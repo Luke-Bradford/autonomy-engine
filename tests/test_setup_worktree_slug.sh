@@ -40,5 +40,37 @@ engine:
 YAML
 check "engine.label overrides basename" "custom-label" "$(derive_slug)"
 
+# --- WORKTREE path resolution (regression: an absent worktree.default_path must
+#     NOT trip set -e and abort -- it should fall through to the derived default)
+parent="$(cd "$tmp" && pwd)"
+
+mkdir -p "$tmp/noWT/.autonomy"
+TARGET_REPO="$tmp/noWT"; SLUG="nowt"
+cat > "$TARGET_REPO/.autonomy/config.yaml" <<'YAML'
+board:
+  owner: someone
+YAML
+check "no worktree.default_path -> derived default (no crash)" "$parent/.nowt-autonomy" "$(resolve_worktree_path "")"
+
+mkdir -p "$tmp/relWT/.autonomy"
+TARGET_REPO="$tmp/relWT"; SLUG="relwt"
+cat > "$TARGET_REPO/.autonomy/config.yaml" <<'YAML'
+worktree:
+  default_path: "../.{repo-slug}-autonomy"
+YAML
+check "relative default_path resolves vs parent, slug substituted" "$parent/.relwt-autonomy" "$(resolve_worktree_path "")"
+
+mkdir -p "$tmp/absWT/.autonomy"
+TARGET_REPO="$tmp/absWT"
+# shellcheck disable=SC2034  # SLUG is read by the sourced resolve_worktree_path (unused only in the absolute-path branch)
+SLUG="abswt"
+cat > "$TARGET_REPO/.autonomy/config.yaml" <<YAML
+worktree:
+  default_path: "$tmp/custom-abs-wt"
+YAML
+check "absolute default_path used as-is" "$tmp/custom-abs-wt" "$(resolve_worktree_path "")"
+
+check "positional arg wins over config + default" "/explicit/path" "$(resolve_worktree_path "/explicit/path")"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
