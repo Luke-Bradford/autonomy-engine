@@ -73,6 +73,9 @@ doctor_full_report() {
   case "$roles_rc" in
     0) echo "OK   roles: block valid" ;;
     3) echo "OK   no roles: block -- defaults apply (coder loop only)" ;;
+    2) echo "FAIL roles: cannot read config.yaml:"
+       echo "$roles_out" | sed 's/^/     /'
+       hard_fail=1 ;;
     *) echo "FAIL roles: block invalid:"
        echo "$roles_out" | sed 's/^/     /'
        hard_fail=1 ;;
