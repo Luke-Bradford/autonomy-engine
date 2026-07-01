@@ -61,6 +61,9 @@ board:
 engine:
   label: <slug>                # optional; disambiguates two repos sharing a basename
   requires_claude_md: <bool>    # hard-fail (not just warn) if .claude/CLAUDE.md is missing
+  account_key: <key>            # optional; which account's shared usage-limit marker this
+                                # repo participates in (default: "default" -- all repos on
+                                # this machine share one account's rate-limit state)
 
 agent:
   type: claude                  # claude | codex (only claude has an adapter implemented)
@@ -133,6 +136,17 @@ Three levers, distinct on purpose:
   stop that holds, which is why graceful-stop pauses rather than exits.)
 
 The dashboard's graceful-stop / resume controls (issue #10) drive this sentinel.
+
+## Usage-limit backoff (account-shared)
+
+When a session hits the account rate limit, the agent adapter *extracts* the
+API-reported reset epoch and the supervisor *persists* it (that split is an
+invariant) — to the repo-local `var/autonomy-logs/.last_usage_reset` **and** to an
+account-shared marker `~/.config/autonomy/usage-reset.<account_key>`, so parallel
+supervisors on the same account back off together instead of each rediscovering the
+wall. Waits use the **latest** valid epoch across both files; garbage/stale/torn
+markers are ignored per-file (fail-safe), and a clean session clears both. Repos on
+different accounts set `engine.account_key` to keep their markers separate.
 
 ## Control room (P1 dashboard)
 
