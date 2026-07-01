@@ -1,0 +1,109 @@
+# templates/qa-merge-gate.yml -- the QA role's event-driven merge gate (#13).
+#
+# Install into the TARGET repo as .github/workflows/qa-merge-gate.yml when
+# roles.qa is enabled with substrate `actions`. Requires:
+#   - the pack scaffolded (.autonomy/roles/qa.md + .autonomy/qa/decide.sh)
+#   - repo secret ANTHROPIC_API_KEY
+#   - (recommended) branch protection requiring the `qa-gate` status context,
+#     so the verdict is a hard veto, not advisory.
+#
+# Behavior: on PR approval / CI completion / new commits (re-arm) / a cron
+# reconcile backstop, each open PR is joined on its HEAD SHA -- reviewDecision
+# APPROVED + every third-party check green (via .autonomy/qa/decide.sh, which
+# refuses on any gh failure rather than assuming green). Ready PRs get a QA
+# pass (prompt: .autonomy/roles/qa.md, scope: diff); the verdict lands as the
+# `qa-gate` commit status on that exact SHA. The merge is completed ONLY when
+# the pack's merge_gate.strategy is not `manual` AND roles.qa.completes_merge
+# is exactly `true` -- `manual` keeps the verdict advisory. Never silent.
+
+name: QA merge gate
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    types: [synchronize]      # new commits invalidate approval + CI: re-arm
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  schedule:
+    - cron: "*/15 * * * *"    # reconcile backstop for dropped webhooks
+
+permissions:
+  contents: write             # bounded self-heal may push <=1 fix commit
+  pull-requests: write
+  statuses: write
+
+concurrency:
+  group: qa-merge-gate
+  cancel-in-progress: false
+
+jobs:
+  qa-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Gate, review, verdict, merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .autonomy/qa/decide.sh
+
+          strategy="$(sed -n 's/^[[:space:]]*strategy:[[:space:]]*//p' .autonomy/config.yaml | head -1 | sed 's/[[:space:]]*#.*//')"
+          completes="$(awk '/^  qa:/{f=1} f && /completes_merge:/{print $2; exit} /^  [a-z_]+:/ && !/^  qa:/{f=0}' .autonomy/config.yaml)"
+
+          for pr in $(gh pr list --state open --json number -q '.[].number'); do
+            echo "== PR #$pr =="
+            if ! sha="$(qa_join_ready "$pr")"; then
+              continue
+            fi
+            # skip if this sha already has a qa-gate verdict (idempotent re-runs)
+            existing="$(gh api "repos/$REPO/commits/$sha/statuses" \
+              -q '[.[] | select(.context == "qa-gate")] | length' 2>/dev/null || echo 0)"
+            if [ "${existing:-0}" -gt 0 ]; then
+              echo "qa_gate: #$pr@$sha already has a verdict -- skipping"
+            else
+              qa_post_verdict "$sha" pending "QA review running" "$REPO"
+              gh pr checkout "$pr"
+              transcript="$(mktemp)"
+              gh pr diff "$pr" > /tmp/qa-pr.diff
+              claude -p "$(cat .autonomy/roles/qa.md)
+
+          ## The PR under review
+          PR #$pr in $REPO. The diff is in /tmp/qa-pr.diff (also available via 'gh pr diff $pr')." \
+                --dangerously-skip-permissions \
+                --output-format text >"$transcript" 2>&1 || true
+              verdict="$(qa_extract_verdict "$transcript")"
+              tail -40 "$transcript"
+              # self-heal may have pushed a commit -> verdict binds to the NEW head
+              sha_now="$(gh pr view "$pr" --json headRefOid -q .headRefOid)"
+              if [ "$sha_now" != "$sha" ]; then
+                echo "qa_gate: head moved during QA (self-heal commit) -- CI must re-join; leaving verdict pending on new head"
+                git checkout - >/dev/null 2>&1 || true
+                continue
+              fi
+              if [ "$verdict" = "pass" ]; then
+                qa_post_verdict "$sha" success "QA pass" "$REPO"
+              else
+                qa_post_verdict "$sha" failure "QA fail -- see workflow log" "$REPO"
+                git checkout - >/dev/null 2>&1 || true
+                continue
+              fi
+              git checkout - >/dev/null 2>&1 || true
+            fi
+            if qa_should_merge "$strategy" "$completes"; then
+              qa_complete_merge "$pr" || echo "qa_gate: merge refused by GitHub (protection not yet satisfied) -- reconciler will retry"
+            else
+              echo "qa_gate: verdict recorded; merge_gate.strategy='$strategy' completes_merge='$completes' -- not completing the merge"
+            fi
+          done

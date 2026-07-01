@@ -20,8 +20,9 @@ Design + build history: `docs/design.md`, `docs/implementation-plan.md`.
 - **Every script's executable body is guarded** by `[ "${BASH_SOURCE[0]}" = "${0}" ] || return 0`
   (or the `if [ "${BASH_SOURCE[0]}" = "${0}" ]; then … fi` form) so sourcing it for tests only
   defines functions. Adapter files that are functions-only (`bin/agents/*.sh`) need no guard.
-- **`shellcheck -S warning` clean** across `bin/*.sh bin/agents/*.sh tests/*.sh`. Test files too —
-  not just `bin/`. (`.sh` under `tests/` is a common miss.)
+- **`shellcheck -S warning` clean** across `bin/*.sh bin/agents/*.sh tests/*.sh
+  templates/autonomy-pack/qa/*.sh`. Test files too — not just `bin/`. (`.sh` under `tests/` is a
+  common miss.)
 - **Tests are genuine.** They `source` the real script and call the real functions (mock only `gh`
   as a shell function where a network call is unavoidable). No assertions-on-mocks.
 

@@ -31,6 +31,29 @@ doctor_preflight_check() {
   return 0
 }
 
+# QA role readiness (#13): enabled-with-actions-substrate needs the
+# qa-merge-gate workflow installed in the target repo; a routine substrate
+# can't be verified locally. Prints exactly one OK/WARN line, or nothing when
+# the QA role is not enabled. Diagnostic-only, never provisions.
+doctor_qa_role_check() {
+  local repo="$1" cfg="$1/.autonomy/config.yaml" qa_enabled qa_sub
+  qa_enabled="$(python3 "$DOCTOR_HOME/lib/config_parser.py" "$cfg" roles.qa.enabled 2>/dev/null || echo false)"
+  [ "$qa_enabled" = "true" ] || return 0
+  qa_sub="$(python3 "$DOCTOR_HOME/lib/config_parser.py" "$cfg" roles.qa.substrate 2>/dev/null || echo)"
+  case "$qa_sub" in
+    actions)
+      if grep -rlq "qa-gate" "$repo/.github/workflows" 2>/dev/null; then
+        echo "OK   qa role (actions): qa-merge-gate workflow found under .github/workflows"
+      else
+        echo "WARN qa role enabled with substrate=actions but no qa-gate workflow under .github/workflows -- copy the engine's templates/qa-merge-gate.yml (and set the ANTHROPIC_API_KEY secret) or the role never fires"
+      fi ;;
+    routine)
+      echo "WARN qa role uses substrate=routine -- cannot be verified locally; confirm the routine exists in claude.ai and points at this repo" ;;
+    *)
+      echo "WARN qa role enabled with substrate='${qa_sub:-unset}' -- the QA merge gate ships for 'actions' (or 'routine'); other substrates are not implemented" ;;
+  esac
+}
+
 doctor_full_report() {
   local repo="$1" hard_fail=0
   echo "== doctor.sh report: $repo =="
@@ -80,6 +103,7 @@ doctor_full_report() {
        echo "$roles_out" | sed 's/^/     /'
        hard_fail=1 ;;
   esac
+  doctor_qa_role_check "$repo"
 
   if (cd "$repo" && gh auth status >/dev/null 2>&1); then
     echo "OK   gh auth status ok"

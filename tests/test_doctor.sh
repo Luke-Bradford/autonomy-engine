@@ -73,5 +73,48 @@ check "missing prompt file -> roles.py fails" "1" "$(python3 "$HERE/../lib/roles
 mkdir -p "$tmp/.autonomy/roles"; touch "$tmp/.autonomy/roles/pm.md"
 check "prompt file present -> roles.py passes" "0" "$(python3 "$HERE/../lib/roles.py" "$tmp" >/dev/null 2>&1; echo $?)"
 
+# --- QA role readiness check (#13) ---
+cat > "$tmp/.autonomy/config.yaml" <<'YAML'
+roles:
+  qa:
+    enabled: true
+    substrate: actions
+    trigger:
+      type: event
+      on: [pull_request_review.approved]
+YAML
+case "$(doctor_qa_role_check "$tmp")" in
+  WARN*qa-gate*) r=warn ;;
+  *) r=other ;;
+esac
+check "qa enabled (actions), no workflow -> WARN" warn "$r"
+
+mkdir -p "$tmp/.github/workflows"
+printf 'name: QA merge gate\n# context: qa-gate\n' > "$tmp/.github/workflows/qa-merge-gate.yml"
+case "$(doctor_qa_role_check "$tmp")" in
+  OK*) r=ok ;;
+  *) r=other ;;
+esac
+check "qa enabled (actions), workflow present -> OK" ok "$r"
+
+cat > "$tmp/.autonomy/config.yaml" <<'YAML'
+roles:
+  qa:
+    enabled: false
+YAML
+check "qa disabled -> no line" "" "$(doctor_qa_role_check "$tmp")"
+
+cat > "$tmp/.autonomy/config.yaml" <<'YAML'
+roles:
+  qa:
+    enabled: true
+    substrate: routine
+YAML
+case "$(doctor_qa_role_check "$tmp")" in
+  WARN*routine*) r=warn ;;
+  *) r=other ;;
+esac
+check "qa on routine substrate -> WARN (unverifiable locally)" warn "$r"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
