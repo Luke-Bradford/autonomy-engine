@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: shellcheck all scripts
+        run: shellcheck -S warning bin/*.sh bin/agents/*.sh tests/*.sh
+
+      - name: Run the full test suite
+        run: bash tests/run_all.sh
