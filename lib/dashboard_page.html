@@ -314,13 +314,10 @@ function tname(n){if(!n)return "tool";if(n.startsWith("mcp__")){const p=n.split(
 
 /* ---- FOCUS BAND ---- */
 function renderFocus(repos){
-  // don't wipe an in-progress model/effort selection on an SSE tick
-  const ae=document.activeElement;
-  if(ae&&$("focus").contains(ae)&&(ae.tagName==="SELECT"||ae.tagName==="BUTTON")) return;
   const active=repos.filter(r=>["working","stopping","idle","paused"].includes(dispStatus(r)));
   $("c-now").textContent=active.length?`${active.filter(r=>dispStatus(r)==="working").length} working · ${active.length} live`:"";
   const show=repos.length?repos:[];
-  $("focus").innerHTML=show.map((r,i)=>{
+  const html=show.map((r,i)=>{
     const st=dispStatus(r), cs=r.current_session||{}, git=r.git||{}, ft=git.focus_ticket;
     const busy=st==="working"||st==="stopping";
     let ticket="";
@@ -347,7 +344,7 @@ function renderFocus(repos){
     else stepLine=`<div class="fc-step">idle — waiting for next session</div>`;
     const elapsed = busy&&cs.started_epoch ? `elapsed <b class="upe mono" data-e="${cs.started_epoch}">${dur(nowS()-cs.started_epoch)}</b>`
                   : cs.updated_at ? `last active <b class="agox mono" data-t="${cs.updated_at}">${ago(nowS()-cs.updated_at)} ago</b>` : "";
-    return `<div class="fcard ${st}">
+    return `<div class="fcard ${st}" data-path="${encodeURIComponent(r.path)}">
       <div class="fc-top">
         <span class="fc-name">${esc(dispName(r.name))}</span>
         <span class="fc-role">coder</span>${isWorktree(r.name)?`<span class="fc-role" title="git worktree of the target repo">worktree</span>`:""}
@@ -358,7 +355,19 @@ function renderFocus(repos){
       <div class="fc-meta"><span>${elapsed}</span>${cs.output_tokens!=null?`<span>out <b class="mono">${num(cs.output_tokens)}</b> tok</span>`:""}${cs.cost_usd?`<span>cost <b class="mono">$${cs.cost_usd.toFixed(2)}</b></span>`:""}</div>
       ${controls(r,st)}${modelCtl(r,st)}
     </div>`;
-  }).join("");
+  });
+  // keep ONLY the card being interacted with (its select/button focused) as
+  // the live DOM node -- every other card still re-renders on this tick.
+  // The held node must never be DETACHED (even reinsertion drops focus), so
+  // the others are swapped in place via replaceWith around it.
+  const box=$("focus"), ae=document.activeElement;
+  const held=(ae&&box.contains(ae)&&(ae.tagName==="SELECT"||ae.tagName==="BUTTON"))?ae.closest(".fcard"):null;
+  if(!held){box.innerHTML=html.join("");return;}
+  const tpl=document.createElement("template");tpl.innerHTML=html.join("");
+  const fresh=[...tpl.content.children], old=[...box.children];
+  const key=els=>els.map(k=>k.dataset.path).join("|");
+  if(key(old)!==key(fresh)){box.innerHTML=html.join("");return;} // repo set changed -> full render wins
+  old.forEach((k,i)=>{if(k!==held)k.replaceWith(fresh[i]);});
 }
 
 /* ---- MODEL / EFFORT CONTROL (#24) ---- */

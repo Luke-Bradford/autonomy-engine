@@ -390,7 +390,8 @@ def execute_set_model(repo, model, effort, scope):
                 fh.write(text)
             os.replace(tmp, plan["config_path"])
     except KeyError as exc:
-        return {"ok": False, "error": "config.yaml has no %s block to update" % exc}
+        missing = exc.args[0] if exc.args else exc
+        return {"ok": False, "error": "config.yaml has no %s key to update" % missing}
     except (OSError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "message": plan.get("message", "done")}
