@@ -5,8 +5,13 @@ A single self-contained local page. Stdlib only (http.server + SSE), no build
 step, no heavy deps -- matches the engine's no-dependency posture. Binds
 127.0.0.1 ONLY: this is a single-operator local tool, never exposed. It reads
 the engine's already-emitted artifacts (session logs, supervisor.log, git/gh,
-config) and renders them; it has NO controls (that is P2, issue #10) and never
-writes to any target repo.
+config) and renders them.
+
+Lifecycle controls (#10) are LIFECYCLE ONLY -- start / graceful-stop (PAUSE
+sentinel) / hard-stop (launchctl) / resume -- behind POST /api/control, which
+requires a per-process token embedded in the served page (defeats cross-origin/
+DNS-rebinding drive-by) and only ever acts on a repo this dashboard manages. It
+never touches any target repo's trade/order/position path.
 
 Usage:
   bin/dashboard.py --repo <path> [--repo <path> ...] [--port 8787]
@@ -17,6 +22,7 @@ Repos may also be listed (one path per line) in $AUTONOMY_DASHBOARD_REPOS or
 import argparse
 import json
 import os
+import secrets
 import subprocess
 import sys
 import threading
@@ -26,9 +32,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 ENGINE_HOME = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ENGINE_HOME, "lib"))
 import dashboard_state as ds  # noqa: E402
+import dashboard_control as dcx  # noqa: E402
 
 PAGE = os.path.join(ENGINE_HOME, "lib", "dashboard_page.html")
 REPOS_FILE = os.path.expanduser("~/.config/autonomy/repos")
+LAUNCH_AGENTS = os.path.expanduser("~/Library/LaunchAgents")
+
+# Per-process control token for the lifecycle write endpoint (#10). Embedded in
+# the served page (same-origin) and required on every POST /api/control, so a
+# cross-origin/DNS-rebinding page in the browser can't drive controls -- it
+# can't read our token. Regenerated each launch.
+_CONTROL_TOKEN = secrets.token_urlsafe(24)
 
 # gh is network + slow; cache its result per repo so SSE ticks don't hammer it.
 # Read/written from per-request SSE threads, so guard it (like _hist).
@@ -270,6 +284,34 @@ def collect(repos):
     return {"generated_at": int(time.time()), "repos": out}
 
 
+def execute_control(repo, action):
+    """Resolve the lifecycle action to a plan and carry it out. Lifecycle only:
+    a sentinel file touch/remove, or an exact launchctl bootout/bootstrap --
+    nothing else is reachable. Returns {ok, message} or {ok:False, error}."""
+    uid = os.getuid()
+    service = dcx.find_service(repo, LAUNCH_AGENTS)
+    plan = dcx.control_plan(repo, action, service, uid)
+    if "error" in plan:
+        return {"ok": False, "error": plan["error"]}
+    try:
+        if "touch" in plan:
+            os.makedirs(os.path.dirname(plan["touch"]), exist_ok=True)
+            open(plan["touch"], "a").close()
+        elif "remove" in plan:
+            if os.path.exists(plan["remove"]):
+                os.remove(plan["remove"])
+        elif "cmd" in plan:
+            out = subprocess.run(plan["cmd"], capture_output=True, text=True,
+                                 errors="replace", timeout=20)
+            if out.returncode != 0:
+                return {"ok": False,
+                        "error": "%s failed: %s" % (plan["cmd"][1],
+                                                    (out.stderr or "").strip()[:200])}
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "message": plan.get("message", "done")}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "autonomy-dashboard/1.0"
     repos = []
@@ -290,7 +332,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             try:
                 with open(PAGE, "rb") as fh:
-                    self._send(200, fh.read(), "text/html; charset=utf-8")
+                    html = fh.read()
+                html = html.replace(b"__CONTROL_TOKEN__", _CONTROL_TOKEN.encode("ascii"))
+                self._send(200, html, "text/html; charset=utf-8")
             except OSError:
                 self._send(500, b"dashboard_page.html missing", "text/plain")
         elif path == "/api/state":
@@ -299,6 +343,43 @@ class Handler(BaseHTTPRequestHandler):
             self._stream()
         else:
             self._send(404, b'{"error":"not found"}')
+
+    def do_POST(self):
+        if self.path.split("?", 1)[0] != "/api/control":
+            self._send(404, b'{"error":"not found"}')
+            return
+        # reject cross-origin drive-by: browsers attach Origin on cross-site
+        # POSTs; a same-origin fetch from our own page omits it or matches host.
+        origin = self.headers.get("Origin")
+        host = self.headers.get("Host", "")
+        if origin and origin.split("://")[-1] != host:
+            self._send(403, b'{"error":"cross-origin refused"}')
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0 or length > 8192:
+            self._send(400, b'{"error":"bad request"}')
+            return
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except ValueError:
+            self._send(400, b'{"error":"bad json"}')
+            return
+        if not secrets.compare_digest(str(body.get("token") or ""), _CONTROL_TOKEN):
+            self._send(403, b'{"error":"bad or missing control token"}')
+            return
+        action = body.get("action")
+        if not dcx.is_valid_action(action):
+            self._send(400, b'{"error":"invalid action"}')
+            return
+        repo = os.path.abspath(os.path.expanduser(str(body.get("repo") or "")))
+        if repo not in self.repos:            # only ever act on a managed repo
+            self._send(400, b'{"error":"repo is not managed by this dashboard"}')
+            return
+        result = execute_control(repo, action)
+        self._send(200 if result.get("ok") else 409, json.dumps(result).encode("utf-8"))
 
     def _stream(self):
         with _sse_lock:
