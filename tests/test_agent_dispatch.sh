@@ -4,6 +4,7 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/../bin/supervisor.sh"
+# shellcheck disable=SC2034  # consumed by log() in the sourced supervisor.sh
 SUPLOG=/dev/null
 log() { :; }
 

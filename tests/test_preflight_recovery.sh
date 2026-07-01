@@ -5,6 +5,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=/dev/null
 source "$HERE/../bin/supervisor.sh"
+# shellcheck disable=SC2034  # consumed by log() in the sourced supervisor.sh
 SUPLOG=/dev/null
 log() { :; }
 
@@ -31,7 +32,9 @@ git branch -M main
 git remote add origin "$origin"
 git push -q -u origin main 2>/dev/null
 
+# shellcheck disable=SC2034  # consumed by preflight() in the sourced supervisor.sh
 AUTONOMY_TARGET_REPO="$work"
+# shellcheck disable=SC2034  # consumed by compute_limit_wait() in the sourced supervisor.sh
 RESET_STATE="$tmp/.last_usage_reset"
 
 dirty_skips=0

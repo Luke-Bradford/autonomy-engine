@@ -1,5 +1,5 @@
-# tests/test_setup_worktree_slug.sh
 #!/usr/bin/env bash
+# tests/test_setup_worktree_slug.sh
 # Unit test for setup_worktree.sh's repo-slug derivation (engine.label override
 # vs basename-derived default).
 set -uo pipefail
