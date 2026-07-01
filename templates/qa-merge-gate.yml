@@ -85,13 +85,26 @@ jobs:
             if ! sha="$(qa_join_ready "$pr")"; then
               continue
             fi
-            # skip if this sha already has a TERMINAL qa-gate verdict. pending
-            # does NOT count -- a run that died after posting pending must be
-            # retryable by the reconciler, not wedged forever.
-            existing="$(gh api "repos/$REPO/commits/$sha/statuses" \
-              -q '[.[] | select(.context == "qa-gate" and (.state == "success" or .state == "failure"))] | length' 2>/dev/null || echo 0)"
-            if [ "${existing:-0}" -gt 0 ]; then
-              echo "qa_gate: #$pr@$sha already has a verdict -- skipping"
+            # latest TERMINAL qa-gate verdict on this sha (statuses API is
+            # newest-first). pending does NOT count -- a run that died after
+            # posting pending must be retryable, not wedged. An existing
+            # FAILURE ends this PR's round outright: only a new head (which
+            # re-arms via synchronize) can be reviewed again -- a failed sha
+            # must NEVER fall through to the merge step. A gh failure here is
+            # "unknown" and also ends the round (fail-safe, never merge blind).
+            verdict_state="$(gh api "repos/$REPO/commits/$sha/statuses" \
+              -q '[.[] | select(.context == "qa-gate" and (.state == "success" or .state == "failure"))] | if length > 0 then .[0].state else "none" end' \
+              2>/dev/null || echo unknown)"
+            if [ "$verdict_state" = "failure" ]; then
+              echo "qa_gate: #$pr@$sha already FAILED QA -- not merging; a new commit re-arms"
+              continue
+            fi
+            if [ "$verdict_state" = "unknown" ]; then
+              echo "qa_gate: cannot read existing verdicts for #$pr -- skipping this round (fail-safe)"
+              continue
+            fi
+            if [ "$verdict_state" = "success" ]; then
+              echo "qa_gate: #$pr@$sha already passed QA -- proceeding to merge decision"
             else
               if ! qa_post_verdict "$sha" pending "QA review running" "$REPO"; then
                 echo "qa_gate: cannot post pending status for #$pr -- skipping this round"
