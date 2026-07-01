@@ -35,7 +35,22 @@ TARGET_REPO="$(cd "$TARGET" && pwd)"
 SLUG="$(derive_slug)"
 [ -n "$SLUG" ] || { echo "setup_worktree.sh: could not derive a repo-slug for $TARGET_REPO" >&2; exit 1; }
 
-WORKTREE="${2:-$(cd "$TARGET_REPO/.." && pwd)/.${SLUG}-autonomy}"
+# Determine WORKTREE with precedence: positional arg $2 > worktree.default_path config > derived default
+if [ -n "${2:-}" ]; then
+  WORKTREE="$2"
+else
+  cfg_path="$(CONFIG_GET "$TARGET_REPO/.autonomy/config.yaml" worktree.default_path)"
+  if [ -n "$cfg_path" ]; then
+    # Substitute {repo-slug} placeholder with the actual SLUG
+    cfg_path="${cfg_path//\{repo-slug\}/$SLUG}"
+    case "$cfg_path" in
+      /*) WORKTREE="$cfg_path" ;;                                   # absolute: use as-is
+      *)  WORKTREE="$(cd "$TARGET_REPO/.." && pwd)/$(basename "$cfg_path")" ;;  # relative: resolve relative to target repo's parent
+    esac
+  else
+    WORKTREE="$(cd "$TARGET_REPO/.." && pwd)/.${SLUG}-autonomy"
+  fi
+fi
 LABEL="com.autonomy.${SLUG}.supervisor"
 PLIST_DST="$HOME/Library/LaunchAgents/${LABEL}.plist"
 

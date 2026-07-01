@@ -57,7 +57,7 @@ merge_gate:
   reviewer_login: <string>       # gh_review only
 
 worktree:
-  default_path: "../.{repo-slug}-autonomy"
+  default_path: "../.{repo-slug}-autonomy"  # worktree path: positional arg overrides, {repo-slug} substituted
 ```
 
 Every value is either optional-with-an-engine-default or required-only-for-the-strategy-that-uses-
