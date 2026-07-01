@@ -23,6 +23,7 @@ from collections import Counter
 from datetime import datetime
 
 import config_parser
+import roles as roles_schema
 
 _TICKET_RE = re.compile(r"#(\d{1,6})\b")
 # in-session branch creation: `git checkout -b|-B <name>` / `git switch -c|-C <name>`
@@ -492,13 +493,8 @@ def parse_quota_windows(path):
 
 
 # The standard roster the page renders even before the multi-role org is built
-# (operator asked to "design for roles now"). Defaults per docs/agent-org-design.md.
-_STANDARD_ROLES = [
-    ("coder", True, "engine", "loop"),
-    ("pm", False, "managed_agents", "cron"),
-    ("qa", False, "routine", "event"),
-    ("researcher", False, "managed_agents", "cron"),
-]
+# (operator asked to "design for roles now"). Single source: lib/roles.py (#12).
+_STANDARD_ROLES = roles_schema.DEFAULT_ROLES
 
 
 def _as_bool(v):
@@ -531,8 +527,9 @@ def build_roles(config_roles, coder_status):
                       "trigger": trigger, "status": status,
                       "configured": bool(cfg)})
     # custom roles declared in the pack but not in the standard set
+    standard = tuple(r[0] for r in _STANDARD_ROLES)
     for name, cfg in config_roles.items():
-        if name in ("coder", "pm", "qa", "researcher"):
+        if name in standard:
             continue
         cfg = cfg or {}
         roles.append({

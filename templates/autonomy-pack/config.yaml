@@ -28,3 +28,35 @@ merge_gate:
 
 worktree:
   default_path: "../.{repo-slug}-autonomy"
+
+# Multi-role org (optional -- absent means: coder loop only). Each role:
+# enabled + substrate (engine | managed_agents | routine | actions) +
+# trigger ({ type: loop | cron | event, ... }). `prompt:` must point at a
+# real pack file under .autonomy/roles/, never a copy. Validate with
+# doctor.sh. See autonomy-engine/docs/agent-org-design.md.
+# roles:
+#   coder:
+#     enabled: true
+#     substrate: engine
+#     trigger: { type: loop }
+#     instances: 1
+#   pm:
+#     enabled: false
+#     substrate: managed_agents
+#     trigger: { type: cron, schedule: "0 */6 * * *" }
+#     prompt: .autonomy/roles/pm.md
+#   qa:
+#     enabled: false
+#     substrate: routine
+#     trigger:
+#       type: event
+#       on: [pull_request_review.approved, workflow_run.completed]
+#       reconcile_cron: "*/10 * * * *"
+#     scope: diff
+#     completes_merge: true          # still gated by merge_gate.strategy
+#     prompt: .autonomy/roles/qa.md
+#   researcher:
+#     enabled: false
+#     substrate: managed_agents
+#     trigger: { type: cron, schedule: "0 3 * * *" }
+#     prompt: .autonomy/roles/researcher.md
