@@ -2,8 +2,10 @@
 model. Parses the engine's real emitted artifacts (stream-json session logs,
 supervisor.log, the lock/sentinel lifecycle, config.yaml) into the shape the
 P1 page renders. Stdlib only; no network (git/gh state is injected)."""
+import json
 import os
 import sys
+import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -38,6 +40,18 @@ class TestSessionParse(unittest.TestCase):
     def test_current_step_is_last_action(self):
         s = ds.parse_session_log(os.path.join(LOGDIR, "session-20260701T093000.log"))
         self.assertIn("consumer.py", s["current_step"])
+
+    def test_in_progress_ticket_from_session_text(self):
+        # the running fixture says "Working ticket #57" -> surface #57 even
+        # before any PR exists
+        s = ds.parse_session_log(os.path.join(LOGDIR, "session-20260701T093000.log"))
+        self.assertEqual(s["ticket"], 57)
+
+    def test_ticket_from_result_text(self):
+        s = ds.parse_session_log(os.path.join(LOGDIR, "session-20260701T090000.log"))
+        # no assistant text/tool ref, but the result text says "Merged #42" ->
+        # the ticket is still recovered from the result
+        self.assertEqual(s["ticket"], 42)
 
     def test_tokens_series_is_cumulative(self):
         s = ds.parse_session_log(os.path.join(LOGDIR, "session-20260701T090000.log"))
@@ -152,6 +166,62 @@ class TestQuotaWindows(unittest.TestCase):
     def test_no_rate_limit_events_returns_empty(self):
         q = ds.parse_quota_windows(os.path.join(LOGDIR, "session-20260701T090000.log"))
         self.assertEqual(q, {})
+
+
+class TestAccountUsage(unittest.TestCase):
+    """Real, account-wide usage from ~/.claude/projects/**/*.jsonl -- live
+    session + token counts per rolling 5h / weekly window (dedup on message.id).
+    This is the honest 'is the account busy' signal, not per-repo threshold
+    events."""
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.now = 1_000_000.0
+        # session A: two records, one inside 5h, plus a duplicate message.id
+        self._sess("aaaa-1111", [
+            (self.now - 600, "mA1", 100, 10),      # 10min ago -> 5h + weekly
+            (self.now - 600, "mA1", 100, 10),      # DUP message.id -> ignored
+            (self.now - 6 * 3600, "mA2", 50, 5),   # 6h ago -> weekly only
+        ])
+        # session B: one record inside 5h
+        self._sess("bbbb-2222", [
+            (self.now - 1200, "mB1", 200, 20),     # 20min ago -> 5h + weekly
+        ])
+        # session C: older than a week -> excluded entirely
+        self._sess("cccc-3333", [
+            (self.now - 8 * 24 * 3600, "mC1", 999, 99),
+        ])
+
+    def _sess(self, sid, recs):
+        sub = os.path.join(self.dir, "-Users-op-Dev-x")
+        os.makedirs(sub, exist_ok=True)
+        with open(os.path.join(sub, sid + ".jsonl"), "w") as fh:
+            for ts, mid, inp, out in recs:
+                from datetime import datetime, timezone
+                iso = datetime.fromtimestamp(ts, timezone.utc).isoformat().replace("+00:00", "Z")
+                fh.write(json.dumps({"timestamp": iso, "type": "assistant",
+                                     "message": {"id": mid, "usage": {
+                                         "input_tokens": inp, "output_tokens": out}}}) + "\n")
+
+    def test_five_hour_window(self):
+        u = ds.account_usage(self.dir, now=self.now)
+        # 5h: mA1 (session A) + mB1 (session B) = 2 sessions; tokens 110 + 220
+        self.assertEqual(u["five_hour"]["sessions"], 2)
+        self.assertEqual(u["five_hour"]["tokens"], 110 + 220)
+
+    def test_weekly_window(self):
+        u = ds.account_usage(self.dir, now=self.now)
+        # weekly: sessions A (mA1,mA2) + B = 2 sessions; C excluded (>7d)
+        self.assertEqual(u["seven_day"]["sessions"], 2)
+        self.assertEqual(u["seven_day"]["tokens"], 110 + 55 + 220)
+
+    def test_dedup_on_message_id(self):
+        u = ds.account_usage(self.dir, now=self.now)
+        # the duplicated mA1 must not double-count
+        self.assertEqual(u["five_hour"]["tokens"], 330)
+
+    def test_missing_dir(self):
+        u = ds.account_usage(os.path.join(self.dir, "nope"), now=self.now)
+        self.assertEqual(u["five_hour"]["sessions"], 0)
 
 
 class TestRoles(unittest.TestCase):
