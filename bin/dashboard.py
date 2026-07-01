@@ -307,7 +307,9 @@ def execute_control(repo, action):
                 return {"ok": False,
                         "error": "%s failed: %s" % (plan["cmd"][1],
                                                     (out.stderr or "").strip()[:200])}
-    except OSError as exc:
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "%s timed out" % plan["cmd"][1]}
+    except (OSError, subprocess.SubprocessError) as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "message": plan.get("message", "done")}
 
@@ -315,6 +317,7 @@ def execute_control(repo, action):
 class Handler(BaseHTTPRequestHandler):
     server_version = "autonomy-dashboard/1.0"
     repos = []
+    allowed_hosts = set()  # set in main() to the loopback host:port we bind
 
     def log_message(self, *a):  # quiet; the page is the UI, not the console
         pass
@@ -348,11 +351,17 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] != "/api/control":
             self._send(404, b'{"error":"not found"}')
             return
-        # reject cross-origin drive-by: browsers attach Origin on cross-site
-        # POSTs; a same-origin fetch from our own page omits it or matches host.
-        origin = self.headers.get("Origin")
+        # Anti-DNS-rebinding: the Host must be exactly the loopback host:port we
+        # bind. After a rebind the browser still sends Host: evil.com, which is
+        # not in the allowlist -> rejected before the token is even checked.
         host = self.headers.get("Host", "")
-        if origin and origin.split("://")[-1] != host:
+        if host not in self.allowed_hosts:
+            self._send(421, b'{"error":"bad host"}')
+            return
+        # And if an Origin is present (cross-site POSTs always carry one) it must
+        # be a loopback origin too.
+        origin = self.headers.get("Origin")
+        if origin and origin.split("://", 1)[-1] not in self.allowed_hosts:
             self._send(403, b'{"error":"cross-origin refused"}')
             return
         try:
@@ -431,6 +440,7 @@ def main(argv):
         return 2
 
     Handler.repos = repos
+    Handler.allowed_hosts = {"%s:%d" % (h, args.port) for h in ("127.0.0.1", "localhost")}
     # seed one sample immediately so the graph isn't empty on first paint, then
     # start the always-on sampler thread (throughput-over-time source).
     _sample_once(repos)
