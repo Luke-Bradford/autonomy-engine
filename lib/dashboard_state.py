@@ -503,13 +503,25 @@ def _as_bool(v):
     return str(v).strip().lower() in ("true", "1", "yes", "on")
 
 
-def build_roles(config_roles, coder_status):
+def _role_next_fire(cfg, enabled, now):
+    """Next-fire epoch for an ENABLED cron role (#18); None otherwise (or on
+    a garbled schedule -- render nothing rather than a wrong countdown)."""
+    if not enabled or now is None:
+        return None
+    trigger = cfg.get("trigger") or {}
+    if trigger.get("type") != "cron":
+        return None
+    return roles_schema.cron_next_fire(trigger.get("schedule"), now)
+
+
+def build_roles(config_roles, coder_status, now=None):
     """The per-repo role roster for the page. The standard four always render
     (Coder live; PM/QA/Researcher as not-configured placeholders unless the
     pack declares them), plus any custom roles the pack adds. `config_roles` is
     the parsed `roles:` mapping (may be empty). `coder_status` is the repo's
     unified display_status (#23) -- the coder row shows the SAME label as the
-    repo badge, never a separately-derived one."""
+    repo badge, never a separately-derived one. `now` enables the cron
+    next-fire countdown (#18)."""
     config_roles = config_roles or {}
     roles = []
     for name, d_enabled, d_sub, d_trig in _STANDARD_ROLES:
@@ -525,20 +537,23 @@ def build_roles(config_roles, coder_status):
             status = "configured" if enabled else "disabled"
         roles.append({"name": name, "enabled": enabled, "substrate": substrate,
                       "trigger": trigger, "status": status,
-                      "configured": bool(cfg)})
+                      "configured": bool(cfg),
+                      "next_fire": _role_next_fire(cfg, enabled and bool(cfg), now)})
     # custom roles declared in the pack but not in the standard set
     standard = tuple(r[0] for r in _STANDARD_ROLES)
     for name, cfg in config_roles.items():
         if name in standard:
             continue
         cfg = cfg or {}
+        enabled = _as_bool(cfg.get("enabled"))
         roles.append({
             "name": name,
-            "enabled": _as_bool(cfg.get("enabled")),
+            "enabled": enabled,
             "substrate": cfg.get("substrate") or "engine",
             "trigger": (cfg.get("trigger") or {}).get("type") or "loop",
-            "status": "configured" if _as_bool(cfg.get("enabled")) else "disabled",
+            "status": "configured" if enabled else "disabled",
             "configured": True,
+            "next_fire": _role_next_fire(cfg, enabled, now),
         })
     return roles
 
@@ -659,7 +674,7 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "current_session": session,
         "activity": activity,
         "display_status": status,
-        "roles": build_roles(config.get("roles"), status),
+        "roles": build_roles(config.get("roles"), status, now=now),
         "voice": read_supervisor_voice(os.path.join(logdir, "supervisor.log")),
         "git": git_in_flight(repo_path) if git_in_flight else {},
         "config": config,
