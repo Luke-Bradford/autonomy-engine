@@ -1,0 +1,82 @@
+# autonomy-engine — project instructions
+
+## What this is
+
+A **repo-agnostic engine** that runs Claude Code (and, in future, other CLI agents) autonomy loops
+against **any** target repo. Extracted from eBull's `scripts/autonomy/`. The engine is generic; each
+target repo supplies a small `.autonomy/` **pack** (`loop_prompt.md`, `hard_rules.md`, `config.yaml`)
+that the engine reads. eBull is the first consumer.
+
+Design + build history: `docs/design.md`, `docs/implementation-plan.md`.
+
+## Non-negotiables (every change respects these — the CI review bot enforces them)
+
+- **macOS `/bin/bash` 3.2.57 compatible.** NO `mapfile`/`readarray`, NO globstar/`**`, NO associative
+  arrays (`declare -A`), NO `${var,,}`/`${var^^}`. This engine runs on the operator's Mac; bash 3.2
+  is the floor. Use `find … -print0` + `while IFS= read -r -d ''` instead of `mapfile`.
+- **Python 3 stdlib only.** No PyYAML, no yq, no third-party imports anywhere. Config parsing goes
+  through `lib/config_parser.py` (a restricted-YAML-subset parser, stdlib only). Adding a dependency
+  needs a very good reason and an explicit decision.
+- **Every script's executable body is guarded** by `[ "${BASH_SOURCE[0]}" = "${0}" ] || return 0`
+  (or the `if [ "${BASH_SOURCE[0]}" = "${0}" ]; then … fi` form) so sourcing it for tests only
+  defines functions. Adapter files that are functions-only (`bin/agents/*.sh`) need no guard.
+- **`shellcheck -S warning` clean** across `bin/*.sh bin/agents/*.sh tests/*.sh`. Test files too —
+  not just `bin/`. (`.sh` under `tests/` is a common miss.)
+- **Tests are genuine.** They `source` the real script and call the real functions (mock only `gh`
+  as a shell function where a network call is unavoidable). No assertions-on-mocks.
+
+## Invariants (correctness properties — do not regress)
+
+- **Merge-gate CI fail-safe:** a `gh` API failure must NEVER be treated as CI-green. `ci_check`
+  refuses (returns 1) on a `gh` failure, distinct from "checks failing". Fail-safe, never fail-open.
+- **Reset-epoch split:** agent adapters (`bin/agents/*.sh`) only *extract* the rate-limit reset
+  epoch and return it in their outcome string; `bin/supervisor.sh` is the sole writer of
+  `.last_usage_reset`. Never persist reset state inside an adapter.
+- **Best-effort scripts never hard-fail their caller:** `board.sh` and `unblock_dependents.sh` warn
+  to stderr and `exit 0` on every failure path — board/notifier hiccups must never block engineering.
+- **Repo-agnostic:** no target-repo-specific values (GitHub owners, board titles, issue numbers)
+  hardcoded in `bin/` or `lib/`. Everything repo-specific comes from the target repo's
+  `.autonomy/config.yaml`. `templates/` and `docs/` may use placeholders/examples — those are fine.
+- **`merge_gate.strategy: manual` is the safe default.** Never silently fall back to a stronger,
+  auto-merging strategy on a misconfig — hard-refuse with a clear reason.
+
+## Layout
+
+```text
+bin/
+  supervisor.sh          # main loop: --repo <path>, agent-adapter dispatch, preflight, backoff
+  onboard.sh              # scaffold a target repo's .autonomy/ (idempotent)
+  doctor.sh                # target-repo readiness report (diagnostic-only, never provisions)
+  setup_worktree.sh         # create dedicated worktree + install launchd plist
+  worktree_gc.sh             # prune stale worktrees + merged branches
+  safe_merge.sh               # the ONLY sanctioned merge path; 4 gate strategies
+  board.sh                     # best-effort GitHub Projects v2 board updates
+  unblock_dependents.sh         # post-merge "blocked by #X" notifier
+  agents/claude.sh               # Claude Code adapter (only one implemented; codex is issue #2)
+lib/config_parser.py             # restricted YAML-subset parser (stdlib only)
+templates/                        # supervisor.plist.tmpl + autonomy-pack/ (onboard scaffolds these)
+tests/                             # one per script; run_all.sh runs the whole suite
+docs/                               # design.md, implementation-plan.md
+```
+
+## Workflow
+
+`main` is branch-protected — **nothing merges to main without a PR + CI green + a review pass**
+(required checks `lint-and-test` + `review`, enforce_admins, PR-required with 0 human approvals so
+CI + the review bot are the gate). So:
+
+1. Branch (`feat/<n>-…` or `fix/<n>-…`), never commit to main.
+2. TDD: write the failing test, see it fail, implement, see it pass.
+3. `bash tests/run_all.sh` (all suites) + `shellcheck -S warning bin/*.sh bin/agents/*.sh tests/*.sh`
+   before pushing.
+4. Push, open a PR. CI (`lint-and-test`) + the Claude review bot run automatically. Resolve every
+   review comment (FIXED `<sha>` / DEFERRED `#n` / REBUTTED `<reason>`).
+5. Merge once green + APPROVE on the latest commit.
+
+The review bot needs the `ANTHROPIC_API_KEY` repo secret (already set). Doc-only PRs skip the bot.
+
+## Backlog
+
+Open issues are the build queue: **#1** harden safe_merge timestamp compare · **#2** codex agent
+adapter · **#3** shared account-level usage-limit state (registry prereq) · **#4** registry /
+control-unit. `docs/implementation-plan.md` is the record of how the engine was built (Tasks 1–13).
