@@ -178,8 +178,15 @@ def cron_next_fire(expr, now_epoch):
         # cron dow: 0=Sunday; python weekday(): 0=Monday
         cron_dow = (day.weekday() + 1) % 7
         if day.month in months and day.day in doms and cron_dow in dows:
+            first_day = day == start.date()
             for h in sorted(hours):
+                # on the starting day, hours before `start` can never match --
+                # skip them instead of allocating 60 datetimes each
+                if first_day and h < start.hour:
+                    continue
                 for m in sorted(minutes):
+                    if first_day and h == start.hour and m < start.minute:
+                        continue
                     cand = datetime(day.year, day.month, day.day, h, m,
                                     tzinfo=timezone.utc)
                     if cand >= start:
