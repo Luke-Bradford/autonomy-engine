@@ -36,5 +36,42 @@ check "requires_claude_md true, CLAUDE.md present -> pass" "0" "$(doctor_preflig
 echo "this line has no colon whatsoever" > "$tmp/.autonomy/config.yaml"
 check "malformed config.yaml -> hard fail" "1" "$(doctor_preflight_check "$tmp" >/dev/null 2>&1; echo $?)"
 
+# --- roles: block validation via lib/roles.py (#12) ---
+cat > "$tmp/.autonomy/config.yaml" <<'YAML'
+engine:
+  requires_claude_md: false
+roles:
+  coder:
+    enabled: true
+    substrate: engine
+    trigger: { type: loop }
+YAML
+check "valid roles block -> roles.py passes" "0" "$(python3 "$HERE/../lib/roles.py" "$tmp" >/dev/null 2>&1; echo $?)"
+
+cat > "$tmp/.autonomy/config.yaml" <<'YAML'
+engine:
+  requires_claude_md: false
+roles:
+  qa:
+    substrate: kubernetes
+    trigger: { type: webhook }
+YAML
+check "invalid roles block -> roles.py fails" "1" "$(python3 "$HERE/../lib/roles.py" "$tmp" >/dev/null 2>&1; echo $?)"
+
+cat > "$tmp/.autonomy/config.yaml" <<'YAML'
+engine:
+  requires_claude_md: false
+YAML
+check "no roles block -> roles.py passes (defaults)" "0" "$(python3 "$HERE/../lib/roles.py" "$tmp" >/dev/null 2>&1; echo $?)"
+
+cat > "$tmp/.autonomy/config.yaml" <<'YAML'
+roles:
+  pm:
+    prompt: .autonomy/roles/pm.md
+YAML
+check "missing prompt file -> roles.py fails" "1" "$(python3 "$HERE/../lib/roles.py" "$tmp" >/dev/null 2>&1; echo $?)"
+mkdir -p "$tmp/.autonomy/roles"; touch "$tmp/.autonomy/roles/pm.md"
+check "prompt file present -> roles.py passes" "0" "$(python3 "$HERE/../lib/roles.py" "$tmp" >/dev/null 2>&1; echo $?)"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi

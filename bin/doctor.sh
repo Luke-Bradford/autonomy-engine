@@ -64,6 +64,21 @@ doctor_full_report() {
     fi
   fi
 
+  # roles: block (multi-role org, #12) -- absent is fine (defaults: coder
+  # only); present-but-invalid is a hard misconfig worth failing the report.
+  local roles_out
+  if roles_out="$(python3 "$DOCTOR_HOME/lib/roles.py" "$repo" 2>/dev/null)"; then
+    if python3 "$DOCTOR_HOME/lib/config_parser.py" "$repo/.autonomy/config.yaml" roles >/dev/null 2>&1; then
+      echo "OK   roles: block valid"
+    else
+      echo "OK   no roles: block -- defaults apply (coder loop only)"
+    fi
+  else
+    echo "FAIL roles: block invalid:"
+    echo "$roles_out" | sed 's/^/     /'
+    hard_fail=1
+  fi
+
   if (cd "$repo" && gh auth status >/dev/null 2>&1); then
     echo "OK   gh auth status ok"
   else

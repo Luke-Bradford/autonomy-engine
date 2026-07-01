@@ -29,6 +29,27 @@ def _strip_comment(line: str) -> str:
     return "".join(out)
 
 
+def _split_top(inner: str) -> list:
+    """Split flow-collection innards on top-level commas, respecting quotes."""
+    parts, buf, quote = [], [], None
+    for ch in inner:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in ('"', "'"):
+            quote = ch
+            buf.append(ch)
+        elif ch == ",":
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    if buf or parts:
+        parts.append("".join(buf))
+    return parts
+
+
 def _parse_scalar(raw: str):
     raw = raw.strip()
     if raw == "" or raw == "{}":
@@ -41,7 +62,21 @@ def _parse_scalar(raw: str):
         inner = raw[1:-1].strip()
         if not inner:
             return []
-        return [_parse_scalar(p.strip()) for p in inner.split(",")]
+        return [_parse_scalar(p.strip()) for p in _split_top(inner)]
+    if raw.startswith("{") and raw.endswith("}"):
+        # inline flow mapping, ONE level of scalar values -- exactly what the
+        # roles schema uses (`trigger: { type: cron, schedule: "..." }`).
+        out = {}
+        for part in _split_top(raw[1:-1].strip()):
+            part = part.strip()
+            if ":" not in part:
+                raise ValueError(f"flow mapping entry needs 'key: value', got {part!r}")
+            key, _, value = part.partition(":")
+            value = value.strip()
+            if value.startswith("{"):
+                raise ValueError("nested flow mappings are not supported")
+            out[key.strip()] = _parse_scalar(value)
+        return out
     if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ("'", '"'):
         return raw[1:-1]
     return raw

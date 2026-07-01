@@ -90,6 +90,37 @@ class TestConfigParser(unittest.TestCase):
         self.assertEqual(rc, 1)
 
 
+class TestFlowMapping(unittest.TestCase):
+    """#12: the roles design uses inline flow mappings -- `trigger: { type:
+    loop }` / `{ type: cron, schedule: "0 */6 * * *" }`. One level deep,
+    scalar values only (matches the design doc exactly, nothing more)."""
+    def test_simple_flow_mapping(self):
+        cfg = config_parser.parse("trigger: { type: loop }\n")
+        self.assertEqual(cfg["trigger"], {"type": "loop"})
+
+    def test_flow_mapping_with_quoted_value(self):
+        cfg = config_parser.parse('trigger: { type: cron, schedule: "0 */6 * * *" }\n')
+        self.assertEqual(cfg["trigger"], {"type": "cron", "schedule": "0 */6 * * *"})
+
+    def test_flow_mapping_nested_under_block(self):
+        cfg = config_parser.parse(
+            "roles:\n  coder:\n    enabled: true\n    trigger: { type: loop }\n")
+        self.assertEqual(config_parser.get(cfg, "roles.coder.trigger.type"), "loop")
+        self.assertIs(config_parser.get(cfg, "roles.coder.enabled"), True)
+
+    def test_flow_list_still_works(self):
+        cfg = config_parser.parse('on: [a, "b c"]\n')
+        self.assertEqual(cfg["on"], ["a", "b c"])
+
+    def test_quoted_comma_stays_in_value(self):
+        cfg = config_parser.parse('m: { a: "x, y", b: z }\n')
+        self.assertEqual(cfg["m"], {"a": "x, y", "b": "z"})
+
+    def test_nested_flow_mapping_rejected(self):
+        with self.assertRaises(ValueError):
+            config_parser.parse("t: { a: { b: c } }\n")
+
+
 class TestSetScalar(unittest.TestCase):
     """set_scalar rewrites ONE scalar in config text while preserving every
     other byte -- comments, blank lines, ordering (#24's 'save default')."""
