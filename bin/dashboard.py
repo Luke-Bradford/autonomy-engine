@@ -316,9 +316,11 @@ def main(argv):
         sys.stderr.write("dashboard: no repos. Pass --repo <path> (repeatable) "
                          "or list them in ~/.config/autonomy/repos\n")
         return 2
-    if args.host not in ("127.0.0.1", "localhost", "::1"):
+    # IPv4 only: ThreadingHTTPServer is AF_INET, so an IPv6 literal (::1) would
+    # raise at bind. Restrict to the two loopback names that actually bind here.
+    if args.host not in ("127.0.0.1", "localhost"):
         sys.stderr.write("dashboard: refusing non-localhost host %r (this is a "
-                         "local-only tool)\n" % args.host)
+                         "local-only tool; use 127.0.0.1 or localhost)\n" % args.host)
         return 2
 
     Handler.repos = repos
