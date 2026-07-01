@@ -132,7 +132,8 @@ EOF
 }
 
 ctl_list() {
-  local repo plist label state any=0 p r
+  local repo plist label state any=0 p r registered
+  registered="$(ctl_repos)"   # capture once; reused for the orphan scan below
   while IFS= read -r repo; do
     [ -n "$repo" ] || continue
     any=1
@@ -144,13 +145,13 @@ ctl_list() {
     fi
     printf '%-8s %s  %s\n' "$state" "$repo" "$label"
   done <<EOF
-$(ctl_repos)
+$registered
 EOF
   [ "$any" -eq 1 ] || echo "no repos registered ($(ctl_registry_file))"
   for p in "$HOME/Library/LaunchAgents"/com.autonomy.*.supervisor.plist; do
     [ -f "$p" ] || continue
     r="$(ctl_plist_repo "$p")"
-    if ! ctl_repos | grep -qxF "$r"; then
+    if ! printf '%s\n' "$registered" | grep -qxF "$r"; then
       printf '%-8s %s  %s  [installed but NOT registered -- control.sh register "%s"]\n' \
         "$(ctl_loop_state "$r")" "$r" "$(ctl_plist_label "$p")" "$r"
     fi
