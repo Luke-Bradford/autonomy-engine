@@ -15,6 +15,17 @@
 # `qa-gate` commit status on that exact SHA. The merge is completed ONLY when
 # the pack's merge_gate.strategy is not `manual` AND roles.qa.completes_merge
 # is exactly `true` -- `manual` keeps the verdict advisory. Never silent.
+#
+# Security model (PR content is UNTRUSTED input into an LLM):
+#   - the workspace stays on the BASE branch -- the prompt (qa.md), decide.sh
+#     and config.yaml are never read from the PR head, so a PR cannot rewrite
+#     its own gate; the QA agent reviews the DIFF as data;
+#   - the QA agent runs with a read-only tool allowlist (no Bash/Edit/Write)
+#     and with the GitHub tokens stripped from its environment -- a prompt
+#     injection in the diff can at worst bias the verdict text, and a "pass"
+#     still cannot merge anything by itself (approval + CI + strategy gate);
+#   - fork PRs are skipped entirely (isCrossRepository) -- the privileged
+#     path only ever sees same-repo branches.
 
 name: QA merge gate
 
@@ -30,7 +41,7 @@ on:
     - cron: "*/15 * * * *"    # reconcile backstop for dropped webhooks
 
 permissions:
-  contents: write             # bounded self-heal may push <=1 fix commit
+  contents: write             # gh pr merge needs it; the QA agent never gets the token
   pull-requests: write
   statuses: write
 
@@ -44,7 +55,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          # ALWAYS the base branch -- never a PR head. The gate's own logic
+          # (decide.sh, qa.md, config.yaml) must not be attacker-writable.
+          ref: ${{ github.event.repository.default_branch }}
 
       - name: Install Claude Code CLI
         run: npm install -g @anthropic-ai/claude-code
@@ -62,7 +75,9 @@ jobs:
           strategy="$(sed -n 's/^[[:space:]]*strategy:[[:space:]]*//p' .autonomy/config.yaml | head -1 | sed 's/[[:space:]]*#.*//')"
           completes="$(awk '/^  qa:/{f=1} f && /completes_merge:/{print $2; exit} /^  [a-z_]+:/ && !/^  qa:/{f=0}' .autonomy/config.yaml)"
 
-          for pr in $(gh pr list --state open --json number -q '.[].number'); do
+          # same-repo PRs only: fork heads never reach the privileged path
+          for pr in $(gh pr list --state open --json number,isCrossRepository \
+                        -q '.[] | select(.isCrossRepository | not) | .number'); do
             echo "== PR #$pr =="
             if ! sha="$(qa_join_ready "$pr")"; then
               continue
@@ -74,32 +89,31 @@ jobs:
               echo "qa_gate: #$pr@$sha already has a verdict -- skipping"
             else
               qa_post_verdict "$sha" pending "QA review running" "$REPO"
-              gh pr checkout "$pr"
               transcript="$(mktemp)"
               gh pr diff "$pr" > /tmp/qa-pr.diff
-              claude -p "$(cat .autonomy/roles/qa.md)
+              # Read-only agent, tokens stripped: the diff is untrusted input.
+              env -u GH_TOKEN -u GITHUB_TOKEN \
+                claude -p "$(cat .autonomy/roles/qa.md)
 
           ## The PR under review
-          PR #$pr in $REPO. The diff is in /tmp/qa-pr.diff (also available via 'gh pr diff $pr')." \
-                --dangerously-skip-permissions \
+          PR #$pr in $REPO. The diff is in /tmp/qa-pr.diff. The checked-out tree is the BASE branch (pre-merge state)." \
+                --allowedTools "Read" "Grep" "Glob" \
                 --output-format text >"$transcript" 2>&1 || true
               verdict="$(qa_extract_verdict "$transcript")"
               tail -40 "$transcript"
-              # self-heal may have pushed a commit -> verdict binds to the NEW head
+              # bind the verdict to the sha we joined on; if the head moved
+              # meanwhile, the synchronize trigger re-arms on the new head
               sha_now="$(gh pr view "$pr" --json headRefOid -q .headRefOid)"
               if [ "$sha_now" != "$sha" ]; then
-                echo "qa_gate: head moved during QA (self-heal commit) -- CI must re-join; leaving verdict pending on new head"
-                git checkout - >/dev/null 2>&1 || true
+                echo "qa_gate: head moved during QA -- verdict discarded; re-armed by synchronize"
                 continue
               fi
               if [ "$verdict" = "pass" ]; then
                 qa_post_verdict "$sha" success "QA pass" "$REPO"
               else
                 qa_post_verdict "$sha" failure "QA fail -- see workflow log" "$REPO"
-                git checkout - >/dev/null 2>&1 || true
                 continue
               fi
-              git checkout - >/dev/null 2>&1 || true
             fi
             if qa_should_merge "$strategy" "$completes"; then
               qa_complete_merge "$pr" || echo "qa_gate: merge refused by GitHub (protection not yet satisfied) -- reconciler will retry"
