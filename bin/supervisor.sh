@@ -163,7 +163,7 @@ pause_requested() {
 # in a filename: anything outside [A-Za-z0-9._-] falls back to 'default'.
 resolve_account_key() {
   local key
-  key="$(CONFIG_GET "$CFG" engine.account_key || printf '')"
+  key="$(resolve_config_value "$CFG" engine.account_key "" default)"
   case "$key" in
     "") key=default ;;
     *[!A-Za-z0-9._-]*)
