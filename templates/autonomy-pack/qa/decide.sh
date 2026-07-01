@@ -61,9 +61,11 @@ print(json.dumps([c for c in checks if c.get("name") != "'"$QA_CONTEXT"'"]))')"
 qa_should_merge() {
   local strategy="$1" completes_merge="$2"
   [ "$completes_merge" = "true" ] || return 1
+  # WHITELIST of merge-permitting strategies -- anything else (manual, empty,
+  # a garbled scrape) refuses. Fail-safe: unknown never means merge.
   case "$strategy" in
-    ''|manual) return 1 ;;   # manual (and unset->manual) NEVER auto-merges
-    *) return 0 ;;
+    ci_only|bot_comment|gh_review) return 0 ;;
+    *) return 1 ;;
   esac
 }
 

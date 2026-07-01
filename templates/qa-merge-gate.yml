@@ -78,9 +78,15 @@ jobs:
           strategy="$(awk '/^merge_gate:/{f=1; next} /^[^[:space:]#]/{f=0} f && /^[[:space:]]+strategy:/{sub(/#.*/,""); print $2; exit}' .autonomy/config.yaml)"
           completes="$(awk '/^  qa:/{f=1} f && /completes_merge:/{print $2; exit} /^  [a-z_]+:/ && !/^  qa:/{f=0}' .autonomy/config.yaml)"
 
-          # same-repo PRs only: fork heads never reach the privileged path
-          for pr in $(gh pr list --state open --json number,isCrossRepository \
-                        -q '.[] | select(.isCrossRepository | not) | .number'); do
+          # same-repo PRs only: fork heads never reach the privileged path.
+          # Listing failure is explicit (a bare $(...) in the for-list would
+          # silently no-op the whole round under set -e).
+          if ! pr_list="$(gh pr list --state open --json number,isCrossRepository \
+                            -q '.[] | select(.isCrossRepository | not) | .number')"; then
+            echo "qa_gate: cannot list open PRs (gh failed) -- nothing processed this round"
+            exit 0
+          fi
+          for pr in $pr_list; do
             echo "== PR #$pr =="
             if ! sha="$(qa_join_ready "$pr")"; then
               continue

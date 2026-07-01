@@ -26,6 +26,13 @@ if qa_should_merge "bot_comment" "true"; then r=merge; else r=refuse; fi
 check "bot_comment + completes_merge -> merge allowed" merge "$r"
 if qa_should_merge "ci_only" "true"; then r=merge; else r=refuse; fi
 check "ci_only + completes_merge -> merge allowed" merge "$r"
+if qa_should_merge "gh_review" "true"; then r=merge; else r=refuse; fi
+check "gh_review + completes_merge -> merge allowed" merge "$r"
+# WHITELIST, not blacklist: a garbled/mis-scraped strategy fails toward refuse
+if qa_should_merge "bot_commentX" "true"; then r=merge; else r=refuse; fi
+check "unknown strategy value -> refuse (whitelist, fail-safe)" refuse "$r"
+if qa_should_merge "strategy: bot_comment" "true"; then r=merge; else r=refuse; fi
+check "scrape artifact as strategy -> refuse" refuse "$r"
 
 # --- qa_join_ready: approved + CI green on the head SHA, fail-safe ---
 GH_MODE=""
