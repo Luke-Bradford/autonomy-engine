@@ -43,6 +43,7 @@ ctl_unregister() {
     return 1
   fi
   tmpf="$f.tmp.$$"
+  cp "$f" "$tmpf"                            # cp first: tmp inherits the registry's mode
   grep -vxF "$path" "$f" > "$tmpf" || true   # rc 1 = registry is now empty
   mv -f "$tmpf" "$f"
   echo "unregistered $path"
@@ -172,11 +173,6 @@ EOF
 
 set -euo pipefail
 
-# qs_register_repo (append-if-missing) comes from quickstart.sh, which is
-# functions-only + side-effect-free when sourced.
-# shellcheck source=/dev/null
-source "$ENGINE_HOME/bin/quickstart.sh"
-
 CMD="${1:-}"
 [ -n "$CMD" ] || { ctl_usage; exit 2; }
 shift
@@ -191,6 +187,11 @@ case "$CMD" in
     # still be unregisterable by its recorded literal path
     if [ -d "$ARG" ]; then ARG="$(cd "$ARG" && pwd)"; fi
     if [ "$CMD" = register ]; then
+      # qs_register_repo (append-if-missing) comes from quickstart.sh, which
+      # is functions-only + side-effect-free when sourced. Sourced only on
+      # this arm -- no other subcommand needs it (PR #41 review).
+      # shellcheck source=/dev/null
+      source "$ENGINE_HOME/bin/quickstart.sh"
       qs_register_repo "$(ctl_registry_file)" "$ARG"
     else
       ctl_unregister "$ARG"

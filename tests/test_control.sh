@@ -73,6 +73,14 @@ bash "$ENGINE_HOME/bin/control.sh" unregister "$repoB" >/dev/null 2>&1
 check "unregister of a non-entry exits non-zero" "1" "$([ $? -ne 0 ] && echo 1 || echo 0)"
 bash "$ENGINE_HOME/bin/control.sh" register "$repoB" >/dev/null 2>&1
 
+# PR #41 review (NITPICK): the rewrite-via-tmpfile must not change the
+# registry's permissions
+chmod 600 "$REG"
+bash "$ENGINE_HOME/bin/control.sh" register "$tmp/repoC" >/dev/null 2>&1
+bash "$ENGINE_HOME/bin/control.sh" unregister "$tmp/repoC" >/dev/null 2>&1
+check "unregister preserves the registry's mode" "0o600" "$(python3 -c 'import os,stat,sys;print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode)))' "$REG")"
+chmod 644 "$REG"
+
 # --- plist mapping (ground truth: installed plists) ----------------------------
 check "find_plist maps repo -> its plist" "$HOME/Library/LaunchAgents/com.autonomy.repoa.supervisor.plist" "$(ctl_find_plist "$repoA")"
 check "find_plist empty when none installed" "" "$(ctl_find_plist "$repoB")"
