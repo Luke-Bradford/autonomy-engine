@@ -210,13 +210,16 @@ def git_in_flight(repo):
     # what the loop finished, not just what's open.
     merged = []
     mraw = _run(["gh", "pr", "list", "--state", "merged", "--limit", "6", "--json",
-                 "number,title,url,mergedAt", "--jq", "sort_by(.mergedAt) | reverse"],
+                 "number,title,url,mergedAt,headRefName", "--jq", "sort_by(.mergedAt) | reverse"],
                 cwd=repo, timeout=20)
     if mraw:
         try:
             for pr in json.loads(mraw):
+                at = pr.get("mergedAt") or ""
                 merged.append({"number": pr.get("number"), "title": pr.get("title") or "",
-                               "url": pr.get("url") or "", "at": pr.get("mergedAt") or ""})
+                               "url": pr.get("url") or "", "at": at,
+                               "merged_epoch": ds.iso_epoch(at),
+                               "branch": pr.get("headRefName") or ""})
         except ValueError:
             pass
 
@@ -328,14 +331,29 @@ def collect(repos):
             git = st.setdefault("git", {})
             sess = st.get("current_session") or {}
             if not git.get("focus_ticket") and sess.get("ticket"):
-                focus = _issue_focus(repo, sess["ticket"], git.get("repo_url", ""))
-                if focus:
-                    # honest chip (#23): "in progress" only while the repo is
-                    # actually busy; a stopped/idle repo shows its LAST ticket,
-                    # never an in-progress claim. Copy -- _issue_focus caches.
-                    focus = dict(focus)
-                    focus["in_progress"] = st.get("display_status") in ("working", "stopping")
-                    git["focus_ticket"] = focus
+                # completed beats issue lookup (#25): if the session's ticket
+                # already has a merged PR, the honest story is "completed at T",
+                # not "last worked". Matched by branch convention/title ref.
+                # Never while busy -- a session re-working the ticket (follow-up
+                # PR) must keep the live "in progress" story.
+                busy = st.get("display_status") in ("working", "stopping")
+                done = None if busy else ds.completed_ticket(
+                    sess["ticket"], git.get("merged") or [])
+                if done:
+                    git["focus_ticket"] = {
+                        "number": sess["ticket"], "title": done.get("title") or "",
+                        "url": done.get("url") or "", "completed": True,
+                        "merged_epoch": done.get("merged_epoch") or 0,
+                        "pr_number": done.get("number")}
+                else:
+                    focus = _issue_focus(repo, sess["ticket"], git.get("repo_url", ""))
+                    if focus:
+                        # honest chip (#23): "in progress" only while the repo is
+                        # actually busy; a stopped/idle repo shows its LAST ticket,
+                        # never an in-progress claim. Copy -- _issue_focus caches.
+                        focus = dict(focus)
+                        focus["in_progress"] = busy
+                        git["focus_ticket"] = focus
             out.append(st)
         except Exception as exc:  # never let one repo blank the page
             out.append({"name": os.path.basename(repo.rstrip("/")), "path": repo,

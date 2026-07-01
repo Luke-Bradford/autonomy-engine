@@ -185,6 +185,47 @@ class TestTicketHeuristic(unittest.TestCase):
         self.assertEqual(s["ticket"], 649)
 
 
+class TestCompletedTicket(unittest.TestCase):
+    """#25: tie the session's ticket to its merged PR so the page can say a
+    ticket was COMPLETED (and when), not just list merged PRs."""
+    MERGED = [
+        {"number": 71, "title": "feat: other thing (#650)", "branch": "feat/650-other",
+         "at": "2026-07-01T20:00:00Z"},
+        {"number": 70, "title": "fix(sec): dedupe flag flip", "branch": "fix/649-sec-fundamentals",
+         "at": "2026-07-01T21:30:00Z"},
+    ]
+
+    def test_matches_by_branch_convention(self):
+        hit = ds.completed_ticket(649, self.MERGED)
+        self.assertEqual(hit["number"], 70)
+
+    def test_matches_by_title_ref_when_branch_unhelpful(self):
+        merged = [{"number": 72, "title": "hotfix for #813 regression",
+                   "branch": "hotfix-regression", "at": "2026-07-01T22:00:00Z"}]
+        self.assertEqual(ds.completed_ticket(813, merged)["number"], 72)
+
+    def test_no_match_returns_none(self):
+        self.assertIsNone(ds.completed_ticket(999, self.MERGED))
+        self.assertIsNone(ds.completed_ticket(None, self.MERGED))
+        self.assertIsNone(ds.completed_ticket(649, []))
+
+    def test_title_number_must_be_a_ref_not_substring(self):
+        # '#6490' must not match ticket 649
+        merged = [{"number": 73, "title": "work on #6490", "branch": "x",
+                   "at": "2026-07-01T22:00:00Z"}]
+        self.assertIsNone(ds.completed_ticket(649, merged))
+
+
+class TestIsoEpoch(unittest.TestCase):
+    def test_zulu_timestamp(self):
+        self.assertEqual(ds.iso_epoch("1970-01-01T00:01:00Z"), 60)
+
+    def test_bad_input_is_zero(self):
+        self.assertEqual(ds.iso_epoch(""), 0)
+        self.assertEqual(ds.iso_epoch(None), 0)
+        self.assertEqual(ds.iso_epoch("not-a-date"), 0)
+
+
 class TestActivityTree(unittest.TestCase):
     def test_subagent_nests_under_its_task_node(self):
         s = ds.parse_session_log(os.path.join(LOGDIR, "session-20260701T093000.log"))
