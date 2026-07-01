@@ -187,7 +187,8 @@ def git_in_flight(repo):
                     s = c.get("conclusion") or c.get("state") or ""
                     if nm == "qa-gate":
                         qa = {"SUCCESS": "passing", "FAILURE": "failing",
-                              "ERROR": "failing"}.get(str(s).upper(), "pending")
+                              "ERROR": "failing", "CANCELLED": "failing",
+                              "TIMED_OUT": "failing"}.get(str(s).upper(), "pending")
                         continue
                     states.append(s)
                 if any(s in ("FAILURE", "ERROR", "CANCELLED") for s in states):
