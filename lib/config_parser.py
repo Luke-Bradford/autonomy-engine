@@ -84,6 +84,50 @@ def get(config: dict, dotted_key: str):
     return node
 
 
+def set_scalar(text: str, dotted_key: str, value: str) -> str:
+    """Rewrite ONE scalar in config text, preserving every other byte --
+    comments (incl. the edited line's trailing comment), blank lines, order.
+    If the leaf key is missing but its parent mapping exists, a new line is
+    inserted directly under the parent. Raises KeyError when the parent path
+    doesn't exist, ValueError when the target is a mapping (not a scalar).
+    Powers the dashboard's 'save as default' write-back (#24)."""
+    parts = dotted_key.split(".")
+    lines = text.splitlines(True)
+    stack = []  # [(indent, key), ...] path to the current line
+    parent_line = None  # index of the line that opens the parent mapping
+    parent_indent = 0
+    for i, raw_line in enumerate(lines):
+        line = _strip_comment(raw_line).rstrip()
+        if not line.strip() or ":" not in line.strip():
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        key, _, val = line.strip().partition(":")
+        key = key.strip()
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        stack.append((indent, key))
+        path = [k for _, k in stack]
+        if path == parts:
+            if val.strip() == "" and i + 1 < len(lines):
+                # key opens a mapping (children more indented) -> refuse
+                nxt = _strip_comment(lines[i + 1]).rstrip()
+                if nxt.strip() and len(nxt) - len(nxt.lstrip(" ")) > indent:
+                    raise ValueError("%s is a mapping, not a scalar" % dotted_key)
+            # replace the value, keep indentation + any trailing comment
+            body = raw_line.rstrip("\n")
+            head = body[:indent] + key + ":"
+            rest = body[len(_strip_comment(body).rstrip()):]  # the comment tail
+            lines[i] = head + " " + str(value) + rest + "\n"
+            return "".join(lines)
+        if path == parts[:-1]:
+            parent_line, parent_indent = i, indent
+    if parent_line is None:
+        raise KeyError(dotted_key)
+    new = " " * (parent_indent + 2) + parts[-1] + ": " + str(value) + "\n"
+    lines.insert(parent_line + 1, new)
+    return "".join(lines)
+
+
 def main(argv: list) -> int:
     if len(argv) != 3:
         print("usage: config_parser.py <config-file> <dotted.key>", file=sys.stderr)

@@ -98,6 +98,9 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px
 .cbtn.go{--bord:var(--ok);--fg:var(--ok)} .cbtn.warn{--bord:var(--warn);--fg:var(--warn)} .cbtn.danger{--bord:var(--bad);--fg:var(--bad)}
 .cbtn:disabled{opacity:.4;cursor:default}
 .ctl .note{margin-left:auto;align-self:center;font-family:var(--mono);font-size:10px;color:var(--dim)}
+.mctl{flex-wrap:wrap}
+.mctl select{background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);font-family:var(--mono);font-size:10.5px;border-radius:5px;padding:5px 6px;max-width:170px}
+.mctl .pend{align-self:center;font-family:var(--mono);font-size:10px;color:var(--warn)}
 #toast{position:fixed;right:20px;bottom:20px;z-index:50;display:flex;flex-direction:column;gap:8px}
 .tmsg{background:var(--panel);border:1px solid var(--hair2);border-left:3px solid var(--tc,var(--accent));border-radius:6px;
   box-shadow:var(--shadow);padding:11px 14px;font-size:12px;max-width:340px;animation:rise .3s both}
@@ -311,6 +314,9 @@ function tname(n){if(!n)return "tool";if(n.startsWith("mcp__")){const p=n.split(
 
 /* ---- FOCUS BAND ---- */
 function renderFocus(repos){
+  // don't wipe an in-progress model/effort selection on an SSE tick
+  const ae=document.activeElement;
+  if(ae&&$("focus").contains(ae)&&(ae.tagName==="SELECT"||ae.tagName==="BUTTON")) return;
   const active=repos.filter(r=>["working","stopping","idle","paused"].includes(dispStatus(r)));
   $("c-now").textContent=active.length?`${active.filter(r=>dispStatus(r)==="working").length} working · ${active.length} live`:"";
   const show=repos.length?repos:[];
@@ -350,9 +356,40 @@ function renderFocus(repos){
       </div>
       ${ticket}${stepLine}
       <div class="fc-meta"><span>${elapsed}</span>${cs.output_tokens!=null?`<span>out <b class="mono">${num(cs.output_tokens)}</b> tok</span>`:""}${cs.cost_usd?`<span>cost <b class="mono">$${cs.cost_usd.toFixed(2)}</b></span>`:""}</div>
-      ${controls(r,st)}
+      ${controls(r,st)}${modelCtl(r,st)}
     </div>`;
   }).join("");
+}
+
+/* ---- MODEL / EFFORT CONTROL (#24) ---- */
+const MODEL_CHOICES=["claude-opus-4-8","claude-sonnet-5","claude-haiku-4-5"];
+const EFFORT_CHOICES=["","low","medium","high","xhigh","max"];
+function modelCtl(r,st){
+  if(st==="needs-setup"||st==="missing"||st==="error") return "";
+  const cfg=r.config||{}, ov=r.override||{};
+  const models=MODEL_CHOICES.slice();
+  if(cfg.model&&!models.includes(cfg.model)) models.unshift(cfg.model);
+  const pend=(ov.model||ov.effort)
+    ? `<span class="pend">queued next session: ${esc(ov.model||"")}${ov.model&&ov.effort?" · ":""}${esc(ov.effort||"")}</span>`:"";
+  return `<div class="ctl mctl" data-repo="${encodeURIComponent(r.path)}">
+    <select class="msel" title="model">${models.map(m=>`<option ${m===cfg.model?"selected":""}>${esc(m)}</option>`).join("")}</select>
+    <select class="esel" title="effort">${EFFORT_CHOICES.map(e=>`<option value="${e}" ${e===(cfg.effort||"")?"selected":""}>${e||"effort: default"}</option>`).join("")}</select>
+    <button class="cbtn" onclick="setModel(this,'session')">next session</button>
+    <button class="cbtn warn" onclick="setModel(this,'default')">save default</button>
+    ${pend}</div>`;
+}
+function setModel(btn,scope){
+  const box=btn.closest(".mctl");
+  const repo=decodeURIComponent(box.dataset.repo);
+  const model=box.querySelector(".msel").value, effort=box.querySelector(".esel").value;
+  if(scope==="default" && !window.confirm(
+    "Save as this repo's DEFAULT?\n\nWrites agent.model.primary"+(effort?" + agent.effort":"")
+    +" into .autonomy/config.yaml (applies from the next session).\n\nrepo: "+repo)) return;
+  fetch("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({repo,action:"set_model",model,effort,scope,token:CTOKEN})})
+    .then(r=>r.json().then(j=>({ok:r.ok,j})))
+    .then(({ok,j})=>toast(ok&&j.ok,(ok&&j.ok)?(j.message||"done"):("failed: "+(j.error||"error"))))
+    .catch(()=>toast(false,"request failed"));
 }
 
 /* ---- CONTROLS (P2) ---- */

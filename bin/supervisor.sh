@@ -5,7 +5,7 @@
 #
 # Usage:
 #   supervisor.sh --repo <path> [--agent-type claude|codex] [--model <id>]
-#                 [--fallback-model <id>] [--label <slug>]
+#                 [--fallback-model <id>] [--effort <level>] [--label <slug>]
 #
 # --repo is required. Everything else defaults from the target repo's
 # .autonomy/config.yaml, or this script's own hardcoded defaults if the pack
@@ -85,6 +85,58 @@ preflight() {
   return 0
 }
 
+# --- live model/effort settings (#24) ---------------------------------------
+# Strict token check for model ids -- the value came over the dashboard's
+# control channel and lands in a CLI argv; nothing shell-metacharish allowed.
+# (In the negated bracket set `]` must come first.)
+valid_model_id() {
+  case "$1" in
+    '') return 1 ;;
+    *[!]A-Za-z0-9._[-]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+# The claude CLI's accepted effort levels (verified against the CLI itself).
+valid_effort() {
+  case "$1" in low|medium|high|xhigh|max) return 0 ;; *) return 1 ;; esac
+}
+
+# Resolve model/fallback/effort PER SESSION (not once at startup), so a config
+# edit -- including the dashboard's 'save as default' write-back -- takes
+# effect on the next session without a supervisor restart.
+resolve_session_settings() {
+  MODEL="$(resolve_config_value "$CFG" agent.model.primary "$MODEL_OVERRIDE" claude-sonnet-5)"
+  FALLBACK_MODEL="$(resolve_config_value "$CFG" agent.model.fallback "$FALLBACK_MODEL_OVERRIDE" claude-sonnet-4-6)"
+  EFFORT="$(resolve_config_value "$CFG" agent.effort "$EFFORT_OVERRIDE" "")"
+  consume_model_override "$LOGDIR/model-override"
+}
+
+# One-shot override file the dashboard writes ('next session only' scope):
+# key=value lines (model= / fallback= / effort=). Values are validated here
+# again (defense in depth) and the file is ALWAYS deleted -- valid or not --
+# so it can never apply twice or wedge the loop.
+consume_model_override() {
+  local override_file="$1" line key val
+  [ -f "$override_file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    key="${line%%=*}"; val="${line#*=}"
+    case "$key" in
+      model)
+        if valid_model_id "$val"; then MODEL="$val"
+        else log "model-override: invalid model id ignored"; fi ;;
+      fallback)
+        if valid_model_id "$val"; then FALLBACK_MODEL="$val"
+        else log "model-override: invalid fallback id ignored"; fi ;;
+      effort)
+        if valid_effort "$val"; then EFFORT="$val"
+        else log "model-override: invalid effort ignored (valid: low|medium|high|xhigh|max)"; fi ;;
+    esac
+  done <"$override_file"
+  rm -f "$override_file"
+  log "model-override consumed (one session): model=$MODEL effort=${EFFORT:-default}"
+}
+
 # Graceful-stop sentinel. If this file exists at the top of the loop the
 # supervisor finishes the current session (this predicate is only checked
 # BEFORE run_session, never mid-session) then idles until it's removed --
@@ -115,13 +167,15 @@ run_session() {
   # shellcheck source=/dev/null
   source "$ENGINE_HOME/bin/agents/${AGENT_TYPE}.sh"
 
+  resolve_session_settings
+
   local log_file; log_file="$LOGDIR/session-$(date +%Y%m%dT%H%M%S).log"
-  log "session start -> $log_file"
+  log "session start (model=$MODEL effort=${EFFORT:-default}) -> $log_file"
 
   agent_invoke \
     "$AUTONOMY_TARGET_REPO/.autonomy/loop_prompt.md" \
     "$AUTONOMY_TARGET_REPO/.autonomy/hard_rules.md" \
-    "$MODEL" "$FALLBACK_MODEL" "$log_file"
+    "$MODEL" "$FALLBACK_MODEL" "$log_file" "$EFFORT"
   local rc=$?
 
   local outcome; outcome="$(agent_classify_outcome "$log_file" "$rc")"
@@ -145,6 +199,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   AGENT_TYPE_OVERRIDE=""
   MODEL_OVERRIDE=""
   FALLBACK_MODEL_OVERRIDE=""
+  EFFORT_OVERRIDE=""
   LABEL_OVERRIDE=""
 
   while [ $# -gt 0 ]; do
@@ -153,12 +208,13 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
       --agent-type) AGENT_TYPE_OVERRIDE="$2"; shift 2 ;;
       --model) MODEL_OVERRIDE="$2"; shift 2 ;;
       --fallback-model) FALLBACK_MODEL_OVERRIDE="$2"; shift 2 ;;
+      --effort) EFFORT_OVERRIDE="$2"; shift 2 ;;
       --label) LABEL_OVERRIDE="$2"; shift 2 ;;
       *) echo "unknown argument: $1" >&2; exit 1 ;;
     esac
   done
 
-  [ -n "$AUTONOMY_TARGET_REPO" ] || { echo "usage: supervisor.sh --repo <path> [--agent-type ...] [--model ...] [--fallback-model ...] [--label ...]" >&2; exit 1; }
+  [ -n "$AUTONOMY_TARGET_REPO" ] || { echo "usage: supervisor.sh --repo <path> [--agent-type ...] [--model ...] [--fallback-model ...] [--effort ...] [--label ...]" >&2; exit 1; }
   [ -d "$AUTONOMY_TARGET_REPO" ] || { echo "supervisor.sh: --repo path does not exist: $AUTONOMY_TARGET_REPO" >&2; exit 1; }
   AUTONOMY_TARGET_REPO="$(cd "$AUTONOMY_TARGET_REPO" && pwd)"
   export AUTONOMY_TARGET_REPO
