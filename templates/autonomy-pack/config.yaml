@@ -12,6 +12,7 @@ engine:
 
 agent:
   type: claude               # claude | codex (only claude has an adapter implemented)
+  # effort: high             # optional: low | medium | high | xhigh | max (omit = CLI default)
   model:
     primary: claude-sonnet-5
     fallback: claude-sonnet-4-6

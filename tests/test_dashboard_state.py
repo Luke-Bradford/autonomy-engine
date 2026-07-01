@@ -394,6 +394,28 @@ class TestRoles(unittest.TestCase):
         self.assertIn("security_sweeper", [r["name"] for r in roles])
 
 
+class TestModelOverrideRead(unittest.TestCase):
+    """#24: the page shows a queued one-shot override honestly ('next session:
+    opus/high') instead of pretending the change is already live."""
+    def test_reads_pending_override(self):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "model-override")
+        with open(p, "w") as fh:
+            fh.write("model=claude-opus-4-8\neffort=high\n")
+        self.assertEqual(ds.read_model_override(p),
+                         {"model": "claude-opus-4-8", "effort": "high"})
+
+    def test_missing_file_is_empty(self):
+        self.assertEqual(ds.read_model_override("/nope/model-override"), {})
+
+    def test_junk_lines_ignored(self):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "model-override")
+        with open(p, "w") as fh:
+            fh.write("bogus\nmodel=claude-sonnet-5\nwhat=ever\n")
+        self.assertEqual(ds.read_model_override(p), {"model": "claude-sonnet-5"})
+
+
 class TestRepoState(unittest.TestCase):
     def test_build_repo_state_composes_without_network(self):
         # git/gh injected so the test never shells out

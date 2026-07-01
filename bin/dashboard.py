@@ -33,6 +33,7 @@ ENGINE_HOME = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ENGINE_HOME, "lib"))
 import dashboard_state as ds  # noqa: E402
 import dashboard_control as dcx  # noqa: E402
+import config_parser  # noqa: E402
 
 PAGE = os.path.join(ENGINE_HOME, "lib", "dashboard_page.html")
 REPOS_FILE = os.path.expanduser("~/.config/autonomy/repos")
@@ -364,6 +365,38 @@ def collect(repos):
     return {"generated_at": int(time.time()), "repos": out, "account": _account_usage()}
 
 
+def execute_set_model(repo, model, effort, scope):
+    """Carry out a validated set_model plan (#24). Session scope writes the
+    one-shot override file the supervisor consumes; default scope rewrites
+    ONLY the agent model/effort scalars in .autonomy/config.yaml via
+    config_parser.set_scalar (comment-preserving, atomic replace)."""
+    plan = dcx.set_model_plan(repo, model, effort, scope)
+    if "error" in plan:
+        return {"ok": False, "error": plan["error"]}
+    try:
+        if "write" in plan:
+            os.makedirs(os.path.dirname(plan["write"]), exist_ok=True)
+            tmp = plan["write"] + ".tmp"
+            with open(tmp, "w") as fh:
+                fh.write(plan["content"])
+            os.replace(tmp, plan["write"])
+        else:
+            with open(plan["config_path"]) as fh:
+                text = fh.read()
+            for key, value in sorted(plan["config_set"].items()):
+                text = config_parser.set_scalar(text, key, value)
+            tmp = plan["config_path"] + ".tmp"
+            with open(tmp, "w") as fh:
+                fh.write(text)
+            os.replace(tmp, plan["config_path"])
+    except KeyError as exc:
+        missing = exc.args[0] if exc.args else exc
+        return {"ok": False, "error": "config.yaml has no %s key to update" % missing}
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "message": plan.get("message", "done")}
+
+
 def execute_control(repo, action):
     """Resolve the lifecycle action to a plan and carry it out. Lifecycle only:
     a sentinel file touch/remove, or an exact launchctl bootout/bootstrap --
@@ -466,14 +499,19 @@ class Handler(BaseHTTPRequestHandler):
             self._send(403, b'{"error":"bad or missing control token"}')
             return
         action = body.get("action")
-        if not dcx.is_valid_action(action):
+        if action != "set_model" and not dcx.is_valid_action(action):
             self._send(400, b'{"error":"invalid action"}')
             return
         repo = os.path.abspath(os.path.expanduser(str(body.get("repo") or "")))
         if repo not in self.repos:            # only ever act on a managed repo
             self._send(400, b'{"error":"repo is not managed by this dashboard"}')
             return
-        result = execute_control(repo, action)
+        if action == "set_model":
+            result = execute_set_model(repo, str(body.get("model") or ""),
+                                       str(body.get("effort") or ""),
+                                       str(body.get("scope") or ""))
+        else:
+            result = execute_control(repo, action)
         self._send(200 if result.get("ok") else 409, json.dumps(result).encode("utf-8"))
 
     def _stream(self):

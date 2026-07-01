@@ -6,13 +6,19 @@
 # spec's "Agent adapters" section.
 
 # Runs the Claude Code CLI once and writes its stream-json log to $5. This is
-# eBull's original supervisor.sh invocation, unchanged, just parameterized.
+# eBull's original supervisor.sh invocation, parameterized. $6 (optional) is
+# the effort level (#24) -- --effort is passed only when non-empty, so packs
+# that set none keep the CLI's default. The ${arr[@]+...} expansion is the
+# bash-3.2 idiom for "empty array under set -u".
 agent_invoke() {
-  local prompt_file="$1" safety_file="$2" model="$3" fallback_model="$4" log_file="$5"
+  local prompt_file="$1" safety_file="$2" model="$3" fallback_model="$4" log_file="$5" effort="${6:-}"
+  local effort_args=()
+  [ -n "$effort" ] && effort_args=(--effort "$effort")
   claude -p "$(cat "$prompt_file")" \
     --dangerously-skip-permissions \
     --model "$model" \
     --fallback-model "$fallback_model" \
+    ${effort_args[@]+"${effort_args[@]}"} \
     --append-system-prompt "$(cat "$safety_file")" \
     --output-format stream-json --verbose \
     >>"$log_file" 2>&1

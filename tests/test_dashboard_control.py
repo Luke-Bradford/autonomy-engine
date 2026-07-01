@@ -25,6 +25,50 @@ PLIST = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
+class TestSetModelPlan(unittest.TestCase):
+    """#24: live model/effort control. The plan is pure and fully validated
+    here; the server only executes it. Two scopes: 'session' (one-shot
+    override file the supervisor consumes) and 'default' (config.yaml keys)."""
+    def setUp(self):
+        self.repo = "/w/tree"
+
+    def test_session_scope_writes_override_file(self):
+        p = dc.set_model_plan(self.repo, "claude-opus-4-8", "high", "session")
+        self.assertEqual(p["write"], "/w/tree/var/autonomy-logs/model-override")
+        self.assertEqual(p["content"], "model=claude-opus-4-8\neffort=high\n")
+
+    def test_session_scope_model_only(self):
+        p = dc.set_model_plan(self.repo, "claude-opus-4-8", "", "session")
+        self.assertEqual(p["content"], "model=claude-opus-4-8\n")
+
+    def test_session_scope_effort_only(self):
+        p = dc.set_model_plan(self.repo, "", "max", "session")
+        self.assertEqual(p["content"], "effort=max\n")
+
+    def test_default_scope_returns_config_keys(self):
+        p = dc.set_model_plan(self.repo, "claude-opus-4-8", "high", "default")
+        self.assertEqual(p["config_path"], "/w/tree/.autonomy/config.yaml")
+        self.assertEqual(p["config_set"], {"agent.model.primary": "claude-opus-4-8",
+                                           "agent.effort": "high"})
+
+    def test_rejects_bad_model_string(self):
+        for bad in ("opus; rm -rf /", "a b", "x\ny", "claude$(boom)"):
+            self.assertIn("error", dc.set_model_plan(self.repo, bad, "", "session"))
+
+    def test_rejects_unknown_effort(self):
+        self.assertIn("error", dc.set_model_plan(self.repo, "", "turbo", "session"))
+
+    def test_valid_efforts(self):
+        for e in ("low", "medium", "high", "xhigh", "max"):
+            self.assertNotIn("error", dc.set_model_plan(self.repo, "", e, "session"))
+
+    def test_rejects_empty_request(self):
+        self.assertIn("error", dc.set_model_plan(self.repo, "", "", "session"))
+
+    def test_rejects_unknown_scope(self):
+        self.assertIn("error", dc.set_model_plan(self.repo, "claude-sonnet-5", "", "forever"))
+
+
 class TestControlPlan(unittest.TestCase):
     def setUp(self):
         self.repo = "/w/tree"

@@ -510,6 +510,22 @@ def build_roles(config_roles, coder_status):
     return roles
 
 
+def read_model_override(path):
+    """A queued one-shot model/effort override (#24), so the page can show
+    'next session: ...' honestly. {} when none. Only the keys the supervisor
+    honors (model/fallback/effort) are surfaced."""
+    out = {}
+    try:
+        with open(path, errors="replace") as fh:
+            for line in fh:
+                key, sep, val = line.strip().partition("=")
+                if sep and key in ("model", "fallback", "effort") and val:
+                    out[key] = val
+    except OSError:
+        return {}
+    return out
+
+
 def read_supervisor_voice(path, limit=40):
     """Last `limit` lines of supervisor.log, oldest-first. Missing log -> []."""
     try:
@@ -584,6 +600,7 @@ def _read_config(repo_path):
         "agent": g("agent.type") or "",
         "model": g("agent.model.primary") or "",
         "fallback": g("agent.model.fallback") or "",
+        "effort": g("agent.effort") or "",
         "merge_gate": g("merge_gate.strategy") or "",
         "roles": roles if isinstance(roles, dict) else {},
     }
@@ -613,5 +630,6 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "voice": read_supervisor_voice(os.path.join(logdir, "supervisor.log")),
         "git": git_in_flight(repo_path) if git_in_flight else {},
         "config": config,
+        "override": read_model_override(os.path.join(logdir, "model-override")),
         "quota": parse_quota_windows(latest) if latest else {},
     }

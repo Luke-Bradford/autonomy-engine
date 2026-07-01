@@ -15,8 +15,17 @@ LaunchAgents. Lifecycle only -- this module has no notion of any target-repo
 trade/order/position path and can never touch one.
 """
 import os
+import re
 
 VALID_ACTIONS = ("pause", "resume", "stop", "start")
+
+# #24 live model/effort control. Model ids are a strict token (defense in
+# depth: the value lands in a file the supervisor reads and in config.yaml,
+# never a shell, but there is no reason to allow anything shell-metacharish).
+# Efforts are the claude CLI's own accepted set (verified empirically).
+_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,63}$")
+VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+VALID_SCOPES = ("session", "default")
 
 
 def is_valid_action(action):
@@ -25,6 +34,47 @@ def is_valid_action(action):
 
 def sentinel_path(repo):
     return os.path.join(repo, "var", "autonomy-logs", "autonomy-PAUSE")
+
+
+def override_path(repo):
+    return os.path.join(repo, "var", "autonomy-logs", "model-override")
+
+
+def set_model_plan(repo, model, effort, scope):
+    """Pure decision for the model/effort control (#24). Returns:
+      scope=session -> {"write": override-file, "content": ..., "message"}
+                       (one-shot; the supervisor consumes it at next session)
+      scope=default -> {"config_path": ..., "config_set": {dotted: value},
+                        "message"}  (the server rewrites config.yaml)
+      {"error": ...} on any invalid input."""
+    model = (model or "").strip()
+    effort = (effort or "").strip()
+    if scope not in VALID_SCOPES:
+        return {"error": "unknown scope %r" % (scope,)}
+    if not model and not effort:
+        return {"error": "nothing to set — pick a model and/or an effort"}
+    if model and not _MODEL_RE.match(model):
+        return {"error": "invalid model id"}
+    if effort and effort not in VALID_EFFORTS:
+        return {"error": "invalid effort (valid: %s)" % ", ".join(VALID_EFFORTS)}
+
+    if scope == "session":
+        content = ""
+        if model:
+            content += "model=%s\n" % model
+        if effort:
+            content += "effort=%s\n" % effort
+        return {"write": override_path(repo), "content": content,
+                "message": "override queued — applies to the NEXT session only"}
+
+    config_set = {}
+    if model:
+        config_set["agent.model.primary"] = model
+    if effort:
+        config_set["agent.effort"] = effort
+    return {"config_path": os.path.join(repo, ".autonomy", "config.yaml"),
+            "config_set": config_set,
+            "message": "saved as the repo default — applies from the next session"}
 
 
 def find_service(repo, launch_agents_dir):

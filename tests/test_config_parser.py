@@ -7,6 +7,9 @@ from pathlib import Path
 ENGINE_ROOT = Path(__file__).resolve().parent.parent
 PARSER = ENGINE_ROOT / "lib" / "config_parser.py"
 
+sys.path.insert(0, str(ENGINE_ROOT / "lib"))
+import config_parser  # noqa: E402
+
 SAMPLE = """\
 board:
   owner: Luke-Bradford
@@ -85,6 +88,56 @@ class TestConfigParser(unittest.TestCase):
     def test_validate_mode_on_bad_file(self):
         rc, out = run_parser("this line has no colon whatsoever\n", "__validate__")
         self.assertEqual(rc, 1)
+
+
+class TestSetScalar(unittest.TestCase):
+    """set_scalar rewrites ONE scalar in config text while preserving every
+    other byte -- comments, blank lines, ordering (#24's 'save default')."""
+    TEXT = (
+        "# pack config\n"
+        "agent:\n"
+        "  type: claude               # claude | codex\n"
+        "  model:\n"
+        "    primary: claude-sonnet-5\n"
+        "    fallback: claude-sonnet-4-6\n"
+        "\n"
+        "merge_gate:\n"
+        "  strategy: manual\n"
+    )
+
+    def test_replaces_value_preserving_everything_else(self):
+        out = config_parser.set_scalar(self.TEXT, "agent.model.primary", "claude-opus-4-8")
+        self.assertIn("    primary: claude-opus-4-8\n", out)
+        # everything else byte-identical
+        self.assertIn("# pack config\n", out)
+        self.assertIn("  type: claude               # claude | codex\n", out)
+        self.assertIn("    fallback: claude-sonnet-4-6\n", out)
+        self.assertIn("  strategy: manual\n", out)
+        # and the new text still parses to the new value
+        self.assertEqual(config_parser.get(config_parser.parse(out),
+                                           "agent.model.primary"), "claude-opus-4-8")
+
+    def test_keeps_trailing_comment_on_the_edited_line(self):
+        text = "agent:\n  model:\n    primary: claude-sonnet-5  # main model\n"
+        out = config_parser.set_scalar(text, "agent.model.primary", "claude-opus-4-8")
+        self.assertIn("    primary: claude-opus-4-8  # main model\n", out)
+
+    def test_inserts_missing_leaf_under_existing_parent(self):
+        # agent.effort doesn't exist -> inserted directly under agent:
+        out = config_parser.set_scalar(self.TEXT, "agent.effort", "high")
+        self.assertEqual(config_parser.get(config_parser.parse(out),
+                                           "agent.effort"), "high")
+        # the rest untouched
+        self.assertEqual(config_parser.get(config_parser.parse(out),
+                                           "agent.model.primary"), "claude-sonnet-5")
+
+    def test_missing_parent_raises(self):
+        with self.assertRaises(KeyError):
+            config_parser.set_scalar(self.TEXT, "nonexistent.block.key", "x")
+
+    def test_refuses_to_overwrite_a_mapping(self):
+        with self.assertRaises(ValueError):
+            config_parser.set_scalar(self.TEXT, "agent.model", "flat-value")
 
 
 if __name__ == "__main__":
