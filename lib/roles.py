@@ -20,7 +20,10 @@ Trigger-specific requirements: cron needs `schedule`; event needs a non-empty
 Two checks, deliberately split: `validate_roles` is pure (shape/enums, no
 filesystem); `check_prompt_files` takes the repo root and verifies prompt
 paths are repo-relative pack files that exist. doctor.sh runs both via the
-CLI entry: `python3 lib/roles.py <target-repo>` (exit 1 + one error per line).
+CLI entry `python3 lib/roles.py <target-repo>`, whose exit code carries the
+whole verdict so callers never re-parse the config:
+  0 = valid, roles: block present   3 = valid, no roles: block (defaults)
+  1 = invalid (one error per stdout line)   2 = config unreadable
 """
 import os
 import sys
@@ -132,7 +135,9 @@ def main(argv):
     errors = validate_roles(config) + check_prompt_files(config, repo)
     for e in errors:
         print(e)
-    return 1 if errors else 0
+    if errors:
+        return 1
+    return 0 if config.get("roles") else 3
 
 
 if __name__ == "__main__":

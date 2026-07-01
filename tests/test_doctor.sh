@@ -62,7 +62,7 @@ cat > "$tmp/.autonomy/config.yaml" <<'YAML'
 engine:
   requires_claude_md: false
 YAML
-check "no roles block -> roles.py passes (defaults)" "0" "$(python3 "$HERE/../lib/roles.py" "$tmp" >/dev/null 2>&1; echo $?)"
+check "no roles block -> rc 3 (valid, defaults apply)" "3" "$(python3 "$HERE/../lib/roles.py" "$tmp" >/dev/null 2>&1; echo $?)"
 
 cat > "$tmp/.autonomy/config.yaml" <<'YAML'
 roles:
