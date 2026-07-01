@@ -149,19 +149,92 @@ pause_requested() {
   [ -f "$1" ]
 }
 
-compute_limit_wait() {
-  [ -f "$RESET_STATE" ] || return 1
-  local reset now
-  reset="$(cat "$RESET_STATE" 2>/dev/null)"
+# --- account-level shared usage-limit state (#3) ----------------------------
+# One Anthropic account serves every supervisor on this machine: a reset
+# epoch discovered by any one loop is written to a shared, account-keyed
+# marker as well as the repo-local file, so parallel supervisors back off
+# together instead of stampeding into the same wall. The supervisor remains
+# the SOLE writer (adapters only extract); the shared write is best-effort
+# and every read is validated per-file, so a torn/garbage/stale marker can
+# never block or extend a loop incorrectly (fail-safe).
+
+# engine.account_key from config.yaml names WHICH account's marker this repo
+# shares ('default' when unset -- one operator, one account). The value lands
+# in a filename: anything outside [A-Za-z0-9._-] falls back to 'default'.
+resolve_account_key() {
+  local key
+  key="$(CONFIG_GET "$CFG" engine.account_key || printf '')"
+  case "$key" in
+    "") key=default ;;
+    *[!A-Za-z0-9._-]*)
+      log "WARN engine.account_key '$key' has characters outside [A-Za-z0-9._-] -- using 'default'"
+      key=default ;;
+  esac
+  printf '%s' "$key"
+}
+
+# Shared marker path: $AUTONOMY_SHARED_STATE_DIR override (tests) >
+# ~/.config/autonomy (the engine's established per-operator config dir) >
+# empty = repo-local-only mode (no HOME, e.g. a bare daemon context).
+resolve_shared_reset_state() {
+  local dir="${AUTONOMY_SHARED_STATE_DIR:-}"
+  if [ -z "$dir" ] && [ -n "${HOME:-}" ]; then dir="$HOME/.config/autonomy"; fi
+  if [ -n "$dir" ]; then printf '%s' "$dir/usage-reset.$1"; fi
+}
+
+# Persist a discovered reset epoch: repo-local (existing contract) plus the
+# shared marker. Shared write is atomic (tmp + mv, a concurrent reader never
+# sees a torn value) and best-effort -- on failure warn and keep looping.
+persist_reset_epoch() {
+  local epoch="$1" dir tmpf
+  printf '%s\n' "$epoch" >"$RESET_STATE"
+  [ -n "${SHARED_RESET_STATE:-}" ] || return 0
+  dir="$(dirname "$SHARED_RESET_STATE")"
+  tmpf="$SHARED_RESET_STATE.$$"
+  if mkdir -p "$dir" 2>/dev/null \
+     && printf '%s\n' "$epoch" >"$tmpf" 2>/dev/null \
+     && mv -f "$tmpf" "$SHARED_RESET_STATE" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$tmpf" 2>/dev/null
+  log "WARN could not write shared usage-reset marker ($SHARED_RESET_STATE) -- repo-local only"
+  return 0
+}
+
+# A clean session is empirical proof the account is usable again: clear both
+# markers. (Another loop that is still limited re-persists within one
+# session attempt -- self-healing, never fail-open.)
+clear_reset_state() {
+  rm -f "$RESET_STATE"
+  if [ -n "${SHARED_RESET_STATE:-}" ]; then rm -f "$SHARED_RESET_STATE" 2>/dev/null; fi
+  return 0
+}
+
+# Print $1's epoch only if it's a pure integer inside (now, now+horizon].
+read_valid_reset() {
+  local f="$1" now="$2" reset
+  [ -f "$f" ] || return 1
+  reset="$(cat "$f" 2>/dev/null)"
   case "$reset" in
     ''|*[!0-9]*) return 1 ;;
   esac
+  [ "$reset" -gt "$now" ] && [ "$reset" -le "$((now + LIMIT_RESET_MAX_HORIZON))" ] || return 1
+  printf '%s' "$reset"
+}
+
+# Wait until the LATEST valid epoch across the repo-local and shared markers
+# (most conservative: the account is limited until every signal has passed).
+compute_limit_wait() {
+  local now best r f
   now="$(date +%s)"
-  if [ "$reset" -gt "$now" ] && [ "$reset" -le "$((now + LIMIT_RESET_MAX_HORIZON))" ]; then
-    echo "$((reset - now))"
-    return 0
-  fi
-  return 1
+  best=""
+  for f in "$RESET_STATE" ${SHARED_RESET_STATE:+"$SHARED_RESET_STATE"}; do
+    if r="$(read_valid_reset "$f" "$now")"; then
+      if [ -z "$best" ] || [ "$r" -gt "$best" ]; then best="$r"; fi
+    fi
+  done
+  [ -n "$best" ] || return 1
+  echo "$((best - now))"
 }
 
 run_session() {
@@ -188,7 +261,7 @@ run_session() {
     usage_limit*)
       local epoch="${outcome#usage_limit }"
       if [ "$epoch" != "usage_limit" ] && [ -n "$epoch" ]; then
-        printf '%s\n' "$epoch" >"$RESET_STATE"
+        persist_reset_epoch "$epoch"
       fi
       return 3 ;;
     *)
@@ -231,6 +304,8 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   LABEL="$LABEL_OVERRIDE"
 
   CFG="$AUTONOMY_TARGET_REPO/.autonomy/config.yaml"
+  ACCOUNT_KEY="$(resolve_account_key)"
+  SHARED_RESET_STATE="$(resolve_shared_reset_state "$ACCOUNT_KEY")"
   AGENT_TYPE="$(resolve_config_value "$CFG" agent.type "$AGENT_TYPE_OVERRIDE" claude)"
   MODEL="$(resolve_config_value "$CFG" agent.model.primary "$MODEL_OVERRIDE" claude-sonnet-5)"
   FALLBACK_MODEL="$(resolve_config_value "$CFG" agent.model.fallback "$FALLBACK_MODEL_OVERRIDE" claude-sonnet-4-6)"
@@ -278,7 +353,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     case $outcome in
       0) log "session clean (open issues ~$open_count). pace ${PACE}s"
          err_backoff=$ERR_BACKOFF_START; limit_backoff=$LIMIT_BACKOFF_START
-         rm -f "$RESET_STATE"
+         clear_reset_state
          sleep "$PACE" ;;
       3) jitter=$((RANDOM % 120))
          if reset_wait="$(compute_limit_wait)"; then

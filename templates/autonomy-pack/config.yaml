@@ -8,6 +8,9 @@ board:
 engine:
   # label: my-repo          # uncomment + set only if this repo's basename collides
   #                         # with another target repo on the same machine
+  # account_key: default    # uncomment + set only if this repo runs on a DIFFERENT
+  #                         # Anthropic account than the machine's other repos --
+  #                         # repos sharing an account share one usage-limit marker
   requires_claude_md: false  # set true if this repo's workflow assumes CLAUDE.md exists
 
 agent:
