@@ -93,6 +93,7 @@ never treated as green; `ci_only` additionally refuses on zero configured checks
 | `safe_merge.sh <pr-number>` | The only sanctioned merge path |
 | `board.sh status <issue#> "<status>" \| add <issue#>` | Best-effort GitHub Projects v2 board updates |
 | `unblock_dependents.sh <merged-pr-number>` | Post-merge "blocked by #X" notifier |
+| `dashboard.py --repo <path> [--repo …] [--port 8787]` | Read-only control-room page (P1). Stdlib HTTP+SSE, **binds 127.0.0.1 only**, no controls. Reads the engine's emitted artifacts (session logs, `supervisor.log`, git/gh, config, quota) and renders them |
 | `agents/claude.sh` | The Claude Code agent adapter (only one implemented) |
 
 ## Lifecycle: start / graceful-stop / hard-stop
@@ -111,6 +112,31 @@ Three levers, distinct on purpose:
   stop that holds, which is why graceful-stop pauses rather than exits.)
 
 The dashboard's graceful-stop / resume controls (issue #10) drive this sentinel.
+
+## Control room (P1 dashboard)
+
+```bash
+bin/dashboard.py --repo /path/to/worktree [--repo /another] [--port 8787]
+# open http://127.0.0.1:8787/
+```
+
+A single self-contained local page — stdlib HTTP + SSE, **localhost-bind only**, no build step,
+no controls (read-only visibility; the control surface is issue #10). It exposes what the engine
+already emits, nothing invented:
+
+- **Now** — each repo's current worker: working / idle / paused / stopped (working-vs-idle is the
+  freshness of the session log, not the lock pid), current step, in-flight ticket, elapsed.
+- **Repos & roles** — the multi-role roster (Coder live; PM/QA/Researcher shown per
+  [docs/agent-org-design.md](docs/agent-org-design.md), rendered even before they're built).
+- **Activity** — tree / timeline / tally over the session's stream-json tool calls (subagents
+  nest by `parent_tool_use_id`).
+- **Account quota** — real 5-hour and weekly `utilization` from `rate_limit_event`s.
+- **Throughput** — server-sampled output tok/min over wall-clock (flatlines when idle).
+- **Supervisor voice** — the loop's own decisions, tailing `supervisor.log`.
+- **Git in flight** — open PRs (CI / review / mergeable) + recently-merged tickets.
+
+Design + the research behind it: [docs/dashboard-design.md](docs/dashboard-design.md),
+[docs/control-room-research.md](docs/control-room-research.md). Dark/light toggle.
 
 ## Agent adapters
 

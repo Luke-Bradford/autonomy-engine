@@ -1,0 +1,7 @@
+agent:
+  type: "claude"
+  model:
+    primary: "claude-opus-4-8"
+    fallback: "claude-sonnet-5"
+merge_gate:
+  strategy: "manual"

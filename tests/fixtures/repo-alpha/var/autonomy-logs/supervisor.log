@@ -1,0 +1,4 @@
+2026-07-01T08:59:50Z === supervisor start (pid 4242, repo=/Users/op/Dev/repo-alpha, agent=claude, model=claude-opus-4-8) ===
+2026-07-01T09:00:00Z session start -> /Users/op/Dev/repo-alpha/var/autonomy-logs/session-20260701T090000.log
+2026-07-01T09:07:00Z session clean (open issues ~8). pace 120s
+2026-07-01T09:30:00Z session start -> /Users/op/Dev/repo-alpha/var/autonomy-logs/session-20260701T093000.log
