@@ -5,6 +5,26 @@ against any target repo, from one operator's account.
 
 ## Quickstart
 
+One guided entry point chains the whole onboarding sequence:
+
+```bash
+bin/quickstart.sh /path/to/target-repo
+```
+
+It scaffolds the `.autonomy/` pack, walks you through the minimum config
+(board owner/title, model, merge-gate strategy — Enter keeps the shown value;
+writes are comment-preserving), runs the doctor report, offers to create the
+dedicated worktree + launchd plist, offers to register the repo for the
+dashboard, and prints the exact go-live commands. It **never runs `launchctl`
+itself** — loading the supervisor stays a deliberate operator step.
+
+Idempotent: re-run it any time; pressing Enter everywhere changes nothing.
+Every prompt has a flag twin (`--board-owner`, `--board-title`, `--model`,
+`--merge-gate`, `--worktree yes|no`, `--register yes|no`) for non-interactive
+use.
+
+Under the hood it runs the same tools you can drive by hand:
+
 ```bash
 # 1. Scaffold a new target repo's pack:
 bin/onboard.sh /path/to/target-repo
@@ -86,6 +106,7 @@ never treated as green; `ci_only` additionally refuses on zero configured checks
 | Script | Purpose |
 |---|---|
 | `supervisor.sh --repo <path> [--agent-type] [--model] [--fallback-model] [--label]` | The main loop launchd runs |
+| `quickstart.sh <target-repo> [flags]` | Guided single-entry onboarding: onboard → minimum config → doctor → optional worktree → optional dashboard registration → printed go-live commands (never runs `launchctl`) |
 | `onboard.sh <target-repo>` | Scaffold `.autonomy/` (idempotent) |
 | `doctor.sh <target-repo>` | Full readiness report (network calls; diagnostic-only, never provisions) |
 | `setup_worktree.sh <target-repo> [worktree-path]` | Create/reuse the dedicated worktree + install the launchd plist |
@@ -119,6 +140,11 @@ The dashboard's graceful-stop / resume controls (issue #10) drive this sentinel.
 bin/dashboard.py --repo /path/to/worktree [--repo /another] [--port 8787]
 # open http://127.0.0.1:8787/
 ```
+
+`--repo` can be omitted: discovery falls back to the `AUTONOMY_DASHBOARD_REPOS`
+environment variable (newline-separated paths), then to `~/.config/autonomy/repos`
+(one path per line — `quickstart.sh`'s register step appends here). CLI `--repo`
+always wins.
 
 A single self-contained local page — stdlib HTTP + SSE, **localhost-bind only**, no build step.
 It exposes what the engine already emits, nothing invented:
