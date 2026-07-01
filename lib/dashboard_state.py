@@ -272,6 +272,29 @@ def activity_state(session, now, stale_secs=90):
     return "idle"
 
 
+def display_status(lifecycle_state, activity):
+    """THE single source of truth for a repo's status label (#23).
+
+    Collapses the two orthogonal axes -- lifecycle (is the supervisor process
+    alive / paused / absent) and activity (is the session log fresh) -- into
+    the one vocabulary every panel renders:
+
+        working / stopping / idle / paused / stopped / needs-setup / missing / error
+
+    Computed exactly once, server-side; the page must never re-derive it.
+    Precedence: a terminal/absent lifecycle wins over stale session activity
+    (a dead supervisor with an old log is 'stopped', never 'working')."""
+    if lifecycle_state in ("needs-setup", "missing", "error"):
+        return lifecycle_state
+    if lifecycle_state == "paused":
+        # graceful stop requested: still finishing the current session ->
+        # "stopping"; session over / gone quiet -> "paused"
+        return "stopping" if activity == "working" else "paused"
+    if lifecycle_state == "stopped":
+        return "stopped"
+    return "working" if activity == "working" else "idle"
+
+
 def extract_ticket_ref(branch):
     """The issue number a branch is working, by the engine's feat/<n>- /
     fix/<n>- convention. None if the branch encodes no ticket."""
@@ -369,11 +392,13 @@ def _as_bool(v):
     return str(v).strip().lower() in ("true", "1", "yes", "on")
 
 
-def build_roles(config_roles, activity):
+def build_roles(config_roles, coder_status):
     """The per-repo role roster for the page. The standard four always render
     (Coder live; PM/QA/Researcher as not-configured placeholders unless the
     pack declares them), plus any custom roles the pack adds. `config_roles` is
-    the parsed `roles:` mapping (may be empty)."""
+    the parsed `roles:` mapping (may be empty). `coder_status` is the repo's
+    unified display_status (#23) -- the coder row shows the SAME label as the
+    repo badge, never a separately-derived one."""
     config_roles = config_roles or {}
     roles = []
     for name, d_enabled, d_sub, d_trig in _STANDARD_ROLES:
@@ -382,7 +407,7 @@ def build_roles(config_roles, activity):
         substrate = cfg.get("substrate") or d_sub
         trigger = (cfg.get("trigger") or {}).get("type") or d_trig
         if name == "coder":
-            status = activity
+            status = coder_status
         elif not cfg:
             status = "not-configured"
         else:
@@ -496,13 +521,16 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
     session = parse_session_log(latest) if latest else None
     activity = activity_state(session, now)
     config = _read_config(repo_path)
+    lifecycle = lifecycle_status(repo_path, pid_is_alive=pid_is_alive)
+    status = display_status(lifecycle["state"], activity)
     return {
         "name": os.path.basename(repo_path.rstrip("/")),
         "path": repo_path,
-        "lifecycle": lifecycle_status(repo_path, pid_is_alive=pid_is_alive),
+        "lifecycle": lifecycle,
         "current_session": session,
         "activity": activity,
-        "roles": build_roles(config.get("roles"), activity),
+        "display_status": status,
+        "roles": build_roles(config.get("roles"), status),
         "voice": read_supervisor_voice(os.path.join(logdir, "supervisor.log")),
         "git": git_in_flight(repo_path) if git_in_flight else {},
         "config": config,

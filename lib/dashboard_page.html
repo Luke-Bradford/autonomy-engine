@@ -296,19 +296,9 @@ function setTheme(t){document.documentElement.setAttribute("data-theme",t);try{l
   $("th-d").classList.toggle("on",t==="dark");$("th-l").classList.toggle("on",t==="light");}
 setTheme((function(){try{return localStorage.getItem("ae-theme")||"dark";}catch(e){return "dark";}})());
 
-/* status derivation */
-function dispStatus(r){
-  const ls=(r.lifecycle||{}).state;
-  if(ls==="needs-setup"||ls==="missing"||ls==="error") return ls;
-  // graceful stop requested (PAUSE sentinel). If a session is STILL running it's
-  // "stopping" (finishing this one), not yet "paused/idle".
-  if(ls==="paused") return r.activity==="working" ? "stopping" : "paused";
-  if(ls==="stopped") return "stopped";
-  // running supervisor -> activity freshness decides
-  const a=r.activity;
-  if(a==="working") return "working";
-  return "idle";
-}
+/* status: the server computes display_status ONCE (dashboard_state.display_status,
+   #23) -- the page only reads it, never re-derives lifecycle x activity. */
+function dispStatus(r){return r.display_status||(r.lifecycle||{}).state||"idle";}
 const SLABEL={"needs-setup":"needs setup","not-configured":"not configured","stopping":"stopping"};
 function dispName(n){return String(n||"").replace(/^\./,"");} // worktree folder .x-autonomy -> x-autonomy
 function isWorktree(n){return /-autonomy$/.test(String(n||""));}
@@ -329,9 +319,14 @@ function renderFocus(repos){
     const busy=st==="working"||st==="stopping";
     let ticket="";
     if(ft){
+      const stateChip=ft.state&&ft.state!=="open"?`<span class="chip">${esc(ft.state)}</span>`:"";
+      // "in progress" is asserted by the SERVER only while the repo is busy;
+      // otherwise an issue-sourced ticket is what the repo LAST worked.
       const right = ft.in_progress
-        ? `<span class="chip c-pending">in progress</span>${ft.state&&ft.state!=="open"?`<span class="chip">${esc(ft.state)}</span>`:""}`
-        : `${ft.ci?`<span class="chip c-${esc(ft.ci)}">ci ${esc(ft.ci)}</span>`:""}${ft.review?`<span class="chip c-${esc(ft.review)}">${esc(ft.review.replace("_"," "))}</span>`:""}`;
+        ? `<span class="chip c-pending">in progress</span>${stateChip}`
+        : (ft.ci||ft.review)
+          ? `${ft.ci?`<span class="chip c-${esc(ft.ci)}">ci ${esc(ft.ci)}</span>`:""}${ft.review?`<span class="chip c-${esc(ft.review)}">${esc(ft.review.replace("_"," "))}</span>`:""}`
+          : `<span class="chip c-none">last worked</span>${stateChip}`;
       ticket=`<div class="fc-ticket"><span class="no">#${ft.number}</span><span class="tt">${ft.url?`<a href="${esc(ft.url)}" target="_blank">${esc(short(ft.title||"ticket",42))}</a>`:esc(short(ft.title||"ticket",42))}</span>
       <span style="margin-left:auto;display:flex;gap:5px">${right}</span></div>`;
     }
@@ -401,10 +396,10 @@ function renderRepos(repos){
         <span class="rn">${esc(role.name)}</span>
         ${subBadge(role.substrate)}
         <span class="trig">${esc(role.trigger)}</span>
-        <span class="rst">${token(role.name==="coder"?st:role.status,role.name==="coder")}</span></div>`;
+        <span class="rst">${token(role.status,role.name==="coder")}</span></div>`;
     }).join("");
     return `<div class="repo">
-      <div class="repo-h"><span class="dot s-${st} ${(st==="working"||st==="stopping")?"pulse":""}"></span><span class="nm">${esc(dispName(r.name))}</span>
+      <div class="repo-h"><span class="nm">${esc(dispName(r.name))}</span>
         <span class="badge">${token(st,true)}</span></div>
       <div class="cfg">${esc(cfg.model||"—")} · gate ${esc(cfg.merge_gate||"—")}${(r.lifecycle||{}).pid?" · pid "+r.lifecycle.pid:""}</div>
       ${roles}</div>`;

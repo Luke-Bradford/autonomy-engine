@@ -315,6 +315,7 @@ def collect(repos):
         if not os.path.isdir(repo):
             out.append({"name": os.path.basename(repo.rstrip("/")), "path": repo,
                         "lifecycle": {"state": "missing", "pid": None},
+                        "display_status": "missing",
                         "current_session": None, "voice": [], "git": {},
                         "config": {}})
             continue
@@ -329,11 +330,17 @@ def collect(repos):
             if not git.get("focus_ticket") and sess.get("ticket"):
                 focus = _issue_focus(repo, sess["ticket"], git.get("repo_url", ""))
                 if focus:
+                    # honest chip (#23): "in progress" only while the repo is
+                    # actually busy; a stopped/idle repo shows its LAST ticket,
+                    # never an in-progress claim. Copy -- _issue_focus caches.
+                    focus = dict(focus)
+                    focus["in_progress"] = st.get("display_status") in ("working", "stopping")
                     git["focus_ticket"] = focus
             out.append(st)
         except Exception as exc:  # never let one repo blank the page
             out.append({"name": os.path.basename(repo.rstrip("/")), "path": repo,
                         "lifecycle": {"state": "error", "pid": None},
+                        "display_status": "error",
                         "error": str(exc), "current_session": None, "voice": [],
                         "git": {}, "config": {}})
     return {"generated_at": int(time.time()), "repos": out, "account": _account_usage()}
