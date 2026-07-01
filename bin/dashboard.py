@@ -291,8 +291,8 @@ def _issue_focus(repo, number, repo_url):
     cached = _issue_cache.get(key)
     if cached and now - cached[0] < 60:
         return cached[1]
-    if len(_issue_cache) > 256:            # bound the cache on a long-running process
-        _issue_cache.clear()
+    while len(_issue_cache) > 256:         # bound it: evict oldest (dict is insertion-ordered), not clear-all
+        _issue_cache.pop(next(iter(_issue_cache)))
     raw = _run(["gh", "issue", "view", str(number), "--json", "title,url,state"],
                cwd=repo, timeout=15)
     focus = None
