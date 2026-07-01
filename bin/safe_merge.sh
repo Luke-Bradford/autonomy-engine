@@ -46,6 +46,34 @@ ci_check() {
   return 0
 }
 
+# ISO-8601 -> epoch seconds (#1). Python because it is portable (BSD/GNU date
+# flags differ) and robust to fractional seconds / explicit offsets -- the
+# exact formats that silently break a lexicographic compare ('.' sorts before
+# 'Z', so a LATER ...00.500Z would string-compare as earlier than ...00Z).
+# Nonzero rc on garbage -- callers refuse rather than guess.
+iso_epoch() {
+  python3 -c '
+import sys
+from datetime import datetime, timezone
+try:
+    dt = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    print(int(dt.timestamp()))
+except (ValueError, IndexError):
+    sys.exit(1)' "$1" 2>/dev/null
+}
+
+# rc 0 = review at/after head commit; 1 = review predates head (gate reset by
+# the push); 2 = a timestamp would not parse (caller REFUSES -- fail-safe,
+# never guesses chronology).
+review_postdates_head() {
+  local review_epoch head_epoch
+  review_epoch="$(iso_epoch "$1")" || return 2
+  head_epoch="$(iso_epoch "$2")" || return 2
+  [ "$review_epoch" -ge "$head_epoch" ]
+}
+
 merge_gate_bot_comment() {
   local pr="$1" author_login="$2" marker="$3" doc_only_extensions="$4"
   local head_time; head_time="$(gh pr view "$pr" --json commits -q '.commits[-1].committedDate')"
@@ -78,10 +106,13 @@ merge_gate_bot_comment() {
   review_time="$(printf '%s' "$latest" | python3 -c 'import sys,json;print(json.load(sys.stdin)["createdAt"])')"
   review_body="$(printf '%s' "$latest" | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"])')"
 
-  if [[ "$review_time" < "$head_time" ]]; then
-    echo "safe_merge: REFUSE -- latest review ($review_time) predates head commit ($head_time); push reset the gate" >&2
-    return 1
-  fi
+  review_postdates_head "$review_time" "$head_time"
+  case $? in
+    1) echo "safe_merge: REFUSE -- latest review ($review_time) predates head commit ($head_time); push reset the gate" >&2
+       return 1 ;;
+    2) echo "safe_merge: REFUSE -- cannot parse review/head timestamps ('$review_time' vs '$head_time') -- refusing rather than guessing chronology" >&2
+       return 1 ;;
+  esac
   if printf '%s' "$review_body" | grep -qiE 'REQUEST CHANGES|\[BLOCKING\]|must fix before merge'; then
     echo "safe_merge: REFUSE -- latest review requests changes / has blocking findings" >&2
     return 1
@@ -109,10 +140,13 @@ merge_gate_gh_review() {
   review_time="$(printf '%s' "$latest" | python3 -c 'import sys,json;print(json.load(sys.stdin)["submittedAt"])')"
   review_state="$(printf '%s' "$latest" | python3 -c 'import sys,json;print(json.load(sys.stdin)["state"])')"
 
-  if [[ "$review_time" < "$head_time" ]]; then
-    echo "safe_merge: REFUSE -- latest review from $reviewer_login ($review_time) predates head commit ($head_time)" >&2
-    return 1
-  fi
+  review_postdates_head "$review_time" "$head_time"
+  case $? in
+    1) echo "safe_merge: REFUSE -- latest review from $reviewer_login ($review_time) predates head commit ($head_time)" >&2
+       return 1 ;;
+    2) echo "safe_merge: REFUSE -- cannot parse review/head timestamps ('$review_time' vs '$head_time') -- refusing rather than guessing chronology" >&2
+       return 1 ;;
+  esac
   if [ "$review_state" != "APPROVED" ]; then
     echo "safe_merge: REFUSE -- latest review from $reviewer_login is '$review_state', not APPROVED" >&2
     return 1
