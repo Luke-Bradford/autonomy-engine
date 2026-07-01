@@ -124,10 +124,13 @@ def _throughput(repo):
 
 
 def _run(args, cwd=None, timeout=12):
+    # errors="replace": non-UTF8 bytes in git/gh output (e.g. a garbled commit
+    # message) must not raise UnicodeDecodeError -- best-effort, never blank the
+    # page. text+errors decodes leniently instead.
     try:
         out = subprocess.run(args, cwd=cwd, timeout=timeout,
-                             capture_output=True, text=True)
-    except (OSError, subprocess.SubprocessError):
+                             capture_output=True, text=True, errors="replace")
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
     if out.returncode != 0:
         return None
@@ -236,6 +239,15 @@ def discover_repos(cli_repos):
     return seen
 
 
+# Bound concurrent SSE streams and give each a send timeout, so a client that
+# vanishes without a clean TCP close (laptop sleep, network change) can't leak
+# its thread indefinitely -- a stalled write times out and the thread exits.
+_SSE_MAX = 12
+_SSE_TIMEOUT = 30
+_sse_lock = threading.Lock()
+_sse_active = [0]
+
+
 def collect(repos):
     """Full app snapshot the page renders."""
     out = []
@@ -289,19 +301,33 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, b'{"error":"not found"}')
 
     def _stream(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Connection", "keep-alive")
-        self.end_headers()
+        with _sse_lock:
+            if _sse_active[0] >= _SSE_MAX:
+                self._send(503, b'{"error":"too many streams"}')
+                return
+            _sse_active[0] += 1
         try:
+            # a stalled write to a vanished client raises within the timeout
+            # (socket.timeout is an OSError subclass) rather than hanging.
+            try:
+                self.connection.settimeout(_SSE_TIMEOUT)
+            except OSError:
+                pass
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
             while True:
                 payload = json.dumps(collect(self.repos))
                 self.wfile.write(b"data: " + payload.encode("utf-8") + b"\n\n")
                 self.wfile.flush()
                 time.sleep(2.0)
         except (BrokenPipeError, ConnectionResetError, OSError):
-            return  # client navigated away
+            return  # client navigated away / dropped / timed out
+        finally:
+            with _sse_lock:
+                _sse_active[0] -= 1
 
 
 def main(argv):
