@@ -181,5 +181,106 @@ class TestSetScalar(unittest.TestCase):
             config_parser.set_scalar(self.TEXT, "agent.model", "flat-value")
 
 
+class TestSetCli(unittest.TestCase):
+    """#38: `config_parser.py --set <file> <dotted.key> <value>` -- the CLI
+    face of set_scalar so bash callers (quickstart.sh) can write config
+    without reimplementing YAML editing. Writes are atomic and the result
+    must still parse, or the file is left untouched."""
+    TEXT = (
+        "# pack config\n"
+        "board:\n"
+        "  owner: CHANGE-ME          # GitHub user or org\n"
+        '  project_title: "CHANGE-ME engineering board"\n'
+        "agent:\n"
+        "  type: claude               # claude | codex\n"
+        "  model:\n"
+        "    primary: claude-sonnet-5\n"
+        "merge_gate:\n"
+        "  strategy: manual\n"
+    )
+
+    def write_tmp(self, text):
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+            f.write(text)
+            return f.name
+
+    def run_set(self, path, key, value):
+        return subprocess.run(
+            [sys.executable, str(PARSER), "--set", path, key, value],
+            capture_output=True, text=True,
+        )
+
+    def read_back(self, path, key):
+        proc = subprocess.run(
+            [sys.executable, str(PARSER), path, key],
+            capture_output=True, text=True,
+        )
+        return proc.returncode, proc.stdout
+
+    def test_set_bare_value(self):
+        path = self.write_tmp(self.TEXT)
+        proc = self.run_set(path, "merge_gate.strategy", "ci_only")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        rc, out = self.read_back(path, "merge_gate.strategy")
+        self.assertEqual((rc, out), (0, "ci_only\n"))
+
+    def test_set_preserves_comments_and_other_lines(self):
+        path = self.write_tmp(self.TEXT)
+        self.run_set(path, "board.owner", "some-org")
+        text = Path(path).read_text()
+        self.assertIn("# pack config\n", text)
+        self.assertIn("owner: some-org          # GitHub user or org\n", text)
+        self.assertIn("  type: claude               # claude | codex\n", text)
+
+    def test_set_value_with_spaces_round_trips(self):
+        path = self.write_tmp(self.TEXT)
+        proc = self.run_set(path, "board.project_title", "My Fancy Board")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        rc, out = self.read_back(path, "board.project_title")
+        self.assertEqual((rc, out), (0, "My Fancy Board\n"))
+
+    def test_set_value_with_hash_round_trips(self):
+        # unquoted, '#' would be comment-stripped on read-back -- must quote
+        path = self.write_tmp(self.TEXT)
+        proc = self.run_set(path, "board.project_title", "team #1 board")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        rc, out = self.read_back(path, "board.project_title")
+        self.assertEqual((rc, out), (0, "team #1 board\n"))
+
+    def test_set_same_value_is_byte_identical(self):
+        path = self.write_tmp(self.TEXT)
+        proc = self.run_set(path, "agent.model.primary", "claude-sonnet-5")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(Path(path).read_text(), self.TEXT)
+
+    def test_set_missing_parent_fails_and_leaves_file_untouched(self):
+        path = self.write_tmp(self.TEXT)
+        proc = self.run_set(path, "nonexistent.block.key", "x")
+        self.assertEqual(proc.returncode, 1)
+        self.assertNotEqual(proc.stderr, "")
+        self.assertEqual(Path(path).read_text(), self.TEXT)
+
+    def test_set_mapping_target_fails_and_leaves_file_untouched(self):
+        path = self.write_tmp(self.TEXT)
+        proc = self.run_set(path, "agent.model", "flat")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(Path(path).read_text(), self.TEXT)
+
+    def test_set_on_unparseable_file_fails_and_leaves_file_untouched(self):
+        bad = "this line has no colon whatsoever\n"
+        path = self.write_tmp(bad)
+        proc = self.run_set(path, "board.owner", "x")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(Path(path).read_text(), bad)
+
+    def test_set_value_with_both_quote_kinds_is_refused(self):
+        # the restricted parser has no escape support: a value that contains
+        # both quote characters cannot be written safely -- refuse
+        path = self.write_tmp(self.TEXT)
+        proc = self.run_set(path, "board.project_title", "a\"b'c")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(Path(path).read_text(), self.TEXT)
+
+
 if __name__ == "__main__":
     unittest.main()
