@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd LaunchAgent for the autonomy SUPERVISOR. KeepAlive + RunAtLoad:
+  starts on load and is restarted if it ever exits (crash, reboot, OOM). The
+  supervisor itself loops sessions forever with usage-limit backoff, so
+  launchd's only job is to keep ONE supervisor alive. Its internal lock
+  prevents duplicates if launchd double-starts.
+
+  __ENGINE_HOME__, __REPO__, __LABEL__ substituted by setup_worktree.sh.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.autonomy.__LABEL__.supervisor</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__ENGINE_HOME__/bin/supervisor.sh</string>
+    <string>--repo</string>
+    <string>__REPO__</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+
+  <key>StandardOutPath</key>
+  <string>__REPO__/var/autonomy-logs/launchd.supervisor.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO__/var/autonomy-logs/launchd.supervisor.err.log</string>
+</dict>
+</plist>
