@@ -21,6 +21,28 @@ derive_slug() {
   basename "$TARGET_REPO" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'
 }
 
+# Resolve the worktree path. Precedence: positional arg ($1) > config
+# worktree.default_path > derived default ".${SLUG}-autonomy" beside the target
+# repo. Reads TARGET_REPO + SLUG (set by the caller). The config read is guarded
+# with `|| printf ''` so an ABSENT worktree.default_path -- config_parser exits
+# non-zero -- yields empty and falls through to the default, rather than tripping
+# `set -e` and aborting the whole script (a bare `x="$(failing)"` takes the
+# command's non-zero status; this bit repos that don't set the key).
+resolve_worktree_path() {
+  local positional="$1"
+  if [ -n "$positional" ]; then printf '%s' "$positional"; return; fi
+  local cfg_path; cfg_path="$(CONFIG_GET "$TARGET_REPO/.autonomy/config.yaml" worktree.default_path || printf '')"
+  if [ -n "$cfg_path" ]; then
+    cfg_path="${cfg_path//\{repo-slug\}/$SLUG}"          # substitute {repo-slug}
+    case "$cfg_path" in
+      /*) printf '%s' "$cfg_path" ;;                     # absolute: as-is
+      *)  printf '%s' "$(cd "$TARGET_REPO/.." && pwd)/$(basename "$cfg_path")" ;;  # relative: vs target's parent
+    esac
+    return
+  fi
+  printf '%s' "$(cd "$TARGET_REPO/.." && pwd)/.${SLUG}-autonomy"
+}
+
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
 
 TARGET="${1:?usage: setup_worktree.sh <target-repo-path> [worktree-path]}"
@@ -35,22 +57,8 @@ TARGET_REPO="$(cd "$TARGET" && pwd)"
 SLUG="$(derive_slug)"
 [ -n "$SLUG" ] || { echo "setup_worktree.sh: could not derive a repo-slug for $TARGET_REPO" >&2; exit 1; }
 
-# Determine WORKTREE with precedence: positional arg $2 > worktree.default_path config > derived default
-if [ -n "${2:-}" ]; then
-  WORKTREE="$2"
-else
-  cfg_path="$(CONFIG_GET "$TARGET_REPO/.autonomy/config.yaml" worktree.default_path)"
-  if [ -n "$cfg_path" ]; then
-    # Substitute {repo-slug} placeholder with the actual SLUG
-    cfg_path="${cfg_path//\{repo-slug\}/$SLUG}"
-    case "$cfg_path" in
-      /*) WORKTREE="$cfg_path" ;;                                   # absolute: use as-is
-      *)  WORKTREE="$(cd "$TARGET_REPO/.." && pwd)/$(basename "$cfg_path")" ;;  # relative: resolve relative to target repo's parent
-    esac
-  else
-    WORKTREE="$(cd "$TARGET_REPO/.." && pwd)/.${SLUG}-autonomy"
-  fi
-fi
+# Precedence: positional arg $2 > worktree.default_path config > derived default
+WORKTREE="$(resolve_worktree_path "${2:-}")"
 LABEL="com.autonomy.${SLUG}.supervisor"
 PLIST_DST="$HOME/Library/LaunchAgents/${LABEL}.plist"
 
