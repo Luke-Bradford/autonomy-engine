@@ -93,7 +93,7 @@ never treated as green; `ci_only` additionally refuses on zero configured checks
 | `safe_merge.sh <pr-number>` | The only sanctioned merge path |
 | `board.sh status <issue#> "<status>" \| add <issue#>` | Best-effort GitHub Projects v2 board updates |
 | `unblock_dependents.sh <merged-pr-number>` | Post-merge "blocked by #X" notifier |
-| `dashboard.py --repo <path> [--repo …] [--port 8787]` | Read-only control-room page (P1). Stdlib HTTP+SSE, **binds 127.0.0.1 only**, no controls. Reads the engine's emitted artifacts (session logs, `supervisor.log`, git/gh, config, quota) and renders them |
+| `dashboard.py --repo <path> [--repo …] [--port 8787]` | Control-room page. Stdlib HTTP+SSE, **binds 127.0.0.1 only**. Renders the engine's emitted artifacts (session logs, `supervisor.log`, git/gh, config, quota); lifecycle controls (start / graceful-stop / hard-stop / resume) via a token-guarded POST |
 | `agents/claude.sh` | The Claude Code agent adapter (only one implemented) |
 
 ## Lifecycle: start / graceful-stop / hard-stop
@@ -120,9 +120,8 @@ bin/dashboard.py --repo /path/to/worktree [--repo /another] [--port 8787]
 # open http://127.0.0.1:8787/
 ```
 
-A single self-contained local page — stdlib HTTP + SSE, **localhost-bind only**, no build step,
-no controls (read-only visibility; the control surface is issue #10). It exposes what the engine
-already emits, nothing invented:
+A single self-contained local page — stdlib HTTP + SSE, **localhost-bind only**, no build step.
+It exposes what the engine already emits, nothing invented:
 
 - **Now** — each repo's current worker: working / idle / paused / stopped (working-vs-idle is the
   freshness of the session log, not the lock pid), current step, in-flight ticket, elapsed.
@@ -134,6 +133,13 @@ already emits, nothing invented:
 - **Throughput** — server-sampled output tok/min over wall-clock (flatlines when idle).
 - **Supervisor voice** — the loop's own decisions, tailing `supervisor.log`.
 - **Git in flight** — open PRs (CI / review / mergeable) + recently-merged tickets.
+
+**Lifecycle controls** (per running/stopped repo, in the Now cards): start / graceful-stop / hard-stop
+/ resume. Behind `POST /api/control`, which requires a per-process token embedded in the served page
+(defeats cross-origin / DNS-rebinding drive-by) and only ever acts on a managed repo — **lifecycle
+only, never a target repo's trade/order path**. Hard-stop and start prompt for confirmation; start
+never auto-fires. graceful-stop/resume drive the `autonomy-PAUSE` sentinel; hard-stop/start drive
+`launchctl bootout`/`bootstrap` on the repo's installed plist.
 
 Design + the research behind it: [docs/dashboard-design.md](docs/dashboard-design.md),
 [docs/control-room-research.md](docs/control-room-research.md). Dark/light toggle.

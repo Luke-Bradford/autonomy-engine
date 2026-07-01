@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="ae-control-token" content="__CONTROL_TOKEN__">
 <title>Autonomy · control room</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23141418'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%235b9dff'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -90,6 +91,18 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px
 .fc-step .k{font-family:var(--mono);color:var(--ink)}
 .fc-meta{display:flex;gap:20px;font-size:11.5px;color:var(--dim)}
 .fc-meta .b{color:var(--ink);font-weight:600} .fc-meta .mono{font-family:var(--mono)}
+.ctl{display:flex;gap:7px;margin-top:12px;padding-top:11px;border-top:1px solid var(--hair)}
+.cbtn{font-family:var(--mono);font-size:10px;letter-spacing:.6px;text-transform:uppercase;padding:6px 11px;border-radius:5px;
+  border:1px solid var(--hair2);background:transparent;color:var(--mut);cursor:pointer;transition:.12s}
+.cbtn:hover{border-color:var(--bord,var(--mut));color:var(--fg,var(--ink))}
+.cbtn.go{--bord:var(--ok);--fg:var(--ok)} .cbtn.warn{--bord:var(--warn);--fg:var(--warn)} .cbtn.danger{--bord:var(--bad);--fg:var(--bad)}
+.cbtn:disabled{opacity:.4;cursor:default}
+.ctl .note{margin-left:auto;align-self:center;font-family:var(--mono);font-size:10px;color:var(--dim)}
+#toast{position:fixed;right:20px;bottom:20px;z-index:50;display:flex;flex-direction:column;gap:8px}
+.tmsg{background:var(--panel);border:1px solid var(--hair2);border-left:3px solid var(--tc,var(--accent));border-radius:6px;
+  box-shadow:var(--shadow);padding:11px 14px;font-size:12px;max-width:340px;animation:rise .3s both}
+.tmsg.ok{--tc:var(--ok)} .tmsg.err{--tc:var(--bad)}
+.tmsg .th{font-weight:600;margin-bottom:2px}
 
 /* status token */
 .st{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;letter-spacing:.8px;text-transform:uppercase;font-weight:500;color:var(--sc,var(--mut))}
@@ -203,7 +216,7 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
 <div class="wrap">
   <header>
     <div class="brand"><span class="mk"><i></i></span>Autonomy <small>control room</small></div>
-    <span class="ro">read-only · p1</span>
+    <span class="ro">lifecycle · p2</span>
     <div class="hgap"></div>
     <div class="hstat">
       <div><span class="lab">repos</span><span class="b" id="h-repos">—</span></div>
@@ -260,9 +273,10 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
   </div>
 
   <div class="foot">
-    <span>autonomy-engine · control-room p1</span><span>localhost-only · read-only</span><span id="f-gen">—</span>
+    <span>autonomy-engine · control-room</span><span>localhost-only · lifecycle controls</span><span id="f-gen">—</span>
   </div>
 </div>
+<div id="toast"></div>
 
 <script>
 "use strict";
@@ -333,8 +347,40 @@ function renderFocus(repos){
       </div>
       ${ticket}${stepLine}
       <div class="fc-meta"><span>${elapsed}</span>${cs.output_tokens!=null?`<span>out <b class="mono">${num(cs.output_tokens)}</b> tok</span>`:""}${cs.cost_usd?`<span>cost <b class="mono">$${cs.cost_usd.toFixed(2)}</b></span>`:""}</div>
+      ${controls(r,st)}
     </div>`;
   }).join("");
+}
+
+/* ---- CONTROLS (P2) ---- */
+const CTOKEN=(document.querySelector('meta[name="ae-control-token"]')||{}).content||"";
+function cbtn(repo,action,label,cls){return `<button class="cbtn ${cls}" onclick="control('${encodeURIComponent(repo)}','${action}','${esc(label)}')">${esc(label)}</button>`;}
+function controls(r,st){
+  const repo=r.path;
+  if(st==="needs-setup"||st==="missing") return `<div class="ctl"><span class="note">run setup_worktree.sh to manage</span></div>`;
+  let btns="";
+  if(st==="working"||st==="idle"){ btns=cbtn(repo,"pause","graceful-stop","warn")+cbtn(repo,"stop","hard-stop","danger"); }
+  else if(st==="paused"){ btns=cbtn(repo,"resume","resume","go")+cbtn(repo,"stop","hard-stop","danger"); }
+  else if(st==="stopped"){ btns=cbtn(repo,"start","start","go"); }
+  else return "";
+  return `<div class="ctl">${btns}<span class="note">lifecycle only</span></div>`;
+}
+const CONFIRM={stop:"Hard-stop this supervisor? A mid-session hard-stop interrupts the running agent.",
+  start:"Start this supervisor via launchctl? It will begin running sessions."};
+function control(repoEnc,action,label){
+  const repo=decodeURIComponent(repoEnc);
+  if(CONFIRM[action] && !window.confirm(CONFIRM[action]+"\n\nrepo: "+repo)) return;
+  fetch("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({repo,action,token:CTOKEN})})
+    .then(r=>r.json().then(j=>({ok:r.ok,j})))
+    .then(({ok,j})=>toast(ok&&j.ok, (ok&&j.ok)?(label+" — "+(j.message||"done")):("failed: "+(j.error||"error"))))
+    .catch(()=>toast(false,"request failed"));
+}
+function toast(ok,msg){
+  const box=$("toast"); const el=document.createElement("div");
+  el.className="tmsg "+(ok?"ok":"err");
+  el.innerHTML=`<div class="th">${ok?"✓ done":"✕ failed"}</div><div>${esc(msg)}</div>`;
+  box.appendChild(el); setTimeout(()=>el.remove(),6000);
 }
 
 /* ---- REPOS + ROLES ---- */
