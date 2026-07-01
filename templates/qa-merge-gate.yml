@@ -72,7 +72,10 @@ jobs:
           set -euo pipefail
           source .autonomy/qa/decide.sh
 
-          strategy="$(sed -n 's/^[[:space:]]*strategy:[[:space:]]*//p' .autonomy/config.yaml | head -1 | sed 's/[[:space:]]*#.*//')"
+          # scoped to the merge_gate: block (an unrelated strategy: key under
+          # another block must not be picked up); a mis-scrape yields empty ->
+          # treated as manual -> no merge (fail-safe)
+          strategy="$(awk '/^merge_gate:/{f=1; next} /^[^[:space:]#]/{f=0} f && /^[[:space:]]+strategy:/{sub(/#.*/,""); print $2; exit}' .autonomy/config.yaml)"
           completes="$(awk '/^  qa:/{f=1} f && /completes_merge:/{print $2; exit} /^  [a-z_]+:/ && !/^  qa:/{f=0}' .autonomy/config.yaml)"
 
           # same-repo PRs only: fork heads never reach the privileged path
@@ -90,7 +93,10 @@ jobs:
             if [ "${existing:-0}" -gt 0 ]; then
               echo "qa_gate: #$pr@$sha already has a verdict -- skipping"
             else
-              qa_post_verdict "$sha" pending "QA review running" "$REPO"
+              if ! qa_post_verdict "$sha" pending "QA review running" "$REPO"; then
+                echo "qa_gate: cannot post pending status for #$pr -- skipping this round"
+                continue
+              fi
               transcript="$(mktemp)"
               # per-PR gh calls are guarded: one PR's transient failure skips
               # THAT PR (reconciler retries) instead of aborting the whole
@@ -121,9 +127,13 @@ jobs:
                 continue
               fi
               if [ "$verdict" = "pass" ]; then
-                qa_post_verdict "$sha" success "QA pass" "$REPO"
+                if ! qa_post_verdict "$sha" success "QA pass" "$REPO"; then
+                  echo "qa_gate: could not post success verdict for #$pr -- NOT merging; reconciler retries"
+                  continue
+                fi
               else
-                qa_post_verdict "$sha" failure "QA fail -- see workflow log" "$REPO"
+                qa_post_verdict "$sha" failure "QA fail -- see workflow log" "$REPO" \
+                  || echo "qa_gate: could not post failure verdict for #$pr -- reconciler retries"
                 continue
               fi
             fi
