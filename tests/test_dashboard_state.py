@@ -47,10 +47,10 @@ class TestSessionParse(unittest.TestCase):
         s = ds.parse_session_log(os.path.join(LOGDIR, "session-20260701T093000.log"))
         self.assertEqual(s["ticket"], 57)
 
-    def test_no_ticket_when_none_mentioned(self):
+    def test_ticket_from_result_text(self):
         s = ds.parse_session_log(os.path.join(LOGDIR, "session-20260701T090000.log"))
-        # the completed fixture's result text mentions #42 (merged) -> that's the
-        # ticket it worked
+        # no assistant text/tool ref, but the result text says "Merged #42" ->
+        # the ticket is still recovered from the result
         self.assertEqual(s["ticket"], 42)
 
     def test_tokens_series_is_cumulative(self):
