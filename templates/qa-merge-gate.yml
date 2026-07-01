@@ -1,0 +1,164 @@
+# templates/qa-merge-gate.yml -- the QA role's event-driven merge gate (#13).
+#
+# Install into the TARGET repo as .github/workflows/qa-merge-gate.yml when
+# roles.qa is enabled with substrate `actions`. Requires:
+#   - the pack scaffolded (.autonomy/roles/qa.md + .autonomy/qa/decide.sh)
+#   - repo secret ANTHROPIC_API_KEY
+#   - (recommended) branch protection requiring the `qa-gate` status context,
+#     so the verdict is a hard veto, not advisory.
+#
+# Behavior: on PR approval / CI completion / new commits (re-arm) / a cron
+# reconcile backstop, each open PR is joined on its HEAD SHA -- reviewDecision
+# APPROVED + every third-party check green (via .autonomy/qa/decide.sh, which
+# refuses on any gh failure rather than assuming green). Ready PRs get a QA
+# pass (prompt: .autonomy/roles/qa.md, scope: diff); the verdict lands as the
+# `qa-gate` commit status on that exact SHA. The merge is completed ONLY when
+# the pack's merge_gate.strategy is not `manual` AND roles.qa.completes_merge
+# is exactly `true` -- `manual` keeps the verdict advisory. Never silent.
+#
+# Security model (PR content is UNTRUSTED input into an LLM):
+#   - the workspace stays on the BASE branch -- the prompt (qa.md), decide.sh
+#     and config.yaml are never read from the PR head, so a PR cannot rewrite
+#     its own gate; the QA agent reviews the DIFF as data;
+#   - the QA agent runs with a read-only tool allowlist (no Bash/Edit/Write)
+#     and with the GitHub tokens stripped from its environment -- a prompt
+#     injection in the diff can at worst bias the verdict text, and a "pass"
+#     still cannot merge anything by itself (approval + CI + strategy gate);
+#   - fork PRs are skipped entirely (isCrossRepository) -- the privileged
+#     path only ever sees same-repo branches.
+
+name: QA merge gate
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    types: [synchronize]      # new commits invalidate approval + CI: re-arm
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  schedule:
+    - cron: "*/15 * * * *"    # reconcile backstop for dropped webhooks
+
+permissions:
+  contents: write             # gh pr merge needs it; the QA agent never gets the token
+  pull-requests: write
+  statuses: write
+
+concurrency:
+  group: qa-merge-gate
+  cancel-in-progress: false
+
+jobs:
+  qa-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # ALWAYS the base branch -- never a PR head. The gate's own logic
+          # (decide.sh, qa.md, config.yaml) must not be attacker-writable.
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Gate, review, verdict, merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .autonomy/qa/decide.sh
+
+          # scoped to the merge_gate: block (an unrelated strategy: key under
+          # another block must not be picked up); a mis-scrape yields empty ->
+          # treated as manual -> no merge (fail-safe)
+          strategy="$(awk '/^merge_gate:/{f=1; next} /^[^[:space:]#]/{f=0} f && /^[[:space:]]+strategy:/{sub(/#.*/,""); print $2; exit}' .autonomy/config.yaml)"
+          completes="$(awk '/^  qa:/{f=1} f && /completes_merge:/{print $2; exit} /^  [a-z_]+:/ && !/^  qa:/{f=0}' .autonomy/config.yaml)"
+
+          # same-repo PRs only: fork heads never reach the privileged path.
+          # Listing failure is explicit (a bare $(...) in the for-list would
+          # silently no-op the whole round under set -e).
+          if ! pr_list="$(gh pr list --state open --json number,isCrossRepository \
+                            -q '.[] | select(.isCrossRepository | not) | .number')"; then
+            echo "qa_gate: cannot list open PRs (gh failed) -- nothing processed this round"
+            exit 0
+          fi
+          for pr in $pr_list; do
+            echo "== PR #$pr =="
+            if ! sha="$(qa_join_ready "$pr")"; then
+              continue
+            fi
+            # latest TERMINAL qa-gate verdict on this sha (statuses API is
+            # newest-first). pending does NOT count -- a run that died after
+            # posting pending must be retryable, not wedged. An existing
+            # FAILURE ends this PR's round outright: only a new head (which
+            # re-arms via synchronize) can be reviewed again -- a failed sha
+            # must NEVER fall through to the merge step. A gh failure here is
+            # "unknown" and also ends the round (fail-safe, never merge blind).
+            verdict_state="$(gh api "repos/$REPO/commits/$sha/statuses" \
+              -q '[.[] | select(.context == "qa-gate" and (.state == "success" or .state == "failure"))] | if length > 0 then .[0].state else "none" end' \
+              2>/dev/null || echo unknown)"
+            if [ "$verdict_state" = "failure" ]; then
+              echo "qa_gate: #$pr@$sha already FAILED QA -- not merging; a new commit re-arms"
+              continue
+            fi
+            if [ "$verdict_state" = "unknown" ]; then
+              echo "qa_gate: cannot read existing verdicts for #$pr -- skipping this round (fail-safe)"
+              continue
+            fi
+            if [ "$verdict_state" = "success" ]; then
+              echo "qa_gate: #$pr@$sha already passed QA -- proceeding to merge decision"
+            else
+              if ! qa_post_verdict "$sha" pending "QA review running" "$REPO"; then
+                echo "qa_gate: cannot post pending status for #$pr -- skipping this round"
+                continue
+              fi
+              transcript="$(mktemp)"
+              # per-PR gh calls are guarded: one PR's transient failure skips
+              # THAT PR (reconciler retries) instead of aborting the whole
+              # loop under set -e
+              if ! gh pr diff "$pr" > /tmp/qa-pr.diff; then
+                echo "qa_gate: cannot fetch diff for #$pr -- skipping this round"
+                continue
+              fi
+              # Read-only agent, tokens stripped: the diff is untrusted input.
+              env -u GH_TOKEN -u GITHUB_TOKEN \
+                claude -p "$(cat .autonomy/roles/qa.md)
+
+          ## The PR under review
+          PR #$pr in $REPO. The diff is in /tmp/qa-pr.diff. The checked-out tree is the BASE branch (pre-merge state)." \
+                --allowedTools "Read" "Grep" "Glob" \
+                --output-format text >"$transcript" 2>&1 || true
+              verdict="$(qa_extract_verdict "$transcript")"
+              tail -40 "$transcript"
+              # bind the verdict to the sha we joined on; if the head moved
+              # meanwhile, the synchronize trigger re-arms on the new head.
+              # A gh failure here refuses (no verdict on an unverifiable sha).
+              if ! sha_now="$(gh pr view "$pr" --json headRefOid -q .headRefOid)"; then
+                echo "qa_gate: cannot re-read head for #$pr -- discarding verdict; reconciler retries"
+                continue
+              fi
+              if [ "$sha_now" != "$sha" ]; then
+                echo "qa_gate: head moved during QA -- verdict discarded; re-armed by synchronize"
+                continue
+              fi
+              if [ "$verdict" = "pass" ]; then
+                if ! qa_post_verdict "$sha" success "QA pass" "$REPO"; then
+                  echo "qa_gate: could not post success verdict for #$pr -- NOT merging; reconciler retries"
+                  continue
+                fi
+              else
+                qa_post_verdict "$sha" failure "QA fail -- see workflow log" "$REPO" \
+                  || echo "qa_gate: could not post failure verdict for #$pr -- reconciler retries"
+                continue
+              fi
+            fi
+            if qa_should_merge "$strategy" "$completes"; then
+              qa_complete_merge "$pr" || echo "qa_gate: merge refused by GitHub (protection not yet satisfied) -- reconciler will retry"
+            else
+              echo "qa_gate: verdict recorded; merge_gate.strategy='$strategy' completes_merge='$completes' -- not completing the merge"
+            fi
+          done

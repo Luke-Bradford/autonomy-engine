@@ -17,9 +17,14 @@ check "config.yaml scaffolded" "0" "$([ -f "$tmp/.autonomy/config.yaml" ] && ech
 check "loop_prompt.md scaffolded" "0" "$([ -f "$tmp/.autonomy/loop_prompt.md" ] && echo 0 || echo 1)"
 check "hard_rules.md scaffolded" "0" "$([ -f "$tmp/.autonomy/hard_rules.md" ] && echo 0 || echo 1)"
 
+check "roles/qa.md scaffolded (subdirectory, #13)" "0" "$([ -f "$tmp/.autonomy/roles/qa.md" ] && echo 0 || echo 1)"
+check "qa/decide.sh scaffolded (subdirectory, #13)" "0" "$([ -f "$tmp/.autonomy/qa/decide.sh" ] && echo 0 || echo 1)"
+
 echo "MY CUSTOM EDIT" > "$tmp/.autonomy/config.yaml"
+echo "MY QA PROMPT" > "$tmp/.autonomy/roles/qa.md"
 "$ENGINE_HOME/bin/onboard.sh" "$tmp" >/dev/null 2>&1
 check "idempotent -- does not clobber an existing file" "MY CUSTOM EDIT" "$(cat "$tmp/.autonomy/config.yaml")"
+check "idempotent in subdirectories too" "MY QA PROMPT" "$(cat "$tmp/.autonomy/roles/qa.md")"
 
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
