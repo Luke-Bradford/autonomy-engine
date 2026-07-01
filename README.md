@@ -95,6 +95,23 @@ never treated as green; `ci_only` additionally refuses on zero configured checks
 | `unblock_dependents.sh <merged-pr-number>` | Post-merge "blocked by #X" notifier |
 | `agents/claude.sh` | The Claude Code agent adapter (only one implemented) |
 
+## Lifecycle: start / graceful-stop / hard-stop
+
+Three levers, distinct on purpose:
+
+- **Start (hard) / stop (hard):** `launchctl bootstrap` / `launchctl bootout` the plist
+  `setup_worktree.sh` installed. Hard-stop kills the supervisor process; a mid-session hard-stop
+  interrupts the running agent.
+- **Graceful-stop (pause):** create the sentinel file
+  `<target-repo>/var/autonomy-logs/autonomy-PAUSE`. The supervisor checks it at the *top* of the
+  loop, so the current session always finishes — never a mid-session kill — then idles (polling
+  every `PAUSE_POLL`=30s). It logs the pause once to `supervisor.log`.
+- **Resume / start-if-stopped:** remove the sentinel; the supervisor logs "resuming" and continues.
+  (Under launchd `KeepAlive=true`, exiting on pause would just be relaunched — idling is the only
+  stop that holds, which is why graceful-stop pauses rather than exits.)
+
+The dashboard's graceful-stop / resume controls (issue #10) drive this sentinel.
+
 ## Agent adapters
 
 `bin/agents/<type>.sh`, dispatched by `agent.type`. Each implements two functions:
