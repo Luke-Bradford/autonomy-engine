@@ -353,6 +353,19 @@ class TestAccountUsage(unittest.TestCase):
         u = ds.account_usage(os.path.join(self.dir, "nope"), now=self.now)
         self.assertEqual(u["five_hour"]["sessions"], 0)
 
+    def test_files_older_than_the_window_are_not_opened(self):
+        # #31: history grows forever; a file whose mtime predates the 7-day
+        # cutoff cannot contain in-window records (mtime = last write) and
+        # must be skipped without reading. Proof: give an old-mtime file a
+        # record that WOULD count if parsed -- it must not.
+        self._sess("dddd-4444", [(self.now - 60, "mD1", 1000, 100)])
+        path = os.path.join(self.dir, "-Users-op-Dev-x", "dddd-4444.jsonl")
+        old = self.now - 8 * 24 * 3600
+        os.utime(path, (old, old))
+        u = ds.account_usage(self.dir, now=self.now)
+        self.assertEqual(u["five_hour"]["tokens"], 330)  # mD1 not counted
+        self.assertEqual(u["seven_day"]["sessions"], 2)
+
 
 class TestRoles(unittest.TestCase):
     """Page is designed for the multi-role org now: Coder live, others as
@@ -392,6 +405,41 @@ class TestRoles(unittest.TestCase):
                                           "trigger": {"type": "event"}}}
         roles = ds.build_roles(cfg_roles, coder_status="idle")
         self.assertIn("security_sweeper", [r["name"] for r in roles])
+
+
+class TestParseSessionLogCached(unittest.TestCase):
+    """#31: the server re-parses the newest session log on every state
+    collection (per SSE client per 2s). The cached variant re-parses only
+    when (mtime_ns, size) changes -- i.e. only when the log was written."""
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "session-20260701T090000.log")
+        self._write('{"type":"system","subtype":"init","session_id":"s1","model":"m","cwd":"/w"}\n')
+
+    def _write(self, text, mode="w"):
+        with open(self.path, mode) as fh:
+            fh.write(text)
+
+    def test_unchanged_file_returns_cached_object(self):
+        a = ds.parse_session_log_cached(self.path)
+        b = ds.parse_session_log_cached(self.path)
+        self.assertIs(a, b)  # identity = no re-parse
+
+    def test_appended_file_reparses(self):
+        a = ds.parse_session_log_cached(self.path)
+        self._write('{"type":"assistant","message":{"id":"m1","usage":{"output_tokens":7},'
+                    '"content":[{"type":"text","text":"hi"}]}}\n', mode="a")
+        b = ds.parse_session_log_cached(self.path)
+        self.assertIsNot(a, b)
+        self.assertEqual(b["output_tokens"], 7)
+
+    def test_missing_file_is_none_and_not_cached_forever(self):
+        gone = os.path.join(self.dir, "session-20260701T100000.log")
+        self.assertIsNone(ds.parse_session_log_cached(gone))
+        with open(gone, "w") as fh:
+            fh.write('{"type":"system","subtype":"init","session_id":"s2","model":"m","cwd":"/w"}\n')
+        got = ds.parse_session_log_cached(gone)
+        self.assertEqual(got["session_id"], "s2")
 
 
 class TestModelOverrideRead(unittest.TestCase):

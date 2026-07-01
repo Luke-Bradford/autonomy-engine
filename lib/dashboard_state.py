@@ -17,6 +17,7 @@ import glob
 import json
 import os
 import re
+import threading
 import time
 from collections import Counter
 from datetime import datetime
@@ -51,7 +52,13 @@ def account_usage(projects_dir=None, now=None):
     }
     for path in glob.glob(os.path.join(projects_dir, "**", "*.jsonl"), recursive=True):
         sid = os.path.basename(path)[:-len(".jsonl")]
+        # history grows forever; a file whose LAST WRITE predates the widest
+        # window cannot contain an in-window record -- skip without reading
+        # (60s slack for clock/fs jitter). Keeps the scan bounded by activity,
+        # not by account age (#31).
         try:
+            if os.path.getmtime(path) < win["seven_day"]["cutoff"] - 60:
+                continue
             fh = open(path, errors="replace")
         except OSError:
             continue
@@ -307,6 +314,35 @@ def parse_session_log(path):
         "rate_limited": rate_limited,
         "ticket": ticket,
     }
+
+
+# parse_session_log re-reads the whole file; the server calls it on every
+# state collection (per SSE client per 2s tick), and real session logs run to
+# megabytes. Cache by (mtime_ns, size): a live log changes both on every
+# write, an idle one hits the cache. Lock guards the eviction scan -- the
+# server is a ThreadingHTTPServer, one thread per request/stream (#31).
+_parse_cache = {}
+_parse_cache_lock = threading.Lock()
+_PARSE_CACHE_MAX = 64
+
+
+def parse_session_log_cached(path):
+    """parse_session_log, re-parsing only when the file actually changed."""
+    try:
+        st = os.stat(path)
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+    with _parse_cache_lock:
+        hit = _parse_cache.get(path)
+        if hit and hit[0] == key:
+            return hit[1]
+    result = parse_session_log(path)
+    with _parse_cache_lock:
+        while len(_parse_cache) >= _PARSE_CACHE_MAX:
+            _parse_cache.pop(next(iter(_parse_cache)))
+        _parse_cache[path] = (key, result)
+    return result
 
 
 def activity_state(session, now, stale_secs=90):
@@ -614,7 +650,7 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
     repo_path = os.path.abspath(repo_path)
     logdir = os.path.join(repo_path, "var", "autonomy-logs")
     latest = latest_session(logdir)
-    session = parse_session_log(latest) if latest else None
+    session = parse_session_log_cached(latest) if latest else None
     activity = activity_state(session, now)
     config = _read_config(repo_path)
     lifecycle = lifecycle_status(repo_path, pid_is_alive=pid_is_alive)
