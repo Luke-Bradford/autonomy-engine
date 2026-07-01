@@ -110,6 +110,7 @@ never treated as green; `ci_only` additionally refuses on zero configured checks
 |---|---|
 | `supervisor.sh --repo <path> [--agent-type] [--model] [--fallback-model] [--label]` | The main loop launchd runs |
 | `quickstart.sh <target-repo> [flags]` | Guided single-entry onboarding: onboard → minimum config → doctor → optional worktree → optional dashboard registration → printed go-live commands (never runs `launchctl`) |
+| `control.sh list \| register \| unregister \| start \| stop \| pause \| resume` | Multi-repo control unit over `~/.config/autonomy/repos`: loop states from the supervisor's own lock/sentinel, start/stop via `launchctl` against the installed plists, graceful pause/resume via the sentinel. `--all` fans out. Never provisions |
 | `onboard.sh <target-repo>` | Scaffold `.autonomy/` (idempotent) |
 | `doctor.sh <target-repo>` | Full readiness report (network calls; diagnostic-only, never provisions) |
 | `setup_worktree.sh <target-repo> [worktree-path]` | Create/reuse the dedicated worktree + install the launchd plist |
@@ -136,6 +137,10 @@ Three levers, distinct on purpose:
   stop that holds, which is why graceful-stop pauses rather than exits.)
 
 The dashboard's graceful-stop / resume controls (issue #10) drive this sentinel.
+
+All three levers are also available across every registered repo at once through
+`bin/control.sh` (`start`/`stop` wrap `launchctl` against the installed plist;
+`pause`/`resume` wrap the sentinel; `--all` fans out over `~/.config/autonomy/repos`).
 
 ## Usage-limit backoff (account-shared)
 
