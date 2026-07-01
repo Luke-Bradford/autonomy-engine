@@ -38,6 +38,7 @@ ERR_BACKOFF_START=300; ERR_BACKOFF_MAX=3600
 LIMIT_BACKOFF_START=1800; LIMIT_BACKOFF_MAX=18000
 LIMIT_RESET_MAX_HORIZON=691200
 PREFLIGHT_RECOVERY_AFTER=2
+PAUSE_POLL=30
 dirty_skips=0
 
 log() {
@@ -82,6 +83,15 @@ preflight() {
   git switch --detach origin/main -q 2>>"$SUPLOG" || { log "preflight: switch to origin/main failed"; return 2; }
   [ -z "$(git status --porcelain)" ] || { log "preflight: tree dirty on origin/main -- skip"; return 2; }
   return 0
+}
+
+# Graceful-stop sentinel. If this file exists at the top of the loop the
+# supervisor finishes the current session (this predicate is only checked
+# BEFORE run_session, never mid-session) then idles until it's removed --
+# distinct from a hard stop (launchctl bootout). Removing the file resumes.
+# File-only: a directory at the path is not a pause request.
+pause_requested() {
+  [ -f "$1" ]
 }
 
 compute_limit_wait() {
@@ -158,6 +168,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   mkdir -p "$LOGDIR"
   SUPLOG="$LOGDIR/supervisor.log"
   RESET_STATE="$LOGDIR/.last_usage_reset"
+  PAUSE_SENTINEL="$LOGDIR/autonomy-PAUSE"
   LABEL="$LABEL_OVERRIDE"
 
   CFG="$AUTONOMY_TARGET_REPO/.autonomy/config.yaml"
@@ -179,8 +190,25 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   log "=== supervisor start (pid $$, repo=$AUTONOMY_TARGET_REPO, agent=$AGENT_TYPE, model=$MODEL) ==="
   err_backoff=$ERR_BACKOFF_START
   limit_backoff=$LIMIT_BACKOFF_START
+  paused_logged=0
 
   while true; do
+    # Graceful stop: checked at the top so any in-flight session has already
+    # finished (never a mid-session kill). Idle-poll until the sentinel is
+    # removed (resume). Under launchd KeepAlive=true, exiting would just be
+    # relaunched -- idling is the only stop that actually holds.
+    if pause_requested "$PAUSE_SENTINEL"; then
+      if [ "$paused_logged" -eq 0 ]; then
+        log "PAUSE sentinel present ($PAUSE_SENTINEL) -- graceful stop: current session finished, idling (remove to resume)"
+        paused_logged=1
+      fi
+      sleep "$PAUSE_POLL"; continue
+    fi
+    if [ "$paused_logged" -eq 1 ]; then
+      log "PAUSE sentinel gone -- resuming"
+      paused_logged=0
+    fi
+
     open_count="$(cd "$AUTONOMY_TARGET_REPO" && gh issue list --state open --json number -q 'length' 2>/dev/null || echo -1)"
     if [ "$open_count" = "0" ]; then
       dirty_skips=0
