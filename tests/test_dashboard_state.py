@@ -310,16 +310,30 @@ class TestRepoState(unittest.TestCase):
         self.assertEqual(st["config"]["model"], "claude-opus-4-8")
 
     def test_repo_state_carries_display_status(self):
-        # fixture: running lock pid (injected alive) + stale session log ->
-        # the ONE label every panel renders is "idle"
+        # running lock pid (injected alive) + a session log gone quiet -> the
+        # ONE label every panel renders is "idle". `now` is pinned relative to
+        # the fixture file's real mtime (a fresh CI checkout writes new mtimes,
+        # so wall-clock now would flip this to "working" there).
+        mtime = os.path.getmtime(os.path.join(LOGDIR, "session-20260701T093000.log"))
         st = ds.build_repo_state(
             FIX,
             pid_is_alive=lambda p: True,
             git_in_flight=lambda repo: {},
+            now=mtime + 9999,
         )
         self.assertEqual(st["display_status"], "idle")
         coder = next(r for r in st["roles"] if r["name"] == "coder")
         self.assertEqual(coder["status"], st["display_status"])
+
+    def test_repo_state_display_status_working_when_log_fresh(self):
+        mtime = os.path.getmtime(os.path.join(LOGDIR, "session-20260701T093000.log"))
+        st = ds.build_repo_state(
+            FIX,
+            pid_is_alive=lambda p: True,
+            git_in_flight=lambda repo: {},
+            now=mtime + 5,
+        )
+        self.assertEqual(st["display_status"], "working")
 
     def test_repo_state_display_status_stopped(self):
         st = ds.build_repo_state(
