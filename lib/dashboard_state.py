@@ -13,11 +13,74 @@ Stdlib only. Pure/parsing functions take explicit inputs; the two
 environment-coupled edges (pid liveness, git/gh state) are injected so the
 whole module is testable without a process table or the network.
 """
+import glob
 import json
 import os
+import re
 import time
+from collections import Counter
+from datetime import datetime
 
 import config_parser
+
+_TICKET_RE = re.compile(r"#(\d{1,6})\b")
+
+# Claude Code writes one JSONL per session under here; the account's REAL usage
+# (all repos, all surfaces) is aggregatable from these -- the honest 5h/weekly
+# signal, vs a single repo's sparse threshold events.
+CLAUDE_PROJECTS = os.path.join(
+    os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")), "projects")
+
+
+def account_usage(projects_dir=None, now=None):
+    """Account-wide session + token counts for the rolling 5-hour and 7-day
+    windows, from ~/.claude/projects/**/*.jsonl. Dedupes on message.id (Claude
+    Code re-emits a message's usage block several times). Stdlib only."""
+    if projects_dir is None:
+        projects_dir = CLAUDE_PROJECTS
+    if now is None:
+        now = time.time()
+    seen = set()
+    win = {
+        "five_hour": {"sessions": set(), "tokens": 0, "cutoff": now - 5 * 3600},
+        "seven_day": {"sessions": set(), "tokens": 0, "cutoff": now - 7 * 24 * 3600},
+    }
+    for path in glob.glob(os.path.join(projects_dir, "**", "*.jsonl"), recursive=True):
+        sid = os.path.basename(path)[:-len(".jsonl")]
+        try:
+            fh = open(path, errors="replace")
+        except OSError:
+            continue
+        with fh:
+            for line in fh:
+                if '"usage"' not in line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except ValueError:
+                    continue
+                msg = o.get("message") or {}
+                mid = msg.get("id")
+                if not mid or mid in seen:
+                    continue
+                ts = o.get("timestamp")
+                if not ts:
+                    continue
+                try:
+                    epoch = datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+                except ValueError:
+                    continue
+                seen.add(mid)
+                u = msg.get("usage") or {}
+                tot = ((u.get("input_tokens") or 0) + (u.get("output_tokens") or 0)
+                       + (u.get("cache_creation_input_tokens") or 0)
+                       + (u.get("cache_read_input_tokens") or 0))
+                for w in win.values():
+                    if epoch >= w["cutoff"]:
+                        w["tokens"] += tot
+                        w["sessions"].add(sid)
+    return {k: {"sessions": len(v["sessions"]), "tokens": v["tokens"]}
+            for k, v in win.items()}
 
 
 # --- session stream-json ----------------------------------------------------
@@ -85,6 +148,7 @@ def parse_session_log(path):
     result = None
     rate_limited = False
     current_step = ""
+    ticket_mentions = Counter()  # issue refs the session works, to surface #+link
 
     try:
         fh = open(path, errors="replace")
@@ -119,7 +183,14 @@ def parse_session_log(path):
                     label = _block_label(block)
                     if label:
                         current_step = label
+                    if block.get("type") == "text":
+                        for n in _TICKET_RE.findall(block.get("text") or ""):
+                            ticket_mentions[int(n)] += 1
                     if block.get("type") == "tool_use":
+                        inp = block.get("input") or {}
+                        for field in ("command", "description"):
+                            for n in _TICKET_RE.findall(str(inp.get(field) or "")):
+                                ticket_mentions[int(n)] += 1
                         nodes.append({
                             "id": block.get("id"),
                             "parent": parent,
@@ -148,10 +219,21 @@ def parse_session_log(path):
         result_text = ""
         num_turns = None
 
+    for n in _TICKET_RE.findall(result_text):
+        ticket_mentions[int(n)] += 1
+    # the ticket the session is working = the most-mentioned issue ref
+    ticket = ticket_mentions.most_common(1)[0][0] if ticket_mentions else None
+
+    # updated_at = last write (liveness); started_epoch = the file's creation time
+    # (real epoch, tz-independent -- the session-*.log NAME is LOCAL time, so
+    # parsing it as UTC would skew elapsed on a non-UTC machine).
     try:
-        updated_at = int(os.path.getmtime(path))
+        stat = os.stat(path)
+        updated_at = int(stat.st_mtime)
+        started_epoch = int(getattr(stat, "st_birthtime", stat.st_mtime))
     except OSError:
         updated_at = 0
+        started_epoch = 0
 
     return {
         "path": path,
@@ -159,6 +241,7 @@ def parse_session_log(path):
         "model": model,
         "cwd": cwd,
         "started_at": _started_at_from_name(path),
+        "started_epoch": started_epoch,
         "updated_at": updated_at,
         "status": status,
         "current_step": current_step,
@@ -169,6 +252,7 @@ def parse_session_log(path):
         "num_turns": num_turns,
         "result_text": result_text,
         "rate_limited": rate_limited,
+        "ticket": ticket,
     }
 
 

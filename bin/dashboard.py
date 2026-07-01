@@ -261,6 +261,50 @@ _SSE_TIMEOUT = 30
 _sse_lock = threading.Lock()
 _sse_active = [0]
 
+# account_usage scans ~1000 JSONL files -- cache it (it changes slowly).
+_ACCT_TTL = 45.0
+_acct_cache = [0.0, None]
+_acct_lock = threading.Lock()
+_issue_cache = {}  # (repo, number) -> (epoch, {title,url,state})
+
+
+def _account_usage():
+    now = time.time()
+    with _acct_lock:
+        if _acct_cache[1] is not None and now - _acct_cache[0] < _ACCT_TTL:
+            return _acct_cache[1]
+    try:
+        usage = ds.account_usage()
+    except Exception:
+        usage = {"five_hour": {"sessions": 0, "tokens": 0},
+                 "seven_day": {"sessions": 0, "tokens": 0}}
+    with _acct_lock:
+        _acct_cache[0], _acct_cache[1] = now, usage
+    return usage
+
+
+def _issue_focus(repo, number, repo_url):
+    """Title/url/state for the ticket a session is working, so it shows with a
+    link even before a PR exists. Cached per (repo, number)."""
+    key = (repo, number)
+    now = time.time()
+    cached = _issue_cache.get(key)
+    if cached and now - cached[0] < 60:
+        return cached[1]
+    raw = _run(["gh", "issue", "view", str(number), "--json", "title,url,state"],
+               cwd=repo, timeout=15)
+    focus = None
+    if raw:
+        try:
+            d = json.loads(raw)
+            focus = {"number": number, "title": d.get("title") or "",
+                     "url": d.get("url") or (repo_url + "/issues/%d" % number if repo_url else ""),
+                     "state": (d.get("state") or "").lower(), "in_progress": True}
+        except ValueError:
+            focus = None
+    _issue_cache[key] = (now, focus)
+    return focus
+
 
 def collect(repos):
     """Full app snapshot the page renders."""
@@ -275,13 +319,21 @@ def collect(repos):
         try:
             st = ds.build_repo_state(repo, git_in_flight=git_in_flight)
             st["throughput"] = _throughput(repo)
+            # if a session is working a ticket but there's no open PR yet, surface
+            # the in-progress ticket with its title + link.
+            git = st.get("git") or {}
+            sess = st.get("current_session") or {}
+            if not git.get("focus_ticket") and sess.get("ticket"):
+                focus = _issue_focus(repo, sess["ticket"], git.get("repo_url", ""))
+                if focus:
+                    git["focus_ticket"] = focus
             out.append(st)
         except Exception as exc:  # never let one repo blank the page
             out.append({"name": os.path.basename(repo.rstrip("/")), "path": repo,
                         "lifecycle": {"state": "error", "pid": None},
                         "error": str(exc), "current_session": None, "voice": [],
                         "git": {}, "config": {}})
-    return {"generated_at": int(time.time()), "repos": out}
+    return {"generated_at": int(time.time()), "repos": out, "account": _account_usage()}
 
 
 def execute_control(repo, action):

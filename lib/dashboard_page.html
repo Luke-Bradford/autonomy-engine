@@ -78,7 +78,7 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px
 .focus{display:grid;grid-template-columns:repeat(auto-fill,minmax(410px,1fr));gap:14px}
 .fcard{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);padding:15px 16px;box-shadow:var(--shadow);position:relative;overflow:hidden}
 .fcard::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--edge,var(--dim))}
-.fcard.working{--edge:var(--ok)} .fcard.idle{--edge:var(--dim)} .fcard.paused{--edge:var(--warn)}
+.fcard.working{--edge:var(--ok)} .fcard.idle{--edge:var(--dim)} .fcard.paused{--edge:var(--warn)} .fcard.stopping{--edge:var(--warn)}
 .fcard.stopped{--edge:var(--dim)} .fcard.error{--edge:var(--bad)} .fcard.needs-setup{--edge:var(--bad)}
 .fc-top{display:flex;align-items:center;gap:10px;margin-bottom:11px}
 .fc-name{font-weight:600;font-size:15px}
@@ -108,7 +108,7 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px
 .st{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;letter-spacing:.8px;text-transform:uppercase;font-weight:500;color:var(--sc,var(--mut))}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--sc,var(--dim));flex:none}
 .dot.pulse{animation:pulse 2.4s infinite}
-.s-working{--sc:var(--ok)} .s-idle{--sc:var(--dim)} .s-paused{--sc:var(--warn)} .s-stopped{--sc:var(--dim)}
+.s-working{--sc:var(--ok)} .s-idle{--sc:var(--dim)} .s-paused{--sc:var(--warn)} .s-stopped{--sc:var(--dim)} .s-stopping{--sc:var(--warn)}
 .s-error{--sc:var(--bad)} .s-done{--sc:var(--ok-dim)} .s-needs-setup{--sc:var(--bad)} .s-missing{--sc:var(--dim)}
 .s-configured{--sc:var(--info)} .s-disabled{--sc:var(--dim)} .s-not-configured{--sc:var(--dim)}
 
@@ -300,16 +300,20 @@ setTheme((function(){try{return localStorage.getItem("ae-theme")||"dark";}catch(
 function dispStatus(r){
   const ls=(r.lifecycle||{}).state;
   if(ls==="needs-setup"||ls==="missing"||ls==="error") return ls;
-  if(ls==="paused") return "paused";
+  // graceful stop requested (PAUSE sentinel). If a session is STILL running it's
+  // "stopping" (finishing this one), not yet "paused/idle".
+  if(ls==="paused") return r.activity==="working" ? "stopping" : "paused";
   if(ls==="stopped") return "stopped";
   // running supervisor -> activity freshness decides
   const a=r.activity;
   if(a==="working") return "working";
   return "idle";
 }
-const SLABEL={"needs-setup":"needs setup","not-configured":"not configured"};
+const SLABEL={"needs-setup":"needs setup","not-configured":"not configured","stopping":"stopping"};
+function dispName(n){return String(n||"").replace(/^\./,"");} // worktree folder .x-autonomy -> x-autonomy
+function isWorktree(n){return /-autonomy$/.test(String(n||""));}
 function sl(s){return SLABEL[s]||s;}
-function token(status,pulse){return `<span class="st s-${status}"><span class="dot s-${status} ${pulse&&status==='working'?'pulse':''}"></span>${sl(status)}</span>`;}
+function token(status,pulse){return `<span class="st s-${status}"><span class="dot s-${status} ${pulse&&(status==='working'||status==='stopping')?'pulse':''}"></span>${sl(status)}</span>`;}
 
 const TIC={Bash:"$",Read:"◇",Edit:"◆",Write:"◆",Task:"⑂",Grep:"◇",Glob:"◇",ToolSearch:"⌕",TodoWrite:"☰"};
 function tic(n){if(!n)return "•";if(n.startsWith("mcp__"))return "◈";return TIC[n]||"•";}
@@ -317,31 +321,32 @@ function tname(n){if(!n)return "tool";if(n.startsWith("mcp__")){const p=n.split(
 
 /* ---- FOCUS BAND ---- */
 function renderFocus(repos){
-  const active=repos.filter(r=>["working","idle","paused"].includes(dispStatus(r)));
+  const active=repos.filter(r=>["working","stopping","idle","paused"].includes(dispStatus(r)));
   $("c-now").textContent=active.length?`${active.filter(r=>dispStatus(r)==="working").length} working · ${active.length} live`:"";
   const show=repos.length?repos:[];
   $("focus").innerHTML=show.map((r,i)=>{
     const st=dispStatus(r), cs=r.current_session||{}, git=r.git||{}, ft=git.focus_ticket;
-    const working=st==="working";
+    const busy=st==="working"||st==="stopping";
     let ticket="";
-    if(ft){ticket=`<div class="fc-ticket"><span class="no">#${ft.number}</span><span class="tt"><a href="${esc(ft.url)}" target="_blank">${esc(short(ft.title,42))}</a></span>
-      <span style="margin-left:auto;display:flex;gap:5px">${ft.ci?`<span class="chip c-${esc(ft.ci)}">ci ${esc(ft.ci)}</span>`:""}${ft.review?`<span class="chip c-${esc(ft.review)}">${esc(ft.review.replace("_"," "))}</span>`:""}</span></div>`;}
-    else{ // no open PR yet -> derive the ticket ref from the session's own words
-      const m=String((cs.current_step||"")+" "+(cs.result_text||"")).match(/#(\d{1,6})/);
-      if(m){const url=git.repo_url?git.repo_url+"/issues/"+m[1]:null;
-        ticket=`<div class="fc-ticket"><span class="no">#${m[1]}</span><span class="tt">${url?`<a href="${esc(url)}" target="_blank">open ticket</a>`:"in session"}</span><span style="margin-left:auto;color:var(--dim);font-size:10.5px">no PR yet</span></div>`;}
+    if(ft){
+      const right = ft.in_progress
+        ? `<span class="chip c-pending">in progress</span>${ft.state&&ft.state!=="open"?`<span class="chip">${esc(ft.state)}</span>`:""}`
+        : `${ft.ci?`<span class="chip c-${esc(ft.ci)}">ci ${esc(ft.ci)}</span>`:""}${ft.review?`<span class="chip c-${esc(ft.review)}">${esc(ft.review.replace("_"," "))}</span>`:""}`;
+      ticket=`<div class="fc-ticket"><span class="no">#${ft.number}</span><span class="tt">${ft.url?`<a href="${esc(ft.url)}" target="_blank">${esc(short(ft.title||"ticket",42))}</a>`:esc(short(ft.title||"ticket",42))}</span>
+      <span style="margin-left:auto;display:flex;gap:5px">${right}</span></div>`;
     }
     let stepLine;
     if(st==="paused") stepLine=`<div class="fc-step">graceful stop — current session finished, idling</div>`;
+    else if(st==="stopping") stepLine=`<div class="fc-step">⏸ graceful stop pending · → <span class="k">${esc(short(cs.current_step||"…",48))}</span></div>`;
     else if(st==="stopped") stepLine=`<div class="fc-step">supervisor stopped — hard start to run</div>`;
-    else if(working) stepLine=`<div class="fc-step">→ <span class="k">${esc(short(cs.current_step||"…",56))}</span></div>`;
+    else if(busy) stepLine=`<div class="fc-step">→ <span class="k">${esc(short(cs.current_step||"…",56))}</span></div>`;
     else stepLine=`<div class="fc-step">idle — waiting for next session</div>`;
-    const elapsed = working&&cs.started_at ? `elapsed <b class="up mono" data-t="${esc(cs.started_at)}">${dur(nowS()-Date.parse(cs.started_at)/1000)}</b>`
+    const elapsed = busy&&cs.started_epoch ? `elapsed <b class="upe mono" data-e="${cs.started_epoch}">${dur(nowS()-cs.started_epoch)}</b>`
                   : cs.updated_at ? `last active <b class="agox mono" data-t="${cs.updated_at}">${ago(nowS()-cs.updated_at)} ago</b>` : "";
     return `<div class="fcard ${st}">
       <div class="fc-top">
-        <span class="fc-name">${esc(r.name)}</span>
-        <span class="fc-role">coder</span>
+        <span class="fc-name">${esc(dispName(r.name))}</span>
+        <span class="fc-role">coder</span>${isWorktree(r.name)?`<span class="fc-role" title="git worktree of the target repo">worktree</span>`:""}
         ${token(st,true)}
         <span class="fc-model">${esc(cs.model||(r.config&&r.config.model)||"")}</span>
       </div>
@@ -360,7 +365,7 @@ function controls(r,st){
   if(st==="needs-setup"||st==="missing") return `<div class="ctl"><span class="note">run setup_worktree.sh to manage</span></div>`;
   let btns="";
   if(st==="working"||st==="idle"){ btns=cbtn(repo,"pause","graceful-stop","warn")+cbtn(repo,"stop","hard-stop","danger"); }
-  else if(st==="paused"){ btns=cbtn(repo,"resume","resume","go")+cbtn(repo,"stop","hard-stop","danger"); }
+  else if(st==="paused"||st==="stopping"){ btns=cbtn(repo,"resume","resume","go")+cbtn(repo,"stop","hard-stop","danger"); }
   else if(st==="stopped"){ btns=cbtn(repo,"start","start","go"); }
   else return "";
   return `<div class="ctl">${btns}<span class="note">lifecycle only</span></div>`;
@@ -399,7 +404,7 @@ function renderRepos(repos){
         <span class="rst">${token(role.name==="coder"?st:role.status,role.name==="coder")}</span></div>`;
     }).join("");
     return `<div class="repo">
-      <div class="repo-h"><span class="dot s-${st} ${st==="working"?"pulse":""}"></span><span class="nm">${esc(r.name)}</span>
+      <div class="repo-h"><span class="dot s-${st} ${(st==="working"||st==="stopping")?"pulse":""}"></span><span class="nm">${esc(dispName(r.name))}</span>
         <span class="badge">${token(st,true)}</span></div>
       <div class="cfg">${esc(cfg.model||"—")} · gate ${esc(cfg.merge_gate||"—")}${(r.lifecycle||{}).pid?" · pid "+r.lifecycle.pid:""}</div>
       ${roles}</div>`;
@@ -407,24 +412,30 @@ function renderRepos(repos){
 }
 
 /* ---- QUOTA ---- */
-function qbar(label,win,now){
-  if(!win) return `<div class="q"><div class="q-h"><span class="lab">${label}</span><span class="val" style="color:var(--ok-dim)">clear</span></div><div class="bar"><i style="width:0%"></i></div></div>`;
-  const pct=Math.round((win.utilization||0)*100);
-  const cls=pct>=90?"hot":pct>=60?"mid":"";
-  const rt=win.resets_at?`resets in <span class="qreset" data-e="${win.resets_at}">${dur(win.resets_at-now)}</span>`:"resetting";
-  return `<div class="q"><div class="q-h"><span class="lab">${label}</span><span class="val">${pct}%</span></div>
-    <div class="bar ${cls}"><i style="width:${Math.max(2,pct)}%"></i></div>
-    <div class="q-sub"><span>${rt}</span>${win.overage?"<span style='color:var(--warn)'>overage</span>":""}</div></div>`;
+function compact(n){n=n||0;if(n>=1e9)return (n/1e9).toFixed(1)+"B";if(n>=1e6)return (n/1e6).toFixed(1)+"M";if(n>=1e3)return (n/1e3).toFixed(1)+"k";return ""+n;}
+function qrow(label,acct,win,now){
+  // live account counts (from ~/.claude, all sessions) are ALWAYS the headline;
+  // utilization % (Anthropic rate-limit events) fills the bar + a badge when a
+  // threshold has been crossed.
+  const sess=acct?acct.sessions:0, toks=acct?acct.tokens:0;
+  const pct=win?Math.round((win.utilization||0)*100):null;
+  const cls=(pct>=90)?"hot":(pct>=60)?"mid":"";
+  const reset = win&&win.resets_at ? ` · resets in <span class="qreset" data-e="${win.resets_at}">${dur(win.resets_at-now)}</span>` : "";
+  return `<div class="q"><div class="q-h"><span class="lab">${label}</span>
+      <span class="val"><b class="mono">${sess}</b> <span style="color:var(--dim);font-weight:400">sess</span>${pct!=null?` · <span style="color:${pct>=60?'var(--warn)':'var(--mut)'}">${pct}%</span>`:""}</span></div>
+    <div class="bar ${cls}"><i style="width:${pct!=null?Math.max(1,pct):0}%"></i></div>
+    <div class="q-sub"><span>${compact(toks)} tok this window${reset}</span>${win&&win.overage?"<span style='color:var(--warn)'>overage</span>":""}</div></div>`;
 }
-function renderQuota(repos){
+function renderQuota(repos,account){
   const now=Math.floor(nowS());
-  // shared account-level: take the highest utilization / soonest reset across repos
+  // utilization % is shared account-level -> take the highest seen across repos' logs
   let five=null, seven=null;
   repos.forEach(r=>{const q=r.quota||{};
     if(q.five_hour&&(!five||q.five_hour.utilization>five.utilization)) five=q.five_hour;
     if(q.seven_day&&(!seven||q.seven_day.utilization>seven.utilization)) seven=q.seven_day;});
-  $("quota").innerHTML=qbar("5-hour window",five,now)+qbar("weekly window",seven,now)
-    + `<div class="q"><div class="q-sub" style="margin-top:0"><span>utilization = Anthropic server-side, from rate-limit events</span></div></div>`;
+  const a=account||{};
+  $("quota").innerHTML=qrow("5-hour window",a.five_hour,five,now)+qrow("weekly window",a.seven_day,seven,now)
+    + `<div class="q"><div class="q-sub" style="margin-top:0"><span>counts from ~/.claude (all sessions); % from Anthropic rate-limit events</span></div></div>`;
 }
 
 /* ---- ACTIVITY ---- */
@@ -527,14 +538,14 @@ function renderGit(repos){
 setInterval(()=>{
   const d=new Date();$("h-clock").textContent=d.toISOString().slice(11,19)+"Z";
   if(GEN)$("h-fresh").textContent=ago(nowS()-GEN)+" ago";
-  document.querySelectorAll(".up").forEach(el=>{const t=Date.parse(el.dataset.t);if(!isNaN(t))el.textContent=dur(nowS()-t/1000);});
+  document.querySelectorAll(".upe").forEach(el=>{el.textContent=dur(nowS()-(+el.dataset.e));});
   document.querySelectorAll(".agox").forEach(el=>{el.textContent=ago(nowS()-(+el.dataset.t))+" ago";});
   document.querySelectorAll(".qreset").forEach(el=>{const s=(+el.dataset.e)-Math.floor(nowS());el.textContent=s>0?dur(s):"now";});
 },1000);
 
 /* ---- render + SSE ---- */
 function render(s){LAST=s;GEN=s.generated_at||Math.floor(nowS());
-  renderFocus(s.repos);renderRepos(s.repos);renderQuota(s.repos);renderActivity(s.repos);
+  renderFocus(s.repos);renderRepos(s.repos);renderQuota(s.repos,s.account);renderActivity(s.repos);
   renderThroughput(s.repos);renderVoice(s.repos);renderGit(s.repos);
   $("f-gen").textContent="snapshot "+new Date(GEN*1000).toISOString().slice(11,19)+"Z";}
 function setLive(ok){$("h-live").classList.toggle("stale",!ok);$("h-live-t").textContent=ok?"live":"reconnecting";}
