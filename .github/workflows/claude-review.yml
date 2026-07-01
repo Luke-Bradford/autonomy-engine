@@ -172,7 +172,11 @@ jobs:
 
           payload = {
               "model": "claude-sonnet-5",
-              "max_tokens": 5000,
+              # Must cover adaptive-thinking tokens PLUS the review text. At 5000
+              # a large diff spent the whole budget on thinking (stop_reason=
+              # max_tokens, 0 text) and the job failed. 16000 leaves room for
+              # both; the truncation guard below still catches genuine overflow.
+              "max_tokens": 16000,
               "thinking": {"type": "adaptive"},
               "output_config": {"effort": "medium"},
               "system": [
