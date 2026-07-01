@@ -115,6 +115,68 @@ class TestPromptFiles(unittest.TestCase):
             self.assertTrue(any("pm" in e for e in errs), bad)
 
 
+class TestCronNextFire(unittest.TestCase):
+    """#18: the dashboard's cron-role 'next fire' countdown. UTC, standard
+    5-field cron, restricted to the forms real schedules use (*, */n, lists,
+    ranges, numbers). Pure + deterministic: epoch in, epoch out."""
+    # 2026-07-01 21:30:00 UTC is a Wednesday
+    NOW = 1782941400
+
+    def _dt(self, epoch):
+        import datetime
+        return datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc)
+
+    def test_every_six_hours(self):
+        nxt = roles.cron_next_fire("0 */6 * * *", self.NOW)
+        d = self._dt(nxt)
+        self.assertEqual((d.hour, d.minute, d.second), (0, 0, 0))
+        self.assertGreater(nxt, self.NOW)
+        self.assertLessEqual(nxt - self.NOW, 6 * 3600)
+
+    def test_every_ten_minutes(self):
+        nxt = roles.cron_next_fire("*/10 * * * *", self.NOW)
+        self.assertEqual(self._dt(nxt).minute % 10, 0)
+        self.assertGreater(nxt, self.NOW)
+        self.assertLessEqual(nxt - self.NOW, 600)
+
+    def test_daily_at_three(self):
+        nxt = roles.cron_next_fire("0 3 * * *", self.NOW)
+        d = self._dt(nxt)
+        self.assertEqual((d.hour, d.minute), (3, 0))
+        self.assertEqual(d.day, 2)  # 21:30 -> tomorrow 03:00
+
+    def test_weekly_monday_nine(self):
+        nxt = roles.cron_next_fire("0 9 * * 1", self.NOW)
+        d = self._dt(nxt)
+        self.assertEqual(d.weekday(), 0)  # Monday
+        self.assertEqual((d.hour, d.minute), (9, 0))
+
+    def test_day_of_month(self):
+        nxt = roles.cron_next_fire("30 14 1 * *", self.NOW)
+        d = self._dt(nxt)
+        self.assertEqual((d.day, d.hour, d.minute), (1, 14, 30))
+        self.assertEqual(d.month, 8)  # July 1st 14:30 already past -> Aug 1st
+
+    def test_range_and_list(self):
+        nxt = roles.cron_next_fire("0 9-17 * * 1,2,3,4,5", self.NOW)
+        d = self._dt(nxt)
+        self.assertIn(d.weekday(), (0, 1, 2, 3, 4))
+        self.assertTrue(9 <= d.hour <= 17)
+
+    def test_invalid_returns_none(self):
+        self.assertIsNone(roles.cron_next_fire("not a cron", self.NOW))
+        self.assertIsNone(roles.cron_next_fire("0 25 * * *", self.NOW))  # hour 25
+        self.assertIsNone(roles.cron_next_fire("", self.NOW))
+        self.assertIsNone(roles.cron_next_fire(None, self.NOW))
+
+    def test_never_returns_now_or_past(self):
+        # a boundary 'now' (exactly on a fire minute) returns the NEXT one
+        on_boundary = roles.cron_next_fire("0 * * * *", self.NOW)
+        d = self._dt(on_boundary)
+        self.assertGreater(on_boundary, self.NOW)
+        self.assertEqual(d.minute, 0)
+
+
 class TestDefaults(unittest.TestCase):
     def test_default_roster_shape(self):
         # single source of truth for the standard roster (dashboard imports it)

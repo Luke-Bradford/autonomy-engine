@@ -406,6 +406,28 @@ class TestRoles(unittest.TestCase):
         roles = ds.build_roles(cfg_roles, coder_status="idle")
         self.assertIn("security_sweeper", [r["name"] for r in roles])
 
+    def test_enabled_cron_role_carries_next_fire(self):
+        # #18: the page shows a live next-fire countdown for scheduled roles
+        cfg_roles = {"pm": {"enabled": "true", "substrate": "managed_agents",
+                            "trigger": {"type": "cron", "schedule": "0 */6 * * *"}}}
+        now = 1782941400
+        roles = ds.build_roles(cfg_roles, coder_status="idle", now=now)
+        pm = next(r for r in roles if r["name"] == "pm")
+        self.assertIsNotNone(pm["next_fire"])
+        self.assertGreater(pm["next_fire"], now)
+        self.assertLessEqual(pm["next_fire"] - now, 6 * 3600)
+
+    def test_disabled_or_unscheduled_roles_have_no_next_fire(self):
+        roles = ds.build_roles({}, coder_status="idle", now=1782941400)
+        for r in roles:
+            self.assertIsNone(r["next_fire"], r["name"])
+        # enabled cron role with a GARBLED schedule -> None, not a crash
+        cfg_roles = {"pm": {"enabled": "true",
+                            "trigger": {"type": "cron", "schedule": "banana"}}}
+        roles = ds.build_roles(cfg_roles, coder_status="idle", now=1782941400)
+        pm = next(r for r in roles if r["name"] == "pm")
+        self.assertIsNone(pm["next_fire"])
+
 
 class TestParseSessionLogCached(unittest.TestCase):
     """#31: the server re-parses the newest session log on every state

@@ -178,7 +178,19 @@ def git_in_flight(repo):
         try:
             for pr in json.loads(raw):
                 rollup = pr.get("statusCheckRollup") or []
-                states = [c.get("conclusion") or c.get("state") or "" for c in rollup]
+                # the QA gate's own verdict (#18) is its own lane chip -- pull
+                # it out so it doesn't double-count as third-party CI
+                states = []
+                qa = "none"
+                for c in rollup:
+                    nm = c.get("name") or c.get("context") or ""
+                    s = c.get("conclusion") or c.get("state") or ""
+                    if nm == "qa-gate":
+                        qa = {"SUCCESS": "passing", "FAILURE": "failing",
+                              "ERROR": "failing", "CANCELLED": "failing",
+                              "TIMED_OUT": "failing"}.get(str(s).upper(), "pending")
+                        continue
+                    states.append(s)
                 if any(s in ("FAILURE", "ERROR", "CANCELLED") for s in states):
                     ci = "failing"
                 elif any(s in ("", "PENDING", "IN_PROGRESS", "QUEUED", "EXPECTED") for s in states):
@@ -196,6 +208,7 @@ def git_in_flight(repo):
                     "mergeable": (pr.get("mergeable") or "").lower(),
                     "review": (pr.get("reviewDecision") or "").lower(),
                     "ci": ci,
+                    "qa": qa,
                 })
         except ValueError:
             pass

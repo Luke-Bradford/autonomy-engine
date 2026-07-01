@@ -27,6 +27,7 @@ whole verdict so callers never re-parse the config:
 """
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
 VALID_SUBSTRATES = ("engine", "managed_agents", "routine", "actions")
 VALID_TRIGGERS = ("loop", "cron", "event")
@@ -114,6 +115,84 @@ def check_prompt_files(config, repo_root):
         if not os.path.isfile(full):
             errors.append("roles.%s: prompt file not found: %s" % (name, prompt))
     return errors
+
+
+def _cron_field(spec, lo, hi):
+    """One cron field -> set of ints, or None if invalid. Supports the forms
+    real schedules use: '*', '*/n', 'a', 'a-b', 'a,b,c' (parts may be ranges
+    or steps)."""
+    out = set()
+    for part in str(spec).split(","):
+        part = part.strip()
+        step = 1
+        if "/" in part:
+            part, _, step_s = part.partition("/")
+            try:
+                step = int(step_s)
+            except ValueError:
+                return None
+            if step < 1:
+                return None
+        if part == "*":
+            lo_p, hi_p = lo, hi
+        elif "-" in part:
+            a, _, b = part.partition("-")
+            try:
+                lo_p, hi_p = int(a), int(b)
+            except ValueError:
+                return None
+        else:
+            try:
+                lo_p = hi_p = int(part)
+            except ValueError:
+                return None
+        if lo_p < lo or hi_p > hi or lo_p > hi_p:
+            return None
+        out.update(range(lo_p, hi_p + 1, step))
+    return out or None
+
+
+def cron_next_fire(expr, now_epoch):
+    """Next fire time (epoch seconds, UTC -- GitHub Actions/Managed Agents
+    cron semantics) strictly AFTER now, for a standard 5-field cron
+    expression. None on anything unparseable. Searches day-by-day (<=366
+    days) then hour/minute, so it's cheap."""
+    if not expr:
+        return None
+    fields = str(expr).split()
+    if len(fields) != 5:
+        return None
+    minutes = _cron_field(fields[0], 0, 59)
+    hours = _cron_field(fields[1], 0, 23)
+    doms = _cron_field(fields[2], 1, 31)
+    months = _cron_field(fields[3], 1, 12)
+    dows = _cron_field(fields[4], 0, 7)
+    if None in (minutes, hours, doms, months, dows):
+        return None
+    if 7 in dows:  # cron allows 0 and 7 for Sunday
+        dows = set(dows) | {0}
+    start = datetime.fromtimestamp(int(now_epoch) + 60, timezone.utc).replace(
+        second=0, microsecond=0)
+    day = start.date()
+    for _ in range(367):
+        # cron dow: 0=Sunday; python weekday(): 0=Monday
+        cron_dow = (day.weekday() + 1) % 7
+        if day.month in months and day.day in doms and cron_dow in dows:
+            first_day = day == start.date()
+            for h in sorted(hours):
+                # on the starting day, hours before `start` can never match --
+                # skip them instead of allocating 60 datetimes each
+                if first_day and h < start.hour:
+                    continue
+                for m in sorted(minutes):
+                    if first_day and h == start.hour and m < start.minute:
+                        continue
+                    cand = datetime(day.year, day.month, day.day, h, m,
+                                    tzinfo=timezone.utc)
+                    if cand >= start:
+                        return int(cand.timestamp())
+        day = day + timedelta(days=1)
+    return None
 
 
 def main(argv):
