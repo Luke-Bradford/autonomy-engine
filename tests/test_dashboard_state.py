@@ -126,6 +126,65 @@ class TestTicketRef(unittest.TestCase):
         self.assertIsNone(ds.extract_ticket_ref(""))
 
 
+class TestTicketHeuristic(unittest.TestCase):
+    """#26: 'most-mentioned issue ref' picked the triage scan's noise (#1015)
+    over the ticket actually worked (#649) in the live eBull session. The
+    replacement is a signal ladder verified against that real log's shape:
+    in-session branch creation > board.sh 'In Progress' (not superseded) >
+    most-RECENT mention among repeat mentions > any mention."""
+
+    def test_pick_branch_creation_wins(self):
+        self.assertEqual(
+            ds.pick_ticket({1015: 7, 649: 2}, {1015: 3, 649: 9},
+                           branch_ticket=649, board_ticket=1816), 649)
+
+    def test_pick_board_in_progress_when_no_branch(self):
+        self.assertEqual(
+            ds.pick_ticket({1015: 7, 1816: 2}, {1015: 9, 1816: 4},
+                           branch_ticket=None, board_ticket=1816), 1816)
+
+    def test_pick_recency_beats_raw_count(self):
+        # both mentioned repeatedly -> the most RECENT wins, not the loudest
+        self.assertEqual(
+            ds.pick_ticket({1015: 7, 649: 3}, {1015: 5, 649: 12},
+                           branch_ticket=None, board_ticket=None), 649)
+
+    def test_pick_repeat_mentions_beat_stray_late_single(self):
+        # a one-off ref at the tail (e.g. 'blocked by #99') must not out-rank
+        # a ticket the session kept coming back to
+        self.assertEqual(
+            ds.pick_ticket({57: 4, 99: 1}, {57: 10, 99: 11},
+                           branch_ticket=None, board_ticket=None), 57)
+
+    def test_pick_single_mention_fallback(self):
+        self.assertEqual(
+            ds.pick_ticket({57: 1}, {57: 1},
+                           branch_ticket=None, board_ticket=None), 57)
+
+    def test_pick_nothing(self):
+        self.assertIsNone(ds.pick_ticket({}, {}, None, None))
+
+    def test_force_create_branch_variants_recognized(self):
+        # review NITPICK on PR #28: -B / -C force-create variants count too
+        for cmd in ("git checkout -B fix/12-redo", "git switch -C feat/12-x"):
+            m = ds._BRANCH_CREATE_RE.search(cmd)
+            self.assertIsNotNone(m, cmd)
+            self.assertEqual(ds.extract_ticket_ref(m.group(1)), 12)
+
+    def test_triage_session_picks_branched_ticket(self):
+        # the real eBull failure shape: #1015 out-mentions everything, #1816
+        # went In Progress then Blocked, the branch created is fix/649-...
+        s = ds.parse_session_log(os.path.join(HERE, "fixtures", "triage-session.log"))
+        self.assertEqual(s["ticket"], 649)
+
+    def test_superseded_board_status_is_not_trusted(self):
+        # no branch created, and #1816's LAST board status is Blocked -> the
+        # board signal is void; recency among repeat mentions picks #649
+        # (mentioned twice, latest) over the louder-but-earlier #1015
+        s = ds.parse_session_log(os.path.join(HERE, "fixtures", "triage-no-branch.log"))
+        self.assertEqual(s["ticket"], 649)
+
+
 class TestActivityTree(unittest.TestCase):
     def test_subagent_nests_under_its_task_node(self):
         s = ds.parse_session_log(os.path.join(LOGDIR, "session-20260701T093000.log"))

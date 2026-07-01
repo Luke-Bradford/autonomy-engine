@@ -24,6 +24,10 @@ from datetime import datetime
 import config_parser
 
 _TICKET_RE = re.compile(r"#(\d{1,6})\b")
+# in-session branch creation: `git checkout -b|-B <name>` / `git switch -c|-C <name>`
+_BRANCH_CREATE_RE = re.compile(r"(?:checkout\s+-[bB]|switch\s+-[cC])\s+['\"]?([^\s'\";&|]+)")
+# the engine's own board write: board.sh status <n> "<Status>"
+_BOARD_STATUS_RE = re.compile(r"board\.sh['\"]?\s+status\s+(\d{1,6})\s+['\"]?([A-Za-z][A-Za-z ]*)")
 
 # Claude Code writes one JSONL per session under here; the account's REAL usage
 # (all repos, all surfaces) is aggregatable from these -- the honest 5h/weekly
@@ -135,6 +139,30 @@ def _block_label(block):
     return bt or ""
 
 
+def pick_ticket(mention_counts, mention_last_pos, branch_ticket, board_ticket):
+    """The ticket a session is actually working (#26) -- a signal ladder, not
+    raw most-mentioned (a board-triage scan out-mentions the picked ticket;
+    the live eBull session showed #1015 while working #649):
+
+      1. the branch the session CREATED (feat/<n>-/fix/<n>- convention) --
+         the engine's own strongest commitment signal;
+      2. the ticket the session marked 'In Progress' via board.sh, unless a
+         later board write moved it elsewhere (Blocked/Done supersedes);
+      3. the most RECENTLY mentioned ticket among those mentioned more than
+         once (repeat mentions = engagement; recency breaks the triage noise);
+      4. any mention at all, most recent first.
+    """
+    if branch_ticket is not None:
+        return branch_ticket
+    if board_ticket is not None:
+        return board_ticket
+    if not mention_counts:
+        return None
+    repeats = [t for t, c in mention_counts.items() if c >= 2]
+    pool = repeats or list(mention_counts)
+    return max(pool, key=lambda t: mention_last_pos.get(t, 0))
+
+
 def parse_session_log(path):
     """Parse one session-*.log into the render model. Robust to partial/live
     files (each line guarded; a truncated tail line is skipped)."""
@@ -148,7 +176,17 @@ def parse_session_log(path):
     result = None
     rate_limited = False
     current_step = ""
-    ticket_mentions = Counter()  # issue refs the session works, to surface #+link
+    # ticket signals (#26): mention counts + last-seen position, the branch the
+    # session created, and the last board.sh status write per ticket
+    ticket_mentions = Counter()
+    mention_last_pos = {}
+    branch_ticket = None
+    board_last = {}     # ticket -> (position, status-lowercased)
+    pos = 0
+
+    def _mention(n):
+        ticket_mentions[n] += 1
+        mention_last_pos[n] = pos
 
     try:
         fh = open(path, errors="replace")
@@ -180,17 +218,26 @@ def parse_session_log(path):
                 for block in (msg.get("content") or []):
                     if not isinstance(block, dict):
                         continue
+                    pos += 1
                     label = _block_label(block)
                     if label:
                         current_step = label
                     if block.get("type") == "text":
                         for n in _TICKET_RE.findall(block.get("text") or ""):
-                            ticket_mentions[int(n)] += 1
+                            _mention(int(n))
                     if block.get("type") == "tool_use":
                         inp = block.get("input") or {}
                         for field in ("command", "description"):
                             for n in _TICKET_RE.findall(str(inp.get(field) or "")):
-                                ticket_mentions[int(n)] += 1
+                                _mention(int(n))
+                        cmd = str(inp.get("command") or "")
+                        m = _BRANCH_CREATE_RE.search(cmd)
+                        if m:
+                            ref = extract_ticket_ref(m.group(1))
+                            if ref is not None:
+                                branch_ticket = ref   # latest creation wins
+                        for bn, bstat in _BOARD_STATUS_RE.findall(cmd):
+                            board_last[int(bn)] = (pos, bstat.strip().lower())
                         nodes.append({
                             "id": block.get("id"),
                             "parent": parent,
@@ -219,10 +266,16 @@ def parse_session_log(path):
         result_text = ""
         num_turns = None
 
+    pos += 1
     for n in _TICKET_RE.findall(result_text):
-        ticket_mentions[int(n)] += 1
-    # the ticket the session is working = the most-mentioned issue ref
-    ticket = ticket_mentions.most_common(1)[0][0] if ticket_mentions else None
+        _mention(int(n))
+    # the ticket the session is working (#26): branch > board 'In Progress'
+    # (unsuperseded) > recency-among-repeats > any mention
+    board_ticket = None
+    in_prog = [(p, t) for t, (p, s) in board_last.items() if s == "in progress"]
+    if in_prog:
+        board_ticket = max(in_prog)[1]
+    ticket = pick_ticket(ticket_mentions, mention_last_pos, branch_ticket, board_ticket)
 
     # updated_at = last write (liveness); started_epoch = the file's creation time
     # (real epoch, tz-independent -- the session-*.log NAME is LOCAL time, so
