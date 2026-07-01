@@ -1,0 +1,29 @@
+# .autonomy/config.yaml -- per-repo policy for the autonomy engine.
+# See autonomy-engine/README.md for the full schema reference.
+
+board:
+  owner: CHANGE-ME          # GitHub user or org that owns the Projects v2 board
+  project_title: "CHANGE-ME engineering board"
+
+engine:
+  # label: my-repo          # uncomment + set only if this repo's basename collides
+  #                         # with another target repo on the same machine
+  requires_claude_md: false  # set true if this repo's workflow assumes CLAUDE.md exists
+
+agent:
+  type: claude               # claude | codex (only claude has an adapter implemented)
+  model:
+    primary: claude-sonnet-5
+    fallback: claude-sonnet-4-6
+
+merge_gate:
+  strategy: manual           # manual | ci_only | bot_comment | gh_review
+  # bot_comment-specific:
+  # author_login: github-actions
+  # marker: "Claude Code Review"
+  # doc_only_extensions: [".md"]
+  # gh_review-specific:
+  # reviewer_login: some-reviewer-bot[bot]
+
+worktree:
+  default_path: "../.{repo-slug}-autonomy"
