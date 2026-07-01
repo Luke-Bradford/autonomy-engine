@@ -1,0 +1,259 @@
+name: Claude PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+    branches: [main]
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR diff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr diff "$PR_NUMBER" > pr.diff
+
+      - name: Check if diff is doc-only
+        # Doc-only PRs (README, docs/) don't benefit from an engineering review.
+        # A PR is doc-only when every changed file is *.md / *.mdx / *.rst or
+        # under docs/. One code/test/workflow file changing → review as normal.
+        id: docs_only
+        shell: bash
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          if ! git rev-parse --verify --quiet "origin/${BASE_REF}" >/dev/null; then
+            echo "::error::origin/${BASE_REF} not found — cannot classify PR; failing to avoid misclassification"
+            exit 1
+          fi
+          files=$(git diff --name-only "origin/${BASE_REF}...HEAD")
+          if [ -z "$files" ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          is_docs_only=true
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if [[ "$f" == *.md || "$f" == *.mdx || "$f" == *.rst || "$f" == docs/* ]]; then
+              continue
+            fi
+            is_docs_only=false
+            break
+          done <<< "$files"
+          echo "docs_only=$is_docs_only" >> "$GITHUB_OUTPUT"
+
+      - name: Post docs-only skip notice
+        if: steps.docs_only.outputs.docs_only == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          printf '## Claude Code Review\n\nDoc-only diff — engineering review skipped to save tokens. If this PR needs a review (e.g. material claims in the docs that affect behaviour), request one manually.\n' > skip_notice.md
+          gh pr comment "$PR_NUMBER" --body-file skip_notice.md
+
+      - name: Get PR comments
+        if: steps.docs_only.outputs.docs_only != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq '[.[] | "### Comment by " + .user.login + " at " + .created_at + "\n" + .body] | join("\n\n---\n\n")' \
+            > pr_comments.txt
+
+      - name: Get PR title + body
+        if: steps.docs_only.outputs.docs_only != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr view "$PR_NUMBER" --json title,body \
+            --jq '"# " + .title + "\n\n" + (.body // "(no description)")' \
+            > pr_description.txt
+
+      - name: Build request body
+        if: steps.docs_only.outputs.docs_only != 'true'
+        run: |
+          cat > build_prompt.py << 'PYEOF'
+          import json
+
+          diff = open('pr.diff', encoding='utf-8', errors='replace').read()
+          comments_raw = open('pr_comments.txt').read().strip()
+          pr_description = open('pr_description.txt', encoding='utf-8', errors='replace').read().strip()
+
+          # ---------------------------------------------------------------
+          # System block — STATIC, cached across runs. This is the
+          # autonomy-engine: a repo-agnostic engine that runs Claude Code
+          # (and, in future, other CLI agents) autonomy loops against any
+          # target repo. Bash (macOS /bin/bash 3.2.57 compatible) + Python 3
+          # stdlib only. No third-party deps.
+          # ---------------------------------------------------------------
+          system_rules = (
+              "You are a code reviewer for autonomy-engine, a repo-agnostic engine that runs "
+              "Claude Code autonomy loops against any target repo. Stack: bash (must stay macOS "
+              "/bin/bash 3.2.57 compatible) + Python 3 stdlib only (NO third-party deps — no "
+              "PyYAML, no yq). The author is Claude Code — it knows the stack. Only surface real "
+              "problems.\n\n"
+
+              "## Review ONLY the diff — never the surrounding code\n"
+              "Judge what CHANGED in this PR. Unchanged code is out of scope.\n"
+              "- If a finding is about a line that exists only OUTSIDE the `+`/`-` hunks, DELETE it.\n"
+              "- Before posting any finding, quote the exact `+`-prefixed line you are flagging. If "
+              "you cannot quote a `+` line, the finding is about unchanged code — DELETE it.\n"
+              "- Claims about MISSING code are the most failure-prone: quote the surrounding `+` "
+              "block verbatim before claiming something is absent. If the block you quote contains "
+              "the thing you claim is missing, DELETE the finding.\n\n"
+
+              "## Engine invariants — flag any violation, do NOT flag as bugs when honoured\n"
+              "- macOS /bin/bash 3.2.57: NO mapfile/readarray, NO globstar/`**`, NO associative "
+              "arrays (`declare -A`), NO `${var,,}`/`${var^^}`. Flag any of these in a `+` line.\n"
+              "- Every script's executable body is guarded by "
+              "`[ \"${BASH_SOURCE[0]}\" = \"${0}\" ] || return 0` (or the `if [ ... ]; then ... fi` "
+              "form) so sourcing it for tests only defines functions. A new script without this "
+              "guard, or logic that runs on source, is a finding.\n"
+              "- No third-party Python deps — config parsing goes through lib/config_parser.py "
+              "(stdlib only). A new `import` of a third-party module is a finding.\n"
+              "- No target-repo-specific values hardcoded in bin/ or lib/ (no specific GitHub "
+              "owners, board titles, issue numbers) — the engine is repo-agnostic; everything "
+              "repo-specific comes from the target repo's .autonomy/config.yaml. templates/ and "
+              "docs/ may use placeholders/examples — those are fine.\n"
+              "- Merge-gate fail-safe: a `gh` API failure must never be treated as CI-green. Any "
+              "new merge-gate path that could read a gh failure as success is a BLOCKING finding.\n"
+              "- Best-effort scripts (board.sh, unblock_dependents.sh) must never hard-fail their "
+              "caller — every path exits 0. A new `exit 1` in those is a finding.\n"
+              "- The reset-epoch split: agent adapters only EXTRACT the reset epoch; supervisor.sh "
+              "persists it. An adapter writing .last_usage_reset is a finding.\n\n"
+
+              "## Check for\n"
+              "Shell correctness (quoting, unset-var safety under `set -u`, exit-code handling — "
+              "e.g. `local x=$(cmd)` masks `$?`), the invariants above, unsafe handling of "
+              "untrusted input, tests that assert nothing or only exercise mocks, and regressions "
+              "from removed code.\n\n"
+
+              "## Review rules\n"
+              "- Do not explain what the code does — the author wrote it.\n"
+              "- Post only confirmed findings. Silent discards only — no 'actually…', no "
+              "self-withdrawals.\n"
+              "- If the author rebutted an identical finding in the comment history with file:line "
+              "evidence, that rebuttal is authoritative — don't re-post it.\n\n"
+
+              "## Output format — one line per finding, no paragraphs\n"
+              "Findings-only, one sentence each. No preamble, no narrative. Omit any empty section.\n"
+              "### [BLOCKING] — must fix before merge\n"
+              "`file:line` — what is wrong (one sentence).\n\n"
+              "### [WARNING] — should fix\n"
+              "`file:line` — what is wrong (one sentence).\n\n"
+              "### [NITPICK] — optional\n"
+              "`file:line` — suggestion (one sentence).\n\n"
+              "### Verdict\n"
+              "**APPROVE**, **REQUEST CHANGES**, or **NEEDS DISCUSSION**. One sentence max.\n"
+          )
+
+          user_prompt = "## PR title + description\n\n" + pr_description + "\n\n"
+          user_prompt += (
+              "## PR Comment History (previous review rounds and author responses)\n\n"
+              + (comments_raw if comments_raw else "(no comments yet)")
+              + "\n\n"
+          )
+          user_prompt += "## Full diff\n```diff\n" + diff + "\n```"
+
+          payload = {
+              "model": "claude-sonnet-5",
+              "max_tokens": 5000,
+              "thinking": {"type": "adaptive"},
+              "output_config": {"effort": "medium"},
+              "system": [
+                  {
+                      "type": "text",
+                      "text": system_rules,
+                      "cache_control": {"type": "ephemeral"},
+                  }
+              ],
+              "messages": [{"role": "user", "content": user_prompt}],
+          }
+
+          with open('request.json', 'w') as f:
+              json.dump(payload, f)
+
+          print(f"Request written: {len(diff)} chars of diff, {len(user_prompt)} chars user prompt")
+          PYEOF
+          python3 build_prompt.py
+
+      - name: Call Claude API
+        if: steps.docs_only.outputs.docs_only != 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          HTTP_STATUS=$(curl -s -w "%{http_code}" \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            --data-binary @request.json \
+            -o response.json \
+            https://api.anthropic.com/v1/messages)
+
+          echo "HTTP status: $HTTP_STATUS"
+          cat response.json
+
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "API returned HTTP $HTTP_STATUS"
+            exit 1
+          fi
+
+          python3 -c "
+          import json, sys
+          data = json.load(open('response.json'))
+          if 'content' not in data or not data['content']:
+              print('Unexpected response shape:', json.dumps(data, indent=2))
+              sys.exit(1)
+          stop_reason = data.get('stop_reason') or ''
+          text_blocks = [b for b in data['content'] if b.get('type') == 'text']
+          if not text_blocks:
+              print('No text block in response content:', json.dumps(data, indent=2))
+              sys.exit(1)
+          text = text_blocks[0]['text']
+          with open('stop_reason.txt', 'w') as f:
+              f.write(stop_reason)
+          if stop_reason == 'max_tokens':
+              text = (
+                  '> :warning: **Review truncated by max_tokens cap — findings below may be incomplete. '
+                  'Bump max_tokens in .github/workflows/claude-review.yml or split the PR.**\n\n'
+                  + text
+              )
+          with open('review.txt', 'w') as f:
+              f.write(text)
+          usage = data.get('usage', {})
+          print(f'Review extracted (stop_reason={stop_reason!r}, usage={usage})')
+          "
+
+      - name: Post review comment
+        if: steps.docs_only.outputs.docs_only != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          { echo "## Claude Code Review"; echo ""; cat review.txt; } > comment_body.txt
+          gh pr comment "$PR_NUMBER" --body-file comment_body.txt
+
+      - name: Fail workflow on truncated review
+        if: steps.docs_only.outputs.docs_only != 'true'
+        run: |
+          STOP_REASON=$(cat stop_reason.txt)
+          if [ "$STOP_REASON" = "max_tokens" ]; then
+            echo "::error::Claude review hit max_tokens cap — review may be truncated. Raise max_tokens or split the PR."
+            exit 1
+          fi
+          echo "stop_reason=$STOP_REASON"
