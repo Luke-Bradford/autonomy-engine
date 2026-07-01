@@ -85,6 +85,36 @@ class TestActivityLiveness(unittest.TestCase):
         self.assertEqual(ds.activity_state(s, now=1000, stale_secs=90), "idle")
 
 
+class TestDisplayStatus(unittest.TestCase):
+    """THE single source of truth for a repo's status label (#23). Every panel
+    renders this one value -- lifecycle x activity collapsed exactly once,
+    server-side, never re-derived per-panel in page JS."""
+    def test_terminal_lifecycle_states_pass_through(self):
+        for state in ("needs-setup", "missing", "error"):
+            self.assertEqual(ds.display_status(state, "working"), state)
+
+    def test_paused_with_live_session_is_stopping(self):
+        # graceful stop requested but the current session is still running
+        self.assertEqual(ds.display_status("paused", "working"), "stopping")
+
+    def test_paused_without_live_session_is_paused(self):
+        self.assertEqual(ds.display_status("paused", "idle"), "paused")
+        self.assertEqual(ds.display_status("paused", "done"), "paused")
+        self.assertEqual(ds.display_status("paused", "none"), "paused")
+
+    def test_stopped_wins_over_stale_session_activity(self):
+        # the operator's #23 report: dead supervisor + old session log must
+        # NEVER render as working/in-progress anywhere
+        for activity in ("working", "idle", "done", "none"):
+            self.assertEqual(ds.display_status("stopped", activity), "stopped")
+
+    def test_running_supervisor_activity_decides(self):
+        self.assertEqual(ds.display_status("running", "working"), "working")
+        self.assertEqual(ds.display_status("running", "idle"), "idle")
+        self.assertEqual(ds.display_status("running", "done"), "idle")
+        self.assertEqual(ds.display_status("running", "none"), "idle")
+
+
 class TestTicketRef(unittest.TestCase):
     def test_extracts_issue_number_from_feat_branch(self):
         self.assertEqual(ds.extract_ticket_ref("feat/57-add-retry"), 57)
@@ -228,7 +258,7 @@ class TestRoles(unittest.TestCase):
     """Page is designed for the multi-role org now: Coder live, others as
     not-configured placeholders unless the pack declares them."""
     def test_default_roster_when_no_roles_block(self):
-        roles = ds.build_roles({}, activity="working")
+        roles = ds.build_roles({}, coder_status="working")
         names = [r["name"] for r in roles]
         self.assertEqual(names, ["coder", "pm", "qa", "researcher"])
         coder = roles[0]
@@ -240,10 +270,18 @@ class TestRoles(unittest.TestCase):
         self.assertFalse(roles[1]["enabled"])
         self.assertEqual(roles[1]["status"], "not-configured")
 
+    def test_coder_row_carries_the_unified_display_status(self):
+        # #23: the coder row must show the SAME label as the repo badge --
+        # lifecycle-aware display status, not the raw activity axis
+        roles = ds.build_roles({}, coder_status="stopping")
+        self.assertEqual(roles[0]["status"], "stopping")
+        roles = ds.build_roles({}, coder_status="stopped")
+        self.assertEqual(roles[0]["status"], "stopped")
+
     def test_config_declared_role_overrides_placeholder(self):
         cfg_roles = {"qa": {"enabled": "true", "substrate": "routine",
                             "trigger": {"type": "event"}}}
-        roles = ds.build_roles(cfg_roles, activity="idle")
+        roles = ds.build_roles(cfg_roles, coder_status="idle")
         qa = next(r for r in roles if r["name"] == "qa")
         self.assertTrue(qa["enabled"])
         self.assertEqual(qa["substrate"], "routine")
@@ -252,7 +290,7 @@ class TestRoles(unittest.TestCase):
     def test_custom_role_appended(self):
         cfg_roles = {"security_sweeper": {"enabled": "true", "substrate": "routine",
                                           "trigger": {"type": "event"}}}
-        roles = ds.build_roles(cfg_roles, activity="idle")
+        roles = ds.build_roles(cfg_roles, coder_status="idle")
         self.assertIn("security_sweeper", [r["name"] for r in roles])
 
 
@@ -270,6 +308,28 @@ class TestRepoState(unittest.TestCase):
         self.assertTrue(st["voice"])
         self.assertEqual(st["git"]["branch"], "feat/x")
         self.assertEqual(st["config"]["model"], "claude-opus-4-8")
+
+    def test_repo_state_carries_display_status(self):
+        # fixture: running lock pid (injected alive) + stale session log ->
+        # the ONE label every panel renders is "idle"
+        st = ds.build_repo_state(
+            FIX,
+            pid_is_alive=lambda p: True,
+            git_in_flight=lambda repo: {},
+        )
+        self.assertEqual(st["display_status"], "idle")
+        coder = next(r for r in st["roles"] if r["name"] == "coder")
+        self.assertEqual(coder["status"], st["display_status"])
+
+    def test_repo_state_display_status_stopped(self):
+        st = ds.build_repo_state(
+            FIX,
+            pid_is_alive=lambda p: False,
+            git_in_flight=lambda repo: {},
+        )
+        self.assertEqual(st["display_status"], "stopped")
+        coder = next(r for r in st["roles"] if r["name"] == "coder")
+        self.assertEqual(coder["status"], "stopped")
 
 
 if __name__ == "__main__":
