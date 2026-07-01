@@ -82,15 +82,23 @@ jobs:
             if ! sha="$(qa_join_ready "$pr")"; then
               continue
             fi
-            # skip if this sha already has a qa-gate verdict (idempotent re-runs)
+            # skip if this sha already has a TERMINAL qa-gate verdict. pending
+            # does NOT count -- a run that died after posting pending must be
+            # retryable by the reconciler, not wedged forever.
             existing="$(gh api "repos/$REPO/commits/$sha/statuses" \
-              -q '[.[] | select(.context == "qa-gate")] | length' 2>/dev/null || echo 0)"
+              -q '[.[] | select(.context == "qa-gate" and (.state == "success" or .state == "failure"))] | length' 2>/dev/null || echo 0)"
             if [ "${existing:-0}" -gt 0 ]; then
               echo "qa_gate: #$pr@$sha already has a verdict -- skipping"
             else
               qa_post_verdict "$sha" pending "QA review running" "$REPO"
               transcript="$(mktemp)"
-              gh pr diff "$pr" > /tmp/qa-pr.diff
+              # per-PR gh calls are guarded: one PR's transient failure skips
+              # THAT PR (reconciler retries) instead of aborting the whole
+              # loop under set -e
+              if ! gh pr diff "$pr" > /tmp/qa-pr.diff; then
+                echo "qa_gate: cannot fetch diff for #$pr -- skipping this round"
+                continue
+              fi
               # Read-only agent, tokens stripped: the diff is untrusted input.
               env -u GH_TOKEN -u GITHUB_TOKEN \
                 claude -p "$(cat .autonomy/roles/qa.md)
@@ -102,8 +110,12 @@ jobs:
               verdict="$(qa_extract_verdict "$transcript")"
               tail -40 "$transcript"
               # bind the verdict to the sha we joined on; if the head moved
-              # meanwhile, the synchronize trigger re-arms on the new head
-              sha_now="$(gh pr view "$pr" --json headRefOid -q .headRefOid)"
+              # meanwhile, the synchronize trigger re-arms on the new head.
+              # A gh failure here refuses (no verdict on an unverifiable sha).
+              if ! sha_now="$(gh pr view "$pr" --json headRefOid -q .headRefOid)"; then
+                echo "qa_gate: cannot re-read head for #$pr -- discarding verdict; reconciler retries"
+                continue
+              fi
               if [ "$sha_now" != "$sha" ]; then
                 echo "qa_gate: head moved during QA -- verdict discarded; re-armed by synchronize"
                 continue
