@@ -25,17 +25,11 @@
 # Every prompt has a flag twin, so the whole run can be non-interactive.
 # Invalid flag values fail immediately; invalid interactive answers warn and
 # re-prompt (EOF keeps the current value).
-set -euo pipefail
+# NOTE: `set` and the helper `source`s live BELOW the guard, in the executed
+# body -- sourcing this file must define the qs_* functions and nothing else
+# (no shell-option mutation, no dragged-in supervisor functions). PR #39
+# review finding.
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-# Reused single-source functions: valid_model_id (supervisor.sh, kept in
-# parity with dashboard_control._MODEL_RE), derive_slug/resolve_worktree_path
-# + CONFIG_GET (setup_worktree.sh). Both files are functions-only when
-# sourced (guarded executable bodies).
-# shellcheck source=/dev/null
-source "$ENGINE_HOME/bin/supervisor.sh"
-# shellcheck source=/dev/null
-source "$ENGINE_HOME/bin/setup_worktree.sh"
 
 qs_valid_strategy() {
   case "$1" in manual|ci_only|bot_comment|gh_review) return 0 ;; *) return 1 ;; esac
@@ -107,6 +101,17 @@ EOF
 }
 
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
+
+set -euo pipefail
+
+# Reused single-source functions: valid_model_id (supervisor.sh, kept in
+# parity with dashboard_control._MODEL_RE), derive_slug/resolve_worktree_path
+# + CONFIG_GET (setup_worktree.sh). Both files are functions-only when
+# sourced (guarded executable bodies).
+# shellcheck source=/dev/null
+source "$ENGINE_HOME/bin/supervisor.sh"
+# shellcheck source=/dev/null
+source "$ENGINE_HOME/bin/setup_worktree.sh"
 
 TARGET=""
 BOARD_OWNER="" BOARD_TITLE="" MODEL="" MERGE_GATE=""

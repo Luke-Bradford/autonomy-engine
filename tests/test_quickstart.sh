@@ -42,9 +42,13 @@ export PATH="$shim:$PATH"
 cfg_get() { python3 "$ENGINE_HOME/lib/config_parser.py" "$1/.autonomy/config.yaml" "$2" 2>/dev/null; }
 
 # --- sourcing defines functions only (the repo-wide guard convention) -------
+# PR #39 review (BLOCKING): sourcing must not mutate the caller's shell
+# options either -- capture $- before/after and demand byte-equality.
+opts_before="$-"
 # shellcheck source=/dev/null
 source "$ENGINE_HOME/bin/quickstart.sh"
-set +e   # quickstart's `set -e` leaks in via source; this test runs failing commands on purpose
+check "sourcing leaves shell options untouched" "$opts_before" "$-"
+check "sourcing does not drag supervisor functions along" "1" "$(type valid_model_id >/dev/null 2>&1 && echo 0 || echo 1)"
 check "sourcing defines qs_valid_strategy" "0" "$(type qs_valid_strategy >/dev/null 2>&1 && echo 0 || echo 1)"
 check "strategy whitelist: manual ok" "0" "$(qs_valid_strategy manual && echo 0 || echo 1)"
 check "strategy whitelist: ci_only ok" "0" "$(qs_valid_strategy ci_only && echo 0 || echo 1)"

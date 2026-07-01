@@ -8,6 +8,7 @@ Deliberately small and dependency-free -- see the pack-seam spec's
 "Parser" note for why this exists instead of PyYAML.
 """
 import os
+import stat
 import sys
 import tempfile
 
@@ -232,6 +233,8 @@ def _set_cli(path: str, dotted_key: str, value: str) -> int:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(new_text)
+        # mkstemp creates 0600; keep the config's own mode (PR #39 review)
+        os.chmod(tmp_path, stat.S_IMODE(os.stat(path).st_mode))
         os.replace(tmp_path, path)
     except BaseException:
         os.unlink(tmp_path)

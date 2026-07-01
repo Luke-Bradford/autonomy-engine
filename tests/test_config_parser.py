@@ -273,6 +273,17 @@ class TestSetCli(unittest.TestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(Path(path).read_text(), bad)
 
+    def test_set_preserves_file_permissions(self):
+        # PR #39 review (WARNING): the atomic tmp+replace write must not
+        # narrow the config's mode to mkstemp's 0600
+        import os
+        import stat
+        path = self.write_tmp(self.TEXT)
+        os.chmod(path, 0o644)
+        proc = self.run_set(path, "board.owner", "some-org")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o644)
+
     def test_set_value_with_both_quote_kinds_is_refused(self):
         # the restricted parser has no escape support: a value that contains
         # both quote characters cannot be written safely -- refuse
