@@ -31,8 +31,10 @@ PAGE = os.path.join(ENGINE_HOME, "lib", "dashboard_page.html")
 REPOS_FILE = os.path.expanduser("~/.config/autonomy/repos")
 
 # gh is network + slow; cache its result per repo so SSE ticks don't hammer it.
+# Read/written from per-request SSE threads, so guard it (like _hist).
 _GH_TTL = 15.0
 _gh_cache = {}
+_gh_lock = threading.Lock()
 
 # Throughput-over-time: a background thread samples each repo's cumulative
 # output-token counter on a fixed wall-clock tick, so the page can draw a
@@ -46,6 +48,7 @@ _hist = {}               # repo_path -> list[[epoch, cumulative_output_tokens]]
 _hist_lock = threading.Lock()
 # per-repo incremental cursor so we read only bytes appended since last sample,
 # never the whole (growing) log again -- O(new bytes)/tick, not O(filesize).
+# Touched only by the single sampler thread (via _sample_once), so no lock.
 _cursor = {}             # repo_path -> {"path", "offset", "sum"}
 
 
@@ -136,7 +139,8 @@ def git_in_flight(repo):
     CI + review + mergeable state. Best-effort: any failure -> partial/empty,
     never raises (a gh/git hiccup must not blank the whole page)."""
     now = time.time()
-    cached = _gh_cache.get(repo)
+    with _gh_lock:
+        cached = _gh_cache.get(repo)
     if cached and now - cached[0] < _GH_TTL:
         return cached[1]
 
@@ -208,7 +212,8 @@ def git_in_flight(repo):
         "merged": merged,
         "focus_ticket": focus,
     }
-    _gh_cache[repo] = (now, result)
+    with _gh_lock:
+        _gh_cache[repo] = (now, result)
     return result
 
 
@@ -239,7 +244,7 @@ def collect(repos):
             out.append({"name": os.path.basename(repo.rstrip("/")), "path": repo,
                         "lifecycle": {"state": "missing", "pid": None},
                         "current_session": None, "voice": [], "git": {},
-                        "config": {}, "reset_epoch": None})
+                        "config": {}})
             continue
         try:
             st = ds.build_repo_state(repo, git_in_flight=git_in_flight)
@@ -249,7 +254,7 @@ def collect(repos):
             out.append({"name": os.path.basename(repo.rstrip("/")), "path": repo,
                         "lifecycle": {"state": "error", "pid": None},
                         "error": str(exc), "current_session": None, "voice": [],
-                        "git": {}, "config": {}, "reset_epoch": None})
+                        "git": {}, "config": {}})
     return {"generated_at": int(time.time()), "repos": out}
 
 

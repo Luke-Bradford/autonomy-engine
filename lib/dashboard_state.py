@@ -401,16 +401,6 @@ def _read_config(repo_path):
     }
 
 
-def read_reset_epoch(repo_path):
-    """The supervisor's persisted usage-limit reset epoch, or None."""
-    p = os.path.join(repo_path, "var", "autonomy-logs", ".last_usage_reset")
-    try:
-        with open(p) as fh:
-            return int((fh.read() or "").strip())
-    except (OSError, ValueError):
-        return None
-
-
 def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_flight=None, now=None):
     """Compose the full per-repo render model. git/gh state is injected via
     `git_in_flight(repo_path) -> dict` so the page's server owns that edge."""
@@ -433,5 +423,4 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "git": git_in_flight(repo_path) if git_in_flight else {},
         "config": config,
         "quota": parse_quota_windows(latest) if latest else {},
-        "reset_epoch": read_reset_epoch(repo_path),
     }
