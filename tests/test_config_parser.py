@@ -120,6 +120,16 @@ class TestFlowMapping(unittest.TestCase):
         with self.assertRaises(ValueError):
             config_parser.parse("t: { a: { b: c } }\n")
 
+    def test_flow_list_inside_flow_mapping(self):
+        # PR #33 review: commas inside a bracketed value must not split the
+        # mapping -- `on: [a, b]` is one entry
+        cfg = config_parser.parse("t: { type: event, on: [a, b] }\n")
+        self.assertEqual(cfg["t"], {"type": "event", "on": ["a", "b"]})
+
+    def test_nested_flow_mapping_still_rejected_with_depth_tracking(self):
+        with self.assertRaises(ValueError):
+            config_parser.parse("t: { a: { b: c }, d: e }\n")
+
 
 class TestSetScalar(unittest.TestCase):
     """set_scalar rewrites ONE scalar in config text while preserving every

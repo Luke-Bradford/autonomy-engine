@@ -66,8 +66,10 @@ doctor_full_report() {
 
   # roles: block (multi-role org, #12) -- absent is fine (defaults: coder
   # only); present-but-invalid is a hard misconfig worth failing the report.
+  # 2>&1: roles.py reports unreadable/unparseable config on stderr -- the
+  # FAIL detail must show it, not swallow it (PR #33 review).
   local roles_out
-  if roles_out="$(python3 "$DOCTOR_HOME/lib/roles.py" "$repo" 2>/dev/null)"; then
+  if roles_out="$(python3 "$DOCTOR_HOME/lib/roles.py" "$repo" 2>&1)"; then
     if python3 "$DOCTOR_HOME/lib/config_parser.py" "$repo/.autonomy/config.yaml" roles >/dev/null 2>&1; then
       echo "OK   roles: block valid"
     else

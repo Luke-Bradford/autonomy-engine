@@ -30,8 +30,9 @@ def _strip_comment(line: str) -> str:
 
 
 def _split_top(inner: str) -> list:
-    """Split flow-collection innards on top-level commas, respecting quotes."""
-    parts, buf, quote = [], [], None
+    """Split flow-collection innards on top-level commas, respecting quotes
+    and bracket/brace depth (a comma inside `[a, b]` is not a separator)."""
+    parts, buf, quote, depth = [], [], None, 0
     for ch in inner:
         if quote:
             buf.append(ch)
@@ -40,7 +41,13 @@ def _split_top(inner: str) -> list:
         elif ch in ('"', "'"):
             quote = ch
             buf.append(ch)
-        elif ch == ",":
+        elif ch in ("[", "{"):
+            depth += 1
+            buf.append(ch)
+        elif ch in ("]", "}"):
+            depth -= 1
+            buf.append(ch)
+        elif ch == "," and depth == 0:
             parts.append("".join(buf))
             buf = []
         else:
