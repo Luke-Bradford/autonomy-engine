@@ -367,6 +367,32 @@ def extract_ticket_ref(branch):
     return None
 
 
+def iso_epoch(ts):
+    """ISO-8601 (gh's Zulu style) -> epoch seconds; 0 on anything unparseable."""
+    if not ts:
+        return 0
+    try:
+        return int(datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return 0
+
+
+def completed_ticket(ticket, merged_prs):
+    """The merged PR that completed `ticket` (#25), or None. Matched by the
+    engine's branch convention first (feat/<n>-/fix/<n>-), then by a #<n> ref
+    in the PR title (word-bounded -- #6490 never matches 649)."""
+    if not ticket or not merged_prs:
+        return None
+    for pr in merged_prs:
+        if extract_ticket_ref(pr.get("branch") or "") == ticket:
+            return pr
+    ref = re.compile(r"#%d\b" % ticket)
+    for pr in merged_prs:
+        if ref.search(pr.get("title") or ""):
+            return pr
+    return None
+
+
 def nest(nodes):
     """Flat node list -> forest, nesting each node under the tool_use whose id
     matches its `parent` (Claude Code subagent parentage). Orphans / top-level

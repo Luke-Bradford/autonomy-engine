@@ -320,9 +320,12 @@ function renderFocus(repos){
     let ticket="";
     if(ft){
       const stateChip=ft.state&&ft.state!=="open"?`<span class="chip">${esc(ft.state)}</span>`:"";
-      // "in progress" is asserted by the SERVER only while the repo is busy;
-      // otherwise an issue-sourced ticket is what the repo LAST worked.
-      const right = ft.in_progress
+      // chip truth ladder, all server-asserted: completed (merged PR tied to
+      // the session's ticket, #25) > in progress (only while busy, #23) >
+      // open-PR ci/review > "last worked".
+      const right = ft.completed
+        ? `<span class="chip c-passing">✓ completed${ft.merged_epoch?` <span class="agox" data-t="${ft.merged_epoch}">${ago(nowS()-ft.merged_epoch)} ago</span>`:""}</span>`
+        : ft.in_progress
         ? `<span class="chip c-pending">in progress</span>${stateChip}`
         : (ft.ci||ft.review)
           ? `${ft.ci?`<span class="chip c-${esc(ft.ci)}">ci ${esc(ft.ci)}</span>`:""}${ft.review?`<span class="chip c-${esc(ft.review)}">${esc(ft.review.replace("_"," "))}</span>`:""}`
@@ -524,7 +527,7 @@ function renderGit(repos){
   }
   if(merged.length){
     html+=`<div class="p-h" style="border-top:1px solid var(--hair)"><span class="sub" style="color:var(--dim)">recently completed</span></div>`;
-    html+=merged.slice(0,6).map(p=>`<div class="pr" style="padding:8px 14px"><div class="p1"><span class="dot s-done"></span><span class="num" style="color:var(--ok-dim)">#${p.number}</span><span class="pt" style="font-size:12px">${p.url?`<a href="${esc(p.url)}" target="_blank">${esc(short(p.title,40))}</a>`:esc(short(p.title,40))}</span></div></div>`).join("");
+    html+=merged.slice(0,6).map(p=>`<div class="pr" style="padding:8px 14px"><div class="p1"><span class="dot s-done"></span><span class="num" style="color:var(--ok-dim)">#${p.number}</span><span class="pt" style="font-size:12px">${p.url?`<a href="${esc(p.url)}" target="_blank">${esc(short(p.title,40))}</a>`:esc(short(p.title,40))}</span>${p.merged_epoch?`<span class="mono agox" style="margin-left:auto;flex:none;color:var(--dim);font-size:10px" data-t="${p.merged_epoch}">${ago(nowS()-p.merged_epoch)} ago</span>`:""}</div></div>`).join("");
   }
   $("git").innerHTML=html;
 }
