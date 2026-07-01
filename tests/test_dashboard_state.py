@@ -164,6 +164,13 @@ class TestTicketHeuristic(unittest.TestCase):
     def test_pick_nothing(self):
         self.assertIsNone(ds.pick_ticket({}, {}, None, None))
 
+    def test_force_create_branch_variants_recognized(self):
+        # review NITPICK on PR #28: -B / -C force-create variants count too
+        for cmd in ("git checkout -B fix/12-redo", "git switch -C feat/12-x"):
+            m = ds._BRANCH_CREATE_RE.search(cmd)
+            self.assertIsNotNone(m, cmd)
+            self.assertEqual(ds.extract_ticket_ref(m.group(1)), 12)
+
     def test_triage_session_picks_branched_ticket(self):
         # the real eBull failure shape: #1015 out-mentions everything, #1816
         # went In Progress then Blocked, the branch created is fix/649-...

@@ -24,8 +24,8 @@ from datetime import datetime
 import config_parser
 
 _TICKET_RE = re.compile(r"#(\d{1,6})\b")
-# in-session branch creation: `git checkout -b <name>` / `git switch -c <name>`
-_BRANCH_CREATE_RE = re.compile(r"(?:checkout\s+-b|switch\s+-c)\s+['\"]?([^\s'\";&|]+)")
+# in-session branch creation: `git checkout -b|-B <name>` / `git switch -c|-C <name>`
+_BRANCH_CREATE_RE = re.compile(r"(?:checkout\s+-[bB]|switch\s+-[cC])\s+['\"]?([^\s'\";&|]+)")
 # the engine's own board write: board.sh status <n> "<Status>"
 _BOARD_STATUS_RE = re.compile(r"board\.sh['\"]?\s+status\s+(\d{1,6})\s+['\"]?([A-Za-z][A-Za-z ]*)")
 
