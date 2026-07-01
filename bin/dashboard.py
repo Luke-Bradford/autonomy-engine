@@ -354,14 +354,19 @@ class Handler(BaseHTTPRequestHandler):
         # Anti-DNS-rebinding: the Host must be exactly the loopback host:port we
         # bind. After a rebind the browser still sends Host: evil.com, which is
         # not in the allowlist -> rejected before the token is even checked.
+        # These early rejects happen BEFORE we read the request body, so close
+        # the connection with the response -- otherwise unread body bytes would
+        # desync parsing of the next request on a keep-alive socket.
         host = self.headers.get("Host", "")
         if host not in self.allowed_hosts:
+            self.close_connection = True
             self._send(421, b'{"error":"bad host"}')
             return
         # And if an Origin is present (cross-site POSTs always carry one) it must
         # be a loopback origin too.
         origin = self.headers.get("Origin")
         if origin and origin.split("://", 1)[-1] not in self.allowed_hosts:
+            self.close_connection = True
             self._send(403, b'{"error":"cross-origin refused"}')
             return
         try:
@@ -369,6 +374,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             length = 0
         if length <= 0 or length > 8192:
+            self.close_connection = True
             self._send(400, b'{"error":"bad request"}')
             return
         try:
