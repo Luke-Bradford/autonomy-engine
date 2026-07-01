@@ -88,13 +88,16 @@ preflight() {
 # --- live model/effort settings (#24) ---------------------------------------
 # Strict token check for model ids -- the value came over the dashboard's
 # control channel and lands in a CLI argv; nothing shell-metacharish allowed.
+# Kept in PARITY with dashboard_control._MODEL_RE (start alnum, allowed set,
+# max 64 chars) so the defense-in-depth line is as strict as the first.
 # (In the negated bracket set `]` must come first.)
 valid_model_id() {
   case "$1" in
     '') return 1 ;;
+    [!A-Za-z0-9]*) return 1 ;;
     *[!]A-Za-z0-9._[-]*) return 1 ;;
-    *) return 0 ;;
   esac
+  [ "${#1}" -le 64 ]
 }
 
 # The claude CLI's accepted effort levels (verified against the CLI itself).

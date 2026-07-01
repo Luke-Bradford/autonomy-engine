@@ -269,7 +269,11 @@ _sse_active = [0]
 _ACCT_TTL = 45.0
 _acct_cache = [0.0, None]
 _acct_lock = threading.Lock()
-_issue_cache = {}  # (repo, number) -> (epoch, {title,url,state})
+# (repo, number) -> (epoch, {title,url,state}). Locked like every other cache
+# here: collect() runs on a thread per request/SSE stream, and the eviction's
+# next(iter(...))/pop must not race concurrent inserts (#31).
+_issue_cache = {}
+_issue_lock = threading.Lock()
 
 
 def _account_usage():
@@ -292,11 +296,12 @@ def _issue_focus(repo, number, repo_url):
     link even before a PR exists. Cached per (repo, number)."""
     key = (repo, number)
     now = time.time()
-    cached = _issue_cache.get(key)
-    if cached and now - cached[0] < 60:
-        return cached[1]
-    while len(_issue_cache) > 256:         # bound it: evict oldest (dict is insertion-ordered), not clear-all
-        _issue_cache.pop(next(iter(_issue_cache)))
+    with _issue_lock:
+        cached = _issue_cache.get(key)
+        if cached and now - cached[0] < 60:
+            return cached[1]
+        while len(_issue_cache) > 256:     # bound it: evict oldest (dict is insertion-ordered), not clear-all
+            _issue_cache.pop(next(iter(_issue_cache)))
     raw = _run(["gh", "issue", "view", str(number), "--json", "title,url,state"],
                cwd=repo, timeout=15)
     focus = None
@@ -308,7 +313,8 @@ def _issue_focus(repo, number, repo_url):
                      "state": (d.get("state") or "").lower(), "in_progress": True}
         except ValueError:
             focus = None
-    _issue_cache[key] = (now, focus)
+    with _issue_lock:
+        _issue_cache[key] = (now, focus)
     return focus
 
 

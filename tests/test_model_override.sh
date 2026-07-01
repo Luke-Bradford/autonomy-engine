@@ -77,6 +77,14 @@ if valid_model_id "claude-opus-4-8[1m]"; then r=ok; else r=rejected; fi
 check "model id with [1m] suffix accepted" ok "$r"
 if valid_model_id ""; then r=ok; else r=rejected; fi
 check "empty model id rejected" rejected "$r"
+# parity with dashboard_control._MODEL_RE (#31): must start alnum, <=64 chars
+if valid_model_id ".claude"; then r=ok; else r=rejected; fi
+check "model id starting with punctuation rejected" rejected "$r"
+if valid_model_id "-claude"; then r=ok; else r=rejected; fi
+check "model id starting with dash rejected" rejected "$r"
+long="a12345678901234567890123456789012345678901234567890123456789012345"  # 65 chars
+if valid_model_id "$long"; then r=ok; else r=rejected; fi
+check "model id over 64 chars rejected" rejected "$r"
 
 # --- adapter: --effort only when set ---
 # shellcheck source=/dev/null
