@@ -291,6 +291,8 @@ def _issue_focus(repo, number, repo_url):
     cached = _issue_cache.get(key)
     if cached and now - cached[0] < 60:
         return cached[1]
+    if len(_issue_cache) > 256:            # bound the cache on a long-running process
+        _issue_cache.clear()
     raw = _run(["gh", "issue", "view", str(number), "--json", "title,url,state"],
                cwd=repo, timeout=15)
     focus = None
@@ -320,8 +322,9 @@ def collect(repos):
             st = ds.build_repo_state(repo, git_in_flight=git_in_flight)
             st["throughput"] = _throughput(repo)
             # if a session is working a ticket but there's no open PR yet, surface
-            # the in-progress ticket with its title + link.
-            git = st.get("git") or {}
+            # the in-progress ticket with its title + link. setdefault returns the
+            # dict actually stored on st, so the mutation isn't lost when git=={}.
+            git = st.setdefault("git", {})
             sess = st.get("current_session") or {}
             if not git.get("focus_ticket") and sess.get("ticket"):
                 focus = _issue_focus(repo, sess["ticket"], git.get("repo_url", ""))
