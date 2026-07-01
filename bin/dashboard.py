@@ -44,18 +44,61 @@ _SAMPLE_EVERY = 12.0      # seconds between samples
 _WINDOW = 3600            # keep last hour
 _hist = {}               # repo_path -> list[[epoch, cumulative_output_tokens]]
 _hist_lock = threading.Lock()
+# per-repo incremental cursor so we read only bytes appended since last sample,
+# never the whole (growing) log again -- O(new bytes)/tick, not O(filesize).
+_cursor = {}             # repo_path -> {"path", "offset", "sum"}
+
+
+def _session_output_tokens(repo):
+    """Cumulative streamed output tokens of the repo's newest session, read
+    incrementally from the last byte offset. Resets when the session rolls over
+    or the file is truncated. Only whole (newline-terminated) lines are counted,
+    so a half-written tail line is picked up on the next tick."""
+    logdir = os.path.join(repo, "var", "autonomy-logs")
+    latest = ds.latest_session(logdir)
+    st = _cursor.get(repo)
+    if latest is None:
+        return st["sum"] if st else 0
+    if st is None or st["path"] != latest:
+        st = {"path": latest, "offset": 0, "sum": 0}
+        _cursor[repo] = st
+    try:
+        size = os.path.getsize(latest)
+    except OSError:
+        return st["sum"]
+    if size < st["offset"]:            # truncated/rotated -> restart the count
+        st["offset"], st["sum"] = 0, 0
+    if size == st["offset"]:           # nothing new -> no read at all
+        return st["sum"]
+    try:
+        with open(latest, "rb") as fh:
+            fh.seek(st["offset"])
+            data = fh.read()
+    except OSError:
+        return st["sum"]
+    nl = data.rfind(b"\n")
+    if nl < 0:                          # no complete new line yet
+        return st["sum"]
+    chunk = data[:nl + 1]
+    st["offset"] += len(chunk)
+    for raw in chunk.split(b"\n"):
+        if b'"output_tokens"' not in raw:
+            continue
+        try:
+            o = json.loads(raw)
+        except ValueError:
+            continue
+        if o.get("type") == "assistant":
+            usage = (o.get("message") or {}).get("usage") or {}
+            st["sum"] += usage.get("output_tokens") or 0
+    return st["sum"]
 
 
 def _sample_once(repos):
     now = int(time.time())
     for repo in repos:
-        tok = 0
         try:
-            logdir = os.path.join(repo, "var", "autonomy-logs")
-            latest = ds._latest_session(logdir)
-            if latest:
-                s = ds.parse_session_log(latest)
-                tok = (s or {}).get("output_tokens", 0) or 0
+            tok = _session_output_tokens(repo)
         except Exception:
             tok = 0
         with _hist_lock:

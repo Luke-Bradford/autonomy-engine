@@ -366,7 +366,9 @@ def lifecycle_status(repo_path, pid_is_alive=_default_pid_is_alive):
 
 # --- composition ------------------------------------------------------------
 
-def _latest_session(logdir):
+def latest_session(logdir):
+    """Path of the newest session-*.log in a logdir, or None. Public: the
+    dashboard server's throughput sampler needs it too."""
     try:
         names = [n for n in os.listdir(logdir)
                  if n.startswith("session-") and n.endswith(".log")]
@@ -416,7 +418,7 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         now = time.time()
     repo_path = os.path.abspath(repo_path)
     logdir = os.path.join(repo_path, "var", "autonomy-logs")
-    latest = _latest_session(logdir)
+    latest = latest_session(logdir)
     session = parse_session_log(latest) if latest else None
     activity = activity_state(session, now)
     config = _read_config(repo_path)
