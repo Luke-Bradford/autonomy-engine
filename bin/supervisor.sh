@@ -105,6 +105,23 @@ valid_effort() {
   case "$1" in low|medium|high|xhigh|max) return 0 ;; *) return 1 ;; esac
 }
 
+# Defense-in-depth re-validation of a role's `prompt:` path at dispatch time.
+# doctor.sh's check_prompt_files (lib/roles.py) already rejects absolute or
+# repo-escaping prompt paths every preflight, but re-checking here -- parity
+# with how valid_model_id re-checks a config-sourced model id -- keeps the
+# supervisor self-contained: the value lands in a filename below, so a doctor
+# bypass must not let an absolute or `..`-escaping path through. Reject empty,
+# absolute, and any real `..` path segment (a dotted FILENAME like `..x.md` is
+# fine -- only `..` as a whole component traverses).
+valid_prompt_path() {
+  case "$1" in
+    '') return 1 ;;
+    /*) return 1 ;;                    # absolute
+    ..|../*|*/..|*/../*) return 1 ;;    # parent-dir segment anywhere
+    *) return 0 ;;
+  esac
+}
+
 # Resolve model/fallback/effort PER SESSION (not once at startup), so a config
 # edit -- including the dashboard's 'save as default' write-back -- takes
 # effect on the next session without a supervisor restart. Role-level
@@ -411,9 +428,17 @@ run_session() {
   fi
 
   # The role's own prompt when set (doctor verified it is a repo-relative
-  # pack file), else the pack's loop_prompt. A missing file refuses.
+  # pack file), else the pack's loop_prompt. Re-validate the config-sourced
+  # path here (defense-in-depth, independent of doctor) before it becomes a
+  # filename; a missing file refuses.
   local prompt_file="$AUTONOMY_TARGET_REPO/.autonomy/loop_prompt.md"
-  [ -n "$ROLE_PROMPT" ] && prompt_file="$AUTONOMY_TARGET_REPO/$ROLE_PROMPT"
+  if [ -n "$ROLE_PROMPT" ]; then
+    if ! valid_prompt_path "$ROLE_PROMPT"; then
+      log "dispatch: role '$role' prompt path '$ROLE_PROMPT' is absolute or escapes the pack -- REFUSING session (fail-safe)"
+      return 2
+    fi
+    prompt_file="$AUTONOMY_TARGET_REPO/$ROLE_PROMPT"
+  fi
   if [ ! -f "$prompt_file" ]; then
     log "dispatch: prompt file missing for role '$role' ($prompt_file) -- REFUSING session"
     return 2
