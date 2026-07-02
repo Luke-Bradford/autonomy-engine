@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# ./start -- THE entry point (issue #45). Run it from a fresh checkout and it
+# figures out what you need:
+#
+#   nothing registered yet   ->  setup guidance; `./start /path/to/repo`
+#                                chains bin/quickstart.sh on that repo
+#                                (guided config, doctor, optional worktree)
+#                                and registers it for the dashboard
+#   repos registered         ->  one-screen loop-state summary, then the
+#                                control-room dashboard (127.0.0.1)
+#
+# Usage: ./start [target-repo] [--port N] [--no-launch]
+#   --no-launch   print the dashboard command instead of running it
+#
+# Never runs launchctl: loading a supervisor stays a deliberate operator
+# step (bin/control.sh start, or the printed go-live lines).
+ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+start_repos_file() { printf '%s' "$HOME/.config/autonomy/repos"; }
+
+# setup | app -- app as soon as anything is registered for the dashboard.
+start_mode() {
+  local f; f="$(start_repos_file)"
+  if [ -f "$f" ] && grep -q '[^[:space:]]' "$f" 2>/dev/null; then
+    printf 'app'
+  else
+    printf 'setup'
+  fi
+}
+
+start_usage() {
+  cat >&2 <<'EOF'
+usage: ./start [target-repo] [--port N] [--no-launch]
+
+No repos registered yet: prints setup guidance; with a target-repo argument
+it runs the guided quickstart on it (and registers it for the dashboard).
+Repos registered: prints the loop-state summary and runs the control-room
+dashboard. --no-launch prints the dashboard command instead of running it.
+Never runs launchctl.
+EOF
+}
+
+[ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
+
+set -euo pipefail
+
+TARGET=""
+PORT=""
+NO_LAUNCH=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --port)      PORT="${2:?--port needs a value}"; shift 2 ;;
+    --no-launch) NO_LAUNCH=1; shift ;;
+    -h|--help)   start_usage; exit 0 ;;
+    -*)          echo "start: unknown flag $1" >&2; start_usage; exit 2 ;;
+    *)           if [ -z "$TARGET" ]; then TARGET="$1"; shift
+                 else echo "start: unexpected argument $1" >&2; start_usage; exit 2; fi ;;
+  esac
+done
+
+if [ -n "$TARGET" ]; then
+  [ -d "$TARGET" ] || { echo "start: target '$TARGET' is not a directory" >&2; exit 2; }
+  echo "== setup: guided quickstart for $TARGET =="
+  # --register yes is the point of coming through ./start: the repo appears
+  # in the dashboard's discovery and this machine flips to app mode.
+  if ! "$ENGINE_HOME/bin/quickstart.sh" "$TARGET" --register yes; then
+    echo "start: quickstart reported problems above -- fix them, then re-run ./start" >&2
+  fi
+  echo ""
+fi
+
+if [ "$(start_mode)" = "setup" ]; then
+  cat <<EOF
+== autonomy engine: nothing set up on this machine yet ==
+
+No repos are registered in $(start_repos_file).
+
+To bring a repo under the engine (guided -- scaffolds the pack, walks the
+minimum config, runs the readiness report, registers it here):
+
+  $ENGINE_HOME/start /path/to/your-repo
+
+Or drive the pieces yourself: bin/quickstart.sh, bin/doctor.sh,
+bin/setup_worktree.sh, bin/control.sh (see README.md).
+EOF
+  exit 0
+fi
+
+echo "== autonomy control room =="
+"$ENGINE_HOME/bin/control.sh" list || true
+echo ""
+
+DASH_CMD="python3 \"$ENGINE_HOME/bin/dashboard.py\""
+if [ -n "$PORT" ]; then DASH_CMD="$DASH_CMD --port $PORT"; fi
+
+if [ "$NO_LAUNCH" -eq 1 ]; then
+  echo "dashboard (not launched, --no-launch):"
+  echo "  $DASH_CMD"
+  exit 0
+fi
+
+echo "launching the dashboard (Ctrl-C stops it; loops are unaffected) ..."
+if [ -n "$PORT" ]; then
+  exec python3 "$ENGINE_HOME/bin/dashboard.py" --port "$PORT"
+else
+  exec python3 "$ENGINE_HOME/bin/dashboard.py"
+fi
