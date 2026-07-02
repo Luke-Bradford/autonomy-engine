@@ -184,6 +184,12 @@ fi
 f="$(mklog '{"type":"turn.failed","error":{"message":"{\"type\":\"error\",\"status\":429,\"error\":{\"type\":\"rate_limit_error\",\"resets_at\":\"2030-06-30T12:00:00Z\"}}"}}')"
 check "resets_at inside stringified envelope -> epoch" "usage_limit $ISO_EPOCH" "$(agent_classify_outcome "$f" 1)"
 
+# PR #44 review (NITPICK): multiple reset-ish keys in one envelope must have
+# defined precedence -- the LATEST epoch wins (most conservative), never
+# dict-iteration order
+f="$(mklog '{"type":"turn.failed","error":{"message":"{\"type\":\"error\",\"status\":429,\"error\":{\"type\":\"rate_limit_error\",\"resets_in_seconds\":60,\"resets_at\":\"2030-06-30T12:00:00Z\"}}"}}')"
+check "multiple reset keys -> latest epoch wins" "usage_limit $ISO_EPOCH" "$(agent_classify_outcome "$f" 1)"
+
 f="$(mklog '{"type":"turn.completed","usage":{}}')"
 check "clean run -> success" "success" "$(agent_classify_outcome "$f" 0)"
 

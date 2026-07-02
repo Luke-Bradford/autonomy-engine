@@ -168,27 +168,30 @@ def scan_reset_fields(node):
     # probes): a real codex error envelope's `message` is a stringified JSON
     # API error -- reset data, when present, lives inside it as structured
     # fields, not in a rate_limits snapshot (exec --json emits none).
+    # Multiple reset-ish keys: the LATEST epoch wins (most conservative --
+    # the account is limited until every signal has passed), never dict
+    # iteration order (PR #44 review).
+    def later(a, b):
+        if a is None:
+            return b
+        if b is None:
+            return a
+        return max(a, b)
     found = None
     if isinstance(node, dict):
         for k, v in node.items():
             kl = k.lower()
             if kl in ("resets_at", "reset_at", "resetsat"):
-                e = to_epoch(v)
-                if e is not None:
-                    found = e
+                found = later(found, to_epoch(v))
             elif kl in ("resets_in_seconds", "retry_after", "retryafter", "retry_after_seconds"):
                 s = relative_secs(v)
                 if s is not None:
-                    found = int(time.time() + s)
+                    found = later(found, int(time.time() + s))
             else:
-                sub = scan_reset_fields(v)
-                if sub is not None:
-                    found = sub
+                found = later(found, scan_reset_fields(v))
     elif isinstance(node, list):
         for item in node:
-            sub = scan_reset_fields(item)
-            if sub is not None:
-                found = sub
+            found = later(found, scan_reset_fields(item))
     return found
 
 reset = None
