@@ -330,11 +330,13 @@ def config_read_model():
     LABELS/providers/assignments. NEVER a secret (creds.list() omits them; a
     live test asserts the secret string is absent from this response)."""
     c = _creds()
+    cred_error = None
     try:
         cred_list = c.list()
         assignments = c.assignments()
-    except Exception:
+    except Exception as exc:   # surface a real backend fault, don't fake "empty"
         cred_list, assignments = [], {}
+        cred_error = str(exc) or exc.__class__.__name__
     repos = []
     for repo in Handler.repos:
         cfg = {}
@@ -346,7 +348,8 @@ def config_read_model():
         repos.append({"path": repo, "name": os.path.basename(repo.rstrip("/")),
                       "config": cfg})
     return {"repos": repos, "credentials": cred_list,
-            "assignments": assignments, "roles": list(_ASSIGNABLE_ROLES)}
+            "assignments": assignments, "roles": list(_ASSIGNABLE_ROLES),
+            "credentials_error": cred_error}
 
 
 def execute_cred_set(label, provider, secret):

@@ -253,7 +253,7 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
 
   <div class="sh"><h2>Credentials</h2><span class="ln"></span><span class="ct">API keys · macOS Keychain · never leaves this machine</span></div>
   <div class="panel" id="creds"></div>
-  <div class="hint">Subscriptions (your Claude / Codex logins) are the default and need nothing here. API keys are optional — add one only if a role should run on API credit instead. Secrets are stored in your macOS Keychain, never in a file, never shown again after saving.</div>
+  <div class="hint">Subscriptions (your Claude / Codex logins) are the default and need nothing here. API keys are optional — add one only if a role should run on API credit instead. Secrets are stored in your macOS Keychain, never in a file, never shown again after saving. On your first save macOS asks to allow Keychain access — choose <b>Always Allow</b> so later saves don't prompt.</div>
 
   <div class="sh" style="margin-top:20px"><h2>Repos &amp; config</h2><span class="ln"></span><span class="ct">registry · writes .autonomy/config.yaml</span></div>
   <div class="panel" id="cfg"></div>
@@ -295,20 +295,29 @@ function renderCreds(m){
     <input id="cr-prov" class="cfgin" placeholder="provider" value="anthropic">
     <input id="cr-secret" class="cfgin" type="password" placeholder="paste API key — stored, never shown again">
     <button class="cbtn go" onclick="credSave()">save</button></div>`;
+  const err=m.credentials_error?`<div class="hint" style="color:var(--bad)">credential store error: ${esc(m.credentials_error)} — fix and reload.</div>`:"";
   const rows=creds.map(c=>{
     const enc=encAttr(c.label);
-    const roleFor=Object.keys(asn).filter(r=>asn[r]===c.label);
-    const opts=`<option value="">assign to role…</option>`+roles.map(r=>`<option value="${esc(r)}" ${roleFor.includes(r)?"selected":""}>${esc(r)}</option>`).join("");
     return `<div class="credrow">
       <span class="credlabel">${esc(c.label)}</span>
       <span class="credprov">${esc(c.provider||"—")}</span>
       <span class="credset">${c.is_set?"set ✓":"MISSING"}</span>
       <span class="credgap"></span>
-      <select class="cfgin" style="max-width:170px" onchange="credAssign('${enc}',this.value)">${opts}</select>
       <button class="cbtn danger" onclick="credDelete('${enc}')">remove</button>
     </div>`;
   }).join("");
-  $("creds").innerHTML=add+(rows||`<div class="hint">no API keys stored — subscription auth is active by default.</div>`);
+  // Assignments are per-ROLE: each role runs on subscription by default, or on
+  // an assigned credential. Selecting "subscription (default)" clears it
+  // (cred_unassign) -- so both directions are reachable from the UI.
+  const asnRows = creds.length ? roles.map(r=>{
+    const cur=asn[r]||"";
+    const opts=`<option value="">subscription (default)</option>`
+      + creds.map(c=>`<option value="${esc(c.label)}" ${c.label===cur?"selected":""}>${esc(c.label)}</option>`).join("");
+    return `<div class="cfgrow"><span class="cfglab">${esc(r)}</span>`
+      + `<select class="cfgin" onchange="credRole('${esc(r)}',this.value)">${opts}</select></div>`;
+  }).join("") : "";
+  const asnBlock = asnRows ? `<div class="credrow" style="color:var(--dim);font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase">role → credential</div>${asnRows}` : "";
+  $("creds").innerHTML=add+err+(rows||`<div class="hint">no API keys stored — subscription auth is active by default.</div>`)+asnBlock;
 }
 function credSave(){
   const label=($("cr-label").value||"").trim();
@@ -323,10 +332,12 @@ function credDelete(enc){
   if(!window.confirm("Remove credential '"+label+"' from the Keychain?\nAny role using it falls back to subscription auth.")) return;
   post({action:"cred_delete",label},"removed",load);
 }
-function credAssign(enc,role){
-  const label=decodeURIComponent(enc);
-  if(!role){return;}
-  post({action:"cred_assign",role,label},"assigned",load);
+function credRole(role,label){
+  if(label){
+    post({action:"cred_assign",role,label},role+" → "+label,load);
+  }else{
+    post({action:"cred_unassign",role},role+" → subscription",load);
+  }
 }
 
 /* ---- REPOS + CONFIG (moved from the main page, #47) ---- */
