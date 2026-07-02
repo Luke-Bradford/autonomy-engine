@@ -36,6 +36,7 @@ import dashboard_state as ds  # noqa: E402
 import dashboard_control as dcx  # noqa: E402
 import config_parser  # noqa: E402
 import credentials as creds  # noqa: E402
+import accounts as accts  # noqa: E402
 
 PAGE = os.path.join(ENGINE_HOME, "lib", "dashboard_page.html")
 CONFIG_PAGE = os.path.join(ENGINE_HOME, "lib", "config_page.html")
@@ -325,6 +326,33 @@ def _creds():
     return _creds_singleton[0]
 
 
+_accts_singleton = [None]
+
+
+def _accts():
+    if _accts_singleton[0] is None:
+        _accts_singleton[0] = accts.Accounts()
+    return _accts_singleton[0]
+
+
+def execute_acct_set(name, kind, credential):
+    try:
+        _accts().set(name, kind, credential=credential or None)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "message": "account '%s' saved" % name}
+
+
+def execute_acct_delete(name):
+    try:
+        _accts().delete(name)
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "message": "account '%s' removed" % name}
+
+
 def config_read_model():
     """The config page's read model -- repos + their config + the credential
     LABELS/providers/assignments. NEVER a secret (creds.list() omits them; a
@@ -347,9 +375,16 @@ def config_read_model():
             cfg = {}
         repos.append({"path": repo, "name": os.path.basename(repo.rstrip("/")),
                       "config": cfg})
+    acct_list, acct_error = [], None
+    try:
+        acct_list = _accts().list()
+    except Exception as exc:
+        acct_error = str(exc) or exc.__class__.__name__
     return {"repos": repos, "credentials": cred_list,
             "assignments": assignments, "roles": list(_ASSIGNABLE_ROLES),
-            "credentials_error": cred_error}
+            "credentials_error": cred_error,
+            "accounts": acct_list, "account_kinds": list(accts.VALID_KINDS),
+            "accounts_error": acct_error}
 
 
 def execute_cred_set(label, provider, secret):
@@ -685,8 +720,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         action = body.get("action")
         _cred_actions = ("cred_set", "cred_delete", "cred_assign", "cred_unassign")
+        _acct_actions = ("acct_set", "acct_delete")
         if (action not in ("set_model", "config_set", "repo_add", "repo_remove")
                 and action not in _cred_actions
+                and action not in _acct_actions
                 and not dcx.is_valid_action(action)):
             self._send(400, b'{"error":"invalid action"}')
             return
@@ -704,6 +741,16 @@ class Handler(BaseHTTPRequestHandler):
                                              str(body.get("label") or ""))
             else:
                 result = execute_cred_unassign(str(body.get("role") or ""))
+            self._send(200 if result.get("ok") else 409,
+                       json.dumps(result).encode("utf-8"))
+            return
+        if action in _acct_actions:
+            if action == "acct_set":
+                result = execute_acct_set(str(body.get("name") or ""),
+                                          str(body.get("kind") or ""),
+                                          str(body.get("credential") or ""))
+            else:
+                result = execute_acct_delete(str(body.get("name") or ""))
             self._send(200 if result.get("ok") else 409,
                        json.dumps(result).encode("utf-8"))
             return
