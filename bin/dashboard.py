@@ -355,8 +355,10 @@ def execute_acct_delete(name):
 
 def config_read_model():
     """The config page's read model -- repos + their config + the credential
-    LABELS/providers/assignments. NEVER a secret (creds.list() omits them; a
-    live test asserts the secret string is absent from this response)."""
+    LABELS/providers/assignments, plus the account registry (accounts /
+    account_kinds / accounts_error: names, kinds, and credential labels
+    only). NEVER a secret (creds.list() omits them; a live test asserts the
+    secret string is absent from this response)."""
     c = _creds()
     cred_error = None
     try:

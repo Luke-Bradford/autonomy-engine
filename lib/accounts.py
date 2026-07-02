@@ -107,11 +107,15 @@ class Accounts:
         if kind in _SUBSCRIPTION_KINDS:
             return {"kind": kind, "env": {}}
         var = _API_ENV.get(kind)
-        secret = self.credentials.get_secret(entry.get("credential"))
+        if var is None:
+            raise LookupError(
+                "account %r has unrecognized kind %r" % (name, kind))
+        label = entry.get("credential")
+        secret = self.credentials.get_secret(label) if label else None
         if not secret:
             raise LookupError(
                 "account %r credential %r has no secret in the Keychain"
-                % (name, entry.get("credential")))
+                % (name, label))
         return {"kind": kind, "env": {var: secret}}
 
 

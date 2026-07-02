@@ -114,6 +114,32 @@ class TestResolve(unittest.TestCase):
         with self.assertRaises(LookupError):
             self.a.resolve("stale")
 
+    def test_unrecognized_kind_raises_lookuperror(self):
+        # a hand-edited index (or version skew: a newer engine wrote a kind
+        # this code doesn't know) must never silently export a var named
+        # "None" -- resolve must fail-safe, not fail-open.
+        self.a.set("work", "anthropic_api", credential="work-key")
+        with open(self.index, encoding="utf-8") as fh:
+            data = json.load(fh)
+        data["accounts"]["future"] = {"kind": "bedrock_api", "credential": "work-key"}
+        with open(self.index, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        with self.assertRaises(LookupError):
+            self.a.resolve("future")
+
+    def test_api_kind_without_credential_raises_lookuperror(self):
+        # must not reach the real Keychain / crash with TypeError when the
+        # index entry has no credential label at all.
+        with open(self.index, "w", encoding="utf-8") as fh:
+            json.dump({"accounts": {"broken": {"kind": "anthropic_api"}}}, fh)
+        with self.assertRaises(LookupError):
+            self.a.resolve("broken")
+
+    def test_codex_subscription_exports_nothing(self):
+        self.a.set("codex-sub", "codex_subscription")
+        r = self.a.resolve("codex-sub")
+        self.assertEqual(r, {"kind": "codex_subscription", "env": {}})
+
 
 class TestCli(unittest.TestCase):
     """_main returns clean exit codes and prints resolve env as VAR=value
