@@ -73,6 +73,33 @@ check "missing prompt file -> roles.py fails" "1" "$(python3 "$HERE/../lib/roles
 mkdir -p "$tmp/.autonomy/roles"; touch "$tmp/.autonomy/roles/pm.md"
 check "prompt file present -> roles.py passes" "0" "$(python3 "$HERE/../lib/roles.py" "$tmp" >/dev/null 2>&1; echo $?)"
 
+# --- roles.account -> accounts registry (agent-org increment 2) ---
+fake_home="$tmp/fakehome"
+mkdir -p "$fake_home/.config/autonomy"
+printf '{"accounts": {"claude-sub": {"kind": "claude_subscription"}}}\n' \
+  > "$fake_home/.config/autonomy/accounts"
+cat > "$tmp/.autonomy/config.yaml" <<'YAML'
+engine:
+  requires_claude_md: false
+roles:
+  coder:
+    account: claude-sub
+    trigger: { type: loop }
+YAML
+check "role account present in registry -> roles.py passes" "0" \
+  "$(HOME="$fake_home" python3 "$HERE/../lib/roles.py" "$tmp" >/dev/null 2>&1; echo $?)"
+
+cat > "$tmp/.autonomy/config.yaml" <<'YAML'
+engine:
+  requires_claude_md: false
+roles:
+  coder:
+    account: no-such-account
+    trigger: { type: loop }
+YAML
+check "role account missing from registry -> roles.py fails" "1" \
+  "$(HOME="$fake_home" python3 "$HERE/../lib/roles.py" "$tmp" >/dev/null 2>&1; echo $?)"
+
 # --- QA role readiness check (#13) ---
 cat > "$tmp/.autonomy/config.yaml" <<'YAML'
 roles:
