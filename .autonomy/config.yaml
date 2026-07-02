@@ -1,0 +1,78 @@
+# .autonomy/config.yaml -- per-repo policy for the autonomy engine.
+# See autonomy-engine/README.md for the full schema reference.
+
+board:
+  owner: Luke-Bradford      # GitHub user/org that owns this repo (+ the Projects v2 board, if any)
+  project_title: "autonomy-engine engineering board"
+
+engine:
+  # account_key omitted on purpose: defaults to 'default', the SAME marker eBull
+  # uses, so both repos share one usage-limit reset epoch and back off together
+  # on the shared Claude subscription instead of stampeding the same wall.
+  requires_claude_md: true   # this repo's workflow assumes CLAUDE.md exists
+
+agent:
+  type: claude               # claude | codex
+  effort: high               # opus works the harder increment-4 tickets; high effort
+  model:
+    primary: claude-opus-4-8
+    fallback: claude-sonnet-5
+
+merge_gate:
+  # bot_comment: safe_merge.sh merges once the review bot posts APPROVE on the
+  # latest commit + CI green. Branch protection (required review + CI checks,
+  # enforce_admins) still fully applies -- this is the SAME gate that protects
+  # main, just driven unattended. Never a silent merge.
+  strategy: bot_comment
+  author_login: github-actions          # who posts the review verdict
+  marker: "Claude Code Review"          # the review comment's header to match
+  doc_only_extensions: [".md"]          # doc-only PRs the bot skips -> merge on CI green alone
+
+worktree:
+  default_path: "../.{repo-slug}-autonomy"
+
+# Multi-role org (autonomy-engine docs/superpowers/specs/
+# 2026-07-02-dynamic-agent-org-design.md). Every agent -- standard or custom
+# -- is the same declarative shape: enabled + account (a name from the
+# machine accounts registry: python3 lib/accounts.py list) + trigger
+# ({ type: loop | cron | event, ... }) + model/effort (or per-phase models)
+# + scope (what it works over; empty = whole open board) + behaviour knobs.
+# `prompt:` must point at a real pack file under .autonomy/roles/, never a
+# copy. Validate with doctor.sh.
+# Enabled `trigger: { type: loop }` roles are dispatched by the supervisor
+# round-robin (one session each, in turn); cron/event triggers are not
+# dispatched yet (scheduler/event bus is a later increment). A role with an
+# `account:` that cannot resolve REFUSES its sessions (fail-safe).
+# roles:
+#   coder:
+#     enabled: true
+#     account: claude-sub              # python3 lib/accounts.py set claude-sub claude_subscription
+#     trigger: { type: loop }
+#     model: claude-sonnet-5
+#     models: { plan: claude-opus-4-8, implement: claude-sonnet-5, test: claude-haiku-4-5 }
+#     scope: { labels: [ready], milestone: current }
+#     self_test: true                  # agents test their own work
+#     blockers: raise-to-pm            # raise-to-pm | raise-to-human
+#     instances: 1
+#   qa:
+#     enabled: false
+#     account: claude-sub
+#     trigger: { type: event, on: [pr.opened, pr.synchronize] }
+#     scope: { target: diff }          # diff | affected | full-regression
+#     gate: wait-for-human             # wait-for-human | auto-merge-on-pass (still gated by merge_gate.strategy)
+#     tools: [read]                    # [read] | [read, mcp]
+#     regression: { after_tickets: 10 }  # or { every: "0 3 * * 0" }; omit = off
+#     prompt: .autonomy/roles/qa.md
+#   pm:
+#     enabled: false
+#     account: claude-sub
+#     trigger: { type: cron, schedule: "0 */6 * * *" }
+#     duties: [groom, prioritise, unblock, spec-check]
+#     prompt: .autonomy/roles/pm.md
+#   researcher:
+#     enabled: false
+#     account: codex-sub               # python3 lib/accounts.py set codex-sub codex_subscription
+#     trigger: { type: cron, schedule: "0 3 * * *" }
+#     output: handoff-to-pm            # raise-issues | handoff-to-pm
+#     web_search: false
+#     prompt: .autonomy/roles/researcher.md

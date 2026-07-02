@@ -3,3 +3,10 @@ __pycache__/
 .DS_Store
 .superpowers/
 .screenshots/
+
+# Loop runtime artifacts written by the supervisor when autonomy-engine runs
+# on ITSELF (session logs + the process lock). Anchored to the repo root so the
+# committed tests/fixtures/*/var/ fixtures are NOT matched. Without this the
+# supervisor's "tree clean on origin/main" preflight would stash/skip forever.
+/var/autonomy-logs/
+/var/autonomy-supervisor.lock/
