@@ -20,6 +20,7 @@ Repos may also be listed (one path per line) in $AUTONOMY_DASHBOARD_REPOS or
 ~/.config/autonomy/repos, so P2 can manage the set without a restart.
 """
 import argparse
+import concurrent.futures
 import json
 import os
 import secrets
@@ -56,9 +57,22 @@ _CONTROL_TOKEN = secrets.token_urlsafe(24)
 
 # gh is network + slow; cache its result per repo so SSE ticks don't hammer it.
 # Read/written from per-request SSE threads, so guard it (like _hist).
+# Serve-stale-while-revalidate (#80): within [_GH_TTL, _GH_MAX_STALE) a request
+# gets the cached value INSTANTLY and a single background thread refreshes it, so
+# a slow/hung `gh` never blocks the render. Past _GH_MAX_STALE we fall back to a
+# blocking refresh so the page can never show data older than the bound (the
+# operator never acts on a chip directly -- safe_merge.sh re-verifies CI+review
+# at merge time -- but a hard staleness ceiling keeps the view honest anyway).
 _GH_TTL = 15.0
+_GH_MAX_STALE = 75.0
+_GH_JOIN_TIMEOUT = 25.0    # cold/too-stale callers wait at most this for a refresh
 _gh_cache = {}
 _gh_lock = threading.Lock()
+# repo -> the in-flight refresh Thread (single-flight guard). At most one refresh
+# per repo runs, and it is the SOLE writer of _gh_cache; cold/too-stale callers
+# join it rather than starting a second compute. Popped in the worker's finally,
+# so a refresh that raises can never permanently pin a stale entry.
+_gh_refreshing = {}
 
 # Throughput-over-time: a background thread samples each repo's cumulative
 # output-token counter on a fixed wall-clock tick, so the page can draw a
@@ -164,25 +178,114 @@ def _run(args, cwd=None, timeout=12):
 def git_in_flight(repo):
     """The 'what's in motion' board for one repo: branch/HEAD + open PRs with
     CI + review + mergeable state. Best-effort: any failure -> partial/empty,
-    never raises (a gh/git hiccup must not blank the whole page)."""
+    never raises (a gh/git hiccup must not blank the whole page).
+
+    Cache policy (#80): fresh (< _GH_TTL) is returned as-is; stale-but-bounded
+    is returned INSTANTLY while one background thread revalidates, so a slow gh
+    never blocks the render; cold or past-_GH_MAX_STALE falls back to a blocking
+    synchronous compute so the first paint (and a hard staleness ceiling) still
+    yield real data. The snapshot itself is built by _compute_in_flight."""
     now = time.time()
     with _gh_lock:
         cached = _gh_cache.get(repo)
-    if cached and now - cached[0] < _GH_TTL:
-        return cached[1]
+    if cached:
+        age = now - cached[0]
+        if age < _GH_TTL:
+            return cached[1]                       # fresh
+        if age < _GH_MAX_STALE:
+            _ensure_refresh(repo)                  # serve stale, refresh behind
+            return cached[1]
+    # cold OR too-stale: block on the single-flight refresh (coalesced -- if one
+    # is already running we join THAT, so a cold /api/state + first SSE tick share
+    # one compute) and then read the cache the worker just wrote.
+    t = _ensure_refresh(repo)
+    if t is not None:
+        t.join(_GH_JOIN_TIMEOUT)
+    with _gh_lock:
+        cached = _gh_cache.get(repo)
+    return cached[1] if cached else _empty_in_flight()
 
+
+def _empty_in_flight():
+    """The never-blank fallback: if a cold refresh fails/times out there is no
+    cached snapshot to serve, so hand back a well-formed empty one rather than
+    raising into the request (best-effort, never blank the page)."""
+    return {"branch": "?", "sha": "", "dirty": False, "repo_url": "",
+            "prs": [], "merged": [], "focus_ticket": None}
+
+
+def _ensure_refresh(repo):
+    """Single-flight: start one background refresh for `repo`, or return the one
+    already running. All cache writes funnel through the worker this spawns, so
+    there is exactly one writer per repo in flight -- no concurrent/out-of-order
+    writes. Returns the Thread, or None if it couldn't be started (best-effort).
+    Starts the thread while holding _gh_lock so a concurrent joiner can only ever
+    observe an already-started thread (join() on an unstarted thread would raise)."""
+    with _gh_lock:
+        t = _gh_refreshing.get(repo)
+        if t is not None:
+            return t
+        t = threading.Thread(target=_refresh_worker, args=(repo,),
+                             name="gh-refresh:" + repo, daemon=True)
+        try:
+            t.start()
+        except RuntimeError:                       # can't spawn -> serve stale/empty
+            return None
+        _gh_refreshing[repo] = t
+        return t
+
+
+def _refresh_worker(repo):
+    """Recompute one repo's snapshot and update the cache -- the SOLE writer of
+    _gh_cache. Swallows every failure (keeps the prior entry -- fail-safe, never
+    blank) and clears the single-flight guard in a finally so a raised refresh
+    can't pin a stale entry forever."""
+    try:
+        result = _compute_in_flight(repo)
+        with _gh_lock:
+            _gh_cache[repo] = (time.time(), result)
+    except Exception:
+        pass
+    finally:
+        with _gh_lock:
+            _gh_refreshing.pop(repo, None)
+
+
+def _compute_in_flight(repo):
+    """Build one repo's in-flight snapshot. Local git calls are serial (fast);
+    the three network `gh` calls run concurrently so a cold build costs ~one
+    round-trip, not three. Runs entirely OUTSIDE _gh_lock so a slow gh never
+    blocks cache readers."""
     head = _run(["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"])
     sha = _run(["git", "-C", repo, "rev-parse", "--short", "HEAD"])
     if head == "HEAD":  # detached (the supervisor runs detached on origin/main)
         head = "detached@" + (sha or "?")
     dirty = _run(["git", "-C", repo, "status", "--porcelain"])
-    repo_url = _run(["gh", "repo", "view", "--json", "url", "--jq", ".url"], cwd=repo, timeout=15) or ""
+
+    def _repo_url():
+        return _run(["gh", "repo", "view", "--json", "url", "--jq", ".url"],
+                    cwd=repo, timeout=15) or ""
+
+    def _open_raw():
+        return _run(["gh", "pr", "list", "--state", "open", "--limit", "20", "--json",
+                     "number,title,headRefName,isDraft,mergeable,reviewDecision,statusCheckRollup,url,updatedAt",
+                     "--jq", "sort_by(.updatedAt) | reverse"],
+                    cwd=repo, timeout=20)
+
+    def _merged_raw():
+        return _run(["gh", "pr", "list", "--state", "merged", "--limit", "6", "--json",
+                     "number,title,url,mergedAt,headRefName", "--jq", "sort_by(.mergedAt) | reverse"],
+                    cwd=repo, timeout=20)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        f_url = pool.submit(_repo_url)
+        f_open = pool.submit(_open_raw)
+        f_merged = pool.submit(_merged_raw)
+        repo_url = f_url.result()
+        raw = f_open.result()
+        mraw = f_merged.result()
 
     prs = []
-    raw = _run(["gh", "pr", "list", "--state", "open", "--limit", "20", "--json",
-                "number,title,headRefName,isDraft,mergeable,reviewDecision,statusCheckRollup,url,updatedAt",
-                "--jq", "sort_by(.updatedAt) | reverse"],
-               cwd=repo, timeout=20)
     if raw:
         try:
             for pr in json.loads(raw):
@@ -230,11 +333,8 @@ def git_in_flight(repo):
                  "ci": top["ci"], "review": top["review"]}
 
     # recently completed tickets (merged PRs) -- ref + link, so the operator sees
-    # what the loop finished, not just what's open.
+    # what the loop finished, not just what's open. mraw fetched concurrently above.
     merged = []
-    mraw = _run(["gh", "pr", "list", "--state", "merged", "--limit", "6", "--json",
-                 "number,title,url,mergedAt,headRefName", "--jq", "sort_by(.mergedAt) | reverse"],
-                cwd=repo, timeout=20)
     if mraw:
         try:
             for pr in json.loads(mraw):
@@ -255,8 +355,6 @@ def git_in_flight(repo):
         "merged": merged,
         "focus_ticket": focus,
     }
-    with _gh_lock:
-        _gh_cache[repo] = (now, result)
     return result
 
 
@@ -455,56 +553,74 @@ def _issue_focus(repo, number, repo_url):
     return focus
 
 
+def _collect_one(repo):
+    """One repo's card for the snapshot. Never raises -- a per-repo failure
+    becomes an error card, so one bad repo can't blank the page."""
+    if not os.path.isdir(repo):
+        return {"name": os.path.basename(repo.rstrip("/")), "path": repo,
+                "lifecycle": {"state": "missing", "pid": None},
+                "display_status": "missing",
+                "current_session": None, "voice": [], "git": {},
+                "config": {}}
+    try:
+        st = ds.build_repo_state(repo, git_in_flight=git_in_flight)
+        st["throughput"] = _throughput(repo)
+        # if a session is working a ticket but there's no open PR yet, surface
+        # the in-progress ticket with its title + link. setdefault returns the
+        # dict actually stored on st, so the mutation isn't lost when git=={}.
+        git = st.setdefault("git", {})
+        sess = st.get("current_session") or {}
+        if not git.get("focus_ticket") and sess.get("ticket"):
+            # completed beats issue lookup (#25): if the session's ticket
+            # already has a merged PR, the honest story is "completed at T",
+            # not "last worked". Matched by branch convention/title ref.
+            # Never while busy -- a session re-working the ticket (follow-up
+            # PR) must keep the live "in progress" story.
+            busy = st.get("display_status") in ("working", "stopping")
+            done = None if busy else ds.completed_ticket(
+                sess["ticket"], git.get("merged") or [])
+            if done:
+                git["focus_ticket"] = {
+                    "number": sess["ticket"], "title": done.get("title") or "",
+                    "url": done.get("url") or "", "completed": True,
+                    "merged_epoch": done.get("merged_epoch") or 0,
+                    "pr_number": done.get("number")}
+            else:
+                focus = _issue_focus(repo, sess["ticket"], git.get("repo_url", ""))
+                if focus:
+                    # honest chip (#23): "in progress" only while the repo is
+                    # actually busy; a stopped/idle repo shows its LAST ticket,
+                    # never an in-progress claim. Copy -- _issue_focus caches.
+                    focus = dict(focus)
+                    focus["in_progress"] = busy
+                    git["focus_ticket"] = focus
+        return st
+    except Exception as exc:  # never let one repo blank the page
+        return {"name": os.path.basename(repo.rstrip("/")), "path": repo,
+                "lifecycle": {"state": "error", "pid": None},
+                "display_status": "error",
+                "error": str(exc), "current_session": None, "voice": [],
+                "git": {}, "config": {}}
+
+
 def collect(repos):
-    """Full app snapshot the page renders."""
-    out = []
-    for repo in repos:
-        if not os.path.isdir(repo):
-            out.append({"name": os.path.basename(repo.rstrip("/")), "path": repo,
-                        "lifecycle": {"state": "missing", "pid": None},
-                        "display_status": "missing",
-                        "current_session": None, "voice": [], "git": {},
-                        "config": {}})
-            continue
+    """Full app snapshot the page renders. Per-repo cards are built concurrently
+    (#80) so N repos don't serialise on gh -- each _collect_one is independent
+    and touches only lock-guarded shared caches. Order is preserved and the list
+    is snapshotted first, so a concurrent Handler.repos mutation can't skip/dup a
+    repo mid-map."""
+    repos = list(repos)
+    if len(repos) <= 1:
+        out = [_collect_one(r) for r in repos]     # no pool for the common 1-repo case
+    else:
         try:
-            st = ds.build_repo_state(repo, git_in_flight=git_in_flight)
-            st["throughput"] = _throughput(repo)
-            # if a session is working a ticket but there's no open PR yet, surface
-            # the in-progress ticket with its title + link. setdefault returns the
-            # dict actually stored on st, so the mutation isn't lost when git=={}.
-            git = st.setdefault("git", {})
-            sess = st.get("current_session") or {}
-            if not git.get("focus_ticket") and sess.get("ticket"):
-                # completed beats issue lookup (#25): if the session's ticket
-                # already has a merged PR, the honest story is "completed at T",
-                # not "last worked". Matched by branch convention/title ref.
-                # Never while busy -- a session re-working the ticket (follow-up
-                # PR) must keep the live "in progress" story.
-                busy = st.get("display_status") in ("working", "stopping")
-                done = None if busy else ds.completed_ticket(
-                    sess["ticket"], git.get("merged") or [])
-                if done:
-                    git["focus_ticket"] = {
-                        "number": sess["ticket"], "title": done.get("title") or "",
-                        "url": done.get("url") or "", "completed": True,
-                        "merged_epoch": done.get("merged_epoch") or 0,
-                        "pr_number": done.get("number")}
-                else:
-                    focus = _issue_focus(repo, sess["ticket"], git.get("repo_url", ""))
-                    if focus:
-                        # honest chip (#23): "in progress" only while the repo is
-                        # actually busy; a stopped/idle repo shows its LAST ticket,
-                        # never an in-progress claim. Copy -- _issue_focus caches.
-                        focus = dict(focus)
-                        focus["in_progress"] = busy
-                        git["focus_ticket"] = focus
-            out.append(st)
-        except Exception as exc:  # never let one repo blank the page
-            out.append({"name": os.path.basename(repo.rstrip("/")), "path": repo,
-                        "lifecycle": {"state": "error", "pid": None},
-                        "display_status": "error",
-                        "error": str(exc), "current_session": None, "voice": [],
-                        "git": {}, "config": {}})
+            with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=min(8, len(repos))) as pool:
+                out = list(pool.map(_collect_one, repos))
+        except Exception:
+            # executor infra failure (thread exhaustion) must not blank the page:
+            # fall back to serial. _collect_one already contains per-repo errors.
+            out = [_collect_one(r) for r in repos]
     return {"generated_at": int(time.time()), "repos": out, "account": _account_usage()}
 
 
