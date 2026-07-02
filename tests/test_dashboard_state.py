@@ -538,5 +538,28 @@ class TestRepoState(unittest.TestCase):
         self.assertEqual(coder["status"], "stopped")
 
 
+class TestConfigBoardKeys(unittest.TestCase):
+    """#47: the config page needs board identity in the per-repo state."""
+    def test_board_keys_exposed(self):
+        tmp = tempfile.mkdtemp()
+        os.makedirs(os.path.join(tmp, ".autonomy"))
+        with open(os.path.join(tmp, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("board:\n  owner: some-org\n"
+                     "  project_title: \"My Fancy Board\"\n"
+                     "agent:\n  type: claude\n")
+        st = ds.build_repo_state(tmp, pid_is_alive=lambda p: False,
+                                              git_in_flight=lambda r: {})
+        self.assertEqual(st["config"]["board_owner"], "some-org")
+        self.assertEqual(st["config"]["board_title"], "My Fancy Board")
+
+    def test_board_keys_default_empty(self):
+        tmp = tempfile.mkdtemp()
+        st = ds.build_repo_state(tmp, pid_is_alive=lambda p: False,
+                                              git_in_flight=lambda r: {})
+        self.assertEqual(st["config"].get("board_owner", ""), "")
+        self.assertEqual(st["config"].get("board_title", ""), "")
+
+
+
 if __name__ == "__main__":
     unittest.main()

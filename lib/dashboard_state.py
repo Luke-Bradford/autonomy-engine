@@ -637,7 +637,8 @@ def _read_config(repo_path):
         with open(cfg_path) as fh:
             cfg = config_parser.parse(fh.read())
     except OSError:
-        return {"agent": "", "model": "", "merge_gate": ""}
+        return {"agent": "", "model": "", "merge_gate": "",
+                "board_owner": "", "board_title": ""}
     def g(key):
         try:
             return config_parser.get(cfg, key)
@@ -650,6 +651,8 @@ def _read_config(repo_path):
         "fallback": g("agent.model.fallback") or "",
         "effort": g("agent.effort") or "",
         "merge_gate": g("merge_gate.strategy") or "",
+        "board_owner": g("board.owner") or "",
+        "board_title": g("board.project_title") or "",
         "roles": roles if isinstance(roles, dict) else {},
     }
 
