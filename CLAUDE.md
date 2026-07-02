@@ -67,17 +67,45 @@ docs/                               # design.md, implementation-plan.md
 
 `main` is branch-protected — **nothing merges to main without a PR + CI green + a review pass**
 (required checks `lint-and-test` + `review`, enforce_admins, PR-required with 0 human approvals so
-CI + the review bot are the gate). So:
+CI + the review bot are the gate).
 
-1. Branch (`feat/<n>-…` or `fix/<n>-…`), never commit to main.
-2. TDD: write the failing test, see it fail, implement, see it pass.
-3. `bash tests/run_all.sh` (all suites) + `shellcheck -S warning start bin/*.sh bin/agents/*.sh
-   tests/*.sh` before pushing.
-4. Push, open a PR. CI (`lint-and-test`) + the Claude review bot run automatically. Resolve every
-   review comment (FIXED `<sha>` / DEFERRED `#n` / REBUTTED `<reason>`).
-5. Merge once green + APPROVE on the latest commit.
+**Working order for every task:**
+
+1. Read the issue. Read `docs/settled-decisions.md` and `docs/review-prevention-log.md`; state
+   which entries apply (or that none do). If the plan would change a settled decision, stop and
+   surface it first.
+2. Branch (`feat/<n>-…` or `fix/<n>-…`), never commit to main.
+3. Spec/plan work: Codex checkpoint 1 before execution
+   (`.claude/skills/engineering/codex-checkpoints.md`).
+4. TDD: write the failing test, see it fail, implement, see it pass
+   (`.claude/skills/engineering/test-quality.md`).
+5. Before every push: `.claude/skills/engineering/pre-push-checklist.md` (run_all + shellcheck +
+   pre-flight-review; Codex checkpoint 2 on the first push; dashboard verify loop if the dashboard
+   changed).
+6. PR per `.claude/skills/engineering/pr-authoring.md` (security model section mandatory). CI +
+   review bot run automatically; resolve every comment per
+   `.claude/skills/engineering/review-resolution.md` (FIXED `<sha>` / DEFERRED `#n` /
+   REBUTTED `<reason>`; Codex checkpoint 3 before any rebuttal-only merge).
+7. Merge once green + APPROVE on the latest commit (every push resets the gate). Delete the
+   branch, close the issue.
 
 The review bot needs the `ANTHROPIC_API_KEY` repo secret (already set). Doc-only PRs skip the bot.
+
+**Definition of done:** implementation matches the issue + settled decisions · self-reviewed via
+pre-flight-review · run_all + shellcheck clean · PR description self-contained · every review
+comment in a terminal state · recurring findings extracted to the prevention log or a skill in the
+same PR · dashboard changes browser-verified.
+
+## Internal skills (project-local, in-repo)
+
+`.claude/skills/engineering/` — bash-hygiene · python-hygiene · test-quality · pre-flight-review ·
+pre-push-checklist · pr-authoring · review-resolution · codex-checkpoints.
+`.claude/skills/dashboard/` — control-room architecture + chrome-devtools browser verify loop.
+
+**Skill ownership:** these files are engineering substrate the agent OWNS. When a gap or stale
+claim is found mid-task, fix the skill inline in the same PR — no separate ticket, no "later".
+New prevention lessons land in the relevant skill AND/OR `docs/review-prevention-log.md` in the
+same PR that exposed them.
 
 ## Backlog
 
