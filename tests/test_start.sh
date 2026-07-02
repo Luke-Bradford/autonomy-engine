@@ -83,6 +83,16 @@ check "dashboard command printed, not run" "0" "$(grep -q 'dashboard.py' "$tmp/o
 bash "$ENGINE_HOME/start" --no-launch --port 9999 </dev/null >"$tmp/out4" 2>&1
 check "--port propagates into the printed command" "0" "$(grep -q -- '--port 9999' "$tmp/out4" && echo 0 || echo 1)"
 
+# --- chained quickstart failure -> non-zero exit, no dashboard exec ----------------
+# (PR #46 review WARNING: exit must stay truthful)
+mkdir -p "$tmp/badproj"
+chmod 555 "$tmp/badproj"          # onboard cannot scaffold -> quickstart fails
+bash "$ENGINE_HOME/start" "$tmp/badproj" --no-launch </dev/null >"$tmp/out5" 2>&1
+rc=$?
+chmod 755 "$tmp/badproj"
+check "failed chained setup -> non-zero exit" "1" "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+check "failed chained setup still explains itself" "0" "$(grep -qi 'quickstart reported problems' "$tmp/out5" && echo 0 || echo 1)"
+
 # --- usage ------------------------------------------------------------------------
 bash "$ENGINE_HOME/start" --frobnicate </dev/null >/dev/null 2>&1
 check "unknown flag -> non-zero exit" "1" "$([ $? -ne 0 ] && echo 1 || echo 0)"

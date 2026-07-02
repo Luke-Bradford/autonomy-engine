@@ -58,6 +58,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+SETUP_FAILED=0
 if [ -n "$TARGET" ]; then
   [ -d "$TARGET" ] || { echo "start: target '$TARGET' is not a directory" >&2; exit 2; }
   echo "== setup: guided quickstart for $TARGET =="
@@ -65,6 +66,7 @@ if [ -n "$TARGET" ]; then
   # in the dashboard's discovery and this machine flips to app mode.
   if ! "$ENGINE_HOME/bin/quickstart.sh" "$TARGET" --register yes; then
     echo "start: quickstart reported problems above -- fix them, then re-run ./start" >&2
+    SETUP_FAILED=1
   fi
   echo ""
 fi
@@ -83,25 +85,28 @@ minimum config, runs the readiness report, registers it here):
 Or drive the pieces yourself: bin/quickstart.sh, bin/doctor.sh,
 bin/setup_worktree.sh, bin/control.sh (see README.md).
 EOF
-  exit 0
+  exit "$SETUP_FAILED"
 fi
 
 echo "== autonomy control room =="
 "$ENGINE_HOME/bin/control.sh" list || true
 echo ""
 
-DASH_CMD="python3 \"$ENGINE_HOME/bin/dashboard.py\""
-if [ -n "$PORT" ]; then DASH_CMD="$DASH_CMD --port $PORT"; fi
+# One source of truth for the dashboard invocation: printed by --no-launch,
+# exec'd otherwise (PR #46 review).
+DASH_ARGV=(python3 "$ENGINE_HOME/bin/dashboard.py")
+if [ -n "$PORT" ]; then DASH_ARGV+=(--port "$PORT"); fi
 
+if [ "$SETUP_FAILED" -ne 0 ]; then
+  echo "setup reported problems above -- not launching the dashboard. When fixed:"
+  printf '  '; printf '%q ' "${DASH_ARGV[@]}"; printf '\n'
+  exit 1
+fi
 if [ "$NO_LAUNCH" -eq 1 ]; then
   echo "dashboard (not launched, --no-launch):"
-  echo "  $DASH_CMD"
+  printf '  '; printf '%q ' "${DASH_ARGV[@]}"; printf '\n'
   exit 0
 fi
 
 echo "launching the dashboard (Ctrl-C stops it; loops are unaffected) ..."
-if [ -n "$PORT" ]; then
-  exec python3 "$ENGINE_HOME/bin/dashboard.py" --port "$PORT"
-else
-  exec python3 "$ENGINE_HOME/bin/dashboard.py"
-fi
+exec "${DASH_ARGV[@]}"
