@@ -442,12 +442,18 @@ def execute_config_set(repo, key, value):
 
 def _refresh_repos():
     """Re-run discovery after a registry change. Only when the repo set came
-    from discovery -- explicit CLI --repo pins the set for this process."""
+    from discovery -- explicit CLI --repo pins the set for this process.
+    Never raises: the registry write already succeeded, and this runs outside
+    that try block -- a discovery hiccup must degrade to a message, not blow
+    up the POST handler (PR #48 review)."""
     if Handler.cli_pinned:
         return ("this dashboard was started with explicit --repo flags, so the "
                 "change shows after a restart")
-    # In-place: the SSE loop and the sampler thread hold this same list object.
-    Handler.repos[:] = discover_repos([])
+    try:
+        # In-place: the SSE loop and the sampler thread hold this same list.
+        Handler.repos[:] = discover_repos([])
+    except Exception as exc:  # noqa: BLE001 -- deliberate catch-all boundary
+        return "saved, but re-discovery failed (%s) -- restart to pick it up" % exc
     return "the repo set updates within a couple of seconds"
 
 

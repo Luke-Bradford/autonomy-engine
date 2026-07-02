@@ -300,6 +300,10 @@ const $=(id)=>document.getElementById(id);
 let VIEW="tree", LAST=null, GEN=0;
 
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+/* attribute-safe repo ref: encodeURIComponent leaves ' alone, which would
+   break out of single-quoted onclick attributes -- %27 keeps it inert and
+   decodeURIComponent still restores it */
+function encAttr(s){return encodeURIComponent(s).replace(/'/g,"%27");}
 function num(n){return (n==null?0:Math.round(n)).toLocaleString("en-US");}
 function short(s,n){s=String(s||"");return s.length>n?s.slice(0,n-1)+"…":s;}
 function dur(sec){sec=Math.max(0,Math.floor(sec));const h=(sec/3600)|0;sec-=h*3600;const m=(sec/60)|0;sec-=m*60;
@@ -416,7 +420,7 @@ function setModel(btn,scope){
 
 /* ---- CONTROLS (P2) ---- */
 const CTOKEN=(document.querySelector('meta[name="ae-control-token"]')||{}).content||"";
-function cbtn(repo,action,label,cls){return `<button class="cbtn ${cls}" onclick="control('${encodeURIComponent(repo)}','${action}','${esc(label)}')">${esc(label)}</button>`;}
+function cbtn(repo,action,label,cls){return `<button class="cbtn ${cls}" onclick="control('${encAttr(repo)}','${action}','${esc(label)}')">${esc(label)}</button>`;}
 function controls(r,st){
   const repo=r.path;
   if(st==="needs-setup"||st==="missing") return `<div class="ctl"><span class="note">run setup_worktree.sh to manage</span></div>`;
@@ -446,7 +450,7 @@ function renderCfg(repos){
   if(sig===CFG_SIG) return;
   CFG_SIG=sig;
   const rows=repos.map(r=>{
-    const c=r.config||{}, enc=encodeURIComponent(r.path);
+    const c=r.config||{}, enc=encAttr(r.path);
     return `<div class="cfgrepo" data-repo="${enc}">
       <div class="cfgname">${esc(r.name||r.path)}<button class="cbtn danger" onclick="repoRemove('${enc}')">remove</button></div>
       ${cfgField(enc,"board.owner","board owner",c.board_owner)}
