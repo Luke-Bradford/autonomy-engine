@@ -160,6 +160,36 @@ check "limit-mention BUT completed turn -> success" "success" "$(agent_classify_
 f="$(mklog '{"type":"item.completed","item":{"type":"agent_message","text":"we should discuss the API rate limit and usage limit handling"}}')"
 check "agent CONTENT mentioning limits is never parsed" "error" "$(agent_classify_outcome "$f" 1)"
 
+# --- shapes captured from a REAL codex-cli 0.136.0 run (#42 probes): the
+# --- error envelope's message is a STRINGIFIED JSON with status + error.type
+f="$(mklog '{"type":"turn.failed","error":{"message":"{\"type\":\"error\",\"status\":429,\"error\":{\"type\":\"rate_limit_error\",\"message\":\"Request too fast\"}}"}}')"
+check "real-shape stringified 429 envelope -> usage_limit" "usage_limit" "$(agent_classify_outcome "$f" 1)"
+
+f="$(mklog '{"type":"error","message":"{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"You have hit your usage limit\"}}"}')"
+check "underscored usage_limit_reached in message -> usage_limit" "usage_limit" "$(agent_classify_outcome "$f" 1)"
+
+f="$(mklog '{"type":"error","message":"{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"model not supported\"}}"}')"
+check "real-shape invalid-model envelope -> error, not usage_limit" "error" "$(agent_classify_outcome "$f" 1)"
+
+now="$(date +%s)"
+printf '%s\n' '{"type":"turn.failed","error":{"message":"{\"type\":\"error\",\"status\":429,\"error\":{\"type\":\"rate_limit_error\",\"resets_in_seconds\":1800}}"}}' > "$tmp/log.jsonl"
+out="$(agent_classify_outcome "$tmp/log.jsonl" 1)"
+epoch="${out#usage_limit }"
+if [ "$epoch" != "$out" ] && [ -n "$epoch" ] && [ "$epoch" -ge $((now + 1790)) ] && [ "$epoch" -le $((now + 1815)) ]; then
+  echo "ok   - resets_in_seconds inside stringified envelope -> epoch"
+else
+  echo "FAIL - resets_in_seconds inside stringified envelope -> epoch (got '$out')"; fails=$((fails + 1))
+fi
+
+f="$(mklog '{"type":"turn.failed","error":{"message":"{\"type\":\"error\",\"status\":429,\"error\":{\"type\":\"rate_limit_error\",\"resets_at\":\"2030-06-30T12:00:00Z\"}}"}}')"
+check "resets_at inside stringified envelope -> epoch" "usage_limit $ISO_EPOCH" "$(agent_classify_outcome "$f" 1)"
+
+# PR #44 review (NITPICK): multiple reset-ish keys in one envelope must have
+# defined precedence -- the LATEST epoch wins (most conservative), never
+# dict-iteration order
+f="$(mklog '{"type":"turn.failed","error":{"message":"{\"type\":\"error\",\"status\":429,\"error\":{\"type\":\"rate_limit_error\",\"resets_in_seconds\":60,\"resets_at\":\"2030-06-30T12:00:00Z\"}}"}}')"
+check "multiple reset keys -> latest epoch wins" "usage_limit $ISO_EPOCH" "$(agent_classify_outcome "$f" 1)"
+
 f="$(mklog '{"type":"turn.completed","usage":{}}')"
 check "clean run -> success" "success" "$(agent_classify_outcome "$f" 0)"
 

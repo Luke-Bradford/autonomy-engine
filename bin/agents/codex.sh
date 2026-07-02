@@ -34,7 +34,10 @@ _codex_run_once() {
     --dangerously-bypass-approvals-and-sandbox \
     ${effort_args[@]+"${effort_args[@]}"} \
     "$prompt" \
-    >>"$log_file" 2>&1
+    </dev/null >>"$log_file" 2>&1
+  # ^ stdin closed: codex APPENDS piped stdin to the prompt (observed on a
+  # real run, "Reading additional input from stdin...") -- never let ambient
+  # supervisor stdin leak into the session prompt.
 }
 
 agent_invoke() {
@@ -155,6 +158,42 @@ def snapshots(o):
         if isinstance(v, dict) and isinstance(v.get("rate_limits"), dict):
             yield v["rate_limits"]
 
+def relative_secs(v):
+    if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(float(v)):
+        return float(v)
+    return None
+
+def scan_reset_fields(node):
+    # Recursive scan of a STRUCTURED dict for reset-ish keys. Empirical (#42
+    # probes): a real codex error envelope's `message` is a stringified JSON
+    # API error -- reset data, when present, lives inside it as structured
+    # fields, not in a rate_limits snapshot (exec --json emits none).
+    # Multiple reset-ish keys: the LATEST epoch wins (most conservative --
+    # the account is limited until every signal has passed), never dict
+    # iteration order (PR #44 review).
+    def later(a, b):
+        if a is None:
+            return b
+        if b is None:
+            return a
+        return max(a, b)
+    found = None
+    if isinstance(node, dict):
+        for k, v in node.items():
+            kl = k.lower()
+            if kl in ("resets_at", "reset_at", "resetsat"):
+                found = later(found, to_epoch(v))
+            elif kl in ("resets_in_seconds", "retry_after", "retryafter", "retry_after_seconds"):
+                s = relative_secs(v)
+                if s is not None:
+                    found = later(found, int(time.time() + s))
+            else:
+                found = later(found, scan_reset_fields(v))
+    elif isinstance(node, list):
+        for item in node:
+            found = later(found, scan_reset_fields(item))
+    return found
+
 reset = None
 for line in open(sys.argv[1], errors="replace"):
     if '"type"' not in line:
@@ -171,9 +210,21 @@ for line in open(sys.argv[1], errors="replace"):
             if e is not None:
                 reset = e
                 continue
-            secs = window.get("resets_in_seconds")
-            if isinstance(secs, (int, float)) and not isinstance(secs, bool) and math.isfinite(float(secs)):
-                reset = int(time.time() + float(secs))
+            secs = relative_secs(window.get("resets_in_seconds"))
+            if secs is not None:
+                reset = int(time.time() + secs)
+    if o.get("type") in ("error", "turn.failed", "stream_error"):
+        err = o.get("error") if isinstance(o.get("error"), dict) else {}
+        msg = err.get("message") or o.get("message")
+        if isinstance(msg, str) and msg.lstrip().startswith("{"):
+            try:
+                inner = json.loads(msg)
+            except Exception:
+                inner = None
+            if inner is not None:
+                e = scan_reset_fields(inner)
+                if e is not None:
+                    reset = e
 
 if reset is not None:
     print(reset)
