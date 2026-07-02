@@ -40,6 +40,10 @@ worktree:
 # + scope (what it works over; empty = whole open board) + behaviour knobs.
 # `prompt:` must point at a real pack file under .autonomy/roles/, never a
 # copy. Validate with doctor.sh.
+# Enabled `trigger: { type: loop }` roles are dispatched by the supervisor
+# round-robin (one session each, in turn); cron/event triggers are not
+# dispatched yet (scheduler/event bus is a later increment). A role with an
+# `account:` that cannot resolve REFUSES its sessions (fail-safe).
 # roles:
 #   coder:
 #     enabled: true

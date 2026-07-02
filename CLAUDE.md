@@ -45,7 +45,7 @@ Design + build history: `docs/design.md`, `docs/implementation-plan.md`.
 
 ```text
 bin/
-  supervisor.sh          # main loop: --repo <path>, agent-adapter dispatch, preflight, backoff
+  supervisor.sh          # main loop: --repo <path>, runs every enabled loop role round-robin (account-first auth), preflight, backoff
   quickstart.sh           # guided single-entry onboarding; chains the tools below (never launchctl)
   control.sh               # multi-repo registry/control unit: list/start/stop/pause/resume, --all
   onboard.sh              # scaffold a target repo's .autonomy/ (idempotent)
