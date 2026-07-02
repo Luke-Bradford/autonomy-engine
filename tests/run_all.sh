@@ -23,6 +23,9 @@ python3 -m unittest tests.test_dashboard_state -v || fail=1
 echo "=== python: test_dashboard_control ==="
 python3 -m unittest tests.test_dashboard_control -v || fail=1
 
+echo "=== python: test_dashboard_state_nonblocking ==="
+python3 -m unittest tests.test_dashboard_state_nonblocking -v || fail=1
+
 echo "=== python: test_credentials ==="
 python3 -m unittest tests.test_credentials -v || fail=1
 
