@@ -237,6 +237,33 @@ compute_limit_wait() {
   echo "$((best - now))"
 }
 
+# --- per-role API credential (#51-C) ----------------------------------------
+# Subscriptions are the default auth (nothing to resolve). If the operator
+# assigned a named API key to this loop's ROLE via the config page, run the
+# session with that key exported -- for THAT session only. Best-effort: any
+# failure resolves to empty and the session runs on whatever auth the env
+# already has (subscription). The secret is never logged.
+resolve_role_credential() {
+  local role="$1"
+  if [ -n "${AUTONOMY_CREDENTIALS_BIN:-}" ]; then
+    "$AUTONOMY_CREDENTIALS_BIN" resolve-role "$role" 2>/dev/null || true
+  else
+    python3 "$ENGINE_HOME/lib/credentials.py" resolve-role "$role" 2>/dev/null || true
+  fi
+}
+
+# Run agent_invoke with $1 (a resolved key, "" = none) exported in a SUBSHELL,
+# so the key is scoped to the one session and never lands in the supervisor's
+# own environment (a long-lived process). $2.. pass straight to agent_invoke.
+invoke_scoped_key() {
+  local key="$1"; shift
+  if [ -n "$key" ]; then
+    ( export ANTHROPIC_API_KEY="$key"; agent_invoke "$@" )
+  else
+    agent_invoke "$@"
+  fi
+}
+
 run_session() {
   preflight || return $?
 
@@ -246,9 +273,12 @@ run_session() {
   resolve_session_settings
 
   local log_file; log_file="$LOGDIR/session-$(date +%Y%m%dT%H%M%S).log"
-  log "session start (model=$MODEL effort=${EFFORT:-default}) -> $log_file"
+  local role_key; role_key="$(resolve_role_credential "${ROLE:-coder}")"
+  local auth_note="subscription"
+  if [ -n "$role_key" ]; then auth_note="api-key(${ROLE:-coder})"; fi
+  log "session start (model=$MODEL effort=${EFFORT:-default} auth=$auth_note) -> $log_file"
 
-  agent_invoke \
+  invoke_scoped_key "$role_key" \
     "$AUTONOMY_TARGET_REPO/.autonomy/loop_prompt.md" \
     "$AUTONOMY_TARGET_REPO/.autonomy/hard_rules.md" \
     "$MODEL" "$FALLBACK_MODEL" "$log_file" "$EFFORT"
