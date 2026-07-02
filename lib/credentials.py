@@ -67,23 +67,77 @@ class KeychainStore:
             capture_output=True, text=True)
 
 
+class RegistryError(RuntimeError):
+    """The on-disk index exists but is unreadable/corrupt: unparseable JSON, a
+    non-dict top level, or a `credentials`/`assignments` section of the wrong
+    type. Writes refuse (raise this) rather than overwrite the file and silently
+    drop the unreadable entries -- fail-safe, never fail-open (#59). Reads
+    degrade to an empty index (a read never destroys data)."""
+
+
 class Credentials:
     def __init__(self, store=None, index_path=None):
         self.store = store if store is not None else KeychainStore()
         self.index_path = index_path or default_index_path()
 
     # --- index io -------------------------------------------------------------
-    def _load(self):
+    def _read(self):
+        """Return (data, status). status is 'empty' (file absent -- a
+        legitimately new index), 'corrupt' (present but unparseable, a non-dict
+        top level, or a non-dict `credentials`/`assignments` section), or 'ok'.
+        The section check matters: a structurally invalid section that slipped
+        through would let delete() drop the Keychain secret and then crash on
+        data['assignments'].items() -- a destructive side effect before the
+        index is proven writable."""
         try:
             with open(self.index_path, encoding="utf-8") as fh:
                 data = json.load(fh)
+        except FileNotFoundError:
+            return {}, "empty"
         except (OSError, ValueError):
-            data = {}
-        # Valid JSON that isn't a dict (bare list/scalar) would blow up the
-        # setdefault below with AttributeError; coerce it to the same empty
-        # index a syntax error yields (graceful degradation, not a crash).
+            return {}, "corrupt"
         if not isinstance(data, dict):
-            data = {}
+            return {}, "corrupt"
+        # sections must be dicts; every credential entry a dict; every
+        # assignment value a label string. A wrong-typed value would crash
+        # list()/delete() (AttributeError / bad keystore key) on a read and let
+        # a write persist unreadable data. Use `in` (not .get()) so an explicit
+        # JSON null -- {"credentials": null} -- is caught: .get() returns None
+        # for both absent and null, but a present-null section would slip past a
+        # `is not None` guard and leave data[section] = None (setdefault is a
+        # no-op on a present key), crashing downstream. Absent is fine.
+        if "credentials" in data:
+            creds_section = data["credentials"]
+            if not isinstance(creds_section, dict) or \
+                    any(not isinstance(v, dict) for v in creds_section.values()):
+                return {}, "corrupt"
+        if "assignments" in data:
+            assign_section = data["assignments"]
+            if not isinstance(assign_section, dict) or \
+                    any(not isinstance(v, str) for v in assign_section.values()):
+                return {}, "corrupt"
+        return data, "ok"
+
+    def is_corrupt(self):
+        """True when the index exists but cannot be read as a valid index --
+        distinct from an empty/absent one."""
+        return self._read()[1] == "corrupt"
+
+    def _load(self):
+        # Reads degrade a corrupt index to empty (never destructive).
+        data, _status = self._read()
+        data.setdefault("credentials", {})
+        data.setdefault("assignments", {})
+        return data
+
+    def _load_for_write(self):
+        # Writes refuse on a corrupt index -- overwriting it would silently drop
+        # the unreadable entries (#59). An empty/absent index is writable.
+        data, status = self._read()
+        if status == "corrupt":
+            raise RegistryError(
+                "credentials registry at %s is unreadable/corrupt -- refusing "
+                "to overwrite; fix or remove it first" % self.index_path)
         data.setdefault("credentials", {})
         data.setdefault("assignments", {})
         return data
@@ -106,7 +160,10 @@ class Credentials:
             raise ValueError("secret must not be empty")
         if not _PROVIDER_RE.fullmatch(provider or ""):
             raise ValueError("provider must be <=32 chars of [A-Za-z0-9._-]")
-        data = self._load()
+        # Refuse a corrupt index BEFORE the keystore write below, so a bad
+        # index never leaves a secret with no recorded label (and never
+        # clobbers the unreadable entries).
+        data = self._load_for_write()
         entry = data["credentials"].get(label, {})
         if "created_at" not in entry:
             entry["created_at"] = int(now if now is not None else time.time())
@@ -135,8 +192,11 @@ class Credentials:
         return self.store.get(label)
 
     def delete(self, label):
+        # Load-and-validate the index FIRST: a corrupt index must refuse before
+        # store.delete() removes the Keychain secret -- otherwise a corrupt
+        # index would still destroy the secret (#59, keystore-before-index bug).
+        data = self._load_for_write()
         self.store.delete(label)
-        data = self._load()
         data["credentials"].pop(label, None)
         data["assignments"] = {r: lbl for r, lbl in data["assignments"].items()
                                if lbl != label}
@@ -146,14 +206,14 @@ class Credentials:
     def assign(self, role, label):
         if not (role or "").strip():
             raise ValueError("role must not be empty")
-        data = self._load()
+        data = self._load_for_write()
         if label not in data["credentials"]:
             raise KeyError("no credential labelled %r" % (label,))
         data["assignments"][role] = label
         self._save(data)
 
     def unassign(self, role):
-        data = self._load()
+        data = self._load_for_write()
         data["assignments"].pop(role, None)
         self._save(data)
 
@@ -202,7 +262,7 @@ def _main(argv):
         else:
             print("unknown command %r" % cmd, file=sys.stderr)
             return 2
-    except (ValueError, KeyError, IndexError) as e:
+    except (RegistryError, ValueError, KeyError, IndexError) as e:
         print("credentials.py: %s" % e, file=sys.stderr)
         return 1
     except subprocess.CalledProcessError as e:

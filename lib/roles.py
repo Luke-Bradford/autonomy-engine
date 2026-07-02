@@ -271,6 +271,32 @@ def check_accounts(config, known_account_names):
     return errors
 
 
+def account_errors(config, registry):
+    """Doctor's account-reference check against a registry object (injected so
+    tests never touch the real registry). A CORRUPT registry reads as empty,
+    which would make every `account:` reference look 'not found -- create it
+    first'; following that advice runs accounts.set, which clobbers the
+    unreadable entries (#59). So when the registry is unreadable, emit ONE
+    'unreadable' error and skip the not-found pass (it can't see the real
+    entries); otherwise delegate to check_accounts.
+
+    Only relevant when some role actually references an account -- a corrupt
+    registry that nothing uses is not doctor's concern (a no-account config,
+    including a no-roles one, must not fail on it)."""
+    roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
+    has_reference = isinstance(roles_blk, dict) and any(
+        _is_nonempty_str(cfg.get("account"))
+        for cfg in roles_blk.values() if isinstance(cfg, dict))
+    if not has_reference:
+        return []
+    if registry.is_corrupt():
+        return ["accounts registry at %s is unreadable/corrupt -- fix or "
+                "remove it before validating role accounts"
+                % registry.index_path]
+    known = [e["name"] for e in registry.list()]
+    return check_accounts(config, known)
+
+
 # Role names land in supervisor shell word-splitting and log lines: same safe
 # charset as account names (lib/accounts.py). dispatch never emits others.
 _ROLE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -509,9 +535,8 @@ def main(argv):
     if rc:
         return rc
     import accounts as accounts_mod
-    known = [e["name"] for e in accounts_mod.Accounts().list()]
     errors = (validate_roles(config) + check_prompt_files(config, repo)
-              + check_accounts(config, known))
+              + account_errors(config, accounts_mod.Accounts()))
     for e in errors:
         print(e)
     if errors:

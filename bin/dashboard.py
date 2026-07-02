@@ -338,7 +338,7 @@ def _accts():
 def execute_acct_set(name, kind, credential):
     try:
         _accts().set(name, kind, credential=credential or None)
-    except ValueError as exc:
+    except (accts.RegistryError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
     except OSError as exc:
         return {"ok": False, "error": str(exc)}
@@ -348,7 +348,7 @@ def execute_acct_set(name, kind, credential):
 def execute_acct_delete(name):
     try:
         _accts().delete(name)
-    except OSError as exc:
+    except (accts.RegistryError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "message": "account '%s' removed" % name}
 
@@ -392,7 +392,7 @@ def config_read_model():
 def execute_cred_set(label, provider, secret):
     try:
         _creds().set(label, secret, provider=provider)
-    except ValueError as exc:
+    except (creds.RegistryError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or "").strip() or "keychain write failed"
@@ -405,7 +405,7 @@ def execute_cred_set(label, provider, secret):
 def execute_cred_delete(label):
     try:
         _creds().delete(label)
-    except OSError as exc:
+    except (creds.RegistryError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "message": "credential '%s' removed" % label}
 
@@ -413,7 +413,7 @@ def execute_cred_delete(label):
 def execute_cred_assign(role, label):
     try:
         _creds().assign(role, label)
-    except (ValueError, KeyError) as exc:
+    except (creds.RegistryError, ValueError, KeyError) as exc:
         return {"ok": False, "error": str(exc)}
     except OSError as exc:
         return {"ok": False, "error": str(exc)}
@@ -423,7 +423,7 @@ def execute_cred_assign(role, label):
 def execute_cred_unassign(role):
     try:
         _creds().unassign(role)
-    except OSError as exc:
+    except (creds.RegistryError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "message": "%s unassigned" % role}
 

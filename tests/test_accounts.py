@@ -85,18 +85,42 @@ class TestAccountsCrud(unittest.TestCase):
         self.assertEqual(a.list(), [])
         self.assertIsNone(a.get("nope"))
 
-    def test_non_dict_index_degrades_to_empty_not_crash(self):
+    def test_non_dict_index_degrades_to_empty_on_read(self):
         # A file that parses as valid JSON but is not a dict (bare list/scalar)
-        # must degrade to an empty registry, NOT raise AttributeError out of
-        # _load()'s setdefault. Same graceful-degradation as a syntax error.
+        # must degrade to an empty registry for READS, NOT raise AttributeError.
+        # (Writes on such a corrupt index refuse -- see the #59 test below.)
         Path(self.index).write_text("[]")
         self.assertEqual(self.a.list(), [])
         self.assertIsNone(self.a.get("nope"))
         Path(self.index).write_text('"a bare string"')
         self.assertEqual(self.a.list(), [])
-        # writes still work on top of the coerced-empty registry
-        self.a.set("work", "claude_subscription")
-        self.assertEqual([e["name"] for e in self.a.list()], ["work"])
+
+    def test_corrupt_index_refuses_writes_without_clobber(self):
+        # #59: a corrupt index (unparseable, non-dict top-level, or a non-dict
+        # `accounts` section) must REFUSE set()/delete() -- never overwrite it
+        # and silently drop the unreadable entries. Reads still degrade to empty.
+        # incl. a per-ENTRY corruption: the `accounts` section is a dict but an
+        # entry value is not (which would crash list()/get() with AttributeError
+        # on a raw read).
+        for corrupt in ('{"accounts": bad', "[]", '{"accounts": []}',
+                        '{"accounts": {"work": []}}', '{"accounts": null}'):
+            Path(self.index).write_text(corrupt)
+            before = Path(self.index).read_bytes()
+            self.assertTrue(self.a.is_corrupt(), msg=corrupt)
+            with self.assertRaises(ac.RegistryError, msg=corrupt):
+                self.a.set("work", "claude_subscription")
+            with self.assertRaises(ac.RegistryError, msg=corrupt):
+                self.a.delete("work")
+            self.assertEqual(Path(self.index).read_bytes(), before, msg=corrupt)
+            self.assertEqual(self.a.list(), [], msg=corrupt)      # read degrades
+            self.assertIsNone(self.a.get("work"), msg=corrupt)    # no crash
+
+    def test_missing_index_is_not_corrupt_and_writable(self):
+        # empty != corrupt: a fresh (absent) registry is writable.
+        a = ac.Accounts(index_path=os.path.join(self.tmp, "fresh"), credentials=FakeCreds())
+        self.assertFalse(a.is_corrupt())
+        a.set("work", "claude_subscription")
+        self.assertEqual([e["name"] for e in a.list()], ["work"])
 
 
 class TestResolve(unittest.TestCase):
