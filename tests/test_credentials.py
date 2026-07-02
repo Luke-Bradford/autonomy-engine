@@ -138,5 +138,41 @@ class TestCredentials(unittest.TestCase):
         self.assertEqual(c.assignments(), {})
 
 
+class TestCliErrors(unittest.TestCase):
+    """PR #52 review: a failing `security` subprocess must exit 1 cleanly,
+    not crash the CLI with a traceback."""
+    def test_set_keychain_failure_is_clean_exit_1(self):
+        import io
+        import subprocess as sp
+
+        class BoomStore:
+            def get(self, label):
+                return None
+            def set(self, label, secret):
+                raise sp.CalledProcessError(1, "security", stderr="keychain locked")
+            def delete(self, label):
+                pass
+
+        tmp = tempfile.mkdtemp()
+        orig_init = cr.Credentials.__init__
+
+        def patched(self, store=None, index_path=None):
+            orig_init(self, store=BoomStore(),
+                      index_path=os.path.join(tmp, "credentials.json"))
+
+        cr.Credentials.__init__ = patched
+        orig_stdin, orig_stderr = sys.stdin, sys.stderr
+        sys.stdin = io.StringIO("sk-secret\n")
+        sys.stderr = io.StringIO()
+        try:
+            rc = cr._main(["set", "work"])
+            err = sys.stderr.getvalue()
+        finally:
+            cr.Credentials.__init__ = orig_init
+            sys.stdin, sys.stderr = orig_stdin, orig_stderr
+        self.assertEqual(rc, 1)
+        self.assertIn("keychain", err.lower())
+
+
 if __name__ == "__main__":
     unittest.main()

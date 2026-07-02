@@ -200,6 +200,12 @@ def _main(argv):
     except (ValueError, KeyError, IndexError) as e:
         print("credentials.py: %s" % e, file=sys.stderr)
         return 1
+    except subprocess.CalledProcessError as e:
+        # KeychainStore.set(check=True) failing -- keychain locked, denied,
+        # etc. Clean exit-1, not a traceback. stderr is captured, so surface it.
+        detail = (e.stderr or "").strip() or "security command failed"
+        print("credentials.py: keychain error: %s" % detail, file=sys.stderr)
+        return 1
     return 0
 
 
