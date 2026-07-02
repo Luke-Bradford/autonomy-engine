@@ -61,7 +61,7 @@ class Accounts:
         os.chmod(self.index_path, 0o600)
 
     def set(self, name, kind, credential=None):
-        if not _NAME_RE.match(name or ""):
+        if not _NAME_RE.fullmatch(name or ""):
             raise ValueError("account name must be 1-64 chars of [A-Za-z0-9._-]")
         if kind not in VALID_KINDS:
             raise ValueError("kind must be one of %s" % (VALID_KINDS,))

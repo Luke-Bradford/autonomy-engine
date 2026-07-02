@@ -63,7 +63,10 @@ class TestCredentials(unittest.TestCase):
         self.assertEqual(self.c.get_secret("work"), "new")
 
     def test_bad_label_rejected(self):
-        for bad in ("", "has space", "a/b", "x" * 65, "semi;colon"):
+        # "work\n" is the fullmatch-vs-match trap: re.match + `$` accepts a
+        # trailing newline, which then becomes un-addressable from bash ($()
+        # strips it). fullmatch rejects it.
+        for bad in ("", "has space", "a/b", "x" * 65, "semi;colon", "work\n"):
             with self.assertRaises(ValueError, msg=bad):
                 self.c.set(bad, "s")
 
@@ -76,6 +79,8 @@ class TestCredentials(unittest.TestCase):
     def test_bad_provider_rejected(self):
         with self.assertRaises(ValueError):
             self.c.set("work", "s", provider="not a provider!")
+        with self.assertRaises(ValueError):
+            self.c.set("work", "s", provider="anthropic\n")   # trailing newline
 
     # --- delete ---------------------------------------------------------------
     def test_delete_removes_everywhere(self):

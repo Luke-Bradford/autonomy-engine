@@ -100,11 +100,11 @@ class Credentials:
 
     # --- credentials ----------------------------------------------------------
     def set(self, label, secret, provider="", now=None):
-        if not _LABEL_RE.match(label or ""):
+        if not _LABEL_RE.fullmatch(label or ""):
             raise ValueError("label must be 1-64 chars of [A-Za-z0-9._-]")
         if not (secret or "").strip():
             raise ValueError("secret must not be empty")
-        if not _PROVIDER_RE.match(provider or ""):
+        if not _PROVIDER_RE.fullmatch(provider or ""):
             raise ValueError("provider must be <=32 chars of [A-Za-z0-9._-]")
         data = self._load()
         entry = data["credentials"].get(label, {})

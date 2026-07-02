@@ -54,6 +54,10 @@ class TestAccountsCrud(unittest.TestCase):
             self.a.set("has space", "claude_subscription")
         with self.assertRaises(ValueError):
             self.a.set("x", "not_a_kind")
+        # trailing newline: re.match + `$` would accept it, leaving a name
+        # bash can't address later ($() strips the newline). fullmatch rejects.
+        with self.assertRaises(ValueError):
+            self.a.set("sneaky\n", "claude_subscription")
 
     def test_set_upserts(self):
         self.a.set("work", "anthropic_api", credential="k1")
