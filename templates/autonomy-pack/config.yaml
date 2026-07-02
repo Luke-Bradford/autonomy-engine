@@ -14,7 +14,7 @@ engine:
   requires_claude_md: false  # set true if this repo's workflow assumes CLAUDE.md exists
 
 agent:
-  type: claude               # claude | codex (only claude has an adapter implemented)
+  type: claude               # claude | codex
   # effort: high             # optional: low | medium | high | xhigh | max (omit = CLI default)
   model:
     primary: claude-sonnet-5

@@ -28,6 +28,7 @@ check "CLI override wins over config" "codex" "$(resolve_config_value "$cfg" age
 check "config wins over hardcoded default" "claude" "$(resolve_config_value "$cfg" agent.type "" opus)"
 check "hardcoded default wins when key absent" "claude-opus-4-8" "$(resolve_config_value "$cfg" agent.model.does_not_exist "" claude-opus-4-8)"
 check "claude adapter file exists" "0" "$([ -f "$HERE/../bin/agents/claude.sh" ] && echo 0 || echo 1)"
+check "codex adapter file exists (#2)" "0" "$([ -f "$HERE/../bin/agents/codex.sh" ] && echo 0 || echo 1)"
 
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
