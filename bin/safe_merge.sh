@@ -155,6 +155,40 @@ merge_gate_gh_review() {
   return 0
 }
 
+# Merge the PR and delete its remote branch. Deliberately NOT `gh pr merge
+# --delete-branch`: that does a post-merge LOCAL `git checkout <base>` to move
+# off the merged branch, which git refuses under a sibling-worktree topology
+# (the base branch checked out in another worktree) with
+# `fatal: '<base>' is already used by worktree` -- the merge still succeeds but
+# the confusing error prints and local cleanup is skipped (#72). So merge via
+# the API only, then delete the remote ref explicitly -- no local branch touch.
+# A failed remote-branch delete is cosmetic and never fails the merge.
+complete_merge() {
+  local pr="$1" info state head_branch is_fork
+  gh pr merge "$pr" --squash || return 1
+  # Confirm the merge actually LANDED before treating it as done: `gh pr merge`
+  # can succeed by enabling auto-merge / queueing rather than merging now, and
+  # a caller must never run post-merge steps on an unmerged PR (fail-safe).
+  info="$(gh pr view "$pr" --json state,headRefName,isCrossRepository \
+          -q '.state + " " + .headRefName + " " + (.isCrossRepository|tostring)' 2>/dev/null)"
+  read -r state head_branch is_fork <<EOF
+$info
+EOF
+  if [ "$state" != "MERGED" ]; then
+    echo "safe_merge: REFUSE -- 'gh pr merge' returned success but PR #$pr state is '${state:-unknown}', not MERGED" >&2
+    return 1
+  fi
+  # Delete the remote branch explicitly. Skip fork PRs: their head branch lives
+  # in ANOTHER repo, so deleting repos/{owner}/{repo}/refs/heads/<name> would
+  # hit the base repo -- possibly an unrelated same-named branch. A failed
+  # delete is cosmetic and never fails the merge.
+  if [ -n "$head_branch" ] && [ "$is_fork" != "true" ]; then
+    gh api -X DELETE "repos/{owner}/{repo}/git/refs/heads/$head_branch" >/dev/null 2>&1 \
+      || echo "safe_merge: note -- merged #$pr but could not delete remote branch '$head_branch' (delete it manually)" >&2
+  fi
+  return 0
+}
+
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
 
 PR="${1:?usage: safe_merge.sh <pr-number>}"
@@ -189,5 +223,5 @@ case "$STRATEGY" in
     ;;
 esac
 
-gh pr merge "$PR" --squash --delete-branch
+complete_merge "$PR" || exit 1
 "$SAFE_MERGE_HOME/bin/unblock_dependents.sh" "$PR" || true
