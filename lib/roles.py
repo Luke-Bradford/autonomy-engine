@@ -1,27 +1,40 @@
 #!/usr/bin/env python3
-"""Role config schema for the multi-role org (#12) -- the single source of
-truth for role enums, the standard roster's defaults, and `roles:` block
+"""Role config schema for the multi-role org -- the single source of truth
+for role enums, the standard roster's defaults, and `roles:` block
 validation. Stdlib only.
 
-The schema (docs/agent-org-design.md):
+The schema (docs/superpowers/specs/2026-07-02-dynamic-agent-org-design.md):
 
     roles:
       <name>:
         enabled: true|false
-        substrate: engine | managed_agents | routine | actions
-        trigger: { type: loop | cron | event, ... }   # or block form
+        account: <name in the accounts registry>   # lib/accounts.py
+        trigger: { type: loop | cron | event, ... } # or block form
+        model: <model id>          effort: <level>
+        models: { plan: ..., implement: ..., test: ... }   # per-phase override
+        scope: { labels: [...], paths: [...], milestone: ..., query: ...,
+                 target: diff|affected|full-regression }   # or bare target
         instances: <positive int>          # optional (parallel loop count)
         prompt: .autonomy/roles/<name>.md  # optional, repo-relative pack file
+        # behaviour knobs (validated by value; custom agents share them):
+        gate: wait-for-human|auto-merge-on-pass   tools: [read] | [read, mcp]
+        regression: { every: <cron> } | { after_tickets: <n> }
+        output: raise-issues|handoff-to-pm        web_search: true|false
+        duties: [groom, prioritise, unblock, spec-check]
+        self_test: true|false     blockers: raise-to-pm|raise-to-human
+        substrate: engine|managed_agents|routine|actions   # legacy, optional
 
 Trigger-specific requirements: cron needs `schedule`; event needs a non-empty
 `on` list. An absent `roles:` block is valid -- the engine's defaults apply
 (only the coder loop enabled).
 
-Two checks, deliberately split: `validate_roles` is pure (shape/enums, no
+Three checks, deliberately split: `validate_roles` is pure (shape/enums, no
 filesystem); `check_prompt_files` takes the repo root and verifies prompt
-paths are repo-relative pack files that exist. doctor.sh runs both via the
-CLI entry `python3 lib/roles.py <target-repo>`, whose exit code carries the
-whole verdict so callers never re-parse the config:
+paths are repo-relative pack files that exist; `check_accounts` takes the
+registry's known names and verifies every `account:` reference resolves.
+doctor.sh runs all three via the CLI entry `python3 lib/roles.py
+<target-repo>`, whose exit code carries the whole verdict so callers never
+re-parse the config:
   0 = valid, roles: block present   3 = valid, no roles: block (defaults)
   1 = invalid (one error per stdout line)   2 = config unreadable
 """
@@ -231,6 +244,32 @@ def check_prompt_files(config, repo_root):
     return errors
 
 
+def check_accounts(config, known_account_names):
+    """Verify each role's `account:` names an entry in the machine accounts
+    registry (lib/accounts.py, increment 1). Pure -- the caller supplies the
+    known names; the CLI entry loads the real registry. A reference to a
+    missing account is an error: that agent could never resolve auth
+    (fail-safe, never fail-open). Shape problems (non-string/empty) are
+    validate_roles' verdict, not duplicated here."""
+    errors = []
+    roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
+    if not isinstance(roles_blk, dict):
+        return errors
+    known = set(known_account_names or ())
+    for name, cfg in roles_blk.items():
+        if not isinstance(cfg, dict):
+            continue
+        account = cfg.get("account")
+        if not _is_nonempty_str(account):
+            continue
+        if account not in known:
+            errors.append("roles.%s: account %r not found in the accounts "
+                          "registry -- create it first: "
+                          "python3 lib/accounts.py set %s <kind> [credential]"
+                          % (name, account, account))
+    return errors
+
+
 def _cron_field(spec, lo, hi):
     """One cron field -> set of ints, or None if invalid. Supports the forms
     real schedules use: '*', '*/n', 'a', 'a-b', 'a,b,c' (parts may be ranges
@@ -325,7 +364,10 @@ def main(argv):
     except ValueError as exc:
         print("roles: config.yaml does not parse: %s" % exc, file=sys.stderr)
         return 1
-    errors = validate_roles(config) + check_prompt_files(config, repo)
+    import accounts as accounts_mod
+    known = [e["name"] for e in accounts_mod.Accounts().list()]
+    errors = (validate_roles(config) + check_prompt_files(config, repo)
+              + check_accounts(config, known))
     for e in errors:
         print(e)
     if errors:

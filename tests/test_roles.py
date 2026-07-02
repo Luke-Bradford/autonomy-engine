@@ -4,7 +4,9 @@ validate_roles is the single validation authority for the `roles:` block:
 enum-checked substrate/trigger, trigger-specific required sub-fields, sane
 scalars. Pure (no filesystem); prompt-file existence is a separate,
 path-taking check so doctor can report it distinctly."""
+import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -347,6 +349,80 @@ class TestBehaviourKnobs(unittest.TestCase):
         cfg = parse("roles:\n  qa:\n    regression: {}\n")
         errs = roles.validate_roles(cfg)
         self.assertTrue(any("regression" in e for e in errs))
+
+
+class TestCheckAccounts(unittest.TestCase):
+    """account: must name an entry in the accounts registry. Pure -- known
+    names injected, same seam as check_prompt_files."""
+
+    def test_known_account_passes(self):
+        cfg = parse("roles:\n  coder:\n    account: claude-sub\n")
+        self.assertEqual(roles.check_accounts(cfg, ["claude-sub"]), [])
+
+    def test_unknown_account_is_error(self):
+        cfg = parse("roles:\n  coder:\n    account: nope\n")
+        errs = roles.check_accounts(cfg, ["claude-sub"])
+        self.assertEqual(len(errs), 1)
+        self.assertIn("nope", errs[0])
+        self.assertIn("coder", errs[0])
+
+    def test_empty_registry_fails_any_reference(self):
+        cfg = parse("roles:\n  coder:\n    account: claude-sub\n")
+        self.assertEqual(len(roles.check_accounts(cfg, [])), 1)
+
+    def test_no_account_field_is_fine(self):
+        cfg = parse("roles:\n  coder:\n    enabled: true\n")
+        self.assertEqual(roles.check_accounts(cfg, []), [])
+
+    def test_malformed_account_left_to_validate_roles(self):
+        # shape errors are validate_roles' verdict; no duplicate report here
+        cfg = parse('roles:\n  coder:\n    account: ""\n')
+        self.assertEqual(roles.check_accounts(cfg, []), [])
+
+
+class TestMainAccountWiring(unittest.TestCase):
+    """roles.py <target-repo> folds check_accounts in, loading the registry
+    from $HOME/.config/autonomy/accounts (accounts.py's default path)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.repo = os.path.join(self.tmp, "repo")
+        os.makedirs(os.path.join(self.repo, ".autonomy"))
+        self.home = os.path.join(self.tmp, "home")
+        os.makedirs(os.path.join(self.home, ".config", "autonomy"))
+        with open(os.path.join(self.home, ".config", "autonomy", "accounts"),
+                  "w", encoding="utf-8") as fh:
+            json.dump({"accounts": {"claude-sub":
+                                    {"kind": "claude_subscription"}}}, fh)
+        self._old_home = os.environ.get("HOME")
+        os.environ["HOME"] = self.home
+        self.addCleanup(self._restore_home)
+
+    def _restore_home(self):
+        if self._old_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = self._old_home
+
+    def _write_config(self, text):
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    def test_known_account_exits_0(self):
+        self._write_config("roles:\n  coder:\n    account: claude-sub\n"
+                           "    trigger: { type: loop }\n")
+        self.assertEqual(roles.main(["roles.py", self.repo]), 0)
+
+    def test_unknown_account_exits_1(self):
+        self._write_config("roles:\n  coder:\n    account: no-such\n"
+                           "    trigger: { type: loop }\n")
+        self.assertEqual(roles.main(["roles.py", self.repo]), 1)
+
+    def test_no_roles_block_still_exits_3(self):
+        self._write_config("engine:\n  requires_claude_md: false\n")
+        self.assertEqual(roles.main(["roles.py", self.repo]), 3)
 
 
 if __name__ == "__main__":
