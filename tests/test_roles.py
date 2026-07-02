@@ -548,5 +548,78 @@ class TestMainAccountWiring(unittest.TestCase):
         self.assertEqual(roles.main(["roles.py", self.repo]), 3)
 
 
+class TestDispatchCli(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        os.makedirs(os.path.join(self.tmp, ".autonomy"))
+
+    def _write(self, text):
+        with open(os.path.join(self.tmp, ".autonomy", "config.yaml"),
+                  "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    def _run(self, *argv):
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = roles.main(["roles.py"] + list(argv))
+        return rc, buf.getvalue()
+
+    def test_enumerate_default_roster(self):
+        self._write("agent:\n  type: claude\n")
+        rc, out = self._run("dispatch", self.tmp)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "coder\n")
+
+    def test_enumerate_enabled_loop_roles(self):
+        self._write("roles:\n"
+                    "  coder:\n    enabled: true\n"
+                    "  qa:\n    enabled: true\n    trigger: { type: loop }\n")
+        rc, out = self._run("dispatch", self.tmp)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.split(), ["coder", "qa"])
+
+    def test_enumerate_all_disabled_prints_nothing(self):
+        self._write("roles:\n  coder:\n    enabled: false\n")
+        rc, out = self._run("dispatch", self.tmp)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "")
+
+    def test_role_settings_key_value_lines(self):
+        self._write("roles:\n"
+                    "  coder:\n"
+                    "    enabled: true\n"
+                    "    account: claude-sub\n"
+                    "    model: claude-opus-4-8\n"
+                    "    scope: { labels: [ready] }\n")
+        rc, out = self._run("dispatch", self.tmp, "coder")
+        self.assertEqual(rc, 0)
+        lines = out.splitlines()
+        self.assertIn("ACCOUNT=claude-sub", lines)
+        self.assertIn("MODEL=claude-opus-4-8", lines)
+        self.assertIn("EFFORT=", lines)
+        self.assertIn("PROMPT=", lines)
+        self.assertIn(
+            "SCOPE=Scope: work ONLY within this scope: labels: ready.", lines)
+        self.assertIn("INSTANCES=1", lines)
+        self.assertEqual(len(lines), 6)
+
+    def test_undispatchable_role_exits_1(self):
+        self._write("agent:\n  type: claude\n")
+        rc, _ = self._run("dispatch", self.tmp, "qa")
+        self.assertEqual(rc, 1)
+
+    def test_unreadable_config_exits_2(self):
+        rc, _ = self._run("dispatch", os.path.join(self.tmp, "nope"))
+        self.assertEqual(rc, 2)
+
+    def test_validation_cli_still_works(self):
+        self._write("agent:\n  type: claude\n")
+        rc, _ = self._run(self.tmp)
+        self.assertEqual(rc, 3)  # valid, no roles: block
+
+
 if __name__ == "__main__":
     unittest.main()

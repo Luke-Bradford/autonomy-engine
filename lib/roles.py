@@ -453,22 +453,61 @@ def cron_next_fire(expr, now_epoch):
     return None
 
 
-def main(argv):
-    if len(argv) != 2:
-        print("usage: roles.py <target-repo>", file=sys.stderr)
-        return 2
-    repo = argv[1]
+def _load_config(repo):
+    """(config, rc) -- rc 0 on success, else the CLI exit code (2 unreadable,
+    1 unparseable) with an explanation on stderr. Shared by the validation
+    and dispatch entries."""
     cfg_path = os.path.join(repo, ".autonomy", "config.yaml")
     import config_parser
     try:
         with open(cfg_path, encoding="utf-8") as fh:
-            config = config_parser.parse(fh.read())
+            return config_parser.parse(fh.read()), 0
     except OSError as exc:
         print("roles: cannot read %s: %s" % (cfg_path, exc), file=sys.stderr)
-        return 2
+        return None, 2
     except ValueError as exc:
         print("roles: config.yaml does not parse: %s" % exc, file=sys.stderr)
+        return None, 1
+
+
+def _dispatch_main(argv):
+    """`roles.py dispatch <target-repo> [role]` -- the supervisor's dispatch
+    contract. Without a role: enabled loop-role names, one per line (may be
+    none). With a role: the six KEY=value session-settings lines. Exit 1 on
+    an undispatchable role (the supervisor REFUSES that session, fail-safe)."""
+    if len(argv) not in (2, 3):
+        print("usage: roles.py dispatch <target-repo> [role]", file=sys.stderr)
+        return 2
+    config, rc = _load_config(argv[1])
+    if rc:
+        return rc
+    if len(argv) == 2:
+        for name in dispatch_roles(config):
+            print(name)
+        return 0
+    try:
+        s = role_settings(config, argv[2])
+    except KeyError:
+        print("roles: %r is not an enabled loop role" % argv[2],
+              file=sys.stderr)
         return 1
+    for key in ("account", "model", "effort", "prompt", "scope"):
+        print("%s=%s" % (key.upper(), s[key]))
+    print("INSTANCES=%d" % s["instances"])
+    return 0
+
+
+def main(argv):
+    if len(argv) >= 2 and argv[1] == "dispatch":
+        return _dispatch_main(argv[1:])
+    if len(argv) != 2:
+        print("usage: roles.py <target-repo> | roles.py dispatch "
+              "<target-repo> [role]", file=sys.stderr)
+        return 2
+    repo = argv[1]
+    config, rc = _load_config(repo)
+    if rc:
+        return rc
     import accounts as accounts_mod
     known = [e["name"] for e in accounts_mod.Accounts().list()]
     errors = (validate_roles(config) + check_prompt_files(config, repo)
