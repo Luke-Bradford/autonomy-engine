@@ -113,3 +113,42 @@ class Accounts:
                 "account %r credential %r has no secret in the Keychain"
                 % (name, entry.get("credential")))
         return {"kind": kind, "env": {var: secret}}
+
+
+def _main(argv):
+    a = Accounts()
+    if not argv:
+        print("usage: accounts.py list | set <name> <kind> [credential] | "
+              "get <name> | delete <name> | resolve <name>", file=sys.stderr)
+        return 2
+    cmd, rest = argv[0], argv[1:]
+    try:
+        if cmd == "list":
+            print(json.dumps(a.list()))
+        elif cmd == "set":
+            if len(rest) < 2:
+                print("set needs <name> <kind> [credential]", file=sys.stderr)
+                return 2
+            a.set(rest[0], rest[1], credential=rest[2] if len(rest) > 2 else None)
+        elif cmd == "get":
+            e = a.get(rest[0]) if rest else None
+            if e is None:
+                return 1
+            print(json.dumps(e))
+        elif cmd == "delete":
+            a.delete(rest[0])
+        elif cmd == "resolve":
+            r = a.resolve(rest[0])   # raises KeyError/LookupError -> caught below
+            for var, val in sorted(r["env"].items()):
+                sys.stdout.write("%s=%s\n" % (var, val))
+        else:
+            print("unknown command %r" % cmd, file=sys.stderr)
+            return 2
+    except (ValueError, KeyError, LookupError, IndexError) as e:
+        print("accounts.py: %s" % e, file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_main(sys.argv[1:]))

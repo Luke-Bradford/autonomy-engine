@@ -115,5 +115,75 @@ class TestResolve(unittest.TestCase):
             self.a.resolve("stale")
 
 
+class TestCli(unittest.TestCase):
+    """_main returns clean exit codes and prints resolve env as VAR=value
+    lines for bash consumers. Patch Accounts to a temp index + fake creds so
+    the CLI never touches the real Keychain."""
+    def _run(self, argv, secrets=None):
+        import io
+        tmp = tempfile.mkdtemp()
+        orig = ac.Accounts.__init__
+        def patched(self, index_path=None, credentials=None):
+            orig(self, index_path=os.path.join(tmp, "accounts"),
+                 credentials=FakeCreds(secrets or {}))
+        ac.Accounts.__init__ = patched
+        out, err = io.StringIO(), io.StringIO()
+        so, se = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = out, err
+        try:
+            rc = ac._main(argv)
+        finally:
+            ac.Accounts.__init__ = orig
+            sys.stdout, sys.stderr = so, se
+        return rc, out.getvalue(), err.getvalue(), tmp
+
+    def test_set_then_resolve_subscription_prints_nothing(self):
+        # reuse one temp dir across two _main calls by pinning the index path
+        import io
+        tmp = tempfile.mkdtemp()
+        idx = os.path.join(tmp, "accounts")
+        orig = ac.Accounts.__init__
+        ac.Accounts.__init__ = lambda self, index_path=None, credentials=None: orig(
+            self, index_path=idx, credentials=FakeCreds())
+        try:
+            self.assertEqual(ac._main(["set", "claude-sub", "claude_subscription"]), 0)
+            out = io.StringIO(); so = sys.stdout; sys.stdout = out
+            try:
+                rc = ac._main(["resolve", "claude-sub"])
+            finally:
+                sys.stdout = so
+        finally:
+            ac.Accounts.__init__ = orig
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.getvalue().strip(), "")   # subscription: no env lines
+
+    def test_resolve_api_prints_var_line(self):
+        import io
+        tmp = tempfile.mkdtemp(); idx = os.path.join(tmp, "accounts")
+        orig = ac.Accounts.__init__
+        ac.Accounts.__init__ = lambda self, index_path=None, credentials=None: orig(
+            self, index_path=idx, credentials=FakeCreds({"k": "sk-ant-X"}))
+        try:
+            ac._main(["set", "work", "anthropic_api", "k"])
+            out = io.StringIO(); so = sys.stdout; sys.stdout = out
+            try:
+                rc = ac._main(["resolve", "work"])
+            finally:
+                sys.stdout = so
+        finally:
+            ac.Accounts.__init__ = orig
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.getvalue().strip(), "ANTHROPIC_API_KEY=sk-ant-X")
+
+    def test_resolve_unknown_exits_1(self):
+        rc, _out, _err, _tmp = self._run(["resolve", "ghost"])
+        self.assertEqual(rc, 1)
+
+    def test_bad_kind_exits_1(self):
+        rc, _out, err, _tmp = self._run(["set", "x", "bogus_kind"])
+        self.assertEqual(rc, 1)
+        self.assertIn("kind", err)
+
+
 if __name__ == "__main__":
     unittest.main()
