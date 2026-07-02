@@ -1,5 +1,13 @@
 # Multi-role agent org — design
 
+> **⚠️ Partially superseded (2026-07-02).** The role→substrate *mapping* below (PM/Researcher →
+> Managed Agents, QA → Actions) is **no longer the design** — substrate is now a per-agent choice,
+> every role runs headless in the engine by default, and each agent picks a named *account*
+> (subscription or API key). See
+> [`superpowers/specs/2026-07-02-dynamic-agent-org-design.md`](superpowers/specs/2026-07-02-dynamic-agent-org-design.md).
+> The trigger taxonomy (loop/cron/event) and the QA robustness / empirical-gate notes here remain
+> valid background.
+
 > Status: design approved in direction by the operator (2026-07-01); this spec turns the
 > research in [control-room-research.md](control-room-research.md) into a buildable plan and the
 > backlog issues that follow it. **Not built yet** — the engine today runs a single hand-rolled
