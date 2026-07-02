@@ -230,6 +230,20 @@ class TestRepoRegistryPlans(unittest.TestCase):
         p = dc.repo_add_plan(self.repo, self.reg)
         self.assertIn("quickstart", p.get("message", ""))
 
+    def test_add_dedupes_against_trailing_slash_entries(self):
+        # PR #48 review: registry lines are normalized before compare, so a
+        # manually-edited "path/" entry still dedupes
+        with open(self.reg, "w") as fh:
+            fh.write(self.repo + "/\n")
+        p = dc.repo_add_plan(self.repo, self.reg)
+        self.assertTrue(p.get("noop"), p)
+
+    def test_remove_matches_trailing_slash_entries(self):
+        with open(self.reg, "w") as fh:
+            fh.write(self.repo + "/\n")
+        p = dc.repo_remove_plan(self.repo, self.reg)
+        self.assertEqual(p.get("drop"), self.repo)
+
     def test_remove_registered(self):
         with open(self.reg, "w") as fh:
             fh.write("/other\n" + self.repo + "\n")

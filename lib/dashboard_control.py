@@ -118,9 +118,12 @@ def config_set_plan(repo, key, value):
 
 
 def _registered_lines(repos_file):
+    """Registry entries normalized the same way incoming paths are (strip +
+    trailing-slash removal), so dedupe/membership never depends on how a
+    line was hand-edited (PR #48 review)."""
     try:
         with open(repos_file) as fh:
-            return [ln.strip() for ln in fh if ln.strip()]
+            return [ln.strip().rstrip("/") for ln in fh if ln.strip()]
     except OSError:
         return []
 
