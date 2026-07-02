@@ -269,6 +269,7 @@ invoke_scoped_env() {
   (
     while IFS= read -r line; do
       [ -n "$line" ] || continue
+      case "$line" in *=*) ;; *) continue ;; esac   # no '=' at all -- not an env line
       case "${line%%=*}" in
         ''|*[!A-Za-z0-9_]*) continue ;;   # not a sane env var name -- skip
       esac
@@ -554,6 +555,10 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
          err_backoff=$ERR_BACKOFF_START; limit_backoff=$LIMIT_BACKOFF_START
          clear_reset_state
          sleep "$PACE" ;;
+      # NOTE: usage-limit state is one marker per supervisor (engine.account_key),
+      # so a limit on one role's account pauses every role in this loop -- with
+      # per-role accounts this over-waits (safe direction). Proper per-account
+      # limit state is issue #3's scope.
       3) jitter=$((RANDOM % 120))
          if reset_wait="$(compute_limit_wait)"; then
            reset_wait=$((reset_wait + jitter))
@@ -565,7 +570,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
            sleep $((limit_backoff + jitter))
            limit_backoff=$(( limit_backoff*2 < LIMIT_BACKOFF_MAX ? limit_backoff*2 : LIMIT_BACKOFF_MAX ))
          fi ;;
-      2) log "preflight skip -- wait ${ERR_BACKOFF_START}s"; sleep "$ERR_BACKOFF_START" ;;
+      2) log "preflight/dispatch skip -- wait ${ERR_BACKOFF_START}s"; sleep "$ERR_BACKOFF_START" ;;
       *) log "session error (rc=$outcome) -- backoff ${err_backoff}s"
          sleep "$err_backoff"
          err_backoff=$(( err_backoff*2 < ERR_BACKOFF_MAX ? err_backoff*2 : ERR_BACKOFF_MAX )) ;;

@@ -41,8 +41,9 @@ to the hard_rules content in a composed session file.
    truth moves into `roles.py`): standard roster defaults from `DEFAULT_ROLES` (coder
    enabled+loop; pm/qa/researcher disabled), custom roles default `enabled: false`,
    trigger `loop`. No `roles:` block → `["coder"]` (today's behaviour).
-6. **Model/effort precedence:** CLI flag > one-shot dashboard override file > role's
-   `model:`/`effort:` > `agent.model.primary`/`agent.effort` > hardcoded default. Implemented by
+6. **Model/effort precedence:** the one-shot dashboard override file (applied last, wins for its
+   one session) > CLI flag > role's `model:`/`effort:` > `agent.model.primary`/`agent.effort` >
+   hardcoded default. Implemented by
    feeding the role value in as the "CLI" slot only when the real CLI flag is empty, then letting
    `consume_model_override` run last (unchanged).
 7. **Fallback model stays global** (`agent.model.fallback`) — roles have no fallback field. YAGNI.

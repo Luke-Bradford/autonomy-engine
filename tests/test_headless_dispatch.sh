@@ -120,6 +120,10 @@ invoke_scoped_env 'not a var line
 ANTHROPIC_API_KEY=sk-b' a b c d e
 check "malformed env lines skipped, valid ones kept" "sk-b|NONE" "$(cat "$envfile")"
 
+invoke_scoped_env 'ANTHROPIC_API_KEY
+OPENAI_API_KEY=sk-c' a b c d e
+check "eq-less line skipped, never exported as VAR=VAR" "NONE|sk-c" "$(cat "$envfile")"
+
 # invoke_scoped_key still works (test_role_credential.sh covers it fully;
 # this is the wrap-not-regress smoke check)
 invoke_scoped_key "sk-legacy" a b c d e
