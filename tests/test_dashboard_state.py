@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -558,6 +559,114 @@ class TestConfigBoardKeys(unittest.TestCase):
                                               git_in_flight=lambda r: {})
         self.assertEqual(st["config"].get("board_owner", ""), "")
         self.assertEqual(st["config"].get("board_title", ""), "")
+
+
+
+class TestCodexUsage(unittest.TestCase):
+    """#49: codex account usage from the codex CLI's own session rollouts.
+    Shapes verified empirically against codex-cli 0.136.0 on this machine:
+    event_msg/payload/token_count with rate_limits (primary=300min,
+    secondary=10080min, plan_type, credits) and info.total_token_usage."""
+
+    def _mk(self, tmp, rel, lines, age_days=0):
+        p = os.path.join(tmp, "sessions", rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w") as fh:
+            for ln in lines:
+                fh.write(json.dumps(ln) + "\n")
+        old = time.time() - age_days * 86400
+        os.utime(p, (old, old))
+        return p
+
+    def _tc(self, pct5, pct7, tokens_in, tokens_out, credits=None, plan="plus"):
+        return {"timestamp": "t", "type": "event_msg", "payload": {
+            "type": "token_count",
+            "info": {"total_token_usage": {
+                "input_tokens": tokens_in, "cached_input_tokens": 0,
+                "output_tokens": tokens_out, "reasoning_output_tokens": 0,
+                "total_tokens": tokens_in + tokens_out}},
+            "rate_limits": {
+                "limit_id": "codex", "plan_type": plan, "credits": credits,
+                "primary": {"used_percent": pct5, "window_minutes": 300,
+                            "resets_at": 4102444800},
+                "secondary": {"used_percent": pct7, "window_minutes": 10080,
+                              "resets_at": 4102444900}}}}
+
+    def test_absent_home_unavailable(self):
+        tmp = tempfile.mkdtemp()
+        u = ds.codex_usage(codex_home=os.path.join(tmp, "nope"))
+        self.assertFalse(u["available"])
+
+    def test_latest_snapshot_and_token_totals(self):
+        tmp = tempfile.mkdtemp()
+        self._mk(tmp, "2026/07/01/rollout-a.jsonl",
+                 [self._tc(50.0, 20.0, 1000, 100)], age_days=1)
+        self._mk(tmp, "2026/07/02/rollout-b.jsonl",
+                 [self._tc(10.0, 5.0, 200, 20), self._tc(16.0, 10.0, 500, 50)],
+                 age_days=0)
+        u = ds.codex_usage(codex_home=tmp)
+        self.assertTrue(u["available"])
+        # newest file's LAST snapshot wins
+        self.assertEqual(u["five_hour"]["pct"], 16.0)
+        self.assertEqual(u["seven_day"]["pct"], 10.0)
+        self.assertEqual(u["five_hour"]["resets_at"], 4102444800)
+        self.assertEqual(u["plan"], "plus")
+        self.assertIsNone(u["credits"])
+        # totals: last cumulative per file, summed across files
+        self.assertEqual(u["tokens_7d"]["input"], 1500)
+        self.assertEqual(u["tokens_7d"]["output"], 150)
+        self.assertEqual(u["sessions_7d"], 2)
+
+    def test_old_files_pruned(self):
+        tmp = tempfile.mkdtemp()
+        self._mk(tmp, "2026/06/01/rollout-old.jsonl",
+                 [self._tc(90.0, 90.0, 9000, 900)], age_days=9)
+        u = ds.codex_usage(codex_home=tmp)
+        self.assertFalse(u["available"])
+
+    def test_credits_surface_when_api_billed(self):
+        tmp = tempfile.mkdtemp()
+        self._mk(tmp, "2026/07/02/rollout-c.jsonl",
+                 [self._tc(1.0, 1.0, 10, 1, credits={"balance": 42.5})])
+        u = ds.codex_usage(codex_home=tmp)
+        self.assertEqual(u["credits"], {"balance": 42.5})
+
+
+class TestCodexSessionParse(unittest.TestCase):
+    """#49: supervisor session logs written by the codex adapter (exec --json)
+    must yield token counts and a result instead of parsing to zeros."""
+
+    def _write(self, lines):
+        tmp = tempfile.mkdtemp()
+        p = os.path.join(tmp, "session-x.log")
+        with open(p, "w") as fh:
+            for ln in lines:
+                fh.write(json.dumps(ln) + "\n")
+        return p
+
+    def test_codex_turn_usage_counted(self):
+        p = self._write([
+            {"type": "thread.started", "thread_id": "th_1"},
+            {"type": "turn.started"},
+            {"type": "item.completed",
+             "item": {"type": "agent_message", "text": "working on #12 now"}},
+            {"type": "turn.completed",
+             "usage": {"input_tokens": 900, "output_tokens": 40,
+                       "reasoning_output_tokens": 10}},
+        ])
+        s = ds.parse_session_log(p)
+        self.assertEqual(s["output_tokens"], 50)
+        self.assertEqual(s["session_id"], "th_1")
+        self.assertEqual(s["status"], "done-ok")
+        self.assertIn("working on", s["current_step"])
+
+    def test_codex_turn_failed_is_error(self):
+        p = self._write([
+            {"type": "thread.started", "thread_id": "th_2"},
+            {"type": "turn.failed", "error": {"message": "boom"}},
+        ])
+        s = ds.parse_session_log(p)
+        self.assertEqual(s["status"], "done-error")
 
 
 

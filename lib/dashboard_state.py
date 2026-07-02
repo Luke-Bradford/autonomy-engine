@@ -171,6 +171,97 @@ def pick_ticket(mention_counts, mention_last_pos, branch_ticket, board_ticket):
     return max(pool, key=lambda t: mention_last_pos.get(t, 0))
 
 
+_CODEX_WINDOWS = {300: "five_hour", 10080: "seven_day"}
+
+
+def codex_usage(codex_home=None, now=None):
+    """Codex account usage, read from the codex CLI's own session rollouts
+    (~/.codex/sessions/**/rollout-*.jsonl) -- shapes verified empirically
+    against codex-cli 0.136.0. The newest file's LAST token_count snapshot
+    provides rate_limits (primary=5h, secondary=weekly, mapped by
+    window_minutes; plan_type; credits -- credits stay null on a ChatGPT
+    subscription and populate under API billing, so surfacing them covers
+    the API-counts case with no further change). Token totals sum the last
+    cumulative total_token_usage per file across a 7-day mtime window.
+    {"available": False} when nothing is found -- honest empty state."""
+    if codex_home is None:
+        codex_home = os.path.expanduser("~/.codex")
+    if now is None:
+        now = time.time()
+    root = os.path.join(codex_home, "sessions")
+    cutoff = now - 7 * 86400
+    files = []
+    for dirpath, _dirs, names in os.walk(root):
+        for name in names:
+            if not (name.startswith("rollout-") and name.endswith(".jsonl")):
+                continue
+            p = os.path.join(dirpath, name)
+            try:
+                mtime = os.stat(p).st_mtime
+            except OSError:
+                continue
+            if mtime >= cutoff:
+                files.append((mtime, p))
+    if not files:
+        return {"available": False}
+    files.sort(reverse=True)
+
+    latest_limits = None
+    tokens_in = tokens_out = 0
+    counted = 0
+    for _mtime, p in files:
+        last_snapshot = None
+        last_totals = None
+        try:
+            fh = open(p, errors="replace")
+        except OSError:
+            continue
+        with fh:
+            for line in fh:
+                if '"token_count"' not in line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except ValueError:
+                    continue
+                payload = o.get("payload") if isinstance(o.get("payload"), dict) else o
+                if payload.get("type") != "token_count":
+                    continue
+                if isinstance(payload.get("rate_limits"), dict):
+                    last_snapshot = payload["rate_limits"]
+                info = payload.get("info") or {}
+                if isinstance(info.get("total_token_usage"), dict):
+                    last_totals = info["total_token_usage"]
+        if last_totals is not None:
+            tokens_in += last_totals.get("input_tokens") or 0
+            tokens_out += ((last_totals.get("output_tokens") or 0)
+                           + (last_totals.get("reasoning_output_tokens") or 0))
+            counted += 1
+        if latest_limits is None and last_snapshot is not None:
+            latest_limits = last_snapshot
+
+    if latest_limits is None and counted == 0:
+        return {"available": False}
+
+    out = {"available": True, "plan": "", "credits": None,
+           "five_hour": {}, "seven_day": {},
+           "tokens_7d": {"input": tokens_in, "output": tokens_out},
+           "sessions_7d": counted}
+    if latest_limits is not None:
+        out["plan"] = latest_limits.get("plan_type") or ""
+        out["credits"] = latest_limits.get("credits")
+        for key in ("primary", "secondary"):
+            win = latest_limits.get(key)
+            if not isinstance(win, dict):
+                continue
+            slot = _CODEX_WINDOWS.get(win.get("window_minutes"))
+            if slot is None:  # unknown window size: fall back positionally
+                slot = "five_hour" if key == "primary" else "seven_day"
+            out[slot] = {"pct": win.get("used_percent"),
+                         "resets_at": win.get("resets_at")}
+    return out
+
+
 def parse_session_log(path):
     """Parse one session-*.log into the render model. Robust to partial/live
     files (each line guarded; a truncated tail line is skipped)."""
@@ -260,6 +351,31 @@ def parse_session_log(path):
                     rate_limited = True
             elif t == "result":
                 result = o
+            # --- codex adapter sessions (`codex exec --json`, #49) ---------
+            elif t == "thread.started":
+                session_id = o.get("thread_id") or session_id
+            elif t == "item.completed":
+                item = o.get("item") or {}
+                if item.get("type") == "agent_message":
+                    pos += 1
+                    text = item.get("text") or ""
+                    label = _block_label({"type": "text", "text": text})
+                    if label:
+                        current_step = label
+                    for n in _TICKET_RE.findall(text):
+                        _mention(int(n))
+            elif t == "turn.completed":
+                usage = o.get("usage") or {}
+                out = ((usage.get("output_tokens") or 0)
+                       + (usage.get("reasoning_output_tokens") or 0))
+                streamed_output += out
+                cumulative += out
+                tokens_series.append(cumulative)
+                # claude-shaped result so the status/token logic below applies
+                result = {"is_error": False,
+                          "usage": {"output_tokens": streamed_output}}
+            elif t in ("turn.failed", "stream_error"):
+                result = {"is_error": True}
 
     if result is not None:
         status = "done-ok" if not result.get("is_error") else "done-error"
