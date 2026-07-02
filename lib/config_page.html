@@ -251,6 +251,10 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
     </div>
   </header>
 
+  <div class="sh"><h2>Accounts</h2><span class="ln"></span><span class="ct">named auth instances · subscription or API</span></div>
+  <div class="panel" id="accts"></div>
+  <div class="hint">An account is a named instance an agent calls from — your Claude or Codex subscription (no key needed), or an API key. API accounts link to a credential below.</div>
+
   <div class="sh"><h2>Credentials</h2><span class="ln"></span><span class="ct">API keys · macOS Keychain · never leaves this machine</span></div>
   <div class="panel" id="creds"></div>
   <div class="hint">Subscriptions (your Claude / Codex logins) are the default and need nothing here. API keys are optional — add one only if a role should run on API credit instead. Secrets are stored in your macOS Keychain, never in a file, never shown again after saving. On your first save macOS asks to allow Keychain access — choose <b>Always Allow</b> so later saves don't prompt.</div>
@@ -285,7 +289,52 @@ function post(body,okLabel,then){
     .then(({ok,j})=>{toast(ok&&j.ok,(ok&&j.ok)?(j.message||okLabel):("failed: "+(j.error||"error")));if(ok&&j.ok&&then)then();})
     .catch(()=>toast(false,"request failed"));
 }
-function load(){fetch("/api/config").then(r=>r.json()).then(m=>{MODEL=m;renderCreds(m);renderCfg(m.repos||[]);}).catch(()=>toast(false,"could not load config"));}
+function load(){fetch("/api/config").then(r=>r.json()).then(m=>{MODEL=m;renderAccts(m);renderCreds(m);renderCfg(m.repos||[]);}).catch(()=>toast(false,"could not load config"));}
+
+/* ---- ACCOUNTS ---- */
+const SUB_KINDS=["claude_subscription","codex_subscription"];
+function renderAccts(m){
+  const accts=m.accounts||[], kinds=m.account_kinds||[], creds=m.credentials||[];
+  const kindOpts=kinds.map(k=>`<option value="${esc(k)}">${esc(k)}</option>`).join("");
+  const credOpts=`<option value="">— credential —</option>`+creds.map(c=>`<option value="${esc(c.label)}">${esc(c.label)}</option>`).join("");
+  const add=`<div class="credadd">
+    <input id="ac-name" class="cfgin" placeholder="account name (e.g. claude-sub)">
+    <select id="ac-kind" class="cfgin" onchange="acctKindChange()">${kindOpts}</select>
+    <select id="ac-cred" class="cfgin" style="display:none">${credOpts}</select>
+    <button class="cbtn go" onclick="acctSave()">save</button></div>`;
+  const err=m.accounts_error?`<div class="hint" style="color:var(--bad)">accounts error: ${esc(m.accounts_error)}</div>`:"";
+  const rows=accts.map(a=>{
+    const enc=encAttr(a.name);
+    const link=a.credential?` <span class="credset">→ ${esc(a.credential)}</span>`:"";
+    return `<div class="credrow">
+      <span class="credlabel">${esc(a.name)}</span>
+      <span class="credprov">${esc(a.kind)}</span>${link}
+      <span class="credgap"></span>
+      <button class="cbtn danger" onclick="acctDelete('${enc}')">remove</button>
+    </div>`;
+  }).join("");
+  $("accts").innerHTML=add+err+(rows||`<div class="hint">no accounts yet — add one above.</div>`);
+  acctKindChange();
+}
+function acctKindChange(){
+  const kind=($("ac-kind")||{}).value||"";
+  const cred=$("ac-cred"); if(!cred) return;
+  cred.style.display=SUB_KINDS.indexOf(kind)>=0?"none":"";
+}
+function acctSave(){
+  const name=($("ac-name").value||"").trim();
+  const kind=$("ac-kind").value;
+  const isSub=SUB_KINDS.indexOf(kind)>=0;
+  const credential=isSub?"":($("ac-cred").value||"");
+  if(!name){toast(false,"enter an account name");return;}
+  if(!isSub&&!credential){toast(false,"pick a credential for an API account");return;}
+  post({action:"acct_set",name,kind,credential},"account saved",()=>{$("ac-name").value="";load();});
+}
+function acctDelete(enc){
+  const name=decodeURIComponent(enc);
+  if(!window.confirm("Remove account '"+name+"'?\nAgents using it fall back to their default auth.")) return;
+  post({action:"acct_delete",name},"removed",load);
+}
 
 /* ---- CREDENTIALS ---- */
 function renderCreds(m){
