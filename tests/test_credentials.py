@@ -162,7 +162,8 @@ class TestCredentials(unittest.TestCase):
         # (a raw read would AttributeError in list()/delete()).
         corrupt_cases = ('{"credentials": oops', "[]", '{"assignments": []}',
                          '{"credentials": []}', '{"credentials": {"work": []}}',
-                         '{"assignments": {"pm": []}}')
+                         '{"assignments": {"pm": []}}', '{"credentials": null}',
+                         '{"assignments": null}')
         for corrupt in corrupt_cases:
             Path(self.index).write_text(corrupt)
             before = Path(self.index).read_bytes()

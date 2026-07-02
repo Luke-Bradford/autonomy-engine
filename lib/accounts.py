@@ -57,8 +57,13 @@ class Accounts:
             return {}, "corrupt"
         if not isinstance(data, dict):
             return {}, "corrupt"
-        section = data.get("accounts")
-        if section is not None:
+        # Use `in` (not .get()) so an explicit JSON null -- {"accounts": null}
+        # -- is caught: .get() returns None for both absent and null, but a
+        # present-null section would slip past a `is not None` guard and leave
+        # data["accounts"] = None (setdefault is a no-op on a present key),
+        # crashing downstream reads/writes. Absent is fine (setdefault fills it).
+        if "accounts" in data:
+            section = data["accounts"]
             # the section must be a dict AND every entry a dict -- a non-dict
             # entry would crash list()/get() with AttributeError on a read and
             # let a write persist unreadable data.

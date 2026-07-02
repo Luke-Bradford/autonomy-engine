@@ -103,7 +103,7 @@ class TestAccountsCrud(unittest.TestCase):
         # entry value is not (which would crash list()/get() with AttributeError
         # on a raw read).
         for corrupt in ('{"accounts": bad', "[]", '{"accounts": []}',
-                        '{"accounts": {"work": []}}'):
+                        '{"accounts": {"work": []}}', '{"accounts": null}'):
             Path(self.index).write_text(corrupt)
             before = Path(self.index).read_bytes()
             self.assertTrue(self.a.is_corrupt(), msg=corrupt)

@@ -101,14 +101,18 @@ class Credentials:
         # sections must be dicts; every credential entry a dict; every
         # assignment value a label string. A wrong-typed value would crash
         # list()/delete() (AttributeError / bad keystore key) on a read and let
-        # a write persist unreadable data.
-        creds_section = data.get("credentials")
-        if creds_section is not None:
+        # a write persist unreadable data. Use `in` (not .get()) so an explicit
+        # JSON null -- {"credentials": null} -- is caught: .get() returns None
+        # for both absent and null, but a present-null section would slip past a
+        # `is not None` guard and leave data[section] = None (setdefault is a
+        # no-op on a present key), crashing downstream. Absent is fine.
+        if "credentials" in data:
+            creds_section = data["credentials"]
             if not isinstance(creds_section, dict) or \
                     any(not isinstance(v, dict) for v in creds_section.values()):
                 return {}, "corrupt"
-        assign_section = data.get("assignments")
-        if assign_section is not None:
+        if "assignments" in data:
+            assign_section = data["assignments"]
             if not isinstance(assign_section, dict) or \
                     any(not isinstance(v, str) for v in assign_section.values()):
                 return {}, "corrupt"
