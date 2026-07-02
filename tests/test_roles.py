@@ -380,6 +380,55 @@ class TestCheckAccounts(unittest.TestCase):
         self.assertEqual(roles.check_accounts(cfg, []), [])
 
 
+class _FakeRegistry:
+    """Stand-in for accounts.Accounts -- doctor only uses is_corrupt/list/
+    index_path (the injected seam)."""
+    def __init__(self, corrupt=False, names=(), index_path="/x/accounts"):
+        self._corrupt = corrupt
+        self._names = list(names)
+        self.index_path = index_path
+    def is_corrupt(self):
+        return self._corrupt
+    def list(self):
+        return [{"name": n} for n in self._names]
+
+
+class TestAccountErrors(unittest.TestCase):
+    """account_errors: doctor's registry-aware account check (#59). A corrupt
+    registry must say 'unreadable', not 'account not found'."""
+
+    def test_healthy_registry_delegates_to_check_accounts(self):
+        cfg = parse("roles:\n  coder:\n    account: work\n")
+        reg = _FakeRegistry(names=["work"])
+        self.assertEqual(roles.account_errors(cfg, reg), [])
+
+    def test_healthy_registry_reports_unknown(self):
+        cfg = parse("roles:\n  coder:\n    account: nope\n")
+        reg = _FakeRegistry(names=["work"])
+        errs = roles.account_errors(cfg, reg)
+        self.assertEqual(len(errs), 1)
+        self.assertIn("nope", errs[0])
+
+    def test_corrupt_registry_says_unreadable_not_not_found(self):
+        cfg = parse("roles:\n  coder:\n    account: work\n")
+        reg = _FakeRegistry(corrupt=True, index_path="/cfg/accounts")
+        errs = roles.account_errors(cfg, reg)
+        self.assertEqual(len(errs), 1)
+        self.assertIn("unreadable", errs[0])
+        self.assertIn("/cfg/accounts", errs[0])
+        self.assertNotIn("not found", errs[0])
+
+    def test_corrupt_registry_ignored_when_no_role_uses_an_account(self):
+        # a corrupt registry nothing references is not doctor's concern
+        cfg = parse("roles:\n  coder:\n    enabled: true\n")
+        reg = _FakeRegistry(corrupt=True)
+        self.assertEqual(roles.account_errors(cfg, reg), [])
+
+    def test_corrupt_registry_ignored_for_no_roles_config(self):
+        reg = _FakeRegistry(corrupt=True)
+        self.assertEqual(roles.account_errors(parse("roles: {}\n"), reg), [])
+
+
 class TestDispatchRoles(unittest.TestCase):
     def test_no_roles_block_defaults_to_coder(self):
         self.assertEqual(roles.dispatch_roles({}), ["coder"])

@@ -30,23 +30,63 @@ def default_index_path():
     return os.path.expanduser("~/.config/autonomy/accounts")
 
 
+class RegistryError(RuntimeError):
+    """The on-disk index exists but is unreadable/corrupt: unparseable JSON,
+    a non-dict top level, or a required section of the wrong type. Writes
+    refuse (raise this) rather than overwrite the file and silently drop the
+    unreadable entries -- fail-safe, never fail-open (#59). Reads degrade to an
+    empty registry (a read never destroys data)."""
+
+
 class Accounts:
     def __init__(self, index_path=None, credentials=None):
         self.index_path = index_path or default_index_path()
         self.credentials = (credentials if credentials is not None
                             else _credentials.Credentials())
 
-    def _load(self):
+    def _read(self):
+        """Return (data, status). status is 'empty' (file absent -- a
+        legitimately new registry), 'corrupt' (present but unparseable, a
+        non-dict top level, or a non-dict `accounts` section), or 'ok'."""
         try:
             with open(self.index_path, encoding="utf-8") as fh:
                 data = json.load(fh)
+        except FileNotFoundError:
+            return {}, "empty"
         except (OSError, ValueError):
-            data = {}
-        # Valid JSON that isn't a dict (bare list/scalar) would blow up the
-        # setdefault below with AttributeError; coerce it to the same empty
-        # registry a syntax error yields (graceful degradation, not a crash).
+            return {}, "corrupt"
         if not isinstance(data, dict):
-            data = {}
+            return {}, "corrupt"
+        section = data.get("accounts")
+        if section is not None:
+            # the section must be a dict AND every entry a dict -- a non-dict
+            # entry would crash list()/get() with AttributeError on a read and
+            # let a write persist unreadable data.
+            if not isinstance(section, dict) or \
+                    any(not isinstance(v, dict) for v in section.values()):
+                return {}, "corrupt"
+        return data, "ok"
+
+    def is_corrupt(self):
+        """True when the index exists but cannot be read as a valid registry --
+        distinct from an empty/absent one. Lets callers (doctor) say
+        'unreadable' instead of 'no accounts'."""
+        return self._read()[1] == "corrupt"
+
+    def _load(self):
+        # Reads degrade a corrupt index to empty (never destructive).
+        data, _status = self._read()
+        data.setdefault("accounts", {})
+        return data
+
+    def _load_for_write(self):
+        # Writes refuse on a corrupt index -- overwriting it would silently drop
+        # the unreadable entries (#59). An empty/absent registry is writable.
+        data, status = self._read()
+        if status == "corrupt":
+            raise RegistryError(
+                "accounts registry at %s is unreadable/corrupt -- refusing to "
+                "overwrite; fix or remove it first" % self.index_path)
         data.setdefault("accounts", {})
         return data
 
@@ -72,7 +112,7 @@ class Accounts:
         else:
             if not (credential or "").strip():
                 raise ValueError("API accounts require a credential label")
-        data = self._load()
+        data = self._load_for_write()
         entry = {"kind": kind}
         if credential:
             entry["credential"] = credential
@@ -96,7 +136,7 @@ class Accounts:
         return {"kind": e.get("kind", ""), "credential": e.get("credential")}
 
     def delete(self, name):
-        data = self._load()
+        data = self._load_for_write()
         if data["accounts"].pop(name, None) is not None:
             self._save(data)
 
@@ -153,7 +193,7 @@ def _main(argv):
         else:
             print("unknown command %r" % cmd, file=sys.stderr)
             return 2
-    except (ValueError, KeyError, LookupError, IndexError) as e:
+    except (RegistryError, ValueError, KeyError, LookupError, IndexError) as e:
         print("accounts.py: %s" % e, file=sys.stderr)
         return 1
     return 0

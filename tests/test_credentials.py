@@ -142,17 +142,48 @@ class TestCredentials(unittest.TestCase):
         self.assertEqual(c.list(), [])
         self.assertEqual(c.assignments(), {})
 
-    def test_non_dict_index_degrades_to_empty_not_crash(self):
+    def test_non_dict_index_degrades_to_empty_on_read(self):
         # Valid JSON that isn't a dict (bare list/scalar) must degrade to an
-        # empty index, NOT raise AttributeError out of _load()'s setdefault.
+        # empty index for READS, NOT raise AttributeError. (Writes on a corrupt
+        # index refuse -- see the #59 test below.)
         Path(self.index).write_text("[]")
         self.assertEqual(self.c.list(), [])
         self.assertEqual(self.c.assignments(), {})
         Path(self.index).write_text("42")
         self.assertEqual(self.c.list(), [])
-        # writes still work on top of the coerced-empty index
-        self.c.set("work", "s", provider="anthropic", now=1000)
-        self.assertEqual([e["label"] for e in self.c.list()], ["work"])
+
+    def test_corrupt_index_refuses_writes_without_clobber_or_secret_loss(self):
+        # #59: store a real credential via a HEALTHY index first, then corrupt
+        # the index. Every write path must refuse (RegistryError) without
+        # overwriting the index, AND delete() must refuse BEFORE touching the
+        # keystore (the reorder) so the backing secret survives.
+        self.c.set("work", "s3cret", provider="anthropic", now=1000)
+        # incl. per-ENTRY corruption: sections are dicts but a value is not
+        # (a raw read would AttributeError in list()/delete()).
+        corrupt_cases = ('{"credentials": oops', "[]", '{"assignments": []}',
+                         '{"credentials": []}', '{"credentials": {"work": []}}',
+                         '{"assignments": {"pm": []}}')
+        for corrupt in corrupt_cases:
+            Path(self.index).write_text(corrupt)
+            before = Path(self.index).read_bytes()
+            self.assertTrue(self.c.is_corrupt(), msg=corrupt)
+            writes = (lambda: self.c.set("x", "y"),
+                      lambda: self.c.delete("work"),
+                      lambda: self.c.assign("pm", "work"),
+                      lambda: self.c.unassign("pm"))
+            for call in writes:
+                with self.assertRaises(cr.RegistryError, msg=corrupt):
+                    call()
+            self.assertEqual(Path(self.index).read_bytes(), before, msg=corrupt)
+            self.assertEqual(self.store.get("work"), "s3cret", msg=corrupt)
+            self.assertEqual(self.c.list(), [], msg=corrupt)
+
+    def test_missing_index_is_not_corrupt_and_writable(self):
+        c = cr.Credentials(store=MemoryStore(),
+                           index_path=os.path.join(self.tmp, "fresh.json"))
+        self.assertFalse(c.is_corrupt())
+        c.set("work", "s", provider="anthropic", now=1)
+        self.assertEqual([e["label"] for e in c.list()], ["work"])
 
 
 class TestCliErrors(unittest.TestCase):
