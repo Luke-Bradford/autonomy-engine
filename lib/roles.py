@@ -31,6 +31,9 @@ from datetime import datetime, timedelta, timezone
 
 VALID_SUBSTRATES = ("engine", "managed_agents", "routine", "actions")
 VALID_TRIGGERS = ("loop", "cron", "event")
+VALID_PHASES = ("plan", "implement", "test")
+VALID_SCOPE_TARGETS = ("diff", "affected", "full-regression")
+_SCOPE_KEYS = ("labels", "paths", "milestone", "query", "target")
 
 # The standard roster and its defaults: (name, enabled, substrate, trigger).
 # Only the coder loop is on by default; everything else is an explicit,
@@ -48,6 +51,46 @@ def _is_positive_int(v):
         return int(str(v)) > 0
     except (TypeError, ValueError):
         return False
+
+
+def _is_nonempty_str(v):
+    return isinstance(v, str) and bool(v.strip())
+
+
+def _validate_scope(name, scope):
+    """`scope:` -- what an agent works over. Either a bare target string
+    (legacy shorthand: `scope: diff`) or a mapping with any of labels/paths
+    (non-empty inline lists), milestone/query (non-empty strings), target
+    (diff | affected | full-regression). Empty mapping = whole open board
+    (today's behaviour)."""
+    if scope is None:
+        return []
+    if isinstance(scope, str):
+        if scope not in VALID_SCOPE_TARGETS:
+            return ["roles.%s: unknown scope target %r (valid: %s)"
+                    % (name, scope, ", ".join(VALID_SCOPE_TARGETS))]
+        return []
+    if not isinstance(scope, dict):
+        return ["roles.%s: scope must be a mapping or a target string" % name]
+    errors = []
+    for key in sorted(scope):
+        val = scope[key]
+        if key not in _SCOPE_KEYS:
+            errors.append("roles.%s: unknown scope key %r (valid: %s)"
+                          % (name, key, ", ".join(_SCOPE_KEYS)))
+        elif key in ("labels", "paths"):
+            if not isinstance(val, list) or not val or \
+                    not all(str(v).strip() for v in val):
+                errors.append("roles.%s: scope.%s must be a non-empty list"
+                              % (name, key))
+        elif key == "target":
+            if val not in VALID_SCOPE_TARGETS:
+                errors.append("roles.%s: unknown scope target %r (valid: %s)"
+                              % (name, val, ", ".join(VALID_SCOPE_TARGETS)))
+        elif not _is_nonempty_str(val):
+            errors.append("roles.%s: scope.%s must be a non-empty string"
+                          % (name, key))
+    return errors
 
 
 def validate_roles(config):
@@ -85,6 +128,28 @@ def validate_roles(config):
                                       "non-empty 'on' list" % name)
         if "instances" in cfg and not _is_positive_int(cfg.get("instances")):
             errors.append("roles.%s: instances must be a positive integer" % name)
+        if "account" in cfg and not _is_nonempty_str(cfg.get("account")):
+            errors.append("roles.%s: account must be a non-empty account name"
+                          % name)
+        for field in ("model", "effort"):
+            if field in cfg and not _is_nonempty_str(cfg.get(field)):
+                errors.append("roles.%s: %s must be a non-empty string"
+                              % (name, field))
+        models = cfg.get("models")
+        if models is not None:
+            if not isinstance(models, dict) or not models:
+                errors.append("roles.%s: models must be a non-empty mapping "
+                              "of phase -> model" % name)
+            else:
+                for phase in sorted(models):
+                    if phase not in VALID_PHASES:
+                        errors.append(
+                            "roles.%s: unknown models phase %r (valid: %s)"
+                            % (name, phase, ", ".join(VALID_PHASES)))
+                    elif not _is_nonempty_str(models[phase]):
+                        errors.append("roles.%s: models.%s must be a model "
+                                      "name" % (name, phase))
+        errors.extend(_validate_scope(name, cfg.get("scope")))
     return errors
 
 

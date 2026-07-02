@@ -188,5 +188,85 @@ class TestDefaults(unittest.TestCase):
         self.assertTrue(all(not r[1] for r in roles.DEFAULT_ROLES[1:]))
 
 
+class TestIncrement2Fields(unittest.TestCase):
+    """account/model/effort/models/scope shape validation (agent-org spec)."""
+
+    def test_full_spec_example_validates(self):
+        cfg = parse(
+            "roles:\n"
+            "  coder:\n"
+            "    enabled: true\n"
+            "    account: claude-sub\n"
+            "    trigger: { type: loop }\n"
+            "    model: claude-sonnet-5\n"
+            "    effort: high\n"
+            "    scope: { labels: [ready], milestone: current }\n"
+            "  qa:\n"
+            "    enabled: true\n"
+            "    account: anthropic-work\n"
+            "    trigger: { type: event, on: [pr.opened, pr.synchronize] }\n"
+            "    model: claude-opus-4-8\n"
+            "    scope: { target: diff }\n"
+            "  researcher:\n"
+            "    enabled: false\n"
+            "    account: codex-sub\n"
+            '    trigger: { type: cron, schedule: "0 3 * * *" }\n'
+            "    models: { plan: claude-opus-4-8, implement: claude-sonnet-5, test: claude-haiku-4-5 }\n")
+        self.assertEqual(roles.validate_roles(cfg), [])
+
+    def test_account_must_be_nonempty(self):
+        cfg = parse("roles:\n  coder:\n    account: \"\"\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("account" in e and "coder" in e for e in errs))
+
+    def test_model_and_effort_must_be_nonempty_strings(self):
+        for field in ("model", "effort"):
+            cfg = parse("roles:\n  coder:\n    %s: \"\"\n" % field)
+            errs = roles.validate_roles(cfg)
+            self.assertTrue(any(field in e for e in errs),
+                            "expected an error for empty %s" % field)
+
+    def test_models_unknown_phase(self):
+        cfg = parse("roles:\n  coder:\n    models: { deploy: claude-sonnet-5 }\n")
+        errs = roles.validate_roles(cfg)
+        self.assertEqual(len(errs), 1)
+        self.assertIn("deploy", errs[0])
+        self.assertIn("plan", errs[0])  # error names the valid phases
+
+    def test_models_must_be_mapping(self):
+        cfg = parse("roles:\n  coder:\n    models: claude-sonnet-5\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("models" in e for e in errs))
+
+    def test_scope_bare_target_shorthand(self):
+        # legacy form from the old template: scope: diff
+        cfg = parse("roles:\n  qa:\n    scope: diff\n")
+        self.assertEqual(roles.validate_roles(cfg), [])
+
+    def test_scope_bare_string_must_be_valid_target(self):
+        cfg = parse("roles:\n  qa:\n    scope: everything\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("scope" in e and "everything" in e for e in errs))
+
+    def test_scope_unknown_key(self):
+        cfg = parse("roles:\n  coder:\n    scope: { repos: [a, b] }\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("repos" in e for e in errs))
+
+    def test_scope_labels_must_be_nonempty_list(self):
+        cfg = parse("roles:\n  coder:\n    scope: { labels: ready }\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("labels" in e for e in errs))
+
+    def test_scope_target_enum(self):
+        cfg = parse("roles:\n  qa:\n    scope: { target: everything }\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("target" in e and "everything" in e for e in errs))
+
+    def test_scope_empty_mapping_is_whole_board(self):
+        cfg = parse("roles:\n  coder:\n    scope: {}\n")
+        self.assertEqual(roles.validate_roles(cfg), [])
+
+
 if __name__ == "__main__":
     unittest.main()
