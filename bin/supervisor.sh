@@ -107,11 +107,14 @@ valid_effort() {
 
 # Resolve model/fallback/effort PER SESSION (not once at startup), so a config
 # edit -- including the dashboard's 'save as default' write-back -- takes
-# effect on the next session without a supervisor restart.
+# effect on the next session without a supervisor restart. Role-level
+# model/effort (ROLE_MODEL/ROLE_EFFORT, set by resolve_role_dispatch) sit
+# between the CLI flag and config.yaml: CLI > role > agent.* > default. The
+# one-shot dashboard override is applied last and wins for its one session.
 resolve_session_settings() {
-  MODEL="$(resolve_config_value "$CFG" agent.model.primary "$MODEL_OVERRIDE" claude-sonnet-5)"
+  MODEL="$(resolve_config_value "$CFG" agent.model.primary "${MODEL_OVERRIDE:-${ROLE_MODEL:-}}" claude-sonnet-5)"
   FALLBACK_MODEL="$(resolve_config_value "$CFG" agent.model.fallback "$FALLBACK_MODEL_OVERRIDE" claude-sonnet-4-6)"
-  EFFORT="$(resolve_config_value "$CFG" agent.effort "$EFFORT_OVERRIDE" "")"
+  EFFORT="$(resolve_config_value "$CFG" agent.effort "${EFFORT_OVERRIDE:-${ROLE_EFFORT:-}}" "")"
   consume_model_override "$LOGDIR/model-override"
 }
 
@@ -321,7 +324,6 @@ resolve_role_dispatch() {
   ROLE_ACCOUNT=""; ROLE_MODEL=""; ROLE_EFFORT=""; ROLE_PROMPT=""
   ROLE_SCOPE=""; ROLE_INSTANCES=1
   out="$(python3 "$ENGINE_HOME/lib/roles.py" dispatch "$AUTONOMY_TARGET_REPO" "$role" 2>>"$SUPLOG")" || return 1
-  # shellcheck disable=SC2034  # ROLE_ACCOUNT/PROMPT/SCOPE/INSTANCES are the dispatch contract consumed by run_session (wired in the next commit)
   while IFS= read -r line; do
     key="${line%%=*}"; val="${line#*=}"
     case "$key" in
@@ -377,22 +379,60 @@ compose_session_rules() {
 }
 
 run_session() {
+  local role="${1:-${ROLE:-coder}}"
   preflight || return $?
 
   # shellcheck source=/dev/null
-  source "$ENGINE_HOME/bin/agents/${AGENT_TYPE}.sh"
+  source "${AUTONOMY_AGENTS_DIR:-$ENGINE_HOME/bin/agents}/${AGENT_TYPE}.sh"
 
+  if ! resolve_role_dispatch "$role"; then
+    log "dispatch: cannot resolve settings for role '$role' -- REFUSING session (fail-safe; see supervisor.log)"
+    return 2
+  fi
   resolve_session_settings
 
-  local log_file; log_file="$LOGDIR/session-$(date +%Y%m%dT%H%M%S).log"
-  local role_key; role_key="$(resolve_role_credential "${ROLE:-coder}")"
-  local auth_note="subscription"
-  if [ -n "$role_key" ]; then auth_note="api-key(${ROLE:-coder})"; fi
-  log "session start (model=$MODEL effort=${EFFORT:-default} auth=$auth_note) -> $log_file"
+  # Auth precedence: account (fail-safe -- an unresolvable account REFUSES
+  # the session, never runs on broken auth) > per-role credential (#51-C,
+  # best-effort) > subscription.
+  local env_lines="" auth_note="subscription"
+  if [ -n "$ROLE_ACCOUNT" ]; then
+    if ! env_lines="$(resolve_account_env "$ROLE_ACCOUNT")"; then
+      log "dispatch: role '$role' account '$ROLE_ACCOUNT' did not resolve -- REFUSING session (fail-safe; see supervisor.log)"
+      return 2
+    fi
+    auth_note="account($ROLE_ACCOUNT)"
+  else
+    local role_key; role_key="$(resolve_role_credential "$role")"
+    if [ -n "$role_key" ]; then
+      env_lines="ANTHROPIC_API_KEY=$role_key"
+      auth_note="api-key($role)"
+    fi
+  fi
 
-  invoke_scoped_key "$role_key" \
-    "$AUTONOMY_TARGET_REPO/.autonomy/loop_prompt.md" \
-    "$AUTONOMY_TARGET_REPO/.autonomy/hard_rules.md" \
+  # The role's own prompt when set (doctor verified it is a repo-relative
+  # pack file), else the pack's loop_prompt. A missing file refuses.
+  local prompt_file="$AUTONOMY_TARGET_REPO/.autonomy/loop_prompt.md"
+  [ -n "$ROLE_PROMPT" ] && prompt_file="$AUTONOMY_TARGET_REPO/$ROLE_PROMPT"
+  if [ ! -f "$prompt_file" ]; then
+    log "dispatch: prompt file missing for role '$role' ($prompt_file) -- REFUSING session"
+    return 2
+  fi
+
+  local rules_file
+  if ! rules_file="$(compose_session_rules "$AUTONOMY_TARGET_REPO/.autonomy/hard_rules.md" "$ROLE_SCOPE" "$LOGDIR/.session-rules")"; then
+    log "dispatch: cannot compose scope rules for role '$role' -- REFUSING session (a dropped scope would widen the agent's remit)"
+    return 2
+  fi
+
+  if [ "$ROLE_INSTANCES" != "1" ]; then
+    log "NOTE roles.$role.instances=$ROLE_INSTANCES not yet supported -- running a single instance (parallel instances are a later increment)"
+  fi
+
+  local log_file; log_file="$LOGDIR/session-$(date +%Y%m%dT%H%M%S).log"
+  log "session start (role=$role model=$MODEL effort=${EFFORT:-default} auth=$auth_note) -> $log_file"
+
+  invoke_scoped_env "$env_lines" \
+    "$prompt_file" "$rules_file" \
     "$MODEL" "$FALLBACK_MODEL" "$log_file" "$EFFORT"
   local rc=$?
 
@@ -467,6 +507,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   err_backoff=$ERR_BACKOFF_START
   limit_backoff=$LIMIT_BACKOFF_START
   paused_logged=0
+  role_rr=0
 
   while true; do
     # Graceful stop: checked at the top so any in-flight session has already
@@ -491,7 +532,23 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
       log "board empty -- idle ${EMPTY_IDLE}s"; sleep "$EMPTY_IDLE"; continue
     fi
 
-    run_session; outcome=$?
+    # Round-robin over the enabled loop roles (re-enumerated every tick so a
+    # config edit applies on the next session). Enumeration failure falls
+    # back to coder-only -- the conservative default; preflight's doctor
+    # check still gates a truly broken pack. NO roles enabled = idle, same
+    # as an empty board.
+    if ! dispatch_list="$(resolve_dispatch_roles)"; then
+      log "WARN role enumeration failed -- coder-only fallback (see supervisor.log)"
+      dispatch_list="coder"
+    fi
+    if [ -z "$dispatch_list" ]; then
+      log "no loop roles enabled -- idle ${EMPTY_IDLE}s"; sleep "$EMPTY_IDLE"; continue
+    fi
+    # shellcheck disable=SC2086  # intentional split: names are [A-Za-z0-9._-] tokens
+    role="$(select_role "$role_rr" $dispatch_list)"
+    role_rr=$(( (role_rr + 1) % 86400 ))
+
+    run_session "$role"; outcome=$?
     case $outcome in
       0) log "session clean (open issues ~$open_count). pace ${PACE}s"
          err_backoff=$ERR_BACKOFF_START; limit_backoff=$LIMIT_BACKOFF_START

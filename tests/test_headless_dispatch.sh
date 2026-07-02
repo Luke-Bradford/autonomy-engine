@@ -139,5 +139,111 @@ check "scope: directive appended" "Scope: only ready." "$(tail -1 "$tmp/composed
 compose_session_rules "$rules" "Scope: x." "$tmp/no-such-dir/out" >/dev/null 2>&1
 check "unwritable compose refuses (rc 1)" "1" "$?"
 
+
+# --- run_session end-to-end (stub adapter via the AUTONOMY_AGENTS_DIR seam) ---
+mkdir -p "$tmp/agents"
+cat > "$tmp/agents/stub.sh" <<'SH'
+agent_invoke() {
+  {
+    echo "key=${ANTHROPIC_API_KEY:-NONE}"
+    echo "prompt=$1"
+    echo "rules=$2"
+    echo "model=$3"
+    echo "effort=${6:-}"
+  } > "${STUB_CAPTURE:?}"
+  return 0
+}
+agent_classify_outcome() { echo "success"; }
+SH
+export AUTONOMY_AGENTS_DIR="$tmp/agents"
+AGENT_TYPE=stub
+export STUB_CAPTURE="$tmp/capture"
+
+# run_session needs: preflight (needs a real git repo -- stub it: dispatch
+# behaviour, not git hygiene, is under test here), CFG, LOGDIR, overrides.
+preflight() { return 0; }
+CFG="$AUTONOMY_TARGET_REPO/.autonomy/config.yaml"
+LOGDIR="$tmp/logs"; mkdir -p "$LOGDIR"
+MODEL_OVERRIDE=""; FALLBACK_MODEL_OVERRIDE=""; EFFORT_OVERRIDE=""
+
+# credentials stub: a legacy #51-C key exists for coder (accounts must win)
+cat > "$tmp/creds-stub" <<'SH'
+#!/bin/sh
+if [ "$1" = "resolve-role" ] && [ "$2" = "coder" ]; then printf 'sk-legacy'; exit 0; fi
+exit 1
+SH
+chmod +x "$tmp/creds-stub"
+export AUTONOMY_CREDENTIALS_BIN="$tmp/creds-stub"
+
+cat > "$AUTONOMY_TARGET_REPO/.autonomy/config.yaml" <<'YAML'
+roles:
+  coder:
+    enabled: true
+    account: acct-good
+  qa:
+    enabled: true
+    trigger: { type: loop }
+    model: claude-opus-4-8
+    effort: high
+    scope: { labels: [ready] }
+    prompt: .autonomy/roles/qa.md
+  broken:
+    enabled: true
+    account: acct-broken
+YAML
+
+grab() { grep "^$1=" "$STUB_CAPTURE" | head -1 | cut -d= -f2-; }
+
+# 1) account-backed role: account env wins over the legacy credential
+unset ANTHROPIC_API_KEY
+run_session coder
+check "account role: session rc 0" "0" "$?"
+check "account role: account key exported (beats #51-C credential)" "sk-acct-77" "$(grab key)"
+check "account role: default loop prompt" "$AUTONOMY_TARGET_REPO/.autonomy/loop_prompt.md" "$(grab prompt)"
+check "account role: plain hard_rules (no scope)" "$AUTONOMY_TARGET_REPO/.autonomy/hard_rules.md" "$(grab rules)"
+check "account role: key never leaks into supervisor" "" "${ANTHROPIC_API_KEY:-}"
+
+# 2) role without account: legacy credential path (best-effort) still runs
+: > "$STUB_CAPTURE"
+run_session qa
+check "credential-less role: session rc 0" "0" "$?"
+check "no account: subscription/none (qa has no credential either)" "NONE" "$(grab key)"
+check "role model reaches the adapter" "claude-opus-4-8" "$(grab model)"
+check "role effort reaches the adapter" "high" "$(grab effort)"
+check "role prompt reaches the adapter" "$AUTONOMY_TARGET_REPO/.autonomy/roles/qa.md" "$(grab prompt)"
+rules_path="$(grab rules)"
+check "scope: composed rules file used" "0" "$([ "$rules_path" != "$AUTONOMY_TARGET_REPO/.autonomy/hard_rules.md" ] && echo 0 || echo 1)"
+check "scope: directive present in composed rules" "Scope: work ONLY within this scope: labels: ready." "$(tail -1 "$rules_path")"
+check "scope: hard rules kept in composed file" "hard rules" "$(head -1 "$rules_path")"
+
+# 3) fail-safe: an unresolvable account REFUSES the session, adapter never runs
+: > "$STUB_CAPTURE"
+run_session broken
+check "broken account: session refused rc 2" "2" "$?"
+check "broken account: adapter never invoked" "" "$(cat "$STUB_CAPTURE")"
+
+# 4) CLI override still beats the role model
+MODEL_OVERRIDE="claude-sonnet-5"
+run_session qa
+check "CLI --model beats roles.qa.model" "claude-sonnet-5" "$(grab model)"
+MODEL_OVERRIDE=""
+
+# 5) one-shot dashboard override beats the role model (applied last)
+printf 'model=claude-haiku-4-5\n' > "$LOGDIR/model-override"
+run_session qa
+check "one-shot override beats roles.qa.model" "claude-haiku-4-5" "$(grab model)"
+check "one-shot override consumed" "1" "$([ -f "$LOGDIR/model-override" ] && echo 0 || echo 1)"
+
+# 6) missing role prompt file refuses (fail-safe)
+rm "$AUTONOMY_TARGET_REPO/.autonomy/roles/qa.md"
+run_session qa
+check "missing prompt file: session refused rc 2" "2" "$?"
+printf 'qa prompt\n' > "$AUTONOMY_TARGET_REPO/.autonomy/roles/qa.md"
+
+# 7) back-compat: no-arg run_session honours the ROLE env contract
+: > "$STUB_CAPTURE"
+ROLE=qa run_session
+check "no-arg run_session uses \$ROLE" "$AUTONOMY_TARGET_REPO/.autonomy/roles/qa.md" "$(grab prompt)"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
