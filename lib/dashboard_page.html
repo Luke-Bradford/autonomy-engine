@@ -101,6 +101,9 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px
 .mctl{flex-wrap:wrap}
 .mctl select{background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);font-family:var(--mono);font-size:10.5px;border-radius:5px;padding:5px 6px;max-width:170px}
 .mctl .pend{align-self:center;font-family:var(--mono);font-size:10px;color:var(--warn)}
+.q-prov{font-family:var(--mono);font-size:9.5px;letter-spacing:1.2px;text-transform:uppercase;color:var(--dim);
+  padding:8px 10px 0;display:flex;align-items:center;gap:6px}
+.q-prov::after{content:"";flex:1;height:1px;background:var(--hair)}
 /* ---- config page (#47) ---- */
 .cfgadd{display:flex;gap:8px;padding:10px;border-bottom:1px solid var(--hair)}
 .cfgrepo{padding:8px 10px;border-bottom:1px solid var(--hair)}
@@ -555,8 +558,33 @@ function renderQuota(repos,account){
     if(q.five_hour&&(!five||q.five_hour.utilization>five.utilization)) five=q.five_hour;
     if(q.seven_day&&(!seven||q.seven_day.utilization>seven.utilization)) seven=q.seven_day;});
   const a=account||{};
-  $("quota").innerHTML=qrow("5-hour window",a.five_hour,five,now)+qrow("weekly window",a.seven_day,seven,now)
-    + `<div class="q"><div class="q-sub" style="margin-top:0"><span>counts from ~/.claude (all sessions); % from Anthropic rate-limit events</span></div></div>`;
+  $("quota").innerHTML=`<div class="q-prov">claude · subscription</div>`
+    + qrow("5-hour window",a.five_hour,five,now)+qrow("weekly window",a.seven_day,seven,now)
+    + `<div class="q"><div class="q-sub" style="margin-top:0"><span>counts from ~/.claude (all sessions); % from Anthropic rate-limit events</span></div></div>`
+    + codexQuota(a.codex,now);
+}
+/* codex lane (#49): from ~/.codex session rollouts. credits render whenever
+   non-null -- that's the API-billed case; on a ChatGPT subscription it's null. */
+function cxrow(label,win,now){
+  if(!win||win.pct==null) return "";
+  const pct=Math.round(win.pct);
+  const cls=(pct>=90)?"hot":(pct>=60)?"mid":"";
+  const reset=win.resets_at?` · resets in <span class="qreset" data-e="${win.resets_at}">${dur(win.resets_at-now)}</span>`:"";
+  return `<div class="q"><div class="q-h"><span class="lab">${esc(label)}</span>
+      <span class="val"><span style="color:${pct>=60?'var(--warn)':'var(--mut)'}">${pct}%</span></span></div>
+    <div class="bar ${cls}"><i style="width:${Math.max(1,pct)}%"></i></div>
+    <div class="q-sub"><span>${esc(label)} usage${reset}</span></div></div>`;
+}
+function codexQuota(cx,now){
+  if(!cx||!cx.available) return "";
+  const plan=cx.plan?` · ${esc(cx.plan)}`:"";
+  const t=cx.tokens_7d||{};
+  const credits=(cx.credits!=null)?`<div class="q"><div class="q-sub" style="margin-top:0"><span style="color:var(--warn)">API credits: <b class="mono">${esc(JSON.stringify(cx.credits))}</b></span></div></div>`:"";
+  return `<div class="q-prov" style="margin-top:10px">codex${plan}</div>`
+    + cxrow("5-hour window",cx.five_hour,now)
+    + cxrow("weekly window",cx.seven_day,now)
+    + credits
+    + `<div class="q"><div class="q-sub" style="margin-top:0"><span>${compact(t.input||0)} in / ${compact(t.output||0)} out tok · ${cx.sessions_7d||0} sess (7d) · from ~/.codex rollouts</span></div></div>`;
 }
 
 /* ---- ACTIVITY ---- */

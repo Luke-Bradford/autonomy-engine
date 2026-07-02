@@ -300,6 +300,10 @@ def _account_usage():
     except Exception:
         usage = {"five_hour": {"sessions": 0, "tokens": 0},
                  "seven_day": {"sessions": 0, "tokens": 0}}
+    try:
+        usage["codex"] = ds.codex_usage(now=now)   # #49: same TTL cache
+    except Exception:
+        usage["codex"] = {"available": False}
     with _acct_lock:
         _acct_cache[0], _acct_cache[1] = now, usage
     return usage
