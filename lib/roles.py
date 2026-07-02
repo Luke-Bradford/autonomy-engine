@@ -1,27 +1,40 @@
 #!/usr/bin/env python3
-"""Role config schema for the multi-role org (#12) -- the single source of
-truth for role enums, the standard roster's defaults, and `roles:` block
+"""Role config schema for the multi-role org -- the single source of truth
+for role enums, the standard roster's defaults, and `roles:` block
 validation. Stdlib only.
 
-The schema (docs/agent-org-design.md):
+The schema (docs/superpowers/specs/2026-07-02-dynamic-agent-org-design.md):
 
     roles:
       <name>:
         enabled: true|false
-        substrate: engine | managed_agents | routine | actions
-        trigger: { type: loop | cron | event, ... }   # or block form
+        account: <name in the accounts registry>   # lib/accounts.py
+        trigger: { type: loop | cron | event, ... } # or block form
+        model: <model id>          effort: <level>
+        models: { plan: ..., implement: ..., test: ... }   # per-phase override
+        scope: { labels: [...], paths: [...], milestone: ..., query: ...,
+                 target: diff|affected|full-regression }   # or bare target
         instances: <positive int>          # optional (parallel loop count)
         prompt: .autonomy/roles/<name>.md  # optional, repo-relative pack file
+        # behaviour knobs (validated by value; custom agents share them):
+        gate: wait-for-human|auto-merge-on-pass   tools: [read] | [read, mcp]
+        regression: { every: <cron> } | { after_tickets: <n> }
+        output: raise-issues|handoff-to-pm        web_search: true|false
+        duties: [groom, prioritise, unblock, spec-check]
+        self_test: true|false     blockers: raise-to-pm|raise-to-human
+        substrate: engine|managed_agents|routine|actions   # legacy, optional
 
 Trigger-specific requirements: cron needs `schedule`; event needs a non-empty
 `on` list. An absent `roles:` block is valid -- the engine's defaults apply
 (only the coder loop enabled).
 
-Two checks, deliberately split: `validate_roles` is pure (shape/enums, no
+Three checks, deliberately split: `validate_roles` is pure (shape/enums, no
 filesystem); `check_prompt_files` takes the repo root and verifies prompt
-paths are repo-relative pack files that exist. doctor.sh runs both via the
-CLI entry `python3 lib/roles.py <target-repo>`, whose exit code carries the
-whole verdict so callers never re-parse the config:
+paths are repo-relative pack files that exist; `check_accounts` takes the
+registry's known names and verifies every `account:` reference resolves.
+doctor.sh runs all three via the CLI entry `python3 lib/roles.py
+<target-repo>`, whose exit code carries the whole verdict so callers never
+re-parse the config:
   0 = valid, roles: block present   3 = valid, no roles: block (defaults)
   1 = invalid (one error per stdout line)   2 = config unreadable
 """
@@ -31,6 +44,17 @@ from datetime import datetime, timedelta, timezone
 
 VALID_SUBSTRATES = ("engine", "managed_agents", "routine", "actions")
 VALID_TRIGGERS = ("loop", "cron", "event")
+VALID_PHASES = ("plan", "implement", "test")
+VALID_SCOPE_TARGETS = ("diff", "affected", "full-regression")
+_SCOPE_KEYS = ("labels", "paths", "milestone", "query", "target")
+VALID_GATES = ("wait-for-human", "auto-merge-on-pass")
+VALID_TOOLS = ("read", "mcp")
+VALID_OUTPUTS = ("raise-issues", "handoff-to-pm")
+VALID_DUTIES = ("groom", "prioritise", "unblock", "spec-check")
+VALID_BLOCKERS = ("raise-to-pm", "raise-to-human")
+_ENUM_KNOBS = (("gate", VALID_GATES), ("output", VALID_OUTPUTS),
+               ("blockers", VALID_BLOCKERS))
+_BOOL_KNOBS = ("web_search", "self_test")
 
 # The standard roster and its defaults: (name, enabled, substrate, trigger).
 # Only the coder loop is on by default; everything else is an explicit,
@@ -48,6 +72,86 @@ def _is_positive_int(v):
         return int(str(v)) > 0
     except (TypeError, ValueError):
         return False
+
+
+def _is_nonempty_str(v):
+    return isinstance(v, str) and bool(v.strip())
+
+
+def _validate_scope(name, scope):
+    """`scope:` -- what an agent works over. Either a bare target string
+    (legacy shorthand: `scope: diff`) or a mapping with any of labels/paths
+    (non-empty inline lists), milestone/query (non-empty strings), target
+    (diff | affected | full-regression). Empty mapping = whole open board
+    (today's behaviour)."""
+    if scope is None:
+        return []
+    if isinstance(scope, str):
+        if scope not in VALID_SCOPE_TARGETS:
+            return ["roles.%s: unknown scope target %r (valid: %s)"
+                    % (name, scope, ", ".join(VALID_SCOPE_TARGETS))]
+        return []
+    if not isinstance(scope, dict):
+        return ["roles.%s: scope must be a mapping or a target string" % name]
+    errors = []
+    for key in sorted(scope):
+        val = scope[key]
+        if key not in _SCOPE_KEYS:
+            errors.append("roles.%s: unknown scope key %r (valid: %s)"
+                          % (name, key, ", ".join(_SCOPE_KEYS)))
+        elif key in ("labels", "paths"):
+            if not isinstance(val, list) or not val or \
+                    not all(str(v).strip() for v in val):
+                errors.append("roles.%s: scope.%s must be a non-empty list"
+                              % (name, key))
+        elif key == "target":
+            if val not in VALID_SCOPE_TARGETS:
+                errors.append("roles.%s: unknown scope target %r (valid: %s)"
+                              % (name, val, ", ".join(VALID_SCOPE_TARGETS)))
+        elif not _is_nonempty_str(val):
+            errors.append("roles.%s: scope.%s must be a non-empty string"
+                          % (name, key))
+    return errors
+
+
+def _validate_knobs(name, cfg):
+    """Behaviour knobs (design spec, Layer 2 knob table). Validated by value
+    wherever they appear -- custom agents share the standard roster's knobs.
+    `gate: auto-merge-on-pass` still routes through merge_gate.strategy; the
+    knob never bypasses the merge authority."""
+    errors = []
+    for knob, valid in _ENUM_KNOBS:
+        if knob in cfg and cfg.get(knob) not in valid:
+            errors.append("roles.%s: %s must be one of %s (got %r)"
+                          % (name, knob, ", ".join(valid), cfg.get(knob)))
+    for knob in _BOOL_KNOBS:
+        if knob in cfg and not isinstance(cfg.get(knob), bool):
+            errors.append("roles.%s: %s must be true or false" % (name, knob))
+    tools = cfg.get("tools")
+    if tools is not None and (not isinstance(tools, list) or not tools
+                              or any(t not in VALID_TOOLS for t in tools)):
+        errors.append("roles.%s: tools must be a non-empty list from [%s]"
+                      % (name, ", ".join(VALID_TOOLS)))
+    duties = cfg.get("duties")
+    if duties is not None and (not isinstance(duties, list) or not duties
+                               or any(d not in VALID_DUTIES for d in duties)):
+        errors.append("roles.%s: duties must be a non-empty list from [%s]"
+                      % (name, ", ".join(VALID_DUTIES)))
+    regression = cfg.get("regression")
+    if regression is not None:
+        if not isinstance(regression, dict) or sorted(regression) not in (
+                ["after_tickets"], ["every"]):
+            errors.append("roles.%s: regression must be { every: <cron> } or "
+                          "{ after_tickets: <n> }" % name)
+        elif "every" in regression and \
+                cron_next_fire(regression["every"], 0) is None:
+            errors.append("roles.%s: regression.every is not a valid cron "
+                          "schedule: %r" % (name, regression["every"]))
+        elif "after_tickets" in regression and \
+                not _is_positive_int(regression["after_tickets"]):
+            errors.append("roles.%s: regression.after_tickets must be a "
+                          "positive integer" % name)
+    return errors
 
 
 def validate_roles(config):
@@ -85,6 +189,29 @@ def validate_roles(config):
                                       "non-empty 'on' list" % name)
         if "instances" in cfg and not _is_positive_int(cfg.get("instances")):
             errors.append("roles.%s: instances must be a positive integer" % name)
+        if "account" in cfg and not _is_nonempty_str(cfg.get("account")):
+            errors.append("roles.%s: account must be a non-empty account name"
+                          % name)
+        for field in ("model", "effort"):
+            if field in cfg and not _is_nonempty_str(cfg.get(field)):
+                errors.append("roles.%s: %s must be a non-empty string"
+                              % (name, field))
+        models = cfg.get("models")
+        if models is not None:
+            if not isinstance(models, dict) or not models:
+                errors.append("roles.%s: models must be a non-empty mapping "
+                              "of phase -> model" % name)
+            else:
+                for phase in sorted(models):
+                    if phase not in VALID_PHASES:
+                        errors.append(
+                            "roles.%s: unknown models phase %r (valid: %s)"
+                            % (name, phase, ", ".join(VALID_PHASES)))
+                    elif not _is_nonempty_str(models[phase]):
+                        errors.append("roles.%s: models.%s must be a model "
+                                      "name" % (name, phase))
+        errors.extend(_validate_scope(name, cfg.get("scope")))
+        errors.extend(_validate_knobs(name, cfg))
     return errors
 
 
@@ -114,6 +241,32 @@ def check_prompt_files(config, repo_root):
             continue
         if not os.path.isfile(full):
             errors.append("roles.%s: prompt file not found: %s" % (name, prompt))
+    return errors
+
+
+def check_accounts(config, known_account_names):
+    """Verify each role's `account:` names an entry in the machine accounts
+    registry (lib/accounts.py, increment 1). Pure -- the caller supplies the
+    known names; the CLI entry loads the real registry. A reference to a
+    missing account is an error: that agent could never resolve auth
+    (fail-safe, never fail-open). Shape problems (non-string/empty) are
+    validate_roles' verdict, not duplicated here."""
+    errors = []
+    roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
+    if not isinstance(roles_blk, dict):
+        return errors
+    known = set(known_account_names or ())
+    for name, cfg in roles_blk.items():
+        if not isinstance(cfg, dict):
+            continue
+        account = cfg.get("account")
+        if not _is_nonempty_str(account):
+            continue
+        if account not in known:
+            errors.append("roles.%s: account %r not found in the accounts "
+                          "registry -- create it first: "
+                          "python3 lib/accounts.py set %r <kind> [credential]"
+                          % (name, account, account))
     return errors
 
 
@@ -211,7 +364,10 @@ def main(argv):
     except ValueError as exc:
         print("roles: config.yaml does not parse: %s" % exc, file=sys.stderr)
         return 1
-    errors = validate_roles(config) + check_prompt_files(config, repo)
+    import accounts as accounts_mod
+    known = [e["name"] for e in accounts_mod.Accounts().list()]
+    errors = (validate_roles(config) + check_prompt_files(config, repo)
+              + check_accounts(config, known))
     for e in errors:
         print(e)
     if errors:

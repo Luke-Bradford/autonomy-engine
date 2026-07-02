@@ -293,5 +293,49 @@ class TestSetCli(unittest.TestCase):
         self.assertEqual(Path(path).read_text(), self.TEXT)
 
 
+class TestAgentOrgShapes(unittest.TestCase):
+    """Increment-2 schema shapes (agent-org design spec, Layer 2) -- the
+    restricted parser must keep handling these exact forms."""
+
+    def test_models_flow_mapping(self):
+        cfg = config_parser.parse(
+            "roles:\n  coder:\n"
+            "    models: { plan: claude-opus-4-8, implement: claude-sonnet-5, test: claude-haiku-4-5 }\n")
+        self.assertEqual(cfg["roles"]["coder"]["models"],
+                         {"plan": "claude-opus-4-8",
+                          "implement": "claude-sonnet-5",
+                          "test": "claude-haiku-4-5"})
+
+    def test_scope_flow_mapping_with_list(self):
+        cfg = config_parser.parse(
+            "roles:\n  coder:\n"
+            "    scope: { labels: [ready, bug], milestone: current }\n")
+        self.assertEqual(cfg["roles"]["coder"]["scope"],
+                         {"labels": ["ready", "bug"], "milestone": "current"})
+
+    def test_scope_block_form(self):
+        cfg = config_parser.parse(
+            "roles:\n  qa:\n    scope:\n      target: diff\n")
+        self.assertEqual(cfg["roles"]["qa"]["scope"], {"target": "diff"})
+
+    def test_regression_after_tickets(self):
+        cfg = config_parser.parse(
+            "roles:\n  qa:\n    regression: { after_tickets: 10 }\n")
+        self.assertEqual(cfg["roles"]["qa"]["regression"], {"after_tickets": "10"})
+
+    def test_regression_every_cron(self):
+        cfg = config_parser.parse(
+            'roles:\n  qa:\n    regression: { every: "0 3 * * 0" }\n')
+        self.assertEqual(cfg["roles"]["qa"]["regression"], {"every": "0 3 * * 0"})
+
+    def test_tools_and_duties_inline_lists(self):
+        cfg = config_parser.parse(
+            "roles:\n  qa:\n    tools: [read, mcp]\n  pm:\n"
+            "    duties: [groom, prioritise, unblock, spec-check]\n")
+        self.assertEqual(cfg["roles"]["qa"]["tools"], ["read", "mcp"])
+        self.assertEqual(cfg["roles"]["pm"]["duties"],
+                         ["groom", "prioritise", "unblock", "spec-check"])
+
+
 if __name__ == "__main__":
     unittest.main()

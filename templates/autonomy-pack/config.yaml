@@ -32,34 +32,44 @@ merge_gate:
 worktree:
   default_path: "../.{repo-slug}-autonomy"
 
-# Multi-role org (optional -- absent means: coder loop only). Each role:
-# enabled + substrate (engine | managed_agents | routine | actions) +
-# trigger ({ type: loop | cron | event, ... }). `prompt:` must point at a
-# real pack file under .autonomy/roles/, never a copy. Validate with
-# doctor.sh. See autonomy-engine/docs/agent-org-design.md.
+# Multi-role org (autonomy-engine docs/superpowers/specs/
+# 2026-07-02-dynamic-agent-org-design.md). Every agent -- standard or custom
+# -- is the same declarative shape: enabled + account (a name from the
+# machine accounts registry: python3 lib/accounts.py list) + trigger
+# ({ type: loop | cron | event, ... }) + model/effort (or per-phase models)
+# + scope (what it works over; empty = whole open board) + behaviour knobs.
+# `prompt:` must point at a real pack file under .autonomy/roles/, never a
+# copy. Validate with doctor.sh.
 # roles:
 #   coder:
 #     enabled: true
-#     substrate: engine
+#     account: claude-sub              # python3 lib/accounts.py set claude-sub claude_subscription
 #     trigger: { type: loop }
+#     model: claude-sonnet-5
+#     models: { plan: claude-opus-4-8, implement: claude-sonnet-5, test: claude-haiku-4-5 }
+#     scope: { labels: [ready], milestone: current }
+#     self_test: true                  # agents test their own work
+#     blockers: raise-to-pm            # raise-to-pm | raise-to-human
 #     instances: 1
-#   pm:
-#     enabled: false
-#     substrate: managed_agents
-#     trigger: { type: cron, schedule: "0 */6 * * *" }
-#     prompt: .autonomy/roles/pm.md
 #   qa:
 #     enabled: false
-#     substrate: routine
-#     trigger:
-#       type: event
-#       on: [pull_request_review.approved, workflow_run.completed]
-#       reconcile_cron: "*/10 * * * *"
-#     scope: diff
-#     completes_merge: true          # still gated by merge_gate.strategy
+#     account: claude-sub
+#     trigger: { type: event, on: [pr.opened, pr.synchronize] }
+#     scope: { target: diff }          # diff | affected | full-regression
+#     gate: wait-for-human             # wait-for-human | auto-merge-on-pass (still gated by merge_gate.strategy)
+#     tools: [read]                    # [read] | [read, mcp]
+#     regression: { after_tickets: 10 }  # or { every: "0 3 * * 0" }; omit = off
 #     prompt: .autonomy/roles/qa.md
+#   pm:
+#     enabled: false
+#     account: claude-sub
+#     trigger: { type: cron, schedule: "0 */6 * * *" }
+#     duties: [groom, prioritise, unblock, spec-check]
+#     prompt: .autonomy/roles/pm.md
 #   researcher:
 #     enabled: false
-#     substrate: managed_agents
+#     account: codex-sub               # python3 lib/accounts.py set codex-sub codex_subscription
 #     trigger: { type: cron, schedule: "0 3 * * *" }
+#     output: handoff-to-pm            # raise-issues | handoff-to-pm
+#     web_search: false
 #     prompt: .autonomy/roles/researcher.md

@@ -4,7 +4,9 @@ validate_roles is the single validation authority for the `roles:` block:
 enum-checked substrate/trigger, trigger-specific required sub-fields, sane
 scalars. Pure (no filesystem); prompt-file existence is a separate,
 path-taking check so doctor can report it distinctly."""
+import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -186,6 +188,241 @@ class TestDefaults(unittest.TestCase):
         self.assertEqual(coder, ("coder", True, "engine", "loop"))
         # only coder enabled by default
         self.assertTrue(all(not r[1] for r in roles.DEFAULT_ROLES[1:]))
+
+
+class TestIncrement2Fields(unittest.TestCase):
+    """account/model/effort/models/scope shape validation (agent-org spec)."""
+
+    def test_full_spec_example_validates(self):
+        cfg = parse(
+            "roles:\n"
+            "  coder:\n"
+            "    enabled: true\n"
+            "    account: claude-sub\n"
+            "    trigger: { type: loop }\n"
+            "    model: claude-sonnet-5\n"
+            "    effort: high\n"
+            "    scope: { labels: [ready], milestone: current }\n"
+            "  qa:\n"
+            "    enabled: true\n"
+            "    account: anthropic-work\n"
+            "    trigger: { type: event, on: [pr.opened, pr.synchronize] }\n"
+            "    model: claude-opus-4-8\n"
+            "    scope: { target: diff }\n"
+            "  researcher:\n"
+            "    enabled: false\n"
+            "    account: codex-sub\n"
+            '    trigger: { type: cron, schedule: "0 3 * * *" }\n'
+            "    models: { plan: claude-opus-4-8, implement: claude-sonnet-5, test: claude-haiku-4-5 }\n")
+        self.assertEqual(roles.validate_roles(cfg), [])
+
+    def test_account_must_be_nonempty(self):
+        cfg = parse("roles:\n  coder:\n    account: \"\"\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("account" in e and "coder" in e for e in errs))
+
+    def test_model_and_effort_must_be_nonempty_strings(self):
+        for field in ("model", "effort"):
+            cfg = parse("roles:\n  coder:\n    %s: \"\"\n" % field)
+            errs = roles.validate_roles(cfg)
+            self.assertTrue(any(field in e for e in errs),
+                            "expected an error for empty %s" % field)
+
+    def test_models_unknown_phase(self):
+        cfg = parse("roles:\n  coder:\n    models: { deploy: claude-sonnet-5 }\n")
+        errs = roles.validate_roles(cfg)
+        self.assertEqual(len(errs), 1)
+        self.assertIn("deploy", errs[0])
+        self.assertIn("plan", errs[0])  # error names the valid phases
+
+    def test_models_must_be_mapping(self):
+        cfg = parse("roles:\n  coder:\n    models: claude-sonnet-5\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("models" in e for e in errs))
+
+    def test_scope_bare_target_shorthand(self):
+        # legacy form from the old template: scope: diff
+        cfg = parse("roles:\n  qa:\n    scope: diff\n")
+        self.assertEqual(roles.validate_roles(cfg), [])
+
+    def test_scope_bare_string_must_be_valid_target(self):
+        cfg = parse("roles:\n  qa:\n    scope: everything\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("scope" in e and "everything" in e for e in errs))
+
+    def test_scope_unknown_key(self):
+        cfg = parse("roles:\n  coder:\n    scope: { repos: [a, b] }\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("repos" in e for e in errs))
+
+    def test_scope_labels_must_be_nonempty_list(self):
+        cfg = parse("roles:\n  coder:\n    scope: { labels: ready }\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("labels" in e for e in errs))
+
+    def test_scope_target_enum(self):
+        cfg = parse("roles:\n  qa:\n    scope: { target: everything }\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("target" in e and "everything" in e for e in errs))
+
+    def test_scope_empty_mapping_is_whole_board(self):
+        cfg = parse("roles:\n  coder:\n    scope: {}\n")
+        self.assertEqual(roles.validate_roles(cfg), [])
+
+
+class TestBehaviourKnobs(unittest.TestCase):
+    """QA/PM/Researcher/Coder behaviour knobs -- validated by value wherever
+    they appear (custom agents get the same knobs)."""
+
+    def test_spec_knob_examples_validate(self):
+        cfg = parse(
+            "roles:\n"
+            "  qa:\n"
+            "    gate: wait-for-human\n"
+            "    tools: [read, mcp]\n"
+            '    regression: { every: "0 3 * * 0" }\n'
+            "  researcher:\n"
+            "    output: handoff-to-pm\n"
+            "    web_search: true\n"
+            "  pm:\n"
+            "    duties: [groom, prioritise, unblock, spec-check]\n"
+            "  coder:\n"
+            "    self_test: true\n"
+            "    blockers: raise-to-pm\n")
+        self.assertEqual(roles.validate_roles(cfg), [])
+
+    def test_gate_enum(self):
+        cfg = parse("roles:\n  qa:\n    gate: yolo-merge\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("gate" in e and "yolo-merge" in e for e in errs))
+
+    def test_output_enum(self):
+        cfg = parse("roles:\n  researcher:\n    output: tweet\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("output" in e for e in errs))
+
+    def test_blockers_enum(self):
+        cfg = parse("roles:\n  coder:\n    blockers: give-up\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("blockers" in e for e in errs))
+
+    def test_bool_knobs_must_be_bool(self):
+        for knob in ("web_search", "self_test"):
+            cfg = parse("roles:\n  r:\n    %s: yes\n" % knob)  # bare 'yes' parses as string
+            errs = roles.validate_roles(cfg)
+            self.assertTrue(any(knob in e for e in errs),
+                            "expected an error for non-bool %s" % knob)
+
+    def test_tools_subset(self):
+        cfg = parse("roles:\n  qa:\n    tools: [read, bash]\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("tools" in e for e in errs))
+
+    def test_tools_empty_list_invalid(self):
+        cfg = parse("roles:\n  qa:\n    tools: []\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("tools" in e for e in errs))
+
+    def test_duties_subset(self):
+        cfg = parse("roles:\n  pm:\n    duties: [groom, moan]\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("duties" in e for e in errs))
+
+    def test_regression_after_tickets(self):
+        cfg = parse("roles:\n  qa:\n    regression: { after_tickets: 10 }\n")
+        self.assertEqual(roles.validate_roles(cfg), [])
+
+    def test_regression_after_tickets_positive(self):
+        cfg = parse("roles:\n  qa:\n    regression: { after_tickets: 0 }\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("after_tickets" in e for e in errs))
+
+    def test_regression_bad_cron(self):
+        cfg = parse('roles:\n  qa:\n    regression: { every: "not cron" }\n')
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("regression" in e for e in errs))
+
+    def test_regression_needs_exactly_one_key(self):
+        cfg = parse('roles:\n  qa:\n    regression: { every: "0 3 * * 0", after_tickets: 5 }\n')
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("regression" in e for e in errs))
+        cfg = parse("roles:\n  qa:\n    regression: {}\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("regression" in e for e in errs))
+
+
+class TestCheckAccounts(unittest.TestCase):
+    """account: must name an entry in the accounts registry. Pure -- known
+    names injected, same seam as check_prompt_files."""
+
+    def test_known_account_passes(self):
+        cfg = parse("roles:\n  coder:\n    account: claude-sub\n")
+        self.assertEqual(roles.check_accounts(cfg, ["claude-sub"]), [])
+
+    def test_unknown_account_is_error(self):
+        cfg = parse("roles:\n  coder:\n    account: nope\n")
+        errs = roles.check_accounts(cfg, ["claude-sub"])
+        self.assertEqual(len(errs), 1)
+        self.assertIn("nope", errs[0])
+        self.assertIn("coder", errs[0])
+
+    def test_empty_registry_fails_any_reference(self):
+        cfg = parse("roles:\n  coder:\n    account: claude-sub\n")
+        self.assertEqual(len(roles.check_accounts(cfg, [])), 1)
+
+    def test_no_account_field_is_fine(self):
+        cfg = parse("roles:\n  coder:\n    enabled: true\n")
+        self.assertEqual(roles.check_accounts(cfg, []), [])
+
+    def test_malformed_account_left_to_validate_roles(self):
+        # shape errors are validate_roles' verdict; no duplicate report here
+        cfg = parse('roles:\n  coder:\n    account: ""\n')
+        self.assertEqual(roles.check_accounts(cfg, []), [])
+
+
+class TestMainAccountWiring(unittest.TestCase):
+    """roles.py <target-repo> folds check_accounts in, loading the registry
+    from $HOME/.config/autonomy/accounts (accounts.py's default path)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.repo = os.path.join(self.tmp, "repo")
+        os.makedirs(os.path.join(self.repo, ".autonomy"))
+        self.home = os.path.join(self.tmp, "home")
+        os.makedirs(os.path.join(self.home, ".config", "autonomy"))
+        with open(os.path.join(self.home, ".config", "autonomy", "accounts"),
+                  "w", encoding="utf-8") as fh:
+            json.dump({"accounts": {"claude-sub":
+                                    {"kind": "claude_subscription"}}}, fh)
+        self._old_home = os.environ.get("HOME")
+        os.environ["HOME"] = self.home
+        self.addCleanup(self._restore_home)
+
+    def _restore_home(self):
+        if self._old_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = self._old_home
+
+    def _write_config(self, text):
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    def test_known_account_exits_0(self):
+        self._write_config("roles:\n  coder:\n    account: claude-sub\n"
+                           "    trigger: { type: loop }\n")
+        self.assertEqual(roles.main(["roles.py", self.repo]), 0)
+
+    def test_unknown_account_exits_1(self):
+        self._write_config("roles:\n  coder:\n    account: no-such\n"
+                           "    trigger: { type: loop }\n")
+        self.assertEqual(roles.main(["roles.py", self.repo]), 1)
+
+    def test_no_roles_block_still_exits_3(self):
+        self._write_config("engine:\n  requires_claude_md: false\n")
+        self.assertEqual(roles.main(["roles.py", self.repo]), 3)
 
 
 if __name__ == "__main__":
