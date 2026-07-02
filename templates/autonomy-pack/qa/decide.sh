@@ -41,11 +41,21 @@ qa_join_ready() {
     echo "qa_gate: REFUSE -- cannot verify CI state (gh failed) -- refusing rather than assuming green" >&2
     return 1
   fi
-  # our own qa-gate check is always pending at this point -- exclude it
-  checks_json="$(printf '%s' "$checks_json" | python3 -c '
+  # our own qa-gate check is always pending at this point -- exclude it.
+  # Guard the substitution: a python-filter failure (missing python, gh
+  # output-shape change) or empty output is an unverifiable CI state -- refuse
+  # rather than let an empty checks_json fall through to green below. Same
+  # fail-safe invariant as the gh-failure branch above (prevention-log #2/#3).
+  local filtered
+  if ! filtered="$(printf '%s' "$checks_json" | python3 -c '
 import json, sys
 checks = json.load(sys.stdin)
-print(json.dumps([c for c in checks if c.get("name") != "'"$QA_CONTEXT"'"]))')"
+print(json.dumps([c for c in checks if c.get("name") != "'"$QA_CONTEXT"'"]))')" \
+     || [ -z "$filtered" ]; then
+    echo "qa_gate: REFUSE -- cannot filter CI state (python filter failed/empty) -- refusing rather than assuming green" >&2
+    return 1
+  fi
+  checks_json="$filtered"
   if printf '%s' "$checks_json" | grep -qiE '"state":[[:space:]]*"(fail|failure|error|cancelled|timed_out)"'; then
     echo "qa_gate: not ready -- a CI check is failing on #$pr" >&2
     return 1
