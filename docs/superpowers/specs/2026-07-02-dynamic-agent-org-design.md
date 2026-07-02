@@ -198,12 +198,21 @@ watching logs. Sourced from a label convention (`needs-human`) + agent-emitted e
 
 ## Config page as the front door
 
-`./start` on a fresh machine currently dead-ends at CLI guidance. Revise: with nothing set up,
-`./start` should **launch the dashboard and open the browser at the config page**, which becomes
-the authoring surface for everything above — accounts, agents (standard + custom), their trigger/
-schedule, account assignment, model(s), scope, and behaviour knobs. Driving config from files
-stays supported; the page is the primary path. This folds sub-project A (onboarding UX) into the
-config page built in #47/#51-B.
+`./start` on a fresh machine currently dead-ends at CLI guidance. Revise the trigger and the
+destination:
+
+- **Front-door trigger = "the org isn't configured yet"**, not merely "no repos registered". If
+  no agents/roles are set up (nothing beyond the defaults, or no accounts, or no repos), `./start`
+  **launches the dashboard and opens the browser straight at the config page**. The config page is
+  the authoring surface for everything above — accounts, agents (standard + custom), their
+  trigger/schedule, account assignment, model(s), scope, and behaviour knobs.
+- **Bidirectional navigation, always available** (not just on first run): the main dashboard keeps
+  its `⚙ config` header link → `/config`, and the config page keeps its `← control room` link →
+  `/`. Both directions already scaffolded in #51-B; this spec makes them a permanent contract, so
+  a configured operator can always jump between live monitoring and settings.
+
+Driving config from files stays supported; the page is the primary path. This folds sub-project A
+(onboarding UX) into the config page built in #47/#51-B.
 
 ---
 
