@@ -252,16 +252,128 @@ resolve_role_credential() {
   fi
 }
 
-# Run agent_invoke with $1 (a resolved key, "" = none) exported in a SUBSHELL,
-# so the key is scoped to the one session and never lands in the supervisor's
-# own environment (a long-lived process). $2.. pass straight to agent_invoke.
+# Run agent_invoke with $1 -- zero or more VAR=value lines, exactly what
+# `accounts.py resolve` prints -- exported in a SUBSHELL, so account keys are
+# scoped to the one session and never land in the supervisor's own
+# environment (a long-lived process). Empty $1 = whatever auth the ambient
+# env already has (subscription). Generalises the #51-C single-key form.
+invoke_scoped_env() {
+  local env_lines="$1"; shift
+  if [ -z "$env_lines" ]; then
+    agent_invoke "$@"
+    return $?
+  fi
+  (
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      case "${line%%=*}" in
+        ''|*[!A-Za-z0-9_]*) continue ;;   # not a sane env var name -- skip
+      esac
+      # shellcheck disable=SC2163
+      export "${line%%=*}=${line#*=}"
+    done <<EOF
+$env_lines
+EOF
+    agent_invoke "$@"
+  )
+}
+
+# Back-compat single-key form (#51-C): a resolved role credential ("" = none).
 invoke_scoped_key() {
   local key="$1"; shift
   if [ -n "$key" ]; then
-    ( export ANTHROPIC_API_KEY="$key"; agent_invoke "$@" )
+    invoke_scoped_env "ANTHROPIC_API_KEY=$key" "$@"
   else
-    agent_invoke "$@"
+    invoke_scoped_env "" "$@"
   fi
+}
+
+# --- headless multi-agent dispatch (agent-org increment 3) -------------------
+# The supervisor dispatches EVERY enabled `roles:` agent whose trigger is
+# `loop`, round-robin -- one session per loop iteration -- exactly the way it
+# has always run Coder. Enumeration re-resolves every tick so config edits
+# apply on the next session. Cron/event triggers belong to increment 4's
+# scheduler/event bus and are never dispatched here.
+
+# Enabled loop-role names, one per line (roles.py dispatch contract). The
+# caller handles rc!=0 (fail back to coder-only) and empty output (idle).
+resolve_dispatch_roles() {
+  python3 "$ENGINE_HOME/lib/roles.py" dispatch "$AUTONOMY_TARGET_REPO" 2>>"$SUPLOG"
+}
+
+# Round-robin selector: print argument ((idx mod n)+1) of the names in $2..;
+# rc 1 when the list is empty. Role names are [A-Za-z0-9._-] by the dispatch
+# contract, so callers may word-split the enumeration safely.
+select_role() {
+  local idx="$1"; shift
+  [ $# -gt 0 ] || return 1
+  shift $(( idx % $# ))
+  printf '%s' "$1"
+}
+
+# Parse `roles.py dispatch <repo> <role>` KEY=value output into ROLE_*
+# globals. rc 1 = the role is not dispatchable / settings unreadable -- the
+# caller REFUSES the session (fail-safe). Model/effort values came from a
+# config a dashboard may write: validate before they can land in argv
+# (defense-in-depth parity with consume_model_override).
+resolve_role_dispatch() {
+  local role="$1" out line key val
+  ROLE_ACCOUNT=""; ROLE_MODEL=""; ROLE_EFFORT=""; ROLE_PROMPT=""
+  ROLE_SCOPE=""; ROLE_INSTANCES=1
+  out="$(python3 "$ENGINE_HOME/lib/roles.py" dispatch "$AUTONOMY_TARGET_REPO" "$role" 2>>"$SUPLOG")" || return 1
+  # shellcheck disable=SC2034  # ROLE_ACCOUNT/PROMPT/SCOPE/INSTANCES are the dispatch contract consumed by run_session (wired in the next commit)
+  while IFS= read -r line; do
+    key="${line%%=*}"; val="${line#*=}"
+    case "$key" in
+      ACCOUNT)   ROLE_ACCOUNT="$val" ;;
+      MODEL)     ROLE_MODEL="$val" ;;
+      EFFORT)    ROLE_EFFORT="$val" ;;
+      PROMPT)    ROLE_PROMPT="$val" ;;
+      SCOPE)     ROLE_SCOPE="$val" ;;
+      INSTANCES) ROLE_INSTANCES="$val" ;;
+    esac
+  done <<EOF
+$out
+EOF
+  if [ -n "$ROLE_MODEL" ] && ! valid_model_id "$ROLE_MODEL"; then
+    log "WARN roles.$role.model is not a valid model id -- ignored"
+    ROLE_MODEL=""
+  fi
+  if [ -n "$ROLE_EFFORT" ] && ! valid_effort "$ROLE_EFFORT"; then
+    log "WARN roles.$role.effort invalid (valid: low|medium|high|xhigh|max) -- ignored"
+    ROLE_EFFORT=""
+  fi
+  return 0
+}
+
+# Resolve an account name to its session env (VAR=value lines) via
+# lib/accounts.py (increment 1). Subscriptions print nothing (rc 0). rc 1 =
+# unresolvable: the caller MUST refuse the session -- never run on broken
+# auth (fail-safe, never fail-open). accounts.py's stderr reason lands in
+# the supervisor log; the secret itself is never logged.
+# $AUTONOMY_ACCOUNTS_BIN is the test seam (same pattern as
+# AUTONOMY_CREDENTIALS_BIN).
+resolve_account_env() {
+  if [ -n "${AUTONOMY_ACCOUNTS_BIN:-}" ]; then
+    "$AUTONOMY_ACCOUNTS_BIN" resolve "$1" 2>>"$SUPLOG"
+  else
+    python3 "$ENGINE_HOME/lib/accounts.py" resolve "$1" 2>>"$SUPLOG"
+  fi
+}
+
+# Compose the session's system-prompt file: the pack's hard_rules plus the
+# role's one-line scope directive. Prints the path to hand the adapter. No
+# scope -> the original hard_rules path untouched. A compose FAILURE refuses
+# (rc 1): silently dropping a scope would widen the agent's remit
+# (fail-open), so the caller skips the session instead.
+compose_session_rules() {
+  local rules_file="$1" scope_line="$2" out_file="$3"
+  if [ -z "$scope_line" ]; then
+    printf '%s' "$rules_file"
+    return 0
+  fi
+  { cat "$rules_file" && printf '\n%s\n' "$scope_line"; } >"$out_file" 2>>"$SUPLOG" || return 1
+  printf '%s' "$out_file"
 }
 
 run_session() {
