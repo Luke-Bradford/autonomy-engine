@@ -43,7 +43,7 @@ worktree:
 # roles:
 #   coder:
 #     enabled: true
-#     account: claude-sub              # accounts.py set claude-sub claude_subscription
+#     account: claude-sub              # python3 lib/accounts.py set claude-sub claude_subscription
 #     trigger: { type: loop }
 #     model: claude-sonnet-5
 #     models: { plan: claude-opus-4-8, implement: claude-sonnet-5, test: claude-haiku-4-5 }
@@ -68,7 +68,7 @@ worktree:
 #     prompt: .autonomy/roles/pm.md
 #   researcher:
 #     enabled: false
-#     account: codex-sub               # accounts.py set codex-sub codex_subscription
+#     account: codex-sub               # python3 lib/accounts.py set codex-sub codex_subscription
 #     trigger: { type: cron, schedule: "0 3 * * *" }
 #     output: handoff-to-pm            # raise-issues | handoff-to-pm
 #     web_search: false

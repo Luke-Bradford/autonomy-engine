@@ -265,7 +265,7 @@ def check_accounts(config, known_account_names):
         if account not in known:
             errors.append("roles.%s: account %r not found in the accounts "
                           "registry -- create it first: "
-                          "python3 lib/accounts.py set %s <kind> [credential]"
+                          "python3 lib/accounts.py set %r <kind> [credential]"
                           % (name, account, account))
     return errors
 
