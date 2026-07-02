@@ -42,6 +42,11 @@ class Accounts:
                 data = json.load(fh)
         except (OSError, ValueError):
             data = {}
+        # Valid JSON that isn't a dict (bare list/scalar) would blow up the
+        # setdefault below with AttributeError; coerce it to the same empty
+        # registry a syntax error yields (graceful degradation, not a crash).
+        if not isinstance(data, dict):
+            data = {}
         data.setdefault("accounts", {})
         return data
 

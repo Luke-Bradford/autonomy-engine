@@ -81,6 +81,19 @@ class TestAccountsCrud(unittest.TestCase):
         self.assertEqual(a.list(), [])
         self.assertIsNone(a.get("nope"))
 
+    def test_non_dict_index_degrades_to_empty_not_crash(self):
+        # A file that parses as valid JSON but is not a dict (bare list/scalar)
+        # must degrade to an empty registry, NOT raise AttributeError out of
+        # _load()'s setdefault. Same graceful-degradation as a syntax error.
+        Path(self.index).write_text("[]")
+        self.assertEqual(self.a.list(), [])
+        self.assertIsNone(self.a.get("nope"))
+        Path(self.index).write_text('"a bare string"')
+        self.assertEqual(self.a.list(), [])
+        # writes still work on top of the coerced-empty registry
+        self.a.set("work", "claude_subscription")
+        self.assertEqual([e["name"] for e in self.a.list()], ["work"])
+
 
 class TestResolve(unittest.TestCase):
     def setUp(self):

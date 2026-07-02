@@ -137,6 +137,18 @@ class TestCredentials(unittest.TestCase):
         self.assertEqual(c.list(), [])
         self.assertEqual(c.assignments(), {})
 
+    def test_non_dict_index_degrades_to_empty_not_crash(self):
+        # Valid JSON that isn't a dict (bare list/scalar) must degrade to an
+        # empty index, NOT raise AttributeError out of _load()'s setdefault.
+        Path(self.index).write_text("[]")
+        self.assertEqual(self.c.list(), [])
+        self.assertEqual(self.c.assignments(), {})
+        Path(self.index).write_text("42")
+        self.assertEqual(self.c.list(), [])
+        # writes still work on top of the coerced-empty index
+        self.c.set("work", "s", provider="anthropic", now=1000)
+        self.assertEqual([e["label"] for e in self.c.list()], ["work"])
+
 
 class TestCliErrors(unittest.TestCase):
     """PR #52 review: a failing `security` subprocess must exit 1 cleanly,
