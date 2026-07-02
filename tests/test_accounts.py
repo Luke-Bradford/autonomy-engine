@@ -82,5 +82,38 @@ class TestAccountsCrud(unittest.TestCase):
         self.assertIsNone(a.get("nope"))
 
 
+class TestResolve(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.index = os.path.join(self.tmp, "accounts")
+        self.creds = FakeCreds({"work-key": "sk-ant-SECRET", "oai": "sk-openai-SECRET"})
+        self.a = ac.Accounts(index_path=self.index, credentials=self.creds)
+
+    def test_subscription_exports_nothing(self):
+        self.a.set("claude-sub", "claude_subscription")
+        r = self.a.resolve("claude-sub")
+        self.assertEqual(r, {"kind": "claude_subscription", "env": {}})
+
+    def test_anthropic_api_exports_key(self):
+        self.a.set("work", "anthropic_api", credential="work-key")
+        r = self.a.resolve("work")
+        self.assertEqual(r["kind"], "anthropic_api")
+        self.assertEqual(r["env"], {"ANTHROPIC_API_KEY": "sk-ant-SECRET"})
+
+    def test_openai_api_exports_key(self):
+        self.a.set("side", "openai_api", credential="oai")
+        self.assertEqual(self.a.resolve("side")["env"], {"OPENAI_API_KEY": "sk-openai-SECRET"})
+
+    def test_unknown_account_raises_keyerror(self):
+        with self.assertRaises(KeyError):
+            self.a.resolve("ghost")
+
+    def test_api_with_missing_secret_raises_lookuperror(self):
+        # credential label present in the index but the Keychain has no secret
+        self.a.set("stale", "anthropic_api", credential="gone")
+        with self.assertRaises(LookupError):
+            self.a.resolve("stale")
+
+
 if __name__ == "__main__":
     unittest.main()

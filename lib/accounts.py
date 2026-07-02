@@ -94,3 +94,22 @@ class Accounts:
         data = self._load()
         if data["accounts"].pop(name, None) is not None:
             self._save(data)
+
+    def resolve(self, name):
+        """Resolve an account to {kind, env}. Subscriptions export nothing
+        (CLI login); API kinds export their Keychain-backed key. Raises
+        KeyError (no such account) / LookupError (API key unresolvable) --
+        the caller must never run with broken auth (fail-safe)."""
+        entry = self.get(name)
+        if entry is None:
+            raise KeyError(name)
+        kind = entry["kind"]
+        if kind in _SUBSCRIPTION_KINDS:
+            return {"kind": kind, "env": {}}
+        var = _API_ENV.get(kind)
+        secret = self.credentials.get_secret(entry.get("credential"))
+        if not secret:
+            raise LookupError(
+                "account %r credential %r has no secret in the Keychain"
+                % (name, entry.get("credential")))
+        return {"kind": kind, "env": {var: secret}}
