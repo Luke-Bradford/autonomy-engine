@@ -380,6 +380,129 @@ class TestCheckAccounts(unittest.TestCase):
         self.assertEqual(roles.check_accounts(cfg, []), [])
 
 
+class TestDispatchRoles(unittest.TestCase):
+    def test_no_roles_block_defaults_to_coder(self):
+        self.assertEqual(roles.dispatch_roles({}), ["coder"])
+        self.assertEqual(roles.dispatch_roles({"agent": {"type": "claude"}}),
+                         ["coder"])
+
+    def test_standard_defaults_only_coder_runs(self):
+        cfg = parse("roles:\n  pm:\n    trigger: { type: cron, schedule: \"0 0 * * *\" }\n")
+        self.assertEqual(roles.dispatch_roles(cfg), ["coder"])
+
+    def test_enabled_loop_roles_run_standard_order_first(self):
+        cfg = parse(
+            "roles:\n"
+            "  qa:\n"
+            "    enabled: true\n"
+            "    trigger: { type: loop }\n"
+            "  helper:\n"
+            "    enabled: true\n"
+            "  coder:\n"
+            "    enabled: true\n")
+        # standard roster order (coder, pm, qa, researcher), then custom
+        self.assertEqual(roles.dispatch_roles(cfg), ["coder", "qa", "helper"])
+
+    def test_disabled_coder_does_not_run(self):
+        cfg = parse("roles:\n  coder:\n    enabled: false\n")
+        self.assertEqual(roles.dispatch_roles(cfg), [])
+
+    def test_cron_and_event_roles_are_not_dispatched(self):
+        cfg = parse(
+            "roles:\n"
+            "  researcher:\n"
+            "    enabled: true\n"
+            "    trigger: { type: cron, schedule: \"0 3 * * *\" }\n"
+            "  qa:\n"
+            "    enabled: true\n"
+            "    trigger: { type: event, on: [pr.opened] }\n")
+        self.assertEqual(roles.dispatch_roles(cfg), ["coder"])
+
+    def test_custom_role_needs_explicit_enabled(self):
+        cfg = parse("roles:\n  helper:\n    account: claude-sub\n")
+        self.assertEqual(roles.dispatch_roles(cfg), ["coder"])
+
+    def test_standard_trigger_default_applies(self):
+        # pm's roster default trigger is cron -> enabling it alone does not
+        # make it a loop role
+        cfg = parse("roles:\n  pm:\n    enabled: true\n")
+        self.assertEqual(roles.dispatch_roles(cfg), ["coder"])
+
+    def test_unsafe_role_names_filtered(self):
+        # a name that could not survive shell word-splitting is never emitted
+        self.assertEqual(
+            roles.dispatch_roles({"roles": {"bad name": {"enabled": True}}}),
+            ["coder"])
+
+    def test_non_dict_roles_block_defaults(self):
+        self.assertEqual(roles.dispatch_roles({"roles": "garbage"}), ["coder"])
+
+
+class TestRenderScope(unittest.TestCase):
+    def test_empty_scope_renders_nothing(self):
+        self.assertEqual(roles.render_scope(None), "")
+        self.assertEqual(roles.render_scope({}), "")
+
+    def test_bare_target_shorthand(self):
+        self.assertEqual(roles.render_scope("diff"),
+                         "Scope: work ONLY within this scope: target: diff.")
+
+    def test_mapping_renders_schema_order_one_line(self):
+        line = roles.render_scope({"milestone": "current",
+                                   "labels": ["ready", "bug"]})
+        self.assertEqual(
+            line,
+            "Scope: work ONLY within this scope: "
+            "labels: ready, bug; milestone: current.")
+        self.assertNotIn("\n", line)
+
+    def test_garbage_scope_renders_nothing(self):
+        self.assertEqual(roles.render_scope(42), "")
+
+
+class TestRoleSettings(unittest.TestCase):
+    CFG = (
+        "roles:\n"
+        "  coder:\n"
+        "    enabled: true\n"
+        "    account: claude-sub\n"
+        "    model: claude-opus-4-8\n"
+        "    effort: high\n"
+        "    scope: { labels: [ready] }\n"
+        "    prompt: .autonomy/roles/coder.md\n"
+        "    instances: 2\n"
+        "  qa:\n"
+        "    enabled: true\n"
+        "    trigger: { type: loop }\n")
+
+    def test_full_settings(self):
+        s = roles.role_settings(parse(self.CFG), "coder")
+        self.assertEqual(s["account"], "claude-sub")
+        self.assertEqual(s["model"], "claude-opus-4-8")
+        self.assertEqual(s["effort"], "high")
+        self.assertEqual(s["prompt"], ".autonomy/roles/coder.md")
+        self.assertEqual(s["scope"],
+                         "Scope: work ONLY within this scope: labels: ready.")
+        self.assertEqual(s["instances"], 2)
+
+    def test_unset_fields_are_empty(self):
+        s = roles.role_settings(parse(self.CFG), "qa")
+        self.assertEqual(
+            s, {"account": "", "model": "", "effort": "", "prompt": "",
+                "scope": "", "instances": 1})
+
+    def test_default_coder_with_no_roles_block(self):
+        s = roles.role_settings({}, "coder")
+        self.assertEqual(s["account"], "")
+        self.assertEqual(s["instances"], 1)
+
+    def test_undispatchable_role_raises(self):
+        with self.assertRaises(KeyError):
+            roles.role_settings(parse(self.CFG), "researcher")
+        with self.assertRaises(KeyError):
+            roles.role_settings({}, "qa")
+
+
 class TestMainAccountWiring(unittest.TestCase):
     """roles.py <target-repo> folds check_accounts in, loading the registry
     from $HOME/.config/autonomy/accounts (accounts.py's default path)."""
