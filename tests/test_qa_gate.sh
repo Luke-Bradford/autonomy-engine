@@ -77,6 +77,19 @@ GH_MODE=ownonly
 qa_join_ready 42 >/dev/null 2>&1
 check "only our own qa-gate check exists -> ready (no third-party CI)" "0" "$?"
 
+# The python check-filter is itself an unverifiable-state boundary: if it
+# crashes (missing python / gh output-shape change) or emits nothing, the
+# resulting empty checks_json matches neither the failing nor the pending grep,
+# so the function must NOT fall through to green. Same fail-safe class as ghfail.
+GH_MODE=green
+python3() { :; }                       # filter emits empty output, rc 0
+qa_join_ready 42 >/dev/null 2>&1
+check "python filter empty output -> REFUSE, never assumed green (fail-safe)" "1" "$?"
+python3() { return 1; }                 # filter crashes (nonzero exit)
+qa_join_ready 42 >/dev/null 2>&1
+check "python filter nonzero exit -> REFUSE (fail-safe)" "1" "$?"
+unset -f python3
+
 # --- verdict extraction from a QA run transcript ---
 t="$(mktemp)"
 printf 'thinking...\nQA-VERDICT: pass\n' >"$t"
