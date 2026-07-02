@@ -2,7 +2,11 @@ name: Claude PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review]
+    # `reopened` is included so close/reopen re-fires the review when GitHub
+    # drops a `synchronize` push event (a real stall on PR #62): `gh pr close`
+    # + `gh pr reopen` then re-runs the required `review` check, matching CI's
+    # default trigger set. Adding a type only widens when the gate fires.
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
 
 jobs:
