@@ -7,6 +7,7 @@ so without the added catch a corrupt-index delete/unassign would escape the
 handler and 500 the request. These tests import the real bin/dashboard.py and
 inject registries backed by a corrupt temp index via the singleton seams."""
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -53,6 +54,7 @@ class TestCorruptRegistryHandlers(unittest.TestCase):
     def tearDown(self):
         dashboard._accts_singleton[0] = None
         dashboard._creds_singleton[0] = None
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _assert_refused(self, result):
         self.assertFalse(result["ok"])
