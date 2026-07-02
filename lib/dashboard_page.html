@@ -67,6 +67,8 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px
 .ttoggle{display:inline-flex;border:1px solid var(--hair2);border-radius:6px;overflow:hidden}
 .ttoggle button{background:transparent;border:0;color:var(--dim);font-family:var(--mono);font-size:11px;padding:6px 9px;cursor:pointer;line-height:1}
 .ttoggle button.on{background:var(--panel2);color:var(--ink)}
+.navlink{font-family:var(--mono);font-size:11px;color:var(--mut);border:1px solid var(--hair2);border-radius:6px;padding:6px 10px;text-decoration:none}
+.navlink:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
 
 /* section heading */
 .sh{display:flex;align-items:center;gap:10px;margin:24px 2px 12px}
@@ -239,6 +241,7 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
       <div><span class="lab">updated</span><span class="b mono" id="h-fresh">—</span></div>
       <div><span class="lab">utc</span><span class="b mono" id="h-clock">—</span></div>
       <div class="live" id="h-live"><i></i><span id="h-live-t">connecting</span></div>
+      <a class="navlink" href="/config">⚙ config</a>
       <div class="ttoggle"><button id="th-d" onclick="setTheme('dark')">dark</button><button id="th-l" onclick="setTheme('light')">light</button></div>
     </div>
   </header>
@@ -255,10 +258,6 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
       <div>
         <div class="sh"><h2>Account quota</h2><span class="ln"></span><span class="ct">shared · all repos</span></div>
         <div class="panel" id="quota"></div>
-      </div>
-      <div>
-        <div class="sh"><h2>Config</h2><span class="ln"></span><span class="ct">writes .autonomy/config.yaml · registry</span></div>
-        <div class="panel" id="cfg"></div>
       </div>
     </div>
 
@@ -445,59 +444,6 @@ function control(repoEnc,action,label){
     .then(({ok,j})=>toast(ok&&j.ok, (ok&&j.ok)?(label+" — "+(j.message||"done")):("failed: "+(j.error||"error"))))
     .catch(()=>toast(false,"request failed"));
 }
-/* ---- CONFIG PAGE (#47): registry + whitelisted config keys ---- */
-const STRATEGIES=["manual","ci_only","bot_comment","gh_review"];
-let CFG_SIG=null; // rebuild only when the repo set changes, so typing survives ticks
-function renderCfg(repos){
-  const sig=repos.map(r=>r.path).join("|");
-  if(sig===CFG_SIG) return;
-  CFG_SIG=sig;
-  const rows=repos.map(r=>{
-    const c=r.config||{}, enc=encAttr(r.path);
-    return `<div class="cfgrepo" data-repo="${enc}">
-      <div class="cfgname">${esc(r.name||r.path)}<button class="cbtn danger" onclick="repoRemove('${enc}')">remove</button></div>
-      ${cfgField(enc,"board.owner","board owner",c.board_owner)}
-      ${cfgField(enc,"board.project_title","board title",c.board_title)}
-      ${cfgField(enc,"agent.model.primary","model",c.model)}
-      ${cfgField(enc,"agent.model.fallback","fallback",c.fallback)}
-      ${cfgSelect(enc,"agent.effort","effort",EFFORT_CHOICES.filter(e=>e),c.effort)}
-      ${cfgSelect(enc,"merge_gate.strategy","merge gate",STRATEGIES,c.merge_gate)}
-    </div>`;
-  }).join("");
-  $("cfg").innerHTML=`<div class="cfgadd"><input id="cfg-add" class="cfgin" placeholder="/absolute/path/to/repo"><button class="cbtn go" onclick="repoAdd()">add repo</button></div>`
-    +(rows||`<div class="ctl" style="padding:10px"><span class="note">no repos registered — add one above</span></div>`);
-}
-function cfgField(enc,key,label,val){
-  return `<div class="cfgrow"><span class="cfglab">${esc(label)}</span><input class="cfgin" data-key="${key}" value="${esc(val||"")}"><button class="cbtn" onclick="cfgSave(this,'${enc}','${key}')">save</button></div>`;
-}
-function cfgSelect(enc,key,label,opts,val){
-  return `<div class="cfgrow"><span class="cfglab">${esc(label)}</span><select class="cfgin" data-key="${key}">${opts.map(o=>`<option ${o===val?"selected":""}>${o}</option>`).join("")}</select><button class="cbtn" onclick="cfgSave(this,'${enc}','${key}')">save</button></div>`;
-}
-function cfgSave(btn,enc,key){
-  const repo=decodeURIComponent(enc);
-  const el=btn.closest(".cfgrow").querySelector("[data-key]");
-  const value=el.value.trim();
-  if(!window.confirm("Write "+key+' = "'+value+'" into .autonomy/config.yaml?\n\nrepo: '+repo)) return;
-  postCfg({repo,action:"config_set",key,value},key+" saved");
-}
-function repoAdd(){
-  const path=($("cfg-add").value||"").trim();
-  if(!path){toast(false,"enter an absolute repo path");return;}
-  postCfg({action:"repo_add",path},"repo added");
-}
-function repoRemove(enc){
-  const path=decodeURIComponent(enc);
-  if(!window.confirm("Unregister this repo from the dashboard?\n(Its loop, if any, is untouched.)\n\n"+path)) return;
-  postCfg({action:"repo_remove",path},"repo removed");
-}
-function postCfg(body,okLabel){
-  body.token=CTOKEN;
-  fetch("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
-    .then(r=>r.json().then(j=>({ok:r.ok,j})))
-    .then(({ok,j})=>{toast(ok&&j.ok,(ok&&j.ok)?(j.message||okLabel):("failed: "+(j.error||"error")));if(ok&&j.ok)CFG_SIG=null;})
-    .catch(()=>toast(false,"request failed"));
-}
-
 function toast(ok,msg){
   const box=$("toast"); const el=document.createElement("div");
   el.className="tmsg "+(ok?"ok":"err");
@@ -694,7 +640,7 @@ setInterval(()=>{
 
 /* ---- render + SSE ---- */
 function render(s){LAST=s;GEN=s.generated_at||Math.floor(nowS());
-  renderFocus(s.repos);renderRepos(s.repos);renderCfg(s.repos);renderQuota(s.repos,s.account);renderActivity(s.repos);
+  renderFocus(s.repos);renderRepos(s.repos);renderQuota(s.repos,s.account);renderActivity(s.repos);
   renderThroughput(s.repos);renderVoice(s.repos);renderGit(s.repos);
   $("f-gen").textContent="snapshot "+new Date(GEN*1000).toISOString().slice(11,19)+"Z";}
 function setLive(ok){$("h-live").classList.toggle("stale",!ok);$("h-live-t").textContent=ok?"live":"reconnecting";}

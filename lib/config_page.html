@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="ae-control-token" content="__CONTROL_TOKEN__">
+<title>Autonomy · config</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23141418'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%235b9dff'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --sans:'Schibsted Grotesk',system-ui,sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
+  --r:8px;
+}
+:root[data-theme="dark"]{
+  --bg:#0a0a0c; --bg-soft:#0d0d10; --panel:#141418; --panel2:#1a1a20;
+  --hair:#242429; --hair2:#30303a; --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
+  --ink:#ebebee; --mut:#9a9aa6; --dim:#63636e;
+  --accent:#6ea3ff; --accent-soft:rgba(110,163,255,.14);
+  --ok:#57cb8b; --ok-dim:#4a8666; --warn:#e6ac52; --bad:#e86f64; --info:#6ea3ff;
+  --ok-glow:rgba(87,203,139,.4); --warn-glow:rgba(230,172,82,.35); --bad-glow:rgba(232,111,100,.35);
+  --grid:rgba(255,255,255,.018);
+}
+:root[data-theme="light"]{
+  --bg:#f5f5f2; --bg-soft:#efefeb; --panel:#ffffff; --panel2:#faf9f6;
+  --hair:#e7e6e1; --hair2:#d7d6d0; --shadow:0 1px 2px rgba(30,30,30,.05),0 10px 30px -18px rgba(30,30,30,.25);
+  --ink:#1a1a1e; --mut:#5a5a63; --dim:#9a9aa2;
+  --accent:#2f6fe0; --accent-soft:rgba(47,111,224,.09);
+  --ok:#2c9c60; --ok-dim:#5a8a70; --warn:#bd7d13; --bad:#d24339; --info:#2f6fe0;
+  --ok-glow:rgba(44,156,96,.3); --warn-glow:rgba(189,125,19,.3); --bad-glow:rgba(210,67,57,.3);
+  --grid:rgba(20,20,20,.02);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  background:var(--bg); color:var(--ink); font-family:var(--sans); font-size:13.5px; line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+  background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:56px 56px;
+}
+.mono{font-family:var(--mono)}
+.num{font-variant-numeric:tabular-nums}
+.wrap{max-width:1640px;margin:0 auto;padding:0 26px 70px}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* header */
+header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px;padding:18px 4px 14px;
+  border-bottom:1px solid var(--hair);background:linear-gradient(var(--bg) 70%,transparent)}
+.brand{display:flex;align-items:baseline;gap:9px;font-weight:600;font-size:18px;letter-spacing:-.2px}
+.brand .mk{display:inline-flex;width:22px;height:22px;border-radius:6px;background:var(--panel2);border:1px solid var(--hair2);align-items:center;justify-content:center;transform:translateY(3px)}
+.brand .mk i{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px 1px var(--accent-soft)}
+.brand small{color:var(--mut);font-weight:400}
+.ro{font-family:var(--mono);font-size:9.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--dim);
+  border:1px solid var(--hair2);border-radius:4px;padding:2px 7px}
+.hgap{flex:1}
+.hstat{display:flex;align-items:center;gap:20px;font-size:12px;color:var(--mut)}
+.hstat .b{color:var(--ink);font-weight:600}
+.hstat .lab{display:block;font-size:9px;letter-spacing:1.4px;text-transform:uppercase;color:var(--dim);margin-bottom:1px}
+.live{display:inline-flex;align-items:center;gap:7px;font-weight:500;color:var(--ok)}
+.live i{width:7px;height:7px;border-radius:50%;background:var(--ok);animation:pulse 2.4s infinite}
+.live.stale{color:var(--warn)} .live.stale i{background:var(--warn);animation:none}
+@keyframes pulse{0%{box-shadow:0 0 0 0 var(--ok-glow)}70%{box-shadow:0 0 0 6px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.ttoggle{display:inline-flex;border:1px solid var(--hair2);border-radius:6px;overflow:hidden}
+.ttoggle button{background:transparent;border:0;color:var(--dim);font-family:var(--mono);font-size:11px;padding:6px 9px;cursor:pointer;line-height:1}
+.ttoggle button.on{background:var(--panel2);color:var(--ink)}
+.navlink{font-family:var(--mono);font-size:11px;color:var(--mut);border:1px solid var(--hair2);border-radius:6px;padding:6px 10px;text-decoration:none}
+.navlink:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
+
+/* section heading */
+.sh{display:flex;align-items:center;gap:10px;margin:24px 2px 12px}
+.sh h2{margin:0;font-size:12px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;color:var(--mut)}
+.sh .ln{flex:1;height:1px;background:var(--hair)}
+.sh .ct{font-family:var(--mono);font-size:10.5px;color:var(--dim)}
+
+/* focus band */
+.focus{display:grid;grid-template-columns:repeat(auto-fill,minmax(410px,1fr));gap:14px}
+.fcard{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);padding:15px 16px;box-shadow:var(--shadow);position:relative;overflow:hidden}
+.fcard::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--edge,var(--dim))}
+.fcard.working{--edge:var(--ok)} .fcard.idle{--edge:var(--dim)} .fcard.paused{--edge:var(--warn)} .fcard.stopping{--edge:var(--warn)}
+.fcard.stopped{--edge:var(--dim)} .fcard.error{--edge:var(--bad)} .fcard.needs-setup{--edge:var(--bad)}
+.fc-top{display:flex;align-items:center;gap:10px;margin-bottom:11px}
+.fc-name{font-weight:600;font-size:15px}
+.fc-role{font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--mut);border:1px solid var(--hair2);border-radius:4px;padding:1px 6px}
+.fc-model{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--dim)}
+.fc-ticket{display:flex;align-items:center;gap:9px;padding:9px 11px;background:var(--panel2);border:1px solid var(--hair);border-radius:6px;margin-bottom:11px;font-size:13px}
+.fc-ticket .no{font-family:var(--mono);font-weight:600;color:var(--accent)}
+.fc-ticket .tt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fc-step{font-size:12.5px;color:var(--mut);margin-bottom:11px;min-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fc-step .k{font-family:var(--mono);color:var(--ink)}
+.fc-meta{display:flex;gap:20px;font-size:11.5px;color:var(--dim)}
+.fc-meta .b{color:var(--ink);font-weight:600} .fc-meta .mono{font-family:var(--mono)}
+.ctl{display:flex;gap:7px;margin-top:12px;padding-top:11px;border-top:1px solid var(--hair)}
+.cbtn{font-family:var(--mono);font-size:10px;letter-spacing:.6px;text-transform:uppercase;padding:6px 11px;border-radius:5px;
+  border:1px solid var(--hair2);background:transparent;color:var(--mut);cursor:pointer;transition:.12s}
+.cbtn:hover{border-color:var(--bord,var(--mut));color:var(--fg,var(--ink))}
+.cbtn.go{--bord:var(--ok);--fg:var(--ok)} .cbtn.warn{--bord:var(--warn);--fg:var(--warn)} .cbtn.danger{--bord:var(--bad);--fg:var(--bad)}
+.cbtn:disabled{opacity:.4;cursor:default}
+.ctl .note{margin-left:auto;align-self:center;font-family:var(--mono);font-size:10px;color:var(--dim)}
+.mctl{flex-wrap:wrap}
+.mctl select{background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);font-family:var(--mono);font-size:10.5px;border-radius:5px;padding:5px 6px;max-width:170px}
+.mctl .pend{align-self:center;font-family:var(--mono);font-size:10px;color:var(--warn)}
+.q-prov{font-family:var(--mono);font-size:9.5px;letter-spacing:1.2px;text-transform:uppercase;color:var(--dim);
+  padding:8px 10px 0;display:flex;align-items:center;gap:6px}
+.q-prov::after{content:"";flex:1;height:1px;background:var(--hair)}
+/* ---- config page (#47) ---- */
+.cfgadd{display:flex;gap:8px;padding:10px;border-bottom:1px solid var(--hair)}
+.cfgrepo{padding:8px 10px;border-bottom:1px solid var(--hair)}
+.cfgrepo:last-child{border-bottom:none}
+.cfgname{display:flex;align-items:center;gap:8px;justify-content:space-between;font-size:12px;color:var(--ink);padding:2px 0 6px}
+.cfgrow{display:flex;align-items:center;gap:8px;padding:3px 0}
+.cfglab{font-family:var(--mono);font-size:10px;color:var(--dim);width:92px;flex:none;text-transform:uppercase;letter-spacing:.5px}
+.cfgin{flex:1;min-width:0;background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);
+  font-family:var(--mono);font-size:11px;border-radius:5px;padding:5px 7px}
+#toast{position:fixed;right:20px;bottom:20px;z-index:50;display:flex;flex-direction:column;gap:8px}
+.tmsg{background:var(--panel);border:1px solid var(--hair2);border-left:3px solid var(--tc,var(--accent));border-radius:6px;
+  box-shadow:var(--shadow);padding:11px 14px;font-size:12px;max-width:340px;animation:rise .3s both}
+.tmsg.ok{--tc:var(--ok)} .tmsg.err{--tc:var(--bad)}
+.tmsg .th{font-weight:600;margin-bottom:2px}
+
+/* status token */
+.st{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;letter-spacing:.8px;text-transform:uppercase;font-weight:500;color:var(--sc,var(--mut))}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--sc,var(--dim));flex:none}
+.dot.pulse{animation:pulse 2.4s infinite}
+.s-working{--sc:var(--ok)} .s-idle{--sc:var(--dim)} .s-paused{--sc:var(--warn)} .s-stopped{--sc:var(--dim)} .s-stopping{--sc:var(--warn)}
+.s-error{--sc:var(--bad)} .s-done{--sc:var(--ok-dim)} .s-needs-setup{--sc:var(--bad)} .s-missing{--sc:var(--dim)}
+.s-configured{--sc:var(--info)} .s-disabled{--sc:var(--dim)} .s-not-configured{--sc:var(--dim)}
+
+/* grid */
+.grid{display:grid;grid-template-columns:300px minmax(0,1fr) 360px;gap:22px;align-items:start}
+@media(max-width:1300px){.grid{grid-template-columns:1fr}}
+.col{display:flex;flex-direction:column;gap:24px}
+.panel{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+.p-h{display:flex;align-items:center;gap:8px;padding:12px 14px 11px;border-bottom:1px solid var(--hair)}
+.p-h h3{margin:0;font-size:12px;font-weight:600;letter-spacing:.3px}
+.p-h .sub{font-size:10.5px;color:var(--dim);font-weight:400}
+.p-h .r{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--dim)}
+
+/* repos + roles */
+.repo{padding:12px 14px;border-bottom:1px solid var(--hair)}
+.repo:last-child{border-bottom:0}
+.repo-h{display:flex;align-items:center;gap:9px;margin-bottom:9px}
+.repo-h .nm{font-weight:600}
+.repo-h .badge{margin-left:auto}
+.repo .cfg{font-family:var(--mono);font-size:10px;color:var(--dim);margin-bottom:10px}
+.role{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px}
+.role .rn{font-weight:500;min-width:74px}
+.role .subs{font-family:var(--mono);font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:var(--mut);border:1px solid var(--hair2);border-radius:3px;padding:1px 5px}
+.role .trig{font-family:var(--mono);font-size:10px;color:var(--dim)}
+.role .rst{margin-left:auto}
+.role.off{opacity:.5}
+
+/* quotas */
+.q{padding:13px 14px;border-bottom:1px solid var(--hair)}
+.q:last-child{border-bottom:0}
+.q-h{display:flex;justify-content:space-between;align-items:baseline;font-size:11.5px;margin-bottom:8px}
+.q-h .lab{color:var(--mut);font-weight:500} .q-h .lab small{color:var(--dim);font-weight:400}
+.q-h .val{font-family:var(--mono);font-weight:600}
+.bar{height:7px;border-radius:4px;background:var(--bg-soft);border:1px solid var(--hair);overflow:hidden}
+.bar i{display:block;height:100%;border-radius:4px;background:linear-gradient(90deg,var(--ok),var(--ok))}
+.bar.mid i{background:linear-gradient(90deg,var(--ok),var(--warn))}
+.bar.hot i{background:linear-gradient(90deg,var(--warn),var(--bad))}
+.q-sub{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--dim);margin-top:7px}
+
+/* activity tabs */
+.tabs{display:flex;gap:2px;margin-left:auto}
+.tab{background:transparent;border:1px solid var(--hair2);border-radius:5px;color:var(--mut);font-family:var(--mono);font-size:10px;letter-spacing:.8px;text-transform:uppercase;padding:5px 10px;cursor:pointer}
+.tab.on{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
+.act-focus{display:flex;align-items:center;gap:9px;padding:11px 14px;border-bottom:1px solid var(--hair);font-size:12.5px}
+.act-focus .lead{color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#activity{max-height:600px;overflow-y:auto}
+#activity .act-focus{position:sticky;top:0;background:var(--panel);z-index:2}
+.act-body{padding:8px 14px 14px;overflow-x:auto;min-height:90px}
+.tnode{display:flex;align-items:center;gap:8px;padding:3px 0;font-family:var(--mono);font-size:12px;white-space:nowrap}
+.tnode .g{color:var(--hair2);white-space:pre}
+.tnode .ic{color:var(--ok-dim);flex:none;width:12px;text-align:center}
+.tnode.sub .ic{color:var(--info)} .tnode.edit .ic{color:var(--warn)}
+.tnode .nn{font-weight:500} .tnode.sub .nn{color:var(--info)}
+.tnode .su{color:var(--mut);overflow:hidden;text-overflow:ellipsis}
+.tnode .tk{margin-left:auto;color:var(--dim);font-size:10px;padding-left:12px;flex:none}
+/* timeline */
+.tl-row{display:flex;align-items:center;gap:10px;padding:3px 0;font-family:var(--mono);font-size:11.5px}
+.tl-row .lbl{width:150px;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--mut)}
+.tl-row .lbl b{color:var(--ink);font-weight:500}
+.tl-bar{flex:1;height:14px;background:var(--bg-soft);border-radius:3px;overflow:hidden}
+.tl-bar i{display:block;height:100%;border-radius:3px;background:var(--ok-dim)}
+.tl-bar i.mid{background:var(--warn)} .tl-bar i.hot{background:var(--bad)}
+.tl-row .v{width:56px;flex:none;text-align:right;color:var(--dim);font-size:10px}
+.empty{color:var(--dim);padding:22px 14px;font-size:13px}
+table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11.5px}
+th{text-align:left;color:var(--dim);font-weight:400;text-transform:uppercase;letter-spacing:.8px;font-size:9px;padding:8px 10px;border-bottom:1px solid var(--hair)}
+td{padding:6px 10px;border-bottom:1px solid var(--hair);color:var(--mut);white-space:nowrap}
+td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
+
+/* throughput */
+.tp{padding:14px}
+.tp .lead{display:flex;align-items:baseline;gap:9px;margin-bottom:2px}
+.tp .big{font-family:var(--mono);font-size:26px;font-weight:600}
+.tp .u{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:1px}
+.tp .trend{font-family:var(--mono);font-size:11px;margin-left:auto}
+.tp svg{display:block;width:100%;height:64px;margin-top:10px}
+.tp .foot{display:flex;gap:18px;font-family:var(--mono);font-size:10px;color:var(--dim);margin-top:8px}
+.tp .foot b{color:var(--ink)}
+
+/* voice */
+.voice{max-height:300px;overflow-y:auto;padding:8px 0}
+.vln{display:flex;gap:10px;padding:3px 14px;font-family:var(--mono);font-size:11px;color:var(--mut)}
+.vln .vt{color:var(--dim);flex:none}
+.vln.limit{color:var(--warn)} .vln.err{color:var(--bad)} .vln.clean{color:var(--ok-dim)} .vln.start{color:var(--ink)} .vln.pause{color:var(--warn)}
+
+/* git in flight */
+.pr{padding:11px 14px;border-bottom:1px solid var(--hair)}
+.pr:last-child{border-bottom:0}
+.pr .p1{display:flex;align-items:center;gap:8px}
+.pr .num{font-family:var(--mono);font-weight:600;color:var(--accent)}
+.pr .pt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
+.pr .p2{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.chip{font-family:var(--mono);font-size:9px;letter-spacing:.6px;text-transform:uppercase;padding:2px 7px;border-radius:4px;border:1px solid var(--cc,var(--hair2));color:var(--cc,var(--mut))}
+.c-passing,.c-approved,.c-mergeable{--cc:var(--ok)} .c-failing,.c-changes_requested,.c-conflicting{--cc:var(--bad)}
+.c-pending,.c-review_required{--cc:var(--warn)} .c-none{--cc:var(--dim)}
+.subs.b-engine{color:var(--ok-dim)} .subs.b-managed_agents{color:var(--info)} .subs.b-routine{color:var(--warn)} .subs.b-actions{color:var(--mut)}
+
+.foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--hair);display:flex;gap:20px;font-family:var(--mono);font-size:10px;color:var(--dim)}
+::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:var(--hair2);border-radius:5px}::-webkit-scrollbar-track{background:transparent}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.rise{animation:rise .45s cubic-bezier(.2,.7,.2,1) both}
+/* ---- config page (#51-B) ---- */
+.cfgwrap{max-width:900px;margin:0 auto}
+.credadd{display:grid;grid-template-columns:1fr 140px 1fr auto;gap:8px;padding:10px;border-bottom:1px solid var(--hair);align-items:center}
+.credrow{display:flex;align-items:center;gap:10px;padding:9px 10px;border-bottom:1px solid var(--hair)}
+.credrow:last-child{border-bottom:none}
+.credlabel{font-size:12.5px;color:var(--ink);font-weight:600;min-width:120px}
+.credprov{font-family:var(--mono);font-size:9.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--mut);border:1px solid var(--hair2);border-radius:4px;padding:1px 6px}
+.credset{font-family:var(--mono);font-size:10px;color:var(--ok)}
+.credgap{flex:1}
+.hint{padding:10px;font-size:11.5px;color:var(--dim);line-height:1.5}
+</style>
+</head>
+<body>
+<div class="wrap cfgwrap">
+  <header>
+    <div class="brand"><span class="mk"><i></i></span>Autonomy <small>config</small></div>
+    <span class="ro">settings</span>
+    <div class="hgap"></div>
+    <div class="hstat">
+      <a class="navlink" href="/">← control room</a>
+      <div class="ttoggle"><button onclick="setTheme('dark')">dark</button><button onclick="setTheme('light')">light</button></div>
+    </div>
+  </header>
+
+  <div class="sh"><h2>Credentials</h2><span class="ln"></span><span class="ct">API keys · macOS Keychain · never leaves this machine</span></div>
+  <div class="panel" id="creds"></div>
+  <div class="hint">Subscriptions (your Claude / Codex logins) are the default and need nothing here. API keys are optional — add one only if a role should run on API credit instead. Secrets are stored in your macOS Keychain, never in a file, never shown again after saving.</div>
+
+  <div class="sh" style="margin-top:20px"><h2>Repos &amp; config</h2><span class="ln"></span><span class="ct">registry · writes .autonomy/config.yaml</span></div>
+  <div class="panel" id="cfg"></div>
+</div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $=(id)=>document.getElementById(id);
+function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+function encAttr(s){return encodeURIComponent(s).replace(/'/g,"%27");}
+function setTheme(t){document.documentElement.setAttribute("data-theme",t);try{localStorage.setItem("ae-theme",t);}catch(e){}}
+setTheme((function(){try{return localStorage.getItem("ae-theme")||"dark";}catch(e){return "dark";}})());
+const CTOKEN=(document.querySelector('meta[name="ae-control-token"]')||{}).content||"";
+const EFFORT_CHOICES=["","low","medium","high","xhigh","max"];
+const STRATEGIES=["manual","ci_only","bot_comment","gh_review"];
+let MODEL=null;
+
+function toast(ok,msg){
+  const box=$("toast"); const el=document.createElement("div");
+  el.className="tmsg "+(ok?"ok":"err");
+  el.innerHTML=`<div class="th">${ok?"✓ done":"✕ failed"}</div><div>${esc(msg)}</div>`;
+  box.appendChild(el); setTimeout(()=>el.remove(),6000);
+}
+function post(body,okLabel,then){
+  body.token=CTOKEN;
+  fetch("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
+    .then(r=>r.json().then(j=>({ok:r.ok,j})))
+    .then(({ok,j})=>{toast(ok&&j.ok,(ok&&j.ok)?(j.message||okLabel):("failed: "+(j.error||"error")));if(ok&&j.ok&&then)then();})
+    .catch(()=>toast(false,"request failed"));
+}
+function load(){fetch("/api/config").then(r=>r.json()).then(m=>{MODEL=m;renderCreds(m);renderCfg(m.repos||[]);}).catch(()=>toast(false,"could not load config"));}
+
+/* ---- CREDENTIALS ---- */
+function renderCreds(m){
+  const creds=m.credentials||[], roles=m.roles||[], asn=m.assignments||{};
+  const add=`<div class="credadd">
+    <input id="cr-label" class="cfgin" placeholder="label (e.g. work-key)">
+    <input id="cr-prov" class="cfgin" placeholder="provider" value="anthropic">
+    <input id="cr-secret" class="cfgin" type="password" placeholder="paste API key — stored, never shown again">
+    <button class="cbtn go" onclick="credSave()">save</button></div>`;
+  const rows=creds.map(c=>{
+    const enc=encAttr(c.label);
+    const roleFor=Object.keys(asn).filter(r=>asn[r]===c.label);
+    const opts=`<option value="">assign to role…</option>`+roles.map(r=>`<option value="${esc(r)}" ${roleFor.includes(r)?"selected":""}>${esc(r)}</option>`).join("");
+    return `<div class="credrow">
+      <span class="credlabel">${esc(c.label)}</span>
+      <span class="credprov">${esc(c.provider||"—")}</span>
+      <span class="credset">${c.is_set?"set ✓":"MISSING"}</span>
+      <span class="credgap"></span>
+      <select class="cfgin" style="max-width:170px" onchange="credAssign('${enc}',this.value)">${opts}</select>
+      <button class="cbtn danger" onclick="credDelete('${enc}')">remove</button>
+    </div>`;
+  }).join("");
+  $("creds").innerHTML=add+(rows||`<div class="hint">no API keys stored — subscription auth is active by default.</div>`);
+}
+function credSave(){
+  const label=($("cr-label").value||"").trim();
+  const provider=($("cr-prov").value||"").trim();
+  const secret=$("cr-secret").value;
+  if(!label){toast(false,"enter a label");return;}
+  if(!secret){toast(false,"paste the key");return;}
+  post({action:"cred_set",label,provider,secret},"saved",()=>{$("cr-label").value="";$("cr-secret").value="";load();});
+}
+function credDelete(enc){
+  const label=decodeURIComponent(enc);
+  if(!window.confirm("Remove credential '"+label+"' from the Keychain?\nAny role using it falls back to subscription auth.")) return;
+  post({action:"cred_delete",label},"removed",load);
+}
+function credAssign(enc,role){
+  const label=decodeURIComponent(enc);
+  if(!role){return;}
+  post({action:"cred_assign",role,label},"assigned",load);
+}
+
+/* ---- REPOS + CONFIG (moved from the main page, #47) ---- */
+function renderCfg(repos){
+  const rows=repos.map(r=>{
+    const c=r.config||{}, enc=encAttr(r.path);
+    return `<div class="cfgrepo" data-repo="${enc}">
+      <div class="cfgname">${esc(r.name||r.path)}<button class="cbtn danger" onclick="repoRemove('${enc}')">remove</button></div>
+      ${cfgField(enc,"board.owner","board owner",c.board_owner)}
+      ${cfgField(enc,"board.project_title","board title",c.board_title)}
+      ${cfgField(enc,"agent.model.primary","model",c.model)}
+      ${cfgField(enc,"agent.model.fallback","fallback",c.fallback)}
+      ${cfgSelect(enc,"agent.effort","effort",EFFORT_CHOICES.filter(e=>e),c.effort)}
+      ${cfgSelect(enc,"merge_gate.strategy","merge gate",STRATEGIES,c.merge_gate)}
+    </div>`;
+  }).join("");
+  $("cfg").innerHTML=`<div class="cfgadd"><input id="cfg-add" class="cfgin" placeholder="/absolute/path/to/repo"><button class="cbtn go" onclick="repoAdd()">add repo</button></div>`
+    +(rows||`<div class="hint">no repos registered — add one above.</div>`);
+}
+function cfgField(enc,key,label,val){
+  return `<div class="cfgrow"><span class="cfglab">${esc(label)}</span><input class="cfgin" data-key="${key}" value="${esc(val||"")}"><button class="cbtn" onclick="cfgSave(this,'${enc}','${key}')">save</button></div>`;
+}
+function cfgSelect(enc,key,label,opts,val){
+  return `<div class="cfgrow"><span class="cfglab">${esc(label)}</span><select class="cfgin" data-key="${key}">${opts.map(o=>`<option ${o===val?"selected":""}>${o}</option>`).join("")}</select><button class="cbtn" onclick="cfgSave(this,'${enc}','${key}')">save</button></div>`;
+}
+function cfgSave(btn,enc,key){
+  const repo=decodeURIComponent(enc);
+  const el=btn.closest(".cfgrow").querySelector("[data-key]");
+  const value=el.value.trim();
+  if(!window.confirm("Write "+key+' = "'+value+'" into .autonomy/config.yaml?\n\nrepo: '+repo)) return;
+  post({action:"config_set",repo,key,value},key+" saved");
+}
+function repoAdd(){
+  const path=($("cfg-add").value||"").trim();
+  if(!path){toast(false,"enter an absolute repo path");return;}
+  post({action:"repo_add",path},"repo added",load);
+}
+function repoRemove(enc){
+  const path=decodeURIComponent(enc);
+  if(!window.confirm("Unregister this repo from the dashboard?\n(Its loop, if any, is untouched.)\n\n"+path)) return;
+  post({action:"repo_remove",path},"repo removed",load);
+}
+load();
+</script>
+</body>
+</html>

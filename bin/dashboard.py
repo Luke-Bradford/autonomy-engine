@@ -35,10 +35,17 @@ sys.path.insert(0, os.path.join(ENGINE_HOME, "lib"))
 import dashboard_state as ds  # noqa: E402
 import dashboard_control as dcx  # noqa: E402
 import config_parser  # noqa: E402
+import credentials as creds  # noqa: E402
 
 PAGE = os.path.join(ENGINE_HOME, "lib", "dashboard_page.html")
+CONFIG_PAGE = os.path.join(ENGINE_HOME, "lib", "config_page.html")
 REPOS_FILE = os.path.expanduser("~/.config/autonomy/repos")
 LAUNCH_AGENTS = os.path.expanduser("~/Library/LaunchAgents")
+
+# The four standard roles a credential can be assigned to (#51). Custom roles
+# in a repo's config still get a credential via config, but the page offers
+# the built-ins as assignment targets.
+_ASSIGNABLE_ROLES = ("coder", "pm", "qa", "researcher")
 
 # Per-process control token for the lifecycle write endpoint (#10). Embedded in
 # the served page (same-origin) and required on every POST /api/control, so a
@@ -309,6 +316,78 @@ def _account_usage():
     return usage
 
 
+_creds_singleton = [None]
+
+
+def _creds():
+    if _creds_singleton[0] is None:
+        _creds_singleton[0] = creds.Credentials()
+    return _creds_singleton[0]
+
+
+def config_read_model():
+    """The config page's read model -- repos + their config + the credential
+    LABELS/providers/assignments. NEVER a secret (creds.list() omits them; a
+    live test asserts the secret string is absent from this response)."""
+    c = _creds()
+    try:
+        cred_list = c.list()
+        assignments = c.assignments()
+    except Exception:
+        cred_list, assignments = [], {}
+    repos = []
+    for repo in Handler.repos:
+        cfg = {}
+        try:
+            st = ds.build_repo_state(repo, git_in_flight=lambda r: {})
+            cfg = st.get("config", {})
+        except Exception:
+            cfg = {}
+        repos.append({"path": repo, "name": os.path.basename(repo.rstrip("/")),
+                      "config": cfg})
+    return {"repos": repos, "credentials": cred_list,
+            "assignments": assignments, "roles": list(_ASSIGNABLE_ROLES)}
+
+
+def execute_cred_set(label, provider, secret):
+    try:
+        _creds().set(label, secret, provider=provider)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or "").strip() or "keychain write failed"
+        return {"ok": False, "error": detail}
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "message": "credential '%s' saved" % label}
+
+
+def execute_cred_delete(label):
+    try:
+        _creds().delete(label)
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "message": "credential '%s' removed" % label}
+
+
+def execute_cred_assign(role, label):
+    try:
+        _creds().assign(role, label)
+    except (ValueError, KeyError) as exc:
+        return {"ok": False, "error": str(exc)}
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "message": "%s → %s" % (role, label)}
+
+
+def execute_cred_unassign(role):
+    try:
+        _creds().unassign(role)
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "message": "%s unassigned" % role}
+
+
 def _issue_focus(repo, number, repo_url):
     """Title/url/state for the ticket a session is working, so it shows with a
     link even before a PR exists. Cached per (repo, number)."""
@@ -544,16 +623,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?", 1)[0]
-        if path == "/":
+        if path == "/" or path == "/config":
+            page = PAGE if path == "/" else CONFIG_PAGE
             try:
-                with open(PAGE, "rb") as fh:
+                with open(page, "rb") as fh:
                     html = fh.read()
                 html = html.replace(b"__CONTROL_TOKEN__", _CONTROL_TOKEN.encode("ascii"))
                 self._send(200, html, "text/html; charset=utf-8")
             except OSError:
-                self._send(500, b"dashboard_page.html missing", "text/plain")
+                self._send(500, os.path.basename(page).encode() + b" missing",
+                           "text/plain")
         elif path == "/api/state":
             self._send(200, json.dumps(collect(self.repos)).encode("utf-8"))
+        elif path == "/api/config":
+            self._send(200, json.dumps(config_read_model()).encode("utf-8"))
         elif path == "/api/stream":
             self._stream()
         else:
@@ -598,9 +681,28 @@ class Handler(BaseHTTPRequestHandler):
             self._send(403, b'{"error":"bad or missing control token"}')
             return
         action = body.get("action")
+        _cred_actions = ("cred_set", "cred_delete", "cred_assign", "cred_unassign")
         if (action not in ("set_model", "config_set", "repo_add", "repo_remove")
+                and action not in _cred_actions
                 and not dcx.is_valid_action(action)):
             self._send(400, b'{"error":"invalid action"}')
+            return
+        # Credential actions (#51) manage the account-level credential store,
+        # not a managed repo -- validation lives in credentials.py.
+        if action in _cred_actions:
+            if action == "cred_set":
+                result = execute_cred_set(str(body.get("label") or ""),
+                                          str(body.get("provider") or ""),
+                                          str(body.get("secret") or ""))
+            elif action == "cred_delete":
+                result = execute_cred_delete(str(body.get("label") or ""))
+            elif action == "cred_assign":
+                result = execute_cred_assign(str(body.get("role") or ""),
+                                             str(body.get("label") or ""))
+            else:
+                result = execute_cred_unassign(str(body.get("role") or ""))
+            self._send(200 if result.get("ok") else 409,
+                       json.dumps(result).encode("utf-8"))
             return
         # Registry actions (#47) manage the repo SET itself, so they take a
         # path, not a managed repo -- validation lives in their plans.
