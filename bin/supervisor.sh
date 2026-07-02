@@ -305,9 +305,9 @@ resolve_dispatch_roles() {
   python3 "$ENGINE_HOME/lib/roles.py" dispatch "$AUTONOMY_TARGET_REPO" 2>>"$SUPLOG"
 }
 
-# Round-robin selector: print argument ((idx mod n)+1) of the names in $2..;
-# rc 1 when the list is empty. Role names are [A-Za-z0-9._-] by the dispatch
-# contract, so callers may word-split the enumeration safely.
+# Round-robin selector: print the (idx mod n)th name, 0-indexed, from the
+# names in $2..; rc 1 when the list is empty. Role names are [A-Za-z0-9._-]
+# by the dispatch contract, so callers may word-split the enumeration safely.
 select_role() {
   local idx="$1"; shift
   [ $# -gt 0 ] || return 1
