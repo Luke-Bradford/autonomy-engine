@@ -5,7 +5,20 @@ against any target repo, from one operator's account.
 
 ## Quickstart
 
-One guided entry point chains the whole onboarding sequence:
+One command, from a fresh checkout:
+
+```bash
+./start                      # detects: setup needed, or just run the app
+./start /path/to/target-repo # first time: guided setup for that repo, then the app
+```
+
+`./start` looks at `~/.config/autonomy/repos`: nothing registered → setup guidance
+(with a target argument it chains the guided quickstart and registers the repo);
+something registered → loop-state summary (`bin/control.sh list`) and the
+control-room dashboard. It never runs `launchctl` — loading a supervisor stays a
+deliberate step (`bin/control.sh start`, or the printed go-live lines).
+
+Under the hood, the guided setup is:
 
 ```bash
 bin/quickstart.sh /path/to/target-repo
@@ -108,6 +121,7 @@ never treated as green; `ci_only` additionally refuses on zero configured checks
 
 | Script | Purpose |
 |---|---|
+| `../start [target-repo] [--port N] [--no-launch]` | THE entry point (repo root): setup-or-app detection — guided quickstart on first run, loop-state summary + dashboard after |
 | `supervisor.sh --repo <path> [--agent-type] [--model] [--fallback-model] [--label]` | The main loop launchd runs |
 | `quickstart.sh <target-repo> [flags]` | Guided single-entry onboarding: onboard → minimum config → doctor → optional worktree → optional dashboard registration → printed go-live commands (never runs `launchctl`) |
 | `control.sh list \| register \| unregister \| start \| stop \| pause \| resume` | Multi-repo control unit over `~/.config/autonomy/repos`: loop states from the supervisor's own lock/sentinel, start/stop via `launchctl` against the installed plists, graceful pause/resume via the sentinel. `--all` fans out. Never provisions |

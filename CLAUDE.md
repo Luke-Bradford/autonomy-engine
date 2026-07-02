@@ -20,7 +20,7 @@ Design + build history: `docs/design.md`, `docs/implementation-plan.md`.
 - **Every script's executable body is guarded** by `[ "${BASH_SOURCE[0]}" = "${0}" ] || return 0`
   (or the `if [ "${BASH_SOURCE[0]}" = "${0}" ]; then … fi` form) so sourcing it for tests only
   defines functions. Adapter files that are functions-only (`bin/agents/*.sh`) need no guard.
-- **`shellcheck -S warning` clean** across `bin/*.sh bin/agents/*.sh tests/*.sh
+- **`shellcheck -S warning` clean** across `start bin/*.sh bin/agents/*.sh tests/*.sh
   templates/autonomy-pack/qa/*.sh`. Test files too — not just `bin/`. (`.sh` under `tests/` is a
   common miss.)
 - **Tests are genuine.** They `source` the real script and call the real functions (mock only `gh`
@@ -71,8 +71,8 @@ CI + the review bot are the gate). So:
 
 1. Branch (`feat/<n>-…` or `fix/<n>-…`), never commit to main.
 2. TDD: write the failing test, see it fail, implement, see it pass.
-3. `bash tests/run_all.sh` (all suites) + `shellcheck -S warning bin/*.sh bin/agents/*.sh tests/*.sh`
-   before pushing.
+3. `bash tests/run_all.sh` (all suites) + `shellcheck -S warning start bin/*.sh bin/agents/*.sh
+   tests/*.sh` before pushing.
 4. Push, open a PR. CI (`lint-and-test`) + the Claude review bot run automatically. Resolve every
    review comment (FIXED `<sha>` / DEFERRED `#n` / REBUTTED `<reason>`).
 5. Merge once green + APPROVE on the latest commit.
