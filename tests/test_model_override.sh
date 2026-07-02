@@ -86,6 +86,24 @@ long="a12345678901234567890123456789012345678901234567890123456789012345"  # 65 
 if valid_model_id "$long"; then r=ok; else r=rejected; fi
 check "model id over 64 chars rejected" rejected "$r"
 
+# --- valid_prompt_path: dispatch-time re-validation of a role's prompt (#63) ---
+# Parity with valid_model_id -- re-check the config-sourced path before it
+# lands in a filename, independent of doctor's preflight check_prompt_files.
+if valid_prompt_path ".autonomy/roles/qa.md"; then r=ok; else r=rejected; fi
+check "repo-relative pack prompt path accepted" ok "$r"
+if valid_prompt_path "..hidden.md"; then r=ok; else r=rejected; fi
+check "dotted filename (not a .. segment) accepted" ok "$r"
+if valid_prompt_path ""; then r=ok; else r=rejected; fi
+check "empty prompt path rejected" rejected "$r"
+if valid_prompt_path "/etc/passwd"; then r=ok; else r=rejected; fi
+check "absolute prompt path rejected" rejected "$r"
+if valid_prompt_path "../../../etc/passwd"; then r=ok; else r=rejected; fi
+check "leading ..-escape prompt path rejected" rejected "$r"
+if valid_prompt_path ".autonomy/../../secret"; then r=ok; else r=rejected; fi
+check "mid-path .. segment rejected" rejected "$r"
+if valid_prompt_path "roles/.."; then r=ok; else r=rejected; fi
+check "trailing .. segment rejected" rejected "$r"
+
 # --- adapter: --effort only when set ---
 # shellcheck source=/dev/null
 source "$HERE/../bin/agents/claude.sh"
