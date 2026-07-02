@@ -264,13 +264,6 @@ invoke_scoped_key() {
   fi
 }
 
-# Tested convenience: resolve the ROLE's key, then invoke scoped. run_session
-# resolves once itself (below) so it can also log the auth mode without a
-# second lookup.
-invoke_with_role_credential() {
-  invoke_scoped_key "$(resolve_role_credential "${ROLE:-coder}")" "$@"
-}
-
 run_session() {
   preflight || return $?
 
@@ -282,7 +275,7 @@ run_session() {
   local log_file; log_file="$LOGDIR/session-$(date +%Y%m%dT%H%M%S).log"
   local role_key; role_key="$(resolve_role_credential "${ROLE:-coder}")"
   local auth_note="subscription"
-  [ -n "$role_key" ] && auth_note="api-key(${ROLE:-coder})"
+  if [ -n "$role_key" ]; then auth_note="api-key(${ROLE:-coder})"; fi
   log "session start (model=$MODEL effort=${EFFORT:-default} auth=$auth_note) -> $log_file"
 
   invoke_scoped_key "$role_key" \

@@ -40,7 +40,7 @@ export AUTONOMY_CREDENTIALS_BIN="$tmp/creds-stub"
 check "resolve returns the assigned key" "sk-ROLEKEY-42" "$(resolve_role_credential coder)"
 check "resolve returns empty for an unassigned role" "" "$(resolve_role_credential researcher)"
 
-# --- invoke_with_role_credential: session-scoped export ---------------------
+# --- invoke_scoped_key + resolve_role_credential: the run_session path ------
 # stub agent_invoke to record what ANTHROPIC_API_KEY it sees
 envfile="$tmp/seen_key"
 agent_invoke() { echo "${ANTHROPIC_API_KEY:-NONE}" > "$envfile"; return 0; }
@@ -49,25 +49,25 @@ agent_invoke() { echo "${ANTHROPIC_API_KEY:-NONE}" > "$envfile"; return 0; }
 unset ANTHROPIC_API_KEY
 
 ROLE=coder
-invoke_with_role_credential a b c d e
+invoke_scoped_key "$(resolve_role_credential "${ROLE:-coder}")" a b c d e
 check "assigned role: key exported to the session" "sk-ROLEKEY-42" "$(cat "$envfile")"
 check "assigned role: key does NOT leak into supervisor env" "" "${ANTHROPIC_API_KEY:-}"
 
 ROLE=researcher
-invoke_with_role_credential a b c d e
+invoke_scoped_key "$(resolve_role_credential "${ROLE:-coder}")" a b c d e
 check "unassigned role: no key exported (subscription)" "NONE" "$(cat "$envfile")"
 check "unassigned role: supervisor env still clean" "" "${ANTHROPIC_API_KEY:-}"
 
 # --- a pre-existing ambient key is preserved when no role key is assigned ----
 export ANTHROPIC_API_KEY="ambient-sub-key"
 ROLE=researcher
-invoke_with_role_credential a b c d e
+invoke_scoped_key "$(resolve_role_credential "${ROLE:-coder}")" a b c d e
 check "no role key: ambient env key passes through" "ambient-sub-key" "$(cat "$envfile")"
 check "no role key: ambient key unchanged after" "ambient-sub-key" "${ANTHROPIC_API_KEY:-}"
 
 # assigned role overrides the ambient key, but only for the session
 ROLE=coder
-invoke_with_role_credential a b c d e
+invoke_scoped_key "$(resolve_role_credential "${ROLE:-coder}")" a b c d e
 check "assigned role overrides ambient for the session" "sk-ROLEKEY-42" "$(cat "$envfile")"
 check "ambient key restored after the session" "ambient-sub-key" "${ANTHROPIC_API_KEY:-}"
 
