@@ -66,7 +66,7 @@ engine:
                                 # this machine share one account's rate-limit state)
 
 agent:
-  type: claude                  # claude | codex (only claude has an adapter implemented)
+  type: claude                  # claude | codex
   model:
     primary: <model-id>
     fallback: <model-id>
@@ -119,7 +119,8 @@ never treated as green; `ci_only` additionally refuses on zero configured checks
 | `board.sh status <issue#> "<status>" \| add <issue#>` | Best-effort GitHub Projects v2 board updates |
 | `unblock_dependents.sh <merged-pr-number>` | Post-merge "blocked by #X" notifier |
 | `dashboard.py --repo <path> [--repo …] [--port 8787]` | Control-room page. Stdlib HTTP+SSE, **binds 127.0.0.1 only**. Renders the engine's emitted artifacts (session logs, `supervisor.log`, git/gh, config, quota); lifecycle controls (start / graceful-stop / hard-stop / resume) via a token-guarded POST |
-| `agents/claude.sh` | The Claude Code agent adapter (only one implemented) |
+| `agents/claude.sh` | The Claude Code agent adapter |
+| `agents/codex.sh` | The Codex agent adapter (safety text prepended to the prompt; engine-level fallback retry) |
 
 ## Lifecycle: start / graceful-stop / hard-stop
 
@@ -196,9 +197,23 @@ Design + the research behind it: [docs/dashboard-design.md](docs/dashboard-desig
 - `agent_invoke(prompt_file, safety_file, model, fallback_model, log_file) -> exit code`
 - `agent_classify_outcome(log_file, exit_code) -> "success" | "usage_limit [epoch]" | "error"`
 
-Only `claude.sh` exists today. A `codex.sh` is a real future possibility (Codex's CLI differs
-structurally — no system-prompt-append flag, its own JSONL schema, no native fallback-model
-support) but is not built or tested here.
+Two adapters exist: `claude.sh` and `codex.sh`. Codex's CLI differs structurally, and the
+adapter absorbs every difference so `supervisor.sh` needs no changes:
+
+- **No system-prompt-append flag** — the safety text (`hard_rules.md`) is *prepended* to the
+  prompt, ordering guaranteed by the adapter.
+- **No native fallback-model support** — the adapter retries once with `agent.model.fallback`
+  on a non-limit failure. A usage-limit failure never burns the fallback (the limit is
+  account-global).
+- **Its own `--json` JSONL schema** — classification parses error envelopes (structured
+  code/message) and `rate_limits` snapshots (`resets_at` in epoch-s/ms/ISO,
+  `resets_in_seconds`); agent *content* is never parsed.
+
+**Codex validation caveat:** the flag surface and field names are verified against
+codex-cli 0.136.0 (`--help` + binary introspection) and the parsers are fixture-tested, but
+the exact rate-limit event a real 429 emits has not been captured yet — that empirical step
+is tracked on issue #2 and costs real spend. Until then, a missed limit signal degrades to
+the supervisor's exponential backoff (fail-safe, never fail-open).
 
 ## Testing
 

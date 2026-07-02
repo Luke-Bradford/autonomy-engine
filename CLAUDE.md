@@ -55,7 +55,8 @@ bin/
   safe_merge.sh               # the ONLY sanctioned merge path; 4 gate strategies
   board.sh                     # best-effort GitHub Projects v2 board updates
   unblock_dependents.sh         # post-merge "blocked by #X" notifier
-  agents/claude.sh               # Claude Code adapter (only one implemented; codex is issue #2)
+  agents/claude.sh               # Claude Code adapter
+  agents/codex.sh                 # Codex adapter (engine-level fallback retry; limit-shape #2-caveat)
 lib/config_parser.py             # restricted YAML-subset parser (stdlib only)
 templates/                        # supervisor.plist.tmpl + autonomy-pack/ (onboard scaffolds these)
 tests/                             # one per script; run_all.sh runs the whole suite
