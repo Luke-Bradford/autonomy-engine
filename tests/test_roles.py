@@ -268,5 +268,86 @@ class TestIncrement2Fields(unittest.TestCase):
         self.assertEqual(roles.validate_roles(cfg), [])
 
 
+class TestBehaviourKnobs(unittest.TestCase):
+    """QA/PM/Researcher/Coder behaviour knobs -- validated by value wherever
+    they appear (custom agents get the same knobs)."""
+
+    def test_spec_knob_examples_validate(self):
+        cfg = parse(
+            "roles:\n"
+            "  qa:\n"
+            "    gate: wait-for-human\n"
+            "    tools: [read, mcp]\n"
+            '    regression: { every: "0 3 * * 0" }\n'
+            "  researcher:\n"
+            "    output: handoff-to-pm\n"
+            "    web_search: true\n"
+            "  pm:\n"
+            "    duties: [groom, prioritise, unblock, spec-check]\n"
+            "  coder:\n"
+            "    self_test: true\n"
+            "    blockers: raise-to-pm\n")
+        self.assertEqual(roles.validate_roles(cfg), [])
+
+    def test_gate_enum(self):
+        cfg = parse("roles:\n  qa:\n    gate: yolo-merge\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("gate" in e and "yolo-merge" in e for e in errs))
+
+    def test_output_enum(self):
+        cfg = parse("roles:\n  researcher:\n    output: tweet\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("output" in e for e in errs))
+
+    def test_blockers_enum(self):
+        cfg = parse("roles:\n  coder:\n    blockers: give-up\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("blockers" in e for e in errs))
+
+    def test_bool_knobs_must_be_bool(self):
+        for knob in ("web_search", "self_test"):
+            cfg = parse("roles:\n  r:\n    %s: yes\n" % knob)  # bare 'yes' parses as string
+            errs = roles.validate_roles(cfg)
+            self.assertTrue(any(knob in e for e in errs),
+                            "expected an error for non-bool %s" % knob)
+
+    def test_tools_subset(self):
+        cfg = parse("roles:\n  qa:\n    tools: [read, bash]\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("tools" in e for e in errs))
+
+    def test_tools_empty_list_invalid(self):
+        cfg = parse("roles:\n  qa:\n    tools: []\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("tools" in e for e in errs))
+
+    def test_duties_subset(self):
+        cfg = parse("roles:\n  pm:\n    duties: [groom, moan]\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("duties" in e for e in errs))
+
+    def test_regression_after_tickets(self):
+        cfg = parse("roles:\n  qa:\n    regression: { after_tickets: 10 }\n")
+        self.assertEqual(roles.validate_roles(cfg), [])
+
+    def test_regression_after_tickets_positive(self):
+        cfg = parse("roles:\n  qa:\n    regression: { after_tickets: 0 }\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("after_tickets" in e for e in errs))
+
+    def test_regression_bad_cron(self):
+        cfg = parse('roles:\n  qa:\n    regression: { every: "not cron" }\n')
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("regression" in e for e in errs))
+
+    def test_regression_needs_exactly_one_key(self):
+        cfg = parse('roles:\n  qa:\n    regression: { every: "0 3 * * 0", after_tickets: 5 }\n')
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("regression" in e for e in errs))
+        cfg = parse("roles:\n  qa:\n    regression: {}\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("regression" in e for e in errs))
+
+
 if __name__ == "__main__":
     unittest.main()

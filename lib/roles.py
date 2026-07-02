@@ -34,6 +34,14 @@ VALID_TRIGGERS = ("loop", "cron", "event")
 VALID_PHASES = ("plan", "implement", "test")
 VALID_SCOPE_TARGETS = ("diff", "affected", "full-regression")
 _SCOPE_KEYS = ("labels", "paths", "milestone", "query", "target")
+VALID_GATES = ("wait-for-human", "auto-merge-on-pass")
+VALID_TOOLS = ("read", "mcp")
+VALID_OUTPUTS = ("raise-issues", "handoff-to-pm")
+VALID_DUTIES = ("groom", "prioritise", "unblock", "spec-check")
+VALID_BLOCKERS = ("raise-to-pm", "raise-to-human")
+_ENUM_KNOBS = (("gate", VALID_GATES), ("output", VALID_OUTPUTS),
+               ("blockers", VALID_BLOCKERS))
+_BOOL_KNOBS = ("web_search", "self_test")
 
 # The standard roster and its defaults: (name, enabled, substrate, trigger).
 # Only the coder loop is on by default; everything else is an explicit,
@@ -90,6 +98,46 @@ def _validate_scope(name, scope):
         elif not _is_nonempty_str(val):
             errors.append("roles.%s: scope.%s must be a non-empty string"
                           % (name, key))
+    return errors
+
+
+def _validate_knobs(name, cfg):
+    """Behaviour knobs (design spec, Layer 2 knob table). Validated by value
+    wherever they appear -- custom agents share the standard roster's knobs.
+    `gate: auto-merge-on-pass` still routes through merge_gate.strategy; the
+    knob never bypasses the merge authority."""
+    errors = []
+    for knob, valid in _ENUM_KNOBS:
+        if knob in cfg and cfg.get(knob) not in valid:
+            errors.append("roles.%s: %s must be one of %s (got %r)"
+                          % (name, knob, ", ".join(valid), cfg.get(knob)))
+    for knob in _BOOL_KNOBS:
+        if knob in cfg and not isinstance(cfg.get(knob), bool):
+            errors.append("roles.%s: %s must be true or false" % (name, knob))
+    tools = cfg.get("tools")
+    if tools is not None and (not isinstance(tools, list) or not tools
+                              or any(t not in VALID_TOOLS for t in tools)):
+        errors.append("roles.%s: tools must be a non-empty list from [%s]"
+                      % (name, ", ".join(VALID_TOOLS)))
+    duties = cfg.get("duties")
+    if duties is not None and (not isinstance(duties, list) or not duties
+                               or any(d not in VALID_DUTIES for d in duties)):
+        errors.append("roles.%s: duties must be a non-empty list from [%s]"
+                      % (name, ", ".join(VALID_DUTIES)))
+    regression = cfg.get("regression")
+    if regression is not None:
+        if not isinstance(regression, dict) or sorted(regression) not in (
+                ["after_tickets"], ["every"]):
+            errors.append("roles.%s: regression must be { every: <cron> } or "
+                          "{ after_tickets: <n> }" % name)
+        elif "every" in regression and \
+                cron_next_fire(regression["every"], 0) is None:
+            errors.append("roles.%s: regression.every is not a valid cron "
+                          "schedule: %r" % (name, regression["every"]))
+        elif "after_tickets" in regression and \
+                not _is_positive_int(regression["after_tickets"]):
+            errors.append("roles.%s: regression.after_tickets must be a "
+                          "positive integer" % name)
     return errors
 
 
@@ -150,6 +198,7 @@ def validate_roles(config):
                         errors.append("roles.%s: models.%s must be a model "
                                       "name" % (name, phase))
         errors.extend(_validate_scope(name, cfg.get("scope")))
+        errors.extend(_validate_knobs(name, cfg))
     return errors
 
 
