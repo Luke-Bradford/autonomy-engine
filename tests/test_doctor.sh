@@ -33,6 +33,16 @@ mkdir -p "$tmp/.claude"
 touch "$tmp/.claude/CLAUDE.md"
 check "requires_claude_md true, CLAUDE.md present -> pass" "0" "$(doctor_preflight_check "$tmp" >/dev/null 2>&1; echo $?)"
 
+# Claude Code loads CLAUDE.md from the repo ROOT as well as .claude/ -- doctor
+# must accept either location, else a root-CLAUDE.md repo (like autonomy-engine
+# itself) fails readiness despite the file being loaded at runtime.
+rm -f "$tmp/.claude/CLAUDE.md"
+check "requires_claude_md true, neither location -> hard fail" "1" "$(doctor_preflight_check "$tmp" >/dev/null 2>&1; echo $?)"
+touch "$tmp/CLAUDE.md"
+check "requires_claude_md true, root CLAUDE.md present -> pass" "0" "$(doctor_preflight_check "$tmp" >/dev/null 2>&1; echo $?)"
+rm -f "$tmp/CLAUDE.md"
+touch "$tmp/.claude/CLAUDE.md"  # restore for subsequent checks
+
 echo "this line has no colon whatsoever" > "$tmp/.autonomy/config.yaml"
 check "malformed config.yaml -> hard fail" "1" "$(doctor_preflight_check "$tmp" >/dev/null 2>&1; echo $?)"
 

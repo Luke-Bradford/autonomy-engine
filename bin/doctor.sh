@@ -24,8 +24,10 @@ doctor_preflight_check() {
   fi
   local requires_md
   requires_md="$(python3 "$DOCTOR_HOME/lib/config_parser.py" "$repo/.autonomy/config.yaml" engine.requires_claude_md 2>/dev/null || echo false)"
-  if [ "$requires_md" = "true" ] && [ ! -f "$repo/.claude/CLAUDE.md" ]; then
-    echo "doctor: FAIL -- engine.requires_claude_md is true but $repo/.claude/CLAUDE.md is missing" >&2
+  # Claude Code loads CLAUDE.md from the repo root AND .claude/; accept either.
+  if [ "$requires_md" = "true" ] \
+     && [ ! -f "$repo/CLAUDE.md" ] && [ ! -f "$repo/.claude/CLAUDE.md" ]; then
+    echo "doctor: FAIL -- engine.requires_claude_md is true but neither $repo/CLAUDE.md nor $repo/.claude/CLAUDE.md exists" >&2
     return 1
   fi
   return 0
@@ -66,13 +68,15 @@ doctor_full_report() {
   fi
   rm -f /tmp/doctor_preflight_err.$$
 
-  if [ -f "$repo/.claude/CLAUDE.md" ]; then
+  if [ -f "$repo/CLAUDE.md" ]; then
+    echo "OK   CLAUDE.md present (repo root)"
+  elif [ -f "$repo/.claude/CLAUDE.md" ]; then
     echo "OK   .claude/CLAUDE.md present"
   else
     local requires_md
     requires_md="$(python3 "$DOCTOR_HOME/lib/config_parser.py" "$repo/.autonomy/config.yaml" engine.requires_claude_md 2>/dev/null || echo false)"
     if [ "$requires_md" != "true" ]; then
-      echo "WARN .claude/CLAUDE.md not found -- run /init in Claude Code, or use the claude-md-management:claude-md-improver skill"
+      echo "WARN no CLAUDE.md found (repo root or .claude/) -- run /init in Claude Code, or use the claude-md-management:claude-md-improver skill"
     fi
   fi
 
