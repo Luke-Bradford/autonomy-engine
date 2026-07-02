@@ -644,6 +644,26 @@ def execute_control(repo, action):
     return {"ok": True, "message": plan.get("message", "done")}
 
 
+def _is_benign_disconnect(exc):
+    """A client resetting a keep-alive / SSE connection is normal (the browser
+    navigated away or closed the stream). The default ThreadingHTTPServer dumps
+    a full traceback per reset, which reads as 'the app is crashing' when it is
+    healthy. These specific socket errors are benign; anything else is real."""
+    return isinstance(exc, (ConnectionResetError, BrokenPipeError,
+                            ConnectionAbortedError, TimeoutError))
+
+
+class _QuietThreadingHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that swallows benign client-disconnect tracebacks
+    (see _is_benign_disconnect) and surfaces everything else as usual."""
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        if _is_benign_disconnect(sys.exc_info()[1]):
+            return
+        super().handle_error(request, client_address)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "autonomy-dashboard/1.0"
     repos = []
@@ -839,7 +859,7 @@ def main(argv):
     sampler = threading.Thread(target=_sampler_loop, args=(repos, stop), daemon=True)
     sampler.start()
 
-    httpd = ThreadingHTTPServer((args.host, args.port), Handler)
+    httpd = _QuietThreadingHTTPServer((args.host, args.port), Handler)
     url = "http://%s:%d/" % (args.host, args.port)
     sys.stderr.write("autonomy control-room on %s  (%d repo%s)\n"
                      % (url, len(repos), "" if len(repos) == 1 else "s"))
