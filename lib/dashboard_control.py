@@ -77,6 +77,87 @@ def set_model_plan(repo, model, effort, scope):
             "message": "saved as the repo default — applies from the next session"}
 
 
+VALID_STRATEGIES = ("manual", "ci_only", "bot_comment", "gh_review")
+
+
+def _valid_text(value):
+    """Free-text config values (board owner/title): single line, bounded, and
+    writable by the restricted parser (no value can hold BOTH quote kinds)."""
+    return (bool(value) and len(value) <= 200
+            and "\n" not in value and "\r" not in value
+            and not ('"' in value and "'" in value))
+
+
+# The config page (#47) may write EXACTLY these keys, each with its own
+# validator. Everything else in config.yaml stays file-edited on purpose
+# (strategy-specific keys, roles, worktree policy -- higher-blast-radius,
+# rarely touched).
+CONFIG_PAGE_KEYS = {
+    "board.owner": _valid_text,
+    "board.project_title": _valid_text,
+    "agent.model.primary": lambda v: bool(_MODEL_RE.match(v)),
+    "agent.model.fallback": lambda v: bool(_MODEL_RE.match(v)),
+    "agent.effort": lambda v: v in VALID_EFFORTS,
+    "merge_gate.strategy": lambda v: v in VALID_STRATEGIES,
+}
+
+
+def config_set_plan(repo, key, value):
+    """#47 config page write: one whitelisted dotted key, validated per key.
+    Returns the same {config_path, config_set, message} shape as
+    set_model_plan's default scope, so the server reuses one executor."""
+    value = (value or "").strip()
+    validator = CONFIG_PAGE_KEYS.get(key)
+    if validator is None:
+        return {"error": "key %r is not editable from the page" % (key,)}
+    if not validator(value):
+        return {"error": "invalid value for %s" % key}
+    return {"config_path": os.path.join(repo, ".autonomy", "config.yaml"),
+            "config_set": {key: value},
+            "message": "%s saved — applies from the next session" % key}
+
+
+def _registered_lines(repos_file):
+    """Registry entries normalized the same way incoming paths are (strip +
+    trailing-slash removal), so dedupe/membership never depends on how a
+    line was hand-edited (PR #48 review)."""
+    try:
+        with open(repos_file) as fh:
+            return [ln.strip().rstrip("/") for ln in fh if ln.strip()]
+    except OSError:
+        return []
+
+
+def repo_add_plan(path, repos_file):
+    """#47: add a repo to the shared registry (the same file discovery,
+    quickstart and control.sh use). Absolute existing directory only;
+    already-registered is a friendly no-op."""
+    path = (path or "").strip().rstrip("/")
+    if not path or not os.path.isabs(path):
+        return {"error": "repo path must be absolute"}
+    path = os.path.abspath(path)
+    if not os.path.isdir(path):
+        return {"error": "%s is not a directory on this machine" % path}
+    if path in _registered_lines(repos_file):
+        return {"noop": True, "message": "%s is already registered" % path}
+    message = "registered %s" % path
+    if not os.path.isfile(os.path.join(path, ".autonomy", "config.yaml")):
+        message += " — no .autonomy pack yet; run bin/quickstart.sh on it"
+    return {"append": repos_file, "line": path, "message": message}
+
+
+def repo_remove_plan(path, repos_file):
+    """#47: remove a repo from the registry. Works for already-deleted
+    directories (that is the main cleanup case)."""
+    path = (path or "").strip().rstrip("/")
+    if not path:
+        return {"error": "repo path required"}
+    if path not in _registered_lines(repos_file):
+        return {"error": "%s is not registered" % path}
+    return {"rewrite": repos_file, "drop": path,
+            "message": "unregistered %s (its loop, if any, is untouched)" % path}
+
+
 def find_service(repo, launch_agents_dir):
     """The installed launchd service for a watched repo (worktree), found by
     matching the plist that references this repo path -- robust to the slug not

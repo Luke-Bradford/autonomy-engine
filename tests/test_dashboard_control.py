@@ -155,5 +155,115 @@ class TestActionValidation(unittest.TestCase):
             self.assertFalse(dc.is_valid_action(a))
 
 
+class TestConfigSetPlan(unittest.TestCase):
+    """#47: config page writes. Whitelisted dotted keys only, per-key
+    validation; the plan reuses the config_set execution path the server
+    already has for set_model."""
+    def setUp(self):
+        self.repo = "/tmp/some-repo"
+
+    def plan(self, key, value):
+        return dc.config_set_plan(self.repo, key, value)
+
+    def test_valid_keys_produce_config_set(self):
+        cases = {
+            "board.owner": "some-org",
+            "board.project_title": "My Fancy Board",
+            "agent.model.primary": "claude-opus-4-8",
+            "agent.model.fallback": "claude-sonnet-5",
+            "agent.effort": "high",
+            "merge_gate.strategy": "ci_only",
+        }
+        for key, value in cases.items():
+            p = self.plan(key, value)
+            self.assertNotIn("error", p, "%s: %r" % (key, p))
+            self.assertEqual(p["config_set"], {key: value})
+            self.assertEqual(p["config_path"],
+                             os.path.join(self.repo, ".autonomy", "config.yaml"))
+
+    def test_unknown_key_refused(self):
+        self.assertIn("error", self.plan("merge_gate.author_login", "x"))
+        self.assertIn("error", self.plan("engine.account_key", "x"))
+        self.assertIn("error", self.plan("evil..key", "x"))
+
+    def test_bad_values_refused_per_key(self):
+        self.assertIn("error", self.plan("merge_gate.strategy", "yolo"))
+        self.assertIn("error", self.plan("agent.effort", "extreme"))
+        self.assertIn("error", self.plan("agent.model.primary", "bad;model"))
+        self.assertIn("error", self.plan("board.owner", "two\nlines"))
+        self.assertIn("error", self.plan("board.project_title", "a\"b'c"))
+        self.assertIn("error", self.plan("board.owner", ""))
+        self.assertIn("error", self.plan("board.project_title", "x" * 300))
+
+    def test_values_are_stripped(self):
+        p = self.plan("board.owner", "  padded-org  ")
+        self.assertEqual(p["config_set"], {"board.owner": "padded-org"})
+
+
+class TestRepoRegistryPlans(unittest.TestCase):
+    """#47: add/remove watched repos from the page. The registry file is the
+    same one dashboard discovery + quickstart + control.sh use."""
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.reg = os.path.join(self.tmp, "repos")
+        self.repo = os.path.join(self.tmp, "proj")
+        os.makedirs(self.repo)
+
+    def test_add_fresh_repo(self):
+        p = dc.repo_add_plan(self.repo, self.reg)
+        self.assertEqual(p.get("append"), self.reg)
+        self.assertEqual(p.get("line"), self.repo)
+
+    def test_add_normalizes_and_dedupes(self):
+        with open(self.reg, "w") as fh:
+            fh.write(self.repo + "\n")
+        p = dc.repo_add_plan(self.repo + "/", self.reg)
+        self.assertTrue(p.get("noop"), p)
+
+    def test_add_missing_dir_refused(self):
+        self.assertIn("error", dc.repo_add_plan(os.path.join(self.tmp, "nope"), self.reg))
+
+    def test_add_relative_path_refused(self):
+        self.assertIn("error", dc.repo_add_plan("relative/path", self.reg))
+
+    def test_add_hints_when_pack_missing(self):
+        p = dc.repo_add_plan(self.repo, self.reg)
+        self.assertIn("quickstart", p.get("message", ""))
+
+    def test_add_dedupes_against_trailing_slash_entries(self):
+        # PR #48 review: registry lines are normalized before compare, so a
+        # manually-edited "path/" entry still dedupes
+        with open(self.reg, "w") as fh:
+            fh.write(self.repo + "/\n")
+        p = dc.repo_add_plan(self.repo, self.reg)
+        self.assertTrue(p.get("noop"), p)
+
+    def test_remove_matches_trailing_slash_entries(self):
+        with open(self.reg, "w") as fh:
+            fh.write(self.repo + "/\n")
+        p = dc.repo_remove_plan(self.repo, self.reg)
+        self.assertEqual(p.get("drop"), self.repo)
+
+    def test_remove_registered(self):
+        with open(self.reg, "w") as fh:
+            fh.write("/other\n" + self.repo + "\n")
+        p = dc.repo_remove_plan(self.repo, self.reg)
+        self.assertEqual(p.get("rewrite"), self.reg)
+        self.assertEqual(p.get("drop"), self.repo)
+
+    def test_remove_unregistered_refused(self):
+        with open(self.reg, "w") as fh:
+            fh.write("/other\n")
+        self.assertIn("error", dc.repo_remove_plan(self.repo, self.reg))
+
+    def test_remove_works_for_deleted_dir(self):
+        gone = os.path.join(self.tmp, "gone")
+        with open(self.reg, "w") as fh:
+            fh.write(gone + "\n")
+        p = dc.repo_remove_plan(gone, self.reg)
+        self.assertEqual(p.get("drop"), gone)
+
+
+
 if __name__ == "__main__":
     unittest.main()

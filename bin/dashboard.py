@@ -23,6 +23,7 @@ import argparse
 import json
 import os
 import secrets
+import stat
 import subprocess
 import sys
 import threading
@@ -400,20 +401,94 @@ def execute_set_model(repo, model, effort, scope):
                 fh.write(plan["content"])
             os.replace(tmp, plan["write"])
         else:
-            with open(plan["config_path"]) as fh:
-                text = fh.read()
-            for key, value in sorted(plan["config_set"].items()):
-                text = config_parser.set_scalar(text, key, value)
-            tmp = plan["config_path"] + ".tmp"
-            with open(tmp, "w") as fh:
-                fh.write(text)
-            os.replace(tmp, plan["config_path"])
+            _rewrite_config(plan["config_path"], plan["config_set"])
     except KeyError as exc:
         missing = exc.args[0] if exc.args else exc
         return {"ok": False, "error": "config.yaml has no %s key to update" % missing}
     except (OSError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "message": plan.get("message", "done")}
+
+
+def _rewrite_config(config_path, config_set):
+    """Comment-preserving, atomic, mode-preserving config.yaml rewrite --
+    the one write path for every page-driven config change."""
+    with open(config_path) as fh:
+        text = fh.read()
+    for key, value in sorted(config_set.items()):
+        text = config_parser.set_scalar(text, key, value)
+    tmp = config_path + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write(text)
+    os.chmod(tmp, stat.S_IMODE(os.stat(config_path).st_mode))
+    os.replace(tmp, config_path)
+
+
+def execute_config_set(repo, key, value):
+    """#47 config page: one whitelisted key per request, validated in the
+    plan; same write path as set_model's save-default."""
+    plan = dcx.config_set_plan(repo, key, value)
+    if "error" in plan:
+        return {"ok": False, "error": plan["error"]}
+    try:
+        _rewrite_config(plan["config_path"], plan["config_set"])
+    except KeyError as exc:
+        missing = exc.args[0] if exc.args else exc
+        return {"ok": False, "error": "config.yaml has no %s key to update" % missing}
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "message": plan.get("message", "done")}
+
+
+def _refresh_repos():
+    """Re-run discovery after a registry change. Only when the repo set came
+    from discovery -- explicit CLI --repo pins the set for this process.
+    Never raises: the registry write already succeeded, and this runs outside
+    that try block -- a discovery hiccup must degrade to a message, not blow
+    up the POST handler (PR #48 review)."""
+    if Handler.cli_pinned:
+        return ("this dashboard was started with explicit --repo flags, so the "
+                "change shows after a restart")
+    try:
+        # In-place: the SSE loop and the sampler thread hold this same list.
+        Handler.repos[:] = discover_repos([])
+    except Exception as exc:  # noqa: BLE001 -- deliberate catch-all boundary
+        return "saved, but re-discovery failed (%s) -- restart to pick it up" % exc
+    return "the repo set updates within a couple of seconds"
+
+
+def execute_repo_add(path):
+    plan = dcx.repo_add_plan(path, REPOS_FILE)
+    if "error" in plan:
+        return {"ok": False, "error": plan["error"]}
+    if plan.get("noop"):
+        return {"ok": True, "message": plan["message"]}
+    try:
+        os.makedirs(os.path.dirname(plan["append"]), exist_ok=True)
+        with open(plan["append"], "a") as fh:
+            fh.write(plan["line"] + "\n")
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "message": plan["message"] + "; " + _refresh_repos()}
+
+
+def execute_repo_remove(path):
+    plan = dcx.repo_remove_plan(path, REPOS_FILE)
+    if "error" in plan:
+        return {"ok": False, "error": plan["error"]}
+    try:
+        with open(plan["rewrite"]) as fh:
+            lines = [ln for ln in fh.read().splitlines() if ln.strip()]
+        kept = [ln for ln in lines if ln.strip().rstrip("/") != plan["drop"]]
+        tmp = plan["rewrite"] + ".tmp"
+        with open(tmp, "w") as fh:
+            for ln in kept:
+                fh.write(ln + "\n")
+        os.chmod(tmp, stat.S_IMODE(os.stat(plan["rewrite"]).st_mode))
+        os.replace(tmp, plan["rewrite"])
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "message": plan["message"] + "; " + _refresh_repos()}
 
 
 def execute_control(repo, action):
@@ -449,6 +524,7 @@ def execute_control(repo, action):
 class Handler(BaseHTTPRequestHandler):
     server_version = "autonomy-dashboard/1.0"
     repos = []
+    cli_pinned = False     # True when --repo flags fixed the set (no live reload)
     allowed_hosts = set()  # set in main() to the loopback host:port we bind
 
     def log_message(self, *a):  # quiet; the page is the UI, not the console
@@ -518,8 +594,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send(403, b'{"error":"bad or missing control token"}')
             return
         action = body.get("action")
-        if action != "set_model" and not dcx.is_valid_action(action):
+        if (action not in ("set_model", "config_set", "repo_add", "repo_remove")
+                and not dcx.is_valid_action(action)):
             self._send(400, b'{"error":"invalid action"}')
+            return
+        # Registry actions (#47) manage the repo SET itself, so they take a
+        # path, not a managed repo -- validation lives in their plans.
+        if action in ("repo_add", "repo_remove"):
+            path = str(body.get("path") or "")
+            result = (execute_repo_add(path) if action == "repo_add"
+                      else execute_repo_remove(path))
+            self._send(200 if result.get("ok") else 409,
+                       json.dumps(result).encode("utf-8"))
             return
         repo = os.path.abspath(os.path.expanduser(str(body.get("repo") or "")))
         if repo not in self.repos:            # only ever act on a managed repo
@@ -529,6 +615,9 @@ class Handler(BaseHTTPRequestHandler):
             result = execute_set_model(repo, str(body.get("model") or ""),
                                        str(body.get("effort") or ""),
                                        str(body.get("scope") or ""))
+        elif action == "config_set":
+            result = execute_config_set(repo, str(body.get("key") or ""),
+                                        str(body.get("value") or ""))
         else:
             result = execute_control(repo, action)
         self._send(200 if result.get("ok") else 409, json.dumps(result).encode("utf-8"))
@@ -583,6 +672,7 @@ def main(argv):
         return 2
 
     Handler.repos = repos
+    Handler.cli_pinned = bool(args.repos)
     Handler.allowed_hosts = {"%s:%d" % (h, args.port) for h in ("127.0.0.1", "localhost")}
     # seed one sample immediately so the graph isn't empty on first paint, then
     # start the always-on sampler thread (throughput-over-time source).

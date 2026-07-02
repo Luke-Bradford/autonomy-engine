@@ -101,6 +101,15 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px
 .mctl{flex-wrap:wrap}
 .mctl select{background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);font-family:var(--mono);font-size:10.5px;border-radius:5px;padding:5px 6px;max-width:170px}
 .mctl .pend{align-self:center;font-family:var(--mono);font-size:10px;color:var(--warn)}
+/* ---- config page (#47) ---- */
+.cfgadd{display:flex;gap:8px;padding:10px;border-bottom:1px solid var(--hair)}
+.cfgrepo{padding:8px 10px;border-bottom:1px solid var(--hair)}
+.cfgrepo:last-child{border-bottom:none}
+.cfgname{display:flex;align-items:center;gap:8px;justify-content:space-between;font-size:12px;color:var(--ink);padding:2px 0 6px}
+.cfgrow{display:flex;align-items:center;gap:8px;padding:3px 0}
+.cfglab{font-family:var(--mono);font-size:10px;color:var(--dim);width:92px;flex:none;text-transform:uppercase;letter-spacing:.5px}
+.cfgin{flex:1;min-width:0;background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);
+  font-family:var(--mono);font-size:11px;border-radius:5px;padding:5px 7px}
 #toast{position:fixed;right:20px;bottom:20px;z-index:50;display:flex;flex-direction:column;gap:8px}
 .tmsg{background:var(--panel);border:1px solid var(--hair2);border-left:3px solid var(--tc,var(--accent));border-radius:6px;
   box-shadow:var(--shadow);padding:11px 14px;font-size:12px;max-width:340px;animation:rise .3s both}
@@ -244,6 +253,10 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
         <div class="sh"><h2>Account quota</h2><span class="ln"></span><span class="ct">shared · all repos</span></div>
         <div class="panel" id="quota"></div>
       </div>
+      <div>
+        <div class="sh"><h2>Config</h2><span class="ln"></span><span class="ct">writes .autonomy/config.yaml · registry</span></div>
+        <div class="panel" id="cfg"></div>
+      </div>
     </div>
 
     <div class="col">
@@ -287,6 +300,10 @@ const $=(id)=>document.getElementById(id);
 let VIEW="tree", LAST=null, GEN=0;
 
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+/* attribute-safe repo ref: encodeURIComponent leaves ' alone, which would
+   break out of single-quoted onclick attributes -- %27 keeps it inert and
+   decodeURIComponent still restores it */
+function encAttr(s){return encodeURIComponent(s).replace(/'/g,"%27");}
 function num(n){return (n==null?0:Math.round(n)).toLocaleString("en-US");}
 function short(s,n){s=String(s||"");return s.length>n?s.slice(0,n-1)+"…":s;}
 function dur(sec){sec=Math.max(0,Math.floor(sec));const h=(sec/3600)|0;sec-=h*3600;const m=(sec/60)|0;sec-=m*60;
@@ -403,7 +420,7 @@ function setModel(btn,scope){
 
 /* ---- CONTROLS (P2) ---- */
 const CTOKEN=(document.querySelector('meta[name="ae-control-token"]')||{}).content||"";
-function cbtn(repo,action,label,cls){return `<button class="cbtn ${cls}" onclick="control('${encodeURIComponent(repo)}','${action}','${esc(label)}')">${esc(label)}</button>`;}
+function cbtn(repo,action,label,cls){return `<button class="cbtn ${cls}" onclick="control('${encAttr(repo)}','${action}','${esc(label)}')">${esc(label)}</button>`;}
 function controls(r,st){
   const repo=r.path;
   if(st==="needs-setup"||st==="missing") return `<div class="ctl"><span class="note">run setup_worktree.sh to manage</span></div>`;
@@ -425,6 +442,59 @@ function control(repoEnc,action,label){
     .then(({ok,j})=>toast(ok&&j.ok, (ok&&j.ok)?(label+" — "+(j.message||"done")):("failed: "+(j.error||"error"))))
     .catch(()=>toast(false,"request failed"));
 }
+/* ---- CONFIG PAGE (#47): registry + whitelisted config keys ---- */
+const STRATEGIES=["manual","ci_only","bot_comment","gh_review"];
+let CFG_SIG=null; // rebuild only when the repo set changes, so typing survives ticks
+function renderCfg(repos){
+  const sig=repos.map(r=>r.path).join("|");
+  if(sig===CFG_SIG) return;
+  CFG_SIG=sig;
+  const rows=repos.map(r=>{
+    const c=r.config||{}, enc=encAttr(r.path);
+    return `<div class="cfgrepo" data-repo="${enc}">
+      <div class="cfgname">${esc(r.name||r.path)}<button class="cbtn danger" onclick="repoRemove('${enc}')">remove</button></div>
+      ${cfgField(enc,"board.owner","board owner",c.board_owner)}
+      ${cfgField(enc,"board.project_title","board title",c.board_title)}
+      ${cfgField(enc,"agent.model.primary","model",c.model)}
+      ${cfgField(enc,"agent.model.fallback","fallback",c.fallback)}
+      ${cfgSelect(enc,"agent.effort","effort",EFFORT_CHOICES.filter(e=>e),c.effort)}
+      ${cfgSelect(enc,"merge_gate.strategy","merge gate",STRATEGIES,c.merge_gate)}
+    </div>`;
+  }).join("");
+  $("cfg").innerHTML=`<div class="cfgadd"><input id="cfg-add" class="cfgin" placeholder="/absolute/path/to/repo"><button class="cbtn go" onclick="repoAdd()">add repo</button></div>`
+    +(rows||`<div class="ctl" style="padding:10px"><span class="note">no repos registered — add one above</span></div>`);
+}
+function cfgField(enc,key,label,val){
+  return `<div class="cfgrow"><span class="cfglab">${esc(label)}</span><input class="cfgin" data-key="${key}" value="${esc(val||"")}"><button class="cbtn" onclick="cfgSave(this,'${enc}','${key}')">save</button></div>`;
+}
+function cfgSelect(enc,key,label,opts,val){
+  return `<div class="cfgrow"><span class="cfglab">${esc(label)}</span><select class="cfgin" data-key="${key}">${opts.map(o=>`<option ${o===val?"selected":""}>${o}</option>`).join("")}</select><button class="cbtn" onclick="cfgSave(this,'${enc}','${key}')">save</button></div>`;
+}
+function cfgSave(btn,enc,key){
+  const repo=decodeURIComponent(enc);
+  const el=btn.closest(".cfgrow").querySelector("[data-key]");
+  const value=el.value.trim();
+  if(!window.confirm("Write "+key+' = "'+value+'" into .autonomy/config.yaml?\n\nrepo: '+repo)) return;
+  postCfg({repo,action:"config_set",key,value},key+" saved");
+}
+function repoAdd(){
+  const path=($("cfg-add").value||"").trim();
+  if(!path){toast(false,"enter an absolute repo path");return;}
+  postCfg({action:"repo_add",path},"repo added");
+}
+function repoRemove(enc){
+  const path=decodeURIComponent(enc);
+  if(!window.confirm("Unregister this repo from the dashboard?\n(Its loop, if any, is untouched.)\n\n"+path)) return;
+  postCfg({action:"repo_remove",path},"repo removed");
+}
+function postCfg(body,okLabel){
+  body.token=CTOKEN;
+  fetch("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
+    .then(r=>r.json().then(j=>({ok:r.ok,j})))
+    .then(({ok,j})=>{toast(ok&&j.ok,(ok&&j.ok)?(j.message||okLabel):("failed: "+(j.error||"error")));if(ok&&j.ok)CFG_SIG=null;})
+    .catch(()=>toast(false,"request failed"));
+}
+
 function toast(ok,msg){
   const box=$("toast"); const el=document.createElement("div");
   el.className="tmsg "+(ok?"ok":"err");
@@ -596,7 +666,7 @@ setInterval(()=>{
 
 /* ---- render + SSE ---- */
 function render(s){LAST=s;GEN=s.generated_at||Math.floor(nowS());
-  renderFocus(s.repos);renderRepos(s.repos);renderQuota(s.repos,s.account);renderActivity(s.repos);
+  renderFocus(s.repos);renderRepos(s.repos);renderCfg(s.repos);renderQuota(s.repos,s.account);renderActivity(s.repos);
   renderThroughput(s.repos);renderVoice(s.repos);renderGit(s.repos);
   $("f-gen").textContent="snapshot "+new Date(GEN*1000).toISOString().slice(11,19)+"Z";}
 function setLive(ok){$("h-live").classList.toggle("stale",!ok);$("h-live-t").textContent=ok?"live":"reconnecting";}
