@@ -39,6 +39,7 @@ re-parse the config:
   1 = invalid (one error per stdout line)   2 = config unreadable
 """
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -270,6 +271,110 @@ def check_accounts(config, known_account_names):
     return errors
 
 
+# Role names land in supervisor shell word-splitting and log lines: same safe
+# charset as account names (lib/accounts.py). dispatch never emits others.
+_ROLE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def as_bool(v):
+    """Config booleans arrive as real bools from config_parser but may be
+    strings from older/hand-edited packs -- one lenient reading, shared with
+    the dashboard (dashboard_state aliases this)."""
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("true", "1", "yes", "on")
+
+
+def _effective(cfg, key_default_pairs):
+    """(enabled, trigger_type) for a role config dict, given its roster
+    defaults. Defensive against non-dict shapes -- dispatch may see a config
+    that validate_roles would reject; it must degrade, not crash."""
+    cfg = cfg if isinstance(cfg, dict) else {}
+    d_enabled, d_trig = key_default_pairs
+    enabled = as_bool(cfg.get("enabled")) if "enabled" in cfg else d_enabled
+    trigger = cfg.get("trigger")
+    ttype = trigger.get("type") if isinstance(trigger, dict) else None
+    return enabled, (ttype or d_trig)
+
+
+def dispatch_roles(config):
+    """Names of the roles the supervisor's loop dispatches, in a stable
+    order: standard roster first (DEFAULT_ROLES order), then custom roles in
+    config order. A role is dispatched iff effectively enabled AND its
+    effective trigger type is 'loop' -- cron/event roles belong to increment
+    4's scheduler/event bus. Merge semantics mirror the dashboard roster
+    (dashboard_state.build_roles): standard roles default from DEFAULT_ROLES,
+    custom roles default to enabled=false / trigger=loop. No roles: block ->
+    ['coder'] (today's behaviour)."""
+    roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
+    if not isinstance(roles_blk, dict):
+        roles_blk = {}
+    out = []
+    for name, d_enabled, _sub, d_trig in DEFAULT_ROLES:
+        enabled, ttype = _effective(roles_blk.get(name), (d_enabled, d_trig))
+        if enabled and ttype == "loop":
+            out.append(name)
+    standard = tuple(r[0] for r in DEFAULT_ROLES)
+    for name, cfg in roles_blk.items():
+        if name in standard or not _ROLE_NAME_RE.match(str(name)):
+            continue
+        enabled, ttype = _effective(cfg, (False, "loop"))
+        if enabled and ttype == "loop":
+            out.append(name)
+    return out
+
+
+def render_scope(scope):
+    """One-line scope directive for the session's system prompt -- the
+    supervisor appends it to the pack's hard_rules. '' when scope is absent
+    or empty (whole open board, today's behaviour). The bare-string
+    shorthand ('scope: diff') renders as its target. Never multi-line: the
+    value crosses a KEY=value pipe to bash."""
+    if not scope:
+        return ""
+    if isinstance(scope, str):
+        parts = [("target", scope)]
+    elif isinstance(scope, dict):
+        parts = []
+        for key in _SCOPE_KEYS:  # stable schema order
+            if key not in scope:
+                continue
+            val = scope[key]
+            if isinstance(val, list):
+                val = ", ".join(str(v) for v in val)
+            parts.append((key, str(val)))
+        if not parts:
+            return ""
+    else:
+        return ""
+    rendered = "; ".join("%s: %s" % (k, v) for k, v in parts)
+    return "Scope: work ONLY within this scope: %s." % rendered
+
+
+def role_settings(config, name):
+    """The session settings the supervisor needs to dispatch `name`:
+    account/model/effort/prompt/scope as strings ('' = unset, supervisor
+    falls back to its agent.* resolution) plus instances (int >= 1).
+    KeyError when the role is not dispatchable (not in dispatch_roles) --
+    the CLI turns that into exit 1 so the supervisor refuses cleanly."""
+    if name not in dispatch_roles(config):
+        raise KeyError(name)
+    roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
+    cfg = roles_blk.get(name) if isinstance(roles_blk, dict) else None
+    if not isinstance(cfg, dict):
+        cfg = {}
+
+    def _s(key):
+        v = cfg.get(key)
+        return str(v).strip() if _is_nonempty_str(v) else ""
+
+    instances = cfg.get("instances")
+    instances = int(str(instances)) if _is_positive_int(instances) else 1
+    return {"account": _s("account"), "model": _s("model"),
+            "effort": _s("effort"), "prompt": _s("prompt"),
+            "scope": render_scope(cfg.get("scope")), "instances": instances}
+
+
 def _cron_field(spec, lo, hi):
     """One cron field -> set of ints, or None if invalid. Supports the forms
     real schedules use: '*', '*/n', 'a', 'a-b', 'a,b,c' (parts may be ranges
@@ -348,22 +453,61 @@ def cron_next_fire(expr, now_epoch):
     return None
 
 
-def main(argv):
-    if len(argv) != 2:
-        print("usage: roles.py <target-repo>", file=sys.stderr)
-        return 2
-    repo = argv[1]
+def _load_config(repo):
+    """(config, rc) -- rc 0 on success, else the CLI exit code (2 unreadable,
+    1 unparseable) with an explanation on stderr. Shared by the validation
+    and dispatch entries."""
     cfg_path = os.path.join(repo, ".autonomy", "config.yaml")
     import config_parser
     try:
         with open(cfg_path, encoding="utf-8") as fh:
-            config = config_parser.parse(fh.read())
+            return config_parser.parse(fh.read()), 0
     except OSError as exc:
         print("roles: cannot read %s: %s" % (cfg_path, exc), file=sys.stderr)
-        return 2
+        return None, 2
     except ValueError as exc:
         print("roles: config.yaml does not parse: %s" % exc, file=sys.stderr)
+        return None, 1
+
+
+def _dispatch_main(argv):
+    """`roles.py dispatch <target-repo> [role]` -- the supervisor's dispatch
+    contract. Without a role: enabled loop-role names, one per line (may be
+    none). With a role: the six KEY=value session-settings lines. Exit 1 on
+    an undispatchable role (the supervisor REFUSES that session, fail-safe)."""
+    if len(argv) not in (2, 3):
+        print("usage: roles.py dispatch <target-repo> [role]", file=sys.stderr)
+        return 2
+    config, rc = _load_config(argv[1])
+    if rc:
+        return rc
+    if len(argv) == 2:
+        for name in dispatch_roles(config):
+            print(name)
+        return 0
+    try:
+        s = role_settings(config, argv[2])
+    except KeyError:
+        print("roles: %r is not an enabled loop role" % argv[2],
+              file=sys.stderr)
         return 1
+    for key in ("account", "model", "effort", "prompt", "scope"):
+        print("%s=%s" % (key.upper(), s[key]))
+    print("INSTANCES=%d" % s["instances"])
+    return 0
+
+
+def main(argv):
+    if len(argv) >= 2 and argv[1] == "dispatch":
+        return _dispatch_main(argv[1:])
+    if len(argv) != 2:
+        print("usage: roles.py <target-repo> | roles.py dispatch "
+              "<target-repo> [role]", file=sys.stderr)
+        return 2
+    repo = argv[1]
+    config, rc = _load_config(repo)
+    if rc:
+        return rc
     import accounts as accounts_mod
     known = [e["name"] for e in accounts_mod.Accounts().list()]
     errors = (validate_roles(config) + check_prompt_files(config, repo)

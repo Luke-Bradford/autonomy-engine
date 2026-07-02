@@ -613,10 +613,7 @@ def parse_quota_windows(path):
 _STANDARD_ROLES = roles_schema.DEFAULT_ROLES
 
 
-def _as_bool(v):
-    if isinstance(v, bool):
-        return v
-    return str(v).strip().lower() in ("true", "1", "yes", "on")
+_as_bool = roles_schema.as_bool
 
 
 def _role_next_fire(cfg, enabled, now):

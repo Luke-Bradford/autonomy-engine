@@ -107,11 +107,14 @@ valid_effort() {
 
 # Resolve model/fallback/effort PER SESSION (not once at startup), so a config
 # edit -- including the dashboard's 'save as default' write-back -- takes
-# effect on the next session without a supervisor restart.
+# effect on the next session without a supervisor restart. Role-level
+# model/effort (ROLE_MODEL/ROLE_EFFORT, set by resolve_role_dispatch) sit
+# between the CLI flag and config.yaml: CLI > role > agent.* > default. The
+# one-shot dashboard override is applied last and wins for its one session.
 resolve_session_settings() {
-  MODEL="$(resolve_config_value "$CFG" agent.model.primary "$MODEL_OVERRIDE" claude-sonnet-5)"
+  MODEL="$(resolve_config_value "$CFG" agent.model.primary "${MODEL_OVERRIDE:-${ROLE_MODEL:-}}" claude-sonnet-5)"
   FALLBACK_MODEL="$(resolve_config_value "$CFG" agent.model.fallback "$FALLBACK_MODEL_OVERRIDE" claude-sonnet-4-6)"
-  EFFORT="$(resolve_config_value "$CFG" agent.effort "$EFFORT_OVERRIDE" "")"
+  EFFORT="$(resolve_config_value "$CFG" agent.effort "${EFFORT_OVERRIDE:-${ROLE_EFFORT:-}}" "")"
   consume_model_override "$LOGDIR/model-override"
 }
 
@@ -252,35 +255,185 @@ resolve_role_credential() {
   fi
 }
 
-# Run agent_invoke with $1 (a resolved key, "" = none) exported in a SUBSHELL,
-# so the key is scoped to the one session and never lands in the supervisor's
-# own environment (a long-lived process). $2.. pass straight to agent_invoke.
+# Run agent_invoke with $1 -- zero or more VAR=value lines, exactly what
+# `accounts.py resolve` prints -- exported in a SUBSHELL, so account keys are
+# scoped to the one session and never land in the supervisor's own
+# environment (a long-lived process). Empty $1 = whatever auth the ambient
+# env already has (subscription). Generalises the #51-C single-key form.
+invoke_scoped_env() {
+  local env_lines="$1"; shift
+  if [ -z "$env_lines" ]; then
+    agent_invoke "$@"
+    return $?
+  fi
+  (
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      case "$line" in *=*) ;; *) continue ;; esac   # no '=' at all -- not an env line
+      case "${line%%=*}" in
+        ''|*[!A-Za-z0-9_]*) continue ;;   # not a sane env var name -- skip
+      esac
+      # shellcheck disable=SC2163
+      export "${line%%=*}=${line#*=}"
+    done <<EOF
+$env_lines
+EOF
+    agent_invoke "$@"
+  )
+}
+
+# Back-compat single-key form (#51-C): a resolved role credential ("" = none).
 invoke_scoped_key() {
   local key="$1"; shift
   if [ -n "$key" ]; then
-    ( export ANTHROPIC_API_KEY="$key"; agent_invoke "$@" )
+    invoke_scoped_env "ANTHROPIC_API_KEY=$key" "$@"
   else
-    agent_invoke "$@"
+    invoke_scoped_env "" "$@"
   fi
 }
 
+# --- headless multi-agent dispatch (agent-org increment 3) -------------------
+# The supervisor dispatches EVERY enabled `roles:` agent whose trigger is
+# `loop`, round-robin -- one session per loop iteration -- exactly the way it
+# has always run Coder. Enumeration re-resolves every tick so config edits
+# apply on the next session. Cron/event triggers belong to increment 4's
+# scheduler/event bus and are never dispatched here.
+
+# Enabled loop-role names, one per line (roles.py dispatch contract). The
+# caller handles rc!=0 (fail back to coder-only) and empty output (idle).
+resolve_dispatch_roles() {
+  python3 "$ENGINE_HOME/lib/roles.py" dispatch "$AUTONOMY_TARGET_REPO" 2>>"$SUPLOG"
+}
+
+# Round-robin selector: print the (idx mod n)th name, 0-indexed, from the
+# names in $2..; rc 1 when the list is empty. Role names are [A-Za-z0-9._-]
+# by the dispatch contract, so callers may word-split the enumeration safely.
+select_role() {
+  local idx="$1"; shift
+  [ $# -gt 0 ] || return 1
+  shift $(( idx % $# ))
+  printf '%s' "$1"
+}
+
+# Parse `roles.py dispatch <repo> <role>` KEY=value output into ROLE_*
+# globals. rc 1 = the role is not dispatchable / settings unreadable -- the
+# caller REFUSES the session (fail-safe). Model/effort values came from a
+# config a dashboard may write: validate before they can land in argv
+# (defense-in-depth parity with consume_model_override).
+resolve_role_dispatch() {
+  local role="$1" out line key val
+  ROLE_ACCOUNT=""; ROLE_MODEL=""; ROLE_EFFORT=""; ROLE_PROMPT=""
+  ROLE_SCOPE=""; ROLE_INSTANCES=1
+  out="$(python3 "$ENGINE_HOME/lib/roles.py" dispatch "$AUTONOMY_TARGET_REPO" "$role" 2>>"$SUPLOG")" || return 1
+  while IFS= read -r line; do
+    key="${line%%=*}"; val="${line#*=}"
+    case "$key" in
+      ACCOUNT)   ROLE_ACCOUNT="$val" ;;
+      MODEL)     ROLE_MODEL="$val" ;;
+      EFFORT)    ROLE_EFFORT="$val" ;;
+      PROMPT)    ROLE_PROMPT="$val" ;;
+      SCOPE)     ROLE_SCOPE="$val" ;;
+      INSTANCES) ROLE_INSTANCES="$val" ;;
+    esac
+  done <<EOF
+$out
+EOF
+  if [ -n "$ROLE_MODEL" ] && ! valid_model_id "$ROLE_MODEL"; then
+    log "WARN roles.$role.model is not a valid model id -- ignored"
+    ROLE_MODEL=""
+  fi
+  if [ -n "$ROLE_EFFORT" ] && ! valid_effort "$ROLE_EFFORT"; then
+    log "WARN roles.$role.effort invalid (valid: low|medium|high|xhigh|max) -- ignored"
+    ROLE_EFFORT=""
+  fi
+  return 0
+}
+
+# Resolve an account name to its session env (VAR=value lines) via
+# lib/accounts.py (increment 1). Subscriptions print nothing (rc 0). rc 1 =
+# unresolvable: the caller MUST refuse the session -- never run on broken
+# auth (fail-safe, never fail-open). accounts.py's stderr reason lands in
+# the supervisor log; the secret itself is never logged.
+# $AUTONOMY_ACCOUNTS_BIN is the test seam (same pattern as
+# AUTONOMY_CREDENTIALS_BIN).
+resolve_account_env() {
+  if [ -n "${AUTONOMY_ACCOUNTS_BIN:-}" ]; then
+    "$AUTONOMY_ACCOUNTS_BIN" resolve "$1" 2>>"$SUPLOG"
+  else
+    python3 "$ENGINE_HOME/lib/accounts.py" resolve "$1" 2>>"$SUPLOG"
+  fi
+}
+
+# Compose the session's system-prompt file: the pack's hard_rules plus the
+# role's one-line scope directive. Prints the path to hand the adapter. No
+# scope -> the original hard_rules path untouched. A compose FAILURE refuses
+# (rc 1): silently dropping a scope would widen the agent's remit
+# (fail-open), so the caller skips the session instead.
+compose_session_rules() {
+  local rules_file="$1" scope_line="$2" out_file="$3"
+  if [ -z "$scope_line" ]; then
+    printf '%s' "$rules_file"
+    return 0
+  fi
+  { cat "$rules_file" && printf '\n%s\n' "$scope_line"; } >"$out_file" 2>>"$SUPLOG" || return 1
+  printf '%s' "$out_file"
+}
+
 run_session() {
+  local role="${1:-${ROLE:-coder}}"
   preflight || return $?
 
   # shellcheck source=/dev/null
-  source "$ENGINE_HOME/bin/agents/${AGENT_TYPE}.sh"
+  source "${AUTONOMY_AGENTS_DIR:-$ENGINE_HOME/bin/agents}/${AGENT_TYPE}.sh"
 
+  if ! resolve_role_dispatch "$role"; then
+    log "dispatch: cannot resolve settings for role '$role' -- REFUSING session (fail-safe; see supervisor.log)"
+    return 2
+  fi
   resolve_session_settings
 
-  local log_file; log_file="$LOGDIR/session-$(date +%Y%m%dT%H%M%S).log"
-  local role_key; role_key="$(resolve_role_credential "${ROLE:-coder}")"
-  local auth_note="subscription"
-  if [ -n "$role_key" ]; then auth_note="api-key(${ROLE:-coder})"; fi
-  log "session start (model=$MODEL effort=${EFFORT:-default} auth=$auth_note) -> $log_file"
+  # Auth precedence: account (fail-safe -- an unresolvable account REFUSES
+  # the session, never runs on broken auth) > per-role credential (#51-C,
+  # best-effort) > subscription.
+  local env_lines="" auth_note="subscription"
+  if [ -n "$ROLE_ACCOUNT" ]; then
+    if ! env_lines="$(resolve_account_env "$ROLE_ACCOUNT")"; then
+      log "dispatch: role '$role' account '$ROLE_ACCOUNT' did not resolve -- REFUSING session (fail-safe; see supervisor.log)"
+      return 2
+    fi
+    auth_note="account($ROLE_ACCOUNT)"
+  else
+    local role_key; role_key="$(resolve_role_credential "$role")"
+    if [ -n "$role_key" ]; then
+      env_lines="ANTHROPIC_API_KEY=$role_key"
+      auth_note="api-key($role)"
+    fi
+  fi
 
-  invoke_scoped_key "$role_key" \
-    "$AUTONOMY_TARGET_REPO/.autonomy/loop_prompt.md" \
-    "$AUTONOMY_TARGET_REPO/.autonomy/hard_rules.md" \
+  # The role's own prompt when set (doctor verified it is a repo-relative
+  # pack file), else the pack's loop_prompt. A missing file refuses.
+  local prompt_file="$AUTONOMY_TARGET_REPO/.autonomy/loop_prompt.md"
+  [ -n "$ROLE_PROMPT" ] && prompt_file="$AUTONOMY_TARGET_REPO/$ROLE_PROMPT"
+  if [ ! -f "$prompt_file" ]; then
+    log "dispatch: prompt file missing for role '$role' ($prompt_file) -- REFUSING session"
+    return 2
+  fi
+
+  local rules_file
+  if ! rules_file="$(compose_session_rules "$AUTONOMY_TARGET_REPO/.autonomy/hard_rules.md" "$ROLE_SCOPE" "$LOGDIR/.session-rules")"; then
+    log "dispatch: cannot compose scope rules for role '$role' -- REFUSING session (a dropped scope would widen the agent's remit)"
+    return 2
+  fi
+
+  if [ "$ROLE_INSTANCES" != "1" ]; then
+    log "NOTE roles.$role.instances=$ROLE_INSTANCES not yet supported -- running a single instance (parallel instances are a later increment)"
+  fi
+
+  local log_file; log_file="$LOGDIR/session-$(date +%Y%m%dT%H%M%S).log"
+  log "session start (role=$role model=$MODEL effort=${EFFORT:-default} auth=$auth_note) -> $log_file"
+
+  invoke_scoped_env "$env_lines" \
+    "$prompt_file" "$rules_file" \
     "$MODEL" "$FALLBACK_MODEL" "$log_file" "$EFFORT"
   local rc=$?
 
@@ -355,6 +508,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   err_backoff=$ERR_BACKOFF_START
   limit_backoff=$LIMIT_BACKOFF_START
   paused_logged=0
+  role_rr=0
 
   while true; do
     # Graceful stop: checked at the top so any in-flight session has already
@@ -379,12 +533,32 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
       log "board empty -- idle ${EMPTY_IDLE}s"; sleep "$EMPTY_IDLE"; continue
     fi
 
-    run_session; outcome=$?
+    # Round-robin over the enabled loop roles (re-enumerated every tick so a
+    # config edit applies on the next session). Enumeration failure falls
+    # back to coder-only -- the conservative default; preflight's doctor
+    # check still gates a truly broken pack. NO roles enabled = idle, same
+    # as an empty board.
+    if ! dispatch_list="$(resolve_dispatch_roles)"; then
+      log "WARN role enumeration failed -- coder-only fallback (see supervisor.log)"
+      dispatch_list="coder"
+    fi
+    if [ -z "$dispatch_list" ]; then
+      log "no loop roles enabled -- idle ${EMPTY_IDLE}s"; sleep "$EMPTY_IDLE"; continue
+    fi
+    # shellcheck disable=SC2086  # intentional split: names are [A-Za-z0-9._-] tokens
+    role="$(select_role "$role_rr" $dispatch_list)"
+    role_rr=$(( (role_rr + 1) % 86400 ))
+
+    run_session "$role"; outcome=$?
     case $outcome in
       0) log "session clean (open issues ~$open_count). pace ${PACE}s"
          err_backoff=$ERR_BACKOFF_START; limit_backoff=$LIMIT_BACKOFF_START
          clear_reset_state
          sleep "$PACE" ;;
+      # NOTE: usage-limit state is one marker per supervisor (engine.account_key),
+      # so a limit on one role's account pauses every role in this loop -- with
+      # per-role accounts this over-waits (safe direction). Proper per-account
+      # limit state is issue #3's scope.
       3) jitter=$((RANDOM % 120))
          if reset_wait="$(compute_limit_wait)"; then
            reset_wait=$((reset_wait + jitter))
@@ -396,7 +570,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
            sleep $((limit_backoff + jitter))
            limit_backoff=$(( limit_backoff*2 < LIMIT_BACKOFF_MAX ? limit_backoff*2 : LIMIT_BACKOFF_MAX ))
          fi ;;
-      2) log "preflight skip -- wait ${ERR_BACKOFF_START}s"; sleep "$ERR_BACKOFF_START" ;;
+      2) log "preflight/dispatch skip -- wait ${ERR_BACKOFF_START}s"; sleep "$ERR_BACKOFF_START" ;;
       *) log "session error (rc=$outcome) -- backoff ${err_backoff}s"
          sleep "$err_backoff"
          err_backoff=$(( err_backoff*2 < ERR_BACKOFF_MAX ? err_backoff*2 : ERR_BACKOFF_MAX )) ;;
