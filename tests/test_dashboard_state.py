@@ -675,6 +675,95 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TestRecentSessions(unittest.TestCase):
+    """recent_sessions (#148 part 2): the last ~N session summaries for the
+    history panel -- role (from the .role sidecar), outcome, tokens, ticket --
+    derived from files already on disk, no gh."""
+
+    def _write(self, d, name, lines, role=None):
+        with open(os.path.join(d, name), "w") as fh:
+            for ln in lines:
+                fh.write(json.dumps(ln) + "\n")
+        if role is not None:
+            with open(os.path.join(d, name[:-4] + ".role"), "w") as fh:
+                fh.write(role)
+
+    def _clean(self, ticket=57, toks=123):
+        return [
+            {"type": "assistant", "message": {"model": "claude-opus-4-8",
+             "content": [{"type": "text", "text": "Working #%d" % ticket}],
+             "usage": {"output_tokens": 10}}},
+            {"type": "result", "is_error": False,
+             "usage": {"output_tokens": toks}, "result": "done"},
+        ]
+
+    def test_newest_first_with_role_and_fields(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        self._write(d, "session-20260101T000000.log", self._clean(57, 100), role="coder")
+        self._write(d, "session-20260101T010000.log", self._clean(88, 200), role="qa")
+        got = ds.recent_sessions(d)
+        self.assertEqual([s["log"] for s in got],
+                         ["session-20260101T010000.log", "session-20260101T000000.log"])
+        self.assertEqual(got[0]["role"], "qa")
+        self.assertEqual(got[0]["outcome"], "clean")
+        self.assertEqual(got[0]["tokens"], 200)
+        self.assertEqual(got[0]["ticket"], 88)
+
+    def test_outcome_error(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        self._write(d, "session-a.log", [{"type": "result", "is_error": True}])
+        self.assertEqual(ds.recent_sessions(d)[0]["outcome"], "error")
+
+    def test_outcome_rate_limited(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        self._write(d, "session-a.log", [
+            {"type": "rate_limit_event",
+             "rate_limit_info": {"status": "rejected", "isUsingOverage": False}},
+            {"type": "result", "is_error": False, "usage": {"output_tokens": 5}},
+        ])
+        self.assertEqual(ds.recent_sessions(d)[0]["outcome"], "rate-limited")
+
+    def test_outcome_running_when_no_result(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        self._write(d, "session-a.log", [
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "hi"}], "usage": {"output_tokens": 3}}}])
+        self.assertEqual(ds.recent_sessions(d)[0]["outcome"], "running")
+
+    def test_missing_role_sidecar_is_blank(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        self._write(d, "session-a.log", self._clean())   # no role file
+        self.assertEqual(ds.recent_sessions(d)[0]["role"], "")
+
+    def test_limit_caps(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        for i in range(15):
+            self._write(d, "session-%02d.log" % i, self._clean())
+        self.assertEqual(len(ds.recent_sessions(d, limit=10)), 10)
+
+    def test_empty_logdir(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        self.assertEqual(ds.recent_sessions(d), [])
+
+    def test_corrupt_role_sidecar_degrades_not_raises(self):
+        # a non-UTF-8 .role sidecar must not blow up the whole state response
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        self._write(d, "session-a.log", self._clean(42, 50))
+        with open(os.path.join(d, "session-a.role"), "wb") as fh:
+            fh.write(b"\xff\xfe bad bytes")
+        got = ds.recent_sessions(d)          # must not raise
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["ticket"], 42)
+
+
 class TestRecentQuotaWindows(unittest.TestCase):
     """The 5-hour bar went 'dead' because quota was read from ONLY the newest
     session log, which often carries just one window type. recent_quota_windows

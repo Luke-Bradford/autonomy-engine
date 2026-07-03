@@ -753,10 +753,61 @@ def _session_role(logpath):
         return ""
     marker = logpath[:-4] + ".role" if logpath.endswith(".log") else logpath + ".role"
     try:
-        with open(marker) as fh:
+        with open(marker, encoding="utf-8", errors="replace") as fh:
             return fh.read().strip()
     except OSError:
         return ""
+
+
+def recent_sessions(logdir, limit=10):
+    """Summaries of the most recent session logs (newest first, up to `limit`)
+    for the history panel (#148 part 2). Each entry: the log filename, the
+    dispatched `role` (from the `session-<ts>.role` sidecar part 1 writes),
+    started_at/started_epoch, duration (s), outcome
+    (clean|error|rate-limited|running), output tokens, and the worked ticket
+    (pick_ticket heuristic, reused from the full parse). Derives entirely from
+    files already on disk -- NO gh in the state path (#80). Idle past logs hit
+    the mtime parse cache, so this stays cheap after warm-up. [] when empty."""
+    try:
+        names = sorted(n for n in os.listdir(logdir)
+                       if n.startswith("session-") and n.endswith(".log"))
+    except OSError:
+        return []
+    out = []
+    for name in reversed(names[-limit:]):
+        path = os.path.join(logdir, name)
+        # best-effort PER artifact (#148): one corrupt older log/sidecar must
+        # degrade its own row, never break the whole /api/state response.
+        try:
+            s = parse_session_log_cached(path)
+        except Exception:
+            s = None
+        if not s:
+            continue
+        started = s.get("started_epoch") or 0
+        updated = s.get("updated_at") or 0
+        duration = updated - started if (started and updated >= started) else 0
+        status = str(s.get("status") or "")
+        if s.get("rate_limited"):
+            outcome = "rate-limited"
+        elif status == "done-error":
+            outcome = "error"
+        elif status == "done-ok":
+            outcome = "clean"
+        else:
+            outcome = "running"
+        out.append({
+            "log": name,
+            "role": _session_role(path),
+            "started_at": s.get("started_at") or "",
+            "started_epoch": started,
+            "duration": duration,
+            "outcome": outcome,
+            "tokens": s.get("output_tokens") or 0,
+            "ticket": s.get("ticket"),
+            "model": s.get("model") or "",
+        })
+    return out
 
 
 def recent_quota_windows(logdir, limit=60):
@@ -859,4 +910,5 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "config": config,
         "override": read_model_override(os.path.join(logdir, "model-override")),
         "quota": recent_quota_windows(logdir),
+        "sessions": recent_sessions(logdir),
     }
