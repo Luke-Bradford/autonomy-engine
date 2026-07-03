@@ -361,8 +361,12 @@ resolve_cron_due() {
   # escape the loop (markers are files; each tick re-enumerates from scratch).
   printf '%s\n' "$enum" | while IFS="$(printf '\t')" read -r name schedule; do
     [ -n "$name" ] || continue
+    # Gate the SAME charset roles.py allows ([A-Za-z0-9._-], its _ROLE_NAME_RE):
+    # a stricter gate here would silently drop a valid dotted role (e.g. pm.v2)
+    # that roles.py happily dispatches. No '/' is possible, and a suffix is
+    # always appended, so a '.'/'..' name cannot traverse out of the dir.
     case "$name" in
-      *[!A-Za-z0-9_-]*)
+      *[!A-Za-z0-9._-]*)
         log "WARN cron: role name '$name' has invalid path chars -- ignored"
         continue ;;
     esac
@@ -455,6 +459,13 @@ _event_role_wakes() {
       pr.opened|issue.created|merge.done|pr.synchronize) : ;;
       *) log "WARN event: unknown event '$event' for '$name' -- ignored"; continue ;;
     esac
+    # The seen-set is the last-fired poll PAGE (bounded to --limit), not a
+    # cumulative history -- correct because every v1 event token is monotonic or
+    # terminal: PR/issue numbers only grow (--state all), merges are terminal. A
+    # token that scrolls off the most-recent-N page can never re-enter it, so
+    # replacing the seen-set with the current page never re-delivers an old item.
+    # (A new event kind that is NOT monotonic would need a cumulative/high-water
+    # cursor instead -- do not add one to this seen-set model naively.)
     seen_file="$VARDIR/events/${name}__${event}.seen"
     tokens="$(_event_poll "$event")" || continue   # poll failed -> skip this event
     if [ ! -f "$seen_file" ]; then
@@ -497,8 +508,11 @@ resolve_event_wakes() {
     log "WARN event: cannot create $VARDIR/events -- skipping events this tick"; return 0; }
   printf '%s\n' "$enum" | while IFS="$(printf '\t')" read -r name events_csv; do
     [ -n "$name" ] || continue
+    # Same charset roles.py allows ([A-Za-z0-9._-]); a stricter gate would drop a
+    # valid dotted role (e.g. qa.v2). No '/', and a suffix is always appended, so
+    # a '.'/'..' name cannot traverse out of $VARDIR/events.
     case "$name" in
-      *[!A-Za-z0-9_-]*)
+      *[!A-Za-z0-9._-]*)
         log "WARN event: role name '$name' has invalid path chars -- ignored"
         continue ;;
     esac
@@ -816,9 +830,13 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     role_rr=$(( (role_rr + 1) % 86400 ))
 
     run_session "$role"; outcome=$?
-    session_ran=1   # a loop session ran this tick -> session.done fires next tick
     case $outcome in
       0) log "session clean (open issues ~$open_count). pace ${PACE}s"
+         # A loop session actually COMPLETED -> session.done fires next tick.
+         # Only outcome 0 counts: a preflight/dispatch REFUSAL (rc 2), a
+         # usage-limit pause (rc 3), or a session error must NOT fabricate a
+         # session.done edge for work that did not run (fail-safe).
+         session_ran=1
          err_backoff=$ERR_BACKOFF_START; limit_backoff=$LIMIT_BACKOFF_START
          clear_reset_state
          sleep "$PACE" ;;

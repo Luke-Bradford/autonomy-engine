@@ -113,6 +113,14 @@ if [ "$(id -u)" != "0" ]; then
   contains "marker-write failure warned" "$(cat "$LOGF")" "WARN"
 fi
 
+# --- a dotted role name (valid per roles.py) fires, is not path-gated out -----
+reset
+ENUM_OUT="pm.v2${TAB}* * * * *"
+mkdir -p "$VARDIR/cron"
+echo 1000000000 >"$VARDIR/cron/pm.v2.last_fire"
+resolve_cron_due
+check "dotted cron role fired (not dropped)" "pm.v2" "$(cat "$CAPTURE")"
+
 # --- invalid role name: WARN, ignored, no fire (prevention-log #6) -----------
 reset
 ENUM_OUT="bad/name${TAB}* * * * *"

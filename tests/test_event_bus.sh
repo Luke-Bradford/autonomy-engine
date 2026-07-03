@@ -115,6 +115,14 @@ resolve_event_wakes 0; rc=$?
 check "enumeration failure returns 0" "0" "$rc"
 check "enumeration failure fired nothing" "" "$(cat "$CAPTURE")"
 
+# --- a dotted role name (valid per roles.py _ROLE_NAME_RE) is processed -------
+reset
+ENUM_OUT="qa.v2${TAB}pr.opened"
+POLL_OUT="$(printf '4\n5')"
+seed_seen "qa.v2__pr.opened" "4"
+resolve_event_wakes 0
+check "dotted role name fired (not dropped)" "qa.v2" "$(cat "$CAPTURE")"
+
 # --- invalid role name ignored with WARN -------------------------------------
 reset
 ENUM_OUT="bad/name${TAB}pr.opened"
