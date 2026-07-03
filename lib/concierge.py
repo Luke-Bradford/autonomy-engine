@@ -18,7 +18,24 @@ Design:
 Stdlib only (urllib), mirroring lib/accounts.py's local-endpoint HTTP.
 """
 import json
+import re
 import urllib.request
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.S)
+
+
+def strip_thinking(text):
+    """Drop <think>...</think> spans that reasoning models (qwen3, deepseek-r1)
+    emit, leaving just the operator-facing answer. Idempotent; returns the input
+    unchanged when there are no such spans. A dangling unclosed <think> (a
+    truncated reply) drops everything from the tag onward."""
+    if not text:
+        return ""
+    out = _THINK_RE.sub("", text)
+    i = out.find("<think>")
+    if i != -1:
+        out = out[:i]
+    return out.strip()
 
 
 def _fmt_reset(hours):

@@ -38,6 +38,7 @@ import dashboard_control as dcx  # noqa: E402
 import config_parser  # noqa: E402
 import credentials as creds  # noqa: E402
 import accounts as accts  # noqa: E402
+import concierge  # noqa: E402
 
 PAGE = os.path.join(ENGINE_HOME, "lib", "dashboard_page.html")
 CONFIG_PAGE = os.path.join(ENGINE_HOME, "lib", "config_page.html")
@@ -813,6 +814,44 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _chat_reply(self, body):
+        """Answer the operator's question about the live system via a LOCAL LLM
+        (token-free). Always returns a JSON-able dict -- a missing account or an
+        unreachable endpoint degrades to {ok:false,error}, never a 500, so the
+        chat box shows a friendly message instead of the dashboard falling over.
+        """
+        message = str(body.get("message") or "").strip()
+        if not message:
+            return {"ok": False, "error": "empty message"}
+        history = body.get("history")
+        history = history if isinstance(history, list) else []
+        try:
+            acc = accts.Accounts()
+            local = [a.get("name") for a in acc.list()
+                     if a.get("kind") == "openai_compatible"]
+        except Exception as exc:  # registry unreadable/corrupt -- report, don't crash
+            return {"ok": False, "error": "account registry error: %s" % exc}
+        if not local:
+            return {"ok": False, "error": "no local LLM configured -- register an "
+                    "openai_compatible account (e.g. Ollama) to use the concierge"}
+        name = local[0]
+        try:
+            base_url = acc.resolve(name)["env"]["OPENAI_BASE_URL"]
+            models = acc.list_models(name)
+        except Exception as exc:
+            return {"ok": False,
+                    "error": "cannot resolve local endpoint '%s': %s" % (name, exc)}
+        model = models[0] if models else "qwen3:14b"
+        context = concierge.build_context(collect(self.repos).get("repos") or [])
+        try:
+            reply = concierge.chat(base_url, model, context, message,
+                                   history=history, timeout=120)
+        except Exception as exc:  # endpoint down / timeout -- degrade gracefully
+            return {"ok": False,
+                    "error": "local endpoint '%s' unreachable: %s" % (name, exc)}
+        return {"ok": True, "reply": concierge.strip_thinking(reply),
+                "model": model, "account": name}
+
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path == "/" or path == "/config":
@@ -833,7 +872,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, b'{"error":"not found"}')
 
     def do_POST(self):
-        if self.path.split("?", 1)[0] != "/api/control":
+        path = self.path.split("?", 1)[0]
+        if path not in ("/api/control", "/api/chat"):
             self._send(404, b'{"error":"not found"}')
             return
         # Anti-DNS-rebinding: the Host must be exactly the loopback host:port we
@@ -858,7 +898,10 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             length = 0
-        if length <= 0 or length > 8192:
+        # Chat carries a message + short history, so it needs a larger cap than
+        # the tiny control payloads.
+        max_len = 65536 if path == "/api/chat" else 8192
+        if length <= 0 or length > max_len:
             self.close_connection = True
             self._send(400, b'{"error":"bad request"}')
             return
@@ -869,6 +912,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not secrets.compare_digest(str(body.get("token") or ""), _CONTROL_TOKEN):
             self._send(403, b'{"error":"bad or missing control token"}')
+            return
+        # Concierge chat (#88/W4): loopback + token-gated like control, but it
+        # only READS system state and calls a LOCAL LLM -- no repo mutation.
+        if path == "/api/chat":
+            self._send(200, json.dumps(self._chat_reply(body)).encode("utf-8"))
             return
         action = body.get("action")
         _cred_actions = ("cred_set", "cred_delete", "cred_assign", "cred_unassign")
