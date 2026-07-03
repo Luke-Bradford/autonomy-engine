@@ -38,7 +38,7 @@ Dashboard-only, read-only, additive. TDD throughout.
   - `event: role '([^']+)' woken by session\.done$`
   - `event: role '([^']+)' woken by (pr\.opened|issue\.created|merge\.done|pr\.synchronize) \(([^)]*)\)$`
     → `refs = group(3).split()`; **validate**: require `refs` non-empty AND every
-    token matches `\d+` (number events) / `\d+:[0-9a-fA-F]+` (`pr.synchronize`);
+    token matches `\d+` (number events) / `\d+:[0-9a-fA-F]{40}` (`pr.synchronize`);
     else skip the line.
 - Anything else → skip.
 - Comment block citing the coupled emit sites `bin/supervisor.sh:511,564,591`, the

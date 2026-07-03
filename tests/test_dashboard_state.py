@@ -307,6 +307,130 @@ class TestHeartbeat(unittest.TestCase):
         self.assertIsInstance(st["heartbeat"], dict)
 
 
+class TestChoreography(unittest.TestCase):
+    """read_choreography (#177 piece 3) parses the supervisor's cron-fire /
+    event-wake / session-done HANDOFF lines out of supervisor.log into structured,
+    role-chipped feed entries. Read-only + best-effort like read_heartbeat: a
+    missing/torn/huge log degrades to []. Fail-safe: a line that does not match a
+    known choreography shape (or has garbage refs) is skipped, never guessed."""
+    TS = "2026-07-03T21:57:52Z"
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.p = os.path.join(self.d, "supervisor.log")
+
+    def tearDown(self):
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def _write(self, *lines):
+        with open(self.p, "w") as fh:
+            fh.write("".join(l if l.endswith("\n") else l + "\n" for l in lines))
+
+    def test_cron_fire(self):
+        self._write("%s cron: role 'pm' due (schedule '0 * * * *') -- firing" % self.TS)
+        out = ds.read_choreography(self.p)
+        self.assertEqual(len(out), 1)
+        e = out[0]
+        self.assertEqual(e["kind"], "cron")
+        self.assertEqual(e["role"], "pm")
+        self.assertEqual(e["event"], None)
+        self.assertEqual(e["refs"], [])
+        self.assertEqual(e["ts"], ds.iso_epoch(self.TS))
+        self.assertEqual(e["at"], self.TS)
+
+    def test_event_wake_numeric_refs(self):
+        for ev in ("pr.opened", "issue.created", "merge.done"):
+            self._write("%s event: role 'qa' woken by %s (175 176)" % (self.TS, ev))
+            out = ds.read_choreography(self.p)
+            self.assertEqual(len(out), 1, ev)
+            self.assertEqual(out[0]["kind"], "event")
+            self.assertEqual(out[0]["role"], "qa")
+            self.assertEqual(out[0]["event"], ev)
+            self.assertEqual(out[0]["refs"], ["175", "176"])
+
+    SHA = "deadbeef0123456789abcdefdeadbeef01234567"  # a full 40-char git OID
+
+    def test_pr_synchronize_ref_preserved(self):
+        tok = "42:" + self.SHA
+        self._write("%s event: role 'coder' woken by pr.synchronize (%s)" % (self.TS, tok))
+        out = ds.read_choreography(self.p)
+        self.assertEqual(out[0]["event"], "pr.synchronize")
+        self.assertEqual(out[0]["refs"], [tok])
+
+    def test_synchronize_short_sha_skipped(self):
+        # a truncated OID is not the emitted shape -> not a real handoff
+        self._write("%s event: role 'coder' woken by pr.synchronize (42:deadbeef)" % self.TS)
+        self.assertEqual(ds.read_choreography(self.p), [])
+
+    def test_session_done_wake(self):
+        self._write("%s event: role 'researcher' woken by session.done" % self.TS)
+        out = ds.read_choreography(self.p)
+        self.assertEqual(out[0]["event"], "session.done")
+        self.assertEqual(out[0]["refs"], [])
+
+    def test_lane_label_prefix_tolerated(self):
+        self._write("%s [fe] cron: role 'pm' due (schedule '@daily') -- firing" % self.TS)
+        out = ds.read_choreography(self.p)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["role"], "pm")
+
+    def test_label_containing_bracket_still_parses(self):
+        # log() wraps a raw --label; a label with ']' must not blank the entry
+        # (re.search, not a [^]]* strip).
+        self._write("%s [we][rd] event: role 'qa' woken by pr.opened (9)" % self.TS)
+        out = ds.read_choreography(self.p)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["refs"], ["9"])
+
+    def test_empty_refs_skipped(self):
+        self._write("%s event: role 'qa' woken by pr.opened ()" % self.TS)
+        self.assertEqual(ds.read_choreography(self.p), [])
+
+    def test_nonnumeric_ref_skipped(self):
+        self._write("%s event: role 'qa' woken by pr.opened (abc)" % self.TS)
+        self.assertEqual(ds.read_choreography(self.p), [])
+
+    def test_synchronize_without_sha_skipped(self):
+        self._write("%s event: role 'coder' woken by pr.synchronize (42)" % self.TS)
+        self.assertEqual(ds.read_choreography(self.p), [])
+
+    def test_non_choreography_lines_filtered(self):
+        self._write(
+            "%s session clean (open issues ~4) -- next session soon" % self.TS,
+            "%s cron: role 'pm' session rc=1 (see supervisor.log)" % self.TS,
+            "%s event: role 'qa' session failed -- leaving seen (re-deliver next tick)" % self.TS,
+            "%s USAGE LIMIT -- backoff" % self.TS,
+            "%s cron: role 'pm' due (schedule '@hourly') -- firing" % self.TS,
+        )
+        out = ds.read_choreography(self.p)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["kind"], "cron")
+
+    def test_missing_file_is_empty(self):
+        self.assertEqual(ds.read_choreography(os.path.join(self.d, "nope")), [])
+
+    def test_unparseable_ts_keeps_entry_ts_zero(self):
+        self._write("garbage cron: role 'pm' due (schedule '@daily') -- firing")
+        out = ds.read_choreography(self.p)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["ts"], 0)
+        self.assertEqual(out[0]["role"], "pm")
+
+    def test_keep_bound_oldest_first(self):
+        lines = ["%s cron: role 'r%d' due (schedule '@daily') -- firing" % (self.TS, i)
+                 for i in range(20)]
+        self._write(*lines)
+        out = ds.read_choreography(self.p, keep=5)
+        self.assertEqual(len(out), 5)
+        self.assertEqual([e["role"] for e in out],
+                         ["r15", "r16", "r17", "r18", "r19"])
+
+    def test_build_repo_state_includes_choreography(self):
+        st = ds.build_repo_state(FIX, pid_is_alive=lambda p: True, git_in_flight=lambda p: {})
+        self.assertIn("choreography", st)
+        self.assertIsInstance(st["choreography"], list)
+
+
 class TestLifecycle(unittest.TestCase):
     def test_stopped_when_lock_pid_dead(self):
         st = ds.lifecycle_status(FIX, pid_is_alive=lambda p: False)

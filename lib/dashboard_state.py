@@ -20,7 +20,7 @@ import re
 import subprocess
 import threading
 import time
-from collections import Counter
+from collections import Counter, deque
 from datetime import datetime
 
 import config_parser
@@ -738,6 +738,93 @@ def read_heartbeat(path):
     return {"ts": ts, "phase": phase, "until": until, "reason": reason}
 
 
+# --- choreography feed (#177 piece 3) ---------------------------------------
+# The supervisor already LOGS the org's handoffs -- cron fires and event wakes --
+# to supervisor.log; slice-1's heartbeat is the *current* state, this is the
+# rolling *history*. read_choreography lifts the handoff subset out of the log and
+# structures it so the page can render first-class role-chipped feed lines instead
+# of burying them in the flat supervisor-voice text.
+#
+# COUPLING: these regexes track the exact strings bin/supervisor.sh emits at
+#   :511  log "cron: role '<r>' due (schedule '<s>') -- firing"
+#   :564  log "event: role '<r>' woken by session.done"
+#   :591  log "event: role '<r>' woken by <event> (<tokens>)"
+# and the v1 event token shapes from _event_poll (:533) -- numeric issue/PR
+# numbers, or NUMBER:SHA for pr.synchronize. If those emit strings change, the
+# tests in TestChoreography break rather than the feed silently blanking.
+#
+# Read-only + best-effort, in the spirit of read_heartbeat: a missing/torn/huge
+# log degrades to []. Fail-safe parsing: a line that does not match a known
+# choreography shape -- or whose refs fail their event's token shape -- is skipped,
+# never guessed into a garbage handoff.
+_CHOREO_EVENTS = ("pr.opened", "issue.created", "merge.done", "pr.synchronize")
+_CHOREO_CRON = re.compile(r"cron: role '([^']+)' due \(schedule '.*'\) -- firing$")
+_CHOREO_DONE = re.compile(r"event: role '([^']+)' woken by session\.done$")
+_CHOREO_EVENT = re.compile(
+    r"event: role '([^']+)' woken by "
+    r"(pr\.opened|issue\.created|merge\.done|pr\.synchronize) \(([^)]*)\)$")
+_CHOREO_NUM = re.compile(r"^\d+$")
+# pr.synchronize emits NUMBER:headRefOid; headRefOid is a full 40-char git OID
+# (gh never abbreviates it), so require exactly 40 hex -- a truncated/corrupt
+# token like `42:a` is not a real handoff and is dropped (fail-safe).
+_CHOREO_SYNC = re.compile(r"^\d+:[0-9a-fA-F]{40}$")
+
+
+def _choreo_refs_ok(event, refs):
+    """Every ref token must match its event's v1 shape (fail-safe: any bad token
+    drops the whole line). pr.synchronize -> NUMBER:40-hex-SHA; the rest -> a
+    number."""
+    if not refs:
+        return False
+    pat = _CHOREO_SYNC if event == "pr.synchronize" else _CHOREO_NUM
+    return all(pat.match(t) for t in refs)
+
+
+def read_choreography(path, scan=400, keep=12):
+    """The supervisor's handoff feed (#177 piece 3): cron fires, event wakes and
+    session-done handoffs parsed from supervisor.log into structured entries
+    `{ts, at, kind, role, event, refs}`, oldest-first, at most `keep`. `kind` is
+    "cron" or "event"; `event` is the wake kind ("session.done" or a v1 event) or
+    None for cron; `refs` is the (validated) item tokens or []. `ts` is epoch
+    seconds (0 if the log line's leading timestamp is unparseable -- never raises);
+    `at` is the raw leading token for display. [] when the log is absent/unreadable
+    or holds no handoffs. Streamed read (deque tail) so a multi-MB log never loads
+    whole. See the COUPLING note above for the emit-string contract."""
+    try:
+        with open(path, errors="replace") as fh:
+            lines = deque(fh, maxlen=scan)
+    except OSError:
+        return []
+    out = []
+    for raw in lines:
+        parts = raw.rstrip("\n").split(None, 1)
+        if len(parts) < 2:
+            continue  # no body after the leading timestamp
+        at, rest = parts[0], parts[1]
+        ts = iso_epoch(at)
+        # re.search (not ^-anchored): any leading lane-label prefix log() injected
+        # -- including a label containing ']' -- is skipped over, never mis-parsed.
+        m = _CHOREO_CRON.search(rest)
+        if m:
+            out.append({"ts": ts, "at": at, "kind": "cron",
+                        "role": m.group(1), "event": None, "refs": []})
+            continue
+        m = _CHOREO_DONE.search(rest)
+        if m:
+            out.append({"ts": ts, "at": at, "kind": "event",
+                        "role": m.group(1), "event": "session.done", "refs": []})
+            continue
+        m = _CHOREO_EVENT.search(rest)
+        if m:
+            event = m.group(2)
+            refs = m.group(3).split()
+            if not _choreo_refs_ok(event, refs):
+                continue  # fail-safe: empty / malformed refs -> not a real handoff
+            out.append({"ts": ts, "at": at, "kind": "event",
+                        "role": m.group(1), "event": event, "refs": refs})
+    return out[-keep:]
+
+
 # --- engine version truth (#166 slice 1) ------------------------------------
 # The two thin shells (bin/supervisor.sh, bin/dashboard.py) freeze their own
 # code at process start (bash function bodies / Python imports), so a merged fix
@@ -1084,6 +1171,7 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "display_status": status,
         "roles": build_roles(config.get("roles"), status, now=now),
         "voice": read_supervisor_voice(os.path.join(logdir, "supervisor.log")),
+        "choreography": read_choreography(os.path.join(logdir, "supervisor.log")),
         "heartbeat": read_heartbeat(os.path.join(logdir, "heartbeat")),
         "engine_boot": read_engine_boot_sha(logdir),  # #166: supervisor's boot sha
         "git": git_in_flight(repo_path) if git_in_flight else {},

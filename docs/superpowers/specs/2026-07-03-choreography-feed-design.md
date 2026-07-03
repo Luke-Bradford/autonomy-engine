@@ -68,8 +68,8 @@ a test rather than silently blanking the feed.
     four v1 kinds and `<tokens>` is `([^)]*)` → `{kind:"event", role, event, refs:[…]}`.
 - **Fail-safe ref validation** (the emit site only fires with non-empty new tokens,
   so anything else is noise): require ≥1 ref token, and each token must match its
-  event's shape — `\d+` for `pr.opened`/`issue.created`/`merge.done`, `\d+:[0-9a-f]+`
-  (number:sha) for `pr.synchronize`. A ref that fails → the whole line is skipped,
+  event's shape — `\d+` for `pr.opened`/`issue.created`/`merge.done`, `\d+:[0-9a-f]{40}`
+  (number:40-hex-sha) for `pr.synchronize`. A ref that fails → the whole line is skipped,
   never rendered as a garbage handoff.
 - Each entry carries `ts` (epoch int) and the raw ISO `at` string for display.
 - Return the last `keep` entries, oldest-first. `[]` on missing/unreadable file or
