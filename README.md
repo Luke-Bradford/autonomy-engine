@@ -271,6 +271,12 @@ It exposes what the engine already emits, nothing invented:
 - **Throughput** — server-sampled output tok/min over wall-clock (flatlines when idle).
 - **Supervisor voice** — the loop's own decisions, tailing `supervisor.log`.
 - **Git in flight** — open PRs (CI / review / mergeable) + recently-merged tickets.
+- **Concierge** — a token-free chat box (`POST /api/chat`) that answers whole-system questions via
+  a **local** LLM, so idle Q&A never spends cloud subscription tokens. It uses a registered
+  `openai_compatible` account (e.g. Ollama); with several registered, set
+  `AUTONOMY_CONCIERGE_ACCOUNT=<name>` to choose which one answers (unset = the first registered).
+  The account that replied is echoed in each response; a set-but-unknown name is refused, not
+  silently swapped.
 
 **Lifecycle controls** (per running/stopped repo, in the Now cards): start / graceful-stop / hard-stop
 / resume. Behind `POST /api/control`, which requires a per-process token embedded in the served page
