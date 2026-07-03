@@ -361,8 +361,12 @@ resolve_cron_due() {
   # escape the loop (markers are files; each tick re-enumerates from scratch).
   printf '%s\n' "$enum" | while IFS="$(printf '\t')" read -r name schedule; do
     [ -n "$name" ] || continue
+    # Gate the SAME charset roles.py allows ([A-Za-z0-9._-], its _ROLE_NAME_RE):
+    # a stricter gate here would silently drop a valid dotted role (e.g. pm.v2)
+    # that roles.py happily dispatches. No '/' is possible, and a suffix is
+    # always appended, so a '.'/'..' name cannot traverse out of the dir.
     case "$name" in
-      *[!A-Za-z0-9_-]*)
+      *[!A-Za-z0-9._-]*)
         log "WARN cron: role name '$name' has invalid path chars -- ignored"
         continue ;;
     esac
@@ -399,6 +403,120 @@ resolve_cron_due() {
     else
       log "WARN cron: cannot advance marker for '$name' -- skipping fire this tick (avoids re-fire)"
     fi
+  done
+  return 0
+}
+
+# --- event bus (W2, issue #86) ----------------------------------------------
+# Enumerate the target repo's event roles as NAME<TAB>EVENT[,EVENT...] lines
+# (roles.py events contract). Behind a function so tests can override the seam.
+# rc!=0 -> caller skips events this tick (best-effort, never crashes the loop).
+_event_enumerate() {
+  python3 "$ENGINE_HOME/lib/roles.py" events "$AUTONOMY_TARGET_REPO" 2>>"$SUPLOG"
+}
+
+# Print the current fireable-item tokens for <event>, one per line (empty = none;
+# rc!=0 -> caller skips this event this tick). Number-keyed events use the item
+# number (monotonic, open/closed-independent via --state all); pr.synchronize
+# uses NUMBER:SHA (a push changes the SHA -> a new token). `gh -q` is gh's
+# built-in query (no external jq), the pattern the loop already uses.
+_event_poll() {
+  local event="$1"
+  case "$event" in
+    pr.opened)
+      (cd "$AUTONOMY_TARGET_REPO" && gh pr list --state all --limit 200 --json number -q '.[].number') 2>>"$SUPLOG" ;;
+    issue.created)
+      (cd "$AUTONOMY_TARGET_REPO" && gh issue list --state all --limit 200 --json number -q '.[].number') 2>>"$SUPLOG" ;;
+    merge.done)
+      (cd "$AUTONOMY_TARGET_REPO" && gh pr list --state merged --limit 200 --json number -q '.[].number') 2>>"$SUPLOG" ;;
+    pr.synchronize)
+      (cd "$AUTONOMY_TARGET_REPO" && gh pr list --state open --limit 200 --json number,headRefOid -q '.[] | "\(.number):\(.headRefOid)"') 2>>"$SUPLOG" ;;
+    *) return 1 ;;
+  esac
+}
+
+# Write the token set to a seen-file; rc!=0 on failure. Subshell contains the
+# redirection so a failed '>' does not leak its error to stderr (as _cron_write_marker).
+_event_write_seen() {
+  ( printf '%s\n' "$2" >"$1" ) 2>/dev/null
+}
+
+# Process one event role's comma-separated on: list under the held lock. Split
+# from resolve_event_wakes so the nested per-event loop stays readable.
+_event_role_wakes() {
+  local name="$1" events_csv="$2" session_ran="$3" event seen_file tokens new
+  printf '%s\n' "$events_csv" | tr ',' '\n' | while IFS= read -r event; do
+    [ -n "$event" ] || continue
+    if [ "$event" = "session.done" ]; then
+      # internal per-tick edge: a loop session ran this tick, never an
+      # event/cron session (reentrancy guard -- no runaway self-trigger).
+      [ "$session_ran" = "1" ] || continue
+      log "event: role '$name' woken by session.done"
+      run_session "$name" || log "event: role '$name' session rc=$? (see supervisor.log)"
+      continue
+    fi
+    case "$event" in
+      pr.opened|issue.created|merge.done|pr.synchronize) : ;;
+      *) log "WARN event: unknown event '$event' for '$name' -- ignored"; continue ;;
+    esac
+    # The seen-set is the last-fired poll PAGE (bounded to --limit), not a
+    # cumulative history -- correct because every v1 event token is monotonic or
+    # terminal: PR/issue numbers only grow (--state all), merges are terminal. A
+    # token that scrolls off the most-recent-N page can never re-enter it, so
+    # replacing the seen-set with the current page never re-delivers an old item.
+    # (A new event kind that is NOT monotonic would need a cumulative/high-water
+    # cursor instead -- do not add one to this seen-set model naively.)
+    seen_file="$VARDIR/events/${name}__${event}.seen"
+    tokens="$(_event_poll "$event")" || continue   # poll failed -> skip this event
+    if [ ! -f "$seen_file" ]; then
+      _event_write_seen "$seen_file" "$tokens" \
+        || log "WARN event: cannot seed seen-set for '$name/$event'"
+      continue   # first-sight: baseline, no fire (no history replay)
+    fi
+    # New = current tokens not present as a full line in the seen FILE. grep
+    # reads a file (no producer pipe to SIGPIPE, prevention-log #7); rc1 (no new)
+    # is expected -> `|| true`.
+    new="$(printf '%s\n' "$tokens" | grep -v '^[[:space:]]*$' | grep -Fxv -f "$seen_file" 2>/dev/null || true)"
+    [ -n "$new" ] || continue
+    log "event: role '$name' woken by $event ($(printf '%s' "$new" | tr '\n' ' '))"
+    if run_session "$name"; then
+      _event_write_seen "$seen_file" "$tokens" \
+        || log "WARN event: cannot advance seen for '$name/$event' -- will re-deliver"
+    else
+      log "event: role '$name' session failed -- leaving seen (re-deliver next tick)"
+    fi
+  done
+}
+
+# Fire every event role whose on: list matched a NEW item since its per-(role,
+# event) seen-set. The supervisor is the SOLE writer of each seen-set
+# ($VARDIR/events/<role>__<event>.seen) -- reset-epoch-split invariant
+# generalised. Delivery is AT-LEAST-ONCE within the poll page: a seen-set
+# advances only after a successful dispatch, so a failed/refused session
+# re-delivers next tick (the deliberate inverse of cron's under-fire ordering --
+# a missed real-world event loses work). First-sight seeds the baseline WITHOUT
+# firing. $1 = whether a loop session ran this tick (drives session.done).
+# Additive + best-effort: enumeration/poll/write failure skips events this tick
+# and leaves loop dispatch byte-for-byte unchanged. NEVER returns non-zero. Role
+# names are charset-gated before they reach the seen-set path (prevention-log #6).
+resolve_event_wakes() {
+  local session_ran="$1"
+  local enum name events_csv
+  enum="$(_event_enumerate)" || return 0
+  [ -n "$enum" ] || return 0
+  mkdir -p "$VARDIR/events" 2>/dev/null || {
+    log "WARN event: cannot create $VARDIR/events -- skipping events this tick"; return 0; }
+  printf '%s\n' "$enum" | while IFS="$(printf '\t')" read -r name events_csv; do
+    [ -n "$name" ] || continue
+    # Same charset roles.py allows ([A-Za-z0-9._-]); a stricter gate would drop a
+    # valid dotted role (e.g. qa.v2). No '/', and a suffix is always appended, so
+    # a '.'/'..' name cannot traverse out of $VARDIR/events.
+    case "$name" in
+      *[!A-Za-z0-9._-]*)
+        log "WARN event: role name '$name' has invalid path chars -- ignored"
+        continue ;;
+    esac
+    _event_role_wakes "$name" "$events_csv" "$session_ran"
   done
   return 0
 }
@@ -650,6 +768,11 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   limit_backoff=$LIMIT_BACKOFF_START
   paused_logged=0
   role_rr=0
+  # Whether a loop session ran in the PREVIOUS iteration -- drives the
+  # session.done event edge (checked at the top of the next iteration, so
+  # session.done has at most one loop-cadence tick of latency). Only loop
+  # sessions set it; cron/event-fired sessions do not (the reentrancy guard).
+  session_ran=0
 
   while true; do
     # Graceful stop: checked at the top so any in-flight session has already
@@ -676,6 +799,14 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # behaves byte-for-byte as before.
     resolve_cron_due
 
+    # Event bus (W2, #86): wake event roles on new board/PR state, under the
+    # held lock, one at a time. Also runs BEFORE the board-empty gate so an
+    # event role (e.g. QA on pr.opened) fires regardless of the coder board.
+    # Passes last iteration's loop-session flag for the session.done edge, then
+    # consumes it. Additive/best-effort: no event roles = no-op.
+    resolve_event_wakes "$session_ran"
+    session_ran=0
+
     open_count="$(cd "$AUTONOMY_TARGET_REPO" && gh issue list --state open --json number -q 'length' 2>/dev/null || echo -1)"
     if [ "$open_count" = "0" ]; then
       dirty_skips=0
@@ -701,6 +832,11 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     run_session "$role"; outcome=$?
     case $outcome in
       0) log "session clean (open issues ~$open_count). pace ${PACE}s"
+         # A loop session actually COMPLETED -> session.done fires next tick.
+         # Only outcome 0 counts: a preflight/dispatch REFUSAL (rc 2), a
+         # usage-limit pause (rc 3), or a session error must NOT fabricate a
+         # session.done edge for work that did not run (fail-safe).
+         session_ran=1
          err_backoff=$ERR_BACKOFF_START; limit_backoff=$LIMIT_BACKOFF_START
          clear_reset_state
          sleep "$PACE" ;;

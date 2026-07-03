@@ -115,7 +115,20 @@ Each role has a `trigger.type`:
   after its scheduled time, not to-the-second. First start (or after downtime) initialises each
   role's marker **without** a catch-up fire. The supervisor is the sole writer of the per-role
   last-fire marker (`<repo>/var/cron/<role>.last_fire`); adapters never persist scheduling state.
-- **`event`** — reserved for the event bus (a later increment); not yet dispatched.
+- **`event`** — the supervisor gh-polls board/PR state each loop iteration and wakes the role when
+  a new item appears for one of its `on:` events (`pr.opened`, `pr.synchronize`, `issue.created`,
+  `merge.done`, `session.done`). So QA (`on: [pr.opened, pr.synchronize]`) reacts to a Coder's PR
+  without either knowing the other — choreography emerges. Delivery is at-least-once within the poll
+  page (loop-cadence latency); the supervisor is sole writer of the per-`(role, event)` seen-set at
+  `<repo>/var/events/<role>__<event>.seen`, and first start seeds the baseline without a catch-up
+  fire. `session.done` fires an event role after a loop session completes.
+
+```yaml
+roles:
+  qa:
+    enabled: true
+    trigger: { type: event, on: [pr.opened, pr.synchronize] }
+```
 
 ```yaml
 roles:

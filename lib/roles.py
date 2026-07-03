@@ -46,6 +46,17 @@ from datetime import datetime, timedelta, timezone
 
 VALID_SUBSTRATES = ("engine", "managed_agents", "routine", "actions")
 VALID_TRIGGERS = ("loop", "cron", "event")
+# The v1 event vocabulary the supervisor's event bus (W2) can poll/emit. An
+# event role's `on:` tokens must be a subset -- a role listening only for unknown
+# events could never wake, so it is fail-closed at validation (not use-time).
+# INVARIANT for anyone extending this: the supervisor's per-(role,event) seen-set
+# (bin/supervisor.sh resolve_event_wakes) assumes every token is MONOTONIC or
+# TERMINAL (PR/issue numbers grow, merges are final) so a token that scrolls off
+# the poll page never re-enters it. A NON-monotonic event kind (e.g. a label that
+# can be added then removed) would re-deliver under that model -- it needs a
+# cumulative/high-water cursor, not this seen-set, so do not just add it here.
+VALID_EVENTS = ("issue.created", "pr.opened", "pr.synchronize", "merge.done",
+                "session.done")
 VALID_PHASES = ("plan", "implement", "test")
 VALID_SCOPE_TARGETS = ("diff", "affected", "full-regression")
 _SCOPE_KEYS = ("labels", "paths", "milestone", "query", "target")
@@ -198,6 +209,12 @@ def validate_roles(config):
                     if not isinstance(on, list) or not on:
                         errors.append("roles.%s: trigger type event requires a "
                                       "non-empty 'on' list" % name)
+                    else:
+                        for ev in on:
+                            if ev not in VALID_EVENTS:
+                                errors.append(
+                                    "roles.%s: unknown event %r in 'on' (valid: "
+                                    "%s)" % (name, ev, ", ".join(VALID_EVENTS)))
         if "instances" in cfg and not _is_positive_int(cfg.get("instances")):
             errors.append("roles.%s: instances must be a positive integer" % name)
         if "account" in cfg and not _is_nonempty_str(cfg.get("account")):
@@ -435,6 +452,50 @@ def cron_roles(config):
     return out
 
 
+def _role_events(cfg):
+    """The event `on:` token list for a role config, [] when absent/blank.
+    Keeps only non-empty string tokens. Defensive against non-dict shapes
+    (dispatch degrades, never crashes)."""
+    cfg = cfg if isinstance(cfg, dict) else {}
+    trigger = cfg.get("trigger")
+    if not isinstance(trigger, dict):
+        return []
+    on = trigger.get("on")
+    if not isinstance(on, list):
+        return []
+    return [str(ev).strip() for ev in on if _is_nonempty_str(ev)]
+
+
+def event_roles(config):
+    """(name, [event, ...]) pairs for the roles the supervisor's event bus wakes,
+    in the same stable order as dispatch_roles: standard roster first
+    (DEFAULT_ROLES order), then custom roles in config order. A role qualifies
+    iff effectively enabled AND its effective trigger type is 'event' AND it has
+    a non-empty `on:` list. Merge semantics mirror dispatch_roles / cron_roles;
+    a role with an empty `on:` is skipped (validate_roles rejects it, but
+    enumeration must degrade, not crash)."""
+    roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
+    if not isinstance(roles_blk, dict):
+        roles_blk = {}
+    out = []
+    for name, d_enabled, _sub, d_trig in DEFAULT_ROLES:
+        enabled, ttype = _effective(roles_blk.get(name), (d_enabled, d_trig))
+        if enabled and ttype == "event":
+            evs = _role_events(roles_blk.get(name))
+            if evs:
+                out.append((name, evs))
+    standard = tuple(r[0] for r in DEFAULT_ROLES)
+    for name, cfg in roles_blk.items():
+        if name in standard or not _ROLE_NAME_RE.match(str(name)):
+            continue
+        enabled, ttype = _effective(cfg, (False, "loop"))
+        if enabled and ttype == "event":
+            evs = _role_events(cfg)
+            if evs:
+                out.append((name, evs))
+    return out
+
+
 def render_scope(scope):
     """One-line scope directive for the session's system prompt -- the
     supervisor appends it to the pack's hard_rules. '' when scope is absent
@@ -465,11 +526,15 @@ def render_scope(scope):
 def dispatchable_roles(config):
     """Every role the supervisor may run a session for: enabled loop roles
     (round-robined by the loop) PLUS enabled cron roles (fired by the W1
-    scheduler through the same run_session path). role_settings resolves any of
-    these; event roles are not yet dispatched. Loop roles keep their stable
-    order; cron roles that are not also loop roles are appended."""
+    scheduler) PLUS enabled event roles (woken by the W2 event bus) -- all three
+    go through the same run_session path, so role_settings must resolve any of
+    them. Loop roles keep their stable order; cron then event roles that are not
+    already listed are appended."""
     names = list(dispatch_roles(config))
     for name, _sched in cron_roles(config):
+        if name not in names:
+            names.append(name)
+    for name, _events in event_roles(config):
         if name not in names:
             names.append(name)
     return names
@@ -660,6 +725,22 @@ def _cron_due_main(argv):
     return 0
 
 
+def _events_main(argv):
+    """`roles.py events <target-repo>` -- one `NAME<TAB>EVENT[,EVENT...]` line per
+    enabled event role (none prints nothing). The supervisor's event bus
+    enumerates listeners from this; keeping the roster/merge logic in Python keeps
+    the supervisor a thin caller. Events never contain a tab or comma."""
+    if len(argv) != 2:
+        print("usage: roles.py events <target-repo>", file=sys.stderr)
+        return 2
+    config, rc = _load_config(argv[1])
+    if rc:
+        return rc
+    for name, evs in event_roles(config):
+        print("%s\t%s" % (name, ",".join(evs)))
+    return 0
+
+
 def main(argv):
     if len(argv) >= 2 and argv[1] == "dispatch":
         return _dispatch_main(argv[1:])
@@ -667,6 +748,8 @@ def main(argv):
         return _cron_main(argv[1:])
     if len(argv) >= 2 and argv[1] == "cron-due":
         return _cron_due_main(argv[1:])
+    if len(argv) >= 2 and argv[1] == "events":
+        return _events_main(argv[1:])
     if len(argv) != 2:
         print("usage: roles.py <target-repo> | roles.py dispatch "
               "<target-repo> [role]", file=sys.stderr)

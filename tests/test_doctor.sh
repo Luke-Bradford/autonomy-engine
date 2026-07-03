@@ -118,7 +118,7 @@ roles:
     substrate: actions
     trigger:
       type: event
-      on: [pull_request_review.approved]
+      on: [pr.opened]
 YAML
 case "$(doctor_qa_role_check "$tmp")" in
   WARN*qa-gate*) r=warn ;;
