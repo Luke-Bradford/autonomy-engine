@@ -96,6 +96,43 @@ start_registered_count() {
   printf '%s' "$n"
 }
 
+# Names of the registered `openai_compatible` accounts (the BYO-LLM local/remote
+# endpoints, #78) -- one per line, empty when none. Best-effort: any problem
+# (no python3, absent/corrupt index, parse error) prints nothing rather than
+# aborting the report under set -e. A seam: tests shadow this after sourcing.
+start_local_accounts() {
+  local raw
+  raw="$(_with_timeout "${AUTONOMY_ACCT_TIMEOUT:-5}" \
+         python3 "$ENGINE_HOME/lib/accounts.py" list 2>/dev/null)" || return 0
+  # Parse the accounts.py `list` JSON with the stdlib (no jq); the whole body is
+  # read before anything prints, so there is no producer-into-early-exit pipe.
+  python3 -c 'import sys, json
+try:
+    for a in json.load(sys.stdin):
+        if a.get("kind") == "openai_compatible":
+            print(a["name"])
+except Exception:
+    pass' <<<"$raw" 2>/dev/null || true
+}
+
+# How many models the named endpoint advertises right now (GET <base_url>/models
+# via accounts.py list-models), bounded so a hung endpoint can't wedge the
+# report. Prints an integer; 0 on unreachable/empty/any error. A seam: tests
+# shadow this after sourcing.
+start_endpoint_model_count() {
+  local name="$1" out cnt
+  out="$(_with_timeout "${AUTONOMY_ENDPOINT_TIMEOUT:-8}" \
+         python3 "$ENGINE_HOME/lib/accounts.py" list-models "$name" 2>/dev/null)" \
+    || { printf '0'; return 0; }
+  # list-models prints one id per line; count the non-blank ones. grep -c reads
+  # all of the here-string (no early exit), so no SIGPIPE (prevention-log #7).
+  # NB grep -c prints "0" AND exits 1 on zero matches -- swallow that rc (it is
+  # the empty/unreachable case, not an error) instead of printing a second 0.
+  cnt="$(grep -c '[^[:space:]]' <<<"$out" 2>/dev/null)" || true
+  case "$cnt" in ''|*[!0-9]*) cnt=0 ;; esac
+  printf '%s' "$cnt"
+}
+
 # Read-only live-health report (issue #81). Doctor-style OK/WARN lines; always
 # succeeds (health is in the text, not the exit code) and touches nothing --
 # no port bind, no launchctl, no dashboard launch.
@@ -119,6 +156,23 @@ start_status_report() {
   else
     echo "WARN no repos registered -- './start /path/to/repo' to onboard one"
   fi
+  # Local (BYO-LLM, #78) endpoints: stay silent unless the operator configured
+  # one -- no noise for the common cloud-only setup. Fed from a command
+  # substitution (not a pipe) so the loop body runs in this shell, not a
+  # subshell. #81 asked specifically for an 'is my ollama reachable?' signal.
+  local acct cnt
+  while IFS= read -r acct; do
+    [ -n "$acct" ] || continue
+    cnt="$(start_endpoint_model_count "$acct")"
+    case "$cnt" in ''|*[!0-9]*) cnt=0 ;; esac
+    if [ "$cnt" -gt 0 ]; then
+      echo "OK   local endpoint '$acct' reachable ($cnt model(s))"
+    else
+      echo "WARN local endpoint '$acct' unreachable or advertises no models -- start it (e.g. 'ollama serve') or check its base_url"
+    fi
+  done <<EOF
+$(start_local_accounts)
+EOF
 }
 
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0

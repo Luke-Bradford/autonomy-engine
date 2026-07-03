@@ -110,6 +110,57 @@ printf '%s\n' "$tmp/somerepo" > "$HOME/.config/autonomy/repos"
 out="$(start_status_report 2>&1)"
 check "status: repos registered -> ok" "0" "$(grep -q 'repo(s) registered' <<<"$out" && echo 0 || echo 1)"
 
+# --- #81: local (BYO-LLM) endpoint reachability in the health report --------------
+# The report enumerates openai_compatible accounts (start_local_accounts) and
+# probes each (start_endpoint_model_count). Both are seams, shadowed here the
+# same way dashboard_pids/gh are, so each OK/WARN branch is deterministic.
+check "sourcing defines start_local_accounts" "0" "$(type start_local_accounts >/dev/null 2>&1 && echo 0 || echo 1)"
+check "sourcing defines start_endpoint_model_count" "0" "$(type start_endpoint_model_count >/dev/null 2>&1 && echo 0 || echo 1)"
+
+# no local accounts -> the report stays silent about endpoints (no noise for
+# operators who never configured BYO-LLM)
+start_local_accounts() { :; }
+out="$(start_status_report 2>&1)"
+check "status: no local endpoint -> silent" "1" "$(grep -q 'local endpoint' <<<"$out" && echo 0 || echo 1)"
+
+# a configured, reachable endpoint -> OK with the model count
+start_local_accounts() { echo "localbot"; }
+start_endpoint_model_count() { echo 3; }
+out="$(start_status_report 2>&1)"
+check "status: reachable local endpoint -> OK with count" "0" "$(grep -q "OK   local endpoint 'localbot' reachable (3 model(s))" <<<"$out" && echo 0 || echo 1)"
+
+# configured but unreachable (0 models) -> WARN naming the remedy
+start_endpoint_model_count() { echo 0; }
+out="$(start_status_report 2>&1)"
+check "status: unreachable local endpoint -> WARN" "0" "$(grep -q "WARN local endpoint 'localbot' unreachable" <<<"$out" && echo 0 || echo 1)"
+
+# a non-integer/garbage probe result must degrade to WARN, never crash the report
+start_endpoint_model_count() { echo "nope"; }
+out="$(start_status_report 2>&1)"; rc=$?
+check "status: garbage probe -> WARN (no crash)" "0" "$(grep -q "WARN local endpoint 'localbot'" <<<"$out" && echo 0 || echo 1)"
+check "status: report still succeeds on garbage probe" "0" "$rc"
+# restore the REAL seam functions (re-sourcing is guarded: it only re-defines,
+# never executes) so the checks below exercise the genuine implementations
+# shellcheck source=/dev/null
+source "$ENGINE_HOME/start"
+
+# REAL enumerator: only openai_compatible accounts are listed. Uses the real
+# accounts.py against the sandboxed HOME index (a local file read -- no network).
+python3 "$ENGINE_HOME/lib/accounts.py" set local-test openai_compatible http://127.0.0.1:1/v1 >/dev/null 2>&1
+python3 "$ENGINE_HOME/lib/accounts.py" set subx claude_subscription >/dev/null 2>&1
+accts_out="$(start_local_accounts)"
+check "real start_local_accounts lists the openai_compatible account" "0" "$(grep -qx 'local-test' <<<"$accts_out" && echo 0 || echo 1)"
+check "real start_local_accounts omits non-endpoint accounts" "1" "$(grep -qx 'subx' <<<"$accts_out" && echo 0 || echo 1)"
+
+# REAL prober against a dead port (127.0.0.1:1) -> 0 (unreachable). Genuinely
+# offline: list_models returns [] on the connection error.
+cnt_out="$(start_endpoint_model_count local-test)"
+check "real start_endpoint_model_count on a dead endpoint -> 0" "0" "$cnt_out"
+
+# clean up so the integration `start status` below sees no local accounts
+python3 "$ENGINE_HOME/lib/accounts.py" delete local-test >/dev/null 2>&1
+python3 "$ENGINE_HOME/lib/accounts.py" delete subx >/dev/null 2>&1
+
 # integration: the status subcommand is read-only -- exit 0, never binds/launchctl
 rm -f "$SHIM_LOG"
 out="$(bash "$ENGINE_HOME/start" status </dev/null 2>&1)"; rc=$?
