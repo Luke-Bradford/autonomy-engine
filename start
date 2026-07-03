@@ -37,9 +37,10 @@ usage: ./start [target-repo] [--port N] [--no-launch] [--foreground]
        ./start status
        ./start stop
 
-`console` opens the terminal control app -- a foreground, cross-platform
-(Python) running application that launches the dashboard, streams logs, takes
-commands (status/pause/resume/chat/web), and stops on Ctrl-C.
+`console` runs the engine as ONE foreground service in your terminal: it hosts
+the dashboard and streams the live work log (a running log of work). Ctrl-C
+stops it; re-run to restart. Cross-platform (Python). `./start console
+--interactive` gives a command prompt (status/pause/resume/chat/web) instead.
 
 No repos registered yet: prints setup guidance; with a target-repo argument
 it runs the guided quickstart on it (and registers it for the dashboard).

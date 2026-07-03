@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""autonomy console -- a foreground terminal control app for the engine.
+"""autonomy console -- the engine's single foreground service, in your terminal.
 
-Run it and you get a VISIBLE running application: it launches the web dashboard,
-streams the engine's logs as they happen, shows status, and takes commands
-(status / pause / resume / chat / web / logs / quit). Ctrl-C or `quit` stops it.
+Default (`bin/console.py`): it becomes THE running service -- it owns the web
+dashboard that hosts the site and streams the live work log in the foreground, a
+running log of work like a dev-server task. No prompt. Ctrl-C stops it; re-run to
+restart. It first boots out the background launchd dashboard daemon so there is
+ONE service, not two fighting for the port.
+
+`--interactive` gives the older command console instead (a prompt with
+status / pause / resume / chat / web / logs / quit), for when you want to poke at
+the system rather than watch it.
 
 Cross-platform by design -- Python stdlib only (subprocess / threading /
-webbrowser), no bash and no launchd -- so it runs the same on macOS, Linux, and
-Windows. The rich helpers below are the testable core; the read-eval loop and the
-log-tail thread at the bottom are thin I/O.
+webbrowser), so it runs the same on macOS, Linux, and Windows (the launchd
+bootout is a no-op off macOS). The rich helpers are the testable core; the
+service loop and REPL at the bottom are thin I/O.
 
-  bin/console.py [--port N] [--no-dashboard]
+  bin/console.py [--port N] [--interactive] [--no-dashboard]
 """
 import os
 import sys
@@ -189,68 +195,126 @@ def dispatch(line, state):
     return "unknown command: %s  (try 'help')" % verb
 
 
-# --- thin I/O: log-tail thread + read-eval loop -----------------------------
+# --- log streaming + service loop -------------------------------------------
+
+def _emit_new_log_lines(offsets):
+    """One pass: for each registered repo's supervisor.log, print newly-appended
+    lines (prefixed '│'). Mutates `offsets` (path -> byte offset); first sight of
+    a file records its end so only NEW work streams (no history dump). Portable
+    seek/read poll -- no `tail -f` dependency."""
+    for r in registered_repos():
+        path = os.path.join(r, *_LOGDIR, "supervisor.log")
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        start = offsets.get(path)
+        if start is None:
+            offsets[path] = size              # first sight -> only tail new
+            continue
+        if size < start:                      # rotated/truncated
+            start = 0
+        if size <= start:
+            continue
+        try:
+            with open(path, errors="replace") as fh:
+                fh.seek(start)
+                new = fh.read()
+        except OSError:
+            continue
+        offsets[path] = size
+        for ln in new.splitlines():
+            sys.stdout.write("│ %s\n" % ln)
+        sys.stdout.flush()
+
+
+def _stop_background_dashboard():
+    """Best-effort: bootout the launchd dashboard DAEMON so this console is the
+    single service hosting the site (no port fight). macOS-only; a no-op where
+    there is no launchd (Windows/Linux without it -- no daemon there anyway)."""
+    if not hasattr(os, "getuid"):
+        return
+    try:
+        subprocess.run(
+            ["launchctl", "bootout", "gui/%d/com.autonomy.dashboard" % os.getuid()],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    except Exception:
+        pass
+
+
+def _launch_dashboard(port, quiet=False):
+    """Start the dashboard subprocess. Default service mode INHERITS this
+    terminal's stdout/stderr so the dashboard's own logs stream into the running
+    log; quiet=True (interactive mode) silences it to keep the prompt clean.
+    None on failure."""
+    out = subprocess.DEVNULL if quiet else None
+    try:
+        return subprocess.Popen(
+            [sys.executable, os.path.join(ENGINE_HOME, "bin", "dashboard.py"),
+             "--port", str(port)], stdout=out, stderr=out)
+    except Exception as exc:
+        print("could not start dashboard: %s" % exc)
+        return None
+
+
+def run_stream(port, launch=True):
+    """THE service (default mode): own the dashboard that hosts the site and
+    stream the live work log in the foreground -- a running log of work, like a
+    dev-server task. No prompt. Ctrl-C stops it; re-run to restart. Relaunches
+    the dashboard if it exits, so the site stays up while the console runs."""
+    dash = None
+    if launch:
+        _stop_background_dashboard()          # consolidate to ONE dashboard
+        dash = _launch_dashboard(port)
+        time.sleep(1.0)
+    print("\n== autonomy service ==  hosting http://127.0.0.1:%s/  "
+          "(Ctrl-C to stop; re-run to restart)" % port)
+    for ln in status_lines():
+        print("  " + ln)
+    print("─ live work log " + "─" * 34)
+    sys.stdout.flush()                        # show the header now, not on first log line
+    offsets = {}
+    try:
+        while True:
+            if dash is not None and dash.poll() is not None:
+                sys.stdout.write("│ (dashboard exited rc=%s -- relaunching)\n"
+                                 % dash.returncode)
+                sys.stdout.flush()
+                dash = _launch_dashboard(port)
+            _emit_new_log_lines(offsets)
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if dash is not None:
+            try:
+                dash.terminate()
+            except Exception:
+                pass
+        print("\nservice stopped.")
+
 
 def _tail_logs(state):
-    """Follow each repo's supervisor.log and print only newly-appended lines.
-    Starts at each file's current end (no history dump). Portable: plain
-    seek/read poll, not `tail -f`."""
+    """Background log stream for interactive mode (the foreground there is the
+    command prompt)."""
     offsets = {}
     while not state.get("quit"):
         if state.get("logs", True):
-            for r in registered_repos():
-                path = os.path.join(r, *_LOGDIR, "supervisor.log")
-                try:
-                    size = os.path.getsize(path)
-                except OSError:
-                    continue
-                start = offsets.get(path)
-                if start is None:
-                    offsets[path] = size          # first sight -> only tail new
-                    continue
-                if size < start:                  # rotated/truncated
-                    start = 0
-                if size > start:
-                    try:
-                        with open(path, errors="replace") as fh:
-                            fh.seek(start)
-                            new = fh.read()
-                    except OSError:
-                        continue
-                    offsets[path] = size
-                    for ln in new.splitlines():
-                        sys.stdout.write("│ %s\n" % ln)
-                    sys.stdout.flush()
+            _emit_new_log_lines(offsets)
         time.sleep(1.0)
 
 
-def main(argv=None):
-    argv = sys.argv[1:] if argv is None else argv
-    port, launch = 8787, True
-    i = 0
-    while i < len(argv):
-        if argv[i] == "--port" and i + 1 < len(argv):
-            port = argv[i + 1]
-            i += 2
-        elif argv[i] == "--no-dashboard":
-            launch = False
-            i += 1
-        else:
-            i += 1
+def _run_repl(port, launch=True):
+    """Interactive mode (--interactive): the dashboard runs quietly and you get a
+    command prompt (status/pause/resume/chat/web/logs/quit); logs stream in a
+    background thread."""
     state = {"port": port, "logs": True, "quit": False, "dash": None}
     if launch:
-        try:
-            state["dash"] = subprocess.Popen(
-                [sys.executable, os.path.join(ENGINE_HOME, "bin", "dashboard.py"),
-                 "--port", str(port)],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception as exc:
-            print("could not launch dashboard: %s" % exc)
-    print("== autonomy console ==  dashboard: http://127.0.0.1:%s/" % port)
+        state["dash"] = _launch_dashboard(port, quiet=True)
+    print("== autonomy console (interactive) ==  http://127.0.0.1:%s/" % port)
     print("\n".join(status_lines()))
     print("type 'help' for commands; Ctrl-C to stop.\n")
-    tail = threading.Thread(target=_tail_logs, args=(state,), daemon=True)
-    tail.start()
+    threading.Thread(target=_tail_logs, args=(state,), daemon=True).start()
     try:
         while not state["quit"]:
             try:
@@ -264,13 +328,35 @@ def main(argv=None):
         pass
     finally:
         state["quit"] = True
-        dash = state.get("dash")
-        if dash is not None:
+        if state.get("dash") is not None:
             try:
-                dash.terminate()
+                state["dash"].terminate()
             except Exception:
                 pass
         print("\nstopped.")
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    port, launch, interactive = 8787, True, False
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--port" and i + 1 < len(argv):
+            port = argv[i + 1]
+            i += 2
+        elif a == "--no-dashboard":
+            launch = False
+            i += 1
+        elif a in ("--interactive", "-i"):
+            interactive = True
+            i += 1
+        else:
+            i += 1
+    if interactive:
+        _run_repl(port, launch)
+    else:
+        run_stream(port, launch)
 
 
 if __name__ == "__main__":
