@@ -91,6 +91,139 @@ def _is_nonempty_str(v):
     return isinstance(v, str) and bool(v.strip())
 
 
+# --- lanes (#147 lanes execution, Part 1) -----------------------------------
+# A lane is a named worktree + role subset, keyed in the ONE committed
+# .autonomy/config.yaml (settled-decisions 21-25; spec
+# 2026-07-03-lanes-and-board-contract-design.md). A role "belongs to" the lane
+# named by its `lane:` field, or the default lane when it sets none. Filtering
+# is unified: `lane=None` resolves to the default lane, so a config with no
+# lanes: block (every role -> the implicit "main" lane) filters to exactly
+# today's set -- zero regression. An undeclared-lane role matches no real
+# lane target and is refused-by-omission (never falls into the default lane,
+# never crashes enumeration -- fail-safe, not fail-open).
+_DEFAULT_LANE = "main"
+
+
+def _declared_lane_names(config):
+    """Declared `lanes:` keys in order, or [] when there is no valid block."""
+    lanes = config.get("lanes") if isinstance(config, dict) else None
+    if not isinstance(lanes, dict):
+        return []
+    return list(lanes)
+
+
+def default_lane(config):
+    """The default lane name: the first declared lane, else 'main' (the
+    implicit lane when no `lanes:` block exists)."""
+    names = _declared_lane_names(config)
+    return names[0] if names else _DEFAULT_LANE
+
+
+def lane_names(config):
+    """Every lane name: declared keys in order, or ['main'] when none."""
+    names = _declared_lane_names(config)
+    return names if names else [_DEFAULT_LANE]
+
+
+def lane_of_role(config, name):
+    """The lane a role belongs to: its `lane:` (stripped) or the default lane.
+    An undeclared lane string is returned verbatim -- callers filter by exact
+    match, so it lands in no real lane (refused-by-omission)."""
+    roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
+    cfg = roles_blk.get(name) if isinstance(roles_blk, dict) else None
+    lane = cfg.get("lane") if isinstance(cfg, dict) else None
+    return lane.strip() if _is_nonempty_str(lane) else default_lane(config)
+
+
+def _scope_labels(cfg):
+    """The frozenset of non-empty string labels a role subscribes to via
+    scope.labels ([] / absent / non-list -> empty). Coerces to str, drops
+    empties -- overlap detection needs a clean set."""
+    if not isinstance(cfg, dict):
+        return frozenset()
+    scope = cfg.get("scope")
+    if not isinstance(scope, dict):
+        return frozenset()
+    labels = scope.get("labels")
+    if not isinstance(labels, list):
+        return frozenset()
+    return frozenset(str(x).strip() for x in labels if _is_nonempty_str(x))
+
+
+def lane_overlaps(config):
+    """Deterministic WARN strings for loop roles in DIFFERENT lanes whose
+    scope.labels intersect -- the label partition is the claim, so overlap
+    'may double-work' (a doctor warning, never a runtime lease; settled-decision
+    22). One line per (lane-pair, shared-label). Roles with no scope.labels
+    never overlap (no partition claim -- the operator's stated risk)."""
+    info = []  # (lane, labelset) per enabled loop role that sets labels
+    roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
+    for lane in lane_names(config):
+        for name in dispatch_roles(config, lane):
+            labels = _scope_labels(roles_blk.get(name)
+                                   if isinstance(roles_blk, dict) else None)
+            if labels:
+                info.append((lane, labels))
+    warnings = set()
+    for i in range(len(info)):
+        for j in range(i + 1, len(info)):
+            la, sa = info[i]
+            lb, sb = info[j]
+            if la == lb:
+                continue
+            pair = tuple(sorted((la, lb)))
+            for label in (sa & sb):
+                warnings.add("lanes %s and %s have overlapping label scopes "
+                             "(label %s) -- may double-work"
+                             % (pair[0], pair[1], label))
+    return sorted(warnings)
+
+
+def _validate_lanes(config):
+    """Shape/enum validation of the top-level `lanes:` block. [] when absent or
+    valid. Fail-closed: bad names, non-mapping lanes, unknown keys, absolute or
+    control-char worktrees, and duplicate worktree paths are all errors so
+    Part 2's launchd/worktree inputs are safe."""
+    errors = []
+    lanes = config.get("lanes") if isinstance(config, dict) else None
+    if lanes is None:
+        return errors
+    if not isinstance(lanes, dict) or not lanes:
+        return ["lanes: must be a non-empty mapping of lane name -> settings"]
+    seen_worktrees = {}
+    for name in lanes:
+        if not _ROLE_NAME_RE.match(str(name)):
+            errors.append("lanes.%s: invalid lane name (allowed: letters, "
+                          "digits, . _ -, max 64 chars)" % name)
+        val = lanes[name]
+        if not isinstance(val, dict):
+            errors.append("lanes.%s: must be a mapping (got %r)" % (name, val))
+            continue
+        for key in sorted(val):
+            if key != "worktree":
+                errors.append("lanes.%s: unknown key %r (valid: worktree)"
+                              % (name, key))
+        if "worktree" in val:
+            wt = val.get("worktree")
+            if not _is_nonempty_str(wt):
+                errors.append("lanes.%s: worktree must be a non-empty string"
+                              % name)
+                continue
+            wt_s = wt.strip()
+            if wt_s.startswith("/"):
+                errors.append("lanes.%s: worktree must be a relative path, not "
+                              "absolute (%r)" % (name, wt))
+            elif any(ord(c) < 32 for c in wt_s):
+                errors.append("lanes.%s: worktree contains control characters "
+                              "(%r)" % (name, wt))
+            elif wt_s in seen_worktrees:
+                errors.append("lanes.%s: worktree %r duplicates lanes.%s"
+                              % (name, wt_s, seen_worktrees[wt_s]))
+            else:
+                seen_worktrees[wt_s] = name
+    return errors
+
+
 def _validate_scope(name, scope):
     """`scope:` -- what an agent works over. Either a bare target string
     (legacy shorthand: `scope: diff`) or a mapping with any of labels/paths
@@ -219,12 +352,14 @@ def unwired_knob_notes(name, cfg):
 def validate_roles(config):
     """Shape/enum validation of the parsed config's `roles:` block. Returns a
     list of human-readable error strings, [] when valid (or when absent)."""
-    errors = []
+    errors = _validate_lanes(config)
     roles = config.get("roles") if isinstance(config, dict) else None
     if not roles:
         return errors
     if not isinstance(roles, dict):
-        return ["roles: must be a mapping of role name -> settings"]
+        errors.append("roles: must be a mapping of role name -> settings")
+        return errors
+    valid_lanes = set(lane_names(config))
     for name, cfg in roles.items():
         if not isinstance(cfg, dict):
             errors.append("roles.%s: must be a mapping (got %r)" % (name, cfg))
@@ -266,6 +401,19 @@ def validate_roles(config):
                                     "%s)" % (name, ev, ", ".join(VALID_EVENTS)))
         if "instances" in cfg and not _is_positive_int(cfg.get("instances")):
             errors.append("roles.%s: instances must be a positive integer" % name)
+        if "lane" in cfg:
+            lane = cfg.get("lane")
+            if not _is_nonempty_str(lane):
+                errors.append("roles.%s: lane must be a non-empty lane name"
+                              % name)
+            elif not _ROLE_NAME_RE.match(str(lane).strip()):
+                errors.append("roles.%s: lane %r is not a valid lane name"
+                              % (name, lane))
+            elif lane.strip() not in valid_lanes:
+                errors.append("roles.%s: lane %r is not a declared lane "
+                              "(declared: %s)"
+                              % (name, lane.strip(),
+                                 ", ".join(sorted(valid_lanes))))
         if "account" in cfg and not _is_nonempty_str(cfg.get("account")):
             errors.append("roles.%s: account must be a non-empty account name"
                           % name)
@@ -433,15 +581,24 @@ def _effective(cfg, key_default_pairs):
     return enabled, (ttype or d_trig)
 
 
-def dispatch_roles(config):
-    """Names of the roles the supervisor's loop dispatches, in a stable
-    order: standard roster first (DEFAULT_ROLES order), then custom roles in
-    config order. A role is dispatched iff effectively enabled AND its
-    effective trigger type is 'loop' -- cron/event roles belong to increment
-    4's scheduler/event bus. Merge semantics mirror the dashboard roster
-    (dashboard_state.build_roles): standard roles default from DEFAULT_ROLES,
-    custom roles default to enabled=false / trigger=loop. No roles: block ->
-    ['coder'] (today's behaviour)."""
+def _in_lane(config, name, lane):
+    """True iff role `name` belongs to `lane` (lane=None -> the default lane).
+    The unified lane filter. A role's resolved lane must ALSO be a declared
+    lane: a role pinned to an undeclared lane matches no target (not even an
+    explicit `--lane <that-undeclared-name>`), so it is refused-by-omission
+    everywhere -- fail-safe, never fall into the default lane, never run a
+    misconfigured role."""
+    rl = lane_of_role(config, name)
+    if rl not in lane_names(config):
+        return False
+    target = lane if lane is not None else default_lane(config)
+    return rl == target
+
+
+def _all_loop_roles(config):
+    """Every enabled loop role, lane-UNfiltered, in the stable dispatch order
+    (standard roster first, then custom roles in config order). The raw roster
+    the lane filter and the settings guard build on."""
     roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
     if not isinstance(roles_blk, dict):
         roles_blk = {}
@@ -460,6 +617,16 @@ def dispatch_roles(config):
     return out
 
 
+def dispatch_roles(config, lane=None):
+    """Names of the loop roles the supervisor dispatches for `lane` (lane=None
+    -> the default lane), in the stable roster order. A role is dispatched iff
+    effectively enabled AND its effective trigger is 'loop' AND it belongs to
+    the lane. With no `lanes:` block every role maps to the implicit 'main'
+    lane, so lane=None returns exactly today's set (zero regression). Merge
+    semantics mirror the dashboard roster (dashboard_state.build_roles)."""
+    return [n for n in _all_loop_roles(config) if _in_lane(config, n, lane)]
+
+
 def _role_schedule(cfg):
     """The cron `schedule` string for a role config, '' when absent/blank.
     Defensive against non-dict shapes (dispatch degrades, never crashes)."""
@@ -471,14 +638,8 @@ def _role_schedule(cfg):
     return str(sched).strip() if _is_nonempty_str(sched) else ""
 
 
-def cron_roles(config):
-    """(name, schedule) pairs for the roles the supervisor's scheduler fires,
-    in the same stable order as dispatch_roles: standard roster first
-    (DEFAULT_ROLES order), then custom roles in config order. A role qualifies
-    iff effectively enabled AND its effective trigger type is 'cron' AND it has
-    a non-blank schedule. Merge semantics mirror dispatch_roles / the dashboard
-    roster; a cron role with no schedule is skipped (validate_roles rejects it,
-    but enumeration must degrade, not crash)."""
+def _all_cron_roles(config):
+    """Every enabled cron role with a schedule, lane-UNfiltered, stable order."""
     roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
     if not isinstance(roles_blk, dict):
         roles_blk = {}
@@ -501,6 +662,17 @@ def cron_roles(config):
     return out
 
 
+def cron_roles(config, lane=None):
+    """(name, schedule) pairs for the cron roles the scheduler fires in `lane`
+    (lane=None -> the default lane), stable order. D6: a lane-less cron role
+    maps to the default lane, so only the default supervisor fires it; a role
+    pinned to a non-default lane fires only under that lane -- exactly-once,
+    no cross-lane coordination. Degrades (skips) a schedule-less role rather
+    than crashing."""
+    return [(n, s) for (n, s) in _all_cron_roles(config)
+            if _in_lane(config, n, lane)]
+
+
 def _role_events(cfg):
     """The event `on:` token list for a role config, [] when absent/blank.
     Keeps only non-empty string tokens. Defensive against non-dict shapes
@@ -515,14 +687,9 @@ def _role_events(cfg):
     return [str(ev).strip() for ev in on if _is_nonempty_str(ev)]
 
 
-def event_roles(config):
-    """(name, [event, ...]) pairs for the roles the supervisor's event bus wakes,
-    in the same stable order as dispatch_roles: standard roster first
-    (DEFAULT_ROLES order), then custom roles in config order. A role qualifies
-    iff effectively enabled AND its effective trigger type is 'event' AND it has
-    a non-empty `on:` list. Merge semantics mirror dispatch_roles / cron_roles;
-    a role with an empty `on:` is skipped (validate_roles rejects it, but
-    enumeration must degrade, not crash)."""
+def _all_event_roles(config):
+    """Every enabled event role with an `on:` list, lane-UNfiltered, stable
+    order."""
     roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
     if not isinstance(roles_blk, dict):
         roles_blk = {}
@@ -543,6 +710,14 @@ def event_roles(config):
             if evs:
                 out.append((name, evs))
     return out
+
+
+def event_roles(config, lane=None):
+    """(name, [event, ...]) pairs for the event roles the bus wakes in `lane`
+    (lane=None -> the default lane), stable order. D6 applies as for cron_roles.
+    Degrades (skips) an empty-`on:` role rather than crashing."""
+    return [(n, e) for (n, e) in _all_event_roles(config)
+            if _in_lane(config, n, lane)]
 
 
 def render_scope(scope):
@@ -578,13 +753,18 @@ def dispatchable_roles(config):
     scheduler) PLUS enabled event roles (woken by the W2 event bus) -- all three
     go through the same run_session path, so role_settings must resolve any of
     them. Loop roles keep their stable order; cron then event roles that are not
-    already listed are appended."""
-    names = list(dispatch_roles(config))
-    for name, _sched in cron_roles(config):
-        if name not in names:
-            names.append(name)
-    for name, _events in event_roles(config):
-        if name not in names:
+    already listed are appended. NOT filtered to a single lane (settings do not
+    depend on lane, so a role in any DECLARED lane resolves without a KeyError
+    on the per-lane path) -- but a role pinned to an UNDECLARED lane is excluded,
+    because it can never run in any real lane (fail-safe: refuse, don't resolve
+    a misconfigured role)."""
+    valid = set(lane_names(config))
+    names = []
+    ordered = (list(_all_loop_roles(config))
+               + [n for n, _ in _all_cron_roles(config)]
+               + [n for n, _ in _all_event_roles(config)])
+    for name in ordered:
+        if name not in names and lane_of_role(config, name) in valid:
             names.append(name)
     return names
 
@@ -710,25 +890,53 @@ def _load_config(repo):
         return None, 1
 
 
+def _extract_lane(args):
+    """Split off an optional `--lane <name>` from a CLI arg list. Returns
+    (positional_args, lane, err): lane is None when absent; err is a message
+    string on malformed usage (missing value, repeated flag). Keeps the lane
+    filter out of the positional grammar so `dispatch <repo> <role>` and
+    `dispatch <repo> --lane <name>` stay unambiguous."""
+    out = []
+    lane = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--lane":
+            if lane is not None or i + 1 >= len(args):
+                return None, None, "malformed --lane"
+            lane = args[i + 1]
+            i += 2
+        else:
+            out.append(a)
+            i += 1
+    return out, lane, None
+
+
 def _dispatch_main(argv):
-    """`roles.py dispatch <target-repo> [role]` -- the supervisor's dispatch
-    contract. Without a role: enabled loop-role names, one per line (may be
-    none). With a role: the six KEY=value session-settings lines. Exit 1 on
-    an undispatchable role (the supervisor REFUSES that session, fail-safe)."""
-    if len(argv) not in (2, 3):
-        print("usage: roles.py dispatch <target-repo> [role]", file=sys.stderr)
+    """`roles.py dispatch <target-repo> [role] | [--lane <name>]` -- the
+    supervisor's dispatch contract. Without a role: enabled loop-role names for
+    the lane (--lane, else the default lane), one per line (may be none). With a
+    role: the six KEY=value session-settings lines (lane-independent). A role
+    and --lane together is a usage error. Exit 1 on an undispatchable role (the
+    supervisor REFUSES that session, fail-safe)."""
+    pos, lane, err = _extract_lane(argv[1:])
+    if (err is not None or pos is None or len(pos) not in (1, 2)
+            or (len(pos) == 2 and lane is not None)):
+        print("usage: roles.py dispatch <target-repo> [role] | "
+              "roles.py dispatch <target-repo> [--lane <name>]",
+              file=sys.stderr)
         return 2
-    config, rc = _load_config(argv[1])
+    config, rc = _load_config(pos[0])
     if rc:
         return rc
-    if len(argv) == 2:
-        for name in dispatch_roles(config):
+    if len(pos) == 1:
+        for name in dispatch_roles(config, lane):
             print(name)
         return 0
     try:
-        s = role_settings(config, argv[2])
+        s = role_settings(config, pos[1])
     except KeyError:
-        print("roles: %r is not an enabled loop or cron role" % argv[2],
+        print("roles: %r is not an enabled loop or cron role" % pos[1],
               file=sys.stderr)
         return 1
     for key in ("account", "agent", "model", "effort", "prompt", "scope"):
@@ -742,13 +950,15 @@ def _cron_main(argv):
     cron role (none prints nothing). The supervisor's scheduler enumerates
     due-ness from this; keeping the roster/merge logic in Python keeps the
     supervisor a thin caller."""
-    if len(argv) != 2:
-        print("usage: roles.py cron <target-repo>", file=sys.stderr)
+    pos, lane, err = _extract_lane(argv[1:])
+    if err is not None or pos is None or len(pos) != 1:
+        print("usage: roles.py cron <target-repo> [--lane <name>]",
+              file=sys.stderr)
         return 2
-    config, rc = _load_config(argv[1])
+    config, rc = _load_config(pos[0])
     if rc:
         return rc
-    for name, sched in cron_roles(config):
+    for name, sched in cron_roles(config, lane):
         print("%s\t%s" % (name, sched))
     return 0
 
@@ -779,13 +989,15 @@ def _events_main(argv):
     enabled event role (none prints nothing). The supervisor's event bus
     enumerates listeners from this; keeping the roster/merge logic in Python keeps
     the supervisor a thin caller. Events never contain a tab or comma."""
-    if len(argv) != 2:
-        print("usage: roles.py events <target-repo>", file=sys.stderr)
+    pos, lane, err = _extract_lane(argv[1:])
+    if err is not None or pos is None or len(pos) != 1:
+        print("usage: roles.py events <target-repo> [--lane <name>]",
+              file=sys.stderr)
         return 2
-    config, rc = _load_config(argv[1])
+    config, rc = _load_config(pos[0])
     if rc:
         return rc
-    for name, evs in event_roles(config):
+    for name, evs in event_roles(config, lane):
         print("%s\t%s" % (name, ",".join(evs)))
     return 0
 
@@ -812,9 +1024,66 @@ def _knob_notes_main(argv):
     return 0
 
 
+def _default_lane_main(argv):
+    """`roles.py default-lane <target-repo>` -- print the default lane name
+    (first declared lane, else 'main'). Part 2's per-lane supervisor/plist
+    derives the default-lane launchd label from this."""
+    if len(argv) != 2:
+        print("usage: roles.py default-lane <target-repo>", file=sys.stderr)
+        return 2
+    config, rc = _load_config(argv[1])
+    if rc:
+        return rc
+    print(default_lane(config))
+    return 0
+
+
+def _roles_in_lane(config, lane):
+    """Set of enabled role names (loop + cron + event) that belong to `lane`."""
+    names = set(dispatch_roles(config, lane))
+    names.update(n for n, _ in cron_roles(config, lane))
+    names.update(n for n, _ in event_roles(config, lane))
+    return names
+
+
+def _lane_report_main(argv):
+    """`roles.py lane-report <target-repo>` -- diagnostic lines for doctor,
+    each `LEVEL<TAB>message` (LEVEL in OK/WARN). Prints NOTHING when no
+    `lanes:` block is declared (zero noise). Otherwise: one OK summary, a WARN
+    per non-default lane that has roles (Part 1 cannot execute a non-default
+    lane -- routing is live but per-lane supervisors land in Part 2 of #147),
+    and a WARN per cross-lane label-scope overlap."""
+    if len(argv) != 2:
+        print("usage: roles.py lane-report <target-repo>", file=sys.stderr)
+        return 2
+    config, rc = _load_config(argv[1])
+    if rc:
+        return rc
+    declared = _declared_lane_names(config)
+    if not declared:
+        return 0
+    dl = default_lane(config)
+    print("OK\tlanes: %d declared (default: %s)" % (len(declared), dl))
+    for lane in declared:
+        if lane == dl:
+            continue
+        n = len(_roles_in_lane(config, lane))
+        if n > 0:
+            print("WARN\tlane %r declared with %d role(s) but per-lane "
+                  "execution lands in Part 2 (#147) -- these roles do NOT run "
+                  "yet" % (lane, n))
+    for w in lane_overlaps(config):
+        print("WARN\t%s" % w)
+    return 0
+
+
 def main(argv):
     if len(argv) >= 2 and argv[1] == "knob-notes":
         return _knob_notes_main(argv[1:])
+    if len(argv) >= 2 and argv[1] == "default-lane":
+        return _default_lane_main(argv[1:])
+    if len(argv) >= 2 and argv[1] == "lane-report":
+        return _lane_report_main(argv[1:])
     if len(argv) >= 2 and argv[1] == "dispatch":
         return _dispatch_main(argv[1:])
     if len(argv) >= 2 and argv[1] == "cron":

@@ -58,7 +58,8 @@ worktree:
 #     scope: { labels: [ready], milestone: current }
 #     self_test: true                  # [#89] agents test their own work (not yet consumed)
 #     blockers: raise-to-pm            # [#89] raise-to-pm | raise-to-human (not yet consumed)
-#     instances: 1
+#     instances: 1                     # [#147/D1] superseded by lanes: (see below); still NOTE-logged
+#     lane: main                       # [#147] the lane this role runs in (default lane if omitted)
 #   qa:
 #     enabled: false
 #     account: claude-sub
@@ -81,3 +82,18 @@ worktree:
 #     output: handoff-to-pm            # [rail-prose] raise-issues | handoff-to-pm (shapes the rail only)
 #     web_search: false                # [rail-prose] shapes the rail only, not enforced
 #     prompt: .autonomy/roles/researcher.md
+
+# lanes: [#147] OPTIONAL. A lane is a named worktree + role subset -- run
+# parallel worktrees of one repo, each scoped to different labels (settled-
+# decisions 21-25). Omit entirely = one implicit lane named 'main' = today's
+# behaviour (zero migration). The FIRST declared lane is the default. A role
+# with no `lane:` runs in the default lane; a role's `lane:` must name a
+# declared lane. Lanes with disjoint scope.labels never contend for a ticket --
+# the label partition IS the claim (doctor WARNs on overlap; no runtime lease).
+#   NOTE (Part 1 of #147): routing into lanes is live, but EXECUTING a non-
+#   default lane (the supervisor --lane flag + per-lane launchd service) lands
+#   in Part 2 -- until then a role pinned to a non-default lane does NOT run
+#   (doctor warns). Cron/event roles fire in the default lane only unless pinned.
+# lanes:
+#   main:     { worktree: ../.myrepo-autonomy }   # relative path (not absolute)
+#   frontend: { worktree: ../.myrepo-frontend }
