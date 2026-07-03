@@ -797,6 +797,34 @@ class _QuietThreadingHTTPServer(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+def _pick_concierge_account(local_names, preferred):
+    """Choose which openai_compatible account the concierge answers from (#137).
+
+    `local_names` is the list of registered openai_compatible account names in
+    registry order; `preferred` is the AUTONOMY_CONCIERGE_ACCOUNT override
+    (None/empty when unset). Rule:
+      - preference set + names a registered local account -> use it;
+      - preference set + no match -> raise (visible misconfig, NEVER a silent
+        fall back to a different endpoint -- fail-safe);
+      - preference unset -> the deterministic registry-first default.
+    Raises ValueError (operator-facing message) when no local account exists or
+    a preference is unmatched; the caller degrades it to {ok:false,error}.
+    """
+    if not local_names:
+        raise ValueError("no local LLM configured -- register an "
+                         "openai_compatible account (e.g. Ollama) to use the "
+                         "concierge")
+    pref = (preferred or "").strip()
+    if pref:
+        if pref in local_names:
+            return pref
+        raise ValueError(
+            "AUTONOMY_CONCIERGE_ACCOUNT=%r is not a registered "
+            "openai_compatible account (have: %s)"
+            % (pref, ", ".join(local_names)))
+    return local_names[0]
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "autonomy-dashboard/1.0"
     repos = []
@@ -831,10 +859,11 @@ class Handler(BaseHTTPRequestHandler):
                      if a.get("kind") == "openai_compatible"]
         except Exception as exc:  # registry unreadable/corrupt -- report, don't crash
             return {"ok": False, "error": "account registry error: %s" % exc}
-        if not local:
-            return {"ok": False, "error": "no local LLM configured -- register an "
-                    "openai_compatible account (e.g. Ollama) to use the concierge"}
-        name = local[0]
+        try:
+            name = _pick_concierge_account(
+                local, os.environ.get("AUTONOMY_CONCIERGE_ACCOUNT"))
+        except ValueError as exc:  # no local account, or an unmatched preference
+            return {"ok": False, "error": str(exc)}
         try:
             base_url = acc.resolve(name)["env"]["OPENAI_BASE_URL"]
             models = acc.list_models(name)

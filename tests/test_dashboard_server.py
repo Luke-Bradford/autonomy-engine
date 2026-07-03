@@ -63,5 +63,50 @@ class TestPageTemplating(unittest.TestCase):
         self.assertNotIn(b"__CONTROL_TOKEN__", html)
 
 
+class TestConciergeAccountSelection(unittest.TestCase):
+    """The concierge's local-account selection rule (#137). An explicit
+    AUTONOMY_CONCIERGE_ACCOUNT preference wins; unset keeps the deterministic
+    registry-first default; a set-but-unmatched preference is a visible error,
+    never a silent fall back to a different endpoint (fail-safe)."""
+
+    def test_unset_preference_uses_registry_first(self):
+        self.assertEqual(
+            dashboard._pick_concierge_account(["ollama", "lmstudio"], None),
+            "ollama")
+        self.assertEqual(
+            dashboard._pick_concierge_account(["ollama", "lmstudio"], ""),
+            "ollama")
+        # whitespace-only preference is treated as unset
+        self.assertEqual(
+            dashboard._pick_concierge_account(["ollama", "lmstudio"], "  "),
+            "ollama")
+
+    def test_matching_preference_wins_over_registry_order(self):
+        self.assertEqual(
+            dashboard._pick_concierge_account(["ollama", "lmstudio"],
+                                              "lmstudio"),
+            "lmstudio")
+        # surrounding whitespace is tolerated
+        self.assertEqual(
+            dashboard._pick_concierge_account(["ollama", "lmstudio"],
+                                              " lmstudio "),
+            "lmstudio")
+
+    def test_unmatched_preference_raises_not_silent_fallback(self):
+        with self.assertRaises(ValueError) as ctx:
+            dashboard._pick_concierge_account(["ollama"], "does-not-exist")
+        msg = str(ctx.exception)
+        self.assertIn("does-not-exist", msg)
+        self.assertIn("ollama", msg)  # lists what IS available
+
+    def test_no_local_accounts_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            dashboard._pick_concierge_account([], None)
+        self.assertIn("openai_compatible", str(ctx.exception))
+        # a preference set with no accounts at all still refuses
+        with self.assertRaises(ValueError):
+            dashboard._pick_concierge_account([], "ollama")
+
+
 if __name__ == "__main__":
     unittest.main()
