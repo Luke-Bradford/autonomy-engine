@@ -237,7 +237,12 @@ class Accounts:
                 req.add_header("Authorization", "Bearer %s" % secret)
             with urllib.request.urlopen(req, timeout=5) as resp:
                 return _parse_models_payload(resp.read())
-        except (urllib.error.URLError, OSError, ValueError):
+        except Exception:   # noqa: BLE001 -- best-effort discovery, never raises
+            # Deliberately broad: this covers the network (URLError/OSError),
+            # a bad URL, AND an unexpected failure from the injected
+            # credentials backend's get_secret() (e.g. a Keychain
+            # subprocess error). The contract is "[] on any error"; discovery
+            # must never break dispatch or the config UI.
             return []
 
 

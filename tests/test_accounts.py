@@ -354,6 +354,19 @@ class TestListModels(unittest.TestCase):
         self.assertEqual(acc.list_models("sub"), [])
         self.assertEqual(acc.list_models("ghost"), [])
 
+    def test_list_models_credential_failure_is_empty(self):
+        # an unexpected failure from the credentials backend must degrade to
+        # [] -- discovery is best-effort and never propagates (never raises).
+        class _BoomCreds:
+            def get_secret(self, label):
+                raise RuntimeError("keychain exploded")
+        tmp = tempfile.mkdtemp()
+        acc = ac.Accounts(index_path=os.path.join(tmp, "accounts"),
+                          credentials=_BoomCreds())
+        acc.set("remote", "openai_compatible",
+                base_url="https://gw.example/v1", credential="k")
+        self.assertEqual(acc.list_models("remote"), [])
+
 
 if __name__ == "__main__":
     unittest.main()
