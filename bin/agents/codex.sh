@@ -28,10 +28,27 @@ _codex_run_once() {
   local prompt="$1" model="$2" log_file="$3" effort="$4"
   local effort_args=()
   [ -n "$effort" ] && effort_args=(-c "model_reasoning_effort=\"$effort\"")
+  # BYO-LLM (#78): a role can resolve to a local OpenAI-compatible endpoint,
+  # which reaches here as OPENAI_BASE_URL. codex-cli 0.136.0 dropped
+  # custom-provider `wire_api = "chat"` (it now demands the Responses API,
+  # which Ollama/LM Studio don't speak), so an arbitrary chat endpoint is NOT
+  # routable via a `-c model_providers` override. The supported path is
+  # codex's NATIVE local provider: --oss + --local-provider. Pick the provider
+  # from the endpoint's default port (Ollama 11434, LM Studio 1234), defaulting
+  # to ollama. Unset OPENAI_BASE_URL -> the cloud invocation is unchanged.
+  local provider_args=()
+  if [ -n "${OPENAI_BASE_URL:-}" ]; then
+    local oss_provider=ollama
+    case "$OPENAI_BASE_URL" in
+      *:1234|*:1234/*) oss_provider=lmstudio ;;
+    esac
+    provider_args=(--oss --local-provider "$oss_provider")
+  fi
   codex exec \
     --json \
     -m "$model" \
     --dangerously-bypass-approvals-and-sandbox \
+    ${provider_args[@]+"${provider_args[@]}"} \
     ${effort_args[@]+"${effort_args[@]}"} \
     "$prompt" \
     </dev/null >>"$log_file" 2>&1

@@ -84,6 +84,31 @@ printf '{"type":"turn.completed"}\n' > "$CODEX_SHIM_DIR/fixture"
 agent_invoke "$tmp/loop_prompt.md" "$tmp/hard_rules.md" m1 m2 "$tmp/session2.log" high
 check "effort maps to -c model_reasoning_effort" "0" "$(argv_has 1 'model_reasoning_effort="high"' && echo 0 || echo 1)"
 
+# --- OPENAI_BASE_URL routing to the local OSS provider (#78) --------------------
+# codex-cli 0.136.0 dropped custom-provider `wire_api = "chat"` (demands the
+# Responses API, which local servers don't speak), so a local role routes
+# through codex's NATIVE --oss local provider. Unset -> byte-for-byte the
+# cloud path (no override); set -> --oss + the matching local provider.
+reset_shim
+printf '{"type":"turn.completed"}\n' > "$CODEX_SHIM_DIR/fixture"
+( unset OPENAI_BASE_URL; _codex_run_once "p" "gpt-x" "$tmp/nb.log" "" )
+check "no base url: no local-provider override" "yes" \
+  "$(tr '\0' '\n' < "$CODEX_SHIM_DIR/argv.1" | grep -qE -- '--oss|--local-provider|model_provider' && echo no || echo yes)"
+
+reset_shim
+printf '{"type":"turn.completed"}\n' > "$CODEX_SHIM_DIR/fixture"
+( export OPENAI_BASE_URL=http://localhost:11434/v1 OPENAI_API_KEY=local
+  _codex_run_once "p" "qwen3:14b" "$tmp/b.log" "" )
+check "base url set: routes via --oss" "0" "$(argv_has 1 --oss && echo 0 || echo 1)"
+check "base url set: ollama provider selected" "0" "$(argv_has 1 ollama && echo 0 || echo 1)"
+check "base url set: still passes the model" "0" "$(argv_has 1 qwen3:14b && echo 0 || echo 1)"
+
+reset_shim
+printf '{"type":"turn.completed"}\n' > "$CODEX_SHIM_DIR/fixture"
+( export OPENAI_BASE_URL=http://localhost:1234/v1 OPENAI_API_KEY=local
+  _codex_run_once "p" "some-model" "$tmp/l.log" "" )
+check "lmstudio default port -> lmstudio provider" "0" "$(argv_has 1 lmstudio && echo 0 || echo 1)"
+
 # --- engine-level fallback: retry once on a NON-limit failure -------------------
 reset_shim
 printf '{"type":"error","message":"boom, internal server error"}\n' > "$CODEX_SHIM_DIR/fixture.1"

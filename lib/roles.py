@@ -9,6 +9,7 @@ The schema (docs/superpowers/specs/2026-07-02-dynamic-agent-org-design.md):
       <name>:
         enabled: true|false
         account: <name in the accounts registry>   # lib/accounts.py
+        agent: <adapter name>      # claude | codex | ... (which CLI runs it)
         trigger: { type: loop | cron | event, ... } # or block form
         model: <model id>          effort: <level>
         models: { plan: ..., implement: ..., test: ... }   # per-phase override
@@ -193,7 +194,7 @@ def validate_roles(config):
         if "account" in cfg and not _is_nonempty_str(cfg.get("account")):
             errors.append("roles.%s: account must be a non-empty account name"
                           % name)
-        for field in ("model", "effort"):
+        for field in ("agent", "model", "effort"):
             if field in cfg and not _is_nonempty_str(cfg.get(field)):
                 errors.append("roles.%s: %s must be a non-empty string"
                               % (name, field))
@@ -396,8 +397,9 @@ def role_settings(config, name):
 
     instances = cfg.get("instances")
     instances = int(str(instances)) if _is_positive_int(instances) else 1
-    return {"account": _s("account"), "model": _s("model"),
-            "effort": _s("effort"), "prompt": _s("prompt"),
+    return {"account": _s("account"), "agent": _s("agent"),
+            "model": _s("model"), "effort": _s("effort"),
+            "prompt": _s("prompt"),
             "scope": render_scope(cfg.get("scope")), "instances": instances}
 
 
@@ -517,7 +519,7 @@ def _dispatch_main(argv):
         print("roles: %r is not an enabled loop role" % argv[2],
               file=sys.stderr)
         return 1
-    for key in ("account", "model", "effort", "prompt", "scope"):
+    for key in ("account", "agent", "model", "effort", "prompt", "scope"):
         print("%s=%s" % (key.upper(), s[key]))
     print("INSTANCES=%d" % s["instances"])
     return 0

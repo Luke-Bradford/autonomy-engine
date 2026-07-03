@@ -81,6 +81,35 @@ resolve_role_dispatch coder
 check "invalid role model blanked" "" "$ROLE_MODEL"
 check "invalid role effort blanked" "" "$ROLE_EFFORT"
 
+# --- per-role agent type (#78) -----------------------------------------------
+cat > "$AUTONOMY_TARGET_REPO/.autonomy/config.yaml" <<'YAML'
+roles:
+  coder:
+    enabled: true
+    agent: codex
+YAML
+resolve_role_dispatch coder
+check "role agent parsed" "codex" "$ROLE_AGENT"
+
+cat > "$AUTONOMY_TARGET_REPO/.autonomy/config.yaml" <<'YAML'
+roles:
+  coder:
+    enabled: true
+YAML
+resolve_role_dispatch coder
+check "role agent empty when unset" "" "$ROLE_AGENT"
+
+# a bogus agent value crosses into a `source .../${ROLE_AGENT}.sh` path -- it
+# must be charset-gated at the point of use and blanked (prevention-log #6)
+cat > "$AUTONOMY_TARGET_REPO/.autonomy/config.yaml" <<'YAML'
+roles:
+  coder:
+    enabled: true
+    agent: "../evil"
+YAML
+resolve_role_dispatch coder
+check "invalid role agent blanked (never a source path)" "" "$ROLE_AGENT"
+
 # --- resolve_account_env (seam) ----------------------------------------------
 cat > "$tmp/accounts-stub" <<'SH'
 #!/bin/sh
@@ -248,6 +277,33 @@ printf 'qa prompt\n' > "$AUTONOMY_TARGET_REPO/.autonomy/roles/qa.md"
 : > "$STUB_CAPTURE"
 ROLE=qa run_session
 check "no-arg run_session uses \$ROLE" "$AUTONOMY_TARGET_REPO/.autonomy/roles/qa.md" "$(grab prompt)"
+
+# 8) per-role agent adapter: run_session sources the ROLE's agent, not the
+# global $AGENT_TYPE (a second stub adapter proves the switch) (#78)
+cat > "$tmp/agents/codexstub.sh" <<'SH'
+agent_invoke() { echo "CODEXSTUB" > "${STUB_CAPTURE:?}"; return 0; }
+agent_classify_outcome() { echo "success"; }
+SH
+cat > "$AUTONOMY_TARGET_REPO/.autonomy/config.yaml" <<'YAML'
+roles:
+  coder:
+    enabled: true
+    agent: codexstub
+YAML
+: > "$STUB_CAPTURE"
+run_session coder
+check "run_session sources the role's agent adapter" "CODEXSTUB" "$(cat "$STUB_CAPTURE")"
+
+# and with no role agent, the global $AGENT_TYPE (stub) still runs
+cat > "$AUTONOMY_TARGET_REPO/.autonomy/config.yaml" <<'YAML'
+roles:
+  coder:
+    enabled: true
+YAML
+: > "$STUB_CAPTURE"
+run_session coder
+check "run_session falls back to \$AGENT_TYPE when role agent unset" "success" \
+  "$(grep -q '^key=' "$STUB_CAPTURE" && echo success || echo MISS)"
 
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
