@@ -3,7 +3,7 @@
 
 board:
   owner: Luke-Bradford      # GitHub user/org that owns this repo (+ the Projects v2 board, if any)
-  project_title: "autonomy-engine engineering board"
+  project_title: "Autonomy Progress"
 
 engine:
   # account_key omitted on purpose: defaults to 'default', the SAME marker eBull
