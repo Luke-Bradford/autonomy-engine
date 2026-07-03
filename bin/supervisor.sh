@@ -339,13 +339,14 @@ select_role() {
 # (defense-in-depth parity with consume_model_override).
 resolve_role_dispatch() {
   local role="$1" out line key val
-  ROLE_ACCOUNT=""; ROLE_MODEL=""; ROLE_EFFORT=""; ROLE_PROMPT=""
+  ROLE_ACCOUNT=""; ROLE_AGENT=""; ROLE_MODEL=""; ROLE_EFFORT=""; ROLE_PROMPT=""
   ROLE_SCOPE=""; ROLE_INSTANCES=1
   out="$(python3 "$ENGINE_HOME/lib/roles.py" dispatch "$AUTONOMY_TARGET_REPO" "$role" 2>>"$SUPLOG")" || return 1
   while IFS= read -r line; do
     key="${line%%=*}"; val="${line#*=}"
     case "$key" in
       ACCOUNT)   ROLE_ACCOUNT="$val" ;;
+      AGENT)     ROLE_AGENT="$val" ;;
       MODEL)     ROLE_MODEL="$val" ;;
       EFFORT)    ROLE_EFFORT="$val" ;;
       PROMPT)    ROLE_PROMPT="$val" ;;
@@ -363,6 +364,16 @@ EOF
     log "WARN roles.$role.effort invalid (valid: low|medium|high|xhigh|max) -- ignored"
     ROLE_EFFORT=""
   fi
+  # The agent name becomes part of a `source .../${ROLE_AGENT}.sh` path, so
+  # re-validate its charset here even though roles.py checks the shape
+  # (defense-in-depth, prevention-log #6): a value with any non-[A-Za-z0-9_-]
+  # char (e.g. a '../' traversal) is blanked -> the global $AGENT_TYPE runs.
+  case "$ROLE_AGENT" in
+    ''|claude|codex) ;;                      # known adapters, fast path
+    *[!A-Za-z0-9_-]*)
+      log "WARN roles.$role.agent '$ROLE_AGENT' has invalid chars -- ignored (using \$AGENT_TYPE)"
+      ROLE_AGENT="" ;;
+  esac
   return 0
 }
 
@@ -400,13 +411,17 @@ run_session() {
   local role="${1:-${ROLE:-coder}}"
   preflight || return $?
 
-  # shellcheck source=/dev/null
-  source "${AUTONOMY_AGENTS_DIR:-$ENGINE_HOME/bin/agents}/${AGENT_TYPE}.sh"
-
   if ! resolve_role_dispatch "$role"; then
     log "dispatch: cannot resolve settings for role '$role' -- REFUSING session (fail-safe; see supervisor.log)"
     return 2
   fi
+
+  # Source the ROLE's agent adapter when it sets one (e.g. a local-LLM 'prep'
+  # role on codex), else the global $AGENT_TYPE. resolve_role_dispatch has
+  # already charset-gated ROLE_AGENT, so it is safe in this path.
+  # shellcheck source=/dev/null
+  source "${AUTONOMY_AGENTS_DIR:-$ENGINE_HOME/bin/agents}/${ROLE_AGENT:-$AGENT_TYPE}.sh"
+
   resolve_session_settings
 
   # Auth precedence: account (fail-safe -- an unresolvable account REFUSES
