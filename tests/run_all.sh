@@ -35,4 +35,10 @@ python3 -m unittest tests.test_accounts -v || fail=1
 echo "=== python: test_dashboard_registry_refuse ==="
 python3 -m unittest tests.test_dashboard_registry_refuse -v || fail=1
 
+echo "=== python: test_concierge ==="
+python3 -m unittest tests.test_concierge -v || fail=1
+
+echo "=== python: test_console ==="
+python3 -m unittest tests.test_console -v || fail=1
+
 if [ "$fail" -eq 0 ]; then echo "ALL SUITES PASS"; exit 0; else echo "ONE OR MORE SUITES FAILED"; exit 1; fi
