@@ -471,7 +471,12 @@ echo ""
 
 # One source of truth for the dashboard invocation: printed by --no-launch,
 # run as a service by default, exec'd foreground with --foreground.
-PORT="${PORT:-8787}"
+# Port precedence: --port flag > ~/.config/autonomy/settings (port = N) > 8787,
+# so `./start`, the double-click launcher, and the console all agree on it.
+if [ -z "${PORT:-}" ]; then   # ${PORT:-} : set-u-safe even if PORT were never set
+  PORT="$(python3 "$ENGINE_HOME/lib/settings.py" port 2>/dev/null)"
+  case "$PORT" in ''|*[!0-9]*) PORT=8787 ;; esac
+fi
 DASH_ARGV=(python3 "$ENGINE_HOME/bin/dashboard.py" --port "$PORT")
 
 if [ "$SETUP_FAILED" -ne 0 ]; then

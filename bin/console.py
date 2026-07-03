@@ -28,6 +28,7 @@ import webbrowser
 ENGINE_HOME = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ENGINE_HOME, "lib"))
 import concierge  # noqa: E402
+import settings  # noqa: E402  (stdlib-only, always available)
 try:                                   # optional at import: keep the console usable
     import accounts as accts           # even if a lib is briefly unavailable
 except Exception:                      # pragma: no cover
@@ -347,7 +348,7 @@ def _run_repl(port, launch=True):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    port, launch, interactive = 8787, True, False
+    port, launch, interactive = settings.port(), True, False   # --port overrides below
     i = 0
     while i < len(argv):
         a = argv[i]
