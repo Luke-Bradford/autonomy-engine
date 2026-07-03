@@ -78,17 +78,25 @@ check "status: hard-kill hint shown" "0" "$(printf '%s\n' "$out" | grep -q 'pkil
 
 # gh auth: shadow gh at the seam (the sanctioned mock for an unavoidable
 # network tool) so the branch is deterministic, not PATH/hash-dependent.
+# NB: capture the report into a var THEN grep it -- piping the report straight
+# into `grep -q` under `set -o pipefail` fails whenever grep matches a non-last
+# line and exits, SIGPIPE-ing the still-writing report (pipeline rc 141). That
+# race is CI-timing-dependent (green locally, red in CI).
 gh() { return 1; }
-check "status: gh not authenticated reported" "0" "$(start_status_report 2>&1 | grep -q 'gh auth not authenticated' && echo 0 || echo 1)"
+out="$(start_status_report 2>&1)"
+check "status: gh not authenticated reported" "0" "$(printf '%s\n' "$out" | grep -q 'gh auth not authenticated' && echo 0 || echo 1)"
 gh() { return 0; }
-check "status: gh ok reported" "0" "$(start_status_report 2>&1 | grep -q 'gh auth ok' && echo 0 || echo 1)"
+out="$(start_status_report 2>&1)"
+check "status: gh ok reported" "0" "$(printf '%s\n' "$out" | grep -q 'gh auth ok' && echo 0 || echo 1)"
 unset -f gh
 
-# repos registered vs none
+# repos registered vs none (same capture-then-grep discipline)
 rm -f "$HOME/.config/autonomy/repos"
-check "status: no repos -> warn" "0" "$(start_status_report 2>&1 | grep -q 'no repos registered' && echo 0 || echo 1)"
+out="$(start_status_report 2>&1)"
+check "status: no repos -> warn" "0" "$(printf '%s\n' "$out" | grep -q 'no repos registered' && echo 0 || echo 1)"
 printf '%s\n' "$tmp/somerepo" > "$HOME/.config/autonomy/repos"
-check "status: repos registered -> ok" "0" "$(start_status_report 2>&1 | grep -q 'repo(s) registered' && echo 0 || echo 1)"
+out="$(start_status_report 2>&1)"
+check "status: repos registered -> ok" "0" "$(printf '%s\n' "$out" | grep -q 'repo(s) registered' && echo 0 || echo 1)"
 
 # integration: the status subcommand is read-only -- exit 0, never binds/launchctl
 rm -f "$SHIM_LOG"
