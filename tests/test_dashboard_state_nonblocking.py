@@ -100,13 +100,15 @@ class NonBlockingState(unittest.TestCase):
             dashboard._gh_refreshing.clear()
 
     def test_gh_calls_run_concurrently(self):
+        # `max_inflight >= 2` is the structural proof of overlap; the gh_sleep
+        # only holds the calls in-flight together long enough for the recorder
+        # to observe it. No wall-clock threshold here on purpose (#108) -- an
+        # `elapsed < X` assertion is the classic load-flake and adds nothing the
+        # inflight counter doesn't already guarantee.
         rec = _Recorder()
         dashboard._run = _fake_run(rec=rec, gh_sleep=0.15)
-        t0 = time.time()
         res = dashboard._compute_in_flight("/repo")
-        elapsed = time.time() - t0
         self.assertGreaterEqual(rec.max_inflight, 2, "gh calls did not overlap")
-        self.assertLess(elapsed, 0.35, "gh calls ran serially (%.2fs)" % elapsed)
         self.assertEqual(res["branch"], "main")
 
     def test_cold_load_blocks_and_returns_real_data(self):
@@ -239,8 +241,24 @@ class NonBlockingState(unittest.TestCase):
         dirs = [tempfile.mkdtemp() for _ in range(3)]
         self.addCleanup(lambda: [os.rmdir(d) for d in dirs])
 
+        # Prove concurrency structurally, not by wall-clock (#108): a Barrier of
+        # N parties can only be crossed once all N repo-builds are genuinely
+        # in-flight at the same instant, so `max_inflight == N` is exact and
+        # needs no timing threshold -- it cannot flake when a loaded box
+        # schedules the threads unevenly. The generous barrier timeout only
+        # bites on a real serial regression (builds that never overlap), which
+        # then trips the max_inflight assertion below.
+        rec = _Recorder()
+        barrier = threading.Barrier(len(dirs), timeout=5.0)
+
         def slow_build(repo, git_in_flight=None):
-            time.sleep(0.15)
+            rec.enter()
+            try:
+                barrier.wait()
+            except threading.BrokenBarrierError:
+                pass  # serial regression: the builds never overlapped
+            finally:
+                rec.leave()
             return {"name": os.path.basename(repo), "path": repo,
                     "git": {}, "current_session": None,
                     "display_status": "idle"}
@@ -250,10 +268,10 @@ class NonBlockingState(unittest.TestCase):
             dashboard._acct_cache[0] = time.time()
             dashboard._acct_cache[1] = {}
 
-        t0 = time.time()
         snap = dashboard.collect(dirs)
-        elapsed = time.time() - t0
-        self.assertLess(elapsed, 0.35, "repos built serially (%.2fs)" % elapsed)
+        self.assertEqual(rec.max_inflight, len(dirs),
+                         "repos built serially: %d of %d overlapped"
+                         % (rec.max_inflight, len(dirs)))
         self.assertEqual([r["path"] for r in snap["repos"]], dirs,
                          "collect did not preserve repo order")
 
