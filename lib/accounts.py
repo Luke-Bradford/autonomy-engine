@@ -29,17 +29,28 @@ _SUBSCRIPTION_KINDS = ("claude_subscription", "codex_subscription")
 _API_ENV = {"anthropic_api": "ANTHROPIC_API_KEY", "openai_api": "OPENAI_API_KEY"}
 
 # Curated model rosters for CLI-login subscriptions: they have no /v1/models
-# endpoint, so discovery falls back to this single in-repo source (#82). Keep
-# the claude list in sync with the dashboard's MODEL_CHOICES
-# (lib/dashboard_page.html). codex_subscription is a deliberate EMPTY SEAM --
-# no codex model roster is verifiable in-repo, so discovery degrades to the
-# config UI's free-text field rather than shipping invented ids (fill this list
-# only once the ids are confirmed against the real codex CLI).
+# endpoint, so discovery falls back to this single in-repo source (#82). This is
+# also the SOLE source for the dashboard's model picker -- bin/dashboard.py
+# injects subscription_models("claude_subscription") into the served page's
+# MODEL_CHOICES (#134), so the two surfaces cannot drift. codex_subscription is
+# a deliberate EMPTY SEAM -- no codex model roster is verifiable in-repo, so
+# discovery degrades to the config UI's free-text field rather than shipping
+# invented ids (fill this list only once the ids are confirmed against the real
+# codex CLI).
 _SUBSCRIPTION_MODELS = {
     "claude_subscription": ["claude-opus-4-8", "claude-sonnet-5",
                             "claude-haiku-4-5"],
     "codex_subscription": [],
 }
+
+
+def subscription_models(kind):
+    """A copy of the curated in-repo roster for a CLI-login subscription `kind`
+    ([] for any non-subscription/unknown kind). The single source both
+    Accounts.list_models() and the dashboard's model picker
+    (bin/dashboard.py -> lib/dashboard_page.html MODEL_CHOICES) read, so the
+    surfaces never drift. Returns a copy -- callers cannot mutate the roster."""
+    return list(_SUBSCRIPTION_MODELS.get(kind, ()))
 
 
 def _valid_base_url(url):
@@ -248,7 +259,7 @@ class Accounts:
             return []
         kind = entry.get("kind")
         if kind in _SUBSCRIPTION_MODELS:
-            return list(_SUBSCRIPTION_MODELS[kind])
+            return subscription_models(kind)
         if kind != "openai_compatible":
             return []
         base = (entry.get("base_url") or "").rstrip("/")
