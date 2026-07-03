@@ -176,5 +176,30 @@ roles:
 YAML
 check "doctor knob-notes stays silent when nothing to say" "" "$(doctor_knob_notes "$tmp" 2>&1)"
 
+# --- lanes: doctor reports declared lanes + non-executable-yet warning (#147) --
+cat > "$tmp/.autonomy/config.yaml" <<'YAML'
+lanes:
+  main: {}
+  frontend: {}
+roles:
+  coder:
+    enabled: true
+  coder-fe:
+    enabled: true
+    trigger: { type: loop }
+    lane: frontend
+YAML
+lane_out="$(doctor_lane_report "$tmp" 2>&1)"
+check "doctor reports the declared default lane (#147)" "0" \
+  "$(printf '%s' "$lane_out" | grep -q 'OK   lanes: 2 declared (default: main)' && echo 0 || echo 1)"
+check "doctor WARNs a non-default lane is not executable yet (#147)" "0" \
+  "$(printf '%s' "$lane_out" | grep -q "WARN lane 'frontend'.*Part 2" && echo 0 || echo 1)"
+cat > "$tmp/.autonomy/config.yaml" <<'YAML'
+roles:
+  coder:
+    enabled: true
+YAML
+check "doctor lane-report silent with no lanes: block (#147)" "" "$(doctor_lane_report "$tmp" 2>&1)"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi

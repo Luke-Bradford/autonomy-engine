@@ -1128,5 +1128,236 @@ class TestCronCli(unittest.TestCase):
         self.assertIn("ACCOUNT=qa-acct", out.splitlines())
 
 
+class TestLaneValidation(unittest.TestCase):
+    """`lanes:` block + role `lane:` schema (#147 lanes execution, Part 1).
+    Fail-closed: undeclared lanes, bad names, unknown keys, unsafe worktrees."""
+
+    def test_no_lanes_block_is_fine(self):
+        self.assertEqual(roles.validate_roles(parse("agent:\n  type: claude\n")), [])
+
+    def test_valid_lanes_block(self):
+        cfg = parse(
+            "lanes:\n"
+            "  main:     { worktree: ../.repo-autonomy }\n"
+            "  frontend: { worktree: ../.repo-frontend }\n"
+            "roles:\n"
+            "  coder:\n    enabled: true\n    lane: main\n"
+            "  coder-fe:\n    enabled: true\n    trigger: { type: loop }\n    lane: frontend\n")
+        self.assertEqual(roles.validate_roles(cfg), [])
+
+    def test_lanes_block_must_be_nonempty_mapping(self):
+        self.assertTrue(roles.validate_roles(parse("lanes: []\n")))
+        self.assertTrue(roles.validate_roles(parse("lanes:\n  main: notamap\n")))
+
+    def test_bad_lane_name_charset(self):
+        errs = roles.validate_roles(parse("lanes:\n  'bad name': {}\n"))
+        self.assertTrue(any("invalid lane name" in e for e in errs))
+
+    def test_unknown_lane_key_rejected(self):
+        errs = roles.validate_roles(parse("lanes:\n  main: { bogus: 1 }\n"))
+        self.assertTrue(any("unknown key" in e for e in errs))
+
+    def test_absolute_worktree_rejected(self):
+        errs = roles.validate_roles(parse("lanes:\n  main: { worktree: /abs/path }\n"))
+        self.assertTrue(any("relative path" in e for e in errs))
+
+    def test_duplicate_worktree_rejected(self):
+        errs = roles.validate_roles(parse(
+            "lanes:\n"
+            "  a: { worktree: ../same }\n"
+            "  b: { worktree: ../same }\n"))
+        self.assertTrue(any("duplicate" in e.lower() for e in errs))
+
+    def test_invalid_lanes_caught_without_roles_block(self):
+        # validate_roles must inspect lanes: even when roles: is absent
+        errs = roles.validate_roles(parse("lanes:\n  main: { bogus: 1 }\n"))
+        self.assertTrue(errs)
+
+    def test_role_lane_must_be_declared(self):
+        errs = roles.validate_roles(parse(
+            "lanes:\n  main: {}\n"
+            "roles:\n  coder: { enabled: true, lane: ghost }\n"))
+        self.assertTrue(any("not a declared lane" in e for e in errs))
+
+    def test_role_lane_main_ok_without_block(self):
+        # no lanes: block -> implicit lane is 'main'; lane: main is valid
+        self.assertEqual(roles.validate_roles(parse(
+            "roles:\n  coder: { enabled: true, lane: main }\n")), [])
+
+    def test_role_lane_bad_charset(self):
+        errs = roles.validate_roles(parse(
+            "roles:\n  coder: { enabled: true, lane: 'x y' }\n"))
+        self.assertTrue(any("lane" in e for e in errs))
+
+
+class TestLaneHelpers(unittest.TestCase):
+    def test_default_lane_no_block(self):
+        self.assertEqual(roles.default_lane(parse("agent:\n  type: claude\n")), "main")
+
+    def test_default_lane_is_first_declared(self):
+        cfg = parse("lanes:\n  frontend: {}\n  main: {}\n")
+        self.assertEqual(roles.default_lane(cfg), "frontend")
+        self.assertEqual(roles.lane_names(cfg), ["frontend", "main"])
+
+    def test_lane_of_role(self):
+        cfg = parse(
+            "lanes:\n  main: {}\n  fe: {}\n"
+            "roles:\n"
+            "  coder: { enabled: true }\n"
+            "  coder-fe: { enabled: true, lane: fe }\n")
+        self.assertEqual(roles.lane_of_role(cfg, "coder"), "main")
+        self.assertEqual(roles.lane_of_role(cfg, "coder-fe"), "fe")
+
+    def test_overlap_disjoint_none(self):
+        cfg = parse(
+            "lanes:\n  main: {}\n  fe: {}\n"
+            "roles:\n"
+            "  coder:\n    enabled: true\n    scope: { labels: [ready] }\n"
+            "  coder-fe:\n    enabled: true\n    lane: fe\n    scope: { labels: [design] }\n")
+        self.assertEqual(roles.lane_overlaps(cfg), [])
+
+    def test_overlap_intersecting_warns(self):
+        cfg = parse(
+            "lanes:\n  main: {}\n  fe: {}\n"
+            "roles:\n"
+            "  coder:\n    enabled: true\n    scope: { labels: [ready] }\n"
+            "  coder-fe:\n    enabled: true\n    lane: fe\n    scope: { labels: [ready, area:fe] }\n")
+        w = roles.lane_overlaps(cfg)
+        self.assertEqual(len(w), 1)
+        self.assertIn("ready", w[0])
+        self.assertIn("fe", w[0])
+        self.assertIn("main", w[0])
+
+    def test_overlap_no_labels_never_overlaps(self):
+        cfg = parse(
+            "lanes:\n  main: {}\n  fe: {}\n"
+            "roles:\n"
+            "  coder: { enabled: true }\n"
+            "  coder-fe: { enabled: true, lane: fe }\n")
+        self.assertEqual(roles.lane_overlaps(cfg), [])
+
+
+class TestLaneDispatchFilter(unittest.TestCase):
+    def test_no_lanes_dispatch_identical_to_today(self):
+        cfg = parse(
+            "roles:\n"
+            "  coder: { enabled: true }\n"
+            "  qa:\n    enabled: true\n    trigger: { type: loop }\n")
+        self.assertEqual(roles.dispatch_roles(cfg), roles.dispatch_roles(cfg, None))
+        self.assertEqual(roles.dispatch_roles(cfg), ["coder", "qa"])
+
+    def test_pinned_role_excluded_from_default(self):
+        cfg = parse(
+            "lanes:\n  main: {}\n  fe: {}\n"
+            "roles:\n"
+            "  coder: { enabled: true }\n"
+            "  coder-fe:\n    enabled: true\n    trigger: { type: loop }\n    lane: fe\n")
+        self.assertEqual(roles.dispatch_roles(cfg), ["coder"])
+        self.assertEqual(roles.dispatch_roles(cfg, "fe"), ["coder-fe"])
+
+    def test_undeclared_lane_role_excluded_everywhere(self):
+        # fail-safe: never fall into default lane, never crash
+        cfg = parse(
+            "lanes:\n  main: {}\n"
+            "roles:\n"
+            "  coder: { enabled: true }\n"
+            "  ghosty:\n    enabled: true\n    trigger: { type: loop }\n    lane: ghost\n")
+        self.assertEqual(roles.dispatch_roles(cfg), ["coder"])
+        self.assertNotIn("ghosty", roles.dispatch_roles(cfg, "main"))
+        # even naming the undeclared lane explicitly must not surface it
+        self.assertEqual(roles.dispatch_roles(cfg, "ghost"), [])
+
+    def test_undeclared_lane_role_not_dispatchable(self):
+        # fail-safe: settings must NOT resolve for a role pinned to a lane that
+        # was never declared -- else `dispatch <repo> <role>` runs a misconfig
+        cfg = parse(
+            "lanes:\n  main: {}\n"
+            "roles:\n"
+            "  coder:\n    enabled: true\n"
+            "  ghosty:\n    enabled: true\n    trigger: { type: loop }\n    lane: ghost\n")
+        self.assertNotIn("ghosty", roles.dispatchable_roles(cfg))
+        with self.assertRaises(KeyError):
+            roles.role_settings(cfg, "ghosty")
+
+    def test_cron_event_default_lane_only(self):
+        cfg = parse(
+            "lanes:\n  main: {}\n  fe: {}\n"
+            "roles:\n"
+            "  pm:\n    enabled: true\n    trigger: { type: cron, schedule: '0 * * * *' }\n"
+            "  qa:\n    enabled: true\n    trigger: { type: event, on: [pr.opened] }\n    lane: fe\n")
+        self.assertEqual([n for n, _ in roles.cron_roles(cfg)], ["pm"])
+        self.assertEqual([n for n, _ in roles.event_roles(cfg)], [])
+        self.assertEqual([n for n, _ in roles.event_roles(cfg, "fe")], ["qa"])
+
+    def test_dispatchable_roles_lane_unaware(self):
+        # settings guard must still resolve a role pinned to a non-default lane
+        cfg = parse(
+            "lanes:\n  main: {}\n  fe: {}\n"
+            "roles:\n"
+            "  coder: { enabled: true }\n"
+            "  coder-fe:\n    enabled: true\n    trigger: { type: loop }\n    lane: fe\n")
+        self.assertIn("coder-fe", roles.dispatchable_roles(cfg))
+
+
+class TestLaneCLI(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.tmp, ".autonomy"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def _write(self, text):
+        with open(os.path.join(self.tmp, ".autonomy", "config.yaml"),
+                  "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    def _run(self, *argv):
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = roles.main(["roles.py"] + list(argv))
+        return rc, buf.getvalue()
+
+    def test_default_lane_cli(self):
+        self._write("lanes:\n  fe: {}\n  main: {}\n")
+        rc, out = self._run("default-lane", self.tmp)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "fe")
+
+    def test_dispatch_with_lane_flag(self):
+        self._write(
+            "lanes:\n  main: {}\n  fe: {}\n"
+            "roles:\n"
+            "  coder: { enabled: true }\n"
+            "  coder-fe:\n    enabled: true\n    trigger: { type: loop }\n    lane: fe\n")
+        rc, out = self._run("dispatch", self.tmp, "--lane", "fe")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.split(), ["coder-fe"])
+
+    def test_dispatch_role_and_lane_together_is_error(self):
+        self._write("roles:\n  coder: { enabled: true }\n")
+        rc, _ = self._run("dispatch", self.tmp, "coder", "--lane", "main")
+        self.assertEqual(rc, 2)
+
+    def test_lane_report_silent_without_block(self):
+        self._write("roles:\n  coder: { enabled: true }\n")
+        rc, out = self._run("lane-report", self.tmp)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "")
+
+    def test_lane_report_declares_and_warns(self):
+        self._write(
+            "lanes:\n  main: {}\n  fe: {}\n"
+            "roles:\n"
+            "  coder: { enabled: true }\n"
+            "  coder-fe:\n    enabled: true\n    trigger: { type: loop }\n    lane: fe\n")
+        rc, out = self._run("lane-report", self.tmp)
+        self.assertEqual(rc, 0)
+        self.assertIn("OK", out)
+        self.assertIn("default: main", out)
+        self.assertIn("WARN", out)
+        self.assertIn("Part 2", out)
+
+
 if __name__ == "__main__":
     unittest.main()

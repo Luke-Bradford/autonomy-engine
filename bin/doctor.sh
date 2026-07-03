@@ -71,6 +71,27 @@ doctor_knob_notes() {
   done <<<"$notes"
 }
 
+# lanes (#147 lanes execution, Part 1): report a declared `lanes:` block, warn
+# for each NON-default lane that has roles (Part 1 routes work into lanes but
+# per-lane execution -- the supervisor --lane flag + per-lane plist -- lands in
+# Part 2, so those roles do NOT run yet), and warn on cross-lane label-scope
+# overlap. Single-sourced from `roles.py lane-report` (LEVEL<TAB>message lines),
+# so config and runtime tell one story. Diagnostic-only: never FAIL, never block.
+doctor_lane_report() {
+  local repo="$1" lines _lvl _msg
+  lines="$(python3 "$DOCTOR_HOME/lib/roles.py" lane-report "$repo" 2>/dev/null)" || return 0
+  [ -n "$lines" ] || return 0
+  while IFS="$(printf '\t')" read -r _lvl _msg; do
+    [ -n "$_msg" ] || continue
+    case "$_lvl" in
+      OK)   echo "OK   $_msg" ;;
+      WARN) echo "WARN $_msg" ;;
+    esac
+  done <<EOF
+$lines
+EOF
+}
+
 doctor_full_report() {
   local repo="$1" hard_fail=0
   echo "== doctor.sh report: $repo =="
@@ -124,6 +145,7 @@ doctor_full_report() {
   esac
   doctor_qa_role_check "$repo"
   doctor_knob_notes "$repo"
+  doctor_lane_report "$repo"
 
   if (cd "$repo" && gh auth status >/dev/null 2>&1); then
     echo "OK   gh auth status ok"
