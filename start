@@ -38,7 +38,8 @@ it runs the guided quickstart on it (and registers it for the dashboard).
 Repos registered: prints the loop-state summary and runs the control-room
 dashboard. --no-launch prints the dashboard command instead of running it.
 `status` prints a read-only health report (dashboard process, gh auth, repo
-registration) and exits -- it never binds a port or runs launchctl.
+registration, local endpoints, loop-worktree cleanliness) and exits -- it never
+binds a port or runs launchctl.
 EOF
 }
 
@@ -133,6 +134,74 @@ start_endpoint_model_count() {
   printf '%s' "$cnt"
 }
 
+# Registered repo paths (the loop worktrees the supervisors run in), one per
+# line, blank-line tolerant; empty when the registry is absent/unreadable. This
+# is the SAME registry control.sh drives and dashboard.py discovers from, so the
+# health report can't desync from the real control surface. Best-effort: any
+# problem prints nothing rather than aborting the report. A seam: tests shadow it.
+start_registered_repos() {
+  local f; f="$(start_repos_file)"
+  [ -f "$f" ] || return 0
+  grep -v '^[[:space:]]*$' "$f" 2>/dev/null || true
+}
+
+# Prints a registered worktree's cleanliness: `clean`, `dirty`, or `unknown`.
+# `unknown` (missing path, not a git repo, git error, or a _with_timeout kill)
+# is DELIBERATELY distinct from `clean`: the health report must never present an
+# uninspectable worktree as healthy -- fail-safe, never fail-open (invariant #1).
+# Bounded by _with_timeout so a huge/slow repo can't wedge the report. A seam:
+# tests shadow it.
+start_worktree_status() {
+  local repo="$1" out rc
+  [ -d "$repo" ] || { printf 'unknown'; return 0; }
+  # Declare-then-assign (not `local out=$(...)`) so `$?` reflects the command's
+  # rc, not the `local` builtin's (prevention-log #2). `git status --porcelain`
+  # exits 0 for BOTH clean and dirty (empty vs one line per change) and non-zero
+  # only on error, so rc!=0 is the genuine "can't tell" case -> unknown.
+  out="$(_with_timeout "${AUTONOMY_GIT_TIMEOUT:-5}" git -C "$repo" status --porcelain 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then printf 'unknown'; return 0; fi
+  if [ -n "$out" ]; then printf 'dirty'; else printf 'clean'; fi
+}
+
+# The argv of a live process (empty if gone). Seam so the supervisor-confirmation
+# in start_loop_running is testable without spawning a real supervisor. `ps -o
+# command= -p` is portable to macOS bash 3.2 (BSD ps) and Linux (procps).
+start_pid_command() {
+  ps -o command= -p "$1" 2>/dev/null || printf ''
+}
+
+# rc 0 iff $1's loop is genuinely running -- from the supervisor's own lock pid,
+# the same lock control.sh's ctl_loop_state reads. But a live pid ALONE is not
+# proof: a stale lock's pid could have been reused by an unrelated process, and
+# here a false "running" would SUPPRESS the dirty-worktree WARN below (fail-open,
+# the direction invariant #1 forbids). So we additionally confirm the live
+# process really is THIS repo's supervisor -- its argv carries `supervisor.sh`
+# AND this repo path (how the plist/quickstart launch it). Anything unconfirmed
+# reads not-running, so the WARN still fires. (ctl_loop_state can skip this: it
+# only labels state cosmetically; here the state gates a health warning.) Paused
+# counts as not-running on purpose -- a paused loop should have finished its
+# in-flight session. A seam: tests shadow it.
+start_loop_running() {
+  local repo="$1" pid cmd
+  pid="$(cat "$repo/var/autonomy-supervisor.lock/pid" 2>/dev/null || printf '')"
+  [ -n "$pid" ] || return 1
+  case "$pid" in *[!0-9]*) return 1 ;; esac   # guard kill -0 against a junk pid
+  kill -0 "$pid" 2>/dev/null || return 1
+  cmd="$(start_pid_command "$pid")"
+  # Match the EXACT launch sequence `supervisor.sh --repo <repo>`, with <repo>
+  # terminated by a space or end-of-argv -- not loose substrings. A loose
+  # `*supervisor.sh*` + `*<repo>*` would false-match `vim .../bin/supervisor.sh`
+  # or a supervisor for `<repo>2` when checking `<repo>`, and a false "running"
+  # suppresses the dirty WARN (fail-open). The quoted parts are literal, so a
+  # path glob metachar can't widen the match (prevention-log #6). Anything that
+  # doesn't match reads not-running, so the WARN still fires (fail-safe).
+  case "$cmd" in
+    *"/supervisor.sh --repo $repo") return 0 ;;    # repo is the final arg
+    *"/supervisor.sh --repo $repo "*) return 0 ;;  # repo followed by more args
+    *) return 1 ;;
+  esac
+}
+
 # Read-only live-health report (issue #81). Doctor-style OK/WARN lines; always
 # succeeds (health is in the text, not the exit code) and touches nothing --
 # no port bind, no launchctl, no dashboard launch.
@@ -173,6 +242,49 @@ start_status_report() {
   done <<EOF
 $(start_local_accounts)
 EOF
+  # Loop-worktree cleanliness (#81): a loop is meant to leave a clean tree
+  # between iterations, so a registered worktree that's dirty while its loop is
+  # NOT running is a real "half-done / wedged session" signal. A running loop is
+  # legitimately dirty mid-session -- flagging it would be noise, so skip it. An
+  # uninspectable worktree (`unknown`) is flagged too, never counted as clean
+  # (fail-safe, never fail-open). Fed from a command substitution (not a pipe)
+  # so the counters live in this shell (prevention-log #7: no early-exit pipe).
+  #
+  # start_registered_repos yields empty for BOTH an absent and an unreadable
+  # registry. Silently skipping cleanliness on an unreadable-but-present registry
+  # would hide dirty/uninspectable worktrees -- fail-open. Disambiguate here: a
+  # registry that exists but can't be read WARNs (still exits 0); an absent one
+  # is the legitimate no-repos case and stays silent.
+  local reg; reg="$(start_repos_file)"
+  if [ -f "$reg" ] && [ ! -r "$reg" ]; then
+    echo "WARN loop-worktree registry $reg exists but is unreadable -- can't check worktree cleanliness; fix its permissions"
+    return 0
+  fi
+  local repo checked_n=0 flagged_n=0 st
+  while IFS= read -r repo; do
+    [ -n "$repo" ] || continue
+    checked_n=$((checked_n + 1))
+    st="$(start_worktree_status "$repo")"
+    case "$st" in
+      dirty)
+        # A running loop's dirt is expected; only a stopped/paused one is a mess.
+        if ! start_loop_running "$repo"; then
+          flagged_n=$((flagged_n + 1))
+          echo "WARN loop worktree '$repo' has uncommitted changes and its loop is not running -- a finished loop should leave a clean tree; inspect 'git -C $repo status'"
+        fi
+        ;;
+      unknown)
+        flagged_n=$((flagged_n + 1))
+        echo "WARN loop worktree '$repo' could not be inspected (missing path, not a git repo, or git timed out) -- check the registered path, then 'git -C $repo status'"
+        ;;
+      *) : ;;   # clean -> nothing to say; the aggregate line below covers it
+    esac
+  done <<EOF
+$(start_registered_repos)
+EOF
+  if [ "$checked_n" -gt 0 ] && [ "$flagged_n" -eq 0 ]; then
+    echo "OK   $checked_n loop worktree(s) healthy (none dirty while stopped, all inspectable)"
+  fi
 }
 
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
