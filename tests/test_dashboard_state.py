@@ -458,6 +458,48 @@ class TestRoles(unittest.TestCase):
         roles = ds.build_roles(cfg_roles, coder_status="idle")
         self.assertIn("security_sweeper", [r["name"] for r in roles])
 
+    def test_configured_role_without_substrate_shows_engine(self):
+        # #164: a standard role the pack ENABLES without an explicit substrate:
+        # runs on the local engine (W1/W2 execute every enabled role) -- it must
+        # show "engine", NOT the legacy DEFAULT_ROLES substrate (pm->managed_agents,
+        # qa->routine) which is what the operator saw badged CLOUD/ROUTINE.
+        cfg_roles = {"pm": {"enabled": "true",
+                            "trigger": {"type": "cron", "schedule": "0 */6 * * *"}},
+                     "qa": {"enabled": "true", "trigger": {"type": "event"}}}
+        roles = ds.build_roles(cfg_roles, coder_status="idle")
+        pm = next(r for r in roles if r["name"] == "pm")
+        qa = next(r for r in roles if r["name"] == "qa")
+        self.assertEqual(pm["substrate"], "engine")
+        self.assertEqual(qa["substrate"], "engine")
+
+    def test_unconfigured_placeholder_has_no_substrate_badge(self):
+        # #164: a not-configured placeholder isn't running anywhere, so it must
+        # not claim a legacy substrate -- substrate is None and the page drops
+        # the badge (truth-in-display). Coder always runs on the engine.
+        roles = ds.build_roles({}, coder_status="idle")
+        by = {r["name"]: r for r in roles}
+        self.assertEqual(by["coder"]["substrate"], "engine")
+        self.assertIsNone(by["pm"]["substrate"])
+        self.assertIsNone(by["qa"]["substrate"])
+        self.assertIsNone(by["researcher"]["substrate"])
+
+    def test_explicit_substrate_still_respected(self):
+        # #164: an explicit substrate: override is preserved (a role genuinely
+        # pointed at a non-engine executor still displays it).
+        cfg_roles = {"pm": {"enabled": "true", "substrate": "managed_agents",
+                            "trigger": {"type": "cron", "schedule": "0 */6 * * *"}}}
+        roles = ds.build_roles(cfg_roles, coder_status="idle")
+        pm = next(r for r in roles if r["name"] == "pm")
+        self.assertEqual(pm["substrate"], "managed_agents")
+
+    def test_coder_substrate_is_always_engine(self):
+        # #164: coder is the local loop role -- it always runs on the engine, so
+        # a stray substrate: override on coder never displays anything else.
+        cfg_roles = {"coder": {"enabled": "true", "substrate": "routine"}}
+        roles = ds.build_roles(cfg_roles, coder_status="working")
+        self.assertEqual(roles[0]["name"], "coder")
+        self.assertEqual(roles[0]["substrate"], "engine")
+
     def test_enabled_cron_role_carries_next_fire(self):
         # #18: the page shows a live next-fire countdown for scheduled roles
         cfg_roles = {"pm": {"enabled": "true", "substrate": "managed_agents",

@@ -637,10 +637,19 @@ def build_roles(config_roles, coder_status, now=None):
     next-fire countdown (#18)."""
     config_roles = config_roles or {}
     roles = []
-    for name, d_enabled, d_sub, d_trig in _STANDARD_ROLES:
+    for name, d_enabled, _d_sub, d_trig in _STANDARD_ROLES:
         cfg = config_roles.get(name) or {}
         enabled = _as_bool(cfg.get("enabled")) if "enabled" in cfg else d_enabled
-        substrate = cfg.get("substrate") or d_sub
+        # #164: the legacy DEFAULT_ROLES substrate (pm->managed_agents, qa->routine)
+        # is a display lie now -- W1/W2 execute every enabled role on the local
+        # engine. So: coder is the local loop role and ALWAYS shows "engine" (even
+        # if a config typos an override); for the others an explicit substrate: is
+        # respected, any configured role shows "engine", and a not-configured
+        # placeholder claims nothing (None -> the page drops the badge). #149.
+        if name == "coder":
+            substrate = "engine"
+        else:
+            substrate = cfg.get("substrate") or ("engine" if cfg else None)
         trigger = (cfg.get("trigger") or {}).get("type") or d_trig
         if name == "coder":
             status = coder_status
