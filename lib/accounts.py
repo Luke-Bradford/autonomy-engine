@@ -28,6 +28,19 @@ _SUBSCRIPTION_KINDS = ("claude_subscription", "codex_subscription")
 # API kind -> the env var its key is exported as (used in Task 2)
 _API_ENV = {"anthropic_api": "ANTHROPIC_API_KEY", "openai_api": "OPENAI_API_KEY"}
 
+# Curated model rosters for CLI-login subscriptions: they have no /v1/models
+# endpoint, so discovery falls back to this single in-repo source (#82). Keep
+# the claude list in sync with the dashboard's MODEL_CHOICES
+# (lib/dashboard_page.html). codex_subscription is a deliberate EMPTY SEAM --
+# no codex model roster is verifiable in-repo, so discovery degrades to the
+# config UI's free-text field rather than shipping invented ids (fill this list
+# only once the ids are confirmed against the real codex CLI).
+_SUBSCRIPTION_MODELS = {
+    "claude_subscription": ["claude-opus-4-8", "claude-sonnet-5",
+                            "claude-haiku-4-5"],
+    "codex_subscription": [],
+}
+
 
 def _valid_base_url(url):
     """A well-formed http(s) URL with a host -- the endpoint a role calls.
@@ -222,11 +235,21 @@ class Accounts:
         return {"kind": kind, "env": {var: secret}}
 
     def list_models(self, name):
-        """Model ids the endpoint advertises (GET <base_url>/models). []
-        on any error -- best-effort discovery for the config UI (sub-project
-        2), never raises. Only openai_compatible accounts have an endpoint."""
+        """Model ids for account `name` -- best-effort discovery for the config
+        UI (#82), never raises. Sources by kind:
+          - openai_compatible: live GET <base_url>/models ([] on any error).
+          - claude_subscription / codex_subscription: the curated in-repo
+            roster (_SUBSCRIPTION_MODELS); no models API exists for a CLI login.
+          - anything else / unknown: [].
+        A copy of the curated list is returned so callers cannot mutate the
+        shared roster."""
         entry = self.get(name)
-        if not entry or entry.get("kind") != "openai_compatible":
+        if not entry:
+            return []
+        kind = entry.get("kind")
+        if kind in _SUBSCRIPTION_MODELS:
+            return list(_SUBSCRIPTION_MODELS[kind])
+        if kind != "openai_compatible":
             return []
         base = (entry.get("base_url") or "").rstrip("/")
         try:
