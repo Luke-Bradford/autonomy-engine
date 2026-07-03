@@ -189,6 +189,45 @@ start_registered_repos() { :; }
 out="$(start_status_report 2>&1)"
 check "status: no repos -> no worktree cleanliness line" "1" "$(grep -q 'loop worktree' <<<"$out" && echo 0 || echo 1)"
 
+# --- #81: per-loop running/paused/stopped state line in the health report -------
+# Fold the loop lifecycle state 'bin/control.sh list' shows into the report so the
+# operator needn't run a second command. start_loop_state is built on the
+# identity-confirmed start_loop_running (fail-safe: an unconfirmable loop reads
+# 'stopped', never a false 'running'); a supervisor idles ALIVE with the PAUSE
+# sentinel present (supervisor.sh's pause loop), so confirmed-alive + sentinel ->
+# paused, confirmed-alive + no sentinel -> running, otherwise stopped.
+check "sourcing defines start_loop_state" "0" "$(type start_loop_state >/dev/null 2>&1 && echo 0 || echo 1)"
+
+# REAL start_loop_state over the start_loop_running seam + a real PAUSE sentinel
+# (a plain file read, no process needed): drive all three branches deterministically.
+lstaterepo="$tmp/lstate"; mkdir -p "$lstaterepo/var/autonomy-logs"
+start_loop_running() { return 1; }
+check "start_loop_state: loop not running -> stopped" "stopped" "$(start_loop_state "$lstaterepo")"
+start_loop_running() { return 0; }
+check "start_loop_state: confirmed running, no sentinel -> running" "running" "$(start_loop_state "$lstaterepo")"
+touch "$lstaterepo/var/autonomy-logs/autonomy-PAUSE"
+check "start_loop_state: confirmed alive + PAUSE sentinel -> paused" "paused" "$(start_loop_state "$lstaterepo")"
+rm -f "$lstaterepo/var/autonomy-logs/autonomy-PAUSE"
+
+# the report emits one per-loop state line per registered repo (state via the seam)
+start_registered_repos() { echo "/fake/wt"; }
+start_worktree_status() { echo clean; }
+start_loop_state() { echo running; }
+out="$(start_status_report 2>&1)"
+check "status: per-loop state line shows running" "0" "$(grep -q 'loop running -- /fake/wt' <<<"$out" && echo 0 || echo 1)"
+start_loop_state() { echo paused; }
+out="$(start_status_report 2>&1)"
+check "status: per-loop state line shows paused" "0" "$(grep -q 'loop paused -- /fake/wt' <<<"$out" && echo 0 || echo 1)"
+check "status: paused state line names the resume command" "0" "$(grep -q 'control.sh resume' <<<"$out" && echo 0 || echo 1)"
+start_loop_state() { echo stopped; }
+out="$(start_status_report 2>&1)"
+check "status: per-loop state line shows stopped" "0" "$(grep -q 'loop stopped -- /fake/wt' <<<"$out" && echo 0 || echo 1)"
+
+# no registered repos -> no per-loop state line at all (no noise)
+start_registered_repos() { :; }
+out="$(start_status_report 2>&1)"
+check "status: no repos -> no per-loop state line" "1" "$(grep -q 'loop running --\|loop paused --\|loop stopped --' <<<"$out" && echo 0 || echo 1)"
+
 # restore the REAL seam functions (re-sourcing is guarded: it only re-defines,
 # never executes) so the checks below exercise the genuine implementations
 # shellcheck source=/dev/null

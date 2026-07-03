@@ -78,7 +78,9 @@ bin/control.sh list   # per-repo loop state: running / paused / stopped
 ```
 
 `./start status` reports the dashboard process (is one running?), `gh` auth, how many repos
-are registered, any BYO-LLM local endpoint's reachability (see [BYO-LLM](docs/byo-llm.md)),
+are registered, **each registered loop's running / paused / stopped state** (folded in from
+`bin/control.sh list` so you don't need a second command), any BYO-LLM local endpoint's
+reachability (see [BYO-LLM](docs/byo-llm.md)),
 and **loop-worktree cleanliness** — it WARNs when a registered worktree is left dirty while
 its loop is *not* running (a finished loop should leave a clean tree), or when a worktree is
 uninspectable or the registry unreadable (surfaced, never reported healthy — fail-safe). It
