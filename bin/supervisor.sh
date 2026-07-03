@@ -17,6 +17,8 @@ export AUTONOMY_ENGINE_HOME="$ENGINE_HOME"
 
 # shellcheck source=/dev/null
 source "$ENGINE_HOME/bin/doctor.sh"
+# shellcheck source=/dev/null
+source "$ENGINE_HOME/bin/lock_paths.sh"
 
 CONFIG_GET() { python3 "$ENGINE_HOME/lib/config_parser.py" "$1" "$2" 2>/dev/null; }
 
@@ -762,7 +764,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   MODEL="$(resolve_config_value "$CFG" agent.model.primary "$MODEL_OVERRIDE" claude-sonnet-5)"
   FALLBACK_MODEL="$(resolve_config_value "$CFG" agent.model.fallback "$FALLBACK_MODEL_OVERRIDE" claude-sonnet-4-6)"
 
-  LOCK="$VARDIR/autonomy-supervisor.lock"
+  LOCK="$(supervisor_lock_dir "$AUTONOMY_TARGET_REPO")"
   if ! mkdir "$LOCK" 2>/dev/null; then
     pid="$(cat "$LOCK/pid" 2>/dev/null || echo)"
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then

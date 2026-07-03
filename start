@@ -15,6 +15,8 @@
 # Never runs launchctl: loading a supervisor stays a deliberate operator
 # step (bin/control.sh start, or the printed go-live lines).
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$ENGINE_HOME/bin/lock_paths.sh"   # single source of the lock pid path (#117)
 
 start_repos_file() { printf '%s' "$HOME/.config/autonomy/repos"; }
 
@@ -183,7 +185,7 @@ start_pid_command() {
 # in-flight session. A seam: tests shadow it.
 start_loop_running() {
   local repo="$1" pid cmd
-  pid="$(cat "$repo/var/autonomy-supervisor.lock/pid" 2>/dev/null || printf '')"
+  pid="$(cat "$(supervisor_lock_pid_file "$repo")" 2>/dev/null || printf '')"
   [ -n "$pid" ] || return 1
   case "$pid" in *[!0-9]*) return 1 ;; esac   # guard kill -0 against a junk pid
   kill -0 "$pid" 2>/dev/null || return 1
