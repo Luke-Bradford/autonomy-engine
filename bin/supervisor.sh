@@ -77,6 +77,26 @@ heartbeat() {
   return 0
 }
 
+# Record the engine sha this supervisor booted from (#166 slice 1). A running
+# supervisor's bash function bodies are frozen at process start, so a merged fix
+# to bin/supervisor.sh is NOT live until a restart. Written ONCE at boot to the
+# gitignored $LOGDIR/engine_sha; the dashboard compares it to the engine's
+# current HEAD and shows an "update available -- restart to apply" chip when they
+# diverge. Best-effort like heartbeat(): a git-less / unwritable path is
+# swallowed and never perturbs the loop (SD-6). Args default to the boot globals
+# so tests can pass a temp checkout + dir.
+write_engine_boot_sha() {
+  local home="${1:-${ENGINE_HOME:-}}" logdir="${2:-${LOGDIR:-}}" sha
+  [ -n "$home" ] && [ -n "$logdir" ] || return 0
+  sha="$(git -C "$home" rev-parse HEAD 2>/dev/null)" || return 0
+  [ -n "$sha" ] || return 0
+  local tmp="$logdir/engine_sha.$$.tmp"
+  (
+    printf '%s\n' "$sha" > "$tmp" && mv -f "$tmp" "$logdir/engine_sha"
+  ) 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+  return 0
+}
+
 preflight() {
   cd "$AUTONOMY_TARGET_REPO" || { log "preflight: cannot cd to $AUTONOMY_TARGET_REPO"; return 2; }
 
@@ -878,6 +898,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   trap 'rm -rf "$LOCK"; heartbeat "stopped" "supervisor exited" ""; log "supervisor stopped."; exit 0' EXIT INT TERM
 
   log "=== supervisor start (pid $$, repo=$AUTONOMY_TARGET_REPO, agent=$AGENT_TYPE, model=$MODEL) ==="
+  write_engine_boot_sha "$ENGINE_HOME" "$LOGDIR"   # #166: record the engine sha we froze at, for the dashboard's update chip
   err_backoff=$ERR_BACKOFF_START
   limit_backoff=$LIMIT_BACKOFF_START
   paused_logged=0

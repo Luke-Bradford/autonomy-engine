@@ -69,6 +69,10 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px
 .ttoggle button.on{background:var(--panel2);color:var(--ink)}
 .navlink{font-family:var(--mono);font-size:11px;color:var(--mut);border:1px solid var(--hair2);border-radius:6px;padding:6px 10px;text-decoration:none}
 .navlink:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
+/* #166: engine "update available -- restart to apply" chip (informational, not an error) */
+.updchip{font-family:var(--mono);font-size:11px;color:var(--warn);border:1px solid var(--warn);
+  border-radius:6px;padding:6px 10px;white-space:nowrap;cursor:default}
+.updchip[hidden]{display:none}
 
 /* section heading */
 .sh{display:flex;align-items:center;gap:10px;margin:24px 2px 12px}
@@ -254,6 +258,7 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
       <div><span class="lab">updated</span><span class="b mono" id="h-fresh">—</span></div>
       <div><span class="lab">utc</span><span class="b mono" id="h-clock">—</span></div>
       <div class="live" id="h-live"><i></i><span id="h-live-t">connecting</span></div>
+      <span class="updchip" id="h-update" hidden></span>
       <a class="navlink" href="/config">⚙ config</a>
       <div class="ttoggle"><button id="th-d" onclick="setTheme('dark')">dark</button><button id="th-l" onclick="setTheme('light')">light</button></div>
     </div>
@@ -745,9 +750,22 @@ setInterval(()=>{
 },1000);
 
 /* ---- render + SSE ---- */
+// #166: surface when a running thin shell (dashboard / supervisor) is behind the
+// merged engine and needs a restart. Truth only -- no restart action here.
+function renderEngineUpdate(e){
+  const el=$("h-update"); if(!el) return;
+  if(!e||!e.stale){el.hidden=true; el.textContent=""; el.removeAttribute("title"); return;}
+  const n=e.behind;
+  const who=[];
+  if(e.dashboard&&e.dashboard.stale) who.push("dashboard");
+  (e.supervisors||[]).forEach(s=>{if(s.stale) who.push("supervisor:"+dispName(s.repo));});
+  el.textContent="⟳ engine updated"+((typeof n==="number"&&n>0)?` (${n} commit${n===1?"":"s"})`:"")+" — restart to apply";
+  el.title=who.length?("behind: "+who.join(", ")):"a running service is behind the merged engine";
+  el.hidden=false;
+}
 function render(s){LAST=s;GEN=s.generated_at||Math.floor(nowS());
   renderFocus(s.repos);renderHistory(s.repos);renderRepos(s.repos);renderQuota(s.repos,s.account);renderActivity(s.repos);
-  renderThroughput(s.repos);renderVoice(s.repos);renderGit(s.repos);
+  renderThroughput(s.repos);renderVoice(s.repos);renderGit(s.repos);renderEngineUpdate(s.engine);
   $("f-gen").textContent="snapshot "+new Date(GEN*1000).toISOString().slice(11,19)+"Z";}
 function setLive(ok){$("h-live").classList.toggle("stale",!ok);$("h-live-t").textContent=ok?"live":"reconnecting";}
 function connect(){let es;try{es=new EventSource("/api/stream");}catch(e){poll();return;}
