@@ -368,8 +368,8 @@ EOF
   # re-validate its charset here even though roles.py checks the shape
   # (defense-in-depth, prevention-log #6): a value with any non-[A-Za-z0-9_-]
   # char (e.g. a '../' traversal) is blanked -> the global $AGENT_TYPE runs.
+  # An empty value has no chars to match, so it stays empty (= use $AGENT_TYPE).
   case "$ROLE_AGENT" in
-    ''|claude|codex) ;;                      # known adapters, fast path
     *[!A-Za-z0-9_-]*)
       log "WARN roles.$role.agent '$ROLE_AGENT' has invalid chars -- ignored (using \$AGENT_TYPE)"
       ROLE_AGENT="" ;;
