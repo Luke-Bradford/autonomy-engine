@@ -400,8 +400,8 @@ function modelCtl(r,st){
   const pend=(ov.model||ov.effort)
     ? `<span class="pend">queued next session: ${esc(ov.model||"")}${ov.model&&ov.effort?" · ":""}${esc(ov.effort||"")}</span>`:"";
   return `<div class="ctl mctl" data-repo="${encodeURIComponent(r.path)}">
-    <select class="msel" title="model">${models.map(m=>`<option ${m===cfg.model?"selected":""}>${esc(m)}</option>`).join("")}</select>
-    <select class="esel" title="effort">${EFFORT_CHOICES.map(e=>`<option value="${e}" ${e===(cfg.effort||"")?"selected":""}>${e||"effort: default"}</option>`).join("")}</select>
+    <select class="msel" name="model" title="model">${models.map(m=>`<option ${m===cfg.model?"selected":""}>${esc(m)}</option>`).join("")}</select>
+    <select class="esel" name="effort" title="effort">${EFFORT_CHOICES.map(e=>`<option value="${e}" ${e===(cfg.effort||"")?"selected":""}>${e||"effort: default"}</option>`).join("")}</select>
     <button class="cbtn" onclick="setModel(this,'session')">next session</button>
     <button class="cbtn warn" onclick="setModel(this,'default')">save default</button>
     ${pend}</div>`;
