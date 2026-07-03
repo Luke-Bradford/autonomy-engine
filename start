@@ -204,6 +204,29 @@ start_loop_running() {
   esac
 }
 
+# Prints a registered loop's lifecycle state: running | paused | stopped (#81).
+# Mirrors control.sh:ctl_loop_state's vocabulary so the report and the control
+# surface agree, but is built on the identity-confirmed start_loop_running (not
+# bare pid liveness) -- a recycled lock pid must not mislabel a dead loop as
+# running/paused. The supervisor idles ALIVE while paused (its pause loop sleeps
+# and re-checks the sentinel), so a confirmed-live supervisor with the PAUSE
+# sentinel present is `paused`, without it `running`; anything unconfirmed is
+# `stopped` (fail-safe: an uncertain state reads stopped, never a false running).
+# The PAUSE sentinel path matches control.sh/supervisor.sh's convention. A seam:
+# tests shadow it.
+start_loop_state() {
+  local repo="$1"
+  if start_loop_running "$repo"; then
+    if [ -f "$repo/var/autonomy-logs/autonomy-PAUSE" ]; then
+      printf 'paused'
+    else
+      printf 'running'
+    fi
+  else
+    printf 'stopped'
+  fi
+}
+
 # Read-only live-health report (issue #81). Doctor-style OK/WARN lines; always
 # succeeds (health is in the text, not the exit code) and touches nothing --
 # no port bind, no launchctl, no dashboard launch.
@@ -223,7 +246,27 @@ start_status_report() {
   fi
   local n; n="$(start_registered_count)"
   if [ "$n" -gt 0 ]; then
-    echo "OK   $n repo(s) registered -- 'bin/control.sh list' for per-loop state"
+    echo "OK   $n repo(s) registered"
+    # Per-loop lifecycle state (#81): fold the running/paused/stopped state that
+    # 'bin/control.sh list' reports into this report so the operator doesn't need
+    # a second command. None of the three is unhealthy on its own (a stopped loop
+    # may be deliberately off; a paused one is a graceful hold), so each is an
+    # informational OK line -- the genuinely-bad case (dirty tree while stopped)
+    # is a separate WARN below. Fed from a command substitution (not a pipe) so
+    # nothing runs in a subshell (prevention-log #7). start_loop_state is
+    # identity-confirmed and fail-safe (an unconfirmable loop reads stopped).
+    local lrepo lstate
+    while IFS= read -r lrepo; do
+      [ -n "$lrepo" ] || continue
+      lstate="$(start_loop_state "$lrepo")"
+      case "$lstate" in
+        running) echo "OK   loop running -- $lrepo" ;;
+        paused)  echo "OK   loop paused -- $lrepo (resume: bin/control.sh resume $lrepo)" ;;
+        *)       echo "OK   loop stopped -- $lrepo (start: bin/control.sh start $lrepo)" ;;
+      esac
+    done <<EOF
+$(start_registered_repos)
+EOF
   else
     echo "WARN no repos registered -- './start /path/to/repo' to onboard one"
   fi
