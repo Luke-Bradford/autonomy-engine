@@ -53,6 +53,30 @@ log() {
   echo "$(date -u +%FT%TZ) ${prefix}$*" | tee -a "$SUPLOG"
 }
 
+# Structured liveness twin of the supervisor.log narration (#177): one
+# machine-readable status line the dashboard can render as "what is happening
+# and why now" instead of a bare IDLE. Sole writer (this supervisor), atomic
+# (temp + mv so a reader never sees a torn line), under the gitignored LOGDIR.
+# Best-effort: any write failure is swallowed -- a heartbeat hiccup must NEVER
+# perturb the loop (mirrors board.sh's never-hard-fail contract).
+# Fields are TAB-separated so the free-text reason (last) can hold spaces:
+#   <ts_epoch> \t <phase> \t <until_epoch|''> \t <reason>
+# until_epoch is the absolute UTC epoch a wait ends (dashboard counts down
+# client-side), empty for an active/instantaneous phase.
+heartbeat() {
+  [ -n "${LOGDIR:-}" ] || return 0
+  local phase="$1" reason="${2:-}" until_epoch="${3:-}"
+  local hb="$LOGDIR/heartbeat" tmp="$LOGDIR/heartbeat.$$.tmp" now
+  now="$(date -u +%s)"
+  # Subshell with fd2 suppressed so even a redirection-OPEN failure (missing
+  # LOGDIR) stays silent -- a heartbeat must never spew to the launchd err log.
+  (
+    printf '%s\t%s\t%s\t%s\n' "$now" "$phase" "$until_epoch" "$reason" > "$tmp" &&
+      mv -f "$tmp" "$hb"
+  ) 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+  return 0
+}
+
 preflight() {
   cd "$AUTONOMY_TARGET_REPO" || { log "preflight: cannot cd to $AUTONOMY_TARGET_REPO"; return 2; }
 
@@ -851,7 +875,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     rm -rf "$LOCK"; mkdir "$LOCK" || { log "lost lock race; exiting."; exit 0; }
   fi
   echo $$ >"$LOCK/pid"
-  trap 'rm -rf "$LOCK"; log "supervisor stopped."; exit 0' EXIT INT TERM
+  trap 'rm -rf "$LOCK"; heartbeat "stopped" "supervisor exited" ""; log "supervisor stopped."; exit 0' EXIT INT TERM
 
   log "=== supervisor start (pid $$, repo=$AUTONOMY_TARGET_REPO, agent=$AGENT_TYPE, model=$MODEL) ==="
   err_backoff=$ERR_BACKOFF_START
@@ -874,6 +898,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
         log "PAUSE sentinel present ($PAUSE_SENTINEL) -- graceful stop: current session finished, idling (remove to resume)"
         paused_logged=1
       fi
+      heartbeat "paused" "paused by operator -- remove the PAUSE sentinel to resume" ""
       sleep "$PAUSE_POLL"; continue
     fi
     if [ "$paused_logged" -eq 1 ]; then
@@ -887,6 +912,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # enabled (a cron-only repo must schedule) -- the spec's whole point. Purely
     # additive and best-effort: with no cron roles this is a no-op and the loop
     # behaves byte-for-byte as before.
+    heartbeat "cron-check" "checking scheduled roles" ""
     resolve_cron_due
 
     # Event bus (W2, #86): wake event roles on new board/PR state, under the
@@ -894,13 +920,16 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # event role (e.g. QA on pr.opened) fires regardless of the coder board.
     # Passes last iteration's loop-session flag for the session.done edge, then
     # consumes it. Additive/best-effort: no event roles = no-op.
+    heartbeat "polling-events" "polling board/PR events" ""
     resolve_event_wakes "$session_ran"
     session_ran=0
 
     open_count="$(cd "$AUTONOMY_TARGET_REPO" && gh issue list --state open --json number -q 'length' 2>/dev/null || echo -1)"
     if [ "$open_count" = "0" ]; then
       dirty_skips=0
-      log "board empty -- idle ${EMPTY_IDLE}s"; sleep "$EMPTY_IDLE"; continue
+      log "board empty -- idle ${EMPTY_IDLE}s"
+      heartbeat "board-empty" "no open issues -- idle" "$(( $(date -u +%s) + EMPTY_IDLE ))"
+      sleep "$EMPTY_IDLE"; continue
     fi
 
     # Round-robin over the enabled loop roles (re-enumerated every tick so a
@@ -913,15 +942,19 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
       dispatch_list="coder"
     fi
     if [ -z "$dispatch_list" ]; then
-      log "no loop roles enabled -- idle ${EMPTY_IDLE}s"; sleep "$EMPTY_IDLE"; continue
+      log "no loop roles enabled -- idle ${EMPTY_IDLE}s"
+      heartbeat "idle" "no loop roles enabled -- idle" "$(( $(date -u +%s) + EMPTY_IDLE ))"
+      sleep "$EMPTY_IDLE"; continue
     fi
     # shellcheck disable=SC2086  # intentional split: names are [A-Za-z0-9._-] tokens
     role="$(select_role "$role_rr" $dispatch_list)"
     role_rr=$(( (role_rr + 1) % 86400 ))
 
+    heartbeat "session-running $role" "running a $role session" ""
     run_session "$role"; outcome=$?
     case $outcome in
       0) log "session clean (open issues ~$open_count). pace ${PACE}s"
+         heartbeat "pace-wait" "session clean (open issues ~$open_count) -- next session soon" "$(( $(date -u +%s) + PACE ))"
          # A loop session actually COMPLETED -> session.done fires next tick.
          # Only outcome 0 counts: a preflight/dispatch REFUSAL (rc 2), a
          # usage-limit pause (rc 3), or a session error must NOT fabricate a
@@ -938,15 +971,20 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
          if reset_wait="$(compute_limit_wait)"; then
            reset_wait=$((reset_wait + jitter))
            log "USAGE LIMIT -- sleeping ${reset_wait}s until API-reported reset, then retry"
+           heartbeat "limit-backoff" "usage limit -- resuming at API-reported reset" "$(( $(date -u +%s) + reset_wait ))"
            sleep "$reset_wait"
            limit_backoff=$LIMIT_BACKOFF_START
          else
            log "USAGE LIMIT (no reset signal) -- exp backoff $((limit_backoff + jitter))s then retry"
+           heartbeat "limit-backoff" "usage limit (no reset signal) -- exponential backoff" "$(( $(date -u +%s) + limit_backoff + jitter ))"
            sleep $((limit_backoff + jitter))
            limit_backoff=$(( limit_backoff*2 < LIMIT_BACKOFF_MAX ? limit_backoff*2 : LIMIT_BACKOFF_MAX ))
          fi ;;
-      2) log "preflight/dispatch skip -- wait ${ERR_BACKOFF_START}s"; sleep "$ERR_BACKOFF_START" ;;
+      2) log "preflight/dispatch skip -- wait ${ERR_BACKOFF_START}s"
+         heartbeat "preflight-hold" "preflight/dispatch skip (dirty tree or pack issue)" "$(( $(date -u +%s) + ERR_BACKOFF_START ))"
+         sleep "$ERR_BACKOFF_START" ;;
       *) log "session error (rc=$outcome) -- backoff ${err_backoff}s"
+         heartbeat "error-backoff" "session error (rc=$outcome) -- exponential backoff" "$(( $(date -u +%s) + err_backoff ))"
          sleep "$err_backoff"
          err_backoff=$(( err_backoff*2 < ERR_BACKOFF_MAX ? err_backoff*2 : ERR_BACKOFF_MAX )) ;;
     esac
