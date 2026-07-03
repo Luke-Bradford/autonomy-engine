@@ -45,7 +45,7 @@ class TestValidateRoles(unittest.TestCase):
             "    substrate: actions\n"
             "    trigger:\n"
             "      type: event\n"
-            "      on: [pull_request_review.approved, workflow_run.completed]\n"
+            "      on: [pr.opened, pr.synchronize]\n"
             '      reconcile_cron: "*/10 * * * *"\n'
             "    scope: diff\n"
             "    completes_merge: true\n"
@@ -53,7 +53,7 @@ class TestValidateRoles(unittest.TestCase):
         self.assertEqual(roles.validate_roles(cfg), [])
 
     def test_unknown_substrate(self):
-        cfg = parse("roles:\n  qa:\n    substrate: kubernetes\n    trigger: { type: event, on: [x] }\n")
+        cfg = parse("roles:\n  qa:\n    substrate: kubernetes\n    trigger: { type: event, on: [pr.opened] }\n")
         errs = roles.validate_roles(cfg)
         self.assertEqual(len(errs), 1)
         self.assertIn("substrate", errs[0])
@@ -84,6 +84,23 @@ class TestValidateRoles(unittest.TestCase):
         cfg = parse("roles:\n  qa:\n    trigger: { type: event }\n")
         errs = roles.validate_roles(cfg)
         self.assertTrue(any("on" in e for e in errs))
+
+    def test_event_unknown_token_rejected(self):
+        # a non-empty on: with an unknown event would accept a role that can
+        # never wake -- fail-closed at validation.
+        cfg = parse("roles:\n  qa:\n    trigger: { type: event, on: [pr.exploded] }\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("pr.exploded" in e for e in errs))
+
+    def test_event_mixed_known_unknown_rejected(self):
+        cfg = parse("roles:\n  qa:\n    trigger: { type: event, on: [pr.opened, nope.bad] }\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("nope.bad" in e for e in errs))
+
+    def test_event_known_tokens_accepted(self):
+        cfg = parse("roles:\n  qa:\n    trigger:\n      type: event\n"
+                    "      on: [pr.opened, pr.synchronize, issue.created, merge.done, session.done]\n")
+        self.assertEqual(roles.validate_roles(cfg), [])
 
     def test_loop_needs_nothing_extra(self):
         cfg = parse("roles:\n  coder:\n    trigger: { type: loop }\n")
@@ -816,6 +833,64 @@ class TestCronRoles(unittest.TestCase):
         self.assertEqual(roles.cron_roles({"roles": "garbage"}), [])
 
 
+class TestEventRoles(unittest.TestCase):
+    """event_roles enumerates enabled event-trigger roles with a non-empty on:
+    list, in dispatch_roles' stable order. The supervisor's event bus consumes it."""
+
+    def test_no_roles_block_has_no_event_roles(self):
+        self.assertEqual(roles.event_roles({}), [])
+
+    def test_enabled_event_role_appears_with_on_list(self):
+        cfg = parse(
+            "roles:\n"
+            "  qa:\n"
+            "    enabled: true\n"
+            "    trigger: { type: event, on: [pr.opened, pr.synchronize] }\n")
+        self.assertEqual(roles.event_roles(cfg),
+                         [("qa", ["pr.opened", "pr.synchronize"])])
+
+    def test_custom_event_role_appears(self):
+        cfg = parse(
+            "roles:\n"
+            "  notify:\n"
+            "    enabled: true\n"
+            "    trigger: { type: event, on: [merge.done] }\n")
+        self.assertEqual(roles.event_roles(cfg), [("notify", ["merge.done"])])
+
+    def test_standard_before_custom_order(self):
+        cfg = parse(
+            "roles:\n"
+            "  notify:\n"
+            "    enabled: true\n"
+            "    trigger: { type: event, on: [merge.done] }\n"
+            "  qa:\n"
+            "    enabled: true\n"
+            "    trigger: { type: event, on: [pr.opened] }\n")
+        self.assertEqual(roles.event_roles(cfg),
+                         [("qa", ["pr.opened"]), ("notify", ["merge.done"])])
+
+    def test_empty_on_list_skipped(self):
+        # defense in depth -- validate_roles rejects it, enumeration must not crash.
+        self.assertEqual(
+            roles.event_roles({"roles": {"qa": {
+                "enabled": True, "trigger": {"type": "event", "on": []}}}}),
+            [])
+
+    def test_loop_cron_and_disabled_event_excluded(self):
+        cfg = parse(
+            "roles:\n"
+            "  coder:\n    enabled: true\n    trigger: { type: loop }\n"
+            "  pm:\n    enabled: true\n    trigger: { type: cron, schedule: \"0 3 * * *\" }\n"
+            "  qa:\n    enabled: false\n    trigger: { type: event, on: [pr.opened] }\n")
+        self.assertEqual(roles.event_roles(cfg), [])
+
+    def test_unsafe_role_names_filtered(self):
+        self.assertEqual(
+            roles.event_roles({"roles": {"bad name": {
+                "enabled": True, "trigger": {"type": "event", "on": ["pr.opened"]}}}}),
+            [])
+
+
 class TestDispatchableRoles(unittest.TestCase):
     """A cron role must be dispatchable: the scheduler fires it via the same
     run_session -> roles.py dispatch <role> path, so role_settings has to
@@ -855,6 +930,26 @@ class TestDispatchableRoles(unittest.TestCase):
         self.assertNotIn("pm", roles.dispatchable_roles(cfg))
         with self.assertRaises(KeyError):
             roles.role_settings(cfg, "pm")
+
+    def test_event_role_is_dispatchable(self):
+        # the event bus fires an event role via the same run_session ->
+        # roles.py dispatch <role> path, so role_settings must resolve it.
+        cfg = parse(
+            "roles:\n"
+            "  qa:\n"
+            "    enabled: true\n"
+            "    account: qa-acct\n"
+            "    trigger: { type: event, on: [pr.opened] }\n")
+        self.assertIn("qa", roles.dispatchable_roles(cfg))
+        self.assertEqual(roles.role_settings(cfg, "qa")["account"], "qa-acct")
+
+    def test_loop_cron_event_order(self):
+        cfg = parse(
+            "roles:\n"
+            "  coder:\n    enabled: true\n"
+            "  pm:\n    enabled: true\n    trigger: { type: cron, schedule: \"0 3 * * *\" }\n"
+            "  qa:\n    enabled: true\n    trigger: { type: event, on: [pr.opened] }\n")
+        self.assertEqual(roles.dispatchable_roles(cfg), ["coder", "pm", "qa"])
 
 
 class TestCronCli(unittest.TestCase):
@@ -930,6 +1025,37 @@ class TestCronCli(unittest.TestCase):
         rc, out = self._run("dispatch", self.tmp, "pm")
         self.assertEqual(rc, 0)
         self.assertIn("ACCOUNT=pm-acct", out.splitlines())
+
+    def test_events_verb_emits_name_tab_events(self):
+        self._write(
+            "roles:\n"
+            "  qa:\n"
+            "    enabled: true\n"
+            "    trigger: { type: event, on: [pr.opened, pr.synchronize] }\n")
+        rc, out = self._run("events", self.tmp)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "qa\tpr.opened,pr.synchronize\n")
+
+    def test_events_verb_empty_when_none(self):
+        self._write("agent:\n  type: claude\n")
+        rc, out = self._run("events", self.tmp)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "")
+
+    def test_events_verb_unreadable_config_exits_2(self):
+        rc, _ = self._run("events", os.path.join(self.tmp, "nope"))
+        self.assertEqual(rc, 2)
+
+    def test_dispatch_resolves_event_role_settings(self):
+        self._write(
+            "roles:\n"
+            "  qa:\n"
+            "    enabled: true\n"
+            "    account: qa-acct\n"
+            "    trigger: { type: event, on: [pr.opened] }\n")
+        rc, out = self._run("dispatch", self.tmp, "qa")
+        self.assertEqual(rc, 0)
+        self.assertIn("ACCOUNT=qa-acct", out.splitlines())
 
 
 if __name__ == "__main__":
