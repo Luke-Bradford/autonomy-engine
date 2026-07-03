@@ -54,7 +54,9 @@ reset_shim() { rm -f "$CODEX_SHIM_DIR"/count "$CODEX_SHIM_DIR"/argv.* "$CODEX_SH
 shim_calls() { cat "$CODEX_SHIM_DIR/count" 2>/dev/null || echo 0; }
 # argv.N as newline-joined for simple grep (args themselves contain newlines,
 # so ordering checks go through python)
-argv_has() { tr '\0' '\n' < "$CODEX_SHIM_DIR/argv.$1" | grep -qxF -- "$2"; }
+# here-string, not `tr … | grep -q`: under `set -o pipefail` a matching grep -q
+# exits before `tr` finishes and SIGPIPEs it, a CI-timing flake (prevention-log #7).
+argv_has() { grep -qxF -- "$2" <<<"$(tr '\0' '\n' < "$CODEX_SHIM_DIR/argv.$1")"; }
 # CODEX_OSS_BASE_URL the adapter exported for call N (empty if unset).
 oss_base() { cat "$CODEX_SHIM_DIR/ossbase.$1" 2>/dev/null; }
 
@@ -72,7 +74,7 @@ check "subcommand is exec" "0" "$(argv_has 1 exec && echo 0 || echo 1)"
 check "--json passed" "0" "$(argv_has 1 --json && echo 0 || echo 1)"
 check "model passed via -m" "0" "$(argv_has 1 gpt-5.1-codex && echo 0 || echo 1)"
 check "non-interactive full-trust flag passed" "0" "$(argv_has 1 --dangerously-bypass-approvals-and-sandbox && echo 0 || echo 1)"
-check "no effort override when effort empty" "1" "$(tr '\0' '\n' < "$CODEX_SHIM_DIR/argv.1" | grep -q 'model_reasoning_effort' && echo 0 || echo 1)"
+check "no effort override when effort empty" "1" "$(grep -q 'model_reasoning_effort' <<<"$(tr '\0' '\n' < "$CODEX_SHIM_DIR/argv.1")" && echo 0 || echo 1)"
 check "events landed in the log file" "0" "$(grep -q 'turn.completed' "$log" && echo 0 || echo 1)"
 check "safety text precedes prompt text in the prompt arg" "yes" "$(python3 - "$CODEX_SHIM_DIR/argv.1" <<'PY'
 import sys
@@ -98,7 +100,7 @@ reset_shim
 printf '{"type":"turn.completed"}\n' > "$CODEX_SHIM_DIR/fixture"
 ( unset OPENAI_BASE_URL; _codex_run_once "p" "gpt-x" "$tmp/nb.log" "" )
 check "no base url: no local-provider override" "yes" \
-  "$(tr '\0' '\n' < "$CODEX_SHIM_DIR/argv.1" | grep -qE -- '--oss|--local-provider|model_provider' && echo no || echo yes)"
+  "$(grep -qE -- '--oss|--local-provider|model_provider' <<<"$(tr '\0' '\n' < "$CODEX_SHIM_DIR/argv.1")" && echo no || echo yes)"
 check "no base url: no CODEX_OSS_BASE_URL override leaked" "" "$(oss_base 1)"
 
 reset_shim

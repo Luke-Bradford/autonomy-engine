@@ -92,7 +92,7 @@ printf 'garbage' >"$VARDIR/cron/corrupt.last_fire"
 resolve_cron_due
 check "corrupt-marker role did not fire" "" "$(cat "$CAPTURE")"
 cm="$(cat "$VARDIR/cron/corrupt.last_fire")"
-check "corrupt marker reinitialised to a numeric epoch" "yes" "$(printf '%s' "$cm" | grep -qE '^[0-9]+$' && echo yes || echo no)"
+check "corrupt marker reinitialised to a numeric epoch" "yes" "$(grep -qE '^[0-9]+$' <<<"$cm" && echo yes || echo no)"
 contains "corrupt-marker warned" "$(cat "$LOGF")" "WARN"
 
 # --- marker write failure: skip fire, no over-fire (fail-safe under-fire) ----
