@@ -2,9 +2,10 @@
 
 > Status: **operator-approved** (2026-07-03, interactive session). Approved via seven mockup
 > iterations reviewed live by the operator, plus a Codex design review (12 findings, 10 accepted —
-> §Requirements). The approved clickable mockup is committed at
-> `docs/superpowers/specs/assets/2026-07-03-control-room-mockup.html` — open it in a browser; it
-> is the visual reference implementations are verified against. Static sample data, nothing wired.
+> §Requirements). The approved clickable mockup lives at the
+> operator's artifact URL (claude.ai/code/artifact/5eadeeb6-4d4c-48ac-8b6e-2293e9f8827c) and will be
+> committed to `docs/superpowers/specs/assets/` once #192 (doc-only gate divergence) lands — a
+> non-md asset under docs/ currently deadlocks the merge gates. Static sample data, nothing wired.
 
 ## Operator requirements (verbatim intent, synthesised)
 
