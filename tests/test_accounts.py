@@ -346,12 +346,45 @@ class TestListModels(unittest.TestCase):
         self.assertEqual(ac._parse_models_payload(b'{"data": null}'), [])
         self.assertEqual(ac._parse_models_payload(b'{"data": [{"no_id": 1}]}'), [])
 
-    def test_list_models_non_openai_account_is_empty(self):
+    def test_list_models_claude_subscription_returns_curated(self):
+        # claude_subscription has no models API -> the curated in-repo roster
+        # is the discovery source (single-sourced in _SUBSCRIPTION_MODELS).
         tmp = tempfile.mkdtemp()
         acc = ac.Accounts(index_path=os.path.join(tmp, "accounts"),
                           credentials=FakeCreds())
         acc.set("sub", "claude_subscription")
-        self.assertEqual(acc.list_models("sub"), [])
+        self.assertEqual(acc.list_models("sub"),
+                         ac._SUBSCRIPTION_MODELS["claude_subscription"])
+        # the curated claude roster is non-empty and holds the shipped ids.
+        self.assertIn("claude-opus-4-8", acc.list_models("sub"))
+
+    def test_list_models_codex_subscription_is_empty_seam(self):
+        # codex model ids are unverified in-repo -> the curated roster is an
+        # explicit empty seam ('fill when verified'); discovery degrades to the
+        # free-text field rather than shipping invented ids.
+        tmp = tempfile.mkdtemp()
+        acc = ac.Accounts(index_path=os.path.join(tmp, "accounts"),
+                          credentials=FakeCreds())
+        acc.set("cx", "codex_subscription")
+        self.assertEqual(acc.list_models("cx"), [])
+
+    def test_list_models_curated_is_a_copy(self):
+        # callers must not be able to mutate the shared curated roster.
+        tmp = tempfile.mkdtemp()
+        acc = ac.Accounts(index_path=os.path.join(tmp, "accounts"),
+                          credentials=FakeCreds())
+        acc.set("sub", "claude_subscription")
+        got = acc.list_models("sub")
+        got.append("tampered")
+        self.assertNotIn("tampered",
+                         ac._SUBSCRIPTION_MODELS["claude_subscription"])
+
+    def test_list_models_api_kind_and_missing_are_empty(self):
+        tmp = tempfile.mkdtemp()
+        acc = ac.Accounts(index_path=os.path.join(tmp, "accounts"),
+                          credentials=FakeCreds())
+        acc.set("api", "anthropic_api", credential="k")
+        self.assertEqual(acc.list_models("api"), [])
         self.assertEqual(acc.list_models("ghost"), [])
 
     def test_list_models_credential_failure_is_empty(self):
