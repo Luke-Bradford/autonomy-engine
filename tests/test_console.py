@@ -131,5 +131,48 @@ class TestConciergeReply(unittest.TestCase):
                           console.concierge_reply("hi", repos=[]))
 
 
+class TestStopBackgroundDashboard(unittest.TestCase):
+    """launchctl is macOS-only; the stop must gate on darwin, not merely on the
+    presence of os.getuid (which exists on every POSIX platform, Linux included)."""
+
+    def test_noop_off_darwin(self):
+        with mock.patch.object(console.sys, "platform", "linux"), \
+                mock.patch.object(console.subprocess, "run") as run:
+            console._stop_background_dashboard()
+        run.assert_not_called()
+
+    def test_boots_out_on_darwin(self):
+        with mock.patch.object(console.sys, "platform", "darwin"), \
+                mock.patch.object(console.os, "getuid", return_value=501, create=True), \
+                mock.patch.object(console.subprocess, "run") as run:
+            console._stop_background_dashboard()
+        run.assert_called_once()
+        argv = run.call_args[0][0]
+        self.assertEqual(argv[:2], ["launchctl", "bootout"])
+        self.assertIn("501", argv[2])
+
+
+class TestReap(unittest.TestCase):
+    """A terminated child must be waited on so it does not linger as a zombie."""
+
+    def test_reaps_none_is_safe(self):
+        console._reap(None)  # must not raise
+
+    def test_terminate_then_wait(self):
+        proc = mock.MagicMock()
+        console._reap(proc)
+        proc.terminate.assert_called_once()
+        proc.wait.assert_called_once()
+        proc.kill.assert_not_called()
+
+    def test_kill_escalation_on_wait_timeout(self):
+        proc = mock.MagicMock()
+        proc.wait.side_effect = [console.subprocess.TimeoutExpired("p", 5), 0]
+        console._reap(proc)
+        proc.terminate.assert_called_once()
+        proc.kill.assert_called_once()
+        self.assertEqual(proc.wait.call_count, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

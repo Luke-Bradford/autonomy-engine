@@ -232,12 +232,29 @@ def _stop_background_dashboard():
     """Best-effort: bootout the launchd dashboard DAEMON so this console is the
     single service hosting the site (no port fight). macOS-only; a no-op where
     there is no launchd (Windows/Linux without it -- no daemon there anyway)."""
-    if not hasattr(os, "getuid"):
+    if sys.platform != "darwin":          # launchctl is macOS-only
         return
     try:
         subprocess.run(
             ["launchctl", "bootout", "gui/%d/com.autonomy.dashboard" % os.getuid()],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    except Exception:
+        pass
+
+
+def _reap(proc, timeout=5):
+    """Best-effort: terminate a child and WAIT for it so it does not linger as a
+    zombie. Escalates to kill() if it ignores SIGTERM; swallows every error
+    (shutdown path -- a reap hiccup must never mask the real exit)."""
+    if proc is None:
+        return
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=timeout)
+        except Exception:                 # SIGTERM ignored / wait timed out
+            proc.kill()
+            proc.wait(timeout=timeout)
     except Exception:
         pass
 
@@ -286,11 +303,7 @@ def run_stream(port, launch=True):
     except KeyboardInterrupt:
         pass
     finally:
-        if dash is not None:
-            try:
-                dash.terminate()
-            except Exception:
-                pass
+        _reap(dash)
         print("\nservice stopped.")
 
 
@@ -328,11 +341,7 @@ def _run_repl(port, launch=True):
         pass
     finally:
         state["quit"] = True
-        if state.get("dash") is not None:
-            try:
-                state["dash"].terminate()
-            except Exception:
-                pass
+        _reap(state.get("dash"))
         print("\nstopped.")
 
 
