@@ -95,3 +95,21 @@ writing after the right side exits. Never `printf … | grep -q` in a check.
 Every review comment ends `FIXED <sha>` / `DEFERRED #n` / `REBUTTED <reason>`
 — posted as a PR reply, not just handled silently. An APPROVE with unreplied
 NITPICKs is not complete (see `review-resolution.md`).
+
+## 9. `assert elapsed < X` is a load-flake; prove concurrency structurally
+
+*Origin: #100 (sleep-timed dashboard test), #108
+(`test_collect_parallelises_repos_and_preserves_order`,
+`test_gh_calls_run_concurrently`).*
+A test that proves work ran in parallel by timing it (`elapsed < serial_sum`)
+goes green in isolation and red under a loaded `run_all` — thread scheduling
+can make a genuinely-parallel run look serial and trip the threshold. There is
+nothing to tune: any wall-clock bound is a flake waiting for a busy box.
+
+**Prove overlap structurally, not by clock.** Use a shared in-flight counter
+(`max_inflight >= N`) recorded as each worker enters/leaves, or a
+`threading.Barrier(N)` the workers must all reach at once — a serial executor
+physically cannot cross an N-party barrier, so `max_inflight == N` is exact and
+deterministic. Keep a `sleep`/latch only to *hold* the workers in-flight long
+enough to observe the overlap, never as the thing asserted on. Same class as any
+"it must be fast enough" assertion standing in for "it must be concurrent".
