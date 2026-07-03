@@ -56,8 +56,15 @@ The verified path (codex-cli **0.136.0**) is codex's **native local provider**:
 
 When a role resolves to a local endpoint (`OPENAI_BASE_URL` is set), the codex
 adapter runs codex with `--oss --local-provider <ollama|lmstudio>` (picked from
-the endpoint's default port — 11434 → ollama, 1234 → lmstudio). With
-`OPENAI_BASE_URL` unset, the cloud invocation is byte-for-byte unchanged.
+the endpoint's default port — 11434 → ollama, 1234 → lmstudio) **and** exports
+`CODEX_OSS_BASE_URL=$OPENAI_BASE_URL` so codex targets the real host:port rather
+than the provider's hardcoded default — a **non-default-port** local endpoint is
+therefore reached, not silently missed (#94). The var is scoped to that single
+codex invocation (via an `env` prefix), so it never leaks into a later cloud
+role in the supervisor's round-robin. With `OPENAI_BASE_URL` unset, the cloud
+invocation is byte-for-byte unchanged. (The port heuristic still only chooses
+*which* provider default applies, so an LM-Studio endpoint on a non-1234 port is
+detected as ollama — an explicit provider knob is deferred; see #94.)
 
 **Constraint (codex 0.136.0):** codex dropped custom-provider
 `wire_api = "chat"` — it now demands the OpenAI *Responses* API, which Ollama and

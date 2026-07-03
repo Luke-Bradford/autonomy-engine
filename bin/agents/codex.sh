@@ -36,15 +36,25 @@ _codex_run_once() {
   # codex's NATIVE local provider: --oss + --local-provider. Pick the provider
   # from the endpoint's default port (Ollama 11434, LM Studio 1234), defaulting
   # to ollama. Unset OPENAI_BASE_URL -> the cloud invocation is unchanged.
-  local provider_args=()
+  #
+  # --local-provider only picks codex's built-in provider DEFAULTS (host :11434
+  # / :1234); it does NOT carry the endpoint's host:port. codex reads the actual
+  # OSS endpoint from CODEX_OSS_BASE_URL (verified against codex-cli 0.136.0), so
+  # without it a non-default-port local endpoint is silently unreachable (codex
+  # hits the default port instead). Point codex at the real endpoint (#94), but
+  # scope the var to THIS call via `env` -- the supervisor reuses one shell
+  # across roles round-robin, so an exported override would leak into a
+  # subsequent cloud role's invocation.
+  local provider_args=() oss_env=()
   if [ -n "${OPENAI_BASE_URL:-}" ]; then
     local oss_provider=ollama
     case "$OPENAI_BASE_URL" in
       *:1234|*:1234/*) oss_provider=lmstudio ;;
     esac
     provider_args=(--oss --local-provider "$oss_provider")
+    oss_env=(env "CODEX_OSS_BASE_URL=$OPENAI_BASE_URL")
   fi
-  codex exec \
+  ${oss_env[@]+"${oss_env[@]}"} codex exec \
     --json \
     -m "$model" \
     --dangerously-bypass-approvals-and-sandbox \

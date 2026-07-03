@@ -37,6 +37,9 @@ cat > "$shim/codex" <<'SH'
 n=$(( $(cat "$CODEX_SHIM_DIR/count" 2>/dev/null || echo 0) + 1 ))
 echo "$n" > "$CODEX_SHIM_DIR/count"
 printf '%s\0' "$@" > "$CODEX_SHIM_DIR/argv.$n"
+# Record the OSS endpoint override the adapter passed via the environment
+# (codex reads CODEX_OSS_BASE_URL from its env, not argv). Empty = unset.
+printf '%s' "${CODEX_OSS_BASE_URL-}" > "$CODEX_SHIM_DIR/ossbase.$n"
 fixture="$CODEX_SHIM_DIR/fixture.$n"
 [ -f "$fixture" ] || fixture="$CODEX_SHIM_DIR/fixture"
 [ -f "$fixture" ] && cat "$fixture"
@@ -47,11 +50,13 @@ SH
 chmod +x "$shim/codex"
 export PATH="$shim:$PATH"
 
-reset_shim() { rm -f "$CODEX_SHIM_DIR"/count "$CODEX_SHIM_DIR"/argv.* "$CODEX_SHIM_DIR"/fixture* "$CODEX_SHIM_DIR"/rc*; }
+reset_shim() { rm -f "$CODEX_SHIM_DIR"/count "$CODEX_SHIM_DIR"/argv.* "$CODEX_SHIM_DIR"/fixture* "$CODEX_SHIM_DIR"/rc* "$CODEX_SHIM_DIR"/ossbase.*; }
 shim_calls() { cat "$CODEX_SHIM_DIR/count" 2>/dev/null || echo 0; }
 # argv.N as newline-joined for simple grep (args themselves contain newlines,
 # so ordering checks go through python)
 argv_has() { tr '\0' '\n' < "$CODEX_SHIM_DIR/argv.$1" | grep -qxF -- "$2"; }
+# CODEX_OSS_BASE_URL the adapter exported for call N (empty if unset).
+oss_base() { cat "$CODEX_SHIM_DIR/ossbase.$1" 2>/dev/null; }
 
 printf 'SAFETYRULES-9000\nnever push to main\n' > "$tmp/hard_rules.md"
 printf 'DOTASK-1234\ndrain the board\n' > "$tmp/loop_prompt.md"
@@ -94,6 +99,7 @@ printf '{"type":"turn.completed"}\n' > "$CODEX_SHIM_DIR/fixture"
 ( unset OPENAI_BASE_URL; _codex_run_once "p" "gpt-x" "$tmp/nb.log" "" )
 check "no base url: no local-provider override" "yes" \
   "$(tr '\0' '\n' < "$CODEX_SHIM_DIR/argv.1" | grep -qE -- '--oss|--local-provider|model_provider' && echo no || echo yes)"
+check "no base url: no CODEX_OSS_BASE_URL override leaked" "" "$(oss_base 1)"
 
 reset_shim
 printf '{"type":"turn.completed"}\n' > "$CODEX_SHIM_DIR/fixture"
@@ -102,12 +108,25 @@ printf '{"type":"turn.completed"}\n' > "$CODEX_SHIM_DIR/fixture"
 check "base url set: routes via --oss" "0" "$(argv_has 1 --oss && echo 0 || echo 1)"
 check "base url set: ollama provider selected" "0" "$(argv_has 1 ollama && echo 0 || echo 1)"
 check "base url set: still passes the model" "0" "$(argv_has 1 qwen3:14b && echo 0 || echo 1)"
+check "base url set: CODEX_OSS_BASE_URL points codex at the endpoint" \
+  "http://localhost:11434/v1" "$(oss_base 1)"
 
 reset_shim
 printf '{"type":"turn.completed"}\n' > "$CODEX_SHIM_DIR/fixture"
 ( export OPENAI_BASE_URL=http://localhost:1234/v1 OPENAI_API_KEY=local
   _codex_run_once "p" "some-model" "$tmp/l.log" "" )
 check "lmstudio default port -> lmstudio provider" "0" "$(argv_has 1 lmstudio && echo 0 || echo 1)"
+
+# The core fix (#94): a NON-default-port endpoint stays ollama (heuristic
+# defaults there) but must actually REACH that host:port, not codex's
+# hardcoded :11434. Before the fix codex silently hit the default port.
+reset_shim
+printf '{"type":"turn.completed"}\n' > "$CODEX_SHIM_DIR/fixture"
+( export OPENAI_BASE_URL=http://localhost:11500/v1 OPENAI_API_KEY=local
+  _codex_run_once "p" "qwen3:14b" "$tmp/np.log" "" )
+check "non-default port: still ollama provider (default)" "0" "$(argv_has 1 ollama && echo 0 || echo 1)"
+check "non-default port: CODEX_OSS_BASE_URL reaches the real endpoint" \
+  "http://localhost:11500/v1" "$(oss_base 1)"
 
 # --- engine-level fallback: retry once on a NON-limit failure -------------------
 reset_shim
