@@ -67,8 +67,33 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
 16. **Shared usage-limit marker is one per supervisor** (`engine.account_key`);
     with per-role accounts this over-waits (safe direction) — accepted, and
     per-account limit state is issue #3's scope. *(PR #62 tradeoffs.)*
-17. **`instances:` is schema-validated but deferred** — NOTE-logged when >1,
-    single instance runs. *(ibid., decision 3.)*
+17. **`instances:` is retired in favour of named lanes** (superseded 2026-07-03,
+    operator-approved D1). Until the lanes increment (#147) lands, the old
+    behaviour stands: schema-validated, NOTE-logged when >1, single instance
+    runs. *(Was: deferred, PR #62 decision 3; now:
+    specs/2026-07-03-lanes-and-board-contract-design.md.)*
+
+## Lanes + board contract (2026-07-03 operator session, D1–D6)
+
+21. **A lane is a named worktree + role subset**, keyed in the repo's one
+    committed `.autonomy/config.yaml`; no `lanes:` block = one implicit lane =
+    prior behaviour. One supervisor per lane; default lane keeps the legacy
+    launchd label. *(specs/2026-07-03-lanes-and-board-contract-design.md, D1.)*
+22. **Parallel lanes coordinate by label partition, not runtime claiming** —
+    disjoint `scope.labels` is the claim; overlap is a doctor WARNING, never a
+    lease mechanism. *(ibid., D1.)*
+23. **Labels are the routing contract; Projects v2 is display-only.** Priority
+    is `p1`/`p2`/`p3` labels (no board-field reads); the PM routes purely by
+    applying labels and never knows lanes exist — label application IS
+    assignment. *(ibid., D2/D3.)*
+24. **Onboard creates the standard routing labels idempotently**
+    (`ready`, `p1`-`p3`, `needs-design`, plus labels referenced by scaffolded
+    scopes); existing labels are never modified; Projects boards are never
+    auto-created. *(ibid., D4.)*
+25. **GitHub is the only board** — no abstraction layer; board access stays
+    concentrated in `board.sh` + the few gh call sites as the seam for any
+    future adapter. Cron/event roles fire in the default lane only unless
+    explicitly pinned. *(ibid., D5/D6.)*
 
 ## Workflow
 
