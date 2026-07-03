@@ -138,3 +138,33 @@ plus `*"$repo"*` false-matches `vim …/bin/supervisor.sh` and a supervisor for
 end-of-argv (two `case` arms: `*"…--repo $repo"` and `*"…--repo $repo "*`).
 Quote `"$repo"` in the pattern so a path metachar can't widen the match
 (entry #6).
+
+## 11. Under `pipefail`, a function that returns non-zero poisons `func | grep -q ... && echo 0`
+
+*Origin: self-loop test authoring (#149 doctor knob-notes; earlier the #152 doctor
+scaffold test).*
+A test that pipes a function's output into `grep`:
+
+```bash
+check "msg matches" "0" \
+  "$(doctor_preflight_check "$tmp" 2>&1 >/dev/null | grep -q -- '--claude-md' && echo 0 || echo 1)"
+```
+
+fails even when the pattern IS present, if the test file runs under `set -o
+pipefail` (most of ours do). `doctor_preflight_check` legitimately `return 1`s on
+the failure path it is meant to report; `pipefail` makes the whole pipeline take
+that non-zero exit even though `grep -q` matched (exit 0), so the `&&` branch
+never runs and the check reads a false negative. `grep`'s own result is invisible.
+
+**Capture the output first, then grep the variable** — take the function out of
+the pipeline so its exit status can't propagate:
+
+```bash
+msg="$(doctor_preflight_check "$tmp" 2>&1 >/dev/null || true)"
+check "msg matches" "0" \
+  "$(printf '%s' "$msg" | grep -q -- '--claude-md' && echo 0 || echo 1)"
+```
+
+The `|| true` on the capture makes the intent explicit. Same trap bites any
+`producer | consumer` under `pipefail` where you care about the *consumer's*
+verdict but the *producer* can exit non-zero by design.

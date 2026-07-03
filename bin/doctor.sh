@@ -56,6 +56,21 @@ doctor_qa_role_check() {
   esac
 }
 
+# fail-safe honesty (#149): surface every knob a role sets that the engine does
+# not (yet) consume -- one INFO line each, from the SAME roles.py source the
+# supervisor logs at dispatch, so config and runtime can't tell different
+# stories. Diagnostic-only: never a FAIL/WARN, never provisions, never blocks.
+doctor_knob_notes() {
+  local repo="$1" notes _kn
+  notes="$(python3 "$DOCTOR_HOME/lib/roles.py" knob-notes "$repo" 2>/dev/null)" || return 0
+  [ -n "$notes" ] || return 0
+  # Quoted here-string: expands $notes once, then inserts the content literally
+  # (no second round of $/backtick/word expansion on the message text).
+  while IFS= read -r _kn; do
+    [ -n "$_kn" ] && echo "INFO $_kn"
+  done <<<"$notes"
+}
+
 doctor_full_report() {
   local repo="$1" hard_fail=0
   echo "== doctor.sh report: $repo =="
@@ -108,6 +123,7 @@ doctor_full_report() {
        hard_fail=1 ;;
   esac
   doctor_qa_role_check "$repo"
+  doctor_knob_notes "$repo"
 
   if (cd "$repo" && gh auth status >/dev/null 2>&1); then
     echo "OK   gh auth status ok"

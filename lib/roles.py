@@ -167,6 +167,55 @@ def _validate_knobs(name, cfg):
     return errors
 
 
+# Knob-consumption status -- the SINGLE SOURCE for the fail-safe-honesty NOTEs
+# (#149). Each entry is a knob the schema validates but the engine does NOT (yet)
+# fully consume, mapped to what it actually does with it today. When #89 wires a
+# knob, delete its entry here and every NOTE for it disappears for free. `gate`
+# IS consumed on the QA merge-path, so it is honest ONLY for non-QA roles
+# (special-cased in unwired_knob_notes); the rest are role-independent.
+_KNOB_NOTES = {
+    "gate":       "consumed only by the QA merge-path -- a no-op on other roles",
+    "tools":      "not yet consumed by any role",
+    "regression": "not yet fired (the QA rail mentions it; nothing schedules it)",
+    "output":     "shapes the role's rail prose only -- not enforced by the engine",
+    "web_search": "shapes the role's rail prose only -- not enforced by the engine",
+    "self_test":  "not yet consumed",
+    "duties":     "not yet consumed (the PM role is not built)",
+    "blockers":   "not yet consumed",
+    "models":     "per-phase models are ignored -- the adapter takes a single model",
+}
+
+
+def _knob_meaningfully_set(val):
+    """True only when the operator set a knob to a non-default, non-empty value.
+    A `self_test: false`, an absent knob, or an empty list/mapping is the quiet
+    default -- flagging it would be honesty-theatre noise, not a real no-op."""
+    if val is None:
+        return False
+    if isinstance(val, bool):
+        return val is True                 # only a TRUE bool is a surprising no-op
+    if isinstance(val, (list, dict, str)):
+        return len(val) > 0
+    return True
+
+
+def unwired_knob_notes(name, cfg):
+    """fail-safe honesty (#149): one message per knob that role `name` sets to a
+    meaningful value but the engine does not (fully) consume today. Single-sourced
+    from _KNOB_NOTES, so the list shrinks automatically as #89 wires knobs.
+    Deterministic order (dict insertion order). [] for a non-mapping config."""
+    if not isinstance(cfg, dict):
+        return []
+    notes = []
+    for knob, why in _KNOB_NOTES.items():
+        if knob == "gate" and name == "qa":
+            continue                       # gate is real on the QA merge-path
+        if _knob_meaningfully_set(cfg.get(knob)):
+            notes.append("roles.%s.%s is set but %s (wiring tracked in #89)"
+                         % (name, knob, why))
+    return notes
+
+
 def validate_roles(config):
     """Shape/enum validation of the parsed config's `roles:` block. Returns a
     list of human-readable error strings, [] when valid (or when absent)."""
@@ -741,7 +790,31 @@ def _events_main(argv):
     return 0
 
 
+def _knob_notes_main(argv):
+    """`roles.py knob-notes <target-repo> [role]` -- one honest NOTE line per
+    knob a role sets but the engine does not (yet) consume (#149). With a role,
+    only that role; without, every configured role. The supervisor logs these at
+    dispatch and doctor surfaces them, both from this single source. Best-effort:
+    no roles: block or an unreadable role config prints nothing, never errors."""
+    if len(argv) not in (2, 3):
+        print("usage: roles.py knob-notes <target-repo> [role]", file=sys.stderr)
+        return 2
+    config, rc = _load_config(argv[1])
+    if rc:
+        return rc
+    roles_cfg = config.get("roles") if isinstance(config, dict) else None
+    if not isinstance(roles_cfg, dict):
+        return 0
+    names = [argv[2]] if len(argv) == 3 else list(roles_cfg)
+    for name in names:
+        for note in unwired_knob_notes(name, roles_cfg.get(name)):
+            print(note)
+    return 0
+
+
 def main(argv):
+    if len(argv) >= 2 and argv[1] == "knob-notes":
+        return _knob_notes_main(argv[1:])
     if len(argv) >= 2 and argv[1] == "dispatch":
         return _dispatch_main(argv[1:])
     if len(argv) >= 2 and argv[1] == "cron":
@@ -752,7 +825,8 @@ def main(argv):
         return _events_main(argv[1:])
     if len(argv) != 2:
         print("usage: roles.py <target-repo> | roles.py dispatch "
-              "<target-repo> [role]", file=sys.stderr)
+              "<target-repo> [role] | roles.py knob-notes <target-repo> [role]",
+              file=sys.stderr)
         return 2
     repo = argv[1]
     config, rc = _load_config(repo)

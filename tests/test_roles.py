@@ -139,6 +139,44 @@ class TestValidateRoles(unittest.TestCase):
         self.assertTrue(any("security_sweeper" in e for e in errs))
 
 
+class TestUnwiredKnobNotes(unittest.TestCase):
+    """fail-safe honesty (#149): a knob the operator set that the engine does
+    not (fully) consume yet must be surfaced, not silently ignored."""
+
+    def test_true_bool_knob_is_flagged(self):
+        notes = roles.unwired_knob_notes("coder", {"self_test": True})
+        self.assertEqual(len(notes), 1)
+        self.assertIn("roles.coder.self_test", notes[0])
+        self.assertIn("#89", notes[0])
+
+    def test_false_bool_knob_is_not_flagged(self):
+        # a false/default bool is the quiet default, not a surprising no-op
+        self.assertEqual(roles.unwired_knob_notes("coder", {"self_test": False}), [])
+
+    def test_absent_knob_is_not_flagged(self):
+        self.assertEqual(roles.unwired_knob_notes("coder", {}), [])
+
+    def test_empty_collections_are_not_flagged(self):
+        self.assertEqual(
+            roles.unwired_knob_notes("coder", {"tools": [], "regression": {}}), [])
+
+    def test_nonempty_collection_knobs_are_flagged(self):
+        notes = roles.unwired_knob_notes(
+            "coder", {"tools": ["read"], "models": {"plan": "opus"}})
+        joined = " ".join(notes)
+        self.assertIn("roles.coder.tools", joined)
+        self.assertIn("roles.coder.models", joined)
+
+    def test_gate_is_flagged_on_non_qa_but_not_on_qa(self):
+        # gate IS consumed on the QA merge-path -> honest only for other roles
+        self.assertTrue(
+            any("gate" in n for n in roles.unwired_knob_notes("coder", {"gate": "auto-merge-on-pass"})))
+        self.assertEqual(roles.unwired_knob_notes("qa", {"gate": "auto-merge-on-pass"}), [])
+
+    def test_non_dict_config_is_empty(self):
+        self.assertEqual(roles.unwired_knob_notes("coder", None), [])
+
+
 class TestPromptFiles(unittest.TestCase):
     def test_missing_prompt_file_reported(self):
         repo = tempfile.mkdtemp()

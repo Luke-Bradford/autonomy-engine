@@ -44,36 +44,40 @@ worktree:
 # round-robin (one session each, in turn); cron/event triggers are not
 # dispatched yet (scheduler/event bus is a later increment). A role with an
 # `account:` that cannot resolve REFUSES its sessions (fail-safe).
+# Knob wiring status is marked inline below: [wired] is consumed today,
+# [rail-prose] only shapes the role's prompt, [#89] is validated but not yet
+# consumed (the supervisor + doctor log an honest NOTE when you set one, so a
+# no-op is never silent -- see #149). Wiring is tracked in #89.
 # roles:
 #   coder:
 #     enabled: true
 #     account: claude-sub              # python3 lib/accounts.py set claude-sub claude_subscription
 #     trigger: { type: loop }
 #     model: claude-sonnet-5
-#     models: { plan: claude-opus-4-8, implement: claude-sonnet-5, test: claude-haiku-4-5 }
+#     models: { plan: claude-opus-4-8, implement: claude-sonnet-5, test: claude-haiku-4-5 }  # [#89] per-phase not consumed; adapter takes one model
 #     scope: { labels: [ready], milestone: current }
-#     self_test: true                  # agents test their own work
-#     blockers: raise-to-pm            # raise-to-pm | raise-to-human
+#     self_test: true                  # [#89] agents test their own work (not yet consumed)
+#     blockers: raise-to-pm            # [#89] raise-to-pm | raise-to-human (not yet consumed)
 #     instances: 1
 #   qa:
 #     enabled: false
 #     account: claude-sub
 #     trigger: { type: event, on: [pr.opened, pr.synchronize] }
 #     scope: { target: diff }          # diff | affected | full-regression
-#     gate: wait-for-human             # wait-for-human | auto-merge-on-pass (still gated by merge_gate.strategy)
-#     tools: [read]                    # [read] | [read, mcp]
-#     regression: { after_tickets: 10 }  # or { every: "0 3 * * 0" }; omit = off
+#     gate: wait-for-human             # [wired on QA] wait-for-human | auto-merge-on-pass (QA merge-path only; still gated by merge_gate.strategy)
+#     tools: [read]                    # [#89] [read] | [read, mcp] (not yet consumed)
+#     regression: { after_tickets: 10 }  # [#89] or { every: "0 3 * * 0" }; omit = off (not yet fired)
 #     prompt: .autonomy/roles/qa.md
 #   pm:
 #     enabled: false
 #     account: claude-sub
 #     trigger: { type: cron, schedule: "0 */6 * * *" }
-#     duties: [groom, prioritise, unblock, spec-check]
+#     duties: [groom, prioritise, unblock, spec-check]  # [#89] not yet consumed (PM not built)
 #     prompt: .autonomy/roles/pm.md
 #   researcher:
 #     enabled: false
 #     account: codex-sub               # python3 lib/accounts.py set codex-sub codex_subscription
 #     trigger: { type: cron, schedule: "0 3 * * *" }
-#     output: handoff-to-pm            # raise-issues | handoff-to-pm
-#     web_search: false
+#     output: handoff-to-pm            # [rail-prose] raise-issues | handoff-to-pm (shapes the rail only)
+#     web_search: false                # [rail-prose] shapes the rail only, not enforced
 #     prompt: .autonomy/roles/researcher.md

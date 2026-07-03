@@ -618,6 +618,22 @@ compose_session_rules() {
   printf '%s' "$out_file"
 }
 
+# fail-safe honesty (#149): log a NOTE for each knob role $2 sets but the engine
+# does not (yet) consume -- single-sourced from `roles.py knob-notes`, surfaced
+# like the instances stub so a validated-but-silent no-op is never invisible.
+# Best-effort: a roles.py hiccup or empty result logs nothing and never breaks
+# the session (honesty is diagnostic, not a gate).
+log_knob_notes() {
+  local repo="$1" role="$2" notes _kn
+  notes="$(python3 "$ENGINE_HOME/lib/roles.py" knob-notes "$repo" "$role" 2>>"$SUPLOG")" || return 0
+  [ -n "$notes" ] || return 0
+  # Quoted here-string: expands $notes once, then inserts the content literally
+  # (no second round of $/backtick/word expansion on the message text).
+  while IFS= read -r _kn; do
+    [ -n "$_kn" ] && log "NOTE $_kn"
+  done <<<"$notes"
+}
+
 run_session() {
   local role="${1:-${ROLE:-coder}}"
   preflight || return $?
@@ -699,6 +715,7 @@ run_session() {
   if [ "$ROLE_INSTANCES" != "1" ]; then
     log "NOTE roles.$role.instances=$ROLE_INSTANCES not yet supported -- running a single instance (parallel instances are a later increment)"
   fi
+  log_knob_notes "$AUTONOMY_TARGET_REPO" "$role"
 
   local log_file; log_file="$LOGDIR/session-$(date +%Y%m%dT%H%M%S).log"
   log "session start (role=$role model=$MODEL effort=${EFFORT:-default} auth=$auth_note) -> $log_file"

@@ -365,5 +365,33 @@ run_session coder 2>/dev/null
 check "broken adapter: session refused rc 2" "2" "$?"
 check "broken adapter: no stale adapter ran" "" "$(cat "$STUB_CAPTURE")"
 
+# --- log_knob_notes: fail-safe honesty for set-but-unwired knobs (#149) -------
+# run_session calls this so a knob the operator set but the engine ignores is
+# logged, never silently dropped. Capture what log() emits and assert.
+knobrepo="$tmp/knobrepo"
+mkdir -p "$knobrepo/.autonomy"
+cat > "$knobrepo/.autonomy/config.yaml" <<'YAML'
+roles:
+  coder:
+    enabled: true
+    self_test: true
+  qa:
+    enabled: true
+    gate: auto-merge-on-pass
+YAML
+KNOB_LOG=""
+log() { KNOB_LOG="${KNOB_LOG}$*"$'\n'; }
+log_knob_notes "$knobrepo" coder
+check "knob NOTE logged for a set-but-unwired knob" "0" \
+  "$(printf '%s' "$KNOB_LOG" | grep -q 'NOTE roles.coder.self_test is set but' && echo 0 || echo 1)"
+KNOB_LOG=""
+log_knob_notes "$knobrepo" qa
+check "gate NOT flagged on the QA role (it is wired there)" "" "$(printf '%s' "$KNOB_LOG")"
+# best-effort: an unreadable repo logs nothing and never fails the session
+KNOB_LOG=""
+log_knob_notes "$tmp/does-not-exist" coder
+check "missing repo -> no NOTE, no failure" "" "$(printf '%s' "$KNOB_LOG")"
+log() { :; }   # restore the quiet stub for any later checks
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
