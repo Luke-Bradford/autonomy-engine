@@ -65,15 +65,29 @@ not paranoia.
 
 ## 7. `producer | grep -q` under `set -o pipefail` is a CI-only flake
 
-*Origin: PR #95 (`tests/test_start.sh`, `start_status_report`).*
+*Origin: PR #95 (`tests/test_start.sh`, `start_status_report`); recurred and
+corrected in #106.*
 `multi_line_producer 2>&1 | grep -q PATTERN` under `set -o pipefail`: when
-`grep -q` matches a **non-last** line it exits immediately, so the producer's
-NEXT write gets SIGPIPE (rc 141). pipefail then makes the whole pipeline
-non-zero *even though grep succeeded*, so a trailing `&& echo 0 || echo 1`
-reports failure. Timing-dependent → green locally, red in CI. Fix: capture the
-producer into a var first, then grep the var
-(`out="$(producer 2>&1)"; printf '%s\n' "$out" | grep -q …`). Same class: any
-`slow_or_multiline | head`/`| grep -q` where the left side keeps writing.
+`grep -q` matches a line it exits immediately, so the producer's NEXT write gets
+SIGPIPE (rc 141). pipefail then makes the whole pipeline non-zero *even though
+grep succeeded*, so a trailing `&& echo 0 || echo 1` reports failure.
+Timing-dependent → green locally, red in CI.
+
+**The fix is to remove the PIPE, not to capture into a var first.** The original
+advice here — `out="$(producer)"; printf '%s\n' "$out" | grep -q …` — is
+**still buggy**: `printf '%s\n' "$out" | grep -q` is itself a
+producer-into-`grep -q` pipeline with the identical SIGPIPE race (this is how
+the #95 flake resurfaced as #106). Grep the variable through a **here-string**,
+which has no producer process to SIGPIPE:
+
+```sh
+grep -q 'PATTERN' <<<"$out"        # deterministic; single command, grep's own rc
+# or, pure-bash, no external:
+case "$out" in *"PATTERN"*) … ;; esac
+```
+
+Same class: any `producer | grep -q`/`| head`/`| read` where the left side keeps
+writing after the right side exits. Never `printf … | grep -q` in a check.
 
 ## 8. Review replies without terminal states get lost
 

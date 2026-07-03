@@ -15,7 +15,9 @@ USER_RESPONSE='{}'
 ORG_RESPONSE='{}'
 gh() {
   # $1=api $2=graphql -f query=... -f o=...
-  if printf '%s' "$*" | grep -q 'organization(login'; then
+  # here-string, not `printf | grep -q`: under `set -o pipefail` a matching
+  # grep -q exits before the producer finishes and SIGPIPEs it (prevention-log #7).
+  if grep -q 'organization(login' <<<"$*"; then
     printf '%s' "$ORG_RESPONSE"
   else
     printf '%s' "$USER_RESPONSE"
