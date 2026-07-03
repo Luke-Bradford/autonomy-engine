@@ -9,6 +9,7 @@ value or a surfaced error; every failure degrades to None (log-scan fallback),
 never an exception into the loop/display."""
 import json
 import os
+import subprocess
 import sys
 import unittest
 from urllib.error import URLError
@@ -65,6 +66,14 @@ class TestReadToken(unittest.TestCase):
             raise RuntimeError("keychain hung")
         self.assertIsNone(
             cu._read_oauth_token(runner=boom, platform="darwin"))
+
+    def test_runner_timeout_is_none(self):
+        # a Keychain prompt/hang surfaces as TimeoutExpired -> must degrade, not
+        # raise (the hard subprocess timeout keeps the sampler from stalling)
+        def timeout():
+            raise subprocess.TimeoutExpired(cmd="security", timeout=4)
+        self.assertIsNone(
+            cu._read_oauth_token(runner=timeout, platform="darwin"))
 
 
 class TestFetchUsage(unittest.TestCase):
