@@ -12,7 +12,16 @@ export HOME="$tmp/home"; mkdir -p "$HOME/.config/autonomy"
 mkdir -p "$tmp/repoA/.autonomy"; printf 'board:\n  owner: x\n' > "$tmp/repoA/.autonomy/config.yaml"
 
 python3 "$ENGINE_HOME/bin/dashboard.py" --repo "$tmp/repoA" --port 8931 >/dev/null 2>&1 & pid=$!
-sleep 1.5
+# Poll for readiness rather than a fixed sleep: under load the server can need
+# more than a second to bind, and a fixed wait races the bind -- the early
+# /api/config GETs then hit nothing listening and read an empty body, which the
+# JSON parse rejects (issue #100). Bounded to ~15s, then fail loudly.
+ready=0
+for _ in $(seq 1 75); do
+  if curl -sf http://127.0.0.1:8931/ >/dev/null 2>&1; then ready=1; break; fi
+  sleep 0.2
+done
+[ "$ready" -eq 1 ] || { echo "FAIL - dashboard did not become ready on :8931"; exit 1; }
 tok="$(curl -s http://127.0.0.1:8931/ | grep -o 'ae-control-token" content="[^"]*' | sed 's/.*content="//')"
 
 curl -s -X POST http://127.0.0.1:8931/api/control -H 'Content-Type: application/json' \

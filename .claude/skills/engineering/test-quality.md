@@ -98,3 +98,27 @@ The assertion shape (from `test_role_credential.sh`):
 ```bash
 check "key does NOT leak into supervisor env" "" "${ANTHROPIC_API_KEY:-}"
 ```
+
+## Poll for readiness, never a fixed sleep
+
+A test that starts a server (e.g. `bin/dashboard.py`) and then does a fixed
+`sleep N` before its first request is racing the bind. Under load — a concurrent
+dashboard from another checkout, overlapping test runs — the server needs longer
+than `N` to come up, the early request hits nothing listening, `curl -s` returns
+an **empty body**, and the assertion fails with a confusing `JSONDecodeError`
+rather than a clear "server not ready" (issue #100). Poll for readiness with a
+bounded loop, then fail loudly if it never comes up:
+
+```bash
+python3 "$ENGINE_HOME/bin/dashboard.py" --repo "$tmp/repoA" --port 8931 & pid=$!
+ready=0
+for _ in $(seq 1 75); do          # ~15s ceiling
+  if curl -sf http://127.0.0.1:8931/ >/dev/null 2>&1; then ready=1; break; fi
+  sleep 0.2
+done
+[ "$ready" -eq 1 ] || { echo "FAIL - dashboard did not become ready"; exit 1; }
+```
+
+Deterministic, still a genuine live round-trip, and bash 3.2 compatible. The
+same rule applies to any readiness signal — a PID file appearing, a socket
+opening, a log line — poll for the actual signal, don't guess a duration.
