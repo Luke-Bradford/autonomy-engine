@@ -385,6 +385,47 @@ def dispatch_roles(config):
     return out
 
 
+def _role_schedule(cfg):
+    """The cron `schedule` string for a role config, '' when absent/blank.
+    Defensive against non-dict shapes (dispatch degrades, never crashes)."""
+    cfg = cfg if isinstance(cfg, dict) else {}
+    trigger = cfg.get("trigger")
+    if not isinstance(trigger, dict):
+        return ""
+    sched = trigger.get("schedule")
+    return str(sched).strip() if _is_nonempty_str(sched) else ""
+
+
+def cron_roles(config):
+    """(name, schedule) pairs for the roles the supervisor's scheduler fires,
+    in the same stable order as dispatch_roles: standard roster first
+    (DEFAULT_ROLES order), then custom roles in config order. A role qualifies
+    iff effectively enabled AND its effective trigger type is 'cron' AND it has
+    a non-blank schedule. Merge semantics mirror dispatch_roles / the dashboard
+    roster; a cron role with no schedule is skipped (validate_roles rejects it,
+    but enumeration must degrade, not crash)."""
+    roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
+    if not isinstance(roles_blk, dict):
+        roles_blk = {}
+    out = []
+    for name, d_enabled, _sub, d_trig in DEFAULT_ROLES:
+        enabled, ttype = _effective(roles_blk.get(name), (d_enabled, d_trig))
+        if enabled and ttype == "cron":
+            sched = _role_schedule(roles_blk.get(name))
+            if sched:
+                out.append((name, sched))
+    standard = tuple(r[0] for r in DEFAULT_ROLES)
+    for name, cfg in roles_blk.items():
+        if name in standard or not _ROLE_NAME_RE.match(str(name)):
+            continue
+        enabled, ttype = _effective(cfg, (False, "loop"))
+        if enabled and ttype == "cron":
+            sched = _role_schedule(cfg)
+            if sched:
+                out.append((name, sched))
+    return out
+
+
 def render_scope(scope):
     """One-line scope directive for the session's system prompt -- the
     supervisor appends it to the pack's hard_rules. '' when scope is absent
@@ -559,9 +600,50 @@ def _dispatch_main(argv):
     return 0
 
 
+def _cron_main(argv):
+    """`roles.py cron <target-repo>` -- one `NAME<TAB>SCHEDULE` line per enabled
+    cron role (none prints nothing). The supervisor's scheduler enumerates
+    due-ness from this; keeping the roster/merge logic in Python keeps the
+    supervisor a thin caller."""
+    if len(argv) != 2:
+        print("usage: roles.py cron <target-repo>", file=sys.stderr)
+        return 2
+    config, rc = _load_config(argv[1])
+    if rc:
+        return rc
+    for name, sched in cron_roles(config):
+        print("%s\t%s" % (name, sched))
+    return 0
+
+
+def _cron_due_main(argv):
+    """`roles.py cron-due <schedule> <last-fire-epoch> <now-epoch>` -- prints
+    'due' when the schedule's next fire strictly after <last> is at or before
+    <now>, else 'not-due'. Keeps ALL cron math in Python so the supervisor just
+    tests the string. Unparseable schedule or non-integer epoch -> 'not-due'
+    (fail-safe: under-fire, never over-fire). rc 0 either way."""
+    if len(argv) != 4:
+        print("usage: roles.py cron-due <schedule> <last> <now>",
+              file=sys.stderr)
+        return 2
+    try:
+        last = int(argv[2])
+        now = int(argv[3])
+    except (TypeError, ValueError):
+        print("not-due")
+        return 0
+    nxt = cron_next_fire(argv[1], last)
+    print("due" if (nxt is not None and nxt <= now) else "not-due")
+    return 0
+
+
 def main(argv):
     if len(argv) >= 2 and argv[1] == "dispatch":
         return _dispatch_main(argv[1:])
+    if len(argv) >= 2 and argv[1] == "cron":
+        return _cron_main(argv[1:])
+    if len(argv) >= 2 and argv[1] == "cron-due":
+        return _cron_due_main(argv[1:])
     if len(argv) != 2:
         print("usage: roles.py <target-repo> | roles.py dispatch "
               "<target-repo> [role]", file=sys.stderr)
