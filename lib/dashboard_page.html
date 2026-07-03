@@ -615,9 +615,39 @@ function treeRows(roots,pre,out){roots.forEach((n,i)=>{const last=i===roots.leng
   out.push(`<div class="tnode ${cls}"><span class="g">${esc(pre+(last?"└─ ":"├─ "))}</span><span class="ic">${tic(n.name)}</span><span class="nn">${esc(tname(n.name))}</span><span class="su">${esc(short(n.summary,72))}</span><span class="tk">${n.tokens?num(n.tokens)+" tok":""}</span></div>`);
   if(n.children&&n.children.length)treeRows(n.children,pre+(last?"   ":"│  "),out);});}
 function reposWithActivity(repos){return repos.filter(r=>r.current_session&&(r.current_session.nodes||[]).length);}
+// #177 piece 4: when no session is streaming, the activity panel narrates each
+// idle supervisor's heartbeat (phase + reason + live countdown) instead of a
+// bare empty state -- so a preflight hold / limit backoff / pace wait / cron
+// check / event poll reads as "what is happening and why now", never blank.
+// Predicate is dispStatus==="idle" -- the exact branch the NOW card renders
+// heartbeat in (alive, between sessions); stopped/working/paused/needs-setup are
+// excluded so a stale heartbeat is never shown as live. All fields esc()'d (the
+// heartbeat is repo-local file content). Countdown emitted only when until>now,
+// byte-matching the NOW card; the .qreset ticker drives it client-side.
+function tickNarration(repos){
+  const idle=repos.filter(r=>dispStatus(r)==="idle"&&r.heartbeat&&r.heartbeat.reason);
+  if(!idle.length)return "";
+  return idle.map(r=>{
+    const hb=r.heartbeat, ph=(hb.phase||"").trim();
+    const m=/^(session-running)\s+(\S+)$/.exec(ph);
+    const head=m?m[1]:(ph||"tick");
+    const roleChip=m?`<span class="fc-role">${esc(m[2])}</span>`:"";
+    // until is a numeric epoch (read_heartbeat coerces int|0); force it numeric
+    // client-side too so nothing but digits ever reaches the data-e attribute.
+    const until=Number(hb.until)||0;
+    const cd=until>nowS()?` · <span class="qreset" data-e="${until}">${dur(until-nowS())}</span>`:"";
+    return `<div class="act-focus"><span class="dot s-idle"></span><b>${esc(short(r.name,28))}</b>`
+      +`<span class="fc-role">${esc(head)}</span>${roleChip}`
+      +`<span class="lead">${esc(hb.reason)}${cd}</span></div>`;
+  }).join("");
+}
 function renderActivity(repos){
   const ws=reposWithActivity(repos);
-  if(!ws.length){$("activity").innerHTML=`<div class="empty">No session activity right now. A working supervisor's tool-by-tool trace appears here live.</div>`;return;}
+  if(!ws.length){
+    const ticks=tickNarration(repos);
+    $("activity").innerHTML=ticks||`<div class="empty">No session activity right now. A working supervisor's tool-by-tool trace — or its wait state between sessions — appears here live.</div>`;
+    return;
+  }
   if(VIEW==="flat")return renderFlat(ws);
   if(VIEW==="time")return renderTimeline(ws);
   let html="";
