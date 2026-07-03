@@ -117,6 +117,42 @@ class TestPromptFiles(unittest.TestCase):
             self.assertTrue(any("pm" in e for e in errs), bad)
 
 
+class TestAgentAdapters(unittest.TestCase):
+    """check_agent_adapters: an explicit role `agent:` must name an adapter
+    that exists in the engine agents dir (fail-safe -- #98)."""
+
+    def _agents_dir(self, *names):
+        d = tempfile.mkdtemp()
+        for n in names:
+            open(os.path.join(d, n + ".sh"), "w").close()
+        return d
+
+    def test_present_adapter_ok(self):
+        agents = self._agents_dir("claude", "codex")
+        cfg = parse("roles:\n  prep:\n    agent: codex\n")
+        self.assertEqual(roles.check_agent_adapters(cfg, agents), [])
+
+    def test_missing_adapter_reported(self):
+        agents = self._agents_dir("claude", "codex")
+        cfg = parse("roles:\n  prep:\n    agent: ghost\n")
+        errs = roles.check_agent_adapters(cfg, agents)
+        self.assertTrue(any("prep" in e and "ghost" in e for e in errs))
+
+    def test_unset_agent_is_not_checked(self):
+        # no `agent:` -> use the global $AGENT_TYPE; not this check's concern
+        agents = self._agents_dir("claude")
+        cfg = parse("roles:\n  coder:\n    enabled: true\n")
+        self.assertEqual(roles.check_agent_adapters(cfg, agents), [])
+
+    def test_invalid_charset_rejected(self):
+        # a traversal-shaped name never reaches a source path -- rejected, not
+        # silently "not found"
+        agents = self._agents_dir("claude")
+        cfg = parse("roles:\n  prep:\n    agent: ../../etc/x\n")
+        errs = roles.check_agent_adapters(cfg, agents)
+        self.assertTrue(any("prep" in e and "invalid chars" in e for e in errs))
+
+
 class TestCronNextFire(unittest.TestCase):
     """#18: the dashboard's cron-role 'next fire' countdown. UTC, standard
     5-field cron, restricted to the forms real schedules use (*, */n, lists,

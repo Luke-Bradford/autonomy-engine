@@ -272,6 +272,40 @@ def check_accounts(config, known_account_names):
     return errors
 
 
+# Adapter names cross into a `source .../<name>.sh` path in supervisor.sh, so
+# only the shell-safe charset the supervisor gates on ([A-Za-z0-9_-]) is valid.
+_AGENT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def check_agent_adapters(config, agents_dir):
+    """Verify each role's explicit `agent:` names an adapter that exists in the
+    engine's agents dir (bin/agents/<name>.sh). validate_roles checks `agent:`
+    only as a non-empty string; a typo'd/missing adapter is otherwise caught
+    only at dispatch (the supervisor REFUSES the session -- fail-safe, never
+    running a stale round-robin adapter). Surfacing it here lets doctor flag it
+    before the loop runs. Pure -- the caller supplies the agents dir. An unset
+    `agent:` (meaning the global $AGENT_TYPE) is not this check's concern."""
+    errors = []
+    roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
+    if not isinstance(roles_blk, dict):
+        return errors
+    for name, cfg in roles_blk.items():
+        if not isinstance(cfg, dict):
+            continue
+        agent = cfg.get("agent")
+        if not _is_nonempty_str(agent):
+            continue
+        agent = str(agent)
+        if not _AGENT_NAME_RE.match(agent):
+            errors.append("roles.%s: agent %r has invalid chars "
+                          "(allowed: A-Za-z0-9_-)" % (name, agent))
+            continue
+        if not os.path.isfile(os.path.join(agents_dir, agent + ".sh")):
+            errors.append("roles.%s: agent adapter %r not found "
+                          "(expected bin/agents/%s.sh)" % (name, agent, agent))
+    return errors
+
+
 def account_errors(config, registry):
     """Doctor's account-reference check against a registry object (injected so
     tests never touch the real registry). A CORRUPT registry reads as empty,
@@ -537,7 +571,12 @@ def main(argv):
     if rc:
         return rc
     import accounts as accounts_mod
+    # Match supervisor.sh's adapter seam: AUTONOMY_AGENTS_DIR override, else the
+    # engine's own bin/agents (this file lives in lib/, so ../bin/agents).
+    agents_dir = os.environ.get("AUTONOMY_AGENTS_DIR") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), os.pardir, "bin", "agents")
     errors = (validate_roles(config) + check_prompt_files(config, repo)
+              + check_agent_adapters(config, agents_dir)
               + account_errors(config, accounts_mod.Accounts()))
     for e in errors:
         print(e)

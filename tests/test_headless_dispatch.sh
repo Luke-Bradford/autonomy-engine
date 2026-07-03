@@ -305,5 +305,65 @@ run_session coder
 check "run_session falls back to \$AGENT_TYPE when role agent unset" "success" \
   "$(grep -q '^key=' "$STUB_CAPTURE" && echo success || echo MISS)"
 
+# 9) fail-safe: a role naming a MISSING adapter refuses (rc 2) and never runs a
+# stale round-robin adapter (#98). `agent: ghost` passes roles.py's string check
+# and the charset gate, so ROLE_AGENT=ghost and `source .../ghost.sh` would fail
+# silently under set -uo pipefail -- leaving section 8's real agent_invoke still
+# defined. A non-refusing path would therefore run that stale adapter and write
+# the capture; assert the session refuses and the capture stays empty.
+cat > "$AUTONOMY_TARGET_REPO/.autonomy/config.yaml" <<'YAML'
+roles:
+  coder:
+    enabled: true
+    agent: ghost
+YAML
+: > "$STUB_CAPTURE"
+run_session coder
+check "missing adapter: session refused rc 2" "2" "$?"
+check "missing adapter: no stale adapter ran" "" "$(cat "$STUB_CAPTURE")"
+
+# prime: a valid adapter run so a REAL agent_invoke is defined (the stale
+# candidate the guard must clear before loading the next, bad adapter).
+prime_stub() {
+  cat > "$AUTONOMY_TARGET_REPO/.autonomy/config.yaml" <<'YAML'
+roles:
+  coder:
+    enabled: true
+YAML
+  : > "$STUB_CAPTURE"; run_session coder >/dev/null 2>&1
+}
+
+# 9b) fail-safe: an adapter that EXISTS but is incomplete (does not define the
+# agent_invoke/agent_classify_outcome contract) must also refuse -- a bare `-f`
+# check would pass, `source` an empty file cleanly, then run the PRIOR role's
+# stale agent_invoke. The guard clears stale defs first, so this refuses.
+printf '# incomplete adapter: defines nothing\n' > "$tmp/agents/incomplete.sh"
+prime_stub
+cat > "$AUTONOMY_TARGET_REPO/.autonomy/config.yaml" <<'YAML'
+roles:
+  coder:
+    enabled: true
+    agent: incomplete
+YAML
+: > "$STUB_CAPTURE"
+run_session coder
+check "incomplete adapter: session refused rc 2" "2" "$?"
+check "incomplete adapter: no stale adapter ran" "" "$(cat "$STUB_CAPTURE")"
+
+# 9c) fail-safe: an adapter that exists but errors while sourcing (syntax error)
+# must refuse, not fall through to stale defs.
+printf 'agent_invoke() { :; }\nthis is not valid shell (\n' > "$tmp/agents/broken.sh"
+prime_stub
+cat > "$AUTONOMY_TARGET_REPO/.autonomy/config.yaml" <<'YAML'
+roles:
+  coder:
+    enabled: true
+    agent: broken
+YAML
+: > "$STUB_CAPTURE"
+run_session coder 2>/dev/null
+check "broken adapter: session refused rc 2" "2" "$?"
+check "broken adapter: no stale adapter ran" "" "$(cat "$STUB_CAPTURE")"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
