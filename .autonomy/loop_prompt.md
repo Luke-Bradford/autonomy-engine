@@ -66,7 +66,12 @@ half-done branches, no unpushed WIP).
 
 5. Update the auto-memory (index + topic files) as you land work, per the memory rules.
 
-6. Next ticket.
+6. **Pause check, then next ticket.** Before picking the next ticket, check for the pause
+   sentinel: `[ -f "$AUTONOMY_TARGET_REPO/var/autonomy-logs/autonomy-PAUSE" ]` (fall back to
+   `var/autonomy-logs/autonomy-PAUSE` under the current worktree). If present, the operator asked
+   the loop to pause — END THE SESSION CLEANLY NOW: leave the repo clean (no unpushed WIP), say
+   what you finished and what you left, and stop. Do not start new work past a pause request.
+   Otherwise: next ticket.
 
 ## Hard safety rules — never violate, even unattended
 
