@@ -497,17 +497,21 @@ function toast(ok,msg){
 
 /* ---- REPOS + ROLES ---- */
 function subBadge(s){return `<span class="subs b-${esc(s)}">${esc({engine:"engine",managed_agents:"cloud",routine:"routine",actions:"actions"}[s]||s)}</span>`;}
+let _reposHtml="";
 function renderRepos(repos){
   $("h-repos").textContent=repos.length;
   $("h-active").textContent=repos.filter(r=>dispStatus(r)==="working").length;
-  $("repos").innerHTML=repos.map(r=>{
+  const html=repos.map(r=>{
     const st=dispStatus(r), cfg=r.config||{};
     const roles=(r.roles||[]).map(role=>{
       const off=!role.enabled;
       // scheduling lane (#18): cron roles get a live next-fire countdown,
       // enabled event roles read "armed" -- both only when actually enabled
+      // (#164: countdown rendered INLINE, never a placeholder -- the qreset
+      // ticker keeps it live between rebuilds)
+      const nf=role.next_fire?(()=>{const s=role.next_fire-Math.floor(nowS());return s>0?dur(s):"now";})():"";
       const trig = role.trigger==="cron"&&role.next_fire
-        ? `cron · next <span class="qreset num" data-e="${role.next_fire}">…</span>`
+        ? `cron · next <span class="qreset num" data-e="${role.next_fire}">${nf}</span>`
         : (role.trigger==="event"&&role.enabled&&role.configured)
         ? `event · armed`
         : esc(role.trigger);
@@ -523,6 +527,11 @@ function renderRepos(repos){
       <div class="cfg">${esc(cfg.model||"—")} · gate ${esc(cfg.merge_gate||"—")}${(r.lifecycle||{}).pid?" · pid "+r.lifecycle.pid:""}</div>
       ${roles}</div>`;
   }).join("");
+  // #164: identical markup -> skip the innerHTML rebuild entirely. The whole
+  // left pane was re-laid-out on EVERY poll, flashing the countdown
+  // placeholder; now it only rebuilds on a real change (countdown text ticks
+  // via the qreset ticker between rebuilds, minute-granularity rebuilds).
+  if(html!==_reposHtml){_reposHtml=html;$("repos").innerHTML=html;}
 }
 
 /* ---- QUOTA ---- */
