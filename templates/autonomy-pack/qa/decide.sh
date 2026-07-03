@@ -108,6 +108,18 @@ qa_role_field() {
         line=$0; sub(/#.*/, "", line)                    # strip a trailing comment
         sub("^[[:space:]]+" key ":[[:space:]]*", "", line)
         gsub(/[[:space:]]+$/, "", line)                  # strip trailing space
+        # Strip ONE matching pair of surrounding quotes, mirroring the engine
+        # config_parser (raw[0]==raw[-1] and a quote) so a doctor-valid quoted
+        # scalar (`gate: "auto-merge-on-pass"`) extracts as the bare enum the
+        # downstream whitelist expects -- not the quoted string (which would be
+        # refused -> silent wait-for-human). An unmatched/unterminated quote is
+        # left verbatim (first != last), so a garbled value never becomes a
+        # bare enum by accident (fail-safe). sprintf("%c",39) is a literal
+        # single quote without embedding one in this single-quoted awk program.
+        fq = substr(line, 1, 1)
+        if (length(line) >= 2 && substr(line, length(line), 1) == fq && \
+            (fq == "\"" || fq == sprintf("%c", 39)))
+          line = substr(line, 2, length(line) - 2)
         val=line                                         # last match wins
       }
     }

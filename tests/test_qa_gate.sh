@@ -90,6 +90,27 @@ check "nested (non-direct) gate key -> empty (refuse, no fail-open)" "" "$(qa_ro
 printf '%s\n' 'roles:' '  qa:' '    scope:' '      gate: auto-merge-on-pass' '    gate: wait-for-human' >"$cfg"
 check "nested gate ignored, direct roles.qa.gate wins" "wait-for-human" "$(qa_role_field "$cfg" gate)"
 
+# Quoted scalars (#129): the engine config_parser strips a matching pair of
+# surrounding quotes, and lib/roles.py validates the *unquoted* enum -- so a
+# doctor-valid `gate: "auto-merge-on-pass"` must extract as the bare enum, not
+# with quotes (which the downstream whitelist would reject -> silent
+# wait-for-human). Mirror config_parser: strip one matching '..'/".." pair.
+printf '%s\n' 'roles:' '  qa:' '    gate: "auto-merge-on-pass"' >"$cfg"
+check "double-quoted gate value -> bare enum (parity with config_parser)" "auto-merge-on-pass" "$(qa_role_field "$cfg" gate)"
+printf '%s\n' 'roles:' '  qa:' "    gate: 'auto-merge-on-pass'" >"$cfg"
+check "single-quoted gate value -> bare enum" "auto-merge-on-pass" "$(qa_role_field "$cfg" gate)"
+printf '%s\n' 'roles:' '  qa:' '    completes_merge: "true"' >"$cfg"
+check "quoted completes_merge -> bare true" "true" "$(qa_role_field "$cfg" completes_merge)"
+printf '%s\n' 'roles:' '  qa:' '    gate: "auto-merge-on-pass"   # opt in' >"$cfg"
+check "quoted value + trailing comment -> bare enum" "auto-merge-on-pass" "$(qa_role_field "$cfg" gate)"
+# Only a MATCHED pair is stripped (config_parser: first==last==quote). A
+# mismatched / unterminated quote is left verbatim -> the whitelist refuses
+# (fail-safe: a garbled value never becomes a bare enum by accident).
+printf '%s\n' 'roles:' '  qa:' '    gate: "auto-merge-on-pass' >"$cfg"
+check "unterminated quote left verbatim (no accidental enum -> refuse)" '"auto-merge-on-pass' "$(qa_role_field "$cfg" gate)"
+printf '%s\n' 'roles:' '  qa:' '    gate: ""' >"$cfg"
+check "empty quoted value -> empty (refuse)" "" "$(qa_role_field "$cfg" gate)"
+
 # Malformed duplicate-key configs must match the engine config_parser's
 # LAST-WINS semantics -- an earlier `auto-merge-on-pass` can never outlive the
 # effective (last) value and fail the merge gate open.
