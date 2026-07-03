@@ -9,14 +9,14 @@ half-done branches, no unpushed WIP).
 
 ## Each iteration
 
-1. **Triage the board.** `gh issue list --state open --limit 100`. Pick the highest-value
-   *actionable* ticket: prefer correctness bugs > operator-visible gaps > tech-debt; skip anything
-   blocked, needing a human decision, or already in flight (open PR). Decide the order yourself —
-   do not ask. The current small-ticket cluster is `#63` (dispatch-time prompt-path guard),
-   `#55`/`#56`/`#59` (accounts/credentials JSON-index hardening). The next major increment is
-   **increment 4 — scheduler + event bus** (see `.superpowers/next-session-prompt.md`); it wants a
-   `superpowers:brainstorming` pass first and touches design decisions — if you reach it and it
-   needs an operator direction call, file the recommendation and move on rather than guessing.
+1. **Triage the board.** `gh issue list --state open --limit 100`. Actionable = labelled
+   `loop-ready` (this repo's `ready` equivalent), or an unlabelled `bug`/`regression` with a
+   clear reproduction. **Order per the board contract (settled-decision 23): `p1` > `p2` > `p3`
+   > unlabelled, oldest first within a tier.** Skip anything labelled `needs-design`/`needs-spec`,
+   anything blocked on another issue, and anything already in flight (open PR). The PM role
+   maintains labels and priorities — trust them; if an issue's labels look wrong, leave a comment
+   for the PM rather than re-deciding the order yourself. If a ticket needs an operator direction
+   call, file the recommendation in a comment and move on rather than guessing.
 
 2. **Execute the full workflow from `CLAUDE.md`** for that ticket. The working order is binding:
    read the issue → `docs/settled-decisions.md` + `docs/review-prevention-log.md` (state which
