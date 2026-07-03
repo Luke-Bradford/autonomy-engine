@@ -49,6 +49,12 @@ VALID_TRIGGERS = ("loop", "cron", "event")
 # The v1 event vocabulary the supervisor's event bus (W2) can poll/emit. An
 # event role's `on:` tokens must be a subset -- a role listening only for unknown
 # events could never wake, so it is fail-closed at validation (not use-time).
+# INVARIANT for anyone extending this: the supervisor's per-(role,event) seen-set
+# (bin/supervisor.sh resolve_event_wakes) assumes every token is MONOTONIC or
+# TERMINAL (PR/issue numbers grow, merges are final) so a token that scrolls off
+# the poll page never re-enters it. A NON-monotonic event kind (e.g. a label that
+# can be added then removed) would re-deliver under that model -- it needs a
+# cumulative/high-water cursor, not this seen-set, so do not just add it here.
 VALID_EVENTS = ("issue.created", "pr.opened", "pr.synchronize", "merge.done",
                 "session.done")
 VALID_PHASES = ("plan", "implement", "test")
