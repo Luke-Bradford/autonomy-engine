@@ -744,6 +744,21 @@ def latest_session(logdir):
     return os.path.join(logdir, sorted(names)[-1])
 
 
+def _session_role(logpath):
+    """The dispatched role for a session log, read from the `session-<ts>.role`
+    sidecar the supervisor writes at dispatch (#148). '' when the marker is
+    absent/unreadable -- older logs predate it and the loop is fail-safe, so the
+    card just falls back to its default badge rather than guessing from prose."""
+    if not logpath:
+        return ""
+    marker = logpath[:-4] + ".role" if logpath.endswith(".log") else logpath + ".role"
+    try:
+        with open(marker) as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
 def recent_quota_windows(logdir, limit=60):
     """Account rate-limit windows merged across recent session logs, scanned
     NEWEST-FIRST with an early stop. Per window type keep the CURRENT window
@@ -822,6 +837,11 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
     logdir = os.path.join(repo_path, "var", "autonomy-logs")
     latest = latest_session(logdir)
     session = parse_session_log_cached(latest) if latest else None
+    if session is not None:
+        # Attribute the live session to its role (#148). Copy first -- the parsed
+        # dict is shared from an mtime cache; mutating it would poison the cache.
+        session = dict(session)
+        session["role"] = _session_role(latest)
     activity = activity_state(session, now)
     config = _read_config(repo_path)
     lifecycle = lifecycle_status(repo_path, pid_is_alive=pid_is_alive)

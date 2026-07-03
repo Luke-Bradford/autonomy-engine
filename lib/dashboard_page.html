@@ -366,7 +366,7 @@ function renderFocus(repos){
     return `<div class="fcard ${st}" data-path="${encodeURIComponent(r.path)}">
       <div class="fc-top">
         <span class="fc-name">${esc(dispName(r.name))}</span>
-        <span class="fc-role">coder</span>${isWorktree(r.name)?`<span class="fc-role" title="git worktree of the target repo">worktree</span>`:""}
+        <span class="fc-role" title="role of the live (or most recent) session">${esc(cs.role||"coder")}</span>${isWorktree(r.name)?`<span class="fc-role" title="git worktree of the target repo">worktree</span>`:""}
         ${token(st,true)}
         <span class="fc-model">${esc(cs.model||(r.config&&r.config.model)||"")}</span>
       </div>

@@ -231,6 +231,8 @@ grab() { grep "^$1=" "$STUB_CAPTURE" | head -1 | cut -d= -f2-; }
 unset ANTHROPIC_API_KEY
 run_session coder
 check "account role: session rc 0" "0" "$?"
+# #148: the role sidecar is written next to the session log for the dashboard.
+check "role marker written for the live session (#148)" "coder" "$(cat "$LOGDIR"/session-*.role 2>/dev/null | head -1)"
 check "account role: account key exported (beats #51-C credential)" "sk-acct-77" "$(grab key)"
 check "account role: default loop prompt" "$AUTONOMY_TARGET_REPO/.autonomy/loop_prompt.md" "$(grab prompt)"
 check "account role: plain hard_rules (no scope)" "$AUTONOMY_TARGET_REPO/.autonomy/hard_rules.md" "$(grab rules)"

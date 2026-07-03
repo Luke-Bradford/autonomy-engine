@@ -776,3 +776,56 @@ class TestRecentQuotaWindows(unittest.TestCase):
         finally:
             ds.parse_quota_windows = orig
         self.assertEqual(w["five_hour"]["resets_at"], 2000)
+
+
+class TestSessionRole(unittest.TestCase):
+    """The dashboard attributes the live session to its dispatched role from the
+    `session-<ts>.role` sidecar the supervisor writes (#148), never by parsing
+    the voice log."""
+
+    def test_role_read_from_marker(self):
+        d = tempfile.mkdtemp()
+        try:
+            log = os.path.join(d, "session-20260701T120000.log")
+            open(log, "w").close()
+            with open(os.path.join(d, "session-20260701T120000.role"), "w") as fh:
+                fh.write("qa\n")
+            self.assertEqual(ds._session_role(log), "qa")
+        finally:
+            shutil.rmtree(d)
+
+    def test_role_empty_when_no_marker(self):
+        d = tempfile.mkdtemp()
+        try:
+            log = os.path.join(d, "session-20260701T120000.log")
+            open(log, "w").close()
+            self.assertEqual(ds._session_role(log), "")
+        finally:
+            shutil.rmtree(d)
+
+    def test_build_repo_state_carries_current_session_role(self):
+        repo = tempfile.mkdtemp()
+        try:
+            logdir = os.path.join(repo, "var", "autonomy-logs")
+            os.makedirs(logdir)
+            log = os.path.join(logdir, "session-20260701T120000.log")
+            with open(log, "w") as fh:
+                fh.write('{"type":"system","subtype":"init"}\n')
+            with open(os.path.join(logdir, "session-20260701T120000.role"), "w") as fh:
+                fh.write("researcher\n")
+            state = ds.build_repo_state(repo, git_in_flight=lambda _p: {})
+            self.assertEqual(state["current_session"]["role"], "researcher")
+        finally:
+            shutil.rmtree(repo)
+
+    def test_build_repo_state_role_empty_without_marker(self):
+        repo = tempfile.mkdtemp()
+        try:
+            logdir = os.path.join(repo, "var", "autonomy-logs")
+            os.makedirs(logdir)
+            with open(os.path.join(logdir, "session-20260701T120000.log"), "w") as fh:
+                fh.write('{"type":"system","subtype":"init"}\n')
+            state = ds.build_repo_state(repo, git_in_flight=lambda _p: {})
+            self.assertEqual(state["current_session"]["role"], "")
+        finally:
+            shutil.rmtree(repo)
