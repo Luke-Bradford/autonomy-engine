@@ -64,11 +64,11 @@ doctor_knob_notes() {
   local repo="$1" notes _kn
   notes="$(python3 "$DOCTOR_HOME/lib/roles.py" knob-notes "$repo" 2>/dev/null)" || return 0
   [ -n "$notes" ] || return 0
+  # Quoted here-string: expands $notes once, then inserts the content literally
+  # (no second round of $/backtick/word expansion on the message text).
   while IFS= read -r _kn; do
     [ -n "$_kn" ] && echo "INFO $_kn"
-  done <<EOF
-$notes
-EOF
+  done <<<"$notes"
 }
 
 doctor_full_report() {
