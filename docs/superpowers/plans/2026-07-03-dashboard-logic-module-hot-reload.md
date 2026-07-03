@@ -113,15 +113,14 @@ injected spec list + signature dict + namespace; production
    is published (both globals still old).
 
 ## Checkpoint-1 pass 2 resolutions (atomic-publish findings)
-- **Exception-identity race** (narrowed): the 6 write helpers snapshot
-  `_a = accts` / `_c = creds` at entry and except on `_a.RegistryError`, shrinking
-  the mismatch window from the whole function body to the single statement
-  between the snapshot and `_accts()`/`_creds()`. Fresh construction from the
-  snapshot would close even that, but it bypasses the singleton seam that the #59
-  corrupt-registry refusal tests inject through, so the singleton accessors are
-  kept and the 1-statement residual is accepted (same benign-by-context class as
-  findings 2 & 3: microsecond window, once per merge, worst case one retryable
-  500 on an admin-write POST — never corruption).
+- **Exception-identity race** (CLOSED — PR #193 review WARNING): the 6 write
+  helpers resolve the `except` class via `_registry_error(inst) =
+  type(inst).__init__.__globals__["RegistryError"]` — the RegistryError from the
+  exact module the instance's class was defined in, derived from the instance
+  itself, not a re-read of the `accts`/`creds` global. Instance and except class
+  now share ONE source of truth, so a concurrent rebind can't desync them (no
+  window). Keeps the singleton accessors, so the #59 corrupt-registry injection
+  seam still works.
 - **No single atomic epoch swap / sys.modules build-candidate exposure**
   (checkpoint-2 findings 2 & 3): consciously accepted as benign-by-context and
   non-reachable on the dashboard's real call paths, NOT eliminated (a full

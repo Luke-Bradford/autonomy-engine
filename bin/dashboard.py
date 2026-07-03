@@ -108,6 +108,12 @@ _HOT_SPECS = _build_hot_specs()
 _hot_sigs = {name: _file_sig(path) for name, path, _ in _HOT_SPECS}
 _reload_lock = threading.Lock()
 _hot_fail_sig = [None]   # last failing signature-set we logged (warn dedup)
+# Throttle the stat-check so it runs at most once per interval regardless of
+# request volume -- a busy dashboard otherwise serialises every concurrent
+# request through _reload_lock just to re-stat 8 unchanged files. A change is
+# still picked up within the interval (which matches the SSE/sample cadence).
+_RELOAD_CHECK_EVERY = 2.0
+_last_reload_check = [0.0]
 
 
 def _reload_tracked(specs, sigs, ns, on_reload, on_error=None):
@@ -185,9 +191,15 @@ def _on_reload_error(exc):
 
 def _reload_logic_modules():
     """Publish any pending logic-module change; a cheap stat-only no-op when
-    nothing changed. Serialised by _reload_lock so two threads never double-
-    build. Called at the top of each request and once per SSE/sampler tick."""
-    with _reload_lock:
+    nothing changed. Throttled to _RELOAD_CHECK_EVERY (so a burst of concurrent
+    requests doesn't serialise on _reload_lock re-statting unchanged files) and
+    serialised by _reload_lock so two threads never double-build. Called at the
+    top of each request and once per SSE/sampler tick."""
+    now = time.time()
+    if now - _last_reload_check[0] < _RELOAD_CHECK_EVERY:
+        return False               # checked recently -- skip the stat + lock
+    _last_reload_check[0] = now    # benign if two threads race this: at worst
+    with _reload_lock:             # one extra stat-check, never a double build
         published = _reload_tracked(_HOT_SPECS, _hot_sigs, globals(),
                                     _reset_logic_singletons, _on_reload_error)
     if published:
@@ -621,18 +633,25 @@ def _accts():
     return _accts_singleton[0]
 
 
-# The write helpers snapshot the reloadable module (`_a = accts` / `_c = creds`)
-# at entry and except on `_a.RegistryError`, so a hot-reload rebinding the global
-# mid-call cannot slip a new-module RegistryError past an old-module `except`
-# (which would crash the POST instead of returning {ok:false}). This narrows the
-# mismatch window from the whole function body to the single statement between
-# the snapshot and `_accts()`/`_creds()`; the singleton accessors are kept (not
-# fresh construction) so the #59 corrupt-registry injection seam still works.
+def _registry_error(inst):
+    """The RegistryError class from the exact module `inst`'s class was defined
+    in, derived from the instance itself rather than a re-read of the `accts`/
+    `creds` global. This CLOSES (not just narrows) the hot-reload race: a concurrent
+    _reload_logic_modules() rebinding the module global mid-call can't desync the
+    `except` from what `inst` actually raises, because both now come from one
+    source of truth -- the instance's own class namespace. (__init__ is defined
+    in the same module as the registry class, so its __globals__ is that module's
+    dict.) Keeps the singleton accessors, so the #59 corrupt-registry injection
+    seam (which sets the singleton to an instance backed by a corrupt index) still
+    works."""
+    return type(inst).__init__.__globals__["RegistryError"]
+
+
 def execute_acct_set(name, kind, credential):
-    _a = accts
+    inst = _accts()
     try:
-        _accts().set(name, kind, credential=credential or None)
-    except (_a.RegistryError, ValueError) as exc:
+        inst.set(name, kind, credential=credential or None)
+    except (_registry_error(inst), ValueError) as exc:
         return {"ok": False, "error": str(exc)}
     except OSError as exc:
         return {"ok": False, "error": str(exc)}
@@ -640,10 +659,10 @@ def execute_acct_set(name, kind, credential):
 
 
 def execute_acct_delete(name):
-    _a = accts
+    inst = _accts()
     try:
-        _accts().delete(name)
-    except (_a.RegistryError, OSError) as exc:
+        inst.delete(name)
+    except (_registry_error(inst), OSError) as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "message": "account '%s' removed" % name}
 
@@ -685,10 +704,10 @@ def config_read_model():
 
 
 def execute_cred_set(label, provider, secret):
-    _c = creds   # snapshot for a consistent except identity (see execute_acct_set)
+    inst = _creds()
     try:
-        _creds().set(label, secret, provider=provider)
-    except (_c.RegistryError, ValueError) as exc:
+        inst.set(label, secret, provider=provider)
+    except (_registry_error(inst), ValueError) as exc:
         return {"ok": False, "error": str(exc)}
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or "").strip() or "keychain write failed"
@@ -699,19 +718,19 @@ def execute_cred_set(label, provider, secret):
 
 
 def execute_cred_delete(label):
-    _c = creds
+    inst = _creds()
     try:
-        _creds().delete(label)
-    except (_c.RegistryError, OSError) as exc:
+        inst.delete(label)
+    except (_registry_error(inst), OSError) as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "message": "credential '%s' removed" % label}
 
 
 def execute_cred_assign(role, label):
-    _c = creds
+    inst = _creds()
     try:
-        _creds().assign(role, label)
-    except (_c.RegistryError, ValueError, KeyError) as exc:
+        inst.assign(role, label)
+    except (_registry_error(inst), ValueError, KeyError) as exc:
         return {"ok": False, "error": str(exc)}
     except OSError as exc:
         return {"ok": False, "error": str(exc)}
@@ -719,10 +738,10 @@ def execute_cred_assign(role, label):
 
 
 def execute_cred_unassign(role):
-    _c = creds
+    inst = _creds()
     try:
-        _creds().unassign(role)
-    except (_c.RegistryError, OSError) as exc:
+        inst.unassign(role)
+    except (_registry_error(inst), OSError) as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "message": "%s unassigned" % role}
 

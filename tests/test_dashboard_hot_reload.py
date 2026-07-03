@@ -155,7 +155,27 @@ class HotReloadWiring(unittest.TestCase):
 
     def test_reload_logic_modules_is_a_noop_when_unchanged(self):
         # nothing edited on disk -> no reload, returns False, never raises.
+        dashboard._last_reload_check[0] = 0.0   # defeat the throttle for this call
         self.assertFalse(dashboard._reload_logic_modules())
+
+    def test_registry_error_is_instance_derived_not_global(self):
+        # _registry_error must resolve the RegistryError from the instance's own
+        # class module, so a concurrent hot-reload rebinding the `accts`/`creds`
+        # global mid-call cannot desync the except from what the instance raises.
+        import accounts as accts_mod
+        inst = accts_mod.Accounts()
+        self.assertIs(dashboard._registry_error(inst), accts_mod.RegistryError)
+        # simulate a reload rebinding dashboard.accts to a decoy with a DIFFERENT
+        # RegistryError -- the instance-derived lookup must ignore the global.
+        orig = dashboard.accts
+        try:
+            class _Decoy:
+                RegistryError = type("RegistryError", (RuntimeError,), {})
+            dashboard.accts = _Decoy
+            self.assertIs(dashboard._registry_error(inst), accts_mod.RegistryError)
+            self.assertIsNot(dashboard._registry_error(inst), _Decoy.RegistryError)
+        finally:
+            dashboard.accts = orig
 
 
 if __name__ == "__main__":
