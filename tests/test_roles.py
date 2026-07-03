@@ -537,8 +537,8 @@ class TestRoleSettings(unittest.TestCase):
     def test_unset_fields_are_empty(self):
         s = roles.role_settings(parse(self.CFG), "qa")
         self.assertEqual(
-            s, {"account": "", "model": "", "effort": "", "prompt": "",
-                "scope": "", "instances": 1})
+            s, {"account": "", "agent": "", "model": "", "effort": "",
+                "prompt": "", "scope": "", "instances": 1})
 
     def test_default_coder_with_no_roles_block(self):
         s = roles.role_settings({}, "coder")
@@ -597,6 +597,28 @@ class TestMainAccountWiring(unittest.TestCase):
         self.assertEqual(roles.main(["roles.py", self.repo]), 3)
 
 
+class TestRoleAgent(unittest.TestCase):
+    """Per-role agent: picks which adapter (claude/codex/...) runs the role,
+    letting one repo run coder on a cloud agent and prep on a local one (#78)."""
+    def test_role_settings_includes_agent(self):
+        cfg = parse("roles:\n"
+                    "  prep:\n"
+                    "    enabled: true\n"
+                    "    agent: codex\n"
+                    "    account: local-llm\n")
+        s = roles.role_settings(cfg, "prep")
+        self.assertEqual(s["agent"], "codex")
+
+    def test_agent_empty_when_unset(self):
+        cfg = parse("roles:\n  coder:\n    enabled: true\n")
+        self.assertEqual(roles.role_settings(cfg, "coder")["agent"], "")
+
+    def test_non_string_agent_rejected(self):
+        cfg = parse("roles:\n  coder:\n    enabled: true\n    agent: []\n")
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("agent" in e for e in errs), errs)
+
+
 class TestDispatchCli(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -652,8 +674,20 @@ class TestDispatchCli(unittest.TestCase):
         self.assertIn("PROMPT=", lines)
         self.assertIn(
             "SCOPE=Scope: work ONLY within this scope: labels: ready.", lines)
+        self.assertIn("AGENT=", lines)
         self.assertIn("INSTANCES=1", lines)
-        self.assertEqual(len(lines), 6)
+        self.assertEqual(len(lines), 7)
+
+    def test_dispatch_role_emits_agent_line(self):
+        self._write("roles:\n"
+                    "  coder:\n"
+                    "    enabled: true\n"
+                    "    agent: codex\n")
+        rc, out = self._run("dispatch", self.tmp, "coder")
+        self.assertEqual(rc, 0)
+        lines = out.splitlines()
+        self.assertIn("AGENT=codex", lines)
+        self.assertEqual(len(lines), 7)  # was 6, now +AGENT
 
     def test_undispatchable_role_exits_1(self):
         self._write("agent:\n  type: claude\n")
