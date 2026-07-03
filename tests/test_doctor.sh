@@ -28,6 +28,12 @@ engine:
   requires_claude_md: true
 YAML
 check "requires_claude_md true, no CLAUDE.md -> hard fail" "1" "$(doctor_preflight_check "$tmp" >/dev/null 2>&1; echo $?)"
+# The FAIL message must point at the scaffold, not dead-end (#152). Capture the
+# message first (the function returns 1, which pipefail would otherwise let
+# poison a `... | grep` pipeline), then grep the captured text.
+claude_fail_msg="$(doctor_preflight_check "$tmp" 2>&1 >/dev/null || true)"
+check "requires_claude_md FAIL points at the --claude-md scaffold" "0" \
+  "$(printf '%s' "$claude_fail_msg" | grep -q -- '--claude-md' && echo 0 || echo 1)"
 
 mkdir -p "$tmp/.claude"
 touch "$tmp/.claude/CLAUDE.md"

@@ -27,7 +27,7 @@ doctor_preflight_check() {
   # Claude Code loads CLAUDE.md from the repo root AND .claude/; accept either.
   if [ "$requires_md" = "true" ] \
      && [ ! -f "$repo/CLAUDE.md" ] && [ ! -f "$repo/.claude/CLAUDE.md" ]; then
-    echo "doctor: FAIL -- engine.requires_claude_md is true but neither $repo/CLAUDE.md nor $repo/.claude/CLAUDE.md exists" >&2
+    echo "doctor: FAIL -- engine.requires_claude_md is true but neither $repo/CLAUDE.md nor $repo/.claude/CLAUDE.md exists -- scaffold a starter with 'bin/onboard.sh $repo --claude-md' (or run /init in Claude Code)" >&2
     return 1
   fi
   return 0
@@ -76,7 +76,7 @@ doctor_full_report() {
     local requires_md
     requires_md="$(python3 "$DOCTOR_HOME/lib/config_parser.py" "$repo/.autonomy/config.yaml" engine.requires_claude_md 2>/dev/null || echo false)"
     if [ "$requires_md" != "true" ]; then
-      echo "WARN no CLAUDE.md found (repo root or .claude/) -- run /init in Claude Code, or use the claude-md-management:claude-md-improver skill"
+      echo "WARN no CLAUDE.md found (repo root or .claude/) -- scaffold a starter with 'bin/onboard.sh $repo --claude-md', run /init in Claude Code, or use the claude-md-management:claude-md-improver skill"
     fi
   fi
 
