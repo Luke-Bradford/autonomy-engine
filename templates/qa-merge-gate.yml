@@ -13,8 +13,10 @@
 # refuses on any gh failure rather than assuming green). Ready PRs get a QA
 # pass (prompt: .autonomy/roles/qa.md, scope: diff); the verdict lands as the
 # `qa-gate` commit status on that exact SHA. The merge is completed ONLY when
-# the pack's merge_gate.strategy is not `manual` AND roles.qa.completes_merge
-# is exactly `true` -- `manual` keeps the verdict advisory. Never silent.
+# roles.qa.gate is `auto-merge-on-pass` (the human/auto switch; any other value
+# -- including a missing knob -- means `wait-for-human`, verdict advisory) AND
+# the pack's merge_gate.strategy is not `manual` AND roles.qa.completes_merge is
+# exactly `true`. Every other state keeps the verdict advisory. Never silent.
 #
 # Security model (PR content is UNTRUSTED input into an LLM):
 #   - the workspace stays on the BASE branch -- the prompt (qa.md), decide.sh
@@ -76,7 +78,15 @@ jobs:
           # another block must not be picked up); a mis-scrape yields empty ->
           # treated as manual -> no merge (fail-safe)
           strategy="$(awk '/^merge_gate:/{f=1; next} /^[^[:space:]#]/{f=0} f && /^[[:space:]]+strategy:/{sub(/#.*/,""); print $2; exit}' .autonomy/config.yaml)"
-          completes="$(awk '/^  qa:/{f=1} f && /completes_merge:/{print $2; exit} /^  [a-z_]+:/ && !/^  qa:/{f=0}' .autonomy/config.yaml)"
+          # roles.qa scalars via the comment-safe, roles-scoped extractor in
+          # decide.sh (a commented `#gate:` line or a `qa:` block under another
+          # top-level namespace can never be mis-read as the live knob -- either
+          # would fail OPEN on the merge gate). Empty on any miss -> refuse.
+          completes="$(qa_role_field .autonomy/config.yaml completes_merge)"
+          # roles.qa.gate knob (#123): only `auto-merge-on-pass` permits an
+          # auto-merge; everything else (wait-for-human / absent / garbled) is
+          # treated as wait-for-human by qa_gate_allows_merge.
+          gate="$(qa_role_field .autonomy/config.yaml gate)"
 
           # same-repo PRs only: fork heads never reach the privileged path.
           # Listing failure is explicit (a bare $(...) in the for-list would
@@ -156,9 +166,9 @@ jobs:
                 continue
               fi
             fi
-            if qa_should_merge "$strategy" "$completes"; then
+            if qa_gate_allows_merge "$gate" "$strategy" "$completes"; then
               qa_complete_merge "$pr" || echo "qa_gate: merge refused by GitHub (protection not yet satisfied) -- reconciler will retry"
             else
-              echo "qa_gate: verdict recorded; merge_gate.strategy='$strategy' completes_merge='$completes' -- not completing the merge"
+              echo "qa_gate: verdict recorded; roles.qa.gate='$gate' merge_gate.strategy='$strategy' completes_merge='$completes' -- not completing the merge (set roles.qa.gate: auto-merge-on-pass to enable auto-merge)"
             fi
           done

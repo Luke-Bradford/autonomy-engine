@@ -79,6 +79,59 @@ qa_should_merge() {
   esac
 }
 
+qa_role_field() {
+  # Extract a scalar under roles.qa from the pack config (#123). Comment-safe
+  # and scoped to the TOP-LEVEL `roles:` block then the `qa:` sub-block: a
+  # commented-out `#gate:` line, a trailing `# ...` comment, or a `qa:` block
+  # nested under some OTHER top-level namespace can NEVER be mis-read as the
+  # live knob -- any of those would fail OPEN on the merge gate. No match (or an
+  # unreadable file) yields empty, which every consumer treats as refuse.
+  local config="$1" key="$2"
+  # LAST-WINS, mirroring the engine's config_parser on duplicate keys (a later
+  # `roles:` block REPLACES an earlier one; a later duplicate key overrides): we
+  # clear on each `roles:` entry and keep the last direct-child match, printing
+  # at END -- so a malformed duplicate-key config can never make an earlier
+  # `auto-merge-on-pass` outlive the effective (last) value.
+  awk -v key="$key" '
+    /^[^[:space:]#]/ { inroles=0; inqa=0 }               # any top-level key resets scope
+    $0 ~ /^roles:[[:space:]]*(#.*)?$/ { inroles=1; val=""; next } # a new roles: replaces prior
+    inroles && /^  [A-Za-z_][A-Za-z0-9_]*:/ {            # a 2-space role key
+      inqa = ($0 ~ /^  qa:[[:space:]]*(#.*)?$/) ? 1 : 0  # only the qa: sub-block
+      qaind = -1; next                                   # (re)arm direct-child indent
+    }
+    inqa {
+      if ($0 ~ /^[[:space:]]*(#.*)?$/) next              # ignore blank / comment-only
+      s = $0; sub(/[^ ].*$/, "", s); ind = length(s)     # count leading SPACES (YAML)
+      if (qaind < 0) qaind = ind                         # first direct child fixes the level
+      if (ind != qaind) next                             # deeper key is NOT roles.qa.<key>
+      if ($0 ~ ("^[[:space:]]+" key ":")) {              # the direct, uncommented scalar
+        line=$0; sub(/#.*/, "", line)                    # strip a trailing comment
+        sub("^[[:space:]]+" key ":[[:space:]]*", "", line)
+        gsub(/[[:space:]]+$/, "", line)                  # strip trailing space
+        val=line                                         # last match wins
+      }
+    }
+    END { if (length(val)) print val }
+  ' "$config" 2>/dev/null
+  return 0                                               # fail-safe: never propagate awk's rc
+}
+
+qa_gate_allows_merge() {
+  # The role's `gate` knob (#123) layered ON TOP of qa_should_merge. WHITELIST:
+  # `auto-merge-on-pass` is the ONLY value that can auto-merge -- every other
+  # state (`wait-for-human`, an absent knob, an unknown value, or a garbled
+  # config scrape that comes through empty) is treated as `wait-for-human` and
+  # refuses. Fail-safe, never fail-open: a mis-scrape can never silently enable
+  # an auto-merge, and the knob never bypasses the merge authority -- an
+  # `auto-merge-on-pass` still has to satisfy qa_should_merge (a merge-permitting
+  # strategy + completes_merge=true).
+  local gate="$1" strategy="$2" completes_merge="$3"
+  case "$gate" in
+    auto-merge-on-pass) qa_should_merge "$strategy" "$completes_merge" ;;
+    *) return 1 ;;
+  esac
+}
+
 qa_extract_verdict() {
   local transcript="$1" verdict
   verdict="$(grep -E '^QA-VERDICT:' "$transcript" 2>/dev/null | tail -1 \
