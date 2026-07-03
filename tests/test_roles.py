@@ -1234,6 +1234,48 @@ class TestLaneHelpers(unittest.TestCase):
             "  coder-fe: { enabled: true, lane: fe }\n")
         self.assertEqual(roles.lane_overlaps(cfg), [])
 
+    def test_overlap_includes_cron_role(self):
+        # A cron role pinned to a non-default lane whose scope.labels intersect
+        # a loop role in another lane must warn: once per-lane execution lands
+        # both can act on the same label (deferred PR-#162 NITPICK, #147 Part2).
+        cfg = parse(
+            "lanes:\n  main: {}\n  fe: {}\n"
+            "roles:\n"
+            "  coder:\n    enabled: true\n    scope: { labels: [ready] }\n"
+            "  pm:\n    enabled: true\n    lane: fe\n"
+            "    trigger: { type: cron, schedule: '0 9 * * *' }\n"
+            "    scope: { labels: [ready] }\n")
+        w = roles.lane_overlaps(cfg)
+        self.assertEqual(len(w), 1)
+        self.assertIn("ready", w[0])
+        self.assertIn("fe", w[0])
+        self.assertIn("main", w[0])
+
+    def test_overlap_includes_event_role(self):
+        # Same for an event role in a different lane (deferred PR-#162 NITPICK).
+        cfg = parse(
+            "lanes:\n  main: {}\n  fe: {}\n"
+            "roles:\n"
+            "  coder:\n    enabled: true\n    scope: { labels: [ready] }\n"
+            "  qa:\n    enabled: true\n    lane: fe\n"
+            "    trigger: { type: event, on: [pr.opened] }\n"
+            "    scope: { labels: [ready] }\n")
+        w = roles.lane_overlaps(cfg)
+        self.assertEqual(len(w), 1)
+        self.assertIn("ready", w[0])
+
+    def test_overlap_cron_same_lane_no_warn(self):
+        # A cron role and a loop role in the SAME lane never warn -- the lane
+        # is one worktree, serialized under one supervisor lock (no double-work).
+        cfg = parse(
+            "lanes:\n  main: {}\n"
+            "roles:\n"
+            "  coder:\n    enabled: true\n    scope: { labels: [ready] }\n"
+            "  pm:\n    enabled: true\n"
+            "    trigger: { type: cron, schedule: '0 9 * * *' }\n"
+            "    scope: { labels: [ready] }\n")
+        self.assertEqual(roles.lane_overlaps(cfg), [])
+
 
 class TestLaneDispatchFilter(unittest.TestCase):
     def test_no_lanes_dispatch_identical_to_today(self):

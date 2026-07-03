@@ -150,15 +150,21 @@ def _scope_labels(cfg):
 
 
 def lane_overlaps(config):
-    """Deterministic WARN strings for loop roles in DIFFERENT lanes whose
+    """Deterministic WARN strings for executable roles in DIFFERENT lanes whose
     scope.labels intersect -- the label partition is the claim, so overlap
     'may double-work' (a doctor warning, never a runtime lease; settled-decision
     22). One line per (lane-pair, shared-label). Roles with no scope.labels
-    never overlap (no partition claim -- the operator's stated risk)."""
-    info = []  # (lane, labelset) per enabled loop role that sets labels
+    never overlap (no partition claim -- the operator's stated risk). Covers
+    every trigger type (loop/cron/event): once per-lane execution lands, a cron
+    or event role pinned to a lane acts on that lane's board just as a loop role
+    does, so its scope must be partitioned too (deferred PR-#162 NITPICK)."""
+    info = []  # (lane, labelset) per enabled executable role that sets labels
     roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
     for lane in lane_names(config):
-        for name in dispatch_roles(config, lane):
+        names = list(dispatch_roles(config, lane))
+        names += [n for (n, _s) in cron_roles(config, lane)]
+        names += [n for (n, _e) in event_roles(config, lane)]
+        for name in names:
             labels = _scope_labels(roles_blk.get(name)
                                    if isinstance(roles_blk, dict) else None)
             if labels:
