@@ -507,7 +507,9 @@ function toast(ok,msg){
 }
 
 /* ---- REPOS + ROLES ---- */
-function subBadge(s){return `<span class="subs b-${esc(s)}">${esc({engine:"engine",managed_agents:"cloud",routine:"routine",actions:"actions"}[s]||s)}</span>`;}
+// #164: a not-configured placeholder has substrate null -> render no badge (it
+// runs nowhere; claiming a substrate is the legacy lie this fixes).
+function subBadge(s){if(!s)return "";return `<span class="subs b-${esc(s)}">${esc({engine:"engine",managed_agents:"cloud",routine:"routine",actions:"actions"}[s]||s)}</span>`;}
 let _reposHtml="";
 function renderRepos(repos){
   $("h-repos").textContent=repos.length;
