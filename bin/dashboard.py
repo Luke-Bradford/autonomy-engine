@@ -24,12 +24,14 @@ import concurrent.futures
 import importlib.util
 import json
 import os
+import re
 import secrets
 import stat
 import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ENGINE_HOME = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -258,6 +260,63 @@ _GH_MAX_STALE = 75.0
 _GH_JOIN_TIMEOUT = 25.0    # cold/too-stale callers wait at most this for a refresh
 _gh_cache = {}
 _gh_lock = threading.Lock()
+
+# --- config-page board picker (#170) -----------------------------------------
+# Enumerate an owner's Projects v2 boards so the config page's project_title
+# becomes a picker instead of raw free-text (a plausible-but-wrong title
+# silently skips board sync for the repo's whole life -- what this ticket fixes).
+# Best-effort periphery (settled-decision 6): any validation / gh / JSON failure
+# yields an empty list + an error string, NEVER an invented board (fail-safe,
+# never fail-open -- the field stays free-text so the operator can still type).
+# The owner is user-supplied (query param) and flows into gh argv, so it is
+# re-validated against the GitHub login grammar first (prevention log 6) --
+# rejecting a leading '-' also blocks argv-option injection. Cached briefly per
+# owner so a page reload doesn't re-hit slow gh.
+_OWNER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
+_BOARD_TTL = 30.0
+_board_cache = {}      # owner -> (wall_ts, result_dict)
+_board_lock = threading.Lock()
+
+
+def board_list(owner):
+    """{"boards": [title, ...], "error": str|None} for the owner's OPEN
+    Projects v2 boards. Best-effort: never raises, never invents a board."""
+    owner = (owner or "").strip()
+    if not _OWNER_RE.match(owner):
+        return {"boards": [], "error": "invalid owner"}
+    now = time.time()
+    with _board_lock:
+        hit = _board_cache.get(owner)
+        if hit and now - hit[0] < _BOARD_TTL:
+            return hit[1]
+    raw = _run(["gh", "project", "list", "--owner", owner,
+                "--limit", "200", "--format", "json"], timeout=15)
+    if raw is None:
+        result = {"boards": [], "error": "gh project list unavailable"}
+    else:
+        try:
+            projects = json.loads(raw).get("projects", [])
+        except (ValueError, AttributeError):
+            projects = None
+        if not isinstance(projects, list):
+            result = {"boards": [], "error": "unreadable board list"}
+        else:
+            titles, seen = [], set()
+            for p in projects:
+                if not isinstance(p, dict) or p.get("closed"):
+                    continue
+                t = p.get("title")
+                # only suggest titles the config-save contract (dcx._valid_text,
+                # resolved at call time so hot-reload #166 is picked up) will
+                # accept -- never offer a value the save path would reject.
+                if not isinstance(t, str) or t in seen or not dcx._valid_text(t):
+                    continue
+                seen.add(t)
+                titles.append(t)
+            result = {"boards": titles, "error": None}
+    with _board_lock:
+        _board_cache[owner] = (now, result)
+    return result
 # repo -> the in-flight refresh Thread (single-flight guard). At most one refresh
 # per repo runs, and it is the SOLE writer of _gh_cache; cold/too-stale callers
 # join it rather than starting a second compute. Popped in the worker's finally,
@@ -1112,6 +1171,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(collect(self.repos)).encode("utf-8"))
         elif path == "/api/config":
             self._send(200, json.dumps(config_read_model()).encode("utf-8"))
+        elif path == "/api/boards":
+            # config-page board picker (#170): best-effort, always 200 (the
+            # payload carries any error), owner re-validated inside board_list.
+            qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]
+                                       if "?" in self.path else "")
+            owner = (qs.get("owner") or [""])[0]
+            self._send(200, json.dumps(board_list(owner)).encode("utf-8"))
         elif path == "/api/stream":
             self._stream()
         else:

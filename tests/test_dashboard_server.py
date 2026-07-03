@@ -118,5 +118,104 @@ class TestConciergeAccountSelection(unittest.TestCase):
             dashboard._pick_concierge_account([], "ollama")
 
 
+class TestBoardList(unittest.TestCase):
+    """The best-effort Projects v2 board enumerator behind the config page's
+    board picker (#170). Mirrors the engine's best-effort periphery posture
+    (settled-decision 6): any gh failure yields an empty list + error, NEVER an
+    invented board (fail-safe, never fail-open). The user-supplied owner is
+    re-validated before it reaches gh argv (prevention log 6)."""
+
+    def setUp(self):
+        # deterministic: never let a prior case's cache leak into this one.
+        dashboard._board_cache.clear()
+        self._orig_run = dashboard._run
+
+    def tearDown(self):
+        dashboard._run = self._orig_run
+        dashboard._board_cache.clear()
+
+    _GOOD = json.dumps({"projects": [
+        {"title": "Autonomy Progress", "closed": False},
+        {"title": "eBull engineering board", "closed": False},
+        {"title": "Archived thing", "closed": True},
+    ]})
+
+    def test_titles_extracted_open_only(self):
+        calls = []
+        dashboard._run = lambda args, **kw: calls.append(args) or self._GOOD
+        out = dashboard.board_list("Luke-Bradford")
+        self.assertEqual(out["boards"],
+                         ["Autonomy Progress", "eBull engineering board"])
+        self.assertIsNone(out["error"])
+        # the owner reached gh argv exactly (not shell), with a bounded limit.
+        self.assertIn("--owner", calls[0])
+        self.assertIn("Luke-Bradford", calls[0])
+        self.assertIn("--limit", calls[0])
+
+    def test_gh_failure_is_empty_never_invents(self):
+        dashboard._run = lambda args, **kw: None   # gh failed/timed out
+        out = dashboard.board_list("Luke-Bradford")
+        self.assertEqual(out["boards"], [])
+        self.assertTrue(out["error"])   # a reason is surfaced, not faked-empty
+
+    def test_invalid_owner_never_calls_gh(self):
+        called = {"n": 0}
+        dashboard._run = lambda *a, **kw: called.__setitem__("n", called["n"] + 1)
+        for bad in ("", "  ", "-rf", "a b", "user_name", "a.b", "x;y"):
+            out = dashboard.board_list(bad)
+            self.assertEqual(out["boards"], [], bad)
+            self.assertTrue(out["error"], bad)
+        self.assertEqual(called["n"], 0, "gh must not run for an invalid owner")
+
+    def test_malformed_json_degrades(self):
+        dashboard._run = lambda args, **kw: "{not json"
+        out = dashboard.board_list("Luke-Bradford")
+        self.assertEqual(out["boards"], [])
+        self.assertTrue(out["error"])
+
+    def test_titles_filtered_to_save_contract(self):
+        # a board whose title the config-save contract (dcx._valid_text) would
+        # reject must NOT be suggested -- else the picker offers an unsavable
+        # value. Here: a title holding BOTH quote kinds.
+        bad_title = "he said \"hi\" it's fine"
+        payload = json.dumps({"projects": [
+            {"title": "OK Board", "closed": False},
+            {"title": bad_title, "closed": False},
+        ]})
+        dashboard._run = lambda args, **kw: payload
+        out = dashboard.board_list("Luke-Bradford")
+        self.assertEqual(out["boards"], ["OK Board"])
+
+    def test_cache_avoids_repeat_gh(self):
+        calls = []
+        dashboard._run = lambda args, **kw: calls.append(1) or self._GOOD
+        dashboard.board_list("Luke-Bradford")
+        dashboard.board_list("Luke-Bradford")
+        self.assertEqual(len(calls), 1, "second call within TTL must be cached")
+
+
+class TestBoardsRoute(unittest.TestCase):
+    def test_api_boards_routes_to_board_list(self):
+        # GET /api/boards?owner=<o> returns 200 with the board_list payload,
+        # bytes-encoded like the other JSON routes (Content-Length needs bytes).
+        h = dashboard.Handler.__new__(dashboard.Handler)
+        h.path = "/api/boards?owner=Luke-Bradford"
+        captured = {}
+        h._send = lambda code, body, ctype="application/json": captured.update(
+            code=code, body=body)
+        dashboard._board_cache.clear()
+        orig_run = dashboard._run
+        dashboard._run = lambda args, **kw: TestBoardList._GOOD
+        try:
+            h.do_GET()
+        finally:
+            dashboard._run = orig_run
+            dashboard._board_cache.clear()
+        self.assertEqual(captured["code"], 200)
+        self.assertIsInstance(captured["body"], (bytes, bytearray))
+        payload = json.loads(captured["body"].decode("utf-8"))
+        self.assertEqual(payload["boards"][0], "Autonomy Progress")
+
+
 if __name__ == "__main__":
     unittest.main()
