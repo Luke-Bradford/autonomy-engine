@@ -126,6 +126,14 @@ class TestMapWindow(unittest.TestCase):
     def test_garbage_reset_none(self):
         self.assertIsNone(cu._map_window({"utilization": 5.0, "resets_at": "nope"}))
 
+    def test_z_suffix_reset_parses(self):
+        # a trailing 'Z' (common JSON form) must parse on every Python version,
+        # not silently null the window
+        w = cu._map_window({"utilization": 10.0, "resets_at": "2026-07-03T19:10:00Z"})
+        self.assertIsNotNone(w)
+        self.assertEqual(cu._iso_to_epoch("2026-07-03T19:10:00Z"),
+                         cu._iso_to_epoch("2026-07-03T19:10:00+00:00"))
+
 
 class TestLiveQuota(unittest.TestCase):
     def setUp(self):

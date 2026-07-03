@@ -144,6 +144,11 @@ def _iso_to_epoch(s):
     None. A naive timestamp is assumed UTC."""
     if not isinstance(s, str):
         return None
+    # datetime.fromisoformat rejects a trailing 'Z' before Python 3.11; JSON
+    # APIs commonly emit it, so normalize to +00:00 -- otherwise every window
+    # would silently map to None and permanently defeat the live source.
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
     try:
         dt = datetime.fromisoformat(s)
     except ValueError:
