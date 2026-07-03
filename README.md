@@ -102,6 +102,28 @@ it. Nothing in the engine hardcodes any one repo's actual values.
 `{repo-slug}` = `engine.label` if set, else the target repo's directory basename, lowercased,
 non-alphanumeric runs collapsed to `-`.
 
+### Role triggers (scheduling)
+
+An optional `roles:` block runs a multi-role roster (see the agent-org spec for the full schema).
+Each role has a `trigger.type`:
+
+- **`loop`** — the supervisor round-robins enabled loop roles, one session per iteration (the coder
+  default).
+- **`cron`** — the supervisor fires the role on its `schedule` (standard 5-field cron, UTC /
+  GitHub-Actions semantics), reusing the same headless dispatch path under the held per-repo lock.
+  Firing granularity is **loop-cadence** — a role becomes due on the first loop iteration at or
+  after its scheduled time, not to-the-second. First start (or after downtime) initialises each
+  role's marker **without** a catch-up fire. The supervisor is the sole writer of the per-role
+  last-fire marker (`<repo>/var/cron/<role>.last_fire`); adapters never persist scheduling state.
+- **`event`** — reserved for the event bus (a later increment); not yet dispatched.
+
+```yaml
+roles:
+  researcher:
+    enabled: true
+    trigger: { type: cron, schedule: "0 3 * * *" }   # daily 03:00 UTC
+```
+
 ## Merge-gate strategies
 
 CI-green is checked first (any failing/pending check refuses; a `gh` API failure itself refuses,

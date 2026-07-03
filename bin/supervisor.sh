@@ -322,6 +322,87 @@ resolve_dispatch_roles() {
   python3 "$ENGINE_HOME/lib/roles.py" dispatch "$AUTONOMY_TARGET_REPO" 2>>"$SUPLOG"
 }
 
+# --- cron scheduler (W1, issue #85) -----------------------------------------
+# Enumerate the target repo's cron roles as NAME<TAB>SCHEDULE lines (roles.py
+# cron contract; schedules never contain a tab). Behind a function so tests can
+# override the enumeration seam without a real roles.py call. rc!=0 is the
+# caller's cue to skip cron this tick -- best-effort, never crashes the loop.
+_cron_enumerate() {
+  python3 "$ENGINE_HOME/lib/roles.py" cron "$AUTONOMY_TARGET_REPO" 2>>"$SUPLOG"
+}
+
+# Fire every cron role whose next scheduled fire (strictly after its last-fire
+# marker) is at or before now, then advance its marker. The supervisor is the
+# SOLE writer of each per-role marker ($VARDIR/cron/<role>.last_fire) -- the
+# reset-epoch-split invariant generalised (adapters never persist scheduling
+# state). Additive and best-effort: any failure skips cron for this tick and
+# leaves loop dispatch byte-for-byte unchanged. First-sight (no marker)
+# initialises the marker to now WITHOUT firing (no thundering-herd on first
+# start / after downtime). All cron math stays in roles.py (cron-due); this is
+# a thin string-tester. NEVER returns non-zero -- a cron hiccup is not a loop
+# error. The role name reaches a filesystem path, so it is charset-gated at the
+# point of use exactly like ROLE_AGENT (prevention-log #6).
+# Write epoch $2 to marker file $1; rc!=0 on failure. The subshell contains the
+# redirection so a failed '>' (e.g. permission denied) does NOT leak its error
+# to the supervisor's stderr -- an inline `2>/dev/null` runs too late to catch a
+# redirection-open failure, which bash reports before the command runs.
+_cron_write_marker() {
+  ( printf '%s' "$2" >"$1" ) 2>/dev/null
+}
+
+resolve_cron_due() {
+  local enum now name schedule marker last due
+  enum="$(_cron_enumerate)" || return 0
+  [ -n "$enum" ] || return 0
+  now="$(date +%s)"
+  mkdir -p "$VARDIR/cron" 2>/dev/null || {
+    log "WARN cron: cannot create $VARDIR/cron -- skipping cron this tick"; return 0; }
+  # NAME<TAB>SCHEDULE per line. A pipeline subshell is fine: no state needs to
+  # escape the loop (markers are files; each tick re-enumerates from scratch).
+  printf '%s\n' "$enum" | while IFS="$(printf '\t')" read -r name schedule; do
+    [ -n "$name" ] || continue
+    case "$name" in
+      *[!A-Za-z0-9_-]*)
+        log "WARN cron: role name '$name' has invalid path chars -- ignored"
+        continue ;;
+    esac
+    marker="$VARDIR/cron/$name.last_fire"
+    if [ ! -f "$marker" ]; then
+      _cron_write_marker "$marker" "$now" \
+        || log "WARN cron: cannot initialise marker for '$name'"
+      continue
+    fi
+    last="$(cat "$marker" 2>/dev/null)"
+    case "$last" in
+      ''|*[!0-9]*)
+        # Marker exists but is unreadable/corrupt. Treat it like first-sight --
+        # reinitialise to now WITHOUT firing -- rather than substituting epoch 0
+        # (which would read as "never fired" and force a spurious immediate
+        # fire). Under-fire, never over-fire, and self-healing next tick.
+        log "WARN cron: marker for '$name' unreadable/corrupt -- reinitialising without firing"
+        _cron_write_marker "$marker" "$now" \
+          || log "WARN cron: cannot reinitialise marker for '$name'"
+        continue ;;
+    esac
+    # roles.py owns the cron_next_fire math; unparseable/error -> not-due.
+    due="$(python3 "$ENGINE_HOME/lib/roles.py" cron-due "$schedule" "$last" "$now" 2>>"$SUPLOG")" || continue
+    [ "$due" = "due" ] || continue
+    # Advance the marker to now BEFORE firing, and only fire if that write
+    # succeeded. This ordering is fail-safe in the under-fire direction: a
+    # marker-write failure skips the fire (never re-fires every tick), and a
+    # crash mid-session leaves the marker already advanced (waits for the next
+    # window) rather than re-firing. The session's own rc does not gate the
+    # marker -- a refused/failed session still waits for its next slot.
+    if _cron_write_marker "$marker" "$now"; then
+      log "cron: role '$name' due (schedule '$schedule') -- firing"
+      run_session "$name" || log "cron: role '$name' session rc=$? (see supervisor.log)"
+    else
+      log "WARN cron: cannot advance marker for '$name' -- skipping fire this tick (avoids re-fire)"
+    fi
+  done
+  return 0
+}
+
 # Round-robin selector: print the (idx mod n)th name, 0-indexed, from the
 # names in $2..; rc 1 when the list is empty. Role names are [A-Za-z0-9._-]
 # by the dispatch contract, so callers may word-split the enumeration safely.
@@ -586,6 +667,14 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
       log "PAUSE sentinel gone -- resuming"
       paused_logged=0
     fi
+
+    # Cron scheduler (W1, #85): fire due cron roles under the held lock, one at
+    # a time. Run BEFORE the board-empty / no-loop-role gates below so a cron
+    # PM/researcher still fires when the coder board is empty or no loop role is
+    # enabled (a cron-only repo must schedule) -- the spec's whole point. Purely
+    # additive and best-effort: with no cron roles this is a no-op and the loop
+    # behaves byte-for-byte as before.
+    resolve_cron_due
 
     open_count="$(cd "$AUTONOMY_TARGET_REPO" && gh issue list --state open --json number -q 'length' 2>/dev/null || echo -1)"
     if [ "$open_count" = "0" ]; then

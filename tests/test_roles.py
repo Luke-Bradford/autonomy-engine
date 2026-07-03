@@ -69,6 +69,17 @@ class TestValidateRoles(unittest.TestCase):
         errs = roles.validate_roles(cfg)
         self.assertTrue(any("schedule" in e for e in errs))
 
+    def test_cron_unparseable_schedule_rejected(self):
+        # a non-blank but invalid schedule would pass the blank check yet never
+        # fire (cron-due always not-due) -- validation must catch it.
+        cfg = parse('roles:\n  pm:\n    trigger: { type: cron, schedule: "not a cron" }\n')
+        errs = roles.validate_roles(cfg)
+        self.assertTrue(any("valid" in e and "cron" in e for e in errs))
+
+    def test_cron_valid_schedule_accepted(self):
+        cfg = parse('roles:\n  pm:\n    trigger: { type: cron, schedule: "*/5 * * * *" }\n')
+        self.assertEqual(roles.validate_roles(cfg), [])
+
     def test_event_requires_on_list(self):
         cfg = parse("roles:\n  qa:\n    trigger: { type: event }\n")
         errs = roles.validate_roles(cfg)
@@ -738,6 +749,187 @@ class TestDispatchCli(unittest.TestCase):
         self._write("agent:\n  type: claude\n")
         rc, _ = self._run(self.tmp)
         self.assertEqual(rc, 3)  # valid, no roles: block
+
+
+class TestCronRoles(unittest.TestCase):
+    """cron_roles enumerates enabled cron-trigger roles with a non-blank
+    schedule, in dispatch_roles' stable order (standard roster first, then
+    custom roles in config order). The supervisor's scheduler consumes it."""
+
+    def test_no_roles_block_has_no_cron_roles(self):
+        self.assertEqual(roles.cron_roles({}), [])
+        self.assertEqual(roles.cron_roles({"agent": {"type": "claude"}}), [])
+
+    def test_enabled_cron_role_appears_with_schedule(self):
+        cfg = parse(
+            "roles:\n"
+            "  pm:\n"
+            "    enabled: true\n"
+            '    trigger: { type: cron, schedule: "0 3 * * *" }\n')
+        self.assertEqual(roles.cron_roles(cfg), [("pm", "0 3 * * *")])
+
+    def test_custom_cron_role_appears(self):
+        cfg = parse(
+            "roles:\n"
+            "  nightly:\n"
+            "    enabled: true\n"
+            '    trigger: { type: cron, schedule: "*/5 * * * *" }\n')
+        self.assertEqual(roles.cron_roles(cfg), [("nightly", "*/5 * * * *")])
+
+    def test_standard_before_custom_order(self):
+        cfg = parse(
+            "roles:\n"
+            "  nightly:\n"
+            "    enabled: true\n"
+            '    trigger: { type: cron, schedule: "*/5 * * * *" }\n'
+            "  pm:\n"
+            "    enabled: true\n"
+            '    trigger: { type: cron, schedule: "0 3 * * *" }\n')
+        self.assertEqual(roles.cron_roles(cfg),
+                         [("pm", "0 3 * * *"), ("nightly", "*/5 * * * *")])
+
+    def test_blank_or_missing_schedule_skipped(self):
+        # a cron role with no schedule cannot fire -- skipped (validate_roles
+        # would reject it, but dispatch must degrade, not crash).
+        cfg = parse("roles:\n  pm:\n    enabled: true\n    trigger: { type: cron }\n")
+        self.assertEqual(roles.cron_roles(cfg), [])
+
+    def test_loop_and_disabled_cron_excluded(self):
+        cfg = parse(
+            "roles:\n"
+            "  coder:\n"
+            "    enabled: true\n"
+            "    trigger: { type: loop }\n"
+            "  pm:\n"
+            "    enabled: false\n"
+            '    trigger: { type: cron, schedule: "0 3 * * *" }\n')
+        self.assertEqual(roles.cron_roles(cfg), [])
+
+    def test_unsafe_role_names_filtered(self):
+        self.assertEqual(
+            roles.cron_roles({"roles": {"bad name": {
+                "enabled": True,
+                "trigger": {"type": "cron", "schedule": "0 3 * * *"}}}}),
+            [])
+
+    def test_non_dict_roles_block(self):
+        self.assertEqual(roles.cron_roles({"roles": "garbage"}), [])
+
+
+class TestDispatchableRoles(unittest.TestCase):
+    """A cron role must be dispatchable: the scheduler fires it via the same
+    run_session -> roles.py dispatch <role> path, so role_settings has to
+    resolve it (else every cron fire is refused -- the W1 feature is inert)."""
+
+    def test_cron_role_is_dispatchable(self):
+        cfg = parse(
+            "roles:\n"
+            "  pm:\n"
+            "    enabled: true\n"
+            '    trigger: { type: cron, schedule: "0 3 * * *" }\n')
+        self.assertIn("pm", roles.dispatchable_roles(cfg))
+
+    def test_role_settings_resolves_a_cron_role(self):
+        cfg = parse(
+            "roles:\n"
+            "  pm:\n"
+            "    enabled: true\n"
+            "    account: pm-acct\n"
+            '    trigger: { type: cron, schedule: "0 3 * * *" }\n')
+        s = roles.role_settings(cfg, "pm")
+        self.assertEqual(s["account"], "pm-acct")
+
+    def test_loop_roles_still_first_and_cron_appended(self):
+        cfg = parse(
+            "roles:\n"
+            "  coder:\n"
+            "    enabled: true\n"
+            "  pm:\n"
+            "    enabled: true\n"
+            '    trigger: { type: cron, schedule: "0 3 * * *" }\n')
+        self.assertEqual(roles.dispatchable_roles(cfg), ["coder", "pm"])
+
+    def test_disabled_cron_role_not_dispatchable(self):
+        cfg = parse("roles:\n  pm:\n    enabled: false\n"
+                    '    trigger: { type: cron, schedule: "0 3 * * *" }\n')
+        self.assertNotIn("pm", roles.dispatchable_roles(cfg))
+        with self.assertRaises(KeyError):
+            roles.role_settings(cfg, "pm")
+
+
+class TestCronCli(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        os.makedirs(os.path.join(self.tmp, ".autonomy"))
+
+    def _write(self, text):
+        with open(os.path.join(self.tmp, ".autonomy", "config.yaml"),
+                  "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    def _run(self, *argv):
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = roles.main(["roles.py"] + list(argv))
+        return rc, buf.getvalue()
+
+    def test_cron_verb_emits_name_tab_schedule(self):
+        self._write(
+            "roles:\n"
+            "  pm:\n"
+            "    enabled: true\n"
+            '    trigger: { type: cron, schedule: "0 3 * * *" }\n')
+        rc, out = self._run("cron", self.tmp)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "pm\t0 3 * * *\n")
+
+    def test_cron_verb_empty_when_none(self):
+        self._write("agent:\n  type: claude\n")
+        rc, out = self._run("cron", self.tmp)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "")
+
+    def test_cron_verb_unreadable_config_exits_2(self):
+        rc, _ = self._run("cron", os.path.join(self.tmp, "nope"))
+        self.assertEqual(rc, 2)
+
+    def test_cron_due_fires_when_slot_elapsed(self):
+        # last fire at epoch 0; a */5 slot (300s) has elapsed by now=600.
+        rc, out = self._run("cron-due", "*/5 * * * *", "0", "600")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "due\n")
+
+    def test_cron_due_not_due_before_slot(self):
+        # last fire at 0; next */5 slot is 300; now=100 is before it.
+        rc, out = self._run("cron-due", "*/5 * * * *", "0", "100")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "not-due\n")
+
+    def test_cron_due_unparseable_schedule_is_not_due(self):
+        rc, out = self._run("cron-due", "not a cron", "0", "999999")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "not-due\n")
+
+    def test_cron_due_non_int_epoch_is_not_due(self):
+        rc, out = self._run("cron-due", "*/5 * * * *", "x", "y")
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "not-due\n")
+
+    def test_dispatch_resolves_cron_role_settings(self):
+        # the scheduler fires a cron role through `dispatch <repo> <role>`;
+        # it must resolve (rc 0), not refuse -- else the fire is inert.
+        self._write(
+            "roles:\n"
+            "  pm:\n"
+            "    enabled: true\n"
+            "    account: pm-acct\n"
+            '    trigger: { type: cron, schedule: "0 3 * * *" }\n')
+        rc, out = self._run("dispatch", self.tmp, "pm")
+        self.assertEqual(rc, 0)
+        self.assertIn("ACCOUNT=pm-acct", out.splitlines())
 
 
 if __name__ == "__main__":
