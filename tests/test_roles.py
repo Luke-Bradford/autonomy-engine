@@ -52,6 +52,22 @@ class TestValidateRoles(unittest.TestCase):
             "    prompt: .autonomy/roles/qa.md\n")
         self.assertEqual(roles.validate_roles(cfg), [])
 
+    def test_researcher_config_example_validates(self):
+        # The exact `researcher:` example documented in
+        # templates/autonomy-pack/config.yaml (W5b, #127) -- read-only cron
+        # future-thinker. If this drifts from the shipped comment it is a real
+        # config-vs-validator bug, not a test to paper over.
+        cfg = parse(
+            "roles:\n"
+            "  researcher:\n"
+            "    enabled: false\n"
+            "    account: codex-sub\n"
+            '    trigger: { type: cron, schedule: "0 3 * * *" }\n'
+            "    output: handoff-to-pm\n"
+            "    web_search: false\n"
+            "    prompt: .autonomy/roles/researcher.md\n")
+        self.assertEqual(roles.validate_roles(cfg), [])
+
     def test_unknown_substrate(self):
         cfg = parse("roles:\n  qa:\n    substrate: kubernetes\n    trigger: { type: event, on: [pr.opened] }\n")
         errs = roles.validate_roles(cfg)
@@ -135,6 +151,22 @@ class TestPromptFiles(unittest.TestCase):
         os.makedirs(os.path.join(repo, ".autonomy", "roles"))
         open(os.path.join(repo, ".autonomy", "roles", "pm.md"), "w").close()
         cfg = parse("roles:\n  pm:\n    prompt: .autonomy/roles/pm.md\n")
+        self.assertEqual(roles.check_prompt_files(cfg, repo), [])
+
+    def test_researcher_rail_path_drift_guard(self):
+        # W5b (#127): the documented researcher `prompt:` and the shipped rail
+        # path must not silently drift. Existence is the invariant that catches
+        # the original bug (config pointed at a rail onboard never scaffolded).
+        repo = tempfile.mkdtemp()
+        cfg = parse("roles:\n  researcher:\n"
+                    "    prompt: .autonomy/roles/researcher.md\n")
+        # absent -> reported (this is today's state before the rail ships)
+        errs = roles.check_prompt_files(cfg, repo)
+        self.assertTrue(any("researcher.md" in e for e in errs))
+        # present at that exact path -> clean
+        os.makedirs(os.path.join(repo, ".autonomy", "roles"))
+        open(os.path.join(repo, ".autonomy", "roles", "researcher.md"),
+             "w").close()
         self.assertEqual(roles.check_prompt_files(cfg, repo), [])
 
     def test_absolute_or_escaping_prompt_path_rejected(self):
