@@ -61,7 +61,6 @@ check "role model parsed" "claude-opus-4-8" "$ROLE_MODEL"
 check "role effort parsed" "high" "$ROLE_EFFORT"
 check "role prompt parsed" ".autonomy/roles/qa.md" "$ROLE_PROMPT"
 check "role scope parsed" "Scope: work ONLY within this scope: labels: ready." "$ROLE_SCOPE"
-check "role instances default" "1" "$ROLE_INSTANCES"
 
 resolve_role_dispatch coder
 check "unset role fields come back empty" "" "$ROLE_MODEL"

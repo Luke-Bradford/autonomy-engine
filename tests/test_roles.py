@@ -34,7 +34,6 @@ class TestValidateRoles(unittest.TestCase):
             "    enabled: true\n"
             "    substrate: engine\n"
             "    trigger: { type: loop }\n"
-            "    instances: 1\n"
             "  pm:\n"
             "    enabled: false\n"
             "    substrate: managed_agents\n"
@@ -122,11 +121,11 @@ class TestValidateRoles(unittest.TestCase):
         cfg = parse("roles:\n  coder:\n    trigger: { type: loop }\n")
         self.assertEqual(roles.validate_roles(cfg), [])
 
-    def test_instances_must_be_positive_int(self):
-        for bad in ("0", "-1", "two"):
-            cfg = parse("roles:\n  coder:\n    instances: %s\n" % bad)
-            errs = roles.validate_roles(cfg)
-            self.assertTrue(any("instances" in e for e in errs), bad)
+    def test_instances_knob_is_retired_and_ignored(self):
+        # D1 (#147): instances: is retired in favour of lanes -- a leftover in an
+        # old config is inert (no longer validated), not an error.
+        cfg = parse("roles:\n  coder:\n    enabled: true\n    instances: 2\n")
+        self.assertEqual(roles.validate_roles(cfg), [])
 
     def test_role_must_be_a_mapping(self):
         cfg = parse("roles:\n  coder: banana\n")
@@ -653,7 +652,6 @@ class TestRoleSettings(unittest.TestCase):
         "    effort: high\n"
         "    scope: { labels: [ready] }\n"
         "    prompt: .autonomy/roles/coder.md\n"
-        "    instances: 2\n"
         "  qa:\n"
         "    enabled: true\n"
         "    trigger: { type: loop }\n")
@@ -666,18 +664,18 @@ class TestRoleSettings(unittest.TestCase):
         self.assertEqual(s["prompt"], ".autonomy/roles/coder.md")
         self.assertEqual(s["scope"],
                          "Scope: work ONLY within this scope: labels: ready.")
-        self.assertEqual(s["instances"], 2)
+        self.assertNotIn("instances", s)   # retired (D1, #147)
 
     def test_unset_fields_are_empty(self):
         s = roles.role_settings(parse(self.CFG), "qa")
         self.assertEqual(
             s, {"account": "", "agent": "", "model": "", "effort": "",
-                "prompt": "", "scope": "", "instances": 1})
+                "prompt": "", "scope": ""})
 
     def test_default_coder_with_no_roles_block(self):
         s = roles.role_settings({}, "coder")
         self.assertEqual(s["account"], "")
-        self.assertEqual(s["instances"], 1)
+        self.assertNotIn("instances", s)
 
     def test_undispatchable_role_raises(self):
         with self.assertRaises(KeyError):
@@ -809,8 +807,7 @@ class TestDispatchCli(unittest.TestCase):
         self.assertIn(
             "SCOPE=Scope: work ONLY within this scope: labels: ready.", lines)
         self.assertIn("AGENT=", lines)
-        self.assertIn("INSTANCES=1", lines)
-        self.assertEqual(len(lines), 7)
+        self.assertEqual(len(lines), 6)
 
     def test_dispatch_role_emits_agent_line(self):
         self._write("roles:\n"
@@ -821,7 +818,8 @@ class TestDispatchCli(unittest.TestCase):
         self.assertEqual(rc, 0)
         lines = out.splitlines()
         self.assertIn("AGENT=codex", lines)
-        self.assertEqual(len(lines), 7)  # was 6, now +AGENT
+        # ACCOUNT/AGENT/MODEL/EFFORT/PROMPT/SCOPE (INSTANCES retired, D1 #147)
+        self.assertEqual(len(lines), 6)
 
     def test_undispatchable_role_exits_1(self):
         self._write("agent:\n  type: claude\n")
