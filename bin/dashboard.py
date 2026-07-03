@@ -39,6 +39,7 @@ import config_parser  # noqa: E402
 import credentials as creds  # noqa: E402
 import accounts as accts  # noqa: E402
 import concierge  # noqa: E402
+import claude_usage as cu  # noqa: E402
 
 PAGE = os.path.join(ENGINE_HOME, "lib", "dashboard_page.html")
 CONFIG_PAGE = os.path.join(ENGINE_HOME, "lib", "config_page.html")
@@ -154,6 +155,14 @@ def _session_output_tokens(repo):
 
 def _sample_once(repos):
     now = int(time.time())
+    # Live Claude 5h/7d utilization (#160): the sampler thread OWNS this I/O
+    # (self-throttled to a 60s TTL inside claude_usage); the request path only
+    # reads the cache. Best-effort -- a failure never crashes the sampler and
+    # leaves the dashboard on the log-scan fallback.
+    try:
+        cu.refresh_live_quota(now=now)
+    except Exception:
+        pass
     for repo in repos:
         try:
             tok = _session_output_tokens(repo)
@@ -427,6 +436,13 @@ def _account_usage():
         usage["codex"] = ds.codex_usage(now=now)   # #49: same TTL cache
     except Exception:
         usage["codex"] = {"available": False}
+    # Live Claude 5h/7d utilization (#160) -- a pure cache read (the sampler
+    # does the I/O), so /api/state never blocks. None => the page falls back to
+    # the log-scan windows and shows a 'logs (stale)' source badge.
+    try:
+        usage["claude"] = cu.live_quota()
+    except Exception:
+        usage["claude"] = None
     with _acct_lock:
         _acct_cache[0], _acct_cache[1] = now, usage
     return usage

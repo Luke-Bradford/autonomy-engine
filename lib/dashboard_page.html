@@ -106,6 +106,9 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px
 .q-prov{font-family:var(--mono);font-size:9.5px;letter-spacing:1.2px;text-transform:uppercase;color:var(--dim);
   padding:8px 10px 0;display:flex;align-items:center;gap:6px}
 .q-prov::after{content:"";flex:1;height:1px;background:var(--hair)}
+.qsrc{font-size:8.5px;padding:1px 5px;border-radius:3px;letter-spacing:.6px}
+.qsrc.live{color:var(--ok,#3fb950);border:1px solid var(--ok,#3fb950)}
+.qsrc.stale{color:var(--dim);border:1px solid var(--hair)}
 /* ---- config page (#47) ---- */
 .cfgadd{display:flex;gap:8px;padding:10px;border-bottom:1px solid var(--hair)}
 .cfgrepo{padding:8px 10px;border-bottom:1px solid var(--hair)}
@@ -504,9 +507,19 @@ function renderQuota(repos,account){
     if(q.five_hour&&(!five||q.five_hour.utilization>five.utilization)) five=q.five_hour;
     if(q.seven_day&&(!seven||q.seven_day.utilization>seven.utilization)) seven=q.seven_day;});
   const a=account||{};
-  $("quota").innerHTML=`<div class="q-prov">claude · subscription</div>`
+  // #160: prefer the live api/oauth/usage windows when present; otherwise fall
+  // back to the log-scan max above and flag the panel as stale.
+  const cl=a.claude, live=!!(cl&&cl.source==='live');
+  if(live){ five=cl.five_hour; seven=cl.seven_day; }
+  const src=live
+    ? `<span class="qsrc live" title="live from Anthropic api/oauth/usage">live</span>`
+    : `<span class="qsrc stale" title="from session-log rate-limit events; refreshed only during sessions">logs · stale</span>`;
+  const cap=live
+    ? "% live from Anthropic api/oauth/usage · counts from ~/.claude (all sessions)"
+    : "counts from ~/.claude (all sessions) · % from session-log rate-limit events (stale)";
+  $("quota").innerHTML=`<div class="q-prov">claude · subscription ${src}</div>`
     + qrow("5-hour window",a.five_hour,five,now)+qrow("weekly window",a.seven_day,seven,now)
-    + `<div class="q"><div class="q-sub" style="margin-top:0"><span>counts from ~/.claude (all sessions); % from Anthropic rate-limit events</span></div></div>`
+    + `<div class="q"><div class="q-sub" style="margin-top:0"><span>${cap}</span></div></div>`
     + codexQuota(a.codex,now);
 }
 /* codex lane (#49): from ~/.codex session rollouts. credits render whenever
