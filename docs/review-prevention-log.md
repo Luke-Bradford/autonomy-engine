@@ -63,7 +63,19 @@ the point of use, with warn-and-ignore (or safe-default) on failure — even
 though an upstream writer also validates. Defense in depth is the convention,
 not paranoia.
 
-## 7. Review replies without terminal states get lost
+## 7. `producer | grep -q` under `set -o pipefail` is a CI-only flake
+
+*Origin: PR #95 (`tests/test_start.sh`, `start_status_report`).*
+`multi_line_producer 2>&1 | grep -q PATTERN` under `set -o pipefail`: when
+`grep -q` matches a **non-last** line it exits immediately, so the producer's
+NEXT write gets SIGPIPE (rc 141). pipefail then makes the whole pipeline
+non-zero *even though grep succeeded*, so a trailing `&& echo 0 || echo 1`
+reports failure. Timing-dependent → green locally, red in CI. Fix: capture the
+producer into a var first, then grep the var
+(`out="$(producer 2>&1)"; printf '%s\n' "$out" | grep -q …`). Same class: any
+`slow_or_multiline | head`/`| grep -q` where the left side keeps writing.
+
+## 8. Review replies without terminal states get lost
 
 *Origin: increments 1-3 process; eBull convention.*
 Every review comment ends `FIXED <sha>` / `DEFERRED #n` / `REBUTTED <reason>`
