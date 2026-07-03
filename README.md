@@ -52,6 +52,47 @@ bin/setup_worktree.sh /path/to/target-repo
 # 4. Load it (see setup_worktree.sh's own printed next-steps for the exact commands)
 ```
 
+## Run model & health
+
+Two tiers of process, deliberately different lifetimes:
+
+- **The loops are background services.** Each registered repo's supervisor runs under
+  **launchd** (the plist `setup_worktree.sh` installs), so it survives closing your
+  terminal and, with `KeepAlive=true`, is **relaunched if it crashes**. Loading one is a
+  deliberate step — `bin/control.sh start <repo>` (or the go-live lines quickstart prints);
+  `./start` itself never runs `launchctl`. This is the tier that does the engineering.
+- **The dashboard is a foreground viewer.** `./start` (with repos registered) runs
+  `bin/dashboard.py` in the **foreground** — a window onto the loops, not a loop itself.
+  Ctrl-C stops it and closing its terminal kills it; **the loops are unaffected** either way
+  (they're separate launchd services). Nothing auto-restarts the dashboard — if it dies, just
+  re-run `./start`. Hard-kill a wedged one with `pkill -f bin/dashboard.py`.
+
+So the everyday model is: **loops run unattended under launchd; you open the dashboard when
+you want to watch, and close it when you're done.**
+
+**Is it healthy?** Two read-only checks, no side effects:
+
+```bash
+./start status        # one-screen OK/WARN report, then exits
+bin/control.sh list   # per-repo loop state: running / paused / stopped
+```
+
+`./start status` reports the dashboard process (is one running?), `gh` auth, how many repos
+are registered, any BYO-LLM local endpoint's reachability (see [BYO-LLM](docs/byo-llm.md)),
+and **loop-worktree cleanliness** — it WARNs when a registered worktree is left dirty while
+its loop is *not* running (a finished loop should leave a clean tree), or when a worktree is
+uninspectable or the registry unreadable (surfaced, never reported healthy — fail-safe). It
+binds no port and runs no `launchctl`; health lives in the text, not the exit code.
+
+> **Note — the dashboard is a foreground process today, not yet a managed service.** Whether
+> to run it under launchd (survives terminal close, restarts on crash) or behind a
+> PID-file `./start stop|restart` is an open operator decision tracked in
+> [#81](https://github.com/Luke-Bradford/autonomy-engine/issues/81); until then, the run
+> model above (foreground viewer + launchd loops) is the intended one.
+
+Starting, pausing, and hard-stopping the loops — one repo or all of them — is the
+[Lifecycle](#lifecycle-start--graceful-stop--hard-stop) section below.
+
 ## The `.autonomy/` pack contract
 
 Every target repo needs a `.autonomy/` directory with exactly these three files:
