@@ -56,6 +56,24 @@ dashboard_pids() {
   pgrep -f "$pat" 2>/dev/null || true
 }
 
+# Run a command under a wall-clock cap so a hung network call never wedges the
+# health report. macOS bash 3.2 has no `timeout(1)`, so background the command
+# and a killer, then wait: whichever the command's own rc (fast path) or a
+# non-zero from the TERM (deadline path). Returns the command's rc, or non-zero
+# if it was killed -- callers treat non-zero as "unhealthy/unknown", never hang.
+_with_timeout() {
+  local secs="$1"; shift
+  local cmd_pid killer_pid rc=0
+  "$@" &
+  cmd_pid=$!
+  ( sleep "$secs"; kill -TERM "$cmd_pid" 2>/dev/null ) >/dev/null 2>&1 &
+  killer_pid=$!
+  wait "$cmd_pid" 2>/dev/null || rc=$?
+  kill -TERM "$killer_pid" 2>/dev/null || true
+  wait "$killer_pid" 2>/dev/null || true
+  return "$rc"
+}
+
 # Count of registered repos, guarded so a missing/unreadable/empty repos file
 # never aborts under set -e (best-effort: prints 0 on any problem).
 start_registered_count() {
@@ -80,10 +98,11 @@ start_status_report() {
   else
     echo "WARN dashboard not running -- './start' launches it; hard-kill: pkill -f bin/dashboard.py"
   fi
-  if gh auth status >/dev/null 2>&1; then
+  # Bounded so a slow/hung `gh` (network) never wedges the health report.
+  if _with_timeout "${AUTONOMY_GH_TIMEOUT:-5}" gh auth status >/dev/null 2>&1; then
     echo "OK   gh auth ok"
   else
-    echo "WARN gh auth not authenticated -- run 'gh auth login' (need repo + project scopes)"
+    echo "WARN gh auth not authenticated (or unreachable) -- run 'gh auth login' (need repo + project scopes)"
   fi
   local n; n="$(start_registered_count)"
   if [ "$n" -gt 0 ]; then

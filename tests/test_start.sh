@@ -76,6 +76,16 @@ out="$(start_status_report 2>&1)"
 check "status: dashboard not running reported" "0" "$(printf '%s\n' "$out" | grep -q 'dashboard not running' && echo 0 || echo 1)"
 check "status: hard-kill hint shown" "0" "$(printf '%s\n' "$out" | grep -q 'pkill -f bin/dashboard.py' && echo 0 || echo 1)"
 
+# _with_timeout caps a hung command so `./start status` can't wedge on a slow
+# network `gh` (macOS bash 3.2 has no timeout(1), so this is our own wrapper)
+_with_timeout 5 true;  check "_with_timeout passes rc of a fast success" "0" "$?"
+_with_timeout 5 false; check "_with_timeout passes rc of a fast failure" "1" "$?"
+t0="$(date +%s)"
+_with_timeout 1 sleep 5; rc=$?
+t1="$(date +%s)"
+check "_with_timeout kills a command past the deadline (non-zero)" "0" "$([ "$rc" -ne 0 ] && echo 0 || echo 1)"
+check "_with_timeout returns promptly (< 4s)" "0" "$([ "$((t1 - t0))" -lt 4 ] && echo 0 || echo 1)"
+
 # gh auth: shadow gh at the seam (the sanctioned mock for an unavoidable
 # network tool) so the branch is deterministic, not PATH/hash-dependent.
 # NB: capture the report into a var THEN grep it -- piping the report straight
