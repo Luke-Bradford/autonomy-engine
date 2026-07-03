@@ -31,18 +31,83 @@ start_mode() {
 start_usage() {
   cat >&2 <<'EOF'
 usage: ./start [target-repo] [--port N] [--no-launch]
+       ./start status
 
 No repos registered yet: prints setup guidance; with a target-repo argument
 it runs the guided quickstart on it (and registers it for the dashboard).
 Repos registered: prints the loop-state summary and runs the control-room
 dashboard. --no-launch prints the dashboard command instead of running it.
-Never runs launchctl.
+`status` prints a read-only health report (dashboard process, gh auth, repo
+registration) and exits -- it never binds a port or runs launchctl.
 EOF
+}
+
+# PIDs of any running control-room dashboard for THIS engine checkout. Anchored
+# to $ENGINE_HOME/bin/dashboard.py so a dashboard from a different checkout (or
+# an unrelated process merely mentioning the path) is not mistaken for ours.
+# `pgrep -f` matches its pattern as a REGEX, so the checkout path is escaped
+# first -- otherwise a '.' in it (e.g. '.autonomy-engine-autonomy') would mean
+# "any char" and could false-match (prevention-log #6: a string crossing into a
+# regex gets neutralized). `|| true`: no match is not an error (never trip the
+# caller's set -e). A seam: tests override this function after sourcing.
+dashboard_pids() {
+  local pat
+  pat="$(printf '%s' "$ENGINE_HOME/bin/dashboard.py" | sed 's/[.^$*+?(){}|\\]/\\&/g')"
+  pgrep -f "$pat" 2>/dev/null || true
+}
+
+# Count of registered repos, guarded so a missing/unreadable/empty repos file
+# never aborts under set -e (best-effort: prints 0 on any problem).
+start_registered_count() {
+  local f n; f="$(start_repos_file)"
+  if [ -f "$f" ]; then
+    n="$(grep -c '[^[:space:]]' "$f" 2>/dev/null || true)"
+  else
+    n=0
+  fi
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s' "$n"
+}
+
+# Read-only live-health report (issue #81). Doctor-style OK/WARN lines; always
+# succeeds (health is in the text, not the exit code) and touches nothing --
+# no port bind, no launchctl, no dashboard launch.
+start_status_report() {
+  echo "== autonomy engine health =="
+  local pids; pids="$(dashboard_pids)"
+  if [ -n "$pids" ]; then
+    echo "OK   dashboard running (pid $(printf '%s' "$pids" | tr '\n' ' ' | sed 's/ *$//'))"
+  else
+    echo "WARN dashboard not running -- './start' launches it; hard-kill: pkill -f bin/dashboard.py"
+  fi
+  if gh auth status >/dev/null 2>&1; then
+    echo "OK   gh auth ok"
+  else
+    echo "WARN gh auth not authenticated -- run 'gh auth login' (need repo + project scopes)"
+  fi
+  local n; n="$(start_registered_count)"
+  if [ "$n" -gt 0 ]; then
+    echo "OK   $n repo(s) registered -- 'bin/control.sh list' for per-loop state"
+  else
+    echo "WARN no repos registered -- './start /path/to/repo' to onboard one"
+  fi
 }
 
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
 
 set -euo pipefail
+
+# `status` subcommand: read-only health report, then exit. Handled before the
+# arg loop so it works in setup mode too (no repos) and never falls through to
+# the launch path. Takes no further args -- reject them rather than ignore.
+if [ "${1:-}" = "status" ]; then
+  shift
+  if [ "$#" -ne 0 ]; then
+    echo "start: 'status' takes no arguments" >&2; start_usage; exit 2
+  fi
+  start_status_report
+  exit 0
+fi
 
 TARGET=""
 PORT=""

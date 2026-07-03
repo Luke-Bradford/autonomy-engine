@@ -54,6 +54,64 @@ printf '%s\n' "$tmp/somerepo" > "$HOME/.config/autonomy/repos"
 check "registered repo -> app" "app" "$(start_mode)"
 rm -f "$HOME/.config/autonomy/repos"
 
+# --- ./start status: read-only live-health report (#81) --------------------------
+check "sourcing defines start_status_report" "0" "$(type start_status_report >/dev/null 2>&1 && echo 0 || echo 1)"
+check "sourcing defines dashboard_pids" "0" "$(type dashboard_pids >/dev/null 2>&1 && echo 0 || echo 1)"
+
+# the REAL dashboard_pids escapes the checkout path so `pgrep -f` treats it
+# literally, not as a regex -- a '.' or '+' in the path must not become a
+# metacharacter (run before the seam is overridden below)
+pgrep() { echo "PAT:$*"; }
+_eh_save="$ENGINE_HOME"; ENGINE_HOME='/x/a.b+c/eng'
+pat_out="$(dashboard_pids)"
+ENGINE_HOME="$_eh_save"; unset -f pgrep
+check "dashboard_pids regex-escapes metachars in the path" "0" "$(printf '%s' "$pat_out" | grep -qF 'a\.b\+c' && echo 0 || echo 1)"
+
+# dashboard process line via the pgrep seam (override the function after sourcing)
+dashboard_pids() { echo 4242; }
+out="$(start_status_report 2>&1)"
+check "status: dashboard running (pid) reported" "0" "$(printf '%s\n' "$out" | grep -q 'dashboard running (pid 4242)' && echo 0 || echo 1)"
+dashboard_pids() { :; }
+out="$(start_status_report 2>&1)"
+check "status: dashboard not running reported" "0" "$(printf '%s\n' "$out" | grep -q 'dashboard not running' && echo 0 || echo 1)"
+check "status: hard-kill hint shown" "0" "$(printf '%s\n' "$out" | grep -q 'pkill -f bin/dashboard.py' && echo 0 || echo 1)"
+
+# gh auth: shadow gh at the seam (the sanctioned mock for an unavoidable
+# network tool) so the branch is deterministic, not PATH/hash-dependent.
+gh() { return 1; }
+check "status: gh not authenticated reported" "0" "$(start_status_report 2>&1 | grep -q 'gh auth not authenticated' && echo 0 || echo 1)"
+gh() { return 0; }
+check "status: gh ok reported" "0" "$(start_status_report 2>&1 | grep -q 'gh auth ok' && echo 0 || echo 1)"
+unset -f gh
+
+# repos registered vs none
+rm -f "$HOME/.config/autonomy/repos"
+check "status: no repos -> warn" "0" "$(start_status_report 2>&1 | grep -q 'no repos registered' && echo 0 || echo 1)"
+printf '%s\n' "$tmp/somerepo" > "$HOME/.config/autonomy/repos"
+check "status: repos registered -> ok" "0" "$(start_status_report 2>&1 | grep -q 'repo(s) registered' && echo 0 || echo 1)"
+
+# integration: the status subcommand is read-only -- exit 0, never binds/launchctl
+rm -f "$SHIM_LOG"
+out="$(bash "$ENGINE_HOME/start" status </dev/null 2>&1)"; rc=$?
+check "start status exits 0" "0" "$rc"
+check "start status prints the health header" "0" "$(printf '%s\n' "$out" | grep -q '== autonomy engine health ==' && echo 0 || echo 1)"
+check "start status never reaches the dashboard launch" "1" "$(printf '%s\n' "$out" | grep -q 'launching the dashboard' && echo 0 || echo 1)"
+check "start status runs no launchctl" "0" "$([ ! -e "$SHIM_LOG" ] && echo 0 || echo 1)"
+
+# status takes no further args (explicit rejection, not silent-ignore)
+bash "$ENGINE_HOME/start" status extra </dev/null >/dev/null 2>&1; rc=$?
+check "start status rejects extra args (rc 2)" "2" "$rc"
+
+# edge: status works in setup mode (no repos) and survives an unreadable repos file
+rm -f "$HOME/.config/autonomy/repos"
+bash "$ENGINE_HOME/start" status </dev/null >/dev/null 2>&1; rc=$?
+check "start status in setup mode exits 0" "0" "$rc"
+printf '%s\n' "$tmp/r" > "$HOME/.config/autonomy/repos"; chmod 000 "$HOME/.config/autonomy/repos"
+bash "$ENGINE_HOME/start" status </dev/null >/dev/null 2>&1; rc=$?
+chmod 644 "$HOME/.config/autonomy/repos"
+check "start status on unreadable repos file still exits 0" "0" "$rc"
+rm -f "$HOME/.config/autonomy/repos"
+
 # --- setup mode: guidance, no bind, no launchctl ---------------------------------
 bash "$ENGINE_HOME/start" </dev/null >"$tmp/out1" 2>&1
 rc=$?
