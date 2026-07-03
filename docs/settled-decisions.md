@@ -68,10 +68,12 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     with per-role accounts this over-waits (safe direction) — accepted, and
     per-account limit state is issue #3's scope. *(PR #62 tradeoffs.)*
 17. **`instances:` is retired in favour of named lanes** (superseded 2026-07-03,
-    operator-approved D1). Until the lanes increment (#147) lands, the old
-    behaviour stands: schema-validated, NOTE-logged when >1, single instance
-    runs. *(Was: deferred, PR #62 decision 3; now:
-    specs/2026-07-03-lanes-and-board-contract-design.md.)*
+    operator-approved D1). REMOVED from the schema once lanes Part 1 landed
+    (#147): no longer validated, dropped from `role_settings`/the dispatch CLI
+    and the supervisor NOTE-stub; a leftover `instances:` in an old config is
+    inert (ignored, not an error). Parallelism is now expressed as named lanes.
+    *(Was: deferred, PR #62 decision 3; retired via
+    specs/2026-07-03-lanes-and-board-contract-design.md D1.)*
 
 ## Lanes + board contract (2026-07-03 operator session, D1–D6)
 

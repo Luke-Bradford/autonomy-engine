@@ -551,7 +551,7 @@ select_role() {
 resolve_role_dispatch() {
   local role="$1" out line key val
   ROLE_ACCOUNT=""; ROLE_AGENT=""; ROLE_MODEL=""; ROLE_EFFORT=""; ROLE_PROMPT=""
-  ROLE_SCOPE=""; ROLE_INSTANCES=1
+  ROLE_SCOPE=""
   out="$(python3 "$ENGINE_HOME/lib/roles.py" dispatch "$AUTONOMY_TARGET_REPO" "$role" 2>>"$SUPLOG")" || return 1
   while IFS= read -r line; do
     key="${line%%=*}"; val="${line#*=}"
@@ -562,7 +562,6 @@ resolve_role_dispatch() {
       EFFORT)    ROLE_EFFORT="$val" ;;
       PROMPT)    ROLE_PROMPT="$val" ;;
       SCOPE)     ROLE_SCOPE="$val" ;;
-      INSTANCES) ROLE_INSTANCES="$val" ;;
     esac
   done <<EOF
 $out
@@ -619,8 +618,8 @@ compose_session_rules() {
 }
 
 # fail-safe honesty (#149): log a NOTE for each knob role $2 sets but the engine
-# does not (yet) consume -- single-sourced from `roles.py knob-notes`, surfaced
-# like the instances stub so a validated-but-silent no-op is never invisible.
+# does not (yet) consume -- single-sourced from `roles.py knob-notes`, so a
+# validated-but-silent no-op is never invisible.
 # Best-effort: a roles.py hiccup or empty result logs nothing and never breaks
 # the session (honesty is diagnostic, not a gate).
 log_knob_notes() {
@@ -712,9 +711,6 @@ run_session() {
     return 2
   fi
 
-  if [ "$ROLE_INSTANCES" != "1" ]; then
-    log "NOTE roles.$role.instances=$ROLE_INSTANCES not yet supported -- running a single instance (parallel instances are a later increment)"
-  fi
   log_knob_notes "$AUTONOMY_TARGET_REPO" "$role"
 
   local log_file; log_file="$LOGDIR/session-$(date +%Y%m%dT%H%M%S).log"

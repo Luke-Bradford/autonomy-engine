@@ -15,7 +15,6 @@ The schema (docs/superpowers/specs/2026-07-02-dynamic-agent-org-design.md):
         models: { plan: ..., implement: ..., test: ... }   # per-phase override
         scope: { labels: [...], paths: [...], milestone: ..., query: ...,
                  target: diff|affected|full-regression }   # or bare target
-        instances: <positive int>          # optional (parallel loop count)
         prompt: .autonomy/roles/<name>.md  # optional, repo-relative pack file
         # behaviour knobs (validated by value; custom agents share them):
         gate: wait-for-human|auto-merge-on-pass   tools: [read] | [read, mcp]
@@ -399,8 +398,6 @@ def validate_roles(config):
                                 errors.append(
                                     "roles.%s: unknown event %r in 'on' (valid: "
                                     "%s)" % (name, ev, ", ".join(VALID_EVENTS)))
-        if "instances" in cfg and not _is_positive_int(cfg.get("instances")):
-            errors.append("roles.%s: instances must be a positive integer" % name)
         if "lane" in cfg:
             lane = cfg.get("lane")
             if not _is_nonempty_str(lane):
@@ -772,10 +769,9 @@ def dispatchable_roles(config):
 def role_settings(config, name):
     """The session settings the supervisor needs to dispatch `name`:
     account/model/effort/prompt/scope as strings ('' = unset, supervisor
-    falls back to its agent.* resolution) plus instances (int >= 1).
-    KeyError when the role is not dispatchable (neither an enabled loop role
-    nor an enabled cron role) -- the CLI turns that into exit 1 so the
-    supervisor refuses cleanly."""
+    falls back to its agent.* resolution). KeyError when the role is not
+    dispatchable (neither an enabled loop role nor an enabled cron role) -- the
+    CLI turns that into exit 1 so the supervisor refuses cleanly."""
     if name not in dispatchable_roles(config):
         raise KeyError(name)
     roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
@@ -787,12 +783,10 @@ def role_settings(config, name):
         v = cfg.get(key)
         return str(v).strip() if _is_nonempty_str(v) else ""
 
-    instances = cfg.get("instances")
-    instances = int(str(instances)) if _is_positive_int(instances) else 1
     return {"account": _s("account"), "agent": _s("agent"),
             "model": _s("model"), "effort": _s("effort"),
             "prompt": _s("prompt"),
-            "scope": render_scope(cfg.get("scope")), "instances": instances}
+            "scope": render_scope(cfg.get("scope"))}
 
 
 def _cron_field(spec, lo, hi):
@@ -941,7 +935,6 @@ def _dispatch_main(argv):
         return 1
     for key in ("account", "agent", "model", "effort", "prompt", "scope"):
         print("%s=%s" % (key.upper(), s[key]))
-    print("INSTANCES=%d" % s["instances"])
     return 0
 
 

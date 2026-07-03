@@ -58,7 +58,6 @@ worktree:
 #     scope: { labels: [ready], milestone: current }
 #     self_test: true                  # [#89] agents test their own work (not yet consumed)
 #     blockers: raise-to-pm            # [#89] raise-to-pm | raise-to-human (not yet consumed)
-#     instances: 1                     # [#147/D1] superseded by lanes: (see below); still NOTE-logged
 #     lane: main                       # [#147] the lane this role runs in (default lane if omitted)
 #   qa:
 #     enabled: false
