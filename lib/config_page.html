@@ -339,11 +339,11 @@ function acctDelete(enc){
 /* ---- CREDENTIALS ---- */
 function renderCreds(m){
   const creds=m.credentials||[], roles=m.roles||[], asn=m.assignments||{};
-  const add=`<div class="credadd">
-    <input id="cr-label" class="cfgin" placeholder="label (e.g. work-key)">
-    <input id="cr-prov" class="cfgin" placeholder="provider" value="anthropic">
-    <input id="cr-secret" class="cfgin" type="password" placeholder="paste API key — stored, never shown again">
-    <button class="cbtn go" onclick="credSave()">save</button></div>`;
+  const add=`<form class="credadd" onsubmit="return false" autocomplete="off">
+    <input id="cr-label" name="cr-label" class="cfgin" autocomplete="off" placeholder="label (e.g. work-key)">
+    <input id="cr-prov" name="cr-prov" class="cfgin" autocomplete="off" placeholder="provider" value="anthropic">
+    <input id="cr-secret" name="cr-secret" class="cfgin" type="password" autocomplete="new-password" placeholder="paste API key — stored, never shown again">
+    <button type="button" class="cbtn go" onclick="credSave()">save</button></form>`;
   const err=m.credentials_error?`<div class="hint" style="color:var(--bad)">credential store error: ${esc(m.credentials_error)} — fix and reload.</div>`:"";
   const rows=creds.map(c=>{
     const enc=encAttr(c.label);
@@ -363,7 +363,7 @@ function renderCreds(m){
     const opts=`<option value="">subscription (default)</option>`
       + creds.map(c=>`<option value="${esc(c.label)}" ${c.label===cur?"selected":""}>${esc(c.label)}</option>`).join("");
     return `<div class="cfgrow"><span class="cfglab">${esc(r)}</span>`
-      + `<select class="cfgin" onchange="credRole('${esc(r)}',this.value)">${opts}</select></div>`;
+      + `<select class="cfgin" name="cred-${esc(r)}" onchange="credRole('${esc(r)}',this.value)">${opts}</select></div>`;
   }).join("") : "";
   const asnBlock = asnRows ? `<div class="credrow" style="color:var(--dim);font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase">role → credential</div>${asnRows}` : "";
   $("creds").innerHTML=add+err+(rows||`<div class="hint">no API keys stored — subscription auth is active by default.</div>`)+asnBlock;
@@ -407,10 +407,10 @@ function renderCfg(repos){
     +(rows||`<div class="hint">no repos registered — add one above.</div>`);
 }
 function cfgField(enc,key,label,val){
-  return `<div class="cfgrow"><span class="cfglab">${esc(label)}</span><input class="cfgin" data-key="${key}" value="${esc(val||"")}"><button class="cbtn" onclick="cfgSave(this,'${enc}','${key}')">save</button></div>`;
+  return `<div class="cfgrow"><span class="cfglab">${esc(label)}</span><input class="cfgin" name="${key}" data-key="${key}" value="${esc(val||"")}"><button class="cbtn" onclick="cfgSave(this,'${enc}','${key}')">save</button></div>`;
 }
 function cfgSelect(enc,key,label,opts,val){
-  return `<div class="cfgrow"><span class="cfglab">${esc(label)}</span><select class="cfgin" data-key="${key}">${opts.map(o=>`<option ${o===val?"selected":""}>${o}</option>`).join("")}</select><button class="cbtn" onclick="cfgSave(this,'${enc}','${key}')">save</button></div>`;
+  return `<div class="cfgrow"><span class="cfglab">${esc(label)}</span><select class="cfgin" name="${key}" data-key="${key}">${opts.map(o=>`<option ${o===val?"selected":""}>${o}</option>`).join("")}</select><button class="cbtn" onclick="cfgSave(this,'${enc}','${key}')">save</button></div>`;
 }
 function cfgSave(btn,enc,key){
   const repo=decodeURIComponent(enc);
