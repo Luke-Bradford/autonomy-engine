@@ -10,3 +10,5 @@ __pycache__/
 # supervisor's "tree clean on origin/main" preflight would stash/skip forever.
 /var/autonomy-logs/
 /var/autonomy-supervisor.lock/
+/var/cron/
+/var/events/
