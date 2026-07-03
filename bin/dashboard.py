@@ -634,17 +634,22 @@ def _accts():
 
 
 def _registry_error(inst):
-    """The RegistryError class from the exact module `inst`'s class was defined
-    in, derived from the instance itself rather than a re-read of the `accts`/
-    `creds` global. This CLOSES (not just narrows) the hot-reload race: a concurrent
+    """The RegistryError class from the module `inst`'s class was defined in,
+    derived from the instance itself rather than a re-read of the `accts`/`creds`
+    global. This CLOSES (not just narrows) the hot-reload race: a concurrent
     _reload_logic_modules() rebinding the module global mid-call can't desync the
-    `except` from what `inst` actually raises, because both now come from one
-    source of truth -- the instance's own class namespace. (__init__ is defined
-    in the same module as the registry class, so its __globals__ is that module's
-    dict.) Keeps the singleton accessors, so the #59 corrupt-registry injection
-    seam (which sets the singleton to an instance backed by a corrupt index) still
-    works."""
-    return type(inst).__init__.__globals__["RegistryError"]
+    `except` from what `inst` actually raises, because both come from one source
+    of truth -- the instance's own class namespace. We scan the methods defined
+    directly on the class for one whose __globals__ carries RegistryError (any
+    such method's __globals__ IS that module's dict), so an inherited __init__
+    never trips us up; the sys.modules fallback covers the pathological case.
+    Keeps the singleton accessors, so the #59 corrupt-registry injection seam
+    (which sets the singleton to an instance backed by a corrupt index) works."""
+    for member in vars(type(inst)).values():
+        g = getattr(member, "__globals__", None)
+        if g and "RegistryError" in g:
+            return g["RegistryError"]
+    return sys.modules[type(inst).__module__].RegistryError
 
 
 def execute_acct_set(name, kind, credential):
