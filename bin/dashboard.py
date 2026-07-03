@@ -21,6 +21,7 @@ Repos may also be listed (one path per line) in $AUTONOMY_DASHBOARD_REPOS or
 """
 import argparse
 import concurrent.futures
+import importlib.util
 import json
 import os
 import secrets
@@ -40,6 +41,159 @@ import credentials as creds  # noqa: E402
 import accounts as accts  # noqa: E402
 import concierge  # noqa: E402
 import claude_usage as cu  # noqa: E402
+
+# --- logic-module hot-reload (#166) ------------------------------------------
+# A merged fix to a lib/*.py logic module is invisible in the running dashboard
+# until a restart -- imports bind once at process start -- which looks identical
+# to "the fix didn't work". So when a tracked module's source changes on disk
+# (the checkout advanced to a merged commit) we rebuild the whole tracked set
+# into BRAND-NEW module objects and atomically republish, without a restart.
+#
+# Why build-fresh + rebind, not in-place importlib.reload(): reload() mutates a
+# live module dict while concurrent SSE/sampler/request threads are executing
+# its functions -- readers would observe a half-mutated dict, a raising exec
+# leaves it partially mutated (no rollback), and names deleted in the new source
+# persist. Building a fresh object and rebinding one name is atomic under the
+# GIL: a reader that already dereferenced the global runs entirely in its old
+# epoch (old object, old module-level locks + caches); a new reader gets the new
+# epoch -- never a blend. A failing build discards the new object and rolls back
+# sys.modules, so the last-good code stays live (fail-safe, never blank).
+#
+# Order is leaves-before-dependents so a dependent's top-level `import` binds the
+# already-rebuilt leaf. Closed set: dashboard_state -> config_parser, roles;
+# accounts -> credentials; the rest are leaves. (roles' two lazy call-time
+# imports resolve from sys.modules; the build+publish holds _reload_lock and the
+# exposure window is microseconds on a 127.0.0.1 single-operator tool -- benign.)
+# The gkey is the dashboard global to rebind, or None (roles has no dashboard
+# global -- only dashboard_state imports it, so it republishes to sys.modules
+# only).
+_HOT_ORDER = (
+    ("config_parser", "config_parser"),
+    ("roles", None),
+    ("credentials", "creds"),
+    ("claude_usage", "cu"),
+    ("concierge", "concierge"),
+    ("dashboard_control", "dcx"),
+    ("dashboard_state", "ds"),
+    ("accounts", "accts"),
+)
+
+
+def _file_sig(path):
+    """Change signature for a source file: (st_mtime_ns, st_size). Nanosecond
+    precision + size beats a float getmtime() (coarse filesystems + float
+    precision loss can miss a same-tick edit). None when unreadable -- a module
+    whose file we cannot stat never triggers a reload on its own."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _build_hot_specs():
+    """(name, source_path, gkey) per tracked module, in dependency order. Skips
+    any module not importable/without a __file__ (defensive -- all are imported
+    above, so this is belt-and-suspenders, never expected to skip)."""
+    specs = []
+    for name, gkey in _HOT_ORDER:
+        mod = sys.modules.get(name)
+        path = getattr(mod, "__file__", None) if mod else None
+        if path:
+            specs.append((name, path, gkey))
+    return specs
+
+
+_HOT_SPECS = _build_hot_specs()
+_hot_sigs = {name: _file_sig(path) for name, path, _ in _HOT_SPECS}
+_reload_lock = threading.Lock()
+_hot_fail_sig = [None]   # last failing signature-set we logged (warn dedup)
+
+
+def _reload_tracked(specs, sigs, ns, on_reload, on_error=None):
+    """Build-fresh + atomic-publish reloader. `specs` is a list of
+    (module_name, source_path, gkey) in dependency order (leaves first); `sigs`
+    is a name->signature map of the currently-loaded code; `ns` is the namespace
+    whose gkey globals get rebound; `on_reload` runs after a successful publish
+    (reset stateful singletons); `on_error(exc)` runs on a build failure.
+
+    Returns True iff a coherent new epoch was published. No change -> False (a
+    cheap stat-only no-op). Build failure -> restores every sys.modules entry we
+    touched, publishes nothing, leaves `sigs` UNADVANCED (so the pending change
+    is retried next tick -- a half-written file recovers when the write
+    completes to a new signature), and returns False."""
+    current = {name: _file_sig(path) for name, path, _ in specs}
+    if all(current[name] == sigs.get(name) for name, _, _ in specs):
+        return False
+    saved = {}
+    built = {}
+    try:
+        for name, path, _ in specs:
+            spec = importlib.util.spec_from_file_location(name, path)
+            if spec is None or spec.loader is None:
+                raise ImportError("no import spec/loader for %s (%s)" % (name, path))
+            newmod = importlib.util.module_from_spec(spec)
+            if name not in saved:
+                saved[name] = sys.modules.get(name)
+            sys.modules[name] = newmod          # a later dependent's import binds new
+            # Compile the CURRENT source text directly rather than exec_module,
+            # which would happily reuse a stale __pycache__/*.pyc: its validity
+            # check is (mtime_SECONDS, size), so a same-second same-size edit
+            # (e.g. one digit changed) runs the OLD bytecode. get_source() re-
+            # reads the file, so the new epoch always reflects what's on disk.
+            src = spec.loader.get_source(name)
+            if src is None:                      # source-less loader -> best-effort
+                spec.loader.exec_module(newmod)
+            else:
+                exec(compile(src, path, "exec"), newmod.__dict__)  # may raise -> caught
+            built[name] = newmod
+    except Exception as exc:                     # noqa: BLE001 -- deliberate boundary
+        for name, old in saved.items():          # all-or-nothing: publish nothing
+            if old is not None:
+                sys.modules[name] = old
+            else:
+                sys.modules.pop(name, None)
+        if on_error is not None:
+            on_error(exc)
+        return False
+    for name, _, gkey in specs:                  # publish: atomic per-name rebind
+        if gkey is not None:
+            ns[gkey] = built[name]
+    sigs.update(current)
+    on_reload()
+    return True
+
+
+def _reset_logic_singletons():
+    """Reset the stateful singletons after a publish so the next _accts()/
+    _creds() reconstructs from the new module (they otherwise pin an instance of
+    the pre-reload class, whose methods run old code)."""
+    _accts_singleton[0] = None
+    _creds_singleton[0] = None
+
+
+def _on_reload_error(exc):
+    # Warn once per distinct failing signature-set: a permanently-broken source
+    # logs a single line, not one per SSE/sampler/request tick.
+    sig = tuple(_file_sig(p) for _, p, _ in _HOT_SPECS)
+    if _hot_fail_sig[0] == sig:
+        return
+    _hot_fail_sig[0] = sig
+    sys.stderr.write("dashboard: logic-module reload failed (%s); serving the "
+                     "last-good code\n" % exc)
+
+
+def _reload_logic_modules():
+    """Publish any pending logic-module change; a cheap stat-only no-op when
+    nothing changed. Serialised by _reload_lock so two threads never double-
+    build. Called at the top of each request and once per SSE/sampler tick."""
+    with _reload_lock:
+        published = _reload_tracked(_HOT_SPECS, _hot_sigs, globals(),
+                                    _reset_logic_singletons, _on_reload_error)
+    if published:
+        _hot_fail_sig[0] = None   # a good publish re-arms failure logging
+    return published
+
 
 PAGE = os.path.join(ENGINE_HOME, "lib", "dashboard_page.html")
 CONFIG_PAGE = os.path.join(ENGINE_HOME, "lib", "config_page.html")
@@ -178,6 +332,7 @@ def _sample_once(repos):
 
 def _sampler_loop(repos, stop):
     while not stop.is_set():
+        _reload_logic_modules()   # so the background sampler runs fresh code too
         _sample_once(repos)
         stop.wait(_SAMPLE_EVERY)
 
@@ -466,10 +621,18 @@ def _accts():
     return _accts_singleton[0]
 
 
+# The write helpers snapshot the reloadable module (`_a = accts` / `_c = creds`)
+# at entry and except on `_a.RegistryError`, so a hot-reload rebinding the global
+# mid-call cannot slip a new-module RegistryError past an old-module `except`
+# (which would crash the POST instead of returning {ok:false}). This narrows the
+# mismatch window from the whole function body to the single statement between
+# the snapshot and `_accts()`/`_creds()`; the singleton accessors are kept (not
+# fresh construction) so the #59 corrupt-registry injection seam still works.
 def execute_acct_set(name, kind, credential):
+    _a = accts
     try:
         _accts().set(name, kind, credential=credential or None)
-    except (accts.RegistryError, ValueError) as exc:
+    except (_a.RegistryError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
     except OSError as exc:
         return {"ok": False, "error": str(exc)}
@@ -477,9 +640,10 @@ def execute_acct_set(name, kind, credential):
 
 
 def execute_acct_delete(name):
+    _a = accts
     try:
         _accts().delete(name)
-    except (accts.RegistryError, OSError) as exc:
+    except (_a.RegistryError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "message": "account '%s' removed" % name}
 
@@ -521,9 +685,10 @@ def config_read_model():
 
 
 def execute_cred_set(label, provider, secret):
+    _c = creds   # snapshot for a consistent except identity (see execute_acct_set)
     try:
         _creds().set(label, secret, provider=provider)
-    except (creds.RegistryError, ValueError) as exc:
+    except (_c.RegistryError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or "").strip() or "keychain write failed"
@@ -534,17 +699,19 @@ def execute_cred_set(label, provider, secret):
 
 
 def execute_cred_delete(label):
+    _c = creds
     try:
         _creds().delete(label)
-    except (creds.RegistryError, OSError) as exc:
+    except (_c.RegistryError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "message": "credential '%s' removed" % label}
 
 
 def execute_cred_assign(role, label):
+    _c = creds
     try:
         _creds().assign(role, label)
-    except (creds.RegistryError, ValueError, KeyError) as exc:
+    except (_c.RegistryError, ValueError, KeyError) as exc:
         return {"ok": False, "error": str(exc)}
     except OSError as exc:
         return {"ok": False, "error": str(exc)}
@@ -552,9 +719,10 @@ def execute_cred_assign(role, label):
 
 
 def execute_cred_unassign(role):
+    _c = creds
     try:
         _creds().unassign(role)
-    except (creds.RegistryError, OSError) as exc:
+    except (_c.RegistryError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "message": "%s unassigned" % role}
 
@@ -898,6 +1066,7 @@ class Handler(BaseHTTPRequestHandler):
                 "model": model, "account": name}
 
     def do_GET(self):
+        _reload_logic_modules()   # pick up merged logic-module fixes (#166)
         path = self.path.split("?", 1)[0]
         if path == "/" or path == "/config":
             page = PAGE if path == "/" else CONFIG_PAGE
@@ -917,6 +1086,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, b'{"error":"not found"}')
 
     def do_POST(self):
+        _reload_logic_modules()   # pick up merged logic-module fixes (#166)
         path = self.path.split("?", 1)[0]
         if path not in ("/api/control", "/api/chat"):
             self._send(404, b'{"error":"not found"}')
@@ -1042,6 +1212,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Connection", "keep-alive")
             self.end_headers()
             while True:
+                _reload_logic_modules()   # long-lived stream picks up fixes too
                 payload = json.dumps(collect(self.repos))
                 self.wfile.write(b"data: " + payload.encode("utf-8") + b"\n\n")
                 self.wfile.flush()
