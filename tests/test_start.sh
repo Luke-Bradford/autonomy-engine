@@ -90,11 +90,11 @@ check "dashboard_pids regex-escapes metachars in the path" "0" "$(grep -qF 'a\.b
 # dashboard process line via the pgrep seam (override the function after sourcing)
 dashboard_pids() { echo 4242; }
 out="$(start_status_report 2>&1)"
-check "status: dashboard running (pid) reported" "0" "$(grep -q 'dashboard running (pid 4242)' <<<"$out" && echo 0 || echo 1)"
+check "status: dashboard running (pid) reported" "0" "$(grep -q 'dashboard running (pid 4242' <<<"$out" && echo 0 || echo 1)"
 dashboard_pids() { :; }
 out="$(start_status_report 2>&1)"
 check "status: dashboard not running reported" "0" "$(grep -q 'dashboard not running' <<<"$out" && echo 0 || echo 1)"
-check "status: hard-kill hint shown" "0" "$(grep -q 'pkill -f bin/dashboard.py' <<<"$out" && echo 0 || echo 1)"
+check "status: not-running hint points at the service" "0" "$(grep -q 'background service' <<<"$out" && echo 0 || echo 1)"
 
 # _with_timeout caps a hung command so `./start status` can't wedge on a slow
 # network `gh` (macOS bash 3.2 has no timeout(1), so this is our own wrapper)
@@ -414,6 +414,16 @@ check "unknown flag -> non-zero exit" "1" "$([ $? -ne 0 ] && echo 1 || echo 0)"
 for f in "$ENGINE_HOME/start" "$ENGINE_HOME"/bin/*.sh "$ENGINE_HOME/bin/dashboard.py"; do
   check "executable: ${f#"$ENGINE_HOME"/}" "0" "$([ -x "$f" ] && echo 0 || echo 1)"
 done
+
+# dashboard-as-a-service (#81): the plist render is the pure, testable core;
+# launchctl load/stop are boundary seams (not exercised here).
+plist="$(render_dashboard_plist 9099)"
+check "plist: dashboard service label present" "0" "$(grep -q 'com.autonomy.dashboard' <<<"$plist" && echo 0 || echo 1)"
+check "plist: port substituted" "0" "$(grep -q '<string>9099</string>' <<<"$plist" && echo 0 || echo 1)"
+check "plist: engine-home dashboard.py path substituted" "0" "$(grep -qF "$ENGINE_HOME/bin/dashboard.py" <<<"$plist" && echo 0 || echo 1)"
+check "plist: python path is absolute" "0" "$(grep -qE '<string>/[^<]*python3?</string>' <<<"$plist" && echo 0 || echo 1)"
+check "plist: no unsubstituted __PLACEHOLDER__ left" "0" "$(grep -q '__[A-Z_]*__' <<<"$plist" && echo 1 || echo 0)"
+check "usage mentions stop + foreground" "0" "$(start_usage 2>&1 | grep -q 'stop' && start_usage 2>&1 | grep -q 'foreground' && echo 0 || echo 1)"
 
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi

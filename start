@@ -32,16 +32,19 @@ start_mode() {
 
 start_usage() {
   cat >&2 <<'EOF'
-usage: ./start [target-repo] [--port N] [--no-launch]
+usage: ./start [target-repo] [--port N] [--no-launch] [--foreground]
        ./start status
+       ./start stop
 
 No repos registered yet: prints setup guidance; with a target-repo argument
 it runs the guided quickstart on it (and registers it for the dashboard).
-Repos registered: prints the loop-state summary and runs the control-room
-dashboard. --no-launch prints the dashboard command instead of running it.
-`status` prints a read-only health report (dashboard process, gh auth, repo
-registration, local endpoints, loop-worktree cleanliness) and exits -- it never
-binds a port or runs launchctl.
+Repos registered: prints the loop-state summary and starts the control-room
+dashboard as a managed launchd service (survives the terminal, restarts on
+crash/reboot), then opens the browser. --foreground runs it in this terminal
+instead (Ctrl-C stops it); --no-launch just prints the command.
+`stop` hard-stops the dashboard service. `status` prints a read-only health
+report (dashboard, gh auth, repos, loop state, local endpoints, worktree
+cleanliness) and exits -- it never binds a port or runs launchctl.
 EOF
 }
 
@@ -234,9 +237,9 @@ start_status_report() {
   echo "== autonomy engine health =="
   local pids; pids="$(dashboard_pids)"
   if [ -n "$pids" ]; then
-    echo "OK   dashboard running (pid $(printf '%s' "$pids" | tr '\n' ' ' | sed 's/ *$//'))"
+    echo "OK   dashboard running (pid $(printf '%s' "$pids" | tr '\n' ' ' | sed 's/ *$//'); stop: ./start stop)"
   else
-    echo "WARN dashboard not running -- './start' launches it; hard-kill: pkill -f bin/dashboard.py"
+    echo "WARN dashboard not running -- './start' starts it as a background service (./start stop to stop)"
   fi
   # Bounded so a slow/hung `gh` (network) never wedges the health report.
   if _with_timeout "${AUTONOMY_GH_TIMEOUT:-5}" gh auth status >/dev/null 2>&1; then
@@ -332,6 +335,48 @@ EOF
   fi
 }
 
+# --- dashboard-as-a-service (#81) -------------------------------------------
+# The control-room dashboard runs as a launchd LaunchAgent so it's a persistent
+# background app (survives the terminal, restarts on crash/reboot) rather than a
+# foreground script. Supervisors stay a deliberate step; the dashboard is a
+# read-only loopback UI, so auto-running it is safe. launchctl is the boundary
+# (seams below let tests drive the pure render without loading anything).
+dashboard_service_label() { printf 'com.autonomy.dashboard'; }
+dashboard_plist_dst() { printf '%s' "$HOME/Library/LaunchAgents/com.autonomy.dashboard.plist"; }
+dashboard_log_dir() { printf '%s' "$HOME/.config/autonomy"; }
+
+# Render the plist template with this checkout's python/engine-home/port/log-dir.
+# Pure (template + args -> stdout); '#' sed delimiter since paths carry '/'.
+render_dashboard_plist() {
+  local port="$1" py tmpl
+  py="$(command -v python3 || printf '/usr/bin/python3')"
+  tmpl="$ENGINE_HOME/templates/dashboard.plist.tmpl"
+  sed -e "s#__PYTHON__#${py}#g" \
+      -e "s#__ENGINE_HOME__#${ENGINE_HOME}#g" \
+      -e "s#__PORT__#${port}#g" \
+      -e "s#__LOG_DIR__#$(dashboard_log_dir)#g" \
+      "$tmpl"
+}
+
+# Install + (re)load the service. Idempotent: bootout-then-bootstrap so a
+# re-run picks up a new port/checkout. A seam: tests shadow it.
+dashboard_service_load() {
+  local port="$1" dst uid
+  mkdir -p "$(dashboard_log_dir)" 2>/dev/null || true
+  dst="$(dashboard_plist_dst)"
+  mkdir -p "$(dirname "$dst")" 2>/dev/null || true
+  render_dashboard_plist "$port" > "$dst" || return 1
+  uid="$(id -u)"
+  launchctl bootout "gui/$uid/$(dashboard_service_label)" 2>/dev/null || true
+  launchctl bootstrap "gui/$uid" "$dst"
+}
+
+# Hard-stop the service (bootout). KeepAlive means only launchctl actually stops
+# it -- pkill would just be restarted. A seam: tests shadow it.
+dashboard_service_stop() {
+  launchctl bootout "gui/$(id -u)/$(dashboard_service_label)" 2>/dev/null || true
+}
+
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
 
 set -euo pipefail
@@ -348,13 +393,27 @@ if [ "${1:-}" = "status" ]; then
   exit 0
 fi
 
+# `stop` subcommand: hard-stop the dashboard service (bootout). Handled before
+# the arg loop; takes no further args.
+if [ "${1:-}" = "stop" ]; then
+  shift
+  if [ "$#" -ne 0 ]; then
+    echo "start: 'stop' takes no arguments" >&2; start_usage; exit 2
+  fi
+  dashboard_service_stop
+  echo "control-room dashboard stopped (service $(dashboard_service_label) booted out)."
+  exit 0
+fi
+
 TARGET=""
 PORT=""
 NO_LAUNCH=0
+FOREGROUND=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --port)      PORT="${2:?--port needs a value}"; shift 2 ;;
     --no-launch) NO_LAUNCH=1; shift ;;
+    --foreground) FOREGROUND=1; shift ;;
     -h|--help)   start_usage; exit 0 ;;
     -*)          echo "start: unknown flag $1" >&2; start_usage; exit 2 ;;
     *)           if [ -z "$TARGET" ]; then TARGET="$1"; shift
@@ -397,9 +456,9 @@ echo "== autonomy control room =="
 echo ""
 
 # One source of truth for the dashboard invocation: printed by --no-launch,
-# exec'd otherwise (PR #46 review).
-DASH_ARGV=(python3 "$ENGINE_HOME/bin/dashboard.py")
-if [ -n "$PORT" ]; then DASH_ARGV+=(--port "$PORT"); fi
+# run as a service by default, exec'd foreground with --foreground.
+PORT="${PORT:-8787}"
+DASH_ARGV=(python3 "$ENGINE_HOME/bin/dashboard.py" --port "$PORT")
 
 if [ "$SETUP_FAILED" -ne 0 ]; then
   echo "setup reported problems above -- not launching the dashboard. When fixed:"
@@ -411,6 +470,19 @@ if [ "$NO_LAUNCH" -eq 1 ]; then
   printf '  '; printf '%q ' "${DASH_ARGV[@]}"; printf '\n'
   exit 0
 fi
+if [ "$FOREGROUND" -eq 1 ]; then
+  echo "launching the dashboard in the foreground (Ctrl-C stops it; loops unaffected) ..."
+  exec "${DASH_ARGV[@]}"
+fi
 
-echo "launching the dashboard (Ctrl-C stops it; loops are unaffected) ..."
-exec "${DASH_ARGV[@]}"
+# Default: a managed launchd service -- survives this terminal, restarts on
+# crash/reboot, hard-stopped with './start stop'.
+echo "starting the control-room dashboard as a background service ..."
+if dashboard_service_load "$PORT"; then
+  echo "OK   dashboard live at http://127.0.0.1:$PORT/  (service $(dashboard_service_label))"
+  echo "     stop:  ./start stop     health:  ./start status     foreground:  ./start --foreground"
+  if command -v open >/dev/null 2>&1; then open "http://127.0.0.1:$PORT/" 2>/dev/null || true; fi
+else
+  echo "start: could not load the launchd service -- running foreground instead (Ctrl-C stops it)" >&2
+  exec "${DASH_ARGV[@]}"
+fi

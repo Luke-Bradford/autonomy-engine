@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd LaunchAgent for the autonomy CONTROL-ROOM DASHBOARD. Unlike a
+  supervisor (which does real work + spends tokens, so it stays a deliberate
+  operator step), the dashboard is a READ-ONLY loopback UI -- safe to run as a
+  persistent service so it survives the terminal, restarts on crash/reboot, and
+  is managed/hard-killed via launchctl instead of a foreground Ctrl-C.
+
+  RunAtLoad + KeepAlive: start on load, restart if it ever exits. dashboard.py
+  binds 127.0.0.1 only and discovers repos from ~/.config/autonomy/repos, so no
+  --repo is needed. Its own port bind fails fast if one is already running.
+
+  __PYTHON__, __ENGINE_HOME__, __PORT__, __LOG_DIR__ substituted at install.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.autonomy.dashboard</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>__ENGINE_HOME__/bin/dashboard.py</string>
+    <string>--port</string>
+    <string>__PORT__</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__ENGINE_HOME__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/dashboard.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/dashboard.err.log</string>
+</dict>
+</plist>
