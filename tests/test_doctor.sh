@@ -159,5 +159,22 @@ case "$(doctor_qa_role_check "$tmp")" in
 esac
 check "qa on routine substrate -> WARN (unverifiable locally)" warn "$r"
 
+# --- fail-safe honesty: doctor surfaces set-but-unwired role knobs (#149) ------
+cat > "$tmp/.autonomy/config.yaml" <<'YAML'
+roles:
+  coder:
+    enabled: true
+    self_test: true
+YAML
+knob_out="$(doctor_knob_notes "$tmp" 2>&1)"
+check "doctor surfaces a set-but-unwired knob (#149)" "0" \
+  "$(printf '%s' "$knob_out" | grep -q 'roles.coder.self_test is set but' && echo 0 || echo 1)"
+cat > "$tmp/.autonomy/config.yaml" <<'YAML'
+roles:
+  coder:
+    enabled: true
+YAML
+check "doctor knob-notes stays silent when nothing to say" "" "$(doctor_knob_notes "$tmp" 2>&1)"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
