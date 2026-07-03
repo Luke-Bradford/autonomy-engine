@@ -746,26 +746,32 @@ def latest_session(logdir):
 
 def recent_quota_windows(logdir, limit=12):
     """Account rate-limit windows merged across the newest `limit` session
-    logs, keeping the most-recent snapshot (max resets_at) per window type.
+    logs. Per window type keep the CURRENT window (max resets_at) and, within
+    it, the PEAK utilization.
 
-    parse_quota_windows reads ONE log, but Anthropic emits five_hour and
-    seven_day events intermittently -- the newest log routinely carries only
-    one of the two, so a single-log read leaves the other window blank/'dead'
-    on the header even when a slightly older log holds a valid snapshot. {}
-    when none found."""
+    Two reasons this beats reading one log:
+    - parse_quota_windows reads ONE log, but Anthropic emits five_hour and
+      seven_day events intermittently -- the newest log routinely carries only
+      one of the two, so a single-log read leaves the other window blank.
+    - within a window utilization only climbs until a reset; a later spurious
+      LOW reading at the same resets_at (e.g. a rejected event in a session that
+      just hit the limit) must NOT override the real peak, or the bar reads 0%
+      right after the account maxed out. Taking the max utilization at a given
+      resets_at fixes that. {} when none found."""
     try:
         names = sorted(n for n in os.listdir(logdir)
                        if n.startswith("session-") and n.endswith(".log"))
     except OSError:
         return {}
     merged = {}
-    for name in reversed(names[-limit:]):   # newest first
+    for name in names[-limit:]:   # order-independent: keep the best per window
         for wt, win in parse_quota_windows(os.path.join(logdir, name)).items():
             cur = merged.get(wt)
-            if cur is None or win.get("resets_at", 0) > cur.get("resets_at", 0):
+            if (cur is None
+                    or win["resets_at"] > cur["resets_at"]
+                    or (win["resets_at"] == cur["resets_at"]
+                        and win["utilization"] > cur["utilization"])):
                 merged[wt] = win
-        if "five_hour" in merged and "seven_day" in merged:
-            break   # both populated; older logs can only be staler
     return merged
 
 
