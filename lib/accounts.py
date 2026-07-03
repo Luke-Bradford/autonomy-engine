@@ -15,15 +15,43 @@ import json
 import os
 import re
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 
 import credentials as _credentials
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 VALID_KINDS = ("claude_subscription", "codex_subscription",
-               "anthropic_api", "openai_api")
+               "anthropic_api", "openai_api", "openai_compatible")
 _SUBSCRIPTION_KINDS = ("claude_subscription", "codex_subscription")
 # API kind -> the env var its key is exported as (used in Task 2)
 _API_ENV = {"anthropic_api": "ANTHROPIC_API_KEY", "openai_api": "OPENAI_API_KEY"}
+
+
+def _valid_base_url(url):
+    """A well-formed http(s) URL with a host -- the endpoint a role calls.
+    Rejects other schemes, host-less strings, and anything unparseable so a
+    malformed endpoint never reaches the wire (fail-safe)."""
+    try:
+        p = urllib.parse.urlparse(url or "")
+    except (ValueError, AttributeError):
+        return False
+    return p.scheme in ("http", "https") and bool(p.netloc)
+
+
+def _parse_models_payload(raw):
+    """Model ids from an OpenAI /v1/models JSON body. [] on any problem
+    (best-effort -- the config UI degrades to manual entry, never raises)."""
+    try:
+        data = json.loads(raw)
+        rows = data.get("data")
+        if not isinstance(rows, list):
+            return []
+        return [r["id"] for r in rows
+                if isinstance(r, dict) and isinstance(r.get("id"), str)]
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return []
 
 
 def default_index_path():
@@ -105,22 +133,31 @@ class Accounts:
         os.replace(tmp, self.index_path)
         os.chmod(self.index_path, 0o600)
 
-    def set(self, name, kind, credential=None):
+    def set(self, name, kind, credential=None, base_url=None):
         if not _NAME_RE.fullmatch(name or ""):
             raise ValueError("account name must be 1-64 chars of [A-Za-z0-9._-]")
         if kind not in VALID_KINDS:
             raise ValueError("kind must be one of %s" % (VALID_KINDS,))
-        if kind in _SUBSCRIPTION_KINDS:
+        entry = {"kind": kind}
+        if kind == "openai_compatible":
+            if not _valid_base_url(base_url):
+                raise ValueError("openai_compatible accounts require a valid "
+                                 "http(s) base_url")
+            entry["base_url"] = base_url
+            if (credential or "").strip():
+                entry["credential"] = credential
+        elif kind in _SUBSCRIPTION_KINDS:
             if credential:
                 raise ValueError("subscription accounts take no credential")
-            credential = None
-        else:
+            if base_url:
+                raise ValueError("only openai_compatible accounts take a base_url")
+        else:  # anthropic_api / openai_api
+            if base_url:
+                raise ValueError("only openai_compatible accounts take a base_url")
             if not (credential or "").strip():
                 raise ValueError("API accounts require a credential label")
-        data = self._load_for_write()
-        entry = {"kind": kind}
-        if credential:
             entry["credential"] = credential
+        data = self._load_for_write()
         data["accounts"][name] = entry
         self._save(data)
 
@@ -138,7 +175,9 @@ class Accounts:
         e = self._load()["accounts"].get(name)
         if e is None:
             return None
-        return {"kind": e.get("kind", ""), "credential": e.get("credential")}
+        return {"kind": e.get("kind", ""),
+                "base_url": e.get("base_url"),
+                "credential": e.get("credential")}
 
     def delete(self, name):
         data = self._load_for_write()
@@ -156,6 +195,20 @@ class Accounts:
         kind = entry["kind"]
         if kind in _SUBSCRIPTION_KINDS:
             return {"kind": kind, "env": {}}
+        if kind == "openai_compatible":
+            base_url = entry.get("base_url")
+            if not _valid_base_url(base_url):
+                raise LookupError(
+                    "account %r has no valid base_url -- refusing" % name)
+            label = entry.get("credential")
+            secret = self.credentials.get_secret(label) if label else None
+            if label and not secret:
+                raise LookupError(
+                    "account %r credential %r has no secret in the Keychain"
+                    % (name, label))
+            return {"kind": kind,
+                    "env": {"OPENAI_BASE_URL": base_url,
+                            "OPENAI_API_KEY": secret or "local"}}
         var = _API_ENV.get(kind)
         if var is None:
             raise LookupError(
@@ -168,12 +221,33 @@ class Accounts:
                 % (name, label))
         return {"kind": kind, "env": {var: secret}}
 
+    def list_models(self, name):
+        """Model ids the endpoint advertises (GET <base_url>/models). []
+        on any error -- best-effort discovery for the config UI (sub-project
+        2), never raises. Only openai_compatible accounts have an endpoint."""
+        entry = self.get(name)
+        if not entry or entry.get("kind") != "openai_compatible":
+            return []
+        base = (entry.get("base_url") or "").rstrip("/")
+        try:
+            req = urllib.request.Request(base + "/models")
+            label = entry.get("credential")
+            secret = self.credentials.get_secret(label) if label else None
+            if secret:
+                req.add_header("Authorization", "Bearer %s" % secret)
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return _parse_models_payload(resp.read())
+        except (urllib.error.URLError, OSError, ValueError):
+            return []
+
 
 def _main(argv):
     a = Accounts()
     if not argv:
         print("usage: accounts.py list | set <name> <kind> [credential] | "
-              "get <name> | delete <name> | resolve <name>", file=sys.stderr)
+              "set <name> openai_compatible <base_url> [credential] | "
+              "get <name> | delete <name> | resolve <name> | "
+              "list-models <name>", file=sys.stderr)
         return 2
     cmd, rest = argv[0], argv[1:]
     try:
@@ -183,7 +257,22 @@ def _main(argv):
             if len(rest) < 2:
                 print("set needs <name> <kind> [credential]", file=sys.stderr)
                 return 2
-            a.set(rest[0], rest[1], credential=rest[2] if len(rest) > 2 else None)
+            name, kind = rest[0], rest[1]
+            if kind == "openai_compatible":
+                if len(rest) < 3:
+                    print("openai_compatible needs <base_url>", file=sys.stderr)
+                    return 2
+                a.set(name, kind, base_url=rest[2],
+                      credential=rest[3] if len(rest) > 3 else None)
+            else:
+                a.set(name, kind,
+                      credential=rest[2] if len(rest) > 2 else None)
+        elif cmd == "list-models":
+            if not rest:
+                print("list-models needs <name>", file=sys.stderr)
+                return 2
+            for mid in a.list_models(rest[0]):
+                print(mid)
         elif cmd == "get":
             e = a.get(rest[0]) if rest else None
             if e is None:

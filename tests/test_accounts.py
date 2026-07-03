@@ -43,7 +43,9 @@ class TestAccountsCrud(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.a.set("work", "anthropic_api")            # no credential -> reject
         self.a.set("work", "anthropic_api", credential="work-key")
-        self.assertEqual(self.a.get("work"), {"kind": "anthropic_api", "credential": "work-key"})
+        self.assertEqual(self.a.get("work"), {"kind": "anthropic_api",
+                                              "base_url": None,
+                                              "credential": "work-key"})
 
     def test_subscription_kind_forbids_credential(self):
         with self.assertRaises(ValueError):
@@ -62,7 +64,9 @@ class TestAccountsCrud(unittest.TestCase):
     def test_set_upserts(self):
         self.a.set("work", "anthropic_api", credential="k1")
         self.a.set("work", "openai_api", credential="k2")   # re-point same name
-        self.assertEqual(self.a.get("work"), {"kind": "openai_api", "credential": "k2"})
+        self.assertEqual(self.a.get("work"), {"kind": "openai_api",
+                                              "base_url": None,
+                                              "credential": "k2"})
         self.assertEqual(len(self.a.list()), 1)
 
     def test_delete_is_idempotent(self):
@@ -250,6 +254,105 @@ class TestCli(unittest.TestCase):
         rc, _out, err, _tmp = self._run(["set", "x", "bogus_kind"])
         self.assertEqual(rc, 1)
         self.assertIn("kind", err)
+
+
+class TestOpenAICompatible(unittest.TestCase):
+    """openai_compatible: a role points at any OpenAI-compatible endpoint
+    (local Ollama/LM Studio or a remote gateway). The index stores the URL
+    (+ optional credential LABEL), never a secret (#78)."""
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.idx = os.path.join(self.tmp, "accounts")
+        self.acc = ac.Accounts(index_path=self.idx,
+                               credentials=FakeCreds({"gw-key": "sk-remote-9"}))
+
+    def test_set_and_get_base_url(self):
+        self.acc.set("local-llm", "openai_compatible",
+                     base_url="http://localhost:11434/v1")
+        self.assertEqual(self.acc.get("local-llm"),
+                         {"kind": "openai_compatible",
+                          "base_url": "http://localhost:11434/v1",
+                          "credential": None})
+
+    def test_resolve_local_exports_base_url_and_dummy_key(self):
+        self.acc.set("local-llm", "openai_compatible",
+                     base_url="http://localhost:11434/v1")
+        self.assertEqual(
+            self.acc.resolve("local-llm"),
+            {"kind": "openai_compatible",
+             "env": {"OPENAI_BASE_URL": "http://localhost:11434/v1",
+                     "OPENAI_API_KEY": "local"}})
+
+    def test_resolve_with_credential_exports_real_key(self):
+        self.acc.set("remote", "openai_compatible",
+                     base_url="https://gw.example/v1", credential="gw-key")
+        env = self.acc.resolve("remote")["env"]
+        self.assertEqual(env["OPENAI_BASE_URL"], "https://gw.example/v1")
+        self.assertEqual(env["OPENAI_API_KEY"], "sk-remote-9")
+
+    def test_resolve_credential_without_secret_refuses(self):
+        # a labelled credential with no secret in the Keychain must refuse,
+        # never fall back to the "local" dummy key (fail-safe).
+        self.acc.set("remote", "openai_compatible",
+                     base_url="https://gw.example/v1", credential="missing")
+        with self.assertRaises(LookupError):
+            self.acc.resolve("remote")
+
+    def test_set_requires_base_url(self):
+        with self.assertRaises(ValueError):
+            self.acc.set("bad", "openai_compatible")
+
+    def test_set_rejects_malformed_base_url(self):
+        for bad in ("ftp://x", "localhost:11434", "not a url", ""):
+            with self.assertRaises(ValueError):
+                self.acc.set("bad", "openai_compatible", base_url=bad)
+
+    def test_base_url_rejected_for_non_openai_kind(self):
+        with self.assertRaises(ValueError):
+            self.acc.set("x", "claude_subscription",
+                         base_url="http://localhost:11434/v1")
+        with self.assertRaises(ValueError):
+            self.acc.set("y", "anthropic_api", credential="lbl",
+                         base_url="http://localhost:11434/v1")
+
+    def test_resolve_missing_base_url_refuses(self):
+        # a hand-corrupted entry with no base_url must not resolve to a
+        # partial env (fail-safe, never fail-open).
+        self.acc.set("local-llm", "openai_compatible",
+                     base_url="http://localhost:11434/v1")
+        data = self.acc._load()
+        del data["accounts"]["local-llm"]["base_url"]
+        self.acc._save(data)
+        with self.assertRaises(LookupError):
+            self.acc.resolve("local-llm")
+
+    def test_index_holds_no_secret(self):
+        self.acc.set("remote", "openai_compatible",
+                     base_url="https://gw.example/v1", credential="gw-key")
+        with open(self.idx, encoding="utf-8") as fh:
+            raw = fh.read()
+        self.assertIn("gw-key", raw)          # the LABEL is stored
+        self.assertNotIn("sk-remote-9", raw)  # the SECRET never is
+
+
+class TestListModels(unittest.TestCase):
+    def test_list_models_parses_openai_shape(self):
+        payload = {"data": [{"id": "qwen3:14b"}, {"id": "deepseek-r1:14b"}]}
+        got = ac._parse_models_payload(json.dumps(payload).encode())
+        self.assertEqual(got, ["qwen3:14b", "deepseek-r1:14b"])
+
+    def test_list_models_bad_payload_is_empty(self):
+        self.assertEqual(ac._parse_models_payload(b"not json"), [])
+        self.assertEqual(ac._parse_models_payload(b'{"data": null}'), [])
+        self.assertEqual(ac._parse_models_payload(b'{"data": [{"no_id": 1}]}'), [])
+
+    def test_list_models_non_openai_account_is_empty(self):
+        tmp = tempfile.mkdtemp()
+        acc = ac.Accounts(index_path=os.path.join(tmp, "accounts"),
+                          credentials=FakeCreds())
+        acc.set("sub", "claude_subscription")
+        self.assertEqual(acc.list_models("sub"), [])
+        self.assertEqual(acc.list_models("ghost"), [])
 
 
 if __name__ == "__main__":
