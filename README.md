@@ -59,16 +59,20 @@ Two tiers of process, deliberately different lifetimes:
 - **The loops are background services.** Each registered repo's supervisor runs under
   **launchd** (the plist `setup_worktree.sh` installs), so it survives closing your
   terminal and, with `KeepAlive=true`, is **relaunched if it crashes**. Loading one is a
-  deliberate step — `bin/control.sh start <repo>` (or the go-live lines quickstart prints);
-  `./start` itself never runs `launchctl`. This is the tier that does the engineering.
-- **The dashboard is a foreground viewer.** `./start` (with repos registered) runs
-  `bin/dashboard.py` in the **foreground** — a window onto the loops, not a loop itself.
-  Ctrl-C stops it and closing its terminal kills it; **the loops are unaffected** either way
-  (they're separate launchd services). Nothing auto-restarts the dashboard — if it dies, just
-  re-run `./start`. Hard-kill a wedged one with `pkill -f bin/dashboard.py`.
+  deliberate step — `bin/control.sh start <repo>` (or the go-live lines quickstart prints).
+  This is the tier that does the engineering.
+- **The dashboard is a managed service too.** `./start` (with repos registered) loads
+  `bin/dashboard.py` as a **launchd service** (`com.autonomy.dashboard`) and opens the
+  browser — so it survives closing your terminal and restarts on crash/reboot, just like the
+  loops. Stop it with **`./start stop`** (booting the service out is the only thing that
+  actually stops it under `KeepAlive`); check it with `./start status`. Two opt-outs when you
+  don't want a service: **`./start --foreground`** runs it in this terminal (Ctrl-C stops it;
+  the loops are unaffected — they're separate services), and **`./start --no-launch`** just
+  prints the command without running anything. For a single terminal-native window onto the
+  live work log instead, **`./start console`** runs the engine as one foreground service.
 
-So the everyday model is: **loops run unattended under launchd; you open the dashboard when
-you want to watch, and close it when you're done.**
+So the everyday model is: **loops run unattended under launchd; `./start` brings up the
+dashboard service and opens it; `./start stop` takes the dashboard back down.**
 
 **Is it healthy?** Two read-only checks, no side effects:
 
@@ -86,11 +90,11 @@ its loop is *not* running (a finished loop should leave a clean tree), or when a
 uninspectable or the registry unreadable (surfaced, never reported healthy — fail-safe). It
 binds no port and runs no `launchctl`; health lives in the text, not the exit code.
 
-> **Note — the dashboard is a foreground process today, not yet a managed service.** Whether
-> to run it under launchd (survives terminal close, restarts on crash) or behind a
-> PID-file `./start stop|restart` is an open operator decision tracked in
-> [#81](https://github.com/Luke-Bradford/autonomy-engine/issues/81); until then, the run
-> model above (foreground viewer + launchd loops) is the intended one.
+> **Note — health signal.** `./start status` is the read-only health story today. A live
+> health strip *inside* the dashboard header (server up? loop stuck? worktree dirty? endpoint
+> down?) is still open on [#81](https://github.com/Luke-Bradford/autonomy-engine/issues/81),
+> pending a decision on where health-truth is owned (the shell `status` report vs. the Python
+> dashboard vs. a shared module).
 
 Starting, pausing, and hard-stopping the loops — one repo or all of them — is the
 [Lifecycle](#lifecycle-start--graceful-stop--hard-stop) section below.
