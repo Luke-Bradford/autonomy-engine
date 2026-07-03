@@ -129,5 +129,17 @@ resolve_cron_due
 check "invalid-name role did not fire" "" "$(cat "$CAPTURE")"
 contains "invalid-name role warned" "$(cat "$LOGF")" "WARN"
 
+# --- _role_name_path_safe: the single-sourced role-name charset gate (#110) ----
+# resolve_cron_due and resolve_event_wakes both gate a role name before it lands
+# in a marker/seen-set filename; the charset lives in ONE predicate now so the
+# two paths can never drift. It matches roles.py _ROLE_NAME_RE ([A-Za-z0-9._-]).
+check "_role_name_path_safe is defined" "function" "$(type -t _role_name_path_safe)"
+_role_name_path_safe "pm.v2";     check "safe: dotted name -> rc 0" "0" "$?"
+_role_name_path_safe "coder_1-a"; check "safe: word/underscore/dash -> rc 0" "0" "$?"
+_role_name_path_safe "bad/name";  check "unsafe: slash -> rc 1" "1" "$?"
+_role_name_path_safe "a b";       check "unsafe: space -> rc 1" "1" "$?"
+_role_name_path_safe 'a;b';       check "unsafe: semicolon -> rc 1" "1" "$?"
+_role_name_path_safe '';          check "empty name -> rc 0 (charset-clean; emptiness gated elsewhere)" "0" "$?"
+
 echo ""
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; else echo "$fails FAILED"; exit 1; fi
