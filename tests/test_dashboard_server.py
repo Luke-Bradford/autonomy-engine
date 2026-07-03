@@ -193,6 +193,16 @@ class TestBoardList(unittest.TestCase):
         dashboard.board_list("Luke-Bradford")
         self.assertEqual(len(calls), 1, "second call within TTL must be cached")
 
+    def test_cache_is_bounded(self):
+        # a long-lived process must not grow _board_cache without bound as
+        # distinct owners are queried (review NITPICK). Feed more distinct
+        # owners than the cap and assert the dict stays bounded.
+        dashboard._run = lambda args, **kw: self._GOOD
+        for n in range(dashboard._BOARD_CACHE_MAX + 20):
+            dashboard.board_list("owner%d" % n)
+        self.assertLessEqual(len(dashboard._board_cache),
+                             dashboard._BOARD_CACHE_MAX)
+
 
 class TestBoardsRoute(unittest.TestCase):
     def test_api_boards_routes_to_board_list(self):

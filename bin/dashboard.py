@@ -274,6 +274,7 @@ _gh_lock = threading.Lock()
 # owner so a page reload doesn't re-hit slow gh.
 _OWNER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
 _BOARD_TTL = 30.0
+_BOARD_CACHE_MAX = 32  # bound the dict: distinct owners must not grow it forever
 _board_cache = {}      # owner -> (wall_ts, result_dict)
 _board_lock = threading.Lock()
 
@@ -315,6 +316,14 @@ def board_list(owner):
                 titles.append(t)
             result = {"boards": titles, "error": None}
     with _board_lock:
+        if len(_board_cache) >= _BOARD_CACHE_MAX and owner not in _board_cache:
+            # bound the dict: drop TTL-expired entries first, then hard-reset if
+            # still at the cap (a small config-page cache, not a hot path).
+            for k in [k for k, (ts, _) in _board_cache.items()
+                      if now - ts >= _BOARD_TTL]:
+                del _board_cache[k]
+            if len(_board_cache) >= _BOARD_CACHE_MAX:
+                _board_cache.clear()
         _board_cache[owner] = (now, result)
     return result
 # repo -> the in-flight refresh Thread (single-flight guard). At most one refresh
