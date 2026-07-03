@@ -33,8 +33,13 @@ start_mode() {
 start_usage() {
   cat >&2 <<'EOF'
 usage: ./start [target-repo] [--port N] [--no-launch] [--foreground]
+       ./start console
        ./start status
        ./start stop
+
+`console` opens the terminal control app -- a foreground, cross-platform
+(Python) running application that launches the dashboard, streams logs, takes
+commands (status/pause/resume/chat/web), and stops on Ctrl-C.
 
 No repos registered yet: prints setup guidance; with a target-repo argument
 it runs the guided quickstart on it (and registers it for the dashboard).
@@ -403,6 +408,14 @@ if [ "${1:-}" = "stop" ]; then
   dashboard_service_stop
   echo "control-room dashboard stopped (service $(dashboard_service_label) booted out)."
   exit 0
+fi
+
+# `console` subcommand: the foreground terminal control app (launches the
+# dashboard, streams logs, takes commands, Ctrl-C to stop). Cross-platform
+# Python -- the visible, hard-killable "running application" surface.
+if [ "${1:-}" = "console" ]; then
+  shift
+  exec python3 "$ENGINE_HOME/bin/console.py" "$@"
 fi
 
 TARGET=""
