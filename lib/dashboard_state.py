@@ -744,27 +744,33 @@ def latest_session(logdir):
     return os.path.join(logdir, sorted(names)[-1])
 
 
-def recent_quota_windows(logdir, limit=12):
-    """Account rate-limit windows merged across the newest `limit` session
-    logs. Per window type keep the CURRENT window (max resets_at) and, within
-    it, the PEAK utilization.
+def recent_quota_windows(logdir, limit=60):
+    """Account rate-limit windows merged across recent session logs, scanned
+    NEWEST-FIRST with an early stop. Per window type keep the CURRENT window
+    (max resets_at) and, within it, the PEAK utilization.
 
-    Two reasons this beats reading one log:
-    - parse_quota_windows reads ONE log, but Anthropic emits five_hour and
-      seven_day events intermittently -- the newest log routinely carries only
-      one of the two, so a single-log read leaves the other window blank.
-    - within a window utilization only climbs until a reset; a later spurious
-      LOW reading at the same resets_at (e.g. a rejected event in a session that
-      just hit the limit) must NOT override the real peak, or the bar reads 0%
-      right after the account maxed out. Taking the max utilization at a given
-      resets_at fixes that. {} when none found."""
+    Why scan many, newest-first, and stop early:
+    - Anthropic emits five_hour and seven_day events INTERMITTENTLY, and at very
+      different rates: five_hour lands in ~every session log, but seven_day is
+      SPARSE -- observed ~18 logs back. A small fixed window (the old 12) reaches
+      five_hour but never the weekly, blanking it on the header. So walk
+      newest-first up to `limit` and stop as soon as BOTH windows are populated
+      (usually well before the cap); the cap only bounds the work when seven_day
+      is genuinely absent from recent history.
+    - within a window, utilization only climbs until a reset; a later spurious
+      LOW reading at the same resets_at (a rejected event in a session that just
+      hit the limit) must NOT override the real peak, or the bar reads 0% right
+      after the account maxed out. Keeping the max utilization at a given
+      resets_at fixes that. Because seven_day is the limiting (sparse) window,
+      the five_hour peak is captured across all the logs walked before we reach
+      it. {} when none found."""
     try:
         names = sorted(n for n in os.listdir(logdir)
                        if n.startswith("session-") and n.endswith(".log"))
     except OSError:
         return {}
     merged = {}
-    for name in names[-limit:]:   # order-independent: keep the best per window
+    for name in reversed(names[-limit:]):   # newest first -> early stop when both found
         for wt, win in parse_quota_windows(os.path.join(logdir, name)).items():
             cur = merged.get(wt)
             # .get(..., 0) keeps the merge degrading gracefully rather than
@@ -776,6 +782,8 @@ def recent_quota_windows(logdir, limit=12):
             c_reset, c_util = cur.get("resets_at", 0), cur.get("utilization", 0)
             if w_reset > c_reset or (w_reset == c_reset and w_util > c_util):
                 merged[wt] = win
+        if "five_hour" in merged and "seven_day" in merged:
+            break                           # both windows found; older logs only staler
     return merged
 
 

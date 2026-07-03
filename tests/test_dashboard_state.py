@@ -716,6 +716,24 @@ class TestRecentQuotaWindows(unittest.TestCase):
         self.addCleanup(shutil.rmtree, d, ignore_errors=True)
         self.assertEqual(ds.recent_quota_windows(d), {})
 
+    def test_finds_sparse_seven_day_many_logs_back(self):
+        # The real bug: five_hour lands in ~every session log but seven_day is
+        # SPARSE -- its most-recent event was ~18 logs back, past the old 12-log
+        # window, so the weekly went missing. The scan must reach it. Here 20
+        # logs all carry five_hour; only the OLDEST carries seven_day.
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        for i in range(20):
+            events = [self._rle("five_hour", 9000 + i, 0.10)]
+            if i == 0:                                   # oldest -> 20th-newest
+                events.append(self._rle("seven_day", 7000, 0.63))
+            self._log(d, "session-%03d.log" % i, events)
+        w = ds.recent_quota_windows(d)
+        self.assertIn("seven_day", w)                    # found despite being 20 back
+        self.assertAlmostEqual(w["seven_day"]["utilization"], 0.63)
+        self.assertIn("five_hour", w)
+        self.assertEqual(w["five_hour"]["resets_at"], 9019)  # newest 5h window
+
     def test_peak_util_wins_over_later_spurious_low_at_same_window(self):
         # a session that just hit the limit logs a spurious low reading at the
         # SAME resets_at as the real ~peak; the peak must win (bar was reading 0%
