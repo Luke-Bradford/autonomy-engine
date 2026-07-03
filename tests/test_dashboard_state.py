@@ -256,6 +256,56 @@ class TestSupervisorVoice(unittest.TestCase):
         self.assertEqual(ds.read_supervisor_voice(os.path.join(LOGDIR, "nope.log")), [])
 
 
+class TestHeartbeat(unittest.TestCase):
+    """read_heartbeat parses the supervisor's one-line structured liveness twin
+    (#177): `ts \\t phase \\t until_epoch \\t reason`. Best-effort -> {}."""
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.p = os.path.join(self.d, "heartbeat")
+
+    def tearDown(self):
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def _write(self, line):
+        with open(self.p, "w") as fh:
+            fh.write(line)
+
+    def test_parses_all_fields(self):
+        self._write("1893456000\tpace-wait\t1893456120\tsession clean -- next soon\n")
+        hb = ds.read_heartbeat(self.p)
+        self.assertEqual(hb["phase"], "pace-wait")
+        self.assertEqual(hb["ts"], 1893456000)
+        self.assertEqual(hb["until"], 1893456120)
+        self.assertEqual(hb["reason"], "session clean -- next soon")
+
+    def test_empty_until_is_zero(self):
+        self._write("1893456000\tsession-running coder\t\trunning a coder session\n")
+        hb = ds.read_heartbeat(self.p)
+        self.assertEqual(hb["until"], 0)
+        self.assertEqual(hb["phase"], "session-running coder")
+
+    def test_missing_file_is_empty(self):
+        self.assertEqual(ds.read_heartbeat(os.path.join(self.d, "nope")), {})
+
+    def test_malformed_too_few_fields_is_empty(self):
+        self._write("1893456000\tpace-wait\n")
+        self.assertEqual(ds.read_heartbeat(self.p), {})
+
+    def test_non_integer_ts_is_empty(self):
+        self._write("notanint\tpace-wait\t0\treason\n")
+        self.assertEqual(ds.read_heartbeat(self.p), {})
+
+    def test_blank_phase_is_empty(self):
+        self._write("1893456000\t\t0\treason\n")
+        self.assertEqual(ds.read_heartbeat(self.p), {})
+
+    def test_build_repo_state_includes_heartbeat(self):
+        # the fixture repo ships a heartbeat file (added for #177 render)
+        st = ds.build_repo_state(FIX, pid_is_alive=lambda p: True, git_in_flight=lambda p: {})
+        self.assertIn("heartbeat", st)
+        self.assertIsInstance(st["heartbeat"], dict)
+
+
 class TestLifecycle(unittest.TestCase):
     def test_stopped_when_lock_pid_dead(self):
         st = ds.lifecycle_status(FIX, pid_is_alive=lambda p: False)

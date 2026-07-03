@@ -404,7 +404,18 @@ function renderFocus(repos){
     else if(st==="stopping") stepLine=`<div class="fc-step">⏸ graceful stop pending · → <span class="k">${esc(short(cs.current_step||"…",48))}</span></div>`;
     else if(st==="stopped") stepLine=`<div class="fc-step">supervisor stopped — hard start to run</div>`;
     else if(busy) stepLine=`<div class="fc-step">→ <span class="k">${esc(short(cs.current_step||"…",56))}</span></div>`;
-    else stepLine=`<div class="fc-step">idle — waiting for next session</div>`;
+    else {
+      // #177: narrate the supervisor's own wait state (heartbeat) with a live
+      // countdown instead of a bare IDLE. This is the 'idle' dispStatus (alive,
+      // between sessions); a hard-stopped supervisor keeps its own line above,
+      // so a stale heartbeat is never shown as live. Countdown ticks
+      // client-side via the .qreset ticker.
+      const hb=r.heartbeat;
+      if(hb&&hb.reason){
+        const cd = hb.until>nowS() ? ` · <span class="qreset" data-e="${hb.until}">${dur(hb.until-nowS())}</span>` : "";
+        stepLine=`<div class="fc-step">${esc(hb.reason)}${cd}</div>`;
+      } else stepLine=`<div class="fc-step">idle — waiting for next session</div>`;
+    }
     const elapsed = busy&&cs.started_epoch ? `elapsed <b class="upe mono" data-e="${cs.started_epoch}">${dur(nowS()-cs.started_epoch)}</b>`
                   : cs.updated_at ? `last active <b class="agox mono" data-t="${cs.updated_at}">${ago(nowS()-cs.updated_at)} ago</b>` : "";
     return `<div class="fcard ${st}" data-path="${encodeURIComponent(r.path)}">
