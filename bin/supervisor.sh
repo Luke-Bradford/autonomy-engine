@@ -342,6 +342,14 @@ _cron_enumerate() {
 # a thin string-tester. NEVER returns non-zero -- a cron hiccup is not a loop
 # error. The role name reaches a filesystem path, so it is charset-gated at the
 # point of use exactly like ROLE_AGENT (prevention-log #6).
+# Write epoch $2 to marker file $1; rc!=0 on failure. The subshell contains the
+# redirection so a failed '>' (e.g. permission denied) does NOT leak its error
+# to the supervisor's stderr -- an inline `2>/dev/null` runs too late to catch a
+# redirection-open failure, which bash reports before the command runs.
+_cron_write_marker() {
+  ( printf '%s' "$2" >"$1" ) 2>/dev/null
+}
+
 resolve_cron_due() {
   local enum now name schedule marker last due
   enum="$(_cron_enumerate)" || return 0
@@ -360,12 +368,22 @@ resolve_cron_due() {
     esac
     marker="$VARDIR/cron/$name.last_fire"
     if [ ! -f "$marker" ]; then
-      printf '%s' "$now" >"$marker" 2>/dev/null \
+      _cron_write_marker "$marker" "$now" \
         || log "WARN cron: cannot initialise marker for '$name'"
       continue
     fi
     last="$(cat "$marker" 2>/dev/null)"
-    case "$last" in ''|*[!0-9]*) last=0 ;; esac
+    case "$last" in
+      ''|*[!0-9]*)
+        # Marker exists but is unreadable/corrupt. Treat it like first-sight --
+        # reinitialise to now WITHOUT firing -- rather than substituting epoch 0
+        # (which would read as "never fired" and force a spurious immediate
+        # fire). Under-fire, never over-fire, and self-healing next tick.
+        log "WARN cron: marker for '$name' unreadable/corrupt -- reinitialising without firing"
+        _cron_write_marker "$marker" "$now" \
+          || log "WARN cron: cannot reinitialise marker for '$name'"
+        continue ;;
+    esac
     # roles.py owns the cron_next_fire math; unparseable/error -> not-due.
     due="$(python3 "$ENGINE_HOME/lib/roles.py" cron-due "$schedule" "$last" "$now" 2>>"$SUPLOG")" || continue
     [ "$due" = "due" ] || continue
@@ -375,7 +393,7 @@ resolve_cron_due() {
     # crash mid-session leaves the marker already advanced (waits for the next
     # window) rather than re-firing. The session's own rc does not gate the
     # marker -- a refused/failed session still waits for its next slot.
-    if printf '%s' "$now" >"$marker" 2>/dev/null; then
+    if _cron_write_marker "$marker" "$now"; then
       log "cron: role '$name' due (schedule '$schedule') -- firing"
       run_session "$name" || log "cron: role '$name' session rc=$? (see supervisor.log)"
     else

@@ -82,6 +82,19 @@ resolve_cron_due; rc=$?
 check "enumeration failure returns 0" "0" "$rc"
 check "enumeration failure fired nothing" "" "$(cat "$CAPTURE")"
 
+# --- corrupt/unreadable marker: reinit without firing (under-fire) -----------
+# A non-numeric marker must NOT be read as epoch 0 (which would force an
+# immediate spurious fire) -- treat like first-sight: reinit to now, no fire.
+reset
+ENUM_OUT="corrupt${TAB}* * * * *"
+mkdir -p "$VARDIR/cron"
+printf 'garbage' >"$VARDIR/cron/corrupt.last_fire"
+resolve_cron_due
+check "corrupt-marker role did not fire" "" "$(cat "$CAPTURE")"
+cm="$(cat "$VARDIR/cron/corrupt.last_fire")"
+check "corrupt marker reinitialised to a numeric epoch" "yes" "$(printf '%s' "$cm" | grep -qE '^[0-9]+$' && echo yes || echo no)"
+contains "corrupt-marker warned" "$(cat "$LOGF")" "WARN"
+
 # --- marker write failure: skip fire, no over-fire (fail-safe under-fire) ----
 # The marker is advanced BEFORE firing; if that write fails the role must NOT
 # fire (else it re-fires every tick). Simulate by making the marker read-only.
