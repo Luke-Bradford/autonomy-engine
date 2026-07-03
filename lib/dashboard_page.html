@@ -228,6 +228,13 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
 .vln .vt{color:var(--dim);flex:none}
 .vln.limit{color:var(--warn)} .vln.err{color:var(--bad)} .vln.clean{color:var(--ok-dim)} .vln.start{color:var(--ink)} .vln.pause{color:var(--warn)}
 
+/* handoffs (choreography feed, #177 piece 3) */
+.hfeed{max-height:240px;overflow-y:auto;padding:8px 0}
+.hln{display:flex;align-items:center;gap:8px;padding:4px 14px;font-size:11.5px;color:var(--mut)}
+.hln .hact{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hln .hat{margin-left:auto;flex:none;font-family:var(--mono);font-size:10px;color:var(--dim)}
+.hln .chip{flex:none}
+
 /* git in flight */
 .pr{padding:11px 14px;border-bottom:1px solid var(--hair)}
 .pr:last-child{border-bottom:0}
@@ -299,6 +306,10 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
       <div>
         <div class="sh"><h2>Throughput</h2><span class="ln"></span><span class="ct">output tok/min</span></div>
         <div class="panel" id="tp"></div>
+      </div>
+      <div>
+        <div class="sh"><h2>Handoffs</h2><span class="ln"></span></div>
+        <div class="panel"><div class="p-h" style="border-bottom:1px solid var(--hair)"><span class="sub">the org's choreography — cron fires &amp; event wakes handing work to a role</span></div><div class="hfeed" id="handoffs"></div></div>
       </div>
       <div>
         <div class="sh"><h2>Supervisor voice</h2><span class="ln"></span></div>
@@ -709,6 +720,26 @@ function renderThroughput(repos){
   </div>`;
 }
 
+/* ---- HANDOFFS (choreography feed, #177 piece 3) ---- */
+function handoffText(e){
+  if(e.kind==="cron") return "cron fired";
+  if(e.event==="session.done") return "← woken by session.done";
+  const refs=(e.refs||[]).map(t=>"#"+String(t).split(":")[0]).join(" ");
+  return "← woken by "+e.event+(refs?" "+refs:"");
+}
+function renderHandoffs(repos){
+  const rows=[];repos.forEach(r=>(r.choreography||[]).forEach(e=>rows.push({repo:r.name,e})));
+  // flatten across repos then sort chronologically (each repo is oldest-first, but
+  // repo order is not time order); ts===0 (unparsed) sorts oldest.
+  rows.sort((a,b)=>(a.e.ts||0)-(b.e.ts||0));
+  const tail=rows.slice(-40);const many=repos.filter(r=>(r.choreography||[]).length).length>1;
+  if(!tail.length){$("handoffs").innerHTML=`<div class="empty">No handoffs yet — cron/event roles appear here when they fire.</div>`;return;}
+  $("handoffs").innerHTML=tail.map(x=>{const e=x.e;
+    const ts=+e.ts||0;  // coerce: only digits reach data-t (attr-injection guard)
+    const when=ts?`<span class="hat agox" data-t="${ts}">${ago(nowS()-ts)} ago</span>`:"";
+    return `<div class="hln"><span class="chip">${esc(e.role)}</span><span class="hact">${many?"["+esc(x.repo)+"] ":""}${esc(handoffText(e))}</span>${when}</div>`;}).join("");
+  const h=$("handoffs");h.scrollTop=h.scrollHeight;}
+
 /* ---- VOICE ---- */
 function vcls(l){if(/USAGE LIMIT/i.test(l))return "limit";if(/PAUSE|resuming|graceful/i.test(l))return "pause";
   if(/error|fail|abort|cannot/i.test(l))return "err";if(/session clean|board empty/i.test(l))return "clean";
@@ -765,7 +796,7 @@ function renderEngineUpdate(e){
 }
 function render(s){LAST=s;GEN=s.generated_at||Math.floor(nowS());
   renderFocus(s.repos);renderHistory(s.repos);renderRepos(s.repos);renderQuota(s.repos,s.account);renderActivity(s.repos);
-  renderThroughput(s.repos);renderVoice(s.repos);renderGit(s.repos);renderEngineUpdate(s.engine);
+  renderThroughput(s.repos);renderHandoffs(s.repos);renderVoice(s.repos);renderGit(s.repos);renderEngineUpdate(s.engine);
   $("f-gen").textContent="snapshot "+new Date(GEN*1000).toISOString().slice(11,19)+"Z";}
 function setLive(ok){$("h-live").classList.toggle("stale",!ok);$("h-live-t").textContent=ok?"live":"reconnecting";}
 function connect(){let es;try{es=new EventSource("/api/stream");}catch(e){poll();return;}
