@@ -1,0 +1,35 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Autonomy: console",
+      "detail": "Foreground terminal control app — dashboard + live logs + commands (Ctrl-C to stop).",
+      "type": "shell",
+      "command": "./start console",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": true,
+        "clear": true
+      },
+      "problemMatcher": [],
+      "runOptions": { "instanceLimit": 1 }
+    },
+    {
+      "label": "Autonomy: status",
+      "detail": "One-shot health report (dashboard, loops, quota) — read-only.",
+      "type": "shell",
+      "command": "./start status",
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Autonomy: stop dashboard service",
+      "detail": "Hard-stop the background launchd dashboard service.",
+      "type": "shell",
+      "command": "./start stop",
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    }
+  ]
+}
