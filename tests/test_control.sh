@@ -86,6 +86,21 @@ check "find_plist maps repo -> its plist" "$HOME/Library/LaunchAgents/com.autono
 check "find_plist empty when none installed" "" "$(ctl_find_plist "$repoB")"
 check "plist label extracted" "com.autonomy.repoa.supervisor" "$(ctl_plist_label "$(ctl_find_plist "$repoA")")"
 
+# --- lanes (#147 Part 2): two lanes of ONE repo -> two distinct plists ---------
+# control keys purely on WorkingDirectory + Label, so per-lane worktrees make it
+# lane-safe with NO code change: the default lane keeps the legacy label, the
+# non-default lane gets <slug>.<lane>, and each worktree resolves to its own plist.
+wtMain="$tmp/wt-lanerepo"; wtFe="$tmp/wt-lanerepo-fe"
+mkdir -p "$wtMain" "$wtFe"
+mkplist lanerepo "$wtMain"       # default lane, legacy label
+mkplist lanerepo.fe "$wtFe"      # non-default lane, com.autonomy.lanerepo.fe.supervisor
+check "lane: default-lane worktree -> legacy plist" \
+  "$HOME/Library/LaunchAgents/com.autonomy.lanerepo.supervisor.plist" "$(ctl_find_plist "$wtMain")"
+check "lane: non-default worktree -> per-lane plist" \
+  "$HOME/Library/LaunchAgents/com.autonomy.lanerepo.fe.supervisor.plist" "$(ctl_find_plist "$wtFe")"
+check "lane: per-lane label extracted" \
+  "com.autonomy.lanerepo.fe.supervisor" "$(ctl_plist_label "$(ctl_find_plist "$wtFe")")"
+
 # --- loop state: lock pid + pause sentinel -------------------------------------
 check "no lock -> stopped" "stopped" "$(ctl_loop_state "$repoA")"
 mkdir -p "$repoA/var/autonomy-supervisor.lock" "$repoA/var/autonomy-logs"

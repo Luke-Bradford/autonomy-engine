@@ -72,5 +72,66 @@ check "absolute default_path used as-is" "$tmp/custom-abs-wt" "$(resolve_worktre
 
 check "positional arg wins over config + default" "/explicit/path" "$(resolve_worktree_path "/explicit/path")"
 
+# --- lanes (#147 Part 2 per-lane plist): label segment + derived worktree ------
+# lane_label_middle = the __LABEL__ segment; default/empty lane keeps the legacy
+# <slug> (byte-identical to today), a non-default lane becomes <slug>.<lane>.
+check "label middle: empty lane keeps legacy slug"        "eb" "$(lane_label_middle eb "" main)"
+check "label middle: lane == default keeps legacy slug"   "eb" "$(lane_label_middle eb main main)"
+check "label middle: non-default lane -> slug.lane"       "eb.fe" "$(lane_label_middle eb fe main)"
+
+# lane_worktree_default: derived basename; default/empty unchanged, non-default
+# gets a per-lane suffix so it never collides with the default worktree.
+check "worktree default: empty lane unchanged"            ".eb-autonomy" "$(lane_worktree_default eb "" main)"
+check "worktree default: lane == default unchanged"       ".eb-autonomy" "$(lane_worktree_default eb main main)"
+check "worktree default: non-default lane suffixed"       ".eb-fe-autonomy" "$(lane_worktree_default eb fe main)"
+
+# --- render_plist: line-by-line, byte-identical default, --lane appended -------
+TMPL="$HERE/../templates/supervisor.plist.tmpl"
+
+# Default lane (empty): identical to today's sed render (no --lane, legacy Label).
+sed_ref="$(sed -e "s#__ENGINE_HOME__#/eng#g" -e "s#__REPO__#/wt#g" -e "s#__LABEL__#eb#g" "$TMPL")"
+render_default="$(render_plist "$TMPL" /eng /wt eb "")"
+check "render default == today's sed output (byte-identical)" "$sed_ref" "$render_default"
+if printf '%s' "$render_default" | grep -q -- '--lane'; then
+  echo "FAIL - default render must NOT contain --lane"; fails=$((fails + 1))
+else echo "ok   - default render has no --lane"; fi
+
+# Non-default lane: --lane <lane> appended after the repo arg; Label carries lane.
+render_fe="$(render_plist "$TMPL" /eng /wt eb.fe fe)"
+if printf '%s' "$render_fe" | grep -q '<string>com.autonomy.eb.fe.supervisor</string>'; then
+  echo "ok   - non-default render Label is com.autonomy.eb.fe.supervisor"
+else echo "FAIL - non-default render Label wrong"; fails=$((fails + 1)); fi
+# The --lane arg + value must appear in the exact ProgramArguments order, right
+# after the --repo value (and NOT after the WorkingDirectory line, which shares
+# the same repo string). Collapse whitespace/newlines and match the sequence.
+collapsed="$(printf '%s' "$render_fe" | tr -d ' \n')"
+case "$collapsed" in
+  *"<string>--repo</string><string>/wt</string><string>--lane</string><string>fe</string>"*)
+    echo "ok   - --lane fe inserted directly after the repo arg" ;;
+  *) echo "FAIL - --lane not in argv order after --repo"; fails=$((fails + 1)) ;;
+esac
+# ...and exactly once (WorkingDirectory's /wt must NOT trigger a second insert).
+n_lane="$(printf '%s\n' "$render_fe" | grep -c -- '<string>--lane</string>')"
+check "exactly one --lane arg emitted" "1" "$n_lane"
+
+# --- main-body lane refuses (real script subprocess; all exit before any git) --
+# These invoke the guarded body, which validates the lane BEFORE touching git,
+# so they never mutate a repo. A temp target repo with a two-lane config.
+laneRepo="$tmp/lanerepo"; mkdir -p "$laneRepo/.autonomy"
+cat > "$laneRepo/.autonomy/config.yaml" <<'YAML'
+lanes:
+  main: {}
+  fe: {}
+YAML
+SCRIPT="$HERE/../bin/setup_worktree.sh"
+run_refuse() { HOME="$tmp/nohome" bash "$SCRIPT" "$@" >/dev/null 2>&1; echo "$?"; }
+
+check "undeclared lane is refused"        "1" "$(run_refuse "$laneRepo" --lane nope)"
+check "empty --lane value is refused"     "1" "$(run_refuse "$laneRepo" --lane '')"
+check "empty --lane= value is refused"    "1" "$(run_refuse "$laneRepo" --lane=)"
+check "bad-charset lane is refused"       "1" "$(run_refuse "$laneRepo" --lane 'a b')"
+check "over-long lane is refused"         "1" "$(run_refuse "$laneRepo" --lane "$(printf 'x%.0s' $(seq 1 65))")"
+check "unknown flag is refused"           "1" "$(run_refuse "$laneRepo" --bogus)"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
