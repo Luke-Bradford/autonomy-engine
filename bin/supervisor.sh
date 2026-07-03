@@ -718,6 +718,12 @@ run_session() {
   log_knob_notes "$AUTONOMY_TARGET_REPO" "$role"
 
   local log_file; log_file="$LOGDIR/session-$(date +%Y%m%dT%H%M%S).log"
+  # Role sidecar (#148): the dashboard attributes the live session to its role
+  # from this marker, NOT by parsing the voice log (fragile, races the tail).
+  # Written before the session runs, best-effort -- a marker-write failure must
+  # never block the session (the card just falls back to its default badge).
+  printf '%s\n' "$role" >"${log_file%.log}.role" 2>>"$SUPLOG" || \
+    log "NOTE could not write role marker for '$role' (dashboard falls back to default badge)"
   log "session start (role=$role model=$MODEL effort=${EFFORT:-default} auth=$auth_note) -> $log_file"
 
   invoke_scoped_env "$env_lines" \
