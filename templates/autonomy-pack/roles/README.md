@@ -9,8 +9,12 @@ read this exact path).
 - `qa.md` — scaffolded by onboard; used by the qa-merge-gate workflow
   (`templates/qa-merge-gate.yml` in the engine repo) when `roles.qa` is
   enabled with `substrate: actions`.
-- `pm.md` / `researcher.md` — write these when enabling those roles
-  (currently gated on the Managed Agents rate-limit spike — engine issue #17).
+- `researcher.md` — scaffolded by onboard; the read-only, cron/manual
+  forward-looking deep-dive (understands the app/board/stack and surfaces
+  findings via the `output:` knob). Enable it with the `researcher:` example in
+  `config.yaml`.
+- `pm.md` — write this when enabling the PM role (still gated on the Managed
+  Agents rate-limit spike — engine issue #17).
 
 ## Custom roles
 
