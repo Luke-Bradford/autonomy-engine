@@ -45,9 +45,8 @@ _cron_enumerate() { [ "$ENUM_RC" -eq 0 ] || return "$ENUM_RC"; printf '%s' "$ENU
 
 reset() { : >"$CAPTURE"; : >"$LOGF"; rm -rf "$VARDIR"; ENUM_OUT=""; ENUM_RC=0; }
 
-# --- functions defined by sourcing -------------------------------------------
+# --- the real function is defined by sourcing (not a stub) -------------------
 check "resolve_cron_due is defined" "function" "$(type -t resolve_cron_due)"
-check "_cron_enumerate seam is defined" "function" "$(type -t _cron_enumerate)"
 
 # --- a due role fires and its marker advances --------------------------------
 reset
@@ -82,6 +81,24 @@ ENUM_RC=1
 resolve_cron_due; rc=$?
 check "enumeration failure returns 0" "0" "$rc"
 check "enumeration failure fired nothing" "" "$(cat "$CAPTURE")"
+
+# --- marker write failure: skip fire, no over-fire (fail-safe under-fire) ----
+# The marker is advanced BEFORE firing; if that write fails the role must NOT
+# fire (else it re-fires every tick). Simulate by making the marker read-only.
+# Skipped under root (perms ignored).
+if [ "$(id -u)" != "0" ]; then
+  reset
+  ENUM_OUT="stuck${TAB}* * * * *"
+  mkdir -p "$VARDIR/cron"
+  echo 1000000000 >"$VARDIR/cron/stuck.last_fire"   # due
+  chmod 0444 "$VARDIR/cron/stuck.last_fire"
+  resolve_cron_due; rc=$?
+  chmod 0644 "$VARDIR/cron/stuck.last_fire"          # restore for cleanup
+  check "marker-write failure returns 0" "0" "$rc"
+  check "marker-write failure did not fire" "" "$(cat "$CAPTURE")"
+  check "marker-write failure left marker unadvanced" "1000000000" "$(cat "$VARDIR/cron/stuck.last_fire")"
+  contains "marker-write failure warned" "$(cat "$LOGF")" "WARN"
+fi
 
 # --- invalid role name: WARN, ignored, no fire (prevention-log #6) -----------
 reset

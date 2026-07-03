@@ -182,8 +182,17 @@ def validate_roles(config):
                 if ttype not in VALID_TRIGGERS:
                     errors.append("roles.%s: unknown trigger type %r (valid: %s)"
                                   % (name, ttype, ", ".join(VALID_TRIGGERS)))
-                elif ttype == "cron" and not str(trigger.get("schedule") or "").strip():
-                    errors.append("roles.%s: trigger type cron requires a schedule" % name)
+                elif ttype == "cron":
+                    sched = str(trigger.get("schedule") or "").strip()
+                    if not sched:
+                        errors.append("roles.%s: trigger type cron requires a schedule" % name)
+                    elif cron_next_fire(sched, 0) is None:
+                        # A non-blank but unparseable schedule would pass silently
+                        # and then never fire (cron-due always 'not-due') -- surface
+                        # it at validation so doctor catches the misconfig.
+                        errors.append("roles.%s: trigger schedule is not a valid "
+                                      "cron expression: %r"
+                                      % (name, trigger.get("schedule")))
                 elif ttype == "event":
                     on = trigger.get("on")
                     if not isinstance(on, list) or not on:
@@ -453,13 +462,27 @@ def render_scope(scope):
     return "Scope: work ONLY within this scope: %s." % rendered
 
 
+def dispatchable_roles(config):
+    """Every role the supervisor may run a session for: enabled loop roles
+    (round-robined by the loop) PLUS enabled cron roles (fired by the W1
+    scheduler through the same run_session path). role_settings resolves any of
+    these; event roles are not yet dispatched. Loop roles keep their stable
+    order; cron roles that are not also loop roles are appended."""
+    names = list(dispatch_roles(config))
+    for name, _sched in cron_roles(config):
+        if name not in names:
+            names.append(name)
+    return names
+
+
 def role_settings(config, name):
     """The session settings the supervisor needs to dispatch `name`:
     account/model/effort/prompt/scope as strings ('' = unset, supervisor
     falls back to its agent.* resolution) plus instances (int >= 1).
-    KeyError when the role is not dispatchable (not in dispatch_roles) --
-    the CLI turns that into exit 1 so the supervisor refuses cleanly."""
-    if name not in dispatch_roles(config):
+    KeyError when the role is not dispatchable (neither an enabled loop role
+    nor an enabled cron role) -- the CLI turns that into exit 1 so the
+    supervisor refuses cleanly."""
+    if name not in dispatchable_roles(config):
         raise KeyError(name)
     roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
     cfg = roles_blk.get(name) if isinstance(roles_blk, dict) else None
@@ -591,7 +614,7 @@ def _dispatch_main(argv):
     try:
         s = role_settings(config, argv[2])
     except KeyError:
-        print("roles: %r is not an enabled loop role" % argv[2],
+        print("roles: %r is not an enabled loop or cron role" % argv[2],
               file=sys.stderr)
         return 1
     for key in ("account", "agent", "model", "effort", "prompt", "scope"):

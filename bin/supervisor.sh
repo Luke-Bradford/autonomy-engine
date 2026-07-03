@@ -369,13 +369,18 @@ resolve_cron_due() {
     # roles.py owns the cron_next_fire math; unparseable/error -> not-due.
     due="$(python3 "$ENGINE_HOME/lib/roles.py" cron-due "$schedule" "$last" "$now" 2>>"$SUPLOG")" || continue
     [ "$due" = "due" ] || continue
-    log "cron: role '$name' due (schedule '$schedule') -- firing"
-    run_session "$name" || log "cron: role '$name' session rc=$? (see supervisor.log)"
-    # Advance the marker regardless of the session's rc: under-fire (wait for
-    # the next window), never over-fire. A write failure warns and leaves the
-    # marker so the role does not re-fire every tick.
-    printf '%s' "$now" >"$marker" 2>/dev/null \
-      || log "WARN cron: marker write failed for '$name' -- not advancing (retries next tick)"
+    # Advance the marker to now BEFORE firing, and only fire if that write
+    # succeeded. This ordering is fail-safe in the under-fire direction: a
+    # marker-write failure skips the fire (never re-fires every tick), and a
+    # crash mid-session leaves the marker already advanced (waits for the next
+    # window) rather than re-firing. The session's own rc does not gate the
+    # marker -- a refused/failed session still waits for its next slot.
+    if printf '%s' "$now" >"$marker" 2>/dev/null; then
+      log "cron: role '$name' due (schedule '$schedule') -- firing"
+      run_session "$name" || log "cron: role '$name' session rc=$? (see supervisor.log)"
+    else
+      log "WARN cron: cannot advance marker for '$name' -- skipping fire this tick (avoids re-fire)"
+    fi
   done
   return 0
 }
