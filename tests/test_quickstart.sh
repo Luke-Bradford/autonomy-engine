@@ -134,6 +134,32 @@ check "invalid --merge-gate flag -> non-zero exit" "1" "$([ $? -ne 0 ] && echo 1
 bash "$ENGINE_HOME/bin/quickstart.sh" "$tmp/plain2" --model 'bad;model' </dev/null >/dev/null 2>&1
 check "invalid --model flag -> non-zero exit" "1" "$([ $? -ne 0 ] && echo 1 || echo 0)"
 
+# --- starter CLAUDE.md offer (#152), non-interactive via the --claude-md twin --
+mkdir -p "$tmp/cmyes"
+bash "$ENGINE_HOME/bin/quickstart.sh" "$tmp/cmyes" \
+  --board-owner o --board-title t --model claude-sonnet-5 --merge-gate manual \
+  --worktree no --register no --claude-md yes </dev/null >/dev/null 2>&1
+check "--claude-md yes scaffolds a starter CLAUDE.md" "0" "$([ -f "$tmp/cmyes/CLAUDE.md" ] && echo 0 || echo 1)"
+check "scaffolded CLAUDE.md is marked as a starter" "0" "$(grep -qi 'STARTER SCAFFOLD' "$tmp/cmyes/CLAUDE.md" && echo 0 || echo 1)"
+
+mkdir -p "$tmp/cmno"
+bash "$ENGINE_HOME/bin/quickstart.sh" "$tmp/cmno" \
+  --board-owner o --board-title t --model claude-sonnet-5 --merge-gate manual \
+  --worktree no --register no --claude-md no </dev/null >/dev/null 2>&1
+check "--claude-md no leaves the repo without a CLAUDE.md" "1" "$([ -f "$tmp/cmno/CLAUDE.md" ] && echo 0 || echo 1)"
+
+# Fully non-interactive with NO --claude-md twin and EOF: the offer declines
+# (never blocks/scaffolds unprompted), so no CLAUDE.md appears.
+mkdir -p "$tmp/cmeof"
+bash "$ENGINE_HOME/bin/quickstart.sh" "$tmp/cmeof" \
+  --board-owner o --board-title t --model claude-sonnet-5 --merge-gate manual \
+  --worktree no --register no </dev/null >/dev/null 2>&1
+check "no --claude-md twin + EOF -> declines, no CLAUDE.md" "1" "$([ -f "$tmp/cmeof/CLAUDE.md" ] && echo 0 || echo 1)"
+
+# Invalid --claude-md value fails loud, like the other yes|no twins.
+bash "$ENGINE_HOME/bin/quickstart.sh" "$tmp/cmyes" --claude-md maybe </dev/null >/dev/null 2>&1
+check "invalid --claude-md flag -> non-zero exit" "1" "$([ $? -ne 0 ] && echo 1 || echo 0)"
+
 # --- worktree + dashboard registration (real git fixture) ---------------------
 git init -q --bare "$tmp/origin.git"
 git clone -q "$tmp/origin.git" "$tmp/target" 2>/dev/null

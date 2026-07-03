@@ -12,7 +12,9 @@
 #   4. optional setup_worktree.sh  worktree + launchd plist (y/N, default no)
 #   5. optional dashboard register append the loop path to
 #                                  ~/.config/autonomy/repos (y/N, default no)
-#   6. printed next steps          the launchctl bootstrap + dashboard lines
+#   6. optional starter CLAUDE.md  scaffold one when the repo has none, via
+#                                  onboard.sh --claude-md (y/N, default no)
+#   7. printed next steps          the launchctl bootstrap + dashboard lines
 #
 # quickstart NEVER runs launchctl -- going live stays a deliberate operator
 # step (same diagnostic-honest stance as doctor.sh). Idempotent: re-running
@@ -21,7 +23,7 @@
 # Usage: quickstart.sh <target-repo>
 #          [--board-owner <login>] [--board-title <title>] [--model <id>]
 #          [--merge-gate manual|ci_only|bot_comment|gh_review]
-#          [--worktree yes|no] [--register yes|no]
+#          [--worktree yes|no] [--register yes|no] [--claude-md yes|no]
 # Every prompt has a flag twin, so the whole run can be non-interactive.
 # Invalid flag values fail immediately; invalid interactive answers warn and
 # re-prompt (EOF keeps the current value).
@@ -92,10 +94,11 @@ qs_usage() {
 usage: quickstart.sh <target-repo>
          [--board-owner <login>] [--board-title <title>] [--model <id>]
          [--merge-gate manual|ci_only|bot_comment|gh_review]
-         [--worktree yes|no] [--register yes|no]
+         [--worktree yes|no] [--register yes|no] [--claude-md yes|no]
 
 Guided single-entry onboarding: onboard -> minimum config -> doctor ->
-optional worktree -> optional dashboard registration -> printed next steps.
+optional worktree -> optional dashboard registration -> optional starter
+CLAUDE.md -> printed next steps.
 Every prompt has a flag twin for non-interactive use. Never runs launchctl.
 EOF
 }
@@ -115,7 +118,7 @@ source "$ENGINE_HOME/bin/setup_worktree.sh"
 
 TARGET=""
 BOARD_OWNER="" BOARD_TITLE="" MODEL="" MERGE_GATE=""
-WORKTREE_MODE="" REGISTER_MODE=""
+WORKTREE_MODE="" REGISTER_MODE="" CLAUDE_MD_MODE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --board-owner)  BOARD_OWNER="${2:?--board-owner needs a value}"; shift 2 ;;
@@ -124,6 +127,7 @@ while [ $# -gt 0 ]; do
     --merge-gate)   MERGE_GATE="${2:?--merge-gate needs a value}"; shift 2 ;;
     --worktree)     WORKTREE_MODE="${2:?--worktree needs yes|no}"; shift 2 ;;
     --register)     REGISTER_MODE="${2:?--register needs yes|no}"; shift 2 ;;
+    --claude-md)    CLAUDE_MD_MODE="${2:?--claude-md needs yes|no}"; shift 2 ;;
     -h|--help)      qs_usage; exit 0 ;;
     -*)             echo "quickstart.sh: unknown flag $1" >&2; qs_usage; exit 2 ;;
     *)              if [ -z "$TARGET" ]; then TARGET="$1"; shift
@@ -147,16 +151,17 @@ if [ -n "$MODEL" ] && ! valid_model_id "$MODEL"; then
 fi
 case "$WORKTREE_MODE" in ""|yes|no) ;; *) echo "quickstart.sh: --worktree takes yes|no" >&2; exit 2 ;; esac
 case "$REGISTER_MODE" in ""|yes|no) ;; *) echo "quickstart.sh: --register takes yes|no" >&2; exit 2 ;; esac
+case "$CLAUDE_MD_MODE" in ""|yes|no) ;; *) echo "quickstart.sh: --claude-md takes yes|no" >&2; exit 2 ;; esac
 
 echo "== quickstart: $TARGET_REPO =="
 
 echo ""
-echo "-- step 1/5: scaffold the .autonomy/ pack (idempotent, never overwrites)"
+echo "-- step 1/6: scaffold the .autonomy/ pack (idempotent, never overwrites)"
 "$ENGINE_HOME/bin/onboard.sh" "$TARGET_REPO"
 CFG="$TARGET_REPO/.autonomy/config.yaml"
 
 echo ""
-echo "-- step 2/5: minimum config (Enter keeps the value shown in brackets)"
+echo "-- step 2/6: minimum config (Enter keeps the value shown in brackets)"
 cur="$(CONFIG_GET "$CFG" board.owner || printf '')"
 val="${BOARD_OWNER:-$(qs_prompt "board.owner" "$cur")}"
 qs_set "$CFG" board.owner "$val"
@@ -171,7 +176,7 @@ val="${MERGE_GATE:-$(qs_prompt "merge_gate.strategy (manual|ci_only|bot_comment|
 qs_set "$CFG" merge_gate.strategy "$val"
 
 echo ""
-echo "-- step 3/5: readiness report (doctor.sh, diagnostic-only)"
+echo "-- step 3/6: readiness report (doctor.sh, diagnostic-only)"
 doctor_rc=0
 "$ENGINE_HOME/bin/doctor.sh" "$TARGET_REPO" || doctor_rc=$?
 
@@ -183,7 +188,7 @@ LABEL="com.autonomy.${SLUG}.supervisor"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
 
 echo ""
-echo "-- step 4/5: dedicated worktree + launchd plist (setup_worktree.sh)"
+echo "-- step 4/6: dedicated worktree + launchd plist (setup_worktree.sh)"
 do_worktree=no
 case "$WORKTREE_MODE" in
   yes) do_worktree=yes ;;
@@ -208,7 +213,7 @@ LOOP_PATH="$TARGET_REPO"
 if [ -d "$WORKTREE" ]; then LOOP_PATH="$WORKTREE"; fi
 
 echo ""
-echo "-- step 5/5: dashboard repo registration (~/.config/autonomy/repos)"
+echo "-- step 5/6: dashboard repo registration (~/.config/autonomy/repos)"
 do_register=no
 case "$REGISTER_MODE" in
   yes) do_register=yes ;;
@@ -221,6 +226,29 @@ case "$REGISTER_MODE" in
 esac
 if [ "$do_register" = yes ]; then
   qs_register_repo "$HOME/.config/autonomy/repos" "$LOOP_PATH"
+fi
+
+echo ""
+echo "-- step 6/6: starter CLAUDE.md (the loop + role rails read it; #152)"
+# Only relevant when the repo has none (Claude Code loads it from the root OR
+# .claude/); onboard --claude-md is idempotent and confirms the same, but
+# checking here keeps the prompt/skip messaging honest.
+if [ -f "$TARGET_REPO/CLAUDE.md" ] || [ -f "$TARGET_REPO/.claude/CLAUDE.md" ]; then
+  echo "skipped (CLAUDE.md already present)"
+else
+  do_claude_md=no
+  case "$CLAUDE_MD_MODE" in
+    yes) do_claude_md=yes ;;
+    no)  echo "skipped (--claude-md no)" ;;
+    "")  if qs_confirm "scaffold a starter CLAUDE.md (placeholders you fill in)?"; then
+           do_claude_md=yes
+         else
+           echo "skipped"
+         fi ;;
+  esac
+  if [ "$do_claude_md" = yes ]; then
+    "$ENGINE_HOME/bin/onboard.sh" "$TARGET_REPO" --claude-md
+  fi
 fi
 
 echo ""

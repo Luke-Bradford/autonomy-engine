@@ -27,5 +27,35 @@ echo "MY QA PROMPT" > "$tmp/.autonomy/roles/qa.md"
 check "idempotent -- does not clobber an existing file" "MY CUSTOM EDIT" "$(cat "$tmp/.autonomy/config.yaml")"
 check "idempotent in subdirectories too" "MY QA PROMPT" "$(cat "$tmp/.autonomy/roles/qa.md")"
 
+# --- --claude-md: opt-in starter CLAUDE.md scaffold (#152) -------------------
+# Default (no flag): the pack scaffold never touches CLAUDE.md.
+noc="$(mktemp -d)"
+"$ENGINE_HOME/bin/onboard.sh" "$noc" >/dev/null 2>&1
+check "no --claude-md flag -> CLAUDE.md NOT created" "1" "$([ -f "$noc/CLAUDE.md" ] && echo 0 || echo 1)"
+rm -rf "$noc"
+
+# --claude-md on a repo with none: scaffolds a marked starter at the repo root.
+fresh="$(mktemp -d)"
+"$ENGINE_HOME/bin/onboard.sh" "$fresh" --claude-md >/dev/null 2>&1
+check "--claude-md -> CLAUDE.md created at repo root" "0" "$([ -f "$fresh/CLAUDE.md" ] && echo 0 || echo 1)"
+check "scaffold is clearly marked as a starter" "0" "$(grep -qi 'STARTER SCAFFOLD' "$fresh/CLAUDE.md" && echo 0 || echo 1)"
+rm -rf "$fresh"
+
+# Idempotent: an existing root CLAUDE.md is never overwritten.
+keep="$(mktemp -d)"
+printf 'MY REAL CLAUDE MD\n' > "$keep/CLAUDE.md"
+"$ENGINE_HOME/bin/onboard.sh" "$keep" --claude-md >/dev/null 2>&1
+check "--claude-md never clobbers an existing root CLAUDE.md" "MY REAL CLAUDE MD" "$(cat "$keep/CLAUDE.md")"
+rm -rf "$keep"
+
+# Respects the .claude/ location too: a .claude/CLAUDE.md means "has one",
+# so no root scaffold is written (doctor accepts either location).
+dotc="$(mktemp -d)"
+mkdir -p "$dotc/.claude"
+printf 'DOT CLAUDE MD\n' > "$dotc/.claude/CLAUDE.md"
+"$ENGINE_HOME/bin/onboard.sh" "$dotc" --claude-md >/dev/null 2>&1
+check "--claude-md skips when .claude/CLAUDE.md already present" "1" "$([ -f "$dotc/CLAUDE.md" ] && echo 0 || echo 1)"
+rm -rf "$dotc"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
