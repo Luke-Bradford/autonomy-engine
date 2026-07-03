@@ -24,6 +24,8 @@
 # PRINTS the launchctl lines), start/stop DO run launchctl -- this is the
 # deliberate operator tool those printed next-steps hand over to.
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=/dev/null
+source "$ENGINE_HOME/bin/lock_paths.sh"   # single source of the lock pid path (#117)
 
 ctl_registry_file() { printf '%s' "$HOME/.config/autonomy/repos"; }
 
@@ -75,7 +77,7 @@ ctl_find_plist() {
 # supervisor reclaims it on next start).
 ctl_loop_state() {
   local repo="$1" pid
-  pid="$(cat "$repo/var/autonomy-supervisor.lock/pid" 2>/dev/null || printf '')"
+  pid="$(cat "$(supervisor_lock_pid_file "$repo")" 2>/dev/null || printf '')"
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
     if [ -f "$repo/var/autonomy-logs/autonomy-PAUSE" ]; then
       printf 'paused'
