@@ -419,8 +419,28 @@ run_session() {
   # Source the ROLE's agent adapter when it sets one (e.g. a local-LLM 'prep'
   # role on codex), else the global $AGENT_TYPE. resolve_role_dispatch has
   # already charset-gated ROLE_AGENT, so it is safe in this path.
+  #
+  # roles.py validates `agent:` only as a non-empty string -- it does NOT check
+  # the adapter file exists or is usable. Under `set -uo pipefail` (no `set -e`)
+  # a missing / unreadable / syntactically-broken / incomplete adapter would
+  # leave the `source` failed or partial and execution would continue with STALE
+  # agent_invoke/agent_classify_outcome definitions from a prior role in the
+  # round-robin (or undefined on the first role) -- silently running the WRONG
+  # agent. So: CLEAR any prior role's adapter functions first, then refuse the
+  # session unless the adapter loads AND defines the full contract. Fail-safe,
+  # never fail-open, like every other unresolvable dispatch (settled-decision #4).
+  local adapter_name="${ROLE_AGENT:-$AGENT_TYPE}"
+  local adapter="${AUTONOMY_AGENTS_DIR:-$ENGINE_HOME/bin/agents}/${adapter_name}.sh"
+  unset -f agent_invoke agent_classify_outcome 2>/dev/null || true
   # shellcheck source=/dev/null
-  source "${AUTONOMY_AGENTS_DIR:-$ENGINE_HOME/bin/agents}/${ROLE_AGENT:-$AGENT_TYPE}.sh"
+  # `declare -F` (not `command -v`): the contract must be a FUNCTION defined by
+  # the adapter, never an unrelated executable of the same name on $PATH.
+  if [ ! -f "$adapter" ] || ! source "$adapter" \
+      || ! declare -F agent_invoke >/dev/null 2>&1 \
+      || ! declare -F agent_classify_outcome >/dev/null 2>&1; then
+    log "dispatch: agent adapter '$adapter_name' unusable ($adapter) -- missing, unreadable, or not defining agent_invoke/agent_classify_outcome -- REFUSING session (fail-safe; see supervisor.log)"
+    return 2
+  fi
 
   resolve_session_settings
 
