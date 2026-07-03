@@ -350,6 +350,21 @@ _cron_write_marker() {
   ( printf '%s' "$2" >"$1" ) 2>/dev/null
 }
 
+# rc 0 when a role name is safe to embed in a marker / seen-set filename -- the
+# SAME charset roles.py allows (its _ROLE_NAME_RE = [A-Za-z0-9._-]). Single
+# source so the cron and event resolvers can never drift on the gate (#110); a
+# stricter gate here would silently drop a valid dotted role (e.g. pm.v2) that
+# roles.py happily dispatches. No '/' is possible and a suffix is always
+# appended, so a '.'/'..' name cannot traverse out of its dir (prevention-log
+# #6: a config string crossing into a filesystem path is re-validated at the
+# point of use). Emptiness is a separate concern the callers gate themselves.
+_role_name_path_safe() {
+  case "$1" in
+    *[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  return 0
+}
+
 resolve_cron_due() {
   local enum now name schedule marker last due
   enum="$(_cron_enumerate)" || return 0
@@ -361,15 +376,12 @@ resolve_cron_due() {
   # escape the loop (markers are files; each tick re-enumerates from scratch).
   printf '%s\n' "$enum" | while IFS="$(printf '\t')" read -r name schedule; do
     [ -n "$name" ] || continue
-    # Gate the SAME charset roles.py allows ([A-Za-z0-9._-], its _ROLE_NAME_RE):
-    # a stricter gate here would silently drop a valid dotted role (e.g. pm.v2)
-    # that roles.py happily dispatches. No '/' is possible, and a suffix is
-    # always appended, so a '.'/'..' name cannot traverse out of the dir.
-    case "$name" in
-      *[!A-Za-z0-9._-]*)
-        log "WARN cron: role name '$name' has invalid path chars -- ignored"
-        continue ;;
-    esac
+    # Charset-gate before the name reaches a marker path (_role_name_path_safe
+    # is the single source shared with resolve_event_wakes, #110).
+    if ! _role_name_path_safe "$name"; then
+      log "WARN cron: role name '$name' has invalid path chars -- ignored"
+      continue
+    fi
     marker="$VARDIR/cron/$name.last_fire"
     if [ ! -f "$marker" ]; then
       _cron_write_marker "$marker" "$now" \
@@ -508,14 +520,12 @@ resolve_event_wakes() {
     log "WARN event: cannot create $VARDIR/events -- skipping events this tick"; return 0; }
   printf '%s\n' "$enum" | while IFS="$(printf '\t')" read -r name events_csv; do
     [ -n "$name" ] || continue
-    # Same charset roles.py allows ([A-Za-z0-9._-]); a stricter gate would drop a
-    # valid dotted role (e.g. qa.v2). No '/', and a suffix is always appended, so
-    # a '.'/'..' name cannot traverse out of $VARDIR/events.
-    case "$name" in
-      *[!A-Za-z0-9._-]*)
-        log "WARN event: role name '$name' has invalid path chars -- ignored"
-        continue ;;
-    esac
+    # Charset-gate before the name reaches a seen-set path (_role_name_path_safe
+    # is the single source shared with resolve_cron_due, #110).
+    if ! _role_name_path_safe "$name"; then
+      log "WARN event: role name '$name' has invalid path chars -- ignored"
+      continue
+    fi
     _event_role_wakes "$name" "$events_csv" "$session_ran"
   done
   return 0
