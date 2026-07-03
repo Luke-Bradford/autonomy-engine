@@ -767,10 +767,14 @@ def recent_quota_windows(logdir, limit=12):
     for name in names[-limit:]:   # order-independent: keep the best per window
         for wt, win in parse_quota_windows(os.path.join(logdir, name)).items():
             cur = merged.get(wt)
-            if (cur is None
-                    or win["resets_at"] > cur["resets_at"]
-                    or (win["resets_at"] == cur["resets_at"]
-                        and win["utilization"] > cur["utilization"])):
+            # .get(..., 0) keeps the merge degrading gracefully rather than
+            # KeyError-ing if a producer ever hands back a partial window dict.
+            w_reset, w_util = win.get("resets_at", 0), win.get("utilization", 0)
+            if cur is None:
+                merged[wt] = win
+                continue
+            c_reset, c_util = cur.get("resets_at", 0), cur.get("utilization", 0)
+            if w_reset > c_reset or (w_reset == c_reset and w_util > c_util):
                 merged[wt] = win
     return merged
 

@@ -737,3 +737,24 @@ class TestRecentQuotaWindows(unittest.TestCase):
         w = ds.recent_quota_windows(d)
         self.assertEqual(w["five_hour"]["resets_at"], 9000)
         self.assertAlmostEqual(w["five_hour"]["utilization"], 0.10)
+
+    def test_partial_window_dict_degrades_not_keyerror(self):
+        # parse_quota_windows is the sole producer today and always sets both
+        # keys, but the merge must degrade gracefully -- not KeyError -- if a
+        # producer ever hands back a partial window (missing utilization). Stub
+        # the producer at the seam to feed two logs' worth of partial dicts.
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        self._log(d, "session-20260101T000000.log", [self._rle("five_hour", 1000, 0.5)])
+        self._log(d, "session-20260101T010000.log", [self._rle("five_hour", 2000, 0.5)])
+        # SAME resets_at both times forces the utilization comparison branch --
+        # the one that indexed win["utilization"] directly and would KeyError.
+        partial = iter([{"five_hour": {"resets_at": 2000}},
+                        {"five_hour": {"resets_at": 2000}}])
+        orig = ds.parse_quota_windows
+        ds.parse_quota_windows = lambda _p: next(partial)
+        try:
+            w = ds.recent_quota_windows(d)   # must not raise
+        finally:
+            ds.parse_quota_windows = orig
+        self.assertEqual(w["five_hour"]["resets_at"], 2000)
