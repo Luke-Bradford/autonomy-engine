@@ -32,47 +32,43 @@ worktree:
   default_path: "../.{repo-slug}-autonomy"
 
 # Multi-role org (autonomy-engine docs/superpowers/specs/
-# 2026-07-02-dynamic-agent-org-design.md). Every agent -- standard or custom
-# -- is the same declarative shape: enabled + account (a name from the
-# machine accounts registry: python3 lib/accounts.py list) + trigger
-# ({ type: loop | cron | event, ... }) + model/effort (or per-phase models)
-# + scope (what it works over; empty = whole open board) + behaviour knobs.
-# `prompt:` must point at a real pack file under .autonomy/roles/, never a
-# copy. Validate with doctor.sh.
-# Enabled `trigger: { type: loop }` roles are dispatched by the supervisor
-# round-robin (one session each, in turn); cron/event triggers are not
-# dispatched yet (scheduler/event bus is a later increment). A role with an
-# `account:` that cannot resolve REFUSES its sessions (fail-safe).
-# roles:
-#   coder:
-#     enabled: true
-#     account: claude-sub              # python3 lib/accounts.py set claude-sub claude_subscription
-#     trigger: { type: loop }
-#     model: claude-sonnet-5
-#     models: { plan: claude-opus-4-8, implement: claude-sonnet-5, test: claude-haiku-4-5 }
-#     scope: { labels: [ready], milestone: current }
-#     self_test: true                  # agents test their own work
-#     blockers: raise-to-pm            # raise-to-pm | raise-to-human
-#     instances: 1
-#   qa:
-#     enabled: false
-#     account: claude-sub
-#     trigger: { type: event, on: [pr.opened, pr.synchronize] }
-#     scope: { target: diff }          # diff | affected | full-regression
-#     gate: wait-for-human             # wait-for-human | auto-merge-on-pass (still gated by merge_gate.strategy)
-#     tools: [read]                    # [read] | [read, mcp]
-#     regression: { after_tickets: 10 }  # or { every: "0 3 * * 0" }; omit = off
-#     prompt: .autonomy/roles/qa.md
-#   pm:
-#     enabled: false
-#     account: claude-sub
-#     trigger: { type: cron, schedule: "0 */6 * * *" }
-#     duties: [groom, prioritise, unblock, spec-check]
-#     prompt: .autonomy/roles/pm.md
-#   researcher:
-#     enabled: false
-#     account: codex-sub               # python3 lib/accounts.py set codex-sub codex_subscription
-#     trigger: { type: cron, schedule: "0 3 * * *" }
-#     output: handoff-to-pm            # raise-issues | handoff-to-pm
-#     web_search: false
-#     prompt: .autonomy/roles/researcher.md
+# 2026-07-02-dynamic-agent-org-design.md + 2026-07-03-lanes-and-board-contract-design.md).
+# Every agent -- standard or custom -- is the same declarative shape: enabled
+# + account (from the machine accounts registry; omitted = the CLI-login
+# subscription) + trigger ({ type: loop | cron | event, ... }) + model/effort
+# + scope + behaviour knobs. `prompt:` must point at a real pack file under
+# .autonomy/roles/, never a copy. Validate with doctor.sh.
+# Loop roles dispatch round-robin; cron/event roles fire via the W1 scheduler
+# / W2 event bus inside the same supervisor. A role with an `account:` that
+# cannot resolve REFUSES its sessions (fail-safe).
+# Live org (enabled 2026-07-03, issue #158): aux roles run on sonnet/medium to
+# protect the opus 7-day budget. Only knobs the runtime or the rails actually
+# consume are set (issue #149 honesty rule) -- no self_test/blockers/tools/
+# regression until they are wired.
+roles:
+  coder:
+    enabled: true
+    trigger: { type: loop }
+    # model/effort inherit agent.* above (opus, high) -- unchanged behaviour
+  qa:
+    enabled: true
+    trigger: { type: event, on: [pr.opened] }
+    scope: { target: diff }
+    gate: wait-for-human               # QA raises findings; humans/bot-gate still own the merge
+    model: claude-sonnet-5
+    effort: medium
+    prompt: .autonomy/roles/qa.md
+  pm:
+    enabled: true
+    trigger: { type: cron, schedule: "0 */6 * * *" }
+    model: claude-sonnet-5
+    effort: medium
+    prompt: .autonomy/roles/pm.md
+  researcher:
+    enabled: true
+    trigger: { type: cron, schedule: "0 3 * * *" }
+    output: raise-issues               # rail fails closed to a findings list without write access
+    web_search: false
+    model: claude-sonnet-5
+    effort: medium
+    prompt: .autonomy/roles/researcher.md
