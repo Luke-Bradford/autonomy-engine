@@ -139,6 +139,56 @@ start_endpoint_model_count() { echo "nope"; }
 out="$(start_status_report 2>&1)"; rc=$?
 check "status: garbage probe -> WARN (no crash)" "0" "$(grep -q "WARN local endpoint 'localbot'" <<<"$out" && echo 0 || echo 1)"
 check "status: report still succeeds on garbage probe" "0" "$rc"
+
+# --- #81: loop-worktree cleanliness in the health report -------------------------
+# A stopped/paused loop that left uncommitted changes is a real "half-done
+# session" signal (the loop is meant to leave a clean tree between iterations);
+# a *running* loop is legitimately dirty mid-session, so it must stay silent.
+# All three are seams, shadowed like the endpoint probes above so every branch
+# is deterministic without real git repos or supervisor processes.
+check "sourcing defines start_registered_repos" "0" "$(type start_registered_repos >/dev/null 2>&1 && echo 0 || echo 1)"
+check "sourcing defines start_worktree_status" "0" "$(type start_worktree_status >/dev/null 2>&1 && echo 0 || echo 1)"
+check "sourcing defines start_loop_running" "0" "$(type start_loop_running >/dev/null 2>&1 && echo 0 || echo 1)"
+check "sourcing defines start_pid_command" "0" "$(type start_pid_command >/dev/null 2>&1 && echo 0 || echo 1)"
+
+# keep the endpoint block silent so only the cleanliness lines are under test
+start_local_accounts() { :; }
+start_registered_repos() { echo "/fake/wt"; }
+
+# dirty + loop NOT running -> WARN naming the worktree and the inspect command
+start_worktree_status() { echo dirty; }
+start_loop_running() { return 1; }
+out="$(start_status_report 2>&1)"
+check "status: dirty stopped worktree -> WARN" "0" "$(grep -q "WARN loop worktree '/fake/wt' has uncommitted changes" <<<"$out" && echo 0 || echo 1)"
+check "status: dirty worktree WARN shows the inspect command" "0" "$(grep -q "git -C /fake/wt status" <<<"$out" && echo 0 || echo 1)"
+
+# dirty + loop RUNNING -> silent (mid-session dirt is expected, not a warning),
+# and the healthy aggregate stands in (nothing was flagged)
+start_loop_running() { return 0; }
+out="$(start_status_report 2>&1)"
+check "status: dirty RUNNING worktree -> no warn (mid-session)" "1" "$(grep -q 'uncommitted changes' <<<"$out" && echo 0 || echo 1)"
+check "status: no flagged worktree -> aggregate healthy OK" "0" "$(grep -q 'loop worktree(s) healthy' <<<"$out" && echo 0 || echo 1)"
+
+# unknown (uninspectable) -> WARN, never counted as clean (fail-safe #1); even
+# a RUNNING loop can't excuse an uninspectable worktree
+start_worktree_status() { echo unknown; }
+start_loop_running() { return 0; }
+out="$(start_status_report 2>&1)"
+check "status: uninspectable worktree -> WARN (fail-safe)" "0" "$(grep -q "WARN loop worktree '/fake/wt' could not be inspected" <<<"$out" && echo 0 || echo 1)"
+check "status: uninspectable worktree suppresses the healthy aggregate" "1" "$(grep -q 'loop worktree(s) healthy' <<<"$out" && echo 0 || echo 1)"
+
+# clean + not running -> the positive aggregate OK, no per-repo warn
+start_worktree_status() { echo clean; }
+start_loop_running() { return 1; }
+out="$(start_status_report 2>&1)"
+check "status: clean worktree -> no warn" "1" "$(grep -q 'uncommitted changes\|could not be inspected' <<<"$out" && echo 0 || echo 1)"
+check "status: clean worktree -> aggregate healthy OK" "0" "$(grep -q 'loop worktree(s) healthy' <<<"$out" && echo 0 || echo 1)"
+
+# no registered repos -> no cleanliness line at all (nothing to check, no noise)
+start_registered_repos() { :; }
+out="$(start_status_report 2>&1)"
+check "status: no repos -> no worktree cleanliness line" "1" "$(grep -q 'loop worktree' <<<"$out" && echo 0 || echo 1)"
+
 # restore the REAL seam functions (re-sourcing is guarded: it only re-defines,
 # never executes) so the checks below exercise the genuine implementations
 # shellcheck source=/dev/null
@@ -160,6 +210,79 @@ check "real start_endpoint_model_count on a dead endpoint -> 0" "0" "$cnt_out"
 # clean up so the integration `start status` below sees no local accounts
 python3 "$ENGINE_HOME/lib/accounts.py" delete local-test >/dev/null 2>&1
 python3 "$ENGINE_HOME/lib/accounts.py" delete subx >/dev/null 2>&1
+
+# REAL start_worktree_status against genuine git worktrees (no seam, no network):
+# a tree with an untracked/modified file reads `dirty`; a committed-clean tree
+# reads `clean`; a non-git directory and a missing path read `unknown` (never
+# silently "clean" -- fail-safe #1).
+gitclean="$tmp/wt-clean"; gitdirty="$tmp/wt-dirty"; notgit="$tmp/wt-nogit"
+mkdir -p "$gitclean" "$gitdirty" "$notgit"
+( cd "$gitclean" && git init -q && git -c user.email=a@b.c -c user.name=t commit -q --allow-empty -m init )
+( cd "$gitdirty" && git init -q && git -c user.email=a@b.c -c user.name=t commit -q --allow-empty -m init && echo x > f )
+check "real start_worktree_status: dirty tree -> dirty" "dirty" "$(start_worktree_status "$gitdirty")"
+check "real start_worktree_status: clean tree -> clean" "clean" "$(start_worktree_status "$gitclean")"
+check "real start_worktree_status: non-git dir -> unknown" "unknown" "$(start_worktree_status "$notgit")"
+check "real start_worktree_status: missing dir -> unknown" "unknown" "$(start_worktree_status "$tmp/nope")"
+
+# REAL start_loop_running: reads the supervisor lock pid, requires the pid to be
+# BOTH alive AND confirmed as this repo's supervisor (argv carries supervisor.sh
+# + the repo path). A live-but-reused pid on an unrelated process must read
+# not-running so the dirty WARN still fires (fail-safe #1). The argv lookup is
+# shadowed via the start_pid_command seam so the confirmation is testable with a
+# real live pid ($$) but a controlled command line.
+mkdir -p "$gitdirty/var/autonomy-supervisor.lock"
+printf '%s' "$$" > "$gitdirty/var/autonomy-supervisor.lock/pid"
+start_pid_command() { echo "/bin/bash $ENGINE_HOME/bin/supervisor.sh --repo $gitdirty"; }
+start_loop_running "$gitdirty"; check "real start_loop_running: live confirmed supervisor -> rc 0" "0" "$?"
+start_pid_command() { echo "/bin/bash $ENGINE_HOME/bin/supervisor.sh --repo $gitdirty --once"; }
+start_loop_running "$gitdirty"; check "real start_loop_running: supervisor with repo + trailing args -> rc 0" "0" "$?"
+start_pid_command() { echo "/usr/bin/vim /some/file"; }
+start_loop_running "$gitdirty"; check "real start_loop_running: live but non-supervisor pid -> rc 1 (fail-safe)" "1" "$?"
+start_pid_command() { echo "/bin/bash $ENGINE_HOME/bin/supervisor.sh --repo /a/different/repo"; }
+start_loop_running "$gitdirty"; check "real start_loop_running: supervisor for another repo -> rc 1" "1" "$?"
+# an EDITOR whose argv merely contains the supervisor.sh path + the repo path,
+# but no `--repo <repo>` launch sequence, must not read running (loose-substring
+# false-match Codex flagged)
+start_pid_command() { echo "/usr/bin/vim $gitdirty/bin/supervisor.sh"; }
+start_loop_running "$gitdirty"; check "real start_loop_running: editor of supervisor.sh -> rc 1 (fail-safe)" "1" "$?"
+# a supervisor for a repo whose path is a SUPERSTRING of this one (repo vs repo2)
+# must not false-match this repo
+start_pid_command() { echo "/bin/bash $ENGINE_HOME/bin/supervisor.sh --repo ${gitdirty}2"; }
+start_loop_running "$gitdirty"; check "real start_loop_running: superstring repo path -> rc 1 (fail-safe)" "1" "$?"
+# dead pid, non-numeric pid, and a missing lock all short-circuit before the
+# argv confirmation, so they read not-running regardless of the seam.
+printf '%s' "999999" > "$gitdirty/var/autonomy-supervisor.lock/pid"
+start_loop_running "$gitdirty"; check "real start_loop_running: dead pid -> rc 1" "1" "$?"
+printf 'garbage' > "$gitdirty/var/autonomy-supervisor.lock/pid"
+start_loop_running "$gitdirty"; check "real start_loop_running: non-numeric pid -> rc 1" "1" "$?"
+start_loop_running "$gitclean"; check "real start_loop_running: no lock -> rc 1" "1" "$?"
+# restore the real seams (the start_pid_command shadow above must be gone before
+# the real start_pid_command checks below); guarded re-source only re-defines.
+# shellcheck source=/dev/null
+source "$ENGINE_HOME/start"
+# REAL start_pid_command: the current process ($$) is live, so its argv is
+# non-empty; a definitely-dead pid yields empty.
+check "real start_pid_command: live pid -> non-empty argv" "0" "$([ -n "$(start_pid_command "$$")" ] && echo 0 || echo 1)"
+check "real start_pid_command: dead pid -> empty" "0" "$([ -z "$(start_pid_command 999999)" ] && echo 0 || echo 1)"
+
+# REAL start_registered_repos: one path per line, blank-tolerant, empty when the
+# registry is absent (the same registry ./start and control.sh share).
+printf '%s\n\n%s\n' "$gitclean" "$gitdirty" > "$HOME/.config/autonomy/repos"
+repos_out="$(start_registered_repos)"
+check "real start_registered_repos lists registered paths" "0" "$(grep -qx "$gitclean" <<<"$repos_out" && echo 0 || echo 1)"
+check "real start_registered_repos drops blank lines (2 non-blank)" "2" "$(grep -c . <<<"$repos_out")"
+rm -f "$HOME/.config/autonomy/repos"
+
+# fail-safe (#1): a registry that EXISTS but is unreadable must WARN, never
+# silently skip worktree health, and the report still exits 0. (An unreadable
+# registry yields empty from start_registered_repos just like an absent one, so
+# the report disambiguates via a readability check.)
+printf '%s\n' "$gitclean" > "$HOME/.config/autonomy/repos"; chmod 000 "$HOME/.config/autonomy/repos"
+out="$(start_status_report 2>&1)"; rc=$?
+chmod 644 "$HOME/.config/autonomy/repos"
+check "status: unreadable registry -> WARN (fail-safe)" "0" "$(grep -q 'registry .* unreadable' <<<"$out" && echo 0 || echo 1)"
+check "status: unreadable registry report still exits 0" "0" "$rc"
+rm -f "$HOME/.config/autonomy/repos"
 
 # integration: the status subcommand is read-only -- exit 0, never binds/launchctl
 rm -f "$SHIM_LOG"

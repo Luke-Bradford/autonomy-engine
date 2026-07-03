@@ -113,3 +113,28 @@ physically cannot cross an N-party barrier, so `max_inflight == N` is exact and
 deterministic. Keep a `sleep`/latch only to *hold* the workers in-flight long
 enough to observe the overlap, never as the thing asserted on. Same class as any
 "it must be fast enough" assertion standing in for "it must be concurrent".
+
+## 10. A live pid alone doesn't prove the process is who the lock says — confirm identity before it gates a warning
+
+*Origin: PR (#81 `start status` worktree cleanliness), Codex checkpoint 2.*
+`kill -0 "$pid"` proves a pid is *alive*, not that it's the process the lock
+claims. A stale `…/supervisor.lock/pid` whose pid was recycled by an unrelated
+process reads "alive" → the code trusts it as "running". Cosmetically (a status
+label) that's tolerable — `control.sh:ctl_loop_state` accepts it. But when the
+state **suppresses a health WARN** (a "running" loop is allowed to be dirty), a
+false-positive HIDES a real problem = fail-open, which invariant #1 forbids.
+
+**When a liveness check gates a warning, confirm the process identity** before
+trusting it: match its argv (`ps -o command= -p "$pid"`) against a signature
+only the real owner has. Anything unconfirmed falls to the fail-safe side
+(treated not-running, so the WARN still fires). The same lock read is fine for a
+cosmetic label and unsafe for a gate — the fail-open cost is set by what the
+state *decides*, not by the signal.
+
+**Match the exact launch sequence, not loose substrings.** `*supervisor.sh*`
+plus `*"$repo"*` false-matches `vim …/bin/supervisor.sh` and a supervisor for
+`<repo>2` when checking `<repo>` — each a fail-open. Require the contiguous
+`…/supervisor.sh --repo <repo>` with `<repo>` terminated by a space or
+end-of-argv (two `case` arms: `*"…--repo $repo"` and `*"…--repo $repo "*`).
+Quote `"$repo"` in the pattern so a path metachar can't widen the match
+(entry #6).
