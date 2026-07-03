@@ -106,6 +106,16 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px
 .q-prov{font-family:var(--mono);font-size:9.5px;letter-spacing:1.2px;text-transform:uppercase;color:var(--dim);
   padding:8px 10px 0;display:flex;align-items:center;gap:6px}
 .q-prov::after{content:"";flex:1;height:1px;background:var(--hair)}
+/* recent-sessions history (#148 part 2) */
+.hist{border:1px solid var(--hair);border-radius:6px;margin-bottom:6px;overflow:hidden}
+.hist>summary{cursor:pointer;list-style:none;padding:7px 10px;font-family:var(--mono);font-size:10px;
+  letter-spacing:.5px;color:var(--dim);display:flex;align-items:center;gap:6px;text-transform:uppercase}
+.hist>summary::-webkit-details-marker{display:none}
+.hist>summary::before{content:"▸";color:var(--mut)}
+.hist[open]>summary::before{content:"▾"}
+.hrow{display:flex;align-items:center;gap:8px;padding:5px 10px;border-top:1px solid var(--hair);font-size:11px}
+.hrow .hrole{font-family:var(--mono);color:var(--fg);min-width:74px}
+.hrow .hmeta{font-family:var(--mono);color:var(--dim);font-size:10px;margin-left:auto;text-align:right}
 .qsrc{font-size:8.5px;padding:1px 5px;border-radius:3px;letter-spacing:.6px}
 .qsrc.live{color:var(--ok,#3fb950);border:1px solid var(--ok,#3fb950)}
 .qsrc.stale{color:var(--dim);border:1px solid var(--hair)}
@@ -252,6 +262,9 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
   <div class="sh"><h2>Now</h2><span class="ln"></span><span class="ct" id="c-now"></span></div>
   <div class="focus" id="focus"></div>
 
+  <div class="sh"><h2>Recent sessions</h2><span class="ln"></span><span class="ct">last 10 per repo · role · outcome</span></div>
+  <div id="history"></div>
+
   <div class="grid" style="margin-top:6px">
     <div class="col">
       <div>
@@ -335,6 +348,34 @@ function tic(n){if(!n)return "•";if(n.startsWith("mcp__"))return "◈";return 
 function tname(n){if(!n)return "tool";if(n.startsWith("mcp__")){const p=n.split("__");return p[p.length-1];}return n;}
 
 /* ---- FOCUS BAND ---- */
+// recent-sessions history (#148 part 2). Open/closed state is kept per repo in
+// HIST_OPEN so the 2s re-render doesn't snap an expanded panel shut.
+const HIST_OPEN={};
+const _OUTCLS={clean:"c-passing",error:"c-failing","rate-limited":"c-pending",running:"c-none"};
+function histRow(s){
+  const oc=_OUTCLS[s.outcome]||"c-none";
+  const tk=s.ticket?` · <span class="no">#${esc(s.ticket)}</span>`:"";
+  const d=s.duration?" · "+dur(s.duration):"";
+  const tok=s.tokens?` · ${num(s.tokens)} tok`:"";
+  return `<div class="hrow"><span class="chip ${oc}">${esc(s.outcome||"—")}</span>`
+    +`<span class="hrole">${esc(s.role||"—")}</span>`
+    +`<span class="hmeta">${esc(s.started_at||"")}${d}${tok}${tk}</span></div>`;
+}
+function renderHistory(repos){
+  const box=$("history");
+  const parts=(repos||[]).map(r=>{
+    const ss=r.sessions||[]; if(!ss.length) return "";
+    const key=r.path, open=HIST_OPEN[key]?" open":"";
+    const label=(repos.length>1?esc(dispName(r.name))+" · ":"")+`${ss.length} session${ss.length>1?"s":""}`;
+    return `<details class="hist" data-key="${encodeURIComponent(key)}"${open}>`
+      +`<summary>${label}</summary>${ss.map(histRow).join("")}</details>`;
+  }).filter(Boolean);
+  box.innerHTML=parts.length?parts.join(""):`<div class="q-sub" style="padding:4px 2px"><span>no sessions yet</span></div>`;
+  // persist expand/collapse across the tick re-render
+  box.querySelectorAll("details.hist").forEach(d=>{
+    d.ontoggle=()=>{HIST_OPEN[decodeURIComponent(d.dataset.key)]=d.open;};
+  });
+}
 function renderFocus(repos){
   const active=repos.filter(r=>["working","stopping","idle","paused"].includes(dispStatus(r)));
   $("c-now").textContent=active.length?`${active.filter(r=>dispStatus(r)==="working").length} working · ${active.length} live`:"";
@@ -653,7 +694,7 @@ setInterval(()=>{
 
 /* ---- render + SSE ---- */
 function render(s){LAST=s;GEN=s.generated_at||Math.floor(nowS());
-  renderFocus(s.repos);renderRepos(s.repos);renderQuota(s.repos,s.account);renderActivity(s.repos);
+  renderFocus(s.repos);renderHistory(s.repos);renderRepos(s.repos);renderQuota(s.repos,s.account);renderActivity(s.repos);
   renderThroughput(s.repos);renderVoice(s.repos);renderGit(s.repos);
   $("f-gen").textContent="snapshot "+new Date(GEN*1000).toISOString().slice(11,19)+"Z";}
 function setLive(ok){$("h-live").classList.toggle("stale",!ok);$("h-live-t").textContent=ok?"live":"reconnecting";}
