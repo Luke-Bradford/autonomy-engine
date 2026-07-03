@@ -25,6 +25,27 @@ class TestReplyText(unittest.TestCase):
             self.assertEqual(concierge._reply_text(bad), "")
 
 
+class TestStripThinking(unittest.TestCase):
+    def test_removes_think_span(self):
+        self.assertEqual(
+            concierge.strip_thinking("<think>reasoning here</think>\n\nAnswer."),
+            "Answer.")
+
+    def test_multiline_and_multiple(self):
+        self.assertEqual(
+            concierge.strip_thinking("<think>a\nb</think>X<think>c</think>Y"), "XY")
+
+    def test_no_span_unchanged(self):
+        self.assertEqual(concierge.strip_thinking("plain answer"), "plain answer")
+
+    def test_unclosed_think_tail_dropped(self):
+        self.assertEqual(concierge.strip_thinking("Answer.\n<think>truncated..."),
+                         "Answer.")
+
+    def test_empty(self):
+        self.assertEqual(concierge.strip_thinking(""), "")
+
+
 class TestBuildContext(unittest.TestCase):
     def test_empty_repos(self):
         ctx = concierge.build_context([])
