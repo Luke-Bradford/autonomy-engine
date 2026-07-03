@@ -21,6 +21,17 @@ trap 'rm -rf "$tmp"' EXIT
 export HOME="$tmp/home"
 mkdir -p "$HOME/Library/LaunchAgents" "$HOME/.config/autonomy"
 
+# Write the shared repos registry, (re)creating its parent dir first. Content is
+# passed as a single verbatim arg (use $'...' for the newlines/blanks) so the
+# blank-line/whitespace fixtures survive exactly and no pipeline masks the write's
+# exit status. Why the mkdir: on CI (Linux, under load) this test's scratch
+# $HOME/.config/autonomy dir has intermittently vanished mid-suite, failing the
+# next `>` redirect with "No such file or directory" (#121). ./start only ever
+# *reads* this dir (its writers -- control.sh/quickstart -- mkdir -p themselves),
+# so the loss is external to the product; making the test's own writes self-heal
+# is the right layer.
+write_repos() { mkdir -p "$HOME/.config/autonomy"; printf '%s' "$1" > "$HOME/.config/autonomy/repos"; }
+
 # launchctl + gh shims: launchctl must NEVER fire; gh keeps any doctor call offline
 shim="$tmp/shim"
 mkdir -p "$shim"
@@ -46,12 +57,21 @@ check "sourcing defines start_mode" "0" "$(type start_mode >/dev/null 2>&1 && ec
 
 # --- mode detection --------------------------------------------------------------
 check "no repos file -> setup" "setup" "$(start_mode)"
-touch "$HOME/.config/autonomy/repos"
+write_repos ''
 check "empty repos file -> setup" "setup" "$(start_mode)"
-printf '   \n\n' > "$HOME/.config/autonomy/repos"
+write_repos $'   \n\n'
 check "whitespace-only repos file -> setup" "setup" "$(start_mode)"
-printf '%s\n' "$tmp/somerepo" > "$HOME/.config/autonomy/repos"
+write_repos "$tmp/somerepo"$'\n'
 check "registered repo -> app" "app" "$(start_mode)"
+rm -f "$HOME/.config/autonomy/repos"
+
+# regression (#121): write_repos re-creates a vanished parent dir instead of
+# failing the redirect, so a transient CI scratch-HOME dir loss can't flake the
+# suite. Content is still written verbatim.
+rm -rf "$HOME/.config/autonomy"
+write_repos "/re/created"$'\n'
+check "write_repos recreates a removed parent dir" "0" "$([ -f "$HOME/.config/autonomy/repos" ] && echo 0 || echo 1)"
+check "write_repos writes content verbatim after re-create" "/re/created" "$(cat "$HOME/.config/autonomy/repos" 2>/dev/null)"
 rm -f "$HOME/.config/autonomy/repos"
 
 # --- ./start status: read-only live-health report (#81) --------------------------
@@ -106,7 +126,7 @@ unset -f gh
 rm -f "$HOME/.config/autonomy/repos"
 out="$(start_status_report 2>&1)"
 check "status: no repos -> warn" "0" "$(grep -q 'no repos registered' <<<"$out" && echo 0 || echo 1)"
-printf '%s\n' "$tmp/somerepo" > "$HOME/.config/autonomy/repos"
+write_repos "$tmp/somerepo"$'\n'
 out="$(start_status_report 2>&1)"
 check "status: repos registered -> ok" "0" "$(grep -q 'repo(s) registered' <<<"$out" && echo 0 || echo 1)"
 
@@ -306,7 +326,7 @@ check "real start_pid_command: dead pid -> empty" "0" "$([ -z "$(start_pid_comma
 
 # REAL start_registered_repos: one path per line, blank-tolerant, empty when the
 # registry is absent (the same registry ./start and control.sh share).
-printf '%s\n\n%s\n' "$gitclean" "$gitdirty" > "$HOME/.config/autonomy/repos"
+write_repos "$gitclean"$'\n\n'"$gitdirty"$'\n'
 repos_out="$(start_registered_repos)"
 check "real start_registered_repos lists registered paths" "0" "$(grep -qx "$gitclean" <<<"$repos_out" && echo 0 || echo 1)"
 check "real start_registered_repos drops blank lines (2 non-blank)" "2" "$(grep -c . <<<"$repos_out")"
@@ -316,7 +336,7 @@ rm -f "$HOME/.config/autonomy/repos"
 # silently skip worktree health, and the report still exits 0. (An unreadable
 # registry yields empty from start_registered_repos just like an absent one, so
 # the report disambiguates via a readability check.)
-printf '%s\n' "$gitclean" > "$HOME/.config/autonomy/repos"; chmod 000 "$HOME/.config/autonomy/repos"
+write_repos "$gitclean"$'\n'; chmod 000 "$HOME/.config/autonomy/repos"
 out="$(start_status_report 2>&1)"; rc=$?
 chmod 644 "$HOME/.config/autonomy/repos"
 check "status: unreadable registry -> WARN (fail-safe)" "0" "$(grep -q 'registry .* unreadable' <<<"$out" && echo 0 || echo 1)"
@@ -339,7 +359,7 @@ check "start status rejects extra args (rc 2)" "2" "$rc"
 rm -f "$HOME/.config/autonomy/repos"
 bash "$ENGINE_HOME/start" status </dev/null >/dev/null 2>&1; rc=$?
 check "start status in setup mode exits 0" "0" "$rc"
-printf '%s\n' "$tmp/r" > "$HOME/.config/autonomy/repos"; chmod 000 "$HOME/.config/autonomy/repos"
+write_repos "$tmp/r"$'\n'; chmod 000 "$HOME/.config/autonomy/repos"
 bash "$ENGINE_HOME/start" status </dev/null >/dev/null 2>&1; rc=$?
 chmod 644 "$HOME/.config/autonomy/repos"
 check "start status on unreadable repos file still exits 0" "0" "$rc"
