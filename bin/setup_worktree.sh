@@ -106,9 +106,12 @@ ARG_WORKTREE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --lane)
-      if [ $# -lt 2 ]; then echo "setup_worktree.sh: --lane needs a value" >&2; exit 1; fi
+      if [ $# -lt 2 ] || [ -z "$2" ]; then echo "setup_worktree.sh: --lane needs a non-empty value" >&2; exit 1; fi
       LANE="$2"; shift 2 ;;
-    --lane=*) LANE="${1#--lane=}"; shift ;;
+    --lane=*)
+      LANE="${1#--lane=}"
+      [ -n "$LANE" ] || { echo "setup_worktree.sh: --lane needs a non-empty value" >&2; exit 1; }
+      shift ;;
     -*) echo "setup_worktree.sh: unknown flag: $1" >&2; exit 1 ;;
     *)
       if [ -z "$ARG_TARGET" ]; then ARG_TARGET="$1"
@@ -153,6 +156,10 @@ if [ -n "$LANE" ]; then
     echo "setup_worktree.sh: refuse -- lane '$LANE' is not declared in $TARGET_REPO/.autonomy/config.yaml (declared: $(printf '%s' "$LANES_OUT" | tr '\n' ' '))" >&2
     exit 1
   fi
+  # An explicit default lane is the legacy install: normalize to empty so the
+  # label, worktree, AND plist argv are byte-identical to the bare invocation
+  # (no stray `--lane <default>` in the plist; SD-21 default-lane back-compat).
+  [ "$LANE" = "$DEFAULT_LANE" ] && LANE=""
 fi
 
 # The __LABEL__ segment (legacy <slug> for default/empty lane, else <slug>.<lane>).

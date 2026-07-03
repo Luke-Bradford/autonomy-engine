@@ -114,5 +114,24 @@ esac
 n_lane="$(printf '%s\n' "$render_fe" | grep -c -- '<string>--lane</string>')"
 check "exactly one --lane arg emitted" "1" "$n_lane"
 
+# --- main-body lane refuses (real script subprocess; all exit before any git) --
+# These invoke the guarded body, which validates the lane BEFORE touching git,
+# so they never mutate a repo. A temp target repo with a two-lane config.
+laneRepo="$tmp/lanerepo"; mkdir -p "$laneRepo/.autonomy"
+cat > "$laneRepo/.autonomy/config.yaml" <<'YAML'
+lanes:
+  main: {}
+  fe: {}
+YAML
+SCRIPT="$HERE/../bin/setup_worktree.sh"
+run_refuse() { HOME="$tmp/nohome" bash "$SCRIPT" "$@" >/dev/null 2>&1; echo "$?"; }
+
+check "undeclared lane is refused"        "1" "$(run_refuse "$laneRepo" --lane nope)"
+check "empty --lane value is refused"     "1" "$(run_refuse "$laneRepo" --lane '')"
+check "empty --lane= value is refused"    "1" "$(run_refuse "$laneRepo" --lane=)"
+check "bad-charset lane is refused"       "1" "$(run_refuse "$laneRepo" --lane 'a b')"
+check "over-long lane is refused"         "1" "$(run_refuse "$laneRepo" --lane "$(printf 'x%.0s' $(seq 1 65))")"
+check "unknown flag is refused"           "1" "$(run_refuse "$laneRepo" --bogus)"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
