@@ -697,6 +697,37 @@ def read_supervisor_voice(path, limit=40):
     return lines[-limit:]
 
 
+def read_heartbeat(path):
+    """The supervisor's structured liveness line (#177): ONE tab-separated
+    record `ts \\t phase \\t until_epoch \\t reason` rewritten each loop phase,
+    so the page can render 'what is happening and why now' instead of a bare
+    IDLE. {} when absent / empty / malformed (fewer than the four fields, or a
+    non-integer ts). `ts`/`until` are ints (epoch seconds); `until` is 0 when
+    the phase has no deadline (active/instantaneous) -- the page shows a
+    client-side countdown only when until > now. Read-only + best-effort, in
+    the spirit of the writer: a torn or partial file degrades to {}."""
+    try:
+        with open(path, errors="replace") as fh:
+            line = fh.readline().rstrip("\n")
+    except OSError:
+        return {}
+    parts = line.split("\t")
+    if len(parts) < 4:
+        return {}
+    ts_s, phase, until_s, reason = parts[0], parts[1], parts[2], parts[3]
+    if not phase:
+        return {}
+    try:
+        ts = int(ts_s)
+    except ValueError:
+        return {}
+    try:
+        until = int(until_s) if until_s else 0
+    except ValueError:
+        until = 0
+    return {"ts": ts, "phase": phase, "until": until, "reason": reason}
+
+
 # --- lifecycle --------------------------------------------------------------
 
 def _default_pid_is_alive(pid):
@@ -906,6 +937,7 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "display_status": status,
         "roles": build_roles(config.get("roles"), status, now=now),
         "voice": read_supervisor_voice(os.path.join(logdir, "supervisor.log")),
+        "heartbeat": read_heartbeat(os.path.join(logdir, "heartbeat")),
         "git": git_in_flight(repo_path) if git_in_flight else {},
         "config": config,
         "override": read_model_override(os.path.join(logdir, "model-override")),
