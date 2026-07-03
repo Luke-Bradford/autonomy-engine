@@ -394,5 +394,42 @@ log_knob_notes "$tmp/does-not-exist" coder
 check "missing repo -> no NOTE, no failure" "" "$(printf '%s' "$KNOB_LOG")"
 log() { :; }   # restore the quiet stub for any later checks
 
+# --- lane execution: --lane threads through the enumeration seams (#147) ------
+# A repo with two lanes and a lane-pinned role. resolve_dispatch_roles must
+# honour $AUTONOMY_LANE (default lane vs a named lane, D6/SD-21); validate_lane
+# must refuse an undeclared/malformed lane rather than silently dispatch nothing
+# (#147 item 6: refuse, do not silently clamp -- fail-safe).
+lanerepo="$tmp/lanerepo"
+mkdir -p "$lanerepo/.autonomy"
+cat > "$lanerepo/.autonomy/config.yaml" <<'YAML'
+lanes:
+  main: {}
+  fe: {}
+roles:
+  coder:
+    enabled: true
+  coder-fe:
+    enabled: true
+    trigger: { type: loop }
+    lane: fe
+YAML
+AUTONOMY_TARGET_REPO="$lanerepo"
+
+AUTONOMY_LANE=""
+check "default lane dispatches the lane-less role" "coder" \
+  "$(resolve_dispatch_roles | tr '\n' ' ' | sed 's/ $//')"
+AUTONOMY_LANE="fe"
+check "named lane dispatches only its pinned role" "coder-fe" \
+  "$(resolve_dispatch_roles | tr '\n' ' ' | sed 's/ $//')"
+
+AUTONOMY_LANE="fe"
+check "validate_lane accepts a declared lane" "0" "$(validate_lane 2>/dev/null; echo $?)"
+AUTONOMY_LANE="ghost"
+check "validate_lane refuses an undeclared lane" "1" "$(validate_lane 2>/dev/null; echo $?)"
+AUTONOMY_LANE="bad/name"
+check "validate_lane refuses a bad-charset lane" "1" "$(validate_lane 2>/dev/null; echo $?)"
+AUTONOMY_LANE=""
+check "validate_lane silent-oks when no lane is set" "0" "$(validate_lane 2>/dev/null; echo $?)"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi

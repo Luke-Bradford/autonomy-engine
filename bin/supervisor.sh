@@ -6,6 +6,10 @@
 # Usage:
 #   supervisor.sh --repo <path> [--agent-type claude|codex] [--model <id>]
 #                 [--fallback-model <id>] [--effort <level>] [--label <slug>]
+#                 [--lane <name>]
+#
+# --lane runs ONE lane of a multi-lane repo (dispatch/cron/events filter to it;
+# default lane = today's behaviour). One supervisor per lane (SD-21).
 #
 # --repo is required. Everything else defaults from the target repo's
 # .autonomy/config.yaml, or this script's own hardcoded defaults if the pack
@@ -318,10 +322,58 @@ invoke_scoped_key() {
 # apply on the next session. Cron/event triggers belong to increment 4's
 # scheduler/event bus and are never dispatched here.
 
+# roles.py enumeration (dispatch/cron/events) with the active lane filter
+# appended. This supervisor runs ONE lane: `--lane "$AUTONOMY_LANE"` when set,
+# else the default lane (bare call = today's behaviour, byte-identical). Lane
+# threading lives in this ONE place so all three seams stay in sync (#147
+# Part 2, SD-21). `${AUTONOMY_LANE:-}` keeps sourcing-for-tests nounset-safe.
+# NOT used by the per-role `dispatch <repo> <role>` settings call -- role+lane
+# together is a roles.py usage error (settings do not depend on lane).
+_roles_enumerate() {
+  if [ -n "${AUTONOMY_LANE:-}" ]; then
+    python3 "$ENGINE_HOME/lib/roles.py" "$@" --lane "$AUTONOMY_LANE" 2>>"$SUPLOG"
+  else
+    python3 "$ENGINE_HOME/lib/roles.py" "$@" 2>>"$SUPLOG"
+  fi
+}
+
+# Refuse (rc 1, message to stderr) a `--lane "$AUTONOMY_LANE"` that is not a
+# declared, validly-configured lane of the target repo; rc 0 (silent) when no
+# lane is set. Startup calls `validate_lane || exit 1` so a typo'd or malformed
+# lane FAILS LOUD instead of silently dispatching nothing (#147 item 6: refuse,
+# do not silently clamp -- the engine's fail-safe convention). A module-level
+# function (not inline) so tests exercise it without launching the loop.
+# The authoritative gate is membership in `roles.py lanes` (which itself refuses
+# a malformed `lanes:` block and only lists names matching the lane-name
+# contract -- charset + <=64 -- so membership covers all of it). A non-zero
+# roles.py rc is itself a refusal (fail-safe: a read/parse error never passes).
+# The charset pre-check is defense-in-depth (prevention-log #6) before the value
+# reaches argv/grep; `grep -qxF --` because a lane name may legally start with `-`.
+validate_lane() {
+  local lane="${AUTONOMY_LANE:-}"
+  [ -n "$lane" ] || return 0
+  case "$lane" in
+    *[!A-Za-z0-9._-]*) echo "supervisor.sh: invalid --lane name: $lane" >&2; return 1 ;;
+  esac
+  if [ "${#lane}" -gt 64 ]; then
+    echo "supervisor.sh: --lane name too long (max 64): $lane" >&2; return 1
+  fi
+  local declared
+  if ! declared="$(python3 "$ENGINE_HOME/lib/roles.py" lanes "$AUTONOMY_TARGET_REPO" 2>>"$SUPLOG")"; then
+    echo "supervisor.sh: could not resolve lanes for $AUTONOMY_TARGET_REPO (malformed lanes: block?) -- refusing --lane $lane" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$declared" | grep -qxF -- "$lane"; then
+    echo "supervisor.sh: --lane '$lane' is not a declared lane in $AUTONOMY_TARGET_REPO/.autonomy/config.yaml" >&2
+    return 1
+  fi
+  return 0
+}
+
 # Enabled loop-role names, one per line (roles.py dispatch contract). The
 # caller handles rc!=0 (fail back to coder-only) and empty output (idle).
 resolve_dispatch_roles() {
-  python3 "$ENGINE_HOME/lib/roles.py" dispatch "$AUTONOMY_TARGET_REPO" 2>>"$SUPLOG"
+  _roles_enumerate dispatch "$AUTONOMY_TARGET_REPO"
 }
 
 # --- cron scheduler (W1, issue #85) -----------------------------------------
@@ -330,7 +382,7 @@ resolve_dispatch_roles() {
 # override the enumeration seam without a real roles.py call. rc!=0 is the
 # caller's cue to skip cron this tick -- best-effort, never crashes the loop.
 _cron_enumerate() {
-  python3 "$ENGINE_HOME/lib/roles.py" cron "$AUTONOMY_TARGET_REPO" 2>>"$SUPLOG"
+  _roles_enumerate cron "$AUTONOMY_TARGET_REPO"
 }
 
 # Fire every cron role whose next scheduled fire (strictly after its last-fire
@@ -426,7 +478,7 @@ resolve_cron_due() {
 # (roles.py events contract). Behind a function so tests can override the seam.
 # rc!=0 -> caller skips events this tick (best-effort, never crashes the loop).
 _event_enumerate() {
-  python3 "$ENGINE_HOME/lib/roles.py" events "$AUTONOMY_TARGET_REPO" 2>>"$SUPLOG"
+  _roles_enumerate events "$AUTONOMY_TARGET_REPO"
 }
 
 # Print the current fireable-item tokens for <event>, one per line (empty = none;
@@ -750,6 +802,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   FALLBACK_MODEL_OVERRIDE=""
   EFFORT_OVERRIDE=""
   LABEL_OVERRIDE=""
+  AUTONOMY_LANE=""
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -759,11 +812,12 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
       --fallback-model) FALLBACK_MODEL_OVERRIDE="$2"; shift 2 ;;
       --effort) EFFORT_OVERRIDE="$2"; shift 2 ;;
       --label) LABEL_OVERRIDE="$2"; shift 2 ;;
+      --lane) AUTONOMY_LANE="$2"; shift 2 ;;
       *) echo "unknown argument: $1" >&2; exit 1 ;;
     esac
   done
 
-  [ -n "$AUTONOMY_TARGET_REPO" ] || { echo "usage: supervisor.sh --repo <path> [--agent-type ...] [--model ...] [--fallback-model ...] [--effort ...] [--label ...]" >&2; exit 1; }
+  [ -n "$AUTONOMY_TARGET_REPO" ] || { echo "usage: supervisor.sh --repo <path> [--agent-type ...] [--model ...] [--fallback-model ...] [--effort ...] [--label ...] [--lane <name>]" >&2; exit 1; }
   [ -d "$AUTONOMY_TARGET_REPO" ] || { echo "supervisor.sh: --repo path does not exist: $AUTONOMY_TARGET_REPO" >&2; exit 1; }
   AUTONOMY_TARGET_REPO="$(cd "$AUTONOMY_TARGET_REPO" && pwd)"
   export AUTONOMY_TARGET_REPO
@@ -775,6 +829,11 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   RESET_STATE="$LOGDIR/.last_usage_reset"
   PAUSE_SENTINEL="$LOGDIR/autonomy-PAUSE"
   LABEL="$LABEL_OVERRIDE"
+
+  # This supervisor runs exactly one lane (SD-21). Refuse a --lane that is not a
+  # declared, validly-configured lane rather than silently dispatching nothing.
+  export AUTONOMY_LANE
+  validate_lane || exit 1
 
   CFG="$AUTONOMY_TARGET_REPO/.autonomy/config.yaml"
   ACCOUNT_KEY="$(resolve_account_key)"
