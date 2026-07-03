@@ -57,10 +57,20 @@ class TestPageTemplating(unittest.TestCase):
         self.assertIn(b'"claude-opus-4-8"', html)
 
     def test_config_page_templates_without_error(self):
-        # /config has no __MODEL_CHOICES__ placeholder; templating is a no-op
-        # for absent placeholders and must still serve.
+        # /config leaves no build-time placeholder behind and still serves.
         html = dashboard._page_bytes(dashboard.CONFIG_PAGE)
         self.assertNotIn(b"__CONTROL_TOKEN__", html)
+        self.assertNotIn(b"__MODEL_CHOICES__", html)
+
+    def test_config_page_model_roster_single_sourced(self):
+        # the config page's model-field datalist is filled from the SAME
+        # accounts curated roster the main page uses (#82 builds on #134), so
+        # the authoring picker and the runtime override picker cannot drift.
+        html = dashboard._page_bytes(dashboard.CONFIG_PAGE)
+        roster = accounts.subscription_models("claude_subscription")
+        injected = ("const MODEL_CHOICES=" + json.dumps(roster) + ";").encode()
+        self.assertIn(injected, html)
+        self.assertIn(b'"claude-opus-4-8"', html)
 
 
 class TestConciergeAccountSelection(unittest.TestCase):
