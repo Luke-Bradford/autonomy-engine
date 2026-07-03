@@ -1031,6 +1031,31 @@ def _default_lane_main(argv):
     return 0
 
 
+def _lanes_main(argv):
+    """`roles.py lanes <target-repo>` -- every declared lane name, one per line
+    (the default lane included; 'main' when no `lanes:` block). VALIDATES the
+    `lanes:` block first: a malformed block prints its errors to stderr and
+    returns rc 1 rather than falling back to a bogus roster. The supervisor
+    validates a `--lane` flag against this output, so membership here is the
+    authoritative gate (name charset+length and declared-ness in one) -- and a
+    broken block must REFUSE, never silently validate a lane against a fallback.
+    Part 2's per-lane supervisor derives its target lane set from this."""
+    if len(argv) != 2:
+        print("usage: roles.py lanes <target-repo>", file=sys.stderr)
+        return 2
+    config, rc = _load_config(argv[1])
+    if rc:
+        return rc
+    errors = _validate_lanes(config)
+    if errors:
+        for e in errors:
+            print(e, file=sys.stderr)
+        return 1
+    for name in lane_names(config):
+        print(name)
+    return 0
+
+
 def _roles_in_lane(config, lane):
     """Set of enabled role names (loop + cron + event) that belong to `lane`."""
     names = set(dispatch_roles(config, lane))
@@ -1075,6 +1100,8 @@ def main(argv):
         return _knob_notes_main(argv[1:])
     if len(argv) >= 2 and argv[1] == "default-lane":
         return _default_lane_main(argv[1:])
+    if len(argv) >= 2 and argv[1] == "lanes":
+        return _lanes_main(argv[1:])
     if len(argv) >= 2 and argv[1] == "lane-report":
         return _lane_report_main(argv[1:])
     if len(argv) >= 2 and argv[1] == "dispatch":

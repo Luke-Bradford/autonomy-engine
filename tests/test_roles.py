@@ -1337,6 +1337,32 @@ class TestLaneCLI(unittest.TestCase):
         rc, _ = self._run("dispatch", self.tmp, "coder", "--lane", "main")
         self.assertEqual(rc, 2)
 
+    def test_lanes_cli_prints_declared_in_order(self):
+        self._write("lanes:\n  main: {}\n  fe: {}\n")
+        rc, out = self._run("lanes", self.tmp)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.split(), ["main", "fe"])
+
+    def test_lanes_cli_prints_main_without_block(self):
+        self._write("roles:\n  coder: { enabled: true }\n")
+        rc, out = self._run("lanes", self.tmp)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.split(), ["main"])
+
+    def test_lanes_cli_refuses_malformed_block(self):
+        # A `lanes:` block present but not a mapping must REFUSE (rc 1), never
+        # fall back to printing 'main' -- the supervisor validates --lane against
+        # this output, so a broken block must not silently validate a lane.
+        self._write("lanes: []\n")
+        rc, out = self._run("lanes", self.tmp)
+        self.assertEqual(rc, 1)
+        self.assertEqual(out.strip(), "")
+
+    def test_lanes_cli_refuses_bad_lane_name(self):
+        self._write("lanes:\n  'bad/name': {}\n")
+        rc, _ = self._run("lanes", self.tmp)
+        self.assertEqual(rc, 1)
+
     def test_lane_report_silent_without_block(self):
         self._write("roles:\n  coder: { enabled: true }\n")
         rc, out = self._run("lane-report", self.tmp)
