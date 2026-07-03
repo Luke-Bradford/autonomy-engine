@@ -898,7 +898,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   trap 'rm -rf "$LOCK"; heartbeat "stopped" "supervisor exited" ""; log "supervisor stopped."; exit 0' EXIT INT TERM
 
   log "=== supervisor start (pid $$, repo=$AUTONOMY_TARGET_REPO, agent=$AGENT_TYPE, model=$MODEL) ==="
-  write_engine_boot_sha   # #166: record the engine sha we froze at, for the dashboard's update chip
+  write_engine_boot_sha "$ENGINE_HOME" "$LOGDIR"   # #166: record the engine sha we froze at, for the dashboard's update chip
   err_backoff=$ERR_BACKOFF_START
   limit_backoff=$LIMIT_BACKOFF_START
   paused_logged=0
