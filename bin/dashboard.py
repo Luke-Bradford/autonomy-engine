@@ -42,6 +42,12 @@ import accounts as accts  # noqa: E402
 import concierge  # noqa: E402
 import claude_usage as cu  # noqa: E402
 
+# #166 slice 1: the engine sha THIS dashboard process booted from. Its own thin
+# shell (bin/dashboard.py) can't hot-reload -- imports/argv bind at start -- so
+# when the engine checkout advances past this sha the page shows an "update
+# available -- restart to apply" chip. Captured once, here at import.
+DASHBOARD_BOOT_SHA = ds.engine_head_sha(ENGINE_HOME)
+
 # --- logic-module hot-reload (#166) ------------------------------------------
 # A merged fix to a lib/*.py logic module is invisible in the running dashboard
 # until a restart -- imports bind once at process start -- which looks identical
@@ -846,7 +852,9 @@ def collect(repos):
             # executor infra failure (thread exhaustion) must not blank the page:
             # fall back to serial. _collect_one already contains per-repo errors.
             out = [_collect_one(r) for r in repos]
-    return {"generated_at": int(time.time()), "repos": out, "account": _account_usage()}
+    return {"generated_at": int(time.time()), "repos": out,
+            "account": _account_usage(),
+            "engine": ds.engine_status(DASHBOARD_BOOT_SHA, out)}
 
 
 def execute_set_model(repo, model, effort, scope):

@@ -5,6 +5,7 @@ P1 page renders. Stdlib only; no network (git/gh state is injected)."""
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -1010,3 +1011,185 @@ class TestSessionRole(unittest.TestCase):
             self.assertEqual(state["current_session"]["role"], "")
         finally:
             shutil.rmtree(repo)
+
+
+class TestEngineVersion(unittest.TestCase):
+    """#166 slice 1: the engine 'update available' truth signal. Each service
+    records the engine sha it booted from; the dashboard compares to the engine
+    checkout's current HEAD and shows a chip when they diverge. Fail-safe: a
+    corrupt / unreadable / non-hex sha never manufactures a false stale, and an
+    unreadable current HEAD reports nothing stale (never cry wolf)."""
+
+    def _git_repo(self):
+        d = tempfile.mkdtemp()
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+
+        def g(*args):
+            subprocess.run(["git", "-C", d] + list(args), check=True, env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        g("init", "-q")
+        return d, g
+
+    # -- engine_head_sha (real git) --
+    def test_head_sha_reads_engine_checkout(self):
+        d, g = self._git_repo()
+        try:
+            open(os.path.join(d, "a"), "w").close()
+            g("add", "a")
+            g("commit", "-qm", "one")
+            self.assertRegex(ds.engine_head_sha(d), r"^[0-9a-f]{40}$")
+        finally:
+            shutil.rmtree(d)
+
+    def test_head_sha_empty_on_non_repo(self):
+        d = tempfile.mkdtemp()
+        try:
+            self.assertEqual(ds.engine_head_sha(d), "")
+        finally:
+            shutil.rmtree(d)
+
+    # -- engine_commits_behind (real git) --
+    def test_commits_behind_counts_new_commits(self):
+        d, g = self._git_repo()
+        try:
+            open(os.path.join(d, "a"), "w").close()
+            g("add", "a")
+            g("commit", "-qm", "one")
+            first = ds.engine_head_sha(d)
+            open(os.path.join(d, "b"), "w").close()
+            g("add", "b")
+            g("commit", "-qm", "two")
+            head = ds.engine_head_sha(d)
+            self.assertEqual(ds.engine_commits_behind(first, head, d), 1)
+            self.assertEqual(ds.engine_commits_behind(head, head, d), 0)
+        finally:
+            shutil.rmtree(d)
+
+    def test_commits_behind_none_on_bad_input(self):
+        self.assertIsNone(ds.engine_commits_behind("", "a" * 40, "/nonexistent"))
+        self.assertIsNone(
+            ds.engine_commits_behind("d" * 40, "c" * 40, "/nonexistent/xyz"))
+
+    # -- read_engine_boot_sha (pure file IO + hex validation) --
+    def _logdir_with(self, content):
+        d = tempfile.mkdtemp()
+        if content is not None:
+            with open(os.path.join(d, "engine_sha"), "w") as fh:
+                fh.write(content)
+        return d
+
+    def test_boot_sha_valid_hex(self):
+        sha = "0123456789abcdef" * 2 + "01234567"  # 40 hex
+        d = self._logdir_with(sha + "\n")
+        try:
+            self.assertEqual(ds.read_engine_boot_sha(d), sha)
+        finally:
+            shutil.rmtree(d)
+
+    def test_boot_sha_absent_returns_empty(self):
+        d = self._logdir_with(None)
+        try:
+            self.assertEqual(ds.read_engine_boot_sha(d), "")
+        finally:
+            shutil.rmtree(d)
+
+    def test_boot_sha_rejects_malformed(self):
+        # non-hex, uppercase (git emits lowercase), too short, too long, blank
+        for bad in ["not-a-sha\n", "A" * 40 + "\n", "a" * 39 + "\n",
+                    "a" * 41 + "\n", "\n", "   \n", "abc def\n"]:
+            d = self._logdir_with(bad)
+            try:
+                self.assertEqual(ds.read_engine_boot_sha(d), "",
+                                 "expected '' for %r" % bad)
+            finally:
+                shutil.rmtree(d)
+
+    # -- engine_status composition (readers injected, no git) --
+    def _status(self, current, dash_boot, repos, behind_map=None):
+        bm = behind_map or {}
+        return ds.engine_status(
+            dash_boot, repos,
+            head_reader=lambda home=None: current,
+            behind_reader=lambda running, cur, home=None: bm.get(running))
+
+    def test_status_all_fresh_not_stale(self):
+        cur = "a" * 40
+        repos = [{"name": "r", "engine_boot": cur,
+                  "lifecycle": {"state": "running"}}]
+        st = self._status(cur, cur, repos)
+        self.assertFalse(st["stale"])
+        self.assertFalse(st["dashboard"]["stale"])
+        self.assertIsNone(st["behind"])
+        self.assertEqual(st["supervisors"],
+                         [{"repo": "r", "sha": cur, "behind": None,
+                           "stale": False}])
+
+    def test_status_dashboard_behind(self):
+        cur, old = "b" * 40, "a" * 40
+        repos = [{"name": "r", "engine_boot": cur,
+                  "lifecycle": {"state": "running"}}]
+        st = self._status(cur, old, repos, behind_map={old: 3})
+        self.assertTrue(st["stale"])
+        self.assertTrue(st["dashboard"]["stale"])
+        self.assertEqual(st["dashboard"]["behind"], 3)
+        self.assertEqual(st["behind"], 3)
+
+    def test_status_paused_supervisor_counts_as_stale(self):
+        # a LIVE-but-paused loop is still booted from old code
+        cur, old = "b" * 40, "a" * 40
+        repos = [{"name": "r", "engine_boot": old,
+                  "lifecycle": {"state": "paused"}}]
+        st = self._status(cur, cur, repos, behind_map={old: 2})
+        self.assertTrue(st["stale"])
+        self.assertEqual(st["supervisors"][0]["stale"], True)
+        self.assertEqual(st["behind"], 2)
+
+    def test_status_stopped_supervisor_ignored(self):
+        # a stopped supervisor keeps a stale lock pid -- gate on STATE, not pid,
+        # so its old engine_sha never fakes a restart chip (Codex CP2)
+        cur, old = "b" * 40, "a" * 40
+        repos = [{"name": "r", "engine_boot": old,
+                  "lifecycle": {"state": "stopped", "pid": 999}}]
+        st = self._status(cur, cur, repos)  # dashboard fresh, supervisor stopped
+        self.assertFalse(st["stale"])
+        self.assertEqual(st["supervisors"], [])
+
+    def test_status_current_unreadable_never_stale(self):
+        old = "a" * 40
+        repos = [{"name": "r", "engine_boot": "b" * 40,
+                  "lifecycle": {"state": "running"}}]
+        st = self._status("", old, repos)  # head unreadable -> ''
+        self.assertFalse(st["stale"])
+        self.assertFalse(st["dashboard"]["stale"])
+        self.assertFalse(st["supervisors"][0]["stale"])
+
+    def test_status_behind_is_max_across_stale(self):
+        cur, d_old, s_old = "c" * 40, "a" * 40, "b" * 40
+        repos = [{"name": "r", "engine_boot": s_old,
+                  "lifecycle": {"state": "running"}}]
+        st = self._status(cur, d_old, repos, behind_map={d_old: 2, s_old: 5})
+        self.assertTrue(st["stale"])
+        self.assertEqual(st["behind"], 5)
+
+    def test_status_live_supervisor_unknown_sha_flagged(self):
+        # a LIVE supervisor with no valid recorded sha (pre-feature / torn write)
+        # is flagged stale -- hiding an unknown is fail-open (Codex CP2). sha ""
+        # and behind None, but it drives the chip so the operator restarts.
+        cur = "a" * 40
+        repos = [{"name": "r", "engine_boot": "",
+                  "lifecycle": {"state": "running"}}]
+        st = self._status(cur, cur, repos)
+        self.assertTrue(st["stale"])
+        self.assertEqual(st["supervisors"],
+                         [{"repo": "r", "sha": "", "behind": None,
+                           "stale": True}])
+        self.assertIsNone(st["behind"])  # unknown-sha contributes no count
+
+    def test_status_unknown_sha_not_stale_when_head_unreadable(self):
+        # no reference point (current == "") -> never cry wolf, even unknown sha
+        repos = [{"name": "r", "engine_boot": "",
+                  "lifecycle": {"state": "running"}}]
+        st = self._status("", "a" * 40, repos)
+        self.assertFalse(st["stale"])
+        self.assertFalse(st["supervisors"][0]["stale"])

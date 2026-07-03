@@ -17,6 +17,7 @@ import glob
 import json
 import os
 import re
+import subprocess
 import threading
 import time
 from collections import Counter
@@ -737,6 +738,143 @@ def read_heartbeat(path):
     return {"ts": ts, "phase": phase, "until": until, "reason": reason}
 
 
+# --- engine version truth (#166 slice 1) ------------------------------------
+# The two thin shells (bin/supervisor.sh, bin/dashboard.py) freeze their own
+# code at process start (bash function bodies / Python imports), so a merged fix
+# to a shell is silently NOT live until a restart -- which looks identical to
+# "the fix didn't work". Slice 1 is truth only: each service records the engine
+# sha it booted from; the dashboard compares against the engine checkout's
+# current HEAD and shows a chip when they diverge. Fail-safe throughout: a
+# corrupt/unreadable sha never manufactures a false stale, and an unreadable
+# current HEAD reports nothing stale (never cry wolf). Slice 2 (safe
+# self-refresh) is out of scope.
+
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _engine_home(engine_home=None):
+    """The engine checkout: an explicit arg wins, else the exported
+    AUTONOMY_ENGINE_HOME (the one contract bin/supervisor.sh sets), else the
+    path this file lives under (lib/ -> engine root)."""
+    if engine_home:
+        return engine_home
+    return os.environ.get("AUTONOMY_ENGINE_HOME") or os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))
+
+
+def engine_head_sha(engine_home=None):
+    """The engine checkout's current HEAD sha, or "" on ANY failure (missing
+    git, not a repo, timeout). Read fresh each request -- it advances as merges
+    land and the checkout is updated."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", _engine_home(engine_home), "rev-parse", "HEAD"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if out.returncode != 0:
+        return ""
+    sha = out.stdout.decode("ascii", "replace").strip()
+    return sha if _SHA_RE.match(sha) else ""
+
+
+def read_engine_boot_sha(logdir):
+    """The sha a supervisor recorded at boot (bin/supervisor.sh writes
+    <logdir>/engine_sha once). Returns "" unless the value is a full 40-char
+    lowercase hex sha -- a torn / corrupt / manual file is treated as absent so
+    it can never manufacture a false stale (fail-safe)."""
+    try:
+        with open(os.path.join(logdir, "engine_sha"), errors="replace") as fh:
+            val = fh.readline().strip()
+    except OSError:
+        return ""
+    return val if _SHA_RE.match(val) else ""
+
+
+def engine_commits_behind(running, current, engine_home=None):
+    """How many commits `current` has that `running` does not
+    (`git rev-list --count running..current`). None when unknowable (either sha
+    empty, git fails). Valid even for divergent shas -- it's "new commits the
+    running process is missing"; staleness itself is decided by the string
+    compare in engine_status, this is display sugar only. Never raises."""
+    if not running or not current:
+        return None
+    try:
+        out = subprocess.run(
+            ["git", "-C", _engine_home(engine_home), "rev-list", "--count",
+             "%s..%s" % (running, current)],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    try:
+        return int(out.stdout.decode("ascii", "replace").strip())
+    except ValueError:
+        return None
+
+
+def engine_status(dashboard_boot, repos, head_reader=engine_head_sha,
+                  behind_reader=engine_commits_behind):
+    """Compose the engine 'update available' truth block for collect()'s
+    payload. `dashboard_boot` is the sha bin/dashboard.py captured at import;
+    `repos` is the per-repo state list (each carries `engine_boot` +
+    `lifecycle`). Readers are injectable for tests. A service is stale when the
+    current HEAD is readable, its boot sha is known, and they differ. A
+    supervisor contributes when its lifecycle state is running OR paused (a
+    paused loop still runs old code); a LIVE supervisor whose boot sha is
+    unknowable is flagged stale too (hiding an unknown is fail-open). `behind`
+    per service is the commit count, computed only when a known sha differs
+    (display sugar; None for unknown-sha). Top-level `behind` = max across
+    stale services. When current HEAD is unreadable, nothing is stale."""
+    current = head_reader() or ""
+
+    def _service(boot):
+        stale = bool(current and boot and boot != current)
+        behind = behind_reader(boot, current) if stale else None
+        return stale, behind
+
+    d_stale, d_behind = _service(dashboard_boot)
+    dashboard = {"sha": dashboard_boot, "behind": d_behind, "stale": d_stale}
+
+    supervisors = []
+    for r in repos:
+        # Only a LIVE loop (running OR paused -- a paused loop still runs old
+        # code) matters. Gate on lifecycle STATE, not a raw pid: a stopped
+        # supervisor keeps its stale lock pid, which would otherwise fake a
+        # restart chip for a process that isn't running (Codex CP2).
+        if (r.get("lifecycle") or {}).get("state") not in ("running", "paused"):
+            continue
+        boot = r.get("engine_boot") or ""
+        valid = bool(_SHA_RE.match(boot))
+        if not current:
+            s_stale, s_behind = False, None          # no reference -> never cry wolf
+        elif not valid:
+            # Live loop whose boot sha is unknowable (pre-feature supervisor that
+            # never wrote the file, or a torn write): we can't prove it's current,
+            # so flag it -- hiding an unknown is fail-OPEN against #166's truth
+            # goal (Codex CP2). Fail-safe direction = surface the restart hint.
+            s_stale, s_behind = True, None
+        else:
+            s_stale, s_behind = _service(boot)
+        supervisors.append({"repo": r.get("name", ""),
+                            "sha": boot if valid else "",
+                            "behind": s_behind, "stale": s_stale})
+
+    behinds = [s["behind"] for s in supervisors if s["stale"]
+               and s["behind"] is not None]
+    if dashboard["stale"] and dashboard["behind"] is not None:
+        behinds.append(dashboard["behind"])
+    stale = dashboard["stale"] or any(s["stale"] for s in supervisors)
+    return {
+        "current": current,
+        "dashboard": dashboard,
+        "supervisors": supervisors,
+        "stale": stale,
+        "behind": max(behinds) if behinds else None,
+    }
+
+
 # --- lifecycle --------------------------------------------------------------
 
 def _default_pid_is_alive(pid):
@@ -947,6 +1085,7 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "roles": build_roles(config.get("roles"), status, now=now),
         "voice": read_supervisor_voice(os.path.join(logdir, "supervisor.log")),
         "heartbeat": read_heartbeat(os.path.join(logdir, "heartbeat")),
+        "engine_boot": read_engine_boot_sha(logdir),  # #166: supervisor's boot sha
         "git": git_in_flight(repo_path) if git_in_flight else {},
         "config": config,
         "override": read_model_override(os.path.join(logdir, "model-override")),
