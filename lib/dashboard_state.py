@@ -744,6 +744,31 @@ def latest_session(logdir):
     return os.path.join(logdir, sorted(names)[-1])
 
 
+def recent_quota_windows(logdir, limit=12):
+    """Account rate-limit windows merged across the newest `limit` session
+    logs, keeping the most-recent snapshot (max resets_at) per window type.
+
+    parse_quota_windows reads ONE log, but Anthropic emits five_hour and
+    seven_day events intermittently -- the newest log routinely carries only
+    one of the two, so a single-log read leaves the other window blank/'dead'
+    on the header even when a slightly older log holds a valid snapshot. {}
+    when none found."""
+    try:
+        names = sorted(n for n in os.listdir(logdir)
+                       if n.startswith("session-") and n.endswith(".log"))
+    except OSError:
+        return {}
+    merged = {}
+    for name in reversed(names[-limit:]):   # newest first
+        for wt, win in parse_quota_windows(os.path.join(logdir, name)).items():
+            cur = merged.get(wt)
+            if cur is None or win.get("resets_at", 0) > cur.get("resets_at", 0):
+                merged[wt] = win
+        if "five_hour" in merged and "seven_day" in merged:
+            break   # both populated; older logs can only be staler
+    return merged
+
+
 def _read_config(repo_path):
     cfg_path = os.path.join(repo_path, ".autonomy", "config.yaml")
     try:
@@ -795,5 +820,5 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "git": git_in_flight(repo_path) if git_in_flight else {},
         "config": config,
         "override": read_model_override(os.path.join(logdir, "model-override")),
-        "quota": parse_quota_windows(latest) if latest else {},
+        "quota": recent_quota_windows(logdir),
     }

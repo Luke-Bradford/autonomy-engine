@@ -4,6 +4,7 @@ supervisor.log, the lock/sentinel lifecycle, config.yaml) into the shape the
 P1 page renders. Stdlib only; no network (git/gh state is injected)."""
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -672,3 +673,45 @@ class TestCodexSessionParse(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRecentQuotaWindows(unittest.TestCase):
+    """The 5-hour bar went 'dead' because quota was read from ONLY the newest
+    session log, which often carries just one window type. recent_quota_windows
+    merges the most-recent snapshot of each window across recent logs."""
+
+    def _rle(self, wt, resets_at, util):
+        return {"type": "rate_limit_event",
+                "rate_limit_info": {"rateLimitType": wt, "resetsAt": resets_at,
+                                    "utilization": util, "isUsingOverage": False}}
+
+    def _log(self, d, name, events):
+        with open(os.path.join(d, name), "w") as fh:
+            for ev in events:
+                fh.write(json.dumps(ev) + "\n")
+
+    def test_merges_five_hour_from_older_log_when_newest_lacks_it(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        # older log holds the five_hour snapshot; the NEWEST holds only seven_day
+        self._log(d, "session-20260101T000000.log", [self._rle("five_hour", 1000, 0.42)])
+        self._log(d, "session-20260101T010000.log", [self._rle("seven_day", 2000, 0.60)])
+        w = ds.recent_quota_windows(d)
+        self.assertIn("five_hour", w)
+        self.assertIn("seven_day", w)
+        self.assertAlmostEqual(w["five_hour"]["utilization"], 0.42)
+        self.assertAlmostEqual(w["seven_day"]["utilization"], 0.60)
+
+    def test_takes_most_recent_snapshot_per_window(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        self._log(d, "session-20260101T000000.log", [self._rle("five_hour", 1000, 0.20)])
+        self._log(d, "session-20260101T010000.log", [self._rle("five_hour", 5000, 0.55)])
+        w = ds.recent_quota_windows(d)
+        self.assertEqual(w["five_hour"]["resets_at"], 5000)
+        self.assertAlmostEqual(w["five_hour"]["utilization"], 0.55)
+
+    def test_empty_logdir(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        self.assertEqual(ds.recent_quota_windows(d), {})
