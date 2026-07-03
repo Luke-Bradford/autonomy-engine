@@ -55,6 +55,22 @@ _ASSIGNABLE_ROLES = ("coder", "pm", "qa", "researcher")
 # can't read our token. Regenerated each launch.
 _CONTROL_TOKEN = secrets.token_urlsafe(24)
 
+
+def _page_bytes(page):
+    """Read a served HTML page and fill its build-time placeholders: the
+    per-process control token, and the model-picker roster. MODEL_CHOICES is
+    single-sourced from accounts.subscription_models("claude_subscription")
+    (#134) and injected as JSON, so the page can never drift from the accounts
+    curated list. A placeholder absent from a given page (e.g. /config has no
+    __MODEL_CHOICES__) is a no-op replace."""
+    with open(page, "rb") as fh:
+        html = fh.read()
+    html = html.replace(b"__CONTROL_TOKEN__", _CONTROL_TOKEN.encode("ascii"))
+    models = json.dumps(accts.subscription_models("claude_subscription"))
+    html = html.replace(b"__MODEL_CHOICES__", models.encode("ascii"))
+    return html
+
+
 # gh is network + slow; cache its result per repo so SSE ticks don't hammer it.
 # Read/written from per-request SSE threads, so guard it (like _hist).
 # Serve-stale-while-revalidate (#80): within [_GH_TTL, _GH_MAX_STALE) a request
@@ -802,10 +818,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/" or path == "/config":
             page = PAGE if path == "/" else CONFIG_PAGE
             try:
-                with open(page, "rb") as fh:
-                    html = fh.read()
-                html = html.replace(b"__CONTROL_TOKEN__", _CONTROL_TOKEN.encode("ascii"))
-                self._send(200, html, "text/html; charset=utf-8")
+                self._send(200, _page_bytes(page),
+                           "text/html; charset=utf-8")
             except OSError:
                 self._send(500, os.path.basename(page).encode() + b" missing",
                            "text/plain")

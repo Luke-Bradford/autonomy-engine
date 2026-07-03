@@ -387,6 +387,22 @@ class TestListModels(unittest.TestCase):
         self.assertEqual(acc.list_models("api"), [])
         self.assertEqual(acc.list_models("ghost"), [])
 
+    def test_subscription_models_is_the_single_source(self):
+        # the module-level accessor both Accounts.list_models AND the dashboard
+        # (bin/dashboard.py MODEL_CHOICES injection) read -- one roster, no
+        # hand-kept duplicate. Returns a copy so no caller can mutate it.
+        self.assertEqual(ac.subscription_models("claude_subscription"),
+                         ac._SUBSCRIPTION_MODELS["claude_subscription"])
+        self.assertIn("claude-opus-4-8",
+                      ac.subscription_models("claude_subscription"))
+        self.assertEqual(ac.subscription_models("codex_subscription"), [])
+        self.assertEqual(ac.subscription_models("openai_compatible"), [])
+        self.assertEqual(ac.subscription_models("nonsense"), [])
+        got = ac.subscription_models("claude_subscription")
+        got.append("tampered")
+        self.assertNotIn("tampered",
+                         ac._SUBSCRIPTION_MODELS["claude_subscription"])
+
     def test_list_models_credential_failure_is_empty(self):
         # an unexpected failure from the credentials backend must degrade to
         # [] -- discovery is best-effort and never propagates (never raises).

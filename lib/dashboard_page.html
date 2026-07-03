@@ -390,7 +390,7 @@ function renderFocus(repos){
 }
 
 /* ---- MODEL / EFFORT CONTROL (#24) ---- */
-const MODEL_CHOICES=["claude-opus-4-8","claude-sonnet-5","claude-haiku-4-5"];
+const MODEL_CHOICES=__MODEL_CHOICES__; // single-sourced from accounts._SUBSCRIPTION_MODELS, injected by bin/dashboard.py (#134)
 const EFFORT_CHOICES=["","low","medium","high","xhigh","max"];
 function modelCtl(r,st){
   if(st==="needs-setup"||st==="missing"||st==="error") return "";
