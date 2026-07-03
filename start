@@ -61,6 +61,15 @@ dashboard_pids() {
 # and a killer, then wait: whichever the command's own rc (fast path) or a
 # non-zero from the TERM (deadline path). Returns the command's rc, or non-zero
 # if it was killed -- callers treat non-zero as "unhealthy/unknown", never hang.
+#
+# Accepted residual (issue #96): the killer targets $cmd_pid by number, so if the
+# command finishes at ~exactly the deadline and the OS recycles that pid before we
+# tear the killer down, the TERM could hit an unrelated process. The fast path is
+# race-free -- the command finishes well inside `sleep "$secs"`, so the killer is
+# torn down (line below) long before its `kill` line runs. A portable race-free fix
+# needs `wait -n` (bash 4+, barred by the 3.2 floor) or a FIFO+`read -t` rewrite,
+# poor risk/reward for a boundary-only near-impossible event on one 5s caller.
+# Revisit if this gains more callers or a tighter timeout.
 _with_timeout() {
   local secs="$1"; shift
   local cmd_pid killer_pid rc=0
