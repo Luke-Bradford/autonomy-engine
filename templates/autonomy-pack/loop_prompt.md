@@ -15,7 +15,10 @@ clean state (no half-done branches, no unpushed WIP).
 3. Update the board via `"$AUTONOMY_ENGINE_HOME/bin/board.sh" status <n>
    "<status>"` at each lifecycle transition (best-effort -- a board hiccup
    never blocks real work).
-4. Next ticket.
+4. **Pause check, then next ticket.** Before picking the next ticket, check for the pause
+   sentinel (`var/autonomy-logs/autonomy-PAUSE` under the target repo). If present, end the
+   session cleanly now — leave the repo clean and stop; the operator asked the loop to pause.
+   Otherwise: next ticket.
 
 <!-- Edit this file for your repo's own triage rules, QA steps, and anything
      else specific to how this project wants its board drained. This is a
