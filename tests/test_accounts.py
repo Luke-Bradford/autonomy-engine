@@ -478,12 +478,17 @@ class TestLiveSubscriptionModels(unittest.TestCase):
             return _FakeResp(status, body)
         return opener
 
-    def test_fetch_parses_ids_skips_bad_rows(self):
-        payload = {"data": [{"id": "a"}, {"no_id": 1}, {"id": ""},
-                            {"id": "b"}, "garbage"]}
+    def test_fetch_parses_rows_skips_bad_rows(self):
+        # #206 follow-up: rows carry {id, display_name}; display_name defaults to
+        # "" when absent/non-str. Bad rows (no id, empty id, non-dict) skipped.
+        payload = {"data": [{"id": "a", "display_name": "Ay"}, {"no_id": 1},
+                            {"id": ""}, {"id": "b"}, {"id": "c", "display_name": 7},
+                            "garbage"]}
         got = ac._fetch_live_claude_models(
             self.TOKEN, opener=self._opener(200, json.dumps(payload)))
-        self.assertEqual(got, ["a", "b"])
+        self.assertEqual(got, [{"id": "a", "display_name": "Ay"},
+                               {"id": "b", "display_name": ""},
+                               {"id": "c", "display_name": ""}])
 
     def test_fetch_non_200_and_bad_payloads_are_none(self):
         self.assertIsNone(ac._fetch_live_claude_models(
@@ -563,6 +568,46 @@ class TestLiveSubscriptionModels(unittest.TestCase):
         self.assertEqual(out, ["cached-x"])
         self.assertEqual(called["n"], 0)
 
+    def test_live_models_projects_ids_from_rich_rows(self):
+        # #206 follow-up: the cache holds rich {id, display_name} rows, but
+        # live_claude_models keeps its bare-id contract (projects ids out).
+        out = ac.live_claude_models(
+            now=1.0, token_reader=lambda: self.TOKEN,
+            fetcher=lambda t: [{"id": "claude-fable-5", "display_name": "Fable 5"},
+                               {"id": "claude-opus-4-8", "display_name": "Opus"}])
+        self.assertEqual(out, ["claude-fable-5", "claude-opus-4-8"])
+
+    def test_live_model_labels_reads_cached_display_names(self):
+        # a pure cache reader (no fetch): returns {id: display_name} for the
+        # rows the last live fetch cached, dropping empty display_names.
+        ac.live_claude_models(
+            now=1.0, token_reader=lambda: self.TOKEN,
+            fetcher=lambda t: [{"id": "claude-fable-5", "display_name": "Fable 5"},
+                               {"id": "claude-opus-4-8", "display_name": ""}])
+        self.assertEqual(ac.live_claude_model_labels(),
+                         {"claude-fable-5": "Fable 5"})
+
+    def test_live_model_labels_empty_when_cache_cold(self):
+        self.assertEqual(ac.live_claude_model_labels(), {})
+
+    def test_live_models_tolerates_junk_rows(self):
+        # fail-safe: a malformed roster (non-dict/non-str rows, a dict with no
+        # id) never raises out of live_claude_models -- bad rows are dropped so
+        # live discovery can never break the config picker.
+        out = ac.live_claude_models(
+            now=1.0, token_reader=lambda: self.TOKEN,
+            fetcher=lambda t: [123, {"no_id": 1}, {"id": ""}, "claude-opus-4-8",
+                               {"id": "claude-fable-5", "display_name": "Fable 5"}])
+        self.assertEqual(out, ["claude-opus-4-8", "claude-fable-5"])
+        self.assertEqual(ac.live_claude_model_labels(),
+                         {"claude-fable-5": "Fable 5"})
+
+    def test_live_model_labels_empty_for_bare_id_cache(self):
+        # a bare-id roster (e.g. an injected legacy fetcher) carries no labels.
+        ac.live_claude_models(now=1.0, token_reader=lambda: self.TOKEN,
+                              fetcher=lambda t: ["claude-opus-4-8"])
+        self.assertEqual(ac.live_claude_model_labels(), {})
+
     def _acc_with_sub(self):
         tmp = tempfile.mkdtemp()
         acc = ac.Accounts(index_path=os.path.join(tmp, "accounts"),
@@ -587,14 +632,55 @@ class TestLiveSubscriptionModels(unittest.TestCase):
         acc = self._acc_with_sub()
         saved = ac.live_claude_models
         try:
+            # cache cold (setUp reset) -> no display_names available -> labels {}.
             ac.live_claude_models = lambda *a, **k: ["claude-fable-5"]
-            self.assertEqual(acc.discover_models("sub"),
-                             {"source": "live", "models": ["claude-fable-5"]})
+            self.assertEqual(
+                acc.discover_models("sub"),
+                {"source": "live", "models": ["claude-fable-5"], "labels": {}})
             ac.live_claude_models = lambda *a, **k: None
             self.assertEqual(
                 acc.discover_models("sub"),
                 {"source": "curated",
-                 "models": ac._SUBSCRIPTION_MODELS["claude_subscription"]})
+                 "models": ac._SUBSCRIPTION_MODELS["claude_subscription"],
+                 "labels": {}})
+        finally:
+            ac.live_claude_models = saved
+
+    def test_discover_models_surfaces_live_labels(self):
+        # #206 follow-up: the live rows the fetch cached surface as {id: name}
+        # labels alongside the bare-id models list, for the config picker.
+        acc = self._acc_with_sub()
+        saved = ac.live_claude_models
+        try:
+            ac.live_claude_models = lambda *a, **k: ["claude-fable-5"]
+            with ac._live_models_lock:
+                ac._live_models_cache.update(
+                    seen=True, ts=1e18, inflight=False,
+                    val=[{"id": "claude-fable-5", "display_name": "Fable 5"}])
+            self.assertEqual(
+                acc.discover_models("sub"),
+                {"source": "live", "models": ["claude-fable-5"],
+                 "labels": {"claude-fable-5": "Fable 5"}})
+        finally:
+            ac.live_claude_models = saved
+
+    def test_discover_models_labels_subset_of_models(self):
+        # #208 review nitpick: live_claude_models and live_claude_model_labels
+        # take the cache lock separately, so a refresh could leave the cache
+        # holding a model the ids list doesn't. labels must never carry an id
+        # absent from `models` -- the response stays internally consistent.
+        acc = self._acc_with_sub()
+        saved = ac.live_claude_models
+        try:
+            ac.live_claude_models = lambda *a, **k: ["claude-fable-5"]
+            with ac._live_models_lock:
+                ac._live_models_cache.update(
+                    seen=True, ts=1e18, inflight=False,
+                    val=[{"id": "claude-fable-5", "display_name": "Fable 5"},
+                         {"id": "claude-opus-4-8", "display_name": "Opus 4.8"}])
+            d = acc.discover_models("sub")
+            self.assertEqual(d["models"], ["claude-fable-5"])
+            self.assertEqual(d["labels"], {"claude-fable-5": "Fable 5"})
         finally:
             ac.live_claude_models = saved
 
@@ -604,9 +690,9 @@ class TestLiveSubscriptionModels(unittest.TestCase):
                           credentials=FakeCreds())
         acc.set("api", "anthropic_api", credential="k")
         self.assertEqual(acc.discover_models("api"),
-                         {"source": "none", "models": []})
+                         {"source": "none", "models": [], "labels": {}})
         self.assertEqual(acc.discover_models("ghost"),
-                         {"source": "none", "models": []})
+                         {"source": "none", "models": [], "labels": {}})
 
 
 if __name__ == "__main__":

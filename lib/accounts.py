@@ -109,11 +109,12 @@ def reset_live_models_cache():
 
 def _fetch_live_claude_models(token, opener=None, timeout=5):
     """GET /v1/models with the OAuth token in the Authorization header. Returns a
-    list of model id strings, or None on empty token / non-200 / transport error
-    / non-JSON / missing `data` / ZERO valid rows. Collects every row with a
-    non-empty str `id` and SKIPS invalid rows (one bad row never poisons the good
-    ones). NEVER re-raises (so no header text can leak) and never puts the token
-    on argv."""
+    list of {"id", "display_name"} rows (#206 follow-up: the display_name feeds the
+    config picker's human-readable labels; "" when the row omits it or it is
+    non-str), or None on empty token / non-200 / transport error / non-JSON /
+    missing `data` / ZERO valid rows. Collects every row with a non-empty str `id`
+    and SKIPS invalid rows (one bad row never poisons the good ones). NEVER
+    re-raises (so no header text can leak) and never puts the token on argv."""
     if not token:
         return None
     if opener is None:
@@ -149,18 +150,54 @@ def _fetch_live_claude_models(token, opener=None, timeout=5):
     rows = data.get("data") if isinstance(data, dict) else None
     if not isinstance(rows, list):
         return None
-    ids = []
+    out = []
     for row in rows:
         if isinstance(row, dict):
             mid = row.get("id")
             if isinstance(mid, str) and mid:
-                ids.append(mid)
-    return ids or None
+                name = row.get("display_name")
+                out.append({"id": mid,
+                            "display_name": name if isinstance(name, str) else ""})
+    return out or None
+
+
+def _row_id(row):
+    """The non-empty str model id of a cached roster row -- a bare str id (a
+    legacy/injected fetcher) or the "id" of a {"id","display_name"} dict (the
+    live fetch). None for any other/malformed shape, so a junk row is DROPPED,
+    never raised on (fail-safe: live discovery never breaks the picker)."""
+    if isinstance(row, str):
+        return row or None
+    if isinstance(row, dict):
+        rid = row.get("id")
+        return rid if isinstance(rid, str) and rid else None
+    return None
+
+
+def _row_label(row):
+    """The display_name of a cached roster row ("" for a bare-str row, a dict
+    with no/empty/non-str display_name, or any other shape -- never raises)."""
+    if isinstance(row, dict):
+        name = row.get("display_name")
+        return name if isinstance(name, str) else ""
+    return ""
+
+
+def _project_ids(rows):
+    """Bare model ids from cached roster rows, or None when rows is None. Keeps
+    live_claude_models' bare-id contract even though the cache now holds richer
+    {id, display_name} rows (#206 follow-up). Malformed rows are dropped (never
+    raised on) so the fail-safe never-raises contract holds for any cache state."""
+    if rows is None:
+        return None
+    return [rid for rid in (_row_id(r) for r in rows) if rid]
 
 
 def live_claude_models(now=None, token_reader=None, fetcher=None, ttl=_LIVE_TTL):
     """The live claude_subscription model ids (cached ~5 min), or None when the
-    live source can't be reached (caller falls back to the curated roster).
+    live source can't be reached (caller falls back to the curated roster). The
+    cache holds richer {id, display_name} rows (see live_claude_model_labels);
+    this projects the bare ids so its long-standing contract is unchanged.
 
     Concurrency: an IN-FLIGHT guard, not a lock-across-fetch. A fresh cache
     returns immediately; a concurrent caller while a fetch is in flight returns
@@ -179,7 +216,7 @@ def live_claude_models(now=None, token_reader=None, fetcher=None, ttl=_LIVE_TTL)
         if fresh or _live_models_cache["inflight"]:
             # fresh -> serve it; someone else is fetching -> serve the current
             # value now (no block, no second fetch/stampede).
-            return _live_models_cache["val"]
+            return _project_ids(_live_models_cache["val"])
         _live_models_cache["inflight"] = True
     try:
         token = token_reader()
@@ -191,7 +228,25 @@ def live_claude_models(now=None, token_reader=None, fetcher=None, ttl=_LIVE_TTL)
         _live_models_cache["val"] = val
         _live_models_cache["seen"] = True
         _live_models_cache["inflight"] = False
-        return val
+        return _project_ids(val)
+
+
+def live_claude_model_labels():
+    """{id: display_name} for the currently-cached live roster, dropping empty
+    names (#206 follow-up). A PURE cache READER -- it never fetches, so it is
+    hermetic and cheap: callers call live_claude_models() first (which refreshes
+    the cache), then read the labels the same fetch already carried. {} when the
+    cache is cold/None or holds a bare-id roster with no display_names."""
+    with _live_models_lock:
+        rows = _live_models_cache["val"]
+    if not rows:
+        return {}
+    out = {}
+    for row in rows:
+        rid, label = _row_id(row), _row_label(row)
+        if rid and label:
+            out[rid] = label
+    return out
 
 
 def _valid_base_url(url):
@@ -425,25 +480,39 @@ class Accounts:
             return []
 
     def discover_models(self, name):
-        """{"source", "models"} for the config picker (#82/#206) -- the
+        """{"source", "models", "labels"} for the config picker (#82/#206) -- the
         SOURCE-TRUTHFUL companion to list_models, so `/api/models` reports the
         source that ACTUALLY produced the roster (not a static per-kind guess).
         claude_subscription: live present -> "live", else "curated" fallback.
         openai_compatible -> "live"; api-kind/unknown/missing -> "none", []. Never
-        raises (best-effort). `models` is a list of ids."""
+        raises (best-effort). `models` is a list of ids; `labels` is an ADDITIVE
+        {id: display_name} map (only claude_subscription's live roster carries
+        display names today, else {}) that the picker shows next to each id."""
         entry = self.get(name)
         if not entry:
-            return {"source": "none", "models": []}
+            return {"source": "none", "models": [], "labels": {}}
         kind = entry.get("kind")
         if kind == "claude_subscription":
             live = live_claude_models()
             if live:
-                return {"source": "live", "models": list(live)}
-            return {"source": "curated", "models": subscription_models(kind)}
+                # labels reads the same cache live_claude_models just refreshed.
+                # The two calls take the cache lock separately, so a refresh
+                # could slip between them; restrict labels to ids actually in
+                # `models` so the response is always internally consistent (a
+                # label for an absent id would just confuse the picker). A
+                # newly-appeared id simply loses its label -> provenance
+                # fallback; harmless (#208 review nitpick).
+                ids = list(live)
+                idset = set(ids)
+                labels = {k: v for k, v in live_claude_model_labels().items()
+                          if k in idset}
+                return {"source": "live", "models": ids, "labels": labels}
+            return {"source": "curated", "models": subscription_models(kind),
+                    "labels": {}}
         source = model_source(kind)
         if source == "none":
-            return {"source": "none", "models": []}
-        return {"source": source, "models": self.list_models(name)}
+            return {"source": "none", "models": [], "labels": {}}
+        return {"source": source, "models": self.list_models(name), "labels": {}}
 
 
 def _main(argv):

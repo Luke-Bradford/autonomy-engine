@@ -784,9 +784,11 @@ def config_read_model():
 
 def models_read_model():
     """Per-account discovered models for the config picker (#82): each account's
-    kind, its discovery SOURCE (accounts.model_source), and the model ids that
+    kind, its discovery SOURCE (accounts.model_source), the model ids that
     source yields (openai_compatible -> live GET /v1/models; a subscription ->
-    the curated roster; else none). Best-effort + fail-safe: Accounts.list_models
+    the curated roster; else none), and an additive `labels` {id: display_name}
+    map (#206 -- the live claude roster's human names, else {}). Best-effort +
+    fail-safe: Accounts.list_models
     never raises, and any registry-level failure yields accounts=[] + error --
     the partial list is DISCARDED, never a leaked partial and never a 500
     (fail-safe, never fail-open)."""
@@ -799,8 +801,11 @@ def models_read_model():
             # reports "live" only when the live /v1/models roster actually came
             # back, else "curated". bin/ never re-derives the source itself.
             disc = inst.discover_models(name)
+            # labels is ADDITIVE (#206): {id: display_name} for the picker to show
+            # a human name next to each id; {} unless a live roster carried names.
             accounts.append({"name": name, "kind": kind,
-                             "source": disc["source"], "models": disc["models"]})
+                             "source": disc["source"], "models": disc["models"],
+                             "labels": disc.get("labels", {})})
     except Exception as exc:   # discard any partial -- never fail-open
         accounts, err = [], (str(exc) or exc.__class__.__name__)
     return {"accounts": accounts, "error": err}
