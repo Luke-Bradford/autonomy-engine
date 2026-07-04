@@ -326,6 +326,59 @@ def board_list(owner):
                 _board_cache.clear()
         _board_cache[owner] = (now, result)
     return result
+
+
+# --- config-page board.owner derived default (#171) --------------------------
+# The config page offers board.owner as a value DERIVED from the repo's GitHub
+# remote instead of raw free text (a typo'd owner silently skips board sync).
+# Best-effort periphery (settled-decision 6): any gh/validation failure yields ""
+# -- never a fabricated default, the field stays free-text and the page works.
+# The login gh returns is re-validated against the GitHub grammar before it is
+# surfaced (prevention log 6) even though gh produced it. Cached briefly per repo
+# so config reloads/saves don't re-hit slow gh.
+# The real GitHub login grammar (not the looser board_list _OWNER_RE): 1-39
+# chars, alphanumeric or single hyphens, never leading/trailing/consecutive
+# hyphens. Strict so a garbage gh reading (e.g. a trailing-hyphen or over-long
+# string) is never surfaced as a derived default -- fail-safe, never fail-open.
+_OWNER_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}$")
+_OWNER_TTL = 60.0
+_OWNER_CACHE_MAX = 32   # bound the dict: distinct repos must not grow it forever
+_owner_cache = {}       # repo_path -> (wall_ts, login_str)
+_owner_lock = threading.Lock()
+
+
+def repo_owner_default(repo):
+    """Best-effort GitHub owner login for `repo`'s origin remote, for the config
+    page's board.owner default. Never raises, never invents: any gh/validation
+    failure yields "" (settled-decision 6). Re-validates the login grammar."""
+    repo = (repo or "").strip()
+    if not repo:
+        return ""
+    now = time.time()
+    with _owner_lock:
+        hit = _owner_cache.get(repo)
+        if hit and now - hit[0] < _OWNER_TTL:
+            return hit[1]
+    # never raises: any unexpected fault -> "" (fail-safe, never fail-open).
+    try:
+        raw = _run(["gh", "repo", "view", "--json", "owner",
+                    "-q", ".owner.login"], cwd=repo, timeout=8)
+        login = (raw or "").strip()
+        if not _OWNER_LOGIN_RE.match(login):
+            login = ""
+    except Exception:
+        login = ""
+    with _owner_lock:
+        if len(_owner_cache) >= _OWNER_CACHE_MAX and repo not in _owner_cache:
+            # bound the dict: drop TTL-expired entries first, then hard-reset if
+            # still at the cap (a small config-page cache, not a hot path).
+            for k in [k for k, (ts, _) in _owner_cache.items()
+                      if now - ts >= _OWNER_TTL]:
+                del _owner_cache[k]
+            if len(_owner_cache) >= _OWNER_CACHE_MAX:
+                _owner_cache.clear()
+        _owner_cache[repo] = (now, login)
+    return login
 # repo -> the in-flight refresh Thread (single-flight guard). At most one refresh
 # per repo runs, and it is the SOLE writer of _gh_cache; cold/too-stale callers
 # join it rather than starting a second compute. Popped in the worker's finally,
@@ -760,8 +813,25 @@ def config_read_model():
     except Exception as exc:   # surface a real backend fault, don't fake "empty"
         cred_list, assignments = [], {}
         cred_error = str(exc) or exc.__class__.__name__
+    # best-effort board.owner defaults from each repo's git remote (#171),
+    # derived CONCURRENTLY: a sequential loop would stall /api/config by N repos
+    # x up to 8s on a cold/expired cache, and gh must never block the config
+    # render (#80). Each repo_owner_default is independent and never raises;
+    # cache hits return instantly so this only spends threads on real misses.
+    repo_paths = list(Handler.repos)
+    owners = {}
+    if repo_paths:
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(8, len(repo_paths))) as ex:
+            futs = {ex.submit(repo_owner_default, r): r for r in repo_paths}
+            for fut in futs:
+                r = futs[fut]
+                try:
+                    owners[r] = fut.result()
+                except Exception:
+                    owners[r] = ""
     repos = []
-    for repo in Handler.repos:
+    for repo in repo_paths:
         cfg = {}
         try:
             st = ds.build_repo_state(repo, git_in_flight=lambda r: {})
@@ -769,7 +839,7 @@ def config_read_model():
         except Exception:
             cfg = {}
         repos.append({"path": repo, "name": os.path.basename(repo.rstrip("/")),
-                      "config": cfg})
+                      "config": cfg, "board_owner_derived": owners.get(repo, "")})
     acct_list, acct_error = [], None
     try:
         acct_list = _accts().list()
