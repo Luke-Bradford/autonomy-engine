@@ -154,7 +154,7 @@ class TestControlRoomShell(unittest.TestCase):
     # every id the page's render functions write into (render() in the page
     # script) -- dropping one silently breaks that panel.
     MOUNTS = [
-        b'id="focus"', b'id="history"', b'id="repos"', b'id="quota"',
+        b'id="focus"', b'id="repos"', b'id="quota"',
         b'id="activity"', b'id="tp"', b'id="handoffs"', b'id="needsyou"', b'id="voice"',
         b'id="git"', b'id="toast"',
         # header/live stats the tickers + render update every second/tick
@@ -1046,6 +1046,110 @@ class TestCenterActivityScoped(unittest.TestCase):
         self.assertNotEqual(i, -1, "selectLane() is not defined")
         self.assertIn(b"renderActivity(", page[i:i + 240],
                       "selectLane does not re-render the scoped activity panel")
+
+
+class TestLaneHistoryPopover(unittest.TestCase):
+    """#258 slice 3b: the inline "Recent sessions" center section moves behind a
+    click-triggered lane-history popover anchored on the selected-lane focus card
+    (mockup #pop pattern, #148 data). The inline section + renderHistory +
+    HIST_OPEN are deleted; the popover renders the SELECTED repo's sessions (CP1
+    P1-a: header names the REPO, not the lane -- sessions carry no lane field, so
+    a "lane" header over cross-lane rows would be a display lie). Structure
+    assertions; behaviour = browser loop."""
+
+    def _page(self):
+        return dashboard._page_bytes(dashboard.PAGE)
+
+    def test_inline_recent_sessions_section_removed(self):
+        # the center no longer stacks an inline RECENT SESSIONS <details> list --
+        # the section header, its #history mount, renderHistory, and the now-dead
+        # HIST_OPEN expand-state must all be gone.
+        html = self._page()
+        self.assertNotIn(b">Recent sessions<", html,
+                         "inline Recent sessions section header still present")
+        self.assertNotIn(b'id="history"', html,
+                         "#history inline mount still present")
+        self.assertNotIn(b"function renderHistory(", html,
+                         "dead renderHistory() still defined")
+        self.assertNotIn(b"HIST_OPEN", html,
+                         "dead HIST_OPEN inline expand-state still present")
+
+    def test_popover_element_and_renderers_present(self):
+        # the fixed popover element + its body renderer + open handler + CSS.
+        html = self._page()
+        self.assertIn(b'id="pop"', html, "history popover #pop element missing")
+        self.assertIn(b'class="pop"', html, "history popover .pop element missing")
+        self.assertIn(b"function laneHist(", html, "laneHist() body renderer missing")
+        self.assertIn(b"function openLaneHist(", html, "openLaneHist() handler missing")
+        self.assertIn(b".pop{", html, ".pop popover CSS missing")
+        self.assertIn(b".hrow{", html, ".hrow row CSS missing")
+
+    def test_popover_header_names_repo_not_lane(self):
+        # CP1 P1-a: sessions have no lane field, so laneHist labels by repo
+        # (dispName), never a lane name -- no #234-class display lie.
+        html = self._page()
+        i = html.find(b"function laneHist(")
+        self.assertNotEqual(i, -1, "laneHist() is not defined")
+        j = html.find(b"function ", i + 1)
+        body = html[i:j]
+        self.assertIn(b"dispName(", body,
+                      "laneHist header does not name the repo via dispName()")
+
+    def test_card_trigger_wired(self):
+        # the clock icon lives on the focus card and passes the event so the
+        # handler can stopPropagation (CP1 P1-c).
+        html = self._page()
+        self.assertIn(b"ibtn hist", html, "clock trigger button class missing")
+        self.assertIn(b"openLaneHist(event,", html,
+                      "clock trigger does not pass the event to openLaneHist")
+
+    def test_close_paths_present(self):
+        # outside-click + Escape + tick-refresh (render re-fills an OPEN #pop from
+        # fresh state every SSE tick, closing only if the repo vanished, so it
+        # never shows stale DOM nor flashes shut while read -- CP1 P1-b).
+        html = self._page()
+        self.assertIn(b'"Escape"', html, "Escape close wiring missing")
+        self.assertIn(b"function refreshLaneHist(", html,
+                      "tick refresher refreshLaneHist() missing (CP1 P1-b)")
+        i = html.find(b"function render(")
+        self.assertNotEqual(i, -1, "render() is not defined")
+        j = html.find(b"function ", i + 1)
+        render_body = html[i:j]
+        self.assertIn(b"refreshLaneHist(", render_body,
+                      "render() does not refresh the popover on tick (CP1 P1-b)")
+
+    def test_open_blurs_the_trigger(self):
+        # CP2: the clock is a <button> in #focus, so leaving it focused makes its
+        # card the "held" node in renderFocus's partial-update path -- with one
+        # center card that freezes the card + resyncs _sig.focus to stale markup.
+        # openLaneHist must blur the anchor so the next tick full-renders the card.
+        html = self._page()
+        i = html.find(b"function openLaneHist(")
+        j = html.find(b"function ", i + 1)
+        body = html[i:j]
+        self.assertIn(b".blur(", body,
+                      "openLaneHist does not blur the trigger (CP2 held-node freeze)")
+
+    def test_selectLane_refreshes_open_popover(self):
+        # CP2: picking another lane while the popover is open must re-fill it with
+        # the new repo's sessions, not leave the prior repo's history until a tick.
+        html = self._page()
+        i = html.find(b"function selectLane(")
+        self.assertNotEqual(i, -1, "selectLane() is not defined")
+        self.assertIn(b"refreshLaneHist(", html[i:i + 200],
+                      "selectLane does not refresh an open history popover (CP2)")
+
+    def test_open_handler_is_total(self):
+        # CP1 P2: openLaneHist guards LAST before dereferencing repos, and no-ops
+        # on a null selected repo rather than throwing on a fresh/empty state.
+        html = self._page()
+        i = html.find(b"function openLaneHist(")
+        self.assertNotEqual(i, -1, "openLaneHist() is not defined")
+        j = html.find(b"function ", i + 1)
+        body = html[i:j]
+        self.assertIn(b"LAST", body, "openLaneHist does not reference LAST")
+        self.assertIn(b"return", body,
+                      "openLaneHist has no guard/no-op return path (CP1 P2)")
 
 
 if __name__ == "__main__":

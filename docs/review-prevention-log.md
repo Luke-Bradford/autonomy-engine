@@ -255,3 +255,28 @@ keys as usable. Displaying an invalid value (badged as broken) is truthful;
 *selecting/acting on* it is fail-open.** Verified:
 `test_active_lane_does_not_surface_an_invalid_lane_name` (an invalid lane name →
 `valid: False`, `active == "main"`, not the raw key).
+
+## 16. A focusable control added to a single-card signature-guarded panel is captured by the held-node "preserve focus" path — freezing the card
+
+*Origin: #258 slice 3b lane-history popover; Codex checkpoint 2.*
+`renderFocus` has a held-node partial-update path (prevention-log #14): if the
+focused element is a `SELECT`/`BUTTON` inside `#focus`, that element's `.fcard`
+is *preserved* (kept as the live DOM node so its focus/dropdown survives) while
+the OTHER cards re-render around it, then `_sig.focus` is resynced to the actual
+DOM. That is correct for the model/effort `<select>` — you're mid-interaction and
+want focus kept. But slice 3b added a history-clock `<button>` to the card, and a
+click leaves it as `document.activeElement`. Since slice 2b collapsed the center
+to a SINGLE card, `held` is then the only card: the `replaceWith` loop swaps
+nothing, and `_sig.focus` is resynced to the UNCHANGED (old) markup — so every
+subsequent tick's real state change is skipped and the focus card FREEZES while
+the popover is read (stale server truth = fail-open display, invariant #1). The
+trap is specific to the single-card panel: with N cards the held path still
+updates the others, so the freeze is invisible until a slice collapses the panel
+to one. **Rule: a focusable control whose job ENDS on click (a popover trigger, a
+toggle) must NOT linger as `document.activeElement` inside a signature-guarded
+single-node panel that has a held-focus preserve path — `blur()` it after acting
+so the next render takes the normal full-render path. Only controls you are
+actively editing (a `<select>` mid-dropdown, a text input) should be held.**
+Verified: `test_open_blurs_the_trigger` (openLaneHist blurs the anchor) + a
+browser check that after open the clock is not focused and the popover stays live
+across ticks.
