@@ -5,6 +5,7 @@ that single-sources the model-picker roster (#134)."""
 import json
 import os
 import sys
+import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -12,6 +13,60 @@ sys.path.insert(0, os.path.join(HERE, "..", "bin"))
 
 import dashboard  # noqa: E402
 import accounts  # noqa: E402
+
+
+class TestConfigOverlayWrite(unittest.TestCase):
+    """#202: model/effort default-saves land in an untracked overlay under
+    var/autonomy-logs (survives the preflight stash-recovery), never the
+    tracked config.yaml. _write_overlay merges/preserves; the POST executors
+    (execute_set_model default scope, execute_config_set model keys) route
+    there end-to-end."""
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.repo = self._td.name
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _overlay(self):
+        return os.path.join(self.repo, "var", "autonomy-logs", "config-overrides")
+
+    def _write_config(self):
+        os.makedirs(os.path.join(self.repo, ".autonomy"))
+        cfg = os.path.join(self.repo, ".autonomy", "config.yaml")
+        with open(cfg, "w") as fh:
+            fh.write("agent:\n  model:\n    primary: claude-sonnet-5\n")
+        return cfg
+
+    def test_overlay_write_merges_and_preserves(self):
+        ov = self._overlay()
+        dashboard._write_overlay(ov, {"model": "claude-opus-4-8"})
+        dashboard._write_overlay(ov, {"effort": "high"})
+        text = open(ov).read()
+        self.assertIn("model=claude-opus-4-8", text)
+        self.assertIn("effort=high", text)
+        dashboard._write_overlay(ov, {"model": "claude-sonnet-5"})
+        text = open(ov).read()
+        self.assertIn("model=claude-sonnet-5", text)
+        self.assertIn("effort=high", text)           # untouched key preserved
+        self.assertNotIn("claude-opus-4-8", text)
+
+    def test_execute_set_model_default_writes_overlay_not_config(self):
+        cfg = self._write_config()
+        before = open(cfg).read()
+        r = dashboard.execute_set_model(self.repo, "claude-opus-4-8", "high", "default")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(open(cfg).read(), before)    # committed config untouched
+        self.assertIn("model=claude-opus-4-8", open(self._overlay()).read())
+
+    def test_execute_config_set_model_key_writes_overlay(self):
+        cfg = self._write_config()
+        before = open(cfg).read()
+        r = dashboard.execute_config_set(self.repo, "agent.model.primary",
+                                         "claude-opus-4-8")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(open(cfg).read(), before)
+        self.assertIn("model=claude-opus-4-8", open(self._overlay()).read())
 
 
 class TestBenignDisconnect(unittest.TestCase):

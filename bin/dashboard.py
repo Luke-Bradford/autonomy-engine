@@ -963,7 +963,9 @@ def execute_set_model(repo, model, effort, scope):
     if "error" in plan:
         return {"ok": False, "error": plan["error"]}
     try:
-        if "write" in plan:
+        if "overlay" in plan:
+            _write_overlay(plan["overlay"], plan["overlay_set"])
+        elif "write" in plan:
             os.makedirs(os.path.dirname(plan["write"]), exist_ok=True)
             tmp = plan["write"] + ".tmp"
             with open(tmp, "w") as fh:
@@ -977,6 +979,30 @@ def execute_set_model(repo, model, effort, scope):
     except (OSError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "message": plan.get("message", "done")}
+
+
+def _write_overlay(path, overlay_set):
+    """Persist page-written model/effort keys to the untracked overlay (#202),
+    merge-preserving existing keys. Atomic; parent dir created. The overlay
+    lives in the gitignored var/autonomy-logs, so 'save default' survives the
+    supervisor's preflight stash-recovery that would sweep a tracked
+    config.yaml edit."""
+    existing = {}
+    try:
+        with open(path, errors="replace") as fh:
+            for line in fh:
+                k, sep, v = line.strip().partition("=")
+                if sep and k:
+                    existing[k] = v
+    except OSError:
+        pass
+    existing.update(overlay_set)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        for k in sorted(existing):
+            fh.write("%s=%s\n" % (k, existing[k]))
+    os.replace(tmp, path)
 
 
 def _rewrite_config(config_path, config_set):
@@ -1000,7 +1026,10 @@ def execute_config_set(repo, key, value):
     if "error" in plan:
         return {"ok": False, "error": plan["error"]}
     try:
-        _rewrite_config(plan["config_path"], plan["config_set"])
+        if "overlay" in plan:
+            _write_overlay(plan["overlay"], plan["overlay_set"])
+        else:
+            _rewrite_config(plan["config_path"], plan["config_set"])
     except KeyError as exc:
         missing = exc.args[0] if exc.args else exc
         return {"ok": False, "error": "config.yaml has no %s key to update" % missing}
