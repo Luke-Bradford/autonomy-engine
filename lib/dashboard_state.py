@@ -1147,6 +1147,72 @@ def recent_quota_windows(logdir, limit=60):
     return merged
 
 
+def token_timeline(logdir, now, window_secs=86400, bucket_secs=900):
+    """Backfilled tokens-over-time series (#188a) for the tokens chart, replacing
+    the instantaneous 0-tok/min readout. Output tokens are summed into fixed
+    `bucket_secs` buckets (default 15 min) across the trailing `window_secs`
+    window ending at `now`; buckets are zero-filled and returned oldest-first so
+    the chart draws a continuous axis, each `{"bucket": <epoch-start>, "tokens":
+    <int>}`.
+
+    Backfilled ENTIRELY from the session-*.log totals already on disk -- NO gh
+    (state stays off the network, #80), and NO live sampler: a session carries a
+    per-session TOTAL, not intra-session throughput, so it becomes ONE point at
+    its accrual bucket rather than a curve spread across the buckets it spanned.
+    Spreading it would fabricate a shape we never measured -- degrade to truth,
+    never guess. The accrual instant is the log's MTIME (a tz-safe real epoch,
+    unlike the LOCAL-time filename): the last write, i.e. session end for a
+    finished log and ~now for a live one (both the honest 'when these tokens
+    landed'). Best-effort per artifact like recent_sessions/recent_quota_windows:
+    a missing/unreadable dir -> [], one corrupt log or un-stattable file degrades
+    only its own contribution. [] on a non-positive window/bucket (no series to
+    draw)."""
+    try:
+        now = int(now)
+        window_secs = int(window_secs)
+        bucket_secs = int(bucket_secs)
+    except (TypeError, ValueError):
+        return []
+    if bucket_secs <= 0 or window_secs <= 0:
+        return []
+    last_bucket = (now // bucket_secs) * bucket_secs
+    n_buckets = window_secs // bucket_secs
+    if n_buckets <= 0:
+        return []
+    first_bucket = last_bucket - (n_buckets - 1) * bucket_secs
+    try:
+        names = [n for n in os.listdir(logdir)
+                 if n.startswith("session-") and n.endswith(".log")]
+    except OSError:
+        return []
+    sums = {}
+    for name in names:
+        path = os.path.join(logdir, name)
+        try:
+            mtime = int(os.stat(path).st_mtime)
+        except OSError:
+            continue                        # un-stattable file: skip, never raise
+        if mtime < first_bucket or mtime > last_bucket + bucket_secs - 1:
+            continue                        # outside the window -> not on this chart
+        try:
+            s = parse_session_log_cached(path)
+        except Exception:
+            continue                        # one corrupt log degrades only itself
+        if not s:
+            continue
+        tok = s.get("output_tokens") or 0
+        if tok <= 0:
+            continue
+        b = (mtime // bucket_secs) * bucket_secs
+        sums[b] = sums.get(b, 0) + tok
+    out = []
+    b = first_bucket
+    while b <= last_bucket:
+        out.append({"bucket": b, "tokens": sums.get(b, 0)})
+        b += bucket_secs
+    return out
+
+
 def read_config_overlay(path):
     """The PERSISTENT operator overrides (#202) the dashboard displays. Unlike
     the one-shot read_model_override, this RE-VALIDATES each value with the
@@ -1250,4 +1316,5 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "override": read_model_override(os.path.join(logdir, "model-override")),
         "quota": recent_quota_windows(logdir),
         "sessions": recent_sessions(logdir),
+        "token_timeline": token_timeline(logdir, now),
     }

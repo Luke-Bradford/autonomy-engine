@@ -1425,3 +1425,93 @@ class TestEngineVersion(unittest.TestCase):
         st = self._status("", "a" * 40, repos)
         self.assertFalse(st["stale"])
         self.assertFalse(st["supervisors"][0]["stale"])
+
+
+class TestTokenTimeline(unittest.TestCase):
+    """token_timeline (#188a): the tokens-over-time series that replaces the
+    instantaneous 0-tok/min readout. Backfilled ENTIRELY from the session-*.log
+    totals already on disk (no gh, no live sampler): each session is ONE point
+    at its accrual bucket (its log's mtime, a tz-safe real epoch), so we never
+    fabricate a distributed curve we did not measure. Zero-filled, oldest-first,
+    best-effort per artifact like recent_sessions/recent_quota_windows."""
+
+    NOW = 1893456000          # 900-aligned epoch -> clean bucket arithmetic
+    BUCKET = 900
+    WINDOW = 86400            # 24h -> 96 buckets
+
+    def _write(self, d, name, toks, mtime):
+        path = os.path.join(d, name)
+        with open(path, "w") as fh:
+            fh.write(json.dumps({"type": "assistant", "message": {
+                "content": [], "usage": {"output_tokens": toks}}}) + "\n")
+            fh.write(json.dumps({"type": "result", "is_error": False,
+                                 "usage": {"output_tokens": toks}}) + "\n")
+        os.utime(path, (mtime, mtime))
+        return path
+
+    def test_missing_dir_returns_empty(self):
+        # OSError on the dir (never created) -> [] (mirrors recent_sessions)
+        self.assertEqual(
+            ds.token_timeline("/no/such/logdir", self.NOW,
+                              window_secs=self.WINDOW, bucket_secs=self.BUCKET), [])
+
+    def test_empty_dir_is_zero_filled_window(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        series = ds.token_timeline(d, self.NOW, window_secs=self.WINDOW,
+                                   bucket_secs=self.BUCKET)
+        self.assertEqual(len(series), self.WINDOW // self.BUCKET)   # 96 buckets
+        self.assertTrue(all(pt["tokens"] == 0 for pt in series))
+        # oldest-first, contiguous, aligned, last bucket == floor(now)
+        buckets = [pt["bucket"] for pt in series]
+        self.assertEqual(buckets, sorted(buckets))
+        self.assertEqual(buckets[-1], self.NOW)                    # NOW is aligned
+        for i in range(1, len(buckets)):
+            self.assertEqual(buckets[i] - buckets[i - 1], self.BUCKET)
+
+    def test_session_lands_in_its_mtime_bucket(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        mt = self.NOW - 3600                                       # 1h ago, aligned
+        self._write(d, "session-x.log", 500, mt)
+        series = ds.token_timeline(d, self.NOW, window_secs=self.WINDOW,
+                                   bucket_secs=self.BUCKET)
+        by_bucket = {pt["bucket"]: pt["tokens"] for pt in series}
+        self.assertEqual(by_bucket[mt], 500)
+        self.assertEqual(sum(pt["tokens"] for pt in series), 500)  # nothing elsewhere
+
+    def test_two_sessions_same_bucket_sum(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        mt = self.NOW - self.BUCKET
+        self._write(d, "session-a.log", 100, mt + 10)             # same bucket
+        self._write(d, "session-b.log", 250, mt + 800)            # same bucket
+        series = ds.token_timeline(d, self.NOW, window_secs=self.WINDOW,
+                                   bucket_secs=self.BUCKET)
+        by_bucket = {pt["bucket"]: pt["tokens"] for pt in series}
+        self.assertEqual(by_bucket[mt], 350)
+
+    def test_session_outside_window_ignored(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        self._write(d, "session-old.log", 999, self.NOW - self.WINDOW - 5000)
+        series = ds.token_timeline(d, self.NOW, window_secs=self.WINDOW,
+                                   bucket_secs=self.BUCKET)
+        self.assertEqual(sum(pt["tokens"] for pt in series), 0)
+
+    def test_corrupt_log_degrades_not_raises(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        bad = os.path.join(d, "session-bad.log")
+        with open(bad, "w") as fh:
+            fh.write("not json at all\n{partial")
+        os.utime(bad, (self.NOW - 900, self.NOW - 900))
+        self._write(d, "session-ok.log", 77, self.NOW - 900)
+        series = ds.token_timeline(d, self.NOW, window_secs=self.WINDOW,
+                                   bucket_secs=self.BUCKET)          # must not raise
+        self.assertEqual(sum(pt["tokens"] for pt in series), 77)
+
+    def test_build_repo_state_includes_token_timeline(self):
+        st = ds.build_repo_state(FIX, git_in_flight=lambda p: {}, now=self.NOW)
+        self.assertIn("token_timeline", st)
+        self.assertIsInstance(st["token_timeline"], list)
