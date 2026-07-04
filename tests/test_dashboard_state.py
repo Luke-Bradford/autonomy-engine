@@ -775,6 +775,33 @@ class TestRoles(unittest.TestCase):
         self.assertFalse(roles[1]["enabled"])
         self.assertEqual(roles[1]["status"], "not-configured")
 
+    def test_last_run_none_without_sessions(self):
+        # #185 fleet rail: with no session history, every role row's last_run
+        # is None (the page then renders no "last …" stat).
+        roles = ds.build_roles({}, coder_status="idle")
+        self.assertTrue(all(r["last_run"] is None for r in roles))
+
+    def test_last_run_from_newest_matching_role_session(self):
+        # #185 fleet rail: a role's last_run is the newest recent_sessions entry
+        # dispatched to it -- {at: started_epoch, outcome}. recent_sessions is
+        # newest-first, so the first match wins.
+        sessions = [
+            {"role": "qa", "started_epoch": 200, "outcome": "clean"},
+            {"role": "coder", "started_epoch": 150, "outcome": "error"},
+            {"role": "qa", "started_epoch": 100, "outcome": "error"},  # older qa
+        ]
+        roles = ds.build_roles({}, coder_status="idle", sessions=sessions)
+        qa = next(r for r in roles if r["name"] == "qa")
+        coder = next(r for r in roles if r["name"] == "coder")
+        self.assertEqual(qa["last_run"], {"at": 200, "outcome": "clean"})
+        self.assertEqual(coder["last_run"], {"at": 150, "outcome": "error"})
+
+    def test_last_run_none_for_role_with_no_matching_session(self):
+        sessions = [{"role": "coder", "started_epoch": 150, "outcome": "clean"}]
+        roles = ds.build_roles({}, coder_status="idle", sessions=sessions)
+        pm = next(r for r in roles if r["name"] == "pm")
+        self.assertIsNone(pm["last_run"])
+
     def test_coder_row_carries_the_unified_display_status(self):
         # #23: the coder row must show the SAME label as the repo badge --
         # lifecycle-aware display status, not the raw activity axis
@@ -1393,6 +1420,17 @@ class TestSessionRole(unittest.TestCase):
             self.assertEqual(state["current_session"]["role"], "")
         finally:
             shutil.rmtree(repo)
+
+    def test_build_repo_state_roles_carry_last_run(self):
+        # #185 fleet rail: roles built by build_repo_state are enriched with the
+        # last-run summary from the repo's own recent_sessions. The FIX fixture's
+        # newest session (role qa) gives the qa row a last_run.
+        state = ds.build_repo_state(FIX, git_in_flight=lambda _p: {})
+        for r in state["roles"]:
+            self.assertIn("last_run", r)
+        qa = next(r for r in state["roles"] if r["name"] == "qa")
+        self.assertIsNotNone(qa["last_run"])
+        self.assertEqual(set(qa["last_run"]), {"at", "outcome"})
 
 
 class TestEngineVersion(unittest.TestCase):
