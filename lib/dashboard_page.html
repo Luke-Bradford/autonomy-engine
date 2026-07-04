@@ -444,6 +444,20 @@ function histRow(s){
     +`<span class="hrole">${esc(s.role||"—")}</span>`
     +`<span class="hmeta">${esc(s.started_at||"")}${d}${tok}${tk}</span></div>`;
 }
+// #248: skip a panel's innerHTML rebuild unless its markup REALLY changed --
+// mirrors renderRepos's #164/#238 guard, shared across the display-list panels.
+// The key normalizes the volatile qreset/agox span CONTENTS out (the 1s ticker
+// updates those in place via textContent), so a pure time tick never rebuilds
+// the subtree; only a real state change does. Returns true IFF it wrote, so a
+// caller can gate a side effect (auto-scroll, listener re-bind) on a real change
+// rather than re-running it every idle tick.
+const _sig={};
+function setHTML(id,html){
+  const el=$(id); if(!el) return false;
+  const key=html.replace(/(<(span|b)\b[^>]*\b(?:qreset|agox)\b[^>]*>)[^<]*(<\/\2>)/g,"$1$3");
+  if(_sig[id]===key) return false;
+  _sig[id]=key; el.innerHTML=html; return true;
+}
 function renderHistory(repos){
   const box=$("history");
   const parts=(repos||[]).map(r=>{
@@ -453,11 +467,14 @@ function renderHistory(repos){
     return `<details class="hist" data-key="${encodeURIComponent(key)}"${open}>`
       +`<summary>${label}</summary>${ss.map(histRow).join("")}</details>`;
   }).filter(Boolean);
-  box.innerHTML=parts.length?parts.join(""):`<div class="q-sub" style="padding:4px 2px"><span>no sessions yet</span></div>`;
-  // persist expand/collapse across the tick re-render
-  box.querySelectorAll("details.hist").forEach(d=>{
-    d.ontoggle=()=>{HIST_OPEN[decodeURIComponent(d.dataset.key)]=d.open;};
-  });
+  const html=parts.length?parts.join(""):`<div class="q-sub" style="padding:4px 2px"><span>no sessions yet</span></div>`;
+  // persist expand/collapse across the tick re-render -- only (re)bind when we
+  // actually rewrote (an unchanged tick keeps the existing DOM + its handlers).
+  if(setHTML("history",html)){
+    box.querySelectorAll("details.hist").forEach(d=>{
+      d.ontoggle=()=>{HIST_OPEN[decodeURIComponent(d.dataset.key)]=d.open;};
+    });
+  }
 }
 function renderFocus(repos){
   const active=repos.filter(r=>["working","stopping","idle","paused"].includes(dispStatus(r)));
@@ -754,10 +771,10 @@ function renderQuota(repos,account){
   const cap=live
     ? "% live from Anthropic api/oauth/usage · counts from ~/.claude (all sessions)"
     : "counts from ~/.claude (all sessions) · % from session-log rate-limit events (stale)";
-  $("quota").innerHTML=`<div class="q-prov">claude · subscription ${src}</div>`
+  setHTML("quota",`<div class="q-prov">claude · subscription ${src}</div>`
     + qrow("5-hour window",a.five_hour,five,now)+qrow("weekly window",a.seven_day,seven,now)
     + `<div class="q"><div class="q-sub" style="margin-top:0"><span>${cap}</span></div></div>`
-    + codexQuota(a.codex,now);
+    + codexQuota(a.codex,now));
 }
 /* codex lane (#49): from ~/.codex session rollouts. credits render whenever
    non-null -- that's the API-billed case; on a ChatGPT subscription it's null. */
@@ -935,24 +952,24 @@ function renderHandoffs(repos){
   // repo order is not time order); ts===0 (unparsed) sorts oldest.
   rows.sort((a,b)=>(a.e.ts||0)-(b.e.ts||0));
   const tail=rows.slice(-40);const many=repos.filter(r=>(r.choreography||[]).length).length>1;
-  if(!tail.length){$("handoffs").innerHTML=`<div class="empty">No handoffs yet — cron/event roles appear here when they fire.</div>`;return;}
-  $("handoffs").innerHTML=tail.map(x=>{const e=x.e;
+  if(!tail.length){setHTML("handoffs",`<div class="empty">No handoffs yet — cron/event roles appear here when they fire.</div>`);return;}
+  const html=tail.map(x=>{const e=x.e;
     const ts=+e.ts||0;  // coerce: only digits reach data-t (attr-injection guard)
     const when=ts?`<span class="hat agox" data-t="${ts}">${ago(nowS()-ts)} ago</span>`:"";
     return `<div class="hln"><span class="chip">${esc(e.role)}</span><span class="hact">${many?"["+esc(x.repo)+"] ":""}${esc(handoffText(e))}</span>${when}</div>`;}).join("");
-  const h=$("handoffs");h.scrollTop=h.scrollHeight;}
+  if(setHTML("handoffs",html)){const h=$("handoffs");h.scrollTop=h.scrollHeight;}}
 
 /* ---- NEEDS YOU (#189 degraded state: untriaged human-decision queue) ---- */
 function renderNeedsYou(repos){
   const rows=[];repos.forEach(r=>((r.git&&r.git.needs_you)||[]).forEach(i=>rows.push({repo:r.name,i})));
   const many=repos.filter(r=>r.git&&(r.git.needs_you||[]).length).length>1;
-  if(!rows.length){$("needsyou").innerHTML=`<div class="empty">Nothing awaiting a decision — needs-design issues appear here.</div>`;return;}
-  $("needsyou").innerHTML=rows.map(x=>{const i=x.i;
+  if(!rows.length){setHTML("needsyou",`<div class="empty">Nothing awaiting a decision — needs-design issues appear here.</div>`);return;}
+  setHTML("needsyou",rows.map(x=>{const i=x.i;
     const labs=(i.labels||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join("");
     const num=i.number!=null?("#"+esc(i.number)):"";
     const href=safeHref(i.url);
     const link=href?`<a href="${esc(href)}" target="_blank" rel="noopener">${num}</a>`:num;
-    return `<div class="hln">${labs}<span class="hact">${many?"["+esc(x.repo)+"] ":""}${link} ${esc(i.title)}</span></div>`;}).join("");}
+    return `<div class="hln">${labs}<span class="hact">${many?"["+esc(x.repo)+"] ":""}${link} ${esc(i.title)}</span></div>`;}).join(""));}
 
 /* ---- VOICE ---- */
 function vcls(l){if(/USAGE LIMIT/i.test(l))return "limit";if(/PAUSE|resuming|graceful/i.test(l))return "pause";
@@ -961,10 +978,10 @@ function vcls(l){if(/USAGE LIMIT/i.test(l))return "limit";if(/PAUSE|resuming|gra
 function renderVoice(repos){
   const lines=[];repos.forEach(r=>(r.voice||[]).forEach(l=>lines.push({repo:r.name,l})));
   const tail=lines.slice(-60);const many=repos.filter(r=>(r.voice||[]).length).length>1;
-  if(!tail.length){$("voice").innerHTML=`<div class="empty">No supervisor has spoken yet.</div>`;return;}
-  $("voice").innerHTML=tail.map(x=>{const m=x.l.match(/^(\S+)\s+(.*)$/);const ts=m?m[1]:"";const rest=m?m[2]:x.l;
+  if(!tail.length){setHTML("voice",`<div class="empty">No supervisor has spoken yet.</div>`);return;}
+  const html=tail.map(x=>{const m=x.l.match(/^(\S+)\s+(.*)$/);const ts=m?m[1]:"";const rest=m?m[2]:x.l;
     return `<div class="vln ${vcls(x.l)}"><span class="vt">${esc(ts.slice(11,19)||ts)}</span><span>${many?"["+esc(x.repo)+"] ":""}${esc(rest)}</span></div>`;}).join("");
-  const v=$("voice");v.scrollTop=v.scrollHeight;}
+  if(setHTML("voice",html)){const v=$("voice");v.scrollTop=v.scrollHeight;}}
 
 /* ---- GIT ---- */
 function renderGit(repos){
