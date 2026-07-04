@@ -180,6 +180,8 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .role .subs{font-family:var(--mono);font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:var(--mut);border:1px solid var(--hair2);border-radius:3px;padding:1px 5px}
 .role .trig{font-family:var(--mono);font-size:10px;color:var(--dim)}
 .role .rlast{font-family:var(--mono);font-size:10px;color:var(--dim)}
+.role .rmiss{font-family:var(--mono);font-size:10px;color:var(--warn);border:1px solid var(--warn);border-radius:3px;padding:1px 5px}
+.role.missed .rn{color:var(--warn)}
 .role .rst{margin-left:auto}
 .role.off{opacity:.5}
 /* #198: subtle pulse on the role acting right now (reuses @keyframes pulse) */
@@ -603,10 +605,14 @@ function renderRepos(repos){
       // between rebuilds). Rendered only when the role has actually run.
       const lr=role.last_run;
       const lastRun = lr&&lr.at ? `<span class="rlast" title="last session dispatched to ${esc(role.name)}">last <b class="agox" data-t="${lr.at}">${ago(nowS()-lr.at)}</b>${lr.outcome?` · ${esc(lr.outcome)}`:""}</span>` : "";
-      return `<div class="role ${off?"off":""}${isActing?" acting":""}">
+      // #188c: a cron role whose expected fire is overdue (marker never
+      // advanced) is a MISSED fire -- the swept-state incident that otherwise
+      // looks identical to a healthy idle role. Surface it, server-asserted.
+      const missed = role.missed_fire ? `<span class="rmiss" title="expected cron fire is overdue — scheduler may be stalled/backed-off">⚠ missed fire</span>` : "";
+      return `<div class="role ${off?"off":""}${isActing?" acting":""}${role.missed_fire?" missed":""}">
         <i class="rdot"></i><span class="rn">${esc(role.name)}</span>
         ${subBadge(role.substrate)}
-        <span class="trig">${trig}</span>${lastRun}
+        <span class="trig">${trig}</span>${missed}${lastRun}
         <span class="rst">${token(role.status,false)}</span></div>`;
     }).join("");
     return `<div class="repo">

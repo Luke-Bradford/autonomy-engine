@@ -1551,6 +1551,15 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
     status = display_status(lifecycle["state"], activity)
     quota = recent_quota_windows(logdir)   # scanned once; forecast reuses it
     sessions = recent_sessions(logdir)     # scanned once; ticket_effort reuses it
+    roles = build_roles(config.get("roles"), status, now=now, sessions=sessions)
+    health = trigger_health(config, os.path.join(repo_path, "var", "cron"), now)
+    # #188c render seam: fold each cron role's missed-fire flag onto its role
+    # row, so the fleet rail can surface the swept-state incident (a stalled
+    # scheduler that otherwise looks identical to a healthy idle role). A role
+    # with no cron schedule / no miss stays False -- never a fabricated alarm.
+    missed = set(h["role"] for h in health if h.get("missed"))
+    for r in roles:
+        r["missed_fire"] = r["name"] in missed
     return {
         "name": os.path.basename(repo_path.rstrip("/")),
         "path": repo_path,
@@ -1558,7 +1567,7 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "current_session": session,
         "activity": activity,
         "display_status": status,
-        "roles": build_roles(config.get("roles"), status, now=now, sessions=sessions),
+        "roles": roles,
         "voice": read_supervisor_voice(os.path.join(logdir, "supervisor.log")),
         "choreography": read_choreography(os.path.join(logdir, "supervisor.log")),
         "heartbeat": read_heartbeat(os.path.join(logdir, "heartbeat")),
@@ -1579,5 +1588,5 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
             sessions, session.get("ticket") if session else None),
         "token_timeline": token_timeline(logdir, now),
         "quota_forecast": quota_forecast(quota, now),
-        "trigger_health": trigger_health(config, os.path.join(repo_path, "var", "cron"), now),
+        "trigger_health": health,
     }
