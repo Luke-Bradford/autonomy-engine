@@ -176,6 +176,10 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .repo-h .badge{margin-left:auto}
 .repo .cfg{font-family:var(--mono);font-size:10px;color:var(--dim);margin-bottom:10px}
 .repo .gchain{font-family:var(--mono);font-size:10px;color:var(--mut);margin:-6px 0 10px}
+.repo-h .lbad{font-family:var(--mono);font-size:10px;color:var(--warn);border:1px solid var(--warn);border-radius:3px;padding:1px 5px}
+.repo .lgrp{border-left:1px solid var(--hair2);margin:2px 0 2px 3px;padding-left:9px}
+.repo .lgrp-h{font-family:var(--mono);font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:var(--mut);margin:6px 0 2px}
+.repo .lgrp-h .ldef{color:var(--dim);margin-left:5px;text-transform:none}
 .role{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px}
 .role .rn{font-weight:500;min-width:74px}
 .role .subs{font-family:var(--mono);font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:var(--mut);border:1px solid var(--hair2);border-radius:3px;padding:1px 5px}
@@ -600,7 +604,18 @@ function renderRepos(repos){
   const html=repos.map(r=>{
     const st=dispStatus(r), cfg=r.config||{};
     const acting=actingRole(r);
-    const roles=(r.roles||[]).map(role=>{
+    // #147 lane topology (data from build_repo_state.lanes). A repo with no
+    // `lanes:` block is the single implicit 'main' lane -> render byte-identical
+    // to today (flat role list, no lane chrome). A multi-lane repo groups its
+    // role rows under a per-lane sub-header (the "repo -> lane tree" of the
+    // redesign spec); a malformed block (valid===false: the supervisor REFUSES
+    // to dispatch it) gets a warning badge so broken config never reads as
+    // healthy. Display only -- lane routing stays a supervisor concern.
+    const lanes=r.lanes||{};
+    const laneNames=Array.isArray(lanes.names)?lanes.names:[];
+    const multiLane=laneNames.length>1;
+    const lanesInvalid=lanes.valid===false;
+    const roleEls=(r.roles||[]).map(role=>{
       const off=!role.enabled;
       const isActing=!off && !!acting && role.name===acting;
       // scheduling lane (#18): cron roles get a live next-fire countdown,
@@ -626,12 +641,33 @@ function renderRepos(repos){
       // advanced) is a MISSED fire -- the swept-state incident that otherwise
       // looks identical to a healthy idle role. Surface it, server-asserted.
       const missed = role.missed_fire ? `<span class="rmiss" title="expected cron fire is overdue — scheduler may be stalled/backed-off">⚠ missed fire</span>` : "";
-      return `<div class="role ${off?"off":""}${isActing?" acting":""}${role.missed_fire?" missed":""}">
+      // #147: keep each role tagged with its lane so a multi-lane repo can group
+      // the rows below WITHOUT widening them (the lane name lives on the group
+      // header, not inline) -- role rows stay byte-identical to today.
+      const html = `<div class="role ${off?"off":""}${isActing?" acting":""}${role.missed_fire?" missed":""}">
         <i class="rdot"></i><span class="rn">${esc(role.name)}</span>
         ${subBadge(role.substrate)}
         <span class="trig">${trig}</span>${missed}${lastRun}
         <span class="rst">${token(role.status,false)}</span></div>`;
-    }).join("");
+      return {lane: role.lane||lanes.default, html: html};
+    });
+    // Flat list for the single implicit lane (zero change); grouped under a lane
+    // sub-header when the repo declares multiple lanes. An orphan lane (a role
+    // whose lane isn't a declared name -- shouldn't happen post-validation) is
+    // appended ungrouped so it can never silently vanish from the roster.
+    let roles;
+    if(multiLane){
+      roles = laneNames.map(ln=>{
+        const inLane=roleEls.filter(x=>x.lane===ln);
+        if(!inLane.length) return "";
+        const def = ln===lanes.default ? `<span class="ldef">·def</span>` : "";
+        return `<div class="lgrp"><div class="lgrp-h" title="lane (worktree + role subset)${ln===lanes.default?' — the default lane':''}">${esc(ln)}${def}</div>${inLane.map(x=>x.html).join("")}</div>`;
+      }).join("");
+      const orphan=roleEls.filter(x=>laneNames.indexOf(x.lane)<0);
+      if(orphan.length) roles += orphan.map(x=>x.html).join("");
+    } else {
+      roles = roleEls.map(x=>x.html).join("");
+    }
     // #187 OUTLINE layer: expand the bare strategy name into the step outline a
     // PR must clear under this repo's merge_gate.strategy (server-derived by
     // merge_gate_chain, mirroring safe_merge). Display only -- safe_merge stays
@@ -640,8 +676,12 @@ function renderRepos(repos){
       s.step==="review" ? (s.actor==="bot" ? "🤖 review" : "👤 review") : s.step
     ).join(" → ");
     const gateChain = chain ? `<div class="gchain" title="what a PR must clear under this repo's merge-gate strategy — display only; safe_merge is the enforcer">${esc(chain)}</div>` : "";
+    // #147: a malformed `lanes:` block makes the supervisor refuse to dispatch
+    // a lane -- surface it so broken committed config never reads as healthy.
+    const laneWarn = lanesInvalid
+      ? `<span class="lbad" title="the committed lanes: block is malformed — the supervisor will refuse to dispatch a lane (display only; fix .autonomy/config.yaml)">⚠ lanes config invalid</span>` : "";
     return `<div class="repo">
-      <div class="repo-h"><span class="nm">${esc(dispName(r.name))}</span>
+      <div class="repo-h"><span class="nm">${esc(dispName(r.name))}</span>${laneWarn}
         <span class="badge">${token(st,true)}</span></div>
       <div class="cfg">${esc(cfg.model||"—")} · gate ${esc(cfg.merge_gate||"—")}${(r.lifecycle||{}).pid?" · pid "+r.lifecycle.pid:""}</div>
       ${gateChain}${roles}</div>`;
