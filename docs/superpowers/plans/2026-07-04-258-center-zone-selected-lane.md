@@ -162,3 +162,97 @@ Each slice is its own PR, browser-verified, merged, then `#258` reset to Ready f
       endpoint, no control write, no auth surface change).
 - [ ] Resolve every review comment; `safe_merge.sh` once APPROVE-on-latest + CI green.
 - [ ] `#258` NOT closed by this PR (slices 2–4 remain) → board reset to **Ready**.
+
+---
+
+## Slice 2 breakdown (post-Slice-1)
+
+Slice 2's goal ("center focus band → selected lane only") couples two moves the plan named
+together: (a) relocate the per-repo controls that live on every NOW card into the fleet-rail
+so they stay reachable for **every** repo, and (b) collapse the center focus band to the
+**selected** lane's single card. (b) cannot land before (a) or the non-selected repos' controls
+vanish ("controls must remain reachable for every repo"). So Slice 2 splits into two safe,
+each-shippable sub-slices — **2a relocates controls (additive, nothing removed); 2b collapses the
+center + removes the now-duplicated card controls.** 2a is the enabling prerequisite and this PR.
+
+### Slice 2a — fleet-rail lifecycle icon cluster (this PR)
+
+**What:** the mockup's per-repo/worktree header icon cluster (`git show
+2f21d4d:docs/superpowers/specs/assets/2026-07-03-control-room-mockup.html`, the `.ibtn` buttons on
+each repo header) — lifecycle controls (start / graceful-stop / resume / hard-stop) rendered as
+compact icon buttons on the fleet-rail **repo header** (`.repo-h`), wired to the EXISTING
+`control()` fn + `CTOKEN`. Purely **additive**: the center NOW cards keep their controls this
+slice; 2b removes those once the center collapses. Lifecycle is a per-**supervisor** (per-repo)
+operation, so the cluster lives on the repo header, not per-lane or per-role. Model/effort pencil
++ history clock icons are later sub-slices (2a is lifecycle only — the highest-value reachability).
+
+**Codex CP1 findings (folded in 2026-07-04):**
+1. `graceful-stop` is a **label**, not an action — the action is `pause` (existing `cbtn(repo,
+   "pause","graceful-stop","warn")`). Icons call `control(repo,"pause","graceful-stop")` etc.;
+   tests assert the ACTION strings `pause`/`resume`/`stop`/`start`.
+2. `.ibtn` **already exists globally** (dashboard_page.html:67; used by the theme + config header
+   buttons). REUSE it — do NOT redefine from the mockup (regression risk). Add only scoped
+   `.ibtn.go/.warn/.danger:hover` colour variants (mirroring `.cbtn`'s `--fg` token ladder); base
+   `.ibtn` stays muted so the header buttons (no colour class) are unaffected.
+3. Slice 2b must NOT remove model/effort controls from the NOW cards — 2a moves only lifecycle.
+   Model/effort relocation is its own later sub-slice; 2b removes only the lifecycle duplicate.
+4. Header flex: `.repo-h .badge{margin-left:auto}` pushes the badge right — place the cluster
+   **after** the badge span so it sits at the far-right action position (not beside the repo name).
+5. Do NOT claim exact output parity with `controls()` for `needs-setup`/`missing` — those render a
+   setup NOTE on the card; the rail cluster simply emits nothing for them (fine, but not "parity").
+6. Selection-safety holds only for real `<button>` — browser check must click the nested `<svg>`/
+   `<path>`, not just the button surface (a nested SVG target must still bubble to the button).
+
+**Files:**
+- Modify: `lib/dashboard_page.html` (`renderRepos`: emit the cluster in `.repo-h`; new
+  `lifecycleCluster(r,st)` helper mirroring `controls()`'s status→button ladder as icons; `.ibtn`
+  CSS from the mockup).
+- Test: `tests/test_dashboard_page.py` (or the established HTML-render test seam) — assert the
+  cluster markup renders per status.
+
+**Design (minimal, additive):**
+- New helper `lifecycleCluster(r,st)` returns the icon-button set for the repo's dispStatus, EXACTLY
+  mirroring `controls()`'s existing status ladder so the same actions are offered (no new control
+  semantics): `working`/`idle` → graceful-stop (⏸) + hard-stop (⏹); `paused`/`stopping` → resume
+  (▶) + hard-stop (⏹); `stopped` → start (▶); `needs-setup`/`missing`/`error` → none. Each button is
+  `<button class="ibtn ..." onclick="control('${encAttr(repo)}','${action}','${label}')" title="...">`
+  with an inline `<svg>` glyph — reuses `control()` verbatim (same `CONFIRM` prompts for
+  stop/start, same `CTOKEN`, same `toast`). No new endpoint, no new action string.
+- **Selection-safe:** the delegated `#repos` click listener already early-returns on
+  `e.target.closest("button,a,select,input,details,summary")` (dashboard_page.html ~L1180), so an
+  icon-button click never triggers lane selection. Assert this stays true (the buttons ARE
+  `<button>`).
+- **Skip-guard integrity (prevention-log #14):** `renderRepos`'s `_reposKey` guard normalizes only
+  `.qreset`/`.agox` volatile spans. The lifecycle glyphs are **static per status** (no time content),
+  and `st` already participates in the markup (the `badge` token) — so a status change already
+  rebuilds and the cluster follows; an idle tick keeps the signature and the cluster persists via
+  node identity. No new volatile content enters the signature; the guard stays correct without
+  change.
+- **Repo-agnostic / no data invention:** renders only from `dispStatus(r)` + `r.path` (already in
+  state); no new server field. `needs-setup`/`missing` render the existing "run setup_worktree.sh"
+  note is NOT duplicated here (that stays on the center card) — the cluster simply emits nothing for
+  non-manageable statuses, matching `controls()`.
+
+**TDD:**
+- [ ] Failing test: a repo with dispStatus `working` renders a graceful-stop + hard-stop icon button
+      in `.repo-h`, each carrying an `onclick="control(...)"` with the correct action string.
+- [ ] Failing test: `stopped` → a single start icon button; `paused` → resume + hard-stop.
+- [ ] Failing test: `needs-setup` / `missing` → no lifecycle icon buttons in the header.
+- [ ] Implement `lifecycleCluster` + `.ibtn` CSS + wire into `.repo-h`. See it pass.
+
+**Verification (browser loop):**
+- [ ] `new_page` repo-alpha (single-lane) + the multi-lane `/tmp` fixture → snapshot: lifecycle
+      icons render on each repo header; ZERO console errors.
+- [ ] Click a lifecycle icon on a non-selected repo → the `/api/control` POST fires (200) AND the
+      lane selection does NOT change (delegated listener ignored the button click).
+- [ ] Selecting a lane by clicking the header text still works (icon buttons don't swallow it).
+- [ ] Role-row + tickers render byte-identical to pre-change (icons live only in the header).
+- [ ] Idle temporal pass (12s observer): `steadyStateCLS < 0.01`, `repos` panel `innerHTMLStable`,
+      ≤1 rebuild — icons are static, no flicker.
+
+### Slice 2b — collapse center focus to selected lane (next PR)
+
+`renderFocus` renders only `selectedLane(repos)`'s card; remove ONLY the now-duplicated
+**lifecycle** controls from the card (model/effort stay on the card until their own rail sub-slice
+lands — CP1 finding 3); RECENT SESSIONS + multi-repo ACTIVITY handled in Slice 3. Kept out of this
+PR.

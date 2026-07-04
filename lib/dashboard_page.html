@@ -199,6 +199,14 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .lsel{cursor:pointer;border-radius:4px}
 .repo-h.lsel:hover,.lgrp-h.lsel:hover{background:var(--panel2)}
 .repo-h.sel,.lgrp-h.sel{background:var(--accent-soft);box-shadow:inset 2px 0 0 var(--accent)}
+/* #258 slice 2a: the fleet-rail lifecycle icon cluster. REUSES the global .ibtn
+   (line ~67) -- only rail-scoped sizing + hover-colour variants are added, so the
+   theme/config header buttons (no go/warn/danger class) are untouched. Colours
+   mirror .cbtn's --ok/--warn/--bad ladder; base .ibtn stays muted until hover so
+   a healthy rail carries no loud colour. */
+.repo-h .ribtns{display:inline-flex;gap:1px;align-items:center}
+.repo-h .ribtns .ibtn{width:24px;height:24px}
+.ibtn.go:hover{color:var(--ok)} .ibtn.warn:hover{color:var(--warn)} .ibtn.danger:hover{color:var(--bad)}
 .role{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px}
 .role .rn{font-weight:500;min-width:74px}
 .role .subs{font-family:var(--mono);font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:var(--mut);border:1px solid var(--hair2);border-radius:3px;padding:1px 5px}
@@ -646,6 +654,35 @@ function controls(r,st){
   else return "";
   return `<div class="ctl">${btns}<span class="note">lifecycle only</span></div>`;
 }
+// #258 slice 2a: the fleet-rail repo-header lifecycle icon cluster (the redesign
+// mockup's `.ibtn` cluster). SAME status ladder + SAME actions as controls()
+// above -- reuses control()/CTOKEN/CONFIRM verbatim (no new endpoint, no new
+// action string; `graceful-stop`/`hard-stop` are only toast LABELS, the actions
+// are pause/resume/stop/start). Additive this slice: the NOW cards keep their
+// controls until slice 2b collapses the center. Emits nothing for
+// needs-setup/missing/error -- those have no manageable supervisor.
+// Static per status: no volatile time content enters the #164/#238 skip-guard
+// signature, and every button is a real <button> so the delegated #repos
+// select listener ignores its clicks (it never triggers lane selection).
+function ibtn(repo,action,label,title,cls,glyph){
+  return `<button class="ibtn ${cls}" title="${esc(title)}" onclick="control('${encAttr(repo)}','${action}','${esc(label)}')">${glyph}</button>`;}
+function lifecycleCluster(r,st){
+  const repo=r.path;
+  const PLAY='<svg viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></svg>';
+  const PAUSE='<svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg>';
+  const STOP='<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>';
+  let btns="";
+  if(st==="working"||st==="idle"){
+    btns=ibtn(repo,"pause","graceful-stop","Graceful stop — finish the current session, then idle","warn",PAUSE)
+        +ibtn(repo,"stop","hard-stop","Hard stop — interrupt the running agent","danger",STOP);
+  } else if(st==="paused"||st==="stopping"){
+    btns=ibtn(repo,"resume","resume","Resume — pick up the next session","go",PLAY)
+        +ibtn(repo,"stop","hard-stop","Hard stop — interrupt the running agent","danger",STOP);
+  } else if(st==="stopped"){
+    btns=ibtn(repo,"start","start","Start supervisor","go",PLAY);
+  } else return "";
+  return `<span class="ribtns" title="lifecycle — same actions as the card controls">${btns}</span>`;
+}
 const CONFIRM={stop:"Hard-stop this supervisor? A mid-session hard-stop interrupts the running agent.",
   start:"Start this supervisor via launchctl? It will begin running sessions."};
 function control(repoEnc,action,label){
@@ -809,7 +846,7 @@ function renderRepos(repos){
       : `<div class="repo-h lsel${selClass(skey)}" data-lane-key="${encodeURIComponent(skey)}" title="click to focus this lane in the center">`;
     return `<div class="repo">
       ${repoHOpen}<span class="nm">${esc(dispName(r.name))}</span>${laneWarn}
-        <span class="badge">${token(st,true)}</span></div>
+        <span class="badge">${token(st,true)}</span>${lifecycleCluster(r,st)}</div>
       <div class="cfg">${esc(cfg.model||"—")} · gate ${esc(cfg.merge_gate||"—")}${(r.lifecycle||{}).pid?" · pid "+r.lifecycle.pid:""}</div>
       ${gateChain}${roles}</div>`;
   }).join("");

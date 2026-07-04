@@ -809,5 +809,73 @@ class TestAccountUsageForecast(unittest.TestCase):
         self.assertIsNone(usage["claude"])
 
 
+class TestFleetRailLifecycleCluster(unittest.TestCase):
+    """#258 slice 2a: the redesign moves per-repo lifecycle controls off the
+    center NOW cards onto the fleet-rail repo header as a compact icon-button
+    cluster (the mockup's `.ibtn` cluster), so controls stay reachable for EVERY
+    repo once slice 2b collapses the center to the selected lane. This slice is
+    additive -- the center cards keep their controls this PR. These assertions
+    pin the render structure + wiring; the behavioral acceptance (buttons render
+    per status, a click POSTs /api/control without changing the lane selection)
+    is the dashboard browser verify loop."""
+
+    def _page(self):
+        return dashboard._page_bytes(dashboard.PAGE)
+
+    def _cluster_body(self, html):
+        # slice the ibtn() helper + lifecycleCluster() function bodies so the
+        # wiring assertions are scoped to them (not incidental control() calls
+        # elsewhere on the page). The two are adjacent; ibtn() emits the
+        # control() onclick, lifecycleCluster() supplies the action ladder.
+        i = html.find(b"function ibtn(repo,action")
+        self.assertNotEqual(i, -1, "ibtn() lifecycle helper is not defined")
+        j = html.find(b"function lifecycleCluster(", i)
+        self.assertNotEqual(j, -1, "lifecycleCluster() is not defined")
+        return html[i:j + 900]
+
+    def test_lifecycle_cluster_defined(self):
+        self.assertIn(b"function lifecycleCluster(", self._page())
+
+    def test_cluster_wires_all_four_lifecycle_actions_via_control(self):
+        # reuses the EXISTING control(repo,action,label) endpoint -- no new
+        # action string, no new endpoint. The full status ladder is offered:
+        # pause + stop (working/idle), resume + stop (paused/stopping), start
+        # (stopped). (CP1 finding 1: these are the ACTION strings; graceful-stop
+        # is only a label.)
+        body = self._cluster_body(self._page())
+        for action in (b'"pause"', b'"resume"', b'"stop"', b'"start"'):
+            self.assertIn(action, body, "cluster missing control action %r" % action)
+        # reuses the existing control() endpoint (emitted by the ibtn helper),
+        # not a bespoke fetch.
+        self.assertIn(b"control(", body)
+        self.assertIn(b"ibtn", body)
+
+    def test_cluster_rendered_in_repo_header(self):
+        # the cluster is emitted inside renderRepos' repo header markup (not the
+        # center focus card) -- so it must be CALLED, not just defined. One
+        # definition + at least one call site => >= 2 occurrences of the token.
+        html = self._page()
+        self.assertGreaterEqual(html.count(b"lifecycleCluster("), 2,
+                                "lifecycleCluster() is defined but never called")
+        # anchor the call inside the repo header: the marker sits next to the
+        # header token cluster the repo-h row already emits.
+        self.assertIn(b"repo-h", html)
+
+    def test_scoped_ibtn_colour_variants_added_without_clobbering_base(self):
+        # CP1 finding 2: `.ibtn` already exists globally (theme/config header
+        # buttons). REUSE it; add only scoped colour variants for the lifecycle
+        # semantics. The base rule must survive (no regression of header icons).
+        html = self._page()
+        self.assertIn(b".ibtn{", html, "base .ibtn rule was clobbered")
+        self.assertIn(b".ibtn.danger", html)
+        self.assertIn(b".ibtn.go", html)
+
+    def test_selection_listener_still_ignores_button_clicks(self):
+        # CP1 finding 6 / prevention-log: a click on a lifecycle icon button must
+        # NOT trigger lane selection. The delegated #repos listener early-returns
+        # on any button/anchor/control target -- assert that guard is intact.
+        self.assertIn(b'closest("button,a,select,input,details,summary")', self._page())
+
+
 if __name__ == "__main__":
     unittest.main()
