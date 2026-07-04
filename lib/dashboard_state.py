@@ -1143,6 +1143,12 @@ def read_config_overlay(path):
                     out[key] = val
                 elif key == "effort" and val in _dcx.VALID_EFFORTS:
                     out[key] = val
+                # #211: board identity overrides re-validate with the SAME
+                # _valid_text the writer applies, so the card can never show a
+                # value the config-page writer would have rejected.
+                elif (key in ("board_owner", "board_project_title")
+                      and _dcx._valid_text(val)):
+                    out[key] = val
     except OSError:
         return {}
     return out
@@ -1173,8 +1179,9 @@ def _read_config(repo_path):
         "fallback": overlay.get("fallback") or (g("agent.model.fallback") or ""),
         "effort": overlay.get("effort") or (g("agent.effort") or ""),
         "merge_gate": g("merge_gate.strategy") or "",
-        "board_owner": g("board.owner") or "",
-        "board_title": g("board.project_title") or "",
+        "board_owner": overlay.get("board_owner") or (g("board.owner") or ""),
+        "board_title": (overlay.get("board_project_title")
+                        or (g("board.project_title") or "")),
         "roles": roles if isinstance(roles, dict) else {},
         "overrides": overlay,
     }

@@ -828,6 +828,29 @@ class TestConfigBoardKeys(unittest.TestCase):
         self.assertEqual(st["config"].get("board_owner", ""), "")
         self.assertEqual(st["config"].get("board_title", ""), "")
 
+    def test_board_keys_shadowed_by_overlay(self):
+        # #211: a config-page 'save default' for board.* lands in the untracked
+        # overlay; the page must show the EFFECTIVE (overlay) value, not the
+        # stale committed one -- otherwise the save looks reverted. Consistent
+        # with how model/effort already shadow config.yaml.
+        tmp = tempfile.mkdtemp()
+        os.makedirs(os.path.join(tmp, ".autonomy"))
+        with open(os.path.join(tmp, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("board:\n  owner: committed-org\n"
+                     "  project_title: Committed Board\n")
+        os.makedirs(os.path.join(tmp, "var", "autonomy-logs"))
+        with open(os.path.join(tmp, "var", "autonomy-logs",
+                               "config-overrides"), "w") as fh:
+            fh.write("board_owner=overlay-org\n"
+                     "board_project_title=Overlay Board\n")
+        st = ds.build_repo_state(tmp, pid_is_alive=lambda p: False,
+                                              git_in_flight=lambda r: {})
+        self.assertEqual(st["config"]["board_owner"], "overlay-org")
+        self.assertEqual(st["config"]["board_title"], "Overlay Board")
+        # flagged in `overrides` so the UI can label them "local override".
+        self.assertEqual(st["config"]["overrides"].get("board_owner"),
+                         "overlay-org")
+
 
 
 class TestCodexUsage(unittest.TestCase):

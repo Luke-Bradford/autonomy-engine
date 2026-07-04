@@ -180,11 +180,10 @@ class TestConfigSetPlan(unittest.TestCase):
         return dc.config_set_plan(self.repo, key, value)
 
     def test_config_yaml_keys_produce_config_set(self):
-        # board.*/merge_gate.* stay config.yaml-written (their consumers --
-        # board.sh, safe_merge, doctor -- have no overlay read seam).
+        # merge_gate.strategy stays config.yaml-written: its consumers
+        # (safe_merge.sh, doctor.sh) are guardrail files with no overlay read
+        # seam yet (#211). board.* now route to the overlay -- see below.
         cases = {
-            "board.owner": "some-org",
-            "board.project_title": "My Fancy Board",
             "merge_gate.strategy": "ci_only",
         }
         for key, value in cases.items():
@@ -197,10 +196,15 @@ class TestConfigSetPlan(unittest.TestCase):
 
     def test_model_effort_keys_route_to_overlay(self):
         # #202: the model/effort keys write the untracked overlay instead.
+        # #211: board.owner/board.project_title join them -- board.sh now reads
+        # the overlay (config_value_with_overlay), so the config-page save both
+        # survives preflight AND takes effect.
         cases = {
             "agent.model.primary": ("model", "claude-opus-4-8"),
             "agent.model.fallback": ("fallback", "claude-sonnet-5"),
             "agent.effort": ("effort", "high"),
+            "board.owner": ("board_owner", "some-org"),
+            "board.project_title": ("board_project_title", "My Fancy Board"),
         }
         for key, (short, value) in cases.items():
             p = self.plan(key, value)
@@ -226,8 +230,10 @@ class TestConfigSetPlan(unittest.TestCase):
         self.assertIn("error", self.plan("board.project_title", "x" * 300))
 
     def test_values_are_stripped(self):
+        # board.owner now routes to the overlay (#211); the value is still
+        # trimmed before it is persisted.
         p = self.plan("board.owner", "  padded-org  ")
-        self.assertEqual(p["config_set"], {"board.owner": "padded-org"})
+        self.assertEqual(p["overlay_set"], {"board_owner": "padded-org"})
 
 
 class TestRepoRegistryPlans(unittest.TestCase):
