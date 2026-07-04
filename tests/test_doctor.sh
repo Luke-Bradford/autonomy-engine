@@ -349,5 +349,50 @@ check "label_check: no configured labels -> silent" "" "$(doctor_label_scope_che
 check "label_check: no configured labels -> gh NOT called" "1" "$(test -f "$gh_called" && echo 0 || echo 1)"
 unset -f gh
 
+# ---- #171: merge_gate marker/author_login verification against the workflow ----
+# doctor_marker_report (pure): the bot_comment gate greps review comments for
+# author.login==author_login AND body contains marker; if the configured marker
+# never appears in the installed workflow's comment, no PR is ever eligible.
+wf_text='      - run: |
+          { echo "## Claude Code Review"; echo ""; cat review.txt; } > comment_body.txt
+          gh pr comment "$PR" --body-file comment_body.txt'
+mr_ok="$(doctor_marker_report "Claude Code Review" "github-actions" "$wf_text")"
+check "marker_report: marker in workflow -> OK"        "0" "$(has "$mr_ok" '^OK' && echo 0 || echo 1)"
+check "marker_report: marker in workflow -> no WARN"   "1" "$(has "$mr_ok" 'WARN' && echo 0 || echo 1)"
+check "marker_report: default author -> no INFO"       "1" "$(has "$mr_ok" '^INFO' && echo 0 || echo 1)"
+
+mr_bad="$(doctor_marker_report "Robo Review" "github-actions" "$wf_text")"
+check "marker_report: marker absent -> WARN naming it"  "0" "$(has "$mr_bad" "'Robo Review'" && has "$mr_bad" 'WARN' && echo 0 || echo 1)"
+
+mr_auth="$(doctor_marker_report "Claude Code Review" "my-bot" "$wf_text")"
+check "marker_report: non-default author -> INFO not WARN" "0" \
+  "$(has "$mr_auth" '^INFO' && ! has "$mr_auth" 'WARN' && echo 0 || echo 1)"
+check "marker_report: non-default author -> names the author" "0" "$(has "$mr_auth" "'my-bot'" && echo 0 || echo 1)"
+
+# doctor_marker_check (impure): reads config defaults + the workflow files.
+mkdir -p "$tmp/.github/workflows"
+printf '%s\n' "$wf_text" > "$tmp/.github/workflows/claude-review.yml"
+cat > "$tmp/.autonomy/config.yaml" <<'YAML'
+merge_gate:
+  strategy: bot_comment
+YAML
+mc_def="$(doctor_marker_check "$tmp")"
+check "marker_check: defaults match stock workflow -> OK, no WARN" "0" \
+  "$(has "$mc_def" '^OK' && ! has "$mc_def" 'WARN' && echo 0 || echo 1)"
+
+cat > "$tmp/.autonomy/config.yaml" <<'YAML'
+merge_gate:
+  strategy: bot_comment
+  marker: "Nope Not Here"
+YAML
+mc_bad="$(doctor_marker_check "$tmp")"
+check "marker_check: mismatched marker -> WARN naming it" "0" \
+  "$(has "$mc_bad" "'Nope Not Here'" && has "$mc_bad" 'WARN' && echo 0 || echo 1)"
+
+# workflow dir unreadable/absent -> silent (best-effort; the outer branch already
+# WARNs when no review workflow exists -- don't double-warn).
+rm -rf "$tmp/.github"
+check "marker_check: no workflow dir -> silent" "" "$(doctor_marker_check "$tmp")"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
