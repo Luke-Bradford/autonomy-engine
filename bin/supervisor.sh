@@ -179,10 +179,33 @@ valid_prompt_path() {
 # between the CLI flag and config.yaml: CLI > role > agent.* > default. The
 # one-shot dashboard override is applied last and wins for its one session.
 resolve_session_settings() {
-  MODEL="$(resolve_config_value "$CFG" agent.model.primary "${MODEL_OVERRIDE:-${ROLE_MODEL:-}}" claude-sonnet-5)"
-  FALLBACK_MODEL="$(resolve_config_value "$CFG" agent.model.fallback "$FALLBACK_MODEL_OVERRIDE" claude-sonnet-4-6)"
-  EFFORT="$(resolve_config_value "$CFG" agent.effort "${EFFORT_OVERRIDE:-${ROLE_EFFORT:-}}" "")"
+  read_config_overlay
+  MODEL="$(resolve_config_value "$CFG" agent.model.primary "${MODEL_OVERRIDE:-${ROLE_MODEL:-$OVERLAY_MODEL}}" claude-sonnet-5)"
+  FALLBACK_MODEL="$(resolve_config_value "$CFG" agent.model.fallback "${FALLBACK_MODEL_OVERRIDE:-$OVERLAY_FALLBACK}" claude-sonnet-4-6)"
+  EFFORT="$(resolve_config_value "$CFG" agent.effort "${EFFORT_OVERRIDE:-${ROLE_EFFORT:-$OVERLAY_EFFORT}}" "")"
   consume_model_override "$LOGDIR/model-override"
+}
+
+# Persistent operator overrides written by the dashboard's 'save default'
+# (#202). Lives in the gitignored var/autonomy-logs (same home as the one-shot
+# model-override) so it survives the preflight stash-recovery that would sweep
+# a tracked config.yaml edit. Values are re-validated here (defense in depth,
+# parity with consume_model_override); an absent/invalid overlay leaves the
+# OVERLAY_* vars empty so resolution falls back to the committed config.yaml.
+# It sits WITHIN the agent.* tier: role/CLI/one-shot still win (settled #13).
+read_config_overlay() {
+  OVERLAY_MODEL=""; OVERLAY_FALLBACK=""; OVERLAY_EFFORT=""
+  local overlay_file="$LOGDIR/config-overrides" line key val
+  [ -f "$overlay_file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    key="${line%%=*}"; val="${line#*=}"
+    case "$key" in
+      model)    if valid_model_id "$val"; then OVERLAY_MODEL="$val"; fi ;;
+      fallback) if valid_model_id "$val"; then OVERLAY_FALLBACK="$val"; fi ;;
+      effort)   if valid_effort "$val"; then OVERLAY_EFFORT="$val"; fi ;;
+    esac
+  done <"$overlay_file"
+  return 0
 }
 
 # One-shot override file the dashboard writes ('next session only' scope):
