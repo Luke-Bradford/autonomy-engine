@@ -133,6 +133,13 @@ check "model id starting with dash rejected" rejected "$r"
 long="a12345678901234567890123456789012345678901234567890123456789012345"  # 65 chars
 if valid_model_id "$long"; then r=ok; else r=rejected; fi
 check "model id over 64 chars rejected" rejected "$r"
+# local-LLM ids are Ollama-style name:tag (e.g. qwen3:14b) -- the colon must be
+# accepted so BYO-LLM roles reach argv with their real model, not the opus
+# fallback (#213). Colon is shell-safe in an exec argv token (no shell parse).
+if valid_model_id "qwen3:14b"; then r=ok; else r=rejected; fi
+check "colon-bearing local model id accepted" ok "$r"
+if valid_model_id "bad:model;rm"; then r=ok; else r=rejected; fi
+check "colon does not admit shell metacharacters" rejected "$r"
 
 # --- valid_prompt_path: dispatch-time re-validation of a role's prompt (#63) ---
 # Parity with valid_model_id -- re-check the config-sourced path before it

@@ -22,8 +22,10 @@ VALID_ACTIONS = ("pause", "resume", "stop", "start")
 # #24 live model/effort control. Model ids are a strict token (defense in
 # depth: the value lands in a file the supervisor reads and in config.yaml,
 # never a shell, but there is no reason to allow anything shell-metacharish).
+# The set includes ':' for local-LLM ids (Ollama-style name:tag, e.g.
+# qwen3:14b); kept in PARITY with supervisor.sh valid_model_id (#213).
 # Efforts are the claude CLI's own accepted set (verified empirically).
-MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,63}$")
+MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,63}$")
 VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 VALID_SCOPES = ("session", "default")
 
