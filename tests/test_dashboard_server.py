@@ -1118,6 +1118,27 @@ class TestLaneHistoryPopover(unittest.TestCase):
         self.assertIn(b"refreshLaneHist(", render_body,
                       "render() does not refresh the popover on tick (CP1 P1-b)")
 
+    def test_open_blurs_the_trigger(self):
+        # CP2: the clock is a <button> in #focus, so leaving it focused makes its
+        # card the "held" node in renderFocus's partial-update path -- with one
+        # center card that freezes the card + resyncs _sig.focus to stale markup.
+        # openLaneHist must blur the anchor so the next tick full-renders the card.
+        html = self._page()
+        i = html.find(b"function openLaneHist(")
+        j = html.find(b"function ", i + 1)
+        body = html[i:j]
+        self.assertIn(b".blur(", body,
+                      "openLaneHist does not blur the trigger (CP2 held-node freeze)")
+
+    def test_selectLane_refreshes_open_popover(self):
+        # CP2: picking another lane while the popover is open must re-fill it with
+        # the new repo's sessions, not leave the prior repo's history until a tick.
+        html = self._page()
+        i = html.find(b"function selectLane(")
+        self.assertNotEqual(i, -1, "selectLane() is not defined")
+        self.assertIn(b"refreshLaneHist(", html[i:i + 200],
+                      "selectLane does not refresh an open history popover (CP2)")
+
     def test_open_handler_is_total(self):
         # CP1 P2: openLaneHist guards LAST before dereferencing repos, and no-ops
         # on a null selected repo rather than throwing on a fresh/empty state.

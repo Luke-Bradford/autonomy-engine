@@ -353,9 +353,16 @@ lands on sessions server-side; not now.)
   its `_sig.history` key go away with it. No other panel references `#history` or `HIST_OPEN`.
 
 **Build order (CP1 P3 — localize regressions within the one PR):** (1) add the inert `#pop` element
-+ `.pop`/`.hrow` CSS + the three close paths (outside-click, Escape, tick-close) with `laneHist`
++ `.pop`/`.hrow` CSS + the three close paths (outside-click, Escape, tick-refresh) with `laneHist`
 still unused; (2) add the `.ibtn.hist` trigger + `openLaneHist`; (3) delete the inline `Recent
 sessions` section + `renderHistory` + call site + `HIST_OPEN`. Tests + browser verify after (3).
+
+**Codex CP2 findings (folded in):** (1) `selectLane` must call `refreshLaneHist()` too — picking a
+different lane while the popover is open otherwise shows the prior repo's history until the next
+tick (stale DOM). (2) The clock `<button>` must `blur()` after opening — left focused inside the
+single-card `#focus`, it becomes the held node in `renderFocus`'s preserve-focus partial path, which
+with one card preserves the OLD card and resyncs `_sig.focus` to stale markup, freezing the focus
+card's server truth while the popover is read. Extracted to prevention-log #16.
 
 **TDD (string-assert seam, mirrors `TestReskinRenderMounts`):**
 - [ ] Failing test: inline RECENT SESSIONS gone — `>Recent sessions<` and `id="history"` NOT in the

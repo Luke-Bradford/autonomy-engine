@@ -529,6 +529,13 @@ function openLaneHist(ev,anchor){
   pop.style.top=Math.min(innerHeight-260,r.bottom+6)+"px";
   pop.style.left=Math.min(innerWidth-352,Math.max(8,r.right-340))+"px";
   pop.classList.add("open");
+  // CP2: the clock is a <button> inside #focus, so leaving it focused makes its
+  // card the "held" node in renderFocus's partial-update path -- with a single
+  // center card that preserves the OLD card + resyncs _sig.focus to stale markup,
+  // FREEZING the focus card's server truth while the popover is read. Blur it: its
+  // job is done (popover open), so the next tick takes the normal full-render path
+  // and the card stays live. Escape/outside-click still close the popover.
+  anchor.blur();
 }
 function closeLaneHist(){const p=$("pop");if(p)p.classList.remove("open");}
 // CP1 P1-b: on every SSE tick, keep an OPEN popover truthful without shutting it
@@ -801,7 +808,10 @@ function selectedRepoOf(repos){
 // on the selection, so without this the center would lag a click until the next
 // /api/state tick. All renders go through the shared setHTML/_sig guard, so a
 // no-op selection (re-click the same lane) is skipped, not a churn.
-function selectLane(key){SELECTED=key; if(LAST){renderRepos(LAST.repos);renderFocus(LAST.repos);renderActivity(LAST.repos);}}
+// CP2: refreshLaneHist too -- if the history popover is open when the operator
+// picks a different lane, re-fill it with the newly selected repo's sessions
+// (else it shows the prior repo's history until the next SSE tick -- stale DOM).
+function selectLane(key){SELECTED=key; if(LAST){renderRepos(LAST.repos);renderFocus(LAST.repos);renderActivity(LAST.repos);refreshLaneHist();}}
 function renderRepos(repos){
   $("h-repos").textContent=repos.length;
   const selKey=selectedLane(repos);
