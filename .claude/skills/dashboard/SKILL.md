@@ -124,3 +124,25 @@ Run this before claiming any dashboard change done (pre-flight-review item J).
 Unit tests still carry the logic coverage (`tests/test_dashboard_state.py`,
 `tests/test_dashboard_control.py`); the browser loop is for what unit tests
 can't see — JS wiring, token plumbing, layout collapse, console errors.
+
+## The operator's LIVE dashboard (do not manage it yourself)
+
+The instance on 127.0.0.1:8787 is a SUPERVISED CHILD of `bin/console.py`
+(VSCode task "Autonomy: console" / `Start Autonomy.command`): a watchdog
+relaunches it within ~1s of any exit, and startup consolidates to one
+dashboard. Blessed as THE manager (settled decision 32; launchd rejected —
+a second manager fights the watchdog).
+
+- To apply new server code: `kill <dashboard pid>` and do NOTHING else —
+  the watchdog respawns it from the (pulled) checkout. NEVER start a
+  replacement server on the port: the watchdog crash-loops on
+  `Errno 48 Address already in use` against your orphan (2026-07-04
+  incident, operator's terminal spammed with tracebacks).
+- Page + lib modules hot-reload per request (#166) — page/state-only merges
+  need NO restart, just a browser refresh; only `bin/dashboard.py` changes
+  need the kill-and-respawn.
+- The page is served from the MAIN checkout — after merging UI work, pull
+  that checkout or the operator keeps seeing the old page (#270's chip now
+  surfaces this; the pull is still the fix).
+- Verify loops always use a THROWAWAY port (8790+) against fixtures; never
+  drive controls against 8787 beyond read-only page loads.
