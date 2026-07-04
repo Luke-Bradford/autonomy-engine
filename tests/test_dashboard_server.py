@@ -228,25 +228,45 @@ class TestBoardsRoute(unittest.TestCase):
 
 
 class _FakeAccts:
-    """A stand-in for accounts.Accounts with a known registry + list_models --
-    lets models_read_model be driven without a real account index / network."""
+    """A stand-in for accounts.Accounts with a known registry + discover_models --
+    lets models_read_model be driven without a real account index / network. Its
+    discover_models mirrors the real source dispatch (#206): claude_subscription
+    is "live" when a live roster is supplied, else "curated"; openai_compatible is
+    "live"; api/unknown is "none" (and is NOT consulted, so setting models_raises
+    for such a kind still yields none without blowing up)."""
 
     def __init__(self, registry, models=None, list_raises=None,
-                 models_raises=None):
+                 models_raises=None, live=None):
         self._registry = registry          # list of {name, kind}
-        self._models = models or {}        # name -> [model ids]
+        self._models = models or {}        # name -> curated/openai [model ids]
+        self._live = live or {}            # name -> live [model ids] (claude_sub)
         self._list_raises = list_raises    # exc to raise from list()
-        self._models_raises = models_raises  # name whose list_models raises
+        self._models_raises = models_raises  # name whose discover_models raises
 
     def list(self):
         if self._list_raises is not None:
             raise self._list_raises
         return list(self._registry)
 
-    def list_models(self, name):
+    def _kind(self, name):
+        return next((a.get("kind") for a in self._registry
+                     if a.get("name") == name), None)
+
+    def discover_models(self, name):
+        kind = self._kind(name)
+        if kind == "claude_subscription":
+            if name == self._models_raises:
+                raise RuntimeError("boom in discover_models(%s)" % name)
+            live = self._live.get(name)
+            if live:
+                return {"source": "live", "models": list(live)}
+            return {"source": "curated", "models": list(self._models.get(name, []))}
+        src = accounts.model_source(kind)
+        if src == "none":
+            return {"source": "none", "models": []}   # not consulted; never raises
         if name == self._models_raises:
-            raise RuntimeError("boom in list_models(%s)" % name)
-        return list(self._models.get(name, []))
+            raise RuntimeError("boom in discover_models(%s)" % name)
+        return {"source": src, "models": list(self._models.get(name, []))}
 
 
 class TestModelsReadModel(unittest.TestCase):
@@ -274,7 +294,7 @@ class TestModelsReadModel(unittest.TestCase):
             {"name": "ollama", "kind": "openai_compatible", "source": "live",
              "models": ["qwen3:14b", "deepseek-r1:14b"]}])
 
-    def test_subscription_is_curated_source(self):
+    def test_subscription_curated_when_live_absent(self):
         self._install(_FakeAccts(
             [{"name": "sub", "kind": "claude_subscription"}],
             models={"sub": ["claude-opus-4-8"]}))
@@ -282,6 +302,18 @@ class TestModelsReadModel(unittest.TestCase):
         acct = out["accounts"][0]
         self.assertEqual(acct["source"], "curated")
         self.assertEqual(acct["models"], ["claude-opus-4-8"])
+
+    def test_subscription_live_source_when_roster_present(self):
+        # #206: when the live /v1/models roster comes back, source is "live".
+        self._install(_FakeAccts(
+            [{"name": "sub", "kind": "claude_subscription"}],
+            models={"sub": ["claude-opus-4-8"]},
+            live={"sub": ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"]}))
+        out = dashboard.models_read_model()
+        acct = out["accounts"][0]
+        self.assertEqual(acct["source"], "live")
+        self.assertEqual(acct["models"],
+                         ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"])
 
     def test_api_kind_is_none_source_and_skips_lookup(self):
         # a 'none'-source kind must NOT consult list_models at all; if it did,

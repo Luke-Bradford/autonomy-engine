@@ -15,10 +15,13 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
+import claude_usage as _claude_usage
 import credentials as _credentials
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -54,18 +57,126 @@ def subscription_models(kind):
 
 
 def model_source(kind):
-    """Which config-picker discovery SOURCE an account `kind` uses (#82):
-      - "live"    -- openai_compatible: Accounts.list_models does GET /v1/models.
-      - "curated" -- a CLI-login subscription served from _SUBSCRIPTION_MODELS.
+    """Which config-picker discovery source a `kind` ATTEMPTS (#82/#206) -- the
+    static capability; `discover_models` reports what a call actually produced:
+      - "live"    -- openai_compatible (GET <base>/models) OR claude_subscription
+                     (GET /v1/models, #206). Both attempt live; both degrade (to
+                     [] / the curated roster) on failure -- `discover_models` is
+                     the runtime-truthful source.
+      - "curated" -- codex_subscription: no live models API, always the curated
+                     in-repo seam (_SUBSCRIPTION_MODELS).
       - "none"    -- an api-key kind / unknown: no roster to offer.
-    Kept here beside _SUBSCRIPTION_MODELS + list_models so the source decision
-    is single-sourced and cannot drift; bin/ never re-derives it (never reaches
-    into the private roster)."""
-    if kind == "openai_compatible":
+    Kept here beside _SUBSCRIPTION_MODELS + list_models so the decision is
+    single-sourced and cannot drift; bin/ never re-derives it."""
+    if kind in ("openai_compatible", "claude_subscription"):
         return "live"
-    if kind in _SUBSCRIPTION_MODELS:
+    if kind in _SUBSCRIPTION_MODELS:   # codex_subscription: no live API
         return "curated"
     return "none"
+
+
+# --- live claude_subscription model roster (#206) ---------------------------
+# The CLI-login subscription DOES expose a model list: GET /v1/models with the
+# Claude Code OAuth token (verified #82). We live-first it (fresh roster incl.
+# new models like fable) and fall back to the curated _SUBSCRIPTION_MODELS on ANY
+# failure. The security-critical token read is REUSED from claude_usage (#160/
+# #163): Keychain 'Claude Code-credentials', in-memory only, header-only, never
+# on argv / in a log / in a return value.
+_LIVE_MODELS_URL = "https://api.anthropic.com/v1/models"
+_ANTHROPIC_VERSION = "2023-06-01"
+_LIVE_TTL = 300.0
+
+# Cache written under the lock ACROSS the fetch: unlike claude_usage (a single
+# sampler thread writes it), this is called from dashboard REQUEST threads, so
+# holding the lock over the fetch serializes concurrent cold callers (one
+# fetches, the rest read the result) -- no stampede, and no slow-older failure
+# overwriting a newer live value.
+_live_models_cache = {"ts": 0.0, "val": None, "seen": False}
+_live_models_lock = threading.Lock()
+
+
+def reset_live_models_cache():
+    """Test hook: drop the cached live roster so each test starts cold."""
+    with _live_models_lock:
+        _live_models_cache["ts"] = 0.0
+        _live_models_cache["val"] = None
+        _live_models_cache["seen"] = False
+
+
+def _fetch_live_claude_models(token, opener=None, timeout=5):
+    """GET /v1/models with the OAuth token in the Authorization header. Returns a
+    list of model id strings, or None on empty token / non-200 / transport error
+    / non-JSON / missing `data` / ZERO valid rows. Collects every row with a
+    non-empty str `id` and SKIPS invalid rows (one bad row never poisons the good
+    ones). NEVER re-raises (so no header text can leak) and never puts the token
+    on argv."""
+    if not token:
+        return None
+    if opener is None:
+        opener = urllib.request.urlopen
+    req = urllib.request.Request(_LIVE_MODELS_URL, headers={
+        "Authorization": "Bearer %s" % token,
+        "anthropic-version": _ANTHROPIC_VERSION,
+        "anthropic-beta": _claude_usage._BETA,
+        "Accept": "application/json",
+    })
+    try:
+        resp = opener(req, timeout=timeout)
+    except Exception:
+        return None
+    try:
+        status = getattr(resp, "status", None)
+        if status is None and hasattr(resp, "getcode"):
+            status = resp.getcode()
+        if status != 200:
+            return None
+        body = resp.read()
+    except Exception:
+        return None
+    finally:
+        try:
+            resp.close()
+        except Exception:
+            pass
+    try:
+        data = json.loads(body)
+    except (ValueError, TypeError):
+        return None
+    rows = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return None
+    ids = []
+    for row in rows:
+        if isinstance(row, dict):
+            mid = row.get("id")
+            if isinstance(mid, str) and mid:
+                ids.append(mid)
+    return ids or None
+
+
+def live_claude_models(now=None, token_reader=None, fetcher=None, ttl=_LIVE_TTL):
+    """The live claude_subscription model ids (cached ~5 min), or None when the
+    live source can't be reached (caller falls back to the curated roster). The
+    lock is held ACROSS the fetch to serialize cold request-thread callers.
+    Fail-safe: ANY error writes None (never a raise, never stale-live)."""
+    if now is None:
+        now = time.time()
+    if token_reader is None:
+        token_reader = _claude_usage._read_oauth_token
+    if fetcher is None:
+        fetcher = _fetch_live_claude_models
+    with _live_models_lock:
+        if _live_models_cache["seen"] and (now - _live_models_cache["ts"]) < ttl:
+            return _live_models_cache["val"]
+        try:
+            token = token_reader()
+            val = fetcher(token) if token else None
+        except Exception:
+            val = None
+        _live_models_cache["ts"] = now
+        _live_models_cache["val"] = val
+        _live_models_cache["seen"] = True
+        return val
 
 
 def _valid_base_url(url):
@@ -264,8 +375,9 @@ class Accounts:
         """Model ids for account `name` -- best-effort discovery for the config
         UI (#82), never raises. Sources by kind:
           - openai_compatible: live GET <base_url>/models ([] on any error).
-          - claude_subscription / codex_subscription: the curated in-repo
-            roster (_SUBSCRIPTION_MODELS); no models API exists for a CLI login.
+          - claude_subscription: live GET /v1/models (#206), falling back to the
+            curated in-repo roster on ANY failure (offline/401/timeout).
+          - codex_subscription: the curated roster (no live models API).
           - anything else / unknown: [].
         A copy of the curated list is returned so callers cannot mutate the
         shared roster."""
@@ -273,6 +385,9 @@ class Accounts:
         if not entry:
             return []
         kind = entry.get("kind")
+        if kind == "claude_subscription":
+            live = live_claude_models()
+            return list(live) if live else subscription_models(kind)
         if kind in _SUBSCRIPTION_MODELS:
             return subscription_models(kind)
         if kind != "openai_compatible":
@@ -293,6 +408,27 @@ class Accounts:
             # subprocess error). The contract is "[] on any error"; discovery
             # must never break dispatch or the config UI.
             return []
+
+    def discover_models(self, name):
+        """{"source", "models"} for the config picker (#82/#206) -- the
+        SOURCE-TRUTHFUL companion to list_models, so `/api/models` reports the
+        source that ACTUALLY produced the roster (not a static per-kind guess).
+        claude_subscription: live present -> "live", else "curated" fallback.
+        openai_compatible -> "live"; api-kind/unknown/missing -> "none", []. Never
+        raises (best-effort). `models` is a list of ids."""
+        entry = self.get(name)
+        if not entry:
+            return {"source": "none", "models": []}
+        kind = entry.get("kind")
+        if kind == "claude_subscription":
+            live = live_claude_models()
+            if live:
+                return {"source": "live", "models": list(live)}
+            return {"source": "curated", "models": subscription_models(kind)}
+        source = model_source(kind)
+        if source == "none":
+            return {"source": "none", "models": []}
+        return {"source": source, "models": self.list_models(name)}
 
 
 def _main(argv):
