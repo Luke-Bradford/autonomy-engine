@@ -547,6 +547,40 @@ def display_status(lifecycle_state, activity):
     return "working" if activity == "working" else "idle"
 
 
+def merge_gate_chain(strategy):
+    """The configured merge-gate tail for the #187 phase track's OUTLINE layer:
+    what gate chain a PR must still clear, derived from the repo's OWN
+    `merge_gate.strategy`. This is a READ-ONLY display derivation -- it draws
+    the gate, it never gates a merge (safe_merge.sh remains the sole enforcer).
+
+    The four strategies mirror safe_merge.sh exactly (an empty/unset strategy
+    defaults to `manual`, matching its `${STRATEGY:-manual}`):
+        manual      pr -> 👤        (operator reviews + merges by hand)
+        ci_only     pr -> merge     (CI green auto-merges, no review)
+        bot_comment pr -> review(bot) -> merge
+        gh_review   pr -> review(human) -> merge
+    Returns an ordered list of {step[, actor]} segments; `actor` is present
+    only on a `review` step. An UNRECOGNISED strategy degrades to `[pr]` -- the
+    one certain fact (a PR was opened) -- rather than guessing a tail, per the
+    spec's 'degrade to truth, never guess'. The QA/custom-role dimension (the
+    other axis of the #156 gating matrix) is a documented follow-up; this is
+    the universal layer only.
+
+    NOTE: the strategy names are necessarily re-enumerated here (Python) from
+    safe_merge.sh (bash) -- config_parser is the only shared lib across that
+    boundary. Keep this mapping in sync with safe_merge.sh's strategy branches."""
+    s = (strategy or "").strip().lower() or "manual"
+    if s == "manual":
+        return [{"step": "pr"}, {"step": "review", "actor": "human"}]
+    if s == "ci_only":
+        return [{"step": "pr"}, {"step": "merge"}]
+    if s == "bot_comment":
+        return [{"step": "pr"}, {"step": "review", "actor": "bot"}, {"step": "merge"}]
+    if s == "gh_review":
+        return [{"step": "pr"}, {"step": "review", "actor": "human"}, {"step": "merge"}]
+    return [{"step": "pr"}]
+
+
 def extract_ticket_ref(branch):
     """The issue number a branch is working, by the engine's feat/<n>- /
     fix/<n>- convention. None if the branch encodes no ticket."""
@@ -1465,6 +1499,7 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "engine_boot": read_engine_boot_sha(logdir),  # #166: supervisor's boot sha
         "git": git_in_flight(repo_path) if git_in_flight else {},
         "config": config,
+        "merge_gate_chain": merge_gate_chain(config.get("merge_gate")),
         "override": read_model_override(os.path.join(logdir, "model-override")),
         "quota": quota,
         "sessions": recent_sessions(logdir),
