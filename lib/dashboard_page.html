@@ -384,7 +384,13 @@ function dispStatus(r){return r.display_status||(r.lifecycle||{}).state||"idle";
 function actingRole(r){
   return dispStatus(r)==="working" ? ((r.current_session||{}).role||"") : "";
 }
-const SLABEL={"needs-setup":"needs setup","not-configured":"not configured","stopping":"stopping"};
+// #151 lifecycle-label truth: the `stopping` display-status token fires while a
+// PAUSE sentinel is set AND the current session is still running (graceful pause
+// pending) -- a healthy state, not a crash. A bare "stopping" badge read as
+// "stuck/exiting" to the operator when a multi-ticket session ran to completion
+// (1h43m). Label it as the pause-pending truth; the token/CSS/filters stay so
+// display_status (the settled status-vocabulary SSOT) is untouched.
+const SLABEL={"needs-setup":"needs setup","not-configured":"not configured","stopping":"pause pending"};
 function dispName(n){return String(n||"").replace(/^\./,"");} // worktree folder .x-autonomy -> x-autonomy
 function isWorktree(n){return /-autonomy$/.test(String(n||""));}
 function sl(s){return SLABEL[s]||s;}
@@ -450,8 +456,8 @@ function renderFocus(repos){
       <span style="margin-left:auto;display:flex;gap:5px">${right}</span></div>`;
     }
     let stepLine;
-    if(st==="paused") stepLine=`<div class="fc-step">graceful stop — current session finished, idling</div>`;
-    else if(st==="stopping") stepLine=`<div class="fc-step">⏸ graceful stop pending · → <span class="k">${esc(short(cs.current_step||"…",48))}</span></div>`;
+    if(st==="paused") stepLine=`<div class="fc-step">paused — idle · resume to continue</div>`;
+    else if(st==="stopping") stepLine=`<div class="fc-step">⏸ pause pending — finishing current session · → <span class="k">${esc(short(cs.current_step||"…",48))}</span></div>`;
     else if(st==="stopped") stepLine=`<div class="fc-step">supervisor stopped — hard start to run</div>`;
     else if(busy) stepLine=`<div class="fc-step">→ <span class="k">${esc(short(cs.current_step||"…",56))}</span></div>`;
     else {
