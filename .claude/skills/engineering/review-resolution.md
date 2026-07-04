@@ -59,3 +59,21 @@ re-trigger, don't keep waiting.
 Every comment has a terminal state · all fixes are on the latest commit · all
 deferrals have issue numbers · all rebuttals cite specifics · prevention
 lessons extracted · APPROVE + CI green on the most recent commit.
+
+## Reading the gate — the check is not the verdict (2026-07-04 incident)
+
+The required `review` CHECK going green only means the review WORKFLOW ran.
+The VERDICT lives in the bot's COMMENT ("## Claude Code Review" →
+`**APPROVE**` / `**REQUEST CHANGES**`), and `safe_merge` enforces the
+comment, freshness-compared against the head commit. A gate watcher that
+polls check buckets will call a PR "ready" that safe_merge then refuses.
+
+When watching a gate:
+
+- Poll the LATEST review comment: `createdAt` must postdate the head
+  commit's `committedDate`, then grep the body for the verdict.
+- Bound every watch (~15 min) and treat silence as a prompt to re-check by
+  hand, never as progress — notifications can arrive late or not at all.
+- A safe_merge run that prints NOTHING and exits 1 is an incident, not a
+  refusal — refusals always print a REFUSE reason. Run `bash -x` on it
+  (prevention-log #17) instead of assuming the gate is just "not ready".
