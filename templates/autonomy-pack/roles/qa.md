@@ -26,6 +26,16 @@ its testing without the operator in the loop. Focus on:
    `./start`/CLI output, a config knob, a log line an operator reads), is it
    usable and clear? Confusing wording, a broken empty/error state, or a
    control that gives no feedback is a `ux` finding.
+   - **Temporal defects (dashboard render):** you review statically and cannot
+     run a browser, so reason about *motion* the diff introduces — flicker,
+     jank, and layout thrash never appear in a snapshot. Flag as a `ux` finding:
+     a panel render that assigns `el.innerHTML = …` on every tick/SSE re-render
+     with no skip-unchanged guard (rebuilds identical DOM each tick → node-identity
+     churn: resets CSS transitions, `:hover`, text selection, in-panel scroll —
+     the #174/#238 flicker class); per-tick-changing values (seconds, live
+     timestamps) embedded in cached markup, which defeats a skip-unchanged compare;
+     or an SSE re-render path that could clobber an operator's un-saved control
+     edit (#202 defect 3). Name the render function + line and the guard it needs.
 5. **Docs** — is the change documented where it should be (README, the role's
    prompt, a settled-decision, an inline contract comment)? A behaviour or knob
    a future reader can't discover is a `docs`-flavoured `ux` finding.

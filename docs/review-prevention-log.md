@@ -183,3 +183,27 @@ must be total: tolerate any shape, drop what it can't read, never assume the
 happy-path type.** `_row_id` returns `None` for anything that isn't a non-empty
 str or an `{id: str}` dict; `_project_ids` drops the `None`s. Regression:
 `test_live_models_tolerates_junk_rows`.
+
+## 13. Static snapshots can't catch temporal defects — instrument time, not frames
+
+*Origin: #239 (operator: "we're not looking at the site but a screenshot"); the
+#174 flicker and its regression both shipped through green QA.*
+A11y snapshots, console dumps, and network status are STILL readings — flicker,
+jank, and layout thrash are *temporal*, so a snapshot literally cannot contain
+them, and a green static pass proves nothing about motion. The dashboard verify
+loop now runs a **temporal pass** (SKILL.md step 4): observe an idle fixture for
+a window with zero interaction and assert `steadyStateCLS < 0.01` + every panel's
+`innerHTML` byte-stable + ≤1 element-rebuild/panel. Two instrumentation traps the
+probe design must avoid or every panel reads as churning: (a) measure CLS with a
+FRESH `PerformanceObserver` (no `buffered:true`) so expected load-time settling
+shifts don't count; (b) count only childList mutations that add/remove an
+ELEMENT node — the minute-granularity countdown ticker (#238) rewrites time-cell
+text nodes every second, which is benign motion. The probe immediately surfaced a
+latent case: only `renderRepos` carries the #164/#238 skip-unchanged guard; the
+other panel renders reassign `el.innerHTML` every SSE tick, rebuilding
+byte-identical DOM (node-identity churn). **Rule: a render that writes markup on a
+recurring tick needs a skip-unchanged guard, not an unconditional
+`el.innerHTML = …`; and any temporal probe must exclude load-settle CLS and
+text-node ticks or it cries wolf.** The read-only QA rail can't run a browser, so
+it carries the *static* twin (qa.md UX check): flag the unconditional-per-tick
+`innerHTML` pattern in review.

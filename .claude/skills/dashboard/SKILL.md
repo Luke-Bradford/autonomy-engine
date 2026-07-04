@@ -74,8 +74,52 @@ Run this before claiming any dashboard change done (pre-flight-review item J).
 3. **Check the three states** for any data-bearing section you touched:
    populated (fixture data) · empty (a repo with no sessions yet) · degraded
    (artifact missing — builders must render the fallback, not blank the page).
-4. Kill the server; note the verification (page, actions, console-clean) in
-   the PR's Testing section.
+4. **Temporal pass** (`evaluate_script` — flicker/jank/thrash are TEMPORAL; a
+   snapshot literally cannot contain them, so a green static pass is not enough
+   — the #174 flicker and its regression both shipped through green QA). Let the
+   fixture tick with ZERO interaction and instrument *time*, not frames:
+   ```js
+   // paste as one evaluate_script; observes an idle window then reports
+   async () => {
+     // steady-state CLS: fresh observer AFTER load settles (NO buffered:true --
+     // load-time settling shifts are expected; only post-load motion is a defect)
+     let cls = 0; const ls = new PerformanceObserver(l => {
+       for (const e of l.getEntries()) if (!e.hadRecentInput) cls += e.value; });
+     ls.observe({type:'layout-shift'});
+     // panel REBUILDS only: childList mutations adding/removing an ELEMENT node.
+     // Text-node rewrites from the minute-granularity countdown ticker (#238) are
+     // benign motion and MUST be excluded, or every panel reads as churning.
+     const ids = ['repos','focus','activity','handoffs','quota','history','needsyou','voice'];
+     const rebuild = {}, obs = [], hasEl = nl => [...nl].some(n => n.nodeType===1);
+     // stability compare BLANKS the known ticking cells (roster minute spans
+     // data-g, countdown .qreset) so a benign "5m"->"4m" rollover mid-window is
+     // not read as a rebuild -- only structural markup change trips this bar.
+     const norm = el => { const c = el.cloneNode(true);
+       c.querySelectorAll('[data-g],.qreset').forEach(n => n.textContent=''); return c.innerHTML; };
+     const snap = () => ids.reduce((o,id)=>{const e=document.getElementById(id); if(e) o[id]=norm(e); return o;}, {});
+     for (const id of ids) { const el=document.getElementById(id); if(!el) continue; rebuild[id]=0;
+       const mo=new MutationObserver(ms=>{for(const m of ms) if(m.type==='childList'&&(hasEl(m.addedNodes)||hasEl(m.removedNodes))) rebuild[id]++;});
+       mo.observe(el,{childList:true,subtree:true}); obs.push(mo); }
+     const h0 = snap();
+     await new Promise(r => setTimeout(r, 12000));   // idle, no interaction
+     ls.disconnect(); obs.forEach(o=>o.disconnect());
+     const h1 = snap(), stable = {}; for (const id in h0) stable[id] = h0[id]===h1[id];
+     return { steadyStateCLS:+cls.toFixed(4), elementRebuildsPerPanel:rebuild, innerHTMLStable:stable };
+   }
+   ```
+   Bar: **`steadyStateCLS` < 0.01**, every panel **`innerHTMLStable` true**, and
+   `elementRebuildsPerPanel` ≤ 1 on an unchanged fixture. A panel that rebuilds
+   its subtree every tick while its markup is byte-identical is a jank/flicker
+   risk (node-identity churn resets CSS transitions, `:hover`, text selection,
+   in-panel scroll) — the #174/#238 class. Only `renderRepos` carries the
+   skip-unchanged guard today; if you touch another panel's render, give it the
+   same guard rather than an unconditional `el.innerHTML = …` each tick.
+   **Dirty-control survival** (#202 defect 3 — an SSE re-render must not revert an
+   operator's un-saved edit): on `/config`, set a `select`/input via JS, fire its
+   `change`/`input` event, `await` ~6 s (2–3 poll cycles), assert the value is
+   still what you set. A control the tick clobbers is a `ux` blocker.
+5. Kill the server; note the verification (page, actions, console-clean, and the
+   temporal readings) in the PR's Testing section.
 
 Unit tests still carry the logic coverage (`tests/test_dashboard_state.py`,
 `tests/test_dashboard_control.py`); the browser loop is for what unit tests
