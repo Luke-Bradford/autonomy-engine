@@ -62,6 +62,13 @@ class TestSetModelPlan(unittest.TestCase):
         for bad in ("opus; rm -rf /", "a b", "x\ny", "claude$(boom)"):
             self.assertIn("error", dc.set_model_plan(self.repo, bad, "", "session"))
 
+    def test_accepts_local_llm_colon_model(self):
+        # #213: Ollama-style name:tag ids carry a colon; accept them so BYO-LLM
+        # roles can be set from the UI. Parity with supervisor.sh valid_model_id.
+        p = dc.set_model_plan(self.repo, "qwen3:14b", "", "session")
+        self.assertNotIn("error", p)
+        self.assertEqual(p["content"], "model=qwen3:14b\n")
+
     def test_rejects_unknown_effort(self):
         self.assertIn("error", dc.set_model_plan(self.repo, "", "turbo", "session"))
 

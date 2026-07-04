@@ -80,6 +80,19 @@ resolve_role_dispatch coder
 check "invalid role model blanked" "" "$ROLE_MODEL"
 check "invalid role effort blanked" "" "$ROLE_EFFORT"
 
+# a local-LLM model id carries a colon (Ollama-style name:tag, e.g. qwen3:14b).
+# It is VALID and must survive to argv -- blanking it silently falls back to the
+# agent.* default (opus), so the role runs the wrong model against a local
+# endpoint and produces nothing (#213).
+cat > "$AUTONOMY_TARGET_REPO/.autonomy/config.yaml" <<'YAML'
+roles:
+  coder:
+    enabled: true
+    model: "qwen3:14b"
+YAML
+resolve_role_dispatch coder
+check "colon (local-LLM) role model survives" "qwen3:14b" "$ROLE_MODEL"
+
 # --- per-role agent type (#78) -----------------------------------------------
 cat > "$AUTONOMY_TARGET_REPO/.autonomy/config.yaml" <<'YAML'
 roles:
