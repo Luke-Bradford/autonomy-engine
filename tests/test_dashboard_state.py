@@ -1676,6 +1676,64 @@ class TestEngineVersion(unittest.TestCase):
         self.assertFalse(st["stale"])
         self.assertFalse(st["supervisors"][0]["stale"])
 
+    # -- chip model (#240): the per-component decision the render consumes.
+    # engine_status embeds it so the branch logic that had the cry-wolf bug is
+    # exercised by run_all.sh, not only by the browser verify loop.
+    def test_chip_hidden_when_nothing_stale(self):
+        cur = "a" * 40
+        repos = [{"name": "r", "engine_boot": cur,
+                  "lifecycle": {"state": "running"}}]
+        chip = self._status(cur, cur, repos)["chip"]
+        self.assertFalse(chip["show"])
+        self.assertEqual(chip["mode"], "none")
+
+    def test_chip_dashboard_stale_is_a_restart_cta(self):
+        # the dashboard is the shell the operator restarts -> mode 'dashboard',
+        # carrying ITS OWN behind count for the CTA.
+        cur, old = "b" * 40, "a" * 40
+        repos = [{"name": "r", "engine_boot": cur,
+                  "lifecycle": {"state": "running"}}]
+        chip = self._status(cur, old, repos, behind_map={old: 3})["chip"]
+        self.assertTrue(chip["show"])
+        self.assertEqual(chip["mode"], "dashboard")
+        self.assertEqual(chip["dashboard_behind"], 3)
+
+    def test_chip_supervisor_only_is_informational_not_dashboard(self):
+        # defect 1: dashboard CURRENT, only a supervisor behind -> mode
+        # 'supervisors' (informational), never a dashboard restart demand.
+        cur, old = "b" * 40, "a" * 40
+        repos = [{"name": "r", "engine_boot": old,
+                  "lifecycle": {"state": "running"}}]
+        chip = self._status(cur, cur, repos, behind_map={old: 5})["chip"]
+        self.assertTrue(chip["show"])
+        self.assertEqual(chip["mode"], "supervisors")
+        self.assertIsNone(chip["dashboard_behind"])
+        self.assertEqual(chip["supervisors"],
+                         [{"repo": "r", "behind": 5, "known": True}])
+
+    def test_chip_unknown_sha_supervisor_marked_unknown_no_count(self):
+        # defect 2: a pre-tracking supervisor (sha "") is 'known': False so the
+        # render says 'version unknown', never a borrowed count.
+        cur = "a" * 40
+        repos = [{"name": "r", "engine_boot": "",
+                  "lifecycle": {"state": "running"}}]
+        chip = self._status(cur, cur, repos)["chip"]
+        self.assertEqual(chip["mode"], "supervisors")
+        self.assertEqual(chip["supervisors"],
+                         [{"repo": "r", "behind": None, "known": False}])
+
+    def test_chip_dashboard_stale_wins_and_lists_stale_supervisors(self):
+        # both behind -> the dashboard CTA is primary; stale supervisors still
+        # ride along (the render footnotes them), each with its own truth.
+        cur, d_old, s_unknown = "c" * 40, "a" * 40, ""
+        repos = [{"name": "r", "engine_boot": s_unknown,
+                  "lifecycle": {"state": "running"}}]
+        chip = self._status(cur, d_old, repos, behind_map={d_old: 2})["chip"]
+        self.assertEqual(chip["mode"], "dashboard")
+        self.assertEqual(chip["dashboard_behind"], 2)
+        self.assertEqual(chip["supervisors"],
+                         [{"repo": "r", "behind": None, "known": False}])
+
 
 class TestTokenTimeline(unittest.TestCase):
     """token_timeline (#188a): the tokens-over-time series that replaces the

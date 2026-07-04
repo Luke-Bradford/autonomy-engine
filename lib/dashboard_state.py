@@ -1126,6 +1126,46 @@ def engine_status(dashboard_boot, repos, head_reader=engine_head_sha,
         "supervisors": supervisors,
         "stale": stale,
         "behind": max(behinds) if behinds else None,
+        "chip": engine_update_chip(dashboard, supervisors),
+    }
+
+
+def engine_update_chip(dashboard, supervisors):
+    """The per-component render decision for the #196 update chip, kept here (not
+    in the page's JS) so the branch logic that caused the #240 cry-wolf bug is
+    exercised by run_all.sh. The chip must answer *which* component is behind and
+    *how loud* to be -- the aggregate `stale`/`behind` above cannot, which is the
+    whole bug.
+
+    - The DASHBOARD is the shell the operator sees and restarts, so its staleness
+      is the loud one: mode 'dashboard', carrying its OWN `dashboard_behind` for a
+      'pull + restart' call-to-action. It wins when both are behind.
+    - A behind SUPERVISOR while the dashboard is current is informational (mode
+      'supervisors'): supervisors hot-reload logic and self-refresh at a session
+      boundary, so a restart demand about the (current) dashboard would be the
+      cry-wolf (#240 defect 1). `dashboard_behind` stays None -- no aggregate
+      count leaks into that message.
+    - Each stale supervisor carries its OWN truth: `behind` when known, and
+      `known: False` for a pre-tracking sha ("") so the render says 'version
+      unknown' rather than borrowing a count (#240 defect 2). Fail-safe: an
+      unknown-sha LIVE supervisor is still surfaced, never hidden.
+    """
+    stale_sups = [{"repo": s.get("repo", ""),
+                   "behind": s.get("behind"),
+                   "known": bool(s.get("sha"))}
+                  for s in supervisors if s.get("stale")]
+    if dashboard.get("stale"):
+        mode = "dashboard"
+    elif stale_sups:
+        mode = "supervisors"
+    else:
+        mode = "none"
+    return {
+        "show": mode != "none",
+        "mode": mode,
+        "dashboard_behind": dashboard.get("behind") if mode == "dashboard"
+        else None,
+        "supervisors": stale_sups,
     }
 
 
