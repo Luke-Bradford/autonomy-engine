@@ -38,8 +38,8 @@ _API_ENV = {"anthropic_api": "ANTHROPIC_API_KEY", "openai_api": "OPENAI_API_KEY"
 # invented ids (fill this list only once the ids are confirmed against the real
 # codex CLI).
 _SUBSCRIPTION_MODELS = {
-    "claude_subscription": ["claude-opus-4-8", "claude-sonnet-5",
-                            "claude-haiku-4-5"],
+    "claude_subscription": ["claude-fable-5", "claude-opus-4-8",
+                            "claude-sonnet-5", "claude-haiku-4-5"],
     "codex_subscription": [],
 }
 

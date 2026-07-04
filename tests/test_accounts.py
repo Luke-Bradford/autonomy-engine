@@ -357,6 +357,9 @@ class TestListModels(unittest.TestCase):
                          ac._SUBSCRIPTION_MODELS["claude_subscription"])
         # the curated claude roster is non-empty and holds the shipped ids.
         self.assertIn("claude-opus-4-8", acc.list_models("sub"))
+        # claude-fable-5 is live on the operator's subscription (verified
+        # 2026-07-04: interactive sessions run it) -- the picker must offer it.
+        self.assertIn("claude-fable-5", acc.list_models("sub"))
 
     def test_list_models_codex_subscription_is_empty_seam(self):
         # codex model ids are unverified in-repo -> the curated roster is an
