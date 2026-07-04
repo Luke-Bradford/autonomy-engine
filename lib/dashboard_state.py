@@ -594,6 +594,64 @@ def merge_gate_chain(strategy):
     return [{"step": "pr"}]
 
 
+# The engine-standard workflow label that marks an issue as awaiting a human
+# decision -- the untriaged "needs you" queue (#189). Repo-agnostic: `needs-design`
+# is scaffolded by `onboard` on every target (settled-decision 24), so it is
+# engine vocabulary, NOT a target-repo-specific value. A repo's own extra
+# human-decision labels (e.g. this repo's `needs-spec`) are deliberately NOT baked
+# in here -- broadening this set, ideally config-driven, is a follow-up that pairs
+# with the PM rail (#89) once it emits structured triaged questions. Display-only
+# routing signal (#23); the tuple shape keeps that a one-line change.
+NEEDS_YOU_LABELS = ("needs-design",)
+
+
+def parse_needs_you(raw):
+    """Parse `gh issue list --json number,title,url,labels,updatedAt` output into
+    the untriaged needs-you list, newest first (#189 degraded state). Total: any
+    bad input (None / non-JSON / non-list / malformed shape) degrades to [] or a
+    skipped entry -- never raises. An entry is KEPT only if it has an int number
+    AND at least one NEEDS_YOU_LABELS label, so a broadened/mocked query can never
+    surface an unrelated issue as 'needs you' (fail-safe filter, settled 4/6;
+    display-only, #23)."""
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    wanted = set(NEEDS_YOU_LABELS)
+    out = []
+    for it in data:
+        if not isinstance(it, dict):
+            continue
+        num = it.get("number")
+        # bool is an int subclass -- exclude it explicitly.
+        if not isinstance(num, int) or isinstance(num, bool):
+            continue
+        raw_labels = it.get("labels")
+        labels = []
+        if isinstance(raw_labels, list):
+            for lb in raw_labels:
+                if isinstance(lb, dict) and isinstance(lb.get("name"), str):
+                    labels.append(lb["name"])
+        if not wanted.intersection(labels):
+            continue
+        title = it.get("title")
+        url = it.get("url")
+        at = it.get("updatedAt")
+        out.append({
+            "number": num,
+            "title": title if isinstance(title, str) else "",
+            "url": url if isinstance(url, str) else "",
+            "labels": labels,
+            "updated_at": at if isinstance(at, str) else "",
+        })
+    out.sort(key=lambda i: i["updated_at"], reverse=True)
+    return out
+
+
 def extract_ticket_ref(branch):
     """The issue number a branch is working, by the engine's feat/<n>- /
     fix/<n>- convention. None if the branch encodes no ticket."""

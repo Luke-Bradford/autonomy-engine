@@ -328,6 +328,9 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
       <div class="sh"><h2>Handoffs</h2><span class="ln"></span></div>
       <div class="panel"><div class="p-h" style="border-bottom:1px solid var(--hair)"><span class="sub">the org's choreography — cron fires &amp; event wakes handing work to a role</span></div><div class="hfeed" id="handoffs"></div></div>
 
+      <div class="sh"><h2>Needs you</h2><span class="ln"></span><span class="ct">untriaged · pending PM triage (#89)</span></div>
+      <div class="panel"><div class="p-h" style="border-bottom:1px solid var(--hair)"><span class="sub">open issues awaiting a human decision — labelled needs-design</span></div><div class="hfeed" id="needsyou"></div></div>
+
       <div class="sh"><h2>Supervisor voice</h2><span class="ln"></span></div>
       <div class="panel"><div class="p-h" style="border-bottom:1px solid var(--hair)"><span class="sub">the loop's own decisions — pacing, backoff, usage limits (not the agent's work)</span></div><div class="voice" id="voice"></div></div>
 
@@ -343,6 +346,10 @@ const $=(id)=>document.getElementById(id);
 let VIEW="tree", LAST=null, GEN=0;
 
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+// gh-sourced URLs are canonical https, but guard the href scheme anyway so a
+// javascript:/data: value can never become executable on click (defence in
+// depth). Returns "" for anything that isn't http(s), so callers render text.
+function safeHref(u){u=String(u==null?"":u);return /^https?:\/\//i.test(u)?u:"";}
 /* attribute-safe repo ref: encodeURIComponent leaves ' alone, which would
    break out of single-quoted onclick attributes -- %27 keeps it inert and
    decodeURIComponent still restores it */
@@ -452,7 +459,7 @@ function renderFocus(repos){
         : (ft.ci||ft.review)
           ? `${ft.ci?`<span class="chip c-${esc(ft.ci)}">ci ${esc(ft.ci)}</span>`:""}${ft.review?`<span class="chip c-${esc(ft.review)}">${esc(ft.review.replace("_"," "))}</span>`:""}`
           : `<span class="chip c-none">last worked</span>${stateChip}`;
-      ticket=`<div class="fc-ticket"><span class="no${ft.source?" src":""}"${ft.source?` title="picked: ${esc(ft.source)}"`:""}>#${ft.number}</span><span class="tt">${ft.url?`<a href="${esc(ft.url)}" target="_blank">${esc(short(ft.title||"ticket",42))}</a>`:esc(short(ft.title||"ticket",42))}</span>
+      ticket=`<div class="fc-ticket"><span class="no${ft.source?" src":""}"${ft.source?` title="picked: ${esc(ft.source)}"`:""}>#${ft.number}</span><span class="tt">${safeHref(ft.url)?`<a href="${esc(safeHref(ft.url))}" target="_blank">${esc(short(ft.title||"ticket",42))}</a>`:esc(short(ft.title||"ticket",42))}</span>
       <span style="margin-left:auto;display:flex;gap:5px">${right}</span></div>`;
     }
     let stepLine;
@@ -867,6 +874,18 @@ function renderHandoffs(repos){
     return `<div class="hln"><span class="chip">${esc(e.role)}</span><span class="hact">${many?"["+esc(x.repo)+"] ":""}${esc(handoffText(e))}</span>${when}</div>`;}).join("");
   const h=$("handoffs");h.scrollTop=h.scrollHeight;}
 
+/* ---- NEEDS YOU (#189 degraded state: untriaged human-decision queue) ---- */
+function renderNeedsYou(repos){
+  const rows=[];repos.forEach(r=>((r.git&&r.git.needs_you)||[]).forEach(i=>rows.push({repo:r.name,i})));
+  const many=repos.filter(r=>r.git&&(r.git.needs_you||[]).length).length>1;
+  if(!rows.length){$("needsyou").innerHTML=`<div class="empty">Nothing awaiting a decision — needs-design issues appear here.</div>`;return;}
+  $("needsyou").innerHTML=rows.map(x=>{const i=x.i;
+    const labs=(i.labels||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join("");
+    const num=i.number!=null?("#"+esc(i.number)):"";
+    const href=safeHref(i.url);
+    const link=href?`<a href="${esc(href)}" target="_blank" rel="noopener">${num}</a>`:num;
+    return `<div class="hln">${labs}<span class="hact">${many?"["+esc(x.repo)+"] ":""}${link} ${esc(i.title)}</span></div>`;}).join("");}
+
 /* ---- VOICE ---- */
 function vcls(l){if(/USAGE LIMIT/i.test(l))return "limit";if(/PAUSE|resuming|graceful/i.test(l))return "pause";
   if(/error|fail|abort|cannot/i.test(l))return "err";if(/session clean|board empty/i.test(l))return "clean";
@@ -886,14 +905,14 @@ function renderGit(repos){
   $("c-prs").textContent=prs.length?prs.length+" open":"";
   let html="";
   if(prs.length){
-    html+=prs.map(p=>`<div class="pr"><div class="p1"><span class="num">#${p.number}</span><span class="pt">${p.url?`<a href="${esc(p.url)}" target="_blank">${esc(short(p.title,38))}</a>`:esc(short(p.title,38))}</span></div>
+    html+=prs.map(p=>`<div class="pr"><div class="p1"><span class="num">#${p.number}</span><span class="pt">${safeHref(p.url)?`<a href="${esc(safeHref(p.url))}" target="_blank">${esc(short(p.title,38))}</a>`:esc(short(p.title,38))}</span></div>
       <div class="p2"><span class="chip">${esc(short(p.repo,16))}</span><span class="chip c-${esc(p.ci)}">ci ${esc(p.ci)}</span>${p.review?`<span class="chip c-${esc(p.review)}">${esc(p.review.replace("_"," "))}</span>`:""}${p.qa&&p.qa!=="none"?`<span class="chip c-${esc(p.qa)}">qa ${esc(p.qa)}</span>`:""}${p.mergeable?`<span class="chip c-${esc(p.mergeable)}">${esc(p.mergeable)}</span>`:""}${p.draft?`<span class="chip">draft</span>`:""}</div></div>`).join("");
   }else{
     html+=repos.filter(r=>r.git&&r.git.branch).map(r=>`<div class="pr"><div class="p1"><span class="pt" style="color:var(--mut)">${esc(r.name)}</span><span class="chip" style="margin-left:auto">${esc(r.git.branch)}${r.git.dirty?" · dirty":""}</span></div></div>`).join("")||`<div class="empty">Nothing open.</div>`;
   }
   if(merged.length){
     html+=`<div class="p-h" style="border-top:1px solid var(--hair)"><span class="sub" style="color:var(--dim)">recently completed</span></div>`;
-    html+=merged.slice(0,6).map(p=>`<div class="pr" style="padding:8px 14px"><div class="p1"><span class="dot s-done"></span><span class="num" style="color:var(--ok-dim)">#${p.number}</span><span class="pt" style="font-size:12px">${p.url?`<a href="${esc(p.url)}" target="_blank">${esc(short(p.title,40))}</a>`:esc(short(p.title,40))}</span>${p.merged_epoch?`<span class="mono agox" style="margin-left:auto;flex:none;color:var(--dim);font-size:10px" data-t="${p.merged_epoch}">${ago(nowS()-p.merged_epoch)} ago</span>`:""}</div></div>`).join("");
+    html+=merged.slice(0,6).map(p=>`<div class="pr" style="padding:8px 14px"><div class="p1"><span class="dot s-done"></span><span class="num" style="color:var(--ok-dim)">#${p.number}</span><span class="pt" style="font-size:12px">${safeHref(p.url)?`<a href="${esc(safeHref(p.url))}" target="_blank">${esc(short(p.title,40))}</a>`:esc(short(p.title,40))}</span>${p.merged_epoch?`<span class="mono agox" style="margin-left:auto;flex:none;color:var(--dim);font-size:10px" data-t="${p.merged_epoch}">${ago(nowS()-p.merged_epoch)} ago</span>`:""}</div></div>`).join("");
   }
   $("git").innerHTML=html;
 }
@@ -923,7 +942,7 @@ function renderEngineUpdate(e){
 }
 function render(s){LAST=s;GEN=s.generated_at||Math.floor(nowS());
   renderFocus(s.repos);renderHistory(s.repos);renderRepos(s.repos);renderQuota(s.repos,s.account);renderActivity(s.repos);
-  renderTokens(s.repos);renderHandoffs(s.repos);renderVoice(s.repos);renderGit(s.repos);renderEngineUpdate(s.engine);}
+  renderTokens(s.repos);renderHandoffs(s.repos);renderNeedsYou(s.repos);renderVoice(s.repos);renderGit(s.repos);renderEngineUpdate(s.engine);}
 function setLive(ok){$("h-live").classList.toggle("stale",!ok);$("h-live-t").textContent=ok?"live":"reconnecting";}
 function connect(){let es;try{es=new EventSource("/api/stream");}catch(e){poll();return;}
   es.onopen=()=>setLive(true);es.onmessage=e=>{try{render(JSON.parse(e.data));setLive(true);}catch(_){}}; es.onerror=()=>setLive(false);}

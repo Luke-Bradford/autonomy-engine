@@ -1152,6 +1152,68 @@ class TestCodexSessionParse(unittest.TestCase):
         self.assertEqual(s["status"], "done-error")
 
 
+class TestParseNeedsYou(unittest.TestCase):
+    """The untriaged needs-you list (#189 degraded state): parse gh issue-list
+    JSON into the human-decision queue, kept only for NEEDS_YOU_LABELS issues,
+    newest first, total against any malformed input (fail-safe, Codex CP1)."""
+
+    def test_parses_and_sorts_desc_by_updated(self):
+        raw = json.dumps([
+            {"number": 1, "title": "old", "url": "u1",
+             "labels": [{"name": "needs-design"}], "updatedAt": "2026-07-01T00:00:00Z"},
+            {"number": 2, "title": "new", "url": "u2",
+             "labels": [{"name": "needs-design"}, {"name": "p2"}], "updatedAt": "2026-07-03T00:00:00Z"},
+        ])
+        out = ds.parse_needs_you(raw)
+        self.assertEqual([i["number"] for i in out], [2, 1])
+        self.assertEqual(out[0]["labels"], ["needs-design", "p2"])
+        self.assertEqual(out[0]["updated_at"], "2026-07-03T00:00:00Z")
+
+    def test_none_and_empty_and_garbage_yield_empty(self):
+        for raw in (None, "", "not json", "{}", "[42]"):
+            self.assertEqual(ds.parse_needs_you(raw), [])
+
+    def test_non_engine_standard_labels_are_dropped(self):
+        # only NEEDS_YOU_LABELS (engine-standard) matches; a repo's own extra
+        # human-decision label (e.g. needs-spec) is not baked in (repo-agnostic).
+        raw = json.dumps([
+            {"number": 5, "title": "t", "url": "u", "labels": [{"name": "bug"}], "updatedAt": "z"},
+            {"number": 6, "title": "t", "url": "u", "labels": [{"name": "needs-spec"}], "updatedAt": "z"},
+        ])
+        self.assertEqual(ds.parse_needs_you(raw), [])
+
+    def test_entry_without_int_number_is_dropped(self):
+        raw = json.dumps([
+            {"number": None, "title": "t", "url": "u",
+             "labels": [{"name": "needs-design"}], "updatedAt": "z"},
+            {"title": "t2", "url": "u2",
+             "labels": [{"name": "needs-design"}], "updatedAt": "z"},
+        ])
+        self.assertEqual(ds.parse_needs_you(raw), [])
+
+    def test_malformed_shapes_do_not_crash(self):
+        raw = json.dumps([
+            {"number": 7, "title": "t", "url": "u", "labels": 1, "updatedAt": "z"},
+            {"number": 8, "title": "t", "url": "u",
+             "labels": [{"name": "needs-design"}], "updatedAt": 1},
+            {"number": {}, "labels": [{"name": "needs-design"}], "updatedAt": "z"},
+            42,
+        ])
+        out = ds.parse_needs_you(raw)
+        self.assertEqual([i["number"] for i in out], [8])
+        self.assertEqual(out[0]["updated_at"], "")
+
+    def test_bool_number_is_not_treated_as_int(self):
+        raw = json.dumps([{"number": True, "title": "t", "url": "u",
+                           "labels": [{"name": "needs-design"}], "updatedAt": "z"}])
+        self.assertEqual(ds.parse_needs_you(raw), [])
+
+    def test_labels_normalised_to_names(self):
+        raw = json.dumps([{"number": 7, "title": "t", "url": "u",
+                           "labels": [{"name": "needs-design"}, {"color": "x"}],
+                           "updatedAt": ""}])
+        self.assertEqual(ds.parse_needs_you(raw)[0]["labels"], ["needs-design"])
+
 
 if __name__ == "__main__":
     unittest.main()
