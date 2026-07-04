@@ -496,8 +496,17 @@ class Accounts:
             live = live_claude_models()
             if live:
                 # labels reads the same cache live_claude_models just refreshed.
-                return {"source": "live", "models": list(live),
-                        "labels": live_claude_model_labels()}
+                # The two calls take the cache lock separately, so a refresh
+                # could slip between them; restrict labels to ids actually in
+                # `models` so the response is always internally consistent (a
+                # label for an absent id would just confuse the picker). A
+                # newly-appeared id simply loses its label -> provenance
+                # fallback; harmless (#208 review nitpick).
+                ids = list(live)
+                idset = set(ids)
+                labels = {k: v for k, v in live_claude_model_labels().items()
+                          if k in idset}
+                return {"source": "live", "models": ids, "labels": labels}
             return {"source": "curated", "models": subscription_models(kind),
                     "labels": {}}
         source = model_source(kind)

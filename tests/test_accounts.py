@@ -664,6 +664,26 @@ class TestLiveSubscriptionModels(unittest.TestCase):
         finally:
             ac.live_claude_models = saved
 
+    def test_discover_models_labels_subset_of_models(self):
+        # #208 review nitpick: live_claude_models and live_claude_model_labels
+        # take the cache lock separately, so a refresh could leave the cache
+        # holding a model the ids list doesn't. labels must never carry an id
+        # absent from `models` -- the response stays internally consistent.
+        acc = self._acc_with_sub()
+        saved = ac.live_claude_models
+        try:
+            ac.live_claude_models = lambda *a, **k: ["claude-fable-5"]
+            with ac._live_models_lock:
+                ac._live_models_cache.update(
+                    seen=True, ts=1e18, inflight=False,
+                    val=[{"id": "claude-fable-5", "display_name": "Fable 5"},
+                         {"id": "claude-opus-4-8", "display_name": "Opus 4.8"}])
+            d = acc.discover_models("sub")
+            self.assertEqual(d["models"], ["claude-fable-5"])
+            self.assertEqual(d["labels"], {"claude-fable-5": "Fable 5"})
+        finally:
+            ac.live_claude_models = saved
+
     def test_discover_models_openai_and_none(self):
         tmp = tempfile.mkdtemp()
         acc = ac.Accounts(index_path=os.path.join(tmp, "accounts"),
