@@ -121,6 +121,16 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
 20. **Tests are genuine** — real scripts sourced, stubs only at the
     established seams. *(CLAUDE.md; test-quality skill.)*
 
+26. **Done once, done everywhere — owned by the merge gate.** Completion is a
+    single atomic checklist (issue closed where the PR says so, board status
+    Done for closed / Ready for still-open multi-slice tickets, branch
+    deleted, dependents unblocked), and it executes at the MERGE, inside
+    `safe_merge.sh` — the one chokepoint every workflow shape passes through
+    (coder-driven, QA `auto-merge-on-pass`, human-invoked). Roles never own
+    done-marking as a duty: whoever triggers the merge gets hygiene for free;
+    the PM sweep is backstop only. Board writes stay best-effort (decision 6).
+    *(Operator decision 2026-07-04.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could
