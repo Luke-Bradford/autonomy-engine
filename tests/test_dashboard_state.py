@@ -1816,6 +1816,39 @@ class TestTriggerHealth(unittest.TestCase):
         self.assertFalse(out[0]["missed"])
         self.assertIsNotNone(out[0]["expected_next"])
 
+    def _repo_with_cron(self, marker_epoch, schedule="*/15 * * * *", name="pm"):
+        repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        os.makedirs(os.path.join(repo, ".autonomy"))
+        os.makedirs(os.path.join(repo, "var", "autonomy-logs"))
+        os.makedirs(os.path.join(repo, "var", "cron"))
+        with open(os.path.join(repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("roles:\n  %s:\n    enabled: true\n"
+                     "    trigger:\n      type: cron\n      schedule: \"%s\"\n"
+                     % (name, schedule))
+        if marker_epoch is not None:
+            self._write_marker(os.path.join(repo, "var", "cron"), name, marker_epoch)
+        return repo
+
+    def test_build_repo_state_flags_missed_fire_on_role(self):
+        # #188c render seam: build_repo_state annotates each role row with a
+        # `missed_fire` flag from trigger_health, so the fleet rail can surface
+        # the swept-state incident (a stalled cron fire) that otherwise looks
+        # identical to a healthy idle role.
+        repo = self._repo_with_cron(self.NOW - 3600)   # frozen an hour ago -> missed
+        st = ds.build_repo_state(repo, git_in_flight=lambda _p: {}, now=self.NOW)
+        pm = next(r for r in st["roles"] if r["name"] == "pm")
+        self.assertTrue(pm["missed_fire"])
+        # a role with no cron schedule is never flagged
+        coder = next(r for r in st["roles"] if r["name"] == "coder")
+        self.assertFalse(coder["missed_fire"])
+
+    def test_build_repo_state_healthy_cron_not_flagged(self):
+        repo = self._repo_with_cron(self.NOW - 60)     # fired a minute ago -> healthy
+        st = ds.build_repo_state(repo, git_in_flight=lambda _p: {}, now=self.NOW)
+        pm = next(r for r in st["roles"] if r["name"] == "pm")
+        self.assertFalse(pm["missed_fire"])
+
     def test_stale_marker_past_expected_fire_plus_grace_is_missed(self):
         d = self._marker_dir()
         # every-15-min schedule; marker frozen an hour ago -> expected fires
