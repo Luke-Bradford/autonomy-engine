@@ -143,6 +143,20 @@ class TestPageTemplating(unittest.TestCase):
         self.assertIn(injected, html)
         self.assertIn(b'"claude-opus-4-8"', html)
 
+    def test_config_model_field_is_select_with_custom_escape(self):
+        # #273: the config page's model fields must be REAL <select> pickers,
+        # not free-text datalist inputs (Safari renders a datalist as a bare text
+        # box, so it read as hard-typing). The build-time source is asserted here;
+        # runtime behaviour is covered by the dashboard browser-verify loop.
+        html = dashboard._page_bytes(dashboard.CONFIG_PAGE)
+        # the model field builds a <select> tagged cfgmodel...
+        self.assertIn(b'class="cfgin cfgmodel"', html)
+        # ...with a custom... escape hatch (BYO-LLM / local ids stay free-text, #78)
+        self.assertIn(b'__custom__', html)
+        self.assertIn(b'cfgcustom', html)
+        # ...and the old datalist-backed text input for models is gone.
+        self.assertNotIn(b'<input class="cfgin" list="cfg-models"', html)
+
 
 class TestControlRoomShell(unittest.TestCase):
     """UI-1 (#184): the control-room skin + shell. The reskin restructures the

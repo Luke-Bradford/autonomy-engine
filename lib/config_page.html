@@ -303,19 +303,38 @@ let MODEL=null;
 // one), `label` carries "<account> · <source>" so a cross-account suggestion
 // shows WHERE it came from (the datalist is shared across every model field).
 let LIVE_MODELS=[];
-function modelOptions(){
-  // id -> option label. A real display_name (#206) always wins so the picker
-  // shows "Claude Opus 4.8" not a bare id; else the provenance ("<acct>·<src>"),
-  // else "curated" for a build-time id no live account reported.
+// #273: the same curated∪live merge (a real display_name #206 wins as the label,
+// else provenance "<acct>·<src>", else "curated" for a build-time id no live
+// account reported), but as real <option>
+// elements for a <select> picker (not datalist suggestions). `cur` is the
+// currently-configured id: it is always present + selected even when the roster
+// does not list it (an unknown/BYO id stays visible, same rule as the main
+// page's modelCtl). A leading blank ("— none —") keeps an unset field
+// representable, and a trailing `__custom__` sentinel reveals a free-text input
+// so BYO-LLM / local openai_compatible ids (#78) stay typeable.
+function modelSelectOptions(cur){
+  cur=(cur||"").trim();
   const seen=new Map();
   MODEL_CHOICES.forEach(id=>{ if(!seen.has(id)) seen.set(id,"curated"); });
   LIVE_MODELS.forEach(m=>{ if(!m.id) return;
-    if(m.display) seen.set(m.id,m.display);          // human name wins
-    else if(!seen.has(m.id)) seen.set(m.id,m.label); // else provenance for a new id
-  });
-  return [...seen].map(([id,label])=>`<option value="${esc(id)}" label="${esc(label)}"></option>`).join("");
+    if(m.display) seen.set(m.id,m.display);
+    else if(!seen.has(m.id)) seen.set(m.id,m.label); });
+  if(cur && !seen.has(cur)) seen.set(cur,"configured");
+  let opts=`<option value=""${cur===""?" selected":""}>— none —</option>`;
+  opts+=[...seen].map(([id,label])=>
+    `<option value="${esc(id)}"${id===cur?" selected":""}>${esc(id)} · ${esc(label)}</option>`).join("");
+  opts+=`<option value="__custom__">custom…</option>`;
+  return opts;
 }
-function updateModelDatalist(){ const dl=$("cfg-models"); if(dl) dl.innerHTML=modelOptions(); }
+// Rebuild every untouched model <select> when live discovery arrives (loadModels
+// resolves after renderCfg). A select the operator has already changed (.dirty)
+// is left alone so late-arriving options never clobber an in-flight edit.
+function updateModelSelects(){
+  document.querySelectorAll("select.cfgmodel").forEach(sel=>{
+    if(sel.classList.contains("dirty")) return;
+    sel.innerHTML=modelSelectOptions(sel.dataset.cur||"");
+  });
+}
 function loadModels(){
   fetch("/api/models").then(r=>r.json()).then(d=>{
     if(d.error) return;                     // backend fault -> ignore discovered models (fail-safe)
@@ -324,7 +343,7 @@ function loadModels(){
       const labels=a.labels||{};
       (a.models||[]).forEach(id=>out.push({id,display:labels[id]||"",label:`${a.name} · ${a.source}`}));
     });
-    LIVE_MODELS=out; updateModelDatalist();
+    LIVE_MODELS=out; updateModelSelects();
   }).catch(()=>{});                         // best-effort: never toast, never block config render
 }
 
@@ -455,12 +474,10 @@ function renderCfg(repos){
       ${cfgSelect(enc,"merge_gate.strategy","merge gate",STRATEGIES,c.merge_gate)}
     </div>`;
   }).join("");
-  // One shared <datalist> feeds every model field's suggestions: the curated
-  // build-time roster plus any live per-account discoveries, each option labelled
-  // with its provenance (#82).
-  const models=`<datalist id="cfg-models">${modelOptions()}</datalist>`;
+  // #273: model fields are now real <select> pickers (cfgFieldList builds each
+  // one inline from modelSelectOptions), so the old shared <datalist> is gone.
   $("cfg").innerHTML=`<div class="cfgadd"><input id="cfg-add" class="cfgin" placeholder="/absolute/path/to/repo"><button class="cbtn go" onclick="repoAdd()">add repo</button></div>`
-    +models+(rows||`<div class="hint">no repos registered — add one above.</div>`);
+    +(rows||`<div class="hint">no repos registered — add one above.</div>`);
   refreshAllBoards();
 }
 // board.project_title picker (#170): the title input is backed by a per-repo
@@ -530,10 +547,30 @@ function cfgUseOwner(btn){
   if(hint) hint.remove();
   refreshRepoBoards(repoEl);
 }
-// Like cfgField but backed by the shared model datalist: suggestions from the
-// curated roster, yet still free-text (type any custom/local model id). #82.
+// #273: a real <select> model picker (options = curated∪live roster, source-
+// labelled) with a `custom…` escape hatch revealing a free-text input for BYO /
+// local ids (#78). `data-cur` + `.dirty` match the main page's chosen-but-unsaved
+// contract (#202); cfgSave reads the custom input when the sentinel is chosen.
 function cfgFieldList(enc,key,label,val){
-  return `<div class="cfgrow"><span class="cfglab">${esc(label)}</span><input class="cfgin" list="cfg-models" name="${key}" data-key="${key}" value="${esc(val||"")}"><button class="cbtn" onclick="cfgSave(this,'${enc}','${key}')">save</button></div>`;
+  const cur=(val||"").trim();
+  return `<div class="cfgrow"><span class="cfglab">${esc(label)}</span>`
+    +`<select class="cfgin cfgmodel" name="${key}" data-key="${key}" data-cur="${esc(cur)}" onchange="onModelSelect(this)">${modelSelectOptions(cur)}</select>`
+    +`<input class="cfgin cfgcustom" name="${key}.custom" aria-label="custom model id" placeholder="custom model id (e.g. gpt-4o-mini)" oninput="onCustomInput(this)" hidden>`
+    +`<button class="cbtn" onclick="cfgSave(this,'${enc}','${key}')">save</button></div>`;
+}
+// Reveal/hide the free-text input as the `custom…` sentinel is (de)selected, and
+// keep the .dirty flag tracking the EFFECTIVE value (custom text when custom).
+function onModelSelect(sel){
+  const row=sel.closest(".cfgrow");
+  const cin=row.querySelector(".cfgcustom");
+  const custom=sel.value==="__custom__";
+  if(cin){ cin.hidden=!custom; if(custom) cin.focus(); }
+  const eff=custom?((cin&&cin.value.trim())||""):sel.value;
+  sel.classList.toggle("dirty", eff!==sel.dataset.cur);
+}
+function onCustomInput(cin){
+  const sel=cin.closest(".cfgrow").querySelector(".cfgmodel");
+  if(sel) sel.classList.toggle("dirty", cin.value.trim()!==sel.dataset.cur);
 }
 function cfgSelect(enc,key,label,opts,val){
   return `<div class="cfgrow"><span class="cfglab">${esc(label)}</span><select class="cfgin" name="${key}" data-key="${key}">${opts.map(o=>`<option ${o===val?"selected":""}>${o}</option>`).join("")}</select><button class="cbtn" onclick="cfgSave(this,'${enc}','${key}')">save</button></div>`;
@@ -541,7 +578,13 @@ function cfgSelect(enc,key,label,opts,val){
 function cfgSave(btn,enc,key){
   const repo=decodeURIComponent(enc);
   const el=btn.closest(".cfgrow").querySelector("[data-key]");
-  const value=el.value.trim();
+  let value=el.value.trim();
+  // #273: a model <select> on the `custom…` sentinel takes its value from the
+  // revealed free-text input instead (BYO / local ids stay typeable, #78).
+  if(el.tagName==="SELECT" && value==="__custom__"){
+    const cin=btn.closest(".cfgrow").querySelector(".cfgcustom");
+    value=(cin&&cin.value.trim())||"";
+  }
   // #202/#211: model/effort AND board.owner/board.project_title persist as an
   // untracked local override under var/ (survives the loop's preflight);
   // merge_gate.strategy still edits committed config.yaml. Keep this in sync
