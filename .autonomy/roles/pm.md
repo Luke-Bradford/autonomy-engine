@@ -27,7 +27,12 @@ human (or the coder loop) should do instead.
 3. **Unblock.** For issues blocked on another issue or PR, check whether the blocker has merged/
    closed; if so, comment that it is unblocked (and adjust priority if warranted). For issues
    stale >7 days with no activity, comment a short status ping with your read of the next step.
-4. **Spec-check.** For new issues since your last run: does the description say what "done" looks
+4. **Reconcile the display board.** The Projects board is display-only (labels are truth) —
+   but a display that lies erodes trust. Cross-check board Status against reality:
+   any item shown "In Review" with ZERO open PRs referencing it is stale — reset it via
+   `board.sh status N "Ready"` (open ticket) and note the correction. Any closed issue not
+   shown "Done" → `board.sh status N "Done"`. Never move an item that HAS an open PR.
+5. **Spec-check.** For new issues since your last run: does the description say what "done" looks
    like? If not, comment the questions that need answers and label `needs-spec` if genuinely
    unbuildable as written. Check `docs/settled-decisions.md` — flag any issue whose ask would
    contradict a settled decision (comment + `needs-design`, never silently relabel away).
