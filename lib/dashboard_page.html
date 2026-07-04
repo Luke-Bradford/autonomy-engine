@@ -453,6 +453,11 @@ function renderFocus(repos){
     }
     const elapsed = busy&&cs.started_epoch ? `elapsed <b class="upe mono" data-e="${cs.started_epoch}">${dur(nowS()-cs.started_epoch)}</b>`
                   : cs.updated_at ? `last active <b class="agox mono" data-t="${cs.updated_at}">${ago(nowS()-cs.updated_at)} ago</b>` : "";
+    // #186 lane detail: total effort this ticket has cost, summed server-side
+    // across its sessions (keyed on the worked issue). Shown only when the
+    // ticket has recorded effort.
+    const eff=r.ticket_effort;
+    const effortMeta = eff ? `<span title="total across this ticket's sessions">this ticket <b class="b">${eff.sessions}</b> sess · <b class="mono">${compact(eff.tokens)}</b> tok${eff.cost?` · <b class="mono">$${eff.cost.toFixed(2)}</b>`:""}</span>` : "";
     return `<div class="fcard ${st}" data-path="${encodeURIComponent(r.path)}">
       <div class="fc-top">
         <span class="fc-name">${esc(dispName(r.name))}</span>
@@ -461,7 +466,7 @@ function renderFocus(repos){
         <span class="fc-model">${esc(cs.model||(r.config&&r.config.model)||"")}</span>
       </div>
       ${ticket}${stepLine}
-      <div class="fc-meta"><span>${elapsed}</span>${cs.output_tokens!=null?`<span>out <b class="mono">${num(cs.output_tokens)}</b> tok</span>`:""}${cs.cost_usd?`<span>cost <b class="mono">$${cs.cost_usd.toFixed(2)}</b></span>`:""}</div>
+      <div class="fc-meta"><span>${elapsed}</span>${cs.output_tokens!=null?`<span>out <b class="mono">${num(cs.output_tokens)}</b> tok</span>`:""}${cs.cost_usd?`<span>cost <b class="mono">$${cs.cost_usd.toFixed(2)}</b></span>`:""}${effortMeta}</div>
       ${controls(r,st)}${modelCtl(r,st)}
     </div>`;
   });

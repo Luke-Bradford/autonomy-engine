@@ -1035,6 +1035,26 @@ class TestRecentSessions(unittest.TestCase):
         self.assertEqual(got[0]["tokens"], 200)
         self.assertEqual(got[0]["ticket"], 88)
 
+    def test_carries_cost_from_result(self):
+        # #186 lane-detail effort: recent_sessions must surface each session's
+        # cost so ticket_effort can total $ across a ticket's sessions.
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        self._write(d, "session-a.log", [
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Working #42"}],
+             "usage": {"output_tokens": 10}}},
+            {"type": "result", "is_error": False, "total_cost_usd": 3.25,
+             "usage": {"output_tokens": 100}, "result": "done"}])
+        got = ds.recent_sessions(d)[0]
+        self.assertAlmostEqual(got["cost"], 3.25, places=4)
+
+    def test_cost_zero_when_result_omits_it(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        self._write(d, "session-a.log", self._clean(57, 100))   # no total_cost_usd
+        self.assertEqual(ds.recent_sessions(d)[0]["cost"], 0)
+
     def test_outcome_error(self):
         d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, d, ignore_errors=True)
@@ -1674,3 +1694,52 @@ class TestTriggerHealth(unittest.TestCase):
         st = ds.build_repo_state(FIX, git_in_flight=lambda p: {}, now=self.NOW)
         self.assertIn("trigger_health", st)
         self.assertIsInstance(st["trigger_health"], list)
+
+
+class TestTicketEffort(unittest.TestCase):
+    """ticket_effort (#186 lane detail): the total work a single ticket has
+    cost -- session count, output tokens, $ -- summed across every recent
+    session that worked it. Pure over the recent_sessions() list; total by
+    construction (feeds the whole-dashboard render, so it must never raise)."""
+
+    NOW = 1893456000
+
+    def _s(self, ticket, tokens, cost):
+        return {"ticket": ticket, "tokens": tokens, "cost": cost}
+
+    def test_sums_only_matching_ticket(self):
+        sessions = [self._s(82, 60000, 8.00), self._s(82, 36000, 4.40),
+                    self._s(57, 5000, 1.00)]
+        got = ds.ticket_effort(sessions, 82)
+        self.assertEqual(got, {"sessions": 2, "tokens": 96000, "cost": 12.40})
+
+    def test_no_active_ticket_is_none(self):
+        self.assertIsNone(ds.ticket_effort([self._s(82, 10, 1.0)], None))
+
+    def test_ticket_absent_from_sessions_is_none(self):
+        self.assertIsNone(ds.ticket_effort([self._s(57, 10, 1.0)], 82))
+
+    def test_empty_sessions_is_none(self):
+        self.assertIsNone(ds.ticket_effort([], 82))
+
+    def test_cost_rounds_to_cents(self):
+        got = ds.ticket_effort([self._s(9, 1, 0.111), self._s(9, 1, 0.222)], 9)
+        self.assertEqual(got["cost"], 0.33)
+
+    def test_non_numeric_fields_degrade_to_zero_not_raise(self):
+        # a torn session dict (missing/None/garbage tokens or cost) must
+        # contribute 0, never blow up the render (prevention-log #12).
+        sessions = [self._s(5, None, None), {"ticket": 5},
+                    {"ticket": 5, "tokens": "x", "cost": "y"},
+                    self._s(5, 100, 2.0)]
+        got = ds.ticket_effort(sessions, 5)
+        self.assertEqual(got, {"sessions": 4, "tokens": 100, "cost": 2.0})
+
+    def test_build_repo_state_includes_ticket_effort(self):
+        # the FIX fixture's newest session works #57; ticket_effort totals it.
+        st = ds.build_repo_state(FIX, git_in_flight=lambda p: {}, now=self.NOW)
+        self.assertIn("ticket_effort", st)
+        eff = st["ticket_effort"]
+        self.assertIsNotNone(eff)
+        self.assertEqual(set(eff), {"sessions", "tokens", "cost"})
+        self.assertGreaterEqual(eff["sessions"], 1)
