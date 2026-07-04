@@ -63,6 +63,13 @@ class TestMergeGateChain(unittest.TestCase):
         self.assertEqual(ds.merge_gate_chain("  bot_comment  "),
                          ds.merge_gate_chain("bot_comment"))
 
+    def test_non_string_strategy_degrades_without_crashing(self):
+        # build_repo_state renders the whole dashboard -- a malformed config
+        # shape (e.g. an un-flattened `merge_gate:` dict block) must degrade,
+        # never raise. None is unset -> manual; a dict/int is malformed -> [pr].
+        for bad in ({"strategy": "bot_comment"}, 5, ["ci_only"]):
+            self.assertEqual(ds.merge_gate_chain(bad), [{"step": "pr"}])
+
 
 class TestConfigOverlay(unittest.TestCase):
     """#202: the persistent operator overlay (var/autonomy-logs/config-overrides)

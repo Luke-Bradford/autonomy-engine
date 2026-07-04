@@ -568,8 +568,21 @@ def merge_gate_chain(strategy):
 
     NOTE: the strategy names are necessarily re-enumerated here (Python) from
     safe_merge.sh (bash) -- config_parser is the only shared lib across that
-    boundary. Keep this mapping in sync with safe_merge.sh's strategy branches."""
-    s = (strategy or "").strip().lower() or "manual"
+    boundary. Keep this mapping in sync with safe_merge.sh's strategy branches.
+
+    Total by construction: this feeds build_repo_state(), which renders the
+    WHOLE dashboard, so it must never raise. `_read_config` hands us the
+    flattened strategy STRING (`merge_gate.strategy`), but we defend the seam
+    anyway -- a non-string shape degrades to `[pr]` rather than crashing the
+    render. `None`/`""` (unset) still default to `manual`."""
+    if strategy is None:
+        s = "manual"
+    elif isinstance(strategy, str):
+        s = strategy.strip().lower() or "manual"
+    else:
+        # malformed (non-string) strategy -- degrade to the one certain fact
+        # rather than blow up the dashboard render on a `.strip()`
+        return [{"step": "pr"}]
     if s == "manual":
         return [{"step": "pr"}, {"step": "review", "actor": "human"}]
     if s == "ci_only":
