@@ -124,5 +124,15 @@ $scan
 EOF
 check "sweep_scan incomplete (page-2 fail): discards page-1 ids" "" "$(printf '%s' "$ids" | tr -d ' \n')"
 
+# Page cap is a DELIBERATE stop (not a failure): the pages actually scanned are
+# complete, so their ids are KEPT. SWEEP_MAX_PAGES=1 with a page that reports
+# hasNextPage=true -> IT_P1 is returned and pagination stops at one page.
+gh() { printf '%s' "$SWEEP_P1_HAS"; }   # closed non-Done + hasNextPage=true
+scan="$(SWEEP_MAX_PAGES=1 board_sweep_scan "PID_X" "OPT_DONE")"
+{ IFS= read -r _r; ids="$(cat)"; } <<EOF
+$scan
+EOF
+check "sweep_scan cap keeps the ids it did scan" "1" "$(printf '%s\n' "$ids" | grep -c '^IT_P1$')"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi

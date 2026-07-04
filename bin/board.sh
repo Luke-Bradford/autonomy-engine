@@ -216,9 +216,11 @@ EOF
     if [ -z "$ec" ]; then scan_ok=0; break; fi  # hasNext but no cursor: malformed -> incomplete
     cursor="$ec"
   done
-  if [ "$page" -ge "$max_pages" ] && [ "$hn" = "1" ]; then
+  if [ "$scan_ok" = "1" ] && [ "$page" -ge "$max_pages" ] && [ "$hn" = "1" ]; then
     # A deliberate cap (not a failure): the pages we DID scan are complete and
-    # their ids are valid -- keep them and warn (no silent truncation).
+    # their ids are valid -- keep them and warn (no silent truncation). Gated on
+    # scan_ok so a fail-safe abort landing on the cap page is not mislabeled a
+    # cap hit (its ids are already discarded).
     warn "sweep: hit page cap ($max_pages) -- swept the first $((max_pages * 100)) items this pass"
   fi
   printf '%s\n' "$remaining"
