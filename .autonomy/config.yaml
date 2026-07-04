@@ -60,7 +60,7 @@ roles:
     prompt: .autonomy/roles/qa.md
   pm:
     enabled: true
-    trigger: { type: cron, schedule: "0 */6 * * *" }
+    trigger: { type: cron, schedule: "0 */2 * * *" }
     model: claude-sonnet-5
     effort: medium
     prompt: .autonomy/roles/pm.md
