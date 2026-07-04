@@ -838,7 +838,7 @@ function renderActivity(repos){
   const ws=reposWithActivity(repos);
   if(!ws.length){
     const ticks=tickNarration(repos);
-    $("activity").innerHTML=ticks||`<div class="empty">No session activity right now. A working supervisor's tool-by-tool trace — or its wait state between sessions — appears here live.</div>`;
+    setHTML("activity",ticks||`<div class="empty">No session activity right now. A working supervisor's tool-by-tool trace — or its wait state between sessions — appears here live.</div>`);
     return;
   }
   if(VIEW==="flat")return renderFlat(ws);
@@ -849,7 +849,7 @@ function renderActivity(repos){
     treeRows(roots,"",out);
     html+=`<div class="act-focus"><span class="dot s-${dispStatus(r)} ${dispStatus(r)==="working"?"pulse":""}"></span><b>${esc(r.name)}</b><span class="lead">${esc(short(cs.current_step||cs.status,64))}</span><span class="mono" style="margin-left:auto;color:var(--dim);font-size:10.5px">${esc((cs.session_id||"").slice(0,8))}</span></div>
       <div class="act-body">${out.join("")}</div>`;});
-  $("activity").innerHTML=html;
+  setHTML("activity",html);
 }
 function renderTimeline(ws){
   let html="";
@@ -858,12 +858,12 @@ function renderTimeline(ws){
     html+=nodes.map(n=>{const w=Math.round(100*(n.tokens||0)/mx);const sh=(n.tokens||0)/mx;const cls=sh>=.75?"hot":sh>=.5?"mid":"";
       return `<div class="tl-row"><span class="lbl"><b>${esc(tname(n.name))}</b> ${esc(short(n.summary,20))}</span><span class="tl-bar"><i class="${cls}" style="width:${w}%"></i></span><span class="v">${n.tokens?num(n.tokens):"·"}</span></div>`;}).join("");
     html+=`</div>`;});
-  $("activity").innerHTML=html;
+  setHTML("activity",html);
 }
 function renderFlat(ws){let rows="";ws.forEach(r=>{(r.current_session.nodes||[]).forEach(n=>{const p=n.parent?(r.current_session.nodes.find(x=>x.id===n.parent)||{}):null;
   rows+=`<tr><td class="f">${esc(tname(n.name))}</td><td>${p?esc(tname(p.name)):"root"}</td><td>${esc(r.name)}</td><td>${esc(short(n.summary,44))}</td><td>${n.tokens?num(n.tokens):"·"}</td></tr>`;});});
-  $("activity").innerHTML=`<div class="act-focus"><span class="lead">every step flattened — one row per tool call, no expanding, for at-a-glance audit</span></div>
-    <div class="act-body" style="padding-top:0"><table><thead><tr><th>agent</th><th>parent</th><th>repo</th><th>task</th><th>tok</th></tr></thead><tbody>${rows}</tbody></table></div>`;}
+  setHTML("activity",`<div class="act-focus"><span class="lead">every step flattened — one row per tool call, no expanding, for at-a-glance audit</span></div>
+    <div class="act-body" style="padding-top:0"><table><thead><tr><th>agent</th><th>parent</th><th>repo</th><th>task</th><th>tok</th></tr></thead><tbody>${rows}</tbody></table></div>`);}
 function setView(v){VIEW=v;["tree","time","flat"].forEach(x=>$("v-"+x).classList.toggle("on",x===v));if(LAST)renderActivity(LAST.repos);}
 
 /* ---- TOKENS timeline (#188) — backfilled output tokens/15min area chart ----
