@@ -210,6 +210,67 @@ EOF
   return 0
 }
 
+# SD-26 (#255): done once, done everywhere -- the completion checklist runs at
+# the merge chokepoint, right after a landed merge. BEST-EFFORT THROUGHOUT: the
+# merge has already happened, so no hygiene failure may fail the caller (warn +
+# continue, SD-6). Semantics:
+#   - close-refs (Closes/Fixes/Resolves #N in the PR body): verify the issue is
+#     closed (gh auto-close can lag/miss on squash), close it if still open,
+#     board it Done.
+#   - work-claims ("Part of #N" in the body, or "(#N)" in the title) that are
+#     NOT close-refs: still-open multi-slice tickets -> board back to Ready.
+#   - bare prose mentions of #N are deliberately IGNORED -- a PR that discusses
+#     #83 must never move #83's board status.
+# BOARD_SH is an injectable seam for tests; board.sh itself is best-effort by
+# contract (warns + exit 0), belt-and-braces `|| true` anyway. No `local`
+# (values never gate control flow via assignment rc -- prevention-log #2 n/a,
+# but keep the file's declare-then-assign style for rc-bearing reads).
+done_everywhere() {
+  de_pr="$1"
+  de_board="${BOARD_SH:-$SAFE_MERGE_HOME/bin/board.sh}"
+  de_body="$(gh pr view "$de_pr" --json body --jq .body 2>/dev/null || true)"
+  if [ -z "$de_body" ]; then
+    echo "safe_merge: note -- done-everywhere: could not read PR #$de_pr body; skipping checklist" >&2
+    return 0
+  fi
+  de_title="$(gh pr view "$de_pr" --json title --jq .title 2>/dev/null || true)"
+  # every grep tolerates no-match (rc 1) -- extraction must not trip set -e.
+  de_close="$(printf '%s\n' "$de_body" \
+    | grep -iEo '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' \
+    | grep -Eo '[0-9]+' | sort -u || true)"
+  de_claim="$( { printf '%s\n' "$de_body" | grep -iEo 'part of[[:space:]]+#[0-9]+' | grep -Eo '[0-9]+' || true; \
+                 printf '%s\n' "$de_title" | grep -Eo '\(#[0-9]+\)' | grep -Eo '[0-9]+' || true; } | sort -u)"
+  for de_n in $de_close; do
+    de_state="$(gh issue view "$de_n" --json state --jq .state 2>/dev/null || true)"
+    # unresolvable ref (typo, a PR number, deleted issue): skip entirely --
+    # boarding it Done would pollute the board with a bogus entry (round-2
+    # review finding on PR #283); mirrors the work-claim loop's skip.
+    if [ -z "$de_state" ]; then
+      echo "safe_merge: note -- done-everywhere: close-ref #$de_n did not resolve to an issue; skipping" >&2
+      continue
+    fi
+    if [ "$de_state" = "OPEN" ]; then
+      gh issue close "$de_n" --comment "Closed by merged PR #$de_pr (done-everywhere, SD-26)." 2>/dev/null \
+        || echo "safe_merge: note -- done-everywhere: could not close #$de_n (close it manually)" >&2
+    fi
+    "$de_board" status "$de_n" "Done" || true
+  done
+  for de_n in $de_claim; do
+    # membership per-token: de_close is newline-separated (sort -u), so a
+    # space-padded case-glob misses interior entries (review finding, PR #283).
+    de_hit=""
+    for de_c in $de_close; do
+      if [ "$de_c" = "$de_n" ]; then de_hit=1; break; fi
+    done
+    [ -n "$de_hit" ] && continue
+    de_state="$(gh issue view "$de_n" --json state --jq .state 2>/dev/null || true)"
+    if [ "$de_state" = "OPEN" ]; then
+      "$de_board" status "$de_n" "Ready" || true
+    fi
+  done
+  return 0
+}
+
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
 
 PR="${1:?usage: safe_merge.sh <pr-number>}"
@@ -249,3 +310,4 @@ esac
 
 complete_merge "$PR" || exit 1
 "$SAFE_MERGE_HOME/bin/unblock_dependents.sh" "$PR" || true
+done_everywhere "$PR" || true
