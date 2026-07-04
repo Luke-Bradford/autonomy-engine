@@ -7,10 +7,17 @@
 set -euo pipefail
 SAFE_MERGE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Doc-only predicate, parameterized by the strategy's configured extension
-# list (comma-separated, e.g. ".md,.rst"). Pure string logic, unit-tested.
+# Doc-only predicate, parameterized by the configured extension list
+# (comma-separated, e.g. ".md,.rst") and -- #192 -- an optional comma-separated
+# doc-PATH list (dir-boundary prefixes, e.g. "docs/"). A file is doc-only when
+# its extension matches OR it lives under a configured doc path; the PR is
+# doc-only only when EVERY file is. Empty paths arg = extension-only, the
+# pre-#192 behaviour byte-for-byte. Fail-safe direction: unsure -> NOT
+# doc-only (review required). Pure string logic, unit-tested. This function is
+# THE single doc-only source: the review workflow sources this file and calls
+# it too (#192 unified the previously-divergent predicates).
 is_doc_only() {
-  local files="$1" extensions_csv="$2"
+  local files="$1" extensions_csv="$2" paths_csv="${3:-}"
   [ -n "$files" ] || return 1
   local ext pattern="" IFS=','
   read -ra exts <<<"$extensions_csv"
@@ -19,7 +26,21 @@ is_doc_only() {
     if [ -n "$pattern" ]; then pattern="$pattern|"; fi
     pattern="${pattern}\\.${ext}\$"
   done
-  ! printf '%s\n' "$files" | grep -qvE "$pattern"
+  local dirs=()
+  read -ra dirs <<<"$paths_csv"
+  local f p matched
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    if printf '%s\n' "$f" | grep -qE "$pattern"; then continue; fi
+    matched=""
+    # bash-3.2 + set -u: guard the possibly-empty array expansion
+    for p in ${dirs[@]+"${dirs[@]}"}; do
+      p="${p%/}/"                       # normalize to a dir-boundary prefix
+      case "$f" in "$p"*) matched=1; break ;; esac
+    done
+    [ -n "$matched" ] || return 1
+  done <<<"$files"
+  return 0
 }
 
 # CI check, generalized (Codex finding: a `gh` API failure must never look
@@ -75,7 +96,7 @@ review_postdates_head() {
 }
 
 merge_gate_bot_comment() {
-  local pr="$1" author_login="$2" marker="$3" doc_only_extensions="$4"
+  local pr="$1" author_login="$2" marker="$3" doc_only_extensions="$4" doc_only_paths="${5:-}"
   local head_time; head_time="$(gh pr view "$pr" --json commits -q '.commits[-1].committedDate')"
   [ -n "$head_time" ] || { echo "safe_merge: cannot resolve PR #$pr head commit time" >&2; return 1; }
 
@@ -83,7 +104,7 @@ merge_gate_bot_comment() {
   files="$(gh api --paginate "repos/{owner}/{repo}/pulls/$pr/files" --jq '.[].filename')"
   n_listed="$(printf '%s\n' "$files" | grep -c . || true)"
   n_changed="$(gh pr view "$pr" --json changedFiles -q '.changedFiles')"
-  if [ "$n_listed" = "$n_changed" ] && is_doc_only "$files" "$doc_only_extensions"; then
+  if [ "$n_listed" = "$n_changed" ] && is_doc_only "$files" "$doc_only_extensions" "$doc_only_paths"; then
     local doc_block
     doc_block="$(gh pr view "$pr" --json comments -q \
       "[.comments[] | select(.author.login==\"$author_login\" and (.body|contains(\"$marker\")))]
@@ -92,7 +113,7 @@ merge_gate_bot_comment() {
       echo "safe_merge: REFUSE -- doc-only PR #$pr but latest bot comment blocks" >&2
       return 1
     fi
-    echo "safe_merge: doc-only PR #$pr (every changed file matches doc_only_extensions), CI green, no blocking comment -- merging."
+    echo "safe_merge: doc-only PR #$pr (every changed file matches the doc-only definition), CI green, no blocking comment -- merging."
     return 0
   fi
 
@@ -211,7 +232,10 @@ case "$STRATEGY" in
     author_login="$(CONFIG_GET merge_gate.author_login)"; author_login="${author_login:-github-actions}"
     marker="$(CONFIG_GET merge_gate.marker)"; marker="${marker:-Claude Code Review}"
     doc_only_extensions="$(CONFIG_GET merge_gate.doc_only_extensions | paste -sd, -)"; doc_only_extensions="${doc_only_extensions:-.md}"
-    merge_gate_bot_comment "$PR" "$author_login" "$marker" "$doc_only_extensions" || exit 1
+    # #192: doc paths default to docs/ -- ONE definition shared with the review
+    # workflow (which sources this file and calls is_doc_only itself).
+    doc_only_paths="$(CONFIG_GET merge_gate.doc_only_paths | paste -sd, -)"; doc_only_paths="${doc_only_paths:-docs/}"
+    merge_gate_bot_comment "$PR" "$author_login" "$marker" "$doc_only_extensions" "$doc_only_paths" || exit 1
     ;;
   gh_review)
     reviewer_login="$(CONFIG_GET merge_gate.reviewer_login)"

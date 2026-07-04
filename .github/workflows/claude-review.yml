@@ -29,9 +29,13 @@ jobs:
         run: gh pr diff "$PR_NUMBER" > pr.diff
 
       - name: Check if diff is doc-only
-        # Doc-only PRs (README, docs/) don't benefit from an engineering review.
-        # A PR is doc-only when every changed file is *.md / *.mdx / *.rst or
-        # under docs/. One code/test/workflow file changing → review as normal.
+        # #192: ONE doc-only definition for the whole gate. This step sources
+        # bin/safe_merge.sh (functions only, source-guarded) and calls the SAME
+        # is_doc_only() the merge gate uses, fed by the SAME config keys
+        # (merge_gate.doc_only_extensions / doc_only_paths, defaults .md +
+        # docs/). Divergence between the bot-skip and the merge-gate predicate
+        # deadlocked non-md docs assets (#183). Fail-safe both ways: an empty
+        # diff or unreadable config classifies as NOT doc-only (review runs).
         id: docs_only
         shell: bash
         env:
@@ -43,20 +47,17 @@ jobs:
             exit 1
           fi
           files=$(git diff --name-only "origin/${BASE_REF}...HEAD")
-          if [ -z "$files" ]; then
+          exts="$( { python3 lib/config_parser.py .autonomy/config.yaml merge_gate.doc_only_extensions 2>/dev/null || true; } | paste -sd, -)"
+          exts="${exts:-.md}"
+          paths="$( { python3 lib/config_parser.py .autonomy/config.yaml merge_gate.doc_only_paths 2>/dev/null || true; } | paste -sd, -)"
+          paths="${paths:-docs/}"
+          # shellcheck source=/dev/null
+          source bin/safe_merge.sh   # functions only (source-guard returns early)
+          if [ -n "$files" ] && is_doc_only "$files" "$exts" "$paths"; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+          else
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
-            exit 0
           fi
-          is_docs_only=true
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            if [[ "$f" == *.md || "$f" == *.mdx || "$f" == *.rst || "$f" == docs/* ]]; then
-              continue
-            fi
-            is_docs_only=false
-            break
-          done <<< "$files"
-          echo "docs_only=$is_docs_only" >> "$GITHUB_OUTPUT"
 
       - name: Post docs-only skip notice
         if: steps.docs_only.outputs.docs_only == 'true'
