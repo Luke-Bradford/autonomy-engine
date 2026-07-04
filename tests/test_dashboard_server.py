@@ -196,6 +196,19 @@ class TestControlRoomShell(unittest.TestCase):
         self.assertNotIn(b"max-width:1640px", html)
         self.assertNotIn(b"background-image:linear-gradient(var(--grid)", html)
 
+    def test_focus_card_uses_detail_header(self):
+        # #269 UI-3c: the selected-lane focus card renders the dense detail header
+        # (dh1 identity row + ticketline + dh2 stat strip), not the legacy fcard
+        # top/ticket/meta rows. Build-time guard against an accidental revert;
+        # runtime behaviour is covered by the dashboard browser-verify loop.
+        html = dashboard._page_bytes(dashboard.PAGE)
+        self.assertIn(b'class="dh1"', html)
+        self.assertIn(b'class="ticketline"', html)
+        self.assertIn(b'class="dh2"', html)
+        # the retired legacy fcard rows are gone from the render source.
+        self.assertNotIn(b'class="fc-top"', html)
+        self.assertNotIn(b'class="fc-ticket"', html)
+
 
 class TestRosterCountdownStability(unittest.TestCase):
     """#238 (p1 regression): seconds-granularity countdowns embedded in the roster

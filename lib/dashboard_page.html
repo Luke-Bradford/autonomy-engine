@@ -110,18 +110,23 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
    center zone, matching the mockup's full-width lane detail. */
 .focus{padding:0 12px}
 .fcard{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);padding:14px 15px;position:relative;overflow:hidden}
-.fc-top{display:flex;align-items:center;gap:10px;margin-bottom:11px}
-.fc-name{font-weight:600;font-size:15px}
 .fc-role{font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--mut);border:1px solid var(--hair2);border-radius:4px;padding:1px 6px}
-.fc-model{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--dim)}
-.fc-ticket{display:flex;align-items:center;gap:9px;padding:9px 11px;background:var(--panel2);border:1px solid var(--hair);border-radius:6px;margin-bottom:11px;font-size:13px}
-.fc-ticket .no{font-family:var(--mono);font-weight:600;color:var(--accent)}
-.fc-ticket .no.src{cursor:help;border-bottom:1px dotted var(--accent)}
-.fc-ticket .tt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fc-step{font-size:12.5px;color:var(--mut);margin-bottom:11px;min-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fc-step .k{font-family:var(--mono);color:var(--ink)}
-.fc-meta{display:flex;gap:20px;font-size:11.5px;color:var(--dim)}
-.fc-meta .b{color:var(--ink);font-weight:600} .fc-meta .mono{font-family:var(--mono)}
+/* #269 UI-3c: the selected-lane detail header (mockup .det>header): a denser
+   dh1 identity row + ticketline + dh2 stat strip. Tokens map to our palette. */
+.dh1{display:flex;align-items:center;gap:10px;margin-bottom:9px}
+.dh1 .path{font-size:14px;color:var(--mut)} .dh1 .path b{color:var(--ink);font-weight:600}
+.dh1 .rolebadge{font-family:var(--mono);font-size:10.5px;color:var(--mut);background:var(--panel2);border:1px solid var(--hair2);border-radius:4px;padding:1px 7px;white-space:nowrap}
+.dh1 .dh-ctl{margin-left:auto;display:inline-flex;gap:1px;align-items:center}
+.dh1 .dh-ctl .ribtns{display:inline-flex;gap:1px;align-items:center}
+.dh1 .dh-ctl .ibtn{width:26px;height:26px}
+.ticketline{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;font-size:13px}
+.ticketline .no{font-family:var(--mono);font-weight:600;color:var(--accent)}
+.ticketline .no.src{cursor:help;border-bottom:1px dotted var(--accent)}
+.ticketline .ttl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.dh2{display:flex;gap:18px;margin-top:2px;margin-bottom:11px;font-size:11.5px;color:var(--dim);flex-wrap:wrap;font-variant-numeric:tabular-nums}
+.dh2 b{color:var(--ink);font-weight:600} .dh2 .mono{font-family:var(--mono)}
 .ctl{display:flex;gap:7px;margin-top:12px;padding-top:11px;border-top:1px solid var(--hair)}
 .cbtn{font-family:var(--mono);font-size:10px;letter-spacing:.6px;text-transform:uppercase;padding:6px 11px;border-radius:5px;
   border:1px solid var(--hair2);background:transparent;color:var(--mut);cursor:pointer;transition:.12s}
@@ -602,8 +607,11 @@ function renderFocus(repos){
         : (ft.ci||ft.review)
           ? `${ft.ci?`<span class="chip c-${esc(ft.ci)}">ci ${esc(ft.ci)}</span>`:""}${ft.review?`<span class="chip c-${esc(ft.review)}">${esc(ft.review.replace("_"," "))}</span>`:""}`
           : `<span class="chip c-none">last worked</span>${stateChip}`;
-      ticket=`<div class="fc-ticket"><span class="no${ft.source?" src":""}"${ft.source?` title="picked: ${esc(ft.source)}"`:""}>#${ft.number}</span><span class="tt">${safeHref(ft.url)?`<a href="${esc(safeHref(ft.url))}" target="_blank">${esc(short(ft.title||"ticket",42))}</a>`:esc(short(ft.title||"ticket",42))}</span>
-      <span style="margin-left:auto;display:flex;gap:5px">${right}</span></div>`;
+      // #269: the ticket ladder becomes its own dense row (wider ~64-char title
+      // budget) + a configured-gate chip. Gate reads the FLATTENED
+      // config.merge_gate string only, never nested merge_gate.strategy.
+      const gate=(r.config&&r.config.merge_gate)?`<span class="chip" title="configured merge gate">gate ${esc(r.config.merge_gate)}</span>`:"";
+      ticket=`<div class="ticketline"><span class="no${ft.source?" src":""}"${ft.source?` title="picked: ${esc(ft.source)}"`:""}>#${ft.number}</span><span class="ttl">${safeHref(ft.url)?`<a href="${esc(safeHref(ft.url))}" target="_blank">${esc(short(ft.title||"ticket",64))}</a>`:esc(short(ft.title||"ticket",64))}</span>${right}${gate}</div>`;
     }
     let stepLine;
     if(st==="paused") stepLine=`<div class="fc-step">paused — idle · resume to continue</div>`;
@@ -629,25 +637,45 @@ function renderFocus(repos){
     // ticket has recorded effort.
     const eff=r.ticket_effort;
     const effortMeta = eff ? `<span title="total across this ticket's sessions">this ticket <b class="b">${eff.sessions}</b> sess · <b class="mono">${compact(eff.tokens)}</b> tok${eff.cost?` · <b class="mono">$${eff.cost.toFixed(2)}</b>`:""}</span>` : "";
+    // #269 dh2 stat strip: pid only when the supervisor is alive (lifecycle
+    // running/paused/etc, NOT stopped -- a stopped supervisor keeps a stale lock
+    // pid); branch from git; effort from #186 ticket_effort. Each stat omits when
+    // its datum is absent -- never "undefined".
+    const lc=r.lifecycle||{};
+    const pidLive=(lc.state==="running"||lc.state==="paused")&&lc.pid;   // allowlist known-live: 'stopped' keeps a STALE lock pid, 'needs-setup' none
+    const pid=pidLive?`<span>pid <b class="mono">${esc(String(lc.pid))}</b></span>`:"";
+    const branch=git.branch?`<span>branch <b class="mono">${esc(git.branch)}</b></span>`:"";
+    // rolebadge: role/model prefer the live-or-most-recent session; effort is
+    // config-sourced (no live counterpart) -- the title states this so it never
+    // implies a live-session effort (#234). Effort tail dropped when unset.
+    const rolebadge=`${esc(cs.role||"coder")} · ${esc(cs.model||(r.config&&r.config.model)||"—")}${(r.config&&r.config.effort)?` · ${esc(r.config.effort)}`:""}`;
     return `<div class="fcard ${st}" data-path="${encodeURIComponent(r.path)}">
-      <div class="fc-top">
-        <span class="fc-name">${esc(dispName(r.name))}</span>
-        <span class="fc-role" title="role of the live (or most recent) session">${esc(cs.role||"coder")}</span>${isWorktree(r.name)?`<span class="fc-role" title="git worktree of the target repo">worktree</span>`:""}
+      <div class="dh1">
         ${token(st,true)}
-        <span class="fc-model">${esc(cs.model||(r.config&&r.config.model)||"")}</span>
-        <button class="ibtn hist" onclick="openLaneHist(event,this)" title="Session history"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg></button>
+        <span class="path"><b>${esc(dispName(r.name))}</b>${laneNames.length>1?` / ${esc(selLane)} lane`:""}</span>
+        <span class="rolebadge" title="role/model of the live (or most recent) session · configured effort">${rolebadge}</span>${isWorktree(r.name)?`<span class="fc-role" title="git worktree of the target repo">worktree</span>`:""}
+        <div class="dh-ctl">${lifecycleCluster(r,st)}<button class="ibtn hist" onclick="openLaneHist(event,this)" title="Session history"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg></button></div>
       </div>
       ${ticket}${stepLine}
-      <div class="fc-meta"><span>${elapsed}</span>${cs.output_tokens!=null?`<span>out <b class="mono">${num(cs.output_tokens)}</b> tok</span>`:""}${cs.cost_usd?`<span>cost <b class="mono">$${cs.cost_usd.toFixed(2)}</b></span>`:""}${effortMeta}</div>
+      <div class="dh2">${elapsed?`<span>${elapsed}</span>`:""}${cs.output_tokens!=null?`<span>out <b class="mono">${num(cs.output_tokens)}</b> tok</span>`:""}${cs.cost_usd?`<span>cost <b class="mono">$${cs.cost_usd.toFixed(2)}</b></span>`:""}${effortMeta}${branch}${pid}</div>
       ${modelCtl(r,st)}
     </div>`;
   });
-  // keep ONLY the card being interacted with (its select/button focused) as
-  // the live DOM node -- every other card still re-renders on this tick.
-  // The held node must never be DETACHED (even reinsertion drops focus), so
-  // the others are swapped in place via replaceWith around it.
+  // keep ONLY the card whose model/effort SELECT is being edited as the live DOM
+  // node -- every other card still re-renders on this tick. The held node must
+  // never be DETACHED (even reinsertion drops focus), so the others are swapped
+  // in place via replaceWith around it.
+  // #269: hold on a focused SELECT, OR a button INSIDE the model/effort control
+  // (.mctl) -- but NOT the dh1 lifecycle/history buttons. Rationale: the .mctl
+  // save buttons ('next session'/'save default') are part of the same edit as the
+  // select, so the card must stay held through the change→click window or a tick
+  // between them would reset the dirty pick before the click reads it. The dh1
+  // lifecycle/history buttons are click-and-done and must NEVER hold, or a
+  // stuck-focused button would freeze this single-node header (prevention-log #16;
+  // openLaneHist also blurs its trigger as belt-and-suspenders).
   const box=$("focus"), ae=document.activeElement;
-  const held=(ae&&box.contains(ae)&&(ae.tagName==="SELECT"||ae.tagName==="BUTTON"))?ae.closest(".fcard"):null;
+  const holds=ae&&box.contains(ae)&&(ae.tagName==="SELECT"||(ae.tagName==="BUTTON"&&ae.closest(".mctl")));
+  const held=holds?ae.closest(".fcard"):null;
   const joined=html.join("");
   // #248: idle (no card being interacted with) is the churn source -- route it
   // through the shared skip-unchanged guard so a pure time tick never rebuilds
@@ -706,11 +734,13 @@ function setModel(btn,scope){
 
 /* ---- CONTROLS (P2) ---- */
 const CTOKEN=(document.querySelector('meta[name="ae-control-token"]')||{}).content||"";
-// #258 slice 2b: the center focus card's `controls()`/`cbtn()` text-button
-// lifecycle renderer is gone -- lifecycle now lives ONLY on the fleet-rail
-// `lifecycleCluster()` icon cluster (slice 2a), so the center is single-lane
-// with no duplicated controls. (The `.cbtn` CSS class stays: modelCtl still
-// uses it for the model/effort save buttons.)
+// #258 slice 2b: the center focus card's legacy `controls()`/`cbtn()` text-button
+// lifecycle renderer is gone. #269 UI-3c then re-introduces the ICON cluster
+// (`lifecycleCluster()`, reused from #264/slice 2a) into the single-lane detail
+// header's dh1 row per the approved mockup -- the fleet rail carries per-repo
+// clusters, the detail header carries the SELECTED lane's, no legacy text
+// buttons. (The `.cbtn` CSS class stays: modelCtl still uses it for the
+// model/effort save buttons.)
 // The fleet-rail repo-header lifecycle icon cluster (the redesign mockup's
 // `.ibtn` cluster) offers the SAME status ladder + SAME actions the old center
 // card controls did -- reuses control()/CTOKEN/CONFIRM verbatim (no new endpoint, no new
