@@ -36,6 +36,9 @@ python3 -m unittest tests.test_accounts -v || fail=1
 echo "=== python: test_agents ==="
 python3 -m unittest tests.test_agents -v || fail=1
 
+echo "=== python: test_health ==="
+python3 -m unittest tests.test_health -v || fail=1
+
 echo "=== python: test_dashboard_registry_refuse ==="
 python3 -m unittest tests.test_dashboard_registry_refuse -v || fail=1
 

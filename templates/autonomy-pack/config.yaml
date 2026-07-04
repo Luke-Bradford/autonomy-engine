@@ -29,6 +29,15 @@ merge_gate:
   # gh_review-specific:
   # reviewer_login: some-reviewer-bot[bot]
 
+# Health thresholds (autonomy-engine #81 / SD-32 §9). Optional; the defaults
+# below apply when omitted.
+# health:
+#   wedged_after: 900        # secs a `session-running` loop may go without a
+#                            # session-log/heartbeat write before `./start status`
+#                            # (and, later, the dashboard) flags it WEDGED. Only a
+#                            # WORKING session is judged -- an idle loop that
+#                            # legitimately sleeps is never flagged. Default 900 (15m).
+
 worktree:
   default_path: "../.{repo-slug}-autonomy"
 

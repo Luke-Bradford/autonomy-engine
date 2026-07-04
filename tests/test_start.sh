@@ -233,6 +233,7 @@ rm -f "$lstaterepo/var/autonomy-logs/autonomy-PAUSE"
 start_registered_repos() { echo "/fake/wt"; }
 start_worktree_status() { echo clean; }
 start_loop_state() { echo running; }
+start_loop_wedged() { printf 'ok\t'; }   # a healthy running loop -> plain OK line
 out="$(start_status_report 2>&1)"
 check "status: per-loop state line shows running" "0" "$(grep -q 'loop running -- /fake/wt' <<<"$out" && echo 0 || echo 1)"
 start_loop_state() { echo paused; }
@@ -247,6 +248,60 @@ check "status: per-loop state line shows stopped" "0" "$(grep -q 'loop stopped -
 start_registered_repos() { :; }
 out="$(start_status_report 2>&1)"
 check "status: no repos -> no per-loop state line" "1" "$(grep -q 'loop running --\|loop paused --\|loop stopped --' <<<"$out" && echo 0 || echo 1)"
+
+# --- #81 / SD-32 §9: wedged-session health folded into the running-loop line ----
+# A RUNNING loop is not automatically healthy: a session-running heartbeat gone
+# quiet past the threshold is WEDGED, and an uninspectable liveness store is
+# UNKNOWN -- both must REPLACE the bare "OK loop running", never read as healthy
+# (fail-safe, never fail-open). start_loop_wedged is a seam (prints
+# lib/health.py's `<state>\t<reason>`), shadowed here so the report branch is
+# deterministic without real heartbeats.
+check "sourcing defines start_loop_wedged" "0" "$(type start_loop_wedged >/dev/null 2>&1 && echo 0 || echo 1)"
+start_registered_repos() { echo "/fake/wt"; }
+start_worktree_status() { echo clean; }
+start_loop_state() { echo running; }
+
+# ok -> plain OK, no wedged warn
+start_loop_wedged() { printf 'ok\tworking session, last write 5s ago'; }
+out="$(start_status_report 2>&1)"
+check "status: running + ok -> OK loop running" "0" "$(grep -q 'OK   loop running -- /fake/wt' <<<"$out" && echo 0 || echo 1)"
+check "status: running + ok -> no WEDGED warn" "1" "$(grep -q 'WEDGED' <<<"$out" && echo 0 || echo 1)"
+
+# idle (a legitimately sleeping loop) -> still a plain OK, never wedged
+start_loop_wedged() { printf 'idle\tnot a working session'; }
+out="$(start_status_report 2>&1)"
+check "status: running + idle -> OK loop running (no false wedged)" "0" "$(grep -q 'OK   loop running -- /fake/wt' <<<"$out" && echo 0 || echo 1)"
+
+# wedged -> WARN that REPLACES the OK line and carries the reason + inspect hint
+start_loop_wedged() { printf 'wedged\tworking session with no liveness write in 2000s (threshold 900s)'; }
+out="$(start_status_report 2>&1)"
+check "status: wedged -> WARN appears" "0" "$(grep -q 'WARN loop appears WEDGED -- /fake/wt' <<<"$out" && echo 0 || echo 1)"
+check "status: wedged WARN carries the health reason" "0" "$(grep -q 'no liveness write in 2000s' <<<"$out" && echo 0 || echo 1)"
+check "status: wedged WARN names the logs to inspect" "0" "$(grep -q '/fake/wt/var/autonomy-logs' <<<"$out" && echo 0 || echo 1)"
+check "status: wedged REPLACES the bare OK line (never both)" "1" "$(grep -q 'OK   loop running -- /fake/wt' <<<"$out" && echo 0 || echo 1)"
+
+# unknown (uninspectable liveness) -> WARN, never a silent OK (fail-safe)
+start_loop_wedged() { printf 'unknown\tno readable heartbeat'; }
+out="$(start_status_report 2>&1)"
+check "status: unknown -> WARN uninspectable liveness" "0" "$(grep -q 'WARN loop running but its liveness is uninspectable -- /fake/wt' <<<"$out" && echo 0 || echo 1)"
+check "status: unknown REPLACES the bare OK line" "1" "$(grep -q 'OK   loop running -- /fake/wt' <<<"$out" && echo 0 || echo 1)"
+
+# blank (the probe itself failed/timed out / no python3) -> WARN uninspectable,
+# NEVER a silent OK: absence of a positive health verdict must not read healthy
+# (fail-safe, never fail-open -- Codex CP2). A fallback reason is supplied.
+start_loop_wedged() { :; }
+out="$(start_status_report 2>&1)"
+check "status: blank probe -> WARN uninspectable (not a silent OK)" "0" "$(grep -q 'WARN loop running but its liveness is uninspectable -- /fake/wt' <<<"$out" && echo 0 || echo 1)"
+check "status: blank probe -> no bare OK loop running" "1" "$(grep -q 'OK   loop running -- /fake/wt' <<<"$out" && echo 0 || echo 1)"
+check "status: blank probe WARN supplies a fallback reason" "0" "$(grep -q 'health probe unavailable' <<<"$out" && echo 0 || echo 1)"
+
+# a garbage/unrecognised state also falls through to the uninspectable WARN
+start_loop_wedged() { printf 'weird-state\tmystery'; }
+out="$(start_status_report 2>&1)"
+check "status: unrecognised state -> WARN uninspectable (fail-safe default)" "0" "$(grep -q 'WARN loop running but its liveness is uninspectable -- /fake/wt' <<<"$out" && echo 0 || echo 1)"
+
+# quiet the registry so the block below re-sources clean
+start_registered_repos() { :; }
 
 # restore the REAL seam functions (re-sourcing is guarded: it only re-defines,
 # never executes) so the checks below exercise the genuine implementations
@@ -424,6 +479,20 @@ check "plist: engine-home dashboard.py path substituted" "0" "$(grep -qF "$ENGIN
 check "plist: python path is absolute" "0" "$(grep -qE '<string>/[^<]*python3?</string>' <<<"$plist" && echo 0 || echo 1)"
 check "plist: no unsubstituted __PLACEHOLDER__ left" "0" "$(grep -q '__[A-Z_]*__' <<<"$plist" && echo 1 || echo 0)"
 check "usage mentions stop + foreground" "0" "$(start_usage 2>&1 | grep -q 'stop' && start_usage 2>&1 | grep -q 'foreground' && echo 0 || echo 1)"
+
+# REAL start_loop_wedged over the REAL lib/health.py on a temp logdir (genuine
+# I/O, no mocks -- the seams are the real ones after the re-source above). A
+# session-running heartbeat whose newest write is far in the past -> wedged; the
+# same stale write under an idle phase -> never wedged (no false positive).
+wrepo="$tmp/wedged-repo"; mkdir -p "$wrepo/var/autonomy-logs"
+printf '1000\tsession-running coder\t0\trunning\n' > "$wrepo/var/autonomy-logs/heartbeat"
+: > "$wrepo/var/autonomy-logs/session-20260101T000000.log"
+touch -t 202601010000 "$wrepo/var/autonomy-logs/session-20260101T000000.log"
+real_wedged="$(start_loop_wedged "$wrepo")"
+check "real start_loop_wedged: session-running + stale write -> wedged" "0" "$(printf '%s' "$real_wedged" | grep -q '^wedged' && echo 0 || echo 1)"
+printf '1000\tboard-empty\t0\tidle\n' > "$wrepo/var/autonomy-logs/heartbeat"
+real_idle="$(start_loop_wedged "$wrepo")"
+check "real start_loop_wedged: idle phase + stale write -> not wedged" "0" "$(printf '%s' "$real_idle" | grep -q '^idle' && echo 0 || echo 1)"
 
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
