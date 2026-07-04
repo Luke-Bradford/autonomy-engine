@@ -201,5 +201,99 @@ roles:
 YAML
 check "doctor lane-report silent with no lanes: block (#147)" "" "$(doctor_lane_report "$tmp" 2>&1)"
 
+# ---- #172: gh token-scope + review-bot-secret checks ----
+# grep the captured text via here-string (no `producer | grep -q` pipe, which
+# under pipefail can return SIGPIPE(141) on a successful early-exit match --
+# prevention-log #7).
+has() { grep -q -- "$2" <<<"$1"; }
+
+# doctor_gh_scopes -- extract + merge the Token scopes tokens (pure).
+single_status="github.com
+  - Token scopes: 'gist', 'project', 'read:org', 'repo', 'workflow'"
+scopes="$(doctor_gh_scopes "$single_status")"
+check "gh_scopes finds repo"    "0" "$(has "$scopes" 'repo' && echo 0 || echo 1)"
+check "gh_scopes finds project" "0" "$(has "$scopes" 'project' && echo 0 || echo 1)"
+check "gh_scopes finds workflow" "0" "$(has "$scopes" 'workflow' && echo 0 || echo 1)"
+
+multi_status="github.com
+  - Token scopes: 'read:org', 'repo'
+otherhost.example
+  - Token scopes: 'project', 'workflow'"
+mscopes="$(doctor_gh_scopes "$multi_status")"
+check "gh_scopes merges multi-host union (repo)"    "0" "$(has "$mscopes" 'repo' && echo 0 || echo 1)"
+check "gh_scopes merges multi-host union (project)" "0" "$(has "$mscopes" 'project' && echo 0 || echo 1)"
+# regression: the union must be ONE line so the report's space-anchored match
+# sees a scope that lived on a later host line (else a false 'missing' WARN).
+check "gh_scopes collapses to a single line (no embedded newline)" "0" \
+  "$(printf '%s' "$mscopes" | wc -l | tr -d ' ')"
+rep_multi="$(doctor_gh_scopes_report "$mscopes")"
+check "multi-host union -> no false WARN (repo+project across hosts)" "1" \
+  "$(has "$rep_multi" 'WARN' && echo 0 || echo 1)"
+check "gh_scopes empty when no scopes line" "" "$(doctor_gh_scopes 'github.com
+  - Logged in')"
+
+# doctor_gh_scopes_report -- tiered severity (pure).
+rep_all="$(doctor_gh_scopes_report 'gist project read:org repo workflow')"
+check "all scopes -> an OK line"      "0" "$(has "$rep_all" '^OK' && echo 0 || echo 1)"
+check "all scopes -> no WARN"         "1" "$(has "$rep_all" 'WARN' && echo 0 || echo 1)"
+rep_no_repo="$(doctor_gh_scopes_report 'project workflow')"
+check "missing repo -> WARN"          "0" "$(has "$rep_no_repo" 'WARN' && echo 0 || echo 1)"
+check "missing repo -> refresh -s repo hint" "0" "$(has "$rep_no_repo" 'refresh -s repo' && echo 0 || echo 1)"
+rep_no_proj="$(doctor_gh_scopes_report 'repo workflow')"
+check "missing project -> WARN"       "0" "$(has "$rep_no_proj" 'WARN' && echo 0 || echo 1)"
+check "missing project -> refresh -s project hint" "0" "$(has "$rep_no_proj" 'refresh -s project' && echo 0 || echo 1)"
+rep_no_wf="$(doctor_gh_scopes_report 'repo project')"
+check "missing workflow -> INFO not WARN" "0" "$(has "$rep_no_wf" '^INFO' && ! has "$rep_no_wf" 'WARN' && echo 0 || echo 1)"
+rep_empty="$(doctor_gh_scopes_report '')"
+check "empty scopes -> a WARN (never silent pass)" "0" "$(has "$rep_empty" 'WARN' && echo 0 || echo 1)"
+
+# doctor_secret_present -- whole-token match (pure).
+sec_list="$(printf 'ANTHROPIC_API_KEY\t2026-07-01T16:57:58Z\nOTHER_SECRET\t2026-06-01T00:00:00Z')"
+check "secret present"  "0" "$(doctor_secret_present "$sec_list" ANTHROPIC_API_KEY; echo $?)"
+check "secret absent"   "1" "$(doctor_secret_present "$sec_list" MISSING_KEY; echo $?)"
+check "secret substring does NOT false-match" "1" \
+  "$(doctor_secret_present 'ANTHROPIC_API_KEY_OLD	x' ANTHROPIC_API_KEY; echo $?)"
+
+# ---- impure wrappers with a gh PATH stub (subshells inherit the function) ----
+gh() {
+  case "$1 $2" in
+    "auth status") [ -n "${STUB_AUTH_OUT:-}" ] && printf '%s\n' "$STUB_AUTH_OUT"; return "${STUB_AUTH_RC:-0}" ;;
+    "secret list") [ -n "${STUB_SECRET_OUT:-}" ] && printf '%s\n' "$STUB_SECRET_OUT"; return "${STUB_SECRET_RC:-0}" ;;
+    *) return 0 ;;
+  esac
+}
+
+STUB_AUTH_RC=0
+STUB_AUTH_OUT="github.com
+  - Token scopes: 'project', 'repo', 'workflow'"
+auth_out="$(doctor_gh_auth_check "$tmp")"
+check "auth_check authed -> OK line"          "0" "$(has "$auth_out" '^OK' && echo 0 || echo 1)"
+check "auth_check authed+full scopes -> no WARN" "1" "$(has "$auth_out" 'WARN' && echo 0 || echo 1)"
+
+STUB_AUTH_RC=1; STUB_AUTH_OUT=""
+auth_fail="$(doctor_gh_auth_check "$tmp")"
+check "auth_check not-authed -> WARN"          "0" "$(has "$auth_fail" 'WARN' && echo 0 || echo 1)"
+check "auth_check not-authed -> no scope report" "1" "$(has "$auth_fail" 'refresh -s' && echo 0 || echo 1)"
+
+# secret check: authed + secret present -> OK
+STUB_AUTH_RC=0; STUB_AUTH_OUT="github.com"
+STUB_SECRET_RC=0; STUB_SECRET_OUT="ANTHROPIC_API_KEY	2026-07-01T00:00:00Z"
+sec_ok="$(doctor_review_secret_check "$tmp")"
+check "secret_check authed+present -> OK" "0" "$(has "$sec_ok" '^OK' && echo 0 || echo 1)"
+# authed + secret absent -> WARN
+STUB_SECRET_OUT="OTHER	x"
+sec_warn="$(doctor_review_secret_check "$tmp")"
+check "secret_check authed+absent -> WARN" "0" "$(has "$sec_warn" 'WARN' && echo 0 || echo 1)"
+# authed + secret list command fails (admin-only) -> INFO hint, not WARN
+STUB_SECRET_RC=1; STUB_SECRET_OUT=""
+sec_info="$(doctor_review_secret_check "$tmp")"
+check "secret_check authed+list-fails -> INFO not WARN" "0" \
+  "$(has "$sec_info" '^INFO' && ! has "$sec_info" 'WARN' && echo 0 || echo 1)"
+# not authed -> silent (auth WARN already covers it)
+STUB_AUTH_RC=1
+check "secret_check not-authed -> silent" "" "$(doctor_review_secret_check "$tmp")"
+unset -f gh
+unset STUB_AUTH_RC STUB_AUTH_OUT STUB_SECRET_RC STUB_SECRET_OUT
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi

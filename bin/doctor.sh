@@ -92,6 +92,89 @@ $lines
 EOF
 }
 
+# gh token-scope + review-bot-secret checks (#172 replication readiness). All
+# diagnostic-only + best-effort: OK/WARN/INFO, never FAIL, never provision.
+
+# Pure: merge the scope tokens from EVERY `Token scopes: 'a', 'b', ...` line of
+# `gh auth status` output (tolerates multi-host/multi-account -- optimistic union
+# is a diagnostic hint, not a gate). Prints ALL tokens on ONE space-separated
+# line (the trailing `tr '\n' ' '` collapses multiple matched lines into one, so
+# doctor_gh_scopes_report's space-anchored membership test sees the whole union).
+doctor_gh_scopes() {
+  printf '%s\n' "$1" | sed -n "s/.*Token scopes:[[:space:]]*//p" | tr -d "'" | tr ',\n' '  '
+}
+
+# Pure: tiered severity by real runtime need. repo/project missing -> WARN (the
+# loop needs them); workflow missing -> INFO (setup-only: the loop never pushes
+# .github/workflows, so it is needed only to install the review workflow). All
+# present -> OK. Empty -> a WARN (never a silent pass).
+doctor_gh_scopes_report() {
+  local scopes=" $1 " miss=""
+  if [ -z "$1" ]; then
+    echo "WARN could not read gh token scopes -- run 'gh auth status'; the engine needs repo + project (board sync)"
+    return 0
+  fi
+  case "$scopes" in *" repo "*) : ;; *) miss="$miss repo" ;; esac
+  case "$scopes" in *" project "*) : ;; *) miss="$miss project" ;; esac
+  if [ -n "$miss" ]; then
+    local s
+    for s in $miss; do
+      echo "WARN gh token missing '$s' scope -- run 'gh auth refresh -s $s' (repo=core, project=Projects v2 board sync)"
+    done
+  fi
+  case "$scopes" in
+    *" workflow "*) : ;;
+    *) echo "INFO gh token has no 'workflow' scope -- fine for the running loop; needed only to install/update the review workflow (gh auth refresh -s workflow)" ;;
+  esac
+  [ -z "$miss" ] && echo "OK   gh token scopes cover repo + project"
+  return 0
+}
+
+# Impure: replaces the inline auth block. Capture BOTH streams (gh prints to
+# either depending on version) from within $repo so the TARGET repo's token is
+# read. Not authed -> WARN as before; authed -> OK + scope report.
+doctor_gh_auth_check() {
+  local repo="$1" out
+  if out="$(cd "$repo" && gh auth status 2>&1)"; then
+    echo "OK   gh auth status ok"
+    doctor_gh_scopes_report "$(doctor_gh_scopes "$out")"
+  else
+    echo "WARN gh auth status failed -- run 'gh auth login' (need repo + project scopes)"
+  fi
+}
+
+# Pure: rc 0 iff NAME is a whole first-column token in `gh secret list` output
+# (a substring like NAME_OLD must not false-match). No pipe under pipefail.
+doctor_secret_present() {
+  local line name="$2"
+  while IFS= read -r line; do
+    case "$line" in
+      "$name"[[:space:]]*|"$name") return 0 ;;
+    esac
+  done <<EOF
+$1
+EOF
+  return 1
+}
+
+# Impure best-effort: called ONLY where the review workflow was found (no noise
+# otherwise). Silent when not authed (the auth WARN already covers it -- no
+# contradictory hint). Authed + secret present -> OK; absent -> WARN; the
+# admin-only `gh secret list` failing -> INFO hint, never a false WARN.
+doctor_review_secret_check() {
+  local repo="$1" secrets
+  (cd "$repo" && gh auth status >/dev/null 2>&1) || return 0
+  if secrets="$(cd "$repo" && gh secret list 2>/dev/null)"; then
+    if doctor_secret_present "$secrets" ANTHROPIC_API_KEY; then
+      echo "OK   ANTHROPIC_API_KEY secret set (review bot can run)"
+    else
+      echo "WARN ANTHROPIC_API_KEY secret not found in this repo -- the review workflow will fail and no PR gets an APPROVE. Add it: gh secret set ANTHROPIC_API_KEY"
+    fi
+  else
+    echo "INFO could not verify repo secrets (needs admin) -- ensure ANTHROPIC_API_KEY is set for the review workflow"
+  fi
+}
+
 doctor_full_report() {
   local repo="$1" hard_fail=0
   echo "== doctor.sh report: $repo =="
@@ -122,6 +205,7 @@ doctor_full_report() {
   if [ "$strategy" = "bot_comment" ]; then
     if [ -d "$repo/.github/workflows" ] && grep -rlE 'anthropic\.com/v1/messages|ANTHROPIC_API_KEY' "$repo/.github/workflows" >/dev/null 2>&1; then
       echo "OK   review-bot workflow found under .github/workflows (merge_gate.strategy=bot_comment)"
+      doctor_review_secret_check "$repo"
     else
       echo "WARN no review-bot workflow found under .github/workflows -- merge_gate.strategy=bot_comment will never see an APPROVE and every PR will stall. Add a workflow, or switch to manual/ci_only."
     fi
@@ -147,11 +231,7 @@ doctor_full_report() {
   doctor_knob_notes "$repo"
   doctor_lane_report "$repo"
 
-  if (cd "$repo" && gh auth status >/dev/null 2>&1); then
-    echo "OK   gh auth status ok"
-  else
-    echo "WARN gh auth status failed -- run 'gh auth login' (need repo + project scopes)"
-  fi
+  doctor_gh_auth_check "$repo"
 
   local owner project_title
   owner="$(python3 "$DOCTOR_HOME/lib/config_parser.py" "$repo/.autonomy/config.yaml" board.owner 2>/dev/null || echo)"
