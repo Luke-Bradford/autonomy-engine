@@ -228,8 +228,9 @@ EOF
 done_everywhere() {
   de_pr="$1"
   de_board="${BOARD_SH:-$SAFE_MERGE_HOME/bin/board.sh}"
-  de_body="$(gh pr view "$de_pr" --json body --jq .body 2>/dev/null || true)"
-  if [ -z "$de_body" ]; then
+  # skip only when the gh CALL fails -- an EMPTY body is data, not an error
+  # (post-hoc codex finding: a blank-bodied PR still carries title work-claims).
+  if ! de_body="$(gh pr view "$de_pr" --json body --jq .body 2>/dev/null)"; then
     echo "safe_merge: note -- done-everywhere: could not read PR #$de_pr body; skipping checklist" >&2
     return 0
   fi
@@ -250,8 +251,13 @@ done_everywhere() {
       continue
     fi
     if [ "$de_state" = "OPEN" ]; then
-      gh issue close "$de_n" --comment "Closed by merged PR #$de_pr (done-everywhere, SD-26)." 2>/dev/null \
-        || echo "safe_merge: note -- done-everywhere: could not close #$de_n (close it manually)" >&2
+      # the board may only say Done once the issue actually closed -- a failed
+      # close leaves the board untouched (post-hoc codex finding: boarding Done
+      # over a still-open issue is a display lie / fail-open).
+      if ! gh issue close "$de_n" --comment "Closed by merged PR #$de_pr (done-everywhere, SD-26)." 2>/dev/null; then
+        echo "safe_merge: note -- done-everywhere: could not close #$de_n; board left untouched (close it manually)" >&2
+        continue
+      fi
     fi
     "$de_board" status "$de_n" "Done" || true
   done

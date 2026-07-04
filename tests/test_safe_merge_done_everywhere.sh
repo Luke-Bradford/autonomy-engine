@@ -30,18 +30,20 @@ chmod +x "$BOARD_SH"
 export BOARD_CALLS="$tmp/board_calls"
 
 # gh mock: PR body/title per scenario; issue states per scenario map.
-BODY=""; TITLE=""
+# BODY_RC simulates the `gh pr view --json body` CALL failing (vs an empty but
+# successfully-read body); CLOSE_FAIL makes `gh issue close` fail.
+BODY=""; TITLE=""; BODY_RC=0; CLOSE_FAIL=""
 gh() {
   printf 'gh %s\n' "$*" >> "$calls"
   case "$*" in
-    "pr view"*"--json body"*)  printf '%s\n' "$BODY" ;;
+    "pr view"*"--json body"*)  [ "$BODY_RC" != "0" ] && return "$BODY_RC"; printf '%s\n' "$BODY" ;;
     "pr view"*"--json title"*) printf '%s\n' "$TITLE" ;;
     "issue view 61 "*) printf 'OPEN\n' ;;
     "issue view 62 "*) printf 'CLOSED\n' ;;
     "issue view 63 "*) printf 'OPEN\n' ;;
     "issue view 64 "*) printf 'OPEN\n' ;;
     "issue view"*) return 1 ;;   # unknown ref (e.g. a PR number) -> error
-    "issue close"*) : ;;
+    "issue close"*) [ -n "$CLOSE_FAIL" ] && return 1 ;;
   esac
   return 0
 }
@@ -85,12 +87,30 @@ rc=0; done_everywhere 45 || rc=$?
 check "close-ref wins over work-claim"   "yes" "$(grep -q 'board status 61 Ready' "$BOARD_CALLS" && echo no || echo yes)"
 check "close-ref still boarded Done"     "yes" "$(grep -q 'board status 61 Done' "$BOARD_CALLS" && echo yes || echo no)"
 
-# --- unreadable body: warn + return 0, nothing mutated ---
+# --- UNREADABLE body (gh CALL fails): warn + return 0, nothing mutated ---
 : > "$calls"; : > "$BOARD_CALLS"
-BODY=""; TITLE=""
+BODY=""; TITLE=""; BODY_RC=1
 rc=0; done_everywhere 46 || rc=$?
+BODY_RC=0
 check "unreadable body returns 0"        "0" "$rc"
 check "unreadable body mutates nothing"  "0" "$(wc -l < "$BOARD_CALLS" | tr -d ' ')"
+
+# --- EMPTY-but-readable body (post-hoc codex finding 2): title work-claims
+# must still process -- an empty body is data, not an error ---
+: > "$calls"; : > "$BOARD_CALLS"
+BODY=""; TITLE="feat: rail cleanup (#64)"
+rc=0; done_everywhere 50 || rc=$?
+check "empty body + title claim -> Ready"  "yes" "$(grep -q 'board status 64 Ready' "$BOARD_CALLS" && echo yes || echo no)"
+check "empty body rc 0"                    "0" "$rc"
+
+# --- close FAILURE must not board Done (post-hoc codex finding 1): the board
+# must never say Done while the issue is still open ---
+: > "$calls"; : > "$BOARD_CALLS"
+BODY="Closes #61"; TITLE="x"; CLOSE_FAIL=1
+rc=0; done_everywhere 51 || rc=$?
+CLOSE_FAIL=""
+check "failed close -> NOT boarded Done"   "yes" "$(grep -q 'board status 61 Done' "$BOARD_CALLS" && echo no || echo yes)"
+check "failed close rc 0"                  "0" "$rc"
 
 # --- MULTI close-ref + work-claim on a NON-LAST ref (review-bot finding on
 # PR #283): de_close is newline-separated, so a space-padded case-glob missed
