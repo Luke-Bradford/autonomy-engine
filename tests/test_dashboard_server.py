@@ -232,6 +232,47 @@ class TestRosterCountdownStability(unittest.TestCase):
         self.assertIn(b"min-width", html)
 
 
+class TestUpdateChipPerComponent(unittest.TestCase):
+    """#240 (p1): the #196 update chip fired on aggregate `engine.stale` with one
+    'restart to apply' call-to-action + the aggregate commit count -- so a
+    fully-current dashboard still demanded a restart whenever any supervisor was
+    behind, and an unknown-sha supervisor borrowed the aggregate count. The fix is
+    render-only (engine_status already exposes per-component truth): the dashboard
+    (the shell the operator restarts) gets the warning 'pull + restart' CTA; a
+    dashboard-current / supervisor-behind state is informational ('refresh at next
+    session boundary'); unknown-sha reads 'version unknown', never a borrowed
+    count. These pin the render's structure; per-scenario DOM output is the browser
+    verify loop."""
+
+    def _page(self):
+        return dashboard._page_bytes(dashboard.PAGE)
+
+    def test_restart_wording_requires_pull(self):
+        # until auto-pull lands (#166) a bare restart applies nothing -- the CTA
+        # must say "pull + restart", not "restart".
+        html = self._page()
+        self.assertIn(b"pull + restart", html)
+
+    def test_dashboard_vs_supervisor_messaging_split(self):
+        # per-component: the dashboard CTA is distinct from the supervisor-only
+        # informational message (no shared 'engine updated ... restart' for both).
+        html = self._page()
+        self.assertIn(b"dashboard outdated", html)
+        self.assertIn(b"session boundary", html)
+
+    def test_unknown_sha_not_a_borrowed_count(self):
+        # a pre-tracking supervisor (sha:"") reads 'version unknown', never the
+        # aggregate commit count.
+        html = self._page()
+        self.assertIn(b"version unknown", html)
+
+    def test_informational_tone_class_present(self):
+        # the supervisor-only state uses a muted informational class, not the
+        # warning-styled chip, so it doesn't read as an alarm.
+        html = self._page()
+        self.assertIn(b".updchip.info", html)
+
+
 class TestConciergeAccountSelection(unittest.TestCase):
     """The concierge's local-account selection rule (#137). An explicit
     AUTONOMY_CONCIERGE_ACCOUNT preference wins; unset keeps the deterministic

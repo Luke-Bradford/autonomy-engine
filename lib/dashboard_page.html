@@ -73,6 +73,10 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 /* #166: engine "update available -- restart to apply" chip (informational, not an error) */
 .updchip{font-family:var(--mono);font-size:11px;color:var(--warn);border:1px solid var(--warn);
   border-radius:99px;padding:2px 9px;white-space:nowrap;cursor:default}
+/* #240: supervisor-only staleness is informational (they hot-reload + self-
+   refresh at a session boundary), not an alarm -- muted, so only a dashboard
+   that truly needs a pull+restart wears the warning color. */
+.updchip.info{color:var(--mut);border-color:var(--hair2)}
 .updchip[hidden]{display:none}
 .navlink{font-family:var(--mono);font-size:11px;color:var(--accent);border:1px solid var(--hair2);border-radius:6px;padding:4px 9px;text-decoration:none;white-space:nowrap}
 .navlink:hover{border-color:var(--accent);text-decoration:none}
@@ -996,18 +1000,42 @@ setInterval(()=>{
 },1000);
 
 /* ---- render + SSE ---- */
-// #166: surface when a running thin shell (dashboard / supervisor) is behind the
-// merged engine and needs a restart. Truth only -- no restart action here.
+// #166/#240: surface when a running thin shell is behind the merged engine --
+// but PER COMPONENT, never a single aggregate cry-wolf. The dashboard is the
+// shell the operator sees + restarts, so ONLY it earns the warning "pull +
+// restart" CTA; supervisors on older code are informational (they hot-reload
+// logic + self-refresh at a session boundary). Each stale service is labelled
+// with ITS OWN commit count -- or "version unknown" for a pre-tracking sha,
+// never a borrowed aggregate count. Truth only -- no restart action here.
+function _commits(n){return (typeof n==="number"&&n>0)?` (${n} commit${n===1?"":"s"})`:"";}
 function renderEngineUpdate(e){
   const el=$("h-update"); if(!el) return;
-  if(!e||!e.stale){el.hidden=true; el.textContent=""; el.removeAttribute("title"); return;}
-  const n=e.behind;
-  const who=[];
-  if(e.dashboard&&e.dashboard.stale) who.push("dashboard");
-  (e.supervisors||[]).forEach(s=>{if(s.stale) who.push("supervisor:"+dispName(s.repo));});
-  el.textContent="⟳ engine updated"+((typeof n==="number"&&n>0)?` (${n} commit${n===1?"":"s"})`:"")+" — restart to apply";
-  el.title=who.length?("behind: "+who.join(", ")):"a running service is behind the merged engine";
-  el.hidden=false;
+  const clear=()=>{el.hidden=true; el.textContent=""; el.removeAttribute("title"); el.classList.remove("info");};
+  if(!e||!e.stale){clear(); return;}
+  const dash=e.dashboard||{};
+  const staleSups=(e.supervisors||[]).filter(s=>s&&s.stale);
+  // per-supervisor label: own count when known, "version unknown" for a pre-
+  // tracking sha ("") -- NEVER the aggregate count (#240 defect 2).
+  const supLabel=s=>{const nm=dispName(s.repo);
+    return typeof s.behind==="number"&&s.behind>0 ? nm+_commits(s.behind)
+         : s.sha ? nm
+         : nm+" (version unknown — started before tracking)";};
+  if(dash.stale){
+    // the dashboard IS the shell the operator restarts -> warning CTA. "pull +
+    // restart": until auto-pull lands (#166) a bare restart applies nothing.
+    el.classList.remove("info");
+    el.textContent="⟳ dashboard outdated"+_commits(dash.behind)+" — pull + restart to apply";
+    el.title=staleSups.length?("also on older code: "+staleSups.map(supLabel).join(", "))
+                             :"pull ENGINE_HOME + restart the dashboard to load the merged engine";
+    el.hidden=false;
+  } else if(staleSups.length){
+    // dashboard current; only supervisors behind -> informational, NOT a restart
+    // demand about the dashboard (#240 defect 1). No aggregate count in the text.
+    el.classList.add("info");
+    el.textContent="ⓘ supervisors on older code — refresh at next session boundary";
+    el.title="older code: "+staleSups.map(supLabel).join(", ");
+    el.hidden=false;
+  } else { clear(); }
 }
 function render(s){LAST=s;GEN=s.generated_at||Math.floor(nowS());
   renderFocus(s.repos);renderHistory(s.repos);renderRepos(s.repos);renderQuota(s.repos,s.account);renderActivity(s.repos);
