@@ -249,6 +249,12 @@ check "account role: account key exported (beats #51-C credential)" "sk-acct-77"
 check "account role: default loop prompt" "$AUTONOMY_TARGET_REPO/.autonomy/loop_prompt.md" "$(grab prompt)"
 check "account role: plain hard_rules (no scope)" "$AUTONOMY_TARGET_REPO/.autonomy/hard_rules.md" "$(grab rules)"
 check "account role: key never leaks into supervisor" "" "${ANTHROPIC_API_KEY:-}"
+# #177: run_session narrates a `session-running <role>` heartbeat at the moment
+# the agent is actually invoked, so the card stops reading "running a session"
+# through the preflight/auth/worktree prep window (the loop narrates
+# `dispatching <role>` there). Emitting it INSIDE run_session covers every
+# caller -- loop, cron, event -- uniformly, not just the main loop.
+check "run_session narrates session-running at invoke (#177)" "session-running coder" "$(cut -f2 "$LOGDIR/heartbeat" 2>/dev/null)"
 
 # 2) role without account: legacy credential path (best-effort) still runs
 : > "$STUB_CAPTURE"
