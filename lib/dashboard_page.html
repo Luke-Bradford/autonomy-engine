@@ -1004,36 +1004,37 @@ setInterval(()=>{
 // but PER COMPONENT, never a single aggregate cry-wolf. The dashboard is the
 // shell the operator sees + restarts, so ONLY it earns the warning "pull +
 // restart" CTA; supervisors on older code are informational (they hot-reload
-// logic + self-refresh at a session boundary). Each stale service is labelled
-// with ITS OWN commit count -- or "version unknown" for a pre-tracking sha,
-// never a borrowed aggregate count. Truth only -- no restart action here.
+// logic + self-refresh at a session boundary). The per-component DECISION lives
+// in dashboard_state.engine_update_chip (unit-tested), shipped as e.chip; this
+// only maps that model to copy. Each stale service is labelled with ITS OWN
+// commit count -- or "version unknown" for a pre-tracking sha, never a borrowed
+// aggregate count. Truth only -- no restart action here.
 function _commits(n){return (typeof n==="number"&&n>0)?` (${n} commit${n===1?"":"s"})`:"";}
+// per-supervisor label: own count when known, "version unknown" for a pre-
+// tracking sha (known:false) -- NEVER the aggregate count (#240 defect 2).
+function _supLabel(s){const nm=dispName(s.repo);
+  return s.known ? nm+_commits(s.behind)
+                 : nm+" (version unknown — started before tracking)";}
 function renderEngineUpdate(e){
   const el=$("h-update"); if(!el) return;
   const clear=()=>{el.hidden=true; el.textContent=""; el.removeAttribute("title"); el.classList.remove("info");};
-  if(!e||!e.stale){clear(); return;}
-  const dash=e.dashboard||{};
-  const staleSups=(e.supervisors||[]).filter(s=>s&&s.stale);
-  // per-supervisor label: own count when known, "version unknown" for a pre-
-  // tracking sha ("") -- NEVER the aggregate count (#240 defect 2).
-  const supLabel=s=>{const nm=dispName(s.repo);
-    return typeof s.behind==="number"&&s.behind>0 ? nm+_commits(s.behind)
-         : s.sha ? nm
-         : nm+" (version unknown — started before tracking)";};
-  if(dash.stale){
+  const c=(e&&e.chip)||null;
+  if(!c||!c.show){clear(); return;}
+  const sups=c.supervisors||[];
+  if(c.mode==="dashboard"){
     // the dashboard IS the shell the operator restarts -> warning CTA. "pull +
     // restart": until auto-pull lands (#166) a bare restart applies nothing.
     el.classList.remove("info");
-    el.textContent="⟳ dashboard outdated"+_commits(dash.behind)+" — pull + restart to apply";
-    el.title=staleSups.length?("also on older code: "+staleSups.map(supLabel).join(", "))
-                             :"pull ENGINE_HOME + restart the dashboard to load the merged engine";
+    el.textContent="⟳ dashboard outdated"+_commits(c.dashboard_behind)+" — pull + restart to apply";
+    el.title=sups.length?("also on older code: "+sups.map(_supLabel).join(", "))
+                        :"pull ENGINE_HOME + restart the dashboard to load the merged engine";
     el.hidden=false;
-  } else if(staleSups.length){
+  } else if(c.mode==="supervisors"){
     // dashboard current; only supervisors behind -> informational, NOT a restart
     // demand about the dashboard (#240 defect 1). No aggregate count in the text.
     el.classList.add("info");
     el.textContent="ⓘ supervisors on older code — refresh at next session boundary";
-    el.title="older code: "+staleSups.map(supLabel).join(", ");
+    el.title="older code: "+sups.map(_supLabel).join(", ");
     el.hidden=false;
   } else { clear(); }
 }
