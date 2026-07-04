@@ -271,10 +271,20 @@ done_everywhere() {
   return 0
 }
 
+# TOTAL config reader: a missing OPTIONAL key returns empty + rc 0, so the
+# caller's `${VAR:-default}` applies as designed. Without the `|| true`, this
+# script's `set -e` turned every missing key into a SILENT rc-1 death through
+# the command-substitution assignment — before any output, before the default
+# (live incident 2026-07-05: merge_gate.doc_only_paths absent from every
+# config → every safe_merge run on the fleet died silently; APPROVE'd PRs
+# piled up unmerged). doctor.sh's `|| echo` reads are this same rule;
+# supervisor.sh runs without set -e so its bare reader is safe. Defined above
+# the source-guard so tests exercise the REAL function.
+CONFIG_GET() { python3 "$SAFE_MERGE_HOME/lib/config_parser.py" .autonomy/config.yaml "$1" 2>/dev/null || true; }
+
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
 
 PR="${1:?usage: safe_merge.sh <pr-number>}"
-CONFIG_GET() { python3 "$SAFE_MERGE_HOME/lib/config_parser.py" .autonomy/config.yaml "$1" 2>/dev/null; }
 
 STRATEGY="$(CONFIG_GET merge_gate.strategy)"; STRATEGY="${STRATEGY:-manual}"
 
