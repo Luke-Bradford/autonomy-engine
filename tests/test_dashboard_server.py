@@ -1048,6 +1048,27 @@ class TestCenterActivityScoped(unittest.TestCase):
                       "selectLane does not re-render the scoped activity panel")
 
 
+class TestCenterCleanupSlice4(unittest.TestCase):
+    """#258 slice 4 (final): the center is a single selected-lane card since slice
+    2b, so the pre-2b multi-card NOW grid on .focus (auto-fill / 360px tracks) is
+    dead + off-design -- it left the lone card at ~360px with empty tracks beside
+    it, whereas the redesign mockup's center is a full-width lane detail. .focus
+    becomes a plain block container so the card fills the center zone. The
+    empty/degraded states are already handled by the self-healing selectedLane/
+    selectedRepoOf accessors (slices 1-3b). Structure assertion; visual = browser."""
+
+    def _page(self):
+        return dashboard._page_bytes(dashboard.PAGE)
+
+    def test_dead_now_card_grid_retired(self):
+        # the multi-card auto-fill grid was the ONLY auto-fill in the page; its
+        # removal means the single lane card is no longer capped to one 360px
+        # track with dead space (mockup = full-width lane detail).
+        html = self._page()
+        self.assertNotIn(b"auto-fill", html,
+                         "dead pre-2b multi-card .focus grid (auto-fill) still present")
+
+
 class TestLaneHistoryPopover(unittest.TestCase):
     """#258 slice 3b: the inline "Recent sessions" center section moves behind a
     click-triggered lane-history popover anchored on the selected-lane focus card

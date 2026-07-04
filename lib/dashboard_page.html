@@ -104,7 +104,11 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .sh .ct{font-family:var(--mono);font-size:10.5px;color:var(--dim)}
 
 /* focus band -- no accent side stripe (killed per spec); state lives in the dot */
-.focus{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px;padding:0 12px}
+/* #258 slice 4: the center is a single selected-lane card since slice 2b, so the
+   pre-2b multi-card grid track is retired -- it left the lone card capped to one
+   ~360px column with dead space beside it. Plain block = the card fills the
+   center zone, matching the mockup's full-width lane detail. */
+.focus{padding:0 12px}
 .fcard{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);padding:14px 15px;position:relative;overflow:hidden}
 .fc-top{display:flex;align-items:center;gap:10px;margin-bottom:11px}
 .fc-name{font-weight:600;font-size:15px}
