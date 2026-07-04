@@ -214,8 +214,10 @@ doctor_label_scope_check() {
     echo "INFO could not list repo labels (gh) -- can't verify role scope labels; ensure they exist"
     return 0
   fi
-  count="$(printf '%s\n' "$raw" | wc -l | tr -d ' ')"
-  if [ "$count" -ge 500 ]; then
+  # Count non-empty lines (each is one label) -- exact regardless of trailing
+  # newlines; `|| true` guards grep's rc 1 on a zero (empty) count.
+  count="$(printf '%s\n' "$raw" | grep -c . || true)"
+  if [ "${count:-0}" -ge 500 ]; then
     echo "INFO repo has >=500 labels -- too many to verify scope labels reliably; skipping"
     return 0
   fi
