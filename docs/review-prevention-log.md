@@ -280,3 +280,25 @@ actively editing (a `<select>` mid-dropdown, a text input) should be held.**
 Verified: `test_open_blurs_the_trigger` (openLaneHist blurs the anchor) + a
 browser check that after open the clock is not focused and the popover stays live
 across ticks.
+
+## 17. Under `set -e`, a non-total config reader turns a MISSING OPTIONAL KEY into a silent rc-1 death — before the `:-default` ever applies
+
+*Origin: 2026-07-05 live incident (fleet-wide safe_merge stall); introduced by
+#192/PR #284, diagnosed after the operator reported "PRs not progressing".*
+`VAR="$(CONFIG_GET some.key | paste ...)"` under `set -euo pipefail`: when the
+key is absent the parser exits 1, the assignment takes that rc, and `set -e`
+kills the script with ZERO output — the next line's `VAR="${VAR:-default}"` is
+unreachable. The first read of a key no existing config carried
+(merge_gate.doc_only_paths) killed EVERY safe_merge run silently; APPROVE'd
+PRs piled up unmerged and the only symptom was rc 1 with no output. **Rule:
+any helper that reads an OPTIONAL config key must be TOTAL (`… || true` /
+`|| echo <default>`) when any caller runs `set -e` — missing-key tolerance
+belongs in the READER, not in each call site's default.** doctor.sh's
+`|| echo` reads are the established pattern; supervisor.sh is exempt only
+because it runs without `set -e`. Same class: any `x="$(cmd)"` under `set -e`
+where cmd legitimately exits nonzero for an expected condition (entry #11's
+capture-first rule is the test-side twin). Diagnosis trap: the failure is
+INVISIBLE (no stderr) — when a gate script "does nothing", run `bash -x`
+before theorizing. Regression: `tests/test_safe_merge_config_get.sh` (the OLD
+code makes the test itself die rc-127 after one output line — the class
+demonstrated on itself).
