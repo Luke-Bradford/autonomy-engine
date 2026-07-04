@@ -2140,11 +2140,25 @@ class TestRepoStateLanes(unittest.TestCase):
             fh.write(config_text)
         return d
 
+    def _write_session(self, repo, ts, role):
+        """Write a minimal session-<ts>.log + its .role sidecar so
+        latest_session() + _session_role() resolve to `role`. latest_session
+        sorts by name, so a lexically-greater ts is 'newest'."""
+        logdir = os.path.join(repo, "var", "autonomy-logs")
+        with open(os.path.join(logdir, "session-%s.log" % ts), "w") as fh:
+            fh.write('{"type":"result","subtype":"success","is_error":false,'
+                     '"duration_ms":1000,"total_cost_usd":0.1,'
+                     '"usage":{"output_tokens":10}}\n')
+        with open(os.path.join(logdir, "session-%s.role" % ts), "w") as fh:
+            fh.write(role)
+
     def test_no_lanes_block_is_the_single_implicit_main_lane(self):
         d = self._repo("agent:\n  type: claude\n")
         st = ds.build_repo_state(d)
         self.assertEqual(
-            st["lanes"], {"names": ["main"], "default": "main", "valid": True})
+            st["lanes"],
+            {"names": ["main"], "default": "main", "valid": True,
+             "active": "main", "active_at": None})
 
     def test_declared_lanes_surface_in_order_first_is_default(self):
         d = self._repo(
@@ -2199,6 +2213,72 @@ class TestRepoStateLanes(unittest.TestCase):
         self.addCleanup(shutil.rmtree, d, True)
         st = ds.build_repo_state(d)
         self.assertEqual(
-            st["lanes"], {"names": ["main"], "default": "main", "valid": True})
+            st["lanes"],
+            {"names": ["main"], "default": "main", "valid": True,
+             "active": "main", "active_at": None})
         for r in st["roles"]:
             self.assertEqual(r["lane"], "main")
+
+    # --- #258 slice 1: lanes.active / active_at (default selection source) ---
+    # The center zone becomes the selected lane; the default selection is the
+    # most-recently-active lane, sourced from server truth (not client guess).
+
+    def test_active_lane_is_the_newest_sessions_declared_lane(self):
+        # newest session (lexically-greater ts) works a role in lane 'frontend';
+        # an older one is in 'main' -> active is the NEWEST lane, with an epoch.
+        d = self._repo(
+            "lanes:\n  main:\n    worktree: ../x-main\n"
+            "  frontend:\n    worktree: ../x-fe\n"
+            "roles:\n  coder:\n    lane: frontend\n"
+            "    scope:\n      labels: [ready]\n")
+        self._write_session(d, "20260701T090000", "pm")      # older -> main
+        self._write_session(d, "20260701T093000", "coder")   # newest -> frontend
+        st = ds.build_repo_state(d)
+        self.assertEqual(st["lanes"]["active"], "frontend")
+        self.assertIsInstance(st["lanes"]["active_at"], int)
+        self.assertGreater(st["lanes"]["active_at"], 0)
+
+    def test_active_lane_defaults_when_no_sessions(self):
+        d = self._repo(
+            "lanes:\n  main:\n    worktree: ../x-main\n"
+            "  frontend:\n    worktree: ../x-fe\n")
+        st = ds.build_repo_state(d)
+        self.assertEqual(st["lanes"]["active"], "main")   # == default
+        self.assertIsNone(st["lanes"]["active_at"])
+
+    def test_active_lane_falls_back_when_role_lane_undeclared(self):
+        # A role routed to a lane that isn't a declared name -> lane_of_role
+        # returns it VERBATIM (dispatch refuses by omission). active must NOT
+        # surface an undeclared lane as selectable -- degrade to the default
+        # lane (fail-safe, never fail-open display; Codex CP1 finding 1).
+        d = self._repo(
+            "lanes:\n  main:\n    worktree: ../x-main\n"
+            "  frontend:\n    worktree: ../x-fe\n"
+            "roles:\n  coder:\n    lane: ghost\n"
+            "    scope:\n      labels: [ready]\n")
+        self._write_session(d, "20260701T093000", "coder")
+        st = ds.build_repo_state(d)
+        self.assertEqual(st["lanes"]["active"], "main")   # not 'ghost'
+
+    def test_active_lane_degrades_to_main_on_malformed_block(self):
+        # malformed `lanes:` -> names degrade to ['main']; active follows,
+        # never raises (prev-log #12, degrade-to-truth).
+        d = self._repo("lanes: nonsense\nroles:\n  coder:\n    enabled: true\n")
+        self._write_session(d, "20260701T093000", "coder")
+        st = ds.build_repo_state(d)
+        self.assertEqual(st["lanes"]["active"], "main")
+
+    def test_active_lane_does_not_surface_an_invalid_lane_name(self):
+        # A well-formed mapping but an INVALID lane name -> valid:False (the
+        # supervisor's --lane gate REFUSES it). names/default still echo the raw
+        # key for the ⚠ badge, but `active` must NOT default-SELECT a lane the
+        # engine won't run -- degrade to 'main' (Codex CP2: fail-safe, never
+        # fail-open display).
+        d = self._repo(
+            "lanes:\n  badname!:\n    worktree: ../x\n"
+            "roles:\n  coder:\n    lane: badname!\n"
+            "    scope:\n      labels: [ready]\n")
+        self._write_session(d, "20260701T093000", "coder")
+        st = ds.build_repo_state(d)
+        self.assertFalse(st["lanes"]["valid"])
+        self.assertEqual(st["lanes"]["active"], "main")   # not 'badname!'

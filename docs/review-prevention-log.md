@@ -233,3 +233,25 @@ counter) alongside `qreset`/`agox`, or a working repo's key changes every second
 and the guard never skips.** Verified via the #239 temporal pass (focus idle
 rebuilds 0) plus an in-browser interaction driver (focus survives a tick;
 change-then-revert leaves no stale card; empty→repopulate restores cards).
+
+## 15. A `*_valid: False` config projection still echoes the RAW invalid keys — a new consumer that treats them as usable is fail-open
+
+*Origin: #258 lane-selection slice; Codex checkpoint 2.*
+`build_repo_state.lanes` exposes `names`/`default`/`valid` where `valid: False`
+means the committed `lanes:` block is malformed (bad name, non-mapping, unknown
+key — the SAME verdict the supervisor's `--lane` gate reaches, so it REFUSES to
+dispatch). But `roles.lane_names()`/`default_lane()` deliberately still echo the
+raw keys verbatim (`_declared_lane_names` returns `list(lanes)` unfiltered) so a
+render can *name* the offending lane in its ⚠ badge. The trap: a NEW consumer
+that reads `names`/`default`/`lane_of_role` as "the lanes I can use" will surface
+a lane the engine won't run. The #258 default-selection (`lanes.active`) hit
+exactly this — an invalid lane name flowed straight into the selectable/active
+lane, so the center zone would default-focus a lane that can't dispatch =
+fail-open display, which invariant #1 forbids. **Rule: any read-only surface that
+turns a config projection into an ACTION target (selection, dispatch, a control
+default) must gate on the block's `valid`/`*_valid` verdict FIRST and degrade to
+the neutral fallback (`main`) when False — never treat the echoed-for-display raw
+keys as usable. Displaying an invalid value (badged as broken) is truthful;
+*selecting/acting on* it is fail-open.** Verified:
+`test_active_lane_does_not_surface_an_invalid_lane_name` (an invalid lane name →
+`valid: False`, `active == "main"`, not the raw key).
