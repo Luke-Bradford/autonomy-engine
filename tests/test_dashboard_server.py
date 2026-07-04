@@ -7,7 +7,9 @@ import os
 import re
 import sys
 import tempfile
+import time
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "bin"))
@@ -763,6 +765,48 @@ class TestConfigPageUi1Parity(unittest.TestCase):
         self.assertIn('setAttribute("data-theme",_effTheme(', html)
         # and that unknown values are coerced rather than applied verbatim.
         self.assertIn('["dark","light","system"].indexOf(t)<0', html)
+
+
+class TestAccountUsageForecast(unittest.TestCase):
+    """#188b: the live-quota assembly (_account_usage) threads each live window's
+    burn-rate forecast onto the window -- so the quota card's dynamically-selected
+    window carries it -- WITHOUT mutating cu.live_quota()'s shared cache dict, and
+    still fails closed (claude=None) when the live read raises."""
+
+    def setUp(self):
+        # force a cache miss so each call actually re-assembles usage.
+        dashboard._acct_cache[0] = 0.0
+        dashboard._acct_cache[1] = None
+
+    def _neutralise_other_sources(self):
+        # only the live claude path matters here; stub the other two usage sources.
+        return (
+            mock.patch.object(dashboard.ds, "account_usage",
+                              lambda *a, **k: {"five_hour": {}, "seven_day": {}}),
+            mock.patch.object(dashboard.ds, "codex_usage",
+                              lambda *a, **k: {"available": False}),
+        )
+
+    def test_live_windows_carry_forecast_and_shared_cache_not_mutated(self):
+        now = int(time.time())
+        shared = {"five_hour": {"utilization": 0.5, "resets_at": now + 3600},
+                  "seven_day": {"utilization": 0.5, "resets_at": now + 3600},
+                  "source": "live"}
+        b1, b2 = self._neutralise_other_sources()
+        with b1, b2, mock.patch.object(dashboard.cu, "live_quota", lambda *a, **k: shared):
+            usage = dashboard._account_usage()
+        self.assertIn("forecast", usage["claude"]["five_hour"])
+        self.assertEqual(usage["claude"]["source"], "live")
+        # the shared cache dict cu.live_quota returned must be untouched.
+        self.assertNotIn("forecast", shared["five_hour"])
+
+    def test_live_read_exception_fails_closed_to_none(self):
+        def boom(*a, **k):
+            raise RuntimeError("live read failed")
+        b1, b2 = self._neutralise_other_sources()
+        with b1, b2, mock.patch.object(dashboard.cu, "live_quota", boom):
+            usage = dashboard._account_usage()
+        self.assertIsNone(usage["claude"])
 
 
 if __name__ == "__main__":

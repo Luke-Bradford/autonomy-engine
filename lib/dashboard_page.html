@@ -779,10 +779,28 @@ function qrow(label,acct,win,now){
   const pct=win?Math.round((win.utilization||0)*100):null;
   const cls=(pct>=90)?"hot":(pct>=60)?"mid":"";
   const reset = win&&win.resets_at ? ` · resets in <span class="qreset" data-e="${win.resets_at}">${dur(win.resets_at-now)}</span>` : "";
+  // #188b burn-rate forecast: rendered ONLY when the forecast's resets_at matches
+  // the displayed window's -- a self-defending render (attach_quota_forecast pairs
+  // them by construction, but a future mispairing degrades to silence, never a lie
+  // against the wrong window). Explicitly a projection ("at this burn"), never an
+  // assertion; a window with no honest forecast shows nothing.
+  const fc = win && win.forecast;
+  let fline = "";
+  if(fc && fc.projected_exhaust_epoch!=null && fc.resets_at===win.resets_at){
+    const eta = fc.projected_exhaust_epoch - now;
+    if(eta<=0){
+      fline = `<div class="q-sub"><span style="color:var(--warn)">at burn limit now</span></div>`;
+    } else if(fc.exhausts_before_reset){
+      fline = `<div class="q-sub"><span style="color:var(--warn)">at this burn: full in `
+            + `<span class="qreset" data-e="${fc.projected_exhaust_epoch}">${dur(eta)}</span> — before reset</span></div>`;
+    } else {
+      fline = `<div class="q-sub"><span style="color:var(--ok)">at this burn: safe — refills before limit</span></div>`;
+    }
+  }
   return `<div class="q"><div class="q-h"><span class="lab">${label}</span>
       <span class="val"><b class="mono">${sess}</b> <span style="color:var(--dim);font-weight:400">sess</span>${pct!=null?` · <span style="color:${pct>=60?'var(--warn)':'var(--mut)'}">${pct}%</span>`:""}</span></div>
     <div class="bar ${cls}"><i style="width:${pct!=null?Math.max(1,pct):0}%"></i></div>
-    <div class="q-sub"><span>${compact(toks)} tok this window${reset}</span>${win&&win.overage?"<span style='color:var(--warn)'>overage</span>":""}</div></div>`;
+    <div class="q-sub"><span>${compact(toks)} tok this window${reset}</span>${win&&win.overage?"<span style='color:var(--warn)'>overage</span>":""}</div>${fline}</div>`;
 }
 function renderQuota(repos,account){
   const now=Math.floor(nowS());
