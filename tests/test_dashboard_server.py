@@ -5,6 +5,7 @@ that single-sources the model-picker roster (#134)."""
 import json
 import os
 import sys
+import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -362,6 +363,106 @@ class TestModelsReadModel(unittest.TestCase):
         out = dashboard.models_read_model()
         self.assertEqual(out["accounts"], [])
         self.assertIsNotNone(out["error"])
+
+
+class TestRepoOwnerDefault(unittest.TestCase):
+    """The best-effort board.owner derivation behind the config page's derived
+    default (#171). Mirrors the engine's best-effort periphery (settled-decision
+    6): any gh/validation failure yields "" -- never a fabricated owner. The
+    login gh returns is re-validated against the GitHub grammar before it is
+    surfaced (prevention log 6). Never raises; cached briefly per repo."""
+
+    def setUp(self):
+        # defensive: on the red run the cache attr does not exist yet, so the
+        # test must fail on the MISSING FUNCTION, not on clearing a missing dict.
+        if hasattr(dashboard, "_owner_cache"):
+            dashboard._owner_cache.clear()
+        self._orig_run = dashboard._run
+
+    def tearDown(self):
+        dashboard._run = self._orig_run
+        if hasattr(dashboard, "_owner_cache"):
+            dashboard._owner_cache.clear()
+
+    def test_valid_login_returned(self):
+        calls = []
+        dashboard._run = lambda args, **kw: calls.append((args, kw)) or "Luke-Bradford\n"
+        self.assertEqual(dashboard.repo_owner_default("/r"), "Luke-Bradford")
+        # gh queried the repo's own remote (cwd=repo), not a global lookup.
+        self.assertIn("repo", calls[0][0])
+        self.assertEqual(calls[0][1].get("cwd"), "/r")
+
+    def test_gh_failure_yields_empty(self):
+        dashboard._run = lambda args, **kw: None   # gh failed/timed out
+        self.assertEqual(dashboard.repo_owner_default("/r"), "")
+
+    def test_grammar_reject_yields_empty(self):
+        # a login that fails the GitHub grammar is never surfaced (prevention 6).
+        for bad in ("-bad", "a b", "user_name", "a.b", "x;y", "--flag"):
+            dashboard._owner_cache.clear()
+            dashboard._run = lambda args, **kw: bad + "\n"
+            self.assertEqual(dashboard.repo_owner_default("/r"), "", bad)
+
+    def test_never_raises_on_run_exception(self):
+        def boom(*a, **kw):
+            raise RuntimeError("gh blew up")
+        dashboard._run = boom
+        self.assertEqual(dashboard.repo_owner_default("/r"), "")
+
+    def test_blank_repo_yields_empty_no_gh(self):
+        called = {"n": 0}
+        dashboard._run = lambda *a, **kw: called.__setitem__("n", called["n"] + 1)
+        self.assertEqual(dashboard.repo_owner_default(""), "")
+        self.assertEqual(dashboard.repo_owner_default("   "), "")
+        self.assertEqual(called["n"], 0, "gh must not run for a blank repo")
+
+    def test_cached_second_call_skips_gh(self):
+        calls = []
+        dashboard._run = lambda args, **kw: calls.append(1) or "Acme\n"
+        dashboard.repo_owner_default("/r")
+        dashboard.repo_owner_default("/r")
+        self.assertEqual(len(calls), 1, "second call within TTL must be cached")
+
+    def test_cache_is_bounded(self):
+        dashboard._run = lambda args, **kw: "Acme\n"
+        for i in range(dashboard._OWNER_CACHE_MAX + 20):
+            dashboard.repo_owner_default("/r%d" % i)
+        self.assertLessEqual(len(dashboard._owner_cache),
+                             dashboard._OWNER_CACHE_MAX)
+
+
+class TestConfigReadModelOwnerDerived(unittest.TestCase):
+    """config_read_model() carries a best-effort board_owner_derived per repo so
+    the config page can offer it as a default. A derivation failure must be ""
+    and non-fatal -- the page still renders (#171)."""
+
+    def setUp(self):
+        if hasattr(dashboard, "_owner_cache"):
+            dashboard._owner_cache.clear()
+        self._orig_run = dashboard._run
+        self._orig_repos = dashboard.Handler.repos
+        self._td = tempfile.TemporaryDirectory()
+        os.makedirs(os.path.join(self._td.name, ".autonomy"))
+        with open(os.path.join(self._td.name, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("board:\n  owner: \"\"\n")
+        dashboard.Handler.repos = [self._td.name]
+
+    def tearDown(self):
+        dashboard._run = self._orig_run
+        dashboard.Handler.repos = self._orig_repos
+        if hasattr(dashboard, "_owner_cache"):
+            dashboard._owner_cache.clear()
+        self._td.cleanup()
+
+    def test_derived_owner_in_payload(self):
+        dashboard._run = lambda args, **kw: "Luke-Bradford\n"
+        repo = dashboard.config_read_model()["repos"][0]
+        self.assertEqual(repo["board_owner_derived"], "Luke-Bradford")
+
+    def test_derivation_failure_is_empty_not_fatal(self):
+        dashboard._run = lambda args, **kw: None
+        repo = dashboard.config_read_model()["repos"][0]
+        self.assertEqual(repo["board_owner_derived"], "")
 
 
 if __name__ == "__main__":
