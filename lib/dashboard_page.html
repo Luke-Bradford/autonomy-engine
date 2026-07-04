@@ -567,11 +567,15 @@ function renderRepos(repos){
         : (role.trigger==="event"&&role.enabled&&role.configured)
         ? `event · armed`
         : esc(role.trigger);
+      // #198: roster MOTION lives solely on the acting-role rdot below. The
+      // coder row's status LABEL still mirrors the repo (#23), but its status
+      // dot no longer pulses (pulse=false) -- else a non-coder session would
+      // pulse the coder row falsely AND double up with the acting rdot.
       return `<div class="role ${off?"off":""}${isActing?" acting":""}">
         <i class="rdot"></i><span class="rn">${esc(role.name)}</span>
         ${subBadge(role.substrate)}
         <span class="trig">${trig}</span>
-        <span class="rst">${token(role.status,role.name==="coder")}</span></div>`;
+        <span class="rst">${token(role.status,false)}</span></div>`;
     }).join("");
     return `<div class="repo">
       <div class="repo-h"><span class="nm">${esc(dispName(r.name))}</span>
