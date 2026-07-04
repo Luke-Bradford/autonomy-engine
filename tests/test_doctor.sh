@@ -394,5 +394,37 @@ check "marker_check: mismatched marker -> WARN naming it" "0" \
 rm -rf "$tmp/.github"
 check "marker_check: no workflow dir -> silent" "" "$(doctor_marker_check "$tmp")"
 
+# ---- #211: tracked+dirty config.yaml is a silent-revert (stash-sweep) hazard ----
+# doctor_dirty_config_report (pure): WARN ONLY when the config is git-tracked AND
+# dirty; every other combination is silent (tracked+clean and untracked are both
+# fine -- no per-run noise).
+dc_hazard="$(doctor_dirty_config_report yes yes)"
+check "dirty_config_report: tracked+dirty -> WARN" "0" "$(has "$dc_hazard" 'WARN' && echo 0 || echo 1)"
+check "dirty_config_report: WARN names config.yaml" "0" "$(has "$dc_hazard" 'config.yaml' && echo 0 || echo 1)"
+check "dirty_config_report: WARN names the stash-sweep hazard" "0" "$(has "$dc_hazard" 'stash' && echo 0 || echo 1)"
+check "dirty_config_report: tracked+clean -> silent" "" "$(doctor_dirty_config_report yes no)"
+check "dirty_config_report: untracked -> silent" "" "$(doctor_dirty_config_report no no)"
+check "dirty_config_report: untracked+dirty -> silent" "" "$(doctor_dirty_config_report no yes)"
+
+# doctor_dirty_config_check (impure): inspects real git state.
+gtmp="$(mktemp -d)"
+mkdir -p "$gtmp/.autonomy"
+printf 'engine:\n  requires_claude_md: false\n' > "$gtmp/.autonomy/config.yaml"
+check "dirty_config_check: non-git dir -> silent" "" "$(doctor_dirty_config_check "$gtmp")"
+git -C "$gtmp" init -q
+git -C "$gtmp" config user.email t@t; git -C "$gtmp" config user.name t
+# tracked but untracked-in-git yet (not added) -> silent
+check "dirty_config_check: config not yet tracked -> silent" "" "$(doctor_dirty_config_check "$gtmp")"
+git -C "$gtmp" add .autonomy/config.yaml
+git -C "$gtmp" commit -qm init
+check "dirty_config_check: tracked+clean -> silent" "" "$(doctor_dirty_config_check "$gtmp")"
+printf 'engine:\n  requires_claude_md: true\n' > "$gtmp/.autonomy/config.yaml"
+dc_live="$(doctor_dirty_config_check "$gtmp")"
+check "dirty_config_check: tracked+dirty -> WARN" "0" "$(has "$dc_live" 'WARN' && echo 0 || echo 1)"
+# staged-but-uncommitted also gets stash-swept -> still flagged
+git -C "$gtmp" add .autonomy/config.yaml
+check "dirty_config_check: tracked+staged -> WARN" "0" "$(has "$(doctor_dirty_config_check "$gtmp")" 'WARN' && echo 0 || echo 1)"
+rm -rf "$gtmp"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
