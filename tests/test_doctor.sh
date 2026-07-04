@@ -295,5 +295,59 @@ check "secret_check not-authed -> silent" "" "$(doctor_review_secret_check "$tmp
 unset -f gh
 unset STUB_AUTH_RC STUB_AUTH_OUT STUB_SECRET_RC STUB_SECRET_OUT
 
+# ---- #171: scope-label existence check ----
+# doctor_labels_report (pure): exact string equality, no grep -> a '-'-leading or
+# space-holding label neither breaks nor false-matches.
+lr_missing="$(doctor_labels_report "$(printf 'ready\nbug\n-weird')" "$(printf 'ready\nbug\ngood first issue')")"
+check "labels_report: absent label -> WARN naming it" "0" "$(has "$lr_missing" "'-weird'" && echo 0 || echo 1)"
+check "labels_report: present label not warned"       "1" "$(has "$lr_missing" "'ready'" && echo 0 || echo 1)"
+check "labels_report: all present -> no output" "" \
+  "$(doctor_labels_report "$(printf 'ready\nbug')" "$(printf 'ready\nbug\ndocs')")"
+check "labels_report: space-in-label whole-line match -> no warn" "" \
+  "$(doctor_labels_report 'good first issue' "$(printf 'good first issue\nbug')")"
+check "labels_report: no configured -> no output" "" \
+  "$(doctor_labels_report '' "$(printf 'bug')")"
+
+# doctor_label_scope_check (impure) with a gh stub + a real roles.py read.
+cat > "$tmp/.autonomy/config.yaml" <<'YAML'
+roles:
+  coder:
+    enabled: true
+    scope: { labels: [ready, ghostlabel] }
+YAML
+gh_pwd="$tmp/ghpwd"; gh_called="$tmp/ghcalled"
+gh() {
+  case "$1 $2" in
+    "label list") pwd > "$gh_pwd"; touch "$gh_called"; printf 'ready\tReady\t#fff\n'; return 0 ;;
+    *) return 0 ;;
+  esac
+}
+lsc="$(doctor_label_scope_check "$tmp")"
+check "label_check: missing label -> WARN"        "0" "$(has "$lsc" 'ghostlabel' && echo 0 || echo 1)"
+check "label_check: present label not warned"     "1" "$(has "$lsc" "'ready'" && echo 0 || echo 1)"
+check "label_check: gh ran in the TARGET repo"    "0" "$(test "$(cat "$gh_pwd")" = "$(cd "$tmp" && pwd)" && echo 0 || echo 1)"
+
+# gh label list fails -> INFO hint, not a false WARN.
+gh() { case "$1 $2" in "label list") return 1 ;; *) return 0 ;; esac; }
+lsc_fail="$(doctor_label_scope_check "$tmp")"
+check "label_check: gh fails -> INFO not WARN" "0" "$(has "$lsc_fail" '^INFO' && ! has "$lsc_fail" 'WARN' && echo 0 || echo 1)"
+
+# saturated list (>=500) is unverifiable -> INFO, never a false missing-WARN.
+gh() { case "$1 $2" in "label list") seq 1 500 | sed 's/^/l/;s/$/\t.\t#fff/' ;; *) return 0 ;; esac; }
+lsc_sat="$(doctor_label_scope_check "$tmp")"
+check "label_check: saturated list -> INFO not WARN" "0" "$(has "$lsc_sat" '^INFO' && ! has "$lsc_sat" 'WARN' && echo 0 || echo 1)"
+
+# no configured labels -> silent AND no gh round-trip.
+cat > "$tmp/.autonomy/config.yaml" <<'YAML'
+roles:
+  coder:
+    enabled: true
+YAML
+rm -f "$gh_called"
+gh() { case "$1 $2" in "label list") touch "$gh_called"; return 0 ;; *) return 0 ;; esac; }
+check "label_check: no configured labels -> silent" "" "$(doctor_label_scope_check "$tmp")"
+check "label_check: no configured labels -> gh NOT called" "1" "$(test -f "$gh_called" && echo 0 || echo 1)"
+unset -f gh
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
