@@ -414,8 +414,11 @@ function renderHistory(repos){
 function renderFocus(repos){
   const active=repos.filter(r=>["working","stopping","idle","paused"].includes(dispStatus(r)));
   $("c-now").textContent=active.length?`${active.filter(r=>dispStatus(r)==="working").length} working · ${active.length} live`:"";
-  const show=repos.length?repos:[];
-  const html=show.map((r,i)=>{
+  // #151 item 4: a fresh install has no registered repos -> the focus band would
+  // render blank. Narrate the empty state with the path forward (config page)
+  // instead of a void. Static copy + a same-origin link, no user data to esc().
+  if(!repos.length){$("focus").innerHTML=`<div class="empty">No repositories yet — <a class="navlink" href="/config">add one on the config page →</a></div>`;return;}
+  const html=repos.map((r,i)=>{
     const st=dispStatus(r), cs=r.current_session||{}, git=r.git||{}, ft=git.focus_ticket;
     const busy=st==="working"||st==="stopping";
     let ticket="";
