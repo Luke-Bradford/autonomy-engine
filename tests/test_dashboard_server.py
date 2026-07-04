@@ -877,5 +877,74 @@ class TestFleetRailLifecycleCluster(unittest.TestCase):
         self.assertIn(b'closest("button,a,select,input,details,summary")', self._page())
 
 
+class TestCenterFocusCollapse(unittest.TestCase):
+    """#258 slice 2b: the center focus band collapses from the per-repo NOW-card
+    grid to the SELECTED lane's single card. Lifecycle controls, relocated to the
+    fleet-rail cluster in slice 2a, are removed from the focus card (no longer
+    duplicated); model/effort stay on the card until their own rail sub-slice
+    (CP1 finding 3). These assertions pin the render structure; the behavioral
+    acceptance (single card renders the selected lane, survives ticks, model
+    picker still reachable) is the dashboard browser verify loop."""
+
+    def _focus_body(self):
+        # scope every assertion to renderFocus()'s body so an incidental
+        # controls()/repos.map() elsewhere on the page can't mask a regression.
+        html = dashboard._page_bytes(dashboard.PAGE)
+        i = html.find(b"function renderFocus(")
+        self.assertNotEqual(i, -1, "renderFocus() is not defined")
+        j = html.find(b"function modelCtl(", i)
+        self.assertNotEqual(j, -1, "modelCtl() is not defined after renderFocus()")
+        return html[i:j]
+
+    def test_focus_no_longer_maps_all_repos(self):
+        # the NOW-card grid mapped every repo (`repos.map(...)`). The collapsed
+        # center renders a single selected card, so that fleet-wide map is gone.
+        self.assertNotIn(b"repos.map(", self._focus_body(),
+                         "center focus still maps all repos — NOW-card grid not collapsed")
+
+    def test_focus_resolves_the_selected_lane(self):
+        # the single card shown is the selected lane's owning repo, resolved via
+        # the shared selectedLane() accessor (self-healing default, never blank).
+        self.assertIn(b"selectedLane(", self._focus_body(),
+                      "center focus does not resolve the selected lane")
+
+    def test_focus_drops_the_duplicated_lifecycle_controls(self):
+        # slice 2a relocated lifecycle to the rail cluster; the focus card must no
+        # longer emit controls(). With no remaining caller the controls()/cbtn()
+        # renderer is dead and is removed entirely this slice (the rail's
+        # lifecycleCluster() independently mirrors the status ladder).
+        self.assertNotIn(b"controls(r,st)", self._focus_body(),
+                         "focus card still emits the duplicated lifecycle controls()")
+
+    def test_dead_center_control_renderer_removed(self):
+        # the now-unused text-button lifecycle renderer (controls()/cbtn()) is
+        # deleted, not left dangling; the icon-cluster rail is the sole lifecycle
+        # surface. (.cbtn CSS stays -- modelCtl uses it for the save buttons.)
+        page = dashboard._page_bytes(dashboard.PAGE)
+        self.assertNotIn(b"function controls(", page,
+                         "dead controls() renderer still defined")
+        self.assertNotIn(b"function cbtn(", page,
+                         "dead cbtn() helper still defined")
+        self.assertIn(b".cbtn{", page, "modelCtl's .cbtn CSS was wrongly removed")
+
+    def test_focus_keeps_the_model_effort_control(self):
+        # CP1 finding 3: 2b removes ONLY the lifecycle duplicate. Model/effort
+        # stay on the card until their own rail sub-slice lands.
+        self.assertIn(b"modelCtl(r", self._focus_body(),
+                      "focus card dropped the model/effort control (2b over-reached)")
+
+    def test_selectLane_rerenders_the_center_focus(self):
+        # CP2 (Codex): renderFocus now depends on selectedLane(), so a lane click
+        # must re-render the center immediately -- else the card/header lags the
+        # click until the next /api/state tick. selectLane re-renders both the
+        # rail and the focus.
+        page = dashboard._page_bytes(dashboard.PAGE)
+        i = page.find(b"function selectLane(")
+        self.assertNotEqual(i, -1, "selectLane() is not defined")
+        body = page[i:i + 200]
+        self.assertIn(b"renderFocus(", body,
+                      "selectLane does not re-render the center focus on selection")
+
+
 if __name__ == "__main__":
     unittest.main()

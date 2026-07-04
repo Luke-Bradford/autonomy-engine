@@ -514,8 +514,6 @@ function renderHistory(repos){
   }
 }
 function renderFocus(repos){
-  const active=repos.filter(r=>["working","stopping","idle","paused"].includes(dispStatus(r)));
-  $("c-now").textContent=active.length?`${active.filter(r=>dispStatus(r)==="working").length} working · ${active.length} live`:"";
   // #151 item 4: a fresh install has no registered repos -> the focus band would
   // render blank. Narrate the empty state with the path forward (config page)
   // instead of a void. Static copy + a same-origin link, no user data to esc().
@@ -523,8 +521,25 @@ function renderFocus(repos){
   // on EVERY write path -- a direct innerHTML here would leave _sig.focus keyed
   // to old card markup, and a transient empty->repopulate with identical markup
   // would then wrongly skip and freeze the empty state.
-  if(!repos.length){setHTML("focus",`<div class="empty">No repositories yet — <a class="navlink" href="/config">add one on the config page →</a></div>`);return;}
-  const html=repos.map((r,i)=>{
+  // #258 slice 2b: the empty state precedes selection (selectedLane needs a repo)
+  // -- clear the header count too so a stale "N live" never lingers behind it.
+  if(!repos.length){$("c-now").textContent="";setHTML("focus",`<div class="empty">No repositories yet — <a class="navlink" href="/config">add one on the config page →</a></div>`);return;}
+  // #258 slice 2b: the center focus band is the SELECTED lane's single card, not
+  // the per-repo NOW-card grid. selectedLane() self-heals a stale/absent key to
+  // the fleet default (greatest lanes.active_at -> its active lane), so the card
+  // is never blank; cross-repo "what's happening everywhere" is answered by the
+  // fleet rail + right-rail org feed by design -- the center is single-lane.
+  const selKey=selectedLane(repos), sep=selKey.indexOf(_LSEP);
+  const selPath=sep<0?selKey:selKey.slice(0,sep);
+  const selLane=sep<0?"main":selKey.slice(sep+1);
+  const sel=repos.find(x=>x.path===selPath)||repos[0];
+  const laneNames=(sel.lanes&&Array.isArray(sel.lanes.names))?sel.lanes.names:[];
+  // label the "Now" header with the lane the single card shows -- a fleet-wide
+  // "N working · M live" count over one card would read as broken (a #234-class
+  // display lie now that the center is single-lane). Multi-lane repos name the
+  // lane; a single-lane repo just names itself.
+  $("c-now").textContent=laneNames.length>1?`${dispName(sel.name)} · ${selLane}`:dispName(sel.name);
+  const html=[sel].map(r=>{
     const st=dispStatus(r), cs=r.current_session||{}, git=r.git||{}, ft=git.focus_ticket;
     const busy=st==="working"||st==="stopping";
     let ticket="";
@@ -576,7 +591,7 @@ function renderFocus(repos){
       </div>
       ${ticket}${stepLine}
       <div class="fc-meta"><span>${elapsed}</span>${cs.output_tokens!=null?`<span>out <b class="mono">${num(cs.output_tokens)}</b> tok</span>`:""}${cs.cost_usd?`<span>cost <b class="mono">$${cs.cost_usd.toFixed(2)}</b></span>`:""}${effortMeta}</div>
-      ${controls(r,st)}${modelCtl(r,st)}
+      ${modelCtl(r,st)}
     </div>`;
   });
   // keep ONLY the card being interacted with (its select/button focused) as
@@ -643,23 +658,17 @@ function setModel(btn,scope){
 
 /* ---- CONTROLS (P2) ---- */
 const CTOKEN=(document.querySelector('meta[name="ae-control-token"]')||{}).content||"";
-function cbtn(repo,action,label,cls){return `<button class="cbtn ${cls}" onclick="control('${encAttr(repo)}','${action}','${esc(label)}')">${esc(label)}</button>`;}
-function controls(r,st){
-  const repo=r.path;
-  if(st==="needs-setup"||st==="missing") return `<div class="ctl"><span class="note">run setup_worktree.sh to manage</span></div>`;
-  let btns="";
-  if(st==="working"||st==="idle"){ btns=cbtn(repo,"pause","graceful-stop","warn")+cbtn(repo,"stop","hard-stop","danger"); }
-  else if(st==="paused"||st==="stopping"){ btns=cbtn(repo,"resume","resume","go")+cbtn(repo,"stop","hard-stop","danger"); }
-  else if(st==="stopped"){ btns=cbtn(repo,"start","start","go"); }
-  else return "";
-  return `<div class="ctl">${btns}<span class="note">lifecycle only</span></div>`;
-}
-// #258 slice 2a: the fleet-rail repo-header lifecycle icon cluster (the redesign
-// mockup's `.ibtn` cluster). SAME status ladder + SAME actions as controls()
-// above -- reuses control()/CTOKEN/CONFIRM verbatim (no new endpoint, no new
+// #258 slice 2b: the center focus card's `controls()`/`cbtn()` text-button
+// lifecycle renderer is gone -- lifecycle now lives ONLY on the fleet-rail
+// `lifecycleCluster()` icon cluster (slice 2a), so the center is single-lane
+// with no duplicated controls. (The `.cbtn` CSS class stays: modelCtl still
+// uses it for the model/effort save buttons.)
+// The fleet-rail repo-header lifecycle icon cluster (the redesign mockup's
+// `.ibtn` cluster) offers the SAME status ladder + SAME actions the old center
+// card controls did -- reuses control()/CTOKEN/CONFIRM verbatim (no new endpoint, no new
 // action string; `graceful-stop`/`hard-stop` are only toast LABELS, the actions
-// are pause/resume/stop/start). Additive this slice: the NOW cards keep their
-// controls until slice 2b collapses the center. Emits nothing for
+// are pause/resume/stop/start). Now the sole lifecycle surface (slice 2b removed
+// the center-card duplicate). Emits nothing for
 // needs-setup/missing/error -- those have no manageable supervisor.
 // Static per status: no volatile time content enters the #164/#238 skip-guard
 // signature, and every button is a real <button> so the delegated #repos
@@ -740,9 +749,12 @@ function selectedLane(repos){
   return SELECTED;
 }
 // selectLane re-renders the fleet so the new `sel` markup flows through the
-// #164/#238 guard (signature-consistent). Slices 2-4 extend this to re-point the
-// center panels at the selected lane.
-function selectLane(key){SELECTED=key; if(LAST)renderRepos(LAST.repos);}
+// #164/#238 guard (signature-consistent). #258 slice 2b: it ALSO re-renders the
+// center focus immediately -- renderFocus now depends on selectedLane(), so
+// without this the center card/header would lag a click until the next
+// /api/state tick. Both renders go through the shared setHTML/_sig guard, so a
+// no-op selection (re-click the same lane) is skipped, not a churn.
+function selectLane(key){SELECTED=key; if(LAST){renderRepos(LAST.repos);renderFocus(LAST.repos);}}
 function renderRepos(repos){
   $("h-repos").textContent=repos.length;
   const selKey=selectedLane(repos);
