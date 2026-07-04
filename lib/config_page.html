@@ -6,32 +6,35 @@
 <meta name="ae-control-token" content="__CONTROL_TOKEN__">
 <title>Autonomy · config</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23141418'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%235b9dff'/%3E%3C/svg%3E">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
+/* UI-8 (#191): config page adopts the UI-1 control-room token system verbatim
+   from lib/dashboard_page.html (#184) so /config and / render as one skin. Same
+   variable NAMES were already shared; this re-points the VALUES, drops the
+   Google-webfont dependency (spec: "no webfont gamble -- Avenir Next / SF Mono
+   are macOS-present") and the grid texture (--grid:transparent). Keep these three
+   blocks byte-identical to dashboard_page.html; a parity test guards the drift. */
 :root{
-  --sans:'Schibsted Grotesk',system-ui,sans-serif;
-  --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
-  --r:8px;
+  --sans:"Avenir Next","Helvetica Neue",system-ui,sans-serif;
+  --mono:"SF Mono",Menlo,ui-monospace,monospace;
+  --r:6px;
 }
 :root[data-theme="dark"]{
-  --bg:#0a0a0c; --bg-soft:#0d0d10; --panel:#141418; --panel2:#1a1a20;
-  --hair:#242429; --hair2:#30303a; --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
-  --ink:#ebebee; --mut:#9a9aa6; --dim:#63636e;
-  --accent:#6ea3ff; --accent-soft:rgba(110,163,255,.14);
-  --ok:#57cb8b; --ok-dim:#4a8666; --warn:#e6ac52; --bad:#e86f64; --info:#6ea3ff;
-  --ok-glow:rgba(87,203,139,.4); --warn-glow:rgba(230,172,82,.35); --bad-glow:rgba(232,111,100,.35);
-  --grid:rgba(255,255,255,.018);
+  --bg:#15181d; --bg-soft:#101318; --panel:#1c2027; --panel2:#20252d;
+  --hair:#2a2f38; --hair2:#333a45; --shadow:0 8px 24px -14px rgba(0,0,0,.6);
+  --ink:#e8eaed; --mut:#98a0ab; --dim:#6b7380;
+  --accent:#4c9ee3; --accent-soft:rgba(76,158,227,.14);
+  --ok:#3fb27f; --ok-dim:#2f8560; --warn:#d9a13b; --bad:#d95757; --info:#4c9ee3;
+  --ok-glow:rgba(63,178,127,.4); --warn-glow:rgba(217,161,59,.35); --bad-glow:rgba(217,87,87,.35);
+  --grid:transparent;
 }
 :root[data-theme="light"]{
-  --bg:#f5f5f2; --bg-soft:#efefeb; --panel:#ffffff; --panel2:#faf9f6;
-  --hair:#e7e6e1; --hair2:#d7d6d0; --shadow:0 1px 2px rgba(30,30,30,.05),0 10px 30px -18px rgba(30,30,30,.25);
-  --ink:#1a1a1e; --mut:#5a5a63; --dim:#9a9aa2;
-  --accent:#2f6fe0; --accent-soft:rgba(47,111,224,.09);
-  --ok:#2c9c60; --ok-dim:#5a8a70; --warn:#bd7d13; --bad:#d24339; --info:#2f6fe0;
-  --ok-glow:rgba(44,156,96,.3); --warn-glow:rgba(189,125,19,.3); --bad-glow:rgba(210,67,57,.3);
-  --grid:rgba(20,20,20,.02);
+  --bg:#f4f5f7; --bg-soft:#eceef1; --panel:#ffffff; --panel2:#f6f7f9;
+  --hair:#e2e4e8; --hair2:#d0d3d9; --shadow:0 8px 24px -18px rgba(30,30,30,.3);
+  --ink:#1b1e24; --mut:#5b626c; --dim:#9aa0aa;
+  --accent:#2f7fc9; --accent-soft:rgba(47,127,201,.10);
+  --ok:#2c9c60; --ok-dim:#5a8a70; --warn:#b9791a; --bad:#cf4b45; --info:#2f7fc9;
+  --ok-glow:rgba(44,156,96,.3); --warn-glow:rgba(185,121,26,.3); --bad-glow:rgba(207,75,69,.3);
+  --grid:transparent;
 }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
@@ -272,8 +275,16 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
 const $=(id)=>document.getElementById(id);
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 function encAttr(s){return encodeURIComponent(s).replace(/'/g,"%27");}
-function setTheme(t){document.documentElement.setAttribute("data-theme",t);try{localStorage.setItem("ae-theme",t);}catch(e){}}
+// theme -- shares the `ae-theme` localStorage key with the main page, whose
+// cycle can store "system" (resolved to dark|light via matchMedia). Applying a
+// raw "system" here would match neither token block and blank the page, so we
+// resolve + coerce exactly as dashboard_page.html does. This page's toggle only
+// offers dark/light, but it must still render any value the main page stored.
+const _mq=window.matchMedia?matchMedia("(prefers-color-scheme: light)"):null;
+function _effTheme(t){return t==="system"?((_mq&&_mq.matches)?"light":"dark"):t;}
+function setTheme(t){if(["dark","light","system"].indexOf(t)<0)t="dark";document.documentElement.setAttribute("data-theme",_effTheme(t));try{localStorage.setItem("ae-theme",t);}catch(e){}}
 setTheme((function(){try{return localStorage.getItem("ae-theme")||"dark";}catch(e){return "dark";}})());
+if(_mq){try{_mq.addEventListener("change",function(){try{if(localStorage.getItem("ae-theme")==="system")document.documentElement.setAttribute("data-theme",_effTheme("system"));}catch(e){}});}catch(e){}}
 const CTOKEN=(document.querySelector('meta[name="ae-control-token"]')||{}).content||"";
 const EFFORT_CHOICES=["","low","medium","high","xhigh","max"];
 const STRATEGIES=["manual","ci_only","bot_comment","gh_review"];
