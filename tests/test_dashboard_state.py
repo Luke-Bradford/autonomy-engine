@@ -1839,9 +1839,9 @@ class TestTriggerHealth(unittest.TestCase):
         st = ds.build_repo_state(repo, git_in_flight=lambda _p: {}, now=self.NOW)
         pm = next(r for r in st["roles"] if r["name"] == "pm")
         self.assertTrue(pm["missed_fire"])
-        # a role with no cron schedule is never flagged
-        coder = next(r for r in st["roles"] if r["name"] == "coder")
-        self.assertFalse(coder["missed_fire"])
+        # ONLY the stale cron role is flagged -- every other row (no cron
+        # schedule, or not overdue) stays False; no fabricated alarm.
+        self.assertEqual([r["name"] for r in st["roles"] if r["missed_fire"]], ["pm"])
 
     def test_build_repo_state_healthy_cron_not_flagged(self):
         repo = self._repo_with_cron(self.NOW - 60)     # fired a minute ago -> healthy
