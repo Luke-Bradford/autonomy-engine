@@ -8,6 +8,9 @@
 #   board.sh status <issue#> "<Status>"
 #   board.sh add    <issue#>
 #
+# Also enriches the item's Priority single-select from the issue's p-label
+# (#169, display-only per settled-decision D2) on both add and status.
+#
 # BEST-EFFORT BY DESIGN: board upkeep must NEVER block engineering work. Every
 # failure path warns to stderr and exits 0.
 set -uo pipefail
@@ -15,62 +18,116 @@ BOARD_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 warn() { echo "board.sh: $*" >&2; }
 
-# Resolve a GitHub Projects v2 project's node ID + Status field id + option
-# id for $3 (want_status), trying a user-owned project first, then an
-# org-owned one (Codex strategic-fit finding -- today's eBull-only version
-# assumed user()). Prints "<project_id> <status_field_id> <option_id>" or
-# nothing if no project with that title is found under either shape.
-board_resolve_project() {
-  local owner="$1" project_title="$2" want_status="${3:-}"
-  local meta
+# Map the engine's p-label (settled-decision 23: p1>p2>p3, p1 highest) to the
+# operator board's Priority single-select option (P0>P1>P2, P0 highest):
+# p1->P0, p2->P1, p3->P2. Echoes "" when no p-label is present -- the field is
+# then left untouched (never guess a priority). $1 = newline-separated labels;
+# HIGHEST present p-label wins deterministically (not label order), so a stray
+# extra p-label can never downgrade a real one.
+plabel_to_priority() {
+  local l has1="" has2="" has3=""
+  while IFS= read -r l; do
+    case "$l" in
+      p1) has1=1 ;;
+      p2) has2=1 ;;
+      p3) has3=1 ;;
+    esac
+  done <<EOF
+$1
+EOF
+  if [ -n "$has1" ]; then printf 'P0'
+  elif [ -n "$has2" ]; then printf 'P1'
+  elif [ -n "$has3" ]; then printf 'P2'
+  fi
+}
+
+# Resolve a Projects v2 project + one of its single-select fields in one pass,
+# trying a user-owned project first then an org-owned one (Codex strategic-fit
+# finding -- today's eBull-only version assumed user()). Prints
+# "<project_id> <field_id> <option_id>" (field_id/option_id empty when the
+# field or the wanted option is absent) or nothing if no project with that
+# title exists under either shape. field_name selects the single-select field
+# (Status | Priority) so one copy of the fallback serves both (DRY).
+#
+# The query ENUMERATES `fields(first:50)` and filters by name in Python rather
+# than `field(name:<n>)`: the latter returns a NOT_FOUND GraphQL error (gh rc=1)
+# for projects that lack the field, poisoning the whole call. Enumeration is
+# rc=0 and yields every single-select. So we do NOT gate on gh's rc -- a true
+# total failure yields empty stdout, which Python turns into empty tokens and
+# the body treats as "not found -> skip". option_id is non-empty ONLY when the
+# field matched (fld.id non-empty), so the 3-token line never has an empty
+# MIDDLE field -- safe under `read` word-splitting.
+board_resolve_field() {
+  local owner="$1" project_title="$2" field_name="$3" want_option="${4:-}"
+  local meta ids
   meta="$(gh api graphql -f query='
     query($o:String!){ user(login:$o){ projectsV2(first:30){ nodes{
       id title
-      field(name:"Status"){ ... on ProjectV2SingleSelectField{ id options{ id name } } }
-    }}}}' -f o="$owner" 2>/dev/null)" || return 1
+      fields(first:50){ nodes{ ... on ProjectV2SingleSelectField{ id name options{ id name } } } }
+    }}}}' -f o="$owner" 2>/dev/null)"
 
-  local ids
-  ids="$(PROJECT_TITLE="$project_title" STATUS="$want_status" python3 - "$meta" <<'PY' 2>/dev/null
+  ids="$(PROJECT_TITLE="$project_title" FIELD="$field_name" WANT="$want_option" python3 - "$meta" <<'PY' 2>/dev/null
 import sys, json, os
-t = os.environ["PROJECT_TITLE"]; want = os.environ.get("STATUS", "")
-d = json.loads(sys.argv[1])
-proj = next((n for n in d["data"]["user"]["projectsV2"]["nodes"] if n["title"] == t), None)
+t = os.environ["PROJECT_TITLE"]; fname = os.environ["FIELD"]; want = os.environ.get("WANT", "")
+try:
+    d = json.loads(sys.argv[1])
+except Exception:
+    print(); sys.exit(0)
+u = (d.get("data") or {}).get("user") or {}
+nodes = (u.get("projectsV2") or {}).get("nodes") or []
+proj = next((n for n in nodes if n and n.get("title") == t), None)
 if not proj:
     print(); sys.exit(0)
-f = proj.get("field") or {}
+fields = (proj.get("fields") or {}).get("nodes") or []
+fld = next((f for f in fields if f and f.get("name") == fname), None) or {}
 oid = ""
-for o in (f.get("options") or []):
+for o in (fld.get("options") or []):
     if o["name"].lower() == want.lower():
         oid = o["id"]
-print(proj["id"], f.get("id", ""), oid)
+print(proj["id"], fld.get("id", ""), oid)
 PY
 )"
   if [ -z "${ids// /}" ]; then
     meta="$(gh api graphql -f query='
       query($o:String!){ organization(login:$o){ projectsV2(first:30){ nodes{
         id title
-        field(name:"Status"){ ... on ProjectV2SingleSelectField{ id options{ id name } } }
-      }}}}' -f o="$owner" 2>/dev/null)" || return 1
-    ids="$(PROJECT_TITLE="$project_title" STATUS="$want_status" python3 - "$meta" <<'PY' 2>/dev/null
+        fields(first:50){ nodes{ ... on ProjectV2SingleSelectField{ id name options{ id name } } } }
+      }}}}' -f o="$owner" 2>/dev/null)"
+    ids="$(PROJECT_TITLE="$project_title" FIELD="$field_name" WANT="$want_option" python3 - "$meta" <<'PY' 2>/dev/null
 import sys, json, os
-t = os.environ["PROJECT_TITLE"]; want = os.environ.get("STATUS", "")
-d = json.loads(sys.argv[1])
+t = os.environ["PROJECT_TITLE"]; fname = os.environ["FIELD"]; want = os.environ.get("WANT", "")
+try:
+    d = json.loads(sys.argv[1])
+except Exception:
+    print(); sys.exit(0)
 org = (d.get("data") or {}).get("organization")
 if not org:
     print(); sys.exit(0)
-proj = next((n for n in org["projectsV2"]["nodes"] if n["title"] == t), None)
+nodes = (org.get("projectsV2") or {}).get("nodes") or []
+proj = next((n for n in nodes if n and n.get("title") == t), None)
 if not proj:
     print(); sys.exit(0)
-f = proj.get("field") or {}
+fields = (proj.get("fields") or {}).get("nodes") or []
+fld = next((f for f in fields if f and f.get("name") == fname), None) or {}
 oid = ""
-for o in (f.get("options") or []):
+for o in (fld.get("options") or []):
     if o["name"].lower() == want.lower():
         oid = o["id"]
-print(proj["id"], f.get("id", ""), oid)
+print(proj["id"], fld.get("id", ""), oid)
 PY
 )"
   fi
   printf '%s' "$ids"
+}
+
+# Status is the field the loop drives; keep the original public name + 3-arg
+# contract as a thin wrapper so every existing caller/test stays unchanged.
+board_resolve_project() { board_resolve_field "$1" "$2" "Status" "${3:-}"; }
+
+# One place for the single-select field write (Status + Priority share it).
+# Returns gh's rc; the caller warns on failure (best-effort).
+set_single_select() {
+  gh api graphql -f query='mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){projectV2Item{id}}}' -f p="$1" -f i="$2" -f f="$3" -f o="$4" >/dev/null 2>&1
 }
 
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
@@ -87,12 +144,26 @@ if [ -z "$OWNER" ] || [ -z "$PROJECT_TITLE" ]; then
   warn "board.owner/board.project_title not set in .autonomy/config.yaml (skip)"; exit 0
 fi
 
-ids="$(board_resolve_project "$OWNER" "$PROJECT_TITLE" "$status")" || { warn "board metadata query failed (skip)"; exit 0; }
+ids="$(board_resolve_project "$OWNER" "$PROJECT_TITLE" "$status")"
 read -r PID FID OPT_ID <<<"$ids"
 if [ -z "${PID:-}" ]; then warn "project '$PROJECT_TITLE' not found under '$OWNER' (skip)"; exit 0; fi
 
-NID="$(gh issue view "$issue" --json id --jq .id 2>/dev/null)" || { warn "issue #$issue not found (skip)"; exit 0; }
+# Issue node id + labels in one call; the p-label drives the Priority field.
+IVIEW="$(gh issue view "$issue" --json id,labels 2>/dev/null)"
+NID="$(printf '%s' "$IVIEW" | python3 -c 'import sys,json; print((json.load(sys.stdin) or {}).get("id",""))' 2>/dev/null)"
 if [ -z "$NID" ]; then warn "issue #$issue not found (skip)"; exit 0; fi
+LABELS="$(printf '%s' "$IVIEW" | python3 -c 'import sys,json
+d = json.load(sys.stdin) or {}
+for l in (d.get("labels") or []):
+    print(l.get("name", ""))' 2>/dev/null)"
+WANT_PRIORITY="$(plabel_to_priority "$LABELS")"
+PFID=""; POPT=""
+if [ -n "$WANT_PRIORITY" ]; then
+  # Independent of the Status resolve above: its own failure just leaves
+  # PFID/POPT empty (Priority skipped), never aborts the run.
+  pri_ids="$(board_resolve_field "$OWNER" "$PROJECT_TITLE" "Priority" "$WANT_PRIORITY")"
+  read -r _ PFID POPT <<<"$pri_ids"
+fi
 
 ITEM="$(gh api graphql -f query='query($n:ID!){node(id:$n){... on Issue{projectItems(first:20){nodes{id project{id}}}}}}' -f n="$NID" 2>/dev/null \
   | PID="$PID" python3 -c 'import sys,json,os; d=json.load(sys.stdin); p=os.environ["PID"]; ns=d["data"]["node"]["projectItems"]["nodes"]; print(next((i["id"] for i in ns if i["project"]["id"]==p), ""))' 2>/dev/null)"
@@ -103,12 +174,25 @@ if [ -z "${ITEM:-}" ]; then
   warn "added #$issue to board"
 fi
 
+# Priority enrichment (display-only, D2): best-effort on BOTH add and status.
+# Set only when the field AND a matching option resolved (field-absent -> both
+# empty -> skipped silently). fid=="" implies opt=="" in the resolver, so the
+# read above never shifts tokens; even a hypothetical shift only makes the
+# mutation fail -> warn+skip, never a wrong write that matters (display field).
+if [ -n "${PFID:-}" ] && [ -n "${POPT:-}" ]; then
+  if set_single_select "$PID" "$ITEM" "$PFID" "$POPT"; then
+    warn "#$issue priority -> $WANT_PRIORITY"
+  else
+    warn "failed to set #$issue priority (skip)"
+  fi
+fi
+
 if [ "$cmd" = "add" ]; then exit 0; fi
 
 if [ "$cmd" = "status" ]; then
   if [ -z "${FID:-}" ]; then warn "Status field not found (skip)"; exit 0; fi
   if [ -z "${OPT_ID:-}" ]; then warn "status '$status' is not a board column (skip)"; exit 0; fi
-  if gh api graphql -f query='mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){projectV2Item{id}}}' -f p="$PID" -f i="$ITEM" -f f="$FID" -f o="$OPT_ID" >/dev/null 2>&1; then
+  if set_single_select "$PID" "$ITEM" "$FID" "$OPT_ID"; then
     warn "#$issue -> $status"
   else
     warn "failed to set #$issue status (skip)"
