@@ -207,11 +207,19 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .repo-h .ribtns{display:inline-flex;gap:1px;align-items:center}
 .repo-h .ribtns .ibtn{width:24px;height:24px}
 .ibtn.go:hover{color:var(--ok)} .ibtn.warn:hover{color:var(--warn)} .ibtn.danger:hover{color:var(--bad)}
-.role{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px}
-.role .rn{font-weight:500;min-width:74px}
+/* #258 rail cleanup: each role is a fixed two-line row — line 1 identity +
+   status, line 2 (mono, dim) schedule + last-run — so dense live data can
+   never collide mid-line or wrap mid-token (the "disjointed" complaint). */
+.role{display:flex;flex-wrap:wrap;align-items:center;padding:6px 0 5px;font-size:12px;border-top:1px solid var(--hair)}
+.role .r1{display:flex;align-items:center;gap:7px;min-width:0}
+.role .rn{font-weight:500}
 .role .subs{font-family:var(--mono);font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:var(--mut);border:1px solid var(--hair2);border-radius:3px;padding:1px 5px}
+.role .r2{width:100%;display:flex;align-items:center;gap:14px;margin-top:3px;white-space:nowrap;overflow:hidden}
 .role .trig{font-family:var(--mono);font-size:10px;color:var(--dim)}
-.role .rlast{font-family:var(--mono);font-size:10px;color:var(--dim)}
+.role .rlast{font-family:var(--mono);font-size:10px;color:var(--dim);overflow:hidden;text-overflow:ellipsis}
+.role.ghost{border:1px dashed var(--hair2);border-radius:5px;padding:4px 11px;margin-top:8px;display:inline-flex;
+  color:var(--dim);font-size:11px;text-decoration:none;cursor:pointer}
+.role.ghost:hover{color:var(--accent);border-color:var(--accent)}
 /* #238: reserve width for the ticking time cells so a minute-granularity update
    can never reshape the row. Sized for the widest durm() a cron next-fire can
    reach -- an hour-scale countdown like `23h59m` (6 chars) on a daily cron, not
@@ -787,7 +795,13 @@ function renderRepos(repos){
     // #258: the single-lane repo's one lane (its implicit 'main'); the repo
     // header selects it. Multi-lane repos select per lgrp-h instead (below).
     const laneActive=lanes.active||lanes.default||"main";
-    const roleEls=(r.roles||[]).map(role=>{
+    // #258 (spec kill-list): suggested-but-unconfigured roles never render as
+    // roster rows — they collapse into one ghost ＋role chip (names in its
+    // title, linking to /config). Configured-but-disabled roles still render.
+    const allRoles=r.roles||[];
+    const ghostRoles=allRoles.filter(ro=>ro.status==="not-configured"||(!ro.configured&&!ro.enabled));
+    const ghostSet={};ghostRoles.forEach(ro=>{ghostSet[ro.name]=1;});
+    const roleEls=allRoles.filter(ro=>!ghostSet[ro.name]).map(role=>{
       const off=!role.enabled;
       const isActing=!off && !!acting && role.name===acting;
       // scheduling lane (#18): cron roles get a live next-fire countdown,
@@ -816,14 +830,16 @@ function renderRepos(repos){
       // advanced) is a MISSED fire -- the swept-state incident that otherwise
       // looks identical to a healthy idle role. Surface it, server-asserted.
       const missed = role.missed_fire ? `<span class="rmiss" title="expected cron fire is overdue — scheduler may be stalled/backed-off">⚠ missed fire</span>` : "";
-      // #147: keep each role tagged with its lane so a multi-lane repo can group
-      // the rows below WITHOUT widening them (the lane name lives on the group
-      // header, not inline) -- role rows stay byte-identical to today.
+      // #147: each role stays tagged with its lane so a multi-lane repo can
+      // group the rows below (the lane name lives on the group header).
+      // #258 two-line row: identity + status on line 1, schedule + last-run on
+      // line 2 — live data can no longer collide inline or wrap mid-token. The
+      // qreset/agox ticker cells keep their classes, so the 1s ticker and the
+      // skip-unchanged guard normalization are unaffected.
       const html = `<div class="role ${off?"off":""}${isActing?" acting":""}${role.missed_fire?" missed":""}">
-        <i class="rdot"></i><span class="rn">${esc(role.name)}</span>
-        ${subBadge(role.substrate)}
-        <span class="trig">${trig}</span>${missed}${lastRun}
-        <span class="rst">${token(role.status,false)}</span></div>`;
+        <span class="r1"><i class="rdot"></i><span class="rn">${esc(role.name)}</span>${subBadge(role.substrate)}</span>
+        <span class="rst">${token(role.status,false)}</span>
+        <div class="r2"><span class="trig">${trig}</span>${missed}${lastRun}</div></div>`;
       return {lane: role.lane||lanes.default, html: html};
     });
     // Flat list for the single implicit lane (zero change); grouped under a lane
@@ -866,11 +882,12 @@ function renderRepos(repos){
     const repoHOpen = multiLane
       ? `<div class="repo-h">`
       : `<div class="repo-h lsel${selClass(skey)}" data-lane-key="${encodeURIComponent(skey)}" title="click to focus this lane in the center">`;
+    const ghost=`<a class="role ghost" href="/config" title="add a role${ghostRoles.length?` — available: ${esc(ghostRoles.map(x=>x.name).join(", "))}`:""}">＋ role</a>`;
     return `<div class="repo">
       ${repoHOpen}<span class="nm">${esc(dispName(r.name))}</span>${laneWarn}
         <span class="badge">${token(st,true)}</span>${lifecycleCluster(r,st)}</div>
       <div class="cfg">${esc(cfg.model||"—")} · gate ${esc(cfg.merge_gate||"—")}${(r.lifecycle||{}).pid?" · pid "+r.lifecycle.pid:""}</div>
-      ${gateChain}${roles}</div>`;
+      ${gateChain}${roles}${ghost}</div>`;
   }).join("");
   // #164/#238: skip the innerHTML rebuild unless the markup REALLY changed. The
   // compare normalizes the volatile .qreset/.agox span CONTENTS out first, so a

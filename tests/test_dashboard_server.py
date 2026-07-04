@@ -877,6 +877,64 @@ class TestFleetRailLifecycleCluster(unittest.TestCase):
         self.assertIn(b'closest("button,a,select,input,details,summary")', self._page())
 
 
+class TestFleetRailRoleRows(unittest.TestCase):
+    """#258 rail cleanup (operator: labels/text 'disjointed ... needs to be a lot
+    cleaner'): each role renders as a fixed TWO-LINE row -- line 1 identity +
+    status, line 2 (mono, dim) schedule + last-run -- so dense live data can
+    never collide inline or wrap mid-token; and suggested-but-unconfigured roles
+    collapse into one ghost +role chip (spec kill-list: they never render as
+    roster rows). Structure/wiring pinned here; visual acceptance is the
+    dashboard browser verify loop."""
+
+    def _page(self):
+        return dashboard._page_bytes(dashboard.PAGE)
+
+    def _role_template(self, html):
+        # slice the role-row template literal inside renderRepos so structural
+        # assertions are scoped to it.
+        i = html.find(b'<div class="role ${off?"off":""}')
+        self.assertNotEqual(i, -1, "role row template not found")
+        return html[i:i + 700]
+
+    def test_role_row_is_two_lines(self):
+        body = self._role_template(self._page())
+        self.assertIn(b'class="r1"', body, "line 1 (identity) wrapper missing")
+        self.assertIn(b'class="r2"', body, "line 2 (schedule) wrapper missing")
+        # status token stays on line 1's right edge, outside r2
+        self.assertLess(body.find(b'class="rst"'), body.find(b'class="r2"'))
+
+    def test_ticker_cells_stay_inside_line_two(self):
+        # the qreset/agox ticking cells (#238) live in trig/lastRun, which move
+        # into r2 -- the 1s ticker + the skip-unchanged guard normalization key
+        # on those class names, so they must survive the restructure.
+        html = self._page()
+        body = self._role_template(html)
+        self.assertIn(b'<span class="trig">', body)
+        self.assertIn(b"lastRun", body)
+        self.assertIn(b"qreset", html)
+        self.assertIn(b"agox", html)
+
+    def test_two_line_css_rules_exist(self):
+        html = self._page()
+        self.assertIn(b".role .r1{", html)
+        self.assertIn(b".role .r2{", html)
+
+    def test_unconfigured_roles_collapse_to_ghost_chip(self):
+        html = self._page()
+        # client filter: placeholder rows (status 'not configured' or neither
+        # configured nor enabled) never render as roster rows...
+        self.assertIn(b"ghostRoles", html)
+        # the server's placeholder status token (dashboard_state.build_roles
+        # emits the HYPHENATED "not-configured"; the space form is only the
+        # SLABEL display text) -- Codex CP2 caught the space-form mismatch.
+        self.assertIn(b'"not-configured"', html)
+        # ...and the ghost chip replaces them, linking to the config page.
+        self.assertIn('class="role ghost"'.encode(), html)
+        self.assertIn("＋ role".encode("utf-8"), html)
+        i = html.find(b'class="role ghost"')
+        self.assertIn(b'href="/config"', html[i - 60:i + 200])
+
+
 class TestCenterFocusCollapse(unittest.TestCase):
     """#258 slice 2b: the center focus band collapses from the per-repo NOW-card
     grid to the SELECTED lane's single card. Lifecycle controls, relocated to the
