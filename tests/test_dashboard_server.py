@@ -946,5 +946,49 @@ class TestCenterFocusCollapse(unittest.TestCase):
                       "selectLane does not re-render the center focus on selection")
 
 
+class TestCenterActivityScoped(unittest.TestCase):
+    """#258 slice 3a: the center ACTIVITY panel scopes to the SELECTED lane's
+    repo (its live tool-trace when streaming, its own heartbeat narration when
+    idle) instead of stacking every repo -- the spec kills the "jumbled,
+    scrolls off the page" shared multi-repo panel; cross-repo lives on the fleet
+    rail + org feed by design. RECENT SESSIONS -> lane-history popover stays for
+    slice 3b (design-coupled). Structure assertions; behaviour = browser loop."""
+
+    def _page(self):
+        return dashboard._page_bytes(dashboard.PAGE)
+
+    def _fn_body(self, name, end):
+        html = self._page()
+        i = html.find(b"function " + name + b"(")
+        self.assertNotEqual(i, -1, name.decode() + "() is not defined")
+        j = html.find(b"function " + end + b"(", i)
+        self.assertNotEqual(j, -1, end.decode() + "() is not defined after " + name.decode())
+        return html[i:j]
+
+    def test_shared_selected_repo_accessor_defined(self):
+        # both renderFocus + renderActivity resolve the SAME repo via one
+        # accessor (no divergent duplicate resolution).
+        self.assertIn(b"function selectedRepoOf(", self._page(),
+                      "shared selectedRepoOf() accessor is not defined")
+
+    def test_activity_scopes_to_the_selected_repo(self):
+        # renderActivity no longer feeds ALL repos into reposWithActivity -- it
+        # resolves the selected repo first, so the panel shows one lane's work.
+        body = self._fn_body(b"renderActivity", b"renderTimeline")
+        self.assertIn(b"selectedRepoOf(", body,
+                      "renderActivity does not scope to the selected repo")
+        self.assertNotIn(b"reposWithActivity(repos)", body,
+                         "renderActivity still stacks every repo's activity")
+
+    def test_selectLane_rerenders_activity(self):
+        # a lane click must refresh the scoped activity panel immediately, same
+        # as the focus card (else it lags a click until the next tick).
+        page = self._page()
+        i = page.find(b"function selectLane(")
+        self.assertNotEqual(i, -1, "selectLane() is not defined")
+        self.assertIn(b"renderActivity(", page[i:i + 240],
+                      "selectLane does not re-render the scoped activity panel")
+
+
 if __name__ == "__main__":
     unittest.main()
