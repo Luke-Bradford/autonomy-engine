@@ -232,15 +232,18 @@ th{text-align:left;color:var(--dim);font-weight:400;text-transform:uppercase;let
 td{padding:6px 10px;border-bottom:1px solid var(--hair);color:var(--mut);white-space:nowrap}
 td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
 
-/* throughput */
+/* tokens timeline (#188) — output tokens/15min area chart, client-windowed */
 .tp{padding:14px}
 .tp .lead{display:flex;align-items:baseline;gap:9px;margin-bottom:2px}
-.tp .big{font-family:var(--mono);font-size:26px;font-weight:600}
+.tp .big{font-family:var(--mono);font-size:24px;font-weight:600}
 .tp .u{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:1px}
-.tp .trend{font-family:var(--mono);font-size:11px;margin-left:auto}
-.tp svg{display:block;width:100%;height:64px;margin-top:10px}
-.tp .foot{display:flex;gap:18px;font-family:var(--mono);font-size:10px;color:var(--dim);margin-top:8px}
-.tp .foot b{color:var(--ink)}
+.tkw-wrap{margin-left:auto;display:flex;gap:4px}
+.tkw{font-family:var(--mono);font-size:10px;color:var(--dim);border:1px solid var(--hair2);border-radius:4px;padding:1px 6px;cursor:pointer}
+.tkw:hover{color:var(--ink);border-color:var(--mut)}
+.tkw.on{color:var(--accent);border-color:var(--accent)}
+.tp .chart{margin-top:8px}
+.tp .chart svg{display:block;width:100%;height:96px}
+.tp .cleg{display:flex;justify-content:space-between;color:var(--dim);font-family:var(--mono);font-size:10px;margin-top:4px}
 
 /* voice */
 .voice{max-height:300px;overflow-y:auto;padding:8px 0}
@@ -316,7 +319,7 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
 
     <!-- RIGHT: telemetry + org -->
     <div class="col zone-tele">
-      <div class="sh"><h2>Throughput</h2><span class="ln"></span><span class="ct">output tok/min</span></div>
+      <div class="sh"><h2>Tokens</h2><span class="ln"></span><span class="ct">output over time</span></div>
       <div class="panel" id="tp"></div>
 
       <div class="sh"><h2>Account quota</h2><span class="ln"></span><span class="ct">shared · all repos</span></div>
@@ -765,32 +768,73 @@ function renderFlat(ws){let rows="";ws.forEach(r=>{(r.current_session.nodes||[])
     <div class="act-body" style="padding-top:0"><table><thead><tr><th>agent</th><th>parent</th><th>repo</th><th>task</th><th>tok</th></tr></thead><tbody>${rows}</tbody></table></div>`;}
 function setView(v){VIEW=v;["tree","time","flat"].forEach(x=>$("v-"+x).classList.toggle("on",x===v));if(LAST)renderActivity(LAST.repos);}
 
-/* ---- THROUGHPUT (moving, wall-clock) ---- */
+/* ---- TOKENS timeline (#188) — backfilled output tokens/15min area chart ----
+   Renders build_repo_state()["token_timeline"] (#188a: zero-filled 24h/15min
+   {bucket,tokens} series from session-log totals; no gh, no live sampler). The
+   1h/6h/24h toggle is a pure client-side slice of that 24h series (no POST, no
+   server round-trip). ratesFrom + the live 'tok/min now' figure are preserved
+   from the old throughput sampler — this slice supersedes the sparkline only. */
 function ratesFrom(samples){
   const out=[];for(let i=1;i<samples.length;i++){const dt=samples[i][0]-samples[i-1][0];if(dt<=0)continue;
     let d=samples[i][1]-samples[i-1][1];if(d<0)d=samples[i][1];out.push({t:samples[i][0],r:Math.max(0,d*60/dt)});}
   return out;}
-function renderThroughput(repos){
+const TOKWINS=[["1h",3600],["6h",21600],["24h",86400]];  // label -> window seconds
+let TOKWIN=21600;                                          // selected window (default 6h, mockup)
+// sum token_timeline across repos keyed by NUMERIC bucket epoch (repos may be
+// sampled either side of a 15-min boundary, so tails need not align by index);
+// finite-guard both fields, clamp tokens>=0, emit bucket-sorted oldest-first.
+function aggTimeline(repos){
+  const m=new Map();
+  (repos||[]).forEach(r=>(r&&r.token_timeline||[]).forEach(p=>{
+    const b=Number(p&&p.bucket), t=Number(p&&p.tokens);
+    if(!Number.isFinite(b)||!Number.isFinite(t))return;
+    m.set(b,(m.get(b)||0)+Math.max(0,t));
+  }));
+  return Array.from(m.keys()).sort((a,b)=>a-b).map(b=>({bucket:b,tokens:m.get(b)}));
+}
+function hhmm(epoch){const d=new Date(epoch*1000);
+  return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");}
+function setTokWin(s){TOKWIN=s;if(LAST&&LAST.repos)renderTokens(LAST.repos);}
+function renderTokens(repos){
+  // live tok/min-now (preserved sampler consumer): latest per-repo-summed rate.
   const now=Math.floor(nowS());
-  // merge samples across repos into one per-timestamp rate (sum)
-  let allRates=[];repos.forEach(r=>{const rr=ratesFrom(r.throughput||[]);allRates=allRates.concat(rr);});
+  let allRates=[];(repos||[]).forEach(r=>{allRates=allRates.concat(ratesFrom(r.throughput||[]));});
   allRates.sort((a,b)=>a.t-b.t);
-  const win=allRates.filter(x=>x.t>=now-1800).slice(-60); // last 30m, up to 60 bars
-  const cur=win.length?win[win.length-1].r:0;
-  const prev=win.length>1?win[win.length-2].r:0;
-  const trend=cur>prev+2?"▲":cur<prev-2?"▼":"·";
-  const trendc=cur>prev+2?"var(--ok)":cur<prev-2?"var(--dim)":"var(--dim)";
-  const mx=Math.max(1,...win.map(x=>x.r));
-  const bw=win.length?100/win.length:100;
-  const bars=win.map((x,i)=>{const h=Math.max(1,Math.round(46*x.r/mx));const c=x.r>0?"var(--ok)":"var(--hair2)";
-    return `<rect x="${(i*bw).toFixed(2)}" y="${50-h}" width="${(bw*.7).toFixed(2)}" height="${h}" rx="1" fill="${c}"/>`;}).join("");
-  const totOut=repos.reduce((a,r)=>a+((r.current_session||{}).output_tokens||0),0);
-  const cost=repos.reduce((a,r)=>a+((r.current_session||{}).cost_usd||0),0);
+  const recent=allRates.filter(x=>x.t>=now-1800);
+  const rateNow=recent.length?recent[recent.length-1].r:0;
+  // backfilled timeline: aggregate, then take the last N 15-min buckets (N is
+  // an exact bucket count, not a ">= max-window" range — deterministic total).
+  const agg=aggTimeline(repos);
+  // degrade-to-truth: an EMPTY aggregate means the series was unavailable (every
+  // repo's token_timeline is [] — an unreadable logdir). That is distinct from a
+  // readable-but-idle repo, which yields a zero-FILLED 96-bucket series (real "no
+  // tokens"). Render the unavailable case as "—", never a fabricated zero.
+  const unavailable=agg.length===0;
+  const N=Math.max(1,Math.round(TOKWIN/900));
+  const win=agg.slice(-N);
+  const tot=win.reduce((a,p)=>a+p.tokens,0);
+  const W=300,H=96;
+  const mx=Math.max(1,...win.map(p=>p.tokens));
+  const denom=Math.max(1,win.length-1);
+  const pts=win.map((p,i)=>[(win.length===1?W:i*(W/denom)), H-(p.tokens/mx)*H]);
+  const line=pts.length?("M"+pts.map(p=>p[0].toFixed(1)+","+p[1].toFixed(1)).join(" L")):"";
+  const area=pts.length?(line+` L${W},${H} L0,${H} Z`):"";
+  const end=pts.length?pts[pts.length-1]:null;
+  const grid=[24,48,72].map(y=>`<line x1="0" y1="${y}" x2="${W}" y2="${y}" stroke="var(--hair2)" stroke-width="0.6"/>`).join("");
+  const tog=TOKWINS.map(w=>`<span class="tkw${w[1]===TOKWIN?" on":""}" onclick="setTokWin(${w[1]})">${w[0]}</span>`).join("");
+  const winLab=(TOKWINS.find(w=>w[1]===TOKWIN)||["6h"])[0];
+  const t0=win.length?hhmm(win[0].bucket):"—";
+  const t1=win.length?hhmm(win[win.length-1].bucket):"—";
+  const mid=unavailable?"no telemetry data":(rateNow>0?(num(rateNow)+" tok/min now"):(tot>0?"":"no tokens in window"));
   $("tp").innerHTML=`<div class="tp">
-    <div class="lead"><span class="big">${num(cur)}</span><span class="u">tok/min now</span><span class="trend" style="color:${trendc}">${trend}</span></div>
-    <svg viewBox="0 0 100 50" preserveAspectRatio="none">${bars||'<rect x="0" y="49" width="100" height="1" fill="var(--hair2)"/>'}
-      <line x1="0" y1="50" x2="100" y2="50" stroke="var(--hair2)" stroke-width="0.5"/></svg>
-    <div class="foot"><span>session out <b>${num(totOut)}</b></span><span>cost <b>$${cost.toFixed(2)}</b></span><span>${win.length?"last "+ago(now-win[0].t):"warming up"}</span></div>
+    <div class="lead"><span class="big">${unavailable?"—":num(tot)}</span><span class="u">out · last ${winLab}</span><span class="tkw-wrap">${tog}</span></div>
+    <div class="chart"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="output tokens per 15 minutes">
+      ${grid}
+      <path fill="rgba(91,157,255,.15)" stroke="none" d="${area}"/>
+      <path fill="none" stroke="var(--accent)" stroke-width="1.6" d="${line}"/>
+      ${end?`<circle r="3" fill="var(--accent)" cx="${end[0].toFixed(1)}" cy="${end[1].toFixed(1)}"/>`:""}
+    </svg></div>
+    <div class="cleg"><span>${t0}</span><span>${mid}</span><span>${t1}</span></div>
   </div>`;
 }
 
@@ -870,7 +914,7 @@ function renderEngineUpdate(e){
 }
 function render(s){LAST=s;GEN=s.generated_at||Math.floor(nowS());
   renderFocus(s.repos);renderHistory(s.repos);renderRepos(s.repos);renderQuota(s.repos,s.account);renderActivity(s.repos);
-  renderThroughput(s.repos);renderHandoffs(s.repos);renderVoice(s.repos);renderGit(s.repos);renderEngineUpdate(s.engine);}
+  renderTokens(s.repos);renderHandoffs(s.repos);renderVoice(s.repos);renderGit(s.repos);renderEngineUpdate(s.engine);}
 function setLive(ok){$("h-live").classList.toggle("stale",!ok);$("h-live-t").textContent=ok?"live":"reconnecting";}
 function connect(){let es;try{es=new EventSource("/api/stream");}catch(e){poll();return;}
   es.onopen=()=>setLive(true);es.onmessage=e=>{try{render(JSON.parse(e.data));setLive(true);}catch(_){}}; es.onerror=()=>setLive(false);}
