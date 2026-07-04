@@ -260,7 +260,7 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
   <div class="panel" id="creds"></div>
   <div class="hint">Subscriptions (your Claude / Codex logins) are the default and need nothing here. API keys are optional — add one only if a role should run on API credit instead. Secrets are stored in your macOS Keychain, never in a file, never shown again after saving. On your first save macOS asks to allow Keychain access — choose <b>Always Allow</b> so later saves don't prompt.</div>
 
-  <div class="sh" style="margin-top:20px"><h2>Repos &amp; config</h2><span class="ln"></span><span class="ct">registry · writes .autonomy/config.yaml</span></div>
+  <div class="sh" style="margin-top:20px"><h2>Repos &amp; config</h2><span class="ln"></span><span class="ct">registry · config.yaml (board/merge_gate) · local override under var/ (model/effort)</span></div>
   <div class="panel" id="cfg"></div>
 </div>
 <div id="toast"></div>
@@ -501,7 +501,12 @@ function cfgSave(btn,enc,key){
   const repo=decodeURIComponent(enc);
   const el=btn.closest(".cfgrow").querySelector("[data-key]");
   const value=el.value.trim();
-  if(!window.confirm("Write "+key+' = "'+value+'" into .autonomy/config.yaml?\n\nrepo: '+repo)) return;
+  // #202: model/effort keys persist as an untracked local override under var/
+  // (survives the loop's preflight); board.*/merge_gate.* still edit config.yaml.
+  const isOverlay=/^agent\.(model\.(primary|fallback)|effort)$/.test(key);
+  const dest=isOverlay?"a local override under var/ (committed config.yaml unchanged)"
+                      :".autonomy/config.yaml";
+  if(!window.confirm("Write "+key+' = "'+value+'" to '+dest+"?\n\nrepo: "+repo)) return;
   // saving a board.* key (owner or title) re-reconciles this repo's picker +
   // warning so the datalist/warning never lag the saved value (#170).
   const after=key.indexOf("board.")===0

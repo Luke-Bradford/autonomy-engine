@@ -19,6 +19,56 @@ LOGDIR = os.path.join(FIX, "var", "autonomy-logs")
 import dashboard_state as ds  # noqa: E402
 
 
+class TestConfigOverlay(unittest.TestCase):
+    """#202: the persistent operator overlay (var/autonomy-logs/config-overrides)
+    shadows committed config.yaml for model/effort in the render model, and is
+    RE-VALIDATED the same way the supervisor validates it -- a corrupt overlay
+    must not show a value the supervisor silently ignores."""
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.repo = self._td.name
+        os.makedirs(os.path.join(self.repo, ".autonomy"))
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("agent:\n  model:\n    primary: claude-sonnet-5\n  effort: low\n")
+        self.logdir = os.path.join(self.repo, "var", "autonomy-logs")
+        os.makedirs(self.logdir)
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _overlay(self, text):
+        with open(os.path.join(self.logdir, "config-overrides"), "w") as fh:
+            fh.write(text)
+
+    def test_overlay_shadows_and_flags(self):
+        self._overlay("model=claude-opus-4-8\n")
+        cfg = ds._read_config(self.repo)
+        self.assertEqual(cfg["model"], "claude-opus-4-8")   # overlay shadows committed
+        self.assertEqual(cfg["effort"], "low")              # untouched key = committed
+        self.assertEqual(cfg["overrides"], {"model": "claude-opus-4-8"})
+
+    def test_invalid_overlay_ignored(self):
+        self._overlay("model=bad;id\neffort=nope\n")
+        cfg = ds._read_config(self.repo)
+        self.assertEqual(cfg["model"], "claude-sonnet-5")   # committed, overlay rejected
+        self.assertEqual(cfg["overrides"], {})
+
+    def test_no_overlay_is_empty(self):
+        cfg = ds._read_config(self.repo)
+        self.assertEqual(cfg["model"], "claude-sonnet-5")
+        self.assertEqual(cfg["overrides"], {})
+
+    def test_whitespace_dirty_overlay_ignored_parity_with_supervisor(self):
+        # The bash reader does NOT strip the line, so a stray-space key/value is
+        # ignored there; the dashboard must ignore it identically (never display
+        # a value the supervisor won't use).
+        for dirty in (" model=claude-opus-4-8\n", "model=claude-opus-4-8 \n"):
+            self._overlay(dirty)
+            cfg = ds._read_config(self.repo)
+            self.assertEqual(cfg["model"], "claude-sonnet-5", repr(dirty))
+            self.assertEqual(cfg["overrides"], {}, repr(dirty))
+
+
 class TestSessionParse(unittest.TestCase):
     def test_completed_session_status_and_result(self):
         s = ds.parse_session_log(os.path.join(LOGDIR, "session-20260701T090000.log"))

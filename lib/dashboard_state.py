@@ -24,6 +24,7 @@ from collections import Counter, deque
 from datetime import datetime
 
 import config_parser
+import dashboard_control as _dcx  # model-id regex + effort set, single-sourced
 import roles as roles_schema
 
 _TICKET_RE = re.compile(r"#(\d{1,6})\b")
@@ -1118,6 +1119,35 @@ def recent_quota_windows(logdir, limit=60):
     return merged
 
 
+def read_config_overlay(path):
+    """The PERSISTENT operator overrides (#202) the dashboard displays. Unlike
+    the one-shot read_model_override, this RE-VALIDATES each value with the
+    same rules the supervisor applies (dashboard_control.MODEL_RE /
+    VALID_EFFORTS), so a corrupt overlay is rejected identically on both
+    surfaces -- the card can never show a value the supervisor silently
+    ignores. Returns {} on any error / absent file (fail-safe)."""
+    out = {}
+    try:
+        with open(path, errors="replace") as fh:
+            for raw in fh:
+                # Parse EXACTLY as the supervisor's bash read_config_overlay does
+                # (`${line%%=*}` / `${line#*=}` after `read -r`): split on the
+                # first '=', strip ONLY the newline -- never the whole line. A
+                # stray-space line (` model=x` / `model=x `) then fails the key
+                # match / MODEL_RE just as it fails valid_model_id in bash, so
+                # the dashboard can't display a value the supervisor ignores.
+                key, sep, val = raw.rstrip("\n").partition("=")
+                if not sep or not val:
+                    continue
+                if key in ("model", "fallback") and _dcx.MODEL_RE.match(val):
+                    out[key] = val
+                elif key == "effort" and val in _dcx.VALID_EFFORTS:
+                    out[key] = val
+    except OSError:
+        return {}
+    return out
+
+
 def _read_config(repo_path):
     cfg_path = os.path.join(repo_path, ".autonomy", "config.yaml")
     try:
@@ -1125,22 +1155,28 @@ def _read_config(repo_path):
             cfg = config_parser.parse(fh.read())
     except OSError:
         return {"agent": "", "model": "", "merge_gate": "",
-                "board_owner": "", "board_title": ""}
+                "board_owner": "", "board_title": "", "overrides": {}}
     def g(key):
         try:
             return config_parser.get(cfg, key)
         except KeyError:
             return None
     roles = g("roles")
+    # The overlay shadows committed config.yaml for model/effort so the page
+    # shows the EFFECTIVE value the supervisor will use; `overrides` flags which
+    # keys came from the overlay so the UI can label them "local override".
+    overlay = read_config_overlay(os.path.join(
+        repo_path, "var", "autonomy-logs", "config-overrides"))
     return {
         "agent": g("agent.type") or "",
-        "model": g("agent.model.primary") or "",
-        "fallback": g("agent.model.fallback") or "",
-        "effort": g("agent.effort") or "",
+        "model": overlay.get("model") or (g("agent.model.primary") or ""),
+        "fallback": overlay.get("fallback") or (g("agent.model.fallback") or ""),
+        "effort": overlay.get("effort") or (g("agent.effort") or ""),
         "merge_gate": g("merge_gate.strategy") or "",
         "board_owner": g("board.owner") or "",
         "board_title": g("board.project_title") or "",
         "roles": roles if isinstance(roles, dict) else {},
+        "overrides": overlay,
     }
 
 

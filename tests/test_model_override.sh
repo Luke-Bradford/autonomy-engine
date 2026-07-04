@@ -72,12 +72,60 @@ check "unknown effort rejected" "high" "$EFFORT"
 if [ -f "$LOGDIR/model-override" ]; then r=present; else r=consumed; fi
 check "invalid override still consumed (no retry loop)" consumed "$r"
 
+# --- persistent overlay (config-overrides) shadows config.yaml (#202) ---
+cat >"$CFG" <<'EOF'
+agent:
+  model:
+    primary: claude-sonnet-5
+    fallback: claude-sonnet-4-6
+EOF
+printf 'model=claude-opus-4-8\nfallback=claude-haiku-4-5\neffort=high\n' >"$LOGDIR/config-overrides"
+resolve_session_settings
+check "overlay shadows config: model" "claude-opus-4-8" "$MODEL"
+check "overlay shadows config: fallback" "claude-haiku-4-5" "$FALLBACK_MODEL"
+check "overlay shadows config: effort" "high" "$EFFORT"
+if [ -f "$LOGDIR/config-overrides" ]; then r=present; else r=gone; fi
+check "overlay persists (not consumed)" present "$r"
+# settled #13 precedence around the overlay: CLI > role > overlay > config.
+# Each override var is set for one resolve then `unset` back to "not passed"
+# (read inside the sourced resolve_session_settings via `${VAR:-...}`, so unset
+# is safe under `set -u`). The expected value references the var itself, which
+# also gives shellcheck a real read (no SC2034 on these set-once locals).
+ROLE_MODEL="claude-haiku-4-5"; resolve_session_settings
+check "role model beats overlay" "$ROLE_MODEL" "$MODEL"; unset ROLE_MODEL
+ROLE_EFFORT="low"; resolve_session_settings
+check "role effort beats overlay" "$ROLE_EFFORT" "$EFFORT"; unset ROLE_EFFORT
+MODEL_OVERRIDE="claude-sonnet-5"; resolve_session_settings
+check "CLI model beats overlay" "$MODEL_OVERRIDE" "$MODEL"; unset MODEL_OVERRIDE
+FALLBACK_MODEL_OVERRIDE="claude-sonnet-4-6"; resolve_session_settings
+check "CLI fallback beats overlay" "$FALLBACK_MODEL_OVERRIDE" "$FALLBACK_MODEL"; unset FALLBACK_MODEL_OVERRIDE
+# one-shot override still wins last, even over the overlay
+printf 'model=claude-sonnet-5\n' >"$LOGDIR/model-override"
+resolve_session_settings
+check "one-shot beats overlay" "claude-sonnet-5" "$MODEL"
+if [ -f "$LOGDIR/model-override" ]; then r=present; else r=gone; fi
+check "one-shot consumed even with overlay present" gone "$r"
+# invalid overlay ignored -> falls back to committed config (fail-safe)
+printf 'model=bad;id\neffort=nope\n' >"$LOGDIR/config-overrides"
+resolve_session_settings
+check "invalid overlay model ignored" "claude-sonnet-5" "$MODEL"
+check "invalid overlay effort ignored" "" "$EFFORT"
+# stray-space lines are ignored (no line-strip) -- the dashboard reader must
+# match this exactly so it never displays a value the supervisor won't use.
+printf ' model=claude-opus-4-8\nfallback=claude-haiku-4-5 \n' >"$LOGDIR/config-overrides"
+resolve_session_settings
+check "leading-space overlay key ignored" "claude-sonnet-5" "$MODEL"
+check "trailing-space overlay value ignored" "claude-sonnet-4-6" "$FALLBACK_MODEL"
+rm -f "$LOGDIR/config-overrides"
+# restore config.yaml to opus for the subsequent one-shot/unit checks
+printf 'agent:\n  model:\n    primary: claude-opus-4-8\n    fallback: claude-sonnet-4-6\n  effort: high\n' >"$CFG"
+
 # valid ids incl. context-window suffix pass
 if valid_model_id "claude-opus-4-8[1m]"; then r=ok; else r=rejected; fi
 check "model id with [1m] suffix accepted" ok "$r"
 if valid_model_id ""; then r=ok; else r=rejected; fi
 check "empty model id rejected" rejected "$r"
-# parity with dashboard_control._MODEL_RE (#31): must start alnum, <=64 chars
+# parity with dashboard_control.MODEL_RE (#31): must start alnum, <=64 chars
 if valid_model_id ".claude"; then r=ok; else r=rejected; fi
 check "model id starting with punctuation rejected" rejected "$r"
 if valid_model_id "-claude"; then r=ok; else r=rejected; fi
