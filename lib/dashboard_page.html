@@ -1289,6 +1289,15 @@ function renderEngineUpdate(e){
     el.title=sups.length?("also on older code: "+sups.map(_supLabel).join(", "))
                         :"pull ENGINE_HOME + restart the dashboard to load the merged engine";
     el.hidden=false;
+  } else if(c.mode==="checkout"){
+    // #270: dashboard PROCESS current, but the serving checkout is behind
+    // origin/main -> merged updates it isn't serving. The fix is a PULL, not a
+    // restart -- the dashboard hot-reloads lib/*.html per request (#240: never
+    // demand a restart the dashboard doesn't need). Warning-level: real action.
+    el.classList.remove("info");
+    el.textContent="⟳ updates merged"+_commits(c.checkout_behind)+" — pull to serve them";
+    el.title="git -C ENGINE_HOME pull --ff-only to serve the merged commits";
+    el.hidden=false;
   } else if(c.mode==="supervisors"){
     // dashboard current; only supervisors behind -> informational, NOT a restart
     // demand about the dashboard (#240 defect 1). No aggregate count in the text.

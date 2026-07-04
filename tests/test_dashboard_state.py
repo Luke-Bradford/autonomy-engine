@@ -1553,6 +1553,46 @@ class TestEngineVersion(unittest.TestCase):
         self.assertIsNone(
             ds.engine_commits_behind("d" * 40, "c" * 40, "/nonexistent/xyz"))
 
+    # -- engine_checkout_behind_origin (#270): HEAD vs origin/main, real git --
+    def test_checkout_behind_none_when_not_a_repo(self):
+        # fail-safe: git fetch fails outside a repo -> contribute nothing, never
+        # invent staleness (and never raise).
+        self.assertIsNone(ds.engine_checkout_behind_origin("/nonexistent/xyz"))
+
+    def test_checkout_behind_none_when_no_origin_remote(self):
+        # a repo with no `origin` remote (offline / detached-serving analogue):
+        # the fetch fails, so the reader stays silent rather than erroring.
+        d, g = self._git_repo()
+        try:
+            open(os.path.join(d, "a"), "w").close()
+            g("add", "a")
+            g("commit", "-qm", "one")
+            self.assertIsNone(ds.engine_checkout_behind_origin(d))
+        finally:
+            shutil.rmtree(d)
+
+    def test_checkout_behind_counts_commits_origin_has(self):
+        # a real local "origin": clone, advance origin/main by one commit, then
+        # the clone (HEAD behind) reports 1; even-with-origin reports 0.
+        up, ug = self._git_repo()
+        cl = tempfile.mkdtemp()
+        try:
+            open(os.path.join(up, "a"), "w").close()
+            ug("add", "a")
+            ug("commit", "-qm", "one")
+            ug("branch", "-M", "main")
+            subprocess.run(["git", "clone", "-q", up, cl],
+                           check=True, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            self.assertEqual(ds.engine_checkout_behind_origin(cl), 0)
+            open(os.path.join(up, "b"), "w").close()
+            ug("add", "b")
+            ug("commit", "-qm", "two")
+            self.assertEqual(ds.engine_checkout_behind_origin(cl), 1)
+        finally:
+            shutil.rmtree(up)
+            shutil.rmtree(cl)
+
     # -- read_engine_boot_sha (pure file IO + hex validation) --
     def _logdir_with(self, content):
         d = tempfile.mkdtemp()
@@ -1588,12 +1628,14 @@ class TestEngineVersion(unittest.TestCase):
                 shutil.rmtree(d)
 
     # -- engine_status composition (readers injected, no git) --
-    def _status(self, current, dash_boot, repos, behind_map=None):
+    def _status(self, current, dash_boot, repos, behind_map=None,
+                checkout_behind=None):
         bm = behind_map or {}
         return ds.engine_status(
             dash_boot, repos,
             head_reader=lambda home=None: current,
-            behind_reader=lambda running, cur, home=None: bm.get(running))
+            behind_reader=lambda running, cur, home=None: bm.get(running),
+            checkout_behind_reader=lambda: checkout_behind)
 
     def test_status_all_fresh_not_stale(self):
         cur = "a" * 40
@@ -1733,6 +1775,62 @@ class TestEngineVersion(unittest.TestCase):
         self.assertEqual(chip["dashboard_behind"], 2)
         self.assertEqual(chip["supervisors"],
                          [{"repo": "r", "behind": None, "known": False}])
+
+    # -- checkout-vs-origin axis (#270): the third staleness comparison --
+    def test_checkout_stale_when_origin_ahead(self):
+        # process + supervisor current, but the serving checkout is behind
+        # origin/main -> a real 'pull' signal (the #270 incident: boot==HEAD hid
+        # merged commits the checkout wasn't serving).
+        cur = "a" * 40
+        repos = [{"name": "r", "engine_boot": cur,
+                  "lifecycle": {"state": "running"}}]
+        st = self._status(cur, cur, repos, checkout_behind=4)
+        self.assertTrue(st["stale"])
+        self.assertEqual(st["checkout"], {"behind": 4, "stale": True})
+        self.assertEqual(st["chip"]["mode"], "checkout")
+        self.assertEqual(st["chip"]["checkout_behind"], 4)
+
+    def test_checkout_fetch_failure_is_silent(self):
+        # fail-safe: reader returns None (fetch/rev-list failed, offline) ->
+        # contributes no staleness, never a false chip.
+        cur = "a" * 40
+        repos = [{"name": "r", "engine_boot": cur,
+                  "lifecycle": {"state": "running"}}]
+        st = self._status(cur, cur, repos, checkout_behind=None)
+        self.assertFalse(st["stale"])
+        self.assertEqual(st["checkout"], {"behind": None, "stale": False})
+        self.assertFalse(st["chip"]["show"])
+
+    def test_checkout_behind_zero_not_stale(self):
+        cur = "a" * 40
+        repos = [{"name": "r", "engine_boot": cur,
+                  "lifecycle": {"state": "running"}}]
+        st = self._status(cur, cur, repos, checkout_behind=0)
+        self.assertFalse(st["stale"])
+        self.assertEqual(st["checkout"], {"behind": None, "stale": False})
+
+    def test_ladder_process_stale_beats_checkout(self):
+        # both the dashboard process (boot<HEAD) AND the checkout (HEAD<origin)
+        # are behind -> the loud pull+restart 'dashboard' CTA wins.
+        cur, old = "b" * 40, "a" * 40
+        repos = [{"name": "r", "engine_boot": cur,
+                  "lifecycle": {"state": "running"}}]
+        chip = self._status(cur, old, repos, behind_map={old: 3},
+                            checkout_behind=2)["chip"]
+        self.assertEqual(chip["mode"], "dashboard")
+        self.assertEqual(chip["dashboard_behind"], 3)
+
+    def test_ladder_checkout_beats_supervisors(self):
+        # dashboard current, a supervisor behind AND the checkout behind ->
+        # checkout (a pull the operator can act on now) outranks the
+        # informational supervisors note.
+        cur, old = "b" * 40, "a" * 40
+        repos = [{"name": "r", "engine_boot": old,
+                  "lifecycle": {"state": "running"}}]
+        chip = self._status(cur, cur, repos, behind_map={old: 5},
+                            checkout_behind=2)["chip"]
+        self.assertEqual(chip["mode"], "checkout")
+        self.assertEqual(chip["checkout_behind"], 2)
 
 
 class TestTokenTimeline(unittest.TestCase):

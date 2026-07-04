@@ -1068,8 +1068,44 @@ def engine_commits_behind(running, current, engine_home=None):
         return None
 
 
+def engine_checkout_behind_origin(engine_home=None):
+    """#270: how many commits origin/main has that the serving checkout's HEAD
+    does not -- i.e. merged updates the dashboard is not yet serving. `git fetch
+    origin main` then `git rev-list --count HEAD..origin/main`. Returns the int
+    count (0 == up to date), or None when unknowable.
+
+    Fail-safe, never fail-open: a failed fetch (offline / no origin / detached
+    with no remote), a failed rev-list, or any git/OS error returns None so the
+    caller contributes NO staleness -- never an invented 'behind' and never a
+    raise. Offline stays silent. `origin/main` is the engine's own default branch
+    (this reads the engine checkout, not a target repo, so it is not the
+    repo-agnostic surface)."""
+    home = _engine_home(engine_home)
+    try:
+        fetched = subprocess.run(
+            ["git", "-C", home, "fetch", "--quiet", "origin", "main"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if fetched.returncode != 0:
+        return None
+    try:
+        out = subprocess.run(
+            ["git", "-C", home, "rev-list", "--count", "HEAD..origin/main"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    try:
+        return int(out.stdout.decode("ascii", "replace").strip())
+    except ValueError:
+        return None
+
+
 def engine_status(dashboard_boot, repos, head_reader=engine_head_sha,
-                  behind_reader=engine_commits_behind):
+                  behind_reader=engine_commits_behind,
+                  checkout_behind_reader=engine_checkout_behind_origin):
     """Compose the engine 'update available' truth block for collect()'s
     payload. `dashboard_boot` is the sha bin/dashboard.py captured at import;
     `repos` is the per-repo state list (each carries `engine_boot` +
@@ -1115,22 +1151,32 @@ def engine_status(dashboard_boot, repos, head_reader=engine_head_sha,
                             "sha": boot if valid else "",
                             "behind": s_behind, "stale": s_stale})
 
+    # #270: the third axis -- the serving checkout vs origin/main. Orthogonal to
+    # the process/supervisor boot-vs-HEAD compares: when merges land but the
+    # checkout is un-pulled, boot == HEAD (both "current") while HEAD < origin.
+    # None (fetch/rev-list failed / offline) or 0 contributes no staleness.
+    co = checkout_behind_reader()
+    co_stale = isinstance(co, int) and not isinstance(co, bool) and co > 0
+    checkout = {"behind": co if co_stale else None, "stale": co_stale}
+
     behinds = [s["behind"] for s in supervisors if s["stale"]
                and s["behind"] is not None]
     if dashboard["stale"] and dashboard["behind"] is not None:
         behinds.append(dashboard["behind"])
-    stale = dashboard["stale"] or any(s["stale"] for s in supervisors)
+    stale = (dashboard["stale"] or checkout["stale"]
+             or any(s["stale"] for s in supervisors))
     return {
         "current": current,
         "dashboard": dashboard,
         "supervisors": supervisors,
+        "checkout": checkout,
         "stale": stale,
         "behind": max(behinds) if behinds else None,
-        "chip": engine_update_chip(dashboard, supervisors),
+        "chip": engine_update_chip(dashboard, supervisors, checkout),
     }
 
 
-def engine_update_chip(dashboard, supervisors):
+def engine_update_chip(dashboard, supervisors, checkout=None):
     """The per-component render decision for the #196 update chip, kept here (not
     in the page's JS) so the branch logic that caused the #240 cry-wolf bug is
     exercised by run_all.sh. The chip must answer *which* component is behind and
@@ -1149,13 +1195,22 @@ def engine_update_chip(dashboard, supervisors):
       `known: False` for a pre-tracking sha ("") so the render says 'version
       unknown' rather than borrowing a count (#240 defect 2). Fail-safe: an
       unknown-sha LIVE supervisor is still surfaced, never hidden.
+    - #270: the CHECKOUT axis (HEAD vs origin/main) ranks BELOW process-stale
+      (a stale process needs pull+restart, which subsumes a pull) but ABOVE the
+      informational supervisors note -- an un-pulled checkout is a real action the
+      operator can take now. Mode 'checkout' carries its own `checkout_behind` and
+      the render calls for a PULL, not a restart (#240: never demand a restart the
+      dashboard doesn't need -- it hot-reloads lib/*.html per request).
     """
+    checkout = checkout or {}
     stale_sups = [{"repo": s.get("repo", ""),
                    "behind": s.get("behind"),
                    "known": bool(s.get("sha"))}
                   for s in supervisors if s.get("stale")]
     if dashboard.get("stale"):
         mode = "dashboard"
+    elif checkout.get("stale"):
+        mode = "checkout"
     elif stale_sups:
         mode = "supervisors"
     else:
@@ -1164,6 +1219,8 @@ def engine_update_chip(dashboard, supervisors):
         "show": mode != "none",
         "mode": mode,
         "dashboard_behind": dashboard.get("behind") if mode == "dashboard"
+        else None,
+        "checkout_behind": checkout.get("behind") if mode == "checkout"
         else None,
         "supervisors": stale_sups,
     }
