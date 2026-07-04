@@ -397,8 +397,10 @@ class TestRepoOwnerDefault(unittest.TestCase):
         self.assertEqual(dashboard.repo_owner_default("/r"), "")
 
     def test_grammar_reject_yields_empty(self):
-        # a login that fails the GitHub grammar is never surfaced (prevention 6).
-        for bad in ("-bad", "a b", "user_name", "a.b", "x;y", "--flag"):
+        # a login that fails the GitHub grammar is never surfaced (prevention 6):
+        # leading/trailing/consecutive hyphens, over-length, and non-login chars.
+        for bad in ("-bad", "a b", "user_name", "a.b", "x;y", "--flag",
+                    "Acme-", "a--b", "a" * 40):
             dashboard._owner_cache.clear()
             dashboard._run = lambda args, **kw: bad + "\n"
             self.assertEqual(dashboard.repo_owner_default("/r"), "", bad)

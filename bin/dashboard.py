@@ -336,7 +336,11 @@ def board_list(owner):
 # The login gh returns is re-validated against the GitHub grammar before it is
 # surfaced (prevention log 6) even though gh produced it. Cached briefly per repo
 # so config reloads/saves don't re-hit slow gh.
-_OWNER_LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
+# The real GitHub login grammar (not the looser board_list _OWNER_RE): 1-39
+# chars, alphanumeric or single hyphens, never leading/trailing/consecutive
+# hyphens. Strict so a garbage gh reading (e.g. a trailing-hyphen or over-long
+# string) is never surfaced as a derived default -- fail-safe, never fail-open.
+_OWNER_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}$")
 _OWNER_TTL = 60.0
 _OWNER_CACHE_MAX = 32   # bound the dict: distinct repos must not grow it forever
 _owner_cache = {}       # repo_path -> (wall_ts, login_str)
