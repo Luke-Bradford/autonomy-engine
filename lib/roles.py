@@ -249,6 +249,16 @@ def _validate_lanes(config):
     return errors
 
 
+def lanes_valid(config):
+    """True when the top-level `lanes:` block is absent or valid, False when it
+    is present-but-malformed. The SAME verdict `roles.py lanes` (and so the
+    supervisor's `--lane` gate) reaches, exposed so read-only surfaces (the
+    dashboard) can tell a healthy single-lane repo from broken config rather
+    than reporting a malformed block as the implicit 'main' lane (which would
+    show health where the supervisor actually REFUSES to dispatch)."""
+    return not _validate_lanes(config)
+
+
 def _validate_scope(name, scope):
     """`scope:` -- what an agent works over. Either a bare target string
     (legacy shorthand: `scope: diff`) or a mapping with any of labels/paths

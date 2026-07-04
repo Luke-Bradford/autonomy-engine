@@ -1585,6 +1585,12 @@ def _read_config(repo_path):
         "board_title": (overlay.get("board_project_title")
                         or (g("board.project_title") or "")),
         "roles": roles if isinstance(roles, dict) else {},
+        # #147 lane topology: surface the RAW `lanes:` block (verbatim -- None
+        # when absent, a scalar when malformed) so roles.py's helpers can both
+        # resolve lane names AND validate it. Coercing absent/malformed to the
+        # same {} would erase the distinction the validity flag needs (an
+        # absent block is healthy; a malformed one is refused by the supervisor).
+        "lanes": g("lanes"),
         "overrides": overlay,
     }
 
@@ -1616,8 +1622,12 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
     # scheduler that otherwise looks identical to a healthy idle role). A role
     # with no cron schedule / no miss stays False -- never a fabricated alarm.
     missed = set(h["role"] for h in health if h.get("missed"))
+    # #147 dashboard slice: tag each role row with the lane it belongs to (its
+    # `lane:` or the default lane) so a later render slice can group the repo
+    # card by lane. Display only -- lane routing stays a supervisor concern.
     for r in roles:
         r["missed_fire"] = r["name"] in missed
+        r["lane"] = roles_schema.lane_of_role(config, r["name"])
     return {
         "name": os.path.basename(repo_path.rstrip("/")),
         "path": repo_path,
@@ -1626,6 +1636,15 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "activity": activity,
         "display_status": status,
         "roles": roles,
+        # #147 lane topology: declared lanes in order + the default lane. No
+        # `lanes:` block -> the single implicit 'main' lane (zero migration).
+        # `valid` is False only for a present-but-malformed block (the same
+        # verdict the supervisor's --lane gate reaches) so a render can flag
+        # broken config instead of faking a healthy single lane -- fail-safe
+        # for the render (never raises), truthful for the operator.
+        "lanes": {"names": roles_schema.lane_names(config),
+                  "default": roles_schema.default_lane(config),
+                  "valid": roles_schema.lanes_valid(config)},
         "voice": read_supervisor_voice(os.path.join(logdir, "supervisor.log")),
         "choreography": read_choreography(os.path.join(logdir, "supervisor.log")),
         "heartbeat": read_heartbeat(os.path.join(logdir, "heartbeat")),
