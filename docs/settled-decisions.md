@@ -131,6 +131,34 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     the PM sweep is backstop only. Board writes stay best-effort (decision 6).
     *(Operator decision 2026-07-04.)*
 
+## Design-blockers resolution (2026-07-04 evening, operator session)
+
+27. **Attended sessions may edit the guardrail files for the named merge-gate fixes**
+    (#255 done-everywhere, #192 doc-only unification, #87/#211 structural write path).
+    The unattended loop stays hard-barred from `bin/safe_merge.sh` +
+    `.github/workflows/**`; the authorization is ticket-scoped, not a general unbar.
+    *(specs/2026-07-04-design-blockers-resolution.md §1.)*
+28. **Config persistence splits by nature.** Structural truth (`roles:`,
+    `merge_gate.*`) is written ONLY via commit + PR through the normal gate; operational
+    knobs (model/effort, board display) stay in the untracked `var/` overlay (#202/#218).
+    No overlay for structure, ever. *(ibid. §3; settles the #211 fork.)*
+29. **UI config writes use full-block re-emit with double validation** (roles.py +
+    re-parse-compare, refuse on mismatch); in-block comments are an accepted loss.
+    Never a byte-splice writer. *(ibid. §4.)*
+30. **Agents are global entities in `~/.config/autonomy/agents`** (index-file
+    conventions: stdlib JSON, 0600, atomic, no secrets); bindings live in each repo's
+    `roles:` block and carry the per-binding rules (trigger, scope, lane, gate, budget).
+    Dangling agent refs degrade to doctor WARNING + ⚠ badge — never silently dropped.
+    *(ibid. §5; operator IA direction on #83.)*
+31. **SD-24 clarified: an explicit operator-clicked board-creation OFFER is allowed**
+    (automation stays forbidden; scaffolds keep `project_title` empty). *(ibid. §6.)*
+32. **Phase track renders only honest layers** — solid observed (timestamped facts),
+    outline configured (gate chain), dotted detected prompt-phases, empty no-evidence;
+    Slice B milestone sources are board.sh's transition log + session-log gate parsing.
+    The escalation-comment schema (fenced `autonomy-question` JSON) and the health
+    architecture (shared `lib/health.py`, 15-min wedged rule, console.py as the blessed
+    dashboard manager) are settled in the same doc §§8–9. *(ibid. §§7–9.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could
