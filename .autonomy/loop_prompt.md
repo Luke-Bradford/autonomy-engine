@@ -62,7 +62,9 @@ half-done branches, no unpushed WIP).
    start → `board.sh status N "In Progress"`; open PR → `board.sh status N "In Review"`; after
    `safe_merge.sh` **confirms the merge** (PR state MERGED — not merely that safe_merge ran; it
    exits 0 without merging when the gate isn't satisfied) → `board.sh status N "Done"`; new ticket
-   #M → `board.sh add M`; park → `board.sh status N "Blocked"`.
+   #M → `board.sh add M`; park → `board.sh status N "Blocked"`. **Multi-slice tickets:** when a
+   merged PR does NOT close the ticket (remaining slices), reset `board.sh status N "Ready"` —
+   never leave a ticket displayed "In Review" with no open PR.
 
 5. Update the auto-memory (index + topic files) as you land work, per the memory rules.
 
