@@ -38,6 +38,9 @@ _API_ENV = {"anthropic_api": "ANTHROPIC_API_KEY", "openai_api": "OPENAI_API_KEY"
 # invented ids (fill this list only once the ids are confirmed against the real
 # codex CLI).
 _SUBSCRIPTION_MODELS = {
+    # claude-fable-5: Claude 5 family (2026). Verified dispatchable on this
+    # machine 2026-07-04: `claude --model claude-fable-5 -p` -> rc 0. Roster
+    # is a UI picker list only; a wrong id fails soft at dispatch (refusal).
     "claude_subscription": ["claude-fable-5", "claude-opus-4-8",
                             "claude-sonnet-5", "claude-haiku-4-5"],
     "codex_subscription": [],
