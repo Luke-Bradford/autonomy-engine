@@ -52,6 +52,29 @@ bin/setup_worktree.sh /path/to/target-repo
 # 4. Load it (see setup_worktree.sh's own printed next-steps for the exact commands)
 ```
 
+## Prerequisites / replicating on a new machine
+
+The engine's supported host is **macOS**: it uses `launchd` (background loops),
+the **Keychain** (API-key storage), and targets the stock **`/bin/bash` 3.2.57**
+floor. Config parsing and all helpers are **Python 3 stdlib only** — no PyYAML,
+no third-party packages. Those four are non-negotiable; everything below is
+per-feature and `bin/doctor.sh <repo>` reports each one (diagnostic-only — it
+warns, never blocks or provisions).
+
+| You want… | Requires | doctor line |
+| --- | --- | --- |
+| **Core loop** (coder drains the board) | `gh` authed with the **`repo`** scope; `claude` CLI logged in (subscription) *or* an API account in the credentials registry | `WARN gh token missing 'repo' scope` / `WARN gh auth status failed` |
+| **Board sync** (Projects v2) | `gh` token also carries the **`project`** scope (default `gh auth login` often omits it → `gh auth refresh -s project`); `board.owner` + `board.project_title` set | `WARN gh token missing 'project' scope`; `WARN board '…' not found` |
+| **Review gate** (`merge_gate.strategy: bot_comment`) | the review workflow installed under the target repo's `.github/workflows/`; the **`ANTHROPIC_API_KEY`** secret set **in that repo** (`gh secret set ANTHROPIC_API_KEY`) | `WARN no review-bot workflow found`; `WARN ANTHROPIC_API_KEY secret not found` |
+| **`gh_review` gate** | branch protection on `main` with required reviews | `WARN no branch protection detected on main` |
+| **Installing/updating** the review or QA workflow | `gh` token also carries the **`workflow`** scope (setup-only — the running loop never pushes workflows) | `INFO gh token has no 'workflow' scope` |
+| **Codex roles** | `codex` CLI installed + logged in (ChatGPT) | (adapter-checked at dispatch) |
+| **Local-LLM roles** (`openai_compatible`) | a local OpenAI-compatible endpoint (Ollama / LM Studio) reachable from the role's configured host | (adapter-checked at dispatch) |
+
+`gh auth refresh -s repo,project,workflow` grants all three GitHub scopes at
+once. `bin/quickstart.sh` runs `doctor.sh` as step 3/6, so these same checks
+surface during guided onboarding.
+
 ## Run model & health
 
 Two tiers of process, deliberately different lifetimes:
