@@ -403,6 +403,18 @@ class TestListModels(unittest.TestCase):
         self.assertNotIn("tampered",
                          ac._SUBSCRIPTION_MODELS["claude_subscription"])
 
+    def test_model_source_maps_kind_to_discovery_source(self):
+        # the config picker (#82) asks accounts, not bin/, which SOURCE a kind
+        # uses -- so the decision cannot drift from list_models. openai_compatible
+        # discovers live; a CLI-login subscription serves the curated roster;
+        # anything else (api key / unknown) has no roster to offer.
+        self.assertEqual(ac.model_source("openai_compatible"), "live")
+        self.assertEqual(ac.model_source("claude_subscription"), "curated")
+        self.assertEqual(ac.model_source("codex_subscription"), "curated")
+        self.assertEqual(ac.model_source("anthropic_api"), "none")
+        self.assertEqual(ac.model_source("openai_api"), "none")
+        self.assertEqual(ac.model_source("nonsense"), "none")
+
     def test_list_models_credential_failure_is_empty(self):
         # an unexpected failure from the credentials backend must degrade to
         # [] -- discovery is best-effort and never propagates (never raises).
