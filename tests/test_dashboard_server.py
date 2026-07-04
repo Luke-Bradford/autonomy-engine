@@ -152,7 +152,7 @@ class TestControlRoomShell(unittest.TestCase):
     # script) -- dropping one silently breaks that panel.
     MOUNTS = [
         b'id="focus"', b'id="history"', b'id="repos"', b'id="quota"',
-        b'id="activity"', b'id="tp"', b'id="handoffs"', b'id="voice"',
+        b'id="activity"', b'id="tp"', b'id="handoffs"', b'id="needsyou"', b'id="voice"',
         b'id="git"', b'id="toast"',
         # header/live stats the tickers + render update every second/tick
         b'id="h-repos"', b'id="h-active"', b'id="h-fresh"', b'id="h-clock"',

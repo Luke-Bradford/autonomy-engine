@@ -531,7 +531,7 @@ def _empty_in_flight():
     cached snapshot to serve, so hand back a well-formed empty one rather than
     raising into the request (best-effort, never blank the page)."""
     return {"branch": "?", "sha": "", "dirty": False, "repo_url": "",
-            "prs": [], "merged": [], "focus_ticket": None}
+            "prs": [], "merged": [], "focus_ticket": None, "needs_you": []}
 
 
 def _ensure_refresh(repo):
@@ -597,13 +597,26 @@ def _compute_in_flight(repo):
                      "number,title,url,mergedAt,headRefName", "--jq", "sort_by(.mergedAt) | reverse"],
                     cwd=repo, timeout=20)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+    def _needs_you_raw():
+        # Untriaged human-decision queue (#189 degraded state). Labels are a
+        # fixed generic-workflow constant (repo-agnostic); cwd-scoped, no owner
+        # interpolation. sort:updated-desc lives IN the search so the --limit
+        # keeps the newest 20 (Codex CP1). Best-effort: "" on any gh failure.
+        return _run(["gh", "issue", "list", "--limit", "20",
+                     "--search", "state:open label:%s sort:updated-desc"
+                                 % ",".join(ds.NEEDS_YOU_LABELS),
+                     "--json", "number,title,url,labels,updatedAt"],
+                    cwd=repo, timeout=20)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         f_url = pool.submit(_repo_url)
         f_open = pool.submit(_open_raw)
         f_merged = pool.submit(_merged_raw)
+        f_needs = pool.submit(_needs_you_raw)
         repo_url = f_url.result()
         raw = f_open.result()
         mraw = f_merged.result()
+        nyraw = f_needs.result()
 
     prs = []
     if raw:
@@ -674,6 +687,7 @@ def _compute_in_flight(repo):
         "prs": prs,
         "merged": merged,
         "focus_ticket": focus,
+        "needs_you": ds.parse_needs_you(nyraw),
     }
     return result
 

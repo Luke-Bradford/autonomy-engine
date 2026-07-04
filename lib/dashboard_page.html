@@ -328,6 +328,9 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
       <div class="sh"><h2>Handoffs</h2><span class="ln"></span></div>
       <div class="panel"><div class="p-h" style="border-bottom:1px solid var(--hair)"><span class="sub">the org's choreography — cron fires &amp; event wakes handing work to a role</span></div><div class="hfeed" id="handoffs"></div></div>
 
+      <div class="sh"><h2>Needs you</h2><span class="ln"></span><span class="ct">untriaged · pending PM triage (#89)</span></div>
+      <div class="panel"><div class="p-h" style="border-bottom:1px solid var(--hair)"><span class="sub">open issues awaiting a human decision — needs-design / needs-spec</span></div><div class="hfeed" id="needsyou"></div></div>
+
       <div class="sh"><h2>Supervisor voice</h2><span class="ln"></span></div>
       <div class="panel"><div class="p-h" style="border-bottom:1px solid var(--hair)"><span class="sub">the loop's own decisions — pacing, backoff, usage limits (not the agent's work)</span></div><div class="voice" id="voice"></div></div>
 
@@ -867,6 +870,17 @@ function renderHandoffs(repos){
     return `<div class="hln"><span class="chip">${esc(e.role)}</span><span class="hact">${many?"["+esc(x.repo)+"] ":""}${esc(handoffText(e))}</span>${when}</div>`;}).join("");
   const h=$("handoffs");h.scrollTop=h.scrollHeight;}
 
+/* ---- NEEDS YOU (#189 degraded state: untriaged human-decision queue) ---- */
+function renderNeedsYou(repos){
+  const rows=[];repos.forEach(r=>((r.git&&r.git.needs_you)||[]).forEach(i=>rows.push({repo:r.name,i})));
+  const many=repos.filter(r=>r.git&&(r.git.needs_you||[]).length).length>1;
+  if(!rows.length){$("needsyou").innerHTML=`<div class="empty">Nothing awaiting a decision — needs-design/needs-spec issues appear here.</div>`;return;}
+  $("needsyou").innerHTML=rows.map(x=>{const i=x.i;
+    const labs=(i.labels||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join("");
+    const num=i.number!=null?("#"+esc(i.number)):"";
+    const link=i.url?`<a href="${esc(i.url)}" target="_blank" rel="noopener">${num}</a>`:num;
+    return `<div class="hln">${labs}<span class="hact">${many?"["+esc(x.repo)+"] ":""}${link} ${esc(i.title)}</span></div>`;}).join("");}
+
 /* ---- VOICE ---- */
 function vcls(l){if(/USAGE LIMIT/i.test(l))return "limit";if(/PAUSE|resuming|graceful/i.test(l))return "pause";
   if(/error|fail|abort|cannot/i.test(l))return "err";if(/session clean|board empty/i.test(l))return "clean";
@@ -923,7 +937,7 @@ function renderEngineUpdate(e){
 }
 function render(s){LAST=s;GEN=s.generated_at||Math.floor(nowS());
   renderFocus(s.repos);renderHistory(s.repos);renderRepos(s.repos);renderQuota(s.repos,s.account);renderActivity(s.repos);
-  renderTokens(s.repos);renderHandoffs(s.repos);renderVoice(s.repos);renderGit(s.repos);renderEngineUpdate(s.engine);}
+  renderTokens(s.repos);renderHandoffs(s.repos);renderNeedsYou(s.repos);renderVoice(s.repos);renderGit(s.repos);renderEngineUpdate(s.engine);}
 function setLive(ok){$("h-live").classList.toggle("stale",!ok);$("h-live-t").textContent=ok?"live":"reconnecting";}
 function connect(){let es;try{es=new EventSource("/api/stream");}catch(e){poll();return;}
   es.onopen=()=>setLive(true);es.onmessage=e=>{try{render(JSON.parse(e.data));setLive(true);}catch(_){}}; es.onerror=()=>setLive(false);}
