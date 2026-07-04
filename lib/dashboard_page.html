@@ -853,7 +853,10 @@ function tickNarration(repos){
   if(!idle.length)return "";
   return idle.map(r=>{
     const hb=r.heartbeat, ph=(hb.phase||"").trim();
-    const m=/^(session-running)\s+(\S+)$/.exec(ph);
+    // #177: both role-scoped phases (`session-running <role>` and the prep-window
+    // `dispatching <role>`) split into a phase head + a role chip; every other
+    // phase (pace-wait, cron-check, ...) renders its whole phase string as head.
+    const m=/^(session-running|dispatching)\s+(\S+)$/.exec(ph);
     const head=m?m[1]:(ph||"tick");
     const roleChip=m?`<span class="fc-role">${esc(m[2])}</span>`:"";
     // until is a numeric epoch (read_heartbeat coerces int|0); force it numeric

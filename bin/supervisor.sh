@@ -844,6 +844,13 @@ run_session() {
     log "NOTE could not write role marker for '$role' (dashboard falls back to default badge)"
   log "session start (role=$role model=$MODEL effort=${EFFORT:-default} auth=$auth_note) -> $log_file"
 
+  # #177: narrate the live phase at the moment the agent is actually invoked --
+  # all prep (preflight, adapter, auth, prompt/rules, role marker) is done, the
+  # very next line runs the agent. Emitting it HERE (not at the call site) means
+  # every caller -- loop, cron, event -- narrates a running session uniformly;
+  # the main loop's own `dispatching <role>` covers the prep window before this.
+  heartbeat "session-running $role" "running a $role session" ""
+
   invoke_scoped_env "$env_lines" \
     "$prompt_file" "$rules_file" \
     "$MODEL" "$FALLBACK_MODEL" "$log_file" "$EFFORT"
@@ -997,7 +1004,11 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     role="$(select_role "$role_rr" $dispatch_list)"
     role_rr=$(( (role_rr + 1) % 86400 ))
 
-    heartbeat "session-running $role" "running a $role session" ""
+    # #177: the prep window (auth, preflight, worktree) narrates as `dispatching`
+    # -- run_session flips it to `session-running <role>` the instant the agent
+    # is actually invoked, so the card never reads "running a session" while it
+    # is only getting ready to (or is about to refuse and back off).
+    heartbeat "dispatching $role" "selected $role -- preparing session (auth, preflight, worktree)" ""
     run_session "$role"; outcome=$?
     case $outcome in
       0) log "session clean (open issues ~$open_count). pace ${PACE}s"
