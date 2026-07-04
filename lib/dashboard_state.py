@@ -720,14 +720,29 @@ def _role_next_fire(cfg, enabled, now):
     return roles_schema.cron_next_fire(trigger.get("schedule"), now)
 
 
-def build_roles(config_roles, coder_status, now=None):
+def _role_last_run(sessions, role_name):
+    """The most recent session dispatched to `role_name`, as
+    {at: started_epoch, outcome}, or None if that role has no session in the
+    list (#185 fleet rail's per-role 'last <when> <outcome>' stat). Read off
+    recent_sessions -- role sidecar + outcome are already parsed there -- which
+    is newest-first, so the first match is the most recent. Pure + total: a
+    session missing its epoch degrades to 0 rather than raising."""
+    for s in sessions or []:
+        if s.get("role") == role_name:
+            return {"at": s.get("started_epoch") or 0, "outcome": s.get("outcome") or ""}
+    return None
+
+
+def build_roles(config_roles, coder_status, now=None, sessions=None):
     """The per-repo role roster for the page. The standard four always render
     (Coder live; PM/QA/Researcher as not-configured placeholders unless the
     pack declares them), plus any custom roles the pack adds. `config_roles` is
     the parsed `roles:` mapping (may be empty). `coder_status` is the repo's
     unified display_status (#23) -- the coder row shows the SAME label as the
     repo badge, never a separately-derived one. `now` enables the cron
-    next-fire countdown (#18)."""
+    next-fire countdown (#18). `sessions` (recent_sessions() output) enriches
+    each row with `last_run` -- the newest session dispatched to that role
+    (#185); None-safe, so callers without the history just get last_run=None."""
     config_roles = config_roles or {}
     roles = []
     for name, d_enabled, _d_sub, d_trig in _STANDARD_ROLES:
@@ -753,7 +768,8 @@ def build_roles(config_roles, coder_status, now=None):
         roles.append({"name": name, "enabled": enabled, "substrate": substrate,
                       "trigger": trigger, "status": status,
                       "configured": bool(cfg),
-                      "next_fire": _role_next_fire(cfg, enabled and bool(cfg), now)})
+                      "next_fire": _role_next_fire(cfg, enabled and bool(cfg), now),
+                      "last_run": _role_last_run(sessions, name)})
     # custom roles declared in the pack but not in the standard set
     standard = tuple(r[0] for r in _STANDARD_ROLES)
     for name, cfg in config_roles.items():
@@ -769,6 +785,7 @@ def build_roles(config_roles, coder_status, now=None):
             "status": "configured" if enabled else "disabled",
             "configured": True,
             "next_fire": _role_next_fire(cfg, enabled, now),
+            "last_run": _role_last_run(sessions, name),
         })
     return roles
 
@@ -1541,7 +1558,7 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "current_session": session,
         "activity": activity,
         "display_status": status,
-        "roles": build_roles(config.get("roles"), status, now=now),
+        "roles": build_roles(config.get("roles"), status, now=now, sessions=sessions),
         "voice": read_supervisor_voice(os.path.join(logdir, "supervisor.log")),
         "choreography": read_choreography(os.path.join(logdir, "supervisor.log")),
         "heartbeat": read_heartbeat(os.path.join(logdir, "heartbeat")),
