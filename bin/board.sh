@@ -139,16 +139,9 @@ set_single_select() {
 # (SD #6) + fail-safe (SD #4): a gh/parse failure yields NO sweep targets (never
 # a wrong write), and every path warns + exits 0.
 
-# GraphQL rate-limit floor: skip the mutation batch when the shared 5k/hr pool
-# is nearly spent, so board hygiene never starves the loop's own API budget.
-# Sanitized to a non-negative integer -- a bad env value can never misgate or
-# emit an arithmetic error (best-effort). Page cap bounds a runaway paginate.
-case "${SWEEP_RATELIMIT_FLOOR:-}" in ''|*[!0-9]*) SWEEP_RATELIMIT_FLOOR=100 ;; esac
-case "${SWEEP_MAX_PAGES:-}" in ''|*[!0-9]*|0) SWEEP_MAX_PAGES=20 ;; esac
-
 # Scan a project's items (by global node id -- no user/org fallback or title
 # ambiguity) for closed-but-not-Done issues. Paginates in bash, threading the
-# ProjectV2 items cursor until hasNextPage is false or SWEEP_MAX_PAGES is hit
+# ProjectV2 items cursor until hasNextPage is false or the page cap is hit
 # (warns if capped -- no silent truncation). Prints line 1 = the GraphQL
 # rateLimit.remaining seen on the LAST page (-1 if unknown), then one item id
 # per line for items whose content is an Issue with state==CLOSED and whose
@@ -158,11 +151,15 @@ case "${SWEEP_MAX_PAGES:-}" in ''|*[!0-9]*|0) SWEEP_MAX_PAGES=20 ;; esac
 #   $1 = project node id, $2 = Done option id.
 board_sweep_scan() {
   local pid="$1" done_opt="$2"
+  # Page cap bounds a runaway paginate. Sanitized to a positive int HERE (inside
+  # the function) so it is self-contained when sourced -- no source-time work
+  # before the "sourcing only defines functions" guard (review nitpick).
+  local max_pages; case "${SWEEP_MAX_PAGES:-}" in ''|*[!0-9]*|0) max_pages=20 ;; *) max_pages="$SWEEP_MAX_PAGES" ;; esac
   local frag='pageInfo{ hasNextPage endCursor } nodes{ id status: fieldValueByName(name:"Status"){ ... on ProjectV2ItemFieldSingleSelectValue{ optionId } } content{ ... on Issue{ state } } }'
   local q_first="query(\$pid:ID!){ node(id:\$pid){ ... on ProjectV2{ items(first:100){ $frag } } } rateLimit{ remaining } }"
   local q_page="query(\$pid:ID!,\$cursor:String!){ node(id:\$pid){ ... on ProjectV2{ items(first:100, after:\$cursor){ $frag } } } rateLimit{ remaining } }"
   local cursor="" page=0 remaining=-1 resp parsed meta hn ec ids all_ids="" scan_ok=1
-  while [ "$page" -lt "$SWEEP_MAX_PAGES" ]; do
+  while [ "$page" -lt "$max_pages" ]; do
     page=$((page + 1))
     if [ -z "$cursor" ]; then
       resp="$(gh api graphql -f query="$q_first" -f pid="$pid" 2>/dev/null)"
@@ -219,10 +216,10 @@ EOF
     if [ -z "$ec" ]; then scan_ok=0; break; fi  # hasNext but no cursor: malformed -> incomplete
     cursor="$ec"
   done
-  if [ "$page" -ge "$SWEEP_MAX_PAGES" ] && [ "$hn" = "1" ]; then
+  if [ "$page" -ge "$max_pages" ] && [ "$hn" = "1" ]; then
     # A deliberate cap (not a failure): the pages we DID scan are complete and
     # their ids are valid -- keep them and warn (no silent truncation).
-    warn "sweep: hit page cap ($SWEEP_MAX_PAGES) -- swept the first $((SWEEP_MAX_PAGES * 100)) items this pass"
+    warn "sweep: hit page cap ($max_pages) -- swept the first $((max_pages * 100)) items this pass"
   fi
   printf '%s\n' "$remaining"
   # Emit ids only for a clean (or deliberately capped) scan; an incomplete scan
@@ -262,6 +259,13 @@ config_value_with_overlay() {
 }
 
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
+
+# GraphQL rate-limit floor for the `sweep` mutation batch (skip when the shared
+# 5k/hr pool is nearly spent, so board hygiene never starves the loop's own API
+# budget). Sanitized to a non-negative integer -- a bad env value can never
+# misgate or emit an arithmetic error (best-effort). Below the guard: it is used
+# only by the executable body, so sourcing stays functions-only.
+case "${SWEEP_RATELIMIT_FLOOR:-}" in ''|*[!0-9]*) SWEEP_RATELIMIT_FLOOR=100 ;; esac
 
 cmd="${1:-}"
 if [ -z "$cmd" ]; then
