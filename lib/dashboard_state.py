@@ -1161,11 +1161,46 @@ def recent_sessions(logdir, limit=10):
             "duration": duration,
             "outcome": outcome,
             "tokens": s.get("output_tokens") or 0,
+            "cost": s.get("cost_usd") or 0,
             "ticket": s.get("ticket"),
             "ticket_source": s.get("ticket_source"),
             "model": s.get("model") or "",
         })
     return out
+
+
+def ticket_effort(sessions, ticket):
+    """Total work one ticket has cost (#186 lane detail 'this ticket · N
+    sessions · X tok · $Y'): the session count, output tokens, and $ summed
+    over every recent session whose worked ticket == `ticket`. Keyed on the
+    ISSUE the sessions worked (recent_sessions' `ticket`), not a PR number, so
+    it stays honest whether or not a PR is open yet.
+
+    Pure over the recent_sessions() list -- no files, no gh. Returns None when
+    there is no active ticket to total, or the list carries no session for it,
+    so the page renders the line only when it has a real figure. Total by
+    construction: this feeds build_repo_state() (which renders the WHOLE
+    dashboard), so every field is coerced defensively -- a torn session dict
+    (missing/None/garbage tokens or cost) contributes 0 rather than raising
+    (prevention-log #12: a pure projection over cached data must never blow up
+    the render)."""
+    if ticket is None:
+        return None
+    matched = [s for s in sessions if s.get("ticket") == ticket]
+    if not matched:
+        return None
+    tokens = 0
+    cost = 0.0
+    for s in matched:
+        try:
+            tokens += int(s.get("tokens") or 0)
+        except (TypeError, ValueError):
+            pass
+        try:
+            cost += float(s.get("cost") or 0)
+        except (TypeError, ValueError):
+            pass
+    return {"sessions": len(matched), "tokens": tokens, "cost": round(cost, 2)}
 
 
 def recent_quota_windows(logdir, limit=60):
@@ -1498,6 +1533,7 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
     lifecycle = lifecycle_status(repo_path, pid_is_alive=pid_is_alive)
     status = display_status(lifecycle["state"], activity)
     quota = recent_quota_windows(logdir)   # scanned once; forecast reuses it
+    sessions = recent_sessions(logdir)     # scanned once; ticket_effort reuses it
     return {
         "name": os.path.basename(repo_path.rstrip("/")),
         "path": repo_path,
@@ -1518,7 +1554,12 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "merge_gate_chain": merge_gate_chain(config.get("merge_gate")),
         "override": read_model_override(os.path.join(logdir, "model-override")),
         "quota": quota,
-        "sessions": recent_sessions(logdir),
+        "sessions": sessions,
+        # #186 lane detail: total effort spent on the ticket the focus card
+        # shows (the live/most-recent session's worked issue), summed across
+        # that ticket's sessions. None when no session is working a ticket.
+        "ticket_effort": ticket_effort(
+            sessions, session.get("ticket") if session else None),
         "token_timeline": token_timeline(logdir, now),
         "quota_forecast": quota_forecast(quota, now),
         "trigger_health": trigger_health(config, os.path.join(repo_path, "var", "cron"), now),
