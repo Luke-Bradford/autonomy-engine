@@ -40,6 +40,27 @@ def override_path(repo):
     return os.path.join(repo, "var", "autonomy-logs", "model-override")
 
 
+def overrides_path(repo):
+    """The PERSISTENT operator-override file (#202). Lives in the gitignored
+    var/autonomy-logs (same home as the one-shot model-override) so a
+    'save default' survives the supervisor's preflight stash-recovery that
+    would otherwise sweep a tracked config.yaml edit into a stash."""
+    return os.path.join(repo, "var", "autonomy-logs", "config-overrides")
+
+
+# The model/effort keys whose page-writes go to the untracked overlay instead
+# of the tracked config.yaml. Dotted config key -> the short overlay key the
+# supervisor/dashboard already parse (mirrors the one-shot model-override
+# format). board.*/merge_gate.* stay config.yaml-written because their
+# consumers (board.sh, safe_merge, doctor) have no overlay read seam.
+OVERLAY_KEYS = {"agent.model.primary": "model",
+                "agent.model.fallback": "fallback",
+                "agent.effort": "effort"}
+
+_OVERLAY_MSG = ("saved as a local override (survives the loop's preflight; "
+                "config.yaml stays the committed default) — applies next session")
+
+
 def set_model_plan(repo, model, effort, scope):
     """Pure decision for the model/effort control (#24). Returns:
       scope=session -> {"write": override-file, "content": ..., "message"}
@@ -67,14 +88,13 @@ def set_model_plan(repo, model, effort, scope):
         return {"write": override_path(repo), "content": content,
                 "message": "override queued — applies to the NEXT session only"}
 
-    config_set = {}
+    overlay_set = {}
     if model:
-        config_set["agent.model.primary"] = model
+        overlay_set["model"] = model
     if effort:
-        config_set["agent.effort"] = effort
-    return {"config_path": os.path.join(repo, ".autonomy", "config.yaml"),
-            "config_set": config_set,
-            "message": "saved as the repo default — applies from the next session"}
+        overlay_set["effort"] = effort
+    return {"overlay": overrides_path(repo), "overlay_set": overlay_set,
+            "message": _OVERLAY_MSG}
 
 
 VALID_STRATEGIES = ("manual", "ci_only", "bot_comment", "gh_review")
@@ -112,6 +132,10 @@ def config_set_plan(repo, key, value):
         return {"error": "key %r is not editable from the page" % (key,)}
     if not validator(value):
         return {"error": "invalid value for %s" % key}
+    short = OVERLAY_KEYS.get(key)
+    if short is not None:
+        return {"overlay": overrides_path(repo), "overlay_set": {short: value},
+                "message": "%s saved as a local override — applies next session" % key}
     return {"config_path": os.path.join(repo, ".autonomy", "config.yaml"),
             "config_set": {key: value},
             "message": "%s saved — applies from the next session" % key}

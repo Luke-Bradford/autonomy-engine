@@ -45,11 +45,18 @@ class TestSetModelPlan(unittest.TestCase):
         p = dc.set_model_plan(self.repo, "", "max", "session")
         self.assertEqual(p["content"], "effort=max\n")
 
-    def test_default_scope_returns_config_keys(self):
+    def test_default_scope_writes_overlay_not_config(self):
+        # #202: default-saves route to the untracked overlay (survives the
+        # preflight stash-recovery), NOT the tracked config.yaml.
         p = dc.set_model_plan(self.repo, "claude-opus-4-8", "high", "default")
-        self.assertEqual(p["config_path"], "/w/tree/.autonomy/config.yaml")
-        self.assertEqual(p["config_set"], {"agent.model.primary": "claude-opus-4-8",
-                                           "agent.effort": "high"})
+        self.assertEqual(p["overlay"], "/w/tree/var/autonomy-logs/config-overrides")
+        self.assertEqual(p["overlay_set"], {"model": "claude-opus-4-8",
+                                            "effort": "high"})
+        self.assertNotIn("config_path", p)
+
+    def test_default_scope_model_only_overlay(self):
+        p = dc.set_model_plan(self.repo, "claude-sonnet-5", "", "default")
+        self.assertEqual(p["overlay_set"], {"model": "claude-sonnet-5"})
 
     def test_rejects_bad_model_string(self):
         for bad in ("opus; rm -rf /", "a b", "x\ny", "claude$(boom)"):
@@ -165,13 +172,12 @@ class TestConfigSetPlan(unittest.TestCase):
     def plan(self, key, value):
         return dc.config_set_plan(self.repo, key, value)
 
-    def test_valid_keys_produce_config_set(self):
+    def test_config_yaml_keys_produce_config_set(self):
+        # board.*/merge_gate.* stay config.yaml-written (their consumers --
+        # board.sh, safe_merge, doctor -- have no overlay read seam).
         cases = {
             "board.owner": "some-org",
             "board.project_title": "My Fancy Board",
-            "agent.model.primary": "claude-opus-4-8",
-            "agent.model.fallback": "claude-sonnet-5",
-            "agent.effort": "high",
             "merge_gate.strategy": "ci_only",
         }
         for key, value in cases.items():
@@ -180,6 +186,23 @@ class TestConfigSetPlan(unittest.TestCase):
             self.assertEqual(p["config_set"], {key: value})
             self.assertEqual(p["config_path"],
                              os.path.join(self.repo, ".autonomy", "config.yaml"))
+            self.assertNotIn("overlay", p)
+
+    def test_model_effort_keys_route_to_overlay(self):
+        # #202: the model/effort keys write the untracked overlay instead.
+        cases = {
+            "agent.model.primary": ("model", "claude-opus-4-8"),
+            "agent.model.fallback": ("fallback", "claude-sonnet-5"),
+            "agent.effort": ("effort", "high"),
+        }
+        for key, (short, value) in cases.items():
+            p = self.plan(key, value)
+            self.assertNotIn("error", p, "%s: %r" % (key, p))
+            self.assertEqual(p["overlay"],
+                             os.path.join(self.repo, "var", "autonomy-logs",
+                                          "config-overrides"))
+            self.assertEqual(p["overlay_set"], {short: value})
+            self.assertNotIn("config_path", p)
 
     def test_unknown_key_refused(self):
         self.assertIn("error", self.plan("merge_gate.author_login", "x"))
