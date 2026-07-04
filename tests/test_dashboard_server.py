@@ -4,6 +4,7 @@ a traceback that looks like the app crashing -- and the served-page templating
 that single-sources the model-picker roster (#134)."""
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -589,6 +590,87 @@ class TestConfigReadModelOwnerDerived(unittest.TestCase):
                    for r in dashboard.config_read_model()["repos"]}
         self.assertEqual(by_path[repo_a], "Owner-A")
         self.assertEqual(by_path[repo_b], "Owner-B")
+
+
+class TestConfigPageUi1Parity(unittest.TestCase):
+    """#191: the config page adopts the UI-1 token system from dashboard_page.html
+    (#184). The two pages already share the same token variable NAMES; this reskin
+    re-points the VALUES, drops the Google-webfont dependency + grid texture, and
+    aligns the theme resolver -- so /config and / render as one skin and cannot
+    drift. Parity is asserted value-for-value. The shared `ae-theme` localStorage
+    key can hold 'system' (the dashboard's dark/light/system cycle), which the
+    config page must resolve to dark|light rather than applying raw and blanking
+    every token (Codex CP1 [High])."""
+
+    _BLOCK_SELECTORS = (":root", ':root[data-theme="dark"]',
+                        ':root[data-theme="light"]')
+
+    def _token_blocks(self, page):
+        # selector -> list of brace-body strings. `:root` is matched only when a
+        # `{` follows (optionally after whitespace), so it never captures the
+        # bracketed `:root[data-theme=...]` variants.
+        text = dashboard._page_bytes(page).decode("utf-8")
+        out = {}
+        for sel in self._BLOCK_SELECTORS:
+            out[sel] = re.findall(re.escape(sel) + r"\s*\{([^}]*)\}", text)
+        return out
+
+    @staticmethod
+    def _decls(body):
+        # compare declarations only: strip comments, split on ';', normalize ws.
+        body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+        return sorted(d.strip() for d in body.split(";") if d.strip())
+
+    def test_config_page_no_webfont_dependency(self):
+        # UI-1 uses macOS-present system fonts -- "no webfont gamble" (spec). No
+        # <link>, no @import, no gstatic preconnect may remain.
+        html = dashboard._page_bytes(dashboard.CONFIG_PAGE)
+        for needle in (b"fonts.googleapis", b"fonts.gstatic", b"@import"):
+            self.assertNotIn(
+                needle, html,
+                "config page still pulls a webfont (%r); UI-1 is system-font only"
+                % needle)
+
+    def test_config_page_uses_ui1_tokens(self):
+        # canonical dark-theme values from dashboard_page.html (UI-1 #184).
+        html = dashboard._page_bytes(dashboard.CONFIG_PAGE).decode("utf-8")
+        self.assertIn("--bg:#15181d", html)
+        self.assertIn("--accent:#4c9ee3", html)
+        self.assertIn("--grid:transparent", html)   # no grid texture (spec)
+        self.assertIn('"Avenir Next"', html)
+        self.assertIn("--r:6px", html)
+
+    def test_token_blocks_match_dashboard_value_for_value(self):
+        cfg = self._token_blocks(dashboard.CONFIG_PAGE)
+        dash = self._token_blocks(dashboard.PAGE)
+        for sel in self._BLOCK_SELECTORS:
+            # Codex CP1/CP2 [Med]: exactly one block per selector on BOTH pages,
+            # else a later duplicate could win the cascade while this test still
+            # compares against the first block and passes.
+            self.assertEqual(
+                len(cfg[sel]), 1,
+                "config page has %d %s token blocks, want exactly 1"
+                % (len(cfg[sel]), sel))
+            self.assertEqual(
+                len(dash[sel]), 1,
+                "dashboard page has %d %s token blocks, want exactly 1"
+                % (len(dash[sel]), sel))
+            self.assertEqual(
+                self._decls(cfg[sel][0]), self._decls(dash[sel][0]),
+                "config %s tokens diverge from UI-1 dashboard_page.html" % sel)
+
+    def test_config_theme_resolves_system(self):
+        # Codex CP1 [High]: the shared ae-theme key can hold 'system' (dashboard
+        # cycle). The config page must resolve system->dark|light via matchMedia,
+        # never set a raw data-theme="system" that matches no token block.
+        html = dashboard._page_bytes(dashboard.CONFIG_PAGE).decode("utf-8")
+        self.assertIn("prefers-color-scheme", html)
+        # Codex CP2 [Med]: pin that data-theme is set to the RESOLVED value, not
+        # the raw stored choice -- a substring check for `_effTheme` alone would
+        # false-pass even if setAttribute still applied a raw "system".
+        self.assertIn('setAttribute("data-theme",_effTheme(', html)
+        # and that unknown values are coerced rather than applied verbatim.
+        self.assertIn('["dark","light","system"].indexOf(t)<0', html)
 
 
 if __name__ == "__main__":
