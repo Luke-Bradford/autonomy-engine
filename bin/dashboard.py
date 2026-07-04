@@ -792,13 +792,15 @@ def models_read_model():
     (fail-safe, never fail-open)."""
     accounts, err = [], None
     try:
-        inst = _accts()   # bind once -- list() and list_models() share a snapshot
+        inst = _accts()   # bind once -- list() and discover_models() share a snapshot
         for a in inst.list():
             name, kind = a.get("name"), a.get("kind")
-            source = accts.model_source(kind)
-            models = inst.list_models(name) if source != "none" else []
+            # discover_models is SOURCE-TRUTHFUL (#206): claude_subscription
+            # reports "live" only when the live /v1/models roster actually came
+            # back, else "curated". bin/ never re-derives the source itself.
+            disc = inst.discover_models(name)
             accounts.append({"name": name, "kind": kind,
-                             "source": source, "models": models})
+                             "source": disc["source"], "models": disc["models"]})
     except Exception as exc:   # discard any partial -- never fail-open
         accounts, err = [], (str(exc) or exc.__class__.__name__)
     return {"accounts": accounts, "error": err}

@@ -8,6 +8,7 @@ import stat
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -336,6 +337,18 @@ class TestOpenAICompatible(unittest.TestCase):
 
 
 class TestListModels(unittest.TestCase):
+    def setUp(self):
+        # Neutralize the live claude_subscription source (#206) so the curated
+        # fallback is deterministic and NO real Keychain/network is touched --
+        # on darwin the default token reader would otherwise read a real token.
+        self._saved_live = ac.live_claude_models
+        ac.live_claude_models = lambda *a, **k: None
+        ac.reset_live_models_cache()
+
+    def tearDown(self):
+        ac.live_claude_models = self._saved_live
+        ac.reset_live_models_cache()
+
     def test_list_models_parses_openai_shape(self):
         payload = {"data": [{"id": "qwen3:14b"}, {"id": "deepseek-r1:14b"}]}
         got = ac._parse_models_payload(json.dumps(payload).encode())
@@ -409,7 +422,9 @@ class TestListModels(unittest.TestCase):
         # discovers live; a CLI-login subscription serves the curated roster;
         # anything else (api key / unknown) has no roster to offer.
         self.assertEqual(ac.model_source("openai_compatible"), "live")
-        self.assertEqual(ac.model_source("claude_subscription"), "curated")
+        # claude_subscription now ATTEMPTS live discovery (#206) -> "live";
+        # discover_models reports the runtime result (live vs curated fallback).
+        self.assertEqual(ac.model_source("claude_subscription"), "live")
         self.assertEqual(ac.model_source("codex_subscription"), "curated")
         self.assertEqual(ac.model_source("anthropic_api"), "none")
         self.assertEqual(ac.model_source("openai_api"), "none")
@@ -427,6 +442,171 @@ class TestListModels(unittest.TestCase):
         acc.set("remote", "openai_compatible",
                 base_url="https://gw.example/v1", credential="k")
         self.assertEqual(acc.list_models("remote"), [])
+
+
+class _FakeResp:
+    def __init__(self, status, body):
+        self.status = status
+        self._body = body if isinstance(body, bytes) else body.encode()
+        self.closed = False
+
+    def read(self):
+        return self._body
+
+    def close(self):
+        self.closed = True
+
+
+class TestLiveSubscriptionModels(unittest.TestCase):
+    """#206: live claude_subscription roster via GET /v1/models, cached, with a
+    curated fallback on ANY failure. Every seam injected -- no network/Keychain.
+    The OAuth token must ride the header only, never a return value or error."""
+    TOKEN = "sk-oauth-SECRET-do-not-leak"
+    PAYLOAD = {"data": [{"id": "claude-opus-4-8", "display_name": "Opus 4.8"},
+                        {"id": "claude-fable-5", "display_name": "Fable 5"}]}
+
+    def setUp(self):
+        ac.reset_live_models_cache()
+
+    def tearDown(self):
+        ac.reset_live_models_cache()
+
+    def _opener(self, status, body, box=None):
+        def opener(req, timeout=None):
+            if box is not None:
+                box["auth"] = req.get_header("Authorization")
+            return _FakeResp(status, body)
+        return opener
+
+    def test_fetch_parses_ids_skips_bad_rows(self):
+        payload = {"data": [{"id": "a"}, {"no_id": 1}, {"id": ""},
+                            {"id": "b"}, "garbage"]}
+        got = ac._fetch_live_claude_models(
+            self.TOKEN, opener=self._opener(200, json.dumps(payload)))
+        self.assertEqual(got, ["a", "b"])
+
+    def test_fetch_non_200_and_bad_payloads_are_none(self):
+        self.assertIsNone(ac._fetch_live_claude_models(
+            self.TOKEN, opener=self._opener(401, "")))
+        self.assertIsNone(ac._fetch_live_claude_models(
+            self.TOKEN, opener=self._opener(200, "not json")))
+        self.assertIsNone(ac._fetch_live_claude_models(
+            self.TOKEN, opener=self._opener(200, '{"data": null}')))
+        self.assertIsNone(ac._fetch_live_claude_models(
+            self.TOKEN, opener=self._opener(200, '{"data": [{"no_id": 1}]}')))
+
+    def test_fetch_empty_token_no_call(self):
+        self.assertIsNone(ac._fetch_live_claude_models(""))
+        self.assertIsNone(ac._fetch_live_claude_models(None))
+
+    def test_token_rides_header_not_return(self):
+        box = {}
+        got = ac._fetch_live_claude_models(
+            self.TOKEN, opener=self._opener(200, json.dumps(self.PAYLOAD), box))
+        self.assertIn(self.TOKEN, box["auth"])          # header carries it
+        self.assertNotIn(self.TOKEN, json.dumps(got))   # return never does
+
+    def test_fetch_transport_error_is_none(self):
+        def boom(req, timeout=None):
+            raise urllib.error.URLError("offline")
+        self.assertIsNone(ac._fetch_live_claude_models(self.TOKEN, opener=boom))
+
+    def test_live_caches_and_throttles(self):
+        calls = {"n": 0}
+
+        def fetcher(token):
+            calls["n"] += 1
+            return ["claude-opus-4-8"]
+        first = ac.live_claude_models(now=1000.0, token_reader=lambda: self.TOKEN,
+                                      fetcher=fetcher)
+        second = ac.live_claude_models(now=1100.0, token_reader=lambda: self.TOKEN,
+                                       fetcher=fetcher)
+        self.assertEqual(first, ["claude-opus-4-8"])
+        self.assertEqual(second, ["claude-opus-4-8"])
+        self.assertEqual(calls["n"], 1)                 # throttled within ttl
+
+    def test_live_failure_replaces_prior_value(self):
+        ac.live_claude_models(now=1000.0, token_reader=lambda: self.TOKEN,
+                              fetcher=lambda t: ["claude-opus-4-8"])
+        # ttl elapsed + fetch now fails -> None REPLACES the cached live value
+        # (fail-safe: never serve stale-live).
+        out = ac.live_claude_models(now=2000.0, token_reader=lambda: self.TOKEN,
+                                    fetcher=lambda t: None)
+        self.assertIsNone(out)
+
+    def test_live_no_token_is_none_no_fetch(self):
+        called = {"n": 0}
+
+        def fetcher(token):
+            called["n"] += 1
+            return ["x"]
+        out = ac.live_claude_models(now=1.0, token_reader=lambda: None,
+                                    fetcher=fetcher)
+        self.assertIsNone(out)
+        self.assertEqual(called["n"], 0)
+
+    def test_inflight_guard_serves_current_without_second_fetch(self):
+        # while a fetch is in flight, a concurrent caller returns the CURRENT
+        # cached value and does NOT launch a second fetch (no stampede/block).
+        called = {"n": 0}
+
+        def fetcher(token):
+            called["n"] += 1
+            return ["should-not-be-called"]
+        with ac._live_models_lock:
+            ac._live_models_cache["seen"] = True
+            ac._live_models_cache["val"] = ["cached-x"]
+            ac._live_models_cache["ts"] = 0.0
+            ac._live_models_cache["inflight"] = True
+        out = ac.live_claude_models(now=1e9, token_reader=lambda: self.TOKEN,
+                                    fetcher=fetcher)
+        self.assertEqual(out, ["cached-x"])
+        self.assertEqual(called["n"], 0)
+
+    def _acc_with_sub(self):
+        tmp = tempfile.mkdtemp()
+        acc = ac.Accounts(index_path=os.path.join(tmp, "accounts"),
+                          credentials=FakeCreds())
+        acc.set("sub", "claude_subscription")
+        return acc
+
+    def test_list_models_live_first_then_curated(self):
+        acc = self._acc_with_sub()
+        saved = ac.live_claude_models
+        try:
+            ac.live_claude_models = lambda *a, **k: ["claude-fable-5", "claude-opus-4-8"]
+            self.assertEqual(acc.list_models("sub"),
+                             ["claude-fable-5", "claude-opus-4-8"])
+            ac.live_claude_models = lambda *a, **k: None
+            self.assertEqual(acc.list_models("sub"),
+                             ac._SUBSCRIPTION_MODELS["claude_subscription"])
+        finally:
+            ac.live_claude_models = saved
+
+    def test_discover_models_source_truthful(self):
+        acc = self._acc_with_sub()
+        saved = ac.live_claude_models
+        try:
+            ac.live_claude_models = lambda *a, **k: ["claude-fable-5"]
+            self.assertEqual(acc.discover_models("sub"),
+                             {"source": "live", "models": ["claude-fable-5"]})
+            ac.live_claude_models = lambda *a, **k: None
+            self.assertEqual(
+                acc.discover_models("sub"),
+                {"source": "curated",
+                 "models": ac._SUBSCRIPTION_MODELS["claude_subscription"]})
+        finally:
+            ac.live_claude_models = saved
+
+    def test_discover_models_openai_and_none(self):
+        tmp = tempfile.mkdtemp()
+        acc = ac.Accounts(index_path=os.path.join(tmp, "accounts"),
+                          credentials=FakeCreds())
+        acc.set("api", "anthropic_api", credential="k")
+        self.assertEqual(acc.discover_models("api"),
+                         {"source": "none", "models": []})
+        self.assertEqual(acc.discover_models("ghost"),
+                         {"source": "none", "models": []})
 
 
 if __name__ == "__main__":
