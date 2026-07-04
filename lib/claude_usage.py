@@ -36,11 +36,17 @@ _USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 _BETA = "oauth-2025-04-20"
 _HTTP_TIMEOUT = 3.0
 _TTL = 60.0                        # cache/self-throttle window
+# #271: how long a FAILED sample may keep serving the last GOOD live value
+# (age-badged via `age_s`) before degrading to the log-scan fallback. Bounds
+# the panel flap a transient endpoint/network/token blip caused, while keeping
+# the staleness visible and finite — degrade to truth, never silently-stale.
+_GRACE = 900.0
 
 # The single account-level cache. Written only by the sampler (via
 # refresh_live_quota); read by any request thread (via live_quota). Lock-guarded
-# so a read never sees a half-written dict.
-_cache = {"ts": 0.0, "val": None, "seen": False}
+# so a read never sees a half-written dict. `good`/`good_ts` remember the last
+# successful sample so live_quota can bridge transient failures (#271).
+_cache = {"ts": 0.0, "val": None, "seen": False, "good": None, "good_ts": 0.0}
 _lock = threading.Lock()
 
 
@@ -50,6 +56,8 @@ def reset_cache():
         _cache["ts"] = 0.0
         _cache["val"] = None
         _cache["seen"] = False
+        _cache["good"] = None
+        _cache["good_ts"] = 0.0
 
 
 def _default_runner():
@@ -218,11 +226,25 @@ def refresh_live_quota(now=None, token_reader=_read_oauth_token,
         _cache["ts"] = now
         _cache["val"] = val
         _cache["seen"] = True
+        if val is not None:
+            _cache["good"], _cache["good_ts"] = val, now
 
 
 def live_quota(now=None):
     """Pure, lock-guarded cache read -- NO I/O ever. Returns the last mapped
-    windows dict ({five_hour, seven_day, source}) or None (cold cache or last
-    refresh failed -> the caller falls back to the log-scan source)."""
+    windows dict ({five_hour, seven_day, source}), or -- when the LAST sample
+    failed but a previous one succeeded within _GRACE (#271) -- a COPY of that
+    last-good value with `age_s` set (the page badges it aged), else None
+    (cold cache / grace exhausted -> caller falls back to the log-scan
+    source). The copy keeps a caller's mutation out of the shared cache."""
+    if now is None:
+        now = time.time()
     with _lock:
-        return _cache["val"]
+        if _cache["val"] is not None:
+            return _cache["val"]
+        good, good_ts = _cache["good"], _cache["good_ts"]
+    if good is not None and 0 <= (now - good_ts) <= _GRACE:
+        out = dict(good)
+        out["age_s"] = int(now - good_ts)
+        return out
+    return None

@@ -179,6 +179,59 @@ class TestLiveQuota(unittest.TestCase):
         # live_quota must never do I/O -- cold cache returns None, no fetch
         self.assertIsNone(cu.live_quota())
 
+    # #271: a transient failed sample must not flap the panel to the log-scan
+    # view -- the last GOOD live value is served through a bounded grace
+    # window, with its age exposed so the page can badge it (degrade to truth,
+    # never silently-stale).
+    def test_transient_failure_serves_last_good_with_age(self):
+        cu.refresh_live_quota(now=1000, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: GOOD_PAYLOAD)
+        cu.refresh_live_quota(now=1061, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: None)   # one failed sample
+        v = cu.live_quota(now=1070)
+        self.assertIsNotNone(v)
+        self.assertEqual(v["source"], "live")
+        self.assertAlmostEqual(v["five_hour"]["utilization"], 0.48)
+        self.assertEqual(v["age_s"], 70)
+
+    def test_failure_beyond_grace_degrades_to_none(self):
+        cu.refresh_live_quota(now=1000, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: GOOD_PAYLOAD)
+        cu.refresh_live_quota(now=1061, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: None)
+        self.assertIsNone(cu.live_quota(now=1000 + cu._GRACE + 1))
+
+    def test_fresh_value_carries_no_age(self):
+        cu.refresh_live_quota(now=1000, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: GOOD_PAYLOAD)
+        self.assertNotIn("age_s", cu.live_quota(now=1010))
+
+    def test_recovery_clears_age(self):
+        cu.refresh_live_quota(now=1000, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: GOOD_PAYLOAD)
+        cu.refresh_live_quota(now=1061, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: None)
+        cu.refresh_live_quota(now=1122, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: GOOD_PAYLOAD)
+        self.assertNotIn("age_s", cu.live_quota(now=1130))
+
+    def test_grace_value_is_a_copy_not_the_cache(self):
+        # a caller mutating the grace-served dict must never poison the cache
+        cu.refresh_live_quota(now=1000, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: GOOD_PAYLOAD)
+        cu.refresh_live_quota(now=1061, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: None)
+        v1 = cu.live_quota(now=1070)
+        v1["mutated"] = True
+        v2 = cu.live_quota(now=1080)
+        self.assertNotIn("mutated", v2)
+
+    def test_cold_start_failure_still_none(self):
+        # no last-good yet: a failed first sample stays None (unchanged path)
+        cu.refresh_live_quota(now=1000, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: None)
+        self.assertIsNone(cu.live_quota(now=1010))
+
     def test_token_never_in_outward_value(self):
         # the dashboard-facing value (live_quota) must never carry the token,
         # even when a token was read to produce it

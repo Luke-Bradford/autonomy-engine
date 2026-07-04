@@ -947,9 +947,15 @@ function renderQuota(repos,account){
   // back to the log-scan max above and flag the panel as stale.
   const cl=a.claude, live=!!(cl&&cl.source==='live');
   if(live){ five=cl.five_hour; seven=cl.seven_day; }
-  const src=live
-    ? `<span class="qsrc live" title="live from Anthropic api/oauth/usage">live</span>`
-    : `<span class="qsrc stale" title="from session-log rate-limit events; refreshed only during sessions">logs · stale</span>`;
+  // #271: age_s set = the sampler is bridging a failed refresh with the last
+  // GOOD live value (bounded grace). Badge the age past ~2 sample intervals so
+  // bridged data never reads as fresh; a young bridge stays a plain "live".
+  const aged=live&&cl.age_s>150;
+  const src=!live
+    ? `<span class="qsrc stale" title="from session-log rate-limit events; refreshed only during sessions">logs · stale</span>`
+    : aged
+    ? `<span class="qsrc stale" title="last successful live read ${Math.round(cl.age_s/60)}m ago — endpoint refresh currently failing; falls back to logs after 15m">live · ${Math.round(cl.age_s/60)}m old</span>`
+    : `<span class="qsrc live" title="live from Anthropic api/oauth/usage">live</span>`;
   const cap=live
     ? "% live from Anthropic api/oauth/usage · counts from ~/.claude (all sessions)"
     : "counts from ~/.claude (all sessions) · % from session-log rate-limit events (stale)";
