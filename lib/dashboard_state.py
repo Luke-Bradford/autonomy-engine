@@ -730,9 +730,78 @@ def parse_needs_you(raw):
             "url": url if isinstance(url, str) else "",
             "labels": labels,
             "updated_at": at if isinstance(at, str) else "",
+            # #189 triaged escalation: the PM's fenced autonomy-question block,
+            # or None when the issue carries no valid one (degrades to the
+            # untriaged row). Total -- comments absent/malformed => None.
+            "question": parse_autonomy_question(it.get("comments")),
         })
     out.sort(key=lambda i: i["updated_at"], reverse=True)
     return out
+
+
+# #189 (SD-32 §8): the PM question contract IS the escalation schema. An
+# escalating role posts ONE issue comment holding a fenced ```autonomy-question
+# JSON block with EXACTLY these six keys. The triaged card renders it; anything
+# else (absence/garbage) degrades to the shipped untriaged row (#235). Strict by
+# design -- a lenient parser that accepts extra keys or coerces a bad `answers`
+# would be fail-open, surfacing a half-formed question as if triaged.
+_AUTONOMY_Q_KEYS = frozenset(("question", "recommendation", "reasoning_quote",
+                              "effort_sunk", "default_if_ignored", "answers"))
+_AUTONOMY_Q_STRINGS = ("question", "recommendation", "reasoning_quote",
+                       "effort_sunk", "default_if_ignored")
+# Tolerant of a trailing-whitespace info string and CRLF; the block body is the
+# lazily-captured group up to the closing fence. re.search returns the FIRST
+# block in a comment (deterministic when a comment holds more than one).
+_AUTONOMY_Q_FENCE = re.compile(
+    r"```[ \t]*autonomy-question[ \t]*\r?\n(.*?)\r?\n?```", re.DOTALL)
+
+
+def _valid_autonomy_question(obj):
+    """The strict schema gate (SD-32 §8): an object with EXACTLY the six keys,
+    five strings + `answers` a list of 1..3 strings. Any deviation -> None."""
+    if not isinstance(obj, dict) or set(obj.keys()) != set(_AUTONOMY_Q_KEYS):
+        return None
+    for k in _AUTONOMY_Q_STRINGS:
+        if not isinstance(obj.get(k), str):
+            return None
+    ans = obj.get("answers")
+    if not isinstance(ans, list) or not (1 <= len(ans) <= 3):
+        return None
+    if any(not isinstance(a, str) for a in ans):
+        return None
+    return obj
+
+
+def parse_autonomy_question(comments):
+    """Extract the PM-triaged escalation (#189) from an issue's `comments` list
+    (gh dicts with `body`, `createdAt`). The NEWEST comment CONTAINING an
+    autonomy-question fence is authoritative: a later prose-only comment does not
+    mask an earlier question, and if that newest block is garbage the whole thing
+    degrades to None (never falls back to an older valid block). Total: any bad
+    input (None / non-list / no fence / bad json / schema mismatch) -> None."""
+    if not isinstance(comments, list):
+        return None
+    candidates = []  # (createdAt, block-text) for each comment holding a fence
+    for c in comments:
+        if not isinstance(c, dict):
+            continue
+        body = c.get("body")
+        if not isinstance(body, str):
+            continue
+        m = _AUTONOMY_Q_FENCE.search(body)
+        if not m:
+            continue
+        at = c.get("createdAt")
+        candidates.append((at if isinstance(at, str) else "", m.group(1)))
+    if not candidates:
+        return None
+    # ISO-8601 timestamps sort lexically; the newest fence-bearing comment wins.
+    candidates.sort(key=lambda x: x[0])
+    try:
+        obj = json.loads(candidates[-1][1])
+    except (ValueError, TypeError):
+        return None
+    return _valid_autonomy_question(obj)
 
 
 def extract_ticket_ref(branch):
