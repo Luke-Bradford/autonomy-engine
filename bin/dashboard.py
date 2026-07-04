@@ -982,7 +982,8 @@ def _collect_one(repo):
                     "number": sess["ticket"], "title": done.get("title") or "",
                     "url": done.get("url") or "", "completed": True,
                     "merged_epoch": done.get("merged_epoch") or 0,
-                    "pr_number": done.get("number")}
+                    "pr_number": done.get("number"),
+                    "source": sess.get("ticket_source")}
             else:
                 focus = _issue_focus(repo, sess["ticket"], git.get("repo_url", ""))
                 if focus:
@@ -991,6 +992,9 @@ def _collect_one(repo):
                     # never an in-progress claim. Copy -- _issue_focus caches.
                     focus = dict(focus)
                     focus["in_progress"] = busy
+                    # #151 item 3: why THIS ticket -- the pick_ticket rung, so
+                    # the operator can trust or discount a heuristic guess.
+                    focus["source"] = sess.get("ticket_source")
                     git["focus_ticket"] = focus
         return st
     except Exception as exc:  # never let one repo blank the page

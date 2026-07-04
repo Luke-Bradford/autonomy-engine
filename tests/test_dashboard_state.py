@@ -217,6 +217,41 @@ class TestTicketHeuristic(unittest.TestCase):
     def test_pick_nothing(self):
         self.assertIsNone(ds.pick_ticket({}, {}, None, None))
 
+    # #151 item 3: the card shows "#N" with no hint why that ticket; expose the
+    # rung of the pick_ticket ladder that chose it so the operator can trust or
+    # discount the attribution. ticket_source mirrors the same ladder.
+    def test_source_branch_creation_names_the_branch(self):
+        src = ds.ticket_source({1015: 7, 649: 2}, {1015: 3, 649: 9},
+                               branch_ticket=649, board_ticket=1816,
+                               branch_name="feat/649-x")
+        self.assertIn("branch", src.lower())
+        self.assertIn("feat/649-x", src)
+
+    def test_source_branch_creation_without_name(self):
+        src = ds.ticket_source({}, {}, branch_ticket=649, board_ticket=None,
+                               branch_name=None)
+        self.assertIn("branch", src.lower())
+
+    def test_source_board_in_progress(self):
+        src = ds.ticket_source({1015: 7}, {1015: 9},
+                               branch_ticket=None, board_ticket=1816)
+        self.assertIn("board", src.lower())
+
+    def test_source_recency_among_repeats(self):
+        # repeats exist -> chosen came from the repeat pool, most recent
+        src = ds.ticket_source({1015: 7, 649: 3}, {1015: 5, 649: 12},
+                               branch_ticket=None, board_ticket=None)
+        self.assertIn("mention", src.lower())
+        self.assertIn("3", src)   # the winning ticket's repeat count
+
+    def test_source_single_mention(self):
+        src = ds.ticket_source({57: 1}, {57: 1},
+                               branch_ticket=None, board_ticket=None)
+        self.assertIn("once", src.lower())
+
+    def test_source_none_when_no_ticket(self):
+        self.assertIsNone(ds.ticket_source({}, {}, None, None))
+
     def test_force_create_branch_variants_recognized(self):
         # review NITPICK on PR #28: -B / -C force-create variants count too
         for cmd in ("git checkout -B fix/12-redo", "git switch -C feat/12-x"):
