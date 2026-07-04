@@ -130,6 +130,106 @@ set_single_select() {
   gh api graphql -f query='mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){projectV2Item{id}}}' -f p="$1" -f i="$2" -f f="$3" -f o="$4" >/dev/null 2>&1
 }
 
+# --- #252: closed-issue -> Done sweep ---------------------------------------
+# GitHub ProjectV2's built-in "item closed -> set Status Done" workflow CANNOT
+# be enabled via API (GraphQL exposes only deleteProjectV2Workflow; the toggle
+# is UI-only). So closed issues freeze in their old column and the board lies.
+# The `sweep` command below moves every project item whose linked issue is
+# CLOSED and whose Status is not already the Done option -> Done. Best-effort
+# (SD #6) + fail-safe (SD #4): a gh/parse failure yields NO sweep targets (never
+# a wrong write), and every path warns + exits 0.
+
+# GraphQL rate-limit floor: skip the mutation batch when the shared 5k/hr pool
+# is nearly spent, so board hygiene never starves the loop's own API budget.
+# Sanitized to a non-negative integer -- a bad env value can never misgate or
+# emit an arithmetic error (best-effort). Page cap bounds a runaway paginate.
+case "${SWEEP_RATELIMIT_FLOOR:-}" in ''|*[!0-9]*) SWEEP_RATELIMIT_FLOOR=100 ;; esac
+case "${SWEEP_MAX_PAGES:-}" in ''|*[!0-9]*|0) SWEEP_MAX_PAGES=20 ;; esac
+
+# Scan a project's items (by global node id -- no user/org fallback or title
+# ambiguity) for closed-but-not-Done issues. Paginates in bash, threading the
+# ProjectV2 items cursor until hasNextPage is false or SWEEP_MAX_PAGES is hit
+# (warns if capped -- no silent truncation). Prints line 1 = the GraphQL
+# rateLimit.remaining seen on the LAST page (-1 if unknown), then one item id
+# per line for items whose content is an Issue with state==CLOSED and whose
+# Status optionId != <done_opt>. Idempotent: already-Done items yield no id; a
+# closed issue with no/other Status yields its id (a closed issue SHOULD be
+# Done). Drafts (DraftIssue) and PRs never match `... on Issue` -> skipped.
+#   $1 = project node id, $2 = Done option id.
+board_sweep_scan() {
+  local pid="$1" done_opt="$2"
+  local frag='pageInfo{ hasNextPage endCursor } nodes{ id status: fieldValueByName(name:"Status"){ ... on ProjectV2ItemFieldSingleSelectValue{ optionId } } content{ ... on Issue{ state } } }'
+  local q_first="query(\$pid:ID!){ node(id:\$pid){ ... on ProjectV2{ items(first:100){ $frag } } } rateLimit{ remaining } }"
+  local q_page="query(\$pid:ID!,\$cursor:String!){ node(id:\$pid){ ... on ProjectV2{ items(first:100, after:\$cursor){ $frag } } } rateLimit{ remaining } }"
+  local cursor="" page=0 remaining=-1 resp parsed meta hn ec ids all_ids="" scan_ok=1
+  while [ "$page" -lt "$SWEEP_MAX_PAGES" ]; do
+    page=$((page + 1))
+    if [ -z "$cursor" ]; then
+      resp="$(gh api graphql -f query="$q_first" -f pid="$pid" 2>/dev/null)"
+    else
+      resp="$(gh api graphql -f query="$q_page" -f pid="$pid" -f cursor="$cursor" 2>/dev/null)"
+    fi
+    parsed="$(DONE_OPT="$done_opt" python3 - "$resp" <<'PY' 2>/dev/null
+import sys, json, os
+done = os.environ.get("DONE_OPT", "")
+try:
+    d = json.loads(sys.argv[1])
+except Exception:
+    sys.exit(0)                    # gh/parse failure -> print nothing (fail-safe)
+data = d.get("data") or {}
+node = data.get("node") or {}
+items = node.get("items")
+if items is None:
+    sys.exit(0)                    # not a project / no items -> nothing this page
+remaining = -1
+rl = data.get("rateLimit") or {}
+if isinstance(rl.get("remaining"), int):
+    remaining = rl["remaining"]
+pi = items.get("pageInfo") or {}
+has_next = 1 if pi.get("hasNextPage") else 0
+end_cur = pi.get("endCursor") or ""
+out_ids = []
+for it in (items.get("nodes") or []):
+    if not it:
+        continue
+    c = it.get("content") or {}
+    if c.get("state") != "CLOSED":     # only closed real Issues (drafts/PRs lack state)
+        continue
+    st = it.get("status") or {}
+    if st.get("optionId") == done:     # idempotent: already Done -> skip
+        continue
+    out_ids.append(it["id"])
+print("%d\t%d\t%s" % (remaining, has_next, end_cur))
+for i in out_ids:
+    print(i)
+PY
+)"
+    # gh/parse failure or non-project mid-pagination -> INCOMPLETE scan. Mark it
+    # and stop: an incomplete scan yields NO ids (all-or-nothing), so we never
+    # emit a partial target set built from only the pages that happened to load.
+    if [ -z "$parsed" ]; then scan_ok=0; break; fi
+    # First line = meta (remaining<TAB>hasNext<TAB>endCursor), rest = item ids.
+    { IFS= read -r meta; ids="$(cat)"; } <<EOF
+$parsed
+EOF
+    IFS=$'\t' read -r remaining hn ec <<<"$meta"
+    if [ -n "$ids" ]; then all_ids="$all_ids$ids
+"; fi
+    [ "$hn" = "1" ] || break          # last page reached -> clean completion
+    if [ -z "$ec" ]; then scan_ok=0; break; fi  # hasNext but no cursor: malformed -> incomplete
+    cursor="$ec"
+  done
+  if [ "$page" -ge "$SWEEP_MAX_PAGES" ] && [ "$hn" = "1" ]; then
+    # A deliberate cap (not a failure): the pages we DID scan are complete and
+    # their ids are valid -- keep them and warn (no silent truncation).
+    warn "sweep: hit page cap ($SWEEP_MAX_PAGES) -- swept the first $((SWEEP_MAX_PAGES * 100)) items this pass"
+  fi
+  printf '%s\n' "$remaining"
+  # Emit ids only for a clean (or deliberately capped) scan; an incomplete scan
+  # (a page failure/malformed cursor) emits none -- the tail is retried next pass.
+  [ "$scan_ok" = "1" ] && printf '%s' "$all_ids"
+}
+
 # Overlay-aware config read (#211). A config-page 'save default' for board.owner
 # / board.project_title lands in the untracked var/autonomy-logs/config-overrides
 # overlay (short keys board_owner / board_project_title) -- the SAME overlay the
@@ -163,12 +263,21 @@ config_value_with_overlay() {
 
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
 
-cmd="${1:-}"; issue="${2:-}"; status="${3:-}"
-if [ -z "$cmd" ] || [ -z "$issue" ]; then
-  warn 'usage: board.sh status <issue#> "<Status>" | add <issue#>'
+cmd="${1:-}"
+if [ -z "$cmd" ]; then
+  warn 'usage: board.sh status <issue#> "<Status>" | add <issue#> | sweep'
   exit 0
 fi
+# Validate the command BEFORE any side effect (resolve/issue-view/add/priority):
+# an unknown command must not mutate the board on its way to the usage warning.
+case "$cmd" in
+  status|add|sweep) ;;
+  *) warn "unknown command '$cmd' (use: status | add | sweep)"; exit 0 ;;
+esac
 
+# OWNER/PROJECT_TITLE are needed by EVERY command (status, add, sweep) -- resolve
+# + validate once, before the per-command arg checks (so `sweep`, which takes no
+# <issue#>, is not rejected by the issue-required check below).
 OWNER="$(config_value_with_overlay board.owner board_owner)"
 PROJECT_TITLE="$(config_value_with_overlay board.project_title board_project_title)"
 if [ -z "$OWNER" ] || [ -z "$PROJECT_TITLE" ]; then
@@ -182,6 +291,48 @@ case "$OWNER" in
   ""|-*|*[!A-Za-z0-9-]*)
     warn "board.owner '$OWNER' is not a valid GitHub login (skip)"; exit 0 ;;
 esac
+
+# #252: sweep closed issues -> Done. Takes NO <issue#>, so it is handled before
+# the issue-required check. Idempotent, rate-limit-gated, best-effort.
+if [ "$cmd" = "sweep" ]; then
+  DONE_NAME="$(config_value_with_overlay board.done_status board_done_status)"
+  [ -n "$DONE_NAME" ] || DONE_NAME="Done"
+  sweep_ids="$(board_resolve_field "$OWNER" "$PROJECT_TITLE" "Status" "$DONE_NAME")"
+  read -r SPID SFID SDONE <<<"$sweep_ids"
+  if [ -z "${SPID:-}" ]; then warn "sweep: project '$PROJECT_TITLE' not found under '$OWNER' (skip)"; exit 0; fi
+  if [ -z "${SFID:-}" ] || [ -z "${SDONE:-}" ]; then
+    warn "sweep: Status field or '$DONE_NAME' option not found on the board (skip)"; exit 0
+  fi
+  scan="$(board_sweep_scan "$SPID" "$SDONE")"
+  swept=0
+  # Brace group (not a subshell) with here-doc redirection: `exit 0` exits the
+  # script and `swept` persists. Line 1 = rateLimit.remaining; rest = item ids.
+  { IFS= read -r sweep_remaining
+    if [ "${sweep_remaining:-0}" -ge 0 ] 2>/dev/null && [ "${sweep_remaining:-0}" -lt "$SWEEP_RATELIMIT_FLOOR" ]; then
+      warn "sweep: GraphQL rate limit low ($sweep_remaining < $SWEEP_RATELIMIT_FLOOR) -- skipping the mutation batch to protect the loop's API budget"
+      exit 0
+    fi
+    while IFS= read -r item_id; do
+      [ -n "$item_id" ] || continue
+      if set_single_select "$SPID" "$item_id" "$SFID" "$SDONE"; then
+        swept=$((swept + 1))
+      else
+        warn "sweep: failed to set an item to $DONE_NAME (skip)"
+      fi
+    done
+  } <<EOF
+$scan
+EOF
+  [ "$swept" -gt 0 ] && warn "sweep: moved $swept closed issue(s) to $DONE_NAME"
+  exit 0
+fi
+
+# status / add require an <issue#>.
+issue="${2:-}"; status="${3:-}"
+if [ -z "$issue" ]; then
+  warn 'usage: board.sh status <issue#> "<Status>" | add <issue#> | sweep'
+  exit 0
+fi
 
 ids="$(board_resolve_project "$OWNER" "$PROJECT_TITLE" "$status")"
 read -r PID FID OPT_ID <<<"$ids"
@@ -239,5 +390,6 @@ if [ "$cmd" = "status" ]; then
   exit 0
 fi
 
-warn "unknown command '$cmd' (skip)"
+# Unreachable: cmd was validated to status|add|sweep up top and every path exits
+# above. Defensive catch-all keeps the best-effort exit-0 contract regardless.
 exit 0

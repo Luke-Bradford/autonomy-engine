@@ -177,6 +177,17 @@ session_end_park() {
   return 0
 }
 
+# #252: keep the board honest each iteration. GitHub ProjectV2's built-in
+# "closed -> Done" workflow can't be enabled via API, so closed issues freeze in
+# their old column. board.sh's `sweep` command moves them to Done (idempotent,
+# rate-limit-gated). Wired here -- the engine side, repo-agnostic -- rather than
+# in the pack's loop_prompt (a guardrail), so every consumer gets it with no
+# pack edit. Best-effort: board.sh warns + exits 0 on every failure path, and
+# `|| true` is belt-and-suspenders so a board hiccup can never perturb dispatch.
+sweep_board() {
+  ( cd "$AUTONOMY_TARGET_REPO" && "$ENGINE_HOME/bin/board.sh" sweep ) >>"$SUPLOG" 2>&1 || true
+}
+
 # --- live model/effort settings (#24) ---------------------------------------
 # Strict token check for model ids -- the value came over the dashboard's
 # control channel and lands in a CLI argv; nothing shell-metacharish allowed.
@@ -1001,6 +1012,12 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
       log "PAUSE sentinel gone -- resuming"
       paused_logged=0
     fi
+
+    # #252: sweep closed issues -> Done once per active iteration (a paused loop
+    # reaches `continue` above and skips this). Best-effort; never perturbs the
+    # loop. Placed before cron/dispatch so the board reflects reality as early
+    # in the tick as possible.
+    sweep_board
 
     # Cron scheduler (W1, #85): fire due cron roles under the held lock, one at
     # a time. Run BEFORE the board-empty / no-loop-role gates below so a cron

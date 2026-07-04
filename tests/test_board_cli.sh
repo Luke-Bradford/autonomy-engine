@@ -40,8 +40,13 @@ case "\$args" in
     printf 'ITEM' ;;
   *projectItems*)
     printf '{"data":{"node":{"projectItems":{"nodes":[{"id":"ITEM","project":{"id":"PID"}}]}}}}' ;;
+  *rateLimit*)
+    # #252 sweep scan (node(id:\$pid){...ProjectV2{items}} rateLimit) -- one closed
+    # non-Done item (sweep), one already-Done closed item (idempotent skip), one
+    # OPEN item (skip). GH_SWEEP_REMAINING drives the rate-limit gate.
+    printf '{"data":{"node":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":"C"},"nodes":[{"id":"SWEEP_ITEM","status":{"optionId":"OPT_BLOCKED"},"content":{"state":"CLOSED"}},{"id":"DONE_ITEM","status":{"optionId":"DONEOPT"},"content":{"state":"CLOSED"}},{"id":"OPEN_ITEM","status":{"optionId":"OPT_BLOCKED"},"content":{"state":"OPEN"}}]}},"rateLimit":{"remaining":%s}}}' "\${GH_SWEEP_REMAINING:-5000}" ;;
   *projectsV2*)
-    printf '%s' '{"data":{"user":{"projectsV2":{"nodes":[{"id":"PID","title":"Autonomy Progress","fields":{"nodes":[{"id":"SFID","name":"Status","options":[{"id":"SOPT","name":"In review"}]},{"id":"PFID","name":"Priority","options":[{"id":"P0OPT","name":"P0"},{"id":"P1OPT","name":"P1"},{"id":"P2OPT","name":"P2"}]}]}}]}}}}' ;;
+    printf '%s' '{"data":{"user":{"projectsV2":{"nodes":[{"id":"PID","title":"Autonomy Progress","fields":{"nodes":[{"id":"SFID","name":"Status","options":[{"id":"SOPT","name":"In review"},{"id":"DONEOPT","name":"Done"}]},{"id":"PFID","name":"Priority","options":[{"id":"P0OPT","name":"P0"},{"id":"P1OPT","name":"P1"},{"id":"P2OPT","name":"P2"}]}]}}]}}}}' ;;
   *) printf '{}' ;;
 esac
 SH
@@ -51,7 +56,7 @@ chmod +x "$TMP/bin/gh"
 run() {
   local labels="$1" fail="$2"; shift 2
   : > "$TMP/mutations"
-  ( cd "$TMP/repo" && PATH="$TMP/bin:$PATH" GH_LABELS="$labels" GH_FAIL="$fail" "$ROOT/bin/board.sh" "$@" ) >/dev/null 2>&1
+  ( cd "$TMP/repo" && PATH="$TMP/bin:$PATH" GH_LABELS="$labels" GH_FAIL="$fail" GH_SWEEP_REMAINING="${GH_SWEEP_REMAINING:-5000}" "$ROOT/bin/board.sh" "$@" ) >/dev/null 2>&1
   echo "$?"
 }
 muts() { cat "$TMP/mutations" 2>/dev/null; }
@@ -85,6 +90,32 @@ rc="$(run p2 "" status 42 "In review")"
 check "invalid owner: still exit 0" "0" "$rc"
 check "invalid owner: no mutation recorded" "0" "$(muts | grep -c 'SET')"
 printf 'board:\n  owner: Luke-Bradford\n  project_title: Autonomy Progress\n' > "$TMP/repo/.autonomy/config.yaml"
+
+# G: #252 sweep -- moves ONLY the closed non-Done item to Done. Runs with NO
+# <issue#> arg (decomposed before the issue-required usage check).
+rc="$(run p2 "" sweep)"
+check "sweep: exit 0" "0" "$rc"
+check "sweep: one mutation recorded (only the stale closed item)" "1" "$(muts | grep -c 'SET')"
+check "sweep: mutates SWEEP_ITEM" "1" "$(muts | grep -c 'i=SWEEP_ITEM')"
+check "sweep: sets it to the Done option" "1" "$(muts | grep -c 'o=DONEOPT')"
+check "sweep: does NOT touch the already-Done item" "0" "$(muts | grep -c 'i=DONE_ITEM')"
+check "sweep: does NOT touch the OPEN item" "0" "$(muts | grep -c 'i=OPEN_ITEM')"
+
+# H: rate-limit low (remaining < floor) -> skip the mutation batch, still exit 0.
+rc="$(GH_SWEEP_REMAINING=50 run p2 "" sweep)"
+check "sweep rate-limit-low: exit 0" "0" "$rc"
+check "sweep rate-limit-low: zero mutations" "0" "$(muts | grep -c 'SET')"
+
+# I: gh totally failing during sweep -> exit 0, no mutation (best-effort).
+rc="$(run p2 1 sweep)"
+check "sweep gh-failure: exit 0" "0" "$rc"
+check "sweep gh-failure: zero mutations" "0" "$(muts | grep -c 'SET')"
+
+# J: an unknown command must NOT mutate the board on its way to the usage warn
+# (validated before any resolve/issue-view/add/priority side effect).
+rc="$(run p2 "" frobnicate 42 "In review")"
+check "unknown command: exit 0" "0" "$rc"
+check "unknown command: zero mutations (no side effects)" "0" "$(muts | grep -c 'SET')"
 
 # F: #211 overlay-aware read seam. Source the real board.sh (its guard makes a
 # `source` define functions only) and exercise config_value_with_overlay
