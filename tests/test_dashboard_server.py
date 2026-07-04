@@ -141,6 +141,45 @@ class TestPageTemplating(unittest.TestCase):
         self.assertIn(b'"claude-opus-4-8"', html)
 
 
+class TestControlRoomShell(unittest.TestCase):
+    """UI-1 (#184): the control-room skin + shell. The reskin restructures the
+    page into a full-viewport three-zone grid with an icon top bar, killing the
+    grid background / accent stripes / max-width cage -- but it must NOT drop any
+    render mount point, or the JS silently stops populating a panel. These assert
+    the render contract survives the reskin (and future ones)."""
+
+    # every id the page's render functions write into (render() in the page
+    # script) -- dropping one silently breaks that panel.
+    MOUNTS = [
+        b'id="focus"', b'id="history"', b'id="repos"', b'id="quota"',
+        b'id="activity"', b'id="tp"', b'id="handoffs"', b'id="voice"',
+        b'id="git"', b'id="toast"',
+        # header/live stats the tickers + render update every second/tick
+        b'id="h-repos"', b'id="h-active"', b'id="h-fresh"', b'id="h-clock"',
+        b'id="h-live"', b'id="h-live-t"', b'id="h-update"',
+        # activity view tabs (setView) must stay wired
+        b'id="v-tree"', b'id="v-time"', b'id="v-flat"',
+    ]
+
+    def test_all_render_mounts_present(self):
+        html = dashboard._page_bytes(dashboard.PAGE)
+        for m in self.MOUNTS:
+            self.assertIn(m, html, "reskin dropped render mount %r" % m)
+
+    def test_three_zone_shell_and_top_bar(self):
+        # the new shell: a full-viewport three-zone grid under an icon top bar.
+        html = dashboard._page_bytes(dashboard.PAGE)
+        self.assertIn(b'class="shell"', html)
+        self.assertIn(b'class="top"', html)
+
+    def test_killed_grid_stripes_and_cage(self):
+        # operator's explicit kills: the grid background texture and the
+        # max-width cage (page now runs full-bleed, one viewport).
+        html = dashboard._page_bytes(dashboard.PAGE)
+        self.assertNotIn(b"max-width:1640px", html)
+        self.assertNotIn(b"background-image:linear-gradient(var(--grid)", html)
+
+
 class TestConciergeAccountSelection(unittest.TestCase):
     """The concierge's local-account selection rule (#137). An explicit
     AUTONOMY_CONCIERGE_ACCOUNT preference wins; unset keeps the deterministic
