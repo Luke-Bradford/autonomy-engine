@@ -1515,3 +1515,68 @@ class TestTokenTimeline(unittest.TestCase):
         st = ds.build_repo_state(FIX, git_in_flight=lambda p: {}, now=self.NOW)
         self.assertIn("token_timeline", st)
         self.assertIsInstance(st["token_timeline"], list)
+
+
+class TestQuotaForecast(unittest.TestCase):
+    """quota_forecast (#188b): burn-rate exhaustion forecast per quota window,
+    extrapolated PURELY from the utilization the dashboard already shows
+    (parse_quota_windows) -- no new source, no gh. Linear from the window's
+    average burn; omits a window when no honest forecast exists."""
+
+    NOW = 1000000
+    FIVE_H = 18000
+
+    def _win(self, util, resets_at, wtype="five_hour"):
+        return {wtype: {"utilization": util, "resets_at": resets_at,
+                        "overage": False}}
+
+    def test_slow_burn_resets_before_exhaustion_is_safe(self):
+        # halfway through a 5h window, only 25% used -> hits 100% long after reset
+        w = self._win(0.25, self.NOW + 9000)     # window_start = now-9000, elapsed=9000
+        f = ds.quota_forecast(w, self.NOW)["five_hour"]
+        self.assertEqual(f["projected_exhaust_epoch"], self.NOW + 27000)
+        self.assertFalse(f["exhausts_before_reset"])
+        self.assertEqual(f["resets_at"], self.NOW + 9000)
+
+    def test_fast_burn_exhausts_before_reset(self):
+        # halfway through, 75% used -> hits 100% before the window resets
+        w = self._win(0.75, self.NOW + 9000)
+        f = ds.quota_forecast(w, self.NOW)["five_hour"]
+        self.assertEqual(f["projected_exhaust_epoch"], self.NOW + 3000)
+        self.assertTrue(f["exhausts_before_reset"])
+
+    def test_already_at_limit_reports_exhausted_now(self):
+        w = self._win(1.0, self.NOW + 5000)
+        f = ds.quota_forecast(w, self.NOW)["five_hour"]
+        self.assertEqual(f["projected_exhaust_epoch"], self.NOW)
+        self.assertTrue(f["exhausts_before_reset"])   # resets_at is in the future
+
+    def test_zero_utilization_omitted(self):
+        # no burn to extrapolate -> no honest forecast
+        self.assertNotIn("five_hour", ds.quota_forecast(self._win(0.0, self.NOW + 9000), self.NOW))
+
+    def test_nonpositive_elapsed_omitted(self):
+        # resets_at further out than the window length -> window_start in the future
+        w = self._win(0.4, self.NOW + self.FIVE_H + 500)
+        self.assertNotIn("five_hour", ds.quota_forecast(w, self.NOW))
+
+    def test_unknown_window_type_omitted(self):
+        self.assertEqual(ds.quota_forecast({"monthly": {"utilization": 0.5,
+                                            "resets_at": self.NOW + 100}}, self.NOW), {})
+
+    def test_non_mapping_input_is_empty(self):
+        self.assertEqual(ds.quota_forecast(None, self.NOW), {})
+        self.assertEqual(ds.quota_forecast([], self.NOW), {})
+
+    def test_seven_day_window_length_used(self):
+        # 7d window (604800s); half elapsed, 10% used -> slow, safe
+        w = self._win(0.10, self.NOW + 302400, wtype="seven_day")   # elapsed=302400
+        f = ds.quota_forecast(w, self.NOW)["seven_day"]
+        # t = (0.9/0.1)*302400 = 2721600
+        self.assertEqual(f["projected_exhaust_epoch"], self.NOW + 2721600)
+        self.assertFalse(f["exhausts_before_reset"])
+
+    def test_build_repo_state_includes_quota_forecast(self):
+        st = ds.build_repo_state(FIX, git_in_flight=lambda p: {}, now=self.NOW)
+        self.assertIn("quota_forecast", st)
+        self.assertIsInstance(st["quota_forecast"], dict)
