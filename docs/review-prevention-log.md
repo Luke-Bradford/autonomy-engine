@@ -168,3 +168,18 @@ check "msg matches" "0" \
 The `|| true` on the capture makes the intent explicit. Same trap bites any
 `producer | consumer` under `pipefail` where you care about the *consumer's*
 verdict but the *producer* can exit non-zero by design.
+
+## 12. A pure projection over cached data runs OUTSIDE the fetch try — make it total
+
+*Origin: #206 follow-up, Codex checkpoint 2 (`_row_id`/`_project_ids`).*
+A best-effort fetch/cache function documents "never raises, fall back safely",
+but when a later helper PROJECTS the cached value (`live_claude_models` maps its
+rich `{id,display_name}` cache rows to bare ids via `_project_ids`), that
+projection runs *after* the fetch `try` has exited. An injected/legacy fetcher
+or a corrupt cache holding an unexpected row shape (a bare int, a dict with no
+`id`) then makes the projection raise — breaking the never-raises contract from a
+spot the `try` no longer guards. **A helper that normalises cached/injected data
+must be total: tolerate any shape, drop what it can't read, never assume the
+happy-path type.** `_row_id` returns `None` for anything that isn't a non-empty
+str or an `{id: str}` dict; `_project_ids` drops the `None`s. Regression:
+`test_live_models_tolerates_junk_rows`.

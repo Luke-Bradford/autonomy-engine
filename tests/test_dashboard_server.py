@@ -236,10 +236,11 @@ class _FakeAccts:
     for such a kind still yields none without blowing up)."""
 
     def __init__(self, registry, models=None, list_raises=None,
-                 models_raises=None, live=None):
+                 models_raises=None, live=None, labels=None):
         self._registry = registry          # list of {name, kind}
         self._models = models or {}        # name -> curated/openai [model ids]
         self._live = live or {}            # name -> live [model ids] (claude_sub)
+        self._labels = labels or {}        # name -> {id: display_name} (#206)
         self._list_raises = list_raises    # exc to raise from list()
         self._models_raises = models_raises  # name whose discover_models raises
 
@@ -254,19 +255,23 @@ class _FakeAccts:
 
     def discover_models(self, name):
         kind = self._kind(name)
+        labels = dict(self._labels.get(name, {}))
         if kind == "claude_subscription":
             if name == self._models_raises:
                 raise RuntimeError("boom in discover_models(%s)" % name)
             live = self._live.get(name)
             if live:
-                return {"source": "live", "models": list(live)}
-            return {"source": "curated", "models": list(self._models.get(name, []))}
+                return {"source": "live", "models": list(live), "labels": labels}
+            return {"source": "curated",
+                    "models": list(self._models.get(name, [])), "labels": {}}
         src = accounts.model_source(kind)
         if src == "none":
-            return {"source": "none", "models": []}   # not consulted; never raises
+            # not consulted; never raises
+            return {"source": "none", "models": [], "labels": {}}
         if name == self._models_raises:
             raise RuntimeError("boom in discover_models(%s)" % name)
-        return {"source": src, "models": list(self._models.get(name, []))}
+        return {"source": src, "models": list(self._models.get(name, [])),
+                "labels": labels}
 
 
 class TestModelsReadModel(unittest.TestCase):
@@ -292,7 +297,7 @@ class TestModelsReadModel(unittest.TestCase):
         self.assertIsNone(out["error"])
         self.assertEqual(out["accounts"], [
             {"name": "ollama", "kind": "openai_compatible", "source": "live",
-             "models": ["qwen3:14b", "deepseek-r1:14b"]}])
+             "models": ["qwen3:14b", "deepseek-r1:14b"], "labels": {}}])
 
     def test_subscription_curated_when_live_absent(self):
         self._install(_FakeAccts(
@@ -315,6 +320,20 @@ class TestModelsReadModel(unittest.TestCase):
         self.assertEqual(acct["models"],
                          ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"])
 
+    def test_subscription_live_labels_flow_through(self):
+        # #206 follow-up: display_name labels ride the /api/models payload so the
+        # config picker can show a human name next to each model id.
+        self._install(_FakeAccts(
+            [{"name": "sub", "kind": "claude_subscription"}],
+            live={"sub": ["claude-fable-5", "claude-opus-4-8"]},
+            labels={"sub": {"claude-fable-5": "Claude Fable 5",
+                            "claude-opus-4-8": "Claude Opus 4.8"}}))
+        out = dashboard.models_read_model()
+        acct = out["accounts"][0]
+        self.assertEqual(acct["source"], "live")
+        self.assertEqual(acct["labels"], {"claude-fable-5": "Claude Fable 5",
+                                          "claude-opus-4-8": "Claude Opus 4.8"})
+
     def test_api_kind_is_none_source_and_skips_lookup(self):
         # a 'none'-source kind must NOT consult list_models at all; if it did,
         # this fake would raise (models_raises) and the test would fail.
@@ -324,7 +343,7 @@ class TestModelsReadModel(unittest.TestCase):
         out = dashboard.models_read_model()
         self.assertEqual(out["accounts"], [
             {"name": "key", "kind": "anthropic_api", "source": "none",
-             "models": []}])
+             "models": [], "labels": {}}])
 
     def test_registry_failure_is_fail_safe(self):
         self._install(_FakeAccts([], list_raises=RuntimeError("gh down")))

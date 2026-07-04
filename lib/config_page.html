@@ -285,14 +285,21 @@ let MODEL=null;
 
 // Live per-account model discovery (#82): /api/models augments the curated
 // build-time roster with the real ids each configured account reports (e.g. a
-// local openai_compatible endpoint's models). LIVE_MODELS is [{id,label}] --
-// the label carries "<account> · <source>" so a cross-account suggestion shows
-// WHERE it came from (the datalist is shared across every repo's model field).
+// local openai_compatible endpoint's models). LIVE_MODELS is [{id,display,label}]
+// -- `display` is the model's human display_name (#206, when the source carried
+// one), `label` carries "<account> · <source>" so a cross-account suggestion
+// shows WHERE it came from (the datalist is shared across every model field).
 let LIVE_MODELS=[];
 function modelOptions(){
-  const seen=new Map();                     // id -> provenance label (first wins)
+  // id -> option label. A real display_name (#206) always wins so the picker
+  // shows "Claude Opus 4.8" not a bare id; else the provenance ("<acct>·<src>"),
+  // else "curated" for a build-time id no live account reported.
+  const seen=new Map();
   MODEL_CHOICES.forEach(id=>{ if(!seen.has(id)) seen.set(id,"curated"); });
-  LIVE_MODELS.forEach(m=>{ if(m.id&&!seen.has(m.id)) seen.set(m.id,m.label); });
+  LIVE_MODELS.forEach(m=>{ if(!m.id) return;
+    if(m.display) seen.set(m.id,m.display);          // human name wins
+    else if(!seen.has(m.id)) seen.set(m.id,m.label); // else provenance for a new id
+  });
   return [...seen].map(([id,label])=>`<option value="${esc(id)}" label="${esc(label)}"></option>`).join("");
 }
 function updateModelDatalist(){ const dl=$("cfg-models"); if(dl) dl.innerHTML=modelOptions(); }
@@ -300,7 +307,10 @@ function loadModels(){
   fetch("/api/models").then(r=>r.json()).then(d=>{
     if(d.error) return;                     // backend fault -> ignore discovered models (fail-safe)
     const out=[];
-    (d.accounts||[]).forEach(a=>(a.models||[]).forEach(id=>out.push({id,label:`${a.name} · ${a.source}`})));
+    (d.accounts||[]).forEach(a=>{
+      const labels=a.labels||{};
+      (a.models||[]).forEach(id=>out.push({id,display:labels[id]||"",label:`${a.name} · ${a.source}`}));
+    });
     LIVE_MODELS=out; updateModelDatalist();
   }).catch(()=>{});                         // best-effort: never toast, never block config render
 }
