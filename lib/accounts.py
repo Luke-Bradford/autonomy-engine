@@ -86,12 +86,15 @@ _LIVE_MODELS_URL = "https://api.anthropic.com/v1/models"
 _ANTHROPIC_VERSION = "2023-06-01"
 _LIVE_TTL = 300.0
 
-# Cache written under the lock ACROSS the fetch: unlike claude_usage (a single
-# sampler thread writes it), this is called from dashboard REQUEST threads, so
-# holding the lock over the fetch serializes concurrent cold callers (one
-# fetches, the rest read the result) -- no stampede, and no slow-older failure
-# overwriting a newer live value.
-_live_models_cache = {"ts": 0.0, "val": None, "seen": False}
+# Unlike claude_usage (a single sampler thread writes it), this is called from
+# dashboard REQUEST threads, so it uses an IN-FLIGHT guard rather than holding the
+# lock across the fetch: exactly one cold caller fetches (with the lock RELEASED
+# during the network I/O, so it never blocks other threads for the ~5s timeout);
+# concurrent callers see `inflight` and return the current cached value (stale or
+# None -> curated fallback) immediately -- no stampede, no blocking, and since
+# only the in-flight fetcher writes, no slow-older failure overwrites a newer
+# value within a cycle.
+_live_models_cache = {"ts": 0.0, "val": None, "seen": False, "inflight": False}
 _live_models_lock = threading.Lock()
 
 
@@ -101,6 +104,7 @@ def reset_live_models_cache():
         _live_models_cache["ts"] = 0.0
         _live_models_cache["val"] = None
         _live_models_cache["seen"] = False
+        _live_models_cache["inflight"] = False
 
 
 def _fetch_live_claude_models(token, opener=None, timeout=5):
@@ -156,9 +160,13 @@ def _fetch_live_claude_models(token, opener=None, timeout=5):
 
 def live_claude_models(now=None, token_reader=None, fetcher=None, ttl=_LIVE_TTL):
     """The live claude_subscription model ids (cached ~5 min), or None when the
-    live source can't be reached (caller falls back to the curated roster). The
-    lock is held ACROSS the fetch to serialize cold request-thread callers.
-    Fail-safe: ANY error writes None (never a raise, never stale-live)."""
+    live source can't be reached (caller falls back to the curated roster).
+
+    Concurrency: an IN-FLIGHT guard, not a lock-across-fetch. A fresh cache
+    returns immediately; a concurrent caller while a fetch is in flight returns
+    the CURRENT cached value (stale/None) rather than blocking or launching a
+    second fetch. The network I/O runs with the lock RELEASED. Fail-safe: ANY
+    error writes None (never a raise, never stale-live)."""
     if now is None:
         now = time.time()
     if token_reader is None:
@@ -166,16 +174,23 @@ def live_claude_models(now=None, token_reader=None, fetcher=None, ttl=_LIVE_TTL)
     if fetcher is None:
         fetcher = _fetch_live_claude_models
     with _live_models_lock:
-        if _live_models_cache["seen"] and (now - _live_models_cache["ts"]) < ttl:
+        fresh = (_live_models_cache["seen"]
+                 and (now - _live_models_cache["ts"]) < ttl)
+        if fresh or _live_models_cache["inflight"]:
+            # fresh -> serve it; someone else is fetching -> serve the current
+            # value now (no block, no second fetch/stampede).
             return _live_models_cache["val"]
-        try:
-            token = token_reader()
-            val = fetcher(token) if token else None
-        except Exception:
-            val = None
+        _live_models_cache["inflight"] = True
+    try:
+        token = token_reader()
+        val = fetcher(token) if token else None
+    except Exception:
+        val = None
+    with _live_models_lock:
         _live_models_cache["ts"] = now
         _live_models_cache["val"] = val
         _live_models_cache["seen"] = True
+        _live_models_cache["inflight"] = False
         return val
 
 

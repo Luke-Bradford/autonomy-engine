@@ -545,6 +545,24 @@ class TestLiveSubscriptionModels(unittest.TestCase):
         self.assertIsNone(out)
         self.assertEqual(called["n"], 0)
 
+    def test_inflight_guard_serves_current_without_second_fetch(self):
+        # while a fetch is in flight, a concurrent caller returns the CURRENT
+        # cached value and does NOT launch a second fetch (no stampede/block).
+        called = {"n": 0}
+
+        def fetcher(token):
+            called["n"] += 1
+            return ["should-not-be-called"]
+        with ac._live_models_lock:
+            ac._live_models_cache["seen"] = True
+            ac._live_models_cache["val"] = ["cached-x"]
+            ac._live_models_cache["ts"] = 0.0
+            ac._live_models_cache["inflight"] = True
+        out = ac.live_claude_models(now=1e9, token_reader=lambda: self.TOKEN,
+                                    fetcher=fetcher)
+        self.assertEqual(out, ["cached-x"])
+        self.assertEqual(called["n"], 0)
+
     def _acc_with_sub(self):
         tmp = tempfile.mkdtemp()
         acc = ac.Accounts(index_path=os.path.join(tmp, "accounts"),
