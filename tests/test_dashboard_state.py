@@ -1162,20 +1162,24 @@ class TestParseNeedsYou(unittest.TestCase):
             {"number": 1, "title": "old", "url": "u1",
              "labels": [{"name": "needs-design"}], "updatedAt": "2026-07-01T00:00:00Z"},
             {"number": 2, "title": "new", "url": "u2",
-             "labels": [{"name": "needs-spec"}], "updatedAt": "2026-07-03T00:00:00Z"},
+             "labels": [{"name": "needs-design"}, {"name": "p2"}], "updatedAt": "2026-07-03T00:00:00Z"},
         ])
         out = ds.parse_needs_you(raw)
         self.assertEqual([i["number"] for i in out], [2, 1])
-        self.assertEqual(out[0]["labels"], ["needs-spec"])
+        self.assertEqual(out[0]["labels"], ["needs-design", "p2"])
         self.assertEqual(out[0]["updated_at"], "2026-07-03T00:00:00Z")
 
     def test_none_and_empty_and_garbage_yield_empty(self):
         for raw in (None, "", "not json", "{}", "[42]"):
             self.assertEqual(ds.parse_needs_you(raw), [])
 
-    def test_entry_without_matching_label_is_dropped(self):
-        raw = json.dumps([{"number": 5, "title": "t", "url": "u",
-                           "labels": [{"name": "bug"}], "updatedAt": "z"}])
+    def test_non_engine_standard_labels_are_dropped(self):
+        # only NEEDS_YOU_LABELS (engine-standard) matches; a repo's own extra
+        # human-decision label (e.g. needs-spec) is not baked in (repo-agnostic).
+        raw = json.dumps([
+            {"number": 5, "title": "t", "url": "u", "labels": [{"name": "bug"}], "updatedAt": "z"},
+            {"number": 6, "title": "t", "url": "u", "labels": [{"name": "needs-spec"}], "updatedAt": "z"},
+        ])
         self.assertEqual(ds.parse_needs_you(raw), [])
 
     def test_entry_without_int_number_is_dropped(self):
@@ -1191,7 +1195,7 @@ class TestParseNeedsYou(unittest.TestCase):
         raw = json.dumps([
             {"number": 7, "title": "t", "url": "u", "labels": 1, "updatedAt": "z"},
             {"number": 8, "title": "t", "url": "u",
-             "labels": [{"name": "needs-spec"}], "updatedAt": 1},
+             "labels": [{"name": "needs-design"}], "updatedAt": 1},
             {"number": {}, "labels": [{"name": "needs-design"}], "updatedAt": "z"},
             42,
         ])

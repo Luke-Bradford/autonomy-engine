@@ -594,11 +594,15 @@ def merge_gate_chain(strategy):
     return [{"step": "pr"}]
 
 
-# The generic engineering-workflow labels that mark an issue as awaiting a human
-# decision -- the untriaged "needs you" queue (#189). Repo-agnostic: these are
-# engine-standard workflow labels (onboard creates needs-design; settled-decision
-# 24), NOT target-repo-specific values. Display-only routing signal (#23).
-NEEDS_YOU_LABELS = ("needs-design", "needs-spec")
+# The engine-standard workflow label that marks an issue as awaiting a human
+# decision -- the untriaged "needs you" queue (#189). Repo-agnostic: `needs-design`
+# is scaffolded by `onboard` on every target (settled-decision 24), so it is
+# engine vocabulary, NOT a target-repo-specific value. A repo's own extra
+# human-decision labels (e.g. this repo's `needs-spec`) are deliberately NOT baked
+# in here -- broadening this set, ideally config-driven, is a follow-up that pairs
+# with the PM rail (#89) once it emits structured triaged questions. Display-only
+# routing signal (#23); the tuple shape keeps that a one-line change.
+NEEDS_YOU_LABELS = ("needs-design",)
 
 
 def parse_needs_you(raw):
