@@ -990,8 +990,13 @@ def _write_overlay(path, overlay_set):
     existing = {}
     try:
         with open(path, errors="replace") as fh:
-            for line in fh:
-                k, sep, v = line.strip().partition("=")
+            for raw in fh:
+                # Preserve existing keys VERBATIM (split on first '=', strip only
+                # the newline). Using line.strip() would normalize a stray-space
+                # line like ` model=x` -- which the supervisor ignores -- into an
+                # effective `model=x` on the next save, resurrecting an invalid
+                # override (fail-safe violation). A dirty key stays dirty here.
+                k, sep, v = raw.rstrip("\n").partition("=")
                 if sep and k:
                     existing[k] = v
     except OSError:

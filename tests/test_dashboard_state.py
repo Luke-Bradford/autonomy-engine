@@ -58,6 +58,16 @@ class TestConfigOverlay(unittest.TestCase):
         self.assertEqual(cfg["model"], "claude-sonnet-5")
         self.assertEqual(cfg["overrides"], {})
 
+    def test_whitespace_dirty_overlay_ignored_parity_with_supervisor(self):
+        # The bash reader does NOT strip the line, so a stray-space key/value is
+        # ignored there; the dashboard must ignore it identically (never display
+        # a value the supervisor won't use).
+        for dirty in (" model=claude-opus-4-8\n", "model=claude-opus-4-8 \n"):
+            self._overlay(dirty)
+            cfg = ds._read_config(self.repo)
+            self.assertEqual(cfg["model"], "claude-sonnet-5", repr(dirty))
+            self.assertEqual(cfg["overrides"], {}, repr(dirty))
+
 
 class TestSessionParse(unittest.TestCase):
     def test_completed_session_status_and_result(self):

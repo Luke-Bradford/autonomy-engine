@@ -68,6 +68,19 @@ class TestConfigOverlayWrite(unittest.TestCase):
         self.assertEqual(open(cfg).read(), before)
         self.assertIn("model=claude-opus-4-8", open(self._overlay()).read())
 
+    def test_overlay_write_does_not_normalize_dirty_line(self):
+        # A stray-space line the supervisor ignores must NOT be resurrected into
+        # an effective `model=...` by an unrelated save (fail-safe parity).
+        ov = self._overlay()
+        os.makedirs(os.path.dirname(ov))
+        with open(ov, "w") as fh:
+            fh.write(" model=claude-opus-4-8\n")     # leading space -> ignored by bash
+        dashboard._write_overlay(ov, {"effort": "high"})
+        text = open(ov).read()
+        self.assertIn(" model=claude-opus-4-8", text)   # preserved verbatim, still dirty
+        self.assertNotIn("\nmodel=claude-opus-4-8", text)  # never normalized to a clean key
+        self.assertIn("effort=high", text)
+
 
 class TestBenignDisconnect(unittest.TestCase):
     def test_client_disconnects_are_benign(self):

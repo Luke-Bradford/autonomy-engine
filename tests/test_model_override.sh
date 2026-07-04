@@ -110,6 +110,12 @@ printf 'model=bad;id\neffort=nope\n' >"$LOGDIR/config-overrides"
 resolve_session_settings
 check "invalid overlay model ignored" "claude-sonnet-5" "$MODEL"
 check "invalid overlay effort ignored" "" "$EFFORT"
+# stray-space lines are ignored (no line-strip) -- the dashboard reader must
+# match this exactly so it never displays a value the supervisor won't use.
+printf ' model=claude-opus-4-8\nfallback=claude-haiku-4-5 \n' >"$LOGDIR/config-overrides"
+resolve_session_settings
+check "leading-space overlay key ignored" "claude-sonnet-5" "$MODEL"
+check "trailing-space overlay value ignored" "claude-sonnet-4-6" "$FALLBACK_MODEL"
 rm -f "$LOGDIR/config-overrides"
 # restore config.yaml to opus for the subsequent one-shot/unit checks
 printf 'agent:\n  model:\n    primary: claude-opus-4-8\n    fallback: claude-sonnet-4-6\n  effort: high\n' >"$CFG"

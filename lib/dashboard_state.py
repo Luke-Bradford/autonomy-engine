@@ -1129,8 +1129,14 @@ def read_config_overlay(path):
     out = {}
     try:
         with open(path, errors="replace") as fh:
-            for line in fh:
-                key, sep, val = line.strip().partition("=")
+            for raw in fh:
+                # Parse EXACTLY as the supervisor's bash read_config_overlay does
+                # (`${line%%=*}` / `${line#*=}` after `read -r`): split on the
+                # first '=', strip ONLY the newline -- never the whole line. A
+                # stray-space line (` model=x` / `model=x `) then fails the key
+                # match / _MODEL_RE just as it fails valid_model_id in bash, so
+                # the dashboard can't display a value the supervisor ignores.
+                key, sep, val = raw.rstrip("\n").partition("=")
                 if not sep or not val:
                     continue
                 if key in ("model", "fallback") and _dcx._MODEL_RE.match(val):
