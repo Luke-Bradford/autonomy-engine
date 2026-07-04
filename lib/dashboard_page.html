@@ -170,6 +170,10 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px
 .role .trig{font-family:var(--mono);font-size:10px;color:var(--dim)}
 .role .rst{margin-left:auto}
 .role.off{opacity:.5}
+/* #198: subtle pulse on the role acting right now (reuses @keyframes pulse) */
+.role .rdot{display:none;width:6px;height:6px;border-radius:50%;background:var(--ok);flex:none;animation:pulse 2.4s infinite}
+.role.acting .rdot{display:inline-block}
+.role.acting .rn{color:var(--ok)}
 
 /* quotas */
 .q{padding:13px 14px;border-bottom:1px solid var(--hair)}
@@ -354,6 +358,14 @@ setTheme((function(){try{return localStorage.getItem("ae-theme")||"dark";}catch(
 /* status: the server computes display_status ONCE (dashboard_state.display_status,
    #23) -- the page only reads it, never re-derives lifecycle x activity. */
 function dispStatus(r){return r.display_status||(r.lifecycle||{}).state||"idle";}
+// #198: who is acting RIGHT NOW = the live session's role (the same signal the
+// supervisor writes as its `session-running <role>` heartbeat phase and the
+// focus card shows as cs.role). Gated on `working` so a stale current_session on
+// an idle/stopped repo never pulses -- a real state transition only, no fake
+// motion (#177 non-goal).
+function actingRole(r){
+  return dispStatus(r)==="working" ? ((r.current_session||{}).role||"") : "";
+}
 const SLABEL={"needs-setup":"needs setup","not-configured":"not configured","stopping":"stopping"};
 function dispName(n){return String(n||"").replace(/^\./,"");} // worktree folder .x-autonomy -> x-autonomy
 function isWorktree(n){return /-autonomy$/.test(String(n||""));}
@@ -541,8 +553,10 @@ function renderRepos(repos){
   $("h-active").textContent=repos.filter(r=>dispStatus(r)==="working").length;
   const html=repos.map(r=>{
     const st=dispStatus(r), cfg=r.config||{};
+    const acting=actingRole(r);
     const roles=(r.roles||[]).map(role=>{
       const off=!role.enabled;
+      const isActing=!off && !!acting && role.name===acting;
       // scheduling lane (#18): cron roles get a live next-fire countdown,
       // enabled event roles read "armed" -- both only when actually enabled
       // (#164: countdown rendered INLINE, never a placeholder -- the qreset
@@ -553,11 +567,15 @@ function renderRepos(repos){
         : (role.trigger==="event"&&role.enabled&&role.configured)
         ? `event · armed`
         : esc(role.trigger);
-      return `<div class="role ${off?"off":""}">
-        <span class="rn">${esc(role.name)}</span>
+      // #198: roster MOTION lives solely on the acting-role rdot below. The
+      // coder row's status LABEL still mirrors the repo (#23), but its status
+      // dot no longer pulses (pulse=false) -- else a non-coder session would
+      // pulse the coder row falsely AND double up with the acting rdot.
+      return `<div class="role ${off?"off":""}${isActing?" acting":""}">
+        <i class="rdot"></i><span class="rn">${esc(role.name)}</span>
         ${subBadge(role.substrate)}
         <span class="trig">${trig}</span>
-        <span class="rst">${token(role.status,role.name==="coder")}</span></div>`;
+        <span class="rst">${token(role.status,false)}</span></div>`;
     }).join("");
     return `<div class="repo">
       <div class="repo-h"><span class="nm">${esc(dispName(r.name))}</span>
