@@ -1188,9 +1188,15 @@ def execute_control(repo, action):
             out = subprocess.run(plan["cmd"], capture_output=True, text=True,
                                  errors="replace", timeout=20)
             if out.returncode != 0:
-                return {"ok": False,
-                        "error": "%s failed: %s" % (plan["cmd"][1],
-                                                    (out.stderr or "").strip()[:200])}
+                # Full stderr also to the server log (#151 item 6 / dashboard
+                # security contract: the operator's own diagnostic record, not
+                # only the escaped in-DOM expander).
+                sys.stderr.write("dashboard: control '%s' on %s failed (rc=%d): %s\n"
+                                 % (action, repo, out.returncode,
+                                    (out.stderr or "").strip()))
+                res = dcx.format_cmd_error(plan["cmd"][1], out.stderr)
+                res["ok"] = False
+                return res
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "%s timed out" % plan["cmd"][1]}
     except (OSError, subprocess.SubprocessError) as exc:

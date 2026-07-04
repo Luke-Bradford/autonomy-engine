@@ -245,3 +245,35 @@ def control_plan(repo, action, service, uid):
     # start
     return {"cmd": ["launchctl", "bootstrap", "gui/%d" % uid, plist],
             "message": "started — bootstrapped %s" % label}
+
+
+# The most a control toast's title line can readably show; a longer first line
+# is truncated there and the full text moves to the expandable `detail` block.
+_TOAST_REASON_MAX = 200
+
+
+def format_cmd_error(cmd_name, stderr):
+    """Split a failed control command's stderr into a SHORT toast reason
+    (`error`) plus an optional full-text `detail` (#151 item 6). launchctl
+    errors routinely exceed the ~200 chars a toast title can show; clipping
+    them there hid the real cause. The page renders `error` inline and
+    `detail` -- when present -- in an expandable block.
+
+    `error` is the command name + the FIRST line of stderr (the actionable
+    part), capped at _TOAST_REASON_MAX with an ellipsis. `detail` is the full
+    stripped stderr, included ONLY when it carries more than the inline reason
+    already shows (a longer first line, or more lines) -- so a short
+    single-line failure never grows a redundant expander. Empty stderr degrades
+    to a bare 'no error output' reason (never a crash)."""
+    full = (stderr or "").strip()
+    if not full:
+        return {"error": "%s: command failed with no error output" % cmd_name}
+    first = full.splitlines()[0]
+    if len(first) > _TOAST_REASON_MAX:
+        shown = first[:_TOAST_REASON_MAX - 1] + "…"
+    else:
+        shown = first
+    out = {"error": "%s: %s" % (cmd_name, shown)}
+    if full != shown:                       # more than the toast shows -> offer it
+        out["detail"] = full
+    return out

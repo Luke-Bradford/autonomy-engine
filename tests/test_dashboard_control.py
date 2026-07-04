@@ -129,6 +129,45 @@ class TestControlPlan(unittest.TestCase):
             self.assertIn(p["cmd"][1], ("bootout", "bootstrap"))
 
 
+class TestFormatCmdError(unittest.TestCase):
+    """#151 item 6: a failed control command's stderr is split into a SHORT
+    toast reason (`error`) plus an optional full-text `detail` the page shows
+    in an expandable block. launchctl errors routinely exceed the ~200 chars a
+    toast title can show; clipping there hid the real cause. `detail` appears
+    ONLY when the full stderr carries more than the inline reason already does,
+    so a short single-line error never grows a redundant expander."""
+
+    def test_empty_stderr_names_the_command_no_detail(self):
+        r = dc.format_cmd_error("bootout", "")
+        self.assertIn("bootout", r["error"])
+        self.assertNotIn("detail", r)
+
+    def test_short_single_line_is_inline_no_detail(self):
+        r = dc.format_cmd_error("bootout", "  Boot-out failed: 5: I/O error\n")
+        self.assertIn("Boot-out failed: 5: I/O error", r["error"])
+        self.assertNotIn("detail", r)          # nothing more to expand
+
+    def test_long_single_line_truncates_error_keeps_full_detail(self):
+        line = "x" * 400
+        r = dc.format_cmd_error("bootstrap", line)
+        self.assertLess(len(r["error"]), 260)  # title stays short
+        self.assertTrue(r["error"].endswith("…"))
+        self.assertEqual(r["detail"], line)    # full text preserved
+
+    def test_multiline_error_is_first_line_detail_is_full(self):
+        stderr = "first line problem\nstack frame 1\nstack frame 2"
+        r = dc.format_cmd_error("bootout", stderr)
+        self.assertIn("first line problem", r["error"])
+        self.assertNotIn("stack frame", r["error"])
+        self.assertEqual(r["detail"], stderr)  # every line kept for the expander
+
+    def test_detail_never_loses_stderr_content(self):
+        stderr = ("Bootstrap failed: 5: Input/output error\n"
+                  "Try re-running as root, or check the plist path is readable\n") * 5
+        r = dc.format_cmd_error("bootstrap", stderr)
+        self.assertEqual(r["detail"], stderr.strip())
+
+
 class TestFindService(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()

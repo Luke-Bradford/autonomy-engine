@@ -139,6 +139,11 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px
   box-shadow:var(--shadow);padding:11px 14px;font-size:12px;max-width:340px;animation:rise .3s both}
 .tmsg.ok{--tc:var(--ok)} .tmsg.err{--tc:var(--bad)}
 .tmsg .th{font-weight:600;margin-bottom:2px}
+.tmsg .tdet{margin-top:6px}
+.tmsg .tdet summary{cursor:pointer;color:var(--dim);font-size:11px;user-select:none}
+.tmsg .tdet pre{margin:5px 0 0;max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word;
+  font-family:var(--mono);font-size:10.5px;color:var(--ink);background:var(--panel2);border:1px solid var(--hair2);
+  border-radius:5px;padding:6px 8px}
 
 /* status token */
 .st{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;letter-spacing:.8px;text-transform:uppercase;font-weight:500;color:var(--sc,var(--mut))}
@@ -509,7 +514,7 @@ function setModel(btn,scope){
   fetch("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({repo,action:"set_model",model,effort,scope,token:CTOKEN})})
     .then(r=>r.json().then(j=>({ok:r.ok,j})))
-    .then(({ok,j})=>toast(ok&&j.ok,(ok&&j.ok)?(j.message||"done"):("failed: "+(j.error||"error"))))
+    .then(({ok,j})=>toast(ok&&j.ok,(ok&&j.ok)?(j.message||"done"):("failed: "+(j.error||"error")),j&&j.detail))
     .catch(()=>toast(false,"request failed"));
 }
 
@@ -534,14 +539,21 @@ function control(repoEnc,action,label){
   fetch("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({repo,action,token:CTOKEN})})
     .then(r=>r.json().then(j=>({ok:r.ok,j})))
-    .then(({ok,j})=>toast(ok&&j.ok, (ok&&j.ok)?(label+" — "+(j.message||"done")):("failed: "+(j.error||"error"))))
+    .then(({ok,j})=>toast(ok&&j.ok, (ok&&j.ok)?(label+" — "+(j.message||"done")):("failed: "+(j.error||"error")),j&&j.detail))
     .catch(()=>toast(false,"request failed"));
 }
-function toast(ok,msg){
+function toast(ok,msg,detail){
   const box=$("toast"); const el=document.createElement("div");
   el.className="tmsg "+(ok?"ok":"err");
-  el.innerHTML=`<div class="th">${ok?"✓ done":"✕ failed"}</div><div>${esc(msg)}</div>`;
-  box.appendChild(el); setTimeout(()=>el.remove(),6000);
+  let html=`<div class="th">${ok?"✓ done":"✕ failed"}</div><div>${esc(msg)}</div>`;
+  // #151 item 6: a failed control command's full stderr (launchctl errors run
+  // long) lands in an expandable block instead of being clipped in the title.
+  if(detail) html+=`<details class="tdet"><summary>details</summary><pre>${esc(detail)}</pre></details>`;
+  el.innerHTML=html;
+  box.appendChild(el);
+  // give a detailed failure long enough to read/expand; keep auto-cleanup so
+  // toasts never pile up. Simple toasts fade fast as before.
+  setTimeout(()=>el.remove(),(!ok&&detail)?20000:6000);
 }
 
 /* ---- REPOS + ROLES ---- */
