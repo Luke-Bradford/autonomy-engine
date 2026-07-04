@@ -250,9 +250,37 @@ operation, so the cluster lives on the repo header, not per-lane or per-role. Mo
 - [ ] Idle temporal pass (12s observer): `steadyStateCLS < 0.01`, `repos` panel `innerHTMLStable`,
       ≤1 rebuild — icons are static, no flicker.
 
-### Slice 2b — collapse center focus to selected lane (next PR)
+### Slice 2b — collapse center focus to selected lane (SHIPPED, PR #265)
 
-`renderFocus` renders only `selectedLane(repos)`'s card; remove ONLY the now-duplicated
-**lifecycle** controls from the card (model/effort stay on the card until their own rail sub-slice
-lands — CP1 finding 3); RECENT SESSIONS + multi-repo ACTIVITY handled in Slice 3. Kept out of this
-PR.
+`renderFocus` renders only `selectedLane(repos)`'s card; removed the now-duplicated **lifecycle**
+controls from the card (the dead `controls()`/`cbtn()` renderer deleted — `.cbtn` CSS kept for
+`modelCtl`); model/effort stay on the card (CP1 finding 3). The "Now" header names the shown lane
+(truthful over a single card). Codex CP2 caught a P1: `selectLane` must re-render `renderFocus`
+(not just the rail) so the center doesn't lag a click — fixed in the same PR. RECENT SESSIONS +
+multi-repo ACTIVITY handled in Slice 3.
+
+## Slice 3 breakdown (post-Slice-2b) — split 3a / 3b
+
+Like Slice 2, Slice 3 bundles two moves of differing readiness: (3a) scope the ACTIVITY panel to
+the selected lane — a clean render-scope collapse mirroring 2b; and (3b) move RECENT SESSIONS
+behind the mockup's lane-history clock-icon **popover** (#148 data) — a NEW interaction affordance
+that is design-coupled (popover shape from the mockup). 3a ships first (no new UI pattern); 3b is
+deferred to a pass that can confirm the popover design.
+
+### Slice 3a — activity panel scopes to the selected lane (SHIPPED, PR #266)
+
+New shared accessor `selectedRepoOf(repos)` (resolves via `selectedLane`, self-healing
+default/fallback) — `renderFocus` + `renderActivity` scope to the SAME repo through it.
+`renderActivity` feeds only `[selectedRepo]` into `reposWithActivity` + `tickNarration` (live trace
+when streaming, own heartbeat when idle, else empty), killing the jumbled multi-repo stack;
+tree/timeline/tally tabs unchanged. `selectLane` re-renders `renderActivity` too (synchronous on
+click). Codex CP2: no findings.
+
+### Slice 3b — RECENT SESSIONS → lane-history popover (deferred, design-coupled)
+
+Move the inline RECENT SESSIONS section behind the mockup's clock-icon popover on the lane header
+(#148 data already built), scoped to the selected lane. This introduces a NEW popover UI pattern —
+confirm the popover shape against the mockup (`git show
+2f21d4d:docs/superpowers/specs/assets/2026-07-03-control-room-mockup.html`) before building. Slice 4
+(cleanup + empty/degraded + remove now-dead CSS/markup) depends on 3b, since RECENT SESSIONS still
+lives inline in the center until then.
