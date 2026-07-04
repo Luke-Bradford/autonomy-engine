@@ -135,6 +135,48 @@ preflight() {
   return 0
 }
 
+# #245: an idle worktree must never hold the `main` branch ref. Git forbids one
+# branch from being checked out in two worktrees at once, so if this loop's
+# worktree parks on an ATTACHED `main` between tickets, a sibling primary
+# checkout (the dev stack) can no longer `git checkout main`. preflight()
+# re-parks to a DETACHED origin/main at session START -- but the agent may end
+# its ticket sitting on an attached `main`, holding that ref for the whole idle
+# window until the next preflight runs. Close the window at session END: detach
+# HEAD off `main` (releasing the ref) after every session.
+#
+# Detach at the CURRENT commit -- no network, no fetch: the goal is only to
+# release the `main` ref during the idle window; preflight re-parks to a fresh
+# origin/main next session. Best-effort and fail-safe (SD #4/#6): only act on a
+# clean tree attached to `main` -- never detach over uncommitted work (WIP is
+# preflight's dirty-tree recovery to own), never touch a feature branch or an
+# already-detached HEAD (neither blocks a sibling worktree), and never hard-fail
+# the loop on a git hiccup (preflight will re-park regardless).
+session_end_park() {
+  cd "$AUTONOMY_TARGET_REPO" 2>/dev/null || return 0
+  # Only an ATTACHED `main` blocks a sibling worktree -- a detached HEAD or a
+  # feature branch does not. symbolic-ref fails (non-zero, empty) when detached.
+  [ "$(git symbolic-ref -q --short HEAD 2>/dev/null || echo '')" = "main" ] || return 0
+  # Never detach over WIP: leave a dirty tree for preflight's recovery to handle.
+  # A `git status` FAILURE is not "clean" -- treat unknown state as fail-safe and
+  # leave the worktree untouched (split `local` from assignment so the command
+  # substitution's rc is not masked). preflight re-parks on the next tick.
+  local dirty
+  dirty="$(git status --porcelain 2>>"$SUPLOG")" || {
+    log "session-end park: 'git status' failed -- leaving worktree as-is (preflight will re-park)"
+    return 0
+  }
+  if [ -n "$dirty" ]; then
+    log "session-end park: tree dirty on main -- leaving for preflight recovery"
+    return 0
+  fi
+  if git switch --detach -q 2>>"$SUPLOG"; then
+    log "session-end park: detached HEAD off main (an idle worktree must not hold the main ref)"
+  else
+    log "session-end park: detach failed -- preflight will re-park next session"
+  fi
+  return 0
+}
+
 # --- live model/effort settings (#24) ---------------------------------------
 # Strict token check for model ids -- the value came over the dashboard's
 # control channel and lands in a CLI argv; nothing shell-metacharish allowed.
@@ -1010,6 +1052,11 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # is only getting ready to (or is about to refuse and back off).
     heartbeat "dispatching $role" "selected $role -- preparing session (auth, preflight, worktree)" ""
     run_session "$role"; outcome=$?
+    # #245: release the `main` ref before the post-session idle window -- an
+    # agent may end its ticket sitting on an attached `main`, which would block
+    # a sibling primary checkout until the next preflight. No-op unless we are
+    # on a clean, attached `main`; never detaches over WIP.
+    session_end_park
     case $outcome in
       0) log "session clean (open issues ~$open_count). pace ${PACE}s"
          heartbeat "pace-wait" "session clean (open issues ~$open_count) -- next session soon" "$(( $(date -u +%s) + PACE ))"
