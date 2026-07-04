@@ -398,8 +398,59 @@ pre-flight-review incl. dashboard item J; **Codex CP2** before first push; PR (s
 client-side render + a read-only popover over already-served `sessions` data; no new endpoint, no
 control write, no auth surface). `#258` NOT closed (Slice 4 remains) → board reset to **Ready**.
 
-### Slice 4 — cleanup + empty/degraded (post-3b)
+### Slice 4 — cleanup + empty/degraded (this PR, CLOSES #258)
 
-With RECENT SESSIONS gone from the center inline flow, Slice 4 finishes the "center is fully
-single-lane" cleanup: the "no lane selected" / "selected repo removed" empty-degraded states and
-removal of any now-dead CSS/markup the earlier slices left. Its own PR.
+**Finding on entry:** the "empty/degraded" half of Slice 4 is **already delivered** by the
+self-healing accessors built in Slices 1–3b, verified by reading the code:
+- **No repos** → `renderFocus` early-returns the `.empty` "No repositories yet → config" narration
+  (`dashboard_page.html`, `if(!repos.length)`), and clears the `#c-now` header count so no stale
+  "N live" lingers.
+- **Selected repo/lane removed** → `selectedLane()` self-heals a stale/absent key to the fleet
+  default (greatest `lanes.active_at` → its `active` lane); `selectedRepoOf()` returns
+  `repos.find(...)||repos[0]||null` — never null when repos exist — so the card is never blank.
+- **No lane selected** → cannot occur while repos exist; `selectedLane` always resolves to a
+  default. `renderActivity`/`laneHist` scope through the same accessor, so all three center panels
+  degrade identically.
+
+So Slice 4's remaining work is the **dead-CSS/markup** cleanup only. The one genuinely dead item
+found: `.focus` still declares the **pre-2b multi-card NOW grid**
+(`display:grid; grid-template-columns:repeat(auto-fill,minmax(360px,1fr)); gap:12px`), but since
+Slice 2b collapsed the center to the **single** selected-lane card, that grid can never hold more
+than one child — the multi-column/`gap` intent is dead and misleading (and the 360px column-min
+could force horizontal overflow in a narrow center zone where a block card would simply fit). The
+`controls()`/`cbtn()` renderers were already deleted in 2b; `.cbtn` CSS is still live (used by
+`modelCtl`), `.empty` is still live (used by six panels) — neither is dead. The `renderFocus`
+held-node multi-card `replaceWith` loop still correctly handles the one-card case and is
+`#248`/`#14`-sensitive, so it is **left intact** (working + guarded, not dead — refactoring it in a
+cleanup slice would risk a regression for no behavioural gain).
+
+#### Task 4.1 (CSS): retire the dead NOW-card grid on `.focus`
+
+**Files:** `lib/dashboard_page.html` (the `.focus` rule); `tests/test_dashboard_server.py`
+(assert the dead grid rule is gone).
+
+**Design (Codex CP1 P1 correction — NOT "visually identical"):** the current `.focus` grid uses
+**`auto-fill`** (not `auto-fit`), so at a center wide enough for ≥2 `360px` tracks the single
+`.fcard` sits in only the FIRST track (~360px) with dead empty tracks to its right — a leftover of
+the pre-2b multi-card layout. The redesign mockup's center is a **full-width single-lane detail**
+(`git show 2f21d4d:…mockup.html`, `.col.det` → `.card` spans the column, no capped grid track), so
+the design-correct fix is a **full-width** single card: change `.focus` to a plain block container
+(`padding:0 12px`, keeping the gutter). This is a deliberate, mockup-grounded visual change (the
+card now fills the center zone), NOT a no-op — it retires the off-design ~360px cap + dead space and
+removes the 360px column-min overflow risk on a narrow center. No JS change.
+
+**TDD (string-assert seam):**
+- [ ] Failing test: `.focus` no longer declares the `repeat(auto-fill,minmax(360px,1fr))` grid
+      (`b"auto-fill"` gone from the page — it was the only occurrence).
+- [ ] Implement; see it pass.
+
+**Verification (browser loop) — assert the INTENDED change, not identity:**
+- [ ] repo-alpha at a WIDE viewport (center ≥ ~760px) → the single focus card now spans the full
+      center width (before: ~360px left-aligned with dead space to the right); ZERO console errors;
+      `/api/state` 200.
+- [ ] Narrow to the two-column breakpoint (≤ the shell's `330px` fleet-rail state) → the card fits
+      the center zone with no horizontal overflow.
+- [ ] Idle temporal pass: `focus` panel stable, no rebuild churn (CSS-only, no signature change).
+
+**Gates + PR:** `run_all` green; `shellcheck` clean; Codex CP2 before first push; PR (security model:
+CSS-only, no data/endpoint/control change). **This is the final slice — the PR `Closes #258`.**
