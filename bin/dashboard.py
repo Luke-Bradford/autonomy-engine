@@ -1048,6 +1048,14 @@ def _collect_one(repo):
                     # the operator can trust or discount a heuristic guess.
                     focus["source"] = sess.get("ticket_source")
                     git["focus_ticket"] = focus
+        # #187: attach the center-zone phase track once the focus_ticket is
+        # finalized (any of the three variants: open PR, completed, or an
+        # in-progress issue). Observed marks come from the ticket's own facts;
+        # the configured spine from this repo's merge_gate. One attach point so
+        # every variant renders the same track shape.
+        ft = git.get("focus_ticket")
+        if ft:
+            ft["track"] = ds.phase_track(ft, st.get("merge_gate_chain"))
         return st
     except Exception as exc:  # never let one repo blank the page
         return {"name": os.path.basename(repo.rstrip("/")), "path": repo,
