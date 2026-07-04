@@ -92,6 +92,19 @@ rc=0; done_everywhere 46 || rc=$?
 check "unreadable body returns 0"        "0" "$rc"
 check "unreadable body mutates nothing"  "0" "$(wc -l < "$BOARD_CALLS" | tr -d ' ')"
 
+# --- MULTI close-ref + work-claim on a NON-LAST ref (review-bot finding on
+# PR #283): de_close is newline-separated, so a space-padded case-glob missed
+# interior entries -- #61 must stay Done-only, never Ready-reset ---
+: > "$calls"; : > "$BOARD_CALLS"
+BODY="Closes #61, closes #62.
+
+Part of #61."
+TITLE="multi (#61)"
+rc=0; done_everywhere 48 || rc=$?
+check "multi-close: first ref boarded Done"     "yes" "$(grep -q 'board status 61 Done' "$BOARD_CALLS" && echo yes || echo no)"
+check "multi-close: second ref boarded Done"    "yes" "$(grep -q 'board status 62 Done' "$BOARD_CALLS" && echo yes || echo no)"
+check "multi-close: no Ready-reset on interior close-ref" "yes" "$(grep -q 'board status 61 Ready' "$BOARD_CALLS" && echo no || echo yes)"
+
 # --- work-claim ref that gh cannot resolve (a PR number): skipped, rc 0 ---
 : > "$calls"; : > "$BOARD_CALLS"
 BODY="Part of #999"

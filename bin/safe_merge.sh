@@ -228,7 +228,13 @@ done_everywhere() {
     "$de_board" status "$de_n" "Done" || true
   done
   for de_n in $de_claim; do
-    case " $de_close " in *" $de_n "*) continue ;; esac
+    # membership per-token: de_close is newline-separated (sort -u), so a
+    # space-padded case-glob misses interior entries (review finding, PR #283).
+    de_hit=""
+    for de_c in $de_close; do
+      if [ "$de_c" = "$de_n" ]; then de_hit=1; break; fi
+    done
+    [ -n "$de_hit" ] && continue
     de_state="$(gh issue view "$de_n" --json state --jq .state 2>/dev/null || true)"
     if [ "$de_state" = "OPEN" ]; then
       "$de_board" status "$de_n" "Ready" || true
