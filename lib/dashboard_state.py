@@ -1668,6 +1668,32 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
     for r in roles:
         r["missed_fire"] = r["name"] in missed
         r["lane"] = roles_schema.lane_of_role(config, r["name"])
+    # #258 slice 1: the most-recently-active lane -- the DEFAULT selection for
+    # the center zone (the page picks the fleet's newest `active_at` repo and
+    # focuses its `active` lane). Sourced from the AUTHORITATIVE newest session
+    # (`session`, from latest_session -- NOT the capped recent_sessions), so the
+    # client never guesses a timestamp field (Codex CP1 finding 2/3). Fail-safe:
+    # `lane_of_role` returns an UNDECLARED lane verbatim (dispatch refuses it by
+    # omission) -- active must never surface a lane that isn't declared, or it
+    # reads as selectable when it can't run. So an undeclared/absent/malformed
+    # lane degrades to the default (Codex CP1 finding 1). Never raises.
+    # A malformed `lanes:` block (bad name, non-mapping, unknown key, ...) is
+    # `valid: False` -- the supervisor REFUSES to dispatch it. `lane_names`/
+    # `default_lane` still echo the raw (possibly-invalid) keys so the render's
+    # ⚠ badge can name them, but `active` must NOT select a lane the engine
+    # won't run: degrade to the neutral implicit 'main' (Codex CP2 -- fail-safe,
+    # not fail-open). `active_at` still reflects the real newest session, since
+    # the repo's liveness is truthful even when its lane config is broken.
+    lanes_ok = roles_schema.lanes_valid(config)
+    lane_names = roles_schema.lane_names(config)
+    active_lane = roles_schema.default_lane(config) if lanes_ok else "main"
+    active_at = None
+    if session:
+        sess_role = session.get("role") or ""
+        if lanes_ok and sess_role:
+            cand = roles_schema.lane_of_role(config, sess_role)
+            active_lane = cand if cand in lane_names else active_lane
+        active_at = session.get("updated_at") or session.get("started_epoch") or None
     return {
         "name": os.path.basename(repo_path.rstrip("/")),
         "path": repo_path,
@@ -1682,9 +1708,10 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         # verdict the supervisor's --lane gate reaches) so a render can flag
         # broken config instead of faking a healthy single lane -- fail-safe
         # for the render (never raises), truthful for the operator.
-        "lanes": {"names": roles_schema.lane_names(config),
+        "lanes": {"names": lane_names,
                   "default": roles_schema.default_lane(config),
-                  "valid": roles_schema.lanes_valid(config)},
+                  "valid": roles_schema.lanes_valid(config),
+                  "active": active_lane, "active_at": active_at},
         "voice": read_supervisor_voice(os.path.join(logdir, "supervisor.log")),
         "choreography": read_choreography(os.path.join(logdir, "supervisor.log")),
         "heartbeat": read_heartbeat(os.path.join(logdir, "heartbeat")),

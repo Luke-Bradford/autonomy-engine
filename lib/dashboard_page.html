@@ -192,6 +192,13 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .repo .lgrp{border-left:1px solid var(--hair2);margin:2px 0 2px 3px;padding-left:9px}
 .repo .lgrp-h{font-family:var(--mono);font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:var(--mut);margin:6px 0 2px}
 .repo .lgrp-h .ldef{color:var(--dim);margin-left:5px;text-transform:none}
+/* #258: the selectable lane target -- the repo header for a single-lane repo
+   (its implicit 'main' lane), each lgrp header for a multi-lane repo. Selection
+   uses the existing --accent steel blue (no new scheme); background + inset bar
+   only, so highlighting never reflows the row (no CLS on select). */
+.lsel{cursor:pointer;border-radius:4px}
+.repo-h.lsel:hover,.lgrp-h.lsel:hover{background:var(--panel2)}
+.repo-h.sel,.lgrp-h.sel{background:var(--accent-soft);box-shadow:inset 2px 0 0 var(--accent)}
 .role{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px}
 .role .rn{font-weight:500;min-width:74px}
 .role .subs{font-family:var(--mono);font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:var(--mut);border:1px solid var(--hair2);border-radius:3px;padding:1px 5px}
@@ -370,6 +377,10 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
 "use strict";
 const $=(id)=>document.getElementById(id);
 let VIEW="tree", LAST=null, GEN=0;
+// #258 slice 1: the SELECTED lane = the center zone's focus (slices 2-4 point
+// the center panels at it). Client UI state; the DEFAULT is server truth -- the
+// fleet's most-recently-active lane (greatest lanes.active_at -> its lanes.active).
+let SELECTED=null;
 
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 // gh-sourced URLs are canonical https, but guard the href scheme anyway so a
@@ -665,8 +676,40 @@ function toast(ok,msg,detail){
 // runs nowhere; claiming a substrate is the legacy lie this fixes).
 function subBadge(s){if(!s)return "";return `<span class="subs b-${esc(s)}">${esc({engine:"engine",managed_agents:"cloud",routine:"routine",actions:"actions"}[s]||s)}</span>`;}
 let _reposKey="";
+/* #258 slice 1: the shared selection contract (Codex CP1 finding 4). The key is
+   repoPath + US + lane (US = 0x1f, never in a path or a lane name) so slices 2-4
+   resolve the selected {repo,lane} from the SAME accessor. */
+const _LSEP="\x1f";
+function laneKey(path,lane){return path+_LSEP+(lane||"main");}
+// Resolve SELECTED against the LIVE repos; self-heal a stale/absent key to the
+// fleet default so selection is NEVER blank or pointing at a vanished repo/lane
+// (Codex CP1 finding 6 -- a Slice-1 invariant, not deferred). Rewrites SELECTED
+// to the resolved key. Returns the key ("" when there are no repos).
+function selectedLane(repos){
+  repos=repos||[];
+  const laneNamesOf=r=>(r.lanes&&Array.isArray(r.lanes.names))?r.lanes.names:["main"];
+  const present=k=>{
+    if(!k) return false; const i=k.indexOf(_LSEP); if(i<0) return false;
+    const r=repos.find(x=>x.path===k.slice(0,i)); if(!r) return false;
+    return laneNamesOf(r).indexOf(k.slice(i+1))>=0;
+  };
+  if(present(SELECTED)) return SELECTED;
+  // default = the repo with the greatest active_at, its active lane; else first.
+  let best=null;
+  for(const r of repos){const at=r.lanes&&r.lanes.active_at;
+    if(at!=null&&(best===null||at>best.at)) best={r:r,at:at};}
+  const d=best?best.r:repos[0];
+  SELECTED=d?laneKey(d.path,(d.lanes&&d.lanes.active)||"main"):"";
+  return SELECTED;
+}
+// selectLane re-renders the fleet so the new `sel` markup flows through the
+// #164/#238 guard (signature-consistent). Slices 2-4 extend this to re-point the
+// center panels at the selected lane.
+function selectLane(key){SELECTED=key; if(LAST)renderRepos(LAST.repos);}
 function renderRepos(repos){
   $("h-repos").textContent=repos.length;
+  const selKey=selectedLane(repos);
+  const selClass=k=>selKey===k?" sel":"";
   $("h-active").textContent=repos.filter(r=>dispStatus(r)==="working").length;
   const html=repos.map(r=>{
     const st=dispStatus(r), cfg=r.config||{};
@@ -682,6 +725,9 @@ function renderRepos(repos){
     const laneNames=Array.isArray(lanes.names)?lanes.names:[];
     const multiLane=laneNames.length>1;
     const lanesInvalid=lanes.valid===false;
+    // #258: the single-lane repo's one lane (its implicit 'main'); the repo
+    // header selects it. Multi-lane repos select per lgrp-h instead (below).
+    const laneActive=lanes.active||lanes.default||"main";
     const roleEls=(r.roles||[]).map(role=>{
       const off=!role.enabled;
       const isActing=!off && !!acting && role.name===acting;
@@ -731,7 +777,11 @@ function renderRepos(repos){
         const inLane=roleEls.filter(x=>x.lane===ln);
         if(!inLane.length) return "";
         const def = ln===lanes.default ? `<span class="ldef">·def</span>` : "";
-        return `<div class="lgrp"><div class="lgrp-h" title="lane (worktree + role subset)${ln===lanes.default?' — the default lane':''}">${esc(ln)}${def}</div>${inLane.map(x=>x.html).join("")}</div>`;
+        // #258: the lane sub-header is the click-to-select target. data-lane-key
+        // is attribute-safe (encodeURIComponent); a delegated #repos listener
+        // reads it -- no inline onclick with a control-separator key (CP1 #5).
+        const lk=laneKey(r.path,ln);
+        return `<div class="lgrp"><div class="lgrp-h lsel${selClass(lk)}" data-lane-key="${encodeURIComponent(lk)}" title="lane (worktree + role subset)${ln===lanes.default?' — the default lane':''} · click to focus this lane">${esc(ln)}${def}</div>${inLane.map(x=>x.html).join("")}</div>`;
       }).join("");
       const orphan=roleEls.filter(x=>laneNames.indexOf(x.lane)<0);
       if(orphan.length) roles += orphan.map(x=>x.html).join("");
@@ -750,8 +800,15 @@ function renderRepos(repos){
     // a lane -- surface it so broken committed config never reads as healthy.
     const laneWarn = lanesInvalid
       ? `<span class="lbad" title="the committed lanes: block is malformed — the supervisor will refuse to dispatch a lane (display only; fix .autonomy/config.yaml)">⚠ lanes config invalid</span>` : "";
+    // #258: single-lane repo -> the repo header IS the implicit 'main' lane's
+    // select target (no role-row restructure; role rows stay byte-identical --
+    // Codex CP1 finding 7). Multi-lane -> header is plain; each lgrp-h selects.
+    const skey=laneKey(r.path,laneActive);
+    const repoHOpen = multiLane
+      ? `<div class="repo-h">`
+      : `<div class="repo-h lsel${selClass(skey)}" data-lane-key="${encodeURIComponent(skey)}" title="click to focus this lane in the center">`;
     return `<div class="repo">
-      <div class="repo-h"><span class="nm">${esc(dispName(r.name))}</span>${laneWarn}
+      ${repoHOpen}<span class="nm">${esc(dispName(r.name))}</span>${laneWarn}
         <span class="badge">${token(st,true)}</span></div>
       <div class="cfg">${esc(cfg.model||"—")} · gate ${esc(cfg.merge_gate||"—")}${(r.lifecycle||{}).pid?" · pid "+r.lifecycle.pid:""}</div>
       ${gateChain}${roles}</div>`;
@@ -1096,6 +1153,16 @@ function setLive(ok){$("h-live").classList.toggle("stale",!ok);$("h-live-t").tex
 function connect(){let es;try{es=new EventSource("/api/stream");}catch(e){poll();return;}
   es.onopen=()=>setLive(true);es.onmessage=e=>{try{render(JSON.parse(e.data));setLive(true);}catch(_){}}; es.onerror=()=>setLive(false);}
 function poll(){setInterval(()=>fetch("/api/state").then(r=>r.json()).then(s=>{render(s);setLive(true);}).catch(()=>setLive(false)),3000);}
+// #258: one delegated click listener on the fleet rail selects the clicked lane.
+// Delegation (not per-row inline onclick) survives every rebuild since #repos
+// persists. Ignores clicks on interactive children so later lane-row controls
+// (pause/start/history) don't double as a select.
+(function(){const rp=$("repos"); if(!rp) return;
+  rp.addEventListener("click",e=>{
+    if(e.target.closest("button,a,select,input,details,summary")) return;
+    const t=e.target.closest("[data-lane-key]"); if(!t) return;
+    selectLane(decodeURIComponent(t.getAttribute("data-lane-key")));
+  });})();
 fetch("/api/state").then(r=>r.json()).then(render).catch(()=>{});connect();
 </script>
 </body>
