@@ -53,6 +53,21 @@ def subscription_models(kind):
     return list(_SUBSCRIPTION_MODELS.get(kind, ()))
 
 
+def model_source(kind):
+    """Which config-picker discovery SOURCE an account `kind` uses (#82):
+      - "live"    -- openai_compatible: Accounts.list_models does GET /v1/models.
+      - "curated" -- a CLI-login subscription served from _SUBSCRIPTION_MODELS.
+      - "none"    -- an api-key kind / unknown: no roster to offer.
+    Kept here beside _SUBSCRIPTION_MODELS + list_models so the source decision
+    is single-sourced and cannot drift; bin/ never re-derives it (never reaches
+    into the private roster)."""
+    if kind == "openai_compatible":
+        return "live"
+    if kind in _SUBSCRIPTION_MODELS:
+        return "curated"
+    return "none"
+
+
 def _valid_base_url(url):
     """A well-formed http(s) URL with a host -- the endpoint a role calls.
     Rejects other schemes, host-less strings, and anything unparseable so a

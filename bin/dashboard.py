@@ -782,6 +782,28 @@ def config_read_model():
             "accounts_error": acct_error}
 
 
+def models_read_model():
+    """Per-account discovered models for the config picker (#82): each account's
+    kind, its discovery SOURCE (accounts.model_source), and the model ids that
+    source yields (openai_compatible -> live GET /v1/models; a subscription ->
+    the curated roster; else none). Best-effort + fail-safe: Accounts.list_models
+    never raises, and any registry-level failure yields accounts=[] + error --
+    the partial list is DISCARDED, never a leaked partial and never a 500
+    (fail-safe, never fail-open)."""
+    accounts, err = [], None
+    try:
+        inst = _accts()   # bind once -- list() and list_models() share a snapshot
+        for a in inst.list():
+            name, kind = a.get("name"), a.get("kind")
+            source = accts.model_source(kind)
+            models = inst.list_models(name) if source != "none" else []
+            accounts.append({"name": name, "kind": kind,
+                             "source": source, "models": models})
+    except Exception as exc:   # discard any partial -- never fail-open
+        accounts, err = [], (str(exc) or exc.__class__.__name__)
+    return {"accounts": accounts, "error": err}
+
+
 def execute_cred_set(label, provider, secret):
     inst = _creds()
     try:
@@ -1180,6 +1202,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(collect(self.repos)).encode("utf-8"))
         elif path == "/api/config":
             self._send(200, json.dumps(config_read_model()).encode("utf-8"))
+        elif path == "/api/models":
+            # config-page model picker (#82): per-account discovered models,
+            # best-effort, always 200 (payload carries any error). No query
+            # param -- account names come only from the validated registry.
+            self._send(200, json.dumps(models_read_model()).encode("utf-8"))
         elif path == "/api/boards":
             # config-page board picker (#170): best-effort, always 200 (the
             # payload carries any error), owner re-validated inside board_list.

@@ -227,5 +227,91 @@ class TestBoardsRoute(unittest.TestCase):
         self.assertEqual(payload["boards"][0], "Autonomy Progress")
 
 
+class _FakeAccts:
+    """A stand-in for accounts.Accounts with a known registry + list_models --
+    lets models_read_model be driven without a real account index / network."""
+
+    def __init__(self, registry, models=None, list_raises=None,
+                 models_raises=None):
+        self._registry = registry          # list of {name, kind}
+        self._models = models or {}        # name -> [model ids]
+        self._list_raises = list_raises    # exc to raise from list()
+        self._models_raises = models_raises  # name whose list_models raises
+
+    def list(self):
+        if self._list_raises is not None:
+            raise self._list_raises
+        return list(self._registry)
+
+    def list_models(self, name):
+        if name == self._models_raises:
+            raise RuntimeError("boom in list_models(%s)" % name)
+        return list(self._models.get(name, []))
+
+
+class TestModelsReadModel(unittest.TestCase):
+    """/api/models read model (#82): per-account discovered models for the
+    config picker, sourced from accounts.model_source + Accounts.list_models.
+    Best-effort + fail-safe -- a registry fault yields accounts=[] + error,
+    never a 500 and never a leaked partial list (never fail-open)."""
+
+    def setUp(self):
+        self._saved = dashboard._accts_singleton[0]
+
+    def tearDown(self):
+        dashboard._accts_singleton[0] = self._saved
+
+    def _install(self, fake):
+        dashboard._accts_singleton[0] = fake
+
+    def test_openai_compatible_is_live_source(self):
+        self._install(_FakeAccts(
+            [{"name": "ollama", "kind": "openai_compatible"}],
+            models={"ollama": ["qwen3:14b", "deepseek-r1:14b"]}))
+        out = dashboard.models_read_model()
+        self.assertIsNone(out["error"])
+        self.assertEqual(out["accounts"], [
+            {"name": "ollama", "kind": "openai_compatible", "source": "live",
+             "models": ["qwen3:14b", "deepseek-r1:14b"]}])
+
+    def test_subscription_is_curated_source(self):
+        self._install(_FakeAccts(
+            [{"name": "sub", "kind": "claude_subscription"}],
+            models={"sub": ["claude-opus-4-8"]}))
+        out = dashboard.models_read_model()
+        acct = out["accounts"][0]
+        self.assertEqual(acct["source"], "curated")
+        self.assertEqual(acct["models"], ["claude-opus-4-8"])
+
+    def test_api_kind_is_none_source_and_skips_lookup(self):
+        # a 'none'-source kind must NOT consult list_models at all; if it did,
+        # this fake would raise (models_raises) and the test would fail.
+        self._install(_FakeAccts(
+            [{"name": "key", "kind": "anthropic_api"}],
+            models_raises="key"))
+        out = dashboard.models_read_model()
+        self.assertEqual(out["accounts"], [
+            {"name": "key", "kind": "anthropic_api", "source": "none",
+             "models": []}])
+
+    def test_registry_failure_is_fail_safe(self):
+        self._install(_FakeAccts([], list_raises=RuntimeError("gh down")))
+        out = dashboard.models_read_model()
+        self.assertEqual(out["accounts"], [])
+        self.assertIn("gh down", out["error"])
+
+    def test_partial_failure_discards_the_partial_list(self):
+        # first account resolves, the second raises mid-loop -> the whole read
+        # is discarded (accounts==[]). Never leak a partial list (fail-open).
+        self._install(_FakeAccts(
+            [{"name": "ollama", "kind": "openai_compatible"},
+             {"name": "broken", "kind": "openai_compatible"}],
+            models={"ollama": ["qwen3:14b"]},
+            models_raises="broken"))
+        out = dashboard.models_read_model()
+        self.assertEqual(out["accounts"], [])
+        self.assertIsNotNone(out["error"])
+
+
 if __name__ == "__main__":
     unittest.main()

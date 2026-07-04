@@ -283,6 +283,28 @@ const STRATEGIES=["manual","ci_only","bot_comment","gh_review"];
 const MODEL_CHOICES=__MODEL_CHOICES__;
 let MODEL=null;
 
+// Live per-account model discovery (#82): /api/models augments the curated
+// build-time roster with the real ids each configured account reports (e.g. a
+// local openai_compatible endpoint's models). LIVE_MODELS is [{id,label}] --
+// the label carries "<account> · <source>" so a cross-account suggestion shows
+// WHERE it came from (the datalist is shared across every repo's model field).
+let LIVE_MODELS=[];
+function modelOptions(){
+  const seen=new Map();                     // id -> provenance label (first wins)
+  MODEL_CHOICES.forEach(id=>{ if(!seen.has(id)) seen.set(id,"curated"); });
+  LIVE_MODELS.forEach(m=>{ if(m.id&&!seen.has(m.id)) seen.set(m.id,m.label); });
+  return [...seen].map(([id,label])=>`<option value="${esc(id)}" label="${esc(label)}"></option>`).join("");
+}
+function updateModelDatalist(){ const dl=$("cfg-models"); if(dl) dl.innerHTML=modelOptions(); }
+function loadModels(){
+  fetch("/api/models").then(r=>r.json()).then(d=>{
+    if(d.error) return;                     // backend fault -> ignore discovered models (fail-safe)
+    const out=[];
+    (d.accounts||[]).forEach(a=>(a.models||[]).forEach(id=>out.push({id,label:`${a.name} · ${a.source}`})));
+    LIVE_MODELS=out; updateModelDatalist();
+  }).catch(()=>{});                         // best-effort: never toast, never block config render
+}
+
 function toast(ok,msg){
   const box=$("toast"); const el=document.createElement("div");
   el.className="tmsg "+(ok?"ok":"err");
@@ -296,7 +318,7 @@ function post(body,okLabel,then){
     .then(({ok,j})=>{toast(ok&&j.ok,(ok&&j.ok)?(j.message||okLabel):("failed: "+(j.error||"error")));if(ok&&j.ok&&then)then();})
     .catch(()=>toast(false,"request failed"));
 }
-function load(){fetch("/api/config").then(r=>r.json()).then(m=>{MODEL=m;renderAccts(m);renderCreds(m);renderCfg(m.repos||[]);}).catch(()=>toast(false,"could not load config"));}
+function load(){fetch("/api/config").then(r=>r.json()).then(m=>{MODEL=m;renderAccts(m);renderCreds(m);renderCfg(m.repos||[]);}).catch(()=>toast(false,"could not load config"));loadModels();}
 
 /* ---- ACCOUNTS ---- */
 const SUB_KINDS=["claude_subscription","codex_subscription"];
@@ -410,8 +432,10 @@ function renderCfg(repos){
       ${cfgSelect(enc,"merge_gate.strategy","merge gate",STRATEGIES,c.merge_gate)}
     </div>`;
   }).join("");
-  // One shared <datalist> feeds every model field's suggestions (#82).
-  const models=`<datalist id="cfg-models">${MODEL_CHOICES.map(m=>`<option value="${esc(m)}"></option>`).join("")}</datalist>`;
+  // One shared <datalist> feeds every model field's suggestions: the curated
+  // build-time roster plus any live per-account discoveries, each option labelled
+  // with its provenance (#82).
+  const models=`<datalist id="cfg-models">${modelOptions()}</datalist>`;
   $("cfg").innerHTML=`<div class="cfgadd"><input id="cfg-add" class="cfgin" placeholder="/absolute/path/to/repo"><button class="cbtn go" onclick="repoAdd()">add repo</button></div>`
     +models+(rows||`<div class="hint">no repos registered — add one above.</div>`);
   refreshAllBoards();
