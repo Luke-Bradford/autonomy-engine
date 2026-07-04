@@ -50,6 +50,40 @@ import claude_usage as cu  # noqa: E402
 # available -- restart to apply" chip. Captured once, here at import.
 DASHBOARD_BOOT_SHA = ds.engine_head_sha(ENGINE_HOME)
 
+# #270: the serving checkout vs origin/main. The dashboard serves lib/*.html from
+# ENGINE_HOME per request, so merges that land on origin/main but are not pulled
+# leave boot == HEAD (both read "current" on the process/supervisor axes) while
+# the checkout itself is behind the remote -- the operator saw old UI with no
+# signal. This TTL-cached, serve-stale-while-revalidate reader adds that axis
+# without ever blocking an SSE tick on a network `git fetch`: a request gets the
+# last cached value (or None while cold) INSTANTLY and a single background thread
+# refreshes it. Fail-safe: ds.engine_checkout_behind_origin returns None on any
+# fetch/rev-list failure (offline stays silent), so a hiccup contributes nothing.
+_CHECKOUT_TTL = 90.0
+_checkout_cache = {"ts": 0.0, "val": None, "refreshing": False}
+_checkout_lock = threading.Lock()
+
+
+def _checkout_behind():
+    """Non-blocking checkout_behind_reader for ds.engine_status. Serves the
+    cached count and spawns a background refresh when stale; never waits on git."""
+    now = time.time()
+    with _checkout_lock:
+        val = _checkout_cache["val"]
+        need = (not _checkout_cache["refreshing"]
+                and now - _checkout_cache["ts"] >= _CHECKOUT_TTL)
+        if need:
+            _checkout_cache["refreshing"] = True
+    if need:
+        def _refresh():
+            v = ds.engine_checkout_behind_origin(ENGINE_HOME)
+            with _checkout_lock:
+                _checkout_cache["val"] = v
+                _checkout_cache["ts"] = time.time()
+                _checkout_cache["refreshing"] = False
+        threading.Thread(target=_refresh, daemon=True).start()
+    return val
+
 # --- logic-module hot-reload (#166) ------------------------------------------
 # A merged fix to a lib/*.py logic module is invisible in the running dashboard
 # until a restart -- imports bind once at process start -- which looks identical
@@ -1043,7 +1077,8 @@ def collect(repos):
             out = [_collect_one(r) for r in repos]
     return {"generated_at": int(time.time()), "repos": out,
             "account": _account_usage(),
-            "engine": ds.engine_status(DASHBOARD_BOOT_SHA, out)}
+            "engine": ds.engine_status(DASHBOARD_BOOT_SHA, out,
+                                       checkout_behind_reader=_checkout_behind)}
 
 
 def execute_set_model(repo, model, effort, scope):
