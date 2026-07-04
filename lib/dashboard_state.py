@@ -1280,6 +1280,73 @@ def quota_forecast(windows, now):
     return out
 
 
+def trigger_health(config, cron_dir, now, grace_secs=300):
+    """Missed cron-fire detection (#188c) for the control room's trigger-health
+    signal -- the 2026-07-03 swept-state incident named the real gap: a
+    stalled/backed-off scheduler renders identically to a healthy idle one.
+
+    Compares each cron role's persisted last_fire marker
+    ($VARDIR/cron/<role>.last_fire, a raw epoch int -- see
+    bin/supervisor.sh:resolve_cron_due, the sole writer) against the SAME
+    schedule math the supervisor itself uses (roles.cron_next_fire), so this
+    reader can never drift from what actually fires (the single-source-of-
+    truth discipline #117 established for the lock path). lane=None (the
+    default lane) mirrors roles.cron_roles' own default and the scheduler's
+    enumeration for a repo with no `lanes:` block (zero behaviour change);
+    dashboards have no lane context yet (#147's still-open dashboard slice).
+
+    A role's next expected fire strictly after its marker is
+    `roles.cron_next_fire(schedule, last_fire)`. If that epoch is more than
+    `grace_secs` in the past, the supervisor should have advanced the marker
+    (fired, or re-armed on a corrupt/missing one) by now and did not --
+    `missed` is True.
+
+    Returns one entry per cron role, stable order:
+      {"role", "schedule", "last_fire" (epoch or None), "expected_next"
+       (epoch or None), "missed" (bool)}
+    A role with no marker yet (never armed -- e.g. freshly configured, or the
+    cron dir doesn't exist) reports last_fire=None, missed=False: degrade to
+    'unknown', never assert a miss with no baseline to compare against
+    (fail-safe -- never fabricate an alarm from absence of data). Same
+    degrade for a corrupt/unreadable marker (mirrors the supervisor's own
+    reinitialise-without-firing recovery) and for an unparseable schedule
+    (expected_next is None, so nothing to compare -- never missed). {} input
+    or a read failure degrades to [] like its #188 siblings."""
+    if not isinstance(config, dict):
+        return []
+    try:
+        now = int(now)
+        grace_secs = int(grace_secs)
+    except (TypeError, ValueError):
+        return []
+    try:
+        cron = roles_schema.cron_roles(config, None)
+    except Exception:
+        return []
+    out = []
+    for name, schedule in cron:
+        last_fire = None
+        try:
+            with open(os.path.join(cron_dir, "%s.last_fire" % name)) as fh:
+                raw = fh.read().strip()
+        except OSError:
+            raw = ""
+        if raw.isdigit():
+            last_fire = int(raw)
+        expected_next = None
+        missed = False
+        if last_fire is not None:
+            try:
+                expected_next = roles_schema.cron_next_fire(schedule, last_fire)
+            except Exception:
+                expected_next = None
+            if expected_next is not None and expected_next < now - grace_secs:
+                missed = True
+        out.append({"role": name, "schedule": schedule, "last_fire": last_fire,
+                    "expected_next": expected_next, "missed": missed})
+    return out
+
+
 def read_config_overlay(path):
     """The PERSISTENT operator overrides (#202) the dashboard displays. Unlike
     the one-shot read_model_override, this RE-VALIDATES each value with the
@@ -1386,4 +1453,5 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "sessions": recent_sessions(logdir),
         "token_timeline": token_timeline(logdir, now),
         "quota_forecast": quota_forecast(quota, now),
+        "trigger_health": trigger_health(config, os.path.join(repo_path, "var", "cron"), now),
     }
