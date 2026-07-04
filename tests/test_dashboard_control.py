@@ -218,20 +218,19 @@ class TestConfigSetPlan(unittest.TestCase):
     def plan(self, key, value):
         return dc.config_set_plan(self.repo, key, value)
 
-    def test_config_yaml_keys_produce_config_set(self):
-        # merge_gate.strategy stays config.yaml-written: its consumers
-        # (safe_merge.sh, doctor.sh) are guardrail files with no overlay read
-        # seam yet (#211). board.* now route to the overlay -- see below.
-        cases = {
-            "merge_gate.strategy": "ci_only",
-        }
-        for key, value in cases.items():
-            p = self.plan(key, value)
-            self.assertNotIn("error", p, "%s: %r" % (key, p))
-            self.assertEqual(p["config_set"], {key: value})
-            self.assertEqual(p["config_path"],
-                             os.path.join(self.repo, ".autonomy", "config.yaml"))
-            self.assertNotIn("overlay", p)
+    def test_structural_key_refused_with_pr_guidance(self):
+        # SD-28 (#211/#282): merge_gate.strategy is STRUCTURAL truth -- writable
+        # ONLY via a config.yaml commit + PR (#87), never from the page. Writing
+        # it to the tracked config.yaml here would be silently swept by the
+        # loop's preflight stash-recovery (the revert-lie). config_set_plan must
+        # REFUSE it with a clear pointer to the commit-PR path -- never a plan
+        # that touches config.yaml or an overlay.
+        p = self.plan("merge_gate.strategy", "ci_only")
+        self.assertIn("error", p)
+        self.assertIn("#87", p["error"])
+        self.assertNotIn("config_set", p)
+        self.assertNotIn("config_path", p)
+        self.assertNotIn("overlay", p)
 
     def test_model_effort_keys_route_to_overlay(self):
         # #202: the model/effort keys write the untracked overlay instead.
@@ -260,7 +259,8 @@ class TestConfigSetPlan(unittest.TestCase):
         self.assertIn("error", self.plan("evil..key", "x"))
 
     def test_bad_values_refused_per_key(self):
-        self.assertIn("error", self.plan("merge_gate.strategy", "yolo"))
+        # (merge_gate.strategy is refused structurally regardless of value --
+        # see test_structural_key_refused_with_pr_guidance.)
         self.assertIn("error", self.plan("agent.effort", "extreme"))
         self.assertIn("error", self.plan("agent.model.primary", "bad;model"))
         self.assertIn("error", self.plan("board.owner", "two\nlines"))

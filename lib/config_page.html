@@ -118,6 +118,7 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px
 .cfglab{font-family:var(--mono);font-size:10px;color:var(--dim);width:92px;flex:none;text-transform:uppercase;letter-spacing:.5px}
 .cfgin{flex:1;min-width:0;background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);
   font-family:var(--mono);font-size:11px;border-radius:5px;padding:5px 7px}
+.cfgro{background:transparent;border-style:dashed;color:var(--mut)}
 .cfgwarn{margin:0 0 3px 100px;font-size:10.5px;color:var(--warn);line-height:1.35}
 .cfghint{margin:0 0 3px 100px;font-size:10.5px;color:var(--mut);line-height:1.35;display:flex;gap:8px;align-items:center}
 .cfghint b{color:var(--ink);font-weight:600}
@@ -265,7 +266,7 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
   <div class="panel" id="creds"></div>
   <div class="hint">Subscriptions (your Claude / Codex logins) are the default and need nothing here. API keys are optional — add one only if a role should run on API credit instead. Secrets are stored in your macOS Keychain, never in a file, never shown again after saving. On your first save macOS asks to allow Keychain access — choose <b>Always Allow</b> so later saves don't prompt.</div>
 
-  <div class="sh" style="margin-top:20px"><h2>Repos &amp; config</h2><span class="ln"></span><span class="ct">registry · config.yaml (merge_gate) · local override under var/ (model/effort/board)</span></div>
+  <div class="sh" style="margin-top:20px"><h2>Repos &amp; config</h2><span class="ln"></span><span class="ct">registry · merge gate (read-only, config.yaml + PR) · local override under var/ (model/effort/board)</span></div>
   <div class="panel" id="cfg"></div>
 </div>
 <div id="toast"></div>
@@ -287,7 +288,6 @@ setTheme((function(){try{return localStorage.getItem("ae-theme")||"dark";}catch(
 if(_mq){try{_mq.addEventListener("change",function(){try{if(localStorage.getItem("ae-theme")==="system")document.documentElement.setAttribute("data-theme",_effTheme("system"));}catch(e){}});}catch(e){}}
 const CTOKEN=(document.querySelector('meta[name="ae-control-token"]')||{}).content||"";
 const EFFORT_CHOICES=["","low","medium","high","xhigh","max"];
-const STRATEGIES=["manual","ci_only","bot_comment","gh_review"];
 // Curated model roster, single-sourced from accounts._SUBSCRIPTION_MODELS and
 // injected by bin/dashboard.py (#134) -- the SAME source the main page's runtime
 // picker uses, so the authoring datalist can't drift from it (#82). A datalist
@@ -471,7 +471,7 @@ function renderCfg(repos){
       ${cfgFieldList(enc,"agent.model.primary","model",c.model)}
       ${cfgFieldList(enc,"agent.model.fallback","fallback",c.fallback)}
       ${cfgSelect(enc,"agent.effort","effort",EFFORT_CHOICES.filter(e=>e),c.effort)}
-      ${cfgSelect(enc,"merge_gate.strategy","merge gate",STRATEGIES,c.merge_gate)}
+      ${cfgReadonly("merge gate",c.merge_gate,"structural — edit via config.yaml + PR (#87)")}
     </div>`;
   }).join("");
   // #273: model fields are now real <select> pickers (cfgFieldList builds each
@@ -575,6 +575,20 @@ function onCustomInput(cin){
 function cfgSelect(enc,key,label,opts,val){
   return `<div class="cfgrow"><span class="cfglab">${esc(label)}</span><select class="cfgin" name="${key}" data-key="${key}">${opts.map(o=>`<option ${o===val?"selected":""}>${o}</option>`).join("")}</select><button class="cbtn" onclick="cfgSave(this,'${enc}','${key}')">save</button></div>`;
 }
+// A read-only config row for STRUCTURAL keys (SD-28, #211): merge_gate.strategy
+// is committed truth edited only via config.yaml + PR (#87), never the page.
+// Rendering it as a read-only value + hint keeps the page HONEST -- the operator
+// sees the current strategy without being invited to a "save" that the backend
+// (config_set_plan STRUCTURAL_KEYS) refuses as a revert-lie. No save button, no
+// data-key: nothing here posts to config_set.
+function cfgReadonly(label,val,hint){
+  // A plain span, not a disabled <input>: a read-only value is not a form
+  // control, so this avoids a stray "form field needs id/name" a11y warning
+  // and nothing here can post to config_set.
+  return `<div class="cfgrow"><span class="cfglab">${esc(label)}</span>`
+    +`<span class="cfgin cfgro">${esc(val||"(default)")}</span>`
+    +`<span class="cfghint">${esc(hint)}</span></div>`;
+}
 function cfgSave(btn,enc,key){
   const repo=decodeURIComponent(enc);
   const el=btn.closest(".cfgrow").querySelector("[data-key]");
@@ -586,9 +600,11 @@ function cfgSave(btn,enc,key){
     value=(cin&&cin.value.trim())||"";
   }
   // #202/#211: model/effort AND board.owner/board.project_title persist as an
-  // untracked local override under var/ (survives the loop's preflight);
-  // merge_gate.strategy still edits committed config.yaml. Keep this in sync
-  // with dashboard_control.OVERLAY_KEYS -- it is the operator-facing twin.
+  // untracked local override under var/ (survives the loop's preflight). Keep
+  // this in sync with dashboard_control.OVERLAY_KEYS -- it is the operator-facing
+  // twin. STRUCTURAL keys (merge_gate.strategy, SD-28) never reach cfgSave: they
+  // render read-only (cfgReadonly) and config_set_plan refuses them, so the
+  // config.yaml destination below is only a defensive fallback.
   const isOverlay=/^(agent\.(model\.(primary|fallback)|effort)|board\.(owner|project_title))$/.test(key);
   const dest=isOverlay?"a local override under var/ (committed config.yaml unchanged)"
                       :".autonomy/config.yaml";
