@@ -181,6 +181,57 @@ class TestControlRoomShell(unittest.TestCase):
         self.assertNotIn(b"background-image:linear-gradient(var(--grid)", html)
 
 
+class TestRosterCountdownStability(unittest.TestCase):
+    """#238 (p1 regression): seconds-granularity countdowns embedded in the roster
+    markup defeated the #164 skip-unchanged compare -- the string differed every
+    second, so the whole roster innerHTML rebuilt every SSE push and variable-width
+    time text reshaped the rows. The fix: minute-granularity roster times (opt-in
+    via data-g="m"), a compare that normalizes the volatile .qreset/.agox span
+    contents out before comparing, and width-reserved time cells. These pin the
+    fix's structure; the behavioral acceptance (zero roster rebuilds over a
+    no-change window) is the browser verify loop (#239)."""
+
+    def _page(self):
+        return dashboard._page_bytes(dashboard.PAGE)
+
+    def test_minute_granularity_helpers_defined(self):
+        # the roster uses minute-granularity siblings of dur()/ago() so the
+        # embedded + ticked countdown is `next 32m`, not `next 32m16s`.
+        html = self._page()
+        self.assertIn(b"function durm(", html)
+        self.assertIn(b"function agom(", html)
+
+    def test_roster_time_spans_opt_into_minute_granularity(self):
+        # both roster time spans (cron next-fire countdown, last-run age) carry
+        # data-g="m" so the shared 1s ticker formats them at minute granularity;
+        # non-roster spans have no data-g and keep their seconds countdowns.
+        html = self._page()
+        self.assertIn(b'data-g="m"', html)
+
+    def test_ticker_branches_on_granularity(self):
+        # the shared ticker must special-case data-g="m" spans (durm/agom, and no
+        # appended " ago" for the roster agox whose " ago" is static in markup),
+        # while the fallback path stays EXACTLY today's behavior.
+        html = self._page()
+        self.assertIn(b'dataset.g', html)
+
+    def test_roster_compare_normalizes_volatile_time(self):
+        # the skip-unchanged compare strips .qreset/.agox contents before
+        # comparing, so a pure time tick never rebuilds the roster innerHTML.
+        # The naive full-string compare (html!==_reposHtml) must be gone.
+        html = self._page()
+        self.assertIn(b"(?:qreset|agox)", html)
+        self.assertNotIn(b"html!==_reposHtml", html)
+
+    def test_roster_time_cells_reserve_width(self):
+        # tabular-nums + a reserved min-width so a ticking/format-length change
+        # can never reshape the row (part 3 of the fix).
+        html = self._page()
+        self.assertIn(b".role .trig .qreset", html)
+        self.assertIn(b".role .rlast .agox", html)
+        self.assertIn(b"min-width", html)
+
+
 class TestConciergeAccountSelection(unittest.TestCase):
     """The concierge's local-account selection rule (#137). An explicit
     AUTONOMY_CONCIERGE_ACCOUNT preference wins; unset keeps the deterministic

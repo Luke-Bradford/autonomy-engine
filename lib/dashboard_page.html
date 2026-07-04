@@ -185,6 +185,10 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .role .subs{font-family:var(--mono);font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:var(--mut);border:1px solid var(--hair2);border-radius:3px;padding:1px 5px}
 .role .trig{font-family:var(--mono);font-size:10px;color:var(--dim)}
 .role .rlast{font-family:var(--mono);font-size:10px;color:var(--dim)}
+/* #238: reserve width for the ticking time cells so a minute-granularity update
+   (or a `<1m`->`59m`->`1h05m` length change) can never reshape the row. */
+.role .trig .qreset{display:inline-block;text-align:right;font-variant-numeric:tabular-nums;min-width:3.6em}
+.role .rlast .agox{display:inline-block;text-align:right;font-variant-numeric:tabular-nums;min-width:2.2em}
 .role .rmiss{font-family:var(--mono);font-size:10px;color:var(--warn);border:1px solid var(--warn);border-radius:3px;padding:1px 5px}
 .role.missed .rn{color:var(--warn)}
 .role .rst{margin-left:auto}
@@ -363,6 +367,15 @@ function short(s,n){s=String(s||"");return s.length>n?s.slice(0,n-1)+"…":s;}
 function dur(sec){sec=Math.max(0,Math.floor(sec));const h=(sec/3600)|0;sec-=h*3600;const m=(sec/60)|0;sec-=m*60;
   return h?`${h}h${String(m).padStart(2,"0")}m`:m?`${m}m${String(sec).padStart(2,"0")}s`:`${sec}s`;}
 function ago(sec){sec=Math.max(0,Math.floor(sec));if(sec<60)return sec+"s";const m=(sec/60)|0;if(m<60)return m+"m";return((m/60)|0)+"h";}
+// #238: minute-granularity siblings of dur()/ago() for the roster. Embedding
+// seconds ("next 32m16s", "5s ago") in the roster markup changed the string
+// every tick, defeating the #164 skip-unchanged compare so the whole roster
+// rebuilt every SSE push and reshaped. These render `next 32m` / `4m` (no per-
+// second churn); the roster spans opt in via data-g="m" and the ticker below
+// formats them with these instead of dur/ago.
+function durm(sec){sec=Math.max(0,Math.floor(sec));const h=(sec/3600)|0;const m=((sec%3600)/60)|0;
+  return h?`${h}h${String(m).padStart(2,"0")}m`:m?`${m}m`:"<1m";}
+function agom(sec){sec=Math.max(0,Math.floor(sec));if(sec<60)return "<1m";const m=(sec/60)|0;if(m<60)return m+"m";return((m/60)|0)+"h";}
 function nowS(){return Date.now()/1000;}
 
 /* theme -- icon cycles dark / light / system. The STORED choice may be
@@ -597,7 +610,7 @@ function toast(ok,msg,detail){
 // #164: a not-configured placeholder has substrate null -> render no badge (it
 // runs nowhere; claiming a substrate is the legacy lie this fixes).
 function subBadge(s){if(!s)return "";return `<span class="subs b-${esc(s)}">${esc({engine:"engine",managed_agents:"cloud",routine:"routine",actions:"actions"}[s]||s)}</span>`;}
-let _reposHtml="";
+let _reposKey="";
 function renderRepos(repos){
   $("h-repos").textContent=repos.length;
   $("h-active").textContent=repos.filter(r=>dispStatus(r)==="working").length;
@@ -622,9 +635,9 @@ function renderRepos(repos){
       // enabled event roles read "armed" -- both only when actually enabled
       // (#164: countdown rendered INLINE, never a placeholder -- the qreset
       // ticker keeps it live between rebuilds)
-      const nf=role.next_fire?(()=>{const s=role.next_fire-Math.floor(nowS());return s>0?dur(s):"now";})():"";
+      const nf=role.next_fire?(()=>{const s=role.next_fire-Math.floor(nowS());return s>0?durm(s):"now";})():"";
       const trig = role.trigger==="cron"&&role.next_fire
-        ? `cron · next <span class="qreset num" data-e="${role.next_fire}">${nf}</span>`
+        ? `cron · next <span class="qreset num" data-g="m" data-e="${role.next_fire}">${nf}</span>`
         : (role.trigger==="event"&&role.enabled&&role.configured)
         ? `event · armed`
         : esc(role.trigger);
@@ -636,7 +649,10 @@ function renderRepos(repos){
       // ran, as a live "last <ago> · <outcome>" (agox ticker keeps it fresh
       // between rebuilds). Rendered only when the role has actually run.
       const lr=role.last_run;
-      const lastRun = lr&&lr.at ? `<span class="rlast" title="last session dispatched to ${esc(role.name)}">last <b class="agox" data-t="${lr.at}">${ago(nowS()-lr.at)}</b>${lr.outcome?` · ${esc(lr.outcome)}`:""}</span>` : "";
+      // #238: minute-granularity age + a STATIC " ago" OUTSIDE the <b> so the
+      // ticker only rewrites the duration; the " ago" can never toggle in/out of
+      // flow and reshape the row (the width-shift the operator saw).
+      const lastRun = lr&&lr.at ? `<span class="rlast" title="last session dispatched to ${esc(role.name)}">last <b class="agox num" data-g="m" data-t="${lr.at}">${agom(nowS()-lr.at)}</b> ago${lr.outcome?` · ${esc(lr.outcome)}`:""}</span>` : "";
       // #188c: a cron role whose expected fire is overdue (marker never
       // advanced) is a MISSED fire -- the swept-state incident that otherwise
       // looks identical to a healthy idle role. Surface it, server-asserted.
@@ -686,11 +702,17 @@ function renderRepos(repos){
       <div class="cfg">${esc(cfg.model||"—")} · gate ${esc(cfg.merge_gate||"—")}${(r.lifecycle||{}).pid?" · pid "+r.lifecycle.pid:""}</div>
       ${gateChain}${roles}</div>`;
   }).join("");
-  // #164: identical markup -> skip the innerHTML rebuild entirely. The whole
-  // left pane was re-laid-out on EVERY poll, flashing the countdown
-  // placeholder; now it only rebuilds on a real change (countdown text ticks
-  // via the qreset ticker between rebuilds, minute-granularity rebuilds).
-  if(html!==_reposHtml){_reposHtml=html;$("repos").innerHTML=html;}
+  // #164/#238: skip the innerHTML rebuild unless the markup REALLY changed. The
+  // compare normalizes the volatile .qreset/.agox span CONTENTS out first, so a
+  // pure time tick (which the client-side ticker already handles via textContent)
+  // never triggers a rebuild -- only a real state change (status, outcome, roster
+  // membership, lane) does. Regex is attribute-order-independent and matches the
+  // close tag to the open tag's name (span|b captured + backreferenced); contents
+  // are text-only in these spans. `html` here is only roster markup, so this is
+  // inherently scoped to the roster's time cells.
+  const norm=h=>h.replace(/(<(span|b)\b[^>]*\b(?:qreset|agox)\b[^>]*>)[^<]*(<\/\2>)/g,"$1$3");
+  const key=norm(html);
+  if(key!==_reposKey){_reposKey=key;$("repos").innerHTML=html;}
 }
 
 /* ---- QUOTA ---- */
@@ -962,8 +984,13 @@ setInterval(()=>{
   const d=new Date();$("h-clock").textContent=d.toISOString().slice(11,19)+"Z";
   if(GEN)$("h-fresh").textContent=ago(nowS()-GEN)+" ago";
   document.querySelectorAll(".upe").forEach(el=>{el.textContent=dur(nowS()-(+el.dataset.e));});
-  document.querySelectorAll(".agox").forEach(el=>{el.textContent=ago(nowS()-(+el.dataset.t))+" ago";});
-  document.querySelectorAll(".qreset").forEach(el=>{const s=(+el.dataset.e)-Math.floor(nowS());el.textContent=s>0?dur(s):"now";});
+  // #238: data-g="m" roster spans tick at MINUTE granularity (durm/agom) and the
+  // roster agox carries a static " ago" in the markup, so the ticker writes only
+  // the bare duration. Everything else keeps EXACTLY today's behavior (seconds
+  // dur, "X ago") -- the branch is opt-in, so NOW card / quota / voice / git are
+  // untouched.
+  document.querySelectorAll(".agox").forEach(el=>{const a=nowS()-(+el.dataset.t);el.textContent=el.dataset.g==="m"?agom(a):ago(a)+" ago";});
+  document.querySelectorAll(".qreset").forEach(el=>{const s=(+el.dataset.e)-Math.floor(nowS());el.textContent=s>0?(el.dataset.g==="m"?durm(s):dur(s)):"now";});
 },1000);
 
 /* ---- render + SSE ---- */
