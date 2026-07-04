@@ -1206,6 +1206,19 @@ class TestLaneHelpers(unittest.TestCase):
         self.assertEqual(roles.lane_of_role(cfg, "coder"), "main")
         self.assertEqual(roles.lane_of_role(cfg, "coder-fe"), "fe")
 
+    def test_lanes_valid_absent_block(self):
+        # No `lanes:` block is the healthy implicit single-lane case.
+        self.assertTrue(roles.lanes_valid(parse("agent:\n  type: claude\n")))
+
+    def test_lanes_valid_valid_block(self):
+        self.assertTrue(roles.lanes_valid(parse("lanes:\n  main: {}\n  fe: {}\n")))
+
+    def test_lanes_valid_false_on_malformed_block(self):
+        # Mirrors the `roles.py lanes` refusal: a non-mapping block and a
+        # bad-charset lane name are both invalid (not silently 'main').
+        self.assertFalse(roles.lanes_valid(parse("lanes: nonsense\n")))
+        self.assertFalse(roles.lanes_valid(parse("lanes:\n  'bad name!': {}\n")))
+
     def test_overlap_disjoint_none(self):
         cfg = parse(
             "lanes:\n  main: {}\n  fe: {}\n"

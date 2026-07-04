@@ -1944,3 +1944,83 @@ class TestTicketEffort(unittest.TestCase):
         self.assertIsNotNone(eff)
         self.assertEqual(set(eff), {"sessions", "tokens", "cost"})
         self.assertGreaterEqual(eff["sessions"], 1)
+
+
+class TestRepoStateLanes(unittest.TestCase):
+    """#147 dashboard slice: build_repo_state exposes the repo's lane topology
+    (declared lanes in order + the default lane) and tags each role row with
+    its lane, so a later render slice can group the repo card by lane. Data
+    layer only -- display, never gates dispatch (SD-21/22). A repo with no
+    `lanes:` block is one implicit lane named 'main' (zero migration)."""
+
+    def _repo(self, config_text):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        os.makedirs(os.path.join(d, ".autonomy"))
+        os.makedirs(os.path.join(d, "var", "autonomy-logs"))
+        with open(os.path.join(d, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write(config_text)
+        return d
+
+    def test_no_lanes_block_is_the_single_implicit_main_lane(self):
+        d = self._repo("agent:\n  type: claude\n")
+        st = ds.build_repo_state(d)
+        self.assertEqual(
+            st["lanes"], {"names": ["main"], "default": "main", "valid": True})
+
+    def test_declared_lanes_surface_in_order_first_is_default(self):
+        d = self._repo(
+            "lanes:\n"
+            "  main:\n"
+            "    worktree: ../x-main\n"
+            "  frontend:\n"
+            "    worktree: ../x-fe\n")
+        st = ds.build_repo_state(d)
+        self.assertEqual(st["lanes"]["names"], ["main", "frontend"])
+        self.assertEqual(st["lanes"]["default"], "main")
+        self.assertTrue(st["lanes"]["valid"])
+
+    def test_each_role_is_tagged_with_its_lane(self):
+        # A role's `lane:` routes it; a role without one belongs to the default
+        # lane (a not-configured standard placeholder included).
+        d = self._repo(
+            "lanes:\n"
+            "  main:\n"
+            "    worktree: ../x-main\n"
+            "  frontend:\n"
+            "    worktree: ../x-fe\n"
+            "roles:\n"
+            "  coder:\n"
+            "    lane: frontend\n"
+            "    scope:\n"
+            "      labels: [ready]\n")
+        st = ds.build_repo_state(d)
+        by_name = {r["name"]: r for r in st["roles"]}
+        self.assertEqual(by_name["coder"]["lane"], "frontend")
+        self.assertEqual(by_name["pm"]["lane"], "main")
+
+    def test_malformed_lanes_block_is_flagged_invalid_not_faked_healthy(self):
+        # A present-but-malformed `lanes:` block (here a bare scalar) makes the
+        # supervisor REFUSE to dispatch a lane -- so the dashboard must not
+        # report it as a healthy single 'main' lane. `valid` is False (the same
+        # verdict `roles.py lanes` reaches); the render keys off it to flag
+        # broken config. Still total: build_repo_state never raises (prev-log
+        # #12), so `names`/`default` degrade to the implicit 'main'.
+        d = self._repo("lanes: nonsense\nroles:\n  coder:\n    enabled: true\n")
+        st = ds.build_repo_state(d)
+        self.assertFalse(st["lanes"]["valid"])
+        self.assertEqual(st["lanes"]["names"], ["main"])
+        self.assertEqual(st["lanes"]["default"], "main")
+        by_name = {r["name"]: r for r in st["roles"]}
+        self.assertEqual(by_name["coder"]["lane"], "main")
+
+    def test_lane_topology_degrades_when_config_is_unreadable(self):
+        # build_repo_state renders the WHOLE dashboard: a missing config must
+        # still yield the implicit single lane, never raise (SD-6 fail-safe).
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        st = ds.build_repo_state(d)
+        self.assertEqual(
+            st["lanes"], {"names": ["main"], "default": "main", "valid": True})
+        for r in st["roles"]:
+            self.assertEqual(r["lane"], "main")
