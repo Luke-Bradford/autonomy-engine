@@ -116,6 +116,8 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px
 .cfgin{flex:1;min-width:0;background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);
   font-family:var(--mono);font-size:11px;border-radius:5px;padding:5px 7px}
 .cfgwarn{margin:0 0 3px 100px;font-size:10.5px;color:var(--warn);line-height:1.35}
+.cfghint{margin:0 0 3px 100px;font-size:10.5px;color:var(--mut);line-height:1.35;display:flex;gap:8px;align-items:center}
+.cfghint b{color:var(--ink);font-weight:600}
 #toast{position:fixed;right:20px;bottom:20px;z-index:50;display:flex;flex-direction:column;gap:8px}
 .tmsg{background:var(--panel);border:1px solid var(--hair2);border-left:3px solid var(--tc,var(--accent));border-radius:6px;
   box-shadow:var(--shadow);padding:11px 14px;font-size:12px;max-width:340px;animation:rise .3s both}
@@ -434,7 +436,7 @@ function renderCfg(repos){
     const c=r.config||{}, enc=encAttr(r.path);
     return `<div class="cfgrepo" data-repo="${enc}">
       <div class="cfgname">${esc(r.name||r.path)}<button class="cbtn danger" onclick="repoRemove('${enc}')">remove</button></div>
-      ${cfgField(enc,"board.owner","board owner",c.board_owner)}
+      ${cfgFieldOwner(enc,"board.owner","board owner",c.board_owner,r.board_owner_derived)}
       ${cfgFieldBoards(enc,i,"board.project_title","board title",c.board_title)}
       ${cfgFieldList(enc,"agent.model.primary","model",c.model)}
       ${cfgFieldList(enc,"agent.model.fallback","fallback",c.fallback)}
@@ -488,6 +490,34 @@ function refreshRepoBoards(row){
 }
 function cfgField(enc,key,label,val){
   return `<div class="cfgrow"><span class="cfglab">${esc(label)}</span><input class="cfgin" name="${key}" data-key="${key}" value="${esc(val||"")}"><button class="cbtn" onclick="cfgSave(this,'${enc}','${key}')">save</button></div>`;
+}
+// board.owner derived default (#171): the same row as cfgField, plus a hint
+// offering the owner gh derived from the repo's git remote -- shown ONLY when the
+// field is empty AND a derived owner exists. Clicking "use" fills (does not save)
+// the field, so the committed value always wins and an override stays possible.
+// Best-effort: no derived value -> just the plain field.
+function cfgFieldOwner(enc,key,label,val,derived){
+  const row=`<div class="cfgrow"><span class="cfglab">${esc(label)}</span><input class="cfgin" name="${key}" data-key="${key}" value="${esc(val||"")}"><button class="cbtn" onclick="cfgSave(this,'${enc}','${key}')">save</button></div>`;
+  const d=(derived||"").trim();
+  if((val||"").trim()||!d) return row;
+  // the derived owner rides in a data attribute, not an inline JS string arg:
+  // esc() is HTML-escaping, NOT JS-string escaping, so interpolating it into the
+  // onclick would be unsafe if the login grammar ever regressed. The handler
+  // reads it back via getAttribute.
+  return row+`<div class="cfghint">from git remote: <b>${esc(d)}</b> <button class="cbtn" data-owner="${esc(d)}" onclick="cfgUseOwner(this)">use</button></div>`;
+}
+function cfgUseOwner(btn){
+  const owner=btn.getAttribute("data-owner")||"";
+  const repoEl=btn.closest(".cfgrepo");
+  const input=repoEl&&repoEl.querySelector('[name="board.owner"]');
+  if(!input) return;
+  input.value=owner; input.focus();
+  // the field is now non-empty, so the hint's invariant (shown only when empty)
+  // no longer holds -- remove it. Still unsaved until the operator clicks save
+  // (override preserved); refresh the #170 board picker against the filled owner.
+  const hint=btn.closest(".cfghint");
+  if(hint) hint.remove();
+  refreshRepoBoards(repoEl);
 }
 // Like cfgField but backed by the shared model datalist: suggestions from the
 // curated roster, yet still free-text (type any custom/local model id). #82.
