@@ -825,7 +825,10 @@ function renderTokens(repos){
   const winLab=(TOKWINS.find(w=>w[1]===TOKWIN)||["6h"])[0];
   const t0=win.length?hhmm(win[0].bucket):"—";
   const t1=win.length?hhmm(win[win.length-1].bucket):"—";
-  const mid=unavailable?"no telemetry data":(rateNow>0?(num(rateNow)+" tok/min now"):(tot>0?"":"no tokens in window"));
+  // middle legend never blanks: live rate when burning, "idle now" when the
+  // window has tokens but nothing is accruing this instant, else the zero/no-data
+  // label (WARNING, review of PR #233 — a positive total + rate 0 left a gap).
+  const mid=unavailable?"no telemetry data":(rateNow>0?(num(rateNow)+" tok/min now"):(tot>0?"idle now":"no tokens in window"));
   $("tp").innerHTML=`<div class="tp">
     <div class="lead"><span class="big">${unavailable?"—":num(tot)}</span><span class="u">out · last ${winLab}</span><span class="tkw-wrap">${tog}</span></div>
     <div class="chart"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="output tokens per 15 minutes">
