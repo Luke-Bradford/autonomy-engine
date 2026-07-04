@@ -1512,6 +1512,9 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "engine_boot": read_engine_boot_sha(logdir),  # #166: supervisor's boot sha
         "git": git_in_flight(repo_path) if git_in_flight else {},
         "config": config,
+        # `config["merge_gate"]` is ALREADY the flattened strategy string
+        # (_read_config does g("merge_gate.strategy")); NOT the nested block.
+        # Reading "merge_gate.strategy" here would return None -> always manual.
         "merge_gate_chain": merge_gate_chain(config.get("merge_gate")),
         "override": read_model_override(os.path.join(logdir, "model-override")),
         "quota": quota,

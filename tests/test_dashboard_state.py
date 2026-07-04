@@ -70,6 +70,25 @@ class TestMergeGateChain(unittest.TestCase):
         for bad in ({"strategy": "bot_comment"}, 5, ["ci_only"]):
             self.assertEqual(ds.merge_gate_chain(bad), [{"step": "pr"}])
 
+    def test_build_repo_state_reflects_configured_strategy_not_default(self):
+        # Regression guard: build_repo_state must surface the repo's ACTUAL
+        # strategy, never silently fall back to the manual chain. `_read_config`
+        # flattens `merge_gate.strategy` onto the flat key `config["merge_gate"]`,
+        # so the call site reads `config.get("merge_gate")` (a string), NOT
+        # `config.get("merge_gate.strategy")` (which would be None -> always
+        # manual -- the exact bug this asserts against).
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        os.makedirs(os.path.join(d, ".autonomy"))
+        os.makedirs(os.path.join(d, "var", "autonomy-logs"))
+        with open(os.path.join(d, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write('merge_gate:\n  strategy: "bot_comment"\n')
+        st = ds.build_repo_state(d)
+        self.assertEqual(st["config"]["merge_gate"], "bot_comment")
+        self.assertEqual(
+            st["merge_gate_chain"],
+            [{"step": "pr"}, {"step": "review", "actor": "bot"}, {"step": "merge"}])
+
 
 class TestConfigOverlay(unittest.TestCase):
     """#202: the persistent operator overlay (var/autonomy-logs/config-overrides)
