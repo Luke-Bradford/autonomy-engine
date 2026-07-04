@@ -3,23 +3,36 @@
 Codex second-opinion runs at exactly three points in the workflow
 (operator decision 2026-07-02, ported from eBull). Non-negotiable.
 
-Invocation: `codex exec "<prompt>"` — always the non-interactive `exec`
-subcommand, never bare `codex` (needs a terminal).
+Invocation: `codex exec "<prompt>" </dev/null` — always the non-interactive
+`exec` subcommand, never bare `codex` (needs a terminal), and ALWAYS with
+stdin closed.
 
-**Hang watchdog (operator feedback 2026-07-04 — recurring):** `codex exec` can
-hang indefinitely producing ZERO output (two hangs in one evening: 40 min and
-8 min, empty output both times). Never wait open-ended:
+**Why `</dev/null` is mandatory (root cause, diagnosed 2026-07-04):**
+`codex exec` reads stdin until EOF ("Reading additional input from stdin...")
+before doing anything. In a foreground shell stdin closes and all is well; in
+a BACKGROUNDED harness task stdin is a pipe that never closes, so codex sits
+silently forever — zero output, no error. That was the "two hangs in one
+evening" (40 min + 8 min): codex itself was healthy the whole time, proven by
+a three-way experiment (foreground OK · backgrounded no-redirect HANGS ·
+backgrounded `</dev/null` OK). Diagnose-before-declaring-dead: the first
+version of this section said "second hang = codex is down for the night" —
+that was a guess from two data points, and it was wrong.
 
-- Run it FOREGROUND with a hard timeout (~4 min covers a diff review). If the
-  call gets backgrounded, its timeout no longer applies — poll the output
-  file on a bounded timer instead of blocking until notified; ~4 min of an
-  empty file = hung.
-- On a hang: kill the whole chain (`zsh → node codex → codex` binary), retry
-  ONCE with a shorter prompt. A second hang = codex is down for the night.
-- Two hangs at checkpoint 2: PROCEED with the push and document the deviation
-  in the PR (attempt timestamps + "post-hoc CP2 when codex recovers"), then
-  actually run it retroactively. A broken tool must not become an indefinite
-  gate-block — but the deviation is recorded, never silent.
+**Hang watchdog (operator feedback 2026-07-04 — keep regardless):** even with
+the stdin fix, never wait open-ended on a spawned checkpoint:
+
+- Prefer FOREGROUND with a hard timeout (~4 min covers a diff review). If the
+  call gets backgrounded, poll its output file on a bounded timer; ~4 min of
+  an empty file = investigate (check for the stdin symptom first).
+- On a genuine hang: kill the whole chain (`zsh → node codex → codex`
+  binary), retry once WITH `</dev/null` confirmed. If it still hangs, run the
+  minimal probe (`codex exec "Reply with exactly: OK" </dev/null`) to separate
+  tool-broken from invocation-broken before concluding anything.
+- Only a failing PROBE justifies the deviation path: proceed with the push,
+  document the deviation in the PR (attempt timestamps + "post-hoc CP2 when
+  codex recovers"), then actually run it retroactively. A broken tool must
+  not become an indefinite gate-block — but the deviation is recorded, never
+  silent, and "broken" is a diagnosis, not a vibe.
 
 ## Checkpoint 1 — before writing code (two passes)
 
