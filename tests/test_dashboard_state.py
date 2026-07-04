@@ -19,6 +19,77 @@ LOGDIR = os.path.join(FIX, "var", "autonomy-logs")
 import dashboard_state as ds  # noqa: E402
 
 
+class TestMergeGateChain(unittest.TestCase):
+    """#187 (UI-4 phase track, configured layer): the OUTLINE segments = the
+    remaining merge-gate chain derived from the repo's OWN
+    `merge_gate.strategy`, mirroring safe_merge.sh's four strategies. Read-only
+    DISPLAY derivation -- it draws what the gate looks like, it never gates a
+    merge. Acceptance (spec): 'degrade to truth, never guess' -- an unknown
+    strategy degrades to the one certain fact (a PR was opened), never a fake
+    tail. The QA/custom-role dimension is a documented follow-up; this slice is
+    the universal layer only."""
+
+    def test_manual_terminates_at_a_human(self):
+        # safe_merge: manual leaves the PR open for the operator to merge
+        self.assertEqual(
+            ds.merge_gate_chain("manual"),
+            [{"step": "pr"}, {"step": "review", "actor": "human"}])
+
+    def test_empty_strategy_defaults_to_manual(self):
+        # safe_merge uses ${STRATEGY:-manual}; the display must match
+        self.assertEqual(ds.merge_gate_chain(""), ds.merge_gate_chain("manual"))
+        self.assertEqual(ds.merge_gate_chain(None), ds.merge_gate_chain("manual"))
+
+    def test_ci_only_merges_on_ci_no_review(self):
+        self.assertEqual(
+            ds.merge_gate_chain("ci_only"),
+            [{"step": "pr"}, {"step": "merge"}])
+
+    def test_bot_comment_has_a_bot_review_gate(self):
+        self.assertEqual(
+            ds.merge_gate_chain("bot_comment"),
+            [{"step": "pr"}, {"step": "review", "actor": "bot"}, {"step": "merge"}])
+
+    def test_gh_review_has_a_human_review_gate(self):
+        self.assertEqual(
+            ds.merge_gate_chain("gh_review"),
+            [{"step": "pr"}, {"step": "review", "actor": "human"}, {"step": "merge"}])
+
+    def test_unknown_strategy_degrades_to_pr_only(self):
+        # never invent a tail we cannot vouch for
+        self.assertEqual(ds.merge_gate_chain("mystery"), [{"step": "pr"}])
+
+    def test_whitespace_and_case_are_tolerated(self):
+        self.assertEqual(ds.merge_gate_chain("  bot_comment  "),
+                         ds.merge_gate_chain("bot_comment"))
+
+    def test_non_string_strategy_degrades_without_crashing(self):
+        # build_repo_state renders the whole dashboard -- a malformed config
+        # shape (e.g. an un-flattened `merge_gate:` dict block) must degrade,
+        # never raise. None is unset -> manual; a dict/int is malformed -> [pr].
+        for bad in ({"strategy": "bot_comment"}, 5, ["ci_only"]):
+            self.assertEqual(ds.merge_gate_chain(bad), [{"step": "pr"}])
+
+    def test_build_repo_state_reflects_configured_strategy_not_default(self):
+        # Regression guard: build_repo_state must surface the repo's ACTUAL
+        # strategy, never silently fall back to the manual chain. `_read_config`
+        # flattens `merge_gate.strategy` onto the flat key `config["merge_gate"]`,
+        # so the call site reads `config.get("merge_gate")` (a string), NOT
+        # `config.get("merge_gate.strategy")` (which would be None -> always
+        # manual -- the exact bug this asserts against).
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        os.makedirs(os.path.join(d, ".autonomy"))
+        os.makedirs(os.path.join(d, "var", "autonomy-logs"))
+        with open(os.path.join(d, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write('merge_gate:\n  strategy: "bot_comment"\n')
+        st = ds.build_repo_state(d)
+        self.assertEqual(st["config"]["merge_gate"], "bot_comment")
+        self.assertEqual(
+            st["merge_gate_chain"],
+            [{"step": "pr"}, {"step": "review", "actor": "bot"}, {"step": "merge"}])
+
+
 class TestConfigOverlay(unittest.TestCase):
     """#202: the persistent operator overlay (var/autonomy-logs/config-overrides)
     shadows committed config.yaml for model/effort in the render model, and is
