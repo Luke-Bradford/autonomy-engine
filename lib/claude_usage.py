@@ -36,11 +36,17 @@ _USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 _BETA = "oauth-2025-04-20"
 _HTTP_TIMEOUT = 3.0
 _TTL = 60.0                        # cache/self-throttle window
+_GRACE = 900.0                     # #271: last-good live value stays servable
+                                   # (age-badged) this long past a failed sample,
+                                   # then expires to None -> log-scan fallback.
 
 # The single account-level cache. Written only by the sampler (via
 # refresh_live_quota); read by any request thread (via live_quota). Lock-guarded
-# so a read never sees a half-written dict.
-_cache = {"ts": 0.0, "val": None, "seen": False}
+# so a read never sees a half-written dict. `good_val`/`good_ts` remember the
+# last SUCCESSFUL sample so a single transient failure does not flap the panel
+# live->stale (#271); they update only on a non-None sample.
+_cache = {"ts": 0.0, "val": None, "seen": False,
+          "good_val": None, "good_ts": 0.0}
 _lock = threading.Lock()
 
 
@@ -50,6 +56,8 @@ def reset_cache():
         _cache["ts"] = 0.0
         _cache["val"] = None
         _cache["seen"] = False
+        _cache["good_val"] = None
+        _cache["good_ts"] = 0.0
 
 
 def _default_runner():
@@ -200,9 +208,11 @@ def refresh_live_quota(now=None, token_reader=_read_oauth_token,
     a login change self-corrects within one ttl.
 
     Fail-safe: ANY unexpected error in the read/fetch/map path writes None (not
-    a raise), so a failure REPLACES a previously-cached live value with the
-    log-scan fallback rather than leaving stale-live data in place (never
-    fail-open)."""
+    a raise) as the CURRENT value. A failure never leaves stale-live data as
+    'current' -- but the last SUCCESSFUL value is retained (good_val/good_ts) so
+    live_quota can serve it, age-badged and bounded to _GRACE, instead of the
+    panel flapping to the log-scan fallback on every transient blip (#271). Past
+    grace it expires to None: never fail-open, never silently-stale."""
     if now is None:
         now = time.time()
     with _lock:
@@ -218,11 +228,33 @@ def refresh_live_quota(now=None, token_reader=_read_oauth_token,
         _cache["ts"] = now
         _cache["val"] = val
         _cache["seen"] = True
+        if val is not None:                 # only a real sample refreshes
+            _cache["good_val"] = val        # last-good and clears any age
+            _cache["good_ts"] = now
 
 
 def live_quota(now=None):
     """Pure, lock-guarded cache read -- NO I/O ever. Returns the last mapped
-    windows dict ({five_hour, seven_day, source}) or None (cold cache or last
-    refresh failed -> the caller falls back to the log-scan source)."""
+    windows dict ({five_hour, seven_day, source}) or None.
+
+    A fresh successful sample is returned as-is (no age_s). If the current
+    sample failed but a last-good live value exists within _GRACE, that value is
+    served instead with an `age_s` (seconds since it was read) so the page can
+    badge it "live · aged Xm" -- bounded and visibly aged, never a live<->stale
+    flap (#271). Cold cache or a value aged past grace -> None (caller falls back
+    to the log-scan source)."""
     with _lock:
-        return _cache["val"]
+        val = _cache["val"]
+        if val is not None:
+            return val
+        good = _cache["good_val"]
+        if good is None:
+            return None
+        if now is None:
+            now = time.time()
+        age = now - _cache["good_ts"]
+        if age >= _GRACE:
+            return None
+        aged = dict(good)                   # shallow copy -- never mutate cache
+        aged["age_s"] = age
+        return aged

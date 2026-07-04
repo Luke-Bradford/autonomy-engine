@@ -186,18 +186,62 @@ class TestLiveQuota(unittest.TestCase):
                               fetcher=lambda t: GOOD_PAYLOAD)
         self.assertNotIn(TOKEN, json.dumps(cu.live_quota()))
 
-    def test_exception_clears_stale_live(self):
-        # fail-safe never fail-open: after a good live value is cached, a later
-        # refresh whose fetcher RAISES must replace it with None (fallback),
-        # not leave stale-live data, and must not propagate the exception
+    def test_grace_serves_last_good_with_age(self):
+        # #271: a single failed sample must NOT flap live->stale. Within the
+        # grace window live_quota keeps serving the last-good live value, now
+        # carrying its age (age_s) so the page can badge it "live · aged Xm".
         cu.refresh_live_quota(now=1000, token_reader=lambda: TOKEN,
                               fetcher=lambda t: GOOD_PAYLOAD)
-        self.assertIsNotNone(cu.live_quota())
+        cu.refresh_live_quota(now=1100, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: None)  # >ttl so it runs; fails
+        v = cu.live_quota(now=1100)
+        self.assertIsNotNone(v)
+        self.assertEqual(v["source"], "live")
+        self.assertEqual(v["age_s"], 100)
+        self.assertAlmostEqual(v["five_hour"]["utilization"], 0.48)
+
+    def test_past_grace_degrades_to_none(self):
+        # #271: bounded, never silently-stale -- past the grace window the aged
+        # value expires to None so the log-scan fallback takes over as today.
+        cu.refresh_live_quota(now=1000, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: GOOD_PAYLOAD)
+        cu.refresh_live_quota(now=1100, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: None)
+        self.assertIsNone(cu.live_quota(now=1000 + cu._GRACE + 1))
+
+    def test_cold_start_no_last_good_is_none(self):
+        # #271: cold start (a failed first sample, no prior good) -> None, and
+        # never an age_s -- there is nothing to age.
+        cu.refresh_live_quota(now=1000, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: None)
+        self.assertIsNone(cu.live_quota(now=1000))
+
+    def test_success_clears_age(self):
+        # #271: a fresh successful sample serves live with NO age_s (not aged).
+        cu.refresh_live_quota(now=1000, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: GOOD_PAYLOAD)
+        cu.refresh_live_quota(now=1100, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: None)      # serves aged
+        self.assertIn("age_s", cu.live_quota(now=1100))
+        cu.refresh_live_quota(now=1200, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: GOOD_PAYLOAD)  # recovers
+        v = cu.live_quota(now=1200)
+        self.assertNotIn("age_s", v)
+
+    def test_exception_within_grace_serves_last_good(self):
+        # fail-safe never fail-open -- but #271 refines the outcome: a fetcher
+        # that RAISES within grace serves the last-good value (age-badged), not
+        # a flap to None, and must never propagate the exception.
+        cu.refresh_live_quota(now=1000, token_reader=lambda: TOKEN,
+                              fetcher=lambda t: GOOD_PAYLOAD)
 
         def boom(_t):
             raise RuntimeError("endpoint changed shape")
         cu.refresh_live_quota(now=1100, token_reader=lambda: TOKEN, fetcher=boom)
-        self.assertIsNone(cu.live_quota())
+        v = cu.live_quota(now=1100)
+        self.assertEqual(v["age_s"], 100)
+        # ...and past grace it still expires to the fallback.
+        self.assertIsNone(cu.live_quota(now=1000 + cu._GRACE + 1))
 
 
 if __name__ == "__main__":
