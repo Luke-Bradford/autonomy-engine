@@ -78,5 +78,13 @@ rc="$(run p2 1 status 42 "In review")"
 check "gh failure: still exit 0" "0" "$rc"
 check "gh failure: no mutation recorded" "0" "$(muts | grep -c 'SET')"
 
+# E: an invalid board.owner is rejected at the point of use (prevention-log 6)
+# -> exit 0, gh never called for a resolve/mutation.
+printf 'board:\n  owner: "-rf; evil"\n  project_title: Autonomy Progress\n' > "$TMP/repo/.autonomy/config.yaml"
+rc="$(run p2 "" status 42 "In review")"
+check "invalid owner: still exit 0" "0" "$rc"
+check "invalid owner: no mutation recorded" "0" "$(muts | grep -c 'SET')"
+printf 'board:\n  owner: Luke-Bradford\n  project_title: Autonomy Progress\n' > "$TMP/repo/.autonomy/config.yaml"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi

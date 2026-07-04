@@ -49,7 +49,7 @@ EOF
 # title exists under either shape. field_name selects the single-select field
 # (Status | Priority) so one copy of the fallback serves both (DRY).
 #
-# The query ENUMERATES `fields(first:50)` and filters by name in Python rather
+# The query ENUMERATES `fields(first:100)` and filters by name in Python rather
 # than `field(name:<n>)`: the latter returns a NOT_FOUND GraphQL error (gh rc=1)
 # for projects that lack the field, poisoning the whole call. Enumeration is
 # rc=0 and yields every single-select. So we do NOT gate on gh's rc -- a true
@@ -63,7 +63,7 @@ board_resolve_field() {
   meta="$(gh api graphql -f query='
     query($o:String!){ user(login:$o){ projectsV2(first:30){ nodes{
       id title
-      fields(first:50){ nodes{ ... on ProjectV2SingleSelectField{ id name options{ id name } } } }
+      fields(first:100){ nodes{ ... on ProjectV2SingleSelectField{ id name options{ id name } } } }
     }}}}' -f o="$owner" 2>/dev/null)"
 
   ids="$(PROJECT_TITLE="$project_title" FIELD="$field_name" WANT="$want_option" python3 - "$meta" <<'PY' 2>/dev/null
@@ -91,7 +91,7 @@ PY
     meta="$(gh api graphql -f query='
       query($o:String!){ organization(login:$o){ projectsV2(first:30){ nodes{
         id title
-        fields(first:50){ nodes{ ... on ProjectV2SingleSelectField{ id name options{ id name } } } }
+        fields(first:100){ nodes{ ... on ProjectV2SingleSelectField{ id name options{ id name } } } }
       }}}}' -f o="$owner" 2>/dev/null)"
     ids="$(PROJECT_TITLE="$project_title" FIELD="$field_name" WANT="$want_option" python3 - "$meta" <<'PY' 2>/dev/null
 import sys, json, os
@@ -143,6 +143,14 @@ PROJECT_TITLE="$(python3 "$BOARD_HOME/lib/config_parser.py" .autonomy/config.yam
 if [ -z "$OWNER" ] || [ -z "$PROJECT_TITLE" ]; then
   warn "board.owner/board.project_title not set in .autonomy/config.yaml (skip)"; exit 0
 fi
+# board.owner crosses into gh argv (as a GraphQL variable); re-validate it
+# against the GitHub login grammar at the point of use (prevention-log 6) even
+# though config also validates -- a stray '-' or non-login char never reaches
+# gh. Best-effort: an invalid owner warns and skips, never errors.
+case "$OWNER" in
+  ""|-*|*[!A-Za-z0-9-]*)
+    warn "board.owner '$OWNER' is not a valid GitHub login (skip)"; exit 0 ;;
+esac
 
 ids="$(board_resolve_project "$OWNER" "$PROJECT_TITLE" "$status")"
 read -r PID FID OPT_ID <<<"$ids"
