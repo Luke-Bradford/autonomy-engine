@@ -133,13 +133,16 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
   padding:8px 10px 0;display:flex;align-items:center;gap:6px}
 .q-prov::after{content:"";flex:1;height:1px;background:var(--hair)}
 /* recent-sessions history (#148 part 2) */
-.hist{border:1px solid var(--hair);border-radius:6px;margin-bottom:6px;overflow:hidden}
-.hist>summary{cursor:pointer;list-style:none;padding:7px 10px;font-family:var(--mono);font-size:10px;
-  letter-spacing:.5px;color:var(--dim);display:flex;align-items:center;gap:6px;text-transform:uppercase}
-.hist>summary::-webkit-details-marker{display:none}
-.hist>summary::before{content:"▸";color:var(--mut)}
-.hist[open]>summary::before{content:"▾"}
+/* #258 slice 3b: lane-history popover (mockup #pop). Fixed panel toggled .open,
+   filled on demand from the selected repo's sessions -- replaces the inline
+   Recent sessions <details> list. --line2 in the mockup maps to this page's
+   --hair2 border token. */
+.pop{position:fixed;z-index:40;width:340px;max-height:320px;overflow-y:auto;background:var(--panel2);
+  border:1px solid var(--hair2);border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.45);padding:10px 12px;display:none}
+.pop.open{display:block}
+.pop h4{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
 .hrow{display:flex;align-items:center;gap:8px;padding:5px 10px;border-top:1px solid var(--hair);font-size:11px}
+.pop .hrow:first-of-type{border-top:0}
 .hrow .hrole{font-family:var(--mono);color:var(--fg);min-width:74px}
 .hrow .hmeta{font-family:var(--mono);color:var(--dim);font-size:10px;margin-left:auto;text-align:right}
 .qsrc{font-size:8.5px;padding:1px 5px;border-radius:3px;letter-spacing:.6px}
@@ -349,9 +352,6 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
       <div class="sh"><h2>Now</h2><span class="ln"></span><span class="ct" id="c-now"></span></div>
       <div class="focus" id="focus"></div>
 
-      <div class="sh"><h2>Recent sessions</h2><span class="ln"></span><span class="ct">last 10 per repo · role · outcome</span></div>
-      <div id="history" style="padding:0 12px"></div>
-
       <div class="sh"><h2>Activity</h2><span class="ln"></span>
         <div class="tabs">
           <button class="tab on" id="v-tree" onclick="setView('tree')">tree</button>
@@ -388,6 +388,8 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
     </div>
   </div>
 <div id="toast"></div>
+<!-- #258 slice 3b: lane-history popover, filled on demand by openLaneHist() -->
+<div class="pop" id="pop" role="dialog" aria-label="Session history"></div>
 
 <script>
 "use strict";
@@ -470,9 +472,8 @@ function tic(n){if(!n)return "•";if(n.startsWith("mcp__"))return "◈";return 
 function tname(n){if(!n)return "tool";if(n.startsWith("mcp__")){const p=n.split("__");return p[p.length-1];}return n;}
 
 /* ---- FOCUS BAND ---- */
-// recent-sessions history (#148 part 2). Open/closed state is kept per repo in
-// HIST_OPEN so the 2s re-render doesn't snap an expanded panel shut.
-const HIST_OPEN={};
+// recent-sessions history (#148 part 2). #258 slice 3b: rendered inside the
+// lane-history popover (laneHist), no longer an inline per-repo <details> stack.
 const _OUTCLS={clean:"c-passing",error:"c-failing","rate-limited":"c-pending",running:"c-none"};
 function histRow(s){
   const oc=_OUTCLS[s.outcome]||"c-none";
@@ -503,24 +504,51 @@ function setHTML(id,html){
   if(_sig[id]===key) return false;
   _sig[id]=key; el.innerHTML=html; return true;
 }
-function renderHistory(repos){
-  const box=$("history");
-  const parts=(repos||[]).map(r=>{
-    const ss=r.sessions||[]; if(!ss.length) return "";
-    const key=r.path, open=HIST_OPEN[key]?" open":"";
-    const label=(repos.length>1?esc(dispName(r.name))+" · ":"")+`${ss.length} session${ss.length>1?"s":""}`;
-    return `<details class="hist" data-key="${encodeURIComponent(key)}"${open}>`
-      +`<summary>${label}</summary>${ss.map(histRow).join("")}</details>`;
-  }).filter(Boolean);
-  const html=parts.length?parts.join(""):`<div class="q-sub" style="padding:4px 2px"><span>no sessions yet</span></div>`;
-  // persist expand/collapse across the tick re-render -- only (re)bind when we
-  // actually rewrote (an unchanged tick keeps the existing DOM + its handlers).
-  if(setHTML("history",html)){
-    box.querySelectorAll("details.hist").forEach(d=>{
-      d.ontoggle=()=>{HIST_OPEN[decodeURIComponent(d.dataset.key)]=d.open;};
-    });
-  }
+// #258 slice 3b: the lane-history popover BODY for one repo. Pure + total over
+// repo.sessions -- a null repo or a repo with no sessions yields the empty line,
+// never throws. CP1 P1-a: the header names the REPO (dispName), NOT a lane --
+// sessions carry no lane field, so a "<lane> lane" header over the repo's
+// (cross-lane) sessions would be a #234-class display lie. Truth over mockup.
+function laneHist(r){
+  const ss=(r&&r.sessions)||[];
+  const rows=ss.length?ss.map(histRow).join("")
+    :`<div class="q-sub" style="padding:4px 2px"><span>no sessions yet</span></div>`;
+  return `<h4>${esc(dispName(r&&r.name))} — recent sessions</h4>${rows}`;
 }
+// Open the popover under the clicked clock icon, filled with the SELECTED lane's
+// repo history. Total (CP1 P2): no-op if the popover mount, LAST, or the resolved
+// repo is missing -- never throws on a fresh-load / no-repo / removed-repo state.
+// stopPropagation (CP1 P1-c) so the document outside-click closer below doesn't
+// fire on this same click and immediately shut it.
+function openLaneHist(ev,anchor){
+  if(ev) ev.stopPropagation();
+  const pop=$("pop"); if(!pop||!LAST||!LAST.repos) return;
+  const sel=selectedRepoOf(LAST.repos); if(!sel) return;
+  pop.innerHTML=laneHist(sel);
+  const r=anchor.getBoundingClientRect();
+  pop.style.top=Math.min(innerHeight-260,r.bottom+6)+"px";
+  pop.style.left=Math.min(innerWidth-352,Math.max(8,r.right-340))+"px";
+  pop.classList.add("open");
+}
+function closeLaneHist(){const p=$("pop");if(p)p.classList.remove("open");}
+// CP1 P1-b: on every SSE tick, keep an OPEN popover truthful without shutting it
+// in the operator's face (ticks arrive every ~1-2s -- a blind close-on-tick makes
+// it unreadable). If it's open, re-resolve the selected repo and re-fill from the
+// fresh LAST; if the repo vanished (removed / no selection), close fail-safe so it
+// never shows stale DOM. Position is anchored to the card (which doesn't move), so
+// no reposition is needed on a content refresh.
+function refreshLaneHist(){
+  const pop=$("pop"); if(!pop||!pop.classList.contains("open")) return;
+  if(!LAST||!LAST.repos){closeLaneHist();return;}
+  const sel=selectedRepoOf(LAST.repos); if(!sel){closeLaneHist();return;}
+  pop.innerHTML=laneHist(sel);
+}
+// Close paths bound ONCE at load (CP1 P2-c -- never per render, so no listener
+// leak across ticks): (a) outside-click, (b) Escape. The third path -- close on
+// every SSE tick (CP1 P1-b) -- lives in render() so an open popover never shows
+// stale DOM after LAST changes / a repo is removed / the selection self-heals.
+document.addEventListener("click",e=>{if(!e.target.closest("#pop"))closeLaneHist();});
+document.addEventListener("keydown",e=>{if(e.key==="Escape")closeLaneHist();});
 function renderFocus(repos){
   // #151 item 4: a fresh install has no registered repos -> the focus band would
   // render blank. Narrate the empty state with the path forward (config page)
@@ -595,6 +623,7 @@ function renderFocus(repos){
         <span class="fc-role" title="role of the live (or most recent) session">${esc(cs.role||"coder")}</span>${isWorktree(r.name)?`<span class="fc-role" title="git worktree of the target repo">worktree</span>`:""}
         ${token(st,true)}
         <span class="fc-model">${esc(cs.model||(r.config&&r.config.model)||"")}</span>
+        <button class="ibtn hist" onclick="openLaneHist(event,this)" title="Session history"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg></button>
       </div>
       ${ticket}${stepLine}
       <div class="fc-meta"><span>${elapsed}</span>${cs.output_tokens!=null?`<span>out <b class="mono">${num(cs.output_tokens)}</b> tok</span>`:""}${cs.cost_usd?`<span>cost <b class="mono">$${cs.cost_usd.toFixed(2)}</b></span>`:""}${effortMeta}</div>
@@ -1247,7 +1276,11 @@ function renderEngineUpdate(e){
   } else { clear(); }
 }
 function render(s){LAST=s;GEN=s.generated_at||Math.floor(nowS());
-  renderFocus(s.repos);renderHistory(s.repos);renderRepos(s.repos);renderQuota(s.repos,s.account);renderActivity(s.repos);
+  // #258 slice 3b (CP1 P1-b): keep an open lane-history popover truthful across
+  // ticks -- refresh its rows from the fresh state, close only if its repo
+  // vanished. Never shows stale DOM, never flashes shut while being read.
+  refreshLaneHist();
+  renderFocus(s.repos);renderRepos(s.repos);renderQuota(s.repos,s.account);renderActivity(s.repos);
   renderTokens(s.repos);renderHandoffs(s.repos);renderNeedsYou(s.repos);renderVoice(s.repos);renderGit(s.repos);renderEngineUpdate(s.engine);}
 function setLive(ok){$("h-live").classList.toggle("stale",!ok);$("h-live-t").textContent=ok?"live":"reconnecting";}
 function connect(){let es;try{es=new EventSource("/api/stream");}catch(e){poll();return;}

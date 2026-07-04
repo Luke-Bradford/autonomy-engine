@@ -276,11 +276,123 @@ when streaming, own heartbeat when idle, else empty), killing the jumbled multi-
 tree/timeline/tally tabs unchanged. `selectLane` re-renders `renderActivity` too (synchronous on
 click). Codex CP2: no findings.
 
-### Slice 3b — RECENT SESSIONS → lane-history popover (deferred, design-coupled)
+### Slice 3b — RECENT SESSIONS → lane-history popover (this PR)
 
-Move the inline RECENT SESSIONS section behind the mockup's clock-icon popover on the lane header
-(#148 data already built), scoped to the selected lane. This introduces a NEW popover UI pattern —
-confirm the popover shape against the mockup (`git show
-2f21d4d:docs/superpowers/specs/assets/2026-07-03-control-room-mockup.html`) before building. Slice 4
-(cleanup + empty/degraded + remove now-dead CSS/markup) depends on 3b, since RECENT SESSIONS still
-lives inline in the center until then.
+**Design confirmed against the mockup** (`git show
+2f21d4d:docs/superpowers/specs/assets/2026-07-03-control-room-mockup.html`). The mockup fully
+specifies the pattern — it is the design SSOT that Slice 2a's icon cluster was already built from,
+so this is a render+interaction build, not a design gate:
+
+- **The popover** (`#pop`, `class="pop"`): a `position:fixed` panel, `display:none` until `.open`,
+  with an `<h4>` header and `.hrow` rows (dot/outcome chip · role chip · `time · dur · tok` meta ·
+  outcome). Closes on outside-click, Escape, **and on every SSE tick** (see truth notes). The
+  mockup's header reads "main lane — last sessions", but the rows are the **repo's** unfiltered
+  `sessions` (no lane field exists on a session — CP1 P1-a). Naming a lane over cross-lane rows
+  would be a #234-class display lie, so the header names the **repo** ("`<repo>` — recent
+  sessions"), which is truthful for both single- and multi-lane repos. Deviating from the mockup
+  wording here is deliberate: truth over mockup.
+- **The trigger** (`.ibtn hist`): a clock glyph icon button. The mockup places it on lane rows /
+  the detail header; since #269 (UI-3c) owns the polished detail-header presentation and runs
+  **after** this slice, 3b anchors the trigger on the **selected-lane focus card** (`renderFocus`'s
+  `.fc-top`) — the card IS the selected lane, so its clock opens that lane's history. #269 then
+  re-homes/re-styles it into the detail header. This keeps 3b's surface minimal and non-overlapping.
+
+**Scope decision (consistency with 3a):** Slice 3a scoped ACTIVITY to the selected **repo**
+(`selectedRepoOf`), NOT lane-role-filtered — `recent_sessions` carries `role` but no `lane`, and
+adding a server-side lane field is out of this client-only slice. 3b mirrors 3a: the popover shows
+the **selected repo's** `sessions` (the same `#148` data `renderHistory` already renders), so the
+two center panels stay scoped identically. (A future slice can lane-filter both if a `lane` field
+lands on sessions server-side; not now.)
+
+**Client-only — no `dashboard_state.py` change.** Reuses the existing per-repo `r.sessions` +
+`histRow`.
+
+#### Task 3b.1 (JS/HTML): the lane-history popover + card trigger, delete inline RECENT SESSIONS
+
+**Files:**
+- Modify: `lib/dashboard_page.html` — new `#pop` popover element; `laneHist(repo)` renderer +
+  `openLaneHist(anchor)` / close wiring; `.hist` clock button in `renderFocus`'s `.fc-top`;
+  `.pop`/`.hrow` CSS from the mockup; **delete** the inline `Recent sessions` section header +
+  `<div id="history">`, the `renderHistory` fn + its call site (`main` render pipeline line ~1250),
+  and `HIST_OPEN` (the inline `<details>` expand-state, now dead).
+- Test: `tests/test_dashboard_server.py` — new `TestLaneHistoryPopover` asserting the served HTML.
+
+**Design (minimal):**
+- `laneHist(repo)` returns the popover BODY: `<h4>` naming the **repo** (`dispName(repo.name)` —
+  CP1 P1-a) + `histRow`-rendered `.hrow` rows for `repo.sessions` (reuse the existing `histRow`;
+  keep `_OUTCLS`). Empty → a "no sessions yet" `.q-sub` line (mirrors `renderHistory`'s empty copy).
+  Pure + **total** over `repo.sessions`; never raises (a repo with no `sessions`, or a `null` repo,
+  yields the empty state, not an exception).
+- The trigger is a `<button class="ibtn hist" onclick="openLaneHist(event,this)"
+  title="Session history">` with the mockup's clock `<svg>`, placed in `.fc-top` **after** the model
+  span so it sits at the row's action edge (mirrors 2a's badge-flex ordering). It passes the event
+  (CP1 P1-c) so the handler can `event.stopPropagation()` — otherwise the document outside-click
+  closer fires on the same click and the popover never opens.
+- `openLaneHist(event, anchor)` is **total** (CP1 P2): `event.stopPropagation()`; if `#pop` is
+  missing, or `LAST`/`LAST.repos` is falsy, or `selectedRepoOf(LAST.repos)` is null → no-op (never
+  throw on a fresh load / no-repo / removed-repo state). Otherwise fills `#pop` via `laneHist(sel)`,
+  positions it under the anchor (`getBoundingClientRect`, clamped to viewport like the mockup), adds
+  `.open`.
+- Close paths bound ONCE at load (not per render — CP1 P2-c, no listener leak): (a) a document
+  `click` listener removes `.open` when the target is outside `#pop`; (b) a document `keydown`
+  closes on `Escape`. Plus (c) **`render(s)` refreshes an OPEN `#pop` on every SSE tick** via
+  `refreshLaneHist()` (CP1 P1-b): SSE ticks arrive every ~1–2s, so a blind close-on-tick would make
+  the popover flash shut mid-read (verified in the browser loop). Instead, if `#pop` is open,
+  re-resolve `selectedRepoOf(LAST.repos)` and re-fill from the fresh state; **close only if the repo
+  vanished** (removed / no selection). This guarantees no stale DOM without shutting a readable
+  popover — the anchor card doesn't move, so no reposition is needed on a content refresh.
+- **Skip-guard interaction (CP1 P2-b, prevention-log #14):** the popover BODY is outside `_sig`
+  (filled only on user open, never on a tick), so it has no signature cache to desync. The trigger
+  IS inside `renderFocus`'s signature-guarded markup, so: the `.ibtn.hist` button is **static per
+  status** (a fixed `<svg>` + fixed handler, NO volatile ticker cell like `qreset`/`agox`/`upe`), so
+  it enters `_sig.focus` exactly once as part of the card markup and rides the existing write paths
+  (idle `setHTML`, held-node `replaceWith`) — it introduces **no new out-of-band focus write path**
+  and requires **no `_volRe` change**. A status change rebuilds the card (button follows); an idle
+  tick keeps the signature (button persists via node identity).
+- Deleting `renderHistory` removes a `setHTML("history",…)` write path — safe, the whole panel and
+  its `_sig.history` key go away with it. No other panel references `#history` or `HIST_OPEN`.
+
+**Build order (CP1 P3 — localize regressions within the one PR):** (1) add the inert `#pop` element
++ `.pop`/`.hrow` CSS + the three close paths (outside-click, Escape, tick-close) with `laneHist`
+still unused; (2) add the `.ibtn.hist` trigger + `openLaneHist`; (3) delete the inline `Recent
+sessions` section + `renderHistory` + call site + `HIST_OPEN`. Tests + browser verify after (3).
+
+**TDD (string-assert seam, mirrors `TestReskinRenderMounts`):**
+- [ ] Failing test: inline RECENT SESSIONS gone — `>Recent sessions<` and `id="history"` NOT in the
+      served HTML; `function renderHistory(` NOT present; `HIST_OPEN` NOT present.
+- [ ] Failing test: popover present — `id="pop"` + `class="pop"` element; `function laneHist(` and
+      `function openLaneHist(` defined; `.pop`/`.hrow` CSS present.
+- [ ] Failing test: card trigger present — an `ibtn hist` button wired to `openLaneHist(event,`
+      inside the focus-card markup; the clock `<svg>` glyph present.
+- [ ] Failing test: close wiring — an `Escape` keydown close + an outside-click close on `#pop`
+      + the tick-close (`render` removes `#pop`'s `open` class — CP1 P1-b).
+- [ ] Failing test: `openLaneHist` is total — guards `LAST`/`selectedRepoOf` before use (assert the
+      source contains the null/no-op guard, not a bare `LAST.repos` deref) (CP1 P2).
+- [ ] Implement; see all pass. `histRow` + `_OUTCLS` retained (now used only by the popover).
+
+**Verification (browser loop — `.claude/skills/dashboard/SKILL.md`):**
+- [ ] `new_page` repo-alpha (has session logs) → snapshot: NO inline "Recent sessions" section in
+      the center; the focus card shows a clock icon; ZERO console errors; `/api/state` 200.
+- [ ] `click` the clock → the popover opens with the repo's session rows (dot·role·meta·outcome);
+      snapshot; ZERO console errors.
+- [ ] `Escape` closes it; click the clock again → opens; click outside → closes.
+- [ ] Tick-refresh (CP1 P1-b): open the popover, `await` an SSE tick → `#pop` stays OPEN with fresh
+      rows (not flashed shut); a removed/vanished selected repo closes it fail-safe.
+- [ ] Listener-once (CP1 P2-c): after several ticks, open+Escape still closes exactly once (no
+      double-bound handler) — assert via a single close, no console error, `#pop` not re-toggled.
+- [ ] Empty-history case: a `/tmp` fixture repo with NO session logs → the card clock opens a
+      popover showing the "no sessions yet" empty line (not a blank/error).
+- [ ] Idle temporal pass (12s observer, popover closed): `steadyStateCLS < 0.01`, `focus` panel
+      `innerHTMLStable`, ≤1 rebuild — the clock icon is static, no flicker; `#pop` stays closed
+      across ticks.
+
+**Gates + PR:** `bash tests/run_all.sh` green; `shellcheck` clean (no `.sh` touched, run the set);
+pre-flight-review incl. dashboard item J; **Codex CP2** before first push; PR (security model: pure
+client-side render + a read-only popover over already-served `sessions` data; no new endpoint, no
+control write, no auth surface). `#258` NOT closed (Slice 4 remains) → board reset to **Ready**.
+
+### Slice 4 — cleanup + empty/degraded (post-3b)
+
+With RECENT SESSIONS gone from the center inline flow, Slice 4 finishes the "center is fully
+single-lane" cleanup: the "no lane selected" / "selected repo removed" empty-degraded states and
+removal of any now-dead CSS/markup the earlier slices left. Its own PR.
