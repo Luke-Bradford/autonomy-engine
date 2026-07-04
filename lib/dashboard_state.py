@@ -594,6 +594,89 @@ def merge_gate_chain(strategy):
     return [{"step": "pr"}]
 
 
+def phase_track(focus, gate_chain):
+    """The selected-lane center-zone phase track (#187 UI-4): the configured
+    gate spine marked by OBSERVED GitHub-flow facts, per ticket.
+
+    The spine is a leading `branch` step + `merge_gate_chain(strategy)` (so the
+    configured layer -- what a PR must still clear -- is drawn straight from the
+    repo's OWN merge_gate, never a template). Each segment is then stamped with
+    a `state` derived ONLY from facts the focus_ticket already carries:
+
+        done     observed to have happened      (SOLID)
+        current  the single live frontier gate  (the gate now being awaited)
+        outline  configured but not yet reached (OUTLINE)
+
+    The acceptance test (settled with the operator) is that the track must NEVER
+    imply certainty it lacks. That is enforced by construction: a step is `done`
+    only when an observed fact asserts it; unreached gates stay `outline`, never
+    guessed; and the three focus_ticket variants map to exactly the facts they
+    hold --
+        completed (`completed`/`merged_epoch`)  -> every step done
+        open PR   (carries live `ci`/`review`)  -> branch+pr done; review done
+                                                    iff approved; the next
+                                                    unreached gate is `current`
+        issue     (session ticket, no PR yet)    -> branch is `current` while a
+                                                    session is in progress, else
+                                                    `done`; gates ahead outline
+
+    Total by construction: this feeds build_repo_state()/the whole-page render,
+    so it must never raise. A falsy focus yields []; a malformed gate_chain
+    (non-list, or junk entries) degrades to the one certain fact -- a branch
+    exists -- rather than inventing a tail. Segments are COPIED, never mutated
+    in place, so the shared merge_gate_chain the caller passes is left clean."""
+    # Builder-totality: a falsy OR non-dict focus (a malformed focus_ticket)
+    # must yield [] rather than raise on `.get()` -- this feeds the whole-page
+    # render inside _collect_one's per-repo try, and a raise would blank the repo.
+    if not isinstance(focus, dict) or not focus:
+        return []
+    # spine = the one universal fact (a branch) + the configured gate tail.
+    # Copy each configured segment so stamping `state` never poisons the shared
+    # merge_gate_chain list build_repo_state hands us.
+    spine = [{"step": "branch"}]
+    if isinstance(gate_chain, list):
+        for seg in gate_chain:
+            if isinstance(seg, dict) and seg.get("step"):
+                spine.append(dict(seg))
+
+    # completed: a merged PR closed this ticket -- every configured milestone is
+    # observably behind us.
+    if focus.get("completed") or focus.get("merged_epoch"):
+        for seg in spine:
+            seg["state"] = "done"
+        return spine
+
+    # open PR: the open-PR focus variant carries live gate state (`ci`/`review`,
+    # co-set at the single construction site in bin/dashboard.py from the top
+    # open PR) -- neither the completed nor the issue-only variant has them, so
+    # their presence is the reliable "an open PR exists" discriminator. branch+pr
+    # are observed done; review is done only when actually approved.
+    if "ci" in focus or "review" in focus:
+        done_steps = {"branch", "pr"}
+        if (focus.get("review") or "") == "approved":
+            done_steps.add("review")
+        marked_current = False
+        for seg in spine:
+            if seg["step"] in done_steps:
+                seg["state"] = "done"
+            elif not marked_current:
+                seg["state"] = "current"   # the single live frontier gate
+                marked_current = True
+            else:
+                seg["state"] = "outline"
+        return spine
+
+    # issue-only (a session ticket with no open PR yet): the branch is the only
+    # real milestone. It is the live frontier while a session is in progress,
+    # otherwise an observed-past fact; every gate ahead is not yet real.
+    for i, seg in enumerate(spine):
+        if i == 0:
+            seg["state"] = "current" if focus.get("in_progress") else "done"
+        else:
+            seg["state"] = "outline"
+    return spine
+
+
 # The engine-standard workflow label that marks an issue as awaiting a human
 # decision -- the untriaged "needs you" queue (#189). Repo-agnostic: `needs-design`
 # is scaffolded by `onboard` on every target (settled-decision 24), so it is

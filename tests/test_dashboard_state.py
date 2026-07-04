@@ -90,6 +90,134 @@ class TestMergeGateChain(unittest.TestCase):
             [{"step": "pr"}, {"step": "review", "actor": "bot"}, {"step": "merge"}])
 
 
+class TestPhaseTrack(unittest.TestCase):
+    """#187 UI-4: the selected-lane center-zone phase track. `phase_track` marks
+    the configured gate spine (a leading `branch` step + merge_gate_chain) with
+    ONLY observed GitHub-flow facts carried on the focus_ticket. The acceptance
+    test (from the spec, settled with the operator) is that the track must NEVER
+    imply certainty it lacks: a step is 'done' only when a fact asserts it,
+    'current' is the single live frontier gate, everything else is 'outline'
+    (configured but not reached). Pure/total -- it feeds the whole-page render,
+    so any focus/chain shape degrades, never raises."""
+
+    BOT = [{"step": "pr"}, {"step": "review", "actor": "bot"}, {"step": "merge"}]
+    MANUAL = [{"step": "pr"}, {"step": "review", "actor": "human"}]
+
+    def _states(self, track):
+        return [(s["step"], s["state"]) for s in track]
+
+    def test_none_focus_is_empty(self):
+        # no ticket in focus -> no track (never a phantom spine)
+        self.assertEqual(ds.phase_track(None, self.BOT), [])
+        self.assertEqual(ds.phase_track({}, self.BOT), [])
+
+    def test_non_dict_focus_degrades_without_raising(self):
+        # builder-totality: a malformed focus_ticket must yield [] on the
+        # whole-page render path, never raise on .get() and blank the repo
+        for bad in ("ticket", 7, ["#5"], object()):
+            self.assertEqual(ds.phase_track(bad, self.BOT), [])
+
+    def test_leading_step_is_always_branch(self):
+        tr = ds.phase_track({"number": 1, "in_progress": True, "state": "open"},
+                            self.BOT)
+        self.assertEqual(tr[0]["step"], "branch")
+
+    def test_completed_marks_every_step_done(self):
+        # a merged ticket: every configured milestone is observably behind us
+        tr = ds.phase_track({"number": 1, "completed": True,
+                             "merged_epoch": 123}, self.BOT)
+        self.assertEqual(self._states(tr),
+                         [("branch", "done"), ("pr", "done"),
+                          ("review", "done"), ("merge", "done")])
+
+    def test_merged_epoch_alone_counts_as_completed(self):
+        tr = ds.phase_track({"number": 1, "merged_epoch": 123}, self.MANUAL)
+        self.assertTrue(all(s["state"] == "done" for s in tr))
+
+    def test_open_pr_awaiting_review_marks_review_current(self):
+        # variant A: an open PR (carries ci/review), review not yet approved ->
+        # branch+pr observed done, review is the live frontier, merge outline
+        tr = ds.phase_track(
+            {"number": 5, "ci": "pending", "review": ""}, self.BOT)
+        self.assertEqual(self._states(tr),
+                         [("branch", "done"), ("pr", "done"),
+                          ("review", "current"), ("merge", "outline")])
+
+    def test_open_pr_approved_marks_merge_current(self):
+        # review approved but not yet merged -> merge is the frontier
+        tr = ds.phase_track(
+            {"number": 5, "ci": "passing", "review": "approved"}, self.BOT)
+        self.assertEqual(self._states(tr),
+                         [("branch", "done"), ("pr", "done"),
+                          ("review", "done"), ("merge", "current")])
+
+    def test_open_pr_under_manual_never_asserts_a_merge(self):
+        # manual chain has NO merge step (operator merges by hand); the track
+        # must not invent one -- degrade to truth
+        tr = ds.phase_track(
+            {"number": 5, "ci": "passing", "review": ""}, self.MANUAL)
+        self.assertEqual(self._states(tr),
+                         [("branch", "done"), ("pr", "done"),
+                          ("review", "current")])
+        self.assertNotIn("merge", [s["step"] for s in tr])
+
+    def test_issue_in_progress_marks_branch_current(self):
+        # variant C: a session is working the ticket, no PR yet -> the branch is
+        # the live frontier, every gate ahead is outline (not yet real)
+        tr = ds.phase_track(
+            {"number": 9, "state": "open", "in_progress": True}, self.BOT)
+        self.assertEqual(self._states(tr),
+                         [("branch", "current"), ("pr", "outline"),
+                          ("review", "outline"), ("merge", "outline")])
+
+    def test_issue_idle_marks_branch_done_rest_outline(self):
+        # variant C, idle (last-worked, not busy): the branch happened but
+        # nothing is live now -> no 'current', gates ahead stay outline
+        tr = ds.phase_track(
+            {"number": 9, "state": "open", "in_progress": False}, self.BOT)
+        self.assertEqual(self._states(tr),
+                         [("branch", "done"), ("pr", "outline"),
+                          ("review", "outline"), ("merge", "outline")])
+
+    def test_review_actor_glyph_is_preserved(self):
+        tr = ds.phase_track(
+            {"number": 5, "ci": "pending", "review": ""}, self.BOT)
+        rev = [s for s in tr if s["step"] == "review"][0]
+        self.assertEqual(rev["actor"], "bot")
+
+    def test_at_most_one_current_in_every_shape(self):
+        # the frontier is a single point -- never two live gates at once
+        focuses = [
+            {"number": 1, "completed": True, "merged_epoch": 1},
+            {"number": 5, "ci": "pending", "review": ""},
+            {"number": 5, "ci": "passing", "review": "approved"},
+            {"number": 9, "state": "open", "in_progress": True},
+            {"number": 9, "state": "open", "in_progress": False},
+        ]
+        for f in focuses:
+            for chain in (self.BOT, self.MANUAL,
+                          [{"step": "pr"}, {"step": "merge"}]):
+                tr = ds.phase_track(f, chain)
+                currents = [s for s in tr if s["state"] == "current"]
+                self.assertLessEqual(len(currents), 1, (f, chain))
+
+    def test_malformed_gate_chain_degrades_to_branch_only(self):
+        # a bad chain (None / junk entries) must not raise and must not invent
+        # steps -- the one certain fact is that a branch exists
+        for bad in (None, "nope", [None, 5, {"noStep": 1}], 42):
+            tr = ds.phase_track({"number": 1, "in_progress": True}, bad)
+            self.assertEqual([s["step"] for s in tr], ["branch"])
+
+    def test_does_not_mutate_the_shared_gate_chain(self):
+        # merge_gate_chain is built once and shared; phase_track must copy, not
+        # stamp 'state' onto the caller's segments
+        chain = [{"step": "pr"}, {"step": "review", "actor": "bot"},
+                 {"step": "merge"}]
+        ds.phase_track({"number": 5, "ci": "pending", "review": ""}, chain)
+        self.assertNotIn("state", chain[0])
+        self.assertNotIn("state", chain[1])
+
+
 class TestConfigOverlay(unittest.TestCase):
     """#202: the persistent operator overlay (var/autonomy-logs/config-overrides)
     shadows committed config.yaml for model/effort in the render model, and is
