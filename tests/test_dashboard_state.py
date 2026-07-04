@@ -1580,3 +1580,97 @@ class TestQuotaForecast(unittest.TestCase):
         st = ds.build_repo_state(FIX, git_in_flight=lambda p: {}, now=self.NOW)
         self.assertIn("quota_forecast", st)
         self.assertIsInstance(st["quota_forecast"], dict)
+
+
+class TestTriggerHealth(unittest.TestCase):
+    """trigger_health (#188c): missed-fire detection for the control room's
+    trigger-health signal. Compares each cron role's persisted last_fire
+    marker ($VARDIR/cron/<role>.last_fire, an epoch int -- see
+    supervisor.sh:resolve_cron_due) against the SAME schedule math the
+    supervisor itself uses (roles.cron_next_fire), so this reader can never
+    drift from what actually fires. A fire expected well in the past that the
+    marker never advanced past is a MISSED fire -- the 2026-07-03 swept-state
+    incident (a stalled/backed-off scheduler looking identical to a healthy
+    one)."""
+
+    NOW = 2000000
+    GRACE = 300
+
+    def _config(self, schedule="*/15 * * * *", name="pm"):
+        return {"roles": {name: {"enabled": True,
+                                  "trigger": {"type": "cron", "schedule": schedule}}}}
+
+    def _marker_dir(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        return d
+
+    def _write_marker(self, d, name, epoch):
+        with open(os.path.join(d, "%s.last_fire" % name), "w") as fh:
+            fh.write(str(epoch))
+
+    def test_no_cron_roles_is_empty(self):
+        d = self._marker_dir()
+        self.assertEqual(ds.trigger_health({"roles": {}}, d, self.NOW), [])
+
+    def test_never_armed_role_is_unknown_not_missed(self):
+        # no marker file at all -- degrade to 'unknown', never fabricate a miss
+        d = self._marker_dir()
+        out = ds.trigger_health(self._config(), d, self.NOW)
+        self.assertEqual(len(out), 1)
+        self.assertIsNone(out[0]["last_fire"])
+        self.assertFalse(out[0]["missed"])
+
+    def test_recently_advanced_marker_is_healthy(self):
+        d = self._marker_dir()
+        self._write_marker(d, "pm", self.NOW - 60)   # fired a minute ago
+        out = ds.trigger_health(self._config(), d, self.NOW)
+        self.assertFalse(out[0]["missed"])
+        self.assertIsNotNone(out[0]["expected_next"])
+
+    def test_stale_marker_past_expected_fire_plus_grace_is_missed(self):
+        d = self._marker_dir()
+        # every-15-min schedule; marker frozen an hour ago -> expected fires
+        # long since passed and were never advanced past -> missed
+        self._write_marker(d, "pm", self.NOW - 3600)
+        out = ds.trigger_health(self._config(), d, self.NOW, grace_secs=self.GRACE)
+        self.assertTrue(out[0]["missed"])
+
+    def test_expected_fire_within_grace_window_not_yet_missed(self):
+        d = self._marker_dir()
+        # schedule fires every 15 min; marker just barely behind, inside grace
+        self._write_marker(d, "pm", self.NOW - 60)
+        out = ds.trigger_health(self._config(), d, self.NOW, grace_secs=self.GRACE)
+        self.assertFalse(out[0]["missed"])
+
+    def test_corrupt_marker_degrades_to_unknown(self):
+        d = self._marker_dir()
+        with open(os.path.join(d, "pm.last_fire"), "w") as fh:
+            fh.write("not-an-epoch")
+        out = ds.trigger_health(self._config(), d, self.NOW)
+        self.assertIsNone(out[0]["last_fire"])
+        self.assertFalse(out[0]["missed"])
+
+    def test_unparseable_schedule_omits_expected_next(self):
+        d = self._marker_dir()
+        self._write_marker(d, "pm", self.NOW - 3600)
+        out = ds.trigger_health(self._config(schedule="garbage"), d, self.NOW)
+        self.assertIsNone(out[0]["expected_next"])
+        self.assertFalse(out[0]["missed"])
+
+    def test_missing_cron_dir_degrades_to_unknown_not_missed(self):
+        # the dir itself absent (role never fired, or fresh install) reads
+        # the same as an absent marker file -- unknown, not a fabricated miss
+        out = ds.trigger_health(self._config(), "/no/such/cron/dir", self.NOW)
+        self.assertEqual(len(out), 1)
+        self.assertIsNone(out[0]["last_fire"])
+        self.assertFalse(out[0]["missed"])
+
+    def test_non_mapping_config_is_empty(self):
+        d = self._marker_dir()
+        self.assertEqual(ds.trigger_health(None, d, self.NOW), [])
+
+    def test_build_repo_state_includes_trigger_health(self):
+        st = ds.build_repo_state(FIX, git_in_flight=lambda p: {}, now=self.NOW)
+        self.assertIn("trigger_health", st)
+        self.assertIsInstance(st["trigger_health"], list)
