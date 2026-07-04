@@ -173,6 +173,28 @@ def pick_ticket(mention_counts, mention_last_pos, branch_ticket, board_ticket):
     return max(pool, key=lambda t: mention_last_pos.get(t, 0))
 
 
+def ticket_source(mention_counts, mention_last_pos, branch_ticket,
+                  board_ticket, branch_name=None):
+    """A short, operator-facing reason the card shows THIS ticket (#151 item 3)
+    -- mirrors pick_ticket's ladder rung-for-rung so the tooltip can never
+    disagree with the pick. Returns None exactly when pick_ticket returns None
+    (no ticket -> no source)."""
+    picked = pick_ticket(mention_counts, mention_last_pos, branch_ticket,
+                         board_ticket)
+    if picked is None:
+        return None
+    if branch_ticket is not None:
+        if branch_name:
+            return "from the branch this session created (%s)" % branch_name
+        return "from the branch this session created"
+    if board_ticket is not None:
+        return "from a board 'In Progress' status write"
+    count = mention_counts.get(picked, 0)
+    if count >= 2:
+        return "most recently mentioned ticket (mentioned %d×)" % count
+    return "only ticket mentioned (once)"
+
+
 _CODEX_WINDOWS = {300: "five_hour", 10080: "seven_day"}
 
 
@@ -282,6 +304,7 @@ def parse_session_log(path):
     ticket_mentions = Counter()
     mention_last_pos = {}
     branch_ticket = None
+    branch_name = None   # the created branch string, for the #151 attribution hint
     board_last = {}     # ticket -> (position, status-lowercased)
     pos = 0
 
@@ -337,6 +360,7 @@ def parse_session_log(path):
                             ref = extract_ticket_ref(m.group(1))
                             if ref is not None:
                                 branch_ticket = ref   # latest creation wins
+                                branch_name = m.group(1).strip()
                         for bn, bstat in _BOARD_STATUS_RE.findall(cmd):
                             board_last[int(bn)] = (pos, bstat.strip().lower())
                         nodes.append({
@@ -402,6 +426,8 @@ def parse_session_log(path):
     if in_prog:
         board_ticket = max(in_prog)[1]
     ticket = pick_ticket(ticket_mentions, mention_last_pos, branch_ticket, board_ticket)
+    ticket_src = ticket_source(ticket_mentions, mention_last_pos, branch_ticket,
+                               board_ticket, branch_name)
 
     # updated_at = last write (liveness); started_epoch = the file's creation time
     # (real epoch, tz-independent -- the session-*.log NAME is LOCAL time, so
@@ -432,6 +458,7 @@ def parse_session_log(path):
         "result_text": result_text,
         "rate_limited": rate_limited,
         "ticket": ticket,
+        "ticket_source": ticket_src,
     }
 
 
@@ -1071,6 +1098,7 @@ def recent_sessions(logdir, limit=10):
             "outcome": outcome,
             "tokens": s.get("output_tokens") or 0,
             "ticket": s.get("ticket"),
+            "ticket_source": s.get("ticket_source"),
             "model": s.get("model") or "",
         })
     return out
