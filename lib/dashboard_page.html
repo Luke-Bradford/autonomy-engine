@@ -530,9 +530,8 @@ function renderFocus(repos){
   // is never blank; cross-repo "what's happening everywhere" is answered by the
   // fleet rail + right-rail org feed by design -- the center is single-lane.
   const selKey=selectedLane(repos), sep=selKey.indexOf(_LSEP);
-  const selPath=sep<0?selKey:selKey.slice(0,sep);
   const selLane=sep<0?"main":selKey.slice(sep+1);
-  const sel=repos.find(x=>x.path===selPath)||repos[0];
+  const sel=selectedRepoOf(repos);
   const laneNames=(sel.lanes&&Array.isArray(sel.lanes.names))?sel.lanes.names:[];
   // label the "Now" header with the lane the single card shows -- a fleet-wide
   // "N working · M live" count over one card would read as broken (a #234-class
@@ -748,13 +747,24 @@ function selectedLane(repos){
   SELECTED=d?laneKey(d.path,(d.lanes&&d.lanes.active)||"main"):"";
   return SELECTED;
 }
+// #258: the repo that owns the selected lane -- the center's single focus. One
+// shared accessor so renderFocus (the card) + renderActivity (the trace) scope
+// to the SAME repo (no divergent duplicate resolution). Resolves via
+// selectedLane so it inherits the self-healing default/fallback; null only when
+// there are no repos.
+function selectedRepoOf(repos){
+  repos=repos||[];
+  const k=selectedLane(repos), i=k.indexOf(_LSEP);
+  const p=i<0?k:k.slice(0,i);
+  return repos.find(x=>x.path===p)||repos[0]||null;
+}
 // selectLane re-renders the fleet so the new `sel` markup flows through the
-// #164/#238 guard (signature-consistent). #258 slice 2b: it ALSO re-renders the
-// center focus immediately -- renderFocus now depends on selectedLane(), so
-// without this the center card/header would lag a click until the next
-// /api/state tick. Both renders go through the shared setHTML/_sig guard, so a
+// #164/#238 guard (signature-consistent). #258 slice 2b/3a: it ALSO re-renders
+// the center focus AND the scoped activity panel immediately -- both now depend
+// on the selection, so without this the center would lag a click until the next
+// /api/state tick. All renders go through the shared setHTML/_sig guard, so a
 // no-op selection (re-click the same lane) is skipped, not a churn.
-function selectLane(key){SELECTED=key; if(LAST){renderRepos(LAST.repos);renderFocus(LAST.repos);}}
+function selectLane(key){SELECTED=key; if(LAST){renderRepos(LAST.repos);renderFocus(LAST.repos);renderActivity(LAST.repos);}}
 function renderRepos(repos){
   $("h-repos").textContent=repos.length;
   const selKey=selectedLane(repos);
@@ -993,9 +1003,15 @@ function tickNarration(repos){
   }).join("");
 }
 function renderActivity(repos){
-  const ws=reposWithActivity(repos);
+  // #258 slice 3a: the center is single-lane -- the ACTIVITY panel shows only
+  // the SELECTED lane's repo (its live tool-trace when streaming, its own
+  // heartbeat narration when idle), not every repo stacked (the spec kills the
+  // "jumbled, scrolls off the page" multi-repo panel). Cross-repo "everywhere"
+  // is answered by the fleet rail + right-rail org feed by design.
+  const sel=selectedRepoOf(repos), scope=sel?[sel]:[];
+  const ws=reposWithActivity(scope);
   if(!ws.length){
-    const ticks=tickNarration(repos);
+    const ticks=tickNarration(scope);
     setHTML("activity",ticks||`<div class="empty">No session activity right now. A working supervisor's tool-by-tool trace — or its wait state between sessions — appears here live.</div>`);
     return;
   }
