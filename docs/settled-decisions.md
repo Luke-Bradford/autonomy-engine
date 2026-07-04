@@ -74,6 +74,18 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     inert (ignored, not an error). Parallelism is now expressed as named lanes.
     *(Was: deferred, PR #62 decision 3; retired via
     specs/2026-07-03-lanes-and-board-contract-design.md D1.)*
+26. **Per-phase `models:` is retained-but-flagged, not dropped** (settled
+    2026-07-04, #149 item 4). The schema still validates `roles.<r>.models:
+    {plan,implement,test}`, but no adapter consumes it — the adapter takes ONE
+    model (see entry 13). It is deliberately NOT dropped from the schema: #149's
+    fail-safe-honesty NOTE now makes the no-op loud (dispatch and `doctor`
+    both emit `roles.<r>.models is set but per-phase models are ignored …`), so
+    the original reason to drop — a *silent* validated aspiration — no longer
+    holds, and a graceful flagged no-op is more fail-safe than hard-rejecting a
+    config that set the knob. Revisit wire-vs-drop when #89 designs per-phase
+    model switching; the `_KNOB_NOTES` entry disappears for free the moment it
+    is wired. *(#149, interim honesty of #89; enforced by
+    `tests/test_roles.py` unwired-knob + models-shape cases.)*
 
 ## Lanes + board contract (2026-07-03 operator session, D1–D6)
 
