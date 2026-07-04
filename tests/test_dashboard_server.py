@@ -466,6 +466,24 @@ class TestConfigReadModelOwnerDerived(unittest.TestCase):
         repo = dashboard.config_read_model()["repos"][0]
         self.assertEqual(repo["board_owner_derived"], "")
 
+    def test_multi_repo_owners_mapped_concurrently(self):
+        # owners are derived concurrently (not blocking N x gh); each repo's
+        # derived owner must still land on the right repo. A cwd-sensitive run
+        # returns a distinct login per repo path.
+        td2 = tempfile.TemporaryDirectory()
+        self.addCleanup(td2.cleanup)
+        os.makedirs(os.path.join(td2.name, ".autonomy"))
+        with open(os.path.join(td2.name, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("board:\n  owner: \"\"\n")
+        repo_a, repo_b = self._td.name, td2.name
+        dashboard.Handler.repos = [repo_a, repo_b]
+        dashboard._run = lambda args, **kw: (
+            "Owner-A\n" if kw.get("cwd") == repo_a else "Owner-B\n")
+        by_path = {r["path"]: r["board_owner_derived"]
+                   for r in dashboard.config_read_model()["repos"]}
+        self.assertEqual(by_path[repo_a], "Owner-A")
+        self.assertEqual(by_path[repo_b], "Owner-B")
+
 
 if __name__ == "__main__":
     unittest.main()

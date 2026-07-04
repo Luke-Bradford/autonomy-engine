@@ -813,23 +813,33 @@ def config_read_model():
     except Exception as exc:   # surface a real backend fault, don't fake "empty"
         cred_list, assignments = [], {}
         cred_error = str(exc) or exc.__class__.__name__
+    # best-effort board.owner defaults from each repo's git remote (#171),
+    # derived CONCURRENTLY: a sequential loop would stall /api/config by N repos
+    # x up to 8s on a cold/expired cache, and gh must never block the config
+    # render (#80). Each repo_owner_default is independent and never raises;
+    # cache hits return instantly so this only spends threads on real misses.
+    repo_paths = list(Handler.repos)
+    owners = {}
+    if repo_paths:
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(8, len(repo_paths))) as ex:
+            futs = {ex.submit(repo_owner_default, r): r for r in repo_paths}
+            for fut in futs:
+                r = futs[fut]
+                try:
+                    owners[r] = fut.result()
+                except Exception:
+                    owners[r] = ""
     repos = []
-    for repo in Handler.repos:
+    for repo in repo_paths:
         cfg = {}
         try:
             st = ds.build_repo_state(repo, git_in_flight=lambda r: {})
             cfg = st.get("config", {})
         except Exception:
             cfg = {}
-        # best-effort board.owner default from the repo's git remote (#171);
-        # repo_owner_default never raises, but stay defensive like the block
-        # above so one repo's gh edge can never break the whole config page.
-        try:
-            owner_derived = repo_owner_default(repo)
-        except Exception:
-            owner_derived = ""
         repos.append({"path": repo, "name": os.path.basename(repo.rstrip("/")),
-                      "config": cfg, "board_owner_derived": owner_derived})
+                      "config": cfg, "board_owner_derived": owners.get(repo, "")})
     acct_list, acct_error = [], None
     try:
         acct_list = _accts().list()
