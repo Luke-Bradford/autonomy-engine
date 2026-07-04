@@ -117,6 +117,65 @@ class TestSessionParse(unittest.TestCase):
         self.assertGreater(s["updated_at"], 0)
 
 
+class TestRepoRelativeFeedPaths(unittest.TestCase):
+    """#186: the feed must print repo-relative paths, never absolute
+    /Users/... on every Edit row. A file_path under the session cwd is
+    stripped to its repo-relative form; a path outside the repo stays
+    absolute (it honestly is not repo-relative -- mangling it would hide
+    where it points)."""
+
+    def test_relative_helper_strips_cwd_prefix(self):
+        root = "/Users/op/Dev/repo-alpha"
+        self.assertEqual(
+            ds._repo_relative(root + "/src/queue/consumer.py", root),
+            "src/queue/consumer.py")
+
+    def test_relative_helper_leaves_outside_paths_absolute(self):
+        root = "/Users/op/Dev/repo-alpha"
+        # a sibling repo, and a home-dir path -- neither is under root
+        self.assertEqual(
+            ds._repo_relative("/Users/op/.claude/settings.json", root),
+            "/Users/op/.claude/settings.json")
+        self.assertEqual(
+            ds._repo_relative("/Users/op/Dev/repo-beta/x.py", root),
+            "/Users/op/Dev/repo-beta/x.py")
+
+    def test_relative_helper_no_root_is_passthrough(self):
+        # back-compat: no cwd known -> path unchanged
+        self.assertEqual(ds._repo_relative("/a/b/c.py", ""), "/a/b/c.py")
+
+    def test_relative_helper_no_partial_segment_match(self):
+        # root is a prefix STRING of the path but not a path ancestor
+        root = "/Users/op/Dev/repo"
+        self.assertEqual(
+            ds._repo_relative("/Users/op/Dev/repo-alpha/x.py", root),
+            "/Users/op/Dev/repo-alpha/x.py")
+
+    def test_summarize_tool_relativizes_file_path(self):
+        root = "/Users/op/Dev/repo-alpha"
+        self.assertEqual(
+            ds._summarize_tool("Edit", {"file_path": root + "/lib/x.py"}, root),
+            "lib/x.py")
+
+    def test_feed_nodes_and_step_are_repo_relative(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        p = os.path.join(d, "session-20260701T120000.log")
+        cwd = "/Users/op/Dev/repo-alpha"
+        with open(p, "w") as fh:
+            fh.write(json.dumps({"type": "system", "subtype": "init",
+                                 "model": "claude-opus-4-8", "cwd": cwd,
+                                 "session_id": "s1"}) + "\n")
+            fh.write(json.dumps({"type": "assistant", "message": {
+                "content": [{"type": "tool_use", "id": "t1", "name": "Edit",
+                             "input": {"file_path": cwd + "/lib/dashboard_state.py"}}],
+                "usage": {"output_tokens": 5}}}) + "\n")
+        s = ds.parse_session_log(p)
+        self.assertEqual(s["nodes"][0]["summary"], "lib/dashboard_state.py")
+        self.assertIn("lib/dashboard_state.py", s["current_step"])
+        self.assertNotIn("/Users/op", s["current_step"])
+
+
 class TestActivityLiveness(unittest.TestCase):
     """Working-right-now vs idle is freshness of the log, not the lock pid."""
     def _sess(self, status, updated_at):

@@ -116,11 +116,28 @@ def _started_at_from_name(path):
     return ""
 
 
-def _summarize_tool(name, inp):
+def _repo_relative(path, root):
+    """Render a tool file_path as repo-relative when it lives under the session
+    cwd (root), so the feed shows 'lib/x.py' not '/Users/.../lib/x.py' (#186).
+    A path outside the repo is left absolute -- it honestly is not repo-relative,
+    and stripping it to a basename would hide where it points. Anchoring on
+    root + '/' (not a bare prefix) keeps '/repo' from mis-eating '/repo-alpha'."""
+    if not root or not path:
+        return path
+    root = root.rstrip("/")
+    if path == root:
+        return "."
+    prefix = root + "/"
+    if path.startswith(prefix):
+        return path[len(prefix):]
+    return path
+
+
+def _summarize_tool(name, inp, root=None):
     """One human-readable line for a tool_use node -- what it's working on."""
     inp = inp or {}
     if "file_path" in inp:
-        return inp["file_path"]
+        return _repo_relative(inp["file_path"], root)
     if name == "Bash":
         return inp.get("description") or inp.get("command") or "bash"
     if name == "Task":
@@ -136,12 +153,12 @@ def _summarize_tool(name, inp):
     return name
 
 
-def _block_label(block):
+def _block_label(block, root=None):
     """Short label for the 'current step' readout from a content block."""
     bt = block.get("type")
     if bt == "tool_use":
         return "%s %s" % (block.get("name", "tool"),
-                          _summarize_tool(block.get("name"), block.get("input")))
+                          _summarize_tool(block.get("name"), block.get("input"), root))
     if bt == "text":
         return (block.get("text") or "").strip().splitlines()[0][:120]
     if bt == "thinking":
@@ -343,7 +360,7 @@ def parse_session_log(path):
                     if not isinstance(block, dict):
                         continue
                     pos += 1
-                    label = _block_label(block)
+                    label = _block_label(block, cwd)
                     if label:
                         current_step = label
                     if block.get("type") == "text":
@@ -367,7 +384,7 @@ def parse_session_log(path):
                             "id": block.get("id"),
                             "parent": parent,
                             "name": block.get("name"),
-                            "summary": _summarize_tool(block.get("name"), block.get("input")),
+                            "summary": _summarize_tool(block.get("name"), block.get("input"), cwd),
                             "tokens": out,
                             "is_subagent": block.get("name") == "Task",
                         })
@@ -385,7 +402,7 @@ def parse_session_log(path):
                 if item.get("type") == "agent_message":
                     pos += 1
                     text = item.get("text") or ""
-                    label = _block_label({"type": "text", "text": text})
+                    label = _block_label({"type": "text", "text": text}, cwd)
                     if label:
                         current_step = label
                     for n in _TICKET_RE.findall(text):
