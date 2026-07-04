@@ -175,6 +175,54 @@ doctor_review_secret_check() {
   fi
 }
 
+# scope-label existence check (#171). A typo'd roles.*.scope.labels entry
+# silently empties a role's board; warn when a configured label isn't on the
+# repo. Diagnostic-only + best-effort.
+
+# Pure: WARN each configured label (newline list) absent from the repo-labels
+# (newline list), by EXACT bash string equality -- no grep, so a '-'-leading or
+# regex-metachar or space-holding label neither breaks nor false-matches.
+doctor_labels_report() {
+  local configured="$1" repo_labels="$2" label rline found
+  [ -n "$configured" ] || return 0
+  while IFS= read -r label; do
+    [ -n "$label" ] || continue
+    found=1
+    while IFS= read -r rline; do
+      if [ "$rline" = "$label" ]; then found=0; break; fi
+    done <<EOF
+$repo_labels
+EOF
+    if [ "$found" != 0 ]; then
+      echo "WARN scope label '$label' not found on the repo -- roles scoped to it see an EMPTY board (create the label or fix the typo)"
+    fi
+  done <<EOF
+$configured
+EOF
+}
+
+# Impure best-effort. Caller gates this to a VALID roles block (roles_rc=0), so
+# it never WARNs from an untrusted config. Nothing configured -> no gh call.
+doctor_label_scope_check() {
+  local repo="$1" configured raw repo_labels count
+  configured="$(python3 "$DOCTOR_HOME/lib/roles.py" scope-labels "$repo" 2>/dev/null)" || return 0
+  [ -n "$configured" ] || return 0
+  # Capture gh's rc WITHOUT a pipe (a `... | cut` substitution returns cut's rc
+  # unless pipefail is set, silently turning a gh failure into an empty list and
+  # false 'missing' WARNs). Only then split the columns.
+  if ! raw="$(cd "$repo" && gh label list --limit 500 2>/dev/null)"; then
+    echo "INFO could not list repo labels (gh) -- can't verify role scope labels; ensure they exist"
+    return 0
+  fi
+  count="$(printf '%s\n' "$raw" | wc -l | tr -d ' ')"
+  if [ "$count" -ge 500 ]; then
+    echo "INFO repo has >=500 labels -- too many to verify scope labels reliably; skipping"
+    return 0
+  fi
+  repo_labels="$(printf '%s\n' "$raw" | cut -f1)"
+  doctor_labels_report "$configured" "$repo_labels"
+}
+
 doctor_full_report() {
   local repo="$1" hard_fail=0
   echo "== doctor.sh report: $repo =="
@@ -218,7 +266,8 @@ doctor_full_report() {
   local roles_out roles_rc
   roles_out="$(python3 "$DOCTOR_HOME/lib/roles.py" "$repo" 2>&1)"; roles_rc=$?
   case "$roles_rc" in
-    0) echo "OK   roles: block valid" ;;
+    0) echo "OK   roles: block valid"
+       doctor_label_scope_check "$repo" ;;
     3) echo "OK   no roles: block -- defaults apply (coder loop only)" ;;
     2) echo "FAIL roles: cannot read config.yaml:"
        echo "$roles_out" | sed 's/^/     /'

@@ -1425,5 +1425,86 @@ class TestLaneCLI(unittest.TestCase):
         self.assertIn("Part 2", out)
 
 
+class TestConfiguredScopeLabels(unittest.TestCase):
+    """#171: configured_scope_labels -- the union of scope.labels across every
+    enabled executable role (the single source doctor's label check reads)."""
+
+    def test_union_across_roles_and_triggers_sorted_deduped(self):
+        cfg = parse(
+            "roles:\n"
+            "  coder:\n    enabled: true\n    scope: { labels: [ready, bug] }\n"
+            "  reviewer:\n    enabled: true\n    trigger: { type: loop }\n"
+            "    scope: { labels: [bug, docs] }\n"
+            "  groomer:\n    enabled: true\n"
+            "    trigger: { type: cron, schedule: \"0 9 * * *\" }\n"
+            "    scope: { labels: [triage] }\n")
+        self.assertEqual(roles.configured_scope_labels(cfg),
+                         ["bug", "docs", "ready", "triage"])
+
+    def test_role_without_scope_contributes_nothing(self):
+        cfg = parse("roles:\n  coder: { enabled: true }\n")
+        self.assertEqual(roles.configured_scope_labels(cfg), [])
+
+    def test_disabled_role_labels_ignored(self):
+        cfg = parse(
+            "roles:\n"
+            "  coder:\n    enabled: true\n    scope: { labels: [ready] }\n"
+            "  reviewer:\n    enabled: false\n    scope: { labels: [ghost] }\n")
+        self.assertEqual(roles.configured_scope_labels(cfg), ["ready"])
+
+    def test_empty_or_garbage_config(self):
+        self.assertEqual(roles.configured_scope_labels({}), [])
+        self.assertEqual(roles.configured_scope_labels(None), [])
+
+    def test_lane_overlaps_still_works_after_shared_helper_refactor(self):
+        # proves the _enabled_label_scopes extraction preserved lane_overlaps.
+        cfg = parse(
+            "lanes:\n  main: {}\n  fe: {}\n"
+            "roles:\n"
+            "  coder:\n    enabled: true\n    scope: { labels: [shared] }\n"
+            "  coder-fe:\n    enabled: true\n    trigger: { type: loop }\n"
+            "    lane: fe\n    scope: { labels: [shared] }\n")
+        overlaps = roles.lane_overlaps(cfg)
+        self.assertTrue(any("shared" in w for w in overlaps))
+
+
+class TestScopeLabelsCli(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.tmp, ".autonomy"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def _write(self, text):
+        with open(os.path.join(self.tmp, ".autonomy", "config.yaml"),
+                  "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    def _run(self, *argv):
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = roles.main(["roles.py"] + list(argv))
+        return rc, buf.getvalue()
+
+    def test_prints_sorted_labels_one_per_line(self):
+        self._write(
+            "roles:\n"
+            "  coder:\n    enabled: true\n    scope: { labels: [ready, bug] }\n")
+        rc, out = self._run("scope-labels", self.tmp)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.split(), ["bug", "ready"])
+
+    def test_no_labels_prints_nothing(self):
+        self._write("roles:\n  coder: { enabled: true }\n")
+        rc, out = self._run("scope-labels", self.tmp)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.strip(), "")
+
+    def test_unreadable_config_returns_rc2(self):
+        rc, _ = self._run("scope-labels", os.path.join(self.tmp, "nope"))
+        self.assertEqual(rc, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

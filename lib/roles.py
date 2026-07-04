@@ -149,6 +149,36 @@ def _scope_labels(cfg):
     return frozenset(str(x).strip() for x in labels if _is_nonempty_str(x))
 
 
+def _enabled_label_scopes(config):
+    """(lane, frozenset(labels)) for every ENABLED executable role (loop/cron/
+    event, any lane) that sets a non-empty scope.labels. The SINGLE source for
+    both lane_overlaps and configured_scope_labels, so the two never diverge on
+    what "an enabled scoped role" means."""
+    roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
+    out = []
+    for lane in lane_names(config):
+        names = list(dispatch_roles(config, lane))
+        names += [n for (n, _s) in cron_roles(config, lane)]
+        names += [n for (n, _e) in event_roles(config, lane)]
+        for name in names:
+            labels = _scope_labels(roles_blk.get(name)
+                                   if isinstance(roles_blk, dict) else None)
+            if labels:
+                out.append((lane, labels))
+    return out
+
+
+def configured_scope_labels(config):
+    """Sorted, de-duplicated union of every scope.label any enabled executable
+    role subscribes to (#171). doctor's label check reads this ONE source to
+    verify each configured label exists on the repo -- a typo'd label silently
+    empties a role's board, so surfacing it is the point. [] when none."""
+    out = set()
+    for _lane, labels in _enabled_label_scopes(config):
+        out |= set(labels)
+    return sorted(out)
+
+
 def lane_overlaps(config):
     """Deterministic WARN strings for executable roles in DIFFERENT lanes whose
     scope.labels intersect -- the label partition is the claim, so overlap
@@ -158,17 +188,7 @@ def lane_overlaps(config):
     every trigger type (loop/cron/event): once per-lane execution lands, a cron
     or event role pinned to a lane acts on that lane's board just as a loop role
     does, so its scope must be partitioned too (deferred PR-#162 NITPICK)."""
-    info = []  # (lane, labelset) per enabled executable role that sets labels
-    roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
-    for lane in lane_names(config):
-        names = list(dispatch_roles(config, lane))
-        names += [n for (n, _s) in cron_roles(config, lane)]
-        names += [n for (n, _e) in event_roles(config, lane)]
-        for name in names:
-            labels = _scope_labels(roles_blk.get(name)
-                                   if isinstance(roles_blk, dict) else None)
-            if labels:
-                info.append((lane, labels))
+    info = _enabled_label_scopes(config)  # (lane, labelset), single source
     warnings = set()
     for i in range(len(info)):
         for j in range(i + 1, len(info)):
@@ -1001,6 +1021,22 @@ def _events_main(argv):
     return 0
 
 
+def _scope_labels_main(argv):
+    """`roles.py scope-labels <target-repo>` -- every scope.label configured by
+    an enabled executable role, sorted, one per line (#171). doctor reads this to
+    warn when a configured label doesn't exist on the repo. No labels / no roles:
+    block -> nothing, rc 0. Unreadable/unparseable config -> the _load_config rc."""
+    if len(argv) != 2:
+        print("usage: roles.py scope-labels <target-repo>", file=sys.stderr)
+        return 2
+    config, rc = _load_config(argv[1])
+    if rc:
+        return rc
+    for label in configured_scope_labels(config):
+        print(label)
+    return 0
+
+
 def _knob_notes_main(argv):
     """`roles.py knob-notes <target-repo> [role]` -- one honest NOTE line per
     knob a role sets but the engine does not (yet) consume (#149). With a role,
@@ -1104,6 +1140,8 @@ def _lane_report_main(argv):
 def main(argv):
     if len(argv) >= 2 and argv[1] == "knob-notes":
         return _knob_notes_main(argv[1:])
+    if len(argv) >= 2 and argv[1] == "scope-labels":
+        return _scope_labels_main(argv[1:])
     if len(argv) >= 2 and argv[1] == "default-lane":
         return _default_lane_main(argv[1:])
     if len(argv) >= 2 and argv[1] == "lanes":
