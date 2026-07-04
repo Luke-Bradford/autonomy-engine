@@ -6,86 +6,94 @@
 <meta name="ae-control-token" content="__CONTROL_TOKEN__">
 <title>Autonomy · control room</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23141418'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%235b9dff'/%3E%3C/svg%3E">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
+/* UI-1 (#184): control-room skin + shell. Tokens per the operator-approved
+   redesign spec (docs/superpowers/specs/2026-07-03-control-room-redesign-design.md
+   §Design tokens). No webfont gamble -- Avenir Next / SF Mono are macOS-present.
+   Healthy org looks boring: color only on abnormal state, no grid texture, no
+   accent stripes. Existing component CSS keeps its variable NAMES; only the
+   values are re-pointed, so the render markup is unchanged. */
 :root{
-  --sans:'Schibsted Grotesk',system-ui,sans-serif;
-  --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
-  --r:8px;
+  --sans:"Avenir Next","Helvetica Neue",system-ui,sans-serif;
+  --mono:"SF Mono",Menlo,ui-monospace,monospace;
+  --r:6px;
 }
 :root[data-theme="dark"]{
-  --bg:#0a0a0c; --bg-soft:#0d0d10; --panel:#141418; --panel2:#1a1a20;
-  --hair:#242429; --hair2:#30303a; --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
-  --ink:#ebebee; --mut:#9a9aa6; --dim:#63636e;
-  --accent:#6ea3ff; --accent-soft:rgba(110,163,255,.14);
-  --ok:#57cb8b; --ok-dim:#4a8666; --warn:#e6ac52; --bad:#e86f64; --info:#6ea3ff;
-  --ok-glow:rgba(87,203,139,.4); --warn-glow:rgba(230,172,82,.35); --bad-glow:rgba(232,111,100,.35);
-  --grid:rgba(255,255,255,.018);
+  --bg:#15181d; --bg-soft:#101318; --panel:#1c2027; --panel2:#20252d;
+  --hair:#2a2f38; --hair2:#333a45; --shadow:0 8px 24px -14px rgba(0,0,0,.6);
+  --ink:#e8eaed; --mut:#98a0ab; --dim:#6b7380;
+  --accent:#4c9ee3; --accent-soft:rgba(76,158,227,.14);
+  --ok:#3fb27f; --ok-dim:#2f8560; --warn:#d9a13b; --bad:#d95757; --info:#4c9ee3;
+  --ok-glow:rgba(63,178,127,.4); --warn-glow:rgba(217,161,59,.35); --bad-glow:rgba(217,87,87,.35);
+  --grid:transparent;
 }
 :root[data-theme="light"]{
-  --bg:#f5f5f2; --bg-soft:#efefeb; --panel:#ffffff; --panel2:#faf9f6;
-  --hair:#e7e6e1; --hair2:#d7d6d0; --shadow:0 1px 2px rgba(30,30,30,.05),0 10px 30px -18px rgba(30,30,30,.25);
-  --ink:#1a1a1e; --mut:#5a5a63; --dim:#9a9aa2;
-  --accent:#2f6fe0; --accent-soft:rgba(47,111,224,.09);
-  --ok:#2c9c60; --ok-dim:#5a8a70; --warn:#bd7d13; --bad:#d24339; --info:#2f6fe0;
-  --ok-glow:rgba(44,156,96,.3); --warn-glow:rgba(189,125,19,.3); --bad-glow:rgba(210,67,57,.3);
-  --grid:rgba(20,20,20,.02);
+  --bg:#f4f5f7; --bg-soft:#eceef1; --panel:#ffffff; --panel2:#f6f7f9;
+  --hair:#e2e4e8; --hair2:#d0d3d9; --shadow:0 8px 24px -18px rgba(30,30,30,.3);
+  --ink:#1b1e24; --mut:#5b626c; --dim:#9aa0aa;
+  --accent:#2f7fc9; --accent-soft:rgba(47,127,201,.10);
+  --ok:#2c9c60; --ok-dim:#5a8a70; --warn:#b9791a; --bad:#cf4b45; --info:#2f7fc9;
+  --ok-glow:rgba(44,156,96,.3); --warn-glow:rgba(185,121,26,.3); --bad-glow:rgba(207,75,69,.3);
+  --grid:transparent;
 }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
 body{
   background:var(--bg); color:var(--ink); font-family:var(--sans); font-size:13.5px; line-height:1.5;
-  -webkit-font-smoothing:antialiased;
-  background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
-  background-size:56px 56px;
+  -webkit-font-smoothing:antialiased; height:100vh; display:flex; flex-direction:column; overflow:hidden;
 }
 .mono{font-family:var(--mono)}
 .num{font-variant-numeric:tabular-nums}
-.wrap{max-width:1640px;margin:0 auto;padding:0 26px 70px}
 a{color:var(--accent);text-decoration:none}
 a:hover{text-decoration:underline}
+@keyframes pulse{0%{box-shadow:0 0 0 0 var(--ok-glow)}70%{box-shadow:0 0 0 6px transparent}100%{box-shadow:0 0 0 0 transparent}}
 
-/* header */
-header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px;padding:18px 4px 14px;
-  border-bottom:1px solid var(--hair);background:linear-gradient(var(--bg) 70%,transparent)}
-.brand{display:flex;align-items:baseline;gap:9px;font-weight:600;font-size:18px;letter-spacing:-.2px}
-.brand .mk{display:inline-flex;width:22px;height:22px;border-radius:6px;background:var(--panel2);border:1px solid var(--hair2);align-items:center;justify-content:center;transform:translateY(3px)}
-.brand .mk i{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px 1px var(--accent-soft)}
-.brand small{color:var(--mut);font-weight:400}
-.ro{font-family:var(--mono);font-size:9.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--dim);
+/* ---------- top bar (icons over labels) ---------- */
+.top{display:flex;align-items:center;gap:14px;height:46px;flex:none;padding:0 18px;
+  border-bottom:1px solid var(--hair);background:var(--panel)}
+.brand{display:flex;align-items:baseline;gap:6px;font-weight:600;font-size:14px;letter-spacing:.02em}
+.brand .mk{display:inline-flex;width:8px;height:8px;border-radius:50%;background:var(--accent);flex:none;transform:translateY(-1px)}
+.brand small{color:var(--mut);font-weight:400;font-size:12.5px}
+.ro{font-family:var(--mono);font-size:9px;letter-spacing:1.4px;text-transform:uppercase;color:var(--dim);
   border:1px solid var(--hair2);border-radius:4px;padding:2px 7px}
 .hgap{flex:1}
-.hstat{display:flex;align-items:center;gap:20px;font-size:12px;color:var(--mut)}
+.hstat{display:flex;align-items:center;gap:16px;font-size:11.5px;color:var(--mut)}
+.hstat .kv{display:flex;align-items:baseline;gap:5px}
 .hstat .b{color:var(--ink);font-weight:600}
-.hstat .lab{display:block;font-size:9px;letter-spacing:1.4px;text-transform:uppercase;color:var(--dim);margin-bottom:1px}
-.live{display:inline-flex;align-items:center;gap:7px;font-weight:500;color:var(--ok)}
+.hstat .lab{font-size:11.5px;color:var(--mut)}
+.live{display:inline-flex;align-items:center;gap:7px;font-weight:500;color:var(--ok);font-size:11.5px}
 .live i{width:7px;height:7px;border-radius:50%;background:var(--ok);animation:pulse 2.4s infinite}
 .live.stale{color:var(--warn)} .live.stale i{background:var(--warn);animation:none}
-@keyframes pulse{0%{box-shadow:0 0 0 0 var(--ok-glow)}70%{box-shadow:0 0 0 6px transparent}100%{box-shadow:0 0 0 0 transparent}}
-.ttoggle{display:inline-flex;border:1px solid var(--hair2);border-radius:6px;overflow:hidden}
-.ttoggle button{background:transparent;border:0;color:var(--dim);font-family:var(--mono);font-size:11px;padding:6px 9px;cursor:pointer;line-height:1}
-.ttoggle button.on{background:var(--panel2);color:var(--ink)}
-.navlink{font-family:var(--mono);font-size:11px;color:var(--mut);border:1px solid var(--hair2);border-radius:6px;padding:6px 10px;text-decoration:none}
-.navlink:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
+.ibtn{width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border-radius:6px;
+  color:var(--mut);border:0;background:none;cursor:pointer;flex:none;text-decoration:none;position:relative}
+.ibtn:hover{background:var(--panel2);color:var(--ink)}
+.ibtn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.ibtn .tglyph{font-family:var(--mono);font-size:12px}
+button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
 /* #166: engine "update available -- restart to apply" chip (informational, not an error) */
 .updchip{font-family:var(--mono);font-size:11px;color:var(--warn);border:1px solid var(--warn);
-  border-radius:6px;padding:6px 10px;white-space:nowrap;cursor:default}
+  border-radius:99px;padding:2px 9px;white-space:nowrap;cursor:default}
 .updchip[hidden]{display:none}
+.navlink{font-family:var(--mono);font-size:11px;color:var(--accent);border:1px solid var(--hair2);border-radius:6px;padding:4px 9px;text-decoration:none;white-space:nowrap}
+.navlink:hover{border-color:var(--accent);text-decoration:none}
+
+/* ---------- three-zone shell (full viewport, zones scroll internally) ---------- */
+.shell{flex:1;min-height:0;display:grid;grid-template-columns:330px minmax(0,1fr) 324px;gap:1px;background:var(--hair)}
+.col{background:var(--bg);overflow-y:auto;min-width:0;padding-bottom:16px}
+@media(max-width:1200px){
+  .shell{grid-template-columns:300px minmax(0,1fr);}
+  .zone-tele{display:none}
+}
 
 /* section heading */
-.sh{display:flex;align-items:center;gap:10px;margin:24px 2px 12px}
-.sh h2{margin:0;font-size:12px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;color:var(--mut)}
+.sh{display:flex;align-items:center;gap:10px;margin:16px 14px 10px}
+.sh h2{margin:0;font-size:11px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:var(--mut)}
 .sh .ln{flex:1;height:1px;background:var(--hair)}
 .sh .ct{font-family:var(--mono);font-size:10.5px;color:var(--dim)}
 
-/* focus band */
-.focus{display:grid;grid-template-columns:repeat(auto-fill,minmax(410px,1fr));gap:14px}
-.fcard{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);padding:15px 16px;box-shadow:var(--shadow);position:relative;overflow:hidden}
-.fcard::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--edge,var(--dim))}
-.fcard.working{--edge:var(--ok)} .fcard.idle{--edge:var(--dim)} .fcard.paused{--edge:var(--warn)} .fcard.stopping{--edge:var(--warn)}
-.fcard.stopped{--edge:var(--dim)} .fcard.error{--edge:var(--bad)} .fcard.needs-setup{--edge:var(--bad)}
+/* focus band -- no accent side stripe (killed per spec); state lives in the dot */
+.focus{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px;padding:0 12px}
+.fcard{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);padding:14px 15px;position:relative;overflow:hidden}
 .fc-top{display:flex;align-items:center;gap:10px;margin-bottom:11px}
 .fc-name{font-weight:600;font-size:15px}
 .fc-role{font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--mut);border:1px solid var(--hair2);border-radius:4px;padding:1px 6px}
@@ -153,11 +161,8 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px
 .s-error{--sc:var(--bad)} .s-done{--sc:var(--ok-dim)} .s-needs-setup{--sc:var(--bad)} .s-missing{--sc:var(--dim)}
 .s-configured{--sc:var(--info)} .s-disabled{--sc:var(--dim)} .s-not-configured{--sc:var(--dim)}
 
-/* grid */
-.grid{display:grid;grid-template-columns:300px minmax(0,1fr) 360px;gap:22px;align-items:start}
-@media(max-width:1300px){.grid{grid-template-columns:1fr}}
-.col{display:flex;flex-direction:column;gap:24px}
-.panel{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+/* panels sit inside a scrolling zone, aligned to the section headings' inset */
+.panel{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);overflow:hidden;margin:0 12px}
 .p-h{display:flex;align-items:center;gap:8px;padding:12px 14px 11px;border-bottom:1px solid var(--hair)}
 .p-h h3{margin:0;font-size:12px;font-weight:600;letter-spacing:.3px}
 .p-h .sub{font-size:10.5px;color:var(--dim);font-weight:400}
@@ -258,85 +263,71 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
 .c-pending,.c-review_required{--cc:var(--warn)} .c-none{--cc:var(--dim)}
 .subs.b-engine{color:var(--ok-dim)} .subs.b-managed_agents{color:var(--info)} .subs.b-routine{color:var(--warn)} .subs.b-actions{color:var(--mut)}
 
-.foot{margin-top:34px;padding-top:14px;border-top:1px solid var(--hair);display:flex;gap:20px;font-family:var(--mono);font-size:10px;color:var(--dim)}
 ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:var(--hair2);border-radius:5px}::-webkit-scrollbar-track{background:transparent}
 @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .rise{animation:rise .45s cubic-bezier(.2,.7,.2,1) both}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <div class="brand"><span class="mk"><i></i></span>Autonomy <small>control room</small></div>
+  <div class="top">
+    <span class="brand"><span class="mk"></span>Autonomy<small>control room</small></span>
     <span class="ro">lifecycle · p2</span>
+    <span class="updchip" id="h-update" hidden></span>
     <div class="hgap"></div>
     <div class="hstat">
-      <div><span class="lab">repos</span><span class="b" id="h-repos">—</span></div>
-      <div><span class="lab">working</span><span class="b" id="h-active">—</span></div>
-      <div><span class="lab">updated</span><span class="b mono" id="h-fresh">—</span></div>
-      <div><span class="lab">utc</span><span class="b mono" id="h-clock">—</span></div>
+      <span class="kv"><span class="b" id="h-repos">—</span><span class="lab">repos</span></span>
+      <span class="kv"><span class="b" id="h-active">—</span><span class="lab">working</span></span>
+      <span class="kv"><span class="lab">upd</span><span class="b mono" id="h-fresh">—</span></span>
+      <span class="kv"><span class="b mono" id="h-clock">—</span><span class="lab">utc</span></span>
       <div class="live" id="h-live"><i></i><span id="h-live-t">connecting</span></div>
-      <span class="updchip" id="h-update" hidden></span>
-      <a class="navlink" href="/config">⚙ config</a>
-      <div class="ttoggle"><button id="th-d" onclick="setTheme('dark')">dark</button><button id="th-l" onclick="setTheme('light')">light</button></div>
     </div>
-  </header>
+    <button class="ibtn" id="th-cycle" onclick="cycleTheme()" title="Theme: dark / light / system"><span class="tglyph">☾</span></button>
+    <a class="ibtn" href="/config" title="Config"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></a>
+  </div>
 
-  <div class="sh"><h2>Now</h2><span class="ln"></span><span class="ct" id="c-now"></span></div>
-  <div class="focus" id="focus"></div>
-
-  <div class="sh"><h2>Recent sessions</h2><span class="ln"></span><span class="ct">last 10 per repo · role · outcome</span></div>
-  <div id="history"></div>
-
-  <div class="grid" style="margin-top:6px">
-    <div class="col">
-      <div>
-        <div class="sh"><h2>Repos &amp; roles</h2><span class="ln"></span></div>
-        <div class="panel" id="repos"></div>
-      </div>
-      <div>
-        <div class="sh"><h2>Account quota</h2><span class="ln"></span><span class="ct">shared · all repos</span></div>
-        <div class="panel" id="quota"></div>
-      </div>
+  <div class="shell">
+    <!-- LEFT: fleet (repos -> roles) -->
+    <div class="col zone-fleet">
+      <div class="sh"><h2>Repos &amp; roles</h2><span class="ln"></span></div>
+      <div class="panel" id="repos"></div>
     </div>
 
-    <div class="col">
-      <div>
-        <div class="sh"><h2>Activity</h2><span class="ln"></span>
-          <div class="tabs">
-            <button class="tab on" id="v-tree" onclick="setView('tree')">tree</button>
-            <button class="tab" id="v-time" onclick="setView('time')">timeline</button>
-            <button class="tab" id="v-flat" onclick="setView('flat')">tally</button>
-          </div>
+    <!-- CENTER: work (now / recent / activity) -->
+    <div class="col zone-work">
+      <div class="sh"><h2>Now</h2><span class="ln"></span><span class="ct" id="c-now"></span></div>
+      <div class="focus" id="focus"></div>
+
+      <div class="sh"><h2>Recent sessions</h2><span class="ln"></span><span class="ct">last 10 per repo · role · outcome</span></div>
+      <div id="history" style="padding:0 12px"></div>
+
+      <div class="sh"><h2>Activity</h2><span class="ln"></span>
+        <div class="tabs">
+          <button class="tab on" id="v-tree" onclick="setView('tree')">tree</button>
+          <button class="tab" id="v-time" onclick="setView('time')">timeline</button>
+          <button class="tab" id="v-flat" onclick="setView('flat')">tally</button>
         </div>
-        <div class="panel" id="activity"></div>
       </div>
+      <div class="panel" id="activity"></div>
     </div>
 
-    <div class="col">
-      <div>
-        <div class="sh"><h2>Throughput</h2><span class="ln"></span><span class="ct">output tok/min</span></div>
-        <div class="panel" id="tp"></div>
-      </div>
-      <div>
-        <div class="sh"><h2>Handoffs</h2><span class="ln"></span></div>
-        <div class="panel"><div class="p-h" style="border-bottom:1px solid var(--hair)"><span class="sub">the org's choreography — cron fires &amp; event wakes handing work to a role</span></div><div class="hfeed" id="handoffs"></div></div>
-      </div>
-      <div>
-        <div class="sh"><h2>Supervisor voice</h2><span class="ln"></span></div>
-        <div class="panel"><div class="p-h" style="border-bottom:1px solid var(--hair)"><span class="sub">the loop's own decisions — pacing, backoff, usage limits (not the agent's work)</span></div><div class="voice" id="voice"></div></div>
-      </div>
-      <div>
-        <div class="sh"><h2>Git in flight</h2><span class="ln"></span><span class="ct" id="c-prs"></span></div>
-        <div class="panel" id="git"></div>
-      </div>
+    <!-- RIGHT: telemetry + org -->
+    <div class="col zone-tele">
+      <div class="sh"><h2>Throughput</h2><span class="ln"></span><span class="ct">output tok/min</span></div>
+      <div class="panel" id="tp"></div>
+
+      <div class="sh"><h2>Account quota</h2><span class="ln"></span><span class="ct">shared · all repos</span></div>
+      <div class="panel" id="quota"></div>
+
+      <div class="sh"><h2>Handoffs</h2><span class="ln"></span></div>
+      <div class="panel"><div class="p-h" style="border-bottom:1px solid var(--hair)"><span class="sub">the org's choreography — cron fires &amp; event wakes handing work to a role</span></div><div class="hfeed" id="handoffs"></div></div>
+
+      <div class="sh"><h2>Supervisor voice</h2><span class="ln"></span></div>
+      <div class="panel"><div class="p-h" style="border-bottom:1px solid var(--hair)"><span class="sub">the loop's own decisions — pacing, backoff, usage limits (not the agent's work)</span></div><div class="voice" id="voice"></div></div>
+
+      <div class="sh"><h2>Git in flight</h2><span class="ln"></span><span class="ct" id="c-prs"></span></div>
+      <div class="panel" id="git"></div>
     </div>
   </div>
-
-  <div class="foot">
-    <span>autonomy-engine · control-room</span><span>localhost-only · lifecycle controls</span><span id="f-gen">—</span>
-  </div>
-</div>
 <div id="toast"></div>
 
 <script>
@@ -356,10 +347,24 @@ function dur(sec){sec=Math.max(0,Math.floor(sec));const h=(sec/3600)|0;sec-=h*36
 function ago(sec){sec=Math.max(0,Math.floor(sec));if(sec<60)return sec+"s";const m=(sec/60)|0;if(m<60)return m+"m";return((m/60)|0)+"h";}
 function nowS(){return Date.now()/1000;}
 
-/* theme */
-function setTheme(t){document.documentElement.setAttribute("data-theme",t);try{localStorage.setItem("ae-theme",t);}catch(e){}
-  $("th-d").classList.toggle("on",t==="dark");$("th-l").classList.toggle("on",t==="light");}
-setTheme((function(){try{return localStorage.getItem("ae-theme")||"dark";}catch(e){return "dark";}})());
+/* theme -- icon cycles dark / light / system. The STORED choice may be
+   "system"; the applied data-theme is always the resolved dark|light, following
+   the OS when in system mode (matchMedia, live). */
+const THEMES=["dark","light","system"], THEME_GLYPH={dark:"☾",light:"☀",system:"⌥"};
+let THEME="dark";
+const _mq=window.matchMedia?matchMedia("(prefers-color-scheme: light)"):null;
+function _effTheme(t){return t==="system"?((_mq&&_mq.matches)?"light":"dark"):t;}
+function applyTheme(t){
+  if(THEMES.indexOf(t)<0)t="dark";
+  THEME=t;
+  document.documentElement.setAttribute("data-theme",_effTheme(t));
+  try{localStorage.setItem("ae-theme",t);}catch(e){}
+  const b=$("th-cycle"); if(b){const g=b.querySelector(".tglyph"); if(g)g.textContent=THEME_GLYPH[t];
+    b.title="Theme: "+t+" — click to cycle dark / light / system";}
+}
+function cycleTheme(){applyTheme(THEMES[(THEMES.indexOf(THEME)+1)%THEMES.length]);}
+applyTheme((function(){try{return localStorage.getItem("ae-theme")||"dark";}catch(e){return "dark";}})());
+if(_mq){try{_mq.addEventListener("change",()=>{if(THEME==="system")document.documentElement.setAttribute("data-theme",_effTheme("system"));});}catch(e){}}
 
 /* status: the server computes display_status ONCE (dashboard_state.display_status,
    #23) -- the page only reads it, never re-derives lifecycle x activity. */
@@ -839,8 +844,7 @@ function renderEngineUpdate(e){
 }
 function render(s){LAST=s;GEN=s.generated_at||Math.floor(nowS());
   renderFocus(s.repos);renderHistory(s.repos);renderRepos(s.repos);renderQuota(s.repos,s.account);renderActivity(s.repos);
-  renderThroughput(s.repos);renderHandoffs(s.repos);renderVoice(s.repos);renderGit(s.repos);renderEngineUpdate(s.engine);
-  $("f-gen").textContent="snapshot "+new Date(GEN*1000).toISOString().slice(11,19)+"Z";}
+  renderThroughput(s.repos);renderHandoffs(s.repos);renderVoice(s.repos);renderGit(s.repos);renderEngineUpdate(s.engine);}
 function setLive(ok){$("h-live").classList.toggle("stale",!ok);$("h-live-t").textContent=ok?"live":"reconnecting";}
 function connect(){let es;try{es=new EventSource("/api/stream");}catch(e){poll();return;}
   es.onopen=()=>setLive(true);es.onmessage=e=>{try{render(JSON.parse(e.data));setLive(true);}catch(_){}}; es.onerror=()=>setLive(false);}
