@@ -39,6 +39,12 @@ python3 -m unittest tests.test_dashboard_registry_refuse -v || fail=1
 echo "=== python: test_concierge ==="
 python3 -m unittest tests.test_concierge -v || fail=1
 
+echo "=== python: test_claude_usage ==="
+python3 -m unittest tests.test_claude_usage -v || fail=1
+
+echo "=== python: test_quota ==="
+python3 -m unittest tests.test_quota -v || fail=1
+
 echo "=== python: test_console ==="
 python3 -m unittest tests.test_console -v || fail=1
 
