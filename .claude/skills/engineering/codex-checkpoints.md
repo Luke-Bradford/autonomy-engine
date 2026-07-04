@@ -6,6 +6,21 @@ Codex second-opinion runs at exactly three points in the workflow
 Invocation: `codex exec "<prompt>"` — always the non-interactive `exec`
 subcommand, never bare `codex` (needs a terminal).
 
+**Hang watchdog (operator feedback 2026-07-04 — recurring):** `codex exec` can
+hang indefinitely producing ZERO output (two hangs in one evening: 40 min and
+8 min, empty output both times). Never wait open-ended:
+
+- Run it FOREGROUND with a hard timeout (~4 min covers a diff review). If the
+  call gets backgrounded, its timeout no longer applies — poll the output
+  file on a bounded timer instead of blocking until notified; ~4 min of an
+  empty file = hung.
+- On a hang: kill the whole chain (`zsh → node codex → codex` binary), retry
+  ONCE with a shorter prompt. A second hang = codex is down for the night.
+- Two hangs at checkpoint 2: PROCEED with the push and document the deviation
+  in the PR (attempt timestamps + "post-hoc CP2 when codex recovers"), then
+  actually run it retroactively. A broken tool must not become an indefinite
+  gate-block — but the deviation is recorded, never silent.
+
 ## Checkpoint 1 — before writing code (two passes)
 
 - **After the spec/plan is written, before execution starts:**
