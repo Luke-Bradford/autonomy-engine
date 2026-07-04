@@ -1890,6 +1890,64 @@ class TestQuotaForecast(unittest.TestCase):
         self.assertIsInstance(st["quota_forecast"], dict)
 
 
+class TestAttachQuotaForecast(unittest.TestCase):
+    """attach_quota_forecast (#188b render seam): threads each window's burn-rate
+    forecast onto the window dict itself, so the quota card -- which renders ONE
+    selected window (the live account window or the log-scan max across repos) --
+    carries the matching forecast by construction instead of pairing two
+    separately-keyed structures at render time (the source-correspondence trap).
+    Non-mutating (the live windows come from a shared usage cache) and total
+    (best-effort, never raises; degrade-to-truth on omission)."""
+
+    NOW = 1000000
+
+    def _win(self, util, resets_at, wtype="five_hour"):
+        return {wtype: {"utilization": util, "resets_at": resets_at, "overage": False}}
+
+    def test_forecast_attached_onto_window(self):
+        w = self._win(0.75, self.NOW + 9000)
+        out = ds.attach_quota_forecast(w, self.NOW)
+        self.assertEqual(out["five_hour"]["forecast"],
+                         ds.quota_forecast(w, self.NOW)["five_hour"])
+
+    def test_input_not_mutated(self):
+        # the live windows are a shared cache dict (cu.live_quota) -- attach must
+        # never write back into the caller's structure.
+        w = self._win(0.75, self.NOW + 9000)
+        ds.attach_quota_forecast(w, self.NOW)
+        self.assertNotIn("forecast", w["five_hour"])
+
+    def test_omitted_window_gets_no_forecast_key(self):
+        # zero burn -> quota_forecast omits it -> no fabricated projection.
+        out = ds.attach_quota_forecast(self._win(0.0, self.NOW + 9000), self.NOW)
+        self.assertNotIn("forecast", out["five_hour"])
+
+    def test_stale_forecast_dropped_when_not_recomputed(self):
+        # an input window carrying a stale forecast whose fresh forecast is now
+        # omitted must LOSE it (degrade-to-truth, never fail-open on a mismatch).
+        w = self._win(0.0, self.NOW + 9000)
+        w["five_hour"]["forecast"] = {"projected_exhaust_epoch": 42}
+        out = ds.attach_quota_forecast(w, self.NOW)
+        self.assertNotIn("forecast", out["five_hour"])
+
+    def test_non_window_keys_passthrough(self):
+        w = self._win(0.75, self.NOW + 9000)
+        w["source"] = "live"   # live_quota carries a non-dict 'source' string
+        out = ds.attach_quota_forecast(w, self.NOW)
+        self.assertEqual(out["source"], "live")
+
+    def test_non_mapping_passthrough(self):
+        self.assertIsNone(ds.attach_quota_forecast(None, self.NOW))
+        self.assertEqual(ds.attach_quota_forecast([], self.NOW), [])
+
+    def test_build_repo_state_quota_windows_carry_forecast(self):
+        # the two build-site paths agree: every window the top-level forecast
+        # covers carries that same forecast on the displayed `quota` window.
+        st = ds.build_repo_state(FIX, git_in_flight=lambda p: {}, now=self.NOW)
+        for wt, f in st["quota_forecast"].items():
+            self.assertEqual(st["quota"][wt].get("forecast"), f)
+
+
 class TestTriggerHealth(unittest.TestCase):
     """trigger_health (#188c): missed-fire detection for the control room's
     trigger-health signal. Compares each cron role's persisted last_fire

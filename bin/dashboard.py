@@ -748,7 +748,11 @@ def _account_usage():
     # does the I/O), so /api/state never blocks. None => the page falls back to
     # the log-scan windows and shows a 'logs (stale)' source badge.
     try:
-        usage["claude"] = cu.live_quota()
+        # #188b: thread each live window's burn-rate forecast onto the window so
+        # the quota card's selected window carries it (attach_quota_forecast is
+        # non-mutating -- cu.live_quota() returns a SHARED cache dict). None (cold
+        # cache) passes through unchanged -> the log-scan fallback still applies.
+        usage["claude"] = ds.attach_quota_forecast(cu.live_quota(), now)
     except Exception:
         usage["claude"] = None
     with _acct_lock:

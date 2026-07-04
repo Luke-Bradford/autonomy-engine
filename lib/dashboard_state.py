@@ -1494,6 +1494,41 @@ def quota_forecast(windows, now):
     return out
 
 
+def attach_quota_forecast(windows, now):
+    """Thread each window's burn-rate forecast (#188b) onto the window dict, so
+    the quota card -- which renders a SINGLE selected window (the live account
+    window or the log-scan max across repos) -- carries the matching forecast by
+    construction, closing the source-correspondence trap (the top-level
+    `quota_forecast` is keyed by window type, but the DISPLAYED window is chosen
+    dynamically at render time). Returns a NEW dict with a shallow copy of each
+    dict window -- never mutates the input, because the live windows come from a
+    shared usage cache (bin/dashboard.py:_account_usage -> cu.live_quota()).
+
+    Total/best-effort like its `quota_forecast` sibling (prevention-log #12): a
+    non-mapping passes through unchanged and a `quota_forecast` raise degrades to
+    no forecasts. Degrade-to-truth: a window `quota_forecast` omits (no honest
+    forecast) gains NO `forecast` key, and any pre-existing `forecast` on a window
+    that is no longer forecast is DROPPED -- never a stale/fabricated projection.
+    Non-window keys (e.g. live_quota's `source` string) pass through untouched."""
+    if not isinstance(windows, dict):
+        return windows
+    try:
+        fc = quota_forecast(windows, now)
+    except Exception:
+        fc = {}
+    out = {}
+    for key, win in windows.items():
+        if isinstance(win, dict):
+            enriched = dict(win)
+            enriched.pop("forecast", None)          # drop any stale forecast...
+            if key in fc:
+                enriched["forecast"] = fc[key]      # ...replace only when recomputed
+            out[key] = enriched
+        else:
+            out[key] = win
+    return out
+
+
 def trigger_health(config, cron_dir, now, grace_secs=300):
     """Missed cron-fire detection (#188c) for the control room's trigger-health
     signal -- the 2026-07-03 swept-state incident named the real gap: a
@@ -1696,7 +1731,11 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         # Reading "merge_gate.strategy" here would return None -> always manual.
         "merge_gate_chain": merge_gate_chain(config.get("merge_gate")),
         "override": read_model_override(os.path.join(logdir, "model-override")),
-        "quota": quota,
+        # #188b: each displayed window carries its own burn-rate forecast, so the
+        # quota card's dynamically-selected window pairs with the right forecast
+        # by construction (see attach_quota_forecast). The top-level key below
+        # stays for back-compat consumers keyed by window type.
+        "quota": attach_quota_forecast(quota, now),
         "sessions": sessions,
         # #186 lane detail: total effort spent on the ticket the focus card
         # shows (the live/most-recent session's worked issue), summed across
