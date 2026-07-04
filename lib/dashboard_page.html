@@ -82,10 +82,18 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .navlink:hover{border-color:var(--accent);text-decoration:none}
 
 /* ---------- three-zone shell (full viewport, zones scroll internally) ---------- */
-.shell{flex:1;min-height:0;display:grid;grid-template-columns:330px minmax(0,1fr) 324px;gap:1px;background:var(--hair)}
+.shell{flex:1;min-height:0;display:grid;grid-template-columns:400px minmax(0,1fr) 324px;gap:1px;background:var(--hair)}
 .col{background:var(--bg);overflow-y:auto;min-width:0;padding-bottom:16px}
+/* #256: >=1760px the right zone doubles into two independently-scrolling
+   sub-columns (telemetry | org) so no panel hides below the fold; the page
+   itself still never scrolls */
+@media(min-width:1760px){
+  .shell{grid-template-columns:400px minmax(0,1fr) 649px}
+  .zone-tele{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:minmax(0,1fr);column-gap:1px;background:var(--hair);overflow:hidden;padding-bottom:0}
+  .rsub{background:var(--bg);overflow-y:auto;min-width:0;padding-bottom:16px}
+}
 @media(max-width:1200px){
-  .shell{grid-template-columns:300px minmax(0,1fr);}
+  .shell{grid-template-columns:330px minmax(0,1fr);}
   .zone-tele{display:none}
 }
 
@@ -331,14 +339,20 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
       <div class="panel" id="activity"></div>
     </div>
 
-    <!-- RIGHT: telemetry + org -->
+    <!-- RIGHT: telemetry + org — two sub-columns on wide viewports (#256) -->
     <div class="col zone-tele">
+      <div class="rsub">
       <div class="sh"><h2>Tokens</h2><span class="ln"></span><span class="ct">output over time</span></div>
       <div class="panel" id="tp"></div>
 
       <div class="sh"><h2>Account quota</h2><span class="ln"></span><span class="ct">shared · all repos</span></div>
       <div class="panel" id="quota"></div>
 
+      <div class="sh"><h2>Git in flight</h2><span class="ln"></span><span class="ct" id="c-prs"></span></div>
+      <div class="panel" id="git"></div>
+      </div>
+
+      <div class="rsub">
       <div class="sh"><h2>Handoffs</h2><span class="ln"></span></div>
       <div class="panel"><div class="p-h" style="border-bottom:1px solid var(--hair)"><span class="sub">the org's choreography — cron fires &amp; event wakes handing work to a role</span></div><div class="hfeed" id="handoffs"></div></div>
 
@@ -347,9 +361,7 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
 
       <div class="sh"><h2>Supervisor voice</h2><span class="ln"></span></div>
       <div class="panel"><div class="p-h" style="border-bottom:1px solid var(--hair)"><span class="sub">the loop's own decisions — pacing, backoff, usage limits (not the agent's work)</span></div><div class="voice" id="voice"></div></div>
-
-      <div class="sh"><h2>Git in flight</h2><span class="ln"></span><span class="ct" id="c-prs"></span></div>
-      <div class="panel" id="git"></div>
+      </div>
     </div>
   </div>
 <div id="toast"></div>
