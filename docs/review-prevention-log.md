@@ -207,3 +207,29 @@ recurring tick needs a skip-unchanged guard, not an unconditional
 text-node ticks or it cries wolf.** The read-only QA rail can't run a browser, so
 it carries the *static* twin (qa.md UX check): flag the unconditional-per-tick
 `innerHTML` pattern in review.
+
+## 14. A skip-unchanged panel guard must own EVERY write path — an out-of-band `innerHTML` desyncs its signature cache
+
+*Origin: #248 renderFocus slice; Codex checkpoint 2 caught the empty-state path.*
+Once a panel render is gated by a signature cache (`_sig[id]` in `setHTML`, the
+#248 skip-unchanged guard), the cache only tells the truth if EVERY mutation of
+that panel's DOM goes through the guard — or re-syncs it. `renderFocus` has four
+write paths: empty-state, idle full-write, repo-set-changed full-write, and the
+held-node partial `replaceWith` (which keeps the focused card's live node and
+swaps the others in place, a DOM mutation *outside* `setHTML`). Two traps this
+exposed: (a) the held partial-update leaves `_sig.focus` keyed to the PRE-update
+markup, so a state-change-during-interaction that then reverts lets the next idle
+`setHTML` match the stale key and SKIP — freezing the swapped cards; fix is to
+re-derive `_sig.focus` from the ACTUAL DOM (`_sig["focus"]=_sigKey(box.innerHTML)`)
+after the partial write. (b) the empty-state early-return wrote `innerHTML`
+directly, leaving `_sig.focus` on old card markup — a transient empty→repopulate
+with identical markup would then wrongly skip and stick on the empty state; fix
+is to route it through `setHTML` too. **Rule: a signature-cached render must have
+NO write path that bypasses the guard; any unavoidable out-of-band DOM mutation
+(a `replaceWith` that preserves a live node) must re-sync the signature to the
+real DOM immediately after. Also: normalize ALL volatile ticker cells the render
+emits — the guard's `_volRe` had to add `upe` (the busy card's live elapsed
+counter) alongside `qreset`/`agox`, or a working repo's key changes every second
+and the guard never skips.** Verified via the #239 temporal pass (focus idle
+rebuilds 0) plus an in-browser interaction driver (focus survives a tick;
+change-then-revert leaves no stale card; empty→repopulate restores cards).
