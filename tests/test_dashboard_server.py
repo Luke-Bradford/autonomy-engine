@@ -1068,6 +1068,14 @@ class TestCenterCleanupSlice4(unittest.TestCase):
         self.assertNotIn(b"auto-fill", html,
                          "dead pre-2b multi-card .focus grid (auto-fill) still present")
 
+    def test_focus_is_a_plain_block_container(self):
+        # CP2: assert the exact replacement rule, not merely the absence of
+        # auto-fill -- a different grid (auto-fit / fixed columns) would otherwise
+        # slip through and re-cap the single lane card.
+        html = self._page()
+        self.assertIn(b".focus{padding:0 12px}", html,
+                      "the .focus rule is not the expected plain block container")
+
 
 class TestLaneHistoryPopover(unittest.TestCase):
     """#258 slice 3b: the inline "Recent sessions" center section moves behind a
