@@ -46,9 +46,15 @@ colored thing on screen.
 
 | zone | altitude | contents |
 | --- | --- | --- |
-| left rail (330px) | **fleet** | repo cards → lane rows (status dot, ticket, ago, icon cluster: pin/pause/start/history) → role rows (trigger + model + next/last, click → role popover) → ghost `＋ role` |
+| left rail (400px; 330px ≤1200px) | **fleet** | repo cards → lane rows (status dot, ticket, ago, icon cluster: pin/pause/start/history) → role rows (trigger + model + next/last, click → role popover) → ghost `＋ role` |
 | center (flex) | **work** | selected lane's session: ticket header, phase track, dense feed (subagent groups, collapsible phases) — OR compare tiles when 2+ lanes pinned |
-| right rail (324px) | **telemetry + org** | tokens-over-time chart, per-account quota + forecast, needs-you questions, org activity feed, engine voice |
+| right rail (324px; ≥1760px two 324px sub-columns — telemetry \| org — each scrolling independently) | **telemetry + org** | tokens-over-time chart, per-account quota + forecast, needs-you questions, org activity feed, engine voice |
+
+> **Geometry amendment (2026-07-04, operator direction, #256):** the mockup's 330px/324px rails
+> were sized against static sample data; live data clips (role status tokens truncate, six right
+> panels always overflow the fold). Fleet rail widens to 400px, and on wide viewports the right
+> zone doubles into two independently-scrolling sub-columns so every panel is visible at once.
+> One-viewport rule unchanged: zones scroll internally, the page never scrolls.
 
 Top bar: brand · update-ready chip (#166) · counts · clock · icons: theme / upcoming-runs /
 concierge chat / config. The concierge dock (shipped `/api/chat`) opens bottom-right.
