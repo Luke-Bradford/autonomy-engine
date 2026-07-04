@@ -225,6 +225,60 @@ doctor_label_scope_check() {
   doctor_labels_report "$configured" "$repo_labels"
 }
 
+# merge_gate marker/author_login verification (#171). Under strategy=bot_comment
+# safe_merge only merges a PR carrying a comment whose author.login==author_login
+# AND whose body contains marker (bin/safe_merge.sh:211-212 defaults). A typo in
+# either = the gate is never satisfied and every PR stalls (fail-safe but
+# baffling). Diagnostic-only + best-effort.
+
+# Pure: given the configured marker + author_login + the installed workflow text,
+# HEURISTICALLY check the bot_comment gate's selectors against the workflow. The
+# marker test is a plain substring of the workflow SOURCE, not the posted comment
+# body -- so it's deliberately a WARN-only signal: a genuinely typo'd marker never
+# appears anywhere in the workflow -> WARN (the case #171 targets); the OK is only
+# "the marker text is present", NOT a promise the gate will match (a marker that
+# coincidentally appears in an unrelated line still reads OK -- diagnostic, not a
+# guarantee). author_login can't be derived from the workflow at all, so the stock
+# identity ('github-actions' -- safe_merge's default AND the empirically-observed
+# author.login of the review comment, verified against this repo's own merged PRs)
+# is confirmed and any other value is only flagged INFO (doctor can't see a custom
+# CI identity).
+doctor_marker_report() {
+  local marker="$1" author="$2" wf="$3"
+  case "$wf" in
+    *"$marker"*)
+      echo "OK   merge_gate.marker '$marker' text is present in the installed review workflow (best-effort source match)" ;;
+    *)
+      echo "WARN merge_gate.marker '$marker' not found in the installed review workflow -- the bot_comment gate greps review comments for this marker, so it never matches and every PR stalls. Align it with the workflow's comment header (default 'Claude Code Review')." ;;
+  esac
+  if [ "$author" = "github-actions" ]; then
+    echo "OK   merge_gate.author_login '$author' matches the workflow's commenting identity (GITHUB_TOKEN)"
+  else
+    echo "INFO merge_gate.author_login '$author' is non-default -- doctor can't verify a custom CI identity against the workflow; ensure it EXACTLY matches the login that posts the review comment (the stock workflow posts as 'github-actions')."
+  fi
+}
+
+# Impure best-effort. Resolves the SAME defaults safe_merge uses, reads the
+# installed workflow files, and delegates to the pure reporter. Silent when the
+# workflow dir is absent (the caller's branch already WARNs on a missing review
+# workflow -- no double-warn).
+doctor_marker_check() {
+  local repo="$1" marker author wf
+  [ -d "$repo/.github/workflows" ] || return 0
+  marker="$(python3 "$DOCTOR_HOME/lib/config_parser.py" "$repo/.autonomy/config.yaml" merge_gate.marker 2>/dev/null || echo)"
+  marker="${marker:-Claude Code Review}"
+  author="$(python3 "$DOCTOR_HOME/lib/config_parser.py" "$repo/.autonomy/config.yaml" merge_gate.author_login 2>/dev/null || echo)"
+  author="${author:-github-actions}"
+  # Concatenate every workflow file (bash 3.2: find -print0 + read -d '', no
+  # globstar). A gh/read hiccup leaves wf empty -> the marker WARN fires, which is
+  # the safe direction (an unverifiable marker is worth a look).
+  wf=""
+  while IFS= read -r -d '' f; do
+    wf="$wf$(cat "$f" 2>/dev/null)"$'\n'
+  done < <(find "$repo/.github/workflows" -type f -print0 2>/dev/null)
+  doctor_marker_report "$marker" "$author" "$wf"
+}
+
 doctor_full_report() {
   local repo="$1" hard_fail=0
   echo "== doctor.sh report: $repo =="
@@ -256,6 +310,7 @@ doctor_full_report() {
     if [ -d "$repo/.github/workflows" ] && grep -rlE 'anthropic\.com/v1/messages|ANTHROPIC_API_KEY' "$repo/.github/workflows" >/dev/null 2>&1; then
       echo "OK   review-bot workflow found under .github/workflows (merge_gate.strategy=bot_comment)"
       doctor_review_secret_check "$repo"
+      doctor_marker_check "$repo"
     else
       echo "WARN no review-bot workflow found under .github/workflows -- merge_gate.strategy=bot_comment will never see an APPROVE and every PR will stall. Add a workflow, or switch to manual/ci_only."
     fi
