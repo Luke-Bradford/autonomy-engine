@@ -113,6 +113,17 @@ rc=0; done_everywhere 47 || rc=$?
 check "unresolvable work-claim skipped"  "yes" "$(grep -q ' 999 ' "$BOARD_CALLS" && echo no || echo yes)"
 check "unresolvable work-claim rc 0"     "0" "$rc"
 
+# --- unresolvable CLOSE-ref (round-2 review finding): must be skipped like
+# the work-claim loop -- never close-attempted, never boarded Done ---
+: > "$calls"; : > "$BOARD_CALLS"
+BODY="Closes #999. Closes #61."
+TITLE="z"
+rc=0; done_everywhere 49 || rc=$?
+check "unresolvable close-ref not boarded Done"    "yes" "$(grep -q ' 999 ' "$BOARD_CALLS" && echo no || echo yes)"
+check "unresolvable close-ref not close-attempted" "yes" "$(grep -q 'gh issue close 999' "$calls" && echo no || echo yes)"
+check "sibling resolvable close-ref still Done"    "yes" "$(grep -q 'board status 61 Done' "$BOARD_CALLS" && echo yes || echo no)"
+check "unresolvable close-ref rc 0"                "0" "$rc"
+
 echo
 if [ "$fails" -gt 0 ]; then echo "$fails FAILURES"; exit 1; fi
 echo "ALL PASS"

@@ -221,6 +221,13 @@ done_everywhere() {
                  printf '%s\n' "$de_title" | grep -Eo '\(#[0-9]+\)' | grep -Eo '[0-9]+' || true; } | sort -u)"
   for de_n in $de_close; do
     de_state="$(gh issue view "$de_n" --json state --jq .state 2>/dev/null || true)"
+    # unresolvable ref (typo, a PR number, deleted issue): skip entirely --
+    # boarding it Done would pollute the board with a bogus entry (round-2
+    # review finding on PR #283); mirrors the work-claim loop's skip.
+    if [ -z "$de_state" ]; then
+      echo "safe_merge: note -- done-everywhere: close-ref #$de_n did not resolve to an issue; skipping" >&2
+      continue
+    fi
     if [ "$de_state" = "OPEN" ]; then
       gh issue close "$de_n" --comment "Closed by merged PR #$de_pr (done-everywhere, SD-26)." 2>/dev/null \
         || echo "safe_merge: note -- done-everywhere: could not close #$de_n (close it manually)" >&2
