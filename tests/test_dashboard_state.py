@@ -1342,6 +1342,122 @@ class TestParseNeedsYou(unittest.TestCase):
                            "updatedAt": ""}])
         self.assertEqual(ds.parse_needs_you(raw)[0]["labels"], ["needs-design"])
 
+    def test_question_attached_when_a_valid_block_present(self):
+        # #189: a needs-design issue whose comments carry a valid
+        # autonomy-question block gets a triaged `question` dict; one without
+        # gets question=None (degrades to the untriaged row).
+        q = {"question": "Ship it?", "recommendation": "yes",
+             "reasoning_quote": "because", "effort_sunk": "2 sessions",
+             "default_if_ignored": "hold", "answers": ["yes", "no"]}
+        body = "prose\n```autonomy-question\n%s\n```\n" % json.dumps(q)
+        raw = json.dumps([
+            {"number": 1, "title": "triaged", "url": "u1",
+             "labels": [{"name": "needs-design"}], "updatedAt": "2026-07-03T00:00:00Z",
+             "comments": [{"body": body, "createdAt": "2026-07-03T01:00:00Z"}]},
+            {"number": 2, "title": "untriaged", "url": "u2",
+             "labels": [{"name": "needs-design"}], "updatedAt": "2026-07-02T00:00:00Z",
+             "comments": [{"body": "just chatter", "createdAt": "z"}]},
+        ])
+        out = {i["number"]: i for i in ds.parse_needs_you(raw)}
+        self.assertEqual(out[1]["question"]["question"], "Ship it?")
+        self.assertEqual(out[1]["question"]["answers"], ["yes", "no"])
+        self.assertIsNone(out[2]["question"])
+
+
+class TestParseAutonomyQuestion(unittest.TestCase):
+    """#189 triaged escalation: parse the fenced `autonomy-question` block from an
+    issue's comments (SD-32 schema). Pure/total; strict schema; the NEWEST comment
+    with a block is authoritative; any deviation degrades to None (fail-safe)."""
+
+    GOOD = {"question": "Proceed with plan B?",
+            "recommendation": "adopt plan B",
+            "reasoning_quote": "A cannot satisfy the invariant",
+            "effort_sunk": "3 sessions",
+            "default_if_ignored": "stay on plan A",
+            "answers": ["plan B", "discuss", "stay"]}
+
+    def _comment(self, body, at):
+        return {"body": body, "createdAt": at}
+
+    def _fenced(self, obj, lang="autonomy-question", nl="\n"):
+        return "leading prose%s```%s%s%s%s```%s" % (
+            nl, lang, nl, json.dumps(obj), nl, nl)
+
+    def test_valid_block_returns_dict(self):
+        c = [self._comment(self._fenced(self.GOOD), "2026-07-03T00:00:00Z")]
+        self.assertEqual(ds.parse_autonomy_question(c), self.GOOD)
+
+    def test_newest_question_comment_wins(self):
+        older = dict(self.GOOD, question="OLD")
+        newer = dict(self.GOOD, question="NEW")
+        c = [self._comment(self._fenced(older), "2026-07-01T00:00:00Z"),
+             self._comment(self._fenced(newer), "2026-07-05T00:00:00Z")]
+        self.assertEqual(ds.parse_autonomy_question(c)["question"], "NEW")
+
+    def test_later_prose_only_comment_does_not_mask_question(self):
+        c = [self._comment(self._fenced(self.GOOD), "2026-07-01T00:00:00Z"),
+             self._comment("no block here", "2026-07-09T00:00:00Z")]
+        self.assertEqual(ds.parse_autonomy_question(c)["question"],
+                         self.GOOD["question"])
+
+    def test_newest_block_malformed_does_not_fall_back_to_older(self):
+        bad = dict(self.GOOD); bad.pop("answers")  # missing key
+        c = [self._comment(self._fenced(self.GOOD), "2026-07-01T00:00:00Z"),
+             self._comment(self._fenced(bad), "2026-07-05T00:00:00Z")]
+        self.assertIsNone(ds.parse_autonomy_question(c))
+
+    def test_extra_key_rejected(self):
+        obj = dict(self.GOOD, sneaky="x")
+        c = [self._comment(self._fenced(obj), "z")]
+        self.assertIsNone(ds.parse_autonomy_question(c))
+
+    def test_missing_key_rejected(self):
+        obj = dict(self.GOOD); obj.pop("recommendation")
+        c = [self._comment(self._fenced(obj), "z")]
+        self.assertIsNone(ds.parse_autonomy_question(c))
+
+    def test_too_many_answers_rejected(self):
+        obj = dict(self.GOOD, answers=["a", "b", "c", "d"])
+        c = [self._comment(self._fenced(obj), "z")]
+        self.assertIsNone(ds.parse_autonomy_question(c))
+
+    def test_empty_answers_rejected(self):
+        obj = dict(self.GOOD, answers=[])
+        c = [self._comment(self._fenced(obj), "z")]
+        self.assertIsNone(ds.parse_autonomy_question(c))
+
+    def test_non_string_answer_rejected(self):
+        obj = dict(self.GOOD, answers=["ok", 3])
+        c = [self._comment(self._fenced(obj), "z")]
+        self.assertIsNone(ds.parse_autonomy_question(c))
+
+    def test_wrong_type_scalar_rejected(self):
+        obj = dict(self.GOOD, question=5)
+        c = [self._comment(self._fenced(obj), "z")]
+        self.assertIsNone(ds.parse_autonomy_question(c))
+
+    def test_bad_json_rejected(self):
+        c = [self._comment("```autonomy-question\n{not json}\n```", "z")]
+        self.assertIsNone(ds.parse_autonomy_question(c))
+
+    def test_non_object_json_rejected(self):
+        c = [self._comment("```autonomy-question\n[1,2]\n```", "z")]
+        self.assertIsNone(ds.parse_autonomy_question(c))
+
+    def test_no_fence_returns_none(self):
+        c = [self._comment("just a normal comment", "z")]
+        self.assertIsNone(ds.parse_autonomy_question(c))
+
+    def test_crlf_and_trailing_space_infostring(self):
+        body = "x\r\n```autonomy-question   \r\n%s\r\n```\r\n" % json.dumps(self.GOOD)
+        c = [self._comment(body, "z")]
+        self.assertEqual(ds.parse_autonomy_question(c), self.GOOD)
+
+    def test_total_against_bad_input(self):
+        for bad in (None, [], "not a list", 42, [None], [{"body": 5}],
+                    [{"createdAt": "z"}]):
+            self.assertIsNone(ds.parse_autonomy_question(bad))
+
 
 if __name__ == "__main__":
     unittest.main()

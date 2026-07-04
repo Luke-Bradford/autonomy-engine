@@ -325,6 +325,19 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
 .hln .hact{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hln .hat{margin-left:auto;flex:none;font-family:var(--mono);font-size:10px;color:var(--dim)}
 .hln .chip{flex:none}
+/* #189 triaged escalation card */
+.nyq{border-left:2px solid var(--warn);background:var(--panel2);border-radius:6px;margin:6px 12px;padding:9px 11px}
+.nyq .qhead{font-size:12.5px;color:var(--ink);font-weight:600;line-height:1.35}
+.nyq .qsrc{display:flex;align-items:center;gap:7px;margin-top:5px;font-size:11px;color:var(--mut)}
+.nyq .qsrc .tri{font-family:var(--mono);font-size:8.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--warn);border:1px solid var(--warn);border-radius:4px;padding:1px 5px}
+.nyq .qrec{margin-top:7px;font-size:11.5px;color:var(--ink)}
+.nyq .qrec b{color:var(--mut);font-weight:600}
+.nyq .qquote{margin:5px 0 0;padding:3px 0 3px 9px;border-left:2px solid var(--hair2);color:var(--mut);font-size:11px;font-style:italic}
+.nyq .qfacts{display:flex;flex-wrap:wrap;gap:5px 14px;margin-top:7px;font-size:10.5px;color:var(--mut)}
+.nyq .qfacts b{color:var(--dim);font-weight:600;text-transform:uppercase;letter-spacing:.4px;font-family:var(--mono);font-size:9px}
+.nyq .qans{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:9px}
+.nyq .qchip{font-family:var(--mono);font-size:10px;padding:3px 9px;border-radius:12px;border:1px solid var(--hair2);color:var(--mut)}
+.nyq .qdiscuss{margin-left:auto;font-size:11px;color:var(--accent);text-decoration:none}
 
 /* git in flight */
 .pr{padding:11px 14px;border-bottom:1px solid var(--hair)}
@@ -1264,11 +1277,29 @@ function renderNeedsYou(repos){
   const many=repos.filter(r=>r.git&&(r.git.needs_you||[]).length).length>1;
   if(!rows.length){setHTML("needsyou",`<div class="empty">Nothing awaiting a decision — needs-design issues appear here.</div>`);return;}
   setHTML("needsyou",rows.map(x=>{const i=x.i;
-    const labs=(i.labels||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join("");
     const num=i.number!=null?("#"+esc(i.number)):"";
     const href=safeHref(i.url);
     const link=href?`<a href="${esc(href)}" target="_blank" rel="noopener">${num}</a>`:num;
-    return `<div class="hln">${labs}<span class="hact">${many?"["+esc(x.repo)+"] ":""}${link} ${esc(i.title)}</span></div>`;}).join(""));}
+    const pfx=many?"["+esc(x.repo)+"] ":"";
+    // #189: a PM-triaged escalation (fenced autonomy-question block parsed
+    // server-side) renders as the question card; absence degrades to the
+    // untriaged row. Answer chips are honest OPTION display + a real discuss
+    // link (post-back is a follow-on) -- not live buttons (#177 no-fake-motion).
+    const q=i.question;
+    if(q){
+      const chips=(q.answers||[]).map(a=>`<span class="qchip">${esc(a)}</span>`).join("");
+      const discuss=href?`<a class="qdiscuss" href="${esc(href)}" target="_blank" rel="noopener">discuss ↗</a>`:"";
+      return `<div class="nyq">
+        <div class="qhead">${esc(q.question)}</div>
+        <div class="qsrc"><span class="tri">triaged</span>${pfx}${link} ${esc(i.title)}</div>
+        <div class="qrec"><b>recommends</b> ${esc(q.recommendation)}</div>
+        ${q.reasoning_quote?`<blockquote class="qquote">${esc(q.reasoning_quote)}</blockquote>`:""}
+        <div class="qfacts"><span><b>effort sunk</b> ${esc(q.effort_sunk)}</span><span><b>if ignored</b> ${esc(q.default_if_ignored)}</span></div>
+        <div class="qans">${chips}${discuss}</div>
+      </div>`;
+    }
+    const labs=(i.labels||[]).map(l=>`<span class="chip">${esc(l)}</span>`).join("");
+    return `<div class="hln">${labs}<span class="hact">${pfx}${link} ${esc(i.title)}</span></div>`;}).join(""));}
 
 /* ---- VOICE ---- */
 function vcls(l){if(/USAGE LIMIT/i.test(l))return "limit";if(/PAUSE|resuming|graceful/i.test(l))return "pause";

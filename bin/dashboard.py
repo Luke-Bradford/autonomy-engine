@@ -636,10 +636,13 @@ def _compute_in_flight(repo):
         # fixed generic-workflow constant (repo-agnostic); cwd-scoped, no owner
         # interpolation. sort:updated-desc lives IN the search so the --limit
         # keeps the newest 20 (Codex CP1). Best-effort: "" on any gh failure.
+        # `comments` carries the PM escalation (#189): parse_needs_you extracts
+        # the fenced autonomy-question block from it. One call, no N+1 -- gh
+        # returns comment bodies inline in the list JSON.
         return _run(["gh", "issue", "list", "--limit", "20",
                      "--search", "state:open label:%s sort:updated-desc"
                                  % ",".join(ds.NEEDS_YOU_LABELS),
-                     "--json", "number,title,url,labels,updatedAt"],
+                     "--json", "number,title,url,labels,updatedAt,comments"],
                     cwd=repo, timeout=20)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
