@@ -1213,6 +1213,73 @@ def token_timeline(logdir, now, window_secs=86400, bucket_secs=900):
     return out
 
 
+# The rate-limit window lengths Anthropic buckets utilization into -- the span
+# between a window opening and its resets_at. Used to place the observed
+# utilization on a burn timeline (there is no absolute token limit in the event,
+# only the fraction). Keyed by parse_quota_windows' canonical types.
+_QUOTA_WINDOW_SECS = {"five_hour": 5 * 3600, "seven_day": 7 * 24 * 3600}
+
+
+def quota_forecast(windows, now):
+    """Burn-rate exhaustion forecast per quota window (#188b) for the quota
+    card's 'projected exhaustion + safe-to-keep-running' indicator. Pure
+    extrapolation from the SAME utilization the dashboard already shows
+    (recent_quota_windows / parse_quota_windows): no new data source, no gh, no
+    token counts (the rate-limit event carries only the fraction).
+
+    The forecast works in UTILIZATION space: a window opened at
+    `resets_at - length`, so `elapsed = now - window_start` and the observed
+    average burn is `utilization / elapsed` (fraction/sec). Extrapolating it
+    linearly, utilization reaches 1.0 in `(1 - utilization) / burn` seconds. A
+    real session is bursty, but the observed-average line never asserts a number
+    we can't defend and is clearly a *forecast* -- the same degrade-to-truth
+    discipline as token_timeline. Per window type it yields:
+      projected_exhaust_epoch : when utilization would hit 1.0 at that rate
+      exhausts_before_reset   : True iff that lands BEFORE resets_at (keep going
+                                and you hit the wall before the window refills)
+      resets_at               : passthrough for the countdown
+
+    A window is OMITTED (no honest forecast) when its length is unknown, when
+    `elapsed <= 0` (a resets_at further out than the window length -- clock skew
+    / a stale event), or when `utilization <= 0` (no burn to extrapolate). A
+    window already at/over the limit (`utilization >= 1`) is reported as
+    exhausted now. {} for a non-mapping input -- best-effort like its siblings."""
+    if not isinstance(windows, dict):
+        return {}
+    try:
+        now = int(now)
+    except (TypeError, ValueError):
+        return {}
+    out = {}
+    for wt, win in windows.items():
+        length = _QUOTA_WINDOW_SECS.get(wt)
+        if length is None or not isinstance(win, dict):
+            continue
+        resets_at = win.get("resets_at")
+        util = win.get("utilization")
+        if not isinstance(resets_at, (int, float)) or not isinstance(util, (int, float)):
+            continue
+        resets_at = int(resets_at)
+        util = float(util)
+        if util >= 1.0:                                 # already exhausted / overage
+            out[wt] = {"projected_exhaust_epoch": now,
+                       "exhausts_before_reset": resets_at > now,
+                       "resets_at": resets_at}
+            continue
+        if util <= 0.0:                                 # no burn to extrapolate
+            continue
+        elapsed = now - (resets_at - length)
+        if elapsed <= 0:                                # window_start in the future
+            continue
+        # burn = util/elapsed; time to 1.0 = (1-util)/burn = (1-util)/util*elapsed
+        secs_to_full = (1.0 - util) / util * elapsed
+        projected = now + int(secs_to_full)
+        out[wt] = {"projected_exhaust_epoch": projected,
+                   "exhausts_before_reset": projected < resets_at,
+                   "resets_at": resets_at}
+    return out
+
+
 def read_config_overlay(path):
     """The PERSISTENT operator overrides (#202) the dashboard displays. Unlike
     the one-shot read_model_override, this RE-VALIDATES each value with the
@@ -1299,6 +1366,7 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
     config = _read_config(repo_path)
     lifecycle = lifecycle_status(repo_path, pid_is_alive=pid_is_alive)
     status = display_status(lifecycle["state"], activity)
+    quota = recent_quota_windows(logdir)   # scanned once; forecast reuses it
     return {
         "name": os.path.basename(repo_path.rstrip("/")),
         "path": repo_path,
@@ -1314,7 +1382,8 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "git": git_in_flight(repo_path) if git_in_flight else {},
         "config": config,
         "override": read_model_override(os.path.join(logdir, "model-override")),
-        "quota": recent_quota_windows(logdir),
+        "quota": quota,
         "sessions": recent_sessions(logdir),
         "token_timeline": token_timeline(logdir, now),
+        "quota_forecast": quota_forecast(quota, now),
     }
