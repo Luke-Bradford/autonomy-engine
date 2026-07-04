@@ -446,15 +446,21 @@ function histRow(s){
 }
 // #248: skip a panel's innerHTML rebuild unless its markup REALLY changed --
 // mirrors renderRepos's #164/#238 guard, shared across the display-list panels.
-// The key normalizes the volatile qreset/agox span CONTENTS out (the 1s ticker
-// updates those in place via textContent), so a pure time tick never rebuilds
-// the subtree; only a real state change does. Returns true IFF it wrote, so a
-// caller can gate a side effect (auto-scroll, listener re-bind) on a real change
-// rather than re-running it every idle tick.
+// The key normalizes the volatile qreset/agox/upe span CONTENTS out (the 1s
+// ticker updates those in place via textContent), so a pure time tick never
+// rebuilds the subtree; only a real state change does. `upe` is the busy focus
+// card's live elapsed counter (#248): omitting it would make a working repo's
+// focus key change every second and the guard would never skip. Returns true
+// IFF it wrote, so a caller can gate a side effect (auto-scroll, listener
+// re-bind) on a real change rather than re-running it every idle tick.
 const _sig={};
+// shared so callers that mutate a panel OUTSIDE setHTML (renderFocus's held-node
+// partial replaceWith) can re-sync _sig against the SAME normalization.
+const _volRe=/(<(span|b)\b[^>]*\b(?:qreset|agox|upe)\b[^>]*>)[^<]*(<\/\2>)/g;
+function _sigKey(html){return html.replace(_volRe,"$1$3");}
 function setHTML(id,html){
   const el=$(id); if(!el) return false;
-  const key=html.replace(/(<(span|b)\b[^>]*\b(?:qreset|agox)\b[^>]*>)[^<]*(<\/\2>)/g,"$1$3");
+  const key=_sigKey(html);
   if(_sig[id]===key) return false;
   _sig[id]=key; el.innerHTML=html; return true;
 }
@@ -482,7 +488,11 @@ function renderFocus(repos){
   // #151 item 4: a fresh install has no registered repos -> the focus band would
   // render blank. Narrate the empty state with the path forward (config page)
   // instead of a void. Static copy + a same-origin link, no user data to esc().
-  if(!repos.length){$("focus").innerHTML=`<div class="empty">No repositories yet — <a class="navlink" href="/config">add one on the config page →</a></div>`;return;}
+  // #248: route through setHTML too so _sig.focus stays consistent with the DOM
+  // on EVERY write path -- a direct innerHTML here would leave _sig.focus keyed
+  // to old card markup, and a transient empty->repopulate with identical markup
+  // would then wrongly skip and freeze the empty state.
+  if(!repos.length){setHTML("focus",`<div class="empty">No repositories yet — <a class="navlink" href="/config">add one on the config page →</a></div>`);return;}
   const html=repos.map((r,i)=>{
     const st=dispStatus(r), cs=r.current_session||{}, git=r.git||{}, ft=git.focus_ticket;
     const busy=st==="working"||st==="stopping";
@@ -544,12 +554,21 @@ function renderFocus(repos){
   // the others are swapped in place via replaceWith around it.
   const box=$("focus"), ae=document.activeElement;
   const held=(ae&&box.contains(ae)&&(ae.tagName==="SELECT"||ae.tagName==="BUTTON"))?ae.closest(".fcard"):null;
-  if(!held){box.innerHTML=html.join("");return;}
-  const tpl=document.createElement("template");tpl.innerHTML=html.join("");
+  const joined=html.join("");
+  // #248: idle (no card being interacted with) is the churn source -- route it
+  // through the shared skip-unchanged guard so a pure time tick never rebuilds
+  // the subtree. setHTML keeps _sig.focus in sync on both idle full-write paths.
+  if(!held){setHTML("focus",joined);return;}
+  const tpl=document.createElement("template");tpl.innerHTML=joined;
   const fresh=[...tpl.content.children], old=[...box.children];
   const key=els=>els.map(k=>k.dataset.path).join("|");
-  if(key(old)!==key(fresh)){box.innerHTML=html.join("");return;} // repo set changed -> full render wins
+  if(key(old)!==key(fresh)){setHTML("focus",joined);return;} // repo set changed -> full render wins
   old.forEach((k,i)=>{if(k!==held)k.replaceWith(fresh[i]);});
+  // the held-node partial update mutated the DOM OUTSIDE setHTML, so _sig.focus
+  // is now stale. Re-sync it to the ACTUAL rendered DOM: otherwise a state
+  // change during interaction that then reverts would let a later idle setHTML
+  // match the stale key and SKIP, freezing the replaceWith'd cards (#248).
+  _sig["focus"]=_sigKey(box.innerHTML);
 }
 
 /* ---- MODEL / EFFORT CONTROL (#24) ---- */
