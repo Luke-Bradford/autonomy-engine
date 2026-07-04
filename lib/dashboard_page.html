@@ -175,6 +175,7 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .repo-h .nm{font-weight:600}
 .repo-h .badge{margin-left:auto}
 .repo .cfg{font-family:var(--mono);font-size:10px;color:var(--dim);margin-bottom:10px}
+.repo .gchain{font-family:var(--mono);font-size:10px;color:var(--mut);margin:-6px 0 10px}
 .role{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px}
 .role .rn{font-weight:500;min-width:74px}
 .role .subs{font-family:var(--mono);font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:var(--mut);border:1px solid var(--hair2);border-radius:3px;padding:1px 5px}
@@ -615,11 +616,19 @@ function renderRepos(repos){
         <span class="trig">${trig}</span>${missed}${lastRun}
         <span class="rst">${token(role.status,false)}</span></div>`;
     }).join("");
+    // #187 OUTLINE layer: expand the bare strategy name into the step outline a
+    // PR must clear under this repo's merge_gate.strategy (server-derived by
+    // merge_gate_chain, mirroring safe_merge). Display only -- safe_merge stays
+    // the sole enforcer. review steps carry the reviewer (bot/human) as a glyph.
+    const chain=(r.merge_gate_chain||[]).map(s=>
+      s.step==="review" ? (s.actor==="bot" ? "🤖 review" : "👤 review") : s.step
+    ).join(" → ");
+    const gateChain = chain ? `<div class="gchain" title="what a PR must clear under this repo's merge-gate strategy — display only; safe_merge is the enforcer">${esc(chain)}</div>` : "";
     return `<div class="repo">
       <div class="repo-h"><span class="nm">${esc(dispName(r.name))}</span>
         <span class="badge">${token(st,true)}</span></div>
       <div class="cfg">${esc(cfg.model||"—")} · gate ${esc(cfg.merge_gate||"—")}${(r.lifecycle||{}).pid?" · pid "+r.lifecycle.pid:""}</div>
-      ${roles}</div>`;
+      ${gateChain}${roles}</div>`;
   }).join("");
   // #164: identical markup -> skip the innerHTML rebuild entirely. The whole
   // left pane was re-laid-out on EVERY poll, flashing the countdown
