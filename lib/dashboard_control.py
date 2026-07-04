@@ -129,6 +129,17 @@ CONFIG_PAGE_KEYS = {
     "merge_gate.strategy": lambda v: v in VALID_STRATEGIES,
 }
 
+# STRUCTURAL truth (SD-28, #211/#282): keys that define the org's shape/gate,
+# NOT operational knobs. These are writable ONLY via a config.yaml commit + PR
+# through the normal gate (#87) -- never the page. There is no untracked overlay
+# for structure (an overlay would silently NOT take effect for consumers like
+# safe_merge.sh that read committed config.yaml), and writing the tracked
+# config.yaml from the page is the revert-lie this whole ticket is about: the
+# loop's preflight stash-recovery sweeps the dirty file and the save vanishes.
+# So the page REFUSES them with a pointer to the commit-PR path rather than
+# silently accepting a write it cannot honestly persist.
+STRUCTURAL_KEYS = frozenset(["merge_gate.strategy"])
+
 
 def config_set_plan(repo, key, value):
     """#47 config page write: one whitelisted dotted key, validated per key.
@@ -138,6 +149,12 @@ def config_set_plan(repo, key, value):
     validator = CONFIG_PAGE_KEYS.get(key)
     if validator is None:
         return {"error": "key %r is not editable from the page" % (key,)}
+    if key in STRUCTURAL_KEYS:
+        return {"error": "%s is structural config — edit it via a "
+                ".autonomy/config.yaml commit + PR (#87), not the page; "
+                "the page can't persist it (a tracked-file write would be "
+                "silently reverted by the loop's preflight stash-recovery)"
+                % key}
     if not validator(value):
         return {"error": "invalid value for %s" % key}
     short = OVERLAY_KEYS.get(key)
