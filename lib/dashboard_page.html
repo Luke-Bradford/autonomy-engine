@@ -151,6 +151,7 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .hrow .hmeta{font-family:var(--mono);color:var(--dim);font-size:10px;margin-left:auto;text-align:right}
 .qsrc{font-size:8.5px;padding:1px 5px;border-radius:3px;letter-spacing:.6px}
 .qsrc.live{color:var(--ok,#3fb950);border:1px solid var(--ok,#3fb950)}
+.qsrc.aged{color:var(--warn,#d29922);border:1px solid var(--warn,#d29922)}
 .qsrc.stale{color:var(--dim);border:1px solid var(--hair)}
 /* ---- config page (#47) ---- */
 .cfgadd{display:flex;gap:8px;padding:10px;border-bottom:1px solid var(--hair)}
@@ -990,7 +991,15 @@ function renderQuota(repos,account){
   // back to the log-scan max above and flag the panel as stale.
   const cl=a.claude, live=!!(cl&&cl.source==='live');
   if(live){ five=cl.five_hour; seven=cl.seven_day; }
-  const src=live
+  // #271: a served-but-aged live value (last-good kept through a bounded grace
+  // window after a failed sample) carries age_s. Badge it "live · aged Xm" only
+  // beyond ~2 sampler intervals (120s), so a single transient blip still reads
+  // plain "live" rather than flapping the panel.
+  const AGED_S=120, aged=live&&cl.age_s!=null&&cl.age_s>=AGED_S;
+  const agedM=aged?Math.floor(cl.age_s/60):0;
+  const src=aged
+    ? `<span class="qsrc aged" title="last live value from Anthropic api/oauth/usage — a recent sample failed, kept through a bounded grace window">live · aged ${agedM}m</span>`
+    : live
     ? `<span class="qsrc live" title="live from Anthropic api/oauth/usage">live</span>`
     : `<span class="qsrc stale" title="from session-log rate-limit events; refreshed only during sessions">logs · stale</span>`;
   const cap=live
