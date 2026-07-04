@@ -623,7 +623,7 @@ function renderRepos(repos){
     const chain=(r.merge_gate_chain||[]).map(s=>
       s.step==="review" ? (s.actor==="bot" ? "🤖 review" : "👤 review") : s.step
     ).join(" → ");
-    const gateChain = chain ? `<div class="gchain" title="what a PR must clear under merge_gate.strategy=${esc(cfg.merge_gate||"manual")} — display only; safe_merge is the enforcer">${esc(chain)}</div>` : "";
+    const gateChain = chain ? `<div class="gchain" title="what a PR must clear under this repo's merge-gate strategy — display only; safe_merge is the enforcer">${esc(chain)}</div>` : "";
     return `<div class="repo">
       <div class="repo-h"><span class="nm">${esc(dispName(r.name))}</span>
         <span class="badge">${token(st,true)}</span></div>
