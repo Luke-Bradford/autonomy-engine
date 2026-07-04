@@ -23,7 +23,7 @@ VALID_ACTIONS = ("pause", "resume", "stop", "start")
 # depth: the value lands in a file the supervisor reads and in config.yaml,
 # never a shell, but there is no reason to allow anything shell-metacharish).
 # Efforts are the claude CLI's own accepted set (verified empirically).
-_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,63}$")
+MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,63}$")
 VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 VALID_SCOPES = ("session", "default")
 
@@ -65,8 +65,9 @@ def set_model_plan(repo, model, effort, scope):
     """Pure decision for the model/effort control (#24). Returns:
       scope=session -> {"write": override-file, "content": ..., "message"}
                        (one-shot; the supervisor consumes it at next session)
-      scope=default -> {"config_path": ..., "config_set": {dotted: value},
-                        "message"}  (the server rewrites config.yaml)
+      scope=default -> {"overlay": overrides-file, "overlay_set": {short: val},
+                        "message"}  (#202: an UNtracked overlay that shadows
+                       config.yaml, so the write survives preflight recovery)
       {"error": ...} on any invalid input."""
     model = (model or "").strip()
     effort = (effort or "").strip()
@@ -74,7 +75,7 @@ def set_model_plan(repo, model, effort, scope):
         return {"error": "unknown scope %r" % (scope,)}
     if not model and not effort:
         return {"error": "nothing to set — pick a model and/or an effort"}
-    if model and not _MODEL_RE.match(model):
+    if model and not MODEL_RE.match(model):
         return {"error": "invalid model id"}
     if effort and effort not in VALID_EFFORTS:
         return {"error": "invalid effort (valid: %s)" % ", ".join(VALID_EFFORTS)}
@@ -115,8 +116,8 @@ def _valid_text(value):
 CONFIG_PAGE_KEYS = {
     "board.owner": _valid_text,
     "board.project_title": _valid_text,
-    "agent.model.primary": lambda v: bool(_MODEL_RE.match(v)),
-    "agent.model.fallback": lambda v: bool(_MODEL_RE.match(v)),
+    "agent.model.primary": lambda v: bool(MODEL_RE.match(v)),
+    "agent.model.fallback": lambda v: bool(MODEL_RE.match(v)),
     "agent.effort": lambda v: v in VALID_EFFORTS,
     "merge_gate.strategy": lambda v: v in VALID_STRATEGIES,
 }

@@ -108,7 +108,7 @@ EOF
 set -euo pipefail
 
 # Reused single-source functions: valid_model_id (supervisor.sh, kept in
-# parity with dashboard_control._MODEL_RE), derive_slug/resolve_worktree_path
+# parity with dashboard_control.MODEL_RE), derive_slug/resolve_worktree_path
 # + CONFIG_GET (setup_worktree.sh). Both files are functions-only when
 # sourced (guarded executable bodies).
 # shellcheck source=/dev/null

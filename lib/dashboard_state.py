@@ -1122,7 +1122,7 @@ def recent_quota_windows(logdir, limit=60):
 def read_config_overlay(path):
     """The PERSISTENT operator overrides (#202) the dashboard displays. Unlike
     the one-shot read_model_override, this RE-VALIDATES each value with the
-    same rules the supervisor applies (dashboard_control._MODEL_RE /
+    same rules the supervisor applies (dashboard_control.MODEL_RE /
     VALID_EFFORTS), so a corrupt overlay is rejected identically on both
     surfaces -- the card can never show a value the supervisor silently
     ignores. Returns {} on any error / absent file (fail-safe)."""
@@ -1134,12 +1134,12 @@ def read_config_overlay(path):
                 # (`${line%%=*}` / `${line#*=}` after `read -r`): split on the
                 # first '=', strip ONLY the newline -- never the whole line. A
                 # stray-space line (` model=x` / `model=x `) then fails the key
-                # match / _MODEL_RE just as it fails valid_model_id in bash, so
+                # match / MODEL_RE just as it fails valid_model_id in bash, so
                 # the dashboard can't display a value the supervisor ignores.
                 key, sep, val = raw.rstrip("\n").partition("=")
                 if not sep or not val:
                     continue
-                if key in ("model", "fallback") and _dcx._MODEL_RE.match(val):
+                if key in ("model", "fallback") and _dcx.MODEL_RE.match(val):
                     out[key] = val
                 elif key == "effort" and val in _dcx.VALID_EFFORTS:
                     out[key] = val
