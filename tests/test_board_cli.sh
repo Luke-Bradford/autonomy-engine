@@ -86,5 +86,31 @@ check "invalid owner: still exit 0" "0" "$rc"
 check "invalid owner: no mutation recorded" "0" "$(muts | grep -c 'SET')"
 printf 'board:\n  owner: Luke-Bradford\n  project_title: Autonomy Progress\n' > "$TMP/repo/.autonomy/config.yaml"
 
+# F: #211 overlay-aware read seam. Source the real board.sh (its guard makes a
+# `source` define functions only) and exercise config_value_with_overlay
+# directly: a config-page 'save default' lands in the untracked
+# var/autonomy-logs/config-overrides overlay and must SHADOW the committed
+# config.yaml so the setting doesn't silently revert (#202/#211). No mocks --
+# real config_parser reads a real config.yaml + a real overlay file on disk.
+# shellcheck source=/dev/null
+. "$ROOT/bin/board.sh"
+UT="$(mktemp -d)"
+mkdir -p "$UT/.autonomy" "$UT/var/autonomy-logs"
+printf 'board:\n  owner: committed-owner\n  project_title: Committed Board\n' > "$UT/.autonomy/config.yaml"
+cd "$UT" || exit 1
+# No overlay -> falls back to the committed config.yaml value.
+check "overlay absent: owner from config"  committed-owner   "$(config_value_with_overlay board.owner board_owner)"
+check "overlay absent: title from config"  "Committed Board" "$(config_value_with_overlay board.project_title board_project_title)"
+# Overlay present -> shadows config.yaml (the #211 fix).
+printf 'board_owner=overlay-org\nboard_project_title=Overlay Board\n' > var/autonomy-logs/config-overrides
+check "overlay shadows config owner"  overlay-org     "$(config_value_with_overlay board.owner board_owner)"
+check "overlay shadows config title"  "Overlay Board" "$(config_value_with_overlay board.project_title board_project_title)"
+# Overlay key present but empty -> treat as unset, fall back to config (never
+# blank out a committed value with an empty override).
+printf 'board_owner=\n' > var/autonomy-logs/config-overrides
+check "overlay empty value: config fallback"  committed-owner  "$(config_value_with_overlay board.owner board_owner)"
+cd "$ROOT" || exit 1
+rm -rf "$UT"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi

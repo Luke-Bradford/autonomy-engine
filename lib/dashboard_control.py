@@ -50,14 +50,19 @@ def overrides_path(repo):
     return os.path.join(repo, "var", "autonomy-logs", "config-overrides")
 
 
-# The model/effort keys whose page-writes go to the untracked overlay instead
-# of the tracked config.yaml. Dotted config key -> the short overlay key the
-# supervisor/dashboard already parse (mirrors the one-shot model-override
-# format). board.*/merge_gate.* stay config.yaml-written because their
-# consumers (board.sh, safe_merge, doctor) have no overlay read seam.
+# The config-page keys whose writes go to the untracked overlay instead of the
+# tracked config.yaml. Dotted config key -> the short overlay key its consumer
+# parses (mirrors the one-shot model-override format). model/effort are read by
+# supervisor.sh:read_config_overlay (#202); board.owner/board.project_title are
+# read by board.sh:config_value_with_overlay (#211) -- so a config-page 'save
+# default' both survives the preflight stash-recovery AND takes effect.
+# merge_gate.strategy stays config.yaml-written: its consumers (safe_merge.sh,
+# doctor.sh) are guardrail files not yet wired to the overlay.
 OVERLAY_KEYS = {"agent.model.primary": "model",
                 "agent.model.fallback": "fallback",
-                "agent.effort": "effort"}
+                "agent.effort": "effort",
+                "board.owner": "board_owner",
+                "board.project_title": "board_project_title"}
 
 _OVERLAY_MSG = ("saved as a local override (survives the loop's preflight; "
                 "config.yaml stays the committed default) — applies next session")

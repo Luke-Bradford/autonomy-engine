@@ -130,6 +130,37 @@ set_single_select() {
   gh api graphql -f query='mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){projectV2Item{id}}}' -f p="$1" -f i="$2" -f f="$3" -f o="$4" >/dev/null 2>&1
 }
 
+# Overlay-aware config read (#211). A config-page 'save default' for board.owner
+# / board.project_title lands in the untracked var/autonomy-logs/config-overrides
+# overlay (short keys board_owner / board_project_title) -- the SAME overlay the
+# supervisor reads for model/effort (#202) -- so the setting survives the
+# preflight stash-recovery that would otherwise sweep a tracked config.yaml edit
+# back to committed. This reader shadows config.yaml with the overlay, mirroring
+# the supervisor's last-wins parse (a later duplicate key wins; an empty value is
+# treated as unset so a blank override never blanks a committed value).
+#   $1 = dotted config key (config.yaml fallback), $2 = short overlay key.
+# Paths are cwd-relative, exactly like the config.yaml reads below -- board.sh
+# runs FROM the target-repo checkout, whose var/ holds the overlay. Best-effort:
+# an unreadable/absent overlay falls straight through to config.yaml, never errors
+# (settled-decision 6). Extractable to a shared lib/ helper if safe_merge/doctor
+# -- guardrail files -- are wired to the same overlay in an attended change.
+config_value_with_overlay() {
+  local config_key="$1" overlay_short="$2"
+  local overlay_file="var/autonomy-logs/config-overrides"
+  local val="" line k v
+  if [ -f "$overlay_file" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      k="${line%%=*}"; v="${line#*=}"
+      if [ "$k" = "$overlay_short" ] && [ -n "$v" ]; then val="$v"; fi
+    done <"$overlay_file"
+  fi
+  if [ -n "$val" ]; then
+    printf '%s' "$val"
+  else
+    python3 "$BOARD_HOME/lib/config_parser.py" .autonomy/config.yaml "$config_key" 2>/dev/null || echo
+  fi
+}
+
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
 
 cmd="${1:-}"; issue="${2:-}"; status="${3:-}"
@@ -138,8 +169,8 @@ if [ -z "$cmd" ] || [ -z "$issue" ]; then
   exit 0
 fi
 
-OWNER="$(python3 "$BOARD_HOME/lib/config_parser.py" .autonomy/config.yaml board.owner 2>/dev/null || echo)"
-PROJECT_TITLE="$(python3 "$BOARD_HOME/lib/config_parser.py" .autonomy/config.yaml board.project_title 2>/dev/null || echo)"
+OWNER="$(config_value_with_overlay board.owner board_owner)"
+PROJECT_TITLE="$(config_value_with_overlay board.project_title board_project_title)"
 if [ -z "$OWNER" ] || [ -z "$PROJECT_TITLE" ]; then
   warn "board.owner/board.project_title not set in .autonomy/config.yaml (skip)"; exit 0
 fi

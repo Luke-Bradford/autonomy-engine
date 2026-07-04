@@ -262,7 +262,7 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
   <div class="panel" id="creds"></div>
   <div class="hint">Subscriptions (your Claude / Codex logins) are the default and need nothing here. API keys are optional — add one only if a role should run on API credit instead. Secrets are stored in your macOS Keychain, never in a file, never shown again after saving. On your first save macOS asks to allow Keychain access — choose <b>Always Allow</b> so later saves don't prompt.</div>
 
-  <div class="sh" style="margin-top:20px"><h2>Repos &amp; config</h2><span class="ln"></span><span class="ct">registry · config.yaml (board/merge_gate) · local override under var/ (model/effort)</span></div>
+  <div class="sh" style="margin-top:20px"><h2>Repos &amp; config</h2><span class="ln"></span><span class="ct">registry · config.yaml (merge_gate) · local override under var/ (model/effort/board)</span></div>
   <div class="panel" id="cfg"></div>
 </div>
 <div id="toast"></div>
@@ -531,9 +531,11 @@ function cfgSave(btn,enc,key){
   const repo=decodeURIComponent(enc);
   const el=btn.closest(".cfgrow").querySelector("[data-key]");
   const value=el.value.trim();
-  // #202: model/effort keys persist as an untracked local override under var/
-  // (survives the loop's preflight); board.*/merge_gate.* still edit config.yaml.
-  const isOverlay=/^agent\.(model\.(primary|fallback)|effort)$/.test(key);
+  // #202/#211: model/effort AND board.owner/board.project_title persist as an
+  // untracked local override under var/ (survives the loop's preflight);
+  // merge_gate.strategy still edits committed config.yaml. Keep this in sync
+  // with dashboard_control.OVERLAY_KEYS -- it is the operator-facing twin.
+  const isOverlay=/^(agent\.(model\.(primary|fallback)|effort)|board\.(owner|project_title))$/.test(key);
   const dest=isOverlay?"a local override under var/ (committed config.yaml unchanged)"
                       :".autonomy/config.yaml";
   if(!window.confirm("Write "+key+' = "'+value+'" to '+dest+"?\n\nrepo: "+repo)) return;
