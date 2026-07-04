@@ -279,6 +279,35 @@ doctor_marker_check() {
   doctor_marker_report "$marker" "$author" "$wf"
 }
 
+# #211: a git-TRACKED .autonomy/config.yaml that is DIRTY in a loop worktree is a
+# silent-revert hazard. The supervisor's preflight stash-recovery sweeps
+# uncommitted changes, so a config-page 'save default' that writes a tracked key
+# (board.*/merge_gate.*) reverts on the next tick -- worse, silently. This
+# consumer-agnostic guard surfaces the whole class early (the model/effort keys
+# already dodge it via the #202 untracked overlay). Pure reporter: WARN only on
+# the hazard, silent otherwise (tracked+clean or an untracked config is fine --
+# no per-run noise).
+doctor_dirty_config_report() {
+  local tracked="$1" dirty="$2"
+  if [ "$tracked" = yes ] && [ "$dirty" = yes ]; then
+    echo "WARN .autonomy/config.yaml is git-tracked AND has uncommitted changes -- in a loop worktree the supervisor's preflight stash-recovery sweeps this, so a config-page save to a tracked key (board.*/merge_gate.*) silently reverts on the next tick. Commit or discard the change, or route the key through the untracked overlay (#202/#211)."
+  fi
+}
+
+# Impure best-effort. Inspects the target repo's real git state and delegates to
+# the pure reporter. Silent when the repo is not a git checkout or git can't read
+# it (can't inspect -> no false alarm). Staged-but-uncommitted counts as dirty:
+# `git stash` sweeps the index too, so it reverts just the same.
+doctor_dirty_config_check() {
+  local repo="$1" tracked=no dirty=no
+  git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+  if git -C "$repo" ls-files --error-unmatch .autonomy/config.yaml >/dev/null 2>&1; then
+    tracked=yes
+    [ -n "$(git -C "$repo" status --porcelain -- .autonomy/config.yaml 2>/dev/null)" ] && dirty=yes
+  fi
+  doctor_dirty_config_report "$tracked" "$dirty"
+}
+
 doctor_full_report() {
   local repo="$1" hard_fail=0
   echo "== doctor.sh report: $repo =="
@@ -290,6 +319,8 @@ doctor_full_report() {
     hard_fail=1
   fi
   rm -f /tmp/doctor_preflight_err.$$
+
+  doctor_dirty_config_check "$repo"
 
   if [ -f "$repo/CLAUDE.md" ]; then
     echo "OK   CLAUDE.md present (repo root)"
