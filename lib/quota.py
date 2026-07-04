@@ -99,14 +99,21 @@ def _logscan(logdir):
         return {}
 
 
-def utilization(window, logdir=None, live_reader=_live, logscan_reader=_logscan):
+def utilization(window, logdir=None, live_reader=None, logscan_reader=None):
     """Current utilization FRACTION (0-1, or >1 on overage) for `window`
     ('5h'/'five_hour' or '7d'/'seven_day'), or None when no source can supply it.
 
     Live is authoritative and all-or-nothing: a present live dict is trusted
     wholesale for this window and the log-scan is not consulted (no live+log
     mixing). Only when live is absent (None) do we read the log-scan. Never
-    fabricates a number; never raises (source exceptions are contained)."""
+    fabricates a number; never raises (source exceptions are contained).
+
+    The source seams default to the module-level `_live`/`_logscan` but are
+    resolved HERE (call time), not bound as def-time defaults -- so a caller
+    (or a test) that rebinds `quota._live`/`quota._logscan` is honored without
+    the caller having to re-pass them."""
+    live_reader = _live if live_reader is None else live_reader
+    logscan_reader = _logscan if logscan_reader is None else logscan_reader
     canon = _canonical(window)
     if canon is None:
         return None
@@ -136,8 +143,7 @@ def main(argv):
               file=sys.stderr)
         return 2
     logdir = argv[2] if len(argv) == 3 else None
-    val = utilization(argv[1], logdir=logdir,
-                      live_reader=_live, logscan_reader=_logscan)
+    val = utilization(argv[1], logdir=logdir)
     if val is None:
         return 1
     print("%s" % val)

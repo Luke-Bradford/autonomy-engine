@@ -84,6 +84,21 @@ class TestPrecedence(unittest.TestCase):
             util("5h", live_val=live("bad", 0.7), logscan_val=logscan(0.9, 0.9)))
 
 
+class TestSeamResolution(unittest.TestCase):
+    def test_module_globals_honored_without_repassing(self):
+        # utilization resolves _live/_logscan at CALL time, so rebinding the
+        # module globals is honored even when the caller passes no readers
+        # (the property main() relies on; a def-time default would miss it).
+        old_live, old_logscan = quota._live, quota._logscan
+        quota._live = lambda: live(0.42, 0.84)
+        quota._logscan = lambda ld: {}
+        try:
+            self.assertEqual(quota.utilization("5h"), 0.42)
+            self.assertEqual(quota.utilization("7d"), 0.84)
+        finally:
+            quota._live, quota._logscan = old_live, old_logscan
+
+
 class TestFractionValidation(unittest.TestCase):
     def test_overage_passed_through_not_capped(self):
         self.assertEqual(util("5h", live_val=live(1.05, 0.2)), 1.05)
