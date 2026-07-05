@@ -2956,3 +2956,68 @@ class TestLaneServices(unittest.TestCase):
             fh.write("lanes:\n  main: notamap\n")
         st = ds.build_repo_state(self.repo, launch_agents_dir=self.la)
         self.assertNotIn("services", st["lanes"])
+
+
+class TestReadBoardWarning(unittest.TestCase):
+    """#90 item (a): board.sh's board-unresolved marker (EXACTLY 2 lines:
+    epoch, message<=512). TOTAL + STRICT reader -- the warning chip is EARNED
+    by a well-formed marker; corruption never fabricates an alarm."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+
+    def _w(self, content):
+        p = os.path.join(self.d, "board-warning")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(content)
+        return p
+
+    def test_missing_file_is_none(self):
+        self.assertIsNone(
+            ds.read_board_warning(os.path.join(self.d, "nope")))
+
+    def test_valid_marker_parses(self):
+        p = self._w("1751700000\nproject 'X' not found under 'o' "
+                    "(or lookup failed) -- board updates skipped\n")
+        got = ds.read_board_warning(p)
+        self.assertEqual(got["epoch"], 1751700000)
+        self.assertIn("not found", got["message"])
+
+    def test_garbage_epoch_is_none(self):
+        self.assertIsNone(ds.read_board_warning(self._w("yesterday\nmsg\n")))
+
+    def test_empty_message_is_none(self):
+        self.assertIsNone(ds.read_board_warning(self._w("1751700000\n\n")))
+
+    def test_truncated_single_line_is_none(self):
+        self.assertIsNone(ds.read_board_warning(self._w("1751700000")))
+
+    def test_oversized_file_rejected(self):
+        # Oversize = malformed (board.sh never writes this) -> None, never a
+        # truncated-and-trusted message (CP1 finding 4).
+        p = self._w("1751700000\n" + "x" * 100000 + "\n")
+        self.assertIsNone(ds.read_board_warning(p))
+
+    def test_overlong_message_rejected(self):
+        p = self._w("1751700000\n" + "x" * 600 + "\n")
+        self.assertIsNone(ds.read_board_warning(p))
+
+    def test_extra_lines_rejected(self):
+        # Contract is exactly 2 lines; extra lines = torn/corrupted write
+        # (CP1 finding 5).
+        p = self._w("1751700000\nmsg\nunexpected third line\n")
+        self.assertIsNone(ds.read_board_warning(p))
+
+    def test_build_repo_state_carries_key(self):
+        # repo-alpha fixture has no marker -> None, key present.
+        st = ds.build_repo_state(FIX, pid_is_alive=lambda p: True,
+                                 git_in_flight=lambda p: {})
+        self.assertIn("board_warning", st)
+        self.assertIsNone(st["board_warning"])
+
+    def test_oversized_multibyte_rejected(self):
+        # 3-byte UTF-8 chars: ~2000 chars but >4096 BYTES -- the size limit
+        # is a byte contract (review NITPICK on #311).
+        p = self._w("1751700000\n" + "⚠" * 2000 + "\n")
+        self.assertIsNone(ds.read_board_warning(p))

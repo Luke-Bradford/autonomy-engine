@@ -1103,6 +1103,39 @@ def read_heartbeat(path):
     return health_mod.read_heartbeat_file(path) or {}
 
 
+def read_board_warning(path):
+    """#90 item (a): board.sh's board-unresolved marker (EXACTLY 2 lines:
+    epoch, one-line message <=512 chars). board.sh writes it when the
+    configured Projects board fails to resolve and removes it on success;
+    the render shows the message verbatim (detector->marker->chip, no
+    re-derivation). TOTAL and STRICT: missing/torn/oversized/extra-lines/
+    malformed -> None -- the warning chip is EARNED by a well-formed marker,
+    never fabricated from corruption (prevention 12/18; oversize is rejected
+    outright, not truncated-and-trusted)."""
+    try:
+        # Binary read: the <=4096 limit is a BYTE contract; a text-mode
+        # read(4097) counts decoded chars and multi-byte UTF-8 could smuggle
+        # an oversized file past it (review NITPICK on #311).
+        with open(path, "rb") as f:
+            raw_bytes = f.read(4097)
+    except OSError:
+        return None
+    if len(raw_bytes) > 4096:
+        return None
+    raw = raw_bytes.decode("utf-8", errors="replace")
+    lines = raw.splitlines()
+    if len(lines) != 2:
+        return None
+    try:
+        epoch = int(lines[0].strip())
+    except ValueError:
+        return None
+    message = lines[1].strip()
+    if not message or len(message) > 512:
+        return None
+    return {"epoch": epoch, "message": message}
+
+
 # --- choreography feed (#177 piece 3) ---------------------------------------
 # The supervisor already LOGS the org's handoffs -- cron fires and event wakes --
 # to supervisor.log; slice-1's heartbeat is the *current* state, this is the
@@ -2090,6 +2123,9 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "voice": read_supervisor_voice(os.path.join(logdir, "supervisor.log")),
         "choreography": read_choreography(os.path.join(logdir, "supervisor.log")),
         "heartbeat": read_heartbeat(os.path.join(logdir, "heartbeat")),
+        # #90 item (a): board.sh's own board-unresolved verdict (detector ->
+        # marker -> chip; the render shows this text verbatim, no re-derivation).
+        "board_warning": read_board_warning(os.path.join(logdir, "board-warning")),
         # #81 slice 2: the classify record behind a `wedged` status -- state +
         # human reason, so the render can explain the alarm, not just paint it.
         "health": loop_health,

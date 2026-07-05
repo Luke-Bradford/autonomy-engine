@@ -18,6 +18,22 @@ BOARD_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 warn() { echo "board.sh: $*" >&2; }
 
+# #90 item (a): persist the "configured board didn't resolve" verdict so the
+# dashboard can surface it (detector->marker->chip: the dashboard renders THIS
+# text verbatim, it never re-derives the verdict). The marker reflects the
+# LATEST resolution attempt -- each command marks/clears per its OWN
+# resolution outcome; `sweep` (every supervisor tick) is the steady-state
+# authority. Both best-effort: a marker fs error must never block board work
+# (SD-6). Written atomically ($$-suffixed temp: concurrent runs must not
+# clobber each other's half-written temp before the mv). Absent = no warning.
+BOARD_MARKER="var/autonomy-logs/board-warning"
+board_mark_unresolved() {
+  { mkdir -p "$(dirname "$BOARD_MARKER")" \
+      && printf '%s\n%s\n' "$(date +%s)" "$1" > "$BOARD_MARKER.tmp.$$" \
+      && mv -f "$BOARD_MARKER.tmp.$$" "$BOARD_MARKER"; } 2>/dev/null || true
+}
+board_mark_resolved() { rm -f "$BOARD_MARKER" 2>/dev/null || true; }
+
 # Map the engine's p-label (settled-decision 23: p1>p2>p3, p1 highest) to the
 # operator board's Priority single-select option (P0>P1>P2, P0 highest):
 # p1->P0, p2->P1, p3->P2. Echoes "" when no p-label is present -- the field is
@@ -389,18 +405,28 @@ esac
 OWNER="$(config_value_with_overlay board.owner board_owner)"
 PROJECT_TITLE="$(config_value_with_overlay board.project_title board_project_title)"
 BOARD_CONFIGURED=1
-if [ -z "$OWNER" ] || [ -z "$PROJECT_TITLE" ]; then
+if [ -z "$PROJECT_TITLE" ]; then
+  # An empty title is board-off-by-design (SD-31 labels-only scaffold), not a
+  # misconfig -- clear any stale marker so the dashboard never false-alarms.
   warn "board.owner/board.project_title not set in .autonomy/config.yaml (board updates skipped)"
   BOARD_CONFIGURED=0
+  board_mark_resolved
+elif [ -z "$OWNER" ]; then
+  # Title set but no owner: a real misconfig (the board can never resolve),
+  # NOT the off switch -- only an empty TITLE reads as board-off.
+  warn "board.project_title set but board.owner missing (board updates skipped)"
+  BOARD_CONFIGURED=0
+  board_mark_unresolved "board.project_title '$PROJECT_TITLE' set but board.owner missing -- board updates skipped"
 else
   # board.owner crosses into gh argv (as a GraphQL variable); re-validate it
   # against the GitHub login grammar at the point of use (prevention-log 6) even
   # though config also validates -- a stray '-' or non-login char never reaches
   # gh. Best-effort: an invalid owner warns and skips, never errors.
   case "$OWNER" in
-    ""|-*|*[!A-Za-z0-9-]*)
+    -*|*[!A-Za-z0-9-]*)
       warn "board.owner '$OWNER' is not a valid GitHub login (board updates skipped)"
-      BOARD_CONFIGURED=0 ;;
+      BOARD_CONFIGURED=0
+      board_mark_unresolved "board.owner '$OWNER' is not a valid GitHub login -- board updates skipped" ;;
   esac
 fi
 if [ "$BOARD_CONFIGURED" = 0 ] && [ "$cmd" != "sweep" ]; then exit 0; fi
@@ -439,10 +465,17 @@ EOF
   [ -n "$DONE_NAME" ] || DONE_NAME="Done"
   sweep_ids="$(board_resolve_field "$OWNER" "$PROJECT_TITLE" "Status" "$DONE_NAME")"
   read -r SPID SFID SDONE <<<"$sweep_ids"
-  if [ -z "${SPID:-}" ]; then warn "sweep: project '$PROJECT_TITLE' not found under '$OWNER' (skip)"; exit 0; fi
-  if [ -z "${SFID:-}" ] || [ -z "${SDONE:-}" ]; then
-    warn "sweep: Status field or '$DONE_NAME' option not found on the board (skip)"; exit 0
+  if [ -z "${SPID:-}" ]; then
+    warn "sweep: project '$PROJECT_TITLE' not found under '$OWNER' (skip)"
+    board_mark_unresolved "project '$PROJECT_TITLE' not found under '$OWNER' (or lookup failed) -- board updates skipped"
+    exit 0
   fi
+  if [ -z "${SFID:-}" ] || [ -z "${SDONE:-}" ]; then
+    warn "sweep: Status field or '$DONE_NAME' option not found on the board (skip)"
+    board_mark_unresolved "board '$PROJECT_TITLE': Status field or '$DONE_NAME' option not found"
+    exit 0
+  fi
+  board_mark_resolved
   scan="$(board_sweep_scan "$SPID" "$SDONE")"
   swept=0
   # Brace group (not a subshell) with here-doc redirection: `exit 0` exits the
@@ -476,7 +509,28 @@ fi
 
 ids="$(board_resolve_project "$OWNER" "$PROJECT_TITLE" "$status")"
 read -r PID FID OPT_ID <<<"$ids"
-if [ -z "${PID:-}" ]; then warn "project '$PROJECT_TITLE' not found under '$OWNER' (skip)"; exit 0; fi
+if [ -z "${PID:-}" ]; then
+  warn "project '$PROJECT_TITLE' not found under '$OWNER' (skip)"
+  board_mark_unresolved "project '$PROJECT_TITLE' not found under '$OWNER' (or lookup failed) -- board updates skipped"
+  exit 0
+fi
+# Marker verdict lands HERE, straight off the resolution result -- NOT further
+# down the command body, where an unrelated issue-lookup failure would exit
+# before a clear and strand a stale marker (Codex CP2). `add` needs only the
+# project; `status` needs field+option too. Verdict only -- control flow is
+# unchanged (a status with a missing field still does the add/Priority work
+# below and warn-skips at the original guards).
+if [ "$cmd" = "add" ]; then
+  board_mark_resolved
+elif [ "$cmd" = "status" ]; then
+  if [ -z "${FID:-}" ]; then
+    board_mark_unresolved "board '$PROJECT_TITLE': Status field not found"
+  elif [ -z "${OPT_ID:-}" ]; then
+    board_mark_unresolved "board '$PROJECT_TITLE': status '$status' is not a board column"
+  else
+    board_mark_resolved
+  fi
+fi
 
 # Issue node id + labels in one call; the p-label drives the Priority field.
 IVIEW="$(gh issue view "$issue" --json id,labels 2>/dev/null)"
@@ -520,6 +574,8 @@ fi
 if [ "$cmd" = "add" ]; then exit 0; fi
 
 if [ "$cmd" = "status" ]; then
+  # Marker verdict for these two cases was already written at the resolution
+  # site above; these guards keep their original warn-skip behaviour only.
   if [ -z "${FID:-}" ]; then warn "Status field not found (skip)"; exit 0; fi
   if [ -z "${OPT_ID:-}" ]; then warn "status '$status' is not a board column (skip)"; exit 0; fi
   if set_single_select "$PID" "$ITEM" "$FID" "$OPT_ID"; then

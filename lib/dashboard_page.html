@@ -1050,6 +1050,12 @@ function renderRepos(repos){
     // a lane -- surface it so broken committed config never reads as healthy.
     const laneWarn = lanesInvalid
       ? `<span class="lbad" title="the committed lanes: block is malformed — the supervisor will refuse to dispatch a lane (display only; fix .autonomy/config.yaml)">⚠ lanes config invalid</span>` : "";
+    // #90 item (a): board.sh could not resolve the configured Projects board
+    // (marker written by the detector itself; its message shown verbatim in
+    // the title -- the rail is too narrow for the full text).
+    const bw=r.board_warning;
+    const boardWarn = bw&&bw.message
+      ? `<span class="lbad" title="${esc(bw.message)} — board updates are being skipped (display only; fix .autonomy/config.yaml or create the board)">⚠ board unresolved</span>` : "";
     // #258: single-lane repo -> the repo header IS the implicit 'main' lane's
     // select target (no role-row restructure; role rows stay byte-identical --
     // Codex CP1 finding 7). Multi-lane -> header is plain; each lgrp-h selects.
@@ -1059,7 +1065,7 @@ function renderRepos(repos){
       : `<div class="repo-h lsel${selClass(skey)}" data-lane-key="${encodeURIComponent(skey)}" title="click to focus this lane in the center">`;
     const ghost=`<a class="role ghost" href="/config" title="add a role${ghostRoles.length?` — available: ${esc(ghostRoles.map(x=>x.name).join(", "))}`:""}">＋ role</a>`;
     return `<div class="repo">
-      ${repoHOpen}<span class="nm">${esc(dispName(r.name))}</span>${laneWarn}
+      ${repoHOpen}<span class="nm">${esc(dispName(r.name))}</span>${laneWarn}${boardWarn}
         <span class="badge">${token(st,true)}</span>${lifecycleCluster(r,st)}</div>
       <div class="cfg">${esc(cfg.model||"—")} · gate ${esc(cfg.merge_gate||"—")}${(r.lifecycle||{}).pid?" · pid "+r.lifecycle.pid:""}</div>
       ${gateChain}${roles}${ghost}</div>`;
