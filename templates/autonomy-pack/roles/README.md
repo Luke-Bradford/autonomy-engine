@@ -13,8 +13,10 @@ read this exact path).
   forward-looking deep-dive (understands the app/board/stack and surfaces
   findings via the `output:` knob). Enable it with the `researcher:` example in
   `config.yaml`.
-- `pm.md` — write this when enabling the PM role (still gated on the Managed
-  Agents rate-limit spike — engine issue #17).
+- `pm.md` — scaffolded by onboard; the cron board-groomer (labels are the
+  routing contract; duties keyed to the `duties:` knob; human decisions
+  escalate via the fenced `autonomy-question` schema the dashboard's
+  needs-you queue parses). Enable it with the `pm:` example in `config.yaml`.
 
 ## Custom roles
 

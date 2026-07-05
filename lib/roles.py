@@ -348,7 +348,7 @@ _KNOB_NOTES = {
     "output":     "shapes the role's rail prose only -- not enforced by the engine",
     "web_search": "shapes the role's rail prose only -- not enforced by the engine",
     "self_test":  "not yet consumed",
-    "duties":     "not yet consumed (the PM role is not built)",
+    "duties":     "shapes the PM rail's prose only -- not enforced by the engine",
     "blockers":   "not yet consumed",
     "models":     "per-phase models are ignored -- the adapter takes a single model",
 }
