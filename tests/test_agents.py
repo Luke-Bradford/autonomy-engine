@@ -189,5 +189,113 @@ class TestAgentsCorruption(unittest.TestCase):
             self.a.delete("coder")
 
 
+class TestDoctorReport(unittest.TestCase):
+    """doctor_report() -- the doctor-WARNING half of SD-30: dangling
+    entity->account refs and a corrupt index degrade to WARN lines, never a
+    crash and never silence. Rail refs are deliberately NOT covered: rails
+    resolve against a repo's roles: block and the binding key tying an entity
+    to a repo is an open #87 design fork, so there is nothing repo-independent
+    to validate them against yet."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.agents_idx = os.path.join(self.tmp, "agents")
+        self.accounts_idx = os.path.join(self.tmp, "accounts")
+        self.reg = ag.Agents(index_path=self.agents_idx)
+
+    def _write_accounts(self, names):
+        with open(self.accounts_idx, "w", encoding="utf-8") as fh:
+            json.dump({"accounts": {n: {"kind": "claude_subscription"}
+                                    for n in names}}, fh)
+
+    def _report(self):
+        return ag.doctor_report(agents_index=self.agents_idx,
+                                accounts_index=self.accounts_idx)
+
+    def test_absent_registry_reports_nothing(self):
+        # No agents registry on this machine is the common, healthy case --
+        # zero noise (mirrors doctor_lane_report's silent-when-absent shape).
+        self._write_accounts(["main"])
+        self.assertEqual(self._report(), [])
+
+    def test_all_refs_resolve_is_one_ok_line(self):
+        self._write_accounts(["main", "codex-1"])
+        self.reg.set("coder", account="main")
+        self.reg.set("researcher", account="codex-1")
+        lines = self._report()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("OK "), lines[0])
+        self.assertIn("2", lines[0])
+
+    def test_dangling_account_ref_warns_naming_both(self):
+        self._write_accounts(["main"])
+        self.reg.set("coder", account="main")
+        self.reg.set("ghost", account="gone-acct")
+        lines = self._report()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("WARN "), lines[0])
+        self.assertIn("ghost", lines[0])
+        self.assertIn("gone-acct", lines[0])
+        # the healthy verdict is EARNED -- no OK line alongside a WARN.
+        self.assertFalse(any(ln.startswith("OK ") for ln in lines))
+
+    def test_corrupt_agents_index_is_one_warn(self):
+        with open(self.agents_idx, "w", encoding="utf-8") as fh:
+            fh.write("{ not json")
+        self._write_accounts(["main"])
+        lines = self._report()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("WARN "), lines[0])
+        self.assertIn("unreadable", lines[0])
+
+    def test_corrupt_accounts_index_never_fabricates_dangling(self):
+        # fail-safe, not fail-open: with an unreadable ACCOUNTS index the
+        # naive set-lookup would accuse every agent of dangling. Degrade to
+        # a single cannot-verify WARN instead -- neither OK nor accusations.
+        self.reg.set("coder", account="main")
+        with open(self.accounts_idx, "w", encoding="utf-8") as fh:
+            fh.write("{ not json")
+        lines = self._report()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("WARN "), lines[0])
+        self.assertIn("cannot verify", lines[0])
+        self.assertNotIn("coder", lines[0])
+
+    def test_malformed_account_ref_warns_not_crashes(self):
+        # A hand-edited entry can carry a non-string account ref; the entry
+        # dict passes is_corrupt() but `[] in set` would raise unhashable
+        # TypeError -- through doctor.sh's best-effort guard that becomes
+        # SILENCE, not a WARN (Codex CP2 finding). The reporter must be total
+        # (prevention-log #12): malformed ref -> its own WARN line.
+        with open(self.agents_idx, "w", encoding="utf-8") as fh:
+            json.dump({"agents": {"bad": {"account": []},
+                                  "coder": {"account": "main"}}}, fh)
+        self._write_accounts(["main"])
+        lines = self._report()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("WARN "), lines[0])
+        self.assertIn("bad", lines[0])
+        self.assertIn("malformed", lines[0])
+
+    def test_missing_account_key_warns_malformed(self):
+        with open(self.agents_idx, "w", encoding="utf-8") as fh:
+            json.dump({"agents": {"orphan": {}}}, fh)
+        self._write_accounts(["main"])
+        lines = self._report()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("WARN "), lines[0])
+        self.assertIn("orphan", lines[0])
+        self.assertIn("malformed", lines[0])
+
+    def test_empty_accounts_registry_warns_each_agent(self):
+        # An ABSENT accounts registry is readable-and-empty, not corrupt:
+        # every ref genuinely dangles and each agent gets its own WARN.
+        self.reg.set("coder", account="main")
+        self.reg.set("qa", account="main")
+        lines = self._report()
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(all(ln.startswith("WARN ") for ln in lines))
+
+
 if __name__ == "__main__":
     unittest.main()
