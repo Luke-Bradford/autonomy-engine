@@ -136,6 +136,11 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .ptrack .pseg.done{color:var(--ink);background:var(--panel2);border-color:var(--hair2)}
 .ptrack .pseg.current{color:var(--accent);background:var(--accent-soft);border-color:var(--accent);font-weight:600}
 .ptrack .pseg.outline{color:var(--dim);background:transparent;border:1px dashed var(--hair2)}
+/* #312: no-evidence milestone -- faded, deliberately BORDER-FREE (SD-32
+   reserves dashed for the configured layer and dotted for the future
+   prompt-phases layer, so absence-of-evidence gets no border idiom at all) */
+.ptrack .pseg.empty{color:var(--dim);opacity:.45;border-color:transparent}
+.ptrack .pseg.done.vred{color:var(--bad);border-color:var(--bad)}
 .ptrack .psep{color:var(--dim);font-size:9px}
 .ctl{display:flex;gap:7px;margin-top:12px;padding-top:11px;border-top:1px solid var(--hair)}
 .cbtn{font-family:var(--mono);font-size:10px;letter-spacing:.6px;text-transform:uppercase;padding:6px 11px;border-radius:5px;
@@ -650,9 +655,15 @@ function renderFocus(repos){
       const trk=ft.track||[];
       if(trk.length){
         const segs=trk.map(s=>{
-          const lbl=s.step==="review"?(s.actor==="bot"?"🤖 review":"👤 review"):s.step;
-          const tip=s.state==="done"?"observed — done":s.state==="current"?"in progress now":"configured — not yet reached";
-          return `<span class="pseg ${esc(s.state)}" title="${esc(tip)}">${esc(lbl)}</span>`;
+          // #312: tests carries an observed red/green verdict (a red run IS an
+          // observed fact -- state stays `done`, the vred class carries color);
+          // `empty` = no evidence for a milestone, rendered faded.
+          const lbl=s.step==="review"?(s.actor==="bot"?"🤖 review":"👤 review")
+                   :s.step==="tests"&&s.verdict?(s.verdict==="green"?"tests ✓":"tests ✗")
+                   :s.step;
+          const tip=s.state==="done"?"observed — done":s.state==="current"?"in progress now":s.state==="empty"?"no evidence — not observed":"configured — not yet reached";
+          const vcls=s.verdict==="red"?" vred":"";
+          return `<span class="pseg ${esc(s.state)}${vcls}" title="${esc(tip)}">${esc(lbl)}</span>`;
         }).join(`<span class="psep">→</span>`);
         ticket+=`<div class="ptrack" title="phase track — observed milestones (solid) + configured gates (outline); display only, safe_merge is the enforcer">${segs}</div>`;
       }
