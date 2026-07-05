@@ -218,6 +218,35 @@ class TestPhaseTrack(unittest.TestCase):
         self.assertNotIn("state", chain[1])
 
 
+class BoardTransitionsTest(unittest.TestCase):
+    """#312 Slice B: board.sh's transition log -> the set of issues with an
+    OBSERVED board write. Total: missing file -> empty set; garbled lines
+    skipped, never raised -- evidence is EARNED (prevention-log #18)."""
+
+    def _write(self, body):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        p = os.path.join(d, "board-transitions.log")
+        with open(p, "w") as fh:
+            fh.write(body)
+        return p
+
+    def test_missing_file_empty(self):
+        self.assertEqual(ds.board_transitions("/nonexistent/x.log"), set())
+
+    def test_parses_issues(self):
+        p = self._write("1751700000\t42\tIn Progress\n"
+                        "1751700100\t42\tIn Review\n1751700200\t7\tDone\n")
+        self.assertEqual(ds.board_transitions(p), {42, 7})
+
+    def test_garbled_lines_skipped(self):
+        # non-numeric epoch, non-numeric issue, empty status, wrong field
+        # count: every garbled shape is skipped -- evidence is EARNED (CP1)
+        p = self._write("junk\n\t\t\nx\t42\tDone\n1751700000\tNaN\tDone\n"
+                        "1751700000\t42\t\n1751700000\t9\tDone\n")
+        self.assertEqual(ds.board_transitions(p), {9})
+
+
 class TestConfigOverlay(unittest.TestCase):
     """#202: the persistent operator overlay (var/autonomy-logs/config-overrides)
     shadows committed config.yaml for model/effort in the render model, and is

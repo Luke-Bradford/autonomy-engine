@@ -603,6 +603,34 @@ def merge_gate_chain(strategy):
     return [{"step": "pr"}]
 
 
+def board_transitions(path):
+    """Issue numbers with at least one OBSERVED board write, from board.sh's
+    append-only transition log (#312 Slice B). Each line is
+    `epoch\\tissue\\tstatus`, written only on a CONFIRMED Status mutation, so
+    membership here is honest evidence for the phase track's `board` segment.
+
+    Total by construction (feeds the whole-page render): a missing/unreadable
+    file is the normal pre-Slice-B state and yields an empty set; a garbled
+    line (fs hiccup, partial append) is skipped, never raised. Strict 3-field
+    shape -- numeric epoch, numeric issue, non-empty status -- because the
+    verdict is EARNED, not defaulted (prevention-log #18): absence of clean
+    evidence keeps the segment EMPTY downstream."""
+    issues = set()
+    try:
+        with open(path, errors="replace") as fh:
+            for line in fh:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) != 3 or not parts[2] or not parts[0].isdigit():
+                    continue
+                try:
+                    issues.add(int(parts[1]))
+                except ValueError:
+                    continue
+    except OSError:
+        return set()
+    return issues
+
+
 def phase_track(focus, gate_chain):
     """The selected-lane center-zone phase track (#187 UI-4): the configured
     gate spine marked by OBSERVED GitHub-flow facts, per ticket.
