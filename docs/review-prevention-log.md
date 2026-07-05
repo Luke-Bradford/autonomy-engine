@@ -319,3 +319,17 @@ A blank/absent/garbage result must land on the safe side, never the happy path.
 Same class as invariant "fail-safe never fail-open": absence of evidence is not
 evidence of health. Regression: `tests/test_start.sh` drives blank-probe and
 unrecognised-state through the branch and asserts the WARN (no bare OK) fires.
+
+## 19. Local shellcheck ≠ CI shellcheck — a locally-clean push can still fail the lint gate
+
+*Origin: 2026-07-05, PR #296 (#294 self-re-exec).* `shellcheck -S warning`
+passed locally (0.11.0) and in the pre-push gate, then FAILED in CI on SC2093
+("remove exec if script should continue") — the CI runner ships a different
+shellcheck build with checks the local one lacks (and vice versa). One full
+red CI round for a one-line directive. **Rule: CI's shellcheck is the
+authoritative one.** When a construct is intentionally unusual (continue after
+`exec` under execfail, sourcing dynamic paths, deliberate word-splitting),
+add the targeted `# shellcheck disable=SCnnnn` + one-line justification AT
+WRITE TIME rather than assuming a locally-clean pass covers CI. If CI flags a
+check the local binary doesn't, fix + note the version drift — don't argue
+with the older tool.

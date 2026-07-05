@@ -152,6 +152,7 @@ reexec_engine() {
   local had_execfail=0
   shopt -q execfail && had_execfail=1
   shopt -s execfail
+  # shellcheck disable=SC2093  # continuing after exec is the point: execfail makes a failed exec return
   exec /bin/bash "$target" "$@"
   # Only reached when the exec itself failed (e.g. /bin/bash unrunnable).
   [ "$had_execfail" -eq 1 ] || shopt -u execfail
