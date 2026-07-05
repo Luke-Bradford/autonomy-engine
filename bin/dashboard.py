@@ -708,7 +708,7 @@ def _compute_in_flight(repo):
     if prs:
         top = prs[0]
         focus = {"number": top["number"], "title": top["title"], "url": top["url"],
-                 "ci": top["ci"], "review": top["review"]}
+                 "branch": top["branch"], "ci": top["ci"], "review": top["review"]}
 
     # recently completed tickets (merged PRs) -- ref + link, so the operator sees
     # what the loop finished, not just what's open. mraw fetched concurrently above.
@@ -1069,7 +1069,23 @@ def _collect_one(repo):
         # every variant renders the same track shape.
         ft = git.get("focus_ticket")
         if ft:
-            ft["track"] = ds.phase_track(ft, st.get("merge_gate_chain"))
+            # #312 Slice B evidence, pre-digested for phase_track and keyed on
+            # the ISSUE number (focus_issue -- the open-PR variant's `number`
+            # is the PR number): the board milestone from board.sh's own
+            # transition log (written only on a confirmed write), the tests
+            # verdict from THIS ticket's live/most-recent session -- scoped so
+            # another ticket's gate run can never light this track.
+            issue = ds.focus_issue(ft)
+            evidence = {
+                "board": issue is not None and issue in ds.board_transitions(
+                    os.path.join(repo, "var", "autonomy-logs",
+                                 "board-transitions.log")),
+                "tests": (sess.get("tests_ran")
+                          if issue is not None and sess.get("ticket") == issue
+                          else None),
+            }
+            ft["track"] = ds.phase_track(ft, st.get("merge_gate_chain"),
+                                         evidence)
         return st
     except Exception as exc:  # never let one repo blank the page
         return {"name": os.path.basename(repo.rstrip("/")), "path": repo,

@@ -281,6 +281,35 @@ class PhaseTrackEvidenceTest(unittest.TestCase):
             [])
 
 
+class FocusIssueTest(unittest.TestCase):
+    """#312 (CP1): evidence must be keyed on the ISSUE number. The open-PR
+    focus variant's `number` is the PR number -- its issue ref comes from the
+    branch name; completed/issue variants already carry the issue number."""
+
+    def test_open_pr_variant_uses_branch_ref(self):
+        ft = {"number": 313, "ci": "passing", "review": "",
+              "branch": "feat/312-phase-track-slice-b"}
+        self.assertEqual(ds.focus_issue(ft), 312)
+
+    def test_open_pr_variant_no_branch_ref_none(self):
+        ft = {"number": 313, "ci": "passing", "review": "",
+              "branch": "hotfix"}
+        self.assertIsNone(ds.focus_issue(ft))
+
+    def test_completed_variant_number_is_issue(self):
+        ft = {"number": 312, "completed": True, "merged_epoch": 9,
+              "pr_number": 313}
+        self.assertEqual(ds.focus_issue(ft), 312)
+
+    def test_issue_variant_number_is_issue(self):
+        ft = {"number": 312, "in_progress": True, "state": "open"}
+        self.assertEqual(ds.focus_issue(ft), 312)
+
+    def test_malformed_none(self):
+        self.assertIsNone(ds.focus_issue(None))
+        self.assertIsNone(ds.focus_issue({}))
+
+
 class BoardTransitionsTest(unittest.TestCase):
     """#312 Slice B: board.sh's transition log -> the set of issues with an
     OBSERVED board write. Total: missing file -> empty set; garbled lines

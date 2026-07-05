@@ -680,6 +680,22 @@ def board_transitions(path):
     return issues
 
 
+def focus_issue(focus):
+    """The ISSUE number behind a focus_ticket, for keying #312 evidence.
+    The three variants carry it differently (Codex CP1 catch): the open-PR
+    variant's `number` is the PR NUMBER -- its issue ref is parsed from the
+    branch name; the completed and issue-only variants' `number` IS the
+    issue. None when it can't be honestly derived (evidence then stays
+    empty -- a wrong key would light another ticket's milestones). Total:
+    any malformed focus -> None."""
+    if not isinstance(focus, dict) or not focus:
+        return None
+    if "ci" in focus or "review" in focus:
+        return extract_ticket_ref(str(focus.get("branch") or ""))
+    n = focus.get("number")
+    return n if isinstance(n, int) else None
+
+
 def _with_evidence(spine, evidence):
     """Insert the #312 evidence-only milestone segments into a fully-stamped
     gate spine: `board` at position 0, `tests` right after `branch`. Evidence
