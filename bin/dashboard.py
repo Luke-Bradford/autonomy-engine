@@ -1254,9 +1254,12 @@ def execute_control(repo, action, lane=None):
     unknown / invalid / unprovisioned lanes REFUSE; acting on the default
     service as a fallback would drive the WRONG loop (fail-open)."""
     uid = os.getuid()
-    service = dcx.find_service(repo, LAUNCH_AGENTS)
     target_repo = repo
+    lane_svc = None
     if lane:
+        # Gate the lane BEFORE any LaunchAgents read (Codex CP2): shape first
+        # (the POST body is a boundary), then the repo's config -- the same
+        # lanes authority the supervisor's --lane gate uses.
         if not dcx.is_valid_lane_name(lane):
             return {"ok": False, "error": "invalid lane name"}
         try:
@@ -1273,16 +1276,15 @@ def execute_control(repo, action, lane=None):
                                           "refusing lane control"}
         if lane not in ds.roles_schema.lane_names(config):
             return {"ok": False, "error": "unknown lane %r" % lane}
-        svc = dcx.find_lane_service(
+        lane_svc = dcx.find_lane_service(
             repo, lane, LAUNCH_AGENTS,
             default_lane=ds.roles_schema.default_lane(config))
-        if svc is None:
-            pass                    # the repo's own service runs this lane
-        elif "error" in svc:
-            return {"ok": False, "error": svc["error"]}
-        else:
-            service = {"label": svc["label"], "plist": svc["plist"]}
-            target_repo = svc["repo"]
+        if lane_svc is not None and "error" in lane_svc:
+            return {"ok": False, "error": lane_svc["error"]}
+    service = dcx.find_service(repo, LAUNCH_AGENTS)
+    if lane_svc is not None:        # a sibling lane's service, not the repo's
+        service = {"label": lane_svc["label"], "plist": lane_svc["plist"]}
+        target_repo = lane_svc["repo"]
     plan = dcx.control_plan(target_repo, action, service, uid)
     if "error" in plan:
         return {"ok": False, "error": plan["error"]}
