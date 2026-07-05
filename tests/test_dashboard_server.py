@@ -1249,5 +1249,114 @@ class TestModelEffortPendingEdit(unittest.TestCase):
                         "delete must sit inside the success guard")
 
 
+_PLIST_TMPL = """<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>Label</key><string>%(label)s</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/bash</string>
+    <string>/eng/bin/supervisor.sh</string>
+    <string>--repo</string>
+    <string>%(repo)s</string>
+%(lane_args)s  </array>
+</dict></plist>
+"""
+
+
+class TestLaneControl(unittest.TestCase):
+    """#147: execute_control(repo, action, lane=...) routes the action to THAT
+    lane's service + worktree. The lane is gated against the repo's config
+    (lanes_valid + lane_names -- the supervisor's own authority) BEFORE any
+    filesystem use; unknown / unprovisioned lanes REFUSE, and there is never
+    a fallback to the default service (fail-safe, not fail-open)."""
+
+    def _plist(self, label, repo, lane):
+        lane_args = ""
+        if lane:
+            lane_args = ("    <string>--lane</string>\n"
+                         "    <string>%s</string>\n" % lane)
+        with open(os.path.join(self.la, label + ".plist"), "w") as fh:
+            fh.write(_PLIST_TMPL % {"label": label, "repo": repo,
+                                    "lane_args": lane_args})
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.repo = os.path.join(self.tmp, ".myrepo-autonomy")
+        os.makedirs(os.path.join(self.repo, ".autonomy"))
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            # real lanes schema (test_roles.py idiom): only `worktree:` is a
+            # valid lane key; the FIRST declared lane is the default -- there
+            # is no `default:` flag (roles.default_lane).
+            fh.write("lanes:\n"
+                     "  main:\n    worktree: ../.myrepo-autonomy\n"
+                     "  qa:\n    worktree: ../.myrepo-qa-autonomy\n"
+                     "roles:\n  coder:\n    enabled: true\n"
+                     "    trigger: { type: loop }\n")
+        self.la = os.path.join(self.tmp, "LaunchAgents")
+        os.makedirs(self.la)
+        self._plist("com.autonomy.myrepo.supervisor", self.repo, None)
+        self.qa_wt = os.path.join(self.tmp, ".myrepo-qa-autonomy")
+        os.makedirs(os.path.join(self.qa_wt, "var", "autonomy-logs"))
+        self._plist("com.autonomy.myrepo.qa.supervisor", self.qa_wt, "qa")
+        self._saved = dashboard.LAUNCH_AGENTS
+        dashboard.LAUNCH_AGENTS = self.la
+
+    def tearDown(self):
+        dashboard.LAUNCH_AGENTS = self._saved
+
+    def _sentinel(self, wt):
+        return os.path.join(wt, "var", "autonomy-logs", "autonomy-PAUSE")
+
+    def test_lane_pause_touches_the_lane_worktrees_sentinel(self):
+        r = dashboard.execute_control(self.repo, "pause", lane="qa")
+        self.assertTrue(r.get("ok"), r)
+        self.assertTrue(os.path.exists(self._sentinel(self.qa_wt)))
+        self.assertFalse(os.path.exists(self._sentinel(self.repo)))
+
+    def test_lane_resume_removes_the_lane_worktrees_sentinel(self):
+        open(self._sentinel(self.qa_wt), "a").close()
+        r = dashboard.execute_control(self.repo, "resume", lane="qa")
+        self.assertTrue(r.get("ok"), r)
+        self.assertFalse(os.path.exists(self._sentinel(self.qa_wt)))
+
+    def test_default_lane_name_uses_the_repos_own_path(self):
+        r = dashboard.execute_control(self.repo, "pause", lane="main")
+        self.assertTrue(r.get("ok"), r)
+        self.assertTrue(os.path.exists(self._sentinel(self.repo)))
+        self.assertFalse(os.path.exists(self._sentinel(self.qa_wt)))
+
+    def test_no_lane_keeps_todays_behaviour(self):
+        r = dashboard.execute_control(self.repo, "pause")
+        self.assertTrue(r.get("ok"), r)
+        self.assertTrue(os.path.exists(self._sentinel(self.repo)))
+
+    def test_unknown_lane_refuses(self):
+        r = dashboard.execute_control(self.repo, "pause", lane="prod")
+        self.assertFalse(r.get("ok"))
+        # prove nothing happened: no sentinel appeared in EITHER worktree
+        # (execute_control never returns plan keys, so asserting on the
+        # result dict alone proves nothing -- Codex CP1 Low-7).
+        for wt in (self.repo, self.qa_wt):
+            self.assertFalse(os.path.exists(self._sentinel(wt)))
+
+    def test_bad_lane_shape_refuses(self):
+        r = dashboard.execute_control(self.repo, "pause", lane="../x")
+        self.assertFalse(r.get("ok"))
+        for wt in (self.repo, self.qa_wt):
+            self.assertFalse(os.path.exists(self._sentinel(wt)))
+
+    def test_unprovisioned_lane_refuses_never_falls_back(self):
+        os.remove(os.path.join(self.la, "com.autonomy.myrepo.qa.supervisor.plist"))
+        r = dashboard.execute_control(self.repo, "stop", lane="qa")
+        self.assertFalse(r.get("ok"))
+        self.assertIn("setup_worktree", r["error"])
+
+    def test_unreadable_config_refuses_lane_control(self):
+        os.remove(os.path.join(self.repo, ".autonomy", "config.yaml"))
+        r = dashboard.execute_control(self.repo, "pause", lane="qa")
+        self.assertFalse(r.get("ok"))
+        for wt in (self.repo, self.qa_wt):
+            self.assertFalse(os.path.exists(self._sentinel(wt)))
+
+
 if __name__ == "__main__":
     unittest.main()
