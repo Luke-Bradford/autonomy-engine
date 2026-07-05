@@ -1928,7 +1928,76 @@ def _read_config(repo_path):
     }
 
 
-def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_flight=None, now=None):
+def lane_status(worktree, now=None):
+    """#147 per-lane lifecycle: the coarse display status for a SIBLING lane's
+    worktree, from the SAME sources the repo card uses -- supervisor lock pid
+    + PAUSE sentinel (lifecycle_status), the heartbeat phase, and lib/health's
+    wedged truth. Vocabulary is a subset of display_status's (working / idle /
+    paused / stopping / stopped / wedged) so lifecycleCluster maps buttons
+    unchanged. Coarser than the card on purpose: the working-vs-idle flavour
+    comes from the heartbeat phase (not session-log activity), and needs-setup
+    degrades to stopped -- the buttons are identical either way."""
+    if now is None:
+        now = time.time()
+    lc = lifecycle_status(worktree)["state"]
+    if lc in ("stopped", "needs-setup"):
+        return "stopped"
+    logdir = os.path.join(worktree, "var", "autonomy-logs")
+    hb = read_heartbeat(os.path.join(logdir, "heartbeat"))
+    phase = str(hb.get("phase") or "")
+    working = phase.startswith("session-running") or phase.startswith("dispatching")
+    if lc == "paused":
+        return "stopping" if working else "paused"
+    if health_mod.loop_health(logdir, now).get("state") == "wedged":
+        return "wedged"
+    return "working" if working else "idle"
+
+
+def lane_services(repo_path, config, launch_agents_dir, now=None):
+    """#147: each DECLARED lane's service + coarse status, for the lane rows'
+    lifecycle clusters. Returns {lane: {installed, own, status}} or None when
+    the topology doesn't apply (single lane, invalid lanes: block) -- callers
+    omit the key entirely so older payload consumers see no difference.
+    own:True = the registered repo's own service runs this lane; its status
+    stays None and the render uses the card's own status (no duplicate read).
+    Total: any surprise returns None -- the buttons vanish rather than lie
+    (fail-safe direction for a display surface)."""
+    try:
+        if not roles_schema.lanes_valid(config):
+            return None
+        names = roles_schema.lane_names(config)
+        if len(names) < 2:
+            return None
+        default = roles_schema.default_lane(config)
+        services = {}
+        for ln in names:
+            svc = _dcx.find_lane_service(repo_path, ln, launch_agents_dir,
+                                         default_lane=default)
+            if svc is None:
+                services[ln] = {"installed": True, "own": True, "status": None}
+            elif "error" in svc:
+                services[ln] = {"installed": False, "own": False, "status": None}
+            else:
+                services[ln] = {"installed": True, "own": False,
+                                "status": lane_status(svc["repo"], now=now)}
+        return services
+    except Exception:
+        return None
+
+
+def _with_services(lanes, repo_path, config, launch_agents_dir, now):
+    """Attach lanes['services'] only when a launch-agents dir was provided AND
+    the topology yields one -- absent otherwise, so every existing caller and
+    payload consumer stays byte-identical."""
+    if launch_agents_dir:
+        services = lane_services(repo_path, config, launch_agents_dir, now=now)
+        if services is not None:
+            lanes["services"] = services
+    return lanes
+
+
+def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_flight=None, now=None,
+                     launch_agents_dir=None):
     """Compose the full per-repo render model. git/gh state is injected via
     `git_in_flight(repo_path) -> dict` so the page's server owns that edge."""
     if now is None:
@@ -2012,10 +2081,12 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         # verdict the supervisor's --lane gate reaches) so a render can flag
         # broken config instead of faking a healthy single lane -- fail-safe
         # for the render (never raises), truthful for the operator.
-        "lanes": {"names": lane_names,
-                  "default": roles_schema.default_lane(config),
-                  "valid": roles_schema.lanes_valid(config),
-                  "active": active_lane, "active_at": active_at},
+        "lanes": _with_services(
+            {"names": lane_names,
+             "default": roles_schema.default_lane(config),
+             "valid": roles_schema.lanes_valid(config),
+             "active": active_lane, "active_at": active_at},
+            repo_path, config, launch_agents_dir, now),
         "voice": read_supervisor_voice(os.path.join(logdir, "supervisor.log")),
         "choreography": read_choreography(os.path.join(logdir, "supervisor.log")),
         "heartbeat": read_heartbeat(os.path.join(logdir, "heartbeat")),

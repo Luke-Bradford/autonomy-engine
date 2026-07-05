@@ -215,6 +215,10 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .repo .lgrp{border-left:1px solid var(--hair2);margin:2px 0 2px 3px;padding-left:9px}
 .repo .lgrp-h{font-family:var(--mono);font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:var(--mut);margin:6px 0 2px}
 .repo .lgrp-h .ldef{color:var(--dim);margin-left:5px;text-transform:none}
+/* #147: per-lane lifecycle cluster on the lane sub-header; the unprovisioned
+   marker stays a quiet dot (title carries the setup_worktree hint). */
+.repo .lgrp-h .ribtns{margin-left:6px}
+.repo .lgrp-h .lnosvc{color:var(--dim);margin-left:6px;cursor:help}
 /* #258: the selectable lane target -- the repo header for a single-lane repo
    (its implicit 'main' lane), each lgrp header for a multi-lane repo. Selection
    uses the existing --accent steel blue (no new scheme); background + inset bar
@@ -694,7 +698,7 @@ function renderFocus(repos){
         ${token(st,true)}
         <span class="path"><b>${esc(dispName(r.name))}</b>${laneNames.length>1?` / ${esc(selLane)} lane`:""}</span>
         <span class="rolebadge" title="role/model of the live (or most recent) session · configured effort">${rolebadge}</span>${isWorktree(r.name)?`<span class="fc-role" title="git worktree of the target repo">worktree</span>`:""}
-        <div class="dh-ctl">${lifecycleCluster(r,st)}<button class="ibtn hist" onclick="openLaneHist(event,this)" title="Session history"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg></button></div>
+        <div class="dh-ctl">${focusCluster(r,st,selLane,laneNames)}<button class="ibtn hist" onclick="openLaneHist(event,this)" title="Session history"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg></button></div>
       </div>
       ${ticket}${stepLine}
       <div class="dh2">${elapsed?`<span>${elapsed}</span>`:""}${cs.output_tokens!=null?`<span>out <b class="mono">${num(cs.output_tokens)}</b> tok</span>`:""}${cs.cost_usd?`<span>cost <b class="mono">$${cs.cost_usd.toFixed(2)}</b></span>`:""}${effortMeta}${branch}${pid}</div>
@@ -818,34 +822,53 @@ const CTOKEN=(document.querySelector('meta[name="ae-control-token"]')||{}).conte
 // Static per status: no volatile time content enters the #164/#238 skip-guard
 // signature, and every button is a real <button> so the delegated #repos
 // select listener ignores its clicks (it never triggers lane selection).
-function ibtn(repo,action,label,title,cls,glyph){
-  return `<button class="ibtn ${cls}" title="${esc(title)}" onclick="control('${encAttr(repo)}','${action}','${esc(label)}')">${glyph}</button>`;}
-function lifecycleCluster(r,st){
+function ibtn(repo,action,label,title,cls,glyph,lane){
+  // #147: an optional lane routes the action to THAT lane's service --
+  // omitted (repo scope) keeps the call byte-identical to before.
+  return `<button class="ibtn ${cls}" title="${esc(title)}" onclick="control('${encAttr(repo)}','${action}','${esc(label)}'${lane?`,'${esc(lane)}'`:""})">${glyph}</button>`;}
+function lifecycleCluster(r,st,lane){
   const repo=r.path;
   const PLAY='<svg viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></svg>';
   const PAUSE='<svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg>';
   const STOP='<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>';
+  const tail=lane?` — ${lane} lane`:"";
   let btns="";
   if(st==="working"||st==="idle"||st==="wedged"){
-    btns=ibtn(repo,"pause","graceful-stop","Graceful stop — finish the current session, then idle","warn",PAUSE)
-        +ibtn(repo,"stop","hard-stop","Hard stop — interrupt the running agent","danger",STOP);
+    btns=ibtn(repo,"pause","graceful-stop","Graceful stop — finish the current session, then idle"+tail,"warn",PAUSE,lane)
+        +ibtn(repo,"stop","hard-stop","Hard stop — interrupt the running agent"+tail,"danger",STOP,lane);
   } else if(st==="paused"||st==="stopping"){
-    btns=ibtn(repo,"resume","resume","Resume — pick up the next session","go",PLAY)
-        +ibtn(repo,"stop","hard-stop","Hard stop — interrupt the running agent","danger",STOP);
+    btns=ibtn(repo,"resume","resume","Resume — pick up the next session"+tail,"go",PLAY,lane)
+        +ibtn(repo,"stop","hard-stop","Hard stop — interrupt the running agent"+tail,"danger",STOP,lane);
   } else if(st==="stopped"){
-    btns=ibtn(repo,"start","start","Start supervisor","go",PLAY);
+    btns=ibtn(repo,"start","start","Start supervisor"+tail,"go",PLAY,lane);
   } else return "";
-  return `<span class="ribtns" title="lifecycle — same actions as the card controls">${btns}</span>`;
+  return `<span class="ribtns" title="lifecycle — same actions as the card controls${esc(tail)}">${btns}</span>`;
+}
+// #147: the focus card's cluster follows the SELECTED lane. Single-lane ->
+// the repo cluster as before. Multi-lane: the own lane keeps the repo cluster
+// (same service); a sibling lane renders from ITS service truth, and with no
+// service truth (services absent / lane unprovisioned) renders NO cluster --
+// the repo's buttons acting on a sibling lane's card was a #234 display lie.
+function focusCluster(r,st,selLane,laneNames){
+  if(laneNames.length<2) return lifecycleCluster(r,st);
+  const svcs=r.lanes&&r.lanes.services;
+  const svc=svcs&&svcs[selLane];
+  if(!svc||!svc.installed) return "";
+  return svc.own ? lifecycleCluster(r,st) : lifecycleCluster(r,svc.status,selLane);
 }
 const CONFIRM={stop:"Hard-stop this supervisor? A mid-session hard-stop interrupts the running agent.",
   start:"Start this supervisor via launchctl? It will begin running sessions."};
-function control(repoEnc,action,label){
+function control(repoEnc,action,label,lane){
   const repo=decodeURIComponent(repoEnc);
-  if(CONFIRM[action] && !window.confirm(CONFIRM[action]+"\n\nrepo: "+repo)) return;
+  // #147: lane-scoped actions confirm + toast with the lane named, and carry
+  // `lane` in the POST body -- the server gates it against the repo's config
+  // and resolves THAT lane's service/worktree (never a default fallback).
+  if(CONFIRM[action] && !window.confirm(CONFIRM[action]+"\n\nrepo: "+repo+(lane?"\nlane: "+lane:""))) return;
+  const body={repo,action,token:CTOKEN}; if(lane) body.lane=lane;
   fetch("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({repo,action,token:CTOKEN})})
+    body:JSON.stringify(body)})
     .then(r=>r.json().then(j=>({ok:r.ok,j})))
-    .then(({ok,j})=>toast(ok&&j.ok, (ok&&j.ok)?(label+" — "+(j.message||"done")):("failed: "+(j.error||"error")),j&&j.detail))
+    .then(({ok,j})=>toast(ok&&j.ok, (ok&&j.ok)?(label+(lane?" ["+lane+"]":"")+" — "+(j.message||"done")):("failed: "+(j.error||"error")),j&&j.detail))
     .catch(()=>toast(false,"request failed"));
 }
 function toast(ok,msg,detail){
@@ -997,7 +1020,18 @@ function renderRepos(repos){
         // is attribute-safe (encodeURIComponent); a delegated #repos listener
         // reads it -- no inline onclick with a control-separator key (CP1 #5).
         const lk=laneKey(r.path,ln);
-        return `<div class="lgrp"><div class="lgrp-h lsel${selClass(lk)}" data-lane-key="${encodeURIComponent(lk)}" title="lane (worktree + role subset)${ln===lanes.default?' — the default lane':''} · click to focus this lane">${esc(ln)}${def}</div>${inLane.map(x=>x.html).join("")}</div>`;
+        // #147 per-lane lifecycle: the cluster renders ONLY from service truth
+        // (lanes.services) -- absent services (older payload, degraded build)
+        // or an unprovisioned lane shows NO buttons, never the repo state as a
+        // stand-in for a sibling lane (#234 display-truth). The own lane uses
+        // the card's status with repo-scoped actions (byte-identical calls);
+        // a sibling lane uses ITS coarse status + lane-scoped actions. The
+        // delegated select listener already ignores button clicks.
+        const svc=lanes.services&&lanes.services[ln];
+        const lcl=svc ? (svc.installed ? lifecycleCluster(r, svc.own?st:svc.status, svc.own?"":ln)
+                                       : `<span class="lnosvc" title="no launchd service installed for this lane — run setup_worktree.sh <target-repo> --lane ${esc(ln)}">·</span>`)
+                      : "";
+        return `<div class="lgrp"><div class="lgrp-h lsel${selClass(lk)}" data-lane-key="${encodeURIComponent(lk)}" title="lane (worktree + role subset)${ln===lanes.default?' — the default lane':''} · click to focus this lane">${esc(ln)}${def}${lcl}</div>${inLane.map(x=>x.html).join("")}</div>`;
       }).join("");
       const orphan=roleEls.filter(x=>laneNames.indexOf(x.lane)<0);
       if(orphan.length) roles += orphan.map(x=>x.html).join("");

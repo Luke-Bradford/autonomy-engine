@@ -2799,3 +2799,160 @@ class TestWedgedStatus(unittest.TestCase):
             fh.write("torn\n")
         self.assertEqual(ds.read_heartbeat(p), {})
         self.assertIsNone(health_mod.read_heartbeat(d))
+
+
+class TestLaneStatus(unittest.TestCase):
+    """#147 per-lane lifecycle: lane_status(worktree) -- the coarse display
+    status for a SIBLING lane's worktree, from the SAME sources the repo card
+    uses (supervisor lock pid + PAUSE sentinel via lifecycle_status, heartbeat
+    phase, lib/health wedged truth). Vocabulary is a subset of
+    display_status's so lifecycleCluster maps buttons unchanged."""
+
+    def _wt(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        os.makedirs(os.path.join(d, ".autonomy"))
+        os.makedirs(os.path.join(d, "var", "autonomy-logs"))
+        with open(os.path.join(d, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("agent:\n  type: claude\n")
+        return d
+
+    def _lock(self, d, alive_pid):
+        lockdir = os.path.join(d, "var", "autonomy-supervisor.lock")
+        os.makedirs(lockdir, exist_ok=True)
+        with open(os.path.join(lockdir, "pid"), "w") as fh:
+            fh.write(str(alive_pid))
+
+    def _hb(self, d, ts, phase):
+        with open(os.path.join(d, "var", "autonomy-logs", "heartbeat"), "w") as fh:
+            fh.write("%d\t%s\t0\treason text\n" % (ts, phase))
+
+    def test_no_lock_is_stopped(self):
+        self.assertEqual(ds.lane_status(self._wt()), "stopped")
+
+    def test_dead_pid_is_stopped(self):
+        d = self._wt()
+        self._lock(d, 99999999)   # certainly-dead pid
+        self.assertEqual(ds.lane_status(d), "stopped")
+
+    def test_sentinel_over_live_pid_is_paused(self):
+        d = self._wt()
+        self._lock(d, os.getpid())
+        open(os.path.join(d, "var", "autonomy-logs", "autonomy-PAUSE"), "a").close()
+        self.assertEqual(ds.lane_status(d), "paused")
+
+    def test_sentinel_while_working_is_stopping(self):
+        d = self._wt()
+        self._lock(d, os.getpid())
+        open(os.path.join(d, "var", "autonomy-logs", "autonomy-PAUSE"), "a").close()
+        now = int(time.time())
+        self._hb(d, now, "session-running coder")
+        self.assertEqual(ds.lane_status(d, now=now), "stopping")
+
+    def test_live_working_fresh_is_working(self):
+        d = self._wt()
+        self._lock(d, os.getpid())
+        now = int(time.time())
+        self._hb(d, now, "session-running coder")
+        self.assertEqual(ds.lane_status(d, now=now), "working")
+
+    def test_live_nonworking_phase_is_idle(self):
+        d = self._wt()
+        self._lock(d, os.getpid())
+        now = int(time.time())
+        self._hb(d, now, "board-empty")
+        self.assertEqual(ds.lane_status(d, now=now), "idle")
+
+    def test_live_working_stale_is_wedged(self):
+        d = self._wt()
+        self._lock(d, os.getpid())
+        now = int(time.time())
+        self._hb(d, now - 3600, "session-running coder")
+        self.assertEqual(ds.lane_status(d, now=now), "wedged")
+
+
+class TestLaneServices(unittest.TestCase):
+    """#147: build_repo_state(launch_agents_dir=...) resolves each DECLARED
+    lane's service + coarse status into lanes.services. Declared lanes ONLY
+    (an undeclared lane never appears); declared-but-unprovisioned reads
+    installed:False with no status; the registered repo's own lane defers its
+    status to the card (own:True, status None). No launch_agents_dir (every
+    existing caller) or a single-lane repo -> NO services key (byte-compat).
+    Any surprise inside the resolution omits the key -- buttons vanish, the
+    render never lies or throws (fail-safe direction for a display)."""
+
+    _CFG = ("lanes:\n"
+            "  main:\n    worktree: ../x-main\n"
+            "  qa:\n    worktree: ../x-qa\n"
+            "roles:\n  coder:\n    enabled: true\n"
+            "    trigger: { type: loop }\n")
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.repo = os.path.join(self.tmp, ".myrepo-autonomy")
+        os.makedirs(os.path.join(self.repo, ".autonomy"))
+        os.makedirs(os.path.join(self.repo, "var", "autonomy-logs"))
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write(self._CFG)
+        self.la = os.path.join(self.tmp, "LaunchAgents")
+        os.makedirs(self.la)
+        self._plist("com.autonomy.myrepo.supervisor", self.repo, None)
+
+    def _plist(self, label, repo, lane):
+        lane_args = ""
+        if lane:
+            lane_args = ("    <string>--lane</string>\n"
+                         "    <string>%s</string>\n" % lane)
+        with open(os.path.join(self.la, label + ".plist"), "w") as fh:
+            fh.write('<?xml version="1.0"?>\n<plist version="1.0"><dict>\n'
+                     "  <key>Label</key><string>%s</string>\n"
+                     "  <key>ProgramArguments</key><array>\n"
+                     "    <string>/bin/bash</string>\n"
+                     "    <string>/eng/bin/supervisor.sh</string>\n"
+                     "    <string>--repo</string>\n"
+                     "    <string>%s</string>\n"
+                     "%s  </array>\n</dict></plist>\n" % (label, repo, lane_args))
+
+    def test_no_launch_agents_dir_means_no_services_key(self):
+        st = ds.build_repo_state(self.repo)
+        self.assertNotIn("services", st["lanes"])
+
+    def test_single_lane_repo_has_no_services_key(self):
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("agent:\n  type: claude\n")
+        st = ds.build_repo_state(self.repo, launch_agents_dir=self.la)
+        self.assertNotIn("services", st["lanes"])
+
+    def test_own_lane_defers_status_to_the_card(self):
+        st = ds.build_repo_state(self.repo, launch_agents_dir=self.la)
+        svc = st["lanes"]["services"]["main"]
+        self.assertEqual(svc, {"installed": True, "own": True, "status": None})
+
+    def test_declared_unprovisioned_lane_is_uninstalled(self):
+        st = ds.build_repo_state(self.repo, launch_agents_dir=self.la)
+        svc = st["lanes"]["services"]["qa"]
+        self.assertEqual(svc, {"installed": False, "own": False, "status": None})
+
+    def test_provisioned_sibling_lane_carries_its_status(self):
+        qa_wt = os.path.join(self.tmp, ".myrepo-qa-autonomy")
+        os.makedirs(os.path.join(qa_wt, ".autonomy"))
+        os.makedirs(os.path.join(qa_wt, "var", "autonomy-logs"))
+        with open(os.path.join(qa_wt, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write(self._CFG)
+        self._plist("com.autonomy.myrepo.qa.supervisor", qa_wt, "qa")
+        st = ds.build_repo_state(self.repo, launch_agents_dir=self.la)
+        svc = st["lanes"]["services"]["qa"]
+        self.assertEqual(svc["installed"], True)
+        self.assertEqual(svc["own"], False)
+        self.assertEqual(svc["status"], "stopped")   # no live lock pid
+
+    def test_services_covers_declared_lanes_only(self):
+        st = ds.build_repo_state(self.repo, launch_agents_dir=self.la)
+        self.assertEqual(sorted(st["lanes"]["services"]), ["main", "qa"])
+
+    def test_malformed_lanes_block_omits_services(self):
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("lanes:\n  main: notamap\n")
+        st = ds.build_repo_state(self.repo, launch_agents_dir=self.la)
+        self.assertNotIn("services", st["lanes"])

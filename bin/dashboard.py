@@ -1024,7 +1024,8 @@ def _collect_one(repo):
                 "current_session": None, "voice": [], "git": {},
                 "config": {}}
     try:
-        st = ds.build_repo_state(repo, git_in_flight=git_in_flight)
+        st = ds.build_repo_state(repo, git_in_flight=git_in_flight,
+                                 launch_agents_dir=LAUNCH_AGENTS)
         st["throughput"] = _throughput(repo)
         # if a session is working a ticket but there's no open PR yet, surface
         # the in-progress ticket with its title + link. setdefault returns the

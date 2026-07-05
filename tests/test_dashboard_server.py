@@ -858,7 +858,13 @@ class TestFleetRailLifecycleCluster(unittest.TestCase):
         self.assertNotEqual(i, -1, "ibtn() lifecycle helper is not defined")
         j = html.find(b"function lifecycleCluster(", i)
         self.assertNotEqual(j, -1, "lifecycleCluster() is not defined")
-        return html[i:j + 900]
+        # structural end (the CONFIRM map follows the cluster helpers), not a
+        # fixed byte window -- a fixed j+900 broke on innocent comment growth
+        # (#147 lane params), the same trap the prior lifecycleCluster window
+        # test fell into (memory: fixed-byte-window tests break on growth).
+        k = html.find(b"const CONFIRM", j)
+        self.assertNotEqual(k, -1, "CONFIRM map is not defined after the cluster")
+        return html[i:k]
 
     def test_lifecycle_cluster_defined(self):
         self.assertIn(b"function lifecycleCluster(", self._page())
