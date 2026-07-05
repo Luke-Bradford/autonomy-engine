@@ -308,6 +308,24 @@ doctor_dirty_config_check() {
   doctor_dirty_config_report "$tracked" "$dirty"
 }
 
+# --- agents registry (SD-30 / #87 slice 2): a corrupt ~/.config/autonomy/
+# agents index and dangling entity->account refs surface as WARNs; an absent/
+# empty registry prints nothing (the common healthy case). Rail refs are NOT
+# validated yet: entities are machine-global while rails resolve against a
+# repo's roles: block, and the binding key linking an entity to this repo is
+# an open #87 design fork -- validating rails repo-wide before bindings exist
+# would WARN on every repo that lacks the rail. Diagnostic-only + best-effort:
+# a python failure prints nothing and never blocks the report. Args (test
+# seam): [agents_index] [accounts_index] -- production passes none and the
+# real registries apply.
+# shellcheck disable=SC2120  # args are the test seam; production passes none
+doctor_agents_check() {
+  local out
+  out="$(python3 "$DOCTOR_HOME/lib/agents.py" doctor-report "$@" 2>/dev/null)" || return 0
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
+}
+
 doctor_full_report() {
   local repo="$1" hard_fail=0
   echo "== doctor.sh report: $repo =="
@@ -367,6 +385,7 @@ doctor_full_report() {
   doctor_qa_role_check "$repo"
   doctor_knob_notes "$repo"
   doctor_lane_report "$repo"
+  doctor_agents_check
 
   doctor_gh_auth_check "$repo"
 

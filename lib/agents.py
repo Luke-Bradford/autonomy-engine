@@ -175,11 +175,68 @@ class Agents:
             self._save(data)
 
 
+def doctor_report(agents_index=None, accounts_index=None):
+    """The doctor-WARNING half of SD-30: return report lines (WARN/OK) for the
+    agents registry -- a corrupt index and dangling entity->account refs
+    degrade to WARNs, never a crash, never silence. An absent/empty registry
+    returns [] (the common healthy case -- no noise). The OK verdict is
+    EARNED: agents exist, the accounts registry is readable, every ref
+    resolves (prevention-log #18).
+
+    A corrupt ACCOUNTS index is its own single cannot-verify WARN -- the naive
+    set-lookup would accuse every agent of a dangling ref (fail-open, #3).
+
+    `rail` refs are deliberately NOT validated here: entities are
+    machine-global while rails resolve against a repo's `roles:` block, and
+    the binding key tying an entity to a repo is an open #87 design fork --
+    checking rails repo-wide before bindings exist would WARN on every repo
+    that lacks the rail. Import is lazy so the registry CRUD path never pays
+    for (or fails on) the accounts module."""
+    import accounts as _accounts
+    reg = Agents(index_path=agents_index)
+    if reg.is_corrupt():
+        return ["WARN agents registry %s is unreadable/corrupt -- reads "
+                "degrade to empty and writes refuse; fix or remove it"
+                % reg.index_path]
+    entities = reg.list()
+    if not entities:
+        return []
+    accts = _accounts.Accounts(index_path=accounts_index)
+    if accts.is_corrupt():
+        return ["WARN accounts registry %s is unreadable/corrupt -- cannot "
+                "verify agent account refs (%d agent(s) unchecked)"
+                % (accts.index_path, len(entities))]
+    known = set()
+    for row in accts.list():
+        known.add(row["name"])
+    lines = []
+    for e in entities:
+        acct = e["account"]
+        # Total over hand-edited entries (prevention-log #12): a non-string /
+        # empty ref would raise unhashable TypeError in the set lookup, and
+        # doctor.sh's best-effort guard turns that crash into SILENCE -- the
+        # one thing SD-30 forbids. Malformed gets its own WARN instead.
+        if not isinstance(acct, str) or not acct:
+            lines.append("WARN agent '%s' has a malformed account ref (%r) "
+                         "-- fix or re-create the registry entry"
+                         % (e["name"], acct))
+        elif acct not in known:
+            lines.append("WARN agent '%s' references unknown account '%s' -- "
+                         "register the account or fix the ref (dangling refs "
+                         "degrade to WARNING, SD-30)"
+                         % (e["name"], acct))
+    if not lines:
+        lines.append("OK   agents registry: %d agent(s), all account refs "
+                     "resolve" % len(entities))
+    return lines
+
+
 def _main(argv):
     a = Agents()
     if not argv:
         print("usage: agents.py list | get <name> | delete <name> | "
-              "set <name> <account> [model] [effort] [rail] [description]",
+              "set <name> <account> [model] [effort] [rail] [description] | "
+              "doctor-report [agents_index] [accounts_index]",
               file=sys.stderr)
         return 2
     cmd, rest = argv[0], argv[1:]
@@ -196,6 +253,11 @@ def _main(argv):
                 print("delete needs <name>", file=sys.stderr)
                 return 2
             a.delete(rest[0])
+        elif cmd == "doctor-report":
+            for line in doctor_report(
+                    agents_index=rest[0] if len(rest) > 0 else None,
+                    accounts_index=rest[1] if len(rest) > 1 else None):
+                print(line)
         elif cmd == "set":
             if len(rest) < 2:
                 print("set needs <name> <account> [model] [effort] [rail] "

@@ -426,5 +426,40 @@ git -C "$gtmp" add .autonomy/config.yaml
 check "dirty_config_check: tracked+staged -> WARN" "0" "$(has "$(doctor_dirty_config_check "$gtmp")" 'WARN' && echo 0 || echo 1)"
 rm -rf "$gtmp"
 
+# --- doctor_agents_check (SD-30 / #87 slice 2): agents-registry health.
+# Exercises the real `lib/agents.py doctor-report` CLI end-to-end with temp
+# index paths (production passes none and hits the real ~/.config registries).
+atmp="$(mktemp -d)"
+agents_idx="$atmp/agents"
+accounts_idx="$atmp/accounts"
+printf '%s' '{"accounts": {"main": {"kind": "claude_subscription"}}}' > "$accounts_idx"
+
+check "agents_check: absent registry -> silent" "" "$(doctor_agents_check "$agents_idx" "$accounts_idx")"
+check "agents_check: absent registry -> rc 0" "0" "$(doctor_agents_check "$agents_idx" "$accounts_idx" >/dev/null 2>&1; echo $?)"
+
+printf '%s' '{"agents": {"coder": {"account": "main"}}}' > "$agents_idx"
+ac_ok="$(doctor_agents_check "$agents_idx" "$accounts_idx")"
+check "agents_check: all refs resolve -> OK" "0" "$(has "$ac_ok" 'OK' && echo 0 || echo 1)"
+
+printf '%s' '{"agents": {"coder": {"account": "main"}, "ghost": {"account": "gone"}}}' > "$agents_idx"
+ac_dangle="$(doctor_agents_check "$agents_idx" "$accounts_idx")"
+check "agents_check: dangling account ref -> WARN" "0" "$(has "$ac_dangle" 'WARN' && echo 0 || echo 1)"
+check "agents_check: WARN names the agent" "0" "$(has "$ac_dangle" 'ghost' && echo 0 || echo 1)"
+check "agents_check: WARN names the missing account" "0" "$(has "$ac_dangle" 'gone' && echo 0 || echo 1)"
+
+printf '%s' '{ not json' > "$agents_idx"
+ac_corrupt="$(doctor_agents_check "$agents_idx" "$accounts_idx")"
+check "agents_check: corrupt index -> WARN unreadable" "0" "$(has "$ac_corrupt" 'unreadable' && echo 0 || echo 1)"
+check "agents_check: corrupt index -> rc 0 (diagnostic-only)" "0" "$(doctor_agents_check "$agents_idx" "$accounts_idx" >/dev/null 2>&1; echo $?)"
+
+# best-effort: python failing entirely (bogus interpreter path via a broken
+# lib) must never block the report -- simulate by pointing DOCTOR_HOME at a
+# dir with no lib/agents.py; the check prints nothing and returns 0.
+save_home="$DOCTOR_HOME"
+DOCTOR_HOME="$atmp"
+check "agents_check: python failure -> silent rc 0" "0" "$(doctor_agents_check "$agents_idx" "$accounts_idx" >/dev/null 2>&1; echo $?)"
+DOCTOR_HOME="$save_home"
+rm -rf "$atmp"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
