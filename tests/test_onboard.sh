@@ -22,6 +22,13 @@ check "roles/researcher.md scaffolded (W5b, #127)" "0" "$([ -f "$tmp/.autonomy/r
 check "roles/pm.md scaffolded (W5c, #89)" "0" "$([ -f "$tmp/.autonomy/roles/pm.md" ] && echo 0 || echo 1)"
 check "qa/decide.sh scaffolded (subdirectory, #13)" "0" "$([ -f "$tmp/.autonomy/qa/decide.sh" ] && echo 0 || echo 1)"
 
+# SD-31 (#90): the scaffold must NOT ship a plausible-looking board name -- a
+# title that references a board nobody created makes board.sh warn-skip for the
+# repo's whole life while looking configured. Empty = explicitly unconfigured
+# (board.sh + doctor.sh both surface that state).
+scaffolded_title="$(python3 "$ENGINE_HOME/lib/config_parser.py" "$tmp/.autonomy/config.yaml" board.project_title 2>/dev/null || printf '')"
+check "scaffolded board.project_title is EMPTY (SD-31, #90)" "" "$scaffolded_title"
+
 echo "MY CUSTOM EDIT" > "$tmp/.autonomy/config.yaml"
 echo "MY QA PROMPT" > "$tmp/.autonomy/roles/qa.md"
 "$ENGINE_HOME/bin/onboard.sh" "$tmp" >/dev/null 2>&1

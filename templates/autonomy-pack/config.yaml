@@ -3,7 +3,12 @@
 
 board:
   owner: CHANGE-ME          # GitHub user or org that owns the Projects v2 board
-  project_title: "CHANGE-ME engineering board"
+  # Leave project_title EMPTY until a Projects v2 board actually exists -- the
+  # engine never creates boards (settled decision 24), and a plausible-looking
+  # name for a board nobody created makes board.sh warn-skip for the repo's
+  # whole life while the config looks done (SD-31). Empty = board updates off;
+  # board.sh and doctor.sh both surface that state explicitly.
+  project_title: ""
 
 engine:
   # label: my-repo          # uncomment + set only if this repo's basename collides
