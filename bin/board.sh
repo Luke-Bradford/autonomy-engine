@@ -278,7 +278,7 @@ config_value_with_overlay() {
 board_stall_scan() {
   local author="$1" marker="$2" threshold="$3"
   local prs pr now blob line
-  prs="$(gh pr list --state open --json number --jq '.[].number' 2>/dev/null)" \
+  prs="$(gh pr list --state open --limit 200 --json number --jq '.[].number' 2>/dev/null)" \
     || { warn "stall: gh pr list failed (skip)"; return 0; }
   [ -n "$prs" ] || return 0
   now="$(date -u +%s)"
