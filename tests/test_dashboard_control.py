@@ -339,6 +339,111 @@ class TestRepoRegistryPlans(unittest.TestCase):
         self.assertEqual(p.get("drop"), gone)
 
 
+LANE_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>Label</key><string>%s</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/bash</string>
+    <string>/eng/bin/supervisor.sh</string>
+    <string>--repo</string>
+    <string>%s</string>
+    <string>--lane</string>
+    <string>%s</string>
+  </array>
+</dict></plist>
+"""
+
+
+class TestFindLaneService(unittest.TestCase):
+    """#147: lane -> ITS launchd service, strictly (SD-21: one supervisor per
+    lane; the default lane keeps the LEGACY com.autonomy.<slug>.supervisor
+    label with no --lane). Resolution is label-CONSTRUCTED + content-verified,
+    never scanned-and-guessed; every mismatch REFUSES -- there is no fallback
+    to a different lane's service (that would be acting on the wrong loop,
+    the fail-open direction)."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.repo = "/Users/op/.myrepo-autonomy"
+        with open(os.path.join(self.dir, "com.autonomy.myrepo.supervisor.plist"), "w") as fh:
+            fh.write(PLIST % self.repo)
+
+    def _lane_plist(self, label_mid, worktree, lane):
+        name = "com.autonomy.%s.supervisor.plist" % label_mid
+        with open(os.path.join(self.dir, name), "w") as fh:
+            fh.write(LANE_PLIST % ("com.autonomy.%s.supervisor" % label_mid,
+                                   worktree, lane))
+
+    def test_sibling_lane_resolves_label_and_worktree(self):
+        self._lane_plist("myrepo.qa", "/Users/op/.myrepo-qa-autonomy", "qa")
+        svc = dc.find_lane_service(self.repo, "qa", self.dir)
+        self.assertEqual(svc["label"], "com.autonomy.myrepo.qa.supervisor")
+        self.assertEqual(svc["repo"], "/Users/op/.myrepo-qa-autonomy")
+
+    def test_missing_sibling_plist_is_error_never_default(self):
+        svc = dc.find_lane_service(self.repo, "qa", self.dir)
+        self.assertIn("error", svc)
+        self.assertIn("setup_worktree", svc["error"])
+
+    def test_lane_content_mismatch_is_error(self):
+        # a plist named .qa. whose --lane says something else: refuse
+        self._lane_plist("myrepo.qa", "/Users/op/.myrepo-qa-autonomy", "prod")
+        self.assertIn("error", dc.find_lane_service(self.repo, "qa", self.dir))
+
+    def test_own_lane_returns_none_when_registered_is_that_lane(self):
+        # registered worktree runs lane qa itself -> None (use existing path)
+        os.remove(os.path.join(self.dir, "com.autonomy.myrepo.supervisor.plist"))
+        self._lane_plist("myrepo.qa", self.repo, "qa")
+        self.assertIsNone(dc.find_lane_service(self.repo, "qa", self.dir))
+
+    def test_default_lane_of_default_registration_is_none(self):
+        # registered worktree IS the default-lane service (no --lane in its
+        # plist); requesting the default lane by name -> own path (None).
+        self.assertIsNone(dc.find_lane_service(self.repo, "main", self.dir,
+                                               default_lane="main"))
+
+    def test_no_own_service_is_error(self):
+        self.assertIn("error", dc.find_lane_service("/nope", "qa", self.dir))
+
+    def test_bad_lane_name_is_error_before_io(self):
+        self.assertIn("error", dc.find_lane_service(self.repo, "../x", self.dir))
+
+    def test_default_lane_from_nonown_registration_uses_legacy_label(self):
+        # registered worktree IS lane qa; requested lane = default 'main':
+        # resolve the LEGACY com.autonomy.myrepo.supervisor (SD-21), never
+        # a constructed .main. label (Codex CP1 High-1).
+        os.remove(os.path.join(self.dir, "com.autonomy.myrepo.supervisor.plist"))
+        self._lane_plist("myrepo.qa", self.repo, "qa")
+        with open(os.path.join(self.dir, "com.autonomy.myrepo.supervisor.plist"), "w") as fh:
+            fh.write(PLIST % "/Users/op/.myrepo-autonomy-main")
+        svc = dc.find_lane_service(self.repo, "main", self.dir, default_lane="main")
+        self.assertEqual(svc["label"], "com.autonomy.myrepo.supervisor")
+        self.assertEqual(svc["repo"], "/Users/op/.myrepo-autonomy-main")
+
+    def test_label_content_mismatch_is_error(self):
+        # plist file named .qa. whose internal Label says something else:
+        # stop (constructed label) and start (plist's internal Label) would
+        # act on different launchd targets -- refuse (Codex CP1 Med-5).
+        name = "com.autonomy.myrepo.qa.supervisor.plist"
+        with open(os.path.join(self.dir, name), "w") as fh:
+            fh.write(LANE_PLIST % ("com.autonomy.OTHER.supervisor",
+                                   "/Users/op/.myrepo-qa-autonomy", "qa"))
+        self.assertIn("error", dc.find_lane_service(self.repo, "qa", self.dir))
+
+
+class TestParsePlistArgs(unittest.TestCase):
+    def test_repo_and_lane_extracted(self):
+        text = LANE_PLIST % ("com.autonomy.x.qa.supervisor", "/wt", "qa")
+        self.assertEqual(dc.parse_plist_args(text), {"repo": "/wt", "lane": "qa"})
+
+    def test_no_lane_is_none(self):
+        text = PLIST % "/wt"
+        self.assertEqual(dc.parse_plist_args(text), {"repo": "/wt", "lane": None})
+
+    def test_garbage_text_is_total(self):
+        self.assertEqual(dc.parse_plist_args("not xml at all"),
+                         {"repo": None, "lane": None})
+
 
 if __name__ == "__main__":
     unittest.main()

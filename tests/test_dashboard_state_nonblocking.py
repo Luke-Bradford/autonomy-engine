@@ -251,7 +251,7 @@ class NonBlockingState(unittest.TestCase):
         rec = _Recorder()
         barrier = threading.Barrier(len(dirs), timeout=5.0)
 
-        def slow_build(repo, git_in_flight=None):
+        def slow_build(repo, git_in_flight=None, launch_agents_dir=None):
             rec.enter()
             try:
                 barrier.wait()

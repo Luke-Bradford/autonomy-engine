@@ -232,6 +232,89 @@ def find_service(repo, launch_agents_dir):
     return None
 
 
+# Lane names share the supervisor's validate_lane shape (bin/supervisor.sh):
+# 1-64 chars of [A-Za-z0-9._-]. Re-validated HERE before the value reaches any
+# filename construction -- the POST body is a boundary (prevention-log #6).
+_LANE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def is_valid_lane_name(lane):
+    return bool(_LANE_NAME_RE.fullmatch(lane or ""))
+
+
+def parse_plist_args(text):
+    """The --repo / --lane values from our own supervisor plist template
+    (one <string> per line, rendered by setup_worktree.sh). Total: garbage
+    text yields {repo: None, lane: None}."""
+    out = {"repo": None, "lane": None}
+    for key in ("repo", "lane"):
+        m = re.search(r"<string>--%s</string>\s*<string>([^<]+)</string>" % key,
+                      text)
+        if m:
+            out[key] = m.group(1)
+    return out
+
+
+def find_lane_service(repo, lane, launch_agents_dir, default_lane=None):
+    """Resolve lane -> ITS launchd service, strictly (#147 / SD-21: one
+    supervisor per lane; the DEFAULT lane keeps the LEGACY
+    com.autonomy.<slug>.supervisor label with no --lane). Returns:
+      None                      -- the registered repo's own service already
+                                   runs this lane; caller uses the existing
+                                   per-repo path.
+      {"label","plist","repo"}  -- the lane's service; `repo` is ITS worktree
+                                   (where the pause sentinel lives).
+      {"error": ...}            -- refusal. NEVER falls back to a different
+                                   lane's service: acting on the wrong loop is
+                                   the fail-open direction.
+    The label is CONSTRUCTED from the registered service's own label (slug) +
+    the lane, then content-verified (--lane value AND the plist's internal
+    Label): a stale/mismatched plist refuses -- launchctl stop uses the
+    constructed label while start bootstraps the plist's internal one, so a
+    mismatch would make the two act on different targets."""
+    if not is_valid_lane_name(lane):
+        return {"error": "invalid lane name"}
+    own = find_service(repo, launch_agents_dir)
+    if own is None:
+        return {"error": "no launchd service installed for this repo -- run "
+                         "setup_worktree.sh first"}
+    try:
+        with open(own["plist"], errors="replace") as fh:
+            own_text = fh.read()
+    except OSError:
+        return {"error": "cannot read the repo's own plist"}
+    own_lane = parse_plist_args(own_text).get("lane")
+    seg = own["label"][len("com.autonomy."):-len(".supervisor")]
+    is_default = (default_lane is not None and lane == default_lane)
+    if own_lane == lane or (own_lane is None and is_default):
+        return None
+    slug = seg
+    if own_lane and is_valid_lane_name(own_lane) and seg.endswith("." + own_lane):
+        slug = seg[:-(len(own_lane) + 1)]
+    label = ("com.autonomy.%s.supervisor" % slug if is_default
+             else "com.autonomy.%s.%s.supervisor" % (slug, lane))
+    plist = os.path.join(launch_agents_dir, label + ".plist")
+    try:
+        with open(plist, errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return {"error": "no service installed for lane '%s' -- run "
+                         "setup_worktree.sh <target-repo> --lane %s"
+                         % (lane, lane)}
+    args = parse_plist_args(text)
+    want_lane = None if is_default else lane
+    if args.get("lane") != want_lane or not args.get("repo"):
+        return {"error": "plist for lane '%s' does not match (lane=%r) -- "
+                         "refusing" % (lane, args.get("lane"))}
+    # Label check scopes to the text before ProgramArguments -- the
+    # <key>Label</key> value is the only <string> there in our template; a
+    # full plist parser is not warranted for our own rendered file.
+    if "<string>%s</string>" % label not in text.split("ProgramArguments")[0]:
+        return {"error": "plist Label does not match its filename for lane "
+                         "'%s' -- refusing (stale plist?)" % lane}
+    return {"label": label, "plist": plist, "repo": args["repo"]}
+
+
 def control_plan(repo, action, service, uid):
     """Pure decision: what a lifecycle action does. Returns one of:
       {"touch": path, "message": ...}   (pause)

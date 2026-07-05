@@ -1024,7 +1024,8 @@ def _collect_one(repo):
                 "current_session": None, "voice": [], "git": {},
                 "config": {}}
     try:
-        st = ds.build_repo_state(repo, git_in_flight=git_in_flight)
+        st = ds.build_repo_state(repo, git_in_flight=git_in_flight,
+                                 launch_agents_dir=LAUNCH_AGENTS)
         st["throughput"] = _throughput(repo)
         # if a session is working a ticket but there's no open PR yet, surface
         # the in-progress ticket with its title + link. setdefault returns the
@@ -1242,13 +1243,49 @@ def execute_repo_remove(path):
     return {"ok": True, "message": plan["message"] + "; " + _refresh_repos()}
 
 
-def execute_control(repo, action):
+def execute_control(repo, action, lane=None):
     """Resolve the lifecycle action to a plan and carry it out. Lifecycle only:
     a sentinel file touch/remove, or an exact launchctl bootout/bootstrap --
-    nothing else is reachable. Returns {ok, message} or {ok:False, error}."""
+    nothing else is reachable. Returns {ok, message} or {ok:False, error}.
+
+    lane (#147): route the action to THAT lane's service + worktree. The lane
+    is gated against the repo's config (the supervisor's own lanes authority)
+    BEFORE any filesystem use, then resolved strictly via find_lane_service --
+    unknown / invalid / unprovisioned lanes REFUSE; acting on the default
+    service as a fallback would drive the WRONG loop (fail-open)."""
     uid = os.getuid()
+    target_repo = repo
+    lane_svc = None
+    if lane:
+        # Gate the lane BEFORE any LaunchAgents read (Codex CP2): shape first
+        # (the POST body is a boundary), then the repo's config -- the same
+        # lanes authority the supervisor's --lane gate uses.
+        if not dcx.is_valid_lane_name(lane):
+            return {"ok": False, "error": "invalid lane name"}
+        try:
+            with open(os.path.join(repo, ".autonomy", "config.yaml"),
+                      encoding="utf-8") as fh:
+                config = config_parser.parse(fh.read())
+        except (OSError, ValueError):
+            return {"ok": False, "error": "cannot read .autonomy/config.yaml "
+                                          "-- refusing lane control"}
+        # ds.roles_schema (not a direct import): the hot-reload order rebinds
+        # dashboard_state after roles, so this reference never goes stale.
+        if not ds.roles_schema.lanes_valid(config):
+            return {"ok": False, "error": "lanes: block is invalid -- "
+                                          "refusing lane control"}
+        if lane not in ds.roles_schema.lane_names(config):
+            return {"ok": False, "error": "unknown lane %r" % lane}
+        lane_svc = dcx.find_lane_service(
+            repo, lane, LAUNCH_AGENTS,
+            default_lane=ds.roles_schema.default_lane(config))
+        if lane_svc is not None and "error" in lane_svc:
+            return {"ok": False, "error": lane_svc["error"]}
     service = dcx.find_service(repo, LAUNCH_AGENTS)
-    plan = dcx.control_plan(repo, action, service, uid)
+    if lane_svc is not None:        # a sibling lane's service, not the repo's
+        service = {"label": lane_svc["label"], "plist": lane_svc["plist"]}
+        target_repo = lane_svc["repo"]
+    plan = dcx.control_plan(target_repo, action, service, uid)
     if "error" in plan:
         return {"ok": False, "error": plan["error"]}
     try:
@@ -1519,7 +1556,10 @@ class Handler(BaseHTTPRequestHandler):
             result = execute_config_set(repo, str(body.get("key") or ""),
                                         str(body.get("value") or ""))
         else:
-            result = execute_control(repo, action)
+            # #147: optional lane routing -- shape-validated here (boundary),
+            # authoritatively gated against the repo's config inside.
+            lane = str(body.get("lane") or "") or None
+            result = execute_control(repo, action, lane=lane)
         self._send(200 if result.get("ok") else 409, json.dumps(result).encode("utf-8"))
 
     def _stream(self):
