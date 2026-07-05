@@ -43,11 +43,17 @@ def read_heartbeat(logdir):
     """Parse `<logdir>/heartbeat` -- the supervisor's structured liveness line
     (`ts \\t phase \\t until \\t reason`, bin/supervisor.sh heartbeat()) -- into
     {"ts": int, "phase": str, "until": int, "reason": str}, or None when absent
-    / torn / unreadable / a non-int ts. Total; the same parse dashboard_state.
-    read_heartbeat uses (re-pointing that onto this is the named dashboard
-    follow-on -- SD-32 'one implementation, zero drift')."""
+    / torn / unreadable / a non-int ts. Total; dashboard_state.read_heartbeat
+    delegates to read_heartbeat_file (SD-32 'one implementation, zero drift')."""
+    return read_heartbeat_file(os.path.join(logdir, _HEARTBEAT))
+
+
+def read_heartbeat_file(path):
+    """read_heartbeat by explicit file PATH (the dashboard's historical
+    signature) -- reads exactly `path`, never a sibling. Same contract:
+    parsed dict or None."""
     try:
-        with open(os.path.join(logdir, _HEARTBEAT), errors="replace") as fh:
+        with open(path, errors="replace") as fh:
             line = fh.readline().rstrip("\n")
     except OSError:
         return None

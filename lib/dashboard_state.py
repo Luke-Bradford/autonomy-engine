@@ -1098,9 +1098,9 @@ def read_heartbeat(path):
 
     #81 slice 5 (SD-32 'one implementation, zero drift'): the parse itself
     lives in lib/health.py -- this is a thin adapter keeping the historical
-    signature (a PATH to the heartbeat file; health takes the logdir) and the
-    {}-on-failure contract (health returns None)."""
-    return health_mod.read_heartbeat(os.path.dirname(path)) or {}
+    contract: reads exactly `path` (health.read_heartbeat_file), {} on any
+    failure (health returns None)."""
+    return health_mod.read_heartbeat_file(path) or {}
 
 
 # --- choreography feed (#177 piece 3) ---------------------------------------
