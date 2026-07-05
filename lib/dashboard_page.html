@@ -747,15 +747,36 @@ function modelCtl(r,st){
   // it so the value isn't mistaken for the committed config.yaml default.
   const ovBadge=(ovr.model||ovr.effort)
     ? `<span class="pend" title="written from the dashboard and stored locally under var/; committed config.yaml is unchanged">local override</span>`:"";
-  // data-cur + onchange give a chosen-but-unsaved value a distinct look so it
-  // is not read as already-applied (the current value stays plain).
-  const dc=`onchange="this.classList.toggle('dirty',this.value!==this.dataset.cur)"`;
+  // A chosen-but-unsaved pick must survive an SSE tick that REBUILDS this card
+  // (a working repo's elapsed/step markup changes every tick, so the held-node
+  // focus guard alone loses the pick the moment focus leaves the select -- the
+  // operator-reported "effort reverts" bug). So the pending pick is persisted
+  // in PENDING_EDIT keyed by repo and re-applied on every render, independent
+  // of focus. onchange records/clears it (markEdit); a successful save clears
+  // it (setModel). A pending value that equals the current one is not dirty.
+  const pe=PENDING_EDIT[r.path]||{};
+  const mCur=cfg.model||"", eCur=cfg.effort||"";
+  const mSel=pe.model!==undefined?pe.model:mCur, eSel=pe.effort!==undefined?pe.effort:eCur;
+  if(mSel&&!models.includes(mSel)) models.unshift(mSel);
+  const mDirty=pe.model!==undefined&&pe.model!==mCur, eDirty=pe.effort!==undefined&&pe.effort!==eCur;
   return `<div class="ctl mctl" data-repo="${encodeURIComponent(r.path)}">
-    <select class="msel" name="model" title="model" data-cur="${esc(cfg.model||"")}" ${dc}>${models.map(m=>`<option ${m===cfg.model?"selected":""}>${esc(m)}</option>`).join("")}</select>
-    <select class="esel" name="effort" title="effort" data-cur="${esc(cfg.effort||"")}" ${dc}>${EFFORT_CHOICES.map(e=>`<option value="${e}" ${e===(cfg.effort||"")?"selected":""}>${e||"effort: default"}</option>`).join("")}</select>
+    <select class="msel${mDirty?" dirty":""}" name="model" title="model" data-cur="${esc(mCur)}" onchange="markEdit(this)">${models.map(m=>`<option ${m===mSel?"selected":""}>${esc(m)}</option>`).join("")}</select>
+    <select class="esel${eDirty?" dirty":""}" name="effort" title="effort" data-cur="${esc(eCur)}" onchange="markEdit(this)">${EFFORT_CHOICES.map(e=>`<option value="${e}" ${e===eSel?"selected":""}>${e||"effort: default"}</option>`).join("")}</select>
     <button class="cbtn" onclick="setModel(this,'session')">next session</button>
     <button class="cbtn warn" onclick="setModel(this,'default')">save default</button>
     ${ovBadge}${pend}</div>`;
+}
+// pending (chosen-but-unsaved) model/effort picks, keyed by repo path -- see
+// modelCtl. Survives tick rebuilds so a working repo's card can't drop the pick.
+const PENDING_EDIT={};
+function markEdit(sel){
+  const box=sel.closest(".mctl"); if(!box) return;
+  const repo=decodeURIComponent(box.dataset.repo), field=sel.name;
+  const cur=sel.dataset.cur||"";
+  const e=PENDING_EDIT[repo]||(PENDING_EDIT[repo]={});
+  if(sel.value!==cur){ e[field]=sel.value; sel.classList.add("dirty"); }
+  else { delete e[field]; sel.classList.remove("dirty"); }
+  if(!Object.keys(PENDING_EDIT[repo]).length) delete PENDING_EDIT[repo];
 }
 function setModel(btn,scope){
   const box=btn.closest(".mctl");
@@ -768,7 +789,13 @@ function setModel(btn,scope){
   fetch("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({repo,action:"set_model",model,effort,scope,token:CTOKEN})})
     .then(r=>r.json().then(j=>({ok:r.ok,j})))
-    .then(({ok,j})=>toast(ok&&j.ok,(ok&&j.ok)?(j.message||"done"):("failed: "+(j.error||"error")),j&&j.detail))
+    .then(({ok,j})=>{
+      // clear the pending pick ONLY on a confirmed save -- the next render then
+      // reflects server truth (default: the applied value; session: the queued
+      // badge). A failed save keeps the pick so the operator can retry.
+      if(ok&&j.ok){ delete PENDING_EDIT[repo]; if(LAST)render(LAST); }
+      toast(ok&&j.ok,(ok&&j.ok)?(j.message||"done"):("failed: "+(j.error||"error")),j&&j.detail);
+    })
     .catch(()=>toast(false,"request failed"));
 }
 

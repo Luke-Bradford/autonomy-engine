@@ -1208,5 +1208,46 @@ class TestLaneHistoryPopover(unittest.TestCase):
                       "openLaneHist has no guard/no-op return path (CP1 P2)")
 
 
+class TestModelEffortPendingEdit(unittest.TestCase):
+    """#306: a chosen-but-unsaved model/effort pick must survive an SSE tick
+    that REBUILDS the working repo's focus card. Persisted in PENDING_EDIT
+    (keyed by repo), re-applied by modelCtl every render independent of focus,
+    cleared on a confirmed save. Structure pinned here; the behavioral
+    acceptance (pick survives blur + rebuild, model+effort, revert-clears,
+    save-clears, idle 0-rebuild) is the browser verify loop."""
+
+    def _page(self):
+        return dashboard._page_bytes(dashboard.PAGE)
+
+    def test_pending_edit_store_and_marker_defined(self):
+        html = self._page()
+        self.assertIn(b"const PENDING_EDIT=", html)
+        self.assertIn(b"function markEdit(", html)
+
+    def test_selects_wire_markEdit_not_inline_toggle(self):
+        # the onchange must record into PENDING_EDIT (markEdit), not the old
+        # focus-dependent inline classList toggle that lost the pick on rebuild.
+        html = self._page()
+        i = html.find(b"function modelCtl(")
+        j = html.find(b"\nfunction ", i + 1)
+        body = html[i:j]
+        self.assertEqual(body.count(b'onchange="markEdit(this)"'), 2,
+                         "both selects must wire markEdit")
+        self.assertIn(b"PENDING_EDIT[r.path]", body,
+                      "modelCtl must re-apply the pending pick on render")
+
+    def test_save_clears_pending_on_success_only(self):
+        html = self._page()
+        i = html.find(b"function setModel(")
+        j = html.find(b"\nfunction ", i + 1)
+        body = html[i:j]
+        # cleared inside the ok&&j.ok branch (a failed save keeps the pick)
+        self.assertIn(b"delete PENDING_EDIT[repo]", body)
+        k = body.find(b"if(ok&&j.ok)")
+        self.assertNotEqual(k, -1, "clear must be gated on a confirmed save")
+        self.assertLess(k, body.find(b"delete PENDING_EDIT[repo]"),
+                        "delete must sit inside the success guard")
+
+
 if __name__ == "__main__":
     unittest.main()
