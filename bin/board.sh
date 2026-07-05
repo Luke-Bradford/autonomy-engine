@@ -260,6 +260,101 @@ config_value_with_overlay() {
   fi
 }
 
+# --- #292: approved-but-unmerged stall detection ------------------------------
+# The merge path can stall invisibly: green CI + a fresh APPROVE verdict on the
+# latest head, and nothing merges (the prevention-log-#17 night sat that way
+# for ~90 minutes with zero signal). Each sweep, flag any open PR in that
+# state older than the threshold. Verdict parsing follows review-resolution
+# "Reading the gate": the review-bot COMMENT is the verdict (author + marker +
+# APPROVE text, postdating the head commit) -- never the CI check bucket.
+# Best-effort like everything here: any gh/parse failure yields NO stall
+# claims (a false "stalled" alarm on garbage data would be its own noise) and
+# never blocks the sweep. bot_comment gate only -- manual/ci_only merges have
+# no autonomous verdict to stall on, and gh_review repos see approved PRs in
+# GitHub's own UI.
+
+# Scan open PRs; print one "<pr>\t<age_minutes>\t<head_oid>" line per stalled
+# PR. $1 = review author login, $2 = comment marker, $3 = threshold seconds.
+board_stall_scan() {
+  local author="$1" marker="$2" threshold="$3"
+  local prs pr now blob line
+  prs="$(gh pr list --state open --json number --jq '.[].number' 2>/dev/null)" \
+    || { warn "stall: gh pr list failed (skip)"; return 0; }
+  [ -n "$prs" ] || return 0
+  now="$(date -u +%s)"
+  while IFS= read -r pr; do
+    [ -n "$pr" ] || continue
+    blob="$(gh pr view "$pr" --json commits,comments 2>/dev/null)" || continue
+    # One total parse per PR: emits "<age_min>\t<head_oid>" ONLY when the
+    # latest marker comment is a non-blocking APPROVE that postdates the head
+    # commit AND is older than the threshold; silent otherwise. Every parse
+    # failure is silent-not-stalled -- the earned-verdict direction.
+    # CONTRACT: verdict semantics deliberately mirror safe_merge.sh's
+    # merge_gate_bot_comment bug-for-bug (same APPROVE/blocking regexes, same
+    # >=-at-equal-timestamps chronology) -- this detector reports "the gate
+    # WOULD pass yet nothing merged", so it must agree with the gate it
+    # watches, not be independently stricter.
+    line="$(printf '%s' "$blob" | python3 -c '
+import json, re, sys
+from datetime import datetime, timezone
+
+def epoch(iso):
+    return int(datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp())
+
+author, marker, threshold, now = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+try:
+    d = json.load(sys.stdin)
+    head = (d.get("commits") or [])[-1]
+    head_epoch = epoch(head["committedDate"])
+    bot = [c for c in (d.get("comments") or [])
+           if (c.get("author") or {}).get("login") == author
+           and marker in (c.get("body") or "")]
+    if not bot:
+        sys.exit(0)
+    latest = sorted(bot, key=lambda c: c.get("createdAt") or "")[-1]
+    body = latest.get("body") or ""
+    if re.search(r"REQUEST CHANGES|\[BLOCKING\]|must fix before merge", body, re.I):
+        sys.exit(0)
+    if not re.search(r"APPROVE", body, re.I):
+        sys.exit(0)
+    review_epoch = epoch(latest["createdAt"])
+    if review_epoch < head_epoch:
+        sys.exit(0)          # push reset the gate -- not an approved head
+    if now - review_epoch <= threshold:
+        sys.exit(0)          # approved, but not stalled yet
+    oid = head.get("oid") or ""
+    if not oid:
+        sys.exit(0)          # no head oid -> no per-head idempotency -> no claim
+    print("%d\t%s" % ((now - review_epoch) // 60, oid))
+except Exception:
+    sys.exit(0)              # unparseable -> no claim, never a false alarm
+' "$author" "$marker" "$threshold" "$now" 2>/dev/null)"
+    [ -n "$line" ] && printf '%s\t%s\n' "$pr" "$line"
+  done <<EOF
+$prs
+EOF
+  return 0
+}
+
+# Post the stall comment on a PR, once per head oid (the hidden marker makes
+# re-sweeps idempotent; a new push = new oid = the gate reset anyway). When
+# the existing comments cannot be READ, post nothing -- idempotency cannot be
+# proven, and a duplicate-comment storm is worse than one quiet sweep.
+board_stall_flag() {
+  local pr="$1" age_min="$2" head_oid="$3"
+  local existing
+  existing="$(gh pr view "$pr" --json comments --jq '.comments[].body' 2>/dev/null)" \
+    || { warn "stall: cannot read #$pr comments -- not posting (idempotency unprovable)"; return 0; }
+  case "$existing" in
+    *"autonomy-stall-flag $head_oid"*) return 0 ;;
+  esac
+  gh pr comment "$pr" --body "⚠ **Approved but unmerged for ${age_min}m.** Latest review verdict is APPROVE on the current head and CI had its chance -- the merge path may be stalled (safe_merge not invoked, or its gate read differs). Detected by the board sweep (#292).
+
+<!-- autonomy-stall-flag $head_oid -->" >/dev/null 2>&1 \
+    || warn "stall: failed to comment on #$pr (skip)"
+  return 0
+}
+
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
 
 # GraphQL rate-limit floor for the `sweep` mutation batch (skip when the shared
@@ -268,6 +363,9 @@ config_value_with_overlay() {
 # misgate or emit an arithmetic error (best-effort). Below the guard: it is used
 # only by the executable body, so sourcing stays functions-only.
 case "${SWEEP_RATELIMIT_FLOOR:-}" in ''|*[!0-9]*) SWEEP_RATELIMIT_FLOOR=100 ;; esac
+
+# #292: approved-but-unmerged threshold (seconds). Same sanitization pattern.
+case "${STALL_AFTER_SECS:-}" in ''|*[!0-9]*) STALL_AFTER_SECS=1800 ;; esac
 
 cmd="${1:-}"
 if [ -z "$cmd" ]; then
@@ -301,6 +399,28 @@ esac
 # #252: sweep closed issues -> Done. Takes NO <issue#>, so it is handled before
 # the issue-required check. Idempotent, rate-limit-gated, best-effort.
 if [ "$cmd" = "sweep" ]; then
+  # #292: stall detection rides the sweep tick, BEFORE the Projects-board
+  # resolution below -- a labels-only repo (no board) still gets stall flags.
+  # Only under a bot_comment gate: manual/ci_only have no autonomous verdict
+  # to stall on; gh_review surfaces approved PRs in GitHub's own UI.
+  gate_strategy="$(python3 "$BOARD_HOME/lib/config_parser.py" .autonomy/config.yaml merge_gate.strategy 2>/dev/null || echo)"
+  if [ "$gate_strategy" = "bot_comment" ]; then
+    stall_author="$(python3 "$BOARD_HOME/lib/config_parser.py" .autonomy/config.yaml merge_gate.author_login 2>/dev/null || echo)"
+    stall_author="${stall_author:-github-actions}"
+    stall_marker="$(python3 "$BOARD_HOME/lib/config_parser.py" .autonomy/config.yaml merge_gate.marker 2>/dev/null || echo)"
+    stall_marker="${stall_marker:-Claude Code Review}"
+    stalls="$(board_stall_scan "$stall_author" "$stall_marker" "$STALL_AFTER_SECS")"
+    if [ -n "$stalls" ]; then
+      while IFS="$(printf '\t')" read -r spr sage soid; do
+        [ -n "$spr" ] || continue
+        warn "stall: PR #$spr approved+unmerged for ${sage}m (head ${soid})"
+        board_stall_flag "$spr" "$sage" "$soid"
+      done <<EOF
+$stalls
+EOF
+    fi
+  fi
+
   DONE_NAME="$(config_value_with_overlay board.done_status board_done_status)"
   [ -n "$DONE_NAME" ] || DONE_NAME="Done"
   sweep_ids="$(board_resolve_field "$OWNER" "$PROJECT_TITLE" "Status" "$DONE_NAME")"
