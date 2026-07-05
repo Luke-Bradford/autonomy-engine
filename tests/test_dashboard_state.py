@@ -3015,3 +3015,9 @@ class TestReadBoardWarning(unittest.TestCase):
                                  git_in_flight=lambda p: {})
         self.assertIn("board_warning", st)
         self.assertIsNone(st["board_warning"])
+
+    def test_oversized_multibyte_rejected(self):
+        # 3-byte UTF-8 chars: ~2000 chars but >4096 BYTES -- the size limit
+        # is a byte contract (review NITPICK on #311).
+        p = self._w("1751700000\n" + "⚠" * 2000 + "\n")
+        self.assertIsNone(ds.read_board_warning(p))

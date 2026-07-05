@@ -1113,12 +1113,16 @@ def read_board_warning(path):
     never fabricated from corruption (prevention 12/18; oversize is rejected
     outright, not truncated-and-trusted)."""
     try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            raw = f.read(4097)
+        # Binary read: the <=4096 limit is a BYTE contract; a text-mode
+        # read(4097) counts decoded chars and multi-byte UTF-8 could smuggle
+        # an oversized file past it (review NITPICK on #311).
+        with open(path, "rb") as f:
+            raw_bytes = f.read(4097)
     except OSError:
         return None
-    if len(raw) > 4096:
+    if len(raw_bytes) > 4096:
         return None
+    raw = raw_bytes.decode("utf-8", errors="replace")
     lines = raw.splitlines()
     if len(lines) != 2:
         return None
