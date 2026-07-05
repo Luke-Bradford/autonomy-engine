@@ -236,6 +236,27 @@ start_loop_state() {
   fi
 }
 
+# Wedged-session health for a running loop (#81, SD-32 §9). Prints lib/health.py's
+# `<state>\t<reason>` ("ok" / "idle" / "wedged" / "unknown") for the repo's
+# var/autonomy-logs; the threshold is the repo's OWN `health.wedged_after`
+# (default 900s). The rule is PHASE-gated inside health.py: only a
+# `session-running` heartbeat is subject to it, so a legitimately-idle loop
+# (board-empty/pace-wait/limit-backoff sleeps up to EMPTY_IDLE) never reads
+# wedged. Best-effort + bounded: any problem (no python3, timeout, absent
+# config) prints nothing -- the caller then keeps the pre-existing OK line, so
+# the probe never makes the report worse than before, and never aborts it under
+# set -e. A seam: tests shadow it.
+start_loop_wedged() {
+  local repo="$1" wa
+  wa="$(_with_timeout "${AUTONOMY_CFG_TIMEOUT:-5}" \
+        python3 "$ENGINE_HOME/lib/config_parser.py" \
+        "$repo/.autonomy/config.yaml" health.wedged_after 2>/dev/null)" || wa=""
+  case "$wa" in ''|*[!0-9]*) wa=900 ;; esac
+  _with_timeout "${AUTONOMY_HEALTH_TIMEOUT:-5}" \
+    python3 "$ENGINE_HOME/lib/health.py" "$repo/var/autonomy-logs" "$wa" \
+    2>/dev/null || true
+}
+
 # Read-only live-health report (issue #81). Doctor-style OK/WARN lines; always
 # succeeds (health is in the text, not the exit code) and touches nothing --
 # no port bind, no launchctl, no dashboard launch.
@@ -264,12 +285,30 @@ start_status_report() {
     # is a separate WARN below. Fed from a command substitution (not a pipe) so
     # nothing runs in a subshell (prevention-log #7). start_loop_state is
     # identity-confirmed and fail-safe (an unconfirmable loop reads stopped).
-    local lrepo lstate
+    local lrepo lstate wline wreason wtab
+    wtab="$(printf '\t')"
     while IFS= read -r lrepo; do
       [ -n "$lrepo" ] || continue
       lstate="$(start_loop_state "$lrepo")"
       case "$lstate" in
-        running) echo "OK   loop running -- $lrepo" ;;
+        running)
+          # A running loop can still be WEDGED (a session-running heartbeat gone
+          # quiet past the threshold) or UNINSPECTABLE -- neither may read as a
+          # bare healthy "OK loop running" (fail-safe, never fail-open). The WARN
+          # REPLACES the OK line (never both). Fail-safe DEFAULT: OK is printed
+          # ONLY on an explicit healthy verdict (`ok`/`idle`); an `unknown`, a
+          # blank line (the probe itself failed/timed out / no python3), or any
+          # unrecognised state all fall through to the uninspectable WARN -- a
+          # missing positive signal is never a silent OK.
+          wline="$(start_loop_wedged "$lrepo")"
+          wreason="${wline#*"$wtab"}"
+          [ "$wreason" = "$wline" ] && wreason="health probe unavailable"
+          case "${wline%%"$wtab"*}" in
+            ok|idle) echo "OK   loop running -- $lrepo" ;;
+            wedged)  echo "WARN loop appears WEDGED -- $lrepo: $wreason (inspect $lrepo/var/autonomy-logs)" ;;
+            *)       echo "WARN loop running but its liveness is uninspectable -- $lrepo: $wreason" ;;
+          esac
+          ;;
         paused)  echo "OK   loop paused -- $lrepo (resume: bin/control.sh resume $lrepo)" ;;
         *)       echo "OK   loop stopped -- $lrepo (start: bin/control.sh start $lrepo)" ;;
       esac

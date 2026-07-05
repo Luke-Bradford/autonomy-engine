@@ -302,3 +302,20 @@ INVISIBLE (no stderr) — when a gate script "does nothing", run `bash -x`
 before theorizing. Regression: `tests/test_safe_merge_config_get.sh` (the OLD
 code makes the test itself die rc-127 after one output line — the class
 demonstrated on itself).
+
+## 18. Fail-safe `case`/`if` DEFAULT — the healthy verdict must be EARNED, not the fallback
+
+*Origin: 2026-07-05, Codex CP2 on the #81 health slice (`./start status` wedged
+wiring).* The running-loop branch printed `OK loop running` as the `case`
+default and WARNed only on explicit `wedged`/`unknown`. A health probe that
+FAILED (no python3, timeout) returned blank → hit the default → read healthy.
+That's fail-open: "couldn't inspect liveness" silently rendered as OK, the exact
+thing the feature exists to prevent. The "never worse than before" rationale
+doesn't hold — the feature's OWN invariant is "unreadable liveness never reads
+healthy". **Rule: for any health/safety verdict rendered by a `case`/`if`, put
+the SAFE outcome in the default arm and require an EXPLICIT positive signal for
+the reassuring one** — `ok|idle) OK ;; *) WARN` beats `wedged) WARN ;; *) OK`.
+A blank/absent/garbage result must land on the safe side, never the happy path.
+Same class as invariant "fail-safe never fail-open": absence of evidence is not
+evidence of health. Regression: `tests/test_start.sh` drives blank-probe and
+unrecognised-state through the branch and asserts the WARN (no bare OK) fires.
