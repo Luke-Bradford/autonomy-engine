@@ -40,10 +40,17 @@ _BOARD_STATUS_RE = re.compile(r"board\.sh['\"]?\s+status\s+(\d{1,6})\s+['\"]?([A
 _GATE_GREEN_RE = re.compile(r"^ALL SUITES PASS$", re.MULTILINE)
 _GATE_RED_RE = re.compile(r"^ONE OR MORE SUITES FAILED$", re.MULTILINE)
 # The other honesty gate (CP1): a marker only counts inside the RESULT of a
-# command that actually invoked the gate -- run_all.sh directly, or git push
-# (the pre-push hook runs the gate; its output lands in the push's result).
-# Any other command (printf/echo) can't fake a verdict.
-_GATE_CMD_RE = re.compile(r"run_all\.sh|\bgit\b[^\n|;&]*\bpush\b")
+# command that actually EXECUTED the gate -- run_all.sh in command position
+# (bare or under bash/sh), or git push (the pre-push hook runs the gate; its
+# output lands in the push's result). Merely MENTIONING run_all.sh is not
+# enough (CP2): `grep -o 'ALL SUITES PASS' tests/run_all.sh` emits a bare
+# marker line from a run_all-naming command -- so cat/grep/printf shapes
+# never earn a gate id.
+_GATE_CMD_RE = re.compile(
+    r"\b(?:bash|sh)\s+\S*run_all\.sh"      # bash tests/run_all.sh
+    r"|(?:^|[;&|(]\s*)\S*run_all\.sh\b"    # ./tests/run_all.sh in cmd position
+    r"|\bgit\b[^\n|;&]*\bpush\b",
+    re.MULTILINE)
 
 # Claude Code writes one JSONL per session under here; the account's REAL usage
 # (all repos, all surfaces) is aggregatable from these -- the honest 5h/weekly

@@ -396,6 +396,19 @@ class TestsRanVerdictTest(unittest.TestCase):
                       self._tool_result("ALL SUITES PASS\n"))
         self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
 
+    def test_mentioning_run_all_is_not_executing_it(self):
+        # CP2: grep -o emits a BARE marker line and the command NAMES
+        # run_all.sh -- but doesn't execute it. Command-position match only.
+        p = self._log(
+            self._tool_use("t1", "grep -o 'ALL SUITES PASS' tests/run_all.sh"),
+            self._tool_result("ALL SUITES PASS\n"))
+        self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
+
+    def test_bare_command_position_run_all_counts(self):
+        p = self._log(self._tool_use("t1", "./tests/run_all.sh"),
+                      self._tool_result("ALL SUITES PASS\n"))
+        self.assertEqual(ds.parse_session_log(p)["tests_ran"], "green")
+
     def test_source_quote_not_a_verdict(self):
         # cat-ing run_all.sh: gate-named command, but the marker is embedded
         # in the echo line, never a bare LINE
