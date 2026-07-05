@@ -52,6 +52,12 @@ Issue numbers, or "None".
 
 - Title: `feat:`/`fix:`/`docs:` prefix + `(#<issue>)`; body carries
   `Closes #<issue>` so the merge closes it.
+- **Multi-slice PRs: never write a negated close phrase.** safe_merge's
+  done-everywhere pass extracts close-refs with a keyword+`#N` regex that is
+  blind to negation — the sentence "does NOT close #90" auto-closed #90 on
+  merge (2026-07-05 incident, bug #301). Until #301 lands, say "#N stays
+  open — <what remains>" and never place `close/closes/fix/fixes/resolve/
+  resolves` directly before an issue ref you do NOT want closed.
 - End the body with the Claude Code attribution line (repo convention).
 - Doc-only PRs skip the review bot but still get CI — say "doc-only" in the
   description so the missing review isn't chased.
