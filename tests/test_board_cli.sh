@@ -32,7 +32,9 @@ if [ -n "\${GH_FAIL:-}" ]; then exit 1; fi
 args="\$*"
 case "\$args" in
   *"issue view"*)
-    printf '{"id":"ISSUE_NODE","labels":[{"name":"%s"},{"name":"loop-ready"}]}' "\${GH_LABELS:-p2}" ;;
+    if [ -n "\${GH_ISSUE_EMPTY:-}" ]; then printf '{}'; else
+      printf '{"id":"ISSUE_NODE","labels":[{"name":"%s"},{"name":"loop-ready"}]}' "\${GH_LABELS:-p2}"
+    fi ;;
   *updateProjectV2ItemFieldValue*)
     echo "SET \$args" >> "$TMP/mutations"
     printf '{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"ITEM"}}}}' ;;
@@ -56,7 +58,7 @@ chmod +x "$TMP/bin/gh"
 run() {
   local labels="$1" fail="$2"; shift 2
   : > "$TMP/mutations"
-  ( cd "$TMP/repo" && PATH="$TMP/bin:$PATH" GH_LABELS="$labels" GH_FAIL="$fail" GH_SWEEP_REMAINING="${GH_SWEEP_REMAINING:-5000}" GH_PROJ_TITLE="${GH_PROJ_TITLE:-}" "$ROOT/bin/board.sh" "$@" ) >/dev/null 2>&1
+  ( cd "$TMP/repo" && PATH="$TMP/bin:$PATH" GH_LABELS="$labels" GH_FAIL="$fail" GH_SWEEP_REMAINING="${GH_SWEEP_REMAINING:-5000}" GH_PROJ_TITLE="${GH_PROJ_TITLE:-}" GH_ISSUE_EMPTY="${GH_ISSUE_EMPTY:-}" "$ROOT/bin/board.sh" "$@" ) >/dev/null 2>&1
   echo "$?"
 }
 muts() { cat "$TMP/mutations" 2>/dev/null; }
@@ -177,6 +179,15 @@ rc="$(run p2 "" status 42 "In review")"
 check "marker: empty-title exits 0" "0" "$rc"
 check "marker: cleared when board off" "0" "$([ -f "$MARKER" ] && echo 1 || echo 0)"
 printf 'board:\n  owner: Luke-Bradford\n  project_title: Autonomy Progress\n' > "$TMP/repo/.autonomy/config.yaml"
+
+# M9 (Codex CP2): the marker verdict rides the RESOLUTION result, not the
+# command body's tail -- a status whose board resolves fine but whose ISSUE
+# lookup fails must still clear a stale marker (else the chip lies forever).
+rc="$(GH_PROJ_TITLE="Some Other Board" run p2 "" status 42 "In review")"
+check "marker: staged stale marker" "1" "$([ -f "$MARKER" ] && echo 1 || echo 0)"
+rc="$(GH_ISSUE_EMPTY=1 run p2 "" status 42 "In review")"
+check "marker: issue-lookup-fail exits 0" "0" "$rc"
+check "marker: cleared despite issue-lookup failure" "0" "$([ -f "$MARKER" ] && echo 1 || echo 0)"
 
 # F: #211 overlay-aware read seam. Source the real board.sh (its guard makes a
 # `source` define functions only) and exercise config_value_with_overlay

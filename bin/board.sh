@@ -514,9 +514,23 @@ if [ -z "${PID:-}" ]; then
   board_mark_unresolved "project '$PROJECT_TITLE' not found under '$OWNER' (or lookup failed) -- board updates skipped"
   exit 0
 fi
-# `add` needs only the project; `status` clears below once field+option also
-# resolve (a shallower clear self-corrects on the next sweep tick regardless).
-[ "$cmd" = "add" ] && board_mark_resolved
+# Marker verdict lands HERE, straight off the resolution result -- NOT further
+# down the command body, where an unrelated issue-lookup failure would exit
+# before a clear and strand a stale marker (Codex CP2). `add` needs only the
+# project; `status` needs field+option too. Verdict only -- control flow is
+# unchanged (a status with a missing field still does the add/Priority work
+# below and warn-skips at the original guards).
+if [ "$cmd" = "add" ]; then
+  board_mark_resolved
+elif [ "$cmd" = "status" ]; then
+  if [ -z "${FID:-}" ]; then
+    board_mark_unresolved "board '$PROJECT_TITLE': Status field not found"
+  elif [ -z "${OPT_ID:-}" ]; then
+    board_mark_unresolved "board '$PROJECT_TITLE': status '$status' is not a board column"
+  else
+    board_mark_resolved
+  fi
+fi
 
 # Issue node id + labels in one call; the p-label drives the Priority field.
 IVIEW="$(gh issue view "$issue" --json id,labels 2>/dev/null)"
@@ -560,19 +574,10 @@ fi
 if [ "$cmd" = "add" ]; then exit 0; fi
 
 if [ "$cmd" = "status" ]; then
-  if [ -z "${FID:-}" ]; then
-    warn "Status field not found (skip)"
-    board_mark_unresolved "board '$PROJECT_TITLE': Status field not found"
-    exit 0
-  fi
-  if [ -z "${OPT_ID:-}" ]; then
-    warn "status '$status' is not a board column (skip)"
-    board_mark_unresolved "board '$PROJECT_TITLE': status '$status' is not a board column"
-    exit 0
-  fi
-  # Full resolution proven; a mutation failure below is transient (network),
-  # not board config -- no mark.
-  board_mark_resolved
+  # Marker verdict for these two cases was already written at the resolution
+  # site above; these guards keep their original warn-skip behaviour only.
+  if [ -z "${FID:-}" ]; then warn "Status field not found (skip)"; exit 0; fi
+  if [ -z "${OPT_ID:-}" ]; then warn "status '$status' is not a board column (skip)"; exit 0; fi
   if set_single_select "$PID" "$ITEM" "$FID" "$OPT_ID"; then
     warn "#$issue -> $status"
   else
