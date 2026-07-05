@@ -46,7 +46,7 @@ case "\$args" in
     # OPEN item (skip). GH_SWEEP_REMAINING drives the rate-limit gate.
     printf '{"data":{"node":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":"C"},"nodes":[{"id":"SWEEP_ITEM","status":{"optionId":"OPT_BLOCKED"},"content":{"state":"CLOSED"}},{"id":"DONE_ITEM","status":{"optionId":"DONEOPT"},"content":{"state":"CLOSED"}},{"id":"OPEN_ITEM","status":{"optionId":"OPT_BLOCKED"},"content":{"state":"OPEN"}}]}},"rateLimit":{"remaining":%s}}}' "\${GH_SWEEP_REMAINING:-5000}" ;;
   *projectsV2*)
-    printf '%s' '{"data":{"user":{"projectsV2":{"nodes":[{"id":"PID","title":"Autonomy Progress","fields":{"nodes":[{"id":"SFID","name":"Status","options":[{"id":"SOPT","name":"In review"},{"id":"DONEOPT","name":"Done"}]},{"id":"PFID","name":"Priority","options":[{"id":"P0OPT","name":"P0"},{"id":"P1OPT","name":"P1"},{"id":"P2OPT","name":"P2"}]}]}}]}}}}' ;;
+    printf '%s' '{"data":{"user":{"projectsV2":{"nodes":[{"id":"PID","title":"'"\${GH_PROJ_TITLE:-Autonomy Progress}"'","fields":{"nodes":[{"id":"SFID","name":"Status","options":[{"id":"SOPT","name":"In review"},{"id":"DONEOPT","name":"Done"}]},{"id":"PFID","name":"Priority","options":[{"id":"P0OPT","name":"P0"},{"id":"P1OPT","name":"P1"},{"id":"P2OPT","name":"P2"}]}]}}]}}}}' ;;
   *) printf '{}' ;;
 esac
 SH
@@ -56,7 +56,7 @@ chmod +x "$TMP/bin/gh"
 run() {
   local labels="$1" fail="$2"; shift 2
   : > "$TMP/mutations"
-  ( cd "$TMP/repo" && PATH="$TMP/bin:$PATH" GH_LABELS="$labels" GH_FAIL="$fail" GH_SWEEP_REMAINING="${GH_SWEEP_REMAINING:-5000}" "$ROOT/bin/board.sh" "$@" ) >/dev/null 2>&1
+  ( cd "$TMP/repo" && PATH="$TMP/bin:$PATH" GH_LABELS="$labels" GH_FAIL="$fail" GH_SWEEP_REMAINING="${GH_SWEEP_REMAINING:-5000}" GH_PROJ_TITLE="${GH_PROJ_TITLE:-}" "$ROOT/bin/board.sh" "$@" ) >/dev/null 2>&1
   echo "$?"
 }
 muts() { cat "$TMP/mutations" 2>/dev/null; }
@@ -116,6 +116,67 @@ check "sweep gh-failure: zero mutations" "0" "$(muts | grep -c 'SET')"
 rc="$(run p2 "" frobnicate 42 "In review")"
 check "unknown command: exit 0" "0" "$rc"
 check "unknown command: zero mutations (no side effects)" "0" "$(muts | grep -c 'SET')"
+
+# --- #90 item (a): board-unresolved marker (detector->marker->chip) ---------
+# board.sh persists its own resolution verdict to var/autonomy-logs/
+# board-warning (2 lines: epoch, message) so the dashboard can surface it;
+# a successful resolution removes it. Best-effort throughout (exit 0 always).
+MARKER="$TMP/repo/var/autonomy-logs/board-warning"
+
+# M1: resolution fails (title mismatch) -> marker written, exit still 0.
+rc="$(GH_PROJ_TITLE="Some Other Board" run p2 "" status 42 "In review")"
+check "marker: not-found status exits 0" "0" "$rc"
+check "marker: written on not-found" "1" "$([ -f "$MARKER" ] && echo 1 || echo 0)"
+check "marker: line1 is an epoch" "1" "$(sed -n 1p "$MARKER" | grep -cE '^[0-9]+$')"
+check "marker: message names the board" "1" "$(sed -n 2p "$MARKER" | grep -c "Autonomy Progress")"
+
+# M2: next successful resolution clears it.
+rc="$(GH_PROJ_TITLE="" run p2 "" status 42 "In review")"
+check "marker: cleared on success" "0" "$([ -f "$MARKER" ] && echo 1 || echo 0)"
+
+# M3: total gh failure -> marker written (indistinguishable from not-found at
+# the resolver's caller; message hedges with "or lookup failed").
+rc="$(run p2 1 status 42 "In review")"
+check "marker: gh-fail exits 0" "0" "$rc"
+check "marker: written on gh failure" "1" "$([ -f "$MARKER" ] && echo 1 || echo 0)"
+check "marker: message hedges lookup" "1" "$(sed -n 2p "$MARKER" | grep -c "lookup failed")"
+
+# M4: sweep resolution failure writes it too; sweep success clears it.
+rc="$(GH_PROJ_TITLE="Some Other Board" run p2 "" sweep)"
+check "marker: sweep not-found exits 0" "0" "$rc"
+check "marker: written by sweep" "1" "$([ -f "$MARKER" ] && echo 1 || echo 0)"
+rc="$(GH_PROJ_TITLE="" run p2 "" sweep)"
+check "marker: cleared by sweep success" "0" "$([ -f "$MARKER" ] && echo 1 || echo 0)"
+
+# M5: status option not a board column -> marker written (board exists but
+# lacks the wanted column: a real board-contract misconfig).
+rc="$(run p2 "" status 42 "Bogus Column")"
+check "marker: bad-column exits 0" "0" "$rc"
+check "marker: written on missing column" "1" "$([ -f "$MARKER" ] && echo 1 || echo 0)"
+check "marker: message names the column" "1" "$(sed -n 2p "$MARKER" | grep -c "Bogus Column")"
+rc="$(run p2 "" status 42 "In review")"
+check "marker: cleared by valid status" "0" "$([ -f "$MARKER" ] && echo 1 || echo 0)"
+
+# M6: title set but owner MISSING -> misconfig, marker written (must NOT read
+# as board-off-by-design; only an empty TITLE is the SD-31 off switch).
+printf 'board:\n  project_title: Autonomy Progress\n' > "$TMP/repo/.autonomy/config.yaml"
+rc="$(run p2 "" status 42 "In review")"
+check "marker: missing-owner exits 0" "0" "$rc"
+check "marker: written on missing owner" "1" "$([ -f "$MARKER" ] && echo 1 || echo 0)"
+
+# M7: owner fails the login grammar -> marker written.
+printf 'board:\n  owner: bad_owner\n  project_title: Autonomy Progress\n' > "$TMP/repo/.autonomy/config.yaml"
+rc="$(run p2 "" status 42 "In review")"
+check "marker: invalid-owner exits 0" "0" "$rc"
+check "marker: written on invalid owner" "1" "$([ -f "$MARKER" ] && echo 1 || echo 0)"
+
+# M8: empty title = board off by design (SD-31) -> stale marker CLEARED, no
+# false alarm. (Marker still present from M7.)
+printf 'board:\n  owner: Luke-Bradford\n  project_title: ""\n' > "$TMP/repo/.autonomy/config.yaml"
+rc="$(run p2 "" status 42 "In review")"
+check "marker: empty-title exits 0" "0" "$rc"
+check "marker: cleared when board off" "0" "$([ -f "$MARKER" ] && echo 1 || echo 0)"
+printf 'board:\n  owner: Luke-Bradford\n  project_title: Autonomy Progress\n' > "$TMP/repo/.autonomy/config.yaml"
 
 # F: #211 overlay-aware read seam. Source the real board.sh (its guard makes a
 # `source` define functions only) and exercise config_value_with_overlay
