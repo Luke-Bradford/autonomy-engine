@@ -621,8 +621,11 @@ def _compute_in_flight(repo):
                     cwd=repo, timeout=15) or ""
 
     def _open_raw():
+        # headRefOid + comments feed the #292 stall chip: parse_stall_flag
+        # matches the sweep's autonomy-stall-flag marker against the CURRENT
+        # head, so the chip drops on push exactly like the gate resets.
         return _run(["gh", "pr", "list", "--state", "open", "--limit", "20", "--json",
-                     "number,title,headRefName,isDraft,mergeable,reviewDecision,statusCheckRollup,url,updatedAt",
+                     "number,title,headRefName,headRefOid,isDraft,mergeable,reviewDecision,statusCheckRollup,url,updatedAt,comments",
                      "--jq", "sort_by(.updatedAt) | reverse"],
                     cwd=repo, timeout=20)
 
@@ -691,6 +694,11 @@ def _compute_in_flight(repo):
                     "review": (pr.get("reviewDecision") or "").lower(),
                     "ci": ci,
                     "qa": qa,
+                    # #292 piece 2: the sweep's approved-but-unmerged flag,
+                    # bound to this head oid; None (no chip) when absent.
+                    "stall": ds.parse_stall_flag(
+                        pr.get("comments"), pr.get("headRefOid") or "",
+                        time.time()),
                 })
         except ValueError:
             pass

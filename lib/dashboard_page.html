@@ -1321,7 +1321,7 @@ function renderGit(repos){
   let html="";
   if(prs.length){
     html+=prs.map(p=>`<div class="pr"><div class="p1"><span class="num">#${p.number}</span><span class="pt">${safeHref(p.url)?`<a href="${esc(safeHref(p.url))}" target="_blank">${esc(short(p.title,38))}</a>`:esc(short(p.title,38))}</span></div>
-      <div class="p2"><span class="chip">${esc(short(p.repo,16))}</span><span class="chip c-${esc(p.ci)}">ci ${esc(p.ci)}</span>${p.review?`<span class="chip c-${esc(p.review)}">${esc(p.review.replace("_"," "))}</span>`:""}${p.qa&&p.qa!=="none"?`<span class="chip c-${esc(p.qa)}">qa ${esc(p.qa)}</span>`:""}${p.mergeable?`<span class="chip c-${esc(p.mergeable)}">${esc(p.mergeable)}</span>`:""}${p.draft?`<span class="chip">draft</span>`:""}</div></div>`).join("");
+      <div class="p2"><span class="chip">${esc(short(p.repo,16))}</span><span class="chip c-${esc(p.ci)}">ci ${esc(p.ci)}</span>${p.review?`<span class="chip c-${esc(p.review)}">${esc(p.review.replace("_"," "))}</span>`:""}${p.qa&&p.qa!=="none"?`<span class="chip c-${esc(p.qa)}">qa ${esc(p.qa)}</span>`:""}${p.mergeable?`<span class="chip c-${esc(p.mergeable)}">${esc(p.mergeable)}</span>`:""}${p.draft?`<span class="chip">draft</span>`:""}${p.stall?`<span class="chip c-failing" title="flagged approved-but-unmerged by the board sweep (#292); clears on push or merge">⚠ approved · unmerged ${Number(p.stall.age_min)||0}m</span>`:""}</div></div>`).join("");
   }else{
     html+=repos.filter(r=>r.git&&r.git.branch).map(r=>`<div class="pr"><div class="p1"><span class="pt" style="color:var(--mut)">${esc(r.name)}</span><span class="chip" style="margin-left:auto">${esc(r.git.branch)}${r.git.dirty?" · dirty":""}</span></div></div>`).join("")||`<div class="empty">Nothing open.</div>`;
   }

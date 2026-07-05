@@ -833,6 +833,57 @@ def iso_epoch(ts):
         return 0
 
 
+# The sweep's stall-flag marker (#292, board.sh board_stall_flag) -- the oid
+# binds the flag to the head it verdicted, so a new push (gate reset) drops it.
+_STALL_MARKER_RE = re.compile(r"autonomy-stall-flag\s+([0-9A-Za-z]+)")
+_STALL_AGE_RE = re.compile(r"unmerged for (\d+)m")
+
+
+def parse_stall_flag(comments, head_oid, now):
+    """#292 piece 2: the sweep's approved-but-unmerged flag for a PR, or None.
+
+    The dashboard deliberately does NOT re-parse review verdicts -- that
+    parity contract (mirror safe_merge's gate bug-for-bug) lives in board.sh
+    alone, and a third copy would drift. Instead this renders the detector's
+    own output: the latest PR comment whose `autonomy-stall-flag <oid>`
+    marker matches the CURRENT head oid. A push moves the head, the marker
+    stops matching, the chip drops -- same reset semantics as the gate.
+
+    Returns {"age_min": <int, stalled-for now>, "flagged_epoch": <int>} or
+    None. age_min = the age the sweep stated in the flag body plus the time
+    since it was posted (falls back to time-since-flag when the body's age is
+    absent). Total: any malformed input -> None, never raises."""
+    if not head_oid or not isinstance(comments, list):
+        return None
+    flag = None
+    for c in comments:
+        if not isinstance(c, dict):
+            continue
+        body = c.get("body")
+        if not isinstance(body, str):
+            continue
+        m = _STALL_MARKER_RE.search(body)
+        if m and m.group(1) == head_oid:
+            flag = c
+    if flag is None:
+        return None
+    flagged_epoch = iso_epoch(flag.get("createdAt"))
+    if not flagged_epoch:
+        return None
+    stated = 0
+    m = _STALL_AGE_RE.search(flag.get("body") or "")
+    if m:
+        try:
+            stated = int(m.group(1))
+        except ValueError:
+            stated = 0
+    try:
+        age_min = stated + max(0, (int(now) - flagged_epoch) // 60)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return {"age_min": age_min, "flagged_epoch": flagged_epoch}
+
+
 def completed_ticket(ticket, merged_prs):
     """The merged PR that completed `ticket` (#25), or None. Matched by the
     engine's branch convention first (feat/<n>-/fix/<n>-), then by a #<n> ref
