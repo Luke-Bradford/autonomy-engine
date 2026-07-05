@@ -58,6 +58,12 @@ Issue numbers, or "None".
   merge (2026-07-05 incident, bug #301). Until #301 lands, say "#N stays
   open — <what remains>" and never place `close/closes/fix/fixes/resolve/
   resolves` directly before an issue ref you do NOT want closed.
+  **Quoted text counts too**: PR #303 — the doc PR for #301 — *quoted* the
+  offending sentence in its body and closed the same issue a second time.
+  The scan is on the PR body verbatim (grep, no negation/quote awareness),
+  so when describing such an incident, break the token pair (e.g. "the
+  'does NOT close' phrasing against #90"), or reference the issue only in
+  a GH comment — comments are not scanned.
 - End the body with the Claude Code attribution line (repo convention).
 - Doc-only PRs skip the review bot but still get CI — say "doc-only" in the
   description so the missing review isn't chased.
