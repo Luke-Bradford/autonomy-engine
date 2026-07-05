@@ -90,6 +90,9 @@ write_engine_boot_sha() {
   [ -n "$home" ] && [ -n "$logdir" ] || return 0
   sha="$(git -C "$home" rev-parse HEAD 2>/dev/null)" || return 0
   [ -n "$sha" ] || return 0
+  # Print the sha for the caller (#294 uses it as the re-exec baseline) even
+  # if the best-effort file write below fails -- the sha itself is known.
+  printf '%s\n' "$sha"
   local tmp="$logdir/engine_sha.$$.tmp"
   (
     printf '%s\n' "$sha" > "$tmp" && mv -f "$tmp" "$logdir/engine_sha"
@@ -1067,10 +1070,10 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   trap 'rm -rf "$LOCK"; heartbeat "stopped" "supervisor exited" ""; log "supervisor stopped."; exit 0' EXIT INT TERM
 
   log "=== supervisor start (pid $$, repo=$AUTONOMY_TARGET_REPO, agent=$AGENT_TYPE, model=$MODEL) ==="
-  write_engine_boot_sha "$ENGINE_HOME" "$LOGDIR"   # #166: record the engine sha we froze at, for the dashboard's update chip
-  # #294: the same sha, in memory, is the re-exec baseline. Empty (unreadable
-  # HEAD) keeps the re-exec gate closed for this process's whole life.
-  ENGINE_BOOT_SHA="$(git -C "$ENGINE_HOME" rev-parse HEAD 2>/dev/null || echo)"
+  # #166: record the engine sha we froze at (dashboard update chip); the same
+  # sha, in memory, is the #294 re-exec baseline. Empty (unreadable HEAD)
+  # keeps the re-exec gate closed for this process's whole life.
+  ENGINE_BOOT_SHA="$(write_engine_boot_sha "$ENGINE_HOME" "$LOGDIR")"
   reexec_disabled=0
   # A self-re-exec relaunches from RESOLVED values, not the raw argv: the loop
   # cd's around (preflight), so an originally-relative --repo would resolve
