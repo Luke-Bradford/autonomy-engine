@@ -90,10 +90,103 @@ write_engine_boot_sha() {
   [ -n "$home" ] && [ -n "$logdir" ] || return 0
   sha="$(git -C "$home" rev-parse HEAD 2>/dev/null)" || return 0
   [ -n "$sha" ] || return 0
+  # Print the sha for the caller (#294 uses it as the re-exec baseline) even
+  # if the best-effort file write below fails -- the sha itself is known.
+  printf '%s\n' "$sha"
   local tmp="$logdir/engine_sha.$$.tmp"
   (
     printf '%s\n' "$sha" > "$tmp" && mv -f "$tmp" "$logdir/engine_sha"
   ) 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+  return 0
+}
+
+# #294: a long-lived supervisor's bash is frozen at process start, so merged
+# engine code is inert until the process is replaced. The three functions
+# below let the supervisor re-exec ITSELF at the session boundary (same pid,
+# lock/pause/reset state all on disk), making the dashboard's "refresh at next
+# session boundary" banner true instead of a display lie.
+
+# "Update ready" is an EARNED verdict (prevention-log #18): prints the engine
+# checkout's current HEAD and returns 0 ONLY when the HEAD is readable,
+# non-empty, differs from the sha this process booted from, AND the engine
+# tree is clean. Every failure path returns 1 -- a git hiccup or dirty tree
+# means keep running the old code, never exec into an unknown state.
+engine_update_ready() {
+  local home="${1:-}" boot_sha="${2:-}" cur dirty
+  [ -n "$home" ] && [ -n "$boot_sha" ] || return 1
+  cur="$(git -C "$home" rev-parse HEAD 2>/dev/null)" || return 1
+  [ -n "$cur" ] || return 1
+  [ "$cur" != "$boot_sha" ] || return 1
+  dirty="$(git -C "$home" status --porcelain 2>/dev/null)" || return 1
+  [ -z "$dirty" ] || return 1
+  printf '%s\n' "$cur"
+  return 0
+}
+
+# The boundary decision: may THIS loop iteration re-exec? No when a prior
+# exec attempt failed (never loop-exec), and no while last iteration's
+# session.done edge is still pending -- resolve_event_wakes must consume it
+# BEFORE the process image is replaced, or the event is silently dropped.
+# Prints the new HEAD on yes (delegated to engine_update_ready).
+should_reexec() {
+  local disabled="${1:-1}" session_ran="${2:-1}" home="${3:-}" boot_sha="${4:-}"
+  [ "$disabled" = "0" ] || return 1
+  [ "$session_ran" = "0" ] || return 1
+  engine_update_ready "$home" "$boot_sha"
+}
+
+# Replace this process with a fresh supervisor from the (updated) engine
+# checkout. On success this never returns and the EXIT trap does NOT fire --
+# the lock dir survives for the same-pid continuation (see
+# acquire_supervisor_lock). On failure the process must SURVIVE: bash's
+# default for a non-interactive shell is to exit when exec fails, so execfail
+# is set for the attempt (and restored after, to leave the surviving old
+# process's shell semantics untouched).
+reexec_engine() {
+  local home="$1"; shift
+  local target="$home/bin/supervisor.sh"
+  # exec-ing "/bin/bash $target" SUCCEEDS even when $target is missing or
+  # broken -- the fresh bash then dies, taking the supervisor with it. So the
+  # target must exist and parse (bash -n) BEFORE the point of no return.
+  if [ ! -r "$target" ] || ! /bin/bash -n "$target" 2>/dev/null; then
+    log "WARN: self-re-exec failed -- new supervisor.sh missing or does not parse; continuing on the old code (restart to apply)"
+    return 1
+  fi
+  local had_execfail=0
+  shopt -q execfail && had_execfail=1
+  shopt -s execfail
+  # shellcheck disable=SC2093  # continuing after exec is the point: execfail makes a failed exec return
+  exec /bin/bash "$target" "$@"
+  # Only reached when the exec itself failed (e.g. /bin/bash unrunnable).
+  [ "$had_execfail" -eq 1 ] || shopt -u execfail
+  log "WARN: self-re-exec failed -- continuing on the old code (restart to apply new engine code)"
+  return 1
+}
+
+# Take (or keep) the one-supervisor-per-repo lock. Returns 0 = we hold the
+# lock, 1 = another live supervisor holds it (caller exits 0, as before --
+# this is the pre-#294 inline block extracted for the re-exec identity case).
+# pid == $$ IS proof of identity (prevention-log #10): after a self-re-exec
+# the SAME pid re-runs startup and must keep its own lock, not refuse it.
+# A malformed pidfile (non-decimal) is treated as stale, never fed to kill.
+acquire_supervisor_lock() {
+  local lock="$1" pid
+  if ! mkdir "$lock" 2>/dev/null; then
+    pid="$(cat "$lock/pid" 2>/dev/null || echo)"
+    case "$pid" in
+      ''|*[!0-9]*) pid="" ;;   # empty or non-decimal -> stale
+    esac
+    if [ -n "$pid" ] && [ "$pid" = "$$" ]; then
+      return 0   # our own lock, carried across a self-re-exec -- keep it
+    fi
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      log "supervisor already running (pid $pid); exiting."
+      return 1
+    fi
+    rm -rf "$lock"
+    mkdir "$lock" 2>/dev/null || { log "lost lock race; exiting."; return 1; }
+  fi
+  echo $$ >"$lock/pid"
   return 0
 }
 
@@ -973,18 +1066,28 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   FALLBACK_MODEL="$(resolve_config_value "$CFG" agent.model.fallback "$FALLBACK_MODEL_OVERRIDE" claude-sonnet-4-6)"
 
   LOCK="$(supervisor_lock_dir "$AUTONOMY_TARGET_REPO")"
-  if ! mkdir "$LOCK" 2>/dev/null; then
-    pid="$(cat "$LOCK/pid" 2>/dev/null || echo)"
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-      log "supervisor already running (pid $pid); exiting."; exit 0
-    fi
-    rm -rf "$LOCK"; mkdir "$LOCK" || { log "lost lock race; exiting."; exit 0; }
-  fi
-  echo $$ >"$LOCK/pid"
+  acquire_supervisor_lock "$LOCK" || exit 0
   trap 'rm -rf "$LOCK"; heartbeat "stopped" "supervisor exited" ""; log "supervisor stopped."; exit 0' EXIT INT TERM
 
   log "=== supervisor start (pid $$, repo=$AUTONOMY_TARGET_REPO, agent=$AGENT_TYPE, model=$MODEL) ==="
-  write_engine_boot_sha "$ENGINE_HOME" "$LOGDIR"   # #166: record the engine sha we froze at, for the dashboard's update chip
+  # #166: record the engine sha we froze at (dashboard update chip); the same
+  # sha, in memory, is the #294 re-exec baseline. Empty (unreadable HEAD)
+  # keeps the re-exec gate closed for this process's whole life.
+  ENGINE_BOOT_SHA="$(write_engine_boot_sha "$ENGINE_HOME" "$LOGDIR")"
+  reexec_disabled=0
+  # A self-re-exec relaunches from RESOLVED values, not the raw argv: the loop
+  # cd's around (preflight), so an originally-relative --repo would resolve
+  # wrong (or not at all) at exec time and the fresh image would exit -- with
+  # no process left. $AUTONOMY_TARGET_REPO was absolutized above; an empty
+  # override means "was not passed" (the resolve_config_value contract), so
+  # dropping empties reconstructs the original semantics exactly.
+  REEXEC_ARGS=(--repo "$AUTONOMY_TARGET_REPO")
+  [ -n "$AGENT_TYPE_OVERRIDE" ]     && REEXEC_ARGS+=(--agent-type "$AGENT_TYPE_OVERRIDE")
+  [ -n "$MODEL_OVERRIDE" ]          && REEXEC_ARGS+=(--model "$MODEL_OVERRIDE")
+  [ -n "$FALLBACK_MODEL_OVERRIDE" ] && REEXEC_ARGS+=(--fallback-model "$FALLBACK_MODEL_OVERRIDE")
+  [ -n "$EFFORT_OVERRIDE" ]         && REEXEC_ARGS+=(--effort "$EFFORT_OVERRIDE")
+  [ -n "$LABEL_OVERRIDE" ]          && REEXEC_ARGS+=(--label "$LABEL_OVERRIDE")
+  [ -n "$AUTONOMY_LANE" ]           && REEXEC_ARGS+=(--lane "$AUTONOMY_LANE")
   err_backoff=$ERR_BACKOFF_START
   limit_backoff=$LIMIT_BACKOFF_START
   paused_logged=0
@@ -996,6 +1099,15 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   session_ran=0
 
   while true; do
+    # #294 self-re-exec, between sessions only, BEFORE the pause check so a
+    # paused fleet still adopts merged engine code. should_reexec defers
+    # while a session.done edge is pending and after one failed exec attempt
+    # (never loop-exec); on success exec never returns (same pid, lock kept).
+    if new_sha="$(should_reexec "$reexec_disabled" "$session_ran" "$ENGINE_HOME" "$ENGINE_BOOT_SHA")"; then
+      log "re-exec onto $new_sha (was $ENGINE_BOOT_SHA) -- adopting new engine code"
+      reexec_engine "$ENGINE_HOME" "${REEXEC_ARGS[@]}" || reexec_disabled=1
+    fi
+
     # Graceful stop: checked at the top so any in-flight session has already
     # finished (never a mid-session kill). Idle-poll until the sentinel is
     # removed (resume). Under launchd KeepAlive=true, exiting would just be

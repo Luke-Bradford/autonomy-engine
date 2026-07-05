@@ -33,8 +33,9 @@ mkdir -p "$home"
 )
 want="$(git -C "$home" rev-parse HEAD)"
 LOGDIR="$tmp/logs"; mkdir -p "$LOGDIR"
-write_engine_boot_sha "$home" "$LOGDIR"; rc=$?
+out="$(write_engine_boot_sha "$home" "$LOGDIR")"; rc=$?
 check "returns 0"                    "0"      "$rc"
+check "prints the boot sha (#294 re-exec baseline)" "$want" "$out"
 check "engine_sha holds HEAD"        "$want"  "$(cat "$LOGDIR/engine_sha" 2>/dev/null)"
 check "exactly one line"             "1"      "$(wc -l < "$LOGDIR/engine_sha" | tr -d ' ')"
 leftover="$(find "$LOGDIR" -name 'engine_sha.*.tmp' | wc -l | tr -d ' ')"
@@ -43,13 +44,15 @@ check "no temp file left behind"     "0"      "$leftover"
 # --- best-effort: git-less home writes nothing, returns 0 ----------------------
 nogit="$tmp/plain"; mkdir -p "$nogit"
 LOGDIR2="$tmp/logs2"; mkdir -p "$LOGDIR2"
-write_engine_boot_sha "$nogit" "$LOGDIR2"; rc=$?
+out="$(write_engine_boot_sha "$nogit" "$LOGDIR2")"; rc=$?
 check "git-less home returns 0"      "0"      "$rc"
+check "git-less home prints nothing" ""       "$out"
 check "git-less home writes no file" "0"      "$(find "$LOGDIR2" -name engine_sha | wc -l | tr -d ' ')"
 
 # --- best-effort: unwritable LOGDIR does not crash -----------------------------
-write_engine_boot_sha "$home" "$tmp/does/not/exist"; rc=$?
+out="$(write_engine_boot_sha "$home" "$tmp/does/not/exist")"; rc=$?
 check "unwritable LOGDIR returns 0"  "0"      "$rc"
+check "unwritable LOGDIR still prints the sha (in-memory baseline survives)" "$want" "$out"
 
 # --- defaults to globals when args omitted ------------------------------------
 ENGINE_HOME="$home"
