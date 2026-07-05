@@ -135,5 +135,47 @@ gh() { return 1; }
 board_stall_flag 101 45 cafe1234deadbeef 2>"$tmp/warn2.txt"; rc=$?
 check "comment-read failure -> rc 0, nothing posted" "1|0" "$(grep -c "pr comment 101" "$tmp/comment-calls.log")|$rc"
 
+# --- main path: labels-only repo (no board configured) still gets stall flags -
+# #298 shipped stall detection with the in-code claim "a labels-only repo (no
+# board) still gets stall flags", but the owner/project_title empty guard sat
+# ABOVE the sweep block and exited first (Codex CP2 catch on the SD-31 scaffold
+# change, which makes empty project_title the scaffold default). Subprocess
+# test through the real CLI: sweep must run the stall scan WITHOUT a board,
+# while status/add (board mutations) still skip cleanly.
+SUBTMP="$tmp/mainpath"
+mkdir -p "$SUBTMP/repo/.autonomy" "$SUBTMP/bin"
+cat > "$SUBTMP/repo/.autonomy/config.yaml" <<'YML'
+board:
+  owner: CHANGE-ME
+  project_title: ""
+merge_gate:
+  strategy: bot_comment
+YML
+cat > "$SUBTMP/bin/gh" <<SH
+#!/usr/bin/env bash
+args="\$*"
+case "\$args" in
+  "pr list"*) printf '101\n' ;;
+  "pr view 101 --json commits,comments"*) cat "$tmp/pr101.json" ;;
+  "pr view 101 --json comments"*) printf '{"comments":[{"body":"unrelated"}]}' ;;
+  "pr comment"*) printf '%s\n' "\$args" >> "$SUBTMP/comments.log"; exit 0 ;;
+  *) exit 1 ;;
+esac
+SH
+chmod +x "$SUBTMP/bin/gh"
+
+: > "$SUBTMP/comments.log"
+( cd "$SUBTMP/repo" && PATH="$SUBTMP/bin:$PATH" "$ENGINE_HOME/bin/board.sh" sweep ) >/dev/null 2>&1
+rc=$?
+check "labels-only sweep: rc 0 (best-effort)"      "0" "$rc"
+check "labels-only sweep: stall flag still posted" "1" "$(grep -c "pr comment 101" "$SUBTMP/comments.log")"
+
+# status/add mutate the board -- with none configured they skip, post nothing.
+: > "$SUBTMP/comments.log"
+( cd "$SUBTMP/repo" && PATH="$SUBTMP/bin:$PATH" "$ENGINE_HOME/bin/board.sh" status 42 "In review" ) >/dev/null 2>&1
+rc=$?
+check "labels-only status: rc 0 (skip)"            "0" "$rc"
+check "labels-only status: no gh writes"           "0" "$(grep -c . "$SUBTMP/comments.log")"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi

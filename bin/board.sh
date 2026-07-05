@@ -379,30 +379,40 @@ case "$cmd" in
   *) warn "unknown command '$cmd' (use: status | add | sweep)"; exit 0 ;;
 esac
 
-# OWNER/PROJECT_TITLE are needed by EVERY command (status, add, sweep) -- resolve
-# + validate once, before the per-command arg checks (so `sweep`, which takes no
-# <issue#>, is not rejected by the issue-required check below).
+# OWNER/PROJECT_TITLE are needed by every BOARD-MUTATING path -- resolve +
+# validate once, before the per-command arg checks (so `sweep`, which takes no
+# <issue#>, is not rejected by the issue-required check below). A missing or
+# invalid board config must NOT exit here for `sweep` (#292): the stall scan
+# inside the sweep block is board-independent, and labels-only repos (SD-31
+# scaffolds project_title empty) are exactly the ones that need it. Sweep
+# degrades to stall-scan-only; status/add (pure board mutations) still skip.
 OWNER="$(config_value_with_overlay board.owner board_owner)"
 PROJECT_TITLE="$(config_value_with_overlay board.project_title board_project_title)"
+BOARD_CONFIGURED=1
 if [ -z "$OWNER" ] || [ -z "$PROJECT_TITLE" ]; then
-  warn "board.owner/board.project_title not set in .autonomy/config.yaml (skip)"; exit 0
+  warn "board.owner/board.project_title not set in .autonomy/config.yaml (board updates skipped)"
+  BOARD_CONFIGURED=0
+else
+  # board.owner crosses into gh argv (as a GraphQL variable); re-validate it
+  # against the GitHub login grammar at the point of use (prevention-log 6) even
+  # though config also validates -- a stray '-' or non-login char never reaches
+  # gh. Best-effort: an invalid owner warns and skips, never errors.
+  case "$OWNER" in
+    ""|-*|*[!A-Za-z0-9-]*)
+      warn "board.owner '$OWNER' is not a valid GitHub login (board updates skipped)"
+      BOARD_CONFIGURED=0 ;;
+  esac
 fi
-# board.owner crosses into gh argv (as a GraphQL variable); re-validate it
-# against the GitHub login grammar at the point of use (prevention-log 6) even
-# though config also validates -- a stray '-' or non-login char never reaches
-# gh. Best-effort: an invalid owner warns and skips, never errors.
-case "$OWNER" in
-  ""|-*|*[!A-Za-z0-9-]*)
-    warn "board.owner '$OWNER' is not a valid GitHub login (skip)"; exit 0 ;;
-esac
+if [ "$BOARD_CONFIGURED" = 0 ] && [ "$cmd" != "sweep" ]; then exit 0; fi
 
 # #252: sweep closed issues -> Done. Takes NO <issue#>, so it is handled before
 # the issue-required check. Idempotent, rate-limit-gated, best-effort.
 if [ "$cmd" = "sweep" ]; then
-  # #292: stall detection rides the sweep tick, BEFORE the Projects-board
-  # resolution below -- a labels-only repo (no board) still gets stall flags.
-  # Only under a bot_comment gate: manual/ci_only have no autonomous verdict
-  # to stall on; gh_review surfaces approved PRs in GitHub's own UI.
+  # #292: stall detection rides the sweep tick, BEFORE the board-configured
+  # gate and the Projects-board resolution below -- a labels-only repo (no
+  # board) still gets stall flags. Only under a bot_comment gate: manual/
+  # ci_only have no autonomous verdict to stall on; gh_review surfaces
+  # approved PRs in GitHub's own UI.
   gate_strategy="$(python3 "$BOARD_HOME/lib/config_parser.py" .autonomy/config.yaml merge_gate.strategy 2>/dev/null || echo)"
   if [ "$gate_strategy" = "bot_comment" ]; then
     stall_author="$(python3 "$BOARD_HOME/lib/config_parser.py" .autonomy/config.yaml merge_gate.author_login 2>/dev/null || echo)"
@@ -420,6 +430,10 @@ $stalls
 EOF
     fi
   fi
+
+  # Stall scan done; the closed->Done sweep below is a board mutation and
+  # needs a real board.
+  [ "$BOARD_CONFIGURED" = 1 ] || exit 0
 
   DONE_NAME="$(config_value_with_overlay board.done_status board_done_status)"
   [ -n "$DONE_NAME" ] || DONE_NAME="Done"
