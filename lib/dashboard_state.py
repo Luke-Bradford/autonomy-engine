@@ -33,6 +33,17 @@ _TICKET_RE = re.compile(r"#(\d{1,6})\b")
 _BRANCH_CREATE_RE = re.compile(r"(?:checkout\s+-[bB]|switch\s+-[cC])\s+['\"]?([^\s'\";&|]+)")
 # the engine's own board write: board.sh status <n> "<Status>"
 _BOARD_STATUS_RE = re.compile(r"board\.sh['\"]?\s+status\s+(\d{1,6})\s+['\"]?([A-Za-z][A-Za-z ]*)")
+# #312 Slice B: run_all.sh's terminal verdict markers, LINE-EXACT (^...$,
+# MULTILINE). Line-exactness is one of the two honesty gates: the run PRINTS
+# the bare marker on its own line, while quoting the script's source (cat/grep
+# in a tool_result) yields `...echo "ALL SUITES PASS"...` -- never a bare line.
+_GATE_GREEN_RE = re.compile(r"^ALL SUITES PASS$", re.MULTILINE)
+_GATE_RED_RE = re.compile(r"^ONE OR MORE SUITES FAILED$", re.MULTILINE)
+# The other honesty gate (CP1): a marker only counts inside the RESULT of a
+# command that actually invoked the gate -- run_all.sh directly, or git push
+# (the pre-push hook runs the gate; its output lands in the push's result).
+# Any other command (printf/echo) can't fake a verdict.
+_GATE_CMD_RE = re.compile(r"run_all\.sh|\bgit\b[^\n|;&]*\bpush\b")
 
 # Claude Code writes one JSONL per session under here; the account's REAL usage
 # (all repos, all surfaces) is aggregatable from these -- the honest 5h/weekly
@@ -317,6 +328,8 @@ def parse_session_log(path):
     result = None
     rate_limited = False
     current_step = ""
+    tests_ran = None      # #312: latest gate verdict ("green"/"red") or None
+    gate_tool_ids = set()  # tool_use ids whose command invoked the gate
     # ticket signals (#26): mention counts + last-seen position, the branch the
     # session created, and the last board.sh status write per ticket
     ticket_mentions = Counter()
@@ -373,6 +386,8 @@ def parse_session_log(path):
                             for n in _TICKET_RE.findall(str(inp.get(field) or "")):
                                 _mention(int(n))
                         cmd = str(inp.get("command") or "")
+                        if _GATE_CMD_RE.search(cmd) and block.get("id"):
+                            gate_tool_ids.add(block.get("id"))
                         m = _BRANCH_CREATE_RE.search(cmd)
                         if m:
                             ref = extract_ticket_ref(m.group(1))
@@ -395,6 +410,39 @@ def parse_session_log(path):
                     rate_limited = True
             elif t == "result":
                 result = o
+            elif t == "user":
+                # tool_result content: the gate verdict (#312 Slice B), but
+                # ONLY for results of a gate-invoking tool_use (gate_tool_ids).
+                # The content field is a block list OR a plain string depending
+                # on the emitter -- normalise to text, then line-exact-match
+                # the run_all.sh terminal markers. Latest marker wins (a red
+                # run followed by a green re-run is honestly green).
+                blocks = (o.get("message") or {}).get("content")
+                if not isinstance(blocks, list):
+                    continue
+                for block in blocks:
+                    if (not isinstance(block, dict)
+                            or block.get("type") != "tool_result"
+                            or block.get("tool_use_id") not in gate_tool_ids):
+                        continue
+                    content = block.get("content")
+                    if isinstance(content, str):
+                        texts = [content]
+                    elif isinstance(content, list):
+                        texts = [c.get("text") or "" for c in content
+                                 if isinstance(c, dict)
+                                 and c.get("type") == "text"]
+                    else:
+                        continue
+                    for text in texts:
+                        g = None
+                        for m in _GATE_GREEN_RE.finditer(text):
+                            g = ("green", m.start())
+                        for m in _GATE_RED_RE.finditer(text):
+                            if g is None or m.start() > g[1]:
+                                g = ("red", m.start())
+                        if g:
+                            tests_ran = g[0]
             # --- codex adapter sessions (`codex exec --json`, #49) ---------
             elif t == "thread.started":
                 session_id = o.get("thread_id") or session_id
@@ -475,6 +523,7 @@ def parse_session_log(path):
         "num_turns": num_turns,
         "result_text": result_text,
         "rate_limited": rate_limited,
+        "tests_ran": tests_ran,
         "ticket": ticket,
         "ticket_source": ticket_src,
     }

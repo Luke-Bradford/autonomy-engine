@@ -247,6 +247,85 @@ class BoardTransitionsTest(unittest.TestCase):
         self.assertEqual(ds.board_transitions(p), {9})
 
 
+class TestsRanVerdictTest(unittest.TestCase):
+    """#312 Slice B: the gate verdict is parsed from run_all.sh's terminal
+    markers in tool_result content. TWO honesty filters (CP1): the result must
+    belong to a tool_use whose command actually invoked the gate (run_all.sh
+    or git push -- the pre-push hook), and the marker must be LINE-EXACT (so
+    quoting the script's source can never fake a green). Latest marker wins;
+    absent -> None."""
+
+    def _log(self, *lines):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        p = os.path.join(d, "session-20260705T010101.log")
+        with open(p, "w") as fh:
+            fh.write("\n".join(json.dumps(o) for o in lines) + "\n")
+        return p
+
+    @staticmethod
+    def _tool_use(tid, command):
+        return {"type": "assistant", "message": {"usage": {}, "content": [
+            {"type": "tool_use", "id": tid, "name": "Bash",
+             "input": {"command": command}}]}}
+
+    @staticmethod
+    def _tool_result(text, tid="t1"):
+        return {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tid,
+             "content": [{"type": "text", "text": text}]}]}}
+
+    def test_green_from_run_all(self):
+        p = self._log(self._tool_use("t1", "bash tests/run_all.sh"),
+                      self._tool_result("=== python: test_quota ===\nok\n"
+                                        "ALL SUITES PASS\n"))
+        self.assertEqual(ds.parse_session_log(p)["tests_ran"], "green")
+
+    def test_green_from_push_hook(self):
+        p = self._log(self._tool_use("t1", "git push -u origin feat/312-x"),
+                      self._tool_result("remote: ...\nALL SUITES PASS\n"))
+        self.assertEqual(ds.parse_session_log(p)["tests_ran"], "green")
+
+    def test_red_then_green_latest_wins(self):
+        p = self._log(self._tool_use("t1", "bash tests/run_all.sh"),
+                      self._tool_result("ONE OR MORE SUITES FAILED\n", "t1"),
+                      self._tool_use("t2", "bash tests/run_all.sh"),
+                      self._tool_result("ALL SUITES PASS\n", "t2"))
+        self.assertEqual(ds.parse_session_log(p)["tests_ran"], "green")
+
+    def test_red(self):
+        p = self._log(self._tool_use("t1", "bash tests/run_all.sh"),
+                      self._tool_result("FAIL - x\nONE OR MORE SUITES FAILED\n"))
+        self.assertEqual(ds.parse_session_log(p)["tests_ran"], "red")
+
+    def test_non_gate_command_cannot_fake_green(self):
+        # a bare marker line from the WRONG command (printf/echo) is ignored
+        p = self._log(self._tool_use("t1", "printf 'ALL SUITES PASS\\n'"),
+                      self._tool_result("ALL SUITES PASS\n"))
+        self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
+
+    def test_source_quote_not_a_verdict(self):
+        # cat-ing run_all.sh: gate-named command, but the marker is embedded
+        # in the echo line, never a bare LINE
+        p = self._log(self._tool_use("t1", "cat tests/run_all.sh"),
+                      self._tool_result('if [ "$fail" -eq 0 ]; then echo '
+                                        '"ALL SUITES PASS"; exit 0; fi\n'))
+        self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
+
+    def test_string_content_shape(self):
+        # tool_result content may be a plain string, not a block list
+        o = {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": "ALL SUITES PASS\n"}]}}
+        p = self._log(self._tool_use("t1", "bash tests/run_all.sh"), o)
+        self.assertEqual(ds.parse_session_log(p)["tests_ran"], "green")
+
+    def test_absent_none(self):
+        p = self._log({"type": "system", "subtype": "init",
+                       "model": "m", "cwd": "/x"})
+        self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
+
+
 class TestConfigOverlay(unittest.TestCase):
     """#202: the persistent operator overlay (var/autonomy-logs/config-overrides)
     shadows committed config.yaml for model/effort in the render model, and is
