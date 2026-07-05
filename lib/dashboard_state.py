@@ -877,7 +877,10 @@ def parse_stall_flag(comments, head_oid, now):
             stated = int(m.group(1))
         except ValueError:
             stated = 0
-    age_min = stated + max(0, (int(now) - flagged_epoch) // 60)
+    try:
+        age_min = stated + max(0, (int(now) - flagged_epoch) // 60)
+    except (TypeError, ValueError, OverflowError):
+        return None
     return {"age_min": age_min, "flagged_epoch": flagged_epoch}
 
 

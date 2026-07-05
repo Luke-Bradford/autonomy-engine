@@ -2689,3 +2689,7 @@ class TestParseStallFlag(unittest.TestCase):
         self.assertIsNone(ds.parse_stall_flag(
             [self._comment(45, 600)], "", self.NOW))
         self.assertIsNone(ds.parse_stall_flag("garbage", self.OID, self.NOW))
+        # malformed `now` too (Codex CP2): totality covers every argument.
+        for bad_now in (None, "bad", float("nan")):
+            self.assertIsNone(ds.parse_stall_flag(
+                [self._comment(45, 600)], self.OID, bad_now))
