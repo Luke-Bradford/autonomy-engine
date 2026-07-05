@@ -2624,3 +2624,68 @@ class TestRepoStateLanes(unittest.TestCase):
         st = ds.build_repo_state(d)
         self.assertFalse(st["lanes"]["valid"])
         self.assertEqual(st["lanes"]["active"], "main")   # not 'badname!'
+
+
+class TestParseStallFlag(unittest.TestCase):
+    """#292 piece 2: surface the sweep's approved-but-unmerged stall flag as a
+    PR-row age chip. The dashboard does NOT re-parse review verdicts (that
+    parity contract lives in board.sh/safe_merge alone -- a third copy would
+    drift); it renders the sweep's own output: the PR comment carrying the
+    `autonomy-stall-flag <head_oid>` marker. Total + best-effort: any parse
+    failure -> None (no chip), never an exception."""
+
+    OID = "cafe1234deadbeef"
+    NOW = 1751680000
+
+    def _comment(self, age_min_stated, flagged_secs_ago, oid=None):
+        body = ("⚠ **Approved but unmerged for %dm.** Latest review "
+                "verdict is APPROVE...\n\n<!-- autonomy-stall-flag %s -->"
+                % (age_min_stated, oid or self.OID))
+        ts = self.NOW - flagged_secs_ago
+        import datetime as _dt
+        iso = _dt.datetime.fromtimestamp(
+            ts, tz=_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return {"body": body, "createdAt": iso}
+
+    def test_current_head_flag_yields_running_age(self):
+        # flagged at 45m stalled, 10 minutes ago -> chip shows 55m now.
+        out = ds.parse_stall_flag([self._comment(45, 600)], self.OID, self.NOW)
+        self.assertIsNotNone(out)
+        self.assertEqual(out["age_min"], 55)
+        self.assertEqual(out["flagged_epoch"], self.NOW - 600)
+
+    def test_stale_oid_flag_is_dropped(self):
+        # a new push moved the head -> the old flag no longer applies (the
+        # gate reset); chip must vanish, not lie.
+        out = ds.parse_stall_flag(
+            [self._comment(45, 600, oid="0ldhead0000")], self.OID, self.NOW)
+        self.assertIsNone(out)
+
+    def test_latest_marker_comment_wins(self):
+        # two flags (older head + re-flag on the current head): the current
+        # head's is used even when an unrelated comment follows it.
+        comments = [
+            self._comment(30, 4000, oid="0ldhead0000"),
+            self._comment(45, 600),
+            {"body": "unrelated chatter", "createdAt": "2026-07-05T01:00:00Z"},
+        ]
+        out = ds.parse_stall_flag(comments, self.OID, self.NOW)
+        self.assertEqual(out["age_min"], 55)
+
+    def test_unparseable_stated_age_falls_back_to_flag_age(self):
+        c = {"body": "stalled <!-- autonomy-stall-flag %s -->" % self.OID,
+             "createdAt": self._comment(0, 600)["createdAt"]}
+        out = ds.parse_stall_flag([c], self.OID, self.NOW)
+        self.assertEqual(out["age_min"], 10)
+
+    def test_total_on_garbage(self):
+        # None/empty/malformed inputs -> None, never raises.
+        self.assertIsNone(ds.parse_stall_flag(None, self.OID, self.NOW))
+        self.assertIsNone(ds.parse_stall_flag([], self.OID, self.NOW))
+        self.assertIsNone(ds.parse_stall_flag([{"body": None}], self.OID, self.NOW))
+        self.assertIsNone(ds.parse_stall_flag(
+            [{"body": "<!-- autonomy-stall-flag %s -->" % self.OID,
+              "createdAt": "not-a-date"}], self.OID, self.NOW))
+        self.assertIsNone(ds.parse_stall_flag(
+            [self._comment(45, 600)], "", self.NOW))
+        self.assertIsNone(ds.parse_stall_flag("garbage", self.OID, self.NOW))
