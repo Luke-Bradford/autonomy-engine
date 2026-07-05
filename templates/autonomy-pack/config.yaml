@@ -81,7 +81,7 @@ worktree:
 #     enabled: false
 #     account: claude-sub
 #     trigger: { type: cron, schedule: "0 */6 * * *" }
-#     duties: [groom, prioritise, unblock, spec-check]  # [#89] not yet consumed (PM not built)
+#     duties: [groom, prioritise, unblock, spec-check]  # [rail-prose] shapes the PM rail only, not enforced
 #     prompt: .autonomy/roles/pm.md
 #   researcher:
 #     enabled: false

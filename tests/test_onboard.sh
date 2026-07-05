@@ -19,6 +19,7 @@ check "hard_rules.md scaffolded" "0" "$([ -f "$tmp/.autonomy/hard_rules.md" ] &&
 
 check "roles/qa.md scaffolded (subdirectory, #13)" "0" "$([ -f "$tmp/.autonomy/roles/qa.md" ] && echo 0 || echo 1)"
 check "roles/researcher.md scaffolded (W5b, #127)" "0" "$([ -f "$tmp/.autonomy/roles/researcher.md" ] && echo 0 || echo 1)"
+check "roles/pm.md scaffolded (W5c, #89)" "0" "$([ -f "$tmp/.autonomy/roles/pm.md" ] && echo 0 || echo 1)"
 check "qa/decide.sh scaffolded (subdirectory, #13)" "0" "$([ -f "$tmp/.autonomy/qa/decide.sh" ] && echo 0 || echo 1)"
 
 echo "MY CUSTOM EDIT" > "$tmp/.autonomy/config.yaml"
