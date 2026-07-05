@@ -218,6 +218,69 @@ class TestPhaseTrack(unittest.TestCase):
         self.assertNotIn("state", chain[1])
 
 
+class PhaseTrackEvidenceTest(unittest.TestCase):
+    """#312 Slice B: board/tests milestones join the spine ONLY as evidence --
+    done on an observed fact, empty otherwise; NEVER current/outline, and the
+    gate frontier logic is byte-identical with them present."""
+
+    BOT = [{"step": "pr"}, {"step": "review", "actor": "bot"},
+           {"step": "merge"}]
+
+    OPEN_PR = {"number": 5, "ci": "passing", "review": "approved"}
+
+    def test_legacy_no_evidence_param_unchanged(self):
+        tr = ds.phase_track(self.OPEN_PR, self.BOT)
+        self.assertEqual([s["step"] for s in tr],
+                         ["branch", "pr", "review", "merge"])
+
+    def test_evidence_segments_inserted(self):
+        tr = ds.phase_track(self.OPEN_PR, self.BOT,
+                            {"board": True, "tests": "green"})
+        self.assertEqual([s["step"] for s in tr],
+                         ["board", "branch", "tests", "pr", "review", "merge"])
+        self.assertEqual(tr[0]["state"], "done")            # board observed
+        self.assertEqual(tr[2]["state"], "done")            # tests observed
+        self.assertEqual(tr[2]["verdict"], "green")
+
+    def test_no_evidence_is_empty_never_done(self):
+        tr = ds.phase_track({"number": 5, "completed": True,
+                             "merged_epoch": 9},
+                            self.BOT, {"board": False, "tests": None})
+        by = {s["step"]: s for s in tr}
+        # completed marks every GATE done -- but a milestone without evidence
+        # stays empty even on a completed ticket (never imply certainty)
+        self.assertEqual(by["board"]["state"], "empty")
+        self.assertEqual(by["tests"]["state"], "empty")
+        self.assertNotIn("verdict", by["tests"])
+        self.assertEqual(by["merge"]["state"], "done")
+
+    def test_red_tests_are_observed_done_with_verdict(self):
+        tr = ds.phase_track(self.OPEN_PR, self.BOT,
+                            {"board": False, "tests": "red"})
+        by = {s["step"]: s for s in tr}
+        self.assertEqual(by["tests"]["state"], "done")
+        self.assertEqual(by["tests"]["verdict"], "red")
+
+    def test_frontier_unmoved_by_empty_milestones(self):
+        # open PR, review NOT approved: frontier must stay on `review`,
+        # not get eaten by an empty tests/board segment
+        tr = ds.phase_track({"number": 5, "ci": "pending", "review": ""},
+                            self.BOT, {"board": False, "tests": None})
+        by = {s["step"]: s for s in tr}
+        self.assertEqual(by["review"]["state"], "current")
+        self.assertEqual(by["tests"]["state"], "empty")
+
+    def test_malformed_evidence_degrades(self):
+        tr = ds.phase_track(self.OPEN_PR, self.BOT, "junk")
+        self.assertEqual([s["step"] for s in tr],
+                         ["branch", "pr", "review", "merge"])
+
+    def test_falsy_focus_still_empty_track(self):
+        self.assertEqual(
+            ds.phase_track(None, self.BOT, {"board": True, "tests": "green"}),
+            [])
+
+
 class BoardTransitionsTest(unittest.TestCase):
     """#312 Slice B: board.sh's transition log -> the set of issues with an
     OBSERVED board write. Total: missing file -> empty set; garbled lines

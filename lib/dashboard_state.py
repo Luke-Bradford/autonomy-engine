@@ -680,9 +680,46 @@ def board_transitions(path):
     return issues
 
 
-def phase_track(focus, gate_chain):
+def _with_evidence(spine, evidence):
+    """Insert the #312 evidence-only milestone segments into a fully-stamped
+    gate spine: `board` at position 0, `tests` right after `branch`. Evidence
+    marks are done/empty ONLY -- inserting after gate stamping keeps the
+    frontier (`current`) logic byte-identical. A malformed (non-dict)
+    evidence degrades to the legacy no-evidence track."""
+    if not isinstance(evidence, dict):
+        return spine
+    board = {"step": "board",
+             "state": "done" if evidence.get("board") else "empty"}
+    verdict = evidence.get("tests")
+    if verdict in ("green", "red"):
+        tests = {"step": "tests", "state": "done", "verdict": verdict}
+    else:
+        tests = {"step": "tests", "state": "empty"}
+    out = [board]
+    for seg in spine:
+        out.append(seg)
+        if seg.get("step") == "branch":
+            out.append(tests)
+    return out
+
+
+def phase_track(focus, gate_chain, evidence=None):
     """The selected-lane center-zone phase track (#187 UI-4): the configured
     gate spine marked by OBSERVED GitHub-flow facts, per ticket.
+
+    #312 Slice B: `evidence` (optional) carries the two SD-32 observed-
+    milestone sources, pre-digested by the caller:
+        {"board": bool, "tests": "green"|"red"|None}
+    With evidence present, a `board` segment (position 0) and a `tests`
+    segment (right after `branch`) join the spine as EVIDENCE-ONLY marks:
+    `done` when the fact was observed (tests also carry a `verdict`),
+    `empty` otherwise -- never `current`, never `outline`, and never
+    inferred from ticket state (a completed ticket with no logged board
+    write keeps an EMPTY board segment: certainty is earned, prevention-log
+    #18). They are inserted AFTER gate stamping (_with_evidence), so the
+    Slice A frontier logic is untouched by construction. A malformed
+    (non-dict) evidence degrades to the legacy no-evidence track; a falsy
+    focus stays [] -- evidence never conjures a phantom spine.
 
     The spine is a leading `branch` step + `merge_gate_chain(strategy)` (so the
     configured layer -- what a PR must still clear -- is drawn straight from the
@@ -730,7 +767,7 @@ def phase_track(focus, gate_chain):
     if focus.get("completed") or focus.get("merged_epoch"):
         for seg in spine:
             seg["state"] = "done"
-        return spine
+        return _with_evidence(spine, evidence)
 
     # open PR: the open-PR focus variant carries live gate state (`ci`/`review`,
     # co-set at the single construction site in bin/dashboard.py from the top
@@ -750,7 +787,7 @@ def phase_track(focus, gate_chain):
                 marked_current = True
             else:
                 seg["state"] = "outline"
-        return spine
+        return _with_evidence(spine, evidence)
 
     # issue-only (a session ticket with no open PR yet): the branch is the only
     # real milestone. It is the live frontier while a session is in progress,
@@ -760,7 +797,7 @@ def phase_track(focus, gate_chain):
             seg["state"] = "current" if focus.get("in_progress") else "done"
         else:
             seg["state"] = "outline"
-    return spine
+    return _with_evidence(spine, evidence)
 
 
 # The engine-standard workflow label that marks an issue as awaiting a human
