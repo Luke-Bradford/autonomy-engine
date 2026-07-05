@@ -25,6 +25,7 @@ from datetime import datetime
 
 import config_parser
 import dashboard_control as _dcx  # model-id regex + effort set, single-sourced
+import health as health_mod      # wedged truth, single-sourced (SD-32 §9)
 import roles as roles_schema
 
 _TICKET_RE = re.compile(r"#(\d{1,6})\b")
@@ -524,18 +525,24 @@ def activity_state(session, now, stale_secs=90):
     return "idle"
 
 
-def display_status(lifecycle_state, activity):
+def display_status(lifecycle_state, activity, health_state=None):
     """THE single source of truth for a repo's status label (#23).
 
-    Collapses the two orthogonal axes -- lifecycle (is the supervisor process
-    alive / paused / absent) and activity (is the session log fresh) -- into
-    the one vocabulary every panel renders:
+    Collapses the orthogonal axes -- lifecycle (is the supervisor process
+    alive / paused / absent), activity (is the session log fresh), and the
+    wedged truth (#81 slice 2, SD-32 §9: lib/health.py's classify state) --
+    into the one vocabulary every panel renders:
 
-        working / stopping / idle / paused / stopped / needs-setup / missing / error
+        working / stopping / idle / paused / stopped / needs-setup / missing /
+        error / wedged
 
     Computed exactly once, server-side; the page must never re-derive it.
     Precedence: a terminal/absent lifecycle wins over stale session activity
-    (a dead supervisor with an old log is 'stopped', never 'working')."""
+    (a dead supervisor with an old log is 'stopped', never 'working'), and
+    only a RUNNING lifecycle can be `wedged` -- a paused/dead supervisor is
+    reported as such, not as a wedged worker. `wedged` must be EARNED from
+    health.classify (prev-log #18): unknown/idle/ok/absent health leaves the
+    two-axis label unchanged -- a health hiccup never fabricates an alarm."""
     if lifecycle_state in ("needs-setup", "missing", "error"):
         return lifecycle_state
     if lifecycle_state == "paused":
@@ -544,6 +551,8 @@ def display_status(lifecycle_state, activity):
         return "stopping" if activity == "working" else "paused"
     if lifecycle_state == "stopped":
         return "stopped"
+    if health_state == "wedged":
+        return "wedged"
     return "working" if activity == "working" else "idle"
 
 
@@ -1085,27 +1094,13 @@ def read_heartbeat(path):
     non-integer ts). `ts`/`until` are ints (epoch seconds); `until` is 0 when
     the phase has no deadline (active/instantaneous) -- the page shows a
     client-side countdown only when until > now. Read-only + best-effort, in
-    the spirit of the writer: a torn or partial file degrades to {}."""
-    try:
-        with open(path, errors="replace") as fh:
-            line = fh.readline().rstrip("\n")
-    except OSError:
-        return {}
-    parts = line.split("\t")
-    if len(parts) < 4:
-        return {}
-    ts_s, phase, until_s, reason = parts[0], parts[1], parts[2], parts[3]
-    if not phase:
-        return {}
-    try:
-        ts = int(ts_s)
-    except ValueError:
-        return {}
-    try:
-        until = int(until_s) if until_s else 0
-    except ValueError:
-        until = 0
-    return {"ts": ts, "phase": phase, "until": until, "reason": reason}
+    the spirit of the writer: a torn or partial file degrades to {}.
+
+    #81 slice 5 (SD-32 'one implementation, zero drift'): the parse itself
+    lives in lib/health.py -- this is a thin adapter keeping the historical
+    contract: reads exactly `path` (health.read_heartbeat_file), {} on any
+    failure (health returns None)."""
+    return health_mod.read_heartbeat_file(path) or {}
 
 
 # --- choreography feed (#177 piece 3) ---------------------------------------
@@ -1926,6 +1921,9 @@ def _read_config(repo_path):
         # same {} would erase the distinction the validity flag needs (an
         # absent block is healthy; a malformed one is refused by the supervisor).
         "lanes": g("lanes"),
+        # #81 slice 2: optional wedged threshold (secs); raw value, sanitized
+        # at the point of use (a bad knob degrades to health.py's default).
+        "health_wedged_after": g("health.wedged_after"),
         "overrides": overlay,
     }
 
@@ -1947,7 +1945,18 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
     activity = activity_state(session, now)
     config = _read_config(repo_path)
     lifecycle = lifecycle_status(repo_path, pid_is_alive=pid_is_alive)
-    status = display_status(lifecycle["state"], activity)
+    # #81 slice 2 (SD-32 §9): the wedged truth, from the ONE health module
+    # ./start status already consumes. Sanitize the optional knob here -- a
+    # malformed health.wedged_after degrades to the module default, never a
+    # TypeError inside classify (total: this feeds the whole render).
+    try:
+        _wa = int(config.get("health_wedged_after") or 0)
+    except (TypeError, ValueError):
+        _wa = 0
+    loop_health = health_mod.loop_health(
+        logdir, now, _wa if _wa > 0 else health_mod.DEFAULT_WEDGED_AFTER)
+    status = display_status(lifecycle["state"], activity,
+                            health_state=loop_health["state"])
     quota = recent_quota_windows(logdir)   # scanned once; forecast reuses it
     sessions = recent_sessions(logdir)     # scanned once; ticket_effort reuses it
     roles = build_roles(config.get("roles"), status, now=now, sessions=sessions)
@@ -2010,6 +2019,9 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "voice": read_supervisor_voice(os.path.join(logdir, "supervisor.log")),
         "choreography": read_choreography(os.path.join(logdir, "supervisor.log")),
         "heartbeat": read_heartbeat(os.path.join(logdir, "heartbeat")),
+        # #81 slice 2: the classify record behind a `wedged` status -- state +
+        # human reason, so the render can explain the alarm, not just paint it.
+        "health": loop_health,
         "engine_boot": read_engine_boot_sha(logdir),  # #166: supervisor's boot sha
         "git": git_in_flight(repo_path) if git_in_flight else {},
         "config": config,

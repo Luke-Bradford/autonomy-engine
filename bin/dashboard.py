@@ -1036,8 +1036,10 @@ def _collect_one(repo):
             # already has a merged PR, the honest story is "completed at T",
             # not "last worked". Matched by branch convention/title ref.
             # Never while busy -- a session re-working the ticket (follow-up
-            # PR) must keep the live "in progress" story.
-            busy = st.get("display_status") in ("working", "stopping")
+            # PR) must keep the live "in progress" story. `wedged` is busy
+            # too: the session is mid-ticket (stuck, not finished) -- a
+            # "completed" story would bury the alarm (#81 slice 2).
+            busy = st.get("display_status") in ("working", "stopping", "wedged")
             done = None if busy else ds.completed_ticket(
                 sess["ticket"], git.get("merged") or [])
             if done:

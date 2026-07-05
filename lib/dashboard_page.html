@@ -193,7 +193,7 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .dot{width:8px;height:8px;border-radius:50%;background:var(--sc,var(--dim));flex:none}
 .dot.pulse{animation:pulse 2.4s infinite}
 .s-working{--sc:var(--ok)} .s-idle{--sc:var(--dim)} .s-paused{--sc:var(--warn)} .s-stopped{--sc:var(--dim)} .s-stopping{--sc:var(--warn)}
-.s-error{--sc:var(--bad)} .s-done{--sc:var(--ok-dim)} .s-needs-setup{--sc:var(--bad)} .s-missing{--sc:var(--dim)}
+.s-error{--sc:var(--bad)} .s-done{--sc:var(--ok-dim)} .s-needs-setup{--sc:var(--bad)} .s-missing{--sc:var(--dim)} .s-wedged{--sc:var(--bad)}
 .s-configured{--sc:var(--info)} .s-disabled{--sc:var(--dim)} .s-not-configured{--sc:var(--dim)}
 
 /* panels sit inside a scrolling zone, aligned to the section headings' inset */
@@ -486,7 +486,8 @@ function dispStatus(r){return r.display_status||(r.lifecycle||{}).state||"idle";
 // an idle/stopped repo never pulses -- a real state transition only, no fake
 // motion (#177 non-goal).
 function actingRole(r){
-  return dispStatus(r)==="working" ? ((r.current_session||{}).role||"") : "";
+  const st=dispStatus(r);   // wedged: the stuck session still HAS a role -- name it
+  return (st==="working"||st==="wedged") ? ((r.current_session||{}).role||"") : "";
 }
 // #151 lifecycle-label truth: the `stopping` display-status token fires while a
 // PAUSE sentinel is set AND the current session is still running (graceful pause
@@ -616,7 +617,7 @@ function renderFocus(repos){
   $("c-now").textContent=laneNames.length>1?`${dispName(sel.name)} · ${selLane}`:dispName(sel.name);
   const html=[sel].map(r=>{
     const st=dispStatus(r), cs=r.current_session||{}, git=r.git||{}, ft=git.focus_ticket;
-    const busy=st==="working"||st==="stopping";
+    const busy=st==="working"||st==="stopping"||st==="wedged";
     let ticket="";
     if(ft){
       const stateChip=ft.state&&ft.state!=="open"?`<span class="chip">${esc(ft.state)}</span>`:"";
@@ -798,7 +799,7 @@ function lifecycleCluster(r,st){
   const PAUSE='<svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg>';
   const STOP='<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>';
   let btns="";
-  if(st==="working"||st==="idle"){
+  if(st==="working"||st==="idle"||st==="wedged"){
     btns=ibtn(repo,"pause","graceful-stop","Graceful stop — finish the current session, then idle","warn",PAUSE)
         +ibtn(repo,"stop","hard-stop","Hard stop — interrupt the running agent","danger",STOP);
   } else if(st==="paused"||st==="stopping"){
