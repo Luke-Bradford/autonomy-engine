@@ -2693,3 +2693,109 @@ class TestParseStallFlag(unittest.TestCase):
         for bad_now in (None, "bad", float("nan")):
             self.assertIsNone(ds.parse_stall_flag(
                 [self._comment(45, 600)], self.OID, bad_now))
+
+
+class TestWedgedStatus(unittest.TestCase):
+    """#81 slice 2 (SD-32 §9): the dashboard consumes lib/health.py's wedged
+    truth. display_status (the status-vocab SSOT, #23) gains a `wedged` token:
+    a RUNNING supervisor whose heartbeat claims a working session but whose
+    liveness has gone silent past the threshold must not render as a healthy
+    'working' -- that is the display lie ./start status already refuses.
+    Fail-safe direction: `wedged` is only ever EARNED from health.classify
+    (prev-log #18); unknown/idle/ok health leave the display unchanged."""
+
+    def test_display_status_wedged_only_when_running(self):
+        self.assertEqual(
+            ds.display_status("running", "working", health_state="wedged"),
+            "wedged")
+        self.assertEqual(
+            ds.display_status("running", "idle", health_state="wedged"),
+            "wedged")
+        # terminal / paused lifecycles win -- a dead or pausing supervisor is
+        # reported as such, not as a wedged worker.
+        self.assertEqual(
+            ds.display_status("paused", "working", health_state="wedged"),
+            "stopping")
+        self.assertEqual(
+            ds.display_status("stopped", "idle", health_state="wedged"),
+            "stopped")
+        self.assertEqual(
+            ds.display_status("needs-setup", "none", health_state="wedged"),
+            "needs-setup")
+
+    def test_display_status_unchanged_for_non_wedged_health(self):
+        for hs in (None, "ok", "idle", "unknown", "garbage"):
+            self.assertEqual(
+                ds.display_status("running", "working", health_state=hs),
+                "working")
+            self.assertEqual(
+                ds.display_status("running", "idle", health_state=hs),
+                "idle")
+
+    def _repo(self, hb_age, phase="session-running coder"):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        os.makedirs(os.path.join(d, ".autonomy"))
+        logdir = os.path.join(d, "var", "autonomy-logs")
+        os.makedirs(logdir)
+        os.makedirs(os.path.join(d, "var", "autonomy-supervisor.lock"))
+        with open(os.path.join(d, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("agent:\n  type: claude\n")
+        with open(os.path.join(d, "var", "autonomy-supervisor.lock", "pid"), "w") as fh:
+            fh.write("12345")
+        ts = int(time.time()) - hb_age
+        with open(os.path.join(logdir, "heartbeat"), "w") as fh:
+            fh.write("%d\t%s\t0\tworking on a ticket\n" % (ts, phase))
+        return d
+
+    def test_build_repo_state_wedged_integration(self):
+        # alive pid + session-running heartbeat gone silent past the default
+        # 900s threshold -> the composed status is `wedged`, and the health
+        # record (state+reason) is exposed for the render.
+        d = self._repo(hb_age=2000)
+        st = ds.build_repo_state(d, pid_is_alive=lambda p: True,
+                                 git_in_flight=lambda p: {})
+        self.assertEqual(st["display_status"], "wedged")
+        self.assertEqual(st["health"]["state"], "wedged")
+        self.assertTrue(st["health"]["reason"])
+
+    def test_build_repo_state_fresh_working_not_wedged(self):
+        d = self._repo(hb_age=10)
+        st = ds.build_repo_state(d, pid_is_alive=lambda p: True,
+                                 git_in_flight=lambda p: {})
+        self.assertNotEqual(st["display_status"], "wedged")
+        self.assertEqual(st["health"]["state"], "ok")
+
+    def test_build_repo_state_idle_phase_never_wedged(self):
+        # a legitimately sleeping loop (pace-wait) is idle, however old the
+        # heartbeat -- health.classify's phase gate, surfaced end-to-end.
+        d = self._repo(hb_age=90000, phase="pace-wait")
+        st = ds.build_repo_state(d, pid_is_alive=lambda p: True,
+                                 git_in_flight=lambda p: {})
+        self.assertNotEqual(st["display_status"], "wedged")
+        self.assertEqual(st["health"]["state"], "idle")
+
+    def test_wedged_after_config_knob_honoured(self):
+        # health.wedged_after: 60 -> a 120s-silent working session is wedged.
+        d = self._repo(hb_age=120)
+        with open(os.path.join(d, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("agent:\n  type: claude\nhealth:\n  wedged_after: 60\n")
+        st = ds.build_repo_state(d, pid_is_alive=lambda p: True,
+                                 git_in_flight=lambda p: {})
+        self.assertEqual(st["display_status"], "wedged")
+
+    def test_read_heartbeat_delegates_to_health(self):
+        # slice 5 (SD-32 zero-drift): one parser. Both readers agree on a
+        # real record AND on rejection of a torn one.
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        p = os.path.join(d, "heartbeat")
+        with open(p, "w") as fh:
+            fh.write("1751680000\tpace-wait\t1751680300\twaiting\n")
+        import health as health_mod
+        self.assertEqual(ds.read_heartbeat(p),
+                         health_mod.read_heartbeat(d))
+        with open(p, "w") as fh:
+            fh.write("torn\n")
+        self.assertEqual(ds.read_heartbeat(p), {})
+        self.assertIsNone(health_mod.read_heartbeat(d))
