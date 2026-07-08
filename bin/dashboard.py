@@ -913,8 +913,11 @@ def config_read_model():
                    "pair": {"planner": {"scaffolded": False, "model": ""},
                             "coder": {"model": "", "fallback": "", "effort": ""}},
                    "roles": []}
+        # Slice 2: live-config drift for the page badge (best-effort by
+        # contract -- live_config_drift never raises).
+        drift = dcx.live_config_drift(repo)
         repos.append({"path": repo, "name": os.path.basename(repo.rstrip("/")),
-                      "config": cfg, "org": org,
+                      "config": cfg, "org": org, "drift": drift,
                       "board_owner_derived": owners.get(repo, "")})
     acct_list, acct_error = [], None
     try:
