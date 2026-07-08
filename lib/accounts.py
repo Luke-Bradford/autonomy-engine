@@ -388,7 +388,8 @@ class Accounts:
             e = data["accounts"][name]
             cred = e.get("credential")
             out.append({"name": name, "kind": e.get("kind", ""),
-                        "credential": cred, "has_credential": bool(cred)})
+                        "credential": cred, "has_credential": bool(cred),
+                        "base_url": e.get("base_url") or ""})
         return out
 
     def get(self, name):
