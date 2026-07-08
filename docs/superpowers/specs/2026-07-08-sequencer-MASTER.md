@@ -83,3 +83,8 @@ guardrail files · honesty NOTEs for any knob validated-but-unconsumed.
   board-groom, pr-qa-sweep, research-digest — right four?
 - The v5 DAG-canvas mockup should be reviewed BEFORE P3 (same artifact
   URL will be reused).
+- v5 §10 (adopted post-review): TRUST LEDGER (earned per-assignment
+  autonomy tiers: watch → auto at ≥20 runs/≥95% pass, auto-demotion) and
+  STANDING GOALS (invariant activity: deterministic predicate, enforced;
+  starter pipeline re-verifies forever). Fold the ledger's journal needs
+  into P1's run journal from the start.
