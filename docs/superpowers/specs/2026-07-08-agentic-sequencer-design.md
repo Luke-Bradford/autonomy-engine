@@ -182,3 +182,51 @@ managed-agents roster pinning).
 Mockup v5 (`mockups/2026-07-08-loop-canvas-mockup.html`): the DAG canvas
 with typed edges, a parallel rank, containers, the property pane and the
 gallery bar — the review artifact for this spec.
+
+## 10. Adopted from the field (Av1dlive "Agentic OS" guide, 2026-07-08)
+
+External design reviewed at operator request. Two concepts we lacked,
+adopted; four expressible as starter-pipeline patterns, catalogued.
+
+### Trust ledger — graduated autonomy, earned per pipeline (ADOPT)
+
+Autonomy is measurable, not configured: each ASSIGNMENT carries a trust
+tier computed from its run journal —
+- **watch** (default): outcomes queue for review; nothing ships unattended
+  (merge-affecting terminal activities park instead of executing).
+- **auto**: earned at ≥20 runs with ≥95% pass; ships unattended.
+- **Demotion is automatic** on pass-rate decay, with an alert — never a
+  silent tier change.
+The run journal (P1) already records per-run outcomes; the ledger is a
+projection over it. UI: the tier as a chip on the assignment bar with its
+run/pass counts — trust is visible, not vibes. Supervision LEVELS wrap the
+fleet (the guide's 30-day arc, generalised): L1 manual runs · L2 triggers
+on but terminal activities queue · L3 one assignment auto · L4 proposals
+allowed. Levels are an OPERATOR dial, tiers are EARNED per assignment.
+
+### Standing goals — done work becomes invariants (ADOPT)
+
+Completed work graduates into perpetual verification: a new activity type
+**invariant** — a DETERMINISTIC predicate (shell command; exit 0 holds,
+exit 1 violated; enforced, no model in the loop) — plus a shipped starter
+pipeline `standing-goals` (cron: run every registered invariant → on
+failure edge: notify + open a regression ticket). Pipelines can end with
+a "register invariant" activity so a finished goal deposits its own guard.
+
+### Expressible patterns (no new machinery — starter pipelines)
+
+- **Quorum**: N parallel cheap `decide` activities → branch on 2-of-N
+  agreement → only then wake the expensive brain. (parallel + branch.)
+- **Ratchet**: invariant with a stored baseline — metric must be ≥ last
+  recorded value; updates baseline on success. (invariant + journal.)
+- **Sparring**: scheduled builder-vs-breaker pair — one agent builds a
+  claim, an opposing agent attacks it; disagreement → ask-human. (two
+  stages + branch.)
+- **Compost**: weekly retro — gather the run journal's failures →
+  summarize ≤3 proposed system improvements → ask-human signature. (our
+  prevention-log habit, automated as a pipeline.)
+
+Already covered elsewhere, validated by the guide: cheap-triage →
+expensive-decide → cheap-workers → fresh-verifier (the reference pipeline
++ fingerprint gate + pair economics); "a bash script holds final
+authority" (= safe_merge + the enforced/instructed split).
