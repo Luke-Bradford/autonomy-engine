@@ -459,9 +459,14 @@ role_fingerprint() {
   fi
   n="$(grep -c . <<<"$prs" || true)"; n="${n:-0}"
   [ "$n" -ge 100 ] && return 1
-  if ! main_head="$(cd "$AUTONOMY_TARGET_REPO" && git ls-remote origin refs/heads/main 2>>"$SUPLOG")"; then
+  # --symref origin HEAD observes the remote's ACTUAL default branch (no
+  # hardcoded name -- a `master`/other-default repo works; and ls-remote of a
+  # nonexistent ref exits 0 with EMPTY output, so emptiness must refuse too:
+  # a silently-constant material component could never bust the fingerprint).
+  if ! main_head="$(cd "$AUTONOMY_TARGET_REPO" && git ls-remote --symref origin HEAD 2>>"$SUPLOG")"; then
     return 1
   fi
+  [ -n "$main_head" ] || return 1
   {
     printf 'role=%s\nlane=%s\ncli=%s|%s|%s|%s\n' "$role" "$lane" \
       "${AGENT_TYPE_OVERRIDE:-}" "${MODEL_OVERRIDE:-}" \
@@ -1386,7 +1391,6 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
       idle_sleep "$fp_wait"
       continue
     fi
-    fp_skips=0
 
     # #177: the prep window (auth, preflight, worktree) narrates as `dispatching`
     # -- run_session flips it to `session-running <role>` the instant the agent
@@ -1394,6 +1398,9 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # is only getting ready to (or is about to refuse and back off).
     heartbeat "dispatching $role" "selected $role -- preparing session (auth, preflight, worktree)" ""
     run_session "$role"; outcome=$?
+    # #318: a session actually RAN (whatever its outcome) -- only now does the
+    # consecutive-skip backoff counter reset, exactly as documented.
+    fp_skips=0
     # #245: release the `main` ref before the post-session idle window -- an
     # agent may end its ticket sitting on an attached `main`, which would block
     # a sibling primary checkout until the next preflight. No-op unless we are

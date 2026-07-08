@@ -58,10 +58,14 @@ gh() {
     *) return 1 ;;
   esac
 }
-GIT_LSREMOTE_OUT="deadbeef	refs/heads/main"
+GIT_LSREMOTE_OUT="ref: refs/heads/main	HEAD
+deadbeef	HEAD"
 GIT_LSREMOTE_RC=0
 git() {
-  if [ "$1" = "ls-remote" ]; then printf '%s\n' "$GIT_LSREMOTE_OUT"; return "$GIT_LSREMOTE_RC"; fi
+  if [ "$1" = "ls-remote" ]; then
+    [ -n "$GIT_LSREMOTE_OUT" ] && printf '%s\n' "$GIT_LSREMOTE_OUT"
+    return "$GIT_LSREMOTE_RC"
+  fi
   command git "$@"
 }
 
@@ -84,10 +88,12 @@ fp_pr="$(role_fingerprint coder)"
 check "PR head change changes the hash" "1" "$([ "$fp_pr" != "$fp1" ] && echo 1 || echo 0)"
 GH_PRS_OUT="7 abc123 2026-07-08T08:00:00Z"
 
-GIT_LSREMOTE_OUT="cafef00d	refs/heads/main"
+GIT_LSREMOTE_OUT="ref: refs/heads/main	HEAD
+cafef00d	HEAD"
 fp_main="$(role_fingerprint coder)"
-check "remote main change changes the hash" "1" "$([ "$fp_main" != "$fp1" ] && echo 1 || echo 0)"
-GIT_LSREMOTE_OUT="deadbeef	refs/heads/main"
+check "remote default-branch head change changes the hash" "1" "$([ "$fp_main" != "$fp1" ] && echo 1 || echo 0)"
+GIT_LSREMOTE_OUT="ref: refs/heads/main	HEAD
+deadbeef	HEAD"
 
 printf 'do the work HARDER\n' > "$AUTONOMY_TARGET_REPO/.autonomy/loop_prompt.md"
 fp_prompt="$(role_fingerprint coder)"
@@ -179,6 +185,14 @@ GIT_LSREMOTE_RC=1
 role_fingerprint coder >/dev/null 2>&1
 check "git ls-remote failure refuses" "1" "$?"
 GIT_LSREMOTE_RC=0
+
+# Review-bot finding: ls-remote of a missing ref exits 0 with EMPTY output --
+# an empty default-branch observation must refuse, never hash as a constant.
+GIT_LSREMOTE_OUT=""
+role_fingerprint coder >/dev/null 2>&1
+check "empty ls-remote output refuses" "1" "$?"
+GIT_LSREMOTE_OUT="ref: refs/heads/main	HEAD
+deadbeef	HEAD"
 
 # Page-cap: exactly the limit means "maybe truncated" -> unfingerprintable.
 GH_ISSUES_OUT="$(i=1; while [ $i -le 200 ]; do echo "$i 2026-07-08T00:00:00Z"; i=$((i+1)); done)"

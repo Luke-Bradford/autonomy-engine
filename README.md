@@ -277,8 +277,10 @@ different accounts set `engine.account_key` to keep their markers separate.
 
 Before dispatching a loop-role session the supervisor computes a sha256
 fingerprint of the observable world — open issues (number + `updatedAt`), open
-PRs (number + head + `updatedAt`), the remote `main` head, every `.autonomy/`
-pack file, the config overlay, and the CLI override set. If it exactly matches
+PRs (number + head + `updatedAt`), the remote default-branch head
+(`ls-remote --symref origin HEAD` — never a hardcoded branch name), every
+`.autonomy/` pack file plus the role's resolved prompt file, the config
+overlay, and the CLI override set. If it exactly matches
 the fingerprint recorded when a previous session for that role **completed
 cleanly**, the session is skipped (zero LLM tokens) and the loop idles on a
 growing schedule (120s → 300 → 900 → 1800 cap, reset by any real session;
