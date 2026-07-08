@@ -196,28 +196,56 @@ class NonBlockingState(unittest.TestCase):
         # the single-writer guarantee (no concurrent/out-of-order cache writes):
         # a cold /api/state fetch + first SSE tick must share ONE compute, not
         # race two writers.
+        #
+        # #316 (CI flake): releasing the compute once only the FIRST caller was
+        # observed asserted a SCHEDULING property (prevention-log #9) -- on a
+        # loaded runner a late caller could reach the cold path after the
+        # worker had finished and popped the single-flight guard, spawning a
+        # legitimate second compute. Deterministic shape: hold the worker until
+        # every caller has RETURNED from _ensure_refresh (each then holds its
+        # Thread ref, necessarily the one blocked worker -- while it blocks,
+        # its finally-pop cannot run), so "exactly one compute" is structural.
         calls = [0]
-        started = threading.Event()
+        entered = [0]
+        elock = threading.Lock()
         release = threading.Event()
 
         def counting_compute(repo):
             calls[0] += 1
-            started.set()
-            release.wait(3.0)
+            release.wait(5.0)
             return {"branch": "fresh", "prs": [], "merged": [], "sha": "",
                     "dirty": False, "repo_url": "", "focus_ticket": None}
         dashboard._compute_in_flight = counting_compute
+
+        orig_ensure = dashboard._ensure_refresh
+
+        def counted_ensure(repo):
+            t = orig_ensure(repo)
+            with elock:
+                entered[0] += 1
+            return t
+        dashboard._ensure_refresh = counted_ensure
 
         outs = []
         threads = [threading.Thread(
             target=lambda: outs.append(dashboard.git_in_flight("/repo")))
             for _ in range(3)]
-        for t in threads:
-            t.start()
-        started.wait(2.0)        # first compute is running; others must coalesce
-        release.set()
-        for t in threads:
-            t.join(3.0)
+        try:
+            for t in threads:
+                t.start()
+            deadline = time.time() + 5.0
+            while time.time() < deadline:      # all 3 coalesced onto the worker
+                with elock:
+                    if entered[0] >= 3:
+                        break
+                time.sleep(0.01)
+            release.set()
+            for t in threads:
+                t.join(3.0)
+        finally:
+            dashboard._ensure_refresh = orig_ensure
+            release.set()
+        self.assertEqual(entered[0], 3, "callers never reached the cold path")
         self.assertEqual(calls[0], 1, "cold callers did not coalesce (%d computes)" % calls[0])
         self.assertEqual([o["branch"] for o in outs], ["fresh"] * 3)
 
