@@ -430,6 +430,22 @@ class TestsRanVerdictTest(unittest.TestCase):
                        "model": "m", "cwd": "/x"})
         self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
 
+    def test_quoted_bash_run_all_is_not_a_gate(self):
+        # review-bot BLOCKING on #313 round 2: `bash tests/run_all.sh` inside
+        # a STRING (echo'd, not executed) must not earn a gate id -- the
+        # bash/sh alternative needs command-position anchoring too.
+        p = self._log(
+            self._tool_use(
+                "t1", 'echo "bash tests/run_all.sh"; echo "ALL SUITES PASS"'),
+            self._tool_result("bash tests/run_all.sh\nALL SUITES PASS\n"))
+        self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
+
+    def test_chained_bash_run_all_still_counts(self):
+        p = self._log(
+            self._tool_use("t1", "cd /w/tree && bash tests/run_all.sh 2>&1"),
+            self._tool_result("ok\nALL SUITES PASS\n"))
+        self.assertEqual(ds.parse_session_log(p)["tests_ran"], "green")
+
     def test_git_commit_mentioning_push_is_not_a_gate(self):
         # review-bot WARNING on #313: `git` + `push` merely CO-OCCURRING in a
         # command (push inside a commit message) must not earn a gate id --

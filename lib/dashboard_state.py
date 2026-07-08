@@ -47,8 +47,11 @@ _GATE_RED_RE = re.compile(r"^ONE OR MORE SUITES FAILED$", re.MULTILINE)
 # marker line from a run_all-naming command -- so cat/grep/printf shapes
 # never earn a gate id.
 _GATE_CMD_RE = re.compile(
-    r"\b(?:bash|sh)\s+\S*run_all\.sh"      # bash tests/run_all.sh
-    r"|(?:^|[;&|(]\s*)\S*run_all\.sh\b"    # ./tests/run_all.sh in cmd position
+    # run_all.sh in COMMAND POSITION, bare or under bash/sh (with optional
+    # shell flags). Anchoring applies to the bash/sh form too (#313 review
+    # BLOCKING round 2): `echo "bash tests/run_all.sh"` names the gate inside
+    # a string without executing it and must not earn a gate id.
+    r"(?:^|[;&|(]\s*)(?:(?:bash|sh)\s+(?:-\S+\s+)*)?\S*run_all\.sh\b"
     # git push: command-position `git` with `push` as its actual SUBCOMMAND
     # (global options like -C <path> allowed between) -- git+push merely
     # CO-OCCURRING (`git commit -m "push fix"`, `echo git push`) must not
