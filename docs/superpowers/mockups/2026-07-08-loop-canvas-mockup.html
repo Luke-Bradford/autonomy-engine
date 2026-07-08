@@ -3,9 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pipeline editor · design mockup</title>
+<title>Pipeline canvas · design mockup v4</title>
 <style>
-/* Tokens verbatim from the control-room system — this pitches a feature for that app. */
 :root{--sans:"Avenir Next","Helvetica Neue",system-ui,sans-serif;--mono:"SF Mono",Menlo,ui-monospace,monospace;--r:6px}
 :root[data-theme="dark"]{--bg:#15181d;--panel:#1c2027;--panel2:#20252d;--hair:#2a2f38;--hair2:#333a45;
   --ink:#e8eaed;--mut:#98a0ab;--dim:#6b7380;--accent:#4c9ee3;--accent-soft:rgba(76,158,227,.14);
@@ -16,77 +15,72 @@
 @media (prefers-color-scheme: light){:root:not([data-theme]){--bg:#f4f5f7;--panel:#fff;--panel2:#f6f7f9;--hair:#e2e4e8;--hair2:#d0d3d9;--ink:#1b1e24;--mut:#5b626c;--dim:#9aa0aa;--accent:#2f7fc9;--accent-soft:rgba(47,127,201,.10);--ok:#2c9c60;--warn:#b9791a;--bad:#cf4b45;--shadow:0 8px 24px -18px rgba(30,30,30,.3)}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:13.5px;line-height:1.5;-webkit-font-smoothing:antialiased}
-.wrap{max-width:1180px;margin:0 auto;padding:26px}
+.wrap{max-width:1200px;margin:0 auto;padding:26px}
 h1{font-size:18px;margin:0 0 2px}
-.sub{color:var(--mut);font-size:12.5px;margin-bottom:16px;max-width:78ch}
+.sub{color:var(--mut);font-size:12.5px;margin-bottom:16px;max-width:80ch}
 .eyebrow{font-family:var(--mono);font-size:9.5px;letter-spacing:1.4px;text-transform:uppercase;color:var(--dim)}
-.roles{display:flex;gap:8px;margin:0 0 16px}
-.rolebtn{border:1px solid var(--hair2);background:var(--panel);border-radius:var(--r);padding:7px 12px;cursor:pointer;color:var(--mut);font-size:12px}
-.rolebtn b{color:var(--ink)}
-.rolebtn.on{border-color:var(--accent);background:var(--accent-soft);color:var(--ink)}
-.layout{display:grid;grid-template-columns:250px minmax(0,1fr);gap:18px;align-items:start}
-@media(max-width:900px){.layout{grid-template-columns:1fr}}
+.layout{display:grid;grid-template-columns:236px minmax(0,1fr);gap:18px;align-items:start}
+@media(max-width:920px){.layout{grid-template-columns:1fr}}
 /* palette */
-.palette{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow);padding:12px;position:sticky;top:14px}
-.pgroup{margin-bottom:10px}
-.pgroup .eyebrow{display:block;margin-bottom:5px}
+.palette{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow);padding:12px;position:sticky;top:14px;max-height:calc(100vh - 40px);overflow-y:auto}
+.pgroup{margin-bottom:9px}
+.pgroup .eyebrow{display:block;margin-bottom:4px}
 .pitem{display:flex;align-items:center;gap:7px;width:100%;background:transparent;border:1px dashed transparent;border-radius:5px;
-  color:var(--ink);font-size:12px;padding:4px 6px;cursor:pointer;text-align:left}
+  color:var(--ink);font-size:11.5px;padding:3px 6px;cursor:grab;text-align:left}
 .pitem:hover{background:var(--accent-soft);border-color:var(--hair2)}
-.pitem .ico{width:16px;text-align:center}
 .pitem .add{margin-left:auto;color:var(--accent);font-weight:600}
-.customs{border-top:1px solid var(--hair);margin-top:8px;padding-top:9px}
-.custform{display:none;flex-direction:column;gap:6px;margin-top:8px}
-.custform.open{display:flex}
-.custform input,.custform select,.custform textarea{background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);
-  font-family:var(--mono);font-size:10.5px;border-radius:5px;padding:5px 7px;width:100%}
-.custform textarea{min-height:52px;resize:vertical}
-/* pipeline rail */
-.rail{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow);padding:16px 18px}
-.rail-h{display:flex;align-items:center;gap:10px;margin-bottom:12px}
-.rail-h .nm{font-weight:600;font-size:15px}
-.trig{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border:1px solid var(--hair2);border-radius:var(--r);
-  background:var(--panel2);padding:9px 12px;margin-bottom:14px}
-.trig .k{font-family:var(--mono);font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:var(--dim)}
-.pill{border:1px solid var(--hair2);border-radius:11px;padding:2px 10px;font-family:var(--mono);font-size:10.5px;color:var(--mut);cursor:pointer;background:transparent}
-.pill.on{border-color:var(--accent);color:var(--ink);background:var(--accent-soft)}
-.zone{margin:10px 0}
-.zone-h{display:flex;align-items:baseline;gap:9px;margin-bottom:6px}
-.zone-h .zt{font-family:var(--mono);font-size:9.5px;letter-spacing:1.3px;text-transform:uppercase;color:var(--dim)}
-.zone-h .zd{font-size:11px;color:var(--dim)}
-.cyclebox{border:1px solid var(--accent);border-radius:var(--r);padding:10px 12px 8px;position:relative;background:transparent}
-.cyclebox .loopbadge{position:absolute;top:-9px;left:12px;background:var(--panel);border:1px solid var(--accent);border-radius:9px;
-  color:var(--accent);font-family:var(--mono);font-size:9.5px;padding:0 8px}
-.repeat{border-top:1px dashed var(--hair2);margin-top:8px;padding-top:7px;font-family:var(--mono);font-size:10.5px;color:var(--mut);
-  display:flex;align-items:center;gap:8px}
-.steps{display:flex;flex-direction:column;gap:6px;min-height:14px}
-.dropzone-hint{font-size:11px;color:var(--dim);border:1px dashed var(--hair2);border-radius:5px;padding:5px 9px;text-align:center}
-.step{border:1px solid var(--hair2);border-radius:var(--r);background:var(--panel2)}
-.step.softb{border-style:dashed}
-.step.lock{opacity:.9}
-.step.off .srow .nm,.step.off .srow .sum{text-decoration:line-through;color:var(--dim)}
-.srow{display:flex;align-items:center;gap:8px;padding:7px 10px;cursor:pointer}
-.srow .grip{color:var(--dim);cursor:grab}
-.srow .ico{width:16px;text-align:center}
-.srow .nm{font-size:12.5px;font-weight:500}
-.srow .sum{font-size:11px;color:var(--mut);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* canvas */
+.canvas{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow);padding:18px 20px 20px;position:relative}
+.canvas-h{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+.canvas-h .nm{font-weight:600;font-size:15px}
+.canvas-h .st{font-family:var(--mono);font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:var(--ok);border:1px solid var(--ok);border-radius:3px;padding:1px 6px}
+.flow{position:relative;margin-left:34px}     /* left gutter for back-edges */
+.gutter{position:absolute;left:-26px;top:0;bottom:0;width:22px;pointer-events:none}
+.connector{width:0;border-left:2px solid var(--hair2);height:16px;margin-left:26px}
+.node{border:1px solid var(--hair2);border-radius:var(--r);background:var(--panel2);cursor:pointer;position:relative}
+.node.softb{border-style:dashed}
+.node.sel{border-color:var(--accent);background:var(--accent-soft)}
+.nrow{display:flex;align-items:center;gap:8px;padding:8px 11px}
+.nrow .ico{width:17px;text-align:center}
+.nrow .nm{font-size:12.5px;font-weight:500;white-space:nowrap}
+.nrow .sum{font-size:11px;color:var(--mut);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nrow .agent{font-family:var(--mono);font-size:9.5px;color:var(--accent);white-space:nowrap}
 .tag{font-family:var(--mono);font-size:8.5px;letter-spacing:.5px;text-transform:uppercase;border-radius:3px;padding:1px 5px;white-space:nowrap}
 .tag.hard{color:var(--ok);border:1px solid var(--ok)}
 .tag.soft{color:var(--warn);border:1px dashed var(--warn)}
-.onfail{font-family:var(--mono);font-size:9px;color:var(--dim);white-space:nowrap}
-.srow .x{background:transparent;border:0;color:var(--dim);cursor:pointer;font-size:13px}
-.step.lock .x{visibility:hidden}
+/* containers */
+.loopbox{border:1.5px solid var(--accent);border-radius:var(--r);padding:12px 12px 8px;position:relative;margin:0}
+.loopbox>.boxtag{position:absolute;top:-9px;left:12px;background:var(--panel);border:1px solid var(--accent);border-radius:9px;
+  color:var(--accent);font-family:var(--mono);font-size:9.5px;padding:0 8px}
+.loopfoot{border-top:1px dashed var(--hair2);margin-top:10px;padding-top:7px;display:flex;gap:14px;flex-wrap:wrap;align-items:center;
+  font-family:var(--mono);font-size:10px;color:var(--mut)}
+.stagebox{border:1px solid var(--hair2);border-radius:var(--r);padding:12px 12px 10px;position:relative;background:rgba(76,158,227,.04)}
+.stagebox>.boxtag{position:absolute;top:-9px;left:12px;background:var(--panel);border:1px solid var(--hair2);border-radius:9px;
+  color:var(--mut);font-family:var(--mono);font-size:9.5px;padding:0 8px}
+/* branch */
+.diamond{display:flex;align-items:center;gap:9px;border:1px solid var(--warn);border-radius:var(--r);background:var(--panel2);padding:8px 11px;cursor:pointer}
+.diamond .q{font-weight:600;font-size:12.5px}
+.diamond.sel{background:var(--accent-soft)}
+.paths{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px}
+@media(max-width:760px){.paths{grid-template-columns:1fr}}
+.path{border:1px dashed var(--hair2);border-radius:var(--r);padding:10px}
+.path>.plabel{font-family:var(--mono);font-size:9.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--dim);margin-bottom:8px;display:flex;gap:6px;align-items:center}
+.endchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--hair2);border-radius:10px;padding:2px 10px;font-family:var(--mono);font-size:10px;color:var(--mut)}
+.backedge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--warn);border-radius:10px;padding:2px 10px;font-family:var(--mono);font-size:10px;color:var(--warn)}
+/* drawer */
 .drawer{border-top:1px solid var(--hair);padding:10px 12px;display:none}
-.step.open .drawer{display:block}
+.node.sel .drawer,.diamond-wrap.sel .drawer{display:block;cursor:default}
 .frow{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin:6px 0}
-.frow .lab{font-family:var(--mono);font-size:9.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--dim);min-width:84px}
+.frow .lab{font-family:var(--mono);font-size:9.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--dim);min-width:86px}
 .frow select,.frow input{background:var(--panel);border:1px solid var(--hair2);color:var(--ink);font-family:var(--mono);font-size:10.5px;border-radius:5px;padding:5px 7px}
-.frow textarea{background:var(--panel);border:1px solid var(--hair2);color:var(--ink);font-family:var(--mono);font-size:10.5px;border-radius:5px;padding:6px 8px;width:100%;min-height:46px;resize:vertical}
-.mvbtn{background:transparent;border:1px solid var(--hair2);border-radius:4px;color:var(--mut);cursor:pointer;font-size:11px;padding:2px 7px}
-.stoprules{border:1px solid var(--hair2);border-radius:var(--r);background:var(--panel2);padding:10px 12px;margin-top:14px}
-.legend{display:flex;gap:16px;margin-top:16px;color:var(--dim);font-size:11px;flex-wrap:wrap}
+.frow textarea{background:var(--panel);border:1px solid var(--hair2);color:var(--ink);font-family:var(--mono);font-size:10.5px;border-radius:5px;padding:6px 8px;width:100%;min-height:44px;resize:vertical}
+.trigbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border:1px solid var(--hair2);border-radius:var(--r);background:var(--panel2);padding:9px 12px;margin:12px 0 0 34px}
+.pill{border:1px solid var(--hair2);border-radius:11px;padding:2px 10px;font-family:var(--mono);font-size:10.5px;color:var(--mut);cursor:pointer;background:transparent}
+.pill.on{border-color:var(--accent);color:var(--ink);background:var(--accent-soft)}
+.legend{display:flex;gap:16px;margin-top:16px;color:var(--dim);font-size:11px;flex-wrap:wrap;margin-left:34px}
 .note{font-size:11px;color:var(--mut)}
-.ttoggle{position:fixed;top:12px;right:14px;display:inline-flex;border:1px solid var(--hair2);border-radius:6px;overflow:hidden;background:var(--panel)}
+svg.edges{position:absolute;left:0;top:0;width:34px;height:100%;overflow:visible;pointer-events:none}
+.ttoggle{position:fixed;top:12px;right:14px;display:inline-flex;border:1px solid var(--hair2);border-radius:6px;overflow:hidden;background:var(--panel);z-index:5}
 .ttoggle button{background:transparent;border:0;color:var(--dim);font-family:var(--mono);font-size:11px;padding:6px 9px;cursor:pointer}
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
 </style>
@@ -94,166 +88,121 @@ h1{font-size:18px;margin:0 0 2px}
 <body>
 <div class="ttoggle"><button onclick="document.documentElement.dataset.theme='dark'">dark</button><button onclick="document.documentElement.dataset.theme='light'">light</button></div>
 <div class="wrap">
-  <span class="eyebrow">design mockup v3 · the pipeline editor</span>
-  <h1>A role's loop, as a pipeline you build</h1>
-  <div class="sub">Left: the step library — click ＋ to drop a step into the pipeline (drag in the build), or create a custom step. Right: the pipeline top-to-bottom exactly as a run executes — <b>before</b> (once), the <b>cycle</b> (repeats), <b>after</b> (once), then the stop rules. Click any step card for its config.</div>
-
-  <div class="roles" id="roles"></div>
+  <span class="eyebrow">design mockup v4 · the pipeline canvas — ADF for loops</span>
+  <h1>One pipeline: pick → plan → coding loop → QA stage → finish</h1>
+  <div class="sub">This is the operator's worked example rendered as a buildable pipeline. Linear activities, a <b>loop container</b> with its exit + enforced cap, a <b>stage</b> that runs as a different agent, <b>branches</b> with labeled paths, and a <b>back-edge</b> from QA's verdict into the coding loop. Click anything for its config. Palette on the left adds activities (drag in the build).</div>
 
   <div class="layout">
     <aside class="palette" id="palette"></aside>
-    <main class="rail">
-      <div class="rail-h"><span class="nm" id="rname"></span><span class="eyebrow" id="rdesc"></span></div>
-      <div class="trig" id="trig"></div>
-      <div class="zone"><div class="zone-h"><span class="zt">before</span><span class="zd">once per run, outside the cycle</span></div>
-        <div class="steps" id="z-before"></div></div>
-      <div class="zone"><div class="cyclebox"><span class="loopbadge">⟲ cycle</span>
-        <div class="steps" id="z-cycle"></div>
-        <div class="repeat" id="repeat"></div></div></div>
-      <div class="zone"><div class="zone-h"><span class="zt">after</span><span class="zd">once per run, outside the cycle</span></div>
-        <div class="steps" id="z-after"></div></div>
-      <div class="stoprules" id="stop"></div>
+    <main class="canvas">
+      <div class="canvas-h"><span class="nm">ticket-to-merge</span><span class="st">pipeline</span><span class="eyebrow">workspace: main · repo: my-app</span></div>
+      <div class="trigbar"><span class="eyebrow">starts</span>
+        <button class="pill on">⟳ continuously — refires while the queue has work</button>
+        <button class="pill">⏱ on a schedule</button><button class="pill">⚡ when something happens</button><button class="pill">▶ when I say</button>
+      </div>
+      <div class="flow" id="flow" style="margin-top:14px"></div>
       <div class="legend">
-        <span><span class="tag hard">enforced</span> the engine makes it happen</span>
-        <span><span class="tag soft">instructed</span> compiled into the agent's brief</span>
-        <span>every step: on-fail = continue · retry once · ask a human · stop the run</span>
+        <span><span class="tag hard">enforced</span> engine-owned (caps, gates, waits)</span>
+        <span><span class="tag soft">instructed</span> compiled into that agent's brief</span>
+        <span class="backedge">↩ back-edge</span><span>returns work upstream, with an enforced bounce cap</span>
       </div>
     </main>
   </div>
 </div>
 
 <script>
-const ICONS={pick:"🎯",wait:"⏳",plan:"🧠",gather:"🔎",decide:"⚖️",act:"🔨",transform:"🛠",triage:"🏷",check:"✔️",ask:"🙋",summarize:"📝",notify:"📣",handoff:"🤝",journal:"📓",housekeep:"🧹"};
+const ICONS={pick:"🎯",wait:"⏳",plan:"🧠",gather:"🔎",decide:"⚖️",act:"🔨",transform:"🛠",triage:"🏷",check:"✔️",ask:"🙋",summarize:"📝",notify:"📣",handoff:"🤝",journal:"📓",housekeep:"🧹",loop:"⟲",stage:"👤"};
 const PALETTE=[
- {g:"getting work",items:[
-   {t:"pick",nm:"pick",sum:"source a work item (board query · PR set · git history)",kind:"soft",zones:["cycle"]},
-   {t:"wait",nm:"wait / watch",sum:"pause for CI, an approval, a time window",kind:"hard",zones:["before","cycle","after"]}]},
- {g:"thinking",items:[
-   {t:"plan",nm:"plan",sum:"produce a plan (pick the brain)",kind:"soft",zones:["before","cycle"]},
-   {t:"gather",nm:"gather",sum:"research: read docs · search · scan the codebase",kind:"soft",zones:["before","cycle"]},
-   {t:"decide",nm:"decide",sum:"a judgment call with named criteria",kind:"soft",zones:["before","cycle","after"]}]},
- {g:"doing",items:[
-   {t:"act",nm:"act",sum:"do the work: code · label · merge · write",kind:"soft",zones:["cycle"]},
-   {t:"transform",nm:"transform",sum:"mechanical bulk change (codemod, docs regen)",kind:"soft",zones:["cycle"]},
-   {t:"triage",nm:"triage",sum:"classify / order a set (can point at sibling roles)",kind:"soft",zones:["before","cycle"]}]},
- {g:"checking",items:[
-   {t:"check",nm:"check",sum:"tests · subagent review · security · browser-verify",kind:"soft",zones:["cycle","after"]},
-   {t:"ask",nm:"ask",sum:"consult: thinking brain · a human · another role",kind:"soft",zones:["before","cycle","after"]}]},
- {g:"communicating",items:[
-   {t:"summarize",nm:"summarize",sum:"digest: release notes · status · PR description",kind:"soft",zones:["cycle","after"]},
-   {t:"notify",nm:"notify",sum:"comment · raise a ticket · needs-you",kind:"soft",zones:["cycle","after"]},
-   {t:"handoff",nm:"handoff",sum:"pass the item to a sibling role",kind:"hard",zones:["cycle"]}]},
- {g:"keeping house",items:[
-   {t:"journal",nm:"journal",sum:"record learnings for the next run",kind:"soft",zones:["after"]},
-   {t:"housekeep",nm:"housekeep",sum:"prune branches · close stale · sweep the board",kind:"soft",zones:["before","after"]}]},
+ {g:"activities",items:["pick","wait","plan","gather","decide","act","transform","triage","check","ask","summarize","notify","handoff","journal","housekeep"]},
+ {g:"structure",items:["loop container","branch","stage (runs as…)"]},
 ];
-function mkstep(t,nm,sum,kind,extra){return Object.assign({t,nm,sum,kind,on:true,fail:"continue",brain:"building",prompt:""},extra||{});}
-const ROLES={
- coder:{nm:"coder",desc:"continuous · two brains",trig:"continuous",
-  before:[mkstep("gather","gather","read the board + recent merges once, not per ticket",{},{kind:"soft"})],
-  cycle:[
-    mkstep("pick","pick","tickets labelled ready · p1 first · oldest first",{},{kind:"soft"}),
-    mkstep("plan","plan","🧠 thinking writes the plan",{},{kind:"soft",brain:"thinking"}),
-    mkstep("act","act","🔨 building writes the code, following the plan",{},{kind:"soft"}),
-    mkstep("check","check: full test suite","before every push",{},{kind:"soft"}),
-    mkstep("check","check: 🧠 vs plan","thinking checks the code against the plan",{},{kind:"soft",brain:"thinking"}),
-    mkstep("wait","wait: CI green","engine polls the checks",{},{kind:"hard",fail:"ask a human"}),
-    Object.assign(mkstep("check","gates: review bot · CI · merge gate","always on"),{kind:"hard",lock:true}),
-  ],
-  after:[mkstep("journal","journal","note learnings for the next run",{},{kind:"soft"})],
-  repeat:"next ticket — while the queue has items and under today's cap",
-  stop:{done:"the queue is drained",caps:"max 6 sessions/day",prob:"end cleanly + flag me"}},
- pm:{nm:"board-butler",desc:"every 2 hours · one brain",trig:"schedule",
-  before:[mkstep("housekeep","housekeep","sweep closed tickets → Done",{},{kind:"soft"})],
-  cycle:[
-    mkstep("pick","pick","next unreviewed open ticket",{},{kind:"soft"}),
-    mkstep("decide","decide","duplicate? priority tier? clear enough to build?",{},{kind:"soft"}),
-    mkstep("triage","triage","label + order for: coder, coder-bugs",{},{kind:"soft"}),
-  ],
-  after:[mkstep("summarize","summarize","one comment: what changed on the board",{},{kind:"soft"}),
-         mkstep("journal","journal","note recurring gaps for the researcher",{},{kind:"soft"})],
-  repeat:"next ticket — until every open ticket was looked at",
-  stop:{done:"board tidy this run",caps:"max 1 session per fire",prob:"end cleanly + flag me"}},
-};
-let CUR="coder",OPEN=null,CUSTOPEN=false;
-function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;")}
-function stepCard(zone,s,i,len){
-  const open=OPEN===zone+i?" open":"";
-  return `<div class="step ${s.kind==="soft"?"softb":""} ${s.lock?"lock":""} ${s.on?"":"off"}${open}">
-   <div class="srow" onclick="toggleOpen('${zone}',${i})">
-     <span class="grip" title="drag to reorder (buttons in the drawer here)">⋮⋮</span>
-     <span class="ico">${ICONS[s.t]||"·"}</span><span class="nm">${esc(s.nm)}</span>
-     <span class="sum">${esc(s.sum)}</span>
-     <span class="tag ${s.kind==="hard"?"hard":"soft"}">${s.kind==="hard"?"enforced":"instructed"}</span>
-     <span class="onfail">on fail: ${esc(s.fail)}</span>
-     <button class="x" title="remove" onclick="event.stopPropagation();rm('${zone}',${i})">×</button>
-   </div>
-   <div class="drawer">
-     <div class="frow"><span class="lab">enabled</span><input type="checkbox" ${s.on?"checked":""} onchange="ROLES[CUR][ '${zone}' ][${i}].on=this.checked;render()"></div>
-     <div class="frow"><span class="lab">who runs it</span>
-       <select onchange="ROLES[CUR]['${zone}'][${i}].brain=this.value">
-         <option ${s.brain==="thinking"?"selected":""} value="thinking">🧠 thinking brain</option>
-         <option ${s.brain==="building"?"selected":""} value="building">🔨 building brain</option>
-         <option ${s.brain==="own"?"selected":""} value="own">its own model…</option></select></div>
-     <div class="frow"><span class="lab">on fail</span>
-       <select onchange="ROLES[CUR]['${zone}'][${i}].fail=this.value;render()">
-         ${["continue","retry once","ask a human","stop the run"].map(f=>`<option ${s.fail===f?"selected":""}>${f}</option>`).join("")}</select></div>
-     <div class="frow"><span class="lab">its brief</span></div>
-     <textarea placeholder="what this step tells the agent — compiled into the brief">${esc(s.prompt||s.sum)}</textarea>
-     <div class="frow"><span class="lab">move</span>
-       <button class="mvbtn" onclick="mv('${zone}',${i},-1)">↑</button>
-       <button class="mvbtn" onclick="mv('${zone}',${i},1)">↓</button>
-       <span class="lab" style="min-width:0">zone</span>
-       <select onchange="mvzone('${zone}',${i},this.value)">
-         ${["before","cycle","after"].map(z=>`<option ${z===zone?"selected":""}>${z}</option>`).join("")}</select>
-       <button class="mvbtn" onclick="alert('mock: saved to the step library — reusable in any role')">save to library</button></div>
-   </div></div>`;
+let SEL=null;
+function esc(x){return String(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;")}
+function drawer(cfg){
+  return `<div class="drawer" onclick="event.stopPropagation()">
+    <div class="frow"><span class="lab">runs as</span><select>
+      <option ${cfg.agent==="coder · 🧠 thinking (fable)"?"selected":""}>coder · 🧠 thinking (fable)</option>
+      <option ${cfg.agent==="coder · 🔨 building (sonnet)"?"selected":""}>coder · 🔨 building (sonnet)</option>
+      <option ${cfg.agent==="qa (sonnet)"?"selected":""}>qa (sonnet)</option>
+      <option>its own model…</option></select>
+      <span class="lab" style="min-width:0">effort</span><select><option>xhigh</option><option>high</option><option selected>medium</option></select></div>
+    <div class="frow"><span class="lab">on fail</span><select>${["continue","retry once","ask a human","stop the run"].map(f=>`<option ${cfg.fail===f?"selected":""}>${f}</option>`).join("")}</select></div>
+    <div class="frow"><span class="lab">its brief</span></div>
+    <textarea>${esc(cfg.brief||"")}</textarea>
+    <div class="frow"><button class="pill" onclick="alert('mock: saved to the step library')">save to library</button>
+      <button class="pill" onclick="alert('mock: removed')">remove</button>
+      <span class="note">drag to reorder / between containers in the build</span></div>
+  </div>`;
 }
+function node(id,t,nm,sum,cfg,opts){
+  opts=opts||{};
+  return `<div class="node ${opts.hard?"":"softb"} ${SEL===id?"sel":""}" onclick="sel('${id}')">
+    <div class="nrow"><span class="ico">${ICONS[t]}</span><span class="nm">${nm}</span>
+      <span class="sum">${sum}</span>
+      ${cfg.agent?`<span class="agent">${cfg.agent.split(" ")[0]}</span>`:""}
+      <span class="tag ${opts.hard?"hard":"soft"}">${opts.hard?"enforced":"instructed"}</span></div>
+    ${drawer(cfg)}
+  </div>`;
+}
+function conn(){return `<div class="connector"></div>`;}
 function render(){
-  const r=ROLES[CUR];
-  document.getElementById("roles").innerHTML=Object.keys(ROLES).map(k=>
-    `<button class="rolebtn ${k===CUR?"on":""}" onclick="CUR='${k}';OPEN=null;render()"><b>${ROLES[k].nm}</b> · ${ROLES[k].desc}</button>`).join("");
-  document.getElementById("rname").textContent=r.nm;
-  document.getElementById("rdesc").textContent=r.desc;
-  document.getElementById("trig").innerHTML=`<span class="k">starts</span>`
-    +["continuous","schedule","event","manual"].map(t=>`<button class="pill ${r.trig===t?"on":""}" onclick="ROLES[CUR].trig='${t}';render()">${t==="continuous"?"⟳ continuously":t==="schedule"?"⏱ on a schedule":t==="event"?"⚡ when something happens":"▶ when I say"}</button>`).join("")
-    +(r.trig==="schedule"?`<select><option>every 2 hours</option><option>daily 09:00</option><option>custom…</option></select>`:"")
-    +(r.trig==="event"?`<span class="pill on">when pr.opened</span>`:"");
-  for(const z of ["before","cycle","after"]){
-    const el=document.getElementById("z-"+z);
-    el.innerHTML=r[z].length?r[z].map((s,i)=>stepCard(z,s,i,r[z].length)).join("")
-      :`<div class="dropzone-hint">nothing here — add a step from the library</div>`;
-  }
-  document.getElementById("repeat").innerHTML=`⟲ <b>repeat:</b>&nbsp;${esc(r.repeat)} <button class="mvbtn" style="margin-left:auto" onclick="alert('mock: edit the repeat rule')">edit</button>`;
-  document.getElementById("stop").innerHTML=`<span class="eyebrow">stop rules — the loop's frame</span>
-    <div class="frow"><span class="lab">done when</span><input value="${esc(r.stop.done)}" size="30"></div>
-    <div class="frow"><span class="lab">caps</span><input value="${esc(r.stop.caps)}" size="30"><span class="tag hard">enforced</span></div>
-    <div class="frow"><span class="lab">on a problem</span>
-      <select>${["end cleanly + flag me","ask a human first","retry once, then flag"].map(o=>`<option ${r.stop.prob===o?"selected":""}>${o}</option>`).join("")}</select>
-      <span class="note">the default any step inherits unless it sets its own on-fail</span></div>`;
+  const F=document.getElementById("flow");
+  F.innerHTML=
+   node("pick","pick","pick","check the board · next ticket in the queue (label ready · p1 first)",{agent:"coder · 🔨 building (sonnet)",fail:"stop the run",brief:"Take the next ticket in queue order. If the queue is empty, end the run cleanly."})
+  +conn()
+  +node("plan","plan","write the plan","address the ticket · flag anything too vague",{agent:"coder · 🧠 thinking (fable)",fail:"ask a human",brief:"Write an executable plan: files, steps, test criteria. If the ticket is too vague to plan, list the questions a human must answer."})
+  +conn()
+  +`<div class="diamond-wrap ${SEL==="b1"?"sel":""}">
+     <div class="diamond ${SEL==="b1"?"sel":""}" onclick="sel('b1')"><span class="ico">⚖️</span><span class="q">plan viable?</span><span class="sum" style="color:var(--mut);font-size:11px">the plan step's own verdict steers the run</span><span class="tag soft">instructed</span></div>
+     ${drawer({agent:"coder · 🧠 thinking (fable)",fail:"ask a human",brief:"Verdict: viable | too-vague. Too vague = missing acceptance criteria or contradictory asks."})}
+     <div class="paths">
+       <div class="path"><div class="plabel">too vague →</div>
+         ${node("ask1","ask","ask the user","post the questions on the ticket · park it",{agent:"coder · 🧠 thinking (fable)",fail:"continue",brief:"Post one needs-you comment with the questions. Label the ticket needs-info."})}
+         ${conn()}<span class="endchip">■ end this run</span></div>
+       <div class="path"><div class="plabel">viable → continue ↓</div><span class="note">falls through to the coding loop</span></div>
+     </div></div>`
+  +conn()
+  +`<div class="loopbox"><span class="boxtag">⟲ coding loop</span>
+     ${node("work","act","work from the plan","implement the next unmet plan item",{agent:"coder · 🔨 building (sonnet)",fail:"ask a human",brief:"Work strictly from the plan. If a step cannot work as written, go back to the thinking brain — never improvise around it."})}
+     ${conn()}
+     ${node("test","check","test against the plan","run the plan's test criteria",{agent:"coder · 🔨 building (sonnet)",fail:"continue",brief:"Run the plan's named test criteria. Report which pass and which remain."})}
+     <div class="loopfoot"><span>⟲ <b>exit when:</b>&nbsp;every test criterion in the plan passes</span>
+       <span class="tag soft">instructed</span>
+       <span style="margin-left:auto"><b>cap:</b> 20 rounds</span><span class="tag hard">enforced</span></div>
+   </div>`
+  +conn()
+  +node("pr","act","open / refresh the PR","self-contained description · plan attached",{agent:"coder · 🔨 building (sonnet)",fail:"retry once",brief:"Open or update the PR. Description covers what changed, why, and the plan's criteria results."})
+  +conn()
+  +`<div class="stagebox"><span class="boxtag">👤 stage · runs as qa (sonnet)</span>
+     ${node("qa1","gather","read the context","original ticket · every PR comment",{agent:"qa (sonnet)",fail:"continue",brief:"Read the original ticket and all PR comments before touching anything."})}
+     ${conn()}
+     ${node("qa2","check","verify in the frontend","branch out · see the change working",{agent:"qa (sonnet)",fail:"ask a human",brief:"Check out the branch, run the app, verify the described change is visible and working."})}
+     ${conn()}
+     ${node("qa3","check","related breakage","anything around or related to the change",{agent:"qa (sonnet)",fail:"continue",brief:"Exercise adjacent features and related code paths; note anything broken."})}
+     ${conn()}
+     ${node("qa4","check","code review","injection risks · duplication · issues in the diff",{agent:"qa (sonnet)",fail:"continue",brief:"Review the diff itself: injection risks, duplication, dead code, missed conventions."})}
+   </div>`
+  +conn()
+  +`<div class="diamond-wrap ${SEL==="b2"?"sel":""}">
+     <div class="diamond ${SEL==="b2"?"sel":""}" onclick="sel('b2')"><span class="ico">⚖️</span><span class="q">QA verdict?</span><span class="sum" style="color:var(--mut);font-size:11px"></span><span class="tag soft">instructed</span></div>
+     ${drawer({agent:"qa (sonnet)",fail:"ask a human",brief:"Verdict: issues | good. Issues = anything from the four checks that must change before merge."})}
+     <div class="paths">
+       <div class="path"><div class="plabel">issues →</div>
+         <span class="backedge" title="returns to the coding loop with the QA comments as input">↩ back to the coding loop · with comments</span>
+         <div class="frow" style="margin-top:8px"><span class="lab">bounce cap</span><input value="3" size="3"><span class="tag hard">enforced</span><span class="note">4th bounce parks the PR for a human</span></div></div>
+       <div class="path"><div class="plabel">good →</div>
+         <div class="frow"><span class="lab">finish how</span><select>
+           <option>ask the user — approval comment, park the PR</option>
+           <option selected>merge · squash · close the ticket</option></select><span class="tag hard">enforced</span></div>
+         ${conn()}<span class="endchip">■ pipeline done — trigger refires while the queue has work</span></div>
+     </div></div>`;
   document.getElementById("palette").innerHTML=PALETTE.map(g=>
-    `<div class="pgroup"><span class="eyebrow">${g.g}</span>${g.items.map(it=>
-      `<button class="pitem" onclick='addStep(${JSON.stringify(JSON.stringify(it))})' title="allowed in: ${it.zones.join(", ")}">
-        <span class="ico">${ICONS[it.t]}</span>${it.nm}<span class="add">＋</span></button>`).join("")}</div>`).join("")
-    +`<div class="customs"><button class="pitem" onclick="CUSTOPEN=!CUSTOPEN;render()"><span class="ico">✚</span><b>custom step…</b></button>
-      <div class="custform ${CUSTOPEN?"open":""}">
-        <input placeholder="name (e.g. verify-changelog)"><select><option>kind: check</option><option>kind: act</option><option>kind: notify</option><option>kind: gather</option></select>
-        <select><option>runs as: 🔨 building brain</option><option>runs as: 🧠 thinking brain</option><option>runs as: its own model…</option></select>
-        <textarea placeholder="its brief: what this step tells the agent to do"></textarea>
-        <select><option>allowed in: cycle</option><option>allowed in: before + cycle + after</option></select>
-        <button class="mvbtn" onclick="alert('mock: saved to the step library — appears in the palette for every role')">save to the step library</button>
-      </div></div>`;
+    `<div class="pgroup"><span class="eyebrow">${g.g}</span>${g.items.map(nm=>{
+      const t=nm.split(" ")[0].replace("(runs","stage");
+      return `<button class="pitem" onclick="alert('mock: drops a ${nm} where you release it')"><span class="ico">${ICONS[t]||ICONS.stage}</span>${nm}<span class="add">＋</span></button>`;}).join("")}</div>`).join("")
+   +`<div class="pgroup" style="border-top:1px solid var(--hair);padding-top:8px"><button class="pitem" onclick="alert('mock: name · kind · runs-as · brief · placements → saved to the step library')"><span class="ico">✚</span><b>custom step…</b></button></div>`;
 }
-function addStep(js){const it=JSON.parse(js);const z=it.zones.indexOf("cycle")>=0?"cycle":it.zones[0];
-  const list=ROLES[CUR][z];const at=list.length&&list[list.length-1].lock?list.length-1:list.length;
-  list.splice(at,0,mkstep(it.t,it.nm,it.sum,{},{kind:it.kind}));OPEN=z+at;render();}
-function rm(z,i){ROLES[CUR][z].splice(i,1);OPEN=null;render();}
-function mv(z,i,d){const l=ROLES[CUR][z];const j=i+d;if(j<0||j>=l.length||l[j]&&l[j].lock&&d>0)return;
-  const s=l.splice(i,1)[0];l.splice(j,0,s);OPEN=z+j;render();}
-function mvzone(z,i,nz){if(z===nz)return;const s=ROLES[CUR][z].splice(i,1)[0];
-  const list=ROLES[CUR][nz];const at=list.length&&list[list.length-1].lock?list.length-1:list.length;
-  list.splice(at,0,s);OPEN=nz+at;render();}
-function toggleOpen(z,i){OPEN=(OPEN===z+i)?null:z+i;render();}
+function sel(id){SEL=(SEL===id)?null:id;render();}
 render();
 </script>
 </body>
