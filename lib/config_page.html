@@ -184,7 +184,7 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px
 .orgstate.orgna{color:var(--dim);opacity:.6}
 .orgname{font-weight:500;min-width:78px}
 .orgtrig{font-family:var(--mono);font-size:10px;color:var(--dim);min-width:150px}
-.orgbits{font-family:var(--mono);font-size:10px;color:var(--mut)}
+.orgbits{font-family:var(--mono);font-size:10px;color:var(--mut);overflow-wrap:anywhere;min-width:0}
 
 /* quotas */
 .q{padding:13px 14px;border-bottom:1px solid var(--hair)}
@@ -278,13 +278,21 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
 .wsdot.on{background:var(--ok);box-shadow:0 0 6px var(--ok-glow)}
 .wsdot.na{background:transparent;border:1px solid var(--hair2)}
 .wsname{font-weight:500}
-.wstrig{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px}
+.wstrig{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
 .wsbad{font-family:var(--mono);font-size:9px;color:var(--bad);padding:2px 4px 2px 14px}
 /* workstream detail card */
 .wsfield{display:flex;gap:10px;padding:6px 0;border-bottom:1px solid var(--hair);font-size:12.5px;align-items:baseline}
 .wsfield:last-child{border-bottom:0}
 .wsfield .k{font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--dim);min-width:96px}
-.wsfield .v{font-family:var(--mono);font-size:11.5px}
+.wsfield .v{font-family:var(--mono);font-size:11.5px;overflow-wrap:anywhere;min-width:0}
+.wsfield{flex-wrap:wrap}
+.wsed{display:flex;flex-wrap:wrap;gap:7px;align-items:center;flex:1;min-width:0}
+.wsed select,.wsed input{background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);font-family:var(--mono);font-size:10.5px;border-radius:5px;padding:5px 6px;max-width:230px}
+.wsed input.wide{flex:1;min-width:140px;max-width:none}
+.wsprompt{width:100%;min-height:180px;background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);
+  font-family:var(--mono);font-size:11px;border-radius:var(--r);padding:9px;resize:vertical;line-height:1.45}
+.wsevrow{display:flex;gap:12px;flex-wrap:wrap;font-family:var(--mono);font-size:10.5px;color:var(--mut)}
+.wsevrow label{display:inline-flex;gap:5px;align-items:center;cursor:pointer}
 .wschip{display:inline-block;border:1px solid var(--hair2);border-radius:10px;padding:0 8px;font-family:var(--mono);font-size:10px;color:var(--mut);margin-right:4px}
 .credadd{display:grid;grid-template-columns:1fr 140px 1fr auto;gap:8px;padding:10px;border-bottom:1px solid var(--hair);align-items:center}
 .credrow{display:flex;align-items:center;gap:10px;padding:9px 10px;border-bottom:1px solid var(--hair)}
@@ -667,23 +675,106 @@ function renderCanvas(m){
   }
 }
 function wsCard(r,w){
-  const org=r.org||{}, pair=org.pair||{};
-  const trig=trigHuman(w.trigger_kind,w.trigger_detail);
-  const scope=(w.scope_labels||[]).length?w.scope_labels.map(l=>`<span class="wschip">${esc(l)}</span>`).join(""):"<span class='wschip'>whole board</span>";
+  const org=r.org||{}, pair=org.pair||{}, enc=encAttr(r.path), encName=encAttr(w.name);
+  const scope=(w.scope_labels||[]).join(", ");
   const notes=(w.notes||[]).map(n=>`<div class="cfghint">note: ${esc(n)}</div>`).join("");
-  const pairRow=(w.name==="coder")?orgZone(org):"";
-  const field=(k,v)=>`<div class="wsfield"><span class="k">${k}</span><span class="v">${v}</span></div>`;
-  return `<div class="cfgrepo" data-repo="${encAttr(r.path)}">
-    ${field("state",!w.configured?"not configured":(w.enabled?"enabled":"disabled"))}
-    ${field("trigger",esc(trig))}
-    ${field("scope",scope)}
-    ${field("gate",esc(w.gate||"—"))}
-    ${field("model",esc(w.model||((pair.coder||{}).model?((pair.coder||{}).model+" (repo default)"):"—")))}
-    ${field("effort",esc(w.effort||((pair.coder||{}).effort?((pair.coder||{}).effort+" (repo default)"):"—")))}
-    ${field("account",esc(w.account||"subscription (default)"))}
-    ${field("lane",esc(w.lane||"main"))}
-    ${notes}${pairRow}
+  const pairRow=(w.name==="coder")?orgZone(org,enc):"";
+  const field=(k,inner)=>`<div class="wsfield"><span class="k">${k}</span><div class="wsed">${inner}</div></div>`;
+  const cronPresets=[["","custom…"],["*/30 * * * *","every 30 min"],["0 * * * *","hourly"],["0 */2 * * *","every 2 hours"],["0 */4 * * *","every 4 hours"],["0 9 * * *","daily 09:00"],["0 9 * * 1-5","weekdays 09:00"]];
+  const kind=w.trigger_kind||"loop";
+  const cronVal=kind==="cron"?(w.trigger_detail||""):"0 9 * * *";
+  const preset=cronPresets.some(p=>p[0]===cronVal&&p[0])?cronVal:"";
+  const events=["pr.opened","pr.synchronize","issue.created","merge.done","session.done"];
+  const onSet=kind==="event"?(w.trigger_detail||"").split(",").map(x=>x.trim()).filter(Boolean):[];
+  const trigEd=
+    `<select id="ws-trig-kind" onchange="wsTrigKind(this)">`
+      +["loop","cron","event","manual"].map(k=>`<option value="${k}" ${k===kind?"selected":""}>${k==="loop"?"continuous (loop)":(k==="manual"?"manual (Run now only)":k)}</option>`).join("")
+    +`</select>`
+    +`<span id="ws-trig-cron" ${kind==="cron"?"":"hidden"}>`
+      +`<select id="ws-cron-preset" onchange="wsCronPreset(this)">${cronPresets.map(p=>`<option value="${esc(p[0])}" ${p[0]===preset?"selected":""}>${esc(p[1])}</option>`).join("")}</select>`
+      +`<input id="ws-cron-raw" class="wide" value="${esc(cronVal)}" placeholder="min hour day month weekday (cron)">`
+    +`</span>`
+    +`<span id="ws-trig-ev" class="wsevrow" ${kind==="event"?"":"hidden"}>`
+      +events.map(e=>`<label><input type="checkbox" value="${e}" ${onSet.indexOf(e)>=0?"checked":""}>when ${e}</label>`).join("")
+    +`</span>`
+    +`<button class="cbtn go" onclick="wsSaveTrigger('${enc}','${encName}')">save trigger</button>`;
+  const stateBtn=w.configured
+    ?`<button class="cbtn ${w.enabled?"warn":"go"}" onclick="wsToggle('${enc}','${encName}',${w.enabled?"false":"true"})">${w.enabled?"disable":"enable"}</button><span class="orgstate ${w.enabled?"orgon":"orgoff"}">${w.enabled?"on":"off"}</span>`
+    :`<span class="orgstate orgna">not configured</span><span class="cfghint">this standard slot isn't set up here — add it with “+ add workstream” on the repo view</span>`;
+  const gateEd=`<select id="ws-gate">`
+      +[["","— none —"],["wait-for-human","wait-for-human (report, human merges)"],["auto-merge-on-pass","auto-merge-on-pass (sign-off + green CI merges)"]]
+        .map(g=>`<option value="${g[0]}" ${g[0]===(w.gate||"")?"selected":""}>${g[1]}</option>`).join("")
+    +`</select><button class="cbtn" onclick="wsSaveField('${enc}','${encName}','gate',document.getElementById('ws-gate').value)">save</button>`;
+  const scopeEd=`<input id="ws-scope" class="wide" value="${esc(scope)}" placeholder="labels, comma separated — empty = whole board">`
+    +`<button class="cbtn" onclick="wsSaveScope('${enc}','${encName}')">save</button>`;
+  const modelEd=`<select id="ws-model">${modelSelectOptions(w.model||"")}</select>`
+    +`<select id="ws-effort">${EFFORT_CHOICES.map(e=>`<option value="${e}" ${e===(w.effort||"")?"selected":""}>${e||"effort: repo default"}</option>`).join("")}</select>`
+    +`<button class="cbtn" onclick="wsSaveModel('${enc}','${encName}')">save</button>`
+    +`<span class="cfghint">empty = repo default (${esc((pair.coder||{}).model||"unset")}${(pair.coder||{}).effort?" · "+esc((pair.coder||{}).effort):""})</span>`;
+  const promptEd=`<div class="wsfield"><span class="k">prompt</span><div class="wsed" style="flex-direction:column;align-items:stretch">`
+    +`<div class="cfghint" id="ws-prompt-path">loading…</div>`
+    +`<textarea id="ws-prompt" class="wsprompt" placeholder="the workstream's standing instructions — duties, priorities, conditions for decisions"></textarea>`
+    +`<div><button class="cbtn go" onclick="wsSavePrompt('${enc}','${encName}')">save prompt</button></div>`
+    +`</div></div>`;
+  setTimeout(()=>wsLoadPrompt(r.path,w.name),0);
+  return `<div class="cfgrepo" data-repo="${enc}">
+    ${field("state",stateBtn)}
+    ${field("runs",trigEd)}
+    ${field("scope",scopeEd)}
+    ${field("merge gate",gateEd)}
+    ${field("model",modelEd)}
+    ${w.lane&&w.lane!=="main"?field("lane",esc(w.lane)):""}
+    ${notes}${promptEd}${pairRow}
   </div>`;
+}
+function wsTrigKind(sel){
+  const k=sel.value;
+  document.getElementById("ws-trig-cron").hidden=(k!=="cron");
+  document.getElementById("ws-trig-ev").hidden=(k!=="event");
+}
+function wsCronPreset(sel){ if(sel.value) document.getElementById("ws-cron-raw").value=sel.value; }
+function wsPost(enc,encName,patch,label){
+  post({action:"ws_set",repo:decodeURIComponent(enc),name:decodeURIComponent(encName),patch},label,load);
+}
+function wsToggle(enc,encName,on){ wsPost(enc,encName,{enabled:on==="true"||on===true},(on?"enabled":"disabled")); }
+function wsSaveField(enc,encName,key,val){ const p={}; p[key]=val; wsPost(enc,encName,p,key+" saved"); }
+function wsSaveScope(enc,encName){
+  const labels=(document.getElementById("ws-scope").value||"").split(",").map(x=>x.trim()).filter(Boolean);
+  wsPost(enc,encName,{scope_labels:labels},"scope saved");
+}
+function wsSaveModel(enc,encName){
+  wsPost(enc,encName,{model:document.getElementById("ws-model").value,
+                      effort:document.getElementById("ws-effort").value},"model/effort saved");
+}
+function wsSaveTrigger(enc,encName){
+  const kind=document.getElementById("ws-trig-kind").value;
+  let trigger={type:kind};
+  if(kind==="cron") trigger.schedule=(document.getElementById("ws-cron-raw").value||"").trim();
+  if(kind==="event") trigger.on=[...document.querySelectorAll("#ws-trig-ev input:checked")].map(c=>c.value);
+  wsPost(enc,encName,{trigger},"trigger saved");
+}
+function wsLoadPrompt(repo,name){
+  fetch("/api/ws-prompt?repo="+encodeURIComponent(repo)+"&name="+encodeURIComponent(name))
+    .then(r=>r.json()).then(j=>{
+      const ta=document.getElementById("ws-prompt"), pp=document.getElementById("ws-prompt-path");
+      if(!ta||!pp) return;
+      if(!j.ok){pp.textContent="could not read the rail: "+(j.error||"error");return;}
+      ta.value=j.content||"";
+      pp.textContent="file: "+j.path+(j.path.indexOf("var/")===0?" (local — yours to edit)":" (committed pack file — saving copies it to a local rail and repoints this workstream)");
+    }).catch(()=>{});
+}
+function wsSavePrompt(enc,encName){
+  const content=document.getElementById("ws-prompt").value;
+  post({action:"ws_prompt_set",repo:decodeURIComponent(enc),name:decodeURIComponent(encName),content},"prompt saved",load);
+}
+function wsAdd(enc){
+  const name=(document.getElementById("ws-new-name").value||"").trim();
+  const tpl=document.getElementById("ws-new-tpl").value;
+  if(!name){toast(false,"name the workstream");return;}
+  post({action:"ws_add",repo:decodeURIComponent(enc),name,template:tpl},"workstream added",()=>{SEL.ws=name;load();});
+}
+function repoInit(enc){
+  post({action:"repo_init",repo:decodeURIComponent(enc)},"pack scaffolded",load);
 }
 /* ---- REPOS + CONFIG (moved from the main page, #47) ---- */
 function cfgRepoCard(r,i){
@@ -692,9 +783,21 @@ function cfgRepoCard(r,i){
   const driftNote=(drift.live&&drift.differs)
     ?`<div class="cfghint">⚠ <b>live config active</b> — var/autonomy/config.yaml diverges from the committed .autonomy/config.yaml (page edits are local; commit whenever you choose)</div>`
     :"";
+  const org=r.org||{};
+  const needsPack=!org.valid&&/unreadable|not found|cannot read/i.test(org.error||"");
+  const initBtn=needsPack
+    ?`<div class="cfghint">⚠ this repo has no .autonomy pack yet — <button class="cbtn go" onclick="repoInit('${enc}')">initialize pack</button> scaffolds the config, rails, planner agent and .gitignore lines (never overwrites anything).</div>`
+    :"";
+  const addWs=org.valid
+    ?`<div class="cfgrow"><span class="cfglab">+ workstream</span>`
+      +`<input id="ws-new-name" class="cfgin" placeholder="name (e.g. pm, qa, coder-fast)">`
+      +`<select id="ws-new-tpl" class="cfgin"><option value="coder">coder — builds tickets (pair)</option><option value="pm">pm — grooms the board</option><option value="qa">qa — reviews PRs</option><option value="researcher">researcher — scans + files issues</option><option value="custom">custom — blank rail</option></select>`
+      +`<button class="cbtn go" onclick="wsAdd('${enc}')">add</button></div>`
+      +`<div class="cfghint">new workstreams land <b>disabled</b> with a starter rail — set the trigger + prompt, then enable.</div>`
+    :"";
   return `<div class="cfgrepo" data-repo="${enc}">
       <div class="cfgname">${esc(r.name||r.path)}<button class="cbtn danger" onclick="repoRemove('${enc}')">remove</button></div>
-      ${driftNote}
+      ${initBtn}${driftNote}
       ${cfgFieldOwner(enc,"board.owner","board owner",c.board_owner,r.board_owner_derived)}
       ${cfgFieldBoards(enc,i,"board.project_title","board title",c.board_title)}
       ${cfgFieldList(enc,"agent.model.primary","model",c.model)}
@@ -702,6 +805,7 @@ function cfgRepoCard(r,i){
       ${cfgSelect(enc,"agent.effort","effort",EFFORT_CHOICES.filter(e=>e),c.effort)}
       ${cfgReadonly("merge gate",c.merge_gate,"structural — edit via config.yaml + PR (#87)")}
       ${orgZone(r.org,enc)}
+      ${addWs}
     </div>`;
 }
 // board.project_title picker (#170): the title input is backed by a per-repo

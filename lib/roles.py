@@ -44,7 +44,11 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 VALID_SUBSTRATES = ("engine", "managed_agents", "routine", "actions")
-VALID_TRIGGERS = ("loop", "cron", "event")
+# `manual` (config-workstreams spec): never auto-fires -- the workstream only
+# runs on an explicit operator Run-now. Naturally inert everywhere else: the
+# loop/cron/event enumerators each filter on their OWN type, so a manual role
+# is simply never enumerated.
+VALID_TRIGGERS = ("loop", "cron", "event", "manual")
 # The v1 event vocabulary the supervisor's event bus (W2) can poll/emit. An
 # event role's `on:` tokens must be a subset -- a role listening only for unknown
 # events could never wake, so it is fail-closed at validation (not use-time).
