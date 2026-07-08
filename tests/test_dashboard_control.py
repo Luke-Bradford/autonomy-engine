@@ -212,6 +212,32 @@ class TestFindService(unittest.TestCase):
             fh.write(PLIST % "/Users/op/.myrepo-autonomy")  # references repo but wrong prefix
         self.assertIsNone(dc.find_service("/Users/op/.myrepo-autonomy", self.dir))
 
+    def test_label_echoed_outside_label_key_does_not_pass(self):
+        # Codex CP2 on #309: the filename-derived label appearing in a COMMENT
+        # (or any non-Label string) must not satisfy the check -- only the
+        # actual <key>Label</key> value counts. A substring scan would pass
+        # this; the plistlib comparison refuses.
+        text = (PLIST % "/Users/op/.myrepo-autonomy").replace(
+            "<dict>",
+            "<dict><!-- <string>com.autonomy.stale.supervisor</string> -->", 1)
+        with open(os.path.join(self.dir, "com.autonomy.stale.supervisor.plist"),
+                  "w") as fh:
+            fh.write(text)
+        svc = dc.find_service("/Users/op/.myrepo-autonomy", self.dir)
+        self.assertIn("error", svc)
+        self.assertIn("stale plist", svc["error"])
+
+    def test_unparseable_plist_refuses_not_trusts(self):
+        # content-matches --repo but is not valid plist XML: the Label cannot
+        # be verified, so refuse (fail-safe) rather than act on the filename.
+        with open(os.path.join(self.dir, "com.autonomy.myrepo.supervisor.plist"),
+                  "w") as fh:
+            fh.write("<string>--repo</string>\n"
+                     "<string>/Users/op/.myrepo-autonomy</string>\n"
+                     "not a plist <<<")
+        svc = dc.find_service("/Users/op/.myrepo-autonomy", self.dir)
+        self.assertIn("error", svc)
+
     def test_internal_label_mismatch_refuses_stale_plist(self):
         # #309: filename says .stale., internal Label says .myrepo. -- launchctl
         # stop (filename-derived label) and start (internal Label) would act on

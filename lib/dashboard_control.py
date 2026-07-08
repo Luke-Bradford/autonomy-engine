@@ -15,6 +15,7 @@ LaunchAgents. Lifecycle only -- this module has no notion of any target-repo
 trade/order/position path and can never touch one.
 """
 import os
+import plistlib
 import re
 
 VALID_ACTIONS = ("pause", "resume", "stop", "start")
@@ -235,15 +236,23 @@ def find_service(repo, launch_agents_dir):
             continue
         if "--repo" in text and needle in text:
             label = name[:-len(".plist")]
-            # Same technique as find_lane_service: the text before
-            # ProgramArguments holds exactly one <string> in our template --
-            # the Label value; a full plist parser is not warranted.
-            if ("<string>%s</string>" % label
-                    not in text.split("ProgramArguments")[0]):
+            if _plist_label(text) != label:
                 return {"error": "plist %s internal Label does not match its "
                                  "filename -- refusing (stale plist?)" % name}
             return {"label": label, "plist": path}
     return None
+
+
+def _plist_label(text):
+    """The plist's internal <key>Label</key> value, exactly (plistlib, not a
+    substring scan -- a label echoed in a comment must not pass as the Label).
+    Unparseable / Label-less -> None, which never equals a real label, so
+    callers refuse (fail-safe)."""
+    try:
+        value = plistlib.loads(text.encode("utf-8", "replace")).get("Label")
+    except Exception:
+        return None
+    return value if isinstance(value, str) else None
 
 
 # Lane names share the supervisor's validate_lane shape (bin/supervisor.sh):
@@ -322,10 +331,7 @@ def find_lane_service(repo, lane, launch_agents_dir, default_lane=None):
     if args.get("lane") != want_lane or not args.get("repo"):
         return {"error": "plist for lane '%s' does not match (lane=%r) -- "
                          "refusing" % (lane, args.get("lane"))}
-    # Label check scopes to the text before ProgramArguments -- the
-    # <key>Label</key> value is the only <string> there in our template; a
-    # full plist parser is not warranted for our own rendered file.
-    if "<string>%s</string>" % label not in text.split("ProgramArguments")[0]:
+    if _plist_label(text) != label:
         return {"error": "plist Label does not match its filename for lane "
                          "'%s' -- refusing (stale plist?)" % lane}
     return {"label": label, "plist": plist, "repo": args["repo"]}
