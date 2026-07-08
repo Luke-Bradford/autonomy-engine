@@ -142,6 +142,22 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .ptrack .pseg.empty{color:var(--dim);opacity:.45;border-color:transparent}
 .ptrack .pseg.done.vred{color:var(--bad);border-color:var(--bad)}
 .ptrack .psep{color:var(--dim);font-size:9px}
+/* #190 UI-7 compare tiles: pin 2+ lanes -> the center tiles. Pin toggle lives
+   in the lane select targets; the grid reuses the .ptrack track styles. */
+.pinbtn{background:none;border:0;color:var(--dim);cursor:pointer;font-size:11px;padding:0 3px;line-height:1;opacity:.55}
+.pinbtn:hover{opacity:1}
+.pinbtn.on{color:var(--accent);opacity:1}
+.tilegrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
+.tile{border:1px solid var(--hair);border-radius:var(--r);padding:9px 11px;cursor:pointer;min-width:0;background:var(--panel)}
+.tile:hover{border-color:var(--accent)}
+.tile .th{display:flex;gap:7px;align-items:baseline;min-width:0}
+.tile .th .nm{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .trole{font-family:var(--mono);font-size:10.5px;color:var(--dim);white-space:nowrap}
+.tile .ptrack{margin:7px 0 0}
+.tile .tmeta{display:flex;gap:10px;flex-wrap:wrap;color:var(--dim);font-size:11px;margin-top:5px}
+.tile .tnow{color:var(--mut);font-size:11px;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .tgate{font-size:11px;color:var(--warn);margin-top:4px}
+.tile .tpace{color:var(--warn)}
 .ctl{display:flex;gap:7px;margin-top:12px;padding-top:11px;border-top:1px solid var(--hair)}
 .cbtn{font-family:var(--mono);font-size:10px;letter-spacing:.6px;text-transform:uppercase;padding:6px 11px;border-radius:5px;
   border:1px solid var(--hair2);background:transparent;color:var(--mut);cursor:pointer;transition:.12s}
@@ -539,7 +555,13 @@ function histRow(s){
 const _sig={};
 // shared so callers that mutate a panel OUTSIDE setHTML (renderFocus's held-node
 // partial replaceWith) can re-sync _sig against the SAME normalization.
-const _volRe=/(<(span|b)\b[^>]*\b(?:qreset|agox|upe)\b[^>]*>)[^<]*(<\/\2>)/g;
+// #190: `pacex` joins the alternation -- the compare tiles' live pace ratio
+// drifts every second; outside this normalization it would defeat the skip
+// guard and rebuild the grid on every tick. The 1s ticker owns its motion
+// (data-e/data-med -> ×ratio), the same contract as .upe/.agox/.qreset:
+// normalized out of the signature AND ticked, so it neither churns the panel
+// nor freezes between rebuilds (CP2 2026-07-08).
+const _volRe=/(<(span|b)\b[^>]*\b(?:qreset|agox|upe|pacex)\b[^>]*>)[^<]*(<\/\2>)/g;
 function _sigKey(html){return html.replace(_volRe,"$1$3");}
 function setHTML(id,html){
   const el=$(id); if(!el) return false;
@@ -599,6 +621,105 @@ function refreshLaneHist(){
 // stale DOM after LAST changes / a repo is removed / the selection self-heals.
 document.addEventListener("click",e=>{if(!e.target.closest("#pop"))closeLaneHist();});
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeLaneHist();});
+/* ---- #190 UI-7 COMPARE TILES ---- */
+// #187/#190: the phase-track markup, shared by the single focus card and the
+// compare tiles -- ONE honest renderer (SD-32), never two drifting copies.
+// `done` = an observed fact, `current` = the single live frontier gate,
+// `outline` = configured but not yet reached, `empty` = no evidence (faded);
+// #312: tests carries an observed red/green verdict (a red run IS an observed
+// fact -- state stays `done`, the vred class carries color). review steps
+// carry the reviewer glyph, mirroring the fleet-rail gchain. A malformed
+// (non-array) track degrades to no track, never a map throw.
+function renderPtrack(trk){
+  if(!Array.isArray(trk)||!trk.length) return "";
+  const segs=trk.map(s=>{
+    const lbl=s.step==="review"?(s.actor==="bot"?"🤖 review":"👤 review")
+             :s.step==="tests"&&s.verdict?(s.verdict==="green"?"tests ✓":"tests ✗")
+             :s.step;
+    const tip=s.state==="done"?"observed — done":s.state==="current"?"in progress now":s.state==="empty"?"no evidence — not observed":"configured — not yet reached";
+    const vcls=s.verdict==="red"?" vred":"";
+    return `<span class="pseg ${esc(s.state)}${vcls}" title="${esc(tip)}">${esc(lbl)}</span>`;
+  }).join(`<span class="psep">→</span>`);
+  return `<div class="ptrack" title="phase track — observed milestones (solid) + configured gates (outline); display only, safe_merge is the enforcer">${segs}</div>`;
+}
+// pace vs role median -- EARNED only (the #187 acceptance test applied to
+// pace): needs a live elapsed AND >=3 completed same-role session durations
+// to call a median honest; anything less renders nothing. Sessions are
+// repo-scoped (they carry no lane field), so the median is the ROLE's across
+// the repo -- the same scope the history popover presents.
+function paceFlag(r,role,startedEpoch){
+  if(!startedEpoch)return "";
+  // s&& guard: one torn/null session row skips itself, never throws the tile
+  // render (prevention-log #12 applied client-side).
+  const ds=((r&&r.sessions)||[]).filter(s=>s&&s.role===role&&s.duration>0&&s.outcome&&s.outcome!=="running").map(s=>s.duration).sort((a,b)=>a-b);
+  if(ds.length<3)return "";                       // >=3 samples or silence
+  const med=ds.length%2?ds[(ds.length-1)/2]:(ds[ds.length/2-1]+ds[ds.length/2])/2;
+  if(!med)return "";
+  const x=(nowS()-startedEpoch)/med;
+  if(x<1.25)return "";                            // on pace -> no flag
+  // the LIVE ratio sits in .pacex (inside _volRe's normalization -- a drifting
+  // ratio outside the volatile classes would defeat the #248 skip-guard and
+  // rebuild the grid every tick) and carries data-e/data-med so the 1s ticker
+  // keeps it moving between rebuilds -- a signature-skipped render must never
+  // freeze a live number (CP2 2026-07-08). Title carries only STATIC facts.
+  return `<span class="tpace" title="this session is running past this role's median duration (${dur(Math.round(med))}, ${ds.length} sessions)">pace <b class="pacex" data-e="${startedEpoch}" data-med="${Math.round(med)}">×${x.toFixed(1)}</b></span>`;
+}
+// one compare tile. Repo-scoped session truth under a lane-named header --
+// the SAME presentation contract as the shipped single-lane focus card for a
+// selected sibling lane (#258/#310): lane status from service truth when the
+// lane has its own installed service, else the repo's display status. Never
+// a live feed (state-not-streams): the now-line is one line.
+function tileCard(r,lane,key){
+  const laneNames=(r.lanes&&Array.isArray(r.lanes.names))?r.lanes.names:[];
+  const svc=r.lanes&&r.lanes.services&&r.lanes.services[lane];
+  // a malformed svc.status must not leak `s-undefined` markup -- string-typed
+  // non-empty or fall back to the repo's display status (the shipped card's
+  // exact fallback, not a new truth claim).
+  const sibSt=(laneNames.length>1&&svc&&svc.installed&&!svc.own&&typeof svc.status==="string"&&svc.status)?svc.status:null;
+  // CP2 (2026-07-08): a SIBLING lane's tile must not dress its service status
+  // with the repo-level session/ticket/track -- those artifacts belong to the
+  // repo's active lane, so a sibling tile showing them would claim another
+  // lane's work as its own (#234 display lie). Reduced tile: service truth +
+  // an explicit no-data note, nothing borrowed.
+  if(sibSt){
+    return `<div class="tile" data-lane-key="${encodeURIComponent(key)}" onclick="drillTo(event,this)" title="click to focus this lane">
+      <div class="th">${token(sibSt,true)}<span class="nm">${esc(dispName(r.name))} / ${esc(lane)}</span></div>
+      <div class="tnow">no lane-scoped session data — sessions/tickets are recorded per repo</div></div>`;
+  }
+  const st=dispStatus(r);
+  const cs=r.current_session||{}, ft=(r.git||{}).focus_ticket;
+  const busy=st==="working"||st==="stopping"||st==="wedged";
+  const nm=laneNames.length>1?`${dispName(r.name)} / ${lane}`:dispName(r.name);
+  // absent datum omitted, never "#undefined"
+  const tno=(ft&&ft.number!=null)?`<span class="no">#${esc(String(ft.number))}</span>`:"";
+  // phase track: the SHARED renderPtrack helper (one renderer, so tiles get
+  // the #312 tests-verdict/empty semantics too); a malformed (non-array)
+  // track degrades to no track, never a map/find throw.
+  const trk=(ft&&Array.isArray(ft.track))?ft.track:[];
+  const track=renderPtrack(trk);
+  // which gate blocks = the track's single live frontier (state "current");
+  // no frontier observed -> no claim.
+  const cur=trk.find(s=>s.state==="current");
+  const gate=cur?`<div class="tgate">awaiting ${esc(cur.step==="review"?(cur.actor==="bot"?"bot review":"human review"):cur.step)}</div>`:"";
+  // now-line (one line, never a feed): busy step / lifecycle word / heartbeat
+  // wait reason -- the focus card's stepLine ladder, condensed.
+  let now="";
+  if(busy&&cs.current_step)now=`→ ${esc(short(cs.current_step,52))}`;
+  else if(st==="paused")now="paused";
+  else if(st==="stopping")now="⏸ pause pending";
+  else if(st==="stopped")now="supervisor stopped";
+  else if(r.heartbeat&&r.heartbeat.reason)now=esc(r.heartbeat.reason);
+  else now="idle";
+  const elapsed=busy&&cs.started_epoch?`<span>elapsed <b class="upe mono" data-e="${cs.started_epoch}">${dur(nowS()-cs.started_epoch)}</b></span>`:"";
+  const toks=cs.output_tokens!=null?`<span><b class="mono">${compact(cs.output_tokens)}</b> tok</span>`:"";
+  const cost=cs.cost_usd?`<span><b class="mono">$${cs.cost_usd.toFixed(2)}</b></span>`:"";
+  const pace=paceFlag(r,cs.role||"coder",busy?cs.started_epoch:null);
+  const lastAct=cs.updated_at?`<span>active <b class="agox mono" data-t="${cs.updated_at}">${ago(nowS()-cs.updated_at)} ago</b></span>`:"";
+  return `<div class="tile" data-lane-key="${encodeURIComponent(key)}" onclick="drillTo(event,this)" title="click to focus this lane">
+    <div class="th">${token(st,true)}<span class="nm">${esc(nm)}</span><span class="trole">${esc(cs.role||"coder")}</span>${tno}</div>
+    ${track}${gate}<div class="tnow">${now}</div>
+    <div class="tmeta">${elapsed}${toks}${cost}${pace}${lastAct}</div></div>`;
+}
 function renderFocus(repos){
   // #151 item 4: a fresh install has no registered repos -> the focus band would
   // render blank. Narrate the empty state with the path forward (config page)
@@ -610,6 +731,20 @@ function renderFocus(repos){
   // #258 slice 2b: the empty state precedes selection (selectedLane needs a repo)
   // -- clear the header count too so a stale "N live" never lingers behind it.
   if(!repos.length){$("c-now").textContent="";setHTML("focus",`<div class="empty">No repositories yet — <a class="navlink" href="/config">add one on the config page →</a></div>`);return;}
+  // #190 UI-7: >=2 valid pins -> the center is the compare-tile grid; <2
+  // falls through to the single selected-lane card unchanged. Routed through
+  // setHTML so the #248 guard owns this write path too; the tiles' volatile
+  // cells reuse upe/agox/pacex (all in _sigKey's normalization), so a pure
+  // time tick never rebuilds the grid.
+  const pins=validPins(repos);
+  if(pins.length>=2){
+    $("c-now").textContent=`compare · ${pins.length} lanes`;
+    const tiles=pins.map(k=>{const i=k.indexOf(_LSEP);
+      const r=repos.find(x=>x.path===k.slice(0,i));
+      return tileCard(r,k.slice(i+1),k);}).join("");
+    setHTML("focus",`<div class="tilegrid">${tiles}</div>`);
+    return;
+  }
   // #258 slice 2b: the center focus band is the SELECTED lane's single card, not
   // the per-repo NOW-card grid. selectedLane() self-heals a stale/absent key to
   // the fleet default (greatest lanes.active_at -> its active lane), so the card
@@ -647,26 +782,9 @@ function renderFocus(repos){
       // redundant.
       ticket=`<div class="ticketline"><span class="no${ft.source?" src":""}"${ft.source?` title="picked: ${esc(ft.source)}"`:""}>#${ft.number}</span><span class="ttl">${safeHref(ft.url)?`<a href="${esc(safeHref(ft.url))}" target="_blank">${esc(short(ft.title||"ticket",64))}</a>`:esc(short(ft.title||"ticket",64))}</span>${right}</div>`;
       // #187 UI-4 phase track: observed milestones (SOLID) + configured gate
-      // chain (OUTLINE), server-derived by ds.phase_track. `done` = an observed
-      // fact, `current` = the single live frontier gate, `outline` = configured
-      // but not yet reached -- the three are visually distinct so the track
-      // never implies certainty it lacks (the spec's acceptance test). review
-      // steps carry the reviewer glyph, mirroring the fleet-rail gchain.
-      const trk=ft.track||[];
-      if(trk.length){
-        const segs=trk.map(s=>{
-          // #312: tests carries an observed red/green verdict (a red run IS an
-          // observed fact -- state stays `done`, the vred class carries color);
-          // `empty` = no evidence for a milestone, rendered faded.
-          const lbl=s.step==="review"?(s.actor==="bot"?"🤖 review":"👤 review")
-                   :s.step==="tests"&&s.verdict?(s.verdict==="green"?"tests ✓":"tests ✗")
-                   :s.step;
-          const tip=s.state==="done"?"observed — done":s.state==="current"?"in progress now":s.state==="empty"?"no evidence — not observed":"configured — not yet reached";
-          const vcls=s.verdict==="red"?" vred":"";
-          return `<span class="pseg ${esc(s.state)}${vcls}" title="${esc(tip)}">${esc(lbl)}</span>`;
-        }).join(`<span class="psep">→</span>`);
-        ticket+=`<div class="ptrack" title="phase track — observed milestones (solid) + configured gates (outline); display only, safe_merge is the enforcer">${segs}</div>`;
-      }
+      // chain (OUTLINE), server-derived by ds.phase_track and drawn by the
+      // shared renderPtrack (one honest renderer for card + compare tiles).
+      ticket+=renderPtrack(ft.track);
     }
     let stepLine;
     if(st==="paused") stepLine=`<div class="fc-step">paused — idle · resume to continue</div>`;
@@ -948,6 +1066,50 @@ function selectedRepoOf(repos){
 // picks a different lane, re-fill it with the newly selected repo's sessions
 // (else it shows the prior repo's history until the next SSE tick -- stale DOM).
 function selectLane(key){SELECTED=key; if(LAST){renderRepos(LAST.repos);renderFocus(LAST.repos);renderActivity(LAST.repos);refreshLaneHist();}}
+// #190 UI-7: the compare set -- client-only, ephemeral (a view state that
+// resets on reload; "state-not-streams" -- nothing persisted server-side).
+// Same laneKey contract as SELECTED. >=2 valid pins flips the center from the
+// single selected-lane card to the compare-tile grid.
+const PINNED=new Set();
+// prune pins whose repo/lane vanished from the live payload -- the same
+// self-heal contract as selectedLane, so the grid can never tile a ghost.
+function validPins(repos){
+  repos=repos||[];
+  const ok=k=>{const i=k.indexOf(_LSEP); if(i<0) return false;
+    const r=repos.find(x=>x.path===k.slice(0,i)); if(!r) return false;
+    const names=(r.lanes&&Array.isArray(r.lanes.names))?r.lanes.names:["main"];
+    return names.indexOf(k.slice(i+1))>=0;};
+  [...PINNED].forEach(k=>{if(!ok(k))PINNED.delete(k);});
+  return [...PINNED];
+}
+// the key rides the SAME data-lane-key attribute the delegated select
+// listener reads (single encodeURIComponent write, single decodeURIComponent
+// read -- one encoding contract, no inline-arg re-encode to get wrong).
+function togglePin(btn){
+  const h=btn&&btn.closest&&btn.closest("[data-lane-key]");
+  if(!h)return;                    // no carrier -> no-op, never a throw
+  const k=decodeURIComponent(h.getAttribute("data-lane-key"));
+  if(PINNED.has(k))PINNED.delete(k);else PINNED.add(k);
+  btn.blur();                      // click-and-done: never a held node (prevention-log #16)
+  if(LAST){renderRepos(LAST.repos);renderFocus(LAST.repos);}
+}
+// tile click -> drill back to the single view. Guards interactive descendants
+// so a future button/link inside a tile can never drill through. The tile
+// carries its own data-lane-key (#focus has no delegated select listener, so
+// the attribute can't double-trigger).
+function drillTo(ev,el){
+  if(ev&&ev.target&&ev.target.closest&&ev.target.closest("button,a,select,input"))return;
+  const k=el&&el.getAttribute&&el.getAttribute("data-lane-key");
+  if(!k)return;
+  PINNED.clear();selectLane(decodeURIComponent(k));
+}
+// the pin toggle rendered inside a lane select target (repo-h / lgrp-h) --
+// every call site is inside the data-lane-key carrier togglePin reads. A
+// real <button> so the delegated #repos select listener ignores its clicks.
+function pinBtn(lk){
+  const on=PINNED.has(lk);
+  return `<button class="pinbtn${on?" on":""}" title="${on?"unpin from compare":"pin to compare — 2+ pinned lanes tile the center"}" onclick="togglePin(this)">📌</button>`;
+}
 function renderRepos(repos){
   $("h-repos").textContent=repos.length;
   const selKey=selectedLane(repos);
@@ -1042,7 +1204,7 @@ function renderRepos(repos){
         const lcl=svc ? (svc.installed ? lifecycleCluster(r, svc.own?st:svc.status, svc.own?"":ln)
                                        : `<span class="lnosvc" title="no launchd service installed for this lane — run setup_worktree.sh <target-repo> --lane ${esc(ln)}">·</span>`)
                       : "";
-        return `<div class="lgrp"><div class="lgrp-h lsel${selClass(lk)}" data-lane-key="${encodeURIComponent(lk)}" title="lane (worktree + role subset)${ln===lanes.default?' — the default lane':''} · click to focus this lane">${esc(ln)}${def}${lcl}</div>${inLane.map(x=>x.html).join("")}</div>`;
+        return `<div class="lgrp"><div class="lgrp-h lsel${selClass(lk)}" data-lane-key="${encodeURIComponent(lk)}" title="lane (worktree + role subset)${ln===lanes.default?' — the default lane':''} · click to focus this lane">${esc(ln)}${def}${pinBtn(lk)}${lcl}</div>${inLane.map(x=>x.html).join("")}</div>`;
       }).join("");
       const orphan=roleEls.filter(x=>laneNames.indexOf(x.lane)<0);
       if(orphan.length) roles += orphan.map(x=>x.html).join("");
@@ -1076,7 +1238,7 @@ function renderRepos(repos){
       : `<div class="repo-h lsel${selClass(skey)}" data-lane-key="${encodeURIComponent(skey)}" title="click to focus this lane in the center">`;
     const ghost=`<a class="role ghost" href="/config" title="add a role${ghostRoles.length?` — available: ${esc(ghostRoles.map(x=>x.name).join(", "))}`:""}">＋ role</a>`;
     return `<div class="repo">
-      ${repoHOpen}<span class="nm">${esc(dispName(r.name))}</span>${laneWarn}${boardWarn}
+      ${repoHOpen}<span class="nm">${esc(dispName(r.name))}</span>${multiLane?"":pinBtn(skey)}${laneWarn}${boardWarn}
         <span class="badge">${token(st,true)}</span>${lifecycleCluster(r,st)}</div>
       <div class="cfg">${esc(cfg.model||"—")} · gate ${esc(cfg.merge_gate||"—")}${(r.lifecycle||{}).pid?" · pid "+r.lifecycle.pid:""}</div>
       ${gateChain}${roles}${ghost}</div>`;
@@ -1423,6 +1585,10 @@ setInterval(()=>{
   // untouched.
   document.querySelectorAll(".agox").forEach(el=>{const a=nowS()-(+el.dataset.t);el.textContent=el.dataset.g==="m"?agom(a):ago(a)+" ago";});
   document.querySelectorAll(".qreset").forEach(el=>{const s=(+el.dataset.e)-Math.floor(nowS());el.textContent=s>0?(el.dataset.g==="m"?durm(s):dur(s)):"now";});
+  // #190 pace ratio: normalized out of the #focus signature (no churn), so the
+  // ticker owns its motion -- otherwise the earned ×N.N would freeze at its
+  // first render until an unrelated state change rebuilt the tile (CP2).
+  document.querySelectorAll(".pacex").forEach(el=>{const m=+el.dataset.med;if(m>0)el.textContent="×"+((nowS()-(+el.dataset.e))/m).toFixed(1);});
 },1000);
 
 /* ---- render + SSE ---- */

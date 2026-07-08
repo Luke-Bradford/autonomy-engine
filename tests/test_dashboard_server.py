@@ -210,6 +210,93 @@ class TestControlRoomShell(unittest.TestCase):
         self.assertNotIn(b'class="fc-ticket"', html)
 
 
+class TestCompareTiles(unittest.TestCase):
+    """#190 UI-7: pin 2+ lanes -> the center renders a compare-tile grid.
+    Structural build-time guards on the page source; runtime behaviour
+    (pin toggle, grid swap, drill-back, signature-guard stability) is the
+    dashboard browser verify loop. Marker-based on purpose -- no byte-window
+    slicing (a fixed html[i:j] breaks on innocent growth)."""
+
+    def _page(self):
+        return dashboard._page_bytes(dashboard.PAGE)
+
+    def test_pin_primitive_present(self):
+        # client-only pin state (ephemeral Set, laneKey contract) + toggle.
+        html = self._page()
+        self.assertIn(b"PINNED", html)
+        self.assertIn(b"function togglePin(", html)
+        # the pin key travels in the onclick arg (encAttr -> decodeURIComponent,
+        # the shipped ibtn/control round-trip) -- no dead data-* duplicate.
+        self.assertIn(b"onclick=\"togglePin(", html)
+        self.assertIn(b"pinbtn", html)
+
+    def test_tile_grid_render_path(self):
+        # renderFocus branches to the tile grid; tiles reuse the shipped
+        # phase-track markup (.ptrack/.pseg) rather than a new track renderer;
+        # vanished repos/lanes are pruned (validPins) and a tile click drills
+        # back to the single view (drillTo).
+        html = self._page()
+        self.assertIn(b"function tileCard(", html)
+        self.assertIn(b"tilegrid", html)
+        self.assertIn(b"function validPins(", html)
+        self.assertIn(b"function drillTo(", html)
+
+    def test_pace_flag_is_earned(self):
+        # pace flag only from >=3 completed same-role durations (median) --
+        # the "never imply certainty" acceptance test applied to pace.
+        html = self._page()
+        self.assertIn(b"function paceFlag(", html)
+        self.assertIn(b"ds.length<3", html)
+
+    def test_tile_css_defined(self):
+        html = self._page()
+        self.assertIn(b".tilegrid", html)
+        self.assertIn(b".tile", html)
+        self.assertIn(b".pinbtn", html)
+
+    def test_pace_ratio_in_volatile_normalization(self):
+        # the live pace ratio drifts every second; it must sit inside the
+        # shared _volRe normalization or the grid rebuilds on every tick
+        # (prevention-log #13/#14 class; Codex CP1 finding).
+        html = self._page()
+        self.assertIn(b"qreset|agox|upe|pacex", html)
+        self.assertIn(b'class="pacex"', html)
+
+    def test_tile_degrades_malformed_track_and_ticket(self):
+        # source-level guards: non-array track -> no track (never a map/find
+        # throw); absent ticket number -> omitted, never "#undefined".
+        html = self._page()
+        self.assertIn(b"Array.isArray(ft.track)", html)
+        self.assertIn(b"ft.number!=null", html)
+
+    def test_ptrack_render_is_shared_helper(self):
+        # ONE honest track renderer (SD-32): the focus card and the compare
+        # tiles both draw via renderPtrack, so the tiles inherit the #312
+        # tests-verdict/empty semantics and the two can never drift. The
+        # ptrack container template exists exactly once in the page source.
+        html = self._page()
+        self.assertIn(b"function renderPtrack(", html)
+        self.assertEqual(html.count(b'class="ptrack"'), 1)
+        # the helper itself guards a malformed track (total render).
+        self.assertIn(b"if(!Array.isArray(trk)||!trk.length)", html)
+
+    def test_sibling_lane_tile_is_reduced(self):
+        # CP2: a sibling lane's tile must not borrow the repo-level session /
+        # ticket / track (they belong to the active lane) -- it renders the
+        # service truth + an explicit no-data note and returns early.
+        html = self._page()
+        self.assertIn(b"if(sibSt){", html)
+        self.assertIn(b"no lane-scoped session data", html)
+
+    def test_pace_ratio_is_ticked_not_frozen(self):
+        # CP2: pacex is normalized OUT of the #focus signature, so the 1s
+        # ticker must own its motion (data-e/data-med) -- otherwise the earned
+        # ratio freezes at first render until an unrelated rebuild.
+        html = self._page()
+        self.assertIn(b'querySelectorAll(".pacex")', html)
+        self.assertIn(b'data-med=', html)
+
+
 class TestRosterCountdownStability(unittest.TestCase):
     """#238 (p1 regression): seconds-granularity countdowns embedded in the roster
     markup defeated the #164 skip-unchanged compare -- the string differed every
@@ -1094,12 +1181,19 @@ class TestCenterCleanupSlice4(unittest.TestCase):
         return dashboard._page_bytes(dashboard.PAGE)
 
     def test_dead_now_card_grid_retired(self):
-        # the multi-card auto-fill grid was the ONLY auto-fill in the page; its
-        # removal means the single lane card is no longer capped to one 360px
-        # track with dead space (mockup = full-width lane detail).
+        # the dead pre-2b grid lived on the .focus rule itself (auto-fill /
+        # 360px tracks capping the lone card). #190's compare tiles later
+        # reintroduced a LEGITIMATE auto-fill grid -- but on a .tilegrid CHILD
+        # rendered only when 2+ lanes are pinned (spec: "OR compare tiles when
+        # 2+ lanes pinned"), never on .focus. So the guard pins the .focus
+        # rule specifically, not a page-wide auto-fill ban.
         html = self._page()
-        self.assertNotIn(b"auto-fill", html,
+        m = re.search(rb"\.focus\{[^}]*\}", html)
+        self.assertIsNotNone(m, ".focus rule not found")
+        self.assertNotIn(b"auto-fill", m.group(0),
                          "dead pre-2b multi-card .focus grid (auto-fill) still present")
+        self.assertNotIn(b"360px", m.group(0),
+                         "dead pre-2b 360px track cap still on .focus")
 
     def test_focus_is_a_plain_block_container(self):
         # CP2: assert the exact replacement rule, not merely the absence of
