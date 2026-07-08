@@ -1272,7 +1272,7 @@ def build_org(repo_path):
     except OSError as exc:
         error = "config.yaml unreadable: %s" % exc
     except Exception as exc:   # parser error -- surfaced, never a blank card
-        error = "config.yaml parse error: %s" % (exc or exc.__class__.__name__)
+        error = "config.yaml parse error: %s" % (str(exc) or exc.__class__.__name__)
     if not error:
         errors = roles_schema.validate_roles(config)
         if errors:

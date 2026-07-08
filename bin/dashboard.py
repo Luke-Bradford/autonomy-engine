@@ -909,7 +909,7 @@ def config_read_model():
             org = ds.build_org(repo)
         except Exception as exc:
             org = {"valid": False,
-                   "error": "org read failed: %s" % (exc or exc.__class__.__name__),
+                   "error": "org read failed: %s" % (str(exc) or exc.__class__.__name__),
                    "pair": {"planner": {"scaffolded": False, "model": ""},
                             "coder": {"model": "", "fallback": "", "effort": ""}},
                    "roles": []}
