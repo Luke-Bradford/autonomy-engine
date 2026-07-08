@@ -320,6 +320,26 @@ Same class as invariant "fail-safe never fail-open": absence of evidence is not
 evidence of health. Regression: `tests/test_start.sh` drives blank-probe and
 unrecognised-state through the branch and asserts the WARN (no bare OK) fires.
 
+## 20. GitHub's closing grammar is itself negation- and quote-blind — a PR body that QUOTES "close #N" closes #N at merge, engine or no engine
+
+*Origin: PR #324 (the #301 fix), 2026-07-08 — the fix's own body quoted
+"does NOT close #90" while documenting the incident; GitHub's
+`closingIssuesReferences` listed [90,286,301] and the merge closed #90 for
+the third time.* The #301 premise "GitHub's own auto-close semantics are
+stricter (negations don't count)" is empirically FALSE: `close #90` inside a
+negated, quoted sentence is linked server-side. Moving done-everywhere onto
+`closingIssuesReferences` (#324) is still right — the engine can no longer
+OUT-close GitHub — but it cannot be MORE careful than GitHub either, because
+GitHub itself closes linked refs natively at merge. **Rule: the "never write
+closing-keyword+#N for an issue that must stay open" authoring rule is
+permanent and applies to every PR body on GitHub, not a workaround for our
+old regex. Check `gh pr view <n> --json closingIssuesReferences` BEFORE
+merging any PR whose body discusses issues it must not close — that field is
+exactly what the merge will close.** Same class as prevention-log #13's
+"verify the premise": an issue's claim about third-party behaviour
+("GitHub is stricter") deserves an empirical check before code is built on
+it — one `gh api` probe would have caught this at spec time.
+
 ## 19. Local shellcheck ≠ CI shellcheck — a locally-clean push can still fail the lint gate
 
 *Origin: 2026-07-05, PR #296 (#294 self-re-exec).* `shellcheck -S warning`
