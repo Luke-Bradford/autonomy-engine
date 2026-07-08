@@ -261,7 +261,31 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
 @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .rise{animation:rise .45s cubic-bezier(.2,.7,.2,1) both}
 /* ---- config page (#51-B) ---- */
-.cfgwrap{max-width:900px;margin:0 auto}
+/* Slice 2 (#326/#191): 3-zone grid -- tree | canvas | machine rail. */
+.cfg3{display:grid;grid-template-columns:270px minmax(0,1fr) 340px;gap:24px;align-items:start;margin-top:8px}
+@media(max-width:1180px){.cfg3{grid-template-columns:1fr}}
+/* workstream tree */
+.wsrepo{border-bottom:1px solid var(--hair);padding:8px 10px}
+.wsrepo:last-child{border-bottom:0}
+.wsrepo-h{display:flex;align-items:center;gap:8px;padding:3px 4px;border-radius:4px;cursor:pointer;font-weight:600;font-size:12.5px}
+.wsrepo-h:hover{background:var(--panel2)}
+.wsrepo-h.sel{background:var(--accent-soft)}
+.wsdrift{margin-left:auto;font-family:var(--mono);font-size:8.5px;letter-spacing:.6px;text-transform:uppercase;color:var(--warn);border:1px solid var(--warn);border-radius:3px;padding:0 4px}
+.wsrow{display:flex;align-items:center;gap:7px;padding:3px 4px 3px 14px;border-radius:4px;cursor:pointer;font-size:12px}
+.wsrow:hover{background:var(--panel2)}
+.wsrow.sel{background:var(--accent-soft)}
+.wsdot{width:7px;height:7px;border-radius:50%;background:var(--dim);flex:none}
+.wsdot.on{background:var(--ok);box-shadow:0 0 6px var(--ok-glow)}
+.wsdot.na{background:transparent;border:1px solid var(--hair2)}
+.wsname{font-weight:500}
+.wstrig{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px}
+.wsbad{font-family:var(--mono);font-size:9px;color:var(--bad);padding:2px 4px 2px 14px}
+/* workstream detail card */
+.wsfield{display:flex;gap:10px;padding:6px 0;border-bottom:1px solid var(--hair);font-size:12.5px;align-items:baseline}
+.wsfield:last-child{border-bottom:0}
+.wsfield .k{font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--dim);min-width:96px}
+.wsfield .v{font-family:var(--mono);font-size:11.5px}
+.wschip{display:inline-block;border:1px solid var(--hair2);border-radius:10px;padding:0 8px;font-family:var(--mono);font-size:10px;color:var(--mut);margin-right:4px}
 .credadd{display:grid;grid-template-columns:1fr 140px 1fr auto;gap:8px;padding:10px;border-bottom:1px solid var(--hair);align-items:center}
 .credrow{display:flex;align-items:center;gap:10px;padding:9px 10px;border-bottom:1px solid var(--hair)}
 .credrow:last-child{border-bottom:none}
@@ -273,7 +297,7 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
 </style>
 </head>
 <body>
-<div class="wrap cfgwrap">
+<div class="wrap">
   <header>
     <div class="brand"><span class="mk"><i></i></span>Autonomy <small>config</small></div>
     <span class="ro">settings</span>
@@ -284,16 +308,31 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
     </div>
   </header>
 
-  <div class="sh"><h2>Accounts</h2><span class="ln"></span><span class="ct">named auth instances · subscription or API</span></div>
-  <div class="panel" id="accts"></div>
-  <div class="hint">An account is a named instance an agent calls from — your Claude or Codex subscription (no key needed), or an API key. API accounts link to a credential below.</div>
+  <!-- Slice 2 (#326/#191): 3-zone layout. Left = repo -> workstream tree
+       (nav). Center = the selected thing's canvas. Right = machine-level
+       plumbing (accounts, credentials). -->
+  <div class="cfg3">
+    <aside>
+      <div class="sh"><h2>Workstreams</h2><span class="ln"></span></div>
+      <div class="panel" id="wstree"></div>
+      <div class="hint">Repo → its pinned workstreams. Select one to inspect it; add/edit lands with the authoring slice (#326).</div>
+    </aside>
 
-  <div class="sh"><h2>Credentials</h2><span class="ln"></span><span class="ct">API keys · macOS Keychain · never leaves this machine</span></div>
-  <div class="panel" id="creds"></div>
-  <div class="hint">Subscriptions (your Claude / Codex logins) are the default and need nothing here. API keys are optional — add one only if a role should run on API credit instead. Secrets are stored in your macOS Keychain, never in a file, never shown again after saving. On your first save macOS asks to allow Keychain access — choose <b>Always Allow</b> so later saves don't prompt.</div>
+    <main>
+      <div class="sh"><h2 id="canvas-title">Overview</h2><span class="ln"></span><span class="ct" id="canvas-sub"></span></div>
+      <div class="panel" id="canvas"></div>
+    </main>
 
-  <div class="sh" style="margin-top:20px"><h2>Repos &amp; config</h2><span class="ln"></span><span class="ct">registry · merge gate (read-only, config.yaml + PR) · local override under var/ (model/effort/board)</span></div>
-  <div class="panel" id="cfg"></div>
+    <aside>
+      <div class="sh"><h2>Accounts</h2><span class="ln"></span><span class="ct">subscription or API</span></div>
+      <div class="panel" id="accts"></div>
+      <div class="hint">An account is a named instance an agent calls from — your Claude or Codex subscription (no key needed), or an API key linked to a credential below.</div>
+
+      <div class="sh" style="margin-top:20px"><h2>Credentials</h2><span class="ln"></span><span class="ct">macOS Keychain</span></div>
+      <div class="panel" id="creds"></div>
+      <div class="hint">Subscriptions are the default and need nothing here. API keys are optional. Secrets live in the macOS Keychain, never in a file, never shown again — choose <b>Always Allow</b> on the first Keychain prompt.</div>
+    </aside>
+  </div>
 </div>
 <div id="toast"></div>
 
@@ -386,7 +425,21 @@ function post(body,okLabel,then){
     .then(({ok,j})=>{toast(ok&&j.ok,(ok&&j.ok)?(j.message||okLabel):("failed: "+(j.error||"error")));if(ok&&j.ok&&then)then();})
     .catch(()=>toast(false,"request failed"));
 }
-function load(){fetch("/api/config").then(r=>r.json()).then(m=>{MODEL=m;renderAccts(m);renderCreds(m);renderCfg(m.repos||[]);}).catch(()=>toast(false,"could not load config"));loadModels();}
+/* Slice 2 (#326/#191): selection state for the 3-zone layout. repo = path;
+   ws = workstream (role) name or null for the repo overview. */
+let SEL={repo:null,ws:null};
+function load(){fetch("/api/config").then(r=>r.json()).then(m=>{
+  MODEL=m;
+  const repos=m.repos||[];
+  if(!SEL.repo||!repos.some(r=>r.path===SEL.repo)){SEL={repo:repos.length?repos[0].path:null,ws:null};}
+  // normalize a vanished workstream BEFORE the tree renders, so tree
+  // highlight and canvas never disagree for a frame (CP2).
+  if(SEL.ws){
+    const cur=repos.find(r=>r.path===SEL.repo);
+    if(!cur||!(((cur.org||{}).roles)||[]).some(w=>w.name===SEL.ws)) SEL.ws=null;
+  }
+  renderAccts(m);renderCreds(m);renderTree(m);renderCanvas(m);
+}).catch(()=>toast(false,"could not load config"));loadModels();}
 
 /* ---- ACCOUNTS ---- */
 const SUB_KINDS=["claude_subscription","codex_subscription"];
@@ -530,12 +583,86 @@ function orgZone(org){
     +badge+pair+`<div class="orgroles">${rows}</div>`;
 }
 
+/* ---- 3-ZONE RENDER (slice 2, #326/#191) ------------------------------------
+   Left tree: repo -> pinned workstreams (r.org.roles). Center canvas: the
+   selected repo's overview (config fields + org zone) or one workstream's
+   read-only detail card. Editors for workstream fields land with slice 3;
+   the repo-level fields keep their existing save paths. */
+function trigGlyph(kind){return kind==="cron"?"⏱":(kind==="event"?"⚡":(kind==="manual"?"▶":"⟳"));}
+function renderTree(m){
+  const repos=m.repos||[];
+  const rows=repos.map(r=>{
+    const enc=encAttr(r.path), org=r.org||{}, drift=r.drift||{};
+    const selR=(SEL.repo===r.path&&!SEL.ws)?" sel":"";
+    const badge=(drift.live&&drift.differs)?`<span class="wsdrift" title="live config differs from committed .autonomy/config.yaml">live</span>`:"";
+    const invalid=org.valid===false?`<div class="wsbad">⚠ config invalid</div>`:"";
+    const ws=(org.roles||[]).map(w=>{
+      const selW=(SEL.repo===r.path&&SEL.ws===w.name)?" sel":"";
+      const dot=!w.configured?"na":(w.enabled?"on":"");
+      const trig=w.trigger_kind==="loop"?"loop":(w.trigger_detail||w.trigger_kind);
+      return `<div class="wsrow${selW}" onclick="selWs('${enc}','${encAttr(w.name)}')">
+        <span class="wsdot ${dot}"></span><span class="wsname">${esc(w.name)}</span>
+        <span class="wstrig">${trigGlyph(w.trigger_kind)} ${esc(trig)}</span></div>`;
+    }).join("");
+    return `<div class="wsrepo">
+      <div class="wsrepo-h${selR}" onclick="selRepo('${enc}')"><span>${esc(r.name||r.path)}</span>${badge}</div>
+      ${invalid}${ws}</div>`;
+  }).join("");
+  $("wstree").innerHTML=(rows||`<div class="hint">no repos registered — add one below.</div>`)
+    +`<div class="cfgadd"><input id="cfg-add" class="cfgin" placeholder="/absolute/path/to/repo"><button class="cbtn go" onclick="repoAdd()">add repo</button></div>`;
+}
+function selRepo(enc){SEL={repo:decodeURIComponent(enc),ws:null};renderTree(MODEL);renderCanvas(MODEL);}
+function selWs(enc,encName){SEL={repo:decodeURIComponent(enc),ws:decodeURIComponent(encName)};renderTree(MODEL);renderCanvas(MODEL);}
+function renderCanvas(m){
+  const repos=m.repos||[];
+  const r=repos.find(x=>x.path===SEL.repo);
+  if(!r){
+    $("canvas-title").textContent="Overview";$("canvas-sub").textContent="";
+    $("canvas").innerHTML=`<div class="hint">no repos registered — add one in the workstreams rail.</div>`;
+    return;
+  }
+  const i=repos.indexOf(r);
+  const w=SEL.ws?((r.org||{}).roles||[]).find(x=>x.name===SEL.ws):null;
+  if(w){
+    $("canvas-title").textContent=r.name+" · "+w.name;
+    $("canvas-sub").textContent="workstream · read-only — editors land with the authoring slice";
+    $("canvas").innerHTML=wsCard(r,w);
+  }else{
+    $("canvas-title").textContent=r.name;
+    $("canvas-sub").textContent="repo config + org — pick a workstream on the left for its detail";
+    $("canvas").innerHTML=cfgRepoCard(r,i);
+    refreshAllBoards();
+  }
+}
+function wsCard(r,w){
+  const org=r.org||{}, pair=org.pair||{};
+  const trig=w.trigger_kind==="loop"?"loop · round-robin":w.trigger_kind+" · "+(w.trigger_detail||"—");
+  const scope=(w.scope_labels||[]).length?w.scope_labels.map(l=>`<span class="wschip">${esc(l)}</span>`).join(""):"<span class='wschip'>whole board</span>";
+  const notes=(w.notes||[]).map(n=>`<div class="cfghint">note: ${esc(n)}</div>`).join("");
+  const pairRow=(w.name==="coder")?orgZone(org):"";
+  const field=(k,v)=>`<div class="wsfield"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+  return `<div class="cfgrepo" data-repo="${encAttr(r.path)}">
+    ${field("state",!w.configured?"not configured":(w.enabled?"enabled":"disabled"))}
+    ${field("trigger",esc(trig))}
+    ${field("scope",scope)}
+    ${field("gate",esc(w.gate||"—"))}
+    ${field("model",esc(w.model||((pair.coder||{}).model?((pair.coder||{}).model+" (repo default)"):"—")))}
+    ${field("effort",esc(w.effort||((pair.coder||{}).effort?((pair.coder||{}).effort+" (repo default)"):"—")))}
+    ${field("account",esc(w.account||"subscription (default)"))}
+    ${field("lane",esc(w.lane||"main"))}
+    ${notes}${pairRow}
+  </div>`;
+}
 /* ---- REPOS + CONFIG (moved from the main page, #47) ---- */
-function renderCfg(repos){
-  const rows=repos.map((r,i)=>{
-    const c=r.config||{}, enc=encAttr(r.path);
-    return `<div class="cfgrepo" data-repo="${enc}">
+function cfgRepoCard(r,i){
+  const c=r.config||{}, enc=encAttr(r.path);
+  const drift=r.drift||{};
+  const driftNote=(drift.live&&drift.differs)
+    ?`<div class="cfghint">⚠ <b>live config active</b> — var/autonomy/config.yaml diverges from the committed .autonomy/config.yaml (page edits are local; commit whenever you choose)</div>`
+    :"";
+  return `<div class="cfgrepo" data-repo="${enc}">
       <div class="cfgname">${esc(r.name||r.path)}<button class="cbtn danger" onclick="repoRemove('${enc}')">remove</button></div>
+      ${driftNote}
       ${cfgFieldOwner(enc,"board.owner","board owner",c.board_owner,r.board_owner_derived)}
       ${cfgFieldBoards(enc,i,"board.project_title","board title",c.board_title)}
       ${cfgFieldList(enc,"agent.model.primary","model",c.model)}
@@ -544,12 +671,6 @@ function renderCfg(repos){
       ${cfgReadonly("merge gate",c.merge_gate,"structural — edit via config.yaml + PR (#87)")}
       ${orgZone(r.org)}
     </div>`;
-  }).join("");
-  // #273: model fields are now real <select> pickers (cfgFieldList builds each
-  // one inline from modelSelectOptions), so the old shared <datalist> is gone.
-  $("cfg").innerHTML=`<div class="cfgadd"><input id="cfg-add" class="cfgin" placeholder="/absolute/path/to/repo"><button class="cbtn go" onclick="repoAdd()">add repo</button></div>`
-    +(rows||`<div class="hint">no repos registered — add one above.</div>`);
-  refreshAllBoards();
 }
 // board.project_title picker (#170): the title input is backed by a per-repo
 // datalist filled from /api/boards (the owner's live Projects v2 boards) plus a

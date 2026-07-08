@@ -1492,3 +1492,35 @@ class ConfigOrgBlockTest(unittest.TestCase):
         names = [r["name"] for r in org["roles"]]
         for n in ("coder", "pm", "qa", "researcher"):
             self.assertIn(n, names)
+
+
+class ConfigDriftBlockTest(unittest.TestCase):
+    """Workstreams slice 2: config_read_model() carries per-repo live-config
+    drift ({live, differs}) so the page can badge an uncommitted shadow."""
+
+    def setUp(self):
+        self._orig_repos = dashboard.Handler.repos
+        self._orig_run = dashboard._run
+        dashboard._run = lambda args, **kw: None
+        self._td = tempfile.TemporaryDirectory()
+        os.makedirs(os.path.join(self._td.name, ".autonomy"))
+        with open(os.path.join(self._td.name, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("agent:\n  model:\n    primary: claude-sonnet-5\n")
+        dashboard.Handler.repos = [self._td.name]
+
+    def tearDown(self):
+        dashboard._run = self._orig_run
+        dashboard.Handler.repos = self._orig_repos
+        self._td.cleanup()
+
+    def test_no_shadow_no_drift(self):
+        repo = dashboard.config_read_model()["repos"][0]
+        self.assertEqual(repo["drift"], {"live": False, "differs": False})
+
+    def test_shadow_reports_drift(self):
+        d = os.path.join(self._td.name, "var", "autonomy")
+        os.makedirs(d)
+        with open(os.path.join(d, "config.yaml"), "w") as fh:
+            fh.write("agent:\n  model:\n    primary: live-model\n")
+        repo = dashboard.config_read_model()["repos"][0]
+        self.assertEqual(repo["drift"], {"live": True, "differs": True})
