@@ -210,8 +210,14 @@ def repo_remove_plan(path, repos_file):
 def find_service(repo, launch_agents_dir):
     """The installed launchd service for a watched repo (worktree), found by
     matching the plist that references this repo path -- robust to the slug not
-    being re-derivable from the worktree. Returns {label, plist} or None.
-    Only considers com.autonomy.*.supervisor plists."""
+    being re-derivable from the worktree. Returns {label, plist}, {"error": ...}
+    or None. Only considers com.autonomy.*.supervisor plists.
+
+    #309: the internal <key>Label</key> is content-verified against the
+    filename-derived label -- launchctl bootout uses the filename-derived label
+    while bootstrap uses the plist's INTERNAL one, so a stale/hand-edited
+    mismatch would make stop and start act on DIFFERENT launchd targets.
+    Refuse rather than pick either (fail-safe, prevention-log #3/#18)."""
     repo = os.path.abspath(repo)
     try:
         names = os.listdir(launch_agents_dir)
@@ -228,7 +234,15 @@ def find_service(repo, launch_agents_dir):
         except OSError:
             continue
         if "--repo" in text and needle in text:
-            return {"label": name[:-len(".plist")], "plist": path}
+            label = name[:-len(".plist")]
+            # Same technique as find_lane_service: the text before
+            # ProgramArguments holds exactly one <string> in our template --
+            # the Label value; a full plist parser is not warranted.
+            if ("<string>%s</string>" % label
+                    not in text.split("ProgramArguments")[0]):
+                return {"error": "plist %s internal Label does not match its "
+                                 "filename -- refusing (stale plist?)" % name}
+            return {"label": label, "plist": path}
     return None
 
 
@@ -278,6 +292,8 @@ def find_lane_service(repo, lane, launch_agents_dir, default_lane=None):
     if own is None:
         return {"error": "no launchd service installed for this repo -- run "
                          "setup_worktree.sh first"}
+    if "error" in own:          # #309: stale own plist -- slug would be a lie
+        return own
     try:
         with open(own["plist"], errors="replace") as fh:
             own_text = fh.read()
@@ -338,6 +354,8 @@ def control_plan(repo, action, service, uid):
     if not service:
         return {"error": "no launchd service installed for this repo — run "
                          "setup_worktree.sh first"}
+    if "error" in service:      # #309: find_service refused (stale plist)
+        return {"error": service["error"]}
     label, plist = service["label"], service["plist"]
     if action == "stop":
         return {"cmd": ["launchctl", "bootout", "gui/%d/%s" % (uid, label)],
