@@ -273,6 +273,22 @@ wall. Waits use the **latest** valid epoch across both files; garbage/stale/torn
 markers are ignored per-file (fail-safe), and a clean session clears both. Repos on
 different accounts set `engine.account_key` to keep their markers separate.
 
+## Fingerprint gate (zero-token idle)
+
+Before dispatching a loop-role session the supervisor computes a sha256
+fingerprint of the observable world — open issues (number + `updatedAt`), open
+PRs (number + head + `updatedAt`), the remote `main` head, every `.autonomy/`
+pack file, the config overlay, and the CLI override set. If it exactly matches
+the fingerprint recorded when a previous session for that role **completed
+cleanly**, the session is skipped (zero LLM tokens) and the loop idles on a
+growing schedule (120s → 300 → 900 → 1800 cap, reset by any real session;
+capped at 300s while cron/event roles are declared so their resolvers keep
+their cadence). Every doubt — a `gh`/git failure, a page-cap hit, a pending
+one-shot model override — refuses the skip and the session runs as before:
+staleness costs tokens, never buried work. The idle is pause-aware
+(`PAUSE` sentinel honoured within one poll), and skips are narrated as
+`fingerprint-idle` heartbeats. (#318)
+
 ## Control room (P1 dashboard)
 
 ```bash

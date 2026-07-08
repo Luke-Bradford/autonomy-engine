@@ -391,6 +391,196 @@ pause_requested() {
   [ -f "$1" ]
 }
 
+# --- #318: deterministic pre-session fingerprint gate ------------------------
+# A full agent session every PACE seconds is pure token burn when the
+# observable world has not moved. The gate skips a loop-role session ONLY on
+# an EARNED, exact sha256 match between the world as it looks now and the
+# world as it looked when a previous session for this role COMPLETED cleanly.
+# Every doubt -- a gh/git failure, a page cap, a pending one-shot override, a
+# path-unsafe name -- REFUSES the skip so the session runs (pre-#318
+# behaviour): staleness can only cost tokens, never bury work. Fail toward
+# work, never toward silence.
+
+# The ONLY constructor for fingerprint state paths (role+lane are an explicit
+# interface, no hidden globals). Names are charset-gated at the point of use
+# (prevention-log #6) exactly like the cron/event marker paths.
+fingerprint_state_file() {
+  local role="$1" lane="$2"
+  [ -n "$role" ] || return 1
+  _role_name_path_safe "$role" || return 1
+  if [ -n "$lane" ]; then
+    _role_name_path_safe "$lane" || return 1
+    printf '%s/.fingerprint-%s--%s' "$LOGDIR" "$role" "$lane"
+  else
+    printf '%s/.fingerprint-%s' "$LOGDIR" "$role"
+  fi
+}
+
+# Print the current fingerprint for <role> (sha256 hex), or rc 1 when the
+# world is unfingerprintable. Material (canonicalised, sorted -- never raw
+# JSON byte order): open issues (number+updatedAt; labels/comments touch
+# updatedAt, and per SD-23 Projects v2 is display-only so issue state IS the
+# board), open PRs (number+head+updatedAt), remote main head, the role's
+# RESOLVED dispatch contract (roles.py dispatch output: account/agent/model/
+# effort/prompt/scope), EVERY file under .autonomy/ plus the role's prompt
+# file wherever it lives (CP2: a prompt outside .autonomy, any extension,
+# must still bust the hash), the persistent config-overrides overlay, the CLI
+# override set, and role+lane. A pending one-shot model-override is a
+# next-session CONTRACT -- it forces a run rather than joining the hash.
+# Exactly the page limit of results means "maybe truncated" -> refuse. Pack
+# traversal happens INSIDE the python hasher with onerror=raise (CP2: a
+# suppressed find/cat failure must never hash partial material -- any read
+# error exits nonzero and the caller refuses). Compute-only: this function
+# never writes state (sole-writer stays with the supervisor loop).
+role_fingerprint() {
+  local role="$1" lane="${AUTONOMY_LANE:-}" issues prs main_head n
+  local dispatch_out prompt_rel line
+  [ -f "$LOGDIR/model-override" ] && return 1
+  _role_name_path_safe "$role" || return 1
+  if [ -n "$lane" ]; then _role_name_path_safe "$lane" || return 1; fi
+  if ! dispatch_out="$(python3 "$ENGINE_HOME/lib/roles.py" dispatch "$AUTONOMY_TARGET_REPO" "$role" 2>>"$SUPLOG")"; then
+    return 1
+  fi
+  prompt_rel=""
+  while IFS= read -r line; do
+    case "$line" in PROMPT=*) prompt_rel="${line#PROMPT=}"; break ;; esac
+  done <<<"$dispatch_out"
+  if ! issues="$(cd "$AUTONOMY_TARGET_REPO" && gh issue list --state open -L 200 \
+      --json number,updatedAt \
+      --jq 'sort_by(.number) | map("\(.number) \(.updatedAt)") | .[]' 2>>"$SUPLOG")"; then
+    return 1
+  fi
+  n="$(grep -c . <<<"$issues" || true)"; n="${n:-0}"
+  [ "$n" -ge 200 ] && return 1
+  if ! prs="$(cd "$AUTONOMY_TARGET_REPO" && gh pr list --state open -L 100 \
+      --json number,headRefOid,updatedAt \
+      --jq 'sort_by(.number) | map("\(.number) \(.headRefOid) \(.updatedAt)") | .[]' 2>>"$SUPLOG")"; then
+    return 1
+  fi
+  n="$(grep -c . <<<"$prs" || true)"; n="${n:-0}"
+  [ "$n" -ge 100 ] && return 1
+  if ! main_head="$(cd "$AUTONOMY_TARGET_REPO" && git ls-remote origin refs/heads/main 2>>"$SUPLOG")"; then
+    return 1
+  fi
+  {
+    printf 'role=%s\nlane=%s\ncli=%s|%s|%s|%s\n' "$role" "$lane" \
+      "${AGENT_TYPE_OVERRIDE:-}" "${MODEL_OVERRIDE:-}" \
+      "${FALLBACK_MODEL_OVERRIDE:-}" "${EFFORT_OVERRIDE:-}"
+    printf -- '--dispatch--\n%s\n' "$dispatch_out"
+    printf -- '--issues--\n%s\n--prs--\n%s\n--main--\n%s\n' "$issues" "$prs" "$main_head"
+  } | python3 -c '
+import hashlib, os, sys
+h = hashlib.sha256()
+
+def record(tag, path_bytes, content):
+    # Length-prefixed, so the serialization is INJECTIVE: file bytes that
+    # happen to contain a marker can never collide with a different file set.
+    h.update(("%s %d %d\n" % (tag, len(path_bytes), len(content))).encode())
+    h.update(path_bytes)
+    h.update(content)
+
+h.update(sys.stdin.buffer.read())
+root = sys.argv[1]
+if not os.path.isdir(root):
+    sys.exit(1)                       # a pack-less repo is unfingerprintable
+def _raise(err):                      # os.walk must never skip-silently
+    raise err
+files = []
+for dp, _dns, fns in os.walk(root, onerror=_raise):
+    for fn in fns:
+        files.append(os.path.join(dp, fn))
+for f in sorted(files):
+    with open(f, "rb") as fh:         # read error -> exception -> rc 1 -> refuse
+        record("file", os.path.relpath(f, root).encode(), fh.read())
+overlay = sys.argv[2]                 # optional -- but absence is ENCODED,
+if os.path.exists(overlay):           # never identical to exists-but-empty
+    with open(overlay, "rb") as fh:
+        record("overlay", overlay.encode(), fh.read())
+else:
+    h.update(b"overlay-absent\n")
+for extra in sys.argv[3:]:            # REQUIRED (the resolved prompt file):
+    with open(extra, "rb") as fh:     # missing -> exception -> rc 1 -> refuse
+        record("extra", extra.encode(), fh.read())
+print(h.hexdigest())
+' "$AUTONOMY_TARGET_REPO/.autonomy" "$LOGDIR/config-overrides" \
+    ${prompt_rel:+"$AUTONOMY_TARGET_REPO/$prompt_rel"} 2>>"$SUPLOG"
+}
+
+# rc 0 => skip this role's session. Side effect: FP_CURRENT holds the freshly
+# computed fingerprint (empty when uncomputable) so the outcome-0 arm can
+# record exactly what this tick OBSERVED, never a re-computed value.
+FP_CURRENT=""
+fingerprint_gate() {
+  local role="$1" state_file recorded
+  FP_CURRENT=""
+  if ! FP_CURRENT="$(role_fingerprint "$role")"; then FP_CURRENT=""; return 1; fi
+  [ -n "$FP_CURRENT" ] || return 1
+  if ! state_file="$(fingerprint_state_file "$role" "${AUTONOMY_LANE:-}")"; then return 1; fi
+  [ -f "$state_file" ] || return 1
+  recorded="$(cat "$state_file" 2>/dev/null || true)"
+  [ -n "$recorded" ] || return 1
+  [ "$recorded" = "$FP_CURRENT" ] || return 1
+  return 0
+}
+
+# Persist the pre-session fingerprint AFTER a clean session (outcome 0 only --
+# a crash/limit/refusal must not bury unfinished work behind a match). The
+# supervisor is the sole writer; atomic tmp+mv like every other state marker.
+# Best-effort: an unwritable state file costs future skips, never the loop.
+record_fingerprint() {
+  local role="$1" lane="$2" fp="$3" state_file tmpf
+  [ -n "$fp" ] || return 0
+  if ! state_file="$(fingerprint_state_file "$role" "$lane")"; then return 0; fi
+  tmpf="$state_file.$$"
+  if ( printf '%s\n' "$fp" >"$tmpf" ) 2>/dev/null && mv -f "$tmpf" "$state_file" 2>/dev/null; then
+    :
+  else
+    rm -f "$tmpf" 2>/dev/null
+    log "WARN could not record fingerprint for $role -- next tick runs normally"
+  fi
+  return 0
+}
+
+# Consecutive-skip backoff schedule. In-memory counter only (a persisted
+# absolute idle-until is clock-fragile); any session actually run resets it.
+fingerprint_backoff() {
+  case "$1" in
+    1) echo 120 ;;
+    2) echo 300 ;;
+    3) echo 900 ;;
+    *) echo 1800 ;;
+  esac
+}
+
+# rc 0 when the repo declares any cron or event role. Long skip sleeps would
+# starve the top-of-tick cron/event resolvers, so the caller caps the idle at
+# 300s when this returns 0. Enumeration failure reads as "none" -- the same
+# tick's own cron/event resolution would have failed too, and the cost is a
+# longer sleep, not lost work.
+has_scheduled_roles() {
+  local names
+  names="$(_cron_enumerate 2>/dev/null || true)"
+  [ -n "$names" ] && return 0
+  names="$(_event_enumerate 2>/dev/null || true)"
+  [ -n "$names" ] && return 0
+  return 1
+}
+
+# Pause-aware idle: sleep <secs> in PAUSE_POLL slices, returning early the
+# moment the pause sentinel appears so an operator pause takes effect within
+# one poll interval, never after a full backoff window.
+idle_sleep() {
+  local remaining="$1" slice
+  while [ "$remaining" -gt 0 ]; do
+    if pause_requested "$PAUSE_SENTINEL"; then return 0; fi
+    slice="$PAUSE_POLL"
+    if [ "$remaining" -lt "$slice" ]; then slice="$remaining"; fi
+    sleep "$slice"
+    remaining=$((remaining - slice))
+  done
+  return 0
+}
+
 # --- account-level shared usage-limit state (#3) ----------------------------
 # One Anthropic account serves every supervisor on this machine: a reset
 # epoch discovered by any one loop is written to a shared, account-keyed
@@ -1092,6 +1282,9 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   limit_backoff=$LIMIT_BACKOFF_START
   paused_logged=0
   role_rr=0
+  # #318: consecutive fingerprint-skip counter (in-memory only; any session
+  # actually run -- whatever its outcome -- resets it, as does a restart).
+  fp_skips=0
   # Whether a loop session ran in the PREVIOUS iteration -- drives the
   # session.done event edge (checked at the top of the next iteration, so
   # session.done has at most one loop-cadence tick of latency). Only loop
@@ -1175,6 +1368,26 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     role="$(select_role "$role_rr" $dispatch_list)"
     role_rr=$(( (role_rr + 1) % 86400 ))
 
+    # #318: fingerprint gate -- skip the session (zero LLM tokens) ONLY when
+    # the observable world exactly matches state a previous COMPLETED session
+    # for this role already examined and declined to act on. Any doubt falls
+    # through to dispatch. Runs AFTER the cron/event resolvers above, so
+    # scheduled roles fire every active tick regardless of this gate; the
+    # skip leaves session_ran untouched (no fabricated session.done edge).
+    if fingerprint_gate "$role"; then
+      fp_skips=$((fp_skips + 1))
+      fp_wait="$(fingerprint_backoff "$fp_skips")"
+      # Long sleeps would starve the top-of-tick cron/event resolvers -- cap
+      # the idle when this repo schedules any (a skipped tick costs a few gh
+      # calls, zero LLM tokens).
+      if [ "$fp_wait" -gt 300 ] && has_scheduled_roles; then fp_wait=300; fi
+      log "fingerprint unchanged for $role -- skip #$fp_skips, idle ${fp_wait}s (zero-token)"
+      heartbeat "fingerprint-idle" "board unchanged since last completed $role session -- zero-token skip" "$(( $(date -u +%s) + fp_wait ))"
+      idle_sleep "$fp_wait"
+      continue
+    fi
+    fp_skips=0
+
     # #177: the prep window (auth, preflight, worktree) narrates as `dispatching`
     # -- run_session flips it to `session-running <role>` the instant the agent
     # is actually invoked, so the card never reads "running a session" while it
@@ -1194,6 +1407,10 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
          # usage-limit pause (rc 3), or a session error must NOT fabricate a
          # session.done edge for work that did not run (fail-safe).
          session_ran=1
+         # #318: record what this tick OBSERVED before the session (FP_CURRENT
+         # from fingerprint_gate) -- a clean session has now examined exactly
+         # that world, so an identical future tick may skip. Outcome 0 only.
+         record_fingerprint "$role" "${AUTONOMY_LANE:-}" "$FP_CURRENT"
          err_backoff=$ERR_BACKOFF_START; limit_backoff=$LIMIT_BACKOFF_START
          clear_reset_state
          sleep "$PACE" ;;
