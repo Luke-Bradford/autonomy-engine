@@ -1098,7 +1098,7 @@ function drillTo(ev,encKey){
 // real <button> so the delegated #repos select listener ignores its clicks.
 function pinBtn(lk){
   const on=PINNED.has(lk);
-  return `<button class="pinbtn${on?" on":""}" data-pin-key="${encodeURIComponent(lk)}" title="${on?"unpin from compare":"pin to compare — 2+ pinned lanes tile the center"}" onclick="togglePin('${encAttr(lk)}',this)">📌</button>`;
+  return `<button class="pinbtn${on?" on":""}" title="${on?"unpin from compare":"pin to compare — 2+ pinned lanes tile the center"}" onclick="togglePin('${encAttr(lk)}',this)">📌</button>`;
 }
 function renderRepos(repos){
   $("h-repos").textContent=repos.length;

@@ -225,7 +225,9 @@ class TestCompareTiles(unittest.TestCase):
         html = self._page()
         self.assertIn(b"PINNED", html)
         self.assertIn(b"function togglePin(", html)
-        self.assertIn(b"data-pin-key", html)
+        # the pin key travels in the onclick arg (encAttr -> decodeURIComponent,
+        # the shipped ibtn/control round-trip) -- no dead data-* duplicate.
+        self.assertIn(b"onclick=\"togglePin(", html)
         self.assertIn(b"pinbtn", html)
 
     def test_tile_grid_render_path(self):
