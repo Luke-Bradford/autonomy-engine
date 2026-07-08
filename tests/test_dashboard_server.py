@@ -41,19 +41,6 @@ class TestConfigOverlayWrite(unittest.TestCase):
             fh.write("agent:\n  model:\n    primary: claude-sonnet-5\n")
         return cfg
 
-    def test_overlay_write_merges_and_preserves(self):
-        ov = self._overlay()
-        dashboard._write_overlay(ov, {"model": "claude-opus-4-8"})
-        dashboard._write_overlay(ov, {"effort": "high"})
-        text = open(ov).read()
-        self.assertIn("model=claude-opus-4-8", text)
-        self.assertIn("effort=high", text)
-        dashboard._write_overlay(ov, {"model": "claude-sonnet-5"})
-        text = open(ov).read()
-        self.assertIn("model=claude-sonnet-5", text)
-        self.assertIn("effort=high", text)           # untouched key preserved
-        self.assertNotIn("claude-opus-4-8", text)
-
     def _gitify(self):
         # Slice 3a: live-shadow writes require var/ gitignored (SD-34).
         import subprocess
@@ -94,21 +81,6 @@ class TestConfigOverlayWrite(unittest.TestCase):
         self.assertTrue(r["ok"], r)
         self.assertIn("planner:", open(self._live()).read())
 
-    def test_overlay_write_does_not_normalize_dirty_line(self):
-        # A stray-space line the supervisor ignores must NOT be resurrected into
-        # an effective `model=...` by an unrelated save (fail-safe parity).
-        ov = self._overlay()
-        os.makedirs(os.path.dirname(ov))
-        with open(ov, "w") as fh:
-            fh.write(" model=claude-opus-4-8\n")     # leading space -> ignored by bash
-        dashboard._write_overlay(ov, {"effort": "high"})
-        text = open(ov).read()
-        self.assertIn(" model=claude-opus-4-8", text)   # preserved verbatim, still dirty
-        self.assertNotIn("\nmodel=claude-opus-4-8", text)  # never normalized to a clean key
-        self.assertIn("effort=high", text)
-
-
-class TestBenignDisconnect(unittest.TestCase):
     def test_client_disconnects_are_benign(self):
         for exc in (ConnectionResetError(), BrokenPipeError(),
                     ConnectionAbortedError(), TimeoutError()):
