@@ -27,6 +27,15 @@ class TestValidateRoles(unittest.TestCase):
         self.assertEqual(roles.validate_roles({}), [])
         self.assertEqual(roles.validate_roles({"agent": {"type": "claude"}}), [])
 
+    def test_pipeline_binding_validates_charset(self):
+        cfg = {"roles": {"coder": {"enabled": True, "pipeline": "../evil"}}}
+        self.assertTrue(any("pipeline" in e for e in roles.validate_roles(cfg)))
+        cfg = {"roles": {"coder": {"enabled": True, "pipeline": ""}}}
+        self.assertTrue(any("pipeline" in e for e in roles.validate_roles(cfg)))
+        cfg = {"roles": {"coder": {"enabled": True,
+                                   "pipeline": "ticket-to-merge"}}}
+        self.assertEqual(roles.validate_roles(cfg), [])
+
     def test_design_doc_example_validates(self):
         cfg = parse(
             "roles:\n"
@@ -670,7 +679,13 @@ class TestRoleSettings(unittest.TestCase):
         s = roles.role_settings(parse(self.CFG), "qa")
         self.assertEqual(
             s, {"account": "", "agent": "", "model": "", "effort": "",
-                "prompt": "", "scope": ""})
+                "prompt": "", "scope": "", "pipeline": ""})
+
+    def test_role_settings_exposes_pipeline(self):
+        cfg = parse("roles:\n  coder:\n    enabled: true\n"
+                    "    pipeline: ticket-to-merge\n")
+        self.assertEqual(roles.role_settings(cfg, "coder")["pipeline"],
+                         "ticket-to-merge")
 
     def test_default_coder_with_no_roles_block(self):
         s = roles.role_settings({}, "coder")

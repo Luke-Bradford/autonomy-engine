@@ -262,6 +262,99 @@ def validate_doc(doc, pipeline_dir=None):
     return errors
 
 
+DEFAULT_PROMPT = ".autonomy/loop_prompt.md"
+
+
+def wrap_role(settings, role):
+    """A legacy role as a one-node pipeline (single dispatch path, operator
+    kickoff decision). Byte-equivalence contract: the wrapped node's
+    legacy_prompt is EXACTLY the prompt path run_session used before
+    pipelines existed, and invalid runs_as values DEGRADE (dropped, like
+    resolve_role_dispatch's blank-and-WARN) instead of refusing -- a config
+    that ran yesterday must keep running after the upgrade. Bound
+    (non-wrapped) pipelines are a NEW surface and stay strict from birth."""
+    runs_as = {}
+    if _is_str(settings.get("model")):
+        runs_as["model"] = settings["model"]      # bash re-validates + blanks
+    if settings.get("effort") in VALID_EFFORTS:
+        runs_as["effort"] = settings["effort"]
+    if _is_str(settings.get("account")) and _NAME_RE.match(settings["account"]):
+        runs_as["account"] = settings["account"]
+    if _is_str(settings.get("agent")) and _AGENT_RE.match(settings["agent"]):
+        runs_as["agent"] = settings["agent"]
+    node = {"id": "act", "type": "agent_task",
+            "legacy_prompt": settings.get("prompt") or DEFAULT_PROMPT,
+            "context": "project"}
+    if runs_as:
+        node["runs_as"] = runs_as
+    return {"name": "legacy-%s" % role, "version": 0,
+            "caps": {"max_sessions_per_run": 1},
+            "nodes": [node], "edges": [], "containers": [],
+            "wrapped_from_role": role}
+
+
+def _check_legacy_prompts(repo, doc, what):
+    """Early refuse (at run start, not mid-run) when a node's legacy_prompt
+    does not exist in the repo -- a run state written for an unrunnable doc
+    would strand in-flight."""
+    for node in doc.get("nodes", []):
+        lp = node.get("legacy_prompt")
+        if lp and not os.path.isfile(os.path.join(repo, lp)):
+            raise PipelineError("%s node %r legacy_prompt %s missing in repo"
+                                % (what, node.get("id"), lp))
+
+
+def resolve_pipeline(repo, role):
+    """The ONE dispatch resolution: bound pipeline when the role names one,
+    else the legacy wrap. A bound-but-missing/invalid pipeline RAISES --
+    fail-safe, never a silent fallback that would change behaviour
+    (prevention-log #3)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import roles
+    cfg, rc = roles._load_config(repo)
+    if rc != 0 or cfg is None:
+        raise PipelineError("config unreadable/unparseable for %s (rc %d)"
+                            % (repo, rc))
+    try:
+        settings = roles.role_settings(cfg, role)
+    except KeyError:
+        raise PipelineError("role %r is not dispatchable" % role)
+    binding = (settings.get("pipeline") or "").strip()
+    if not binding:
+        doc = wrap_role(settings, role)
+        errs = validate_doc(doc, None)
+        if errs:
+            raise PipelineError("wrapped role %r invalid: %s"
+                                % (role, "; ".join(errs)))
+        _check_legacy_prompts(repo, doc, "wrapped role %r" % role)
+        return doc, {"pipeline_dir": None, "wrapped": True,
+                     "from": doc["name"], "from_version": 0}
+    if not _NAME_RE.match(binding):
+        raise PipelineError("roles.%s.pipeline %r has invalid charset"
+                            % (role, binding))
+    pdir = os.path.join(repo, ".autonomy", "pipelines", binding)
+    doc = load_doc(os.path.join(pdir, "pipeline.json"))
+    errs = validate_doc(doc, pdir)
+    if errs:
+        raise PipelineError("pipeline %r invalid: %s"
+                            % (binding, "; ".join(errs)))
+    _check_legacy_prompts(repo, doc, "pipeline %r" % binding)
+    # P1 advances one node per LOOP iteration (SD-12); a cron/event role's
+    # trigger fires run_session once per due-tick, so a multi-node pipeline
+    # bound to one would stall mid-run until the next fire. Refuse honestly;
+    # P2's dispatch work lifts this.
+    trig_names = set(n for n, _ in (roles.cron_roles(cfg) or []))
+    trig_names.update(n for n, _ in (roles.event_roles(cfg) or []))
+    if len(doc.get("nodes") or []) > 1 and role in trig_names:
+        raise PipelineError("pipeline %r has %d nodes but role %r fires on a "
+                            "cron/event trigger -- P1 advances one node per "
+                            "loop iteration, so the run would stall between "
+                            "fires; multi-node cron/event dispatch lands in "
+                            "P2" % (binding, len(doc["nodes"]), role))
+    return doc, {"pipeline_dir": pdir, "wrapped": False,
+                 "from": binding, "from_version": doc.get("version", 0)}
+
+
 def _cli_validate(argv):
     if len(argv) != 2:
         print("usage: pipeline.py validate <repo> <name>", file=sys.stderr)
@@ -289,6 +382,17 @@ def main(argv):
     cmd, rest = argv[0], argv[1:]
     if cmd == "validate":
         return _cli_validate(rest)
+    if cmd == "wrap":
+        if len(rest) != 2:
+            print("usage: pipeline.py wrap <repo> <role>", file=sys.stderr)
+            return 2
+        try:
+            doc, _meta = resolve_pipeline(rest[0], rest[1])
+        except PipelineError as exc:
+            print("pipeline wrap: %s" % exc, file=sys.stderr)
+            return 1
+        print(json.dumps(doc, indent=2, sort_keys=True))
+        return 0
     print("unknown subcommand %r" % cmd, file=sys.stderr)
     return 2
 

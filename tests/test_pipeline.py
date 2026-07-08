@@ -159,6 +159,106 @@ class ValidateDocTest(unittest.TestCase):
         self.assertTrue(pipeline.validate_doc(doc, self.dir))
 
 
+class WrapResolveTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, True)
+        os.makedirs(os.path.join(self.repo, ".autonomy", "pipelines", "p1"))
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("engine:\n  label: t\n")
+        # resolve_pipeline refuses early when a legacy_prompt is missing
+        with open(os.path.join(self.repo, ".autonomy", "loop_prompt.md"), "w") as fh:
+            fh.write("legacy prompt\n")
+
+    def _write_pipeline(self, doc, briefs=("act.md",)):
+        pdir = os.path.join(self.repo, ".autonomy", "pipelines", "p1")
+        for b in briefs:
+            with open(os.path.join(pdir, b), "w") as fh:
+                fh.write("brief %s\n" % b)
+        with open(os.path.join(pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+
+    def test_wrap_role_is_valid_one_node_doc(self):
+        settings = {"account": "", "agent": "", "model": "opus", "effort": "high",
+                    "prompt": "", "scope": "", "pipeline": ""}
+        doc = pipeline.wrap_role(settings, "coder")
+        self.assertEqual(pipeline.validate_doc(doc, None), [])
+        self.assertEqual(len(doc["nodes"]), 1)
+        node = doc["nodes"][0]
+        self.assertEqual(node["legacy_prompt"], ".autonomy/loop_prompt.md")
+        self.assertEqual(node["runs_as"]["model"], "opus")
+        self.assertEqual(doc["caps"]["max_sessions_per_run"], 1)
+        self.assertEqual(doc.get("wrapped_from_role"), "coder")
+
+    def test_wrap_role_keeps_role_prompt(self):
+        settings = {"account": "", "agent": "", "model": "", "effort": "",
+                    "prompt": ".autonomy/roles/pm.md", "scope": "", "pipeline": ""}
+        doc = pipeline.wrap_role(settings, "pm")
+        self.assertEqual(doc["nodes"][0]["legacy_prompt"], ".autonomy/roles/pm.md")
+
+    def test_wrap_degrades_invalid_effort_like_legacy(self):
+        # resolve_role_dispatch blanks invalid values and RUNS; the wrap must
+        # not turn that degrade into a hard refusal (a config that ran
+        # yesterday keeps running after the upgrade).
+        settings = {"account": "", "agent": "../evil", "model": "opus",
+                    "effort": "warp9", "prompt": "", "scope": "", "pipeline": ""}
+        doc = pipeline.wrap_role(settings, "coder")
+        self.assertEqual(pipeline.validate_doc(doc, None), [])
+        self.assertNotIn("effort", doc["nodes"][0].get("runs_as", {}))
+        self.assertNotIn("agent", doc["nodes"][0].get("runs_as", {}))
+
+    def test_resolve_unbound_role_wraps(self):
+        doc, meta = pipeline.resolve_pipeline(self.repo, "coder")
+        self.assertTrue(meta["wrapped"])
+        self.assertIsNone(meta["pipeline_dir"])
+        self.assertEqual(doc["nodes"][0]["legacy_prompt"], ".autonomy/loop_prompt.md")
+
+    def test_resolve_bound_role_loads_doc(self):
+        d = minimal_doc(); d["name"] = "p1"
+        self._write_pipeline(d)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("roles:\n  coder:\n    enabled: true\n    pipeline: p1\n")
+        doc, meta = pipeline.resolve_pipeline(self.repo, "coder")
+        self.assertFalse(meta["wrapped"])
+        self.assertEqual(meta["from"], "p1")
+        self.assertEqual(doc["name"], "p1")
+
+    def test_resolve_bound_but_invalid_REFUSES(self):
+        d = minimal_doc(); d["name"] = "p1"; del d["caps"]
+        self._write_pipeline(d)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("roles:\n  coder:\n    enabled: true\n    pipeline: p1\n")
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.resolve_pipeline(self.repo, "coder")   # NEVER falls back to wrap
+
+    def test_resolve_bound_but_missing_REFUSES(self):
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("roles:\n  coder:\n    enabled: true\n    pipeline: ghost\n")
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.resolve_pipeline(self.repo, "coder")
+
+    def test_resolve_missing_legacy_prompt_REFUSES_early(self):
+        # A run state for an unrunnable doc would strand in-flight -- refuse
+        # BEFORE any state exists.
+        os.unlink(os.path.join(self.repo, ".autonomy", "loop_prompt.md"))
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.resolve_pipeline(self.repo, "coder")
+
+    def test_resolve_refuses_multinode_on_cron_role(self):
+        # P1: one node per LOOP iteration; a cron fire would strand a
+        # multi-node run until the next fire -- refuse honestly (P2 lifts).
+        d = minimal_doc(); d["name"] = "p1"
+        d["nodes"].append({"id": "b", "type": "check", "brief_ref": "act.md"})
+        self._write_pipeline(d)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("roles:\n  pm:\n    enabled: true\n"
+                     "    trigger:\n      type: cron\n"
+                     "      schedule: '0 * * * *'\n"
+                     "    pipeline: p1\n")
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.resolve_pipeline(self.repo, "pm")
+
+
 class LoadDocTest(unittest.TestCase):
     def test_load_missing_raises(self):
         with self.assertRaises(pipeline.PipelineError):
