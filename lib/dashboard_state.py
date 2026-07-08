@@ -1265,6 +1265,8 @@ def build_org(repo_path):
         os.path.join(repo_path, ".autonomy", "config.yaml"))
     error = ""
     config = {}
+    pack_missing = not os.path.exists(
+        os.path.join(repo_path, ".autonomy", "config.yaml"))
     try:
         with open(cfg_path) as fh:
             config = config_parser.parse(fh.read())
@@ -1343,7 +1345,8 @@ def build_org(repo_path):
         cfg = cfg if isinstance(cfg, dict) else {}
         rows.append(row(name, cfg, True, _as_bool(cfg.get("enabled")), "loop"))
 
-    return {"valid": not error, "error": error, "pair": pair, "roles": rows}
+    return {"valid": not error, "error": error, "pack_missing": pack_missing,
+            "pair": pair, "roles": rows}
 
 
 def read_model_override(path):

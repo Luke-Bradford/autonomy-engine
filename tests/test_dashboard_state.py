@@ -3459,3 +3459,11 @@ class TestBuildOrg(unittest.TestCase):
                      "roles:\n  coder:\n    enabled: true\n")
         org = ds.build_org(self.repo)
         self.assertEqual(org["pair"]["coder"]["model"], "live-model")
+
+    def test_pack_missing_flag_explicit(self):
+        # #334 NITPICK: the init-pack button gates on an explicit flag, not
+        # error-text substrings.
+        org = ds.build_org(self.repo)          # setUp made no config.yaml
+        self.assertTrue(org["pack_missing"])
+        self._config("agent:\n  model:\n    primary: claude-sonnet-5\n")
+        self.assertFalse(ds.build_org(self.repo)["pack_missing"])
