@@ -218,6 +218,278 @@ class TestPhaseTrack(unittest.TestCase):
         self.assertNotIn("state", chain[1])
 
 
+class PhaseTrackEvidenceTest(unittest.TestCase):
+    """#312 Slice B: board/tests milestones join the spine ONLY as evidence --
+    done on an observed fact, empty otherwise; NEVER current/outline, and the
+    gate frontier logic is byte-identical with them present."""
+
+    BOT = [{"step": "pr"}, {"step": "review", "actor": "bot"},
+           {"step": "merge"}]
+
+    OPEN_PR = {"number": 5, "ci": "passing", "review": "approved"}
+
+    def test_legacy_no_evidence_param_unchanged(self):
+        tr = ds.phase_track(self.OPEN_PR, self.BOT)
+        self.assertEqual([s["step"] for s in tr],
+                         ["branch", "pr", "review", "merge"])
+
+    def test_evidence_segments_inserted(self):
+        tr = ds.phase_track(self.OPEN_PR, self.BOT,
+                            {"board": True, "tests": "green"})
+        self.assertEqual([s["step"] for s in tr],
+                         ["board", "branch", "tests", "pr", "review", "merge"])
+        self.assertEqual(tr[0]["state"], "done")            # board observed
+        self.assertEqual(tr[2]["state"], "done")            # tests observed
+        self.assertEqual(tr[2]["verdict"], "green")
+
+    def test_no_evidence_is_empty_never_done(self):
+        tr = ds.phase_track({"number": 5, "completed": True,
+                             "merged_epoch": 9},
+                            self.BOT, {"board": False, "tests": None})
+        by = {s["step"]: s for s in tr}
+        # completed marks every GATE done -- but a milestone without evidence
+        # stays empty even on a completed ticket (never imply certainty)
+        self.assertEqual(by["board"]["state"], "empty")
+        self.assertEqual(by["tests"]["state"], "empty")
+        self.assertNotIn("verdict", by["tests"])
+        self.assertEqual(by["merge"]["state"], "done")
+
+    def test_red_tests_are_observed_done_with_verdict(self):
+        tr = ds.phase_track(self.OPEN_PR, self.BOT,
+                            {"board": False, "tests": "red"})
+        by = {s["step"]: s for s in tr}
+        self.assertEqual(by["tests"]["state"], "done")
+        self.assertEqual(by["tests"]["verdict"], "red")
+
+    def test_frontier_unmoved_by_empty_milestones(self):
+        # open PR, review NOT approved: frontier must stay on `review`,
+        # not get eaten by an empty tests/board segment
+        tr = ds.phase_track({"number": 5, "ci": "pending", "review": ""},
+                            self.BOT, {"board": False, "tests": None})
+        by = {s["step"]: s for s in tr}
+        self.assertEqual(by["review"]["state"], "current")
+        self.assertEqual(by["tests"]["state"], "empty")
+
+    def test_malformed_evidence_degrades(self):
+        tr = ds.phase_track(self.OPEN_PR, self.BOT, "junk")
+        self.assertEqual([s["step"] for s in tr],
+                         ["branch", "pr", "review", "merge"])
+
+    def test_falsy_focus_still_empty_track(self):
+        self.assertEqual(
+            ds.phase_track(None, self.BOT, {"board": True, "tests": "green"}),
+            [])
+
+
+class FocusIssueTest(unittest.TestCase):
+    """#312 (CP1): evidence must be keyed on the ISSUE number. The open-PR
+    focus variant's `number` is the PR number -- its issue ref comes from the
+    branch name; completed/issue variants already carry the issue number."""
+
+    def test_open_pr_variant_uses_branch_ref(self):
+        ft = {"number": 313, "ci": "passing", "review": "",
+              "branch": "feat/312-phase-track-slice-b"}
+        self.assertEqual(ds.focus_issue(ft), 312)
+
+    def test_open_pr_variant_no_branch_ref_none(self):
+        ft = {"number": 313, "ci": "passing", "review": "",
+              "branch": "hotfix"}
+        self.assertIsNone(ds.focus_issue(ft))
+
+    def test_completed_variant_number_is_issue(self):
+        ft = {"number": 312, "completed": True, "merged_epoch": 9,
+              "pr_number": 313}
+        self.assertEqual(ds.focus_issue(ft), 312)
+
+    def test_issue_variant_number_is_issue(self):
+        ft = {"number": 312, "in_progress": True, "state": "open"}
+        self.assertEqual(ds.focus_issue(ft), 312)
+
+    def test_malformed_none(self):
+        self.assertIsNone(ds.focus_issue(None))
+        self.assertIsNone(ds.focus_issue({}))
+
+
+class BoardTransitionsTest(unittest.TestCase):
+    """#312 Slice B: board.sh's transition log -> the set of issues with an
+    OBSERVED board write. Total: missing file -> empty set; garbled lines
+    skipped, never raised -- evidence is EARNED (prevention-log #18)."""
+
+    def _write(self, body):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        p = os.path.join(d, "board-transitions.log")
+        with open(p, "w") as fh:
+            fh.write(body)
+        return p
+
+    def test_missing_file_empty(self):
+        self.assertEqual(ds.board_transitions("/nonexistent/x.log"), set())
+
+    def test_parses_issues(self):
+        p = self._write("1751700000\t42\tIn Progress\n"
+                        "1751700100\t42\tIn Review\n1751700200\t7\tDone\n")
+        self.assertEqual(ds.board_transitions(p), {42, 7})
+
+    def test_garbled_lines_skipped(self):
+        # non-numeric epoch, non-numeric issue, empty status, wrong field
+        # count: every garbled shape is skipped -- evidence is EARNED (CP1)
+        p = self._write("junk\n\t\t\nx\t42\tDone\n1751700000\tNaN\tDone\n"
+                        "1751700000\t42\t\n1751700000\t9\tDone\n")
+        self.assertEqual(ds.board_transitions(p), {9})
+
+
+class TestsRanVerdictTest(unittest.TestCase):
+    """#312 Slice B: the gate verdict is parsed from run_all.sh's terminal
+    markers in tool_result content. TWO honesty filters (CP1): the result must
+    belong to a tool_use whose command actually invoked the gate (run_all.sh
+    or git push -- the pre-push hook), and the marker must be LINE-EXACT (so
+    quoting the script's source can never fake a green). Latest marker wins;
+    absent -> None."""
+
+    def _log(self, *lines):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        p = os.path.join(d, "session-20260705T010101.log")
+        with open(p, "w") as fh:
+            fh.write("\n".join(json.dumps(o) for o in lines) + "\n")
+        return p
+
+    @staticmethod
+    def _tool_use(tid, command):
+        return {"type": "assistant", "message": {"usage": {}, "content": [
+            {"type": "tool_use", "id": tid, "name": "Bash",
+             "input": {"command": command}}]}}
+
+    @staticmethod
+    def _tool_result(text, tid="t1"):
+        return {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tid,
+             "content": [{"type": "text", "text": text}]}]}}
+
+    def test_green_from_run_all(self):
+        p = self._log(self._tool_use("t1", "bash tests/run_all.sh"),
+                      self._tool_result("=== python: test_quota ===\nok\n"
+                                        "ALL SUITES PASS\n"))
+        self.assertEqual(ds.parse_session_log(p)["tests_ran"], "green")
+
+    def test_green_from_push_hook(self):
+        p = self._log(self._tool_use("t1", "git push -u origin feat/312-x"),
+                      self._tool_result("remote: ...\nALL SUITES PASS\n"))
+        self.assertEqual(ds.parse_session_log(p)["tests_ran"], "green")
+
+    def test_red_then_green_latest_wins(self):
+        p = self._log(self._tool_use("t1", "bash tests/run_all.sh"),
+                      self._tool_result("ONE OR MORE SUITES FAILED\n", "t1"),
+                      self._tool_use("t2", "bash tests/run_all.sh"),
+                      self._tool_result("ALL SUITES PASS\n", "t2"))
+        self.assertEqual(ds.parse_session_log(p)["tests_ran"], "green")
+
+    def test_red(self):
+        p = self._log(self._tool_use("t1", "bash tests/run_all.sh"),
+                      self._tool_result("FAIL - x\nONE OR MORE SUITES FAILED\n"))
+        self.assertEqual(ds.parse_session_log(p)["tests_ran"], "red")
+
+    def test_non_gate_command_cannot_fake_green(self):
+        # a bare marker line from the WRONG command (printf/echo) is ignored
+        p = self._log(self._tool_use("t1", "printf 'ALL SUITES PASS\\n'"),
+                      self._tool_result("ALL SUITES PASS\n"))
+        self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
+
+    def test_mentioning_run_all_is_not_executing_it(self):
+        # CP2: grep -o emits a BARE marker line and the command NAMES
+        # run_all.sh -- but doesn't execute it. Command-position match only.
+        p = self._log(
+            self._tool_use("t1", "grep -o 'ALL SUITES PASS' tests/run_all.sh"),
+            self._tool_result("ALL SUITES PASS\n"))
+        self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
+
+    def test_bare_command_position_run_all_counts(self):
+        p = self._log(self._tool_use("t1", "./tests/run_all.sh"),
+                      self._tool_result("ALL SUITES PASS\n"))
+        self.assertEqual(ds.parse_session_log(p)["tests_ran"], "green")
+
+    def test_source_quote_not_a_verdict(self):
+        # cat-ing run_all.sh: gate-named command, but the marker is embedded
+        # in the echo line, never a bare LINE
+        p = self._log(self._tool_use("t1", "cat tests/run_all.sh"),
+                      self._tool_result('if [ "$fail" -eq 0 ]; then echo '
+                                        '"ALL SUITES PASS"; exit 0; fi\n'))
+        self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
+
+    def test_string_content_shape(self):
+        # tool_result content may be a plain string, not a block list
+        o = {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": "ALL SUITES PASS\n"}]}}
+        p = self._log(self._tool_use("t1", "bash tests/run_all.sh"), o)
+        self.assertEqual(ds.parse_session_log(p)["tests_ran"], "green")
+
+    def test_absent_none(self):
+        p = self._log({"type": "system", "subtype": "init",
+                       "model": "m", "cwd": "/x"})
+        self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
+
+    def test_heredoc_line_starting_with_run_all_is_not_a_gate(self):
+        # review-bot BLOCKING on #313 round 3: with re.MULTILINE, `^` matched
+        # the start of EVERY line, so a heredoc/multi-line string whose line
+        # begins with run_all.sh earned a gate id without executing anything.
+        p = self._log(
+            self._tool_use("t1", 'cat <<EOF\nrun_all.sh\nEOF\n'
+                                 'echo "ALL SUITES PASS"'),
+            self._tool_result("run_all.sh\nALL SUITES PASS\n"))
+        self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
+
+    def test_heredoc_line_starting_with_git_push_is_not_a_gate(self):
+        p = self._log(
+            self._tool_use("t1", 'cat <<EOF\ngit push\nEOF\n'
+                                 'echo "ALL SUITES PASS"'),
+            self._tool_result("git push\nALL SUITES PASS\n"))
+        self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
+
+    def test_quoted_bash_run_all_is_not_a_gate(self):
+        # review-bot BLOCKING on #313 round 2: `bash tests/run_all.sh` inside
+        # a STRING (echo'd, not executed) must not earn a gate id -- the
+        # bash/sh alternative needs command-position anchoring too.
+        p = self._log(
+            self._tool_use(
+                "t1", 'echo "bash tests/run_all.sh"; echo "ALL SUITES PASS"'),
+            self._tool_result("bash tests/run_all.sh\nALL SUITES PASS\n"))
+        self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
+
+    def test_chained_bash_run_all_still_counts(self):
+        p = self._log(
+            self._tool_use("t1", "cd /w/tree && bash tests/run_all.sh 2>&1"),
+            self._tool_result("ok\nALL SUITES PASS\n"))
+        self.assertEqual(ds.parse_session_log(p)["tests_ran"], "green")
+
+    def test_git_commit_mentioning_push_is_not_a_gate(self):
+        # review-bot WARNING on #313: `git` + `push` merely CO-OCCURRING in a
+        # command (push inside a commit message) must not earn a gate id --
+        # push must be git's actual subcommand, in command position.
+        p = self._log(
+            self._tool_use("t1", 'git commit -m "push fix for failing test"'),
+            self._tool_result("ALL SUITES PASS\n"))
+        self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
+
+    def test_git_push_not_in_command_position_is_not_a_gate(self):
+        p = self._log(self._tool_use("t1", "echo git push"),
+                      self._tool_result("ALL SUITES PASS\n"))
+        self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
+
+    def test_chained_git_push_still_counts(self):
+        # the loop's real shape: git add/commit && git push -u origin <branch>
+        p = self._log(
+            self._tool_use("t1", "git add -A && git push -u origin feat/312-x"),
+            self._tool_result("remote: ...\nALL SUITES PASS\n"))
+        self.assertEqual(ds.parse_session_log(p)["tests_ran"], "green")
+
+    def test_git_option_before_push_subcommand_counts(self):
+        p = self._log(self._tool_use("t1", "git -C /w/tree push origin main"),
+                      self._tool_result("ALL SUITES PASS\n"))
+        self.assertEqual(ds.parse_session_log(p)["tests_ran"], "green")
+
+
 class TestConfigOverlay(unittest.TestCase):
     """#202: the persistent operator overlay (var/autonomy-logs/config-overrides)
     shadows committed config.yaml for model/effort in the render model, and is

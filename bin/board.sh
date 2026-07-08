@@ -580,6 +580,15 @@ if [ "$cmd" = "status" ]; then
   if [ -z "${OPT_ID:-}" ]; then warn "status '$status' is not a board column (skip)"; exit 0; fi
   if set_single_select "$PID" "$ITEM" "$FID" "$OPT_ID"; then
     warn "#$issue -> $status"
+    # #312 Slice B: append-only transition log -- the engine-owned evidence
+    # the dashboard's phase track stamps its `board` milestone from. ONLY a
+    # confirmed write lands here (this success branch), so a log line is an
+    # honest observed fact. Best-effort like every board.sh path (SD-6): an
+    # fs failure warns and never blocks the transition that just succeeded.
+    { mkdir -p var/autonomy-logs \
+        && printf '%s\t%s\t%s\n' "$(date +%s)" "$issue" "$status" \
+           >> var/autonomy-logs/board-transitions.log; } 2>/dev/null \
+      || warn "transition log write failed (skip)"
   else
     warn "failed to set #$issue status (skip)"
   fi

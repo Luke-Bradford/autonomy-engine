@@ -33,6 +33,35 @@ _TICKET_RE = re.compile(r"#(\d{1,6})\b")
 _BRANCH_CREATE_RE = re.compile(r"(?:checkout\s+-[bB]|switch\s+-[cC])\s+['\"]?([^\s'\";&|]+)")
 # the engine's own board write: board.sh status <n> "<Status>"
 _BOARD_STATUS_RE = re.compile(r"board\.sh['\"]?\s+status\s+(\d{1,6})\s+['\"]?([A-Za-z][A-Za-z ]*)")
+# #312 Slice B: run_all.sh's terminal verdict markers, LINE-EXACT (^...$,
+# MULTILINE). Line-exactness is one of the two honesty gates: the run PRINTS
+# the bare marker on its own line, while quoting the script's source (cat/grep
+# in a tool_result) yields `...echo "ALL SUITES PASS"...` -- never a bare line.
+_GATE_GREEN_RE = re.compile(r"^ALL SUITES PASS$", re.MULTILINE)
+_GATE_RED_RE = re.compile(r"^ONE OR MORE SUITES FAILED$", re.MULTILINE)
+# The other honesty gate (CP1): a marker only counts inside the RESULT of a
+# command that actually EXECUTED the gate -- run_all.sh in command position
+# (bare or under bash/sh), or git push (the pre-push hook runs the gate; its
+# output lands in the push's result). Merely MENTIONING run_all.sh is not
+# enough (CP2): `grep -o 'ALL SUITES PASS' tests/run_all.sh` emits a bare
+# marker line from a run_all-naming command -- so cat/grep/printf shapes
+# never earn a gate id.
+_GATE_CMD_RE = re.compile(
+    # run_all.sh in COMMAND POSITION, bare or under bash/sh (with optional
+    # shell flags). Anchoring applies to the bash/sh form too (#313 review
+    # BLOCKING round 2): `echo "bash tests/run_all.sh"` names the gate inside
+    # a string without executing it and must not earn a gate id.
+    r"(?:^|[;&|(]\s*)(?:(?:bash|sh)\s+(?:-\S+\s+)*)?\S*run_all\.sh\b"
+    # git push: command-position `git` with `push` as its actual SUBCOMMAND
+    # (global options like -C <path> allowed between) -- git+push merely
+    # CO-OCCURRING (`git commit -m "push fix"`, `echo git push`) must not
+    # earn a gate id (#313 review WARNING).
+    r"|(?:^|[;&|(]\s*)git\s+(?:-\S+(?:\s+[^-\s]\S*)?\s+)*push\b")
+# NO re.MULTILINE (#313 review round 3): a per-line `^` let any line of a
+# multi-line string (heredoc body, embedded script) forge a gate id without
+# executing anything. `^` = start of the WHOLE command only; a legit gate
+# call on a later line of a multi-line command is missed and degrades to an
+# EMPTY segment -- the fail-safe direction (miss evidence, never lie).
 
 # Claude Code writes one JSONL per session under here; the account's REAL usage
 # (all repos, all surfaces) is aggregatable from these -- the honest 5h/weekly
@@ -317,6 +346,8 @@ def parse_session_log(path):
     result = None
     rate_limited = False
     current_step = ""
+    tests_ran = None      # #312: latest gate verdict ("green"/"red") or None
+    gate_tool_ids = set()  # tool_use ids whose command invoked the gate
     # ticket signals (#26): mention counts + last-seen position, the branch the
     # session created, and the last board.sh status write per ticket
     ticket_mentions = Counter()
@@ -373,6 +404,8 @@ def parse_session_log(path):
                             for n in _TICKET_RE.findall(str(inp.get(field) or "")):
                                 _mention(int(n))
                         cmd = str(inp.get("command") or "")
+                        if _GATE_CMD_RE.search(cmd) and block.get("id"):
+                            gate_tool_ids.add(block.get("id"))
                         m = _BRANCH_CREATE_RE.search(cmd)
                         if m:
                             ref = extract_ticket_ref(m.group(1))
@@ -395,6 +428,39 @@ def parse_session_log(path):
                     rate_limited = True
             elif t == "result":
                 result = o
+            elif t == "user":
+                # tool_result content: the gate verdict (#312 Slice B), but
+                # ONLY for results of a gate-invoking tool_use (gate_tool_ids).
+                # The content field is a block list OR a plain string depending
+                # on the emitter -- normalise to text, then line-exact-match
+                # the run_all.sh terminal markers. Latest marker wins (a red
+                # run followed by a green re-run is honestly green).
+                blocks = (o.get("message") or {}).get("content")
+                if not isinstance(blocks, list):
+                    continue
+                for block in blocks:
+                    if (not isinstance(block, dict)
+                            or block.get("type") != "tool_result"
+                            or block.get("tool_use_id") not in gate_tool_ids):
+                        continue
+                    content = block.get("content")
+                    if isinstance(content, str):
+                        texts = [content]
+                    elif isinstance(content, list):
+                        texts = [c.get("text") or "" for c in content
+                                 if isinstance(c, dict)
+                                 and c.get("type") == "text"]
+                    else:
+                        continue
+                    for text in texts:
+                        g = None
+                        for m in _GATE_GREEN_RE.finditer(text):
+                            g = ("green", m.start())
+                        for m in _GATE_RED_RE.finditer(text):
+                            if g is None or m.start() > g[1]:
+                                g = ("red", m.start())
+                        if g:
+                            tests_ran = g[0]
             # --- codex adapter sessions (`codex exec --json`, #49) ---------
             elif t == "thread.started":
                 session_id = o.get("thread_id") or session_id
@@ -475,6 +541,7 @@ def parse_session_log(path):
         "num_turns": num_turns,
         "result_text": result_text,
         "rate_limited": rate_limited,
+        "tests_ran": tests_ran,
         "ticket": ticket,
         "ticket_source": ticket_src,
     }
@@ -603,9 +670,90 @@ def merge_gate_chain(strategy):
     return [{"step": "pr"}]
 
 
-def phase_track(focus, gate_chain):
+def board_transitions(path):
+    """Issue numbers with at least one OBSERVED board write, from board.sh's
+    append-only transition log (#312 Slice B). Each line is
+    `epoch\\tissue\\tstatus`, written only on a CONFIRMED Status mutation, so
+    membership here is honest evidence for the phase track's `board` segment.
+
+    Total by construction (feeds the whole-page render): a missing/unreadable
+    file is the normal pre-Slice-B state and yields an empty set; a garbled
+    line (fs hiccup, partial append) is skipped, never raised. Strict 3-field
+    shape -- numeric epoch, numeric issue, non-empty status -- because the
+    verdict is EARNED, not defaulted (prevention-log #18): absence of clean
+    evidence keeps the segment EMPTY downstream."""
+    issues = set()
+    try:
+        with open(path, errors="replace") as fh:
+            for line in fh:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) != 3 or not parts[2] or not parts[0].isdigit():
+                    continue
+                try:
+                    issues.add(int(parts[1]))
+                except ValueError:
+                    continue
+    except OSError:
+        return set()
+    return issues
+
+
+def focus_issue(focus):
+    """The ISSUE number behind a focus_ticket, for keying #312 evidence.
+    The three variants carry it differently (Codex CP1 catch): the open-PR
+    variant's `number` is the PR NUMBER -- its issue ref is parsed from the
+    branch name; the completed and issue-only variants' `number` IS the
+    issue. None when it can't be honestly derived (evidence then stays
+    empty -- a wrong key would light another ticket's milestones). Total:
+    any malformed focus -> None."""
+    if not isinstance(focus, dict) or not focus:
+        return None
+    if "ci" in focus or "review" in focus:
+        return extract_ticket_ref(str(focus.get("branch") or ""))
+    n = focus.get("number")
+    return n if isinstance(n, int) else None
+
+
+def _with_evidence(spine, evidence):
+    """Insert the #312 evidence-only milestone segments into a fully-stamped
+    gate spine: `board` at position 0, `tests` right after `branch`. Evidence
+    marks are done/empty ONLY -- inserting after gate stamping keeps the
+    frontier (`current`) logic byte-identical. A malformed (non-dict)
+    evidence degrades to the legacy no-evidence track."""
+    if not isinstance(evidence, dict):
+        return spine
+    board = {"step": "board",
+             "state": "done" if evidence.get("board") else "empty"}
+    verdict = evidence.get("tests")
+    if verdict in ("green", "red"):
+        tests = {"step": "tests", "state": "done", "verdict": verdict}
+    else:
+        tests = {"step": "tests", "state": "empty"}
+    out = [board]
+    for seg in spine:
+        out.append(seg)
+        if seg.get("step") == "branch":
+            out.append(tests)
+    return out
+
+
+def phase_track(focus, gate_chain, evidence=None):
     """The selected-lane center-zone phase track (#187 UI-4): the configured
     gate spine marked by OBSERVED GitHub-flow facts, per ticket.
+
+    #312 Slice B: `evidence` (optional) carries the two SD-32 observed-
+    milestone sources, pre-digested by the caller:
+        {"board": bool, "tests": "green"|"red"|None}
+    With evidence present, a `board` segment (position 0) and a `tests`
+    segment (right after `branch`) join the spine as EVIDENCE-ONLY marks:
+    `done` when the fact was observed (tests also carry a `verdict`),
+    `empty` otherwise -- never `current`, never `outline`, and never
+    inferred from ticket state (a completed ticket with no logged board
+    write keeps an EMPTY board segment: certainty is earned, prevention-log
+    #18). They are inserted AFTER gate stamping (_with_evidence), so the
+    Slice A frontier logic is untouched by construction. A malformed
+    (non-dict) evidence degrades to the legacy no-evidence track; a falsy
+    focus stays [] -- evidence never conjures a phantom spine.
 
     The spine is a leading `branch` step + `merge_gate_chain(strategy)` (so the
     configured layer -- what a PR must still clear -- is drawn straight from the
@@ -653,7 +801,7 @@ def phase_track(focus, gate_chain):
     if focus.get("completed") or focus.get("merged_epoch"):
         for seg in spine:
             seg["state"] = "done"
-        return spine
+        return _with_evidence(spine, evidence)
 
     # open PR: the open-PR focus variant carries live gate state (`ci`/`review`,
     # co-set at the single construction site in bin/dashboard.py from the top
@@ -673,7 +821,7 @@ def phase_track(focus, gate_chain):
                 marked_current = True
             else:
                 seg["state"] = "outline"
-        return spine
+        return _with_evidence(spine, evidence)
 
     # issue-only (a session ticket with no open PR yet): the branch is the only
     # real milestone. It is the live frontier while a session is in progress,
@@ -683,7 +831,7 @@ def phase_track(focus, gate_chain):
             seg["state"] = "current" if focus.get("in_progress") else "done"
         else:
             seg["state"] = "outline"
-    return spine
+    return _with_evidence(spine, evidence)
 
 
 # The engine-standard workflow label that marks an issue as awaiting a human

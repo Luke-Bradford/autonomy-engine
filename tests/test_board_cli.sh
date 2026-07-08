@@ -36,6 +36,7 @@ case "\$args" in
       printf '{"id":"ISSUE_NODE","labels":[{"name":"%s"},{"name":"loop-ready"}]}' "\${GH_LABELS:-p2}"
     fi ;;
   *updateProjectV2ItemFieldValue*)
+    if [ -n "\${GH_MUTFAIL:-}" ]; then exit 1; fi
     echo "SET \$args" >> "$TMP/mutations"
     printf '{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"ITEM"}}}}' ;;
   *addProjectV2ItemById*)
@@ -58,7 +59,7 @@ chmod +x "$TMP/bin/gh"
 run() {
   local labels="$1" fail="$2"; shift 2
   : > "$TMP/mutations"
-  ( cd "$TMP/repo" && PATH="$TMP/bin:$PATH" GH_LABELS="$labels" GH_FAIL="$fail" GH_SWEEP_REMAINING="${GH_SWEEP_REMAINING:-5000}" GH_PROJ_TITLE="${GH_PROJ_TITLE:-}" GH_ISSUE_EMPTY="${GH_ISSUE_EMPTY:-}" "$ROOT/bin/board.sh" "$@" ) >/dev/null 2>&1
+  ( cd "$TMP/repo" && PATH="$TMP/bin:$PATH" GH_LABELS="$labels" GH_FAIL="$fail" GH_SWEEP_REMAINING="${GH_SWEEP_REMAINING:-5000}" GH_PROJ_TITLE="${GH_PROJ_TITLE:-}" GH_ISSUE_EMPTY="${GH_ISSUE_EMPTY:-}" GH_MUTFAIL="${GH_MUTFAIL:-}" "$ROOT/bin/board.sh" "$@" ) >/dev/null 2>&1
   echo "$?"
 }
 muts() { cat "$TMP/mutations" 2>/dev/null; }
@@ -188,6 +189,21 @@ check "marker: staged stale marker" "1" "$([ -f "$MARKER" ] && echo 1 || echo 0)
 rc="$(GH_ISSUE_EMPTY=1 run p2 "" status 42 "In review")"
 check "marker: issue-lookup-fail exits 0" "0" "$rc"
 check "marker: cleared despite issue-lookup failure" "0" "$([ -f "$MARKER" ] && echo 1 || echo 0)"
+
+# T: transition log (#312 Slice B) -- a SUCCESSFUL status write appends one
+# epoch<TAB>issue<TAB>status line to var/autonomy-logs/board-transitions.log;
+# a FAILED mutation appends nothing. Best-effort: rc stays 0 either way.
+TLOG="$TMP/repo/var/autonomy-logs/board-transitions.log"
+rm -f "$TLOG"
+rc="$(run p2 "" status 42 "In review")"
+check "tlog: successful status exits 0" "0" "$rc"
+check "tlog: one line appended" "1" "$(wc -l < "$TLOG" 2>/dev/null | tr -d ' ')"
+tline="$(tail -1 "$TLOG" 2>/dev/null)"
+check "tlog: line is epoch<TAB>issue<TAB>status" "42	In review" "$(printf '%s' "$tline" | cut -f2-)"
+check "tlog: epoch field numeric" "1" "$(printf '%s' "$tline" | cut -f1 | grep -c '^[0-9][0-9]*$')"
+rc="$(GH_MUTFAIL=1 run p2 "" status 42 "In review")"
+check "tlog: failed mutation exits 0" "0" "$rc"
+check "tlog: failed mutation appends nothing" "1" "$(wc -l < "$TLOG" | tr -d ' ')"
 
 # F: #211 overlay-aware read seam. Source the real board.sh (its guard makes a
 # `source` define functions only) and exercise config_value_with_overlay
