@@ -160,6 +160,15 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px
 .role .rst{margin-left:auto}
 .role.off{opacity:.5}
 
+/* the two-brain pair editor */
+.brains{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:10px 0}
+@media(max-width:900px){.brains{grid-template-columns:1fr}}
+.brain{border:1px solid var(--hair2);border-radius:var(--r);background:var(--panel2);padding:11px 13px}
+.brain-h{font-weight:600;font-size:13px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.brain-h .brain-what{font-weight:400;font-size:11.5px;color:var(--mut)}
+.brain-when{font-size:11px;color:var(--dim);margin:5px 0 9px;line-height:1.45}
+.brain .wsed{border:0;padding:0}
+
 /* org & workflow (#326 slice 1) */
 .orghead{margin-top:14px;padding-top:10px;border-top:1px solid var(--hair);
   font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--dim)}
@@ -593,9 +602,9 @@ function orgZone(org,enc){
     :(pl.source==="agent-file"?`<span class="orgmodel" style="color:var(--dim)" title="from the committed agent file — picking a model below overrides it">agent-file</span>`:"");
   const pair=`<div class="orgpair">
     <span class="orgflow">ticket</span><span class="orgarr">→</span>
-    <span class="orgnode"><b>planner</b> <span class="orgmodel ${plCls}">${esc(plTxt)}</span> ${plSrc} thinks — plan · structure · goals</span><span class="orgarr">→</span>
-    <span class="orgnode"><b>coder</b> <span class="orgmodel">${esc(co.model||"model unset")}${co.effort?" · "+esc(co.effort):""}</span> builds, asking the planner when unsure</span><span class="orgarr">→</span>
-    <span class="orgnode">planner checks the code against the plan (PLAN-CHECK)</span><span class="orgarr">→</span>
+    <span class="orgnode"><b>thinking</b> <span class="orgmodel ${plCls}">${esc(plTxt)}</span> ${plSrc} writes the plan</span><span class="orgarr">→</span>
+    <span class="orgnode"><b>building</b> <span class="orgmodel">${esc(co.model||"model unset")}${co.effort?" · "+esc(co.effort):""}</span> writes the code, following the plan</span><span class="orgarr">→</span>
+    <span class="orgnode"><b>thinking</b> checks the code against the plan</span><span class="orgarr">→</span>
     <span class="orgnode orgdim">review bot · CI · merge gate</span>
   </div>`;
   const rows=(org.roles||[]).map(r=>{
@@ -615,12 +624,38 @@ function orgZone(org,enc){
       +`<span class="orgtrig">${esc(trig)}</span>`
       +`<span class="orgbits">${esc(bits.join(" · "))}</span></div>${notes}`;
   }).join("");
-  const pairEdit=enc?(
-    `<div class="cfghint" style="margin-top:2px">pick the pair — planner = the thinking tier; the coder model/effort selects above are the building tier:</div>`
-    +cfgFieldList(enc,"agent.planner.model","planner model",(pl.source==="config"?pl.model:""))
-  ):"";
-  return `<div class="orghead">org &amp; workflow<span class="orgct">who runs · when · on what — workstream editors land next slice; the pair is editable below</span></div>`
+  const pairEdit=enc?pairBrains(enc,pl,co):"";
+  return `<div class="orghead">org &amp; workflow<span class="orgct">who runs · when · on what — click a workstream on the left to change it</span></div>`
     +badge+pair+pairEdit+`<div class="orgroles">${rows}</div>`;
+}
+/* The two-brain editor: everything a human needs to steer the pair, in the
+   pair's own words. One picker per brain -- no third "model" field competing
+   with these (the coder card hides its generic model row for exactly that
+   reason). All saves land in the live config via the existing config_set
+   path. */
+function pairBrains(enc,pl,co){
+  const brain=(title,what,when,inner)=>`<div class="brain">
+    <div class="brain-h">${title}<span class="brain-what">${what}</span></div>
+    <div class="brain-when">${when}</div>
+    <div class="wsed cfgrow">${inner}</div></div>`;
+  const think=brain("🧠 thinking","plans the work, answers the hard questions, signs off",
+    "used three times per ticket: writes the plan up front · answers the coder when it gets stuck mid-build · checks the finished code against the plan before the PR is declared done",
+    `<select class="cfgin" name="agent.planner.model" data-key="agent.planner.model">${modelSelectOptions(pl.source==="config"?pl.model:"")}</select>`
+    +`<button class="cbtn" onclick="cfgSave(this,'${enc}','agent.planner.model')">save</button>`
+    +(pl.source==="agent-file"?`<span class="cfghint">currently from the repo's own agent file (${esc(pl.model||"?")}) — picking here overrides it</span>`:"")
+    +(pl.source==="config-invalid"?`<span class="cfghint" style="color:var(--warn)">⚠ the configured value isn't a valid model id — the agent file's ${esc(pl.model||"default")} is used instead</span>`:""));
+  const build=brain("🔨 building","does the grunt work — writes the code, following the plan",
+    "runs the whole session: reads the ticket + the plan, edits files, runs tests, opens the PR; goes back to thinking when unsure",
+    `<select class="cfgin" name="agent.model.primary" data-key="agent.model.primary">${modelSelectOptions(co.model||"")}</select>`
+    +`<select class="cfgin" name="agent.effort" data-key="agent.effort">${EFFORT_CHOICES.map(e=>`<option value="${e}" ${e===(co.effort||"")?"selected":""}>${e?("effort: "+e):"effort: CLI default"}</option>`).join("")}</select>`
+    +`<button class="cbtn" onclick="pairSaveBuild('${enc}')">save</button>`);
+  return `<div class="brains">${think}${build}</div>`;
+}
+function pairSaveBuild(enc){
+  const root=document.getElementById("canvas");
+  const m=root.querySelector('.brains select[name="agent.model.primary"]').value;
+  const e=root.querySelector('.brains select[name="agent.effort"]').value;
+  post({action:"set_model",repo:decodeURIComponent(enc),model:m,effort:e,scope:"default"},"building brain saved",load);
 }
 
 /* ---- 3-ZONE RENDER (slice 2, #326/#191) ------------------------------------
@@ -679,7 +714,7 @@ function wsCard(r,w){
   const scope=(w.scope_labels||[]).join(", ");
   const notes=(w.notes||[]).map(n=>`<div class="cfghint">note: ${esc(n)}</div>`).join("");
   const pairRow=(w.name==="coder")?orgZone(org,enc):"";
-  const field=(k,inner)=>`<div class="wsfield"><span class="k">${k}</span><div class="wsed">${inner}</div></div>`;
+  const field=(k,inner)=>`<div class="wsfield"><span class="k">${k}</span><div class="wsed cfgrow">${inner}</div></div>`;
   const cronPresets=[["","custom…"],["*/30 * * * *","every 30 min"],["0 * * * *","hourly"],["0 */2 * * *","every 2 hours"],["0 */4 * * *","every 4 hours"],["0 9 * * *","daily 09:00"],["0 9 * * 1-5","weekdays 09:00"]];
   const kind=w.trigger_kind||"loop";
   const cronVal=kind==="cron"?(w.trigger_detail||""):"0 9 * * *";
@@ -711,18 +746,20 @@ function wsCard(r,w){
     +`<select id="ws-effort">${EFFORT_CHOICES.map(e=>`<option value="${e}" ${e===(w.effort||"")?"selected":""}>${e||"effort: repo default"}</option>`).join("")}</select>`
     +`<button class="cbtn" onclick="wsSaveModel('${enc}','${encName}')">save</button>`
     +`<span class="cfghint">empty = repo default (${esc((pair.coder||{}).model||"unset")}${(pair.coder||{}).effort?" · "+esc((pair.coder||{}).effort):""})</span>`;
-  const promptEd=`<div class="wsfield"><span class="k">prompt</span><div class="wsed" style="flex-direction:column;align-items:stretch">`
+  const promptEd=`<div class="wsfield"><span class="k">instructions</span><div class="wsed" style="flex-direction:column;align-items:stretch">`
     +`<div class="cfghint" id="ws-prompt-path">loading…</div>`
     +`<textarea id="ws-prompt" class="wsprompt" placeholder="the workstream's standing instructions — duties, priorities, conditions for decisions"></textarea>`
     +`<div><button class="cbtn go" onclick="wsSavePrompt('${enc}','${encName}')">save prompt</button></div>`
     +`</div></div>`;
   setTimeout(()=>wsLoadPrompt(r.path,w.name),0);
+  const isCoder=(w.name==="coder");
   return `<div class="cfgrepo" data-repo="${enc}">
-    ${field("state",stateBtn)}
-    ${field("runs",trigEd)}
-    ${field("scope",scopeEd)}
-    ${field("merge gate",gateEd)}
-    ${field("model",modelEd)}
+    ${isCoder?`<div class="cfghint">the coder is a PAIR: a <b>thinking</b> brain that plans/answers/checks, and a <b>building</b> brain that writes the code from the plan — set each below.</div>`:""}
+    ${field("on / off",stateBtn)}
+    ${field("when it runs",trigEd)}
+    ${field("which tickets",scopeEd)}
+    ${field("merge behaviour",gateEd)}
+    ${isCoder?"":field("runs on",modelEd)}
     ${w.lane&&w.lane!=="main"?field("lane",esc(w.lane)):""}
     ${notes}${promptEd}${pairRow}
   </div>`;
