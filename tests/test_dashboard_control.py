@@ -115,6 +115,23 @@ class TestControlPlan(unittest.TestCase):
         p = dc.control_plan(self.repo, "start", None, 501)
         self.assertIn("error", p)
 
+    def test_stop_with_error_service_propagates_refusal(self):
+        # #309: find_service refused (stale plist) -- stop/start must surface
+        # THAT reason, not act on a half-known service or claim none installed.
+        p = dc.control_plan(self.repo, "stop", {"error": "stale plist?"}, 501)
+        self.assertEqual(p["error"], "stale plist?")
+        self.assertNotIn("cmd", p)
+
+    def test_start_with_error_service_propagates_refusal(self):
+        p = dc.control_plan(self.repo, "start", {"error": "stale plist?"}, 501)
+        self.assertEqual(p["error"], "stale plist?")
+        self.assertNotIn("cmd", p)
+
+    def test_pause_unaffected_by_error_service(self):
+        # pause/resume are sentinel-only; a stale plist must not block them
+        p = dc.control_plan(self.repo, "pause", {"error": "stale plist?"}, 501)
+        self.assertIn("touch", p)
+
     def test_unknown_action_errors(self):
         p = dc.control_plan(self.repo, "delete-everything", self.svc, 501)
         self.assertIn("error", p)
@@ -194,6 +211,42 @@ class TestFindService(unittest.TestCase):
         with open(os.path.join(self.dir, "com.example.other.plist"), "w") as fh:
             fh.write(PLIST % "/Users/op/.myrepo-autonomy")  # references repo but wrong prefix
         self.assertIsNone(dc.find_service("/Users/op/.myrepo-autonomy", self.dir))
+
+    def test_label_echoed_outside_label_key_does_not_pass(self):
+        # Codex CP2 on #309: the filename-derived label appearing in a COMMENT
+        # (or any non-Label string) must not satisfy the check -- only the
+        # actual <key>Label</key> value counts. A substring scan would pass
+        # this; the plistlib comparison refuses.
+        text = (PLIST % "/Users/op/.myrepo-autonomy").replace(
+            "<dict>",
+            "<dict><!-- <string>com.autonomy.stale.supervisor</string> -->", 1)
+        with open(os.path.join(self.dir, "com.autonomy.stale.supervisor.plist"),
+                  "w") as fh:
+            fh.write(text)
+        svc = dc.find_service("/Users/op/.myrepo-autonomy", self.dir)
+        self.assertIn("error", svc)
+        self.assertIn("stale plist", svc["error"])
+
+    def test_unparseable_plist_refuses_not_trusts(self):
+        # content-matches --repo but is not valid plist XML: the Label cannot
+        # be verified, so refuse (fail-safe) rather than act on the filename.
+        with open(os.path.join(self.dir, "com.autonomy.myrepo.supervisor.plist"),
+                  "w") as fh:
+            fh.write("<string>--repo</string>\n"
+                     "<string>/Users/op/.myrepo-autonomy</string>\n"
+                     "not a plist <<<")
+        svc = dc.find_service("/Users/op/.myrepo-autonomy", self.dir)
+        self.assertIn("error", svc)
+
+    def test_internal_label_mismatch_refuses_stale_plist(self):
+        # #309: filename says .stale., internal Label says .myrepo. -- launchctl
+        # stop (filename-derived label) and start (internal Label) would act on
+        # DIFFERENT targets; find_service must refuse, not pick either.
+        self._write("com.autonomy.stale.supervisor.plist", "/Users/op/.myrepo-autonomy")
+        svc = dc.find_service("/Users/op/.myrepo-autonomy", self.dir)
+        self.assertIn("error", svc)
+        self.assertIn("stale plist", svc["error"])
+        self.assertNotIn("label", svc)
 
 
 class TestActionValidation(unittest.TestCase):
@@ -389,6 +442,17 @@ class TestFindLaneService(unittest.TestCase):
         # a plist named .qa. whose --lane says something else: refuse
         self._lane_plist("myrepo.qa", "/Users/op/.myrepo-qa-autonomy", "prod")
         self.assertIn("error", dc.find_lane_service(self.repo, "qa", self.dir))
+
+    def test_stale_own_plist_propagates_find_service_refusal(self):
+        # #309: the repo's OWN plist has filename != internal Label; lane
+        # resolution derives the slug from that label, so it must refuse with
+        # the stale-plist reason, not construct labels off a lie.
+        os.remove(os.path.join(self.dir, "com.autonomy.myrepo.supervisor.plist"))
+        with open(os.path.join(self.dir, "com.autonomy.stale.supervisor.plist"), "w") as fh:
+            fh.write(PLIST % self.repo)   # internal Label stays .myrepo.
+        svc = dc.find_lane_service(self.repo, "qa", self.dir)
+        self.assertIn("error", svc)
+        self.assertIn("stale plist", svc["error"])
 
     def test_own_lane_returns_none_when_registered_is_that_lane(self):
         # registered worktree runs lane qa itself -> None (use existing path)

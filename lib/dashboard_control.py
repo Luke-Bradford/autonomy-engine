@@ -15,6 +15,7 @@ LaunchAgents. Lifecycle only -- this module has no notion of any target-repo
 trade/order/position path and can never touch one.
 """
 import os
+import plistlib
 import re
 
 VALID_ACTIONS = ("pause", "resume", "stop", "start")
@@ -210,8 +211,14 @@ def repo_remove_plan(path, repos_file):
 def find_service(repo, launch_agents_dir):
     """The installed launchd service for a watched repo (worktree), found by
     matching the plist that references this repo path -- robust to the slug not
-    being re-derivable from the worktree. Returns {label, plist} or None.
-    Only considers com.autonomy.*.supervisor plists."""
+    being re-derivable from the worktree. Returns {label, plist}, {"error": ...}
+    or None. Only considers com.autonomy.*.supervisor plists.
+
+    #309: the internal <key>Label</key> is content-verified against the
+    filename-derived label -- launchctl bootout uses the filename-derived label
+    while bootstrap uses the plist's INTERNAL one, so a stale/hand-edited
+    mismatch would make stop and start act on DIFFERENT launchd targets.
+    Refuse rather than pick either (fail-safe, prevention-log #3/#18)."""
     repo = os.path.abspath(repo)
     try:
         names = os.listdir(launch_agents_dir)
@@ -228,8 +235,24 @@ def find_service(repo, launch_agents_dir):
         except OSError:
             continue
         if "--repo" in text and needle in text:
-            return {"label": name[:-len(".plist")], "plist": path}
+            label = name[:-len(".plist")]
+            if _plist_label(text) != label:
+                return {"error": "plist %s internal Label does not match its "
+                                 "filename -- refusing (stale plist?)" % name}
+            return {"label": label, "plist": path}
     return None
+
+
+def _plist_label(text):
+    """The plist's internal <key>Label</key> value, exactly (plistlib, not a
+    substring scan -- a label echoed in a comment must not pass as the Label).
+    Unparseable / Label-less -> None, which never equals a real label, so
+    callers refuse (fail-safe)."""
+    try:
+        value = plistlib.loads(text.encode("utf-8", "replace")).get("Label")
+    except Exception:
+        return None
+    return value if isinstance(value, str) else None
 
 
 # Lane names share the supervisor's validate_lane shape (bin/supervisor.sh):
@@ -278,6 +301,8 @@ def find_lane_service(repo, lane, launch_agents_dir, default_lane=None):
     if own is None:
         return {"error": "no launchd service installed for this repo -- run "
                          "setup_worktree.sh first"}
+    if "error" in own:          # #309: stale own plist -- slug would be a lie
+        return own
     try:
         with open(own["plist"], errors="replace") as fh:
             own_text = fh.read()
@@ -306,10 +331,7 @@ def find_lane_service(repo, lane, launch_agents_dir, default_lane=None):
     if args.get("lane") != want_lane or not args.get("repo"):
         return {"error": "plist for lane '%s' does not match (lane=%r) -- "
                          "refusing" % (lane, args.get("lane"))}
-    # Label check scopes to the text before ProgramArguments -- the
-    # <key>Label</key> value is the only <string> there in our template; a
-    # full plist parser is not warranted for our own rendered file.
-    if "<string>%s</string>" % label not in text.split("ProgramArguments")[0]:
+    if _plist_label(text) != label:
         return {"error": "plist Label does not match its filename for lane "
                          "'%s' -- refusing (stale plist?)" % lane}
     return {"label": label, "plist": plist, "repo": args["repo"]}
@@ -338,6 +360,8 @@ def control_plan(repo, action, service, uid):
     if not service:
         return {"error": "no launchd service installed for this repo — run "
                          "setup_worktree.sh first"}
+    if "error" in service:      # #309: find_service refused (stale plist)
+        return {"error": service["error"]}
     label, plist = service["label"], service["plist"]
     if action == "stop":
         return {"cmd": ["launchctl", "bootout", "gui/%d/%s" % (uid, label)],
