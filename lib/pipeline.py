@@ -386,8 +386,8 @@ def resolve_pipeline(repo, role):
     # P2's dispatch work lifts this. Lane-UNfiltered enumerators (Codex CP2):
     # the stall hazard is lane-independent, so a role pinned to a non-default
     # lane must not slip past.
-    trig_names = set(n for n, _ in (roles._all_cron_roles(cfg) or []))
-    trig_names.update(n for n, _ in (roles._all_event_roles(cfg) or []))
+    trig_names = set(n for n, _ in (roles.all_cron_roles(cfg) or []))
+    trig_names.update(n for n, _ in (roles.all_event_roles(cfg) or []))
     if len(doc.get("nodes") or []) > 1 and role in trig_names:
         raise PipelineError("pipeline %r has %d nodes but role %r fires on a "
                             "cron/event trigger -- P1 advances one node per "

@@ -716,6 +716,14 @@ def cron_roles(config, lane=None):
             if _in_lane(config, n, lane)]
 
 
+def all_cron_roles(config):
+    """PUBLIC lane-UNfiltered (name, schedule) pairs. For consumers whose
+    concern is lane-independent -- lib/pipeline.py's multi-node cron/event
+    refusal (#345) must catch a role pinned to ANY lane -- as opposed to the
+    scheduler's per-lane cron_roles()."""
+    return _all_cron_roles(config)
+
+
 def _role_events(cfg):
     """The event `on:` token list for a role config, [] when absent/blank.
     Keeps only non-empty string tokens. Defensive against non-dict shapes
@@ -761,6 +769,12 @@ def event_roles(config, lane=None):
     Degrades (skips) an empty-`on:` role rather than crashing."""
     return [(n, e) for (n, e) in _all_event_roles(config)
             if _in_lane(config, n, lane)]
+
+
+def all_event_roles(config):
+    """PUBLIC lane-UNfiltered (name, [event, ...]) pairs -- the sibling of
+    all_cron_roles(), same consumer and rationale."""
+    return _all_event_roles(config)
 
 
 def render_scope(scope):
