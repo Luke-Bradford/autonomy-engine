@@ -396,6 +396,228 @@ def resolve_pipeline(repo, role):
                  "from": binding, "from_version": doc.get("version", 0)}
 
 
+def _split_opts(args, opts):
+    """Split `--flag value` pairs (keys pre-seeded in opts) from positionals."""
+    pos, i = [], 0
+    while i < len(args):
+        if args[i] in opts and i + 1 < len(args):
+            opts[args[i]] = args[i + 1]
+            i += 2
+        else:
+            pos.append(args[i])
+            i += 1
+    return pos
+
+
+def _atomic_write_json(path, obj):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(obj, fh, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _load_state(state_path):
+    try:
+        with open(state_path) as fh:
+            state = json.load(fh)
+    except OSError as exc:
+        raise PipelineError("run state unreadable %s: %s" % (state_path, exc))
+    except ValueError as exc:
+        # Corrupt state is REFUSED loudly, never deleted: silently discarding
+        # it would lose the run's journal record (fail-open). The log names
+        # the path; the operator (or a later doctor slice) removes it.
+        raise PipelineError("run state corrupt %s: %s -- refusing; inspect "
+                            "and remove the file to recover" % (state_path, exc))
+    if not isinstance(state, dict) or not isinstance(state.get("doc"), dict):
+        raise PipelineError("run state corrupt %s: unexpected shape -- "
+                            "refusing" % state_path)
+    return state
+
+
+def start_run(repo, role, state_path, lane=""):
+    doc, meta = resolve_pipeline(repo, role)
+    # run_id: role[--lane]-timestamp-pid -- pid disambiguates same-second
+    # starts across lanes/tests (second-granularity ids collide, weakening
+    # the trust-ledger identity field).
+    ident = "%s--%s" % (role, lane) if lane else role
+    state = {"run_id": "%s-%s-%d" % (ident, time.strftime("%Y%m%dT%H%M%S"),
+                                     os.getpid()),
+             "role": role, "lane": lane, "doc": doc, "meta": meta,
+             "started": int(time.time()), "sessions": 0, "idx": 0,
+             "rounds": {}, "nodes_done": [], "status": "in_progress"}
+    _atomic_write_json(state_path, state)
+    return state
+
+
+def _container_of(doc, node_id):
+    for con in doc.get("containers", []):
+        if node_id in (con.get("children") or []):
+            return con
+    return None
+
+
+def _effective_runs_as(doc, node):
+    con = _container_of(doc, node["id"])
+    merged = {}
+    if con is not None and con.get("kind") == "stage":
+        merged.update(con.get("runs_as") or {})
+    merged.update(node.get("runs_as") or {})
+    return merged
+
+
+def _verdict_rel(state_path):
+    """The verdict file's repo-relative path for the compiled brief: LOGDIR
+    is always <repo>/var/autonomy-logs, and the supervisor derives the SAME
+    absolute path via pipeline_verdict_file (state path minus .json plus
+    .verdict.json) -- one naming rule on both sides, lane-safe."""
+    base = os.path.basename(state_path)
+    if base.endswith(".json"):
+        base = base[:-len(".json")]
+    return "var/autonomy-logs/%s.verdict.json" % base
+
+
+def _loop_ctx(state, node, state_path):
+    con = _container_of(state["doc"], node["id"])
+    if con is None or con.get("kind") != "loop":
+        return None
+    return {"container": con["id"],
+            "round": int(state["rounds"].get(con["id"], 1)),
+            "max_rounds": con["max_rounds"],
+            "exit_when": con["exit_when"],
+            "verdict_file": _verdict_rel(state_path)}
+
+
+def _read_verdict(verdict_path):
+    """Total (prevention-log #12): any unreadable/odd shape = no exit.
+    Missing evidence never exits a loop early -- that would declare the exit
+    condition met without evidence (fail-open). The max_rounds cap is the
+    floor under a persistently absent verdict."""
+    if not verdict_path:
+        return False
+    try:
+        with open(verdict_path) as fh:
+            verdict = json.load(fh)
+    except (OSError, ValueError):
+        return False
+    return isinstance(verdict, dict) and verdict.get("exit") is True
+
+
+def _journal_append(journal_path, state):
+    pass   # replaced in task 5 (journal + ledger)
+
+
+def _finish(state, state_path, outcome, journal_path):
+    state["status"] = "done"
+    state["outcome"] = outcome
+    if journal_path:
+        _journal_append(journal_path, state)
+    try:
+        os.unlink(state_path)
+    except OSError:
+        # Persist the DONE marker: a swallowed unlink failure would leave an
+        # in_progress state on disk -> the last node re-runs and the journal
+        # gets a duplicate line. With the marker, next_node refuses loudly.
+        try:
+            _atomic_write_json(state_path, state)
+        except OSError:
+            pass
+    return {"status": "done", "outcome": outcome}
+
+
+def next_node(state_path, brief_out, journal_path=""):
+    state = _load_state(state_path)
+    doc = state["doc"]
+    nodes = doc["nodes"]
+    status = state.get("status")
+    if status == "done":
+        # A done-state on disk means a prior _finish could not unlink -- the
+        # run is already journalled; refuse loudly rather than re-finish.
+        raise PipelineError("run state %s is already done (outcome %r) but "
+                            "could not be removed -- delete the file to "
+                            "recover" % (state_path, state.get("outcome")))
+    if status != "in_progress":
+        # Unknown status lands on the REFUSE side, never the success side
+        # (prevention-log #18: the reassuring verdict must be earned).
+        raise PipelineError("run state %s has unexpected status %r -- "
+                            "refusing" % (state_path, status))
+    # Backstops for stale states (record_outcome normally finishes runs) --
+    # they take journal_path so no completed run ever slips out of the journal.
+    if state["idx"] >= len(nodes):
+        return _finish(state, state_path, "success", journal_path)
+    cap = doc["caps"]["max_sessions_per_run"]
+    if state["sessions"] >= cap:
+        return _finish(state, state_path, "capped", journal_path)
+    node = nodes[state["idx"]]
+    if node.get("legacy_prompt"):
+        kind, prompt = "legacy", node["legacy_prompt"]
+    else:
+        pdir = (state.get("meta") or {}).get("pipeline_dir")
+        text = compile_brief(pdir, doc, node["id"],
+                             _loop_ctx(state, node, state_path))
+        with open(brief_out, "w") as fh:
+            fh.write(text)
+        kind, prompt = "compiled", brief_out
+    return {"status": "node", "node": node["id"], "kind": kind,
+            "prompt": prompt, "runs_as": _effective_runs_as(doc, node)}
+
+
+def record_outcome(state_path, node_id, outcome, session_log="",
+                   verdict_path="", journal_path=""):
+    if outcome not in ("success", "error"):
+        raise PipelineError("unrecordable outcome %r (usage_limit retries the "
+                            "node; only success/error are recorded)" % outcome)
+    state = _load_state(state_path)
+    doc = state["doc"]
+    nodes = doc["nodes"]
+    if state["idx"] >= len(nodes) or nodes[state["idx"]]["id"] != node_id:
+        raise PipelineError("record for node %r but the run's current node is "
+                            "%r -- refusing (corrupt driver?)"
+                            % (node_id, nodes[state["idx"]]["id"]
+                               if state["idx"] < len(nodes) else None))
+    node = nodes[state["idx"]]
+    con = _container_of(doc, node_id)
+    entry = {"id": node_id, "type": node.get("type"), "outcome": outcome,
+             "session_log": os.path.basename(session_log) if session_log else ""}
+    if con is not None and con.get("kind") == "loop":
+        entry["round"] = int(state["rounds"].get(con["id"], 1))
+        if node_id == con["children"][-1]:
+            # v5 §6: the structured verdict is part of the run journal, not
+            # just a control signal -- record what the exit decision saw.
+            entry["verdict_exit"] = _read_verdict(verdict_path)
+    state["nodes_done"].append(entry)
+    state["sessions"] += 1
+    if outcome == "error":
+        res = _finish(state, state_path, "failure", journal_path)
+        return "DONE %s" % res["outcome"]
+    # success: advance
+    last_child_of_loop = (con is not None and con.get("kind") == "loop"
+                          and node_id == con["children"][-1])
+    if last_child_of_loop:
+        if _read_verdict(verdict_path):
+            state["idx"] += 1                              # exit the loop
+        else:
+            rnd = int(state["rounds"].get(con["id"], 1))
+            if rnd >= con["max_rounds"]:
+                res = _finish(state, state_path, "capped", journal_path)
+                return "DONE %s" % res["outcome"]
+            state["rounds"][con["id"]] = rnd + 1
+            first = con["children"][0]
+            state["idx"] = [n["id"] for n in nodes].index(first)
+    else:
+        state["idx"] += 1
+    if state["idx"] >= len(nodes):
+        res = _finish(state, state_path, "success", journal_path)
+        return "DONE %s" % res["outcome"]
+    if state["sessions"] >= doc["caps"]["max_sessions_per_run"]:
+        # Cap decided HERE (record holds the journal path) -- deciding it in
+        # next_node would lose the run's journal line. next_node's own cap
+        # check remains as a journal-less backstop for stale states only.
+        res = _finish(state, state_path, "capped", journal_path)
+        return "DONE %s" % res["outcome"]
+    _atomic_write_json(state_path, state)
+    return "CONTINUE"
+
+
 def _cli_validate(argv):
     if len(argv) != 2:
         print("usage: pipeline.py validate <repo> <name>", file=sys.stderr)
@@ -433,6 +655,52 @@ def main(argv):
             print("pipeline wrap: %s" % exc, file=sys.stderr)
             return 1
         print(json.dumps(doc, indent=2, sort_keys=True))
+        return 0
+    if cmd == "start":
+        # start <repo> <role> <state-file> [--lane <lane>]
+        opts = {"--lane": ""}
+        pos = _split_opts(rest, opts)
+        try:
+            state = start_run(pos[0], pos[1], pos[2], lane=opts["--lane"])
+        except (IndexError, PipelineError) as exc:
+            print("pipeline start: %s" % exc, file=sys.stderr)
+            return 1
+        print("RUN=%s" % state["run_id"])
+        return 0
+    if cmd == "next":
+        # next <state-file> --brief-out <path> [--journal <path>]
+        opts = {"--brief-out": "", "--journal": ""}
+        pos = _split_opts(rest, opts)
+        try:
+            step = next_node(pos[0], opts["--brief-out"],
+                             journal_path=opts["--journal"])
+        except (IndexError, PipelineError) as exc:
+            print("pipeline next: %s" % exc, file=sys.stderr)
+            return 1
+        if step["status"] == "done":
+            print("DONE %s" % step["outcome"])
+            return 0
+        print("NODE=%s" % step["node"])
+        print("KIND=%s" % step["kind"])
+        print("PROMPT=%s" % step["prompt"])
+        runs_as = step.get("runs_as") or {}
+        for key in ("model", "effort", "account", "agent"):
+            if runs_as.get(key):
+                print("NODE_%s=%s" % (key.upper(), runs_as[key]))
+        return 0
+    if cmd == "record":
+        # record <state-file> <node> <outcome> [--session-log p]
+        #        [--verdict p] [--journal p]
+        opts = {"--session-log": "", "--verdict": "", "--journal": ""}
+        pos = _split_opts(rest, opts)
+        try:
+            print(record_outcome(pos[0], pos[1], pos[2],
+                                 session_log=opts["--session-log"],
+                                 verdict_path=opts["--verdict"],
+                                 journal_path=opts["--journal"]))
+        except (IndexError, PipelineError) as exc:
+            print("pipeline record: %s" % exc, file=sys.stderr)
+            return 1
         return 0
     print("unknown subcommand %r" % cmd, file=sys.stderr)
     return 2

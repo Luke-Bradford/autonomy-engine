@@ -293,6 +293,176 @@ class CompileBriefTest(unittest.TestCase):
             pipeline.compile_brief(self.dir, doc, "act")
 
 
+class StateMachineTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, True)
+        self.pdir = os.path.join(self.repo, ".autonomy", "pipelines", "flow")
+        os.makedirs(self.pdir)
+        with open(os.path.join(self.repo, ".autonomy", "loop_prompt.md"), "w") as fh:
+            fh.write("legacy prompt\n")
+        for b in ("a.md", "b.md", "c.md"):
+            with open(os.path.join(self.pdir, b), "w") as fh:
+                fh.write("brief %s\n" % b)
+        self.state = os.path.join(self.repo, "state.json")
+        self.brief_out = os.path.join(self.repo, "brief.md")
+        self.verdict = os.path.join(self.repo, "verdict.json")
+
+    def _bind(self, doc):
+        with open(os.path.join(self.pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("roles:\n  coder:\n    enabled: true\n    pipeline: flow\n")
+
+    def _three_node_doc(self):
+        return {"name": "flow", "version": 2,
+                "caps": {"max_sessions_per_run": 10},
+                "nodes": [
+                    {"id": "a", "type": "pick", "brief_ref": "a.md"},
+                    {"id": "b", "type": "agent_task", "brief_ref": "b.md"},
+                    {"id": "c", "type": "summarize", "brief_ref": "c.md"}],
+                "edges": [], "containers": []}
+
+    def test_linear_walk_and_completion(self):
+        self._bind(self._three_node_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        for expect in ("a", "b", "c"):
+            step = pipeline.next_node(self.state, self.brief_out)
+            self.assertEqual(step["status"], "node")
+            self.assertEqual(step["node"], expect)
+            self.assertEqual(step["kind"], "compiled")
+            self.assertEqual(step["prompt"], self.brief_out)
+            with open(self.brief_out) as fh:
+                self.assertIn("brief %s.md" % expect, fh.read())
+            res = pipeline.record_outcome(self.state, expect, "success")
+            if expect == "c":
+                self.assertEqual(res, "DONE success")
+            else:
+                self.assertEqual(res, "CONTINUE")
+        self.assertFalse(os.path.exists(self.state))   # cleaned up on DONE
+
+    def test_run_id_carries_role_ts_pid(self):
+        self._bind(self._three_node_doc())
+        state = pipeline.start_run(self.repo, "coder", self.state, lane="alpha")
+        self.assertTrue(state["run_id"].startswith("coder--alpha-"))
+        self.assertTrue(state["run_id"].endswith("-%d" % os.getpid()))
+
+    def test_usage_limit_means_no_record_same_node_again(self):
+        self._bind(self._three_node_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        self.assertEqual(pipeline.next_node(self.state, self.brief_out)["node"], "a")
+        # supervisor does NOT call record on usage_limit
+        self.assertEqual(pipeline.next_node(self.state, self.brief_out)["node"], "a")
+
+    def test_node_error_fails_the_run(self):
+        self._bind(self._three_node_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        pipeline.next_node(self.state, self.brief_out)
+        self.assertEqual(pipeline.record_outcome(self.state, "a", "error"),
+                         "DONE failure")
+        self.assertFalse(os.path.exists(self.state))
+
+    def test_mismatched_node_id_raises(self):
+        self._bind(self._three_node_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        pipeline.next_node(self.state, self.brief_out)
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.record_outcome(self.state, "c", "success")
+
+    def _loop_doc(self, max_rounds=3):
+        return {"name": "flow", "version": 1,
+                "caps": {"max_sessions_per_run": 20},
+                "nodes": [
+                    {"id": "a", "type": "pick", "brief_ref": "a.md"},
+                    {"id": "b", "type": "agent_task", "brief_ref": "b.md"},
+                    {"id": "c", "type": "check", "brief_ref": "c.md"}],
+                "edges": [],
+                "containers": [{"id": "L", "kind": "loop",
+                                "children": ["b", "c"],
+                                "exit_when": "done", "max_rounds": max_rounds}]}
+
+    def _run_round(self, nodes):
+        res = None
+        for n in nodes:
+            step = pipeline.next_node(self.state, self.brief_out)
+            self.assertEqual(step["node"], n)
+            res = pipeline.record_outcome(self.state, n, "success",
+                                          verdict_path=self.verdict)
+        return res
+
+    def test_loop_repeats_until_verdict_exit(self):
+        self._bind(self._loop_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        self.assertEqual(self._run_round(["a"]), "CONTINUE")
+        self.assertEqual(self._run_round(["b", "c"]), "CONTINUE")   # round 1, no verdict
+        with open(self.verdict, "w") as fh:
+            json.dump({"exit": True}, fh)
+        # round 2: verdict read after last child -> exits loop -> run done
+        self.assertEqual(self._run_round(["b", "c"]), "DONE success")
+
+    def test_loop_verdict_garbage_is_no_exit(self):
+        self._bind(self._loop_doc(max_rounds=2))
+        pipeline.start_run(self.repo, "coder", self.state)
+        self._run_round(["a"])
+        with open(self.verdict, "w") as fh:
+            fh.write("not json {{{")
+        self._run_round(["b", "c"])                      # garbage -> round 2
+        with open(self.verdict, "w") as fh:
+            fh.write("not json {{{")
+        self.assertEqual(self._run_round(["b", "c"]), "DONE capped")  # cap floor
+
+    def test_loop_round_ctx_in_brief(self):
+        self._bind(self._loop_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        self._run_round(["a"])
+        pipeline.next_node(self.state, self.brief_out)
+        with open(self.brief_out) as fh:
+            self.assertIn("round 1 of at most 3", fh.read())
+
+    def test_session_cap_finishes_capped_at_record_time(self):
+        # The cap decision happens in record_outcome (which holds the journal
+        # path) -- deciding it in next_node would lose the run's journal line.
+        doc = self._loop_doc(max_rounds=99)
+        doc["caps"]["max_sessions_per_run"] = 3
+        self._bind(doc)
+        pipeline.start_run(self.repo, "coder", self.state)
+        self.assertEqual(self._run_round(["a"]), "CONTINUE")
+        self.assertEqual(self._run_round(["b", "c"]), "DONE capped")  # 3rd session
+        self.assertFalse(os.path.exists(self.state))
+
+    def test_wrapped_role_state_machine_passthrough(self):
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("engine:\n  label: t\n")
+        pipeline.start_run(self.repo, "coder", self.state)
+        step = pipeline.next_node(self.state, self.brief_out)
+        self.assertEqual(step["kind"], "legacy")
+        self.assertEqual(step["prompt"], ".autonomy/loop_prompt.md")
+        self.assertFalse(os.path.exists(self.brief_out))   # no compile for legacy
+        self.assertEqual(pipeline.record_outcome(self.state, "act", "success"),
+                         "DONE success")
+
+    def test_corrupt_state_raises_never_deletes(self):
+        with open(self.state, "w") as fh:
+            fh.write("garbage")
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.next_node(self.state, self.brief_out)
+        self.assertTrue(os.path.exists(self.state))
+
+    def test_unknown_status_refuses_not_success(self):
+        # prevention-log #18: the reassuring verdict must be earned -- a
+        # garbage status lands on the REFUSE side, never finish-success.
+        self._bind(self._three_node_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        with open(self.state) as fh:
+            state = json.load(fh)
+        state["status"] = "wtf"
+        with open(self.state, "w") as fh:
+            json.dump(state, fh)
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.next_node(self.state, self.brief_out)
+        self.assertTrue(os.path.exists(self.state))
+
+
 class LoadDocTest(unittest.TestCase):
     def test_load_missing_raises(self):
         with self.assertRaises(pipeline.PipelineError):
