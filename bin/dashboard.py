@@ -1496,8 +1496,10 @@ class Handler(BaseHTTPRequestHandler):
             length = 0
         # Chat carries a message + short history, so it needs a larger cap than
         # the tiny control payloads.
-        # ws_prompt_set carries a whole rail (cap re-checked at 200KB in
-        # dashboard_control); every other action stays at the tight default.
+        # ws_prompt_set carries a whole rail, so the READ allows 256KB -- but
+        # any OTHER action whose body exceeds the classic 8KB cap is rejected
+        # after parse (the oversize allowance is scoped to the one action
+        # that needs it; #334 review WARNING).
         max_len = 65536 if path == "/api/chat" else 262144
         if length <= 0 or length > max_len:
             self.close_connection = True
@@ -1507,6 +1509,13 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
             self._send(400, b'{"error":"bad json"}')
+            return
+        # the oversize read allowance is for ws_prompt_set ONLY -- every other
+        # action keeps the classic 8KB contract (#334 review WARNING).
+        if (path != "/api/chat" and length > 8192
+                and body.get("action") != "ws_prompt_set"):
+            self.close_connection = True
+            self._send(400, b'{"error":"bad request"}')
             return
         if not secrets.compare_digest(str(body.get("token") or ""), _CONTROL_TOKEN):
             self._send(403, b'{"error":"bad or missing control token"}')

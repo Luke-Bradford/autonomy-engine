@@ -784,7 +784,7 @@ function cfgRepoCard(r,i){
     ?`<div class="cfghint">⚠ <b>live config active</b> — var/autonomy/config.yaml diverges from the committed .autonomy/config.yaml (page edits are local; commit whenever you choose)</div>`
     :"";
   const org=r.org||{};
-  const needsPack=!org.valid&&/unreadable|not found|cannot read/i.test(org.error||"");
+  const needsPack=!!org.pack_missing;
   const initBtn=needsPack
     ?`<div class="cfghint">⚠ this repo has no .autonomy pack yet — <button class="cbtn go" onclick="repoInit('${enc}')">initialize pack</button> scaffolds the config, rails, planner agent and .gitignore lines (never overwrites anything).</div>`
     :"";
