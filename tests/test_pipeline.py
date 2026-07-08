@@ -237,6 +237,23 @@ class WrapResolveTest(unittest.TestCase):
         with self.assertRaises(pipeline.PipelineError):
             pipeline.resolve_pipeline(self.repo, "coder")
 
+    def test_resolve_refuses_multinode_on_cron_role_in_any_lane(self):
+        # Codex CP2: cron_roles(cfg) is default-lane-filtered -- a cron role
+        # PINNED TO A NON-DEFAULT LANE must not slip past the multi-node
+        # refusal (the stall-between-fires hazard is lane-independent).
+        d = minimal_doc(); d["name"] = "p1"
+        d["nodes"].append({"id": "b", "type": "check", "brief_ref": "act.md"})
+        self._write_pipeline(d)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("lanes:\n  side:\n    worktree: ../side\n"
+                     "roles:\n  pm:\n    enabled: true\n"
+                     "    lane: side\n"
+                     "    trigger:\n      type: cron\n"
+                     "      schedule: '0 * * * *'\n"
+                     "    pipeline: p1\n")
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.resolve_pipeline(self.repo, "pm")
+
     def test_resolve_missing_legacy_prompt_REFUSES_early(self):
         # A run state for an unrunnable doc would strand in-flight -- refuse
         # BEFORE any state exists.
@@ -447,6 +464,26 @@ class StateMachineTest(unittest.TestCase):
         with self.assertRaises(pipeline.PipelineError):
             pipeline.next_node(self.state, self.brief_out)
         self.assertTrue(os.path.exists(self.state))
+
+    def test_finish_cleanup_double_failure_raises_after_journal(self):
+        # Codex CP2: if the state file can neither be unlinked NOR rewritten
+        # as a done-marker, returning success would let the next tick rerun
+        # the completed node and double-journal -- fail-open. Must raise.
+        subdir = os.path.join(self.repo, "locked")
+        os.makedirs(subdir)
+        state = os.path.join(subdir, "state.json")
+        journal = os.path.join(self.repo, "journal.jsonl")
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("engine:\n  label: t\n")
+        pipeline.start_run(self.repo, "coder", state)
+        pipeline.next_node(state, self.brief_out)
+        os.chmod(subdir, 0o500)                      # unlink + rewrite both fail
+        self.addCleanup(os.chmod, subdir, 0o700)
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.record_outcome(state, "act", "success",
+                                    journal_path=journal)
+        with open(journal) as fh:
+            self.assertEqual(len(fh.read().splitlines()), 1)   # journalled once
 
     def test_unknown_status_refuses_not_success(self):
         # prevention-log #18: the reassuring verdict must be earned -- a

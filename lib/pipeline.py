@@ -383,9 +383,11 @@ def resolve_pipeline(repo, role):
     # P1 advances one node per LOOP iteration (SD-12); a cron/event role's
     # trigger fires run_session once per due-tick, so a multi-node pipeline
     # bound to one would stall mid-run until the next fire. Refuse honestly;
-    # P2's dispatch work lifts this.
-    trig_names = set(n for n, _ in (roles.cron_roles(cfg) or []))
-    trig_names.update(n for n, _ in (roles.event_roles(cfg) or []))
+    # P2's dispatch work lifts this. Lane-UNfiltered enumerators (Codex CP2):
+    # the stall hazard is lane-independent, so a role pinned to a non-default
+    # lane must not slip past.
+    trig_names = set(n for n, _ in (roles._all_cron_roles(cfg) or []))
+    trig_names.update(n for n, _ in (roles._all_event_roles(cfg) or []))
     if len(doc.get("nodes") or []) > 1 and role in trig_names:
         raise PipelineError("pipeline %r has %d nodes but role %r fires on a "
                             "cron/event trigger -- P1 advances one node per "
@@ -586,8 +588,15 @@ def _finish(state, state_path, outcome, journal_path):
         # gets a duplicate line. With the marker, next_node refuses loudly.
         try:
             _atomic_write_json(state_path, state)
-        except OSError:
-            pass
+        except OSError as exc:
+            # Both cleanup paths failed: the stale in_progress state WILL
+            # replay the run next tick and double-journal -- returning
+            # success here would be fail-open (Codex CP2). Refuse loudly;
+            # the run IS journalled, only the state file needs operator help.
+            raise PipelineError(
+                "run %s finished (%s, journalled) but its state file %s "
+                "could neither be removed nor marked done: %s -- remove it "
+                "by hand" % (state.get("run_id"), outcome, state_path, exc))
     return {"status": "done", "outcome": outcome}
 
 
