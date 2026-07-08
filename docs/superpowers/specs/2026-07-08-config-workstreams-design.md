@@ -23,9 +23,29 @@ keep working. The UI concept is new; the storage is not.
 > "Config changes should just be local, shouldn't need constant PRs. A user
 > downloading this could add their own config, not ours."
 
-- Every UI edit writes the target repo's `.autonomy/config.yaml` **directly
-  and locally**. No PR, no overlay shadow. PR-gating remains OUR engine-repo
-  dev workflow, never a product requirement on a user's pack.
+- Every UI edit writes **locally and immediately** — but NOT to the tracked
+  `.autonomy/config.yaml` in the loop worktree: preflight stash-sweeps
+  tracked-file drift after 3 dirty sessions (that sweep is why the old
+  overlay existed). The live truth is a full-file shadow at
+  **`var/autonomy/config.yaml`** — `var/` is the established
+  preflight-surviving home. The committed `.autonomy/config.yaml` remains
+  the shareable default that SEEDS the live file on first structural write
+  (old overlay values folded in, overlay deleted). No PR, no key-level
+  overlay shadow. PR-gating remains OUR engine-repo dev workflow, never a
+  product requirement on a user's pack.
+- **One resolver, every reader**: `config_parser.effective_config_path()` —
+  given a pack config path, prefer the sibling `var/autonomy/config.yaml`
+  when present. Applied inside config_parser's CLI (supervisor, safe_merge,
+  board.sh, doctor all funnel through it) and its python API (roles.py,
+  dashboard readers). No split-brain: either every consumer sees the live
+  file or none does. A present-but-unparseable live file is a pack FAILURE
+  (doctor/preflight refuse the session) — never a silent fall-back to the
+  older committed config (a remit change behind the operator's back).
+- **Drift is visible**: the config page badges "live config — diverges from
+  committed" whenever the shadow exists and differs; committing it back is
+  the user's choice (copy-back helper later).
+- Onboard idempotently ensures the target repo's `.gitignore` covers `var/`
+  (the preflight-survival assumption made explicit).
 - The writer keeps the SD-29 mechanics: full-block re-emit, validated by
   `roles.py` BEFORE writing, re-parsed and compared AFTER — any mismatch
   refuses and leaves the file untouched. Invalid edits are refused inline
@@ -104,9 +124,12 @@ Template → prefilled trigger/scope/duties + rail prompt scaffolded into
 ## Slices (each ships usable)
 
 1. **Writer foundation**: SD-28 supersession entry in settled-decisions +
-   local-direct structural writer in `lib/dashboard_control.py`
-   (full-block re-emit + double validation) + overlay fold-in migration +
-   tests. No UI change yet.
+   `config_parser.effective_config_path()` resolver (CLI + python API, so
+   supervisor/safe_merge/board/doctor/roles/dashboard all agree) +
+   the var-live structural writer in `lib/dashboard_control.py` (seed from
+   committed + overlay fold-in + delete overlay; roles-block re-emit +
+   scalar sets; validate-before + reparse-compare-after) + onboard
+   `.gitignore var/` step + drift badge data + tests. No UI change yet.
 2. **3-zone layout + workstream nav** (read): left rail tree, center canvas,
    right rail machine panels. #191 closes here.
 3. **Inline editors**: toggle, trigger editor, scope chips, gate,

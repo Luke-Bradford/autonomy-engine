@@ -511,3 +511,178 @@ class TestParsePlistArgs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestVarLiveWriter(unittest.TestCase):
+    """Workstreams slice 1: the var-live structural writer. UI edits land in
+    var/autonomy/config.yaml (the preflight-surviving home); the committed
+    file seeds it on first write (legacy overlay folded in, then deleted).
+    Every refusal leaves every file untouched (SD-29 mechanics kept)."""
+
+    COMMITTED = (
+        "# top comment stays\n"
+        "board:\n"
+        "  owner: someone\n"
+        "  project_title: \"\"\n"
+        "agent:\n"
+        "  type: claude\n"
+        "  model:\n"
+        "    primary: claude-sonnet-5\n"
+        "    fallback: claude-sonnet-4-6\n"
+        "merge_gate:\n"
+        "  strategy: manual\n"
+        "roles:\n"
+        "  coder:\n"
+        "    enabled: true\n"
+    )
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.repo = self._td.name
+        os.makedirs(os.path.join(self.repo, ".autonomy", "roles"))
+        with open(os.path.join(self.repo, ".autonomy", "roles", "qa.md"), "w") as fh:
+            fh.write("qa rail\n")
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write(self.COMMITTED)
+        # a git repo where var/ is ignored (the write-precondition)
+        import subprocess
+        subprocess.run(["git", "init", "-q", self.repo], check=True)
+        with open(os.path.join(self.repo, ".gitignore"), "w") as fh:
+            fh.write("var/\n")
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _live(self):
+        return os.path.join(self.repo, "var", "autonomy", "config.yaml")
+
+    def _parse(self, path):
+        import config_parser
+        with open(path) as fh:
+            return config_parser.parse(fh.read())
+
+    # --- roles_block_emit ---------------------------------------------------
+    def test_emit_round_trips_through_the_parser(self):
+        import config_parser
+        roles = {
+            "coder": {"enabled": True},
+            "qa": {"enabled": True,
+                   "trigger": {"type": "event", "on": ["pr.opened"]},
+                   "gate": "auto-merge-on-pass",
+                   "scope": {"labels": ["ready", "p1"]},
+                   "prompt": ".autonomy/roles/qa.md"},
+            "pm": {"enabled": False,
+                   "trigger": {"type": "cron", "schedule": "0 */4 * * *"},
+                   "model": "claude-haiku-4-5-20251001"},
+        }
+        block = dc.roles_block_emit(roles)
+        parsed = config_parser.parse(block)
+        self.assertEqual(parsed["roles"], roles)
+
+    def test_emit_quotes_awkward_scalars(self):
+        import config_parser
+        roles = {"pm": {"enabled": True,
+                        "trigger": {"type": "cron", "schedule": "*/30 * * * *"},
+                        "account": "work: main"}}
+        parsed = config_parser.parse(dc.roles_block_emit(roles))
+        self.assertEqual(parsed["roles"], roles)
+
+    def test_emit_refuses_unrepresentable_scalars(self):
+        with self.assertRaises(ValueError) as ctx:
+            dc.roles_block_emit({"pm": {"account": "has \"both\" 'quotes'"}})
+        self.assertIn("pm", str(ctx.exception))
+
+    # --- set_block ------------------------------------------------------------
+    def test_set_block_replaces_only_the_block(self):
+        new = dc.set_block(self.COMMITTED, "roles",
+                           "roles:\n  coder:\n    enabled: false\n")
+        self.assertIn("# top comment stays", new)
+        self.assertIn("strategy: manual", new)
+        self.assertIn("enabled: false", new)
+        self.assertNotIn("enabled: true", new)
+
+    def test_set_block_appends_when_absent(self):
+        no_roles = "agent:\n  type: claude\n"
+        new = dc.set_block(no_roles, "roles", "roles:\n  coder:\n    enabled: true\n")
+        self.assertTrue(new.startswith("agent:"))
+        self.assertIn("roles:\n  coder:\n    enabled: true", new)
+
+    # --- structural_write ----------------------------------------------------
+    def test_first_write_seeds_live_and_applies(self):
+        res = dc.structural_write(self.repo, {"coder": {"enabled": False}})
+        self.assertTrue(res["ok"], res)
+        live = self._parse(self._live())
+        self.assertEqual(live["roles"], {"coder": {"enabled": False}})
+        self.assertEqual(live["agent"]["model"]["primary"], "claude-sonnet-5")
+        # committed file untouched
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml")) as fh:
+            self.assertEqual(fh.read(), self.COMMITTED)
+
+    def test_first_write_folds_and_deletes_the_legacy_overlay(self):
+        logdir = os.path.join(self.repo, "var", "autonomy-logs")
+        os.makedirs(logdir)
+        with open(os.path.join(logdir, "config-overrides"), "w") as fh:
+            fh.write("model=claude-fable-5\neffort=medium\n")
+        res = dc.structural_write(self.repo, {"coder": {"enabled": True}})
+        self.assertTrue(res["ok"], res)
+        live = self._parse(self._live())
+        self.assertEqual(live["agent"]["model"]["primary"], "claude-fable-5")
+        self.assertEqual(live["agent"]["effort"], "medium")
+        self.assertFalse(os.path.exists(os.path.join(logdir, "config-overrides")))
+
+    def test_second_write_edits_the_live_file(self):
+        dc.structural_write(self.repo, {"coder": {"enabled": True}})
+        dc.structural_write(self.repo, {
+            "coder": {"enabled": True},
+            "qa": {"enabled": True,
+                   "trigger": {"type": "event", "on": ["pr.opened"]},
+                   "prompt": ".autonomy/roles/qa.md"}})
+        live = self._parse(self._live())
+        self.assertIn("qa", live["roles"])
+
+    def test_invalid_roles_refused_files_untouched(self):
+        res = dc.structural_write(self.repo, {
+            "qa": {"enabled": True, "trigger": {"type": "cron"}}})  # no schedule
+        self.assertFalse(res["ok"])
+        self.assertIn("schedule", res["error"])
+        self.assertFalse(os.path.exists(self._live()))
+
+    def test_non_roles_keys_never_drift(self):
+        # the writer only replaces the roles block; everything else must be
+        # byte-preserved in the live file relative to its seed.
+        dc.structural_write(self.repo, {"coder": {"enabled": True}})
+        live = self._parse(self._live())
+        self.assertEqual(live["merge_gate"]["strategy"], "manual")
+        self.assertEqual(live["board"]["owner"], "someone")
+
+    def test_write_refused_when_var_not_gitignored(self):
+        os.unlink(os.path.join(self.repo, ".gitignore"))
+        res = dc.structural_write(self.repo, {"coder": {"enabled": True}})
+        self.assertFalse(res["ok"])
+        self.assertIn(".gitignore", res["error"])
+        self.assertFalse(os.path.exists(self._live()))
+
+    # --- drift ---------------------------------------------------------------
+    def test_drift_absent_without_live(self):
+        self.assertEqual(dc.live_config_drift(self.repo),
+                         {"live": False, "differs": False})
+
+    def test_drift_reported_when_live_differs(self):
+        dc.structural_write(self.repo, {"coder": {"enabled": False}})
+        d = dc.live_config_drift(self.repo)
+        self.assertTrue(d["live"])
+        self.assertTrue(d["differs"])
+
+    def test_fold_skips_values_the_overlay_readers_ignored(self):
+        # CP2: an invalid overlay value (readers ignored it) must never be
+        # PROMOTED into effective config by the fold.
+        logdir = os.path.join(self.repo, "var", "autonomy-logs")
+        os.makedirs(logdir)
+        with open(os.path.join(logdir, "config-overrides"), "w") as fh:
+            fh.write("model=bad model id\neffort=nope\nfallback=claude-sonnet-5\n")
+        res = dc.structural_write(self.repo, {"coder": {"enabled": True}})
+        self.assertTrue(res["ok"], res)
+        live = self._parse(self._live())
+        self.assertEqual(live["agent"]["model"]["primary"], "claude-sonnet-5")
+        self.assertEqual(live["agent"]["model"]["fallback"], "claude-sonnet-5")
+        self.assertNotIn("effort", live["agent"])

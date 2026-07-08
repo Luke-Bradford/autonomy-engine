@@ -909,6 +909,10 @@ def _load_config(repo):
     and dispatch entries."""
     cfg_path = os.path.join(repo, ".autonomy", "config.yaml")
     import config_parser
+    # Workstreams slice 1: the var-live shadow, when present, IS the config
+    # (config_parser.effective_config_path is the single resolver -- bash
+    # readers get the identical answer through the same module's CLI).
+    cfg_path = config_parser.effective_config_path(cfg_path)
     try:
         with open(cfg_path, encoding="utf-8") as fh:
             return config_parser.parse(fh.read()), 0

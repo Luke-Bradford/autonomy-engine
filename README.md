@@ -142,6 +142,17 @@ against that plan before the PR is declared done. `agent.model` in the pack conf
 cheap executor the session itself runs on; the pair adds a gate on top of the review
 bot/CI, never instead of them.
 
+**Live config shadow (SD-34, workstreams):** dashboard config edits write
+`var/autonomy/config.yaml` — local, immediate, no PR. When that file exists it
+IS the effective config for every reader (one resolver:
+`config_parser.effective_config_path`, applied in the CLI all bash tools use
+and in the python readers). The committed `.autonomy/config.yaml` stays the
+shareable default that seeds the shadow on first write (the old persistent
+overlay is folded in and retired). An unparseable shadow is a pack failure
+(doctor/preflight refuse — never a silent fallback), and writes refuse when
+`var/` isn't gitignored (`onboard.sh` adds the line) so the loop's preflight
+stash can never sweep it.
+
 ## `config.yaml` schema
 
 ```yaml

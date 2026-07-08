@@ -81,5 +81,27 @@ printf 'DOT CLAUDE MD\n' > "$dotc/.claude/CLAUDE.md"
 check "--claude-md skips when .claude/CLAUDE.md already present" "1" "$([ -f "$dotc/CLAUDE.md" ] && echo 0 || echo 1)"
 rm -rf "$dotc"
 
+# --- workstreams slice 1: .gitignore must cover var/ (the live config home;
+# preflight's stash -u would sweep an unignored var/) ---
+gi="$(mktemp -d)"
+"$ENGINE_HOME/bin/onboard.sh" "$gi" >/dev/null 2>&1
+check "fresh repo gets a .gitignore with var/" "0" "$(grep -qx 'var/' "$gi/.gitignore" && echo 0 || echo 1)"
+"$ENGINE_HOME/bin/onboard.sh" "$gi" >/dev/null 2>&1
+check "gitignore var/ never duplicated" "1" "$(grep -cx 'var/' "$gi/.gitignore")"
+rm -rf "$gi"
+
+gi2="$(mktemp -d)"
+printf 'node_modules/\n' > "$gi2/.gitignore"
+"$ENGINE_HOME/bin/onboard.sh" "$gi2" >/dev/null 2>&1
+check "existing gitignore preserved" "0" "$(grep -qx 'node_modules/' "$gi2/.gitignore" && echo 0 || echo 1)"
+check "var/ appended to existing gitignore" "0" "$(grep -qx 'var/' "$gi2/.gitignore" && echo 0 || echo 1)"
+rm -rf "$gi2"
+
+gi3="$(mktemp -d)"
+printf 'var\n' > "$gi3/.gitignore"
+"$ENGINE_HOME/bin/onboard.sh" "$gi3" >/dev/null 2>&1
+check "bare 'var' line counts as covered" "0" "$(grep -cx 'var/' "$gi3/.gitignore")"
+rm -rf "$gi3"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi

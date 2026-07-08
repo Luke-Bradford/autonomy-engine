@@ -337,5 +337,66 @@ class TestAgentOrgShapes(unittest.TestCase):
                          ["groom", "prioritise", "unblock", "spec-check"])
 
 
+class TestEffectiveConfigPath(unittest.TestCase):
+    """Workstreams slice 1: the var-live shadow resolver -- the SINGLE choke
+    point that makes every reader (bash via the CLI, python via the API)
+    agree on which config file is the truth. Committed .autonomy/config.yaml
+    seeds; var/autonomy/config.yaml, when present, IS the effective config."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.repo = Path(self._td.name)
+        (self.repo / ".autonomy").mkdir()
+        self.committed = self.repo / ".autonomy" / "config.yaml"
+        self.committed.write_text("agent:\n  model:\n    primary: committed-model\n")
+        self.live = self.repo / "var" / "autonomy" / "config.yaml"
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _mklive(self):
+        self.live.parent.mkdir(parents=True)
+        self.live.write_text("agent:\n  model:\n    primary: live-model\n")
+
+    def test_no_live_returns_original(self):
+        p = config_parser.effective_config_path(str(self.committed))
+        self.assertEqual(p, str(self.committed))
+
+    def test_live_present_returns_live(self):
+        self._mklive()
+        p = config_parser.effective_config_path(str(self.committed))
+        self.assertEqual(p, str(self.live))
+
+    def test_non_pack_path_never_resolves(self):
+        other = self.repo / "settings.yaml"
+        other.write_text("a: b\n")
+        self._mklive()
+        self.assertEqual(config_parser.effective_config_path(str(other)), str(other))
+
+    def test_cli_reads_live_value_when_present(self):
+        self._mklive()
+        out = subprocess.run(
+            [sys.executable, str(PARSER), str(self.committed), "agent.model.primary"],
+            capture_output=True, text=True)
+        self.assertEqual(out.stdout.strip(), "live-model")
+        self.assertEqual(out.returncode, 0)
+
+    def test_cli_reads_committed_without_live(self):
+        out = subprocess.run(
+            [sys.executable, str(PARSER), str(self.committed), "agent.model.primary"],
+            capture_output=True, text=True)
+        self.assertEqual(out.stdout.strip(), "committed-model")
+
+    def test_set_cli_targets_the_committed_file(self):
+        # quickstart --set is setup-time: it edits the SHAREABLE default,
+        # never the live shadow (which the dashboard writer owns).
+        self._mklive()
+        subprocess.run(
+            [sys.executable, str(PARSER), "--set", str(self.committed),
+             "agent.model.primary", "new-model"], capture_output=True)
+        self.assertIn("new-model", self.committed.read_text())
+        self.assertIn("live-model", self.live.read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

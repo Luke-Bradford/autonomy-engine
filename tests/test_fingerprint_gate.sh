@@ -314,5 +314,19 @@ check "record_fingerprint has exactly one call site (the outcome-0 arm)" "1" "$c
 wired="$(grep -c '^ *if fingerprint_gate ' "$ENGINE_HOME/bin/supervisor.sh")"
 check "fingerprint_gate is wired into the loop exactly once" "1" "$wired"
 
+
+# --- workstreams slice 1: the var-live config shadow joins the material ------
+# fresh baseline: earlier cases leave the config in a different (valid) state
+fp_base="$(role_fingerprint coder)"
+mkdir -p "$AUTONOMY_TARGET_REPO/var/autonomy"
+printf 'agent:\n  model:\n    primary: live-model\n' > "$AUTONOMY_TARGET_REPO/var/autonomy/config.yaml"
+fp_live="$(role_fingerprint coder)"
+check "var-live shadow appearing changes the hash" "1" "$([ "$fp_live" != "$fp_base" ] && echo 1 || echo 0)"
+printf 'agent:\n  model:\n    primary: live-model-2\n' > "$AUTONOMY_TARGET_REPO/var/autonomy/config.yaml"
+fp_live2="$(role_fingerprint coder)"
+check "var-live edit changes the hash" "1" "$([ "$fp_live2" != "$fp_live" ] && echo 1 || echo 0)"
+rm -rf "$AUTONOMY_TARGET_REPO/var/autonomy"
+fp_live_gone="$(role_fingerprint coder)"
+check "hash returns to baseline when the shadow is removed" "$fp_base" "$fp_live_gone"
 echo
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; else echo "$fails FAILURES"; exit 1; fi
