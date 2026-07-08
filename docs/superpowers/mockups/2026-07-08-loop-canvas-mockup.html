@@ -69,6 +69,26 @@ select,input[type=text]{background:var(--panel2);border:1px solid var(--hair2);c
 .legend .sw.dash{border-style:dashed;border-color:var(--warn)}
 .legend .sw.lit{border-color:var(--ok);box-shadow:0 0 6px rgba(63,178,127,.4)}
 .node.lit{border-color:var(--ok)}
+/* composable step list */
+.steps{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+.step{display:flex;align-items:center;gap:9px;border:1px solid var(--hair2);border-radius:var(--r);background:var(--panel2);padding:7px 10px}
+.step.softb{border-style:dashed}
+.step .grip{color:var(--dim);cursor:grab;font-size:12px}
+.step .nm{font-size:12px;font-weight:500;flex:1}
+.step .x{background:transparent;border:0;color:var(--dim);cursor:pointer;font-size:13px;padding:0 3px}
+.step .x:hover{color:var(--ink)}
+.step.lock{opacity:.85}
+.step.lock .x{visibility:hidden}
+.step input[type=checkbox]{accent-color:var(--accent)}
+.addcheck{border:1px dashed var(--hair2);border-radius:var(--r);background:transparent;color:var(--accent);padding:7px 10px;cursor:pointer;font-size:12px;text-align:left}
+.catalog{display:flex;flex-direction:column;gap:5px;margin-top:8px;border:1px solid var(--hair2);border-radius:var(--r);padding:9px;background:var(--panel)}
+.catalog button{background:transparent;border:0;color:var(--ink);text-align:left;cursor:pointer;font-size:12px;padding:5px 7px;border-radius:5px;display:flex;gap:8px;align-items:center}
+.catalog button:hover{background:var(--accent-soft)}
+.brief{margin-top:12px;border:1px solid var(--hair2);border-radius:var(--r);background:var(--panel);padding:10px 12px}
+.brief .eyebrow{display:block;margin-bottom:6px}
+.brief pre{margin:0;font-family:var(--mono);font-size:10.5px;color:var(--mut);white-space:pre-wrap;line-height:1.5}
+.brainrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;border:1px solid var(--hair2);border-radius:var(--r);background:var(--panel2);padding:8px 11px;margin:6px 0}
+.brainrow .bh{font-weight:600;font-size:12.5px;min-width:96px}
 .ttoggle{position:fixed;top:14px;right:16px;display:inline-flex;border:1px solid var(--hair2);border-radius:6px;overflow:hidden;background:var(--panel)}
 .ttoggle button{background:transparent;border:0;color:var(--dim);font-family:var(--mono);font-size:11px;padding:6px 9px;cursor:pointer}
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
@@ -79,7 +99,7 @@ select,input[type=text]{background:var(--panel2);border:1px solid var(--hair2);c
 <div class="wrap">
   <span class="eyebrow">design mockup · config-workstreams</span>
   <h1>The Loop Canvas</h1>
-  <div class="sub">Every workstream's loop, drawn and editable. Click a station to configure it. Pick a loop shape below — the four from the loops article.</div>
+  <div class="sub">Every workstream's loop, drawn and COMPOSABLE: each station is an ordered step list you add to, amend, reorder and remove from; the canvas compiles your steps into the agent's brief. Try + add a check on the coder. Pick a loop shape below — the four from the loops article.</div>
 
   <div class="presets" id="presets"></div>
 
@@ -100,67 +120,113 @@ select,input[type=text]{background:var(--panel2);border:1px solid var(--hair2);c
 </div>
 
 <script>
+const CATALOG=[
+  {id:"testsuite",nm:"run the full test suite before push",kind:"soft"},
+  {id:"subreview",nm:"subagent code review before push",kind:"soft"},
+  {id:"security",nm:"security pass on the diff",kind:"soft"},
+  {id:"browser",nm:"browser-verify the UI",kind:"soft"},
+  {id:"qahandoff",nm:"hand off to the QA workstream",kind:"hard"},
+  {id:"custom",nm:"custom check… (describe it)",kind:"soft"},
+];
 const PRESETS = {
-  coder: {name:"coder", shape:"continuous routine", lit:[0,1,2,3],
+  coder:{name:"coder",shape:"continuous routine",lit:[0,1,2,3],feature:3,
     nodes:[
-      {k:"when", v:"continuously", d:"back-to-back while there's work", hard:true},
-      {k:"pick up", v:"tickets labelled ready · p1 first", d:"from the GitHub board", hard:true},
-      {k:"work", v:"two brains", d:"🧠 fable plans · 🔨 sonnet builds", hard:true},
-      {k:"check", v:"3 checks", d:"ask 🧠 when unsure → 🧠 checks vs plan → review bot + CI", hard:false},
-      {k:"done when", v:"PR merged · ≤6 sessions/day", d:"then back to the board", hard:true},
+      {k:"when",v:"continuously",d:"back-to-back while there's work",hard:true},
+      {k:"pick up",v:"tickets labelled ready · p1 first",d:"from the GitHub board",hard:true},
+      {k:"work",v:"two brains",d:"thinking: fable · building: sonnet",hard:true},
+      {k:"check",v:"4 checks",d:"click to add · amend · reorder",hard:false},
+      {k:"done when",v:"PR merged · max 6 sessions/day",d:"then back to the board",hard:true},
     ],
-    drawer:{title:"WORK — who does it",
-      html:`<div class="row"><span class="lab">brains</span>
-        <span class="seg"><button>one brain</button><button class="on">two brains</button></span></div>
-      <div class="row"><span class="lab">🧠 thinking</span><select><option>claude-fable-5</option><option>claude-opus-4-8</option></select>
-        <span class="note">plans · answers when the builder is stuck · checks the result</span></div>
-      <div class="row"><span class="lab">🔨 building</span><select><option>claude-sonnet-5</option><option>claude-haiku-4-5</option></select>
-        <select><option>effort: xhigh</option><option>effort: high</option><option>effort: medium</option></select></div>
-      <div class="row"><span class="lab">fallback</span><select><option>claude-sonnet-4-6</option></select>
-        <span class="chip" title="the CLI switches models itself mid-session and carries ONE effort — pick an effort valid for both">effort: inherits session ⓘ</span></div>
-      <div class="row"><span class="lab">runs as</span><select><option>subscription (default)</option><option>local-llm — local LLM</option></select></div>
-      <div class="row"><span class="lab">instructions</span><button class="preset" style="padding:5px 10px">open the brief ▸</button></div>`}},
-  pm: {name:"board-butler", shape:"on a schedule", lit:[0,2,4],
+    checks:[
+      {nm:"ask the thinking brain when unsure",kind:"soft",on:true},
+      {nm:"run the full test suite before push",kind:"soft",on:true},
+      {nm:"thinking brain checks the code against the plan",kind:"soft",on:true},
+      {nm:"review bot · CI · merge gate",kind:"hard",on:true,lock:true},
+    ]},
+  pm:{name:"board-butler",shape:"on a schedule",lit:[0,2,4],feature:0,
     nodes:[
-      {k:"when", v:"every 2 hours", d:"0 */2 * * *", hard:true},
-      {k:"pick up", v:"the whole open board", d:"grooming pass", hard:true},
-      {k:"work", v:"one brain", d:"claude-haiku-4-5 · effort low", hard:true},
-      {k:"check", v:"labels only", d:"never merges, never edits code", hard:false},
-      {k:"done when", v:"board tidy this run", d:"every ticket labelled + prioritised", hard:false},
+      {k:"when",v:"every 2 hours",d:"0 */2 * * *",hard:true},
+      {k:"pick up",v:"the whole open board",d:"grooming pass",hard:true},
+      {k:"work",v:"one brain",d:"claude-haiku-4-5 · effort low",hard:true},
+      {k:"check",v:"labels only",d:"never merges, never edits code",hard:false},
+      {k:"done when",v:"board tidy this run",d:"every ticket labelled + prioritised",hard:false},
     ],
-    drawer:{title:"WHEN — what starts a run",
-      html:`<div class="row"><span class="lab">shape</span>
-        <span class="seg"><button>continuously</button><button class="on">on a schedule</button><button>when something happens</button><button>when I say</button></span></div>
-      <div class="row"><span class="lab">schedule</span><select><option>every 2 hours</option><option>hourly</option><option>daily 09:00</option><option>weekdays 09:00</option><option>custom…</option></select>
-        <span class="chip">next: today 16:00 · 18:00 · 20:00</span></div>`}},
-  qa: {name:"qa-merge-sweeper", shape:"when something happens", lit:[0,1,3,4],
+    checks:[{nm:"write surface: labels + comments only",kind:"soft",on:true},
+            {nm:"never edits code, never merges",kind:"hard",on:true,lock:true}]},
+  qa:{name:"qa-merge-sweeper",shape:"when something happens",lit:[0,1,3,4],feature:3,
     nodes:[
-      {k:"when", v:"when a PR opens", d:"also: hourly sweep for approved-unmerged", hard:true},
-      {k:"pick up", v:"that PR", d:"or bot-approved PRs waiting on merge", hard:true},
-      {k:"work", v:"one brain", d:"claude-sonnet-5 · review + verify CI", hard:true},
-      {k:"check", v:"sign-off gate", d:"auto-merge-on-pass — green CI + its approval merges", hard:true},
-      {k:"done when", v:"that PR handled", d:"merged, or findings posted", hard:false},
+      {k:"when",v:"when a PR opens",d:"plus an hourly sweep",hard:true},
+      {k:"pick up",v:"that PR",d:"or bot-approved PRs waiting on merge",hard:true},
+      {k:"work",v:"one brain",d:"claude-sonnet-5 · review + verify CI",hard:true},
+      {k:"check",v:"sign-off gate",d:"auto-merge-on-pass",hard:true},
+      {k:"done when",v:"that PR handled",d:"merged, or findings posted",hard:false},
     ],
-    drawer:{title:"CHECK — when something needs checking",
-      html:`<div class="row"><span class="lab">its own gate</span>
-        <select><option>auto-merge-on-pass — its sign-off + green CI merges</option><option>wait-for-human — report only, you merge</option></select>
-        <span class="tag hard">enforced</span></div>
-      <div class="row"><span class="lab">then always</span><span class="chip">review bot</span><span class="chip">CI green</span><span class="chip">merge gate (safe_merge)</span><span class="tag hard">enforced</span></div>
-      <div class="row"><span class="lab">in the brief</span><span class="chip">regression sweep weekly</span><span class="tag soft">instructed</span></div>`}},
-  helper:{name:"release-notes", shape:"when I say", lit:[],
+    checks:[{nm:"its sign-off gate: auto-merge-on-pass",kind:"hard",on:true},
+            {nm:"regression sweep weekly",kind:"soft",on:true},
+            {nm:"review bot · CI · merge gate",kind:"hard",on:true,lock:true}]},
+  helper:{name:"release-notes",shape:"when I say",lit:[],feature:4,
     nodes:[
-      {k:"when", v:"when I say", d:"Run now — never fires on its own", hard:true},
-      {k:"pick up", v:"merges since last run", d:"git history", hard:true},
-      {k:"work", v:"one brain", d:"claude-haiku-4-5 · effort low", hard:true},
-      {k:"check", v:"none", d:"writes a draft, touches nothing", hard:false},
-      {k:"done when", v:"draft posted", d:"one run, then stops", hard:true},
+      {k:"when",v:"when I say",d:"Run now — never fires on its own",hard:true},
+      {k:"pick up",v:"merges since last run",d:"git history",hard:true},
+      {k:"work",v:"one brain",d:"claude-haiku-4-5 · effort low",hard:true},
+      {k:"check",v:"none",d:"writes a draft, touches nothing",hard:false},
+      {k:"done when",v:"draft posted",d:"one run, then stops",hard:true},
     ],
-    drawer:{title:"DONE WHEN — definition of done",
-      html:`<div class="row"><span class="lab">hard stops</span><span class="chip">max 1 session per run</span><span class="tag hard">enforced</span></div>
-      <div class="row"><span class="lab">instructed</span><input type="text" value="stop after posting the draft as an issue comment" size="44"><span class="tag soft">instructed</span></div>
-      <div class="row"><span class="note">Structured picks here are written into the agent's brief as its "when to stop" section — the brief stops being the only place the loop is defined.</span></div>`}},
+    checks:[]},
 };
-let CUR="coder", SELNODE=null;
+let CUR="coder", SELNODE=null, SHOWCAT=false;
+function stepRow(c,idx){
+  return `<div class="step ${c.kind==="soft"?"softb":""} ${c.lock?"lock":""}">
+    <span class="grip" title="drag to reorder">⋮⋮</span>
+    <input type="checkbox" ${c.on?"checked":""} ${c.lock?"disabled":""} onchange="PRESETS[CUR].checks[${idx}].on=this.checked;render()">
+    <span class="nm">${c.nm}</span>
+    <span class="tag ${c.kind==="hard"?"hard":"soft"}">${c.kind==="hard"?"enforced":"instructed"}</span>
+    <button class="x" title="remove" onclick="PRESETS[CUR].checks.splice(${idx},1);render()">×</button>
+  </div>`;
+}
+function briefPreview(p){
+  const lines=p.checks.filter(c=>c.on&&c.kind==="soft").map(c=>"- "+c.nm);
+  if(!lines.length) return "";
+  return `<div class="brief"><span class="eyebrow">what this writes into the agent's brief</span>
+    <pre>&lt;!-- canvas:check (generated — edit on the canvas, not here) --&gt;
+Before opening or updating a PR, in this order:
+${lines.join("\n")}
+&lt;!-- /canvas:check --&gt;</pre></div>`;
+}
+function checkDrawer(p){
+  const cat=SHOWCAT?`<div class="catalog">${CATALOG.map((c,ci)=>
+    `<button onclick="addCheck(${ci})">
+      <span class="tag ${c.kind==="hard"?"hard":"soft"}">${c.kind==="hard"?"enforced":"instructed"}</span>${c.nm}</button>`).join("")}</div>`:"";
+  return `<span class="eyebrow">check — when something needs checking (ordered; the loop runs them top to bottom)</span>
+    <div class="steps">${p.checks.map(stepRow).join("")||'<div class="note">no checks — this workstream only reads and reports.</div>'}</div>
+    <button class="addcheck" onclick="SHOWCAT=!SHOWCAT;render()">＋ add a check…</button>${cat}
+    ${briefPreview(p)}`;
+}
+function addCheck(ci){
+  const c=CATALOG[ci], list=PRESETS[CUR].checks;
+  const at=list.length && list[list.length-1].lock ? list.length-1 : list.length;
+  list.splice(at,0,{nm:c.nm,kind:c.kind,on:true});
+  SHOWCAT=false;render();
+}
+function workDrawer(){
+  return `<span class="eyebrow">work — who does it (each brain on its own row)</span>
+    <div class="brainrow"><span class="bh">🧠 thinking</span>
+      <select><option>claude-fable-5</option><option>claude-opus-4-8</option></select>
+      <span class="chip" title="Claude Code subagents carry ONE model — no fallback mechanism exists upstream. So this is an instructed behaviour the compiler writes into the brief, not a fake picker.">if unavailable: builder continues alone + flags it in the PR ⓘ</span></div>
+    <div class="brainrow"><span class="bh">🔨 building</span>
+      <select><option>claude-sonnet-5</option><option>claude-haiku-4-5</option></select>
+      <select><option>effort: xhigh</option><option>effort: high</option><option>effort: medium</option></select>
+      <span class="chip">falls back to</span><select><option>claude-sonnet-4-6</option><option>claude-haiku-4-5</option></select>
+      <span class="chip" title="the CLI switches models itself mid-session and carries ONE effort — pick an effort valid for both models">fallback effort: inherits ⓘ</span></div>
+    <div class="row"><span class="lab">runs as</span><select><option>subscription (default)</option><option>local-llm — local LLM</option></select></div>
+    <div class="row"><span class="lab">brains</span><span class="seg"><button>one brain</button><button class="on">two brains</button></span>
+      <span class="note">one brain = a single model thinks AND builds; the thinking row disappears and its checks leave the CHECK list.</span></div>`;
+}
+function genericDrawer(n){
+  return `<span class="eyebrow">${n.k} — editing</span>
+    <div class="row"><span class="lab">${n.k}</span><span class="v">${n.v}</span><span class="tag ${n.hard?"hard":"soft"}">${n.hard?"enforced":"instructed"}</span></div>
+    <div class="row"><span class="note">In the build this drawer holds the real ${n.k.toUpperCase()} controls (they all exist today). CHECK and WORK show the full editing pattern; every station gets the same step-list treatment.</span></div>`;
+}
 function render(){
   const p=PRESETS[CUR];
   document.getElementById("ws-name").textContent=p.name;
@@ -169,22 +235,19 @@ function render(){
     const q=PRESETS[k];
     return `<button class="preset ${k===CUR?"on":""}" onclick="pick('${k}')"><b>${q.name}</b>${q.shape}</button>`;
   }).join("");
+  const activeChecks=p.checks.filter(c=>c.on).length;
+  p.nodes[3].v=activeChecks?activeChecks+" check"+(activeChecks===1?"":"s"):"none";
   document.getElementById("rail").innerHTML=p.nodes.map((n,i)=>
     `<div class="node ${n.hard?"":"dashed"} ${p.lit.indexOf(i)>=0?"lit":""} ${SELNODE===i?"sel":""}" tabindex="0" role="button" onclick="selNode(${i})" onkeydown="if(event.key==='Enter')selNode(${i})">
       <span class="k">${n.k}</span><span class="v">${n.v}</span><div class="d">${n.d}</div></div>`).join("");
   const d=document.getElementById("drawer");
-  if(SELNODE===null){
-    d.innerHTML=`<span class="eyebrow">${p.drawer.title}</span>`+p.drawer.html
-      +`<div class="row"><span class="note">…this is the preset's featured station — click any node above to open its editor.</span></div>`;
-  }else{
-    const n=p.nodes[SELNODE];
-    d.innerHTML=`<span class="eyebrow">${n.k} — editing</span>`+(p.drawer.title.toLowerCase().indexOf(n.k)===0?p.drawer.html:
-      `<div class="row"><span class="lab">${n.k}</span><span class="v">${n.v}</span><span class="tag ${n.hard?"hard":"soft"}">${n.hard?"enforced":"instructed"}</span></div>
-       <div class="row"><span class="note">In the build, this drawer holds the real ${n.k.toUpperCase()} controls (they all exist today — this mockup shows where they live).</span></div>`);
-  }
+  const idx=SELNODE===null?p.feature:SELNODE;
+  if(idx===3) d.innerHTML=checkDrawer(p);
+  else if(idx===2) d.innerHTML=workDrawer();
+  else d.innerHTML=genericDrawer(p.nodes[idx]);
 }
-function pick(k){CUR=k;SELNODE=null;render();}
-function selNode(i){SELNODE=i;render();}
+function pick(k){CUR=k;SELNODE=null;SHOWCAT=false;render();}
+function selNode(i){SELNODE=i;SHOWCAT=false;render();}
 render();
 </script>
 </body>

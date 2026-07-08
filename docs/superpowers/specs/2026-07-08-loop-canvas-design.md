@@ -126,3 +126,56 @@ Goal-based lands as DONE WHEN's verifiable-criteria row (later; recorded).
 Mockup: `docs/superpowers/mockups/2026-07-08-loop-canvas-mockup.html`
 (interactive; the four presets switchable, stations clickable) — the
 review artifact for this spec.
+
+## v2 corrections (operator review of the first mockup, 2026-07-08)
+
+### The canvas is a COMPILER, not a picture
+
+The first mockup showed a fixed flow — "this is the plan, deal with it."
+Wrong shape. Each station holds an ORDERED, EDITABLE STEP LIST; the canvas
+compiles those steps into the agent's brief (the rail). The user adds,
+amends, reorders, toggles and removes steps; prose is the OUTPUT (visible
+via "what this writes into the brief"), with a per-step free-text escape
+hatch. The brief's generated sections are fenced (`<!-- canvas:check -->`)
+so hand-written content survives regeneration.
+
+### The step catalog (CHECK station, initial)
+
+Each step is tagged enforced / instructed, per the honesty split:
+
+| Step | Kind | Mechanism |
+| --- | --- | --- |
+| ask thinking when unsure | instructed | pair rail section |
+| thinking checks code vs plan (plan-check) | instructed | pair rail section |
+| subagent code review before push | instructed | materialized reviewer agent (planner pattern) + rail step |
+| run the full test suite before push | instructed | rail step |
+| security pass on the diff | instructed | rail step (reviewer agent w/ security brief) |
+| browser-verify the UI | instructed | rail step |
+| hand off to the QA workstream | enforced wiring | QA binding (event pr.opened) — adds/links the workstream |
+| review bot · CI · merge gate | enforced, always-on | branch protection + safe_merge — shown, not removable |
+
+"Custom check…" = name + free text, lands as an instructed rail step.
+The same list pattern later extends WORK (ordered work steps) and DONE
+WHEN (stop conditions) — CHECK ships first because it answers "when does
+something need checking".
+
+### Fallback is PER BRAIN — and only one brain has a real one
+
+- **Building brain**: real fallback — the CLI's `--fallback-model` switches
+  mid-session. One row: `building · model · effort · falls back to X`
+  (effort inherits — the earlier note stands).
+- **Thinking brain**: Claude Code subagent frontmatter carries ONE model —
+  there is no fallback mechanism. The row says so: `thinking · model · if
+  unavailable: the builder continues alone and flags it in the PR`
+  (instructed behavior, written into the brief by the compiler). No fake
+  picker. If subagent fallback lands upstream, the cell becomes one.
+
+### Added user stories (extend the personalities catalogue)
+
+| # | Story | Oracle |
+| --- | --- | --- |
+| S16 | Add "subagent code review before push" to the coder's CHECK list from the catalog. | reviewer agent materialized; brief gains the fenced step; PR body shows the review happened |
+| S17 | Remove plan-check from a repo that runs one brain. | step absent from brief; canvas shows the shorter chain |
+| S18 | Reorder: run the full test suite BEFORE the subagent review. | brief lists steps in the new order |
+| S19 | Wire the QA workstream as a CHECK step ("hand off to QA") from the coder's canvas. | QA binding created/linked; canvas shows the handoff edge |
+| S20 | Custom check: "verify the changelog was updated" typed free-text. | fenced instructed step in the brief, tagged instructed on the canvas |
