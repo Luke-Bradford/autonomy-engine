@@ -45,6 +45,24 @@ done < <(find "$TEMPLATE_DIR" -type f -print0)
 
 echo "onboard.sh: $copied file(s) created, $skipped already present. Edit $PACK_DIR/config.yaml before running the loop."
 
+# #320: the planner/coder pair is the DEFAULT coding shape -- scaffold the
+# planner subagent where Claude Code reads it (.claude/agents/, NOT inside
+# .autonomy/). Same idempotent contract as the pack: never overwrite. The
+# agent file carries its own thinking-tier `model:` override; the coder
+# session keeps the cheap executor model from agent.model in config.yaml.
+if [ -f "$TARGET_REPO/.claude/agents/planner.md" ]; then
+  echo "onboard.sh: SKIP .claude/agents/planner.md (already exists)"
+elif [ -e "$TARGET_REPO/.claude/agents/planner.md" ]; then
+  # A directory/symlink/etc squatting the path: cp would land INSIDE it and
+  # this script would claim success while Claude Code sees no agent file.
+  # Surface it instead of faking a scaffold (fail-safe).
+  echo "onboard.sh: WARN .claude/agents/planner.md exists but is not a regular file -- planner agent NOT scaffolded" >&2
+else
+  mkdir -p "$TARGET_REPO/.claude/agents"
+  cp "$ENGINE_HOME/templates/planner-agent.md" "$TARGET_REPO/.claude/agents/planner.md"
+  echo "onboard.sh: created .claude/agents/planner.md (planner/coder pair default, #320)"
+fi
+
 # Opt-in starter CLAUDE.md (#152). The whole prompt stack + role rails lean on
 # the target repo's CLAUDE.md; a repo without one gets weaker sessions. Scaffold
 # a placeholder starter ONLY when asked AND the repo has none -- Claude Code

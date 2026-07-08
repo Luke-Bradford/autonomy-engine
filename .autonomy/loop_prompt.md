@@ -98,6 +98,19 @@ re-derivation, never by cutting verification that produces a decision.
   exceed them — say why in one line and carry on. Never trade correctness,
   tests, TDD, or the safety rails for tokens.
 
+## Planner/coder pair (default working shape) [#320]
+
+This session is the CODER: a cheap executor model. The thinking happens in the `planner`
+subagent (`.claude/agents/planner.md`, thinking-tier model override). For every non-trivial
+ticket: (1) dispatch the `planner` agent with the ticket and get back an executable plan —
+files, ordered steps, acceptance checks, invariants, non-goals (this satisfies the
+"writing-plans" step of the working order; Codex checkpoint 1 still runs on that plan);
+(2) execute the plan faithfully — if reality contradicts a step, go back to the planner with
+what you found, never improvise around it; (3) before declaring the PR done, dispatch the
+planner again with the diff + its own plan for the closing sense-check — fix CONCERNS and
+re-check; only `PLAN-CHECK: APPROVE` (or TRIVIAL) closes the pair. The review bot, CI, and
+Codex checkpoints still run — the pair adds a gate, it never replaces one.
+
 ## Hard safety rules — never violate, even unattended
 
 - **Never commit to main.** Every change is a branch + PR. Merge ONLY via `safe_merge.sh`
