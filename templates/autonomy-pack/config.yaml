@@ -21,6 +21,10 @@ engine:
 agent:
   type: claude               # claude | codex
   # effort: high             # optional: low | medium | high | xhigh | max (omit = CLI default)
+  # Planner/coder pair (#320): this model is the cheap EXECUTOR the coder
+  # session runs on; the thinking-tier planning + closing sense-check happen
+  # in the scaffolded `planner` subagent (.claude/agents/planner.md), which
+  # carries its own `model:` override. Edit that file to change planner tier.
   model:
     primary: claude-sonnet-5
     fallback: claude-sonnet-4-6

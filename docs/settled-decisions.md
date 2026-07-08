@@ -159,6 +159,18 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     architecture (shared `lib/health.py`, 15-min wedged rule, console.py as the blessed
     dashboard manager) are settled in the same doc §§8–9. *(ibid. §§7–9.)*
 
+33. **The planner/coder pair is the default coding shape** (operator decision
+    2026-07-08, #320). The coder session runs a cheap executor model
+    (`agent.model` in the pack config); the thinking happens in a `planner`
+    subagent (`.claude/agents/planner.md`, scaffolded by onboard, carrying its
+    own thinking-tier `model:` override) dispatched twice per non-trivial
+    ticket: plan first (written to a lower-model-executable standard), then a
+    closing sense-check of the diff against that plan (`PLAN-CHECK: APPROVE`)
+    before the PR is declared done. The pair ADDS a gate — review bot / CI /
+    Codex checkpoints are untouched. SD-26 (per-phase `models:`
+    retained-but-flagged) is unchanged: the pair rides agent frontmatter, not
+    adapter phase-switching. *(#320; operator session 2026-07-08.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could

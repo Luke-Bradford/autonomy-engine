@@ -41,6 +41,24 @@ cutting verification that produces a decision.
   exceed them — say why in one line and carry on. Never trade correctness,
   tests, or the safety rails for tokens.
 
+## Planner/coder pair (default working shape)
+
+This session is the CODER: a cheap executor model. The thinking happens in
+the `planner` subagent (`.claude/agents/planner.md`, thinking-tier model
+override). For every non-trivial ticket:
+
+1. **Plan first.** Dispatch the `planner` agent with the ticket. It returns
+   an executable plan (files, ordered steps, acceptance checks, invariants,
+   non-goals). If it answers TRIVIAL, skip the pair and just do the work.
+2. **Execute the plan faithfully.** Follow the steps; do not re-litigate the
+   design. If reality contradicts the plan (a step cannot work as written),
+   go BACK to the planner with what you found — never improvise around it.
+3. **Close the loop.** Before declaring the PR done, dispatch the planner
+   again with the diff + its own plan for the closing sense-check. Fix any
+   CONCERNS and re-check; only `PLAN-CHECK: APPROVE` (or TRIVIAL) closes the
+   pair. The review bot/CI still run — this is the pair's own gate, in
+   addition to theirs, never instead of them.
+
 <!-- Edit this file for your repo's own triage rules, QA steps, and anything
      else specific to how this project wants its board drained. This is a
      starter, not a complete policy. -->

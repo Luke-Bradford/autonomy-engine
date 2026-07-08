@@ -134,6 +134,14 @@ Every target repo needs a `.autonomy/` directory with exactly these three files:
 `.autonomy/config.yaml` existing and parsing is the engine's hard requirement for treating a
 directory as a valid target repo — `doctor.sh`/`supervisor.sh` both refuse to proceed without it.
 
+**Planner/coder pair (default, #320):** `onboard.sh` also scaffolds
+`.claude/agents/planner.md` in the target repo (idempotent, never overwrites) — a
+thinking-tier subagent (its own `model:` override) the coder session dispatches twice per
+non-trivial ticket: an executable plan up front, and a closing `PLAN-CHECK` of the diff
+against that plan before the PR is declared done. `agent.model` in the pack config is the
+cheap executor the session itself runs on; the pair adds a gate on top of the review
+bot/CI, never instead of them.
+
 ## `config.yaml` schema
 
 ```yaml

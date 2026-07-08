@@ -29,11 +29,27 @@ check "qa/decide.sh scaffolded (subdirectory, #13)" "0" "$([ -f "$tmp/.autonomy/
 scaffolded_title="$(python3 "$ENGINE_HOME/lib/config_parser.py" "$tmp/.autonomy/config.yaml" board.project_title 2>/dev/null || printf '')"
 check "scaffolded board.project_title is EMPTY (SD-31, #90)" "" "$scaffolded_title"
 
+# #320: planner/coder pair is the default -- the planner agent lands in
+# .claude/agents/ (where Claude Code reads subagents), NOT inside .autonomy/.
+check "planner agent scaffolded (.claude/agents, #320)" "0" "$([ -f "$tmp/.claude/agents/planner.md" ] && echo 0 || echo 1)"
+check "planner agent carries a thinking-tier model override" "0" "$(grep -q '^model: claude-opus' "$tmp/.claude/agents/planner.md" && echo 0 || echo 1)"
+
 echo "MY CUSTOM EDIT" > "$tmp/.autonomy/config.yaml"
 echo "MY QA PROMPT" > "$tmp/.autonomy/roles/qa.md"
+echo "MY PLANNER" > "$tmp/.claude/agents/planner.md"
 "$ENGINE_HOME/bin/onboard.sh" "$tmp" >/dev/null 2>&1
 check "idempotent -- does not clobber an existing file" "MY CUSTOM EDIT" "$(cat "$tmp/.autonomy/config.yaml")"
 check "idempotent in subdirectories too" "MY QA PROMPT" "$(cat "$tmp/.autonomy/roles/qa.md")"
+check "idempotent -- never clobbers an existing planner agent" "MY PLANNER" "$(cat "$tmp/.claude/agents/planner.md")"
+
+# CP2 (#320): a DIRECTORY squatting the planner path must warn, not fake a
+# scaffold (cp into the dir would claim success while no agent file exists).
+sq="$(mktemp -d)"
+mkdir -p "$sq/.claude/agents/planner.md"
+sq_out="$("$ENGINE_HOME/bin/onboard.sh" "$sq" 2>&1 || true)"
+check "dir squatting planner path warns" "0" "$(grep -q 'not a regular file' <<<"$sq_out" && echo 0 || echo 1)"
+check "dir squatting planner path scaffolds nothing inside it" "1" "$([ -f "$sq/.claude/agents/planner.md/planner.md" ] && echo 0 || echo 1)"
+rm -rf "$sq"
 
 # --- --claude-md: opt-in starter CLAUDE.md scaffold (#152) -------------------
 # Default (no flag): the pack scaffold never touches CLAUDE.md.

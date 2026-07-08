@@ -13,10 +13,15 @@ engine:
 
 agent:
   type: claude               # claude | codex
-  effort: high               # opus works the harder increment-4 tickets; high effort
+  effort: high               # executor keeps high while we baseline the pair; revisit with ticket_effort data
   model:
-    primary: claude-opus-4-8
-    fallback: claude-sonnet-5
+    # #320 planner/coder pair (operator decision 2026-07-08): the coder session
+    # runs the cheap executor; the thinking-tier work happens in the `planner`
+    # subagent (.claude/agents/planner.md, its own model: override). Opus is
+    # ~5x sonnet quota weight -- measure ~10 tickets via ticket_effort before
+    # judging the swap.
+    primary: claude-sonnet-5
+    fallback: claude-sonnet-4-6
 
 merge_gate:
   # bot_comment: safe_merge.sh merges once the review bot posts APPROVE on the
