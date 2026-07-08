@@ -188,3 +188,99 @@ Simplifications that keep it tinkerable:
 - Library: `lib/library.py` grows steps beside roles.
 - Engine enforcement lands incrementally: caps → wait-on-CI → the rest
   stay instructed with honest tags (the #157 pattern from birth).
+
+## v4 — the pipeline is the top-level unit; loops are NODES in it (operator, 2026-07-08 latest)
+
+The operator's worked example forced the final shape shift: one pipeline
+spans coding AND QA, with a loop container in the middle and a back-edge
+from QA's verdict into that loop. ADF's own vocabulary fits exactly:
+activities on a canvas, an Until container holding inner activities, and
+success/failure paths.
+
+### The corrected hierarchy
+
+- **Pipeline** — the runnable unit attached to a workspace: a TRIGGER plus
+  an ordered graph of nodes. The trigger re-fires the whole pipeline
+  (continuous = again while the queue has work; schedule/event/manual as
+  before) — the outer loop is implicit in the trigger.
+- **Node kinds**:
+  - **activity** — a typed step from the step library (v3 catalog). Config:
+    who runs it (an AGENT from the library + brain/model/effort), its
+    brief fragment, params, on-fail.
+  - **loop container** (ADF Until) — holds an inner sequence + an **exit
+    when** condition (instructed criteria, e.g. "all tests meet the plan's
+    criteria") + an ENFORCED safety cap (max rounds — runaway protection,
+    engine-owned).
+  - **branch** (decide with labeled paths) — v3 deferred real branching;
+    the operator's stories now demand it ("plan too vague → ask the user
+    and park" / "QA verdict: issues → back to coding; good → finish").
+    Two-way labeled paths in v1; paths may END the run, CONTINUE, or
+    **back-edge** to an earlier named node (the ADF failure-path analogue,
+    restricted: back-edges may only target a loop container or stage head,
+    and carry an enforced max-bounce cap).
+  - **stage** — a named grouping that sets the default agent for its
+    children (the QA stage runs as the qa agent; nodes may override).
+- **Agents (personalities)** stop being the orchestration unit: they are
+  WHO an activity runs as. The role library becomes the agent library;
+  a "role instance" is now simply a one-stage pipeline — full backward
+  compatibility (today's roles compile to: trigger + one stage).
+
+### The operator's example, in the model (the reference pipeline)
+
+trigger: continuous →
+activity pick (check board, next ticket in queue) →
+activity plan (thinking brain) →
+branch "plan viable?" [too vague → ask user questions + park → end run |
+ok → continue] →
+loop CODING (exit when: every planned test criterion passes · cap 20):
+[act: work from the plan → check: test vs the plan] →
+activity act (open/refresh the PR) →
+stage QA (runs as qa agent): [gather: read ticket + PR comments →
+check: branch out, verify in the frontend → check: related breakage →
+check: code review (injection, duplication)] →
+branch "verdict?" [issues → BACK-EDGE to loop CODING with comments
+(max 3 bounces) | good → continue] →
+branch "finish how?" [ask the user (approval comment + park) |
+merge · squash · close]
+
+### Visualisation (the "ADF for loops" answer)
+
+A vertical canvas that reads as execution order (not a free-form 2D graph
+— loops read better as containers than as cycles drawn in space):
+
+- Activities = cards (v3's card + drawer pattern survives).
+- Loop containers = bordered boxes with the ⟲ badge, inner cards nested,
+  the **exit when** + cap as the box footer.
+- Stages = tinted boxes titled "runs as <agent>".
+- Branches = a diamond row whose labeled paths render as side-by-side
+  columns that re-merge; an END path terminates with a stop chip.
+- **Back-edges** = a gutter arrow on the left margin from the branch back
+  up to its target container, labeled ("↩ back to coding, with comments ·
+  max 3"); enforced caps rendered solid.
+- Palette + custom steps + per-node drawers carry over from v3 unchanged.
+
+### Safety rails the model adds (all enforced, engine-owned)
+
+- Loop containers REQUIRE a max-rounds cap; back-edges REQUIRE a max-bounce
+  cap; the pipeline keeps its stop rules (done-when · caps · on-a-problem).
+  An exit condition is instructed; the cap is the hard floor under it.
+- A branch path that parks work must say where (needs-you queue) — no
+  silent drops.
+
+### Added stories
+
+| # | Story | Oracle |
+| --- | --- | --- |
+| S27 | Build the reference pipeline above end-to-end from the palette. | compiles; run traverses stages; QA bounce returns to the loop w/ comments |
+| S28 | Loop cap hits before exit criteria: run ends cleanly + flags. | enforced cap; needs-you entry |
+| S29 | Back-edge bounce cap (3) reached: pipeline parks the PR for a human. | enforced; PR parked w/ escalation comment |
+| S30 | Reuse the QA stage in a second pipeline by reference. | stage from library; both pipelines list it |
+
+### Compilation note
+
+Stages/nodes compile per agent-session: the engine dispatches a session
+per stage (or per loop burst) with the stage's agent + the compiled brief
+for its nodes; branch verdicts and loop exits are read back from the
+session's structured output (the SD-32 escalation schema generalised to a
+`pipeline-verdict` block). Enforced caps live in the supervisor. Legacy
+roles = one-stage pipelines; zero migration.
