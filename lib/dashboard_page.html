@@ -557,9 +557,10 @@ const _sig={};
 // partial replaceWith) can re-sync _sig against the SAME normalization.
 // #190: `pacex` joins the alternation -- the compare tiles' live pace ratio
 // drifts every second; outside this normalization it would defeat the skip
-// guard and rebuild the grid on every tick. It carries no data-e/data-t, so
-// the 1s ticker (which selects .upe/.agox/.qreset only) never touches it; it
-// refreshes on genuine state-change rebuilds.
+// guard and rebuild the grid on every tick. The 1s ticker owns its motion
+// (data-e/data-med -> ×ratio), the same contract as .upe/.agox/.qreset:
+// normalized out of the signature AND ticked, so it neither churns the panel
+// nor freezes between rebuilds (CP2 2026-07-08).
 const _volRe=/(<(span|b)\b[^>]*\b(?:qreset|agox|upe|pacex)\b[^>]*>)[^<]*(<\/\2>)/g;
 function _sigKey(html){return html.replace(_volRe,"$1$3");}
 function setHTML(id,html){
@@ -658,8 +659,10 @@ function paceFlag(r,role,startedEpoch){
   if(x<1.25)return "";                            // on pace -> no flag
   // the LIVE ratio sits in .pacex (inside _volRe's normalization -- a drifting
   // ratio outside the volatile classes would defeat the #248 skip-guard and
-  // rebuild the grid every tick). The title carries only STATIC facts.
-  return `<span class="tpace" title="this session is running past this role's median duration (${dur(Math.round(med))}, ${ds.length} sessions)">pace <b class="pacex">×${x.toFixed(1)}</b></span>`;
+  // rebuild the grid every tick) and carries data-e/data-med so the 1s ticker
+  // keeps it moving between rebuilds -- a signature-skipped render must never
+  // freeze a live number (CP2 2026-07-08). Title carries only STATIC facts.
+  return `<span class="tpace" title="this session is running past this role's median duration (${dur(Math.round(med))}, ${ds.length} sessions)">pace <b class="pacex" data-e="${startedEpoch}" data-med="${Math.round(med)}">×${x.toFixed(1)}</b></span>`;
 }
 // one compare tile. Repo-scoped session truth under a lane-named header --
 // the SAME presentation contract as the shipped single-lane focus card for a
@@ -673,7 +676,17 @@ function tileCard(r,lane,key){
   // non-empty or fall back to the repo's display status (the shipped card's
   // exact fallback, not a new truth claim).
   const sibSt=(laneNames.length>1&&svc&&svc.installed&&!svc.own&&typeof svc.status==="string"&&svc.status)?svc.status:null;
-  const st=sibSt||dispStatus(r);
+  // CP2 (2026-07-08): a SIBLING lane's tile must not dress its service status
+  // with the repo-level session/ticket/track -- those artifacts belong to the
+  // repo's active lane, so a sibling tile showing them would claim another
+  // lane's work as its own (#234 display lie). Reduced tile: service truth +
+  // an explicit no-data note, nothing borrowed.
+  if(sibSt){
+    return `<div class="tile" onclick="drillTo(event,'${encAttr(key)}')" title="click to focus this lane">
+      <div class="th">${token(sibSt,true)}<span class="nm">${esc(dispName(r.name))} / ${esc(lane)}</span></div>
+      <div class="tnow">no lane-scoped session data — sessions/tickets are recorded per repo</div></div>`;
+  }
+  const st=dispStatus(r);
   const cs=r.current_session||{}, ft=(r.git||{}).focus_ticket;
   const busy=st==="working"||st==="stopping"||st==="wedged";
   const nm=laneNames.length>1?`${dispName(r.name)} / ${lane}`:dispName(r.name);
@@ -1562,6 +1575,10 @@ setInterval(()=>{
   // untouched.
   document.querySelectorAll(".agox").forEach(el=>{const a=nowS()-(+el.dataset.t);el.textContent=el.dataset.g==="m"?agom(a):ago(a)+" ago";});
   document.querySelectorAll(".qreset").forEach(el=>{const s=(+el.dataset.e)-Math.floor(nowS());el.textContent=s>0?(el.dataset.g==="m"?durm(s):dur(s)):"now";});
+  // #190 pace ratio: normalized out of the #focus signature (no churn), so the
+  // ticker owns its motion -- otherwise the earned ×N.N would freeze at its
+  // first render until an unrelated state change rebuilt the tile (CP2).
+  document.querySelectorAll(".pacex").forEach(el=>{const m=+el.dataset.med;if(m>0)el.textContent="×"+((nowS()-(+el.dataset.e))/m).toFixed(1);});
 },1000);
 
 /* ---- render + SSE ---- */

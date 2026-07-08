@@ -278,6 +278,22 @@ class TestCompareTiles(unittest.TestCase):
         # the helper itself guards a malformed track (total render).
         self.assertIn(b"if(!Array.isArray(trk)||!trk.length)", html)
 
+    def test_sibling_lane_tile_is_reduced(self):
+        # CP2: a sibling lane's tile must not borrow the repo-level session /
+        # ticket / track (they belong to the active lane) -- it renders the
+        # service truth + an explicit no-data note and returns early.
+        html = self._page()
+        self.assertIn(b"if(sibSt){", html)
+        self.assertIn(b"no lane-scoped session data", html)
+
+    def test_pace_ratio_is_ticked_not_frozen(self):
+        # CP2: pacex is normalized OUT of the #focus signature, so the 1s
+        # ticker must own its motion (data-e/data-med) -- otherwise the earned
+        # ratio freezes at first render until an unrelated rebuild.
+        html = self._page()
+        self.assertIn(b'querySelectorAll(".pacex")', html)
+        self.assertIn(b'data-med=', html)
+
 
 class TestRosterCountdownStability(unittest.TestCase):
     """#238 (p1 regression): seconds-granularity countdowns embedded in the roster
