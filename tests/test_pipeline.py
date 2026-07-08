@@ -259,6 +259,40 @@ class WrapResolveTest(unittest.TestCase):
             pipeline.resolve_pipeline(self.repo, "pm")
 
 
+class CompileBriefTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        with open(os.path.join(self.dir, "act.md"), "w") as fh:
+            fh.write("Do the thing.\n")
+
+    def test_plain_node_brief(self):
+        doc = minimal_doc()
+        out = pipeline.compile_brief(self.dir, doc, "act")
+        self.assertIn("<!-- pipeline:node act (agent_task) -->", out)
+        self.assertIn("Do the thing.", out)
+        self.assertNotIn("pipeline:loop", out)
+
+    def test_loop_node_brief_carries_round_and_verdict_instructions(self):
+        doc = minimal_doc()
+        doc["containers"] = [{"id": "c1", "kind": "loop", "children": ["act"],
+                              "exit_when": "all tests pass", "max_rounds": 5}]
+        ctx = {"container": "c1", "round": 2, "max_rounds": 5,
+               "exit_when": "all tests pass",
+               "verdict_file": "var/autonomy-logs/.pipeline-run-coder.verdict.json"}
+        out = pipeline.compile_brief(self.dir, doc, "act", ctx)
+        self.assertIn("round 2 of at most 5", out)
+        self.assertIn("all tests pass", out)
+        self.assertIn(".pipeline-run-coder.verdict.json", out)
+        self.assertIn("enforced by the engine", out)   # honesty tag
+
+    def test_missing_brief_raises(self):
+        doc = minimal_doc()
+        doc["nodes"][0]["brief_ref"] = "ghost.md"
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.compile_brief(self.dir, doc, "act")
+
+
 class LoadDocTest(unittest.TestCase):
     def test_load_missing_raises(self):
         with self.assertRaises(pipeline.PipelineError):

@@ -264,6 +264,47 @@ def validate_doc(doc, pipeline_dir=None):
 
 DEFAULT_PROMPT = ".autonomy/loop_prompt.md"
 
+_LOOP_FOOTER = """<!-- pipeline:loop %(container)s -->
+You are inside the loop "%(container)s", round %(round)d of at most %(max_rounds)d.
+The round cap is enforced by the engine; the exit condition below is
+instructed -- the engine cannot verify it, you must judge it.
+Exit condition: %(exit_when)s
+Before you finish this session, write a JSON file at
+%(verdict_file)s (relative to the repo root):
+  {"exit": true}   if the exit condition is satisfied
+  {"exit": false}  if another round is needed
+If you write nothing, the engine assumes another round is needed."""
+
+
+def _node_by_id(doc, node_id):
+    for node in doc.get("nodes", []):
+        if node.get("id") == node_id:
+            return node
+    raise PipelineError("node %r not in pipeline %r"
+                        % (node_id, doc.get("name")))
+
+
+def compile_brief(pipeline_dir, doc, node_id, loop_ctx=None):
+    """Compose the session brief for one node: fenced header + the node's
+    brief file + (inside a loop) the round/verdict footer. Fenced sections
+    per the spec so future regeneration is recognisable."""
+    node = _node_by_id(doc, node_id)
+    ref = node.get("brief_ref")
+    if not ref:
+        raise PipelineError("node %r has no brief_ref (legacy nodes pass "
+                            "their prompt path through, not the compiler)"
+                            % node_id)
+    try:
+        with open(os.path.join(pipeline_dir, ref)) as fh:
+            body = fh.read().rstrip()
+    except OSError as exc:
+        raise PipelineError("brief %s unreadable: %s" % (ref, exc))
+    parts = ["<!-- pipeline:node %s (%s) -->" % (node_id, node.get("type")),
+             body]
+    if loop_ctx:
+        parts.append(_LOOP_FOOTER % loop_ctx)
+    return "\n\n".join(parts) + "\n"
+
 
 def wrap_role(settings, role):
     """A legacy role as a one-node pipeline (single dispatch path, operator
