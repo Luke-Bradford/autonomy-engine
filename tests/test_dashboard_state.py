@@ -430,6 +430,32 @@ class TestsRanVerdictTest(unittest.TestCase):
                        "model": "m", "cwd": "/x"})
         self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
 
+    def test_git_commit_mentioning_push_is_not_a_gate(self):
+        # review-bot WARNING on #313: `git` + `push` merely CO-OCCURRING in a
+        # command (push inside a commit message) must not earn a gate id --
+        # push must be git's actual subcommand, in command position.
+        p = self._log(
+            self._tool_use("t1", 'git commit -m "push fix for failing test"'),
+            self._tool_result("ALL SUITES PASS\n"))
+        self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
+
+    def test_git_push_not_in_command_position_is_not_a_gate(self):
+        p = self._log(self._tool_use("t1", "echo git push"),
+                      self._tool_result("ALL SUITES PASS\n"))
+        self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
+
+    def test_chained_git_push_still_counts(self):
+        # the loop's real shape: git add/commit && git push -u origin <branch>
+        p = self._log(
+            self._tool_use("t1", "git add -A && git push -u origin feat/312-x"),
+            self._tool_result("remote: ...\nALL SUITES PASS\n"))
+        self.assertEqual(ds.parse_session_log(p)["tests_ran"], "green")
+
+    def test_git_option_before_push_subcommand_counts(self):
+        p = self._log(self._tool_use("t1", "git -C /w/tree push origin main"),
+                      self._tool_result("ALL SUITES PASS\n"))
+        self.assertEqual(ds.parse_session_log(p)["tests_ran"], "green")
+
 
 class TestConfigOverlay(unittest.TestCase):
     """#202: the persistent operator overlay (var/autonomy-logs/config-overrides)

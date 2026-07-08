@@ -49,7 +49,11 @@ _GATE_RED_RE = re.compile(r"^ONE OR MORE SUITES FAILED$", re.MULTILINE)
 _GATE_CMD_RE = re.compile(
     r"\b(?:bash|sh)\s+\S*run_all\.sh"      # bash tests/run_all.sh
     r"|(?:^|[;&|(]\s*)\S*run_all\.sh\b"    # ./tests/run_all.sh in cmd position
-    r"|\bgit\b[^\n|;&]*\bpush\b",
+    # git push: command-position `git` with `push` as its actual SUBCOMMAND
+    # (global options like -C <path> allowed between) -- git+push merely
+    # CO-OCCURRING (`git commit -m "push fix"`, `echo git push`) must not
+    # earn a gate id (#313 review WARNING).
+    r"|(?:^|[;&|(]\s*)git\s+(?:-\S+(?:\s+[^-\s]\S*)?\s+)*push\b",
     re.MULTILINE)
 
 # Claude Code writes one JSONL per session under here; the account's REAL usage
