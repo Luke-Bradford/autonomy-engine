@@ -923,3 +923,14 @@ class TestWorkstreamAuthoring(unittest.TestCase):
         # the refused content
         with open(os.path.join(self.repo, "var", "autonomy", "roles", "qa.md")) as fh:
             self.assertNotIn("new content", fh.read())
+
+    def test_set_account_round_trips(self):
+        # #337 review: 'runs as' saves through the SAME ws_set path #334
+        # shipped -- prove the account field lands and clears.
+        dc.ws_add(self.repo, "pm", "pm", self.ENGINE)
+        res = dc.ws_set(self.repo, "pm", {"account": "local-llm"})
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(self._roles()["pm"]["account"], "local-llm")
+        res = dc.ws_set(self.repo, "pm", {"account": ""})
+        self.assertTrue(res["ok"], res)
+        self.assertNotIn("account", self._roles()["pm"])
