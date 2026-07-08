@@ -52,18 +52,16 @@ Issue numbers, or "None".
 
 - Title: `feat:`/`fix:`/`docs:` prefix + `(#<issue>)`; body carries
   `Closes #<issue>` so the merge closes it.
-- **Multi-slice PRs: never write a negated close phrase.** safe_merge's
-  done-everywhere pass extracts close-refs with a keyword+`#N` regex that is
-  blind to negation — the sentence "does NOT close #90" auto-closed #90 on
-  merge (2026-07-05 incident, bug #301). Until #301 lands, say "#N stays
-  open — <what remains>" and never place `close/closes/fix/fixes/resolve/
-  resolves` directly before an issue ref you do NOT want closed.
-  **Quoted text counts too**: PR #303 — the doc PR for #301 — *quoted* the
-  offending sentence in its body and closed the same issue a second time.
-  The scan is on the PR body verbatim (grep, no negation/quote awareness),
-  so when describing such an incident, break the token pair (e.g. "the
-  'does NOT close' phrasing against #90"), or reference the issue only in
-  a GH comment — comments are not scanned.
+- **Close-refs are GitHub's own grammar** (#301, fixed 2026-07-08):
+  done-everywhere reads `closingIssuesReferences` — the server-side
+  closing-keyword linkage — so negated phrases ("does NOT close #90"),
+  quoted incident text, and code-fenced examples no longer close anything
+  (the old body regex did exactly that, twice: PRs #299 and #303). What
+  still matters: a REAL `Closes #N` in closing-keyword position is the one
+  and only way a merge closes an issue, and "Part of #N" / `(#N)` in the
+  title remain the work-claim signals that reset a multi-slice ticket to
+  Ready. "#N stays open — <what remains>" is still good practice for
+  reviewer clarity, just no longer load-bearing.
 - End the body with the Claude Code attribution line (repo convention).
 - Doc-only PRs skip the review bot but still get CI — say "doc-only" in the
   description so the missing review isn't chased.
