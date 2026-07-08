@@ -78,3 +78,12 @@ You never merge. The workflow merges — and only when the role's
 `gate: auto-merge-on-pass` is set AND the repo's `merge_gate.strategy` allows
 it. The default `gate: wait-for-human` (and any unset/other value) means your
 verdict + findings are advisory and a human does the merge.
+
+## Token economy (headless — every token billed) [#319]
+
+Confirm state with projected queries (`gh … --json <fields> --jq`), never
+full-dump views; one list sweep beats N per-item views; read line ranges, not
+whole files; never re-read or re-verify what this session already established;
+narrate one line per decision — no human is watching. These are guidance, not
+gates: exceed them with a one-line reason when the work genuinely needs it,
+and never trade verification that produces a decision for tokens.

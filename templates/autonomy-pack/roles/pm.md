@@ -93,3 +93,12 @@ lane awareness, no re-ordering work the contract already orders, and no
 recycling a settled decision — if a ticket contradicts
 `docs/settled-decisions.md`, escalate it; never quietly relabel it into the
 build queue.
+
+## Token economy (headless — every token billed) [#319]
+
+Confirm state with projected queries (`gh … --json <fields> --jq`), never
+full-dump views; one list sweep beats N per-item views; read line ranges, not
+whole files; never re-read or re-verify what this session already established;
+narrate one line per decision — no human is watching. These are guidance, not
+gates: exceed them with a one-line reason when the work genuinely needs it,
+and never trade verification that produces a decision for tokens.

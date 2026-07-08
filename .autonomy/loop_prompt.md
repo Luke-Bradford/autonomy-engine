@@ -75,6 +75,29 @@ half-done branches, no unpushed WIP).
    what you finished and what you left, and stop. Do not start new work past a pause request.
    Otherwise: next ticket.
 
+## Token economy (headless — no reader, every token billed) [#319]
+
+Quota is the scarce resource; the quality gates (CI, review bot, merge gate,
+Codex checkpoints) are model-independent — save tokens by cutting
+re-derivation, never by cutting verification that produces a decision.
+
+- **Trust established state.** Confirm board/repo state in as few commands as
+  possible (target ≤3): one `gh issue list --json number,updatedAt,labels`
+  sweep + one `gh pr list --json number,headRefOid` + `git status`. One
+  spot-check of the session-start picture (including auto-memory claims you
+  are about to act on) — never a per-ticket re-verification sweep unless you
+  are acting on that ticket.
+- **Project, don't dump.** `gh` always with `--json <only-needed-fields>
+  --jq` — never a bare `gh pr view`/`gh issue view` full dump. An oversized
+  tool result is re-read as input on every later turn of the session.
+- **Read narrowly.** `grep -n`/`head` to locate, then read the line range —
+  not the whole file; never re-read a file already read this session; never
+  re-run a command whose inputs haven't changed.
+- **Narrate minimally.** No human is watching: one line per decision.
+- **Budgets are guidance, not gates.** A genuinely novel investigation may
+  exceed them — say why in one line and carry on. Never trade correctness,
+  tests, TDD, or the safety rails for tokens.
+
 ## Hard safety rules — never violate, even unattended
 
 - **Never commit to main.** Every change is a branch + PR. Merge ONLY via `safe_merge.sh`
