@@ -463,6 +463,114 @@ class StateMachineTest(unittest.TestCase):
         self.assertTrue(os.path.exists(self.state))
 
 
+class JournalLedgerTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, True)
+        os.makedirs(os.path.join(self.repo, ".autonomy"))
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("engine:\n  label: t\n")   # no roles block -> coder wraps
+        with open(os.path.join(self.repo, ".autonomy", "loop_prompt.md"), "w") as fh:
+            fh.write("legacy prompt\n")
+        self.state = os.path.join(self.repo, "state.json")
+        self.journal = os.path.join(self.repo, "journal.jsonl")
+
+    def _finish_wrapped_run(self, outcome="success"):
+        pipeline.start_run(self.repo, "coder", self.state)
+        pipeline.next_node(self.state, os.path.join(self.repo, "brief.md"))
+        pipeline.record_outcome(self.state, "act",
+                                "success" if outcome == "success" else "error",
+                                session_log="/x/session-1.log",
+                                journal_path=self.journal)
+
+    def test_done_run_appends_journal_line_with_trust_fields(self):
+        self._finish_wrapped_run()
+        with open(self.journal) as fh:
+            lines = fh.read().splitlines()
+        self.assertEqual(len(lines), 1)
+        rec = json.loads(lines[0])
+        self.assertEqual(rec["role"], "coder")
+        self.assertEqual(rec["pipeline"], "legacy-coder")
+        self.assertTrue(rec["wrapped"])
+        self.assertEqual(rec["outcome"], "success")
+        self.assertIs(rec["pass"], True)
+        self.assertEqual(rec["sessions"], 1)
+        self.assertEqual(rec["nodes"][0]["session_log"], "session-1.log")
+        self.assertIn("merge_affecting", rec)
+        self.assertIn("lane", rec)
+        self.assertIsInstance(rec["started"], int)
+        self.assertIsInstance(rec["finished"], int)
+
+    def test_failure_run_pass_false(self):
+        self._finish_wrapped_run(outcome="error")
+        with open(self.journal) as fh:
+            rec = json.loads(fh.read().splitlines()[0])
+        self.assertEqual(rec["outcome"], "failure")
+        self.assertIs(rec["pass"], False)
+
+    def _write_journal(self, role, n_pass, n_fail):
+        with open(self.journal, "a") as fh:
+            for _ in range(n_pass):
+                fh.write(json.dumps({"role": role, "outcome": "success",
+                                     "pass": True}) + "\n")
+            for _ in range(n_fail):
+                fh.write(json.dumps({"role": role, "outcome": "failure",
+                                     "pass": False}) + "\n")
+
+    def test_ledger_watch_below_20_runs(self):
+        self._write_journal("coder", 19, 0)
+        self.assertEqual(pipeline.ledger(self.journal, "coder")["tier"], "watch")
+
+    def test_ledger_auto_at_20_runs_95pct(self):
+        self._write_journal("coder", 19, 1)
+        led = pipeline.ledger(self.journal, "coder")
+        self.assertEqual((led["runs"], led["passes"], led["tier"]),
+                         (20, 19, "auto"))
+
+    def test_ledger_demotes_below_95(self):
+        self._write_journal("coder", 18, 2)
+        self.assertEqual(pipeline.ledger(self.journal, "coder")["tier"], "watch")
+
+    def test_ledger_total_reader_skips_junk(self):
+        with open(self.journal, "w") as fh:
+            fh.write("garbage line\n")
+            fh.write(json.dumps(["not", "a", "dict"]) + "\n")
+            fh.write(json.dumps({"role": "coder", "outcome": "success",
+                                 "pass": True}) + "\n")
+        led = pipeline.ledger(self.journal, "coder")
+        self.assertEqual((led["runs"], led["passes"]), (1, 1))
+
+    def test_ledger_missing_journal_is_watch_zero(self):
+        self.assertEqual(pipeline.ledger("/nope/journal.jsonl", "coder"),
+                         {"runs": 0, "passes": 0, "tier": "watch"})
+
+    def test_ledger_filters_by_role(self):
+        self._write_journal("coder", 25, 0)
+        self._write_journal("pm", 1, 5)
+        self.assertEqual(pipeline.ledger(self.journal, "coder")["tier"], "auto")
+        self.assertEqual(pipeline.ledger(self.journal, "pm")["tier"], "watch")
+
+    def test_ledger_scopes_to_assignment_not_role(self):
+        # v5 §10: trust is earned per ASSIGNMENT -- rebinding a role to a new
+        # pipeline must not inherit the old pipeline's record.
+        with open(self.journal, "a") as fh:
+            for _ in range(25):
+                fh.write(json.dumps({"role": "coder", "pipeline": "old-flow",
+                                     "outcome": "success", "pass": True}) + "\n")
+        led = pipeline.ledger(self.journal, "coder", pipeline_name="new-flow")
+        self.assertEqual((led["runs"], led["tier"]), (0, "watch"))
+        led = pipeline.ledger(self.journal, "coder", pipeline_name="old-flow")
+        self.assertEqual(led["tier"], "auto")
+
+    def test_ledger_windowed_demotion(self):
+        # 40 passes then 2 recent failures: lifetime 40/42 ~= 0.952 (>=0.95)
+        # but the last-20 window is 18/20 = 0.90 -> demoted. §10's decay
+        # demotion must respond to RECENT decay.
+        self._write_journal("coder", 40, 0)
+        self._write_journal("coder", 0, 2)
+        self.assertEqual(pipeline.ledger(self.journal, "coder")["tier"], "watch")
+
+
 class LoadDocTest(unittest.TestCase):
     def test_load_missing_raises(self):
         with self.assertRaises(pipeline.PipelineError):

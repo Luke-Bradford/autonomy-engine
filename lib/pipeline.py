@@ -503,7 +503,74 @@ def _read_verdict(verdict_path):
 
 
 def _journal_append(journal_path, state):
-    pass   # replaced in task 5 (journal + ledger)
+    """One JSON line per completed run -- the run journal the trust ledger
+    projects over (v5 §10). Single write() of line+newline in append mode;
+    a torn line from a rare cross-lane interleave is TOLERATED by the total
+    reader (skipped), and lost evidence lands on the safe side (watch)."""
+    doc = state.get("doc") or {}
+    meta = state.get("meta") or {}
+    nodes_done = state.get("nodes_done") or []
+    rec = {
+        "run_id": state.get("run_id", ""),
+        "role": state.get("role", ""),
+        "pipeline": doc.get("name", ""),
+        "pipeline_version": meta.get("from_version", 0),
+        "wrapped": bool(meta.get("wrapped")),
+        "outcome": state.get("outcome", "failure"),
+        "pass": state.get("outcome") == "success",
+        "started": int(state.get("started") or 0),
+        "finished": int(time.time()),
+        "sessions": int(state.get("sessions") or 0),
+        "lane": state.get("lane", ""),
+        "nodes": nodes_done,
+        "merge_affecting": any(n.get("type") == "git_ops" for n in nodes_done
+                               if isinstance(n, dict)),
+    }
+    line = json.dumps(rec, sort_keys=True) + "\n"
+    with open(journal_path, "a") as fh:
+        fh.write(line)
+
+
+TRUST_MIN_RUNS = 20
+TRUST_PASS_RATE = 0.95
+
+
+def ledger(journal_path, role, pipeline_name=""):
+    """Trust-ledger projection (v5 §10): PURE read over the journal, no
+    stored tier. Total reader (prevention-log #12): junk lines are skipped --
+    they reduce evidence, which keeps the tier on the safe side (watch).
+
+    Trust is earned per ASSIGNMENT, not per role name: pass pipeline_name to
+    scope the history to the role's CURRENT binding, so rebinding a role
+    never inherits the previous pipeline's record. The pass-rate is computed
+    over the most recent TRUST_MIN_RUNS runs (a rolling window), so §10's
+    'demotion on pass-rate decay' actually responds to recent decay instead
+    of being diluted by a long healthy history."""
+    matched = []
+    try:
+        fh = open(journal_path)
+    except OSError:
+        return {"runs": 0, "passes": 0, "tier": "watch"}
+    with fh:
+        for line in fh:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict) or rec.get("role") != role:
+                continue
+            if pipeline_name and rec.get("pipeline") != pipeline_name:
+                continue
+            if rec.get("outcome") not in ("success", "failure", "capped"):
+                continue
+            matched.append(rec.get("pass") is True)
+    runs = len(matched)
+    passes = sum(1 for p in matched if p)
+    window = matched[-TRUST_MIN_RUNS:]
+    window_passes = sum(1 for p in window if p)
+    tier = ("auto" if runs >= TRUST_MIN_RUNS
+            and window_passes >= len(window) * TRUST_PASS_RATE else "watch")
+    return {"runs": runs, "passes": passes, "tier": tier}
 
 
 def _finish(state, state_path, outcome, journal_path):
@@ -701,6 +768,17 @@ def main(argv):
         except (IndexError, PipelineError) as exc:
             print("pipeline record: %s" % exc, file=sys.stderr)
             return 1
+        return 0
+    if cmd == "ledger":
+        opts = {"--pipeline": ""}
+        pos = _split_opts(rest, opts)
+        if len(pos) != 2:
+            print("usage: pipeline.py ledger <journal> <role> "
+                  "[--pipeline <name>]", file=sys.stderr)
+            return 2
+        led = ledger(pos[0], pos[1], pipeline_name=opts["--pipeline"])
+        print("runs=%d passes=%d tier=%s" % (led["runs"], led["passes"],
+                                             led["tier"]))
         return 0
     print("unknown subcommand %r" % cmd, file=sys.stderr)
     return 2
