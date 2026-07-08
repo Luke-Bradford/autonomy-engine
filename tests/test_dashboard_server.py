@@ -1460,3 +1460,35 @@ class TestLaneControl(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConfigOrgBlockTest(unittest.TestCase):
+    """#326 slice 1: config_read_model() carries a per-repo `org` block (the
+    SD-33 pair + role roster read model from ds.build_org) so /config can
+    render Org & Workflow. Best-effort: never fatal to the payload."""
+
+    def setUp(self):
+        self._orig_repos = dashboard.Handler.repos
+        self._orig_run = dashboard._run
+        dashboard._run = lambda args, **kw: None
+        self._td = tempfile.TemporaryDirectory()
+        os.makedirs(os.path.join(self._td.name, ".autonomy"))
+        with open(os.path.join(self._td.name, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("agent:\n  model:\n    primary: claude-sonnet-5\n"
+                     "roles:\n  coder:\n    enabled: true\n")
+        dashboard.Handler.repos = [self._td.name]
+
+    def tearDown(self):
+        dashboard._run = self._orig_run
+        dashboard.Handler.repos = self._orig_repos
+        self._td.cleanup()
+
+    def test_org_block_in_payload(self):
+        repo = dashboard.config_read_model()["repos"][0]
+        org = repo["org"]
+        self.assertTrue(org["valid"])
+        self.assertEqual(org["pair"]["coder"]["model"], "claude-sonnet-5")
+        self.assertFalse(org["pair"]["planner"]["scaffolded"])
+        names = [r["name"] for r in org["roles"]]
+        for n in ("coder", "pm", "qa", "researcher"):
+            self.assertIn(n, names)

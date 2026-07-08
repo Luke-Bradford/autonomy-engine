@@ -3293,3 +3293,134 @@ class TestReadBoardWarning(unittest.TestCase):
         # is a byte contract (review NITPICK on #311).
         p = self._w("1751700000\n" + "⚠" * 2000 + "\n")
         self.assertIsNone(ds.read_board_warning(p))
+
+
+class TestBuildOrg(unittest.TestCase):
+    """#326 slice 1: the Org & Workflow read model -- planner/coder pair +
+    the FULL merged role roster with honest trigger detail. Degrades to
+    truth (prevention-log 15/18): malformed roles: -> valid False + error,
+    never blank/default cards; a missing planner agent file renders as
+    not-scaffolded, never invented."""
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.repo = self._td.name
+        os.makedirs(os.path.join(self.repo, ".autonomy", "roles"))
+        with open(os.path.join(self.repo, ".autonomy", "roles", "qa.md"), "w") as fh:
+            fh.write("qa rail\n")
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _config(self, text):
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write(text)
+
+    def _planner(self, text):
+        d = os.path.join(self.repo, ".claude", "agents")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "planner.md"), "w") as fh:
+            fh.write(text)
+
+    FULL = (
+        "agent:\n"
+        "  effort: high\n"
+        "  model:\n"
+        "    primary: claude-sonnet-5\n"
+        "    fallback: claude-sonnet-4-6\n"
+        "roles:\n"
+        "  coder:\n"
+        "    enabled: true\n"
+        "  qa:\n"
+        "    enabled: true\n"
+        "    trigger: { type: event, on: [pr.opened] }\n"
+        "    gate: auto-merge-on-pass\n"
+        "    scope: { labels: [ready] }\n"
+        "    prompt: .autonomy/roles/qa.md\n"
+        "  researcher:\n"
+        "    enabled: false\n"
+        "    trigger: { type: cron, schedule: \"0 9 * * *\" }\n"
+        "    prompt: .autonomy/roles/qa.md\n"
+        "  scribe:\n"
+        "    enabled: true\n"
+        "    trigger: { type: cron, schedule: \"*/30 * * * *\" }\n"
+        "    model: claude-haiku-4-5-20251001\n"
+        "    prompt: .autonomy/roles/qa.md\n"
+    )
+
+    def test_pair_from_agent_file_and_config(self):
+        self._config(self.FULL)
+        self._planner("---\nname: planner\nmodel: claude-opus-4-8\n---\nbody\n")
+        org = ds.build_org(self.repo)
+        self.assertTrue(org["valid"])
+        self.assertEqual(org["pair"]["planner"],
+                         {"scaffolded": True, "model": "claude-opus-4-8"})
+        self.assertEqual(org["pair"]["coder"]["model"], "claude-sonnet-5")
+        self.assertEqual(org["pair"]["coder"]["fallback"], "claude-sonnet-4-6")
+        self.assertEqual(org["pair"]["coder"]["effort"], "high")
+
+    def test_planner_not_scaffolded_is_stated_never_invented(self):
+        self._config(self.FULL)
+        org = ds.build_org(self.repo)
+        self.assertEqual(org["pair"]["planner"], {"scaffolded": False, "model": ""})
+
+    def test_planner_garbage_frontmatter_scaffolded_model_unknown(self):
+        self._config(self.FULL)
+        self._planner("no frontmatter at all\n")
+        org = ds.build_org(self.repo)
+        self.assertEqual(org["pair"]["planner"], {"scaffolded": True, "model": ""})
+
+    def test_full_roster_with_trigger_detail(self):
+        self._config(self.FULL)
+        org = ds.build_org(self.repo)
+        rows = {r["name"]: r for r in org["roles"]}
+        # the standard four always present, plus the custom role
+        for name in ("coder", "pm", "qa", "researcher", "scribe"):
+            self.assertIn(name, rows)
+        self.assertEqual(rows["coder"]["trigger_kind"], "loop")
+        self.assertEqual(rows["coder"]["trigger_detail"], "round-robin")
+        self.assertEqual(rows["qa"]["trigger_kind"], "event")
+        self.assertEqual(rows["qa"]["trigger_detail"], "pr.opened")
+        self.assertEqual(rows["qa"]["gate"], "auto-merge-on-pass")
+        self.assertEqual(rows["qa"]["scope_labels"], ["ready"])
+        self.assertTrue(rows["qa"]["enabled"])
+        self.assertEqual(rows["researcher"]["trigger_kind"], "cron")
+        self.assertEqual(rows["researcher"]["trigger_detail"], "0 9 * * *")
+        self.assertFalse(rows["researcher"]["enabled"])
+        self.assertEqual(rows["scribe"]["trigger_kind"], "cron")
+        self.assertEqual(rows["scribe"]["model"], "claude-haiku-4-5-20251001")
+        self.assertFalse(rows["pm"]["configured"])
+
+    def test_malformed_roles_block_degrades_to_invalid(self):
+        self._config("roles: just-a-scalar\n")
+        org = ds.build_org(self.repo)
+        self.assertFalse(org["valid"])
+        self.assertNotEqual(org["error"], "")
+
+    def test_invalid_role_entry_degrades_to_invalid(self):
+        self._config("roles:\n  qa:\n    enabled: true\n"
+                     "    trigger: { type: cron }\n"
+                     "    prompt: .autonomy/roles/qa.md\n")  # cron w/o schedule
+        org = ds.build_org(self.repo)
+        self.assertFalse(org["valid"])
+
+    def test_missing_config_is_invalid_not_blank(self):
+        org = ds.build_org(self.repo)
+        self.assertFalse(org["valid"])
+        self.assertNotEqual(org["error"], "")
+
+    def test_unwired_knob_notes_surface(self):
+        self._config("agent:\n  model:\n    primary: claude-sonnet-5\n"
+                     "roles:\n  coder:\n    enabled: true\n    self_test: true\n")
+        org = ds.build_org(self.repo)
+        rows = {r["name"]: r for r in org["roles"]}
+        self.assertTrue(any("self_test" in n for n in rows["coder"]["notes"]))
+
+    def test_syntax_invalid_config_is_total_and_invalid(self):
+        # CP2: _read_config re-parses the same file and only guards OSError --
+        # a syntax error must NOT raise out of build_org; it renders invalid
+        # with the standard roster still present (badge, never a blank card).
+        self._config(": bad\n")
+        org = ds.build_org(self.repo)
+        self.assertFalse(org["valid"])
+        self.assertNotEqual(org["error"], "")
+        self.assertEqual(len(org["roles"]), 4)   # standard roster best-effort

@@ -901,8 +901,21 @@ def config_read_model():
             cfg = st.get("config", {})
         except Exception:
             cfg = {}
+        # #326: the Org & Workflow read model (SD-33 pair + role roster).
+        # build_org is total by design; the belt keeps a surprise from
+        # blanking the whole config payload -- an org failure renders as an
+        # explicit invalid block, never a missing key (prevention-log 15/18).
+        try:
+            org = ds.build_org(repo)
+        except Exception as exc:
+            org = {"valid": False,
+                   "error": "org read failed: %s" % (exc or exc.__class__.__name__),
+                   "pair": {"planner": {"scaffolded": False, "model": ""},
+                            "coder": {"model": "", "fallback": "", "effort": ""}},
+                   "roles": []}
         repos.append({"path": repo, "name": os.path.basename(repo.rstrip("/")),
-                      "config": cfg, "board_owner_derived": owners.get(repo, "")})
+                      "config": cfg, "org": org,
+                      "board_owner_derived": owners.get(repo, "")})
     acct_list, acct_error = [], None
     try:
         acct_list = _accts().list()

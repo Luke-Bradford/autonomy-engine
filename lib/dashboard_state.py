@@ -1208,6 +1208,129 @@ def build_roles(config_roles, coder_status, now=None, sessions=None):
     return roles
 
 
+def planner_agent_info(repo_path):
+    """SD-33 pair: the planner subagent's model, read ONLY from the agent
+    file's frontmatter (.claude/agents/planner.md) -- never from config
+    (per-phase `models:` stays a flagged no-op, SD-26). Total: a missing file
+    is not-scaffolded (stated, never invented), garbage/absent frontmatter is
+    scaffolded-with-unknown-model; never raises."""
+    path = os.path.join(repo_path, ".claude", "agents", "planner.md")
+    try:
+        with open(path, errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return {"scaffolded": False, "model": ""}
+    model = ""
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---":
+        for ln in lines[1:]:
+            s = ln.strip()
+            if s == "---":
+                break
+            if s.startswith("model:"):
+                model = s.split(":", 1)[1].strip()
+                break
+    return {"scaffolded": True, "model": model}
+
+
+def _org_trigger(cfg, default_kind):
+    """(kind, detail) for a role's trigger, rendered honestly: the cron
+    schedule / event name verbatim, 'round-robin' for the loop. A malformed
+    trigger block degrades to the empty detail (the row's validity is judged
+    by roles.validate_roles, not re-derived here)."""
+    trig = cfg.get("trigger")
+    trig = trig if isinstance(trig, dict) else {}
+    kind = str(trig.get("type") or default_kind)
+    if kind == "cron":
+        return kind, str(trig.get("schedule") or "")
+    if kind == "event":
+        on = trig.get("on")
+        if isinstance(on, list):
+            return kind, ", ".join(str(x) for x in on)
+        return kind, str(on or "")
+    return kind, "round-robin"
+
+
+def build_org(repo_path):
+    """#326 slice 1: the Org & Workflow read model for /config -- the SD-33
+    planner/coder pair plus the FULL merged role roster (standard four +
+    custom) with honest trigger detail (loop round-robin / cron schedule /
+    event name), scope labels, gate, per-role model/effort/account/lane and
+    the #157 unwired-knob NOTEs. Validity comes from roles.validate_roles
+    (the SSOT) -- a malformed or missing config renders `valid: False` with
+    the error text, never blank/default cards (prevention-log 15/18); rows
+    are still built best-effort so the page can badge them rather than
+    vanish them."""
+    cfg_path = os.path.join(repo_path, ".autonomy", "config.yaml")
+    error = ""
+    config = {}
+    try:
+        with open(cfg_path) as fh:
+            config = config_parser.parse(fh.read())
+        if not isinstance(config, dict):
+            config, error = {}, "config.yaml did not parse to a mapping"
+    except OSError as exc:
+        error = "config.yaml unreadable: %s" % exc
+    except Exception as exc:   # parser error -- surfaced, never a blank card
+        error = "config.yaml parse error: %s" % (exc or exc.__class__.__name__)
+    if not error:
+        errors = roles_schema.validate_roles(config)
+        if errors:
+            error = "; ".join(errors)
+
+    # overlay-aware EFFECTIVE coder values. _read_config re-parses the same
+    # file and only guards OSError, so a syntax-invalid config would raise
+    # through it (CP2) -- build_org must stay TOTAL: fall back to empty
+    # effective values; the parse error is already in `error` above.
+    try:
+        eff = _read_config(repo_path)
+    except Exception:
+        eff = {}
+    pair = {
+        "planner": planner_agent_info(repo_path),
+        "coder": {"model": eff.get("model", ""),
+                  "fallback": eff.get("fallback", ""),
+                  "effort": eff.get("effort", "")},
+    }
+
+    config_roles = config.get("roles") if isinstance(config.get("roles"), dict) else {}
+
+    def row(name, cfg, configured, enabled, default_kind):
+        cfg = cfg if isinstance(cfg, dict) else {}
+        kind, detail = _org_trigger(cfg, default_kind)
+        scope = cfg.get("scope") if isinstance(cfg.get("scope"), dict) else {}
+        labels = scope.get("labels") if isinstance(scope.get("labels"), list) else []
+        return {
+            "name": name,
+            "configured": configured,
+            "enabled": enabled,
+            "trigger_kind": kind,
+            "trigger_detail": detail,
+            "scope_labels": [str(x) for x in labels],
+            "gate": str(cfg.get("gate") or ""),
+            "model": str(cfg.get("model") or ""),
+            "effort": str(cfg.get("effort") or ""),
+            "account": str(cfg.get("account") or ""),
+            "lane": roles_schema.lane_of_role(config, name),
+            "notes": roles_schema.unwired_knob_notes(name, cfg) if cfg else [],
+        }
+
+    rows = []
+    for name, d_enabled, _d_sub, d_trig in _STANDARD_ROLES:
+        cfg = config_roles.get(name) or {}
+        configured = bool(cfg)
+        enabled = _as_bool(cfg.get("enabled")) if "enabled" in cfg else (d_enabled if configured or name == "coder" else False)
+        rows.append(row(name, cfg, configured or name == "coder", enabled, d_trig))
+    standard = tuple(r[0] for r in _STANDARD_ROLES)
+    for name, cfg in config_roles.items():
+        if name in standard:
+            continue
+        cfg = cfg if isinstance(cfg, dict) else {}
+        rows.append(row(name, cfg, True, _as_bool(cfg.get("enabled")), "loop"))
+
+    return {"valid": not error, "error": error, "pair": pair, "roles": rows}
+
+
 def read_model_override(path):
     """A queued one-shot model/effort override (#24), so the page can show
     'next session: ...' honestly. {} when none. Only the keys the supervisor

@@ -160,6 +160,32 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px
 .role .rst{margin-left:auto}
 .role.off{opacity:.5}
 
+/* org & workflow (#326 slice 1) */
+.orghead{margin-top:14px;padding-top:10px;border-top:1px solid var(--hair);
+  font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--dim)}
+.orghead .orgct{margin-left:8px;text-transform:none;letter-spacing:0;color:var(--dim);opacity:.8}
+.orgbad{margin:8px 0;padding:6px 9px;border:1px solid var(--bad);border-radius:var(--r);
+  color:var(--bad);font-family:var(--mono);font-size:10.5px;background:var(--panel2)}
+.orgpair{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:9px 0 6px;
+  padding:8px 10px;border:1px solid var(--hair2);border-radius:var(--r);background:var(--panel2);
+  font-size:11.5px}
+.orgpair .orgarr{color:var(--dim)}
+.orgpair .orgnode b{color:var(--ink)}
+.orgpair .orgdim{color:var(--mut)}
+.orgpair .orgflow{color:var(--mut)}
+.orgmodel{font-family:var(--mono);font-size:10px;color:var(--accent)}
+.orgmodel.orgmiss{color:var(--warn)}
+.orgroles{margin-top:4px}
+.orgrole{display:flex;align-items:center;gap:9px;padding:4px 0;font-size:12px}
+.orgstate{font-family:var(--mono);font-size:9px;letter-spacing:.5px;text-transform:uppercase;
+  border:1px solid var(--hair2);border-radius:3px;padding:1px 6px;min-width:26px;text-align:center}
+.orgstate.orgon{color:var(--ok);border-color:var(--ok-dim)}
+.orgstate.orgoff{color:var(--mut)}
+.orgstate.orgna{color:var(--dim);opacity:.6}
+.orgname{font-weight:500;min-width:78px}
+.orgtrig{font-family:var(--mono);font-size:10px;color:var(--dim);min-width:150px}
+.orgbits{font-family:var(--mono);font-size:10px;color:var(--mut)}
+
 /* quotas */
 .q{padding:13px 14px;border-bottom:1px solid var(--hair)}
 .q:last-child{border-bottom:0}
@@ -460,6 +486,50 @@ function credRole(role,label){
   }
 }
 
+/* ---- ORG & WORKFLOW (#326 slice 1, read-only) ------------------------------
+   Renders ds.build_org's per-repo read model: the SD-33 planner/coder pair
+   (planner model from the AGENT FILE, coder from effective config) as the
+   flow the rails actually run, plus one honest row per role (trigger kind +
+   verbatim schedule/event, scope labels, gate, model/effort/account/lane,
+   #157 unwired-knob notes). Invalid config renders a ⚠ badge with the
+   validator's own error -- never blank/default cards (prevention-log 15/18).
+   Read-only: structural edits stay config.yaml + PR (SD-28); authoring is
+   #326 slice 3 / #87. */
+function orgZone(org){
+  if(!org) return "";
+  const badge=!org.valid?`<div class="orgbad">⚠ roles config invalid — ${esc(org.error||"unreadable")}</div>`:"";
+  const p=org.pair||{}, pl=p.planner||{}, co=p.coder||{};
+  const plTxt=pl.scaffolded?(pl.model||"model unknown"):"not scaffolded — run onboard.sh";
+  const plCls=pl.scaffolded?"":"orgmiss";
+  const pair=`<div class="orgpair">
+    <span class="orgflow">ticket</span><span class="orgarr">→</span>
+    <span class="orgnode"><b>planner</b> <span class="orgmodel ${plCls}">${esc(plTxt)}</span> plans</span><span class="orgarr">→</span>
+    <span class="orgnode"><b>coder</b> <span class="orgmodel">${esc(co.model||"model unset")}${co.effort?" · "+esc(co.effort):""}</span> executes</span><span class="orgarr">→</span>
+    <span class="orgnode orgdim">unsure? → back to planner</span><span class="orgarr">→</span>
+    <span class="orgnode">PLAN-CHECK</span><span class="orgarr">→</span>
+    <span class="orgnode orgdim">review bot · CI · merge gate</span>
+  </div>`;
+  const rows=(org.roles||[]).map(r=>{
+    const trig=r.trigger_kind==="loop"?"loop · round-robin":r.trigger_kind+" · "+(r.trigger_detail||"—");
+    const bits=[];
+    if((r.scope_labels||[]).length) bits.push("scope "+r.scope_labels.join(","));
+    if(r.gate) bits.push("gate "+r.gate);
+    if(r.model) bits.push(r.model);
+    if(r.effort) bits.push(r.effort);
+    if(r.account) bits.push("acct "+r.account);
+    if(r.lane&&r.lane!=="main") bits.push("lane "+r.lane);
+    const state=!r.configured?"—":(r.enabled?"on":"off");
+    const cls=!r.configured?"orgna":(r.enabled?"orgon":"orgoff");
+    const notes=(r.notes||[]).map(n=>`<div class="cfghint">note: ${esc(n)}</div>`).join("");
+    return `<div class="orgrole"><span class="orgstate ${cls}">${state}</span>`
+      +`<span class="orgname">${esc(r.name)}</span>`
+      +`<span class="orgtrig">${esc(trig)}</span>`
+      +`<span class="orgbits">${esc(bits.join(" · "))}</span></div>${notes}`;
+  }).join("");
+  return `<div class="orghead">org &amp; workflow<span class="orgct">who runs · when · on what — read-only; add roles via config.yaml roles: (trigger: loop | cron schedule | event on:[…])</span></div>`
+    +badge+pair+`<div class="orgroles">${rows}</div>`;
+}
+
 /* ---- REPOS + CONFIG (moved from the main page, #47) ---- */
 function renderCfg(repos){
   const rows=repos.map((r,i)=>{
@@ -472,6 +542,7 @@ function renderCfg(repos){
       ${cfgFieldList(enc,"agent.model.fallback","fallback",c.fallback)}
       ${cfgSelect(enc,"agent.effort","effort",EFFORT_CHOICES.filter(e=>e),c.effort)}
       ${cfgReadonly("merge gate",c.merge_gate,"structural — edit via config.yaml + PR (#87)")}
+      ${orgZone(r.org)}
     </div>`;
   }).join("");
   // #273: model fields are now real <select> pickers (cfgFieldList builds each
