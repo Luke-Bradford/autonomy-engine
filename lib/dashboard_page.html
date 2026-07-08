@@ -621,6 +621,26 @@ function refreshLaneHist(){
 document.addEventListener("click",e=>{if(!e.target.closest("#pop"))closeLaneHist();});
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeLaneHist();});
 /* ---- #190 UI-7 COMPARE TILES ---- */
+// #187/#190: the phase-track markup, shared by the single focus card and the
+// compare tiles -- ONE honest renderer (SD-32), never two drifting copies.
+// `done` = an observed fact, `current` = the single live frontier gate,
+// `outline` = configured but not yet reached, `empty` = no evidence (faded);
+// #312: tests carries an observed red/green verdict (a red run IS an observed
+// fact -- state stays `done`, the vred class carries color). review steps
+// carry the reviewer glyph, mirroring the fleet-rail gchain. A malformed
+// (non-array) track degrades to no track, never a map throw.
+function renderPtrack(trk){
+  if(!Array.isArray(trk)||!trk.length) return "";
+  const segs=trk.map(s=>{
+    const lbl=s.step==="review"?(s.actor==="bot"?"🤖 review":"👤 review")
+             :s.step==="tests"&&s.verdict?(s.verdict==="green"?"tests ✓":"tests ✗")
+             :s.step;
+    const tip=s.state==="done"?"observed — done":s.state==="current"?"in progress now":s.state==="empty"?"no evidence — not observed":"configured — not yet reached";
+    const vcls=s.verdict==="red"?" vred":"";
+    return `<span class="pseg ${esc(s.state)}${vcls}" title="${esc(tip)}">${esc(lbl)}</span>`;
+  }).join(`<span class="psep">→</span>`);
+  return `<div class="ptrack" title="phase track — observed milestones (solid) + configured gates (outline); display only, safe_merge is the enforcer">${segs}</div>`;
+}
 // pace vs role median -- EARNED only (the #187 acceptance test applied to
 // pace): needs a live elapsed AND >=3 completed same-role session durations
 // to call a median honest; anything less renders nothing. Sessions are
@@ -628,7 +648,9 @@ document.addEventListener("keydown",e=>{if(e.key==="Escape")closeLaneHist();});
 // the repo -- the same scope the history popover presents.
 function paceFlag(r,role,startedEpoch){
   if(!startedEpoch)return "";
-  const ds=((r&&r.sessions)||[]).filter(s=>s.role===role&&s.duration>0&&s.outcome&&s.outcome!=="running").map(s=>s.duration).sort((a,b)=>a-b);
+  // s&& guard: one torn/null session row skips itself, never throws the tile
+  // render (prevention-log #12 applied client-side).
+  const ds=((r&&r.sessions)||[]).filter(s=>s&&s.role===role&&s.duration>0&&s.outcome&&s.outcome!=="running").map(s=>s.duration).sort((a,b)=>a-b);
   if(ds.length<3)return "";                       // >=3 samples or silence
   const med=ds.length%2?ds[(ds.length-1)/2]:(ds[ds.length/2-1]+ds[ds.length/2])/2;
   if(!med)return "";
@@ -657,13 +679,11 @@ function tileCard(r,lane,key){
   const nm=laneNames.length>1?`${dispName(r.name)} / ${lane}`:dispName(r.name);
   // absent datum omitted, never "#undefined"
   const tno=(ft&&ft.number!=null)?`<span class="no">#${esc(String(ft.number))}</span>`:"";
-  // phase track: the shipped .ptrack/.pseg markup verbatim; a malformed
-  // (non-array) track degrades to no track, never a map/find throw.
+  // phase track: the SHARED renderPtrack helper (one renderer, so tiles get
+  // the #312 tests-verdict/empty semantics too); a malformed (non-array)
+  // track degrades to no track, never a map/find throw.
   const trk=(ft&&Array.isArray(ft.track))?ft.track:[];
-  const track=trk.length?`<div class="ptrack">${trk.map(s=>{
-      const lbl=s.step==="review"?(s.actor==="bot"?"🤖 review":"👤 review"):s.step;
-      return `<span class="pseg ${esc(s.state)}">${esc(lbl)}</span>`;
-    }).join(`<span class="psep">→</span>`)}</div>`:"";
+  const track=renderPtrack(trk);
   // which gate blocks = the track's single live frontier (state "current");
   // no frontier observed -> no claim.
   const cur=trk.find(s=>s.state==="current");
@@ -749,26 +769,9 @@ function renderFocus(repos){
       // redundant.
       ticket=`<div class="ticketline"><span class="no${ft.source?" src":""}"${ft.source?` title="picked: ${esc(ft.source)}"`:""}>#${ft.number}</span><span class="ttl">${safeHref(ft.url)?`<a href="${esc(safeHref(ft.url))}" target="_blank">${esc(short(ft.title||"ticket",64))}</a>`:esc(short(ft.title||"ticket",64))}</span>${right}</div>`;
       // #187 UI-4 phase track: observed milestones (SOLID) + configured gate
-      // chain (OUTLINE), server-derived by ds.phase_track. `done` = an observed
-      // fact, `current` = the single live frontier gate, `outline` = configured
-      // but not yet reached -- the three are visually distinct so the track
-      // never implies certainty it lacks (the spec's acceptance test). review
-      // steps carry the reviewer glyph, mirroring the fleet-rail gchain.
-      const trk=ft.track||[];
-      if(trk.length){
-        const segs=trk.map(s=>{
-          // #312: tests carries an observed red/green verdict (a red run IS an
-          // observed fact -- state stays `done`, the vred class carries color);
-          // `empty` = no evidence for a milestone, rendered faded.
-          const lbl=s.step==="review"?(s.actor==="bot"?"🤖 review":"👤 review")
-                   :s.step==="tests"&&s.verdict?(s.verdict==="green"?"tests ✓":"tests ✗")
-                   :s.step;
-          const tip=s.state==="done"?"observed — done":s.state==="current"?"in progress now":s.state==="empty"?"no evidence — not observed":"configured — not yet reached";
-          const vcls=s.verdict==="red"?" vred":"";
-          return `<span class="pseg ${esc(s.state)}${vcls}" title="${esc(tip)}">${esc(lbl)}</span>`;
-        }).join(`<span class="psep">→</span>`);
-        ticket+=`<div class="ptrack" title="phase track — observed milestones (solid) + configured gates (outline); display only, safe_merge is the enforcer">${segs}</div>`;
-      }
+      // chain (OUTLINE), server-derived by ds.phase_track and drawn by the
+      // shared renderPtrack (one honest renderer for card + compare tiles).
+      ticket+=renderPtrack(ft.track);
     }
     let stepLine;
     if(st==="paused") stepLine=`<div class="fc-step">paused — idle · resume to continue</div>`;

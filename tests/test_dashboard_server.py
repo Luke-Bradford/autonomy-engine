@@ -267,6 +267,17 @@ class TestCompareTiles(unittest.TestCase):
         self.assertIn(b"Array.isArray(ft.track)", html)
         self.assertIn(b"ft.number!=null", html)
 
+    def test_ptrack_render_is_shared_helper(self):
+        # ONE honest track renderer (SD-32): the focus card and the compare
+        # tiles both draw via renderPtrack, so the tiles inherit the #312
+        # tests-verdict/empty semantics and the two can never drift. The
+        # ptrack container template exists exactly once in the page source.
+        html = self._page()
+        self.assertIn(b"function renderPtrack(", html)
+        self.assertEqual(html.count(b'class="ptrack"'), 1)
+        # the helper itself guards a malformed track (total render).
+        self.assertIn(b"if(!Array.isArray(trk)||!trk.length)", html)
+
 
 class TestRosterCountdownStability(unittest.TestCase):
     """#238 (p1 regression): seconds-granularity countdowns embedded in the roster

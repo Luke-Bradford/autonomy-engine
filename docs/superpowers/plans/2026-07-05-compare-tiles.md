@@ -294,3 +294,24 @@ git commit -m "feat: UI-7 compare tiles — pin 2+ lanes into a center tile grid
 - Spec coverage: header ✓ (th: status/name/role/#ticket) · phase track ✓ · now-line/wait reason ✓ · elapsed·tok·$ ✓ · pace flag vs role median ✓ (earned) · last-activity age ✓ · blocking gate ✓ · drill ✓ · state-not-streams ✓ (no feed in tiles) · pin gesture ✓ (spec line 49/71).
 - `encAttr` exists (used by `ibtn`); verify its exact semantics before reuse.
 - `rolebadge` class reused in tiles for the role chip — verify its CSS is context-free (it's styled under `.dh1` scope? check; if scoped, use a `.trole` class with tile CSS instead).
+
+## Addendum (2026-07-08 resume — fresh Codex CP1 pass before push)
+
+The 2026-07-05 session committed this build locally but its push was killed
+before a PR opened. Resumed 2026-07-08: rebased onto main (past #313 phase
+track Slice B) and folded a fresh Codex CP1:
+
+- **Shared `renderPtrack(trk)` extracted** — the focus card's inline track
+  render and the tile's condensed copy were two drifting renderers; the tile
+  copy predated #312/#313 (missed tests-verdict `vred` + `empty` tooltips).
+  One helper now serves both (SD-32: one honest renderer); guards
+  `Array.isArray` so a malformed track degrades to nothing.
+- **paceFlag torn-row guard** — `s&&` in the sessions filter (prevention-log
+  #12 applied client-side).
+- Sibling-lane tile truth (CP1 finding): tiles reuse the SHIPPED single-card
+  contract — repo-scoped session truth under a lane-named header, lane status
+  from service truth (#258/#310); no new truth claim.
+- Drill-back clears the pin set — conscious choice: compare is a transient
+  lens; re-pinning is two clicks.
+- Pace baseline window = the existing `recent_sessions` window (10); the
+  ≥3-samples earned gate covers instability (no new fetch, no server change).
