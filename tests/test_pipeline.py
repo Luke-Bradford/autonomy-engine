@@ -571,6 +571,17 @@ class JournalLedgerTest(unittest.TestCase):
         self.assertEqual(pipeline.ledger(self.journal, "coder")["tier"], "watch")
 
 
+class StarterTemplateTest(unittest.TestCase):
+    def test_ticket_to_merge_template_validates(self):
+        pdir = os.path.join(os.path.dirname(__file__), "..", "templates",
+                            "autonomy-pack", "pipelines", "ticket-to-merge")
+        doc = pipeline.load_doc(os.path.join(pdir, "pipeline.json"))
+        self.assertEqual(pipeline.validate_doc(doc, pdir), [])
+        self.assertEqual(doc["name"], "ticket-to-merge")
+        kinds = [c["kind"] for c in doc["containers"]]
+        self.assertIn("loop", kinds)
+
+
 class LoadDocTest(unittest.TestCase):
     def test_load_missing_raises(self):
         with self.assertRaises(pipeline.PipelineError):

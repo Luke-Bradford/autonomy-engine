@@ -58,7 +58,8 @@ bin/
   agents/claude.sh               # Claude Code adapter
   agents/codex.sh                 # Codex adapter (engine-level fallback retry; limit-shape #2-caveat)
 lib/config_parser.py             # restricted YAML-subset parser (stdlib only)
-templates/                        # supervisor.plist.tmpl + autonomy-pack/ (onboard scaffolds these)
+lib/pipeline.py                   # P1 sequencer (#345): pipeline docs, wrap, compile, walk, journal/ledger
+templates/                        # supervisor.plist.tmpl + autonomy-pack/ (onboard scaffolds these; incl. pipelines/ starters)
 tests/                             # one per script; run_all.sh runs the whole suite
 docs/                               # design.md, implementation-plan.md
 ```
