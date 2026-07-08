@@ -1328,8 +1328,12 @@ run_session() {
     return 2
   fi
   if [ "$PIPE_DONE" = "1" ]; then
-    log "pipeline: role '$role' run already complete -- nothing to dispatch"
-    return 0
+    # Stale-state recovery: the run finished without its state file being
+    # cleaned. NO session ran this tick, so return the dispatch-skip rc (2)
+    # -- rc 0 would fabricate a session.done edge and record a fingerprint
+    # for work that did not run (the main loop's own fail-safe rule).
+    log "pipeline: role '$role' run already complete -- nothing to dispatch (state recovered)"
+    return 2
   fi
 
   # Source the ROLE's agent adapter when it sets one (e.g. a local-LLM 'prep'
