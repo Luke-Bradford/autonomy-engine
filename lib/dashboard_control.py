@@ -401,3 +401,267 @@ def format_cmd_error(cmd_name, stderr):
     if full != shown:                       # more than the toast shows -> offer it
         out["detail"] = full
     return out
+
+
+# --- workstreams slice 1: the var-live structural writer ---------------------
+# UI config edits land in <repo>/var/autonomy/config.yaml -- the
+# preflight-surviving home (a tracked-file edit would be stash-swept after 3
+# dirty sessions; that sweep is why the legacy overlay existed). The committed
+# .autonomy/config.yaml stays the shareable default that SEEDS the live file
+# on first write (legacy overlay folded in, then deleted). Readers resolve via
+# _cp.effective_config_path -- one choke point, no split-brain.
+# SD-29 mechanics kept: validate BEFORE writing, re-parse + compare AFTER
+# building the candidate; any refusal leaves every file untouched.
+
+import subprocess as _subprocess  # noqa: E402  (writer-only dependency)
+
+import sys as _sys  # noqa: E402
+_sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import config_parser as _cp  # noqa: E402
+
+
+_EMIT_TOKEN_RE = re.compile(r"^[A-Za-z0-9._/*-]+$")
+_EMIT_KEY_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def live_config_path(repo):
+    return os.path.join(repo, "var", "autonomy", "config.yaml")
+
+
+def _emit_scalar(val, where):
+    """One scalar in the restricted subset, quoted when needed. Refuses what
+    the subset cannot represent (newlines, both quote kinds) -- a refused
+    emit must never become a mis-parsing write."""
+    if isinstance(val, bool):
+        return "true" if val else "false"
+    if isinstance(val, int):
+        return str(val)
+    if isinstance(val, str):
+        if "\n" in val:
+            raise ValueError("%s: newlines are not representable" % where)
+        if _EMIT_TOKEN_RE.match(val):
+            return val
+        if '"' not in val:
+            return '"%s"' % val
+        if "'" not in val:
+            return "'%s'" % val
+        raise ValueError("%s: cannot represent a value containing both "
+                         "quote kinds" % where)
+    raise ValueError("%s: unsupported value type %s" % (where, type(val).__name__))
+
+
+def _emit_mapping(d, indent, where):
+    lines = []
+    pad = " " * indent
+    for key in d:
+        if not (isinstance(key, str) and _EMIT_KEY_RE.match(key)):
+            raise ValueError("%s: key %r is not emittable" % (where, key))
+        val = d[key]
+        kwhere = "%s.%s" % (where, key)
+        if isinstance(val, dict):
+            lines.append("%s%s:" % (pad, key))
+            lines.extend(_emit_mapping(val, indent + 2, kwhere))
+        elif isinstance(val, list):
+            items = []
+            for item in val:
+                # flow-list items stay bare tokens only: a quoted item inside
+                # [] is outside the restricted subset's tested surface.
+                if not (isinstance(item, str) and _EMIT_TOKEN_RE.match(item)):
+                    raise ValueError("%s: list item %r is not emittable"
+                                     % (kwhere, item))
+                items.append(item)
+            lines.append("%s%s: [%s]" % (pad, key, ", ".join(items)))
+        else:
+            lines.append("%s%s: %s" % (pad, key, _emit_scalar(val, kwhere)))
+    return lines
+
+
+def roles_block_emit(roles):
+    """The `roles:` block as restricted-subset text. Raises ValueError with
+    the offending role/key named when a value cannot be represented; the
+    caller turns that into a refused write."""
+    if not isinstance(roles, dict):
+        raise ValueError("roles must be a mapping")
+    lines = ["roles:"]
+    lines.extend(_emit_mapping(roles, 2, "roles"))
+    return "\n".join(lines) + "\n"
+
+
+def set_block(text, key, block_text):
+    """Replace the top-level `key:` block in TEXT with block_text; append
+    when absent. The block runs from its key line to the next top-level key
+    (first column-0 line that isn't blank or a comment). In-block comments
+    are an accepted loss (SD-29); everything outside is byte-preserved."""
+    lines = text.splitlines(keepends=True)
+    start = end = None
+    for i, ln in enumerate(lines):
+        if start is None:
+            if ln.startswith(key + ":"):
+                start = i
+            continue
+        stripped = ln.strip()
+        if ln[:1] not in (" ", "\t") and stripped and not stripped.startswith("#"):
+            end = i
+            break
+    if start is None:
+        joined = text
+        if joined and not joined.endswith("\n"):
+            joined += "\n"
+        return joined + block_text
+    if end is None:
+        end = len(lines)
+    if not block_text.endswith("\n"):
+        block_text += "\n"
+    return "".join(lines[:start]) + block_text + "".join(lines[end:])
+
+
+# key -> (dotted target, the SAME validator the overlay readers applied) --
+# a value the supervisor/dashboard would have IGNORED in the overlay must not
+# become effective config through the fold (CP2). Invalid values are skipped:
+# they were dead weight in the overlay too.
+_OVERLAY_FOLD_KEYS = {
+    "model": ("agent.model.primary", lambda v: bool(MODEL_RE.match(v))),
+    "fallback": ("agent.model.fallback", lambda v: bool(MODEL_RE.match(v))),
+    "effort": ("agent.effort", lambda v: v in VALID_EFFORTS),
+    "board_owner": ("board.owner", _valid_text),
+    "board_project_title": ("board.project_title", _valid_text),
+}
+
+
+def _fold_overlay(repo, text):
+    """Fold the legacy persistent overlay's values into the seed TEXT via
+    set_scalar. Returns (text, overlay_path_or_None): the path is returned
+    ONLY when every readable value folded cleanly, so the caller deletes the
+    overlay strictly after a successful write. Unreadable overlay -> no fold,
+    no delete (values must never be silently lost)."""
+    path = overrides_path(repo)
+    try:
+        with open(path, errors="replace") as fh:
+            raw_lines = fh.read().splitlines()
+    except OSError:
+        return text, None
+    for raw in raw_lines:
+        k, sep, v = raw.partition("=")
+        if not sep or not k or k != k.strip() or v != v.strip():
+            continue                     # dirty line: supervisor ignored it too
+        entry = _OVERLAY_FOLD_KEYS.get(k)
+        if entry is None or not v:
+            continue
+        dotted, valid = entry
+        if not valid(v):
+            continue                     # readers ignored it; folding it would
+                                         # PROMOTE an invalid value (CP2)
+        try:
+            text = _cp.set_scalar(text, dotted, v)
+        except Exception:
+            return text, None            # unfoldable -> keep the overlay file
+    return text, path
+
+
+def _var_live_protected(repo):
+    """The live file must be invisible to git, or preflight's `stash -u`
+    sweeps it (silent config loss). Unknown/error = NOT protected (fail-safe:
+    refuse the write rather than risk the sweep)."""
+    try:
+        rc = _subprocess.run(
+            ["git", "-C", repo, "check-ignore", "-q", "var/autonomy/config.yaml"],
+            stdout=_subprocess.DEVNULL, stderr=_subprocess.DEVNULL, timeout=10)
+    except (OSError, _subprocess.SubprocessError):
+        return False
+    return rc.returncode == 0
+
+
+def structural_write(repo, new_roles):
+    """Apply a new `roles:` mapping to the repo's live config. Returns
+    {ok: True, path, message} or {ok: False, error}. Refusals leave every
+    file untouched."""
+    committed = os.path.join(repo, ".autonomy", "config.yaml")
+    live = live_config_path(repo)
+    if not _var_live_protected(repo):
+        return {"ok": False, "error":
+                "var/ is not covered by this repo's .gitignore -- the loop's "
+                "preflight would sweep the live config. Add a 'var/' line to "
+                ".gitignore (and commit it) first."}
+    overlay_to_delete = None
+    try:
+        if os.path.isfile(live):
+            with open(live, encoding="utf-8") as fh:
+                base = fh.read()
+        else:
+            with open(committed, encoding="utf-8") as fh:
+                base = fh.read()
+            base, overlay_to_delete = _fold_overlay(repo, base)
+    except OSError as exc:
+        return {"ok": False, "error": "cannot read config: %s" % exc}
+    try:
+        base_parsed = _cp.parse(base)
+    except ValueError as exc:
+        return {"ok": False, "error": "current config does not parse: %s" % exc}
+    try:
+        block = roles_block_emit(new_roles)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    candidate = set_block(base, "roles", block)
+    try:
+        cand_parsed = _cp.parse(candidate)
+    except ValueError as exc:
+        return {"ok": False, "error": "candidate config does not parse: %s" % exc}
+    import roles as _roles
+    errors = _roles.validate_roles(cand_parsed)
+    if errors:
+        return {"ok": False, "error": "; ".join(errors)}
+    if cand_parsed.get("roles") != new_roles:
+        return {"ok": False, "error":
+                "re-parse mismatch: written roles would not read back "
+                "identically -- write refused"}
+    base_others = {k: v for k, v in base_parsed.items() if k != "roles"}
+    cand_others = {k: v for k, v in cand_parsed.items() if k != "roles"}
+    if base_others != cand_others:
+        return {"ok": False, "error":
+                "re-parse mismatch: a non-roles key drifted -- write refused"}
+    os.makedirs(os.path.dirname(live), exist_ok=True)
+    tmp = live + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(candidate)
+        os.replace(tmp, live)
+    except OSError as exc:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return {"ok": False, "error": "could not write live config: %s" % exc}
+    message = "saved to the live config -- applies next tick"
+    if overlay_to_delete:
+        # The stale overlay is NOT inert: _read_config/the supervisor still
+        # apply it over the (now live) config. unlink, else truncate to empty
+        # (no keys = no shadow); if even that fails, say so loudly (CP2).
+        try:
+            os.unlink(overlay_to_delete)
+        except OSError:
+            try:
+                with open(overlay_to_delete, "w"):
+                    pass
+            except OSError:
+                message += (" -- WARNING: could not remove the legacy overlay "
+                            "(%s); its values still shadow model/effort until "
+                            "it is deleted" % overlay_to_delete)
+    return {"ok": True, "path": live, "message": message}
+
+
+def live_config_drift(repo):
+    """{live, differs} for the page badge: does a live shadow exist, and does
+    it differ (bytes) from the committed default? Best-effort, never raises."""
+    committed = os.path.join(repo, ".autonomy", "config.yaml")
+    live = live_config_path(repo)
+    try:
+        with open(live, "rb") as fh:
+            live_b = fh.read()
+    except OSError:
+        return {"live": False, "differs": False}
+    try:
+        with open(committed, "rb") as fh:
+            committed_b = fh.read()
+    except OSError:
+        return {"live": True, "differs": True}
+    return {"live": True, "differs": live_b != committed_b}

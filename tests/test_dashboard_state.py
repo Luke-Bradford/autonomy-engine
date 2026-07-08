@@ -3424,3 +3424,15 @@ class TestBuildOrg(unittest.TestCase):
         self.assertFalse(org["valid"])
         self.assertNotEqual(org["error"], "")
         self.assertEqual(len(org["roles"]), 4)   # standard roster best-effort
+
+    def test_var_live_shadow_is_the_effective_config(self):
+        # Workstreams slice 1: var/autonomy/config.yaml, when present, IS the
+        # config for every reader (single resolver in config_parser).
+        self._config(self.FULL)
+        live_dir = os.path.join(self.repo, "var", "autonomy")
+        os.makedirs(live_dir)
+        with open(os.path.join(live_dir, "config.yaml"), "w") as fh:
+            fh.write("agent:\n  model:\n    primary: live-model\n"
+                     "roles:\n  coder:\n    enabled: true\n")
+        org = ds.build_org(self.repo)
+        self.assertEqual(org["pair"]["coder"]["model"], "live-model")

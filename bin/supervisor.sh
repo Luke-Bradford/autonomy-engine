@@ -434,7 +434,13 @@ fingerprint_state_file() {
 # never writes state (sole-writer stays with the supervisor loop).
 role_fingerprint() {
   local role="$1" lane="${AUTONOMY_LANE:-}" issues prs main_head n
-  local dispatch_out prompt_rel line
+  local dispatch_out prompt_rel line fp_live_cfg
+  # Workstreams slice 1: the var-live config shadow, when present, IS the
+  # effective config (config_parser resolver) -- its bytes join the material
+  # as a REQUIRED extra so a live edit can never hide behind an unchanged
+  # hash and be skipped.
+  fp_live_cfg="$AUTONOMY_TARGET_REPO/var/autonomy/config.yaml"
+  [ -f "$fp_live_cfg" ] || fp_live_cfg=""
   [ -f "$LOGDIR/model-override" ] && return 1
   _role_name_path_safe "$role" || return 1
   if [ -n "$lane" ]; then _role_name_path_safe "$lane" || return 1; fi
@@ -511,7 +517,8 @@ for extra in sys.argv[3:]:            # REQUIRED (the resolved prompt file):
         record("extra", extra.encode(), fh.read())
 print(h.hexdigest())
 ' "$AUTONOMY_TARGET_REPO/.autonomy" "$LOGDIR/config-overrides" \
-    ${prompt_rel:+"$AUTONOMY_TARGET_REPO/$prompt_rel"} 2>>"$SUPLOG"
+    ${prompt_rel:+"$AUTONOMY_TARGET_REPO/$prompt_rel"} \
+    ${fp_live_cfg:+"$fp_live_cfg"} 2>>"$SUPLOG"
 }
 
 # rc 0 => skip this role's session. Side effect: FP_CURRENT holds the freshly

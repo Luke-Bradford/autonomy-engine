@@ -462,4 +462,20 @@ DOCTOR_HOME="$save_home"
 rm -rf "$atmp"
 
 echo "---"
+
+# --- workstreams slice 1: the var-live shadow is the EFFECTIVE config -------
+vt="$(mktemp -d)"
+mkdir -p "$vt/.autonomy" "$vt/var/autonomy"
+printf 'engine:\n  requires_claude_md: false\n' > "$vt/.autonomy/config.yaml"
+printf ': bad\n' > "$vt/var/autonomy/config.yaml"
+check "unparseable var-live shadow -> hard fail (never silent fallback)" "1" \
+  "$(doctor_preflight_check "$vt" >/dev/null 2>&1; echo $?)"
+vmsg="$(doctor_preflight_check "$vt" 2>&1 >/dev/null || true)"
+check "FAIL names the live shadow path" "0" \
+  "$(printf '%s' "$vmsg" | grep -q 'var/autonomy/config.yaml (live shadow' && echo 0 || echo 1)"
+printf 'engine:\n  requires_claude_md: false\n' > "$vt/var/autonomy/config.yaml"
+check "parseable var-live shadow -> pass" "0" \
+  "$(doctor_preflight_check "$vt" >/dev/null 2>&1; echo $?)"
+rm -rf "$vt"
+
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi

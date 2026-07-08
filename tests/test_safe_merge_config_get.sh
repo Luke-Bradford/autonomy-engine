@@ -47,6 +47,19 @@ v="$(cd "$tmp"; rm -rf .autonomy; CONFIG_GET merge_gate.strategy)"; rc=$?
 check "missing config file: empty"  "" "$v"
 check "missing config file: rc 0"   "0" "$rc"
 
+
+# --- workstreams slice 1: CONFIG_GET agrees with the var-live shadow --------
+# (CWD is / after the previous case -- run in a subshell cd'd back to the
+# repo, exactly how safe_merge itself runs. The resolver keys off the PATH
+# shape, so the live file IS the config even over a differing committed one.)
+mkdir -p "$tmp/.autonomy" "$tmp/var/autonomy"
+printf 'merge_gate:\n  strategy: bot_comment\n' > "$tmp/.autonomy/config.yaml"
+printf 'merge_gate:\n  strategy: manual\n' > "$tmp/var/autonomy/config.yaml"
+v="$(cd "$tmp" && CONFIG_GET merge_gate.strategy)"; rc=$?
+check "var-live shadow value wins" "manual" "$v"
+check "var-live shadow rc 0"       "0" "$rc"
+rm -rf "${tmp:?}/var"
+
 echo
 if [ "$fails" -gt 0 ]; then echo "$fails FAILURES"; exit 1; fi
 echo "ALL PASS"

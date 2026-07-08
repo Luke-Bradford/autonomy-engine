@@ -242,6 +242,35 @@ def _set_cli(path: str, dotted_key: str, value: str) -> int:
     return 0
 
 
+def effective_config_path(path: str) -> str:
+    """Workstreams slice 1 (config-workstreams spec): the SINGLE choke point
+    for var-live config resolution. Given a pack config path
+    (<repo>/.autonomy/config.yaml), return the live shadow
+    (<repo>/var/autonomy/config.yaml) when it exists, else the path
+    unchanged. The dashboard's structural writer owns the live file; the
+    committed file remains the shareable default that seeds it. Applied by
+    this module's read CLI (every bash reader funnels through it:
+    supervisor, safe_merge, board.sh, doctor, quickstart reads) and imported
+    by the python readers (roles._load_config, the dashboard). Pure fs check
+    -- never parses, never raises (any OSError -> the original path).
+    Deliberately NOT applied to --set: setup-time writes edit the shareable
+    default, never the shadow."""
+    try:
+        norm = os.path.normpath(path)
+        parts = norm.split(os.sep)
+        if parts[-2:] != [".autonomy", "config.yaml"]:
+            return path
+        # '' happens for the RELATIVE form '.autonomy/config.yaml' (CWD =
+        # repo, e.g. safe_merge's CONFIG_GET) -- that is '.', never '/'.
+        repo = os.sep.join(parts[:-2]) or "."
+        live = os.path.join(repo, "var", "autonomy", "config.yaml")
+        if os.path.isfile(live):
+            return live
+    except (OSError, IndexError):
+        pass
+    return path
+
+
 def main(argv: list) -> int:
     if len(argv) == 5 and argv[1] == "--set":
         return _set_cli(argv[2], argv[3], argv[4])
@@ -250,7 +279,7 @@ def main(argv: list) -> int:
               "       config_parser.py --set <config-file> <dotted.key> <value>",
               file=sys.stderr)
         return 2
-    path, dotted_key = argv[1], argv[2]
+    path, dotted_key = effective_config_path(argv[1]), argv[2]
     with open(path, encoding="utf-8") as f:
         text = f.read()
     try:

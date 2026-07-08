@@ -1261,7 +1261,8 @@ def build_org(repo_path):
     the error text, never blank/default cards (prevention-log 15/18); rows
     are still built best-effort so the page can badge them rather than
     vanish them."""
-    cfg_path = os.path.join(repo_path, ".autonomy", "config.yaml")
+    cfg_path = config_parser.effective_config_path(
+        os.path.join(repo_path, ".autonomy", "config.yaml"))
     error = ""
     config = {}
     try:
@@ -2191,7 +2192,9 @@ def read_config_overlay(path):
 
 
 def _read_config(repo_path):
-    cfg_path = os.path.join(repo_path, ".autonomy", "config.yaml")
+    # Workstreams slice 1: prefer the var-live shadow (single resolver).
+    cfg_path = config_parser.effective_config_path(
+        os.path.join(repo_path, ".autonomy", "config.yaml"))
     try:
         with open(cfg_path) as fh:
             cfg = config_parser.parse(fh.read())

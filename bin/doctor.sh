@@ -18,8 +18,16 @@ doctor_preflight_check() {
     echo "doctor: FAIL -- $repo/.autonomy/config.yaml not found" >&2
     return 1
   fi
+  # Workstreams slice 1: the CLI resolves the var-live shadow, so the parse
+  # check below already judges the EFFECTIVE config; name the file the
+  # operator must actually fix (an existence check mirrors the resolver --
+  # config_parser.effective_config_path is the semantic single source).
+  local cfg_shown="$repo/.autonomy/config.yaml"
+  if [ -f "$repo/var/autonomy/config.yaml" ]; then
+    cfg_shown="$repo/var/autonomy/config.yaml (live shadow -- the effective config)"
+  fi
   if ! python3 "$DOCTOR_HOME/lib/config_parser.py" "$repo/.autonomy/config.yaml" __validate__ >/dev/null 2>&1; then
-    echo "doctor: FAIL -- $repo/.autonomy/config.yaml does not parse" >&2
+    echo "doctor: FAIL -- $cfg_shown does not parse" >&2
     return 1
   fi
   local requires_md

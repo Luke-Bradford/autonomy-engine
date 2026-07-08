@@ -171,6 +171,26 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     retained-but-flagged) is unchanged: the pair rides agent frontmatter, not
     adapter phase-switching. *(#320; operator session 2026-07-08.)*
 
+34. **SD-28 is SUPERSEDED for target-repo packs: UI config edits are local**
+    (operator decision 2026-07-08, config-workstreams spec). "Config changes
+    should just be local, shouldn't need constant PRs. A user downloading
+    this could add their own config, not ours." Structural edits from the
+    dashboard land in the **var-live shadow** `var/autonomy/config.yaml`
+    (the preflight-surviving home — a tracked-file edit is stash-swept);
+    the committed `.autonomy/config.yaml` remains the shareable default
+    that SEEDS the shadow on first write (legacy persistent overlay folded
+    in, then deleted — the overlay retires). One resolver
+    (`config_parser.effective_config_path`, applied in the CLI + python
+    API) makes every reader agree. SD-29's writer mechanics stay (validate
+    before, re-parse-compare after, refusal leaves files untouched); the
+    write additionally refuses when `var/` is not gitignored. A
+    present-but-unparseable shadow is a pack FAILURE (doctor/preflight
+    refuse) — never a silent fallback to the committed file; safe_merge's
+    total CONFIG_GET reading it as absent defaults to `manual` (the safest
+    direction — accepted). The unattended loop stays barred from editing
+    packs; PR-gating remains the ENGINE repo's own dev workflow only.
+    *(specs/2026-07-08-config-workstreams-design.md; #326.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could
