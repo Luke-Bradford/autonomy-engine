@@ -41,51 +41,46 @@ class TestConfigOverlayWrite(unittest.TestCase):
             fh.write("agent:\n  model:\n    primary: claude-sonnet-5\n")
         return cfg
 
-    def test_overlay_write_merges_and_preserves(self):
-        ov = self._overlay()
-        dashboard._write_overlay(ov, {"model": "claude-opus-4-8"})
-        dashboard._write_overlay(ov, {"effort": "high"})
-        text = open(ov).read()
-        self.assertIn("model=claude-opus-4-8", text)
-        self.assertIn("effort=high", text)
-        dashboard._write_overlay(ov, {"model": "claude-sonnet-5"})
-        text = open(ov).read()
-        self.assertIn("model=claude-sonnet-5", text)
-        self.assertIn("effort=high", text)           # untouched key preserved
-        self.assertNotIn("claude-opus-4-8", text)
+    def _gitify(self):
+        # Slice 3a: live-shadow writes require var/ gitignored (SD-34).
+        import subprocess
+        subprocess.run(["git", "init", "-q", self.repo], check=True)
+        with open(os.path.join(self.repo, ".gitignore"), "w") as fh:
+            fh.write("var/\n")
 
-    def test_execute_set_model_default_writes_overlay_not_config(self):
+    def _live(self):
+        return os.path.join(self.repo, "var", "autonomy", "config.yaml")
+
+    def test_execute_set_model_default_writes_live_shadow_not_config(self):
         cfg = self._write_config()
+        self._gitify()
         before = open(cfg).read()
         r = dashboard.execute_set_model(self.repo, "claude-opus-4-8", "high", "default")
         self.assertTrue(r["ok"], r)
         self.assertEqual(open(cfg).read(), before)    # committed config untouched
-        self.assertIn("model=claude-opus-4-8", open(self._overlay()).read())
+        live = open(self._live()).read()
+        self.assertIn("claude-opus-4-8", live)
+        self.assertIn("effort: high", live)
+        self.assertFalse(os.path.exists(self._overlay()))   # overlay retired
 
-    def test_execute_config_set_model_key_writes_overlay(self):
+    def test_execute_config_set_model_key_writes_live_shadow(self):
         cfg = self._write_config()
+        self._gitify()
         before = open(cfg).read()
         r = dashboard.execute_config_set(self.repo, "agent.model.primary",
                                          "claude-opus-4-8")
         self.assertTrue(r["ok"], r)
         self.assertEqual(open(cfg).read(), before)
-        self.assertIn("model=claude-opus-4-8", open(self._overlay()).read())
+        self.assertIn("claude-opus-4-8", open(self._live()).read())
 
-    def test_overlay_write_does_not_normalize_dirty_line(self):
-        # A stray-space line the supervisor ignores must NOT be resurrected into
-        # an effective `model=...` by an unrelated save (fail-safe parity).
-        ov = self._overlay()
-        os.makedirs(os.path.dirname(ov))
-        with open(ov, "w") as fh:
-            fh.write(" model=claude-opus-4-8\n")     # leading space -> ignored by bash
-        dashboard._write_overlay(ov, {"effort": "high"})
-        text = open(ov).read()
-        self.assertIn(" model=claude-opus-4-8", text)   # preserved verbatim, still dirty
-        self.assertNotIn("\nmodel=claude-opus-4-8", text)  # never normalized to a clean key
-        self.assertIn("effort=high", text)
+    def test_execute_config_set_planner_model_creates_key(self):
+        self._write_config()
+        self._gitify()
+        r = dashboard.execute_config_set(self.repo, "agent.planner.model",
+                                         "claude-opus-4-8")
+        self.assertTrue(r["ok"], r)
+        self.assertIn("planner:", open(self._live()).read())
 
-
-class TestBenignDisconnect(unittest.TestCase):
     def test_client_disconnects_are_benign(self):
         for exc in (ConnectionResetError(), BrokenPipeError(),
                     ConnectionAbortedError(), TimeoutError()):

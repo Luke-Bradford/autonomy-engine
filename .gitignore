@@ -12,3 +12,4 @@ __pycache__/
 /var/autonomy-supervisor.lock/
 /var/cron/
 /var/events/
+.claude/agents/planner.md

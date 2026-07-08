@@ -85,6 +85,25 @@ else
   echo "onboard.sh: added 'var/' to .gitignore (protects the live config + logs from the preflight sweep)"
 fi
 
+# Slice 3a: the planner agent file is MATERIALIZED per session from
+# agent.planner.model -- it must be git-invisible or preflight's dirty check
+# trips on it (and the materializer refuses to write a visible one).
+planner_covered=0
+if [ -f "$GITIGNORE" ]; then
+  while IFS= read -r gi_line; do
+    case "$gi_line" in .claude/agents/planner.md) planner_covered=1; break ;; esac
+  done <"$GITIGNORE"
+fi
+if [ "$planner_covered" -eq 1 ]; then
+  echo "onboard.sh: SKIP .gitignore (planner agent path already covered)"
+else
+  if [ -f "$GITIGNORE" ] && [ -n "$(tail -c 1 "$GITIGNORE" 2>/dev/null)" ]; then
+    printf '\n' >>"$GITIGNORE"
+  fi
+  printf '.claude/agents/planner.md\n' >>"$GITIGNORE"
+  echo "onboard.sh: added '.claude/agents/planner.md' to .gitignore (the engine materializes it from agent.planner.model)"
+fi
+
 # Opt-in starter CLAUDE.md (#152). The whole prompt stack + role rails lean on
 # the target repo's CLAUDE.md; a repo without one gets weaker sessions. Scaffold
 # a placeholder starter ONLY when asked AND the repo has none -- Claude Code

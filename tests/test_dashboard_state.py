@@ -3353,7 +3353,8 @@ class TestBuildOrg(unittest.TestCase):
         org = ds.build_org(self.repo)
         self.assertTrue(org["valid"])
         self.assertEqual(org["pair"]["planner"],
-                         {"scaffolded": True, "model": "claude-opus-4-8"})
+                         {"scaffolded": True, "model": "claude-opus-4-8",
+                          "source": "agent-file"})
         self.assertEqual(org["pair"]["coder"]["model"], "claude-sonnet-5")
         self.assertEqual(org["pair"]["coder"]["fallback"], "claude-sonnet-4-6")
         self.assertEqual(org["pair"]["coder"]["effort"], "high")
@@ -3361,13 +3362,15 @@ class TestBuildOrg(unittest.TestCase):
     def test_planner_not_scaffolded_is_stated_never_invented(self):
         self._config(self.FULL)
         org = ds.build_org(self.repo)
-        self.assertEqual(org["pair"]["planner"], {"scaffolded": False, "model": ""})
+        self.assertEqual(org["pair"]["planner"],
+                         {"scaffolded": False, "model": "", "source": "none"})
 
     def test_planner_garbage_frontmatter_scaffolded_model_unknown(self):
         self._config(self.FULL)
         self._planner("no frontmatter at all\n")
         org = ds.build_org(self.repo)
-        self.assertEqual(org["pair"]["planner"], {"scaffolded": True, "model": ""})
+        self.assertEqual(org["pair"]["planner"],
+                         {"scaffolded": True, "model": "", "source": "agent-file"})
 
     def test_full_roster_with_trigger_detail(self):
         self._config(self.FULL)
@@ -3424,6 +3427,26 @@ class TestBuildOrg(unittest.TestCase):
         self.assertFalse(org["valid"])
         self.assertNotEqual(org["error"], "")
         self.assertEqual(len(org["roles"]), 4)   # standard roster best-effort
+
+
+    def test_planner_config_key_wins_over_agent_file(self):
+        # Slice 3a: agent.planner.model (live-shadow editable) beats the
+        # agent-file frontmatter; an invalid value degrades honestly.
+        self._config(self.FULL.replace("agent:\n",
+                     "agent:\n  planner:\n    model: claude-fable-5\n"))
+        self._planner("---\nname: planner\nmodel: claude-opus-4-8\n---\nbody\n")
+        org = ds.build_org(self.repo)
+        self.assertEqual(org["pair"]["planner"],
+                         {"scaffolded": True, "model": "claude-fable-5",
+                          "source": "config"})
+
+    def test_planner_invalid_config_value_falls_back_honestly(self):
+        self._config(self.FULL.replace("agent:\n",
+                     "agent:\n  planner:\n    model: \"bad model\"\n"))
+        self._planner("---\nname: planner\nmodel: claude-opus-4-8\n---\nbody\n")
+        org = ds.build_org(self.repo)
+        self.assertEqual(org["pair"]["planner"]["source"], "config-invalid")
+        self.assertEqual(org["pair"]["planner"]["model"], "claude-opus-4-8")
 
     def test_var_live_shadow_is_the_effective_config(self):
         # Workstreams slice 1: var/autonomy/config.yaml, when present, IS the

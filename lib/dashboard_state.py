@@ -1287,8 +1287,22 @@ def build_org(repo_path):
         eff = _read_config(repo_path)
     except Exception:
         eff = {}
+    # Slice 3a: planner model precedence = config (agent.planner.model,
+    # live-shadow editable) > agent-file frontmatter > none. `source` stays
+    # honest: a syntactically invalid config value renders `config-invalid`
+    # with the file fallback shown -- the card never displays a model the
+    # materializer would refuse (CP1).
+    planner = planner_agent_info(repo_path)
+    planner["source"] = "agent-file" if planner["scaffolded"] else "none"
+    agent_cfg = config.get("agent") if isinstance(config.get("agent"), dict) else {}
+    pl_cfg = agent_cfg.get("planner") if isinstance(agent_cfg.get("planner"), dict) else {}
+    pl_model = str(pl_cfg.get("model") or "")
+    if pl_model and _dcx.MODEL_RE.match(pl_model):
+        planner = {"scaffolded": True, "model": pl_model, "source": "config"}
+    elif pl_model:
+        planner["source"] = "config-invalid"
     pair = {
-        "planner": planner_agent_info(repo_path),
+        "planner": planner,
         "coder": {"model": eff.get("model", ""),
                   "fallback": eff.get("fallback", ""),
                   "effort": eff.get("effort", "")},

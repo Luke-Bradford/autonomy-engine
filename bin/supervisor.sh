@@ -1106,9 +1106,70 @@ log_knob_notes() {
   done <<<"$notes"
 }
 
+# Slice 3a (config-workstreams): the pair's planner agent is MATERIALIZED
+# from config each session -- agent.planner.model (live-shadow editable via
+# the dashboard) is rendered into the worktree's .claude/agents/planner.md
+# from templates/planner-agent.md, so the operator picks the thinking tier
+# without committing anything. Fail-safe rules:
+#   - claude-type repos only (a codex repo gets no Claude agent file);
+#   - NEVER create a git-VISIBLE file (untracked-not-ignored would trip
+#     preflight's dirty check into its 3-skip stash sweep) -- refuse + NOTE
+#     naming the .gitignore fix;
+#   - a TRACKED file that differs is the repo's own committed truth -- kept
+#     verbatim with a NOTE (config model not applied there);
+#   - an invalid model id falls back to the template default + NOTE
+#     (prevention-log #6: config values re-validated at the point of use).
+# Best-effort throughout: never fails the session. cwd = the target repo
+# (called right after preflight, which cd'd there).
+materialize_planner() {
+  local agent_type tpl dst model desired current
+  tpl="$ENGINE_HOME/templates/planner-agent.md"
+  dst=".claude/agents/planner.md"
+  [ -f "$tpl" ] || { log "NOTE planner: template missing -- skipped"; return 0; }
+  agent_type="$(python3 "$ENGINE_HOME/lib/config_parser.py" .autonomy/config.yaml agent.type 2>/dev/null || true)"
+  if [ -n "$agent_type" ] && [ "$agent_type" != "claude" ]; then return 0; fi
+  model="$(python3 "$ENGINE_HOME/lib/config_parser.py" .autonomy/config.yaml agent.planner.model 2>/dev/null || true)"
+  if [ -n "$model" ] && ! valid_model_id "$model"; then
+    log "NOTE planner: agent.planner.model is not a valid model id -- template default used"
+    model=""
+  fi
+  desired="$(cat "$tpl")"
+  # valid_model_id's charset has no '|' or '&', so the sed is unambiguous.
+  [ -n "$model" ] && desired="$(printf '%s\n' "$desired" | sed "s|^model: .*|model: $model|")"
+  if [ -e "$dst" ] && [ ! -f "$dst" ]; then
+    log "NOTE planner: $dst exists but is not a regular file -- skipped"; return 0
+  fi
+  if [ -f "$dst" ]; then
+    current="$(cat "$dst")"
+    [ "$current" = "$desired" ] && return 0
+    if git ls-files --error-unmatch "$dst" >/dev/null 2>&1; then
+      log "NOTE planner: $dst is tracked and differs -- committed content kept (agent.planner.model not applied here)"
+      return 0
+    fi
+    # untracked AND git-visible: overwriting would clobber local content the
+    # operator can still see in git status -- keep it + NOTE (CP2).
+    if ! git check-ignore -q "$dst" 2>/dev/null; then
+      log "NOTE planner: $dst is untracked but git-visible and differs -- kept (gitignore it to let the engine manage it)"
+      return 0
+    fi
+  else
+    if ! git check-ignore -q "$dst" 2>/dev/null; then
+      log "NOTE planner: $dst is not gitignored -- not materializing (add '.claude/agents/planner.md' to .gitignore so preflight cannot sweep it)"
+      return 0
+    fi
+  fi
+  if mkdir -p .claude/agents 2>/dev/null && printf '%s\n' "$desired" >"$dst" 2>/dev/null; then
+    log "planner agent materialized (model: ${model:-template default})"
+  else
+    log "NOTE planner: could not write $dst -- skipped"
+  fi
+  return 0
+}
+
 run_session() {
   local role="${1:-${ROLE:-coder}}"
   preflight || return $?
+  materialize_planner
 
   if ! resolve_role_dispatch "$role"; then
     log "dispatch: cannot resolve settings for role '$role' -- REFUSING session (fail-safe; see supervisor.log)"

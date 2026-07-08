@@ -97,13 +97,17 @@ def set_model_plan(repo, model, effort, scope):
         return {"write": override_path(repo), "content": content,
                 "message": "override queued — applies to the NEXT session only"}
 
-    overlay_set = {}
+    # Slice 3a (SD-34): default-scope saves land in the var-live shadow --
+    # the persistent overlay write path is retired (a shadow-of-a-shadow was
+    # exactly the fable-5-vs-sonnet-5 confusion). The one-shot session scope
+    # above is the only override left.
+    live_set = {}
     if model:
-        overlay_set["model"] = model
+        live_set["agent.model.primary"] = model
     if effort:
-        overlay_set["effort"] = effort
-    return {"overlay": overrides_path(repo), "overlay_set": overlay_set,
-            "message": _OVERLAY_MSG}
+        live_set["agent.effort"] = effort
+    return {"live_set": live_set,
+            "message": "saved to the live config — applies from the next session"}
 
 
 VALID_STRATEGIES = ("manual", "ci_only", "bot_comment", "gh_review")
@@ -127,6 +131,9 @@ CONFIG_PAGE_KEYS = {
     "agent.model.primary": lambda v: bool(MODEL_RE.match(v)),
     "agent.model.fallback": lambda v: bool(MODEL_RE.match(v)),
     "agent.effort": lambda v: v in VALID_EFFORTS,
+    # Slice 3a: the pair's thinking tier -- materialized into the planner
+    # agent file by the supervisor each session (valid_model_id re-checks).
+    "agent.planner.model": lambda v: bool(MODEL_RE.match(v)),
     "merge_gate.strategy": lambda v: v in VALID_STRATEGIES,
 }
 
@@ -158,13 +165,11 @@ def config_set_plan(repo, key, value):
                 % key}
     if not validator(value):
         return {"error": "invalid value for %s" % key}
-    short = OVERLAY_KEYS.get(key)
-    if short is not None:
-        return {"overlay": overrides_path(repo), "overlay_set": {short: value},
-                "message": "%s saved as a local override — applies next session" % key}
-    return {"config_path": os.path.join(repo, ".autonomy", "config.yaml"),
-            "config_set": {key: value},
-            "message": "%s saved — applies from the next session" % key}
+    # Slice 3a (SD-34): every page-editable key lands in the var-live shadow
+    # -- one write home, no overlay-of-a-shadow, no tracked-file write for
+    # preflight to sweep.
+    return {"live_set": {key: value},
+            "message": "%s saved to the live config — applies from the next session" % key}
 
 
 def _registered_lines(repos_file):
@@ -634,18 +639,10 @@ def structural_write(repo, new_roles):
     message = "saved to the live config -- applies next tick"
     if overlay_to_delete:
         # The stale overlay is NOT inert: _read_config/the supervisor still
-        # apply it over the (now live) config. unlink, else truncate to empty
-        # (no keys = no shadow); if even that fails, say so loudly (CP2).
-        try:
-            os.unlink(overlay_to_delete)
-        except OSError:
-            try:
-                with open(overlay_to_delete, "w"):
-                    pass
-            except OSError:
-                message += (" -- WARNING: could not remove the legacy overlay "
-                            "(%s); its values still shadow model/effort until "
-                            "it is deleted" % overlay_to_delete)
+        # apply it over the (now live) config (CP2).
+        warn = _retire_overlay(overlay_to_delete)
+        if warn:
+            message += " -- WARNING: " + warn
     return {"ok": True, "path": live, "message": message}
 
 
@@ -665,3 +662,112 @@ def live_config_drift(repo):
     except OSError:
         return {"live": True, "differs": True}
     return {"live": True, "differs": live_b != committed_b}
+
+
+def _retire_overlay(path):
+    """Delete (or truncate) the legacy overlay after its values were folded.
+    Returns a warning string when neither works -- the stale overlay still
+    shadows model/effort and the caller must say so."""
+    try:
+        os.unlink(path)
+        return None
+    except OSError:
+        try:
+            with open(path, "w"):
+                pass
+            return None
+        except OSError:
+            return ("could not remove the legacy overlay (%s); its values "
+                    "still shadow model/effort until it is deleted" % path)
+
+
+def live_scalar_write(repo, live_set):
+    """Slice 3a: apply {dotted key: value} scalar edits to the live shadow
+    (values are validated by the CALLER against CONFIG_PAGE_KEYS -- this is
+    the write mechanism, not the policy). Same seeding + refusal semantics
+    as structural_write: first use seeds from committed + folds/retires the
+    legacy overlay; any refusal leaves every file untouched."""
+    committed = os.path.join(repo, ".autonomy", "config.yaml")
+    live = live_config_path(repo)
+    if not _var_live_protected(repo):
+        return {"ok": False, "error":
+                "var/ is not covered by this repo's .gitignore -- the loop's "
+                "preflight would sweep the live config. Add a 'var/' line to "
+                ".gitignore (and commit it) first."}
+    overlay_to_delete = None
+    try:
+        if os.path.isfile(live):
+            with open(live, encoding="utf-8") as fh:
+                base = fh.read()
+        else:
+            with open(committed, encoding="utf-8") as fh:
+                base = fh.read()
+            base, overlay_to_delete = _fold_overlay(repo, base)
+    except OSError as exc:
+        return {"ok": False, "error": "cannot read config: %s" % exc}
+    candidate = base
+    for key in sorted(live_set):
+        try:
+            candidate = _cp.set_scalar(candidate, key, live_set[key])
+        except KeyError:
+            # set_scalar only rewrites EXISTING keys; a new key (e.g. the
+            # first agent.planner.model) is created by re-emitting its
+            # top-level block from the parsed dict (in-block comments are
+            # SD-29's accepted loss; bytes outside the block are preserved).
+            try:
+                candidate = _create_scalar(candidate, key, live_set[key])
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+        except ValueError as exc:
+            return {"ok": False, "error": "could not set value: %s" % exc}
+    try:
+        _cp.parse(candidate)
+    except ValueError as exc:
+        return {"ok": False, "error": "candidate config does not parse: %s" % exc}
+    os.makedirs(os.path.dirname(live), exist_ok=True)
+    tmp = live + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(candidate)
+        os.replace(tmp, live)
+    except OSError as exc:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return {"ok": False, "error": "could not write live config: %s" % exc}
+    message = "saved to the live config -- applies from the next session"
+    if overlay_to_delete:
+        warn = _retire_overlay(overlay_to_delete)
+        if warn:
+            message += " -- WARNING: " + warn
+    return {"ok": True, "path": live, "message": message}
+
+
+def _create_scalar(text, dotted, value):
+    """Create a missing dotted scalar by re-emitting its top-level block.
+    Raises ValueError when the path crosses a non-mapping or the value is
+    not emittable (the caller refuses the write)."""
+    parts = dotted.split(".")
+    if len(parts) < 2:
+        raise ValueError("cannot create top-level key %r from the page" % dotted)
+    cfg = _cp.parse(text)
+    top = parts[0]
+    sub = cfg.get(top) if isinstance(cfg, dict) else None
+    if sub is not None and not isinstance(sub, dict):
+        # `agent: claude`-style scalar at the top key: silently replacing it
+        # with a mapping would rewrite meaning the operator set (CP2).
+        raise ValueError("%s: %r is not a mapping -- write refused" % (dotted, top))
+    sub = sub if isinstance(sub, dict) else {}
+    node = sub
+    for p in parts[1:-1]:
+        nxt = node.get(p)
+        if nxt is None:
+            nxt = {}
+            node[p] = nxt
+        if not isinstance(nxt, dict):
+            raise ValueError("%s crosses a non-mapping value -- write refused" % dotted)
+        node = nxt
+    node[parts[-1]] = value
+    block = top + ":\n" + "\n".join(_emit_mapping(sub, 2, top)) + "\n"
+    return set_block(text, top, block)
