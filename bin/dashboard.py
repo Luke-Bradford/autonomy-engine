@@ -842,10 +842,11 @@ def _registry_error(inst):
     return sys.modules[type(inst).__module__].RegistryError
 
 
-def execute_acct_set(name, kind, credential):
+def execute_acct_set(name, kind, credential, base_url=""):
     inst = _accts()
     try:
-        inst.set(name, kind, credential=credential or None)
+        inst.set(name, kind, credential=credential or None,
+                 base_url=(base_url or None))
     except (_registry_error(inst), ValueError) as exc:
         return {"ok": False, "error": str(exc)}
     except OSError as exc:
@@ -1557,7 +1558,8 @@ class Handler(BaseHTTPRequestHandler):
             if action == "acct_set":
                 result = execute_acct_set(str(body.get("name") or ""),
                                           str(body.get("kind") or ""),
-                                          str(body.get("credential") or ""))
+                                          str(body.get("credential") or ""),
+                                          str(body.get("base_url") or ""))
             else:
                 result = execute_acct_delete(str(body.get("name") or ""))
             self._send(200 if result.get("ok") else 409,

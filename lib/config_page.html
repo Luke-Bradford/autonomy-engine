@@ -343,7 +343,7 @@ td.f{color:var(--ink)} tr:last-child td{border-bottom:0}
     <aside>
       <div class="sh"><h2>Accounts</h2><span class="ln"></span><span class="ct">subscription or API</span></div>
       <div class="panel" id="accts"></div>
-      <div class="hint">An account is a named instance an agent calls from — your Claude or Codex subscription (no key needed), or an API key linked to a credential below.</div>
+      <div class="hint">An account is a named way to call a model: your Claude/Codex login (no key), an API key (link a credential below), or a <b>local LLM</b> (Ollama / LM Studio — give its endpoint). Workstreams pick one under “runs as”.</div>
 
       <div class="sh" style="margin-top:20px"><h2>Credentials</h2><span class="ln"></span><span class="ct">macOS Keychain</span></div>
       <div class="panel" id="creds"></div>
@@ -460,22 +460,37 @@ function load(){fetch("/api/config").then(r=>r.json()).then(m=>{
 
 /* ---- ACCOUNTS ---- */
 const SUB_KINDS=["claude_subscription","codex_subscription"];
+/* Plain words for every account kind -- "what is this?" answered inline. */
+const KIND_LABELS={
+  claude_subscription:"Claude subscription — your claude.ai login, no key",
+  codex_subscription:"Codex subscription — your ChatGPT login, no key",
+  anthropic_api:"Anthropic API key — pay-per-token",
+  openai_api:"OpenAI API key — pay-per-token",
+  openai_compatible:"local LLM — Ollama / LM Studio endpoint on your machine",
+};
+const KIND_SHORT={
+  claude_subscription:"Claude login",codex_subscription:"Codex login",
+  anthropic_api:"Anthropic key",openai_api:"OpenAI key",
+  openai_compatible:"local LLM",
+};
 function renderAccts(m){
   const accts=m.accounts||[], kinds=m.account_kinds||[], creds=m.credentials||[];
-  const kindOpts=kinds.map(k=>`<option value="${esc(k)}">${esc(k)}</option>`).join("");
+  const kindOpts=kinds.map(k=>`<option value="${esc(k)}">${esc(KIND_LABELS[k]||k)}</option>`).join("");
   const credOpts=`<option value="">— credential —</option>`+creds.map(c=>`<option value="${esc(c.label)}">${esc(c.label)}</option>`).join("");
   const add=`<div class="credadd">
     <input id="ac-name" class="cfgin" placeholder="account name (e.g. claude-sub)">
     <select id="ac-kind" class="cfgin" onchange="acctKindChange()">${kindOpts}</select>
     <select id="ac-cred" class="cfgin" style="display:none">${credOpts}</select>
+    <input id="ac-url" class="cfgin" style="display:none" placeholder="endpoint, e.g. http://127.0.0.1:11434/v1">
     <button class="cbtn go" onclick="acctSave()">save</button></div>`;
   const err=m.accounts_error?`<div class="hint" style="color:var(--bad)">accounts error: ${esc(m.accounts_error)}</div>`:"";
   const rows=accts.map(a=>{
     const enc=encAttr(a.name);
     const link=a.credential?` <span class="credset">→ ${esc(a.credential)}</span>`:"";
+    const url=a.base_url?` <span class="credset" style="color:var(--dim)">${esc(a.base_url)}</span>`:"";
     return `<div class="credrow">
       <span class="credlabel">${esc(a.name)}</span>
-      <span class="credprov">${esc(a.kind)}</span>${link}
+      <span class="credprov" title="${esc(a.kind)}">${esc(KIND_SHORT[a.kind]||a.kind)}</span>${link}${url}
       <span class="credgap"></span>
       <button class="cbtn danger" onclick="acctDelete('${enc}')">remove</button>
     </div>`;
@@ -487,15 +502,19 @@ function acctKindChange(){
   const kind=($("ac-kind")||{}).value||"";
   const cred=$("ac-cred"); if(!cred) return;
   cred.style.display=SUB_KINDS.indexOf(kind)>=0?"none":"";
+  const url=$("ac-url");
+  if(url) url.style.display=(kind==="openai_compatible")?"":"none";
 }
 function acctSave(){
   const name=($("ac-name").value||"").trim();
   const kind=$("ac-kind").value;
   const isSub=SUB_KINDS.indexOf(kind)>=0;
   const credential=isSub?"":($("ac-cred").value||"");
+  const base_url=(kind==="openai_compatible")?(($("ac-url").value||"").trim()):"";
   if(!name){toast(false,"enter an account name");return;}
-  if(!isSub&&!credential){toast(false,"pick a credential for an API account");return;}
-  post({action:"acct_set",name,kind,credential},"account saved",()=>{$("ac-name").value="";load();});
+  if(kind==="openai_compatible"&&!base_url){toast(false,"enter the local endpoint URL");return;}
+  if(!isSub&&kind!=="openai_compatible"&&!credential){toast(false,"pick a credential for an API account");return;}
+  post({action:"acct_set",name,kind,credential,base_url},"account saved",()=>{$("ac-name").value="";load();});
 }
 function acctDelete(enc){
   const name=decodeURIComponent(enc);
@@ -507,7 +526,7 @@ function acctDelete(enc){
 function renderCreds(m){
   const creds=m.credentials||[], roles=m.roles||[], asn=m.assignments||{};
   const add=`<form class="credadd" onsubmit="return false" autocomplete="off">
-    <input id="cr-label" name="cr-label" class="cfgin" autocomplete="off" placeholder="label (e.g. work-key)">
+    <input id="cr-label" name="cr-label" class="cfgin" autocomplete="off" placeholder="key name (e.g. personal-api-key)">
     <input id="cr-prov" name="cr-prov" class="cfgin" autocomplete="off" placeholder="provider" value="anthropic">
     <input id="cr-secret" name="cr-secret" class="cfgin" type="password" autocomplete="new-password" placeholder="paste API key — stored, never shown again">
     <button type="button" class="cbtn go" onclick="credSave()">save</button></form>`;
@@ -742,6 +761,17 @@ function wsCard(r,w){
     +`</select><button class="cbtn" onclick="wsSaveField('${enc}','${encName}','gate',document.getElementById('ws-gate').value)">save</button>`;
   const scopeEd=`<input id="ws-scope" class="wide" value="${esc(scope)}" placeholder="labels, comma separated — empty = whole board">`
     +`<button class="cbtn" onclick="wsSaveScope('${enc}','${encName}')">save</button>`;
+  const accts=(MODEL.accounts||[]);
+  // a configured account missing from the registry stays visible + selected
+  // (dangling ref, SD-30) -- silently rendering 'subscription' would let one
+  // save CLEAR it (CP2).
+  const acctKnown=accts.some(a=>a.name===(w.account||""));
+  const acctEd=`<select id="ws-acct">`
+    +`<option value="">subscription (default)</option>`
+    +((w.account&&!acctKnown)?`<option value="${esc(w.account)}" selected>${esc(w.account)} — ⚠ not in the accounts registry</option>`:"")
+    +accts.map(a=>`<option value="${esc(a.name)}" ${a.name===(w.account||"")?"selected":""}>${esc(a.name)} — ${esc(KIND_SHORT[a.kind]||a.kind)}</option>`).join("")
+    +`</select><button class="cbtn" onclick="wsSaveField('${enc}','${encName}','account',document.getElementById('ws-acct').value)">save</button>`
+    +`<span class="cfghint">who this workstream calls — pick your local LLM account here to run it off-API</span>`;
   const modelEd=`<select id="ws-model">${modelSelectOptions(w.model||"")}</select>`
     +`<select id="ws-effort">${EFFORT_CHOICES.map(e=>`<option value="${e}" ${e===(w.effort||"")?"selected":""}>${e||"effort: repo default"}</option>`).join("")}</select>`
     +`<button class="cbtn" onclick="wsSaveModel('${enc}','${encName}')">save</button>`
@@ -759,6 +789,7 @@ function wsCard(r,w){
     ${field("when it runs",trigEd)}
     ${field("which tickets",scopeEd)}
     ${field("merge behaviour",gateEd)}
+    ${field("runs as",acctEd)}
     ${isCoder?"":field("runs on",modelEd)}
     ${w.lane&&w.lane!=="main"?field("lane",esc(w.lane)):""}
     ${notes}${promptEd}${pairRow}
