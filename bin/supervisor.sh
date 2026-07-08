@@ -1163,6 +1163,10 @@ resolve_pipeline_node() {
   case "$out" in
     DONE*) PIPE_DONE=1; return 0 ;;
   esac
+  # Here-string, not an unquoted heredoc: behaviourally identical (a heredoc
+  # body expands $out ONCE and never re-evaluates the value -- proven on
+  # /bin/bash 3.2.57), but the here-string leaves no shell-expansion step to
+  # reason about at review time (prevention-log #7's recommended shape).
   while IFS= read -r line; do
     case "$line" in *=*) ;; *) continue ;; esac
     key="${line%%=*}"; val="${line#*=}"
@@ -1191,9 +1195,7 @@ resolve_pipeline_node() {
           *) ROLE_AGENT="$val" ;;
         esac ;;
     esac
-  done <<EOF
-$out
-EOF
+  done <<<"$out"
   [ -n "$PIPE_NODE" ] || return 1
   case "$PIPE_KIND" in
     legacy)
