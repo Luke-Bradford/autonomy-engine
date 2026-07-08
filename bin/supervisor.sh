@@ -450,6 +450,9 @@ role_fingerprint() {
       --jq 'sort_by(.number) | map("\(.number) \(.updatedAt)") | .[]' 2>>"$SUPLOG")"; then
     return 1
   fi
+  # `|| true` covers grep -c's rc-1-on-zero-matches (an empty board is a
+  # valid count of 0, not an error); a genuinely broken grep would also land
+  # on n=0, which only RUNS more sessions -- the safe direction.
   n="$(grep -c . <<<"$issues" || true)"; n="${n:-0}"
   [ "$n" -ge 200 ] && return 1
   if ! prs="$(cd "$AUTONOMY_TARGET_REPO" && gh pr list --state open -L 100 \
