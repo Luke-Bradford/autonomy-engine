@@ -55,3 +55,12 @@ human (or the coder loop) should do instead.
   session cleanly — never retry aggressively, never block.
 - Do not comment noise: if an issue is correctly labelled, correctly prioritised, and moving, say
   nothing on it. A run where nothing needed changing is a successful run.
+
+## Token economy (headless — every token billed) [#319]
+
+Confirm state with projected queries (`gh … --json <fields> --jq`), never
+full-dump views; one list sweep beats N per-item views; read line ranges, not
+whole files; never re-read or re-verify what this session already established;
+narrate one line per decision — no human is watching. These are guidance, not
+gates: exceed them with a one-line reason when the work genuinely needs it,
+and never trade verification that produces a decision for tokens.
