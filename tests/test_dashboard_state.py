@@ -430,6 +430,23 @@ class TestsRanVerdictTest(unittest.TestCase):
                        "model": "m", "cwd": "/x"})
         self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
 
+    def test_heredoc_line_starting_with_run_all_is_not_a_gate(self):
+        # review-bot BLOCKING on #313 round 3: with re.MULTILINE, `^` matched
+        # the start of EVERY line, so a heredoc/multi-line string whose line
+        # begins with run_all.sh earned a gate id without executing anything.
+        p = self._log(
+            self._tool_use("t1", 'cat <<EOF\nrun_all.sh\nEOF\n'
+                                 'echo "ALL SUITES PASS"'),
+            self._tool_result("run_all.sh\nALL SUITES PASS\n"))
+        self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
+
+    def test_heredoc_line_starting_with_git_push_is_not_a_gate(self):
+        p = self._log(
+            self._tool_use("t1", 'cat <<EOF\ngit push\nEOF\n'
+                                 'echo "ALL SUITES PASS"'),
+            self._tool_result("git push\nALL SUITES PASS\n"))
+        self.assertIsNone(ds.parse_session_log(p)["tests_ran"])
+
     def test_quoted_bash_run_all_is_not_a_gate(self):
         # review-bot BLOCKING on #313 round 2: `bash tests/run_all.sh` inside
         # a STRING (echo'd, not executed) must not earn a gate id -- the

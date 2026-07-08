@@ -56,8 +56,12 @@ _GATE_CMD_RE = re.compile(
     # (global options like -C <path> allowed between) -- git+push merely
     # CO-OCCURRING (`git commit -m "push fix"`, `echo git push`) must not
     # earn a gate id (#313 review WARNING).
-    r"|(?:^|[;&|(]\s*)git\s+(?:-\S+(?:\s+[^-\s]\S*)?\s+)*push\b",
-    re.MULTILINE)
+    r"|(?:^|[;&|(]\s*)git\s+(?:-\S+(?:\s+[^-\s]\S*)?\s+)*push\b")
+# NO re.MULTILINE (#313 review round 3): a per-line `^` let any line of a
+# multi-line string (heredoc body, embedded script) forge a gate id without
+# executing anything. `^` = start of the WHOLE command only; a legit gate
+# call on a later line of a multi-line command is missed and degrades to an
+# EMPTY segment -- the fail-safe direction (miss evidence, never lie).
 
 # Claude Code writes one JSONL per session under here; the account's REAL usage
 # (all repos, all surfaces) is aggregatable from these -- the honest 5h/weekly
