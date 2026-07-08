@@ -769,3 +769,157 @@ class TestLiveScalarWrite(unittest.TestCase):
         res = dc.live_scalar_write(self.repo, {"agent.planner.model": "claude-opus-4-8"})
         self.assertFalse(res["ok"])
         self.assertFalse(os.path.exists(self._live()))
+
+
+class TestWorkstreamAuthoring(unittest.TestCase):
+    """Authoring slice: create/edit workstreams from the page -- ws_add,
+    ws_set (patch), ws_prompt_set (rails live in the untracked
+    var/autonomy/roles/, localize-on-write for tracked pack rails). All
+    through the slice-1 structural writer: refusals leave files untouched."""
+
+    ENGINE = os.path.join(HERE, "..")
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.repo = self._td.name
+        os.makedirs(os.path.join(self.repo, ".autonomy", "roles"))
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("agent:\n  model:\n    primary: claude-sonnet-5\n"
+                     "roles:\n  coder:\n    enabled: true\n")
+        with open(os.path.join(self.repo, ".autonomy", "roles", "qa.md"), "w") as fh:
+            fh.write("committed qa rail\n")
+        import subprocess
+        subprocess.run(["git", "init", "-q", self.repo], check=True)
+        with open(os.path.join(self.repo, ".gitignore"), "w") as fh:
+            fh.write("var/\n")
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _roles(self):
+        import config_parser
+        with open(os.path.join(self.repo, "var", "autonomy", "config.yaml")) as fh:
+            return config_parser.parse(fh.read())["roles"]
+
+    # --- ws_add -----------------------------------------------------------
+    def test_add_pm_from_template(self):
+        res = dc.ws_add(self.repo, "pm", "pm", self.ENGINE)
+        self.assertTrue(res["ok"], res)
+        roles = self._roles()
+        self.assertIn("pm", roles)
+        self.assertFalse(roles["pm"].get("enabled"))       # lands disabled
+        self.assertEqual(roles["pm"]["trigger"]["type"], "cron")
+        rail = os.path.join(self.repo, roles["pm"]["prompt"])
+        self.assertTrue(os.path.isfile(rail))
+        self.assertTrue(roles["pm"]["prompt"].startswith("var/autonomy/roles/"))
+
+    def test_add_custom_name_charset_gated(self):
+        res = dc.ws_add(self.repo, "bad/name", "custom", self.ENGINE)
+        self.assertFalse(res["ok"])
+
+    def test_add_existing_name_refused(self):
+        res = dc.ws_add(self.repo, "coder", "coder", self.ENGINE)
+        self.assertFalse(res["ok"])
+        self.assertIn("exists", res["error"])
+
+    def test_add_unknown_template_refused(self):
+        self.assertFalse(dc.ws_add(self.repo, "x", "wizard", self.ENGINE)["ok"])
+
+    # --- ws_set -----------------------------------------------------------
+    def test_set_enable_toggle(self):
+        dc.ws_add(self.repo, "pm", "pm", self.ENGINE)
+        res = dc.ws_set(self.repo, "pm", {"enabled": True})
+        self.assertTrue(res["ok"], res)
+        self.assertTrue(self._roles()["pm"]["enabled"])
+
+    def test_set_cron_trigger(self):
+        dc.ws_add(self.repo, "pm", "pm", self.ENGINE)
+        res = dc.ws_set(self.repo, "pm",
+                        {"trigger": {"type": "cron", "schedule": "0 */2 * * *"}})
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(self._roles()["pm"]["trigger"],
+                         {"type": "cron", "schedule": "0 */2 * * *"})
+
+    def test_set_event_trigger_and_gate(self):
+        dc.ws_add(self.repo, "qa", "qa", self.ENGINE)
+        res = dc.ws_set(self.repo, "qa",
+                        {"trigger": {"type": "event", "on": ["pr.opened"]},
+                         "gate": "auto-merge-on-pass"})
+        self.assertTrue(res["ok"], res)
+        roles = self._roles()
+        self.assertEqual(roles["qa"]["trigger"]["on"], ["pr.opened"])
+        self.assertEqual(roles["qa"]["gate"], "auto-merge-on-pass")
+
+    def test_set_scope_labels_and_model(self):
+        res = dc.ws_set(self.repo, "coder",
+                        {"scope_labels": ["ready", "p1"],
+                         "model": "claude-sonnet-5", "effort": "medium"})
+        self.assertTrue(res["ok"], res)
+        roles = self._roles()
+        self.assertEqual(roles["coder"]["scope"]["labels"], ["ready", "p1"])
+        self.assertEqual(roles["coder"]["effort"], "medium")
+
+    def test_set_invalid_trigger_refused_untouched(self):
+        res = dc.ws_set(self.repo, "coder",
+                        {"trigger": {"type": "cron"}})   # no schedule
+        self.assertFalse(res["ok"])
+
+    def test_set_unknown_role_refused(self):
+        self.assertFalse(dc.ws_set(self.repo, "ghost", {"enabled": True})["ok"])
+
+    def test_set_bad_event_name_refused(self):
+        res = dc.ws_set(self.repo, "coder",
+                        {"trigger": {"type": "event", "on": ["evil.event"]}})
+        self.assertFalse(res["ok"])
+
+    # --- prompt (rail) editing ---------------------------------------------
+    def test_prompt_set_writes_var_rail(self):
+        dc.ws_add(self.repo, "pm", "pm", self.ENGINE)
+        res = dc.ws_prompt_set(self.repo, "pm", "my PM conditions:\n- p1 first\n")
+        self.assertTrue(res["ok"], res)
+        roles = self._roles()
+        with open(os.path.join(self.repo, roles["pm"]["prompt"])) as fh:
+            self.assertIn("p1 first", fh.read())
+
+    def test_prompt_set_localizes_a_tracked_rail(self):
+        # qa's committed rail must not be edited in place (preflight sweep /
+        # user content); the write copies to var/ and repoints prompt:.
+        dc.ws_add(self.repo, "qa", "qa", self.ENGINE)
+        dc.ws_set(self.repo, "qa", {"prompt": ".autonomy/roles/qa.md"})
+        res = dc.ws_prompt_set(self.repo, "qa", "custom sign-off rules\n")
+        self.assertTrue(res["ok"], res)
+        roles = self._roles()
+        self.assertTrue(roles["qa"]["prompt"].startswith("var/autonomy/roles/"))
+        with open(os.path.join(self.repo, ".autonomy", "roles", "qa.md")) as fh:
+            self.assertEqual(fh.read(), "committed qa rail\n")   # untouched
+
+    def test_prompt_get_reads_effective_rail(self):
+        dc.ws_add(self.repo, "pm", "pm", self.ENGINE)
+        got = dc.ws_prompt_get(self.repo, "pm")
+        self.assertTrue(got["ok"], got)
+        self.assertIn("PM", got["content"])
+
+    def test_prompt_set_size_capped(self):
+        dc.ws_add(self.repo, "pm", "pm", self.ENGINE)
+        res = dc.ws_prompt_set(self.repo, "pm", "x" * 200001)
+        self.assertFalse(res["ok"])
+
+    def test_ws_set_prompt_escape_refused(self):
+        # CP2: a prompt path escaping the repo must refuse at the WRITE
+        # boundary, not just at read time.
+        for bad in ("../outside.md", "/tmp/x.md"):
+            res = dc.ws_set(self.repo, "coder", {"prompt": bad})
+            self.assertFalse(res["ok"], bad)
+
+    def test_localize_rolls_back_on_refused_repoint(self):
+        # CP2: a refused config write during localization must leave no
+        # new rail behind.
+        dc.ws_add(self.repo, "qa", "qa", self.ENGINE)
+        dc.ws_set(self.repo, "qa", {"prompt": ".autonomy/roles/qa.md"})
+        os.unlink(os.path.join(self.repo, ".gitignore"))   # forces write refusal
+        res = dc.ws_prompt_set(self.repo, "qa", "new content\n")
+        self.assertFalse(res["ok"])
+        # the pre-existing scaffolded rail is ROLLED BACK, never left holding
+        # the refused content
+        with open(os.path.join(self.repo, "var", "autonomy", "roles", "qa.md")) as fh:
+            self.assertNotIn("new content", fh.read())

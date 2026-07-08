@@ -1519,3 +1519,52 @@ class ConfigDriftBlockTest(unittest.TestCase):
             fh.write("agent:\n  model:\n    primary: live-model\n")
         repo = dashboard.config_read_model()["repos"][0]
         self.assertEqual(repo["drift"], {"live": True, "differs": True})
+
+
+class WorkstreamActionsTest(unittest.TestCase):
+    """Authoring slice: the ws_* control actions + repo_init executor wire
+    dashboard_control's authoring ops; GET /api/ws-prompt is read-only."""
+
+    def setUp(self):
+        self._orig_repos = dashboard.Handler.repos
+        self._td = tempfile.TemporaryDirectory()
+        self.repo = self._td.name
+        os.makedirs(os.path.join(self.repo, ".autonomy", "roles"))
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("agent:\n  model:\n    primary: claude-sonnet-5\n"
+                     "roles:\n  coder:\n    enabled: true\n")
+        import subprocess
+        subprocess.run(["git", "init", "-q", self.repo], check=True)
+        with open(os.path.join(self.repo, ".gitignore"), "w") as fh:
+            fh.write("var/\n")
+        dashboard.Handler.repos = [self.repo]
+
+    def tearDown(self):
+        dashboard.Handler.repos = self._orig_repos
+        self._td.cleanup()
+
+    def test_ws_add_and_set_through_control_layer(self):
+        r = dashboard.dcx.ws_add(self.repo, "pm", "pm", dashboard.ENGINE_HOME)
+        self.assertTrue(r["ok"], r)
+        r = dashboard.dcx.ws_set(self.repo, "pm", {"enabled": True,
+            "trigger": {"type": "cron", "schedule": "0 */2 * * *"}})
+        self.assertTrue(r["ok"], r)
+
+    def test_repo_init_scaffolds_pack(self):
+        bare = tempfile.TemporaryDirectory()
+        import subprocess
+        subprocess.run(["git", "init", "-q", bare.name], check=True)
+        res = dashboard.execute_repo_init(bare.name)
+        self.assertTrue(res["ok"], res)
+        self.assertTrue(os.path.isfile(
+            os.path.join(bare.name, ".autonomy", "config.yaml")))
+        # idempotent second run
+        res2 = dashboard.execute_repo_init(bare.name)
+        self.assertTrue(res2["ok"], res2)
+        bare.cleanup()
+
+    def test_ws_prompt_get_reads(self):
+        dashboard.dcx.ws_add(self.repo, "pm", "pm", dashboard.ENGINE_HOME)
+        got = dashboard.dcx.ws_prompt_get(self.repo, "pm")
+        self.assertTrue(got["ok"])
+        self.assertTrue(got["path"].startswith("var/autonomy/roles/"))

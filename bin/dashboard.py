@@ -1193,6 +1193,24 @@ def _refresh_repos():
     return "the repo set updates within a couple of seconds"
 
 
+def execute_repo_init(repo):
+    """Authoring slice: scaffold the .autonomy pack from the page by running
+    the engine's own onboard.sh (idempotent by contract -- never overwrites;
+    also adds the gitignore lines and the planner agent). Bounded; stdout
+    tail returned so the operator sees what was created."""
+    try:
+        proc = subprocess.run(
+            ["bash", os.path.join(ENGINE_HOME, "bin", "onboard.sh"), repo],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "error": "onboard failed to run: %s" % exc}
+    tail = proc.stdout.decode("utf-8", "replace").strip().splitlines()[-6:]
+    if proc.returncode != 0:
+        return {"ok": False, "error": "onboard exited %d: %s"
+                % (proc.returncode, " / ".join(tail) or "no output")}
+    return {"ok": True, "message": "pack ready — " + (" / ".join(tail) or "scaffolded")}
+
+
 def execute_repo_add(path):
     plan = dcx.repo_add_plan(path, REPOS_FILE)
     if "error" in plan:
@@ -1423,6 +1441,19 @@ class Handler(BaseHTTPRequestHandler):
             # best-effort, always 200 (payload carries any error). No query
             # param -- account names come only from the validated registry.
             self._send(200, json.dumps(models_read_model()).encode("utf-8"))
+        elif path == "/api/ws-prompt":
+            # Authoring slice: read one workstream's rail (read-only; writes
+            # go through POST ws_prompt_set). repo must be managed; the rail
+            # path is resolved + repo-escape-gated in dashboard_control.
+            qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]
+                                       if "?" in self.path else "")
+            repo = os.path.abspath(os.path.expanduser(
+                (qs.get("repo") or [""])[0]))
+            name = (qs.get("name") or [""])[0]
+            if repo not in self.repos:
+                self._send(400, b'{"ok": false, "error": "repo is not managed"}')
+            else:
+                self._send(200, json.dumps(dcx.ws_prompt_get(repo, name)).encode("utf-8"))
         elif path == "/api/boards":
             # config-page board picker (#170): best-effort, always 200 (the
             # payload carries any error), owner re-validated inside board_list.
@@ -1465,7 +1496,9 @@ class Handler(BaseHTTPRequestHandler):
             length = 0
         # Chat carries a message + short history, so it needs a larger cap than
         # the tiny control payloads.
-        max_len = 65536 if path == "/api/chat" else 8192
+        # ws_prompt_set carries a whole rail (cap re-checked at 200KB in
+        # dashboard_control); every other action stays at the tight default.
+        max_len = 65536 if path == "/api/chat" else 262144
         if length <= 0 or length > max_len:
             self.close_connection = True
             self._send(400, b'{"error":"bad request"}')
@@ -1486,9 +1519,11 @@ class Handler(BaseHTTPRequestHandler):
         action = body.get("action")
         _cred_actions = ("cred_set", "cred_delete", "cred_assign", "cred_unassign")
         _acct_actions = ("acct_set", "acct_delete")
+        _ws_actions = ("ws_add", "ws_set", "ws_prompt_set", "repo_init")
         if (action not in ("set_model", "config_set", "repo_add", "repo_remove")
                 and action not in _cred_actions
                 and action not in _acct_actions
+                and action not in _ws_actions
                 and not dcx.is_valid_action(action)):
             self._send(400, b'{"error":"invalid action"}')
             return
@@ -1531,6 +1566,24 @@ class Handler(BaseHTTPRequestHandler):
         repo = os.path.abspath(os.path.expanduser(str(body.get("repo") or "")))
         if repo not in self.repos:            # only ever act on a managed repo
             self._send(400, b'{"error":"repo is not managed by this dashboard"}')
+            return
+        if action in _ws_actions:
+            # Authoring slice: workstream create/edit + pack init. All policy
+            # + refusal semantics live in dashboard_control (SD-34 writer).
+            if action == "ws_add":
+                result = dcx.ws_add(repo, str(body.get("name") or ""),
+                                    str(body.get("template") or ""), ENGINE_HOME)
+            elif action == "ws_set":
+                patch = body.get("patch")
+                result = dcx.ws_set(repo, str(body.get("name") or ""),
+                                    patch if isinstance(patch, dict) else {})
+            elif action == "ws_prompt_set":
+                result = dcx.ws_prompt_set(repo, str(body.get("name") or ""),
+                                           body.get("content") if isinstance(body.get("content"), str) else None)
+            else:                       # repo_init: idempotent pack scaffold
+                result = execute_repo_init(repo)
+            self._send(200 if result.get("ok") else 409,
+                       json.dumps(result).encode("utf-8"))
             return
         if action == "set_model":
             result = execute_set_model(repo, str(body.get("model") or ""),

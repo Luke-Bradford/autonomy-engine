@@ -771,3 +771,239 @@ def _create_scalar(text, dotted, value):
     node[parts[-1]] = value
     block = top + ":\n" + "\n".join(_emit_mapping(sub, 2, top)) + "\n"
     return set_block(text, top, block)
+
+
+# --- authoring slice: create/edit workstreams from the page ------------------
+# A workstream IS a roles: entry (config-workstreams spec). UI-authored rails
+# live in the UNTRACKED var/autonomy/roles/ (a tracked rail edit would be
+# preflight sweep-bait, exactly like the config shadow); editing a tracked
+# pack rail LOCALIZES it there first (copy + repoint prompt:) so committed
+# content is never touched. Every structural change goes through
+# structural_write -- validate-before, compare-after, refuse-untouched.
+
+import re as _re  # noqa: E402
+_WS_NAME_RE = _re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_WS_TEMPLATES = {
+    "coder": ("loop", None),
+    "pm": ("cron", "roles/pm.md"),
+    "qa": ("event", "roles/qa.md"),
+    "researcher": ("cron", "roles/researcher.md"),
+    "custom": ("loop", None),
+}
+_PROMPT_CAP = 200000
+_DEFAULT_TRIGGERS = {
+    "loop": {"type": "loop"},
+    "cron": {"type": "cron", "schedule": "0 9 * * *"},
+    "event": {"type": "event", "on": ["pr.opened"]},
+}
+
+
+def _effective_roles(repo):
+    """(roles_dict, error) -- the CURRENT effective roles mapping (live shadow
+    when present). Total: parse failure returns the error string."""
+    path = _cp.effective_config_path(
+        os.path.join(repo, ".autonomy", "config.yaml"))
+    try:
+        with open(path, encoding="utf-8") as fh:
+            cfg = _cp.parse(fh.read())
+    except (OSError, ValueError) as exc:
+        return None, "cannot read config: %s" % exc
+    roles = cfg.get("roles") if isinstance(cfg, dict) else None
+    return (roles if isinstance(roles, dict) else {}), None
+
+
+def _var_rail_path(name):
+    return os.path.join("var", "autonomy", "roles", "%s.md" % name)
+
+
+def ws_add(repo, name, template, engine_home):
+    """Add a workstream from a template: scaffolds its rail into the
+    untracked var/autonomy/roles/<name>.md and appends a DISABLED roles:
+    entry with the template's default trigger."""
+    name = (name or "").strip()
+    if not _WS_NAME_RE.match(name):
+        return {"ok": False, "error": "workstream name must be 1-64 chars of A-Za-z0-9._-"}
+    if template not in _WS_TEMPLATES:
+        return {"ok": False, "error": "unknown template %r" % template}
+    roles, err = _effective_roles(repo)
+    if err:
+        return {"ok": False, "error": err}
+    if name in roles:
+        return {"ok": False, "error": "workstream %r already exists" % name}
+    trig_kind, rail_tpl = _WS_TEMPLATES[template]
+    rail_text = "# %s workstream\n\nDescribe this workstream's standing task here.\n" % name
+    if rail_tpl:
+        tpl_path = os.path.join(engine_home, "templates", "autonomy-pack", rail_tpl)
+        try:
+            with open(tpl_path, encoding="utf-8") as fh:
+                rail_text = fh.read()
+        except OSError:
+            pass                       # template missing -> starter stub
+    rail_rel = _var_rail_path(name)
+    rail_abs = os.path.join(repo, rail_rel)
+    entry = {"enabled": False,
+             "trigger": dict(_DEFAULT_TRIGGERS[trig_kind]),
+             "prompt": rail_rel}
+    new_roles = dict(roles)
+    new_roles[name] = entry
+    # rail first (roles.py validates prompt existence), then the entry; a
+    # refused write leaves an orphan rail in var/ -- inert and gitignored.
+    try:
+        os.makedirs(os.path.dirname(rail_abs), exist_ok=True)
+        with open(rail_abs, "w", encoding="utf-8") as fh:
+            fh.write(rail_text)
+    except OSError as exc:
+        return {"ok": False, "error": "could not write the rail: %s" % exc}
+    res = structural_write(repo, new_roles)
+    if not res.get("ok"):
+        return res
+    return {"ok": True,
+            "message": "%s added (disabled) — set its trigger and prompt, then enable it" % name}
+
+
+def ws_set(repo, name, patch):
+    """Patch one workstream's entry. Allowed patch keys: enabled (bool),
+    trigger ({type, schedule|on}), scope_labels (list), gate, model, effort,
+    account, prompt. Values validated here (page-level policy) AND by
+    roles.validate_roles inside structural_write (the SSOT)."""
+    roles, err = _effective_roles(repo)
+    if err:
+        return {"ok": False, "error": err}
+    if name not in roles:
+        return {"ok": False, "error": "no workstream named %r" % name}
+    entry = dict(roles[name] if isinstance(roles[name], dict) else {})
+    for key, val in (patch or {}).items():
+        if key == "enabled":
+            entry["enabled"] = bool(val)
+        elif key == "trigger":
+            trig = val if isinstance(val, dict) else {}
+            kind = str(trig.get("type") or "")
+            if kind == "loop":
+                entry["trigger"] = {"type": "loop"}
+            elif kind == "manual":
+                entry["trigger"] = {"type": "manual"}
+            elif kind == "cron":
+                entry["trigger"] = {"type": "cron",
+                                    "schedule": str(trig.get("schedule") or "")}
+            elif kind == "event":
+                on = trig.get("on") if isinstance(trig.get("on"), list) else []
+                entry["trigger"] = {"type": "event",
+                                    "on": [str(x) for x in on]}
+            else:
+                return {"ok": False, "error": "unknown trigger type %r" % kind}
+        elif key == "scope_labels":
+            labels = [str(x).strip() for x in (val or []) if str(x).strip()]
+            if labels:
+                scope = entry.get("scope") if isinstance(entry.get("scope"), dict) else {}
+                scope = dict(scope)
+                scope["labels"] = labels
+                entry["scope"] = scope
+            else:
+                entry.pop("scope", None)
+        elif key == "gate":
+            if val:
+                entry["gate"] = str(val)
+            else:
+                entry.pop("gate", None)
+        elif key == "prompt":
+            if val:
+                rel = str(val)
+                full = os.path.realpath(os.path.join(repo, rel))
+                root = os.path.realpath(repo)
+                if os.path.isabs(rel) or not (full == root or full.startswith(root + os.sep)):
+                    return {"ok": False, "error":
+                            "prompt must be a repo-relative path inside the repo"}
+                entry["prompt"] = rel
+            else:
+                entry.pop("prompt", None)
+        elif key in ("model", "effort", "account"):
+            if val:
+                entry[key] = str(val)
+            else:
+                entry.pop(key, None)
+        else:
+            return {"ok": False, "error": "key %r is not patchable" % key}
+    new_roles = dict(roles)
+    new_roles[name] = entry
+    return structural_write(repo, new_roles)
+
+
+def _resolved_rail(repo, name):
+    """(rel_path, error) for the workstream's prompt file. Standard roles
+    without an explicit prompt: resolve to the pack's conventional rail
+    (roles.py's own default); path is re-validated to stay inside the repo."""
+    roles, err = _effective_roles(repo)
+    if err:
+        return None, err
+    entry = roles.get(name)
+    if entry is None:
+        return None, "no workstream named %r" % name
+    entry = entry if isinstance(entry, dict) else {}
+    rel = str(entry.get("prompt") or "")
+    if not rel:
+        rel = ".autonomy/roles/%s.md" % name if name != "coder" else ".autonomy/loop_prompt.md"
+    full = os.path.realpath(os.path.join(repo, rel))
+    root = os.path.realpath(repo)
+    if not (full == root or full.startswith(root + os.sep)):
+        return None, "prompt path escapes the repo -- refused"
+    return rel, None
+
+
+def ws_prompt_get(repo, name):
+    rel, err = _resolved_rail(repo, name)
+    if err:
+        return {"ok": False, "error": err}
+    try:
+        with open(os.path.join(repo, rel), encoding="utf-8", errors="replace") as fh:
+            return {"ok": True, "path": rel, "content": fh.read()}
+    except OSError:
+        return {"ok": True, "path": rel, "content": ""}
+
+
+def ws_prompt_set(repo, name, content):
+    """Write the workstream's rail. UI-authored rails live under
+    var/autonomy/roles/ (untracked); a rail anywhere else (a committed pack
+    file) is LOCALIZED: content goes to the var rail and prompt: repoints --
+    the committed file is never modified."""
+    if not isinstance(content, str) or len(content) > _PROMPT_CAP:
+        return {"ok": False, "error": "prompt must be a string under %d bytes" % _PROMPT_CAP}
+    rel, err = _resolved_rail(repo, name)
+    if err:
+        return {"ok": False, "error": err}
+    var_prefix = os.path.join("var", "autonomy", "roles") + os.sep
+    target_rel = rel if rel.startswith(var_prefix) else _var_rail_path(name)
+    target_abs = os.path.join(repo, target_rel)
+    # snapshot for rollback: a refused localize must leave NO new/changed rail
+    # behind (CP2 -- refusals leave files untouched).
+    prior = None
+    if os.path.isfile(target_abs):
+        try:
+            with open(target_abs, "rb") as fh:
+                prior = fh.read()
+        except OSError:
+            prior = None
+    try:
+        os.makedirs(os.path.dirname(target_abs), exist_ok=True)
+        tmp = target_abs + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        os.replace(tmp, target_abs)
+    except OSError as exc:
+        return {"ok": False, "error": "could not write the rail: %s" % exc}
+    if target_rel != rel:
+        res = ws_set(repo, name, {"prompt": target_rel})
+        if not res.get("ok"):
+            try:                                   # roll the rail back
+                if prior is None:
+                    os.unlink(target_abs)
+                else:
+                    with open(target_abs, "wb") as fh:
+                        fh.write(prior)
+            except OSError:
+                pass
+            return {"ok": False, "error":
+                    "could not localize the rail (config write refused: %s) -- nothing changed"
+                    % res.get("error")}
+        return {"ok": True, "path": target_rel,
+                "message": "rail localized to %s (the committed file is untouched)" % target_rel}
+    return {"ok": True, "path": target_rel, "message": "rail saved"}
