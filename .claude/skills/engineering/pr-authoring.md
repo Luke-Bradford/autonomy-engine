@@ -52,16 +52,22 @@ Issue numbers, or "None".
 
 - Title: `feat:`/`fix:`/`docs:` prefix + `(#<issue>)`; body carries
   `Closes #<issue>` so the merge closes it.
-- **Close-refs are GitHub's own grammar** (#301, fixed 2026-07-08):
-  done-everywhere reads `closingIssuesReferences` — the server-side
-  closing-keyword linkage — so negated phrases ("does NOT close #90"),
-  quoted incident text, and code-fenced examples no longer close anything
-  (the old body regex did exactly that, twice: PRs #299 and #303). What
-  still matters: a REAL `Closes #N` in closing-keyword position is the one
-  and only way a merge closes an issue, and "Part of #N" / `(#N)` in the
-  title remain the work-claim signals that reset a multi-slice ticket to
-  Ready. "#N stays open — <what remains>" is still good practice for
-  reviewer clarity, just no longer load-bearing.
+- **NEVER write closing-keyword+`#N` for an issue that must stay open — in
+  ANY form, anywhere in a PR body.** This rule is about GITHUB, not our
+  tooling: GitHub's own server-side closing grammar
+  (`closingIssuesReferences`) is negation-blind AND quote-blind —
+  empirically proven three times: PR #299 ("does NOT close #90"), PR #303
+  (quoting that sentence), and PR #324 (the #301 FIX itself, whose body
+  quoted the phrase while documenting it — GitHub linked [90,286,301] and
+  closed #90 a third time). Since 2026-07-08 done-everywhere reads
+  `closingIssuesReferences` (#301/#324), so the engine merely VERIFIES what
+  GitHub will close — but GitHub closes negated/quoted refs natively at
+  merge, with or without the engine. When you must reference such an issue:
+  say "#N stays open — <what remains>", break the token pair when quoting an
+  incident ("the 'does NOT close' phrasing against #N"), or put it in an
+  issue comment — comments are never scanned by anyone. Real `Closes #N` in
+  keyword position remains the one way a merge closes an issue; "Part of
+  #N" / `(#N)` in the title remain the work-claim (Ready-reset) signals.
 - End the body with the Claude Code attribution line (repo convention).
 - Doc-only PRs skip the review bot but still get CI — say "doc-only" in the
   description so the missing review isn't chased.
