@@ -458,6 +458,12 @@ def validate_roles(config):
             if field in cfg and not _is_nonempty_str(cfg.get(field)):
                 errors.append("roles.%s: %s must be a non-empty string"
                               % (name, field))
+        if "pipeline" in cfg:
+            pval = cfg.get("pipeline")
+            if not _is_nonempty_str(pval) or not _ROLE_NAME_RE.match(
+                    str(pval).strip()):
+                errors.append("roles.%s: pipeline must be a pipeline name "
+                              "(charset [A-Za-z0-9._-]{1,64})" % name)
         models = cfg.get("models")
         if models is not None:
             if not isinstance(models, dict) or not models:
@@ -710,6 +716,14 @@ def cron_roles(config, lane=None):
             if _in_lane(config, n, lane)]
 
 
+def all_cron_roles(config):
+    """PUBLIC lane-UNfiltered (name, schedule) pairs. For consumers whose
+    concern is lane-independent -- lib/pipeline.py's multi-node cron/event
+    refusal (#345) must catch a role pinned to ANY lane -- as opposed to the
+    scheduler's per-lane cron_roles()."""
+    return _all_cron_roles(config)
+
+
 def _role_events(cfg):
     """The event `on:` token list for a role config, [] when absent/blank.
     Keeps only non-empty string tokens. Defensive against non-dict shapes
@@ -755,6 +769,12 @@ def event_roles(config, lane=None):
     Degrades (skips) an empty-`on:` role rather than crashing."""
     return [(n, e) for (n, e) in _all_event_roles(config)
             if _in_lane(config, n, lane)]
+
+
+def all_event_roles(config):
+    """PUBLIC lane-UNfiltered (name, [event, ...]) pairs -- the sibling of
+    all_cron_roles(), same consumer and rationale."""
+    return _all_event_roles(config)
 
 
 def render_scope(scope):
@@ -826,7 +846,8 @@ def role_settings(config, name):
     return {"account": _s("account"), "agent": _s("agent"),
             "model": _s("model"), "effort": _s("effort"),
             "prompt": _s("prompt"),
-            "scope": render_scope(cfg.get("scope"))}
+            "scope": render_scope(cfg.get("scope")),
+            "pipeline": _s("pipeline")}
 
 
 def _cron_field(spec, lo, hi):

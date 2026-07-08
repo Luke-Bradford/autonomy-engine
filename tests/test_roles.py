@@ -27,6 +27,15 @@ class TestValidateRoles(unittest.TestCase):
         self.assertEqual(roles.validate_roles({}), [])
         self.assertEqual(roles.validate_roles({"agent": {"type": "claude"}}), [])
 
+    def test_pipeline_binding_validates_charset(self):
+        cfg = {"roles": {"coder": {"enabled": True, "pipeline": "../evil"}}}
+        self.assertTrue(any("pipeline" in e for e in roles.validate_roles(cfg)))
+        cfg = {"roles": {"coder": {"enabled": True, "pipeline": ""}}}
+        self.assertTrue(any("pipeline" in e for e in roles.validate_roles(cfg)))
+        cfg = {"roles": {"coder": {"enabled": True,
+                                   "pipeline": "ticket-to-merge"}}}
+        self.assertEqual(roles.validate_roles(cfg), [])
+
     def test_design_doc_example_validates(self):
         cfg = parse(
             "roles:\n"
@@ -670,7 +679,26 @@ class TestRoleSettings(unittest.TestCase):
         s = roles.role_settings(parse(self.CFG), "qa")
         self.assertEqual(
             s, {"account": "", "agent": "", "model": "", "effort": "",
-                "prompt": "", "scope": ""})
+                "prompt": "", "scope": "", "pipeline": ""})
+
+    def test_role_settings_exposes_pipeline(self):
+        cfg = parse("roles:\n  coder:\n    enabled: true\n"
+                    "    pipeline: ticket-to-merge\n")
+        self.assertEqual(roles.role_settings(cfg, "coder")["pipeline"],
+                         "ticket-to-merge")
+
+    def test_all_cron_and_event_roles_are_public_and_lane_unfiltered(self):
+        # lib/pipeline.py's multi-node cron/event refusal consumes these --
+        # they must see a role PINNED TO A NON-DEFAULT LANE (the stall
+        # hazard is lane-independent).
+        cfg = parse("lanes:\n  side:\n    worktree: worktrees/side\n"
+                    "roles:\n"
+                    "  pm:\n    enabled: true\n    lane: side\n"
+                    "    trigger: { type: cron, schedule: '0 * * * *' }\n"
+                    "  qa:\n    enabled: true\n    lane: side\n"
+                    "    trigger: { type: event, on: [pr.opened] }\n")
+        self.assertIn("pm", [n for n, _ in roles.all_cron_roles(cfg)])
+        self.assertIn("qa", [n for n, _ in roles.all_event_roles(cfg)])
 
     def test_default_coder_with_no_roles_block(self):
         s = roles.role_settings({}, "coder")

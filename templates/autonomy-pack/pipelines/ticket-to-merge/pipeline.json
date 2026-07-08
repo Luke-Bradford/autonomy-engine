@@ -1,0 +1,21 @@
+{
+  "name": "ticket-to-merge",
+  "version": 1,
+  "trigger_default": {"type": "loop"},
+  "caps": {"max_sessions_per_run": 12},
+  "nodes": [
+    {"id": "pick", "type": "pick", "brief_ref": "pick.md"},
+    {"id": "plan", "type": "plan", "brief_ref": "plan.md"},
+    {"id": "code", "type": "agent_task", "brief_ref": "code.md"},
+    {"id": "test-vs-plan", "type": "check", "brief_ref": "test-vs-plan.md"},
+    {"id": "open-pr", "type": "git_ops", "brief_ref": "open-pr.md"},
+    {"id": "qa-review", "type": "check", "brief_ref": "qa-review.md"},
+    {"id": "summarize", "type": "summarize", "brief_ref": "summarize.md"}
+  ],
+  "edges": [],
+  "containers": [
+    {"id": "coding", "kind": "loop", "children": ["code", "test-vs-plan"],
+     "exit_when": "every test criterion named in the plan passes",
+     "max_rounds": 5}
+  ]
+}

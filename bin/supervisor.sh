@@ -1026,6 +1026,10 @@ resolve_role_dispatch() {
   ROLE_ACCOUNT=""; ROLE_AGENT=""; ROLE_MODEL=""; ROLE_EFFORT=""; ROLE_PROMPT=""
   ROLE_SCOPE=""
   out="$(python3 "$ENGINE_HOME/lib/roles.py" dispatch "$AUTONOMY_TARGET_REPO" "$role" 2>>"$SUPLOG")" || return 1
+  # shellcheck disable=SC2034  # ROLE_PROMPT: the pipeline runner (P1 #345) reads
+  # the role prompt through pipeline.py wrap instead; the parse stays because it
+  # is resolve_role_dispatch's documented contract (asserted by
+  # tests/test_headless_dispatch.sh "role prompt parsed").
   while IFS= read -r line; do
     key="${line%%=*}"; val="${line#*=}"
     case "$key" in
@@ -1088,6 +1092,146 @@ compose_session_rules() {
   fi
   { cat "$rules_file" && printf '\n%s\n' "$scope_line"; } >"$out_file" 2>>"$SUPLOG" || return 1
   printf '%s' "$out_file"
+}
+
+# --- pipeline runner (P1, #345) ----------------------------------------------
+# One dispatch path: every role runs THROUGH lib/pipeline.py -- a role with a
+# `pipeline:` binding walks its document one node-session per iteration
+# (settled decision 12); a role without one auto-wraps as a one-node pipeline
+# whose prompt path is byte-identical to the legacy engine's. A bound-but-
+# missing/invalid pipeline REFUSES the session -- never a silent fallback to
+# the legacy prompt (prevention-log #3: a fallback would silently change what
+# the operator configured).
+#
+# Lane-scoped like fingerprint_state_file: one supervisor per lane shares
+# LOGDIR, so an unscoped state file would let two lanes advance or corrupt
+# each other's runs. Same [--<lane>] suffix convention.
+pipeline_state_file() {
+  local role="$1" lane="${AUTONOMY_LANE:-}"
+  if [ -n "$lane" ]; then
+    printf '%s/.pipeline-run-%s--%s.json' "$LOGDIR" "$role" "$lane"
+  else
+    printf '%s/.pipeline-run-%s.json' "$LOGDIR" "$role"
+  fi
+}
+
+# The verdict file derives from the state path -- one derivation, lane-safe
+# for free. pipeline.py derives the SAME repo-relative name for the compiled
+# brief's instruction (var/autonomy-logs/<state-basename> minus .json plus
+# .verdict.json), so the agent writes exactly the file the engine reads.
+pipeline_verdict_file() {
+  local state
+  state="$(pipeline_state_file "$1")"
+  printf '%s.verdict.json' "${state%.json}"
+}
+
+pipeline_inflight() { [ -f "$(pipeline_state_file "$1")" ]; }
+
+any_pipeline_inflight() {
+  local f
+  for f in "$LOGDIR"/.pipeline-run-*.json; do
+    [ -f "$f" ] && return 0
+  done
+  return 1
+}
+
+# Resolve the role's CURRENT pipeline node into PIPE_* globals; start a run
+# when none is in flight. Node runs_as values override the ROLE_* slot
+# (SD-13: they sit where the role's own model/effort sat; one-shot override
+# and CLI flags still win later in resolve_session_settings). Every value is
+# re-validated here before it can land in argv or a source path
+# (prevention-log #6). rc 1 = REFUSE.
+resolve_pipeline_node() {
+  local role="$1" state brief out line key val
+  PIPE_NODE=""; PIPE_KIND=""; PIPE_PROMPT=""; PIPE_DONE=0
+  state="$(pipeline_state_file "$role")"
+  if [ ! -f "$state" ]; then
+    if [ -n "${AUTONOMY_LANE:-}" ]; then
+      python3 "$ENGINE_HOME/lib/pipeline.py" start \
+        "$AUTONOMY_TARGET_REPO" "$role" "$state" \
+        --lane "$AUTONOMY_LANE" >>"$SUPLOG" 2>&1 || return 1
+    else
+      python3 "$ENGINE_HOME/lib/pipeline.py" start \
+        "$AUTONOMY_TARGET_REPO" "$role" "$state" >>"$SUPLOG" 2>&1 || return 1
+    fi
+  fi
+  brief="${state%.json}.brief.md"
+  if ! out="$(python3 "$ENGINE_HOME/lib/pipeline.py" next "$state" \
+      --brief-out "$brief" --journal "$LOGDIR/journal.jsonl" 2>>"$SUPLOG")"; then
+    return 1
+  fi
+  case "$out" in
+    DONE*) PIPE_DONE=1; return 0 ;;
+  esac
+  # Here-string, not an unquoted heredoc: behaviourally identical (a heredoc
+  # body expands $out ONCE and never re-evaluates the value -- proven on
+  # /bin/bash 3.2.57), but the here-string leaves no shell-expansion step to
+  # reason about at review time (prevention-log #7's recommended shape).
+  while IFS= read -r line; do
+    case "$line" in *=*) ;; *) continue ;; esac
+    key="${line%%=*}"; val="${line#*=}"
+    case "$key" in
+      NODE)   PIPE_NODE="$val" ;;
+      KIND)   PIPE_KIND="$val" ;;
+      PROMPT) PIPE_PROMPT="$val" ;;
+      NODE_MODEL)
+        if valid_model_id "$val"; then ROLE_MODEL="$val"
+        else log "WARN pipeline node model invalid -- ignored"; fi ;;
+      NODE_EFFORT)
+        if valid_effort "$val"; then ROLE_EFFORT="$val"
+        else log "WARN pipeline node effort invalid -- ignored"; fi ;;
+      NODE_ACCOUNT)
+        # prevention-log #6: account names land in accounts.py argv --
+        # charset-gate at the point of use like agent/model/effort.
+        case "$val" in
+          *[!A-Za-z0-9._-]*) log "WARN pipeline node account invalid chars -- ignored" ;;
+          "") ;;
+          *) ROLE_ACCOUNT="$val" ;;
+        esac ;;
+      NODE_AGENT)
+        case "$val" in
+          *[!A-Za-z0-9_-]*) log "WARN pipeline node agent invalid chars -- ignored" ;;
+          "") ;;
+          *) ROLE_AGENT="$val" ;;
+        esac ;;
+    esac
+  done <<<"$out"
+  [ -n "$PIPE_NODE" ] || return 1
+  case "$PIPE_KIND" in
+    legacy)
+      if ! valid_prompt_path "$PIPE_PROMPT"; then
+        log "pipeline: node prompt path '$PIPE_PROMPT' is absolute or escapes the pack -- REFUSING"
+        return 1
+      fi
+      PIPE_PROMPT="$AUTONOMY_TARGET_REPO/$PIPE_PROMPT" ;;
+    compiled)
+      # The compiled brief must be exactly the file we asked pipeline.py to
+      # write -- anything else in this slot is a forged path (fail-safe).
+      if [ "$PIPE_PROMPT" != "$brief" ]; then
+        log "pipeline: compiled brief path mismatch -- REFUSING"
+        return 1
+      fi ;;
+    *)
+      log "pipeline: unknown node kind '$PIPE_KIND' -- REFUSING"
+      return 1 ;;
+  esac
+  if [ ! -f "$PIPE_PROMPT" ]; then
+    log "pipeline: node prompt file missing ($PIPE_PROMPT) -- REFUSING"
+    return 1
+  fi
+  return 0
+}
+
+# Record a node outcome. NOT best-effort: a record failure is loud (the
+# caller treats the session as errored) because losing run-state consistency
+# silently would corrupt the walk.
+record_pipeline_outcome() {
+  local role="$1" node="$2" outcome="$3" session_log="$4"
+  python3 "$ENGINE_HOME/lib/pipeline.py" record \
+    "$(pipeline_state_file "$role")" "$node" "$outcome" \
+    --session-log "$session_log" \
+    --verdict "$(pipeline_verdict_file "$role")" \
+    --journal "$LOGDIR/journal.jsonl" >>"$SUPLOG" 2>&1
 }
 
 # fail-safe honesty (#149): log a NOTE for each knob role $2 sets but the engine
@@ -1176,6 +1320,24 @@ run_session() {
     return 2
   fi
 
+  # P1 (#345): every role dispatches through the pipeline runner -- bound
+  # documents walk one node per iteration, unbound roles run their auto-wrap
+  # (byte-identical prompt path). Placed BEFORE adapter sourcing so a node's
+  # runs_as.agent override selects the adapter, and BEFORE
+  # resolve_session_settings so node model/effort sit in the ROLE_* slot.
+  if ! resolve_pipeline_node "$role"; then
+    log "dispatch: cannot resolve pipeline node for role '$role' -- REFUSING session (fail-safe; see supervisor.log)"
+    return 2
+  fi
+  if [ "$PIPE_DONE" = "1" ]; then
+    # Stale-state recovery: the run finished without its state file being
+    # cleaned. NO session ran this tick, so return the dispatch-skip rc (2)
+    # -- rc 0 would fabricate a session.done edge and record a fingerprint
+    # for work that did not run (the main loop's own fail-safe rule).
+    log "pipeline: role '$role' run already complete -- nothing to dispatch (state recovered)"
+    return 2
+  fi
+
   # Source the ROLE's agent adapter when it sets one (e.g. a local-LLM 'prep'
   # role on codex), else the global $AGENT_TYPE. resolve_role_dispatch has
   # already charset-gated ROLE_AGENT, so it is safe in this path.
@@ -1222,22 +1384,12 @@ run_session() {
     fi
   fi
 
-  # The role's own prompt when set (doctor verified it is a repo-relative
-  # pack file), else the pack's loop_prompt. Re-validate the config-sourced
-  # path here (defense-in-depth, independent of doctor) before it becomes a
-  # filename; a missing file refuses.
-  local prompt_file="$AUTONOMY_TARGET_REPO/.autonomy/loop_prompt.md"
-  if [ -n "$ROLE_PROMPT" ]; then
-    if ! valid_prompt_path "$ROLE_PROMPT"; then
-      log "dispatch: role '$role' prompt path '$ROLE_PROMPT' is absolute or escapes the pack -- REFUSING session (fail-safe)"
-      return 2
-    fi
-    prompt_file="$AUTONOMY_TARGET_REPO/$ROLE_PROMPT"
-  fi
-  if [ ! -f "$prompt_file" ]; then
-    log "dispatch: prompt file missing for role '$role' ($prompt_file) -- REFUSING session"
-    return 2
-  fi
+  # The node's prompt: the wrapped role's own pack prompt (byte-identical to
+  # the pre-pipeline engine -- pipeline.py wrap reads the same roles.py
+  # `prompt:` and applies the same loop_prompt.md default) or the compiled
+  # per-node brief. Path validated in resolve_pipeline_node (legacy paths
+  # via valid_prompt_path, compiled paths pinned to the expected file).
+  local prompt_file="$PIPE_PROMPT"
 
   local rules_file
   if ! rules_file="$(compose_session_rules "$AUTONOMY_TARGET_REPO/.autonomy/hard_rules.md" "$ROLE_SCOPE" "$LOGDIR/.session-rules")"; then
@@ -1263,6 +1415,9 @@ run_session() {
   # the main loop's own `dispatching <role>` covers the prep window before this.
   heartbeat "session-running $role" "running a $role session" ""
 
+  # A stale verdict from a prior round must never decide this round's exit.
+  rm -f "$(pipeline_verdict_file "$role")"
+
   invoke_scoped_env "$env_lines" \
     "$prompt_file" "$rules_file" \
     "$MODEL" "$FALLBACK_MODEL" "$log_file" "$EFFORT"
@@ -1271,15 +1426,29 @@ run_session() {
   local outcome; outcome="$(agent_classify_outcome "$log_file" "$rc")"
   case "$outcome" in
     success)
+      if ! record_pipeline_outcome "$role" "$PIPE_NODE" success "$log_file"; then
+        log "ERROR pipeline: could not record node success for '$role' -- treating session as errored (state preserved for inspection)"
+        return 1
+      fi
       return 0 ;;
     usage_limit*)
+      # No record: the node was not completed -- state stays put and the SAME
+      # node retries next iteration (after the reset wait).
       local epoch="${outcome#usage_limit }"
       if [ "$epoch" != "usage_limit" ] && [ -n "$epoch" ]; then
         persist_reset_epoch "$epoch"
       fi
       return 3 ;;
     *)
-      if compute_limit_wait >/dev/null; then return 3; fi
+      if compute_limit_wait >/dev/null; then
+        # Active usage-limit window: this error is presumed limit-flavoured
+        # (the legacy path's exact semantics) -- NO record, the same node
+        # retries after the wait. Recording would destroy a mid-flight run
+        # for a rate-limit artifact.
+        return 3
+      fi
+      record_pipeline_outcome "$role" "$PIPE_NODE" error "$log_file" || \
+        log "WARN pipeline: could not record node error for '$role'"
       return "$rc" ;;
   esac
 }
@@ -1419,26 +1588,51 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     session_ran=0
 
     open_count="$(cd "$AUTONOMY_TARGET_REPO" && gh issue list --state open --json number -q 'length' 2>/dev/null || echo -1)"
+    # P1 (#345): a picked item must FINISH even after the board drains -- an
+    # in-flight pipeline run may still dispatch on an empty board, but
+    # nothing NEW starts (a fresh run would burn a session discovering there
+    # is nothing to pick). Empty board + no in-flight runs = idle as before.
+    empty_board_dispatch=""
     if [ "$open_count" = "0" ]; then
-      dirty_skips=0
-      log "board empty -- idle ${EMPTY_IDLE}s"
-      heartbeat "board-empty" "no open issues -- idle" "$(( $(date -u +%s) + EMPTY_IDLE ))"
-      sleep "$EMPTY_IDLE"; continue
+      if any_pipeline_inflight; then
+        if ! empty_board_dispatch="$(resolve_dispatch_roles)"; then
+          empty_board_dispatch="coder"
+        fi
+        inflight_only=""
+        for _r in $empty_board_dispatch; do
+          pipeline_inflight "$_r" && inflight_only="$inflight_only $_r"
+        done
+        empty_board_dispatch="${inflight_only# }"
+        if [ -z "$empty_board_dispatch" ]; then
+          log "NOTE pipeline: in-flight run state exists for a role that is no longer dispatchable -- stranded until re-enabled (see .pipeline-run-*.json in $LOGDIR)"
+        fi
+      fi
+      if [ -z "$empty_board_dispatch" ]; then
+        dirty_skips=0
+        log "board empty -- idle ${EMPTY_IDLE}s"
+        heartbeat "board-empty" "no open issues -- idle" "$(( $(date -u +%s) + EMPTY_IDLE ))"
+        sleep "$EMPTY_IDLE"; continue
+      fi
     fi
 
     # Round-robin over the enabled loop roles (re-enumerated every tick so a
     # config edit applies on the next session). Enumeration failure falls
     # back to coder-only -- the conservative default; preflight's doctor
     # check still gates a truly broken pack. NO roles enabled = idle, same
-    # as an empty board.
-    if ! dispatch_list="$(resolve_dispatch_roles)"; then
-      log "WARN role enumeration failed -- coder-only fallback (see supervisor.log)"
-      dispatch_list="coder"
-    fi
-    if [ -z "$dispatch_list" ]; then
-      log "no loop roles enabled -- idle ${EMPTY_IDLE}s"
-      heartbeat "idle" "no loop roles enabled -- idle" "$(( $(date -u +%s) + EMPTY_IDLE ))"
-      sleep "$EMPTY_IDLE"; continue
+    # as an empty board. On an empty board the list is already restricted to
+    # the in-flight roles (above).
+    if [ -n "$empty_board_dispatch" ]; then
+      dispatch_list="$empty_board_dispatch"
+    else
+      if ! dispatch_list="$(resolve_dispatch_roles)"; then
+        log "WARN role enumeration failed -- coder-only fallback (see supervisor.log)"
+        dispatch_list="coder"
+      fi
+      if [ -z "$dispatch_list" ]; then
+        log "no loop roles enabled -- idle ${EMPTY_IDLE}s"
+        heartbeat "idle" "no loop roles enabled -- idle" "$(( $(date -u +%s) + EMPTY_IDLE ))"
+        sleep "$EMPTY_IDLE"; continue
+      fi
     fi
     # shellcheck disable=SC2086  # intentional split: names are [A-Za-z0-9._-] tokens
     role="$(select_role "$role_rr" $dispatch_list)"
@@ -1450,7 +1644,11 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # through to dispatch. Runs AFTER the cron/event resolvers above, so
     # scheduled roles fire every active tick regardless of this gate; the
     # skip leaves session_ran untouched (no fabricated session.done edge).
-    if fingerprint_gate "$role"; then
+    # P1 (#345): an in-flight pipeline run means PENDING WORK regardless of
+    # an unchanged world -- the gate still runs first (it computes the
+    # FP_CURRENT that record_fingerprint persists on outcome 0; skipping it
+    # would record a stale fingerprint), but its skip verdict is vetoed.
+    if fingerprint_gate "$role" && ! pipeline_inflight "$role"; then
       fp_skips=$((fp_skips + 1))
       fp_wait="$(fingerprint_backoff "$fp_skips")"
       # Long sleeps would starve the top-of-tick cron/event resolvers -- cap
