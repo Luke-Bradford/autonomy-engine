@@ -214,18 +214,21 @@ EOF
 # the merge chokepoint, right after a landed merge. BEST-EFFORT THROUGHOUT: the
 # merge has already happened, so no hygiene failure may fail the caller (warn +
 # continue, SD-6). Semantics:
-#   - close-refs (Closes/Fixes/Resolves #N in the PR body): verify the issue is
-#     closed (gh auto-close can lag/miss on squash), close it if still open,
-#     board it Done.
+#   - close-refs come from GitHub's OWN closingIssuesReferences (server-side
+#     closing-keyword grammar), never a prose regex -- #301: the old regex
+#     matched NEGATED phrases ("does NOT close #90") and out-closed GitHub.
+#     Done-everywhere VERIFIES GitHub's close (auto-close can lag/miss on
+#     squash), closes it if still open, boards it Done.
 #   - work-claims ("Part of #N" in the body, or "(#N)" in the title) that are
 #     NOT close-refs: still-open multi-slice tickets -> board back to Ready.
 #   - bare prose mentions of #N are deliberately IGNORED -- a PR that discusses
 #     #83 must never move #83's board status.
 # BOARD_SH is an injectable seam for tests; board.sh itself is best-effort by
-# contract (warns + exit 0), belt-and-braces `|| true` anyway. No `local`
-# (values never gate control flow via assignment rc -- prevention-log #2 n/a,
-# but keep the file's declare-then-assign style for rc-bearing reads).
+# contract (warns + exit 0), belt-and-braces `|| true` anyway. Vars are
+# declared local UP FRONT (#286) and assigned separately -- rc-bearing reads
+# keep the declare-then-assign style (prevention-log #2).
 done_everywhere() {
+  local de_pr de_board de_body de_title de_close de_claim de_n de_state de_hit
   de_pr="$1"
   de_board="${BOARD_SH:-$SAFE_MERGE_HOME/bin/board.sh}"
   # skip only when the gh CALL fails -- an EMPTY body is data, not an error
@@ -235,10 +238,19 @@ done_everywhere() {
     return 0
   fi
   de_title="$(gh pr view "$de_pr" --json title --jq .title 2>/dev/null || true)"
+  # #301: the close authority is GitHub's closingIssuesReferences -- the real
+  # closing-keyword grammar, applied server-side, immune to negations and code
+  # fences. A failed CALL skips only the close pass (a missed close is the
+  # safe direction; work-claims below still process); the numeric re-filter is
+  # defense in depth before the values reach gh argv (prevention-log #6).
+  if de_close="$(gh pr view "$de_pr" --json closingIssuesReferences \
+      --jq '.closingIssuesReferences[].number' 2>/dev/null)"; then
+    de_close="$(printf '%s\n' "$de_close" | grep -Eo '^[0-9]+$' | sort -u || true)"
+  else
+    echo "safe_merge: note -- done-everywhere: could not read closing refs for PR #$de_pr; skipping close pass" >&2
+    de_close=""
+  fi
   # every grep tolerates no-match (rc 1) -- extraction must not trip set -e.
-  de_close="$(printf '%s\n' "$de_body" \
-    | grep -iEo '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' \
-    | grep -Eo '[0-9]+' | sort -u || true)"
   de_claim="$( { printf '%s\n' "$de_body" | grep -iEo 'part of[[:space:]]+#[0-9]+' | grep -Eo '[0-9]+' || true; \
                  printf '%s\n' "$de_title" | grep -Eo '\(#[0-9]+\)' | grep -Eo '[0-9]+' || true; } | sort -u)"
   for de_n in $de_close; do
