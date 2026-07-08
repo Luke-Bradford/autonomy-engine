@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loop Canvas · design mockup</title>
+<style>
+/* Tokens verbatim from the control-room system (dashboard_page.html) — this
+   mockup pitches a feature FOR that app, so it wears its skin. */
+:root{--sans:"Avenir Next","Helvetica Neue",system-ui,sans-serif;--mono:"SF Mono",Menlo,ui-monospace,monospace;--r:6px}
+:root[data-theme="dark"]{--bg:#15181d;--panel:#1c2027;--panel2:#20252d;--hair:#2a2f38;--hair2:#333a45;
+  --ink:#e8eaed;--mut:#98a0ab;--dim:#6b7380;--accent:#4c9ee3;--accent-soft:rgba(76,158,227,.14);
+  --ok:#3fb27f;--warn:#d9a13b;--shadow:0 8px 24px -14px rgba(0,0,0,.6)}
+:root[data-theme="light"]{--bg:#f4f5f7;--panel:#fff;--panel2:#f6f7f9;--hair:#e2e4e8;--hair2:#d0d3d9;
+  --ink:#1b1e24;--mut:#5b626c;--dim:#9aa0aa;--accent:#2f7fc9;--accent-soft:rgba(47,127,201,.10);
+  --ok:#2c9c60;--warn:#b9791a;--shadow:0 8px 24px -18px rgba(30,30,30,.3)}
+@media (prefers-color-scheme: light){:root:not([data-theme]){--bg:#f4f5f7;--panel:#fff;--panel2:#f6f7f9;--hair:#e2e4e8;--hair2:#d0d3d9;--ink:#1b1e24;--mut:#5b626c;--dim:#9aa0aa;--accent:#2f7fc9;--accent-soft:rgba(47,127,201,.10);--ok:#2c9c60;--warn:#b9791a;--shadow:0 8px 24px -18px rgba(30,30,30,.3)}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:13.5px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:980px;margin:0 auto;padding:28px 26px 70px}
+h1{font-size:18px;margin:0 0 2px}
+.sub{color:var(--mut);font-size:12.5px;margin-bottom:22px}
+.eyebrow{font-family:var(--mono);font-size:9.5px;letter-spacing:1.4px;text-transform:uppercase;color:var(--dim)}
+/* preset switcher */
+.presets{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 18px}
+.preset{border:1px solid var(--hair2);background:var(--panel);border-radius:var(--r);padding:8px 12px;cursor:pointer;color:var(--mut);font-size:12px;text-align:left}
+.preset b{display:block;color:var(--ink);font-size:12.5px}
+.preset.on{border-color:var(--accent);background:var(--accent-soft);color:var(--ink)}
+.preset:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* the card + canvas */
+.card{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow);padding:16px 18px}
+.card-h{display:flex;align-items:baseline;gap:10px;margin-bottom:14px}
+.card-h .nm{font-weight:600;font-size:15px}
+.card-h .st{font-family:var(--mono);font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:var(--ok);border:1px solid var(--ok);border-radius:3px;padding:1px 6px}
+.canvas{overflow-x:auto;padding:18px 6px 8px}
+.rail{display:flex;align-items:stretch;gap:0;min-width:700px;position:relative}
+.node{flex:1;position:relative;cursor:pointer;border:1px solid var(--hair2);background:var(--panel2);border-radius:var(--r);
+  padding:10px 12px 9px;margin-right:34px;transition:border-color .12s}
+.node:last-child{margin-right:0}
+.node::after{content:"→";position:absolute;right:-26px;top:50%;transform:translateY(-50%);color:var(--dim);font-size:15px}
+.node:last-child::after{content:""}
+.node .k{font-family:var(--mono);font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:var(--dim);display:block;margin-bottom:3px}
+.node .v{font-size:12px;font-weight:500}
+.node .d{font-size:10.5px;color:var(--mut);margin-top:2px}
+.node:hover{border-color:var(--accent)}
+.node.sel{border-color:var(--accent);background:var(--accent-soft)}
+.node.dashed{border-style:dashed}
+.node:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* the loop-back arrow */
+.loopback{min-width:700px;display:flex;align-items:center;gap:8px;color:var(--dim);font-family:var(--mono);font-size:10px;
+  border-left:1px solid var(--hair2);border-bottom:1px solid var(--hair2);border-right:1px solid var(--hair2);
+  border-radius:0 0 var(--r) var(--r);margin:0 8px;padding:5px 12px;justify-content:center}
+/* station editor drawer */
+.drawer{margin-top:16px;border-top:1px solid var(--hair);padding-top:14px;min-height:120px}
+.drawer .eyebrow{margin-bottom:8px;display:block}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.row .lab{font-family:var(--mono);font-size:10px;letter-spacing:.8px;text-transform:uppercase;color:var(--dim);min-width:110px}
+select,input[type=text]{background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);font-family:var(--mono);font-size:11px;border-radius:5px;padding:6px 8px}
+.seg{display:inline-flex;border:1px solid var(--hair2);border-radius:6px;overflow:hidden}
+.seg button{background:transparent;border:0;color:var(--dim);font-family:var(--mono);font-size:10.5px;padding:6px 11px;cursor:pointer}
+.seg button.on{background:var(--accent-soft);color:var(--ink)}
+.chip{display:inline-block;border:1px solid var(--hair2);border-radius:10px;padding:1px 9px;font-family:var(--mono);font-size:10px;color:var(--mut)}
+.tag{font-family:var(--mono);font-size:9px;letter-spacing:.6px;text-transform:uppercase;border-radius:3px;padding:1px 6px}
+.tag.hard{color:var(--ok);border:1px solid var(--ok)}
+.tag.soft{color:var(--warn);border:1px dashed var(--warn)}
+.note{font-size:11px;color:var(--mut);max-width:64ch}
+.legend{display:flex;gap:18px;margin-top:20px;color:var(--dim);font-size:11px;align-items:center;flex-wrap:wrap}
+.legend .sw{display:inline-block;width:22px;height:12px;border-radius:3px;border:1px solid var(--hair2);background:var(--panel2);vertical-align:-2px;margin-right:5px}
+.legend .sw.dash{border-style:dashed;border-color:var(--warn)}
+.legend .sw.lit{border-color:var(--ok);box-shadow:0 0 6px rgba(63,178,127,.4)}
+.node.lit{border-color:var(--ok)}
+.ttoggle{position:fixed;top:14px;right:16px;display:inline-flex;border:1px solid var(--hair2);border-radius:6px;overflow:hidden;background:var(--panel)}
+.ttoggle button{background:transparent;border:0;color:var(--dim);font-family:var(--mono);font-size:11px;padding:6px 9px;cursor:pointer}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="ttoggle"><button onclick="document.documentElement.dataset.theme='dark'">dark</button><button onclick="document.documentElement.dataset.theme='light'">light</button></div>
+<div class="wrap">
+  <span class="eyebrow">design mockup · config-workstreams</span>
+  <h1>The Loop Canvas</h1>
+  <div class="sub">Every workstream's loop, drawn and editable. Click a station to configure it. Pick a loop shape below — the four from the loops article.</div>
+
+  <div class="presets" id="presets"></div>
+
+  <div class="card">
+    <div class="card-h"><span class="nm" id="ws-name">coder</span><span class="st">on</span><span class="eyebrow" id="ws-shape"></span></div>
+    <div class="canvas">
+      <div class="rail" id="rail"></div>
+      <div class="loopback">⟲ &nbsp;repeats until DONE WHEN says stop</div>
+    </div>
+    <div class="drawer" id="drawer"></div>
+  </div>
+
+  <div class="legend">
+    <span><span class="sw"></span>enforced by the engine</span>
+    <span><span class="sw dash"></span>instructed (written into the agent's brief — gates still enforce the hard stop)</span>
+    <span><span class="sw lit"></span>lit = what the last run actually did</span>
+  </div>
+</div>
+
+<script>
+const PRESETS = {
+  coder: {name:"coder", shape:"continuous routine", lit:[0,1,2,3],
+    nodes:[
+      {k:"when", v:"continuously", d:"back-to-back while there's work", hard:true},
+      {k:"pick up", v:"tickets labelled ready · p1 first", d:"from the GitHub board", hard:true},
+      {k:"work", v:"two brains", d:"🧠 fable plans · 🔨 sonnet builds", hard:true},
+      {k:"check", v:"3 checks", d:"ask 🧠 when unsure → 🧠 checks vs plan → review bot + CI", hard:false},
+      {k:"done when", v:"PR merged · ≤6 sessions/day", d:"then back to the board", hard:true},
+    ],
+    drawer:{title:"WORK — who does it",
+      html:`<div class="row"><span class="lab">brains</span>
+        <span class="seg"><button>one brain</button><button class="on">two brains</button></span></div>
+      <div class="row"><span class="lab">🧠 thinking</span><select><option>claude-fable-5</option><option>claude-opus-4-8</option></select>
+        <span class="note">plans · answers when the builder is stuck · checks the result</span></div>
+      <div class="row"><span class="lab">🔨 building</span><select><option>claude-sonnet-5</option><option>claude-haiku-4-5</option></select>
+        <select><option>effort: xhigh</option><option>effort: high</option><option>effort: medium</option></select></div>
+      <div class="row"><span class="lab">fallback</span><select><option>claude-sonnet-4-6</option></select>
+        <span class="chip" title="the CLI switches models itself mid-session and carries ONE effort — pick an effort valid for both">effort: inherits session ⓘ</span></div>
+      <div class="row"><span class="lab">runs as</span><select><option>subscription (default)</option><option>local-llm — local LLM</option></select></div>
+      <div class="row"><span class="lab">instructions</span><button class="preset" style="padding:5px 10px">open the brief ▸</button></div>`}},
+  pm: {name:"board-butler", shape:"on a schedule", lit:[0,2,4],
+    nodes:[
+      {k:"when", v:"every 2 hours", d:"0 */2 * * *", hard:true},
+      {k:"pick up", v:"the whole open board", d:"grooming pass", hard:true},
+      {k:"work", v:"one brain", d:"claude-haiku-4-5 · effort low", hard:true},
+      {k:"check", v:"labels only", d:"never merges, never edits code", hard:false},
+      {k:"done when", v:"board tidy this run", d:"every ticket labelled + prioritised", hard:false},
+    ],
+    drawer:{title:"WHEN — what starts a run",
+      html:`<div class="row"><span class="lab">shape</span>
+        <span class="seg"><button>continuously</button><button class="on">on a schedule</button><button>when something happens</button><button>when I say</button></span></div>
+      <div class="row"><span class="lab">schedule</span><select><option>every 2 hours</option><option>hourly</option><option>daily 09:00</option><option>weekdays 09:00</option><option>custom…</option></select>
+        <span class="chip">next: today 16:00 · 18:00 · 20:00</span></div>`}},
+  qa: {name:"qa-merge-sweeper", shape:"when something happens", lit:[0,1,3,4],
+    nodes:[
+      {k:"when", v:"when a PR opens", d:"also: hourly sweep for approved-unmerged", hard:true},
+      {k:"pick up", v:"that PR", d:"or bot-approved PRs waiting on merge", hard:true},
+      {k:"work", v:"one brain", d:"claude-sonnet-5 · review + verify CI", hard:true},
+      {k:"check", v:"sign-off gate", d:"auto-merge-on-pass — green CI + its approval merges", hard:true},
+      {k:"done when", v:"that PR handled", d:"merged, or findings posted", hard:false},
+    ],
+    drawer:{title:"CHECK — when something needs checking",
+      html:`<div class="row"><span class="lab">its own gate</span>
+        <select><option>auto-merge-on-pass — its sign-off + green CI merges</option><option>wait-for-human — report only, you merge</option></select>
+        <span class="tag hard">enforced</span></div>
+      <div class="row"><span class="lab">then always</span><span class="chip">review bot</span><span class="chip">CI green</span><span class="chip">merge gate (safe_merge)</span><span class="tag hard">enforced</span></div>
+      <div class="row"><span class="lab">in the brief</span><span class="chip">regression sweep weekly</span><span class="tag soft">instructed</span></div>`}},
+  helper:{name:"release-notes", shape:"when I say", lit:[],
+    nodes:[
+      {k:"when", v:"when I say", d:"Run now — never fires on its own", hard:true},
+      {k:"pick up", v:"merges since last run", d:"git history", hard:true},
+      {k:"work", v:"one brain", d:"claude-haiku-4-5 · effort low", hard:true},
+      {k:"check", v:"none", d:"writes a draft, touches nothing", hard:false},
+      {k:"done when", v:"draft posted", d:"one run, then stops", hard:true},
+    ],
+    drawer:{title:"DONE WHEN — definition of done",
+      html:`<div class="row"><span class="lab">hard stops</span><span class="chip">max 1 session per run</span><span class="tag hard">enforced</span></div>
+      <div class="row"><span class="lab">instructed</span><input type="text" value="stop after posting the draft as an issue comment" size="44"><span class="tag soft">instructed</span></div>
+      <div class="row"><span class="note">Structured picks here are written into the agent's brief as its "when to stop" section — the brief stops being the only place the loop is defined.</span></div>`}},
+};
+let CUR="coder", SELNODE=null;
+function render(){
+  const p=PRESETS[CUR];
+  document.getElementById("ws-name").textContent=p.name;
+  document.getElementById("ws-shape").textContent=p.shape;
+  document.getElementById("presets").innerHTML=Object.keys(PRESETS).map(k=>{
+    const q=PRESETS[k];
+    return `<button class="preset ${k===CUR?"on":""}" onclick="pick('${k}')"><b>${q.name}</b>${q.shape}</button>`;
+  }).join("");
+  document.getElementById("rail").innerHTML=p.nodes.map((n,i)=>
+    `<div class="node ${n.hard?"":"dashed"} ${p.lit.indexOf(i)>=0?"lit":""} ${SELNODE===i?"sel":""}" tabindex="0" role="button" onclick="selNode(${i})" onkeydown="if(event.key==='Enter')selNode(${i})">
+      <span class="k">${n.k}</span><span class="v">${n.v}</span><div class="d">${n.d}</div></div>`).join("");
+  const d=document.getElementById("drawer");
+  if(SELNODE===null){
+    d.innerHTML=`<span class="eyebrow">${p.drawer.title}</span>`+p.drawer.html
+      +`<div class="row"><span class="note">…this is the preset's featured station — click any node above to open its editor.</span></div>`;
+  }else{
+    const n=p.nodes[SELNODE];
+    d.innerHTML=`<span class="eyebrow">${n.k} — editing</span>`+(p.drawer.title.toLowerCase().indexOf(n.k)===0?p.drawer.html:
+      `<div class="row"><span class="lab">${n.k}</span><span class="v">${n.v}</span><span class="tag ${n.hard?"hard":"soft"}">${n.hard?"enforced":"instructed"}</span></div>
+       <div class="row"><span class="note">In the build, this drawer holds the real ${n.k.toUpperCase()} controls (they all exist today — this mockup shows where they live).</span></div>`);
+  }
+}
+function pick(k){CUR=k;SELNODE=null;render();}
+function selNode(i){SELNODE=i;render();}
+render();
+</script>
+</body>
+</html>
