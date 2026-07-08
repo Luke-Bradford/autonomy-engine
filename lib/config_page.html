@@ -548,22 +548,50 @@ function credRole(role,label){
    validator's own error -- never blank/default cards (prevention-log 15/18).
    Read-only: structural edits stay config.yaml + PR (SD-28); authoring is
    #326 slice 3 / #87. */
-function orgZone(org){
+/* Plain-English cron for humans; the raw expression stays available. */
+function cronHuman(x){
+  if(!x) return "";
+  const p=(x||"").trim().split(/\s+/);
+  if(p.length!==5) return x;
+  const m=p[0],h=p[1],dom=p[2],mon=p[3],dow=p[4];
+  const pad=n=>("0"+n).slice(-2);
+  if(dom==="*"&&mon==="*"){
+    if(m.indexOf("*/")===0&&h==="*"&&dow==="*") return "every "+m.slice(2)+" min";
+    if(m==="0"&&h==="*"&&dow==="*") return "hourly";
+    if(m==="0"&&h.indexOf("*/")===0&&dow==="*") return "every "+h.slice(2)+" hours";
+    if(/^\d+$/.test(m)&&/^\d+$/.test(h)){
+      const t=pad(h)+":"+pad(m);
+      if(dow==="*") return "daily "+t;
+      if(dow==="1-5") return "weekdays "+t;
+    }
+  }
+  return x;
+}
+function trigHuman(kind,detail){
+  if(kind==="loop") return "continuous (round-robin)";
+  if(kind==="cron"){const hu=cronHuman(detail); return hu===detail?("cron · "+(detail||"—")):(hu+" ("+detail+")");}
+  if(kind==="event") return "when "+(detail||"—");
+  if(kind==="manual") return "manual (Run now only)";
+  return kind+" · "+(detail||"—");
+}
+function orgZone(org,enc){
   if(!org) return "";
   const badge=!org.valid?`<div class="orgbad">⚠ roles config invalid — ${esc(org.error||"unreadable")}</div>`:"";
   const p=org.pair||{}, pl=p.planner||{}, co=p.coder||{};
-  const plTxt=pl.scaffolded?(pl.model||"model unknown"):"not scaffolded — run onboard.sh";
+  const plTxt=pl.scaffolded?(pl.model||"model unknown"):"not set — pick one below";
   const plCls=pl.scaffolded?"":"orgmiss";
+  const plSrc=pl.source==="config-invalid"
+    ?`<span class="orgmodel orgmiss" title="agent.planner.model is not a valid model id — the agent file's model is used instead">⚠ config value invalid</span>`
+    :(pl.source==="agent-file"?`<span class="orgmodel" style="color:var(--dim)" title="from the committed agent file — picking a model below overrides it">agent-file</span>`:"");
   const pair=`<div class="orgpair">
     <span class="orgflow">ticket</span><span class="orgarr">→</span>
-    <span class="orgnode"><b>planner</b> <span class="orgmodel ${plCls}">${esc(plTxt)}</span> plans</span><span class="orgarr">→</span>
-    <span class="orgnode"><b>coder</b> <span class="orgmodel">${esc(co.model||"model unset")}${co.effort?" · "+esc(co.effort):""}</span> executes</span><span class="orgarr">→</span>
-    <span class="orgnode orgdim">unsure? → back to planner</span><span class="orgarr">→</span>
-    <span class="orgnode">PLAN-CHECK</span><span class="orgarr">→</span>
+    <span class="orgnode"><b>planner</b> <span class="orgmodel ${plCls}">${esc(plTxt)}</span> ${plSrc} thinks — plan · structure · goals</span><span class="orgarr">→</span>
+    <span class="orgnode"><b>coder</b> <span class="orgmodel">${esc(co.model||"model unset")}${co.effort?" · "+esc(co.effort):""}</span> builds, asking the planner when unsure</span><span class="orgarr">→</span>
+    <span class="orgnode">planner checks the code against the plan (PLAN-CHECK)</span><span class="orgarr">→</span>
     <span class="orgnode orgdim">review bot · CI · merge gate</span>
   </div>`;
   const rows=(org.roles||[]).map(r=>{
-    const trig=r.trigger_kind==="loop"?"loop · round-robin":r.trigger_kind+" · "+(r.trigger_detail||"—");
+    const trig=trigHuman(r.trigger_kind,r.trigger_detail);
     const bits=[];
     if((r.scope_labels||[]).length) bits.push("scope "+r.scope_labels.join(","));
     if(r.gate) bits.push("gate "+r.gate);
@@ -579,8 +607,12 @@ function orgZone(org){
       +`<span class="orgtrig">${esc(trig)}</span>`
       +`<span class="orgbits">${esc(bits.join(" · "))}</span></div>${notes}`;
   }).join("");
-  return `<div class="orghead">org &amp; workflow<span class="orgct">who runs · when · on what — read-only; add roles via config.yaml roles: (trigger: loop | cron schedule | event on:[…])</span></div>`
-    +badge+pair+`<div class="orgroles">${rows}</div>`;
+  const pairEdit=enc?(
+    `<div class="cfghint" style="margin-top:2px">pick the pair — planner = the thinking tier; the coder model/effort selects above are the building tier:</div>`
+    +cfgFieldList(enc,"agent.planner.model","planner model",(pl.source==="config"?pl.model:""))
+  ):"";
+  return `<div class="orghead">org &amp; workflow<span class="orgct">who runs · when · on what — workstream editors land next slice; the pair is editable below</span></div>`
+    +badge+pair+pairEdit+`<div class="orgroles">${rows}</div>`;
 }
 
 /* ---- 3-ZONE RENDER (slice 2, #326/#191) ------------------------------------
@@ -599,7 +631,7 @@ function renderTree(m){
     const ws=(org.roles||[]).map(w=>{
       const selW=(SEL.repo===r.path&&SEL.ws===w.name)?" sel":"";
       const dot=!w.configured?"na":(w.enabled?"on":"");
-      const trig=w.trigger_kind==="loop"?"loop":(w.trigger_detail||w.trigger_kind);
+      const trig=w.trigger_kind==="loop"?"loop":(w.trigger_kind==="cron"?cronHuman(w.trigger_detail):(w.trigger_detail||w.trigger_kind));
       return `<div class="wsrow${selW}" onclick="selWs('${enc}','${encAttr(w.name)}')">
         <span class="wsdot ${dot}"></span><span class="wsname">${esc(w.name)}</span>
         <span class="wstrig">${trigGlyph(w.trigger_kind)} ${esc(trig)}</span></div>`;
@@ -636,7 +668,7 @@ function renderCanvas(m){
 }
 function wsCard(r,w){
   const org=r.org||{}, pair=org.pair||{};
-  const trig=w.trigger_kind==="loop"?"loop · round-robin":w.trigger_kind+" · "+(w.trigger_detail||"—");
+  const trig=trigHuman(w.trigger_kind,w.trigger_detail);
   const scope=(w.scope_labels||[]).length?w.scope_labels.map(l=>`<span class="wschip">${esc(l)}</span>`).join(""):"<span class='wschip'>whole board</span>";
   const notes=(w.notes||[]).map(n=>`<div class="cfghint">note: ${esc(n)}</div>`).join("");
   const pairRow=(w.name==="coder")?orgZone(org):"";
@@ -669,7 +701,7 @@ function cfgRepoCard(r,i){
       ${cfgFieldList(enc,"agent.model.fallback","fallback",c.fallback)}
       ${cfgSelect(enc,"agent.effort","effort",EFFORT_CHOICES.filter(e=>e),c.effort)}
       ${cfgReadonly("merge gate",c.merge_gate,"structural — edit via config.yaml + PR (#87)")}
-      ${orgZone(r.org)}
+      ${orgZone(r.org,enc)}
     </div>`;
 }
 // board.project_title picker (#170): the title input is backed by a per-repo
@@ -793,14 +825,11 @@ function cfgSave(btn,enc,key){
   }
   // #202/#211: model/effort AND board.owner/board.project_title persist as an
   // untracked local override under var/ (survives the loop's preflight). Keep
-  // this in sync with dashboard_control.OVERLAY_KEYS -- it is the operator-facing
-  // twin. STRUCTURAL keys (merge_gate.strategy, SD-28) never reach cfgSave: they
-  // render read-only (cfgReadonly) and config_set_plan refuses them, so the
-  // config.yaml destination below is only a defensive fallback.
-  const isOverlay=/^(agent\.(model\.(primary|fallback)|effort)|board\.(owner|project_title))$/.test(key);
-  const dest=isOverlay?"a local override under var/ (committed config.yaml unchanged)"
-                      :".autonomy/config.yaml";
-  if(!window.confirm("Write "+key+' = "'+value+'" to '+dest+"?\n\nrepo: "+repo)) return;
+  // Slice 3a (SD-34): every page-editable key lands in the LIVE config
+  // (var/autonomy/config.yaml -- local, immediate, committed file untouched).
+  // STRUCTURAL keys (merge_gate.strategy) never reach cfgSave: they render
+  // read-only and config_set_plan refuses them.
+  if(!window.confirm("Write "+key+' = "'+value+'" to the live config (var/autonomy/config.yaml — local; the committed .autonomy/config.yaml stays untouched)?'+"\n\nrepo: "+repo)) return;
   // saving a board.* key (owner or title) re-reconciles this repo's picker +
   // warning so the datalist/warning never lag the saved value (#170).
   const after=key.indexOf("board.")===0

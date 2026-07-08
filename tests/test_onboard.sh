@@ -103,5 +103,14 @@ printf 'var\n' > "$gi3/.gitignore"
 check "bare 'var' line counts as covered" "0" "$(grep -cx 'var/' "$gi3/.gitignore")"
 rm -rf "$gi3"
 
+
+# --- slice 3a: planner agent path must be gitignored (materialized file) ----
+gp="$(mktemp -d)"
+"$ENGINE_HOME/bin/onboard.sh" "$gp" >/dev/null 2>&1
+check "planner path gitignored on onboard" "0" "$(grep -qx '.claude/agents/planner.md' "$gp/.gitignore" && echo 0 || echo 1)"
+"$ENGINE_HOME/bin/onboard.sh" "$gp" >/dev/null 2>&1
+check "planner ignore line never duplicated" "1" "$(grep -cx '.claude/agents/planner.md' "$gp/.gitignore")"
+rm -rf "$gp"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi

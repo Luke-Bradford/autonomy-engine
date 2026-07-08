@@ -1143,6 +1143,12 @@ def execute_set_model(repo, model, effort, scope):
     plan = dcx.set_model_plan(repo, model, effort, scope)
     if "error" in plan:
         return {"ok": False, "error": plan["error"]}
+    if "live_set" in plan:
+        # Slice 3a (SD-34): default-scope saves land in the var-live shadow.
+        res = dcx.live_scalar_write(repo, plan["live_set"])
+        if not res.get("ok"):
+            return {"ok": False, "error": res.get("error", "write failed")}
+        return {"ok": True, "message": res.get("message", plan.get("message", "done"))}
     try:
         if "overlay" in plan:
             _write_overlay(plan["overlay"], plan["overlay_set"])
@@ -1211,6 +1217,12 @@ def execute_config_set(repo, key, value):
     plan = dcx.config_set_plan(repo, key, value)
     if "error" in plan:
         return {"ok": False, "error": plan["error"]}
+    if "live_set" in plan:
+        # Slice 3a (SD-34): page edits land in the var-live shadow.
+        res = dcx.live_scalar_write(repo, plan["live_set"])
+        if not res.get("ok"):
+            return {"ok": False, "error": res.get("error", "write failed")}
+        return {"ok": True, "message": res.get("message", plan.get("message", "done"))}
     try:
         if "overlay" in plan:
             _write_overlay(plan["overlay"], plan["overlay_set"])

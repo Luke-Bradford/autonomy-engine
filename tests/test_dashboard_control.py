@@ -47,16 +47,17 @@ class TestSetModelPlan(unittest.TestCase):
 
     def test_default_scope_writes_overlay_not_config(self):
         # #202: default-saves route to the untracked overlay (survives the
-        # preflight stash-recovery), NOT the tracked config.yaml.
+        # Slice 3a (SD-34): default scope lands in the var-live shadow, the
+        # overlay write path is retired.
         p = dc.set_model_plan(self.repo, "claude-opus-4-8", "high", "default")
-        self.assertEqual(p["overlay"], "/w/tree/var/autonomy-logs/config-overrides")
-        self.assertEqual(p["overlay_set"], {"model": "claude-opus-4-8",
-                                            "effort": "high"})
+        self.assertEqual(p["live_set"], {"agent.model.primary": "claude-opus-4-8",
+                                         "agent.effort": "high"})
+        self.assertNotIn("overlay", p)
         self.assertNotIn("config_path", p)
 
-    def test_default_scope_model_only_overlay(self):
+    def test_default_scope_model_only_live(self):
         p = dc.set_model_plan(self.repo, "claude-sonnet-5", "", "default")
-        self.assertEqual(p["overlay_set"], {"model": "claude-sonnet-5"})
+        self.assertEqual(p["live_set"], {"agent.model.primary": "claude-sonnet-5"})
 
     def test_rejects_bad_model_string(self):
         for bad in ("opus; rm -rf /", "a b", "x\ny", "claude$(boom)"):
@@ -297,13 +298,12 @@ class TestConfigSetPlan(unittest.TestCase):
             "board.owner": ("board_owner", "some-org"),
             "board.project_title": ("board_project_title", "My Fancy Board"),
         }
-        for key, (short, value) in cases.items():
+        for key, (_short, value) in cases.items():
             p = self.plan(key, value)
             self.assertNotIn("error", p, "%s: %r" % (key, p))
-            self.assertEqual(p["overlay"],
-                             os.path.join(self.repo, "var", "autonomy-logs",
-                                          "config-overrides"))
-            self.assertEqual(p["overlay_set"], {short: value})
+            # Slice 3a (SD-34): every editable key targets the live shadow.
+            self.assertEqual(p["live_set"], {key: value})
+            self.assertNotIn("overlay", p)
             self.assertNotIn("config_path", p)
 
     def test_unknown_key_refused(self):
@@ -322,10 +322,8 @@ class TestConfigSetPlan(unittest.TestCase):
         self.assertIn("error", self.plan("board.project_title", "x" * 300))
 
     def test_values_are_stripped(self):
-        # board.owner now routes to the overlay (#211); the value is still
-        # trimmed before it is persisted.
         p = self.plan("board.owner", "  padded-org  ")
-        self.assertEqual(p["overlay_set"], {"board_owner": "padded-org"})
+        self.assertEqual(p["live_set"], {"board.owner": "padded-org"})
 
 
 class TestRepoRegistryPlans(unittest.TestCase):
@@ -686,3 +684,88 @@ class TestVarLiveWriter(unittest.TestCase):
         self.assertEqual(live["agent"]["model"]["primary"], "claude-sonnet-5")
         self.assertEqual(live["agent"]["model"]["fallback"], "claude-sonnet-5")
         self.assertNotIn("effort", live["agent"])
+
+
+class TestLiveScalarWrite(unittest.TestCase):
+    """Slice 3a: scalar page edits land in the var-live shadow (the overlay
+    write path retires for default-scope saves). Same seeding + refusal
+    semantics as the slice-1 structural writer."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.repo = self._td.name
+        os.makedirs(os.path.join(self.repo, ".autonomy"))
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("agent:\n  model:\n    primary: claude-sonnet-5\n"
+                     "    fallback: claude-sonnet-4-6\n")
+        import subprocess
+        subprocess.run(["git", "init", "-q", self.repo], check=True)
+        with open(os.path.join(self.repo, ".gitignore"), "w") as fh:
+            fh.write("var/\n")
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _live(self):
+        return os.path.join(self.repo, "var", "autonomy", "config.yaml")
+
+    def _parse_live(self):
+        import config_parser
+        with open(self._live()) as fh:
+            return config_parser.parse(fh.read())
+
+    def test_first_write_seeds_and_sets(self):
+        res = dc.live_scalar_write(self.repo, {"agent.model.primary": "claude-opus-4-8"})
+        self.assertTrue(res["ok"], res)
+        cfg = self._parse_live()
+        self.assertEqual(cfg["agent"]["model"]["primary"], "claude-opus-4-8")
+        self.assertEqual(cfg["agent"]["model"]["fallback"], "claude-sonnet-4-6")
+
+    def test_planner_model_key_writes(self):
+        res = dc.live_scalar_write(self.repo, {"agent.planner.model": "claude-opus-4-8"})
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(self._parse_live()["agent"]["planner"]["model"],
+                         "claude-opus-4-8")
+
+    def test_overlay_folds_and_retires_on_first_scalar_write(self):
+        logdir = os.path.join(self.repo, "var", "autonomy-logs")
+        os.makedirs(logdir)
+        with open(os.path.join(logdir, "config-overrides"), "w") as fh:
+            fh.write("effort=medium\n")
+        res = dc.live_scalar_write(self.repo, {"agent.model.primary": "claude-opus-4-8"})
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(self._parse_live()["agent"]["effort"], "medium")
+        self.assertFalse(os.path.exists(os.path.join(logdir, "config-overrides")))
+
+    def test_refused_when_var_not_ignored(self):
+        os.unlink(os.path.join(self.repo, ".gitignore"))
+        res = dc.live_scalar_write(self.repo, {"agent.effort": "low"})
+        self.assertFalse(res["ok"])
+        self.assertFalse(os.path.exists(self._live()))
+
+    def test_config_set_plan_targets_live_not_overlay(self):
+        plan = dc.config_set_plan(self.repo, "agent.model.primary", "claude-opus-4-8")
+        self.assertNotIn("overlay", plan)
+        self.assertEqual(plan.get("live_set"), {"agent.model.primary": "claude-opus-4-8"})
+
+    def test_config_set_plan_planner_model_validated(self):
+        bad = dc.config_set_plan(self.repo, "agent.planner.model", "not a model")
+        self.assertIn("error", bad)
+        good = dc.config_set_plan(self.repo, "agent.planner.model", "claude-opus-4-8")
+        self.assertEqual(good.get("live_set"), {"agent.planner.model": "claude-opus-4-8"})
+
+    def test_set_model_plan_default_scope_targets_live(self):
+        plan = dc.set_model_plan(self.repo, "claude-opus-4-8", "high", "default")
+        self.assertNotIn("overlay", plan)
+        self.assertEqual(plan.get("live_set"),
+                         {"agent.model.primary": "claude-opus-4-8",
+                          "agent.effort": "high"})
+
+    def test_create_scalar_refuses_over_top_level_scalar(self):
+        # CP2: `agent: something` (scalar) must refuse, never be silently
+        # replaced by a mapping.
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("agent: claude\n")
+        res = dc.live_scalar_write(self.repo, {"agent.planner.model": "claude-opus-4-8"})
+        self.assertFalse(res["ok"])
+        self.assertFalse(os.path.exists(self._live()))
