@@ -682,7 +682,7 @@ function tileCard(r,lane,key){
   // lane's work as its own (#234 display lie). Reduced tile: service truth +
   // an explicit no-data note, nothing borrowed.
   if(sibSt){
-    return `<div class="tile" onclick="drillTo(event,'${encAttr(key)}')" title="click to focus this lane">
+    return `<div class="tile" data-lane-key="${encodeURIComponent(key)}" onclick="drillTo(event,this)" title="click to focus this lane">
       <div class="th">${token(sibSt,true)}<span class="nm">${esc(dispName(r.name))} / ${esc(lane)}</span></div>
       <div class="tnow">no lane-scoped session data — sessions/tickets are recorded per repo</div></div>`;
   }
@@ -715,7 +715,7 @@ function tileCard(r,lane,key){
   const cost=cs.cost_usd?`<span><b class="mono">$${cs.cost_usd.toFixed(2)}</b></span>`:"";
   const pace=paceFlag(r,cs.role||"coder",busy?cs.started_epoch:null);
   const lastAct=cs.updated_at?`<span>active <b class="agox mono" data-t="${cs.updated_at}">${ago(nowS()-cs.updated_at)} ago</b></span>`:"";
-  return `<div class="tile" onclick="drillTo(event,'${encAttr(key)}')" title="click to focus this lane">
+  return `<div class="tile" data-lane-key="${encodeURIComponent(key)}" onclick="drillTo(event,this)" title="click to focus this lane">
     <div class="th">${token(st,true)}<span class="nm">${esc(nm)}</span><span class="trole">${esc(cs.role||"coder")}</span>${tno}</div>
     ${track}${gate}<div class="tnow">${now}</div>
     <div class="tmeta">${elapsed}${toks}${cost}${pace}${lastAct}</div></div>`;
@@ -1082,23 +1082,33 @@ function validPins(repos){
   [...PINNED].forEach(k=>{if(!ok(k))PINNED.delete(k);});
   return [...PINNED];
 }
-function togglePin(encKey,btn){
-  const k=decodeURIComponent(encKey);
+// the key rides the SAME data-lane-key attribute the delegated select
+// listener reads (single encodeURIComponent write, single decodeURIComponent
+// read -- one encoding contract, no inline-arg re-encode to get wrong).
+function togglePin(btn){
+  const h=btn&&btn.closest&&btn.closest("[data-lane-key]");
+  if(!h)return;                    // no carrier -> no-op, never a throw
+  const k=decodeURIComponent(h.getAttribute("data-lane-key"));
   if(PINNED.has(k))PINNED.delete(k);else PINNED.add(k);
-  if(btn)btn.blur();               // click-and-done: never a held node (prevention-log #16)
+  btn.blur();                      // click-and-done: never a held node (prevention-log #16)
   if(LAST){renderRepos(LAST.repos);renderFocus(LAST.repos);}
 }
 // tile click -> drill back to the single view. Guards interactive descendants
-// so a future button/link inside a tile can never drill through.
-function drillTo(ev,encKey){
+// so a future button/link inside a tile can never drill through. The tile
+// carries its own data-lane-key (#focus has no delegated select listener, so
+// the attribute can't double-trigger).
+function drillTo(ev,el){
   if(ev&&ev.target&&ev.target.closest&&ev.target.closest("button,a,select,input"))return;
-  PINNED.clear();selectLane(decodeURIComponent(encKey));
+  const k=el&&el.getAttribute&&el.getAttribute("data-lane-key");
+  if(!k)return;
+  PINNED.clear();selectLane(decodeURIComponent(k));
 }
-// the pin toggle rendered inside a lane select target (repo-h / lgrp-h). A
+// the pin toggle rendered inside a lane select target (repo-h / lgrp-h) --
+// every call site is inside the data-lane-key carrier togglePin reads. A
 // real <button> so the delegated #repos select listener ignores its clicks.
 function pinBtn(lk){
   const on=PINNED.has(lk);
-  return `<button class="pinbtn${on?" on":""}" title="${on?"unpin from compare":"pin to compare — 2+ pinned lanes tile the center"}" onclick="togglePin('${encAttr(lk)}',this)">📌</button>`;
+  return `<button class="pinbtn${on?" on":""}" title="${on?"unpin from compare":"pin to compare — 2+ pinned lanes tile the center"}" onclick="togglePin(this)">📌</button>`;
 }
 function renderRepos(repos){
   $("h-repos").textContent=repos.length;
