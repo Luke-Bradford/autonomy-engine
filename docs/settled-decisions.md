@@ -201,6 +201,20 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     node-sessions". Docs and briefs must not imply concurrency P2a does
     not have. *(#349 kickoff comment; plans/2026-07-09-sequencer-p2a-typed-edges.md.)*
 
+36. **SD-12 amended for pipelines (P2b): one DISPATCH per loop iteration; a
+    dispatch may fan out up to the pipeline's ENFORCED `caps.max_parallel`
+    concurrent node-sessions for that role** (operator pre-authorized via the
+    SD-35 split option, 2026-07-09, #351). Round-robin fairness between
+    roles, re-enumeration every tick, and pause/stop responsiveness between
+    iterations survive; sequential pipelines (`max_parallel` absent/1) keep
+    the one-session path byte-identical. Fan-out sessions run in EPHEMERAL
+    WORKTREES under `var/autonomy-worktrees/` (two sessions in one checkout
+    collide on the git index); in-flight runs join the dispatch list
+    regardless of trigger type (a cron/event fire only STARTS a run).
+    Branch-level races between parallel sessions pushing one branch are the
+    briefs' concern (pull-rebase-push), stated in the template README —
+    never silently absorbed. *(#351; plans/2026-07-09-sequencer-p2b-parallel-dispatch.md.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could
