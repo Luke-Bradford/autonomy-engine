@@ -2,7 +2,10 @@
 The safety-critical decision (what a control action does) is a pure function
 returning a plan; the server merely executes it. So every safety property is
 testable here without running launchctl or touching real LaunchAgents."""
+import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -934,3 +937,182 @@ class TestWorkstreamAuthoring(unittest.TestCase):
         res = dc.ws_set(self.repo, "pm", {"account": ""})
         self.assertTrue(res["ok"], res)
         self.assertNotIn("account", self._roles()["pm"])
+
+
+class PipelineSaveTest(unittest.TestCase):
+    """P3b (#365): the var-shadow pipeline writer. SD-29/SD-34 discipline --
+    validate-before, stage + re-validate + deep-compare, reader-safe atomic
+    publish, snapshot rollback; every refusal leaves the shadow byte-identical."""
+
+    def _repo(self, gitignore="var/\n"):
+        repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        if gitignore is not None:
+            with open(os.path.join(repo, ".gitignore"), "w") as fh:
+                fh.write(gitignore)
+        committed = os.path.join(repo, ".autonomy", "pipelines", "flow")
+        os.makedirs(committed)
+        self.doc = {"name": "flow", "version": 1,
+                    "caps": {"max_sessions_per_run": 16},
+                    "nodes": [{"id": "a", "type": "pick", "brief_ref": "a.md"},
+                              {"id": "b", "type": "check", "brief_ref": "b.md"}],
+                    "edges": [{"from": "a", "to": "b", "on": "success"}]}
+        with open(os.path.join(committed, "pipeline.json"), "w") as fh:
+            json.dump(self.doc, fh)
+        for n in ("a", "b"):
+            with open(os.path.join(committed, n + ".md"), "w") as fh:
+                fh.write("brief %s\n" % n)
+        return repo
+
+    def _shadow(self, repo):
+        return os.path.join(repo, "var", "autonomy", "pipelines", "flow")
+
+    def test_valid_save_writes_the_shadow(self):
+        repo = self._repo()
+        doc = dict(self.doc, version=2)
+        res = dc.pipeline_save(repo, "flow", doc, {})
+        self.assertTrue(res["ok"], res)
+        p = os.path.join(self._shadow(repo), "pipeline.json")
+        self.assertTrue(os.path.isfile(p))
+        with open(p) as fh:
+            self.assertEqual(json.load(fh)["version"], 2)
+        self.assertTrue(os.path.isfile(os.path.join(self._shadow(repo), "a.md")))
+
+    def test_edited_brief_written_seed_untouched_survives(self):
+        repo = self._repo()
+        res = dc.pipeline_save(repo, "flow", self.doc, {"a.md": "NEW a\n"})
+        self.assertTrue(res["ok"], res)
+        with open(os.path.join(self._shadow(repo), "a.md")) as fh:
+            self.assertEqual(fh.read(), "NEW a\n")
+        self.assertTrue(os.path.isfile(os.path.join(self._shadow(repo), "b.md")))
+
+    def test_invalid_doc_refused_shadow_untouched(self):
+        repo = self._repo()
+        bad = dict(self.doc)
+        bad["nodes"] = [{"id": "a", "type": "no_such_type", "brief_ref": "a.md"}]
+        res = dc.pipeline_save(repo, "flow", bad, {})
+        self.assertFalse(res["ok"])
+        self.assertFalse(os.path.isdir(self._shadow(repo)))
+
+    def test_brief_traversal_refused(self):
+        repo = self._repo()
+        res = dc.pipeline_save(repo, "flow", self.doc, {"../evil.md": "x"})
+        self.assertFalse(res["ok"])
+        self.assertIn("sibling basename", res["error"])
+        self.assertFalse(os.path.isdir(self._shadow(repo)))
+
+    def test_bad_name_charset_refused(self):
+        repo = self._repo()
+        res = dc.pipeline_save(repo, "../flow", self.doc, {})
+        self.assertFalse(res["ok"])
+
+    def test_gitignore_missing_refused(self):
+        repo = self._repo(gitignore=None)     # var/ NOT ignored
+        res = dc.pipeline_save(repo, "flow", self.doc, {})
+        self.assertFalse(res["ok"])
+        self.assertIn("gitignore", res["error"])
+        self.assertFalse(os.path.isdir(self._shadow(repo)))
+
+    def test_name_mismatch_refused(self):
+        # the doc's own name must match the save target (Codex CP1 #2).
+        repo = self._repo()
+        res = dc.pipeline_save(repo, "flow", dict(self.doc, name="other"), {})
+        self.assertFalse(res["ok"])
+        self.assertIn("must match", res["error"])
+        self.assertFalse(os.path.isdir(self._shadow(repo)))
+
+    def test_no_committed_dir_refused_even_with_orphan_shadow(self):
+        # BOUND pipelines only: a name with no committed pack is not editable
+        # even if an orphan shadow exists (Codex CP1 #5).
+        repo = self._repo()
+        orphan = os.path.join(repo, "var", "autonomy", "pipelines", "ghost")
+        os.makedirs(orphan)
+        with open(os.path.join(orphan, "pipeline.json"), "w") as fh:
+            json.dump(dict(self.doc, name="ghost"), fh)
+        res = dc.pipeline_save(repo, "ghost", dict(self.doc, name="ghost"), {})
+        self.assertFalse(res["ok"])
+        self.assertIn("no committed pipeline", res["error"])
+
+    def test_only_referenced_briefs_copied_no_symlinks(self):
+        # staging is built from the doc's brief_refs -- never a blind copytree,
+        # so stray files and symlinks in the pack are NOT laundered (Codex #7).
+        repo = self._repo()
+        committed = os.path.join(repo, ".autonomy", "pipelines", "flow")
+        with open(os.path.join(committed, "extra.txt"), "w") as fh:
+            fh.write("junk\n")
+        os.symlink("/etc/passwd", os.path.join(committed, "evil.md"))
+        self.assertTrue(dc.pipeline_save(repo, "flow", self.doc, {})["ok"])
+        shadow = self._shadow(repo)
+        self.assertFalse(os.path.exists(os.path.join(shadow, "extra.txt")))
+        self.assertFalse(os.path.lexists(os.path.join(shadow, "evil.md")))
+        self.assertEqual(sorted(os.listdir(shadow)),
+                         ["a.md", "b.md", "pipeline.json"])
+
+    def test_invalid_shadow_not_used_as_seed(self):
+        # a present-but-invalid shadow is NEVER trusted as a brief seed (no
+        # laundering; Codex CP1 #6/#7): untouched briefs reset to committed.
+        repo = self._repo()
+        self.assertTrue(dc.pipeline_save(repo, "flow", dict(self.doc, version=2),
+                                         {"a.md": "shadow a\n"})["ok"])
+        shadow = self._shadow(repo)
+        with open(os.path.join(shadow, "pipeline.json"), "w") as fh:
+            fh.write("{ not json")                    # shadow now INVALID
+        self.assertTrue(dc.pipeline_save(repo, "flow",
+                                         dict(self.doc, version=3), {})["ok"])
+        with open(os.path.join(shadow, "a.md")) as fh:
+            self.assertEqual(fh.read(), "brief a\n")  # committed's, not laundered
+
+    def test_install_failure_rolls_back_byte_identical(self):
+        # fault injection on the atomic pipeline.json publish -> the prior
+        # shadow is restored byte-identical (Codex CP1 #4).
+        from unittest import mock
+        repo = self._repo()
+        self.assertTrue(dc.pipeline_save(repo, "flow",
+                                         dict(self.doc, version=5), {})["ok"])
+        p = os.path.join(self._shadow(repo), "pipeline.json")
+        with open(p, "rb") as fh:
+            before = fh.read()
+        real = os.replace
+        def boom(src, dst):
+            if str(dst).endswith("pipeline.json"):
+                raise OSError("disk full")
+            return real(src, dst)
+        with mock.patch("dashboard_control.os.replace", boom):
+            res = dc.pipeline_save(repo, "flow", dict(self.doc, version=6), {})
+        self.assertFalse(res["ok"])
+        with open(p, "rb") as fh:
+            self.assertEqual(fh.read(), before)       # rolled back byte-identical
+
+    def test_oversize_doc_refused(self):
+        # the serialized pipeline.json is capped too, not just briefs (Codex #9).
+        repo = self._repo()
+        huge = dict(self.doc)
+        huge["nodes"] = self.doc["nodes"] + [
+            {"id": "n%d" % i, "type": "pick", "brief_ref": "a.md"}
+            for i in range(20000)]                    # serialized > 200 KiB
+        res = dc.pipeline_save(repo, "flow", huge, {})
+        self.assertFalse(res["ok"])
+        self.assertIn("exceeds", res["error"])
+
+    def test_refusal_over_existing_shadow_leaves_it_byte_identical(self):
+        repo = self._repo()
+        self.assertTrue(dc.pipeline_save(repo, "flow",
+                                         dict(self.doc, version=5), {})["ok"])
+        p = os.path.join(self._shadow(repo), "pipeline.json")
+        with open(p, "rb") as fh:
+            before = fh.read()
+        bad = {"name": "flow", "version": 6, "nodes": "not a list"}
+        res = dc.pipeline_save(repo, "flow", bad, {})
+        self.assertFalse(res["ok"])
+        with open(p, "rb") as fh:
+            self.assertEqual(fh.read(), before)       # byte-identical
+
+    def test_second_save_over_shadow_seeds_from_shadow_not_committed(self):
+        repo = self._repo()
+        self.assertTrue(dc.pipeline_save(repo, "flow", dict(self.doc, version=2),
+                                         {"a.md": "shadow a\n"})["ok"])
+        self.assertTrue(dc.pipeline_save(repo, "flow", dict(self.doc, version=3),
+                                         {})["ok"])
+        with open(os.path.join(self._shadow(repo), "a.md")) as fh:
+            self.assertEqual(fh.read(), "shadow a\n")  # from shadow, not committed
