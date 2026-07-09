@@ -36,17 +36,158 @@ VALID_CONTEXTS = ("project",)          # "own" is P2+ (dishonest to accept uncon
 # polling; ask_human: SD-32 park/resume; handoff: enforced wiring;
 # run_command: allowlist gate) are REJECTED like branch containers, not
 # silently run as weaker plain sessions (the honesty invariant).
-NODE_TYPES = frozenset((
-    "pick", "agent_task", "plan", "gather", "check", "subagent_review",
-    "summarize", "notify", "transform", "triage", "journal", "housekeep",
-    "git_ops",
-))
-DEFERRED_NODE_TYPES = {
-    "wait_watch": "P5 (enforced engine polling)",
-    "ask_human": "P5 (SD-32 park/resume machinery)",
-    "handoff": "P2 (enforced wiring)",
-    "run_command": "P5 (allowlist gate)",
+# SPEC_SHEETS -- the activity-catalog SSOT (v5 spec section 4; P3a #357).
+# One entry per activity type + container kind: what the property pane
+# renders (required first, optionals collapsed, guarded locked) and what
+# the palette offers. NODE_TYPES / DEFERRED_NODE_TYPES are DERIVED from it
+# below, so the canvas and the validator cannot drift. `deferred` entries
+# carry the validator's exact refusal reason in `deferred_reason`.
+SPEC_SHEETS = {
+    "pick": {
+        "label": "pick", "group": "source", "icon": "\U0001f3af",
+        "required": [["source", "board query / PR set / file glob / git range"]],
+        "optional": [["order", "priority / age"], ["limit", "max items"],
+                     ["plan_source", "where an attached plan lives"]],
+        "emits": "the picked item downstream activities reference",
+        "deferred": False, "guarded": []},
+    "agent_task": {
+        "label": "agent task", "group": "work", "icon": "\U0001f528",
+        "required": [["brief_ref", "prompt brief (sibling file) or library step"],
+                     ["runs_as", "agent + model"]],
+        "optional": [["effort", "reasoning effort"], ["allowed_tools", ""],
+                     ["max_turns", ""], ["budget_usd", ""],
+                     ["permission_mode", "beyond acceptEdits = frictioned"]],
+        "emits": "session outcome (success/error)",
+        "deferred": False, "guarded": ["budget ceilings"]},
+    "plan": {
+        "label": "plan", "group": "work", "icon": "\U0001f9e0",
+        "required": [["runs_as", "agent + model"]],
+        "optional": [["plan_template", ""], ["vagueness_rules", ""]],
+        "emits": "verdict viable / too-vague (branch source)",
+        "deferred": False, "guarded": []},
+    "gather": {
+        "label": "gather / research", "group": "work", "icon": "\U0001f50e",
+        "required": [["collect", "what to collect"]],
+        "optional": [["web_search", "on/off"], ["sources", ""]],
+        "emits": "collected context for downstream briefs",
+        "deferred": False, "guarded": []},
+    "check": {
+        "label": "check", "group": "verify", "icon": "✔️",
+        "required": [["verify", "suite / review lens / browser / custom"]],
+        "optional": [["pass_criteria", ""]],
+        "emits": "success/failure -- the natural branch source",
+        "deferred": False, "guarded": []},
+    "subagent_review": {
+        "label": "subagent review", "group": "verify", "icon": "\U0001f9d0",
+        "required": [["lens", "code / security / UX"]],
+        "optional": [["model_override", ""]],
+        "emits": "review verdict",
+        "deferred": False, "guarded": []},
+    "triage": {
+        "label": "triage", "group": "verify", "icon": "\U0001f3f7",
+        "required": [["set", "the item set"], ["vocabulary", "labels"]],
+        "optional": [["sibling_references", ""]],
+        "emits": "labelled set",
+        "deferred": False, "guarded": []},
+    "summarize": {
+        "label": "summarize", "group": "communicate", "icon": "\U0001f4dd",
+        "required": [["destination", "issue/PR comment, new ticket, needs-you"]],
+        "optional": [["template", ""]],
+        "emits": "digest at the destination",
+        "deferred": False, "guarded": []},
+    "notify": {
+        "label": "notify", "group": "communicate", "icon": "\U0001f4e3",
+        "required": [["destination", "issue/PR comment, new ticket, needs-you"]],
+        "optional": [["template", ""]],
+        "emits": "notification at the destination",
+        "deferred": False, "guarded": []},
+    "ask_human": {
+        "label": "ask human", "group": "communicate", "icon": "\U0001f64b",
+        "required": [["question", "SD-32 escalation schema"]],
+        "optional": [["answer_chips", ""], ["default_if_ignored", ""]],
+        "emits": "the answer (parks; resume is an event)",
+        "deferred": True, "deferred_reason": "P5 (SD-32 park/resume machinery)",
+        "guarded": []},
+    "handoff": {
+        "label": "handoff", "group": "communicate", "icon": "\U0001f91d",
+        "required": [["target", "assignment / stage"]],
+        "optional": [["payload_note", ""]],
+        "emits": "enforced wiring to the target",
+        "deferred": True, "deferred_reason": "P2 (enforced wiring)",
+        "guarded": []},
+    "transform": {
+        "label": "transform", "group": "work", "icon": "\U0001f6e0",
+        "required": [["file_set", ""], ["instruction", ""]],
+        "optional": [["per_file", "per-file vs whole-set"]],
+        "emits": "transformed file set",
+        "deferred": False, "guarded": []},
+    "journal": {
+        "label": "journal", "group": "ops", "icon": "\U0001f4d3",
+        "required": [["record", "what to record"]],
+        "optional": [],
+        "emits": "run record",
+        "deferred": False, "guarded": []},
+    "housekeep": {
+        "label": "housekeep", "group": "ops", "icon": "\U0001f9f9",
+        "required": [["clean", "what to clean"]],
+        "optional": [],
+        "emits": "cleaned state",
+        "deferred": False, "guarded": []},
+    "git_ops": {
+        "label": "git ops", "group": "ops", "icon": "\U0001f33f",
+        "required": [["op", "branch / commit / push / PR / merge-via-gate"]],
+        "optional": [],
+        "emits": "git state change",
+        "deferred": False, "guarded": ["merge always via safe_merge"]},
+    "wait_watch": {
+        "label": "wait / watch", "group": "ops", "icon": "⏳",
+        "required": [["condition", "CI state / PR state / file / duration"]],
+        "optional": [["timeout", "timeout -> failure edge"]],
+        "emits": "condition met, or timeout failure",
+        "deferred": True, "deferred_reason": "P5 (enforced engine polling)",
+        "guarded": []},
+    "run_command": {
+        "label": "run command", "group": "ops", "icon": "＞_",
+        "required": [["command", ""]],
+        "optional": [["cwd", ""], ["timeout", ""]],
+        "emits": "command outcome",
+        "deferred": True, "deferred_reason": "P5 (allowlist gate)",
+        "guarded": ["allowlist"]},
+    "loop": {
+        "label": "loop container", "group": "structure", "icon": "⟲",
+        "required": [["exit_when", "verdict condition"],
+                     ["max_rounds", "1..99"], ["children", ""]],
+        "optional": [["runs_as", ""], ["join", "all | any"]],
+        "emits": "container outcome (exit=success, cap=failure+capped)",
+        "deferred": False, "guarded": ["caps"]},
+    "stage": {
+        "label": "stage container", "group": "structure", "icon": "\U0001f464",
+        "required": [["children", ""]],
+        "optional": [["runs_as", "shared runs-as for children"],
+                     ["join", "all | any"]],
+        "emits": "container outcome (last child success)",
+        "deferred": False, "guarded": []},
+    "branch": {
+        "label": "branch", "group": "structure", "icon": "⚖️",
+        "required": [["on", "verdict-labelled paths"]],
+        "optional": [],
+        "emits": "labelled path selection",
+        "deferred": True, "deferred_reason": "P2c+ (verdict channel covers "
+        "two-way today; branch containers later)", "guarded": []},
+    "for_each": {
+        "label": "for each", "group": "structure", "icon": "∀",
+        "required": [["over", "item set (e.g. file glob)"]],
+        "optional": [["max_parallel", ""]],
+        "emits": "one child run per item",
+        "deferred": True, "deferred_reason": "P5 (bounded fan-out per item)",
+        "guarded": ["caps"]},
 }
+NODE_TYPES = frozenset(
+    k for k, v in SPEC_SHEETS.items()
+    if v["group"] != "structure" and not v["deferred"])
+DEFERRED_NODE_TYPES = dict(
+    (k, v["deferred_reason"]) for k, v in SPEC_SHEETS.items()
+    if v["group"] != "structure" and v["deferred"])
 _NODE_KEYS = frozenset(("id", "type", "brief_ref", "legacy_prompt",
                         "runs_as", "context", "join"))
 _CONTAINER_KEYS = frozenset(("id", "kind", "children", "exit_when",
@@ -108,12 +249,15 @@ def _top_units(doc):
     for con in doc.get("containers") or []:
         if isinstance(con, dict):
             for c in (con.get("children") or []):
-                child_to_con[c] = con.get("id")
+                if isinstance(c, str):     # garbage child = not a mapping key
+                    child_to_con[c] = con.get("id")
     out, seen_con = [], set()
     for node in doc.get("nodes") or []:
         if not isinstance(node, dict):
             continue
         nid = node.get("id")
+        if not isinstance(nid, str):       # unhashable/garbage id: the
+            continue                       # validator names it; skip here
         con = child_to_con.get(nid)
         if con is None:
             out.append(nid)
@@ -121,6 +265,25 @@ def _top_units(doc):
             seen_con.add(con)
             out.append(con)
     return out
+
+
+def valid_pipeline_name(name):
+    """The ONE charset gate for `roles.<r>.pipeline` bindings -- shared by
+    resolve_pipeline (dispatch, raises) and the dashboard viewer (display,
+    degrades), so what dispatch refuses can never render healthy (CP2)."""
+    return bool(_is_str(name) and _NAME_RE.match(name))
+
+
+def effective_edges(doc):
+    """Declared edges, or -- when the document declares none (P1 docs,
+    wrapped roles) -- the implicit success-chain over top-level units.
+    Pure; the walker (start_run) and the canvas viewer share this so the
+    graph they act on / display is one and the same."""
+    if doc.get("edges"):
+        return doc["edges"]
+    order = _top_units(doc)
+    return [{"from": a, "to": b, "on": "success"}
+            for a, b in zip(order, order[1:])]
 
 
 def _validate_runs_as(where, runs_as, errors):
@@ -264,7 +427,7 @@ def validate_doc(doc, pipeline_dir=None):
                           "branch is P2, for_each is P5)" % (where, kind))
         children = con.get("children")
         if not isinstance(children, list) or not children or not all(
-                c in ids for c in children):
+                isinstance(c, str) and c in ids for c in children):
             errors.append("%s: children must be a non-empty list of node ids"
                           % where)
             children = []
@@ -301,7 +464,10 @@ def validate_doc(doc, pipeline_dir=None):
     child_ids = set()
     for c in containers:
         if isinstance(c, dict):
-            child_ids.update(c.get("children") or [])
+            # non-str entries already earned a children error above; keep
+            # this set op TOTAL on garbage (unhashable dict, CP2)
+            child_ids.update(x for x in (c.get("children") or [])
+                             if isinstance(x, str))
     unit_order = _top_units(doc)
     units = set(unit_order)
     fwd = {}                      # non-back adjacency (cycle + ancestor checks)
@@ -503,7 +669,7 @@ def resolve_pipeline(repo, role):
         _check_legacy_prompts(repo, doc, "wrapped role %r" % role)
         return doc, {"pipeline_dir": None, "wrapped": True,
                      "from": doc["name"], "from_version": 0}
-    if not _NAME_RE.match(binding):
+    if not valid_pipeline_name(binding):
         raise PipelineError("roles.%s.pipeline %r has invalid charset"
                             % (role, binding))
     pdir = os.path.join(repo, ".autonomy", "pipelines", binding)
@@ -565,13 +731,10 @@ def _load_state(state_path):
 def start_run(repo, role, state_path, lane=""):
     doc, meta = resolve_pipeline(repo, role)
     doc = dict(doc)
-    if not doc.get("edges"):
-        # Implicit chain synthesis: P1 docs and wrapped roles become the
-        # equivalent success-chain graph -- ONE walk engine, stored into the
-        # state's embedded doc so a resumed run is stable.
-        order = _top_units(doc)
-        doc["edges"] = [{"from": a, "to": b, "on": "success"}
-                        for a, b in zip(order, order[1:])]
+    # Implicit chain synthesis: P1 docs and wrapped roles become the
+    # equivalent success-chain graph -- ONE walk engine, stored into the
+    # state's embedded doc so a resumed run is stable.
+    doc["edges"] = effective_edges(doc)
     # run_id: role[--lane]-timestamp-pid -- pid disambiguates same-second
     # starts across lanes/tests (second-granularity ids collide, weakening
     # the trust-ledger identity field).

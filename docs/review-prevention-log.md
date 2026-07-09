@@ -353,3 +353,21 @@ add the targeted `# shellcheck disable=SCnnnn` + one-line justification AT
 WRITE TIME rather than assuming a locally-clean pass covers CI. If CI flags a
 check the local binary doesn't, fix + note the version drift — don't argue
 with the older tool.
+
+## 21. A review fix is a diff too — run the same-class scan on the FIX before pushing it
+
+*Origin: 2026-07-09, PR #358 (#357 P3a canvas viewer).* Review round 1
+flagged ONE call site in `build_pipeline_view` escaping the builder's
+totality contract (`role_settings` guarded only for `KeyError`). The fix
+widened exactly that site and pushed — and round 2 came back REQUEST
+CHANGES with the two SIBLINGS (`wrap_role` unguarded, `ledger` guarded too
+narrowly). The pre-flight-review skill's "required same-class scan" was
+applied to the feature diff but NOT to the follow-up fix, which is itself a
+diff introducing (or re-asserting) a pattern. One extra grep at fix time —
+"list every external call in this function and its guard" — would have
+saved a full review round. **Rule: when a review finding names an instance
+of a CLASS (a missing guard, a masked rc, an unvalidated input), fix EVERY
+occurrence of the class in the touched scope in the same commit, and say so
+in the reply ("scanned siblings: X, Y also widened / already guarded
+because …"). A one-site fix to a class finding is a partial fix the next
+round will find.**

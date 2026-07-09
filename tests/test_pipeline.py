@@ -1190,6 +1190,104 @@ class StarterTemplateTest(unittest.TestCase):
         self.assertTrue(any(n.get("join") == "any" for n in doc["nodes"]))
 
 
+class SpecSheetTest(unittest.TestCase):
+    """SPEC_SHEETS is the activity-catalog SSOT (P3a, #357): the validator
+    vocabulary is DERIVED from it so palette/pane/validator cannot drift."""
+
+    def test_catalog_covers_validator_vocabulary(self):
+        sheet_nodes = set(k for k, v in pipeline.SPEC_SHEETS.items()
+                          if v["group"] != "structure")
+        self.assertEqual(
+            sheet_nodes,
+            set(pipeline.NODE_TYPES) | set(pipeline.DEFERRED_NODE_TYPES))
+
+    def test_deferred_flag_matches_validator(self):
+        for k in pipeline.DEFERRED_NODE_TYPES:
+            self.assertTrue(pipeline.SPEC_SHEETS[k]["deferred"], k)
+        for k in pipeline.NODE_TYPES:
+            self.assertFalse(pipeline.SPEC_SHEETS[k]["deferred"], k)
+
+    def test_deferred_reasons_stay_the_validator_refusal_strings(self):
+        # DEFERRED_NODE_TYPES stays a dict[type -> reason] (validate_doc
+        # indexes it for the refusal message) -- derived from the sheets.
+        for k, reason in pipeline.DEFERRED_NODE_TYPES.items():
+            self.assertTrue(isinstance(reason, str) and reason.strip())
+            self.assertEqual(reason, pipeline.SPEC_SHEETS[k]["deferred_reason"])
+
+    def test_entry_shape_total(self):
+        for k, v in pipeline.SPEC_SHEETS.items():
+            for key in ("label", "group", "icon", "required", "optional",
+                        "emits", "deferred", "guarded"):
+                self.assertIn(key, v, "%s missing %s" % (k, key))
+
+    def test_containers_present(self):
+        for k in ("loop", "stage", "branch", "for_each"):
+            self.assertEqual(pipeline.SPEC_SHEETS[k]["group"], "structure")
+
+
+class GarbageShapeTest(unittest.TestCase):
+    """CP2 (P3a, #357): the viewer renders INVALID docs, so validate_doc is
+    a display-boundary error source -- garbage shapes must come back as
+    error strings, never exceptions."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        with open(os.path.join(self.dir, "act.md"), "w") as fh:
+            fh.write("do\n")
+
+    def test_garbage_children_shapes_error_not_crash(self):
+        # CP2 (P3a): validate_doc is the DISPLAY boundary's error source --
+        # a garbage shape must come back as an error STRING, never a
+        # TypeError out of a set operation (unhashable dict children).
+        doc = minimal_doc()
+        doc["containers"] = [{"id": "L", "kind": "loop",
+                              "children": [{}, 5, None],
+                              "exit_when": "done", "max_rounds": 3}]
+        errs = pipeline.validate_doc(doc, self.dir)
+        self.assertTrue(any("children" in e for e in errs))
+
+    def test_garbage_node_id_shapes_error_not_crash(self):
+        doc = minimal_doc()
+        doc["nodes"].append({"id": {"weird": 1}, "type": "check",
+                             "brief_ref": "act.md"})
+        errs = pipeline.validate_doc(doc, self.dir)
+        self.assertTrue(any("id required" in e for e in errs))
+
+    def test_valid_pipeline_name(self):
+        self.assertTrue(pipeline.valid_pipeline_name("ticket-to-merge"))
+        self.assertFalse(pipeline.valid_pipeline_name("../outside"))
+        self.assertFalse(pipeline.valid_pipeline_name(""))
+        self.assertFalse(pipeline.valid_pipeline_name(None))
+
+
+class EffectiveEdgesTest(unittest.TestCase):
+    def test_declared_edges_returned_verbatim(self):
+        doc = minimal_doc()
+        doc["nodes"].append({"id": "b", "type": "check", "brief_ref": "act.md"})
+        doc["edges"] = [{"from": "act", "to": "b", "on": "failure"}]
+        self.assertEqual(pipeline.effective_edges(doc), doc["edges"])
+
+    def test_empty_edges_synthesize_success_chain(self):
+        doc = minimal_doc()
+        doc["nodes"].append({"id": "b", "type": "check", "brief_ref": "act.md"})
+        edges = pipeline.effective_edges(doc)
+        self.assertEqual(edges, [{"from": "act", "to": "b", "on": "success"}])
+
+    def test_containers_are_chain_units(self):
+        # the synthesized chain runs over TOP-LEVEL units: a container id
+        # appears in the chain, its children do not.
+        doc = minimal_doc()
+        doc["nodes"] += [{"id": "b", "type": "check", "brief_ref": "act.md"},
+                         {"id": "c", "type": "check", "brief_ref": "act.md"},
+                         {"id": "d", "type": "journal", "brief_ref": "act.md"}]
+        doc["containers"] = [{"id": "L", "kind": "loop", "children": ["b", "c"],
+                              "exit_when": "done", "max_rounds": 3}]
+        edges = pipeline.effective_edges(doc)
+        self.assertEqual(edges, [{"from": "act", "to": "L", "on": "success"},
+                                 {"from": "L", "to": "d", "on": "success"}])
+
+
 class LoadDocTest(unittest.TestCase):
     def test_load_missing_raises(self):
         with self.assertRaises(pipeline.PipelineError):

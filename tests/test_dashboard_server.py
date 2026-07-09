@@ -1568,3 +1568,76 @@ class WorkstreamActionsTest(unittest.TestCase):
         got = dashboard.dcx.ws_prompt_get(self.repo, "pm")
         self.assertTrue(got["ok"])
         self.assertTrue(got["path"].startswith("var/autonomy/roles/"))
+
+
+class TestPipelineRoutes(unittest.TestCase):
+    """P3a (#357): GET /pipeline (page) + GET /api/pipeline (read model).
+    Repo param is the managed ABSOLUTE PATH, identity-checked against
+    Handler.repos -- the /api/ws-prompt contract (a NAME would be ambiguous
+    across same-basename managed repos). No write surface."""
+
+    FIXTURE = os.path.join(HERE, "fixtures", "repo-alpha")
+
+    def setUp(self):
+        import shutil
+        self._orig_repos = dashboard.Handler.repos
+        self._td = tempfile.TemporaryDirectory()
+        self.repo = os.path.join(self._td.name, "repo-alpha")
+        shutil.copytree(self.FIXTURE, self.repo)
+        dashboard.Handler.repos = [os.path.abspath(self.repo)]
+
+    def tearDown(self):
+        dashboard.Handler.repos = self._orig_repos
+        self._td.cleanup()
+
+    def _get(self, path):
+        h = dashboard.Handler.__new__(dashboard.Handler)
+        h.path = path
+        captured = {}
+        h._send = lambda code, body, ctype="application/json": captured.update(
+            code=code, body=body, ctype=ctype)
+        h.do_GET()
+        return captured
+
+    def _api(self, repo, role):
+        import urllib.parse
+        return self._get("/api/pipeline?repo=%s&role=%s"
+                         % (urllib.parse.quote(repo, safe=""), role))
+
+    def test_view_route_returns_doc_and_spec(self):
+        got = self._api(self.repo, "coder")
+        self.assertEqual(got["code"], 200)
+        payload = json.loads(got["body"].decode("utf-8"))
+        self.assertEqual(payload["source"]["name"], "fixture-flow")
+        self.assertEqual(payload["errors"], [])
+        self.assertIn("agent_task", payload["spec"])
+        self.assertIn("loop", payload["spec"])
+
+    def test_unmanaged_repo_is_400(self):
+        got = self._api("/definitely/not/managed", "coder")
+        self.assertEqual(got["code"], 400)
+        payload = json.loads(got["body"].decode("utf-8"))
+        self.assertIn("not managed", payload["error"])
+
+    def test_unknown_role_is_200_with_error(self):
+        got = self._api(self.repo, "ghost")
+        self.assertEqual(got["code"], 200)
+        payload = json.loads(got["body"].decode("utf-8"))
+        self.assertIn("unknown role", payload["error"])
+
+    def test_corrupt_doc_degrades_not_500(self):
+        pj = os.path.join(self.repo, ".autonomy", "pipelines", "fixture-flow",
+                          "pipeline.json")
+        with open(pj, "w") as fh:
+            fh.write("{nope")
+        got = self._api(self.repo, "coder")
+        self.assertEqual(got["code"], 200)
+        payload = json.loads(got["body"].decode("utf-8"))
+        self.assertIsNone(payload["doc"])
+        self.assertTrue(payload["errors"])
+
+    def test_pipeline_page_served(self):
+        got = self._get("/pipeline")
+        self.assertEqual(got["code"], 200)
+        self.assertIn("text/html", got["ctype"])
+        self.assertIn(b"pipeline", got["body"].lower())

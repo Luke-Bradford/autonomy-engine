@@ -275,6 +275,10 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .role .trig .qreset{display:inline-block;text-align:right;font-variant-numeric:tabular-nums;min-width:4.8em}
 .role .rlast .agox{display:inline-block;text-align:right;font-variant-numeric:tabular-nums;min-width:2.2em}
 .role .rmiss{font-family:var(--mono);font-size:10px;color:var(--warn);border:1px solid var(--warn);border-radius:3px;padding:1px 5px}
+/* #357 P3a: per-role pipeline-canvas link. Static per role (repo path + role
+   name), so the skip-unchanged guard signature is unaffected. */
+.role .rpipe{font-size:10px;color:var(--dim);text-decoration:none;margin-left:auto}
+.role .rpipe:hover{color:var(--accent)}
 .role.missed .rn{color:var(--warn)}
 .role .rst{margin-left:auto}
 .role.off{opacity:.5}
@@ -1176,7 +1180,7 @@ function renderRepos(repos){
       const html = `<div class="role ${off?"off":""}${isActing?" acting":""}${role.missed_fire?" missed":""}">
         <span class="r1"><i class="rdot"></i><span class="rn">${esc(role.name)}</span>${subBadge(role.substrate)}</span>
         <span class="rst">${token(role.status,false)}</span>
-        <div class="r2"><span class="trig">${trig}</span>${missed}${lastRun}</div></div>`;
+        <div class="r2"><span class="trig">${trig}</span>${missed}${lastRun}<a class="rpipe" href="/pipeline?repo=${encodeURIComponent(r.path)}&role=${encodeURIComponent(role.name)}" title="pipeline canvas — how this role runs">⛓</a></div></div>`;
       return {lane: role.lane||lanes.default, html: html};
     });
     // Flat list for the single implicit lane (zero change); grouped under a lane
