@@ -540,6 +540,61 @@ def resolve_params(declared, overrides, *, secret_lookup=None):
     return out
 
 
+def write_output(path, name, value):
+    """Append/overwrite one named output in the per-run outputs file, atomically
+    (tmp + os.replace) so a concurrent reader never sees a torn file."""
+    cur = read_outputs(path)
+    cur[name] = value
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(cur, fh)
+    os.replace(tmp, path)
+
+
+def read_outputs(path):
+    """Total reader: missing/corrupt/non-object -> {} (never raises)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def project_outputs(declared, raw):
+    """Project a run's raw outputs onto the pipeline's DECLARED outputs: keep
+    only declared names (an activity cannot leak an undeclared value to a
+    caller, spec S3) AND type-check each present value (Codex CP1: a declared
+    `number` output written as 'abc' RAISES, never passes invalid data on). A
+    declared output the run did not produce is simply absent -- a downstream
+    ${nodes.id.output.x} ref then raises at resolve time (fail-safe)."""
+    decls = {o["name"]: o for o in (declared or [])
+             if isinstance(o, dict) and _is_str(o.get("name"))}
+    out = {}
+    for k, v in (raw or {}).items():
+        if k not in decls:
+            continue
+        typ = decls[k].get("type")
+        if typ in PARAM_TYPES and typ != "enum" and not _typed_ok(typ, v):
+            raise PipelineError("output %r: %r does not match declared type %r"
+                                % (k, v, typ))
+        out[k] = v
+    return out
+
+
+def substitute_doc(doc, ctx):
+    """Deep copy of doc with every STRING scalar run through substitute(). Phase
+    B calls this at compile time; Phase A only unit-tests it. Non-strings pass
+    through untouched; the input doc is never mutated."""
+    def walk(v):
+        if isinstance(v, dict):
+            return {k: walk(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        return substitute(v, ctx)
+    return walk(doc)
+
+
 def _validate_runs_as(where, runs_as, errors):
     if runs_as is None:
         return

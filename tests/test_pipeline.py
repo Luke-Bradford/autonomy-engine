@@ -1595,5 +1595,56 @@ class ResolveParamsTest(unittest.TestCase):
                                     {"t": "K"})                # no secret_lookup seam
 
 
+class OutputsFileTest(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+        self.p = os.path.join(self.d, ".run-r1-outputs.json")
+
+    def test_write_then_read_roundtrip(self):
+        pipeline.write_output(self.p, "branch", "feat/x")
+        pipeline.write_output(self.p, "pr", 42)
+        self.assertEqual(pipeline.read_outputs(self.p), {"branch": "feat/x", "pr": 42})
+
+    def test_read_missing_is_empty_total(self):
+        self.assertEqual(pipeline.read_outputs(self.p + "-nope"), {})
+
+    def test_read_corrupt_is_empty_total(self):
+        with open(self.p, "w") as fh:
+            fh.write("{ not json")
+        self.assertEqual(pipeline.read_outputs(self.p), {})
+
+    def test_project_outputs_keeps_only_declared(self):
+        raw = {"pr": 42, "branch": "feat/x", "secret_junk": "x"}
+        decl = [{"name": "pr", "type": "number"}]
+        self.assertEqual(pipeline.project_outputs(decl, raw), {"pr": 42})
+
+    def test_project_outputs_type_mismatch_raises(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.project_outputs([{"name": "pr", "type": "number"}], {"pr": "abc"})
+
+    def test_project_outputs_missing_declared_is_absent(self):
+        self.assertEqual(pipeline.project_outputs(
+            [{"name": "pr", "type": "number"}, {"name": "x", "type": "string"}],
+            {"pr": 7}), {"pr": 7})
+
+    def test_write_is_atomic_and_bounded(self):
+        pipeline.write_output(self.p, "a", "1")
+        # a second writer never corrupts the file (tmp+replace); still valid JSON
+        pipeline.write_output(self.p, "b", "2")
+        self.assertEqual(sorted(pipeline.read_outputs(self.p)), ["a", "b"])
+
+
+class SubstituteDocTest(unittest.TestCase):
+    def test_deep_substitutes_strings_only(self):
+        doc = {"name": "flow", "nodes": [
+            {"id": "a", "runs_as": {"model": "${params.m}"}, "count": 3}]}
+        ctx = {"params": {"m": "opus"}, "nodes": {}, "run": {}}
+        out = pipeline.substitute_doc(doc, ctx)
+        self.assertEqual(out["nodes"][0]["runs_as"]["model"], "opus")
+        self.assertEqual(out["nodes"][0]["count"], 3)             # non-string untouched
+        self.assertEqual(doc["nodes"][0]["runs_as"]["model"], "${params.m}")  # input intact
+
+
 if __name__ == "__main__":
     unittest.main()
