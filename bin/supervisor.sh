@@ -1598,19 +1598,30 @@ dispatch_batch() {
   local i wt log_file res m e envl
   local wts=() logs=() results=() pids=()
   BATCH_PIDS=""
+  # Setup failure AFTER earlier blocks spawned: kill + reap the live
+  # wrappers before removing the directories they run in (Codex CP2);
+  # their units stay dispatched and reclaim next tick (at-most-one-batch
+  # duplicate work, SD-36 semantics).
+  abort_batch() {
+    # ${arr[@]+...}: bash 3.2 treats an EMPTY array as unbound under set -u.
+    local _p _j
+    for _p in ${pids[@]+"${pids[@]}"}; do kill "$_p" 2>/dev/null; done
+    for _p in ${pids[@]+"${pids[@]}"}; do wait "$_p" 2>/dev/null; done
+    BATCH_PIDS=""
+    for _j in ${wts[@]+"${wts[@]}"}; do remove_ephemeral_worktree "$_j"; done
+  }
   for i in $(seq 0 $((PB_COUNT - 1))); do
     wt="$wt_root/$(basename "${state%.json}").${PB_NODE[i]}"
     if ! git -C "$AUTONOMY_TARGET_REPO" worktree add --detach "$wt" origin/main >>"$SUPLOG" 2>&1; then
       log "dispatch: could not create ephemeral worktree for node '${PB_NODE[i]}' -- REFUSING batch (fail-safe)"
-      local j
-      for j in "${wts[@]}"; do remove_ephemeral_worktree "$j"; done
+      abort_batch
       return 2
     fi
     mkdir -p "$wt/var/autonomy-logs" 2>>"$SUPLOG"
     wts[i]="$wt"
     if ! log_file="$(allocate_session_log)"; then
       log "dispatch: could not allocate a session log name -- REFUSING batch"
-      for j in "${wts[@]}"; do remove_ephemeral_worktree "$j"; done
+      abort_batch
       return 2
     fi
     logs[i]="$log_file"
@@ -1624,7 +1635,7 @@ dispatch_batch() {
     if [ "$i" -gt 0 ] && [ -n "${PB_ACCOUNT[i]}" ]; then
       if ! envl="$(resolve_account_env "${PB_ACCOUNT[i]}")"; then
         log "dispatch: node '${PB_NODE[i]}' account '${PB_ACCOUNT[i]}' did not resolve -- REFUSING batch (fail-safe)"
-        for j in "${wts[@]}"; do remove_ephemeral_worktree "$j"; done
+        abort_batch
         return 2
       fi
     fi
@@ -1640,7 +1651,10 @@ dispatch_batch() {
         "${PB_PROMPT[i]}" "$rules_file" \
         "$m" "$FALLBACK_MODEL" "${logs[i]}" "$e" &
       _cp=$!
-      trap 'kill "$_cp" 2>/dev/null' TERM
+      # TERM: kill + REAP the agent child, then exit WITHOUT writing a
+      # result (a missing result reads as error, fail-safe) -- an
+      # interrupted wait must never fall through to classify (Codex CP2).
+      trap 'kill "$_cp" 2>/dev/null; wait "$_cp" 2>/dev/null; exit 143' TERM
       wait "$_cp"; _rc=$?
       _out="$(agent_classify_outcome "${logs[i]}" "$_rc")"
       printf '%s\n%s\n' "$_rc" "$_out" >"${results[i]}.tmp" \
@@ -1691,8 +1705,10 @@ dispatch_batch() {
           record_pipeline_outcome "$role" "${PB_NODE[i]}" retry "${logs[i]}" "" || \
             log "WARN pipeline: could not release node '${PB_NODE[i]}' for retry"
         else
-          record_pipeline_outcome "$role" "${PB_NODE[i]}" error "${logs[i]}" "$verdict_abs" || \
-            log "WARN pipeline: could not record node error for '${PB_NODE[i]}'"
+          record_pipeline_outcome "$role" "${PB_NODE[i]}" error "${logs[i]}" "$verdict_abs" || {
+            log "ERROR pipeline: could not record node error for '${PB_NODE[i]}'"
+            record_failed=1
+          }
           [ "$rc_i" -gt "$worst_rc" ] && worst_rc="$rc_i"
         fi ;;
     esac
