@@ -334,6 +334,25 @@ doctor_agents_check() {
   return 0
 }
 
+# pack starter skills (#362, #361 slice a): one INFO line per skill the
+# engine ships in templates/pack-skills/ -- present in the target's
+# .claude/skills/ or not. Skills are OPTIONAL additive elaboration, so
+# absence is never a WARN/FAIL and this never blocks; the line just tells
+# the operator that `onboard.sh <repo>` would scaffold the missing ones.
+doctor_pack_skills_check() {
+  local repo="$1" _skdir _sk
+  for _skdir in "$DOCTOR_HOME"/templates/pack-skills/*/; do
+    [ -f "$_skdir/SKILL.md" ] || continue
+    _sk="$(basename "$_skdir")"
+    if [ -f "$repo/.claude/skills/$_sk/SKILL.md" ]; then
+      echo "INFO pack skill '$_sk' present (.claude/skills/)"
+    else
+      echo "INFO pack skill '$_sk' not scaffolded -- optional; bin/onboard.sh $repo adds it (never overwrites)"
+    fi
+  done
+  return 0
+}
+
 doctor_full_report() {
   local repo="$1" hard_fail=0
   echo "== doctor.sh report: $repo =="
@@ -394,6 +413,7 @@ doctor_full_report() {
   doctor_knob_notes "$repo"
   doctor_lane_report "$repo"
   doctor_agents_check
+  doctor_pack_skills_check "$repo"
 
   doctor_gh_auth_check "$repo"
 

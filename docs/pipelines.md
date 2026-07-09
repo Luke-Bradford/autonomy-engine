@@ -156,3 +156,10 @@ roles:
   keep working unchanged.
 - Starter pipelines ship in `templates/autonomy-pack/pipelines/` and are
   scaffolded into new target repos by onboarding.
+- Onboarding also seeds two optional **starter skills** into the target
+  repo's `.claude/skills/` (`working-under-the-loop`,
+  `pipeline-sessions`) — trigger-scoped guidance that sessions load when
+  relevant. They elaborate the engine's rules; they never replace them
+  (everything correctness-critical is compiled into the brief regardless).
+  Once scaffolded they belong to your repo: edit freely, onboarding never
+  overwrites an existing file.

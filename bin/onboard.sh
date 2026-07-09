@@ -52,16 +52,46 @@ echo "onboard.sh: $copied file(s) created, $skipped already present. Edit $PACK_
 # session keeps the cheap executor model from agent.model in config.yaml.
 if [ -f "$TARGET_REPO/.claude/agents/planner.md" ]; then
   echo "onboard.sh: SKIP .claude/agents/planner.md (already exists)"
-elif [ -e "$TARGET_REPO/.claude/agents/planner.md" ]; then
-  # A directory/symlink/etc squatting the path: cp would land INSIDE it and
-  # this script would claim success while Claude Code sees no agent file.
-  # Surface it instead of faking a scaffold (fail-safe).
+elif [ -e "$TARGET_REPO/.claude/agents/planner.md" ] || [ -L "$TARGET_REPO/.claude/agents/planner.md" ]; then
+  # A directory/symlink (incl. DANGLING symlink: -e false, -L true) squatting
+  # the path: cp would land inside it / write through it and this script
+  # would claim success while Claude Code sees no agent file. Surface it
+  # instead of faking a scaffold (fail-safe; CP2 #362 same-class widening).
   echo "onboard.sh: WARN .claude/agents/planner.md exists but is not a regular file -- planner agent NOT scaffolded" >&2
+elif ! mkdir -p "$TARGET_REPO/.claude/agents" 2>/dev/null; then
+  # A FILE squatting .claude or .claude/agents makes mkdir -p fail; under
+  # set -e an unguarded call would kill onboard mid-scaffold (CP2 #362).
+  echo "onboard.sh: WARN cannot create .claude/agents (a file squats the path?) -- planner agent NOT scaffolded" >&2
 else
-  mkdir -p "$TARGET_REPO/.claude/agents"
   cp "$ENGINE_HOME/templates/planner-agent.md" "$TARGET_REPO/.claude/agents/planner.md"
   echo "onboard.sh: created .claude/agents/planner.md (planner/coder pair default, #320)"
 fi
+
+# #362 (#361 slice a): starter pack skills land in .claude/skills/ (where
+# Claude Code auto-loads them for sessions running in the target repo), NOT
+# inside .autonomy/ -- same home logic and same idempotent contract as the
+# planner agent: skip if present, WARN if a non-regular file squats the
+# path, never overwrite. Additive elaboration only; enforcement stays in
+# the engine-compiled briefs.
+for _skdir in "$ENGINE_HOME"/templates/pack-skills/*/; do
+  [ -f "$_skdir/SKILL.md" ] || continue
+  _sk="$(basename "$_skdir")"
+  _dest="$TARGET_REPO/.claude/skills/$_sk/SKILL.md"
+  if [ -f "$_dest" ]; then
+    echo "onboard.sh: SKIP .claude/skills/$_sk/SKILL.md (already exists)"
+  elif [ -e "$_dest" ] || [ -L "$_dest" ]; then
+    # -L catches a DANGLING symlink (-e false) -- cp would write through it.
+    echo "onboard.sh: WARN .claude/skills/$_sk/SKILL.md exists but is not a regular file -- skill NOT scaffolded" >&2
+  elif ! mkdir -p "$TARGET_REPO/.claude/skills/$_sk" 2>/dev/null; then
+    # A FILE squatting any path component makes mkdir -p fail; guarded so
+    # set -e cannot kill onboard mid-scaffold and the remaining skills
+    # still land (CP2 #362).
+    echo "onboard.sh: WARN cannot create .claude/skills/$_sk (a file squats the path?) -- skill NOT scaffolded" >&2
+  else
+    cp "$_skdir/SKILL.md" "$_dest"
+    echo "onboard.sh: created .claude/skills/$_sk/SKILL.md (pack starter skill, #362)"
+  fi
+done
 
 # Workstreams slice 1: the dashboard's live config lives at
 # var/autonomy/config.yaml -- the loop preflight's `git stash -u` would sweep
