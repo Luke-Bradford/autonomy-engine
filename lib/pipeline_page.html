@@ -167,7 +167,7 @@ svg.edges path.hit{pointer-events:stroke;cursor:pointer}
         <span><span class="sw" style="border-color:var(--dim);border-top-style:dashed"></span>on completion</span>
         <span><span class="tag hard">enforced</span> engine-owned</span>
         <span><span class="tag soft">instructed</span> compiled into the brief</span>
-        <span class="note">read-only viewer — editing lands in P3b</span>
+        <span class="note" id="legendnote">read-only viewer</span>
       </div>
     </main>
     <aside class="pane" id="pane"></aside>
@@ -324,6 +324,7 @@ function card(n, lit, inflight){
     ${glyph}<span class="ico">${icon}</span> <span class="nm">${esc(n.id)}</span>
     <span class="sum">${invalid ? "unknown type: " + esc(n.type) : esc(sheet.label)}${bounce}</span>
     <div class="meta">${runsAs?`<span class="agent">${runsAs}</span>`:""}${tag}</div>
+    <div class="ehandle" data-ehandle="${esc(n.id)}" title="drag to draw an edge"></div>
   </div>`;
 }
 function containerBox(con, lit, inflight){
@@ -346,6 +347,7 @@ function containerBox(con, lit, inflight){
   return `<div class="box${con.kind==="stage"?" stage":""}${dim}${running?" running":""}" data-uid="${esc(con.id)}">
     <span class="boxtag" data-seluid="${esc(con.id)}" title="the container's own pane">${sheet.icon} ${esc(con.kind)} · ${esc(con.id)}</span>
     <button class="chev" data-collapse="${esc(con.id)}" title="collapse this container">▾</button>
+    <div class="ehandle" data-ehandle="${esc(con.id)}" title="drag to draw an edge"></div>
     <div class="inner">${kids.map(k => card(k, lit, inflight)).join("")}</div>${foot}</div>`;
 }
 
@@ -429,6 +431,8 @@ function drawEdges(){
     const dimmed = OBSERVED && !edgeLit(e, lit) ? " dimmed" : "";
     const dash = e.on === "completion" ? ` stroke-dasharray="4 4"` : "";
     body += `<path class="e${dimmed}" d="${d}" fill="none" stroke="var(--${col})" stroke-width="1.6"${dash} marker-end="url(#m-${e.on})"/>`;
+    if(editable() && !e.back)
+      body += `<path class="hit" data-efrom="${esc(e.from)}" data-eto="${esc(e.to)}" data-eon="${esc(e.on)}" d="${d}" fill="none" stroke="transparent" stroke-width="12"><title>${esc(e.on)} — click to cycle · shift-click to delete</title></path>`;
     if(e.back){
       const used = (VIEW.last_run && VIEW.last_run.bounces && VIEW.last_run.bounces[e.from+"->"+e.to]) || 0;
       const lbl = `↩ max ${e.max_bounces}` + (OBSERVED && used ? ` · used ${used}` : "") + ` · enforced`;
@@ -444,13 +448,14 @@ function renderPalette(){
   const spec = VIEW && VIEW.spec || {};
   const groups = {};
   for(const [k,v] of Object.entries(spec)) (groups[v.group] = groups[v.group] || []).push([k,v]);
+  const ed = editable();
   document.getElementById("palette").innerHTML = GROUP_ORDER.filter(g => groups[g]).map(g =>
     `<div class="pgroup"><span class="eyebrow">${esc(g)}</span>${groups[g].map(([k,v]) =>
-      `<button class="pitem${v.deferred?" off":""}" data-type="${esc(k)}"
-        title="${v.deferred ? esc("not yet executable — " + (v.deferred_reason||"")) : "click: preview its spec sheet"}">
+      `<button class="pitem${v.deferred?" off":""}" data-type="${esc(k)}"${(ed && !v.deferred)?' draggable="true"':''}
+        title="${v.deferred ? esc("not yet executable — " + (v.deferred_reason||"")) : (ed ? "click: preview · drag: drop onto the canvas to add" : "click: preview its spec sheet")}">
         <span class="ico">${v.icon}</span>${esc(v.label)}${v.deferred?`<span class="phase">${esc((v.deferred_reason||"").split(" ")[0])}</span>`:""}
       </button>`).join("")}</div>`).join("")
-    + `<div class="pgroup" style="border-top:1px solid var(--hair);padding-top:8px"><span class="note">palette previews only — drag-to-place lands in P3b</span></div>`;
+    + `<div class="pgroup" style="border-top:1px solid var(--hair);padding-top:8px"><span class="note">${ed ? "drag a type onto the canvas to add a node · click to preview" : "palette previews only — bind a pipeline to edit"}</span></div>`;
 }
 function previewType(t){ SEL = "type:" + t; render(); }
 
@@ -643,6 +648,95 @@ document.getElementById("palette").addEventListener("click", e => {
   const it = e.target.closest("[data-type]");
   if(it) previewType(it.dataset.type);
 });
+
+/* ---- editor gestures: palette drag-to-place · edge draw / cycle / delete ----
+   Every gesture mutates WORKING only and re-renders; NOTHING posts until Save.
+   Operator-authored ids come from uniqueNodeId (safe charset), never free text
+   into a path. */
+function ensureExplicitEdges(){   // materialize the implicit chain before editing
+  const d = curDoc(); if(!d) return;
+  if(!Array.isArray(d.edges) || !d.edges.length) d.edges = effectiveEdges(d);
+}
+function reaches(a, b){           // can a reach b via forward (non-back) edges?
+  const adj = {};
+  for(const e of curEdges()) if(!e.back) (adj[e.from] = adj[e.from] || []).push(e.to);
+  const seen = new Set(), stack = [a];
+  while(stack.length){ const x = stack.pop();
+    if(x === b) return true;
+    if(seen.has(x)) continue; seen.add(x);
+    for(const y of (adj[x]||[])) stack.push(y); }
+  return false;
+}
+function edgeHint(msg){
+  document.getElementById("errbar").innerHTML =
+    `<div class="errbar"><span class="eyebrow">edit not applied</span><ul><li>${esc(msg)}</li></ul></div>`;
+}
+function addEdge(from, to){
+  if(from === to){ edgeHint("an edge can't loop a node to itself"); return; }
+  ensureExplicitEdges();
+  const d = curDoc();
+  if(d.edges.some(e => e.from === from && e.to === to && !e.back)){ edgeHint("that edge already exists"); return; }
+  if(reaches(to, from)){ edgeHint("that edge would create a cycle — declare a back-edge on the source doc instead"); return; }
+  d.edges.push({from, to, on: "success"});
+  markDirty(); render();
+}
+function cycleEdge(from, to, on){
+  ensureExplicitEdges();
+  const order = ["success","failure","completion"];
+  const e = curDoc().edges.find(x => x.from === from && x.to === to && x.on === on);
+  if(!e) return;
+  e.on = order[(order.indexOf(e.on) + 1) % 3];
+  markDirty(); render();
+}
+function deleteEdge(from, to, on){
+  ensureExplicitEdges();
+  const es = curDoc().edges;
+  const i = es.findIndex(x => x.from === from && x.to === to && x.on === on);
+  if(i >= 0){ es.splice(i, 1); markDirty(); render(); }
+}
+function placeNode(type){
+  const d = curDoc(); if(!d) return;
+  const before = topUnits(d);           // tail BEFORE adding the node
+  ensureExplicitEdges();
+  const id = uniqueNodeId((type.replace(/[^a-z0-9_]/gi, "_").toLowerCase()) || "node");
+  const ref = id + ".md";
+  (d.nodes = d.nodes || []).push({id, type, brief_ref: ref});
+  BRIEFS[ref] = "(new " + type + " brief)\n";
+  if(before.length) d.edges.push({from: before[before.length-1], to: id, on: "success"});
+  SEL = id; markDirty(); render();
+}
+// palette drag -> drop on the canvas
+document.getElementById("palette").addEventListener("dragstart", e => {
+  const it = e.target.closest("[data-type]");
+  if(it && editable() && !it.classList.contains("off"))
+    e.dataTransfer.setData("text/ae-type", it.dataset.type);
+});
+const _dagwrap = document.getElementById("dagwrap");
+_dagwrap.addEventListener("dragover", e => { if(editable()) e.preventDefault(); });
+_dagwrap.addEventListener("drop", e => {
+  const t = e.dataTransfer.getData("text/ae-type"), sp = (VIEW && VIEW.spec) || {};
+  if(t && editable() && sp[t] && !sp[t].deferred){ e.preventDefault(); placeNode(t); }
+});
+// edge draw: mousedown a handle -> mouseup a target card
+let DRAWING = null;
+document.getElementById("dag").addEventListener("mousedown", e => {
+  const h = e.target.closest("[data-ehandle]");
+  if(h && editable()){ DRAWING = h.dataset.ehandle; e.preventDefault(); e.stopPropagation(); }
+});
+window.addEventListener("mouseup", e => {
+  if(!DRAWING) return;
+  const from = DRAWING; DRAWING = null;
+  const card = e.target.closest && e.target.closest("[data-uid]");
+  if(card && card.dataset.uid !== from) addEdge(from, card.dataset.uid);
+});
+// edge click: cycle its type (shift-click deletes it)
+document.getElementById("edgesvg").addEventListener("click", e => {
+  const p = e.target.closest("[data-efrom]");
+  if(!p || !editable()) return;
+  if(e.shiftKey) deleteEdge(p.dataset.efrom, p.dataset.eto, p.dataset.eon);
+  else cycleEdge(p.dataset.efrom, p.dataset.eto, p.dataset.eon);
+});
+
 document.getElementById("obsbtn").addEventListener("click", () => { OBSERVED = !OBSERVED; render(); });
 window.addEventListener("resize", () => requestAnimationFrame(drawEdges));
 
@@ -658,6 +752,10 @@ function updateHeader(){
     ? `<span class="badge unsaved" title="unsaved edits — a live tick will not overwrite them">● unsaved</span>` : "";
   sc.innerHTML = (VIEW && VIEW.source && VIEW.source.shadow)
     ? `<span class="badge shadow" title="showing local edits (var/autonomy/pipelines) — the committed pack is untouched">📝 local edits</span>` : "";
+  const ln = document.getElementById("legendnote");
+  if(ln) ln.textContent = ed
+    ? "drag a palette type to add a node · drag a node's handle to draw an edge · click an edge to cycle, shift-click to delete"
+    : (VIEW && VIEW.source && VIEW.source.kind === "wrapped" ? "read-only — bind a pipeline to edit" : "read-only viewer");
 }
 async function saveNow(){
   if(!editable() || !DIRTY) return;
