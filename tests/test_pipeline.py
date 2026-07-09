@@ -325,22 +325,8 @@ class WrapResolveTest(unittest.TestCase):
         with self.assertRaises(pipeline.PipelineError):
             pipeline.resolve_pipeline(self.repo, "coder")
 
-    def test_resolve_refuses_multinode_on_cron_role_in_any_lane(self):
-        # Codex CP2: cron_roles(cfg) is default-lane-filtered -- a cron role
-        # PINNED TO A NON-DEFAULT LANE must not slip past the multi-node
-        # refusal (the stall-between-fires hazard is lane-independent).
-        d = minimal_doc(); d["name"] = "p1"
-        d["nodes"].append({"id": "b", "type": "check", "brief_ref": "act.md"})
-        self._write_pipeline(d)
-        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
-            fh.write("lanes:\n  side:\n    worktree: ../side\n"
-                     "roles:\n  pm:\n    enabled: true\n"
-                     "    lane: side\n"
-                     "    trigger:\n      type: cron\n"
-                     "      schedule: '0 * * * *'\n"
-                     "    pipeline: p1\n")
-        with self.assertRaises(pipeline.PipelineError):
-            pipeline.resolve_pipeline(self.repo, "pm")
+    # P2b lifted the lane-pinned cron refusal with the trigger-agnostic
+    # in-flight dispatch (see test_resolve_accepts_multinode_on_cron_role_p2b).
 
     def test_resolve_missing_legacy_prompt_REFUSES_early(self):
         # A run state for an unrunnable doc would strand in-flight -- refuse
@@ -349,9 +335,9 @@ class WrapResolveTest(unittest.TestCase):
         with self.assertRaises(pipeline.PipelineError):
             pipeline.resolve_pipeline(self.repo, "coder")
 
-    def test_resolve_refuses_multinode_on_cron_role(self):
-        # P1: one node per LOOP iteration; a cron fire would strand a
-        # multi-node run until the next fire -- refuse honestly (P2 lifts).
+    def test_resolve_accepts_multinode_on_cron_role_p2b(self):
+        # P2b (#351): an in-flight run JOINS the main loop's dispatch list,
+        # so a cron fire only STARTS the run -- the P1/P2a refusal lifts.
         d = minimal_doc(); d["name"] = "p1"
         d["nodes"].append({"id": "b", "type": "check", "brief_ref": "act.md"})
         self._write_pipeline(d)
@@ -360,8 +346,8 @@ class WrapResolveTest(unittest.TestCase):
                      "    trigger:\n      type: cron\n"
                      "      schedule: '0 * * * *'\n"
                      "    pipeline: p1\n")
-        with self.assertRaises(pipeline.PipelineError):
-            pipeline.resolve_pipeline(self.repo, "pm")
+        doc, meta = pipeline.resolve_pipeline(self.repo, "pm")
+        self.assertEqual(len(doc["nodes"]), 2)
 
 
 class CompileBriefTest(unittest.TestCase):

@@ -513,20 +513,10 @@ def resolve_pipeline(repo, role):
         raise PipelineError("pipeline %r invalid: %s"
                             % (binding, "; ".join(errs)))
     _check_legacy_prompts(repo, doc, "pipeline %r" % binding)
-    # P1 advances one node per LOOP iteration (SD-12); a cron/event role's
-    # trigger fires run_session once per due-tick, so a multi-node pipeline
-    # bound to one would stall mid-run until the next fire. Refuse honestly;
-    # P2's dispatch work lifts this. Lane-UNfiltered enumerators (Codex CP2):
-    # the stall hazard is lane-independent, so a role pinned to a non-default
-    # lane must not slip past.
-    trig_names = set(n for n, _ in (roles.all_cron_roles(cfg) or []))
-    trig_names.update(n for n, _ in (roles.all_event_roles(cfg) or []))
-    if len(doc.get("nodes") or []) > 1 and role in trig_names:
-        raise PipelineError("pipeline %r has %d nodes but role %r fires on a "
-                            "cron/event trigger -- P1 advances one node per "
-                            "loop iteration, so the run would stall between "
-                            "fires; multi-node cron/event dispatch lands in "
-                            "P2" % (binding, len(doc["nodes"]), role))
+    # P2b (#351): the P1/P2a multi-node cron/event refusal is LIFTED -- an
+    # in-flight run joins the main loop's dispatch list regardless of its
+    # trigger type, so a cron/event fire only STARTS the run and the loop
+    # advances it with its own limit/backoff/pause handling.
     return doc, {"pipeline_dir": pdir, "wrapped": False,
                  "from": binding, "from_version": doc.get("version", 0)}
 

@@ -206,7 +206,19 @@ run_session coder >/dev/null 2>&1          # node z completes the run
 check "run completed after batch" "1" \
   "$([ ! -f "$(pipeline_state_file coder)" ] && echo 1 || echo 0)"
 
-# 9. lane-scoped state path (one supervisor per lane shares LOGDIR) -------------
+# 9. inflight_roles: lane-filtered, charset-gated (P2b -- these join the
+#    main loop's dispatch list regardless of trigger type) ------------------
+: >"$LOGDIR/.pipeline-run-pm.json"
+: >"$LOGDIR/.pipeline-run-qa--side.json"
+: >"$LOGDIR/.pipeline-run-bad name.json"
+check "inflight_roles default lane" "pm" "$(inflight_roles | tr '\n' ' ' | tr -d ' ')"
+AUTONOMY_LANE="side"
+check "inflight_roles side lane" "qa" "$(inflight_roles | tr '\n' ' ' | tr -d ' ')"
+AUTONOMY_LANE=""
+rm -f "$LOGDIR/.pipeline-run-pm.json" "$LOGDIR/.pipeline-run-qa--side.json" \
+  "$LOGDIR/.pipeline-run-bad name.json"
+
+# 10. lane-scoped state path (one supervisor per lane shares LOGDIR) ------------
 AUTONOMY_LANE="alpha"
 check "lane-scoped state filename" "$LOGDIR/.pipeline-run-coder--alpha.json" \
   "$(pipeline_state_file coder)"

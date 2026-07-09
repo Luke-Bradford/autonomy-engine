@@ -1135,6 +1135,35 @@ any_pipeline_inflight() {
   return 1
 }
 
+# Roles with an in-flight run in THIS supervisor's lane (P2b, #351): they
+# join the main loop's dispatch list regardless of trigger type, so a
+# cron/event fire only STARTS a multi-node run and the loop advances it
+# with its own limit/backoff/pause handling. Filenames are lane-scoped
+# (pipeline_state_file); other lanes' states are another supervisor's
+# business. Role tokens are charset-gated before they can re-enter dispatch
+# (prevention-log #6 -- the filename is disk input).
+inflight_roles() {
+  local f base lane="${AUTONOMY_LANE:-}"
+  for f in "$LOGDIR"/.pipeline-run-*.json; do
+    [ -f "$f" ] || continue
+    base="$(basename "$f")"
+    base="${base#.pipeline-run-}"
+    base="${base%.json}"
+    if [ -n "$lane" ]; then
+      case "$base" in
+        *--"$lane") base="${base%--"$lane"}" ;;
+        *) continue ;;
+      esac
+    else
+      case "$base" in *--*) continue ;; esac
+    fi
+    case "$base" in
+      *[!A-Za-z0-9._-]*|"") log "WARN pipeline: ignoring state file with invalid role token: $f" ;;
+      *) printf '%s\n' "$base" ;;
+    esac
+  done
+}
+
 # Resolve the role's CURRENT ready set (P2b, #351) into parallel PB_* arrays
 # (bash 3.2 regular arrays; index i = block i). Starts a run when none is in
 # flight. Per-block runs_as values are re-validated here before they can
@@ -1826,42 +1855,37 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # in-flight pipeline run may still dispatch on an empty board, but
     # nothing NEW starts (a fresh run would burn a session discovering there
     # is nothing to pick). Empty board + no in-flight runs = idle as before.
-    empty_board_dispatch=""
+    # P2b (#351): in-flight runs join dispatch regardless of trigger type
+    # (a cron/event fire only STARTS a run; the loop advances it). On an
+    # empty board ONLY in-flight roles dispatch -- a picked item finishes,
+    # nothing new starts (a fresh run would burn a session discovering
+    # there is nothing to pick).
+    inflight_list="$(inflight_roles | tr '\n' ' ')"
+    inflight_list="${inflight_list% }"
     if [ "$open_count" = "0" ]; then
-      if any_pipeline_inflight; then
-        if ! empty_board_dispatch="$(resolve_dispatch_roles)"; then
-          empty_board_dispatch="coder"
-        fi
-        inflight_only=""
-        for _r in $empty_board_dispatch; do
-          pipeline_inflight "$_r" && inflight_only="$inflight_only $_r"
-        done
-        empty_board_dispatch="${inflight_only# }"
-        if [ -z "$empty_board_dispatch" ]; then
-          log "NOTE pipeline: in-flight run state exists for a role that is no longer dispatchable -- stranded until re-enabled (see .pipeline-run-*.json in $LOGDIR)"
-        fi
-      fi
-      if [ -z "$empty_board_dispatch" ]; then
+      if [ -z "$inflight_list" ]; then
         dirty_skips=0
         log "board empty -- idle ${EMPTY_IDLE}s"
         heartbeat "board-empty" "no open issues -- idle" "$(( $(date -u +%s) + EMPTY_IDLE ))"
         sleep "$EMPTY_IDLE"; continue
       fi
-    fi
-
-    # Round-robin over the enabled loop roles (re-enumerated every tick so a
-    # config edit applies on the next session). Enumeration failure falls
-    # back to coder-only -- the conservative default; preflight's doctor
-    # check still gates a truly broken pack. NO roles enabled = idle, same
-    # as an empty board. On an empty board the list is already restricted to
-    # the in-flight roles (above).
-    if [ -n "$empty_board_dispatch" ]; then
-      dispatch_list="$empty_board_dispatch"
+      dispatch_list="$inflight_list"
     else
+      # Round-robin over the enabled loop roles (re-enumerated every tick so
+      # a config edit applies on the next session) PLUS any in-flight role.
+      # Enumeration failure falls back to coder-only -- the conservative
+      # default; preflight's doctor check still gates a truly broken pack.
       if ! dispatch_list="$(resolve_dispatch_roles)"; then
         log "WARN role enumeration failed -- coder-only fallback (see supervisor.log)"
         dispatch_list="coder"
       fi
+      for _r in $inflight_list; do
+        case " $dispatch_list " in
+          *" $_r "*) ;;
+          *) dispatch_list="$dispatch_list $_r" ;;
+        esac
+      done
+      dispatch_list="${dispatch_list# }"
       if [ -z "$dispatch_list" ]; then
         log "no loop roles enabled -- idle ${EMPTY_IDLE}s"
         heartbeat "idle" "no loop roles enabled -- idle" "$(( $(date -u +%s) + EMPTY_IDLE ))"

@@ -15,9 +15,13 @@ comments as input; the 4th failure parks the PR for a human.
 
 Notes:
 
-- The engine SEQUENCES these nodes one session per supervisor iteration
-  (SD-35): the three checks are parallel in the GRAPH but interleave in
-  time until P2b ships bounded concurrent dispatch.
+- Parallelism is OPT-IN (SD-36): this template ships without
+  `caps.max_parallel`, so nodes interleave one session per supervisor
+  iteration. Set `"max_parallel": 2` (or 3) in `caps` to run the three QA
+  checks as genuinely concurrent sessions — each gets its own ephemeral
+  worktree. Caveat: concurrent sessions pushing ONE branch race each other;
+  briefs that push should pull-rebase-push (the checks here only read and
+  comment, so the fan is safe out of the box).
 - Nodes whose failure verdict steers the graph get a compiled
   `pipeline:verdict` footer naming the exact verdict file — a session
   writes `{"outcome": "success"|"failure"}` there; writing nothing means
