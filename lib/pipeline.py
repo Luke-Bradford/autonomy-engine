@@ -548,20 +548,34 @@ def _load_state(state_path):
     if not isinstance(state, dict) or not isinstance(state.get("doc"), dict):
         raise PipelineError("run state corrupt %s: unexpected shape -- "
                             "refusing" % state_path)
+    if state.get("status") == "in_progress" and state.get("fmt") != 2:
+        raise PipelineError("run state %s predates the graph walk (P2a, fmt "
+                            "2) -- remove the file to recover" % state_path)
     return state
 
 
 def start_run(repo, role, state_path, lane=""):
     doc, meta = resolve_pipeline(repo, role)
+    doc = dict(doc)
+    if not doc.get("edges"):
+        # Implicit chain synthesis: P1 docs and wrapped roles become the
+        # equivalent success-chain graph -- ONE walk engine, stored into the
+        # state's embedded doc so a resumed run is stable.
+        order = _top_units(doc)
+        doc["edges"] = [{"from": a, "to": b, "on": "success"}
+                        for a, b in zip(order, order[1:])]
     # run_id: role[--lane]-timestamp-pid -- pid disambiguates same-second
     # starts across lanes/tests (second-granularity ids collide, weakening
     # the trust-ledger identity field).
     ident = "%s--%s" % (role, lane) if lane else role
-    state = {"run_id": "%s-%s-%d" % (ident, time.strftime("%Y%m%dT%H%M%S"),
+    state = {"fmt": 2,
+             "run_id": "%s-%s-%d" % (ident, time.strftime("%Y%m%dT%H%M%S"),
                                      os.getpid()),
              "role": role, "lane": lane, "doc": doc, "meta": meta,
-             "started": int(time.time()), "sessions": 0, "idx": 0,
-             "rounds": {}, "nodes_done": [], "status": "in_progress"}
+             "started": int(time.time()), "sessions": 0,
+             "units": dict((u, {"status": "pending"}) for u in _top_units(doc)),
+             "container_pos": {}, "rounds": {}, "bounces": {},
+             "nodes_done": [], "status": "in_progress"}
     _atomic_write_json(state_path, state)
     return state
 
@@ -571,6 +585,124 @@ def _container_of(doc, node_id):
         if node_id in (con.get("children") or []):
             return con
     return None
+
+
+def _con_by_id(doc, uid):
+    for con in doc.get("containers", []):
+        if con.get("id") == uid:
+            return con
+    return None
+
+
+# --- the graph walk (P2a, #349) ----------------------------------------------
+def _unit_join(doc, uid):
+    con = _con_by_id(doc, uid)
+    if con is not None:
+        return con.get("join", "all")
+    for node in doc.get("nodes", []):
+        if node.get("id") == uid:
+            return node.get("join", "all")
+    return "all"
+
+
+def _incoming_edges(doc, uid):
+    """Non-back incoming edges only: back-edges are TRAVERSAL-ONLY and never
+    gate readiness (else the target waits forever on its own downstream
+    verdict -- deadlock, then a never-run graph completes as success:
+    fail-open; adversarial-review blocking fix)."""
+    return [e for e in doc.get("edges", [])
+            if e.get("to") == uid and not e.get("back")]
+
+
+def _edge_state(state, edge):
+    """open (from not terminal yet) | satisfied | dead. A SKIPPED from
+    deadens every outgoing edge -- completion means "ran either way";
+    skipped never ran."""
+    fs = state["units"][edge["from"]]["status"]
+    if fs == "pending":
+        return "open"
+    if fs == "skipped":
+        return "dead"
+    on = edge["on"]
+    if on == "completion":
+        return "satisfied"
+    want = "success" if on == "success" else "failure"
+    return "satisfied" if fs == want else "dead"
+
+
+def _unit_ready(doc, state, uid):
+    if state["units"][uid]["status"] != "pending":
+        return False
+    inc = _incoming_edges(doc, uid)
+    if not inc:
+        return True                                   # root
+    states = [_edge_state(state, e) for e in inc]
+    if _unit_join(doc, uid) == "any":
+        return "open" not in states and "satisfied" in states
+    return all(s == "satisfied" for s in states)
+
+
+def _unit_dead(doc, state, uid):
+    inc = _incoming_edges(doc, uid)
+    if not inc:
+        return False
+    states = [_edge_state(state, e) for e in inc]
+    if _unit_join(doc, uid) == "any":
+        return all(s == "dead" for s in states)
+    return "dead" in states
+
+
+def _propagate_skips(doc, state):
+    changed = True
+    while changed:
+        changed = False
+        for uid in _top_units(doc):
+            if (state["units"][uid]["status"] == "pending"
+                    and _unit_dead(doc, state, uid)):
+                state["units"][uid]["status"] = "skipped"
+                changed = True
+
+
+def _first_ready(doc, state):
+    for uid in _top_units(doc):
+        if _unit_ready(doc, state, uid):
+            return uid
+    return None
+
+
+def _expected_node(doc, state, uid):
+    """The node id a session actually runs for this unit: the unit itself,
+    or the container's current internal child (array-order, P1 machinery)."""
+    con = _con_by_id(doc, uid)
+    if con is None:
+        return uid
+    pos = int(state.get("container_pos", {}).get(uid, 0))
+    return con["children"][pos]
+
+
+def _walk_outcome(doc, state):
+    """Rules 6/6b/8: failure handled iff a satisfied outgoing
+    failure/completion edge's target actually RAN (skipped targets do not
+    count -- edge presence is not traversal)."""
+    outcome, capped = "success", False
+    for uid in _top_units(doc):
+        u = state["units"][uid]
+        if u["status"] != "failure":
+            continue
+        handled = False
+        for e in doc.get("edges", []):
+            if (e.get("from") == uid and not e.get("back")
+                    and e.get("on") in ("failure", "completion")
+                    and _edge_state(state, e) == "satisfied"
+                    and state["units"][e["to"]]["status"] in
+                    ("success", "failure")):
+                handled = True
+                break
+        if not handled:
+            outcome = "failure"
+            if u.get("capped"):
+                capped = True
+    return "capped" if capped else outcome
 
 
 def _effective_runs_as(doc, node):
@@ -604,19 +736,25 @@ def _loop_ctx(state, node, state_path):
             "verdict_file": _verdict_rel(state_path)}
 
 
-def _read_verdict(verdict_path):
-    """Total (prevention-log #12): any unreadable/odd shape = no exit.
-    Missing evidence never exits a loop early -- that would declare the exit
-    condition met without evidence (fail-open). The max_rounds cap is the
-    floor under a persistently absent verdict."""
+def _read_verdict_full(verdict_path):
+    """Total (prevention-log #12): any unreadable/odd shape = {}. The file
+    may carry {"exit": bool} (loop exit, P1) and/or
+    {"outcome": "success"|"failure"} (the branch mechanism, P2a)."""
     if not verdict_path:
-        return False
+        return {}
     try:
         with open(verdict_path) as fh:
             verdict = json.load(fh)
     except (OSError, ValueError):
-        return False
-    return isinstance(verdict, dict) and verdict.get("exit") is True
+        return {}
+    return verdict if isinstance(verdict, dict) else {}
+
+
+def _read_verdict(verdict_path):
+    """Loop-exit view: missing evidence never exits a loop early -- that
+    would declare the exit condition met without evidence (fail-open). The
+    max_rounds cap is the floor under a persistently absent verdict."""
+    return _read_verdict_full(verdict_path).get("exit") is True
 
 
 def _journal_append(journal_path, state):
@@ -639,6 +777,7 @@ def _journal_append(journal_path, state):
         "finished": int(time.time()),
         "sessions": int(state.get("sessions") or 0),
         "lane": state.get("lane", ""),
+        "bounces": state.get("bounces") or {},
         "nodes": nodes_done,
         "merge_affecting": any(n.get("type") == "git_ops" for n in nodes_done
                                if isinstance(n, dict)),
@@ -718,7 +857,6 @@ def _finish(state, state_path, outcome, journal_path):
 def next_node(state_path, brief_out, journal_path=""):
     state = _load_state(state_path)
     doc = state["doc"]
-    nodes = doc["nodes"]
     status = state.get("status")
     if status == "done":
         # A done-state on disk means a prior _finish could not unlink -- the
@@ -731,14 +869,24 @@ def next_node(state_path, brief_out, journal_path=""):
         # (prevention-log #18: the reassuring verdict must be earned).
         raise PipelineError("run state %s has unexpected status %r -- "
                             "refusing" % (state_path, status))
-    # Backstops for stale states (record_outcome normally finishes runs) --
-    # they take journal_path so no completed run ever slips out of the journal.
-    if state["idx"] >= len(nodes):
-        return _finish(state, state_path, "success", journal_path)
     cap = doc["caps"]["max_sessions_per_run"]
     if state["sessions"] >= cap:
+        # Backstop for stale states (record_outcome normally finishes runs)
+        # -- takes journal_path so no completed run slips out of the journal.
         return _finish(state, state_path, "capped", journal_path)
-    node = nodes[state["idx"]]
+    uid = _first_ready(doc, state)
+    if uid is None:
+        pending = [u for u in _top_units(doc)
+                   if state["units"][u]["status"] == "pending"]
+        if pending:
+            # Impossible on a validated DAG (a minimal pending unit always
+            # has all-terminal parents) -- refuse loudly, never guess
+            # (prevention-log #18).
+            raise PipelineError("walk stalled with pending units %s in %s -- "
+                                "refusing" % (", ".join(pending), state_path))
+        return _finish(state, state_path, _walk_outcome(doc, state),
+                       journal_path)
+    node = _node_by_id(doc, _expected_node(doc, state, uid))
     if node.get("legacy_prompt"):
         kind, prompt = "legacy", node["legacy_prompt"]
     else:
@@ -759,50 +907,90 @@ def record_outcome(state_path, node_id, outcome, session_log="",
                             "node; only success/error are recorded)" % outcome)
     state = _load_state(state_path)
     doc = state["doc"]
-    nodes = doc["nodes"]
-    if state["idx"] >= len(nodes) or nodes[state["idx"]]["id"] != node_id:
+    uid = _first_ready(doc, state)
+    if uid is None or _expected_node(doc, state, uid) != node_id:
         raise PipelineError("record for node %r but the run's current node is "
                             "%r -- refusing (corrupt driver?)"
-                            % (node_id, nodes[state["idx"]]["id"]
-                               if state["idx"] < len(nodes) else None))
-    node = nodes[state["idx"]]
-    con = _container_of(doc, node_id)
+                            % (node_id,
+                               _expected_node(doc, state, uid) if uid else None))
+    node = _node_by_id(doc, node_id)
+    con = _con_by_id(doc, uid)
+    verdict = _read_verdict_full(verdict_path)
     entry = {"id": node_id, "type": node.get("type"), "outcome": outcome,
+             "unit": uid,
+             "via": sorted(set(e["on"] for e in _incoming_edges(doc, uid)
+                               if _edge_state(state, e) == "satisfied")),
              "session_log": os.path.basename(session_log) if session_log else ""}
+    bounce_total = sum(int(v) for v in (state.get("bounces") or {}).values())
+    if bounce_total:
+        entry["bounce"] = bounce_total
+    unit = state["units"][uid]
+
     if con is not None and con.get("kind") == "loop":
-        entry["round"] = int(state["rounds"].get(con["id"], 1))
+        entry["round"] = int(state["rounds"].get(uid, 1))
         if node_id == con["children"][-1]:
             # v5 §6: the structured verdict is part of the run journal, not
             # just a control signal -- record what the exit decision saw.
-            entry["verdict_exit"] = _read_verdict(verdict_path)
+            entry["verdict_exit"] = verdict.get("exit") is True
     state["nodes_done"].append(entry)
     state["sessions"] += 1
-    if outcome == "error":
-        res = _finish(state, state_path, "failure", journal_path)
-        return "DONE %s" % res["outcome"]
-    # success: advance
-    last_child_of_loop = (con is not None and con.get("kind") == "loop"
-                          and node_id == con["children"][-1])
-    if last_child_of_loop:
-        if _read_verdict(verdict_path):
-            state["idx"] += 1                              # exit the loop
+
+    # --- resolve the UNIT's terminal state (decisions 3 + 6b) --------------
+    if con is None:
+        if outcome == "error":
+            # An errored session's verdict never rescues it (fail-safe).
+            unit["status"] = "failure"
         else:
-            rnd = int(state["rounds"].get(con["id"], 1))
-            if rnd >= con["max_rounds"]:
-                res = _finish(state, state_path, "capped", journal_path)
-                return "DONE %s" % res["outcome"]
-            state["rounds"][con["id"]] = rnd + 1
-            first = con["children"][0]
-            state["idx"] = [n["id"] for n in nodes].index(first)
+            dep = verdict.get("outcome")
+            if dep in ("success", "failure"):
+                # The branch mechanism: a healthy session's structured
+                # verdict steers the labeled paths.
+                unit["status"] = dep
+                entry["verdict_outcome"] = dep
+            else:
+                unit["status"] = "success"
     else:
-        state["idx"] += 1
-    if state["idx"] >= len(nodes):
-        res = _finish(state, state_path, "success", journal_path)
+        pos = int(state["container_pos"].get(uid, 0))
+        children = con["children"]
+        if outcome == "error":
+            # 6b: a child error finishes the CONTAINER as failure so its
+            # failure/completion edges can fire -- never the whole run.
+            unit["status"] = "failure"
+        elif con.get("kind") == "loop" and pos == len(children) - 1:
+            if verdict.get("exit") is True:
+                unit["status"] = "success"
+            else:
+                rnd = int(state["rounds"].get(uid, 1))
+                if rnd >= con["max_rounds"]:
+                    # 6b: cap-exit = container FAILURE carrying the cap
+                    # marker (success would declare the exit condition met
+                    # without evidence -- fail-open).
+                    unit["status"] = "failure"
+                    unit["capped"] = True
+                else:
+                    state["rounds"][uid] = rnd + 1
+                    state["container_pos"][uid] = 0
+        elif pos == len(children) - 1:
+            unit["status"] = "success"                 # stage complete
+        else:
+            state["container_pos"][uid] = pos + 1      # mid-container
+
+    if unit["status"] != "pending":
+        _propagate_skips(doc, state)
+
+    # --- walk end / caps ----------------------------------------------------
+    if _first_ready(doc, state) is None:
+        pending = [u for u in _top_units(doc)
+                   if state["units"][u]["status"] == "pending"]
+        if pending:
+            raise PipelineError("walk stalled with pending units %s in %s -- "
+                                "refusing" % (", ".join(pending), state_path))
+        res = _finish(state, state_path, _walk_outcome(doc, state),
+                      journal_path)
         return "DONE %s" % res["outcome"]
     if state["sessions"] >= doc["caps"]["max_sessions_per_run"]:
-        # Cap decided HERE (record holds the journal path) -- deciding it in
-        # next_node would lose the run's journal line. next_node's own cap
-        # check remains as a journal-less backstop for stale states only.
+        # The RUN-level cap, decided HERE (record holds the journal path) --
+        # deciding it in next_node would lose the run's journal line.
         res = _finish(state, state_path, "capped", journal_path)
         return "DONE %s" % res["outcome"]
     _atomic_write_json(state_path, state)

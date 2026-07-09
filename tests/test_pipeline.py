@@ -588,6 +588,193 @@ class StateMachineTest(unittest.TestCase):
         self.assertTrue(os.path.exists(self.state))
 
 
+class GraphWalkTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, True)
+        self.pdir = os.path.join(self.repo, ".autonomy", "pipelines", "flow")
+        os.makedirs(self.pdir)
+        with open(os.path.join(self.repo, ".autonomy", "loop_prompt.md"), "w") as fh:
+            fh.write("legacy prompt\n")
+        for b in ("a.md", "b.md", "c.md", "d.md", "e.md"):
+            with open(os.path.join(self.pdir, b), "w") as fh:
+                fh.write("brief %s\n" % b)
+        self.state = os.path.join(self.repo, "state.json")
+        self.brief_out = os.path.join(self.repo, "brief.md")
+        self.verdict = os.path.join(self.repo, "verdict.json")
+
+    def _bind(self, doc):
+        with open(os.path.join(self.pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("roles:\n  coder:\n    enabled: true\n    pipeline: flow\n")
+
+    def _graph_doc(self):
+        return {"name": "flow", "version": 3,
+                "caps": {"max_sessions_per_run": 10},
+                "nodes": [
+                    {"id": "a", "type": "pick", "brief_ref": "a.md"},
+                    {"id": "b", "type": "check", "brief_ref": "b.md"},
+                    {"id": "ok", "type": "summarize", "brief_ref": "c.md"},
+                    {"id": "bad", "type": "notify", "brief_ref": "d.md"},
+                    {"id": "always", "type": "journal", "brief_ref": "e.md",
+                     "join": "any"}],
+                "edges": [
+                    {"from": "a", "to": "b", "on": "success"},
+                    {"from": "b", "to": "ok", "on": "success"},
+                    {"from": "b", "to": "bad", "on": "failure"},
+                    {"from": "ok", "to": "always", "on": "completion"},
+                    {"from": "bad", "to": "always", "on": "completion"}],
+                "containers": []}
+
+    def _drive(self, outcomes=None):
+        """Walk to DONE. outcomes maps node id -> success|error (default
+        success). Returns (picks, done_line)."""
+        outcomes = outcomes or {}
+        picks = []
+        for _ in range(40):
+            step = pipeline.next_node(self.state, self.brief_out)
+            if step["status"] == "done":
+                return picks, "DONE %s" % step["outcome"]
+            nid = step["node"]
+            picks.append(nid)
+            res = pipeline.record_outcome(self.state, nid,
+                                          outcomes.get(nid, "success"),
+                                          verdict_path=self.verdict)
+            if res.startswith("DONE"):
+                return picks, res
+        self.fail("walk did not terminate")
+
+    def test_success_path_skips_failure_lane(self):
+        self._bind(self._graph_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        picks, done = self._drive()
+        self.assertEqual(picks, ["a", "b", "ok", "always"])
+        self.assertEqual(done, "DONE success")
+        self.assertFalse(os.path.exists(self.state))
+
+    def test_failure_edge_consumes_failure(self):
+        self._bind(self._graph_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        picks, done = self._drive({"b": "error"})
+        self.assertEqual(picks, ["a", "b", "bad", "always"])
+        self.assertEqual(done, "DONE success")   # the failure was HANDLED
+
+    def test_unhandled_failure_fails_run(self):
+        self._bind(self._graph_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        picks, done = self._drive({"a": "error"})
+        self.assertEqual(picks, ["a"])
+        self.assertEqual(done, "DONE failure")
+
+    def test_completion_does_not_fire_from_skipped(self):
+        # always hangs ONLY off ok (join all); b fails handled by bad ->
+        # ok skipped -> always skipped; run still success (failure handled).
+        doc = self._graph_doc()
+        doc["nodes"][4] = {"id": "always", "type": "journal",
+                           "brief_ref": "e.md"}
+        doc["edges"] = [
+            {"from": "a", "to": "b", "on": "success"},
+            {"from": "b", "to": "ok", "on": "success"},
+            {"from": "b", "to": "bad", "on": "failure"},
+            {"from": "ok", "to": "always", "on": "completion"}]
+        self._bind(doc)
+        pipeline.start_run(self.repo, "coder", self.state)
+        picks, done = self._drive({"b": "error"})
+        self.assertEqual(picks, ["a", "b", "bad"])
+        self.assertEqual(done, "DONE success")
+
+    def test_join_all_fanin_strict(self):
+        # d needs BOTH b and c (S33 semantics); c errors unhandled ->
+        # d skipped, run failure.
+        doc = {"name": "flow", "version": 3,
+               "caps": {"max_sessions_per_run": 10},
+               "nodes": [
+                   {"id": "a", "type": "pick", "brief_ref": "a.md"},
+                   {"id": "b", "type": "check", "brief_ref": "b.md"},
+                   {"id": "c", "type": "check", "brief_ref": "c.md"},
+                   {"id": "d", "type": "summarize", "brief_ref": "d.md"}],
+               "edges": [
+                   {"from": "a", "to": "b", "on": "success"},
+                   {"from": "a", "to": "c", "on": "success"},
+                   {"from": "b", "to": "d", "on": "success"},
+                   {"from": "c", "to": "d", "on": "success"}],
+               "containers": []}
+        self._bind(doc)
+        pipeline.start_run(self.repo, "coder", self.state)
+        picks, done = self._drive({"c": "error"})
+        self.assertEqual(picks, ["a", "b", "c"])
+        self.assertEqual(done, "DONE failure")
+
+    def test_implicit_chain_synthesized_into_state(self):
+        doc = {"name": "flow", "version": 1,
+               "caps": {"max_sessions_per_run": 5},
+               "nodes": [
+                   {"id": "a", "type": "pick", "brief_ref": "a.md"},
+                   {"id": "b", "type": "check", "brief_ref": "b.md"},
+                   {"id": "c", "type": "summarize", "brief_ref": "c.md"}],
+               "edges": [], "containers": []}
+        self._bind(doc)
+        pipeline.start_run(self.repo, "coder", self.state)
+        with open(self.state) as fh:
+            st = json.load(fh)
+        self.assertEqual(st["fmt"], 2)
+        self.assertEqual(len(st["doc"]["edges"]), 2)   # a->b, b->c
+
+    def test_verdict_outcome_steers_failure_edge(self):
+        # session SUCCEEDS but its structured verdict says failure -> the
+        # failure path runs (the branch mechanism).
+        self._bind(self._graph_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        picks = []
+        for _ in range(10):
+            step = pipeline.next_node(self.state, self.brief_out)
+            if step["status"] == "done":
+                break
+            picks.append(step["node"])
+            if step["node"] == "b":
+                with open(self.verdict, "w") as fh:
+                    json.dump({"outcome": "failure"}, fh)
+            else:
+                try:
+                    os.unlink(self.verdict)
+                except OSError:
+                    pass
+            res = pipeline.record_outcome(self.state, step["node"], "success",
+                                          verdict_path=self.verdict)
+            if res.startswith("DONE"):
+                break
+        self.assertEqual(picks, ["a", "b", "bad", "always"])
+        self.assertEqual(res, "DONE success")
+
+    def test_errored_session_verdict_never_rescues(self):
+        # error + verdict {"outcome": "success"} stays a failure (fail-safe).
+        self._bind(self._graph_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        pipeline.next_node(self.state, self.brief_out)
+        pipeline.record_outcome(self.state, "a", "success",
+                                verdict_path=self.verdict)
+        pipeline.next_node(self.state, self.brief_out)
+        with open(self.verdict, "w") as fh:
+            json.dump({"outcome": "success"}, fh)
+        pipeline.record_outcome(self.state, "b", "error",
+                                verdict_path=self.verdict)
+        step = pipeline.next_node(self.state, self.brief_out)
+        self.assertEqual(step["node"], "bad")   # the failure edge fired
+
+    def test_p1_format_state_refused(self):
+        self._bind(self._graph_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        with open(self.state) as fh:
+            st = json.load(fh)
+        del st["fmt"]
+        with open(self.state, "w") as fh:
+            json.dump(st, fh)
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.next_node(self.state, self.brief_out)
+        self.assertTrue(os.path.exists(self.state))
+
+
 class JournalLedgerTest(unittest.TestCase):
     def setUp(self):
         self.repo = tempfile.mkdtemp()
