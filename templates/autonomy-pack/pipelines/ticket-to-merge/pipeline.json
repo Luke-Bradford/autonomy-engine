@@ -36,6 +36,7 @@
     {"from": "qa-review", "to": "notify-park", "on": "failure"},
     {"from": "qa-verdict", "to": "coding", "on": "failure", "back": true,
      "max_bounces": 3},
+    {"from": "qa-verdict", "to": "notify-park", "on": "failure"},
     {"from": "qa-verdict", "to": "summarize", "on": "success"},
     {"from": "summarize", "to": "journal-run", "on": "completion"},
     {"from": "notify-park", "to": "journal-run", "on": "completion"}

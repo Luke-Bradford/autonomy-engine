@@ -878,6 +878,24 @@ class BackEdgeTest(unittest.TestCase):
         res = self._step("v", verdict={"outcome": "failure"})  # cap hit
         self.assertEqual(res, "DONE failure")
 
+    def test_bounce_cap_exhausted_falls_back_to_failure_edge(self):
+        # the template shape: back-edge until the cap, THEN the non-back
+        # failure edge parks -- while bounces remain, the reset re-opens the
+        # fallback edge so it never fires prematurely.
+        doc = self._ref_doc(max_bounces=1)
+        doc["nodes"].append({"id": "park", "type": "notify",
+                             "brief_ref": "p.md"})
+        doc["edges"].append({"from": "v", "to": "park", "on": "failure"})
+        self._bind(doc)
+        pipeline.start_run(self.repo, "coder", self.state)
+        self._step("a")
+        self._step("w", verdict={"exit": True})
+        self._step("v", verdict={"outcome": "failure"})    # bounce 1 (no park)
+        self._step("w", verdict={"exit": True})
+        self._step("v", verdict={"outcome": "failure"})    # cap denied
+        res = self._step("park")                           # fallback fired
+        self.assertEqual(res, "DONE success")              # handled = parked
+
     def test_child_error_fires_container_failure_edge(self):
         doc = {"name": "flow", "version": 3,
                "caps": {"max_sessions_per_run": 10},
