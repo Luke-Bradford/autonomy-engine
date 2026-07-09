@@ -1494,5 +1494,54 @@ class SubstituteRefsTest(unittest.TestCase):
                          "cost ${params.n}")
 
 
+class SubstituteFuncsTest(unittest.TestCase):
+    def setUp(self):
+        self.ctx = {"params": {"model": "", "ticket": "AE-12", "a": "x"},
+                    "nodes": {}, "run": {}}
+
+    def test_default_uses_fallback_when_empty(self):
+        self.assertEqual(pipeline.substitute(
+            "${default(params.model, 'claude-sonnet-5')}", self.ctx), "claude-sonnet-5")
+
+    def test_default_uses_value_when_set(self):
+        self.ctx["params"]["model"] = "opus"
+        self.assertEqual(pipeline.substitute(
+            "${default(params.model, 'x')}", self.ctx), "opus")
+
+    def test_concat(self):
+        self.assertEqual(pipeline.substitute(
+            "${concat('release/', params.ticket)}", self.ctx), "release/AE-12")
+
+    def test_slug(self):
+        self.assertEqual(pipeline.substitute(
+            "${slug(concat(params.ticket, ' Fix Bug'))}", self.ctx), "ae-12-fix-bug")
+
+    def test_nested_refs_and_literals(self):
+        self.assertEqual(pipeline.substitute(
+            "${concat(params.a, '-', params.ticket)}", self.ctx), "x-AE-12")
+
+    def test_unknown_function_refuses(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.substitute("${danger(params.a)}", self.ctx)
+
+    def test_no_eval_arbitrary_expr_refuses(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.substitute("${__import__('os').system('x')}", self.ctx)
+
+    def test_wrong_arity_refuses(self):
+        for expr in ("${slug()}", "${slug(params.a, 'x')}", "${default(params.a)}",
+                     "${default(params.a, 'x', 'y')}"):
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.substitute(expr, self.ctx)
+
+    def test_brace_in_literal_is_a_documented_limitation_refuses(self):
+        # Low (Codex CP1): _REF_RE stops at the first '}', so a '}' inside a
+        # quoted literal truncates the body -> it fails to parse and RAISES
+        # (fail-safe, never a silent mis-resolve). Documented constraint:
+        # string literals inside ${...} may not contain '}'.
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.substitute("${concat('a}b', params.a)}", self.ctx)
+
+
 if __name__ == "__main__":
     unittest.main()

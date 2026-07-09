@@ -373,9 +373,87 @@ def _resolve_ref(path, ctx):
     raise PipelineError("unresolvable reference ${%s}" % path)
 
 
+def _slug(s):
+    s = re.sub(r"[^a-z0-9]+", "-", _to_str(s).lower()).strip("-")
+    return s or "x"
+
+
+# fn -> (impl, min_args, max_args | None for variadic). Arity is enforced so a
+# wrong-arity call is a fail-safe language error, never an IndexError (Codex CP1).
+_ALLOWED_FUNCS = {
+    "default": (lambda a: a[0] if a[0] not in (None, "", False) else a[1], 2, 2),
+    "concat":  (lambda a: "".join(_to_str(x) for x in a), 1, None),
+    "slug":    (lambda a: _slug(a[0]), 1, 1),
+}
+_CALL_RE = re.compile(r"^([a-z_]+)\((.*)\)$", re.S)
+
+
+def _split_args(s):
+    """Top-level comma split respecting quotes + one level of nested parens.
+    No eval: a hand tokenizer, so arbitrary Python can never execute."""
+    args, buf, depth, quote = [], [], 0, None
+    for ch in s:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+            buf.append(ch)
+        elif ch == "(":
+            depth += 1
+            buf.append(ch)
+        elif ch == ")":
+            depth -= 1
+            buf.append(ch)
+        elif ch == "," and depth == 0:
+            args.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+    if quote is not None or depth != 0:
+        raise PipelineError("malformed expression: unbalanced quotes/parens")
+    tail = "".join(buf).strip()
+    if tail or args:
+        args.append(tail)
+    return args
+
+
+def _resolve_arg(tok, ctx):
+    tok = tok.strip()
+    if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in "'\"":
+        return tok[1:-1]                            # string literal
+    if _CALL_RE.match(tok):
+        return _resolve_expr(tok, ctx)              # nested call
+    if re.match(r"^-?\d+$", tok):
+        return int(tok)
+    return _resolve_ref(tok, ctx)                    # a reference
+
+
 def _resolve_expr(expr, ctx):
-    """One ${...} body: a reference (Task 2) or a function call (Task 3)."""
-    return _resolve_ref(expr.strip(), ctx)        # Task 3 wraps this for funcs
+    """One ${...} body: a closed-allowlist function call or a dotted reference.
+    A hand-rolled parse -- there is NO eval anywhere, so ${__import__(...)} is
+    just an unknown function that RAISES (test_no_eval_arbitrary_expr_refuses)."""
+    expr = expr.strip()
+    m = _CALL_RE.match(expr)
+    if m:
+        fn, raw = m.group(1), m.group(2)
+        spec = _ALLOWED_FUNCS.get(fn)
+        if spec is None:
+            raise PipelineError("unknown function %r (allowed: %s)"
+                                % (fn, ", ".join(sorted(_ALLOWED_FUNCS))))
+        impl, lo, hi = spec
+        args = [_resolve_arg(a, ctx) for a in _split_args(raw)]
+        if len(args) < lo or (hi is not None and len(args) > hi):
+            raise PipelineError("function %r arity: expected %s, got %d"
+                                % (fn, lo if hi == lo else "%s+" % lo, len(args)))
+        try:
+            return impl(args)
+        except PipelineError:
+            raise
+        except Exception as exc:                 # any impl slip -> language error
+            raise PipelineError("function %r failed: %s" % (fn, exc))
+    return _resolve_ref(expr, ctx)
 
 
 def _to_str(v):
