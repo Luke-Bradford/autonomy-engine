@@ -90,6 +90,13 @@ sibling scripts) for the same shape and account for every occurrence. One
 fixed `local x=$(…)` with five unfixed siblings is a partial fix — the bot
 will find the rest.
 
+**This applies to REVIEW FIXES too** (prevention-log #21, PR #358): when a
+review finding names an instance of a CLASS (missing guard, masked rc,
+unvalidated input), the follow-up commit fixes every occurrence in the
+touched scope and the reply says so ("scanned siblings: X also widened, Y
+already guarded because …"). A one-site fix to a class finding costs the
+next full review round.
+
 ## Pre-push statement
 
 Before pushing, be able to state honestly: fail-safe paths checked; invariants

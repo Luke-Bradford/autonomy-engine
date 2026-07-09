@@ -40,6 +40,16 @@ depends on, the missing/garbage case is an error — not `None`, not a default.
 Corollary: `assert` is for tests. Production invariants use explicit checks +
 a concrete exception.
 
+**Two failure disciplines when the same data has two consumers** (P3a,
+PR #358): the DISPATCH consumer raises (`resolve_pipeline` — a broken doc
+must never run) while the DISPLAY consumer is a TOTALITY boundary
+(`build_pipeline_view` — every call guarded, errors become degraded payload
+fields, the raw artifact stays visible as truth). Don't unify them in
+either direction: a raising display 500s the dashboard; a degrading
+dispatcher runs broken config. If a builder claims totality, EVERY external
+call inside it is guarded — the review bot checks call-by-call
+(prevention-log #21).
+
 ## Defensive shape-handling on config input
 
 Parsed config can be any shape (`roles: "garbage"`). Every function that walks
