@@ -1647,14 +1647,17 @@ dispatch_batch() {
       cd "${wts[i]}" || exit 1
       materialize_planner
       rm -f "var/autonomy-logs/$(basename "${PB_VERDICT[i]}")" 2>/dev/null
+      # TERM: kill + REAP the agent child, then exit WITHOUT writing a
+      # result (a missing result reads as error, fail-safe) -- an
+      # interrupted wait must never fall through to classify (Codex CP2).
+      # Installed BEFORE the spawn so no delivery window precedes it
+      # (review round 2); the guard covers a pre-spawn TERM.
+      _cp=""
+      trap '[ -n "$_cp" ] && kill "$_cp" 2>/dev/null; [ -n "$_cp" ] && wait "$_cp" 2>/dev/null; exit 143' TERM
       invoke_scoped_env "$envl" \
         "${PB_PROMPT[i]}" "$rules_file" \
         "$m" "$FALLBACK_MODEL" "${logs[i]}" "$e" &
       _cp=$!
-      # TERM: kill + REAP the agent child, then exit WITHOUT writing a
-      # result (a missing result reads as error, fail-safe) -- an
-      # interrupted wait must never fall through to classify (Codex CP2).
-      trap 'kill "$_cp" 2>/dev/null; wait "$_cp" 2>/dev/null; exit 143' TERM
       wait "$_cp"; _rc=$?
       _out="$(agent_classify_outcome "${logs[i]}" "$_rc")"
       printf '%s\n%s\n' "$_rc" "$_out" >"${results[i]}.tmp" \
