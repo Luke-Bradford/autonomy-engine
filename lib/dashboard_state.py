@@ -2544,7 +2544,11 @@ def build_pipeline_view(repo_path, role):
     try:
         settings = roles_schema.role_settings(cfg, role)
     except KeyError:
-        return {"error": "unknown role: %s" % role}
+        # role_settings refuses NON-DISPATCHABLE roles too (disabled, or
+        # pinned to an undeclared lane) -- say so; "unknown" alone would
+        # mislead for a role that exists but is switched off.
+        return {"error": "unknown role: %s (or not dispatchable -- not an "
+                         "enabled loop/cron/event role)" % role}
     view = {"repo": os.path.basename(repo_path.rstrip("/")),
             "path": repo_path, "role": role}
     binding = settings.get("pipeline") or ""

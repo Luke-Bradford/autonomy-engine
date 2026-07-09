@@ -163,7 +163,7 @@ let SEL = "";             // selected unit/node id ("" = nothing)
 let OBSERVED = false;
 const COLLAPSED = new Set();   // container ids, survives re-render
 
-function esc(x){return String(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;")}
+function esc(x){return String(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;")}
 function qs(){return new URLSearchParams(location.search)}
 
 /* ---- layout: longest-path ranking over effective edges ---- */
@@ -240,8 +240,7 @@ function card(n, lit, inflight){
   const bounce = OBSERVED && entry && entry.bounce ? ` <span class="badge warn">↩ bounce ${esc(entry.bounce)}</span>` : "";
   const tag = invalid ? `<span class="tag badt">invalid</span>`
     : (n.type === "git_ops" ? `<span class="tag hard">enforced</span>` : `<span class="tag soft">instructed</span>`);
-  return `<div class="node softb${SEL===n.id?" sel":""}${dim}${run}" data-nid="${esc(n.id)}" data-uid="${esc(n.id)}"
-    onclick="sel('${esc(n.id)}')" tabindex="0" onkeydown="if(event.key==='Enter')sel('${esc(n.id)}')">
+  return `<div class="node softb${SEL===n.id?" sel":""}${dim}${run}" data-uid="${esc(n.id)}" tabindex="0">
     ${glyph}<span class="ico">${icon}</span> <span class="nm">${esc(n.id)}</span>
     <span class="sum">${invalid ? "unknown type: " + esc(n.type) : esc(sheet.label)}${bounce}</span>
     <div class="meta">${runsAs?`<span class="agent">${runsAs}</span>`:""}${tag}</div>
@@ -255,19 +254,18 @@ function containerBox(con, lit, inflight){
   const running = kids.some(k => inflight[k.id] === "dispatched") ||
                   inflight[con.id] === "dispatched";
   if(COLLAPSED.has(con.id)){
-    return `<div class="node${SEL===con.id?" sel":""}${dim}${running?" running":""}" data-uid="${esc(con.id)}"
-      onclick="sel('${esc(con.id)}')" tabindex="0" onkeydown="if(event.key==='Enter')sel('${esc(con.id)}')">
+    return `<div class="node${SEL===con.id?" sel":""}${dim}${running?" running":""}" data-uid="${esc(con.id)}" tabindex="0">
       <span class="ico">${sheet.icon}</span> <span class="nm">${esc(con.id)}</span>
       <span class="sum">${esc(con.kind)} · ${kids.length} steps (collapsed)</span>
-      <div class="meta"><button class="pill" onclick="event.stopPropagation();toggleCollapse('${esc(con.id)}')">expand</button></div>
+      <div class="meta"><button class="pill" data-collapse="${esc(con.id)}">expand</button></div>
     </div>`;
   }
   const foot = con.kind === "loop"
     ? `<div class="foot"><span><b>exit when:</b> ${esc(con.exit_when||"")}</span><span class="tag soft">instructed</span>
        <span style="margin-left:auto"><b>cap:</b> ${esc(con.max_rounds||"?")} rounds</span><span class="tag hard">enforced</span></div>` : "";
   return `<div class="box${con.kind==="stage"?" stage":""}${dim}${running?" running":""}" data-uid="${esc(con.id)}">
-    <span class="boxtag" onclick="event.stopPropagation();sel('${esc(con.id)}')" title="the container's own pane">${sheet.icon} ${esc(con.kind)} · ${esc(con.id)}</span>
-    <button class="chev" onclick="event.stopPropagation();toggleCollapse('${esc(con.id)}')" title="collapse this container">▾</button>
+    <span class="boxtag" data-seluid="${esc(con.id)}" title="the container's own pane">${sheet.icon} ${esc(con.kind)} · ${esc(con.id)}</span>
+    <button class="chev" data-collapse="${esc(con.id)}" title="collapse this container">▾</button>
     <div class="inner">${kids.map(k => card(k, lit, inflight)).join("")}</div>${foot}</div>`;
 }
 
@@ -366,7 +364,7 @@ function renderPalette(){
   for(const [k,v] of Object.entries(spec)) (groups[v.group] = groups[v.group] || []).push([k,v]);
   document.getElementById("palette").innerHTML = GROUP_ORDER.filter(g => groups[g]).map(g =>
     `<div class="pgroup"><span class="eyebrow">${esc(g)}</span>${groups[g].map(([k,v]) =>
-      `<button class="pitem${v.deferred?" off":""}" onclick="previewType('${esc(k)}')"
+      `<button class="pitem${v.deferred?" off":""}" data-type="${esc(k)}"
         title="${v.deferred ? esc("not yet executable — " + (v.deferred_reason||"")) : "click: preview its spec sheet"}">
         <span class="ico">${v.icon}</span>${esc(v.label)}${v.deferred?`<span class="phase">${esc((v.deferred_reason||"").split(" ")[0])}</span>`:""}
       </button>`).join("")}</div>`).join("")
@@ -442,9 +440,27 @@ function renderPane(){
     ${OBSERVED && entry ? `<div class="frow"><span class="lab">last run</span><span class="val">${esc(entry.outcome)}${entry.verdict_outcome?` · verdict ${esc(entry.verdict_outcome)}`:""}${entry.bounce?` · bounce ${esc(entry.bounce)}`:""} · <span class="note">${esc(entry.session_log||"")}</span></span></div>` : ""}`;
 }
 
-/* ---- selection / toggles ---- */
+/* ---- selection / toggles ----
+   Delegated listeners reading data-* attributes: ids from the (possibly
+   INVALID, so untrusted) document are never interpolated into inline
+   handler strings -- code and data stay separate (security review on this
+   commit; prevention-log #6 at the render boundary). */
 function sel(id){ SEL = id; render(); }
 function toggleCollapse(id){ if(COLLAPSED.has(id)) COLLAPSED.delete(id); else COLLAPSED.add(id); render(); }
+function dagActivate(e){
+  const col = e.target.closest("[data-collapse]");
+  if(col){ toggleCollapse(col.dataset.collapse); return; }
+  const tag = e.target.closest("[data-seluid]");
+  if(tag){ sel(tag.dataset.seluid); return; }
+  const card = e.target.closest("[data-uid]");
+  if(card) sel(card.dataset.uid);
+}
+document.getElementById("dag").addEventListener("click", dagActivate);
+document.getElementById("dag").addEventListener("keydown", e => { if(e.key === "Enter") dagActivate(e); });
+document.getElementById("palette").addEventListener("click", e => {
+  const it = e.target.closest("[data-type]");
+  if(it) previewType(it.dataset.type);
+});
 document.getElementById("obsbtn").addEventListener("click", () => { OBSERVED = !OBSERVED; render(); });
 window.addEventListener("resize", () => requestAnimationFrame(drawEdges));
 
