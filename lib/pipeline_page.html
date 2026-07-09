@@ -608,7 +608,7 @@ function renderPane(){
     const ref = n.brief_ref, guarded = n.type === "git_ops", bt = briefText(ref);
     pane.innerHTML = `<span class="eyebrow">property pane · spec sheet</span>
       <h3><span class="ico">${sheet.icon}</span>${esc(n.id)}<span class="tag ${guarded?"hard":"soft"}">${guarded?"enforced":"instructed"}</span></h3>
-      <div class="note" style="margin-bottom:6px">${esc(sheet.label)} — schema fields editable; catalog extras are hints. Saves to the local shadow.</div>
+      <div class="note" style="margin-bottom:6px">${esc(sheet.label)} — edit the document fields below (they save to the local shadow). The activity's catalog spec is shown at the end as read-only reference.</div>
       <div class="frow"><span class="lab">runs_as</span><span class="note" style="margin-left:auto">inherits the role default</span></div>${runsAsRows(n.id, n.runs_as, "runs_as")}
       <div class="frow"><span class="lab">context</span><select data-edit="field" data-scope="node" data-id="${esc(n.id)}" data-field="context"><option value=""${!n.context?" selected":""}>project</option><option value="own"${n.context==="own"?" selected":""} disabled>own — deferred (P5)</option></select></div>
       <div class="frow"><span class="lab">join</span>${editSelect(n.id,"join",["","all","any"],n.join,"node")}</div>
@@ -617,7 +617,9 @@ function renderPane(){
         : (ref ? `<div class="frow"><span class="lab">brief</span><span class="note" style="margin-left:auto">${esc(ref)}${bt==null?" · new":""}</span></div>
             <textarea data-edit="brief" data-ref="${esc(ref)}" placeholder="(brief text — saving creates ${esc(ref)})">${esc(bt==null?"":bt)}</textarea>`
              : `<div class="note">no brief_ref (legacy node)</div>`)}
-      ${sheetRows(sheet, n)}
+      <details style="margin-top:8px"><summary>activity spec (catalog reference — read-only)</summary>
+        <div class="note" style="margin:4px 0">these describe what the activity does; they are NOT document fields (the P1/P2 schema carries only the fields above — a validated node cannot add them, so they stay read-only).</div>
+        ${sheetRows(sheet, n)}</details>
       <div class="frow" style="margin-top:8px"><button class="pill" data-remove="${esc(n.id)}" title="remove this node and its edges">remove node</button></div>`;
     return;
   }
