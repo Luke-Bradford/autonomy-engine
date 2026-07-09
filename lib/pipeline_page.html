@@ -390,7 +390,7 @@ function render(){
       const n = nodeById(uid);
       return n ? card(n, lit, inflight) : "";
     }).join("")}</div>`).join("");
-  renderPane();
+  if(!paneFocused()) renderPane();   // never yank a pane input mid-edit (#14/#16)
   requestAnimationFrame(drawEdges);
 }
 function anchor(el, side){
@@ -473,6 +473,77 @@ function sheetRows(sheet, node){
   const emits = sheet.emits ? `<div class="frow"><span class="lab">emits</span><span class="note">${esc(sheet.emits)}</span></div>` : "";
   return req + opt + guard + emits;
 }
+
+/* ---- editor: pane field inputs (only when editable) ----
+   Writes go straight into WORKING/BRIEFS WITHOUT a re-render, so the focused
+   input keeps its caret (the #14/#16 held-edit discipline). markDirty updates
+   only the header. A live tick skips renderPane while a pane input is focused
+   (paneFocused), so server overlays never yank the field mid-edit. */
+const EFFORTS = ["", "low", "medium", "high", "xhigh", "max"];
+function optList(opts, cur){
+  return opts.map(o => `<option value="${esc(o)}"${String(o)===String(cur==null?"":cur)?" selected":""}>${esc(o===""?"—":o)}</option>`).join("");
+}
+function editInput(id, field, value, scope){
+  return `<input data-edit="field" data-id="${esc(id)}" data-field="${esc(field)}" data-scope="${esc(scope||"node")}" value="${esc(value==null?"":value)}">`;
+}
+function editSelect(id, field, opts, cur, scope){
+  return `<select data-edit="field" data-id="${esc(id)}" data-field="${esc(field)}" data-scope="${esc(scope||"node")}">${optList(opts, cur)}</select>`;
+}
+function runsAsRows(id, ra, scope){
+  ra = ra || {};
+  const models = [""].concat(MODEL_CHOICES || []);
+  return `<div class="frow"><span class="lab">model</span>${editSelect(id,"model",models,ra.model,scope)}</div>
+    <div class="frow"><span class="lab">effort</span>${editSelect(id,"effort",EFFORTS,ra.effort,scope)}</div>
+    <div class="frow"><span class="lab">account</span>${editInput(id,"account",ra.account,scope)}</div>
+    <div class="frow"><span class="lab">agent</span>${editInput(id,"agent",ra.agent,scope)}</div>`;
+}
+function paneFocused(){
+  const a = document.activeElement;
+  return !!(a && document.getElementById("pane").contains(a) &&
+            /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName));
+}
+function setField(scope, id, field, val){
+  const d = curDoc(); if(!d) return;
+  if(scope === "runs_as" || scope === "con-runs_as"){
+    const owner = scope === "runs_as" ? (d.nodes||[])[nodeIndex(id)] : conById(id);
+    if(!owner) return;
+    const ra = Object.assign({}, owner.runs_as);
+    if(val === "") delete ra[field]; else ra[field] = val;
+    if(Object.keys(ra).length) owner.runs_as = ra; else delete owner.runs_as;
+    return;
+  }
+  if(scope === "con"){
+    const c = conById(id); if(!c) return;
+    if(field === "max_rounds"){ const n = parseInt(val, 10);
+      if(!isNaN(n)) c.max_rounds = n; else delete c.max_rounds; }
+    else if(val === "") delete c[field]; else c[field] = val;
+    return;
+  }
+  const i = nodeIndex(id); if(i < 0) return;         // node scalar field
+  if(val === "") delete d.nodes[i][field]; else d.nodes[i][field] = val;
+}
+function removeNode(id){
+  const d = curDoc(); if(!d) return;
+  d.nodes = (d.nodes||[]).filter(n => !(n && n.id === id));
+  d.edges = (d.edges||[]).filter(e => e.from !== id && e.to !== id);
+  for(const c of (d.containers||[])) if(c.children) c.children = c.children.filter(ch => ch !== id);
+  if(SEL === id) SEL = "";
+  markDirty(); render();
+}
+function onPaneEdit(e){
+  const el = e.target.closest("[data-edit]");
+  if(!el || !editable()) return;
+  if(el.dataset.edit === "brief"){ BRIEFS[el.dataset.ref] = el.value; markDirty(); return; }
+  setField(el.dataset.scope, el.dataset.id, el.dataset.field, el.value);
+  markDirty();
+}
+document.getElementById("pane").addEventListener("input", onPaneEdit);
+document.getElementById("pane").addEventListener("change", onPaneEdit);
+document.getElementById("pane").addEventListener("click", e => {
+  const rm = e.target.closest("[data-remove]");
+  if(rm && editable()) removeNode(rm.dataset.remove);
+});
+
 function renderPane(){
   const pane = document.getElementById("pane");
   if(!VIEW || VIEW.error){ pane.innerHTML = `<span class="note">${esc(VIEW && VIEW.error || "loading…")}</span>`; return; }
@@ -489,6 +560,18 @@ function renderPane(){
   const con = conById(SEL);
   if(con){
     const sheet = sheetFor(con.kind) || {icon:"?", label:con.kind, required:[], optional:[], guarded:[]};
+    if(editable()){
+      pane.innerHTML = `<span class="eyebrow">property pane · container</span>
+        <h3><span class="ico">${sheet.icon}</span>${esc(con.id)}<span class="tag soft">${esc(con.kind)}</span></h3>
+        ${valRow("children", (con.children||[]).join(", "), true, "edit on the canvas")}
+        ${con.kind==="loop" ? `<div class="frow"><span class="lab"><span class="req">●</span> exit_when</span></div>
+          <textarea data-edit="field" data-scope="con" data-id="${esc(con.id)}" data-field="exit_when">${esc(con.exit_when||"")}</textarea>
+          <div class="frow"><span class="lab"><span class="req">●</span> max_rounds</span>${editInput(con.id,"max_rounds",con.max_rounds,"con")}<span class="tag hard">enforced cap</span></div>` : ""}
+        <div class="frow"><span class="lab">join</span>${editSelect(con.id,"join",["","all","any"],con.join,"con")}</div>
+        <div class="frow"><span class="lab">runs_as</span><span class="note" style="margin-left:auto">children inherit</span></div>${runsAsRows(con.id, con.runs_as, "con-runs_as")}
+        ${(sheet.guarded||[]).map(g => `<div class="guard">🔒 <span><b>guarded:</b> ${esc(g)} — visible, not removable.</span></div>`).join("")}`;
+      return;
+    }
     pane.innerHTML = `<span class="eyebrow">property pane · container</span>
       <h3><span class="ico">${sheet.icon}</span>${esc(con.id)}<span class="tag soft">${esc(con.kind)}</span></h3>
       ${valRow("children", (con.children||[]).join(", "), true, "")}
@@ -508,6 +591,23 @@ function renderPane(){
       <h3><span class="ico">?</span>${esc(n.id)}<span class="tag badt">invalid</span></h3>
       <div class="guard">⚠ <span><b>unknown type "${esc(n.type)}"</b> — the validator refuses this document; raw fields below.</span></div>
       ${Object.entries(n).map(([k,v]) => valRow(k, v, false, "")).join("")}`;
+    return;
+  }
+  if(editable()){
+    const ref = n.brief_ref, guarded = n.type === "git_ops", bt = briefText(ref);
+    pane.innerHTML = `<span class="eyebrow">property pane · spec sheet</span>
+      <h3><span class="ico">${sheet.icon}</span>${esc(n.id)}<span class="tag ${guarded?"hard":"soft"}">${guarded?"enforced":"instructed"}</span></h3>
+      <div class="note" style="margin-bottom:6px">${esc(sheet.label)} — schema fields editable; catalog extras are hints. Saves to the local shadow.</div>
+      <div class="frow"><span class="lab">runs_as</span><span class="note" style="margin-left:auto">inherits the role default</span></div>${runsAsRows(n.id, n.runs_as, "runs_as")}
+      <div class="frow"><span class="lab">context</span><select data-edit="field" data-scope="node" data-id="${esc(n.id)}" data-field="context"><option value=""${!n.context?" selected":""}>project</option><option value="own"${n.context==="own"?" selected":""} disabled>own — deferred (P5)</option></select></div>
+      <div class="frow"><span class="lab">join</span>${editSelect(n.id,"join",["","all","any"],n.join,"node")}</div>
+      ${guarded
+        ? `<div class="guard">🔒 <span><b>guarded:</b> git_ops merges via safe_merge + the repo gate — visible, not removable. Engine mechanics: no brief to edit.</span></div>`
+        : (ref ? `<div class="frow"><span class="lab">brief</span><span class="note" style="margin-left:auto">${esc(ref)}${bt==null?" · new":""}</span></div>
+            <textarea data-edit="brief" data-ref="${esc(ref)}" placeholder="(brief text — saving creates ${esc(ref)})">${esc(bt==null?"":bt)}</textarea>`
+             : `<div class="note">no brief_ref (legacy node)</div>`)}
+      ${sheetRows(sheet, n)}
+      <div class="frow" style="margin-top:8px"><button class="pill" data-remove="${esc(n.id)}" title="remove this node and its edges">remove node</button></div>`;
     return;
   }
   const entry = lastRunMaps().nodes[n.id];
