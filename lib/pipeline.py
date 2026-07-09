@@ -478,6 +478,68 @@ def substitute(value, ctx):
     return _REF_RE.sub(repl, protected).replace(_ESC, "${")
 
 
+def _coerce(name, typ, value, choices):
+    """Type-check/coerce one resolved value. Fail-safe: a mismatch RAISES."""
+    if typ == "number":
+        if isinstance(value, bool):
+            raise PipelineError("param %r: expected number" % name)
+        try:
+            return int(value) if str(value).lstrip("-").isdigit() else float(value)
+        except (TypeError, ValueError):
+            raise PipelineError("param %r: %r is not a number" % (name, value))
+    if typ == "bool":
+        if isinstance(value, bool):
+            return value
+        if str(value).lower() in ("true", "false"):
+            return str(value).lower() == "true"
+        raise PipelineError("param %r: %r is not a bool" % (name, value))
+    if typ == "enum" and value not in (choices or []):
+        raise PipelineError("param %r: %r not in choices %s" % (name, value, choices))
+    # string/repo/agent/model/account/secret carry through as strings here; the
+    # concrete existence checks (a real repo/account) belong to Phase B dispatch.
+    return value
+
+
+def resolve_params(declared, overrides, *, secret_lookup=None):
+    """Merge pipeline DEFAULTS with an invoker's OVERRIDES (a trigger OR a
+    calling pipeline -- the same slot, spec S3), type-check, and return
+    {name: typed_value}. A required param with neither default nor override
+    RAISES (fail-safe). Unknown override keys RAISE. A `secret` param resolves
+    its VALUE through secret_lookup(name) and never carries the raw name onward
+    (secrets discipline); no secret_lookup seam for a secret param RAISES."""
+    if not isinstance(declared, list):
+        raise PipelineError("params declaration must be a list")
+    if not isinstance(overrides, dict):
+        raise PipelineError("overrides must be a mapping")
+    by_name = {}
+    for p in declared:
+        if isinstance(p, dict) and _is_str(p.get("name")):
+            by_name[p["name"]] = p
+    for k in overrides:
+        if k not in by_name:
+            raise PipelineError("override for undeclared param %r" % k)
+    out = {}
+    for name, p in by_name.items():
+        typ = p.get("type")
+        if name in overrides:
+            value = overrides[name]
+        elif "default" in p:
+            value = p["default"]
+        elif p.get("required"):
+            raise PipelineError("required param %r has no value" % name)
+        else:
+            continue                                   # optional, unset -> absent
+        if typ == "secret":
+            if secret_lookup is None:
+                raise PipelineError("param %r is a secret but no secret store "
+                                    "was provided" % name)
+            value = secret_lookup(value)
+        else:
+            value = _coerce(name, typ, value, p.get("choices"))
+        out[name] = value
+    return out
+
+
 def _validate_runs_as(where, runs_as, errors):
     if runs_as is None:
         return

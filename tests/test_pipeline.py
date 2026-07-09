@@ -1543,5 +1543,57 @@ class SubstituteFuncsTest(unittest.TestCase):
             pipeline.substitute("${concat('a}b', params.a)}", self.ctx)
 
 
+class ResolveParamsTest(unittest.TestCase):
+    def _decl(self):
+        return [{"name": "repo", "type": "repo", "required": True},
+                {"name": "model", "type": "model", "default": "claude-sonnet-5"},
+                {"name": "retries", "type": "number", "default": 2},
+                {"name": "mode", "type": "enum", "choices": ["fast", "safe"], "default": "safe"},
+                {"name": "token", "type": "secret", "required": False}]
+
+    def test_default_when_no_override(self):
+        got = pipeline.resolve_params(self._decl(), {"repo": "/r"})
+        self.assertEqual(got["model"], "claude-sonnet-5")
+        self.assertEqual(got["retries"], 2)
+
+    def test_override_wins(self):
+        got = pipeline.resolve_params(self._decl(), {"repo": "/r", "model": "opus"})
+        self.assertEqual(got["model"], "opus")
+
+    def test_required_unset_refuses(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.resolve_params(self._decl(), {})          # repo missing
+
+    def test_unknown_override_refuses(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.resolve_params(self._decl(), {"repo": "/r", "nope": 1})
+
+    def test_enum_override_must_be_a_choice(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.resolve_params(self._decl(), {"repo": "/r", "mode": "wild"})
+
+    def test_number_type_coerced_and_checked(self):
+        got = pipeline.resolve_params(self._decl(), {"repo": "/r", "retries": "5"})
+        self.assertEqual(got["retries"], 5)                    # coerced to int
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.resolve_params(self._decl(), {"repo": "/r", "retries": "abc"})
+
+    def test_secret_resolves_via_lookup_and_is_not_the_name(self):
+        seen = {}
+        def fake_lookup(name):
+            seen["asked"] = name
+            return "s3cr3t"
+        got = pipeline.resolve_params(
+            [{"name": "token", "type": "secret", "required": True}],
+            {"token": "PROD_KEY"}, secret_lookup=fake_lookup)
+        self.assertEqual(got["token"], "s3cr3t")
+        self.assertEqual(seen["asked"], "PROD_KEY")
+
+    def test_secret_without_lookup_refuses(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.resolve_params([{"name": "t", "type": "secret", "required": True}],
+                                    {"t": "K"})                # no secret_lookup seam
+
+
 if __name__ == "__main__":
     unittest.main()
