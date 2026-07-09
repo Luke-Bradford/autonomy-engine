@@ -1531,10 +1531,11 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             self._send(400, b'{"error":"bad json"}')
             return
-        # the oversize read allowance is for ws_prompt_set ONLY -- every other
-        # action keeps the classic 8KB contract (#334 review WARNING).
+        # the oversize read allowance is for ws_prompt_set + pipeline_save ONLY
+        # (a whole rail / a whole pipeline doc + briefs) -- every other action
+        # keeps the classic 8KB contract (#334 review WARNING; #365 P3b).
         if (path != "/api/chat" and length > 8192
-                and body.get("action") != "ws_prompt_set"):
+                and body.get("action") not in ("ws_prompt_set", "pipeline_save")):
             self.close_connection = True
             self._send(400, b'{"error":"bad request"}')
             return
@@ -1549,7 +1550,8 @@ class Handler(BaseHTTPRequestHandler):
         action = body.get("action")
         _cred_actions = ("cred_set", "cred_delete", "cred_assign", "cred_unassign")
         _acct_actions = ("acct_set", "acct_delete")
-        _ws_actions = ("ws_add", "ws_set", "ws_prompt_set", "repo_init")
+        _ws_actions = ("ws_add", "ws_set", "ws_prompt_set", "repo_init",
+                       "pipeline_save")
         if (action not in ("set_model", "config_set", "repo_add", "repo_remove")
                 and action not in _cred_actions
                 and action not in _acct_actions
@@ -1611,6 +1613,17 @@ class Handler(BaseHTTPRequestHandler):
             elif action == "ws_prompt_set":
                 result = dcx.ws_prompt_set(repo, str(body.get("name") or ""),
                                            body.get("content") if isinstance(body.get("content"), str) else None)
+            elif action == "pipeline_save":
+                # P3b (#365): whole-doc re-emit into the var-live pipeline shadow.
+                # All policy + refusal semantics live in dashboard_control (SD-34
+                # writer). Shape-validate at the boundary; the writer refuses
+                # anything malformed.
+                doc = body.get("doc")
+                briefs = body.get("briefs")
+                result = dcx.pipeline_save(
+                    repo, str(body.get("name") or ""),
+                    doc if isinstance(doc, dict) else None,
+                    briefs if isinstance(briefs, dict) else {})
             else:                       # repo_init: idempotent pack scaffold
                 result = execute_repo_init(repo)
             self._send(200 if result.get("ok") else 409,
