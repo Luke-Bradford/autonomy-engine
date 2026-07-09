@@ -195,11 +195,19 @@ fi
 
 (cd "$TARGET_REPO" && git fetch origin -q)
 
+# #353: the target's default branch (engine.default_branch, 'main' when
+# unset/invalid) -- total under set -e (|| true inside the substitution,
+# prevention-log #17) and charset-gated before git argv (prevention-log #6).
+DEFAULT_BRANCH="$(CONFIG_GET "$TARGET_REPO/.autonomy/config.yaml" engine.default_branch || true)"
+case "$DEFAULT_BRANCH" in
+  ""|-*|*[!A-Za-z0-9._/-]*) DEFAULT_BRANCH=main ;;
+esac
+
 if (cd "$TARGET_REPO" && git worktree list --porcelain | grep -Fxq "worktree $WORKTREE"); then
   echo "worktree already registered -- leaving as-is (persistent/loop-specific)."
 else
-  (cd "$TARGET_REPO" && git worktree add --detach "$WORKTREE" origin/main)
-  echo "worktree created (detached @ origin/main)."
+  (cd "$TARGET_REPO" && git worktree add --detach "$WORKTREE" "origin/$DEFAULT_BRANCH")
+  echo "worktree created (detached @ origin/$DEFAULT_BRANCH)."
 fi
 
 mkdir -p "$WORKTREE/var/autonomy-logs"

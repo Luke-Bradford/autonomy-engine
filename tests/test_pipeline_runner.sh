@@ -232,6 +232,16 @@ check "lane-scoped per-node verdict filename" \
   "$(pipeline_verdict_file coder act)"
 AUTONOMY_LANE=""
 
+# 11. default_branch (#353): engine.default_branch, total + charset-gated ---
+check "default_branch falls back to main" "main" "$(default_branch)"
+printf 'engine:\n  label: t\n  default_branch: trunk\nroles:\n  coder:\n    enabled: true\n' \
+  >"$repo/.autonomy/config.yaml"
+check "default_branch reads the knob" "trunk" "$(default_branch)"
+printf 'engine:\n  default_branch: "-bad"\n' >"$repo/.autonomy/config.yaml"
+check "leading-dash branch falls back (git argv safety)" "main" "$(default_branch)"
+printf 'engine:\n  default_branch: "sp ace"\n' >"$repo/.autonomy/config.yaml"
+check "invalid charset falls back" "main" "$(default_branch)"
+
 echo
 if [ "$fails" -eq 0 ]; then echo "ALL CHECKS PASS"; exit 0; fi
 echo "$fails CHECK(S) FAILED"; exit 1
