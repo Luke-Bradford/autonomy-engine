@@ -2552,6 +2552,20 @@ def build_pipeline_view(repo_path, role):
     view = {"repo": os.path.basename(repo_path.rstrip("/")),
             "path": repo_path, "role": role}
     binding = settings.get("pipeline") or ""
+    if binding and not pipeline_mod.valid_pipeline_name(binding):
+        # The DISPATCHER's charset gate, applied before any path is built
+        # (CP2): a `pipeline: ../outside` binding must never read outside
+        # .autonomy/pipelines nor render healthy while dispatch refuses it.
+        view["source"] = {"kind": "pipeline", "name": binding, "dir": "",
+                          "version": 0}
+        view["doc"] = None
+        view["errors"] = ["roles.%s.pipeline %r has invalid charset -- "
+                          "dispatch refuses it" % (role, binding)]
+        view["edges_effective"] = []
+        view["last_run"] = None
+        view["ledger"] = None
+        view["in_flight"] = _inflight_units(logdir, role)
+        return view
     if binding:
         pdir = os.path.join(repo_path, ".autonomy", "pipelines", binding)
         view["source"] = {"kind": "pipeline", "name": binding,
@@ -2563,7 +2577,13 @@ def build_pipeline_view(repo_path, role):
             doc = None
             view["errors"] = [str(exc)]
         if doc is not None:
-            view["errors"] = pipeline_mod.validate_doc(doc, pdir)
+            try:
+                view["errors"] = pipeline_mod.validate_doc(doc, pdir)
+            except Exception as exc:  # a shape the validator has no error
+                # path for (CP2) -- the display boundary stays TOTAL and
+                # says so; dispatch still crashes loudly on its own path
+                view["errors"] = ["validator crashed on document shape: "
+                                  "%s: %s" % (type(exc).__name__, exc)]
             if isinstance(doc.get("version"), int):
                 view["source"]["version"] = doc["version"]
         pname = (doc or {}).get("name")
@@ -2575,7 +2595,10 @@ def build_pipeline_view(repo_path, role):
         view["errors"] = []
         pname = doc["name"]
     view["doc"] = doc
-    eff = pipeline_mod.effective_edges(doc) if isinstance(doc, dict) else []
+    try:
+        eff = pipeline_mod.effective_edges(doc) if isinstance(doc, dict) else []
+    except Exception:  # same totality boundary as validate_doc above (CP2)
+        eff = []
     if not isinstance(eff, list):
         eff = []
     view["edges_effective"] = [e for e in eff if isinstance(e, dict)]

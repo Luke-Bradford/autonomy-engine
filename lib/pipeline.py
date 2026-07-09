@@ -249,12 +249,15 @@ def _top_units(doc):
     for con in doc.get("containers") or []:
         if isinstance(con, dict):
             for c in (con.get("children") or []):
-                child_to_con[c] = con.get("id")
+                if isinstance(c, str):     # garbage child = not a mapping key
+                    child_to_con[c] = con.get("id")
     out, seen_con = [], set()
     for node in doc.get("nodes") or []:
         if not isinstance(node, dict):
             continue
         nid = node.get("id")
+        if not isinstance(nid, str):       # unhashable/garbage id: the
+            continue                       # validator names it; skip here
         con = child_to_con.get(nid)
         if con is None:
             out.append(nid)
@@ -262,6 +265,13 @@ def _top_units(doc):
             seen_con.add(con)
             out.append(con)
     return out
+
+
+def valid_pipeline_name(name):
+    """The ONE charset gate for `roles.<r>.pipeline` bindings -- shared by
+    resolve_pipeline (dispatch, raises) and the dashboard viewer (display,
+    degrades), so what dispatch refuses can never render healthy (CP2)."""
+    return bool(_is_str(name) and _NAME_RE.match(name))
 
 
 def effective_edges(doc):
@@ -417,7 +427,7 @@ def validate_doc(doc, pipeline_dir=None):
                           "branch is P2, for_each is P5)" % (where, kind))
         children = con.get("children")
         if not isinstance(children, list) or not children or not all(
-                c in ids for c in children):
+                isinstance(c, str) and c in ids for c in children):
             errors.append("%s: children must be a non-empty list of node ids"
                           % where)
             children = []
@@ -454,7 +464,10 @@ def validate_doc(doc, pipeline_dir=None):
     child_ids = set()
     for c in containers:
         if isinstance(c, dict):
-            child_ids.update(c.get("children") or [])
+            # non-str entries already earned a children error above; keep
+            # this set op TOTAL on garbage (unhashable dict, CP2)
+            child_ids.update(x for x in (c.get("children") or [])
+                             if isinstance(x, str))
     unit_order = _top_units(doc)
     units = set(unit_order)
     fwd = {}                      # non-back adjacency (cycle + ancestor checks)
@@ -656,7 +669,7 @@ def resolve_pipeline(repo, role):
         _check_legacy_prompts(repo, doc, "wrapped role %r" % role)
         return doc, {"pipeline_dir": None, "wrapped": True,
                      "from": doc["name"], "from_version": 0}
-    if not _NAME_RE.match(binding):
+    if not valid_pipeline_name(binding):
         raise PipelineError("roles.%s.pipeline %r has invalid charset"
                             % (role, binding))
     pdir = os.path.join(repo, ".autonomy", "pipelines", binding)

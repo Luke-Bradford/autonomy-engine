@@ -3567,3 +3567,36 @@ class TestBuildPipelineView(unittest.TestCase):
         v = ds.build_pipeline_view(FIX, "ghost")
         self.assertIn("error", v)
         self.assertIn("ghost", v["error"])
+
+    def test_traversal_binding_refused_like_dispatch(self):
+        # CP2: the viewer must apply the DISPATCHER's pipeline-name charset
+        # gate. `pipeline: ../outside` would otherwise render healthy (and
+        # read outside .autonomy/pipelines) while resolve_pipeline refuses
+        # it -- a display lie + traversal read.
+        repo = self._tmp_repo()
+        outside = os.path.join(repo, ".autonomy", "outside")
+        shutil.copytree(os.path.join(repo, ".autonomy", "pipelines",
+                                     "fixture-flow"), outside)
+        with open(os.path.join(repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write('roles:\n  coder:\n    pipeline: "../outside"\n'
+                     'agent:\n  type: "claude"\n')
+        v = ds.build_pipeline_view(repo, "coder")
+        self.assertIsNone(v["doc"])
+        self.assertTrue(any("charset" in e for e in v["errors"]))
+        self.assertEqual(v["edges_effective"], [])
+
+    def test_garbage_doc_shape_is_total(self):
+        # CP2: a shape the validator has no error path for must still come
+        # back as a degraded errors field, never a 500 out of the route.
+        repo = self._tmp_repo()
+        pj = os.path.join(repo, ".autonomy", "pipelines", "fixture-flow",
+                          "pipeline.json")
+        with open(pj) as fh:
+            doc = json.load(fh)
+        doc["containers"] = [{"id": "L", "kind": "loop",
+                              "children": [{"bad": "unhashable"}],
+                              "exit_when": "done", "max_rounds": 1}]
+        with open(pj, "w") as fh:
+            json.dump(doc, fh)
+        v = ds.build_pipeline_view(repo, "coder")
+        self.assertTrue(v["errors"])

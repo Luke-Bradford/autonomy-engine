@@ -1225,6 +1225,42 @@ class SpecSheetTest(unittest.TestCase):
             self.assertEqual(pipeline.SPEC_SHEETS[k]["group"], "structure")
 
 
+class GarbageShapeTest(unittest.TestCase):
+    """CP2 (P3a, #357): the viewer renders INVALID docs, so validate_doc is
+    a display-boundary error source -- garbage shapes must come back as
+    error strings, never exceptions."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        with open(os.path.join(self.dir, "act.md"), "w") as fh:
+            fh.write("do\n")
+
+    def test_garbage_children_shapes_error_not_crash(self):
+        # CP2 (P3a): validate_doc is the DISPLAY boundary's error source --
+        # a garbage shape must come back as an error STRING, never a
+        # TypeError out of a set operation (unhashable dict children).
+        doc = minimal_doc()
+        doc["containers"] = [{"id": "L", "kind": "loop",
+                              "children": [{}, 5, None],
+                              "exit_when": "done", "max_rounds": 3}]
+        errs = pipeline.validate_doc(doc, self.dir)
+        self.assertTrue(any("children" in e for e in errs))
+
+    def test_garbage_node_id_shapes_error_not_crash(self):
+        doc = minimal_doc()
+        doc["nodes"].append({"id": {"weird": 1}, "type": "check",
+                             "brief_ref": "act.md"})
+        errs = pipeline.validate_doc(doc, self.dir)
+        self.assertTrue(any("id required" in e for e in errs))
+
+    def test_valid_pipeline_name(self):
+        self.assertTrue(pipeline.valid_pipeline_name("ticket-to-merge"))
+        self.assertFalse(pipeline.valid_pipeline_name("../outside"))
+        self.assertFalse(pipeline.valid_pipeline_name(""))
+        self.assertFalse(pipeline.valid_pipeline_name(None))
+
+
 class EffectiveEdgesTest(unittest.TestCase):
     def test_declared_edges_returned_verbatim(self):
         doc = minimal_doc()
