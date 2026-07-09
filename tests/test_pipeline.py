@@ -789,6 +789,149 @@ class GraphWalkTest(unittest.TestCase):
         self.assertTrue(os.path.exists(self.state))
 
 
+class ReadySetTest(unittest.TestCase):
+    """P2b (#351): the batch dispatch protocol -- ready marks units
+    dispatched, retry releases them, the batch blocks finish/skip."""
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, True)
+        self.pdir = os.path.join(self.repo, ".autonomy", "pipelines", "flow")
+        os.makedirs(self.pdir)
+        with open(os.path.join(self.repo, ".autonomy", "loop_prompt.md"), "w") as fh:
+            fh.write("legacy prompt\n")
+        for b in ("a.md", "b.md", "c.md", "d.md", "e.md"):
+            with open(os.path.join(self.pdir, b), "w") as fh:
+                fh.write("brief %s\n" % b)
+        self.state = os.path.join(self.repo, "state.json")
+        self.bdir = os.path.join(self.repo, "briefs")
+        os.makedirs(self.bdir)
+        self.verdict = os.path.join(self.repo, "verdict.json")
+
+    def _bind(self, doc):
+        with open(os.path.join(self.pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("roles:\n  coder:\n    enabled: true\n    pipeline: flow\n")
+
+    def _fan_doc(self, max_parallel=3):
+        # the template's fan: g -> (x, y, z) -> j (join all), failure -> p (any)
+        return {"name": "flow", "version": 3,
+                "caps": {"max_sessions_per_run": 10,
+                         "max_parallel": max_parallel},
+                "nodes": [
+                    {"id": "g", "type": "gather", "brief_ref": "a.md"},
+                    {"id": "x", "type": "check", "brief_ref": "b.md"},
+                    {"id": "y", "type": "check", "brief_ref": "c.md"},
+                    {"id": "z", "type": "check", "brief_ref": "d.md"},
+                    {"id": "j", "type": "summarize", "brief_ref": "e.md"},
+                    {"id": "p", "type": "notify", "brief_ref": "e.md",
+                     "join": "any"}],
+                "edges": [
+                    {"from": "g", "to": "x", "on": "success"},
+                    {"from": "g", "to": "y", "on": "success"},
+                    {"from": "g", "to": "z", "on": "success"},
+                    {"from": "x", "to": "j", "on": "success"},
+                    {"from": "y", "to": "j", "on": "success"},
+                    {"from": "z", "to": "j", "on": "success"},
+                    {"from": "x", "to": "p", "on": "failure"},
+                    {"from": "y", "to": "p", "on": "failure"},
+                    {"from": "z", "to": "p", "on": "failure"}],
+                "containers": []}
+
+    def test_max_parallel_validated(self):
+        doc = minimal_doc(); doc["caps"]["max_parallel"] = 0
+        self.assertTrue(pipeline.validate_doc(doc, None))
+        doc["caps"]["max_parallel"] = 9
+        self.assertTrue(pipeline.validate_doc(doc, None))
+        doc["caps"]["max_parallel"] = 3
+        del doc["nodes"][0]["brief_ref"]
+        doc["nodes"][0]["legacy_prompt"] = ".autonomy/loop_prompt.md"
+        self.assertEqual(pipeline.validate_doc(doc, None), [])
+
+    def test_ready_set_marks_dispatched_and_excludes_them(self):
+        self._bind(self._fan_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        first = pipeline.ready_set(self.state, self.bdir, 3)
+        self.assertEqual([s["node"] for s in first], ["g"])   # only root ready
+        pipeline.record_outcome(self.state, "g", "success")
+        batch = pipeline.ready_set(self.state, self.bdir, 3)
+        self.assertEqual([s["node"] for s in batch], ["x", "y", "z"])
+        with open(self.state) as fh:
+            st = json.load(fh)
+        self.assertEqual(
+            [st["units"][u]["status"] for u in ("x", "y", "z")],
+            ["dispatched"] * 3)
+        # each block carries its OWN brief + verdict paths
+        self.assertEqual(len(set(s["prompt"] for s in batch)), 3)
+        self.assertEqual(len(set(s["verdict"] for s in batch)), 3)
+
+    def test_failure_record_cannot_skip_a_dispatched_sibling(self):
+        self._bind(self._fan_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        pipeline.ready_set(self.state, self.bdir, 1)
+        pipeline.record_outcome(self.state, "g", "success")
+        pipeline.ready_set(self.state, self.bdir, 3)          # x,y,z dispatched
+        # x fails; y and z ALREADY RAN concurrently -- their records must
+        # still be accepted afterwards (they were dispatched, not skipped).
+        self.assertEqual(
+            pipeline.record_outcome(self.state, "x", "error"), "CONTINUE")
+        self.assertEqual(
+            pipeline.record_outcome(self.state, "y", "success"), "CONTINUE")
+        res = pipeline.record_outcome(self.state, "z", "success")
+        # x's failure fired p (join any); j skipped (join all, dead edge)
+        step = pipeline.next_node(self.state, os.path.join(self.bdir, "n.md"))
+        self.assertEqual(step["node"], "p")
+
+    def test_walk_cannot_finish_while_batch_outstanding(self):
+        self._bind(self._fan_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        pipeline.ready_set(self.state, self.bdir, 1)
+        pipeline.record_outcome(self.state, "g", "success")
+        pipeline.ready_set(self.state, self.bdir, 3)
+        pipeline.record_outcome(self.state, "x", "error")
+        pipeline.record_outcome(self.state, "y", "error")
+        # z still dispatched: even though p is ready and j is doomed, the
+        # run must NOT finish or cap-finish around z.
+        res = pipeline.record_outcome(self.state, "z", "error")
+        self.assertEqual(res, "CONTINUE")
+        self.assertTrue(os.path.exists(self.state))
+
+    def test_retry_releases_a_dispatched_unit(self):
+        self._bind(self._fan_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        pipeline.ready_set(self.state, self.bdir, 1)
+        pipeline.record_outcome(self.state, "g", "success")
+        pipeline.ready_set(self.state, self.bdir, 3)
+        self.assertEqual(
+            pipeline.record_outcome(self.state, "y", "retry"), "CONTINUE")
+        with open(self.state) as fh:
+            st = json.load(fh)
+        self.assertEqual(st["units"]["y"]["status"], "pending")
+        self.assertEqual(st["sessions"], 1)          # retry never counts
+        self.assertEqual(len(st["nodes_done"]), 1)   # no entry for y
+
+    def test_ready_clamps_to_session_cap(self):
+        doc = self._fan_doc()
+        doc["caps"]["max_sessions_per_run"] = 3      # g + two more
+        self._bind(doc)
+        pipeline.start_run(self.repo, "coder", self.state)
+        pipeline.ready_set(self.state, self.bdir, 3)
+        pipeline.record_outcome(self.state, "g", "success")
+        batch = pipeline.ready_set(self.state, self.bdir, 3)
+        self.assertEqual(len(batch), 2)              # clamped, never overshot
+
+    def test_ready_reclaims_stale_dispatched_after_crash(self):
+        self._bind(self._fan_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        pipeline.ready_set(self.state, self.bdir, 1)
+        pipeline.record_outcome(self.state, "g", "success")
+        pipeline.ready_set(self.state, self.bdir, 3)
+        # "crash": a fresh dispatcher asks again -- the dispatched units
+        # come back (duplicate work beats a stranded run).
+        batch = pipeline.ready_set(self.state, self.bdir, 3)
+        self.assertEqual([s["node"] for s in batch], ["x", "y", "z"])
+
+
 class BackEdgeTest(unittest.TestCase):
     def setUp(self):
         self.repo = tempfile.mkdtemp()

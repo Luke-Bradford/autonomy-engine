@@ -60,6 +60,7 @@ _DOC_KEYS = frozenset(("name", "version", "trigger_default", "caps",
 CONTAINER_KINDS = frozenset(("loop", "stage"))   # branch=P2, for_each=P5
 MAX_ROUNDS_CEIL = 99
 MAX_SESSIONS_CEIL = 500
+MAX_PARALLEL_CEIL = 8
 
 
 class PipelineError(Exception):
@@ -169,6 +170,11 @@ def validate_doc(doc, pipeline_dir=None):
         errors.append("caps.max_sessions_per_run: required integer (ENFORCED cap)")
     elif not 1 <= caps["max_sessions_per_run"] <= MAX_SESSIONS_CEIL:
         errors.append("caps.max_sessions_per_run: must be 1..%d" % MAX_SESSIONS_CEIL)
+    if isinstance(caps, dict) and "max_parallel" in caps:
+        if not isinstance(caps["max_parallel"], int) or not (
+                1 <= caps["max_parallel"] <= MAX_PARALLEL_CEIL):
+            errors.append("caps.max_parallel: must be 1..%d (ENFORCED fan-out "
+                          "ceiling; absent = sequential)" % MAX_PARALLEL_CEIL)
 
     nodes = doc.get("nodes")
     ids = []
@@ -629,9 +635,9 @@ def _incoming_edges(doc, uid):
 def _edge_state(state, edge):
     """open (from not terminal yet) | satisfied | dead. A SKIPPED from
     deadens every outgoing edge -- completion means "ran either way";
-    skipped never ran."""
+    skipped never ran. A DISPATCHED from is still running: open."""
     fs = state["units"][edge["from"]]["status"]
-    if fs == "pending":
+    if fs in ("pending", "dispatched"):
         return "open"
     if fs == "skipped":
         return "dead"
@@ -675,11 +681,22 @@ def _propagate_skips(doc, state):
                 changed = True
 
 
-def _first_ready(doc, state):
+def _pick_candidates(doc, state):
+    """Doc-order units eligible for dispatch: DISPATCHED units first-class
+    (crash/limit reclaim -- duplicate work beats a stranded run; within one
+    healthy dispatch cycle the supervisor records before asking again),
+    then ready pending units."""
+    out = []
     for uid in _top_units(doc):
-        if _unit_ready(doc, state, uid):
-            return uid
-    return None
+        if (state["units"][uid]["status"] == "dispatched"
+                or _unit_ready(doc, state, uid)):
+            out.append(uid)
+    return out
+
+
+def _any_dispatched(doc, state):
+    return any(state["units"][u]["status"] == "dispatched"
+               for u in _top_units(doc))
 
 
 def _expected_node(doc, state, uid):
@@ -774,15 +791,17 @@ def _effective_runs_as(doc, node):
     return merged
 
 
-def _verdict_rel(state_path):
-    """The verdict file's repo-relative path for the compiled brief: LOGDIR
-    is always <repo>/var/autonomy-logs, and the supervisor derives the SAME
-    absolute path via pipeline_verdict_file (state path minus .json plus
-    .verdict.json) -- one naming rule on both sides, lane-safe."""
+def _verdict_rel(state_path, node_id):
+    """The PER-NODE verdict file's repo-relative path for the compiled
+    brief: LOGDIR is always <repo>/var/autonomy-logs (in an ephemeral
+    worktree, the worktree's own var/), and the supervisor derives the same
+    name from the state base + node -- one naming rule on both sides,
+    lane-safe, collision-free under parallel dispatch (P2b: a shared
+    per-role file would collide the moment two nodes run at once)."""
     base = os.path.basename(state_path)
     if base.endswith(".json"):
         base = base[:-len(".json")]
-    return "var/autonomy-logs/%s.verdict.json" % base
+    return "var/autonomy-logs/%s.%s.verdict.json" % (base, node_id)
 
 
 def _loop_ctx(state, node, state_path):
@@ -793,7 +812,7 @@ def _loop_ctx(state, node, state_path):
             "round": int(state["rounds"].get(con["id"], 1)),
             "max_rounds": con["max_rounds"],
             "exit_when": con["exit_when"],
-            "verdict_file": _verdict_rel(state_path)}
+            "verdict_file": _verdict_rel(state_path, node["id"])}
 
 
 def _read_verdict_full(verdict_path):
@@ -914,9 +933,7 @@ def _finish(state, state_path, outcome, journal_path):
     return {"status": "done", "outcome": outcome}
 
 
-def next_node(state_path, brief_out, journal_path=""):
-    state = _load_state(state_path)
-    doc = state["doc"]
+def _guard_in_progress(state, state_path):
     status = state.get("status")
     if status == "done":
         # A done-state on disk means a prior _finish could not unlink -- the
@@ -929,24 +946,12 @@ def next_node(state_path, brief_out, journal_path=""):
         # (prevention-log #18: the reassuring verdict must be earned).
         raise PipelineError("run state %s has unexpected status %r -- "
                             "refusing" % (state_path, status))
-    cap = doc["caps"]["max_sessions_per_run"]
-    if state["sessions"] >= cap:
-        # Backstop for stale states (record_outcome normally finishes runs)
-        # -- takes journal_path so no completed run slips out of the journal.
-        return _finish(state, state_path, "capped", journal_path)
-    uid = _first_ready(doc, state)
-    if uid is None:
-        pending = [u for u in _top_units(doc)
-                   if state["units"][u]["status"] == "pending"]
-        if pending:
-            # Impossible on a validated DAG (a minimal pending unit always
-            # has all-terminal parents) -- refuse loudly, never guess
-            # (prevention-log #18).
-            raise PipelineError("walk stalled with pending units %s in %s -- "
-                                "refusing" % (", ".join(pending), state_path))
-        return _finish(state, state_path, _walk_outcome(doc, state),
-                       journal_path)
+
+
+def _prepare_step(state_path, state, uid, brief_path):
+    doc = state["doc"]
     node = _node_by_id(doc, _expected_node(doc, state, uid))
+    verdict_rel = _verdict_rel(state_path, node["id"])
     if node.get("legacy_prompt"):
         kind, prompt = "legacy", node["legacy_prompt"]
     else:
@@ -957,30 +962,105 @@ def next_node(state_path, brief_out, journal_path=""):
                 for e in doc.get("edges", [])):
             # An on-failure path leaves this node: its structured verdict is
             # load-bearing, so the brief must say where to write it.
-            verdict_ctx = {"verdict_file": _verdict_rel(state_path)}
+            verdict_ctx = {"verdict_file": verdict_rel}
         text = compile_brief(pdir, doc, node["id"],
                              _loop_ctx(state, node, state_path),
                              verdict_ctx=verdict_ctx)
-        with open(brief_out, "w") as fh:
+        with open(brief_path, "w") as fh:
             fh.write(text)
-        kind, prompt = "compiled", brief_out
-    return {"status": "node", "node": node["id"], "kind": kind,
-            "prompt": prompt, "runs_as": _effective_runs_as(doc, node)}
+        kind, prompt = "compiled", brief_path
+    return {"status": "node", "unit": uid, "node": node["id"], "kind": kind,
+            "prompt": prompt, "verdict": verdict_rel,
+            "runs_as": _effective_runs_as(doc, node)}
+
+
+def _pick(state_path, state, n, brief_path_for, journal_path):
+    """The dispatch protocol core: returns ("done", outcome-dict) or
+    ("steps", [step...]) with the chosen units MARKED dispatched (one
+    atomic state write). n is clamped to the doc's max_parallel AND the
+    remaining session budget (the run cap can never be overshot by a
+    batch -- Codex CP1)."""
+    doc = state["doc"]
+    cap = doc["caps"]["max_sessions_per_run"]
+    avail = cap - state["sessions"]
+    if avail <= 0 and not _any_dispatched(doc, state):
+        return "done", _finish(state, state_path, "capped", journal_path)
+    candidates = _pick_candidates(doc, state)
+    if not candidates:
+        if _any_dispatched(doc, state):
+            # Only reachable through a driver bug (dispatched units ARE
+            # candidates) -- refuse rather than finish around a live batch.
+            raise PipelineError("no candidates but a batch is outstanding "
+                                "in %s -- refusing" % state_path)
+        pending = [u for u in _top_units(doc)
+                   if state["units"][u]["status"] == "pending"]
+        if pending:
+            # Impossible on a validated DAG (a minimal pending unit always
+            # has all-terminal parents) -- refuse loudly, never guess
+            # (prevention-log #18).
+            raise PipelineError("walk stalled with pending units %s in %s -- "
+                                "refusing" % (", ".join(pending), state_path))
+        return "done", _finish(state, state_path, _walk_outcome(doc, state),
+                               journal_path)
+    n_eff = max(1, min(n, int(doc["caps"].get("max_parallel", 1)), avail))
+    steps = []
+    for uid in candidates[:n_eff]:
+        steps.append(_prepare_step(state_path, state, uid,
+                                   brief_path_for(uid)))
+        state["units"][uid]["status"] = "dispatched"
+    _atomic_write_json(state_path, state)
+    return "steps", steps
+
+
+def next_node(state_path, brief_out, journal_path=""):
+    state = _load_state(state_path)
+    _guard_in_progress(state, state_path)
+    kind, result = _pick(state_path, state, 1, lambda _uid: brief_out,
+                         journal_path)
+    if kind == "done":
+        return result
+    return result[0]
+
+
+def ready_set(state_path, brief_dir, n, journal_path=""):
+    """The batch view: up to n steps (clamped), units marked dispatched.
+    [] when the run just finished (the finish itself has already happened,
+    exactly like next_node's done path)."""
+    state = _load_state(state_path)
+    _guard_in_progress(state, state_path)
+    kind, result = _pick(
+        state_path, state, n,
+        lambda uid: os.path.join(brief_dir, "%s.brief.md" % uid),
+        journal_path)
+    if kind == "done":
+        return []
+    return result
 
 
 def record_outcome(state_path, node_id, outcome, session_log="",
                    verdict_path="", journal_path=""):
-    if outcome not in ("success", "error"):
-        raise PipelineError("unrecordable outcome %r (usage_limit retries the "
-                            "node; only success/error are recorded)" % outcome)
+    if outcome not in ("success", "error", "retry"):
+        raise PipelineError("unrecordable outcome %r (only "
+                            "success/error/retry are recorded)" % outcome)
     state = _load_state(state_path)
     doc = state["doc"]
-    uid = _first_ready(doc, state)
-    if uid is None or _expected_node(doc, state, uid) != node_id:
-        raise PipelineError("record for node %r but the run's current node is "
-                            "%r -- refusing (corrupt driver?)"
-                            % (node_id,
-                               _expected_node(doc, state, uid) if uid else None))
+    uid = None
+    for cand in _top_units(doc):
+        if (state["units"][cand]["status"] == "dispatched"
+                and _expected_node(doc, state, cand) == node_id):
+            uid = cand
+            break
+    if uid is None:
+        raise PipelineError("record for node %r but no dispatched unit "
+                            "expects it -- refusing (corrupt driver?)"
+                            % node_id)
+    if outcome == "retry":
+        # usage_limit path: the node was NOT completed -- release the unit
+        # (no nodes_done entry, no session count); it re-runs after the
+        # reset, and nothing can finish around it meanwhile.
+        state["units"][uid]["status"] = "pending"
+        _atomic_write_json(state_path, state)
+        return "CONTINUE"
     node = _node_by_id(doc, node_id)
     con = _con_by_id(doc, uid)
     verdict = _read_verdict_full(verdict_path)
@@ -1038,30 +1118,36 @@ def record_outcome(state_path, node_id, outcome, session_log="",
                 else:
                     state["rounds"][uid] = rnd + 1
                     state["container_pos"][uid] = 0
+                    unit["status"] = "pending"          # next round dispatches
         elif pos == len(children) - 1:
             unit["status"] = "success"                 # stage complete
         else:
             state["container_pos"][uid] = pos + 1      # mid-container
+            unit["status"] = "pending"
 
-    if unit["status"] != "pending":
+    if unit["status"] not in ("pending", "dispatched"):
         _traverse_back_edges(doc, state, uid)
         _propagate_skips(doc, state)
 
     # --- walk end / caps ----------------------------------------------------
-    if _first_ready(doc, state) is None:
-        pending = [u for u in _top_units(doc)
-                   if state["units"][u]["status"] == "pending"]
-        if pending:
-            raise PipelineError("walk stalled with pending units %s in %s -- "
-                                "refusing" % (", ".join(pending), state_path))
-        res = _finish(state, state_path, _walk_outcome(doc, state),
-                      journal_path)
-        return "DONE %s" % res["outcome"]
-    if state["sessions"] >= doc["caps"]["max_sessions_per_run"]:
-        # The RUN-level cap, decided HERE (record holds the journal path) --
-        # deciding it in next_node would lose the run's journal line.
-        res = _finish(state, state_path, "capped", journal_path)
-        return "DONE %s" % res["outcome"]
+    # While ANY unit is still dispatched, the run can neither finish nor
+    # cap-finish: the batch's remaining records land first (Codex CP1).
+    if not _any_dispatched(doc, state):
+        if not _pick_candidates(doc, state):
+            pending = [u for u in _top_units(doc)
+                       if state["units"][u]["status"] == "pending"]
+            if pending:
+                raise PipelineError("walk stalled with pending units %s in "
+                                    "%s -- refusing"
+                                    % (", ".join(pending), state_path))
+            res = _finish(state, state_path, _walk_outcome(doc, state),
+                          journal_path)
+            return "DONE %s" % res["outcome"]
+        if state["sessions"] >= doc["caps"]["max_sessions_per_run"]:
+            # The RUN-level cap, decided HERE (record holds the journal
+            # path) -- deciding it in next_node would lose the journal line.
+            res = _finish(state, state_path, "capped", journal_path)
+            return "DONE %s" % res["outcome"]
     _atomic_write_json(state_path, state)
     return "CONTINUE"
 
@@ -1084,6 +1170,17 @@ def _cli_validate(argv):
     for e in errs:
         print(e)
     return 1 if errs else 0
+
+
+def _print_step(step):
+    print("NODE=%s" % step["node"])
+    print("KIND=%s" % step["kind"])
+    print("PROMPT=%s" % step["prompt"])
+    print("VERDICT=%s" % step["verdict"])
+    runs_as = step.get("runs_as") or {}
+    for key in ("model", "effort", "account", "agent"):
+        if runs_as.get(key):
+            print("NODE_%s=%s" % (key.upper(), runs_as[key]))
 
 
 def main(argv):
@@ -1128,13 +1225,29 @@ def main(argv):
         if step["status"] == "done":
             print("DONE %s" % step["outcome"])
             return 0
-        print("NODE=%s" % step["node"])
-        print("KIND=%s" % step["kind"])
-        print("PROMPT=%s" % step["prompt"])
-        runs_as = step.get("runs_as") or {}
-        for key in ("model", "effort", "account", "agent"):
-            if runs_as.get(key):
-                print("NODE_%s=%s" % (key.upper(), runs_as[key]))
+        _print_step(step)
+        return 0
+    if cmd == "ready":
+        # ready <state-file> --max <n> --brief-dir <dir> [--journal <p>]
+        opts = {"--max": "1", "--brief-dir": "", "--journal": ""}
+        pos = _split_opts(rest, opts)
+        try:
+            n = int(opts["--max"])
+        except ValueError:
+            print("pipeline ready: --max must be an integer", file=sys.stderr)
+            return 1
+        try:
+            steps = ready_set(pos[0], opts["--brief-dir"], n,
+                              journal_path=opts["--journal"])
+        except (IndexError, PipelineError) as exc:
+            print("pipeline ready: %s" % exc, file=sys.stderr)
+            return 1
+        if not steps:
+            print("DONE")
+            return 0
+        for step in steps:
+            _print_step(step)
+            print("END")
         return 0
     if cmd == "record":
         # record <state-file> <node> <outcome> [--session-log p]
