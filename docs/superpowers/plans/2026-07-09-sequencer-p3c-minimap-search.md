@@ -482,7 +482,13 @@ function drawMinimap(){
   if(!mm || !svg || !wrap || !VIEW || VIEW.error || !curDoc()){ if(mm) mm.hidden = true; return; }
   const sw = wrap.scrollWidth, sh = wrap.scrollHeight;
   const cw = wrap.clientWidth, ch = wrap.clientHeight;
-  const overflow = sw > cw + 4 || sh > ch + 4;
+  // Gate on HORIZONTAL overflow only -- the canvas's sole meaningful scroll axis.
+  // dagwrap has no bounded height, so a tall graph grows the PAGE (window scroll),
+  // it never scrolls inside dagwrap; and the negative-top glyphs + 26px top
+  // padding leave a constant ~24px phantom vertical scrollHeight (browser-verified:
+  // a 3-node graph reads sh=150/ch=126) that must NOT trip the gate, or it shows a
+  // map for a graph that visually fits. The map is for wide DAGs; width is its axis.
+  const overflow = sw > cw + 4;
   if(!MAP_ON || !overflow || sw <= 0 || sh <= 0){ mm.hidden = true; return; }
   mm.hidden = false;
   const scale = Math.min((MM_W - 2*MM_PAD) / sw, (MM_H - 2*MM_PAD) / sh);
@@ -659,12 +665,17 @@ git commit -m "feat(#367): pipeline canvas minimap -- scaled overview + draggabl
   read-oracle fixture and the wide throwaway from Task 2). Assert, in order:
   - **Read surface unchanged** on `/pipeline?repo=<repo-alpha-abs>&role=coder`:
     palette groups, ranked cards, pane rows, lighting toggle — all P3a/P3b
-    behaviour intact. Search box present and empty. **Overflow gate,
-    deterministically** (Codex CP1 — the gate is viewport-dependent, never
-    assume): `resize_page` to a WIDE viewport (e.g. 1600×900) where repo-alpha's
-    small graph fits → assert `#minimap` is `hidden`; then `resize_page` NARROW
-    (e.g. 640×900) so the same graph overflows → assert `#minimap` is shown. The
-    gate is tested both ways against a forced viewport, not an assumption.
+    behaviour intact. Search box present and empty. **Overflow gate, both ways**
+    (Codex CP1 — the gate is viewport-dependent, never assume). TWO REALITIES
+    found during verify, so use dedicated graphs, not repo-alpha alone: (a) the
+    page has `.wrap{max-width:1500px}`, so the canvas column caps at ~892px and
+    repo-alpha (1566px) can NEVER be made to fit by widening; (b) a viewport
+    ≤1120px triggers the single-column media query that hides the minimap by
+    design. So test at a **3-column width (>1120, e.g. 1300–1400)**: a small
+    throwaway (≤3 nodes, ~780px) → no horizontal overflow → assert `#minimap`
+    `hidden` even with `MAP_ON` true; the wide throwaway (14 nodes, ~3000px) →
+    overflow → assert `#minimap` shown. Both against a forced `resize_page`
+    viewport, not an assumption.
   - **Search**: type an id/type/agent → matched cards get `.searchhit`, others
     `.searchoff`, `#searchcount` shows N; Enter scrolls the first match into view
     and flashes it; Escape clears. `evaluate_script` reruns the Task 1 assertion.
