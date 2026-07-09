@@ -70,6 +70,54 @@ keys, unsupported activity types, malformed graphs (cycles without a
 declared back-edge, edges into a container's interior). A document that
 validates is a document that runs; there is no accept-and-ignore.
 
+### Parameters & outputs
+
+A pipeline may declare a typed interface:
+
+```json
+{
+  "params": [
+    {"name": "repo",  "type": "repo",  "required": true},
+    {"name": "model", "type": "model", "default": "claude-sonnet-5"},
+    {"name": "mode",  "type": "enum",  "choices": ["fast", "safe"], "default": "safe"}
+  ],
+  "outputs": [
+    {"name": "merged_pr", "type": "number"}
+  ]
+}
+```
+
+- **Param types:** `string`, `number`, `bool`, `enum` (with `choices`),
+  `repo`, `agent`, `model`, `account`, `secret`. Declarations are
+  validated — a bad type, a duplicate name, an enum without choices, or a
+  default that does not match its declared type all refuse the document.
+- **Values come from whatever invokes the pipeline.** The pipeline's saved
+  default is the base; the invoker's override wins. A required parameter
+  with neither refuses the run. A `secret` parameter resolves its value
+  through the credential store at resolution time — the raw value never
+  appears in a document or on a command line.
+- **References:** `${params.x}` reads a parameter,
+  `${nodes.<id>.output.<name>}` reads a completed upstream activity's
+  named output, `${run.<field>}` reads run metadata. A field that is
+  exactly one reference keeps the typed value; a reference embedded in
+  text interpolates as a string. A small closed set of helper functions
+  is allowed inside `${…}` — `default(x, y)`, `concat(a, b, …)`,
+  `slug(x)` — and nothing else; the language never evaluates code. A
+  literal `${` is written `$${`. One limitation: a string literal inside
+  `${…}` may not contain `}` (the expression is refused, never
+  mis-parsed).
+- **Outputs:** an activity writes named values to a per-run outputs file;
+  the pipeline's declared `outputs` project from it by name and type —
+  an undeclared value never leaks to a consumer, and a value that does
+  not match its declared type refuses rather than passing through.
+
+The runnable invocation surface — triggers that supply parameter values,
+and calling one pipeline from another — is coming with the trigger
+system. Until it lands, `${…}` references in activity fields are refused
+by the validator (a document that validates must be one the engine can
+actually run today); the declarations themselves validate now so a
+pipeline's interface can be authored ahead of it.
+
 ## Activities
 
 Supported today: `pick`, `agent_task`, `plan`, `gather`, `check`,

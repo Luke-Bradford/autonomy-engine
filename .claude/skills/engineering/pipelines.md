@@ -39,6 +39,12 @@ Binding: `roles.<r>.pipeline: <name>`; unbound roles auto-wrap
 - `effective_edges(doc)` = declared edges or the synthesized implicit
   success-chain; `start_run` and the canvas both consume it — never
   re-derive the chain elsewhere.
+- Typed `params`/`outputs` are declared+validated and the `${…}` resolver
+  (`substitute`/`resolve_params`/`substitute_doc` + the run-outputs file
+  `write_output`/`read_outputs`/`project_outputs`) exists in
+  `lib/pipeline.py` but is **not yet wired into dispatch** (Phase B of the
+  pipeline+trigger model) — the validator still refuses `${…}` in activity
+  fields until substitution is live.
 
 ## The walk (fmt-2 state machine)
 
