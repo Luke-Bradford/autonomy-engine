@@ -3,15 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="ae-control-token" content="__CONTROL_TOKEN__">
 <title>Autonomy · pipeline</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23141418'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%235b9dff'/%3E%3C/svg%3E">
 <style>
-/* P3a (#357): the pipeline canvas VIEWER. Token blocks are the UI-1 system,
+/* P3a (#357) viewer + P3b (#365) EDITOR. Token blocks are the UI-1 system,
    kept byte-identical to lib/dashboard_page.html / lib/config_page.html
    (the config page's parity test guards the source pair; this page copies
    the same three blocks -- if they ever drift, fix the source pair first,
-   never fork a third scheme). Read-only: this page never POSTs, carries no
-   control token, and offers no edit affordances (editing is P3b). */
+   never fork a third scheme). A BOUND pipeline is editable (writes to the
+   var-shadow via POST /api/control pipeline_save, token-gated); a wrapped
+   role stays read-only. A live tick never clobbers unsaved edits (#202). */
 :root{
   --sans:"Avenir Next","Helvetica Neue",system-ui,sans-serif;
   --mono:"SF Mono",Menlo,ui-monospace,monospace;
@@ -114,6 +116,24 @@ svg.edges .lbl{font-family:var(--mono);font-size:8.5px;letter-spacing:.4px}
 .note{font-size:11px;color:var(--mut)}
 button:focus-visible,.node:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
+/* --- P3b (#365): editor affordances (only shown when editable) --- */
+.pill.save{border-color:var(--ok);color:var(--ok)}
+.pill.save[disabled]{opacity:.4;border-color:var(--hair2);color:var(--mut)}
+.badge.unsaved{color:var(--warn);border-color:var(--warn)}
+.badge.shadow{color:var(--accent);border-color:var(--accent)}
+.pitem[draggable="true"]{cursor:grab}
+.pitem[draggable="true"]:active{cursor:grabbing}
+.dropzone{align-self:stretch;min-width:14px;border:1px dashed transparent;border-radius:var(--r)}
+.dropzone.hot{border-color:var(--accent);background:var(--accent-soft)}
+.ehandle{position:absolute;top:50%;right:-6px;transform:translateY(-50%);width:11px;height:11px;border-radius:50%;background:var(--panel);border:1.5px solid var(--accent);cursor:crosshair;z-index:3;display:none}
+.editable .node .ehandle,.editable .box .ehandle{display:block}
+.box>.ehandle{top:14px;transform:none}
+svg.edges path.hit{pointer-events:stroke;cursor:pointer}
+.exbtn{cursor:pointer}
+.pane input,.pane select,.pane textarea{background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);font-family:var(--mono);font-size:10.5px;border-radius:5px;padding:4px 7px;max-width:170px}
+.pane textarea{width:100%;max-width:none;min-height:52px;resize:vertical}
+.pane input[readonly]{opacity:.7;cursor:not-allowed}
+.frow.locked .lab{color:var(--dim)}
 </style>
 </head>
 <body>
@@ -124,10 +144,14 @@ button:focus-visible,.node:focus-visible{outline:2px solid var(--accent);outline
     <select id="repopick" aria-label="repo"></select>
     <select id="rolepick" aria-label="role"></select>
     <span id="prov"></span>
+    <span id="shadowchip"></span>
     <span class="gap"></span>
     <span id="ledgerchip"></span>
     <span id="capchip"></span>
     <button class="pill" id="obsbtn">⚡ last run</button>
+    <span id="unsaved"></span>
+    <button class="pill" id="revertbtn" style="display:none">revert</button>
+    <button class="pill save" id="savebtn" style="display:none">save</button>
   </div>
   <div class="layout">
     <aside class="palette" id="palette"></aside>
@@ -143,7 +167,7 @@ button:focus-visible,.node:focus-visible{outline:2px solid var(--accent);outline
         <span><span class="sw" style="border-color:var(--dim);border-top-style:dashed"></span>on completion</span>
         <span><span class="tag hard">enforced</span> engine-owned</span>
         <span><span class="tag soft">instructed</span> compiled into the brief</span>
-        <span class="note">read-only viewer — editing lands in P3b</span>
+        <span class="note" id="legendnote">read-only viewer</span>
       </div>
     </main>
     <aside class="pane" id="pane"></aside>
@@ -157,14 +181,71 @@ button:focus-visible,.node:focus-visible{outline:2px solid var(--accent);outline
    last_run, in-flight statuses, ledger). Signature-guarded: the poll only
    re-renders when the payload BYTES change (#174/#238 class), so an idle
    fixture never churns the DOM. */
-let VIEW = null;          // last payload (parsed)
+let VIEW = null;          // last payload (parsed) -- SERVER TRUTH (lighting etc.)
 let VIEWSIG = "";         // last payload (raw string) -- the render guard
 let SEL = "";             // selected unit/node id ("" = nothing)
 let OBSERVED = false;
 const COLLAPSED = new Set();   // container ids, survives re-render
 
+/* P3b (#365) editor state. WORKING is a dirty working COPY of the doc the
+   canvas + pane render from; the server payload (VIEW) still owns the
+   read-only overlays (last_run, in_flight, ledger). A live tick NEVER
+   clobbers WORKING while DIRTY (the #202 bar). Nothing POSTs until Save. */
+let WORKING = null;       // deep clone of the editable doc; render reads THIS
+let BRIEFS = {};          // {basename: content} for briefs edited this session
+let DIRTY = false;        // unsaved edits pending
+let EDIT_SEQ = 0;         // bumps on every edit -- guards save against in-flight edits
+const CTOKEN = (document.querySelector('meta[name="ae-control-token"]')||{}).content || "";
+const MODEL_CHOICES=__MODEL_CHOICES__;
+
 function esc(x){return String(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;")}
 function qs(){return new URLSearchParams(location.search)}
+function clone(o){ return o == null ? o : JSON.parse(JSON.stringify(o)); }
+
+/* Editable = a BOUND pipeline with a loadable, server-known doc AND a real
+   control token (the page is served by the dashboard). A wrapped role, an
+   unreadable doc, or a raw file (no token) stays READ-ONLY -- P3a behaviour,
+   no edit affordances. Editing writes to the var-shadow only (SD-34). */
+function hasToken(){ return CTOKEN && CTOKEN !== "__CONTROL" + "_TOKEN__"; }
+function editable(){
+  return !!(VIEW && !VIEW.error && VIEW.doc && WORKING &&
+            VIEW.source && VIEW.source.kind === "pipeline" && hasToken());
+}
+function curDoc(){ return WORKING || (VIEW && VIEW.doc) || null; }
+function effectiveEdges(doc){
+  // mirror pipeline.effective_edges: declared edges, else the synthesized
+  // implicit success-chain over top-level units.
+  if(doc && Array.isArray(doc.edges) && doc.edges.length) return doc.edges;
+  const order = topUnits(doc || {});
+  const out = [];
+  for(let i = 0; i + 1 < order.length; i++)
+    out.push({from: order[i], to: order[i+1], on: "success"});
+  return out;
+}
+function curEdges(){
+  const d = curDoc();
+  // an in-sync WORKING matches VIEW.edges_effective; after edits WORKING
+  // diverges and the client synth is authoritative.
+  return d ? effectiveEdges(d) : (VIEW && VIEW.edges_effective || []);
+}
+function adoptWorking(){    // baseline WORKING from server truth (only when !DIRTY)
+  WORKING = VIEW && VIEW.doc ? clone(VIEW.doc) : null;
+  BRIEFS = {};
+}
+function markDirty(){ DIRTY = true; EDIT_SEQ++; updateHeader(); }
+function briefText(ref){   // pane seeds from edits-first, else server truth
+  if(ref in BRIEFS) return BRIEFS[ref];
+  const b = VIEW && VIEW.briefs || {};
+  return (ref in b) ? b[ref] : null;
+}
+function nodeIndex(id){ const ns = (curDoc()||{}).nodes||[]; return ns.findIndex(n => n && n.id === id); }
+function uniqueNodeId(base){
+  const ns = (curDoc()||{}).nodes||[], cons = (curDoc()||{}).containers||[];
+  const taken = new Set(ns.map(n => n && n.id).concat(cons.map(c => c && c.id)));
+  let i = 1, id = base;
+  while(taken.has(id)){ id = base + "-" + (++i); }
+  return id;
+}
 
 /* ---- layout: longest-path ranking over effective edges ---- */
 function topUnits(doc){
@@ -223,8 +304,8 @@ function edgeLit(e, lit){
 }
 
 /* ---- cards ---- */
-function nodeById(id){ return (VIEW.doc.nodes||[]).find(n => n && n.id === id); }
-function conById(id){ return (VIEW.doc.containers||[]).find(c => c && c.id === id); }
+function nodeById(id){ return ((curDoc()||{}).nodes||[]).find(n => n && n.id === id); }
+function conById(id){ return ((curDoc()||{}).containers||[]).find(c => c && c.id === id); }
 function sheetFor(type){ return (VIEW.spec||{})[type]; }
 
 function card(n, lit, inflight){
@@ -244,6 +325,7 @@ function card(n, lit, inflight){
     ${glyph}<span class="ico">${icon}</span> <span class="nm">${esc(n.id)}</span>
     <span class="sum">${invalid ? "unknown type: " + esc(n.type) : esc(sheet.label)}${bounce}</span>
     <div class="meta">${runsAs?`<span class="agent">${runsAs}</span>`:""}${tag}</div>
+    <div class="ehandle" data-ehandle="${esc(n.id)}" title="drag to draw an edge"></div>
   </div>`;
 }
 function containerBox(con, lit, inflight){
@@ -266,6 +348,7 @@ function containerBox(con, lit, inflight){
   return `<div class="box${con.kind==="stage"?" stage":""}${dim}${running?" running":""}" data-uid="${esc(con.id)}">
     <span class="boxtag" data-seluid="${esc(con.id)}" title="the container's own pane">${sheet.icon} ${esc(con.kind)} · ${esc(con.id)}</span>
     <button class="chev" data-collapse="${esc(con.id)}" title="collapse this container">▾</button>
+    <div class="ehandle" data-ehandle="${esc(con.id)}" title="drag to draw an edge"></div>
     <div class="inner">${kids.map(k => card(k, lit, inflight)).join("")}</div>${foot}</div>`;
 }
 
@@ -284,23 +367,25 @@ function render(){
   const lg = VIEW.ledger;
   document.getElementById("ledgerchip").innerHTML = lg
     ? `<span class="badge" title="trust is earned per assignment (auto at ≥20 runs with ≥95% pass over the last 20)">🛡 ${esc(lg.tier)} · ${esc(lg.runs)} runs · ${esc(lg.passes)} pass</span>` : "";
-  const caps = VIEW.doc && VIEW.doc.caps || null;
+  const caps = (curDoc()||{}).caps || null;
   document.getElementById("capchip").innerHTML = caps && caps.max_parallel
     ? `<span class="badge" title="the pipeline's dispatch ceiling — engine-owned">⛓ max_parallel ${esc(caps.max_parallel)} · enforced</span>` : "";
   const obs = document.getElementById("obsbtn");
   obs.disabled = !VIEW.last_run;
   obs.title = VIEW.last_run ? "light the last run's observed path" : "no runs recorded";
   obs.classList.toggle("on", OBSERVED);
+  updateHeader();
   renderPalette();
   const dagwrap = document.getElementById("dagwrap");
   dagwrap.classList.toggle("observed", OBSERVED);
+  dagwrap.classList.toggle("editable", editable());
   const dag = document.getElementById("dag");
-  if(VIEW.error || !VIEW.doc){ dag.innerHTML = `<span class="note">${esc(VIEW.error || "document unreadable — see the errors above")}</span>`;
+  if(VIEW.error || !curDoc()){ dag.innerHTML = `<span class="note">${esc(VIEW.error || "document unreadable — see the errors above")}</span>`;
     document.getElementById("edgesvg").innerHTML = ""; renderPane(); return; }
   const lit = lastRunMaps();
   const inflight = (VIEW.in_flight && VIEW.in_flight.units) || {};
-  const units = topUnits(VIEW.doc);
-  const cols = rankUnits(units, VIEW.edges_effective || []);
+  const units = topUnits(curDoc());
+  const cols = rankUnits(units, curEdges());
   dag.innerHTML = cols.map(col =>
     `<div class="rank">${col.map(uid => {
       const con = conById(uid);
@@ -308,7 +393,7 @@ function render(){
       const n = nodeById(uid);
       return n ? card(n, lit, inflight) : "";
     }).join("")}</div>`).join("");
-  renderPane();
+  if(!paneFocused()) renderPane();   // never yank a pane input mid-edit (#14/#16)
   requestAnimationFrame(drawEdges);
 }
 function anchor(el, side){
@@ -321,14 +406,14 @@ function anchor(el, side){
 }
 function drawEdges(){
   const c = document.getElementById("dagwrap"), svg = document.getElementById("edgesvg");
-  if(!VIEW || !VIEW.doc){ svg.innerHTML = ""; return; }
+  if(!VIEW || !curDoc()){ svg.innerHTML = ""; return; }
   svg.setAttribute("width", c.scrollWidth); svg.setAttribute("height", c.scrollHeight);
   const lit = lastRunMaps();
   let defs = `<defs>${["success","failure","completion"].map(k => {
     const col = k === "success" ? "ok" : (k === "failure" ? "bad" : "dim");
     return `<marker id="m-${k}" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="var(--${col})"/></marker>`;}).join("")}</defs>`;
   let body = "";
-  for(const e of (VIEW.edges_effective || [])){
+  for(const e of curEdges()){
     const fe = document.querySelector(`[data-uid="${CSS.escape(e.from)}"]`);
     const te = document.querySelector(`[data-uid="${CSS.escape(e.to)}"]`);
     if(!fe || !te) continue;
@@ -344,9 +429,16 @@ function drawEdges(){
       lblx = (x1+x2)/2; lbly = (y1+y2)/2 - 6;
     }
     const col = e.on === "success" ? "ok" : (e.on === "failure" ? "bad" : "dim");
+    // canonicalize the marker id to a KNOWN value: e.on comes from the doc,
+    // which for an invalid (intentionally-rendered) doc is untrusted -- an
+    // arbitrary `on` string interpolated into url(#m-…) would inject SVG
+    // attributes (Codex CP2). Only success/failure/completion have markers.
+    const mk = (e.on === "success" || e.on === "failure") ? e.on : "completion";
     const dimmed = OBSERVED && !edgeLit(e, lit) ? " dimmed" : "";
     const dash = e.on === "completion" ? ` stroke-dasharray="4 4"` : "";
-    body += `<path class="e${dimmed}" d="${d}" fill="none" stroke="var(--${col})" stroke-width="1.6"${dash} marker-end="url(#m-${e.on})"/>`;
+    body += `<path class="e${dimmed}" d="${d}" fill="none" stroke="var(--${col})" stroke-width="1.6"${dash} marker-end="url(#m-${mk})"/>`;
+    if(editable() && !e.back)
+      body += `<path class="hit" data-efrom="${esc(e.from)}" data-eto="${esc(e.to)}" data-eon="${esc(e.on)}" d="${d}" fill="none" stroke="transparent" stroke-width="12"><title>${esc(e.on)} — click to cycle · shift-click to delete</title></path>`;
     if(e.back){
       const used = (VIEW.last_run && VIEW.last_run.bounces && VIEW.last_run.bounces[e.from+"->"+e.to]) || 0;
       const lbl = `↩ max ${e.max_bounces}` + (OBSERVED && used ? ` · used ${used}` : "") + ` · enforced`;
@@ -362,13 +454,14 @@ function renderPalette(){
   const spec = VIEW && VIEW.spec || {};
   const groups = {};
   for(const [k,v] of Object.entries(spec)) (groups[v.group] = groups[v.group] || []).push([k,v]);
+  const ed = editable();
   document.getElementById("palette").innerHTML = GROUP_ORDER.filter(g => groups[g]).map(g =>
     `<div class="pgroup"><span class="eyebrow">${esc(g)}</span>${groups[g].map(([k,v]) =>
-      `<button class="pitem${v.deferred?" off":""}" data-type="${esc(k)}"
-        title="${v.deferred ? esc("not yet executable — " + (v.deferred_reason||"")) : "click: preview its spec sheet"}">
+      `<button class="pitem${v.deferred?" off":""}" data-type="${esc(k)}"${(ed && !v.deferred)?' draggable="true"':''}
+        title="${v.deferred ? esc("not yet executable — " + (v.deferred_reason||"")) : (ed ? "click: preview · drag: drop onto the canvas to add" : "click: preview its spec sheet")}">
         <span class="ico">${v.icon}</span>${esc(v.label)}${v.deferred?`<span class="phase">${esc((v.deferred_reason||"").split(" ")[0])}</span>`:""}
       </button>`).join("")}</div>`).join("")
-    + `<div class="pgroup" style="border-top:1px solid var(--hair);padding-top:8px"><span class="note">palette previews only — drag-to-place lands in P3b</span></div>`;
+    + `<div class="pgroup" style="border-top:1px solid var(--hair);padding-top:8px"><span class="note">${ed ? "drag a type onto the canvas to add a node · click to preview" : "palette previews only — bind a pipeline to edit"}</span></div>`;
 }
 function previewType(t){ SEL = "type:" + t; render(); }
 
@@ -391,6 +484,77 @@ function sheetRows(sheet, node){
   const emits = sheet.emits ? `<div class="frow"><span class="lab">emits</span><span class="note">${esc(sheet.emits)}</span></div>` : "";
   return req + opt + guard + emits;
 }
+
+/* ---- editor: pane field inputs (only when editable) ----
+   Writes go straight into WORKING/BRIEFS WITHOUT a re-render, so the focused
+   input keeps its caret (the #14/#16 held-edit discipline). markDirty updates
+   only the header. A live tick skips renderPane while a pane input is focused
+   (paneFocused), so server overlays never yank the field mid-edit. */
+const EFFORTS = ["", "low", "medium", "high", "xhigh", "max"];
+function optList(opts, cur){
+  return opts.map(o => `<option value="${esc(o)}"${String(o)===String(cur==null?"":cur)?" selected":""}>${esc(o===""?"—":o)}</option>`).join("");
+}
+function editInput(id, field, value, scope){
+  return `<input data-edit="field" data-id="${esc(id)}" data-field="${esc(field)}" data-scope="${esc(scope||"node")}" value="${esc(value==null?"":value)}">`;
+}
+function editSelect(id, field, opts, cur, scope){
+  return `<select data-edit="field" data-id="${esc(id)}" data-field="${esc(field)}" data-scope="${esc(scope||"node")}">${optList(opts, cur)}</select>`;
+}
+function runsAsRows(id, ra, scope){
+  ra = ra || {};
+  const models = [""].concat(MODEL_CHOICES || []);
+  return `<div class="frow"><span class="lab">model</span>${editSelect(id,"model",models,ra.model,scope)}</div>
+    <div class="frow"><span class="lab">effort</span>${editSelect(id,"effort",EFFORTS,ra.effort,scope)}</div>
+    <div class="frow"><span class="lab">account</span>${editInput(id,"account",ra.account,scope)}</div>
+    <div class="frow"><span class="lab">agent</span>${editInput(id,"agent",ra.agent,scope)}</div>`;
+}
+function paneFocused(){
+  const a = document.activeElement;
+  return !!(a && document.getElementById("pane").contains(a) &&
+            /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName));
+}
+function setField(scope, id, field, val){
+  const d = curDoc(); if(!d) return;
+  if(scope === "runs_as" || scope === "con-runs_as"){
+    const owner = scope === "runs_as" ? (d.nodes||[])[nodeIndex(id)] : conById(id);
+    if(!owner) return;
+    const ra = Object.assign({}, owner.runs_as);
+    if(val === "") delete ra[field]; else ra[field] = val;
+    if(Object.keys(ra).length) owner.runs_as = ra; else delete owner.runs_as;
+    return;
+  }
+  if(scope === "con"){
+    const c = conById(id); if(!c) return;
+    if(field === "max_rounds"){ const n = parseInt(val, 10);
+      if(!isNaN(n)) c.max_rounds = n; else delete c.max_rounds; }
+    else if(val === "") delete c[field]; else c[field] = val;
+    return;
+  }
+  const i = nodeIndex(id); if(i < 0) return;         // node scalar field
+  if(val === "") delete d.nodes[i][field]; else d.nodes[i][field] = val;
+}
+function removeNode(id){
+  const d = curDoc(); if(!d) return;
+  d.nodes = (d.nodes||[]).filter(n => !(n && n.id === id));
+  d.edges = (d.edges||[]).filter(e => e.from !== id && e.to !== id);
+  for(const c of (d.containers||[])) if(c.children) c.children = c.children.filter(ch => ch !== id);
+  if(SEL === id) SEL = "";
+  markDirty(); render();
+}
+function onPaneEdit(e){
+  const el = e.target.closest("[data-edit]");
+  if(!el || !editable()) return;
+  if(el.dataset.edit === "brief"){ BRIEFS[el.dataset.ref] = el.value; markDirty(); return; }
+  setField(el.dataset.scope, el.dataset.id, el.dataset.field, el.value);
+  markDirty();
+}
+document.getElementById("pane").addEventListener("input", onPaneEdit);
+document.getElementById("pane").addEventListener("change", onPaneEdit);
+document.getElementById("pane").addEventListener("click", e => {
+  const rm = e.target.closest("[data-remove]");
+  if(rm && editable()) removeNode(rm.dataset.remove);
+});
+
 function renderPane(){
   const pane = document.getElementById("pane");
   if(!VIEW || VIEW.error){ pane.innerHTML = `<span class="note">${esc(VIEW && VIEW.error || "loading…")}</span>`; return; }
@@ -407,6 +571,18 @@ function renderPane(){
   const con = conById(SEL);
   if(con){
     const sheet = sheetFor(con.kind) || {icon:"?", label:con.kind, required:[], optional:[], guarded:[]};
+    if(editable()){
+      pane.innerHTML = `<span class="eyebrow">property pane · container</span>
+        <h3><span class="ico">${sheet.icon}</span>${esc(con.id)}<span class="tag soft">${esc(con.kind)}</span></h3>
+        ${valRow("children", (con.children||[]).join(", "), true, "edit on the canvas")}
+        ${con.kind==="loop" ? `<div class="frow"><span class="lab"><span class="req">●</span> exit_when</span></div>
+          <textarea data-edit="field" data-scope="con" data-id="${esc(con.id)}" data-field="exit_when">${esc(con.exit_when||"")}</textarea>
+          <div class="frow"><span class="lab"><span class="req">●</span> max_rounds</span>${editInput(con.id,"max_rounds",con.max_rounds,"con")}<span class="tag hard">enforced cap</span></div>` : ""}
+        <div class="frow"><span class="lab">join</span>${editSelect(con.id,"join",["","all","any"],con.join,"con")}</div>
+        <div class="frow"><span class="lab">runs_as</span><span class="note" style="margin-left:auto">children inherit</span></div>${runsAsRows(con.id, con.runs_as, "con-runs_as")}
+        ${(sheet.guarded||[]).map(g => `<div class="guard">🔒 <span><b>guarded:</b> ${esc(g)} — visible, not removable.</span></div>`).join("")}`;
+      return;
+    }
     pane.innerHTML = `<span class="eyebrow">property pane · container</span>
       <h3><span class="ico">${sheet.icon}</span>${esc(con.id)}<span class="tag soft">${esc(con.kind)}</span></h3>
       ${valRow("children", (con.children||[]).join(", "), true, "")}
@@ -426,6 +602,25 @@ function renderPane(){
       <h3><span class="ico">?</span>${esc(n.id)}<span class="tag badt">invalid</span></h3>
       <div class="guard">⚠ <span><b>unknown type "${esc(n.type)}"</b> — the validator refuses this document; raw fields below.</span></div>
       ${Object.entries(n).map(([k,v]) => valRow(k, v, false, "")).join("")}`;
+    return;
+  }
+  if(editable()){
+    const ref = n.brief_ref, guarded = n.type === "git_ops", bt = briefText(ref);
+    pane.innerHTML = `<span class="eyebrow">property pane · spec sheet</span>
+      <h3><span class="ico">${sheet.icon}</span>${esc(n.id)}<span class="tag ${guarded?"hard":"soft"}">${guarded?"enforced":"instructed"}</span></h3>
+      <div class="note" style="margin-bottom:6px">${esc(sheet.label)} — edit the document fields below (they save to the local shadow). The activity's catalog spec is shown at the end as read-only reference.</div>
+      <div class="frow"><span class="lab">runs_as</span><span class="note" style="margin-left:auto">inherits the role default</span></div>${runsAsRows(n.id, n.runs_as, "runs_as")}
+      <div class="frow"><span class="lab">context</span><select data-edit="field" data-scope="node" data-id="${esc(n.id)}" data-field="context"><option value=""${!n.context?" selected":""}>project</option><option value="own"${n.context==="own"?" selected":""} disabled>own — deferred (P5)</option></select></div>
+      <div class="frow"><span class="lab">join</span>${editSelect(n.id,"join",["","all","any"],n.join,"node")}</div>
+      ${guarded
+        ? `<div class="guard">🔒 <span><b>guarded:</b> git_ops merges via safe_merge + the repo gate — visible, not removable. Engine mechanics: no brief to edit.</span></div>`
+        : (ref ? `<div class="frow"><span class="lab">brief</span><span class="note" style="margin-left:auto">${esc(ref)}${bt==null?" · new":""}</span></div>
+            <textarea data-edit="brief" data-ref="${esc(ref)}" placeholder="(brief text — saving creates ${esc(ref)})">${esc(bt==null?"":bt)}</textarea>`
+             : `<div class="note">no brief_ref (legacy node)</div>`)}
+      <details style="margin-top:8px"><summary>activity spec (catalog reference — read-only)</summary>
+        <div class="note" style="margin:4px 0">these describe what the activity does; they are NOT document fields (the P1/P2 schema carries only the fields above — a validated node cannot add them, so they stay read-only).</div>
+        ${sheetRows(sheet, n)}</details>
+      <div class="frow" style="margin-top:8px"><button class="pill" data-remove="${esc(n.id)}" title="remove this node and its edges">remove node</button></div>`;
     return;
   }
   const entry = lastRunMaps().nodes[n.id];
@@ -461,8 +656,151 @@ document.getElementById("palette").addEventListener("click", e => {
   const it = e.target.closest("[data-type]");
   if(it) previewType(it.dataset.type);
 });
+
+/* ---- editor gestures: palette drag-to-place · edge draw / cycle / delete ----
+   Every gesture mutates WORKING only and re-renders; NOTHING posts until Save.
+   Operator-authored ids come from uniqueNodeId (safe charset), never free text
+   into a path. */
+function ensureExplicitEdges(){   // materialize the implicit chain before editing
+  const d = curDoc(); if(!d) return;
+  if(!Array.isArray(d.edges) || !d.edges.length) d.edges = effectiveEdges(d);
+}
+function reaches(a, b){           // can a reach b via forward (non-back) edges?
+  const adj = {};
+  for(const e of curEdges()) if(!e.back) (adj[e.from] = adj[e.from] || []).push(e.to);
+  const seen = new Set(), stack = [a];
+  while(stack.length){ const x = stack.pop();
+    if(x === b) return true;
+    if(seen.has(x)) continue; seen.add(x);
+    for(const y of (adj[x]||[])) stack.push(y); }
+  return false;
+}
+function edgeHint(msg){
+  document.getElementById("errbar").innerHTML =
+    `<div class="errbar"><span class="eyebrow">edit not applied</span><ul><li>${esc(msg)}</li></ul></div>`;
+}
+function addEdge(from, to){
+  if(from === to){ edgeHint("an edge can't loop a node to itself"); return; }
+  ensureExplicitEdges();
+  const d = curDoc();
+  if(d.edges.some(e => e.from === from && e.to === to && !e.back)){ edgeHint("that edge already exists"); return; }
+  if(reaches(to, from)){ edgeHint("that edge would create a cycle — declare a back-edge on the source doc instead"); return; }
+  d.edges.push({from, to, on: "success"});
+  markDirty(); render();
+}
+function cycleEdge(from, to, on){
+  ensureExplicitEdges();
+  const order = ["success","failure","completion"];
+  const e = curDoc().edges.find(x => x.from === from && x.to === to && x.on === on);
+  if(!e) return;
+  e.on = order[(order.indexOf(e.on) + 1) % 3];
+  markDirty(); render();
+}
+function deleteEdge(from, to, on){
+  ensureExplicitEdges();
+  const es = curDoc().edges;
+  const i = es.findIndex(x => x.from === from && x.to === to && x.on === on);
+  if(i >= 0){ es.splice(i, 1); markDirty(); render(); }
+}
+function placeNode(type){
+  const d = curDoc(); if(!d) return;
+  const before = topUnits(d);           // tail BEFORE adding the node
+  ensureExplicitEdges();
+  const id = uniqueNodeId((type.replace(/[^a-z0-9_]/gi, "_").toLowerCase()) || "node");
+  const ref = id + ".md";
+  (d.nodes = d.nodes || []).push({id, type, brief_ref: ref});
+  BRIEFS[ref] = "(new " + type + " brief)\n";
+  if(before.length) d.edges.push({from: before[before.length-1], to: id, on: "success"});
+  SEL = id; markDirty(); render();
+}
+// palette drag -> drop on the canvas
+document.getElementById("palette").addEventListener("dragstart", e => {
+  const it = e.target.closest("[data-type]");
+  if(it && editable() && !it.classList.contains("off"))
+    e.dataTransfer.setData("text/ae-type", it.dataset.type);
+});
+const _dagwrap = document.getElementById("dagwrap");
+_dagwrap.addEventListener("dragover", e => { if(editable()) e.preventDefault(); });
+_dagwrap.addEventListener("drop", e => {
+  const t = e.dataTransfer.getData("text/ae-type"), sp = (VIEW && VIEW.spec) || {};
+  if(t && editable() && sp[t] && !sp[t].deferred){ e.preventDefault(); placeNode(t); }
+});
+// edge draw: mousedown a handle -> mouseup a target card
+let DRAWING = null;
+document.getElementById("dag").addEventListener("mousedown", e => {
+  const h = e.target.closest("[data-ehandle]");
+  if(h && editable()){ DRAWING = h.dataset.ehandle; e.preventDefault(); e.stopPropagation(); }
+});
+window.addEventListener("mouseup", e => {
+  if(!DRAWING) return;
+  const from = DRAWING; DRAWING = null;
+  const card = e.target.closest && e.target.closest("[data-uid]");
+  if(card && card.dataset.uid !== from) addEdge(from, card.dataset.uid);
+});
+// edge click: cycle its type (shift-click deletes it)
+document.getElementById("edgesvg").addEventListener("click", e => {
+  const p = e.target.closest("[data-efrom]");
+  if(!p || !editable()) return;
+  if(e.shiftKey) deleteEdge(p.dataset.efrom, p.dataset.eto, p.dataset.eon);
+  else cycleEdge(p.dataset.efrom, p.dataset.eto, p.dataset.eon);
+});
+
 document.getElementById("obsbtn").addEventListener("click", () => { OBSERVED = !OBSERVED; render(); });
 window.addEventListener("resize", () => requestAnimationFrame(drawEdges));
+
+/* ---- editor: header state + Save / Revert (the #202 bar) ---- */
+function updateHeader(){
+  const ed = editable();
+  const save = document.getElementById("savebtn"), rev = document.getElementById("revertbtn"),
+        uns = document.getElementById("unsaved"), sc = document.getElementById("shadowchip");
+  save.style.display = ed ? "" : "none";
+  rev.style.display = (ed && DIRTY) ? "" : "none";
+  save.disabled = !DIRTY;
+  uns.innerHTML = (ed && DIRTY)
+    ? `<span class="badge unsaved" title="unsaved edits — a live tick will not overwrite them">● unsaved</span>` : "";
+  sc.innerHTML = (VIEW && VIEW.source && VIEW.source.shadow)
+    ? `<span class="badge shadow" title="showing local edits (var/autonomy/pipelines) — the committed pack is untouched">📝 local edits</span>` : "";
+  const ln = document.getElementById("legendnote");
+  if(ln) ln.textContent = ed
+    ? "drag a palette type to add a node · drag a node's handle to draw an edge · click an edge to cycle, shift-click to delete"
+    : (VIEW && VIEW.source && VIEW.source.kind === "wrapped" ? "read-only — bind a pipeline to edit" : "read-only viewer");
+}
+async function saveNow(){
+  if(!editable() || !DIRTY) return;
+  const src = VIEW.source || {}, errbar = document.getElementById("errbar");
+  const repo = qs().get("repo"), role = qs().get("role");
+  const seqAtSubmit = EDIT_SEQ;                    // snapshot: detect edits mid-POST
+  try{
+    const res = await fetch("/api/control", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({action:"pipeline_save", token:CTOKEN, repo,
+        name: src.name, doc: WORKING, briefs: BRIEFS})});   // pipeline selected by name, not role
+    const out = await res.json().catch(() => ({}));
+    if(res.status === 200 && out.ok){
+      if(EDIT_SEQ !== seqAtSubmit){
+        // the operator edited WHILE the save was in flight (Codex CP2): the
+        // posted bytes are persisted, but clearing/adopting now would clobber
+        // the newer edits. Keep them DIRTY; the next Save persists them.
+        updateHeader();
+        return;
+      }
+      DIRTY = false; BRIEFS = {}; VIEWSIG = "";   // force a re-fetch of server truth
+      updateHeader();
+      await tick(repo, role);                     // shadow is now the effective read
+    } else {
+      errbar.innerHTML = `<div class="errbar"><span class="eyebrow">save refused — your edits are kept</span><ul><li>${esc(out.error || ("HTTP " + res.status))}</li></ul></div>`;
+    }
+  }catch(e){
+    errbar.innerHTML = `<div class="errbar"><span class="eyebrow">save failed — your edits are kept</span><ul><li>${esc(String(e))}</li></ul></div>`;
+  }
+}
+function revertNow(){
+  if(!DIRTY) return;
+  adoptWorking(); DIRTY = false; render();
+}
+document.getElementById("savebtn").addEventListener("click", saveNow);
+document.getElementById("revertbtn").addEventListener("click", revertNow);
+window.addEventListener("beforeunload", e => { if(DIRTY){ e.preventDefault(); e.returnValue = ""; } });
 
 /* ---- data flow ---- */
 async function loadPickers(){
@@ -488,6 +826,11 @@ async function tick(repo, role){
     if(raw === VIEWSIG) return;          // unchanged payload -> zero DOM writes
     VIEWSIG = raw;
     VIEW = JSON.parse(raw);
+    // The #202 bar: a live tick must NEVER clobber the operator's unsaved edits.
+    // Clean -> adopt the fresh doc as the new working baseline. DIRTY -> KEEP
+    // WORKING (the operator's graph); the read-only overlays (last_run /
+    // in_flight / ledger) still refresh because render() reads them from VIEW.
+    if(!DIRTY) adoptWorking();
     render();
   }catch(e){ /* transient fetch/parse hiccup: keep the last good render */ }
 }

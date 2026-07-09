@@ -274,6 +274,38 @@ def valid_pipeline_name(name):
     return bool(_is_str(name) and _NAME_RE.match(name))
 
 
+def effective_pipeline_dir(repo, name):
+    """The SINGLE choke point for var-live pipeline resolution -- SD-34's model
+    (config_parser.effective_config_path) applied to pipeline DOCUMENTS. Return
+    the live shadow <repo>/var/autonomy/pipelines/<name> when it holds a
+    pipeline.json, else the committed <repo>/.autonomy/pipelines/<name>. The
+    dashboard's pipeline_save writer owns the shadow; the committed dir stays
+    the shareable default that SEEDS it on first save. Consulted by BOTH
+    resolve_pipeline (dispatch, raises on an invalid doc) and
+    build_pipeline_view (display, degrades) so the two never disagree.
+
+    Pure fs check -- never raises. PRECONDITION: `name` is charset-valid
+    (valid_pipeline_name); both callers gate first, so no '/'/'..' reaches the
+    join. A present-but-INVALID shadow is NOT a fallback case: the file exists,
+    so this returns the shadow and the caller's load_doc/validate_doc refuses it
+    (fail-safe, prevention-log #3) -- never a silent widen to committed."""
+    committed = os.path.join(repo, ".autonomy", "pipelines", name)
+    try:
+        shadow = os.path.join(repo, "var", "autonomy", "pipelines", name)
+        # Key on the shadow DIRECTORY, not just pipeline.json (Codex CP2): an
+        # incomplete shadow (dir present, pipeline.json missing/invalid) is a
+        # present-but-invalid shadow that must REFUSE (load_doc/validate_doc
+        # raise at the call site), never a silent fallback to committed
+        # (fail-safe, prevention-log #3). A SYMLINKED shadow is not a sanctioned
+        # shadow -- ignore it so the resolver can never be redirected out of
+        # var/ (the writer separately refuses to write through one).
+        if os.path.isdir(shadow) and not os.path.islink(shadow):
+            return shadow
+    except (OSError, TypeError):
+        pass
+    return committed
+
+
 def effective_edges(doc):
     """Declared edges, or -- when the document declares none (P1 docs,
     wrapped roles) -- the implicit success-chain over top-level units.
@@ -672,7 +704,11 @@ def resolve_pipeline(repo, role):
     if not valid_pipeline_name(binding):
         raise PipelineError("roles.%s.pipeline %r has invalid charset"
                             % (role, binding))
-    pdir = os.path.join(repo, ".autonomy", "pipelines", binding)
+    # Read the var-live shadow when the operator has edited this pipeline in the
+    # canvas (SD-34); a present-but-invalid shadow RAISES below, never a silent
+    # fallback to the committed default (prevention-log #3). binding is
+    # charset-gated just above, so the resolver's precondition holds.
+    pdir = effective_pipeline_dir(repo, binding)
     doc = load_doc(os.path.join(pdir, "pipeline.json"))
     errs = validate_doc(doc, pdir)
     if errs:

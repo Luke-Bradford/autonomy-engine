@@ -128,6 +128,17 @@ class TestPageTemplating(unittest.TestCase):
         self.assertNotIn(b"__CONTROL_TOKEN__", html)
         self.assertNotIn(b"__MODEL_CHOICES__", html)
 
+    def test_pipeline_page_templates_without_error(self):
+        # P3b (#365): the editor page now carries both placeholders (Save posts
+        # a token; runs_as picks a model). The served page must leave neither
+        # behind -- an unreplaced __MODEL_CHOICES__ is invalid JS.
+        html = dashboard._page_bytes(dashboard.PIPELINE_PAGE)
+        self.assertNotIn(b"__CONTROL_TOKEN__", html)
+        self.assertNotIn(b"__MODEL_CHOICES__", html)
+        roster = accounts.subscription_models("claude_subscription")
+        injected = ("const MODEL_CHOICES=" + json.dumps(roster) + ";").encode()
+        self.assertIn(injected, html)
+
     def test_config_page_model_roster_single_sourced(self):
         # the config page's model-field datalist is filled from the SAME
         # accounts curated roster the main page uses (#82 builds on #134), so
@@ -1641,3 +1652,106 @@ class TestPipelineRoutes(unittest.TestCase):
         self.assertEqual(got["code"], 200)
         self.assertIn("text/html", got["ctype"])
         self.assertIn(b"pipeline", got["body"].lower())
+
+
+class TestPipelineSaveRoute(unittest.TestCase):
+    """P3b (#365): POST /api/control action=pipeline_save. Inherits the token
+    gauntlet (Host allowlist + Origin + compare_digest token) and the managed-
+    repo gate; oversize bodies allowed for this action like ws_prompt_set."""
+
+    HOST = "127.0.0.1:0"
+
+    def setUp(self):
+        import shutil
+        self._orig_repos = dashboard.Handler.repos
+        self._orig_hosts = getattr(dashboard.Handler, "allowed_hosts", set())
+        dashboard.Handler.allowed_hosts = {self.HOST}
+        self._td = tempfile.TemporaryDirectory()
+        self.repo = os.path.abspath(os.path.join(self._td.name, "repo"))
+        shutil.rmtree(self.repo, ignore_errors=True)
+        self._build_repo()
+        dashboard.Handler.repos = [self.repo]
+
+    def tearDown(self):
+        dashboard.Handler.repos = self._orig_repos
+        dashboard.Handler.allowed_hosts = self._orig_hosts
+        self._td.cleanup()
+
+    def _build_repo(self):
+        import subprocess
+        os.makedirs(self.repo)
+        subprocess.run(["git", "init", "-q", self.repo], check=True)
+        with open(os.path.join(self.repo, ".gitignore"), "w") as fh:
+            fh.write("var/\n")
+        pdir = os.path.join(self.repo, ".autonomy", "pipelines", "flow")
+        os.makedirs(pdir)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("roles:\n  coder:\n    pipeline: flow\n")
+        doc = {"name": "flow", "version": 1,
+               "caps": {"max_sessions_per_run": 16},
+               "nodes": [{"id": "a", "type": "pick", "brief_ref": "a.md"}],
+               "edges": []}
+        with open(os.path.join(pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(pdir, "a.md"), "w") as fh:
+            fh.write("brief a\n")
+
+    def _post(self, body, token="__REAL__", host=None):
+        import io
+        h = dashboard.Handler.__new__(dashboard.Handler)
+        h.path = "/api/control"
+        body = dict(body)
+        if token == "__REAL__":
+            body["token"] = dashboard._CONTROL_TOKEN
+        elif token is not None:
+            body["token"] = token
+        raw = json.dumps(body).encode("utf-8")
+        h.headers = {"Host": host or self.HOST, "Content-Length": str(len(raw))}
+        h.rfile = io.BytesIO(raw)
+        h.close_connection = False
+        captured = {}
+        h._send = lambda code, b=b"", ctype="application/json": captured.update(
+            code=code, body=b, ctype=ctype)
+        h.do_POST()
+        return captured
+
+    def _valid_doc(self, version=3):
+        return {"name": "flow", "version": version,
+                "caps": {"max_sessions_per_run": 16},
+                "nodes": [{"id": "a", "type": "pick", "brief_ref": "a.md"}],
+                "edges": []}
+
+    def test_pipeline_save_writes_shadow_200(self):
+        r = self._post({"action": "pipeline_save", "repo": self.repo,
+                        "name": "flow", "doc": self._valid_doc(), "briefs": {}})
+        self.assertEqual(r["code"], 200)
+        self.assertTrue(json.loads(r["body"])["ok"])
+        self.assertTrue(os.path.isfile(os.path.join(
+            self.repo, "var", "autonomy", "pipelines", "flow", "pipeline.json")))
+
+    def test_pipeline_save_bad_token_403(self):
+        r = self._post({"action": "pipeline_save", "repo": self.repo,
+                        "name": "flow", "doc": self._valid_doc(), "briefs": {}},
+                       token="wrong")
+        self.assertEqual(r["code"], 403)
+
+    def test_pipeline_save_unmanaged_repo_400(self):
+        r = self._post({"action": "pipeline_save", "repo": "/nope",
+                        "name": "flow", "doc": self._valid_doc(), "briefs": {}})
+        self.assertEqual(r["code"], 400)
+
+    def test_pipeline_save_invalid_doc_409(self):
+        r = self._post({"action": "pipeline_save", "repo": self.repo,
+                        "name": "flow", "doc": {"name": "flow"}, "briefs": {}})
+        self.assertEqual(r["code"], 409)
+        self.assertFalse(json.loads(r["body"])["ok"])
+
+    def test_oversize_body_allowed_only_for_pipeline_save(self):
+        big = "x" * 9000
+        ok = self._post({"action": "pipeline_save", "repo": self.repo,
+                         "name": "flow", "doc": self._valid_doc(),
+                         "briefs": {"a.md": big}})
+        self.assertNotEqual(ok["code"], 400)             # oversize allowed
+        bad = self._post({"action": "config_set", "repo": self.repo,
+                          "key": "k", "value": big})
+        self.assertEqual(bad["code"], 400)               # oversize rejected

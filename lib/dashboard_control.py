@@ -14,6 +14,7 @@ actions do nothing) is unit-tested without running launchctl or touching real
 LaunchAgents. Lifecycle only -- this module has no notion of any target-repo
 trade/order/position path and can never touch one.
 """
+import json
 import os
 import plistlib
 import re
@@ -419,6 +420,7 @@ def format_cmd_error(cmd_name, stderr):
 # building the candidate; any refusal leaves every file untouched.
 
 import subprocess as _subprocess  # noqa: E402  (writer-only dependency)
+import shutil as _shutil  # noqa: E402  (pipeline_save dir stage/rollback)
 
 import sys as _sys  # noqa: E402
 _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -563,13 +565,14 @@ def _fold_overlay(repo, text):
     return text, path
 
 
-def _var_live_protected(repo):
-    """The live file must be invisible to git, or preflight's `stash -u`
-    sweeps it (silent config loss). Unknown/error = NOT protected (fail-safe:
-    refuse the write rather than risk the sweep)."""
+def _var_live_protected(repo, rel="var/autonomy/config.yaml"):
+    """The live file/dir must be invisible to git, or preflight's `stash -u`
+    sweeps it (silent loss). Unknown/error = NOT protected (fail-safe: refuse
+    the write rather than risk the sweep). `rel` is a repo-relative path under
+    var/ (default: the config shadow; pipeline_save passes the pipeline shadow)."""
     try:
         rc = _subprocess.run(
-            ["git", "-C", repo, "check-ignore", "-q", "var/autonomy/config.yaml"],
+            ["git", "-C", repo, "check-ignore", "-q", rel],
             stdout=_subprocess.DEVNULL, stderr=_subprocess.DEVNULL, timeout=10)
     except (OSError, _subprocess.SubprocessError):
         return False
@@ -1007,3 +1010,195 @@ def ws_prompt_set(repo, name, content):
         return {"ok": True, "path": target_rel,
                 "message": "rail localized to %s (the committed file is untouched)" % target_rel}
     return {"ok": True, "path": target_rel, "message": "rail saved"}
+
+
+# --- P3b (#365): canvas pipeline editor -> var-live shadow writer ------------
+# SD-34 (var-shadow home) applied to pipeline DOCUMENTS + SD-29 (double-
+# validation, refuse-untouched) mechanics, generalized from structural_write to
+# a DIRECTORY asset (pipeline.json + sibling briefs). Reader-safe install
+# (pipeline.json published last) + snapshot rollback; a present-but-invalid
+# shadow is never trusted as a seed (no laundering).
+
+_PIPELINE_DOC_CAP = 200000   # per-file byte cap (the _PROMPT_CAP precedent)
+
+
+def _pipeline_seed_dir(committed, shadow):
+    """Where untouched briefs come from: the current shadow IF it is itself
+    valid (so prior edits survive a later save), else the committed pack. A
+    present-but-INVALID shadow is NEVER trusted as a seed -- no laundering of
+    its arbitrary content (SD-34/prevention-log #3); the operator's posted doc
+    is the fix and untouched briefs reset to the known-good committed base.
+    Total -- any read error falls to committed."""
+    import pipeline as _pl
+    if os.path.isdir(shadow) and not os.path.islink(shadow):
+        try:
+            cur = _pl.load_doc(os.path.join(shadow, "pipeline.json"))
+            if not _pl.validate_doc(cur, shadow):
+                return shadow
+        except _pl.PipelineError:
+            pass
+    return committed
+
+
+def pipeline_save(repo, name, doc, briefs):
+    """Whole-doc re-emit of a pipeline into its var-live shadow
+    <repo>/var/autonomy/pipelines/<name>/ (SD-34 for pipeline documents; SD-29
+    double-validation). `doc` is the full pipeline document; `briefs` maps
+    sibling basenames -> content for briefs edited on the canvas. Untouched
+    briefs are seeded per-ref from _pipeline_seed_dir so prior edits survive.
+    Returns {ok: True, path, message} or {ok: False, error}; every refusal/
+    exception leaves the shadow byte-identical. P3b edits a BOUND pipeline only
+    -- a name with no committed pack is refused (creating/binding is P4)."""
+    import pipeline as _pl
+    # charset-gate the name BEFORE any path is built (prevention-log #6; the ONE
+    # binding gate dispatch also uses -- what dispatch refuses can never be saved)
+    if not _pl.valid_pipeline_name(name):
+        return {"ok": False, "error": "pipeline name has invalid charset"}
+    if not isinstance(doc, dict):
+        return {"ok": False, "error": "pipeline document must be a JSON object"}
+    if not isinstance(briefs, dict):
+        return {"ok": False, "error": "briefs must be a mapping"}
+    # the document's OWN name must match the save target, or the shadow dir
+    # <name> would hold a doc named otherwise -- splitting binding / journal /
+    # ledger / provenance (Codex CP1 #2).
+    if doc.get("name") != name:
+        return {"ok": False, "error":
+                "document name %r must match the pipeline name %r"
+                % (doc.get("name"), name)}
+    for bname, bcontent in briefs.items():
+        if not _pl._valid_brief_ref(bname):
+            return {"ok": False, "error":
+                    "brief %r is not a sibling basename (no paths, no dotfiles)"
+                    % bname}
+        if not isinstance(bcontent, str) or \
+                len(bcontent.encode("utf-8")) > _PIPELINE_DOC_CAP:   # BYTES (#9)
+            return {"ok": False, "error":
+                    "brief %r must be a string under %d bytes"
+                    % (bname, _PIPELINE_DOC_CAP)}
+    # gitignore guard (SD-34): var/ must be ignored or preflight sweeps it.
+    if not _var_live_protected(repo, os.path.join("var", "autonomy", "pipelines")):
+        return {"ok": False, "error":
+                "var/ is not covered by this repo's .gitignore -- the loop's "
+                "preflight would sweep the pipeline shadow. Add a 'var/' line to "
+                ".gitignore (and commit it) first."}
+    # serialize once; cap the DOCUMENT too, not just briefs (#9), before validate
+    serialized = json.dumps(doc, indent=2, sort_keys=True)
+    if len(serialized.encode("utf-8")) > _PIPELINE_DOC_CAP:
+        return {"ok": False, "error":
+                "pipeline document exceeds %d bytes" % _PIPELINE_DOC_CAP}
+    # structural pre-check (brief existence is re-checked post-stage)
+    errs = _pl.validate_doc(doc, None)
+    if errs:
+        return {"ok": False, "error": "; ".join(errs)}
+    committed = os.path.join(repo, ".autonomy", "pipelines", name)
+    shadow = os.path.join(repo, "var", "autonomy", "pipelines", name)
+    # BOUND pipelines only: a name with no committed pack is not editable even
+    # if an orphan shadow exists (Codex CP1 #5).
+    if not os.path.isdir(committed):
+        return {"ok": False, "error":
+                "no committed pipeline %r to edit (bind one first)" % name}
+    # A symlinked or non-directory shadow path is NOT a sanctioned shadow:
+    # refuse BEFORE we seed/stage, so the writer can never read or write
+    # through a symlink out of var/ (path-escape guard, Codex CP2).
+    if os.path.islink(shadow) or (os.path.exists(shadow) and not os.path.isdir(shadow)):
+        return {"ok": False, "error":
+                "the pipeline shadow path is not a clean directory -- refusing"}
+    seed = _pipeline_seed_dir(committed, shadow)
+    staging = shadow + ".staging"
+    try:
+        os.makedirs(os.path.dirname(shadow), exist_ok=True)
+        _shutil.rmtree(staging, ignore_errors=True)
+        os.makedirs(staging)
+        with open(os.path.join(staging, "pipeline.json"), "w",
+                  encoding="utf-8") as fh:
+            fh.write(serialized)
+        # staging gets EXACTLY the doc's referenced briefs -- posted edits, else
+        # copied (regular files only) from the seed. No blind copytree, so stray
+        # files / symlinks in a legacy or hostile pack are never laundered in (#7).
+        for node in (doc.get("nodes") or []):
+            ref = node.get("brief_ref") if isinstance(node, dict) else None
+            if not (isinstance(ref, str) and _pl._valid_brief_ref(ref)):
+                continue                          # validate_doc will flag it
+            dst = os.path.join(staging, ref)
+            if os.path.exists(dst):
+                continue
+            if ref in briefs:
+                with open(dst, "w", encoding="utf-8") as fh:
+                    fh.write(briefs[ref])
+            else:
+                src = os.path.join(seed, ref)
+                if os.path.isfile(src) and not os.path.islink(src):
+                    _shutil.copyfile(src, dst)
+        # re-load + re-validate against staging (brief-existence NOW checked)
+        reloaded = _pl.load_doc(os.path.join(staging, "pipeline.json"))
+        errs2 = _pl.validate_doc(reloaded, staging)
+        if errs2:
+            _shutil.rmtree(staging, ignore_errors=True)
+            return {"ok": False, "error": "; ".join(errs2)}
+        if reloaded != doc:                       # SD-29 lossy-emit guard
+            _shutil.rmtree(staging, ignore_errors=True)
+            return {"ok": False, "error":
+                    "re-parse mismatch: the written document would not read back "
+                    "identically -- write refused"}
+    except (OSError, _pl.PipelineError) as exc:
+        _shutil.rmtree(staging, ignore_errors=True)
+        return {"ok": False, "error": "could not stage the pipeline: %s" % exc}
+    # install staging over the LIVE shadow reader-safely: briefs first (atomic
+    # per file), then pipeline.json LAST via an atomic replace -- a concurrent
+    # reader (dispatch/poll) never sees the shadow without a complete
+    # pipeline.json, so there is no transient fallback-to-committed window (#3).
+    # A copytree snapshot backs a wholesale restore if an install write fails (#4).
+    backup = shadow + ".bak"
+    _shutil.rmtree(backup, ignore_errors=True)
+    had_shadow = os.path.isdir(shadow)
+    keep = set(os.listdir(staging))
+    consumed = False
+    try:
+        if not had_shadow:
+            # first save: ATOMIC dir install -- the shadow appears complete or
+            # not at all, so a reader keyed on the dir (effective_pipeline_dir)
+            # never sees a partial shadow mid-install (Codex CP2).
+            os.rename(staging, shadow)
+            consumed = True
+        else:
+            _shutil.copytree(shadow, backup)      # rollback snapshot
+            for entry in sorted(keep):            # briefs first, pipeline.json LAST
+                if entry == "pipeline.json":
+                    continue
+                tmp = os.path.join(shadow, entry + ".tmp")
+                _shutil.copyfile(os.path.join(staging, entry), tmp)
+                os.replace(tmp, os.path.join(shadow, entry))
+            tmp = os.path.join(shadow, "pipeline.json.tmp")
+            _shutil.copyfile(os.path.join(staging, "pipeline.json"), tmp)
+            os.replace(tmp, os.path.join(shadow, "pipeline.json"))   # PUBLISH (atomic)
+    except OSError as exc:
+        try:                                      # wholesale restore
+            if had_shadow:
+                _shutil.rmtree(shadow, ignore_errors=True)
+                if os.path.isdir(backup):
+                    os.rename(backup, shadow)
+        except OSError:
+            pass
+        _shutil.rmtree(staging, ignore_errors=True)
+        return {"ok": False, "error": "could not install the pipeline: %s" % exc}
+    # prune stale files best-effort (only meaningful on an OVER-write -- a fresh
+    # rename install already holds exactly the staged set). The save already
+    # SUCCEEDED at the atomic publish; a leftover file is inert and must not
+    # trigger a rollback of a good save.
+    if had_shadow:
+        try:
+            for entry in os.listdir(shadow):
+                if entry not in keep and not entry.endswith(".tmp"):
+                    p = os.path.join(shadow, entry)
+                    if os.path.isdir(p) and not os.path.islink(p):
+                        _shutil.rmtree(p, ignore_errors=True)
+                    else:
+                        os.remove(p)
+        except OSError:
+            pass
+    if not consumed:
+        _shutil.rmtree(staging, ignore_errors=True)
+    _shutil.rmtree(backup, ignore_errors=True)
+    return {"ok": True, "path": os.path.relpath(shadow, repo),
+            "message": "saved to the live pipeline shadow -- applies next run "
+                       "(the committed pack is untouched)"}
