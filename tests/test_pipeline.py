@@ -397,6 +397,20 @@ class CompileBriefTest(unittest.TestCase):
         with self.assertRaises(pipeline.PipelineError):
             pipeline.compile_brief(self.dir, doc, "act")
 
+    def test_verdict_footer_when_failure_edge_leaves_the_node(self):
+        # a node whose outgoing failure edge makes its verdict load-bearing
+        # must be TOLD where to write it -- otherwise the branch can never
+        # fire and the failure lane is dead prose.
+        doc = minimal_doc()
+        doc["nodes"].append({"id": "b", "type": "notify", "brief_ref": "act.md"})
+        doc["edges"] = [{"from": "act", "to": "b", "on": "failure"}]
+        out = pipeline.compile_brief(
+            self.dir, doc, "act",
+            verdict_ctx={"verdict_file": "var/autonomy-logs/x.verdict.json"})
+        self.assertIn("pipeline:verdict", out)
+        self.assertIn("x.verdict.json", out)
+        self.assertIn('"outcome"', out)
+
 
 class StateMachineTest(unittest.TestCase):
     def setUp(self):
@@ -1021,8 +1035,12 @@ class StarterTemplateTest(unittest.TestCase):
         doc = pipeline.load_doc(os.path.join(pdir, "pipeline.json"))
         self.assertEqual(pipeline.validate_doc(doc, pdir), [])
         self.assertEqual(doc["name"], "ticket-to-merge")
+        self.assertEqual(doc["version"], 2)
         kinds = [c["kind"] for c in doc["containers"]]
         self.assertIn("loop", kinds)
+        self.assertTrue(any(e.get("back") for e in doc["edges"]))
+        self.assertTrue(any(e.get("on") == "failure" for e in doc["edges"]))
+        self.assertTrue(any(n.get("join") == "any" for n in doc["nodes"]))
 
 
 class LoadDocTest(unittest.TestCase):

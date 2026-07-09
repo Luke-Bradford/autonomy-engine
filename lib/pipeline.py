@@ -399,10 +399,20 @@ def _node_by_id(doc, node_id):
                         % (node_id, doc.get("name")))
 
 
-def compile_brief(pipeline_dir, doc, node_id, loop_ctx=None):
+_VERDICT_FOOTER = """<!-- pipeline:verdict -->
+Your structured verdict steers the graph: this activity has an on-failure
+path. Before you finish, write a JSON file at %(verdict_file)s (relative to
+the repo root):
+  {"outcome": "success"}  the work is good -- the success path continues
+  {"outcome": "failure"}  it must change -- the failure path runs instead
+If you write nothing, your session's own outcome is the verdict."""
+
+
+def compile_brief(pipeline_dir, doc, node_id, loop_ctx=None, verdict_ctx=None):
     """Compose the session brief for one node: fenced header + the node's
-    brief file + (inside a loop) the round/verdict footer. Fenced sections
-    per the spec so future regeneration is recognisable."""
+    brief file + (inside a loop) the round/verdict footer + (when an
+    on-failure edge leaves the node) the structured-verdict footer. Fenced
+    sections per the spec so future regeneration is recognisable."""
     node = _node_by_id(doc, node_id)
     ref = node.get("brief_ref")
     if not ref:
@@ -418,6 +428,8 @@ def compile_brief(pipeline_dir, doc, node_id, loop_ctx=None):
              body]
     if loop_ctx:
         parts.append(_LOOP_FOOTER % loop_ctx)
+    if verdict_ctx:
+        parts.append(_VERDICT_FOOTER % verdict_ctx)
     return "\n\n".join(parts) + "\n"
 
 
@@ -939,8 +951,16 @@ def next_node(state_path, brief_out, journal_path=""):
         kind, prompt = "legacy", node["legacy_prompt"]
     else:
         pdir = (state.get("meta") or {}).get("pipeline_dir")
+        verdict_ctx = None
+        if _con_by_id(doc, uid) is None and any(
+                e.get("from") == uid and e.get("on") == "failure"
+                for e in doc.get("edges", [])):
+            # An on-failure path leaves this node: its structured verdict is
+            # load-bearing, so the brief must say where to write it.
+            verdict_ctx = {"verdict_file": _verdict_rel(state_path)}
         text = compile_brief(pdir, doc, node["id"],
-                             _loop_ctx(state, node, state_path))
+                             _loop_ctx(state, node, state_path),
+                             verdict_ctx=verdict_ctx)
         with open(brief_out, "w") as fh:
             fh.write(text)
         kind, prompt = "compiled", brief_out
