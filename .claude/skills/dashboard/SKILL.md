@@ -1,6 +1,6 @@
 ---
 name: dashboard
-description: Use when changing, debugging, or verifying the control-room dashboard — bin/dashboard.py, lib/dashboard_state.py, lib/dashboard_control.py, lib/dashboard_page.html, or lib/config_page.html — or when a change needs browser-level verification.
+description: Use when changing, debugging, or verifying the control-room dashboard — bin/dashboard.py, lib/dashboard_state.py, lib/dashboard_control.py, lib/dashboard_page.html, lib/config_page.html, or lib/pipeline_page.html — or when a change needs browser-level verification.
 ---
 
 # dashboard — control-room architecture + browser verify loop
@@ -14,11 +14,15 @@ No build step, no framework, stdlib only. Four layers:
 | Server | `bin/dashboard.py` | `http.server`, **loopback only** (127.0.0.1 default; `localhost` accepted; anything else refused at startup); routes; SSE; control token; owns the git/gh calls + TTL cache |
 | State | `lib/dashboard_state.py` | PURE builders: read engine artifacts (session logs, supervisor.log, config) → JSON-able dicts. git/gh state is INJECTED by the server (`build_repo_state(git_in_flight=…)`) — builders never call the network. Unit-tested against `tests/fixtures/repo-alpha` |
 | Control | `lib/dashboard_control.py` | PURE decisions for lifecycle writes (`control_plan`) + input validation (`_MODEL_RE` parity with the supervisor's `valid_model_id`) |
-| Pages | `lib/dashboard_page.html` (main, 650ish lines), `lib/config_page.html` (config) | Vanilla JS, single file each, `__CONTROL_TOKEN__` substituted at serve time |
+| Pages | `lib/dashboard_page.html` (main), `lib/config_page.html` (config), `lib/pipeline_page.html` (canvas viewer, #357) | Vanilla JS, single file each, `__CONTROL_TOKEN__`/`__MODEL_CHOICES__` substituted at serve time (absent placeholder = no-op) |
 
-Routes: `GET /` (main page) · `GET /config` (config page) · `GET /api/state` ·
-`GET /api/config` · `GET /api/stream` (SSE tick) · `POST /api/control` (the
-ONLY write endpoint).
+Routes: pages `GET /` · `/config` · `/pipeline` · reads `GET /api/state` ·
+`/api/config` · `/api/models` · `/api/ws-prompt` · `/api/pipeline` ·
+`/api/boards` · `/api/stream` (SSE tick) · writes `POST /api/control`
+(action-multiplexed — every mutating button goes through it) and
+`POST /api/chat` (the W4 concierge; same token gauntlet). Adding a
+per-feature write endpoint is still forbidden — new mutations become
+`/api/control` actions.
 
 ## Security contract (do not weaken)
 
@@ -31,7 +35,14 @@ ONLY write endpoint).
 - Server-side re-validation of every control value even though the page also
   validates (defense in depth). Lifecycle actions: `pause`/`resume`/`stop`/
   `start`; plus `set_model`, `config_set`, `repo_add`/`repo_remove`,
-  `cred_*`, `acct_*`.
+  `cred_*`, `acct_*`, and the workstream-authoring set (`ws_add`, `ws_set`,
+  `ws_prompt_set`, `repo_init`). The action whitelist in `do_POST` is the
+  authority — check it, don't trust this list's freshness.
+- **Render data can be hostile.** Pages that render degraded/invalid
+  artifacts (the `/pipeline` viewer shows INVALID docs by design) must
+  treat ids/strings from the payload as untrusted: full-coverage escaping
+  (`&<>"'`), no inline `onclick="f('${id}')"` handler strings — delegated
+  listeners reading `data-*` attributes (PR #358 security round).
 - Control responses carry short, structured validation reasons
   (`{"error": "invalid action"}`) — fine. What must never happen: raw
   exception text / tracebacks in an HTTP body, or pages rendering an error
@@ -111,9 +122,13 @@ Run this before claiming any dashboard change done (pre-flight-review item J).
    `elementRebuildsPerPanel` ≤ 1 on an unchanged fixture. A panel that rebuilds
    its subtree every tick while its markup is byte-identical is a jank/flicker
    risk (node-identity churn resets CSS transitions, `:hover`, text selection,
-   in-panel scroll) — the #174/#238 class. Only `renderRepos` carries the
-   skip-unchanged guard today; if you touch another panel's render, give it the
-   same guard rather than an unconditional `el.innerHTML = …` each tick.
+   in-panel scroll) — the #174/#238 class. Main-page panels route DOM writes
+   through the `setHTML(id, el, html)` signature guard (volatile ticker cells
+   normalized out) — give any new panel the same guard, never an
+   unconditional `el.innerHTML = …` each tick. `/pipeline` uses the
+   coarser payload-signature variant (re-render only when the fetched JSON
+   bytes change); its panel ids for this pass are
+   `['dag','pane','palette','errbar','edgesvg']`.
    **Dirty-control survival** (#202 defect 3 — an SSE re-render must not revert an
    operator's un-saved edit): on `/config`, set a `select`/input via JS, fire its
    `change`/`input` event, `await` ~6 s (2–3 poll cycles), assert the value is

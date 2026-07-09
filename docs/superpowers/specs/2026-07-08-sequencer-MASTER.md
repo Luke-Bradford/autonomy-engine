@@ -1,8 +1,17 @@
-# MASTER — the agentic pipeline sequencer (ingest this first)
+# MASTER — the agentic pipeline sequencer (internal build record)
 
-One-day design arc, operator-driven, 2026-07-08. This is the entry point
-for any session picking the work up: read this, then the referenced specs
-in order. The operator's one-line product:
+**Audience note: this is an ENGINEERING RECORD** — it organizes the work
+by build phases (P1…P5) and decision numbers (SD-N) and assumes the
+process context in `docs/README.md`'s "Engineering records" section. To
+learn what the pipeline system IS and how it behaves, read
+**`docs/pipelines.md`** (the production spec) instead — it needs none of
+this vocabulary.
+
+Design arc 2026-07-08; build P1–P3a shipped 2026-07-08/09. Entry point for
+any engineering session picking the work up: read the "Shipped" table for
+CURRENT state, `.claude/skills/engineering/pipelines.md` for the runtime
+map + gotchas, then the referenced specs for the full model. The one-line
+product:
 
 > A person running Claude on their own computer points this at a repo,
 > builds/assigns pipelines of agentic activities (ADF-style: DAG,
@@ -33,13 +42,40 @@ in order. The operator's one-line product:
    observed), the fallback-per-brain constraint (one --effort per CLI
    session; thinking brain has NO subagent fallback upstream — never fake
    the knob), loop-type presets wording.
-5. **Mockup**: `docs/superpowers/mockups/2026-07-08-loop-canvas-mockup.html`
-   (v4 — the reference pipeline, clickable) · artifact
-   https://claude.ai/code/artifact/70d11a3c-ec6c-4bc8-b596-bd303066ca17 ·
-   v5's DAG-canvas mockup is SPEC'D (v5 §7) but not yet built — it is
-   build-phase P3's blueprint, worth mocking before P3 starts.
+5. **Mockups**: `docs/superpowers/mockups/2026-07-08-loop-canvas-mockup.html`
+   (v4 — the reference pipeline, clickable) and
+   `docs/superpowers/mockups/2026-07-08-dag-canvas-mockup.html` (v5 §7 —
+   the P3 blueprint, operator-reviewed in two depth rounds, #347/#348) ·
+   artifact (same URL both rounds)
+   <https://claude.ai/code/artifact/70d11a3c-ec6c-4bc8-b596-bd303066ca17>
 
-## What is ALREADY BUILT AND MERGED (today's shipped substrate)
+## SHIPPED — the sequencer itself (state as of 2026-07-09)
+
+| Phase | PR → issue | What runs today | Plan doc (`docs/superpowers/plans/`) |
+| --- | --- | --- | --- |
+| P1 | #346 → #345 | pipeline document + validator (refuses what it can't honor) + compiler-to-briefs + sequential runner; run journal w/ trust-ledger fields; legacy roles auto-wrap; starter `ticket-to-merge` | `2026-07-08-sequencer-p1-pipeline-runner.md` |
+| P2a | #350 → #349 | typed edges success/failure/completion, join all\|any, skip propagation, verdict `{"outcome"}` branch channel, traversal-only back-edges w/ enforced bounce caps, container-level outcomes — ONE walk engine, fmt-2 state (SD-35) | `2026-07-09-sequencer-p2a-typed-edges.md` |
+| P2b | #352 → #351 | bounded parallel dispatch: one DISPATCH may fan out to `caps.max_parallel` node-sessions (SD-36), ephemeral worktrees under `var/autonomy-worktrees/`, cron/event multi-node lift, batch `ready` protocol | `2026-07-09-sequencer-p2b-parallel-dispatch.md` |
+| — | #354 → #353 | `engine.default_branch` knob at every detach/merge-base site (repo-agnostic default branch) | (small fix, no plan doc) |
+| P3a | #358 → #357 | `/pipeline` read-only canvas: `SPEC_SHEETS` catalog SSOT (validator vocab derived), auto-ranked DAG + containers + collapse, schema-driven pane, observed lighting from the journal, total `build_pipeline_view` | `2026-07-09-sequencer-p3a-canvas-viewer.md` |
+
+**NEXT = P3b (canvas editor + save path).** Decisions LOCKED in the P3a
+plan doc ("P3 phase decisions" pt 8): var-shadow `var/autonomy/pipelines/`
+per the SD-34 model (committed-pack edits are stash-swept by preflight —
+a shadow is the only edit home that survives), one
+`effective_pipeline_dir` resolver consulted by dispatch AND dashboard,
+`pipeline_save` action through `/api/control` with SD-29 writer mechanics
+(validate → atomic → re-load-compare, gitignore guard), dirty
+working-copy protection (#202 bar), minimap/search. A new
+settled-decision entry rides the P3b PR. Kickoff answers on record: #345.
+
+**Still honestly deferred** (validator refuses; palette shows them
+disabled): `wait_watch`/`ask_human`/`handoff`/`run_command`,
+`branch`/`for_each` containers, intra-container edges, `context: own`,
+gallery/assignment/versioning + run windows (P4), for-each + catalog long
+tail (P5).
+
+## Pre-sequencer substrate (shipped 2026-07-08, context for the above)
 
 - **Token efficiency**: fingerprint gate + idle backoff (#318/PR #321);
   token-hygiene rails (#319/#322); planner/coder pair default (SD-33,
@@ -63,9 +99,8 @@ in order. The operator's one-line product:
 
 ## The build plan (P-phases from v5, each TDD + browser-verified)
 
-P1 pipeline document+compiler+sequential runner (legacy roles auto-wrap) →
-P2 dependency edges + failure paths + bounded parallel dispatch →
-P3 the DAG canvas editor (+ its mockup first) →
+P1 ✅ → P2a/P2b ✅ → P3a ✅ (see the Shipped table) →
+**P3b canvas EDITING + save path (next)** →
 P4 gallery/assignment/versioning + run windows →
 P5 for-each + wait/watch enforcement + catalog long tail.
 
@@ -73,18 +108,12 @@ Engine invariants unchanged throughout: bash 3.2 floor · stdlib only ·
 fail-safe never fail-open · merge only via safe_merge · loop barred from
 guardrail files · honesty NOTEs for any knob validated-but-unconsumed.
 
-## Open questions for the operator at P1 kickoff
+## Kickoff questions — ANSWERED on record (#345, 2026-07-08)
 
-- Confirm the v5 asset/versioning semantics read right (template pin +
-  divergence badge, no silent fleet updates).
-- Pipeline document format: JSON chosen (stdlib, no comments) — briefs live
-  as sibling .md files; OK?
-- First shipped starter pipelines: ticket-to-merge (the reference),
-  board-groom, pr-qa-sweep, research-digest — right four?
-- The v5 DAG-canvas mockup should be reviewed BEFORE P3 (same artifact
-  URL will be reused).
-- v5 §10 (adopted post-review): TRUST LEDGER (earned per-assignment
-  autonomy tiers: watch → auto at ≥20 runs/≥95% pass, auto-demotion) and
-  STANDING GOALS (invariant activity: deterministic predicate, enforced;
-  starter pipeline re-verifies forever). Fold the ledger's journal needs
-  into P1's run journal from the start.
+Versioning as spec'd (template pin + divergence badge, no silent fleet
+updates) · JSON + sibling `.md` briefs · starter four (ticket-to-merge,
+board-groom, pr-qa-sweep, research-digest) · one dispatch path via
+auto-wrap · trust ledger + standing goals adopted (v5 §10), ledger fields
+in the run journal from P1 day one · v5 DAG mockup reviewed pre-P3
+(#347/#348 depth rounds). P2 split (SD-35) + SD-12 amendment (SD-36)
+decided at P2 kickoff, #349/#351.

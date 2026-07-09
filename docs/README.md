@@ -1,47 +1,73 @@
 # autonomy-engine docs — index
 
-Everything about this engine's design, decisions, scope, and build history. This repo is
-self-contained: you should not need eBull (the first target repo) to understand or extend the engine.
+This repo is self-contained: you should not need any target repo to
+understand or extend the engine. The docs split into two layers — know
+which one you are reading:
 
-## Design & decisions
+- **Product documentation** — what the engine is and how it works today.
+  Written for someone with no knowledge of how it was built. Start here.
+- **Engineering records** — decision logs, build plans, design-session
+  archives, review-lesson logs. These are the working substrate of the
+  engineering process (they use internal shorthand and reference build
+  phases); read them when contributing changes, not to learn the product.
 
-- **[design.md](design.md)** — the engine↔pack seam design spec. What's repo-agnostic (the engine)
-  vs. per-project (the `.autonomy/` pack), the config schema, the four merge-gate strategies, the
-  agent-adapter boundary, `onboard.sh`/`doctor.sh`. Carries the Codex review findings inline. This
-  is the authoritative "what the engine is and why."
-- **[implementation-plan.md](implementation-plan.md)** — the 13-task TDD build plan, with the actual
-  code for every task. Tasks 1–12 built the engine; Task 13 was the eBull cutover.
-- **[managed-agents-comparison.md](managed-agents-comparison.md)** — why the continuous Coder loop
-  stays hand-rolled here, while the dashboard (#1876) and multi-role org (#1877) are redirected
-  toward Anthropic's Managed Agents rather than hand-built. Read before scoping those.
-- **[dashboard-design.md](dashboard-design.md)** — the control-room UI design (from a mockup
-  session), with a production-grade build-direction preamble. The spec for the clickable
-  control/visibility page. Not built yet — this is the next build phase.
+## Product documentation (start here)
 
-## Build history (audit trail)
+- **[design.md](design.md)** — the engine↔pack seam: what is repo-agnostic
+  (the engine) vs. per-project (the `.autonomy/` pack), the config schema,
+  the four merge-gate strategies, the agent-adapter boundary,
+  onboarding/doctor tooling. The authoritative "what the engine is and
+  why."
+- **[pipelines.md](pipelines.md)** — the pipeline system: describing
+  multi-step agent work as a typed-dependency graph (loops, parallel
+  ranks, failure paths, enforced caps), how a run executes, the run
+  journal and earned-autonomy trust tiers, and the `/pipeline` dashboard
+  canvas.
+- **[dashboard-design.md](dashboard-design.md)** — the control-room UI
+  design. The dashboard is BUILT and live (`bin/dashboard.py`; pages `/`,
+  `/config`, `/pipeline`); this doc is its design rationale.
+- **[byo-llm.md](byo-llm.md)** — pointing a role at a local
+  OpenAI-compatible endpoint.
+- **[managed-agents-comparison.md](managed-agents-comparison.md)** — where
+  this engine deliberately overlaps with or defers to hosted agent
+  platforms.
 
-- **[build-log/ledger.md](build-log/ledger.md)** — one line per task: commit, review verdict, and
-  the material findings (incl. the ones that became backlog issues). The fastest way to see what was
-  decided and what's deferred.
-- **[build-log/task-N-brief.md](build-log/)** — each task's exact requirements (extracted from the
-  plan).
-- **[build-log/task-N-report.md](build-log/)** — each task's implementer report (TDD evidence, test
-  results, self-review). Review verdicts are summarized in the ledger; the material ones are on the
-  issue tracker.
+## Engineering records (internal shorthand lives here)
 
-## Scope boundaries (what this engine deliberately does NOT do)
+- **[settled-decisions.md](settled-decisions.md)** — numbered rulings
+  (`SD-N`) that changes must not silently regress. The CI review bot
+  enforces these.
+- **[review-prevention-log.md](review-prevention-log.md)** — numbered
+  recurring-bug-class lessons (`prevention-log #N`) extracted from review
+  rounds.
+- **[superpowers/specs/](superpowers/specs/)** — design-session archives.
+  `2026-07-08-sequencer-MASTER.md` is the pipeline build's internal entry
+  point (shipped-state table, phase plan, decision pointers).
+- **[superpowers/plans/](superpowers/plans/)** — per-slice implementation
+  plans (TDD task breakdowns) as executed.
+- **[implementation-plan.md](implementation-plan.md)** +
+  **[build-log/](build-log/)** — the original 13-task engine build and its
+  audit trail.
+- **[control-room-research.md](control-room-research.md)** ·
+  **[agent-org-design.md](agent-org-design.md)** — earlier design arcs;
+  superseded where they conflict with settled-decisions.md.
 
-From design.md's Scope section — captured here so they aren't re-litigated:
-- **Not** a cross-repo registry yet — the CLI (`supervisor.sh --repo <path>`) is shaped so a registry
-  can drive it later, but supervising many repos at once is issue #4.
-- **Not** the dashboard/control page — designed (dashboard-design.md), not built.
-- **Not** the multi-role org (PM/Coder/QA/Owner) — redirected to Managed Agents.
-- **Not** auto-provisioning of a cold repo's GitHub state (review workflow, branch protection,
-  board) — `doctor.sh` diagnoses; it never provisions.
-- **Not** any agent but Claude yet — the adapter boundary exists; Codex is issue #2.
+## Scope boundaries (deliberate non-goals today)
 
-## Backlog
+- Merges happen ONLY through `bin/safe_merge.sh` — no pipeline, agent, or
+  dashboard action can bypass the merge gate.
+- The engine diagnoses a cold repo's GitHub state (`doctor.sh`) but never
+  provisions it.
+- Pipeline activities the engine cannot yet enforce (human-in-the-loop
+  waits, arbitrary command execution, per-item fan-out) are REFUSED by the
+  validator rather than run in a weaker form — see pipelines.md.
+- Canvas editing (drag-and-drop pipeline authoring) is not yet available;
+  pipelines are edited as JSON + Markdown briefs.
 
-Open issues are the build queue: **#1** harden safe_merge timestamp compare · **#2** codex agent
-adapter · **#3** shared account-level usage-limit state (registry prereq) · **#4** registry /
-control-unit · plus the dashboard/control-surface + graceful-stop issues (see the tracker).
+## Current state (high level)
+
+Multi-repo registry + lifecycle control (`bin/control.sh`), Claude + Codex
+agent adapters, cron/event/loop/manual triggers, the pipeline sequencer
+with bounded parallel dispatch, the live dashboard (fleet rail, config
+authoring, pipeline canvas), run journal + trust ledger. The issue tracker
+is the authoritative backlog.

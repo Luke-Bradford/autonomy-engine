@@ -58,7 +58,7 @@ bin/
   agents/claude.sh               # Claude Code adapter
   agents/codex.sh                 # Codex adapter (engine-level fallback retry; limit-shape #2-caveat)
 lib/config_parser.py             # restricted YAML-subset parser (stdlib only)
-lib/pipeline.py                   # P1 sequencer (#345): pipeline docs, wrap, compile, walk, journal/ledger
+lib/pipeline.py                   # sequencer P1-P3a: docs+validator, SPEC_SHEETS SSOT, graph walk, journal/ledger (skill: engineering/pipelines)
 templates/                        # supervisor.plist.tmpl + autonomy-pack/ (onboard scaffolds these; incl. pipelines/ starters)
 tests/                             # one per script; run_all.sh runs the whole suite
 docs/                               # design.md, implementation-plan.md
@@ -100,7 +100,8 @@ same PR · dashboard changes browser-verified.
 ## Internal skills (project-local, in-repo)
 
 `.claude/skills/engineering/` — bash-hygiene · python-hygiene · test-quality · pre-flight-review ·
-pre-push-checklist · pr-authoring · review-resolution · codex-checkpoints.
+pre-push-checklist · pr-authoring · review-resolution · codex-checkpoints · loop-coexistence ·
+pipelines (the sequencer subsystem map — read before touching lib/pipeline.py or the dispatch path).
 `.claude/skills/dashboard/` — control-room architecture + chrome-devtools browser verify loop.
 
 **Skill ownership:** these files are engineering substrate the agent OWNS. When a gap or stale
