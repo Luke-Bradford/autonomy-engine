@@ -2466,8 +2466,8 @@ def _journal_last_run(journal_path, role, pipeline_name):
             continue
         try:
             rec = json.loads(line)
-        except ValueError:
-            continue
+        except Exception:  # junk OR pathological line (deep nesting ->
+            continue       # RecursionError): skip, the reader stays total
         if not isinstance(rec, dict):
             continue
         if rec.get("role") != role or rec.get("pipeline") != pipeline_name:
@@ -2506,8 +2506,8 @@ def _inflight_units(logdir, role):
     try:
         with open(best) as fh:
             state = json.load(fh)
-    except (OSError, ValueError):
-        return None
+    except Exception:  # unreadable OR pathological (same-class widening,
+        return None    # review round 2): in-flight display degrades to none
     if not isinstance(state, dict) or not isinstance(state.get("units"), dict):
         return None
     units = {}
@@ -2580,7 +2580,10 @@ def build_pipeline_view(repo_path, role):
                           "version": 0}
         try:
             doc = pipeline_mod.load_doc(os.path.join(pdir, "pipeline.json"))
-        except pipeline_mod.PipelineError as exc:
+        except Exception as exc:  # PipelineError normally; the broad guard
+            # covers raises load_doc's contract doesn't convert (e.g.
+            # RecursionError on hostile deep nesting) -- same-class scan,
+            # review round 2
             doc = None
             view["errors"] = [str(exc)]
         if doc is not None:
@@ -2596,7 +2599,12 @@ def build_pipeline_view(repo_path, role):
         pname = (doc or {}).get("name")
         pname = pname if isinstance(pname, str) and pname else binding
     else:
-        doc = pipeline_mod.wrap_role(settings, role)
+        try:
+            doc = pipeline_mod.wrap_role(settings, role)
+        except Exception as exc:  # same totality boundary as the bound
+            # branch (review round 2) -- degrade, never 500
+            return {"error": "role wrap failed: %s: %s"
+                             % (type(exc).__name__, exc)}
         view["source"] = {"kind": "wrapped", "name": doc["name"],
                           "dir": "", "version": 0}
         view["errors"] = []
@@ -2614,7 +2622,9 @@ def build_pipeline_view(repo_path, role):
         view["last_run"] = _journal_last_run(journal, role, pname)
         try:
             view["ledger"] = pipeline_mod.ledger(journal, role, pname)
-        except (OSError, ValueError):
+        except Exception:  # review round 2: a parseable-but-wrong-typed
+            # journal line tripping ledger() must degrade like every other
+            # guard in this builder -- lost evidence lands on watch/None
             view["ledger"] = None
     else:
         view["last_run"] = None
