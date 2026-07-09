@@ -66,6 +66,28 @@ read concurrently are atomic (`tmp` + `mv`/`os.replace`).
 Solve the issue without sneaking in redesign. Half-fixed problems and
 undocumented tech debt are review findings — open the issue yourself first.
 
+### G2. Simplicity, duplication, and known logic (operator standard 2026-07-09)
+
+- **No guessed behaviour in the diff.** Every runtime claim the code rests
+  on (a git flag, an API shape, a framework quirk) was CHECKED — run
+  empirically, read in official docs, or read in source — before being
+  coded against. "I believe it works like…" in your own reasoning is the
+  tell: stop and verify.
+- **Duplication sweep, post-plan.** Before adding a helper or a parsing
+  block, grep `lib/` and the script you are in for an existing one; a
+  near-duplicate gets unified into one owner, or the duplication is
+  justified in the PR (the review bot finds the rest — see #354's
+  default_branch ×3 finding, tech-debt #356).
+- **Lowest workable complexity.** Prefer the boring shape; cleverness must
+  carry a comment stating the CONSTRAINT that forces it, or it gets
+  simplified in review.
+- **Brief commentary, known logic.** Comments state constraints/invariants
+  the code cannot show — never narration of the next line. Anything
+  genuinely complex (an algorithm, a protocol, a multi-file contract)
+  gets its logic written up in the relevant doc or skill and the code
+  points there by name — complexity must be KNOWN logic someone can look
+  up, never head-knowledge that left with the session.
+
 ### H. Settled decisions
 
 Read `docs/settled-decisions.md`. State which decisions apply and how the diff
