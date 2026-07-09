@@ -680,6 +680,54 @@ def _expected_node(doc, state, uid):
     return con["children"][pos]
 
 
+def _reset_for_bounce(doc, state, target):
+    """Re-pend the back-edge target container (fresh internal state -- each
+    entry earns max_rounds again) and everything transitively downstream of
+    it via non-back edges. UNIT statuses only: nodes_done is append-only
+    session history and bounce counters + sessions survive."""
+    fwd = {}
+    for e in doc.get("edges", []):
+        if not e.get("back"):
+            fwd.setdefault(e["from"], []).append(e["to"])
+    stack, reached = [target], set()
+    while stack:
+        u = stack.pop()
+        if u in reached:
+            continue
+        reached.add(u)
+        stack.extend(fwd.get(u, ()))
+    for u in reached:
+        state["units"][u] = {"status": "pending"}
+        state["container_pos"].pop(u, None)
+        state["rounds"].pop(u, None)
+
+
+def _traverse_back_edges(doc, state, uid):
+    """Fire at most one satisfied back-edge from the just-terminal unit.
+    Cap exhausted = the edge does NOT fire and the source's terminal state
+    stands -- an unhandled failure then fails the run (S29: parks for a
+    human via the journal outcome)."""
+    status = state["units"][uid]["status"]
+    if status not in ("success", "failure"):
+        return
+    for e in doc.get("edges", []):
+        if e.get("from") != uid or not e.get("back"):
+            continue
+        on = e.get("on")
+        fires = (on == "completion"
+                 or (on == "success" and status == "success")
+                 or (on == "failure" and status == "failure"))
+        if not fires:
+            continue
+        key = "%s->%s" % (uid, e["to"])
+        n = int((state.get("bounces") or {}).get(key, 0))
+        if n >= int(e.get("max_bounces", 0)):
+            continue                      # ENFORCED cap: bounce denied
+        state.setdefault("bounces", {})[key] = n + 1
+        _reset_for_bounce(doc, state, e["to"])
+        return
+
+
 def _walk_outcome(doc, state):
     """Rules 6/6b/8: failure handled iff a satisfied outgoing
     failure/completion edge's target actually RAN (skipped targets do not
@@ -976,6 +1024,7 @@ def record_outcome(state_path, node_id, outcome, session_log="",
             state["container_pos"][uid] = pos + 1      # mid-container
 
     if unit["status"] != "pending":
+        _traverse_back_edges(doc, state, uid)
         _propagate_skips(doc, state)
 
     # --- walk end / caps ----------------------------------------------------

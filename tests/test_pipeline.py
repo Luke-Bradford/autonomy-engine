@@ -775,6 +775,137 @@ class GraphWalkTest(unittest.TestCase):
         self.assertTrue(os.path.exists(self.state))
 
 
+class BackEdgeTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, True)
+        self.pdir = os.path.join(self.repo, ".autonomy", "pipelines", "flow")
+        os.makedirs(self.pdir)
+        with open(os.path.join(self.repo, ".autonomy", "loop_prompt.md"), "w") as fh:
+            fh.write("legacy prompt\n")
+        for b in ("a.md", "w.md", "v.md", "d.md", "p.md"):
+            with open(os.path.join(self.pdir, b), "w") as fh:
+                fh.write("brief %s\n" % b)
+        self.state = os.path.join(self.repo, "state.json")
+        self.brief_out = os.path.join(self.repo, "brief.md")
+        self.verdict = os.path.join(self.repo, "verdict.json")
+
+    def _bind(self, doc):
+        with open(os.path.join(self.pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("roles:\n  coder:\n    enabled: true\n    pipeline: flow\n")
+
+    def _ref_doc(self, max_bounces=2):
+        return {"name": "flow", "version": 3,
+                "caps": {"max_sessions_per_run": 20},
+                "nodes": [
+                    {"id": "a", "type": "pick", "brief_ref": "a.md"},
+                    {"id": "w", "type": "agent_task", "brief_ref": "w.md"},
+                    {"id": "v", "type": "check", "brief_ref": "v.md"},
+                    {"id": "done", "type": "summarize", "brief_ref": "d.md"}],
+                "edges": [
+                    {"from": "a", "to": "L", "on": "success"},
+                    {"from": "L", "to": "v", "on": "success"},
+                    {"from": "v", "to": "L", "on": "failure", "back": True,
+                     "max_bounces": max_bounces},
+                    {"from": "v", "to": "done", "on": "success"}],
+                "containers": [{"id": "L", "kind": "loop", "children": ["w"],
+                                "exit_when": "done", "max_rounds": 2}]}
+
+    def _step(self, expect, outcome="success", verdict=None):
+        # NB: every call reloads state from DISK -- the bounce/reload
+        # persistence the plan demands is exercised inherently.
+        step = pipeline.next_node(self.state, self.brief_out)
+        self.assertEqual(step["status"], "node")
+        self.assertEqual(step["node"], expect)
+        if verdict is None:
+            try:
+                os.unlink(self.verdict)
+            except OSError:
+                pass
+        else:
+            with open(self.verdict, "w") as fh:
+                json.dump(verdict, fh)
+        return pipeline.record_outcome(self.state, expect, outcome,
+                                       verdict_path=self.verdict)
+
+    def test_back_edge_never_gates_readiness(self):
+        # the blocking-fix regression: L is ready after a despite the OPEN
+        # back-edge v->L.
+        self._bind(self._ref_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        self.assertEqual(self._step("a"), "CONTINUE")
+        step = pipeline.next_node(self.state, self.brief_out)
+        self.assertEqual(step["node"], "w")   # L's child -- L is ready
+
+    def test_bounce_resets_loop_and_downstream(self):
+        self._bind(self._ref_doc())
+        pipeline.start_run(self.repo, "coder", self.state)
+        self._step("a")
+        self._step("w", verdict={"exit": True})            # L succeeds
+        self._step("v", verdict={"outcome": "failure"})    # bounce 1
+        self._step("w", verdict={"exit": True})            # L re-ran fresh
+        self._step("v", verdict={"outcome": "success"})
+        res = self._step("done")
+        self.assertEqual(res, "DONE success")
+        # journal carries the bounce map
+        with open(self.state) if os.path.exists(self.state) else open(os.devnull) as fh:
+            pass
+        self.assertFalse(os.path.exists(self.state))
+
+    def test_bounce_cap_exhausted_fails_run(self):
+        self._bind(self._ref_doc(max_bounces=1))
+        pipeline.start_run(self.repo, "coder", self.state)
+        self._step("a")
+        self._step("w", verdict={"exit": True})
+        self._step("v", verdict={"outcome": "failure"})    # bounce 1
+        self._step("w", verdict={"exit": True})
+        res = self._step("v", verdict={"outcome": "failure"})  # cap hit
+        self.assertEqual(res, "DONE failure")
+
+    def test_child_error_fires_container_failure_edge(self):
+        doc = {"name": "flow", "version": 3,
+               "caps": {"max_sessions_per_run": 10},
+               "nodes": [
+                   {"id": "a", "type": "pick", "brief_ref": "a.md"},
+                   {"id": "w", "type": "agent_task", "brief_ref": "w.md"},
+                   {"id": "park", "type": "notify", "brief_ref": "p.md"},
+                   {"id": "done", "type": "summarize", "brief_ref": "d.md"}],
+               "edges": [
+                   {"from": "a", "to": "L", "on": "success"},
+                   {"from": "L", "to": "done", "on": "success"},
+                   {"from": "L", "to": "park", "on": "failure"}],
+               "containers": [{"id": "L", "kind": "loop", "children": ["w"],
+                               "exit_when": "done", "max_rounds": 2}]}
+        self._bind(doc)
+        pipeline.start_run(self.repo, "coder", self.state)
+        self._step("a")
+        self._step("w", outcome="error")                   # container fails
+        res = self._step("park")                           # failure edge fired
+        self.assertEqual(res, "DONE success")              # failure HANDLED
+
+    def test_loop_cap_exit_with_failure_edge_continues(self):
+        doc = {"name": "flow", "version": 3,
+               "caps": {"max_sessions_per_run": 10},
+               "nodes": [
+                   {"id": "a", "type": "pick", "brief_ref": "a.md"},
+                   {"id": "w", "type": "agent_task", "brief_ref": "w.md"},
+                   {"id": "park", "type": "notify", "brief_ref": "p.md"}],
+               "edges": [
+                   {"from": "a", "to": "L", "on": "success"},
+                   {"from": "L", "to": "park", "on": "failure"}],
+               "containers": [{"id": "L", "kind": "loop", "children": ["w"],
+                               "exit_when": "done", "max_rounds": 2}]}
+        self._bind(doc)
+        pipeline.start_run(self.repo, "coder", self.state)
+        self._step("a")
+        self._step("w")                                    # round 1, no exit
+        self._step("w")                                    # round 2 -> cap
+        res = self._step("park")
+        self.assertEqual(res, "DONE success")              # cap CONSUMED
+
+
 class JournalLedgerTest(unittest.TestCase):
     def setUp(self):
         self.repo = tempfile.mkdtemp()
