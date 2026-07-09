@@ -1,11 +1,489 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
-<title>pipeline canvas</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Autonomy · pipeline</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23141418'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%235b9dff'/%3E%3C/svg%3E">
+<style>
+/* P3a (#357): the pipeline canvas VIEWER. Token blocks are the UI-1 system,
+   kept byte-identical to lib/dashboard_page.html / lib/config_page.html
+   (the config page's parity test guards the source pair; this page copies
+   the same three blocks -- if they ever drift, fix the source pair first,
+   never fork a third scheme). Read-only: this page never POSTs, carries no
+   control token, and offers no edit affordances (editing is P3b). */
+:root{
+  --sans:"Avenir Next","Helvetica Neue",system-ui,sans-serif;
+  --mono:"SF Mono",Menlo,ui-monospace,monospace;
+  --r:6px;
+}
+:root[data-theme="dark"]{
+  --bg:#15181d; --bg-soft:#101318; --panel:#1c2027; --panel2:#20252d;
+  --hair:#2a2f38; --hair2:#333a45; --shadow:0 8px 24px -14px rgba(0,0,0,.6);
+  --ink:#e8eaed; --mut:#98a0ab; --dim:#6b7380;
+  --accent:#4c9ee3; --accent-soft:rgba(76,158,227,.14);
+  --ok:#3fb27f; --ok-dim:#2f8560; --warn:#d9a13b; --bad:#d95757; --info:#4c9ee3;
+  --ok-glow:rgba(63,178,127,.4); --warn-glow:rgba(217,161,59,.35); --bad-glow:rgba(217,87,87,.35);
+  --grid:transparent;
+}
+:root[data-theme="light"]{
+  --bg:#f4f5f7; --bg-soft:#eceef1; --panel:#ffffff; --panel2:#f6f7f9;
+  --hair:#e2e4e8; --hair2:#d0d3d9; --shadow:0 8px 24px -18px rgba(30,30,30,.3);
+  --ink:#1b1e24; --mut:#5b626c; --dim:#9aa0aa;
+  --accent:#2f7fc9; --accent-soft:rgba(47,127,201,.10);
+  --ok:#2c9c60; --ok-dim:#5a8a70; --warn:#b9791a; --bad:#cf4b45; --info:#2f7fc9;
+  --ok-glow:rgba(44,156,96,.3); --warn-glow:rgba(185,121,26,.3); --bad-glow:rgba(207,75,69,.3);
+  --grid:transparent;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:13.5px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1500px;margin:0 auto;padding:20px 26px}
+h1{font-size:17px;margin:0}
+a{color:var(--accent)}
+.eyebrow{font-family:var(--mono);font-size:9.5px;letter-spacing:1.4px;text-transform:uppercase;color:var(--dim)}
+.hdr{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.hdr select{background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);font-family:var(--mono);font-size:11px;border-radius:5px;padding:4px 7px}
+.badge{font-family:var(--mono);font-size:9.5px;border:1px solid var(--hair2);border-radius:10px;padding:1px 8px;color:var(--mut);white-space:nowrap}
+.badge.warn{color:var(--warn);border-color:var(--warn)}
+.badge.bad{color:var(--bad);border-color:var(--bad)}
+.pill{border:1px solid var(--hair2);border-radius:11px;padding:2px 10px;font-family:var(--mono);font-size:10px;color:var(--mut);cursor:pointer;background:transparent}
+.pill.on{border-color:var(--accent);color:var(--ink);background:var(--accent-soft)}
+.pill[disabled]{opacity:.45;cursor:default}
+.gap{flex:1}
+.layout{display:grid;grid-template-columns:196px minmax(0,1fr) 292px;gap:16px;align-items:start}
+@media(max-width:1120px){.layout{grid-template-columns:1fr}.palette,.pane{position:static;max-height:none}}
+.palette,.pane{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow);padding:12px;position:sticky;top:14px;max-height:calc(100vh - 40px);overflow-y:auto}
+.pgroup{margin-bottom:9px}
+.pgroup .eyebrow{display:block;margin-bottom:4px}
+.pitem{display:flex;align-items:center;gap:7px;width:100%;background:transparent;border:1px dashed transparent;border-radius:5px;color:var(--ink);font-size:11.5px;padding:3px 6px;cursor:pointer;text-align:left}
+.pitem:hover{background:var(--accent-soft);border-color:var(--hair2)}
+.pitem.off{opacity:.5}
+.pitem .ico{width:16px;display:inline-block;text-align:center}
+.pitem .phase{margin-left:auto;font-family:var(--mono);font-size:8.5px;color:var(--warn);white-space:nowrap}
+.canvaswrap{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow);padding:14px 16px 18px;min-width:0}
+.errbar{border:1px solid var(--bad);border-radius:var(--r);background:rgba(217,87,87,.08);color:var(--ink);padding:8px 12px;margin-bottom:10px;font-size:12px}
+.errbar .eyebrow{color:var(--bad)}
+.errbar ul{margin:4px 0 0;padding-left:18px}
+.dagwrap{position:relative;overflow-x:auto;margin-top:6px;padding:26px 8px 14px;border:1px solid var(--hair);border-radius:var(--r)}
+.dag{display:flex;align-items:flex-start;gap:44px;width:max-content;padding:6px 10px;position:relative;z-index:1}
+.rank{display:flex;flex-direction:column;gap:18px}
+.node{border:1px solid var(--hair2);border-radius:var(--r);background:var(--panel2);cursor:pointer;position:relative;width:172px;padding:8px 10px 7px}
+.node.softb{border-style:dashed}
+.node.sel{border-color:var(--accent);background:var(--accent-soft)}
+.node .ico{width:16px;display:inline-block;text-align:center}
+.node .nm{font-size:12px;font-weight:600;overflow-wrap:anywhere}
+.node .sum{font-size:10.5px;color:var(--mut);display:block;margin-top:1px;line-height:1.35;overflow-wrap:anywhere}
+.node .meta{display:flex;align-items:center;gap:6px;margin-top:5px}
+.node .agent{font-family:var(--mono);font-size:9px;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tag{font-family:var(--mono);font-size:8.5px;letter-spacing:.5px;text-transform:uppercase;border-radius:3px;padding:1px 5px;white-space:nowrap;margin-left:auto}
+.tag.hard{color:var(--ok);border:1px solid var(--ok)}
+.tag.soft{color:var(--warn);border:1px dashed var(--warn)}
+.tag.badt{color:var(--bad);border:1px solid var(--bad)}
+.glyph{position:absolute;top:-9px;right:-8px;width:18px;height:18px;border-radius:50%;display:none;align-items:center;justify-content:center;font-size:10px;font-weight:700;background:var(--panel);border:1.5px solid var(--dim);color:var(--dim);z-index:2}
+.observed .glyph{display:inline-flex}
+.glyph.ok{border-color:var(--ok);color:var(--ok)}
+.glyph.fail{border-color:var(--bad);color:var(--bad)}
+.observed .dimmed{opacity:.32}
+@keyframes pulse{0%{box-shadow:0 0 0 0 var(--ok-glow)}70%{box-shadow:0 0 0 8px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.running{animation:pulse 1.6s infinite}
+@media (prefers-reduced-motion: reduce){.running{animation:none;outline:2px solid var(--ok)}}
+.box{border:1.5px solid var(--accent);border-radius:var(--r);padding:20px 14px 10px;position:relative}
+.box>.boxtag{position:absolute;top:-9px;left:12px;background:var(--panel);border:1px solid var(--accent);border-radius:9px;color:var(--accent);font-family:var(--mono);font-size:9.5px;padding:0 8px;white-space:nowrap;cursor:pointer}
+.box .inner{display:flex;align-items:center;gap:40px}
+.box .foot{border-top:1px dashed var(--hair2);margin-top:12px;padding-top:6px;display:flex;gap:12px;flex-wrap:wrap;align-items:center;font-family:var(--mono);font-size:9.5px;color:var(--mut);max-width:420px}
+.box.stage{border-color:var(--hair2);background:rgba(76,158,227,.04)}
+.box.stage>.boxtag{border-color:var(--hair2);color:var(--mut)}
+.chev{position:absolute;top:-9px;right:10px;background:var(--panel);border:1px solid var(--hair2);border-radius:9px;color:var(--mut);font-family:var(--mono);font-size:9.5px;padding:0 7px;cursor:pointer;z-index:2}
+svg.edges{position:absolute;left:0;top:0;overflow:visible;pointer-events:none;z-index:0}
+svg.edges .lbl{font-family:var(--mono);font-size:8.5px;letter-spacing:.4px}
+.observed svg.edges path.e.dimmed{opacity:.18}
+.observed svg.edges text.dimmed{opacity:.18}
+.legend{display:flex;gap:14px;margin-top:12px;color:var(--dim);font-size:11px;flex-wrap:wrap;align-items:center}
+.sw{display:inline-block;width:18px;height:0;border-top:2px solid;vertical-align:middle;margin-right:4px}
+.pane h3{font-size:13px;margin:2px 0 8px;display:flex;align-items:center;gap:7px}
+.pane h3 .tag{margin-left:auto}
+.frow{display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;margin:7px 0}
+.frow .lab{font-family:var(--mono);font-size:9.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--dim);min-width:86px}
+.frow .lab .req{color:var(--bad)}
+.frow .val{font-family:var(--mono);font-size:10.5px;color:var(--ink);overflow-wrap:anywhere}
+.frow .val.unset{color:var(--dim)}
+.pane details{border:1px solid var(--hair);border-radius:5px;padding:6px 9px;margin:9px 0}
+.pane summary{font-family:var(--mono);font-size:9.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--dim);cursor:pointer}
+.guard{display:flex;gap:7px;align-items:flex-start;border:1px solid var(--hair2);border-radius:5px;padding:6px 9px;margin:9px 0;font-size:11px;color:var(--mut)}
+.note{font-size:11px;color:var(--mut)}
+button:focus-visible,.node:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
 </head>
 <body>
-<h1>pipeline canvas</h1>
-<p>canvas lands in the next commit</p>
+<div class="wrap">
+  <div class="hdr">
+    <a href="/" title="back to the control room">← control room</a>
+    <h1>pipeline</h1>
+    <select id="repopick" aria-label="repo"></select>
+    <select id="rolepick" aria-label="role"></select>
+    <span id="prov"></span>
+    <span class="gap"></span>
+    <span id="ledgerchip"></span>
+    <span id="capchip"></span>
+    <button class="pill" id="obsbtn">⚡ last run</button>
+  </div>
+  <div class="layout">
+    <aside class="palette" id="palette"></aside>
+    <main class="canvaswrap">
+      <div id="errbar"></div>
+      <div class="dagwrap" id="dagwrap">
+        <svg class="edges" id="edgesvg"></svg>
+        <div class="dag" id="dag"></div>
+      </div>
+      <div class="legend">
+        <span><span class="sw" style="border-color:var(--ok)"></span>on success</span>
+        <span><span class="sw" style="border-color:var(--bad)"></span>on failure</span>
+        <span><span class="sw" style="border-color:var(--dim);border-top-style:dashed"></span>on completion</span>
+        <span><span class="tag hard">enforced</span> engine-owned</span>
+        <span><span class="tag soft">instructed</span> compiled into the brief</span>
+        <span class="note">read-only viewer — editing lands in P3b</span>
+      </div>
+    </main>
+    <aside class="pane" id="pane"></aside>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* P3a viewer: renders /api/pipeline truth. NO client-side state invention:
+   every fact on screen traces to the payload (doc, validator errors, journal
+   last_run, in-flight statuses, ledger). Signature-guarded: the poll only
+   re-renders when the payload BYTES change (#174/#238 class), so an idle
+   fixture never churns the DOM. */
+let VIEW = null;          // last payload (parsed)
+let VIEWSIG = "";         // last payload (raw string) -- the render guard
+let SEL = "";             // selected unit/node id ("" = nothing)
+let OBSERVED = false;
+const COLLAPSED = new Set();   // container ids, survives re-render
+
+function esc(x){return String(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;")}
+function qs(){return new URLSearchParams(location.search)}
+
+/* ---- layout: longest-path ranking over effective edges ---- */
+function topUnits(doc){
+  // mirror of pipeline._top_units: nodes not inside any container, with the
+  // container at its first child's position.
+  const childCon = {};
+  for(const c of (doc.containers||[])) if(c && c.id)
+    for(const ch of (c.children||[])) childCon[ch] = c.id;
+  const out = [], seen = new Set();
+  for(const n of (doc.nodes||[])){
+    if(!n || !n.id) continue;
+    const con = childCon[n.id];
+    if(con === undefined) out.push(n.id);
+    else if(!seen.has(con)){ seen.add(con); out.push(con); }
+  }
+  return out;
+}
+function rankUnits(units, edges){
+  const known = new Set(units);          // degraded-truth guard (Codex CP1):
+  // an invalid doc can carry edges to unknown ids -- rank what is rankable,
+  // the error banner names the rest; never NaN/crash.
+  const fwd = edges.filter(e => !e.back && known.has(e.from) && known.has(e.to));
+  const rank = {}; units.forEach(u => rank[u] = 0);
+  for(let pass = 0; pass < units.length; pass++){
+    let moved = false;
+    for(const e of fwd){
+      if(rank[e.to] < rank[e.from] + 1){ rank[e.to] = rank[e.from] + 1; moved = true; }
+    }
+    if(!moved) break;                    // longest-path layering, O(V·E) cap
+  }
+  const cols = [];
+  units.forEach(u => { (cols[rank[u]] = cols[rank[u]] || []).push(u); });
+  return cols.filter(c => c && c.length);
+}
+
+/* ---- observed lighting projections (journal facts only) ---- */
+function lastRunMaps(){
+  const lit = {nodes:{}, units:new Set(), via:{}};
+  const lr = VIEW && VIEW.last_run;
+  if(!lr || !Array.isArray(lr.nodes)) return lit;
+  for(const en of lr.nodes){
+    if(!en || !en.id) continue;
+    lit.nodes[en.id] = en;               // LAST entry per node id wins
+    if(en.unit){ lit.units.add(en.unit);
+      if(!(en.unit in lit.via)) lit.via[en.unit] = en.via || []; }
+  }
+  return lit;
+}
+function edgeLit(e, lit){
+  // an edge is lit when both endpoints RAN and the target's recorded `via`
+  // includes this edge's kind -- derived from journal facts, never guessed.
+  if(e.back) return (VIEW.last_run && VIEW.last_run.bounces &&
+                     VIEW.last_run.bounces[e.from + "->" + e.to]) ? true : false;
+  return lit.units.has(e.from) && lit.units.has(e.to) &&
+         (lit.via[e.to] || []).indexOf(e.on) >= 0;
+}
+
+/* ---- cards ---- */
+function nodeById(id){ return (VIEW.doc.nodes||[]).find(n => n && n.id === id); }
+function conById(id){ return (VIEW.doc.containers||[]).find(c => c && c.id === id); }
+function sheetFor(type){ return (VIEW.spec||{})[type]; }
+
+function card(n, lit, inflight){
+  const sheet = sheetFor(n.type);
+  const invalid = !sheet;
+  const icon = invalid ? "?" : sheet.icon;
+  const entry = lit.nodes[n.id];
+  const dim = OBSERVED && !entry ? " dimmed" : "";
+  const glyph = OBSERVED && entry
+    ? `<span class="glyph ${entry.outcome === "success" ? "ok" : "fail"}">${entry.outcome === "success" ? "✓" : "✕"}</span>` : "";
+  const run = (inflight[n.id] === "dispatched") ? " running" : "";
+  const runsAs = n.runs_as ? Object.entries(n.runs_as).map(([k,v]) => esc(v)).join("·") : "";
+  const bounce = OBSERVED && entry && entry.bounce ? ` <span class="badge warn">↩ bounce ${esc(entry.bounce)}</span>` : "";
+  const tag = invalid ? `<span class="tag badt">invalid</span>`
+    : (n.type === "git_ops" ? `<span class="tag hard">enforced</span>` : `<span class="tag soft">instructed</span>`);
+  return `<div class="node softb${SEL===n.id?" sel":""}${dim}${run}" data-nid="${esc(n.id)}" data-uid="${esc(n.id)}"
+    onclick="sel('${esc(n.id)}')" tabindex="0" onkeydown="if(event.key==='Enter')sel('${esc(n.id)}')">
+    ${glyph}<span class="ico">${icon}</span> <span class="nm">${esc(n.id)}</span>
+    <span class="sum">${invalid ? "unknown type: " + esc(n.type) : esc(sheet.label)}${bounce}</span>
+    <div class="meta">${runsAs?`<span class="agent">${runsAs}</span>`:""}${tag}</div>
+  </div>`;
+}
+function containerBox(con, lit, inflight){
+  const sheet = sheetFor(con.kind) || {icon:"?", label:con.kind};
+  const kids = (con.children||[]).map(nodeById).filter(Boolean);
+  const anyLit = kids.some(k => lit.nodes[k.id]);
+  const dim = OBSERVED && !anyLit ? " dimmed" : "";
+  const running = kids.some(k => inflight[k.id] === "dispatched") ||
+                  inflight[con.id] === "dispatched";
+  if(COLLAPSED.has(con.id)){
+    return `<div class="node${SEL===con.id?" sel":""}${dim}${running?" running":""}" data-uid="${esc(con.id)}"
+      onclick="sel('${esc(con.id)}')" tabindex="0" onkeydown="if(event.key==='Enter')sel('${esc(con.id)}')">
+      <span class="ico">${sheet.icon}</span> <span class="nm">${esc(con.id)}</span>
+      <span class="sum">${esc(con.kind)} · ${kids.length} steps (collapsed)</span>
+      <div class="meta"><button class="pill" onclick="event.stopPropagation();toggleCollapse('${esc(con.id)}')">expand</button></div>
+    </div>`;
+  }
+  const foot = con.kind === "loop"
+    ? `<div class="foot"><span><b>exit when:</b> ${esc(con.exit_when||"")}</span><span class="tag soft">instructed</span>
+       <span style="margin-left:auto"><b>cap:</b> ${esc(con.max_rounds||"?")} rounds</span><span class="tag hard">enforced</span></div>` : "";
+  return `<div class="box${con.kind==="stage"?" stage":""}${dim}${running?" running":""}" data-uid="${esc(con.id)}">
+    <span class="boxtag" onclick="event.stopPropagation();sel('${esc(con.id)}')" title="the container's own pane">${sheet.icon} ${esc(con.kind)} · ${esc(con.id)}</span>
+    <button class="chev" onclick="event.stopPropagation();toggleCollapse('${esc(con.id)}')" title="collapse this container">▾</button>
+    <div class="inner">${kids.map(k => card(k, lit, inflight)).join("")}</div>${foot}</div>`;
+}
+
+/* ---- canvas ---- */
+function render(){
+  if(!VIEW) return;
+  const err = document.getElementById("errbar");
+  const errors = VIEW.error ? [VIEW.error] : (VIEW.errors || []);
+  err.innerHTML = errors.length
+    ? `<div class="errbar"><span class="eyebrow">pipeline invalid — the engine refuses to dispatch this document</span>
+       <ul>${errors.map(e => `<li>${esc(e)}</li>`).join("")}</ul></div>` : "";
+  const src = VIEW.source || {};
+  document.getElementById("prov").innerHTML = VIEW.error ? "" :
+    `<span class="badge">${src.kind === "wrapped" ? "auto-wrapped from role" : esc((src.dir||"") + " · v" + src.version)}</span>
+     <b style="margin-left:6px">${esc(src.name||"")}</b>`;
+  const lg = VIEW.ledger;
+  document.getElementById("ledgerchip").innerHTML = lg
+    ? `<span class="badge" title="trust is earned per assignment (auto at ≥20 runs with ≥95% pass over the last 20)">🛡 ${esc(lg.tier)} · ${esc(lg.runs)} runs · ${esc(lg.passes)} pass</span>` : "";
+  const caps = VIEW.doc && VIEW.doc.caps || null;
+  document.getElementById("capchip").innerHTML = caps && caps.max_parallel
+    ? `<span class="badge" title="the pipeline's dispatch ceiling — engine-owned">⛓ max_parallel ${esc(caps.max_parallel)} · enforced</span>` : "";
+  const obs = document.getElementById("obsbtn");
+  obs.disabled = !VIEW.last_run;
+  obs.title = VIEW.last_run ? "light the last run's observed path" : "no runs recorded";
+  obs.classList.toggle("on", OBSERVED);
+  renderPalette();
+  const dagwrap = document.getElementById("dagwrap");
+  dagwrap.classList.toggle("observed", OBSERVED);
+  const dag = document.getElementById("dag");
+  if(VIEW.error || !VIEW.doc){ dag.innerHTML = `<span class="note">${esc(VIEW.error || "document unreadable — see the errors above")}</span>`;
+    document.getElementById("edgesvg").innerHTML = ""; renderPane(); return; }
+  const lit = lastRunMaps();
+  const inflight = (VIEW.in_flight && VIEW.in_flight.units) || {};
+  const units = topUnits(VIEW.doc);
+  const cols = rankUnits(units, VIEW.edges_effective || []);
+  dag.innerHTML = cols.map(col =>
+    `<div class="rank">${col.map(uid => {
+      const con = conById(uid);
+      if(con) return containerBox(con, lit, inflight);
+      const n = nodeById(uid);
+      return n ? card(n, lit, inflight) : "";
+    }).join("")}</div>`).join("");
+  renderPane();
+  requestAnimationFrame(drawEdges);
+}
+function anchor(el, side){
+  const c = document.getElementById("dagwrap"), cr = c.getBoundingClientRect(), r = el.getBoundingClientRect();
+  const x = r.left - cr.left + c.scrollLeft, y = r.top - cr.top + c.scrollTop;
+  if(side === "l") return [x, y + r.height/2];
+  if(side === "r") return [x + r.width, y + r.height/2];
+  if(side === "t") return [x + r.width/2, y];
+  return [x + r.width/2, y + r.height];
+}
+function drawEdges(){
+  const c = document.getElementById("dagwrap"), svg = document.getElementById("edgesvg");
+  if(!VIEW || !VIEW.doc){ svg.innerHTML = ""; return; }
+  svg.setAttribute("width", c.scrollWidth); svg.setAttribute("height", c.scrollHeight);
+  const lit = lastRunMaps();
+  let defs = `<defs>${["success","failure","completion"].map(k => {
+    const col = k === "success" ? "ok" : (k === "failure" ? "bad" : "dim");
+    return `<marker id="m-${k}" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="var(--${col})"/></marker>`;}).join("")}</defs>`;
+  let body = "";
+  for(const e of (VIEW.edges_effective || [])){
+    const fe = document.querySelector(`[data-uid="${CSS.escape(e.from)}"]`);
+    const te = document.querySelector(`[data-uid="${CSS.escape(e.to)}"]`);
+    if(!fe || !te) continue;
+    let d, lblx, lbly;
+    if(e.back){
+      const [x1,y1] = anchor(fe,"t"), [x2,y2] = anchor(te,"t");
+      const top = Math.min(y1,y2) - 46;
+      d = `M ${x1} ${y1} C ${x1} ${top}, ${x2} ${top}, ${x2} ${y2}`;
+      lblx = (x1+x2)/2; lbly = top + 4;
+    } else {
+      const [x1,y1] = anchor(fe,"r"), [x2,y2] = anchor(te,"l");
+      d = `M ${x1} ${y1} C ${x1+22} ${y1}, ${x2-22} ${y2}, ${x2} ${y2}`;
+      lblx = (x1+x2)/2; lbly = (y1+y2)/2 - 6;
+    }
+    const col = e.on === "success" ? "ok" : (e.on === "failure" ? "bad" : "dim");
+    const dimmed = OBSERVED && !edgeLit(e, lit) ? " dimmed" : "";
+    const dash = e.on === "completion" ? ` stroke-dasharray="4 4"` : "";
+    body += `<path class="e${dimmed}" d="${d}" fill="none" stroke="var(--${col})" stroke-width="1.6"${dash} marker-end="url(#m-${e.on})"/>`;
+    if(e.back){
+      const used = (VIEW.last_run && VIEW.last_run.bounces && VIEW.last_run.bounces[e.from+"->"+e.to]) || 0;
+      const lbl = `↩ max ${e.max_bounces}` + (OBSERVED && used ? ` · used ${used}` : "") + ` · enforced`;
+      body += `<text class="lbl${dimmed}" x="${lblx}" y="${lbly}" text-anchor="middle" fill="var(--${col})">${esc(lbl)}</text>`;
+    }
+  }
+  svg.innerHTML = defs + body;
+}
+
+/* ---- palette (read-only spec-sheet previews; deferred honestly greyed) ---- */
+const GROUP_ORDER = ["source","work","verify","communicate","ops","structure"];
+function renderPalette(){
+  const spec = VIEW && VIEW.spec || {};
+  const groups = {};
+  for(const [k,v] of Object.entries(spec)) (groups[v.group] = groups[v.group] || []).push([k,v]);
+  document.getElementById("palette").innerHTML = GROUP_ORDER.filter(g => groups[g]).map(g =>
+    `<div class="pgroup"><span class="eyebrow">${esc(g)}</span>${groups[g].map(([k,v]) =>
+      `<button class="pitem${v.deferred?" off":""}" onclick="previewType('${esc(k)}')"
+        title="${v.deferred ? esc("not yet executable — " + (v.deferred_reason||"")) : "click: preview its spec sheet"}">
+        <span class="ico">${v.icon}</span>${esc(v.label)}${v.deferred?`<span class="phase">${esc((v.deferred_reason||"").split(" ")[0])}</span>`:""}
+      </button>`).join("")}</div>`).join("")
+    + `<div class="pgroup" style="border-top:1px solid var(--hair);padding-top:8px"><span class="note">palette previews only — drag-to-place lands in P3b</span></div>`;
+}
+function previewType(t){ SEL = "type:" + t; render(); }
+
+/* ---- property pane (schema-driven, read-only) ---- */
+function valRow(label, value, required, hint){
+  const has = value !== undefined && value !== null && value !== "";
+  const shown = has ? esc(typeof value === "object" ? JSON.stringify(value) : value)
+                    : ("— unset" + (hint ? " · " + esc(hint) : ""));
+  return `<div class="frow"><span class="lab">${required?`<span class="req">●</span> `:""}${esc(label)}</span>
+    <span class="val${has?"":" unset"}">${shown}</span></div>`;
+}
+function sheetRows(sheet, node){
+  // values come from the node's TOP-LEVEL keys (validated docs have no
+  // `config` sub-object -- Codex CP1); a semantic field the P1/P2 schema
+  // does not carry yet renders "— unset" with its hint. Honest, not padded.
+  const req = (sheet.required||[]).map(([f,h]) => valRow(f, node ? node[f] : undefined, true, h)).join("");
+  const opt = (sheet.optional||[]).length
+    ? `<details><summary>optional</summary>${sheet.optional.map(([f,h]) => valRow(f, node ? node[f] : undefined, false, h)).join("")}</details>` : "";
+  const guard = (sheet.guarded||[]).map(g => `<div class="guard">🔒 <span><b>guarded:</b> ${esc(g)} — visible, not removable.</span></div>`).join("");
+  const emits = sheet.emits ? `<div class="frow"><span class="lab">emits</span><span class="note">${esc(sheet.emits)}</span></div>` : "";
+  return req + opt + guard + emits;
+}
+function renderPane(){
+  const pane = document.getElementById("pane");
+  if(!VIEW || VIEW.error){ pane.innerHTML = `<span class="note">${esc(VIEW && VIEW.error || "loading…")}</span>`; return; }
+  if(SEL.indexOf("type:") === 0){
+    const t = SEL.slice(5), sheet = sheetFor(t);
+    if(!sheet){ pane.innerHTML = `<span class="note">unknown type</span>`; return; }
+    pane.innerHTML = `<span class="eyebrow">spec sheet · from the catalog</span>
+      <h3><span class="ico">${sheet.icon}</span>${esc(sheet.label)}</h3>
+      ${sheet.deferred?`<div class="guard">⏳ <span><b>not yet runnable:</b> ${esc(sheet.deferred_reason||"")} — the validator refuses it honestly.</span></div>`:""}
+      ${sheetRows(sheet, null)}`;
+    return;
+  }
+  if(!SEL || !VIEW.doc){ pane.innerHTML = `<span class="note">select a node, a container tag, or a palette type</span>`; return; }
+  const con = conById(SEL);
+  if(con){
+    const sheet = sheetFor(con.kind) || {icon:"?", label:con.kind, required:[], optional:[], guarded:[]};
+    pane.innerHTML = `<span class="eyebrow">property pane · container</span>
+      <h3><span class="ico">${sheet.icon}</span>${esc(con.id)}<span class="tag soft">${esc(con.kind)}</span></h3>
+      ${valRow("children", (con.children||[]).join(", "), true, "")}
+      ${con.kind==="loop" ? valRow("exit_when", con.exit_when, true, "") + valRow("max_rounds", con.max_rounds, true, "1..99") : ""}
+      ${valRow("join", con.join, false, "all")}
+      ${valRow("runs_as", con.runs_as, false, "children inherit")}
+      ${(sheet.guarded||[]).map(g => `<div class="guard">🔒 <span><b>guarded:</b> ${esc(g)}</span></div>`).join("")}`;
+    return;
+  }
+  const n = nodeById(SEL);
+  if(!n){ pane.innerHTML = `<span class="note">select a node, a container tag, or a palette type</span>`; return; }
+  const sheet = sheetFor(n.type);
+  if(!sheet){
+    // unknown type (invalid doc): raw key/value dump, marked INVALID --
+    // surfaced as invalid, never echoed as usable (prevention-log #15).
+    pane.innerHTML = `<span class="eyebrow">property pane · node</span>
+      <h3><span class="ico">?</span>${esc(n.id)}<span class="tag badt">invalid</span></h3>
+      <div class="guard">⚠ <span><b>unknown type "${esc(n.type)}"</b> — the validator refuses this document; raw fields below.</span></div>
+      ${Object.entries(n).map(([k,v]) => valRow(k, v, false, "")).join("")}`;
+    return;
+  }
+  const entry = lastRunMaps().nodes[n.id];
+  pane.innerHTML = `<span class="eyebrow">property pane · spec sheet</span>
+    <h3><span class="ico">${sheet.icon}</span>${esc(n.id)}<span class="tag ${n.type==="git_ops"?"hard":"soft"}">${n.type==="git_ops"?"enforced":"instructed"}</span></h3>
+    <div class="note" style="margin-bottom:6px">${esc(sheet.label)} — required first, optionals folded. Read-only (P3b edits).</div>
+    ${valRow("brief", n.brief_ref || n.legacy_prompt, true, "brief_ref / legacy_prompt")}
+    ${valRow("runs_as", n.runs_as, false, "inherits the role's agent/model")}
+    ${valRow("context", n.context, false, "project")}
+    ${valRow("join", n.join, false, "all")}
+    ${sheetRows(sheet, n)}
+    ${OBSERVED && entry ? `<div class="frow"><span class="lab">last run</span><span class="val">${esc(entry.outcome)}${entry.verdict_outcome?` · verdict ${esc(entry.verdict_outcome)}`:""}${entry.bounce?` · bounce ${esc(entry.bounce)}`:""} · <span class="note">${esc(entry.session_log||"")}</span></span></div>` : ""}`;
+}
+
+/* ---- selection / toggles ---- */
+function sel(id){ SEL = id; render(); }
+function toggleCollapse(id){ if(COLLAPSED.has(id)) COLLAPSED.delete(id); else COLLAPSED.add(id); render(); }
+document.getElementById("obsbtn").addEventListener("click", () => { OBSERVED = !OBSERVED; render(); });
+window.addEventListener("resize", () => requestAnimationFrame(drawEdges));
+
+/* ---- data flow ---- */
+async function loadPickers(){
+  try{
+    const st = await (await fetch("/api/state")).json();
+    const repos = st.repos || [];
+    const rp = document.getElementById("repopick"), lp = document.getElementById("rolepick");
+    const curRepo = qs().get("repo") || (repos[0] && repos[0].path) || "";
+    rp.innerHTML = repos.map(r => `<option value="${esc(r.path)}"${r.path===curRepo?" selected":""}>${esc(r.name)}</option>`).join("");
+    const cur = repos.find(r => r.path === curRepo) || repos[0];
+    const roles = (cur && cur.roles || []).map(r => r.name);
+    const curRole = qs().get("role") || roles[0] || "";
+    lp.innerHTML = roles.map(n => `<option${n===curRole?" selected":""}>${esc(n)}</option>`).join("");
+    const nav = () => { location.search = "?repo=" + encodeURIComponent(rp.value) + "&role=" + encodeURIComponent(lp.value); };
+    rp.addEventListener("change", nav); lp.addEventListener("change", nav);
+    return {repo: curRepo, role: curRole};
+  }catch(e){ return {repo: qs().get("repo") || "", role: qs().get("role") || ""}; }
+}
+async function tick(repo, role){
+  try{
+    const res = await fetch("/api/pipeline?repo=" + encodeURIComponent(repo) + "&role=" + encodeURIComponent(role));
+    const raw = await res.text();
+    if(raw === VIEWSIG) return;          // unchanged payload -> zero DOM writes
+    VIEWSIG = raw;
+    VIEW = JSON.parse(raw);
+    render();
+  }catch(e){ /* transient fetch/parse hiccup: keep the last good render */ }
+}
+(async () => {
+  const {repo, role} = await loadPickers();
+  if(!repo || !role){
+    document.getElementById("errbar").innerHTML = `<div class="errbar"><span class="eyebrow">nothing to show</span><ul><li>no managed repo/role — add one on the control room page</li></ul></div>`;
+    return;
+  }
+  await tick(repo, role);
+  setInterval(() => tick(repo, role), 5000);
+})();
+</script>
 </body>
 </html>
