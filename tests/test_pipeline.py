@@ -1378,5 +1378,329 @@ class EffectivePipelineDirTest(unittest.TestCase):
         self.assertEqual(meta["pipeline_dir"], d)
 
 
+class ParamsOutputsValidationTest(unittest.TestCase):
+    def _doc(self, **over):
+        d = {"name": "flow", "version": 1,
+             "caps": {"max_sessions_per_run": 16},
+             "nodes": [{"id": "a", "type": "pick", "brief_ref": "a.md"}],
+             "edges": []}
+        d.update(over)
+        return d
+
+    def test_valid_params_and_outputs_accepted(self):
+        d = self._doc(
+            params=[{"name": "repo", "type": "repo", "required": True},
+                    {"name": "model", "type": "model", "default": "claude-sonnet-5"},
+                    {"name": "mode", "type": "enum", "choices": ["a", "b"], "default": "a"}],
+            outputs=[{"name": "pr", "type": "number"}])
+        self.assertEqual(pipeline.validate_doc(d, None), [])
+
+    def test_unknown_param_type_refused(self):
+        d = self._doc(params=[{"name": "x", "type": "wat"}])
+        errs = pipeline.validate_doc(d, None)
+        self.assertTrue(any("type" in e for e in errs))
+
+    def test_param_bad_name_charset_refused(self):
+        d = self._doc(params=[{"name": "../x", "type": "string"}])
+        self.assertTrue(pipeline.validate_doc(d, None))
+
+    def test_enum_requires_choices(self):
+        d = self._doc(params=[{"name": "m", "type": "enum"}])
+        self.assertTrue(any("choices" in e for e in pipeline.validate_doc(d, None)))
+
+    def test_default_must_be_in_choices(self):
+        d = self._doc(params=[{"name": "m", "type": "enum",
+                               "choices": ["a"], "default": "z"}])
+        self.assertTrue(any("default" in e for e in pipeline.validate_doc(d, None)))
+
+    def test_non_enum_default_type_checked_at_declare(self):
+        bad = self._doc(params=[{"name": "n", "type": "number", "default": "abc"}])
+        self.assertTrue(any("default" in e for e in pipeline.validate_doc(bad, None)))
+        badb = self._doc(params=[{"name": "b", "type": "bool", "default": "maybe"}])
+        self.assertTrue(any("default" in e for e in pipeline.validate_doc(badb, None)))
+        ok = self._doc(params=[{"name": "n", "type": "number", "default": 3}])
+        self.assertEqual(pipeline.validate_doc(ok, None), [])
+
+    def test_duplicate_param_names_refused(self):
+        d = self._doc(params=[{"name": "x", "type": "string"},
+                              {"name": "x", "type": "number"}])
+        self.assertTrue(any("duplicate" in e for e in pipeline.validate_doc(d, None)))
+
+    def test_output_needs_name_and_type(self):
+        d = self._doc(outputs=[{"name": "pr"}])
+        self.assertTrue(pipeline.validate_doc(d, None))
+
+    def test_params_not_a_list_refused(self):
+        self.assertTrue(pipeline.validate_doc(self._doc(params={}), None))
+
+    def test_reference_in_field_still_refused_in_phase_a(self):
+        # HONESTY (Codex CP1): Phase A cannot substitute ${...} (dispatch is
+        # Phase B), so validate_doc must still REFUSE a ${...} in agent -- a
+        # validating doc must be a runnable doc. Acceptance lands in Phase B.
+        d = self._doc(nodes=[{"id": "a", "type": "agent_task", "brief_ref": "a.md",
+                              "runs_as": {"agent": "${params.coder_agent}"}}])
+        self.assertTrue(pipeline.validate_doc(d, None))          # refused for now
+        d2 = self._doc(nodes=[{"id": "a", "type": "agent_task", "brief_ref": "a.md",
+                               "runs_as": {"agent": "bad agent!"}}])
+        self.assertTrue(pipeline.validate_doc(d2, None))
+
+    def test_no_params_key_still_valid(self):    # back-compat: params optional
+        self.assertEqual(pipeline.validate_doc(self._doc(), None), [])
+
+
+class SubstituteRefsTest(unittest.TestCase):
+    def setUp(self):
+        self.ctx = {"params": {"repo": "/tmp/r", "n": 3, "flag": True},
+                    "nodes": {"code": {"branch": "feat/x"}},
+                    "run": {"id": "r1", "pipeline": "flow"}}
+
+    def test_whole_value_keeps_type(self):
+        self.assertEqual(pipeline.substitute("${params.n}", self.ctx), 3)   # int, not "3"
+        self.assertIs(pipeline.substitute("${params.flag}", self.ctx), True)
+
+    def test_whole_value_string(self):
+        self.assertEqual(pipeline.substitute("${params.repo}", self.ctx), "/tmp/r")
+
+    def test_node_output_ref(self):
+        self.assertEqual(pipeline.substitute("${nodes.code.output.branch}", self.ctx),
+                         "feat/x")
+
+    def test_run_field_ref(self):
+        self.assertEqual(pipeline.substitute("${run.id}", self.ctx), "r1")
+
+    def test_interpolation_is_string(self):
+        self.assertEqual(pipeline.substitute("release/${params.repo}/${run.id}", self.ctx),
+                         "release//tmp/r/r1")
+        self.assertEqual(pipeline.substitute("n=${params.n}", self.ctx), "n=3")
+
+    def test_non_string_passthrough(self):
+        self.assertEqual(pipeline.substitute(7, self.ctx), 7)
+        self.assertEqual(pipeline.substitute(None, self.ctx), None)
+
+    def test_unknown_param_refuses(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.substitute("${params.missing}", self.ctx)
+
+    def test_unknown_namespace_refuses(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.substitute("${bogus.x}", self.ctx)
+
+    def test_unknown_node_output_refuses(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.substitute("${nodes.code.output.nope}", self.ctx)
+
+    def test_escape_literal_dollar_brace(self):
+        self.assertEqual(pipeline.substitute("cost $${params.n}", self.ctx),
+                         "cost ${params.n}")
+
+
+class SubstituteFuncsTest(unittest.TestCase):
+    def setUp(self):
+        self.ctx = {"params": {"model": "", "ticket": "AE-12", "a": "x"},
+                    "nodes": {}, "run": {}}
+
+    def test_default_uses_fallback_when_empty(self):
+        self.assertEqual(pipeline.substitute(
+            "${default(params.model, 'claude-sonnet-5')}", self.ctx), "claude-sonnet-5")
+
+    def test_default_uses_value_when_set(self):
+        self.ctx["params"]["model"] = "opus"
+        self.assertEqual(pipeline.substitute(
+            "${default(params.model, 'x')}", self.ctx), "opus")
+
+    def test_concat(self):
+        self.assertEqual(pipeline.substitute(
+            "${concat('release/', params.ticket)}", self.ctx), "release/AE-12")
+
+    def test_slug(self):
+        self.assertEqual(pipeline.substitute(
+            "${slug(concat(params.ticket, ' Fix Bug'))}", self.ctx), "ae-12-fix-bug")
+
+    def test_nested_refs_and_literals(self):
+        self.assertEqual(pipeline.substitute(
+            "${concat(params.a, '-', params.ticket)}", self.ctx), "x-AE-12")
+
+    def test_unknown_function_refuses(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.substitute("${danger(params.a)}", self.ctx)
+
+    def test_no_eval_arbitrary_expr_refuses(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.substitute("${__import__('os').system('x')}", self.ctx)
+
+    def test_wrong_arity_refuses(self):
+        for expr in ("${slug()}", "${slug(params.a, 'x')}", "${default(params.a)}",
+                     "${default(params.a, 'x', 'y')}"):
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.substitute(expr, self.ctx)
+
+    def test_brace_in_literal_is_a_documented_limitation_refuses(self):
+        # Low (Codex CP1): _REF_RE stops at the first '}', so a '}' inside a
+        # quoted literal truncates the body -> it fails to parse and RAISES
+        # (fail-safe, never a silent mis-resolve). Documented constraint:
+        # string literals inside ${...} may not contain '}'.
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.substitute("${concat('a}b', params.a)}", self.ctx)
+
+
+class ResolveParamsTest(unittest.TestCase):
+    def _decl(self):
+        return [{"name": "repo", "type": "repo", "required": True},
+                {"name": "model", "type": "model", "default": "claude-sonnet-5"},
+                {"name": "retries", "type": "number", "default": 2},
+                {"name": "mode", "type": "enum", "choices": ["fast", "safe"], "default": "safe"},
+                {"name": "token", "type": "secret", "required": False}]
+
+    def test_default_when_no_override(self):
+        got = pipeline.resolve_params(self._decl(), {"repo": "/r"})
+        self.assertEqual(got["model"], "claude-sonnet-5")
+        self.assertEqual(got["retries"], 2)
+
+    def test_override_wins(self):
+        got = pipeline.resolve_params(self._decl(), {"repo": "/r", "model": "opus"})
+        self.assertEqual(got["model"], "opus")
+
+    def test_required_unset_refuses(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.resolve_params(self._decl(), {})          # repo missing
+
+    def test_unknown_override_refuses(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.resolve_params(self._decl(), {"repo": "/r", "nope": 1})
+
+    def test_enum_override_must_be_a_choice(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.resolve_params(self._decl(), {"repo": "/r", "mode": "wild"})
+
+    def test_number_type_coerced_and_checked(self):
+        got = pipeline.resolve_params(self._decl(), {"repo": "/r", "retries": "5"})
+        self.assertEqual(got["retries"], 5)                    # coerced to int
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.resolve_params(self._decl(), {"repo": "/r", "retries": "abc"})
+
+    def test_secret_resolves_via_lookup_and_is_not_the_name(self):
+        seen = {}
+        def fake_lookup(name):
+            seen["asked"] = name
+            return "s3cr3t"
+        got = pipeline.resolve_params(
+            [{"name": "token", "type": "secret", "required": True}],
+            {"token": "PROD_KEY"}, secret_lookup=fake_lookup)
+        self.assertEqual(got["token"], "s3cr3t")
+        self.assertEqual(seen["asked"], "PROD_KEY")
+
+    def test_secret_without_lookup_refuses(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.resolve_params([{"name": "t", "type": "secret", "required": True}],
+                                    {"t": "K"})                # no secret_lookup seam
+
+
+class OutputsFileTest(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+        self.p = os.path.join(self.d, ".run-r1-outputs.json")
+
+    def test_write_then_read_roundtrip(self):
+        pipeline.write_output(self.p, "branch", "feat/x")
+        pipeline.write_output(self.p, "pr", 42)
+        self.assertEqual(pipeline.read_outputs(self.p), {"branch": "feat/x", "pr": 42})
+
+    def test_read_missing_is_empty_total(self):
+        self.assertEqual(pipeline.read_outputs(self.p + "-nope"), {})
+
+    def test_read_corrupt_is_empty_total(self):
+        with open(self.p, "w") as fh:
+            fh.write("{ not json")
+        self.assertEqual(pipeline.read_outputs(self.p), {})
+
+    def test_project_outputs_keeps_only_declared(self):
+        raw = {"pr": 42, "branch": "feat/x", "secret_junk": "x"}
+        decl = [{"name": "pr", "type": "number"}]
+        self.assertEqual(pipeline.project_outputs(decl, raw), {"pr": 42})
+
+    def test_project_outputs_type_mismatch_raises(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.project_outputs([{"name": "pr", "type": "number"}], {"pr": "abc"})
+
+    def test_project_outputs_missing_declared_is_absent(self):
+        self.assertEqual(pipeline.project_outputs(
+            [{"name": "pr", "type": "number"}, {"name": "x", "type": "string"}],
+            {"pr": 7}), {"pr": 7})
+
+    def test_write_is_atomic_and_bounded(self):
+        pipeline.write_output(self.p, "a", "1")
+        # a second writer never corrupts the file (tmp+replace); still valid JSON
+        pipeline.write_output(self.p, "b", "2")
+        self.assertEqual(sorted(pipeline.read_outputs(self.p)), ["a", "b"])
+
+
+class SubstituteDocTest(unittest.TestCase):
+    def test_deep_substitutes_strings_only(self):
+        doc = {"name": "flow", "nodes": [
+            {"id": "a", "runs_as": {"model": "${params.m}"}, "count": 3}]}
+        ctx = {"params": {"m": "opus"}, "nodes": {}, "run": {}}
+        out = pipeline.substitute_doc(doc, ctx)
+        self.assertEqual(out["nodes"][0]["runs_as"]["model"], "opus")
+        self.assertEqual(out["nodes"][0]["count"], 3)             # non-string untouched
+        self.assertEqual(doc["nodes"][0]["runs_as"]["model"], "${params.m}")  # input intact
+
+
+class Cp2HonestyHardeningTest(unittest.TestCase):
+    """Codex CP2 findings on the Phase A diff: the ${...} honesty gate must
+    cover EVERY activity string field (not just charset-gated agent/account),
+    output types must not be fail-open, and a malformed ref must raise."""
+
+    def _doc(self, **over):
+        d = {"name": "flow", "version": 1,
+             "caps": {"max_sessions_per_run": 16},
+             "nodes": [{"id": "a", "type": "pick", "brief_ref": "a.md"}],
+             "edges": []}
+        d.update(over)
+        return d
+
+    def test_ref_in_runs_as_model_refused_in_phase_a(self):
+        # runs_as.model has no charset gate (any non-empty string), so without
+        # an explicit ${ gate this doc validates and dispatch would consume the
+        # LITERAL "${params.model}" -- the fail-open the honesty invariant forbids.
+        d = self._doc(nodes=[{"id": "a", "type": "agent_task", "brief_ref": "a.md",
+                              "runs_as": {"model": "${params.model}"}}])
+        self.assertTrue(any("Phase B" in e or "${" in e
+                            for e in pipeline.validate_doc(d, None)))
+
+    def test_ref_in_legacy_prompt_refused_in_phase_a(self):
+        d = self._doc(nodes=[{"id": "a", "type": "agent_task",
+                              "legacy_prompt": "${params.prompt}"}])
+        self.assertTrue(any("${" in e for e in pipeline.validate_doc(d, None)))
+
+    def test_ref_in_container_exit_when_refused_in_phase_a(self):
+        d = self._doc(
+            nodes=[{"id": "a", "type": "pick", "brief_ref": "a.md"}],
+            containers=[{"id": "c", "kind": "loop", "children": ["a"],
+                         "exit_when": "done per ${params.criteria}",
+                         "max_rounds": 3}])
+        self.assertTrue(any("${" in e for e in pipeline.validate_doc(d, None)))
+
+    def test_enum_and_secret_output_types_refused(self):
+        # enum outputs have no choices channel (fail-open type-check); a secret
+        # output would land a secret VALUE in the plaintext run-outputs file.
+        for typ in ("enum", "secret"):
+            d = self._doc(outputs=[{"name": "x", "type": typ}])
+            self.assertTrue(pipeline.validate_doc(d, None), typ)
+
+    def test_project_outputs_unsupported_type_raises_not_passes(self):
+        for typ in ("enum", "secret", "wat"):
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.project_outputs([{"name": "x", "type": typ}], {"x": "v"})
+
+    def test_unterminated_ref_raises_not_literal(self):
+        ctx = {"params": {"repo": "/r"}, "nodes": {}, "run": {}}
+        for bad in ("x ${params.repo", "${params.repo", "a ${run.id b"):
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.substitute(bad, ctx)
+        # the $${ escape still passes through untouched
+        self.assertEqual(pipeline.substitute("$${literal", ctx), "${literal")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -197,11 +197,40 @@ EDGE_KINDS = ("success", "failure", "completion")
 JOIN_KINDS = ("all", "any")
 MAX_BOUNCES_CEIL = 9
 _DOC_KEYS = frozenset(("name", "version", "trigger_default", "caps",
-                       "nodes", "edges", "containers", "wrapped_from_role"))
+                       "nodes", "edges", "containers", "wrapped_from_role",
+                       "params", "outputs"))
 CONTAINER_KINDS = frozenset(("loop", "stage"))   # branch=P2, for_each=P5
 MAX_ROUNDS_CEIL = 99
 MAX_SESSIONS_CEIL = 500
 MAX_PARALLEL_CEIL = 8
+# --- Typed params/outputs (pipeline+trigger model Phase A, spec S3). The
+#     declarations are validated here; VALUES are supplied by an invoker
+#     (a trigger or a calling pipeline -- Phase B/C) via resolve_params. ---
+PARAM_TYPES = ("string", "number", "bool", "enum",
+               "repo", "agent", "model", "account", "secret")
+# Outputs exclude enum (an output decl has no choices channel, so an enum
+# output could never be checked -- fail-open) and secret (the run-outputs
+# file is plaintext on disk; a secret VALUE must never be invited into it).
+OUTPUT_TYPES = tuple(t for t in PARAM_TYPES if t not in ("enum", "secret"))
+_PARAM_KEYS = frozenset(("name", "type", "required", "default", "choices"))
+_OUTPUT_KEYS = frozenset(("name", "type"))
+_REF_RE = re.compile(r"\$\{([^}]*)\}")            # ${ ... } (the param language)
+
+
+def _typed_ok(typ, val, choices=None):
+    """Does `val` satisfy declared type `typ`? Used to type-check a declared
+    DEFAULT at validate time (Codex CP1: catch {number, default:'abc'} early,
+    not later in resolve_params). number/bool accept their JSON form or a
+    coercible string; enum must be a choice; string-family accept any string."""
+    if typ == "number":
+        return (isinstance(val, (int, float)) and not isinstance(val, bool)) or \
+               (isinstance(val, str) and re.match(r"^-?\d+(\.\d+)?$", val) is not None)
+    if typ == "bool":
+        return isinstance(val, bool) or \
+               (isinstance(val, str) and val.lower() in ("true", "false"))
+    if typ == "enum":
+        return val in (choices or [])
+    return isinstance(val, str)            # string/repo/agent/model/account/secret
 
 
 class PipelineError(Exception):
@@ -318,6 +347,268 @@ def effective_edges(doc):
             for a, b in zip(order, order[1:])]
 
 
+# --- The ${...} dynamic-param language (spec S3.1). Stdlib, NO eval/exec: a
+#     hand-rolled resolver over named refs + a closed pure-function allowlist.
+#     Fail-safe: any unresolvable ref / unknown function / type mismatch RAISES
+#     PipelineError -- never a silent empty string. Proven in isolation here;
+#     Phase B wires it into compile_brief/dispatch. ---
+_ESC = "\x00AE_DOLLAR_BRACE\x00"          # sentinel for the $${ escape
+
+
+def _resolve_ref(path, ctx):
+    """A dotted reference: params.<n> | nodes.<id>.output.<n> | run.<field>."""
+    parts = path.split(".")
+    if parts[0] == "params" and len(parts) == 2:
+        d = ctx.get("params", {})
+        if parts[1] not in d:
+            raise PipelineError("unknown param reference ${params.%s}" % parts[1])
+        return d[parts[1]]
+    if parts[0] == "nodes" and len(parts) == 4 and parts[2] == "output":
+        outs = ctx.get("nodes", {}).get(parts[1])
+        if outs is None or parts[3] not in outs:
+            raise PipelineError("unknown node output ${nodes.%s.output.%s}"
+                                % (parts[1], parts[3]))
+        return outs[parts[3]]
+    if parts[0] == "run" and len(parts) == 2:
+        d = ctx.get("run", {})
+        if parts[1] not in d:
+            raise PipelineError("unknown run field ${run.%s}" % parts[1])
+        return d[parts[1]]
+    raise PipelineError("unresolvable reference ${%s}" % path)
+
+
+def _slug(s):
+    s = re.sub(r"[^a-z0-9]+", "-", _to_str(s).lower()).strip("-")
+    return s or "x"
+
+
+# fn -> (impl, min_args, max_args | None for variadic). Arity is enforced so a
+# wrong-arity call is a fail-safe language error, never an IndexError (Codex CP1).
+_ALLOWED_FUNCS = {
+    "default": (lambda a: a[0] if a[0] not in (None, "", False) else a[1], 2, 2),
+    "concat":  (lambda a: "".join(_to_str(x) for x in a), 1, None),
+    "slug":    (lambda a: _slug(a[0]), 1, 1),
+}
+_CALL_RE = re.compile(r"^([a-z_]+)\((.*)\)$", re.S)
+
+
+def _split_args(s):
+    """Top-level comma split respecting quotes + one level of nested parens.
+    No eval: a hand tokenizer, so arbitrary Python can never execute."""
+    args, buf, depth, quote = [], [], 0, None
+    for ch in s:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+            buf.append(ch)
+        elif ch == "(":
+            depth += 1
+            buf.append(ch)
+        elif ch == ")":
+            depth -= 1
+            buf.append(ch)
+        elif ch == "," and depth == 0:
+            args.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+    if quote is not None or depth != 0:
+        raise PipelineError("malformed expression: unbalanced quotes/parens")
+    tail = "".join(buf).strip()
+    if tail or args:
+        args.append(tail)
+    return args
+
+
+def _resolve_arg(tok, ctx):
+    tok = tok.strip()
+    if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in "'\"":
+        return tok[1:-1]                            # string literal
+    if _CALL_RE.match(tok):
+        return _resolve_expr(tok, ctx)              # nested call
+    if re.match(r"^-?\d+$", tok):
+        return int(tok)
+    return _resolve_ref(tok, ctx)                    # a reference
+
+
+def _resolve_expr(expr, ctx):
+    """One ${...} body: a closed-allowlist function call or a dotted reference.
+    A hand-rolled parse -- there is NO eval anywhere, so ${__import__(...)} is
+    just an unknown function that RAISES (test_no_eval_arbitrary_expr_refuses)."""
+    expr = expr.strip()
+    m = _CALL_RE.match(expr)
+    if m:
+        fn, raw = m.group(1), m.group(2)
+        spec = _ALLOWED_FUNCS.get(fn)
+        if spec is None:
+            raise PipelineError("unknown function %r (allowed: %s)"
+                                % (fn, ", ".join(sorted(_ALLOWED_FUNCS))))
+        impl, lo, hi = spec
+        args = [_resolve_arg(a, ctx) for a in _split_args(raw)]
+        if len(args) < lo or (hi is not None and len(args) > hi):
+            raise PipelineError("function %r arity: expected %s, got %d"
+                                % (fn, lo if hi == lo else "%s+" % lo, len(args)))
+        try:
+            return impl(args)
+        except PipelineError:
+            raise
+        except Exception as exc:                 # any impl slip -> language error
+            raise PipelineError("function %r failed: %s" % (fn, exc))
+    return _resolve_ref(expr, ctx)
+
+
+def _to_str(v):
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return "" if v is None else str(v)
+
+
+def substitute(value, ctx):
+    """Resolve ${...} in one scalar. A field that is EXACTLY ${ref} keeps ref's
+    TYPED value; an embedded ${ref} interpolates as a string. $${ is a literal
+    ${. Non-strings pass through. Raises PipelineError on any bad reference."""
+    if not isinstance(value, str):
+        return value
+    protected = value.replace("$${", _ESC)
+    if "${" in _REF_RE.sub("", protected):
+        # an opener the ref regex could not consume = unterminated ${...} --
+        # a typo must RAISE, never silently stay a literal (Codex CP2)
+        raise PipelineError("unterminated ${...} reference in %r "
+                            "(write $${ for a literal ${)" % value)
+    m = _REF_RE.fullmatch(protected)
+    if m:                                          # whole-value -> typed
+        out = _resolve_expr(m.group(1), ctx)
+        return out if not isinstance(out, str) else out.replace(_ESC, "${")
+    def repl(mo):
+        return _to_str(_resolve_expr(mo.group(1), ctx))
+    return _REF_RE.sub(repl, protected).replace(_ESC, "${")
+
+
+def _coerce(name, typ, value, choices):
+    """Type-check/coerce one resolved value. Fail-safe: a mismatch RAISES."""
+    if typ == "number":
+        if isinstance(value, bool):
+            raise PipelineError("param %r: expected number" % name)
+        try:
+            return int(value) if str(value).lstrip("-").isdigit() else float(value)
+        except (TypeError, ValueError):
+            raise PipelineError("param %r: %r is not a number" % (name, value))
+    if typ == "bool":
+        if isinstance(value, bool):
+            return value
+        if str(value).lower() in ("true", "false"):
+            return str(value).lower() == "true"
+        raise PipelineError("param %r: %r is not a bool" % (name, value))
+    if typ == "enum" and value not in (choices or []):
+        raise PipelineError("param %r: %r not in choices %s" % (name, value, choices))
+    # string/repo/agent/model/account/secret carry through as strings here; the
+    # concrete existence checks (a real repo/account) belong to Phase B dispatch.
+    return value
+
+
+def resolve_params(declared, overrides, *, secret_lookup=None):
+    """Merge pipeline DEFAULTS with an invoker's OVERRIDES (a trigger OR a
+    calling pipeline -- the same slot, spec S3), type-check, and return
+    {name: typed_value}. A required param with neither default nor override
+    RAISES (fail-safe). Unknown override keys RAISE. A `secret` param resolves
+    its VALUE through secret_lookup(name) and never carries the raw name onward
+    (secrets discipline); no secret_lookup seam for a secret param RAISES."""
+    if not isinstance(declared, list):
+        raise PipelineError("params declaration must be a list")
+    if not isinstance(overrides, dict):
+        raise PipelineError("overrides must be a mapping")
+    by_name = {}
+    for p in declared:
+        if isinstance(p, dict) and _is_str(p.get("name")):
+            by_name[p["name"]] = p
+    for k in overrides:
+        if k not in by_name:
+            raise PipelineError("override for undeclared param %r" % k)
+    out = {}
+    for name, p in by_name.items():
+        typ = p.get("type")
+        if name in overrides:
+            value = overrides[name]
+        elif "default" in p:
+            value = p["default"]
+        elif p.get("required"):
+            raise PipelineError("required param %r has no value" % name)
+        else:
+            continue                                   # optional, unset -> absent
+        if typ == "secret":
+            if secret_lookup is None:
+                raise PipelineError("param %r is a secret but no secret store "
+                                    "was provided" % name)
+            value = secret_lookup(value)
+        else:
+            value = _coerce(name, typ, value, p.get("choices"))
+        out[name] = value
+    return out
+
+
+def write_output(path, name, value):
+    """Append/overwrite one named output in the per-run outputs file, atomically
+    (tmp + os.replace) so a concurrent reader never sees a torn file."""
+    cur = read_outputs(path)
+    cur[name] = value
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(cur, fh)
+    os.replace(tmp, path)
+
+
+def read_outputs(path):
+    """Total reader: missing/corrupt/non-object -> {} (never raises)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def project_outputs(declared, raw):
+    """Project a run's raw outputs onto the pipeline's DECLARED outputs: keep
+    only declared names (an activity cannot leak an undeclared value to a
+    caller, spec S3) AND type-check each present value (Codex CP1: a declared
+    `number` output written as 'abc' RAISES, never passes invalid data on). A
+    declared output the run did not produce is simply absent -- a downstream
+    ${nodes.id.output.x} ref then raises at resolve time (fail-safe)."""
+    decls = {o["name"]: o for o in (declared or [])
+             if isinstance(o, dict) and _is_str(o.get("name"))}
+    out = {}
+    for k, v in (raw or {}).items():
+        if k not in decls:
+            continue
+        typ = decls[k].get("type")
+        if typ not in OUTPUT_TYPES:
+            # an unvalidated decl (enum/secret/garbage) must not become a
+            # skipped check -- fail-safe, never pass-through (Codex CP2)
+            raise PipelineError("output %r: unsupported declared type %r"
+                                % (k, typ))
+        if not _typed_ok(typ, v):
+            raise PipelineError("output %r: %r does not match declared type %r"
+                                % (k, v, typ))
+        out[k] = v
+    return out
+
+
+def substitute_doc(doc, ctx):
+    """Deep copy of doc with every STRING scalar run through substitute(). Phase
+    B calls this at compile time; Phase A only unit-tests it. Non-strings pass
+    through untouched; the input doc is never mutated."""
+    def walk(v):
+        if isinstance(v, dict):
+            return {k: walk(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        return substitute(v, ctx)
+    return walk(doc)
+
+
 def _validate_runs_as(where, runs_as, errors):
     if runs_as is None:
         return
@@ -339,6 +630,94 @@ def _validate_runs_as(where, runs_as, errors):
     if "agent" in runs_as and not (_is_str(runs_as["agent"])
                                    and _AGENT_RE.match(runs_as["agent"])):
         errors.append("%s: runs_as.agent has invalid chars" % where)
+
+
+def _validate_params_outputs(doc, errors):
+    """params/outputs are typed declarations (spec S3). Refuse malformed -- an
+    accepted-but-unconsumed decl is the fail-open the honesty invariant forbids."""
+    params = doc.get("params")
+    if params is not None:
+        if not isinstance(params, list):
+            errors.append("params: must be a list of declarations")
+        else:
+            seen = set()
+            for i, p in enumerate(params):
+                w = "params[%d]" % i
+                if not isinstance(p, dict):
+                    errors.append("%s: must be a mapping" % w)
+                    continue
+                for k in p:
+                    if k not in _PARAM_KEYS:
+                        errors.append("%s: unknown key %r" % (w, k))
+                nm = p.get("name")
+                if not (_is_str(nm) and _NAME_RE.match(nm)):
+                    errors.append("%s: name required, charset [A-Za-z0-9._-]" % w)
+                elif nm in seen:
+                    errors.append("%s: duplicate param name %r" % (w, nm))
+                else:
+                    seen.add(nm)
+                if p.get("type") not in PARAM_TYPES:
+                    errors.append("%s: type must be one of %s"
+                                  % (w, ", ".join(PARAM_TYPES)))
+                typ = p.get("type")
+                if typ == "enum":
+                    ch = p.get("choices")
+                    if not (isinstance(ch, list) and ch and all(_is_str(c) for c in ch)):
+                        errors.append("%s: enum requires non-empty string choices" % w)
+                    elif "default" in p and p["default"] not in ch:
+                        errors.append("%s: default %r not in choices" % (w, p["default"]))
+                elif "default" in p and typ in PARAM_TYPES and \
+                        not _typed_ok(typ, p["default"]):
+                    errors.append("%s: default %r does not match type %r"
+                                  % (w, p["default"], typ))     # CP1: catch early
+                if "required" in p and not isinstance(p["required"], bool):
+                    errors.append("%s: required must be a bool" % w)
+    outputs = doc.get("outputs")
+    if outputs is not None:
+        if not isinstance(outputs, list):
+            errors.append("outputs: must be a list of declarations")
+        else:
+            for i, o in enumerate(outputs):
+                w = "outputs[%d]" % i
+                if not isinstance(o, dict):
+                    errors.append("%s: must be a mapping" % w)
+                    continue
+                for k in o:
+                    if k not in _OUTPUT_KEYS:
+                        errors.append("%s: unknown key %r" % (w, k))
+                if not (_is_str(o.get("name")) and _NAME_RE.match(o.get("name") or "")):
+                    errors.append("%s: name required, charset [A-Za-z0-9._-]" % w)
+                if o.get("type") not in OUTPUT_TYPES:
+                    errors.append("%s: type must be one of %s (enum/secret are "
+                                  "not output types: no choices channel / the "
+                                  "run-outputs file is plaintext)"
+                                  % (w, ", ".join(OUTPUT_TYPES)))
+
+
+def _refuse_refs_in_activity_fields(doc, errors):
+    """Phase A honesty gate (Codex CP2): NOTHING substitutes ${...} yet, so a
+    '${' anywhere in an activity's string fields (runs_as.model has no charset
+    gate, legacy_prompt/exit_when are free text) would dispatch as a raw
+    literal -- the accept-and-ignore fail-open prevention-log #3 forbids.
+    Refused wholesale until Phase B wires substitution; the params/outputs
+    DECLARATIONS stay accepted (they are the interface, not consumed fields)."""
+    def scan(where, v):
+        if isinstance(v, str) and "${" in v:
+            errors.append("%s: contains '${' but the ${...} language is not "
+                          "substituted until Phase B wires it into dispatch -- "
+                          "a validating doc must be runnable today" % where)
+        elif isinstance(v, dict):
+            for k, x in v.items():
+                scan("%s.%s" % (where, k), x)
+        elif isinstance(v, list):
+            for j, x in enumerate(v):
+                scan("%s[%d]" % (where, j), x)
+    for i, node in enumerate(doc.get("nodes") or []):
+        if isinstance(node, dict):
+            scan("nodes[%d]" % i, node)
+    for i, con in enumerate(doc.get("containers") or []):
+        if isinstance(con, dict):
+            scan("containers[%d]" % i, con)
 
 
 def validate_doc(doc, pipeline_dir=None):
@@ -370,6 +749,8 @@ def validate_doc(doc, pipeline_dir=None):
                 1 <= caps["max_parallel"] <= MAX_PARALLEL_CEIL):
             errors.append("caps.max_parallel: must be 1..%d (ENFORCED fan-out "
                           "ceiling; absent = sequential)" % MAX_PARALLEL_CEIL)
+    _validate_params_outputs(doc, errors)
+    _refuse_refs_in_activity_fields(doc, errors)
 
     nodes = doc.get("nodes")
     ids = []
