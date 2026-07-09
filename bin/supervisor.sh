@@ -37,6 +37,21 @@ resolve_config_value() {
   printf '%s' "$hardcoded_default"
 }
 
+# #353: the TARGET repo's default branch -- engine.default_branch, 'main'
+# when unset/unreadable/invalid. TOTAL under any caller (prevention-log
+# #17) and charset-gated before the value lands in git argv (prevention-log
+# #6: git-ref charset subset, never a leading '-'). Every engine detach
+# site on the target (preflight, session_end_park, dispatch_batch
+# worktrees, setup_worktree, worktree_gc) reads this knob.
+default_branch() {
+  local db
+  db="$(CONFIG_GET "$AUTONOMY_TARGET_REPO/.autonomy/config.yaml" engine.default_branch)" || db=""
+  case "$db" in
+    ""|-*|*[!A-Za-z0-9._/-]*) printf 'main' ;;
+    *) printf '%s' "$db" ;;
+  esac
+}
+
 # --- timing knobs (seconds) ---
 PACE=120
 EMPTY_IDLE=1800
@@ -223,8 +238,9 @@ preflight() {
   dirty_skips=0
 
   git fetch origin -q 2>>"$SUPLOG" || { log "preflight: fetch failed"; return 2; }
-  git switch --detach origin/main -q 2>>"$SUPLOG" || { log "preflight: switch to origin/main failed"; return 2; }
-  [ -z "$(git status --porcelain)" ] || { log "preflight: tree dirty on origin/main -- skip"; return 2; }
+  local _db; _db="$(default_branch)"
+  git switch --detach "origin/$_db" -q 2>>"$SUPLOG" || { log "preflight: switch to origin/$_db failed"; return 2; }
+  [ -z "$(git status --porcelain)" ] || { log "preflight: tree dirty on origin/$_db -- skip"; return 2; }
   return 0
 }
 
@@ -248,7 +264,7 @@ session_end_park() {
   cd "$AUTONOMY_TARGET_REPO" 2>/dev/null || return 0
   # Only an ATTACHED `main` blocks a sibling worktree -- a detached HEAD or a
   # feature branch does not. symbolic-ref fails (non-zero, empty) when detached.
-  [ "$(git symbolic-ref -q --short HEAD 2>/dev/null || echo '')" = "main" ] || return 0
+  [ "$(git symbolic-ref -q --short HEAD 2>/dev/null || echo '')" = "$(default_branch)" ] || return 0
   # Never detach over WIP: leave a dirty tree for preflight's recovery to handle.
   # A `git status` FAILURE is not "clean" -- treat unknown state as fail-safe and
   # leave the worktree untouched (split `local` from assignment so the command
@@ -1612,7 +1628,7 @@ dispatch_batch() {
   }
   for i in $(seq 0 $((PB_COUNT - 1))); do
     wt="$wt_root/$(basename "${state%.json}").${PB_NODE[i]}"
-    if ! git -C "$AUTONOMY_TARGET_REPO" worktree add --detach "$wt" origin/main >>"$SUPLOG" 2>&1; then
+    if ! git -C "$AUTONOMY_TARGET_REPO" worktree add --detach "$wt" "origin/$(default_branch)" >>"$SUPLOG" 2>&1; then
       log "dispatch: could not create ephemeral worktree for node '${PB_NODE[i]}' -- REFUSING batch (fail-safe)"
       abort_batch
       return 2
