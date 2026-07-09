@@ -2549,6 +2549,13 @@ def build_pipeline_view(repo_path, role):
         # mislead for a role that exists but is switched off.
         return {"error": "unknown role: %s (or not dispatchable -- not an "
                          "enabled loop/cron/event role)" % role}
+    except Exception as exc:  # review WARNING on PR #358: the builder is
+        # the route's totality boundary -- an unforeseen raise on a
+        # malformed roles: block must degrade, never 500. (Empirical probe
+        # found no such shape from the restricted parser; defense-in-depth
+        # like the validate_doc guard below.)
+        return {"error": "role settings unreadable: %s: %s"
+                         % (type(exc).__name__, exc)}
     view = {"repo": os.path.basename(repo_path.rstrip("/")),
             "path": repo_path, "role": role}
     binding = settings.get("pipeline") or ""
