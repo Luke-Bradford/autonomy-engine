@@ -1115,14 +1115,14 @@ pipeline_state_file() {
   fi
 }
 
-# The verdict file derives from the state path -- one derivation, lane-safe
-# for free. pipeline.py derives the SAME repo-relative name for the compiled
-# brief's instruction (var/autonomy-logs/<state-basename> minus .json plus
-# .verdict.json), so the agent writes exactly the file the engine reads.
+# The PER-NODE verdict file derives from the state path + node id -- one
+# derivation, lane-safe, collision-free under parallel dispatch (P2b).
+# pipeline.py derives the SAME repo-relative name for the compiled brief's
+# instruction, so the agent writes exactly the file the engine reads.
 pipeline_verdict_file() {
   local state
   state="$(pipeline_state_file "$1")"
-  printf '%s.verdict.json' "${state%.json}"
+  printf '%s.%s.verdict.json' "${state%.json}" "$2"
 }
 
 pipeline_inflight() { [ -f "$(pipeline_state_file "$1")" ]; }
@@ -1135,15 +1135,17 @@ any_pipeline_inflight() {
   return 1
 }
 
-# Resolve the role's CURRENT pipeline node into PIPE_* globals; start a run
-# when none is in flight. Node runs_as values override the ROLE_* slot
-# (SD-13: they sit where the role's own model/effort sat; one-shot override
-# and CLI flags still win later in resolve_session_settings). Every value is
-# re-validated here before it can land in argv or a source path
-# (prevention-log #6). rc 1 = REFUSE.
-resolve_pipeline_node() {
-  local role="$1" state brief out line key val
-  PIPE_NODE=""; PIPE_KIND=""; PIPE_PROMPT=""; PIPE_DONE=0
+# Resolve the role's CURRENT ready set (P2b, #351) into parallel PB_* arrays
+# (bash 3.2 regular arrays; index i = block i). Starts a run when none is in
+# flight. Per-block runs_as values are re-validated here before they can
+# land in argv or a source path (prevention-log #6). rc 1 = REFUSE. Sets
+# PB_COUNT + PIPE_DONE and arrays PB_NODE PB_PROMPT PB_VERDICT
+# PB_MODEL PB_EFFORT PB_ACCOUNT PB_AGENT ('' = no override).
+resolve_pipeline_ready() {
+  local role="$1" max="${2:-1}" state out line key val i
+  PB_NODE=(); PB_PROMPT=(); PB_VERDICT=()
+  PB_MODEL=(); PB_EFFORT=(); PB_ACCOUNT=(); PB_AGENT=()
+  PB_COUNT=0; PIPE_DONE=0
   state="$(pipeline_state_file "$role")"
   if [ ! -f "$state" ]; then
     if [ -n "${AUTONOMY_LANE:-}" ]; then
@@ -1155,30 +1157,66 @@ resolve_pipeline_node() {
         "$AUTONOMY_TARGET_REPO" "$role" "$state" >>"$SUPLOG" 2>&1 || return 1
     fi
   fi
-  brief="${state%.json}.brief.md"
-  if ! out="$(python3 "$ENGINE_HOME/lib/pipeline.py" next "$state" \
-      --brief-out "$brief" --journal "$LOGDIR/journal.jsonl" 2>>"$SUPLOG")"; then
+  if ! out="$(python3 "$ENGINE_HOME/lib/pipeline.py" ready "$state" \
+      --max "$max" --brief-dir "$LOGDIR" \
+      --journal "$LOGDIR/journal.jsonl" 2>>"$SUPLOG")"; then
     return 1
   fi
   case "$out" in
     DONE*) PIPE_DONE=1; return 0 ;;
   esac
-  # Here-string, not an unquoted heredoc: behaviourally identical (a heredoc
-  # body expands $out ONCE and never re-evaluates the value -- proven on
-  # /bin/bash 3.2.57), but the here-string leaves no shell-expansion step to
-  # reason about at review time (prevention-log #7's recommended shape).
+  i=0
+  local node="" kind="" prompt="" verdict="" model="" effort="" account="" agent=""
+  # Here-string (prevention-log #7 shape); every field validated per line.
   while IFS= read -r line; do
+    if [ "$line" = "END" ]; then
+      if [ -z "$node" ] || [ -z "$kind" ] || [ -z "$prompt" ] || [ -z "$verdict" ]; then
+        log "pipeline: incomplete ready block -- REFUSING"
+        return 1
+      fi
+      case "$kind" in
+        legacy)
+          if ! valid_prompt_path "$prompt"; then
+            log "pipeline: node prompt path '$prompt' is absolute or escapes the pack -- REFUSING"
+            return 1
+          fi
+          prompt="$AUTONOMY_TARGET_REPO/$prompt" ;;
+        compiled)
+          # The compiled brief must be exactly where we asked pipeline.py
+          # to write it -- anything else in this slot is a forged path.
+          case "$prompt" in
+            "$LOGDIR"/*.brief.md) ;;
+            *) log "pipeline: compiled brief path mismatch -- REFUSING"; return 1 ;;
+          esac ;;
+        *) log "pipeline: unknown node kind '$kind' -- REFUSING"; return 1 ;;
+      esac
+      if [ ! -f "$prompt" ]; then
+        log "pipeline: node prompt file missing ($prompt) -- REFUSING"
+        return 1
+      fi
+      case "$verdict" in
+        var/autonomy-logs/*.verdict.json) ;;
+        *) log "pipeline: verdict path shape invalid -- REFUSING"; return 1 ;;
+      esac
+      PB_NODE[i]="$node"; PB_PROMPT[i]="$prompt"
+      PB_VERDICT[i]="$verdict"; PB_MODEL[i]="$model"; PB_EFFORT[i]="$effort"
+      PB_ACCOUNT[i]="$account"; PB_AGENT[i]="$agent"
+      i=$((i + 1))
+      node=""; kind=""; prompt=""; verdict=""; model=""; effort=""; account=""; agent=""
+      continue
+    fi
     case "$line" in *=*) ;; *) continue ;; esac
     key="${line%%=*}"; val="${line#*=}"
     case "$key" in
-      NODE)   PIPE_NODE="$val" ;;
-      KIND)   PIPE_KIND="$val" ;;
-      PROMPT) PIPE_PROMPT="$val" ;;
+      NODE)    node="$val" ;;
+      KIND)    kind="$val" ;;
+      PROMPT)  prompt="$val" ;;
+      VERDICT) verdict="$val" ;;
       NODE_MODEL)
-        if valid_model_id "$val"; then ROLE_MODEL="$val"
+        if valid_model_id "$val"; then model="$val"
         else log "WARN pipeline node model invalid -- ignored"; fi ;;
       NODE_EFFORT)
-        if valid_effort "$val"; then ROLE_EFFORT="$val"
+        if valid_effort "$val"; then effort="$val"
         else log "WARN pipeline node effort invalid -- ignored"; fi ;;
       NODE_ACCOUNT)
         # prevention-log #6: account names land in accounts.py argv --
@@ -1186,51 +1224,72 @@ resolve_pipeline_node() {
         case "$val" in
           *[!A-Za-z0-9._-]*) log "WARN pipeline node account invalid chars -- ignored" ;;
           "") ;;
-          *) ROLE_ACCOUNT="$val" ;;
+          *) account="$val" ;;
         esac ;;
       NODE_AGENT)
         case "$val" in
           *[!A-Za-z0-9_-]*) log "WARN pipeline node agent invalid chars -- ignored" ;;
           "") ;;
-          *) ROLE_AGENT="$val" ;;
+          *) agent="$val" ;;
         esac ;;
     esac
   done <<<"$out"
-  [ -n "$PIPE_NODE" ] || return 1
-  case "$PIPE_KIND" in
-    legacy)
-      if ! valid_prompt_path "$PIPE_PROMPT"; then
-        log "pipeline: node prompt path '$PIPE_PROMPT' is absolute or escapes the pack -- REFUSING"
-        return 1
-      fi
-      PIPE_PROMPT="$AUTONOMY_TARGET_REPO/$PIPE_PROMPT" ;;
-    compiled)
-      # The compiled brief must be exactly the file we asked pipeline.py to
-      # write -- anything else in this slot is a forged path (fail-safe).
-      if [ "$PIPE_PROMPT" != "$brief" ]; then
-        log "pipeline: compiled brief path mismatch -- REFUSING"
-        return 1
-      fi ;;
-    *)
-      log "pipeline: unknown node kind '$PIPE_KIND' -- REFUSING"
-      return 1 ;;
-  esac
-  if [ ! -f "$PIPE_PROMPT" ]; then
-    log "pipeline: node prompt file missing ($PIPE_PROMPT) -- REFUSING"
-    return 1
-  fi
+  PB_COUNT=$i
+  [ "$PB_COUNT" -gt 0 ] || return 1
   return 0
 }
 
-# Record a node outcome. NOT best-effort: a record failure is loud (the
-# caller treats the session as errored) because losing run-state consistency
-# silently would corrupt the walk.
+# Atomic session-log name claim (P2b): two concurrent allocations (parallel
+# sessions, or two lane supervisors sharing LOGDIR) must never pick the same
+# name. noclobber (set -C) makes the create the claim; on collision sleep 1
+# and re-stamp -- real seconds, no date math, so the SD-15 name shape stays
+# byte-exact for the dashboard's parser. Prints the claimed path.
+allocate_session_log() {
+  local f tries=0
+  while [ "$tries" -lt 20 ]; do
+    f="$LOGDIR/session-$(date +%Y%m%dT%H%M%S).log"
+    if (set -C; : >"$f") 2>/dev/null; then
+      printf '%s' "$f"
+      return 0
+    fi
+    tries=$((tries + 1))
+    sleep 1
+  done
+  return 1
+}
+
+# Remove one ephemeral worktree, loudly on failure. Sessions leave WIP by
+# design, so a plain `worktree remove` would refuse -- force, then fall back
+# to rm -rf + prune (worktree_gc does NOT remove live directories).
+remove_ephemeral_worktree() {
+  local wt="$1"
+  git -C "$AUTONOMY_TARGET_REPO" worktree remove --force "$wt" >>"$SUPLOG" 2>&1 \
+    || rm -rf "$wt" 2>>"$SUPLOG" \
+    || log "ERROR pipeline: could not remove ephemeral worktree $wt -- remove it by hand"
+  git -C "$AUTONOMY_TARGET_REPO" worktree prune >>"$SUPLOG" 2>&1 || true
+}
+
+# Sweep OUR ephemeral namespace of leftovers from a killed batch before
+# creating new ones.
+sweep_ephemeral_worktrees() {
+  local d
+  for d in "$VARDIR/autonomy-worktrees"/*; do
+    [ -e "$d" ] || continue
+    log "NOTE pipeline: sweeping leftover ephemeral worktree $d"
+    remove_ephemeral_worktree "$d"
+  done
+}
+
+# Record a node outcome ($5 = the absolute verdict path for THAT node's
+# session cwd). NOT best-effort: a record failure is loud (the caller treats
+# the session as errored) because losing run-state consistency silently
+# would corrupt the walk.
 record_pipeline_outcome() {
-  local role="$1" node="$2" outcome="$3" session_log="$4"
+  local role="$1" node="$2" outcome="$3" session_log="$4" verdict="$5"
   python3 "$ENGINE_HOME/lib/pipeline.py" record \
     "$(pipeline_state_file "$role")" "$node" "$outcome" \
     --session-log "$session_log" \
-    --verdict "$(pipeline_verdict_file "$role")" \
+    --verdict "$verdict" \
     --journal "$LOGDIR/journal.jsonl" >>"$SUPLOG" 2>&1
 }
 
@@ -1320,13 +1379,14 @@ run_session() {
     return 2
   fi
 
-  # P1 (#345): every role dispatches through the pipeline runner -- bound
-  # documents walk one node per iteration, unbound roles run their auto-wrap
-  # (byte-identical prompt path). Placed BEFORE adapter sourcing so a node's
-  # runs_as.agent override selects the adapter, and BEFORE
-  # resolve_session_settings so node model/effort sit in the ROLE_* slot.
-  if ! resolve_pipeline_node "$role"; then
-    log "dispatch: cannot resolve pipeline node for role '$role' -- REFUSING session (fail-safe; see supervisor.log)"
+  # P1 (#345): every role dispatches through the pipeline runner. P2b
+  # (#351): the runner returns the READY SET, up to the doc's enforced
+  # caps.max_parallel; one block = today's sequential path. Placed BEFORE
+  # adapter sourcing so a node's runs_as.agent override selects the adapter,
+  # and BEFORE resolve_session_settings so node model/effort sit in the
+  # ROLE_* slot.
+  if ! resolve_pipeline_ready "$role" 8; then
+    log "dispatch: cannot resolve pipeline ready set for role '$role' -- REFUSING session (fail-safe; see supervisor.log)"
     return 2
   fi
   if [ "$PIPE_DONE" = "1" ]; then
@@ -1337,6 +1397,24 @@ run_session() {
     log "pipeline: role '$role' run already complete -- nothing to dispatch (state recovered)"
     return 2
   fi
+  # Heterogeneous-agent batches cannot share one sourced adapter contract:
+  # fall back to the FIRST block alone (sequential; honest NOTE) when any
+  # block overrides the agent. Same for the model/effort/account overrides
+  # of the FIRST block: they land in the ROLE_* slot exactly as P1 did.
+  if [ "$PB_COUNT" -gt 1 ]; then
+    local _i
+    for _i in $(seq 0 $((PB_COUNT - 1))); do
+      if [ -n "${PB_AGENT[_i]}" ]; then
+        log "NOTE pipeline: node '${PB_NODE[_i]}' overrides the agent -- batch reduced to sequential (heterogeneous adapters cannot share one dispatch)"
+        PB_COUNT=1
+        break
+      fi
+    done
+  fi
+  if [ -n "${PB_MODEL[0]}" ];   then ROLE_MODEL="${PB_MODEL[0]}"; fi
+  if [ -n "${PB_EFFORT[0]}" ];  then ROLE_EFFORT="${PB_EFFORT[0]}"; fi
+  if [ -n "${PB_ACCOUNT[0]}" ]; then ROLE_ACCOUNT="${PB_ACCOUNT[0]}"; fi
+  if [ -n "${PB_AGENT[0]}" ];   then ROLE_AGENT="${PB_AGENT[0]}"; fi
 
   # Source the ROLE's agent adapter when it sets one (e.g. a local-LLM 'prep'
   # role on codex), else the global $AGENT_TYPE. resolve_role_dispatch has
@@ -1384,13 +1462,6 @@ run_session() {
     fi
   fi
 
-  # The node's prompt: the wrapped role's own pack prompt (byte-identical to
-  # the pre-pipeline engine -- pipeline.py wrap reads the same roles.py
-  # `prompt:` and applies the same loop_prompt.md default) or the compiled
-  # per-node brief. Path validated in resolve_pipeline_node (legacy paths
-  # via valid_prompt_path, compiled paths pinned to the expected file).
-  local prompt_file="$PIPE_PROMPT"
-
   local rules_file
   if ! rules_file="$(compose_session_rules "$AUTONOMY_TARGET_REPO/.autonomy/hard_rules.md" "$ROLE_SCOPE" "$LOGDIR/.session-rules")"; then
     log "dispatch: cannot compose scope rules for role '$role' -- REFUSING session (a dropped scope would widen the agent's remit)"
@@ -1399,24 +1470,37 @@ run_session() {
 
   log_knob_notes "$AUTONOMY_TARGET_REPO" "$role"
 
-  local log_file; log_file="$LOGDIR/session-$(date +%Y%m%dT%H%M%S).log"
+  if [ "$PB_COUNT" -eq 1 ]; then
+    run_single_session "$role" "$env_lines" "$rules_file" "$auth_note"
+  else
+    dispatch_batch "$role" "$env_lines" "$rules_file" "$auth_note"
+  fi
+}
+
+# The sequential path -- today's behaviour, one node-session in the main
+# checkout (block 0 of the ready set).
+run_single_session() {
+  local role="$1" env_lines="$2" rules_file="$3" auth_note="$4"
+  local prompt_file="${PB_PROMPT[0]}"
+  local verdict_abs="$AUTONOMY_TARGET_REPO/${PB_VERDICT[0]}"
+
+  local log_file
+  if ! log_file="$(allocate_session_log)"; then
+    log "dispatch: could not allocate a session log name -- REFUSING session"
+    return 2
+  fi
   # Role sidecar (#148): the dashboard attributes the live session to its role
   # from this marker, NOT by parsing the voice log (fragile, races the tail).
-  # Written before the session runs, best-effort -- a marker-write failure must
-  # never block the session (the card just falls back to its default badge).
+  # Best-effort -- a marker-write failure must never block the session.
   printf '%s\n' "$role" >"${log_file%.log}.role" 2>>"$SUPLOG" || \
     log "NOTE could not write role marker for '$role' (dashboard falls back to default badge)"
-  log "session start (role=$role model=$MODEL effort=${EFFORT:-default} auth=$auth_note) -> $log_file"
+  log "session start (role=$role node=${PB_NODE[0]} model=$MODEL effort=${EFFORT:-default} auth=$auth_note) -> $log_file"
 
-  # #177: narrate the live phase at the moment the agent is actually invoked --
-  # all prep (preflight, adapter, auth, prompt/rules, role marker) is done, the
-  # very next line runs the agent. Emitting it HERE (not at the call site) means
-  # every caller -- loop, cron, event -- narrates a running session uniformly;
-  # the main loop's own `dispatching <role>` covers the prep window before this.
+  # #177: narrate the live phase at the moment the agent is actually invoked.
   heartbeat "session-running $role" "running a $role session" ""
 
-  # A stale verdict from a prior round must never decide this round's exit.
-  rm -f "$(pipeline_verdict_file "$role")"
+  # A stale verdict from a prior visit must never decide this one.
+  rm -f "$verdict_abs"
 
   invoke_scoped_env "$env_lines" \
     "$prompt_file" "$rules_file" \
@@ -1426,14 +1510,16 @@ run_session() {
   local outcome; outcome="$(agent_classify_outcome "$log_file" "$rc")"
   case "$outcome" in
     success)
-      if ! record_pipeline_outcome "$role" "$PIPE_NODE" success "$log_file"; then
+      if ! record_pipeline_outcome "$role" "${PB_NODE[0]}" success "$log_file" "$verdict_abs"; then
         log "ERROR pipeline: could not record node success for '$role' -- treating session as errored (state preserved for inspection)"
         return 1
       fi
       return 0 ;;
     usage_limit*)
-      # No record: the node was not completed -- state stays put and the SAME
-      # node retries next iteration (after the reset wait).
+      # The node was not completed: release its dispatched mark so nothing
+      # can finish around it, and retry after the reset wait.
+      record_pipeline_outcome "$role" "${PB_NODE[0]}" retry "$log_file" "" || \
+        log "WARN pipeline: could not release node '${PB_NODE[0]}' for retry"
       local epoch="${outcome#usage_limit }"
       if [ "$epoch" != "usage_limit" ] && [ -n "$epoch" ]; then
         persist_reset_epoch "$epoch"
@@ -1442,15 +1528,158 @@ run_session() {
     *)
       if compute_limit_wait >/dev/null; then
         # Active usage-limit window: this error is presumed limit-flavoured
-        # (the legacy path's exact semantics) -- NO record, the same node
-        # retries after the wait. Recording would destroy a mid-flight run
-        # for a rate-limit artifact.
+        # (the legacy path's exact semantics) -- release for retry after the
+        # wait. Recording an error would destroy a mid-flight run for a
+        # rate-limit artifact.
+        record_pipeline_outcome "$role" "${PB_NODE[0]}" retry "$log_file" "" || \
+          log "WARN pipeline: could not release node '${PB_NODE[0]}' for retry"
         return 3
       fi
-      record_pipeline_outcome "$role" "$PIPE_NODE" error "$log_file" || \
+      record_pipeline_outcome "$role" "${PB_NODE[0]}" error "$log_file" "$verdict_abs" || \
         log "WARN pipeline: could not record node error for '$role'"
       return "$rc" ;;
   esac
+}
+
+# The parallel path (P2b, #351): k>1 ready nodes run as CONCURRENT sessions,
+# each in its own EPHEMERAL WORKTREE (two sessions in one checkout collide on
+# the git index). The dispatcher owns all shared-checkout work foreground;
+# background wrappers only cd their worktree, materialize the planner there,
+# invoke, classify, and write a result file. Collection is wait-per-pid
+# (bash 3.2: no wait -n); a killed child's missing result reads as error
+# (fail-safe). Records land AFTER collection, in block order; usage_limit
+# maps to `retry` (nothing finishes around a released node); the dispatcher
+# persists the MAX reset epoch across the batch (children never persist --
+# SD-7). Worktrees are removed after records (verdicts live under each
+# session's own var/autonomy-logs).
+dispatch_batch() {
+  local role="$1" env_lines="$2" rules_file="$3" auth_note="$4"
+  local state; state="$(pipeline_state_file "$role")"
+  # Inside the repo tree but SAFE only because var/ is gitignored (the
+  # engine's onboard/doctor guarantee): preflight's status check + stash
+  # sweep never see it, and `git worktree add` accepts a nested ignored
+  # path. The child subshells get </dev/null so a backgrounded session can
+  # never drain a caller's read-loop pipe (cron/event resolvers) or hang
+  # an agent CLI on an unclosed stdin.
+  local wt_root="$VARDIR/autonomy-worktrees"
+
+  sweep_ephemeral_worktrees
+  mkdir -p "$wt_root" 2>>"$SUPLOG"
+
+  local i wt log_file res m e envl
+  local wts=() logs=() results=() pids=()
+  BATCH_PIDS=""
+  for i in $(seq 0 $((PB_COUNT - 1))); do
+    wt="$wt_root/$(basename "${state%.json}").${PB_NODE[i]}"
+    if ! git -C "$AUTONOMY_TARGET_REPO" worktree add --detach "$wt" origin/main >>"$SUPLOG" 2>&1; then
+      log "dispatch: could not create ephemeral worktree for node '${PB_NODE[i]}' -- REFUSING batch (fail-safe)"
+      local j
+      for j in "${wts[@]}"; do remove_ephemeral_worktree "$j"; done
+      return 2
+    fi
+    mkdir -p "$wt/var/autonomy-logs" 2>>"$SUPLOG"
+    wts[i]="$wt"
+    if ! log_file="$(allocate_session_log)"; then
+      log "dispatch: could not allocate a session log name -- REFUSING batch"
+      for j in "${wts[@]}"; do remove_ephemeral_worktree "$j"; done
+      return 2
+    fi
+    logs[i]="$log_file"
+    printf '%s\n' "$role" >"${log_file%.log}.role" 2>>"$SUPLOG" || true
+    # Per-block model/effort land per session; per-block account resolves
+    # FOREGROUND (fail-safe refuse) so background wrappers never touch
+    # accounts.py.
+    m="$MODEL"; e="$EFFORT"; envl="$env_lines"
+    [ -n "${PB_MODEL[i]}" ] && m="${PB_MODEL[i]}"
+    [ -n "${PB_EFFORT[i]}" ] && e="${PB_EFFORT[i]}"
+    if [ "$i" -gt 0 ] && [ -n "${PB_ACCOUNT[i]}" ]; then
+      if ! envl="$(resolve_account_env "${PB_ACCOUNT[i]}")"; then
+        log "dispatch: node '${PB_NODE[i]}' account '${PB_ACCOUNT[i]}' did not resolve -- REFUSING batch (fail-safe)"
+        for j in "${wts[@]}"; do remove_ephemeral_worktree "$j"; done
+        return 2
+      fi
+    fi
+    res="${state%.json}.${PB_NODE[i]}.result"
+    rm -f "$res"
+    results[i]="$res"
+    log "session start (role=$role node=${PB_NODE[i]} model=$m effort=${e:-default} auth=$auth_note parallel=$PB_COUNT) -> $log_file"
+    (
+      cd "${wts[i]}" || exit 1
+      materialize_planner
+      rm -f "var/autonomy-logs/$(basename "${PB_VERDICT[i]}")" 2>/dev/null
+      invoke_scoped_env "$envl" \
+        "${PB_PROMPT[i]}" "$rules_file" \
+        "$m" "$FALLBACK_MODEL" "${logs[i]}" "$e" &
+      _cp=$!
+      trap 'kill "$_cp" 2>/dev/null' TERM
+      wait "$_cp"; _rc=$?
+      _out="$(agent_classify_outcome "${logs[i]}" "$_rc")"
+      printf '%s\n%s\n' "$_rc" "$_out" >"${results[i]}.tmp" \
+        && mv "${results[i]}.tmp" "${results[i]}"
+    ) </dev/null &
+    pids[i]=$!
+    BATCH_PIDS="$BATCH_PIDS $!"
+  done
+  heartbeat "session-running $role" "running $PB_COUNT parallel $role sessions" ""
+
+  for i in $(seq 0 $((PB_COUNT - 1))); do
+    wait "${pids[i]}" 2>/dev/null
+  done
+  BATCH_PIDS=""
+
+  # Collection + records (block order). Fail-safe: a missing result file
+  # (killed child) reads as error.
+  local any_limit=0 max_epoch="" worst_rc=0 rc_i out_i verdict_abs
+  local record_failed=0
+  for i in $(seq 0 $((PB_COUNT - 1))); do
+    rc_i=1; out_i="error"
+    if [ -f "${results[i]}" ]; then
+      rc_i="$(sed -n '1p' "${results[i]}")"
+      out_i="$(sed -n '2p' "${results[i]}")"
+      rm -f "${results[i]}"
+    fi
+    case "$rc_i" in *[!0-9]*|"") rc_i=1 ;; esac
+    verdict_abs="${wts[i]}/var/autonomy-logs/$(basename "${PB_VERDICT[i]}")"
+    case "$out_i" in
+      success)
+        record_pipeline_outcome "$role" "${PB_NODE[i]}" success "${logs[i]}" "$verdict_abs" || {
+          log "ERROR pipeline: could not record node success for '${PB_NODE[i]}'"
+          record_failed=1
+        } ;;
+      usage_limit*)
+        any_limit=1
+        record_pipeline_outcome "$role" "${PB_NODE[i]}" retry "${logs[i]}" "" || \
+          log "WARN pipeline: could not release node '${PB_NODE[i]}' for retry"
+        local ep="${out_i#usage_limit }"
+        if [ "$ep" != "usage_limit" ] && [ -n "$ep" ]; then
+          case "$ep" in *[!0-9]*) ;; *)
+            if [ -z "$max_epoch" ] || [ "$ep" -gt "$max_epoch" ]; then max_epoch="$ep"; fi ;;
+          esac
+        fi ;;
+      *)
+        if compute_limit_wait >/dev/null; then
+          any_limit=1
+          record_pipeline_outcome "$role" "${PB_NODE[i]}" retry "${logs[i]}" "" || \
+            log "WARN pipeline: could not release node '${PB_NODE[i]}' for retry"
+        else
+          record_pipeline_outcome "$role" "${PB_NODE[i]}" error "${logs[i]}" "$verdict_abs" || \
+            log "WARN pipeline: could not record node error for '${PB_NODE[i]}'"
+          [ "$rc_i" -gt "$worst_rc" ] && worst_rc="$rc_i"
+        fi ;;
+    esac
+  done
+
+  for i in $(seq 0 $((PB_COUNT - 1))); do
+    remove_ephemeral_worktree "${wts[i]}"
+  done
+
+  # A smaller epoch must never overwrite a later one: persist the batch MAX
+  # once, from the dispatcher (children never persist -- SD-7).
+  [ -n "$max_epoch" ] && persist_reset_epoch "$max_epoch"
+  if [ "$any_limit" -eq 1 ]; then return 3; fi
+  if [ "$record_failed" -eq 1 ]; then return 1; fi
+  if [ "$worst_rc" -ne 0 ]; then return "$worst_rc"; fi
+  return 0
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
@@ -1502,7 +1731,12 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
 
   LOCK="$(supervisor_lock_dir "$AUTONOMY_TARGET_REPO")"
   acquire_supervisor_lock "$LOCK" || exit 0
-  trap 'rm -rf "$LOCK"; heartbeat "stopped" "supervisor exited" ""; log "supervisor stopped."; exit 0' EXIT INT TERM
+  # P2b: a TERM during a parallel batch interrupts the dispatcher's wait --
+  # kill the batch wrappers (each forwards TERM to its agent child) BEFORE
+  # releasing the lock, or a KeepAlive relaunch would run alongside orphans.
+  # The relaunch's first pick RECLAIMS the dispatched units (SD-36).
+  BATCH_PIDS=""
+  trap 'if [ -n "${BATCH_PIDS:-}" ]; then kill $BATCH_PIDS 2>/dev/null; wait $BATCH_PIDS 2>/dev/null; fi; rm -rf "$LOCK"; heartbeat "stopped" "supervisor exited" ""; log "supervisor stopped."; exit 0' EXIT INT TERM
 
   log "=== supervisor start (pid $$, repo=$AUTONOMY_TARGET_REPO, agent=$AGENT_TYPE, model=$MODEL) ==="
   # #166: record the engine sha we froze at (dashboard update chip); the same

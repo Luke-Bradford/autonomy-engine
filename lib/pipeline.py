@@ -1028,9 +1028,12 @@ def ready_set(state_path, brief_dir, n, journal_path=""):
     exactly like next_node's done path)."""
     state = _load_state(state_path)
     _guard_in_progress(state, state_path)
+    base = os.path.basename(state_path)
+    if base.endswith(".json"):
+        base = base[:-len(".json")]
     kind, result = _pick(
         state_path, state, n,
-        lambda uid: os.path.join(brief_dir, "%s.brief.md" % uid),
+        lambda uid: os.path.join(brief_dir, "%s.%s.brief.md" % (base, uid)),
         journal_path)
     if kind == "done":
         return []

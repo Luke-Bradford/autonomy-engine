@@ -80,7 +80,7 @@ printf 'roles:\n  coder:\n    enabled: true\n    pipeline: flow\n' \
 
 run_session coder; rc=$?
 check "bound node-a rc" "0" "$rc"
-brief_file="$LOGDIR/.pipeline-run-coder.brief.md"
+brief_file="$LOGDIR/.pipeline-run-coder.a.brief.md"
 check "node-a compiled brief used" "$brief_file" \
   "$(cat "$STUB_CALLS/prompt_file")"
 check "brief carries node a body" "1" \
@@ -93,7 +93,7 @@ check "any_pipeline_inflight sees it" "0" "$(any_pipeline_inflight; echo $?)"
 run_session coder; rc=$?
 check "bound node-b rc" "0" "$rc"
 check "brief carries node b body" "1" \
-  "$(grep -c 'BRIEF B' "$brief_file")"
+  "$(grep -c 'BRIEF B' "$LOGDIR/.pipeline-run-coder.b.brief.md")"
 check "state cleaned after final node" "1" \
   "$([ ! -f "$(pipeline_state_file coder)" ] && echo 1 || echo 0)"
 check "journal now two lines" "2" "$(wc -l <"$LOGDIR/journal.jsonl" | tr -d ' ')"
@@ -144,13 +144,75 @@ check "invalid binding never invoked the agent" "1" \
 check "pipeline_inflight none" "1" "$(pipeline_inflight coder; echo $?)"
 check "any_pipeline_inflight none" "1" "$(any_pipeline_inflight; echo $?)"
 
-# 8. lane-scoped state path (one supervisor per lane shares LOGDIR) -------------
+# 8. PARALLEL batch: two nodes overlap STRUCTURALLY (prevention-log #9:
+#    a file barrier a serial executor cannot cross -- each stub session
+#    waits for the sibling's inflight marker before completing; run serially
+#    the first would time out and the whole batch would fail) ---------------
+cat >"$repo/.autonomy/pipelines/flow/pipeline.json" <<'EOF'
+{"name": "flow", "version": 2,
+ "caps": {"max_sessions_per_run": 6, "max_parallel": 2},
+ "nodes": [{"id": "a", "type": "pick", "brief_ref": "a.md"},
+           {"id": "x", "type": "check", "brief_ref": "a.md"},
+           {"id": "y", "type": "check", "brief_ref": "b.md"},
+           {"id": "z", "type": "summarize", "brief_ref": "b.md"}],
+ "edges": [{"from": "a", "to": "x", "on": "success"},
+           {"from": "a", "to": "y", "on": "success"},
+           {"from": "x", "to": "z", "on": "success"},
+           {"from": "y", "to": "z", "on": "success"}],
+ "containers": []}
+EOF
+printf 'roles:\n  coder:\n    enabled: true\n    pipeline: flow\n' \
+  >"$repo/.autonomy/config.yaml"
+run_session coder >/dev/null 2>&1          # node a (sequential root, simple stub)
+( cd "$repo" && git init -q >/dev/null 2>&1 && git add -A >/dev/null 2>&1 \
+    && git commit -qm init >/dev/null 2>&1; \
+  git -C "$repo" update-ref refs/remotes/origin/main \
+    "$(git -C "$repo" rev-parse HEAD)" ) >/dev/null 2>&1
+cat >"$agents/stub.sh" <<'EOF'
+agent_invoke() {
+  # barrier: mark inflight, then wait (bounded) for a SIBLING marker.
+  _b="${STUB_CALLS:?}/barrier"
+  mkdir -p "$_b"
+  _me="$(basename "$1")"
+  : >"$_b/$_me"
+  _t=0
+  while [ "$_t" -lt 100 ]; do
+    if [ "$(ls -A "$_b" | wc -l)" -ge 2 ]; then return 0; fi
+    sleep 0.1 2>/dev/null || sleep 1
+    _t=$((_t + 1))
+  done
+  return 1   # serial executor: sibling never arrives -> session errors
+}
+agent_classify_outcome() { [ "$2" = "0" ] && printf 'success' || printf 'error'; }
+EOF
+rm -rf "$STUB_CALLS/barrier"
+run_session coder; rc=$?
+check "parallel batch rc" "0" "$rc"
+check "both siblings crossed the barrier (structural overlap)" "2" \
+  "$(ls -A "$STUB_CALLS/barrier" | wc -l | tr -d ' ')"
+check "state persists after batch (z pending)" "1" \
+  "$([ -f "$(pipeline_state_file coder)" ] && echo 1 || echo 0)"
+check "ephemeral worktrees removed" "0" \
+  "$(ls "$repo/var/autonomy-worktrees" 2>/dev/null | wc -l | tr -d ' ')"
+cat >"$agents/stub.sh" <<'EOF'
+agent_invoke() {
+  printf '%s\n' "$1" >"${STUB_CALLS:?}/prompt_file"
+  printf '%s\n' "$2" >"${STUB_CALLS}/rules_file"
+  return 0
+}
+agent_classify_outcome() { printf '%s' "${STUB_OUTCOME:-success}"; }
+EOF
+run_session coder >/dev/null 2>&1          # node z completes the run
+check "run completed after batch" "1" \
+  "$([ ! -f "$(pipeline_state_file coder)" ] && echo 1 || echo 0)"
+
+# 9. lane-scoped state path (one supervisor per lane shares LOGDIR) -------------
 AUTONOMY_LANE="alpha"
 check "lane-scoped state filename" "$LOGDIR/.pipeline-run-coder--alpha.json" \
   "$(pipeline_state_file coder)"
-check "lane-scoped verdict filename" \
-  "$LOGDIR/.pipeline-run-coder--alpha.verdict.json" \
-  "$(pipeline_verdict_file coder)"
+check "lane-scoped per-node verdict filename" \
+  "$LOGDIR/.pipeline-run-coder--alpha.act.verdict.json" \
+  "$(pipeline_verdict_file coder act)"
 AUTONOMY_LANE=""
 
 echo
