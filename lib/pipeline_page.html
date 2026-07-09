@@ -3,15 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="ae-control-token" content="__CONTROL_TOKEN__">
 <title>Autonomy · pipeline</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23141418'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%235b9dff'/%3E%3C/svg%3E">
 <style>
-/* P3a (#357): the pipeline canvas VIEWER. Token blocks are the UI-1 system,
+/* P3a (#357) viewer + P3b (#365) EDITOR. Token blocks are the UI-1 system,
    kept byte-identical to lib/dashboard_page.html / lib/config_page.html
    (the config page's parity test guards the source pair; this page copies
    the same three blocks -- if they ever drift, fix the source pair first,
-   never fork a third scheme). Read-only: this page never POSTs, carries no
-   control token, and offers no edit affordances (editing is P3b). */
+   never fork a third scheme). A BOUND pipeline is editable (writes to the
+   var-shadow via POST /api/control pipeline_save, token-gated); a wrapped
+   role stays read-only. A live tick never clobbers unsaved edits (#202). */
 :root{
   --sans:"Avenir Next","Helvetica Neue",system-ui,sans-serif;
   --mono:"SF Mono",Menlo,ui-monospace,monospace;
@@ -114,6 +116,24 @@ svg.edges .lbl{font-family:var(--mono);font-size:8.5px;letter-spacing:.4px}
 .note{font-size:11px;color:var(--mut)}
 button:focus-visible,.node:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
+/* --- P3b (#365): editor affordances (only shown when editable) --- */
+.pill.save{border-color:var(--ok);color:var(--ok)}
+.pill.save[disabled]{opacity:.4;border-color:var(--hair2);color:var(--mut)}
+.badge.unsaved{color:var(--warn);border-color:var(--warn)}
+.badge.shadow{color:var(--accent);border-color:var(--accent)}
+.pitem[draggable="true"]{cursor:grab}
+.pitem[draggable="true"]:active{cursor:grabbing}
+.dropzone{align-self:stretch;min-width:14px;border:1px dashed transparent;border-radius:var(--r)}
+.dropzone.hot{border-color:var(--accent);background:var(--accent-soft)}
+.ehandle{position:absolute;top:50%;right:-6px;transform:translateY(-50%);width:11px;height:11px;border-radius:50%;background:var(--panel);border:1.5px solid var(--accent);cursor:crosshair;z-index:3;display:none}
+.editable .node .ehandle,.editable .box .ehandle{display:block}
+.box>.ehandle{top:14px;transform:none}
+svg.edges path.hit{pointer-events:stroke;cursor:pointer}
+.exbtn{cursor:pointer}
+.pane input,.pane select,.pane textarea{background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);font-family:var(--mono);font-size:10.5px;border-radius:5px;padding:4px 7px;max-width:170px}
+.pane textarea{width:100%;max-width:none;min-height:52px;resize:vertical}
+.pane input[readonly]{opacity:.7;cursor:not-allowed}
+.frow.locked .lab{color:var(--dim)}
 </style>
 </head>
 <body>
@@ -124,10 +144,14 @@ button:focus-visible,.node:focus-visible{outline:2px solid var(--accent);outline
     <select id="repopick" aria-label="repo"></select>
     <select id="rolepick" aria-label="role"></select>
     <span id="prov"></span>
+    <span id="shadowchip"></span>
     <span class="gap"></span>
     <span id="ledgerchip"></span>
     <span id="capchip"></span>
     <button class="pill" id="obsbtn">⚡ last run</button>
+    <span id="unsaved"></span>
+    <button class="pill" id="revertbtn" style="display:none">revert</button>
+    <button class="pill save" id="savebtn" style="display:none">save</button>
   </div>
   <div class="layout">
     <aside class="palette" id="palette"></aside>
@@ -157,14 +181,70 @@ button:focus-visible,.node:focus-visible{outline:2px solid var(--accent);outline
    last_run, in-flight statuses, ledger). Signature-guarded: the poll only
    re-renders when the payload BYTES change (#174/#238 class), so an idle
    fixture never churns the DOM. */
-let VIEW = null;          // last payload (parsed)
+let VIEW = null;          // last payload (parsed) -- SERVER TRUTH (lighting etc.)
 let VIEWSIG = "";         // last payload (raw string) -- the render guard
 let SEL = "";             // selected unit/node id ("" = nothing)
 let OBSERVED = false;
 const COLLAPSED = new Set();   // container ids, survives re-render
 
+/* P3b (#365) editor state. WORKING is a dirty working COPY of the doc the
+   canvas + pane render from; the server payload (VIEW) still owns the
+   read-only overlays (last_run, in_flight, ledger). A live tick NEVER
+   clobbers WORKING while DIRTY (the #202 bar). Nothing POSTs until Save. */
+let WORKING = null;       // deep clone of the editable doc; render reads THIS
+let BRIEFS = {};          // {basename: content} for briefs edited this session
+let DIRTY = false;        // unsaved edits pending
+const CTOKEN = (document.querySelector('meta[name="ae-control-token"]')||{}).content || "";
+const MODEL_CHOICES=__MODEL_CHOICES__;
+
 function esc(x){return String(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;")}
 function qs(){return new URLSearchParams(location.search)}
+function clone(o){ return o == null ? o : JSON.parse(JSON.stringify(o)); }
+
+/* Editable = a BOUND pipeline with a loadable, server-known doc AND a real
+   control token (the page is served by the dashboard). A wrapped role, an
+   unreadable doc, or a raw file (no token) stays READ-ONLY -- P3a behaviour,
+   no edit affordances. Editing writes to the var-shadow only (SD-34). */
+function hasToken(){ return CTOKEN && CTOKEN !== "__CONTROL" + "_TOKEN__"; }
+function editable(){
+  return !!(VIEW && !VIEW.error && VIEW.doc && WORKING &&
+            VIEW.source && VIEW.source.kind === "pipeline" && hasToken());
+}
+function curDoc(){ return WORKING || (VIEW && VIEW.doc) || null; }
+function effectiveEdges(doc){
+  // mirror pipeline.effective_edges: declared edges, else the synthesized
+  // implicit success-chain over top-level units.
+  if(doc && Array.isArray(doc.edges) && doc.edges.length) return doc.edges;
+  const order = topUnits(doc || {});
+  const out = [];
+  for(let i = 0; i + 1 < order.length; i++)
+    out.push({from: order[i], to: order[i+1], on: "success"});
+  return out;
+}
+function curEdges(){
+  const d = curDoc();
+  // an in-sync WORKING matches VIEW.edges_effective; after edits WORKING
+  // diverges and the client synth is authoritative.
+  return d ? effectiveEdges(d) : (VIEW && VIEW.edges_effective || []);
+}
+function adoptWorking(){    // baseline WORKING from server truth (only when !DIRTY)
+  WORKING = VIEW && VIEW.doc ? clone(VIEW.doc) : null;
+  BRIEFS = {};
+}
+function markDirty(){ DIRTY = true; updateHeader(); }
+function briefText(ref){   // pane seeds from edits-first, else server truth
+  if(ref in BRIEFS) return BRIEFS[ref];
+  const b = VIEW && VIEW.briefs || {};
+  return (ref in b) ? b[ref] : null;
+}
+function nodeIndex(id){ const ns = (curDoc()||{}).nodes||[]; return ns.findIndex(n => n && n.id === id); }
+function uniqueNodeId(base){
+  const ns = (curDoc()||{}).nodes||[], cons = (curDoc()||{}).containers||[];
+  const taken = new Set(ns.map(n => n && n.id).concat(cons.map(c => c && c.id)));
+  let i = 1, id = base;
+  while(taken.has(id)){ id = base + "-" + (++i); }
+  return id;
+}
 
 /* ---- layout: longest-path ranking over effective edges ---- */
 function topUnits(doc){
@@ -223,8 +303,8 @@ function edgeLit(e, lit){
 }
 
 /* ---- cards ---- */
-function nodeById(id){ return (VIEW.doc.nodes||[]).find(n => n && n.id === id); }
-function conById(id){ return (VIEW.doc.containers||[]).find(c => c && c.id === id); }
+function nodeById(id){ return ((curDoc()||{}).nodes||[]).find(n => n && n.id === id); }
+function conById(id){ return ((curDoc()||{}).containers||[]).find(c => c && c.id === id); }
 function sheetFor(type){ return (VIEW.spec||{})[type]; }
 
 function card(n, lit, inflight){
@@ -284,23 +364,25 @@ function render(){
   const lg = VIEW.ledger;
   document.getElementById("ledgerchip").innerHTML = lg
     ? `<span class="badge" title="trust is earned per assignment (auto at ≥20 runs with ≥95% pass over the last 20)">🛡 ${esc(lg.tier)} · ${esc(lg.runs)} runs · ${esc(lg.passes)} pass</span>` : "";
-  const caps = VIEW.doc && VIEW.doc.caps || null;
+  const caps = (curDoc()||{}).caps || null;
   document.getElementById("capchip").innerHTML = caps && caps.max_parallel
     ? `<span class="badge" title="the pipeline's dispatch ceiling — engine-owned">⛓ max_parallel ${esc(caps.max_parallel)} · enforced</span>` : "";
   const obs = document.getElementById("obsbtn");
   obs.disabled = !VIEW.last_run;
   obs.title = VIEW.last_run ? "light the last run's observed path" : "no runs recorded";
   obs.classList.toggle("on", OBSERVED);
+  updateHeader();
   renderPalette();
   const dagwrap = document.getElementById("dagwrap");
   dagwrap.classList.toggle("observed", OBSERVED);
+  dagwrap.classList.toggle("editable", editable());
   const dag = document.getElementById("dag");
-  if(VIEW.error || !VIEW.doc){ dag.innerHTML = `<span class="note">${esc(VIEW.error || "document unreadable — see the errors above")}</span>`;
+  if(VIEW.error || !curDoc()){ dag.innerHTML = `<span class="note">${esc(VIEW.error || "document unreadable — see the errors above")}</span>`;
     document.getElementById("edgesvg").innerHTML = ""; renderPane(); return; }
   const lit = lastRunMaps();
   const inflight = (VIEW.in_flight && VIEW.in_flight.units) || {};
-  const units = topUnits(VIEW.doc);
-  const cols = rankUnits(units, VIEW.edges_effective || []);
+  const units = topUnits(curDoc());
+  const cols = rankUnits(units, curEdges());
   dag.innerHTML = cols.map(col =>
     `<div class="rank">${col.map(uid => {
       const con = conById(uid);
@@ -321,14 +403,14 @@ function anchor(el, side){
 }
 function drawEdges(){
   const c = document.getElementById("dagwrap"), svg = document.getElementById("edgesvg");
-  if(!VIEW || !VIEW.doc){ svg.innerHTML = ""; return; }
+  if(!VIEW || !curDoc()){ svg.innerHTML = ""; return; }
   svg.setAttribute("width", c.scrollWidth); svg.setAttribute("height", c.scrollHeight);
   const lit = lastRunMaps();
   let defs = `<defs>${["success","failure","completion"].map(k => {
     const col = k === "success" ? "ok" : (k === "failure" ? "bad" : "dim");
     return `<marker id="m-${k}" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="var(--${col})"/></marker>`;}).join("")}</defs>`;
   let body = "";
-  for(const e of (VIEW.edges_effective || [])){
+  for(const e of curEdges()){
     const fe = document.querySelector(`[data-uid="${CSS.escape(e.from)}"]`);
     const te = document.querySelector(`[data-uid="${CSS.escape(e.to)}"]`);
     if(!fe || !te) continue;
@@ -464,6 +546,48 @@ document.getElementById("palette").addEventListener("click", e => {
 document.getElementById("obsbtn").addEventListener("click", () => { OBSERVED = !OBSERVED; render(); });
 window.addEventListener("resize", () => requestAnimationFrame(drawEdges));
 
+/* ---- editor: header state + Save / Revert (the #202 bar) ---- */
+function updateHeader(){
+  const ed = editable();
+  const save = document.getElementById("savebtn"), rev = document.getElementById("revertbtn"),
+        uns = document.getElementById("unsaved"), sc = document.getElementById("shadowchip");
+  save.style.display = ed ? "" : "none";
+  rev.style.display = (ed && DIRTY) ? "" : "none";
+  save.disabled = !DIRTY;
+  uns.innerHTML = (ed && DIRTY)
+    ? `<span class="badge unsaved" title="unsaved edits — a live tick will not overwrite them">● unsaved</span>` : "";
+  sc.innerHTML = (VIEW && VIEW.source && VIEW.source.shadow)
+    ? `<span class="badge shadow" title="showing local edits (var/autonomy/pipelines) — the committed pack is untouched">📝 local edits</span>` : "";
+}
+async function saveNow(){
+  if(!editable() || !DIRTY) return;
+  const src = VIEW.source || {}, errbar = document.getElementById("errbar");
+  const repo = qs().get("repo"), role = qs().get("role");
+  try{
+    const res = await fetch("/api/control", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({action:"pipeline_save", token:CTOKEN, repo, role,
+        name: src.name, doc: WORKING, briefs: BRIEFS})});
+    const out = await res.json().catch(() => ({}));
+    if(res.status === 200 && out.ok){
+      DIRTY = false; BRIEFS = {}; VIEWSIG = "";   // force a re-fetch of server truth
+      updateHeader();
+      await tick(repo, role);                     // shadow is now the effective read
+    } else {
+      errbar.innerHTML = `<div class="errbar"><span class="eyebrow">save refused — your edits are kept</span><ul><li>${esc(out.error || ("HTTP " + res.status))}</li></ul></div>`;
+    }
+  }catch(e){
+    errbar.innerHTML = `<div class="errbar"><span class="eyebrow">save failed — your edits are kept</span><ul><li>${esc(String(e))}</li></ul></div>`;
+  }
+}
+function revertNow(){
+  if(!DIRTY) return;
+  adoptWorking(); DIRTY = false; render();
+}
+document.getElementById("savebtn").addEventListener("click", saveNow);
+document.getElementById("revertbtn").addEventListener("click", revertNow);
+window.addEventListener("beforeunload", e => { if(DIRTY){ e.preventDefault(); e.returnValue = ""; } });
+
 /* ---- data flow ---- */
 async function loadPickers(){
   try{
@@ -488,6 +612,11 @@ async function tick(repo, role){
     if(raw === VIEWSIG) return;          // unchanged payload -> zero DOM writes
     VIEWSIG = raw;
     VIEW = JSON.parse(raw);
+    // The #202 bar: a live tick must NEVER clobber the operator's unsaved edits.
+    // Clean -> adopt the fresh doc as the new working baseline. DIRTY -> KEEP
+    // WORKING (the operator's graph); the read-only overlays (last_run /
+    // in_flight / ledger) still refresh because render() reads them from VIEW.
+    if(!DIRTY) adoptWorking();
     render();
   }catch(e){ /* transient fetch/parse hiccup: keep the last good render */ }
 }

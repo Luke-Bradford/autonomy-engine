@@ -128,6 +128,17 @@ class TestPageTemplating(unittest.TestCase):
         self.assertNotIn(b"__CONTROL_TOKEN__", html)
         self.assertNotIn(b"__MODEL_CHOICES__", html)
 
+    def test_pipeline_page_templates_without_error(self):
+        # P3b (#365): the editor page now carries both placeholders (Save posts
+        # a token; runs_as picks a model). The served page must leave neither
+        # behind -- an unreplaced __MODEL_CHOICES__ is invalid JS.
+        html = dashboard._page_bytes(dashboard.PIPELINE_PAGE)
+        self.assertNotIn(b"__CONTROL_TOKEN__", html)
+        self.assertNotIn(b"__MODEL_CHOICES__", html)
+        roster = accounts.subscription_models("claude_subscription")
+        injected = ("const MODEL_CHOICES=" + json.dumps(roster) + ";").encode()
+        self.assertIn(injected, html)
+
     def test_config_page_model_roster_single_sourced(self):
         # the config page's model-field datalist is filled from the SAME
         # accounts curated roster the main page uses (#82 builds on #134), so
