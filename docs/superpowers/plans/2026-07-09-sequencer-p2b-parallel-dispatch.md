@@ -126,6 +126,33 @@ prevention-log #1/#2/#3/#6/#9/#12/#17/#18; TDD; safe_merge). Plus:
   (parallel dispatch with barrier stubs proving overlap structurally,
   usage_limit mixing, worktree cleanup, cron drive-to-completion).
 
+## Task-2 bash traps (adversarial-review findings, all folded)
+
+- **No `$$` in backgrounded paths** (bash 3.2 has no BASHPID; `$$` is the
+  parent) — every per-session temp name derives from the NODE id (unique
+  within a batch) + the state base. Children never call
+  persist_reset_epoch or any `.$$`-tmp helper.
+- **Log-name allocation**: noclobber (`set -C`) atomic claim of
+  `session-<date +%Y%m%dT%H%M%S>.log`; on collision `sleep 1` and re-stamp
+  (real seconds — no GNU/BSD date math, SD-15 name shape byte-exact for
+  the dashboard's parser). Max k-1 seconds of startup skew per batch.
+- **Worktree removal**: `git worktree remove --force` (sessions leave WIP
+  by design), fallback `rm -rf` + `git worktree prune`; the namespace
+  sweep at dispatch start applies the same sequence to leftovers; every
+  failure logs the PATH loudly. worktree_gc is NOT claimed as a backstop.
+- **Dispatcher owns all shared-checkout work**: ONE preflight + ONE rules
+  compose + worktree creation happen foreground; bg subshells only
+  `cd <their worktree>`, run materialize_planner there, invoke, classify,
+  write their result file. Nothing backgrounded touches the main checkout.
+- **Collection is wait-per-pid**, never spin-on-files: `wait "$pid"` per
+  child (3.2-safe) captures each rc; a killed child's missing result file
+  reads as `error` (fail-safe). No `wait -n`.
+- **TERM during the batch**: the trap kills the recorded child pids (and
+  their process groups) BEFORE releasing the lock/exiting, so a KeepAlive
+  relaunch never runs alongside orphans; the relaunch's first pick
+  RECLAIMS the dispatched units (at-most-one-batch duplicate work, safe
+  direction — decision 4).
+
 ## Tasks
 
 1. **pipeline.py: max_parallel + ready_set + per-node paths + guard

@@ -165,9 +165,13 @@ printf 'roles:\n  coder:\n    enabled: true\n    pipeline: flow\n' \
   >"$repo/.autonomy/config.yaml"
 run_session coder >/dev/null 2>&1          # node a (sequential root, simple stub)
 ( cd "$repo" && git init -q >/dev/null 2>&1 && git add -A >/dev/null 2>&1 \
-    && git commit -qm init >/dev/null 2>&1; \
+    && git -c user.email=test@test -c user.name=test \
+      commit -qm init >/dev/null 2>&1; \
   git -C "$repo" update-ref refs/remotes/origin/main \
     "$(git -C "$repo" rev-parse HEAD)" ) >/dev/null 2>&1
+check "fixture repo has origin/main (CI runners lack a git identity)" "0" \
+  "$(git -C "$repo" rev-parse -q --verify refs/remotes/origin/main \
+     >/dev/null 2>&1; echo $?)"
 cat >"$agents/stub.sh" <<'EOF'
 agent_invoke() {
   # barrier: mark inflight, then wait (bounded) for a SIBLING marker.
@@ -208,6 +212,7 @@ check "run completed after batch" "1" \
 
 # 9. inflight_roles: lane-filtered, charset-gated (P2b -- these join the
 #    main loop's dispatch list regardless of trigger type) ------------------
+rm -f "$(pipeline_state_file coder)"   # defensive: isolate from scenario 8
 : >"$LOGDIR/.pipeline-run-pm.json"
 : >"$LOGDIR/.pipeline-run-qa--side.json"
 : >"$LOGDIR/.pipeline-run-bad name.json"
