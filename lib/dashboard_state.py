@@ -26,6 +26,7 @@ from datetime import datetime
 import config_parser
 import dashboard_control as _dcx  # model-id regex + effort set, single-sourced
 import health as health_mod      # wedged truth, single-sourced (SD-32 §9)
+import pipeline as pipeline_mod  # doc loader/validator + SSOT catalog (#357)
 import roles as roles_schema
 
 _TICKET_RE = re.compile(r"#(\d{1,6})\b")
@@ -2443,3 +2444,146 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "quota_forecast": quota_forecast(quota, now),
         "trigger_health": health,
     }
+
+
+def _journal_last_run(journal_path, role, pipeline_name):
+    """The NEWEST journal line for (role, pipeline) -- observed-lighting
+    source (#357). Total (prevention-log #12): bounded 64 KiB tail, junk
+    lines skipped, missing/unreadable file -> None. Iterates the tail
+    REVERSED so the newest matching run wins (Codex CP1: forward iteration
+    would return the oldest)."""
+    try:
+        with open(journal_path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - 65536))
+            chunk = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    for line in reversed(chunk.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("role") != role or rec.get("pipeline") != pipeline_name:
+            continue
+        nodes = rec.get("nodes")
+        return {"run_id": rec.get("run_id", ""),
+                "outcome": rec.get("outcome", ""),
+                "pass": bool(rec.get("pass")),
+                "started": rec.get("started"),
+                "finished": rec.get("finished"),
+                "sessions": rec.get("sessions"),
+                "bounces": rec.get("bounces") if isinstance(rec.get("bounces"), dict) else {},
+                "nodes": [n for n in nodes if isinstance(n, dict)]
+                         if isinstance(nodes, list) else []}
+    return None
+
+
+def _inflight_units(logdir, role):
+    """Project the role's in-flight run state (.pipeline-run-<role>.json /
+    lane-scoped variant, NEWEST mtime wins) into {units, sessions, name}.
+    Total: corrupt/missing/odd shape -> None. RAW fmt-2 status vocabulary
+    passes through ("dispatched", never a synthesized "running" -- Codex
+    CP1); the page owns display treatment."""
+    paths = [os.path.join(logdir, ".pipeline-run-%s.json" % role)]
+    paths += glob.glob(os.path.join(logdir, ".pipeline-run-%s--*.json" % role))
+    best, best_mtime = None, -1.0
+    for p in paths:
+        try:
+            mt = os.path.getmtime(p)
+        except OSError:
+            continue
+        if mt > best_mtime:
+            best, best_mtime = p, mt
+    if best is None:
+        return None
+    try:
+        with open(best) as fh:
+            state = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(state, dict) or not isinstance(state.get("units"), dict):
+        return None
+    units = {}
+    for uid, u in state["units"].items():
+        units[str(uid)] = str(u.get("status", "")) if isinstance(u, dict) else ""
+    doc = state.get("doc")
+    return {"units": units,
+            "sessions": state.get("sessions"),
+            "name": (doc.get("name", "") if isinstance(doc, dict) else ""),
+            "status": state.get("status", "")}
+
+
+def build_pipeline_view(repo_path, role):
+    """The /pipeline canvas read model (#357, P3a). Pure + TOTAL: every
+    missing/corrupt artifact degrades to a field, never an exception. An
+    invalid BOUND pipeline renders its validator errors with the raw doc
+    kept visible -- never a healthy-looking wrap fallback (prevention-log
+    #3/#15). Uses load_doc+validate_doc, NOT resolve_pipeline: dispatch
+    wants the fail-safe raise, display wants degraded truth. Config comes
+    through effective_config_path + roles.role_settings -- the exact
+    resolution the supervisor dispatches with (SD-34 single resolver;
+    Codex CP1: raw cfg["roles"] would lose default-role semantics), so
+    only dispatchable roles have a canvas (a disabled role can never run
+    its pipeline; offering a view would imply it can)."""
+    repo_path = os.path.abspath(repo_path)
+    logdir = os.path.join(repo_path, "var", "autonomy-logs")
+    cfg_path = config_parser.effective_config_path(
+        os.path.join(repo_path, ".autonomy", "config.yaml"))
+    try:
+        with open(cfg_path) as fh:
+            cfg = config_parser.parse(fh.read())
+    except (OSError, ValueError) as exc:
+        return {"error": "unreadable config: %s" % exc}
+    try:
+        settings = roles_schema.role_settings(cfg, role)
+    except KeyError:
+        return {"error": "unknown role: %s" % role}
+    view = {"repo": os.path.basename(repo_path.rstrip("/")),
+            "path": repo_path, "role": role}
+    binding = settings.get("pipeline") or ""
+    if binding:
+        pdir = os.path.join(repo_path, ".autonomy", "pipelines", binding)
+        view["source"] = {"kind": "pipeline", "name": binding,
+                          "dir": os.path.relpath(pdir, repo_path),
+                          "version": 0}
+        try:
+            doc = pipeline_mod.load_doc(os.path.join(pdir, "pipeline.json"))
+        except pipeline_mod.PipelineError as exc:
+            doc = None
+            view["errors"] = [str(exc)]
+        if doc is not None:
+            view["errors"] = pipeline_mod.validate_doc(doc, pdir)
+            if isinstance(doc.get("version"), int):
+                view["source"]["version"] = doc["version"]
+        pname = (doc or {}).get("name")
+        pname = pname if isinstance(pname, str) and pname else binding
+    else:
+        doc = pipeline_mod.wrap_role(settings, role)
+        view["source"] = {"kind": "wrapped", "name": doc["name"],
+                          "dir": "", "version": 0}
+        view["errors"] = []
+        pname = doc["name"]
+    view["doc"] = doc
+    eff = pipeline_mod.effective_edges(doc) if isinstance(doc, dict) else []
+    if not isinstance(eff, list):
+        eff = []
+    view["edges_effective"] = [e for e in eff if isinstance(e, dict)]
+    journal = os.path.join(logdir, "journal.jsonl")
+    if os.path.exists(journal):
+        view["last_run"] = _journal_last_run(journal, role, pname)
+        try:
+            view["ledger"] = pipeline_mod.ledger(journal, role, pname)
+        except (OSError, ValueError):
+            view["ledger"] = None
+    else:
+        view["last_run"] = None
+        view["ledger"] = None
+    view["in_flight"] = _inflight_units(logdir, role)
+    return view

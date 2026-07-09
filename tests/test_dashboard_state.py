@@ -3467,3 +3467,103 @@ class TestBuildOrg(unittest.TestCase):
         self.assertTrue(org["pack_missing"])
         self._config("agent:\n  model:\n    primary: claude-sonnet-5\n")
         self.assertFalse(ds.build_org(self.repo)["pack_missing"])
+
+
+class TestBuildPipelineView(unittest.TestCase):
+    """P3a (#357): the canvas viewer's read model. Pure + TOTAL: every
+    missing/corrupt artifact degrades to a field, never an exception, and an
+    invalid bound pipeline renders its ERRORS with the doc kept visible --
+    never a healthy-looking wrap fallback (prevention-log #3/#15)."""
+
+    def _tmp_repo(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        repo = os.path.join(tmp, "repo-alpha")
+        shutil.copytree(FIX, repo)
+        return repo
+
+    def test_bound_role_view(self):
+        v = ds.build_pipeline_view(FIX, "coder")
+        self.assertEqual(v["source"]["kind"], "pipeline")
+        self.assertEqual(v["source"]["name"], "fixture-flow")
+        self.assertEqual(v["source"]["version"], 2)
+        self.assertEqual(v["errors"], [])
+        self.assertTrue(any(e.get("back") for e in v["edges_effective"]))
+        self.assertTrue(v["last_run"]["pass"])       # NEWEST line wins
+        self.assertEqual(v["last_run"]["bounces"], {"review->coding": 1})
+        self.assertEqual(v["ledger"]["runs"], 2)
+        self.assertIn("tier", v["ledger"])
+
+    def test_wrapped_role_view(self):
+        # no `pipeline:` binding -> the auto-wrap doc, honestly labelled
+        repo = self._tmp_repo()
+        with open(os.path.join(repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("agent:\n  type: \"claude\"\n")
+        v = ds.build_pipeline_view(repo, "coder")
+        self.assertEqual(v["source"]["kind"], "wrapped")
+        self.assertEqual(v["errors"], [])
+        self.assertTrue(all(e["on"] == "success" for e in v["edges_effective"]))
+        self.assertIsNone(v["last_run"])             # journal has no legacy runs
+
+    def test_invalid_doc_renders_errors_not_fallback(self):
+        repo = self._tmp_repo()
+        pj = os.path.join(repo, ".autonomy", "pipelines", "fixture-flow",
+                          "pipeline.json")
+        with open(pj) as fh:
+            doc = json.load(fh)
+        doc["nodes"][0]["type"] = "teleport"          # unknown node type
+        with open(pj, "w") as fh:
+            json.dump(doc, fh)
+        v = ds.build_pipeline_view(repo, "coder")
+        self.assertTrue(v["errors"])
+        self.assertEqual(v["source"]["kind"], "pipeline")
+        self.assertIsNotNone(v["doc"])                # degraded truth, visible
+
+    def test_unreadable_json_degrades(self):
+        repo = self._tmp_repo()
+        pj = os.path.join(repo, ".autonomy", "pipelines", "fixture-flow",
+                          "pipeline.json")
+        with open(pj, "w") as fh:
+            fh.write("{nope")
+        v = ds.build_pipeline_view(repo, "coder")
+        self.assertIsNone(v["doc"])
+        self.assertTrue(v["errors"])
+        self.assertEqual(v["edges_effective"], [])
+
+    def test_missing_journal_means_no_lighting(self):
+        repo = self._tmp_repo()
+        os.remove(os.path.join(repo, "var", "autonomy-logs", "journal.jsonl"))
+        v = ds.build_pipeline_view(repo, "coder")
+        self.assertIsNone(v["last_run"])
+        self.assertIsNone(v["ledger"])
+        self.assertEqual(v["errors"], [])             # doc itself still fine
+
+    def test_inflight_state_projected(self):
+        repo = self._tmp_repo()
+        state = {"fmt": 2, "run_id": "coder-x-1", "role": "coder",
+                 "doc": {"name": "fixture-flow"}, "sessions": 3,
+                 "units": {"pick": {"status": "success"},
+                           "plan": {"status": "dispatched"},
+                           "coding": {"status": "pending"}},
+                 "status": "in_progress"}
+        sp = os.path.join(repo, "var", "autonomy-logs",
+                          ".pipeline-run-coder.json")
+        with open(sp, "w") as fh:
+            json.dump(state, fh)
+        v = ds.build_pipeline_view(repo, "coder")
+        self.assertEqual(v["in_flight"]["units"]["plan"], "dispatched")
+        self.assertEqual(v["in_flight"]["sessions"], 3)
+
+    def test_corrupt_inflight_is_none(self):
+        repo = self._tmp_repo()
+        sp = os.path.join(repo, "var", "autonomy-logs",
+                          ".pipeline-run-coder.json")
+        with open(sp, "w") as fh:
+            fh.write("not json")
+        v = ds.build_pipeline_view(repo, "coder")
+        self.assertIsNone(v["in_flight"])
+
+    def test_unknown_role_errors(self):
+        v = ds.build_pipeline_view(FIX, "ghost")
+        self.assertIn("error", v)
+        self.assertIn("ghost", v["error"])
