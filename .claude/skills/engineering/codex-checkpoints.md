@@ -39,7 +39,7 @@ the stdin fix, never wait open-ended on a spawned checkpoint:
 - **After the spec/plan is written, before execution starts:**
 
   ```bash
-  codex exec "Review this implementation plan. Path: docs/superpowers/plans/<date>-<topic>.md. Focus: correctness gaps, invariant violations (fail-safe never fail-open, reset-epoch split, bash 3.2 floor, stdlib-only, repo-agnostic bin//lib/), missing edge cases, bad task decomposition, wrong interface contracts between tasks. Reply terse, findings only."
+  codex exec "Review this implementation plan. Path: docs/superpowers/plans/<date>-<topic>.md. Focus: correctness gaps, invariant violations (fail-safe never fail-open, reset-epoch split, bash 3.2 floor, stdlib-only, repo-agnostic bin//lib/), missing edge cases, bad task decomposition, wrong interface contracts between tasks, duplication of existing helpers in lib//bin/ the plan should reuse instead, unnecessary complexity a simpler shape covers. Reply terse, findings only."
   ```
 
   Run once against the spec (when one is being written) and once against the
