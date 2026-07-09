@@ -114,7 +114,7 @@ button:focus-visible,.node:focus-visible{outline:2px solid var(--accent);outline
 <div class="wrap">
   <span class="eyebrow">design mockup v5 · the DAG canvas — ADF for Claude pipelines (spec §7 · P3's blueprint)</span>
   <h1>ticket-to-merge as a real dependency graph</h1>
-  <div class="sub">Left-to-right ranked layout. <b>Typed dependency edges</b> — <span style="color:var(--ok)">on success</span>, <span style="color:var(--bad)">on failure</span>, <span style="color:var(--dim)">on completion</span> — click any edge to cycle its type. Activities with no dependency between them stack in the <b>same rank and run in parallel</b> (docs ∥ tests; the three QA checks). Containers stay from v4: the <b>coding loop</b> (exit instructed · cap enforced) and the <b>QA stage</b>. The failure path IS part of the graph: any QA check fails → notify &amp; park. Click a node for its <b>spec-sheet pane</b> on the right; toggle <b>last run</b> to light the observed path.</div>
+  <div class="sub">Left-to-right ranked layout. <b>Typed dependency edges</b> — <span style="color:var(--ok)">on success</span>, <span style="color:var(--bad)">on failure</span>, <span style="color:var(--dim)">on completion</span> — click any edge to cycle its type. Activities with no dependency between them stack in the <b>same rank and run in parallel</b> (docs ∥ tests; the three QA checks). Containers stay from v4: the <b>coding loop</b> (exit instructed · cap enforced) and the <b>QA stage</b> — click a container's tag for its own pane. The failure path IS part of the graph: any QA check fails → notify &amp; park. Click a node (or any palette type) for its <b>spec-sheet pane</b> on the right; toggle <b>last run</b> to light the observed path. <span style="color:var(--dim)">Build boundaries: the canvas + pane are P3; the top bar's gallery/assignment/versioning/run-window controls are P4 and shown here for the full-vision judgment; for-each is P5.</span></div>
 
   <div class="layout">
     <aside class="palette" id="palette"></aside>
@@ -128,7 +128,8 @@ button:focus-visible,.node:focus-visible{outline:2px solid var(--accent);outline
         <span class="gap"></span>
         <span class="badge trust" title="trust is earned per assignment: auto at ≥20 runs with ≥95% pass over the last 20; demotion is automatic">🛡 trust: watch · 12 runs · 11 pass</span>
         <span class="pill on">⟳ continuous</span>
-        <span class="pill" title="end of window: graceful — finish the current activity, then stop">🕘 22:00–06:00 weekdays · graceful</span>
+        <span class="pill" title="the pipeline's dispatch ceiling: at most this many node-sessions run at once — engine-owned">⛓ max_parallel 2 · enforced</span>
+        <button class="pill" title="end of window: graceful — finish the current activity, then stop" onclick="alert('mock: run window editor — window 22:00–06:00 weekdays · end-of-window behaviour: ● graceful (finish the current activity, no new dispatches) ○ hard (interrupt now) · outside the window now: next dispatch 22:00')">🕘 22:00–06:00 weekdays · graceful</button>
         <span class="switch"><span class="knob"></span>enabled</span>
         <button class="pill go" onclick="alert('mock: run dispatched')">▶ start</button>
         <button class="pill" id="obsbtn" onclick="toggleObserved()">⚡ last run</button>
@@ -145,6 +146,24 @@ button:focus-visible,.node:focus-visible{outline:2px solid var(--accent);outline
         <span><span class="tag soft">instructed</span> compiled into the brief</span>
         <span class="note">drag from the palette to a rank · drag an edge handle between nodes · click an edge to cycle its type (all mock-live here except the cycle, which works)</span>
       </div>
+      <div style="margin-top:14px;border-top:1px dashed var(--hair);padding-top:12px">
+        <span class="eyebrow">∀ for-each, demonstrated (its own pipeline — the fan-out container lands in P5)</span>
+        <div class="box" style="border-style:dashed;margin-top:8px;max-width:640px">
+          <span class="boxtag">∀ for-each · src/legacy/*.js</span>
+          <div class="inner" style="gap:16px;flex-wrap:wrap">
+            <div class="node softb" style="width:200px"><span class="ico">🛠</span> <span class="nm">transform each file</span>
+              <span class="sum">one child run per item · isolated context per branch</span>
+              <div class="meta"><span class="agent">coder·building</span><span class="tag soft">instructed</span></div></div>
+            <span class="note">× 14 items →<br>3 at a time</span>
+            <div class="node softb" style="width:180px"><span class="ico">📝</span> <span class="nm">one digest after</span>
+              <span class="sum">fan-in: a single summarize once every child finishes</span>
+              <div class="meta"><span class="agent">coder·building</span><span class="tag soft">instructed</span></div></div>
+          </div>
+          <div class="foot"><span><b>for each:</b> file in src/legacy/*.js (14 today)</span>
+            <span><b>max_parallel:</b> 3</span><span class="tag hard">enforced fan-out</span>
+            <span>a child's failure edge runs per item — one bad file never stops the sweep</span></div>
+        </div>
+      </div>
     </main>
     <aside class="pane" id="pane"></aside>
   </div>
@@ -159,18 +178,31 @@ const PALETTE=[
  {g:"check + talk",items:["check","ask human","handoff","summarize","notify"]},
  {g:"keep house",items:["journal","housekeep"]},
  {g:"structure",items:["loop container","for-each","branch","stage (runs as…)"]},
+ {g:"from your library",items:["verify-changelog","browser-verify the UI"]},
 ];
-// spec sheets (v5 §4): required first, optionals collapsed
+// spec sheets (v5 §4): the FULL catalog -- required first, optionals collapsed.
+// sel = a typed selector rendered as a <select>; phase = machinery lands later
+// (the P1 validator refuses the type until then -- honest on the pane).
 const SPEC={
- pick:{req:[["source","board query · label ready · p1 first"]],opt:[["order","priority, oldest first"],["limit","1"]]},
- plan:{req:[["runs as","(below)"]],opt:[["plan template","default"],["vagueness rules","missing acceptance criteria"]]},
- agent_task:{req:[["brief","(below)"]],opt:[["allowed tools","all"],["max turns","—"],["permission mode","acceptEdits"]]},
- gather:{req:[["what to collect","(below)"]],opt:[["web search","off"],["sources","repo + tickets"]]},
- check:{req:[["what to verify","(below)"]],opt:[["pass criteria","explicit list"]]},
- git_ops:{req:[["operation","open / refresh PR"]],opt:[]},
- notify:{req:[["destination","PR comment + needs-you"]],opt:[["template","default digest"]]},
- journal:{req:[["what to record","run outcome + learnings"]],opt:[]},
- branch:{req:[["verdict labels","(paths on the canvas)"]],opt:[]},
+ pick:{req:[["source",["board query","a PR set","file glob","git range"]],["query","label ready · p1 first"]],opt:[["order","priority, oldest first"],["limit","1"],["plan source","ticket-written plans"]],emits:"the picked item (downstream nodes reference it)"},
+ plan:{req:[["runs as","(below)"]],opt:[["plan template","default"],["vagueness rules","missing acceptance criteria"]],emits:"verdict: viable | too-vague"},
+ agent_task:{req:[["brief","(below)"]],opt:[["allowed tools","all"],["max turns","—"],["permission mode","acceptEdits 🔒 beyond needs an explicit confirm"]],emits:"success | failure"},
+ gather:{req:[["what to collect","(below)"]],opt:[["web search","off"],["sources","repo + tickets"]],emits:"context for the brief"},
+ check:{req:[["what to verify",["the test suite","a review lens","browser-verify","custom…"]]],opt:[["pass criteria","explicit list"]],emits:"success | failure — the natural branch source"},
+ subagent_review:{req:[["lens",["code","security","UX"]]],opt:[["model override","—"]],emits:"findings on the PR"},
+ git_ops:{req:[["operation",["branch","commit","push","open / refresh PR","merge — via the gate"]]],opt:[],emits:"success | failure"},
+ notify:{req:[["destination",["PR comment","issue comment","new ticket","needs-you queue"]]],opt:[["template","default digest"]],emits:"completion"},
+ summarize:{req:[["destination",["PR comment","issue comment","new ticket","needs-you queue"]]],opt:[["template","run digest"]],emits:"the digest"},
+ transform:{req:[["file set","src/legacy/*.js"],["instruction","(below)"]],opt:[["mode",["per-file","whole-set"]]],emits:"success | failure — pairs with for-each"},
+ triage:{req:[["the set","open unlabelled issues"],["vocabulary","p1 · p2 · p3 · needs-design"]],opt:[["sibling references","coder, coder-bugs ordered lists"]],emits:"labels applied"},
+ journal:{req:[["what to record","run outcome + learnings"]],opt:[],emits:"completion"},
+ housekeep:{req:[["what to clean",["merged branches","stale tickets","board sweep","worktree gc"]]],opt:[],emits:"completion"},
+ wait_watch:{req:[["condition",["CI finished","PR approved","a file appears","a duration"]]],opt:[["timeout","→ its failure edge"]],phase:"P5 — the engine polls this itself (ENFORCED); until then the P1 validator refuses it",emits:"success | failure (timeout)"},
+ ask_human:{req:[["the question","SD-32 schema: question + context"]],opt:[["answer chips","yes / no / custom"],["default if ignored","stay parked"]],phase:"P5 — parks in needs-you, an answer resumes as an event; P1 refuses it",emits:"the answer"},
+ handoff:{req:[["target","a named assignment / stage"]],opt:[["payload note","what travels with the item"]],phase:"P2 — enforced wiring; P1 refuses it",emits:"completion"},
+ run_command:{req:[["the command","🔒 allowlist-gated + explicit confirm"]],opt:[["cwd","repo root"],["timeout","120s"]],phase:"P5 — the allowlist gate is engine machinery; P1 refuses it",emits:"exit code → success | failure"},
+ branch:{req:[["verdict labels","(the paths on the canvas)"]],opt:[],emits:"one labelled path fires"},
+ for_each:{req:[["for each",["file matching a glob","open PR with a label","board query result"]],["item set","src/legacy/*.js"],["max_parallel","3 🔒 enforced fan-out"]],opt:[["then","one fan-in activity after every child"]],phase:"P5 — the fan-out container; see it demonstrated under the canvas",emits:"per-item success | failure; the fan-in sees all"},
 };
 const NODES={
  pick:{t:"pick",nm:"pick",sum:"board · next ready ticket · p1 first",agent:"coder·building",brief:"Take the next ticket in queue order. Empty queue = end the run cleanly."},
@@ -186,14 +218,14 @@ const NODES={
  verify:{t:"check",nm:"verify in the frontend",sum:"branch out · see it working",agent:"qa",brief:"Check out the branch, run the app, see the change working."},
  breakage:{t:"check",nm:"related breakage",sum:"around + related to the change",agent:"qa",brief:"Exercise adjacent features; note anything broken."},
  review:{t:"check",nm:"code review",sum:"injection · duplication · conventions",agent:"qa",brief:"Review the diff itself."},
- park:{t:"notify",nm:"notify + park",sum:"the failure path IS the graph",agent:"qa",brief:"Post what failed on the PR; park it in needs-you.",end:"■ end this run"},
+ park:{t:"notify",nm:"notify + park",sum:"the failure path IS the graph",agent:"qa",brief:"Post what failed on the PR; park it in needs-you.",end:"■ ends the run — journal still fires (its edge is on-completion)"},
  verdict:{t:"branch",nm:"QA verdict?",sum:"issues → back to coding · good → merge",agent:"qa",brief:"Verdict: issues | good."},
  merge:{t:"git_ops",nm:"merge via the gate",sum:"safe_merge · squash · close",agent:"engine",brief:"The engine's merge gate — not a prompt.",hard:true},
  journal:{t:"journal",nm:"journal the run",sum:"runs either way (on completion)",agent:"coder·building",brief:"Record outcome + learnings for the next run."},
 };
 // observed lighting: the S34 story — code review failed, red path ran
 const LASTRUN={pick:"ok",plan:"ok",viable:"ok",code:"ok",test:"ok",docs:"ok",tests2:"ok",pr:"ok",gather:"ok",verify:"ok",breakage:"ok",review:"fail",park:"ok",journal:"ok"};
-const LASTRUN_EDGES=["pick-plan","plan-viable","viable-code","test-docs","test-tests2","docs-pr","tests2-pr","pr-gather","gather-verify","gather-breakage","gather-review","review-park","park-journal"];
+const LASTRUN_EDGES=["pick-plan","plan-viable","viable-code","code-test","test-docs","test-tests2","docs-pr","tests2-pr","pr-gather","gather-verify","gather-breakage","gather-review","review-park","park-journal"];
 const EDGES=[
  {id:"pick-plan",f:"pick",t:"plan",on:"success"},
  {id:"plan-viable",f:"plan",t:"viable",on:"success"},
@@ -229,7 +261,7 @@ function card(id,extra){
   return `<div class="${kind}${SEL===id?" sel":""}${obs}" data-nid="${id}" onclick="sel('${id}')" tabindex="0" onkeydown="if(event.key==='Enter')sel('${id}')">
     ${g}<span class="ico">${ICONS[n.t]}</span> <span class="nm">${esc(n.nm)}</span>
     <span class="sum">${esc(n.sum)}</span>
-    <div class="meta"><span class="agent">${esc(n.agent)}</span><span class="tag ${n.hard?"hard":"soft"}">${n.hard?"enforced":"instructed"}</span></div>
+    <div class="meta"><span class="agent">${esc(n.agent)}</span>${n.t==="branch"?"":`<span class="agent" style="color:var(--dim)" title="context: inherits the project brain (CLAUDE.md + skills); 'own' = bare session, P2+">ctx·…</span>`}<span class="tag ${n.hard?"hard":"soft"}">${n.hard?"enforced":"instructed"}</span></div>
     ${n.end&&extra!=="noend"?"":""}
   </div>${n.end?`<div style="display:flex;justify-content:center;margin-top:8px"><span class="endchip">${n.end}</span></div>`:""}`;
 }
@@ -239,13 +271,13 @@ function render(){
    `<div class="seg" style="--nudge:96px"><div class="main">${card("pick")}</div></div>`
   +`<div class="seg" style="--nudge:96px"><div class="main">${card("plan")}</div></div>`
   +`<div class="seg" style="--nudge:96px"><div class="main">${card("viable")}</div><div>${card("ask")}</div></div>`
-  +`<div class="seg" style="--nudge:64px"><div class="main"><div class="box${dim("loop")}" id="loopbox"><span class="boxtag">⟲ loop · coding${OBSERVED?" · ran 2 rounds":""}</span>
+  +`<div class="seg" style="--nudge:64px"><div class="main"><div class="box${dim("code")}" id="loopbox"><span class="boxtag" style="cursor:pointer" onclick="event.stopPropagation();sel('__loop')" title="click: the container's own pane">⟲ loop · coding${OBSERVED?" · ran 2 rounds":""}</span>
       <div class="inner">${card("code")}${card("test")}</div>
       <div class="foot"><span><b>exit when:</b> every plan criterion passes</span><span class="tag soft">instructed</span>
       <span style="margin-left:auto"><b>cap:</b> 20 rounds</span><span class="tag hard">enforced</span></div></div></div></div>`
   +`<div class="seg" style="--nudge:40px"><div class="main"><div class="rank">${card("docs")}${card("tests2")}</div></div></div>`
   +`<div class="seg" style="--nudge:96px"><div class="main">${card("pr")}</div></div>`
-  +`<div class="seg"><div class="main"><div class="box stage${dim("gather")}" id="stagebox"><span class="boxtag">👤 stage · runs as qa (sonnet)</span>
+  +`<div class="seg"><div class="main"><div class="box stage${dim("gather")}" id="stagebox"><span class="boxtag" style="cursor:pointer" onclick="event.stopPropagation();sel('__stage')" title="click: the container's own pane">👤 stage · runs as qa (sonnet)</span>
       <div class="inner">${card("gather")}<div class="rank">${card("verify")}${card("breakage")}${card("review")}</div></div></div></div>
       <div style="margin-left:120px">${card("park")}</div></div>`
   +`<div class="seg" style="--nudge:96px"><div class="main">${card("verdict")}</div></div>`
@@ -253,36 +285,89 @@ function render(){
   document.getElementById("palette").innerHTML=PALETTE.map(g=>
     `<div class="pgroup"><span class="eyebrow">${g.g}</span>${g.items.map(nm=>{
       const key=nm.replace(" / ","_").replace(" (runs as…)","").replace("-","_").replace(" container","").split(" ").join("_");
-      return `<button class="pitem" onclick="alert('mock: drag drops a ${nm} into a rank; a new rank between two ranks is a drop zone')"><span class="ico">${ICONS[key]||ICONS.stage}</span>${nm}<span class="add">＋</span></button>`;}).join("")}</div>`).join("")
-   +`<div class="pgroup" style="border-top:1px solid var(--hair);padding-top:8px"><button class="pitem" onclick="alert('mock: name · kind · runs-as · brief · placements → saved to the step library')"><span class="ico">✚</span><b>custom step…</b></button></div>`;
+      const lib=g.g==="from your library";
+      const click=lib?`alert('mock: your library step — same drop gesture; its kind decides the palette group it mirrors (S22: one step, reused across repos)')`
+        :(SPEC[key]?`previewType('${key}')`:`alert('mock: drag drops a ${nm} into a rank; a new rank between two ranks is a drop zone')`);
+      return `<button class="pitem" onclick="${click}" title="click: preview its spec sheet in the pane · drag: drop it on a rank"><span class="ico">${lib?"✚":(ICONS[key]||ICONS.stage)}</span>${nm}<span class="add">＋</span></button>`;}).join("")}</div>`).join("")
+   +`<div class="pgroup" style="border-top:1px solid var(--hair);padding-top:8px"><button class="pitem" onclick="alert('mock: name · kind (palette group) · runs-as · brief · params → saved to the step library, then drops on any rank or container')"><span class="ico">✚</span><b>custom step…</b></button></div>`;
   renderPane();
   requestAnimationFrame(drawEdges);
 }
+function field(k,v){
+  const nm=esc(k).replace(/\W+/g,"_");
+  if(Array.isArray(v))return `<select name="${nm}">${v.map((o,i)=>`<option ${i===0?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
+  return `<input name="${nm}" value="${esc(v)}">`;
+}
 function renderPane(){
+  if(SEL==="__loop"){
+    document.getElementById("pane").innerHTML=`
+     <span class="eyebrow">property pane · container</span>
+     <h3><span class="ico">⟲</span>loop · coding</h3>
+     <div class="frow"><span class="lab"><span class="req">●</span> exit when</span></div>
+     <textarea name="exit_when">every test criterion named in the plan passes</textarea>
+     <div class="frow"><span class="note">instructed — judged by the agent, written into every round's brief with the verdict-file instruction</span></div>
+     <div class="frow"><span class="lab"><span class="req">●</span> max rounds</span><input name="max_rounds" value="20" size="4"><span class="tag hard">enforced</span><span class="note">the hard floor under the exit condition — cap hit = run ends capped + flags needs-you</span></div>
+     <div class="frow"><span class="lab">on cap hit</span><select name="on_cap"><option>end the run · flag needs-you</option><option>follow my failure edge</option></select></div>
+     <div class="frow"><button class="pill" onclick="alert('mock: container dissolved — children rejoin the main flow')">dissolve</button></div>`;
+    return;
+  }
+  if(SEL==="__stage"){
+    document.getElementById("pane").innerHTML=`
+     <span class="eyebrow">property pane · container</span>
+     <h3><span class="ico">👤</span>stage · qa</h3>
+     <div class="frow"><span class="lab"><span class="req">●</span> runs as</span><select name="stage_agent"><option selected>qa (sonnet)</option><option>coder · 🔨 building (sonnet)</option><option>its own model…</option></select></div>
+     <div class="frow"><span class="note">the DEFAULT agent for every child — a child's own runs-as overrides it (the inherit row on its pane)</span></div>
+     <div class="frow"><span class="lab">effort default</span><select name="stage_effort"><option>xhigh</option><option>high</option><option selected>medium</option></select></div>
+     <div class="frow"><button class="pill" onclick="alert('mock: stage saved to the library — a second pipeline reuses it BY REFERENCE (S30); edits there show up here')">save stage to library</button>
+       <button class="pill" onclick="alert('mock: container dissolved — children rejoin the main flow, keeping their pinned agents')">dissolve</button></div>`;
+    return;
+  }
   const n=NODES[SEL],spec=SPEC[n.t]||{req:[["brief","(below)"]],opt:[]};
   document.getElementById("pane").innerHTML=`
    <span class="eyebrow">property pane · spec sheet</span>
    <h3><span class="ico">${ICONS[n.t]}</span>${esc(n.nm)}<span class="tag ${n.hard?"hard":"soft"}">${n.hard?"enforced":"instructed"}</span></h3>
    <div class="note" style="margin-bottom:6px">${esc(n.t.replace("_"," "))} activity — required fields first, everything else stays folded.</div>
-   ${spec.req.map(([k,v])=>`<div class="frow"><span class="lab"><span class="req">●</span> ${k}</span><input name="${esc(k).replace(/\W+/g,"_")}" value="${esc(v)}"></div>`).join("")}
+   ${spec.phase?`<div class="guard">⏳ <span><b>not yet runnable:</b> ${esc(spec.phase)} — the palette shows the full catalog so the design is judgeable; the validator refuses honestly.</span></div>`:""}
+   <div class="frow"><span class="lab">step source</span><span class="badge">library · steps/${esc(SEL)}.md</span><span class="badge diverged" title="this use's brief differs from the library step">⚠ diverged</span></div>
+   ${spec.req.map(([k,v])=>`<div class="frow"><span class="lab"><span class="req">●</span> ${k}</span>${field(k,v)}</div>`).join("")}
    <div class="frow"><span class="lab"><span class="req">●</span> runs as</span><select name="runs_as">
+     ${n.agent==="qa"?`<option selected>inherit — the stage's default: qa (sonnet)</option>`:""}
      <option ${n.agent.indexOf("thinking")>=0?"selected":""}>coder · 🧠 thinking (fable)</option>
      <option ${n.agent.indexOf("building")>=0?"selected":""}>coder · 🔨 building (sonnet)</option>
-     <option ${n.agent==="qa"?"selected":""}>qa (sonnet)</option>
-     <option ${n.agent==="engine"?"selected":""}>the engine (no model)</option></select></div>
+     <option ${n.agent==="qa"?"":""}>qa (sonnet) — pin it even outside the stage</option>
+     <option ${n.agent==="engine"?"selected":""}>the engine (no model)</option></select>
+     ${n.agent==="qa"?`<span class="note">a stage sets the default; a node may override</span>`:""}</div>
    <div class="frow"><span class="lab">context</span><span class="ctx"><button class="on" onclick="alert('mock: inherits CLAUDE.md + skills')">project</button><button onclick="alert('mock: bare session, brief only — P2+ (P1 validator refuses it, honestly)')">own</button></span></div>
-   <div class="frow"><span class="lab">its brief</span></div>
+   ${n.hard?`<div class="guard">⚙️ <span><b>engine mechanics, not a prompt:</b> this activity executes in the engine — there is no brief to edit.</span></div>`:`
+   <div class="frow"><span class="lab">its brief</span><span class="note" style="margin-left:auto">the library step's text, editable per use</span></div>
    <textarea name="brief">${esc(n.brief)}</textarea>
+   <div class="frow"><span class="lab">prompt append</span><span class="note" style="margin-left:auto">per-use, ON TOP of the step — survives a library update</span></div>
+   <textarea name="prompt_append" placeholder="e.g. in this repo, also update CHANGELOG.md"></textarea>
+   <div class="frow"><span class="lab">params</span><input name="params" value="labels: ready · priority: p1 first"><span class="note">interpolated into the brief's {placeholders}</span></div>
+   <details><summary>what this compiles into the session brief</summary>
+     <pre style="font-family:var(--mono);font-size:9.5px;color:var(--mut);white-space:pre-wrap;margin:6px 0 2px">&lt;!-- pipeline:node ${esc(SEL)} (${esc(n.t)}) --&gt;
+${esc(n.brief)}
+&lt;!-- per-use append --&gt;
+(your prompt-append text)
+${SEL==="code"||SEL==="test"?"&lt;!-- pipeline:loop coding --&gt;\nround N of at most 20 · exit condition + the\nverdict-file instruction (engine-enforced cap)":""}</pre>
+     <span class="note">the canvas is a compiler — prose is its OUTPUT, these fields are the input</span>
+   </details>`}
    <details><summary>optional — effort · budget · tools</summary>
-     <div class="frow"><span class="lab">effort</span><select name="effort"><option>xhigh</option><option>high</option><option selected>medium</option></select></div>
+     <div class="frow"><span class="lab">effort</span><select name="effort"><option>xhigh</option><option>high</option><option selected>medium</option></select><span class="note">overrides the stage default</span></div>
      <div class="frow"><span class="lab">budget usd</span><input name="budget_usd" value="—" size="5"></div>
      <div class="frow"><span class="lab">max turns</span><input name="max_turns" value="—" size="5"></div>
-     ${spec.opt.map(([k,v])=>`<div class="frow"><span class="lab">${k}</span><input name="${esc(k).replace(/\W+/g,"_")}" value="${esc(v)}"></div>`).join("")}
+     ${spec.opt.map(([k,v])=>`<div class="frow"><span class="lab">${k}</span>${field(k,v)}</div>`).join("")}
    </details>
+   ${spec.emits?`<div class="frow"><span class="lab">emits</span><span class="note">${esc(spec.emits)}</span></div>`:""}
    <div class="frow"><span class="lab">on fail</span><select name="on_fail"><option>follow the failure edge</option><option>retry once</option><option>ask a human</option><option>stop the run</option></select>
      <span class="note">a failure edge on the canvas replaces this default</span></div>
    ${n.t==="git_ops"?`<div class="guard">🔒 <span><b>guarded:</b> merge goes through safe_merge + the repo's merge-gate chain — visible here, not removable.</span></div>`:""}
-   <div class="frow"><button class="pill" onclick="alert('mock: saved to the step library')">save to library</button>
+   ${SEL==="verdict"?`<div class="frow"><span class="lab">bounce cap</span><input name="bounce_cap" value="3" size="3"><span class="tag hard">enforced</span><span class="note">used 1 of 3 last run · the 4th parks the PR in needs-you</span></div>`:""}
+   <div class="frow"><button class="pill" onclick="alert('mock: this use\\'s brief saved BACK to the library step — other uses that have not diverged pick it up')">save back to step</button>
+     <button class="pill" onclick="alert('mock: saved as a NEW library step — name it; this use now references it')">save as new step</button>
+     <button class="pill" onclick="alert('mock: per-use edits discarded — back to the library step verbatim')">reset to step</button></div>
+   <div class="frow"><button class="pill" onclick="alert('mock: disabled for this pipeline only — stays on the canvas greyed, its edges pass through')">disable this use</button>
+     <button class="pill" onclick="alert('mock: move — pick a rank or container on the canvas; same gesture as dragging the card (S26)')">move…</button>
      <button class="pill" onclick="alert('mock: removed — its edges reconnect or fall to the run default')">remove</button></div>`;
 }
 function anchor(el,side){
@@ -321,6 +406,13 @@ function drawEdges(){
 function cycle(id){const e=EDGES.find(e=>e.id===id);const order=["success","failure","completion"];
   e.on=order[(order.indexOf(e.on)+1)%3];drawEdges();}
 function sel(id){SEL=id;render();}
+function previewType(t){
+  NODES.__preview={t:t,nm:t.replace(/_/g," ")+" — from the palette",
+    sum:"spec-sheet preview · drop on a rank to place it",
+    agent:"coder·building",
+    brief:"(the library step's brief lands here, or write one inline)"};
+  SEL="__preview";render();
+}
 function toggleObserved(){OBSERVED=!OBSERVED;
   document.getElementById("dagwrap").classList.toggle("observed",OBSERVED);
   document.getElementById("obsbtn").classList.toggle("on",OBSERVED);render();}
