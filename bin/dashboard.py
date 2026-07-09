@@ -41,6 +41,7 @@ import dashboard_control as dcx  # noqa: E402
 import config_parser  # noqa: E402
 import credentials as creds  # noqa: E402
 import accounts as accts  # noqa: E402
+import pipeline as pipeline_mod  # noqa: E402  (SPEC_SHEETS SSOT, #357)
 import concierge  # noqa: E402
 import claude_usage as cu  # noqa: E402
 
@@ -251,6 +252,7 @@ def _reload_logic_modules():
 
 PAGE = os.path.join(ENGINE_HOME, "lib", "dashboard_page.html")
 CONFIG_PAGE = os.path.join(ENGINE_HOME, "lib", "config_page.html")
+PIPELINE_PAGE = os.path.join(ENGINE_HOME, "lib", "pipeline_page.html")
 REPOS_FILE = os.path.expanduser("~/.config/autonomy/repos")
 LAUNCH_AGENTS = os.path.expanduser("~/Library/LaunchAgents")
 
@@ -1425,8 +1427,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         _reload_logic_modules()   # pick up merged logic-module fixes (#166)
         path = self.path.split("?", 1)[0]
-        if path == "/" or path == "/config":
-            page = PAGE if path == "/" else CONFIG_PAGE
+        if path in ("/", "/config", "/pipeline"):
+            page = {"/": PAGE, "/config": CONFIG_PAGE,
+                    "/pipeline": PIPELINE_PAGE}[path]
             try:
                 self._send(200, _page_bytes(page),
                            "text/html; charset=utf-8")
@@ -1455,6 +1458,23 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, b'{"ok": false, "error": "repo is not managed"}')
             else:
                 self._send(200, json.dumps(dcx.ws_prompt_get(repo, name)).encode("utf-8"))
+        elif path == "/api/pipeline":
+            # P3a canvas read model (#357): read-only. repo must be managed
+            # (absolute-path identity, the ws-prompt contract); role failures
+            # are builder-level (200 + {"error": ...} -- the page renders the
+            # message). The spec sheets ride along so the palette/pane render
+            # from the SAME dict the validator derives its vocabulary from.
+            qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]
+                                       if "?" in self.path else "")
+            repo = os.path.abspath(os.path.expanduser(
+                (qs.get("repo") or [""])[0]))
+            role = (qs.get("role") or [""])[0]
+            if repo not in self.repos:
+                self._send(400, b'{"ok": false, "error": "repo is not managed"}')
+            else:
+                view = ds.build_pipeline_view(repo, role)
+                view["spec"] = pipeline_mod.SPEC_SHEETS
+                self._send(200, json.dumps(view).encode("utf-8"))
         elif path == "/api/boards":
             # config-page board picker (#170): best-effort, always 200 (the
             # payload carries any error), owner re-validated inside board_list.
