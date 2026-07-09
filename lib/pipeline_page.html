@@ -134,6 +134,15 @@ svg.edges path.hit{pointer-events:stroke;cursor:pointer}
 .pane textarea{width:100%;max-width:none;min-height:52px;resize:vertical}
 .pane input[readonly]{opacity:.7;cursor:not-allowed}
 .frow.locked .lab{color:var(--dim)}
+/* --- P3c (#367): navigation overlays — search highlight + minimap --- */
+.search{background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);font-family:var(--mono);font-size:11px;border-radius:5px;padding:4px 7px;width:132px}
+.search::placeholder{color:var(--dim)}
+.node.searchoff,.box.searchoff{opacity:.28}
+.node.searchhit{border-color:var(--warn);box-shadow:0 0 0 2px var(--warn-glow)}
+.box.searchhit{border-color:var(--warn)}
+@keyframes flashpulse{0%{box-shadow:0 0 0 3px var(--warn-glow)}100%{box-shadow:0 0 0 0 transparent}}
+.node.flash,.box.flash{animation:flashpulse .9s ease-out}
+@media (prefers-reduced-motion: reduce){.node.flash,.box.flash{animation:none;outline:2px solid var(--warn)}}
 </style>
 </head>
 <body>
@@ -143,6 +152,9 @@ svg.edges path.hit{pointer-events:stroke;cursor:pointer}
     <h1>pipeline</h1>
     <select id="repopick" aria-label="repo"></select>
     <select id="rolepick" aria-label="role"></select>
+    <input id="search" class="search" type="search" placeholder="find node…"
+           aria-label="find an activity by id, type, or agent" autocomplete="off">
+    <span id="searchcount" class="badge" style="display:none"></span>
     <span id="prov"></span>
     <span id="shadowchip"></span>
     <span class="gap"></span>
@@ -186,6 +198,7 @@ let VIEWSIG = "";         // last payload (raw string) -- the render guard
 let SEL = "";             // selected unit/node id ("" = nothing)
 let OBSERVED = false;
 const COLLAPSED = new Set();   // container ids, survives re-render
+let SEARCH = "";               // P3c: active search/filter query (lowercased), survives re-render
 
 /* P3b (#365) editor state. WORKING is a dirty working COPY of the doc the
    canvas + pane render from; the server payload (VIEW) still owns the
@@ -279,6 +292,89 @@ function rankUnits(units, edges){
   const cols = [];
   units.forEach(u => { (cols[rank[u]] = cols[rank[u]] || []).push(u); });
   return cols.filter(c => c && c.length);
+}
+
+/* ---- P3c search/filter: pure predicates over curDoc() ----
+   SEARCH is page state like SEL/OBSERVED/COLLAPSED: it survives a re-render and
+   render() re-applies it, so a live update never drops the filter. Matching is a
+   case-insensitive substring over a node/container's id + type/kind + runs_as
+   values. Nothing here renders raw doc text -- highlighting toggles CSS classes
+   on the already-esc()'d cards; matched ids never reach the DOM un-escaped. */
+function nodeSearchText(u){
+  if(!u || typeof u !== "object") return "";
+  const parts = [u.id, u.type, u.kind];
+  const ra = u.runs_as;
+  if(ra && typeof ra === "object") for(const v of Object.values(ra)) parts.push(v);
+  return parts.filter(x => x != null).map(String).join(" ").toLowerCase();
+}
+function nodeMatches(u, q){ return q === "" ? true : nodeSearchText(u).indexOf(q) >= 0; }
+function matchedIds(q){
+  const d = curDoc(), ids = new Set();
+  if(!d || !q) return ids;
+  for(const n of (d.nodes||[])) if(n && n.id && nodeMatches(n, q)) ids.add(n.id);
+  for(const c of (d.containers||[])) if(c && c.id && nodeMatches(c, q)) ids.add(c.id);
+  return ids;
+}
+function childMatched(id, hits){
+  const c = conById(id);
+  return !!c && (c.children||[]).some(ch => hits.has(ch));
+}
+function firstMatchId(q){
+  const hits = matchedIds(q);
+  if(!hits.size) return null;
+  const d = curDoc() || {};
+  // Visual left-to-right, top-to-bottom order = the SAME ranked columns the
+  // canvas lays out (rankUnits over topUnits + curEdges), NOT raw topUnits order
+  // -- longest-path layering can move a unit to a later column than its
+  // declaration index, so jumping by topUnits order could skip a leftward match
+  // (Codex CP1). Mirror the render layout exactly.
+  for(const col of rankUnits(topUnits(d), curEdges())){
+    for(const u of col){
+      if(hits.has(u)) return u;
+      const c = conById(u);
+      if(c) for(const ch of (c.children||[])) if(hits.has(ch)) return ch;
+    }
+  }
+  for(const id of hits) return id;                 // any hit (defensive: unranked)
+  return null;
+}
+
+/* Toggle highlight/dim classes on the rendered cards WITHOUT a rebuild (so the
+   pane, selection, and caret are untouched). A container card lights when it OR
+   any child matches, so a wide search does not blank a box whose child matched.
+   Callers that also want the minimap shading refreshed call drawMinimap() after
+   (Task 2 defines it; the event wiring guards it with typeof so search stands
+   alone). */
+function applySearch(){
+  const q = SEARCH, cnt = document.getElementById("searchcount");
+  const cards = document.querySelectorAll("#dag [data-uid]");
+  if(!q){
+    cards.forEach(el => el.classList.remove("searchhit","searchoff"));
+    if(cnt) cnt.style.display = "none";
+    return;
+  }
+  const hits = matchedIds(q);
+  cards.forEach(el => {
+    const on = hits.has(el.dataset.uid) || childMatched(el.dataset.uid, hits);
+    el.classList.toggle("searchhit", on);
+    el.classList.toggle("searchoff", !on);
+  });
+  if(cnt){ cnt.style.display = ""; cnt.textContent = hits.size + (hits.size===1?" match":" matches"); }
+}
+function jumpToSearch(){
+  const box = document.getElementById("search");
+  if(box) box.blur();                              // #16: the jump ENDS -> release focus
+  if(!SEARCH) return;
+  const id = firstMatchId(SEARCH);
+  if(!id) return;
+  sel(id);                                         // select -> render() (header persists)
+  requestAnimationFrame(() => {
+    const el = document.querySelector(`#dag [data-uid="${CSS.escape(id)}"]`);
+    if(!el) return;
+    el.scrollIntoView({block:"nearest", inline:"center", behavior:"smooth"});
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 900);
+  });
 }
 
 /* ---- observed lighting projections (journal facts only) ---- */
@@ -393,6 +489,7 @@ function render(){
       const n = nodeById(uid);
       return n ? card(n, lit, inflight) : "";
     }).join("")}</div>`).join("");
+  applySearch();                     // re-apply the active filter to the fresh cards (P3c)
   if(!paneFocused()) renderPane();   // never yank a pane input mid-edit (#14/#16)
   requestAnimationFrame(drawEdges);
 }
@@ -746,6 +843,20 @@ document.getElementById("edgesvg").addEventListener("click", e => {
 });
 
 document.getElementById("obsbtn").addEventListener("click", () => { OBSERVED = !OBSERVED; render(); });
+
+/* ---- P3c: search box wiring (header control -- never rebuilt by render(), so
+   it survives every live tick with value + caret intact, #16). ---- */
+const _search = document.getElementById("search");
+_search.addEventListener("input", e => {
+  SEARCH = e.target.value.trim().toLowerCase();
+  applySearch();
+  if(typeof drawMinimap === "function") drawMinimap();   // refresh minimap shading (Task 2)
+});
+_search.addEventListener("keydown", e => {
+  if(e.key === "Enter"){ e.preventDefault(); jumpToSearch(); }
+  else if(e.key === "Escape"){ e.target.value = ""; SEARCH = ""; applySearch();
+    if(typeof drawMinimap === "function") drawMinimap(); e.target.blur(); }
+});
 window.addEventListener("resize", () => requestAnimationFrame(drawEdges));
 
 /* ---- editor: header state + Save / Revert (the #202 bar) ---- */
