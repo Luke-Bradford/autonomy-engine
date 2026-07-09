@@ -98,11 +98,8 @@ class ValidateDocTest(unittest.TestCase):
             doc["nodes"][0]["legacy_prompt"] = bad
             self.assertTrue(pipeline.validate_doc(doc, None), bad)
 
-    def test_nonempty_edges_rejected_p1(self):
-        doc = minimal_doc()
-        doc["nodes"].append({"id": "b", "type": "check", "brief_ref": "act.md"})
-        doc["edges"] = [{"from": "act", "to": "b", "on": "success"}]
-        self.assertTrue(any("P2" in e for e in pipeline.validate_doc(doc, self.dir)))
+    # P2a (#349) lifted the P1 edges-must-be-[] refusal; the acceptance
+    # matrix lives in EdgeValidationTest below.
 
     def test_context_own_rejected_p1(self):
         doc = minimal_doc(); doc["nodes"][0]["context"] = "own"
@@ -157,6 +154,97 @@ class ValidateDocTest(unittest.TestCase):
     def test_runs_as_account_charset(self):
         doc = minimal_doc(); doc["nodes"][0]["runs_as"] = {"account": "a b!"}
         self.assertTrue(pipeline.validate_doc(doc, self.dir))
+
+
+class EdgeValidationTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        with open(os.path.join(self.dir, "act.md"), "w") as fh:
+            fh.write("do\n")
+
+    def _doc(self, edges, containers=None, extra_nodes=()):
+        doc = minimal_doc()
+        for nid in ("b", "c") + tuple(extra_nodes):
+            doc["nodes"].append({"id": nid, "type": "check", "brief_ref": "act.md"})
+        doc["edges"] = edges
+        if containers is not None:
+            doc["containers"] = containers
+        return doc
+
+    def test_typed_edges_accepted(self):
+        edges = [{"from": "act", "to": "b", "on": "success"},
+                 {"from": "act", "to": "c", "on": "failure"},
+                 {"from": "b", "to": "c", "on": "completion"}]
+        doc = self._doc(edges)
+        doc["nodes"][2]["join"] = "any"   # c: failure OR completion path
+        self.assertEqual(pipeline.validate_doc(doc, self.dir), [])
+
+    def test_unknown_endpoint_rejected(self):
+        edges = [{"from": "act", "to": "ghost", "on": "success"}]
+        self.assertTrue(pipeline.validate_doc(self._doc(edges), self.dir))
+
+    def test_bad_on_rejected(self):
+        edges = [{"from": "act", "to": "b", "on": "sometimes"}]
+        self.assertTrue(pipeline.validate_doc(self._doc(edges), self.dir))
+
+    def test_unknown_edge_key_rejected(self):
+        edges = [{"from": "act", "to": "b", "on": "success", "when": "maybe"}]
+        self.assertTrue(pipeline.validate_doc(self._doc(edges), self.dir))
+
+    def test_bad_join_rejected(self):
+        doc = minimal_doc(); doc["nodes"][0]["join"] = "some"
+        self.assertTrue(pipeline.validate_doc(doc, self.dir))
+
+    def test_cycle_without_back_flag_rejected(self):
+        edges = [{"from": "act", "to": "b", "on": "success"},
+                 {"from": "b", "to": "act", "on": "success"}]
+        errs = pipeline.validate_doc(self._doc(edges), self.dir)
+        self.assertTrue(any("cycle" in e for e in errs))
+
+    def test_back_edge_requires_container_target_and_cap(self):
+        con = [{"id": "L", "kind": "loop", "children": ["b"],
+                "exit_when": "done", "max_rounds": 3}]
+        ok = [{"from": "act", "to": "L", "on": "success"},
+              {"from": "c", "to": "L", "on": "failure", "back": True,
+               "max_bounces": 3},
+              {"from": "L", "to": "c", "on": "success"}]
+        self.assertEqual(pipeline.validate_doc(self._doc(ok, con), self.dir), [])
+        no_cap = dict(ok[1]); del no_cap["max_bounces"]
+        errs = pipeline.validate_doc(self._doc([ok[0], no_cap, ok[2]], con),
+                                     self.dir)
+        self.assertTrue(any("max_bounces" in e for e in errs))
+        to_node = [ok[0],
+                   {"from": "c", "to": "act", "on": "failure", "back": True,
+                    "max_bounces": 2},
+                   ok[2]]
+        errs = pipeline.validate_doc(self._doc(to_node, con), self.dir)
+        self.assertTrue(any("loop or stage" in e for e in errs))
+
+    def test_forward_back_edge_rejected(self):
+        # a back:true edge whose target is NOT an ancestor of its from-node
+        # is invisible to the DAG check and would stall the walk -- refuse.
+        con = [{"id": "L", "kind": "loop", "children": ["c"],
+                "exit_when": "done", "max_rounds": 3}]
+        edges = [{"from": "act", "to": "b", "on": "success"},
+                 {"from": "act", "to": "L", "on": "failure", "back": True,
+                  "max_bounces": 2}]
+        errs = pipeline.validate_doc(self._doc(edges, con), self.dir)
+        self.assertTrue(any("ancestor" in e for e in errs))
+
+    def test_intra_container_edge_rejected(self):
+        con = [{"id": "L", "kind": "loop", "children": ["b", "c"],
+                "exit_when": "done", "max_rounds": 3}]
+        edges = [{"from": "b", "to": "c", "on": "success"}]
+        errs = pipeline.validate_doc(self._doc(edges, con), self.dir)
+        self.assertTrue(any("inside" in e for e in errs))
+
+    def test_container_endpoints_accepted(self):
+        con = [{"id": "L", "kind": "loop", "children": ["b"],
+                "exit_when": "done", "max_rounds": 3}]
+        edges = [{"from": "act", "to": "L", "on": "success"},
+                 {"from": "L", "to": "c", "on": "success"}]
+        self.assertEqual(pipeline.validate_doc(self._doc(edges, con), self.dir), [])
 
 
 class WrapResolveTest(unittest.TestCase):

@@ -48,9 +48,13 @@ DEFERRED_NODE_TYPES = {
     "run_command": "P5 (allowlist gate)",
 }
 _NODE_KEYS = frozenset(("id", "type", "brief_ref", "legacy_prompt",
-                        "runs_as", "context"))
+                        "runs_as", "context", "join"))
 _CONTAINER_KEYS = frozenset(("id", "kind", "children", "exit_when",
-                             "max_rounds", "runs_as"))
+                             "max_rounds", "runs_as", "join"))
+_EDGE_KEYS = frozenset(("from", "to", "on", "back", "max_bounces"))
+EDGE_KINDS = ("success", "failure", "completion")
+JOIN_KINDS = ("all", "any")
+MAX_BOUNCES_CEIL = 9
 _DOC_KEYS = frozenset(("name", "version", "trigger_default", "caps",
                        "nodes", "edges", "containers", "wrapped_from_role"))
 CONTAINER_KINDS = frozenset(("loop", "stage"))   # branch=P2, for_each=P5
@@ -93,6 +97,29 @@ def _valid_legacy_prompt(path):
         return False
     parts = path.replace("\\", "/").split("/")
     return ".." not in parts and "" not in parts
+
+
+def _top_units(doc):
+    """Ordered top-level unit ids: nodes not inside any container, with each
+    container appearing at the position of its FIRST child. The graph's
+    vertices (edges may only reference these)."""
+    child_to_con = {}
+    for con in doc.get("containers") or []:
+        if isinstance(con, dict):
+            for c in (con.get("children") or []):
+                child_to_con[c] = con.get("id")
+    out, seen_con = [], set()
+    for node in doc.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        nid = node.get("id")
+        con = child_to_con.get(nid)
+        if con is None:
+            out.append(nid)
+        elif con not in seen_con:
+            seen_con.add(con)
+            out.append(con)
+    return out
 
 
 def _validate_runs_as(where, runs_as, errors):
@@ -198,14 +225,10 @@ def validate_doc(doc, pipeline_dir=None):
             errors.append("%s: context %r not supported in P1 (P1 runs every "
                           "node with project context; 'own' lands with P2+)"
                           % (where, ctx))
+        if node.get("join", "all") not in JOIN_KINDS:
+            errors.append("%s: join must be one of %s"
+                          % (where, "|".join(JOIN_KINDS)))
         _validate_runs_as(where, node.get("runs_as"), errors)
-
-    edges = doc.get("edges")
-    if not isinstance(edges, list):
-        errors.append("edges: required list (must be [] in P1)")
-    elif edges:
-        errors.append("edges: typed dependency edges are a P2 feature -- P1 "
-                      "executes nodes in array order; edges must be []")
 
     containers = doc.get("containers", [])
     if not isinstance(containers, list):
@@ -259,6 +282,98 @@ def validate_doc(doc, pipeline_dir=None):
                               "runaway cap)" % (where, MAX_ROUNDS_CEIL))
         if kind == "stage":
             _validate_runs_as(where, con.get("runs_as"), errors)
+        if con.get("join", "all") not in JOIN_KINDS:
+            errors.append("%s: join must be one of %s"
+                          % (where, "|".join(JOIN_KINDS)))
+
+    # --- typed dependency edges (P2a, #349) --------------------------------
+    edges = doc.get("edges")
+    if not isinstance(edges, list):
+        errors.append("edges: required list")
+        edges = []
+    con_by_id = {c.get("id"): c for c in containers if isinstance(c, dict)}
+    child_ids = set()
+    for c in containers:
+        if isinstance(c, dict):
+            child_ids.update(c.get("children") or [])
+    unit_order = _top_units(doc)
+    units = set(unit_order)
+    fwd = {}                      # non-back adjacency (cycle + ancestor checks)
+    for i, e in enumerate(edges):
+        where = "edges[%d]" % i
+        if not isinstance(e, dict):
+            errors.append("%s: must be a mapping" % where)
+            continue
+        for key in e:
+            if key not in _EDGE_KEYS:
+                errors.append("%s: key %r is not consumed in P2a -- remove it"
+                              % (where, key))
+        f, t = e.get("from"), e.get("to")
+        for end, val in (("from", f), ("to", t)):
+            if val in child_ids:
+                errors.append("%s: %s %r is inside a container -- edges "
+                              "connect top-level units; intra-container flow "
+                              "stays array-order (P2b lifts)" % (where, end, val))
+            elif val not in units:
+                errors.append("%s: %s %r is not a top-level node or container "
+                              "id" % (where, end, val))
+        if e.get("on") not in EDGE_KINDS:
+            errors.append("%s: on must be one of %s"
+                          % (where, "|".join(EDGE_KINDS)))
+        if e.get("back"):
+            if not isinstance(e.get("max_bounces"), int) or not (
+                    1 <= e["max_bounces"] <= MAX_BOUNCES_CEIL):
+                errors.append("%s: a back-edge requires max_bounces 1..%d "
+                              "(ENFORCED bounce cap)" % (where, MAX_BOUNCES_CEIL))
+            tc = con_by_id.get(t)
+            if tc is None or tc.get("kind") not in ("loop", "stage"):
+                errors.append("%s: a back-edge must target a loop or stage "
+                              "container" % where)
+        elif "max_bounces" in e:
+            errors.append("%s: max_bounces only belongs on a back-edge" % where)
+        if f in units and t in units and not e.get("back"):
+            fwd.setdefault(f, []).append(t)
+    # Acyclicity over non-back edges (Kahn) -- back-edges are the ONE
+    # sanctioned cycle mechanism (traversal-only, bounce-capped).
+    indeg = dict((u, 0) for u in units)
+    for f in fwd:
+        for t in fwd[f]:
+            indeg[t] += 1
+    queue = [u for u in unit_order if indeg.get(u, 0) == 0]
+    seen_n = 0
+    while queue:
+        u = queue.pop(0)
+        seen_n += 1
+        for t in fwd.get(u, ()):
+            indeg[t] -= 1
+            if indeg[t] == 0:
+                queue.append(t)
+    if seen_n < len(units):
+        cyc = sorted(u for u in units if indeg.get(u, 0) > 0)
+        errors.append("edges: cycle detected involving %s -- declare a "
+                      "back-edge (back: true + max_bounces) or break the "
+                      "cycle" % ", ".join(cyc))
+    # A back-edge target must be an ANCESTOR of its from-node via forward
+    # edges: a "forward" back:true edge is invisible to the cycle check and
+    # would stall the walk (adversarial-review blocking fix).
+    for i, e in enumerate(edges):
+        if (isinstance(e, dict) and e.get("back")
+                and e.get("from") in units and e.get("to") in units):
+            stack, visited, found = [e["to"]], set(), False
+            while stack:
+                u = stack.pop()
+                if u == e["from"]:
+                    found = True
+                    break
+                if u in visited:
+                    continue
+                visited.add(u)
+                stack.extend(fwd.get(u, ()))
+            if not found:
+                errors.append("edges[%d]: back-edge target %r is not an "
+                              "ancestor of %r via forward edges -- a forward "
+                              "back-edge would stall the walk"
+                              % (i, e["to"], e["from"]))
     return errors
 
 

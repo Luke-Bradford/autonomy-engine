@@ -191,6 +191,16 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     packs; PR-gating remains the ENGINE repo's own dev workflow only.
     *(specs/2026-07-08-config-workstreams-design.md; #326.)*
 
+35. **P2 is split: typed edges ship on the sequential walk (P2a); real
+    bounded parallel dispatch and the SD-12 amendment enabling it are P2b**
+    (operator decision 2026-07-09, #349). P2a keeps SD-12 verbatim —
+    parallel-eligible nodes INTERLEAVE one node-session per iteration;
+    story S33's two-sessions-overlap oracle is deliberately deferred to
+    P2b, where SD-12 becomes "one DISPATCH per iteration; a dispatch may
+    fan out up to the pipeline's enforced max_parallel concurrent
+    node-sessions". Docs and briefs must not imply concurrency P2a does
+    not have. *(#349 kickoff comment; plans/2026-07-09-sequencer-p2a-typed-edges.md.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could
