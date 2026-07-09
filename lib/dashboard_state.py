@@ -2463,11 +2463,14 @@ def _pipeline_briefs(pdir, doc):
         if not (isinstance(ref, str) and pipeline_mod._valid_brief_ref(ref)):
             continue
         try:
-            with open(os.path.join(pdir, ref), encoding="utf-8",
-                      errors="replace") as fh:
-                text = fh.read(200001)          # bounded read (the doc byte cap)
-            if len(text) <= 200000:
-                out[ref] = text
+            # cap by UTF-8 BYTES to match the writer's _PIPELINE_DOC_CAP exactly
+            # (review NITPICK): a char-count read could drop or truncate a
+            # multi-byte brief the writer would still accept, desyncing the pane
+            # seed from what a save persists. Read binary, bound to 200001 bytes.
+            with open(os.path.join(pdir, ref), "rb") as fh:
+                raw = fh.read(200001)
+            if len(raw) <= 200000:
+                out[ref] = raw.decode("utf-8", "replace")
         except OSError:
             continue                            # missing/unreadable -> absent
     return out

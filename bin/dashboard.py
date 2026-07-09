@@ -1533,7 +1533,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         # the oversize read allowance is for ws_prompt_set + pipeline_save ONLY
         # (a whole rail / a whole pipeline doc + briefs) -- every other action
-        # keeps the classic 8KB contract (#334 review WARNING; #365 P3b).
+        # keeps the classic 8KB contract (#334 review WARNING; #365 P3b). The
+        # HARD body ceiling is still `max_len` (262144) above: any request over
+        # 256 KiB is rejected BEFORE it is read/parsed, so this exemption only
+        # lifts the 8 KiB floor to that same 256 KiB ceiling ws_prompt_set uses
+        # -- it does NOT uncap the read (#366 review WARNING). pipeline_save's
+        # per-brief/per-doc 200 KiB caps are SEMANTIC refusals layered on top.
         if (path != "/api/chat" and length > 8192
                 and body.get("action") not in ("ws_prompt_set", "pipeline_save")):
             self.close_connection = True
