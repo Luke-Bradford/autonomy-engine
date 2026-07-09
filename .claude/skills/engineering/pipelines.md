@@ -104,6 +104,10 @@ rollback. Present-but-invalid shadow refuses, never falls back.
 
 `wait_watch/ask_human/handoff/run_command` types, `branch`/`for_each`
 containers, intra-container edges, `context: own`. Canvas EDITING SHIPPED (P3b,
-#365, SD-37 — var-shadow write path); still deferred there: minimap + search
-(P3c), full brief round-trip / reset-shadow-to-committed / provenance diff, and
-binding-a-new-pipeline from the canvas (P4 gallery).
+#365, SD-37 — var-shadow write path); canvas NAVIGATION SHIPPED (P3c, #367,
+SD-38 — minimap + search/filter, client-only over `curDoc()`, no new payload/
+write surface; minimap gates on HORIZONTAL overflow only; zoom deferred to keep
+the editor's `getBoundingClientRect` gesture geometry unscaled). Still deferred
+on the canvas: reset-shadow-to-committed and provenance diff (both need a write
+surface or a new payload), canvas zoom, and binding-a-new-pipeline (P4 gallery).
+Full brief round-trip already shipped in P3b (`VIEW.briefs` + `briefText`).
