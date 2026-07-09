@@ -2446,6 +2446,33 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
     }
 
 
+def _pipeline_briefs(pdir, doc):
+    """{brief_ref: text} for a bound pipeline's referenced briefs -- the pane
+    seeds its editable textarea from THIS, so a P3b save is a true edit rather
+    than a blind overwrite (Codex CP1 #8). Total: an unreadable/oversize/missing
+    brief drops its key (never an exception -- the builder is the route's
+    totality boundary). Only sibling basenames are read (no traversal), matching
+    the validator."""
+    out = {}
+    if not isinstance(doc, dict):
+        return out
+    for node in (doc.get("nodes") or []):
+        if not isinstance(node, dict):
+            continue
+        ref = node.get("brief_ref")
+        if not (isinstance(ref, str) and pipeline_mod._valid_brief_ref(ref)):
+            continue
+        try:
+            with open(os.path.join(pdir, ref), encoding="utf-8",
+                      errors="replace") as fh:
+                text = fh.read(200001)          # bounded read (the doc byte cap)
+            if len(text) <= 200000:
+                out[ref] = text
+        except OSError:
+            continue                            # missing/unreadable -> absent
+    return out
+
+
 def _journal_last_run(journal_path, role, pipeline_name):
     """The NEWEST journal line for (role, pipeline) -- observed-lighting
     source (#357). Total (prevention-log #12): bounded 64 KiB tail, junk
@@ -2564,8 +2591,9 @@ def build_pipeline_view(repo_path, role):
         # (CP2): a `pipeline: ../outside` binding must never read outside
         # .autonomy/pipelines nor render healthy while dispatch refuses it.
         view["source"] = {"kind": "pipeline", "name": binding, "dir": "",
-                          "version": 0}
+                          "shadow": False, "version": 0}
         view["doc"] = None
+        view["briefs"] = {}
         view["errors"] = ["roles.%s.pipeline %r has invalid charset -- "
                           "dispatch refuses it" % (role, binding)]
         view["edges_effective"] = []
@@ -2574,9 +2602,15 @@ def build_pipeline_view(repo_path, role):
         view["in_flight"] = _inflight_units(logdir, role)
         return view
     if binding:
-        pdir = os.path.join(repo_path, ".autonomy", "pipelines", binding)
+        # P3b (#365): read the var-live shadow when the operator has edited this
+        # pipeline in the canvas; source.shadow tells the page it is showing
+        # local edits. A present-but-invalid shadow renders ITS errors below,
+        # never a fallback to committed (prevention-log #3).
+        pdir = pipeline_mod.effective_pipeline_dir(repo_path, binding)
+        _shadow_root = os.path.join(repo_path, "var", "autonomy", "pipelines")
         view["source"] = {"kind": "pipeline", "name": binding,
                           "dir": os.path.relpath(pdir, repo_path),
+                          "shadow": pdir.startswith(_shadow_root + os.sep),
                           "version": 0}
         try:
             doc = pipeline_mod.load_doc(os.path.join(pdir, "pipeline.json"))
@@ -2596,6 +2630,7 @@ def build_pipeline_view(repo_path, role):
                                   "%s: %s" % (type(exc).__name__, exc)]
             if isinstance(doc.get("version"), int):
                 view["source"]["version"] = doc["version"]
+        view["briefs"] = _pipeline_briefs(pdir, doc)   # pane seeds true edits
         pname = (doc or {}).get("name")
         pname = pname if isinstance(pname, str) and pname else binding
     else:
@@ -2606,8 +2641,9 @@ def build_pipeline_view(repo_path, role):
             return {"error": "role wrap failed: %s: %s"
                              % (type(exc).__name__, exc)}
         view["source"] = {"kind": "wrapped", "name": doc["name"],
-                          "dir": "", "version": 0}
+                          "dir": "", "shadow": False, "version": 0}
         view["errors"] = []
+        view["briefs"] = {}          # a wrapped role is read-only; no editing
         pname = doc["name"]
     view["doc"] = doc
     try:

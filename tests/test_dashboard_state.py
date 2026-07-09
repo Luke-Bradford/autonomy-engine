@@ -3600,3 +3600,67 @@ class TestBuildPipelineView(unittest.TestCase):
             json.dump(doc, fh)
         v = ds.build_pipeline_view(repo, "coder")
         self.assertTrue(v["errors"])
+
+    # -- P3b (#365): the viewer reads the var-live shadow + brief texts --------
+
+    def _shadow_dir(self, repo):
+        d = os.path.join(repo, "var", "autonomy", "pipelines", "fixture-flow")
+        os.makedirs(d)
+        return d
+
+    def test_view_reads_the_shadow_when_present(self):
+        repo = self._tmp_repo()
+        shadow = self._shadow_dir(repo)
+        # a MINIMAL valid one-node shadow doc, version 42, distinct from
+        # committed (caps + edges required)
+        with open(os.path.join(shadow, "pipeline.json"), "w") as fh:
+            json.dump({"name": "fixture-flow", "version": 42,
+                       "caps": {"max_sessions_per_run": 16},
+                       "nodes": [{"id": "only", "type": "pick",
+                                  "brief_ref": "only.md"}], "edges": []}, fh)
+        with open(os.path.join(shadow, "only.md"), "w") as fh:
+            fh.write("x\n")
+        v = ds.build_pipeline_view(repo, "coder")
+        self.assertEqual(v["source"]["kind"], "pipeline")
+        self.assertTrue(v["source"]["shadow"])
+        self.assertEqual(v["doc"]["version"], 42)      # shadow, not committed
+        self.assertEqual(v["errors"], [])
+
+    def test_committed_view_marks_shadow_false(self):
+        v = ds.build_pipeline_view(FIX, "coder")       # no shadow on the fixture
+        self.assertFalse(v["source"]["shadow"])
+
+    def test_invalid_shadow_renders_errors_not_fallback(self):
+        repo = self._tmp_repo()
+        shadow = self._shadow_dir(repo)
+        # valid EXCEPT the node type, so the unknown-type error is the sole
+        # failure (caps + edges present)
+        with open(os.path.join(shadow, "pipeline.json"), "w") as fh:
+            json.dump({"name": "fixture-flow", "version": 1,
+                       "caps": {"max_sessions_per_run": 16},
+                       "nodes": [{"id": "a", "type": "no_such_type",
+                                  "brief_ref": "a.md"}], "edges": []}, fh)
+        with open(os.path.join(shadow, "a.md"), "w") as fh:
+            fh.write("x\n")
+        v = ds.build_pipeline_view(repo, "coder")
+        self.assertTrue(v["source"]["shadow"])
+        self.assertTrue(v["errors"])                   # shadow's errors, shown
+        self.assertEqual(v["source"]["kind"], "pipeline")   # NOT a wrap fallback
+
+    def test_view_carries_brief_texts(self):
+        # the pane must seed its brief textarea from server truth, or an
+        # edit-writes-only save blindly overwrites the brief (Codex CP1 #8).
+        v = ds.build_pipeline_view(FIX, "coder")
+        self.assertIn("briefs", v)
+        self.assertIn("pick.md", v["briefs"])          # a real fixture brief
+        self.assertTrue(v["briefs"]["pick.md"])        # its text, non-empty
+
+    def test_briefs_total_on_unreadable(self):
+        # a brief_ref whose file is missing degrades to an absent key, never an
+        # exception (builders are total).
+        repo = self._tmp_repo()
+        os.remove(os.path.join(repo, ".autonomy", "pipelines",
+                               "fixture-flow", "pick.md"))
+        v = ds.build_pipeline_view(repo, "coder")
+        self.assertNotIn("pick.md", v["briefs"])       # dropped, no crash
+        self.assertIn("plan.md", v["briefs"])          # siblings still read
