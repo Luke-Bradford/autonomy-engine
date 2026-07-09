@@ -122,12 +122,43 @@ agent). Existing `roles:` configs are auto-migrated (§7).
   `valid_model_id` / account registry gates). `secret` resolves from the
   credential store at run time and is **never logged, never in argv** (existing
   secrets discipline).
-- **Substitution** happens at **compile time**, before any session dispatch:
-  `${params.x}` is resolved in (a) brief `.md` text and (b) activity fields that
-  accept it (`runs_as.*`, `call_pipeline.params.*`, container fields). A missing
-  **required** param at run start = **refuse the run** (fail-safe, clear reason
-  — never dispatch with an unresolved `${}`). Stdlib-only string substitution;
-  no template engine dependency.
+- **Resolution precedence (per run):** every pipeline declares its **full param
+  set with defaults saved in it**. A value resolves as: (1) the pipeline's saved
+  **default** (base), overridden by (2) the **invoker** — a **trigger** (a
+  standalone run) *or* a **calling pipeline's `call_pipeline.params`** (a composed
+  run); trigger and caller are the **same override slot**, interchangeable. A
+  required param with no default and no override → **refuse the run** (fail-safe).
+  So a called pipeline runs on its own saved defaults unless the caller overrides
+  them; `call_pipeline.params` *is* the caller acting as the trigger would.
+
+### 3.1 The dynamic param language — named refs + a closed pure-function set
+
+Stdlib-parseable, **never evaluates arbitrary code** (no `eval`/`exec`). ~90% of
+uses are a plain name lookup; the rest is defaults + output-passing.
+
+- **Refs (the simple string-match names):**
+  - `${params.<name>}` — a pipeline parameter (resolved by the precedence above)
+  - `${nodes.<id>.output.<name>}` — a completed upstream activity's named output
+  - `${run.<field>}` — run metadata (`run.id`, `run.pipeline`, `run.trigger`,
+    `run.repo`)
+- **Two resolution modes:** a field that is *exactly* `${ref}` keeps ref's
+  **typed** value (a `repo` stays a repo, a `number` stays a number); a `${ref}`
+  embedded in surrounding text is **string interpolation**
+  (`"release/${params.version}"`).
+- **Closed pure-function escape hatch** (allowlist only, each a real stdlib
+  function — no eval): `default(x, y)` · `concat(a, b, …)` · `slug(x)`; extensible
+  by allowlist. Used inside `${…}`:
+  `${default(params.model, 'claude-sonnet-5')}`,
+  `${slug(concat(params.ticket, '-fix'))}`.
+- **Where resolved:** at **compile time**, before any session dispatch, in
+  (a) brief `.md` text and (b) activity fields that accept it (`runs_as.*`,
+  `call_pipeline.params.*`, container fields). An unresolved/unknown ref or a
+  non-allowlisted function is a **validator error** (refuse, don't run).
+- **Impl/security:** one stdlib resolver — a regex for `${…}` + a small
+  recursive-descent parse of the function calls over the **closed allowlist**;
+  type-checked against declared param types; **secrets resolved last, never
+  logged/argv**; literal `${` in prose escapes as `$${`.
+
 - **Outputs:** each activity may write named values to a per-run outputs file
   (`var/autonomy-logs/.run-<id>-outputs.json`); the pipeline's declared
   `outputs` project from them by name. A `call_pipeline` parent reads the
@@ -142,9 +173,11 @@ agent). Existing `roles:` configs are auto-migrated (§7).
 - `{ "type": "call_pipeline", "pipeline": "<name>", "params": {…}, "wait": true|false }`.
 - A call spawns a **child run** — a real run with its own journal line, linked to
   the parent by a `parent_run` field. The child is resolved + parameterised
-  exactly like a trigger-started run, except its params come from the call's
-  `params` block (which may reference the parent's `${params.*}` /
-  `${nodes.*.output.*}`).
+  exactly like a trigger-started run: the child's **saved defaults** are the base,
+  the caller's `call_pipeline.params` are the overrides (§3.1 precedence — the
+  caller occupies the trigger's slot), and the override values may reference the
+  parent's `${params.*}` / `${nodes.*.output.*}`. The child's **account/agent are
+  just params** — pinned by the child's own default, overridable by the caller.
 - **`wait: true` (default):** the parent activity's unit stays `dispatched` until
   the child run reaches a terminal outcome; the parent then reads the child's
   typed **outputs** and the child's outcome drives the parent's edges (a child
@@ -282,24 +315,28 @@ browser verify for UI, safe_merge).
 11. **Build = model-first big-bang**, built behind the old path, cut over when
     proven; loops stay PAUSED.
 
-## 11. Open questions for review
+## 11. Resolved decisions (operator delegated 2026-07-09; recorded here)
 
-- **Param reference syntax** — `${params.x}` / `${nodes.id.output.name}` is the
-  proposed surface. Confirm the sigil + dotted-path shape (stdlib-parseable, no
-  template dep).
-- **Trigger storage** — `.autonomy/triggers/*.json` (one file per trigger) vs a
-  `triggers:` block in `config.yaml`. Files compose better with the var-shadow
-  editor (SD-34) and per-trigger enable/pause state; the block is fewer files.
-  Proposed: **files** (mirrors pipelines).
-- **`repo` param vs registry** — a trigger's `repo` selects among engine-
-  registered checkouts (the control-unit #4), not an arbitrary path. Confirm.
-- **Queue depth** — for `concurrency: queue`, a bounded depth (proposed: 1, ADF-
-  like) vs configurable. Deeper queues risk stale runs.
-- **Child-run auth** — a `call_pipeline` child's account: inherit the parent's,
-  or resolve independently from its own params? Proposed: **its own params**
-  (a QA pipeline can pin a cheaper agent regardless of caller).
-- **Scheduling clock** — `schedule` needs a cron parser (stdlib-only). Confirm
-  the cron subset (reuse whatever the current cron-role trigger parses).
+- **Param language** — `${params.x}` / `${nodes.id.output.name}` / `${run.field}`
+  named refs + a **closed pure-function allowlist** (`default`/`concat`/`slug`,
+  no eval), stdlib-resolved, type-checked, secrets-last. Full spec §3.1.
+- **Param precedence** — pipeline saved **default** < invoker override (a
+  **trigger OR a calling pipeline** — the same slot); required-unset → refuse. §3.
+- **Trigger storage** — **files** `.autonomy/triggers/*.json` (composes with the
+  SD-34 var-shadow editor, carries per-trigger enable/pause state, mirrors
+  pipelines).
+- **`repo` param** — type `repo`, **selects among engine-registered checkouts**
+  (control-unit #4), validated — never an arbitrary path.
+- **Queue depth** — `concurrency: queue` is bounded at **1** (ADF-like; deeper
+  queues risk stale runs).
+- **Child-run account** — from the child's **own resolved params** (its saved
+  default, overridable by the caller): a QA pipeline pins a cheaper agent by
+  default, the caller can override.
+- **Scheduling clock** — reuse the **existing cron-role parser** (same stdlib
+  cron subset already in the engine).
+
+Remaining genuinely-open item (needs a mockup pass, not a decision): the
+**visual layout** of the Pipelines gallery + Triggers section (§8).
 
 ## 12. Relationship to existing specs
 
