@@ -1030,7 +1030,7 @@ def _pipeline_seed_dir(committed, shadow):
     is the fix and untouched briefs reset to the known-good committed base.
     Total -- any read error falls to committed."""
     import pipeline as _pl
-    if os.path.isdir(shadow):
+    if os.path.isdir(shadow) and not os.path.islink(shadow):
         try:
             cur = _pl.load_doc(os.path.join(shadow, "pipeline.json"))
             if not _pl.validate_doc(cur, shadow):
@@ -1097,6 +1097,12 @@ def pipeline_save(repo, name, doc, briefs):
     if not os.path.isdir(committed):
         return {"ok": False, "error":
                 "no committed pipeline %r to edit (bind one first)" % name}
+    # A symlinked or non-directory shadow path is NOT a sanctioned shadow:
+    # refuse BEFORE we seed/stage, so the writer can never read or write
+    # through a symlink out of var/ (path-escape guard, Codex CP2).
+    if os.path.islink(shadow) or (os.path.exists(shadow) and not os.path.isdir(shadow)):
+        return {"ok": False, "error":
+                "the pipeline shadow path is not a clean directory -- refusing"}
     seed = _pipeline_seed_dir(committed, shadow)
     staging = shadow + ".staging"
     try:
@@ -1146,43 +1152,52 @@ def pipeline_save(repo, name, doc, briefs):
     _shutil.rmtree(backup, ignore_errors=True)
     had_shadow = os.path.isdir(shadow)
     keep = set(os.listdir(staging))
+    consumed = False
     try:
-        if had_shadow:
-            _shutil.copytree(shadow, backup)      # rollback snapshot
+        if not had_shadow:
+            # first save: ATOMIC dir install -- the shadow appears complete or
+            # not at all, so a reader keyed on the dir (effective_pipeline_dir)
+            # never sees a partial shadow mid-install (Codex CP2).
+            os.rename(staging, shadow)
+            consumed = True
         else:
-            os.makedirs(shadow)
-        for entry in sorted(keep):                # briefs first
-            if entry == "pipeline.json":
-                continue
-            tmp = os.path.join(shadow, entry + ".tmp")
-            _shutil.copyfile(os.path.join(staging, entry), tmp)
-            os.replace(tmp, os.path.join(shadow, entry))
-        tmp = os.path.join(shadow, "pipeline.json.tmp")
-        _shutil.copyfile(os.path.join(staging, "pipeline.json"), tmp)
-        os.replace(tmp, os.path.join(shadow, "pipeline.json"))   # PUBLISH (atomic)
+            _shutil.copytree(shadow, backup)      # rollback snapshot
+            for entry in sorted(keep):            # briefs first, pipeline.json LAST
+                if entry == "pipeline.json":
+                    continue
+                tmp = os.path.join(shadow, entry + ".tmp")
+                _shutil.copyfile(os.path.join(staging, entry), tmp)
+                os.replace(tmp, os.path.join(shadow, entry))
+            tmp = os.path.join(shadow, "pipeline.json.tmp")
+            _shutil.copyfile(os.path.join(staging, "pipeline.json"), tmp)
+            os.replace(tmp, os.path.join(shadow, "pipeline.json"))   # PUBLISH (atomic)
     except OSError as exc:
         try:                                      # wholesale restore
-            _shutil.rmtree(shadow, ignore_errors=True)
             if had_shadow:
-                os.rename(backup, shadow)
+                _shutil.rmtree(shadow, ignore_errors=True)
+                if os.path.isdir(backup):
+                    os.rename(backup, shadow)
         except OSError:
             pass
         _shutil.rmtree(staging, ignore_errors=True)
         return {"ok": False, "error": "could not install the pipeline: %s" % exc}
-    # prune stale files best-effort -- the save already SUCCEEDED at the atomic
-    # publish above; a leftover unreferenced file is inert and must not trigger
-    # a rollback of a good save.
-    try:
-        for entry in os.listdir(shadow):
-            if entry not in keep and not entry.endswith(".tmp"):
-                p = os.path.join(shadow, entry)
-                if os.path.isdir(p) and not os.path.islink(p):
-                    _shutil.rmtree(p, ignore_errors=True)
-                else:
-                    os.remove(p)
-    except OSError:
-        pass
-    _shutil.rmtree(staging, ignore_errors=True)
+    # prune stale files best-effort (only meaningful on an OVER-write -- a fresh
+    # rename install already holds exactly the staged set). The save already
+    # SUCCEEDED at the atomic publish; a leftover file is inert and must not
+    # trigger a rollback of a good save.
+    if had_shadow:
+        try:
+            for entry in os.listdir(shadow):
+                if entry not in keep and not entry.endswith(".tmp"):
+                    p = os.path.join(shadow, entry)
+                    if os.path.isdir(p) and not os.path.islink(p):
+                        _shutil.rmtree(p, ignore_errors=True)
+                    else:
+                        os.remove(p)
+        except OSError:
+            pass
+    if not consumed:
+        _shutil.rmtree(staging, ignore_errors=True)
     _shutil.rmtree(backup, ignore_errors=True)
     return {"ok": True, "path": os.path.relpath(shadow, repo),
             "message": "saved to the live pipeline shadow -- applies next run "

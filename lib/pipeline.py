@@ -292,7 +292,14 @@ def effective_pipeline_dir(repo, name):
     committed = os.path.join(repo, ".autonomy", "pipelines", name)
     try:
         shadow = os.path.join(repo, "var", "autonomy", "pipelines", name)
-        if os.path.isfile(os.path.join(shadow, "pipeline.json")):
+        # Key on the shadow DIRECTORY, not just pipeline.json (Codex CP2): an
+        # incomplete shadow (dir present, pipeline.json missing/invalid) is a
+        # present-but-invalid shadow that must REFUSE (load_doc/validate_doc
+        # raise at the call site), never a silent fallback to committed
+        # (fail-safe, prevention-log #3). A SYMLINKED shadow is not a sanctioned
+        # shadow -- ignore it so the resolver can never be redirected out of
+        # var/ (the writer separately refuses to write through one).
+        if os.path.isdir(shadow) and not os.path.islink(shadow):
             return shadow
     except (OSError, TypeError):
         pass

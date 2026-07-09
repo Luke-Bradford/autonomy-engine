@@ -1049,6 +1049,19 @@ class PipelineSaveTest(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(shadow)),
                          ["a.md", "b.md", "pipeline.json"])
 
+    def test_symlinked_shadow_refused(self):
+        # a symlinked shadow path must be refused, never written through (Codex CP2).
+        repo = self._repo()
+        outside = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, outside, ignore_errors=True)
+        pdir = os.path.join(repo, "var", "autonomy", "pipelines")
+        os.makedirs(pdir)
+        os.symlink(outside, os.path.join(pdir, "flow"))
+        res = dc.pipeline_save(repo, "flow", dict(self.doc, version=2), {})
+        self.assertFalse(res["ok"])
+        self.assertIn("clean directory", res["error"])
+        self.assertEqual(os.listdir(outside), [])    # nothing written through it
+
     def test_invalid_shadow_not_used_as_seed(self):
         # a present-but-invalid shadow is NEVER trusted as a brief seed (no
         # laundering; Codex CP1 #6/#7): untouched briefs reset to committed.

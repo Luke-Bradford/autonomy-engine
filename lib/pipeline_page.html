@@ -194,6 +194,7 @@ const COLLAPSED = new Set();   // container ids, survives re-render
 let WORKING = null;       // deep clone of the editable doc; render reads THIS
 let BRIEFS = {};          // {basename: content} for briefs edited this session
 let DIRTY = false;        // unsaved edits pending
+let EDIT_SEQ = 0;         // bumps on every edit -- guards save against in-flight edits
 const CTOKEN = (document.querySelector('meta[name="ae-control-token"]')||{}).content || "";
 const MODEL_CHOICES=__MODEL_CHOICES__;
 
@@ -231,7 +232,7 @@ function adoptWorking(){    // baseline WORKING from server truth (only when !DI
   WORKING = VIEW && VIEW.doc ? clone(VIEW.doc) : null;
   BRIEFS = {};
 }
-function markDirty(){ DIRTY = true; updateHeader(); }
+function markDirty(){ DIRTY = true; EDIT_SEQ++; updateHeader(); }
 function briefText(ref){   // pane seeds from edits-first, else server truth
   if(ref in BRIEFS) return BRIEFS[ref];
   const b = VIEW && VIEW.briefs || {};
@@ -428,9 +429,14 @@ function drawEdges(){
       lblx = (x1+x2)/2; lbly = (y1+y2)/2 - 6;
     }
     const col = e.on === "success" ? "ok" : (e.on === "failure" ? "bad" : "dim");
+    // canonicalize the marker id to a KNOWN value: e.on comes from the doc,
+    // which for an invalid (intentionally-rendered) doc is untrusted -- an
+    // arbitrary `on` string interpolated into url(#m-…) would inject SVG
+    // attributes (Codex CP2). Only success/failure/completion have markers.
+    const mk = (e.on === "success" || e.on === "failure") ? e.on : "completion";
     const dimmed = OBSERVED && !edgeLit(e, lit) ? " dimmed" : "";
     const dash = e.on === "completion" ? ` stroke-dasharray="4 4"` : "";
-    body += `<path class="e${dimmed}" d="${d}" fill="none" stroke="var(--${col})" stroke-width="1.6"${dash} marker-end="url(#m-${e.on})"/>`;
+    body += `<path class="e${dimmed}" d="${d}" fill="none" stroke="var(--${col})" stroke-width="1.6"${dash} marker-end="url(#m-${mk})"/>`;
     if(editable() && !e.back)
       body += `<path class="hit" data-efrom="${esc(e.from)}" data-eto="${esc(e.to)}" data-eon="${esc(e.on)}" d="${d}" fill="none" stroke="transparent" stroke-width="12"><title>${esc(e.on)} — click to cycle · shift-click to delete</title></path>`;
     if(e.back){
@@ -761,6 +767,7 @@ async function saveNow(){
   if(!editable() || !DIRTY) return;
   const src = VIEW.source || {}, errbar = document.getElementById("errbar");
   const repo = qs().get("repo"), role = qs().get("role");
+  const seqAtSubmit = EDIT_SEQ;                    // snapshot: detect edits mid-POST
   try{
     const res = await fetch("/api/control", {method:"POST",
       headers:{"Content-Type":"application/json"},
@@ -768,6 +775,13 @@ async function saveNow(){
         name: src.name, doc: WORKING, briefs: BRIEFS})});
     const out = await res.json().catch(() => ({}));
     if(res.status === 200 && out.ok){
+      if(EDIT_SEQ !== seqAtSubmit){
+        // the operator edited WHILE the save was in flight (Codex CP2): the
+        // posted bytes are persisted, but clearing/adopting now would clobber
+        // the newer edits. Keep them DIRTY; the next Save persists them.
+        updateHeader();
+        return;
+      }
       DIRTY = false; BRIEFS = {}; VIEWSIG = "";   // force a re-fetch of server truth
       updateHeader();
       await tick(repo, role);                     // shadow is now the effective read

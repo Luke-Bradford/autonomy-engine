@@ -1332,8 +1332,19 @@ class EffectivePipelineDirTest(unittest.TestCase):
             fh.write("{}")
         self.assertEqual(pipeline.effective_pipeline_dir(self.repo, "flow"), d)
 
-    def test_empty_shadow_dir_falls_to_committed(self):
-        self._shadow()                       # dir exists, no pipeline.json
+    def test_empty_shadow_dir_is_used_then_refuses(self):
+        # dir present, pipeline.json missing -> a present-but-invalid shadow:
+        # the resolver returns IT (never committed), so dispatch refuses
+        # (fail-safe, Codex CP2) rather than silently running the committed pack.
+        d = self._shadow()
+        self.assertEqual(pipeline.effective_pipeline_dir(self.repo, "flow"), d)
+
+    def test_symlinked_shadow_ignored(self):
+        # a symlinked shadow is not a sanctioned shadow -> resolver returns
+        # committed, never following the link out of var/ (Codex CP2).
+        parent = os.path.join(self.repo, "var", "autonomy", "pipelines")
+        os.makedirs(parent)
+        os.symlink(self.committed, os.path.join(parent, "flow"))
         self.assertEqual(pipeline.effective_pipeline_dir(self.repo, "flow"),
                          self.committed)
 
