@@ -1049,6 +1049,18 @@ class PipelineSaveTest(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(shadow)),
                          ["a.md", "b.md", "pipeline.json"])
 
+    def test_narrow_gitignore_refuses_pipeline_shadow(self):
+        # a .gitignore ignoring ONLY the config file (not var/) leaves the
+        # pipeline shadow UNPROTECTED -> preflight's `stash -u` would sweep it,
+        # so the write must refuse (fail-safe). Confirms the directory pathspec
+        # passed to git check-ignore is the RIGHT check for the pipeline shadow
+        # (PR #366 review NITPICK; empirically verified against check-ignore).
+        repo = self._repo(gitignore="var/autonomy/config.yaml\n")
+        res = dc.pipeline_save(repo, "flow", dict(self.doc, version=2), {})
+        self.assertFalse(res["ok"])
+        self.assertIn("gitignore", res["error"])
+        self.assertFalse(os.path.isdir(self._shadow(repo)))
+
     def test_symlinked_shadow_refused(self):
         # a symlinked shadow path must be refused, never written through (Codex CP2).
         repo = self._repo()
