@@ -197,11 +197,36 @@ EDGE_KINDS = ("success", "failure", "completion")
 JOIN_KINDS = ("all", "any")
 MAX_BOUNCES_CEIL = 9
 _DOC_KEYS = frozenset(("name", "version", "trigger_default", "caps",
-                       "nodes", "edges", "containers", "wrapped_from_role"))
+                       "nodes", "edges", "containers", "wrapped_from_role",
+                       "params", "outputs"))
 CONTAINER_KINDS = frozenset(("loop", "stage"))   # branch=P2, for_each=P5
 MAX_ROUNDS_CEIL = 99
 MAX_SESSIONS_CEIL = 500
 MAX_PARALLEL_CEIL = 8
+# --- Typed params/outputs (pipeline+trigger model Phase A, spec S3). The
+#     declarations are validated here; VALUES are supplied by an invoker
+#     (a trigger or a calling pipeline -- Phase B/C) via resolve_params. ---
+PARAM_TYPES = ("string", "number", "bool", "enum",
+               "repo", "agent", "model", "account", "secret")
+_PARAM_KEYS = frozenset(("name", "type", "required", "default", "choices"))
+_OUTPUT_KEYS = frozenset(("name", "type"))
+_REF_RE = re.compile(r"\$\{([^}]*)\}")            # ${ ... } (the param language)
+
+
+def _typed_ok(typ, val, choices=None):
+    """Does `val` satisfy declared type `typ`? Used to type-check a declared
+    DEFAULT at validate time (Codex CP1: catch {number, default:'abc'} early,
+    not later in resolve_params). number/bool accept their JSON form or a
+    coercible string; enum must be a choice; string-family accept any string."""
+    if typ == "number":
+        return (isinstance(val, (int, float)) and not isinstance(val, bool)) or \
+               (isinstance(val, str) and re.match(r"^-?\d+(\.\d+)?$", val) is not None)
+    if typ == "bool":
+        return isinstance(val, bool) or \
+               (isinstance(val, str) and val.lower() in ("true", "false"))
+    if typ == "enum":
+        return val in (choices or [])
+    return isinstance(val, str)            # string/repo/agent/model/account/secret
 
 
 class PipelineError(Exception):
@@ -341,6 +366,66 @@ def _validate_runs_as(where, runs_as, errors):
         errors.append("%s: runs_as.agent has invalid chars" % where)
 
 
+def _validate_params_outputs(doc, errors):
+    """params/outputs are typed declarations (spec S3). Refuse malformed -- an
+    accepted-but-unconsumed decl is the fail-open the honesty invariant forbids."""
+    params = doc.get("params")
+    if params is not None:
+        if not isinstance(params, list):
+            errors.append("params: must be a list of declarations")
+        else:
+            seen = set()
+            for i, p in enumerate(params):
+                w = "params[%d]" % i
+                if not isinstance(p, dict):
+                    errors.append("%s: must be a mapping" % w)
+                    continue
+                for k in p:
+                    if k not in _PARAM_KEYS:
+                        errors.append("%s: unknown key %r" % (w, k))
+                nm = p.get("name")
+                if not (_is_str(nm) and _NAME_RE.match(nm)):
+                    errors.append("%s: name required, charset [A-Za-z0-9._-]" % w)
+                elif nm in seen:
+                    errors.append("%s: duplicate param name %r" % (w, nm))
+                else:
+                    seen.add(nm)
+                if p.get("type") not in PARAM_TYPES:
+                    errors.append("%s: type must be one of %s"
+                                  % (w, ", ".join(PARAM_TYPES)))
+                typ = p.get("type")
+                if typ == "enum":
+                    ch = p.get("choices")
+                    if not (isinstance(ch, list) and ch and all(_is_str(c) for c in ch)):
+                        errors.append("%s: enum requires non-empty string choices" % w)
+                    elif "default" in p and p["default"] not in ch:
+                        errors.append("%s: default %r not in choices" % (w, p["default"]))
+                elif "default" in p and typ in PARAM_TYPES and \
+                        not _typed_ok(typ, p["default"]):
+                    errors.append("%s: default %r does not match type %r"
+                                  % (w, p["default"], typ))     # CP1: catch early
+                if "required" in p and not isinstance(p["required"], bool):
+                    errors.append("%s: required must be a bool" % w)
+    outputs = doc.get("outputs")
+    if outputs is not None:
+        if not isinstance(outputs, list):
+            errors.append("outputs: must be a list of declarations")
+        else:
+            for i, o in enumerate(outputs):
+                w = "outputs[%d]" % i
+                if not isinstance(o, dict):
+                    errors.append("%s: must be a mapping" % w)
+                    continue
+                for k in o:
+                    if k not in _OUTPUT_KEYS:
+                        errors.append("%s: unknown key %r" % (w, k))
+                if not (_is_str(o.get("name")) and _NAME_RE.match(o.get("name") or "")):
+                    errors.append("%s: name required, charset [A-Za-z0-9._-]" % w)
+                if o.get("type") not in PARAM_TYPES:
+                    errors.append("%s: type must be one of %s"
+                                  % (w, ", ".join(PARAM_TYPES)))
+
+
 def validate_doc(doc, pipeline_dir=None):
     """Full-document validation. Returns error strings, [] = valid.
     pipeline_dir enables brief_ref existence checks (None for wrapped docs)."""
@@ -370,6 +455,7 @@ def validate_doc(doc, pipeline_dir=None):
                 1 <= caps["max_parallel"] <= MAX_PARALLEL_CEIL):
             errors.append("caps.max_parallel: must be 1..%d (ENFORCED fan-out "
                           "ceiling; absent = sequential)" % MAX_PARALLEL_CEIL)
+    _validate_params_outputs(doc, errors)
 
     nodes = doc.get("nodes")
     ids = []

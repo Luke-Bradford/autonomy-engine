@@ -1378,5 +1378,75 @@ class EffectivePipelineDirTest(unittest.TestCase):
         self.assertEqual(meta["pipeline_dir"], d)
 
 
+class ParamsOutputsValidationTest(unittest.TestCase):
+    def _doc(self, **over):
+        d = {"name": "flow", "version": 1,
+             "caps": {"max_sessions_per_run": 16},
+             "nodes": [{"id": "a", "type": "pick", "brief_ref": "a.md"}],
+             "edges": []}
+        d.update(over)
+        return d
+
+    def test_valid_params_and_outputs_accepted(self):
+        d = self._doc(
+            params=[{"name": "repo", "type": "repo", "required": True},
+                    {"name": "model", "type": "model", "default": "claude-sonnet-5"},
+                    {"name": "mode", "type": "enum", "choices": ["a", "b"], "default": "a"}],
+            outputs=[{"name": "pr", "type": "number"}])
+        self.assertEqual(pipeline.validate_doc(d, None), [])
+
+    def test_unknown_param_type_refused(self):
+        d = self._doc(params=[{"name": "x", "type": "wat"}])
+        errs = pipeline.validate_doc(d, None)
+        self.assertTrue(any("type" in e for e in errs))
+
+    def test_param_bad_name_charset_refused(self):
+        d = self._doc(params=[{"name": "../x", "type": "string"}])
+        self.assertTrue(pipeline.validate_doc(d, None))
+
+    def test_enum_requires_choices(self):
+        d = self._doc(params=[{"name": "m", "type": "enum"}])
+        self.assertTrue(any("choices" in e for e in pipeline.validate_doc(d, None)))
+
+    def test_default_must_be_in_choices(self):
+        d = self._doc(params=[{"name": "m", "type": "enum",
+                               "choices": ["a"], "default": "z"}])
+        self.assertTrue(any("default" in e for e in pipeline.validate_doc(d, None)))
+
+    def test_non_enum_default_type_checked_at_declare(self):
+        bad = self._doc(params=[{"name": "n", "type": "number", "default": "abc"}])
+        self.assertTrue(any("default" in e for e in pipeline.validate_doc(bad, None)))
+        badb = self._doc(params=[{"name": "b", "type": "bool", "default": "maybe"}])
+        self.assertTrue(any("default" in e for e in pipeline.validate_doc(badb, None)))
+        ok = self._doc(params=[{"name": "n", "type": "number", "default": 3}])
+        self.assertEqual(pipeline.validate_doc(ok, None), [])
+
+    def test_duplicate_param_names_refused(self):
+        d = self._doc(params=[{"name": "x", "type": "string"},
+                              {"name": "x", "type": "number"}])
+        self.assertTrue(any("duplicate" in e for e in pipeline.validate_doc(d, None)))
+
+    def test_output_needs_name_and_type(self):
+        d = self._doc(outputs=[{"name": "pr"}])
+        self.assertTrue(pipeline.validate_doc(d, None))
+
+    def test_params_not_a_list_refused(self):
+        self.assertTrue(pipeline.validate_doc(self._doc(params={}), None))
+
+    def test_reference_in_field_still_refused_in_phase_a(self):
+        # HONESTY (Codex CP1): Phase A cannot substitute ${...} (dispatch is
+        # Phase B), so validate_doc must still REFUSE a ${...} in agent -- a
+        # validating doc must be a runnable doc. Acceptance lands in Phase B.
+        d = self._doc(nodes=[{"id": "a", "type": "agent_task", "brief_ref": "a.md",
+                              "runs_as": {"agent": "${params.coder_agent}"}}])
+        self.assertTrue(pipeline.validate_doc(d, None))          # refused for now
+        d2 = self._doc(nodes=[{"id": "a", "type": "agent_task", "brief_ref": "a.md",
+                               "runs_as": {"agent": "bad agent!"}}])
+        self.assertTrue(pipeline.validate_doc(d2, None))
+
+    def test_no_params_key_still_valid(self):    # back-compat: params optional
+        self.assertEqual(pipeline.validate_doc(self._doc(), None), [])
+
+
 if __name__ == "__main__":
     unittest.main()
