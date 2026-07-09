@@ -134,7 +134,11 @@ The dashboard serves **`/pipeline`** — a read-only canvas per role:
 - a **last run** overlay lighting the path the most recent run actually
   took — per-activity ✓/✕, traversed edges, bounce badges — straight from
   the journal,
-- live pulse on activities currently running.
+- live pulse on activities currently running,
+- a **search box** to find an activity by id, type, or agent (matches
+  highlight, the rest dim, a count shows, and Enter jumps to the first),
+  and an **overview map** for wide graphs — a scaled thumbnail with a
+  draggable viewport rectangle you drag to pan the canvas.
 
 An invalid pipeline renders its validator errors with the document still
 visible — the page shows you what is wrong rather than hiding it.

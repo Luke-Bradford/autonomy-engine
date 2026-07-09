@@ -63,7 +63,7 @@ a{color:var(--accent)}
 .pitem.off{opacity:.5}
 .pitem .ico{width:16px;display:inline-block;text-align:center}
 .pitem .phase{margin-left:auto;font-family:var(--mono);font-size:8.5px;color:var(--warn);white-space:nowrap}
-.canvaswrap{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow);padding:14px 16px 18px;min-width:0}
+.canvaswrap{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow);padding:14px 16px 18px;min-width:0;position:relative}
 .errbar{border:1px solid var(--bad);border-radius:var(--r);background:rgba(217,87,87,.08);color:var(--ink);padding:8px 12px;margin-bottom:10px;font-size:12px}
 .errbar .eyebrow{color:var(--bad)}
 .errbar ul{margin:4px 0 0;padding-left:18px}
@@ -134,6 +134,23 @@ svg.edges path.hit{pointer-events:stroke;cursor:pointer}
 .pane textarea{width:100%;max-width:none;min-height:52px;resize:vertical}
 .pane input[readonly]{opacity:.7;cursor:not-allowed}
 .frow.locked .lab{color:var(--dim)}
+/* --- P3c (#367): navigation overlays — search highlight + minimap --- */
+.search{background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);font-family:var(--mono);font-size:11px;border-radius:5px;padding:4px 7px;width:132px}
+.search::placeholder{color:var(--dim)}
+.node.searchoff,.box.searchoff{opacity:.28}
+.node.searchhit{border-color:var(--warn);box-shadow:0 0 0 2px var(--warn-glow)}
+.box.searchhit{border-color:var(--warn)}
+@keyframes flashpulse{0%{box-shadow:0 0 0 3px var(--warn-glow)}100%{box-shadow:0 0 0 0 transparent}}
+.node.flash,.box.flash{animation:flashpulse .9s ease-out}
+@media (prefers-reduced-motion: reduce){.node.flash,.box.flash{animation:none;outline:2px solid var(--warn)}}
+.minimap{position:absolute;right:16px;bottom:16px;width:176px;height:104px;background:var(--panel2);border:1px solid var(--hair2);border-radius:5px;box-shadow:var(--shadow);overflow:hidden;z-index:4}
+.minimap[hidden]{display:none}
+.mmsvg{display:block;width:176px;height:104px;cursor:pointer}
+.mmnode{fill:var(--hair2);stroke:var(--dim);stroke-width:.5}
+.mmnode.off{fill:var(--hair);opacity:.4;stroke:none}
+.mmnode.hit{fill:var(--warn);stroke:none}
+.mmview{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1;cursor:grab}
+@media(max-width:1120px){.minimap{display:none}}
 </style>
 </head>
 <body>
@@ -143,12 +160,16 @@ svg.edges path.hit{pointer-events:stroke;cursor:pointer}
     <h1>pipeline</h1>
     <select id="repopick" aria-label="repo"></select>
     <select id="rolepick" aria-label="role"></select>
+    <input id="search" class="search" type="search" placeholder="find node…"
+           aria-label="find an activity by id, type, or agent" autocomplete="off">
+    <span id="searchcount" class="badge" style="display:none"></span>
     <span id="prov"></span>
     <span id="shadowchip"></span>
     <span class="gap"></span>
     <span id="ledgerchip"></span>
     <span id="capchip"></span>
     <button class="pill" id="obsbtn">⚡ last run</button>
+    <button class="pill on" id="mapbtn" title="toggle the overview map">🗺 map</button>
     <span id="unsaved"></span>
     <button class="pill" id="revertbtn" style="display:none">revert</button>
     <button class="pill save" id="savebtn" style="display:none">save</button>
@@ -169,6 +190,9 @@ svg.edges path.hit{pointer-events:stroke;cursor:pointer}
         <span><span class="tag soft">instructed</span> compiled into the brief</span>
         <span class="note" id="legendnote">read-only viewer</span>
       </div>
+      <div class="minimap" id="minimap" hidden aria-hidden="true">
+        <svg id="mmsvg" class="mmsvg"></svg>
+      </div>
     </main>
     <aside class="pane" id="pane"></aside>
   </div>
@@ -186,6 +210,8 @@ let VIEWSIG = "";         // last payload (raw string) -- the render guard
 let SEL = "";             // selected unit/node id ("" = nothing)
 let OBSERVED = false;
 const COLLAPSED = new Set();   // container ids, survives re-render
+let SEARCH = "";               // P3c: active search/filter query (lowercased), survives re-render
+let MAP_ON = true;             // P3c: minimap visible when the canvas overflows
 
 /* P3b (#365) editor state. WORKING is a dirty working COPY of the doc the
    canvas + pane render from; the server payload (VIEW) still owns the
@@ -279,6 +305,89 @@ function rankUnits(units, edges){
   const cols = [];
   units.forEach(u => { (cols[rank[u]] = cols[rank[u]] || []).push(u); });
   return cols.filter(c => c && c.length);
+}
+
+/* ---- P3c search/filter: pure predicates over curDoc() ----
+   SEARCH is page state like SEL/OBSERVED/COLLAPSED: it survives a re-render and
+   render() re-applies it, so a live update never drops the filter. Matching is a
+   case-insensitive substring over a node/container's id + type/kind + runs_as
+   values. Nothing here renders raw doc text -- highlighting toggles CSS classes
+   on the already-esc()'d cards; matched ids never reach the DOM un-escaped. */
+function nodeSearchText(u){
+  if(!u || typeof u !== "object") return "";
+  const parts = [u.id, u.type, u.kind];
+  const ra = u.runs_as;
+  if(ra && typeof ra === "object") for(const v of Object.values(ra)) parts.push(v);
+  return parts.filter(x => x != null).map(String).join(" ").toLowerCase();
+}
+function nodeMatches(u, q){ return q === "" ? true : nodeSearchText(u).indexOf(q) >= 0; }
+function matchedIds(q){
+  const d = curDoc(), ids = new Set();
+  if(!d || !q) return ids;
+  for(const n of (d.nodes||[])) if(n && n.id && nodeMatches(n, q)) ids.add(n.id);
+  for(const c of (d.containers||[])) if(c && c.id && nodeMatches(c, q)) ids.add(c.id);
+  return ids;
+}
+function childMatched(id, hits){
+  const c = conById(id);
+  return !!c && (c.children||[]).some(ch => hits.has(ch));
+}
+function firstMatchId(q){
+  const hits = matchedIds(q);
+  if(!hits.size) return null;
+  const d = curDoc() || {};
+  // Visual left-to-right, top-to-bottom order = the SAME ranked columns the
+  // canvas lays out (rankUnits over topUnits + curEdges), NOT raw topUnits order
+  // -- longest-path layering can move a unit to a later column than its
+  // declaration index, so jumping by topUnits order could skip a leftward match
+  // (Codex CP1). Mirror the render layout exactly.
+  for(const col of rankUnits(topUnits(d), curEdges())){
+    for(const u of col){
+      if(hits.has(u)) return u;
+      const c = conById(u);
+      if(c) for(const ch of (c.children||[])) if(hits.has(ch)) return ch;
+    }
+  }
+  for(const id of hits) return id;                 // any hit (defensive: unranked)
+  return null;
+}
+
+/* Toggle highlight/dim classes on the rendered cards WITHOUT a rebuild (so the
+   pane, selection, and caret are untouched). A container card lights when it OR
+   any child matches, so a wide search does not blank a box whose child matched.
+   Callers that also want the minimap shading refreshed call drawMinimap() after
+   (Task 2 defines it; the event wiring guards it with typeof so search stands
+   alone). */
+function applySearch(){
+  const q = SEARCH, cnt = document.getElementById("searchcount");
+  const cards = document.querySelectorAll("#dag [data-uid]");
+  if(!q){
+    cards.forEach(el => el.classList.remove("searchhit","searchoff"));
+    if(cnt) cnt.style.display = "none";
+    return;
+  }
+  const hits = matchedIds(q);
+  cards.forEach(el => {
+    const on = hits.has(el.dataset.uid) || childMatched(el.dataset.uid, hits);
+    el.classList.toggle("searchhit", on);
+    el.classList.toggle("searchoff", !on);
+  });
+  if(cnt){ cnt.style.display = ""; cnt.textContent = hits.size + (hits.size===1?" match":" matches"); }
+}
+function jumpToSearch(){
+  const box = document.getElementById("search");
+  if(box) box.blur();                              // #16: the jump ENDS -> release focus
+  if(!SEARCH) return;
+  const id = firstMatchId(SEARCH);
+  if(!id) return;
+  sel(id);                                         // select -> render() (header persists)
+  requestAnimationFrame(() => {
+    const el = document.querySelector(`#dag [data-uid="${CSS.escape(id)}"]`);
+    if(!el) return;
+    el.scrollIntoView({block:"nearest", inline:"center", behavior:"smooth"});
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 900);
+  });
 }
 
 /* ---- observed lighting projections (journal facts only) ---- */
@@ -381,7 +490,7 @@ function render(){
   dagwrap.classList.toggle("editable", editable());
   const dag = document.getElementById("dag");
   if(VIEW.error || !curDoc()){ dag.innerHTML = `<span class="note">${esc(VIEW.error || "document unreadable — see the errors above")}</span>`;
-    document.getElementById("edgesvg").innerHTML = ""; renderPane(); return; }
+    document.getElementById("edgesvg").innerHTML = ""; drawMinimap(); renderPane(); return; }
   const lit = lastRunMaps();
   const inflight = (VIEW.in_flight && VIEW.in_flight.units) || {};
   const units = topUnits(curDoc());
@@ -393,8 +502,9 @@ function render(){
       const n = nodeById(uid);
       return n ? card(n, lit, inflight) : "";
     }).join("")}</div>`).join("");
+  applySearch();                     // re-apply the active filter to the fresh cards (P3c)
   if(!paneFocused()) renderPane();   // never yank a pane input mid-edit (#14/#16)
-  requestAnimationFrame(drawEdges);
+  requestAnimationFrame(() => { drawEdges(); drawMinimap(); });   // P3c: map in the same frame
 }
 function anchor(el, side){
   const c = document.getElementById("dagwrap"), cr = c.getBoundingClientRect(), r = el.getBoundingClientRect();
@@ -446,6 +556,66 @@ function drawEdges(){
     }
   }
   svg.innerHTML = defs + body;
+}
+
+/* ---- P3c minimap: a scaled overview measured from the rendered cards ----
+   Geometry mirrors anchor()/drawEdges exactly (rect - dagwrapRect + scroll), so
+   the map can never disagree with the layout. Bare <rect>s only -- no untrusted
+   text reaches the map (prevention-log #6 is satisfied by construction). Shown
+   only when the canvas overflows AND MAP_ON; hidden otherwise (a fully-visible
+   graph needs no map). Redrawn only from render()'s frame + resize + a filter
+   change -- never on an idle tick, so the panel is temporally stable (#13). */
+const MM_W = 176, MM_H = 104, MM_PAD = 6;
+function drawMinimap(){
+  const mm = document.getElementById("minimap"), svg = document.getElementById("mmsvg");
+  const wrap = document.getElementById("dagwrap");
+  // Guard MUST match render()'s early-return contract (`VIEW.error || !curDoc()`),
+  // not just !curDoc(): an error payload can arrive with a still-parseable doc
+  // present, and #dag then shows the error note (no cards) -- hide the map rather
+  // than leave a stale overview (Codex CP1).
+  if(!mm || !svg || !wrap || !VIEW || VIEW.error || !curDoc()){ if(mm) mm.hidden = true; return; }
+  const sw = wrap.scrollWidth, sh = wrap.scrollHeight;
+  const cw = wrap.clientWidth, ch = wrap.clientHeight;
+  // Gate on HORIZONTAL overflow only -- the canvas's sole meaningful scroll axis.
+  // dagwrap has no bounded height, so a tall graph grows the PAGE (window scroll),
+  // it never scrolls inside dagwrap; and the negative-top glyphs + top padding
+  // leave a constant ~24px phantom vertical scrollHeight that must NOT trip the
+  // gate (it would show a map for a graph that visually fits). The map is for
+  // wide DAGs; width overflow is exactly its trigger.
+  const overflow = sw > cw + 4;
+  if(!MAP_ON || !overflow || sw <= 0 || sh <= 0){ mm.hidden = true; return; }
+  mm.hidden = false;
+  const scale = Math.min((MM_W - 2*MM_PAD) / sw, (MM_H - 2*MM_PAD) / sh);
+  const ox = MM_PAD, oy = MM_PAD;
+  const cr = wrap.getBoundingClientRect();
+  const hits = SEARCH ? matchedIds(SEARCH) : null;
+  let blocks = "";
+  for(const el of wrap.querySelectorAll(".dag [data-uid]")){
+    const r = el.getBoundingClientRect();
+    const x = ox + (r.left - cr.left + wrap.scrollLeft) * scale;
+    const y = oy + (r.top  - cr.top  + wrap.scrollTop ) * scale;
+    const w = Math.max(2, r.width  * scale), h = Math.max(2, r.height * scale);
+    let cls = "mmnode";
+    if(hits){ const on = hits.has(el.dataset.uid) || childMatched(el.dataset.uid, hits);
+      cls += on ? " hit" : " off"; }
+    blocks += `<rect class="${cls}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" `
+            + `width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="1"/>`;
+  }
+  const vx = ox + wrap.scrollLeft * scale, vy = oy + wrap.scrollTop * scale;
+  const vw = Math.max(3, cw * scale), vh = Math.max(3, ch * scale);
+  svg.setAttribute("viewBox", `0 0 ${MM_W} ${MM_H}`);
+  svg.setAttribute("width", MM_W); svg.setAttribute("height", MM_H);
+  svg.innerHTML = blocks + `<rect id="mmview" class="mmview" x="${vx.toFixed(1)}" `
+    + `y="${vy.toFixed(1)}" width="${vw.toFixed(1)}" height="${vh.toFixed(1)}"/>`;
+  mm._scale = scale; mm._ox = ox; mm._oy = oy;   // stash for drag + cheap updates
+}
+function updateMMView(){
+  const mm = document.getElementById("minimap");
+  if(!mm || mm.hidden || !mm._scale) return;
+  const wrap = document.getElementById("dagwrap"), view = document.getElementById("mmview");
+  if(!view) return;
+  view.setAttribute("x", (mm._ox + wrap.scrollLeft * mm._scale).toFixed(1));
+  view.setAttribute("y", (mm._oy + wrap.scrollTop  * mm._scale).toFixed(1));
 }
 
 /* ---- palette (read-only spec-sheet previews; deferred honestly greyed) ---- */
@@ -746,7 +916,54 @@ document.getElementById("edgesvg").addEventListener("click", e => {
 });
 
 document.getElementById("obsbtn").addEventListener("click", () => { OBSERVED = !OBSERVED; render(); });
-window.addEventListener("resize", () => requestAnimationFrame(drawEdges));
+
+/* ---- P3c: search box wiring (header control -- never rebuilt by render(), so
+   it survives every live tick with value + caret intact, #16). ---- */
+const _search = document.getElementById("search");
+_search.addEventListener("input", e => {
+  SEARCH = e.target.value.trim().toLowerCase();
+  applySearch();
+  if(typeof drawMinimap === "function") drawMinimap();   // refresh minimap shading (Task 2)
+});
+_search.addEventListener("keydown", e => {
+  if(e.key === "Enter"){ e.preventDefault(); jumpToSearch(); }
+  else if(e.key === "Escape"){ e.target.value = ""; SEARCH = ""; applySearch();
+    if(typeof drawMinimap === "function") drawMinimap(); e.target.blur(); }
+});
+
+/* ---- P3c minimap navigation: scroll-track + drag-to-scroll + toggle ----
+   scroll -> move ONLY the viewport rect (attribute write, no rebuild, rAF-
+   throttled). User-driven, so it never fires on an idle canvas (#13/#14). */
+let _mmRaf = 0;
+document.getElementById("dagwrap").addEventListener("scroll", () => {
+  if(_mmRaf) return;
+  _mmRaf = requestAnimationFrame(() => { _mmRaf = 0; updateMMView(); });
+});
+/* click / drag the map -> scroll the canvas so the pointed-at spot centers.
+   Reads the svg's own client rect so it is correct wherever the map sits. */
+function mmScrollTo(clientX, clientY){
+  const mm = document.getElementById("minimap"), svg = document.getElementById("mmsvg");
+  const wrap = document.getElementById("dagwrap");
+  if(!mm || !mm._scale) return;
+  const r = svg.getBoundingClientRect();
+  const cx = ((clientX - r.left) - mm._ox) / mm._scale;
+  const cy = ((clientY - r.top ) - mm._oy) / mm._scale;
+  wrap.scrollLeft = cx - wrap.clientWidth  / 2;
+  wrap.scrollTop  = cy - wrap.clientHeight / 2;
+  updateMMView();
+}
+let MMDRAG = false;
+document.getElementById("mmsvg").addEventListener("mousedown", e => {
+  MMDRAG = true; mmScrollTo(e.clientX, e.clientY); e.preventDefault();
+});
+window.addEventListener("mousemove", e => { if(MMDRAG) mmScrollTo(e.clientX, e.clientY); });
+window.addEventListener("mouseup", () => { MMDRAG = false; });   // ends the drag (#16)
+document.getElementById("mapbtn").addEventListener("click", () => {
+  MAP_ON = !MAP_ON;
+  document.getElementById("mapbtn").classList.toggle("on", MAP_ON);
+  drawMinimap();
+});
+window.addEventListener("resize", () => requestAnimationFrame(() => { drawEdges(); drawMinimap(); }));
 
 /* ---- editor: header state + Save / Revert (the #202 bar) ---- */
 function updateHeader(){

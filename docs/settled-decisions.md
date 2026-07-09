@@ -240,6 +240,27 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     superseded-for-packs); this surface is operator-only via the loopback
     dashboard. *(#365; plans/2026-07-09-sequencer-p3b-canvas-editor.md.)*
 
+38. **The pipeline canvas navigation layer (minimap + search) is client-only
+    over the existing payload** (P3c, 2026-07-09, #367). Search highlights/dims
+    and jumps by id/type/agent over `curDoc()`; the minimap is a scaled overview
+    of the rendered cards with a draggable viewport rect that tracks the canvas
+    **scroll**. **Read/navigation only** — no new payload field, no new
+    `/api/control` action, no write surface (SD-37's editor and its
+    `pipeline_save` path are untouched). **Canvas zoom is deferred**: a scale
+    transform would break the editor's `getBoundingClientRect` gesture geometry
+    (edge-draw, palette-drop, minimap measurement all assume unscaled
+    coordinates). The minimap **gates on HORIZONTAL overflow only** — dagwrap has
+    no bounded height, so a tall graph grows the page rather than scrolling
+    inside the canvas, and a constant phantom vertical scrollHeight (glyphs + top
+    padding) would otherwise show a map for a graph that fits. Navigation is
+    available on **read-only viewers too** (not gated on `editable()`). Both
+    re-apply only inside `render()` (payload-change/edit) or on operator events,
+    so an idle canvas rebuilds nothing (prevention-log #13); the search input
+    lives in the never-rebuilt header, so a live tick cannot freeze it (#16). The
+    P3b optional follow-ons stay deferred: reset-shadow-to-committed (a write
+    surface) and provenance diff (needs a new payload); full-brief-round-trip
+    already shipped in P3b. *(#367; plans/2026-07-09-sequencer-p3c-minimap-search.md.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could
