@@ -343,6 +343,63 @@ def effective_edges(doc):
             for a, b in zip(order, order[1:])]
 
 
+# --- The ${...} dynamic-param language (spec S3.1). Stdlib, NO eval/exec: a
+#     hand-rolled resolver over named refs + a closed pure-function allowlist.
+#     Fail-safe: any unresolvable ref / unknown function / type mismatch RAISES
+#     PipelineError -- never a silent empty string. Proven in isolation here;
+#     Phase B wires it into compile_brief/dispatch. ---
+_ESC = "\x00AE_DOLLAR_BRACE\x00"          # sentinel for the $${ escape
+
+
+def _resolve_ref(path, ctx):
+    """A dotted reference: params.<n> | nodes.<id>.output.<n> | run.<field>."""
+    parts = path.split(".")
+    if parts[0] == "params" and len(parts) == 2:
+        d = ctx.get("params", {})
+        if parts[1] not in d:
+            raise PipelineError("unknown param reference ${params.%s}" % parts[1])
+        return d[parts[1]]
+    if parts[0] == "nodes" and len(parts) == 4 and parts[2] == "output":
+        outs = ctx.get("nodes", {}).get(parts[1])
+        if outs is None or parts[3] not in outs:
+            raise PipelineError("unknown node output ${nodes.%s.output.%s}"
+                                % (parts[1], parts[3]))
+        return outs[parts[3]]
+    if parts[0] == "run" and len(parts) == 2:
+        d = ctx.get("run", {})
+        if parts[1] not in d:
+            raise PipelineError("unknown run field ${run.%s}" % parts[1])
+        return d[parts[1]]
+    raise PipelineError("unresolvable reference ${%s}" % path)
+
+
+def _resolve_expr(expr, ctx):
+    """One ${...} body: a reference (Task 2) or a function call (Task 3)."""
+    return _resolve_ref(expr.strip(), ctx)        # Task 3 wraps this for funcs
+
+
+def _to_str(v):
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return "" if v is None else str(v)
+
+
+def substitute(value, ctx):
+    """Resolve ${...} in one scalar. A field that is EXACTLY ${ref} keeps ref's
+    TYPED value; an embedded ${ref} interpolates as a string. $${ is a literal
+    ${. Non-strings pass through. Raises PipelineError on any bad reference."""
+    if not isinstance(value, str):
+        return value
+    protected = value.replace("$${", _ESC)
+    m = _REF_RE.fullmatch(protected)
+    if m:                                          # whole-value -> typed
+        out = _resolve_expr(m.group(1), ctx)
+        return out if not isinstance(out, str) else out.replace(_ESC, "${")
+    def repl(mo):
+        return _to_str(_resolve_expr(mo.group(1), ctx))
+    return _REF_RE.sub(repl, protected).replace(_ESC, "${")
+
+
 def _validate_runs_as(where, runs_as, errors):
     if runs_as is None:
         return

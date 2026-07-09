@@ -1448,5 +1448,51 @@ class ParamsOutputsValidationTest(unittest.TestCase):
         self.assertEqual(pipeline.validate_doc(self._doc(), None), [])
 
 
+class SubstituteRefsTest(unittest.TestCase):
+    def setUp(self):
+        self.ctx = {"params": {"repo": "/tmp/r", "n": 3, "flag": True},
+                    "nodes": {"code": {"branch": "feat/x"}},
+                    "run": {"id": "r1", "pipeline": "flow"}}
+
+    def test_whole_value_keeps_type(self):
+        self.assertEqual(pipeline.substitute("${params.n}", self.ctx), 3)   # int, not "3"
+        self.assertIs(pipeline.substitute("${params.flag}", self.ctx), True)
+
+    def test_whole_value_string(self):
+        self.assertEqual(pipeline.substitute("${params.repo}", self.ctx), "/tmp/r")
+
+    def test_node_output_ref(self):
+        self.assertEqual(pipeline.substitute("${nodes.code.output.branch}", self.ctx),
+                         "feat/x")
+
+    def test_run_field_ref(self):
+        self.assertEqual(pipeline.substitute("${run.id}", self.ctx), "r1")
+
+    def test_interpolation_is_string(self):
+        self.assertEqual(pipeline.substitute("release/${params.repo}/${run.id}", self.ctx),
+                         "release//tmp/r/r1")
+        self.assertEqual(pipeline.substitute("n=${params.n}", self.ctx), "n=3")
+
+    def test_non_string_passthrough(self):
+        self.assertEqual(pipeline.substitute(7, self.ctx), 7)
+        self.assertEqual(pipeline.substitute(None, self.ctx), None)
+
+    def test_unknown_param_refuses(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.substitute("${params.missing}", self.ctx)
+
+    def test_unknown_namespace_refuses(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.substitute("${bogus.x}", self.ctx)
+
+    def test_unknown_node_output_refuses(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.substitute("${nodes.code.output.nope}", self.ctx)
+
+    def test_escape_literal_dollar_brace(self):
+        self.assertEqual(pipeline.substitute("cost $${params.n}", self.ctx),
+                         "cost ${params.n}")
+
+
 if __name__ == "__main__":
     unittest.main()
