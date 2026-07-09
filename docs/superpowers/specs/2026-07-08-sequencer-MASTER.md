@@ -1,10 +1,17 @@
-# MASTER — the agentic pipeline sequencer (ingest this first)
+# MASTER — the agentic pipeline sequencer (internal build record)
 
-Design arc operator-driven 2026-07-08; build P1–P3a shipped 2026-07-08/09.
-This is the entry point for any session picking the work up: read the
-"Shipped" table for CURRENT state, `.claude/skills/engineering/pipelines.md`
-for the runtime functional map, then the referenced specs for the full
-model. The operator's one-line product:
+**Audience note: this is an ENGINEERING RECORD** — it organizes the work
+by build phases (P1…P5) and decision numbers (SD-N) and assumes the
+process context in `docs/README.md`'s "Engineering records" section. To
+learn what the pipeline system IS and how it behaves, read
+**`docs/pipelines.md`** (the production spec) instead — it needs none of
+this vocabulary.
+
+Design arc 2026-07-08; build P1–P3a shipped 2026-07-08/09. Entry point for
+any engineering session picking the work up: read the "Shipped" table for
+CURRENT state, `.claude/skills/engineering/pipelines.md` for the runtime
+map + gotchas, then the referenced specs for the full model. The one-line
+product:
 
 > A person running Claude on their own computer points this at a repo,
 > builds/assigns pipelines of agentic activities (ADF-style: DAG,

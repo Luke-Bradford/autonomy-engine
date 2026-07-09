@@ -4,9 +4,19 @@
 
 Touching `lib/pipeline.py`, `.autonomy/pipelines/`, the supervisor's
 dispatch path, the `/pipeline` canvas page, or anything the run journal /
-trust ledger feeds. Spec: `docs/superpowers/specs/2026-07-08-sequencer-MASTER.md`
-(entry point) → v5 design doc. Build history: the P1/P2a/P2b/P3a plan docs
+trust ledger feeds. **Functional spec (production, no process jargon):
+`docs/pipelines.md`** — read that first if the system is new to you.
+Engineering entry point: `docs/superpowers/specs/2026-07-08-sequencer-MASTER.md`
+(shipped table + decisions) → v5 design doc → the P1/P2a/P2b/P3a plan docs
 in `docs/superpowers/plans/`.
+
+**Vocabulary decoder** (used across this repo's docs): `P1…P5` = the
+sequencer's build phases, defined in the MASTER spec's shipped table ·
+`SD-N` = numbered entry in `docs/settled-decisions.md` ·
+`prevention-log #N` = numbered entry in `docs/review-prevention-log.md` ·
+`CP1/CP2/CP3` = the three Codex checkpoints (`codex-checkpoints.md`).
+References like "(SD-36)" are provenance — the sentence should stand
+without them; look one up only when you need the full ruling.
 
 ## The document (one per pipeline, JSON, stdlib-parsed)
 
@@ -33,11 +43,14 @@ Binding: `roles.<r>.pipeline: <name>`; unbound roles auto-wrap
 ## The walk (fmt-2 state machine)
 
 CLI: `validate · wrap · start · next · ready · record · ledger`. The
-supervisor drives `start` → `ready` (the batch protocol; a sequential
-pipeline is a batch of 1 — `next` is the P1-era single-step form, kept for
-tests) → `record` per completed session. One DISPATCH per iteration; a
-dispatch may fan out to `caps.max_parallel` concurrent node-sessions in
-ephemeral worktrees (SD-36; SD-12 amended).
+supervisor drives `start` → `ready` (returns the batch of dispatchable
+nodes; a sequential pipeline is a batch of 1) → `record` per completed
+session. `next` is the older single-step form the batch protocol
+superseded — still in the CLI for tests, not called by the supervisor.
+One DISPATCH per supervisor iteration; a dispatch may fan out to
+`caps.max_parallel` concurrent node-sessions, each in its own ephemeral
+worktree because two sessions sharing a checkout collide on the git index
+(SD-36).
 State: `var/autonomy-logs/.pipeline-run-<role>[--<lane>].json` — unit
 statuses `pending|dispatched|success|failure|skipped` (never "running"),
 `fmt: 2` enforced (fmt-less in-flight state REFUSES). Semantics: typed
