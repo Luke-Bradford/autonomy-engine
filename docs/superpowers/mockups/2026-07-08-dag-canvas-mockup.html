@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pipeline canvas · design mockup v5 — the DAG</title>
+<style>
+:root{--sans:"Avenir Next","Helvetica Neue",system-ui,sans-serif;--mono:"SF Mono",Menlo,ui-monospace,monospace;--r:6px}
+:root[data-theme="dark"]{--bg:#15181d;--panel:#1c2027;--panel2:#20252d;--hair:#2a2f38;--hair2:#333a45;
+  --ink:#e8eaed;--mut:#98a0ab;--dim:#6b7380;--accent:#4c9ee3;--accent-soft:rgba(76,158,227,.14);
+  --ok:#3fb27f;--warn:#d9a13b;--bad:#d95757;--shadow:0 8px 24px -14px rgba(0,0,0,.6)}
+:root[data-theme="light"]{--bg:#f4f5f7;--panel:#fff;--panel2:#f6f7f9;--hair:#e2e4e8;--hair2:#d0d3d9;
+  --ink:#1b1e24;--mut:#5b626c;--dim:#9aa0aa;--accent:#2f7fc9;--accent-soft:rgba(47,127,201,.10);
+  --ok:#2c9c60;--warn:#b9791a;--bad:#cf4b45;--shadow:0 8px 24px -18px rgba(30,30,30,.3)}
+@media (prefers-color-scheme: light){:root:not([data-theme]){--bg:#f4f5f7;--panel:#fff;--panel2:#f6f7f9;--hair:#e2e4e8;--hair2:#d0d3d9;--ink:#1b1e24;--mut:#5b626c;--dim:#9aa0aa;--accent:#2f7fc9;--accent-soft:rgba(47,127,201,.10);--ok:#2c9c60;--warn:#b9791a;--bad:#cf4b45;--shadow:0 8px 24px -18px rgba(30,30,30,.3)}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:13.5px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1500px;margin:0 auto;padding:26px}
+h1{font-size:18px;margin:0 0 2px}
+.sub{color:var(--mut);font-size:12.5px;margin-bottom:16px;max-width:88ch}
+.eyebrow{font-family:var(--mono);font-size:9.5px;letter-spacing:1.4px;text-transform:uppercase;color:var(--dim)}
+.layout{display:grid;grid-template-columns:196px minmax(0,1fr) 272px;gap:16px;align-items:start}
+@media(max-width:1120px){.layout{grid-template-columns:1fr}.palette,.pane{position:static;max-height:none}}
+/* palette (v4 vocabulary, v5 catalog) */
+.palette{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow);padding:12px;position:sticky;top:14px;max-height:calc(100vh - 40px);overflow-y:auto}
+.pgroup{margin-bottom:9px}
+.pgroup .eyebrow{display:block;margin-bottom:4px}
+.pitem{display:flex;align-items:center;gap:7px;width:100%;background:transparent;border:1px dashed transparent;border-radius:5px;
+  color:var(--ink);font-size:11.5px;padding:3px 6px;cursor:grab;text-align:left}
+.pitem:hover{background:var(--accent-soft);border-color:var(--hair2)}
+.pitem .add{margin-left:auto;color:var(--accent);font-weight:600}
+/* gallery / assignment bar */
+.canvaswrap{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow);padding:14px 16px 18px;min-width:0}
+.gallery{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border:1px solid var(--hair2);border-radius:var(--r);background:var(--panel2);padding:8px 12px}
+.gallery .nm{font-weight:600;font-size:14.5px}
+.badge{font-family:var(--mono);font-size:9.5px;border:1px solid var(--hair2);border-radius:10px;padding:1px 8px;color:var(--mut)}
+.badge.diverged{color:var(--warn);border-color:var(--warn)}
+.badge.trust{color:var(--mut)}
+.pill{border:1px solid var(--hair2);border-radius:11px;padding:2px 10px;font-family:var(--mono);font-size:10px;color:var(--mut);cursor:pointer;background:transparent}
+.pill.on{border-color:var(--accent);color:var(--ink);background:var(--accent-soft)}
+.pill.go{border-color:var(--ok);color:var(--ok)}
+.gap{flex:1}
+.switch{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--mut);cursor:pointer}
+.switch .knob{width:26px;height:14px;border-radius:8px;background:var(--ok);position:relative}
+.switch .knob::after{content:"";position:absolute;right:2px;top:2px;width:10px;height:10px;border-radius:50%;background:#fff}
+/* the DAG canvas */
+.dagwrap{position:relative;overflow-x:auto;margin-top:14px;padding:26px 8px 14px;border:1px solid var(--hair);border-radius:var(--r);background:
+  repeating-linear-gradient(90deg,transparent,transparent 39px,var(--hair) 39px,var(--hair) 40px);background-size:40px 100%;background-position:0 0}
+.dag{display:flex;align-items:flex-start;gap:44px;width:max-content;padding:6px 10px;position:relative;z-index:1}
+.seg{display:flex;flex-direction:column;gap:34px;align-items:stretch}
+.seg .main{margin-top:var(--nudge,0px)}
+.rank{display:flex;flex-direction:column;gap:18px}
+.node{border:1px solid var(--hair2);border-radius:var(--r);background:var(--panel2);cursor:pointer;position:relative;width:172px;padding:8px 10px 7px}
+.node.softb{border-style:dashed}
+.node.sel{border-color:var(--accent);background:var(--accent-soft)}
+.node .ico{width:16px;display:inline-block;text-align:center}
+.node .nm{font-size:12px;font-weight:600}
+.node .sum{font-size:10.5px;color:var(--mut);display:block;margin-top:1px;line-height:1.35}
+.node .meta{display:flex;align-items:center;gap:6px;margin-top:5px}
+.node .agent{font-family:var(--mono);font-size:9px;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tag{font-family:var(--mono);font-size:8.5px;letter-spacing:.5px;text-transform:uppercase;border-radius:3px;padding:1px 5px;white-space:nowrap;margin-left:auto}
+.tag.hard{color:var(--ok);border:1px solid var(--ok)}
+.tag.soft{color:var(--warn);border:1px dashed var(--warn)}
+.glyph{position:absolute;top:-9px;right:-8px;width:18px;height:18px;border-radius:50%;display:none;align-items:center;justify-content:center;
+  font-size:10px;font-weight:700;background:var(--panel);border:1.5px solid var(--dim);color:var(--dim);z-index:2}
+.observed .glyph{display:inline-flex}
+.glyph.ok{border-color:var(--ok);color:var(--ok)}
+.glyph.fail{border-color:var(--bad);color:var(--bad)}
+.observed .node.dimmed,.observed .box.dimmed,.observed .diamond.dimmed{opacity:.32}
+/* containers */
+.box{border:1.5px solid var(--accent);border-radius:var(--r);padding:20px 14px 10px;position:relative}
+.box>.boxtag{position:absolute;top:-9px;left:12px;background:var(--panel);border:1px solid var(--accent);border-radius:9px;
+  color:var(--accent);font-family:var(--mono);font-size:9.5px;padding:0 8px;white-space:nowrap}
+.box .inner{display:flex;align-items:center;gap:40px}
+.box .foot{border-top:1px dashed var(--hair2);margin-top:12px;padding-top:6px;display:flex;gap:12px;flex-wrap:wrap;align-items:center;
+  font-family:var(--mono);font-size:9.5px;color:var(--mut);max-width:420px}
+.box.stage{border-color:var(--hair2);background:rgba(76,158,227,.04)}
+.box.stage>.boxtag{border-color:var(--hair2);color:var(--mut)}
+.diamond{border:1px solid var(--warn);border-radius:var(--r);background:var(--panel2);cursor:pointer;width:160px;padding:8px 10px;position:relative}
+.diamond.sel{border-color:var(--accent);background:var(--accent-soft)}
+.endchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--hair2);border-radius:10px;padding:2px 10px;font-family:var(--mono);font-size:10px;color:var(--mut);width:max-content}
+/* edges */
+svg.edges{position:absolute;left:0;top:0;overflow:visible;pointer-events:none;z-index:0}
+svg.edges .lbl{font-family:var(--mono);font-size:8.5px;letter-spacing:.4px}
+svg.edges path.hit{pointer-events:stroke;cursor:pointer}
+.observed svg.edges path.e.dimmed{opacity:.18}
+.observed svg.edges text.dimmed{opacity:.18}
+/* property pane */
+.pane{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow);padding:12px;position:sticky;top:14px;max-height:calc(100vh - 40px);overflow-y:auto}
+.pane h3{font-size:13px;margin:2px 0 8px;display:flex;align-items:center;gap:7px}
+.pane h3 .tag{margin-left:auto}
+.frow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:7px 0}
+.frow .lab{font-family:var(--mono);font-size:9.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--dim);min-width:78px}
+.frow .lab .req{color:var(--bad)}
+.frow select,.frow input{background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);font-family:var(--mono);font-size:10.5px;border-radius:5px;padding:4px 7px;max-width:150px}
+.pane textarea{background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);font-family:var(--mono);font-size:10.5px;border-radius:5px;padding:6px 8px;width:100%;min-height:46px;resize:vertical}
+.pane details{border:1px solid var(--hair);border-radius:5px;padding:6px 9px;margin:9px 0}
+.pane summary{font-family:var(--mono);font-size:9.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--dim);cursor:pointer}
+.ctx{display:inline-flex;border:1px solid var(--hair2);border-radius:6px;overflow:hidden}
+.ctx button{background:transparent;border:0;color:var(--dim);font-family:var(--mono);font-size:9.5px;padding:3px 8px;cursor:pointer}
+.ctx button.on{background:var(--accent-soft);color:var(--ink)}
+.guard{display:flex;gap:7px;align-items:flex-start;border:1px solid var(--hair2);border-radius:5px;padding:6px 9px;margin:9px 0;font-size:11px;color:var(--mut)}
+.note{font-size:11px;color:var(--mut)}
+.legend{display:flex;gap:14px;margin-top:12px;color:var(--dim);font-size:11px;flex-wrap:wrap;align-items:center}
+.sw{display:inline-block;width:18px;height:0;border-top:2px solid;vertical-align:middle;margin-right:4px}
+.ttoggle{position:fixed;top:12px;right:14px;display:inline-flex;border:1px solid var(--hair2);border-radius:6px;overflow:hidden;background:var(--panel);z-index:5}
+.ttoggle button{background:transparent;border:0;color:var(--dim);font-family:var(--mono);font-size:11px;padding:6px 9px;cursor:pointer}
+button:focus-visible,.node:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="ttoggle"><button onclick="document.documentElement.dataset.theme='dark'">dark</button><button onclick="document.documentElement.dataset.theme='light'">light</button></div>
+<div class="wrap">
+  <span class="eyebrow">design mockup v5 · the DAG canvas — ADF for Claude pipelines (spec §7 · P3's blueprint)</span>
+  <h1>ticket-to-merge as a real dependency graph</h1>
+  <div class="sub">Left-to-right ranked layout. <b>Typed dependency edges</b> — <span style="color:var(--ok)">on success</span>, <span style="color:var(--bad)">on failure</span>, <span style="color:var(--dim)">on completion</span> — click any edge to cycle its type. Activities with no dependency between them stack in the <b>same rank and run in parallel</b> (docs ∥ tests; the three QA checks). Containers stay from v4: the <b>coding loop</b> (exit instructed · cap enforced) and the <b>QA stage</b>. The failure path IS part of the graph: any QA check fails → notify &amp; park. Click a node for its <b>spec-sheet pane</b> on the right; toggle <b>last run</b> to light the observed path.</div>
+
+  <div class="layout">
+    <aside class="palette" id="palette"></aside>
+    <main class="canvaswrap">
+      <div class="gallery">
+        <span class="nm">ticket-to-merge</span>
+        <span class="badge diverged">clone · from ticket-to-merge@v3 · ⚠ diverged</span>
+        <button class="pill" onclick="alert('mock: clone reset to ticket-to-merge@v3')">reset to template</button>
+        <button class="pill" onclick="alert('mock: template bumped to v4 — existing clones keep their pin')">save back</button>
+        <button class="pill" onclick="alert('mock: saved as NEW template — name it')">save as new…</button>
+        <span class="gap"></span>
+        <span class="badge trust" title="trust is earned per assignment: auto at ≥20 runs with ≥95% pass over the last 20; demotion is automatic">🛡 trust: watch · 12 runs · 11 pass</span>
+        <span class="pill on">⟳ continuous</span>
+        <span class="pill" title="end of window: graceful — finish the current activity, then stop">🕘 22:00–06:00 weekdays · graceful</span>
+        <span class="switch"><span class="knob"></span>enabled</span>
+        <button class="pill go" onclick="alert('mock: run dispatched')">▶ start</button>
+        <button class="pill" id="obsbtn" onclick="toggleObserved()">⚡ last run</button>
+      </div>
+      <div class="dagwrap" id="dagwrap">
+        <svg class="edges" id="edgesvg"></svg>
+        <div class="dag" id="dag"></div>
+      </div>
+      <div class="legend">
+        <span><span class="sw" style="border-color:var(--ok)"></span>on success</span>
+        <span><span class="sw" style="border-color:var(--bad)"></span>on failure</span>
+        <span><span class="sw" style="border-color:var(--dim);border-top-style:dashed"></span>on completion (either way)</span>
+        <span><span class="tag hard">enforced</span> engine-owned</span>
+        <span><span class="tag soft">instructed</span> compiled into the brief</span>
+        <span class="note">drag from the palette to a rank · drag an edge handle between nodes · click an edge to cycle its type (all mock-live here except the cycle, which works)</span>
+      </div>
+    </main>
+    <aside class="pane" id="pane"></aside>
+  </div>
+</div>
+
+<script>
+const ICONS={pick:"🎯",agent_task:"🔨",plan:"🧠",gather:"🔎",check:"✔️",subagent_review:"🧐",wait_watch:"⏳",ask_human:"🙋",handoff:"🤝",summarize:"📝",notify:"📣",transform:"🛠",triage:"🏷",journal:"📓",housekeep:"🧹",git_ops:"🌿",run_command:"＞_",branch:"⚖️",loop:"⟲",for_each:"∀",stage:"👤"};
+const PALETTE=[
+ {g:"get work",items:["pick","wait / watch"]},
+ {g:"think",items:["plan","gather","subagent review"]},
+ {g:"do",items:["agent task","transform","triage","git ops","run command"]},
+ {g:"check + talk",items:["check","ask human","handoff","summarize","notify"]},
+ {g:"keep house",items:["journal","housekeep"]},
+ {g:"structure",items:["loop container","for-each","branch","stage (runs as…)"]},
+];
+// spec sheets (v5 §4): required first, optionals collapsed
+const SPEC={
+ pick:{req:[["source","board query · label ready · p1 first"]],opt:[["order","priority, oldest first"],["limit","1"]]},
+ plan:{req:[["runs as","(below)"]],opt:[["plan template","default"],["vagueness rules","missing acceptance criteria"]]},
+ agent_task:{req:[["brief","(below)"]],opt:[["allowed tools","all"],["max turns","—"],["permission mode","acceptEdits"]]},
+ gather:{req:[["what to collect","(below)"]],opt:[["web search","off"],["sources","repo + tickets"]]},
+ check:{req:[["what to verify","(below)"]],opt:[["pass criteria","explicit list"]]},
+ git_ops:{req:[["operation","open / refresh PR"]],opt:[]},
+ notify:{req:[["destination","PR comment + needs-you"]],opt:[["template","default digest"]]},
+ journal:{req:[["what to record","run outcome + learnings"]],opt:[]},
+ branch:{req:[["verdict labels","(paths on the canvas)"]],opt:[]},
+};
+const NODES={
+ pick:{t:"pick",nm:"pick",sum:"board · next ready ticket · p1 first",agent:"coder·building",brief:"Take the next ticket in queue order. Empty queue = end the run cleanly."},
+ plan:{t:"plan",nm:"write the plan",sum:"executable plan · flag vagueness",agent:"coder·thinking",brief:"Files, steps, test criteria. Too vague to plan → list the questions a human must answer."},
+ viable:{t:"branch",nm:"plan viable?",sum:"the plan's own verdict steers the run",agent:"coder·thinking",brief:"Verdict: viable | too-vague."},
+ ask:{t:"ask_human",nm:"ask the user",sum:"questions on the ticket · park it",agent:"coder·thinking",brief:"One needs-you comment with the questions. Label needs-info.",end:"■ end this run"},
+ code:{t:"agent_task",nm:"work from the plan",sum:"next unmet plan item · TDD",agent:"coder·building",brief:"Work strictly from the plan; can't work as written → back to the thinking brain."},
+ test:{t:"check",nm:"test vs the plan",sum:"run the plan's criteria",agent:"coder·building",brief:"Run the named criteria; report pass/remaining. Loop exit rides this verdict."},
+ docs:{t:"agent_task",nm:"update the docs",sum:"runs in parallel with tests ∥",agent:"coder·building",brief:"Docs for the change: README, comments, changelog."},
+ tests2:{t:"agent_task",nm:"extend the tests",sum:"runs in parallel with docs ∥",agent:"coder·building",brief:"Broaden coverage around the change beyond the plan's minimum."},
+ pr:{t:"git_ops",nm:"open / refresh the PR",sum:"self-contained description",agent:"coder·building",brief:"PR description: what, why, security model, tradeoffs. NEVER merges — the gate owns that.",hard:true},
+ gather:{t:"gather",nm:"read the context",sum:"ticket + every PR comment",agent:"qa",brief:"Read everything before touching anything."},
+ verify:{t:"check",nm:"verify in the frontend",sum:"branch out · see it working",agent:"qa",brief:"Check out the branch, run the app, see the change working."},
+ breakage:{t:"check",nm:"related breakage",sum:"around + related to the change",agent:"qa",brief:"Exercise adjacent features; note anything broken."},
+ review:{t:"check",nm:"code review",sum:"injection · duplication · conventions",agent:"qa",brief:"Review the diff itself."},
+ park:{t:"notify",nm:"notify + park",sum:"the failure path IS the graph",agent:"qa",brief:"Post what failed on the PR; park it in needs-you.",end:"■ end this run"},
+ verdict:{t:"branch",nm:"QA verdict?",sum:"issues → back to coding · good → merge",agent:"qa",brief:"Verdict: issues | good."},
+ merge:{t:"git_ops",nm:"merge via the gate",sum:"safe_merge · squash · close",agent:"engine",brief:"The engine's merge gate — not a prompt.",hard:true},
+ journal:{t:"journal",nm:"journal the run",sum:"runs either way (on completion)",agent:"coder·building",brief:"Record outcome + learnings for the next run."},
+};
+// observed lighting: the S34 story — code review failed, red path ran
+const LASTRUN={pick:"ok",plan:"ok",viable:"ok",code:"ok",test:"ok",docs:"ok",tests2:"ok",pr:"ok",gather:"ok",verify:"ok",breakage:"ok",review:"fail",park:"ok",journal:"ok"};
+const LASTRUN_EDGES=["pick-plan","plan-viable","viable-code","test-docs","test-tests2","docs-pr","tests2-pr","pr-gather","gather-verify","gather-breakage","gather-review","review-park","park-journal"];
+const EDGES=[
+ {id:"pick-plan",f:"pick",t:"plan",on:"success"},
+ {id:"plan-viable",f:"plan",t:"viable",on:"success"},
+ {id:"viable-ask",f:"viable",t:"ask",on:"failure",lbl:"too vague",fs:"b",ts:"t"},
+ {id:"viable-code",f:"viable",t:"code",on:"success",lbl:"viable"},
+ {id:"code-test",f:"code",t:"test",on:"success"},
+ {id:"test-docs",f:"test",t:"docs",on:"success"},
+ {id:"test-tests2",f:"test",t:"tests2",on:"success"},
+ {id:"docs-pr",f:"docs",t:"pr",on:"success"},
+ {id:"tests2-pr",f:"tests2",t:"pr",on:"success"},
+ {id:"pr-gather",f:"pr",t:"gather",on:"success"},
+ {id:"gather-verify",f:"gather",t:"verify",on:"success"},
+ {id:"gather-breakage",f:"gather",t:"breakage",on:"success"},
+ {id:"gather-review",f:"gather",t:"review",on:"success"},
+ {id:"verify-verdict",f:"verify",t:"verdict",on:"success"},
+ {id:"breakage-verdict",f:"breakage",t:"verdict",on:"success"},
+ {id:"review-verdict",f:"review",t:"verdict",on:"success"},
+ {id:"verify-park",f:"verify",t:"park",on:"failure",fs:"b",ts:"t"},
+ {id:"breakage-park",f:"breakage",t:"park",on:"failure",fs:"b",ts:"t"},
+ {id:"review-park",f:"review",t:"park",on:"failure",fs:"b",ts:"t"},
+ {id:"verdict-loop",f:"verdict",t:"loopbox",on:"failure",lbl:"↩ issues · max 3 · enforced",fs:"t",ts:"t",arc:true},
+ {id:"verdict-merge",f:"verdict",t:"merge",on:"success",lbl:"good"},
+ {id:"merge-journal",f:"merge",t:"journal",on:"completion"},
+ {id:"park-journal",f:"park",t:"journal",on:"completion",fs:"r",ts:"b"},
+];
+let SEL="pick",OBSERVED=false;
+const COLORS={success:"var(--ok)",failure:"var(--bad)",completion:"var(--dim)"};
+function esc(x){return String(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;")}
+function card(id,extra){
+  const n=NODES[id],obs=OBSERVED?(LASTRUN[id]?(LASTRUN[id]==="ok"?"":""):" dimmed"):"";
+  const kind=n.t==="branch"?"diamond":"node "+(n.hard?"":"softb");
+  const g=OBSERVED&&LASTRUN[id]?`<span class="glyph ${LASTRUN[id]}">${LASTRUN[id]==="ok"?"✓":"✕"}</span>`:(OBSERVED?"":"");
+  return `<div class="${kind}${SEL===id?" sel":""}${obs}" data-nid="${id}" onclick="sel('${id}')" tabindex="0" onkeydown="if(event.key==='Enter')sel('${id}')">
+    ${g}<span class="ico">${ICONS[n.t]}</span> <span class="nm">${esc(n.nm)}</span>
+    <span class="sum">${esc(n.sum)}</span>
+    <div class="meta"><span class="agent">${esc(n.agent)}</span><span class="tag ${n.hard?"hard":"soft"}">${n.hard?"enforced":"instructed"}</span></div>
+    ${n.end&&extra!=="noend"?"":""}
+  </div>${n.end?`<div style="display:flex;justify-content:center;margin-top:8px"><span class="endchip">${n.end}</span></div>`:""}`;
+}
+function render(){
+  const dim=id=>OBSERVED&&!LASTRUN[id]?" dimmed":"";
+  document.getElementById("dag").innerHTML=
+   `<div class="seg" style="--nudge:96px"><div class="main">${card("pick")}</div></div>`
+  +`<div class="seg" style="--nudge:96px"><div class="main">${card("plan")}</div></div>`
+  +`<div class="seg" style="--nudge:96px"><div class="main">${card("viable")}</div><div>${card("ask")}</div></div>`
+  +`<div class="seg" style="--nudge:64px"><div class="main"><div class="box${dim("loop")}" id="loopbox"><span class="boxtag">⟲ loop · coding${OBSERVED?" · ran 2 rounds":""}</span>
+      <div class="inner">${card("code")}${card("test")}</div>
+      <div class="foot"><span><b>exit when:</b> every plan criterion passes</span><span class="tag soft">instructed</span>
+      <span style="margin-left:auto"><b>cap:</b> 20 rounds</span><span class="tag hard">enforced</span></div></div></div></div>`
+  +`<div class="seg" style="--nudge:40px"><div class="main"><div class="rank">${card("docs")}${card("tests2")}</div></div></div>`
+  +`<div class="seg" style="--nudge:96px"><div class="main">${card("pr")}</div></div>`
+  +`<div class="seg"><div class="main"><div class="box stage${dim("gather")}" id="stagebox"><span class="boxtag">👤 stage · runs as qa (sonnet)</span>
+      <div class="inner">${card("gather")}<div class="rank">${card("verify")}${card("breakage")}${card("review")}</div></div></div></div>
+      <div style="margin-left:120px">${card("park")}</div></div>`
+  +`<div class="seg" style="--nudge:96px"><div class="main">${card("verdict")}</div></div>`
+  +`<div class="seg" style="--nudge:56px"><div class="main">${card("merge")}</div><div>${card("journal")}</div></div>`;
+  document.getElementById("palette").innerHTML=PALETTE.map(g=>
+    `<div class="pgroup"><span class="eyebrow">${g.g}</span>${g.items.map(nm=>{
+      const key=nm.replace(" / ","_").replace(" (runs as…)","").replace("-","_").replace(" container","").split(" ").join("_");
+      return `<button class="pitem" onclick="alert('mock: drag drops a ${nm} into a rank; a new rank between two ranks is a drop zone')"><span class="ico">${ICONS[key]||ICONS.stage}</span>${nm}<span class="add">＋</span></button>`;}).join("")}</div>`).join("")
+   +`<div class="pgroup" style="border-top:1px solid var(--hair);padding-top:8px"><button class="pitem" onclick="alert('mock: name · kind · runs-as · brief · placements → saved to the step library')"><span class="ico">✚</span><b>custom step…</b></button></div>`;
+  renderPane();
+  requestAnimationFrame(drawEdges);
+}
+function renderPane(){
+  const n=NODES[SEL],spec=SPEC[n.t]||{req:[["brief","(below)"]],opt:[]};
+  document.getElementById("pane").innerHTML=`
+   <span class="eyebrow">property pane · spec sheet</span>
+   <h3><span class="ico">${ICONS[n.t]}</span>${esc(n.nm)}<span class="tag ${n.hard?"hard":"soft"}">${n.hard?"enforced":"instructed"}</span></h3>
+   <div class="note" style="margin-bottom:6px">${esc(n.t.replace("_"," "))} activity — required fields first, everything else stays folded.</div>
+   ${spec.req.map(([k,v])=>`<div class="frow"><span class="lab"><span class="req">●</span> ${k}</span><input name="${esc(k).replace(/\W+/g,"_")}" value="${esc(v)}"></div>`).join("")}
+   <div class="frow"><span class="lab"><span class="req">●</span> runs as</span><select name="runs_as">
+     <option ${n.agent.indexOf("thinking")>=0?"selected":""}>coder · 🧠 thinking (fable)</option>
+     <option ${n.agent.indexOf("building")>=0?"selected":""}>coder · 🔨 building (sonnet)</option>
+     <option ${n.agent==="qa"?"selected":""}>qa (sonnet)</option>
+     <option ${n.agent==="engine"?"selected":""}>the engine (no model)</option></select></div>
+   <div class="frow"><span class="lab">context</span><span class="ctx"><button class="on" onclick="alert('mock: inherits CLAUDE.md + skills')">project</button><button onclick="alert('mock: bare session, brief only — P2+ (P1 validator refuses it, honestly)')">own</button></span></div>
+   <div class="frow"><span class="lab">its brief</span></div>
+   <textarea name="brief">${esc(n.brief)}</textarea>
+   <details><summary>optional — effort · budget · tools</summary>
+     <div class="frow"><span class="lab">effort</span><select name="effort"><option>xhigh</option><option>high</option><option selected>medium</option></select></div>
+     <div class="frow"><span class="lab">budget usd</span><input name="budget_usd" value="—" size="5"></div>
+     <div class="frow"><span class="lab">max turns</span><input name="max_turns" value="—" size="5"></div>
+     ${spec.opt.map(([k,v])=>`<div class="frow"><span class="lab">${k}</span><input name="${esc(k).replace(/\W+/g,"_")}" value="${esc(v)}"></div>`).join("")}
+   </details>
+   <div class="frow"><span class="lab">on fail</span><select name="on_fail"><option>follow the failure edge</option><option>retry once</option><option>ask a human</option><option>stop the run</option></select>
+     <span class="note">a failure edge on the canvas replaces this default</span></div>
+   ${n.t==="git_ops"?`<div class="guard">🔒 <span><b>guarded:</b> merge goes through safe_merge + the repo's merge-gate chain — visible here, not removable.</span></div>`:""}
+   <div class="frow"><button class="pill" onclick="alert('mock: saved to the step library')">save to library</button>
+     <button class="pill" onclick="alert('mock: removed — its edges reconnect or fall to the run default')">remove</button></div>`;
+}
+function anchor(el,side){
+  const c=document.getElementById("dagwrap"),cr=c.getBoundingClientRect(),r=el.getBoundingClientRect();
+  const x=r.left-cr.left+c.scrollLeft,y=r.top-cr.top+c.scrollTop;
+  if(side==="l")return[x,y+r.height/2]; if(side==="r")return[x+r.width,y+r.height/2];
+  if(side==="t")return[x+r.width/2,y]; return[x+r.width/2,y+r.height];
+}
+function drawEdges(){
+  const c=document.getElementById("dagwrap"),svg=document.getElementById("edgesvg");
+  svg.setAttribute("width",c.scrollWidth);svg.setAttribute("height",c.scrollHeight);
+  let defs=`<defs>${Object.entries(COLORS).map(([k])=>{
+    const col=k==="success"?"ok":(k==="failure"?"bad":"dim");
+    return `<marker id="m-${k}" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="var(--${col})"/></marker>`}).join("")}</defs>`;
+  let body="";
+  for(const e of EDGES){
+    const fe=e.f==="loopbox"?document.getElementById("loopbox"):document.querySelector(`[data-nid="${e.f}"]`);
+    const te=e.t==="loopbox"?document.getElementById("loopbox"):document.querySelector(`[data-nid="${e.t}"]`);
+    if(!fe||!te)continue;
+    const[x1,y1]=anchor(fe,e.fs||"r"),[x2,y2]=anchor(te,e.ts||"l");
+    let d;
+    if(e.arc){const top=Math.min(y1,y2)-46;d=`M ${x1} ${y1} C ${x1} ${top}, ${x2} ${top}, ${x2} ${y2}`;}
+    else if((e.fs||"r")==="b"&&(e.ts||"l")==="t"){d=`M ${x1} ${y1} C ${x1} ${(y1+y2)/2}, ${x2} ${(y1+y2)/2}, ${x2} ${y2}`;}
+    else if((e.fs||"r")==="r"&&(e.ts||"l")==="b"){d=`M ${x1} ${y1} C ${x1+70} ${y1}, ${x2} ${y2+56}, ${x2} ${y2}`;}
+    else{d=`M ${x1} ${y1} C ${x1+22} ${y1}, ${x2-22} ${y2}, ${x2} ${y2}`;}
+    const col=e.on==="success"?"ok":(e.on==="failure"?"bad":"dim");
+    const dimmed=OBSERVED&&LASTRUN_EDGES.indexOf(e.id)<0?" dimmed":"";
+    const dash=e.on==="completion"?` stroke-dasharray="4 4"`:"";
+    body+=`<path class="e${dimmed}" d="${d}" fill="none" stroke="var(--${col})" stroke-width="1.6"${dash} marker-end="url(#m-${e.on})"/>`
+        +`<path class="hit" d="${d}" fill="none" stroke="transparent" stroke-width="12" onclick="cycle('${e.id}')"><title>${e.on} — click to cycle the edge type</title></path>`;
+    if(e.lbl){const mx=e.arc?(x1+x2)/2:(x1+x2)/2,my=e.arc?Math.min(y1,y2)-50:(y1+y2)/2-6;
+      body+=`<text class="lbl${dimmed}" x="${mx}" y="${my}" text-anchor="middle" fill="var(--${col})">${esc(e.lbl)}</text>`;}
+  }
+  svg.innerHTML=defs+body;
+}
+function cycle(id){const e=EDGES.find(e=>e.id===id);const order=["success","failure","completion"];
+  e.on=order[(order.indexOf(e.on)+1)%3];drawEdges();}
+function sel(id){SEL=id;render();}
+function toggleObserved(){OBSERVED=!OBSERVED;
+  document.getElementById("dagwrap").classList.toggle("observed",OBSERVED);
+  document.getElementById("obsbtn").classList.toggle("on",OBSERVED);render();}
+window.addEventListener("resize",()=>requestAnimationFrame(drawEdges));
+render();
+</script>
+</body>
+</html>
