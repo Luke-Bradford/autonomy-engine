@@ -478,4 +478,21 @@ check "parseable var-live shadow -> pass" "0" \
   "$(doctor_preflight_check "$vt" >/dev/null 2>&1; echo $?)"
 rm -rf "$vt"
 
+
+# --- pack skills awareness (#362): diagnostic-only INFO, never a failure ----
+pk="$(mktemp -d)"
+pk_out="$(doctor_pack_skills_check "$pk")"
+pk_rc=$?
+check "pack skills absent -> rc 0 (never a failure)" "0" "$pk_rc"
+check "pack skills absent -> INFO per skill, names onboard" "0" \
+  "$(grep -q 'INFO pack skill .working-under-the-loop. not scaffolded' <<<"$pk_out" && grep -q 'onboard.sh' <<<"$pk_out" && echo 0 || echo 1)"
+check "pack skills absent -> never WARN/FAIL" "0" \
+  "$(grep -Eq '^(WARN|FAIL)' <<<"$pk_out" && echo 1 || echo 0)"
+mkdir -p "$pk/.claude/skills/working-under-the-loop"
+echo x > "$pk/.claude/skills/working-under-the-loop/SKILL.md"
+pk_out2="$(doctor_pack_skills_check "$pk")"
+check "scaffolded skill -> INFO present" "0" \
+  "$(grep -q 'INFO pack skill .working-under-the-loop. present' <<<"$pk_out2" && echo 0 || echo 1)"
+rm -rf "$pk"
+
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi

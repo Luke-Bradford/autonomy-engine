@@ -113,4 +113,71 @@ check "planner ignore line never duplicated" "1" "$(grep -cx '.claude/agents/pla
 rm -rf "$gp"
 
 echo "---"
+# --- pack skills (#362, #361 slice a): starter skills land in .claude/skills/
+# (where Claude Code reads them), NOT inside .autonomy/ -- same home logic as
+# the planner agent. Additive elaboration only; never overwrite user content.
+ps="$(mktemp -d)"
+"$ENGINE_HOME/bin/onboard.sh" "$ps" >/dev/null 2>&1
+for sk in working-under-the-loop pipeline-sessions; do
+  check "pack skill $sk scaffolded (.claude/skills, #362)" "0" \
+    "$([ -f "$ps/.claude/skills/$sk/SKILL.md" ] && echo 0 || echo 1)"
+  check "pack skill $sk has a 'Use when' description (trigger-scoped)" "0" \
+    "$(grep -q '^description: Use when' "$ps/.claude/skills/$sk/SKILL.md" && echo 0 || echo 1)"
+done
+echo "MY SKILL EDIT" > "$ps/.claude/skills/pipeline-sessions/SKILL.md"
+"$ENGINE_HOME/bin/onboard.sh" "$ps" >/dev/null 2>&1
+check "idempotent -- never clobbers a user-edited pack skill" "MY SKILL EDIT" \
+  "$(cat "$ps/.claude/skills/pipeline-sessions/SKILL.md")"
+rm -rf "$ps"
+
+# A directory squatting a skill's SKILL.md path must WARN, not fake a scaffold
+# (the planner-path rule, same fail-safe reason).
+sqs="$(mktemp -d)"
+mkdir -p "$sqs/.claude/skills/working-under-the-loop/SKILL.md"
+sqs_out="$("$ENGINE_HOME/bin/onboard.sh" "$sqs" 2>&1 || true)"
+check "dir squatting a skill path warns" "0" \
+  "$(grep -c 'not a regular file' <<<"$sqs_out" | awk '{print ($1>=1)?0:1}')"
+check "dir squatting a skill path scaffolds nothing inside it" "1" \
+  "$([ -f "$sqs/.claude/skills/working-under-the-loop/SKILL.md/SKILL.md" ] && echo 0 || echo 1)"
+rm -rf "$sqs"
+
+# CP2 (#362): a regular FILE squatting the skill's parent DIRECTORY would make
+# `mkdir -p` fail under set -e and kill onboard mid-scaffold -- must WARN,
+# skip, and keep scaffolding the rest.
+fq="$(mktemp -d)"
+mkdir -p "$fq/.claude/skills"
+echo squat > "$fq/.claude/skills/working-under-the-loop"   # file where dir belongs
+fq_out="$("$ENGINE_HOME/bin/onboard.sh" "$fq" 2>&1)"
+fq_rc=$?
+check "file squatting a skill DIR -> onboard completes (rc 0)" "0" "$fq_rc"
+check "file squatting a skill DIR -> warns" "0" \
+  "$(grep -q 'working-under-the-loop.*NOT scaffolded' <<<"$fq_out" && echo 0 || echo 1)"
+check "file squatting one skill dir -> the OTHER skill still scaffolds" "0" \
+  "$([ -f "$fq/.claude/skills/pipeline-sessions/SKILL.md" ] && echo 0 || echo 1)"
+rm -rf "$fq"
+
+# CP2 (#362): a DANGLING SYMLINK at SKILL.md is neither -f nor -e -- without a
+# -L check the scaffold would cp through/over it. Must WARN + skip.
+ds="$(mktemp -d)"
+mkdir -p "$ds/.claude/skills/pipeline-sessions"
+ln -s /nonexistent-target "$ds/.claude/skills/pipeline-sessions/SKILL.md"
+ds_out="$("$ENGINE_HOME/bin/onboard.sh" "$ds" 2>&1)"
+check "dangling symlink at SKILL.md -> warns, not scaffolded" "0" \
+  "$(grep -q 'pipeline-sessions.*not a regular file' <<<"$ds_out" && echo 0 || echo 1)"
+check "dangling symlink remains a symlink (never replaced)" "0" \
+  "$([ -L "$ds/.claude/skills/pipeline-sessions/SKILL.md" ] && echo 0 || echo 1)"
+rm -rf "$ds"
+
+# Same-class (planner block shares the mkdir hazard): a FILE squatting
+# .claude/agents must WARN, not kill the script.
+pq="$(mktemp -d)"
+mkdir -p "$pq/.claude"
+echo squat > "$pq/.claude/agents"
+pq_out="$("$ENGINE_HOME/bin/onboard.sh" "$pq" 2>&1)"
+pq_rc=$?
+check "file squatting .claude/agents -> onboard completes (rc 0)" "0" "$pq_rc"
+check "file squatting .claude/agents -> planner warn" "0" \
+  "$(grep -q 'planner.*NOT scaffolded' <<<"$pq_out" && echo 0 || echo 1)"
+rm -rf "$pq"
+
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
