@@ -1302,5 +1302,70 @@ class LoadDocTest(unittest.TestCase):
             pipeline.load_doc(p)
 
 
+class EffectivePipelineDirTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        self.committed = os.path.join(
+            self.repo, ".autonomy", "pipelines", "flow")
+        os.makedirs(self.committed)
+        # A minimal VALID doc: validate_doc requires caps.max_sessions_per_run
+        # AND an edges list (lib/pipeline.py:330,461) -- Codex CP1 finding #1.
+        with open(os.path.join(self.committed, "pipeline.json"), "w") as fh:
+            json.dump({"name": "flow", "version": 1,
+                       "caps": {"max_sessions_per_run": 16},
+                       "nodes": [{"id": "a", "type": "pick",
+                                  "brief_ref": "a.md"}], "edges": []}, fh)
+
+    def _shadow(self):
+        d = os.path.join(self.repo, "var", "autonomy", "pipelines", "flow")
+        os.makedirs(d)
+        return d
+
+    def test_no_shadow_returns_committed(self):
+        self.assertEqual(pipeline.effective_pipeline_dir(self.repo, "flow"),
+                         self.committed)
+
+    def test_shadow_with_pipeline_json_wins(self):
+        d = self._shadow()
+        with open(os.path.join(d, "pipeline.json"), "w") as fh:
+            fh.write("{}")
+        self.assertEqual(pipeline.effective_pipeline_dir(self.repo, "flow"), d)
+
+    def test_empty_shadow_dir_falls_to_committed(self):
+        self._shadow()                       # dir exists, no pipeline.json
+        self.assertEqual(pipeline.effective_pipeline_dir(self.repo, "flow"),
+                         self.committed)
+
+    def test_invalid_shadow_still_wins_no_fallback(self):
+        # a shadow whose pipeline.json is present-but-garbage is NOT a fallback
+        # case: the resolver returns the shadow, dispatch then RAISES on it
+        # (fail-safe, prevention-log #3) -- never a silent widen to committed.
+        d = self._shadow()
+        with open(os.path.join(d, "pipeline.json"), "w") as fh:
+            fh.write("{ not json")
+        self.assertEqual(pipeline.effective_pipeline_dir(self.repo, "flow"), d)
+
+    def test_resolve_pipeline_reads_the_shadow(self):
+        # bind the role, give the shadow a DIFFERENT valid doc, assert
+        # resolve_pipeline returns the shadow's doc, not committed's.
+        cfg = os.path.join(self.repo, ".autonomy", "config.yaml")
+        with open(cfg, "w") as fh:
+            fh.write("roles:\n  coder:\n    pipeline: flow\n")
+        with open(os.path.join(self.committed, "a.md"), "w") as fh:
+            fh.write("committed brief\n")
+        d = self._shadow()
+        with open(os.path.join(d, "pipeline.json"), "w") as fh:
+            json.dump({"name": "flow", "version": 9,
+                       "caps": {"max_sessions_per_run": 16},
+                       "nodes": [{"id": "a", "type": "pick",
+                                  "brief_ref": "a.md"}], "edges": []}, fh)
+        with open(os.path.join(d, "a.md"), "w") as fh:
+            fh.write("shadow brief\n")
+        doc, meta = pipeline.resolve_pipeline(self.repo, "coder")
+        self.assertEqual(doc["version"], 9)               # shadow, not committed
+        self.assertEqual(meta["pipeline_dir"], d)
+
+
 if __name__ == "__main__":
     unittest.main()
