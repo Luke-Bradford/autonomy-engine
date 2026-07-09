@@ -1,0 +1,37 @@
+{
+  "name": "fixture-flow",
+  "version": 2,
+  "trigger_default": {"type": "loop"},
+  "caps": {"max_sessions_per_run": 20, "max_parallel": 2},
+  "nodes": [
+    {"id": "pick", "type": "pick", "brief_ref": "pick.md"},
+    {"id": "plan", "type": "plan", "brief_ref": "plan.md"},
+    {"id": "code", "type": "agent_task", "brief_ref": "code.md"},
+    {"id": "test", "type": "check", "brief_ref": "test.md"},
+    {"id": "docs", "type": "check", "brief_ref": "docs.md"},
+    {"id": "review", "type": "check", "brief_ref": "review.md"},
+    {"id": "notify-park", "type": "notify", "brief_ref": "notify-park.md",
+     "join": "any"},
+    {"id": "summarize", "type": "summarize", "brief_ref": "summarize.md"},
+    {"id": "journal-run", "type": "journal", "brief_ref": "journal-run.md",
+     "join": "any"}
+  ],
+  "edges": [
+    {"from": "pick", "to": "plan", "on": "success"},
+    {"from": "plan", "to": "coding", "on": "success"},
+    {"from": "coding", "to": "docs", "on": "success"},
+    {"from": "coding", "to": "review", "on": "success"},
+    {"from": "review", "to": "coding", "on": "failure", "back": true,
+     "max_bounces": 2},
+    {"from": "review", "to": "notify-park", "on": "failure"},
+    {"from": "docs", "to": "notify-park", "on": "failure"},
+    {"from": "review", "to": "summarize", "on": "success"},
+    {"from": "docs", "to": "summarize", "on": "success"},
+    {"from": "summarize", "to": "journal-run", "on": "completion"},
+    {"from": "notify-park", "to": "journal-run", "on": "completion"}
+  ],
+  "containers": [
+    {"id": "coding", "kind": "loop", "children": ["code", "test"],
+     "exit_when": "the fixture tests pass", "max_rounds": 3}
+  ]
+}

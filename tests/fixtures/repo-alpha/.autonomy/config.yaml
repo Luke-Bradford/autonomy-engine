@@ -1,3 +1,6 @@
+roles:
+  coder:
+    pipeline: "fixture-flow"
 agent:
   type: "claude"
   model:
