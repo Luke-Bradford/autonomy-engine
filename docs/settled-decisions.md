@@ -215,6 +215,31 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     briefs' concern (pull-rebase-push), stated in the template README —
     never silently absorbed. *(#351; plans/2026-07-09-sequencer-p2b-parallel-dispatch.md.)*
 
+37. **Canvas pipeline edits write to the var-live shadow
+    `var/autonomy/pipelines/<name>/` via `pipeline_save`** (operator-approved
+    P3b direction, 2026-07-09, #365) — SD-34 applied to pipeline DOCUMENTS +
+    SD-29 double-validation, generalized from `structural_write` to a directory
+    asset. One resolver `pipeline.effective_pipeline_dir(repo, name)` is what
+    BOTH dispatch (`resolve_pipeline`, raises) and the dashboard viewer
+    (`build_pipeline_view`, degrades) consult; the committed pack SEEDS the
+    shadow on first save and stays the shareable default. A present-but-invalid
+    shadow REFUSES (dispatch raises, the viewer renders its errors) — never a
+    silent fallback to committed (prevention-log #3). The writer re-uses the
+    established discipline: gitignore guard (refuse when `var/` is not ignored),
+    `name`==folder + charset gates, doc/brief byte caps, seed-from-valid-shadow-
+    else-committed (a present-but-invalid shadow is never a seed — no
+    laundering), staging built from the doc's own `brief_ref`s (no stray files/
+    symlinks), re-validate + deep-compare, reader-safe install (`pipeline.json`
+    published LAST via atomic replace — no fallback window), snapshot rollback;
+    every refusal leaves the shadow byte-identical. **P3b edits a BOUND pipeline
+    only** — a wrapped role has no committed dir to seed from, so its canvas
+    stays read-only; creating/binding a new pipeline is P4. The `/pipeline` page
+    becomes a token-gated write surface (`__CONTROL_TOKEN__` injected), a new
+    `POST /api/control` action (never a new endpoint, SD-9). Minimap + search
+    defer to P3c. The unattended loop stays barred from editing packs (SD-28-
+    superseded-for-packs); this surface is operator-only via the loopback
+    dashboard. *(#365; plans/2026-07-09-sequencer-p3b-canvas-editor.md.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could

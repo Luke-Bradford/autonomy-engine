@@ -79,19 +79,31 @@ evidence toward `watch` (the safe side).
   (never a healthy fallback). Same data, two consumers, two disciplines —
   keep both; see prevention-log #21 before "fixing" one guard.
 
-## Viewer (`/pipeline`, read-only until P3b)
+## Viewer + editor (`/pipeline`)
 
 `GET /api/pipeline?repo=<managed-abs-path>&role=<role>` (ws-prompt identity
-contract) returns the view dict + `spec: SPEC_SHEETS`. The page holds no
-control token, POSTs nothing, and treats node ids as UNTRUSTED (invalid
-docs render): delegated `data-*` listeners, full-coverage `esc()`. Fixture:
-`tests/fixtures/repo-alpha` binds `coder → fixture-flow` and ships a
-walker-shaped `journal.jsonl`; tests needing an unbound role take tmp
-copies.
+contract) returns the view dict + `spec: SPEC_SHEETS` + a `briefs` map (bounded
+brief texts, so the editor pane seeds a true edit). The page treats node ids as
+UNTRUSTED (invalid docs render): delegated `data-*` listeners, full-coverage
+`esc()`. Fixture: `tests/fixtures/repo-alpha` binds `coder → fixture-flow` and
+ships a walker-shaped `journal.jsonl`; tests needing an unbound role take tmp
+copies. **Editing (P3b, #365, SD-37)**: a BOUND pipeline is editable and
+`Save`s the whole doc to the var-shadow via `POST /api/control` action
+`pipeline_save` (token-gated, oversize-body-allowed like `ws_prompt_set`); a
+wrapped role stays read-only. `WORKING` is a dirty working copy the canvas/pane
+render from (`curDoc`/`curEdges`); a live tick never clobbers unsaved edits (the
+#202 bar). `effective_pipeline_dir(repo, name)` (the SD-34 shadow resolver) is
+consulted by BOTH `resolve_pipeline` and `build_pipeline_view`. The writer
+`dashboard_control.pipeline_save` re-uses `structural_write`'s discipline for a
+DIRECTORY asset: gitignore guard, name==folder + charset gates, seed-from-valid-
+shadow-else-committed (no laundering), staging from the doc's own brief_refs,
+re-validate + deep-compare, reader-safe install (pipeline.json last), snapshot
+rollback. Present-but-invalid shadow refuses, never falls back.
 
 ## Still deferred (validator refuses, honestly)
 
 `wait_watch/ask_human/handoff/run_command` types, `branch`/`for_each`
-containers, intra-container edges, `context: own`, canvas EDITING (P3b:
-var-shadow `var/autonomy/pipelines/` per SD-34, `pipeline_save` via
-`/api/control` — decisions locked in the P3a plan doc, pt 8).
+containers, intra-container edges, `context: own`. Canvas EDITING SHIPPED (P3b,
+#365, SD-37 — var-shadow write path); still deferred there: minimap + search
+(P3c), full brief round-trip / reset-shadow-to-committed / provenance diff, and
+binding-a-new-pipeline from the canvas (P4 gallery).

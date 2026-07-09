@@ -137,10 +137,23 @@ The dashboard serves **`/pipeline`** — a read-only canvas per role:
 - live pulse on activities currently running.
 
 An invalid pipeline renders its validator errors with the document still
-visible — the page shows you what is wrong rather than hiding it. Editing
-from the canvas is not yet available; today you edit the JSON and briefs
-directly and the validator/canvas tell you immediately if the result is
-runnable.
+visible — the page shows you what is wrong rather than hiding it.
+
+**Editing from the canvas.** A role bound to a pipeline is editable: drag
+activity types from the palette to add nodes, drag a node's handle to another
+node to draw a typed edge, click an edge to cycle its type (or shift-click to
+delete it), and edit each activity's fields and brief in the property pane —
+then **Save**. Edits are written to a **local shadow**
+(`var/autonomy/pipelines/<name>/`), leaving the committed pack — the shareable
+default — untouched; the shadow is what the engine then runs. A save is
+**validated before it lands**: an invalid graph is refused, not stored, and the
+errors are shown in place. A live view never overwrites your unsaved edits — a
+badge marks unsaved changes until you Save or Revert. Guarded fields (merge
+always via the gate, enforced caps) are visible but not editable, and
+not-yet-runnable activity types stay disabled. Only a role bound to a pipeline
+is editable; an auto-wrapped role is read-only until you bind one. You can still
+edit the JSON and briefs directly instead — the validator and canvas tell you
+immediately if the result is runnable.
 
 ## Configuration reference
 
