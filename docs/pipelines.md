@@ -110,6 +110,10 @@ A pipeline may declare a typed interface:
   the pipeline's declared `outputs` project from it by name and type —
   an undeclared value never leaks to a consumer, and a value that does
   not match its declared type refuses rather than passing through.
+  Output types are the parameter types minus `enum` (an output
+  declaration carries no `choices`, so it could never be checked) and
+  `secret` (the outputs file is plaintext on disk — a secret value is
+  never invited into it).
 
 The runnable invocation surface — triggers that supply parameter values,
 and calling one pipeline from another — is coming with the trigger

@@ -208,6 +208,10 @@ MAX_PARALLEL_CEIL = 8
 #     (a trigger or a calling pipeline -- Phase B/C) via resolve_params. ---
 PARAM_TYPES = ("string", "number", "bool", "enum",
                "repo", "agent", "model", "account", "secret")
+# Outputs exclude enum (an output decl has no choices channel, so an enum
+# output could never be checked -- fail-open) and secret (the run-outputs
+# file is plaintext on disk; a secret VALUE must never be invited into it).
+OUTPUT_TYPES = tuple(t for t in PARAM_TYPES if t not in ("enum", "secret"))
 _PARAM_KEYS = frozenset(("name", "type", "required", "default", "choices"))
 _OUTPUT_KEYS = frozenset(("name", "type"))
 _REF_RE = re.compile(r"\$\{([^}]*)\}")            # ${ ... } (the param language)
@@ -469,6 +473,11 @@ def substitute(value, ctx):
     if not isinstance(value, str):
         return value
     protected = value.replace("$${", _ESC)
+    if "${" in _REF_RE.sub("", protected):
+        # an opener the ref regex could not consume = unterminated ${...} --
+        # a typo must RAISE, never silently stay a literal (Codex CP2)
+        raise PipelineError("unterminated ${...} reference in %r "
+                            "(write $${ for a literal ${)" % value)
     m = _REF_RE.fullmatch(protected)
     if m:                                          # whole-value -> typed
         out = _resolve_expr(m.group(1), ctx)
@@ -575,7 +584,12 @@ def project_outputs(declared, raw):
         if k not in decls:
             continue
         typ = decls[k].get("type")
-        if typ in PARAM_TYPES and typ != "enum" and not _typed_ok(typ, v):
+        if typ not in OUTPUT_TYPES:
+            # an unvalidated decl (enum/secret/garbage) must not become a
+            # skipped check -- fail-safe, never pass-through (Codex CP2)
+            raise PipelineError("output %r: unsupported declared type %r"
+                                % (k, typ))
+        if not _typed_ok(typ, v):
             raise PipelineError("output %r: %r does not match declared type %r"
                                 % (k, v, typ))
         out[k] = v
@@ -673,9 +687,37 @@ def _validate_params_outputs(doc, errors):
                         errors.append("%s: unknown key %r" % (w, k))
                 if not (_is_str(o.get("name")) and _NAME_RE.match(o.get("name") or "")):
                     errors.append("%s: name required, charset [A-Za-z0-9._-]" % w)
-                if o.get("type") not in PARAM_TYPES:
-                    errors.append("%s: type must be one of %s"
-                                  % (w, ", ".join(PARAM_TYPES)))
+                if o.get("type") not in OUTPUT_TYPES:
+                    errors.append("%s: type must be one of %s (enum/secret are "
+                                  "not output types: no choices channel / the "
+                                  "run-outputs file is plaintext)"
+                                  % (w, ", ".join(OUTPUT_TYPES)))
+
+
+def _refuse_refs_in_activity_fields(doc, errors):
+    """Phase A honesty gate (Codex CP2): NOTHING substitutes ${...} yet, so a
+    '${' anywhere in an activity's string fields (runs_as.model has no charset
+    gate, legacy_prompt/exit_when are free text) would dispatch as a raw
+    literal -- the accept-and-ignore fail-open prevention-log #3 forbids.
+    Refused wholesale until Phase B wires substitution; the params/outputs
+    DECLARATIONS stay accepted (they are the interface, not consumed fields)."""
+    def scan(where, v):
+        if isinstance(v, str) and "${" in v:
+            errors.append("%s: contains '${' but the ${...} language is not "
+                          "substituted until Phase B wires it into dispatch -- "
+                          "a validating doc must be runnable today" % where)
+        elif isinstance(v, dict):
+            for k, x in v.items():
+                scan("%s.%s" % (where, k), x)
+        elif isinstance(v, list):
+            for j, x in enumerate(v):
+                scan("%s[%d]" % (where, j), x)
+    for i, node in enumerate(doc.get("nodes") or []):
+        if isinstance(node, dict):
+            scan("nodes[%d]" % i, node)
+    for i, con in enumerate(doc.get("containers") or []):
+        if isinstance(con, dict):
+            scan("containers[%d]" % i, con)
 
 
 def validate_doc(doc, pipeline_dir=None):
@@ -708,6 +750,7 @@ def validate_doc(doc, pipeline_dir=None):
             errors.append("caps.max_parallel: must be 1..%d (ENFORCED fan-out "
                           "ceiling; absent = sequential)" % MAX_PARALLEL_CEIL)
     _validate_params_outputs(doc, errors)
+    _refuse_refs_in_activity_fields(doc, errors)
 
     nodes = doc.get("nodes")
     ids = []

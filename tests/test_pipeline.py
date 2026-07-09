@@ -1646,5 +1646,61 @@ class SubstituteDocTest(unittest.TestCase):
         self.assertEqual(doc["nodes"][0]["runs_as"]["model"], "${params.m}")  # input intact
 
 
+class Cp2HonestyHardeningTest(unittest.TestCase):
+    """Codex CP2 findings on the Phase A diff: the ${...} honesty gate must
+    cover EVERY activity string field (not just charset-gated agent/account),
+    output types must not be fail-open, and a malformed ref must raise."""
+
+    def _doc(self, **over):
+        d = {"name": "flow", "version": 1,
+             "caps": {"max_sessions_per_run": 16},
+             "nodes": [{"id": "a", "type": "pick", "brief_ref": "a.md"}],
+             "edges": []}
+        d.update(over)
+        return d
+
+    def test_ref_in_runs_as_model_refused_in_phase_a(self):
+        # runs_as.model has no charset gate (any non-empty string), so without
+        # an explicit ${ gate this doc validates and dispatch would consume the
+        # LITERAL "${params.model}" -- the fail-open the honesty invariant forbids.
+        d = self._doc(nodes=[{"id": "a", "type": "agent_task", "brief_ref": "a.md",
+                              "runs_as": {"model": "${params.model}"}}])
+        self.assertTrue(any("Phase B" in e or "${" in e
+                            for e in pipeline.validate_doc(d, None)))
+
+    def test_ref_in_legacy_prompt_refused_in_phase_a(self):
+        d = self._doc(nodes=[{"id": "a", "type": "agent_task",
+                              "legacy_prompt": "${params.prompt}"}])
+        self.assertTrue(any("${" in e for e in pipeline.validate_doc(d, None)))
+
+    def test_ref_in_container_exit_when_refused_in_phase_a(self):
+        d = self._doc(
+            nodes=[{"id": "a", "type": "pick", "brief_ref": "a.md"}],
+            containers=[{"id": "c", "kind": "loop", "children": ["a"],
+                         "exit_when": "done per ${params.criteria}",
+                         "max_rounds": 3}])
+        self.assertTrue(any("${" in e for e in pipeline.validate_doc(d, None)))
+
+    def test_enum_and_secret_output_types_refused(self):
+        # enum outputs have no choices channel (fail-open type-check); a secret
+        # output would land a secret VALUE in the plaintext run-outputs file.
+        for typ in ("enum", "secret"):
+            d = self._doc(outputs=[{"name": "x", "type": typ}])
+            self.assertTrue(pipeline.validate_doc(d, None), typ)
+
+    def test_project_outputs_unsupported_type_raises_not_passes(self):
+        for typ in ("enum", "secret", "wat"):
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.project_outputs([{"name": "x", "type": typ}], {"x": "v"})
+
+    def test_unterminated_ref_raises_not_literal(self):
+        ctx = {"params": {"repo": "/r"}, "nodes": {}, "run": {}}
+        for bad in ("x ${params.repo", "${params.repo", "a ${run.id b"):
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.substitute(bad, ctx)
+        # the $${ escape still passes through untouched
+        self.assertEqual(pipeline.substitute("$${literal", ctx), "${literal")
+
+
 if __name__ == "__main__":
     unittest.main()
