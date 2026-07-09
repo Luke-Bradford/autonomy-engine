@@ -771,8 +771,8 @@ async function saveNow(){
   try{
     const res = await fetch("/api/control", {method:"POST",
       headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({action:"pipeline_save", token:CTOKEN, repo, role,
-        name: src.name, doc: WORKING, briefs: BRIEFS})});
+      body: JSON.stringify({action:"pipeline_save", token:CTOKEN, repo,
+        name: src.name, doc: WORKING, briefs: BRIEFS})});   // pipeline selected by name, not role
     const out = await res.json().catch(() => ({}));
     if(res.status === 200 && out.ok){
       if(EDIT_SEQ !== seqAtSubmit){
