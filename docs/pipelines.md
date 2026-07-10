@@ -452,6 +452,37 @@ is editable; an auto-wrapped role is read-only until you bind one. You can still
 edit the JSON and briefs directly instead — the validator and canvas tell you
 immediately if the result is runnable.
 
+**The trigger views.** `/pipeline` opens on four tabs:
+
+- **🗂 pipelines** — one card per pipeline (committed or locally-edited)
+  with its version, activity count, trust rollup, and the triggers bound to
+  it. An invalid pipeline shows its errors on the card. Creating and cloning
+  pipelines from here is not built yet (the buttons say so).
+- **⚡ triggers** — one card per trigger: firing mode (continuous /
+  schedule / manual / event), enabled state, overlap policy, run-window
+  state, parameter count, per-trigger trust tier, and any pending markers
+  (a queued fire, an error backoff, a stop freeze). Two controls work
+  today: **▶ run now** writes a run-now marker for a **manual-mode**
+  trigger — the supervisor fires it on its next pass, or holds it while the
+  trigger is disabled or outside its run window; **■ stop / ▶ resume** set
+  and clear the freeze marker (a stopped trigger starts nothing and its
+  in-flight runs hold in place). Run-now is disabled, with the reason
+  shown, when firing would be refused — for example a required parameter
+  with no value. Enabling/disabling and editing a trigger from this page is
+  not built yet. A trigger file the engine refuses to load appears here
+  verbatim, and also in the dashboard's "Needs you" queue.
+- **▶ runs** — in-flight runs first (one row per parallel slot), then the
+  recent history. A run started by `call_pipeline` indents under its
+  caller; **💡 canvas** opens that run's own graph lit with its progress,
+  and a child's canvas carries a link back to its parent.
+- **🎨 canvas** — the editor above, now addressable by pipeline name (from
+  a gallery card) or by a single run, not only by role.
+
+The main dashboard page reflects the same model: the repo rail lists
+triggers grouped by pipeline (a legacy `roles:` config looks unchanged —
+its synthesised triggers carry the same names), the repo card shows the
+pipeline trust rollup, and refused triggers raise into "Needs you".
+
 ## Configuration reference
 
 ```yaml

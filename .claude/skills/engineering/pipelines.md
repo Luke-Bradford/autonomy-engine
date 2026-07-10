@@ -188,7 +188,23 @@ seeds without firing.
 
 `GET /api/pipeline?repo=<managed-abs-path>&role=<role>` (ws-prompt identity
 contract) returns the view dict + `spec: SPEC_SHEETS` + a `briefs` map (bounded
-brief texts, so the editor pane seeds a true edit). The page treats node ids as
+brief texts, so the editor pane seeds a true edit). Phase D1 (#383) grew
+EXACTLY-ONE selectors: `name=` (by pipeline — gallery cards/native triggers
+have no role; ledger None, trust lives on `/api/triggers`) and `token=`
+(one run's state file under the canonical token grammar; renders the run's
+EMBEDDED doc as degraded truth + a `run{}` block w/ `parent_token`
+breadcrumb). The page has four tabs (gallery/triggers/runs/canvas); the
+list tabs render `GET /api/triggers` (= `build_triggers_view`: trigger
+cards + per-trigger tiers + rollup + REFUSED verbatim + `list_runs`)
+behind their own raw-bytes guard. Lifecycle: `/api/control` actions
+`trigger_fire`/`trigger_stop`/`trigger_resume` write the supervisor's
+lane-scoped `var/trigger-ctl/{fire,stop}/` markers (EMPTY files;
+`marker_basename` in lib/triggers.py is the one basename rule both sides
+share; `queued/`+`backoff/` stay supervisor-owned/read-only; fire is
+manual-mode-only, gated by `trigger_fire_ready` = the same dry
+resolve_params verdict the payload shows). Per-trigger PAUSE
+(`enabled:false`) is a trigger-FILE edit = D2's `trigger_save`; the D1 UI
+shows it read-only. The page treats node ids as
 UNTRUSTED (invalid docs render): delegated `data-*` listeners, full-coverage
 `esc()`. Fixture: `tests/fixtures/repo-alpha` binds `coder → fixture-flow` and
 ships a walker-shaped `journal.jsonl`; tests needing an unbound role take tmp

@@ -17,7 +17,9 @@ No build step, no framework, stdlib only. Four layers:
 | Pages | `lib/dashboard_page.html` (main), `lib/config_page.html` (config), `lib/pipeline_page.html` (canvas viewer, #357) | Vanilla JS, single file each, `__CONTROL_TOKEN__`/`__MODEL_CHOICES__` substituted at serve time (absent placeholder = no-op) |
 
 Routes: pages `GET /` · `/config` · `/pipeline` · reads `GET /api/state` ·
-`/api/config` · `/api/models` · `/api/ws-prompt` · `/api/pipeline` ·
+`/api/config` · `/api/models` · `/api/ws-prompt` · `/api/pipeline`
+(selectors `role=` | `name=` | `token=`, exactly one — #383 D1) ·
+`/api/triggers` (trigger cards + trust + gallery + runs, #383 D1) ·
 `/api/boards` · `/api/stream` (SSE tick) · writes `POST /api/control`
 (action-multiplexed — every mutating button goes through it) and
 `POST /api/chat` (the W4 concierge; same token gauntlet). Adding a
@@ -35,9 +37,13 @@ per-feature write endpoint is still forbidden — new mutations become
 - Server-side re-validation of every control value even though the page also
   validates (defense in depth). Lifecycle actions: `pause`/`resume`/`stop`/
   `start`; plus `set_model`, `config_set`, `repo_add`/`repo_remove`,
-  `cred_*`, `acct_*`, and the workstream-authoring set (`ws_add`, `ws_set`,
-  `ws_prompt_set`, `repo_init`). The action whitelist in `do_POST` is the
-  authority — check it, don't trust this list's freshness.
+  `cred_*`, `acct_*`, the workstream-authoring set (`ws_add`, `ws_set`,
+  `ws_prompt_set`, `repo_init`, `pipeline_save`), and the per-trigger
+  marker set (`trigger_fire`/`trigger_stop`/`trigger_resume`, #383 D1 —
+  enumeration-derived validation + `find_lane_service` lane routing in
+  `execute_trigger_ctl`; writes ONLY `var/trigger-ctl/{fire,stop}/`,
+  `queued/`+`backoff/` are supervisor-owned). The action whitelist in
+  `do_POST` is the authority — check it, don't trust this list's freshness.
 - **Render data can be hostile.** Pages that render degraded/invalid
   artifacts (the `/pipeline` viewer shows INVALID docs by design) must
   treat ids/strings from the payload as untrusted: full-coverage escaping
@@ -127,8 +133,10 @@ Run this before claiming any dashboard change done (pre-flight-review item J).
    normalized out) — give any new panel the same guard, never an
    unconditional `el.innerHTML = …` each tick. `/pipeline` uses the
    coarser payload-signature variant (re-render only when the fetched JSON
-   bytes change); its panel ids for this pass are
-   `['dag','pane','palette','errbar','edgesvg']`.
+   bytes change; the D1 list tabs have their own `TRIGSIG` twin over
+   `/api/triggers`, and only the ACTIVE tab's payload is fetched); its
+   panel ids for this pass are
+   `['dag','pane','palette','errbar','edgesvg','v-gallery','v-triggers','v-runs']`.
    **Dirty-control survival** (#202 defect 3 — an SSE re-render must not revert an
    operator's un-saved edit): on `/config`, set a `select`/input via JS, fire its
    `change`/`input` event, `await` ~6 s (2–3 poll cycles), assert the value is
