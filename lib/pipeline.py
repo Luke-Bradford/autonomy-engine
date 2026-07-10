@@ -1739,15 +1739,17 @@ def _child_token_name(parent_state_path, parent_state, node_id):
 
 def _check_call_name_headroom(doc, run_name):
     """Every call node must yield a charset-legal child token:
-    <run_name>.c<slot>.<node_id> with slot up to one digit (concurrency max
-    is <= 8). Raises PipelineError naming the first offender. Called at RUN
-    START (CP1: an over-long trigger name must refuse the run up front, not
-    fail every call node one by one at sweep time -- same verdict,
-    delivered before any session burns)."""
+    <run_name>.c<slot>.<node_id> with slot up to MAX_PARALLEL_CEIL-1 (the
+    widest slot a parent can occupy -- derived, so raising the ceiling can
+    never silently under-count this check). Raises PipelineError naming the
+    first offender. Called at RUN START (CP1: an over-long trigger name
+    must refuse the run up front, not fail every call node one by one at
+    sweep time -- same verdict, delivered before any session burns)."""
     for n in doc.get("nodes") or []:
         if not (isinstance(n, dict) and n.get("type") == "call_pipeline"):
             continue
-        worst = "%s.c9.%s" % (run_name, n.get("id", ""))
+        worst = "%s.c%d.%s" % (run_name, MAX_PARALLEL_CEIL - 1,
+                               n.get("id", ""))
         if not _NAME_RE.match(worst):
             raise PipelineError(
                 "call node %r: child token %r would exceed the 64-char name "
