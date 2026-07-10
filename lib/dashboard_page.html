@@ -275,6 +275,9 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .role .trig .qreset{display:inline-block;text-align:right;font-variant-numeric:tabular-nums;min-width:4.8em}
 .role .rlast .agox{display:inline-block;text-align:right;font-variant-numeric:tabular-nums;min-width:2.2em}
 .role .rmiss{font-family:var(--mono);font-size:10px;color:var(--warn);border:1px solid var(--warn);border-radius:3px;padding:1px 5px}
+/* D1 (#383): per-trigger tier / pipeline rollup chip (rail + repo header) */
+.rtier{font-family:var(--mono);font-size:10px;color:var(--warn);border:1px solid var(--hair2);border-radius:3px;padding:0 5px;white-space:nowrap}
+.rtier.ok{color:var(--ok)}
 /* #357 P3a: per-role pipeline-canvas link. Static per role (repo path + role
    name), so the skip-unchanged guard signature is unaffected. */
 .role .rpipe{font-size:10px;color:var(--dim);text-decoration:none;margin-left:auto}
@@ -1142,19 +1145,32 @@ function renderRepos(repos){
     const allRoles=r.roles||[];
     const ghostRoles=allRoles.filter(ro=>ro.status==="not-configured"||(!ro.configured&&!ro.enabled));
     const ghostSet={};ghostRoles.forEach(ro=>{ghostSet[ro.name]=1;});
-    const roleEls=allRoles.filter(ro=>!ghostSet[ro.name]).map(role=>{
-      const off=!role.enabled;
-      const isActing=!off && !!acting && role.name===acting;
+    // D1 (#383): the rail lists TRIGGERS when the trigger layer is readable
+    // (decision 1 -- shim names are byte-equal to role names, so legacy
+    // configs render unchanged; the matched role row keeps supplying the
+    // live status/countdown/last-run cells). Fallback = the role rows (old
+    // payload or trust.error -- degrade to truth, badged on the header).
+    const trigList=Array.isArray(r.triggers)?r.triggers:[];
+    const trust=r.trust||{};
+    const useTrig=trigList.length>0&&!trust.error;
+    const roleByName={};allRoles.forEach(ro=>{roleByName[ro.name]=ro;});
+    const rowOne=(name,role,tg)=>{
+      const off=tg?!tg.enabled:!(role&&role.enabled);
+      const isActing=!off && !!acting && name===acting;
       // scheduling lane (#18): cron roles get a live next-fire countdown,
       // enabled event roles read "armed" -- both only when actually enabled
       // (#164: countdown rendered INLINE, never a placeholder -- the qreset
-      // ticker keeps it live between rebuilds)
-      const nf=role.next_fire?(()=>{const s=role.next_fire-Math.floor(nowS());return s>0?durm(s):"now";})():"";
-      const trig = role.trigger==="cron"&&role.next_fire
-        ? `cron · next <span class="qreset num" data-g="m" data-e="${role.next_fire}">${nf}</span>`
-        : (role.trigger==="event"&&role.enabled&&role.configured)
-        ? `event · armed`
-        : esc(role.trigger);
+      // ticker keeps it live between rebuilds). A NATIVE trigger has no role
+      // row: its schedule renders as the static mode word (its countdown is
+      // a follow-on -- never a fabricated number).
+      const nf=role&&role.next_fire?(()=>{const s=role.next_fire-Math.floor(nowS());return s>0?durm(s):"now";})():"";
+      const trig = role
+        ? (role.trigger==="cron"&&role.next_fire
+          ? `cron · next <span class="qreset num" data-g="m" data-e="${role.next_fire}">${nf}</span>`
+          : (role.trigger==="event"&&role.enabled&&role.configured)
+          ? `event · armed`
+          : esc(role.trigger))
+        : esc(tg?(tg.mode==="continuous"?"loop":tg.mode==="schedule"?"cron":tg.mode):"");
       // #198: roster MOTION lives solely on the acting-role rdot below. The
       // coder row's status LABEL still mirrors the repo (#23), but its status
       // dot no longer pulses (pulse=false) -- else a non-coder session would
@@ -1162,27 +1178,38 @@ function renderRepos(repos){
       // #185 fleet rail: per-role last-run stat -- the newest session this role
       // ran, as a live "last <ago> · <outcome>" (agox ticker keeps it fresh
       // between rebuilds). Rendered only when the role has actually run.
-      const lr=role.last_run;
+      const lr=role&&role.last_run;
       // #238: minute-granularity age + a STATIC " ago" OUTSIDE the <b> so the
       // ticker only rewrites the duration; the " ago" can never toggle in/out of
       // flow and reshape the row (the width-shift the operator saw).
-      const lastRun = lr&&lr.at ? `<span class="rlast" title="last session dispatched to ${esc(role.name)}">last <b class="agox num" data-g="m" data-t="${lr.at}">${agom(nowS()-lr.at)}</b> ago${lr.outcome?` · ${esc(lr.outcome)}`:""}</span>` : "";
-      // #188c: a cron role whose expected fire is overdue (marker never
-      // advanced) is a MISSED fire -- the swept-state incident that otherwise
-      // looks identical to a healthy idle role. Surface it, server-asserted.
-      const missed = role.missed_fire ? `<span class="rmiss" title="expected cron fire is overdue — scheduler may be stalled/backed-off">⚠ missed fire</span>` : "";
-      // #147: each role stays tagged with its lane so a multi-lane repo can
-      // group the rows below (the lane name lives on the group header).
-      // #258 two-line row: identity + status on line 1, schedule + last-run on
-      // line 2 — live data can no longer collide inline or wrap mid-token. The
-      // qreset/agox ticker cells keep their classes, so the 1s ticker and the
-      // skip-unchanged guard normalization are unaffected.
-      const html = `<div class="role ${off?"off":""}${isActing?" acting":""}${role.missed_fire?" missed":""}">
-        <span class="r1"><i class="rdot"></i><span class="rn">${esc(role.name)}</span>${subBadge(role.substrate)}</span>
-        <span class="rst">${token(role.status,false)}</span>
-        <div class="r2"><span class="trig">${trig}</span>${missed}${lastRun}<a class="rpipe" href="/pipeline?repo=${encodeURIComponent(r.path)}&role=${encodeURIComponent(role.name)}" title="pipeline canvas — how this role runs">⛓</a></div></div>`;
-      return {lane: role.lane||lanes.default, html: html};
-    });
+      const lastRun = lr&&lr.at ? `<span class="rlast" title="last session dispatched to ${esc(name)}">last <b class="agox num" data-g="m" data-t="${lr.at}">${agom(nowS()-lr.at)}</b> ago${lr.outcome?` · ${esc(lr.outcome)}`:""}</span>` : "";
+      // #188c: an overdue expected cron fire (marker never advanced) is a
+      // MISSED fire -- the swept-state incident. Trigger rows carry the
+      // server verdict directly (natives included, Phase D1).
+      const missedFlag=tg?tg.missed_fire:(role&&role.missed_fire);
+      const missed = missedFlag ? `<span class="rmiss" title="expected cron fire is overdue — scheduler may be stalled/backed-off">⚠ missed fire</span>` : "";
+      // D1 trigger-layer cells: per-trigger trust tier, stop-marker freeze,
+      // run-window state. All server-asserted; absent on role fallback rows.
+      const tier=tg?`<span class="rtier${tg.tier==="auto"?" ok":""}" title="trust tier — earned per trigger (${esc(tg.kind)})">🛡 ${esc(tg.tier)}</span>`:"";
+      const stopped=tg&&tg.stopped?`<span class="rmiss" title="stop marker set — frozen (no new fires, no advance) until resumed">⛔ stopped</span>`:"";
+      const closed=tg&&tg.window_open===false?`<span class="rmiss" title="outside its run window — new starts deferred">🕘 window closed</span>`:"";
+      const pchip=tg&&multiLane?`<span class="trig">· ${esc(tg.pipeline||name)}</span>`:"";
+      const status=role?role.status:(off?"disabled":"idle");
+      // D1: the per-role ⛓ canvas link retires -- trigger rows link to the
+      // /pipeline TRIGGERS tab (canvas stays reachable from there).
+      const link=tg
+        ? `<a class="rpipe" href="/pipeline?repo=${encodeURIComponent(r.path)}&view=triggers" title="triggers — firing, trust, run-now">⚡</a>`
+        : `<a class="rpipe" href="/pipeline?repo=${encodeURIComponent(r.path)}&role=${encodeURIComponent(name)}" title="pipeline canvas — how this role runs">⛓</a>`;
+      const html = `<div class="role ${off?"off":""}${isActing?" acting":""}${missedFlag?" missed":""}">
+        <span class="r1"><i class="rdot"></i><span class="rn">${esc(name)}</span>${role?subBadge(role.substrate):""}${tier}</span>
+        <span class="rst">${token(status,false)}</span>
+        <div class="r2"><span class="trig">${trig}</span>${pchip}${missed}${stopped}${closed}${lastRun}${link}</div></div>`;
+      return {lane:(tg&&tg.lane)||(role&&role.lane)||lanes.default,
+              pipeline:tg?(tg.pipeline||name):"", html: html};
+    };
+    const roleEls=useTrig
+      ? trigList.map(tg=>rowOne(tg.name,roleByName[tg.name]||null,tg))
+      : allRoles.filter(ro=>!ghostSet[ro.name]).map(role=>rowOne(role.name,role,null));
     // Flat list for the single implicit lane (zero change); grouped under a lane
     // sub-header when the repo declares multiple lanes. An orphan lane (a role
     // whose lane isn't a declared name -- shouldn't happen post-validation) is
@@ -1212,6 +1239,18 @@ function renderRepos(repos){
       }).join("");
       const orphan=roleEls.filter(x=>laneNames.indexOf(x.lane)<0);
       if(orphan.length) roles += orphan.map(x=>x.html).join("");
+    } else if(useTrig){
+      // D1 (#383, decision 1): single-lane repos group trigger rows under a
+      // PIPELINE header carrying the rollup tier (auto only when every
+      // trigger is auto -- the fail-safe floor). Non-selectable label: lane
+      // selection stays on the repo header (single-lane semantics, #258).
+      const pnames=[];roleEls.forEach(x=>{if(pnames.indexOf(x.pipeline)<0)pnames.push(x.pipeline);});
+      roles=pnames.map(pn=>{
+        const inP=roleEls.filter(x=>x.pipeline===pn);
+        const tier=(trust.rollup||{})[pn];
+        const chip=tier?`<span class="rtier${tier==="auto"?" ok":""}" title="pipeline trust rollup — auto only when every trigger reads auto">🛡 ${esc(tier)}</span>`:"";
+        return `<div class="lgrp"><div class="lgrp-h" title="pipeline — its triggers below">${esc(pn)}${chip}</div>${inP.map(x=>x.html).join("")}</div>`;
+      }).join("");
     } else {
       roles = roleEls.map(x=>x.html).join("");
     }
@@ -1241,8 +1280,17 @@ function renderRepos(repos){
       ? `<div class="repo-h">`
       : `<div class="repo-h lsel${selClass(skey)}" data-lane-key="${encodeURIComponent(skey)}" title="click to focus this lane in the center">`;
     const ghost=`<a class="role ghost" href="/config" title="add a role${ghostRoles.length?` — available: ${esc(ghostRoles.map(x=>x.name).join(", "))}`:""}">＋ role</a>`;
+    // D1 (#383, decision 5): the pipeline trust ROLLUP chip on the repo
+    // card -- worst-of across pipelines (any watch -> watch), per-pipeline
+    // tiers in the title. trust.error renders as a warning, never healthy.
+    const rollup=trust.rollup||{};
+    const rkeys=Object.keys(rollup);
+    const worst=rkeys.length?(rkeys.every(k=>rollup[k]==="auto")?"auto":"watch"):"";
+    const trustChip=trust.error
+      ? `<span class="lbad" title="${esc(trust.error)} — rail shows role rows">⚠ triggers unavailable</span>`
+      : (worst?`<span class="rtier${worst==="auto"?" ok":""}" title="${esc(rkeys.map(k=>k+": "+rollup[k]).join(" · "))}">🛡 ${esc(worst)}</span>`:"");
     return `<div class="repo">
-      ${repoHOpen}<span class="nm">${esc(dispName(r.name))}</span>${multiLane?"":pinBtn(skey)}${laneWarn}${boardWarn}
+      ${repoHOpen}<span class="nm">${esc(dispName(r.name))}</span>${multiLane?"":pinBtn(skey)}${laneWarn}${boardWarn}${trustChip}
         <span class="badge">${token(st,true)}</span>${lifecycleCluster(r,st)}</div>
       <div class="cfg">${esc(cfg.model||"—")} · gate ${esc(cfg.merge_gate||"—")}${(r.lifecycle||{}).pid?" · pid "+r.lifecycle.pid:""}</div>
       ${gateChain}${roles}${ghost}</div>`;
@@ -1518,10 +1566,16 @@ function renderHandoffs(repos){
 
 /* ---- NEEDS YOU (#189 degraded state: untriaged human-decision queue) ---- */
 function renderNeedsYou(repos){
-  const rows=[];repos.forEach(r=>((r.git&&r.git.needs_you)||[]).forEach(i=>rows.push({repo:r.name,i})));
+  const rows=[];
+  // D1 (#383, decision 6): REFUSED triggers are operator-actionable by
+  // definition -- they rank AHEAD of the gh items (fail-safe visibility).
+  repos.forEach(r=>(((r.trust||{}).refused)||[]).forEach(w=>rows.push({repo:r.name,ref:{w:w,path:r.path}})));
+  repos.forEach(r=>((r.git&&r.git.needs_you)||[]).forEach(i=>rows.push({repo:r.name,i})));
   const many=repos.filter(r=>r.git&&(r.git.needs_you||[]).length).length>1;
   if(!rows.length){setHTML("needsyou",`<div class="empty">Nothing awaiting a decision — needs-design issues appear here.</div>`);return;}
-  setHTML("needsyou",rows.map(x=>{const i=x.i;
+  setHTML("needsyou",rows.map(x=>{
+    if(x.ref) return `<div class="hln"><span class="chip">REFUSED trigger</span><span class="hact">[${esc(x.repo)}] <a href="/pipeline?repo=${encodeURIComponent(x.ref.path)}&view=triggers">${esc(x.ref.w)}</a></span></div>`;
+    const i=x.i;
     const num=i.number!=null?("#"+esc(i.number)):"";
     const href=safeHref(i.url);
     const link=href?`<a href="${esc(href)}" target="_blank" rel="noopener">${num}</a>`:num;
