@@ -609,6 +609,10 @@ def substitute_doc(doc, ctx):
     return walk(doc)
 
 
+def _has_ref(v):
+    return isinstance(v, str) and "${" in v.replace("$${", "")
+
+
 def _validate_runs_as(where, runs_as, errors):
     if runs_as is None:
         return
@@ -618,17 +622,24 @@ def _validate_runs_as(where, runs_as, errors):
     for key in runs_as:
         if key not in ("model", "effort", "account", "agent"):
             errors.append("%s: runs_as.%s is not a known field" % (where, key))
-    if "model" in runs_as and not _is_str(runs_as["model"]):
+    # A ${...}-bearing field defers to the POST-SUBSTITUTION concrete check
+    # in _prepare_step (refuse-not-drop) -- check_refs has already validated
+    # the reference statically. A ref-free field keeps the P1 checks.
+    if "model" in runs_as and not _has_ref(runs_as["model"]) \
+            and not _is_str(runs_as["model"]):
         errors.append("%s: runs_as.model must be a non-empty string" % where)
-    if "account" in runs_as and not (_is_str(runs_as["account"])
-                                     and _NAME_RE.match(runs_as["account"])):
+    if "account" in runs_as and not _has_ref(runs_as["account"]) \
+            and not (_is_str(runs_as["account"])
+                     and _NAME_RE.match(runs_as["account"])):
         errors.append("%s: runs_as.account must be an account name "
                       "(charset [A-Za-z0-9._-]{1,64})" % where)
-    if "effort" in runs_as and runs_as["effort"] not in VALID_EFFORTS:
+    if "effort" in runs_as and not _has_ref(runs_as["effort"]) \
+            and runs_as["effort"] not in VALID_EFFORTS:
         errors.append("%s: runs_as.effort %r invalid (valid: %s)"
                       % (where, runs_as.get("effort"), ", ".join(VALID_EFFORTS)))
-    if "agent" in runs_as and not (_is_str(runs_as["agent"])
-                                   and _AGENT_RE.match(runs_as["agent"])):
+    if "agent" in runs_as and not _has_ref(runs_as["agent"]) \
+            and not (_is_str(runs_as["agent"])
+                     and _AGENT_RE.match(runs_as["agent"])):
         errors.append("%s: runs_as.agent has invalid chars" % where)
 
 
@@ -692,32 +703,6 @@ def _validate_params_outputs(doc, errors):
                                   "not output types: no choices channel / the "
                                   "run-outputs file is plaintext)"
                                   % (w, ", ".join(OUTPUT_TYPES)))
-
-
-def _refuse_refs_in_activity_fields(doc, errors):
-    """Phase A honesty gate (Codex CP2): NOTHING substitutes ${...} yet, so a
-    '${' anywhere in an activity's string fields (runs_as.model has no charset
-    gate, legacy_prompt/exit_when are free text) would dispatch as a raw
-    literal -- the accept-and-ignore fail-open prevention-log #3 forbids.
-    Refused wholesale until Phase B wires substitution; the params/outputs
-    DECLARATIONS stay accepted (they are the interface, not consumed fields)."""
-    def scan(where, v):
-        if isinstance(v, str) and "${" in v:
-            errors.append("%s: contains '${' but the ${...} language is not "
-                          "substituted until Phase B wires it into dispatch -- "
-                          "a validating doc must be runnable today" % where)
-        elif isinstance(v, dict):
-            for k, x in v.items():
-                scan("%s.%s" % (where, k), x)
-        elif isinstance(v, list):
-            for j, x in enumerate(v):
-                scan("%s[%d]" % (where, j), x)
-    for i, node in enumerate(doc.get("nodes") or []):
-        if isinstance(node, dict):
-            scan("nodes[%d]" % i, node)
-    for i, con in enumerate(doc.get("containers") or []):
-        if isinstance(con, dict):
-            scan("containers[%d]" % i, con)
 
 
 _RUN_FIELDS = ("id", "pipeline", "trigger", "repo")
@@ -821,11 +806,16 @@ def check_refs(doc, errors):
     time -- catching it at validate time keeps 'validating == runnable')."""
     declared = {p.get("name"): p for p in (doc.get("params") or [])
                 if isinstance(p, dict)}
+    # Garbage id shapes (a dict where a string belongs) are the SHAPE
+    # checks' finding, later in validate_doc -- here they just degrade to
+    # unit=None (no ancestors -> node-output refs refuse, the safe side);
+    # this scan must stay total (it runs before the shape checks).
     con_of = {}
     for con in (doc.get("containers") or []):
         if isinstance(con, dict):
             for ch in (con.get("children") or []):
-                con_of[ch] = con.get("id")
+                if isinstance(ch, str):
+                    con_of[ch] = con.get("id")
 
     def scan(where, v, unit):
         if isinstance(v, str):
@@ -858,7 +848,8 @@ def check_refs(doc, errors):
             if isinstance(val, str) and "${" in val:
                 errors.append("%s.%s: is a file path -- ${...} is never "
                               "substituted in paths" % (where, f))
-        unit = con_of.get(node.get("id"), node.get("id"))
+        nid = node.get("id")
+        unit = con_of.get(nid, nid) if isinstance(nid, str) else None
         clean = {k: v for k, v in node.items() if k not in _REF_FREE_FIELDS}
         scan(where, clean, unit)
     for i, con in enumerate(doc.get("containers") or []):
@@ -896,7 +887,12 @@ def validate_doc(doc, pipeline_dir=None):
             errors.append("caps.max_parallel: must be 1..%d (ENFORCED fan-out "
                           "ceiling; absent = sequential)" % MAX_PARALLEL_CEIL)
     _validate_params_outputs(doc, errors)
-    _refuse_refs_in_activity_fields(doc, errors)
+    # Phase B: substitution IS wired into prepare now, so ${...} in activity
+    # fields is validated statically (check_refs) instead of refused
+    # wholesale. The Phase A gate (_refuse_refs_in_activity_fields) is
+    # DELETED in this same commit -- a validating doc is still a runnable
+    # doc, the honesty invariant just moved from "refuse" to "check".
+    check_refs(doc, errors)
 
     nodes = doc.get("nodes")
     ids = []
@@ -1520,6 +1516,45 @@ def _verdict_rel(state_path, node_id):
     return "var/autonomy-logs/%s.%s.verdict.json" % (base, node_id)
 
 
+def _node_outputs_rel(state_path, node_id):
+    """Per-NODE outputs sidecar, derived exactly like the verdict file --
+    one naming rule both sides, lane/slot-safe for free."""
+    base = os.path.basename(state_path)
+    if base.endswith(".json"):
+        base = base[:-len(".json")]
+    return "var/autonomy-logs/%s.%s.outputs.json" % (base, node_id)
+
+
+def _collect_node_outputs(state_path, state):
+    """{node_id: {name: value}} for every recorded-successful node, read
+    TOTALLY from the sidecars (read_outputs: missing/corrupt -> {}). A node
+    that wrote nothing simply has no entry -- a ref to it refuses at
+    substitute time with the Phase A 'unknown node output' error."""
+    logdir = os.path.dirname(state_path)
+    out = {}
+    for entry in state.get("nodes_done", []):
+        if entry.get("outcome") != "success":
+            continue
+        nid = entry.get("id")
+        rel = _node_outputs_rel(state_path, nid)
+        vals = read_outputs(os.path.join(logdir, os.path.basename(rel)))
+        if vals:
+            out[nid] = vals
+    return out
+
+
+_OUTPUTS_FOOTER = """<!-- pipeline:outputs -->
+A later activity reads this activity's named outputs. Before you finish,
+write a JSON object of them to %(outputs_file)s (relative to the repo
+root), e.g. {"branch": "feat/x-123"}. Downstream references
+($${nodes.%(node_id)s.output.<name>}) refuse to run if the name they need
+is missing -- write every output you produced."""
+# The $${ above is the documented prose escape: the footer is appended to the
+# brief BEFORE substitute() runs over the composed text, and a live
+# ${nodes.<this-node>...} ref would try to resolve THIS node's not-yet-written
+# outputs and refuse its own dispatch. substitute() renders it back to ${.
+
+
 def _loop_ctx(state, node, state_path):
     con = _container_of(state["doc"], node["id"])
     if con is None or con.get("kind") != "loop":
@@ -1664,10 +1699,57 @@ def _guard_in_progress(state, state_path):
                             "refusing" % (state_path, status))
 
 
+def _substitution_ctx(state_path, state):
+    return {"params": state.get("params") or {},
+            "nodes": _collect_node_outputs(state_path, state),
+            "run": state.get("run") or {}}
+
+
+def _concrete_runs_as_check(node_id, runs_as):
+    """The SAME concrete gates _validate_runs_as applies to ref-free fields,
+    re-run on POST-substitution values. REFUSES (raises) -- never the
+    wrap_role warn-and-drop: dropping a trigger's chosen model would
+    silently change what the operator parameterised (prevention-log #3/#15;
+    the supervisor's bash-side re-validation stays as defense in depth,
+    prevention-log #6)."""
+    errs = []
+    _validate_runs_as("node %r (resolved)" % node_id, runs_as, errs)
+    for k, v in (runs_as or {}).items():
+        if _has_ref(v):
+            errs.append("node %r: runs_as.%s still carries ${ after "
+                        "substitution" % (node_id, k))
+    if errs:
+        raise PipelineError("; ".join(errs))
+
+
+def _doc_briefs_reference(pdir, doc, needle):
+    """True when any sibling brief file mentions `needle` -- total reader
+    (an unreadable brief refuses later at ITS compile; here absence of
+    evidence just means no footer)."""
+    if not pdir:
+        return False
+    for n in doc.get("nodes", []):
+        ref = n.get("brief_ref")
+        if not ref:
+            continue
+        try:
+            with open(os.path.join(pdir, ref)) as fh:
+                if needle in fh.read():
+                    return True
+        except OSError:
+            continue
+    return False
+
+
 def _prepare_step(state_path, state, uid, brief_path):
     doc = state["doc"]
     node = _node_by_id(doc, _expected_node(doc, state, uid))
     verdict_rel = _verdict_rel(state_path, node["id"])
+    ctx = _substitution_ctx(state_path, state)
+    # Resolve the node's OWN ${...} fields (runs_as etc.) before anything
+    # derived from them is emitted. substitute_doc deep-copies; the stored
+    # doc keeps its template form so a later bounce re-resolves fresh.
+    resolved_node = substitute_doc(node, ctx)
     if node.get("legacy_prompt"):
         kind, prompt = "legacy", node["legacy_prompt"]
     else:
@@ -1682,12 +1764,28 @@ def _prepare_step(state_path, state, uid, brief_path):
         text = compile_brief(pdir, doc, node["id"],
                              _loop_ctx(state, node, state_path),
                              verdict_ctx=verdict_ctx)
+        # Downstream consumers of THIS node's outputs? Tell the agent where
+        # to write them (same contract as the verdict footer).
+        consumers = "${nodes.%s.output." % node["id"]
+        if consumers in json.dumps(doc) or _doc_briefs_reference(
+                pdir, doc, consumers):
+            text += "\n\n" + _OUTPUTS_FOOTER % {
+                "outputs_file": _node_outputs_rel(state_path, node["id"]),
+                "node_id": node["id"]}
+        # Brief TEXT substitution: string interpolation over the composed
+        # brief (body + footers). A stray unknown ref RAISES here -- refuse
+        # the dispatch, never send a template to an agent. Prose ${ must be
+        # escaped $${ (documented in docs/pipelines.md).
+        text = substitute(text, ctx)
         with open(brief_path, "w") as fh:
             fh.write(text)
         kind, prompt = "compiled", brief_path
+    merged = dict(_effective_runs_as(doc, node))
+    merged.update(resolved_node.get("runs_as") or {})
+    merged = {k: substitute(v, ctx) for k, v in merged.items()}
+    _concrete_runs_as_check(node["id"], merged)
     return {"status": "node", "unit": uid, "node": node["id"], "kind": kind,
-            "prompt": prompt, "verdict": verdict_rel,
-            "runs_as": _effective_runs_as(doc, node)}
+            "prompt": prompt, "verdict": verdict_rel, "runs_as": merged}
 
 
 def _pick(state_path, state, n, brief_path_for, journal_path):

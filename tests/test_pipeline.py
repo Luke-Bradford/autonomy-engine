@@ -1433,13 +1433,19 @@ class ParamsOutputsValidationTest(unittest.TestCase):
     def test_params_not_a_list_refused(self):
         self.assertTrue(pipeline.validate_doc(self._doc(params={}), None))
 
-    def test_reference_in_field_still_refused_in_phase_a(self):
-        # HONESTY (Codex CP1): Phase A cannot substitute ${...} (dispatch is
-        # Phase B), so validate_doc must still REFUSE a ${...} in agent -- a
-        # validating doc must be a runnable doc. Acceptance lands in Phase B.
-        d = self._doc(nodes=[{"id": "a", "type": "agent_task", "brief_ref": "a.md",
+    def test_reference_in_activity_field_now_accepted(self):
+        # Phase B wired substitution into prepare, so the Phase A wholesale
+        # refusal is gone: a DECLARED param ref validates; an undeclared one
+        # is a check_refs error; concrete garbage still refuses.
+        d = self._doc(params=[{"name": "coder_agent", "type": "agent",
+                               "default": "claude-code"}],
+                      nodes=[{"id": "a", "type": "agent_task", "brief_ref": "a.md",
                               "runs_as": {"agent": "${params.coder_agent}"}}])
-        self.assertTrue(pipeline.validate_doc(d, None))          # refused for now
+        self.assertEqual(pipeline.validate_doc(d, None), [])
+        d_undeclared = self._doc(
+            nodes=[{"id": "a", "type": "agent_task", "brief_ref": "a.md",
+                    "runs_as": {"agent": "${params.coder_agent}"}}])
+        self.assertTrue(pipeline.validate_doc(d_undeclared, None))
         d2 = self._doc(nodes=[{"id": "a", "type": "agent_task", "brief_ref": "a.md",
                                "runs_as": {"agent": "bad agent!"}}])
         self.assertTrue(pipeline.validate_doc(d2, None))
@@ -1700,6 +1706,152 @@ class Cp2HonestyHardeningTest(unittest.TestCase):
                 pipeline.substitute(bad, ctx)
         # the $${ escape still passes through untouched
         self.assertEqual(pipeline.substitute("$${literal", ctx), "${literal")
+
+
+class SubstitutionWiringTest(unittest.TestCase):
+    """Drives ready_set over a hand-built fmt-2 state with ${} fields.
+    start_run_trigger lands in Task 6; state['params']/'run' default to {}
+    when absent, so every pre-existing state fixture keeps passing."""
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        self.pdir = os.path.join(self.repo, ".autonomy", "pipelines", "flow")
+        os.makedirs(self.pdir)
+        self.logdir = os.path.join(self.repo, "var", "autonomy-logs")
+        os.makedirs(self.logdir)
+        self.state = os.path.join(self.logdir, ".pipeline-run-t1.json")
+
+    def _doc(self, nodes, edges, params=None):
+        return {"name": "flow", "version": 1,
+                "params": params or [
+                    {"name": "m", "type": "model",
+                     "default": "claude-sonnet-5"},
+                    {"name": "ticket", "type": "string", "default": "AE-1"},
+                    {"name": "eff", "type": "string", "default": "high"}],
+                "caps": {"max_sessions_per_run": 8},
+                "nodes": nodes, "edges": edges}
+
+    def _write(self, doc, briefs, state_params=None, done=None, units=None):
+        with open(os.path.join(self.pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        for name, text in briefs.items():
+            with open(os.path.join(self.pdir, name), "w") as fh:
+                fh.write(text)
+        d = dict(doc)
+        d["edges"] = pipeline.effective_edges(d)
+        st = {"fmt": 2, "run_id": "t1-x-1", "role": "t1", "lane": "",
+              "doc": d,
+              "meta": {"pipeline_dir": self.pdir, "wrapped": False,
+                       "from": "flow", "from_version": 1},
+              "trigger": "t1", "kind": "native",
+              "params": state_params if state_params is not None else
+                  {"m": "claude-sonnet-5", "ticket": "AE-1", "eff": "high"},
+              "run": {"id": "t1-x-1", "pipeline": "flow", "trigger": "t1",
+                      "repo": self.repo},
+              "started": 0, "sessions": 0,
+              "units": units or dict((u, {"status": "pending"})
+                                     for u in pipeline._top_units(d)),
+              "container_pos": {}, "rounds": {}, "bounces": {},
+              "nodes_done": done or [], "status": "in_progress"}
+        with open(self.state, "w") as fh:
+            json.dump(st, fh)
+
+    def _one_node(self, brief_text, runs_as=None):
+        node = {"id": "a", "type": "pick", "brief_ref": "a.md"}
+        if runs_as:
+            node["runs_as"] = runs_as
+        self._write(self._doc([node], []), {"a.md": brief_text})
+
+    def test_validator_accepts_refs_in_activity_fields_now(self):
+        d = self._doc([{"id": "a", "type": "pick", "brief_ref": "a.md"},
+                       {"id": "b", "type": "agent_task", "brief_ref": "b.md",
+                        "runs_as": {"model": "${params.m}",
+                                    "effort": "${params.eff}"}}],
+                      [{"from": "a", "to": "b", "on": "success"}])
+        self.assertEqual(pipeline.validate_doc(d, None), [])
+
+    def test_brief_text_interpolates_params(self):
+        self._one_node("Work ${params.ticket} now")
+        steps = pipeline.ready_set(self.state, self.logdir, 1)
+        with open(steps[0]["prompt"]) as fh:
+            self.assertIn("Work AE-1 now", fh.read())
+
+    def test_runs_as_whole_value_substitution_is_typed(self):
+        self._one_node("plain", runs_as={"model": "${params.m}"})
+        steps = pipeline.ready_set(self.state, self.logdir, 1)
+        self.assertEqual(steps[0]["runs_as"]["model"], "claude-sonnet-5")
+
+    def test_bad_resolved_effort_refuses_and_leaves_unit_pending(self):
+        self._one_node("plain", runs_as={"effort": "${params.eff}"})
+        # overwrite state params with a non-effort value
+        with open(self.state) as fh:
+            st = json.load(fh)
+        st["params"]["eff"] = "not-an-effort"
+        with open(self.state, "w") as fh:
+            json.dump(st, fh)
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.ready_set(self.state, self.logdir, 1)
+        with open(self.state) as fh:
+            after = json.load(fh)
+        self.assertEqual(after["units"]["a"]["status"], "pending")
+
+    def test_upstream_output_ref_resolves_from_sidecar(self):
+        nodes = [{"id": "a", "type": "pick", "brief_ref": "a.md"},
+                 {"id": "b", "type": "agent_task", "brief_ref": "b.md"}]
+        edges = [{"from": "a", "to": "b", "on": "success"}]
+        self._write(self._doc(nodes, edges),
+                    {"a.md": "pick", "b.md": "work on ${nodes.a.output.branch}"},
+                    done=[{"id": "a", "outcome": "success", "unit": "a"}],
+                    units={"a": {"status": "success"},
+                           "b": {"status": "pending"}})
+        sidecar = os.path.join(self.logdir, ".pipeline-run-t1.a.outputs.json")
+        pipeline.write_output(sidecar, "branch", "feat/x")
+        steps = pipeline.ready_set(self.state, self.logdir, 1)
+        with open(steps[0]["prompt"]) as fh:
+            self.assertIn("work on feat/x", fh.read())
+
+    def test_missing_upstream_output_refuses(self):
+        nodes = [{"id": "a", "type": "pick", "brief_ref": "a.md"},
+                 {"id": "b", "type": "agent_task", "brief_ref": "b.md"}]
+        edges = [{"from": "a", "to": "b", "on": "success"}]
+        self._write(self._doc(nodes, edges),
+                    {"a.md": "pick", "b.md": "on ${nodes.a.output.branch}"},
+                    done=[{"id": "a", "outcome": "success", "unit": "a"}],
+                    units={"a": {"status": "success"},
+                           "b": {"status": "pending"}})
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.ready_set(self.state, self.logdir, 1)
+
+    def test_stray_unknown_ref_in_brief_refuses(self):
+        # validate_doc never reads brief BODIES, so a stray ref surfaces at
+        # prepare -- refuse the dispatch, never send a template to an agent.
+        self._one_node("do ${ghost.thing}")
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.ready_set(self.state, self.logdir, 1)
+
+    def test_escaped_literal_in_brief_passes_through(self):
+        self._one_node("cost is $${params.ticket} literally")
+        steps = pipeline.ready_set(self.state, self.logdir, 1)
+        with open(steps[0]["prompt"]) as fh:
+            self.assertIn("cost is ${params.ticket} literally", fh.read())
+
+    def test_outputs_footer_only_when_downstream_consumer_exists(self):
+        nodes = [{"id": "a", "type": "pick", "brief_ref": "a.md"},
+                 {"id": "b", "type": "agent_task", "brief_ref": "b.md"}]
+        edges = [{"from": "a", "to": "b", "on": "success"}]
+        self._write(self._doc(nodes, edges),
+                    {"a.md": "pick", "b.md": "on ${nodes.a.output.branch}"})
+        steps = pipeline.ready_set(self.state, self.logdir, 1)   # node a
+        with open(steps[0]["prompt"]) as fh:
+            text = fh.read()
+        self.assertIn("pipeline:outputs", text)
+        self.assertIn(".pipeline-run-t1.a.outputs.json", text)
+
+    def test_no_footer_without_consumer(self):
+        self._one_node("plain work")
+        steps = pipeline.ready_set(self.state, self.logdir, 1)
+        with open(steps[0]["prompt"]) as fh:
+            self.assertNotIn("pipeline:outputs", fh.read())
 
 
 class CheckRefsTest(unittest.TestCase):
