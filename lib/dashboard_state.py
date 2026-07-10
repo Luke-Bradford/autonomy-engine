@@ -3063,7 +3063,14 @@ def _pipeline_view_by_token(repo_path, logdir, token):
     parent_token = None
     segs = list(_CHILD_SEG_RE.finditer(tok["name"]))
     if segs:
-        pslot = segs[-1].group(1)           # the PARENT's slot
+        # The child token is CONSTRUCTED as <parent-name>.c<parent-slot>.
+        # <node-id> (pipeline._child_token_name -- the c<N> is the parent
+        # state filename's own @slot, NOT a call index; a parent running
+        # as pr-sweep@1 spawns pr-sweep.c1.<node>). Inverting that grammar
+        # is therefore exact: parent token = name before the last .c<N>.
+        # segment, re-suffixed @<N> when N != 0. parent_run (a run id)
+        # cannot address a canvas -- tokens name state FILES.
+        pslot = segs[-1].group(1)
         parent_token = tok["name"][:segs[-1].start()] + (
             "@%s" % pslot if pslot != "0" else "")
     view["run"] = {

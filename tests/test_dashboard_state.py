@@ -2197,6 +2197,33 @@ class PipelineViewByNameTokenTest(unittest.TestCase):
         self.assertTrue(view["errors"])
         self.assertIsNotNone(view["doc"])
 
+    def test_by_token_slotted_parent_breadcrumb(self):
+        # #385 review round 1 WARNING, resolved by pinning the semantics:
+        # the child token's .c<N>. segment IS the parent's own @slot by
+        # construction (pipeline._child_token_name -- a parent running as
+        # pr-sweep@1 spawns pr-sweep.c1.<node>), NOT a call index. The
+        # breadcrumb therefore re-suffixes @<N> exactly.
+        import pipeline as pl
+        self.assertEqual(
+            pl._child_token_name(
+                "var/autonomy-logs/.pipeline-run-pr-sweep@1.json",
+                {"lane": ""}, "qa"),
+            "pr-sweep.c1.qa")            # the constructor's own grammar
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        logdir = os.path.join(d, "var", "autonomy-logs")
+        os.makedirs(logdir)
+        with open(os.path.join(logdir,
+                               ".pipeline-run-pr-sweep.c1.qa.json"),
+                  "w") as fh:
+            json.dump({"fmt": 2, "run_id": "pr-sweep.c1.qa-9001",
+                       "trigger": "pr-sweep.c1.qa", "status": "in_progress",
+                       "parent_run": "pr-sweep-20260709T230000-7003",
+                       "doc": {"name": "fixture-flow", "nodes": []},
+                       "units": {}}, fh)
+        view = ds.build_pipeline_view(d, token="pr-sweep.c1.qa")
+        self.assertEqual(view["run"]["parent_token"], "pr-sweep@1")
+
     def test_by_token_grammar_matrix(self):
         ok = ds.build_pipeline_view(FIX, token="pr-sweep@1")
         self.assertNotIn("error", ok)

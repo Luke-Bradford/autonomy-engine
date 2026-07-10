@@ -19,6 +19,9 @@ import os
 import plistlib
 import re
 
+import pipeline as _pipeline    # reserved sidecar suffixes (review NITPICK:
+import triggers as _triggers    # module scope, not per-call -- #385 round 1)
+
 VALID_ACTIONS = ("pause", "resume", "stop", "start")
 
 # #24 live model/effort control. Model ids are a strict token (defense in
@@ -360,14 +363,12 @@ def trigger_ctl_plan(marker_repo, action, name, lane_suffix=""):
     queued/ and backoff/ are supervisor-owned and never planned here."""
     if action not in TRIGGER_CTL_ACTIONS:
         return {"error": "unknown trigger action"}
-    import pipeline as _pl
-    import triggers as _tr
     try:
-        base = _tr.marker_basename(name, lane_suffix or "")
+        base = _triggers.marker_basename(name, lane_suffix or "")
     except Exception as exc:
         return {"error": str(exc)}
     if "." in base and base.rsplit(".", 1)[-1] in \
-            _pl._RESERVED_SIDECAR_SUFFIXES:
+            _pipeline._RESERVED_SIDECAR_SUFFIXES:
         return {"error": "trigger name ends in a reserved sidecar suffix"}
     sub = "fire" if action == "trigger_fire" else "stop"
     path = os.path.join(marker_repo, "var", "trigger-ctl", sub, base)
