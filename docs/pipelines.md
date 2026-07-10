@@ -115,12 +115,26 @@ A pipeline may declare a typed interface:
   `secret` (the outputs file is plaintext on disk — a secret value is
   never invited into it).
 
-The runnable invocation surface — triggers that supply parameter values,
-and calling one pipeline from another — is coming with the trigger
-system. Until it lands, `${…}` references in activity fields are refused
-by the validator (a document that validates must be one the engine can
-actually run today); the declarations themselves validate now so a
-pipeline's interface can be authored ahead of it.
+`${…}` references are live in activity fields (`runs_as.*`, container
+fields) and in brief text: the validator checks every reference
+statically (a reference to an undeclared parameter, a non-upstream
+activity's output, an unknown run field, or a non-allowlisted function
+refuses the document), and the engine resolves them when it prepares
+each session. Two places never substitute: `brief_ref` and
+`legacy_prompt` are file paths, resolved before substitution exists in
+the flow, so a `${…}` there refuses. A resolved value is re-checked
+against the concrete rules for its field (a parameter that resolves to
+an invalid model name refuses that dispatch rather than running with
+it). Parameter values that supply them come from **triggers** (below);
+calling one pipeline from another is coming with the pipeline-call
+activity.
+
+One deliberate hole: a `secret`-typed parameter currently has **no
+delivery channel**. A reference to one refuses the document, and a
+trigger value or saved default that would resolve one refuses the run —
+the engine has no sink today that does not land in a file or on a
+command line. The environment-variable channel is coming with the
+pipeline-call phase; until then secrets are declared-only.
 
 ## Activities
 
@@ -138,11 +152,74 @@ canvas shows them disabled rather than pretending): `wait_watch`,
 containers. Merging is never an agent free-for-all in any pipeline:
 `git_ops` merge operations always go through the engine's merge gate.
 
+## Triggers
+
+A **trigger** is its own JSON file, `.autonomy/triggers/<name>.json`,
+that binds ONE pipeline, supplies its parameter values, and says when it
+fires and how overlapping runs behave:
+
+```json
+{
+  "name": "coder-repoA",
+  "pipeline": "ticket-to-merge",
+  "params": {"repo": "/abs/path/to/repoA", "m": "claude-opus-4-8"},
+  "firing": {"mode": "continuous"},
+  "concurrency": {"policy": "skip", "max": 1},
+  "enabled": true
+}
+```
+
+- **`name`** must equal the filename stem (a rename cannot silently fork
+  identity). Many triggers may reference one pipeline — same activities,
+  different parameters.
+- **`params`** is a flat map of scalar values; each is type-checked
+  against the pipeline's declaration when a run starts. A required
+  parameter with no value refuses the run before any session is spent.
+  A `repo`-typed value must be a checkout registered with the engine and
+  an `account`-typed value must exist in the accounts index — an
+  unreadable registry refuses a run that needs it (can't verify = don't
+  run).
+- **`firing.mode`** is `continuous` (fires every loop tick while work
+  and capacity exist), `schedule` (5-field cron in `firing.schedule`;
+  missed fires while the machine was off are skipped with a warning,
+  never replayed as a storm), or `manual` (fires when the operator drops
+  a file named after the trigger into `var/trigger-ctl/fire/`; the
+  marker is consumed on start, kept when the trigger is at capacity or
+  disabled). `event` mode is coming with the event-trigger phase — a
+  trigger declaring it refuses rather than being accepted and ignored,
+  and in the meantime event-triggered work stays on the `roles:` config.
+- **`concurrency.policy`** governs overlapping runs of this one trigger:
+  `skip` (default, max 1 — an in-flight run advances, a new fire is
+  skipped), `queue` (max 1, depth 1 — one scheduled fire waits for the
+  current run to end; a second overwrites the first), or `parallel` up
+  to `max` (8 ceiling) simultaneous runs. Parallel runs do not claim
+  work items for you: the pipeline's pick brief must claim its ticket
+  (assign/label at pick time) so two runs never grab the same one.
+- **`enabled: false`** pauses the trigger: no new fires, in-flight runs
+  drain gracefully. A hard stop is the file `var/trigger-ctl/stop/<name>`:
+  no new fires AND in-flight runs freeze in place (state preserved;
+  remove the file to resume mid-run). A trigger whose sessions error
+  backs off individually (exponential, per trigger) so one broken
+  trigger never monopolises the loop's retries.
+- **Editing:** the same var-live shadow rule as pipelines — a file at
+  `var/autonomy/triggers/<name>.json` beats the committed one; a
+  present-but-invalid shadow refuses that trigger (never a silent
+  fallback to the committed file).
+
+**Existing `roles:` configs keep working unchanged.** On every tick the
+engine synthesises a trigger per enabled loop role (continuous) and cron
+role (schedule) — same name, same one-run-at-a-time semantics, settings
+resolved through the role exactly as before. A trigger FILE with a
+role's name replaces that role's automatic trigger; a broken trigger
+file refuses and its role stays replaced (a broken replacement never
+silently resurrects what it replaced). The dashboard still displays the
+role view; triggers get their own surface in a later phase.
+
 ## How a run executes
 
-1. **Trigger fires** (loop iteration, cron, or event) → the engine
-   resolves the role's pipeline and starts a run: a state file records
-   every unit as `pending`.
+1. **Trigger fires** (loop iteration, cron, manual marker) → the engine
+   resolves the trigger's pipeline, resolves its parameters, and starts
+   a run: a state file records every unit as `pending`.
 2. **Ready set** → units whose incoming edges are satisfied. The engine
    dispatches up to `max_parallel` of them, one agent session each. Each
    session receives a **compiled brief**: the activity's brief plus the

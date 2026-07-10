@@ -261,6 +261,32 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     surface) and provenance diff (needs a new payload); full-brief-round-trip
     already shipped in P3b. *(#367; plans/2026-07-09-sequencer-p3c-minimap-search.md.)*
 
+39. **Triggers are the dispatch unit** (Phase B of the pipeline+trigger
+    model, 2026-07-10, #374). The supervisor enumerates first-class triggers
+    (`.autonomy/triggers/<name>.json` + auto-shimmed `roles:` entries);
+    SD-12/SD-36 generalise role→trigger verbatim — still one DISPATCH per
+    loop iteration, round-robin, re-enumeration every tick, fan-out to the
+    pipeline's enforced `caps.max_parallel` — with ONE explicit
+    supersession: **SD-12's enumeration-failure→coder-only fallback is
+    RETIRED.** Post-cutover an enumeration failure idles new starts for the
+    tick (in-flight runs still advance); running coder past a
+    config/trigger failure would be fail-open. SD-34's var-shadow extends
+    to trigger FILES (`var/autonomy/triggers/<name>.json` beats committed;
+    present-but-invalid shadow refuses; symlinked shadow ignored). The
+    auto-shim keeps a shimmed trigger's name BYTE-EQUAL to its role name
+    (ledger/fingerprint/state-file continuity until the trust re-key
+    phase); event roles are NOT shimmed (the event bus keeps firing them
+    through the legacy role path until event triggers land). A native
+    trigger file supersedes its same-name loop/cron shim; a native name
+    colliding with an enabled EVENT role refuses (double-dispatch); a
+    refused/broken trigger NEVER falls back to role dispatch. Per-trigger
+    pause (`enabled:false`, drain) / stop sentinel (freeze) / error
+    backoff live under `var/trigger-ctl/`; the fleet PAUSE sentinel and
+    account-level limit state are unchanged. Secrets have NO Phase B sink
+    and refuse end-to-end (ref at validate, value/default at start).
+    *(specs/2026-07-09-pipeline-trigger-model-design.md;
+    plans/2026-07-10-pipeline-model-phaseB-triggers.md; #374.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could

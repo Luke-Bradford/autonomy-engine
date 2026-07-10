@@ -39,12 +39,39 @@ Binding: `roles.<r>.pipeline: <name>`; unbound roles auto-wrap
 - `effective_edges(doc)` = declared edges or the synthesized implicit
   success-chain; `start_run` and the canvas both consume it — never
   re-derive the chain elsewhere.
-- Typed `params`/`outputs` are declared+validated and the `${…}` resolver
-  (`substitute`/`resolve_params`/`substitute_doc` + the run-outputs file
-  `write_output`/`read_outputs`/`project_outputs`) exists in
-  `lib/pipeline.py` but is **not yet wired into dispatch** (Phase B of the
-  pipeline+trigger model) — the validator still refuses `${…}` in activity
-  fields until substitution is live.
+- Typed `params`/`outputs` + the `${…}` resolver are LIVE in dispatch
+  (Phase B, #374): `check_refs` validates every `${…}` statically inside
+  `validate_doc` (declared params only, secret refs refused, node-output
+  refs upstream-only, closed run fields, static function arity;
+  `brief_ref`/`legacy_prompt` stay ref-free — they are paths), and
+  `_prepare_step` substitutes node fields + composed brief text at
+  prepare time with a POST-substitution concrete re-check that REFUSES
+  (never warn-and-drop). Per-node outputs sidecars
+  (`.pipeline-run-<x>.<node>.outputs.json`, derived like the verdict
+  file) feed `${nodes.<id>.output.*}`; a brief whose node has a
+  downstream consumer gains a `pipeline:outputs` footer.
+
+## Triggers (`lib/triggers.py`, Phase B #374)
+
+The supervisor enumerates TRIGGERS, not roles: native
+`.autonomy/triggers/<name>.json` files (schema in `validate_trigger`;
+SD-34 var-shadow via `effective_trigger_path` — file asset, symlinked
+shadow ignored, invalid shadow refuses) + `shim_triggers` synthesised
+from `roles:` (loop→continuous, cron→schedule; EVENT roles are NOT
+shimmed — the event bus fires them through the legacy role path until
+event triggers land). A native file supersedes its same-name shim; a
+BROKEN native file refuses AND keeps the shim suppressed (never fall
+back to role dispatch); a native name colliding with an enabled event
+role refuses (double-dispatch). CLI: `dispatch/cron/show/validate`.
+Supervisor side: dispatch tokens `name[@slot]` (slot 0 = legacy
+filename), `inflight_tokens` (strip `@slot` FIRST, then `--lane`),
+`run_session <token> <kind>` (`shim` = the role path byte-identical;
+`native` = no role settings, runs_as from the doc), per-trigger markers
+under `var/trigger-ctl/{fire,queued,stop,backoff}/`, enumeration
+failure = idle tick (SD-12's coder fallback RETIRED). State gains
+`trigger`/`kind`/`params`/`run`; journal gains additive `trigger`
+(ledger still keys on `role`; shim trigger name == role name BYTE-EQUAL
+until the trust re-key phase).
 
 ## The walk (fmt-2 state machine)
 
