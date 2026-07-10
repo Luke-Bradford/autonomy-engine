@@ -1244,14 +1244,32 @@ resolve_queued_fires() {
         log "WARN trigger-ctl: queued marker for '$name' has invalid kind -- removing (fire lost, next schedule re-queues)"
         rm -f "$f" 2>>"$SUPLOG" || true; continue ;;
     esac
-    # A queued fire is a NEW run start: the window was open when the fire
-    # was minted but may have closed before capacity freed. Defer (marker
-    # kept) while closed -- fail-safe consequence accepted: a marker whose
-    # trigger FILE has vanished defers forever with a NOTE (previously an
-    # endless run_session retry WARN); both are visible loops, under-fire
-    # is the safe side. Queued markers are native-only today, so a failed
-    # show never wedges a shim.
+    # A queued fire is a NEW run start, so it re-earns dispatchability from
+    # `show` before running (Codex CP2: the trigger may have been disabled,
+    # re-authored, or window-closed since the fire was minted -- dispatching
+    # anyway would bypass every gate the dispatch-facing CLI applies):
+    #   - show failed (file vanished / transient read error): defer forever
+    #     with a NOTE (previously an endless run_session retry WARN); both
+    #     are visible loops, under-fire is the safe side. Queued markers are
+    #     native-only today, so a failed show never wedges a shim.
+    #   - mode no longer `schedule`: remove loudly -- only the cron resolver
+    #     mints queued markers, so this one can never legitimately re-mint.
+    #   - disabled: keep until re-enabled (the disabled-marker discipline).
+    #   - window closed: defer, marker kept (fires when it opens).
     _trigger_show_fields "$name"
+    case "$SHOW_MODE" in
+      "")
+        log "NOTE trigger '$name': show failed -- queued fire deferred (marker kept)"
+        continue ;;
+      schedule) ;;
+      *)
+        log "WARN trigger-ctl: '$name' is no longer a schedule trigger -- removing its queued fire"
+        rm -f "$f" 2>>"$SUPLOG" || true; continue ;;
+    esac
+    if [ "$SHOW_ENABLED" = "false" ]; then
+      log "NOTE trigger '$name' is disabled -- queued fire kept until enabled"
+      continue
+    fi
     if [ "$SHOW_WINDOW" = "closed" ]; then
       log "NOTE trigger '$name': outside its run window -- queued fire deferred (marker kept)"
       continue

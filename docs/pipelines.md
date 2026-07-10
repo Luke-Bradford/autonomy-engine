@@ -300,7 +300,9 @@ fires and how overlapping runs behave:
   first-sight behaviour). `triggers.py show` prints
   `WINDOW=open|closed`.
 - **`enabled: false`** pauses the trigger: no new fires, in-flight runs
-  drain gracefully. A hard stop is the file `var/trigger-ctl/stop/<name>`:
+  drain gracefully. Pending manual and queued fire markers are kept and
+  fire on re-enable (a queued fire is a new start, so it re-checks
+  enabled/mode/window before running). A hard stop is the file `var/trigger-ctl/stop/<name>`:
   no new fires AND in-flight runs freeze in place (state preserved;
   remove the file to resume mid-run). A trigger whose sessions error
   backs off individually (exponential, per trigger) so one broken

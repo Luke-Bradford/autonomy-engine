@@ -212,24 +212,29 @@ check "qa marker left in place"      "0" "$([ -f "$VARDIR/trigger-ctl/fire/push-
 rm -f "$VARDIR/trigger-ctl/fire/push-now--qa"
 
 # --- queued fires ---------------------------------------------------------------
+# fixture is a SCHEDULE trigger: only the cron resolver mints queued markers,
+# and the drain re-earns dispatchability from `show` (mode/enabled/window).
+printf '{"name":"nightq","pipeline":"flow","firing":{"mode":"schedule","schedule":"* * * * *"},"concurrency":{"policy":"queue","max":1}}' \
+  >"$repo/.autonomy/triggers/nightq.json"
 : >"$RS_FILE"
 mkdir -p "$VARDIR/trigger-ctl/queued"
-printf 'native\n' >"$VARDIR/trigger-ctl/queued/push-now"
+printf 'native\n' >"$VARDIR/trigger-ctl/queued/nightq"
 resolve_queued_fires
-check "queued fire ran with kind"   " push-now:native" "$(rs_calls)"
-check "queued marker consumed"      "1" "$([ -f "$VARDIR/trigger-ctl/queued/push-now" ] && echo 0 || echo 1)"
+check "queued fire ran with kind"   " nightq:native" "$(rs_calls)"
+check "queued marker consumed"      "1" "$([ -f "$VARDIR/trigger-ctl/queued/nightq" ] && echo 0 || echo 1)"
 : >"$RS_FILE"
-printf 'wat\n' >"$VARDIR/trigger-ctl/queued/push-now"
+printf 'wat\n' >"$VARDIR/trigger-ctl/queued/nightq"
 resolve_queued_fires
 check "junk kind refused, no run"   "" "$(rs_calls)"
-check "junk queued marker removed"  "1" "$([ -f "$VARDIR/trigger-ctl/queued/push-now" ] && echo 0 || echo 1)"
+check "junk queued marker removed"  "1" "$([ -f "$VARDIR/trigger-ctl/queued/nightq" ] && echo 0 || echo 1)"
 : >"$RS_FILE"
-printf 'native\n' >"$VARDIR/trigger-ctl/queued/push-now"
-: >"$LOGDIR/.pipeline-run-push-now.json"
+printf 'native\n' >"$VARDIR/trigger-ctl/queued/nightq"
+: >"$LOGDIR/.pipeline-run-nightq.json"
 resolve_queued_fires
 check "queued at capacity waits"    "" "$(rs_calls)"
-check "queued marker kept at cap"   "0" "$([ -f "$VARDIR/trigger-ctl/queued/push-now" ] && echo 0 || echo 1)"
-rm -f "$LOGDIR"/.pipeline-run-*.json "$VARDIR/trigger-ctl/queued/push-now"
+check "queued marker kept at cap"   "0" "$([ -f "$VARDIR/trigger-ctl/queued/nightq" ] && echo 0 || echo 1)"
+rm -f "$LOGDIR"/.pipeline-run-*.json "$VARDIR/trigger-ctl/queued/nightq" \
+  "$repo/.autonomy/triggers/nightq.json"
 
 # --- run-window fire-marker deferral (Phase E) -------------------------------
 # manual: window-closed keeps the marker (the disabled-marker discipline).
@@ -254,6 +259,10 @@ rm -f "$VARDIR/trigger-ctl/fire/night-push"
 : >"$RS_FILE"
 mkdir -p "$(trigger_ctl_dir queued)"
 printf 'native\n' >"$VARDIR/trigger-ctl/queued/night-push"
+_trigger_show_fields() {
+  SHOW_MODE="schedule"; SHOW_ENABLED="true"; SHOW_POLICY="queue"
+  SHOW_MAX=1; SHOW_WINDOW="closed"
+}
 resolve_queued_fires
 check "window-closed queued marker kept" "0" \
   "$([ -f "$VARDIR/trigger-ctl/queued/night-push" ] && echo 0 || echo 1)"
@@ -261,13 +270,50 @@ check "window-closed queued did not run" "" "$(rs_calls)"
 
 # window OPEN drains the queued marker (the gate opens, not just closes).
 _trigger_show_fields() {
-  SHOW_MODE="manual"; SHOW_ENABLED="true"; SHOW_POLICY="skip"
+  SHOW_MODE="schedule"; SHOW_ENABLED="true"; SHOW_POLICY="queue"
   SHOW_MAX=1; SHOW_WINDOW="open"
 }
 resolve_queued_fires
 check "window-open queued fire ran" " night-push:native" "$(rs_calls)"
 check "window-open queued marker consumed" "1" \
   "$([ -f "$VARDIR/trigger-ctl/queued/night-push" ] && echo 0 || echo 1)"
+
+# DISABLED trigger's queued marker: kept, not dispatched (Codex CP2 -- a
+# queued fire is a NEW start; disable means no new fires, resume on enable).
+: >"$RS_FILE"
+printf 'native\n' >"$VARDIR/trigger-ctl/queued/night-push"
+_trigger_show_fields() {
+  SHOW_MODE="schedule"; SHOW_ENABLED="false"; SHOW_POLICY="queue"
+  SHOW_MAX=1; SHOW_WINDOW="open"
+}
+resolve_queued_fires
+check "disabled queued did not run" "" "$(rs_calls)"
+check "disabled queued marker kept" "0" \
+  "$([ -f "$VARDIR/trigger-ctl/queued/night-push" ] && echo 0 || echo 1)"
+
+# mode drifted off schedule: marker removed loudly (can never re-mint).
+: >"$RS_FILE"
+_trigger_show_fields() {
+  SHOW_MODE="manual"; SHOW_ENABLED="true"; SHOW_POLICY="skip"
+  SHOW_MAX=1; SHOW_WINDOW="open"
+}
+resolve_queued_fires
+check "mode-drift queued did not run" "" "$(rs_calls)"
+check "mode-drift queued marker removed" "1" \
+  "$([ -f "$VARDIR/trigger-ctl/queued/night-push" ] && echo 0 || echo 1)"
+
+# show failure (trigger file gone / transient): deferred, marker kept.
+: >"$RS_FILE"
+printf 'native\n' >"$VARDIR/trigger-ctl/queued/night-push"
+_trigger_show_fields() {
+  SHOW_MODE=""; SHOW_ENABLED=""; SHOW_POLICY="skip"
+  SHOW_MAX=1; SHOW_WINDOW="closed"
+}
+resolve_queued_fires
+check "show-failed queued did not run" "" "$(rs_calls)"
+check "show-failed queued marker kept" "0" \
+  "$([ -f "$VARDIR/trigger-ctl/queued/night-push" ] && echo 0 || echo 1)"
+rm -f "$VARDIR/trigger-ctl/queued/night-push"
 # restore the REAL seams (unset -f would delete the sourced functions too)
 eval "$SAVED_SHOW_FIELDS"
 _triggers_enumerate() {
