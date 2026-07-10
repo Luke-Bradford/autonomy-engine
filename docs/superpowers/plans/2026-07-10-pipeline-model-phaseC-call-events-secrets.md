@@ -34,6 +34,20 @@ into the session's scoped env.
 **Tech stack:** Python 3 stdlib only (`lib/pipeline.py`, `lib/triggers.py`);
 macOS bash 3.2.57 (`bin/supervisor.sh`); unittest + sourced-script shell tests.
 
+> **Codex CP1 run and folded (2026-07-10, 12 findings).** The two structural
+> ones reshaped decisions 4 + 14: the session cap is RESERVED at call start
+> (not counted at consumption), and native event fires are START-ONLY (no
+> `run_session` in the resolver — SD-12 stays exact). Also folded: earned
+> child-liveness (`status == in_progress`, never file-exists), start-time
+> child-name headroom check, `secrets`-on-call-node single-error ordering,
+> stdin-fed redaction (values never in a child env — `ps` inspection),
+> newline-bearing secret values refused, per-log batch redaction values,
+> the supervisor-side NODE_SECRET denylist twin, duplicate `--event-field`
+> refusal, and `[[:space:]]` in the structural grep (BSD grep has no `\s`).
+> One finding was already covered (dispatched plain units re-emit as steps,
+> so WAITING cannot mask reclaim) — pinned with an explicit regression test
+> (`test_reclaim_coexists_with_waiting_call`) rather than argued.
+
 ## Global Constraints
 
 - macOS `/bin/bash` 3.2.57 floor: no `mapfile`, no `**`, no `declare -A`, no
@@ -115,19 +129,27 @@ recorded here with its argument; the PR carries them into SD-40.
    `var/autonomy-logs/<child-state-base>.outcome.json` (`{run_id, outcome, outputs}`)
    *before* journalling in `_finish`. The parent's `ready` sweep consumes it, records
    the call unit, republishes `outputs` as the call node's own outputs sidecar, and
-   unlinks it. Missing sidecar + live child state = still waiting; missing sidecar +
-   NO child state = external interference → restart the child (the dispatched-unit
-   reclaim philosophy); corrupt sidecar + no child state = record failure.
+   unlinks it. "Child alive" is EARNED from the child state's own
+   `status == "in_progress"` (CP1: a done-marked state file — `_finish`'s
+   could-not-unlink marker — must not read as alive, or a lost sidecar would
+   wait forever). Missing sidecar + live child state = still waiting; missing
+   sidecar + NO live child state = external interference → restart the child
+   (the dispatched-unit reclaim philosophy); corrupt/missing sidecar + child
+   done-or-gone = record failure (prevention-log #18).
 3. **`wait` semantics (spec §4):** `wait: true` (default) = unit stays `dispatched`
    until the child outcome arrives; the child's outcome drives the parent's edges
    (success→success, failure/capped/anything-else→failure). `wait: false` = start the
    child, record the call unit **success** immediately, never read its outputs
    (statically refused, decision 7).
-4. **The run cap counts call dispatches.** Consuming a wait:true outcome and
-   recording a wait:false start each do `sessions += 1` in the parent. The
-   `max_sessions_per_run` cap therefore bounds child-spawn loops exactly like agent
-   sessions (a back-edge that keeps re-calling a child cannot run away). Documented
-   in `docs/pipelines.md` as "the cap counts dispatches".
+4. **The run cap counts call dispatches, RESERVED at start** (CP1: counting only
+   at consumption would let outstanding children exceed the cap). STARTING a call
+   unit — wait:true or wait:false — does `sessions += 1` in the parent
+   immediately; consuming the outcome does not increment again, and `_pick` stops
+   starting further call units once the remaining budget is spent (they stay
+   pending for the next tick). The `max_sessions_per_run` cap therefore bounds
+   child-spawn loops exactly like agent sessions (a back-edge that keeps
+   re-calling a child cannot run away). Documented in `docs/pipelines.md` as
+   "the cap counts dispatches".
 5. **Depth + cycles:** `MAX_CALL_DEPTH = 3`. State carries `call_depth` +
    `call_path` (pipeline names, root→self; absent = 0 / `[doc name]`, so existing
    state files need no migration). A child whose pipeline is already in `call_path`,
@@ -201,14 +223,21 @@ recorded here with its argument; the PR carries them into SD-40.
     (overlap refused); a map may not target a secret-typed param (refused at start,
     where types are known). `concurrency.policy: queue` is refused for event mode —
     the seen-set's natural redelivery IS the queue.
-14. **Native event fires are one run per new token**, gated by the trigger's
-    concurrency policy; the seen-set advances **per handled token** (append handled,
-    prune to the current poll page — boundedness preserved) and a token is "handled"
-    the moment its RUN STARTS (the state file is the durable claim; the loop
-    advances it thereafter). At-capacity tokens are not advanced (redelivered).
-    Shimmed event roles keep the legacy semantics *verbatim* — same functions, same
-    page-replace seen advance, same one-wake-per-batch, same session.done handling —
-    which is the cutover parity argument.
+14. **Native event fires are START-ONLY: one run per new token, NO session in
+    the resolver** (CP1: firing `run_session` per token inside the event phase
+    would contradict both the durable-claim contract and SD-12's one-dispatch-
+    per-iteration — the resolver only writes state files; the main loop then
+    advances them as ordinary in-flight tokens). Starts are gated by the
+    trigger's concurrency policy; the seen-set advances **per started token**
+    (append handled, prune to the current poll page — boundedness preserved); a
+    token is "handled" the moment its RUN STARTS (the state file IS the durable
+    claim). At-capacity and failed-start tokens are not advanced (redelivered).
+    Cost: a native event run's first session lands one loop tick after the fire
+    — stated in the honest gaps. Shimmed event roles keep the legacy semantics
+    *verbatim* — same functions (`_event_role_wakes` still fires `run_session`
+    directly, exactly as today), same page-replace seen advance, same
+    one-wake-per-batch, same session.done handling — which is the cutover
+    parity argument.
 15. **Double-dispatch stays impossible throughout the transition** (the CP1
     question, sharpened): Task 9 builds all native-event machinery while event roles
     remain un-shimmed and both collision refusals stay in force — native event
@@ -233,7 +262,8 @@ supervisor tick
   ├─ resolve_trigger_event_wakes                                              (Task 10)
   │    ├─ shim event triggers  → _event_role_wakes (legacy semantics verbatim)
   │    └─ native event triggers→ per new token: pipeline.py start --kind native
-  │                              --event-field … → run_session <tok> native
+  │                              --event-field … (START-ONLY; the run joins the
+  │                              in-flight tokens and the main loop advances it)
   ├─ dispatch list = continuous triggers + IN-FLIGHT TOKENS (incl. child runs)
   └─ run_session <token> <kind>
        └─ pipeline.py ready
@@ -1180,6 +1210,34 @@ def _finish(state, state_path, outcome, journal_path):
     ...
 ```
 
+Deterministic name-headroom at RUN START (CP1: an over-long trigger name must
+refuse the run up front, not fail every call node one by one at sweep time —
+same verdict, delivered before any session burns). New helper, called from
+`start_run_trigger` and `start_run` right after the doc resolves, and from
+`start_child_run` after the child doc resolves (grandchild headroom):
+
+```python
+def _check_call_name_headroom(doc, run_name):
+    """Every call node must yield a charset-legal child token:
+    <run_name>.c<slot>.<node_id> with slot up to one digit (concurrency max
+    is <= 8). Raises PipelineError naming the first offender."""
+    for n in doc.get("nodes") or []:
+        if not (isinstance(n, dict) and n.get("type") == "call_pipeline"):
+            continue
+        worst = "%s.c9.%s" % (run_name, n.get("id", ""))
+        if not _NAME_RE.match(worst):
+            raise PipelineError(
+                "call node %r: child token %r would exceed the 64-char name "
+                "limit -- shorten the trigger or node name (refusing the run "
+                "up front rather than failing every call at sweep time)"
+                % (n.get("id"), worst))
+```
+
+(with a `ChildRunTest` sibling: a trigger whose name makes any call-node child
+token over-long refuses at `start_run_trigger` time with the headroom message;
+`test_overlong_child_name_refused` stays as the start_child_run-level backstop
+for the grandchild case.)
+
 `_journal_append`'s record gains one additive field after `"trigger"`:
 
 ```python
@@ -1291,9 +1349,25 @@ class CallWalkTest(unittest.TestCase):
         ...  # node.pipeline = "ghost" -> unit failure, entry error names the
              # unresolvable pipeline; run outcome failure unless handled
 
-    def test_call_consumption_counts_toward_session_cap(self):
-        ...  # cap 1, consume the call outcome -> sessions == 1; a following
-             # agent node then cap-finishes the run as "capped" (decision 4)
+    def test_call_start_reserves_session_budget(self):
+        ...  # cap 1: starting the wait:true call sets sessions == 1
+             # IMMEDIATELY; consuming the outcome does NOT increment again;
+             # a following agent node then cap-finishes the run as "capped"
+             # (decision 4: reserved at start)
+
+    def test_budget_exhausted_leaves_call_pending(self):
+        ...  # cap already spent, call unit pending -> _pick does NOT start
+             # a child; unit stays pending (never a silent skip)
+
+    def test_done_marked_child_without_sidecar_records_failure(self):
+        ...  # child state file present but status "done" (the _finish
+             # could-not-unlink marker), NO sidecar -> unit failure with
+             # "sidecar is missing" named; NEVER an eternal wait (CP1)
+
+    def test_reclaim_coexists_with_waiting_call(self):
+        ...  # one dispatched AGENT unit (crash reclaim) + one waiting call
+             # unit -> ready returns the re-prepared agent STEP, not WAITING
+             # (the reclaim contract survives the new protocol)
 ```
 
 (Write the `...` bodies in full — each follows the first three tests' fixture
@@ -1314,8 +1388,10 @@ New sweep + dispatch helpers (beside `_pick`):
 def _record_call_entry(state, uid, nid, outcome, extra):
     """Append a call node's journal entry + resolve the unit terminal state
     through the SAME rails a session record uses (via/back-edges/skips).
-    Containers: a call node inside a container advances container_pos
-    exactly like record_outcome's mid-container arm."""
+    Does NOT touch state["sessions"] -- the budget is RESERVED at call START
+    (_start_call_unit, decision 4), never at consumption. Containers: a call
+    node inside a container advances container_pos exactly like
+    record_outcome's mid-container arm."""
     doc = state["doc"]
     entry = {"id": nid, "type": "call_pipeline", "outcome": outcome,
              "unit": uid,
@@ -1324,7 +1400,6 @@ def _record_call_entry(state, uid, nid, outcome, extra):
              "session_log": ""}
     entry.update(extra)
     state["nodes_done"].append(entry)
-    state["sessions"] += 1                       # the cap counts dispatches
     unit = state["units"][uid]
     con = _con_by_id(doc, uid)
     status = "success" if outcome == "success" else "failure"
@@ -1347,12 +1422,28 @@ def _record_call_entry(state, uid, nid, outcome, extra):
         _propagate_skips(doc, state)
 
 
+def _child_alive(child_state_path):
+    """EARNED liveness: the child state file exists, parses, and says
+    in_progress. A done-marked state (_finish's could-not-unlink marker) or
+    unreadable/garbage state is NOT alive -- treating it as alive would make
+    a lost sidecar wait forever (CP1; prevention-log #18: the reassuring
+    verdict is earned). Total reader."""
+    try:
+        with open(child_state_path, encoding="utf-8") as fh:
+            st = json.load(fh)
+        return isinstance(st, dict) and st.get("status") == "in_progress"
+    except (OSError, ValueError):
+        return False
+
+
 def _sweep_call_units(state_path, state):
     """Consume terminal children of dispatched call units. The reclaim rule
-    refined for calls: sidecar present -> consume; child state alive ->
-    keep waiting (NEVER a duplicate child); both gone -> restart the child
-    (external interference; duplicate work beats a stranded run); corrupt
-    sidecar with the child gone -> record failure (prevention-log #18)."""
+    refined for calls: sidecar present -> consume; child ALIVE (in_progress
+    by its own state, _child_alive) -> keep waiting (NEVER a duplicate
+    child); no sidecar + child not alive + state file GONE -> restart the
+    child (external interference; duplicate work beats a stranded run); no
+    usable sidecar + child done-or-garbage -> record failure
+    (prevention-log #18)."""
     doc = state["doc"]
     logdir = os.path.dirname(state_path)
     for uid in _top_units(doc):
@@ -1373,13 +1464,22 @@ def _sweep_call_units(state_path, state):
             if not isinstance(payload, dict):
                 raise ValueError("not an object")
         except OSError:
-            if os.path.exists(child_state):
+            if _child_alive(child_state):
                 continue                          # child alive: wait
-            del unit["child"]                     # vanished: restart below
-            _start_call_unit(state_path, state, uid, _node_by_id(doc, nid))
+            if not os.path.exists(child_state):
+                del unit["child"]                 # vanished: restart
+                _start_call_unit(state_path, state, uid,
+                                 _node_by_id(doc, nid))
+                continue
+            # done-marked/garbage child state with NO sidecar: the outcome
+            # is unrecoverable -- record failure, never wait forever
+            _record_call_entry(state, uid, nid, "failure",
+                               {"child_run": child,
+                                "error": "child finished but its outcome "
+                                         "sidecar is missing"})
             continue
         except ValueError as exc:
-            if os.path.exists(child_state):
+            if _child_alive(child_state):
                 continue                          # child alive: not terminal yet
             _record_call_entry(state, uid, nid, "failure",
                                {"child_run": child,
@@ -1412,13 +1512,15 @@ def _unlink_quiet(path):
 
 
 def _start_call_unit(state_path, state, uid, node):
-    """Dispatch a call candidate: start the child (wait:true parks the unit
-    dispatched; wait:false records success NOW). Start failures record a
-    named unit failure -- the walk continues on failure edges, never
-    crashes (prevention-log #3: a refused call is a loud failure, not a
-    skipped node)."""
+    """Dispatch a call candidate: RESERVE one budget unit (decision 4 --
+    sessions += 1 at START, whatever happens next), then start the child
+    (wait:true parks the unit dispatched; wait:false records success NOW).
+    Start failures record a named unit failure -- the walk continues on
+    failure edges, never crashes (prevention-log #3: a refused call is a
+    loud failure, not a skipped node)."""
     repo = (state.get("run") or {}).get("repo", "")
     nid = node["id"]
+    state["sessions"] += 1                       # the cap counts dispatches
     try:
         child_name, _cpath = start_child_run(repo, state_path, state, node)
     except PipelineError as exc:
@@ -1432,6 +1534,10 @@ def _start_call_unit(state_path, state, uid, node):
         _record_call_entry(state, uid, nid, "success",
                            {"child_run": child_name, "detached": True})
 ```
+
+(A RESTART from the sweep (vanished child) also passes through here and pays a
+fresh budget unit — deliberate: restarts are dispatches, and the cap is what
+bounds a pathological delete-restart loop.)
 
 `_pick` rework — sweep first, call-aware dispatch loop, waiting exit (full
 replacement of the body from `candidates = ...`):
@@ -1464,6 +1570,8 @@ def _pick(state_path, state, n, brief_path_for, journal_path):
         if node is not None and node.get("type") == "call_pipeline":
             if state["units"][uid]["status"] == "dispatched":
                 continue                    # waiting on its child (sweep owns it)
+            if state["sessions"] >= cap:
+                continue                    # budget spent: stays pending (dec. 4)
             _start_call_unit(state_path, state, uid, node)
             continue
         if len(steps) >= n_eff:
@@ -1480,6 +1588,12 @@ def _pick(state_path, state, n, brief_path_for, journal_path):
     # (wait:false or start-failure) -- re-enter for the next frontier
     return _pick(state_path, state, n, brief_path_for, journal_path)
 ```
+
+(Note the reclaim contract survives untouched: a dispatched PLAIN unit is still
+a candidate and is re-prepared into `steps` exactly as before — `waiting` is
+only reachable when every dispatched unit is a call unit whose child is being
+waited on. A regression test pins the coexistence: one dispatched agent unit +
+one waiting call unit → ready returns the re-prepared agent STEP, not WAITING.)
 
 (The tail recursion is bounded: each re-entry either consumed candidates into
 terminal states or finishes/waits — at most `len(units)` frames.)
@@ -1795,6 +1909,8 @@ def _validate_secrets_field(where, node, doc, errors):
     sec = node.get("secrets")
     if sec is None:
         return
+    if node.get("type") == "call_pipeline":
+        return   # Task 3's type-branch owns that refusal -- one error, not two
     if not isinstance(sec, dict) or not sec:
         errors.append("%s: secrets must be a non-empty mapping "
                       "ENV_VAR -> ${params.<secret-typed>}" % where)
@@ -1927,6 +2043,9 @@ t_secret_resolves_into_env_lines() {
 }
 t_secret_missing_refuses() { ... }          # stub rc 1 -> rc 1, NS_ENV_LINES=""
 t_secret_dup_of_account_var_refuses() { ... } # $2 already has MY_TOKEN= -> rc 1
+t_secret_newline_value_refuses() { ... }     # stub prints 2 lines -> rc 1
+t_node_secret_denylisted_var_refuses() { ... } # NODE_SECRET=ANTHROPIC_API_KEY=x
+                                               # -> resolve_pipeline_ready rc 1
 t_secret_value_never_logged() { ... }        # SUPLOG contains "gh-token" is OK,
                                              # "s3cr3t-value" is NOT
 # redaction sweep
@@ -1971,6 +2090,13 @@ the END arm, and:
         case "$_sv" in *[!A-Z0-9_]*)
           log "pipeline: NODE_SECRET var name invalid -- REFUSING"; return 1 ;;
         esac
+        # Defense-in-depth twin of the python denylist (CP1: ready-block
+        # stdout is an interface boundary -- re-check at the point of use,
+        # prevention-log #6).
+        case "$_sv" in
+          ANTHROPIC_*|AUTONOMY_*|CLAUDE_*|LD_*|DYLD_*|PATH|HOME|SHELL|IFS|ENV|BASH_ENV|PYTHONPATH)
+            log "pipeline: NODE_SECRET var '$_sv' shadows an engine/auth variable -- REFUSING"; return 1 ;;
+        esac
         case "$_sl" in ''|*[!A-Za-z0-9._-]*)
           log "pipeline: NODE_SECRET label invalid -- REFUSING"; return 1 ;;
         esac
@@ -2009,6 +2135,13 @@ $var="*)
       log "dispatch: secret '$label' (for $var) did not resolve -- REFUSING session (fail-safe)"
       NS_ENV_LINES=""; NS_VALUES=""; return 1
     fi
+    case "$value" in
+      *$'\n'*|*$'\r'*)
+        # CP1: an embedded newline would corrupt the VAR=value line protocol
+        # AND the redaction value list -- refuse, never truncate/mangle.
+        log "dispatch: secret '$label' (for $var) contains a newline -- REFUSING session (unsupported shape)"
+        NS_ENV_LINES=""; NS_VALUES=""; return 1 ;;
+    esac
     NS_ENV_LINES="${NS_ENV_LINES}${var}=${value}
 "
     NS_VALUES="${NS_VALUES}${value}
@@ -2022,20 +2155,23 @@ EOF
 # Best-effort post-session redaction: replace every resolved secret value in
 # the session log with [REDACTED]. Runs AFTER classify (the outcome grep must
 # see the raw log) -- documented residual: a live tail can see an agent-echoed
-# secret until this runs. Literal byte replace (no regex metachars).
+# secret until this runs. Values reach python via STDIN, never env or argv
+# (CP1: a child's environment is inspectable via `ps` -- stdin is not; SD-8's
+# boundary stays "supervisor memory + the session's own subshell env").
+# Literal byte replace (no regex metachars). Newline-free values guaranteed
+# by resolve_node_secret_env, so one value per stdin line is unambiguous.
 redact_session_log() {
   local logf="$1"
   [ -n "${NS_VALUES:-}" ] && [ -f "$logf" ] || return 0
-  REDACT_VALUES="$NS_VALUES" REDACT_FILE="$logf" python3 - <<'PYEOF' 2>>"$SUPLOG" || \
-    log "WARN could not redact session log $logf"
-import os
-vals = [v for v in os.environ.get("REDACT_VALUES", "").split("\n") if v]
-path = os.environ["REDACT_FILE"]
+  printf '%s' "$NS_VALUES" | python3 -c '
+import sys
+path = sys.argv[1]
+vals = [v for v in sys.stdin.read().split("\n") if v]
 data = open(path, "rb").read()
 for v in vals:
     data = data.replace(v.encode("utf-8"), b"[REDACTED]")
 open(path, "wb").write(data)
-PYEOF
+' "$logf" 2>>"$SUPLOG" || log "WARN could not redact session log $logf"
 }
 ```
 
@@ -2069,13 +2205,15 @@ resolution — same foreground/fail-safe pattern):
       fi
       envl="${envl}
 ${NS_ENV_LINES}"
-      BATCH_NS_VALUES="${BATCH_NS_VALUES}${NS_VALUES}"
+      ns_vals[i]="$NS_VALUES"
     fi
 ```
 
-(`BATCH_NS_VALUES=""` initialised beside `BATCH_PIDS=""`;) and in the
-collection loop after each classify: `NS_VALUES="$BATCH_NS_VALUES"
-redact_session_log "${logs[i]}"`.
+(`local ns_vals=()` declared beside the other per-block arrays — PER-LOG
+values, CP1: aggregating every block's values and sweeping them across every
+log would widen the blast radius and blur the per-session redaction tests.)
+In the collection loop, after each classify:
+`NS_VALUES="${ns_vals[i]:-}" redact_session_log "${logs[i]}"`.
 
 - [ ] **Step 4: Run to verify pass**
 
@@ -2327,6 +2465,12 @@ handles single-valued opts):
                     print("pipeline start: bad --event-field %r" % kv,
                           file=sys.stderr)
                     return 2
+                if k in ev_fields:
+                    # payload mapping is a control boundary: a silent
+                    # last-wins on a duplicate field is fail-open (CP1)
+                    print("pipeline start: duplicate --event-field %r" % k,
+                          file=sys.stderr)
+                    return 2
                 ev_fields[k] = v
                 i += 2
             else:
@@ -2410,13 +2554,18 @@ supervisor; extend it):
 t_shim_event_parity() { ... }
 # parity 2: session.done fires shims only when session_ran=1
 t_shim_session_done_edge() { ... }
-# native: one run per new token; start called with --event-field; seen
-# ADVANCES per handled token and PRUNES to page; at-capacity token left
-t_native_event_fires_per_token() { ... }
+# native: START-ONLY, one run per new token -- pipeline.py start called with
+# --event-field, run_session NEVER invoked by the native lane (decision 14);
+# seen ADVANCES per started token and PRUNES to page; at-capacity token left
+t_native_event_starts_run_per_token() { ... }
+t_native_lane_never_runs_a_session() { ... }   # run_session stub records argv;
+                                               # assert zero invocations
 t_native_at_capacity_redelivers() { ... }
 # structural: the main loop no longer calls resolve_event_wakes
+# ([[:space:]] not \s -- BSD grep has no \s; a silently-unmatched pattern
+# would fake the double-dispatch proof, CP1)
 t_legacy_resolver_uncalled() {
-  n="$(grep -c '^\s*resolve_event_wakes ' "$ENGINE_HOME/bin/supervisor.sh")"
+  n="$(grep -c '^[[:space:]]*resolve_event_wakes ' "$ENGINE_HOME/bin/supervisor.sh" || true)"
   check "legacy event resolver uncalled by the loop" "0" "$n"
 }
 ```
@@ -2466,10 +2615,12 @@ New functions (after the legacy block):
 # --- event triggers (Phase C) ------------------------------------------------
 # One resolver, two lanes: SHIM event triggers ride the legacy per-role
 # semantics VERBATIM (same _event_role_wakes body, same seen files -- the
-# cutover parity argument); NATIVE event triggers fire ONE RUN PER NEW TOKEN
-# with the payload mapped to params inside start_run_trigger. Best-effort
-# throughout: enumeration/poll failure skips events this tick and never
-# perturbs loop dispatch. NEVER returns non-zero.
+# cutover parity argument); NATIVE event triggers are START-ONLY -- one run
+# per new token, payload mapped to params inside start_run_trigger, and the
+# run's first session lands via the MAIN LOOP like any in-flight token
+# (decision 14: sessions only ever run through the one dispatch per
+# iteration, SD-12). Best-effort throughout: enumeration/poll failure skips
+# events this tick and never perturbs loop dispatch. NEVER returns non-zero.
 resolve_trigger_event_wakes() {
   local session_ran="$1"
   local enum line name kind evspec policy max
@@ -2499,11 +2650,12 @@ EOF
   return 0
 }
 
-# Fire a NATIVE event trigger once per NEW token. Seen-set discipline
-# (decision 14): handled tokens append; the set prunes to the current poll
-# page (bounded, monotonicity argument unchanged); a token is handled when
-# its RUN STARTS (the state file is the durable claim -- the loop advances
-# it); at-capacity/failed-start tokens stay unhandled (redelivered).
+# START a NATIVE event trigger's run once per NEW token -- never a session
+# here (decision 14). Seen-set discipline: handled tokens append; the set
+# prunes to the current poll page (bounded, monotonicity argument
+# unchanged); a token is handled when its RUN STARTS (the state file is the
+# durable claim -- the main loop advances it as an in-flight token);
+# at-capacity/failed-start tokens stay unhandled (redelivered).
 _event_native_wakes() {
   local name="$1" event="$2"
   local seen_file tokens new tok item sha handled kept state stok
@@ -2558,9 +2710,7 @@ EOF2
       log "WARN event: could not start trigger '$name' for $event '$tok' -- redelivered next tick"
       continue
     fi
-    log "event: trigger '$name' fired by $event ($tok) -> run started ($stok)"
-    run_session "$stok" native \
-      || log "event: trigger '$name' first session rc=$? (run is in-flight; the loop advances it)"
+    log "event: trigger '$name' fired by $event ($tok) -> run started ($stok); the loop advances it"
     handled="${handled}${tok}
 "
   done <<EOF3
@@ -2672,6 +2822,10 @@ git commit -m "docs(#376): Phase C product docs + SD-40 + follow-on ticket filed
 - **Manual fires still have no param-override channel** (Phase D trigger editor).
 - **Dashboard renders the role view**; child runs and `@slot` runs are invisible
   but crash-free (tested). Phase D renders them (spec §8 child-run links).
+- **Native event first-session latency:** a native event fire is start-only, so
+  the run's first session lands via the main loop — worst case one loop tick
+  after the fire (a shimmed event role keeps firing its session immediately,
+  legacy semantics). The price of keeping SD-12 exact (decision 14).
 - **Per-event poll dedupe:** two triggers on one event poll `gh` twice per tick
   (legacy behaviour per role, unchanged). A page cache is a Phase D-adjacent
   perf slice if it ever matters.
