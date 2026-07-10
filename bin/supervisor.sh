@@ -809,8 +809,393 @@ validate_lane() {
 
 # Enabled loop-role names, one per line (roles.py dispatch contract). The
 # caller handles rc!=0 (fail back to coder-only) and empty output (idle).
+# LEGACY (post-#374 cutover): the main loop enumerates TRIGGERS now
+# (resolve_dispatch_triggers). Kept because tests (and the enumeration-parity
+# invariant) exercise it -- removal is a Phase E cleanup.
 resolve_dispatch_roles() {
   _roles_enumerate dispatch "$AUTONOMY_TARGET_REPO"
+}
+
+# --- trigger dispatch (pipeline+trigger model Phase B, #374) ------------------
+# The supervisor enumerates TRIGGERS (native .autonomy/triggers/*.json files
+# + auto-shimmed roles) instead of roles. Built BEHIND the role path: these
+# functions exist alongside resolve_dispatch_roles and the main loop swaps
+# over only in the cutover commit, after the parity tests pass.
+#
+# Dispatch tokens are 'name' (run slot 0 -- filename identical to the legacy
+# per-role state file, so pre-cutover in-flight runs resume) or 'name@<slot>'
+# (parallel policy, slots 1..max-1). '@' is outside the name charset, so the
+# split is unambiguous; every token from disk or enumeration is charset-gated
+# before it reaches a filename or argv (prevention-log #6).
+token_name() {
+  local t="$1" n="${1%%@*}"
+  case "$n" in *[!A-Za-z0-9._-]*|"") return 1 ;; esac
+  case "$t" in
+    "$n") ;;
+    "$n"@*) case "${t#"$n"@}" in *[!0-9]*|"") return 1 ;; esac ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$n"
+}
+
+token_slot() {
+  local t="$1"
+  case "$t" in
+    *@*) printf '%s' "${t##*@}" ;;
+    *)   printf '0' ;;
+  esac
+}
+
+_triggers_enumerate() {
+  if [ -n "${AUTONOMY_LANE:-}" ]; then
+    python3 "$ENGINE_HOME/lib/triggers.py" "$@" --lane "$AUTONOMY_LANE" 2>>"$SUPLOG"
+  else
+    python3 "$ENGINE_HOME/lib/triggers.py" "$@" 2>>"$SUPLOG"
+  fi
+}
+
+# TRIG_* parallel arrays (bash 3.2), refreshed each tick by
+# resolve_dispatch_triggers: names + kind/policy/max per index. Every field
+# is re-validated here before it can steer a dispatch (prevention-log #6 --
+# the enumeration crosses a pipe from python).
+resolve_dispatch_triggers() {
+  local out line name kind policy max i=0
+  TRIG_NAME=(); TRIG_KIND=(); TRIG_POLICY=(); TRIG_MAX=()
+  out="$(_triggers_enumerate dispatch "$AUTONOMY_TARGET_REPO")" || return 1
+  while IFS=$'\t' read -r name kind policy max; do
+    [ -n "$name" ] || continue
+    case "$name" in *[!A-Za-z0-9._-]*) continue ;; esac
+    case "$kind" in shim|native) ;; *) continue ;; esac
+    case "$policy" in queue|skip|parallel) ;; *) continue ;; esac
+    case "$max" in *[!0-9]*|"") continue ;; esac
+    TRIG_NAME[i]="$name"; TRIG_KIND[i]="$kind"
+    TRIG_POLICY[i]="$policy"; TRIG_MAX[i]="$max"
+    printf '%s\n' "$name"
+    i=$((i + 1))
+  done <<<"$out"
+}
+
+trigger_kind_of()   { _trig_field_of "$1" KIND; }
+trigger_policy_of() { _trig_field_of "$1" POLICY; }
+trigger_max_of()    { _trig_field_of "$1" MAX; }
+
+_trig_enumerated() {   # rc 0 iff $1 is in this tick's TRIG_* arrays
+  local i=0
+  while [ "$i" -lt "${#TRIG_NAME[@]}" ]; do
+    [ "${TRIG_NAME[i]}" = "$1" ] && return 0
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# Kind recorded in an in-flight run's own state file (Codex CP2): guessing
+# shim for a token absent from enumeration would route a native run whose
+# trigger broke mid-run through legacy role dispatch -- the exact fallback
+# the cutover forbids. The state file is engine-written and already carries
+# kind; a pre-Phase-B state (no key) is genuinely shim. rc 1 = unreadable/
+# corrupt state -- the caller skips the token this tick (state preserved).
+state_kind_of() {   # $1=name $2=slot
+  local f
+  f="$(pipeline_state_file "$1" "$2")"
+  [ -f "$f" ] || { printf 'shim'; return 0; }   # gone mid-tick: nothing runs
+  python3 -c '
+import json, sys
+try:
+    st = json.load(open(sys.argv[1]))
+    k = st.get("kind", "shim")
+except Exception:
+    sys.exit(1)
+if k not in ("shim", "native"):
+    sys.exit(1)
+print(k)' "$f" 2>>"$SUPLOG"
+}
+
+# The main loop resolves a selected token's kind here: this tick's
+# enumeration when the trigger is in it, else the run's OWN state file.
+dispatch_kind_of() {   # $1=name $2=slot; rc 1 = cannot determine (skip)
+  if _trig_enumerated "$1"; then
+    trigger_kind_of "$1"
+    return 0
+  fi
+  state_kind_of "$1" "$2"
+}
+
+_trig_field_of() {
+  local name="$1" field="$2" i=0
+  while [ "$i" -lt "${#TRIG_NAME[@]}" ]; do
+    if [ "${TRIG_NAME[i]}" = "$name" ]; then
+      case "$field" in
+        KIND)   printf '%s' "${TRIG_KIND[i]}" ;;
+        POLICY) printf '%s' "${TRIG_POLICY[i]}" ;;
+        MAX)    printf '%s' "${TRIG_MAX[i]}" ;;
+      esac
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  # Not in this tick's enumeration: conservative defaults (skip/1). The
+  # main loop never trusts the KIND default for an in-flight token -- it
+  # reads the run's own state file via dispatch_kind_of (Codex CP2: a shim
+  # guess would route a native run whose trigger broke mid-run through
+  # legacy role dispatch, the fallback the cutover forbids).
+  case "$field" in KIND) printf 'shim' ;; POLICY) printf 'skip' ;; MAX) printf '1' ;; esac
+}
+
+# --- per-trigger lifecycle + concurrency (Phase B, #374) ----------------------
+# Markers under $VARDIR/trigger-ctl/: fire/ + stop/ are OPERATOR-written and
+# supervisor-consumed; queued/ + backoff/ are supervisor-owned (SD-7's
+# sole-writer discipline generalised). Every name from disk is charset-gated
+# before any path join (prevention-log #6). All readers tolerate a missing
+# dir; all writers are best-effort (a marker hiccup never crashes the loop).
+trigger_ctl_dir() { printf '%s/trigger-ctl/%s' "$VARDIR" "$1"; }
+
+_trigger_ctl_path() {   # $1=kind $2=name; rc 1 on a bad name
+  # Lane-scoped like pipeline_state_file (review round 2): a same-named
+  # trigger in another lane is a DIFFERENT trigger -- its stop/backoff/
+  # fire/queued markers must never freeze or throttle this lane's. A lane
+  # supervisor's markers carry the --<lane> suffix; the scanners skip
+  # other lanes' markers exactly as inflight_tokens does.
+  case "$2" in *[!A-Za-z0-9._-]*|"") return 1 ;; esac
+  local lane="${AUTONOMY_LANE:-}"
+  if [ -n "$lane" ]; then
+    printf '%s/%s--%s' "$(trigger_ctl_dir "$1")" "$2" "$lane"
+  else
+    printf '%s/%s' "$(trigger_ctl_dir "$1")" "$2"
+  fi
+}
+
+# Split a marker BASENAME into this lane's trigger name: strips the --<lane>
+# suffix under a lane supervisor, skips (rc 1) markers belonging to other
+# lanes -- the inflight_tokens discipline applied to marker files. The
+# basename is DISK input: callers charset-gate the result before use.
+_ctl_marker_name() {   # $1=basename; prints name, rc 1 = not this lane's
+  local base="$1" lane="${AUTONOMY_LANE:-}"
+  if [ -n "$lane" ]; then
+    case "$base" in
+      *--"$lane") printf '%s' "${base%--"$lane"}" ;;
+      *) return 1 ;;
+    esac
+  else
+    case "$base" in *--*) return 1 ;; esac
+    printf '%s' "$base"
+  fi
+}
+
+# Per-trigger HARD STOP: no new fires AND in-flight tokens filtered out of
+# dispatch (state preserved; removing the sentinel resumes mid-run).
+# enabled:false in the trigger file is the PAUSE (graceful drain) -- it only
+# stops NEW fires because enumeration excludes it while in-flight advances.
+trigger_stopped() {
+  local p
+  p="$(_trigger_ctl_path stop "$1")" || return 1
+  [ -f "$p" ]
+}
+
+trigger_backoff_until() {   # prints next-eligible epoch; 0 = eligible now
+  local p epoch
+  p="$(_trigger_ctl_path backoff "$1")" || return 1
+  if [ ! -f "$p" ]; then printf '0'; return 0; fi
+  IFS=$'\t' read -r epoch _ <"$p" 2>/dev/null || epoch=""
+  case "$epoch" in *[!0-9]*|"") printf '0' ;; *) printf '%s' "$epoch" ;; esac
+}
+
+trigger_record_error_backoff() {
+  local p count=0 wait i=1
+  p="$(_trigger_ctl_path backoff "$1")" || return 0
+  mkdir -p "$(trigger_ctl_dir backoff)" 2>>"$SUPLOG" || return 0
+  if [ -f "$p" ]; then IFS=$'\t' read -r _ count <"$p" 2>/dev/null || count=0; fi
+  case "$count" in *[!0-9]*|"") count=0 ;; esac
+  count=$((count + 1))
+  wait=$ERR_BACKOFF_START
+  while [ "$i" -lt "$count" ] && [ "$wait" -lt "$ERR_BACKOFF_MAX" ]; do
+    wait=$((wait * 2)); i=$((i + 1))
+  done
+  [ "$wait" -gt "$ERR_BACKOFF_MAX" ] && wait=$ERR_BACKOFF_MAX
+  printf '%s\t%s\n' "$(( $(date -u +%s) + wait ))" "$count" >"$p" 2>>"$SUPLOG" || true
+}
+
+trigger_clear_backoff() {
+  local p
+  p="$(_trigger_ctl_path backoff "$1")" || return 0
+  rm -f "$p" 2>>"$SUPLOG" || true
+}
+
+# Filter dispatch tokens through the per-trigger lifecycle: a stop-sentinel
+# trigger's tokens are OUT (hard stop: no new fires AND no advance; state
+# preserved), a trigger inside its error-backoff window is OUT for this tick
+# (one erroring trigger no longer monopolises the loop's retry cadence). A
+# token whose name fails the gate is dropped (prevention-log #6).
+filter_dispatchable_tokens() {
+  local tok name now
+  now="$(date -u +%s)"
+  for tok in "$@"; do
+    name="$(token_name "$tok")" || continue
+    trigger_stopped "$name" && continue
+    [ "$(trigger_backoff_until "$name")" -gt "$now" ] && continue
+    printf '%s\n' "$tok"
+  done
+  return 0
+}
+
+trigger_inflight_count() {
+  local name="$1" tok n=0 tn
+  while IFS= read -r tok; do
+    [ -n "$tok" ] || continue
+    tn="$(token_name "$tok")" || continue
+    [ "$tn" = "$name" ] && n=$((n + 1))
+  done <<<"$(inflight_tokens)"
+  printf '%s' "$n"
+}
+
+trigger_free_slot() {   # $1=name $2=max; prints the first free slot, rc 1 = full
+  local name="$1" max="$2" slot=0
+  while [ "$slot" -lt "$max" ]; do
+    if [ ! -f "$(pipeline_state_file "$name" "$slot")" ]; then
+      printf '%s' "$slot"; return 0
+    fi
+    slot=$((slot + 1))
+  done
+  return 1
+}
+
+# Capacity-aware start token for THIS tick's enumeration (TRIG_* arrays).
+# Policy skip/queue clamp to one run; parallel opens slots up to max.
+# rc 1 = at capacity (skip logs the NOTE; queue's marker write is the cron
+# resolver's job -- it knows the fire actually happened).
+trigger_start_token() {
+  local name="$1" policy max slot
+  policy="$(trigger_policy_of "$name")"; max="$(trigger_max_of "$name")"
+  [ "$policy" = "parallel" ] || max=1
+  slot="$(trigger_free_slot "$name" "$max")" || return 1
+  if [ "$slot" = "0" ]; then printf '%s' "$name"; else printf '%s@%s' "$name" "$slot"; fi
+}
+
+# ONE `triggers.py show` reader for every consumer (review round 2 NITPICK:
+# three near-identical loops unified). Exact KEY=VALUE line parse (Codex
+# CP1: substring matching on the whole blob could match inside another
+# value once fields grow; prevention-log #1's parser rule). Sets the
+# SHOW_MODE/SHOW_ENABLED/SHOW_POLICY/SHOW_MAX globals; SHOW_POLICY/SHOW_MAX
+# clamp to skip/1 on any misread -- the safe direction (never opens extra
+# slots).
+_trigger_show_fields() {   # $1=name
+  local out line
+  SHOW_MODE=""; SHOW_ENABLED=""; SHOW_POLICY=""; SHOW_MAX=""
+  out="$(python3 "$ENGINE_HOME/lib/triggers.py" show "$AUTONOMY_TARGET_REPO" "$1" 2>>"$SUPLOG" || true)"
+  while IFS= read -r line; do
+    case "$line" in *=*) ;; *) continue ;; esac
+    case "${line%%=*}" in
+      MODE)    SHOW_MODE="${line#*=}" ;;
+      ENABLED) SHOW_ENABLED="${line#*=}" ;;
+      POLICY)  SHOW_POLICY="${line#*=}" ;;
+      MAX)     SHOW_MAX="${line#*=}" ;;
+    esac
+  done <<<"$out"
+  case "$SHOW_POLICY" in queue|skip|parallel) ;; *) SHOW_POLICY="skip" ;; esac
+  [ "$SHOW_POLICY" = "parallel" ] || SHOW_MAX=1
+  case "$SHOW_MAX" in *[!0-9]*|"") SHOW_MAX=1 ;; esac
+}
+
+# POLICY for a trigger NOT in the continuous dispatch arrays (manual +
+# schedule triggers).
+trigger_show_policy() {
+  _trigger_show_fields "$1"
+  printf '%s' "$SHOW_POLICY"
+}
+
+trigger_start_token_for() {   # $1=name; show-backed capacity gate, rc 1 = full
+  local name="$1" slot
+  _trigger_show_fields "$name"
+  slot="$(trigger_free_slot "$name" "$SHOW_MAX")" || return 1
+  if [ "$slot" = "0" ]; then printf '%s' "$name"; else printf '%s@%s' "$name" "$slot"; fi
+}
+
+# Operator 'run now' markers for MANUAL triggers. Marker name = trigger
+# name. The DISPATCH gate is `triggers.py manual` -- derived from
+# enumerate_triggers, so validity / event-role collision / lane / enabled
+# gating is inherited (Codex CP2: a bare `show` reads the trigger file with
+# no config context and would bypass the event-collision refusal). `show`
+# decides only keep-vs-remove for a marker naming a currently-DISABLED
+# manual trigger (kept until enabled); it never gates a fire.
+# Capture-then-case, never producer|grep (prevention-log #7/#11).
+resolve_manual_fires() {
+  local d f name manual_list mname mpolicy mmax
+  local policy max slot tok
+  d="$(trigger_ctl_dir fire)"
+  [ -d "$d" ] || return 0
+  manual_list="$(_triggers_enumerate manual "$AUTONOMY_TARGET_REPO")" || {
+    log "WARN trigger-ctl: manual enumeration failed -- fire markers kept this tick"
+    return 0
+  }
+  for f in "$d"/*; do
+    [ -e "$f" ] || continue
+    name="$(_ctl_marker_name "$(basename "$f")")" || continue   # other lane's
+    case "$name" in
+      *[!A-Za-z0-9._-]*|"")
+        log "WARN trigger-ctl: fire marker with invalid name -- removing"
+        rm -f "$f" 2>>"$SUPLOG" || true; continue ;;
+    esac
+    policy=""; max=""
+    while IFS=$'\t' read -r mname mpolicy mmax; do
+      if [ "$mname" = "$name" ]; then policy="$mpolicy"; max="$mmax"; fi
+    done <<<"$manual_list"
+    if [ -z "$policy" ]; then
+      # Not a dispatchable manual trigger this tick: keep the marker ONLY
+      # for the disabled-manual case (resumes on re-enable); anything else
+      # (non-manual, refused, colliding, unknown) is removed loudly.
+      _trigger_show_fields "$name"
+      if [ "$SHOW_MODE" = "manual" ] && [ "$SHOW_ENABLED" = "false" ]; then
+        log "NOTE trigger '$name' is disabled -- fire marker kept until enabled"
+      else
+        log "WARN trigger-ctl: '$name' is not a dispatchable manual trigger -- removing its fire marker"
+        rm -f "$f" 2>>"$SUPLOG" || true
+      fi
+      continue
+    fi
+    [ "$policy" = "parallel" ] || max=1
+    case "$max" in *[!0-9]*|"") max=1 ;; esac
+    if ! slot="$(trigger_free_slot "$name" "$max")"; then
+      log "NOTE trigger '$name': at capacity -- manual fire deferred (marker kept)"
+      continue
+    fi
+    if [ "$slot" = "0" ]; then tok="$name"; else tok="$name@$slot"; fi
+    if run_session "$tok" native; then
+      rm -f "$f" 2>>"$SUPLOG" || true
+    else
+      log "WARN manual fire for '$name' rc=$? -- marker kept for retry"
+    fi
+  done
+  return 0
+}
+
+# Deferred schedule fires (policy queue, depth 1). The marker BODY holds the
+# trigger's kind (written by resolve_trigger_cron_due at fire time -- queued
+# triggers are not in the continuous dispatch arrays, so the kind must
+# travel with the marker).
+resolve_queued_fires() {
+  local d f name kind tok
+  d="$(trigger_ctl_dir queued)"
+  [ -d "$d" ] || return 0
+  for f in "$d"/*; do
+    [ -e "$f" ] || continue
+    name="$(_ctl_marker_name "$(basename "$f")")" || continue   # other lane's
+    case "$name" in *[!A-Za-z0-9._-]*|"")
+      rm -f "$f" 2>>"$SUPLOG" || true; continue ;; esac
+    tok="$(trigger_free_slot "$name" 1 >/dev/null && printf '%s' "$name")" || continue
+    IFS= read -r kind <"$f" 2>/dev/null || kind=""
+    case "$kind" in
+      shim|native) ;;
+      *)
+        # Corrupt marker body (Codex CP2): guessing shim could route a
+        # native trigger through legacy role dispatch. Drop the deferred
+        # fire loudly -- under-fire, the cron corrupt-marker discipline.
+        log "WARN trigger-ctl: queued marker for '$name' has invalid kind -- removing (fire lost, next schedule re-queues)"
+        rm -f "$f" 2>>"$SUPLOG" || true; continue ;;
+    esac
+    if run_session "$tok" "$kind"; then
+      rm -f "$f" 2>>"$SUPLOG" || true
+    fi
+  done
+  return 0
 }
 
 # --- cron scheduler (W1, issue #85) -----------------------------------------
@@ -856,6 +1241,9 @@ _role_name_path_safe() {
   return 0
 }
 
+# LEGACY (post-#374 cutover): the main loop fires resolve_trigger_cron_due
+# now (same markers/semantics; shim cron roles ride the trigger enumeration).
+# Kept because tests exercise it -- removal is a Phase E cleanup.
 resolve_cron_due() {
   local enum now name schedule marker last due
   enum="$(_cron_enumerate)" || return 0
@@ -903,6 +1291,73 @@ resolve_cron_due() {
     if _cron_write_marker "$marker" "$now"; then
       log "cron: role '$name' due (schedule '$schedule') -- firing"
       run_session "$name" || log "cron: role '$name' session rc=$? (see supervisor.log)"
+    else
+      log "WARN cron: cannot advance marker for '$name' -- skipping fire this tick (avoids re-fire)"
+    fi
+  done
+  return 0
+}
+
+# The trigger-model twin of resolve_cron_due (Phase B, #374): same marker
+# files ($VARDIR/cron/<name>.last_fire), same first-sight-no-fire, same
+# corrupt-marker reinitialise, same advance-before-fire ordering -- derived
+# mechanically so shim cron roles keep their exact firing semantics across
+# the cutover. Differences: the enumeration is `triggers.py cron` (three TAB
+# fields: name, schedule, kind) and the fire is capacity-gated by the
+# trigger's concurrency policy (queue writes ONE deferred marker; skip warns).
+resolve_trigger_cron_due() {
+  local enum now name schedule kind marker last due tok qp
+  enum="$(_triggers_enumerate cron "$AUTONOMY_TARGET_REPO")" || return 0
+  [ -n "$enum" ] || return 0
+  now="$(date +%s)"
+  mkdir -p "$VARDIR/cron" 2>/dev/null || {
+    log "WARN cron: cannot create $VARDIR/cron -- skipping cron this tick"; return 0; }
+  printf '%s\n' "$enum" | while IFS="$(printf '\t')" read -r name schedule kind; do
+    [ -n "$name" ] || continue
+    if ! _role_name_path_safe "$name"; then
+      log "WARN cron: trigger name '$name' has invalid path chars -- ignored"
+      continue
+    fi
+    # Hostile/malformed kind on the enumeration pipe: DROP the line, never
+    # clamp to shim (review round 3 -- a clamp could route a native trigger
+    # through legacy role dispatch; resolve_dispatch_triggers' discipline).
+    case "$kind" in shim|native) ;; *)
+      log "WARN cron: trigger '$name' has invalid kind on the enumeration line -- ignored"
+      continue ;;
+    esac
+    marker="$VARDIR/cron/$name.last_fire"
+    if [ ! -f "$marker" ]; then
+      _cron_write_marker "$marker" "$now" \
+        || log "WARN cron: cannot initialise marker for '$name'"
+      continue
+    fi
+    last="$(cat "$marker" 2>/dev/null)"
+    case "$last" in
+      ''|*[!0-9]*)
+        log "WARN cron: marker for '$name' unreadable/corrupt -- reinitialising without firing"
+        _cron_write_marker "$marker" "$now" \
+          || log "WARN cron: cannot reinitialise marker for '$name'"
+        continue ;;
+    esac
+    due="$(python3 "$ENGINE_HOME/lib/roles.py" cron-due "$schedule" "$last" "$now" 2>>"$SUPLOG")" || continue
+    [ "$due" = "due" ] || continue
+    if _cron_write_marker "$marker" "$now"; then
+      log "cron: trigger '$name' due (schedule '$schedule') -- firing"
+      if tok="$(trigger_start_token_for "$name")"; then
+        run_session "$tok" "$kind" || log "cron: trigger '$name' session rc=$? (see supervisor.log)"
+      else
+        case "$(trigger_show_policy "$name")" in
+          queue)
+            mkdir -p "$(trigger_ctl_dir queued)" 2>>"$SUPLOG" || true
+            if qp="$(_trigger_ctl_path queued "$name")"; then
+              [ -f "$qp" ] && \
+                log "WARN trigger '$name': queued fire overwritten (queue depth is 1)"
+              printf '%s\n' "$kind" >"$qp" 2>>"$SUPLOG" || true
+            fi ;;
+          *)
+            log "NOTE trigger '$name': at capacity -- scheduled fire skipped (policy skip)" ;;
+        esac
+      fi
     else
       log "WARN cron: cannot advance marker for '$name' -- skipping fire this tick (avoids re-fire)"
     fi
@@ -1122,12 +1577,16 @@ compose_session_rules() {
 # Lane-scoped like fingerprint_state_file: one supervisor per lane shares
 # LOGDIR, so an unscoped state file would let two lanes advance or corrupt
 # each other's runs. Same [--<lane>] suffix convention.
+# Slot 0 keeps the LEGACY filename (Phase B parity invariant 2: an in-flight
+# run started before the trigger cutover resumes identically after). Slots
+# 1..max-1 exist only for a parallel-policy trigger's overlapping runs.
 pipeline_state_file() {
-  local role="$1" lane="${AUTONOMY_LANE:-}"
+  local role="$1" slot="${2:-0}" lane="${AUTONOMY_LANE:-}" suffix=""
+  [ "$slot" != "0" ] && suffix="@$slot"
   if [ -n "$lane" ]; then
-    printf '%s/.pipeline-run-%s--%s.json' "$LOGDIR" "$role" "$lane"
+    printf '%s/.pipeline-run-%s--%s%s.json' "$LOGDIR" "$role" "$lane" "$suffix"
   else
-    printf '%s/.pipeline-run-%s.json' "$LOGDIR" "$role"
+    printf '%s/.pipeline-run-%s%s.json' "$LOGDIR" "$role" "$suffix"
   fi
 }
 
@@ -1158,6 +1617,8 @@ any_pipeline_inflight() {
 # (pipeline_state_file); other lanes' states are another supervisor's
 # business. Role tokens are charset-gated before they can re-enter dispatch
 # (prevention-log #6 -- the filename is disk input).
+# LEGACY (post-#374 cutover): the main loop reads inflight_tokens (slot-
+# aware) now. Kept because tests exercise it -- removal is a Phase E cleanup.
 inflight_roles() {
   local f base lane="${AUTONOMY_LANE:-}"
   for f in "$LOGDIR"/.pipeline-run-*.json; do
@@ -1180,6 +1641,41 @@ inflight_roles() {
   done
 }
 
+# Slot-aware sibling of inflight_roles (Phase B): emits dispatch TOKENS
+# ('name' or 'name@<slot>'). The state basename is <name>[--<lane>][@<slot>],
+# so the @<slot> suffix strips FIRST, then the --<lane> suffix, then the
+# charset gate (Codex CP1: lane-first never matches '--qa@2' and silently
+# ignores a lane's slotted in-flight run). inflight_roles stays until the
+# cutover deletes its last caller.
+inflight_tokens() {
+  local f base slot lane="${AUTONOMY_LANE:-}"
+  for f in "$LOGDIR"/.pipeline-run-*.json; do
+    [ -f "$f" ] || continue
+    base="$(basename "$f")"
+    base="${base#.pipeline-run-}"
+    base="${base%.json}"
+    slot=""
+    case "$base" in
+      *@*)
+        slot="${base##*@}"
+        case "$slot" in *[!0-9]*|"") log "WARN pipeline: ignoring state file with invalid slot: $f"; continue ;; esac
+        base="${base%@*}" ;;
+    esac
+    if [ -n "$lane" ]; then
+      case "$base" in
+        *--"$lane") base="${base%--"$lane"}" ;;
+        *) continue ;;
+      esac
+    else
+      case "$base" in *--*) continue ;; esac
+    fi
+    case "$base" in
+      *[!A-Za-z0-9._-]*|"") log "WARN pipeline: ignoring state file with invalid trigger token: $f"; continue ;;
+    esac
+    if [ -n "$slot" ]; then printf '%s@%s\n' "$base" "$slot"; else printf '%s\n' "$base"; fi
+  done
+}
+
 # Resolve the role's CURRENT ready set (P2b, #351) into parallel PB_* arrays
 # (bash 3.2 regular arrays; index i = block i). Starts a run when none is in
 # flight. Per-block runs_as values are re-validated here before they can
@@ -1187,19 +1683,21 @@ inflight_roles() {
 # PB_COUNT + PIPE_DONE and arrays PB_NODE PB_PROMPT PB_VERDICT
 # PB_MODEL PB_EFFORT PB_ACCOUNT PB_AGENT ('' = no override).
 resolve_pipeline_ready() {
-  local role="$1" max="${2:-1}" state out line key val i
+  local role="$1" max="${2:-1}" slot="${3:-0}" kind="${4:-shim}" state out line key val i
   PB_NODE=(); PB_PROMPT=(); PB_VERDICT=()
   PB_MODEL=(); PB_EFFORT=(); PB_ACCOUNT=(); PB_AGENT=()
   PB_COUNT=0; PIPE_DONE=0
-  state="$(pipeline_state_file "$role")"
+  # Two-arg callers (pre-Phase-B) get slot 0 + kind shim -- byte-identical.
+  state="$(pipeline_state_file "$role" "$slot")"
   if [ ! -f "$state" ]; then
     if [ -n "${AUTONOMY_LANE:-}" ]; then
       python3 "$ENGINE_HOME/lib/pipeline.py" start \
         "$AUTONOMY_TARGET_REPO" "$role" "$state" \
-        --lane "$AUTONOMY_LANE" >>"$SUPLOG" 2>&1 || return 1
+        --lane "$AUTONOMY_LANE" --kind "$kind" >>"$SUPLOG" 2>&1 || return 1
     else
       python3 "$ENGINE_HOME/lib/pipeline.py" start \
-        "$AUTONOMY_TARGET_REPO" "$role" "$state" >>"$SUPLOG" 2>&1 || return 1
+        "$AUTONOMY_TARGET_REPO" "$role" "$state" \
+        --kind "$kind" >>"$SUPLOG" 2>&1 || return 1
     fi
   fi
   if ! out="$(python3 "$ENGINE_HOME/lib/pipeline.py" ready "$state" \
@@ -1330,9 +1828,14 @@ sweep_ephemeral_worktrees() {
 # the session as errored) because losing run-state consistency silently
 # would corrupt the walk.
 record_pipeline_outcome() {
-  local role="$1" node="$2" outcome="$3" session_log="$4" verdict="$5"
+  # $1 is a dispatch TOKEN (name or name@slot; a bare role IS the slot-0
+  # token, so every pre-Phase-B caller is byte-identical). A bad token
+  # refuses -- it would derive a wrong state path.
+  local token="$1" node="$2" outcome="$3" session_log="$4" verdict="$5" name slot
+  name="$(token_name "$token")" || { log "pipeline: bad record token '$token' -- REFUSING"; return 1; }
+  slot="$(token_slot "$token")"
   python3 "$ENGINE_HOME/lib/pipeline.py" record \
-    "$(pipeline_state_file "$role")" "$node" "$outcome" \
+    "$(pipeline_state_file "$name" "$slot")" "$node" "$outcome" \
     --session-log "$session_log" \
     --verdict "$verdict" \
     --journal "$LOGDIR/journal.jsonl" >>"$SUPLOG" 2>&1
@@ -1415,13 +1918,28 @@ materialize_planner() {
 }
 
 run_session() {
-  local role="${1:-${ROLE:-coder}}"
+  local token="${1:-${ROLE:-coder}}" kind="${2:-shim}" role slot
+  role="$(token_name "$token")" || { log "dispatch: bad token '$token' -- REFUSING"; return 2; }
+  slot="$(token_slot "$token")"
   preflight || return $?
   materialize_planner
 
-  if ! resolve_role_dispatch "$role"; then
-    log "dispatch: cannot resolve settings for role '$role' -- REFUSING session (fail-safe; see supervisor.log)"
-    return 2
+  if [ "$kind" = "shim" ]; then
+    if ! resolve_role_dispatch "$role"; then
+      log "dispatch: cannot resolve settings for role '$role' -- REFUSING session (fail-safe; see supervisor.log)"
+      return 2
+    fi
+  else
+    # NATIVE trigger (Phase B): roles are dissolved -- no role settings, no
+    # scope directive. Model/effort/account/agent come from the pipeline's
+    # own (substituted) runs_as via the ready blocks; the rules file is the
+    # pack's hard_rules alone (compose_session_rules passes it through
+    # verbatim when the scope line is empty). This is configured behaviour
+    # for a NEW surface, not a silent widening of an existing one.
+    # shellcheck disable=SC2034  # ROLE_PROMPT: same cross-function consumer
+    # as resolve_role_dispatch's (the pipeline runner reads it, see :1128).
+    ROLE_PROMPT=""; ROLE_SCOPE=""; ROLE_MODEL=""; ROLE_EFFORT=""
+    ROLE_ACCOUNT=""; ROLE_AGENT=""
   fi
 
   # P1 (#345): every role dispatches through the pipeline runner. P2b
@@ -1430,7 +1948,7 @@ run_session() {
   # adapter sourcing so a node's runs_as.agent override selects the adapter,
   # and BEFORE resolve_session_settings so node model/effort sit in the
   # ROLE_* slot.
-  if ! resolve_pipeline_ready "$role" 8; then
+  if ! resolve_pipeline_ready "$role" 8 "$slot" "$kind"; then
     log "dispatch: cannot resolve pipeline ready set for role '$role' -- REFUSING session (fail-safe; see supervisor.log)"
     return 2
   fi
@@ -1513,12 +2031,16 @@ run_session() {
     return 2
   fi
 
-  log_knob_notes "$AUTONOMY_TARGET_REPO" "$role"
+  # Knob notes are keyed to a roles: entry a native trigger does not have --
+  # a spurious roles.py error in the log every tick would be noise, not truth.
+  [ "$kind" = "shim" ] && log_knob_notes "$AUTONOMY_TARGET_REPO" "$role"
 
+  # The TOKEN flows down (name@slot); for slot 0 it is byte-equal to the
+  # bare role, so the legacy path's argv is unchanged (parity invariant 7).
   if [ "$PB_COUNT" -eq 1 ]; then
-    run_single_session "$role" "$env_lines" "$rules_file" "$auth_note"
+    run_single_session "$token" "$env_lines" "$rules_file" "$auth_note"
   else
-    dispatch_batch "$role" "$env_lines" "$rules_file" "$auth_note"
+    dispatch_batch "$token" "$env_lines" "$rules_file" "$auth_note"
   fi
 }
 
@@ -1598,8 +2120,13 @@ run_single_session() {
 # SD-7). Worktrees are removed after records (verdicts live under each
 # session's own var/autonomy-logs).
 dispatch_batch() {
+  # $1 is a dispatch TOKEN (see record_pipeline_outcome) -- name+slot derive
+  # the state path; the bare name would read the wrong file for slot >= 1.
   local role="$1" env_lines="$2" rules_file="$3" auth_note="$4"
-  local state; state="$(pipeline_state_file "$role")"
+  local state _bn _bs
+  _bn="$(token_name "$role")" || { log "pipeline: bad batch token '$role' -- REFUSING"; return 2; }
+  _bs="$(token_slot "$role")"
+  state="$(pipeline_state_file "$_bn" "$_bs")"
   # Inside the repo tree but SAFE only because var/ is gitignored (the
   # engine's onboard/doctor guarantee): preflight's status check + stash
   # sweep never see it, and `git worktree add` accepts a nested ignored
@@ -1874,7 +2401,12 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # additive and best-effort: with no cron roles this is a no-op and the loop
     # behaves byte-for-byte as before.
     heartbeat "cron-check" "checking scheduled roles" ""
-    resolve_cron_due
+    # CUTOVER (#374): shim cron roles arrive through the trigger enumeration
+    # -- same markers, same first-sight/skip-and-warn semantics. Manual fire
+    # markers and deferred (queue-policy) fires drain in the same window.
+    resolve_trigger_cron_due
+    resolve_manual_fires
+    resolve_queued_fires
 
     # Event bus (W2, #86): wake event roles on new board/PR state, under the
     # held lock, one at a time. Also runs BEFORE the board-empty gate so an
@@ -1895,7 +2427,10 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # empty board ONLY in-flight roles dispatch -- a picked item finishes,
     # nothing new starts (a fresh run would burn a session discovering
     # there is nothing to pick).
-    inflight_list="$(inflight_roles | tr '\n' ' ')"
+    # CUTOVER (#374): in-flight TOKENS (slot-aware), filtered through the
+    # per-trigger stop sentinel + error-backoff window.
+    # shellcheck disable=SC2046  # intentional split: tokens are charset-gated words
+    inflight_list="$(filter_dispatchable_tokens $(inflight_tokens) | tr '\n' ' ')"
     inflight_list="${inflight_list% }"
     if [ "$open_count" = "0" ]; then
       if [ -z "$inflight_list" ]; then
@@ -1906,13 +2441,29 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
       fi
       dispatch_list="$inflight_list"
     else
-      # Round-robin over the enabled loop roles (re-enumerated every tick so
-      # a config edit applies on the next session) PLUS any in-flight role.
-      # Enumeration failure falls back to coder-only -- the conservative
-      # default; preflight's doctor check still gates a truly broken pack.
-      if ! dispatch_list="$(resolve_dispatch_roles)"; then
-        log "WARN role enumeration failed -- coder-only fallback (see supervisor.log)"
-        dispatch_list="coder"
+      # Round-robin over the enabled continuous triggers (re-enumerated
+      # every tick so a config/trigger edit applies on the next session)
+      # PLUS any in-flight token. CUTOVER (#374): SD-12's enumeration-
+      # failure -> coder-only fallback is RETIRED -- triggers are now the
+      # authority on what may run, and a failed enumeration can mean the
+      # config or trigger set is unreadable; running coder anyway would
+      # resurrect legacy dispatch past an operator-visible failure
+      # (fail-open). In-flight tokens still advance -- they need no
+      # enumeration; with none, the tick idles.
+      if trig_names="$(resolve_dispatch_triggers)"; then
+        dispatch_list=""
+        for _t in $trig_names; do
+          # Policy-gated start candidate: at capacity -> no NEW start (the
+          # in-flight token below keeps the run advancing).
+          if _tok="$(trigger_start_token "$_t")"; then
+            dispatch_list="$dispatch_list $_tok"
+          fi
+        done
+        dispatch_list="$(filter_dispatchable_tokens $dispatch_list | tr '\n' ' ')"
+      else
+        log "WARN trigger enumeration failed -- no new starts this tick (in-flight runs still advance; see supervisor.log)"
+        heartbeat "enumeration-failed" "trigger enumeration failed -- advancing in-flight only" "$(( $(date -u +%s) + ERR_BACKOFF_START ))"
+        dispatch_list=""
       fi
       for _r in $inflight_list; do
         case " $dispatch_list " in
@@ -1920,16 +2471,26 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
           *) dispatch_list="$dispatch_list $_r" ;;
         esac
       done
-      dispatch_list="${dispatch_list# }"
+      dispatch_list="$(printf '%s' "$dispatch_list" | tr -s ' ')"
+      dispatch_list="${dispatch_list# }"; dispatch_list="${dispatch_list% }"
       if [ -z "$dispatch_list" ]; then
-        log "no loop roles enabled -- idle ${EMPTY_IDLE}s"
-        heartbeat "idle" "no loop roles enabled -- idle" "$(( $(date -u +%s) + EMPTY_IDLE ))"
+        log "no dispatchable triggers -- idle ${EMPTY_IDLE}s"
+        heartbeat "idle" "no dispatchable triggers -- idle" "$(( $(date -u +%s) + EMPTY_IDLE ))"
         sleep "$EMPTY_IDLE"; continue
       fi
     fi
-    # shellcheck disable=SC2086  # intentional split: names are [A-Za-z0-9._-] tokens
+    # shellcheck disable=SC2086  # intentional split: tokens are [A-Za-z0-9._-@] words
     role="$(select_role "$role_rr" $dispatch_list)"
     role_rr=$(( (role_rr + 1) % 86400 ))
+    name="$(token_name "$role")" || { log "WARN bad dispatch token '$role' -- skipping tick"; sleep "$ERR_BACKOFF_START"; continue; }
+    # Enumerated trigger -> this tick's kind; in-flight-only token -> the
+    # kind its OWN state file recorded (Codex CP2: guessing shim here would
+    # route a native run whose trigger broke mid-run through legacy role
+    # dispatch). Undeterminable = skip the token this tick, state preserved.
+    if ! kind="$(dispatch_kind_of "$name" "$(token_slot "$role")")"; then
+      log "WARN cannot determine kind for in-flight '$role' (state unreadable) -- skipping this tick"
+      sleep "$ERR_BACKOFF_START"; continue
+    fi
 
     # #318: fingerprint gate -- skip the session (zero LLM tokens) ONLY when
     # the observable world exactly matches state a previous COMPLETED session
@@ -1941,7 +2502,12 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # an unchanged world -- the gate still runs first (it computes the
     # FP_CURRENT that record_fingerprint persists on outcome 0; skipping it
     # would record a stale fingerprint), but its skip verdict is vetoed.
-    if fingerprint_gate "$role" && ! pipeline_inflight "$role"; then
+    # CUTOVER (#374): the gate keys on the bare NAME (fingerprint state files
+    # keep their per-role names -- parity invariant 5); "pending work vetoes
+    # the skip" now checks ANY slot, not just slot 0. For a native trigger
+    # any gate sub-probe that cannot read role config lands on the gate's
+    # own "any doubt falls through to dispatch" side -- the safe direction.
+    if fingerprint_gate "$name" && [ "$(trigger_inflight_count "$name")" -eq 0 ]; then
       fp_skips=$((fp_skips + 1))
       fp_wait="$(fingerprint_backoff "$fp_skips")"
       # Long sleeps would starve the top-of-tick cron/event resolvers -- cap
@@ -1959,7 +2525,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # is actually invoked, so the card never reads "running a session" while it
     # is only getting ready to (or is about to refuse and back off).
     heartbeat "dispatching $role" "selected $role -- preparing session (auth, preflight, worktree)" ""
-    run_session "$role"; outcome=$?
+    run_session "$role" "$kind"; outcome=$?
     # #318: a session actually RAN (whatever its outcome) -- only now does the
     # consecutive-skip backoff counter reset, exactly as documented.
     fp_skips=0
@@ -1979,8 +2545,9 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
          # #318: record what this tick OBSERVED before the session (FP_CURRENT
          # from fingerprint_gate) -- a clean session has now examined exactly
          # that world, so an identical future tick may skip. Outcome 0 only.
-         record_fingerprint "$role" "${AUTONOMY_LANE:-}" "$FP_CURRENT"
+         record_fingerprint "$name" "${AUTONOMY_LANE:-}" "$FP_CURRENT"
          err_backoff=$ERR_BACKOFF_START; limit_backoff=$LIMIT_BACKOFF_START
+         trigger_clear_backoff "$name"
          clear_reset_state
          sleep "$PACE" ;;
       # NOTE: usage-limit state is one marker per supervisor (engine.account_key),
@@ -2005,6 +2572,10 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
          sleep "$ERR_BACKOFF_START" ;;
       *) log "session error (rc=$outcome) -- backoff ${err_backoff}s"
          heartbeat "error-backoff" "session error (rc=$outcome) -- exponential backoff" "$(( $(date -u +%s) + err_backoff ))"
+         # Per-trigger error backoff (#374): T sits out its own window while
+         # other triggers stay eligible. The loop-global sleep below REMAINS
+         # -- it paces the loop when every trigger is backing off.
+         trigger_record_error_backoff "$name"
          sleep "$err_backoff"
          err_backoff=$(( err_backoff*2 < ERR_BACKOFF_MAX ? err_backoff*2 : ERR_BACKOFF_MAX )) ;;
     esac

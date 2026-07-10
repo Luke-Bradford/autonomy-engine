@@ -274,14 +274,20 @@ def _top_units(doc):
     """Ordered top-level unit ids: nodes not inside any container, with each
     container appearing at the position of its FIRST child. The graph's
     vertices (edges may only reference these)."""
+    # Scalar blocks (nodes: 5, containers: 5, children: true) are the shape
+    # checks' finding; this walk stays TOTAL (validate_doc calls it on
+    # garbage docs before those checks run).
+    nodes_blk = doc.get("nodes")
+    cons_blk = doc.get("containers")
     child_to_con = {}
-    for con in doc.get("containers") or []:
+    for con in (cons_blk if isinstance(cons_blk, list) else []):
         if isinstance(con, dict):
-            for c in (con.get("children") or []):
+            children = con.get("children")
+            for c in (children if isinstance(children, list) else []):
                 if isinstance(c, str):     # garbage child = not a mapping key
                     child_to_con[c] = con.get("id")
     out, seen_con = [], set()
-    for node in doc.get("nodes") or []:
+    for node in (nodes_blk if isinstance(nodes_blk, list) else []):
         if not isinstance(node, dict):
             continue
         nid = node.get("id")
@@ -597,9 +603,12 @@ def project_outputs(declared, raw):
 
 
 def substitute_doc(doc, ctx):
-    """Deep copy of doc with every STRING scalar run through substitute(). Phase
-    B calls this at compile time; Phase A only unit-tests it. Non-strings pass
-    through untouched; the input doc is never mutated."""
+    """Deep copy of doc with every STRING scalar run through substitute().
+    NOT in the dispatch path: prepare substitutes each channel exactly once
+    itself (a whole-doc pass composed with a field pass would double-resolve
+    -- values must stay inert). Kept for consumers that need one total pass
+    over a template (call_pipeline's params mapping is the expected one).
+    Non-strings pass through untouched; the input doc is never mutated."""
     def walk(v):
         if isinstance(v, dict):
             return {k: walk(x) for k, x in v.items()}
@@ -607,6 +616,10 @@ def substitute_doc(doc, ctx):
             return [walk(x) for x in v]
         return substitute(v, ctx)
     return walk(doc)
+
+
+def _has_ref(v):
+    return isinstance(v, str) and "${" in v.replace("$${", "")
 
 
 def _validate_runs_as(where, runs_as, errors):
@@ -618,17 +631,24 @@ def _validate_runs_as(where, runs_as, errors):
     for key in runs_as:
         if key not in ("model", "effort", "account", "agent"):
             errors.append("%s: runs_as.%s is not a known field" % (where, key))
-    if "model" in runs_as and not _is_str(runs_as["model"]):
+    # A ${...}-bearing field defers to the POST-SUBSTITUTION concrete check
+    # in _prepare_step (refuse-not-drop) -- check_refs has already validated
+    # the reference statically. A ref-free field keeps the P1 checks.
+    if "model" in runs_as and not _has_ref(runs_as["model"]) \
+            and not _is_str(runs_as["model"]):
         errors.append("%s: runs_as.model must be a non-empty string" % where)
-    if "account" in runs_as and not (_is_str(runs_as["account"])
-                                     and _NAME_RE.match(runs_as["account"])):
+    if "account" in runs_as and not _has_ref(runs_as["account"]) \
+            and not (_is_str(runs_as["account"])
+                     and _NAME_RE.match(runs_as["account"])):
         errors.append("%s: runs_as.account must be an account name "
                       "(charset [A-Za-z0-9._-]{1,64})" % where)
-    if "effort" in runs_as and runs_as["effort"] not in VALID_EFFORTS:
+    if "effort" in runs_as and not _has_ref(runs_as["effort"]) \
+            and runs_as["effort"] not in VALID_EFFORTS:
         errors.append("%s: runs_as.effort %r invalid (valid: %s)"
                       % (where, runs_as.get("effort"), ", ".join(VALID_EFFORTS)))
-    if "agent" in runs_as and not (_is_str(runs_as["agent"])
-                                   and _AGENT_RE.match(runs_as["agent"])):
+    if "agent" in runs_as and not _has_ref(runs_as["agent"]) \
+            and not (_is_str(runs_as["agent"])
+                     and _AGENT_RE.match(runs_as["agent"])):
         errors.append("%s: runs_as.agent has invalid chars" % where)
 
 
@@ -694,30 +714,161 @@ def _validate_params_outputs(doc, errors):
                                   % (w, ", ".join(OUTPUT_TYPES)))
 
 
-def _refuse_refs_in_activity_fields(doc, errors):
-    """Phase A honesty gate (Codex CP2): NOTHING substitutes ${...} yet, so a
-    '${' anywhere in an activity's string fields (runs_as.model has no charset
-    gate, legacy_prompt/exit_when are free text) would dispatch as a raw
-    literal -- the accept-and-ignore fail-open prevention-log #3 forbids.
-    Refused wholesale until Phase B wires substitution; the params/outputs
-    DECLARATIONS stay accepted (they are the interface, not consumed fields)."""
-    def scan(where, v):
-        if isinstance(v, str) and "${" in v:
-            errors.append("%s: contains '${' but the ${...} language is not "
-                          "substituted until Phase B wires it into dispatch -- "
-                          "a validating doc must be runnable today" % where)
+_RUN_FIELDS = ("id", "pipeline", "trigger", "repo")
+# Fields that are file PATHS resolved before substitution runs -- a ${} here
+# would dispatch a garbage path, so they stay ref-free forever.
+_REF_FREE_FIELDS = ("brief_ref", "legacy_prompt")
+
+
+def _ancestors(doc, uid):
+    """Strict ancestor UNIT ids of top-level unit `uid` over
+    effective_edges (traversal edges only -- back-edges excluded: an output
+    'from the future' via a back-edge is not statically guaranteed).
+    TOTAL over garbage doc shapes: check_refs runs inside validate_doc
+    BEFORE the node/edge shape checks, so a malformed edges list must
+    degrade to 'no ancestors' (which REFUSES node-output refs -- the safe
+    side) rather than crash the validator."""
+    parents = {}
+    try:
+        edges = effective_edges(doc)
+    except Exception:
+        return set()
+    for e in edges:
+        if not isinstance(e, dict) or e.get("back"):
+            continue
+        parents.setdefault(e.get("to"), set()).add(e.get("from"))
+    seen, stack = set(), list(parents.get(uid, ()))
+    while stack:
+        cur = stack.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        stack.extend(parents.get(cur, ()))
+    return seen
+
+
+def _check_expr_static(expr, declared_params, allowed_nodes, errors, where):
+    """Parse ONE ${...} body without resolving anything. Mirrors
+    _resolve_expr's grammar exactly -- if this accepts, resolution can only
+    fail on run-time-only facts (a node that wrote no outputs)."""
+    expr = expr.strip()
+    m = _CALL_RE.match(expr)
+    if m:
+        fn, raw = m.group(1), m.group(2)
+        spec = _ALLOWED_FUNCS.get(fn)
+        if spec is None:
+            errors.append("%s: unknown function %r (allowed: %s)"
+                          % (where, fn, ", ".join(sorted(_ALLOWED_FUNCS))))
+            return
+        _impl, lo, hi = spec
+        try:
+            args = _split_args(raw)
+        except PipelineError as exc:
+            errors.append("%s: %s" % (where, exc))
+            return
+        if len(args) < lo or (hi is not None and len(args) > hi):
+            errors.append("%s: function %r arity: expected %s, got %d"
+                          % (where, fn, lo if hi == lo else "%s+" % lo,
+                             len(args)))
+        for a in args:
+            a = a.strip()
+            if len(a) >= 2 and a[0] == a[-1] and a[0] in "'\"":
+                continue                              # string literal
+            if re.match(r"^-?\d+$", a):
+                continue                              # int literal
+            _check_expr_static(a, declared_params, allowed_nodes, errors,
+                               where)
+        return
+    parts = expr.split(".")
+    if parts[0] == "params" and len(parts) == 2:
+        decl = declared_params.get(parts[1])
+        if decl is None:
+            errors.append("%s: ${params.%s} is not a declared param"
+                          % (where, parts[1]))
+        elif decl.get("type") == "secret":
+            errors.append("%s: ${params.%s} is secret-typed -- secrets have "
+                          "no safe substitution sink in Phase B (briefs and "
+                          "runs_as land in files/argv; the env channel is "
+                          "Phase C)" % (where, parts[1]))
+        return
+    if parts[0] == "nodes" and len(parts) == 4 and parts[2] == "output":
+        if parts[1] not in allowed_nodes:
+            errors.append("%s: ${nodes.%s.output.%s} does not name a strict "
+                          "upstream node -- its outputs cannot exist yet"
+                          % (where, parts[1], parts[3]))
+        return
+    if parts[0] == "run" and len(parts) == 2:
+        if parts[1] not in _RUN_FIELDS:
+            errors.append("%s: ${run.%s} unknown (fields: %s)"
+                          % (where, parts[1], ", ".join(_RUN_FIELDS)))
+        return
+    errors.append("%s: unresolvable reference ${%s}" % (where, expr))
+
+
+def check_refs(doc, errors):
+    """Static validation of every ${...} in activity string fields (spec
+    S3.1: an unresolved/unknown ref or non-allowlisted function is a
+    VALIDATOR error -- refuse, don't run). Field-blind scan like
+    _refuse_refs_in_activity_fields was, except brief_ref/legacy_prompt
+    which must stay ref-free (they are paths, resolved before substitution).
+    Also refuses an unterminated '${' (substitute would raise at prepare
+    time -- catching it at validate time keeps 'validating == runnable')."""
+    # Garbage BLOCK shapes (a scalar where a list belongs: params: 5,
+    # nodes: 5, containers: 5, children: true) and garbage id shapes are
+    # the SHAPE checks' finding, later in validate_doc -- here they just
+    # degrade to empty (refs then refuse as undeclared/non-upstream, the
+    # safe side); this scan must stay total, it runs before those checks
+    # (review round 1, PR #375 -- same-class scan over every block).
+    def _lst(v):
+        return v if isinstance(v, list) else []
+
+    declared = {p.get("name"): p for p in _lst(doc.get("params"))
+                if isinstance(p, dict)}
+    con_of = {}
+    for con in _lst(doc.get("containers")):
+        if isinstance(con, dict):
+            for ch in _lst(con.get("children")):
+                if isinstance(ch, str):
+                    con_of[ch] = con.get("id")
+
+    def scan(where, v, unit):
+        if isinstance(v, str):
+            if "${" in v.replace("$${", ""):
+                allowed = _ancestors(doc, unit) if unit else set()
+                # container children may also reference EARLIER SIBLINGS in
+                # the same container -- the walk runs them in order; Phase B
+                # does NOT statically allow that (the container is one unit
+                # to the walk; refusing is the safe side -- YAGNI).
+                protected = v.replace("$${", _ESC)
+                bodies = _REF_RE.findall(protected)
+                stripped = _REF_RE.sub("", protected)
+                if "${" in stripped:
+                    errors.append("%s: unterminated ${ reference" % where)
+                for b in bodies:
+                    _check_expr_static(b, declared, allowed, errors, where)
         elif isinstance(v, dict):
             for k, x in v.items():
-                scan("%s.%s" % (where, k), x)
+                scan("%s.%s" % (where, k), x, unit)
         elif isinstance(v, list):
             for j, x in enumerate(v):
-                scan("%s[%d]" % (where, j), x)
-    for i, node in enumerate(doc.get("nodes") or []):
-        if isinstance(node, dict):
-            scan("nodes[%d]" % i, node)
-    for i, con in enumerate(doc.get("containers") or []):
+                scan("%s[%d]" % (where, j), x, unit)
+
+    for i, node in enumerate(_lst(doc.get("nodes"))):
+        if not isinstance(node, dict):
+            continue
+        where = "nodes[%d]" % i
+        for f in _REF_FREE_FIELDS:
+            val = node.get(f)
+            if isinstance(val, str) and "${" in val:
+                errors.append("%s.%s: is a file path -- ${...} is never "
+                              "substituted in paths" % (where, f))
+        nid = node.get("id")
+        unit = con_of.get(nid, nid) if isinstance(nid, str) else None
+        clean = {k: v for k, v in node.items() if k not in _REF_FREE_FIELDS}
+        scan(where, clean, unit)
+    for i, con in enumerate(_lst(doc.get("containers"))):
         if isinstance(con, dict):
-            scan("containers[%d]" % i, con)
+            scan("containers[%d]" % i, con, con.get("id"))
 
 
 def validate_doc(doc, pipeline_dir=None):
@@ -750,7 +901,12 @@ def validate_doc(doc, pipeline_dir=None):
             errors.append("caps.max_parallel: must be 1..%d (ENFORCED fan-out "
                           "ceiling; absent = sequential)" % MAX_PARALLEL_CEIL)
     _validate_params_outputs(doc, errors)
-    _refuse_refs_in_activity_fields(doc, errors)
+    # Phase B: substitution IS wired into prepare now, so ${...} in activity
+    # fields is validated statically (check_refs) instead of refused
+    # wholesale. The Phase A gate (_refuse_refs_in_activity_fields) is
+    # DELETED in this same commit -- a validating doc is still a runnable
+    # doc, the honesty invariant just moved from "refuse" to "check".
+    check_refs(doc, errors)
 
     nodes = doc.get("nodes")
     ids = []
@@ -877,9 +1033,10 @@ def validate_doc(doc, pipeline_dir=None):
     child_ids = set()
     for c in containers:
         if isinstance(c, dict):
-            # non-str entries already earned a children error above; keep
-            # this set op TOTAL on garbage (unhashable dict, CP2)
-            child_ids.update(x for x in (c.get("children") or [])
+            # non-str/non-list children already earned an error above; keep
+            # this set op TOTAL on garbage (unhashable dict, scalar children)
+            ch = c.get("children")
+            child_ids.update(x for x in (ch if isinstance(ch, list) else [])
                              if isinstance(x, str))
     unit_order = _top_units(doc)
     units = set(unit_order)
@@ -1085,23 +1242,31 @@ def resolve_pipeline(repo, role):
     if not valid_pipeline_name(binding):
         raise PipelineError("roles.%s.pipeline %r has invalid charset"
                             % (role, binding))
-    # Read the var-live shadow when the operator has edited this pipeline in the
-    # canvas (SD-34); a present-but-invalid shadow RAISES below, never a silent
-    # fallback to the committed default (prevention-log #3). binding is
-    # charset-gated just above, so the resolver's precondition holds.
-    pdir = effective_pipeline_dir(repo, binding)
-    doc = load_doc(os.path.join(pdir, "pipeline.json"))
-    errs = validate_doc(doc, pdir)
-    if errs:
-        raise PipelineError("pipeline %r invalid: %s"
-                            % (binding, "; ".join(errs)))
-    _check_legacy_prompts(repo, doc, "pipeline %r" % binding)
     # P2b (#351): the P1/P2a multi-node cron/event refusal is LIFTED -- an
     # in-flight run joins the main loop's dispatch list regardless of its
     # trigger type, so a cron/event fire only STARTS the run and the loop
     # advances it with its own limit/backoff/pause handling.
+    return resolve_pipeline_doc(repo, binding)
+
+
+def resolve_pipeline_doc(repo, name):
+    """By-NAME pipeline resolution (trigger-started runs; also the bound
+    branch of resolve_pipeline -- extracted in Phase B, behaviour
+    byte-identical). Reads the var-live shadow when the operator has edited
+    this pipeline in the canvas (SD-34/SD-37); a present-but-invalid shadow
+    RAISES, never a silent fallback to the committed default
+    (prevention-log #3). Validates, checks legacy prompts. Fail-safe."""
+    if not valid_pipeline_name(name):
+        raise PipelineError("pipeline name %r has invalid charset" % (name,))
+    pdir = effective_pipeline_dir(repo, name)
+    doc = load_doc(os.path.join(pdir, "pipeline.json"))
+    errs = validate_doc(doc, pdir)
+    if errs:
+        raise PipelineError("pipeline %r invalid: %s"
+                            % (name, "; ".join(errs)))
+    _check_legacy_prompts(repo, doc, "pipeline %r" % name)
     return doc, {"pipeline_dir": pdir, "wrapped": False,
-                 "from": binding, "from_version": doc.get("version", 0)}
+                 "from": name, "from_version": doc.get("version", 0)}
 
 
 def _split_opts(args, opts):
@@ -1156,10 +1321,148 @@ def start_run(repo, role, state_path, lane=""):
     # starts across lanes/tests (second-granularity ids collide, weakening
     # the trust-ledger identity field).
     ident = "%s--%s" % (role, lane) if lane else role
+    run_id = "%s-%s-%d" % (ident, time.strftime("%Y%m%dT%H%M%S"), os.getpid())
+    # trigger/kind/params/run: ONE state shape with trigger-started runs
+    # (Phase B) -- the walk code never branches on kind. For a shim the
+    # trigger IS the role (name byte-equal, the trust-continuity contract).
     state = {"fmt": 2,
-             "run_id": "%s-%s-%d" % (ident, time.strftime("%Y%m%dT%H%M%S"),
-                                     os.getpid()),
+             "run_id": run_id,
              "role": role, "lane": lane, "doc": doc, "meta": meta,
+             "trigger": role, "kind": "shim", "params": {},
+             "run": {"id": run_id, "pipeline": doc["name"],
+                     "trigger": role, "repo": repo},
+             "started": int(time.time()), "sessions": 0,
+             "units": dict((u, {"status": "pending"}) for u in _top_units(doc)),
+             "container_pos": {}, "rounds": {}, "bounces": {},
+             "nodes_done": [], "status": "in_progress"}
+    _atomic_write_json(state_path, state)
+    return state
+
+
+def _registered_repos():
+    """The control-unit registry (bin/control.sh, one absolute path per
+    line). Raises OSError when unreadable -- the CALLER decides whether the
+    run needed it (a run with no repo-typed params never asks)."""
+    path = os.path.expanduser("~/.config/autonomy/repos")
+    with open(path, encoding="utf-8") as fh:
+        return set(ln.strip() for ln in fh if ln.strip())
+
+
+def _known_accounts():
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import accounts
+    # Accounts.list() returns dict ROWS (lib/accounts.py:384) -- set() over
+    # them would raise TypeError (Codex CP1; the plan named the class
+    # `Registry`, the real class is `Accounts` -- verified against the
+    # accounts tests). Project NAMES totally: drop any row that isn't
+    # readable as one (prevention-log #12).
+    out = set()
+    for row in accounts.Accounts().list():
+        name = row.get("name") if isinstance(row, dict) else row
+        if isinstance(name, str) and name:
+            out.add(name)
+    return out
+
+
+def check_param_existence(declared, resolved, *, known_repos, known_accounts):
+    """repo/account-typed params must name REGISTERED entities (spec S11:
+    'selects among engine-registered checkouts, validated -- never an
+    arbitrary path'). Reader failure REFUSES a run that uses the type
+    (can't verify = don't run); types not used never read the registry."""
+    types = {p["name"]: p.get("type") for p in declared
+             if isinstance(p, dict) and _is_str(p.get("name"))}
+    for name, value in resolved.items():
+        typ = types.get(name)
+        if typ == "repo":
+            try:
+                reg = known_repos()
+            except Exception as exc:
+                raise PipelineError("param %r: cannot read the repo "
+                                    "registry (%s) -- refusing" % (name, exc))
+            if value not in reg:
+                raise PipelineError("param %r: %r is not a registered "
+                                    "checkout" % (name, value))
+        elif typ == "account":
+            try:
+                known = known_accounts()
+            except Exception as exc:
+                raise PipelineError("param %r: cannot read the accounts "
+                                    "index (%s) -- refusing" % (name, exc))
+            if value not in known:
+                raise PipelineError("param %r: %r is not a known account"
+                                    % (name, value))
+
+
+def start_run_trigger(repo, trigger_name, state_path, lane="", *,
+                      known_repos=None, known_accounts=None):
+    """Start a run for a NATIVE trigger: load+validate the trigger, resolve
+    the pipeline BY NAME, resolve params (required-unset refuses HERE,
+    before a session is burned), run the repo/account existence checks,
+    write fmt-2 state. Secrets: Phase B refuses any secret param that
+    would RESOLVE -- trigger-supplied OR pipeline default (no dispatch
+    sink exists; check_refs already refuses secret REFS at validate time)
+    -- so no secret value can enter this dataflow, which IS the Phase
+    A-deferred log-redaction boundary, by construction. Deliberately NO
+    secret_lookup seam. A shim with pipeline '' never reaches this
+    function -- shims start through start_run(repo, role)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import triggers as triggers_mod
+    import roles
+    trig = triggers_mod.load_trigger(repo, trigger_name)
+    if not trig["pipeline"]:
+        raise PipelineError("trigger %r has no pipeline binding -- shim "
+                            "triggers start through start_run" % trigger_name)
+    # Event-role collision refusal at the CHOKEPOINT (Codex CP2): the
+    # enumeration refuses this too, but a start arriving another way (a
+    # manual fire marker, a direct CLI call) must hit the same wall --
+    # event roles stay on the legacy bus until event triggers land, and a
+    # same-name native run would double-dispatch that name. Config
+    # unreadable = cannot verify = don't run.
+    cfg, rc = roles._load_config(repo)
+    if rc != 0 or cfg is None:
+        raise PipelineError("config unreadable/unparseable for %s (rc %d) "
+                            "-- cannot verify trigger %r against event "
+                            "roles; refusing" % (repo, rc, trigger_name))
+    if trigger_name in set(n for (n, _ev) in roles.all_event_roles(cfg)):
+        raise PipelineError("trigger %r collides with an enabled event role "
+                            "-- event triggers land in a later phase; "
+                            "refusing (double-dispatch)" % trigger_name)
+    doc, meta = resolve_pipeline_doc(repo, trig["pipeline"])
+    declared = doc.get("params") or []
+    # A secret param that WOULD RESOLVE -- supplied by the trigger OR
+    # carrying a pipeline-saved default -- is refused outright (Codex CP1:
+    # a default would flow through secret_lookup into state['params'] on
+    # disk). Declared-but-valueless secrets are inert. Phase B therefore
+    # never passes a secret_lookup at all: no secret value can enter this
+    # dataflow, which IS the Phase A-deferred redaction boundary.
+    resolving_secrets = sorted(
+        p["name"] for p in declared
+        if isinstance(p, dict) and p.get("type") == "secret"
+        and ("default" in p or p.get("name") in trig["params"]))
+    if resolving_secrets:
+        raise PipelineError(
+            "secret param(s) %s would resolve (trigger value or pipeline "
+            "default) but Phase B has no dispatch sink for secrets (env "
+            "channel lands in Phase C) -- refusing rather than "
+            "accept-and-ignore" % ", ".join(resolving_secrets))
+    params = resolve_params(declared, trig["params"], secret_lookup=None)
+    check_param_existence(
+        declared, params,
+        known_repos=known_repos or _registered_repos,
+        known_accounts=known_accounts or _known_accounts)
+    doc = dict(doc)
+    doc["edges"] = effective_edges(doc)
+    ident = "%s--%s" % (trigger_name, lane) if lane else trigger_name
+    run_id = "%s-%s-%d" % (ident, time.strftime("%Y%m%dT%H%M%S"),
+                           os.getpid())
+    # "role": trigger_name keeps every existing state consumer -- journal,
+    # dashboard state-file glob, ledger -- working without a branch; Phase E
+    # renames the key when trust re-keys.
+    state = {"fmt": 2, "run_id": run_id,
+             "role": trigger_name, "lane": lane, "doc": doc, "meta": meta,
+             "trigger": trigger_name, "kind": "native", "params": params,
+             "run": {"id": run_id, "pipeline": doc["name"],
+                     "trigger": trigger_name, "repo": repo},
              "started": int(time.time()), "sessions": 0,
              "units": dict((u, {"status": "pending"}) for u in _top_units(doc)),
              "container_pos": {}, "rounds": {}, "bounces": {},
@@ -1374,6 +1677,45 @@ def _verdict_rel(state_path, node_id):
     return "var/autonomy-logs/%s.%s.verdict.json" % (base, node_id)
 
 
+def _node_outputs_rel(state_path, node_id):
+    """Per-NODE outputs sidecar, derived exactly like the verdict file --
+    one naming rule both sides, lane/slot-safe for free."""
+    base = os.path.basename(state_path)
+    if base.endswith(".json"):
+        base = base[:-len(".json")]
+    return "var/autonomy-logs/%s.%s.outputs.json" % (base, node_id)
+
+
+def _collect_node_outputs(state_path, state):
+    """{node_id: {name: value}} for every recorded-successful node, read
+    TOTALLY from the sidecars (read_outputs: missing/corrupt -> {}). A node
+    that wrote nothing simply has no entry -- a ref to it refuses at
+    substitute time with the Phase A 'unknown node output' error."""
+    logdir = os.path.dirname(state_path)
+    out = {}
+    for entry in state.get("nodes_done", []):
+        if entry.get("outcome") != "success":
+            continue
+        nid = entry.get("id")
+        rel = _node_outputs_rel(state_path, nid)
+        vals = read_outputs(os.path.join(logdir, os.path.basename(rel)))
+        if vals:
+            out[nid] = vals
+    return out
+
+
+_OUTPUTS_FOOTER = """<!-- pipeline:outputs -->
+A later activity reads this activity's named outputs. Before you finish,
+write a JSON object of them to %(outputs_file)s (relative to the repo
+root), e.g. {"branch": "feat/x-123"}. Downstream references
+($${nodes.%(node_id)s.output.<name>}) refuse to run if the name they need
+is missing -- write every output you produced."""
+# The $${ above is the documented prose escape: the footer is appended to the
+# brief BEFORE substitute() runs over the composed text, and a live
+# ${nodes.<this-node>...} ref would try to resolve THIS node's not-yet-written
+# outputs and refuse its own dispatch. substitute() renders it back to ${.
+
+
 def _loop_ctx(state, node, state_path):
     con = _container_of(state["doc"], node["id"])
     if con is None or con.get("kind") != "loop":
@@ -1417,6 +1759,9 @@ def _journal_append(journal_path, state):
     rec = {
         "run_id": state.get("run_id", ""),
         "role": state.get("role", ""),
+        # Additive Phase B field: evidence for Phase E's per-trigger trust
+        # re-key starts accumulating now; ledger() does NOT read it yet.
+        "trigger": state.get("trigger", ""),
         "pipeline": doc.get("name", ""),
         "pipeline_version": meta.get("from_version", 0),
         "wrapped": bool(meta.get("wrapped")),
@@ -1518,10 +1863,53 @@ def _guard_in_progress(state, state_path):
                             "refusing" % (state_path, status))
 
 
+def _substitution_ctx(state_path, state):
+    return {"params": state.get("params") or {},
+            "nodes": _collect_node_outputs(state_path, state),
+            "run": state.get("run") or {}}
+
+
+def _concrete_runs_as_check(node_id, runs_as):
+    """The SAME concrete gates _validate_runs_as applies to ref-free fields,
+    re-run on POST-substitution values. REFUSES (raises) -- never the
+    wrap_role warn-and-drop: dropping a trigger's chosen model would
+    silently change what the operator parameterised (prevention-log #3/#15;
+    the supervisor's bash-side re-validation stays as defense in depth,
+    prevention-log #6)."""
+    errs = []
+    _validate_runs_as("node %r (resolved)" % node_id, runs_as, errs)
+    for k, v in (runs_as or {}).items():
+        if _has_ref(v):
+            errs.append("node %r: runs_as.%s still carries ${ after "
+                        "substitution" % (node_id, k))
+    if errs:
+        raise PipelineError("; ".join(errs))
+
+
+def _doc_briefs_reference(pdir, doc, needle):
+    """True when any sibling brief file mentions `needle` -- total reader
+    (an unreadable brief refuses later at ITS compile; here absence of
+    evidence just means no footer)."""
+    if not pdir:
+        return False
+    for n in doc.get("nodes", []):
+        ref = n.get("brief_ref")
+        if not ref:
+            continue
+        try:
+            with open(os.path.join(pdir, ref)) as fh:
+                if needle in fh.read():
+                    return True
+        except OSError:
+            continue
+    return False
+
+
 def _prepare_step(state_path, state, uid, brief_path):
     doc = state["doc"]
     node = _node_by_id(doc, _expected_node(doc, state, uid))
     verdict_rel = _verdict_rel(state_path, node["id"])
+    ctx = _substitution_ctx(state_path, state)
     if node.get("legacy_prompt"):
         kind, prompt = "legacy", node["legacy_prompt"]
     else:
@@ -1536,12 +1924,34 @@ def _prepare_step(state_path, state, uid, brief_path):
         text = compile_brief(pdir, doc, node["id"],
                              _loop_ctx(state, node, state_path),
                              verdict_ctx=verdict_ctx)
+        # Downstream consumers of THIS node's outputs? Tell the agent where
+        # to write them (same contract as the verdict footer).
+        consumers = "${nodes.%s.output." % node["id"]
+        if consumers in json.dumps(doc) or _doc_briefs_reference(
+                pdir, doc, consumers):
+            text += "\n\n" + _OUTPUTS_FOOTER % {
+                "outputs_file": _node_outputs_rel(state_path, node["id"]),
+                "node_id": node["id"]}
+        # Brief TEXT substitution: string interpolation over the composed
+        # brief (body + footers). A stray unknown ref RAISES here -- refuse
+        # the dispatch, never send a template to an agent. Prose ${ must be
+        # escaped $${ (documented in docs/pipelines.md).
+        text = substitute(text, ctx)
         with open(brief_path, "w") as fh:
             fh.write(text)
         kind, prompt = "compiled", brief_path
+    # runs_as resolves from its TEMPLATE form in exactly ONE substitute pass
+    # (the stored doc keeps templates so a later bounce re-resolves fresh).
+    # Never substitute a runs_as value twice: the second pass would re-parse
+    # ${...} inside an already-substituted PARAM VALUE -- the injection
+    # channel the inertness argument (single-pass re.sub, Phase A PR #372)
+    # forbids. A value that still carries a literal ${ after the single
+    # pass is data; the concrete check below refuses it (never dispatched).
+    merged = {k: substitute(v, ctx)
+              for k, v in _effective_runs_as(doc, node).items()}
+    _concrete_runs_as_check(node["id"], merged)
     return {"status": "node", "unit": uid, "node": node["id"], "kind": kind,
-            "prompt": prompt, "verdict": verdict_rel,
-            "runs_as": _effective_runs_as(doc, node)}
+            "prompt": prompt, "verdict": verdict_rel, "runs_as": merged}
 
 
 def _pick(state_path, state, n, brief_path_for, journal_path):
@@ -1775,11 +2185,22 @@ def main(argv):
         print(json.dumps(doc, indent=2, sort_keys=True))
         return 0
     if cmd == "start":
-        # start <repo> <role> <state-file> [--lane <lane>]
-        opts = {"--lane": ""}
+        # start <repo> <name> <state-file> [--lane <l>] [--kind shim|native]
+        # default shim = start_run(repo, role): every pre-Phase-B caller
+        # unchanged; native = start_run_trigger (trigger-started run).
+        opts = {"--lane": "", "--kind": "shim"}
         pos = _split_opts(rest, opts)
+        if opts["--kind"] not in ("shim", "native"):
+            print("pipeline start: --kind must be shim|native",
+                  file=sys.stderr)
+            return 2
         try:
-            state = start_run(pos[0], pos[1], pos[2], lane=opts["--lane"])
+            if opts["--kind"] == "native":
+                state = start_run_trigger(pos[0], pos[1], pos[2],
+                                          lane=opts["--lane"])
+            else:
+                state = start_run(pos[0], pos[1], pos[2],
+                                  lane=opts["--lane"])
         except (IndexError, PipelineError) as exc:
             print("pipeline start: %s" % exc, file=sys.stderr)
             return 1

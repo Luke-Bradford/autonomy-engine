@@ -1433,13 +1433,19 @@ class ParamsOutputsValidationTest(unittest.TestCase):
     def test_params_not_a_list_refused(self):
         self.assertTrue(pipeline.validate_doc(self._doc(params={}), None))
 
-    def test_reference_in_field_still_refused_in_phase_a(self):
-        # HONESTY (Codex CP1): Phase A cannot substitute ${...} (dispatch is
-        # Phase B), so validate_doc must still REFUSE a ${...} in agent -- a
-        # validating doc must be a runnable doc. Acceptance lands in Phase B.
-        d = self._doc(nodes=[{"id": "a", "type": "agent_task", "brief_ref": "a.md",
+    def test_reference_in_activity_field_now_accepted(self):
+        # Phase B wired substitution into prepare, so the Phase A wholesale
+        # refusal is gone: a DECLARED param ref validates; an undeclared one
+        # is a check_refs error; concrete garbage still refuses.
+        d = self._doc(params=[{"name": "coder_agent", "type": "agent",
+                               "default": "claude-code"}],
+                      nodes=[{"id": "a", "type": "agent_task", "brief_ref": "a.md",
                               "runs_as": {"agent": "${params.coder_agent}"}}])
-        self.assertTrue(pipeline.validate_doc(d, None))          # refused for now
+        self.assertEqual(pipeline.validate_doc(d, None), [])
+        d_undeclared = self._doc(
+            nodes=[{"id": "a", "type": "agent_task", "brief_ref": "a.md",
+                    "runs_as": {"agent": "${params.coder_agent}"}}])
+        self.assertTrue(pipeline.validate_doc(d_undeclared, None))
         d2 = self._doc(nodes=[{"id": "a", "type": "agent_task", "brief_ref": "a.md",
                                "runs_as": {"agent": "bad agent!"}}])
         self.assertTrue(pipeline.validate_doc(d2, None))
@@ -1700,6 +1706,492 @@ class Cp2HonestyHardeningTest(unittest.TestCase):
                 pipeline.substitute(bad, ctx)
         # the $${ escape still passes through untouched
         self.assertEqual(pipeline.substitute("$${literal", ctx), "${literal")
+
+
+class SubstitutionWiringTest(unittest.TestCase):
+    """Drives ready_set over a hand-built fmt-2 state with ${} fields.
+    start_run_trigger lands in Task 6; state['params']/'run' default to {}
+    when absent, so every pre-existing state fixture keeps passing."""
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        self.pdir = os.path.join(self.repo, ".autonomy", "pipelines", "flow")
+        os.makedirs(self.pdir)
+        self.logdir = os.path.join(self.repo, "var", "autonomy-logs")
+        os.makedirs(self.logdir)
+        self.state = os.path.join(self.logdir, ".pipeline-run-t1.json")
+
+    def _doc(self, nodes, edges, params=None):
+        return {"name": "flow", "version": 1,
+                "params": params or [
+                    {"name": "m", "type": "model",
+                     "default": "claude-sonnet-5"},
+                    {"name": "ticket", "type": "string", "default": "AE-1"},
+                    {"name": "eff", "type": "string", "default": "high"}],
+                "caps": {"max_sessions_per_run": 8},
+                "nodes": nodes, "edges": edges}
+
+    def _write(self, doc, briefs, state_params=None, done=None, units=None):
+        with open(os.path.join(self.pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        for name, text in briefs.items():
+            with open(os.path.join(self.pdir, name), "w") as fh:
+                fh.write(text)
+        d = dict(doc)
+        d["edges"] = pipeline.effective_edges(d)
+        st = {"fmt": 2, "run_id": "t1-x-1", "role": "t1", "lane": "",
+              "doc": d,
+              "meta": {"pipeline_dir": self.pdir, "wrapped": False,
+                       "from": "flow", "from_version": 1},
+              "trigger": "t1", "kind": "native",
+              "params": state_params if state_params is not None else
+                  {"m": "claude-sonnet-5", "ticket": "AE-1", "eff": "high"},
+              "run": {"id": "t1-x-1", "pipeline": "flow", "trigger": "t1",
+                      "repo": self.repo},
+              "started": 0, "sessions": 0,
+              "units": units or dict((u, {"status": "pending"})
+                                     for u in pipeline._top_units(d)),
+              "container_pos": {}, "rounds": {}, "bounces": {},
+              "nodes_done": done or [], "status": "in_progress"}
+        with open(self.state, "w") as fh:
+            json.dump(st, fh)
+
+    def _one_node(self, brief_text, runs_as=None):
+        node = {"id": "a", "type": "pick", "brief_ref": "a.md"}
+        if runs_as:
+            node["runs_as"] = runs_as
+        self._write(self._doc([node], []), {"a.md": brief_text})
+
+    def test_validator_accepts_refs_in_activity_fields_now(self):
+        d = self._doc([{"id": "a", "type": "pick", "brief_ref": "a.md"},
+                       {"id": "b", "type": "agent_task", "brief_ref": "b.md",
+                        "runs_as": {"model": "${params.m}",
+                                    "effort": "${params.eff}"}}],
+                      [{"from": "a", "to": "b", "on": "success"}])
+        self.assertEqual(pipeline.validate_doc(d, None), [])
+
+    def test_brief_text_interpolates_params(self):
+        self._one_node("Work ${params.ticket} now")
+        steps = pipeline.ready_set(self.state, self.logdir, 1)
+        with open(steps[0]["prompt"]) as fh:
+            self.assertIn("Work AE-1 now", fh.read())
+
+    def test_runs_as_whole_value_substitution_is_typed(self):
+        self._one_node("plain", runs_as={"model": "${params.m}"})
+        steps = pipeline.ready_set(self.state, self.logdir, 1)
+        self.assertEqual(steps[0]["runs_as"]["model"], "claude-sonnet-5")
+
+    def test_bad_resolved_effort_refuses_and_leaves_unit_pending(self):
+        self._one_node("plain", runs_as={"effort": "${params.eff}"})
+        # overwrite state params with a non-effort value
+        with open(self.state) as fh:
+            st = json.load(fh)
+        st["params"]["eff"] = "not-an-effort"
+        with open(self.state, "w") as fh:
+            json.dump(st, fh)
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.ready_set(self.state, self.logdir, 1)
+        with open(self.state) as fh:
+            after = json.load(fh)
+        self.assertEqual(after["units"]["a"]["status"], "pending")
+
+    def test_upstream_output_ref_resolves_from_sidecar(self):
+        nodes = [{"id": "a", "type": "pick", "brief_ref": "a.md"},
+                 {"id": "b", "type": "agent_task", "brief_ref": "b.md"}]
+        edges = [{"from": "a", "to": "b", "on": "success"}]
+        self._write(self._doc(nodes, edges),
+                    {"a.md": "pick", "b.md": "work on ${nodes.a.output.branch}"},
+                    done=[{"id": "a", "outcome": "success", "unit": "a"}],
+                    units={"a": {"status": "success"},
+                           "b": {"status": "pending"}})
+        sidecar = os.path.join(self.logdir, ".pipeline-run-t1.a.outputs.json")
+        pipeline.write_output(sidecar, "branch", "feat/x")
+        steps = pipeline.ready_set(self.state, self.logdir, 1)
+        with open(steps[0]["prompt"]) as fh:
+            self.assertIn("work on feat/x", fh.read())
+
+    def test_missing_upstream_output_refuses(self):
+        nodes = [{"id": "a", "type": "pick", "brief_ref": "a.md"},
+                 {"id": "b", "type": "agent_task", "brief_ref": "b.md"}]
+        edges = [{"from": "a", "to": "b", "on": "success"}]
+        self._write(self._doc(nodes, edges),
+                    {"a.md": "pick", "b.md": "on ${nodes.a.output.branch}"},
+                    done=[{"id": "a", "outcome": "success", "unit": "a"}],
+                    units={"a": {"status": "success"},
+                           "b": {"status": "pending"}})
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.ready_set(self.state, self.logdir, 1)
+
+    def test_stray_unknown_ref_in_brief_refuses(self):
+        # validate_doc never reads brief BODIES, so a stray ref surfaces at
+        # prepare -- refuse the dispatch, never send a template to an agent.
+        self._one_node("do ${ghost.thing}")
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.ready_set(self.state, self.logdir, 1)
+
+    def test_escaped_literal_in_brief_passes_through(self):
+        self._one_node("cost is $${params.ticket} literally")
+        steps = pipeline.ready_set(self.state, self.logdir, 1)
+        with open(steps[0]["prompt"]) as fh:
+            self.assertIn("cost is ${params.ticket} literally", fh.read())
+
+    def test_outputs_footer_only_when_downstream_consumer_exists(self):
+        nodes = [{"id": "a", "type": "pick", "brief_ref": "a.md"},
+                 {"id": "b", "type": "agent_task", "brief_ref": "b.md"}]
+        edges = [{"from": "a", "to": "b", "on": "success"}]
+        self._write(self._doc(nodes, edges),
+                    {"a.md": "pick", "b.md": "on ${nodes.a.output.branch}"})
+        steps = pipeline.ready_set(self.state, self.logdir, 1)   # node a
+        with open(steps[0]["prompt"]) as fh:
+            text = fh.read()
+        self.assertIn("pipeline:outputs", text)
+        self.assertIn(".pipeline-run-t1.a.outputs.json", text)
+
+    def test_no_footer_without_consumer(self):
+        self._one_node("plain work")
+        steps = pipeline.ready_set(self.state, self.logdir, 1)
+        with open(steps[0]["prompt"]) as fh:
+            self.assertNotIn("pipeline:outputs", fh.read())
+
+    def test_param_value_with_ref_stays_literal_in_brief(self):
+        # THE inertness invariant carried from Phase A (single-pass re.sub):
+        # a param VALUE containing ${...} is data, never re-resolved.
+        self._one_node("t is ${params.ticket}",)
+        with open(self.state) as fh:
+            st = json.load(fh)
+        st["params"]["ticket"] = "${run.id}"
+        with open(self.state, "w") as fh:
+            json.dump(st, fh)
+        steps = pipeline.ready_set(self.state, self.logdir, 1)
+        with open(steps[0]["prompt"]) as fh:
+            text = fh.read()
+        self.assertIn("t is ${run.id}", text)          # literal, not t1-x-1
+        self.assertNotIn("t is t1-x-1", text)
+
+    def test_param_value_with_ref_in_runs_as_refused_not_resolved(self):
+        # Same invariant on the runs_as channel: a single substitute pass
+        # leaves the value's literal ${...} in place, and the concrete
+        # re-check REFUSES it -- it is never re-parsed as a reference.
+        self._one_node("plain", runs_as={"model": "${params.m}"})
+        with open(self.state) as fh:
+            st = json.load(fh)
+        st["params"]["m"] = "${run.repo}"
+        with open(self.state, "w") as fh:
+            json.dump(st, fh)
+        with self.assertRaises(pipeline.PipelineError) as cm:
+            pipeline.ready_set(self.state, self.logdir, 1)
+        # refused as leftover-${, NOT resolved into the repo path
+        self.assertNotIn(self.repo, str(cm.exception))
+
+
+class StartRunTriggerTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        self.pdir = os.path.join(self.repo, ".autonomy", "pipelines", "flow")
+        self.tdir = os.path.join(self.repo, ".autonomy", "triggers")
+        self.logdir = os.path.join(self.repo, "var", "autonomy-logs")
+        for d in (self.pdir, self.tdir, self.logdir):
+            os.makedirs(d)
+        # start_run_trigger verifies the trigger name against enabled EVENT
+        # roles (CP2: the collision gate must hold at the python chokepoint,
+        # not only in enumeration) -- the config is required context.
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("engine:\n  label: t\n")
+        self.state = os.path.join(self.logdir, ".pipeline-run-t1.json")
+        doc = {"name": "flow", "version": 1,
+               "params": [
+                   {"name": "repo", "type": "repo", "required": True},
+                   {"name": "m", "type": "model",
+                    "default": "claude-sonnet-5"},
+                   {"name": "tok", "type": "secret"}],
+               "caps": {"max_sessions_per_run": 4},
+               "nodes": [{"id": "a", "type": "pick", "brief_ref": "a.md"}],
+               "edges": []}
+        with open(os.path.join(self.pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(self.pdir, "a.md"), "w") as fh:
+            fh.write("pick work in ${params.repo}")
+
+    def _trigger(self, **params):
+        t = {"name": "t1", "pipeline": "flow",
+             "params": dict({"repo": "/reg/checkout"}, **params),
+             "firing": {"mode": "continuous"}}
+        with open(os.path.join(self.tdir, "t1.json"), "w") as fh:
+            json.dump(t, fh)
+
+    def _start(self, **kw):
+        kw.setdefault("known_repos", lambda: {"/reg/checkout"})
+        kw.setdefault("known_accounts", lambda: {"acct-a"})
+        return pipeline.start_run_trigger(self.repo, "t1", self.state, **kw)
+
+    def test_start_resolves_params_into_state(self):
+        self._trigger()
+        st = self._start()
+        self.assertEqual(st["trigger"], "t1")
+        self.assertEqual(st["kind"], "native")
+        self.assertEqual(st["params"]["m"], "claude-sonnet-5")
+        self.assertEqual(st["run"]["pipeline"], "flow")
+        self.assertEqual(st["run"]["trigger"], "t1")
+        self.assertEqual(st["run"]["repo"], self.repo)
+
+    def test_required_unset_refuses_before_any_state_write(self):
+        t = {"name": "t1", "pipeline": "flow", "params": {},
+             "firing": {"mode": "continuous"}}
+        with open(os.path.join(self.tdir, "t1.json"), "w") as fh:
+            json.dump(t, fh)
+        with self.assertRaises(pipeline.PipelineError):
+            self._start()
+        self.assertFalse(os.path.exists(self.state))
+
+    def test_unregistered_repo_param_refuses(self):
+        self._trigger()
+        with self.assertRaises(pipeline.PipelineError):
+            self._start(known_repos=lambda: {"/other"})
+
+    def test_unreadable_registry_refuses_runs_that_use_repo_type(self):
+        self._trigger()
+
+        def broken():
+            raise OSError("no registry")
+        with self.assertRaises(pipeline.PipelineError):
+            self._start(known_repos=broken)
+
+    def test_unknown_account_param_refuses(self):
+        # swap the doc's param decl to account-typed via a fresh pipeline
+        with open(os.path.join(self.pdir, "pipeline.json")) as fh:
+            doc = json.load(fh)
+        doc["params"] = [{"name": "acct", "type": "account",
+                          "required": True}]
+        with open(os.path.join(self.pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(self.pdir, "a.md"), "w") as fh:
+            fh.write("no refs")
+        t = {"name": "t1", "pipeline": "flow",
+             "params": {"acct": "ghost"},
+             "firing": {"mode": "continuous"}}
+        with open(os.path.join(self.tdir, "t1.json"), "w") as fh:
+            json.dump(t, fh)
+        with self.assertRaises(pipeline.PipelineError):
+            self._start()
+
+    def test_secret_value_supplied_refuses_and_never_echoes_value(self):
+        self._trigger(tok="hunter2-value")
+        with self.assertRaises(pipeline.PipelineError) as cm:
+            self._start()
+        self.assertNotIn("hunter2-value", str(cm.exception))
+        self.assertIn("tok", str(cm.exception))
+
+    def test_secret_with_pipeline_default_refuses_too(self):
+        # Codex CP1: a saved default would resolve through secret_lookup
+        # into state['params'] on disk -- the same refusal must cover it.
+        with open(os.path.join(self.pdir, "pipeline.json")) as fh:
+            doc = json.load(fh)
+        doc["params"] = [p if p["name"] != "tok" else
+                         {"name": "tok", "type": "secret", "default": "KEY"}
+                         for p in doc["params"]]
+        with open(os.path.join(self.pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        self._trigger()
+        with self.assertRaises(pipeline.PipelineError) as cm:
+            self._start()
+        self.assertIn("tok", str(cm.exception))
+
+    def test_declared_valueless_secret_is_inert(self):
+        self._trigger()          # 'tok' declared, no default, no value
+        st = self._start()
+        self.assertNotIn("tok", st["params"])
+
+    def test_missing_pipeline_refuses(self):
+        t = {"name": "t1", "pipeline": "ghost", "params": {},
+             "firing": {"mode": "continuous"}}
+        with open(os.path.join(self.tdir, "t1.json"), "w") as fh:
+            json.dump(t, fh)
+        with self.assertRaises(pipeline.PipelineError):
+            self._start()
+
+    def test_event_role_collision_refuses_at_start(self):
+        # CP2 defense in depth: enumeration refuses the collision, but a
+        # start that arrives another way (manual marker, direct CLI) must
+        # refuse at the chokepoint too -- event roles stay on the legacy bus.
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("roles:\n  t1:\n    enabled: true\n"
+                     "    trigger:\n      type: event\n"
+                     "      on: [pr.opened]\n")
+        self._trigger()
+        with self.assertRaises(pipeline.PipelineError) as cm:
+            self._start()
+        self.assertIn("event", str(cm.exception))
+
+    def test_config_unreadable_refuses_native_start(self):
+        # Can't verify the event-collision gate = don't run (fail-safe).
+        os.remove(os.path.join(self.repo, ".autonomy", "config.yaml"))
+        self._trigger()
+        with self.assertRaises(pipeline.PipelineError):
+            self._start()
+
+    def test_shim_state_shape_matches(self):
+        # start_run gains trigger/kind/params/run too -- ONE state shape.
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("roles:\n  coder:\n    enabled: true\n")
+        with open(os.path.join(self.repo, ".autonomy", "loop_prompt.md"),
+                  "w") as fh:
+            fh.write("loop")
+        st = pipeline.start_run(self.repo, "coder",
+                                os.path.join(self.logdir,
+                                             ".pipeline-run-coder.json"))
+        self.assertEqual(st["trigger"], "coder")
+        self.assertEqual(st["kind"], "shim")
+        self.assertEqual(st["params"], {})
+        self.assertEqual(st["run"]["trigger"], "coder")
+
+
+class SecretMessageAuditTest(unittest.TestCase):
+    def test_secret_failure_message_names_param_never_value(self):
+        # Secret error paths must carry the NAME only -- the message flows
+        # to supervisor.log via stderr (SD-8 redaction belt).
+        declared = [{"name": "tok", "type": "secret"}]
+        with self.assertRaises(pipeline.PipelineError) as cm:
+            pipeline.resolve_params(declared, {"tok": "hunter2-value"},
+                                    secret_lookup=None)
+        self.assertIn("tok", str(cm.exception))
+        self.assertNotIn("hunter2-value", str(cm.exception))
+
+
+class JournalTriggerFieldTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, True)
+        os.makedirs(os.path.join(self.repo, ".autonomy"))
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("engine:\n  label: t\n")   # no roles block -> coder wraps
+        with open(os.path.join(self.repo, ".autonomy", "loop_prompt.md"), "w") as fh:
+            fh.write("legacy prompt\n")
+        self.state = os.path.join(self.repo, "state.json")
+        self.journal = os.path.join(self.repo, "journal.jsonl")
+
+    def test_journal_line_carries_additive_trigger_field(self):
+        pipeline.start_run(self.repo, "coder", self.state)
+        pipeline.next_node(self.state, os.path.join(self.repo, "brief.md"))
+        pipeline.record_outcome(self.state, "act", "success",
+                                session_log="/x/session-1.log",
+                                journal_path=self.journal)
+        with open(self.journal) as fh:
+            rec = json.loads(fh.read().splitlines()[0])
+        self.assertEqual(rec["trigger"], "coder")
+        self.assertEqual(rec["role"], "coder")      # ledger keys stay put
+
+
+class CheckRefsTest(unittest.TestCase):
+    def _doc(self, nodes=None, edges=None, params=None):
+        d = {"name": "flow", "version": 1,
+             "caps": {"max_sessions_per_run": 16},
+             "params": params if params is not None else
+                 [{"name": "m", "type": "model", "default": "claude-sonnet-5"},
+                  {"name": "tok", "type": "secret"}],
+             "nodes": nodes or
+                 [{"id": "a", "type": "pick", "brief_ref": "a.md"},
+                  {"id": "b", "type": "agent_task", "brief_ref": "b.md"}],
+             "edges": edges if edges is not None else
+                 [{"from": "a", "to": "b", "on": "success"}]}
+        return d
+
+    def _errs(self, doc):
+        errors = []
+        pipeline.check_refs(doc, errors)
+        return errors
+
+    def test_declared_param_ref_ok(self):
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"model": "${params.m}"}
+        self.assertEqual(self._errs(d), [])
+
+    def test_undeclared_param_ref_refused(self):
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"model": "${params.ghost}"}
+        self.assertTrue(any("ghost" in e for e in self._errs(d)))
+
+    def test_secret_param_ref_refused_everywhere(self):
+        # Phase B has no safe sink for a secret (briefs/argv are files) --
+        # SD-8. The env channel lands with Phase C.
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"account": "${params.tok}"}
+        self.assertTrue(any("secret" in e for e in self._errs(d)))
+
+    def test_upstream_node_output_ref_ok(self):
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"model": "${nodes.a.output.model}"}
+        self.assertEqual(self._errs(d), [])
+
+    def test_downstream_or_sibling_node_ref_refused(self):
+        d = self._doc()
+        d["nodes"][0]["runs_as"] = {"model": "${nodes.b.output.x}"}   # downstream
+        self.assertTrue(self._errs(d))
+        d2 = self._doc(edges=[])                                       # siblings
+        d2["nodes"][0]["runs_as"] = {"model": "${nodes.b.output.x}"}
+        self.assertTrue(self._errs(d2))
+
+    def test_self_ref_refused(self):
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"model": "${nodes.b.output.x}"}
+        self.assertTrue(self._errs(d))
+
+    def test_unknown_node_ref_refused(self):
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"model": "${nodes.ghost.output.x}"}
+        self.assertTrue(self._errs(d))
+
+    def test_run_fields_closed_set(self):
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"model": "${run.id}"}
+        self.assertEqual(self._errs(d), [])
+        d["nodes"][1]["runs_as"] = {"model": "${run.hostname}"}
+        self.assertTrue(self._errs(d))
+
+    def test_function_allowlist_and_arity_static(self):
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"model": "${default(params.m, 'x')}"}
+        self.assertEqual(self._errs(d), [])
+        d["nodes"][1]["runs_as"] = {"model": "${danger(params.m)}"}
+        self.assertTrue(self._errs(d))
+        d["nodes"][1]["runs_as"] = {"model": "${slug()}"}
+        self.assertTrue(self._errs(d))
+
+    def test_brief_ref_and_legacy_prompt_stay_ref_free(self):
+        d = self._doc(nodes=[{"id": "a", "type": "pick",
+                              "brief_ref": "${params.m}.md"}], edges=[])
+        self.assertTrue(self._errs(d))
+        d2 = self._doc(nodes=[{"id": "a", "type": "agent_task",
+                               "legacy_prompt": "${params.m}"}], edges=[])
+        self.assertTrue(self._errs(d2))
+
+    def test_malformed_body_refused(self):
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"model": "${params.m"}      # unterminated
+        self.assertTrue(self._errs(d))
+
+    def test_escaped_literal_ignored(self):
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"model": "$${params.m}"}
+        # An escaped literal is prose, not a ref -- but runs_as.model with a
+        # literal '${' still fails the CONCRETE model check at prepare time;
+        # statically it is not a reference error.
+        self.assertEqual([e for e in self._errs(d) if "reference" in e], [])
+
+    def test_scalar_block_shapes_never_crash_the_checker(self):
+        # Review round 1 (PR #375): check_refs is the totality boundary for
+        # its own scan -- a scalar where a list belongs (children: true,
+        # params: 5, nodes: 5, containers: 5) must degrade to the SHAPE
+        # checks' refusal, never TypeError out of the validator.
+        for bad in ({"containers": [{"id": "c", "children": True}]},
+                    {"containers": [{"id": "c", "children": 5}]},
+                    {"params": 5}, {"nodes": 5}, {"containers": 5}):
+            d = self._doc()
+            d.update(bad)
+            self.assertTrue(pipeline.validate_doc(d, None))   # errors, no crash
 
 
 if __name__ == "__main__":
