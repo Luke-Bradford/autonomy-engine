@@ -404,6 +404,29 @@ class CliTest(unittest.TestCase):
         rc, _, _ = self._run("frobnicate", self.repo)
         self.assertEqual(rc, 2)
 
+    def test_manual_lists_only_gated_manual_triggers(self):
+        # The manual list is the DISPATCH gate for fire markers (CP2): it
+        # comes from enumerate_triggers, so validity/collision/lane/enabled
+        # gating is inherited -- never a bare load_trigger.
+        self._write("push-now", _trig(name="push-now",
+                                      firing={"mode": "manual"}))
+        self._write("always-on", _trig(name="always-on"))
+        rc, out, _ = self._run("manual", self.repo)
+        self.assertEqual(rc, 0)
+        self.assertIn("push-now\tskip\t1\n", out)
+        self.assertNotIn("always-on", out)
+
+    def test_manual_excludes_event_colliding_trigger(self):
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("roles:\n  qa:\n    enabled: true\n"
+                     "    trigger:\n      type: event\n"
+                     "      on: [pr.opened]\n")
+        self._write("qa", _trig(name="qa", firing={"mode": "manual"}))
+        rc, out, _ = self._run("manual", self.repo)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("qa\t", out)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -327,6 +327,27 @@ def main(argv):
                 print("%s\t%s\t%s" % (t["name"], t["firing"]["schedule"],
                                       t["kind"]))
         return 0
+    if cmd == "manual":
+        # The manual-fire DISPATCH gate (Codex CP2): derived from
+        # enumerate_triggers so validity / event-role collision / lane /
+        # enabled gating is inherited -- a bare load_trigger (show) would
+        # bypass the collision refusal that only enumeration knows about.
+        if len(pos) != 1:
+            print("usage: triggers.py manual <repo> [--lane <l>]",
+                  file=sys.stderr)
+            return 2
+        try:
+            trigs, warns = enumerate_triggers(pos[0], lane)
+        except PipelineError as exc:
+            print("triggers manual: %s" % exc, file=sys.stderr)
+            return 1
+        for w in warns:
+            print("WARN %s" % w, file=sys.stderr)
+        for t in trigs:
+            if t["firing"]["mode"] == "manual":
+                c = t["concurrency"]
+                print("%s\t%s\t%d" % (t["name"], c["policy"], c["max"]))
+        return 0
     if cmd == "show":
         if len(pos) != 2:
             print("usage: triggers.py show <repo> <name>", file=sys.stderr)

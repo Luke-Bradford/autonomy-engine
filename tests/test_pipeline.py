@@ -1893,6 +1893,12 @@ class StartRunTriggerTest(unittest.TestCase):
         self.logdir = os.path.join(self.repo, "var", "autonomy-logs")
         for d in (self.pdir, self.tdir, self.logdir):
             os.makedirs(d)
+        # start_run_trigger verifies the trigger name against enabled EVENT
+        # roles (CP2: the collision gate must hold at the python chokepoint,
+        # not only in enumeration) -- the config is required context.
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("engine:\n  label: t\n")
         self.state = os.path.join(self.logdir, ".pipeline-run-t1.json")
         doc = {"name": "flow", "version": 1,
                "params": [
@@ -2002,6 +2008,27 @@ class StartRunTriggerTest(unittest.TestCase):
              "firing": {"mode": "continuous"}}
         with open(os.path.join(self.tdir, "t1.json"), "w") as fh:
             json.dump(t, fh)
+        with self.assertRaises(pipeline.PipelineError):
+            self._start()
+
+    def test_event_role_collision_refuses_at_start(self):
+        # CP2 defense in depth: enumeration refuses the collision, but a
+        # start that arrives another way (manual marker, direct CLI) must
+        # refuse at the chokepoint too -- event roles stay on the legacy bus.
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("roles:\n  t1:\n    enabled: true\n"
+                     "    trigger:\n      type: event\n"
+                     "      on: [pr.opened]\n")
+        self._trigger()
+        with self.assertRaises(pipeline.PipelineError) as cm:
+            self._start()
+        self.assertIn("event", str(cm.exception))
+
+    def test_config_unreadable_refuses_native_start(self):
+        # Can't verify the event-collision gate = don't run (fail-safe).
+        os.remove(os.path.join(self.repo, ".autonomy", "config.yaml"))
+        self._trigger()
         with self.assertRaises(pipeline.PipelineError):
             self._start()
 

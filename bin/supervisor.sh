@@ -879,6 +879,47 @@ trigger_kind_of()   { _trig_field_of "$1" KIND; }
 trigger_policy_of() { _trig_field_of "$1" POLICY; }
 trigger_max_of()    { _trig_field_of "$1" MAX; }
 
+_trig_enumerated() {   # rc 0 iff $1 is in this tick's TRIG_* arrays
+  local i=0
+  while [ "$i" -lt "${#TRIG_NAME[@]}" ]; do
+    [ "${TRIG_NAME[i]}" = "$1" ] && return 0
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# Kind recorded in an in-flight run's own state file (Codex CP2): guessing
+# shim for a token absent from enumeration would route a native run whose
+# trigger broke mid-run through legacy role dispatch -- the exact fallback
+# the cutover forbids. The state file is engine-written and already carries
+# kind; a pre-Phase-B state (no key) is genuinely shim. rc 1 = unreadable/
+# corrupt state -- the caller skips the token this tick (state preserved).
+state_kind_of() {   # $1=name $2=slot
+  local f
+  f="$(pipeline_state_file "$1" "$2")"
+  [ -f "$f" ] || { printf 'shim'; return 0; }   # gone mid-tick: nothing runs
+  python3 -c '
+import json, sys
+try:
+    st = json.load(open(sys.argv[1]))
+    k = st.get("kind", "shim")
+except Exception:
+    sys.exit(1)
+if k not in ("shim", "native"):
+    sys.exit(1)
+print(k)' "$f" 2>>"$SUPLOG"
+}
+
+# The main loop resolves a selected token's kind here: this tick's
+# enumeration when the trigger is in it, else the run's OWN state file.
+dispatch_kind_of() {   # $1=name $2=slot; rc 1 = cannot determine (skip)
+  if _trig_enumerated "$1"; then
+    trigger_kind_of "$1"
+    return 0
+  fi
+  state_kind_of "$1" "$2"
+}
+
 _trig_field_of() {
   local name="$1" field="$2" i=0
   while [ "$i" -lt "${#TRIG_NAME[@]}" ]; do
@@ -892,10 +933,11 @@ _trig_field_of() {
     fi
     i=$((i + 1))
   done
-  # Not in this tick's enumeration: an in-flight token for a trigger that
-  # was disabled/removed mid-run. Advance-only defaults -- kind falls back
-  # to shim ONLY for state files that predate the cutover; refusing here
-  # would strand a live run (the cutover parity suite pins this).
+  # Not in this tick's enumeration: conservative defaults (skip/1). The
+  # main loop never trusts the KIND default for an in-flight token -- it
+  # reads the run's own state file via dispatch_kind_of (Codex CP2: a shim
+  # guess would route a native run whose trigger broke mid-run through
+  # legacy role dispatch, the fallback the cutover forbids).
   case "$field" in KIND) printf 'shim' ;; POLICY) printf 'skip' ;; MAX) printf '1' ;; esac
 }
 
@@ -1033,14 +1075,22 @@ trigger_start_token_for() {   # $1=name; show-backed capacity gate, rc 1 = full
 }
 
 # Operator 'run now' markers for MANUAL triggers. Marker name = trigger
-# name. triggers.py show is the identity check (MODE/ENABLED/POLICY/MAX come
-# from the file, not from the dispatch arrays -- manual triggers are not in
-# the continuous enumeration). Capture-then-case, never producer|grep
-# (prevention-log #7/#11).
+# name. The DISPATCH gate is `triggers.py manual` -- derived from
+# enumerate_triggers, so validity / event-role collision / lane / enabled
+# gating is inherited (Codex CP2: a bare `show` reads the trigger file with
+# no config context and would bypass the event-collision refusal). `show`
+# decides only keep-vs-remove for a marker naming a currently-DISABLED
+# manual trigger (kept until enabled); it never gates a fire.
+# Capture-then-case, never producer|grep (prevention-log #7/#11).
 resolve_manual_fires() {
-  local d f name out line mode enabled policy max slot tok
+  local d f name manual_list out line mode enabled mname mpolicy mmax
+  local policy max slot tok
   d="$(trigger_ctl_dir fire)"
   [ -d "$d" ] || return 0
+  manual_list="$(_triggers_enumerate manual "$AUTONOMY_TARGET_REPO")" || {
+    log "WARN trigger-ctl: manual enumeration failed -- fire markers kept this tick"
+    return 0
+  }
   for f in "$d"/*; do
     [ -e "$f" ] || continue
     name="$(basename "$f")"
@@ -1049,25 +1099,29 @@ resolve_manual_fires() {
         log "WARN trigger-ctl: fire marker with invalid name -- removing"
         rm -f "$f" 2>>"$SUPLOG" || true; continue ;;
     esac
-    out="$(python3 "$ENGINE_HOME/lib/triggers.py" show "$AUTONOMY_TARGET_REPO" "$name" 2>>"$SUPLOG" || true)"
-    # Exact KEY=VALUE line parse (Codex CP1; prevention-log #1) -- this gate
-    # stands between an operator marker and a dispatch.
-    mode=""; enabled=""; policy=""; max=""
-    while IFS= read -r line; do
-      case "$line" in *=*) ;; *) continue ;; esac
-      case "${line%%=*}" in
-        MODE)    mode="${line#*=}" ;;
-        ENABLED) enabled="${line#*=}" ;;
-        POLICY)  policy="${line#*=}" ;;
-        MAX)     max="${line#*=}" ;;
-      esac
-    done <<<"$out"
-    if [ "$mode" != "manual" ]; then
-      log "WARN trigger-ctl: '$name' is not a valid manual trigger -- removing its fire marker"
-      rm -f "$f" 2>>"$SUPLOG" || true; continue
-    fi
-    if [ "$enabled" != "true" ]; then
-      log "NOTE trigger '$name' is disabled -- fire marker kept until enabled"
+    policy=""; max=""
+    while IFS=$'\t' read -r mname mpolicy mmax; do
+      if [ "$mname" = "$name" ]; then policy="$mpolicy"; max="$mmax"; fi
+    done <<<"$manual_list"
+    if [ -z "$policy" ]; then
+      # Not a dispatchable manual trigger this tick: keep the marker ONLY
+      # for the disabled-manual case (resumes on re-enable); anything else
+      # (non-manual, refused, colliding, unknown) is removed loudly.
+      out="$(python3 "$ENGINE_HOME/lib/triggers.py" show "$AUTONOMY_TARGET_REPO" "$name" 2>>"$SUPLOG" || true)"
+      mode=""; enabled=""
+      while IFS= read -r line; do
+        case "$line" in *=*) ;; *) continue ;; esac
+        case "${line%%=*}" in
+          MODE)    mode="${line#*=}" ;;
+          ENABLED) enabled="${line#*=}" ;;
+        esac
+      done <<<"$out"
+      if [ "$mode" = "manual" ] && [ "$enabled" = "false" ]; then
+        log "NOTE trigger '$name' is disabled -- fire marker kept until enabled"
+      else
+        log "WARN trigger-ctl: '$name' is not a dispatchable manual trigger -- removing its fire marker"
+        rm -f "$f" 2>>"$SUPLOG" || true
+      fi
       continue
     fi
     [ "$policy" = "parallel" ] || max=1
@@ -1101,7 +1155,15 @@ resolve_queued_fires() {
       rm -f "$f" 2>>"$SUPLOG" || true; continue ;; esac
     tok="$(trigger_free_slot "$name" 1 >/dev/null && printf '%s' "$name")" || continue
     IFS= read -r kind <"$f" 2>/dev/null || kind=""
-    case "$kind" in shim|native) ;; *) kind="shim" ;; esac
+    case "$kind" in
+      shim|native) ;;
+      *)
+        # Corrupt marker body (Codex CP2): guessing shim could route a
+        # native trigger through legacy role dispatch. Drop the deferred
+        # fire loudly -- under-fire, the cron corrupt-marker discipline.
+        log "WARN trigger-ctl: queued marker for '$name' has invalid kind -- removing (fire lost, next schedule re-queues)"
+        rm -f "$f" 2>>"$SUPLOG" || true; continue ;;
+    esac
     if run_session "$tok" "$kind"; then
       rm -f "$f" 2>>"$SUPLOG" || true
     fi
@@ -2387,7 +2449,14 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     role="$(select_role "$role_rr" $dispatch_list)"
     role_rr=$(( (role_rr + 1) % 86400 ))
     name="$(token_name "$role")" || { log "WARN bad dispatch token '$role' -- skipping tick"; sleep "$ERR_BACKOFF_START"; continue; }
-    kind="$(trigger_kind_of "$name")"
+    # Enumerated trigger -> this tick's kind; in-flight-only token -> the
+    # kind its OWN state file recorded (Codex CP2: guessing shim here would
+    # route a native run whose trigger broke mid-run through legacy role
+    # dispatch). Undeterminable = skip the token this tick, state preserved.
+    if ! kind="$(dispatch_kind_of "$name" "$(token_slot "$role")")"; then
+      log "WARN cannot determine kind for in-flight '$role' (state unreadable) -- skipping this tick"
+      sleep "$ERR_BACKOFF_START"; continue
+    fi
 
     # #318: fingerprint gate -- skip the session (zero LLM tokens) ONLY when
     # the observable world exactly matches state a previous COMPLETED session

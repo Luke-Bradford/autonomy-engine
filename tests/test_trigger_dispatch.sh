@@ -195,7 +195,8 @@ check "queued marker consumed"      "1" "$([ -f "$VARDIR/trigger-ctl/queued/push
 : >"$RS_FILE"
 printf 'wat\n' >"$VARDIR/trigger-ctl/queued/push-now"
 resolve_queued_fires
-check "junk kind clamps to shim"    " push-now:shim" "$(rs_calls)"
+check "junk kind refused, no run"   "" "$(rs_calls)"
+check "junk queued marker removed"  "1" "$([ -f "$VARDIR/trigger-ctl/queued/push-now" ] && echo 0 || echo 1)"
 : >"$RS_FILE"
 printf 'native\n' >"$VARDIR/trigger-ctl/queued/push-now"
 : >"$LOGDIR/.pipeline-run-push-now.json"
@@ -223,6 +224,31 @@ check "cron at cap queues not fires" "" "$(rs_calls)"
 check "queued marker written"       "native" "$(cat "$VARDIR/trigger-ctl/queued/nightly" 2>/dev/null)"
 rm -f "$LOGDIR"/.pipeline-run-*.json "$VARDIR/trigger-ctl/queued/nightly" "$VARDIR/cron/nightly.last_fire"
 rm -f "$repo/.autonomy/triggers"/*.json
+
+# --- dispatch_kind_of: kind comes from the run's OWN state, never a guess ------
+printf '{"fmt": 2, "doc": {}, "kind": "native", "status": "in_progress"}' \
+  >"$LOGDIR/.pipeline-run-natv.json"
+check "state kind native"           "native" "$(state_kind_of natv 0)"
+printf '{"fmt": 2, "doc": {}, "status": "in_progress"}' \
+  >"$LOGDIR/.pipeline-run-oldstate.json"
+check "pre-phaseB state kind shim"  "shim"   "$(state_kind_of oldstate 0)"
+printf 'not json' >"$LOGDIR/.pipeline-run-corrupt.json"
+check "corrupt state kind rc1"      "1"      "$(state_kind_of corrupt 0 >/dev/null 2>&1; echo $?)"
+printf '{"fmt": 2, "doc": {}, "kind": "wat"}' >"$LOGDIR/.pipeline-run-badkind.json"
+check "junk state kind rc1"         "1"      "$(state_kind_of badkind 0 >/dev/null 2>&1; echo $?)"
+_triggers_enumerate() { printf 'listed\tnative\tskip\t1\n'; }
+resolve_dispatch_triggers >/dev/null
+check "dispatch kind enumerated"    "native" "$(dispatch_kind_of listed 0)"
+check "dispatch kind from state"    "native" "$(dispatch_kind_of natv 0)"
+# restore the REAL seam (unset -f would delete the sourced function too)
+_triggers_enumerate() {
+  if [ -n "${AUTONOMY_LANE:-}" ]; then
+    python3 "$ENGINE_HOME/lib/triggers.py" "$@" --lane "$AUTONOMY_LANE" 2>>"$SUPLOG"
+  else
+    python3 "$ENGINE_HOME/lib/triggers.py" "$@" 2>>"$SUPLOG"
+  fi
+}
+rm -f "$LOGDIR"/.pipeline-run-*.json
 
 # --- Task 9: the seven cutover parity invariants -------------------------------
 # 1. Enumeration parity: a roles-only config enumerates exactly
@@ -293,6 +319,7 @@ check "empty board inflight-only"   "1" "$(grep -c 'dispatch_list="\$inflight_li
 check "event path stays on roles"   "1" "$(grep -c 'resolve_event_wakes "\$session_ran"' "$sup")"
 check "fp gate gets bare name"      "1" "$(grep -c 'fingerprint_gate "\$name"' "$sup")"
 check "run_session gets kind"       "1" "$(grep -c 'run_session "\$role" "\$kind"; outcome=' "$sup")"
+check "loop kind via state not guess" "1" "$(grep -c 'kind="\$(dispatch_kind_of "\$name"' "$sup")"
 check "no coder fallback left"      "0" "$(grep -c 'dispatch_list="coder"' "$sup")"
 check "error arm records backoff"   "1" "$(grep -c 'trigger_record_error_backoff "\$name"' "$sup")"
 check "clean arm clears backoff"    "1" "$(grep -c 'trigger_clear_backoff "\$name"' "$sup")"

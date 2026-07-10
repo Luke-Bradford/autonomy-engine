@@ -1395,10 +1395,26 @@ def start_run_trigger(repo, trigger_name, state_path, lane="", *,
     function -- shims start through start_run(repo, role)."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import triggers as triggers_mod
+    import roles
     trig = triggers_mod.load_trigger(repo, trigger_name)
     if not trig["pipeline"]:
         raise PipelineError("trigger %r has no pipeline binding -- shim "
                             "triggers start through start_run" % trigger_name)
+    # Event-role collision refusal at the CHOKEPOINT (Codex CP2): the
+    # enumeration refuses this too, but a start arriving another way (a
+    # manual fire marker, a direct CLI call) must hit the same wall --
+    # event roles stay on the legacy bus until event triggers land, and a
+    # same-name native run would double-dispatch that name. Config
+    # unreadable = cannot verify = don't run.
+    cfg, rc = roles._load_config(repo)
+    if rc != 0 or cfg is None:
+        raise PipelineError("config unreadable/unparseable for %s (rc %d) "
+                            "-- cannot verify trigger %r against event "
+                            "roles; refusing" % (repo, rc, trigger_name))
+    if trigger_name in set(n for (n, _ev) in roles.all_event_roles(cfg)):
+        raise PipelineError("trigger %r collides with an enabled event role "
+                            "-- event triggers land in a later phase; "
+                            "refusing (double-dispatch)" % trigger_name)
     doc, meta = resolve_pipeline_doc(repo, trig["pipeline"])
     declared = doc.get("params") or []
     # A secret param that WOULD RESOLVE -- supplied by the trigger OR
