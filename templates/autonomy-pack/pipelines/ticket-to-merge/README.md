@@ -32,6 +32,11 @@ Notes:
 - Nodes share state via git/GitHub (the pushed branch, the ticket's
   comment trail, the PR) — the engine does not carry payloads between
   node sessions.
+- A `concurrency: {policy: parallel}` trigger can run SEVERAL runs of this
+  pipeline at once. The engine does not claim work items: the PICK brief
+  must claim its ticket (assign/label at pick time) so overlapping runs
+  never grab the same one — the SD-36 precedent (races are the briefs'
+  concern, never silently absorbed by the engine).
 - Merging is NEVER a pipeline node's job: the repo merge gate
   (safe_merge + the configured strategy) owns it.
 - `trigger_default` is informational (the binding role's own `trigger:`

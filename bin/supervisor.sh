@@ -896,6 +896,199 @@ _trig_field_of() {
   case "$field" in KIND) printf 'shim' ;; POLICY) printf 'skip' ;; MAX) printf '1' ;; esac
 }
 
+# --- per-trigger lifecycle + concurrency (Phase B, #374) ----------------------
+# Markers under $VARDIR/trigger-ctl/: fire/ + stop/ are OPERATOR-written and
+# supervisor-consumed; queued/ + backoff/ are supervisor-owned (SD-7's
+# sole-writer discipline generalised). Every name from disk is charset-gated
+# before any path join (prevention-log #6). All readers tolerate a missing
+# dir; all writers are best-effort (a marker hiccup never crashes the loop).
+trigger_ctl_dir() { printf '%s/trigger-ctl/%s' "$VARDIR" "$1"; }
+
+_trigger_ctl_path() {   # $1=kind $2=name; rc 1 on a bad name
+  case "$2" in *[!A-Za-z0-9._-]*|"") return 1 ;; esac
+  printf '%s/%s' "$(trigger_ctl_dir "$1")" "$2"
+}
+
+# Per-trigger HARD STOP: no new fires AND in-flight tokens filtered out of
+# dispatch (state preserved; removing the sentinel resumes mid-run).
+# enabled:false in the trigger file is the PAUSE (graceful drain) -- it only
+# stops NEW fires because enumeration excludes it while in-flight advances.
+trigger_stopped() {
+  local p
+  p="$(_trigger_ctl_path stop "$1")" || return 1
+  [ -f "$p" ]
+}
+
+trigger_backoff_until() {   # prints next-eligible epoch; 0 = eligible now
+  local p epoch
+  p="$(_trigger_ctl_path backoff "$1")" || return 1
+  if [ ! -f "$p" ]; then printf '0'; return 0; fi
+  IFS=$'\t' read -r epoch _ <"$p" 2>/dev/null || epoch=""
+  case "$epoch" in *[!0-9]*|"") printf '0' ;; *) printf '%s' "$epoch" ;; esac
+}
+
+trigger_record_error_backoff() {
+  local p count=0 wait i=1
+  p="$(_trigger_ctl_path backoff "$1")" || return 0
+  mkdir -p "$(trigger_ctl_dir backoff)" 2>>"$SUPLOG" || return 0
+  if [ -f "$p" ]; then IFS=$'\t' read -r _ count <"$p" 2>/dev/null || count=0; fi
+  case "$count" in *[!0-9]*|"") count=0 ;; esac
+  count=$((count + 1))
+  wait=$ERR_BACKOFF_START
+  while [ "$i" -lt "$count" ] && [ "$wait" -lt "$ERR_BACKOFF_MAX" ]; do
+    wait=$((wait * 2)); i=$((i + 1))
+  done
+  [ "$wait" -gt "$ERR_BACKOFF_MAX" ] && wait=$ERR_BACKOFF_MAX
+  printf '%s\t%s\n' "$(( $(date -u +%s) + wait ))" "$count" >"$p" 2>>"$SUPLOG" || true
+}
+
+trigger_clear_backoff() {
+  local p
+  p="$(_trigger_ctl_path backoff "$1")" || return 0
+  rm -f "$p" 2>>"$SUPLOG" || true
+}
+
+trigger_inflight_count() {
+  local name="$1" tok n=0 tn
+  while IFS= read -r tok; do
+    [ -n "$tok" ] || continue
+    tn="$(token_name "$tok")" || continue
+    [ "$tn" = "$name" ] && n=$((n + 1))
+  done <<<"$(inflight_tokens)"
+  printf '%s' "$n"
+}
+
+trigger_free_slot() {   # $1=name $2=max; prints the first free slot, rc 1 = full
+  local name="$1" max="$2" slot=0
+  while [ "$slot" -lt "$max" ]; do
+    if [ ! -f "$(pipeline_state_file "$name" "$slot")" ]; then
+      printf '%s' "$slot"; return 0
+    fi
+    slot=$((slot + 1))
+  done
+  return 1
+}
+
+# Capacity-aware start token for THIS tick's enumeration (TRIG_* arrays).
+# Policy skip/queue clamp to one run; parallel opens slots up to max.
+# rc 1 = at capacity (skip logs the NOTE; queue's marker write is the cron
+# resolver's job -- it knows the fire actually happened).
+trigger_start_token() {
+  local name="$1" policy max slot
+  policy="$(trigger_policy_of "$name")"; max="$(trigger_max_of "$name")"
+  [ "$policy" = "parallel" ] || max=1
+  slot="$(trigger_free_slot "$name" "$max")" || return 1
+  if [ "$slot" = "0" ]; then printf '%s' "$name"; else printf '%s@%s' "$name" "$slot"; fi
+}
+
+# POLICY/MAX for a trigger NOT in the continuous dispatch arrays (manual +
+# schedule triggers): a `triggers.py show` read, defaulting to skip/1 on any
+# failure -- the safe direction (never opens extra slots on a misread).
+trigger_show_policy() {
+  local name="$1" out line policy=""
+  out="$(python3 "$ENGINE_HOME/lib/triggers.py" show "$AUTONOMY_TARGET_REPO" "$name" 2>>"$SUPLOG" || true)"
+  while IFS= read -r line; do
+    case "$line" in POLICY=*) policy="${line#POLICY=}" ;; esac
+  done <<<"$out"
+  case "$policy" in queue|skip|parallel) printf '%s' "$policy" ;; *) printf 'skip' ;; esac
+}
+
+trigger_start_token_for() {   # $1=name; show-backed capacity gate, rc 1 = full
+  local name="$1" out line policy="" max="" slot
+  out="$(python3 "$ENGINE_HOME/lib/triggers.py" show "$AUTONOMY_TARGET_REPO" "$name" 2>>"$SUPLOG" || true)"
+  # Exact KEY=VALUE line parse (Codex CP1: substring matching on the whole
+  # blob could match inside another value once fields grow). Requires the
+  # '=' separator per line -- prevention-log #1's parser rule.
+  while IFS= read -r line; do
+    case "$line" in *=*) ;; *) continue ;; esac
+    case "${line%%=*}" in
+      POLICY) policy="${line#*=}" ;;
+      MAX)    max="${line#*=}" ;;
+    esac
+  done <<<"$out"
+  [ "$policy" = "parallel" ] || max=1
+  case "$max" in *[!0-9]*|"") max=1 ;; esac
+  slot="$(trigger_free_slot "$name" "$max")" || return 1
+  if [ "$slot" = "0" ]; then printf '%s' "$name"; else printf '%s@%s' "$name" "$slot"; fi
+}
+
+# Operator 'run now' markers for MANUAL triggers. Marker name = trigger
+# name. triggers.py show is the identity check (MODE/ENABLED/POLICY/MAX come
+# from the file, not from the dispatch arrays -- manual triggers are not in
+# the continuous enumeration). Capture-then-case, never producer|grep
+# (prevention-log #7/#11).
+resolve_manual_fires() {
+  local d f name out line mode enabled policy max slot tok
+  d="$(trigger_ctl_dir fire)"
+  [ -d "$d" ] || return 0
+  for f in "$d"/*; do
+    [ -e "$f" ] || continue
+    name="$(basename "$f")"
+    case "$name" in
+      *[!A-Za-z0-9._-]*|"")
+        log "WARN trigger-ctl: fire marker with invalid name -- removing"
+        rm -f "$f" 2>>"$SUPLOG" || true; continue ;;
+    esac
+    out="$(python3 "$ENGINE_HOME/lib/triggers.py" show "$AUTONOMY_TARGET_REPO" "$name" 2>>"$SUPLOG" || true)"
+    # Exact KEY=VALUE line parse (Codex CP1; prevention-log #1) -- this gate
+    # stands between an operator marker and a dispatch.
+    mode=""; enabled=""; policy=""; max=""
+    while IFS= read -r line; do
+      case "$line" in *=*) ;; *) continue ;; esac
+      case "${line%%=*}" in
+        MODE)    mode="${line#*=}" ;;
+        ENABLED) enabled="${line#*=}" ;;
+        POLICY)  policy="${line#*=}" ;;
+        MAX)     max="${line#*=}" ;;
+      esac
+    done <<<"$out"
+    if [ "$mode" != "manual" ]; then
+      log "WARN trigger-ctl: '$name' is not a valid manual trigger -- removing its fire marker"
+      rm -f "$f" 2>>"$SUPLOG" || true; continue
+    fi
+    if [ "$enabled" != "true" ]; then
+      log "NOTE trigger '$name' is disabled -- fire marker kept until enabled"
+      continue
+    fi
+    [ "$policy" = "parallel" ] || max=1
+    case "$max" in *[!0-9]*|"") max=1 ;; esac
+    if ! slot="$(trigger_free_slot "$name" "$max")"; then
+      log "NOTE trigger '$name': at capacity -- manual fire deferred (marker kept)"
+      continue
+    fi
+    if [ "$slot" = "0" ]; then tok="$name"; else tok="$name@$slot"; fi
+    if run_session "$tok" native; then
+      rm -f "$f" 2>>"$SUPLOG" || true
+    else
+      log "WARN manual fire for '$name' rc=$? -- marker kept for retry"
+    fi
+  done
+  return 0
+}
+
+# Deferred schedule fires (policy queue, depth 1). The marker BODY holds the
+# trigger's kind (written by resolve_trigger_cron_due at fire time -- queued
+# triggers are not in the continuous dispatch arrays, so the kind must
+# travel with the marker).
+resolve_queued_fires() {
+  local d f name kind tok
+  d="$(trigger_ctl_dir queued)"
+  [ -d "$d" ] || return 0
+  for f in "$d"/*; do
+    [ -e "$f" ] || continue
+    name="$(basename "$f")"
+    case "$name" in *[!A-Za-z0-9._-]*|"")
+      rm -f "$f" 2>>"$SUPLOG" || true; continue ;; esac
+    tok="$(trigger_free_slot "$name" 1 >/dev/null && printf '%s' "$name")" || continue
+    IFS= read -r kind <"$f" 2>/dev/null || kind=""
+    case "$kind" in shim|native) ;; *) kind="shim" ;; esac
+    if run_session "$tok" "$kind"; then
+      rm -f "$f" 2>>"$SUPLOG" || true
+    fi
+  done
+  return 0
+}
+
 # --- cron scheduler (W1, issue #85) -----------------------------------------
 # Enumerate the target repo's cron roles as NAME<TAB>SCHEDULE lines (roles.py
 # cron contract; schedules never contain a tab). Behind a function so tests can
@@ -986,6 +1179,66 @@ resolve_cron_due() {
     if _cron_write_marker "$marker" "$now"; then
       log "cron: role '$name' due (schedule '$schedule') -- firing"
       run_session "$name" || log "cron: role '$name' session rc=$? (see supervisor.log)"
+    else
+      log "WARN cron: cannot advance marker for '$name' -- skipping fire this tick (avoids re-fire)"
+    fi
+  done
+  return 0
+}
+
+# The trigger-model twin of resolve_cron_due (Phase B, #374): same marker
+# files ($VARDIR/cron/<name>.last_fire), same first-sight-no-fire, same
+# corrupt-marker reinitialise, same advance-before-fire ordering -- derived
+# mechanically so shim cron roles keep their exact firing semantics across
+# the cutover. Differences: the enumeration is `triggers.py cron` (three TAB
+# fields: name, schedule, kind) and the fire is capacity-gated by the
+# trigger's concurrency policy (queue writes ONE deferred marker; skip warns).
+resolve_trigger_cron_due() {
+  local enum now name schedule kind marker last due tok qd
+  enum="$(_triggers_enumerate cron "$AUTONOMY_TARGET_REPO")" || return 0
+  [ -n "$enum" ] || return 0
+  now="$(date +%s)"
+  mkdir -p "$VARDIR/cron" 2>/dev/null || {
+    log "WARN cron: cannot create $VARDIR/cron -- skipping cron this tick"; return 0; }
+  printf '%s\n' "$enum" | while IFS="$(printf '\t')" read -r name schedule kind; do
+    [ -n "$name" ] || continue
+    if ! _role_name_path_safe "$name"; then
+      log "WARN cron: trigger name '$name' has invalid path chars -- ignored"
+      continue
+    fi
+    case "$kind" in shim|native) ;; *) kind="shim" ;; esac
+    marker="$VARDIR/cron/$name.last_fire"
+    if [ ! -f "$marker" ]; then
+      _cron_write_marker "$marker" "$now" \
+        || log "WARN cron: cannot initialise marker for '$name'"
+      continue
+    fi
+    last="$(cat "$marker" 2>/dev/null)"
+    case "$last" in
+      ''|*[!0-9]*)
+        log "WARN cron: marker for '$name' unreadable/corrupt -- reinitialising without firing"
+        _cron_write_marker "$marker" "$now" \
+          || log "WARN cron: cannot reinitialise marker for '$name'"
+        continue ;;
+    esac
+    due="$(python3 "$ENGINE_HOME/lib/roles.py" cron-due "$schedule" "$last" "$now" 2>>"$SUPLOG")" || continue
+    [ "$due" = "due" ] || continue
+    if _cron_write_marker "$marker" "$now"; then
+      log "cron: trigger '$name' due (schedule '$schedule') -- firing"
+      if tok="$(trigger_start_token_for "$name")"; then
+        run_session "$tok" "$kind" || log "cron: trigger '$name' session rc=$? (see supervisor.log)"
+      else
+        case "$(trigger_show_policy "$name")" in
+          queue)
+            qd="$(trigger_ctl_dir queued)"
+            mkdir -p "$qd" 2>>"$SUPLOG" || true
+            [ -f "$qd/$name" ] && \
+              log "WARN trigger '$name': queued fire overwritten (queue depth is 1)"
+            printf '%s\n' "$kind" >"$qd/$name" 2>>"$SUPLOG" || true ;;
+          *)
+            log "NOTE trigger '$name': at capacity -- scheduled fire skipped (policy skip)" ;;
+        esac
+      fi
     else
       log "WARN cron: cannot advance marker for '$name' -- skipping fire this tick (avoids re-fire)"
     fi
