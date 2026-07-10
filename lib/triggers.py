@@ -365,7 +365,7 @@ def shim_triggers(config):
     out = []
     for name in roles._all_loop_roles(config):
         out.append(_shim(name, {"mode": "continuous"}))
-    for name, sched in roles._all_cron_roles(config):
+    for name, sched in roles.all_cron_roles(config):
         out.append(_shim(name, {"mode": "schedule", "schedule": sched}))
     for name, events in roles.all_event_roles(config):
         out.append(_shim(name, {"mode": "event",

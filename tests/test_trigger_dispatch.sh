@@ -177,7 +177,7 @@ printf '{"name":"always-on","pipeline":"flow","firing":{"mode":"continuous"}}' \
   >"$repo/.autonomy/triggers/always-on.json"
 
 # File-based recorder: resolve_trigger_cron_due fires inside a pipeline
-# subshell (the resolve_cron_due shape), so a variable would not escape.
+# subshell, so a variable would not escape.
 RS_FILE="$tmp/rs_calls"; : >"$RS_FILE"
 run_session() { printf ' %s:%s' "$1" "$2" >>"$RS_FILE"; return 0; }
 rs_calls() { cat "$RS_FILE"; }

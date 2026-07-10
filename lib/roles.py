@@ -53,7 +53,7 @@ VALID_TRIGGERS = ("loop", "cron", "event", "manual")
 # event role's `on:` tokens must be a subset -- a role listening only for unknown
 # events could never wake, so it is fail-closed at validation (not use-time).
 # INVARIANT for anyone extending this: the supervisor's per-(role,event) seen-set
-# (bin/supervisor.sh resolve_event_wakes) assumes every token is MONOTONIC or
+# (bin/supervisor.sh _event_role_wakes) assumes every token is MONOTONIC or
 # TERMINAL (PR/issue numbers grow, merges are final) so a token that scrolls off
 # the poll page never re-enters it. A NON-monotonic event kind (e.g. a label that
 # can be added then removed) would re-deliver under that model -- it needs a
@@ -161,9 +161,11 @@ def _enabled_label_scopes(config):
     roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
     out = []
     for lane in lane_names(config):
-        names = list(dispatch_roles(config, lane))
+        names = [n for n in _all_loop_roles(config)
+                 if _in_lane(config, n, lane)]
         names += [n for (n, _s) in cron_roles(config, lane)]
-        names += [n for (n, _e) in event_roles(config, lane)]
+        names += [n for (n, _e) in _all_event_roles(config)
+                  if _in_lane(config, n, lane)]
         for name in names:
             labels = _scope_labels(roles_blk.get(name)
                                    if isinstance(roles_blk, dict) else None)
@@ -660,16 +662,6 @@ def _all_loop_roles(config):
     return out
 
 
-def dispatch_roles(config, lane=None):
-    """Names of the loop roles the supervisor dispatches for `lane` (lane=None
-    -> the default lane), in the stable roster order. A role is dispatched iff
-    effectively enabled AND its effective trigger is 'loop' AND it belongs to
-    the lane. With no `lanes:` block every role maps to the implicit 'main'
-    lane, so lane=None returns exactly today's set (zero regression). Merge
-    semantics mirror the dashboard roster (dashboard_state.build_roles)."""
-    return [n for n in _all_loop_roles(config) if _in_lane(config, n, lane)]
-
-
 def _role_schedule(cfg):
     """The cron `schedule` string for a role config, '' when absent/blank.
     Defensive against non-dict shapes (dispatch degrades, never crashes)."""
@@ -761,14 +753,6 @@ def _all_event_roles(config):
             if evs:
                 out.append((name, evs))
     return out
-
-
-def event_roles(config, lane=None):
-    """(name, [event, ...]) pairs for the event roles the bus wakes in `lane`
-    (lane=None -> the default lane), stable order. D6 applies as for cron_roles.
-    Degrades (skips) an empty-`on:` role rather than crashing."""
-    return [(n, e) for (n, e) in _all_event_roles(config)
-            if _in_lane(config, n, lane)]
 
 
 def all_event_roles(config):
@@ -972,26 +956,19 @@ def _extract_lane(args):
 
 
 def _dispatch_main(argv):
-    """`roles.py dispatch <target-repo> [role] | [--lane <name>]` -- the
-    supervisor's dispatch contract. Without a role: enabled loop-role names for
-    the lane (--lane, else the default lane), one per line (may be none). With a
-    role: the six KEY=value session-settings lines (lane-independent). A role
-    and --lane together is a usage error. Exit 1 on an undispatchable role (the
-    supervisor REFUSES that session, fail-safe)."""
+    """`roles.py dispatch <target-repo> <role>` -- the six KEY=value
+    session-settings lines (lane-independent). Exit 1 on an undispatchable
+    role (the supervisor REFUSES that session, fail-safe). The one-positional
+    loop-role ENUMERATION arm was deleted with the legacy role-dispatch twins
+    (Phase E, SD-39/SD-40): dispatch enumeration lives in triggers.py."""
     pos, lane, err = _extract_lane(argv[1:])
-    if (err is not None or pos is None or len(pos) not in (1, 2)
-            or (len(pos) == 2 and lane is not None)):
-        print("usage: roles.py dispatch <target-repo> [role] | "
-              "roles.py dispatch <target-repo> [--lane <name>]",
+    if err is not None or pos is None or len(pos) != 2 or lane is not None:
+        print("usage: roles.py dispatch <target-repo> <role>",
               file=sys.stderr)
         return 2
     config, rc = _load_config(pos[0])
     if rc:
         return rc
-    if len(pos) == 1:
-        for name in dispatch_roles(config, lane):
-            print(name)
-        return 0
     try:
         s = role_settings(config, pos[1])
     except KeyError:
@@ -1000,24 +977,6 @@ def _dispatch_main(argv):
         return 1
     for key in ("account", "agent", "model", "effort", "prompt", "scope"):
         print("%s=%s" % (key.upper(), s[key]))
-    return 0
-
-
-def _cron_main(argv):
-    """`roles.py cron <target-repo>` -- one `NAME<TAB>SCHEDULE` line per enabled
-    cron role (none prints nothing). The supervisor's scheduler enumerates
-    due-ness from this; keeping the roster/merge logic in Python keeps the
-    supervisor a thin caller."""
-    pos, lane, err = _extract_lane(argv[1:])
-    if err is not None or pos is None or len(pos) != 1:
-        print("usage: roles.py cron <target-repo> [--lane <name>]",
-              file=sys.stderr)
-        return 2
-    config, rc = _load_config(pos[0])
-    if rc:
-        return rc
-    for name, sched in cron_roles(config, lane):
-        print("%s\t%s" % (name, sched))
     return 0
 
 
@@ -1039,24 +998,6 @@ def _cron_due_main(argv):
         return 0
     nxt = cron_next_fire(argv[1], last)
     print("due" if (nxt is not None and nxt <= now) else "not-due")
-    return 0
-
-
-def _events_main(argv):
-    """`roles.py events <target-repo>` -- one `NAME<TAB>EVENT[,EVENT...]` line per
-    enabled event role (none prints nothing). The supervisor's event bus
-    enumerates listeners from this; keeping the roster/merge logic in Python keeps
-    the supervisor a thin caller. Events never contain a tab or comma."""
-    pos, lane, err = _extract_lane(argv[1:])
-    if err is not None or pos is None or len(pos) != 1:
-        print("usage: roles.py events <target-repo> [--lane <name>]",
-              file=sys.stderr)
-        return 2
-    config, rc = _load_config(pos[0])
-    if rc:
-        return rc
-    for name, evs in event_roles(config, lane):
-        print("%s\t%s" % (name, ",".join(evs)))
     return 0
 
 
@@ -1139,9 +1080,11 @@ def _lanes_main(argv):
 
 def _roles_in_lane(config, lane):
     """Set of enabled role names (loop + cron + event) that belong to `lane`."""
-    names = set(dispatch_roles(config, lane))
+    names = set(n for n in _all_loop_roles(config)
+                if _in_lane(config, n, lane))
     names.update(n for n, _ in cron_roles(config, lane))
-    names.update(n for n, _ in event_roles(config, lane))
+    names.update(n for n, _e in _all_event_roles(config)
+                 if _in_lane(config, n, lane))
     return names
 
 
@@ -1189,15 +1132,11 @@ def main(argv):
         return _lane_report_main(argv[1:])
     if len(argv) >= 2 and argv[1] == "dispatch":
         return _dispatch_main(argv[1:])
-    if len(argv) >= 2 and argv[1] == "cron":
-        return _cron_main(argv[1:])
     if len(argv) >= 2 and argv[1] == "cron-due":
         return _cron_due_main(argv[1:])
-    if len(argv) >= 2 and argv[1] == "events":
-        return _events_main(argv[1:])
     if len(argv) != 2:
         print("usage: roles.py <target-repo> | roles.py dispatch "
-              "<target-repo> [role] | roles.py knob-notes <target-repo> [role]",
+              "<target-repo> <role> | roles.py knob-notes <target-repo> [role]",
               file=sys.stderr)
         return 2
     repo = argv[1]

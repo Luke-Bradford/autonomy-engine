@@ -322,8 +322,9 @@ class ShimTriggersTest(unittest.TestCase):
         names = [t["name"] for t in triggers.shim_triggers(self._config())]
         self.assertNotIn("researcher", names)
 
-    def test_shim_order_matches_dispatch_roles_order(self):
-        # Parity invariant 3 depends on this ordering.
+    def test_shim_order_matches_loop_roles_order(self):
+        # Parity invariant 3 depends on this ordering: the shims
+        # resolve_dispatch_triggers emits keep _all_loop_roles' order.
         import roles
         cfg = self._config()
         loop_shims = [t["name"] for t in triggers.shim_triggers(cfg)
@@ -432,6 +433,20 @@ class EnumerateTriggersTest(unittest.TestCase):
         os.remove(os.path.join(self.repo, ".autonomy", "config.yaml"))
         with self.assertRaises(pipeline.PipelineError):
             triggers.enumerate_triggers(self.repo)
+
+    def test_undeclared_lane_shim_excluded_everywhere(self):
+        # fail-safe (ported from the retired role-path lane test): a role
+        # pinned to an UNDECLARED lane never dispatches -- not in the
+        # default lane, not even when the undeclared lane is named.
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("lanes:\n  main: {}\n"
+                     "roles:\n  coder:\n    enabled: true\n"
+                     "  ghosty:\n    enabled: true\n    lane: ghost\n")
+        trigs, _ = triggers.enumerate_triggers(self.repo)
+        self.assertNotIn("ghosty", [t["name"] for t in trigs])
+        trigs, _ = triggers.enumerate_triggers(self.repo, lane="ghost")
+        self.assertNotIn("ghosty", [t["name"] for t in trigs])
 
 
 class CliTest(unittest.TestCase):

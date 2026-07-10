@@ -2114,7 +2114,7 @@ def trigger_health(config, cron_dir, now, grace_secs=300):
 
     Compares each cron role's persisted last_fire marker
     ($VARDIR/cron/<role>.last_fire, a raw epoch int -- see
-    bin/supervisor.sh:resolve_cron_due, the sole writer) against the SAME
+    bin/supervisor.sh:resolve_trigger_cron_due, the sole writer) against the SAME
     schedule math the supervisor itself uses (roles.cron_next_fire), so this
     reader can never drift from what actually fires (the single-source-of-
     truth discipline #117 established for the lock path). lane=None (the
