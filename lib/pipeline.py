@@ -215,6 +215,12 @@ MAX_ROUNDS_CEIL = 99
 MAX_SESSIONS_CEIL = 500
 MAX_PARALLEL_CEIL = 8
 MAX_CALL_DEPTH = 3
+# Sidecar files (.pipeline-run-<x>.<node>.outputs.json / .verdict.json and
+# .pipeline-run-<child>.outcome.json) share the state files' glob namespace;
+# the supervisor's inflight_tokens skips these suffixes, so names that would
+# END in one are refused where they are minted (node ids here, trigger names
+# in triggers.py) -- a run may never take a shape the token scan skips.
+_RESERVED_SIDECAR_SUFFIXES = frozenset(("outputs", "verdict", "outcome"))
 # --- Typed params/outputs (pipeline+trigger model Phase A, spec S3). The
 #     declarations are validated here; VALUES are supplied by an invoker
 #     (a trigger or a calling pipeline -- Phase B/C) via resolve_params. ---
@@ -1040,6 +1046,15 @@ def validate_doc(doc, pipeline_dir=None):
         nid = node.get("id")
         if not (_is_str(nid) and _NAME_RE.match(nid)):
             errors.append("%s: id required, charset [A-Za-z0-9._-]{1,64}" % where)
+        elif nid.rsplit(".", 1)[-1] in _RESERVED_SIDECAR_SUFFIXES:
+            # A child token ends with the node id (<parent>.c<slot>.<id>);
+            # a reserved last component would make the child's state file
+            # look like a sidecar to the supervisor's token scan -- the
+            # child would start but never dispatch (stranded).
+            errors.append("%s: id %r ends in a reserved sidecar suffix "
+                          "(%s) -- rename the node"
+                          % (where, nid,
+                             "/".join(sorted(_RESERVED_SIDECAR_SUFFIXES))))
         elif nid in ids:
             errors.append("%s: duplicate id %r" % (where, nid))
         else:

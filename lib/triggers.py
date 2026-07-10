@@ -69,6 +69,15 @@ def validate_trigger(trig, stem):
         errors.append("name: required, charset [A-Za-z0-9._-]{1,64}")
     elif nm != stem:
         errors.append("name %r != filename stem %r" % (nm, stem))
+    elif "." in nm and nm.rsplit(".", 1)[-1] in \
+            pipeline._RESERVED_SIDECAR_SUFFIXES:
+        # <name>.outputs/.verdict/.outcome state files would be skipped by
+        # the supervisor's token scan (sidecars share the glob namespace):
+        # the run could start but never advance. Refuse at mint (Phase C).
+        errors.append("name %r ends in a reserved sidecar suffix (%s) -- "
+                      "rename the trigger"
+                      % (nm, "/".join(sorted(
+                          pipeline._RESERVED_SIDECAR_SUFFIXES))))
     if not pipeline.valid_pipeline_name(trig.get("pipeline")):
         errors.append("pipeline: required, charset [A-Za-z0-9._-]{1,64} "
                       "(existence is checked at run start)")

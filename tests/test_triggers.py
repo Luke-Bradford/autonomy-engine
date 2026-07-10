@@ -40,6 +40,18 @@ class ValidateTriggerTest(unittest.TestCase):
         errs = triggers.validate_trigger(_trig(name="../x"), "../x")
         self.assertTrue(errs)
 
+    def test_name_with_reserved_sidecar_suffix_refused(self):
+        # <name>.outputs/.verdict/.outcome state files would be skipped by
+        # the supervisor's inflight_tokens (sidecars share the glob
+        # namespace) -- the run could start but never advance. Refuse at
+        # mint (Phase C reserved suffixes).
+        for bad in ("qa.outputs", "qa.verdict", "qa.outcome"):
+            errs = triggers.validate_trigger(_trig(name=bad), bad)
+            self.assertTrue(any("reserved" in e for e in errs), (bad, errs))
+        self.assertEqual(
+            triggers.validate_trigger(_trig(name="qa.outputs2"),
+                                      "qa.outputs2"), [])
+
     def test_pipeline_required_and_charset_gated(self):
         self.assertTrue(triggers.validate_trigger(_trig(pipeline=""), "coder-a"))
         self.assertTrue(triggers.validate_trigger(_trig(pipeline="a/b"), "coder-a"))

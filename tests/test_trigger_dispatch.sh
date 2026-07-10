@@ -367,6 +367,72 @@ check "no coder fallback left"      "0" "$(grep -c 'dispatch_list="coder"' "$sup
 check "error arm records backoff"   "1" "$(grep -c 'trigger_record_error_backoff "\$name"' "$sup")"
 check "clean arm clears backoff"    "1" "$(grep -c 'trigger_clear_backoff "\$name"' "$sup")"
 
+# --- Phase C (#376): WAITING protocol + child tokens + reserved sidecars ------
+
+# A child run's state file joins the tokens as exactly ONE extra well-formed
+# token (parity invariant 7)...
+: >"$LOGDIR/.pipeline-run-coder.json"
+: >"$LOGDIR/.pipeline-run-coder.c0.qa.json"
+out="$(inflight_tokens | sort | tr '\n' ' ')"
+check "child token present" "coder coder.c0.qa " "$out"
+
+# ...and the run's SIDECARS never become tokens. They share the state-file
+# glob namespace (.pipeline-run-*.json) -- latent since Phase B for
+# outputs/verdict, aggravated by the Phase C outcome sidecar, which persists
+# BETWEEN ticks while a parent waits. Reserved suffixes; the mint sites
+# (validate_doc node ids, validate_trigger names) refuse them.
+: >"$LOGDIR/.pipeline-run-coder.qa.outputs.json"
+: >"$LOGDIR/.pipeline-run-coder.qa.verdict.json"
+: >"$LOGDIR/.pipeline-run-coder.c0.qa.outcome.json"
+out="$(inflight_tokens | sort | tr '\n' ' ')"
+check "sidecars are not tokens" "coder coder.c0.qa " "$out"
+rm -f "$LOGDIR"/.pipeline-run-*.json
+
+# resolve_pipeline_ready parses the WAITING sentinel: rc 0, flag set, zero
+# blocks (a wait:true call unit's child is running as its own token).
+: >"$LOGDIR/.pipeline-run-coder.json"     # state exists -> no start call
+python3() { echo "WAITING"; }
+PIPE_WAIT=0
+resolve_pipeline_ready coder 8 0 shim; rc=$?
+check "waiting ready rc" "0" "$rc"
+check "waiting flag set" "1" "$PIPE_WAIT"
+check "waiting zero blocks" "0" "$PB_COUNT"
+unset -f python3
+rm -f "$LOGDIR"/.pipeline-run-*.json
+
+# run_session treats a waiting run as the dispatch-skip family (rc 2) and
+# invokes NO adapter -- stub only the established seams. The manual-fire
+# tests above stubbed run_session itself; re-source the real supervisor to
+# get it back (the BASH_SOURCE guard makes sourcing side-effect free), then
+# re-apply this file's env.
+# shellcheck source=/dev/null
+source "$ENGINE_HOME/bin/supervisor.sh"
+AUTONOMY_TARGET_REPO="$repo"
+VARDIR="$repo/var"; LOGDIR="$VARDIR/autonomy-logs"
+SUPLOG=/dev/null
+AUTONOMY_LANE=""
+log() { :; }
+preflight() { return 0; }
+materialize_planner() { :; }
+resolve_role_dispatch() {
+  ROLE_PROMPT="p"; ROLE_SCOPE=""; ROLE_MODEL=""; ROLE_EFFORT=""
+  ROLE_ACCOUNT=""; ROLE_AGENT=""; return 0
+}
+resolve_pipeline_ready() {
+  PIPE_DONE=0; PIPE_WAIT=1; PB_COUNT=0
+  PB_NODE=(); PB_PROMPT=(); PB_VERDICT=()
+  PB_MODEL=(); PB_EFFORT=(); PB_ACCOUNT=(); PB_AGENT=()
+  return 0
+}
+run_session coder shim; rc=$?
+check "waiting run_session rc is dispatch-skip" "2" "$rc"
+
+# Main-loop wiring (grep-level, the file's established pattern): the waiting
+# branch paces WITHOUT entering the outcome case (no error backoff, no
+# fingerprint record, no session.done edge).
+check "loop paces child-wait"            "1" "$(grep -c 'heartbeat "child-wait"' "$sup")"
+check "loop resets PIPE_WAIT pre-dispatch" "1" "$(grep -c '^    PIPE_WAIT=0$' "$sup")"
+
 echo
 if [ "$fails" -gt 0 ]; then echo "$fails FAILURE(S)"; exit 1; fi
 echo "ALL CHECKS PASS"

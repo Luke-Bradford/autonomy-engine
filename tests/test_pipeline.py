@@ -2803,6 +2803,24 @@ class CallPipelineValidationTest(unittest.TestCase):
         self.assertEqual(pipeline.validate_doc(doc), [])
 
 
+class ReservedSidecarSuffixTest(unittest.TestCase):
+    def test_node_id_with_reserved_suffix_refused(self):
+        # A node id whose last dot-component is outputs/verdict/outcome would
+        # mint a child token the supervisor's inflight_tokens deliberately
+        # skips (sidecars share the .pipeline-run-*.json glob namespace) --
+        # a stranded, undispatchable child. Refuse at mint.
+        for bad in ("outputs", "verdict", "outcome", "x.outputs"):
+            doc = minimal_doc()
+            doc["nodes"][0]["id"] = bad
+            errs = pipeline.validate_doc(doc)
+            self.assertTrue(any("reserved" in e for e in errs), (bad, errs))
+
+    def test_ordinary_dotted_ids_still_validate(self):
+        doc = minimal_doc()
+        doc["nodes"][0]["id"] = "my.outputs2"
+        self.assertEqual(pipeline.validate_doc(doc), [])
+
+
 class LazyDefaultTest(unittest.TestCase):
     CTX = {"params": {"x": "v"}, "nodes": {"done": {"branch": "b1"}},
            "run": {"id": "r"}}

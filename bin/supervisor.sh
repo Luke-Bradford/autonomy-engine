@@ -1654,6 +1654,17 @@ inflight_tokens() {
     base="$(basename "$f")"
     base="${base#.pipeline-run-}"
     base="${base%.json}"
+    case "$base" in
+      *.outputs|*.verdict|*.outcome)
+        # RESERVED sidecar suffixes: <state-base>.<node>.outputs.json /
+        # .verdict.json and <child-base>.outcome.json share this glob
+        # namespace and must never become dispatch tokens (a phantom token
+        # wastes a tick per sidecar per cycle -- ready refuses the sidecar's
+        # shape). Nothing legitimate is skipped: validate_doc refuses node
+        # ids and validate_trigger refuses trigger names ending in a
+        # reserved component, so no real run can take these shapes.
+        continue ;;
+    esac
     slot=""
     case "$base" in
       *@*)
@@ -1686,7 +1697,7 @@ resolve_pipeline_ready() {
   local role="$1" max="${2:-1}" slot="${3:-0}" kind="${4:-shim}" state out line key val i
   PB_NODE=(); PB_PROMPT=(); PB_VERDICT=()
   PB_MODEL=(); PB_EFFORT=(); PB_ACCOUNT=(); PB_AGENT=()
-  PB_COUNT=0; PIPE_DONE=0
+  PB_COUNT=0; PIPE_DONE=0; PIPE_WAIT=0
   # Two-arg callers (pre-Phase-B) get slot 0 + kind shim -- byte-identical.
   state="$(pipeline_state_file "$role" "$slot")"
   if [ ! -f "$state" ]; then
@@ -1707,6 +1718,7 @@ resolve_pipeline_ready() {
   fi
   case "$out" in
     DONE*) PIPE_DONE=1; return 0 ;;
+    WAITING*) PIPE_WAIT=1; return 0 ;;
   esac
   i=0
   local node="" kind="" prompt="" verdict="" model="" effort="" account="" agent=""
@@ -1958,6 +1970,14 @@ run_session() {
     # -- rc 0 would fabricate a session.done edge and record a fingerprint
     # for work that did not run (the main loop's own fail-safe rule).
     log "pipeline: role '$role' run already complete -- nothing to dispatch (state recovered)"
+    return 2
+  fi
+  if [ "$PIPE_WAIT" = "1" ]; then
+    # A wait:true call_pipeline child is running as its OWN in-flight token;
+    # this run has nothing to dispatch until the child parks its outcome.
+    # rc 2 = the dispatch-skip family; the flag refines it in the main loop
+    # (no error backoff -- waiting is healthy, not a failure).
+    log "pipeline: run for '$role' waiting on child pipeline run(s) -- no session this tick"
     return 2
   fi
   # Heterogeneous-agent batches cannot share one sourced adapter contract:
@@ -2525,15 +2545,26 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # is actually invoked, so the card never reads "running a session" while it
     # is only getting ready to (or is about to refuse and back off).
     heartbeat "dispatching $role" "selected $role -- preparing session (auth, preflight, worktree)" ""
+    PIPE_WAIT=0
     run_session "$role" "$kind"; outcome=$?
     # #318: a session actually RAN (whatever its outcome) -- only now does the
     # consecutive-skip backoff counter reset, exactly as documented.
+    # (Staying unconditional across the child-wait branch below is
+    # deliberate: a waiting tick is not a fingerprint skip.)
     fp_skips=0
     # #245: release the `main` ref before the post-session idle window -- an
     # agent may end its ticket sitting on an attached `main`, which would block
     # a sibling primary checkout until the next preflight. No-op unless we are
     # on a clean, attached `main`; never detaches over WIP.
     session_end_park
+    if [ "$PIPE_WAIT" = "1" ]; then
+      # Phase C: the run is healthy, waiting on a child pipeline run that
+      # advances as its own in-flight token -- a paced no-op, NOT the rc-2
+      # error arm (no error backoff, no fingerprint record, no session.done).
+      log "run '$role' waiting on child run(s) -- pace ${PACE}s"
+      heartbeat "child-wait" "waiting on a child pipeline run" "$(( $(date -u +%s) + PACE ))"
+      sleep "$PACE"; continue
+    fi
     case $outcome in
       0) log "session clean (open issues ~$open_count). pace ${PACE}s"
          heartbeat "pace-wait" "session clean (open issues ~$open_count) -- next session soon" "$(( $(date -u +%s) + PACE ))"
