@@ -1320,6 +1320,82 @@ def execute_control(repo, action, lane=None):
     return {"ok": True, "message": plan.get("message", "done")}
 
 
+def execute_trigger_ctl(repo, action, name):
+    """Per-trigger marker lifecycle (Phase D1, #383): run-now / stop /
+    resume through the supervisor's existing lane-scoped markers under
+    var/trigger-ctl/{fire,stop}/. Validation is ENUMERATION-derived (the
+    same authority dispatch uses): an unknown/refused/broken trigger takes
+    no marker, and a trigger pinned to an undeclared lane refuses -- no
+    supervisor would ever consume that marker, so writing it is fail-open
+    theatre. Lane routing mirrors execute_control's find_lane_service
+    precedent EXACTLY: default lane -> this repo, bare basename; a
+    non-default lane -> that lane's verified service worktree (or this
+    repo when its own service runs the lane), basename <name>--<lane>;
+    no/refusing service -> refuse, never guess a worktree.
+    queued/ and backoff/ are supervisor-owned -- never written here."""
+    try:
+        trigs, _warns = ds.triggers_mod.enumerate_triggers(
+            repo, dispatchable_only=False)
+    except Exception as exc:
+        return {"ok": False, "error": "cannot enumerate triggers: %s" % exc}
+    trig = None
+    for t in trigs:
+        if t.get("name") == name:
+            trig = t
+            break
+    if trig is None:
+        return {"ok": False,
+                "error": "unknown trigger %r (refused/broken triggers "
+                         "cannot take markers)" % name}
+    try:
+        with open(os.path.join(repo, ".autonomy", "config.yaml"),
+                  encoding="utf-8") as fh:
+            config = config_parser.parse(fh.read())
+    except (OSError, ValueError):
+        return {"ok": False, "error": "cannot read .autonomy/config.yaml "
+                                      "-- refusing trigger control"}
+    if not ds.roles_schema.lanes_valid(config):
+        return {"ok": False, "error": "lanes: block is invalid -- "
+                                      "refusing trigger control"}
+    default_lane = ds.roles_schema.default_lane(config)
+    el = trig.get("lane") or default_lane
+    if el not in ds.roles_schema.lane_names(config):
+        return {"ok": False,
+                "error": "trigger %r is pinned to undeclared lane %r -- "
+                         "no supervisor would consume its marker" % (name, el)}
+    marker_repo, lane_suffix = repo, ""
+    if el != default_lane:
+        lane_svc = dcx.find_lane_service(repo, el, LAUNCH_AGENTS,
+                                         default_lane=default_lane)
+        if isinstance(lane_svc, dict) and "error" in lane_svc:
+            return {"ok": False, "error": lane_svc["error"]}
+        lane_suffix = el
+        if lane_svc is not None:
+            marker_repo = lane_svc["repo"]   # the lane's own worktree
+        # None = this repo's OWN service runs lane el (its plist carries
+        # --lane el): markers stay HERE, still with the lane suffix.
+    if action == "trigger_fire":
+        # The SAME verdict the read payload shows (ds.trigger_fire_ready:
+        # manual mode + a dry resolve_params) -- read/write can't drift.
+        ready, reason = ds.trigger_fire_ready(repo, trig)
+        if not ready:
+            return {"ok": False, "error": reason or "trigger not fireable"}
+    plan = dcx.trigger_ctl_plan(marker_repo, action, name,
+                                lane_suffix=lane_suffix)
+    if "error" in plan:
+        return {"ok": False, "error": plan["error"]}
+    try:
+        if "touch" in plan:
+            os.makedirs(os.path.dirname(plan["touch"]), exist_ok=True)
+            open(plan["touch"], "a").close()
+        elif "remove" in plan:
+            if os.path.exists(plan["remove"]):
+                os.remove(plan["remove"])
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "message": plan.get("message", "done")}
+
+
 def _is_benign_disconnect(exc):
     """A client resetting a keep-alive / SSE connection is normal (the browser
     navigated away or closed the stream). The default ThreadingHTTPServer dumps
@@ -1469,12 +1545,33 @@ class Handler(BaseHTTPRequestHandler):
             repo = os.path.abspath(os.path.expanduser(
                 (qs.get("repo") or [""])[0]))
             role = (qs.get("role") or [""])[0]
+            # D1 (#383): alternative selectors -- name= (by pipeline) and
+            # token= (one run's state file). The builder owns the
+            # exactly-one contract + token grammar; failures are builder-
+            # level (200 + {"error": ...}).
+            name = (qs.get("name") or [""])[0]
+            token = (qs.get("token") or [""])[0]
             if repo not in self.repos:
                 self._send(400, b'{"ok": false, "error": "repo is not managed"}')
             else:
-                view = ds.build_pipeline_view(repo, role)
+                view = ds.build_pipeline_view(repo, role or None,
+                                              name=name or None,
+                                              token=token or None)
                 view["spec"] = pipeline_mod.SPEC_SHEETS
                 self._send(200, json.dumps(view).encode("utf-8"))
+        elif path == "/api/triggers":
+            # D1 (#383): the triggers/gallery/runs read model. Managed-repo
+            # gate like /api/pipeline; everything below it is the builder's
+            # totality boundary (errors ride the payload).
+            qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]
+                                       if "?" in self.path else "")
+            repo = os.path.abspath(os.path.expanduser(
+                (qs.get("repo") or [""])[0]))
+            if repo not in self.repos:
+                self._send(400, b'{"ok": false, "error": "repo is not managed"}')
+            else:
+                self._send(200, json.dumps(
+                    ds.build_triggers_view(repo)).encode("utf-8"))
         elif path == "/api/boards":
             # config-page board picker (#170): best-effort, always 200 (the
             # payload carries any error), owner re-validated inside board_list.
@@ -1561,6 +1658,7 @@ class Handler(BaseHTTPRequestHandler):
                 and action not in _cred_actions
                 and action not in _acct_actions
                 and action not in _ws_actions
+                and action not in dcx.TRIGGER_CTL_ACTIONS
                 and not dcx.is_valid_action(action)):
             self._send(400, b'{"error":"invalid action"}')
             return
@@ -1604,6 +1702,15 @@ class Handler(BaseHTTPRequestHandler):
         repo = os.path.abspath(os.path.expanduser(str(body.get("repo") or "")))
         if repo not in self.repos:            # only ever act on a managed repo
             self._send(400, b'{"error":"repo is not managed by this dashboard"}')
+            return
+        if action in dcx.TRIGGER_CTL_ACTIONS:
+            # D1 (#383): per-trigger marker lifecycle (run-now/stop/resume).
+            # Enumeration-derived validation + execute_control-style lane
+            # routing live in execute_trigger_ctl.
+            result = execute_trigger_ctl(repo, action,
+                                         str(body.get("name") or ""))
+            self._send(200 if result.get("ok") else 409,
+                       json.dumps(result).encode("utf-8"))
             return
         if action in _ws_actions:
             # Authoring slice: workstream create/edit + pack init. All policy
