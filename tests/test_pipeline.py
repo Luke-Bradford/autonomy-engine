@@ -2278,6 +2278,77 @@ class SiblingRefTest(unittest.TestCase):
         self.assertEqual(pipeline.validate_doc(doc), [])
 
 
+def _call_doc(wait=True, params=None):
+    return {
+        "name": "parent", "version": 1, "caps": {"max_sessions_per_run": 9},
+        "params": [{"name": "repo", "type": "string", "required": False,
+                    "default": "r"}],
+        "nodes": [
+            {"id": "code", "type": "agent_task", "brief_ref": "code.md"},
+            {"id": "qa", "type": "call_pipeline", "pipeline": "qa-sweep",
+             "params": params if params is not None
+             else {"target": "${nodes.code.output.branch}"},
+             "wait": wait},
+        ],
+        "edges": [{"from": "code", "to": "qa", "on": "success"}],
+    }
+
+
+class CallPipelineValidationTest(unittest.TestCase):
+    def test_minimal_call_doc_validates(self):
+        self.assertEqual(pipeline.validate_doc(_call_doc()), [])
+
+    def test_call_is_a_live_node_type(self):
+        self.assertIn("call_pipeline", pipeline.NODE_TYPES)
+        self.assertNotIn("call_pipeline", pipeline.DEFERRED_NODE_TYPES)
+
+    def test_call_refuses_brief_and_runs_as(self):
+        doc = _call_doc()
+        doc["nodes"][1]["brief_ref"] = "x.md"
+        self.assertTrue(pipeline.validate_doc(doc))
+        doc = _call_doc()
+        doc["nodes"][1]["runs_as"] = {"model": "m"}
+        self.assertTrue(pipeline.validate_doc(doc))
+
+    def test_call_requires_valid_pipeline_name(self):
+        doc = _call_doc()
+        doc["nodes"][1]["pipeline"] = "../escape"
+        self.assertTrue(pipeline.validate_doc(doc))
+        del doc["nodes"][1]["pipeline"]
+        self.assertTrue(pipeline.validate_doc(doc))
+
+    def test_call_params_must_be_scalar_map(self):
+        self.assertTrue(pipeline.validate_doc(_call_doc(params={"k": []})))
+        self.assertTrue(pipeline.validate_doc(_call_doc(params="nope")))
+
+    def test_wait_must_be_bool(self):
+        doc = _call_doc()
+        doc["nodes"][1]["wait"] = "yes"
+        self.assertTrue(pipeline.validate_doc(doc))
+
+    def test_call_keys_refused_on_other_types(self):
+        doc = _call_doc()
+        doc["nodes"][0]["wait"] = True
+        self.assertTrue(pipeline.validate_doc(doc))
+
+    def test_detached_call_outputs_are_unreadable(self):
+        doc = _call_doc(wait=False)
+        doc["nodes"].append({"id": "z", "type": "agent_task",
+                             "brief_ref": "z.md",
+                             "runs_as": {"model": "${nodes.qa.output.v}"}})
+        doc["edges"].append({"from": "qa", "to": "z", "on": "success"})
+        errs = pipeline.validate_doc(doc)
+        self.assertTrue(any("detached" in e for e in errs), errs)
+
+    def test_call_inside_loop_container_validates(self):
+        doc = _call_doc()
+        doc["containers"] = [{"id": "lp", "kind": "loop",
+                              "children": ["code", "qa"],
+                              "exit_when": "verdict", "max_rounds": 3}]
+        doc["edges"] = []
+        self.assertEqual(pipeline.validate_doc(doc), [])
+
+
 class LazyDefaultTest(unittest.TestCase):
     CTX = {"params": {"x": "v"}, "nodes": {"done": {"branch": "b1"}},
            "run": {"id": "r"}}

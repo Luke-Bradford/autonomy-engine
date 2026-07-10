@@ -71,6 +71,16 @@ SPEC_SHEETS = {
         "optional": [["web_search", "on/off"], ["sources", ""]],
         "emits": "collected context for downstream briefs",
         "deferred": False, "guarded": []},
+    "call_pipeline": {
+        "label": "call pipeline", "group": "work", "icon": "\U0001f4de",
+        "required": [["pipeline", "the pipeline to run as a CHILD run"]],
+        "optional": [["params", "override the child's saved defaults "
+                      "(values may use ${...})"],
+                     ["wait", "true (default): wait, read outputs, child "
+                      "outcome drives edges; false: detach"]],
+        "emits": "child outcome (success/failure); outputs -> "
+                 "${nodes.<id>.output.*} when waited",
+        "deferred": False, "guarded": ["depth cap", "cycle refusal"]},
     "check": {
         "label": "check", "group": "verify", "icon": "✔️",
         "required": [["verify", "suite / review lens / browser / custom"]],
@@ -189,7 +199,8 @@ DEFERRED_NODE_TYPES = dict(
     (k, v["deferred_reason"]) for k, v in SPEC_SHEETS.items()
     if v["group"] != "structure" and v["deferred"])
 _NODE_KEYS = frozenset(("id", "type", "brief_ref", "legacy_prompt",
-                        "runs_as", "context", "join"))
+                        "runs_as", "context", "join",
+                        "pipeline", "params", "wait"))
 _CONTAINER_KEYS = frozenset(("id", "kind", "children", "exit_when",
                              "max_rounds", "runs_as", "join"))
 _EDGE_KEYS = frozenset(("from", "to", "on", "back", "max_bounces"))
@@ -203,6 +214,7 @@ CONTAINER_KINDS = frozenset(("loop", "stage"))   # branch=P2, for_each=P5
 MAX_ROUNDS_CEIL = 99
 MAX_SESSIONS_CEIL = 500
 MAX_PARALLEL_CEIL = 8
+MAX_CALL_DEPTH = 3
 # --- Typed params/outputs (pipeline+trigger model Phase A, spec S3). The
 #     declarations are validated here; VALUES are supplied by an invoker
 #     (a trigger or a calling pipeline -- Phase B/C) via resolve_params. ---
@@ -900,6 +912,14 @@ def check_refs(doc, errors):
             for ch in _lst(con.get("children")):
                 if isinstance(ch, str):
                     con_of[ch] = con.get("id")
+    # A detached (wait:false) call's outputs NEVER return to this run --
+    # referencing them is statically dead, refuse with the specific reason
+    # (decisions 3+7).
+    detached = set()
+    for n in _lst(doc.get("nodes")):
+        if isinstance(n, dict) and n.get("type") == "call_pipeline" \
+                and n.get("wait") is False and isinstance(n.get("id"), str):
+            detached.add(n["id"])
 
     def _allowed_node_ids(nid, unit):
         """Referenceable node ids for a node: every node an ancestor UNIT
@@ -922,12 +942,19 @@ def check_refs(doc, errors):
             if "${" in v.replace("$${", ""):
                 allowed = _allowed_node_ids(nid, unit) if unit else set()
                 soft = _soft_visible(doc, unit) if unit else set()
+                allowed -= detached
+                soft -= detached
                 protected = v.replace("$${", _ESC)
                 bodies = _REF_RE.findall(protected)
                 stripped = _REF_RE.sub("", protected)
                 if "${" in stripped:
                     errors.append("%s: unterminated ${ reference" % where)
                 for b in bodies:
+                    for did in detached:
+                        if ("nodes.%s.output." % did) in b:
+                            errors.append("%s: ${nodes.%s.output...} names a "
+                                          "detached (wait:false) call -- its "
+                                          "outputs never return" % (where, did))
                     _check_expr_static(b, declared, allowed, soft, errors,
                                        where)
         elif isinstance(v, dict):
@@ -1027,9 +1054,44 @@ def validate_doc(doc, pipeline_dir=None):
             errors.append("%s: unknown type %r" % (where, ntype))
         has_brief = "brief_ref" in node
         has_legacy = "legacy_prompt" in node
-        if has_brief == has_legacy:
-            errors.append("%s: exactly one of brief_ref / legacy_prompt required"
-                          % where)
+        if ntype == "call_pipeline":
+            # A call node carries NO session surface -- the child's own doc
+            # declares its briefs/runs_as/secrets ('secrets' forward-refs
+            # Task 7's node key; listing it now is a no-op until _NODE_KEYS
+            # gains it there, and keeps the two tasks commit-independent).
+            for bad in ("brief_ref", "legacy_prompt", "runs_as", "secrets"):
+                if bad in node:
+                    errors.append("%s: %r does not belong on call_pipeline "
+                                  "(the child's own doc carries it)"
+                                  % (where, bad))
+            if not valid_pipeline_name(node.get("pipeline")):
+                errors.append("%s: pipeline: required, charset "
+                              "[A-Za-z0-9._-]{1,64} (existence is checked at "
+                              "call time)" % where)
+            cparams = node.get("params")
+            if cparams is not None:
+                if not isinstance(cparams, dict):
+                    errors.append("%s: params must be a mapping of "
+                                  "name -> scalar" % where)
+                else:
+                    for k, v in cparams.items():
+                        if not (isinstance(k, str) and _NAME_RE.match(k)):
+                            errors.append("%s: params key %r invalid charset"
+                                          % (where, k))
+                        if not (isinstance(v, (str, int, float, bool))
+                                or v is None):
+                            errors.append("%s: params.%s must be a scalar"
+                                          % (where, k))
+            if "wait" in node and not isinstance(node["wait"], bool):
+                errors.append("%s: wait must be a bool" % where)
+        else:
+            for bad in ("pipeline", "params", "wait"):
+                if bad in node:
+                    errors.append("%s: %r only belongs on call_pipeline"
+                                  % (where, bad))
+            if has_brief == has_legacy:
+                errors.append("%s: exactly one of brief_ref / legacy_prompt "
+                              "required" % where)
         if has_brief:
             ref = node.get("brief_ref")
             if not _valid_brief_ref(ref):
