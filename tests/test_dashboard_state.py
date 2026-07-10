@@ -2161,6 +2161,69 @@ class TriggerHealthNativesTest(unittest.TestCase):
         self.assertEqual(out[0]["kind"], "role")
 
 
+class PipelineViewByNameTokenTest(unittest.TestCase):
+    """Phase D1 (#383): canvas addressing grows name= (gallery cards,
+    native triggers have no role) and token= (a run's own embedded doc,
+    lit; child rows open the CHILD canvas w/ parent breadcrumb)."""
+
+    def test_by_name_resolves_committed_pipeline(self):
+        view = ds.build_pipeline_view(FIX, name="fixture-flow")
+        self.assertNotIn("error", view)
+        self.assertIsNone(view["role"])
+        self.assertEqual(view["source"]["kind"], "pipeline")
+        self.assertEqual(view["source"]["name"], "fixture-flow")
+        self.assertEqual(view["source"]["version"], 2)
+        self.assertEqual(view["errors"], [])
+        self.assertTrue(view["edges_effective"])
+        self.assertIsNone(view["ledger"])       # trust lives on /api/triggers
+        self.assertIsNone(view["in_flight"])
+
+    def test_by_name_charset_refused(self):
+        self.assertIn("error", ds.build_pipeline_view(FIX, name="../x"))
+
+    def test_by_token_renders_run_doc_with_breadcrumb(self):
+        view = ds.build_pipeline_view(FIX, token="adhoc-digest.c0.qa")
+        self.assertNotIn("error", view)
+        self.assertEqual(view["source"]["kind"], "run")
+        self.assertEqual(view["run"]["token"], "adhoc-digest.c0.qa")
+        self.assertEqual(view["run"]["parent_run"],
+                         "adhoc-digest-20260709T220000-7001")
+        self.assertEqual(view["run"]["parent_token"], "adhoc-digest")
+        self.assertTrue(view["run"]["child"])
+        self.assertEqual(view["in_flight"]["units"],
+                         {"pick": "dispatched"})
+        # CP1: the fixture's MINIMAL embedded doc (no caps) must render as
+        # DEGRADED truth -- errors populated, doc still visible.
+        self.assertTrue(view["errors"])
+        self.assertIsNotNone(view["doc"])
+
+    def test_by_token_grammar_matrix(self):
+        ok = ds.build_pipeline_view(FIX, token="pr-sweep@1")
+        self.assertNotIn("error", ok)
+        self.assertEqual(ok["run"]["slot"], 1)
+        for bad in ("x@bad", "x@@", "x.outputs", "p.c0.qa.outcome",
+                    "../x", "a b"):
+            self.assertIn("error", ds.build_pipeline_view(FIX, token=bad))
+
+    def test_by_token_missing_state_is_an_error(self):
+        self.assertIn("error",
+                      ds.build_pipeline_view(FIX, token="no-such-run"))
+
+    def test_exactly_one_selector(self):
+        self.assertIn("error", ds.build_pipeline_view(FIX))
+        self.assertIn("error", ds.build_pipeline_view(
+            FIX, role="coder", name="fixture-flow"))
+        self.assertIn("error", ds.build_pipeline_view(
+            FIX, name="fixture-flow", token="pr-sweep@1"))
+
+    def test_role_path_unchanged(self):
+        view = ds.build_pipeline_view(FIX, "coder")
+        self.assertEqual(view["role"], "coder")
+        self.assertEqual(view["source"]["kind"], "pipeline")
+        self.assertEqual(view["errors"], [])
+        self.assertIsNotNone(view["ledger"])
+
+
 if __name__ == "__main__":
     unittest.main()
 

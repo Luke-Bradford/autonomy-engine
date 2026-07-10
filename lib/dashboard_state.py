@@ -2951,7 +2951,141 @@ def build_triggers_view(repo_path, now=None):
     return view
 
 
-def build_pipeline_view(repo_path, role):
+def _fill_bound_doc(view, repo_path, binding):
+    """source/doc/errors/briefs for a BOUND pipeline dir -- shared by the
+    role canvas and the D1 by-name canvas (one resolution, SD-34/SD-37).
+    Returns the resolved pipeline name for journal keying."""
+    pdir = pipeline_mod.effective_pipeline_dir(repo_path, binding)
+    _shadow_root = os.path.join(repo_path, "var", "autonomy", "pipelines")
+    view["source"] = {"kind": "pipeline", "name": binding,
+                      "dir": os.path.relpath(pdir, repo_path),
+                      "shadow": pdir.startswith(_shadow_root + os.sep),
+                      "version": 0}
+    try:
+        doc = pipeline_mod.load_doc(os.path.join(pdir, "pipeline.json"))
+    except Exception as exc:  # PipelineError normally; the broad guard
+        # covers raises load_doc's contract doesn't convert (e.g.
+        # RecursionError on hostile deep nesting) -- same-class scan,
+        # review round 2
+        doc = None
+        view["errors"] = [str(exc)]
+    if doc is not None:
+        try:
+            view["errors"] = pipeline_mod.validate_doc(doc, pdir)
+        except Exception as exc:  # a shape the validator has no error
+            # path for (CP2) -- the display boundary stays TOTAL and
+            # says so; dispatch still crashes loudly on its own path
+            view["errors"] = ["validator crashed on document shape: "
+                              "%s: %s" % (type(exc).__name__, exc)]
+        if isinstance(doc.get("version"), int):
+            view["source"]["version"] = doc["version"]
+    view["briefs"] = _pipeline_briefs(pdir, doc)   # pane seeds true edits
+    view["doc"] = doc
+    pname = (doc or {}).get("name")
+    return doc, (pname if isinstance(pname, str) and pname else binding)
+
+
+def _fill_effective_edges(view, doc):
+    try:
+        eff = pipeline_mod.effective_edges(doc) if isinstance(doc, dict) else []
+    except Exception:  # same totality boundary as validate_doc (CP2)
+        eff = []
+    if not isinstance(eff, list):
+        eff = []
+    view["edges_effective"] = [e for e in eff if isinstance(e, dict)]
+
+
+def _pipeline_view_by_name(repo_path, logdir, name):
+    """D1 (#383): the canvas by PIPELINE NAME -- gallery cards and native
+    triggers have no role to key on. No role settings, no role-keyed
+    ledger (trust lives on /api/triggers); read-only surface."""
+    if not pipeline_mod.valid_pipeline_name(name):
+        return {"error": "pipeline name %r has invalid charset" % (name,)}
+    view = {"repo": os.path.basename(repo_path.rstrip("/")),
+            "path": repo_path, "role": None}
+    doc, _ = _fill_bound_doc(view, repo_path, name)
+    _fill_effective_edges(view, doc)
+    view["last_run"] = None
+    view["ledger"] = None
+    view["in_flight"] = None
+    return view
+
+
+def _pipeline_view_by_token(repo_path, logdir, token):
+    """D1 (#383): the canvas for ONE RUN -- renders the state file's own
+    EMBEDDED doc (the exact version the run executes) lit with its unit
+    statuses; child runs surface parent_run + a parent_token breadcrumb.
+    The embedded doc still validates -- a minimal/invalid doc renders as
+    DEGRADED truth (errors + visible doc), never a healthy canvas (CP1)."""
+    tok = _parse_run_token(token)
+    if tok is None:
+        return {"error": "invalid run token %r" % (token,)}
+    p = os.path.join(logdir, ".pipeline-run-%s.json" % token)
+    try:
+        with open(p) as fh:
+            state = json.load(fh)
+    except OSError:
+        return {"error": "no state file for run token %r" % (token,)}
+    except Exception:
+        return {"error": "state file for %r unreadable" % (token,)}
+    if not isinstance(state, dict):
+        return {"error": "state file for %r unreadable" % (token,)}
+    view = {"repo": os.path.basename(repo_path.rstrip("/")),
+            "path": repo_path, "role": None}
+    doc = state.get("doc") if isinstance(state.get("doc"), dict) else None
+    ver = (doc or {}).get("version")
+    dname = (doc or {}).get("name")
+    view["source"] = {"kind": "run",
+                      "name": dname if isinstance(dname, str) else "",
+                      "dir": "", "shadow": False,
+                      "version": ver if isinstance(ver, int) else 0}
+    view["doc"] = doc
+    if doc is None:
+        view["errors"] = ["run state carries no pipeline document"]
+    else:
+        try:
+            view["errors"] = pipeline_mod.validate_doc(doc, None)
+        except Exception as exc:
+            view["errors"] = ["validator crashed on document shape: "
+                              "%s: %s" % (type(exc).__name__, exc)]
+    view["briefs"] = {}                     # a run view is read-only
+    _fill_effective_edges(view, doc)
+    view["last_run"] = None
+    view["ledger"] = None
+    units = {}
+    if isinstance(state.get("units"), dict):
+        for uid, u in state["units"].items():
+            units[str(uid)] = (str(u.get("status", ""))
+                               if isinstance(u, dict) else "")
+    view["in_flight"] = {"units": units, "sessions": state.get("sessions"),
+                         "name": view["source"]["name"],
+                         "status": str(state.get("status", ""))}
+    parent_token = None
+    segs = list(_CHILD_SEG_RE.finditer(tok["name"]))
+    if segs:
+        pslot = segs[-1].group(1)           # the PARENT's slot
+        parent_token = tok["name"][:segs[-1].start()] + (
+            "@%s" % pslot if pslot != "0" else "")
+    view["run"] = {
+        "token": token,
+        "run_id": str(state.get("run_id", "")),
+        "trigger": str(state.get("trigger") or state.get("role")
+                       or tok["name"]),
+        "status": str(state.get("status", "")),
+        "parent_run": (str(state["parent_run"])
+                       if isinstance(state.get("parent_run"), str)
+                       else None),
+        "parent_node": (str(state["parent_node"])
+                        if isinstance(state.get("parent_node"), str)
+                        else None),
+        "parent_token": parent_token,
+        "slot": tok["slot"], "lane": tok["lane"],
+        "child": tok["child"] or bool(state.get("parent_run")),
+    }
+    return view
+
+
+def build_pipeline_view(repo_path, role=None, name=None, token=None):
     """The /pipeline canvas read model (#357, P3a). Pure + TOTAL: every
     missing/corrupt artifact degrades to a field, never an exception. An
     invalid BOUND pipeline renders its validator errors with the raw doc
@@ -2962,9 +3096,22 @@ def build_pipeline_view(repo_path, role):
     resolution the supervisor dispatches with (SD-34 single resolver;
     Codex CP1: raw cfg["roles"] would lose default-role semantics), so
     only dispatchable roles have a canvas (a disabled role can never run
-    its pipeline; offering a view would imply it can)."""
+    its pipeline; offering a view would imply it can).
+
+    D1 (#383): EXACTLY ONE selector -- role= (unchanged, positional
+    back-compat), name= (by pipeline name), token= (one run's state file,
+    canonical token grammar)."""
     repo_path = os.path.abspath(repo_path)
     logdir = os.path.join(repo_path, "var", "autonomy-logs")
+    picked = [s for s in (role, name, token)
+              if isinstance(s, str) and s]
+    if len(picked) != 1:
+        return {"error": "exactly one of role=, name=, token= selects a "
+                         "canvas"}
+    if isinstance(name, str) and name:
+        return _pipeline_view_by_name(repo_path, logdir, name)
+    if isinstance(token, str) and token:
+        return _pipeline_view_by_token(repo_path, logdir, token)
     cfg_path = config_parser.effective_config_path(
         os.path.join(repo_path, ".autonomy", "config.yaml"))
     try:
@@ -3009,34 +3156,9 @@ def build_pipeline_view(repo_path, role):
         # P3b (#365): read the var-live shadow when the operator has edited this
         # pipeline in the canvas; source.shadow tells the page it is showing
         # local edits. A present-but-invalid shadow renders ITS errors below,
-        # never a fallback to committed (prevention-log #3).
-        pdir = pipeline_mod.effective_pipeline_dir(repo_path, binding)
-        _shadow_root = os.path.join(repo_path, "var", "autonomy", "pipelines")
-        view["source"] = {"kind": "pipeline", "name": binding,
-                          "dir": os.path.relpath(pdir, repo_path),
-                          "shadow": pdir.startswith(_shadow_root + os.sep),
-                          "version": 0}
-        try:
-            doc = pipeline_mod.load_doc(os.path.join(pdir, "pipeline.json"))
-        except Exception as exc:  # PipelineError normally; the broad guard
-            # covers raises load_doc's contract doesn't convert (e.g.
-            # RecursionError on hostile deep nesting) -- same-class scan,
-            # review round 2
-            doc = None
-            view["errors"] = [str(exc)]
-        if doc is not None:
-            try:
-                view["errors"] = pipeline_mod.validate_doc(doc, pdir)
-            except Exception as exc:  # a shape the validator has no error
-                # path for (CP2) -- the display boundary stays TOTAL and
-                # says so; dispatch still crashes loudly on its own path
-                view["errors"] = ["validator crashed on document shape: "
-                                  "%s: %s" % (type(exc).__name__, exc)]
-            if isinstance(doc.get("version"), int):
-                view["source"]["version"] = doc["version"]
-        view["briefs"] = _pipeline_briefs(pdir, doc)   # pane seeds true edits
-        pname = (doc or {}).get("name")
-        pname = pname if isinstance(pname, str) and pname else binding
+        # never a fallback to committed (prevention-log #3). Shared with the
+        # D1 by-name canvas (_fill_bound_doc -- one resolution).
+        doc, pname = _fill_bound_doc(view, repo_path, binding)
     else:
         try:
             doc = pipeline_mod.wrap_role(settings, role)
@@ -3050,13 +3172,7 @@ def build_pipeline_view(repo_path, role):
         view["briefs"] = {}          # a wrapped role is read-only; no editing
         pname = doc["name"]
     view["doc"] = doc
-    try:
-        eff = pipeline_mod.effective_edges(doc) if isinstance(doc, dict) else []
-    except Exception:  # same totality boundary as validate_doc above (CP2)
-        eff = []
-    if not isinstance(eff, list):
-        eff = []
-    view["edges_effective"] = [e for e in eff if isinstance(e, dict)]
+    _fill_effective_edges(view, doc)
     journal = os.path.join(logdir, "journal.jsonl")
     if os.path.exists(journal):
         view["last_run"] = _journal_last_run(journal, role, pname)
