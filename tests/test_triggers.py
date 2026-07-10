@@ -770,5 +770,103 @@ class TrustRollupTest(unittest.TestCase):
         self.assertIn("broken", refused[0])
 
 
+class RunWindowCliTest(unittest.TestCase):
+    # the shared night window + verified instants (see
+    # RunWindowMembershipTest for the derivation command).
+    NIGHT = [{"start": "22:00", "end": "06:00"}]
+    INSIDE = 1783551600    # Wed 2026-07-08 23:00 UTC
+    OUTSIDE = 1783580400   # Thu 2026-07-09 07:00 UTC
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        os.makedirs(os.path.join(self.tmp, ".autonomy", "triggers"))
+
+    def _config(self, text="roles: {}\n"):
+        with open(os.path.join(self.tmp, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write(text)
+
+    def _trigger(self, name, **over):
+        trig = {"name": name, "pipeline": "flow",
+                "firing": {"mode": "continuous"}}
+        trig.update(over)
+        with open(os.path.join(self.tmp, ".autonomy", "triggers",
+                               "%s.json" % name), "w") as fh:
+            json.dump(trig, fh)
+
+    def _run_main_capture(self, argv):
+        import contextlib
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            triggers.main(list(argv))
+        return out.getvalue()
+
+    def _windowed(self, mode, **firing_extra):
+        firing = {"mode": mode}
+        firing.update(firing_extra)
+        self._trigger("night", firing=firing, run_windows=self.NIGHT)
+
+    def test_dispatch_window_filters(self):
+        self._config()
+        self._windowed("continuous")
+        inside = self._run_main_capture(
+            ["dispatch", self.tmp, "--now", str(self.INSIDE)])
+        outside = self._run_main_capture(
+            ["dispatch", self.tmp, "--now", str(self.OUTSIDE)])
+        self.assertIn("night", inside)
+        self.assertNotIn("night", outside)
+
+    def test_cron_event_manual_window_filter(self):
+        self._config()
+        self._trigger("night-cron",
+                      firing={"mode": "schedule", "schedule": "0 23 * * *"},
+                      run_windows=self.NIGHT)
+        self._trigger("night-ev",
+                      firing={"mode": "event", "event": "pr.opened"},
+                      run_windows=self.NIGHT)
+        self._trigger("night-man", firing={"mode": "manual"},
+                      run_windows=self.NIGHT)
+        for verb, name in (("cron", "night-cron"), ("event", "night-ev"),
+                           ("manual", "night-man")):
+            inside = self._run_main_capture(
+                [verb, self.tmp, "--now", str(self.INSIDE)])
+            outside = self._run_main_capture(
+                [verb, self.tmp, "--now", str(self.OUTSIDE)])
+            self.assertIn(name, inside, verb)
+            self.assertNotIn(name, outside, verb)
+
+    def test_show_window_field(self):
+        self._config()
+        self._windowed("manual")
+        self.assertIn("WINDOW=closed", self._run_main_capture(
+            ["show", self.tmp, "night", "--now", str(self.OUTSIDE)]))
+        self.assertIn("WINDOW=open", self._run_main_capture(
+            ["show", self.tmp, "night", "--now", str(self.INSIDE)]))
+        self._trigger("plain", firing={"mode": "manual"})
+        self.assertIn("WINDOW=open", self._run_main_capture(
+            ["show", self.tmp, "plain", "--now", str(self.OUTSIDE)]))
+
+    def test_validate_and_trust_are_unfiltered(self):
+        # windows never hide a trigger from inspection.
+        self._config()
+        self._windowed("continuous")
+        j = os.path.join(self.tmp, "journal.jsonl")
+        open(j, "w").close()
+        self.assertIn("OK night", self._run_main_capture(
+            ["validate", self.tmp, "--now", str(self.OUTSIDE)]))
+        self.assertIn("TRIGGER\tnight", self._run_main_capture(
+            ["trust", self.tmp, j, "--now", str(self.OUTSIDE)]))
+
+    def test_now_argv_gate(self):
+        # digits-only (prevention-log #6): "12abc" and a missing value
+        # both return 2 with a usage error, never a silent live-clock
+        # fallback.
+        self.assertEqual(triggers.main(
+            ["dispatch", self.tmp, "--now", "12abc"]), 2)
+        self.assertEqual(triggers.main(["dispatch", self.tmp, "--now"]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

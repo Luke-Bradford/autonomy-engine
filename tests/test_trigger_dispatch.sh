@@ -231,6 +231,53 @@ check "queued at capacity waits"    "" "$(rs_calls)"
 check "queued marker kept at cap"   "0" "$([ -f "$VARDIR/trigger-ctl/queued/push-now" ] && echo 0 || echo 1)"
 rm -f "$LOGDIR"/.pipeline-run-*.json "$VARDIR/trigger-ctl/queued/push-now"
 
+# --- run-window fire-marker deferral (Phase E) -------------------------------
+# manual: window-closed keeps the marker (the disabled-marker discipline).
+# Stub both seams; the real definitions are restored below (save/restore --
+# re-sourcing here would clobber the run_session recorder).
+SAVED_SHOW_FIELDS="$(declare -f _trigger_show_fields)"
+: >"$RS_FILE"
+mkdir -p "$(trigger_ctl_dir fire)"
+: >"$VARDIR/trigger-ctl/fire/night-push"
+_triggers_enumerate() { printf ''; }   # window-filtered list omits it
+_trigger_show_fields() {
+  SHOW_MODE="manual"; SHOW_ENABLED="true"; SHOW_POLICY="skip"
+  SHOW_MAX=1; SHOW_WINDOW="closed"
+}
+resolve_manual_fires
+check "window-closed manual marker kept" "0" \
+  "$([ -f "$VARDIR/trigger-ctl/fire/night-push" ] && echo 0 || echo 1)"
+check "window-closed manual did not run" "" "$(rs_calls)"
+rm -f "$VARDIR/trigger-ctl/fire/night-push"
+
+# queued: window-closed defers the drain, marker kept.
+: >"$RS_FILE"
+mkdir -p "$(trigger_ctl_dir queued)"
+printf 'native\n' >"$VARDIR/trigger-ctl/queued/night-push"
+resolve_queued_fires
+check "window-closed queued marker kept" "0" \
+  "$([ -f "$VARDIR/trigger-ctl/queued/night-push" ] && echo 0 || echo 1)"
+check "window-closed queued did not run" "" "$(rs_calls)"
+
+# window OPEN drains the queued marker (the gate opens, not just closes).
+_trigger_show_fields() {
+  SHOW_MODE="manual"; SHOW_ENABLED="true"; SHOW_POLICY="skip"
+  SHOW_MAX=1; SHOW_WINDOW="open"
+}
+resolve_queued_fires
+check "window-open queued fire ran" " night-push:native" "$(rs_calls)"
+check "window-open queued marker consumed" "1" \
+  "$([ -f "$VARDIR/trigger-ctl/queued/night-push" ] && echo 0 || echo 1)"
+# restore the REAL seams (unset -f would delete the sourced functions too)
+eval "$SAVED_SHOW_FIELDS"
+_triggers_enumerate() {
+  if [ -n "${AUTONOMY_LANE:-}" ]; then
+    python3 "$ENGINE_HOME/lib/triggers.py" "$@" --lane "$AUTONOMY_LANE" 2>>"$SUPLOG"
+  else
+    python3 "$ENGINE_HOME/lib/triggers.py" "$@" 2>>"$SUPLOG"
+  fi
+}
+
 # --- schedule firing via the cron machinery --------------------------------------
 printf '{"name":"nightly","pipeline":"flow","firing":{"mode":"schedule","schedule":"* * * * *"},"concurrency":{"policy":"queue","max":1}}' \
   >"$repo/.autonomy/triggers/nightly.json"

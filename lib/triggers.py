@@ -18,6 +18,7 @@ import datetime
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pipeline                                             # noqa: E402
@@ -464,17 +465,29 @@ def trust_rollup(repo, journal_path):
     return rows, rollup, warnings
 
 
-def _cli_lane(args):
-    opts = {"--lane": None}
+def _cli_opts(args):
+    """Positionals + (--lane, --now). --now is the run-window clock's
+    test seam: digits-only epoch (argv-boundary gate, prevention-log #6);
+    anything else raises -- a typo'd --now silently meaning 'live clock'
+    could open a window that should be closed."""
+    lane, now = None, None
     pos, i = [], 0
     while i < len(args):
         if args[i] == "--lane" and i + 1 < len(args):
-            opts["--lane"] = args[i + 1]
+            lane = args[i + 1]
+            i += 2
+        elif args[i] == "--now":
+            if i + 1 >= len(args):
+                raise ValueError("--now needs a digits-only epoch value")
+            v = args[i + 1]
+            if not v or not all(c in "0123456789" for c in v):
+                raise ValueError("--now must be a digits-only epoch")
+            now = int(v)
             i += 2
         else:
             pos.append(args[i])
             i += 1
-    return pos, opts["--lane"]
+    return pos, lane, now
 
 
 def main(argv):
@@ -482,7 +495,13 @@ def main(argv):
         print(__doc__, file=sys.stderr)
         return 2
     cmd, rest = argv[0], argv[1:]
-    pos, lane = _cli_lane(rest)
+    try:
+        pos, lane, now = _cli_opts(rest)
+    except ValueError as exc:
+        print("triggers.py: %s" % exc, file=sys.stderr)
+        return 2
+    if now is None:
+        now = int(time.time())
     if cmd in ("dispatch", "cron", "validate", "event") and len(pos) != 1:
         print("usage: triggers.py %s <repo> [--lane <l>]" % cmd,
               file=sys.stderr)
@@ -495,6 +514,7 @@ def main(argv):
             return 1
         for w in warns:
             print("WARN %s" % w, file=sys.stderr)
+        trigs = [t for t in trigs if in_run_window(t, now)]
         for t in trigs:
             if t["firing"]["mode"] == "continuous":
                 c = t["concurrency"]
@@ -509,6 +529,7 @@ def main(argv):
             return 1
         for w in warns:
             print("WARN %s" % w, file=sys.stderr)
+        trigs = [t for t in trigs if in_run_window(t, now)]
         for t in trigs:
             if t["firing"]["mode"] == "schedule":
                 print("%s\t%s\t%s" % (t["name"], t["firing"]["schedule"],
@@ -526,6 +547,7 @@ def main(argv):
             return 1
         for w in warns:
             print("WARN %s" % w, file=sys.stderr)
+        trigs = [t for t in trigs if in_run_window(t, now)]
         for t in trigs:
             f = t["firing"]
             if f.get("mode") != "event":
@@ -551,6 +573,7 @@ def main(argv):
             return 1
         for w in warns:
             print("WARN %s" % w, file=sys.stderr)
+        trigs = [t for t in trigs if in_run_window(t, now)]
         for t in trigs:
             if t["firing"]["mode"] == "manual":
                 c = t["concurrency"]
@@ -572,6 +595,7 @@ def main(argv):
         print("POLICY=%s" % c["policy"])
         print("MAX=%d" % c["max"])
         print("ENABLED=%s" % ("true" if t.get("enabled", True) else "false"))
+        print("WINDOW=%s" % ("open" if in_run_window(t, now) else "closed"))
         return 0
     if cmd == "trust":
         if len(pos) != 2:

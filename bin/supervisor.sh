@@ -1149,7 +1149,11 @@ trigger_start_token() {
 # slots).
 _trigger_show_fields() {   # $1=name
   local out line
+  # SHOW_WINDOW init CLOSED: only the literal `open` opens (the earned
+  # healthy verdict, prevention-log #18) -- a failed/garbled show can
+  # never report an open run window.
   SHOW_MODE=""; SHOW_ENABLED=""; SHOW_POLICY=""; SHOW_MAX=""
+  SHOW_WINDOW="closed"
   out="$(python3 "$ENGINE_HOME/lib/triggers.py" show "$AUTONOMY_TARGET_REPO" "$1" 2>>"$SUPLOG" || true)"
   while IFS= read -r line; do
     case "$line" in *=*) ;; *) continue ;; esac
@@ -1158,6 +1162,7 @@ _trigger_show_fields() {   # $1=name
       ENABLED) SHOW_ENABLED="${line#*=}" ;;
       POLICY)  SHOW_POLICY="${line#*=}" ;;
       MAX)     SHOW_MAX="${line#*=}" ;;
+      WINDOW)  case "${line#*=}" in open) SHOW_WINDOW="open" ;; esac ;;
     esac
   done <<<"$out"
   case "$SHOW_POLICY" in queue|skip|parallel) ;; *) SHOW_POLICY="skip" ;; esac
@@ -1215,6 +1220,8 @@ resolve_manual_fires() {
       _trigger_show_fields "$name"
       if [ "$SHOW_MODE" = "manual" ] && [ "$SHOW_ENABLED" = "false" ]; then
         log "NOTE trigger '$name' is disabled -- fire marker kept until enabled"
+      elif [ "$SHOW_MODE" = "manual" ] && [ "$SHOW_WINDOW" = "closed" ]; then
+        log "NOTE trigger '$name' is outside its run window -- fire marker kept"
       else
         log "WARN trigger-ctl: '$name' is not a dispatchable manual trigger -- removing its fire marker"
         rm -f "$f" 2>>"$SUPLOG" || true
@@ -1261,6 +1268,18 @@ resolve_queued_fires() {
         log "WARN trigger-ctl: queued marker for '$name' has invalid kind -- removing (fire lost, next schedule re-queues)"
         rm -f "$f" 2>>"$SUPLOG" || true; continue ;;
     esac
+    # A queued fire is a NEW run start: the window was open when the fire
+    # was minted but may have closed before capacity freed. Defer (marker
+    # kept) while closed -- fail-safe consequence accepted: a marker whose
+    # trigger FILE has vanished defers forever with a NOTE (previously an
+    # endless run_session retry WARN); both are visible loops, under-fire
+    # is the safe side. Queued markers are native-only today, so a failed
+    # show never wedges a shim.
+    _trigger_show_fields "$name"
+    if [ "$SHOW_WINDOW" = "closed" ]; then
+      log "NOTE trigger '$name': outside its run window -- queued fire deferred (marker kept)"
+      continue
+    fi
     if run_session "$tok" "$kind"; then
       rm -f "$f" 2>>"$SUPLOG" || true
     fi
