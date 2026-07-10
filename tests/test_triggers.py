@@ -188,5 +188,70 @@ class LoadTriggerTest(unittest.TestCase):
         self.assertIs(got["enabled"], True)
 
 
+class ShimTriggersTest(unittest.TestCase):
+    def _config(self):
+        return {"roles": {
+            "coder": {"enabled": True},
+            "pm": {"enabled": True,
+                   "trigger": {"type": "cron", "schedule": "0 6 * * *"}},
+            "qa": {"enabled": True, "trigger": {"type": "event",
+                                                "on": ["pr.opened"]}},
+            "researcher": {"enabled": False}}}
+
+    def test_loop_role_becomes_continuous_shim(self):
+        shims = triggers.shim_triggers(self._config())
+        coder = [t for t in shims if t["name"] == "coder"][0]
+        self.assertEqual(coder["firing"], {"mode": "continuous"})
+        self.assertEqual(coder["concurrency"], {"policy": "skip", "max": 1})
+        self.assertEqual(coder["kind"], "shim")
+        self.assertEqual(coder["params"], {})
+        self.assertIs(coder["enabled"], True)
+
+    def test_cron_role_becomes_schedule_shim(self):
+        shims = triggers.shim_triggers(self._config())
+        pm = [t for t in shims if t["name"] == "pm"][0]
+        self.assertEqual(pm["firing"],
+                         {"mode": "schedule", "schedule": "0 6 * * *"})
+
+    def test_event_role_not_shimmed(self):
+        # The event bus stays on the legacy role path until Phase C --
+        # shimming would dispatch qa twice (once per path).
+        names = [t["name"] for t in triggers.shim_triggers(self._config())]
+        self.assertNotIn("qa", names)
+
+    def test_disabled_role_not_shimmed(self):
+        names = [t["name"] for t in triggers.shim_triggers(self._config())]
+        self.assertNotIn("researcher", names)
+
+    def test_shim_order_matches_dispatch_roles_order(self):
+        # Parity invariant 3 depends on this ordering.
+        import roles
+        cfg = self._config()
+        loop_shims = [t["name"] for t in triggers.shim_triggers(cfg)
+                      if t["firing"]["mode"] == "continuous"]
+        self.assertEqual(loop_shims, roles._all_loop_roles(cfg))
+
+    def test_shim_carries_pipeline_binding_when_bound(self):
+        cfg = {"roles": {"coder": {"enabled": True,
+                                   "pipeline": "ticket-to-merge"}}}
+        coder = [t for t in triggers.shim_triggers(cfg)
+                 if t["name"] == "coder"][0]
+        self.assertEqual(coder["pipeline"], "ticket-to-merge")
+
+    def test_shim_carries_lane(self):
+        # lanes: is a dict KEYED BY LANE NAME, first key = default lane
+        # (roles._declared_lane_names/default_lane, lib/roles.py:110-122).
+        cfg = {"lanes": {"main": {}, "qa-lane": {}},
+               "roles": {"coder": {"enabled": True, "lane": "qa-lane"}}}
+        coder = [t for t in triggers.shim_triggers(cfg)
+                 if t["name"] == "coder"][0]
+        self.assertEqual(coder["lane"], "qa-lane")
+
+    def test_degenerate_config_yields_defaults_not_crash(self):
+        # dispatch must degrade, never crash (roles.py convention).
+        self.assertIsInstance(triggers.shim_triggers({}), list)
+        self.assertIsInstance(triggers.shim_triggers({"roles": []}), list)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -169,6 +169,42 @@ def load_trigger(repo, name):
     return _apply_defaults(trig)
 
 
+def shim_triggers(config):
+    """Auto-shim (spec S7): every enabled loop role -> a synthetic continuous
+    trigger; every enabled cron role -> a synthetic schedule trigger. Event
+    roles are NOT shimmed -- the event bus fires them through the legacy role
+    path until Phase C wires event triggers (a shim would double-dispatch).
+
+    The shim carries FIRING identity only: name==role (byte-equal -- ledger/
+    fingerprint/state-file continuity, the Phase E trust argument), params={},
+    and the role's pipeline binding verbatim ('' = wrapped role). A shim run
+    resolves settings through resolve_pipeline(repo, role) exactly as before
+    -- prompts, scope, accounts, model precedence all ride the role path."""
+    import roles
+    roles_blk = (config.get("roles") or {}) if isinstance(config, dict) else {}
+    if not isinstance(roles_blk, dict):
+        roles_blk = {}
+
+    def _binding(name):
+        cfg = roles_blk.get(name)
+        b = cfg.get("pipeline") if isinstance(cfg, dict) else None
+        return b.strip() if isinstance(b, str) else ""
+
+    def _shim(name, firing):
+        return {"name": name, "pipeline": _binding(name), "params": {},
+                "firing": firing,
+                "concurrency": {"policy": "skip", "max": 1},
+                "enabled": True, "lane": roles.lane_of_role(config, name),
+                "kind": "shim"}
+
+    out = []
+    for name in roles._all_loop_roles(config):
+        out.append(_shim(name, {"mode": "continuous"}))
+    for name, sched in roles._all_cron_roles(config):
+        out.append(_shim(name, {"mode": "schedule", "schedule": sched}))
+    return out
+
+
 def main(argv):
     print("triggers.py: CLI lands in a later task", file=sys.stderr)
     return 2
