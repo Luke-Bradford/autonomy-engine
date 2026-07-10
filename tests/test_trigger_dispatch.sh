@@ -359,7 +359,10 @@ check "loop consumes manual fires"  "1" "$(grep -c '^    resolve_manual_fires$' 
 check "loop consumes queued fires"  "1" "$(grep -c '^    resolve_queued_fires$' "$sup")"
 check "loop inflight via tokens"    "1" "$(grep -c 'inflight_list="\$(filter_dispatchable_tokens' "$sup")"
 check "empty board inflight-only"   "1" "$(grep -c 'dispatch_list="\$inflight_list"' "$sup")"
-check "event path stays on roles"   "1" "$(grep -c 'resolve_event_wakes "\$session_ran"' "$sup")"
+# Phase C FLIP: the loop calls the TRIGGER event resolver; the legacy role
+# resolver is uncalled (structural double-dispatch impossibility, parity 5 --
+# test_event_bus.sh proves the same with an anchored grep).
+check "event path via triggers"     "1" "$(grep -c 'resolve_trigger_event_wakes "\$session_ran"' "$sup")"
 check "fp gate gets bare name"      "1" "$(grep -c 'fingerprint_gate "\$name"' "$sup")"
 check "run_session gets kind"       "1" "$(grep -c 'run_session "\$role" "\$kind"; outcome=' "$sup")"
 check "loop kind via state not guess" "1" "$(grep -c 'kind="\$(dispatch_kind_of "\$name"' "$sup")"

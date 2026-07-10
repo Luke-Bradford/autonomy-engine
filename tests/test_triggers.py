@@ -227,11 +227,12 @@ class ShimTriggersTest(unittest.TestCase):
         self.assertEqual(pm["firing"],
                          {"mode": "schedule", "schedule": "0 6 * * *"})
 
-    def test_event_role_not_shimmed(self):
-        # The event bus stays on the legacy role path until Phase C --
-        # shimming would dispatch qa twice (once per path).
-        names = [t["name"] for t in triggers.shim_triggers(self._config())]
-        self.assertNotIn("qa", names)
+    def test_event_role_shimmed_with_events_csv(self):
+        # Phase C FLIP: event roles ARE shimmed now -- the supervisor routes
+        # the shim through the legacy wake body, so nothing dispatches twice.
+        shims = {t["name"]: t for t in triggers.shim_triggers(self._config())}
+        self.assertIn("qa", shims)
+        self.assertEqual(shims["qa"]["firing"]["mode"], "event")
 
     def test_disabled_role_not_shimmed(self):
         names = [t["name"] for t in triggers.shim_triggers(self._config())]
@@ -316,9 +317,10 @@ class EnumerateTriggersTest(unittest.TestCase):
         trigs, _ = triggers.enumerate_triggers(self.repo)
         self.assertNotIn("qa-nightly", [t["name"] for t in trigs])
 
-    def test_native_trigger_colliding_with_event_role_refused(self):
-        # Event roles stay on the legacy bus until Phase C; a same-name
-        # native trigger would double-dispatch that name (Codex CP1).
+    def test_native_over_event_role_is_ordinary_supersession(self):
+        # Phase C FLIP of the CP1 collision refusal (decision 15): event
+        # roles are shimmed, natives supersede shims -- exactly one
+        # enumerator can fire the name, so the refusal's reason is gone.
         with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
                   "w") as fh:
             fh.write("roles:\n  qa:\n    enabled: true\n"
@@ -326,8 +328,9 @@ class EnumerateTriggersTest(unittest.TestCase):
                      "      on: [pr.opened]\n")
         self._write("qa", _trig(name="qa"))
         trigs, warns = triggers.enumerate_triggers(self.repo)
-        self.assertNotIn("qa", [t["name"] for t in trigs])
-        self.assertTrue(any("event" in w and "qa" in w for w in warns))
+        qa = [t for t in trigs if t["name"] == "qa"]
+        self.assertEqual([t["kind"] for t in qa], ["native"])
+        self.assertTrue(any("supersede" in w for w in warns))
 
     def test_bad_filename_stem_refused_with_warning(self):
         d = os.path.join(self.repo, ".autonomy", "triggers")
@@ -430,7 +433,9 @@ class CliTest(unittest.TestCase):
         self.assertIn("push-now\tskip\t1\n", out)
         self.assertNotIn("always-on", out)
 
-    def test_manual_excludes_event_colliding_trigger(self):
+    def test_manual_native_supersedes_event_role(self):
+        # Phase C FLIP: a manual native named like an event role is ordinary
+        # supersession -- it lists (and the role's event shim is suppressed).
         with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
                   "w") as fh:
             fh.write("roles:\n  qa:\n    enabled: true\n"
@@ -439,7 +444,9 @@ class CliTest(unittest.TestCase):
         self._write("qa", _trig(name="qa", firing={"mode": "manual"}))
         rc, out, _ = self._run("manual", self.repo)
         self.assertEqual(rc, 0)
-        self.assertNotIn("qa\t", out)
+        self.assertIn("qa\t", out)
+        rc, out, _ = self._run("event", self.repo)
+        self.assertNotIn("qa\t", out)      # the event shim stays suppressed
 
 
 class EventTriggerSchemaTest(unittest.TestCase):
@@ -507,6 +514,55 @@ class EventCliTest(CliTest):
             rc, out, _ = self._run(sub, self.repo)
             self.assertEqual(rc, 0, sub)
             self.assertNotIn("qa-on-pr", out, sub)
+
+
+class EventCutoverTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        self.tdir = os.path.join(self.repo, ".autonomy", "triggers")
+        os.makedirs(self.tdir)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("roles:\n  qa:\n    enabled: true\n"
+                     "    trigger:\n      type: event\n"
+                     "      on: [pr.opened, session.done]\n")
+
+    def test_event_roles_are_shimmed(self):
+        cfg = {"roles": {"qa": {"enabled": True,
+                                "trigger": {"type": "event",
+                                            "on": ["pr.opened",
+                                                   "session.done"]}}}}
+        shims = [t for t in triggers.shim_triggers(cfg)
+                 if t["firing"]["mode"] == "event"]
+        self.assertEqual(shims[0]["name"], "qa")
+        self.assertEqual(shims[0]["firing"]["events_csv"],
+                         "pr.opened,session.done")
+
+    def test_event_shim_enumerates(self):
+        trigs, warns = triggers.enumerate_triggers(self.repo)
+        ev = [t for t in trigs if t["firing"]["mode"] == "event"]
+        self.assertEqual(ev[0]["name"], "qa")
+        self.assertEqual(ev[0]["kind"], "shim")
+
+    def test_native_supersedes_event_role_shim(self):
+        with open(os.path.join(self.tdir, "qa.json"), "w") as fh:
+            json.dump({"name": "qa", "pipeline": "qa-sweep", "params": {},
+                       "firing": {"mode": "event", "event": "pr.opened"}},
+                      fh)
+        trigs, warns = triggers.enumerate_triggers(self.repo)
+        qa = [t for t in trigs if t["name"] == "qa"]
+        self.assertEqual(len(qa), 1)
+        self.assertEqual(qa[0]["kind"], "native")     # NO refusal
+        self.assertTrue(any("supersede" in w for w in warns), warns)
+        self.assertFalse(any(w.startswith("refused") for w in warns), warns)
+
+    def test_broken_native_still_suppresses_event_shim(self):
+        with open(os.path.join(self.tdir, "qa.json"), "w") as fh:
+            fh.write("{corrupt")
+        trigs, warns = triggers.enumerate_triggers(self.repo)
+        self.assertFalse([t for t in trigs if t["name"] == "qa"])
+        self.assertTrue(any(w.startswith("refused") for w in warns), warns)
 
 
 if __name__ == "__main__":

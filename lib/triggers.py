@@ -215,9 +215,11 @@ def load_trigger(repo, name):
 
 def shim_triggers(config):
     """Auto-shim (spec S7): every enabled loop role -> a synthetic continuous
-    trigger; every enabled cron role -> a synthetic schedule trigger. Event
-    roles are NOT shimmed -- the event bus fires them through the legacy role
-    path until Phase C wires event triggers (a shim would double-dispatch).
+    trigger; every enabled cron role -> a synthetic schedule trigger; every
+    enabled event role -> a synthetic event trigger carrying its on: list as
+    events_csv (Phase C cutover -- the supervisor routes event shims through
+    the LEGACY per-role wake body verbatim, so semantics are byte-identical;
+    events_csv is a shim-internal field, never valid in a native file).
 
     The shim carries FIRING identity only: name==role (byte-equal -- ledger/
     fingerprint/state-file continuity, the Phase E trust argument), params={},
@@ -246,6 +248,9 @@ def shim_triggers(config):
         out.append(_shim(name, {"mode": "continuous"}))
     for name, sched in roles._all_cron_roles(config):
         out.append(_shim(name, {"mode": "schedule", "schedule": sched}))
+    for name, events in roles.all_event_roles(config):
+        out.append(_shim(name, {"mode": "event",
+                                "events_csv": ",".join(events)}))
     return out
 
 
@@ -286,20 +291,12 @@ def enumerate_triggers(repo, lane=None):
     target_lane = lane if lane is not None else roles.default_lane(cfg)
     declared = roles.lane_names(cfg)
     warnings, out, native_stems = [], [], set()
-    event_names = set(n for (n, _ev) in roles.all_event_roles(cfg))
     stems, bad = _trigger_stems(repo)
     for stem in bad:
         warnings.append("refused trigger file %r: invalid name charset"
                         % stem)
     for stem in stems:
         native_stems.add(stem)      # even a BROKEN file suppresses the shim
-        if stem in event_names:
-            # Event roles stay on the legacy bus until Phase C; a same-name
-            # native trigger would DOUBLE-DISPATCH this name (Codex CP1).
-            warnings.append("refused trigger %r: collides with an enabled "
-                            "event role -- event triggers land in Phase C"
-                            % stem)
-            continue
         try:
             trig = load_trigger(repo, stem)
         except PipelineError as exc:

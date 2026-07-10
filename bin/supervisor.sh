@@ -583,16 +583,18 @@ fingerprint_backoff() {
   esac
 }
 
-# rc 0 when the repo declares any cron or event role. Long skip sleeps would
-# starve the top-of-tick cron/event resolvers, so the caller caps the idle at
-# 300s when this returns 0. Enumeration failure reads as "none" -- the same
-# tick's own cron/event resolution would have failed too, and the cost is a
-# longer sleep, not lost work.
-has_scheduled_roles() {
+# rc 0 when the repo has any cron or event TRIGGER (native or shim -- the
+# Phase C cutover renamed has_scheduled_roles and re-based it on the trigger
+# enumeration; roles-only counting would miss native schedule/event files).
+# Long skip sleeps would starve the top-of-tick cron/event resolvers, so the
+# caller caps the idle at 300s when this returns 0. Enumeration failure reads
+# as "none" -- the same tick's own cron/event resolution would have failed
+# too, and the cost is a longer sleep, not lost work.
+has_scheduled_triggers() {
   local names
-  names="$(_cron_enumerate 2>/dev/null || true)"
+  names="$(_triggers_enumerate cron "$AUTONOMY_TARGET_REPO" 2>/dev/null || true)"
   [ -n "$names" ] && return 0
-  names="$(_event_enumerate 2>/dev/null || true)"
+  names="$(_triggers_enumerate event "$AUTONOMY_TARGET_REPO" 2>/dev/null || true)"
   [ -n "$names" ] && return 0
   return 1
 }
@@ -1432,6 +1434,9 @@ resolve_trigger_cron_due() {
 }
 
 # --- event bus (W2, issue #86) ----------------------------------------------
+# LEGACY enumerator (pre-Phase-C role path) -- kept for has-scheduled parity
+# tests and the legacy resolver below only. New code enumerates TRIGGERS
+# (_triggers_enumerate event); see resolve_trigger_event_wakes.
 # Enumerate the target repo's event roles as NAME<TAB>EVENT[,EVENT...] lines
 # (roles.py events contract). Behind a function so tests can override the seam.
 # rc!=0 -> caller skips events this tick (best-effort, never crashes the loop).
@@ -1512,6 +1517,11 @@ _event_role_wakes() {
   done
 }
 
+# --- LEGACY event bus (W2, #86) -- pre-Phase-C role-path resolver. Kept for
+# the parity tests only (deletion = Phase E, with the other legacy twins named
+# in SD-39); the main loop calls resolve_trigger_event_wakes. NEVER call this
+# from new code: it enumerates ROLES and would double-dispatch beside the
+# trigger resolver.
 # Fire every event role whose on: list matched a NEW item since its per-(role,
 # event) seen-set. The supervisor is the SOLE writer of each seen-set
 # ($VARDIR/events/<role>__<event>.seen) -- reset-epoch-split invariant
@@ -1541,6 +1551,123 @@ resolve_event_wakes() {
     _event_role_wakes "$name" "$events_csv" "$session_ran"
   done
   return 0
+}
+
+# --- event triggers (Phase C, #376) -------------------------------------------
+# One resolver, two lanes: SHIM event triggers ride the legacy per-role
+# semantics VERBATIM (same _event_role_wakes body, same seen files -- the
+# cutover parity argument); NATIVE event triggers are START-ONLY -- one run
+# per new token, payload mapped to params inside start_run_trigger, and the
+# run's first session lands via the MAIN LOOP like any in-flight token
+# (decision 14: sessions only ever run through the one dispatch per
+# iteration, SD-12). Best-effort throughout: enumeration/poll failure skips
+# events this tick and never perturbs loop dispatch. NEVER returns non-zero.
+resolve_trigger_event_wakes() {
+  local session_ran="$1"
+  local enum line name kind evspec policy max
+  enum="$(_triggers_enumerate event "$AUTONOMY_TARGET_REPO")" || {
+    log "WARN event: trigger enumeration failed -- skipping events this tick"
+    return 0
+  }
+  [ -n "$enum" ] || return 0
+  mkdir -p "$VARDIR/events" 2>/dev/null || {
+    log "WARN event: cannot create $VARDIR/events -- skipping events this tick"
+    return 0
+  }
+  while IFS="$(printf '\t')" read -r name kind evspec policy max; do
+    [ -n "$name" ] || continue
+    if ! _role_name_path_safe "$name"; then
+      log "WARN event: trigger name '$name' has invalid path chars -- ignored"
+      continue
+    fi
+    # Hostile/unknown kind DROPS the line (the resolve_trigger_cron_due
+    # discipline, review round 3 of PR #375 -- an if/else would route junk
+    # into the native lane).
+    case "$kind" in
+      shim)   _event_role_wakes "$name" "$evspec" "$session_ran" ;;
+      native) _event_native_wakes "$name" "$evspec" ;;
+      *) log "WARN event: trigger '$name' has unknown kind '$kind' -- ignored" ;;
+    esac
+  done <<EOF
+$enum
+EOF
+  return 0
+}
+
+# START a NATIVE event trigger's run once per NEW token -- never a session
+# here (decision 14). Seen-set discipline: handled tokens append; the set
+# prunes to the current poll page (bounded, monotonicity argument
+# unchanged); a token is handled when its RUN STARTS (the state file is the
+# durable claim -- the main loop advances it as an in-flight token);
+# at-capacity/failed-start tokens stay unhandled (redelivered).
+_event_native_wakes() {
+  local name="$1" event="$2"
+  local seen_file tokens new tok item sha handled kept state stok rc_start
+  case "$event" in
+    pr.opened|issue.created|merge.done|pr.synchronize) : ;;
+    *) log "WARN event: unknown event '$event' for trigger '$name' -- ignored"
+       return 0 ;;
+  esac
+  seen_file="$VARDIR/events/${name}__${event}.seen"
+  tokens="$(_event_poll "$event")" || return 0
+  if [ ! -f "$seen_file" ]; then
+    _event_write_seen "$seen_file" "$tokens" \
+      || log "WARN event: cannot seed seen-set for '$name/$event'"
+    return 0
+  fi
+  new="$(printf '%s\n' "$tokens" | grep -v '^[[:space:]]*$' | grep -Fxv -f "$seen_file" 2>/dev/null || true)"
+  # prune the carried-over seen lines to the current page (bounded set)
+  kept="$(grep -Fx -f "$seen_file" 2>/dev/null <<EOF2 || true
+$tokens
+EOF2
+)"
+  handled=""
+  while IFS= read -r tok; do
+    [ -n "$tok" ] || continue
+    case "$event" in
+      pr.synchronize) item="${tok%%:*}"; sha="${tok#*:}" ;;
+      *)              item="$tok";       sha="" ;;
+    esac
+    # prevention-log #6: poll output crosses a gh pipe -- gate both pieces
+    # before they land in argv.
+    case "$item" in ''|*[!0-9]*)
+      log "WARN event: token '$tok' has no numeric item -- ignored"; continue ;;
+    esac
+    case "$sha" in *[!A-Za-z0-9]*)
+      log "WARN event: token '$tok' has a malformed sha -- ignored"; continue ;;
+    esac
+    if ! stok="$(trigger_start_token_for "$name")"; then
+      log "NOTE event: trigger '$name' at capacity -- '$tok' redelivered next tick"
+      continue
+    fi
+    state="$(pipeline_state_file "$(token_name "$stok")" "$(token_slot "$stok")")"
+    if [ -n "${AUTONOMY_LANE:-}" ]; then
+      python3 "$ENGINE_HOME/lib/pipeline.py" start "$AUTONOMY_TARGET_REPO" \
+        "$name" "$state" --lane "$AUTONOMY_LANE" --kind native \
+        --event-field "item=$item" ${sha:+--event-field "sha=$sha"} \
+        >>"$SUPLOG" 2>&1
+      rc_start=$?
+    else
+      python3 "$ENGINE_HOME/lib/pipeline.py" start "$AUTONOMY_TARGET_REPO" \
+        "$name" "$state" --kind native \
+        --event-field "item=$item" ${sha:+--event-field "sha=$sha"} \
+        >>"$SUPLOG" 2>&1
+      rc_start=$?
+    fi
+    if [ "$rc_start" -ne 0 ]; then
+      log "WARN event: could not start trigger '$name' for $event '$tok' -- redelivered next tick"
+      continue
+    fi
+    log "event: trigger '$name' fired by $event ($tok) -> run started ($stok); the loop advances it"
+    handled="${handled}${tok}
+"
+  done <<EOF3
+$new
+EOF3
+  printf '%s%s' "$kept${kept:+
+}" "$handled" | grep -v '^[[:space:]]*$' >"$seen_file".tmp 2>/dev/null \
+    && mv "$seen_file".tmp "$seen_file" \
+    || log "WARN event: cannot advance seen for '$name/$event' -- some tokens may redeliver"
 }
 
 # Round-robin selector: print the (idx mod n)th name, 0-indexed, from the
@@ -2559,7 +2686,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # Passes last iteration's loop-session flag for the session.done edge, then
     # consumes it. Additive/best-effort: no event roles = no-op.
     heartbeat "polling-events" "polling board/PR events" ""
-    resolve_event_wakes "$session_ran"
+    resolve_trigger_event_wakes "$session_ran"
     session_ran=0
 
     open_count="$(cd "$AUTONOMY_TARGET_REPO" && gh issue list --state open --json number -q 'length' 2>/dev/null || echo -1)"
@@ -2658,7 +2785,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
       # Long sleeps would starve the top-of-tick cron/event resolvers -- cap
       # the idle when this repo schedules any (a skipped tick costs a few gh
       # calls, zero LLM tokens).
-      if [ "$fp_wait" -gt 300 ] && has_scheduled_roles; then fp_wait=300; fi
+      if [ "$fp_wait" -gt 300 ] && has_scheduled_triggers; then fp_wait=300; fi
       log "fingerprint unchanged for $role -- skip #$fp_skips, idle ${fp_wait}s (zero-token)"
       heartbeat "fingerprint-idle" "board unchanged since last completed $role session -- zero-token skip" "$(( $(date -u +%s) + fp_wait ))"
       idle_sleep "$fp_wait"

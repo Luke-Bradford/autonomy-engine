@@ -2005,26 +2005,28 @@ class StartRunTriggerTest(unittest.TestCase):
         with self.assertRaises(pipeline.PipelineError):
             self._start()
 
-    def test_event_role_collision_refuses_at_start(self):
-        # CP2 defense in depth: enumeration refuses the collision, but a
-        # start that arrives another way (manual marker, direct CLI) must
-        # refuse at the chokepoint too -- event roles stay on the legacy bus.
+    def test_event_role_name_starts_fine_post_cutover(self):
+        # Phase C FLIP of the CP2 collision pin (decision 15): event roles
+        # are shimmed and natives supersede shims, so a trigger named like
+        # an event role is ordinary supersession -- the chokepoint probe is
+        # retired WITH its reason in the same commit.
         with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
                   "w") as fh:
             fh.write("roles:\n  t1:\n    enabled: true\n"
                      "    trigger:\n      type: event\n"
                      "      on: [pr.opened]\n")
         self._trigger()
-        with self.assertRaises(pipeline.PipelineError) as cm:
-            self._start()
-        self.assertIn("event", str(cm.exception))
+        st = self._start()
+        self.assertEqual(st["trigger"], "t1")
 
-    def test_config_unreadable_refuses_native_start(self):
-        # Can't verify the event-collision gate = don't run (fail-safe).
+    def test_config_unreadable_no_longer_blocks_native_start(self):
+        # Phase C FLIP: the config read existed ONLY for the retired
+        # collision probe. Enumeration (dispatch) still requires a readable
+        # config; a direct start does not.
         os.remove(os.path.join(self.repo, ".autonomy", "config.yaml"))
         self._trigger()
-        with self.assertRaises(pipeline.PipelineError):
-            self._start()
+        st = self._start()
+        self.assertEqual(st["kind"], "native")
 
     def test_shim_state_shape_matches(self):
         # start_run gains trigger/kind/params/run too -- ONE state shape.
