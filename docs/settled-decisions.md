@@ -287,6 +287,34 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     *(specs/2026-07-09-pipeline-trigger-model-design.md;
     plans/2026-07-10-pipeline-model-phaseB-triggers.md; #374.)*
 
+40. **Child runs, event triggers and the secret env channel land as Phase C
+    of the pipeline+trigger model** (2026-07-10, #376). A
+    `call_pipeline` node spawns a CHILD run that dispatches as its own
+    in-flight token (`<parent>.c<slot>.<node>`; SD-12/SD-36 untouched);
+    parent and child signal through the `<child>.outcome.json` sidecar; the
+    run cap counts call dispatches; depth ≤ 3, call cycles refuse; a failed
+    child's projected outputs still return (the findings loop). Back-edge-
+    visible node outputs are readable ONLY inside `default()`, whose missing-
+    node-output tolerance is the one soft spot in the reference language;
+    same-container EARLIER-sibling refs are now static-legal. Event firing is
+    a trigger mode: event roles auto-shim onto the legacy per-role semantics
+    verbatim, native event triggers fire one run per new token with payload→
+    param mapping inside `start_run_trigger`, and TWO SD-39 rules retire
+    WITH their reason in the same commit — the event-collision refusal and
+    the legacy role-path event resolver (LEGACY-marked; deletion = Phase E).
+    A broken native event trigger still never falls back to role dispatch.
+    Secrets: a secret param's value is a credential LABEL (SD-8); the ONLY
+    sink is a node's `secrets: {ENV_VAR: ${params.<name>}}` map; the value
+    resolves supervisor-side (foreground, refuse-on-failure), exports
+    subshell-scoped, and is scrubbed from the session log post-session; state,
+    journal, briefs and ready-blocks carry labels only. Sidecar suffixes
+    (`.outputs`/`.verdict`/`.outcome`) are RESERVED in the state-file glob
+    namespace: the token scan skips them and the mint sites (node ids,
+    trigger names) refuse them. Trust stays keyed per-assignment (Phase E
+    re-keys); the dashboard keeps the role view (Phase D renders children).
+    *(specs/2026-07-09-pipeline-trigger-model-design.md §3.1/§4/§5;
+    plans/2026-07-10-pipeline-model-phaseC-call-events-secrets.md; #376.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could

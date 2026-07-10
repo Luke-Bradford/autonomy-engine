@@ -21,10 +21,13 @@ from pipeline import PipelineError                          # noqa: E402
 
 _TRIGGER_KEYS = frozenset(("name", "pipeline", "params", "firing",
                            "concurrency", "enabled", "lane"))
-_FIRING_KEYS = frozenset(("mode", "schedule"))
+_FIRING_KEYS = frozenset(("mode", "schedule", "event", "map"))
 _CONCURRENCY_KEYS = frozenset(("policy", "max"))
-FIRING_MODES = ("continuous", "schedule", "manual")
-DEFERRED_FIRING_MODES = {"event": "the event-bus payload mapping (Phase C)"}
+FIRING_MODES = ("continuous", "schedule", "manual", "event")
+# Closed event vocabulary = the four EXTERNAL kinds the W2 bus polls;
+# session.done stays a shim-internal loop edge (the validator names it).
+EVENT_KINDS = ("pr.opened", "issue.created", "merge.done", "pr.synchronize")
+EVENT_FIELDS = ("item", "sha", "event")
 CONCURRENCY_POLICIES = ("queue", "skip", "parallel")
 MAX_TRIGGER_PARALLEL = 8          # mirrors pipeline.MAX_PARALLEL_CEIL
 
@@ -69,6 +72,15 @@ def validate_trigger(trig, stem):
         errors.append("name: required, charset [A-Za-z0-9._-]{1,64}")
     elif nm != stem:
         errors.append("name %r != filename stem %r" % (nm, stem))
+    elif "." in nm and nm.rsplit(".", 1)[-1] in \
+            pipeline._RESERVED_SIDECAR_SUFFIXES:
+        # <name>.outputs/.verdict/.outcome state files would be skipped by
+        # the supervisor's token scan (sidecars share the glob namespace):
+        # the run could start but never advance. Refuse at mint (Phase C).
+        errors.append("name %r ends in a reserved sidecar suffix (%s) -- "
+                      "rename the trigger"
+                      % (nm, "/".join(sorted(
+                          pipeline._RESERVED_SIDECAR_SUFFIXES))))
     if not pipeline.valid_pipeline_name(trig.get("pipeline")):
         errors.append("pipeline: required, charset [A-Za-z0-9._-]{1,64} "
                       "(existence is checked at run start)")
@@ -91,13 +103,40 @@ def validate_trigger(trig, stem):
             if k not in _FIRING_KEYS:
                 errors.append("firing: unknown key %r" % k)
         mode = firing.get("mode")
-        if mode in DEFERRED_FIRING_MODES:
-            errors.append("firing.mode %r needs engine machinery Phase B "
-                          "does not have -- lands with %s"
-                          % (mode, DEFERRED_FIRING_MODES[mode]))
-        elif mode not in FIRING_MODES:
+        if mode not in FIRING_MODES:
             errors.append("firing.mode: must be one of %s"
                           % ", ".join(FIRING_MODES))
+        if mode == "event":
+            ev = firing.get("event")
+            if ev not in EVENT_KINDS:
+                errors.append("firing.event: must be one of %s "
+                              "(session.done is an internal loop edge, "
+                              "not a subscribable event)"
+                              % ", ".join(EVENT_KINDS))
+            mp = firing.get("map")
+            if mp is not None:
+                if not isinstance(mp, dict):
+                    errors.append("firing.map: must be {param: item|sha|event}")
+                else:
+                    for k, v in mp.items():
+                        if not (isinstance(k, str)
+                                and pipeline._NAME_RE.match(k)):
+                            errors.append("firing.map: key %r invalid "
+                                          "charset" % (k,))
+                        if v not in EVENT_FIELDS:
+                            errors.append("firing.map.%s: field must be one "
+                                          "of %s" % (k, ", ".join(EVENT_FIELDS)))
+                        elif v == "sha" and ev != "pr.synchronize":
+                            errors.append("firing.map.%s: 'sha' exists only "
+                                          "on pr.synchronize payloads" % k)
+                        if isinstance(params, dict) and k in params:
+                            errors.append("firing.map.%s: also set in params "
+                                          "-- one source per param, remove "
+                                          "one" % k)
+        else:
+            for k in ("event", "map"):
+                if k in firing:
+                    errors.append("firing.%s: only valid with mode=event" % k)
         if mode == "schedule":
             sched = firing.get("schedule")
             if not (isinstance(sched, str) and sched.strip()):
@@ -130,6 +169,11 @@ def validate_trigger(trig, stem):
             elif pol == "queue" and mx != 1:
                 errors.append("concurrency: queue is bounded at max 1 "
                               "(spec S11 -- deeper queues risk stale runs)")
+            elif pol == "queue" and isinstance(trig.get("firing"), dict) \
+                    and trig["firing"].get("mode") == "event":
+                errors.append("concurrency: queue is not valid for event "
+                              "mode -- the event seen-set redelivers "
+                              "unhandled tokens, which IS the queue")
     if "enabled" in trig and not isinstance(trig["enabled"], bool):
         errors.append("enabled: must be a bool")
     lane = trig.get("lane")
@@ -171,9 +215,11 @@ def load_trigger(repo, name):
 
 def shim_triggers(config):
     """Auto-shim (spec S7): every enabled loop role -> a synthetic continuous
-    trigger; every enabled cron role -> a synthetic schedule trigger. Event
-    roles are NOT shimmed -- the event bus fires them through the legacy role
-    path until Phase C wires event triggers (a shim would double-dispatch).
+    trigger; every enabled cron role -> a synthetic schedule trigger; every
+    enabled event role -> a synthetic event trigger carrying its on: list as
+    events_csv (Phase C cutover -- the supervisor routes event shims through
+    the LEGACY per-role wake body verbatim, so semantics are byte-identical;
+    events_csv is a shim-internal field, never valid in a native file).
 
     The shim carries FIRING identity only: name==role (byte-equal -- ledger/
     fingerprint/state-file continuity, the Phase E trust argument), params={},
@@ -202,6 +248,9 @@ def shim_triggers(config):
         out.append(_shim(name, {"mode": "continuous"}))
     for name, sched in roles._all_cron_roles(config):
         out.append(_shim(name, {"mode": "schedule", "schedule": sched}))
+    for name, events in roles.all_event_roles(config):
+        out.append(_shim(name, {"mode": "event",
+                                "events_csv": ",".join(events)}))
     return out
 
 
@@ -242,20 +291,12 @@ def enumerate_triggers(repo, lane=None):
     target_lane = lane if lane is not None else roles.default_lane(cfg)
     declared = roles.lane_names(cfg)
     warnings, out, native_stems = [], [], set()
-    event_names = set(n for (n, _ev) in roles.all_event_roles(cfg))
     stems, bad = _trigger_stems(repo)
     for stem in bad:
         warnings.append("refused trigger file %r: invalid name charset"
                         % stem)
     for stem in stems:
         native_stems.add(stem)      # even a BROKEN file suppresses the shim
-        if stem in event_names:
-            # Event roles stay on the legacy bus until Phase C; a same-name
-            # native trigger would DOUBLE-DISPATCH this name (Codex CP1).
-            warnings.append("refused trigger %r: collides with an enabled "
-                            "event role -- event triggers land in Phase C"
-                            % stem)
-            continue
         try:
             trig = load_trigger(repo, stem)
         except PipelineError as exc:
@@ -296,7 +337,7 @@ def main(argv):
         return 2
     cmd, rest = argv[0], argv[1:]
     pos, lane = _cli_lane(rest)
-    if cmd in ("dispatch", "cron", "validate") and len(pos) != 1:
+    if cmd in ("dispatch", "cron", "validate", "event") and len(pos) != 1:
         print("usage: triggers.py %s <repo> [--lane <l>]" % cmd,
               file=sys.stderr)
         return 2
@@ -326,6 +367,27 @@ def main(argv):
             if t["firing"]["mode"] == "schedule":
                 print("%s\t%s\t%s" % (t["name"], t["firing"]["schedule"],
                                       t["kind"]))
+        return 0
+    if cmd == "event":
+        # Event-mode listing for the supervisor's event resolver. Until the
+        # Task 10 cutover shims event roles, this lists NATIVES only (and
+        # nothing fires them -- the collision refusals hold, decision 15).
+        # evspec = the single event for a native; a shim carries events_csv.
+        try:
+            trigs, warns = enumerate_triggers(pos[0], lane)
+        except PipelineError as exc:
+            print("triggers event: %s" % exc, file=sys.stderr)
+            return 1
+        for w in warns:
+            print("WARN %s" % w, file=sys.stderr)
+        for t in trigs:
+            f = t["firing"]
+            if f.get("mode") != "event":
+                continue
+            c = t["concurrency"]
+            spec = f.get("events_csv") if t["kind"] == "shim" else f.get("event")
+            print("%s\t%s\t%s\t%s\t%d" % (t["name"], t["kind"], spec,
+                                          c["policy"], c["max"]))
         return 0
     if cmd == "manual":
         # The manual-fire DISPATCH gate (Codex CP2): derived from

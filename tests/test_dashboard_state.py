@@ -1731,6 +1731,34 @@ class TestParseAutonomyQuestion(unittest.TestCase):
             self.assertIsNone(ds.parse_autonomy_question(bad))
 
 
+class ChildRunToleranceTest(unittest.TestCase):
+    def test_child_run_state_files_never_crash_build_repo_state(self):
+        # Phase C: child/slotted state files land in var/autonomy-logs; the
+        # dashboard keeps the ROLE view until Phase D -- children are
+        # invisible to its glob, but they must never crash the build.
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        os.makedirs(os.path.join(d, ".autonomy"))
+        logdir = os.path.join(d, "var", "autonomy-logs")
+        os.makedirs(logdir)
+        with open(os.path.join(d, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("roles:\n  coder:\n    enabled: true\n")
+        child = {"fmt": 2, "run_id": "coder.c0.qa-x-1", "role": "coder.c0.qa",
+                 "lane": "", "doc": {"name": "qa-sweep", "nodes": []},
+                 "meta": {}, "parent_run": "coder-x-1", "parent_node": "qa",
+                 "call_depth": 1, "call_path": ["p", "qa-sweep"],
+                 "units": {}, "status": "in_progress"}
+        for fn in (".pipeline-run-coder.c0.qa.json",
+                   ".pipeline-run-coder@2.json"):
+            with open(os.path.join(logdir, fn), "w") as fh:
+                json.dump(child, fh)
+        with open(os.path.join(
+                logdir, ".pipeline-run-coder.c0.qa.outcome.json"), "w") as fh:
+            json.dump({"run_id": "x", "outcome": "success", "outputs": {}}, fh)
+        st = ds.build_repo_state(d)          # must not raise
+        self.assertIn("roles", st)
+
+
 if __name__ == "__main__":
     unittest.main()
 

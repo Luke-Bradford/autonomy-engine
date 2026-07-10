@@ -1584,21 +1584,14 @@ class ResolveParamsTest(unittest.TestCase):
         with self.assertRaises(pipeline.PipelineError):
             pipeline.resolve_params(self._decl(), {"repo": "/r", "retries": "abc"})
 
-    def test_secret_resolves_via_lookup_and_is_not_the_name(self):
-        seen = {}
-        def fake_lookup(name):
-            seen["asked"] = name
-            return "s3cr3t"
+    def test_secret_resolves_to_its_label_never_a_value(self):
+        # Phase C FLIP of the Phase A secret_lookup pins: the seam is
+        # deleted; a secret's resolved form IS the label (SD-8), and the
+        # VALUE resolves only supervisor-side at the env sink.
         got = pipeline.resolve_params(
             [{"name": "token", "type": "secret", "required": True}],
-            {"token": "PROD_KEY"}, secret_lookup=fake_lookup)
-        self.assertEqual(got["token"], "s3cr3t")
-        self.assertEqual(seen["asked"], "PROD_KEY")
-
-    def test_secret_without_lookup_refuses(self):
-        with self.assertRaises(pipeline.PipelineError):
-            pipeline.resolve_params([{"name": "t", "type": "secret", "required": True}],
-                                    {"t": "K"})                # no secret_lookup seam
+            {"token": "PROD_KEY"})
+        self.assertEqual(got["token"], "PROD_KEY")
 
 
 class OutputsFileTest(unittest.TestCase):
@@ -1976,16 +1969,18 @@ class StartRunTriggerTest(unittest.TestCase):
         with self.assertRaises(pipeline.PipelineError):
             self._start()
 
-    def test_secret_value_supplied_refuses_and_never_echoes_value(self):
-        self._trigger(tok="hunter2-value")
-        with self.assertRaises(pipeline.PipelineError) as cm:
-            self._start()
-        self.assertNotIn("hunter2-value", str(cm.exception))
-        self.assertIn("tok", str(cm.exception))
+    def test_secret_value_starts_as_label_in_state(self):
+        # Phase C FLIP of the Phase B no-sink refusal pin: the env-channel
+        # sink exists now, so a trigger-supplied secret VALUE -- a
+        # credential LABEL (SD-8: index names are non-secret) -- starts the
+        # run and rides state['params'] as the label.
+        self._trigger(tok="gh-token")
+        st = self._start()
+        self.assertEqual(st["params"]["tok"], "gh-token")
 
-    def test_secret_with_pipeline_default_refuses_too(self):
-        # Codex CP1: a saved default would resolve through secret_lookup
-        # into state['params'] on disk -- the same refusal must cover it.
+    def test_secret_with_pipeline_default_starts_too(self):
+        # Phase C FLIP of the CP1 saved-default refusal: a saved default is
+        # a LABEL and resolves like any invoker value.
         with open(os.path.join(self.pdir, "pipeline.json")) as fh:
             doc = json.load(fh)
         doc["params"] = [p if p["name"] != "tok" else
@@ -1994,9 +1989,8 @@ class StartRunTriggerTest(unittest.TestCase):
         with open(os.path.join(self.pdir, "pipeline.json"), "w") as fh:
             json.dump(doc, fh)
         self._trigger()
-        with self.assertRaises(pipeline.PipelineError) as cm:
-            self._start()
-        self.assertIn("tok", str(cm.exception))
+        st = self._start()
+        self.assertEqual(st["params"]["tok"], "KEY")
 
     def test_declared_valueless_secret_is_inert(self):
         self._trigger()          # 'tok' declared, no default, no value
@@ -2011,26 +2005,28 @@ class StartRunTriggerTest(unittest.TestCase):
         with self.assertRaises(pipeline.PipelineError):
             self._start()
 
-    def test_event_role_collision_refuses_at_start(self):
-        # CP2 defense in depth: enumeration refuses the collision, but a
-        # start that arrives another way (manual marker, direct CLI) must
-        # refuse at the chokepoint too -- event roles stay on the legacy bus.
+    def test_event_role_name_starts_fine_post_cutover(self):
+        # Phase C FLIP of the CP2 collision pin (decision 15): event roles
+        # are shimmed and natives supersede shims, so a trigger named like
+        # an event role is ordinary supersession -- the chokepoint probe is
+        # retired WITH its reason in the same commit.
         with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
                   "w") as fh:
             fh.write("roles:\n  t1:\n    enabled: true\n"
                      "    trigger:\n      type: event\n"
                      "      on: [pr.opened]\n")
         self._trigger()
-        with self.assertRaises(pipeline.PipelineError) as cm:
-            self._start()
-        self.assertIn("event", str(cm.exception))
+        st = self._start()
+        self.assertEqual(st["trigger"], "t1")
 
-    def test_config_unreadable_refuses_native_start(self):
-        # Can't verify the event-collision gate = don't run (fail-safe).
+    def test_config_unreadable_no_longer_blocks_native_start(self):
+        # Phase C FLIP: the config read existed ONLY for the retired
+        # collision probe. Enumeration (dispatch) still requires a readable
+        # config; a direct start does not.
         os.remove(os.path.join(self.repo, ".autonomy", "config.yaml"))
         self._trigger()
-        with self.assertRaises(pipeline.PipelineError):
-            self._start()
+        st = self._start()
+        self.assertEqual(st["kind"], "native")
 
     def test_shim_state_shape_matches(self):
         # start_run gains trigger/kind/params/run too -- ONE state shape.
@@ -2049,16 +2045,683 @@ class StartRunTriggerTest(unittest.TestCase):
         self.assertEqual(st["run"]["trigger"], "coder")
 
 
+class _ChildFixture(unittest.TestCase):
+    """Shared tmp-repo fixture for the call_pipeline family (Tasks 4+5)."""
+
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        self.logdir = os.path.join(self.repo, "var", "autonomy-logs")
+        os.makedirs(self.logdir)
+        self.journal = os.path.join(self.logdir, "journal.jsonl")
+        self._write_pipeline("qa-sweep", {
+            "name": "qa-sweep", "version": 1,
+            "caps": {"max_sessions_per_run": 4},
+            "params": [{"name": "target", "type": "string", "required": True}],
+            "outputs": [{"name": "findings", "type": "string"}],
+            "nodes": [{"id": "scan", "type": "check", "brief_ref": "scan.md"}],
+            "edges": [],
+        }, briefs={"scan.md": "scan ${params.target}"})
+
+    def _write_pipeline(self, name, doc, briefs):
+        d = os.path.join(self.repo, ".autonomy", "pipelines", name)
+        os.makedirs(d)
+        with open(os.path.join(d, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        for fn, text in briefs.items():
+            with open(os.path.join(d, fn), "w") as fh:
+                fh.write(text)
+
+    def _parent_state(self, node_params=None, name="par", doc=None):
+        doc = doc if doc is not None else _call_doc()
+        if node_params is not None:
+            doc["nodes"][1]["params"] = node_params
+        state_path = os.path.join(self.logdir, ".pipeline-run-%s.json" % name)
+        units = dict((u, {"status": "pending"}) for u in
+                     pipeline._top_units(doc))
+        units["code"] = {"status": "success"}
+        state = {"fmt": 2, "run_id": "%s-x-1" % name, "role": name,
+                 "lane": "", "doc": dict(doc, edges=pipeline.effective_edges(doc)),
+                 "meta": {}, "trigger": name, "kind": "native", "params": {},
+                 "run": {"id": "%s-x-1" % name, "pipeline": doc["name"],
+                         "trigger": name, "repo": self.repo},
+                 "started": 1, "sessions": 0,
+                 "units": units,
+                 "container_pos": {}, "rounds": {}, "bounces": {},
+                 "nodes_done": [{"id": "code", "type": "agent_task",
+                                 "outcome": "success", "unit": "code",
+                                 "via": [], "session_log": ""}],
+                 "status": "in_progress"}
+        pipeline._atomic_write_json(state_path, state)
+        # code's outputs sidecar feeds the call params
+        outp = os.path.join(self.logdir,
+                            ".pipeline-run-%s.code.outputs.json" % name)
+        pipeline.write_output(outp, "branch", "feat/x")
+        return state_path, state
+
+
+class ChildRunTest(_ChildFixture):
+    def test_child_starts_with_substituted_params(self):
+        sp, st = self._parent_state()
+        name, cpath = pipeline.start_child_run(
+            self.repo, sp, st, st["doc"]["nodes"][1])
+        self.assertEqual(name, "par.c0.qa")
+        with open(cpath) as fh:
+            child = json.load(fh)
+        self.assertEqual(child["params"], {"target": "feat/x"})
+        self.assertEqual(child["kind"], "native")
+        self.assertEqual(child["parent_run"], st["run_id"])
+        self.assertEqual(child["parent_node"], "qa")
+        self.assertEqual(child["call_depth"], 1)
+        self.assertEqual(child["call_path"], ["parent", "qa-sweep"])
+
+    def test_cycle_refused(self):
+        sp, st = self._parent_state()
+        st["call_path"] = ["qa-sweep"]
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.start_child_run(self.repo, sp, st, st["doc"]["nodes"][1])
+
+    def test_depth_cap_refused(self):
+        sp, st = self._parent_state()
+        st["call_depth"] = pipeline.MAX_CALL_DEPTH
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.start_child_run(self.repo, sp, st, st["doc"]["nodes"][1])
+
+    def test_overlong_child_name_refused(self):
+        # 'p'*60 + '.c0.qa' = 66 chars > the 64-char _NAME_RE cap (the plan's
+        # 'p'*58 lands EXACTLY on 64, which legally passes -- adjusted).
+        sp, st = self._parent_state(name="p" * 60)
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.start_child_run(self.repo, sp, st, st["doc"]["nodes"][1])
+
+    def test_required_child_param_missing_refuses(self):
+        sp, st = self._parent_state(node_params={})
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.start_child_run(self.repo, sp, st, st["doc"]["nodes"][1])
+
+    def test_existing_child_state_refuses(self):
+        sp, st = self._parent_state()
+        stale = os.path.join(self.logdir, ".pipeline-run-par.c0.qa.json")
+        with open(stale, "w") as fh:
+            fh.write("{}")
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.start_child_run(self.repo, sp, st, st["doc"]["nodes"][1])
+
+    def test_lane_scoped_child_state_filename(self):
+        sp, st = self._parent_state()
+        st["lane"] = "night"
+        name, cpath = pipeline.start_child_run(
+            self.repo, sp, st, st["doc"]["nodes"][1])
+        self.assertEqual(name, "par.c0.qa")
+        self.assertTrue(cpath.endswith(".pipeline-run-par.c0.qa--night.json"))
+
+
+class ChildOutcomeSidecarTest(_ChildFixture):
+    def _child_state(self, outputs_decl=None, nodes_done=None):
+        doc = {"name": "qa-sweep", "version": 1,
+               "caps": {"max_sessions_per_run": 4},
+               "outputs": outputs_decl if outputs_decl is not None else
+                   [{"name": "findings", "type": "string"}],
+               "nodes": [{"id": "scan", "type": "check",
+                          "brief_ref": "scan.md"}],
+               "edges": []}
+        sp = os.path.join(self.logdir, ".pipeline-run-par.c0.qa.json")
+        st = {"fmt": 2, "run_id": "par.c0.qa-x-1", "role": "par.c0.qa",
+              "lane": "", "doc": doc, "meta": {}, "trigger": "par.c0.qa",
+              "kind": "native", "params": {},
+              "run": {"id": "par.c0.qa-x-1", "pipeline": "qa-sweep",
+                      "trigger": "par.c0.qa", "repo": self.repo},
+              "parent_run": "par-x-1", "parent_node": "qa",
+              "call_depth": 1, "call_path": ["parent", "qa-sweep"],
+              "started": 1, "sessions": 1,
+              "units": {"scan": {"status": "success"}},
+              "container_pos": {}, "rounds": {}, "bounces": {},
+              "nodes_done": nodes_done if nodes_done is not None else
+                  [{"id": "scan", "type": "check", "outcome": "success",
+                    "unit": "scan", "via": [], "session_log": ""}],
+              "status": "in_progress"}
+        pipeline._atomic_write_json(sp, st)
+        return sp, st
+
+    def _sidecar(self):
+        p = os.path.join(self.logdir, ".pipeline-run-par.c0.qa.outcome.json")
+        with open(p) as fh:
+            return json.load(fh)
+
+    def test_finish_parks_outcome_and_projected_outputs(self):
+        sp, st = self._child_state()
+        pipeline.write_output(os.path.join(
+            self.logdir, ".pipeline-run-par.c0.qa.scan.outputs.json"),
+            "findings", "f1")
+        pipeline._finish(st, sp, "success", self.journal)
+        self.assertEqual(self._sidecar(),
+                         {"run_id": "par.c0.qa-x-1", "outcome": "success",
+                          "outputs": {"findings": "f1"}})
+
+    def test_projection_type_mismatch_downgrades_to_failure(self):
+        sp, st = self._child_state(
+            outputs_decl=[{"name": "findings", "type": "number"}])
+        pipeline.write_output(os.path.join(
+            self.logdir, ".pipeline-run-par.c0.qa.scan.outputs.json"),
+            "findings", "abc")
+        pipeline._finish(st, sp, "success", self.journal)
+        parked = self._sidecar()
+        self.assertEqual(parked["outcome"], "failure")
+        self.assertIn("projection", parked["error"])
+        self.assertNotIn("outputs", parked)
+
+    def test_failed_call_entries_still_contribute_outputs(self):
+        # decision 8: a failed CHILD's findings are exactly the value the
+        # back-edge loops back -- call entries contribute on failure too.
+        sp, st = self._child_state(nodes_done=[
+            {"id": "scan", "type": "call_pipeline", "outcome": "failure",
+             "unit": "scan", "via": [], "session_log": "",
+             "child_run": "x", "child_outcome": "failure"}])
+        pipeline.write_output(os.path.join(
+            self.logdir, ".pipeline-run-par.c0.qa.scan.outputs.json"),
+            "findings", "f-from-failed-child")
+        pipeline._finish(st, sp, "failure", self.journal)
+        self.assertEqual(self._sidecar()["outputs"],
+                         {"findings": "f-from-failed-child"})
+
+    def test_plain_failed_entries_do_not_contribute(self):
+        # an errored SESSION's sidecar is untrustworthy -- plain nodes stay
+        # success-only (decision 8's other half)
+        sp, st = self._child_state(nodes_done=[
+            {"id": "scan", "type": "check", "outcome": "failure",
+             "unit": "scan", "via": [], "session_log": ""}])
+        pipeline.write_output(os.path.join(
+            self.logdir, ".pipeline-run-par.c0.qa.scan.outputs.json"),
+            "findings", "junk")
+        pipeline._finish(st, sp, "failure", self.journal)
+        self.assertNotIn("findings", self._sidecar().get("outputs", {}))
+
+    def test_journal_line_carries_parent_run(self):
+        sp, st = self._child_state()
+        pipeline._finish(st, sp, "success", self.journal)
+        with open(self.journal) as fh:
+            rec = json.loads(fh.read().splitlines()[-1])
+        self.assertEqual(rec["parent_run"], "par-x-1")
+
+    def test_non_child_run_writes_no_sidecar(self):
+        sp, st = self._child_state()
+        del st["parent_run"]
+        pipeline._finish(st, sp, "success", self.journal)
+        self.assertFalse(os.path.exists(os.path.join(
+            self.logdir, ".pipeline-run-par.c0.qa.outcome.json")))
+
+
+class CallWalkTest(_ChildFixture):
+    def setUp(self):
+        super().setUp()
+        self.pdir = os.path.join(self.repo, ".autonomy", "pipelines", "parent")
+        os.makedirs(self.pdir)
+        for fn, text in (
+                ("code.md", "do code"),
+                ("z.md", "do z"),
+                ("fix.md",
+                 "fix these: ${default(nodes.qa.output.findings, 'none')}")):
+            with open(os.path.join(self.pdir, fn), "w") as fh:
+                fh.write(text)
+
+    def _pstate(self, doc=None, name="par", sessions=0, cap=None):
+        doc = doc if doc is not None else _call_doc()
+        if cap is not None:
+            doc["caps"]["max_sessions_per_run"] = cap
+        sp, st = self._parent_state(name=name, doc=doc)
+        st["meta"] = {"pipeline_dir": self.pdir}
+        st["sessions"] = sessions
+        pipeline._atomic_write_json(sp, st)
+        return sp, st
+
+    def _ready(self, sp):
+        return pipeline.ready_set(sp, self.logdir, 8,
+                                  journal_path=self.journal)
+
+    def _finish_child(self, payload, child="par.c0.qa"):
+        os.unlink(os.path.join(self.logdir,
+                               ".pipeline-run-%s.json" % child))
+        with open(os.path.join(self.logdir,
+                  ".pipeline-run-%s.outcome.json" % child), "w") as fh:
+            json.dump(payload, fh)
+
+    def test_call_candidate_starts_child_and_waits(self):
+        sp, st = self._pstate()
+        out = self._ready(sp)
+        self.assertEqual(out, "WAITING")
+        child_state = os.path.join(self.logdir,
+                                   ".pipeline-run-par.c0.qa.json")
+        self.assertTrue(os.path.isfile(child_state))
+        with open(sp) as fh:
+            st2 = json.load(fh)
+        self.assertEqual(st2["units"]["qa"]["status"], "dispatched")
+        self.assertEqual(st2["units"]["qa"]["child"], "par.c0.qa")
+
+    def test_waiting_while_child_alive(self):
+        sp, st = self._pstate()
+        self._ready(sp)
+        self.assertEqual(self._ready(sp), "WAITING")   # no duplicate child
+        self.assertEqual(
+            1, len([f for f in os.listdir(self.logdir) if ".c0.qa" in f
+                    and f.endswith(".json")]))
+
+    def test_child_outcome_consumed_records_and_republishes_outputs(self):
+        sp, st = self._pstate()
+        self._ready(sp)
+        self._finish_child({"run_id": "c", "outcome": "success",
+                            "outputs": {"findings": "f1"}})
+        out = self._ready(sp)                     # run finishes: [] (DONE path)
+        self.assertEqual(out, [])
+        # the call node's own outputs sidecar now serves ${nodes.qa.output.*}
+        got = pipeline.read_outputs(os.path.join(
+            self.logdir, ".pipeline-run-par.qa.outputs.json"))
+        self.assertEqual(got, {"findings": "f1"})
+        # journal line: outcome success, one call entry with child_run
+        with open(self.journal) as fh:
+            rec = json.loads(fh.read().splitlines()[-1])
+        self.assertEqual(rec["outcome"], "success")
+        entries = [n for n in rec["nodes"] if n["id"] == "qa"]
+        self.assertEqual(entries[0]["type"], "call_pipeline")
+        self.assertTrue(entries[0]["child_run"])
+
+    def test_child_failure_drives_failure_edges(self):
+        # decision 8 end-to-end: a FAILED child's parked findings compile
+        # into the failure-path brief.
+        doc = _call_doc()
+        doc["nodes"].append({"id": "fix", "type": "agent_task",
+                             "brief_ref": "fix.md"})
+        doc["edges"].append({"from": "qa", "to": "fix", "on": "failure"})
+        sp, st = self._pstate(doc=doc)
+        self._ready(sp)
+        self._finish_child({"run_id": "c", "outcome": "failure",
+                            "outputs": {"findings": "f-val"}})
+        steps = self._ready(sp)
+        self.assertEqual([s["node"] for s in steps], ["fix"])
+        with open(steps[0]["prompt"]) as fh:
+            brief = fh.read()
+        self.assertIn("f-val", brief)
+
+    def test_corrupt_sidecar_child_gone_records_failure(self):
+        sp, st = self._pstate()
+        self._ready(sp)
+        os.unlink(os.path.join(self.logdir, ".pipeline-run-par.c0.qa.json"))
+        with open(os.path.join(self.logdir,
+                  ".pipeline-run-par.c0.qa.outcome.json"), "w") as fh:
+            fh.write("{junk")
+        self.assertEqual(self._ready(sp), [])
+        with open(self.journal) as fh:
+            rec = json.loads(fh.read().splitlines()[-1])
+        self.assertEqual(rec["outcome"], "failure")
+        entry = [n for n in rec["nodes"] if n["id"] == "qa"][0]
+        self.assertIn("corrupt", entry["error"])
+
+    def test_child_vanished_restarts(self):
+        sp, st = self._pstate()
+        self._ready(sp)
+        os.unlink(os.path.join(self.logdir, ".pipeline-run-par.c0.qa.json"))
+        out = self._ready(sp)
+        self.assertEqual(out, "WAITING")
+        self.assertTrue(os.path.isfile(os.path.join(
+            self.logdir, ".pipeline-run-par.c0.qa.json")))   # fresh child
+        with open(sp) as fh:
+            st2 = json.load(fh)
+        self.assertEqual(st2["units"]["qa"]["status"], "dispatched")
+
+    def test_wait_false_records_success_immediately(self):
+        doc = _call_doc(wait=False)
+        doc["nodes"].append({"id": "z", "type": "agent_task",
+                             "brief_ref": "z.md"})
+        doc["edges"].append({"from": "qa", "to": "z", "on": "success"})
+        sp, st = self._pstate(doc=doc)
+        steps = self._ready(sp)                   # z ready in the SAME call
+        self.assertEqual([s["node"] for s in steps], ["z"])
+        with open(sp) as fh:
+            st2 = json.load(fh)
+        self.assertEqual(st2["units"]["qa"]["status"], "success")
+        self.assertTrue(os.path.isfile(os.path.join(
+            self.logdir, ".pipeline-run-par.c0.qa.json")))
+        entry = [n for n in st2["nodes_done"] if n["id"] == "qa"][0]
+        self.assertIs(entry["detached"], True)
+
+    def test_call_start_failure_records_unit_failure(self):
+        doc = _call_doc()
+        doc["nodes"][1]["pipeline"] = "ghost"
+        sp, st = self._pstate(doc=doc)
+        self.assertEqual(self._ready(sp), [])
+        with open(self.journal) as fh:
+            rec = json.loads(fh.read().splitlines()[-1])
+        self.assertEqual(rec["outcome"], "failure")
+        entry = [n for n in rec["nodes"] if n["id"] == "qa"][0]
+        self.assertIn("ghost", entry["error"])
+
+    def test_call_start_reserves_session_budget(self):
+        # decision 4: sessions += 1 at call START; consumption does not
+        # increment again; a following agent node then cap-finishes.
+        doc = _call_doc()
+        doc["nodes"].append({"id": "z", "type": "agent_task",
+                             "brief_ref": "z.md"})
+        doc["edges"].append({"from": "qa", "to": "z", "on": "success"})
+        sp, st = self._pstate(doc=doc, cap=1)
+        self.assertEqual(self._ready(sp), "WAITING")
+        with open(sp) as fh:
+            st2 = json.load(fh)
+        self.assertEqual(st2["sessions"], 1)      # RESERVED at start
+        self._finish_child({"run_id": "c", "outcome": "success",
+                            "outputs": {}})
+        self.assertEqual(self._ready(sp), [])     # cap spent -> capped finish
+        with open(self.journal) as fh:
+            rec = json.loads(fh.read().splitlines()[-1])
+        self.assertEqual(rec["outcome"], "capped")
+        self.assertEqual(rec["sessions"], 1)      # consume did NOT increment
+
+    def test_mixed_frontier_call_reservation_blocks_fresh_steps(self):
+        # CP2: a call reservation that spends the LAST budget unit must
+        # also stop fresh agent steps in the same frontier -- the max(1,..)
+        # reclaim floor may never let a pending unit overshoot the cap.
+        doc = _call_doc()
+        doc["nodes"].append({"id": "z", "type": "agent_task",
+                             "brief_ref": "z.md"})
+        doc["edges"].append({"from": "code", "to": "z", "on": "success"})
+        sp, st = self._pstate(doc=doc, cap=1)      # one unit for BOTH
+        out = self._ready(sp)                      # call reserves it
+        self.assertEqual(out, "WAITING")           # z NOT dispatched
+        with open(sp) as fh:
+            st2 = json.load(fh)
+        self.assertEqual(st2["sessions"], 1)
+        self.assertEqual(st2["units"]["z"]["status"], "pending")
+
+    def test_budget_exhausted_leaves_call_pending(self):
+        # cap spent + a batch outstanding: the call unit is NOT started and
+        # stays pending (never a silent skip); the reclaimed agent step
+        # still returns.
+        doc = _call_doc()
+        sp, st = self._pstate(doc=doc, sessions=9)   # cap 9, all spent
+        st["units"]["code"] = {"status": "dispatched"}
+        st["units"]["qa"] = {"status": "pending"}
+        st["nodes_done"] = []
+        for f in os.listdir(self.logdir):
+            if f.endswith(".code.outputs.json"):
+                os.unlink(os.path.join(self.logdir, f))
+        pipeline._atomic_write_json(sp, st)
+        steps = self._ready(sp)
+        self.assertEqual([s["node"] for s in steps], ["code"])
+        with open(sp) as fh:
+            st2 = json.load(fh)
+        self.assertEqual(st2["units"]["qa"]["status"], "pending")
+        self.assertFalse(os.path.exists(os.path.join(
+            self.logdir, ".pipeline-run-par.c0.qa.json")))
+
+    def test_done_marked_child_without_sidecar_records_failure(self):
+        sp, st = self._pstate()
+        self._ready(sp)
+        child = os.path.join(self.logdir, ".pipeline-run-par.c0.qa.json")
+        with open(child) as fh:
+            cst = json.load(fh)
+        cst["status"] = "done"                    # _finish's unlink-failed marker
+        pipeline._atomic_write_json(child, cst)
+        self.assertEqual(self._ready(sp), [])     # NEVER an eternal wait (CP1)
+        with open(self.journal) as fh:
+            rec = json.loads(fh.read().splitlines()[-1])
+        entry = [n for n in rec["nodes"] if n["id"] == "qa"][0]
+        self.assertIn("sidecar is missing", entry["error"])
+
+    def test_reclaim_coexists_with_waiting_call(self):
+        # CP1 pin: dispatched plain units re-emit as steps, so WAITING can
+        # never mask reclaim -- a crashed agent session is re-prepared while
+        # a call unit's child is still being waited on.
+        doc = _call_doc()
+        doc["nodes"].append({"id": "z", "type": "agent_task",
+                             "brief_ref": "z.md"})
+        doc["edges"].append({"from": "code", "to": "z", "on": "success"})
+        sp, st = self._pstate(doc=doc)
+        steps = self._ready(sp)          # starts qa's child AND prepares z
+        self.assertEqual([s["node"] for s in steps], ["z"])
+        # crash: z never recorded -- the next ready re-prepares it (reclaim)
+        # instead of collapsing to WAITING on qa's live child
+        steps = self._ready(sp)
+        self.assertEqual([s["node"] for s in steps], ["z"])
+
+    def test_next_node_reports_waiting(self):
+        sp, st = self._pstate()
+        out = pipeline.next_node(sp, os.path.join(self.logdir, "b.md"),
+                                 journal_path=self.journal)
+        self.assertEqual(out, {"status": "waiting"})
+
+
+class CallNameHeadroomTest(_ChildFixture):
+    def test_overlong_trigger_name_refuses_the_run_up_front(self):
+        # CP1: an over-long trigger name must refuse at run START, not fail
+        # every call node one by one at sweep time.
+        tname = "t" * 60
+        self._write_pipeline("caller", {
+            "name": "caller", "version": 1,
+            "caps": {"max_sessions_per_run": 4},
+            "nodes": [{"id": "qa", "type": "call_pipeline",
+                       "pipeline": "qa-sweep", "params": {"target": "x"}}],
+            "edges": []}, briefs={})
+        tdir = os.path.join(self.repo, ".autonomy", "triggers")
+        os.makedirs(tdir)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("engine:\n  label: t\n")
+        with open(os.path.join(tdir, "%s.json" % tname), "w") as fh:
+            json.dump({"name": tname, "pipeline": "caller", "params": {},
+                       "firing": {"mode": "continuous"}}, fh)
+        with self.assertRaises(pipeline.PipelineError) as cm:
+            pipeline.start_run_trigger(
+                self.repo, tname,
+                os.path.join(self.logdir, ".pipeline-run-%s.json" % tname),
+                known_repos=lambda: set(), known_accounts=lambda: set())
+        self.assertIn("64-char", str(cm.exception))
+
+
+class SecretChannelTest(unittest.TestCase):
+    DECL = [{"name": "tok", "type": "secret", "required": True}]
+
+    def test_secret_value_is_a_label_passthrough(self):
+        out = pipeline.resolve_params(self.DECL, {"tok": "gh-token"})
+        self.assertEqual(out, {"tok": "gh-token"})
+
+    def test_secret_label_charset_gated(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.resolve_params(self.DECL, {"tok": "bad label!"})
+
+    def test_secret_lookup_seam_is_gone(self):
+        with self.assertRaises(TypeError):
+            pipeline.resolve_params(self.DECL, {"tok": "x"},
+                                    secret_lookup=lambda v: v)
+
+    def _doc(self, secrets=None, ptype="secret"):
+        return {"name": "s", "version": 1,
+                "caps": {"max_sessions_per_run": 4},
+                "params": [{"name": "tok", "type": ptype, "required": True}],
+                "nodes": [{"id": "a", "type": "agent_task",
+                           "brief_ref": "a.md",
+                           "secrets": secrets if secrets is not None
+                           else {"MY_TOKEN": "${params.tok}"}}],
+                "edges": []}
+
+    def test_secrets_field_validates(self):
+        self.assertEqual(pipeline.validate_doc(self._doc()), [])
+
+    def test_secrets_value_must_be_exact_secret_ref(self):
+        for bad in ("${params.tok}x", "${default(params.tok,'')}",
+                    "literal", "${run.id}"):
+            self.assertTrue(pipeline.validate_doc(self._doc({"V": bad})), bad)
+
+    def test_secrets_ref_must_target_secret_typed_param(self):
+        self.assertTrue(pipeline.validate_doc(self._doc(ptype="string")))
+
+    def test_secrets_key_charset_and_denylist(self):
+        for bad in ("lower", "1X", "ANTHROPIC_API_KEY", "AUTONOMY_X",
+                    "PATH", "DYLD_INSERT_LIBRARIES"):
+            self.assertTrue(
+                pipeline.validate_doc(self._doc({bad: "${params.tok}"})), bad)
+
+    def test_secrets_refused_on_call_pipeline_with_one_error(self):
+        doc = _call_doc()
+        doc["nodes"][1]["secrets"] = {"X": "${params.tok}"}
+        errs = [e for e in pipeline.validate_doc(doc) if "secrets" in e]
+        self.assertEqual(len(errs), 1)   # the type-branch owns it, not two
+
+    def test_secret_ref_outside_secrets_still_refuses(self):
+        doc = self._doc()
+        doc["nodes"][0]["runs_as"] = {"model": "${params.tok}"}
+        errs = pipeline.validate_doc(doc)
+        self.assertTrue(any("secret" in e for e in errs), errs)
+
+    def test_secret_params_stripped_from_substitution_ctx(self):
+        state = {"params": {"tok": "gh-token"},
+                 "doc": {"params": self.DECL}, "run": {}}
+        ctx = pipeline._substitution_ctx("/tmp/x.json", state)
+        self.assertNotIn("tok", ctx["params"])
+
+    def test_prepare_emits_node_secret_lines(self):
+        repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        logdir = os.path.join(repo, "var", "autonomy-logs")
+        pdir = os.path.join(repo, ".autonomy", "pipelines", "s")
+        os.makedirs(logdir)
+        os.makedirs(pdir)
+        with open(os.path.join(pdir, "a.md"), "w") as fh:
+            fh.write("use the env token")
+        doc = self._doc()
+        sp = os.path.join(logdir, ".pipeline-run-s.json")
+        state = {"fmt": 2, "run_id": "s-x-1", "role": "s", "lane": "",
+                 "doc": dict(doc, edges=[]), "meta": {"pipeline_dir": pdir},
+                 "trigger": "s", "kind": "native",
+                 "params": {"tok": "gh-token"},
+                 "run": {"id": "s-x-1", "pipeline": "s", "trigger": "s",
+                         "repo": repo},
+                 "started": 1, "sessions": 0,
+                 "units": {"a": {"status": "pending"}},
+                 "container_pos": {}, "rounds": {}, "bounces": {},
+                 "nodes_done": [], "status": "in_progress"}
+        pipeline._atomic_write_json(sp, state)
+        steps = pipeline.ready_set(sp, logdir, 1)
+        self.assertEqual(steps[0]["secrets"], {"MY_TOKEN": "gh-token"})
+        # the CLI line shape the supervisor parses
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            pipeline._print_step(steps[0])
+        self.assertIn("NODE_SECRET=MY_TOKEN=gh-token", buf.getvalue())
+
+    def test_saved_secret_default_now_resolves_as_label(self):
+        decl = [{"name": "tok", "type": "secret", "default": "gh-token"}]
+        out = pipeline.resolve_params(decl, {})
+        self.assertEqual(out, {"tok": "gh-token"})
+
+
+class EventStartChannelTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        pdir = os.path.join(self.repo, ".autonomy", "pipelines", "evflow")
+        self.tdir = os.path.join(self.repo, ".autonomy", "triggers")
+        self.logdir = os.path.join(self.repo, "var", "autonomy-logs")
+        for d in (pdir, self.tdir, self.logdir):
+            os.makedirs(d)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("engine:\n  label: t\n")
+        doc = {"name": "evflow", "version": 1,
+               "caps": {"max_sessions_per_run": 4},
+               "params": [
+                   {"name": "pr", "type": "number", "required": False},
+                   {"name": "ev", "type": "string", "required": False},
+                   {"name": "tok", "type": "secret", "required": False}],
+               "nodes": [{"id": "a", "type": "pick", "brief_ref": "a.md"}],
+               "edges": []}
+        with open(os.path.join(pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(pdir, "a.md"), "w") as fh:
+            fh.write("work item ${default(params.pr, 'none')}")
+        self.state = os.path.join(self.logdir, ".pipeline-run-evt.json")
+
+    def _trigger(self, firing, params=None):
+        with open(os.path.join(self.tdir, "evt.json"), "w") as fh:
+            json.dump({"name": "evt", "pipeline": "evflow",
+                       "params": params or {}, "firing": firing}, fh)
+
+    def _start(self, event_fields=None):
+        return pipeline.start_run_trigger(
+            self.repo, "evt", self.state,
+            known_repos=lambda: set(), known_accounts=lambda: set(),
+            event_fields=event_fields)
+
+    def test_mapped_field_resolves_typed(self):
+        self._trigger({"mode": "event", "event": "pr.opened",
+                       "map": {"pr": "item", "ev": "event"}})
+        st = self._start(event_fields={"item": "42"})
+        self.assertEqual(st["params"]["pr"], 42)       # coerced to number
+        self.assertEqual(st["params"]["ev"], "pr.opened")  # implicit field
+
+    def test_event_fields_on_continuous_trigger_refuses(self):
+        self._trigger({"mode": "continuous"})
+        with self.assertRaises(pipeline.PipelineError):
+            self._start(event_fields={"item": "42"})
+
+    def test_mapped_trigger_without_event_fields_refuses(self):
+        self._trigger({"mode": "event", "event": "pr.opened",
+                       "map": {"pr": "item"}})
+        with self.assertRaises(pipeline.PipelineError):
+            self._start()
+
+    def test_map_targeting_secret_param_refuses(self):
+        self._trigger({"mode": "event", "event": "pr.opened",
+                       "map": {"tok": "item"}})
+        with self.assertRaises(pipeline.PipelineError) as cm:
+            self._start(event_fields={"item": "42"})
+        self.assertIn("credential", str(cm.exception))
+
+    def test_missing_mapped_field_refuses(self):
+        self._trigger({"mode": "event", "event": "pr.synchronize",
+                       "map": {"pr": "item", "ev": "sha"}})
+        with self.assertRaises(pipeline.PipelineError):
+            self._start(event_fields={"item": "42"})   # no sha supplied
+
+    def test_cli_event_field_charset_and_duplicates(self):
+        self._trigger({"mode": "event", "event": "pr.opened",
+                       "map": {"pr": "item"}})
+        base = ["start", self.repo, "evt", self.state, "--kind", "native"]
+        # duplicate field: fail-open last-wins refused (CP1)
+        rc = pipeline.main(base + ["--event-field", "item=1",
+                                   "--event-field", "item=2"])
+        self.assertEqual(rc, 2)
+        # bad key / bad value charset; item must be NUMERIC (byte-parity
+        # with the supervisor's _event_native_wakes gate)
+        rc = pipeline.main(base + ["--event-field", "body=x"])
+        self.assertEqual(rc, 2)
+        rc = pipeline.main(base + ["--event-field", "item=4;2"])
+        self.assertEqual(rc, 2)
+        rc = pipeline.main(base + ["--event-field", "item=abc"])
+        self.assertEqual(rc, 2)
+        rc = pipeline.main(base + ["--event-field", "sha=de:ad"])
+        self.assertEqual(rc, 2)
+        # --event-field with --kind shim = usage error
+        rc = pipeline.main(["start", self.repo, "evt", self.state,
+                            "--kind", "shim", "--event-field", "item=1"])
+        self.assertEqual(rc, 2)
+        # the good shape starts the run
+        rc = pipeline.main(base + ["--event-field", "item=42"])
+        self.assertEqual(rc, 0)
+        with open(self.state) as fh:
+            self.assertEqual(json.load(fh)["params"]["pr"], 42)
+
+
 class SecretMessageAuditTest(unittest.TestCase):
     def test_secret_failure_message_names_param_never_value(self):
         # Secret error paths must carry the NAME only -- the message flows
-        # to supervisor.log via stderr (SD-8 redaction belt).
+        # to supervisor.log via stderr (SD-8 redaction belt). A rejected
+        # secret value may be a REAL credential a misconfigured trigger
+        # pasted in; the label-charset refusal must not echo it.
         declared = [{"name": "tok", "type": "secret"}]
         with self.assertRaises(pipeline.PipelineError) as cm:
-            pipeline.resolve_params(declared, {"tok": "hunter2-value"},
-                                    secret_lookup=None)
+            pipeline.resolve_params(declared, {"tok": "hunter2 raw value!"})
         self.assertIn("tok", str(cm.exception))
-        self.assertNotIn("hunter2-value", str(cm.exception))
+        self.assertNotIn("hunter2", str(cm.exception))
 
 
 class JournalTriggerFieldTest(unittest.TestCase):
@@ -2192,6 +2855,209 @@ class CheckRefsTest(unittest.TestCase):
             d = self._doc()
             d.update(bad)
             self.assertTrue(pipeline.validate_doc(d, None))   # errors, no crash
+
+
+def _findings_doc():
+    """The spec S2.1 example, expressed with today's back-edge rule:
+    pick -> stage[code] -> qa, qa --failure,back--> stage."""
+    return {
+        "name": "t2m", "version": 1, "caps": {"max_sessions_per_run": 10},
+        "params": [], "outputs": [],
+        "nodes": [
+            {"id": "pick", "type": "pick", "brief_ref": "pick.md"},
+            {"id": "code", "type": "agent_task", "brief_ref": "code.md"},
+            {"id": "qa", "type": "check", "brief_ref": "qa.md"},
+        ],
+        "containers": [{"id": "st", "kind": "stage", "children": ["code"]}],
+        "edges": [
+            {"from": "pick", "to": "st", "on": "success"},
+            {"from": "st", "to": "qa", "on": "success"},
+            {"from": "qa", "to": "st", "on": "failure", "back": True,
+             "max_bounces": 3},
+        ],
+    }
+
+
+class SoftBackEdgeRefTest(unittest.TestCase):
+    def test_bare_future_ref_refuses(self):
+        doc = _findings_doc()
+        doc["nodes"][1]["runs_as"] = {"model": "${nodes.qa.output.findings}"}
+        errs = pipeline.validate_doc(doc)
+        self.assertTrue(any("strict upstream" in e for e in errs), errs)
+
+    def test_future_ref_inside_default_validates(self):
+        # exercised through a STRING FIELD the scanner walks; brief text is
+        # checked by the same _check_expr_static at compile time
+        doc = _findings_doc()
+        doc["params"] = [{"name": "m", "type": "model", "required": False,
+                          "default": "claude-sonnet-5"}]
+        doc["nodes"][1]["runs_as"] = {
+            "model": "${default(nodes.qa.output.model_hint, params.m)}"}
+        self.assertEqual(pipeline.validate_doc(doc), [])
+
+    def test_default_second_arg_gets_no_soft_pass(self):
+        doc = _findings_doc()
+        doc["nodes"][1]["runs_as"] = {
+            "model": "${default(params_missing_entirely, nodes.qa.output.h)}"}
+        errs = pipeline.validate_doc(doc)
+        self.assertTrue(errs)   # both args refuse: bad ref + non-soft position
+
+    def test_soft_set_requires_the_bounce_path(self):
+        # qa's back-edge removed -> code may NOT soft-reference qa
+        doc = _findings_doc()
+        doc["edges"] = doc["edges"][:2]
+        doc["nodes"][1]["runs_as"] = {
+            "model": "${default(nodes.qa.output.h, 'x')}"}
+        self.assertTrue(pipeline.validate_doc(doc))
+
+
+class SiblingRefTest(unittest.TestCase):
+    def _doc(self):
+        return {
+            "name": "sib", "version": 1, "caps": {"max_sessions_per_run": 9},
+            "nodes": [
+                {"id": "a", "type": "agent_task", "brief_ref": "a.md"},
+                {"id": "b", "type": "agent_task", "brief_ref": "b.md"},
+                {"id": "c", "type": "agent_task", "brief_ref": "c.md"},
+            ],
+            "containers": [{"id": "st", "kind": "stage",
+                            "children": ["a", "b"]}],
+            "edges": [{"from": "st", "to": "c", "on": "success"}],
+        }
+
+    def test_earlier_sibling_ref_validates(self):
+        doc = self._doc()
+        doc["nodes"][1]["runs_as"] = {"model": "${nodes.a.output.m}"}
+        self.assertEqual(pipeline.validate_doc(doc), [])
+
+    def test_later_sibling_ref_refuses(self):
+        doc = self._doc()
+        doc["nodes"][0]["runs_as"] = {"model": "${nodes.b.output.m}"}
+        self.assertTrue(pipeline.validate_doc(doc))
+
+    def test_upstream_container_child_ref_validates(self):
+        doc = self._doc()
+        doc["nodes"][2]["runs_as"] = {"model": "${nodes.b.output.m}"}
+        self.assertEqual(pipeline.validate_doc(doc), [])
+
+
+def _call_doc(wait=True, params=None):
+    return {
+        "name": "parent", "version": 1, "caps": {"max_sessions_per_run": 9},
+        "params": [{"name": "repo", "type": "string", "required": False,
+                    "default": "r"}],
+        "nodes": [
+            {"id": "code", "type": "agent_task", "brief_ref": "code.md"},
+            {"id": "qa", "type": "call_pipeline", "pipeline": "qa-sweep",
+             "params": params if params is not None
+             else {"target": "${nodes.code.output.branch}"},
+             "wait": wait},
+        ],
+        "edges": [{"from": "code", "to": "qa", "on": "success"}],
+    }
+
+
+class CallPipelineValidationTest(unittest.TestCase):
+    def test_minimal_call_doc_validates(self):
+        self.assertEqual(pipeline.validate_doc(_call_doc()), [])
+
+    def test_call_is_a_live_node_type(self):
+        self.assertIn("call_pipeline", pipeline.NODE_TYPES)
+        self.assertNotIn("call_pipeline", pipeline.DEFERRED_NODE_TYPES)
+
+    def test_call_refuses_brief_and_runs_as(self):
+        doc = _call_doc()
+        doc["nodes"][1]["brief_ref"] = "x.md"
+        self.assertTrue(pipeline.validate_doc(doc))
+        doc = _call_doc()
+        doc["nodes"][1]["runs_as"] = {"model": "m"}
+        self.assertTrue(pipeline.validate_doc(doc))
+
+    def test_call_requires_valid_pipeline_name(self):
+        doc = _call_doc()
+        doc["nodes"][1]["pipeline"] = "../escape"
+        self.assertTrue(pipeline.validate_doc(doc))
+        del doc["nodes"][1]["pipeline"]
+        self.assertTrue(pipeline.validate_doc(doc))
+
+    def test_call_params_must_be_scalar_map(self):
+        self.assertTrue(pipeline.validate_doc(_call_doc(params={"k": []})))
+        self.assertTrue(pipeline.validate_doc(_call_doc(params="nope")))
+
+    def test_wait_must_be_bool(self):
+        doc = _call_doc()
+        doc["nodes"][1]["wait"] = "yes"
+        self.assertTrue(pipeline.validate_doc(doc))
+
+    def test_call_keys_refused_on_other_types(self):
+        doc = _call_doc()
+        doc["nodes"][0]["wait"] = True
+        self.assertTrue(pipeline.validate_doc(doc))
+
+    def test_detached_call_outputs_are_unreadable(self):
+        doc = _call_doc(wait=False)
+        doc["nodes"].append({"id": "z", "type": "agent_task",
+                             "brief_ref": "z.md",
+                             "runs_as": {"model": "${nodes.qa.output.v}"}})
+        doc["edges"].append({"from": "qa", "to": "z", "on": "success"})
+        errs = pipeline.validate_doc(doc)
+        self.assertTrue(any("detached" in e for e in errs), errs)
+
+    def test_call_inside_loop_container_validates(self):
+        doc = _call_doc()
+        doc["containers"] = [{"id": "lp", "kind": "loop",
+                              "children": ["code", "qa"],
+                              "exit_when": "verdict", "max_rounds": 3}]
+        doc["edges"] = []
+        self.assertEqual(pipeline.validate_doc(doc), [])
+
+
+class ReservedSidecarSuffixTest(unittest.TestCase):
+    def test_node_id_with_reserved_suffix_refused(self):
+        # A node id whose last dot-component is outputs/verdict/outcome would
+        # mint a child token the supervisor's inflight_tokens deliberately
+        # skips (sidecars share the .pipeline-run-*.json glob namespace) --
+        # a stranded, undispatchable child. Refuse at mint.
+        for bad in ("outputs", "verdict", "outcome", "x.outputs"):
+            doc = minimal_doc()
+            doc["nodes"][0]["id"] = bad
+            errs = pipeline.validate_doc(doc)
+            self.assertTrue(any("reserved" in e for e in errs), (bad, errs))
+
+    def test_ordinary_dotted_ids_still_validate(self):
+        doc = minimal_doc()
+        doc["nodes"][0]["id"] = "my.outputs2"
+        self.assertEqual(pipeline.validate_doc(doc), [])
+
+
+class LazyDefaultTest(unittest.TestCase):
+    CTX = {"params": {"x": "v"}, "nodes": {"done": {"branch": "b1"}},
+           "run": {"id": "r"}}
+
+    def test_missing_node_output_is_typed(self):
+        with self.assertRaises(pipeline.MissingNodeOutput):
+            pipeline.substitute("${nodes.ghost.output.x}", self.CTX)
+        with self.assertRaises(pipeline.MissingNodeOutput):
+            pipeline.substitute("${nodes.done.output.ghost}", self.CTX)
+
+    def test_default_tolerates_missing_node_output(self):
+        out = pipeline.substitute(
+            "${default(nodes.ghost.output.findings, 'none yet')}", self.CTX)
+        self.assertEqual(out, "none yet")
+
+    def test_default_still_resolves_present_output(self):
+        out = pipeline.substitute(
+            "${default(nodes.done.output.branch, 'none')}", self.CTX)
+        self.assertEqual(out, "b1")
+
+    def test_default_does_not_mask_param_typos(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.substitute("${default(params.ghost, 'x')}", self.CTX)
+
+    def test_default_empty_first_arg_still_falls_back(self):
+        ctx = {"params": {"m": ""}, "nodes": {}, "run": {}}
+        self.assertEqual(
+            pipeline.substitute("${default(params.m, 'fb')}", ctx), "fb")
 
 
 if __name__ == "__main__":

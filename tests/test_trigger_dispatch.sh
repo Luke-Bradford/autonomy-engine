@@ -359,13 +359,221 @@ check "loop consumes manual fires"  "1" "$(grep -c '^    resolve_manual_fires$' 
 check "loop consumes queued fires"  "1" "$(grep -c '^    resolve_queued_fires$' "$sup")"
 check "loop inflight via tokens"    "1" "$(grep -c 'inflight_list="\$(filter_dispatchable_tokens' "$sup")"
 check "empty board inflight-only"   "1" "$(grep -c 'dispatch_list="\$inflight_list"' "$sup")"
-check "event path stays on roles"   "1" "$(grep -c 'resolve_event_wakes "\$session_ran"' "$sup")"
+# Phase C FLIP: the loop calls the TRIGGER event resolver; the legacy role
+# resolver is uncalled (structural double-dispatch impossibility, parity 5 --
+# test_event_bus.sh proves the same with an anchored grep).
+check "event path via triggers"     "1" "$(grep -c 'resolve_trigger_event_wakes "\$session_ran"' "$sup")"
 check "fp gate gets bare name"      "1" "$(grep -c 'fingerprint_gate "\$name"' "$sup")"
 check "run_session gets kind"       "1" "$(grep -c 'run_session "\$role" "\$kind"; outcome=' "$sup")"
 check "loop kind via state not guess" "1" "$(grep -c 'kind="\$(dispatch_kind_of "\$name"' "$sup")"
 check "no coder fallback left"      "0" "$(grep -c 'dispatch_list="coder"' "$sup")"
 check "error arm records backoff"   "1" "$(grep -c 'trigger_record_error_backoff "\$name"' "$sup")"
 check "clean arm clears backoff"    "1" "$(grep -c 'trigger_clear_backoff "\$name"' "$sup")"
+
+# --- Phase C (#376): WAITING protocol + child tokens + reserved sidecars ------
+
+# A child run's state file joins the tokens as exactly ONE extra well-formed
+# token (parity invariant 7)...
+: >"$LOGDIR/.pipeline-run-coder.json"
+: >"$LOGDIR/.pipeline-run-coder.c0.qa.json"
+out="$(inflight_tokens | sort | tr '\n' ' ')"
+check "child token present" "coder coder.c0.qa " "$out"
+
+# ...and the run's SIDECARS never become tokens. They share the state-file
+# glob namespace (.pipeline-run-*.json) -- latent since Phase B for
+# outputs/verdict, aggravated by the Phase C outcome sidecar, which persists
+# BETWEEN ticks while a parent waits. Reserved suffixes; the mint sites
+# (validate_doc node ids, validate_trigger names) refuse them.
+: >"$LOGDIR/.pipeline-run-coder.qa.outputs.json"
+: >"$LOGDIR/.pipeline-run-coder.qa.verdict.json"
+: >"$LOGDIR/.pipeline-run-coder.c0.qa.outcome.json"
+out="$(inflight_tokens | sort | tr '\n' ' ')"
+check "sidecars are not tokens" "coder coder.c0.qa " "$out"
+rm -f "$LOGDIR"/.pipeline-run-*.json
+
+# resolve_pipeline_ready parses the WAITING sentinel: rc 0, flag set, zero
+# blocks (a wait:true call unit's child is running as its own token).
+: >"$LOGDIR/.pipeline-run-coder.json"     # state exists -> no start call
+python3() { echo "WAITING"; }
+PIPE_WAIT=0
+resolve_pipeline_ready coder 8 0 shim; rc=$?
+check "waiting ready rc" "0" "$rc"
+check "waiting flag set" "1" "$PIPE_WAIT"
+check "waiting zero blocks" "0" "$PB_COUNT"
+unset -f python3
+rm -f "$LOGDIR"/.pipeline-run-*.json
+
+# run_session treats a waiting run as the dispatch-skip family (rc 2) and
+# invokes NO adapter -- stub only the established seams. The manual-fire
+# tests above stubbed run_session itself; re-source the real supervisor to
+# get it back (the BASH_SOURCE guard makes sourcing side-effect free), then
+# re-apply this file's env. The WAITING signal reaches the REAL
+# resolve_pipeline_ready through the python3 seam (redefining the function
+# here would trip CI shellcheck's SC2218 on the earlier call).
+# shellcheck source=/dev/null
+source "$ENGINE_HOME/bin/supervisor.sh"
+AUTONOMY_TARGET_REPO="$repo"
+VARDIR="$repo/var"; LOGDIR="$VARDIR/autonomy-logs"
+SUPLOG=/dev/null
+AUTONOMY_LANE=""
+log() { :; }
+preflight() { return 0; }
+materialize_planner() { :; }
+resolve_role_dispatch() {
+  ROLE_PROMPT="p"; ROLE_SCOPE=""; ROLE_MODEL=""; ROLE_EFFORT=""
+  ROLE_ACCOUNT=""; ROLE_AGENT=""; return 0
+}
+: >"$LOGDIR/.pipeline-run-coder.json"     # state exists -> no start call
+python3() { echo "WAITING"; }
+run_session coder shim; rc=$?
+check "waiting run_session rc is dispatch-skip" "2" "$rc"
+check "waiting run_session set the flag" "1" "$PIPE_WAIT"
+unset -f python3
+rm -f "$LOGDIR"/.pipeline-run-*.json
+
+# Main-loop wiring (grep-level, the file's established pattern): the waiting
+# branch paces WITHOUT entering the outcome case (no error backoff, no
+# fingerprint record, no session.done edge).
+check "loop paces child-wait"            "1" "$(grep -c 'heartbeat "child-wait"' "$sup")"
+check "loop resets PIPE_WAIT pre-dispatch" "1" "$(grep -c '^    PIPE_WAIT=0$' "$sup")"
+
+# --- Phase C (#376) Task 8: NODE_SECRET parse + resolution + redaction --------
+
+# The waiting tests above stubbed resolve_pipeline_ready; re-source the real
+# supervisor and re-apply this file's env.
+# shellcheck source=/dev/null
+source "$ENGINE_HOME/bin/supervisor.sh"
+AUTONOMY_TARGET_REPO="$repo"
+VARDIR="$repo/var"; LOGDIR="$VARDIR/autonomy-logs"
+SUPLOG=/dev/null
+AUTONOMY_LANE=""
+log() { :; }
+
+# Ready-block parse: a malformed NODE_SECRET line refuses the WHOLE block
+# (a session running WITHOUT a declared secret is a broken constraint
+# artifact -- prevention-log #3, account-resolution parity).
+: >"$LOGDIR/.pipeline-run-coder.json"
+: >"$LOGDIR/.pipeline-run-coder.a.brief.md"
+mk_ready_stub() {
+  READY_EXTRA="$1"
+  python3() {
+    printf 'NODE=a\nKIND=compiled\nPROMPT=%s\nVERDICT=var/autonomy-logs/.pipeline-run-coder.a.verdict.json\n' \
+      "$LOGDIR/.pipeline-run-coder.a.brief.md"
+    [ -n "$READY_EXTRA" ] && printf '%s\n' "$READY_EXTRA"
+    printf 'END\n'
+  }
+}
+mk_ready_stub "NODE_SECRET=noequals"
+resolve_pipeline_ready coder 8 0 shim >/dev/null 2>&1
+check "NODE_SECRET malformed refuses" "1" "$?"
+mk_ready_stub "NODE_SECRET=my-var=lbl"
+resolve_pipeline_ready coder 8 0 shim >/dev/null 2>&1
+check "NODE_SECRET bad var refuses" "1" "$?"
+mk_ready_stub "NODE_SECRET=ANTHROPIC_API_KEY=x"
+resolve_pipeline_ready coder 8 0 shim >/dev/null 2>&1
+check "NODE_SECRET denylisted var refuses" "1" "$?"
+mk_ready_stub "NODE_SECRET=MY_TOKEN=bad label"
+resolve_pipeline_ready coder 8 0 shim >/dev/null 2>&1
+check "NODE_SECRET bad label refuses" "1" "$?"
+mk_ready_stub "NODE_SECRET=MY_TOKEN=gh-token"
+resolve_pipeline_ready coder 8 0 shim; rc=$?
+check "NODE_SECRET good parses" "0" "$rc"
+case "${PB_SECRET[0]:-}" in
+  *"MY_TOKEN=gh-token"*) check "PB_SECRET carries VAR=label" 0 0 ;;
+  *) check "PB_SECRET carries VAR=label" 0 1 ;;
+esac
+# two blocks -> distinct per-block PB_SECRET
+python3() {
+  printf 'NODE=a\nKIND=compiled\nPROMPT=%s\nVERDICT=var/autonomy-logs/.pipeline-run-coder.a.verdict.json\nNODE_SECRET=TOK_A=lbl-a\nEND\n' \
+    "$LOGDIR/.pipeline-run-coder.a.brief.md"
+  printf 'NODE=b\nKIND=compiled\nPROMPT=%s\nVERDICT=var/autonomy-logs/.pipeline-run-coder.b.verdict.json\nNODE_SECRET=TOK_B=lbl-b\nEND\n' \
+    "$LOGDIR/.pipeline-run-coder.a.brief.md"
+}
+resolve_pipeline_ready coder 8 0 shim
+check "two-block parse rc" "0" "$?"
+case "${PB_SECRET[0]:-}" in *"TOK_A=lbl-a"*) ok=0 ;; *) ok=1 ;; esac
+check "block0 secret distinct" "0" "$ok"
+case "${PB_SECRET[1]:-}" in *"TOK_B=lbl-b"*) ok=0 ;; *) ok=1 ;; esac
+check "block1 secret distinct" "0" "$ok"
+unset -f python3
+rm -f "$LOGDIR"/.pipeline-run-*
+
+# Resolution: label -> value via the AUTONOMY_CREDENTIALS_BIN seam,
+# FOREGROUND, fail-safe; the VALUE never reaches the supervisor log.
+SUPLOG="$tmp/sup.log"; : >"$SUPLOG"
+log() { printf '%s\n' "$*" >>"$SUPLOG"; }
+cred_ok="$tmp/cred_ok"
+printf '#!/bin/sh\n[ "$1" = get ] || exit 1\necho s3cr3t-value\n' >"$cred_ok"
+chmod +x "$cred_ok"
+cred_missing="$tmp/cred_missing"
+printf '#!/bin/sh\nexit 1\n' >"$cred_missing"
+chmod +x "$cred_missing"
+cred_multiline="$tmp/cred_multiline"
+printf '#!/bin/sh\nprintf "a\\nb\\n"\n' >"$cred_multiline"
+chmod +x "$cred_multiline"
+
+AUTONOMY_CREDENTIALS_BIN="$cred_ok"
+if resolve_node_secret_env "MY_TOKEN=gh-token" "A=1"; then rc=0; else rc=1; fi
+check "secret resolves rc" "0" "$rc"
+case "$NS_ENV_LINES" in *"MY_TOKEN=s3cr3t-value"*) ok=0 ;; *) ok=1 ;; esac
+check "secret env line built" "0" "$ok"
+case "$NS_VALUES" in *"s3cr3t-value"*) ok=0 ;; *) ok=1 ;; esac
+check "secret value collected for redaction" "0" "$ok"
+
+AUTONOMY_CREDENTIALS_BIN="$cred_missing"
+if resolve_node_secret_env "MY_TOKEN=gh-token" ""; then rc=0; else rc=1; fi
+check "missing secret refuses" "1" "$rc"
+check "missing secret clears env lines" "" "$NS_ENV_LINES"
+
+AUTONOMY_CREDENTIALS_BIN="$cred_ok"
+if resolve_node_secret_env "MY_TOKEN=gh-token" "MY_TOKEN=already"; then rc=0; else rc=1; fi
+check "dup of auth env var refuses" "1" "$rc"
+if resolve_node_secret_env "MY_TOKEN=gh-token" "A=1
+MY_TOKEN=already"; then rc=0; else rc=1; fi
+check "dup on later auth line refuses" "1" "$rc"
+
+AUTONOMY_CREDENTIALS_BIN="$cred_multiline"
+if resolve_node_secret_env "MY_TOKEN=gh-token" ""; then rc=0; else rc=1; fi
+check "newline-bearing value refuses" "1" "$rc"
+
+case "$(cat "$SUPLOG")" in
+  *s3cr3t-value*) check "value never logged" 0 1 ;;
+  *) check "value never logged" 0 0 ;;
+esac
+case "$(cat "$SUPLOG")" in
+  *gh-token*) check "label IS loggable (SD-8)" 0 0 ;;
+  *) check "label IS loggable (SD-8)" 0 1 ;;
+esac
+
+# Redaction sweep: every resolved value replaced with [REDACTED]; runs
+# after classify (the outcome grep must see the raw log).
+printf 'before s3cr3t-value after\n' >"$LOGDIR/s.log"
+NS_VALUES="s3cr3t-value
+"
+redact_session_log "$LOGDIR/s.log"
+case "$(cat "$LOGDIR/s.log")" in
+  *s3cr3t-value*) check "redaction scrubs value" 0 1 ;;
+  *"[REDACTED]"*) check "redaction scrubs value" 0 0 ;;
+  *) check "redaction scrubs value" 0 1 ;;
+esac
+# empty NS_VALUES = no-op, never an error
+NS_VALUES=""
+redact_session_log "$LOGDIR/s.log"
+check "redaction no-op rc" "0" "$?"
+# prefix shadowing (CP2): a shorter value that PREFIXES a longer one must
+# not leave the longer one's tail in the log -- longest replaced first.
+printf 'x abcdef y abc z\n' >"$LOGDIR/p.log"
+NS_VALUES="abc
+abcdef
+"
+redact_session_log "$LOGDIR/p.log"
+case "$(cat "$LOGDIR/p.log")" in
+  *def*) check "prefix-shadowed value fully scrubbed" 0 1 ;;
+  *) check "prefix-shadowed value fully scrubbed" 0 0 ;;
+esac
+unset AUTONOMY_CREDENTIALS_BIN
+SUPLOG=/dev/null
+log() { :; }
 
 echo
 if [ "$fails" -gt 0 ]; then echo "$fails FAILURE(S)"; exit 1; fi

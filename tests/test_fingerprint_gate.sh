@@ -271,8 +271,9 @@ check "backoff step 3" "900"  "$(fingerprint_backoff 3)"
 check "backoff step 4" "1800" "$(fingerprint_backoff 4)"
 check "backoff caps at 1800" "1800" "$(fingerprint_backoff 9)"
 
-# --- has_scheduled_roles (real roles.py against the real config) -------------
-has_scheduled_roles
+# --- has_scheduled_triggers (real triggers.py against the real config;
+#     Phase C renamed has_scheduled_roles onto the trigger enumeration) ------
+has_scheduled_triggers
 check "loop-only config has no scheduled roles" "1" "$?"
 cat > "$AUTONOMY_TARGET_REPO/.autonomy/config.yaml" <<'YAML'
 roles:
@@ -283,7 +284,7 @@ roles:
     trigger: { type: cron, schedule: "0 9 * * *" }
     prompt: .autonomy/roles/qa.md
 YAML
-has_scheduled_roles
+has_scheduled_triggers
 check "cron role config has scheduled roles" "0" "$?"
 cat > "$AUTONOMY_TARGET_REPO/.autonomy/config.yaml" <<'YAML'
 roles:

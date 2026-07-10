@@ -583,16 +583,18 @@ fingerprint_backoff() {
   esac
 }
 
-# rc 0 when the repo declares any cron or event role. Long skip sleeps would
-# starve the top-of-tick cron/event resolvers, so the caller caps the idle at
-# 300s when this returns 0. Enumeration failure reads as "none" -- the same
-# tick's own cron/event resolution would have failed too, and the cost is a
-# longer sleep, not lost work.
-has_scheduled_roles() {
+# rc 0 when the repo has any cron or event TRIGGER (native or shim -- the
+# Phase C cutover renamed has_scheduled_roles and re-based it on the trigger
+# enumeration; roles-only counting would miss native schedule/event files).
+# Long skip sleeps would starve the top-of-tick cron/event resolvers, so the
+# caller caps the idle at 300s when this returns 0. Enumeration failure reads
+# as "none" -- the same tick's own cron/event resolution would have failed
+# too, and the cost is a longer sleep, not lost work.
+has_scheduled_triggers() {
   local names
-  names="$(_cron_enumerate 2>/dev/null || true)"
+  names="$(_triggers_enumerate cron "$AUTONOMY_TARGET_REPO" 2>/dev/null || true)"
   [ -n "$names" ] && return 0
-  names="$(_event_enumerate 2>/dev/null || true)"
+  names="$(_triggers_enumerate event "$AUTONOMY_TARGET_REPO" 2>/dev/null || true)"
   [ -n "$names" ] && return 0
   return 1
 }
@@ -740,6 +742,74 @@ $env_lines
 EOF
     agent_invoke "$@"
   )
+}
+
+# Resolve NODE_SECRET labels to values -- FOREGROUND, fail-safe: any failure
+# REFUSES (rc 1) with only the LABEL named; the value never reaches a log or
+# argv (SD-8). $1 = newline VAR=label lines; $2 = the env lines already
+# resolved (account auth) -- a duplicate VAR refuses rather than clobbering
+# auth. Sets NS_ENV_LINES (VAR=value lines) + NS_VALUES (values, for the
+# redaction sweep). Globals, not stdout: a $() subshell could not set them.
+resolve_node_secret_env() {
+  local lines="$1" existing="$2" line var label value
+  NS_ENV_LINES=""; NS_VALUES=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    var="${line%%=*}"; label="${line#*=}"
+    case "$existing" in
+      "$var="*|*"
+$var="*)
+        log "dispatch: secret env var '$var' collides with resolved auth env -- REFUSING session"
+        NS_ENV_LINES=""; NS_VALUES=""; return 1 ;;
+    esac
+    if [ -n "${AUTONOMY_CREDENTIALS_BIN:-}" ]; then
+      value="$("$AUTONOMY_CREDENTIALS_BIN" get "$label" 2>>"$SUPLOG")" || value=""
+    else
+      value="$(python3 "$ENGINE_HOME/lib/credentials.py" get "$label" 2>>"$SUPLOG")" || value=""
+    fi
+    if [ -z "$value" ]; then
+      log "dispatch: secret '$label' (for $var) did not resolve -- REFUSING session (fail-safe)"
+      NS_ENV_LINES=""; NS_VALUES=""; return 1
+    fi
+    case "$value" in
+      *$'\n'*|*$'\r'*)
+        # CP1: an embedded newline would corrupt the VAR=value line protocol
+        # AND the redaction value list -- refuse, never truncate/mangle.
+        log "dispatch: secret '$label' (for $var) contains a newline -- REFUSING session (unsupported shape)"
+        NS_ENV_LINES=""; NS_VALUES=""; return 1 ;;
+    esac
+    NS_ENV_LINES="${NS_ENV_LINES}${var}=${value}
+"
+    NS_VALUES="${NS_VALUES}${value}
+"
+  done <<EOF
+$lines
+EOF
+  return 0
+}
+
+# Best-effort post-session redaction: replace every resolved secret value in
+# the session log with [REDACTED]. Runs AFTER classify (the outcome grep must
+# see the raw log) -- documented residual: a live tail can see an agent-echoed
+# secret until this runs. Values reach python via STDIN, never env or argv
+# (CP1: a child's environment is inspectable via `ps` -- stdin is not; SD-8's
+# boundary stays "supervisor memory + the session's own subshell env").
+# Literal byte replace (no regex metachars). Newline-free values guaranteed
+# by resolve_node_secret_env, so one value per stdin line is unambiguous.
+redact_session_log() {
+  local logf="$1"
+  [ -n "${NS_VALUES:-}" ] && [ -f "$logf" ] || return 0
+  printf '%s' "$NS_VALUES" | python3 -c '
+import sys
+path = sys.argv[1]
+vals = [v for v in sys.stdin.read().split("\n") if v]
+data = open(path, "rb").read()
+# Longest first (CP2): a value that PREFIXES another, replaced first,
+# would leave the longer one as [REDACTED]<tail> -- secret bytes remain.
+for v in sorted(vals, key=len, reverse=True):
+    data = data.replace(v.encode("utf-8"), b"[REDACTED]")
+open(path, "wb").write(data)
+' "$logf" 2>>"$SUPLOG" || log "WARN could not redact session log $logf"
 }
 
 # Back-compat single-key form (#51-C): a resolved role credential ("" = none).
@@ -1366,6 +1436,9 @@ resolve_trigger_cron_due() {
 }
 
 # --- event bus (W2, issue #86) ----------------------------------------------
+# LEGACY enumerator (pre-Phase-C role path) -- kept for has-scheduled parity
+# tests and the legacy resolver below only. New code enumerates TRIGGERS
+# (_triggers_enumerate event); see resolve_trigger_event_wakes.
 # Enumerate the target repo's event roles as NAME<TAB>EVENT[,EVENT...] lines
 # (roles.py events contract). Behind a function so tests can override the seam.
 # rc!=0 -> caller skips events this tick (best-effort, never crashes the loop).
@@ -1446,6 +1519,11 @@ _event_role_wakes() {
   done
 }
 
+# --- LEGACY event bus (W2, #86) -- pre-Phase-C role-path resolver. Kept for
+# the parity tests only (deletion = Phase E, with the other legacy twins named
+# in SD-39); the main loop calls resolve_trigger_event_wakes. NEVER call this
+# from new code: it enumerates ROLES and would double-dispatch beside the
+# trigger resolver.
 # Fire every event role whose on: list matched a NEW item since its per-(role,
 # event) seen-set. The supervisor is the SOLE writer of each seen-set
 # ($VARDIR/events/<role>__<event>.seen) -- reset-epoch-split invariant
@@ -1475,6 +1553,128 @@ resolve_event_wakes() {
     _event_role_wakes "$name" "$events_csv" "$session_ran"
   done
   return 0
+}
+
+# --- event triggers (Phase C, #376) -------------------------------------------
+# One resolver, two lanes: SHIM event triggers ride the legacy per-role
+# semantics VERBATIM (same _event_role_wakes body, same seen files -- the
+# cutover parity argument); NATIVE event triggers are START-ONLY -- one run
+# per new token, payload mapped to params inside start_run_trigger, and the
+# run's first session lands via the MAIN LOOP like any in-flight token
+# (decision 14: sessions only ever run through the one dispatch per
+# iteration, SD-12). Best-effort throughout: enumeration/poll failure skips
+# events this tick and never perturbs loop dispatch. NEVER returns non-zero.
+resolve_trigger_event_wakes() {
+  local session_ran="$1"
+  # _policy/_max document the enumeration's TSV line shape; capacity is
+  # gated show-backed in trigger_start_token_for, not here (review nitpick).
+  local enum line name kind evspec _policy _max
+  enum="$(_triggers_enumerate event "$AUTONOMY_TARGET_REPO")" || {
+    log "WARN event: trigger enumeration failed -- skipping events this tick"
+    return 0
+  }
+  [ -n "$enum" ] || return 0
+  mkdir -p "$VARDIR/events" 2>/dev/null || {
+    log "WARN event: cannot create $VARDIR/events -- skipping events this tick"
+    return 0
+  }
+  while IFS="$(printf '\t')" read -r name kind evspec _policy _max; do
+    [ -n "$name" ] || continue
+    if ! _role_name_path_safe "$name"; then
+      log "WARN event: trigger name '$name' has invalid path chars -- ignored"
+      continue
+    fi
+    # Hostile/unknown kind DROPS the line (the resolve_trigger_cron_due
+    # discipline, review round 3 of PR #375 -- an if/else would route junk
+    # into the native lane).
+    case "$kind" in
+      shim)   _event_role_wakes "$name" "$evspec" "$session_ran" ;;
+      native) _event_native_wakes "$name" "$evspec" ;;
+      *) log "WARN event: trigger '$name' has unknown kind '$kind' -- ignored" ;;
+    esac
+  done <<EOF
+$enum
+EOF
+  return 0
+}
+
+# START a NATIVE event trigger's run once per NEW token -- never a session
+# here (decision 14). Seen-set discipline: handled tokens append; the set
+# prunes to the current poll page (bounded, monotonicity argument
+# unchanged); a token is handled when its RUN STARTS (the state file is the
+# durable claim -- the main loop advances it as an in-flight token);
+# at-capacity/failed-start tokens stay unhandled (redelivered).
+_event_native_wakes() {
+  local name="$1" event="$2"
+  local seen_file tokens new tok item sha handled kept state stok rc_start
+  case "$event" in
+    pr.opened|issue.created|merge.done|pr.synchronize) : ;;
+    *) log "WARN event: unknown event '$event' for trigger '$name' -- ignored"
+       return 0 ;;
+  esac
+  seen_file="$VARDIR/events/${name}__${event}.seen"
+  tokens="$(_event_poll "$event")" || return 0
+  if [ ! -f "$seen_file" ]; then
+    _event_write_seen "$seen_file" "$tokens" \
+      || log "WARN event: cannot seed seen-set for '$name/$event'"
+    return 0
+  fi
+  new="$(printf '%s\n' "$tokens" | grep -v '^[[:space:]]*$' | grep -Fxv -f "$seen_file" 2>/dev/null || true)"
+  # prune the carried-over seen lines to the current page (bounded set)
+  kept="$(grep -Fx -f "$seen_file" 2>/dev/null <<EOF2 || true
+$tokens
+EOF2
+)"
+  handled=""
+  while IFS= read -r tok; do
+    [ -n "$tok" ] || continue
+    case "$event" in
+      pr.synchronize) item="${tok%%:*}"; sha="${tok#*:}" ;;
+      *)              item="$tok";       sha="" ;;
+    esac
+    # prevention-log #6: poll output crosses a gh pipe -- gate both pieces
+    # before they land in argv.
+    case "$item" in ''|*[!0-9]*)
+      log "WARN event: token '$tok' has no numeric item -- ignored"; continue ;;
+    esac
+    case "$sha" in *[!A-Za-z0-9]*)
+      log "WARN event: token '$tok' has a malformed sha -- ignored"; continue ;;
+    esac
+    if ! stok="$(trigger_start_token_for "$name")"; then
+      log "NOTE event: trigger '$name' at capacity -- '$tok' redelivered next tick"
+      continue
+    fi
+    state="$(pipeline_state_file "$(token_name "$stok")" "$(token_slot "$stok")")"
+    if [ -n "${AUTONOMY_LANE:-}" ]; then
+      python3 "$ENGINE_HOME/lib/pipeline.py" start "$AUTONOMY_TARGET_REPO" \
+        "$name" "$state" --lane "$AUTONOMY_LANE" --kind native \
+        --event-field "item=$item" ${sha:+--event-field "sha=$sha"} \
+        >>"$SUPLOG" 2>&1
+      rc_start=$?
+    else
+      python3 "$ENGINE_HOME/lib/pipeline.py" start "$AUTONOMY_TARGET_REPO" \
+        "$name" "$state" --kind native \
+        --event-field "item=$item" ${sha:+--event-field "sha=$sha"} \
+        >>"$SUPLOG" 2>&1
+      rc_start=$?
+    fi
+    if [ "$rc_start" -ne 0 ]; then
+      log "WARN event: could not start trigger '$name' for $event '$tok' -- redelivered next tick"
+      continue
+    fi
+    log "event: trigger '$name' fired by $event ($tok) -> run started ($stok); the loop advances it"
+    handled="${handled}${tok}
+"
+  done <<EOF3
+$new
+EOF3
+  # grep rc 1 = zero surviving lines, a LEGITIMATE empty advance (every seen
+  # token scrolled off the page, nothing handled) -- `|| true` keeps the mv
+  # on that path; only a real write/mv failure logs (review round 1).
+  { printf '%s%s' "$kept${kept:+
+}" "$handled" | grep -v '^[[:space:]]*$' || true; } >"$seen_file".tmp 2>/dev/null \
+    && mv "$seen_file".tmp "$seen_file" \
+    || log "WARN event: cannot advance seen for '$name/$event' -- some tokens may redeliver"
 }
 
 # Round-robin selector: print the (idx mod n)th name, 0-indexed, from the
@@ -1654,6 +1854,17 @@ inflight_tokens() {
     base="$(basename "$f")"
     base="${base#.pipeline-run-}"
     base="${base%.json}"
+    case "$base" in
+      *.outputs|*.verdict|*.outcome)
+        # RESERVED sidecar suffixes: <state-base>.<node>.outputs.json /
+        # .verdict.json and <child-base>.outcome.json share this glob
+        # namespace and must never become dispatch tokens (a phantom token
+        # wastes a tick per sidecar per cycle -- ready refuses the sidecar's
+        # shape). Nothing legitimate is skipped: validate_doc refuses node
+        # ids and validate_trigger refuses trigger names ending in a
+        # reserved component, so no real run can take these shapes.
+        continue ;;
+    esac
     slot=""
     case "$base" in
       *@*)
@@ -1683,10 +1894,10 @@ inflight_tokens() {
 # PB_COUNT + PIPE_DONE and arrays PB_NODE PB_PROMPT PB_VERDICT
 # PB_MODEL PB_EFFORT PB_ACCOUNT PB_AGENT ('' = no override).
 resolve_pipeline_ready() {
-  local role="$1" max="${2:-1}" slot="${3:-0}" kind="${4:-shim}" state out line key val i
+  local role="$1" max="${2:-1}" slot="${3:-0}" kind="${4:-shim}" state out line key val i _sv _sl
   PB_NODE=(); PB_PROMPT=(); PB_VERDICT=()
-  PB_MODEL=(); PB_EFFORT=(); PB_ACCOUNT=(); PB_AGENT=()
-  PB_COUNT=0; PIPE_DONE=0
+  PB_MODEL=(); PB_EFFORT=(); PB_ACCOUNT=(); PB_AGENT=(); PB_SECRET=()
+  PB_COUNT=0; PIPE_DONE=0; PIPE_WAIT=0
   # Two-arg callers (pre-Phase-B) get slot 0 + kind shim -- byte-identical.
   state="$(pipeline_state_file "$role" "$slot")"
   if [ ! -f "$state" ]; then
@@ -1707,9 +1918,10 @@ resolve_pipeline_ready() {
   fi
   case "$out" in
     DONE*) PIPE_DONE=1; return 0 ;;
+    WAITING*) PIPE_WAIT=1; return 0 ;;
   esac
   i=0
-  local node="" kind="" prompt="" verdict="" model="" effort="" account="" agent=""
+  local node="" kind="" prompt="" verdict="" model="" effort="" account="" agent="" secrets=""
   # Here-string (prevention-log #7 shape); every field validated per line.
   while IFS= read -r line; do
     if [ "$line" = "END" ]; then
@@ -1743,9 +1955,9 @@ resolve_pipeline_ready() {
       esac
       PB_NODE[i]="$node"; PB_PROMPT[i]="$prompt"
       PB_VERDICT[i]="$verdict"; PB_MODEL[i]="$model"; PB_EFFORT[i]="$effort"
-      PB_ACCOUNT[i]="$account"; PB_AGENT[i]="$agent"
+      PB_ACCOUNT[i]="$account"; PB_AGENT[i]="$agent"; PB_SECRET[i]="$secrets"
       i=$((i + 1))
-      node=""; kind=""; prompt=""; verdict=""; model=""; effort=""; account=""; agent=""
+      node=""; kind=""; prompt=""; verdict=""; model=""; effort=""; account=""; agent=""; secrets=""
       continue
     fi
     case "$line" in *=*) ;; *) continue ;; esac
@@ -1775,6 +1987,35 @@ resolve_pipeline_ready() {
           "") ;;
           *) agent="$val" ;;
         esac ;;
+      NODE_SECRET)
+        # VAR=label; both land in env keys / credentials.py argv later --
+        # refuse the WHOLE block on any malformed line (a session running
+        # WITHOUT a declared secret is a broken constraint artifact,
+        # prevention-log #3 -- unlike model/effort, there is no safe
+        # 'ignore' for a secret).
+        case "$val" in *=*) ;; *)
+          log "pipeline: malformed NODE_SECRET line -- REFUSING"; return 1 ;;
+        esac
+        _sv="${val%%=*}"; _sl="${val#*=}"
+        case "$_sv" in
+          [A-Z]*) ;;
+          *) log "pipeline: NODE_SECRET var name invalid -- REFUSING"; return 1 ;;
+        esac
+        case "$_sv" in *[!A-Z0-9_]*)
+          log "pipeline: NODE_SECRET var name invalid -- REFUSING"; return 1 ;;
+        esac
+        # Defense-in-depth twin of the python denylist (CP1: ready-block
+        # stdout is an interface boundary -- re-check at the point of use,
+        # prevention-log #6).
+        case "$_sv" in
+          ANTHROPIC_*|AUTONOMY_*|CLAUDE_*|LD_*|DYLD_*|PATH|HOME|SHELL|IFS|ENV|BASH_ENV|PYTHONPATH)
+            log "pipeline: NODE_SECRET var '$_sv' shadows an engine/auth variable -- REFUSING"; return 1 ;;
+        esac
+        case "$_sl" in ''|*[!A-Za-z0-9._-]*)
+          log "pipeline: NODE_SECRET label invalid -- REFUSING"; return 1 ;;
+        esac
+        secrets="${secrets}${_sv}=${_sl}
+" ;;
     esac
   done <<<"$out"
   PB_COUNT=$i
@@ -1960,6 +2201,14 @@ run_session() {
     log "pipeline: role '$role' run already complete -- nothing to dispatch (state recovered)"
     return 2
   fi
+  if [ "$PIPE_WAIT" = "1" ]; then
+    # A wait:true call_pipeline child is running as its OWN in-flight token;
+    # this run has nothing to dispatch until the child parks its outcome.
+    # rc 2 = the dispatch-skip family; the flag refines it in the main loop
+    # (no error backoff -- waiting is healthy, not a failure).
+    log "pipeline: run for '$role' waiting on child pipeline run(s) -- no session this tick"
+    return 2
+  fi
   # Heterogeneous-agent batches cannot share one sourced adapter contract:
   # fall back to the FIRST block alone (sequential; honest NOTE) when any
   # block overrides the agent. Same for the model/effort/account overrides
@@ -2069,12 +2318,23 @@ run_single_session() {
   # A stale verdict from a prior visit must never decide this one.
   rm -f "$verdict_abs"
 
+  # The node's declared secrets resolve label->value HERE, foreground,
+  # fail-safe (decision 12) -- the value exists only in supervisor memory
+  # and the session's subshell env, never argv or a log.
+  NS_ENV_LINES=""; NS_VALUES=""
+  if [ -n "${PB_SECRET[0]:-}" ]; then
+    resolve_node_secret_env "${PB_SECRET[0]}" "$env_lines" || return 2
+    env_lines="${env_lines}
+${NS_ENV_LINES}"
+  fi
+
   invoke_scoped_env "$env_lines" \
     "$prompt_file" "$rules_file" \
     "$MODEL" "$FALLBACK_MODEL" "$log_file" "$EFFORT"
   local rc=$?
 
   local outcome; outcome="$(agent_classify_outcome "$log_file" "$rc")"
+  redact_session_log "$log_file"
   case "$outcome" in
     success)
       if ! record_pipeline_outcome "$role" "${PB_NODE[0]}" success "$log_file" "$verdict_abs"; then
@@ -2139,7 +2399,7 @@ dispatch_batch() {
   mkdir -p "$wt_root" 2>>"$SUPLOG"
 
   local i wt log_file res m e envl
-  local wts=() logs=() results=() pids=()
+  local wts=() logs=() results=() pids=() ns_vals=()
   BATCH_PIDS=""
   # Setup failure AFTER earlier blocks spawned: kill + reap the live
   # wrappers before removing the directories they run in (Codex CP2);
@@ -2181,6 +2441,21 @@ dispatch_batch() {
         abort_batch
         return 2
       fi
+    fi
+    # Per-block secrets resolve foreground like the per-block account; the
+    # values are kept PER LOG (ns_vals[i]) so the redaction sweep stays
+    # per-session (CP1: aggregating every block's values across every log
+    # would widen the blast radius).
+    ns_vals[i]=""
+    if [ -n "${PB_SECRET[i]:-}" ]; then
+      if ! resolve_node_secret_env "${PB_SECRET[i]}" "$envl"; then
+        log "dispatch: node '${PB_NODE[i]}' secret did not resolve -- REFUSING batch (fail-safe)"
+        abort_batch
+        return 2
+      fi
+      envl="${envl}
+${NS_ENV_LINES}"
+      ns_vals[i]="$NS_VALUES"
     fi
     res="${state%.json}.${PB_NODE[i]}.result"
     rm -f "$res"
@@ -2228,6 +2503,10 @@ dispatch_batch() {
       rm -f "${results[i]}"
     fi
     case "$rc_i" in *[!0-9]*|"") rc_i=1 ;; esac
+    # Redact THIS session's log with THIS block's values (classify already
+    # ran inside the wrapper -- the outcome grep saw the raw log).
+    NS_VALUES="${ns_vals[i]:-}"
+    redact_session_log "${logs[i]}"
     verdict_abs="${wts[i]}/var/autonomy-logs/$(basename "${PB_VERDICT[i]}")"
     case "$out_i" in
       success)
@@ -2414,7 +2693,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # Passes last iteration's loop-session flag for the session.done edge, then
     # consumes it. Additive/best-effort: no event roles = no-op.
     heartbeat "polling-events" "polling board/PR events" ""
-    resolve_event_wakes "$session_ran"
+    resolve_trigger_event_wakes "$session_ran"
     session_ran=0
 
     open_count="$(cd "$AUTONOMY_TARGET_REPO" && gh issue list --state open --json number -q 'length' 2>/dev/null || echo -1)"
@@ -2513,7 +2792,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
       # Long sleeps would starve the top-of-tick cron/event resolvers -- cap
       # the idle when this repo schedules any (a skipped tick costs a few gh
       # calls, zero LLM tokens).
-      if [ "$fp_wait" -gt 300 ] && has_scheduled_roles; then fp_wait=300; fi
+      if [ "$fp_wait" -gt 300 ] && has_scheduled_triggers; then fp_wait=300; fi
       log "fingerprint unchanged for $role -- skip #$fp_skips, idle ${fp_wait}s (zero-token)"
       heartbeat "fingerprint-idle" "board unchanged since last completed $role session -- zero-token skip" "$(( $(date -u +%s) + fp_wait ))"
       idle_sleep "$fp_wait"
@@ -2525,15 +2804,26 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # is actually invoked, so the card never reads "running a session" while it
     # is only getting ready to (or is about to refuse and back off).
     heartbeat "dispatching $role" "selected $role -- preparing session (auth, preflight, worktree)" ""
+    PIPE_WAIT=0
     run_session "$role" "$kind"; outcome=$?
     # #318: a session actually RAN (whatever its outcome) -- only now does the
     # consecutive-skip backoff counter reset, exactly as documented.
+    # (Staying unconditional across the child-wait branch below is
+    # deliberate: a waiting tick is not a fingerprint skip.)
     fp_skips=0
     # #245: release the `main` ref before the post-session idle window -- an
     # agent may end its ticket sitting on an attached `main`, which would block
     # a sibling primary checkout until the next preflight. No-op unless we are
     # on a clean, attached `main`; never detaches over WIP.
     session_end_park
+    if [ "$PIPE_WAIT" = "1" ]; then
+      # Phase C: the run is healthy, waiting on a child pipeline run that
+      # advances as its own in-flight token -- a paced no-op, NOT the rc-2
+      # error arm (no error backoff, no fingerprint record, no session.done).
+      log "run '$role' waiting on child run(s) -- pace ${PACE}s"
+      heartbeat "child-wait" "waiting on a child pipeline run" "$(( $(date -u +%s) + PACE ))"
+      sleep "$PACE"; continue
+    fi
     case $outcome in
       0) log "session clean (open issues ~$open_count). pace ${PACE}s"
          heartbeat "pace-wait" "session clean (open issues ~$open_count) -- next session soon" "$(( $(date -u +%s) + PACE ))"

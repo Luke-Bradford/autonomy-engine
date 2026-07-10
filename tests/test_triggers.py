@@ -40,6 +40,18 @@ class ValidateTriggerTest(unittest.TestCase):
         errs = triggers.validate_trigger(_trig(name="../x"), "../x")
         self.assertTrue(errs)
 
+    def test_name_with_reserved_sidecar_suffix_refused(self):
+        # <name>.outputs/.verdict/.outcome state files would be skipped by
+        # the supervisor's inflight_tokens (sidecars share the glob
+        # namespace) -- the run could start but never advance. Refuse at
+        # mint (Phase C reserved suffixes).
+        for bad in ("qa.outputs", "qa.verdict", "qa.outcome"):
+            errs = triggers.validate_trigger(_trig(name=bad), bad)
+            self.assertTrue(any("reserved" in e for e in errs), (bad, errs))
+        self.assertEqual(
+            triggers.validate_trigger(_trig(name="qa.outputs2"),
+                                      "qa.outputs2"), [])
+
     def test_pipeline_required_and_charset_gated(self):
         self.assertTrue(triggers.validate_trigger(_trig(pipeline=""), "coder-a"))
         self.assertTrue(triggers.validate_trigger(_trig(pipeline="a/b"), "coder-a"))
@@ -56,10 +68,12 @@ class ValidateTriggerTest(unittest.TestCase):
         self.assertTrue(triggers.validate_trigger(
             _trig(firing={"mode": "sometimes"}), "coder-a"))
 
-    def test_event_mode_deferred_refusal_names_phase(self):
+    def test_event_mode_live_but_bare_mode_still_refuses(self):
+        # Phase C FLIP of the deferred-mode pin: event is a live firing mode
+        # now; a bare {"mode": "event"} still refuses -- it names no event.
         errs = triggers.validate_trigger(
             _trig(firing={"mode": "event"}), "coder-a")
-        self.assertTrue(any("Phase C" in e for e in errs))
+        self.assertTrue(any("firing.event" in e for e in errs), errs)
 
     def test_schedule_mode_requires_valid_cron(self):
         errs = triggers.validate_trigger(
@@ -213,11 +227,12 @@ class ShimTriggersTest(unittest.TestCase):
         self.assertEqual(pm["firing"],
                          {"mode": "schedule", "schedule": "0 6 * * *"})
 
-    def test_event_role_not_shimmed(self):
-        # The event bus stays on the legacy role path until Phase C --
-        # shimming would dispatch qa twice (once per path).
-        names = [t["name"] for t in triggers.shim_triggers(self._config())]
-        self.assertNotIn("qa", names)
+    def test_event_role_shimmed_with_events_csv(self):
+        # Phase C FLIP: event roles ARE shimmed now -- the supervisor routes
+        # the shim through the legacy wake body, so nothing dispatches twice.
+        shims = {t["name"]: t for t in triggers.shim_triggers(self._config())}
+        self.assertIn("qa", shims)
+        self.assertEqual(shims["qa"]["firing"]["mode"], "event")
 
     def test_disabled_role_not_shimmed(self):
         names = [t["name"] for t in triggers.shim_triggers(self._config())]
@@ -302,9 +317,10 @@ class EnumerateTriggersTest(unittest.TestCase):
         trigs, _ = triggers.enumerate_triggers(self.repo)
         self.assertNotIn("qa-nightly", [t["name"] for t in trigs])
 
-    def test_native_trigger_colliding_with_event_role_refused(self):
-        # Event roles stay on the legacy bus until Phase C; a same-name
-        # native trigger would double-dispatch that name (Codex CP1).
+    def test_native_over_event_role_is_ordinary_supersession(self):
+        # Phase C FLIP of the CP1 collision refusal (decision 15): event
+        # roles are shimmed, natives supersede shims -- exactly one
+        # enumerator can fire the name, so the refusal's reason is gone.
         with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
                   "w") as fh:
             fh.write("roles:\n  qa:\n    enabled: true\n"
@@ -312,8 +328,9 @@ class EnumerateTriggersTest(unittest.TestCase):
                      "      on: [pr.opened]\n")
         self._write("qa", _trig(name="qa"))
         trigs, warns = triggers.enumerate_triggers(self.repo)
-        self.assertNotIn("qa", [t["name"] for t in trigs])
-        self.assertTrue(any("event" in w and "qa" in w for w in warns))
+        qa = [t for t in trigs if t["name"] == "qa"]
+        self.assertEqual([t["kind"] for t in qa], ["native"])
+        self.assertTrue(any("supersede" in w for w in warns))
 
     def test_bad_filename_stem_refused_with_warning(self):
         d = os.path.join(self.repo, ".autonomy", "triggers")
@@ -416,7 +433,9 @@ class CliTest(unittest.TestCase):
         self.assertIn("push-now\tskip\t1\n", out)
         self.assertNotIn("always-on", out)
 
-    def test_manual_excludes_event_colliding_trigger(self):
+    def test_manual_native_supersedes_event_role(self):
+        # Phase C FLIP: a manual native named like an event role is ordinary
+        # supersession -- it lists (and the role's event shim is suppressed).
         with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
                   "w") as fh:
             fh.write("roles:\n  qa:\n    enabled: true\n"
@@ -425,7 +444,125 @@ class CliTest(unittest.TestCase):
         self._write("qa", _trig(name="qa", firing={"mode": "manual"}))
         rc, out, _ = self._run("manual", self.repo)
         self.assertEqual(rc, 0)
-        self.assertNotIn("qa\t", out)
+        self.assertIn("qa\t", out)
+        rc, out, _ = self._run("event", self.repo)
+        self.assertNotIn("qa\t", out)      # the event shim stays suppressed
+
+
+class EventTriggerSchemaTest(unittest.TestCase):
+    def _trig(self, firing=None, **kw):
+        t = {"name": "qa-on-pr", "pipeline": "qa-sweep",
+             "params": {"repo": "/r"},
+             "firing": firing or {"mode": "event", "event": "pr.opened",
+                                  "map": {"pr": "item"}}}
+        t.update(kw)
+        return t
+
+    def test_event_mode_validates(self):
+        self.assertEqual(triggers.validate_trigger(self._trig(), "qa-on-pr"),
+                         [])
+
+    def test_event_kind_closed_vocabulary(self):
+        for bad in ("session.done", "push", ""):
+            t = self._trig({"mode": "event", "event": bad})
+            self.assertTrue(triggers.validate_trigger(t, "qa-on-pr"), bad)
+
+    def test_map_fields_closed(self):
+        t = self._trig({"mode": "event", "event": "pr.opened",
+                        "map": {"pr": "body"}})
+        self.assertTrue(triggers.validate_trigger(t, "qa-on-pr"))
+
+    def test_sha_only_for_synchronize(self):
+        t = self._trig({"mode": "event", "event": "pr.opened",
+                        "map": {"s": "sha"}})
+        self.assertTrue(triggers.validate_trigger(t, "qa-on-pr"))
+        t = self._trig({"mode": "event", "event": "pr.synchronize",
+                        "map": {"s": "sha"}})
+        self.assertEqual(triggers.validate_trigger(t, "qa-on-pr"), [])
+
+    def test_map_overlap_with_static_params_refused(self):
+        t = self._trig({"mode": "event", "event": "pr.opened",
+                        "map": {"repo": "item"}})
+        self.assertTrue(triggers.validate_trigger(t, "qa-on-pr"))
+
+    def test_queue_policy_refused_for_event_mode(self):
+        t = self._trig(concurrency={"policy": "queue", "max": 1})
+        self.assertTrue(triggers.validate_trigger(t, "qa-on-pr"))
+
+    def test_event_key_refused_on_other_modes(self):
+        t = self._trig({"mode": "continuous", "event": "pr.opened"})
+        self.assertTrue(triggers.validate_trigger(t, "qa-on-pr"))
+        t = self._trig({"mode": "continuous", "map": {"x": "item"}})
+        self.assertTrue(triggers.validate_trigger(t, "qa-on-pr"))
+
+
+class EventCliTest(CliTest):
+    def test_event_lists_native_event_triggers(self):
+        # shims are Task 10 -- until then `event` lists NATIVES only
+        self._write("qa-on-pr", {
+            "name": "qa-on-pr", "pipeline": "qa-sweep", "params": {},
+            "firing": {"mode": "event", "event": "pr.opened"}})
+        rc, out, _ = self._run("event", self.repo)
+        self.assertEqual(rc, 0)
+        self.assertIn("qa-on-pr\tnative\tpr.opened\tskip\t1\n", out)
+
+    def test_event_trigger_absent_from_other_listings(self):
+        self._write("qa-on-pr", {
+            "name": "qa-on-pr", "pipeline": "qa-sweep", "params": {},
+            "firing": {"mode": "event", "event": "pr.opened"}})
+        for sub in ("dispatch", "cron", "manual"):
+            rc, out, _ = self._run(sub, self.repo)
+            self.assertEqual(rc, 0, sub)
+            self.assertNotIn("qa-on-pr", out, sub)
+
+
+class EventCutoverTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        self.tdir = os.path.join(self.repo, ".autonomy", "triggers")
+        os.makedirs(self.tdir)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("roles:\n  qa:\n    enabled: true\n"
+                     "    trigger:\n      type: event\n"
+                     "      on: [pr.opened, session.done]\n")
+
+    def test_event_roles_are_shimmed(self):
+        cfg = {"roles": {"qa": {"enabled": True,
+                                "trigger": {"type": "event",
+                                            "on": ["pr.opened",
+                                                   "session.done"]}}}}
+        shims = [t for t in triggers.shim_triggers(cfg)
+                 if t["firing"]["mode"] == "event"]
+        self.assertEqual(shims[0]["name"], "qa")
+        self.assertEqual(shims[0]["firing"]["events_csv"],
+                         "pr.opened,session.done")
+
+    def test_event_shim_enumerates(self):
+        trigs, warns = triggers.enumerate_triggers(self.repo)
+        ev = [t for t in trigs if t["firing"]["mode"] == "event"]
+        self.assertEqual(ev[0]["name"], "qa")
+        self.assertEqual(ev[0]["kind"], "shim")
+
+    def test_native_supersedes_event_role_shim(self):
+        with open(os.path.join(self.tdir, "qa.json"), "w") as fh:
+            json.dump({"name": "qa", "pipeline": "qa-sweep", "params": {},
+                       "firing": {"mode": "event", "event": "pr.opened"}},
+                      fh)
+        trigs, warns = triggers.enumerate_triggers(self.repo)
+        qa = [t for t in trigs if t["name"] == "qa"]
+        self.assertEqual(len(qa), 1)
+        self.assertEqual(qa[0]["kind"], "native")     # NO refusal
+        self.assertTrue(any("supersede" in w for w in warns), warns)
+        self.assertFalse(any(w.startswith("refused") for w in warns), warns)
+
+    def test_broken_native_still_suppresses_event_shim(self):
+        with open(os.path.join(self.tdir, "qa.json"), "w") as fh:
+            fh.write("{corrupt")
+        trigs, warns = triggers.enumerate_triggers(self.repo)
+        self.assertFalse([t for t in trigs if t["name"] == "qa"])
+        self.assertTrue(any(w.startswith("refused") for w in warns), warns)
 
 
 if __name__ == "__main__":
