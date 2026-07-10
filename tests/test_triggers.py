@@ -565,5 +565,126 @@ class EventCutoverTest(unittest.TestCase):
         self.assertTrue(any(w.startswith("refused") for w in warns), warns)
 
 
+class TrustRollupTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        os.makedirs(os.path.join(self.tmp, ".autonomy", "triggers"))
+
+    def _config(self, text="roles: {}\n"):
+        with open(os.path.join(self.tmp, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write(text)
+
+    def _trigger(self, name, **over):
+        trig = {"name": name, "pipeline": "flow",
+                "firing": {"mode": "continuous"}}
+        trig.update(over)
+        p = os.path.join(self.tmp, ".autonomy", "triggers",
+                         "%s.json" % name)
+        with open(p, "w") as fh:
+            json.dump(trig, fh)
+
+    def _journal(self, recs):
+        p = os.path.join(self.tmp, "journal.jsonl")
+        with open(p, "w") as fh:
+            for r in recs:
+                fh.write(json.dumps(r) + "\n")
+        return p
+
+    def _pass_lines(self, trigger, n, pipeline="flow"):
+        return [{"role": trigger, "trigger": trigger, "pipeline": pipeline,
+                 "outcome": "success", "pass": True} for _ in range(n)]
+
+    def _run_main_capture(self, argv):
+        import contextlib
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            triggers.main(list(argv))
+        return out.getvalue()
+
+    def test_rollup_floor_any_watch_is_watch(self):
+        self._config()
+        self._trigger("hot")             # 20/20 passes -> auto
+        self._trigger("cold")            # 0 runs -> watch
+        j = self._journal(self._pass_lines("hot", 20))
+        rows, rollup, _ = triggers.trust_rollup(self.tmp, j)
+        tiers = dict((r["trigger"], r["tier"]) for r in rows)
+        self.assertEqual(tiers["hot"], "auto")
+        self.assertEqual(tiers["cold"], "watch")
+        self.assertEqual(rollup["flow"], "watch")   # the fail-safe floor
+
+    def test_rollup_all_auto_is_auto(self):
+        self._config()
+        self._trigger("hot")
+        self._trigger("warm")
+        j = self._journal(self._pass_lines("hot", 20)
+                          + self._pass_lines("warm", 20))
+        _, rollup, _ = triggers.trust_rollup(self.tmp, j)
+        self.assertEqual(rollup["flow"], "auto")
+
+    def test_disabled_trigger_still_counted(self):
+        # a pause must never hide evidence from the rollup.
+        self._config()
+        self._trigger("hot", enabled=False)
+        j = self._journal(self._pass_lines("hot", 20))
+        rows, rollup, _ = triggers.trust_rollup(self.tmp, j)
+        self.assertIn("hot", [r["trigger"] for r in rows])
+        self.assertEqual(rollup["flow"], "auto")
+
+    def test_wrapped_shim_groups_under_role_name(self):
+        # unbound loop role: the shim's pipeline binding is empty, so the
+        # row groups under the wrapped doc's name (== the role name),
+        # matching the journal's pipeline field for wrapped runs.
+        self._config("roles:\n  coder:\n    enabled: true\n")
+        j = self._journal([])
+        rows, rollup, _ = triggers.trust_rollup(self.tmp, j)
+        row = [r for r in rows if r["trigger"] == "coder"][0]
+        self.assertEqual(row["pipeline"], "coder")
+        self.assertEqual(rollup["coder"], "watch")
+
+    def test_native_rows_do_not_inherit_roleonly_lines(self):
+        # 20 passing TRIGGER-LESS role lines + a same-name NATIVE trigger:
+        # the native row earns from zero (native=True wired through).
+        self._config()
+        self._trigger("coder")
+        j = self._journal([{"role": "coder", "pipeline": "flow",
+                            "outcome": "success", "pass": True}
+                           for _ in range(20)])
+        rows, _, _ = triggers.trust_rollup(self.tmp, j)
+        row = [r for r in rows if r["trigger"] == "coder"][0]
+        self.assertEqual(row["runs"], 0)
+        self.assertEqual(row["tier"], "watch")
+
+    def test_trust_cli_output_shape(self):
+        # TRIGGER rows carry 7 tab-fields, PIPELINE rollup rows 3.
+        self._config()
+        self._trigger("hot")
+        j = self._journal(self._pass_lines("hot", 20))
+        out = self._run_main_capture(["trust", self.tmp, j])
+        lines = out.strip().split("\n")
+        self.assertTrue(lines[0].startswith("TRIGGER\t"))
+        self.assertEqual(len(lines[0].split("\t")), 7)
+        self.assertEqual(lines[-1].split("\t"),
+                         ["PIPELINE", "flow", "auto"])
+
+    def test_trust_cli_surfaces_refused_triggers_on_stdout(self):
+        # CP1 finding 1: a corrupt trigger file cannot be attributed to a
+        # pipeline, so the verdict SURFACE carries it -- a REFUSED row on
+        # stdout, alongside (not instead of) the stderr WARN.
+        self._config()
+        self._trigger("hot")
+        with open(os.path.join(self.tmp, ".autonomy", "triggers",
+                               "broken.json"), "w") as fh:
+            fh.write("{not json")
+        j = self._journal(self._pass_lines("hot", 20))
+        out = self._run_main_capture(["trust", self.tmp, j])
+        refused = [l for l in out.strip().split("\n")
+                   if l.startswith("REFUSED\t")]
+        self.assertEqual(len(refused), 1)
+        self.assertIn("broken", refused[0])
+
+
 if __name__ == "__main__":
     unittest.main()

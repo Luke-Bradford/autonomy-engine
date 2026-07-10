@@ -10,6 +10,9 @@ parallel). Legacy `roles:` configs are auto-shimmed into synthetic triggers
 Fail-safe: a malformed trigger REFUSES (named reason) and NEVER falls back
 to legacy role dispatch -- a broken trigger that shadows a role name must
 not silently resurrect the role path the operator replaced.
+
+CLI verbs: dispatch, cron, event, manual, show, validate,
+trust <repo> <journal> (per-trigger rows + per-pipeline rollup).
 """
 import json
 import os
@@ -276,13 +279,16 @@ def _trigger_stems(repo):
     return stems, bad
 
 
-def enumerate_triggers(repo, lane=None):
+def enumerate_triggers(repo, lane=None, dispatchable_only=True):
     """(triggers, warnings) for one lane. Native file triggers (validated,
     kind='native') + shims for roles no file supersedes (kind='shim').
     Every refusal becomes a warning string -- a refused trigger is OUT of
     the dispatchable list AND its same-name shim stays suppressed (never
     fall back to role dispatch for a broken/shadowing trigger). Raises
-    PipelineError when the config (the shim source) is unreadable."""
+    PipelineError when the config (the shim source) is unreadable.
+    dispatchable_only=False returns every VALID trigger regardless of
+    enabled/lane (trust/inspection callers -- a pause must not hide
+    evidence); refusals stay refused either way."""
     import roles
     cfg, rc = roles._load_config(repo)
     if rc != 0 or cfg is None:
@@ -314,8 +320,33 @@ def enumerate_triggers(repo, lane=None):
     def _in_lane(t):
         tl = t.get("lane") or roles.default_lane(cfg)
         return tl in declared and tl == target_lane
+    if not dispatchable_only:
+        # trust/inspection callers: every VALID trigger, disabled and
+        # off-lane included (a pause must not hide evidence). Refusals
+        # stayed refused above -- this widens nothing invalid.
+        return out, warnings
     return ([t for t in out if t.get("enabled", True) and _in_lane(t)],
             warnings)
+
+
+def trust_rollup(repo, journal_path):
+    """Per-trigger trust rows + per-pipeline rollup (design spec §6).
+    The rollup is a fail-safe floor: a pipeline reads `auto` only when
+    EVERY contributing trigger's tier is `auto` (prevention-log #18 --
+    the reassuring verdict is earned, never the default)."""
+    trigs, warnings = enumerate_triggers(repo, dispatchable_only=False)
+    rows, by_pipeline = [], {}
+    for t in trigs:
+        pname = t.get("pipeline") or t["name"]  # wrapped role: doc name == role name
+        led = pipeline.ledger(journal_path, t["name"], pipeline_name=pname,
+                              native=(t.get("kind") == "native"))
+        rows.append({"trigger": t["name"], "pipeline": pname,
+                     "kind": t.get("kind", ""), "runs": led["runs"],
+                     "passes": led["passes"], "tier": led["tier"]})
+        by_pipeline.setdefault(pname, []).append(led["tier"])
+    rollup = dict((p, "auto" if all(x == "auto" for x in tiers) else "watch")
+                  for p, tiers in by_pipeline.items())
+    return rows, rollup, warnings
 
 
 def _cli_lane(args):
@@ -426,6 +457,33 @@ def main(argv):
         print("POLICY=%s" % c["policy"])
         print("MAX=%d" % c["max"])
         print("ENABLED=%s" % ("true" if t.get("enabled", True) else "false"))
+        return 0
+    if cmd == "trust":
+        if len(pos) != 2:
+            print("usage: triggers.py trust <repo> <journal>",
+                  file=sys.stderr)
+            return 2
+        try:
+            rows, rollup, warns = trust_rollup(pos[0], pos[1])
+        except PipelineError as exc:
+            print("triggers trust: %s" % exc, file=sys.stderr)
+            return 1
+        for w in warns:
+            print("WARN %s" % w, file=sys.stderr)
+        for r in rows:
+            print("TRIGGER\t%s\t%s\t%s\t%d\t%d\t%s" % (
+                r["trigger"], r["pipeline"], r["kind"], r["runs"],
+                r["passes"], r["tier"]))
+        # Refusals land on STDOUT too (CP1 finding 1): the trust surface
+        # itself must carry "a trigger here is unreadable" -- a refused
+        # file can't be attributed to a pipeline, so no rollup floor can
+        # represent it. Tabs in the reason are flattened so the row stays
+        # 2-field parseable.
+        for w in warns:
+            if w.startswith("refused"):
+                print("REFUSED\t%s" % w.replace("\t", " "))
+        for p in sorted(rollup):
+            print("PIPELINE\t%s\t%s" % (p, rollup[p]))
         return 0
     if cmd == "validate":
         try:
