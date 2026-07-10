@@ -111,7 +111,7 @@ def in_run_window(trig, now_epoch):
     try:
         dt = datetime.datetime.fromtimestamp(int(now_epoch),
                                              datetime.timezone.utc)
-    except (ValueError, OverflowError, OSError):
+    except (TypeError, ValueError, OverflowError, OSError):
         return False
     minutes = dt.hour * 60 + dt.minute
     dow = WINDOW_DAYS[dt.weekday()]            # weekday(): mon=0 .. sun=6

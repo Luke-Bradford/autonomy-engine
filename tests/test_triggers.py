@@ -189,6 +189,13 @@ class RunWindowMembershipTest(unittest.TestCase):
         w2 = [{"start": "22:00", "end": "23:00"}]
         self.assertFalse(triggers.in_run_window(self._t(w2), self.WED_2300))
 
+    def test_junk_epoch_fails_closed(self):
+        # review NITPICK (PR #382): a non-numeric epoch must fail CLOSED,
+        # never raise -- defense-in-depth beyond the argv digits-only gate.
+        w = self._t([{"start": "00:00", "end": "23:59"}])
+        for junk in (None, [], {}, "abc", float("nan")):
+            self.assertFalse(triggers.in_run_window(w, junk), repr(junk))
+
     def test_junk_window_contributes_no_open_time(self):
         # defense-in-depth (prevention-log #12/#18, CP1 finding 2): junk
         # on an already-loaded dict opens NOTHING (fail-safe = closed).
