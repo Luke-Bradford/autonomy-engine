@@ -597,9 +597,12 @@ def project_outputs(declared, raw):
 
 
 def substitute_doc(doc, ctx):
-    """Deep copy of doc with every STRING scalar run through substitute(). Phase
-    B calls this at compile time; Phase A only unit-tests it. Non-strings pass
-    through untouched; the input doc is never mutated."""
+    """Deep copy of doc with every STRING scalar run through substitute().
+    NOT in the dispatch path: prepare substitutes each channel exactly once
+    itself (a whole-doc pass composed with a field pass would double-resolve
+    -- values must stay inert). Kept for consumers that need one total pass
+    over a template (call_pipeline's params mapping is the expected one).
+    Non-strings pass through untouched; the input doc is never mutated."""
     def walk(v):
         if isinstance(v, dict):
             return {k: walk(x) for k, x in v.items()}
