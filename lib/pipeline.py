@@ -19,7 +19,7 @@ CLI (roles.py conventions; rc 0 ok / 1 invalid / 2 unreadable):
   pipeline.py next <state-file> --brief-out <path> [--journal <path>]
   pipeline.py record <state-file> <node> <outcome> \
       [--session-log <p>] [--verdict <p>] [--journal <p>]
-  pipeline.py ledger <journal-file> <role> [--pipeline <name>]
+  pipeline.py ledger <journal-file> <trigger> [--pipeline <name>] [--native]
 """
 import json
 import os
@@ -2114,6 +2114,10 @@ def _journal_append(journal_path, state):
         "trigger": state.get("trigger", ""),
         # Additive Phase C field: links a child run's line to its parent.
         "parent_run": state.get("parent_run", ""),
+        # Additive Phase E field: shim/native provenance per line, so
+        # future keying refinements can tell role-era shim evidence from
+        # native evidence without rewriting the journal.
+        "kind": state.get("kind", ""),
         "pipeline": doc.get("name", ""),
         "pipeline_version": meta.get("from_version", 0),
         "wrapped": bool(meta.get("wrapped")),
@@ -2137,17 +2141,23 @@ TRUST_MIN_RUNS = 20
 TRUST_PASS_RATE = 0.95
 
 
-def ledger(journal_path, role, pipeline_name=""):
-    """Trust-ledger projection (v5 §10): PURE read over the journal, no
-    stored tier. Total reader (prevention-log #12): junk lines are skipped --
-    they reduce evidence, which keeps the tier on the safe side (watch).
+def ledger(journal_path, trigger, pipeline_name="", native=False):
+    """Trust-ledger projection, keyed per TRIGGER (Phase E; design spec
+    §6): PURE read over the journal, no stored tier. Total reader
+    (prevention-log #12): junk lines are skipped -- they reduce evidence,
+    which keeps the tier on the safe side (watch).
 
-    Trust is earned per ASSIGNMENT, not per role name: pass pipeline_name to
-    scope the history to the role's CURRENT binding, so rebinding a role
-    never inherits the previous pipeline's record. The pass-rate is computed
-    over the most recent TRUST_MIN_RUNS runs (a rolling window), so §10's
-    'demotion on pass-rate decay' actually responds to recent decay instead
-    of being diluted by a long healthy history."""
+    A line counts when its `trigger` field matches. A line with NO trigger
+    field (pre-#374 evidence; an empty string counts as absent) is
+    grandfathered ONLY for a SHIM (native=False): the shim's name is
+    byte-equal to the role whose assignment that line described. A NATIVE
+    trigger earns from zero -- inheriting role-era evidence for a
+    re-authored parameterisation would be fail-open. Child-run lines
+    (parent_run set) never count: no trigger fired them. pipeline_name
+    still scopes to the current binding, so rebinding never inherits the
+    previous pipeline's record. The pass-rate is computed over the most
+    recent TRUST_MIN_RUNS runs (rolling window), so demotion responds to
+    recent decay."""
     matched = []
     try:
         fh = open(journal_path)
@@ -2159,7 +2169,17 @@ def ledger(journal_path, role, pipeline_name=""):
                 rec = json.loads(line)
             except ValueError:
                 continue
-            if not isinstance(rec, dict) or rec.get("role") != role:
+            if not isinstance(rec, dict):
+                continue
+            if rec.get("parent_run"):
+                continue
+            t = rec.get("trigger", "")
+            if not isinstance(t, str):
+                continue      # junk trigger value: skip, never grandfather
+            if t:
+                if t != trigger:
+                    continue
+            elif native or rec.get("role") != trigger:
                 continue
             if pipeline_name and rec.get("pipeline") != pipeline_name:
                 continue
@@ -2915,13 +2935,16 @@ def main(argv):
             return 1
         return 0
     if cmd == "ledger":
+        native = "--native" in rest
+        rest = [a for a in rest if a != "--native"]
         opts = {"--pipeline": ""}
         pos = _split_opts(rest, opts)
         if len(pos) != 2:
-            print("usage: pipeline.py ledger <journal> <role> "
-                  "[--pipeline <name>]", file=sys.stderr)
+            print("usage: pipeline.py ledger <journal> <trigger> "
+                  "[--pipeline <name>] [--native]", file=sys.stderr)
             return 2
-        led = ledger(pos[0], pos[1], pipeline_name=opts["--pipeline"])
+        led = ledger(pos[0], pos[1], pipeline_name=opts["--pipeline"],
+                     native=native)
         print("runs=%d passes=%d tier=%s" % (led["runs"], led["passes"],
                                              led["tier"]))
         return 0
