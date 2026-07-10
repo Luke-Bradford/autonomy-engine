@@ -2811,8 +2811,14 @@ def main(argv):
             if rest[i] == "--event-field" and i + 1 < len(rest):
                 kv = rest[i + 1]
                 k, _, v = kv.partition("=")
-                if k not in ("item", "sha") or not v or \
-                        not re.match(r"^[A-Za-z0-9:._-]{1,128}$", v):
+                # Per-key gates, byte-parity with _event_native_wakes'
+                # supervisor-side checks (prevention-log #6): item is a
+                # PR/issue NUMBER, sha is alphanumeric -- a looser CLI
+                # charset would let a direct call bypass the resolver's gate.
+                ok = (re.match(r"^\d{1,20}$", v) if k == "item"
+                      else re.match(r"^[A-Za-z0-9]{1,64}$", v)
+                      if k == "sha" else None)
+                if not ok:
                     print("pipeline start: bad --event-field %r" % kv,
                           file=sys.stderr)
                     return 2

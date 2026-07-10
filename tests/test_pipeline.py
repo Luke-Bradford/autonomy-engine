@@ -2690,10 +2690,15 @@ class EventStartChannelTest(unittest.TestCase):
         rc = pipeline.main(base + ["--event-field", "item=1",
                                    "--event-field", "item=2"])
         self.assertEqual(rc, 2)
-        # bad key / bad value charset
+        # bad key / bad value charset; item must be NUMERIC (byte-parity
+        # with the supervisor's _event_native_wakes gate)
         rc = pipeline.main(base + ["--event-field", "body=x"])
         self.assertEqual(rc, 2)
         rc = pipeline.main(base + ["--event-field", "item=4;2"])
+        self.assertEqual(rc, 2)
+        rc = pipeline.main(base + ["--event-field", "item=abc"])
+        self.assertEqual(rc, 2)
+        rc = pipeline.main(base + ["--event-field", "sha=de:ad"])
         self.assertEqual(rc, 2)
         # --event-field with --kind shim = usage error
         rc = pipeline.main(["start", self.repo, "evt", self.state,
