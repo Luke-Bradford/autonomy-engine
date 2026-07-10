@@ -1853,6 +1853,36 @@ class SubstitutionWiringTest(unittest.TestCase):
         with open(steps[0]["prompt"]) as fh:
             self.assertNotIn("pipeline:outputs", fh.read())
 
+    def test_param_value_with_ref_stays_literal_in_brief(self):
+        # THE inertness invariant carried from Phase A (single-pass re.sub):
+        # a param VALUE containing ${...} is data, never re-resolved.
+        self._one_node("t is ${params.ticket}",)
+        with open(self.state) as fh:
+            st = json.load(fh)
+        st["params"]["ticket"] = "${run.id}"
+        with open(self.state, "w") as fh:
+            json.dump(st, fh)
+        steps = pipeline.ready_set(self.state, self.logdir, 1)
+        with open(steps[0]["prompt"]) as fh:
+            text = fh.read()
+        self.assertIn("t is ${run.id}", text)          # literal, not t1-x-1
+        self.assertNotIn("t is t1-x-1", text)
+
+    def test_param_value_with_ref_in_runs_as_refused_not_resolved(self):
+        # Same invariant on the runs_as channel: a single substitute pass
+        # leaves the value's literal ${...} in place, and the concrete
+        # re-check REFUSES it -- it is never re-parsed as a reference.
+        self._one_node("plain", runs_as={"model": "${params.m}"})
+        with open(self.state) as fh:
+            st = json.load(fh)
+        st["params"]["m"] = "${run.repo}"
+        with open(self.state, "w") as fh:
+            json.dump(st, fh)
+        with self.assertRaises(pipeline.PipelineError) as cm:
+            pipeline.ready_set(self.state, self.logdir, 1)
+        # refused as leftover-${, NOT resolved into the repo path
+        self.assertNotIn(self.repo, str(cm.exception))
+
 
 class StartRunTriggerTest(unittest.TestCase):
     def setUp(self):

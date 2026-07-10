@@ -1879,10 +1879,6 @@ def _prepare_step(state_path, state, uid, brief_path):
     node = _node_by_id(doc, _expected_node(doc, state, uid))
     verdict_rel = _verdict_rel(state_path, node["id"])
     ctx = _substitution_ctx(state_path, state)
-    # Resolve the node's OWN ${...} fields (runs_as etc.) before anything
-    # derived from them is emitted. substitute_doc deep-copies; the stored
-    # doc keeps its template form so a later bounce re-resolves fresh.
-    resolved_node = substitute_doc(node, ctx)
     if node.get("legacy_prompt"):
         kind, prompt = "legacy", node["legacy_prompt"]
     else:
@@ -1913,9 +1909,15 @@ def _prepare_step(state_path, state, uid, brief_path):
         with open(brief_path, "w") as fh:
             fh.write(text)
         kind, prompt = "compiled", brief_path
-    merged = dict(_effective_runs_as(doc, node))
-    merged.update(resolved_node.get("runs_as") or {})
-    merged = {k: substitute(v, ctx) for k, v in merged.items()}
+    # runs_as resolves from its TEMPLATE form in exactly ONE substitute pass
+    # (the stored doc keeps templates so a later bounce re-resolves fresh).
+    # Never substitute a runs_as value twice: the second pass would re-parse
+    # ${...} inside an already-substituted PARAM VALUE -- the injection
+    # channel the inertness argument (single-pass re.sub, Phase A PR #372)
+    # forbids. A value that still carries a literal ${ after the single
+    # pass is data; the concrete check below refuses it (never dispatched).
+    merged = {k: substitute(v, ctx)
+              for k, v in _effective_runs_as(doc, node).items()}
     _concrete_runs_as_check(node["id"], merged)
     return {"status": "node", "unit": uid, "node": node["id"], "kind": kind,
             "prompt": prompt, "verdict": verdict_rel, "runs_as": merged}
