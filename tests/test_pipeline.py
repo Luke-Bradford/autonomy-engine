@@ -2049,6 +2049,237 @@ class StartRunTriggerTest(unittest.TestCase):
         self.assertEqual(st["run"]["trigger"], "coder")
 
 
+class _ChildFixture(unittest.TestCase):
+    """Shared tmp-repo fixture for the call_pipeline family (Tasks 4+5)."""
+
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        self.logdir = os.path.join(self.repo, "var", "autonomy-logs")
+        os.makedirs(self.logdir)
+        self.journal = os.path.join(self.logdir, "journal.jsonl")
+        self._write_pipeline("qa-sweep", {
+            "name": "qa-sweep", "version": 1,
+            "caps": {"max_sessions_per_run": 4},
+            "params": [{"name": "target", "type": "string", "required": True}],
+            "outputs": [{"name": "findings", "type": "string"}],
+            "nodes": [{"id": "scan", "type": "check", "brief_ref": "scan.md"}],
+            "edges": [],
+        }, briefs={"scan.md": "scan ${params.target}"})
+
+    def _write_pipeline(self, name, doc, briefs):
+        d = os.path.join(self.repo, ".autonomy", "pipelines", name)
+        os.makedirs(d)
+        with open(os.path.join(d, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        for fn, text in briefs.items():
+            with open(os.path.join(d, fn), "w") as fh:
+                fh.write(text)
+
+    def _parent_state(self, node_params=None, name="par", doc=None):
+        doc = doc if doc is not None else _call_doc()
+        if node_params is not None:
+            doc["nodes"][1]["params"] = node_params
+        state_path = os.path.join(self.logdir, ".pipeline-run-%s.json" % name)
+        state = {"fmt": 2, "run_id": "%s-x-1" % name, "role": name,
+                 "lane": "", "doc": dict(doc, edges=pipeline.effective_edges(doc)),
+                 "meta": {}, "trigger": name, "kind": "native", "params": {},
+                 "run": {"id": "%s-x-1" % name, "pipeline": doc["name"],
+                         "trigger": name, "repo": self.repo},
+                 "started": 1, "sessions": 0,
+                 "units": {"code": {"status": "success"},
+                           "qa": {"status": "pending"}},
+                 "container_pos": {}, "rounds": {}, "bounces": {},
+                 "nodes_done": [{"id": "code", "type": "agent_task",
+                                 "outcome": "success", "unit": "code",
+                                 "via": [], "session_log": ""}],
+                 "status": "in_progress"}
+        pipeline._atomic_write_json(state_path, state)
+        # code's outputs sidecar feeds the call params
+        outp = os.path.join(self.logdir,
+                            ".pipeline-run-%s.code.outputs.json" % name)
+        pipeline.write_output(outp, "branch", "feat/x")
+        return state_path, state
+
+
+class ChildRunTest(_ChildFixture):
+    def test_child_starts_with_substituted_params(self):
+        sp, st = self._parent_state()
+        name, cpath = pipeline.start_child_run(
+            self.repo, sp, st, st["doc"]["nodes"][1])
+        self.assertEqual(name, "par.c0.qa")
+        with open(cpath) as fh:
+            child = json.load(fh)
+        self.assertEqual(child["params"], {"target": "feat/x"})
+        self.assertEqual(child["kind"], "native")
+        self.assertEqual(child["parent_run"], st["run_id"])
+        self.assertEqual(child["parent_node"], "qa")
+        self.assertEqual(child["call_depth"], 1)
+        self.assertEqual(child["call_path"], ["parent", "qa-sweep"])
+
+    def test_cycle_refused(self):
+        sp, st = self._parent_state()
+        st["call_path"] = ["qa-sweep"]
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.start_child_run(self.repo, sp, st, st["doc"]["nodes"][1])
+
+    def test_depth_cap_refused(self):
+        sp, st = self._parent_state()
+        st["call_depth"] = pipeline.MAX_CALL_DEPTH
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.start_child_run(self.repo, sp, st, st["doc"]["nodes"][1])
+
+    def test_overlong_child_name_refused(self):
+        # 'p'*60 + '.c0.qa' = 66 chars > the 64-char _NAME_RE cap (the plan's
+        # 'p'*58 lands EXACTLY on 64, which legally passes -- adjusted).
+        sp, st = self._parent_state(name="p" * 60)
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.start_child_run(self.repo, sp, st, st["doc"]["nodes"][1])
+
+    def test_required_child_param_missing_refuses(self):
+        sp, st = self._parent_state(node_params={})
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.start_child_run(self.repo, sp, st, st["doc"]["nodes"][1])
+
+    def test_existing_child_state_refuses(self):
+        sp, st = self._parent_state()
+        stale = os.path.join(self.logdir, ".pipeline-run-par.c0.qa.json")
+        with open(stale, "w") as fh:
+            fh.write("{}")
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.start_child_run(self.repo, sp, st, st["doc"]["nodes"][1])
+
+    def test_lane_scoped_child_state_filename(self):
+        sp, st = self._parent_state()
+        st["lane"] = "night"
+        name, cpath = pipeline.start_child_run(
+            self.repo, sp, st, st["doc"]["nodes"][1])
+        self.assertEqual(name, "par.c0.qa")
+        self.assertTrue(cpath.endswith(".pipeline-run-par.c0.qa--night.json"))
+
+
+class ChildOutcomeSidecarTest(_ChildFixture):
+    def _child_state(self, outputs_decl=None, nodes_done=None):
+        doc = {"name": "qa-sweep", "version": 1,
+               "caps": {"max_sessions_per_run": 4},
+               "outputs": outputs_decl if outputs_decl is not None else
+                   [{"name": "findings", "type": "string"}],
+               "nodes": [{"id": "scan", "type": "check",
+                          "brief_ref": "scan.md"}],
+               "edges": []}
+        sp = os.path.join(self.logdir, ".pipeline-run-par.c0.qa.json")
+        st = {"fmt": 2, "run_id": "par.c0.qa-x-1", "role": "par.c0.qa",
+              "lane": "", "doc": doc, "meta": {}, "trigger": "par.c0.qa",
+              "kind": "native", "params": {},
+              "run": {"id": "par.c0.qa-x-1", "pipeline": "qa-sweep",
+                      "trigger": "par.c0.qa", "repo": self.repo},
+              "parent_run": "par-x-1", "parent_node": "qa",
+              "call_depth": 1, "call_path": ["parent", "qa-sweep"],
+              "started": 1, "sessions": 1,
+              "units": {"scan": {"status": "success"}},
+              "container_pos": {}, "rounds": {}, "bounces": {},
+              "nodes_done": nodes_done if nodes_done is not None else
+                  [{"id": "scan", "type": "check", "outcome": "success",
+                    "unit": "scan", "via": [], "session_log": ""}],
+              "status": "in_progress"}
+        pipeline._atomic_write_json(sp, st)
+        return sp, st
+
+    def _sidecar(self):
+        p = os.path.join(self.logdir, ".pipeline-run-par.c0.qa.outcome.json")
+        with open(p) as fh:
+            return json.load(fh)
+
+    def test_finish_parks_outcome_and_projected_outputs(self):
+        sp, st = self._child_state()
+        pipeline.write_output(os.path.join(
+            self.logdir, ".pipeline-run-par.c0.qa.scan.outputs.json"),
+            "findings", "f1")
+        pipeline._finish(st, sp, "success", self.journal)
+        self.assertEqual(self._sidecar(),
+                         {"run_id": "par.c0.qa-x-1", "outcome": "success",
+                          "outputs": {"findings": "f1"}})
+
+    def test_projection_type_mismatch_downgrades_to_failure(self):
+        sp, st = self._child_state(
+            outputs_decl=[{"name": "findings", "type": "number"}])
+        pipeline.write_output(os.path.join(
+            self.logdir, ".pipeline-run-par.c0.qa.scan.outputs.json"),
+            "findings", "abc")
+        pipeline._finish(st, sp, "success", self.journal)
+        parked = self._sidecar()
+        self.assertEqual(parked["outcome"], "failure")
+        self.assertIn("projection", parked["error"])
+        self.assertNotIn("outputs", parked)
+
+    def test_failed_call_entries_still_contribute_outputs(self):
+        # decision 8: a failed CHILD's findings are exactly the value the
+        # back-edge loops back -- call entries contribute on failure too.
+        sp, st = self._child_state(nodes_done=[
+            {"id": "scan", "type": "call_pipeline", "outcome": "failure",
+             "unit": "scan", "via": [], "session_log": "",
+             "child_run": "x", "child_outcome": "failure"}])
+        pipeline.write_output(os.path.join(
+            self.logdir, ".pipeline-run-par.c0.qa.scan.outputs.json"),
+            "findings", "f-from-failed-child")
+        pipeline._finish(st, sp, "failure", self.journal)
+        self.assertEqual(self._sidecar()["outputs"],
+                         {"findings": "f-from-failed-child"})
+
+    def test_plain_failed_entries_do_not_contribute(self):
+        # an errored SESSION's sidecar is untrustworthy -- plain nodes stay
+        # success-only (decision 8's other half)
+        sp, st = self._child_state(nodes_done=[
+            {"id": "scan", "type": "check", "outcome": "failure",
+             "unit": "scan", "via": [], "session_log": ""}])
+        pipeline.write_output(os.path.join(
+            self.logdir, ".pipeline-run-par.c0.qa.scan.outputs.json"),
+            "findings", "junk")
+        pipeline._finish(st, sp, "failure", self.journal)
+        self.assertNotIn("findings", self._sidecar().get("outputs", {}))
+
+    def test_journal_line_carries_parent_run(self):
+        sp, st = self._child_state()
+        pipeline._finish(st, sp, "success", self.journal)
+        with open(self.journal) as fh:
+            rec = json.loads(fh.read().splitlines()[-1])
+        self.assertEqual(rec["parent_run"], "par-x-1")
+
+    def test_non_child_run_writes_no_sidecar(self):
+        sp, st = self._child_state()
+        del st["parent_run"]
+        pipeline._finish(st, sp, "success", self.journal)
+        self.assertFalse(os.path.exists(os.path.join(
+            self.logdir, ".pipeline-run-par.c0.qa.outcome.json")))
+
+
+class CallNameHeadroomTest(_ChildFixture):
+    def test_overlong_trigger_name_refuses_the_run_up_front(self):
+        # CP1: an over-long trigger name must refuse at run START, not fail
+        # every call node one by one at sweep time.
+        tname = "t" * 60
+        self._write_pipeline("caller", {
+            "name": "caller", "version": 1,
+            "caps": {"max_sessions_per_run": 4},
+            "nodes": [{"id": "qa", "type": "call_pipeline",
+                       "pipeline": "qa-sweep", "params": {"target": "x"}}],
+            "edges": []}, briefs={})
+        tdir = os.path.join(self.repo, ".autonomy", "triggers")
+        os.makedirs(tdir)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("engine:\n  label: t\n")
+        with open(os.path.join(tdir, "%s.json" % tname), "w") as fh:
+            json.dump({"name": tname, "pipeline": "caller", "params": {},
+                       "firing": {"mode": "continuous"}}, fh)
+        with self.assertRaises(pipeline.PipelineError) as cm:
+            pipeline.start_run_trigger(
+                self.repo, tname,
+                os.path.join(self.logdir, ".pipeline-run-%s.json" % tname),
+                known_repos=lambda: set(), known_accounts=lambda: set())
+        self.assertIn("64-char", str(cm.exception))
+
+
 class SecretMessageAuditTest(unittest.TestCase):
     def test_secret_failure_message_names_param_never_value(self):
         # Secret error paths must carry the NAME only -- the message flows

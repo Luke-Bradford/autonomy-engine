@@ -1458,6 +1458,7 @@ def _load_state(state_path):
 
 def start_run(repo, role, state_path, lane=""):
     doc, meta = resolve_pipeline(repo, role)
+    _check_call_name_headroom(doc, role)
     doc = dict(doc)
     # Implicit chain synthesis: P1 docs and wrapped roles become the
     # equivalent success-chain graph -- ONE walk engine, stored into the
@@ -1539,18 +1540,42 @@ def check_param_existence(declared, resolved, *, known_repos, known_accounts):
                                     % (name, value))
 
 
+def _resolve_run_params(repo, doc, overrides, *, known_repos=None,
+                        known_accounts=None):
+    """Invoker param resolution for a parameterised run (a trigger OR a
+    calling pipeline -- the same slot, spec S3). Phase B semantics verbatim:
+    a secret param that WOULD RESOLVE -- invoker value or pipeline default
+    -- is refused outright (no dispatch sink exists; the env-channel sink
+    flips this in ONE place -- here -- when it lands). Declared-but-
+    valueless secrets are inert; no secret value can enter this dataflow,
+    which IS the log-redaction boundary, by construction."""
+    declared = doc.get("params") or []
+    resolving_secrets = sorted(
+        p["name"] for p in declared
+        if isinstance(p, dict) and p.get("type") == "secret"
+        and ("default" in p or p.get("name") in overrides))
+    if resolving_secrets:
+        raise PipelineError(
+            "secret param(s) %s would resolve (invoker value or pipeline "
+            "default) but no dispatch sink for secrets exists yet -- "
+            "refusing rather than accept-and-ignore"
+            % ", ".join(resolving_secrets))
+    params = resolve_params(declared, overrides, secret_lookup=None)
+    check_param_existence(
+        declared, params,
+        known_repos=known_repos or _registered_repos,
+        known_accounts=known_accounts or _known_accounts)
+    return params
+
+
 def start_run_trigger(repo, trigger_name, state_path, lane="", *,
                       known_repos=None, known_accounts=None):
     """Start a run for a NATIVE trigger: load+validate the trigger, resolve
     the pipeline BY NAME, resolve params (required-unset refuses HERE,
-    before a session is burned), run the repo/account existence checks,
-    write fmt-2 state. Secrets: Phase B refuses any secret param that
-    would RESOLVE -- trigger-supplied OR pipeline default (no dispatch
-    sink exists; check_refs already refuses secret REFS at validate time)
-    -- so no secret value can enter this dataflow, which IS the Phase
-    A-deferred log-redaction boundary, by construction. Deliberately NO
-    secret_lookup seam. A shim with pipeline '' never reaches this
-    function -- shims start through start_run(repo, role)."""
+    before a session is burned -- _resolve_run_params, shared with
+    start_child_run), run the repo/account existence checks, write fmt-2
+    state. A shim with pipeline '' never reaches this function -- shims
+    start through start_run(repo, role)."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import triggers as triggers_mod
     import roles
@@ -1574,28 +1599,10 @@ def start_run_trigger(repo, trigger_name, state_path, lane="", *,
                             "-- event triggers land in a later phase; "
                             "refusing (double-dispatch)" % trigger_name)
     doc, meta = resolve_pipeline_doc(repo, trig["pipeline"])
-    declared = doc.get("params") or []
-    # A secret param that WOULD RESOLVE -- supplied by the trigger OR
-    # carrying a pipeline-saved default -- is refused outright (Codex CP1:
-    # a default would flow through secret_lookup into state['params'] on
-    # disk). Declared-but-valueless secrets are inert. Phase B therefore
-    # never passes a secret_lookup at all: no secret value can enter this
-    # dataflow, which IS the Phase A-deferred redaction boundary.
-    resolving_secrets = sorted(
-        p["name"] for p in declared
-        if isinstance(p, dict) and p.get("type") == "secret"
-        and ("default" in p or p.get("name") in trig["params"]))
-    if resolving_secrets:
-        raise PipelineError(
-            "secret param(s) %s would resolve (trigger value or pipeline "
-            "default) but Phase B has no dispatch sink for secrets (env "
-            "channel lands in Phase C) -- refusing rather than "
-            "accept-and-ignore" % ", ".join(resolving_secrets))
-    params = resolve_params(declared, trig["params"], secret_lookup=None)
-    check_param_existence(
-        declared, params,
-        known_repos=known_repos or _registered_repos,
-        known_accounts=known_accounts or _known_accounts)
+    _check_call_name_headroom(doc, trigger_name)
+    params = _resolve_run_params(repo, doc, trig["params"],
+                                 known_repos=known_repos,
+                                 known_accounts=known_accounts)
     doc = dict(doc)
     doc["edges"] = effective_edges(doc)
     ident = "%s--%s" % (trigger_name, lane) if lane else trigger_name
@@ -1615,6 +1622,110 @@ def start_run_trigger(repo, trigger_name, state_path, lane="", *,
              "nodes_done": [], "status": "in_progress"}
     _atomic_write_json(state_path, state)
     return state
+
+
+def _state_base(state_path):
+    base = os.path.basename(state_path)
+    if base.endswith(".json"):
+        base = base[:-len(".json")]
+    return base
+
+
+def _run_outcome_rel(state_path):
+    """The parked child outcome, derived exactly like the verdict/outputs
+    sidecars -- one naming rule everywhere, lane/slot-safe for free."""
+    return "var/autonomy-logs/%s.outcome.json" % _state_base(state_path)
+
+
+def _child_token_name(parent_state_path, parent_state, node_id):
+    """<parent-name>.c<parent-slot>.<node-id> -- parsed from the state
+    FILENAME with inflight_tokens' exact rules (strip @slot from the end,
+    then --lane), so both sides agree by construction."""
+    base = _state_base(parent_state_path)
+    if base.startswith(".pipeline-run-"):
+        base = base[len(".pipeline-run-"):]
+    slot = "0"
+    if "@" in base:
+        base, slot = base.rsplit("@", 1)
+    lane = parent_state.get("lane") or ""
+    if lane and base.endswith("--%s" % lane):
+        base = base[:-(len(lane) + 2)]
+    return "%s.c%s.%s" % (base, slot, node_id)
+
+
+def _check_call_name_headroom(doc, run_name):
+    """Every call node must yield a charset-legal child token:
+    <run_name>.c<slot>.<node_id> with slot up to one digit (concurrency max
+    is <= 8). Raises PipelineError naming the first offender. Called at RUN
+    START (CP1: an over-long trigger name must refuse the run up front, not
+    fail every call node one by one at sweep time -- same verdict,
+    delivered before any session burns)."""
+    for n in doc.get("nodes") or []:
+        if not (isinstance(n, dict) and n.get("type") == "call_pipeline"):
+            continue
+        worst = "%s.c9.%s" % (run_name, n.get("id", ""))
+        if not _NAME_RE.match(worst):
+            raise PipelineError(
+                "call node %r: child token %r would exceed the 64-char name "
+                "limit -- shorten the trigger or node name (refusing the run "
+                "up front rather than failing every call at sweep time)"
+                % (n.get("id"), worst))
+
+
+def start_child_run(repo, parent_state_path, parent_state, node):
+    """Spawn the CHILD run for a call_pipeline node (spec S4): a real run,
+    resolved+parameterised exactly like a trigger-started run -- the caller
+    occupies the trigger's override slot. Returns (child_name,
+    child_state_path); raises PipelineError on every refusal (the caller
+    records the call unit as failed -- a broken call must fail the node,
+    never crash the walk)."""
+    child_name = _child_token_name(parent_state_path, parent_state, node["id"])
+    if not _NAME_RE.match(child_name):
+        raise PipelineError("child run name %r is over 64 chars or invalid "
+                            "-- shorten the trigger/pipeline/node names"
+                            % child_name)
+    depth = int(parent_state.get("call_depth") or 0) + 1
+    if depth > MAX_CALL_DEPTH:
+        raise PipelineError("call depth %d exceeds MAX_CALL_DEPTH=%d"
+                            % (depth, MAX_CALL_DEPTH))
+    call_path = list(parent_state.get("call_path")
+                     or [parent_state.get("doc", {}).get("name", "")])
+    if node["pipeline"] in call_path:
+        raise PipelineError("call cycle: %s -> %s"
+                            % (" -> ".join(call_path), node["pipeline"]))
+    doc, meta = resolve_pipeline_doc(repo, node["pipeline"])
+    _check_call_name_headroom(doc, child_name)      # grandchild headroom
+    ctx = _substitution_ctx(parent_state_path, parent_state)
+    overrides = {}
+    for k, v in (node.get("params") or {}).items():
+        overrides[k] = substitute(v, ctx)     # ONE pass; values stay inert
+    params = _resolve_run_params(repo, doc, overrides)
+    doc = dict(doc)
+    doc["edges"] = effective_edges(doc)
+    lane = parent_state.get("lane") or ""
+    child_base = "%s--%s" % (child_name, lane) if lane else child_name
+    child_state_path = os.path.join(os.path.dirname(parent_state_path),
+                                    ".pipeline-run-%s.json" % child_base)
+    if os.path.exists(child_state_path):
+        raise PipelineError("child state %s already exists -- a previous "
+                            "child was interrupted mid-consume; remove the "
+                            "file to recover" % child_state_path)
+    run_id = "%s-%s-%d" % (child_name, time.strftime("%Y%m%dT%H%M%S"),
+                           os.getpid())
+    state = {"fmt": 2, "run_id": run_id,
+             "role": child_name, "lane": lane, "doc": doc, "meta": meta,
+             "trigger": child_name, "kind": "native", "params": params,
+             "run": {"id": run_id, "pipeline": doc["name"],
+                     "trigger": child_name, "repo": repo},
+             "parent_run": parent_state.get("run_id", ""),
+             "parent_node": node["id"],
+             "call_depth": depth, "call_path": call_path + [node["pipeline"]],
+             "started": int(time.time()), "sessions": 0,
+             "units": dict((u, {"status": "pending"}) for u in _top_units(doc)),
+             "container_pos": {}, "rounds": {}, "bounces": {},
+             "nodes_done": [], "status": "in_progress"}
+    _atomic_write_json(child_state_path, state)
+    return child_name, child_state_path
 
 
 def _container_of(doc, node_id):
@@ -1908,6 +2019,8 @@ def _journal_append(journal_path, state):
         # Additive Phase B field: evidence for Phase E's per-trigger trust
         # re-key starts accumulating now; ledger() does NOT read it yet.
         "trigger": state.get("trigger", ""),
+        # Additive Phase C field: links a child run's line to its parent.
+        "parent_run": state.get("parent_run", ""),
         "pipeline": doc.get("name", ""),
         "pipeline_version": meta.get("from_version", 0),
         "wrapped": bool(meta.get("wrapped")),
@@ -1969,9 +2082,46 @@ def ledger(journal_path, role, pipeline_name=""):
     return {"runs": runs, "passes": passes, "tier": tier}
 
 
+def _write_child_outcome(state, state_path, outcome):
+    """Park {outcome, outputs} for the parent's sweep. Outputs = the child's
+    DECLARED outputs projected from its node sidecars in completion order;
+    call entries contribute on failure too (decision 8). A projection
+    failure DOWNGRADES the parked outcome to failure with the error named
+    -- unvalidated data never crosses runs (fail-safe)."""
+    raw = {}
+    logdir = os.path.dirname(state_path)
+    for entry in state.get("nodes_done", []):
+        if not isinstance(entry, dict):
+            continue
+        usable = entry.get("outcome") == "success" or (
+            entry.get("type") == "call_pipeline"
+            and entry.get("outcome") in ("success", "failure"))
+        if not usable:
+            continue
+        rel = _node_outputs_rel(state_path, entry.get("id"))
+        raw.update(read_outputs(os.path.join(logdir, os.path.basename(rel))))
+    payload = {"run_id": state.get("run_id", ""), "outcome": outcome}
+    try:
+        payload["outputs"] = project_outputs(
+            (state.get("doc") or {}).get("outputs") or [], raw)
+    except PipelineError as exc:
+        payload = {"run_id": state.get("run_id", ""), "outcome": "failure",
+                   "error": "outputs projection failed: %s" % exc}
+    path = os.path.join(os.path.dirname(state_path), os.path.basename(
+        _run_outcome_rel(state_path)))
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+    os.replace(tmp, path)
+
+
 def _finish(state, state_path, outcome, journal_path):
     state["status"] = "done"
     state["outcome"] = outcome
+    # Sidecar FIRST: a write failure raises and leaves the run in_progress
+    # so it retries -- never a silently lost outcome the parent waits on.
+    if state.get("parent_run"):
+        _write_child_outcome(state, state_path, outcome)
     if journal_path:
         _journal_append(journal_path, state)
     try:
