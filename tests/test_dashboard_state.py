@@ -2594,7 +2594,7 @@ class TestTriggerHealth(unittest.TestCase):
     """trigger_health (#188c): missed-fire detection for the control room's
     trigger-health signal. Compares each cron role's persisted last_fire
     marker ($VARDIR/cron/<role>.last_fire, an epoch int -- see
-    supervisor.sh:resolve_cron_due) against the SAME schedule math the
+    supervisor.sh:resolve_trigger_cron_due) against the SAME schedule math the
     supervisor itself uses (roles.cron_next_fire), so this reader can never
     drift from what actually fires. A fire expected well in the past that the
     marker never advanced past is a MISSED fire -- the 2026-07-03 swept-state

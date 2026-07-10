@@ -210,18 +210,10 @@ run_session coder >/dev/null 2>&1          # node z completes the run
 check "run completed after batch" "1" \
   "$([ ! -f "$(pipeline_state_file coder)" ] && echo 1 || echo 0)"
 
-# 9. inflight_roles: lane-filtered, charset-gated (P2b -- these join the
-#    main loop's dispatch list regardless of trigger type) ------------------
+# 9. (retired with the legacy twins, Phase E: lane filtering + charset
+#    gating of in-flight state files is covered on inflight_tokens in
+#    test_trigger_dispatch.sh) -----------------------------------------------
 rm -f "$(pipeline_state_file coder)"   # defensive: isolate from scenario 8
-: >"$LOGDIR/.pipeline-run-pm.json"
-: >"$LOGDIR/.pipeline-run-qa--side.json"
-: >"$LOGDIR/.pipeline-run-bad name.json"
-check "inflight_roles default lane" "pm" "$(inflight_roles | tr '\n' ' ' | tr -d ' ')"
-AUTONOMY_LANE="side"
-check "inflight_roles side lane" "qa" "$(inflight_roles | tr '\n' ' ' | tr -d ' ')"
-AUTONOMY_LANE=""
-rm -f "$LOGDIR/.pipeline-run-pm.json" "$LOGDIR/.pipeline-run-qa--side.json" \
-  "$LOGDIR/.pipeline-run-bad name.json"
 
 # 10. lane-scoped state path (one supervisor per lane shares LOGDIR) ------------
 AUTONOMY_LANE="alpha"

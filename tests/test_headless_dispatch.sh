@@ -51,8 +51,9 @@ check "select_role single role always" "coder" "$(select_role 7 coder)"
 select_role 0 >/dev/null 2>&1
 check "select_role with no roles fails" "1" "$?"
 
-# --- resolve_dispatch_roles (real roles.py against the real config) ----------
-check "enumerates enabled loop roles" "coder qa" "$(resolve_dispatch_roles | tr '\n' ' ' | sed 's/ $//')"
+# --- resolve_dispatch_triggers (real triggers.py against the real config;
+# shims mirror loop roles byte-for-byte, so expected values are unchanged) ----
+check "enumerates enabled loop roles" "coder qa" "$(resolve_dispatch_triggers | tr '\n' ' ' | sed 's/ $//')"
 
 # --- resolve_role_dispatch ---------------------------------------------------
 resolve_role_dispatch qa
@@ -414,8 +415,9 @@ check "missing repo -> no NOTE, no failure" "" "$(printf '%s' "$KNOB_LOG")"
 log() { :; }   # restore the quiet stub for any later checks
 
 # --- lane execution: --lane threads through the enumeration seams (#147) ------
-# A repo with two lanes and a lane-pinned role. resolve_dispatch_roles must
-# honour $AUTONOMY_LANE (default lane vs a named lane, D6/SD-21); validate_lane
+# A repo with two lanes and a lane-pinned role. resolve_dispatch_triggers must
+# honour $AUTONOMY_LANE (default lane vs a named lane, D6/SD-21; shim lanes
+# come from roles.lane_of_role, so expectations are unchanged); validate_lane
 # must refuse an undeclared/malformed lane rather than silently dispatch nothing
 # (#147 item 6: refuse, do not silently clamp -- fail-safe).
 lanerepo="$tmp/lanerepo"
@@ -436,10 +438,10 @@ AUTONOMY_TARGET_REPO="$lanerepo"
 
 AUTONOMY_LANE=""
 check "default lane dispatches the lane-less role" "coder" \
-  "$(resolve_dispatch_roles | tr '\n' ' ' | sed 's/ $//')"
+  "$(resolve_dispatch_triggers | tr '\n' ' ' | sed 's/ $//')"
 AUTONOMY_LANE="fe"
 check "named lane dispatches only its pinned role" "coder-fe" \
-  "$(resolve_dispatch_roles | tr '\n' ' ' | sed 's/ $//')"
+  "$(resolve_dispatch_triggers | tr '\n' ' ' | sed 's/ $//')"
 
 AUTONOMY_LANE="fe"
 check "validate_lane accepts a declared lane" "0" "$(validate_lane 2>/dev/null; echo $?)"

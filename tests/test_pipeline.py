@@ -1174,6 +1174,77 @@ class JournalLedgerTest(unittest.TestCase):
         self._write_journal("coder", 0, 2)
         self.assertEqual(pipeline.ledger(self.journal, "coder")["tier"], "watch")
 
+    # --- Phase E: per-trigger keying + grandfather clause ------------------
+
+    def _rec(self, **over):
+        rec = {"role": "coder", "pipeline": "flow", "outcome": "success",
+               "pass": True}
+        rec.update(over)
+        return rec
+
+    def _write_recs(self, recs):
+        with open(self.journal, "w") as fh:
+            for r in recs:
+                fh.write(json.dumps(r) + "\n")
+        return self.journal
+
+    def test_ledger_keys_on_trigger_field(self):
+        # trigger field wins over role: a line written by trigger "night"
+        # never counts for trigger "coder" even though role says coder.
+        j = self._write_recs([self._rec(trigger="night"),
+                              self._rec(trigger="coder")])
+        self.assertEqual(pipeline.ledger(j, "coder")["runs"], 1)
+        self.assertEqual(pipeline.ledger(j, "night")["runs"], 1)
+
+    def test_ledger_grandfathers_roleonly_lines_for_shim(self):
+        # pre-#374 line: no trigger key at all. Counts for the shim
+        # (native=False default) whose name is the byte-equal role name.
+        j = self._write_recs([self._rec()])
+        self.assertEqual(pipeline.ledger(j, "coder")["runs"], 1)
+
+    def test_ledger_empty_trigger_field_is_grandfathered_too(self):
+        # a pre-B in-flight run that FINISHED post-B writes trigger="".
+        j = self._write_recs([self._rec(trigger="")])
+        self.assertEqual(pipeline.ledger(j, "coder")["runs"], 1)
+
+    def test_ledger_junk_trigger_value_is_skipped_not_grandfathered(self):
+        # ONLY a missing key or "" grandfathers (CP1 finding 4): a corrupt
+        # post-B line with a non-string trigger is dropped entirely.
+        j = self._write_recs([self._rec(trigger=0), self._rec(trigger=[]),
+                              self._rec(trigger=None)])
+        self.assertEqual(pipeline.ledger(j, "coder")["runs"], 0)
+
+    def test_ledger_native_earns_from_zero(self):
+        # native=True: trigger-less role-era lines are NOT inherited.
+        j = self._write_recs([self._rec(), self._rec(trigger="")])
+        self.assertEqual(pipeline.ledger(j, "coder", native=True)["runs"], 0)
+        # but a real post-B line keyed on the trigger still counts.
+        j2 = self._write_recs([self._rec(trigger="coder")])
+        self.assertEqual(pipeline.ledger(j2, "coder", native=True)["runs"], 1)
+
+    def test_ledger_excludes_child_runs(self):
+        # call_pipeline children (parent_run set) are never trigger evidence.
+        j = self._write_recs([self._rec(trigger="coder", parent_run="r-1"),
+                              self._rec(trigger="coder")])
+        self.assertEqual(pipeline.ledger(j, "coder")["runs"], 1)
+
+    def test_journal_line_carries_kind(self):
+        # additive Phase E field, written from state["kind"]: a wrapped run
+        # journals kind=shim; a kind-less state writes "".
+        self._finish_wrapped_run()
+        with open(self.journal) as fh:
+            rec = json.loads(fh.read().splitlines()[0])
+        self.assertEqual(rec["kind"], "shim")
+        pipeline._journal_append(self.journal, {"outcome": "success"})
+        with open(self.journal) as fh:
+            rec2 = json.loads(fh.read().splitlines()[1])
+        self.assertEqual(rec2["kind"], "")
+        pipeline._journal_append(self.journal, {"outcome": "success",
+                                                "kind": "native"})
+        with open(self.journal) as fh:
+            rec3 = json.loads(fh.read().splitlines()[2])
+        self.assertEqual(rec3["kind"], "native")
+
 
 class StarterTemplateTest(unittest.TestCase):
     def test_ticket_to_merge_template_validates(self):

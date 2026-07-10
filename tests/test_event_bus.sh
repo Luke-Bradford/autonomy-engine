@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# tests/test_event_bus.sh -- W2 event bus (event triggers, issue #86). The
-# supervisor folds a gh-poll event check into its loop iteration: enumerate
-# event roles (roles.py events, seam _event_enumerate), poll current fireable
-# tokens per event (seam _event_poll), fire a role via run_session (stubbed)
-# when a new token appears since its per-(role,event) seen-set, and advance the
-# seen-set after a successful dispatch (at-least-once). session.done is a
-# per-tick loop-session edge. Sources the real supervisor.sh, stubs only
-# run_session + the two seams.
+# tests/test_event_bus.sh -- event bus over TRIGGERS (Phase C cutover; W2
+# lineage, issue #86). The supervisor folds a gh-poll event check into its
+# loop iteration: resolve_trigger_event_wakes enumerates event triggers
+# (seam _triggers_enumerate), polls current fireable tokens per event (seam
+# _event_poll), routes SHIM triggers through the legacy per-role wake body
+# (run_session, stubbed) and NATIVE triggers through the START-ONLY lane,
+# and advances the per-(name,event) seen-set at-least-once. session.done is
+# a per-tick loop-session edge. Sources the real supervisor.sh, stubs only
+# run_session + the seams.
 # shellcheck disable=SC2034  # vars consumed inside the sourced supervisor.sh
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,98 +39,12 @@ RS_RC=0
 run_session() { echo "$1" >>"$CAPTURE"; return "$RS_RC"; }
 
 TAB="$(printf '\t')"
-ENUM_OUT=""
-ENUM_RC=0
-_event_enumerate() { [ "$ENUM_RC" -eq 0 ] || return "$ENUM_RC"; printf '%s' "$ENUM_OUT"; }
-
 POLL_OUT=""
 POLL_RC=0
 _event_poll() { [ "$POLL_RC" -eq 0 ] || return "$POLL_RC"; printf '%s\n' "$POLL_OUT"; }
 
-reset() { : >"$CAPTURE"; : >"$LOGF"; rm -rf "$VARDIR"; ENUM_OUT=""; ENUM_RC=0; POLL_OUT=""; POLL_RC=0; RS_RC=0; }
+reset() { : >"$CAPTURE"; : >"$LOGF"; rm -rf "$VARDIR"; POLL_OUT=""; POLL_RC=0; RS_RC=0; }
 seed_seen() { mkdir -p "$VARDIR/events"; printf '%s\n' "$2" > "$VARDIR/events/$1.seen"; }
-
-# --- the real function is defined by sourcing (not a stub) -------------------
-check "resolve_event_wakes is defined" "function" "$(type -t resolve_event_wakes)"
-
-# --- a new pr.opened number fires and the seen-set advances ------------------
-reset
-ENUM_OUT="qa${TAB}pr.opened"
-POLL_OUT="$(printf '4\n5')"           # PR 5 is new relative to seen {4}
-seed_seen "qa__pr.opened" "4"
-resolve_event_wakes 0
-check "new pr.opened fired qa once" "qa" "$(cat "$CAPTURE")"
-contains "seen advanced to include 5" "$(cat "$VARDIR/events/qa__pr.opened.seen")" "5"
-
-# --- no new token -> no fire -------------------------------------------------
-reset
-ENUM_OUT="qa${TAB}pr.opened"
-POLL_OUT="$(printf '4\n5')"
-seed_seen "qa__pr.opened" "$(printf '4\n5')"
-resolve_event_wakes 0
-check "no new token did not fire" "" "$(cat "$CAPTURE")"
-
-# --- first-sight: seed the seen-set without firing ---------------------------
-reset
-ENUM_OUT="qa${TAB}pr.opened"
-POLL_OUT="$(printf '4\n5')"
-resolve_event_wakes 0
-check "first-sight did not fire" "" "$(cat "$CAPTURE")"
-check "first-sight seeded seen-set" "yes" "$([ -f "$VARDIR/events/qa__pr.opened.seen" ] && echo yes || echo no)"
-
-# --- dispatch failure leaves the seen-set unadvanced (re-delivers) -----------
-reset
-ENUM_OUT="qa${TAB}pr.opened"
-POLL_OUT="$(printf '4\n5')"
-seed_seen "qa__pr.opened" "4"
-RS_RC=1
-resolve_event_wakes 0
-check "failed dispatch still fired (attempted)" "qa" "$(cat "$CAPTURE")"
-check "failed dispatch did NOT advance seen (re-deliver)" "yes" \
-  "$(grep -Fxq 5 "$VARDIR/events/qa__pr.opened.seen" && echo no || echo yes)"
-
-# --- poll failure: no fire, no error, seen untouched -------------------------
-reset
-ENUM_OUT="qa${TAB}pr.opened"
-seed_seen "qa__pr.opened" "4"
-POLL_RC=1
-resolve_event_wakes 0; rc=$?
-check "poll failure returns 0" "0" "$rc"
-check "poll failure fired nothing" "" "$(cat "$CAPTURE")"
-check "poll failure left seen untouched" "4" "$(cat "$VARDIR/events/qa__pr.opened.seen")"
-
-# --- session.done fires on a loop-session tick, not otherwise ----------------
-reset
-ENUM_OUT="notify${TAB}session.done"
-resolve_event_wakes 1
-check "session.done fired when a session ran" "notify" "$(cat "$CAPTURE")"
-reset
-ENUM_OUT="notify${TAB}session.done"
-resolve_event_wakes 0
-check "session.done did not fire with no session" "" "$(cat "$CAPTURE")"
-
-# --- enumeration failure: no fire, no error ----------------------------------
-reset
-ENUM_RC=1
-resolve_event_wakes 0; rc=$?
-check "enumeration failure returns 0" "0" "$rc"
-check "enumeration failure fired nothing" "" "$(cat "$CAPTURE")"
-
-# --- a dotted role name (valid per roles.py _ROLE_NAME_RE) is processed -------
-reset
-ENUM_OUT="qa.v2${TAB}pr.opened"
-POLL_OUT="$(printf '4\n5')"
-seed_seen "qa.v2__pr.opened" "4"
-resolve_event_wakes 0
-check "dotted role name fired (not dropped)" "qa.v2" "$(cat "$CAPTURE")"
-
-# --- invalid role name ignored with WARN -------------------------------------
-reset
-ENUM_OUT="bad/name${TAB}pr.opened"
-POLL_OUT="5"
-resolve_event_wakes 0
-check "invalid-name role did not fire" "" "$(cat "$CAPTURE")"
-contains "invalid-name role warned" "$(cat "$LOGF")" "WARN"
 
 # === Phase C (#376) Task 10: the event CUTOVER ================================
 # resolve_trigger_event_wakes routes SHIM event triggers through the SAME
@@ -182,6 +97,49 @@ seed_seen "qa__pr.opened" "4"
 RS_RC=1
 resolve_trigger_event_wakes 0
 check "failed shim left seen (redeliver)" "4" "$(cat "$VARDIR/events/qa__pr.opened.seen")"
+
+# --- shim-lane ports from the retired legacy first half ----------------------
+# no new token -> no fire.
+reset2
+TRIG_ENUM_OUT="qa${TAB}shim${TAB}pr.opened${TAB}skip${TAB}1"
+POLL_OUT="$(printf '4\n5')"
+seed_seen "qa__pr.opened" "$(printf '4\n5')"
+resolve_trigger_event_wakes 0
+check "shim no new token did not fire" "" "$(cat "$CAPTURE")"
+
+# first-sight: seed the seen-set without firing (the native twin is below).
+reset2
+TRIG_ENUM_OUT="qa${TAB}shim${TAB}pr.opened${TAB}skip${TAB}1"
+POLL_OUT="$(printf '4\n5')"
+resolve_trigger_event_wakes 0
+check "shim first-sight did not fire" "" "$(cat "$CAPTURE")"
+check "shim first-sight seeded seen-set" "yes" \
+  "$([ -f "$VARDIR/events/qa__pr.opened.seen" ] && echo yes || echo no)"
+
+# poll failure: no fire, no error, seen untouched.
+reset2
+TRIG_ENUM_OUT="qa${TAB}shim${TAB}pr.opened${TAB}skip${TAB}1"
+seed_seen "qa__pr.opened" "4"
+POLL_RC=1
+resolve_trigger_event_wakes 0; rc=$?
+check "shim poll failure returns 0" "0" "$rc"
+check "shim poll failure fired nothing" "" "$(cat "$CAPTURE")"
+check "shim poll failure left seen untouched" "4" "$(cat "$VARDIR/events/qa__pr.opened.seen")"
+
+# a dotted shim name (valid charset) is processed, not path-gated out.
+reset2
+TRIG_ENUM_OUT="qa.v2${TAB}shim${TAB}pr.opened${TAB}skip${TAB}1"
+POLL_OUT="$(printf '4\n5')"
+seed_seen "qa.v2__pr.opened" "4"
+resolve_trigger_event_wakes 0
+check "dotted shim name fired (not dropped)" "qa.v2" "$(cat "$CAPTURE")"
+
+# invalid shim name: dropped, no fire (prevention-log #6).
+reset2
+TRIG_ENUM_OUT="bad/name${TAB}shim${TAB}pr.opened${TAB}skip${TAB}1"
+POLL_OUT="5"
+resolve_trigger_event_wakes 0
+check "invalid shim name did not fire" "" "$(cat "$CAPTURE")"
 
 # --- native: START-ONLY, one run per new token --------------------------------
 reset2
@@ -269,11 +227,9 @@ TRIG_ENUM_RC=1
 resolve_trigger_event_wakes 0; rc=$?
 check "trigger enumeration failure returns 0" "0" "$rc"
 
-# --- structural double-dispatch impossibility (parity 5) -----------------------
-# [[:space:]] not \s -- BSD grep has no \s; a silently-unmatched pattern would
-# fake the proof (CP1).
-n="$(grep -c '^[[:space:]]*resolve_event_wakes ' "$ENGINE_HOME/bin/supervisor.sh" || true)"
-check "legacy event resolver uncalled by the loop" "0" "$n"
+# --- single-wiring proof (parity 5's surviving half) ---------------------------
+# The trigger resolver is the ONE event dispatch call in the loop (the legacy
+# twin is deleted -- Phase E; double dispatch is structurally impossible).
 n="$(grep -c 'resolve_trigger_event_wakes "\$session_ran"' "$ENGINE_HOME/bin/supervisor.sh")"
 check "trigger event resolver wired in the loop" "1" "$n"
 

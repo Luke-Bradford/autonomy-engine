@@ -475,7 +475,7 @@ function render(){
      <b style="margin-left:6px">${esc(src.name||"")}</b>`;
   const lg = VIEW.ledger;
   document.getElementById("ledgerchip").innerHTML = lg
-    ? `<span class="badge" title="trust is earned per assignment (auto at ≥20 runs with ≥95% pass over the last 20)">🛡 ${esc(lg.tier)} · ${esc(lg.runs)} runs · ${esc(lg.passes)} pass</span>` : "";
+    ? `<span class="badge" title="trust is earned per trigger (auto at ≥20 runs with ≥95% pass over the last 20)">🛡 ${esc(lg.tier)} · ${esc(lg.runs)} runs · ${esc(lg.passes)} pass</span>` : "";
   const caps = (curDoc()||{}).caps || null;
   document.getElementById("capchip").innerHTML = caps && caps.max_parallel
     ? `<span class="badge" title="the pipeline's dispatch ceiling — engine-owned">⛓ max_parallel ${esc(caps.max_parallel)} · enforced</span>` : "";

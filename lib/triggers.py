@@ -10,17 +10,22 @@ parallel). Legacy `roles:` configs are auto-shimmed into synthetic triggers
 Fail-safe: a malformed trigger REFUSES (named reason) and NEVER falls back
 to legacy role dispatch -- a broken trigger that shadows a role name must
 not silently resurrect the role path the operator replaced.
+
+CLI verbs: dispatch, cron, event, manual, show, validate,
+trust <repo> <journal> (per-trigger rows + per-pipeline rollup).
 """
+import datetime
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pipeline                                             # noqa: E402
 from pipeline import PipelineError                          # noqa: E402
 
 _TRIGGER_KEYS = frozenset(("name", "pipeline", "params", "firing",
-                           "concurrency", "enabled", "lane"))
+                           "concurrency", "enabled", "lane", "run_windows"))
 _FIRING_KEYS = frozenset(("mode", "schedule", "event", "map"))
 _CONCURRENCY_KEYS = frozenset(("policy", "max"))
 FIRING_MODES = ("continuous", "schedule", "manual", "event")
@@ -30,10 +35,110 @@ EVENT_KINDS = ("pr.opened", "issue.created", "merge.done", "pr.synchronize")
 EVENT_FIELDS = ("item", "sha", "event")
 CONCURRENCY_POLICIES = ("queue", "skip", "parallel")
 MAX_TRIGGER_PARALLEL = 8          # mirrors pipeline.MAX_PARALLEL_CEIL
+_WINDOW_KEYS = frozenset(("start", "end", "days"))
+WINDOW_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+MAX_RUN_WINDOWS = 16
 
 
 def _is_scalar(v):
     return isinstance(v, (str, int, float, bool)) or v is None
+
+
+def _hhmm(value):
+    """'HH:MM' -> minutes-since-midnight, or None when malformed.
+    Charset-explicit (prevention-log #6): only ASCII digits."""
+    if not isinstance(value, str) or len(value) != 5 or value[2] != ":":
+        return None
+    hh, mm = value[:2], value[3:]
+    if not all(c in "0123456789" for c in hh + mm):
+        return None
+    h, m = int(hh), int(mm)
+    if h > 23 or m > 59:
+        return None
+    return h * 60 + m
+
+
+def _validate_window(w, idx):
+    errs = []
+    if not isinstance(w, dict):
+        return ["run_windows[%d] must be an object" % idx]
+    for k in w:
+        if k not in _WINDOW_KEYS:
+            errs.append("run_windows[%d]: unknown key %r" % (idx, k))
+    start, end = _hhmm(w.get("start")), _hhmm(w.get("end"))
+    if start is None:
+        errs.append("run_windows[%d].start must be 'HH:MM' (UTC)" % idx)
+    if end is None:
+        errs.append("run_windows[%d].end must be 'HH:MM' (UTC)" % idx)
+    if start is not None and start == end:
+        errs.append("run_windows[%d]: start == end is a zero-length window"
+                    " -- omit run_windows for always-on, or widen it" % idx)
+    days = w.get("days")
+    if days is not None:
+        if not isinstance(days, list) or not days:
+            errs.append("run_windows[%d].days must be a non-empty list"
+                        " of day names" % idx)
+        else:
+            for d in days:
+                if d not in WINDOW_DAYS:
+                    errs.append("run_windows[%d].days: unknown day %r"
+                                " (mon..sun, lowercase)" % (idx, d))
+    return errs
+
+
+def in_run_window(trig, now_epoch):
+    """True when NEW dispatch is allowed at now_epoch. UTC clock -- the
+    same clock as the cron parser (roles.cron_next_fire). ONE public rule
+    (CP1 finding 3): a MISSING run_windows key means always-dispatchable,
+    and the empty list `[]` is its defaults-synthesised twin
+    (_apply_defaults writes it; the validator refuses an EXPLICIT [] in an
+    authored file as a foot-gun, so a validated file never carries one).
+    end <= start wraps past midnight; a wrapped window's `days` list names
+    the window's START day. Start inclusive, end exclusive.
+
+    Fail-closed on junk (CP1 finding 2, prevention-log #12/#18): a
+    PRESENT-but-malformed run_windows value (non-list) opens nothing, and
+    a malformed window entry or days value contributes NO open time --
+    the operator wrote a restriction, so an unreadable restriction must
+    restrict, never widen. In-flight runs are never gated here: only the
+    four dispatch-facing CLI verbs consult this, and in-flight tokens
+    never pass through enumeration."""
+    windows = trig.get("run_windows")
+    if windows is None or windows == []:
+        return True
+    if not isinstance(windows, list):
+        return False
+    try:
+        dt = datetime.datetime.fromtimestamp(int(now_epoch),
+                                             datetime.timezone.utc)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return False
+    minutes = dt.hour * 60 + dt.minute
+    dow = WINDOW_DAYS[dt.weekday()]            # weekday(): mon=0 .. sun=6
+    prev = WINDOW_DAYS[(dt.weekday() - 1) % 7]
+    for w in windows:
+        if not isinstance(w, dict):
+            continue
+        start, end = _hhmm(w.get("start")), _hhmm(w.get("end"))
+        if start is None or end is None:
+            continue
+        days = w.get("days")
+        if days is None:
+            days = WINDOW_DAYS
+        elif (not isinstance(days, list)
+              or not all(isinstance(d, str) and d in WINDOW_DAYS
+                         for d in days)
+              or not days):
+            continue                    # junk days: no open time
+        if end > start:
+            if dow in days and start <= minutes < end:
+                return True
+        else:
+            if dow in days and minutes >= start:
+                return True
+            if prev in days and minutes < end:
+                return True
+    return False
 
 
 def effective_trigger_path(repo, name):
@@ -174,6 +279,16 @@ def validate_trigger(trig, stem):
                 errors.append("concurrency: queue is not valid for event "
                               "mode -- the event seen-set redelivers "
                               "unhandled tokens, which IS the queue")
+    windows = trig.get("run_windows")
+    if windows is not None:
+        if not isinstance(windows, list) or not windows:
+            errors.append("run_windows must be a non-empty list of window"
+                          " objects (omit the key for always-dispatchable)")
+        elif len(windows) > MAX_RUN_WINDOWS:
+            errors.append("run_windows: at most %d windows" % MAX_RUN_WINDOWS)
+        else:
+            for i, w in enumerate(windows):
+                errors.extend(_validate_window(w, i))
     if "enabled" in trig and not isinstance(trig["enabled"], bool):
         errors.append("enabled: must be a bool")
     lane = trig.get("lane")
@@ -188,6 +303,10 @@ def _apply_defaults(trig):
     out.setdefault("params", {})
     out.setdefault("concurrency", {"policy": "skip", "max": 1})
     out.setdefault("enabled", True)
+    # [] = the defaults-synthesised twin of "no run_windows key" (always
+    # dispatchable). An EXPLICIT [] in an authored file refuses at
+    # validation, so a loaded trigger only ever gets one here.
+    out.setdefault("run_windows", [])
     return out
 
 
@@ -246,7 +365,7 @@ def shim_triggers(config):
     out = []
     for name in roles._all_loop_roles(config):
         out.append(_shim(name, {"mode": "continuous"}))
-    for name, sched in roles._all_cron_roles(config):
+    for name, sched in roles.all_cron_roles(config):
         out.append(_shim(name, {"mode": "schedule", "schedule": sched}))
     for name, events in roles.all_event_roles(config):
         out.append(_shim(name, {"mode": "event",
@@ -276,13 +395,16 @@ def _trigger_stems(repo):
     return stems, bad
 
 
-def enumerate_triggers(repo, lane=None):
+def enumerate_triggers(repo, lane=None, dispatchable_only=True):
     """(triggers, warnings) for one lane. Native file triggers (validated,
     kind='native') + shims for roles no file supersedes (kind='shim').
     Every refusal becomes a warning string -- a refused trigger is OUT of
     the dispatchable list AND its same-name shim stays suppressed (never
     fall back to role dispatch for a broken/shadowing trigger). Raises
-    PipelineError when the config (the shim source) is unreadable."""
+    PipelineError when the config (the shim source) is unreadable.
+    dispatchable_only=False returns every VALID trigger regardless of
+    enabled/lane (trust/inspection callers -- a pause must not hide
+    evidence); refusals stay refused either way."""
     import roles
     cfg, rc = roles._load_config(repo)
     if rc != 0 or cfg is None:
@@ -314,21 +436,58 @@ def enumerate_triggers(repo, lane=None):
     def _in_lane(t):
         tl = t.get("lane") or roles.default_lane(cfg)
         return tl in declared and tl == target_lane
+    if not dispatchable_only:
+        # trust/inspection callers: every VALID trigger, disabled and
+        # off-lane included (a pause must not hide evidence). Refusals
+        # stayed refused above -- this widens nothing invalid.
+        return out, warnings
     return ([t for t in out if t.get("enabled", True) and _in_lane(t)],
             warnings)
 
 
-def _cli_lane(args):
-    opts = {"--lane": None}
+def trust_rollup(repo, journal_path):
+    """Per-trigger trust rows + per-pipeline rollup (design spec §6).
+    The rollup is a fail-safe floor: a pipeline reads `auto` only when
+    EVERY contributing trigger's tier is `auto` (prevention-log #18 --
+    the reassuring verdict is earned, never the default)."""
+    trigs, warnings = enumerate_triggers(repo, dispatchable_only=False)
+    rows, by_pipeline = [], {}
+    for t in trigs:
+        pname = t.get("pipeline") or t["name"]  # wrapped role: doc name == role name
+        led = pipeline.ledger(journal_path, t["name"], pipeline_name=pname,
+                              native=(t.get("kind") == "native"))
+        rows.append({"trigger": t["name"], "pipeline": pname,
+                     "kind": t.get("kind", ""), "runs": led["runs"],
+                     "passes": led["passes"], "tier": led["tier"]})
+        by_pipeline.setdefault(pname, []).append(led["tier"])
+    rollup = dict((p, "auto" if all(x == "auto" for x in tiers) else "watch")
+                  for p, tiers in by_pipeline.items())
+    return rows, rollup, warnings
+
+
+def _cli_opts(args):
+    """Positionals + (--lane, --now). --now is the run-window clock's
+    test seam: digits-only epoch (argv-boundary gate, prevention-log #6);
+    anything else raises -- a typo'd --now silently meaning 'live clock'
+    could open a window that should be closed."""
+    lane, now = None, None
     pos, i = [], 0
     while i < len(args):
         if args[i] == "--lane" and i + 1 < len(args):
-            opts["--lane"] = args[i + 1]
+            lane = args[i + 1]
+            i += 2
+        elif args[i] == "--now":
+            if i + 1 >= len(args):
+                raise ValueError("--now needs a digits-only epoch value")
+            v = args[i + 1]
+            if not v or not all(c in "0123456789" for c in v):
+                raise ValueError("--now must be a digits-only epoch")
+            now = int(v)
             i += 2
         else:
             pos.append(args[i])
             i += 1
-    return pos, opts["--lane"]
+    return pos, lane, now
 
 
 def main(argv):
@@ -336,7 +495,13 @@ def main(argv):
         print(__doc__, file=sys.stderr)
         return 2
     cmd, rest = argv[0], argv[1:]
-    pos, lane = _cli_lane(rest)
+    try:
+        pos, lane, now = _cli_opts(rest)
+    except ValueError as exc:
+        print("triggers.py: %s" % exc, file=sys.stderr)
+        return 2
+    if now is None:
+        now = int(time.time())
     if cmd in ("dispatch", "cron", "validate", "event") and len(pos) != 1:
         print("usage: triggers.py %s <repo> [--lane <l>]" % cmd,
               file=sys.stderr)
@@ -349,6 +514,7 @@ def main(argv):
             return 1
         for w in warns:
             print("WARN %s" % w, file=sys.stderr)
+        trigs = [t for t in trigs if in_run_window(t, now)]
         for t in trigs:
             if t["firing"]["mode"] == "continuous":
                 c = t["concurrency"]
@@ -363,6 +529,7 @@ def main(argv):
             return 1
         for w in warns:
             print("WARN %s" % w, file=sys.stderr)
+        trigs = [t for t in trigs if in_run_window(t, now)]
         for t in trigs:
             if t["firing"]["mode"] == "schedule":
                 print("%s\t%s\t%s" % (t["name"], t["firing"]["schedule"],
@@ -380,6 +547,7 @@ def main(argv):
             return 1
         for w in warns:
             print("WARN %s" % w, file=sys.stderr)
+        trigs = [t for t in trigs if in_run_window(t, now)]
         for t in trigs:
             f = t["firing"]
             if f.get("mode") != "event":
@@ -405,6 +573,7 @@ def main(argv):
             return 1
         for w in warns:
             print("WARN %s" % w, file=sys.stderr)
+        trigs = [t for t in trigs if in_run_window(t, now)]
         for t in trigs:
             if t["firing"]["mode"] == "manual":
                 c = t["concurrency"]
@@ -426,6 +595,34 @@ def main(argv):
         print("POLICY=%s" % c["policy"])
         print("MAX=%d" % c["max"])
         print("ENABLED=%s" % ("true" if t.get("enabled", True) else "false"))
+        print("WINDOW=%s" % ("open" if in_run_window(t, now) else "closed"))
+        return 0
+    if cmd == "trust":
+        if len(pos) != 2:
+            print("usage: triggers.py trust <repo> <journal>",
+                  file=sys.stderr)
+            return 2
+        try:
+            rows, rollup, warns = trust_rollup(pos[0], pos[1])
+        except PipelineError as exc:
+            print("triggers trust: %s" % exc, file=sys.stderr)
+            return 1
+        for w in warns:
+            print("WARN %s" % w, file=sys.stderr)
+        for r in rows:
+            print("TRIGGER\t%s\t%s\t%s\t%d\t%d\t%s" % (
+                r["trigger"], r["pipeline"], r["kind"], r["runs"],
+                r["passes"], r["tier"]))
+        # Refusals land on STDOUT too (CP1 finding 1): the trust surface
+        # itself must carry "a trigger here is unreadable" -- a refused
+        # file can't be attributed to a pipeline, so no rollup floor can
+        # represent it. Tabs in the reason are flattened so the row stays
+        # 2-field parseable.
+        for w in warns:
+            if w.startswith("refused"):
+                print("REFUSED\t%s" % w.replace("\t", " "))
+        for p in sorted(rollup):
+            print("PIPELINE\t%s\t%s" % (p, rollup[p]))
         return 0
     if cmd == "validate":
         try:

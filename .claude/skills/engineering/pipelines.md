@@ -62,7 +62,10 @@ from `roles:` (loop→continuous, cron→schedule, event→event with
 `events_csv`, a shim-internal field). A native file supersedes its
 same-name shim; a BROKEN native file refuses AND keeps the shim
 suppressed (never fall back to role dispatch). CLI:
-`dispatch/cron/event/manual/show/validate`. Firing modes:
+`dispatch/cron/event/manual/show/validate/trust` (the four
+dispatch-facing verbs -- dispatch/cron/event/manual -- filter by
+`run_windows`; every verb takes a `--now <epoch>` digits-only test
+seam). Firing modes:
 continuous/schedule/manual/event — event carries `firing.event` (closed
 vocabulary `pr.opened/issue.created/merge.done/pr.synchronize`;
 `session.done` is shim-internal) + `firing.map {param: item|sha|event}`
@@ -72,8 +75,7 @@ lane = the legacy `_event_role_wakes` body VERBATIM (same seen files);
 native lane = START-ONLY, one run per new token via `pipeline.py start
 --kind native --event-field` (never `run_session` — SD-12 exact; seen
 advances per STARTED token, prunes to the poll page; at-capacity/failed
-starts redeliver). `resolve_event_wakes`/`_event_enumerate` are
-LEGACY-marked, uncalled by the loop (deletion = Phase E).
+starts redeliver).
 Supervisor side: dispatch tokens `name[@slot]` (slot 0 = legacy
 filename), `inflight_tokens` (strip `@slot` FIRST, then `--lane`;
 RESERVED sidecar suffixes `.outputs/.verdict/.outcome` are skipped —
@@ -82,9 +84,10 @@ in them), `run_session <token> <kind>` (`shim` = the role path
 byte-identical; `native` = no role settings, runs_as from the doc),
 per-trigger markers under `var/trigger-ctl/{fire,queued,stop,backoff}/`,
 enumeration failure = idle tick (SD-12's coder fallback RETIRED). State
-gains `trigger`/`kind`/`params`/`run`; journal gains additive `trigger`
-and `parent_run` (ledger still keys on `role`; shim trigger name == role
-name BYTE-EQUAL until the trust re-key phase).
+gains `trigger`/`kind`/`params`/`run`; journal carries `trigger`,
+`parent_run` and (Phase E) `kind` -- the ledger was re-keyed on
+`trigger` in Phase E (shim trigger name == role name BYTE-EQUAL is what
+makes the grandfather clause sound).
 
 ## Child runs + secrets (Phase C #376, SD-40)
 
@@ -142,9 +145,34 @@ outcomes fire container edges; unhandled failure fails the run; caps land
 
 `var/autonomy-logs/journal.jsonl`, one line per RUN (never per bounce);
 node entries carry `id/type/outcome/unit/via/session_log` + optional
-`bounce/round/verdict_*`. `ledger(journal, role, name)` projects
-`{runs, passes, tier}` per ASSIGNMENT — total reader, junk lines reduce
-evidence toward `watch` (the safe side).
+`bounce/round/verdict_*`. `ledger(journal, trigger, pipeline_name=, native=)` projects
+`{runs, passes, tier}` per TRIGGER (Phase E, SD-41) — total reader, junk
+lines reduce evidence toward `watch` (the safe side). Grandfather
+clause: a line with NO `trigger` field (or `""`) counts only for a SHIM
+(`native=False`) whose name equals the line's `role`; natives earn from
+zero; `parent_run` lines (call_pipeline children) never count; the
+additive `kind` field records shim/native provenance per line.
+`triggers.trust_rollup(repo, journal)` enumerates with
+`dispatchable_only=False` (disabled/off-lane still counted) and floors
+each pipeline to `auto` only when ALL its triggers are `auto`; the
+`trust` CLI verb prints TRIGGER rows + REFUSED rows (unattributable
+refusals surface ON STDOUT) + PIPELINE rollup rows.
+
+## Run windows (Phase E, SD-41)
+
+`run_windows: [{start, end, days?}]` on a native trigger, validated in
+`validate_trigger` (HH:MM UTC, wrap past midnight when end <= start,
+`days` names the window's START day, <=16 windows, explicit `[]`
+refused; `_apply_defaults` synthesises `[]` = always).
+`in_run_window(trig, epoch)` is the ONE membership predicate --
+fail-CLOSED on any junk shape. The gate lives at the four
+dispatch-facing CLI verbs, so NEW starts are blocked while in-flight
+tokens keep advancing (they never pass enumeration). `show` prints
+`WINDOW=open|closed`; supervisor `_trigger_show_fields` inits
+`SHOW_WINDOW=closed` and only the literal `open` opens; manual fire
+markers + queued fires DEFER (marker kept) while closed. Accepted
+bounds: one-tick end-boundary precision; first-sight at window-open
+seeds without firing.
 
 ## Two failure disciplines (the P3a lesson)
 

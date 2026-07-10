@@ -315,6 +315,37 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     *(specs/2026-07-09-pipeline-trigger-model-design.md §3.1/§4/§5;
     plans/2026-07-10-pipeline-model-phaseC-call-events-secrets.md; #376.)*
 
+41. **Trust keys per TRIGGER; run windows are per-trigger, graceful,
+    new-starts-only; the legacy role-dispatch twins are DELETED** (2026-07-10,
+    #380, Phase E of the pipeline+trigger model). The ledger counts a journal
+    line for trigger T when `line.trigger == T`; a line with NO trigger field
+    (or `""`) is grandfathered ONLY for a shim whose name byte-equals the
+    line's `role` — a NATIVE trigger earns from zero (inheriting role-era
+    evidence for a re-authored parameterisation would be fail-open). Child
+    runs (`parent_run` set) are never trigger evidence. The journal is never
+    rewritten; the additive `kind` field records shim/native provenance per
+    line. The per-pipeline rollup is a fail-safe floor over ALL valid
+    triggers (disabled/off-lane included — a pause never hides evidence):
+    `auto` only when every trigger reads `auto`; unattributable refused
+    trigger files surface as `REFUSED` rows on the `trust` CLI's stdout.
+    Run windows: `run_windows: [{start, end, days?}]`, UTC (the cron
+    parser's clock), start-inclusive/end-exclusive, wrap past midnight with
+    `days` naming the START day, ≤16, explicit `[]` refused, junk fails
+    CLOSED; enforced at the four dispatch-facing enumeration verbs
+    (dispatch/cron/event/manual) so NEW starts are blocked while in-flight
+    tokens advance; manual/queued markers defer while closed, a
+    schedule fire that came due while closed fires once at window-open,
+    events redeliver; accepted bounds = one-tick end-boundary precision +
+    first-sight-at-window-open seeds without firing. The SD-39/SD-40 legacy
+    twins (`resolve_dispatch_roles`/`inflight_roles`/`resolve_cron_due`/
+    `resolve_event_wakes` + enumerator helpers + the roles.py
+    enumerate/cron/events CLI surface) are deleted — the role-dispatch
+    fallback is now structurally impossible. The state-file `role` key
+    SURVIVES until the dashboard learns triggers (Phase D; supersedes the
+    Phase B plan's rename note).
+    *(specs/2026-07-09-pipeline-trigger-model-design.md §6/§9-E;
+    plans/2026-07-10-pipeline-model-phaseE-trust-windows-retire.md; #380.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could

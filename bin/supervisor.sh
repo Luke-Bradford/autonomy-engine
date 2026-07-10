@@ -140,7 +140,7 @@ engine_update_ready() {
 
 # The boundary decision: may THIS loop iteration re-exec? No when a prior
 # exec attempt failed (never loop-exec), and no while last iteration's
-# session.done edge is still pending -- resolve_event_wakes must consume it
+# session.done edge is still pending -- resolve_trigger_event_wakes must consume it
 # BEFORE the process image is replaced, or the event is silently dropped.
 # Prints the new HEAD on yes (delegated to engine_update_ready).
 should_reexec() {
@@ -829,21 +829,6 @@ invoke_scoped_key() {
 # apply on the next session. Cron/event triggers belong to increment 4's
 # scheduler/event bus and are never dispatched here.
 
-# roles.py enumeration (dispatch/cron/events) with the active lane filter
-# appended. This supervisor runs ONE lane: `--lane "$AUTONOMY_LANE"` when set,
-# else the default lane (bare call = today's behaviour, byte-identical). Lane
-# threading lives in this ONE place so all three seams stay in sync (#147
-# Part 2, SD-21). `${AUTONOMY_LANE:-}` keeps sourcing-for-tests nounset-safe.
-# NOT used by the per-role `dispatch <repo> <role>` settings call -- role+lane
-# together is a roles.py usage error (settings do not depend on lane).
-_roles_enumerate() {
-  if [ -n "${AUTONOMY_LANE:-}" ]; then
-    python3 "$ENGINE_HOME/lib/roles.py" "$@" --lane "$AUTONOMY_LANE" 2>>"$SUPLOG"
-  else
-    python3 "$ENGINE_HOME/lib/roles.py" "$@" 2>>"$SUPLOG"
-  fi
-}
-
 # Refuse (rc 1, message to stderr) a `--lane "$AUTONOMY_LANE"` that is not a
 # declared, validly-configured lane of the target repo; rc 0 (silent) when no
 # lane is set. Startup calls `validate_lane || exit 1` so a typo'd or malformed
@@ -877,20 +862,11 @@ validate_lane() {
   return 0
 }
 
-# Enabled loop-role names, one per line (roles.py dispatch contract). The
-# caller handles rc!=0 (fail back to coder-only) and empty output (idle).
-# LEGACY (post-#374 cutover): the main loop enumerates TRIGGERS now
-# (resolve_dispatch_triggers). Kept because tests (and the enumeration-parity
-# invariant) exercise it -- removal is a Phase E cleanup.
-resolve_dispatch_roles() {
-  _roles_enumerate dispatch "$AUTONOMY_TARGET_REPO"
-}
-
 # --- trigger dispatch (pipeline+trigger model Phase B, #374) ------------------
 # The supervisor enumerates TRIGGERS (native .autonomy/triggers/*.json files
-# + auto-shimmed roles) instead of roles. Built BEHIND the role path: these
-# functions exist alongside resolve_dispatch_roles and the main loop swaps
-# over only in the cutover commit, after the parity tests pass.
+# + auto-shimmed roles) instead of roles. resolve_dispatch_triggers below IS
+# the loop's one dispatch enumerator (cutover complete; the legacy role-path
+# twins were deleted in Phase E, SD-39/SD-40).
 #
 # Dispatch tokens are 'name' (run slot 0 -- filename identical to the legacy
 # per-role state file, so pre-cutover in-flight runs resume) or 'name@<slot>'
@@ -1149,7 +1125,11 @@ trigger_start_token() {
 # slots).
 _trigger_show_fields() {   # $1=name
   local out line
+  # SHOW_WINDOW init CLOSED: only the literal `open` opens (the earned
+  # healthy verdict, prevention-log #18) -- a failed/garbled show can
+  # never report an open run window.
   SHOW_MODE=""; SHOW_ENABLED=""; SHOW_POLICY=""; SHOW_MAX=""
+  SHOW_WINDOW="closed"
   out="$(python3 "$ENGINE_HOME/lib/triggers.py" show "$AUTONOMY_TARGET_REPO" "$1" 2>>"$SUPLOG" || true)"
   while IFS= read -r line; do
     case "$line" in *=*) ;; *) continue ;; esac
@@ -1158,6 +1138,7 @@ _trigger_show_fields() {   # $1=name
       ENABLED) SHOW_ENABLED="${line#*=}" ;;
       POLICY)  SHOW_POLICY="${line#*=}" ;;
       MAX)     SHOW_MAX="${line#*=}" ;;
+      WINDOW)  case "${line#*=}" in open) SHOW_WINDOW="open" ;; esac ;;
     esac
   done <<<"$out"
   case "$SHOW_POLICY" in queue|skip|parallel) ;; *) SHOW_POLICY="skip" ;; esac
@@ -1215,6 +1196,8 @@ resolve_manual_fires() {
       _trigger_show_fields "$name"
       if [ "$SHOW_MODE" = "manual" ] && [ "$SHOW_ENABLED" = "false" ]; then
         log "NOTE trigger '$name' is disabled -- fire marker kept until enabled"
+      elif [ "$SHOW_MODE" = "manual" ] && [ "$SHOW_WINDOW" = "closed" ]; then
+        log "NOTE trigger '$name' is outside its run window -- fire marker kept"
       else
         log "WARN trigger-ctl: '$name' is not a dispatchable manual trigger -- removing its fire marker"
         rm -f "$f" 2>>"$SUPLOG" || true
@@ -1261,6 +1244,36 @@ resolve_queued_fires() {
         log "WARN trigger-ctl: queued marker for '$name' has invalid kind -- removing (fire lost, next schedule re-queues)"
         rm -f "$f" 2>>"$SUPLOG" || true; continue ;;
     esac
+    # A queued fire is a NEW run start, so it re-earns dispatchability from
+    # `show` before running (Codex CP2: the trigger may have been disabled,
+    # re-authored, or window-closed since the fire was minted -- dispatching
+    # anyway would bypass every gate the dispatch-facing CLI applies):
+    #   - show failed (file vanished / transient read error): defer forever
+    #     with a NOTE (previously an endless run_session retry WARN); both
+    #     are visible loops, under-fire is the safe side. Queued markers are
+    #     native-only today, so a failed show never wedges a shim.
+    #   - mode no longer `schedule`: remove loudly -- only the cron resolver
+    #     mints queued markers, so this one can never legitimately re-mint.
+    #   - disabled: keep until re-enabled (the disabled-marker discipline).
+    #   - window closed: defer, marker kept (fires when it opens).
+    _trigger_show_fields "$name"
+    case "$SHOW_MODE" in
+      "")
+        log "NOTE trigger '$name': show failed -- queued fire deferred (marker kept)"
+        continue ;;
+      schedule) ;;
+      *)
+        log "WARN trigger-ctl: '$name' is no longer a schedule trigger -- removing its queued fire"
+        rm -f "$f" 2>>"$SUPLOG" || true; continue ;;
+    esac
+    if [ "$SHOW_ENABLED" = "false" ]; then
+      log "NOTE trigger '$name' is disabled -- queued fire kept until enabled"
+      continue
+    fi
+    if [ "$SHOW_WINDOW" = "closed" ]; then
+      log "NOTE trigger '$name': outside its run window -- queued fire deferred (marker kept)"
+      continue
+    fi
     if run_session "$tok" "$kind"; then
       rm -f "$f" 2>>"$SUPLOG" || true
     fi
@@ -1269,14 +1282,6 @@ resolve_queued_fires() {
 }
 
 # --- cron scheduler (W1, issue #85) -----------------------------------------
-# Enumerate the target repo's cron roles as NAME<TAB>SCHEDULE lines (roles.py
-# cron contract; schedules never contain a tab). Behind a function so tests can
-# override the enumeration seam without a real roles.py call. rc!=0 is the
-# caller's cue to skip cron this tick -- best-effort, never crashes the loop.
-_cron_enumerate() {
-  _roles_enumerate cron "$AUTONOMY_TARGET_REPO"
-}
-
 # Fire every cron role whose next scheduled fire (strictly after its last-fire
 # marker) is at or before now, then advance its marker. The supervisor is the
 # SOLE writer of each per-role marker ($VARDIR/cron/<role>.last_fire) -- the
@@ -1311,70 +1316,13 @@ _role_name_path_safe() {
   return 0
 }
 
-# LEGACY (post-#374 cutover): the main loop fires resolve_trigger_cron_due
-# now (same markers/semantics; shim cron roles ride the trigger enumeration).
-# Kept because tests exercise it -- removal is a Phase E cleanup.
-resolve_cron_due() {
-  local enum now name schedule marker last due
-  enum="$(_cron_enumerate)" || return 0
-  [ -n "$enum" ] || return 0
-  now="$(date +%s)"
-  mkdir -p "$VARDIR/cron" 2>/dev/null || {
-    log "WARN cron: cannot create $VARDIR/cron -- skipping cron this tick"; return 0; }
-  # NAME<TAB>SCHEDULE per line. A pipeline subshell is fine: no state needs to
-  # escape the loop (markers are files; each tick re-enumerates from scratch).
-  printf '%s\n' "$enum" | while IFS="$(printf '\t')" read -r name schedule; do
-    [ -n "$name" ] || continue
-    # Charset-gate before the name reaches a marker path (_role_name_path_safe
-    # is the single source shared with resolve_event_wakes, #110).
-    if ! _role_name_path_safe "$name"; then
-      log "WARN cron: role name '$name' has invalid path chars -- ignored"
-      continue
-    fi
-    marker="$VARDIR/cron/$name.last_fire"
-    if [ ! -f "$marker" ]; then
-      _cron_write_marker "$marker" "$now" \
-        || log "WARN cron: cannot initialise marker for '$name'"
-      continue
-    fi
-    last="$(cat "$marker" 2>/dev/null)"
-    case "$last" in
-      ''|*[!0-9]*)
-        # Marker exists but is unreadable/corrupt. Treat it like first-sight --
-        # reinitialise to now WITHOUT firing -- rather than substituting epoch 0
-        # (which would read as "never fired" and force a spurious immediate
-        # fire). Under-fire, never over-fire, and self-healing next tick.
-        log "WARN cron: marker for '$name' unreadable/corrupt -- reinitialising without firing"
-        _cron_write_marker "$marker" "$now" \
-          || log "WARN cron: cannot reinitialise marker for '$name'"
-        continue ;;
-    esac
-    # roles.py owns the cron_next_fire math; unparseable/error -> not-due.
-    due="$(python3 "$ENGINE_HOME/lib/roles.py" cron-due "$schedule" "$last" "$now" 2>>"$SUPLOG")" || continue
-    [ "$due" = "due" ] || continue
-    # Advance the marker to now BEFORE firing, and only fire if that write
-    # succeeded. This ordering is fail-safe in the under-fire direction: a
-    # marker-write failure skips the fire (never re-fires every tick), and a
-    # crash mid-session leaves the marker already advanced (waits for the next
-    # window) rather than re-firing. The session's own rc does not gate the
-    # marker -- a refused/failed session still waits for its next slot.
-    if _cron_write_marker "$marker" "$now"; then
-      log "cron: role '$name' due (schedule '$schedule') -- firing"
-      run_session "$name" || log "cron: role '$name' session rc=$? (see supervisor.log)"
-    else
-      log "WARN cron: cannot advance marker for '$name' -- skipping fire this tick (avoids re-fire)"
-    fi
-  done
-  return 0
-}
-
-# The trigger-model twin of resolve_cron_due (Phase B, #374): same marker
-# files ($VARDIR/cron/<name>.last_fire), same first-sight-no-fire, same
-# corrupt-marker reinitialise, same advance-before-fire ordering -- derived
-# mechanically so shim cron roles keep their exact firing semantics across
-# the cutover. Differences: the enumeration is `triggers.py cron` (three TAB
-# fields: name, schedule, kind) and the fire is capacity-gated by the
-# trigger's concurrency policy (queue writes ONE deferred marker; skip warns).
+# The trigger-model cron resolver (Phase B, #374; its legacy role-path twin
+# was deleted in Phase E): per-name marker files ($VARDIR/cron/<name>.last_fire),
+# first-sight-no-fire, corrupt-marker reinitialise, advance-before-fire
+# ordering -- the exact firing semantics shim cron roles have always had.
+# The enumeration is `triggers.py cron` (three TAB fields: name, schedule,
+# kind) and the fire is capacity-gated by the trigger's concurrency policy
+# (queue writes ONE deferred marker; skip warns).
 resolve_trigger_cron_due() {
   local enum now name schedule kind marker last due tok qp
   enum="$(_triggers_enumerate cron "$AUTONOMY_TARGET_REPO")" || return 0
@@ -1436,16 +1384,6 @@ resolve_trigger_cron_due() {
 }
 
 # --- event bus (W2, issue #86) ----------------------------------------------
-# LEGACY enumerator (pre-Phase-C role path) -- kept for has-scheduled parity
-# tests and the legacy resolver below only. New code enumerates TRIGGERS
-# (_triggers_enumerate event); see resolve_trigger_event_wakes.
-# Enumerate the target repo's event roles as NAME<TAB>EVENT[,EVENT...] lines
-# (roles.py events contract). Behind a function so tests can override the seam.
-# rc!=0 -> caller skips events this tick (best-effort, never crashes the loop).
-_event_enumerate() {
-  _roles_enumerate events "$AUTONOMY_TARGET_REPO"
-}
-
 # Print the current fireable-item tokens for <event>, one per line (empty = none;
 # rc!=0 -> caller skips this event this tick). Number-keyed events use the item
 # number (monotonic, open/closed-independent via --state all); pr.synchronize
@@ -1473,7 +1411,8 @@ _event_write_seen() {
 }
 
 # Process one event role's comma-separated on: list under the held lock. Split
-# from resolve_event_wakes so the nested per-event loop stays readable.
+# out (the shim lane of resolve_trigger_event_wakes) so the nested per-event
+# loop stays readable.
 _event_role_wakes() {
   local name="$1" events_csv="$2" session_ran="$3" event seen_file tokens new
   printf '%s\n' "$events_csv" | tr ',' '\n' | while IFS= read -r event; do
@@ -1517,42 +1456,6 @@ _event_role_wakes() {
       log "event: role '$name' session failed -- leaving seen (re-deliver next tick)"
     fi
   done
-}
-
-# --- LEGACY event bus (W2, #86) -- pre-Phase-C role-path resolver. Kept for
-# the parity tests only (deletion = Phase E, with the other legacy twins named
-# in SD-39); the main loop calls resolve_trigger_event_wakes. NEVER call this
-# from new code: it enumerates ROLES and would double-dispatch beside the
-# trigger resolver.
-# Fire every event role whose on: list matched a NEW item since its per-(role,
-# event) seen-set. The supervisor is the SOLE writer of each seen-set
-# ($VARDIR/events/<role>__<event>.seen) -- reset-epoch-split invariant
-# generalised. Delivery is AT-LEAST-ONCE within the poll page: a seen-set
-# advances only after a successful dispatch, so a failed/refused session
-# re-delivers next tick (the deliberate inverse of cron's under-fire ordering --
-# a missed real-world event loses work). First-sight seeds the baseline WITHOUT
-# firing. $1 = whether a loop session ran this tick (drives session.done).
-# Additive + best-effort: enumeration/poll/write failure skips events this tick
-# and leaves loop dispatch byte-for-byte unchanged. NEVER returns non-zero. Role
-# names are charset-gated before they reach the seen-set path (prevention-log #6).
-resolve_event_wakes() {
-  local session_ran="$1"
-  local enum name events_csv
-  enum="$(_event_enumerate)" || return 0
-  [ -n "$enum" ] || return 0
-  mkdir -p "$VARDIR/events" 2>/dev/null || {
-    log "WARN event: cannot create $VARDIR/events -- skipping events this tick"; return 0; }
-  printf '%s\n' "$enum" | while IFS="$(printf '\t')" read -r name events_csv; do
-    [ -n "$name" ] || continue
-    # Charset-gate before the name reaches a seen-set path (_role_name_path_safe
-    # is the single source shared with resolve_cron_due, #110).
-    if ! _role_name_path_safe "$name"; then
-      log "WARN event: role name '$name' has invalid path chars -- ignored"
-      continue
-    fi
-    _event_role_wakes "$name" "$events_csv" "$session_ran"
-  done
-  return 0
 }
 
 # --- event triggers (Phase C, #376) -------------------------------------------
@@ -1810,43 +1713,16 @@ any_pipeline_inflight() {
   return 1
 }
 
-# Roles with an in-flight run in THIS supervisor's lane (P2b, #351): they
+# Tokens with an in-flight run in THIS supervisor's lane (P2b, #351): they
 # join the main loop's dispatch list regardless of trigger type, so a
 # cron/event fire only STARTS a multi-node run and the loop advances it
-# with its own limit/backoff/pause handling. Filenames are lane-scoped
-# (pipeline_state_file); other lanes' states are another supervisor's
-# business. Role tokens are charset-gated before they can re-enter dispatch
-# (prevention-log #6 -- the filename is disk input).
-# LEGACY (post-#374 cutover): the main loop reads inflight_tokens (slot-
-# aware) now. Kept because tests exercise it -- removal is a Phase E cleanup.
-inflight_roles() {
-  local f base lane="${AUTONOMY_LANE:-}"
-  for f in "$LOGDIR"/.pipeline-run-*.json; do
-    [ -f "$f" ] || continue
-    base="$(basename "$f")"
-    base="${base#.pipeline-run-}"
-    base="${base%.json}"
-    if [ -n "$lane" ]; then
-      case "$base" in
-        *--"$lane") base="${base%--"$lane"}" ;;
-        *) continue ;;
-      esac
-    else
-      case "$base" in *--*) continue ;; esac
-    fi
-    case "$base" in
-      *[!A-Za-z0-9._-]*|"") log "WARN pipeline: ignoring state file with invalid role token: $f" ;;
-      *) printf '%s\n' "$base" ;;
-    esac
-  done
-}
-
-# Slot-aware sibling of inflight_roles (Phase B): emits dispatch TOKENS
-# ('name' or 'name@<slot>'). The state basename is <name>[--<lane>][@<slot>],
-# so the @<slot> suffix strips FIRST, then the --<lane> suffix, then the
-# charset gate (Codex CP1: lane-first never matches '--qa@2' and silently
-# ignores a lane's slotted in-flight run). inflight_roles stays until the
-# cutover deletes its last caller.
+# with its own limit/backoff/pause handling. Emits dispatch TOKENS ('name'
+# or 'name@<slot>'). Filenames are lane-scoped (pipeline_state_file); other
+# lanes' states are another supervisor's business. The state basename is
+# <name>[--<lane>][@<slot>], so the @<slot> suffix strips FIRST, then the
+# --<lane> suffix, then the charset gate (Codex CP1: lane-first never
+# matches '--qa@2' and silently ignores a lane's slotted in-flight run;
+# prevention-log #6 -- the filename is disk input).
 inflight_tokens() {
   local f base slot lane="${AUTONOMY_LANE:-}"
   for f in "$LOGDIR"/.pipeline-run-*.json; do

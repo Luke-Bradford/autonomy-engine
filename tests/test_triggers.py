@@ -120,6 +120,97 @@ class ValidateTriggerTest(unittest.TestCase):
         self.assertEqual(triggers.validate_trigger(_trig(lane="qa"), "coder-a"), [])
         self.assertTrue(triggers.validate_trigger(_trig(lane="a b"), "coder-a"))
 
+    def test_run_windows_valid_shapes_pass(self):
+        self.assertEqual(triggers.validate_trigger(
+            _trig(run_windows=[{"start": "22:00", "end": "06:00"}]),
+            "coder-a"), [])
+        self.assertEqual(triggers.validate_trigger(
+            _trig(run_windows=[{"start": "09:00", "end": "17:00",
+                                "days": ["mon", "fri"]}]), "coder-a"), [])
+
+    def test_run_windows_refusals(self):
+        cases = [
+            {},                                    # not a list
+            "22:00-06:00",                         # not a list
+            [],                                    # empty list refused
+            [{"start": "22:00", "end": "06:00"}] * 17,   # > MAX_RUN_WINDOWS
+            [{"start": "22:00"}],                  # end missing
+            [{"start": "2200", "end": "06:00"}],   # bad HH:MM
+            [{"start": "24:00", "end": "06:00"}],  # hour 24
+            [{"start": "22:60", "end": "06:00"}],  # minute 60
+            [{"start": "22:00", "end": "22:00"}],  # zero-length
+            [{"start": "22:00", "end": "06:00", "days": []}],     # empty days
+            [{"start": "22:00", "end": "06:00", "days": ["Mon"]}],  # case-exact
+            [{"start": "22:00", "end": "06:00", "tz": "UTC"}],    # unknown key
+        ]
+        for windows in cases:
+            errs = triggers.validate_trigger(
+                _trig(run_windows=windows), "coder-a")
+            self.assertTrue(errs, repr(windows))
+
+
+class RunWindowMembershipTest(unittest.TestCase):
+    # Fixed UTC instants (never the live clock -- prevention-log #9 spirit).
+    # 2026-07-08 is a WEDNESDAY; values verified empirically:
+    # python3 -c "import datetime; print(int(datetime.datetime(2026,7,8,23,0,
+    #   tzinfo=datetime.timezone.utc).timestamp()))"
+    WED_2300 = 1783551600   # Wed 2026-07-08 23:00:00 UTC
+    THU_0300 = 1783566000   # Thu 2026-07-09 03:00:00 UTC
+    THU_0700 = 1783580400   # Thu 2026-07-09 07:00:00 UTC
+
+    def _t(self, windows):
+        return {"run_windows": windows}
+
+    def test_absent_or_empty_means_always(self):
+        self.assertTrue(triggers.in_run_window({}, self.WED_2300))
+        self.assertTrue(triggers.in_run_window(self._t([]), self.WED_2300))
+
+    def test_same_day_window(self):
+        w = [{"start": "09:00", "end": "17:00"}]
+        self.assertFalse(triggers.in_run_window(self._t(w), self.WED_2300))
+
+    def test_wrap_past_midnight(self):
+        w = [{"start": "22:00", "end": "06:00"}]
+        self.assertTrue(triggers.in_run_window(self._t(w), self.WED_2300))
+        self.assertTrue(triggers.in_run_window(self._t(w), self.THU_0300))
+        self.assertFalse(triggers.in_run_window(self._t(w), self.THU_0700))
+
+    def test_wrap_days_name_the_start_day(self):
+        # window belongs to WED; Thursday 03:00 is inside WED's wrapped tail.
+        w = [{"start": "22:00", "end": "06:00", "days": ["wed"]}]
+        self.assertTrue(triggers.in_run_window(self._t(w), self.THU_0300))
+        # a THU-only window has not started by Thursday 03:00.
+        w2 = [{"start": "22:00", "end": "06:00", "days": ["thu"]}]
+        self.assertFalse(triggers.in_run_window(self._t(w2), self.THU_0300))
+
+    def test_start_inclusive_end_exclusive(self):
+        w = [{"start": "23:00", "end": "23:30"}]
+        self.assertTrue(triggers.in_run_window(self._t(w), self.WED_2300))
+        w2 = [{"start": "22:00", "end": "23:00"}]
+        self.assertFalse(triggers.in_run_window(self._t(w2), self.WED_2300))
+
+    def test_junk_epoch_fails_closed(self):
+        # review NITPICK (PR #382): a non-numeric epoch must fail CLOSED,
+        # never raise -- defense-in-depth beyond the argv digits-only gate.
+        w = self._t([{"start": "00:00", "end": "23:59"}])
+        for junk in (None, [], {}, "abc", float("nan")):
+            self.assertFalse(triggers.in_run_window(w, junk), repr(junk))
+
+    def test_junk_window_contributes_no_open_time(self):
+        # defense-in-depth (prevention-log #12/#18, CP1 finding 2): junk
+        # on an already-loaded dict opens NOTHING (fail-safe = closed).
+        for junk in ([{"start": "junk", "end": "06:00"}],   # bad HH:MM
+                     "22:00-06:00",                          # non-list key
+                     [{"start": "00:00", "end": "23:59",
+                       "days": "wed"}],                      # non-list days
+                     [{"start": "00:00", "end": "23:59",
+                       "days": []}],                         # empty days
+                     [{"start": "00:00", "end": "23:59",
+                       "days": ["wed", 3]}]):                # junk member
+            self.assertFalse(
+                triggers.in_run_window(self._t(junk), self.WED_2300),
+                repr(junk))
+
 
 class EffectiveTriggerPathTest(unittest.TestCase):
     def setUp(self):
@@ -238,8 +329,9 @@ class ShimTriggersTest(unittest.TestCase):
         names = [t["name"] for t in triggers.shim_triggers(self._config())]
         self.assertNotIn("researcher", names)
 
-    def test_shim_order_matches_dispatch_roles_order(self):
-        # Parity invariant 3 depends on this ordering.
+    def test_shim_order_matches_loop_roles_order(self):
+        # Parity invariant 3 depends on this ordering: the shims
+        # resolve_dispatch_triggers emits keep _all_loop_roles' order.
         import roles
         cfg = self._config()
         loop_shims = [t["name"] for t in triggers.shim_triggers(cfg)
@@ -348,6 +440,20 @@ class EnumerateTriggersTest(unittest.TestCase):
         os.remove(os.path.join(self.repo, ".autonomy", "config.yaml"))
         with self.assertRaises(pipeline.PipelineError):
             triggers.enumerate_triggers(self.repo)
+
+    def test_undeclared_lane_shim_excluded_everywhere(self):
+        # fail-safe (ported from the retired role-path lane test): a role
+        # pinned to an UNDECLARED lane never dispatches -- not in the
+        # default lane, not even when the undeclared lane is named.
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("lanes:\n  main: {}\n"
+                     "roles:\n  coder:\n    enabled: true\n"
+                     "  ghosty:\n    enabled: true\n    lane: ghost\n")
+        trigs, _ = triggers.enumerate_triggers(self.repo)
+        self.assertNotIn("ghosty", [t["name"] for t in trigs])
+        trigs, _ = triggers.enumerate_triggers(self.repo, lane="ghost")
+        self.assertNotIn("ghosty", [t["name"] for t in trigs])
 
 
 class CliTest(unittest.TestCase):
@@ -563,6 +669,225 @@ class EventCutoverTest(unittest.TestCase):
         trigs, warns = triggers.enumerate_triggers(self.repo)
         self.assertFalse([t for t in trigs if t["name"] == "qa"])
         self.assertTrue(any(w.startswith("refused") for w in warns), warns)
+
+
+class TrustRollupTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        os.makedirs(os.path.join(self.tmp, ".autonomy", "triggers"))
+
+    def _config(self, text="roles: {}\n"):
+        with open(os.path.join(self.tmp, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write(text)
+
+    def _trigger(self, name, **over):
+        trig = {"name": name, "pipeline": "flow",
+                "firing": {"mode": "continuous"}}
+        trig.update(over)
+        p = os.path.join(self.tmp, ".autonomy", "triggers",
+                         "%s.json" % name)
+        with open(p, "w") as fh:
+            json.dump(trig, fh)
+
+    def _journal(self, recs):
+        p = os.path.join(self.tmp, "journal.jsonl")
+        with open(p, "w") as fh:
+            for r in recs:
+                fh.write(json.dumps(r) + "\n")
+        return p
+
+    def _pass_lines(self, trigger, n, pipeline="flow"):
+        return [{"role": trigger, "trigger": trigger, "pipeline": pipeline,
+                 "outcome": "success", "pass": True} for _ in range(n)]
+
+    def _run_main_capture(self, argv):
+        import contextlib
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            triggers.main(list(argv))
+        return out.getvalue()
+
+    def test_rollup_floor_any_watch_is_watch(self):
+        self._config()
+        self._trigger("hot")             # 20/20 passes -> auto
+        self._trigger("cold")            # 0 runs -> watch
+        j = self._journal(self._pass_lines("hot", 20))
+        rows, rollup, _ = triggers.trust_rollup(self.tmp, j)
+        tiers = dict((r["trigger"], r["tier"]) for r in rows)
+        self.assertEqual(tiers["hot"], "auto")
+        self.assertEqual(tiers["cold"], "watch")
+        self.assertEqual(rollup["flow"], "watch")   # the fail-safe floor
+
+    def test_rollup_all_auto_is_auto(self):
+        self._config()
+        self._trigger("hot")
+        self._trigger("warm")
+        j = self._journal(self._pass_lines("hot", 20)
+                          + self._pass_lines("warm", 20))
+        _, rollup, _ = triggers.trust_rollup(self.tmp, j)
+        self.assertEqual(rollup["flow"], "auto")
+
+    def test_disabled_trigger_still_counted(self):
+        # a pause must never hide evidence from the rollup.
+        self._config()
+        self._trigger("hot", enabled=False)
+        j = self._journal(self._pass_lines("hot", 20))
+        rows, rollup, _ = triggers.trust_rollup(self.tmp, j)
+        self.assertIn("hot", [r["trigger"] for r in rows])
+        self.assertEqual(rollup["flow"], "auto")
+
+    def test_wrapped_shim_groups_under_role_name(self):
+        # unbound loop role: the shim's pipeline binding is empty, so the
+        # row groups under the wrapped doc's name (== the role name),
+        # matching the journal's pipeline field for wrapped runs.
+        self._config("roles:\n  coder:\n    enabled: true\n")
+        j = self._journal([])
+        rows, rollup, _ = triggers.trust_rollup(self.tmp, j)
+        row = [r for r in rows if r["trigger"] == "coder"][0]
+        self.assertEqual(row["pipeline"], "coder")
+        self.assertEqual(rollup["coder"], "watch")
+
+    def test_native_rows_do_not_inherit_roleonly_lines(self):
+        # 20 passing TRIGGER-LESS role lines + a same-name NATIVE trigger:
+        # the native row earns from zero (native=True wired through).
+        self._config()
+        self._trigger("coder")
+        j = self._journal([{"role": "coder", "pipeline": "flow",
+                            "outcome": "success", "pass": True}
+                           for _ in range(20)])
+        rows, _, _ = triggers.trust_rollup(self.tmp, j)
+        row = [r for r in rows if r["trigger"] == "coder"][0]
+        self.assertEqual(row["runs"], 0)
+        self.assertEqual(row["tier"], "watch")
+
+    def test_trust_cli_output_shape(self):
+        # TRIGGER rows carry 7 tab-fields, PIPELINE rollup rows 3.
+        self._config()
+        self._trigger("hot")
+        j = self._journal(self._pass_lines("hot", 20))
+        out = self._run_main_capture(["trust", self.tmp, j])
+        lines = out.strip().split("\n")
+        self.assertTrue(lines[0].startswith("TRIGGER\t"))
+        self.assertEqual(len(lines[0].split("\t")), 7)
+        self.assertEqual(lines[-1].split("\t"),
+                         ["PIPELINE", "flow", "auto"])
+
+    def test_trust_cli_surfaces_refused_triggers_on_stdout(self):
+        # CP1 finding 1: a corrupt trigger file cannot be attributed to a
+        # pipeline, so the verdict SURFACE carries it -- a REFUSED row on
+        # stdout, alongside (not instead of) the stderr WARN.
+        self._config()
+        self._trigger("hot")
+        with open(os.path.join(self.tmp, ".autonomy", "triggers",
+                               "broken.json"), "w") as fh:
+            fh.write("{not json")
+        j = self._journal(self._pass_lines("hot", 20))
+        out = self._run_main_capture(["trust", self.tmp, j])
+        refused = [l for l in out.strip().split("\n")
+                   if l.startswith("REFUSED\t")]
+        self.assertEqual(len(refused), 1)
+        self.assertIn("broken", refused[0])
+
+
+class RunWindowCliTest(unittest.TestCase):
+    # the shared night window + verified instants (see
+    # RunWindowMembershipTest for the derivation command).
+    NIGHT = [{"start": "22:00", "end": "06:00"}]
+    INSIDE = 1783551600    # Wed 2026-07-08 23:00 UTC
+    OUTSIDE = 1783580400   # Thu 2026-07-09 07:00 UTC
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        os.makedirs(os.path.join(self.tmp, ".autonomy", "triggers"))
+
+    def _config(self, text="roles: {}\n"):
+        with open(os.path.join(self.tmp, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write(text)
+
+    def _trigger(self, name, **over):
+        trig = {"name": name, "pipeline": "flow",
+                "firing": {"mode": "continuous"}}
+        trig.update(over)
+        with open(os.path.join(self.tmp, ".autonomy", "triggers",
+                               "%s.json" % name), "w") as fh:
+            json.dump(trig, fh)
+
+    def _run_main_capture(self, argv):
+        import contextlib
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            triggers.main(list(argv))
+        return out.getvalue()
+
+    def _windowed(self, mode, **firing_extra):
+        firing = {"mode": mode}
+        firing.update(firing_extra)
+        self._trigger("night", firing=firing, run_windows=self.NIGHT)
+
+    def test_dispatch_window_filters(self):
+        self._config()
+        self._windowed("continuous")
+        inside = self._run_main_capture(
+            ["dispatch", self.tmp, "--now", str(self.INSIDE)])
+        outside = self._run_main_capture(
+            ["dispatch", self.tmp, "--now", str(self.OUTSIDE)])
+        self.assertIn("night", inside)
+        self.assertNotIn("night", outside)
+
+    def test_cron_event_manual_window_filter(self):
+        self._config()
+        self._trigger("night-cron",
+                      firing={"mode": "schedule", "schedule": "0 23 * * *"},
+                      run_windows=self.NIGHT)
+        self._trigger("night-ev",
+                      firing={"mode": "event", "event": "pr.opened"},
+                      run_windows=self.NIGHT)
+        self._trigger("night-man", firing={"mode": "manual"},
+                      run_windows=self.NIGHT)
+        for verb, name in (("cron", "night-cron"), ("event", "night-ev"),
+                           ("manual", "night-man")):
+            inside = self._run_main_capture(
+                [verb, self.tmp, "--now", str(self.INSIDE)])
+            outside = self._run_main_capture(
+                [verb, self.tmp, "--now", str(self.OUTSIDE)])
+            self.assertIn(name, inside, verb)
+            self.assertNotIn(name, outside, verb)
+
+    def test_show_window_field(self):
+        self._config()
+        self._windowed("manual")
+        self.assertIn("WINDOW=closed", self._run_main_capture(
+            ["show", self.tmp, "night", "--now", str(self.OUTSIDE)]))
+        self.assertIn("WINDOW=open", self._run_main_capture(
+            ["show", self.tmp, "night", "--now", str(self.INSIDE)]))
+        self._trigger("plain", firing={"mode": "manual"})
+        self.assertIn("WINDOW=open", self._run_main_capture(
+            ["show", self.tmp, "plain", "--now", str(self.OUTSIDE)]))
+
+    def test_validate_and_trust_are_unfiltered(self):
+        # windows never hide a trigger from inspection.
+        self._config()
+        self._windowed("continuous")
+        j = os.path.join(self.tmp, "journal.jsonl")
+        open(j, "w").close()
+        self.assertIn("OK night", self._run_main_capture(
+            ["validate", self.tmp, "--now", str(self.OUTSIDE)]))
+        self.assertIn("TRIGGER\tnight", self._run_main_capture(
+            ["trust", self.tmp, j, "--now", str(self.OUTSIDE)]))
+
+    def test_now_argv_gate(self):
+        # digits-only (prevention-log #6): "12abc" and a missing value
+        # both return 2 with a usage error, never a silent live-clock
+        # fallback.
+        self.assertEqual(triggers.main(
+            ["dispatch", self.tmp, "--now", "12abc"]), 2)
+        self.assertEqual(triggers.main(["dispatch", self.tmp, "--now"]), 2)
 
 
 if __name__ == "__main__":

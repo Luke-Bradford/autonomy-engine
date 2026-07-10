@@ -571,64 +571,6 @@ class TestAccountErrors(unittest.TestCase):
         self.assertEqual(roles.account_errors(parse("roles: {}\n"), reg), [])
 
 
-class TestDispatchRoles(unittest.TestCase):
-    def test_no_roles_block_defaults_to_coder(self):
-        self.assertEqual(roles.dispatch_roles({}), ["coder"])
-        self.assertEqual(roles.dispatch_roles({"agent": {"type": "claude"}}),
-                         ["coder"])
-
-    def test_standard_defaults_only_coder_runs(self):
-        cfg = parse("roles:\n  pm:\n    trigger: { type: cron, schedule: \"0 0 * * *\" }\n")
-        self.assertEqual(roles.dispatch_roles(cfg), ["coder"])
-
-    def test_enabled_loop_roles_run_standard_order_first(self):
-        cfg = parse(
-            "roles:\n"
-            "  qa:\n"
-            "    enabled: true\n"
-            "    trigger: { type: loop }\n"
-            "  helper:\n"
-            "    enabled: true\n"
-            "  coder:\n"
-            "    enabled: true\n")
-        # standard roster order (coder, pm, qa, researcher), then custom
-        self.assertEqual(roles.dispatch_roles(cfg), ["coder", "qa", "helper"])
-
-    def test_disabled_coder_does_not_run(self):
-        cfg = parse("roles:\n  coder:\n    enabled: false\n")
-        self.assertEqual(roles.dispatch_roles(cfg), [])
-
-    def test_cron_and_event_roles_are_not_dispatched(self):
-        cfg = parse(
-            "roles:\n"
-            "  researcher:\n"
-            "    enabled: true\n"
-            "    trigger: { type: cron, schedule: \"0 3 * * *\" }\n"
-            "  qa:\n"
-            "    enabled: true\n"
-            "    trigger: { type: event, on: [pr.opened] }\n")
-        self.assertEqual(roles.dispatch_roles(cfg), ["coder"])
-
-    def test_custom_role_needs_explicit_enabled(self):
-        cfg = parse("roles:\n  helper:\n    account: claude-sub\n")
-        self.assertEqual(roles.dispatch_roles(cfg), ["coder"])
-
-    def test_standard_trigger_default_applies(self):
-        # pm's roster default trigger is cron -> enabling it alone does not
-        # make it a loop role
-        cfg = parse("roles:\n  pm:\n    enabled: true\n")
-        self.assertEqual(roles.dispatch_roles(cfg), ["coder"])
-
-    def test_unsafe_role_names_filtered(self):
-        # a name that could not survive shell word-splitting is never emitted
-        self.assertEqual(
-            roles.dispatch_roles({"roles": {"bad name": {"enabled": True}}}),
-            ["coder"])
-
-    def test_non_dict_roles_block_defaults(self):
-        self.assertEqual(roles.dispatch_roles({"roles": "garbage"}), ["coder"])
-
-
 class TestRenderScope(unittest.TestCase):
     def test_empty_scope_renders_nothing(self):
         self.assertEqual(roles.render_scope(None), "")
@@ -798,24 +740,12 @@ class TestDispatchCli(unittest.TestCase):
             rc = roles.main(["roles.py"] + list(argv))
         return rc, buf.getvalue()
 
-    def test_enumerate_default_roster(self):
-        self._write("agent:\n  type: claude\n")
+    def test_enumerate_arm_retired(self):
+        # the one-positional loop-role enumeration arm was deleted with the
+        # legacy role-dispatch twins (Phase E): usage error, never a roster.
+        self._write("roles:\n  coder:\n    enabled: true\n")
         rc, out = self._run("dispatch", self.tmp)
-        self.assertEqual(rc, 0)
-        self.assertEqual(out, "coder\n")
-
-    def test_enumerate_enabled_loop_roles(self):
-        self._write("roles:\n"
-                    "  coder:\n    enabled: true\n"
-                    "  qa:\n    enabled: true\n    trigger: { type: loop }\n")
-        rc, out = self._run("dispatch", self.tmp)
-        self.assertEqual(rc, 0)
-        self.assertEqual(out.split(), ["coder", "qa"])
-
-    def test_enumerate_all_disabled_prints_nothing(self):
-        self._write("roles:\n  coder:\n    enabled: false\n")
-        rc, out = self._run("dispatch", self.tmp)
-        self.assertEqual(rc, 0)
+        self.assertEqual(rc, 2)
         self.assertEqual(out, "")
 
     def test_role_settings_key_value_lines(self):
@@ -855,7 +785,7 @@ class TestDispatchCli(unittest.TestCase):
         self.assertEqual(rc, 1)
 
     def test_unreadable_config_exits_2(self):
-        rc, _ = self._run("dispatch", os.path.join(self.tmp, "nope"))
+        rc, _ = self._run("dispatch", os.path.join(self.tmp, "nope"), "coder")
         self.assertEqual(rc, 2)
 
     def test_validation_cli_still_works(self):
@@ -866,8 +796,9 @@ class TestDispatchCli(unittest.TestCase):
 
 class TestCronRoles(unittest.TestCase):
     """cron_roles enumerates enabled cron-trigger roles with a non-blank
-    schedule, in dispatch_roles' stable order (standard roster first, then
-    custom roles in config order). The supervisor's scheduler consumes it."""
+    schedule, in the stable roster order (standard roster first, then
+    custom roles in config order). The dashboard's trigger_health consumes
+    it; the trigger shim rides the lane-unfiltered all_cron_roles twin."""
 
     def test_no_roles_block_has_no_cron_roles(self):
         self.assertEqual(roles.cron_roles({}), [])
@@ -930,11 +861,12 @@ class TestCronRoles(unittest.TestCase):
 
 
 class TestEventRoles(unittest.TestCase):
-    """event_roles enumerates enabled event-trigger roles with a non-empty on:
-    list, in dispatch_roles' stable order. The supervisor's event bus consumes it."""
+    """all_event_roles enumerates enabled event-trigger roles with a
+    non-empty on: list, lane-unfiltered, in the stable roster order. The
+    trigger shim (lib/triggers.py) consumes it."""
 
     def test_no_roles_block_has_no_event_roles(self):
-        self.assertEqual(roles.event_roles({}), [])
+        self.assertEqual(roles.all_event_roles({}), [])
 
     def test_enabled_event_role_appears_with_on_list(self):
         cfg = parse(
@@ -942,7 +874,7 @@ class TestEventRoles(unittest.TestCase):
             "  qa:\n"
             "    enabled: true\n"
             "    trigger: { type: event, on: [pr.opened, pr.synchronize] }\n")
-        self.assertEqual(roles.event_roles(cfg),
+        self.assertEqual(roles.all_event_roles(cfg),
                          [("qa", ["pr.opened", "pr.synchronize"])])
 
     def test_custom_event_role_appears(self):
@@ -951,7 +883,7 @@ class TestEventRoles(unittest.TestCase):
             "  notify:\n"
             "    enabled: true\n"
             "    trigger: { type: event, on: [merge.done] }\n")
-        self.assertEqual(roles.event_roles(cfg), [("notify", ["merge.done"])])
+        self.assertEqual(roles.all_event_roles(cfg), [("notify", ["merge.done"])])
 
     def test_standard_before_custom_order(self):
         cfg = parse(
@@ -962,13 +894,13 @@ class TestEventRoles(unittest.TestCase):
             "  qa:\n"
             "    enabled: true\n"
             "    trigger: { type: event, on: [pr.opened] }\n")
-        self.assertEqual(roles.event_roles(cfg),
+        self.assertEqual(roles.all_event_roles(cfg),
                          [("qa", ["pr.opened"]), ("notify", ["merge.done"])])
 
     def test_empty_on_list_skipped(self):
         # defense in depth -- validate_roles rejects it, enumeration must not crash.
         self.assertEqual(
-            roles.event_roles({"roles": {"qa": {
+            roles.all_event_roles({"roles": {"qa": {
                 "enabled": True, "trigger": {"type": "event", "on": []}}}}),
             [])
 
@@ -978,11 +910,11 @@ class TestEventRoles(unittest.TestCase):
             "  coder:\n    enabled: true\n    trigger: { type: loop }\n"
             "  pm:\n    enabled: true\n    trigger: { type: cron, schedule: \"0 3 * * *\" }\n"
             "  qa:\n    enabled: false\n    trigger: { type: event, on: [pr.opened] }\n")
-        self.assertEqual(roles.event_roles(cfg), [])
+        self.assertEqual(roles.all_event_roles(cfg), [])
 
     def test_unsafe_role_names_filtered(self):
         self.assertEqual(
-            roles.event_roles({"roles": {"bad name": {
+            roles.all_event_roles({"roles": {"bad name": {
                 "enabled": True, "trigger": {"type": "event", "on": ["pr.opened"]}}}}),
             [])
 
@@ -1067,26 +999,6 @@ class TestCronCli(unittest.TestCase):
             rc = roles.main(["roles.py"] + list(argv))
         return rc, buf.getvalue()
 
-    def test_cron_verb_emits_name_tab_schedule(self):
-        self._write(
-            "roles:\n"
-            "  pm:\n"
-            "    enabled: true\n"
-            '    trigger: { type: cron, schedule: "0 3 * * *" }\n')
-        rc, out = self._run("cron", self.tmp)
-        self.assertEqual(rc, 0)
-        self.assertEqual(out, "pm\t0 3 * * *\n")
-
-    def test_cron_verb_empty_when_none(self):
-        self._write("agent:\n  type: claude\n")
-        rc, out = self._run("cron", self.tmp)
-        self.assertEqual(rc, 0)
-        self.assertEqual(out, "")
-
-    def test_cron_verb_unreadable_config_exits_2(self):
-        rc, _ = self._run("cron", os.path.join(self.tmp, "nope"))
-        self.assertEqual(rc, 2)
-
     def test_cron_due_fires_when_slot_elapsed(self):
         # last fire at epoch 0; a */5 slot (300s) has elapsed by now=600.
         rc, out = self._run("cron-due", "*/5 * * * *", "0", "600")
@@ -1121,26 +1033,6 @@ class TestCronCli(unittest.TestCase):
         rc, out = self._run("dispatch", self.tmp, "pm")
         self.assertEqual(rc, 0)
         self.assertIn("ACCOUNT=pm-acct", out.splitlines())
-
-    def test_events_verb_emits_name_tab_events(self):
-        self._write(
-            "roles:\n"
-            "  qa:\n"
-            "    enabled: true\n"
-            "    trigger: { type: event, on: [pr.opened, pr.synchronize] }\n")
-        rc, out = self._run("events", self.tmp)
-        self.assertEqual(rc, 0)
-        self.assertEqual(out, "qa\tpr.opened,pr.synchronize\n")
-
-    def test_events_verb_empty_when_none(self):
-        self._write("agent:\n  type: claude\n")
-        rc, out = self._run("events", self.tmp)
-        self.assertEqual(rc, 0)
-        self.assertEqual(out, "")
-
-    def test_events_verb_unreadable_config_exits_2(self):
-        rc, _ = self._run("events", os.path.join(self.tmp, "nope"))
-        self.assertEqual(rc, 2)
 
     def test_dispatch_resolves_event_role_settings(self):
         self._write(
@@ -1319,35 +1211,9 @@ class TestLaneHelpers(unittest.TestCase):
 
 
 class TestLaneDispatchFilter(unittest.TestCase):
-    def test_no_lanes_dispatch_identical_to_today(self):
-        cfg = parse(
-            "roles:\n"
-            "  coder: { enabled: true }\n"
-            "  qa:\n    enabled: true\n    trigger: { type: loop }\n")
-        self.assertEqual(roles.dispatch_roles(cfg), roles.dispatch_roles(cfg, None))
-        self.assertEqual(roles.dispatch_roles(cfg), ["coder", "qa"])
-
-    def test_pinned_role_excluded_from_default(self):
-        cfg = parse(
-            "lanes:\n  main: {}\n  fe: {}\n"
-            "roles:\n"
-            "  coder: { enabled: true }\n"
-            "  coder-fe:\n    enabled: true\n    trigger: { type: loop }\n    lane: fe\n")
-        self.assertEqual(roles.dispatch_roles(cfg), ["coder"])
-        self.assertEqual(roles.dispatch_roles(cfg, "fe"), ["coder-fe"])
-
-    def test_undeclared_lane_role_excluded_everywhere(self):
-        # fail-safe: never fall into default lane, never crash
-        cfg = parse(
-            "lanes:\n  main: {}\n"
-            "roles:\n"
-            "  coder: { enabled: true }\n"
-            "  ghosty:\n    enabled: true\n    trigger: { type: loop }\n    lane: ghost\n")
-        self.assertEqual(roles.dispatch_roles(cfg), ["coder"])
-        self.assertNotIn("ghosty", roles.dispatch_roles(cfg, "main"))
-        # even naming the undeclared lane explicitly must not surface it
-        self.assertEqual(roles.dispatch_roles(cfg, "ghost"), [])
-
+    # (the loop-role lane-filter tests moved with their subject: live lane
+    # filtering is trigger enumeration -- tests/test_triggers.py
+    # EnumerateTriggersTest + tests/test_headless_dispatch.sh drive it.)
     def test_undeclared_lane_role_not_dispatchable(self):
         # fail-safe: settings must NOT resolve for a role pinned to a lane that
         # was never declared -- else `dispatch <repo> <role>` runs a misconfig
@@ -1360,15 +1226,14 @@ class TestLaneDispatchFilter(unittest.TestCase):
         with self.assertRaises(KeyError):
             roles.role_settings(cfg, "ghosty")
 
-    def test_cron_event_default_lane_only(self):
+    def test_cron_default_lane_only(self):
         cfg = parse(
             "lanes:\n  main: {}\n  fe: {}\n"
             "roles:\n"
             "  pm:\n    enabled: true\n    trigger: { type: cron, schedule: '0 * * * *' }\n"
-            "  qa:\n    enabled: true\n    trigger: { type: event, on: [pr.opened] }\n    lane: fe\n")
+            "  qa:\n    enabled: true\n    trigger: { type: cron, schedule: '0 * * * *' }\n    lane: fe\n")
         self.assertEqual([n for n, _ in roles.cron_roles(cfg)], ["pm"])
-        self.assertEqual([n for n, _ in roles.event_roles(cfg)], [])
-        self.assertEqual([n for n, _ in roles.event_roles(cfg, "fe")], ["qa"])
+        self.assertEqual([n for n, _ in roles.cron_roles(cfg, "fe")], ["qa"])
 
     def test_dispatchable_roles_lane_unaware(self):
         # settings guard must still resolve a role pinned to a non-default lane
@@ -1404,16 +1269,6 @@ class TestLaneCLI(unittest.TestCase):
         rc, out = self._run("default-lane", self.tmp)
         self.assertEqual(rc, 0)
         self.assertEqual(out.strip(), "fe")
-
-    def test_dispatch_with_lane_flag(self):
-        self._write(
-            "lanes:\n  main: {}\n  fe: {}\n"
-            "roles:\n"
-            "  coder: { enabled: true }\n"
-            "  coder-fe:\n    enabled: true\n    trigger: { type: loop }\n    lane: fe\n")
-        rc, out = self._run("dispatch", self.tmp, "--lane", "fe")
-        self.assertEqual(rc, 0)
-        self.assertEqual(out.split(), ["coder-fe"])
 
     def test_dispatch_role_and_lane_together_is_error(self):
         self._write("roles:\n  coder: { enabled: true }\n")
