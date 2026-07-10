@@ -253,5 +253,157 @@ class ShimTriggersTest(unittest.TestCase):
         self.assertIsInstance(triggers.shim_triggers({"roles": []}), list)
 
 
+class EnumerateTriggersTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        os.makedirs(os.path.join(self.repo, ".autonomy", "triggers"))
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("roles:\n  coder:\n    enabled: true\n")
+
+    def _write(self, name, obj, where=".autonomy"):
+        d = os.path.join(self.repo, where, "triggers")
+        if not os.path.isdir(d):
+            os.makedirs(d)
+        with open(os.path.join(d, "%s.json" % name), "w") as fh:
+            json.dump(obj, fh)
+
+    def test_roles_only_config_enumerates_shims(self):
+        trigs, warns = triggers.enumerate_triggers(self.repo)
+        self.assertEqual([(t["name"], t["kind"]) for t in trigs],
+                         [("coder", "shim")])
+        self.assertEqual(warns, [])
+
+    def test_native_trigger_included(self):
+        self._write("qa-nightly", _trig(name="qa-nightly",
+                                        firing={"mode": "continuous"}))
+        trigs, _ = triggers.enumerate_triggers(self.repo)
+        names = {t["name"]: t["kind"] for t in trigs}
+        self.assertEqual(names["qa-nightly"], "native")
+
+    def test_native_supersedes_same_name_shim_with_warning(self):
+        self._write("coder", _trig(name="coder"))
+        trigs, warns = triggers.enumerate_triggers(self.repo)
+        kinds = [t["kind"] for t in trigs if t["name"] == "coder"]
+        self.assertEqual(kinds, ["native"])          # exactly one, the file
+        self.assertTrue(any("supersedes" in w for w in warns))
+
+    def test_invalid_file_trigger_refused_and_never_falls_back_to_shim(self):
+        # THE carried argument: a broken trigger shadowing a role must not
+        # resurrect role dispatch. coder must NOT appear at all.
+        self._write("coder", {"name": "coder", "firing": {"mode": "wat"}})
+        trigs, warns = triggers.enumerate_triggers(self.repo)
+        self.assertEqual([t for t in trigs if t["name"] == "coder"], [])
+        self.assertTrue(any("coder" in w for w in warns))
+
+    def test_disabled_trigger_excluded_from_dispatch_enumeration(self):
+        self._write("qa-nightly", _trig(name="qa-nightly", enabled=False))
+        trigs, _ = triggers.enumerate_triggers(self.repo)
+        self.assertNotIn("qa-nightly", [t["name"] for t in trigs])
+
+    def test_native_trigger_colliding_with_event_role_refused(self):
+        # Event roles stay on the legacy bus until Phase C; a same-name
+        # native trigger would double-dispatch that name (Codex CP1).
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("roles:\n  qa:\n    enabled: true\n"
+                     "    trigger:\n      type: event\n"
+                     "      on: [pr.opened]\n")
+        self._write("qa", _trig(name="qa"))
+        trigs, warns = triggers.enumerate_triggers(self.repo)
+        self.assertNotIn("qa", [t["name"] for t in trigs])
+        self.assertTrue(any("event" in w and "qa" in w for w in warns))
+
+    def test_bad_filename_stem_refused_with_warning(self):
+        d = os.path.join(self.repo, ".autonomy", "triggers")
+        with open(os.path.join(d, "has space.json"), "w") as fh:
+            fh.write("{}")
+        trigs, warns = triggers.enumerate_triggers(self.repo)
+        self.assertTrue(any("has space" in w for w in warns))
+
+    def test_shadow_only_trigger_enumerates(self):
+        self._write("hotfix", _trig(name="hotfix"), where="var/autonomy")
+        trigs, _ = triggers.enumerate_triggers(self.repo)
+        self.assertIn("hotfix", [t["name"] for t in trigs])
+
+    def test_config_unreadable_raises(self):
+        os.remove(os.path.join(self.repo, ".autonomy", "config.yaml"))
+        with self.assertRaises(pipeline.PipelineError):
+            triggers.enumerate_triggers(self.repo)
+
+
+class CliTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        os.makedirs(os.path.join(self.repo, ".autonomy", "triggers"))
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("roles:\n  coder:\n    enabled: true\n"
+                     "  pm:\n    enabled: true\n"
+                     "    trigger:\n      type: cron\n"
+                     "      schedule: '0 6 * * *'\n")
+
+    def _write(self, name, obj):
+        d = os.path.join(self.repo, ".autonomy", "triggers")
+        with open(os.path.join(d, "%s.json" % name), "w") as fh:
+            json.dump(obj, fh)
+
+    def _run(self, *argv):
+        import contextlib
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = triggers.main(list(argv))
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_dispatch_emits_tab_line_for_continuous_shim(self):
+        rc, out, _ = self._run("dispatch", self.repo)
+        self.assertEqual(rc, 0)
+        self.assertIn("coder\tshim\tskip\t1\n", out)
+        self.assertNotIn("pm\t", out)          # cron shim not in dispatch
+
+    def test_cron_emits_schedule_shim(self):
+        rc, out, _ = self._run("cron", self.repo)
+        self.assertEqual(rc, 0)
+        self.assertIn("pm\t0 6 * * *\tshim\n", out)
+        self.assertNotIn("coder\t", out)
+
+    def test_show_round_trips_a_written_trigger(self):
+        self._write("t9", _trig(name="t9", firing={"mode": "manual"}))
+        rc, out, _ = self._run("show", self.repo, "t9")
+        self.assertEqual(rc, 0)
+        self.assertIn("NAME=t9\n", out)
+        self.assertIn("PIPELINE=ticket-to-merge\n", out)
+        self.assertIn("MODE=manual\n", out)
+        self.assertIn("POLICY=skip\n", out)
+        self.assertIn("MAX=1\n", out)
+        self.assertIn("ENABLED=true\n", out)
+
+    def test_validate_rc1_on_refused_trigger(self):
+        self._write("bad", {"name": "bad", "firing": {"mode": "wat"}})
+        rc, out, _ = self._run("validate", self.repo)
+        self.assertEqual(rc, 1)
+        self.assertIn("WARN", out)
+
+    def test_validate_rc0_when_valid_native_supersedes_shim(self):
+        # A supersession note is informational, not a refusal.
+        self._write("coder", _trig(name="coder"))
+        rc, out, _ = self._run("validate", self.repo)
+        self.assertEqual(rc, 0)
+        self.assertIn("OK coder (native, continuous)\n", out)
+
+    def test_dispatch_unreadable_config_rc1(self):
+        os.remove(os.path.join(self.repo, ".autonomy", "config.yaml"))
+        rc, _, err = self._run("dispatch", self.repo)
+        self.assertEqual(rc, 1)
+        self.assertIn("dispatch", err)
+
+    def test_unknown_subcommand_rc2(self):
+        rc, _, _ = self._run("frobnicate", self.repo)
+        self.assertEqual(rc, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

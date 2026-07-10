@@ -205,8 +205,161 @@ def shim_triggers(config):
     return out
 
 
+def _trigger_stems(repo):
+    """Union of committed + shadow trigger filename stems. Filenames are DISK
+    INPUT: stems that fail the charset gate are returned in the second slot
+    so the caller can warn (never silently dropped, never path-joined)."""
+    stems, bad = [], []
+    for d in (os.path.join(repo, ".autonomy", "triggers"),
+              os.path.join(repo, "var", "autonomy", "triggers")):
+        try:
+            entries = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for fn in entries:
+            if not fn.endswith(".json"):
+                continue
+            stem = fn[:-len(".json")]
+            if not pipeline._NAME_RE.match(stem):
+                bad.append(stem)
+            elif stem not in stems:
+                stems.append(stem)
+    return stems, bad
+
+
+def enumerate_triggers(repo, lane=None):
+    """(triggers, warnings) for one lane. Native file triggers (validated,
+    kind='native') + shims for roles no file supersedes (kind='shim').
+    Every refusal becomes a warning string -- a refused trigger is OUT of
+    the dispatchable list AND its same-name shim stays suppressed (never
+    fall back to role dispatch for a broken/shadowing trigger). Raises
+    PipelineError when the config (the shim source) is unreadable."""
+    import roles
+    cfg, rc = roles._load_config(repo)
+    if rc != 0 or cfg is None:
+        raise PipelineError("config unreadable/unparseable for %s (rc %d) "
+                            "-- cannot enumerate triggers" % (repo, rc))
+    target_lane = lane if lane is not None else roles.default_lane(cfg)
+    declared = roles.lane_names(cfg)
+    warnings, out, native_stems = [], [], set()
+    event_names = set(n for (n, _ev) in roles.all_event_roles(cfg))
+    stems, bad = _trigger_stems(repo)
+    for stem in bad:
+        warnings.append("refused trigger file %r: invalid name charset"
+                        % stem)
+    for stem in stems:
+        native_stems.add(stem)      # even a BROKEN file suppresses the shim
+        if stem in event_names:
+            # Event roles stay on the legacy bus until Phase C; a same-name
+            # native trigger would DOUBLE-DISPATCH this name (Codex CP1).
+            warnings.append("refused trigger %r: collides with an enabled "
+                            "event role -- event triggers land in Phase C"
+                            % stem)
+            continue
+        try:
+            trig = load_trigger(repo, stem)
+        except PipelineError as exc:
+            warnings.append("refused trigger %r: %s" % (stem, exc))
+            continue
+        trig["kind"] = "native"
+        out.append(trig)
+    for t in shim_triggers(cfg):
+        if t["name"] in native_stems:
+            warnings.append("trigger %r supersedes the role shim of the "
+                            "same name" % t["name"])
+            continue
+        out.append(t)
+
+    def _in_lane(t):
+        tl = t.get("lane") or roles.default_lane(cfg)
+        return tl in declared and tl == target_lane
+    return ([t for t in out if t.get("enabled", True) and _in_lane(t)],
+            warnings)
+
+
+def _cli_lane(args):
+    opts = {"--lane": None}
+    pos, i = [], 0
+    while i < len(args):
+        if args[i] == "--lane" and i + 1 < len(args):
+            opts["--lane"] = args[i + 1]
+            i += 2
+        else:
+            pos.append(args[i])
+            i += 1
+    return pos, opts["--lane"]
+
+
 def main(argv):
-    print("triggers.py: CLI lands in a later task", file=sys.stderr)
+    if not argv:
+        print(__doc__, file=sys.stderr)
+        return 2
+    cmd, rest = argv[0], argv[1:]
+    pos, lane = _cli_lane(rest)
+    if cmd in ("dispatch", "cron", "validate") and len(pos) != 1:
+        print("usage: triggers.py %s <repo> [--lane <l>]" % cmd,
+              file=sys.stderr)
+        return 2
+    if cmd == "dispatch":
+        try:
+            trigs, warns = enumerate_triggers(pos[0], lane)
+        except PipelineError as exc:
+            print("triggers dispatch: %s" % exc, file=sys.stderr)
+            return 1
+        for w in warns:
+            print("WARN %s" % w, file=sys.stderr)
+        for t in trigs:
+            if t["firing"]["mode"] == "continuous":
+                c = t["concurrency"]
+                print("%s\t%s\t%s\t%d" % (t["name"], t["kind"],
+                                          c["policy"], c["max"]))
+        return 0
+    if cmd == "cron":
+        try:
+            trigs, warns = enumerate_triggers(pos[0], lane)
+        except PipelineError as exc:
+            print("triggers cron: %s" % exc, file=sys.stderr)
+            return 1
+        for w in warns:
+            print("WARN %s" % w, file=sys.stderr)
+        for t in trigs:
+            if t["firing"]["mode"] == "schedule":
+                print("%s\t%s\t%s" % (t["name"], t["firing"]["schedule"],
+                                      t["kind"]))
+        return 0
+    if cmd == "show":
+        if len(pos) != 2:
+            print("usage: triggers.py show <repo> <name>", file=sys.stderr)
+            return 2
+        try:
+            t = load_trigger(pos[0], pos[1])
+        except PipelineError as exc:
+            print("triggers show: %s" % exc, file=sys.stderr)
+            return 1
+        c = t["concurrency"]
+        print("NAME=%s" % t["name"])
+        print("PIPELINE=%s" % t["pipeline"])
+        print("MODE=%s" % t["firing"]["mode"])
+        print("POLICY=%s" % c["policy"])
+        print("MAX=%d" % c["max"])
+        print("ENABLED=%s" % ("true" if t.get("enabled", True) else "false"))
+        return 0
+    if cmd == "validate":
+        try:
+            trigs, warns = enumerate_triggers(pos[0], lane)
+        except PipelineError as exc:
+            print("triggers validate: %s" % exc, file=sys.stderr)
+            return 1
+        for w in warns:
+            print("WARN %s" % w)
+        for t in trigs:
+            print("OK %s (%s, %s)" % (t["name"], t["kind"],
+                                      t["firing"]["mode"]))
+        # Only REFUSALS fail the report -- a supersession note is
+        # informational (the 'refused ' prefix is the contract; a test pins
+        # that a superseding-but-valid native trigger exits 0).
+        return 1 if any(w.startswith("refused") for w in warns) else 0
+    print("unknown subcommand %r" % cmd, file=sys.stderr)
     return 2
 
 
