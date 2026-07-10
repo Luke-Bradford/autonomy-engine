@@ -14,6 +14,7 @@ not silently resurrect the role path the operator replaced.
 CLI verbs: dispatch, cron, event, manual, show, validate,
 trust <repo> <journal> (per-trigger rows + per-pipeline rollup).
 """
+import datetime
 import json
 import os
 import sys
@@ -23,7 +24,7 @@ import pipeline                                             # noqa: E402
 from pipeline import PipelineError                          # noqa: E402
 
 _TRIGGER_KEYS = frozenset(("name", "pipeline", "params", "firing",
-                           "concurrency", "enabled", "lane"))
+                           "concurrency", "enabled", "lane", "run_windows"))
 _FIRING_KEYS = frozenset(("mode", "schedule", "event", "map"))
 _CONCURRENCY_KEYS = frozenset(("policy", "max"))
 FIRING_MODES = ("continuous", "schedule", "manual", "event")
@@ -33,10 +34,110 @@ EVENT_KINDS = ("pr.opened", "issue.created", "merge.done", "pr.synchronize")
 EVENT_FIELDS = ("item", "sha", "event")
 CONCURRENCY_POLICIES = ("queue", "skip", "parallel")
 MAX_TRIGGER_PARALLEL = 8          # mirrors pipeline.MAX_PARALLEL_CEIL
+_WINDOW_KEYS = frozenset(("start", "end", "days"))
+WINDOW_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+MAX_RUN_WINDOWS = 16
 
 
 def _is_scalar(v):
     return isinstance(v, (str, int, float, bool)) or v is None
+
+
+def _hhmm(value):
+    """'HH:MM' -> minutes-since-midnight, or None when malformed.
+    Charset-explicit (prevention-log #6): only ASCII digits."""
+    if not isinstance(value, str) or len(value) != 5 or value[2] != ":":
+        return None
+    hh, mm = value[:2], value[3:]
+    if not all(c in "0123456789" for c in hh + mm):
+        return None
+    h, m = int(hh), int(mm)
+    if h > 23 or m > 59:
+        return None
+    return h * 60 + m
+
+
+def _validate_window(w, idx):
+    errs = []
+    if not isinstance(w, dict):
+        return ["run_windows[%d] must be an object" % idx]
+    for k in w:
+        if k not in _WINDOW_KEYS:
+            errs.append("run_windows[%d]: unknown key %r" % (idx, k))
+    start, end = _hhmm(w.get("start")), _hhmm(w.get("end"))
+    if start is None:
+        errs.append("run_windows[%d].start must be 'HH:MM' (UTC)" % idx)
+    if end is None:
+        errs.append("run_windows[%d].end must be 'HH:MM' (UTC)" % idx)
+    if start is not None and start == end:
+        errs.append("run_windows[%d]: start == end is a zero-length window"
+                    " -- omit run_windows for always-on, or widen it" % idx)
+    days = w.get("days")
+    if days is not None:
+        if not isinstance(days, list) or not days:
+            errs.append("run_windows[%d].days must be a non-empty list"
+                        " of day names" % idx)
+        else:
+            for d in days:
+                if d not in WINDOW_DAYS:
+                    errs.append("run_windows[%d].days: unknown day %r"
+                                " (mon..sun, lowercase)" % (idx, d))
+    return errs
+
+
+def in_run_window(trig, now_epoch):
+    """True when NEW dispatch is allowed at now_epoch. UTC clock -- the
+    same clock as the cron parser (roles.cron_next_fire). ONE public rule
+    (CP1 finding 3): a MISSING run_windows key means always-dispatchable,
+    and the empty list `[]` is its defaults-synthesised twin
+    (_apply_defaults writes it; the validator refuses an EXPLICIT [] in an
+    authored file as a foot-gun, so a validated file never carries one).
+    end <= start wraps past midnight; a wrapped window's `days` list names
+    the window's START day. Start inclusive, end exclusive.
+
+    Fail-closed on junk (CP1 finding 2, prevention-log #12/#18): a
+    PRESENT-but-malformed run_windows value (non-list) opens nothing, and
+    a malformed window entry or days value contributes NO open time --
+    the operator wrote a restriction, so an unreadable restriction must
+    restrict, never widen. In-flight runs are never gated here: only the
+    four dispatch-facing CLI verbs consult this, and in-flight tokens
+    never pass through enumeration."""
+    windows = trig.get("run_windows")
+    if windows is None or windows == []:
+        return True
+    if not isinstance(windows, list):
+        return False
+    try:
+        dt = datetime.datetime.fromtimestamp(int(now_epoch),
+                                             datetime.timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return False
+    minutes = dt.hour * 60 + dt.minute
+    dow = WINDOW_DAYS[dt.weekday()]            # weekday(): mon=0 .. sun=6
+    prev = WINDOW_DAYS[(dt.weekday() - 1) % 7]
+    for w in windows:
+        if not isinstance(w, dict):
+            continue
+        start, end = _hhmm(w.get("start")), _hhmm(w.get("end"))
+        if start is None or end is None:
+            continue
+        days = w.get("days")
+        if days is None:
+            days = WINDOW_DAYS
+        elif (not isinstance(days, list)
+              or not all(isinstance(d, str) and d in WINDOW_DAYS
+                         for d in days)
+              or not days):
+            continue                    # junk days: no open time
+        if end > start:
+            if dow in days and start <= minutes < end:
+                return True
+        else:
+            if dow in days and minutes >= start:
+                return True
+            if prev in days and minutes < end:
+                return True
+    return False
 
 
 def effective_trigger_path(repo, name):
@@ -177,6 +278,16 @@ def validate_trigger(trig, stem):
                 errors.append("concurrency: queue is not valid for event "
                               "mode -- the event seen-set redelivers "
                               "unhandled tokens, which IS the queue")
+    windows = trig.get("run_windows")
+    if windows is not None:
+        if not isinstance(windows, list) or not windows:
+            errors.append("run_windows must be a non-empty list of window"
+                          " objects (omit the key for always-dispatchable)")
+        elif len(windows) > MAX_RUN_WINDOWS:
+            errors.append("run_windows: at most %d windows" % MAX_RUN_WINDOWS)
+        else:
+            for i, w in enumerate(windows):
+                errors.extend(_validate_window(w, i))
     if "enabled" in trig and not isinstance(trig["enabled"], bool):
         errors.append("enabled: must be a bool")
     lane = trig.get("lane")
@@ -191,6 +302,10 @@ def _apply_defaults(trig):
     out.setdefault("params", {})
     out.setdefault("concurrency", {"policy": "skip", "max": 1})
     out.setdefault("enabled", True)
+    # [] = the defaults-synthesised twin of "no run_windows key" (always
+    # dispatchable). An EXPLICIT [] in an authored file refuses at
+    # validation, so a loaded trigger only ever gets one here.
+    out.setdefault("run_windows", [])
     return out
 
 

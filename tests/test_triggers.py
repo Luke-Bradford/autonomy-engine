@@ -120,6 +120,90 @@ class ValidateTriggerTest(unittest.TestCase):
         self.assertEqual(triggers.validate_trigger(_trig(lane="qa"), "coder-a"), [])
         self.assertTrue(triggers.validate_trigger(_trig(lane="a b"), "coder-a"))
 
+    def test_run_windows_valid_shapes_pass(self):
+        self.assertEqual(triggers.validate_trigger(
+            _trig(run_windows=[{"start": "22:00", "end": "06:00"}]),
+            "coder-a"), [])
+        self.assertEqual(triggers.validate_trigger(
+            _trig(run_windows=[{"start": "09:00", "end": "17:00",
+                                "days": ["mon", "fri"]}]), "coder-a"), [])
+
+    def test_run_windows_refusals(self):
+        cases = [
+            {},                                    # not a list
+            "22:00-06:00",                         # not a list
+            [],                                    # empty list refused
+            [{"start": "22:00", "end": "06:00"}] * 17,   # > MAX_RUN_WINDOWS
+            [{"start": "22:00"}],                  # end missing
+            [{"start": "2200", "end": "06:00"}],   # bad HH:MM
+            [{"start": "24:00", "end": "06:00"}],  # hour 24
+            [{"start": "22:60", "end": "06:00"}],  # minute 60
+            [{"start": "22:00", "end": "22:00"}],  # zero-length
+            [{"start": "22:00", "end": "06:00", "days": []}],     # empty days
+            [{"start": "22:00", "end": "06:00", "days": ["Mon"]}],  # case-exact
+            [{"start": "22:00", "end": "06:00", "tz": "UTC"}],    # unknown key
+        ]
+        for windows in cases:
+            errs = triggers.validate_trigger(
+                _trig(run_windows=windows), "coder-a")
+            self.assertTrue(errs, repr(windows))
+
+
+class RunWindowMembershipTest(unittest.TestCase):
+    # Fixed UTC instants (never the live clock -- prevention-log #9 spirit).
+    # 2026-07-08 is a WEDNESDAY; values verified empirically:
+    # python3 -c "import datetime; print(int(datetime.datetime(2026,7,8,23,0,
+    #   tzinfo=datetime.timezone.utc).timestamp()))"
+    WED_2300 = 1783551600   # Wed 2026-07-08 23:00:00 UTC
+    THU_0300 = 1783566000   # Thu 2026-07-09 03:00:00 UTC
+    THU_0700 = 1783580400   # Thu 2026-07-09 07:00:00 UTC
+
+    def _t(self, windows):
+        return {"run_windows": windows}
+
+    def test_absent_or_empty_means_always(self):
+        self.assertTrue(triggers.in_run_window({}, self.WED_2300))
+        self.assertTrue(triggers.in_run_window(self._t([]), self.WED_2300))
+
+    def test_same_day_window(self):
+        w = [{"start": "09:00", "end": "17:00"}]
+        self.assertFalse(triggers.in_run_window(self._t(w), self.WED_2300))
+
+    def test_wrap_past_midnight(self):
+        w = [{"start": "22:00", "end": "06:00"}]
+        self.assertTrue(triggers.in_run_window(self._t(w), self.WED_2300))
+        self.assertTrue(triggers.in_run_window(self._t(w), self.THU_0300))
+        self.assertFalse(triggers.in_run_window(self._t(w), self.THU_0700))
+
+    def test_wrap_days_name_the_start_day(self):
+        # window belongs to WED; Thursday 03:00 is inside WED's wrapped tail.
+        w = [{"start": "22:00", "end": "06:00", "days": ["wed"]}]
+        self.assertTrue(triggers.in_run_window(self._t(w), self.THU_0300))
+        # a THU-only window has not started by Thursday 03:00.
+        w2 = [{"start": "22:00", "end": "06:00", "days": ["thu"]}]
+        self.assertFalse(triggers.in_run_window(self._t(w2), self.THU_0300))
+
+    def test_start_inclusive_end_exclusive(self):
+        w = [{"start": "23:00", "end": "23:30"}]
+        self.assertTrue(triggers.in_run_window(self._t(w), self.WED_2300))
+        w2 = [{"start": "22:00", "end": "23:00"}]
+        self.assertFalse(triggers.in_run_window(self._t(w2), self.WED_2300))
+
+    def test_junk_window_contributes_no_open_time(self):
+        # defense-in-depth (prevention-log #12/#18, CP1 finding 2): junk
+        # on an already-loaded dict opens NOTHING (fail-safe = closed).
+        for junk in ([{"start": "junk", "end": "06:00"}],   # bad HH:MM
+                     "22:00-06:00",                          # non-list key
+                     [{"start": "00:00", "end": "23:59",
+                       "days": "wed"}],                      # non-list days
+                     [{"start": "00:00", "end": "23:59",
+                       "days": []}],                         # empty days
+                     [{"start": "00:00", "end": "23:59",
+                       "days": ["wed", 3]}]):                # junk member
+            self.assertFalse(
+                triggers.in_run_window(self._t(junk), self.WED_2300),
+                repr(junk))
+
 
 class EffectiveTriggerPathTest(unittest.TestCase):
     def setUp(self):
