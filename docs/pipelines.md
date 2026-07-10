@@ -91,11 +91,13 @@ A pipeline may declare a typed interface:
   `repo`, `agent`, `model`, `account`, `secret`. Declarations are
   validated — a bad type, a duplicate name, an enum without choices, or a
   default that does not match its declared type all refuse the document.
-- **Values come from whatever invokes the pipeline.** The pipeline's saved
-  default is the base; the invoker's override wins. A required parameter
-  with neither refuses the run. A `secret` parameter resolves its value
-  through the credential store at resolution time — the raw value never
-  appears in a document or on a command line.
+- **Values come from whatever invokes the pipeline** — a trigger or a
+  calling pipeline, the same slot. The pipeline's saved default is the
+  base; the invoker's override wins. A required parameter with neither
+  refuses the run. A `secret` parameter's value is a credential **label**
+  (a name in the credential store, not the secret itself); the real value
+  resolves only at dispatch, into the session's environment — see
+  **Secrets** below.
 - **References:** `${params.x}` reads a parameter,
   `${nodes.<id>.output.<name>}` reads a completed upstream activity's
   named output, `${run.<field>}` reads run metadata. A field that is
@@ -125,32 +127,99 @@ each session. Two places never substitute: `brief_ref` and
 the flow, so a `${…}` there refuses. A resolved value is re-checked
 against the concrete rules for its field (a parameter that resolves to
 an invalid model name refuses that dispatch rather than running with
-it). Parameter values that supply them come from **triggers** (below);
-calling one pipeline from another is coming with the pipeline-call
-activity.
+it).
 
-One deliberate hole: a `secret`-typed parameter currently has **no
-delivery channel**. A reference to one refuses the document, and a
-trigger value or saved default that would resolve one refuses the run —
-the engine has no sink today that does not land in a file or on a
-command line. The environment-variable channel is coming with the
-pipeline-call phase; until then secrets are declared-only.
+**Which activity outputs may a field reference?** Anything strictly
+upstream — including the nodes inside an upstream container — plus
+**earlier siblings in the same container** (container children run in
+order). Later siblings and downstream activities stay refused: their
+outputs cannot exist yet. There is one sanctioned way to read a value
+"from the future": a node that a **back-edge** re-runs may read the
+back-edge source's outputs, but only as the first argument of
+`default(…)` — on the first visit the output does not exist and the
+fallback compiles; after a bounce the real value does. This is the
+findings-return pattern:
+
+```json
+"nodes": [
+  {"id": "pick", "type": "pick", "brief_ref": "pick.md"},
+  {"id": "code", "type": "agent_task", "brief_ref": "code.md"},
+  {"id": "qa", "type": "call_pipeline", "pipeline": "qa-sweep",
+   "params": {"target": "${nodes.code.output.branch}"}}
+],
+"containers": [{"id": "st", "kind": "stage", "children": ["code"]}],
+"edges": [
+  {"from": "pick", "to": "st", "on": "success"},
+  {"from": "st", "to": "qa", "on": "success"},
+  {"from": "qa", "to": "st", "on": "failure", "back": true, "max_bounces": 3}
+]
+```
+
+with `code.md` containing
+`${default(nodes.qa.output.findings, 'first pass -- no findings yet')}`:
+each bounce recompiles the coding brief with the QA child's actual
+findings. Only a genuinely missing node output maps to the fallback; a
+typo'd parameter inside `default(…)` still refuses.
 
 ## Activities
 
 Supported today: `pick`, `agent_task`, `plan`, `gather`, `check`,
 `subagent_review`, `summarize`, `notify`, `transform`, `triage`,
-`journal`, `housekeep`, `git_ops`. Each type has a **spec sheet**
-(required fields, optional fields, what it emits) defined in one place in
-the code (`lib/pipeline.py`, `SPEC_SHEETS`) — the validator, the canvas
-palette, and the property pane all read the same table, so they cannot
-disagree.
+`journal`, `housekeep`, `git_ops`, `call_pipeline`. Each type has a
+**spec sheet** (required fields, optional fields, what it emits) defined
+in one place in the code (`lib/pipeline.py`, `SPEC_SHEETS`) — the
+validator, the canvas palette, and the property pane all read the same
+table, so they cannot disagree.
 
 Declared but **not yet executable** (the validator refuses them, and the
 canvas shows them disabled rather than pretending): `wait_watch`,
 `ask_human`, `handoff`, `run_command`, plus `branch` and `for_each`
 containers. Merging is never an agent free-for-all in any pipeline:
 `git_ops` merge operations always go through the engine's merge gate.
+
+## Calling another pipeline
+
+A `call_pipeline` activity runs another pipeline as a real **child run**:
+
+```json
+{"id": "qa", "type": "call_pipeline", "pipeline": "qa-sweep",
+ "params": {"target": "${nodes.code.output.branch}"}, "wait": true}
+```
+
+- The child is resolved and parameterised exactly like a trigger-started
+  run: its saved defaults are the base, the caller's `params` are the
+  overrides (values may use `${…}` against the parent's context). It
+  executes in the parent's repo and lane, gets its own journal line
+  (linked by `parent_run`), and advances tick by tick alongside the
+  parent — the parent does not block the loop while waiting.
+- **`wait: true`** (the default): the call activity stays open until the
+  child finishes. The child's outcome drives the parent's edges (child
+  failure fires the parent's `on: failure` path), and the child's
+  declared **outputs** become the call activity's outputs —
+  `${nodes.qa.output.findings}` downstream reads them. A **failed**
+  child's outputs still return: a QA child that found problems is
+  exactly the child whose findings the failure path needs.
+- **`wait: false`**: fire-and-forget. The call records success
+  immediately and the detached child reports independently; referencing
+  a detached call's outputs anywhere refuses the document (they never
+  return).
+- A call node carries no brief and no `runs_as` — the child's own
+  document declares who runs it (the caller may override any of that
+  through `params`).
+- **The run cap counts dispatches.** Starting a child spends one unit of
+  the parent's `max_sessions_per_run` immediately, exactly like an agent
+  session — so a back-edge that keeps re-calling a child is bounded by
+  the same cap as everything else.
+- Guard rails: call depth is capped at 3; a pipeline that (transitively)
+  calls itself refuses; a missing or invalid child pipeline fails the
+  call activity with a named reason — the failure edge handles it, the
+  run never crashes.
+- One edge case to know: a `call_pipeline` as the **last child of a loop
+  container** exits the loop when the child succeeds (a child run has no
+  verdict channel; loop-exit verdicts come from agent sessions).
+
+While a run is only waiting on children, the supervisor logs it as
+waiting and spends no session on it.
 
 ## Triggers
 
@@ -182,12 +251,29 @@ fires and how overlapping runs behave:
 - **`firing.mode`** is `continuous` (fires every loop tick while work
   and capacity exist), `schedule` (5-field cron in `firing.schedule`;
   missed fires while the machine was off are skipped with a warning,
-  never replayed as a storm), or `manual` (fires when the operator drops
+  never replayed as a storm), `manual` (fires when the operator drops
   a file named after the trigger into `var/trigger-ctl/fire/`; the
   marker is consumed on start, kept when the trigger is at capacity or
-  disabled). `event` mode is coming with the event-trigger phase — a
-  trigger declaring it refuses rather than being accepted and ignored,
-  and in the meantime event-triggered work stays on the `roles:` config.
+  disabled), or `event` (below).
+- **`firing.mode: event`** fires on repository events. `firing.event`
+  names one of the four kinds the engine polls — `pr.opened`,
+  `issue.created`, `merge.done`, `pr.synchronize` — and an optional
+  `firing.map` feeds the event payload into the pipeline's parameters:
+
+  ```json
+  "firing": {"mode": "event", "event": "pr.opened",
+             "map": {"pr_number": "item"}}
+  ```
+
+  Mappable fields: `item` (the PR/issue number), `sha` (the new head —
+  `pr.synchronize` only), `event` (the kind itself). A mapped parameter
+  may not also be set in `params` (one source per value), and may never
+  be `secret`-typed (an event payload is not a credential). Each NEW
+  event token starts one fresh run of the pipeline, which then advances
+  through the normal loop — so the run's first session lands on the
+  following tick, not instantly. Tokens the trigger had no capacity for
+  are redelivered next tick; `concurrency: queue` is refused for event
+  mode (redelivery already is the queue).
 - **`concurrency.policy`** governs overlapping runs of this one trigger:
   `skip` (default, max 1 — an in-flight run advances, a new fire is
   skipped), `queue` (max 1, depth 1 — one scheduled fire waits for the
@@ -210,19 +296,56 @@ fires and how overlapping runs behave:
   fallback to the committed file).
 
 **Existing `roles:` configs keep working unchanged.** On every tick the
-engine synthesises a trigger per enabled loop role (continuous) and cron
-role (schedule) — same name, same one-run-at-a-time semantics, settings
-resolved through the role exactly as before. A trigger FILE with a
-role's name replaces that role's automatic trigger; a broken trigger
-file refuses and its role stays replaced (a broken replacement never
-silently resurrects what it replaced). The dashboard still displays the
-role view; triggers get their own surface in a later phase.
+engine synthesises a trigger per enabled loop role (continuous), cron
+role (schedule), and event role (event — same wake behaviour as before,
+including the `session.done` internal edge, which native event triggers
+do not have: it is a loop-internal signal, not a subscribable event). A
+trigger FILE with a role's name replaces that role's automatic trigger;
+a broken trigger file refuses and its role stays replaced (a broken
+replacement never silently resurrects what it replaced). The dashboard
+still displays the role view; triggers get their own surface in a later
+phase.
+
+## Secrets
+
+A `secret`-typed parameter carries a credential **label** — the name of
+an entry in the engine's credential store (the macOS Keychain), never
+the secret itself. Labels are ordinary non-secret strings: they may sit
+in a trigger file, a saved default, or a run's recorded parameters.
+
+The value has exactly one delivery channel: an activity's `secrets:`
+map, which requests it as an environment variable for that activity's
+sessions —
+
+```json
+{"id": "deploy", "type": "agent_task", "brief_ref": "deploy.md",
+ "secrets": {"DEPLOY_TOKEN": "${params.deploy_key}"}}
+```
+
+- The value must be **exactly** `${params.<name>}` of a declared
+  `secret` parameter — a secret never mixes into a string or function.
+- The variable name is upper-case and may not shadow engine or auth
+  variables (`PATH`, `HOME`, `ANTHROPIC_*`, … — refused at validation).
+- Everywhere else, `${params.<secret>}` refuses the document: briefs,
+  `runs_as`, call params — none of them may carry a secret.
+- At dispatch the engine resolves each label to its value in the
+  credential store and exports it **only into that session's
+  environment**. An unresolvable label refuses the session (never runs
+  without a declared secret, never runs with an empty one). The value
+  never appears in state files, the journal, compiled briefs, or the
+  engine's own logs.
+- After each session the engine scrubs any occurrence of the value from
+  the session log. **Known residual:** if the agent echoes the secret,
+  it is visible in the live log until that post-session scrub — the same
+  residual as any environment-provided credential. Prefer scoped,
+  revocable credentials.
 
 ## How a run executes
 
-1. **Trigger fires** (loop iteration, cron, manual marker) → the engine
-   resolves the trigger's pipeline, resolves its parameters, and starts
-   a run: a state file records every unit as `pending`.
+1. **Trigger fires** (loop iteration, cron, event token, manual marker)
+   → the engine resolves the trigger's pipeline, resolves its
+   parameters, and starts a run: a state file records every unit as
+   `pending`.
 2. **Ready set** → units whose incoming edges are satisfied. The engine
    dispatches up to `max_parallel` of them, one agent session each. Each
    session receives a **compiled brief**: the activity's brief plus the

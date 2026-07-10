@@ -42,7 +42,8 @@ Binding: `roles.<r>.pipeline: <name>`; unbound roles auto-wrap
 - Typed `params`/`outputs` + the `${…}` resolver are LIVE in dispatch
   (Phase B, #374): `check_refs` validates every `${…}` statically inside
   `validate_doc` (declared params only, secret refs refused, node-output
-  refs upstream-only, closed run fields, static function arity;
+  refs upstream / earlier-sibling / soft-via-`default()` per Phase C,
+  closed run fields, static function arity;
   `brief_ref`/`legacy_prompt` stay ref-free — they are paths), and
   `_prepare_step` substitutes node fields + composed brief text at
   prepare time with a POST-substitution concrete re-check that REFUSES
@@ -51,27 +52,70 @@ Binding: `roles.<r>.pipeline: <name>`; unbound roles auto-wrap
   file) feed `${nodes.<id>.output.*}`; a brief whose node has a
   downstream consumer gains a `pipeline:outputs` footer.
 
-## Triggers (`lib/triggers.py`, Phase B #374)
+## Triggers (`lib/triggers.py`, Phase B #374 + Phase C #376)
 
 The supervisor enumerates TRIGGERS, not roles: native
 `.autonomy/triggers/<name>.json` files (schema in `validate_trigger`;
 SD-34 var-shadow via `effective_trigger_path` — file asset, symlinked
 shadow ignored, invalid shadow refuses) + `shim_triggers` synthesised
-from `roles:` (loop→continuous, cron→schedule; EVENT roles are NOT
-shimmed — the event bus fires them through the legacy role path until
-event triggers land). A native file supersedes its same-name shim; a
-BROKEN native file refuses AND keeps the shim suppressed (never fall
-back to role dispatch); a native name colliding with an enabled event
-role refuses (double-dispatch). CLI: `dispatch/cron/show/validate`.
+from `roles:` (loop→continuous, cron→schedule, event→event with
+`events_csv`, a shim-internal field). A native file supersedes its
+same-name shim; a BROKEN native file refuses AND keeps the shim
+suppressed (never fall back to role dispatch). CLI:
+`dispatch/cron/event/manual/show/validate`. Firing modes:
+continuous/schedule/manual/event — event carries `firing.event` (closed
+vocabulary `pr.opened/issue.created/merge.done/pr.synchronize`;
+`session.done` is shim-internal) + `firing.map {param: item|sha|event}`
+(sha = pr.synchronize only; map∩params refused; secret targets refused
+at start). `resolve_trigger_event_wakes` is the ONE event resolver: shim
+lane = the legacy `_event_role_wakes` body VERBATIM (same seen files);
+native lane = START-ONLY, one run per new token via `pipeline.py start
+--kind native --event-field` (never `run_session` — SD-12 exact; seen
+advances per STARTED token, prunes to the poll page; at-capacity/failed
+starts redeliver). `resolve_event_wakes`/`_event_enumerate` are
+LEGACY-marked, uncalled by the loop (deletion = Phase E).
 Supervisor side: dispatch tokens `name[@slot]` (slot 0 = legacy
-filename), `inflight_tokens` (strip `@slot` FIRST, then `--lane`),
-`run_session <token> <kind>` (`shim` = the role path byte-identical;
-`native` = no role settings, runs_as from the doc), per-trigger markers
-under `var/trigger-ctl/{fire,queued,stop,backoff}/`, enumeration
-failure = idle tick (SD-12's coder fallback RETIRED). State gains
-`trigger`/`kind`/`params`/`run`; journal gains additive `trigger`
-(ledger still keys on `role`; shim trigger name == role name BYTE-EQUAL
-until the trust re-key phase).
+filename), `inflight_tokens` (strip `@slot` FIRST, then `--lane`;
+RESERVED sidecar suffixes `.outputs/.verdict/.outcome` are skipped —
+they share the state-file glob — and the mint sites refuse names ending
+in them), `run_session <token> <kind>` (`shim` = the role path
+byte-identical; `native` = no role settings, runs_as from the doc),
+per-trigger markers under `var/trigger-ctl/{fire,queued,stop,backoff}/`,
+enumeration failure = idle tick (SD-12's coder fallback RETIRED). State
+gains `trigger`/`kind`/`params`/`run`; journal gains additive `trigger`
+and `parent_run` (ledger still keys on `role`; shim trigger name == role
+name BYTE-EQUAL until the trust re-key phase).
+
+## Child runs + secrets (Phase C #376, SD-40)
+
+`call_pipeline` spawns a CHILD run: an ordinary run whose state file
+`.pipeline-run-<parent>.c<slot>.<node>[--lane].json` joins
+`inflight_tokens`, so the main loop advances it with zero new dispatch
+machinery. Parent↔child signalling = ONE sidecar
+(`<child-base>.outcome.json` `{run_id, outcome, outputs}`, written in
+`_finish` BEFORE the journal); the parent's ready sweep
+(`_sweep_call_units`) consumes it, records the call unit through the
+same via/back-edge/skip rails, and republishes the outputs as the call
+node's OWN outputs sidecar (`${nodes.<call>.output.*}` rides the Phase B
+machinery unchanged). The session cap RESERVES a unit at call START
+(`_start_call_unit`); child liveness is EARNED
+(`status == in_progress`); vanished child = restart, done-marked child
+without a sidecar = failure (never an eternal wait). `ready` prints
+`WAITING` when only children are outstanding → supervisor `PIPE_WAIT`
+paced no-op (not the error arm). `MAX_CALL_DEPTH = 3`; `call_path`
+refuses cycles; `_check_call_name_headroom` refuses over-long names at
+run start. Findings-return: back-edge-visible outputs are legal ONLY as
+`default()`'s first argument (`MissingNodeOutput` is the one tolerated
+error class); earlier same-container siblings + upstream-container
+children are statically referenceable.
+Secrets: a secret param's value is a credential LABEL (SD-8); the ONLY
+sink is a node's `secrets: {ENV_VAR: ${params.<name>}}` map (exact-ref
+rule, env-var denylist); `_prepare_step` emits `NODE_SECRET=VAR=label`
+lines; the supervisor resolves label→value FOREGROUND
+(`resolve_node_secret_env`, refuse-on-failure, newline values refused),
+exports subshell-scoped, and `redact_session_log` scrubs values (fed via
+STDIN) after classify. Secret-typed params are STRIPPED from the
+substitution context; `${params.<secret>}` anywhere else refuses.
 
 ## The walk (fmt-2 state machine)
 
