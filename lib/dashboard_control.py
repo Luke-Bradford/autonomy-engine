@@ -19,6 +19,9 @@ import os
 import plistlib
 import re
 
+import pipeline as _pipeline    # reserved sidecar suffixes (review NITPICK:
+import triggers as _triggers    # module scope, not per-call -- #385 round 1)
+
 VALID_ACTIONS = ("pause", "resume", "stop", "start")
 
 # #24 live model/effort control. Model ids are a strict token (defense in
@@ -341,6 +344,44 @@ def find_lane_service(repo, lane, launch_agents_dir, default_lane=None):
         return {"error": "plist Label does not match its filename for lane "
                          "'%s' -- refusing (stale plist?)" % lane}
     return {"label": label, "plist": plist, "repo": args["repo"]}
+
+
+TRIGGER_CTL_ACTIONS = ("trigger_fire", "trigger_stop", "trigger_resume")
+
+
+def trigger_ctl_plan(marker_repo, action, name, lane_suffix=""):
+    """Pure plan for a per-trigger marker write (Phase D1, #383).
+    marker_repo = the VERIFIED consuming supervisor's repo (the caller
+    resolves lanes via find_lane_service, execute_control-style);
+    lane_suffix = "" for that repo's default-lane supervisor, else the
+    lane name. Path mechanics ONLY: mode/fire-readiness/lane-routing
+    validation happens in the caller. Charset gates BOTH name and lane
+    (prevention-log #6, via triggers.marker_basename -- the one
+    supervisor-parity rule) and refuses reserved sidecar suffixes
+    (defense in depth: validate_trigger already refuses them at mint).
+    Never touches the filesystem. fire/stop markers are EMPTY files;
+    queued/ and backoff/ are supervisor-owned and never planned here."""
+    if action not in TRIGGER_CTL_ACTIONS:
+        return {"error": "unknown trigger action"}
+    try:
+        base = _triggers.marker_basename(name, lane_suffix or "")
+    except Exception as exc:
+        return {"error": str(exc)}
+    if "." in base and base.rsplit(".", 1)[-1] in \
+            _pipeline._RESERVED_SIDECAR_SUFFIXES:
+        return {"error": "trigger name ends in a reserved sidecar suffix"}
+    sub = "fire" if action == "trigger_fire" else "stop"
+    path = os.path.join(marker_repo, "var", "trigger-ctl", sub, base)
+    if action == "trigger_resume":
+        return {"remove": path,
+                "message": "stop marker removed — %s resumes" % base}
+    if action == "trigger_fire":
+        return {"touch": path,
+                "message": "run-now marker set for %s — the supervisor "
+                           "fires it on its next tick" % base}
+    return {"touch": path,
+            "message": "stop marker set — %s is frozen (no new fires, no "
+                       "advance) until resumed" % base}
 
 
 def control_plan(repo, action, service, uid):

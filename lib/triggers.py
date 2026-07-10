@@ -445,12 +445,41 @@ def enumerate_triggers(repo, lane=None, dispatchable_only=True):
             warnings)
 
 
-def trust_rollup(repo, journal_path):
+def marker_basename(name, lane_suffix):
+    """The ONE python twin of _trigger_ctl_path's basename rule
+    (bin/supervisor.sh): <name> bare for the default-lane supervisor
+    (AUTONOMY_LANE=""), <name>--<lane> under a lane supervisor. Charset
+    gates BOTH parts (prevention-log #6 -- these become filenames); raises
+    PipelineError so a caller can never path-join an ungated string.
+    Phase D1: dashboard_state (marker reads) + dashboard_control (marker
+    writes) both consume this -- one source, no drift."""
+    if not (isinstance(name, str) and pipeline._NAME_RE.match(name)):
+        raise PipelineError("trigger name %r has invalid charset" % (name,))
+    if not lane_suffix:
+        return name
+    if not (isinstance(lane_suffix, str)
+            and pipeline._NAME_RE.match(lane_suffix)):
+        raise PipelineError("lane %r has invalid charset" % (lane_suffix,))
+    return "%s--%s" % (name, lane_suffix)
+
+
+def trust_rollup(repo, journal_path, trigs=None):
     """Per-trigger trust rows + per-pipeline rollup (design spec §6).
     The rollup is a fail-safe floor: a pipeline reads `auto` only when
     EVERY contributing trigger's tier is `auto` (prevention-log #18 --
-    the reassuring verdict is earned, never the default)."""
-    trigs, warnings = enumerate_triggers(repo, dispatchable_only=False)
+    the reassuring verdict is earned, never the default).
+
+    trigs (Phase D1): an already-loaded (triggers, warnings) tuple from
+    enumerate_triggers(repo, dispatchable_only=False), so the dashboard
+    builder enumerates ONCE per payload. Anything that isn't that exact
+    shape is ignored and re-enumerated (total reader -- a junk preload
+    must never change the verdict). Default None = the CLI path,
+    behaviour byte-identical."""
+    if (isinstance(trigs, tuple) and len(trigs) == 2
+            and isinstance(trigs[0], list) and isinstance(trigs[1], list)):
+        trigs, warnings = trigs
+    else:
+        trigs, warnings = enumerate_triggers(repo, dispatchable_only=False)
     rows, by_pipeline = [], {}
     for t in trigs:
         pname = t.get("pipeline") or t["name"]  # wrapped role: doc name == role name

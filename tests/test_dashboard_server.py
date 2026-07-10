@@ -1755,3 +1755,234 @@ class TestPipelineSaveRoute(unittest.TestCase):
         bad = self._post({"action": "config_set", "repo": self.repo,
                           "key": "k", "value": big})
         self.assertEqual(bad["code"], 400)               # oversize rejected
+
+
+class TestTriggerRoutes(unittest.TestCase):
+    """Phase D1 (#383): GET /api/triggers + /api/pipeline name=/token= +
+    the trigger_fire/trigger_stop/trigger_resume control actions.
+    Marker writes must land where the CONSUMING supervisor reads them
+    (lane routing mirrors execute_control's find_lane_service precedent)."""
+
+    HOST = "127.0.0.1:0"
+    FIXTURE = os.path.join(HERE, "fixtures", "repo-alpha")
+
+    def setUp(self):
+        import shutil
+        self._orig_repos = dashboard.Handler.repos
+        self._orig_hosts = getattr(dashboard.Handler, "allowed_hosts", set())
+        dashboard.Handler.allowed_hosts = {self.HOST}
+        self._td = tempfile.TemporaryDirectory()
+        self.repo = os.path.abspath(os.path.join(self._td.name, "repo-alpha"))
+        shutil.copytree(self.FIXTURE, self.repo)
+        dashboard.Handler.repos = [self.repo]
+
+    def tearDown(self):
+        dashboard.Handler.repos = self._orig_repos
+        dashboard.Handler.allowed_hosts = self._orig_hosts
+        self._td.cleanup()
+
+    def _get(self, path):
+        h = dashboard.Handler.__new__(dashboard.Handler)
+        h.path = path
+        captured = {}
+        h._send = lambda code, body, ctype="application/json": captured.update(
+            code=code, body=body, ctype=ctype)
+        h.do_GET()
+        return captured
+
+    def _post(self, body, token="__REAL__"):
+        import io
+        h = dashboard.Handler.__new__(dashboard.Handler)
+        h.path = "/api/control"
+        body = dict(body)
+        if token == "__REAL__":
+            body["token"] = dashboard._CONTROL_TOKEN
+        elif token is not None:
+            body["token"] = token
+        raw = json.dumps(body).encode("utf-8")
+        h.headers = {"Host": self.HOST, "Content-Length": str(len(raw))}
+        h.rfile = io.BytesIO(raw)
+        h.close_connection = False
+        captured = {}
+        h._send = lambda code, b=b"", ctype="application/json": captured.update(
+            code=code, body=b, ctype=ctype)
+        h.do_POST()
+        return captured
+
+    def _payload(self, got):
+        return json.loads(got["body"].decode("utf-8"))
+
+    # ---- reads -------------------------------------------------------
+
+    def test_api_triggers_happy(self):
+        import urllib.parse
+        got = self._get("/api/triggers?repo=%s"
+                        % urllib.parse.quote(self.repo, safe=""))
+        self.assertEqual(got["code"], 200)
+        p = self._payload(got)
+        self.assertEqual(sorted(t["name"] for t in p["triggers"]),
+                         ["adhoc-digest", "coder", "pr-sweep"])
+        self.assertEqual(p["rollup"], {"fixture-flow": "watch"})
+
+    def test_api_triggers_unmanaged_400(self):
+        got = self._get("/api/triggers?repo=/definitely/not/managed")
+        self.assertEqual(got["code"], 400)
+
+    def test_api_pipeline_by_name_and_token(self):
+        import urllib.parse
+        q = urllib.parse.quote(self.repo, safe="")
+        byname = self._payload(self._get(
+            "/api/pipeline?repo=%s&name=fixture-flow" % q))
+        self.assertEqual(byname["source"]["kind"], "pipeline")
+        self.assertNotIn("error", byname)
+        bytok = self._payload(self._get(
+            "/api/pipeline?repo=%s&token=adhoc-digest.c0.qa" % q))
+        self.assertEqual(bytok["source"]["kind"], "run")
+        self.assertEqual(bytok["run"]["parent_token"], "adhoc-digest")
+        both = self._payload(self._get(
+            "/api/pipeline?repo=%s&role=coder&name=fixture-flow" % q))
+        self.assertIn("error", both)
+
+    # ---- lifecycle writes --------------------------------------------
+
+    def _marker(self, sub, base, repo=None):
+        return os.path.join(repo or self.repo, "var", "trigger-ctl",
+                            sub, base)
+
+    def test_fire_manual_trigger_creates_marker(self):
+        r = self._post({"action": "trigger_fire", "repo": self.repo,
+                        "name": "adhoc-digest"})
+        self.assertEqual(r["code"], 200)
+        self.assertTrue(os.path.isfile(self._marker("fire", "adhoc-digest")))
+        # empty file -- byte-parity with the hand-touched marker the
+        # supervisor consumes today
+        self.assertEqual(os.path.getsize(
+            self._marker("fire", "adhoc-digest")), 0)
+
+    def test_fire_non_manual_refused(self):
+        for name in ("coder", "pr-sweep"):
+            r = self._post({"action": "trigger_fire", "repo": self.repo,
+                            "name": name})
+            self.assertEqual(r["code"], 409)
+            self.assertIn("manual", self._payload(r)["error"])
+            self.assertFalse(os.path.exists(self._marker("fire", name)))
+
+    def test_stop_resume_roundtrip(self):
+        r = self._post({"action": "trigger_stop", "repo": self.repo,
+                        "name": "coder"})
+        self.assertEqual(r["code"], 200)
+        self.assertTrue(os.path.isfile(self._marker("stop", "coder")))
+        r = self._post({"action": "trigger_resume", "repo": self.repo,
+                        "name": "coder"})
+        self.assertEqual(r["code"], 200)
+        self.assertFalse(os.path.exists(self._marker("stop", "coder")))
+        # resume is idempotent
+        r = self._post({"action": "trigger_resume", "repo": self.repo,
+                        "name": "coder"})
+        self.assertEqual(r["code"], 200)
+
+    def test_unknown_trigger_refused(self):
+        r = self._post({"action": "trigger_stop", "repo": self.repo,
+                        "name": "ghost"})
+        self.assertEqual(r["code"], 409)
+        self.assertIn("unknown trigger", self._payload(r)["error"])
+
+    def test_undeclared_lane_trigger_refused(self):
+        with open(os.path.join(self.repo, ".autonomy", "triggers",
+                               "offlane.json"), "w") as fh:
+            json.dump({"name": "offlane", "pipeline": "fixture-flow",
+                       "firing": {"mode": "manual"}, "lane": "ghost"}, fh)
+        r = self._post({"action": "trigger_stop", "repo": self.repo,
+                        "name": "offlane"})
+        self.assertEqual(r["code"], 409)
+        self.assertIn("undeclared lane", self._payload(r)["error"])
+        self.assertFalse(os.path.exists(self._marker("stop", "offlane")))
+        self.assertFalse(os.path.exists(
+            self._marker("stop", "offlane--ghost")))
+
+    def test_bad_token_403_before_any_write(self):
+        r = self._post({"action": "trigger_stop", "repo": self.repo,
+                        "name": "coder"}, token="wrong")
+        self.assertEqual(r["code"], 403)
+        self.assertFalse(os.path.exists(self._marker("stop", "coder")))
+
+    # ---- lane routing (CP1: the wrong-repo write is the bug this
+    # suite must catch) ------------------------------------------------
+
+    def _add_lane_trigger(self):
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "a") as fh:
+            fh.write("lanes:\n  main:\n    worktree: ../x-main\n"
+                     "  qa:\n    worktree: ../x-qa\n")
+        with open(os.path.join(self.repo, ".autonomy", "triggers",
+                               "qa-sweep.json"), "w") as fh:
+            json.dump({"name": "qa-sweep", "pipeline": "fixture-flow",
+                       "firing": {"mode": "manual"}, "lane": "qa"}, fh)
+
+    def test_lane_service_worktree_receives_the_marker(self):
+        self._add_lane_trigger()
+        worktree = os.path.join(self._td.name, "qa-worktree")
+        os.makedirs(worktree)
+        real = dashboard.dcx.find_lane_service
+        dashboard.dcx.find_lane_service = lambda *a, **k: {
+            "label": "com.autonomy.x.qa.supervisor", "plist": "/la/x.plist",
+            "repo": worktree}
+        try:
+            r = self._post({"action": "trigger_stop", "repo": self.repo,
+                            "name": "qa-sweep"})
+        finally:
+            dashboard.dcx.find_lane_service = real
+        self.assertEqual(r["code"], 200)
+        self.assertTrue(os.path.isfile(
+            self._marker("stop", "qa-sweep--qa", repo=worktree)))
+        self.assertFalse(os.path.exists(
+            self._marker("stop", "qa-sweep--qa")))     # NOT the registered repo
+
+    def test_own_service_running_lane_keeps_marker_here_with_suffix(self):
+        self._add_lane_trigger()
+        real = dashboard.dcx.find_lane_service
+        dashboard.dcx.find_lane_service = lambda *a, **k: None
+        try:
+            r = self._post({"action": "trigger_stop", "repo": self.repo,
+                            "name": "qa-sweep"})
+        finally:
+            dashboard.dcx.find_lane_service = real
+        self.assertEqual(r["code"], 200)
+        self.assertTrue(os.path.isfile(
+            self._marker("stop", "qa-sweep--qa")))
+
+    def test_shadow_config_lane_removal_refuses(self):
+        # Codex CP2 (D1): lane authority reads the SD-34 EFFECTIVE config.
+        # Committed config still declares lane qa, but the var-live shadow
+        # (what the supervisor actually runs) has dropped the lanes block --
+        # the trigger's qa lane is now undeclared, so the marker refuses.
+        self._add_lane_trigger()
+        shadow_dir = os.path.join(self.repo, "var", "autonomy")
+        os.makedirs(shadow_dir, exist_ok=True)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml")) as fh:
+            committed = fh.read()
+        shadow = "".join(l for l in committed.splitlines(True)
+                         if "lanes:" not in l and "worktree:" not in l
+                         and l.strip() not in ("main:", "qa:"))
+        with open(os.path.join(shadow_dir, "config.yaml"), "w") as fh:
+            fh.write(shadow)
+        r = self._post({"action": "trigger_stop", "repo": self.repo,
+                        "name": "qa-sweep"})
+        self.assertEqual(r["code"], 409)
+        self.assertIn("undeclared lane", self._payload(r)["error"])
+        self.assertFalse(os.path.exists(
+            self._marker("stop", "qa-sweep--qa")))
+
+    def test_unresolvable_lane_service_refuses_writes_nothing(self):
+        self._add_lane_trigger()
+        real = dashboard.dcx.find_lane_service
+        dashboard.dcx.find_lane_service = lambda *a, **k: {
+            "error": "no service installed for lane 'qa'"}
+        try:
+            r = self._post({"action": "trigger_stop", "repo": self.repo,
+                            "name": "qa-sweep"})
+        finally:
+            dashboard.dcx.find_lane_service = real
+        self.assertEqual(r["code"], 409)
+        self.assertFalse(os.path.exists(
+            self._marker("stop", "qa-sweep--qa")))

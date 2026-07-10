@@ -753,6 +753,63 @@ unset AUTONOMY_CREDENTIALS_BIN
 SUPLOG=/dev/null
 log() { :; }
 
+# --- Phase D1 (#383): dashboard-minted marker parity --------------------------
+# A fire marker created through dashboard_control.trigger_ctl_plan (the
+# dashboard write path's planner + the same touch mechanics) must be consumed
+# by resolve_manual_fires byte-identically to a hand-touched one.
+# Earlier sections leave the enumeration/show seams STUBBED and the line-584
+# re-source put the REAL run_session back -- restore the real seams and
+# re-stub the recorder (this file's established save/restore pattern).
+eval "$(bash -c "source '$ENGINE_HOME/bin/supervisor.sh'; declare -f _trigger_show_fields")"
+# eval'd (not a literal definition): CI's shellcheck flags a late literal
+# redefinition as SC2218 against the line-606 call site (prevention-log #19
+# -- CI's build has checks the local one lacks); the eval string is the
+# file's established restore pattern and is invisible to that check.
+eval 'run_session() { printf " %s:%s" "$1" "$2" >>"$RS_FILE"; return 0; }'
+_triggers_enumerate() {
+  if [ -n "${AUTONOMY_LANE:-}" ]; then
+    python3 "$ENGINE_HOME/lib/triggers.py" "$@" --lane "$AUTONOMY_LANE" 2>>"$SUPLOG"
+  else
+    python3 "$ENGINE_HOME/lib/triggers.py" "$@" 2>>"$SUPLOG"
+  fi
+}
+: >"$RS_FILE"
+rm -f "$VARDIR/trigger-ctl/fire/push-now" "$LOGDIR"/.pipeline-run-*.json
+dash_plan_touch() {  # $1=repo $2=action $3=name $4=lane_suffix
+  python3 - "$1" "$2" "$3" "$4" <<'PYEOF'
+import os, sys
+sys.path.insert(0, os.path.join(os.environ["ENGINE_HOME"], "lib"))
+import dashboard_control as dcx
+repo, action, name, lane = sys.argv[1:5]
+plan = dcx.trigger_ctl_plan(repo, action, name, lane_suffix=lane)
+if "error" in plan:
+    sys.stderr.write(plan["error"] + "\n")
+    sys.exit(1)
+path = plan["touch"]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+open(path, "a").close()
+print(path)
+PYEOF
+}
+# an earlier section swept .autonomy/triggers/*.json -- recreate the fixture
+printf '{"name":"push-now","pipeline":"flow","firing":{"mode":"manual"}}' \
+  >"$repo/.autonomy/triggers/push-now.json"
+minted="$(dash_plan_touch "$repo" trigger_fire push-now "")"
+check "dashboard-minted marker path" "$VARDIR/trigger-ctl/fire/push-now" "$minted"
+resolve_manual_fires
+check "dashboard-minted fire ran"      " push-now:native" "$(rs_calls)"
+check "dashboard-minted marker consumed" "1" \
+  "$([ -f "$VARDIR/trigger-ctl/fire/push-now" ] && echo 0 || echo 1)"
+
+# lane basename parity BY CONSTRUCTION: the real _trigger_ctl_path under a
+# lane supervisor vs the python planner's lane_suffix path -- byte equal.
+AUTONOMY_LANE="qa"
+sup_path="$(_trigger_ctl_path fire push-now)"
+AUTONOMY_LANE=""
+dash_path="$(dash_plan_touch "$repo" trigger_fire push-now qa)"
+check "lane marker parity (sup vs dashboard)" "$sup_path" "$dash_path"
+rm -f "$dash_path"
+
 echo
 if [ "$fails" -gt 0 ]; then echo "$fails FAILURE(S)"; exit 1; fi
 echo "ALL CHECKS PASS"

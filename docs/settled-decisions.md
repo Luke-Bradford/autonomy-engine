@@ -346,6 +346,33 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     *(specs/2026-07-09-pipeline-trigger-model-design.md §6/§9-E;
     plans/2026-07-10-pipeline-model-phaseE-trust-windows-retire.md; #380.)*
 
+42. **Phase D1 scope: the dashboard's trigger lifecycle is MARKER-ONLY;
+    everything file-shaped waits for D2's `trigger_save`** (2026-07-10, #383
+    decisions comment + D1 build). The dashboard learns triggers as read
+    surfaces (`/api/triggers`, the `/pipeline` tabs, the trigger-listing
+    fleet rail, the rollup chip, REFUSED→needs-you) plus exactly three
+    `/api/control` actions — `trigger_fire` / `trigger_stop` /
+    `trigger_resume` — that write/remove the supervisor's EXISTING
+    lane-scoped `var/trigger-ctl/{fire,stop}/` markers as EMPTY files
+    (byte-parity with the consumer). Scope lines, all veto-able on #383:
+    per-trigger pause is `enabled:false` in the trigger FILE, not a marker
+    — D2; the run-now PARAMS payload channel (decision 3) ships with D2's
+    typed-params form (its supervisor-side consumer does not exist yet;
+    meanwhile run-now is DISABLED with the reason whenever a dry
+    `resolve_params` would refuse — the read and write sides share
+    `trigger_fire_ready`); run-now applies to MANUAL-mode triggers only
+    (the supervisor WARN-removes other modes' fire markers); `queued/` and
+    `backoff/` are supervisor-owned — the dashboard renders them read-only
+    and a resume never clears a backoff. Marker writes route like
+    `execute_control`: default lane → the managed repo, bare basename;
+    non-default lane → `find_lane_service`'s verified worktree (own-service
+    `None` keeps the repo, suffix stays), no/refusing service or an
+    undeclared lane REFUSES — never guess a worktree, never mint a marker
+    no supervisor will consume. `triggers.marker_basename` is the ONE
+    python twin of `_trigger_ctl_path`'s naming rule.
+    *(#383; specs/2026-07-10-pipeline-model-phaseD1-triggers-read.md;
+    plans/2026-07-10-pipeline-model-phaseD1-triggers-read.md.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could

@@ -28,6 +28,7 @@ import dashboard_control as _dcx  # model-id regex + effort set, single-sourced
 import health as health_mod      # wedged truth, single-sourced (SD-32 §9)
 import pipeline as pipeline_mod  # doc loader/validator + SSOT catalog (#357)
 import roles as roles_schema
+import triggers as triggers_mod  # trigger enumeration + trust + marker rule (#383 D1)
 
 _TICKET_RE = re.compile(r"#(\d{1,6})\b")
 # in-session branch creation: `git checkout -b|-B <name>` / `git switch -c|-C <name>`
@@ -2107,7 +2108,8 @@ def attach_quota_forecast(windows, now):
     return out
 
 
-def trigger_health(config, cron_dir, now, grace_secs=300):
+def trigger_health(config, cron_dir, now, grace_secs=300,
+                   schedule_triggers=None):
     """Missed cron-fire detection (#188c) for the control room's trigger-health
     signal -- the 2026-07-03 swept-state incident named the real gap: a
     stalled/backed-off scheduler renders identically to a healthy idle one.
@@ -2150,8 +2152,8 @@ def trigger_health(config, cron_dir, now, grace_secs=300):
         cron = roles_schema.cron_roles(config, None)
     except Exception:
         return []
-    out = []
-    for name, schedule in cron:
+
+    def _row(name, schedule, kind):
         last_fire = None
         try:
             with open(os.path.join(cron_dir, "%s.last_fire" % name)) as fh:
@@ -2169,8 +2171,29 @@ def trigger_health(config, cron_dir, now, grace_secs=300):
                 expected_next = None
             if expected_next is not None and expected_next < now - grace_secs:
                 missed = True
-        out.append({"role": name, "schedule": schedule, "last_fire": last_fire,
-                    "expected_next": expected_next, "missed": missed})
+        return {"role": name, "schedule": schedule, "last_fire": last_fire,
+                "expected_next": expected_next, "missed": missed,
+                "kind": kind}
+    out = [_row(name, schedule, "role") for name, schedule in cron]
+    # Phase D1 (#383, CP1): NATIVE schedule triggers write the same
+    # var/cron/<name>.last_fire markers (supervisor's
+    # resolve_trigger_cron_due) -- a config-cron-roles-only read would miss
+    # a stalled native scheduler. Dedup by name: a native superseding a
+    # same-name cron role reads the same marker, so ONE row (marked native,
+    # the enumeration truth). Junk entries skipped (total reader).
+    if isinstance(schedule_triggers, list):
+        have = dict((r["role"], r) for r in out)
+        for t in schedule_triggers:
+            if not (isinstance(t, dict) and isinstance(t.get("name"), str)
+                    and t.get("name")
+                    and isinstance(t.get("schedule"), str)):
+                continue
+            if t["name"] in have:
+                have[t["name"]]["kind"] = "native"
+                continue
+            row = _row(t["name"], t["schedule"], "native")
+            out.append(row)
+            have[t["name"]] = row
     return out
 
 
@@ -2354,7 +2377,40 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
     quota = recent_quota_windows(logdir)   # scanned once; forecast reuses it
     sessions = recent_sessions(logdir)     # scanned once; ticket_effort reuses it
     roles = build_roles(config.get("roles"), status, now=now, sessions=sessions)
-    health = trigger_health(config, os.path.join(repo_path, "var", "cron"), now)
+    # Phase D1 (#383): the trigger layer -- light rows for the fleet rail +
+    # trust (rollup/refused) for the repo card and needs-you. Guarded: an
+    # unreadable trigger layer becomes trust.error with triggers=[] (the
+    # rail falls back to the role rows -- degrade to truth, badged), never
+    # a crash and never a healthy fallback.
+    trig_view = None
+    try:
+        trig_view = build_triggers_view(repo_path, now=now)
+    except Exception:
+        trig_view = None
+    natives = []
+    if isinstance(trig_view, dict):
+        natives = [{"name": t["name"], "schedule": t.get("schedule")}
+                   for t in trig_view.get("triggers", [])
+                   if t.get("kind") == "native" and t.get("mode") == "schedule"
+                   and isinstance(t.get("schedule"), str)]
+    health = trigger_health(config, os.path.join(repo_path, "var", "cron"),
+                            now, schedule_triggers=natives)
+    st_triggers, trust = [], {}
+    if not isinstance(trig_view, dict) or "error" in trig_view:
+        trust = {"error": (trig_view or {}).get("error",
+                                                "triggers unavailable")}
+    else:
+        trust = {"rollup": trig_view.get("rollup", {}),
+                 "refused": trig_view.get("refused", [])}
+        missed_trig = set(h["role"] for h in health if h.get("missed"))
+        for t in trig_view.get("triggers", []):
+            st_triggers.append({
+                "name": t["name"], "kind": t["kind"],
+                "pipeline": t["pipeline"], "mode": t["mode"],
+                "enabled": t["enabled"], "lane": t["lane"],
+                "window_open": t["window_open"], "tier": t["tier"],
+                "stopped": t["stopped"],
+                "missed_fire": t["name"] in missed_trig})
     # #188c render seam: fold each cron role's missed-fire flag onto its role
     # row, so the fleet rail can surface the swept-state incident (a stalled
     # scheduler that otherwise looks identical to a healthy idle role). A role
@@ -2443,6 +2499,8 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "token_timeline": token_timeline(logdir, now),
         "quota_forecast": quota_forecast(quota, now),
         "trigger_health": health,
+        "triggers": st_triggers,
+        "trust": trust,
     }
 
 
@@ -2550,7 +2608,491 @@ def _inflight_units(logdir, role):
             "status": state.get("status", "")}
 
 
-def build_pipeline_view(repo_path, role):
+_RUN_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+_RESERVED_RUN_SUFFIXES = ("outputs", "verdict", "outcome")
+_CHILD_SEG_RE = re.compile(r"\.c(\d+)\.")
+
+
+def _parse_run_token(base, lane_hint=""):
+    """Parse a `.pipeline-run-<base>.json` filename base into run identity
+    (Phase D1, #383). The parse ORDER is the supervisor's canonical rule
+    (inflight_tokens / pipeline._child_token_name): strip a trailing
+    `@<digits>` slot FIRST, then the `--<lane>` suffix -- and lane is only
+    stripped when it matches lane_hint (the state file's own `lane` field),
+    because `-` is name-legal and a bare `a--b` can be a real trigger name.
+    RESERVED sidecar suffixes are never tokens (the Phase C phantom-token
+    lesson). Returns None for anything unparseable -- the caller degrades,
+    never guesses."""
+    if not isinstance(base, str) or not base:
+        return None
+    if base.rsplit(".", 1)[-1] in _RESERVED_RUN_SUFFIXES:
+        return None
+    name, slot = base, 0
+    if "@" in name:
+        head, _, tail = name.rpartition("@")
+        if not head or not tail or not tail.isdigit() or "@" in head:
+            return None
+        name, slot = head, int(tail)
+    lane = ""
+    if lane_hint and name.endswith("--%s" % lane_hint):
+        name, lane = name[:-(len(lane_hint) + 2)], lane_hint
+    if not _RUN_TOKEN_RE.match(name):
+        return None
+    parent = None
+    segs = list(_CHILD_SEG_RE.finditer(name))
+    if segs:
+        parent = name[:segs[-1].start()]
+    return {"token": base, "name": name, "lane": lane, "slot": slot,
+            "child": parent is not None, "parent": parent}
+
+
+def list_runs(logdir, journal_path, limit=20):
+    """The runs list (Phase D1, #383): in-flight rows from every
+    `.pipeline-run-*.json` state file (newest mtime first), then up to
+    `limit` finished rows from a bounded journal tail (newest first).
+    Keyed on the state/journal `trigger` field (decision 4 on #383); a
+    grandfather line with no trigger shows its `role` (display only).
+    Total: corrupt state -> an "unreadable" row (present-but-broken must
+    stay visible, never vanish); junk filenames/sidecars skipped; missing
+    journal -> in-flight rows only. Never raises."""
+    rows = []
+    try:
+        paths = glob.glob(os.path.join(logdir, ".pipeline-run-*.json"))
+    except Exception:
+        paths = []
+    dated = []
+    for p in paths:
+        try:
+            dated.append((os.path.getmtime(p), p))
+        except OSError:
+            continue
+    for _, p in sorted(dated, reverse=True):
+        base = os.path.basename(p)[len(".pipeline-run-"):-len(".json")]
+        if not isinstance(base, str) or not base:
+            continue
+        if base.rsplit(".", 1)[-1] in _RESERVED_RUN_SUFFIXES:
+            continue
+        state = None
+        try:
+            with open(p) as fh:
+                state = json.load(fh)
+        except Exception:
+            state = None
+        if not isinstance(state, dict):
+            state = {}
+        lane_hint = state.get("lane") if isinstance(state.get("lane"), str) \
+            else ""
+        tok = _parse_run_token(base, lane_hint=lane_hint)
+        if tok is None:
+            continue                      # junk filename: never a row
+        unreadable = not state
+        doc = state.get("doc")
+        trigger = state.get("trigger") or state.get("role") or tok["name"]
+        rows.append({
+            "token": base, "state": "in-flight",
+            "trigger": str(trigger),
+            "pipeline": (doc.get("name", "") if isinstance(doc, dict)
+                         else ""),
+            "status": "unreadable" if unreadable
+                      else str(state.get("status", "")),
+            "pass": None, "started": None,
+            "finished": None,
+            "sessions": state.get("sessions"),
+            "run_id": str(state.get("run_id", "")),
+            "parent_run": (str(state["parent_run"])
+                           if isinstance(state.get("parent_run"), str)
+                           else None),
+            "slot": tok["slot"], "lane": tok["lane"],
+            "child": tok["child"] or bool(state.get("parent_run")),
+        })
+    try:
+        with open(journal_path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - 65536))
+            chunk = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return rows
+    fin = 0
+    for line in reversed(chunk.splitlines()):
+        if fin >= limit:
+            break
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        trigger = rec.get("trigger") or rec.get("role") or ""
+        rows.append({
+            "token": None, "state": "finished",
+            "trigger": str(trigger),
+            "pipeline": str(rec.get("pipeline", "")),
+            "status": str(rec.get("outcome", "")),
+            "pass": bool(rec.get("pass")) if "pass" in rec else None,
+            "started": rec.get("started"),
+            "finished": rec.get("finished"),
+            "sessions": rec.get("sessions"),
+            "run_id": str(rec.get("run_id", "")),
+            "parent_run": (str(rec["parent_run"])
+                           if isinstance(rec.get("parent_run"), str)
+                           else None),
+            "slot": None,
+            "lane": str(rec.get("lane", "")),
+            "child": bool(rec.get("parent_run")),
+        })
+        fin += 1
+    return rows
+
+
+def trigger_fire_ready(repo_path, trig):
+    """(ok, reason) -- may this trigger take a run-now fire marker? The
+    SAME verdict the write side must reach (Phase D1: bin/dashboard.py's
+    execute path calls this exact helper -- read/write can't drift).
+    Manual mode only (the supervisor's resolve_manual_fires WARN-removes a
+    fire marker for any other mode -- a run-now button there would be a
+    dead control); then a DRY pipeline.resolve_params over the doc's
+    declared params + the trigger's saved params -- the same refusal
+    start_run_trigger would reach, caught HERE instead of burning a
+    backoff after the marker fires. Total: any failure -> (False, reason),
+    never raises."""
+    try:
+        firing = trig.get("firing") if isinstance(trig, dict) else None
+        if not isinstance(firing, dict) or firing.get("mode") != "manual":
+            return False, ("run-now applies to manual-mode triggers "
+                           "(other modes are a D2 extension)")
+        binding = trig.get("pipeline") or ""
+        if not pipeline_mod.valid_pipeline_name(binding):
+            return False, "pipeline binding invalid"
+        pdir = pipeline_mod.effective_pipeline_dir(repo_path, binding)
+        doc = pipeline_mod.load_doc(os.path.join(pdir, "pipeline.json"))
+        declared = doc.get("params")
+        declared = declared if isinstance(declared, list) else []
+        params = trig.get("params")
+        params = params if isinstance(params, dict) else {}
+        pipeline_mod.resolve_params(declared, params)
+        return True, None
+    except Exception as exc:
+        return False, "pipeline/params not fireable: %s" % exc
+
+
+def _trigger_marker_flags(repo_path, name, lane_suffix):
+    """Read-only projection of this trigger's var/trigger-ctl markers.
+    fire/stop are operator-written; queued/backoff are SUPERVISOR-OWNED
+    (read-only here, never written by the dashboard). A PRESENT-but-
+    unreadable backoff marker degrades to {"error": "unreadable"} -- never
+    to the healthy None (prevention-log #18)."""
+    base = triggers_mod.marker_basename(name, lane_suffix)
+    ctl = os.path.join(repo_path, "var", "trigger-ctl")
+    flags = {
+        "stopped": os.path.isfile(os.path.join(ctl, "stop", base)),
+        "fire_pending": os.path.isfile(os.path.join(ctl, "fire", base)),
+        "queued": os.path.isfile(os.path.join(ctl, "queued", base)),
+        "backoff": None,
+    }
+    bpath = os.path.join(ctl, "backoff", base)
+    if os.path.isfile(bpath):
+        flags["backoff"] = {"error": "unreadable"}
+        try:
+            with open(bpath) as fh:
+                parts = fh.readline().strip().split("\t")
+            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                flags["backoff"] = {"until": int(parts[0]),
+                                    "count": int(parts[1])}
+        except OSError:
+            pass
+    return flags
+
+
+def _gallery_rows(repo_path, trigs, rollup):
+    """Pipeline gallery cards: union of committed + var-shadow pipeline DIR
+    stems, each loaded through effective_pipeline_dir (SD-34/SD-37 -- a
+    present-but-invalid shadow renders its errors, never falls back), plus
+    a 'wrapped' row per shim trigger with no binding. Total per row."""
+    names, seen = [], set()
+    for d in (os.path.join(repo_path, ".autonomy", "pipelines"),
+              os.path.join(repo_path, "var", "autonomy", "pipelines")):
+        try:
+            entries = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for fn in entries:
+            if fn in seen or not os.path.isdir(os.path.join(d, fn)):
+                continue
+            seen.add(fn)
+            names.append(fn)
+    by_pipeline = {}
+    for t in trigs:
+        pname = t.get("pipeline") or t.get("name", "")
+        by_pipeline.setdefault(pname, []).append(t.get("name", ""))
+    rows = []
+    for name in sorted(names):
+        row = {"name": name, "version": None, "source": "committed",
+               "valid": False, "errors": [], "nodes": 0,
+               "triggers": sorted(by_pipeline.get(name, [])),
+               "tier": rollup.get(name)}
+        if not pipeline_mod.valid_pipeline_name(name):
+            row["errors"] = ["pipeline dir name has invalid charset"]
+            rows.append(row)
+            continue
+        try:
+            pdir = pipeline_mod.effective_pipeline_dir(repo_path, name)
+            if os.path.normpath(pdir).startswith(
+                    os.path.normpath(os.path.join(repo_path, "var")) + os.sep):
+                row["source"] = "shadow"
+            doc = pipeline_mod.load_doc(os.path.join(pdir, "pipeline.json"))
+        except Exception as exc:
+            row["errors"] = [str(exc)]
+            rows.append(row)
+            continue
+        try:
+            errs = pipeline_mod.validate_doc(doc, pdir)
+        except Exception as exc:   # validator totality boundary (#21)
+            errs = ["validator error: %s" % exc]
+        nodes = doc.get("nodes")
+        row.update({"version": doc.get("version"),
+                    "valid": not errs, "errors": errs,
+                    "nodes": len(nodes) if isinstance(nodes, list) else 0})
+        rows.append(row)
+    for t in trigs:
+        if t.get("pipeline"):
+            continue
+        nm = t.get("name", "")
+        rows.append({"name": nm, "version": None, "source": "wrapped",
+                     "valid": True, "errors": [], "nodes": 1,
+                     "triggers": [nm], "tier": rollup.get(nm)})
+    return rows
+
+
+def build_triggers_view(repo_path, now=None):
+    """The /api/triggers payload (Phase D1, #383): trigger cards +
+    per-trigger trust + pipeline gallery + rollup + REFUSED rows verbatim
+    + the runs list. This is the route's TOTALITY boundary (prevention-log
+    #21): every external call is guarded, failures become payload fields,
+    and a broken repo renders its error -- never a healthy fallback.
+    `now` is injected for run-window determinism in tests."""
+    repo_path = os.path.abspath(os.path.expanduser(str(repo_path)))
+    view = {"repo": os.path.basename(repo_path.rstrip(os.sep)) or repo_path,
+            "path": repo_path, "triggers": [], "refused": [],
+            "rollup": {}, "pipelines": [], "runs": []}
+    if now is None:
+        now = int(time.time())
+    logdir = os.path.join(repo_path, "var", "autonomy-logs")
+    journal = os.path.join(logdir, "journal.jsonl")
+    try:
+        view["runs"] = list_runs(logdir, journal)
+    except Exception:
+        view["runs"] = []
+    try:
+        pre = triggers_mod.enumerate_triggers(repo_path,
+                                              dispatchable_only=False)
+    except Exception as exc:
+        view["error"] = "triggers unavailable: %s" % exc
+        return view
+    trigs, warnings = pre
+    view["refused"] = [w for w in warnings if w.startswith("refused")]
+    try:
+        rows, rollup, _ = triggers_mod.trust_rollup(repo_path, journal,
+                                                    trigs=pre)
+    except Exception as exc:
+        rows, rollup = [], {}
+        view["error"] = "trust unavailable: %s" % exc
+    tier_by_name = dict((r.get("trigger"), r) for r in rows
+                        if isinstance(r, dict))
+    view["rollup"] = rollup
+    try:
+        default_lane = roles_schema.default_lane(
+            roles_schema._load_config(repo_path)[0] or {})
+    except Exception:
+        default_lane = "main"
+    for t in sorted(trigs, key=lambda x: x.get("name", "")):
+        name = t.get("name", "")
+        firing = t.get("firing") if isinstance(t.get("firing"), dict) else {}
+        el = t.get("lane") or default_lane
+        try:
+            flags = _trigger_marker_flags(
+                repo_path, name, "" if el == default_lane else el)
+        except Exception:
+            # unreachable for validated triggers (both parts charset-gated
+            # upstream); degrade to no-marker display rather than dropping
+            # the whole card.
+            flags = {"stopped": False, "fire_pending": False,
+                     "queued": False, "backoff": None}
+        led = tier_by_name.get(name) or {}
+        ready, reason = trigger_fire_ready(repo_path, t)
+        view["triggers"].append({
+            "name": name, "kind": t.get("kind", ""),
+            "pipeline": t.get("pipeline") or "",
+            "mode": firing.get("mode", ""),
+            "schedule": firing.get("schedule"),
+            "event": firing.get("event") or firing.get("events_csv"),
+            "map": firing.get("map"),
+            "enabled": bool(t.get("enabled", True)),
+            "lane": t.get("lane") or "",
+            "concurrency": t.get("concurrency"),
+            "params": t.get("params"),
+            "run_windows": t.get("run_windows"),
+            "window_open": bool(triggers_mod.in_run_window(t, now)),
+            "tier": led.get("tier", "watch"),
+            "runs": led.get("runs", 0), "passes": led.get("passes", 0),
+            "stopped": flags["stopped"],
+            "fire_pending": flags["fire_pending"],
+            "queued": flags["queued"], "backoff": flags["backoff"],
+            "fire_ready": ready, "fire_block_reason": reason,
+        })
+    try:
+        view["pipelines"] = _gallery_rows(repo_path, trigs, rollup)
+    except Exception as exc:
+        view["pipelines"] = []
+        view.setdefault("error", "gallery unavailable: %s" % exc)
+    return view
+
+
+def _fill_bound_doc(view, repo_path, binding):
+    """source/doc/errors/briefs for a BOUND pipeline dir -- shared by the
+    role canvas and the D1 by-name canvas (one resolution, SD-34/SD-37).
+    Returns the resolved pipeline name for journal keying."""
+    pdir = pipeline_mod.effective_pipeline_dir(repo_path, binding)
+    _shadow_root = os.path.join(repo_path, "var", "autonomy", "pipelines")
+    view["source"] = {"kind": "pipeline", "name": binding,
+                      "dir": os.path.relpath(pdir, repo_path),
+                      "shadow": pdir.startswith(_shadow_root + os.sep),
+                      "version": 0}
+    try:
+        doc = pipeline_mod.load_doc(os.path.join(pdir, "pipeline.json"))
+    except Exception as exc:  # PipelineError normally; the broad guard
+        # covers raises load_doc's contract doesn't convert (e.g.
+        # RecursionError on hostile deep nesting) -- same-class scan,
+        # review round 2
+        doc = None
+        view["errors"] = [str(exc)]
+    if doc is not None:
+        try:
+            view["errors"] = pipeline_mod.validate_doc(doc, pdir)
+        except Exception as exc:  # a shape the validator has no error
+            # path for (CP2) -- the display boundary stays TOTAL and
+            # says so; dispatch still crashes loudly on its own path
+            view["errors"] = ["validator crashed on document shape: "
+                              "%s: %s" % (type(exc).__name__, exc)]
+        if isinstance(doc.get("version"), int):
+            view["source"]["version"] = doc["version"]
+    view["briefs"] = _pipeline_briefs(pdir, doc)   # pane seeds true edits
+    view["doc"] = doc
+    pname = (doc or {}).get("name")
+    return doc, (pname if isinstance(pname, str) and pname else binding)
+
+
+def _fill_effective_edges(view, doc):
+    try:
+        eff = pipeline_mod.effective_edges(doc) if isinstance(doc, dict) else []
+    except Exception:  # same totality boundary as validate_doc (CP2)
+        eff = []
+    if not isinstance(eff, list):
+        eff = []
+    view["edges_effective"] = [e for e in eff if isinstance(e, dict)]
+
+
+def _pipeline_view_by_name(repo_path, logdir, name):
+    """D1 (#383): the canvas by PIPELINE NAME -- gallery cards and native
+    triggers have no role to key on. No role settings, no role-keyed
+    ledger (trust lives on /api/triggers); read-only surface."""
+    if not pipeline_mod.valid_pipeline_name(name):
+        return {"error": "pipeline name %r has invalid charset" % (name,)}
+    view = {"repo": os.path.basename(repo_path.rstrip("/")),
+            "path": repo_path, "role": None}
+    doc, _ = _fill_bound_doc(view, repo_path, name)
+    _fill_effective_edges(view, doc)
+    view["last_run"] = None
+    view["ledger"] = None
+    view["in_flight"] = None
+    return view
+
+
+def _pipeline_view_by_token(repo_path, logdir, token):
+    """D1 (#383): the canvas for ONE RUN -- renders the state file's own
+    EMBEDDED doc (the exact version the run executes) lit with its unit
+    statuses; child runs surface parent_run + a parent_token breadcrumb.
+    The embedded doc still validates -- a minimal/invalid doc renders as
+    DEGRADED truth (errors + visible doc), never a healthy canvas (CP1)."""
+    tok = _parse_run_token(token)
+    if tok is None:
+        return {"error": "invalid run token %r" % (token,)}
+    p = os.path.join(logdir, ".pipeline-run-%s.json" % token)
+    try:
+        with open(p) as fh:
+            state = json.load(fh)
+    except OSError:
+        return {"error": "no state file for run token %r" % (token,)}
+    except Exception:
+        return {"error": "state file for %r unreadable" % (token,)}
+    if not isinstance(state, dict):
+        return {"error": "state file for %r unreadable" % (token,)}
+    view = {"repo": os.path.basename(repo_path.rstrip("/")),
+            "path": repo_path, "role": None}
+    doc = state.get("doc") if isinstance(state.get("doc"), dict) else None
+    ver = (doc or {}).get("version")
+    dname = (doc or {}).get("name")
+    view["source"] = {"kind": "run",
+                      "name": dname if isinstance(dname, str) else "",
+                      "dir": "", "shadow": False,
+                      "version": ver if isinstance(ver, int) else 0}
+    view["doc"] = doc
+    if doc is None:
+        view["errors"] = ["run state carries no pipeline document"]
+    else:
+        try:
+            view["errors"] = pipeline_mod.validate_doc(doc, None)
+        except Exception as exc:
+            view["errors"] = ["validator crashed on document shape: "
+                              "%s: %s" % (type(exc).__name__, exc)]
+    view["briefs"] = {}                     # a run view is read-only
+    _fill_effective_edges(view, doc)
+    view["last_run"] = None
+    view["ledger"] = None
+    units = {}
+    if isinstance(state.get("units"), dict):
+        for uid, u in state["units"].items():
+            units[str(uid)] = (str(u.get("status", ""))
+                               if isinstance(u, dict) else "")
+    view["in_flight"] = {"units": units, "sessions": state.get("sessions"),
+                         "name": view["source"]["name"],
+                         "status": str(state.get("status", ""))}
+    parent_token = None
+    segs = list(_CHILD_SEG_RE.finditer(tok["name"]))
+    if segs:
+        # The child token is CONSTRUCTED as <parent-name>.c<parent-slot>.
+        # <node-id> (pipeline._child_token_name -- the c<N> is the parent
+        # state filename's own @slot, NOT a call index; a parent running
+        # as pr-sweep@1 spawns pr-sweep.c1.<node>). Inverting that grammar
+        # is therefore exact: parent token = name before the last .c<N>.
+        # segment, re-suffixed @<N> when N != 0. parent_run (a run id)
+        # cannot address a canvas -- tokens name state FILES.
+        pslot = segs[-1].group(1)
+        parent_token = tok["name"][:segs[-1].start()] + (
+            "@%s" % pslot if pslot != "0" else "")
+    view["run"] = {
+        "token": token,
+        "run_id": str(state.get("run_id", "")),
+        "trigger": str(state.get("trigger") or state.get("role")
+                       or tok["name"]),
+        "status": str(state.get("status", "")),
+        "parent_run": (str(state["parent_run"])
+                       if isinstance(state.get("parent_run"), str)
+                       else None),
+        "parent_node": (str(state["parent_node"])
+                        if isinstance(state.get("parent_node"), str)
+                        else None),
+        "parent_token": parent_token,
+        "slot": tok["slot"], "lane": tok["lane"],
+        "child": tok["child"] or bool(state.get("parent_run")),
+    }
+    return view
+
+
+def build_pipeline_view(repo_path, role=None, name=None, token=None):
     """The /pipeline canvas read model (#357, P3a). Pure + TOTAL: every
     missing/corrupt artifact degrades to a field, never an exception. An
     invalid BOUND pipeline renders its validator errors with the raw doc
@@ -2561,9 +3103,22 @@ def build_pipeline_view(repo_path, role):
     resolution the supervisor dispatches with (SD-34 single resolver;
     Codex CP1: raw cfg["roles"] would lose default-role semantics), so
     only dispatchable roles have a canvas (a disabled role can never run
-    its pipeline; offering a view would imply it can)."""
+    its pipeline; offering a view would imply it can).
+
+    D1 (#383): EXACTLY ONE selector -- role= (unchanged, positional
+    back-compat), name= (by pipeline name), token= (one run's state file,
+    canonical token grammar)."""
     repo_path = os.path.abspath(repo_path)
     logdir = os.path.join(repo_path, "var", "autonomy-logs")
+    picked = [s for s in (role, name, token)
+              if isinstance(s, str) and s]
+    if len(picked) != 1:
+        return {"error": "exactly one of role=, name=, token= selects a "
+                         "canvas"}
+    if isinstance(name, str) and name:
+        return _pipeline_view_by_name(repo_path, logdir, name)
+    if isinstance(token, str) and token:
+        return _pipeline_view_by_token(repo_path, logdir, token)
     cfg_path = config_parser.effective_config_path(
         os.path.join(repo_path, ".autonomy", "config.yaml"))
     try:
@@ -2608,34 +3163,9 @@ def build_pipeline_view(repo_path, role):
         # P3b (#365): read the var-live shadow when the operator has edited this
         # pipeline in the canvas; source.shadow tells the page it is showing
         # local edits. A present-but-invalid shadow renders ITS errors below,
-        # never a fallback to committed (prevention-log #3).
-        pdir = pipeline_mod.effective_pipeline_dir(repo_path, binding)
-        _shadow_root = os.path.join(repo_path, "var", "autonomy", "pipelines")
-        view["source"] = {"kind": "pipeline", "name": binding,
-                          "dir": os.path.relpath(pdir, repo_path),
-                          "shadow": pdir.startswith(_shadow_root + os.sep),
-                          "version": 0}
-        try:
-            doc = pipeline_mod.load_doc(os.path.join(pdir, "pipeline.json"))
-        except Exception as exc:  # PipelineError normally; the broad guard
-            # covers raises load_doc's contract doesn't convert (e.g.
-            # RecursionError on hostile deep nesting) -- same-class scan,
-            # review round 2
-            doc = None
-            view["errors"] = [str(exc)]
-        if doc is not None:
-            try:
-                view["errors"] = pipeline_mod.validate_doc(doc, pdir)
-            except Exception as exc:  # a shape the validator has no error
-                # path for (CP2) -- the display boundary stays TOTAL and
-                # says so; dispatch still crashes loudly on its own path
-                view["errors"] = ["validator crashed on document shape: "
-                                  "%s: %s" % (type(exc).__name__, exc)]
-            if isinstance(doc.get("version"), int):
-                view["source"]["version"] = doc["version"]
-        view["briefs"] = _pipeline_briefs(pdir, doc)   # pane seeds true edits
-        pname = (doc or {}).get("name")
-        pname = pname if isinstance(pname, str) and pname else binding
+        # never a fallback to committed (prevention-log #3). Shared with the
+        # D1 by-name canvas (_fill_bound_doc -- one resolution).
+        doc, pname = _fill_bound_doc(view, repo_path, binding)
     else:
         try:
             doc = pipeline_mod.wrap_role(settings, role)
@@ -2649,13 +3179,7 @@ def build_pipeline_view(repo_path, role):
         view["briefs"] = {}          # a wrapped role is read-only; no editing
         pname = doc["name"]
     view["doc"] = doc
-    try:
-        eff = pipeline_mod.effective_edges(doc) if isinstance(doc, dict) else []
-    except Exception:  # same totality boundary as validate_doc above (CP2)
-        eff = []
-    if not isinstance(eff, list):
-        eff = []
-    view["edges_effective"] = [e for e in eff if isinstance(e, dict)]
+    _fill_effective_edges(view, doc)
     journal = os.path.join(logdir, "journal.jsonl")
     if os.path.exists(journal):
         view["last_run"] = _journal_last_run(journal, role, pname)

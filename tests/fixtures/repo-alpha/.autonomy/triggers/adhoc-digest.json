@@ -1,0 +1,3 @@
+{"name": "adhoc-digest", "pipeline": "fixture-flow",
+ "firing": {"mode": "manual"},
+ "concurrency": {"policy": "skip", "max": 1}}

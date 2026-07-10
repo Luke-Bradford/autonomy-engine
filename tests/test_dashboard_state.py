@@ -1759,6 +1759,498 @@ class ChildRunToleranceTest(unittest.TestCase):
         self.assertIn("roles", st)
 
 
+class ParseRunTokenTest(unittest.TestCase):
+    """Phase D1 (#383): the filename-token parse twin of the supervisor's
+    inflight_tokens rules -- strip @<digits> slot from the END, then
+    --<lane>; reserved sidecar suffixes are never tokens."""
+
+    def test_plain_token(self):
+        got = ds._parse_run_token("adhoc-digest")
+        self.assertEqual(got, {"token": "adhoc-digest", "name": "adhoc-digest",
+                               "lane": "", "slot": 0, "child": False,
+                               "parent": None})
+
+    def test_slot_stripped_from_end(self):
+        got = ds._parse_run_token("pr-sweep@1")
+        self.assertEqual(got["name"], "pr-sweep")
+        self.assertEqual(got["slot"], 1)
+
+    def test_lane_then_slot(self):
+        got = ds._parse_run_token("coder--qa@2", lane_hint="qa")
+        self.assertEqual((got["name"], got["lane"], got["slot"]),
+                         ("coder", "qa", 2))
+
+    def test_lane_hint_only_strips_matching_suffix(self):
+        # a trigger genuinely named a--b under NO lane keeps its full name
+        got = ds._parse_run_token("a--b", lane_hint="")
+        self.assertEqual(got["name"], "a--b")
+
+    def test_child_token(self):
+        got = ds._parse_run_token("adhoc-digest.c0.qa")
+        self.assertTrue(got["child"])
+        self.assertEqual(got["parent"], "adhoc-digest")
+
+    def test_depth2_child_parent_is_last_call_segment(self):
+        got = ds._parse_run_token("a.c0.qa.c1.x")
+        self.assertEqual(got["parent"], "a.c0.qa")
+
+    def test_reserved_sidecar_suffixes_never_tokens(self):
+        for base in ("x.outputs", "x.verdict", "p.c0.qa.outcome",
+                     "x.plan.outputs"):
+            self.assertIsNone(ds._parse_run_token(base))
+
+    def test_junk_refused(self):
+        for base in ("x@@", "x@bad", "x@", "", "a b", "../x", "x@1@2"):
+            self.assertIsNone(ds._parse_run_token(base))
+
+
+class ListRunsTest(unittest.TestCase):
+    """Phase D1 (#383): the runs list -- in-flight state files + a bounded
+    journal tail; child linkage + @slot rows; total (never raises)."""
+
+    FIXLOG = os.path.join(FIX, "var", "autonomy-logs")
+    FIXJOURNAL = os.path.join(FIXLOG, "journal.jsonl")
+
+    def test_fixture_inflight_and_journal_rows(self):
+        runs = ds.list_runs(self.FIXLOG, self.FIXJOURNAL)
+        by_token = dict((r["token"], r) for r in runs if r["token"])
+        self.assertIn("adhoc-digest", by_token)
+        self.assertIn("adhoc-digest.c0.qa", by_token)
+        self.assertIn("pr-sweep@1", by_token)
+        child = by_token["adhoc-digest.c0.qa"]
+        self.assertTrue(child["child"])
+        self.assertEqual(child["parent_run"],
+                         "adhoc-digest-20260709T220000-7001")
+        self.assertEqual(by_token["pr-sweep@1"]["slot"], 1)
+        self.assertEqual(by_token["adhoc-digest"]["pipeline"], "fixture-flow")
+        self.assertEqual(by_token["adhoc-digest"]["state"], "in-flight")
+        self.assertEqual(by_token["adhoc-digest"]["status"], "in_progress")
+
+    def test_fixture_journal_rows_trigger_keyed_and_child_flagged(self):
+        runs = ds.list_runs(self.FIXLOG, self.FIXJOURNAL)
+        fin = [r for r in runs if r["state"] == "finished"]
+        self.assertTrue(fin)
+        by_run = dict((r["run_id"], r) for r in fin)
+        self.assertIn("adhoc-digest-20260707T080000-6001", by_run)
+        cj = by_run.get("adhoc-digest.c0.qa-6002")
+        self.assertIsNotNone(cj)
+        self.assertTrue(cj["child"])
+        self.assertEqual(cj["trigger"], "adhoc-digest.c0.qa")
+        # grandfather display: the coder lines carry NO trigger -> role shown
+        coder = [r for r in fin if r["trigger"] == "coder"]
+        self.assertTrue(coder)
+
+    def test_inflight_first_then_journal_newest_first(self):
+        runs = ds.list_runs(self.FIXLOG, self.FIXJOURNAL)
+        states = [r["state"] for r in runs]
+        self.assertEqual(states, sorted(
+            states, key=lambda s: 0 if s == "in-flight" else 1))
+        fin = [r for r in runs if r["state"] == "finished"
+               and r.get("finished")]
+        self.assertEqual([r["finished"] for r in fin],
+                         sorted([r["finished"] for r in fin], reverse=True))
+
+    def test_corrupt_state_degrades_never_raises(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        with open(os.path.join(d, ".pipeline-run-broken.json"), "w") as fh:
+            fh.write("{not json")
+        runs = ds.list_runs(d, os.path.join(d, "journal.jsonl"))
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["status"], "unreadable")
+        self.assertEqual(runs[0]["token"], "broken")
+
+    def test_sidecars_and_junk_filenames_skipped(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        for fn in (".pipeline-run-x.outputs.json",
+                   ".pipeline-run-x.verdict.json",
+                   ".pipeline-run-p.c0.qa.outcome.json",
+                   ".pipeline-run-x@@.json"):
+            with open(os.path.join(d, fn), "w") as fh:
+                fh.write("{}")
+        self.assertEqual(ds.list_runs(d, os.path.join(d, "journal.jsonl")),
+                         [])
+
+    def test_journal_limit_bounds_finished_rows(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        j = os.path.join(d, "journal.jsonl")
+        with open(j, "w") as fh:
+            for i in range(30):
+                fh.write(json.dumps({"trigger": "t", "pipeline": "p",
+                                     "outcome": "success", "pass": True,
+                                     "run_id": "t-%d" % i, "finished": i,
+                                     "started": i}) + "\n")
+        runs = ds.list_runs(d, j, limit=5)
+        self.assertEqual(len(runs), 5)
+        self.assertEqual(runs[0]["run_id"], "t-29")
+
+
+class BuildTriggersViewTest(unittest.TestCase):
+    """Phase D1 (#383): the /api/triggers payload builder -- the route's
+    totality boundary (prevention-log #21): every failure becomes a payload
+    field, never an exception, never a healthy fallback."""
+
+    def _tmp_copy(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        dst = os.path.join(d, "repo")
+        shutil.copytree(FIX, dst)
+        return dst
+
+    def _mini_repo(self, triggers_json, journal_lines=None,
+                   pipeline_params=None):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        os.makedirs(os.path.join(d, ".autonomy", "triggers"))
+        pdir = os.path.join(d, ".autonomy", "pipelines", "flow")
+        os.makedirs(pdir)
+        doc = {"name": "flow", "version": 1,
+               "caps": {"max_sessions_per_run": 5},
+               "nodes": [{"id": "pick", "type": "pick",
+                          "brief_ref": "pick.md"}]}
+        if pipeline_params is not None:
+            doc["params"] = pipeline_params
+        with open(os.path.join(pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(pdir, "pick.md"), "w") as fh:
+            fh.write("pick brief\n")
+        with open(os.path.join(d, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("roles: {}\n")
+        for name, trig in triggers_json.items():
+            with open(os.path.join(d, ".autonomy", "triggers",
+                                   "%s.json" % name), "w") as fh:
+                json.dump(trig, fh)
+        logdir = os.path.join(d, "var", "autonomy-logs")
+        os.makedirs(logdir)
+        with open(os.path.join(logdir, "journal.jsonl"), "w") as fh:
+            for r in (journal_lines or []):
+                fh.write(json.dumps(r) + "\n")
+        return d
+
+    def test_fixture_happy_path(self):
+        view = ds.build_triggers_view(FIX)
+        self.assertNotIn("error", view)
+        by_name = dict((t["name"], t) for t in view["triggers"])
+        self.assertEqual(sorted(by_name),
+                         ["adhoc-digest", "coder", "pr-sweep"])
+        self.assertEqual(by_name["coder"]["kind"], "shim")
+        self.assertEqual(by_name["adhoc-digest"]["kind"], "native")
+        self.assertEqual(by_name["adhoc-digest"]["mode"], "manual")
+        self.assertFalse(by_name["pr-sweep"]["enabled"])
+        self.assertEqual(view["rollup"], {"fixture-flow": "watch"})
+        self.assertTrue(by_name["adhoc-digest"]["fire_ready"])
+        self.assertFalse(by_name["coder"]["fire_ready"])
+        self.assertIn("manual", by_name["coder"]["fire_block_reason"])
+        for t in by_name.values():
+            self.assertTrue(t["window_open"])
+            self.assertFalse(t["stopped"])
+            self.assertFalse(t["fire_pending"])
+            self.assertIsNone(t["backoff"])
+        gal = dict((p["name"], p) for p in view["pipelines"])
+        self.assertIn("fixture-flow", gal)
+        self.assertEqual(gal["fixture-flow"]["version"], 2)
+        self.assertEqual(gal["fixture-flow"]["source"], "committed")
+        self.assertTrue(gal["fixture-flow"]["valid"])
+        self.assertEqual(gal["fixture-flow"]["tier"], "watch")
+        self.assertEqual(sorted(gal["fixture-flow"]["triggers"]),
+                         ["adhoc-digest", "coder", "pr-sweep"])
+        self.assertTrue(any(r["token"] == "pr-sweep@1" for r in view["runs"]))
+        self.assertEqual(view["refused"], [])
+
+    def test_disabled_zero_run_trigger_floors_rollup(self):
+        # CP1: the floor must hold when the OTHER trigger is auto.
+        lines = [{"role": "hot", "trigger": "hot", "pipeline": "flow",
+                  "outcome": "success", "pass": True} for _ in range(20)]
+        d = self._mini_repo(
+            {"hot": {"name": "hot", "pipeline": "flow",
+                     "firing": {"mode": "continuous"}},
+             "cold": {"name": "cold", "pipeline": "flow", "enabled": False,
+                      "firing": {"mode": "continuous"}}},
+            journal_lines=lines)
+        view = ds.build_triggers_view(d)
+        tiers = dict((t["name"], t["tier"]) for t in view["triggers"])
+        self.assertEqual(tiers["hot"], "auto")
+        self.assertEqual(tiers["cold"], "watch")
+        self.assertEqual(view["rollup"]["flow"], "watch")
+
+    def test_refused_trigger_surfaces_verbatim_and_stays_out(self):
+        d = self._tmp_copy()
+        with open(os.path.join(d, ".autonomy", "triggers", "broken.json"),
+                  "w") as fh:
+            fh.write("{not json")
+        view = ds.build_triggers_view(d)
+        self.assertTrue(any("broken" in w for w in view["refused"]))
+        self.assertNotIn("broken", [t["name"] for t in view["triggers"]])
+
+    def test_marker_reads(self):
+        d = self._tmp_copy()
+        ctl = os.path.join(d, "var", "trigger-ctl")
+        for sub, name in (("stop", "adhoc-digest"), ("fire", "adhoc-digest"),
+                          ("queued", "pr-sweep")):
+            os.makedirs(os.path.join(ctl, sub), exist_ok=True)
+            with open(os.path.join(ctl, sub, name), "w"):
+                pass
+        os.makedirs(os.path.join(ctl, "backoff"), exist_ok=True)
+        with open(os.path.join(ctl, "backoff", "coder"), "w") as fh:
+            fh.write("1751880000\t3\n")
+        view = ds.build_triggers_view(d)
+        by_name = dict((t["name"], t) for t in view["triggers"])
+        self.assertTrue(by_name["adhoc-digest"]["stopped"])
+        self.assertTrue(by_name["adhoc-digest"]["fire_pending"])
+        self.assertTrue(by_name["pr-sweep"]["queued"])
+        self.assertEqual(by_name["coder"]["backoff"],
+                         {"until": 1751880000, "count": 3})
+
+    def test_corrupt_backoff_is_an_error_never_absence(self):
+        # CP1 / prevention-log #18: present-but-unreadable degrades to an
+        # error chip, never to the healthy None.
+        d = self._tmp_copy()
+        bdir = os.path.join(d, "var", "trigger-ctl", "backoff")
+        os.makedirs(bdir)
+        with open(os.path.join(bdir, "coder"), "w") as fh:
+            fh.write("garbage no tab")
+        view = ds.build_triggers_view(d)
+        by_name = dict((t["name"], t) for t in view["triggers"])
+        self.assertEqual(by_name["coder"]["backoff"],
+                         {"error": "unreadable"})
+
+    def test_run_window_closed_with_injected_now(self):
+        d = self._mini_repo(
+            {"windowed": {"name": "windowed", "pipeline": "flow",
+                          "firing": {"mode": "manual"},
+                          "run_windows": [{"start": "02:00",
+                                           "end": "03:00"}]}})
+        # 2026-07-10 12:00 UTC -- outside 02:00-03:00
+        view = ds.build_triggers_view(d, now=1783080000)
+        t = [x for x in view["triggers"] if x["name"] == "windowed"][0]
+        self.assertFalse(t["window_open"])
+
+    def test_unreadable_config_degrades_to_error_field(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        os.makedirs(os.path.join(d, ".autonomy"))
+        with open(os.path.join(d, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("roles: [broken\n  - x\n")
+        view = ds.build_triggers_view(d)
+        self.assertIn("error", view)
+        self.assertEqual(view["triggers"], [])
+        self.assertEqual(view["pipelines"], [])
+
+    def test_broken_pipeline_doc_degrades_gallery_row(self):
+        d = self._mini_repo(
+            {"t1": {"name": "t1", "pipeline": "flow",
+                    "firing": {"mode": "manual"}}})
+        with open(os.path.join(d, ".autonomy", "pipelines", "flow",
+                               "pipeline.json"), "w") as fh:
+            fh.write("{corrupt")
+        view = ds.build_triggers_view(d)
+        gal = dict((p["name"], p) for p in view["pipelines"])
+        self.assertFalse(gal["flow"]["valid"])
+        self.assertTrue(gal["flow"]["errors"])
+        # fire-readiness is fail-safe on an unreadable doc
+        t = [x for x in view["triggers"] if x["name"] == "t1"][0]
+        self.assertFalse(t["fire_ready"])
+
+    def test_fire_blocked_on_required_no_default_param(self):
+        d = self._mini_repo(
+            {"needy": {"name": "needy", "pipeline": "flow",
+                       "firing": {"mode": "manual"}}},
+            pipeline_params=[{"name": "ticket", "type": "string",
+                              "required": True}])
+        view = ds.build_triggers_view(d)
+        t = [x for x in view["triggers"] if x["name"] == "needy"][0]
+        self.assertFalse(t["fire_ready"])
+        self.assertIn("ticket", t["fire_block_reason"])
+
+
+class RepoStateTriggersTest(unittest.TestCase):
+    """Phase D1 (#383): build_repo_state's additive trigger keys -- light
+    rows for the fleet rail + trust for the repo card/needs-you. Nothing
+    existing is removed; an unreadable trigger layer degrades to an error
+    field with the role rows as the rail fallback."""
+
+    def test_fixture_light_rows_and_trust(self):
+        st = ds.build_repo_state(FIX, git_in_flight=lambda p: {})
+        self.assertIn("roles", st)                     # untouched
+        names = sorted(t["name"] for t in st["triggers"])
+        self.assertEqual(names, ["adhoc-digest", "coder", "pr-sweep"])
+        self.assertEqual(st["trust"]["rollup"], {"fixture-flow": "watch"})
+        self.assertEqual(st["trust"]["refused"], [])
+        for t in st["triggers"]:
+            self.assertIn("tier", t)
+            self.assertIn("window_open", t)
+            self.assertFalse(t["stopped"])
+            self.assertFalse(t["missed_fire"])
+
+    def test_broken_trigger_layer_degrades_to_trust_error(self):
+        # build_repo_state's guard: a raising/erroring build_triggers_view
+        # becomes trust.error + triggers=[] (rail falls back to role rows),
+        # never a crash. (A config that does not PARSE at all raises out of
+        # _read_config before this layer -- pre-existing; the server wraps
+        # per-repo exceptions into an error card.)
+        real = ds.build_triggers_view
+        ds.build_triggers_view = lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError("boom"))
+        try:
+            st = ds.build_repo_state(FIX, git_in_flight=lambda p: {})
+        finally:
+            ds.build_triggers_view = real
+        self.assertEqual(st["triggers"], [])
+        self.assertIn("error", st["trust"])
+        self.assertIn("roles", st)                     # the rail fallback
+
+    def test_error_payload_from_trigger_layer_also_degrades(self):
+        real = ds.build_triggers_view
+        ds.build_triggers_view = lambda *a, **k: {
+            "error": "triggers unavailable: x", "triggers": [], "rollup": {},
+            "refused": [], "pipelines": [], "runs": []}
+        try:
+            st = ds.build_repo_state(FIX, git_in_flight=lambda p: {})
+        finally:
+            ds.build_triggers_view = real
+        self.assertEqual(st["triggers"], [])
+        self.assertEqual(st["trust"]["error"], "triggers unavailable: x")
+
+
+class TriggerHealthNativesTest(unittest.TestCase):
+    """Phase D1 (#383, CP1): native schedule triggers write the same
+    var/cron/<name>.last_fire markers -- the config-cron-roles-only reader
+    would miss a stalled native scheduler."""
+
+    NOW = 2000000
+
+    def _marker_dir(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        return d
+
+    def test_native_schedule_stall_reported(self):
+        d = self._marker_dir()
+        with open(os.path.join(d, "t1.last_fire"), "w") as fh:
+            fh.write("1000")                       # ancient
+        out = ds.trigger_health({"roles": {}}, d, self.NOW,
+                                schedule_triggers=[{"name": "t1",
+                                                    "schedule": "*/15 * * * *"}])
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["role"], "t1")
+        self.assertEqual(out[0]["kind"], "native")
+        self.assertTrue(out[0]["missed"])
+
+    def test_same_name_native_supersedes_role_row(self):
+        d = self._marker_dir()
+        cfg = {"roles": {"night": {"enabled": True,
+                                    "trigger": {"type": "cron",
+                                                "schedule": "*/15 * * * *"}}}}
+        out = ds.trigger_health(cfg, d, self.NOW,
+                                schedule_triggers=[{"name": "night",
+                                                    "schedule": "*/15 * * * *"}])
+        self.assertEqual([r["role"] for r in out], ["night"])   # ONE row
+        self.assertEqual(out[0]["kind"], "native")
+
+    def test_role_rows_gain_kind_and_junk_natives_skipped(self):
+        d = self._marker_dir()
+        cfg = {"roles": {"pm": {"enabled": True,
+                                 "trigger": {"type": "cron",
+                                             "schedule": "*/15 * * * *"}}}}
+        out = ds.trigger_health(cfg, d, self.NOW,
+                                schedule_triggers=[7, {"name": 1},
+                                                   {"name": "x"}, "junk"])
+        self.assertEqual([r["role"] for r in out], ["pm"])
+        self.assertEqual(out[0]["kind"], "role")
+
+
+class PipelineViewByNameTokenTest(unittest.TestCase):
+    """Phase D1 (#383): canvas addressing grows name= (gallery cards,
+    native triggers have no role) and token= (a run's own embedded doc,
+    lit; child rows open the CHILD canvas w/ parent breadcrumb)."""
+
+    def test_by_name_resolves_committed_pipeline(self):
+        view = ds.build_pipeline_view(FIX, name="fixture-flow")
+        self.assertNotIn("error", view)
+        self.assertIsNone(view["role"])
+        self.assertEqual(view["source"]["kind"], "pipeline")
+        self.assertEqual(view["source"]["name"], "fixture-flow")
+        self.assertEqual(view["source"]["version"], 2)
+        self.assertEqual(view["errors"], [])
+        self.assertTrue(view["edges_effective"])
+        self.assertIsNone(view["ledger"])       # trust lives on /api/triggers
+        self.assertIsNone(view["in_flight"])
+
+    def test_by_name_charset_refused(self):
+        self.assertIn("error", ds.build_pipeline_view(FIX, name="../x"))
+
+    def test_by_token_renders_run_doc_with_breadcrumb(self):
+        view = ds.build_pipeline_view(FIX, token="adhoc-digest.c0.qa")
+        self.assertNotIn("error", view)
+        self.assertEqual(view["source"]["kind"], "run")
+        self.assertEqual(view["run"]["token"], "adhoc-digest.c0.qa")
+        self.assertEqual(view["run"]["parent_run"],
+                         "adhoc-digest-20260709T220000-7001")
+        self.assertEqual(view["run"]["parent_token"], "adhoc-digest")
+        self.assertTrue(view["run"]["child"])
+        self.assertEqual(view["in_flight"]["units"],
+                         {"pick": "dispatched"})
+        # CP1: the fixture's MINIMAL embedded doc (no caps) must render as
+        # DEGRADED truth -- errors populated, doc still visible.
+        self.assertTrue(view["errors"])
+        self.assertIsNotNone(view["doc"])
+
+    def test_by_token_slotted_parent_breadcrumb(self):
+        # #385 review round 1 WARNING, resolved by pinning the semantics:
+        # the child token's .c<N>. segment IS the parent's own @slot by
+        # construction (pipeline._child_token_name -- a parent running as
+        # pr-sweep@1 spawns pr-sweep.c1.<node>), NOT a call index. The
+        # breadcrumb therefore re-suffixes @<N> exactly.
+        import pipeline as pl
+        self.assertEqual(
+            pl._child_token_name(
+                "var/autonomy-logs/.pipeline-run-pr-sweep@1.json",
+                {"lane": ""}, "qa"),
+            "pr-sweep.c1.qa")            # the constructor's own grammar
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        logdir = os.path.join(d, "var", "autonomy-logs")
+        os.makedirs(logdir)
+        with open(os.path.join(logdir,
+                               ".pipeline-run-pr-sweep.c1.qa.json"),
+                  "w") as fh:
+            json.dump({"fmt": 2, "run_id": "pr-sweep.c1.qa-9001",
+                       "trigger": "pr-sweep.c1.qa", "status": "in_progress",
+                       "parent_run": "pr-sweep-20260709T230000-7003",
+                       "doc": {"name": "fixture-flow", "nodes": []},
+                       "units": {}}, fh)
+        view = ds.build_pipeline_view(d, token="pr-sweep.c1.qa")
+        self.assertEqual(view["run"]["parent_token"], "pr-sweep@1")
+
+    def test_by_token_grammar_matrix(self):
+        ok = ds.build_pipeline_view(FIX, token="pr-sweep@1")
+        self.assertNotIn("error", ok)
+        self.assertEqual(ok["run"]["slot"], 1)
+        for bad in ("x@bad", "x@@", "x.outputs", "p.c0.qa.outcome",
+                    "../x", "a b"):
+            self.assertIn("error", ds.build_pipeline_view(FIX, token=bad))
+
+    def test_by_token_missing_state_is_an_error(self):
+        self.assertIn("error",
+                      ds.build_pipeline_view(FIX, token="no-such-run"))
+
+    def test_exactly_one_selector(self):
+        self.assertIn("error", ds.build_pipeline_view(FIX))
+        self.assertIn("error", ds.build_pipeline_view(
+            FIX, role="coder", name="fixture-flow"))
+        self.assertIn("error", ds.build_pipeline_view(
+            FIX, name="fixture-flow", token="pr-sweep@1"))
+
+    def test_role_path_unchanged(self):
+        view = ds.build_pipeline_view(FIX, "coder")
+        self.assertEqual(view["role"], "coder")
+        self.assertEqual(view["source"]["kind"], "pipeline")
+        self.assertEqual(view["errors"], [])
+        self.assertIsNotNone(view["ledger"])
+
+
 if __name__ == "__main__":
     unittest.main()
 

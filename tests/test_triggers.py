@@ -792,6 +792,64 @@ class TrustRollupTest(unittest.TestCase):
         self.assertIn("broken", refused[0])
 
 
+class TrustRollupPreloadTest(TrustRollupTest):
+    """Phase D1: trust_rollup(trigs=) accepts a preloaded
+    enumerate_triggers tuple so the dashboard builder never
+    double-enumerates; junk preloads are ignored (total reader)."""
+
+    def test_preload_equals_no_kwarg_and_skips_enumeration(self):
+        self._config()
+        self._trigger("hot")
+        self._trigger("cold")
+        j = self._journal(self._pass_lines("hot", 20))
+        want = triggers.trust_rollup(self.tmp, j)
+        pre = triggers.enumerate_triggers(self.tmp, dispatchable_only=False)
+        calls = []
+        real = triggers.enumerate_triggers
+
+        def counting(*a, **kw):
+            calls.append(a)
+            return real(*a, **kw)
+        triggers.enumerate_triggers = counting
+        try:
+            got = triggers.trust_rollup(self.tmp, j, trigs=pre)
+        finally:
+            triggers.enumerate_triggers = real
+        self.assertEqual(got, want)
+        self.assertEqual(calls, [])      # preload used, no re-enumeration
+
+    def test_junk_preload_ignored_and_reenumerated(self):
+        self._config()
+        self._trigger("hot")
+        j = self._journal(self._pass_lines("hot", 20))
+        want = triggers.trust_rollup(self.tmp, j)
+        for junk in ("nope", 7, ([],), (None, []), ({}, [])):
+            self.assertEqual(triggers.trust_rollup(self.tmp, j, trigs=junk),
+                             want)
+
+
+class MarkerBasenameTest(unittest.TestCase):
+    """Phase D1: the ONE python twin of _trigger_ctl_path's basename rule
+    (bin/supervisor.sh) -- both dashboard modules consume this."""
+
+    def test_bare_when_no_lane_suffix(self):
+        self.assertEqual(triggers.marker_basename("adhoc-digest", ""), "adhoc-digest")
+        self.assertEqual(triggers.marker_basename("adhoc-digest", None), "adhoc-digest")
+
+    def test_lane_suffix_appended(self):
+        self.assertEqual(triggers.marker_basename("coder", "qa"), "coder--qa")
+
+    def test_bad_name_charset_raises(self):
+        for bad in ("../x", "", "a b", "x/y", None, 7):
+            with self.assertRaises(pipeline.PipelineError):
+                triggers.marker_basename(bad, "")
+
+    def test_bad_lane_charset_raises(self):
+        for bad in ("../x", "a b", "q/a", 7):
+            with self.assertRaises(pipeline.PipelineError):
+                triggers.marker_basename("coder", bad)
+
+
 class RunWindowCliTest(unittest.TestCase):
     # the shared night window + verified instants (see
     # RunWindowMembershipTest for the derivation command).
