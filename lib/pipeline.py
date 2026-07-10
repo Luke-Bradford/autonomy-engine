@@ -237,6 +237,14 @@ class PipelineError(Exception):
     """Unreadable/invalid pipeline state -- callers REFUSE, never fall back."""
 
 
+class MissingNodeOutput(PipelineError):
+    """A ${nodes.<id>.output.<x>} whose node has not (yet) recorded that
+    output. The ONE error class default() maps to its fallback -- the
+    findings-return channel (a back-edge target's first visit legitimately
+    predates the source's outputs). Every other resolution failure (a
+    typo'd param, an unknown run field) stays a hard PipelineError."""
+
+
 def load_doc(path):
     try:
         with open(path) as fh:
@@ -372,8 +380,8 @@ def _resolve_ref(path, ctx):
     if parts[0] == "nodes" and len(parts) == 4 and parts[2] == "output":
         outs = ctx.get("nodes", {}).get(parts[1])
         if outs is None or parts[3] not in outs:
-            raise PipelineError("unknown node output ${nodes.%s.output.%s}"
-                                % (parts[1], parts[3]))
+            raise MissingNodeOutput("unknown node output ${nodes.%s.output.%s}"
+                                    % (parts[1], parts[3]))
         return outs[parts[3]]
     if parts[0] == "run" and len(parts) == 2:
         d = ctx.get("run", {})
@@ -446,6 +454,24 @@ def _resolve_expr(expr, ctx):
     just an unknown function that RAISES (test_no_eval_arbitrary_expr_refuses)."""
     expr = expr.strip()
     m = _CALL_RE.match(expr)
+    if m and m.group(1) == "default":
+        # default() is the ONE lazy function: its first argument may be a
+        # back-edge-visible node output that legitimately does not exist yet
+        # (findings-return, decision 7 in the Phase C plan). ONLY
+        # MissingNodeOutput maps to the fallback -- a typo'd param stays a
+        # hard error. The _ALLOWED_FUNCS entry stays: the static checker and
+        # arity errors still read it.
+        args_raw = _split_args(m.group(2))
+        if len(args_raw) != 2:
+            raise PipelineError("function 'default' arity: expected 2, got %d"
+                                % len(args_raw))
+        try:
+            first = _resolve_arg(args_raw[0], ctx)
+        except MissingNodeOutput:
+            return _resolve_arg(args_raw[1], ctx)
+        if first in (None, "", False):
+            return _resolve_arg(args_raw[1], ctx)
+        return first
     if m:
         fn, raw = m.group(1), m.group(2)
         spec = _ALLOWED_FUNCS.get(fn)

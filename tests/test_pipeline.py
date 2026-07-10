@@ -2194,5 +2194,35 @@ class CheckRefsTest(unittest.TestCase):
             self.assertTrue(pipeline.validate_doc(d, None))   # errors, no crash
 
 
+class LazyDefaultTest(unittest.TestCase):
+    CTX = {"params": {"x": "v"}, "nodes": {"done": {"branch": "b1"}},
+           "run": {"id": "r"}}
+
+    def test_missing_node_output_is_typed(self):
+        with self.assertRaises(pipeline.MissingNodeOutput):
+            pipeline.substitute("${nodes.ghost.output.x}", self.CTX)
+        with self.assertRaises(pipeline.MissingNodeOutput):
+            pipeline.substitute("${nodes.done.output.ghost}", self.CTX)
+
+    def test_default_tolerates_missing_node_output(self):
+        out = pipeline.substitute(
+            "${default(nodes.ghost.output.findings, 'none yet')}", self.CTX)
+        self.assertEqual(out, "none yet")
+
+    def test_default_still_resolves_present_output(self):
+        out = pipeline.substitute(
+            "${default(nodes.done.output.branch, 'none')}", self.CTX)
+        self.assertEqual(out, "b1")
+
+    def test_default_does_not_mask_param_typos(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.substitute("${default(params.ghost, 'x')}", self.CTX)
+
+    def test_default_empty_first_arg_still_falls_back(self):
+        ctx = {"params": {"m": ""}, "nodes": {}, "run": {}}
+        self.assertEqual(
+            pipeline.substitute("${default(params.m, 'fb')}", ctx), "fb")
+
+
 if __name__ == "__main__":
     unittest.main()
