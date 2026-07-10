@@ -2194,6 +2194,90 @@ class CheckRefsTest(unittest.TestCase):
             self.assertTrue(pipeline.validate_doc(d, None))   # errors, no crash
 
 
+def _findings_doc():
+    """The spec S2.1 example, expressed with today's back-edge rule:
+    pick -> stage[code] -> qa, qa --failure,back--> stage."""
+    return {
+        "name": "t2m", "version": 1, "caps": {"max_sessions_per_run": 10},
+        "params": [], "outputs": [],
+        "nodes": [
+            {"id": "pick", "type": "pick", "brief_ref": "pick.md"},
+            {"id": "code", "type": "agent_task", "brief_ref": "code.md"},
+            {"id": "qa", "type": "check", "brief_ref": "qa.md"},
+        ],
+        "containers": [{"id": "st", "kind": "stage", "children": ["code"]}],
+        "edges": [
+            {"from": "pick", "to": "st", "on": "success"},
+            {"from": "st", "to": "qa", "on": "success"},
+            {"from": "qa", "to": "st", "on": "failure", "back": True,
+             "max_bounces": 3},
+        ],
+    }
+
+
+class SoftBackEdgeRefTest(unittest.TestCase):
+    def test_bare_future_ref_refuses(self):
+        doc = _findings_doc()
+        doc["nodes"][1]["runs_as"] = {"model": "${nodes.qa.output.findings}"}
+        errs = pipeline.validate_doc(doc)
+        self.assertTrue(any("strict upstream" in e for e in errs), errs)
+
+    def test_future_ref_inside_default_validates(self):
+        # exercised through a STRING FIELD the scanner walks; brief text is
+        # checked by the same _check_expr_static at compile time
+        doc = _findings_doc()
+        doc["params"] = [{"name": "m", "type": "model", "required": False,
+                          "default": "claude-sonnet-5"}]
+        doc["nodes"][1]["runs_as"] = {
+            "model": "${default(nodes.qa.output.model_hint, params.m)}"}
+        self.assertEqual(pipeline.validate_doc(doc), [])
+
+    def test_default_second_arg_gets_no_soft_pass(self):
+        doc = _findings_doc()
+        doc["nodes"][1]["runs_as"] = {
+            "model": "${default(params_missing_entirely, nodes.qa.output.h)}"}
+        errs = pipeline.validate_doc(doc)
+        self.assertTrue(errs)   # both args refuse: bad ref + non-soft position
+
+    def test_soft_set_requires_the_bounce_path(self):
+        # qa's back-edge removed -> code may NOT soft-reference qa
+        doc = _findings_doc()
+        doc["edges"] = doc["edges"][:2]
+        doc["nodes"][1]["runs_as"] = {
+            "model": "${default(nodes.qa.output.h, 'x')}"}
+        self.assertTrue(pipeline.validate_doc(doc))
+
+
+class SiblingRefTest(unittest.TestCase):
+    def _doc(self):
+        return {
+            "name": "sib", "version": 1, "caps": {"max_sessions_per_run": 9},
+            "nodes": [
+                {"id": "a", "type": "agent_task", "brief_ref": "a.md"},
+                {"id": "b", "type": "agent_task", "brief_ref": "b.md"},
+                {"id": "c", "type": "agent_task", "brief_ref": "c.md"},
+            ],
+            "containers": [{"id": "st", "kind": "stage",
+                            "children": ["a", "b"]}],
+            "edges": [{"from": "st", "to": "c", "on": "success"}],
+        }
+
+    def test_earlier_sibling_ref_validates(self):
+        doc = self._doc()
+        doc["nodes"][1]["runs_as"] = {"model": "${nodes.a.output.m}"}
+        self.assertEqual(pipeline.validate_doc(doc), [])
+
+    def test_later_sibling_ref_refuses(self):
+        doc = self._doc()
+        doc["nodes"][0]["runs_as"] = {"model": "${nodes.b.output.m}"}
+        self.assertTrue(pipeline.validate_doc(doc))
+
+    def test_upstream_container_child_ref_validates(self):
+        doc = self._doc()
+        doc["nodes"][2]["runs_as"] = {"model": "${nodes.b.output.m}"}
+        self.assertEqual(pipeline.validate_doc(doc), [])
+
+
 class LazyDefaultTest(unittest.TestCase):
     CTX = {"params": {"x": "v"}, "nodes": {"done": {"branch": "b1"}},
            "run": {"id": "r"}}

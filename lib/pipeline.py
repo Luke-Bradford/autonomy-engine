@@ -773,10 +773,48 @@ def _ancestors(doc, uid):
     return seen
 
 
-def _check_expr_static(expr, declared_params, allowed_nodes, errors, where):
+def _unit_node_ids(doc, uid):
+    """Node ids a UNIT contributes to the reference namespace: itself for a
+    plain node, its children for a container. Total over garbage shapes."""
+    con = None
+    for c in doc.get("containers") or []:
+        if isinstance(c, dict) and c.get("id") == uid:
+            con = c
+            break
+    if con is None:
+        return [uid]
+    return [ch for ch in (con.get("children") or []) if isinstance(ch, str)]
+
+
+def _soft_visible(doc, unit):
+    """Node ids whose outputs `unit` may reference ONLY inside default():
+    back-edge sources that re-run this unit when they bounce. src is
+    soft-visible to unit iff unit lies on the re-run stretch -- unit is the
+    back-edge target or downstream of it, AND strictly upstream of src."""
+    soft = set()
+    try:
+        edges = effective_edges(doc)
+    except Exception:
+        return soft
+    anc_of_unit = _ancestors(doc, unit)
+    for e in edges:
+        if not (isinstance(e, dict) and e.get("back")):
+            continue
+        src, tgt = e.get("from"), e.get("to")
+        if not (isinstance(src, str) and isinstance(tgt, str)):
+            continue
+        if (unit == tgt or tgt in anc_of_unit) and unit in _ancestors(doc, src):
+            soft.update(_unit_node_ids(doc, src))
+    return soft
+
+
+def _check_expr_static(expr, declared_params, allowed_nodes, soft_nodes,
+                       errors, where, soft_ok=False):
     """Parse ONE ${...} body without resolving anything. Mirrors
     _resolve_expr's grammar exactly -- if this accepts, resolution can only
-    fail on run-time-only facts (a node that wrote no outputs)."""
+    fail on run-time-only facts (a node that wrote no outputs). soft_nodes
+    are back-edge-visible node ids, legal ONLY as default()'s first argument
+    (soft_ok) -- the findings-return channel, decision 7."""
     expr = expr.strip()
     m = _CALL_RE.match(expr)
     if m:
@@ -796,14 +834,15 @@ def _check_expr_static(expr, declared_params, allowed_nodes, errors, where):
             errors.append("%s: function %r arity: expected %s, got %d"
                           % (where, fn, lo if hi == lo else "%s+" % lo,
                              len(args)))
-        for a in args:
+        for j, a in enumerate(args):
             a = a.strip()
             if len(a) >= 2 and a[0] == a[-1] and a[0] in "'\"":
                 continue                              # string literal
             if re.match(r"^-?\d+$", a):
                 continue                              # int literal
-            _check_expr_static(a, declared_params, allowed_nodes, errors,
-                               where)
+            _check_expr_static(a, declared_params, allowed_nodes, soft_nodes,
+                               errors, where,
+                               soft_ok=(fn == "default" and j == 0))
         return
     parts = expr.split(".")
     if parts[0] == "params" and len(parts) == 2:
@@ -818,10 +857,15 @@ def _check_expr_static(expr, declared_params, allowed_nodes, errors, where):
                           "Phase C)" % (where, parts[1]))
         return
     if parts[0] == "nodes" and len(parts) == 4 and parts[2] == "output":
-        if parts[1] not in allowed_nodes:
-            errors.append("%s: ${nodes.%s.output.%s} does not name a strict "
-                          "upstream node -- its outputs cannot exist yet"
-                          % (where, parts[1], parts[3]))
+        if parts[1] in allowed_nodes:
+            return
+        if soft_ok and parts[1] in soft_nodes:
+            return
+        errors.append("%s: ${nodes.%s.output.%s} does not name a strict "
+                      "upstream node -- its outputs cannot exist yet (a "
+                      "back-edge-visible node's outputs may be read only as "
+                      "default()'s first argument)"
+                      % (where, parts[1], parts[3]))
         return
     if parts[0] == "run" and len(parts) == 2:
         if parts[1] not in _RUN_FIELDS:
@@ -857,27 +901,41 @@ def check_refs(doc, errors):
                 if isinstance(ch, str):
                     con_of[ch] = con.get("id")
 
-    def scan(where, v, unit):
+    def _allowed_node_ids(nid, unit):
+        """Referenceable node ids for a node: every node an ancestor UNIT
+        contributes (a container's children included -- the latent gap
+        decision 9 fixes), plus EARLIER siblings in its own container (the
+        walk runs container children in order; later siblings stay refused
+        -- in a loop they would read the previous round's value)."""
+        allowed = set()
+        for a in _ancestors(doc, unit):
+            allowed.update(_unit_node_ids(doc, a))
+        cid = con_of.get(nid)
+        if cid is not None:
+            sibs = _unit_node_ids(doc, cid)
+            if nid in sibs:
+                allowed.update(sibs[:sibs.index(nid)])   # EARLIER siblings only
+        return allowed
+
+    def scan(where, v, unit, nid=None):
         if isinstance(v, str):
             if "${" in v.replace("$${", ""):
-                allowed = _ancestors(doc, unit) if unit else set()
-                # container children may also reference EARLIER SIBLINGS in
-                # the same container -- the walk runs them in order; Phase B
-                # does NOT statically allow that (the container is one unit
-                # to the walk; refusing is the safe side -- YAGNI).
+                allowed = _allowed_node_ids(nid, unit) if unit else set()
+                soft = _soft_visible(doc, unit) if unit else set()
                 protected = v.replace("$${", _ESC)
                 bodies = _REF_RE.findall(protected)
                 stripped = _REF_RE.sub("", protected)
                 if "${" in stripped:
                     errors.append("%s: unterminated ${ reference" % where)
                 for b in bodies:
-                    _check_expr_static(b, declared, allowed, errors, where)
+                    _check_expr_static(b, declared, allowed, soft, errors,
+                                       where)
         elif isinstance(v, dict):
             for k, x in v.items():
-                scan("%s.%s" % (where, k), x, unit)
+                scan("%s.%s" % (where, k), x, unit, nid)
         elif isinstance(v, list):
             for j, x in enumerate(v):
-                scan("%s[%d]" % (where, j), x, unit)
+                scan("%s[%d]" % (where, j), x, unit, nid)
 
     for i, node in enumerate(_lst(doc.get("nodes"))):
         if not isinstance(node, dict):
@@ -891,7 +949,7 @@ def check_refs(doc, errors):
         nid = node.get("id")
         unit = con_of.get(nid, nid) if isinstance(nid, str) else None
         clean = {k: v for k, v in node.items() if k not in _REF_FREE_FIELDS}
-        scan(where, clean, unit)
+        scan(where, clean, unit, nid)
     for i, con in enumerate(_lst(doc.get("containers"))):
         if isinstance(con, dict):
             scan("containers[%d]" % i, con, con.get("id"))
