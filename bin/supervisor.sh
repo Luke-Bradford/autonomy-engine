@@ -809,6 +809,9 @@ validate_lane() {
 
 # Enabled loop-role names, one per line (roles.py dispatch contract). The
 # caller handles rc!=0 (fail back to coder-only) and empty output (idle).
+# LEGACY (post-#374 cutover): the main loop enumerates TRIGGERS now
+# (resolve_dispatch_triggers). Kept because tests (and the enumeration-parity
+# invariant) exercise it -- removal is a Phase E cleanup.
 resolve_dispatch_roles() {
   _roles_enumerate dispatch "$AUTONOMY_TARGET_REPO"
 }
@@ -946,6 +949,23 @@ trigger_clear_backoff() {
   local p
   p="$(_trigger_ctl_path backoff "$1")" || return 0
   rm -f "$p" 2>>"$SUPLOG" || true
+}
+
+# Filter dispatch tokens through the per-trigger lifecycle: a stop-sentinel
+# trigger's tokens are OUT (hard stop: no new fires AND no advance; state
+# preserved), a trigger inside its error-backoff window is OUT for this tick
+# (one erroring trigger no longer monopolises the loop's retry cadence). A
+# token whose name fails the gate is dropped (prevention-log #6).
+filter_dispatchable_tokens() {
+  local tok name now
+  now="$(date -u +%s)"
+  for tok in "$@"; do
+    name="$(token_name "$tok")" || continue
+    trigger_stopped "$name" && continue
+    [ "$(trigger_backoff_until "$name")" -gt "$now" ] && continue
+    printf '%s\n' "$tok"
+  done
+  return 0
 }
 
 trigger_inflight_count() {
@@ -1132,6 +1152,9 @@ _role_name_path_safe() {
   return 0
 }
 
+# LEGACY (post-#374 cutover): the main loop fires resolve_trigger_cron_due
+# now (same markers/semantics; shim cron roles ride the trigger enumeration).
+# Kept because tests exercise it -- removal is a Phase E cleanup.
 resolve_cron_due() {
   local enum now name schedule marker last due
   enum="$(_cron_enumerate)" || return 0
@@ -1498,6 +1521,8 @@ any_pipeline_inflight() {
 # (pipeline_state_file); other lanes' states are another supervisor's
 # business. Role tokens are charset-gated before they can re-enter dispatch
 # (prevention-log #6 -- the filename is disk input).
+# LEGACY (post-#374 cutover): the main loop reads inflight_tokens (slot-
+# aware) now. Kept because tests exercise it -- removal is a Phase E cleanup.
 inflight_roles() {
   local f base lane="${AUTONOMY_LANE:-}"
   for f in "$LOGDIR"/.pipeline-run-*.json; do
@@ -2280,7 +2305,12 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # additive and best-effort: with no cron roles this is a no-op and the loop
     # behaves byte-for-byte as before.
     heartbeat "cron-check" "checking scheduled roles" ""
-    resolve_cron_due
+    # CUTOVER (#374): shim cron roles arrive through the trigger enumeration
+    # -- same markers, same first-sight/skip-and-warn semantics. Manual fire
+    # markers and deferred (queue-policy) fires drain in the same window.
+    resolve_trigger_cron_due
+    resolve_manual_fires
+    resolve_queued_fires
 
     # Event bus (W2, #86): wake event roles on new board/PR state, under the
     # held lock, one at a time. Also runs BEFORE the board-empty gate so an
@@ -2301,7 +2331,10 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # empty board ONLY in-flight roles dispatch -- a picked item finishes,
     # nothing new starts (a fresh run would burn a session discovering
     # there is nothing to pick).
-    inflight_list="$(inflight_roles | tr '\n' ' ')"
+    # CUTOVER (#374): in-flight TOKENS (slot-aware), filtered through the
+    # per-trigger stop sentinel + error-backoff window.
+    # shellcheck disable=SC2046  # intentional split: tokens are charset-gated words
+    inflight_list="$(filter_dispatchable_tokens $(inflight_tokens) | tr '\n' ' ')"
     inflight_list="${inflight_list% }"
     if [ "$open_count" = "0" ]; then
       if [ -z "$inflight_list" ]; then
@@ -2312,13 +2345,29 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
       fi
       dispatch_list="$inflight_list"
     else
-      # Round-robin over the enabled loop roles (re-enumerated every tick so
-      # a config edit applies on the next session) PLUS any in-flight role.
-      # Enumeration failure falls back to coder-only -- the conservative
-      # default; preflight's doctor check still gates a truly broken pack.
-      if ! dispatch_list="$(resolve_dispatch_roles)"; then
-        log "WARN role enumeration failed -- coder-only fallback (see supervisor.log)"
-        dispatch_list="coder"
+      # Round-robin over the enabled continuous triggers (re-enumerated
+      # every tick so a config/trigger edit applies on the next session)
+      # PLUS any in-flight token. CUTOVER (#374): SD-12's enumeration-
+      # failure -> coder-only fallback is RETIRED -- triggers are now the
+      # authority on what may run, and a failed enumeration can mean the
+      # config or trigger set is unreadable; running coder anyway would
+      # resurrect legacy dispatch past an operator-visible failure
+      # (fail-open). In-flight tokens still advance -- they need no
+      # enumeration; with none, the tick idles.
+      if trig_names="$(resolve_dispatch_triggers)"; then
+        dispatch_list=""
+        for _t in $trig_names; do
+          # Policy-gated start candidate: at capacity -> no NEW start (the
+          # in-flight token below keeps the run advancing).
+          if _tok="$(trigger_start_token "$_t")"; then
+            dispatch_list="$dispatch_list $_tok"
+          fi
+        done
+        dispatch_list="$(filter_dispatchable_tokens $dispatch_list | tr '\n' ' ')"
+      else
+        log "WARN trigger enumeration failed -- no new starts this tick (in-flight runs still advance; see supervisor.log)"
+        heartbeat "enumeration-failed" "trigger enumeration failed -- advancing in-flight only" "$(( $(date -u +%s) + ERR_BACKOFF_START ))"
+        dispatch_list=""
       fi
       for _r in $inflight_list; do
         case " $dispatch_list " in
@@ -2326,16 +2375,19 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
           *) dispatch_list="$dispatch_list $_r" ;;
         esac
       done
-      dispatch_list="${dispatch_list# }"
+      dispatch_list="$(printf '%s' "$dispatch_list" | tr -s ' ')"
+      dispatch_list="${dispatch_list# }"; dispatch_list="${dispatch_list% }"
       if [ -z "$dispatch_list" ]; then
-        log "no loop roles enabled -- idle ${EMPTY_IDLE}s"
-        heartbeat "idle" "no loop roles enabled -- idle" "$(( $(date -u +%s) + EMPTY_IDLE ))"
+        log "no dispatchable triggers -- idle ${EMPTY_IDLE}s"
+        heartbeat "idle" "no dispatchable triggers -- idle" "$(( $(date -u +%s) + EMPTY_IDLE ))"
         sleep "$EMPTY_IDLE"; continue
       fi
     fi
-    # shellcheck disable=SC2086  # intentional split: names are [A-Za-z0-9._-] tokens
+    # shellcheck disable=SC2086  # intentional split: tokens are [A-Za-z0-9._-@] words
     role="$(select_role "$role_rr" $dispatch_list)"
     role_rr=$(( (role_rr + 1) % 86400 ))
+    name="$(token_name "$role")" || { log "WARN bad dispatch token '$role' -- skipping tick"; sleep "$ERR_BACKOFF_START"; continue; }
+    kind="$(trigger_kind_of "$name")"
 
     # #318: fingerprint gate -- skip the session (zero LLM tokens) ONLY when
     # the observable world exactly matches state a previous COMPLETED session
@@ -2347,7 +2399,12 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # an unchanged world -- the gate still runs first (it computes the
     # FP_CURRENT that record_fingerprint persists on outcome 0; skipping it
     # would record a stale fingerprint), but its skip verdict is vetoed.
-    if fingerprint_gate "$role" && ! pipeline_inflight "$role"; then
+    # CUTOVER (#374): the gate keys on the bare NAME (fingerprint state files
+    # keep their per-role names -- parity invariant 5); "pending work vetoes
+    # the skip" now checks ANY slot, not just slot 0. For a native trigger
+    # any gate sub-probe that cannot read role config lands on the gate's
+    # own "any doubt falls through to dispatch" side -- the safe direction.
+    if fingerprint_gate "$name" && [ "$(trigger_inflight_count "$name")" -eq 0 ]; then
       fp_skips=$((fp_skips + 1))
       fp_wait="$(fingerprint_backoff "$fp_skips")"
       # Long sleeps would starve the top-of-tick cron/event resolvers -- cap
@@ -2365,7 +2422,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # is actually invoked, so the card never reads "running a session" while it
     # is only getting ready to (or is about to refuse and back off).
     heartbeat "dispatching $role" "selected $role -- preparing session (auth, preflight, worktree)" ""
-    run_session "$role"; outcome=$?
+    run_session "$role" "$kind"; outcome=$?
     # #318: a session actually RAN (whatever its outcome) -- only now does the
     # consecutive-skip backoff counter reset, exactly as documented.
     fp_skips=0
@@ -2385,8 +2442,9 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
          # #318: record what this tick OBSERVED before the session (FP_CURRENT
          # from fingerprint_gate) -- a clean session has now examined exactly
          # that world, so an identical future tick may skip. Outcome 0 only.
-         record_fingerprint "$role" "${AUTONOMY_LANE:-}" "$FP_CURRENT"
+         record_fingerprint "$name" "${AUTONOMY_LANE:-}" "$FP_CURRENT"
          err_backoff=$ERR_BACKOFF_START; limit_backoff=$LIMIT_BACKOFF_START
+         trigger_clear_backoff "$name"
          clear_reset_state
          sleep "$PACE" ;;
       # NOTE: usage-limit state is one marker per supervisor (engine.account_key),
@@ -2411,6 +2469,10 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
          sleep "$ERR_BACKOFF_START" ;;
       *) log "session error (rc=$outcome) -- backoff ${err_backoff}s"
          heartbeat "error-backoff" "session error (rc=$outcome) -- exponential backoff" "$(( $(date -u +%s) + err_backoff ))"
+         # Per-trigger error backoff (#374): T sits out its own window while
+         # other triggers stay eligible. The loop-global sleep below REMAINS
+         # -- it paces the loop when every trigger is backing off.
+         trigger_record_error_backoff "$name"
          sleep "$err_backoff"
          err_backoff=$(( err_backoff*2 < ERR_BACKOFF_MAX ? err_backoff*2 : ERR_BACKOFF_MAX )) ;;
     esac

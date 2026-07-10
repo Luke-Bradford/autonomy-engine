@@ -224,6 +224,79 @@ check "queued marker written"       "native" "$(cat "$VARDIR/trigger-ctl/queued/
 rm -f "$LOGDIR"/.pipeline-run-*.json "$VARDIR/trigger-ctl/queued/nightly" "$VARDIR/cron/nightly.last_fire"
 rm -f "$repo/.autonomy/triggers"/*.json
 
+# --- Task 9: the seven cutover parity invariants -------------------------------
+# 1. Enumeration parity: a roles-only config enumerates exactly
+#    resolve_dispatch_roles' output, same order, all kind=shim -- REAL CLIs,
+#    no stubs, over a fixture with standard + custom roles.
+parity="$tmp/parity"
+mkdir -p "$parity/.autonomy" "$parity/var/autonomy-logs"
+cat >"$parity/.autonomy/config.yaml" <<'EOF'
+roles:
+  coder:
+    enabled: true
+  docs-bot:
+    enabled: true
+  pm:
+    enabled: true
+    trigger:
+      type: cron
+      schedule: '0 6 * * *'
+EOF
+AUTONOMY_TARGET_REPO="$parity"
+roles_out="$(resolve_dispatch_roles | tr '\n' ' ')"
+trig_out="$(resolve_dispatch_triggers | tr '\n' ' ')"
+check "parity1 same names same order" "$roles_out" "$trig_out"
+kind_check=0
+for _n in $trig_out; do [ "$(trigger_kind_of "$_n")" = "shim" ] || kind_check=1; done
+check "parity1 every entry kind=shim" "0" "$kind_check"
+AUTONOMY_TARGET_REPO="$repo"
+
+# 2. Filename parity: a pre-cutover state file (no @, no lane) appears in
+#    inflight_tokens as the bare name and round-trips to the same path.
+pre="$LOGDIR/.pipeline-run-coder.json"
+: >"$pre"
+check "parity2 token is bare name"  "coder" "$(inflight_tokens | tr -d '\n')"
+check "parity2 path round-trip"     "$pre"  "$(pipeline_state_file "$(inflight_tokens | tr -d '\n')" 0)"
+rm -f "$pre"
+
+# 4. (kind of unenumerated token = shim -- pinned above in the Task 7 block.)
+
+# 6. Stopped trigger's token filtered; backoff-marked trigger's token filtered.
+: >"$LOGDIR/.pipeline-run-coder.json"
+: >"$LOGDIR/.pipeline-run-qa@1.json"
+: >"$LOGDIR/.pipeline-run-ok.json"
+mkdir -p "$VARDIR/trigger-ctl/stop" "$VARDIR/trigger-ctl/backoff"
+: >"$VARDIR/trigger-ctl/stop/coder"
+printf '%s\t1\n' "$(( $(date -u +%s) + 900 ))" >"$VARDIR/trigger-ctl/backoff/qa"
+# shellcheck disable=SC2046  # intentional split: tokens are [A-Za-z0-9._-@] words
+out="$(filter_dispatchable_tokens $(inflight_tokens) | sort | tr '\n' ' ')"
+check "parity6 stop+backoff filtered" "ok " "$out"
+printf '5\t1\n' >"$VARDIR/trigger-ctl/backoff/qa"    # expired backoff = eligible
+# shellcheck disable=SC2046
+out="$(filter_dispatchable_tokens $(inflight_tokens) | sort | tr '\n' ' ')"
+check "parity6 expired backoff passes" "ok qa@1 " "$out"
+rm -f "$VARDIR/trigger-ctl/stop/coder" "$VARDIR/trigger-ctl/backoff/qa" \
+      "$LOGDIR"/.pipeline-run-*.json
+
+# 3/5/7. Loop-wiring assertions (grep-level, per the plan): the main loop
+# enumerates TRIGGERS, keeps the empty-board in-flight-only assembly, keeps
+# the event path on ROLES, splits token->name for the fingerprint gate, and
+# passes kind to run_session. Event-path invariant 5 is the UNCHANGED
+# test_event_bus.sh suite -- run_all executes it.
+sup="$ENGINE_HOME/bin/supervisor.sh"
+check "loop enumerates triggers"    "1" "$(grep -c 'trig_names="\$(resolve_dispatch_triggers)"' "$sup")"
+check "loop cron via triggers"      "1" "$(grep -c '^    resolve_trigger_cron_due$' "$sup")"
+check "loop consumes manual fires"  "1" "$(grep -c '^    resolve_manual_fires$' "$sup")"
+check "loop consumes queued fires"  "1" "$(grep -c '^    resolve_queued_fires$' "$sup")"
+check "loop inflight via tokens"    "1" "$(grep -c 'inflight_list="\$(filter_dispatchable_tokens' "$sup")"
+check "empty board inflight-only"   "1" "$(grep -c 'dispatch_list="\$inflight_list"' "$sup")"
+check "event path stays on roles"   "1" "$(grep -c 'resolve_event_wakes "\$session_ran"' "$sup")"
+check "fp gate gets bare name"      "1" "$(grep -c 'fingerprint_gate "\$name"' "$sup")"
+check "run_session gets kind"       "1" "$(grep -c 'run_session "\$role" "\$kind"; outcome=' "$sup")"
+check "no coder fallback left"      "0" "$(grep -c 'dispatch_list="coder"' "$sup")"
+check "error arm records backoff"   "1" "$(grep -c 'trigger_record_error_backoff "\$name"' "$sup")"
+check "clean arm clears backoff"    "1" "$(grep -c 'trigger_clear_backoff "\$name"' "$sup")"
+
 echo
 if [ "$fails" -gt 0 ]; then echo "$fails FAILURE(S)"; exit 1; fi
 echo "ALL CHECKS PASS"
