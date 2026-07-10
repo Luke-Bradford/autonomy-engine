@@ -151,6 +151,53 @@ svg.edges path.hit{pointer-events:stroke;cursor:pointer}
 .mmnode.hit{fill:var(--warn);stroke:none}
 .mmview{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1;cursor:grab}
 @media(max-width:1120px){.minimap{display:none}}
+
+/* ---- Phase D1 (#383): view tabs + gallery/triggers/runs lists (v6 mockup
+   classes, same token palette) ---- */
+.tabs{display:flex;gap:6px;margin:10px 0 12px}
+.tab{font:inherit;font-size:12.5px;background:var(--panel);border:1px solid var(--hair);color:var(--mut);border-radius:8px;padding:6px 12px;cursor:pointer}
+.tab.on{color:var(--ink);border-color:var(--accent);background:var(--accent-soft)}
+.tview{margin-top:6px}
+.vhead{display:flex;align-items:baseline;gap:10px;margin:6px 0 10px}
+.vhead .note{color:var(--dim);font-size:12px}
+#trigmsg{min-height:18px;color:var(--mut);font-size:12px;margin:0 0 8px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:10px}
+.pcard{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);padding:12px;box-shadow:var(--shadow)}
+.pcard .hd{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pcard .nm{font-weight:600}
+.pcard .kv{color:var(--mut);font-size:12px;margin-top:4px}
+.pcard .acts{display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap}
+.pcard .acts .off{color:var(--dim);font-size:12px;cursor:not-allowed}
+.badge.trust{border-color:var(--hair2)}
+.tier-auto{color:var(--ok)}
+.tier-watch{color:var(--warn)}
+.tchips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.tchip{font-family:var(--mono);font-size:10.5px;border:1px solid var(--hair);border-radius:9px;padding:1px 8px;color:var(--mut)}
+.tchip.okc{border-color:var(--ok-dim);color:var(--ok)}
+.tchip.warnc{border-color:var(--warn);color:var(--warn)}
+.tchip.badc{border-color:var(--bad);color:var(--bad)}
+.refbar{border:1px solid var(--bad);border-radius:var(--r);padding:8px 12px;margin-top:10px;color:var(--bad);font-family:var(--mono);font-size:11px;overflow-x:auto}
+.trow{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);padding:10px 12px;margin-bottom:8px}
+.trow.refused{border-color:var(--bad)}
+.trow .rline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.trow .rline+.rline{margin-top:6px}
+.trow .nm{font-weight:600}
+.trow .kv{color:var(--mut);font-size:12px}
+.switch{display:inline-flex;width:26px;height:14px;border-radius:8px;background:var(--ok-dim);position:relative;flex:none}
+.switch .knob{position:absolute;top:2px;right:2px;width:10px;height:10px;border-radius:50%;background:var(--ink)}
+.switch.off{background:var(--hair2)}
+.switch.off .knob{right:auto;left:2px;opacity:.6}
+.pill.go{border-color:var(--ok-dim);color:var(--ok)}
+.pill:disabled{opacity:.45;cursor:not-allowed}
+.runrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);padding:8px 12px;margin-bottom:6px;font-size:12.5px}
+.runrow.child{margin-left:34px;border-style:dashed}
+.runrow .oc{font-family:var(--mono);font-size:11px}
+.runrow .oc.ok{color:var(--ok)}
+.runrow .oc.bad{color:var(--bad)}
+.runrow .oc.warn{color:var(--warn)}
+.runrow .oc.acc{color:var(--accent)}
+.runrow .tok{font-family:var(--mono)}
+.runrow .kv{color:var(--mut)}
 </style>
 </head>
 <body>
@@ -164,6 +211,7 @@ svg.edges path.hit{pointer-events:stroke;cursor:pointer}
            aria-label="find an activity by id, type, or agent" autocomplete="off">
     <span id="searchcount" class="badge" style="display:none"></span>
     <span id="prov"></span>
+    <span id="runcrumb"></span>
     <span id="shadowchip"></span>
     <span class="gap"></span>
     <span id="ledgerchip"></span>
@@ -174,6 +222,18 @@ svg.edges path.hit{pointer-events:stroke;cursor:pointer}
     <button class="pill" id="revertbtn" style="display:none">revert</button>
     <button class="pill save" id="savebtn" style="display:none">save</button>
   </div>
+  <!-- Phase D1 (#383): view tabs -- gallery / triggers / runs are list views
+       over /api/triggers; canvas is the existing P3a-P3c page unchanged. -->
+  <div class="tabs" id="tabs" role="tablist">
+    <button class="tab" data-view="gallery">🗂 pipelines</button>
+    <button class="tab" data-view="triggers">⚡ triggers</button>
+    <button class="tab" data-view="runs">▶ runs</button>
+    <button class="tab" data-view="canvas">🎨 canvas</button>
+  </div>
+  <section id="v-gallery" class="tview" hidden></section>
+  <section id="v-triggers" class="tview" hidden></section>
+  <section id="v-runs" class="tview" hidden></section>
+  <div id="v-canvas" hidden>
   <div class="layout">
     <aside class="palette" id="palette"></aside>
     <main class="canvaswrap">
@@ -196,6 +256,7 @@ svg.edges path.hit{pointer-events:stroke;cursor:pointer}
     </main>
     <aside class="pane" id="pane"></aside>
   </div>
+  </div><!-- /#v-canvas -->
 </div>
 
 <script>
@@ -207,6 +268,16 @@ svg.edges path.hit{pointer-events:stroke;cursor:pointer}
    fixture never churns the DOM. */
 let VIEW = null;          // last payload (parsed) -- SERVER TRUTH (lighting etc.)
 let VIEWSIG = "";         // last payload (raw string) -- the render guard
+/* Phase D1 (#383): view tabs. The three list views render /api/triggers
+   behind their own raw-bytes guard (TRIGSIG); the canvas keeps VIEWSIG.
+   Only the ACTIVE tab's payload is fetched each tick. */
+const D1_VIEWS = ["gallery", "triggers", "runs", "canvas"];
+let CURVIEW = "triggers"; // active tab
+let TRIGSIG = "";         // /api/triggers raw-bytes render guard
+let TRIGDATA = null;      // parsed /api/triggers payload
+let CANVAS_STALE = false; // payload changed while the canvas tab was hidden
+let REPO = "";            // managed repo path (set at bootstrap)
+let TICK_FN = null;       // the active-view tick, kicked on tab switch
 let SEL = "";             // selected unit/node id ("" = nothing)
 let OBSERVED = false;
 const COLLAPSED = new Set();   // container ids, survives re-render
@@ -1020,6 +1091,198 @@ document.getElementById("revertbtn").addEventListener("click", revertNow);
 window.addEventListener("beforeunload", e => { if(DIRTY){ e.preventDefault(); e.returnValue = ""; } });
 
 /* ---- data flow ---- */
+/* ---- Phase D1 (#383): tabs + list views ------------------------------- */
+function showView(v){
+  if(D1_VIEWS.indexOf(v) < 0) v = "triggers";
+  CURVIEW = v;
+  for(const k of D1_VIEWS){
+    const s = document.getElementById("v-" + k);
+    if(s) s.hidden = (k !== v);
+    const t = document.querySelector('#tabs [data-view="' + k + '"]');
+    if(t) t.classList.toggle("on", k === v);
+  }
+  if(v === "canvas" && CANVAS_STALE && VIEW){ CANVAS_STALE = false; render(); }
+}
+function switchView(v){
+  const u = new URLSearchParams(location.search);
+  u.set("view", v);
+  history.replaceState(null, "", "?" + u.toString());
+  showView(v);
+  if(TICK_FN) TICK_FN();
+}
+function canvasHref(sel){
+  const u = new URLSearchParams();
+  u.set("repo", REPO); u.set("view", "canvas");
+  for(const k of ["role", "name", "token"]) if(sel[k]) u.set(k, sel[k]);
+  return "?" + u.toString();
+}
+function tierBadge(tier, runs, passes){
+  const cls = tier === "auto" ? "tier-auto" : "tier-watch";
+  return `<span class="badge trust ${cls}">🛡 ${esc(tier)} · ${Number(runs)||0} runs · ${Number(passes)||0} pass</span>`;
+}
+function modeChip(t){
+  if(t.mode === "continuous") return `<span class="tchip">⟳ continuous</span>`;
+  if(t.mode === "schedule")   return `<span class="tchip">🕐 schedule · ${esc(t.schedule||"")}</span>`;
+  if(t.mode === "event")      return `<span class="tchip">⚡ event · ${esc(t.event||"")}</span>`;
+  if(t.mode === "manual")     return `<span class="tchip">👤 manual</span>`;
+  return `<span class="tchip badc">mode ${esc(t.mode||"?")}</span>`;
+}
+function windowChip(t){
+  if(!t.run_windows || !t.run_windows.length) return `<span class="tchip">no windows</span>`;
+  return t.window_open ? `<span class="tchip okc">🕘 window OPEN</span>`
+                       : `<span class="tchip warnc">🕘 window CLOSED — new starts deferred</span>`;
+}
+function markerChips(t){
+  let h = "";
+  if(t.stopped)      h += `<span class="tchip badc">■ stopped</span>`;
+  if(t.fire_pending) h += `<span class="tchip warnc">▶ run-now pending</span>`;
+  if(t.queued)       h += `<span class="tchip warnc">queued fire held</span>`;
+  if(t.backoff && t.backoff.error)
+    h += `<span class="tchip badc">backoff marker unreadable</span>`;
+  else if(t.backoff && t.backoff.until)
+    h += `<span class="tchip warnc">backoff ×${Number(t.backoff.count)||0} until ${new Date(t.backoff.until*1000).toISOString().slice(11,16)}Z</span>`;
+  return h;
+}
+function renderTriggers(tv){
+  const box = document.getElementById("v-triggers");
+  let h = `<div class="vhead"><span class="eyebrow">triggers</span>` +
+          `<span class="note">enable/disable + trigger editing land in D2; ▶ run-now applies to manual-mode triggers</span></div>` +
+          `<div id="trigmsg"></div>`;
+  if(tv.error) h += `<div class="refbar">${esc(tv.error)}</div>`;
+  for(const t of (tv.triggers || [])){
+    const pipe = t.pipeline || t.name;
+    const sel = t.pipeline ? {name: t.pipeline} : {role: t.name};
+    const fireTitle = t.fire_ready ? "write a run-now marker" : (t.fire_block_reason || "not fireable");
+    h += `<div class="trow" data-name="${esc(t.name)}">
+      <div class="rline">
+        <span class="switch${t.enabled ? "" : " off"}" title="enable/disable lands in D2 (it edits the trigger file)"><span class="knob"></span></span>
+        <span class="nm">${esc(t.name)}</span>
+        <span class="kv">→ <a href="${esc(canvasHref(sel))}">${esc(pipe)}</a></span>
+        <span class="badge">${esc(t.kind)}</span>
+        ${tierBadge(t.tier, t.runs, t.passes)}
+        <span class="gap"></span>
+        <button class="pill go" data-act="trigger_fire" data-name="${esc(t.name)}" ${t.fire_ready ? "" : "disabled"} title="${esc(fireTitle)}">▶ run now</button>
+        ${t.stopped
+          ? `<button class="pill" data-act="trigger_resume" data-name="${esc(t.name)}" title="remove the stop marker">▶ resume</button>`
+          : `<button class="pill" data-act="trigger_stop" data-name="${esc(t.name)}" title="freeze: no new fires, no advance">■ stop</button>`}
+      </div>
+      <div class="rline">
+        ${modeChip(t)}
+        <span class="tchip">${esc((t.concurrency||{}).policy||"skip")}${(t.concurrency||{}).policy==="parallel" ? " ≤ " + esc(String((t.concurrency||{}).max||1)) : ""}</span>
+        ${windowChip(t)}
+        <span class="tchip">${Object.keys(t.params||{}).length} params</span>
+        ${t.lane ? `<span class="tchip">lane ${esc(t.lane)}</span>` : ""}
+        ${t.enabled ? "" : `<span class="tchip warnc">disabled</span>`}
+        ${markerChips(t)}
+      </div>
+    </div>`;
+  }
+  for(const w of (tv.refused || []))
+    h += `<div class="trow refused"><div class="rline"><span class="badge" style="color:var(--bad);border-color:var(--bad)">REFUSED</span><span class="kv">${esc(w)}</span></div></div>`;
+  box.innerHTML = h;
+}
+function runRow(r){
+  let oc;
+  if(r.state === "in-flight")
+    oc = r.status === "unreadable" ? `<span class="oc warn">⚠ unreadable</span>`
+                                   : `<span class="oc acc">● ${esc(r.status||"")}</span>`;
+  else
+    oc = r.pass ? `<span class="oc ok">✓ ${esc(r.status||"success")}</span>`
+                : `<span class="oc bad">✕ ${esc(r.status||"?")}</span>`;
+  const label = r.token || r.run_id || "?";
+  const light = r.token ? ` <a href="${esc(canvasHref({token: r.token}))}" title="open this run's canvas, lit">💡 canvas</a>` : "";
+  const kvs = [];
+  if(r.trigger)  kvs.push(`${esc(r.trigger)} → ${esc(r.pipeline||"")}`);
+  if(r.sessions != null) kvs.push(`${esc(String(r.sessions))} sessions`);
+  if(r.slot)     kvs.push(`slot @${esc(String(r.slot))}`);
+  if(r.lane)     kvs.push(`lane ${esc(r.lane)}`);
+  if(r.child && r.parent_run) kvs.push(`parent_run ↑`);
+  return `<div class="runrow${r.child ? " child" : ""}">${oc}<span class="tok">${esc(label)}</span><span class="kv">${kvs.join(" · ")}</span>${light}</div>`;
+}
+function renderRuns(tv){
+  const box = document.getElementById("v-runs");
+  let h = `<div class="vhead"><span class="eyebrow">runs</span><span class="note">in-flight first, then the journal tail; child runs indent under their caller</span></div>`;
+  const rows = tv.runs || [];
+  const byRun = {};
+  for(const r of rows) if(r.run_id) byRun[r.run_id] = r;
+  const kids = {}, top = [];
+  for(const r of rows){
+    if(r.child && r.parent_run && byRun[r.parent_run] && byRun[r.parent_run] !== r)
+      (kids[r.parent_run] = kids[r.parent_run] || []).push(r);
+    else top.push(r);
+  }
+  if(!rows.length) h += `<div class="runrow"><span class="kv">no runs yet</span></div>`;
+  for(const r of top){
+    h += runRow(r);
+    for(const c of (kids[r.run_id] || [])) h += runRow(c);
+  }
+  box.innerHTML = h;
+}
+function renderGallery(tv){
+  const box = document.getElementById("v-gallery");
+  let h = `<div class="vhead"><span class="eyebrow">pipelines</span><span class="note">＋ new pipeline / ⧉ clone land in D3</span></div><div class="cards">`;
+  for(const p of (tv.pipelines || [])){
+    const rollTier = p.tier ? tierBadge(p.tier, "—", "—").replace(/ · .*?pass/, " rollup") : "";
+    const chips = (p.triggers || []).map(n => {
+      const t = (tv.triggers || []).find(x => x.name === n) || {};
+      return `<span class="tchip ${t.tier === "auto" ? "okc" : ""}">${esc(n)}${t.tier ? " · " + esc(t.tier) : ""}</span>`;
+    }).join("");
+    const open = p.source === "wrapped" ? canvasHref({role: p.name}) : canvasHref({name: p.name});
+    h += `<div class="pcard">
+      <div class="hd"><span class="nm">${esc(p.name)}</span>
+        <span class="badge">${p.version != null ? "v" + esc(String(p.version)) + " · " : ""}${esc(p.source)}</span>
+        ${p.tier ? `<span class="badge trust ${p.tier === "auto" ? "tier-auto" : "tier-watch"}">🛡 rollup: ${esc(p.tier)}</span>` : ""}
+      </div>
+      ${p.errors && p.errors.length ? `<div class="refbar">${p.errors.map(esc).join("<br>")}</div>` : ""}
+      <div class="kv">${Number(p.nodes)||0} activities</div>
+      <div class="tchips">${chips || `<span class="tchip">no triggers</span>`}</div>
+      <div class="acts"><a href="${esc(open)}">open canvas</a><span class="off" title="trigger create/edit lands in D2">＋ trigger (D2)</span><span class="off" title="pipeline clone lands in D3">⧉ clone (D3)</span></div>
+    </div>`;
+  }
+  h += `</div>`;
+  for(const w of (tv.refused || []))
+    h += `<div class="refbar">${esc(w)}</div>`;
+  box.innerHTML = h;
+}
+async function trigCtl(action, name){
+  if(!hasToken()) return;
+  try{
+    const res = await fetch("/api/control", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({action: action, name: name, token: CTOKEN, repo: REPO})});
+    const out = await res.json();
+    const m = document.getElementById("trigmsg");
+    if(m) m.textContent = out.ok ? (out.message || "done")
+                                 : "refused: " + (out.error || "");
+    TRIGSIG = "";                 // force a fresh render with the new marker state
+    await tickLists();
+  }catch(e){ /* transient; next tick re-syncs */ }
+}
+async function tickLists(){
+  try{
+    const res = await fetch("/api/triggers?repo=" + encodeURIComponent(REPO));
+    const raw = await res.text();
+    if(raw === TRIGSIG) return;        // unchanged payload -> zero DOM writes
+    const msg = (document.getElementById("trigmsg") || {}).textContent || "";
+    TRIGSIG = raw;
+    TRIGDATA = JSON.parse(raw);
+    renderTriggers(TRIGDATA);
+    renderRuns(TRIGDATA);
+    renderGallery(TRIGDATA);
+    const m = document.getElementById("trigmsg");
+    if(m && msg) m.textContent = msg;  // keep the last action's outcome visible
+  }catch(e){ /* transient fetch/parse hiccup: keep the last good render */ }
+}
+document.getElementById("tabs").addEventListener("click", e => {
+  const b = e.target.closest("[data-view]");
+  if(b) switchView(b.dataset.view);
+});
+document.getElementById("v-triggers").addEventListener("click", e => {
+  const b = e.target.closest("button[data-act]");
+  if(!b || b.disabled) return;
+  trigCtl(b.dataset.act, b.dataset.name);
+});
+
 async function loadPickers(){
   try{
     const st = await (await fetch("/api/state")).json();
@@ -1036,9 +1299,27 @@ async function loadPickers(){
     return {repo: curRepo, role: curRole};
   }catch(e){ return {repo: qs().get("repo") || "", role: qs().get("role") || ""}; }
 }
-async function tick(repo, role){
+function renderRunCrumb(){
+  // D1 (#383): a token view's breadcrumb -- child canvases link back to
+  // their parent's run (decision 7 on #383, both ends reachable).
+  const el = document.getElementById("runcrumb");
+  if(!el) return;
+  const r = VIEW && VIEW.run;
+  if(!r){ el.innerHTML = ""; return; }
+  let h = `<span class="badge">run ${esc(r.token || "")} · ${esc(r.status || "")}</span>`;
+  if(r.parent_token)
+    h += ` <a href="${esc(canvasHref({token: r.parent_token}))}" title="open the parent run's canvas">↑ parent ${esc(r.parent_token)}</a>`;
+  el.innerHTML = h;
+}
+async function tick(repo, sel){
   try{
-    const res = await fetch("/api/pipeline?repo=" + encodeURIComponent(repo) + "&role=" + encodeURIComponent(role));
+    // D1 selector precedence: token > name > role (the builder enforces
+    // exactly-one; the page only ever sends one).
+    let q = "";
+    if(sel.token)      q = "&token=" + encodeURIComponent(sel.token);
+    else if(sel.name)  q = "&name=" + encodeURIComponent(sel.name);
+    else               q = "&role=" + encodeURIComponent(sel.role || "");
+    const res = await fetch("/api/pipeline?repo=" + encodeURIComponent(repo) + q);
     const raw = await res.text();
     if(raw === VIEWSIG) return;          // unchanged payload -> zero DOM writes
     VIEWSIG = raw;
@@ -1048,17 +1329,34 @@ async function tick(repo, role){
     // WORKING (the operator's graph); the read-only overlays (last_run /
     // in_flight / ledger) still refresh because render() reads them from VIEW.
     if(!DIRTY) adoptWorking();
+    renderRunCrumb();
+    if(document.getElementById("v-canvas").hidden){
+      // hidden geometry reads are all-zero (minimap/edge layout would be
+      // garbage) -- defer the render to the tab switch.
+      CANVAS_STALE = true;
+      return;
+    }
     render();
   }catch(e){ /* transient fetch/parse hiccup: keep the last good render */ }
 }
 (async () => {
   const {repo, role} = await loadPickers();
-  if(!repo || !role){
-    document.getElementById("errbar").innerHTML = `<div class="errbar"><span class="eyebrow">nothing to show</span><ul><li>no managed repo/role — add one on the control room page</li></ul></div>`;
+  REPO = repo || "";
+  const sel = {role: qs().get("role") || role || "",
+               name: qs().get("name") || "",
+               token: qs().get("token") || ""};
+  let v = qs().get("view");
+  if(D1_VIEWS.indexOf(v) < 0)
+    v = (qs().get("role") || sel.name || sel.token) ? "canvas" : "triggers";
+  showView(v);
+  if(!repo){
+    document.getElementById("errbar").innerHTML = `<div class="errbar"><span class="eyebrow">nothing to show</span><ul><li>no managed repo — add one on the control room page</li></ul></div>`;
+    showView("canvas");
     return;
   }
-  await tick(repo, role);
-  setInterval(() => tick(repo, role), 5000);
+  TICK_FN = () => { if(CURVIEW === "canvas") tick(repo, sel); else tickLists(); };
+  await TICK_FN();
+  setInterval(TICK_FN, 5000);
 })();
 </script>
 </body>
