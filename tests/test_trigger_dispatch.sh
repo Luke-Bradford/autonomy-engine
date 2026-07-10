@@ -288,6 +288,13 @@ check "cron marker initialised"     "0" "$([ -f "$VARDIR/cron/nightly.last_fire"
 printf '0' >"$VARDIR/cron/nightly.last_fire"
 resolve_trigger_cron_due
 check "cron due fires native"       " nightly:native" "$(rs_calls)"
+# marker discipline (ported from test_scheduler.sh): the fire advanced the
+# marker off its seeded value to a recent epoch (advance-before-fire).
+marker_after="$(cat "$VARDIR/cron/nightly.last_fire")"
+check "cron marker advanced off seed" "yes" \
+  "$([ "$marker_after" != "0" ] && echo yes || echo no)"
+check "cron marker is a recent epoch" "yes" \
+  "$([ "$marker_after" -gt 60 ] && echo yes || echo no)"
 # at capacity, policy queue -> ONE queued marker carrying the kind
 : >"$RS_FILE"
 : >"$LOGDIR/.pipeline-run-nightly.json"
@@ -306,6 +313,79 @@ _triggers_enumerate() { printf 'evil\t* * * * *\twat\n'; }
 resolve_trigger_cron_due
 check "hostile cron kind no fire"   "" "$(rs_calls)"
 check "hostile cron kind no marker" "1" "$([ -f "$VARDIR/cron/evil.last_fire" ] && echo 0 || echo 1)"
+
+# --- cron discipline ports from test_scheduler.sh (legacy-twin retirement) ---
+# not-due trigger does not fire: yearly schedule + fresh marker.
+_triggers_enumerate() { printf 'later\t0 0 1 1 *\tnative\n'; }
+: >"$RS_FILE"
+date -u +%s >"$VARDIR/cron/later.last_fire"
+resolve_trigger_cron_due
+check "cron not-due no fire"        "" "$(rs_calls)"
+rm -f "$VARDIR/cron/later.last_fire"
+
+# enumeration failure: rc 0, fired nothing (best-effort, never a loop error).
+_triggers_enumerate() { return 1; }
+: >"$RS_FILE"
+resolve_trigger_cron_due; rc=$?
+check "cron enum failure rc 0"      "0" "$rc"
+check "cron enum failure no fire"   "" "$(rs_calls)"
+
+# corrupt marker: reinitialise WITHOUT firing (never read as epoch 0).
+_triggers_enumerate() { printf 'corrupt\t* * * * *\tnative\n'; }
+: >"$RS_FILE"
+printf 'garbage' >"$VARDIR/cron/corrupt.last_fire"
+resolve_trigger_cron_due
+check "cron corrupt marker no fire" "" "$(rs_calls)"
+cm="$(cat "$VARDIR/cron/corrupt.last_fire")"
+case "$cm" in
+  ''|*[!0-9]*) cm_numeric=no ;;
+  *) cm_numeric=yes ;;
+esac
+check "cron corrupt marker reinit numeric" "yes" "$cm_numeric"
+rm -f "$VARDIR/cron/corrupt.last_fire"
+
+# marker-write failure: skip the fire, marker unadvanced (fail-safe
+# under-fire -- advance-before-fire means an unwritable marker never fires).
+# Skipped under root (perms ignored).
+if [ "$(id -u)" != "0" ]; then
+  _triggers_enumerate() { printf 'stuck\t* * * * *\tnative\n'; }
+  : >"$RS_FILE"
+  echo 1000000000 >"$VARDIR/cron/stuck.last_fire"   # due
+  chmod 0444 "$VARDIR/cron/stuck.last_fire"
+  resolve_trigger_cron_due; rc=$?
+  chmod 0644 "$VARDIR/cron/stuck.last_fire"          # restore for cleanup
+  check "cron marker-write failure rc 0"    "0" "$rc"
+  check "cron marker-write failure no fire" "" "$(rs_calls)"
+  check "cron marker-write failure unadvanced" "1000000000" \
+    "$(cat "$VARDIR/cron/stuck.last_fire")"
+  rm -f "$VARDIR/cron/stuck.last_fire"
+fi
+
+# dotted trigger name (valid per the charset) fires, not path-gated out.
+_triggers_enumerate() { printf 'pm.v2\t* * * * *\tnative\n'; }
+: >"$RS_FILE"
+echo 1000000000 >"$VARDIR/cron/pm.v2.last_fire"
+resolve_trigger_cron_due
+check "cron dotted name fires"      " pm.v2:native" "$(rs_calls)"
+rm -f "$VARDIR/cron/pm.v2.last_fire"
+
+# invalid name on the enumeration pipe: dropped, no fire (prevention-log #6).
+_triggers_enumerate() { printf 'bad/name\t* * * * *\tnative\n'; }
+: >"$RS_FILE"
+resolve_trigger_cron_due
+check "cron invalid name no fire"   "" "$(rs_calls)"
+
+# _role_name_path_safe: the single-sourced role/trigger-name charset gate
+# (#110) -- both live resolvers gate a name before it lands in a marker /
+# seen-set filename (ported verbatim from test_scheduler.sh).
+check "_role_name_path_safe is defined" "function" "$(type -t _role_name_path_safe)"
+_role_name_path_safe "pm.v2";     check "path-safe: dotted name rc 0" "0" "$?"
+_role_name_path_safe "coder_1-a"; check "path-safe: word/underscore/dash rc 0" "0" "$?"
+_role_name_path_safe "bad/name";  check "path-unsafe: slash rc 1" "1" "$?"
+_role_name_path_safe "a b";       check "path-unsafe: space rc 1" "1" "$?"
+_role_name_path_safe 'a;b';       check "path-unsafe: semicolon rc 1" "1" "$?"
+_role_name_path_safe '';          check "path-safe: empty rc 0 (emptiness gated elsewhere)" "0" "$?"
+
 # restore the REAL seam (unset -f would delete the sourced function too)
 _triggers_enumerate() {
   if [ -n "${AUTONOMY_LANE:-}" ]; then
@@ -340,10 +420,16 @@ _triggers_enumerate() {
 }
 rm -f "$LOGDIR"/.pipeline-run-*.json
 
-# --- Task 9: the seven cutover parity invariants -------------------------------
-# 1. Enumeration parity: a roles-only config enumerates exactly
-#    resolve_dispatch_roles' output, same order, all kind=shim -- REAL CLIs,
-#    no stubs, over a fixture with standard + custom roles.
+# --- Task 9: the cutover parity invariants -------------------------------------
+# (parity1's legacy comparator was retired with the legacy enumerator in
+# Phase E -- the assertion below pins the same property DIRECTLY: enabled
+# loop roles, `roles:` order, every entry kind=shim. The ordering pin also
+# survives python-side in tests/test_triggers.py::
+# test_shim_order_matches_loop_roles_order.)
+# 1. Enumeration: a roles-only config enumerates exactly its enabled loop
+#    roles, in `roles:` order, all kind=shim -- REAL CLIs, no stubs, over a
+#    fixture with standard + custom roles (the cron role rides the cron
+#    verb, not dispatch).
 parity="$tmp/parity"
 mkdir -p "$parity/.autonomy" "$parity/var/autonomy-logs"
 cat >"$parity/.autonomy/config.yaml" <<'EOF'
@@ -359,9 +445,8 @@ roles:
       schedule: '0 6 * * *'
 EOF
 AUTONOMY_TARGET_REPO="$parity"
-roles_out="$(resolve_dispatch_roles | tr '\n' ' ')"
 trig_out="$(resolve_dispatch_triggers | tr '\n' ' ')"
-check "parity1 same names same order" "$roles_out" "$trig_out"
+check "parity1 enabled loop roles in roles: order" "coder docs-bot " "$trig_out"
 kind_check=0
 for _n in $trig_out; do [ "$(trigger_kind_of "$_n")" = "shim" ] || kind_check=1; done
 check "parity1 every entry kind=shim" "0" "$kind_check"
