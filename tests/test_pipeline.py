@@ -1854,6 +1854,180 @@ class SubstitutionWiringTest(unittest.TestCase):
             self.assertNotIn("pipeline:outputs", fh.read())
 
 
+class StartRunTriggerTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        self.pdir = os.path.join(self.repo, ".autonomy", "pipelines", "flow")
+        self.tdir = os.path.join(self.repo, ".autonomy", "triggers")
+        self.logdir = os.path.join(self.repo, "var", "autonomy-logs")
+        for d in (self.pdir, self.tdir, self.logdir):
+            os.makedirs(d)
+        self.state = os.path.join(self.logdir, ".pipeline-run-t1.json")
+        doc = {"name": "flow", "version": 1,
+               "params": [
+                   {"name": "repo", "type": "repo", "required": True},
+                   {"name": "m", "type": "model",
+                    "default": "claude-sonnet-5"},
+                   {"name": "tok", "type": "secret"}],
+               "caps": {"max_sessions_per_run": 4},
+               "nodes": [{"id": "a", "type": "pick", "brief_ref": "a.md"}],
+               "edges": []}
+        with open(os.path.join(self.pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(self.pdir, "a.md"), "w") as fh:
+            fh.write("pick work in ${params.repo}")
+
+    def _trigger(self, **params):
+        t = {"name": "t1", "pipeline": "flow",
+             "params": dict({"repo": "/reg/checkout"}, **params),
+             "firing": {"mode": "continuous"}}
+        with open(os.path.join(self.tdir, "t1.json"), "w") as fh:
+            json.dump(t, fh)
+
+    def _start(self, **kw):
+        kw.setdefault("known_repos", lambda: {"/reg/checkout"})
+        kw.setdefault("known_accounts", lambda: {"acct-a"})
+        return pipeline.start_run_trigger(self.repo, "t1", self.state, **kw)
+
+    def test_start_resolves_params_into_state(self):
+        self._trigger()
+        st = self._start()
+        self.assertEqual(st["trigger"], "t1")
+        self.assertEqual(st["kind"], "native")
+        self.assertEqual(st["params"]["m"], "claude-sonnet-5")
+        self.assertEqual(st["run"]["pipeline"], "flow")
+        self.assertEqual(st["run"]["trigger"], "t1")
+        self.assertEqual(st["run"]["repo"], self.repo)
+
+    def test_required_unset_refuses_before_any_state_write(self):
+        t = {"name": "t1", "pipeline": "flow", "params": {},
+             "firing": {"mode": "continuous"}}
+        with open(os.path.join(self.tdir, "t1.json"), "w") as fh:
+            json.dump(t, fh)
+        with self.assertRaises(pipeline.PipelineError):
+            self._start()
+        self.assertFalse(os.path.exists(self.state))
+
+    def test_unregistered_repo_param_refuses(self):
+        self._trigger()
+        with self.assertRaises(pipeline.PipelineError):
+            self._start(known_repos=lambda: {"/other"})
+
+    def test_unreadable_registry_refuses_runs_that_use_repo_type(self):
+        self._trigger()
+
+        def broken():
+            raise OSError("no registry")
+        with self.assertRaises(pipeline.PipelineError):
+            self._start(known_repos=broken)
+
+    def test_unknown_account_param_refuses(self):
+        # swap the doc's param decl to account-typed via a fresh pipeline
+        with open(os.path.join(self.pdir, "pipeline.json")) as fh:
+            doc = json.load(fh)
+        doc["params"] = [{"name": "acct", "type": "account",
+                          "required": True}]
+        with open(os.path.join(self.pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(self.pdir, "a.md"), "w") as fh:
+            fh.write("no refs")
+        t = {"name": "t1", "pipeline": "flow",
+             "params": {"acct": "ghost"},
+             "firing": {"mode": "continuous"}}
+        with open(os.path.join(self.tdir, "t1.json"), "w") as fh:
+            json.dump(t, fh)
+        with self.assertRaises(pipeline.PipelineError):
+            self._start()
+
+    def test_secret_value_supplied_refuses_and_never_echoes_value(self):
+        self._trigger(tok="hunter2-value")
+        with self.assertRaises(pipeline.PipelineError) as cm:
+            self._start()
+        self.assertNotIn("hunter2-value", str(cm.exception))
+        self.assertIn("tok", str(cm.exception))
+
+    def test_secret_with_pipeline_default_refuses_too(self):
+        # Codex CP1: a saved default would resolve through secret_lookup
+        # into state['params'] on disk -- the same refusal must cover it.
+        with open(os.path.join(self.pdir, "pipeline.json")) as fh:
+            doc = json.load(fh)
+        doc["params"] = [p if p["name"] != "tok" else
+                         {"name": "tok", "type": "secret", "default": "KEY"}
+                         for p in doc["params"]]
+        with open(os.path.join(self.pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        self._trigger()
+        with self.assertRaises(pipeline.PipelineError) as cm:
+            self._start()
+        self.assertIn("tok", str(cm.exception))
+
+    def test_declared_valueless_secret_is_inert(self):
+        self._trigger()          # 'tok' declared, no default, no value
+        st = self._start()
+        self.assertNotIn("tok", st["params"])
+
+    def test_missing_pipeline_refuses(self):
+        t = {"name": "t1", "pipeline": "ghost", "params": {},
+             "firing": {"mode": "continuous"}}
+        with open(os.path.join(self.tdir, "t1.json"), "w") as fh:
+            json.dump(t, fh)
+        with self.assertRaises(pipeline.PipelineError):
+            self._start()
+
+    def test_shim_state_shape_matches(self):
+        # start_run gains trigger/kind/params/run too -- ONE state shape.
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("roles:\n  coder:\n    enabled: true\n")
+        with open(os.path.join(self.repo, ".autonomy", "loop_prompt.md"),
+                  "w") as fh:
+            fh.write("loop")
+        st = pipeline.start_run(self.repo, "coder",
+                                os.path.join(self.logdir,
+                                             ".pipeline-run-coder.json"))
+        self.assertEqual(st["trigger"], "coder")
+        self.assertEqual(st["kind"], "shim")
+        self.assertEqual(st["params"], {})
+        self.assertEqual(st["run"]["trigger"], "coder")
+
+
+class SecretMessageAuditTest(unittest.TestCase):
+    def test_secret_failure_message_names_param_never_value(self):
+        # Secret error paths must carry the NAME only -- the message flows
+        # to supervisor.log via stderr (SD-8 redaction belt).
+        declared = [{"name": "tok", "type": "secret"}]
+        with self.assertRaises(pipeline.PipelineError) as cm:
+            pipeline.resolve_params(declared, {"tok": "hunter2-value"},
+                                    secret_lookup=None)
+        self.assertIn("tok", str(cm.exception))
+        self.assertNotIn("hunter2-value", str(cm.exception))
+
+
+class JournalTriggerFieldTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, True)
+        os.makedirs(os.path.join(self.repo, ".autonomy"))
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("engine:\n  label: t\n")   # no roles block -> coder wraps
+        with open(os.path.join(self.repo, ".autonomy", "loop_prompt.md"), "w") as fh:
+            fh.write("legacy prompt\n")
+        self.state = os.path.join(self.repo, "state.json")
+        self.journal = os.path.join(self.repo, "journal.jsonl")
+
+    def test_journal_line_carries_additive_trigger_field(self):
+        pipeline.start_run(self.repo, "coder", self.state)
+        pipeline.next_node(self.state, os.path.join(self.repo, "brief.md"))
+        pipeline.record_outcome(self.state, "act", "success",
+                                session_log="/x/session-1.log",
+                                journal_path=self.journal)
+        with open(self.journal) as fh:
+            rec = json.loads(fh.read().splitlines()[0])
+        self.assertEqual(rec["trigger"], "coder")
+        self.assertEqual(rec["role"], "coder")      # ledger keys stay put
+
+
 class CheckRefsTest(unittest.TestCase):
     def _doc(self, nodes=None, edges=None, params=None):
         d = {"name": "flow", "version": 1,

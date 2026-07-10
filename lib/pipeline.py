@@ -1227,23 +1227,31 @@ def resolve_pipeline(repo, role):
     if not valid_pipeline_name(binding):
         raise PipelineError("roles.%s.pipeline %r has invalid charset"
                             % (role, binding))
-    # Read the var-live shadow when the operator has edited this pipeline in the
-    # canvas (SD-34); a present-but-invalid shadow RAISES below, never a silent
-    # fallback to the committed default (prevention-log #3). binding is
-    # charset-gated just above, so the resolver's precondition holds.
-    pdir = effective_pipeline_dir(repo, binding)
-    doc = load_doc(os.path.join(pdir, "pipeline.json"))
-    errs = validate_doc(doc, pdir)
-    if errs:
-        raise PipelineError("pipeline %r invalid: %s"
-                            % (binding, "; ".join(errs)))
-    _check_legacy_prompts(repo, doc, "pipeline %r" % binding)
     # P2b (#351): the P1/P2a multi-node cron/event refusal is LIFTED -- an
     # in-flight run joins the main loop's dispatch list regardless of its
     # trigger type, so a cron/event fire only STARTS the run and the loop
     # advances it with its own limit/backoff/pause handling.
+    return resolve_pipeline_doc(repo, binding)
+
+
+def resolve_pipeline_doc(repo, name):
+    """By-NAME pipeline resolution (trigger-started runs; also the bound
+    branch of resolve_pipeline -- extracted in Phase B, behaviour
+    byte-identical). Reads the var-live shadow when the operator has edited
+    this pipeline in the canvas (SD-34/SD-37); a present-but-invalid shadow
+    RAISES, never a silent fallback to the committed default
+    (prevention-log #3). Validates, checks legacy prompts. Fail-safe."""
+    if not valid_pipeline_name(name):
+        raise PipelineError("pipeline name %r has invalid charset" % (name,))
+    pdir = effective_pipeline_dir(repo, name)
+    doc = load_doc(os.path.join(pdir, "pipeline.json"))
+    errs = validate_doc(doc, pdir)
+    if errs:
+        raise PipelineError("pipeline %r invalid: %s"
+                            % (name, "; ".join(errs)))
+    _check_legacy_prompts(repo, doc, "pipeline %r" % name)
     return doc, {"pipeline_dir": pdir, "wrapped": False,
-                 "from": binding, "from_version": doc.get("version", 0)}
+                 "from": name, "from_version": doc.get("version", 0)}
 
 
 def _split_opts(args, opts):
@@ -1298,10 +1306,132 @@ def start_run(repo, role, state_path, lane=""):
     # starts across lanes/tests (second-granularity ids collide, weakening
     # the trust-ledger identity field).
     ident = "%s--%s" % (role, lane) if lane else role
+    run_id = "%s-%s-%d" % (ident, time.strftime("%Y%m%dT%H%M%S"), os.getpid())
+    # trigger/kind/params/run: ONE state shape with trigger-started runs
+    # (Phase B) -- the walk code never branches on kind. For a shim the
+    # trigger IS the role (name byte-equal, the trust-continuity contract).
     state = {"fmt": 2,
-             "run_id": "%s-%s-%d" % (ident, time.strftime("%Y%m%dT%H%M%S"),
-                                     os.getpid()),
+             "run_id": run_id,
              "role": role, "lane": lane, "doc": doc, "meta": meta,
+             "trigger": role, "kind": "shim", "params": {},
+             "run": {"id": run_id, "pipeline": doc["name"],
+                     "trigger": role, "repo": repo},
+             "started": int(time.time()), "sessions": 0,
+             "units": dict((u, {"status": "pending"}) for u in _top_units(doc)),
+             "container_pos": {}, "rounds": {}, "bounces": {},
+             "nodes_done": [], "status": "in_progress"}
+    _atomic_write_json(state_path, state)
+    return state
+
+
+def _registered_repos():
+    """The control-unit registry (bin/control.sh, one absolute path per
+    line). Raises OSError when unreadable -- the CALLER decides whether the
+    run needed it (a run with no repo-typed params never asks)."""
+    path = os.path.expanduser("~/.config/autonomy/repos")
+    with open(path, encoding="utf-8") as fh:
+        return set(ln.strip() for ln in fh if ln.strip())
+
+
+def _known_accounts():
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import accounts
+    # Accounts.list() returns dict ROWS (lib/accounts.py:384) -- set() over
+    # them would raise TypeError (Codex CP1; the plan named the class
+    # `Registry`, the real class is `Accounts` -- verified against the
+    # accounts tests). Project NAMES totally: drop any row that isn't
+    # readable as one (prevention-log #12).
+    out = set()
+    for row in accounts.Accounts().list():
+        name = row.get("name") if isinstance(row, dict) else row
+        if isinstance(name, str) and name:
+            out.add(name)
+    return out
+
+
+def check_param_existence(declared, resolved, *, known_repos, known_accounts):
+    """repo/account-typed params must name REGISTERED entities (spec S11:
+    'selects among engine-registered checkouts, validated -- never an
+    arbitrary path'). Reader failure REFUSES a run that uses the type
+    (can't verify = don't run); types not used never read the registry."""
+    types = {p["name"]: p.get("type") for p in declared
+             if isinstance(p, dict) and _is_str(p.get("name"))}
+    for name, value in resolved.items():
+        typ = types.get(name)
+        if typ == "repo":
+            try:
+                reg = known_repos()
+            except Exception as exc:
+                raise PipelineError("param %r: cannot read the repo "
+                                    "registry (%s) -- refusing" % (name, exc))
+            if value not in reg:
+                raise PipelineError("param %r: %r is not a registered "
+                                    "checkout" % (name, value))
+        elif typ == "account":
+            try:
+                known = known_accounts()
+            except Exception as exc:
+                raise PipelineError("param %r: cannot read the accounts "
+                                    "index (%s) -- refusing" % (name, exc))
+            if value not in known:
+                raise PipelineError("param %r: %r is not a known account"
+                                    % (name, value))
+
+
+def start_run_trigger(repo, trigger_name, state_path, lane="", *,
+                      known_repos=None, known_accounts=None):
+    """Start a run for a NATIVE trigger: load+validate the trigger, resolve
+    the pipeline BY NAME, resolve params (required-unset refuses HERE,
+    before a session is burned), run the repo/account existence checks,
+    write fmt-2 state. Secrets: Phase B refuses any secret param that
+    would RESOLVE -- trigger-supplied OR pipeline default (no dispatch
+    sink exists; check_refs already refuses secret REFS at validate time)
+    -- so no secret value can enter this dataflow, which IS the Phase
+    A-deferred log-redaction boundary, by construction. Deliberately NO
+    secret_lookup seam. A shim with pipeline '' never reaches this
+    function -- shims start through start_run(repo, role)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import triggers as triggers_mod
+    trig = triggers_mod.load_trigger(repo, trigger_name)
+    if not trig["pipeline"]:
+        raise PipelineError("trigger %r has no pipeline binding -- shim "
+                            "triggers start through start_run" % trigger_name)
+    doc, meta = resolve_pipeline_doc(repo, trig["pipeline"])
+    declared = doc.get("params") or []
+    # A secret param that WOULD RESOLVE -- supplied by the trigger OR
+    # carrying a pipeline-saved default -- is refused outright (Codex CP1:
+    # a default would flow through secret_lookup into state['params'] on
+    # disk). Declared-but-valueless secrets are inert. Phase B therefore
+    # never passes a secret_lookup at all: no secret value can enter this
+    # dataflow, which IS the Phase A-deferred redaction boundary.
+    resolving_secrets = sorted(
+        p["name"] for p in declared
+        if isinstance(p, dict) and p.get("type") == "secret"
+        and ("default" in p or p.get("name") in trig["params"]))
+    if resolving_secrets:
+        raise PipelineError(
+            "secret param(s) %s would resolve (trigger value or pipeline "
+            "default) but Phase B has no dispatch sink for secrets (env "
+            "channel lands in Phase C) -- refusing rather than "
+            "accept-and-ignore" % ", ".join(resolving_secrets))
+    params = resolve_params(declared, trig["params"], secret_lookup=None)
+    check_param_existence(
+        declared, params,
+        known_repos=known_repos or _registered_repos,
+        known_accounts=known_accounts or _known_accounts)
+    doc = dict(doc)
+    doc["edges"] = effective_edges(doc)
+    ident = "%s--%s" % (trigger_name, lane) if lane else trigger_name
+    run_id = "%s-%s-%d" % (ident, time.strftime("%Y%m%dT%H%M%S"),
+                           os.getpid())
+    # "role": trigger_name keeps every existing state consumer -- journal,
+    # dashboard state-file glob, ledger -- working without a branch; Phase E
+    # renames the key when trust re-keys.
+    state = {"fmt": 2, "run_id": run_id,
+             "role": trigger_name, "lane": lane, "doc": doc, "meta": meta,
+             "trigger": trigger_name, "kind": "native", "params": params,
+             "run": {"id": run_id, "pipeline": doc["name"],
+                     "trigger": trigger_name, "repo": repo},
              "started": int(time.time()), "sessions": 0,
              "units": dict((u, {"status": "pending"}) for u in _top_units(doc)),
              "container_pos": {}, "rounds": {}, "bounces": {},
@@ -1598,6 +1728,9 @@ def _journal_append(journal_path, state):
     rec = {
         "run_id": state.get("run_id", ""),
         "role": state.get("role", ""),
+        # Additive Phase B field: evidence for Phase E's per-trigger trust
+        # re-key starts accumulating now; ledger() does NOT read it yet.
+        "trigger": state.get("trigger", ""),
         "pipeline": doc.get("name", ""),
         "pipeline_version": meta.get("from_version", 0),
         "wrapped": bool(meta.get("wrapped")),
@@ -2019,11 +2152,22 @@ def main(argv):
         print(json.dumps(doc, indent=2, sort_keys=True))
         return 0
     if cmd == "start":
-        # start <repo> <role> <state-file> [--lane <lane>]
-        opts = {"--lane": ""}
+        # start <repo> <name> <state-file> [--lane <l>] [--kind shim|native]
+        # default shim = start_run(repo, role): every pre-Phase-B caller
+        # unchanged; native = start_run_trigger (trigger-started run).
+        opts = {"--lane": "", "--kind": "shim"}
         pos = _split_opts(rest, opts)
+        if opts["--kind"] not in ("shim", "native"):
+            print("pipeline start: --kind must be shim|native",
+                  file=sys.stderr)
+            return 2
         try:
-            state = start_run(pos[0], pos[1], pos[2], lane=opts["--lane"])
+            if opts["--kind"] == "native":
+                state = start_run_trigger(pos[0], pos[1], pos[2],
+                                          lane=opts["--lane"])
+            else:
+                state = start_run(pos[0], pos[1], pos[2],
+                                  lane=opts["--lane"])
         except (IndexError, PipelineError) as exc:
             print("pipeline start: %s" % exc, file=sys.stderr)
             return 1
