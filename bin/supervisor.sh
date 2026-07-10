@@ -950,8 +950,35 @@ _trig_field_of() {
 trigger_ctl_dir() { printf '%s/trigger-ctl/%s' "$VARDIR" "$1"; }
 
 _trigger_ctl_path() {   # $1=kind $2=name; rc 1 on a bad name
+  # Lane-scoped like pipeline_state_file (review round 2): a same-named
+  # trigger in another lane is a DIFFERENT trigger -- its stop/backoff/
+  # fire/queued markers must never freeze or throttle this lane's. A lane
+  # supervisor's markers carry the --<lane> suffix; the scanners skip
+  # other lanes' markers exactly as inflight_tokens does.
   case "$2" in *[!A-Za-z0-9._-]*|"") return 1 ;; esac
-  printf '%s/%s' "$(trigger_ctl_dir "$1")" "$2"
+  local lane="${AUTONOMY_LANE:-}"
+  if [ -n "$lane" ]; then
+    printf '%s/%s--%s' "$(trigger_ctl_dir "$1")" "$2" "$lane"
+  else
+    printf '%s/%s' "$(trigger_ctl_dir "$1")" "$2"
+  fi
+}
+
+# Split a marker BASENAME into this lane's trigger name: strips the --<lane>
+# suffix under a lane supervisor, skips (rc 1) markers belonging to other
+# lanes -- the inflight_tokens discipline applied to marker files. The
+# basename is DISK input: callers charset-gate the result before use.
+_ctl_marker_name() {   # $1=basename; prints name, rc 1 = not this lane's
+  local base="$1" lane="${AUTONOMY_LANE:-}"
+  if [ -n "$lane" ]; then
+    case "$base" in
+      *--"$lane") printf '%s' "${base%--"$lane"}" ;;
+      *) return 1 ;;
+    esac
+  else
+    case "$base" in *--*) return 1 ;; esac
+    printf '%s' "$base"
+  fi
 }
 
 # Per-trigger HARD STOP: no new fires AND in-flight tokens filtered out of
@@ -1043,34 +1070,42 @@ trigger_start_token() {
   if [ "$slot" = "0" ]; then printf '%s' "$name"; else printf '%s@%s' "$name" "$slot"; fi
 }
 
-# POLICY/MAX for a trigger NOT in the continuous dispatch arrays (manual +
-# schedule triggers): a `triggers.py show` read, defaulting to skip/1 on any
-# failure -- the safe direction (never opens extra slots on a misread).
-trigger_show_policy() {
-  local name="$1" out line policy=""
-  out="$(python3 "$ENGINE_HOME/lib/triggers.py" show "$AUTONOMY_TARGET_REPO" "$name" 2>>"$SUPLOG" || true)"
-  while IFS= read -r line; do
-    case "$line" in POLICY=*) policy="${line#POLICY=}" ;; esac
-  done <<<"$out"
-  case "$policy" in queue|skip|parallel) printf '%s' "$policy" ;; *) printf 'skip' ;; esac
-}
-
-trigger_start_token_for() {   # $1=name; show-backed capacity gate, rc 1 = full
-  local name="$1" out line policy="" max="" slot
-  out="$(python3 "$ENGINE_HOME/lib/triggers.py" show "$AUTONOMY_TARGET_REPO" "$name" 2>>"$SUPLOG" || true)"
-  # Exact KEY=VALUE line parse (Codex CP1: substring matching on the whole
-  # blob could match inside another value once fields grow). Requires the
-  # '=' separator per line -- prevention-log #1's parser rule.
+# ONE `triggers.py show` reader for every consumer (review round 2 NITPICK:
+# three near-identical loops unified). Exact KEY=VALUE line parse (Codex
+# CP1: substring matching on the whole blob could match inside another
+# value once fields grow; prevention-log #1's parser rule). Sets the
+# SHOW_MODE/SHOW_ENABLED/SHOW_POLICY/SHOW_MAX globals; SHOW_POLICY/SHOW_MAX
+# clamp to skip/1 on any misread -- the safe direction (never opens extra
+# slots).
+_trigger_show_fields() {   # $1=name
+  local out line
+  SHOW_MODE=""; SHOW_ENABLED=""; SHOW_POLICY=""; SHOW_MAX=""
+  out="$(python3 "$ENGINE_HOME/lib/triggers.py" show "$AUTONOMY_TARGET_REPO" "$1" 2>>"$SUPLOG" || true)"
   while IFS= read -r line; do
     case "$line" in *=*) ;; *) continue ;; esac
     case "${line%%=*}" in
-      POLICY) policy="${line#*=}" ;;
-      MAX)    max="${line#*=}" ;;
+      MODE)    SHOW_MODE="${line#*=}" ;;
+      ENABLED) SHOW_ENABLED="${line#*=}" ;;
+      POLICY)  SHOW_POLICY="${line#*=}" ;;
+      MAX)     SHOW_MAX="${line#*=}" ;;
     esac
   done <<<"$out"
-  [ "$policy" = "parallel" ] || max=1
-  case "$max" in *[!0-9]*|"") max=1 ;; esac
-  slot="$(trigger_free_slot "$name" "$max")" || return 1
+  case "$SHOW_POLICY" in queue|skip|parallel) ;; *) SHOW_POLICY="skip" ;; esac
+  [ "$SHOW_POLICY" = "parallel" ] || SHOW_MAX=1
+  case "$SHOW_MAX" in *[!0-9]*|"") SHOW_MAX=1 ;; esac
+}
+
+# POLICY for a trigger NOT in the continuous dispatch arrays (manual +
+# schedule triggers).
+trigger_show_policy() {
+  _trigger_show_fields "$1"
+  printf '%s' "$SHOW_POLICY"
+}
+
+trigger_start_token_for() {   # $1=name; show-backed capacity gate, rc 1 = full
+  local name="$1" slot
+  _trigger_show_fields "$name"
+  slot="$(trigger_free_slot "$name" "$SHOW_MAX")" || return 1
   if [ "$slot" = "0" ]; then printf '%s' "$name"; else printf '%s@%s' "$name" "$slot"; fi
 }
 
@@ -1083,7 +1118,7 @@ trigger_start_token_for() {   # $1=name; show-backed capacity gate, rc 1 = full
 # manual trigger (kept until enabled); it never gates a fire.
 # Capture-then-case, never producer|grep (prevention-log #7/#11).
 resolve_manual_fires() {
-  local d f name manual_list out line mode enabled mname mpolicy mmax
+  local d f name manual_list mname mpolicy mmax
   local policy max slot tok
   d="$(trigger_ctl_dir fire)"
   [ -d "$d" ] || return 0
@@ -1093,7 +1128,7 @@ resolve_manual_fires() {
   }
   for f in "$d"/*; do
     [ -e "$f" ] || continue
-    name="$(basename "$f")"
+    name="$(_ctl_marker_name "$(basename "$f")")" || continue   # other lane's
     case "$name" in
       *[!A-Za-z0-9._-]*|"")
         log "WARN trigger-ctl: fire marker with invalid name -- removing"
@@ -1107,16 +1142,8 @@ resolve_manual_fires() {
       # Not a dispatchable manual trigger this tick: keep the marker ONLY
       # for the disabled-manual case (resumes on re-enable); anything else
       # (non-manual, refused, colliding, unknown) is removed loudly.
-      out="$(python3 "$ENGINE_HOME/lib/triggers.py" show "$AUTONOMY_TARGET_REPO" "$name" 2>>"$SUPLOG" || true)"
-      mode=""; enabled=""
-      while IFS= read -r line; do
-        case "$line" in *=*) ;; *) continue ;; esac
-        case "${line%%=*}" in
-          MODE)    mode="${line#*=}" ;;
-          ENABLED) enabled="${line#*=}" ;;
-        esac
-      done <<<"$out"
-      if [ "$mode" = "manual" ] && [ "$enabled" = "false" ]; then
+      _trigger_show_fields "$name"
+      if [ "$SHOW_MODE" = "manual" ] && [ "$SHOW_ENABLED" = "false" ]; then
         log "NOTE trigger '$name' is disabled -- fire marker kept until enabled"
       else
         log "WARN trigger-ctl: '$name' is not a dispatchable manual trigger -- removing its fire marker"
@@ -1150,7 +1177,7 @@ resolve_queued_fires() {
   [ -d "$d" ] || return 0
   for f in "$d"/*; do
     [ -e "$f" ] || continue
-    name="$(basename "$f")"
+    name="$(_ctl_marker_name "$(basename "$f")")" || continue   # other lane's
     case "$name" in *[!A-Za-z0-9._-]*|"")
       rm -f "$f" 2>>"$SUPLOG" || true; continue ;; esac
     tok="$(trigger_free_slot "$name" 1 >/dev/null && printf '%s' "$name")" || continue
@@ -1279,7 +1306,7 @@ resolve_cron_due() {
 # fields: name, schedule, kind) and the fire is capacity-gated by the
 # trigger's concurrency policy (queue writes ONE deferred marker; skip warns).
 resolve_trigger_cron_due() {
-  local enum now name schedule kind marker last due tok qd
+  local enum now name schedule kind marker last due tok qp
   enum="$(_triggers_enumerate cron "$AUTONOMY_TARGET_REPO")" || return 0
   [ -n "$enum" ] || return 0
   now="$(date +%s)"
@@ -1315,11 +1342,12 @@ resolve_trigger_cron_due() {
       else
         case "$(trigger_show_policy "$name")" in
           queue)
-            qd="$(trigger_ctl_dir queued)"
-            mkdir -p "$qd" 2>>"$SUPLOG" || true
-            [ -f "$qd/$name" ] && \
-              log "WARN trigger '$name': queued fire overwritten (queue depth is 1)"
-            printf '%s\n' "$kind" >"$qd/$name" 2>>"$SUPLOG" || true ;;
+            mkdir -p "$(trigger_ctl_dir queued)" 2>>"$SUPLOG" || true
+            if qp="$(_trigger_ctl_path queued "$name")"; then
+              [ -f "$qp" ] && \
+                log "WARN trigger '$name': queued fire overwritten (queue depth is 1)"
+              printf '%s\n' "$kind" >"$qp" 2>>"$SUPLOG" || true
+            fi ;;
           *)
             log "NOTE trigger '$name': at capacity -- scheduled fire skipped (policy skip)" ;;
         esac

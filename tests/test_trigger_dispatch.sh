@@ -125,6 +125,22 @@ rm -f "$VARDIR/trigger-ctl/stop/coder"
 check "stop sentinel gone"          "1" "$(trigger_stopped coder && echo 0 || echo 1)"
 check "stop bad name refused"       "1" "$(trigger_stopped 'a;b' && echo 0 || echo 1)"
 
+# lane-scoped markers (review round 2): a same-named trigger in another lane
+# must never be frozen/throttled by THIS lane's markers -- the marker name
+# carries the lane suffix exactly like pipeline_state_file's filename.
+AUTONOMY_LANE="qa"
+: >"$VARDIR/trigger-ctl/stop/coder"          # bare marker = default lane's
+check "lane ignores default-lane stop" "1" "$(trigger_stopped coder && echo 0 || echo 1)"
+: >"$VARDIR/trigger-ctl/stop/coder--qa"
+check "lane sees its own stop"         "0" "$(trigger_stopped coder && echo 0 || echo 1)"
+trigger_record_error_backoff coder
+check "lane backoff file suffixed"     "0" "$([ -f "$VARDIR/trigger-ctl/backoff/coder--qa" ] && echo 0 || echo 1)"
+trigger_clear_backoff coder
+AUTONOMY_LANE=""
+rm -f "$VARDIR/trigger-ctl/stop/coder"       # drop the bare marker first
+check "default lane ignores qa stop"   "1" "$(trigger_stopped coder && echo 0 || echo 1)"
+rm -f "$VARDIR/trigger-ctl/stop/coder" "$VARDIR/trigger-ctl/stop/coder--qa"
+
 # slots: first hole wins; full -> rc 1; slot 0 keeps the legacy filename
 : >"$LOGDIR/.pipeline-run-qa.json"
 check "free slot skips slot 0"      "1" "$(trigger_free_slot qa 3)"
@@ -184,6 +200,16 @@ resolve_manual_fires
 check "manual at capacity no run"   "" "$(rs_calls)"
 check "manual marker kept"          "0" "$([ -f "$VARDIR/trigger-ctl/fire/push-now" ] && echo 0 || echo 1)"
 rm -f "$LOGDIR"/.pipeline-run-*.json "$VARDIR/trigger-ctl/fire/push-now"
+
+# lane discipline on the fire scanner (review round 2): a default-lane
+# supervisor skips other lanes' markers; a lane supervisor consumes only
+# its own suffix (trigger must belong to that lane in config).
+: >"$RS_FILE"
+: >"$VARDIR/trigger-ctl/fire/push-now--qa"
+resolve_manual_fires
+check "default lane skips qa marker" "" "$(rs_calls)"
+check "qa marker left in place"      "0" "$([ -f "$VARDIR/trigger-ctl/fire/push-now--qa" ] && echo 0 || echo 1)"
+rm -f "$VARDIR/trigger-ctl/fire/push-now--qa"
 
 # --- queued fires ---------------------------------------------------------------
 : >"$RS_FILE"

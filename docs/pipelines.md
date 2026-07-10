@@ -200,7 +200,10 @@ fires and how overlapping runs behave:
   no new fires AND in-flight runs freeze in place (state preserved;
   remove the file to resume mid-run). A trigger whose sessions error
   backs off individually (exponential, per trigger) so one broken
-  trigger never monopolises the loop's retries.
+  trigger never monopolises the loop's retries. Under a lane supervisor
+  every marker name carries the lane suffix — `stop/<name>--<lane>`,
+  `fire/<name>--<lane>` — so a same-named trigger in another lane is
+  never frozen or fired by mistake.
 - **Editing:** the same var-live shadow rule as pipelines — a file at
   `var/autonomy/triggers/<name>.json` beats the committed one; a
   present-but-invalid shadow refuses that trigger (never a silent
