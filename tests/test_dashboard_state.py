@@ -2065,6 +2065,102 @@ class BuildTriggersViewTest(unittest.TestCase):
         self.assertIn("ticket", t["fire_block_reason"])
 
 
+class RepoStateTriggersTest(unittest.TestCase):
+    """Phase D1 (#383): build_repo_state's additive trigger keys -- light
+    rows for the fleet rail + trust for the repo card/needs-you. Nothing
+    existing is removed; an unreadable trigger layer degrades to an error
+    field with the role rows as the rail fallback."""
+
+    def test_fixture_light_rows_and_trust(self):
+        st = ds.build_repo_state(FIX, git_in_flight=lambda p: {})
+        self.assertIn("roles", st)                     # untouched
+        names = sorted(t["name"] for t in st["triggers"])
+        self.assertEqual(names, ["adhoc-digest", "coder", "pr-sweep"])
+        self.assertEqual(st["trust"]["rollup"], {"fixture-flow": "watch"})
+        self.assertEqual(st["trust"]["refused"], [])
+        for t in st["triggers"]:
+            self.assertIn("tier", t)
+            self.assertIn("window_open", t)
+            self.assertFalse(t["stopped"])
+            self.assertFalse(t["missed_fire"])
+
+    def test_broken_trigger_layer_degrades_to_trust_error(self):
+        # build_repo_state's guard: a raising/erroring build_triggers_view
+        # becomes trust.error + triggers=[] (rail falls back to role rows),
+        # never a crash. (A config that does not PARSE at all raises out of
+        # _read_config before this layer -- pre-existing; the server wraps
+        # per-repo exceptions into an error card.)
+        real = ds.build_triggers_view
+        ds.build_triggers_view = lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError("boom"))
+        try:
+            st = ds.build_repo_state(FIX, git_in_flight=lambda p: {})
+        finally:
+            ds.build_triggers_view = real
+        self.assertEqual(st["triggers"], [])
+        self.assertIn("error", st["trust"])
+        self.assertIn("roles", st)                     # the rail fallback
+
+    def test_error_payload_from_trigger_layer_also_degrades(self):
+        real = ds.build_triggers_view
+        ds.build_triggers_view = lambda *a, **k: {
+            "error": "triggers unavailable: x", "triggers": [], "rollup": {},
+            "refused": [], "pipelines": [], "runs": []}
+        try:
+            st = ds.build_repo_state(FIX, git_in_flight=lambda p: {})
+        finally:
+            ds.build_triggers_view = real
+        self.assertEqual(st["triggers"], [])
+        self.assertEqual(st["trust"]["error"], "triggers unavailable: x")
+
+
+class TriggerHealthNativesTest(unittest.TestCase):
+    """Phase D1 (#383, CP1): native schedule triggers write the same
+    var/cron/<name>.last_fire markers -- the config-cron-roles-only reader
+    would miss a stalled native scheduler."""
+
+    NOW = 2000000
+
+    def _marker_dir(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        return d
+
+    def test_native_schedule_stall_reported(self):
+        d = self._marker_dir()
+        with open(os.path.join(d, "t1.last_fire"), "w") as fh:
+            fh.write("1000")                       # ancient
+        out = ds.trigger_health({"roles": {}}, d, self.NOW,
+                                schedule_triggers=[{"name": "t1",
+                                                    "schedule": "*/15 * * * *"}])
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["role"], "t1")
+        self.assertEqual(out[0]["kind"], "native")
+        self.assertTrue(out[0]["missed"])
+
+    def test_same_name_native_supersedes_role_row(self):
+        d = self._marker_dir()
+        cfg = {"roles": {"night": {"enabled": True,
+                                    "trigger": {"type": "cron",
+                                                "schedule": "*/15 * * * *"}}}}
+        out = ds.trigger_health(cfg, d, self.NOW,
+                                schedule_triggers=[{"name": "night",
+                                                    "schedule": "*/15 * * * *"}])
+        self.assertEqual([r["role"] for r in out], ["night"])   # ONE row
+        self.assertEqual(out[0]["kind"], "native")
+
+    def test_role_rows_gain_kind_and_junk_natives_skipped(self):
+        d = self._marker_dir()
+        cfg = {"roles": {"pm": {"enabled": True,
+                                 "trigger": {"type": "cron",
+                                             "schedule": "*/15 * * * *"}}}}
+        out = ds.trigger_health(cfg, d, self.NOW,
+                                schedule_triggers=[7, {"name": 1},
+                                                   {"name": "x"}, "junk"])
+        self.assertEqual([r["role"] for r in out], ["pm"])
+        self.assertEqual(out[0]["kind"], "role")
+
+
 if __name__ == "__main__":
     unittest.main()
 

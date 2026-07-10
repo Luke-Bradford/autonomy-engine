@@ -2108,7 +2108,8 @@ def attach_quota_forecast(windows, now):
     return out
 
 
-def trigger_health(config, cron_dir, now, grace_secs=300):
+def trigger_health(config, cron_dir, now, grace_secs=300,
+                   schedule_triggers=None):
     """Missed cron-fire detection (#188c) for the control room's trigger-health
     signal -- the 2026-07-03 swept-state incident named the real gap: a
     stalled/backed-off scheduler renders identically to a healthy idle one.
@@ -2151,8 +2152,8 @@ def trigger_health(config, cron_dir, now, grace_secs=300):
         cron = roles_schema.cron_roles(config, None)
     except Exception:
         return []
-    out = []
-    for name, schedule in cron:
+
+    def _row(name, schedule, kind):
         last_fire = None
         try:
             with open(os.path.join(cron_dir, "%s.last_fire" % name)) as fh:
@@ -2170,8 +2171,29 @@ def trigger_health(config, cron_dir, now, grace_secs=300):
                 expected_next = None
             if expected_next is not None and expected_next < now - grace_secs:
                 missed = True
-        out.append({"role": name, "schedule": schedule, "last_fire": last_fire,
-                    "expected_next": expected_next, "missed": missed})
+        return {"role": name, "schedule": schedule, "last_fire": last_fire,
+                "expected_next": expected_next, "missed": missed,
+                "kind": kind}
+    out = [_row(name, schedule, "role") for name, schedule in cron]
+    # Phase D1 (#383, CP1): NATIVE schedule triggers write the same
+    # var/cron/<name>.last_fire markers (supervisor's
+    # resolve_trigger_cron_due) -- a config-cron-roles-only read would miss
+    # a stalled native scheduler. Dedup by name: a native superseding a
+    # same-name cron role reads the same marker, so ONE row (marked native,
+    # the enumeration truth). Junk entries skipped (total reader).
+    if isinstance(schedule_triggers, list):
+        have = dict((r["role"], r) for r in out)
+        for t in schedule_triggers:
+            if not (isinstance(t, dict) and isinstance(t.get("name"), str)
+                    and t.get("name")
+                    and isinstance(t.get("schedule"), str)):
+                continue
+            if t["name"] in have:
+                have[t["name"]]["kind"] = "native"
+                continue
+            row = _row(t["name"], t["schedule"], "native")
+            out.append(row)
+            have[t["name"]] = row
     return out
 
 
@@ -2355,7 +2377,40 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
     quota = recent_quota_windows(logdir)   # scanned once; forecast reuses it
     sessions = recent_sessions(logdir)     # scanned once; ticket_effort reuses it
     roles = build_roles(config.get("roles"), status, now=now, sessions=sessions)
-    health = trigger_health(config, os.path.join(repo_path, "var", "cron"), now)
+    # Phase D1 (#383): the trigger layer -- light rows for the fleet rail +
+    # trust (rollup/refused) for the repo card and needs-you. Guarded: an
+    # unreadable trigger layer becomes trust.error with triggers=[] (the
+    # rail falls back to the role rows -- degrade to truth, badged), never
+    # a crash and never a healthy fallback.
+    trig_view = None
+    try:
+        trig_view = build_triggers_view(repo_path, now=now)
+    except Exception:
+        trig_view = None
+    natives = []
+    if isinstance(trig_view, dict):
+        natives = [{"name": t["name"], "schedule": t.get("schedule")}
+                   for t in trig_view.get("triggers", [])
+                   if t.get("kind") == "native" and t.get("mode") == "schedule"
+                   and isinstance(t.get("schedule"), str)]
+    health = trigger_health(config, os.path.join(repo_path, "var", "cron"),
+                            now, schedule_triggers=natives)
+    st_triggers, trust = [], {}
+    if not isinstance(trig_view, dict) or "error" in trig_view:
+        trust = {"error": (trig_view or {}).get("error",
+                                                "triggers unavailable")}
+    else:
+        trust = {"rollup": trig_view.get("rollup", {}),
+                 "refused": trig_view.get("refused", [])}
+        missed_trig = set(h["role"] for h in health if h.get("missed"))
+        for t in trig_view.get("triggers", []):
+            st_triggers.append({
+                "name": t["name"], "kind": t["kind"],
+                "pipeline": t["pipeline"], "mode": t["mode"],
+                "enabled": t["enabled"], "lane": t["lane"],
+                "window_open": t["window_open"], "tier": t["tier"],
+                "stopped": t["stopped"],
+                "missed_fire": t["name"] in missed_trig})
     # #188c render seam: fold each cron role's missed-fire flag onto its role
     # row, so the fleet rail can surface the swept-state incident (a stalled
     # scheduler that otherwise looks identical to a healthy idle role). A role
@@ -2444,6 +2499,8 @@ def build_repo_state(repo_path, pid_is_alive=_default_pid_is_alive, git_in_fligh
         "token_timeline": token_timeline(logdir, now),
         "quota_forecast": quota_forecast(quota, now),
         "trigger_health": health,
+        "triggers": st_triggers,
+        "trust": trust,
     }
 
 
