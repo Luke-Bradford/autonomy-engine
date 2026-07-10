@@ -274,14 +274,20 @@ def _top_units(doc):
     """Ordered top-level unit ids: nodes not inside any container, with each
     container appearing at the position of its FIRST child. The graph's
     vertices (edges may only reference these)."""
+    # Scalar blocks (nodes: 5, containers: 5, children: true) are the shape
+    # checks' finding; this walk stays TOTAL (validate_doc calls it on
+    # garbage docs before those checks run).
+    nodes_blk = doc.get("nodes")
+    cons_blk = doc.get("containers")
     child_to_con = {}
-    for con in doc.get("containers") or []:
+    for con in (cons_blk if isinstance(cons_blk, list) else []):
         if isinstance(con, dict):
-            for c in (con.get("children") or []):
+            children = con.get("children")
+            for c in (children if isinstance(children, list) else []):
                 if isinstance(c, str):     # garbage child = not a mapping key
                     child_to_con[c] = con.get("id")
     out, seen_con = [], set()
-    for node in doc.get("nodes") or []:
+    for node in (nodes_blk if isinstance(nodes_blk, list) else []):
         if not isinstance(node, dict):
             continue
         nid = node.get("id")
@@ -807,16 +813,21 @@ def check_refs(doc, errors):
     which must stay ref-free (they are paths, resolved before substitution).
     Also refuses an unterminated '${' (substitute would raise at prepare
     time -- catching it at validate time keeps 'validating == runnable')."""
-    declared = {p.get("name"): p for p in (doc.get("params") or [])
+    # Garbage BLOCK shapes (a scalar where a list belongs: params: 5,
+    # nodes: 5, containers: 5, children: true) and garbage id shapes are
+    # the SHAPE checks' finding, later in validate_doc -- here they just
+    # degrade to empty (refs then refuse as undeclared/non-upstream, the
+    # safe side); this scan must stay total, it runs before those checks
+    # (review round 1, PR #375 -- same-class scan over every block).
+    def _lst(v):
+        return v if isinstance(v, list) else []
+
+    declared = {p.get("name"): p for p in _lst(doc.get("params"))
                 if isinstance(p, dict)}
-    # Garbage id shapes (a dict where a string belongs) are the SHAPE
-    # checks' finding, later in validate_doc -- here they just degrade to
-    # unit=None (no ancestors -> node-output refs refuse, the safe side);
-    # this scan must stay total (it runs before the shape checks).
     con_of = {}
-    for con in (doc.get("containers") or []):
+    for con in _lst(doc.get("containers")):
         if isinstance(con, dict):
-            for ch in (con.get("children") or []):
+            for ch in _lst(con.get("children")):
                 if isinstance(ch, str):
                     con_of[ch] = con.get("id")
 
@@ -842,7 +853,7 @@ def check_refs(doc, errors):
             for j, x in enumerate(v):
                 scan("%s[%d]" % (where, j), x, unit)
 
-    for i, node in enumerate(doc.get("nodes") or []):
+    for i, node in enumerate(_lst(doc.get("nodes"))):
         if not isinstance(node, dict):
             continue
         where = "nodes[%d]" % i
@@ -855,7 +866,7 @@ def check_refs(doc, errors):
         unit = con_of.get(nid, nid) if isinstance(nid, str) else None
         clean = {k: v for k, v in node.items() if k not in _REF_FREE_FIELDS}
         scan(where, clean, unit)
-    for i, con in enumerate(doc.get("containers") or []):
+    for i, con in enumerate(_lst(doc.get("containers"))):
         if isinstance(con, dict):
             scan("containers[%d]" % i, con, con.get("id"))
 
@@ -1022,9 +1033,10 @@ def validate_doc(doc, pipeline_dir=None):
     child_ids = set()
     for c in containers:
         if isinstance(c, dict):
-            # non-str entries already earned a children error above; keep
-            # this set op TOTAL on garbage (unhashable dict, CP2)
-            child_ids.update(x for x in (c.get("children") or [])
+            # non-str/non-list children already earned an error above; keep
+            # this set op TOTAL on garbage (unhashable dict, scalar children)
+            ch = c.get("children")
+            child_ids.update(x for x in (ch if isinstance(ch, list) else [])
                              if isinstance(x, str))
     unit_order = _top_units(doc)
     units = set(unit_order)

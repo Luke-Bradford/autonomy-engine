@@ -2181,6 +2181,18 @@ class CheckRefsTest(unittest.TestCase):
         # statically it is not a reference error.
         self.assertEqual([e for e in self._errs(d) if "reference" in e], [])
 
+    def test_scalar_block_shapes_never_crash_the_checker(self):
+        # Review round 1 (PR #375): check_refs is the totality boundary for
+        # its own scan -- a scalar where a list belongs (children: true,
+        # params: 5, nodes: 5, containers: 5) must degrade to the SHAPE
+        # checks' refusal, never TypeError out of the validator.
+        for bad in ({"containers": [{"id": "c", "children": True}]},
+                    {"containers": [{"id": "c", "children": 5}]},
+                    {"params": 5}, {"nodes": 5}, {"containers": 5}):
+            d = self._doc()
+            d.update(bad)
+            self.assertTrue(pipeline.validate_doc(d, None))   # errors, no crash
+
 
 if __name__ == "__main__":
     unittest.main()
