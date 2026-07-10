@@ -1,0 +1,9 @@
+{"fmt": 2, "run_id": "adhoc-digest-20260709T220000-7001",
+ "trigger": "adhoc-digest", "kind": "native", "role": "adhoc-digest",
+ "lane": "", "params": {}, "status": "in_progress", "sessions": 1,
+ "run": {"id": "adhoc-digest-20260709T220000-7001",
+         "pipeline": "fixture-flow", "trigger": "adhoc-digest",
+         "repo": "tests/fixtures/repo-alpha"},
+ "doc": {"name": "fixture-flow", "nodes": [{"id": "pick", "type": "pick",
+         "brief_ref": "pick.md"}]},
+ "units": {"pick": {"status": "dispatched"}}}
