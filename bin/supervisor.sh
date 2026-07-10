@@ -804,7 +804,9 @@ import sys
 path = sys.argv[1]
 vals = [v for v in sys.stdin.read().split("\n") if v]
 data = open(path, "rb").read()
-for v in vals:
+# Longest first (CP2): a value that PREFIXES another, replaced first,
+# would leave the longer one as [REDACTED]<tail> -- secret bytes remain.
+for v in sorted(vals, key=len, reverse=True):
     data = data.replace(v.encode("utf-8"), b"[REDACTED]")
 open(path, "wb").write(data)
 ' "$logf" 2>>"$SUPLOG" || log "WARN could not redact session log $logf"

@@ -2567,6 +2567,15 @@ def _pick(state_path, state, n, brief_path_for, journal_path):
             continue
         step_candidates.append(uid)
     avail = cap - state["sessions"]
+    if avail <= 0:
+        # The budget is spent -- possibly by a call reservation THIS pass.
+        # Only RECLAIM re-emission may proceed (a crashed dispatched unit
+        # must never strand); fresh pending units stay pending, and the
+        # next _pick entry cap-finishes or waits (CP2: the max(1,..) floor
+        # below must never let a pending unit overshoot the cap a call
+        # just exhausted).
+        step_candidates = [u for u in step_candidates
+                           if state["units"][u]["status"] == "dispatched"]
     n_eff = max(1, min(n, int(doc["caps"].get("max_parallel", 1)), avail))
     steps = []
     for uid in step_candidates[:n_eff]:

@@ -559,6 +559,17 @@ esac
 NS_VALUES=""
 redact_session_log "$LOGDIR/s.log"
 check "redaction no-op rc" "0" "$?"
+# prefix shadowing (CP2): a shorter value that PREFIXES a longer one must
+# not leave the longer one's tail in the log -- longest replaced first.
+printf 'x abcdef y abc z\n' >"$LOGDIR/p.log"
+NS_VALUES="abc
+abcdef
+"
+redact_session_log "$LOGDIR/p.log"
+case "$(cat "$LOGDIR/p.log")" in
+  *def*) check "prefix-shadowed value fully scrubbed" 0 1 ;;
+  *) check "prefix-shadowed value fully scrubbed" 0 0 ;;
+esac
 unset AUTONOMY_CREDENTIALS_BIN
 SUPLOG=/dev/null
 log() { :; }

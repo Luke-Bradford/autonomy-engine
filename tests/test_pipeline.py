@@ -2414,6 +2414,22 @@ class CallWalkTest(_ChildFixture):
         self.assertEqual(rec["outcome"], "capped")
         self.assertEqual(rec["sessions"], 1)      # consume did NOT increment
 
+    def test_mixed_frontier_call_reservation_blocks_fresh_steps(self):
+        # CP2: a call reservation that spends the LAST budget unit must
+        # also stop fresh agent steps in the same frontier -- the max(1,..)
+        # reclaim floor may never let a pending unit overshoot the cap.
+        doc = _call_doc()
+        doc["nodes"].append({"id": "z", "type": "agent_task",
+                             "brief_ref": "z.md"})
+        doc["edges"].append({"from": "code", "to": "z", "on": "success"})
+        sp, st = self._pstate(doc=doc, cap=1)      # one unit for BOTH
+        out = self._ready(sp)                      # call reserves it
+        self.assertEqual(out, "WAITING")           # z NOT dispatched
+        with open(sp) as fh:
+            st2 = json.load(fh)
+        self.assertEqual(st2["sessions"], 1)
+        self.assertEqual(st2["units"]["z"]["status"], "pending")
+
     def test_budget_exhausted_leaves_call_pending(self):
         # cap spent + a batch outstanding: the call unit is NOT started and
         # stays pending (never a silent skip); the reclaimed agent step
