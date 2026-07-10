@@ -1584,21 +1584,14 @@ class ResolveParamsTest(unittest.TestCase):
         with self.assertRaises(pipeline.PipelineError):
             pipeline.resolve_params(self._decl(), {"repo": "/r", "retries": "abc"})
 
-    def test_secret_resolves_via_lookup_and_is_not_the_name(self):
-        seen = {}
-        def fake_lookup(name):
-            seen["asked"] = name
-            return "s3cr3t"
+    def test_secret_resolves_to_its_label_never_a_value(self):
+        # Phase C FLIP of the Phase A secret_lookup pins: the seam is
+        # deleted; a secret's resolved form IS the label (SD-8), and the
+        # VALUE resolves only supervisor-side at the env sink.
         got = pipeline.resolve_params(
             [{"name": "token", "type": "secret", "required": True}],
-            {"token": "PROD_KEY"}, secret_lookup=fake_lookup)
-        self.assertEqual(got["token"], "s3cr3t")
-        self.assertEqual(seen["asked"], "PROD_KEY")
-
-    def test_secret_without_lookup_refuses(self):
-        with self.assertRaises(pipeline.PipelineError):
-            pipeline.resolve_params([{"name": "t", "type": "secret", "required": True}],
-                                    {"t": "K"})                # no secret_lookup seam
+            {"token": "PROD_KEY"})
+        self.assertEqual(got["token"], "PROD_KEY")
 
 
 class OutputsFileTest(unittest.TestCase):
@@ -1976,16 +1969,18 @@ class StartRunTriggerTest(unittest.TestCase):
         with self.assertRaises(pipeline.PipelineError):
             self._start()
 
-    def test_secret_value_supplied_refuses_and_never_echoes_value(self):
-        self._trigger(tok="hunter2-value")
-        with self.assertRaises(pipeline.PipelineError) as cm:
-            self._start()
-        self.assertNotIn("hunter2-value", str(cm.exception))
-        self.assertIn("tok", str(cm.exception))
+    def test_secret_value_starts_as_label_in_state(self):
+        # Phase C FLIP of the Phase B no-sink refusal pin: the env-channel
+        # sink exists now, so a trigger-supplied secret VALUE -- a
+        # credential LABEL (SD-8: index names are non-secret) -- starts the
+        # run and rides state['params'] as the label.
+        self._trigger(tok="gh-token")
+        st = self._start()
+        self.assertEqual(st["params"]["tok"], "gh-token")
 
-    def test_secret_with_pipeline_default_refuses_too(self):
-        # Codex CP1: a saved default would resolve through secret_lookup
-        # into state['params'] on disk -- the same refusal must cover it.
+    def test_secret_with_pipeline_default_starts_too(self):
+        # Phase C FLIP of the CP1 saved-default refusal: a saved default is
+        # a LABEL and resolves like any invoker value.
         with open(os.path.join(self.pdir, "pipeline.json")) as fh:
             doc = json.load(fh)
         doc["params"] = [p if p["name"] != "tok" else
@@ -1994,9 +1989,8 @@ class StartRunTriggerTest(unittest.TestCase):
         with open(os.path.join(self.pdir, "pipeline.json"), "w") as fh:
             json.dump(doc, fh)
         self._trigger()
-        with self.assertRaises(pipeline.PipelineError) as cm:
-            self._start()
-        self.assertIn("tok", str(cm.exception))
+        st = self._start()
+        self.assertEqual(st["params"]["tok"], "KEY")
 
     def test_declared_valueless_secret_is_inert(self):
         self._trigger()          # 'tok' declared, no default, no value
@@ -2503,16 +2497,116 @@ class CallNameHeadroomTest(_ChildFixture):
         self.assertIn("64-char", str(cm.exception))
 
 
+class SecretChannelTest(unittest.TestCase):
+    DECL = [{"name": "tok", "type": "secret", "required": True}]
+
+    def test_secret_value_is_a_label_passthrough(self):
+        out = pipeline.resolve_params(self.DECL, {"tok": "gh-token"})
+        self.assertEqual(out, {"tok": "gh-token"})
+
+    def test_secret_label_charset_gated(self):
+        with self.assertRaises(pipeline.PipelineError):
+            pipeline.resolve_params(self.DECL, {"tok": "bad label!"})
+
+    def test_secret_lookup_seam_is_gone(self):
+        with self.assertRaises(TypeError):
+            pipeline.resolve_params(self.DECL, {"tok": "x"},
+                                    secret_lookup=lambda v: v)
+
+    def _doc(self, secrets=None, ptype="secret"):
+        return {"name": "s", "version": 1,
+                "caps": {"max_sessions_per_run": 4},
+                "params": [{"name": "tok", "type": ptype, "required": True}],
+                "nodes": [{"id": "a", "type": "agent_task",
+                           "brief_ref": "a.md",
+                           "secrets": secrets if secrets is not None
+                           else {"MY_TOKEN": "${params.tok}"}}],
+                "edges": []}
+
+    def test_secrets_field_validates(self):
+        self.assertEqual(pipeline.validate_doc(self._doc()), [])
+
+    def test_secrets_value_must_be_exact_secret_ref(self):
+        for bad in ("${params.tok}x", "${default(params.tok,'')}",
+                    "literal", "${run.id}"):
+            self.assertTrue(pipeline.validate_doc(self._doc({"V": bad})), bad)
+
+    def test_secrets_ref_must_target_secret_typed_param(self):
+        self.assertTrue(pipeline.validate_doc(self._doc(ptype="string")))
+
+    def test_secrets_key_charset_and_denylist(self):
+        for bad in ("lower", "1X", "ANTHROPIC_API_KEY", "AUTONOMY_X",
+                    "PATH", "DYLD_INSERT_LIBRARIES"):
+            self.assertTrue(
+                pipeline.validate_doc(self._doc({bad: "${params.tok}"})), bad)
+
+    def test_secrets_refused_on_call_pipeline_with_one_error(self):
+        doc = _call_doc()
+        doc["nodes"][1]["secrets"] = {"X": "${params.tok}"}
+        errs = [e for e in pipeline.validate_doc(doc) if "secrets" in e]
+        self.assertEqual(len(errs), 1)   # the type-branch owns it, not two
+
+    def test_secret_ref_outside_secrets_still_refuses(self):
+        doc = self._doc()
+        doc["nodes"][0]["runs_as"] = {"model": "${params.tok}"}
+        errs = pipeline.validate_doc(doc)
+        self.assertTrue(any("secret" in e for e in errs), errs)
+
+    def test_secret_params_stripped_from_substitution_ctx(self):
+        state = {"params": {"tok": "gh-token"},
+                 "doc": {"params": self.DECL}, "run": {}}
+        ctx = pipeline._substitution_ctx("/tmp/x.json", state)
+        self.assertNotIn("tok", ctx["params"])
+
+    def test_prepare_emits_node_secret_lines(self):
+        repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        logdir = os.path.join(repo, "var", "autonomy-logs")
+        pdir = os.path.join(repo, ".autonomy", "pipelines", "s")
+        os.makedirs(logdir)
+        os.makedirs(pdir)
+        with open(os.path.join(pdir, "a.md"), "w") as fh:
+            fh.write("use the env token")
+        doc = self._doc()
+        sp = os.path.join(logdir, ".pipeline-run-s.json")
+        state = {"fmt": 2, "run_id": "s-x-1", "role": "s", "lane": "",
+                 "doc": dict(doc, edges=[]), "meta": {"pipeline_dir": pdir},
+                 "trigger": "s", "kind": "native",
+                 "params": {"tok": "gh-token"},
+                 "run": {"id": "s-x-1", "pipeline": "s", "trigger": "s",
+                         "repo": repo},
+                 "started": 1, "sessions": 0,
+                 "units": {"a": {"status": "pending"}},
+                 "container_pos": {}, "rounds": {}, "bounces": {},
+                 "nodes_done": [], "status": "in_progress"}
+        pipeline._atomic_write_json(sp, state)
+        steps = pipeline.ready_set(sp, logdir, 1)
+        self.assertEqual(steps[0]["secrets"], {"MY_TOKEN": "gh-token"})
+        # the CLI line shape the supervisor parses
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            pipeline._print_step(steps[0])
+        self.assertIn("NODE_SECRET=MY_TOKEN=gh-token", buf.getvalue())
+
+    def test_saved_secret_default_now_resolves_as_label(self):
+        decl = [{"name": "tok", "type": "secret", "default": "gh-token"}]
+        out = pipeline.resolve_params(decl, {})
+        self.assertEqual(out, {"tok": "gh-token"})
+
+
 class SecretMessageAuditTest(unittest.TestCase):
     def test_secret_failure_message_names_param_never_value(self):
         # Secret error paths must carry the NAME only -- the message flows
-        # to supervisor.log via stderr (SD-8 redaction belt).
+        # to supervisor.log via stderr (SD-8 redaction belt). A rejected
+        # secret value may be a REAL credential a misconfigured trigger
+        # pasted in; the label-charset refusal must not echo it.
         declared = [{"name": "tok", "type": "secret"}]
         with self.assertRaises(pipeline.PipelineError) as cm:
-            pipeline.resolve_params(declared, {"tok": "hunter2-value"},
-                                    secret_lookup=None)
+            pipeline.resolve_params(declared, {"tok": "hunter2 raw value!"})
         self.assertIn("tok", str(cm.exception))
-        self.assertNotIn("hunter2-value", str(cm.exception))
+        self.assertNotIn("hunter2", str(cm.exception))
 
 
 class JournalTriggerFieldTest(unittest.TestCase):

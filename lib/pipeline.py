@@ -200,7 +200,7 @@ DEFERRED_NODE_TYPES = dict(
     if v["group"] != "structure" and v["deferred"])
 _NODE_KEYS = frozenset(("id", "type", "brief_ref", "legacy_prompt",
                         "runs_as", "context", "join",
-                        "pipeline", "params", "wait"))
+                        "pipeline", "params", "wait", "secrets"))
 _CONTAINER_KEYS = frozenset(("id", "kind", "children", "exit_when",
                              "max_rounds", "runs_as", "join"))
 _EDGE_KEYS = frozenset(("from", "to", "on", "back", "max_bounces"))
@@ -233,6 +233,12 @@ OUTPUT_TYPES = tuple(t for t in PARAM_TYPES if t not in ("enum", "secret"))
 _PARAM_KEYS = frozenset(("name", "type", "required", "default", "choices"))
 _OUTPUT_KEYS = frozenset(("name", "type"))
 _REF_RE = re.compile(r"\$\{([^}]*)\}")            # ${ ... } (the param language)
+# The secret env channel (Phase C, decision 11): a node's `secrets:` map is
+# {ENV_VAR: "${params.<secret-typed>}"} -- EXACT ref only, no interpolation.
+_SECRET_ENV_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+_SECRET_ENV_DENY = ("ANTHROPIC_", "AUTONOMY_", "CLAUDE_", "LD_", "DYLD_")
+_SECRET_ENV_DENY_EXACT = frozenset(
+    ("PATH", "HOME", "SHELL", "IFS", "ENV", "BASH_ENV", "PYTHONPATH"))
 
 
 def _typed_ok(typ, val, choices=None):
@@ -559,13 +565,14 @@ def _coerce(name, typ, value, choices):
     return value
 
 
-def resolve_params(declared, overrides, *, secret_lookup=None):
+def resolve_params(declared, overrides):
     """Merge pipeline DEFAULTS with an invoker's OVERRIDES (a trigger OR a
     calling pipeline -- the same slot, spec S3), type-check, and return
     {name: typed_value}. A required param with neither default nor override
-    RAISES (fail-safe). Unknown override keys RAISE. A `secret` param resolves
-    its VALUE through secret_lookup(name) and never carries the raw name onward
-    (secrets discipline); no secret_lookup seam for a secret param RAISES."""
+    RAISES (fail-safe). Unknown override keys RAISE. A `secret` param's
+    value is a credential LABEL (SD-8: index names are non-secret) and
+    passes through charset-gated; the VALUE resolves only supervisor-side
+    at the env sink (Phase C -- the secret_lookup seam is deleted)."""
     if not isinstance(declared, list):
         raise PipelineError("params declaration must be a list")
     if not isinstance(overrides, dict):
@@ -589,10 +596,14 @@ def resolve_params(declared, overrides, *, secret_lookup=None):
         else:
             continue                                   # optional, unset -> absent
         if typ == "secret":
-            if secret_lookup is None:
-                raise PipelineError("param %r is a secret but no secret store "
-                                    "was provided" % name)
-            value = secret_lookup(value)
+            if not (_is_str(value) and _NAME_RE.match(value)):
+                # NEVER echo the rejected value: a misconfigured invoker may
+                # have pasted a REAL credential where the label belongs, and
+                # this message flows to supervisor.log (SD-8).
+                raise PipelineError(
+                    "param %r: a secret's value is a credential LABEL "
+                    "(charset [A-Za-z0-9._-]{1,64}) -- the value resolves "
+                    "only at the dispatch env sink" % name)
         else:
             value = _coerce(name, typ, value, p.get("choices"))
         out[name] = value
@@ -694,6 +705,50 @@ def _validate_runs_as(where, runs_as, errors):
             and not (_is_str(runs_as["agent"])
                      and _AGENT_RE.match(runs_as["agent"])):
         errors.append("%s: runs_as.agent has invalid chars" % where)
+
+
+def _secret_ref_param(ref):
+    """'${params.x}' -> 'x'; anything else -> None. No regex re-use of the
+    generic scanner: the EXACT form is the security property."""
+    if not isinstance(ref, str):
+        return None
+    m = re.match(r"^\$\{params\.([A-Za-z0-9._-]{1,64})\}$", ref)
+    return m.group(1) if m else None
+
+
+def _validate_secrets_field(where, node, doc, errors):
+    """The secret env channel's ONLY doc surface (decision 11): a node's
+    secrets: {ENV_VAR: ${params.<secret-typed>}}. Key charset-gated and
+    denylisted (never shadow engine/auth vars); value must be EXACTLY a
+    ${params.<name>} ref to a declared secret param -- a secret never mixes
+    into a string or function."""
+    sec = node.get("secrets")
+    if sec is None:
+        return
+    if node.get("type") == "call_pipeline":
+        return   # Task 3's type-branch owns that refusal -- one error, not two
+    if not isinstance(sec, dict) or not sec:
+        errors.append("%s: secrets must be a non-empty mapping "
+                      "ENV_VAR -> ${params.<secret-typed>}" % where)
+        return
+    decl = {p.get("name"): p for p in (doc.get("params") or [])
+            if isinstance(p, dict)}
+    for var, ref in sec.items():
+        if not (isinstance(var, str) and _SECRET_ENV_RE.match(var)):
+            errors.append("%s: secrets key %r must match "
+                          "[A-Z][A-Z0-9_]{0,63}" % (where, var))
+        elif var in _SECRET_ENV_DENY_EXACT or any(
+                var.startswith(p) for p in _SECRET_ENV_DENY):
+            errors.append("%s: secrets key %r would shadow an engine/auth "
+                          "variable -- refused" % (where, var))
+        pname = _secret_ref_param(ref)
+        if pname is None:
+            errors.append("%s: secrets.%s must be EXACTLY "
+                          "${params.<name>} -- a secret never mixes into a "
+                          "string or function" % (where, var))
+        elif (decl.get(pname) or {}).get("type") != "secret":
+            errors.append("%s: secrets.%s references %r which is not a "
+                          "declared secret param" % (where, var, pname))
 
 
 def _validate_params_outputs(doc, errors):
@@ -869,10 +924,10 @@ def _check_expr_static(expr, declared_params, allowed_nodes, soft_nodes,
             errors.append("%s: ${params.%s} is not a declared param"
                           % (where, parts[1]))
         elif decl.get("type") == "secret":
-            errors.append("%s: ${params.%s} is secret-typed -- secrets have "
-                          "no safe substitution sink in Phase B (briefs and "
-                          "runs_as land in files/argv; the env channel is "
-                          "Phase C)" % (where, parts[1]))
+            errors.append("%s: ${params.%s} is secret-typed -- its only "
+                          "sink is a node's secrets: map (the env channel); "
+                          "briefs, runs_as and call params never carry a "
+                          "secret" % (where, parts[1]))
         return
     if parts[0] == "nodes" and len(parts) == 4 and parts[2] == "output":
         if parts[1] in allowed_nodes:
@@ -981,7 +1036,11 @@ def check_refs(doc, errors):
                               "substituted in paths" % (where, f))
         nid = node.get("id")
         unit = con_of.get(nid, nid) if isinstance(nid, str) else None
-        clean = {k: v for k, v in node.items() if k not in _REF_FREE_FIELDS}
+        # 'secrets' is excluded from the generic ref scan: its own validator
+        # (_validate_secrets_field) owns the exact-ref rule, and the generic
+        # scanner would double-refuse the deliberate secret ref inside it.
+        clean = {k: v for k, v in node.items()
+                 if k not in _REF_FREE_FIELDS and k != "secrets"}
         scan(where, clean, unit, nid)
     for i, con in enumerate(_lst(doc.get("containers"))):
         if isinstance(con, dict):
@@ -1128,6 +1187,7 @@ def validate_doc(doc, pipeline_dir=None):
             errors.append("%s: join must be one of %s"
                           % (where, "|".join(JOIN_KINDS)))
         _validate_runs_as(where, node.get("runs_as"), errors)
+        _validate_secrets_field(where, node, doc, errors)
 
     containers = doc.get("containers", [])
     if not isinstance(containers, list):
@@ -1558,24 +1618,12 @@ def check_param_existence(declared, resolved, *, known_repos, known_accounts):
 def _resolve_run_params(repo, doc, overrides, *, known_repos=None,
                         known_accounts=None):
     """Invoker param resolution for a parameterised run (a trigger OR a
-    calling pipeline -- the same slot, spec S3). Phase B semantics verbatim:
-    a secret param that WOULD RESOLVE -- invoker value or pipeline default
-    -- is refused outright (no dispatch sink exists; the env-channel sink
-    flips this in ONE place -- here -- when it lands). Declared-but-
-    valueless secrets are inert; no secret value can enter this dataflow,
-    which IS the log-redaction boundary, by construction."""
+    calling pipeline -- the same slot, spec S3). Secret params resolve to
+    credential LABELS here (non-secret, SD-8); the VALUE resolves only
+    supervisor-side at the env sink. Phase B's no-sink refusal retired in
+    the same commit that landed the sink (the honesty invariant)."""
     declared = doc.get("params") or []
-    resolving_secrets = sorted(
-        p["name"] for p in declared
-        if isinstance(p, dict) and p.get("type") == "secret"
-        and ("default" in p or p.get("name") in overrides))
-    if resolving_secrets:
-        raise PipelineError(
-            "secret param(s) %s would resolve (invoker value or pipeline "
-            "default) but no dispatch sink for secrets exists yet -- "
-            "refusing rather than accept-and-ignore"
-            % ", ".join(resolving_secrets))
-    params = resolve_params(declared, overrides, secret_lookup=None)
+    params = resolve_params(declared, overrides)
     check_param_existence(
         declared, params,
         known_repos=known_repos or _registered_repos,
@@ -2182,7 +2230,15 @@ def _guard_in_progress(state, state_path):
 
 
 def _substitution_ctx(state_path, state):
-    return {"params": state.get("params") or {},
+    # Secret-typed params are STRIPPED (defense in depth, decision 11): the
+    # secrets: map resolves its labels from state['params'] directly, and an
+    # escaped ${params.<secret>} that reaches the generic resolver raises
+    # "unknown param" at prepare instead of leaking a label into a brief.
+    params = dict(state.get("params") or {})
+    for p in (state.get("doc") or {}).get("params") or []:
+        if isinstance(p, dict) and p.get("type") == "secret":
+            params.pop(p.get("name"), None)
+    return {"params": params,
             "nodes": _collect_node_outputs(state_path, state),
             "run": state.get("run") or {}}
 
@@ -2268,8 +2324,24 @@ def _prepare_step(state_path, state, uid, brief_path):
     merged = {k: substitute(v, ctx)
               for k, v in _effective_runs_as(doc, node).items()}
     _concrete_runs_as_check(node["id"], merged)
-    return {"status": "node", "unit": uid, "node": node["id"], "kind": kind,
+    # The secret env channel (decision 11): resolve each secrets: ref to its
+    # LABEL from state['params'] (labels are non-secret, SD-8). Refused, not
+    # dropped, when unresolvable -- a session missing a declared secret is a
+    # broken constraint artifact (prevention-log #3).
+    secrets_map = {}
+    for var, ref in (node.get("secrets") or {}).items():
+        pname = _secret_ref_param(ref)
+        label = (state.get("params") or {}).get(pname) if pname else None
+        if not (isinstance(label, str) and _NAME_RE.match(label)):
+            raise PipelineError("node %r: secrets.%s has no resolvable "
+                                "credential label -- refusing dispatch"
+                                % (node["id"], var))
+        secrets_map[var] = label
+    step = {"status": "node", "unit": uid, "node": node["id"], "kind": kind,
             "prompt": prompt, "verdict": verdict_rel, "runs_as": merged}
+    if secrets_map:
+        step["secrets"] = secrets_map
+    return step
 
 
 def _record_call_entry(state, uid, nid, outcome, extra):
@@ -2670,6 +2742,9 @@ def _print_step(step):
     for key in ("model", "effort", "account", "agent"):
         if runs_as.get(key):
             print("NODE_%s=%s" % (key.upper(), runs_as[key]))
+    for var in sorted(step.get("secrets") or {}):
+        # labels are index names -- non-secret (SD-8)
+        print("NODE_SECRET=%s=%s" % (var, step["secrets"][var]))
 
 
 def main(argv):
