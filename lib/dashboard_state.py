@@ -28,6 +28,7 @@ import dashboard_control as _dcx  # model-id regex + effort set, single-sourced
 import health as health_mod      # wedged truth, single-sourced (SD-32 §9)
 import pipeline as pipeline_mod  # doc loader/validator + SSOT catalog (#357)
 import roles as roles_schema
+import triggers as triggers_mod  # trigger enumeration + trust + marker rule (#383 D1)
 
 _TICKET_RE = re.compile(r"#(\d{1,6})\b")
 # in-session branch creation: `git checkout -b|-B <name>` / `git switch -c|-C <name>`
@@ -2688,6 +2689,209 @@ def list_runs(logdir, journal_path, limit=20):
         })
         fin += 1
     return rows
+
+
+def trigger_fire_ready(repo_path, trig):
+    """(ok, reason) -- may this trigger take a run-now fire marker? The
+    SAME verdict the write side must reach (Phase D1: bin/dashboard.py's
+    execute path calls this exact helper -- read/write can't drift).
+    Manual mode only (the supervisor's resolve_manual_fires WARN-removes a
+    fire marker for any other mode -- a run-now button there would be a
+    dead control); then a DRY pipeline.resolve_params over the doc's
+    declared params + the trigger's saved params -- the same refusal
+    start_run_trigger would reach, caught HERE instead of burning a
+    backoff after the marker fires. Total: any failure -> (False, reason),
+    never raises."""
+    try:
+        firing = trig.get("firing") if isinstance(trig, dict) else None
+        if not isinstance(firing, dict) or firing.get("mode") != "manual":
+            return False, ("run-now applies to manual-mode triggers "
+                           "(other modes are a D2 extension)")
+        binding = trig.get("pipeline") or ""
+        if not pipeline_mod.valid_pipeline_name(binding):
+            return False, "pipeline binding invalid"
+        pdir = pipeline_mod.effective_pipeline_dir(repo_path, binding)
+        doc = pipeline_mod.load_doc(os.path.join(pdir, "pipeline.json"))
+        declared = doc.get("params")
+        declared = declared if isinstance(declared, list) else []
+        params = trig.get("params")
+        params = params if isinstance(params, dict) else {}
+        pipeline_mod.resolve_params(declared, params)
+        return True, None
+    except Exception as exc:
+        return False, "pipeline/params not fireable: %s" % exc
+
+
+def _trigger_marker_flags(repo_path, name, lane_suffix):
+    """Read-only projection of this trigger's var/trigger-ctl markers.
+    fire/stop are operator-written; queued/backoff are SUPERVISOR-OWNED
+    (read-only here, never written by the dashboard). A PRESENT-but-
+    unreadable backoff marker degrades to {"error": "unreadable"} -- never
+    to the healthy None (prevention-log #18)."""
+    base = triggers_mod.marker_basename(name, lane_suffix)
+    ctl = os.path.join(repo_path, "var", "trigger-ctl")
+    flags = {
+        "stopped": os.path.isfile(os.path.join(ctl, "stop", base)),
+        "fire_pending": os.path.isfile(os.path.join(ctl, "fire", base)),
+        "queued": os.path.isfile(os.path.join(ctl, "queued", base)),
+        "backoff": None,
+    }
+    bpath = os.path.join(ctl, "backoff", base)
+    if os.path.isfile(bpath):
+        flags["backoff"] = {"error": "unreadable"}
+        try:
+            with open(bpath) as fh:
+                parts = fh.readline().strip().split("\t")
+            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                flags["backoff"] = {"until": int(parts[0]),
+                                    "count": int(parts[1])}
+        except OSError:
+            pass
+    return flags
+
+
+def _gallery_rows(repo_path, trigs, rollup):
+    """Pipeline gallery cards: union of committed + var-shadow pipeline DIR
+    stems, each loaded through effective_pipeline_dir (SD-34/SD-37 -- a
+    present-but-invalid shadow renders its errors, never falls back), plus
+    a 'wrapped' row per shim trigger with no binding. Total per row."""
+    names, seen = [], set()
+    for d in (os.path.join(repo_path, ".autonomy", "pipelines"),
+              os.path.join(repo_path, "var", "autonomy", "pipelines")):
+        try:
+            entries = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for fn in entries:
+            if fn in seen or not os.path.isdir(os.path.join(d, fn)):
+                continue
+            seen.add(fn)
+            names.append(fn)
+    by_pipeline = {}
+    for t in trigs:
+        pname = t.get("pipeline") or t.get("name", "")
+        by_pipeline.setdefault(pname, []).append(t.get("name", ""))
+    rows = []
+    for name in sorted(names):
+        row = {"name": name, "version": None, "source": "committed",
+               "valid": False, "errors": [], "nodes": 0,
+               "triggers": sorted(by_pipeline.get(name, [])),
+               "tier": rollup.get(name)}
+        if not pipeline_mod.valid_pipeline_name(name):
+            row["errors"] = ["pipeline dir name has invalid charset"]
+            rows.append(row)
+            continue
+        try:
+            pdir = pipeline_mod.effective_pipeline_dir(repo_path, name)
+            if os.path.normpath(pdir).startswith(
+                    os.path.normpath(os.path.join(repo_path, "var")) + os.sep):
+                row["source"] = "shadow"
+            doc = pipeline_mod.load_doc(os.path.join(pdir, "pipeline.json"))
+        except Exception as exc:
+            row["errors"] = [str(exc)]
+            rows.append(row)
+            continue
+        try:
+            errs = pipeline_mod.validate_doc(doc, pdir)
+        except Exception as exc:   # validator totality boundary (#21)
+            errs = ["validator error: %s" % exc]
+        nodes = doc.get("nodes")
+        row.update({"version": doc.get("version"),
+                    "valid": not errs, "errors": errs,
+                    "nodes": len(nodes) if isinstance(nodes, list) else 0})
+        rows.append(row)
+    for t in trigs:
+        if t.get("pipeline"):
+            continue
+        nm = t.get("name", "")
+        rows.append({"name": nm, "version": None, "source": "wrapped",
+                     "valid": True, "errors": [], "nodes": 1,
+                     "triggers": [nm], "tier": rollup.get(nm)})
+    return rows
+
+
+def build_triggers_view(repo_path, now=None):
+    """The /api/triggers payload (Phase D1, #383): trigger cards +
+    per-trigger trust + pipeline gallery + rollup + REFUSED rows verbatim
+    + the runs list. This is the route's TOTALITY boundary (prevention-log
+    #21): every external call is guarded, failures become payload fields,
+    and a broken repo renders its error -- never a healthy fallback.
+    `now` is injected for run-window determinism in tests."""
+    repo_path = os.path.abspath(os.path.expanduser(str(repo_path)))
+    view = {"repo": os.path.basename(repo_path.rstrip(os.sep)) or repo_path,
+            "path": repo_path, "triggers": [], "refused": [],
+            "rollup": {}, "pipelines": [], "runs": []}
+    if now is None:
+        now = int(time.time())
+    logdir = os.path.join(repo_path, "var", "autonomy-logs")
+    journal = os.path.join(logdir, "journal.jsonl")
+    try:
+        view["runs"] = list_runs(logdir, journal)
+    except Exception:
+        view["runs"] = []
+    try:
+        pre = triggers_mod.enumerate_triggers(repo_path,
+                                              dispatchable_only=False)
+    except Exception as exc:
+        view["error"] = "triggers unavailable: %s" % exc
+        return view
+    trigs, warnings = pre
+    view["refused"] = [w for w in warnings if w.startswith("refused")]
+    try:
+        rows, rollup, _ = triggers_mod.trust_rollup(repo_path, journal,
+                                                    trigs=pre)
+    except Exception as exc:
+        rows, rollup = [], {}
+        view["error"] = "trust unavailable: %s" % exc
+    tier_by_name = dict((r.get("trigger"), r) for r in rows
+                        if isinstance(r, dict))
+    view["rollup"] = rollup
+    try:
+        default_lane = roles_schema.default_lane(
+            roles_schema._load_config(repo_path)[0] or {})
+    except Exception:
+        default_lane = "main"
+    for t in sorted(trigs, key=lambda x: x.get("name", "")):
+        name = t.get("name", "")
+        firing = t.get("firing") if isinstance(t.get("firing"), dict) else {}
+        el = t.get("lane") or default_lane
+        try:
+            flags = _trigger_marker_flags(
+                repo_path, name, "" if el == default_lane else el)
+        except Exception:
+            # unreachable for validated triggers (both parts charset-gated
+            # upstream); degrade to no-marker display rather than dropping
+            # the whole card.
+            flags = {"stopped": False, "fire_pending": False,
+                     "queued": False, "backoff": None}
+        led = tier_by_name.get(name) or {}
+        ready, reason = trigger_fire_ready(repo_path, t)
+        view["triggers"].append({
+            "name": name, "kind": t.get("kind", ""),
+            "pipeline": t.get("pipeline") or "",
+            "mode": firing.get("mode", ""),
+            "schedule": firing.get("schedule"),
+            "event": firing.get("event") or firing.get("events_csv"),
+            "map": firing.get("map"),
+            "enabled": bool(t.get("enabled", True)),
+            "lane": t.get("lane") or "",
+            "concurrency": t.get("concurrency"),
+            "params": t.get("params"),
+            "run_windows": t.get("run_windows"),
+            "window_open": bool(triggers_mod.in_run_window(t, now)),
+            "tier": led.get("tier", "watch"),
+            "runs": led.get("runs", 0), "passes": led.get("passes", 0),
+            "stopped": flags["stopped"],
+            "fire_pending": flags["fire_pending"],
+            "queued": flags["queued"], "backoff": flags["backoff"],
+            "fire_ready": ready, "fire_block_reason": reason,
+        })
+    try:
+        view["pipelines"] = _gallery_rows(repo_path, trigs, rollup)
+    except Exception as exc:
+        view["pipelines"] = []
+        view.setdefault("error", "gallery unavailable: %s" % exc)
+    return view
 
 
 def build_pipeline_view(repo_path, role):
