@@ -433,6 +433,133 @@ check "waiting run_session rc is dispatch-skip" "2" "$rc"
 check "loop paces child-wait"            "1" "$(grep -c 'heartbeat "child-wait"' "$sup")"
 check "loop resets PIPE_WAIT pre-dispatch" "1" "$(grep -c '^    PIPE_WAIT=0$' "$sup")"
 
+# --- Phase C (#376) Task 8: NODE_SECRET parse + resolution + redaction --------
+
+# The waiting tests above stubbed resolve_pipeline_ready; re-source the real
+# supervisor and re-apply this file's env.
+# shellcheck source=/dev/null
+source "$ENGINE_HOME/bin/supervisor.sh"
+AUTONOMY_TARGET_REPO="$repo"
+VARDIR="$repo/var"; LOGDIR="$VARDIR/autonomy-logs"
+SUPLOG=/dev/null
+AUTONOMY_LANE=""
+log() { :; }
+
+# Ready-block parse: a malformed NODE_SECRET line refuses the WHOLE block
+# (a session running WITHOUT a declared secret is a broken constraint
+# artifact -- prevention-log #3, account-resolution parity).
+: >"$LOGDIR/.pipeline-run-coder.json"
+: >"$LOGDIR/.pipeline-run-coder.a.brief.md"
+mk_ready_stub() {
+  READY_EXTRA="$1"
+  python3() {
+    printf 'NODE=a\nKIND=compiled\nPROMPT=%s\nVERDICT=var/autonomy-logs/.pipeline-run-coder.a.verdict.json\n' \
+      "$LOGDIR/.pipeline-run-coder.a.brief.md"
+    [ -n "$READY_EXTRA" ] && printf '%s\n' "$READY_EXTRA"
+    printf 'END\n'
+  }
+}
+mk_ready_stub "NODE_SECRET=noequals"
+resolve_pipeline_ready coder 8 0 shim >/dev/null 2>&1
+check "NODE_SECRET malformed refuses" "1" "$?"
+mk_ready_stub "NODE_SECRET=my-var=lbl"
+resolve_pipeline_ready coder 8 0 shim >/dev/null 2>&1
+check "NODE_SECRET bad var refuses" "1" "$?"
+mk_ready_stub "NODE_SECRET=ANTHROPIC_API_KEY=x"
+resolve_pipeline_ready coder 8 0 shim >/dev/null 2>&1
+check "NODE_SECRET denylisted var refuses" "1" "$?"
+mk_ready_stub "NODE_SECRET=MY_TOKEN=bad label"
+resolve_pipeline_ready coder 8 0 shim >/dev/null 2>&1
+check "NODE_SECRET bad label refuses" "1" "$?"
+mk_ready_stub "NODE_SECRET=MY_TOKEN=gh-token"
+resolve_pipeline_ready coder 8 0 shim; rc=$?
+check "NODE_SECRET good parses" "0" "$rc"
+case "${PB_SECRET[0]:-}" in
+  *"MY_TOKEN=gh-token"*) check "PB_SECRET carries VAR=label" 0 0 ;;
+  *) check "PB_SECRET carries VAR=label" 0 1 ;;
+esac
+# two blocks -> distinct per-block PB_SECRET
+python3() {
+  printf 'NODE=a\nKIND=compiled\nPROMPT=%s\nVERDICT=var/autonomy-logs/.pipeline-run-coder.a.verdict.json\nNODE_SECRET=TOK_A=lbl-a\nEND\n' \
+    "$LOGDIR/.pipeline-run-coder.a.brief.md"
+  printf 'NODE=b\nKIND=compiled\nPROMPT=%s\nVERDICT=var/autonomy-logs/.pipeline-run-coder.b.verdict.json\nNODE_SECRET=TOK_B=lbl-b\nEND\n' \
+    "$LOGDIR/.pipeline-run-coder.a.brief.md"
+}
+resolve_pipeline_ready coder 8 0 shim
+check "two-block parse rc" "0" "$?"
+case "${PB_SECRET[0]:-}" in *"TOK_A=lbl-a"*) ok=0 ;; *) ok=1 ;; esac
+check "block0 secret distinct" "0" "$ok"
+case "${PB_SECRET[1]:-}" in *"TOK_B=lbl-b"*) ok=0 ;; *) ok=1 ;; esac
+check "block1 secret distinct" "0" "$ok"
+unset -f python3
+rm -f "$LOGDIR"/.pipeline-run-*
+
+# Resolution: label -> value via the AUTONOMY_CREDENTIALS_BIN seam,
+# FOREGROUND, fail-safe; the VALUE never reaches the supervisor log.
+SUPLOG="$tmp/sup.log"; : >"$SUPLOG"
+log() { printf '%s\n' "$*" >>"$SUPLOG"; }
+cred_ok="$tmp/cred_ok"
+printf '#!/bin/sh\n[ "$1" = get ] || exit 1\necho s3cr3t-value\n' >"$cred_ok"
+chmod +x "$cred_ok"
+cred_missing="$tmp/cred_missing"
+printf '#!/bin/sh\nexit 1\n' >"$cred_missing"
+chmod +x "$cred_missing"
+cred_multiline="$tmp/cred_multiline"
+printf '#!/bin/sh\nprintf "a\\nb\\n"\n' >"$cred_multiline"
+chmod +x "$cred_multiline"
+
+AUTONOMY_CREDENTIALS_BIN="$cred_ok"
+if resolve_node_secret_env "MY_TOKEN=gh-token" "A=1"; then rc=0; else rc=1; fi
+check "secret resolves rc" "0" "$rc"
+case "$NS_ENV_LINES" in *"MY_TOKEN=s3cr3t-value"*) ok=0 ;; *) ok=1 ;; esac
+check "secret env line built" "0" "$ok"
+case "$NS_VALUES" in *"s3cr3t-value"*) ok=0 ;; *) ok=1 ;; esac
+check "secret value collected for redaction" "0" "$ok"
+
+AUTONOMY_CREDENTIALS_BIN="$cred_missing"
+if resolve_node_secret_env "MY_TOKEN=gh-token" ""; then rc=0; else rc=1; fi
+check "missing secret refuses" "1" "$rc"
+check "missing secret clears env lines" "" "$NS_ENV_LINES"
+
+AUTONOMY_CREDENTIALS_BIN="$cred_ok"
+if resolve_node_secret_env "MY_TOKEN=gh-token" "MY_TOKEN=already"; then rc=0; else rc=1; fi
+check "dup of auth env var refuses" "1" "$rc"
+if resolve_node_secret_env "MY_TOKEN=gh-token" "A=1
+MY_TOKEN=already"; then rc=0; else rc=1; fi
+check "dup on later auth line refuses" "1" "$rc"
+
+AUTONOMY_CREDENTIALS_BIN="$cred_multiline"
+if resolve_node_secret_env "MY_TOKEN=gh-token" ""; then rc=0; else rc=1; fi
+check "newline-bearing value refuses" "1" "$rc"
+
+case "$(cat "$SUPLOG")" in
+  *s3cr3t-value*) check "value never logged" 0 1 ;;
+  *) check "value never logged" 0 0 ;;
+esac
+case "$(cat "$SUPLOG")" in
+  *gh-token*) check "label IS loggable (SD-8)" 0 0 ;;
+  *) check "label IS loggable (SD-8)" 0 1 ;;
+esac
+
+# Redaction sweep: every resolved value replaced with [REDACTED]; runs
+# after classify (the outcome grep must see the raw log).
+printf 'before s3cr3t-value after\n' >"$LOGDIR/s.log"
+NS_VALUES="s3cr3t-value
+"
+redact_session_log "$LOGDIR/s.log"
+case "$(cat "$LOGDIR/s.log")" in
+  *s3cr3t-value*) check "redaction scrubs value" 0 1 ;;
+  *"[REDACTED]"*) check "redaction scrubs value" 0 0 ;;
+  *) check "redaction scrubs value" 0 1 ;;
+esac
+# empty NS_VALUES = no-op, never an error
+NS_VALUES=""
+redact_session_log "$LOGDIR/s.log"
+check "redaction no-op rc" "0" "$?"
+unset AUTONOMY_CREDENTIALS_BIN
+SUPLOG=/dev/null
+log() { :; }
+
 echo
 if [ "$fails" -gt 0 ]; then echo "$fails FAILURE(S)"; exit 1; fi
 echo "ALL CHECKS PASS"

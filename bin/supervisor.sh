@@ -742,6 +742,72 @@ EOF
   )
 }
 
+# Resolve NODE_SECRET labels to values -- FOREGROUND, fail-safe: any failure
+# REFUSES (rc 1) with only the LABEL named; the value never reaches a log or
+# argv (SD-8). $1 = newline VAR=label lines; $2 = the env lines already
+# resolved (account auth) -- a duplicate VAR refuses rather than clobbering
+# auth. Sets NS_ENV_LINES (VAR=value lines) + NS_VALUES (values, for the
+# redaction sweep). Globals, not stdout: a $() subshell could not set them.
+resolve_node_secret_env() {
+  local lines="$1" existing="$2" line var label value
+  NS_ENV_LINES=""; NS_VALUES=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    var="${line%%=*}"; label="${line#*=}"
+    case "$existing" in
+      "$var="*|*"
+$var="*)
+        log "dispatch: secret env var '$var' collides with resolved auth env -- REFUSING session"
+        NS_ENV_LINES=""; NS_VALUES=""; return 1 ;;
+    esac
+    if [ -n "${AUTONOMY_CREDENTIALS_BIN:-}" ]; then
+      value="$("$AUTONOMY_CREDENTIALS_BIN" get "$label" 2>>"$SUPLOG")" || value=""
+    else
+      value="$(python3 "$ENGINE_HOME/lib/credentials.py" get "$label" 2>>"$SUPLOG")" || value=""
+    fi
+    if [ -z "$value" ]; then
+      log "dispatch: secret '$label' (for $var) did not resolve -- REFUSING session (fail-safe)"
+      NS_ENV_LINES=""; NS_VALUES=""; return 1
+    fi
+    case "$value" in
+      *$'\n'*|*$'\r'*)
+        # CP1: an embedded newline would corrupt the VAR=value line protocol
+        # AND the redaction value list -- refuse, never truncate/mangle.
+        log "dispatch: secret '$label' (for $var) contains a newline -- REFUSING session (unsupported shape)"
+        NS_ENV_LINES=""; NS_VALUES=""; return 1 ;;
+    esac
+    NS_ENV_LINES="${NS_ENV_LINES}${var}=${value}
+"
+    NS_VALUES="${NS_VALUES}${value}
+"
+  done <<EOF
+$lines
+EOF
+  return 0
+}
+
+# Best-effort post-session redaction: replace every resolved secret value in
+# the session log with [REDACTED]. Runs AFTER classify (the outcome grep must
+# see the raw log) -- documented residual: a live tail can see an agent-echoed
+# secret until this runs. Values reach python via STDIN, never env or argv
+# (CP1: a child's environment is inspectable via `ps` -- stdin is not; SD-8's
+# boundary stays "supervisor memory + the session's own subshell env").
+# Literal byte replace (no regex metachars). Newline-free values guaranteed
+# by resolve_node_secret_env, so one value per stdin line is unambiguous.
+redact_session_log() {
+  local logf="$1"
+  [ -n "${NS_VALUES:-}" ] && [ -f "$logf" ] || return 0
+  printf '%s' "$NS_VALUES" | python3 -c '
+import sys
+path = sys.argv[1]
+vals = [v for v in sys.stdin.read().split("\n") if v]
+data = open(path, "rb").read()
+for v in vals:
+    data = data.replace(v.encode("utf-8"), b"[REDACTED]")
+open(path, "wb").write(data)
+' "$logf" 2>>"$SUPLOG" || log "WARN could not redact session log $logf"
+}
+
 # Back-compat single-key form (#51-C): a resolved role credential ("" = none).
 invoke_scoped_key() {
   local key="$1"; shift
@@ -1694,9 +1760,9 @@ inflight_tokens() {
 # PB_COUNT + PIPE_DONE and arrays PB_NODE PB_PROMPT PB_VERDICT
 # PB_MODEL PB_EFFORT PB_ACCOUNT PB_AGENT ('' = no override).
 resolve_pipeline_ready() {
-  local role="$1" max="${2:-1}" slot="${3:-0}" kind="${4:-shim}" state out line key val i
+  local role="$1" max="${2:-1}" slot="${3:-0}" kind="${4:-shim}" state out line key val i _sv _sl
   PB_NODE=(); PB_PROMPT=(); PB_VERDICT=()
-  PB_MODEL=(); PB_EFFORT=(); PB_ACCOUNT=(); PB_AGENT=()
+  PB_MODEL=(); PB_EFFORT=(); PB_ACCOUNT=(); PB_AGENT=(); PB_SECRET=()
   PB_COUNT=0; PIPE_DONE=0; PIPE_WAIT=0
   # Two-arg callers (pre-Phase-B) get slot 0 + kind shim -- byte-identical.
   state="$(pipeline_state_file "$role" "$slot")"
@@ -1721,7 +1787,7 @@ resolve_pipeline_ready() {
     WAITING*) PIPE_WAIT=1; return 0 ;;
   esac
   i=0
-  local node="" kind="" prompt="" verdict="" model="" effort="" account="" agent=""
+  local node="" kind="" prompt="" verdict="" model="" effort="" account="" agent="" secrets=""
   # Here-string (prevention-log #7 shape); every field validated per line.
   while IFS= read -r line; do
     if [ "$line" = "END" ]; then
@@ -1755,9 +1821,9 @@ resolve_pipeline_ready() {
       esac
       PB_NODE[i]="$node"; PB_PROMPT[i]="$prompt"
       PB_VERDICT[i]="$verdict"; PB_MODEL[i]="$model"; PB_EFFORT[i]="$effort"
-      PB_ACCOUNT[i]="$account"; PB_AGENT[i]="$agent"
+      PB_ACCOUNT[i]="$account"; PB_AGENT[i]="$agent"; PB_SECRET[i]="$secrets"
       i=$((i + 1))
-      node=""; kind=""; prompt=""; verdict=""; model=""; effort=""; account=""; agent=""
+      node=""; kind=""; prompt=""; verdict=""; model=""; effort=""; account=""; agent=""; secrets=""
       continue
     fi
     case "$line" in *=*) ;; *) continue ;; esac
@@ -1787,6 +1853,35 @@ resolve_pipeline_ready() {
           "") ;;
           *) agent="$val" ;;
         esac ;;
+      NODE_SECRET)
+        # VAR=label; both land in env keys / credentials.py argv later --
+        # refuse the WHOLE block on any malformed line (a session running
+        # WITHOUT a declared secret is a broken constraint artifact,
+        # prevention-log #3 -- unlike model/effort, there is no safe
+        # 'ignore' for a secret).
+        case "$val" in *=*) ;; *)
+          log "pipeline: malformed NODE_SECRET line -- REFUSING"; return 1 ;;
+        esac
+        _sv="${val%%=*}"; _sl="${val#*=}"
+        case "$_sv" in
+          [A-Z]*) ;;
+          *) log "pipeline: NODE_SECRET var name invalid -- REFUSING"; return 1 ;;
+        esac
+        case "$_sv" in *[!A-Z0-9_]*)
+          log "pipeline: NODE_SECRET var name invalid -- REFUSING"; return 1 ;;
+        esac
+        # Defense-in-depth twin of the python denylist (CP1: ready-block
+        # stdout is an interface boundary -- re-check at the point of use,
+        # prevention-log #6).
+        case "$_sv" in
+          ANTHROPIC_*|AUTONOMY_*|CLAUDE_*|LD_*|DYLD_*|PATH|HOME|SHELL|IFS|ENV|BASH_ENV|PYTHONPATH)
+            log "pipeline: NODE_SECRET var '$_sv' shadows an engine/auth variable -- REFUSING"; return 1 ;;
+        esac
+        case "$_sl" in ''|*[!A-Za-z0-9._-]*)
+          log "pipeline: NODE_SECRET label invalid -- REFUSING"; return 1 ;;
+        esac
+        secrets="${secrets}${_sv}=${_sl}
+" ;;
     esac
   done <<<"$out"
   PB_COUNT=$i
@@ -2089,12 +2184,23 @@ run_single_session() {
   # A stale verdict from a prior visit must never decide this one.
   rm -f "$verdict_abs"
 
+  # The node's declared secrets resolve label->value HERE, foreground,
+  # fail-safe (decision 12) -- the value exists only in supervisor memory
+  # and the session's subshell env, never argv or a log.
+  NS_ENV_LINES=""; NS_VALUES=""
+  if [ -n "${PB_SECRET[0]:-}" ]; then
+    resolve_node_secret_env "${PB_SECRET[0]}" "$env_lines" || return 2
+    env_lines="${env_lines}
+${NS_ENV_LINES}"
+  fi
+
   invoke_scoped_env "$env_lines" \
     "$prompt_file" "$rules_file" \
     "$MODEL" "$FALLBACK_MODEL" "$log_file" "$EFFORT"
   local rc=$?
 
   local outcome; outcome="$(agent_classify_outcome "$log_file" "$rc")"
+  redact_session_log "$log_file"
   case "$outcome" in
     success)
       if ! record_pipeline_outcome "$role" "${PB_NODE[0]}" success "$log_file" "$verdict_abs"; then
@@ -2159,7 +2265,7 @@ dispatch_batch() {
   mkdir -p "$wt_root" 2>>"$SUPLOG"
 
   local i wt log_file res m e envl
-  local wts=() logs=() results=() pids=()
+  local wts=() logs=() results=() pids=() ns_vals=()
   BATCH_PIDS=""
   # Setup failure AFTER earlier blocks spawned: kill + reap the live
   # wrappers before removing the directories they run in (Codex CP2);
@@ -2201,6 +2307,21 @@ dispatch_batch() {
         abort_batch
         return 2
       fi
+    fi
+    # Per-block secrets resolve foreground like the per-block account; the
+    # values are kept PER LOG (ns_vals[i]) so the redaction sweep stays
+    # per-session (CP1: aggregating every block's values across every log
+    # would widen the blast radius).
+    ns_vals[i]=""
+    if [ -n "${PB_SECRET[i]:-}" ]; then
+      if ! resolve_node_secret_env "${PB_SECRET[i]}" "$envl"; then
+        log "dispatch: node '${PB_NODE[i]}' secret did not resolve -- REFUSING batch (fail-safe)"
+        abort_batch
+        return 2
+      fi
+      envl="${envl}
+${NS_ENV_LINES}"
+      ns_vals[i]="$NS_VALUES"
     fi
     res="${state%.json}.${PB_NODE[i]}.result"
     rm -f "$res"
@@ -2248,6 +2369,10 @@ dispatch_batch() {
       rm -f "${results[i]}"
     fi
     case "$rc_i" in *[!0-9]*|"") rc_i=1 ;; esac
+    # Redact THIS session's log with THIS block's values (classify already
+    # ran inside the wrapper -- the outcome grep saw the raw log).
+    NS_VALUES="${ns_vals[i]:-}"
+    redact_session_log "${logs[i]}"
     verdict_abs="${wts[i]}/var/autonomy-logs/$(basename "${PB_VERDICT[i]}")"
     case "$out_i" in
       success)
