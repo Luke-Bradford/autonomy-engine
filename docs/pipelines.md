@@ -234,6 +234,7 @@ fires and how overlapping runs behave:
   "params": {"repo": "/abs/path/to/repoA", "m": "claude-opus-4-8"},
   "firing": {"mode": "continuous"},
   "concurrency": {"policy": "skip", "max": 1},
+  "run_windows": [{"start": "22:00", "end": "06:00", "days": ["fri"]}],
   "enabled": true
 }
 ```
@@ -281,6 +282,23 @@ fires and how overlapping runs behave:
   to `max` (8 ceiling) simultaneous runs. Parallel runs do not claim
   work items for you: the pipeline's pick brief must claim its ticket
   (assign/label at pick time) so two runs never grab the same one.
+- **`run_windows`** (optional) restricts when the trigger may START new
+  runs: a list of `{start, end, days?}` windows, times as `HH:MM` in
+  **UTC** (the same clock as cron schedules), start inclusive, end
+  exclusive. `end <= start` wraps past midnight, and a wrapped window's
+  `days` list names the day the window STARTS (`22:00`–`06:00` with
+  `days: ["fri"]` covers Friday night into Saturday morning). Omit the
+  key for always-dispatchable; an explicit empty list is refused. New
+  runs only: in-flight runs finish their current activity and keep
+  advancing past the boundary. Manual fire markers and queued fires
+  wait for the window to open; a schedule fire that came due while the
+  window was closed fires once at window-open (never a replay storm);
+  event tokens redeliver at window-open. Two accepted bounds: window
+  precision is one loop tick (a run can start just inside the boundary
+  the tick observed), and a trigger FIRST seen at window-open seeds its
+  schedule/event baseline without firing (the engine's normal
+  first-sight behaviour). `triggers.py show` prints
+  `WINDOW=open|closed`.
 - **`enabled: false`** pauses the trigger: no new fires, in-flight runs
   drain gracefully. A hard stop is the file `var/trigger-ctl/stop/<name>`:
   no new fires AND in-flight runs freeze in place (state preserved;
@@ -372,11 +390,29 @@ counted.
 Every completed run appends one line to
 `var/autonomy-logs/journal.jsonl`: outcome, per-activity results (which
 edges each traversed, bounce counts, verdicts), sessions used, whether
-anything merge-affecting ran. From this journal the engine projects a
-**trust tier** per role+pipeline assignment: `watch` until the assignment
-has ≥20 recorded runs with ≥95% passing over the last 20, then `auto`.
-Lost or corrupt journal evidence always lands on the cautious side
-(`watch`).
+anything merge-affecting ran, and which trigger started the run (plus
+whether that trigger was a real file or a synthesised role trigger).
+From this journal the engine projects a **trust tier** per TRIGGER --
+the pipeline as parameterised: `watch` until that trigger has ≥20
+recorded runs with ≥95% passing over the last 20, then `auto`.
+
+- Runs recorded before the trigger model existed count toward the
+  same-name synthesised role trigger. A trigger FILE of the same name is
+  a new parameterisation and starts from zero.
+- Runs a pipeline starts in another pipeline (`call_pipeline` children)
+  never count as trigger evidence: no trigger fired them.
+- Lost or corrupt journal evidence always lands on the cautious side
+  (`watch`).
+- Each pipeline also gets a **rollup** tier: `auto` only when EVERY
+  trigger bound to it reads `auto`, else `watch`. Disabled and
+  off-lane triggers still contribute (pausing a trigger never hides
+  its record).
+
+`python3 lib/triggers.py trust <repo> <journal>` prints one `TRIGGER`
+row per trigger (name, pipeline, kind, runs, passes, tier), one
+`REFUSED` row per unreadable trigger file (an unreadable trigger cannot
+be attributed to a pipeline, so the report itself carries the caveat),
+then one `PIPELINE` rollup row per pipeline.
 
 ## Seeing it: the pipeline canvas
 
