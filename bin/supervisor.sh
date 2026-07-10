@@ -1566,7 +1566,9 @@ resolve_event_wakes() {
 # events this tick and never perturbs loop dispatch. NEVER returns non-zero.
 resolve_trigger_event_wakes() {
   local session_ran="$1"
-  local enum line name kind evspec policy max
+  # _policy/_max document the enumeration's TSV line shape; capacity is
+  # gated show-backed in trigger_start_token_for, not here (review nitpick).
+  local enum line name kind evspec _policy _max
   enum="$(_triggers_enumerate event "$AUTONOMY_TARGET_REPO")" || {
     log "WARN event: trigger enumeration failed -- skipping events this tick"
     return 0
@@ -1576,7 +1578,7 @@ resolve_trigger_event_wakes() {
     log "WARN event: cannot create $VARDIR/events -- skipping events this tick"
     return 0
   }
-  while IFS="$(printf '\t')" read -r name kind evspec policy max; do
+  while IFS="$(printf '\t')" read -r name kind evspec _policy _max; do
     [ -n "$name" ] || continue
     if ! _role_name_path_safe "$name"; then
       log "WARN event: trigger name '$name' has invalid path chars -- ignored"
@@ -1666,8 +1668,11 @@ EOF2
   done <<EOF3
 $new
 EOF3
-  printf '%s%s' "$kept${kept:+
-}" "$handled" | grep -v '^[[:space:]]*$' >"$seen_file".tmp 2>/dev/null \
+  # grep rc 1 = zero surviving lines, a LEGITIMATE empty advance (every seen
+  # token scrolled off the page, nothing handled) -- `|| true` keeps the mv
+  # on that path; only a real write/mv failure logs (review round 1).
+  { printf '%s%s' "$kept${kept:+
+}" "$handled" | grep -v '^[[:space:]]*$' || true; } >"$seen_file".tmp 2>/dev/null \
     && mv "$seen_file".tmp "$seen_file" \
     || log "WARN event: cannot advance seen for '$name/$event' -- some tokens may redeliver"
 }

@@ -241,6 +241,21 @@ resolve_trigger_event_wakes 0
 contains "sync item field" "$(cat "$PYCALLS")" "--event-field item=7"
 contains "sync sha field" "$(cat "$PYCALLS")" "--event-field sha=abc123"
 
+# --- empty page + nothing handled: seen EMPTIES cleanly (review round 1) -------
+# all previously-seen tokens scrolled off the poll page and nothing new was
+# handled -> the advance writes an EMPTY seen-set; grep's rc-1 on zero lines
+# is not a failure and must not leave the stale file or a spurious WARN.
+reset2
+TRIG_ENUM_OUT="qa-x${TAB}native${TAB}pr.opened${TAB}skip${TAB}1"
+POLL_OUT=""
+seed_seen "qa-x__pr.opened" "4"
+resolve_trigger_event_wakes 0
+check "empty page emptied the seen-set" "" "$(cat "$VARDIR/events/qa-x__pr.opened.seen")"
+case "$(cat "$LOGF")" in
+  *"cannot advance seen"*) check "no spurious advance WARN" 0 1 ;;
+  *) check "no spurious advance WARN" 0 0 ;;
+esac
+
 # --- hostile enumeration lines are dropped -------------------------------------
 reset2
 TRIG_ENUM_OUT="bad/name${TAB}native${TAB}pr.opened${TAB}skip${TAB}1"
