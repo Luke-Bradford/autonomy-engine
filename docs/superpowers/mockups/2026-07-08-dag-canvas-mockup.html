@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pipeline canvas · design mockup v5 — the DAG</title>
+<title>Pipeline canvas · design mockup v6 — gallery · triggers · runs · DAG</title>
 <style>
 :root{--sans:"Avenir Next","Helvetica Neue",system-ui,sans-serif;--mono:"SF Mono",Menlo,ui-monospace,monospace;--r:6px}
 :root[data-theme="dark"]{--bg:#15181d;--panel:#1c2027;--panel2:#20252d;--hair:#2a2f38;--hair2:#333a45;
@@ -106,15 +106,302 @@ svg.edges path.hit{pointer-events:stroke;cursor:pointer}
 .ttoggle{position:fixed;top:12px;right:14px;display:inline-flex;border:1px solid var(--hair2);border-radius:6px;overflow:hidden;background:var(--panel);z-index:5}
 .ttoggle button{background:transparent;border:0;color:var(--dim);font-family:var(--mono);font-size:11px;padding:6px 9px;cursor:pointer}
 button:focus-visible,.node:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* v6: view tabs + gallery / triggers / runs surfaces (Phase D pass) */
+.tabs{display:flex;gap:8px;margin:2px 0 14px;flex-wrap:wrap}
+.tabs .tab{border:1px solid var(--hair2);background:var(--panel);color:var(--mut);font-family:var(--mono);font-size:11px;border-radius:6px;padding:6px 14px;cursor:pointer}
+.tabs .tab.on{border-color:var(--accent);color:var(--ink);background:var(--accent-soft)}
+.qbox{border:1px solid var(--hair);border-radius:var(--r);background:var(--panel);padding:8px 12px;margin-bottom:14px}
+.qbox summary{font-family:var(--mono);font-size:10px;letter-spacing:.8px;text-transform:uppercase;color:var(--dim);cursor:pointer}
+.qbox ol{margin:8px 0 4px 18px;padding:0;font-size:11.5px;color:var(--mut)}
+.qbox li{margin:4px 0}
+.qbox b{color:var(--ink)}
+.vhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-top:8px}
+.pcard{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow);padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.pcard .hd{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pcard .nm,.trow .nm{font-weight:600;font-size:13.5px}
+.tchips{display:flex;gap:6px;flex-wrap:wrap}
+.tchip{font-family:var(--mono);font-size:9.5px;border:1px solid var(--hair2);border-radius:10px;padding:1px 8px;color:var(--mut)}
+.tchip.warnc{border-color:var(--warn);color:var(--warn)}
+.tchip.okc{border-color:var(--ok);color:var(--ok)}
+.tchip.badc{border-color:var(--bad);color:var(--bad)}
+.tier-auto{color:var(--ok)}.tier-watch{color:var(--warn)}
+.kv{font-family:var(--mono);font-size:10px;color:var(--mut)}
+.acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:auto}
+.trow{background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow);padding:10px 14px;margin-top:10px;display:flex;flex-direction:column;gap:7px}
+.trow.refused{border:1.5px dashed var(--bad)}
+.rline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.refbar{font-family:var(--mono);font-size:10px;color:var(--bad);border:1px dashed var(--bad);border-radius:5px;padding:6px 10px;margin-top:12px;overflow-x:auto;white-space:nowrap}
+.runrow{display:flex;gap:12px;align-items:center;flex-wrap:wrap;border:1px solid var(--hair);border-radius:var(--r);background:var(--panel);padding:8px 12px;margin-top:8px;font-family:var(--mono);font-size:10.5px;color:var(--mut)}
+.runrow.child{margin-left:34px;border-style:dashed}
+.oc{font-weight:700}.oc.ok{color:var(--ok)}.oc.bad{color:var(--bad)}.oc.warn{color:var(--warn)}.oc.acc{color:var(--accent)}
+.flow{border:1px solid var(--hair2);border-radius:var(--r);background:var(--panel2);padding:12px 14px;margin-top:16px}
+.flow .lab{min-width:150px}
+.step{display:flex;gap:10px;margin:12px 0;align-items:flex-start}
+.step>.n{font-family:var(--mono);font-size:10px;color:var(--accent);border:1px solid var(--accent);border-radius:50%;width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;flex:none;margin-top:2px}
+.step>div{min-width:0;flex:1}
+.switch.off .knob{background:var(--dim)}
+.switch.off .knob::after{right:auto;left:2px}
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
 </style>
 </head>
 <body>
 <div class="ttoggle"><button onclick="document.documentElement.dataset.theme='dark'">dark</button><button onclick="document.documentElement.dataset.theme='light'">light</button></div>
 <div class="wrap">
-  <span class="eyebrow">design mockup v5 · the DAG canvas — ADF for Claude pipelines (spec §7 · P3's blueprint)</span>
-  <h1>ticket-to-merge as a real dependency graph</h1>
-  <div class="sub">Left-to-right ranked layout. <b>Typed dependency edges</b> — <span style="color:var(--ok)">on success</span>, <span style="color:var(--bad)">on failure</span>, <span style="color:var(--dim)">on completion</span> — click any edge to cycle its type. Activities with no dependency between them stack in the <b>same rank and run in parallel</b> (docs ∥ tests; the three QA checks). Containers stay from v4: the <b>coding loop</b> (exit instructed · cap enforced) and the <b>QA stage</b> — click a container's tag for its own pane. The failure path IS part of the graph: any QA check fails → notify &amp; park. Click a node (or any palette type) for its <b>spec-sheet pane</b> on the right; toggle <b>last run</b> to light the observed path. <span style="color:var(--dim)">Build boundaries: the canvas + pane are P3; the top bar's gallery/assignment/versioning/run-window controls are P4 and shown here for the full-vision judgment; for-each is P5.</span></div>
+  <span class="eyebrow">design mockup v6 · gallery + triggers + runs + the DAG canvas — Phase D pass (pipeline+trigger spec §2.2/§5/§6/§8 · issue #383)</span>
+  <h1>pipelines are templates · triggers make them run</h1>
+  <div class="sub">Three concepts (the ADF re-baseline): a <b>pipeline</b> is a reusable template with typed params + outputs; a <b>trigger</b> is its own object that binds ONE pipeline, supplies the param values, and says when it fires; a <b>run</b> is what happened. The tabs below mirror the proposed <code>/pipeline</code> surfaces — the tab shape itself is design question 1. Everything rendered uses the SHIPPED Phase A–E vocabulary: firing modes (continuous · schedule · event · manual), concurrency policies (queue-1 · skip · parallel≤8), UTC run windows (fail-closed), per-trigger trust + all-auto pipeline rollup, REFUSED rows, child-run tokens.</div>
+  <div class="tabs">
+    <button class="tab on" id="tab-gallery" onclick="showView('gallery')">🗂 pipelines gallery</button>
+    <button class="tab" id="tab-triggers" onclick="showView('triggers')">⚡ triggers</button>
+    <button class="tab" id="tab-runs" onclick="showView('runs')">▶ runs</button>
+    <button class="tab" id="tab-canvas" onclick="showView('canvas')">🎨 canvas (v5 · bar reworked)</button>
+  </div>
+  <details class="qbox"><summary>the 9 design questions this pass asks — mirrored on issue #383, operator notes go there</summary>
+    <ol>
+      <li><b>Navigation shape</b> — tabs on <code>/pipeline</code> (this mockup) vs separate routes vs sections folded into the main dashboard. And: does the main page's fleet rail re-list roles as triggers now, or keep role names (shim names are byte-equal) until re-authoring?</li>
+      <li><b>Phase D scope</b> — read-only payload + lifecycle controls first, or also the write surfaces: trigger create/edit (the create flow at the bottom of the ⚡ triggers tab) and pipeline create-from-blank / clone (gallery header buttons)? The canvas editor today edits BOUND pipelines only — create/clone is new scope this phase proposes.</li>
+      <li><b>Run-now params</b> — manual fires have no param-override channel yet: build the required-param prompt (engine-side channel + UI) in D, or grey run-now where required params lack defaults?</li>
+      <li><b>State-file <code>role</code>-key rename</b> — SD-41 deferred it here: rename <code>role</code> → <code>trigger</code> with a reader alias, or keep <code>role</code> permanently as "the token name"? Payload field naming follows.</li>
+      <li><b>Trust placement</b> — per-trigger tier on trigger cards + rollup on gallery cards and the canvas bar (as here); should the MAIN dashboard repo card carry the rollup chip too?</li>
+      <li><b>REFUSED surfacing</b> — gallery strip + degraded trigger cards (as here); also raise into the needs-you queue?</li>
+      <li><b>Child runs</b> — nested under the parent with the <code>.c&lt;slot&gt;.&lt;node&gt;</code> token (as here); does "light on canvas" for a child open the parent's canvas (call node lit) or the child pipeline's own canvas?</li>
+      <li><b>@slot tokens</b> — parallel concurrency mints <code>name@1…</code> tokens today's dashboard glob misses; one row per slotted run (as here) — anything more wanted per slot?</li>
+      <li><b>Canvas bar relocation</b> — confirm enabled · firing · run window · start leave the pipeline bar for the trigger cards; the bar keeps provenance/versioning, params+outputs, caps, trust rollup (as here).</li>
+    </ol>
+  </details>
+
+  <section id="v-gallery">
+    <div class="vhead">
+      <span class="eyebrow">pipelines — reusable templates · .autonomy/pipelines/&lt;name&gt;/ · repo-, agent- and schedule-agnostic</span>
+      <span class="gap"></span>
+      <button class="pill" onclick="alert('mock: blank pipeline — opens the canvas editor on an empty doc')">＋ new pipeline</button>
+      <button class="pill" onclick="alert('mock: pick a pipeline to clone — the new one carries provenance: clone · from name@version')">⧉ clone existing…</button>
+    </div>
+    <div class="cards">
+      <div class="pcard">
+        <div class="hd"><span class="nm">ticket-to-merge</span><span class="badge">v3 · template</span>
+          <span class="badge trust" title="rollup = fail-safe floor over ALL valid triggers (disabled included — a pause never hides evidence): auto only when EVERY per-trigger tier reads auto">🛡 rollup: watch</span></div>
+        <div class="tchips">
+          <span class="tchip" title="trust is earned per trigger — this pipeline, as parameterised by THIS trigger">⟳ coder-repoA · <b class="tier-auto">auto</b></span>
+          <span class="tchip">⟳ coder-repoB · <b class="tier-watch">watch</b></span>
+          <span class="tchip badc" title="a refused trigger file can't be attributed to a pipeline — shown in the strip below and on the triggers tab">⚠ 1 refused</span>
+        </div>
+        <div class="kv">14 activities · caps 16 sessions · ∥ 2 · params 4 (repo · board · coder_agent · coder_model) · outputs 2 (merged_pr · findings)</div>
+        <div class="kv">last run ✓ merged PR #341 · 38m · 6 sessions · 2h ago</div>
+        <div class="acts">
+          <button class="pill" onclick="showView('canvas')">open canvas</button>
+          <button class="pill" onclick="showView('triggers')">＋ trigger</button>
+          <button class="pill" onclick="showView('runs')">runs</button>
+          <button class="pill" onclick="alert('mock: clone — a new pipeline with provenance clone · from ticket-to-merge@v3')">⧉ clone</button>
+        </div>
+      </div>
+      <div class="pcard">
+        <div class="hd"><span class="nm">qa-sweep</span><span class="badge">v5 · template</span>
+          <span class="badge trust">🛡 rollup: auto</span></div>
+        <div class="tchips">
+          <span class="tchip">🕐 qa-nightly · <b class="tier-auto">auto</b></span>
+          <span class="tchip" title="a call_pipeline child run is parameterised by its caller — it never counts toward this pipeline's trigger trust">⧉ also called by ticket-to-merge — child runs never earn trigger trust</span>
+        </div>
+        <div class="kv">5 activities · caps 6 sessions · ∥ 1 · params 2 (repo · target) · outputs 2 (verdict · findings)</div>
+        <div class="kv">last run ✓ pass · 12m · 2 sessions · 02:00 UTC</div>
+        <div class="acts">
+          <button class="pill" onclick="showView('canvas')">open canvas</button>
+          <button class="pill" onclick="showView('triggers')">＋ trigger</button>
+          <button class="pill" onclick="showView('runs')">runs</button>
+        </div>
+      </div>
+      <div class="pcard">
+        <div class="hd"><span class="nm">board-groom</span><span class="badge">v1 · shim</span>
+          <span class="badge trust">🛡 rollup: auto</span></div>
+        <div class="tchips"><span class="tchip">⟳ board-groom · <b class="tier-auto">auto</b> · grandfathered role evidence</span></div>
+        <div class="kv">auto-shim from roles.board-groom — the legacy config keeps running unchanged; re-author into an explicit pipeline + trigger at your own pace</div>
+        <div class="kv">last run ✓ swept · 4m · 1 session · 40m ago</div>
+        <div class="acts">
+          <button class="pill" onclick="alert('mock: wrapped role — READ-ONLY on the canvas until re-authored (P3b rule)')">open canvas</button>
+          <button class="pill" onclick="showView('runs')">runs</button>
+        </div>
+      </div>
+      <div class="pcard">
+        <div class="hd"><span class="nm">research-digest</span><span class="badge diverged">v2 · clone · from research-digest@v1 · ⚠ diverged</span>
+          <span class="badge trust">🛡 rollup: watch</span></div>
+        <div class="tchips"><span class="tchip">👤 adhoc-research · <b class="tier-watch">watch</b> · 3 runs</span></div>
+        <div class="kv">6 activities · params 3 (repo · topic · depth) · outputs 1 (digest)</div>
+        <div class="kv">last run ⚠ parked — needs-you · 54m · yesterday</div>
+        <div class="acts">
+          <button class="pill" onclick="showView('canvas')">open canvas</button>
+          <button class="pill" onclick="showView('triggers')">＋ trigger</button>
+          <button class="pill" onclick="alert('mock: reset the clone to research-digest@v1')">reset to template</button>
+        </div>
+      </div>
+    </div>
+    <div class="refbar">REFUSED&nbsp;&nbsp;triggers/qa-broken.json: firing.mode must be one of continuous, schedule, manual, event</div>
+    <div class="note" style="margin-top:6px">refused trigger files surface VERBATIM from the trust CLI — they can't be attributed to a pipeline (the file may not parse far enough to name one), so no rollup can represent them. The same file renders as a degraded card on the ⚡ triggers tab. Design question 6: also raise these into needs-you?</div>
+  </section>
+
+  <section id="v-triggers" hidden>
+    <div class="vhead">
+      <span class="eyebrow">triggers — when it fires + the params it binds · .autonomy/triggers/&lt;name&gt;.json · pause / stop / run-now live HERE now</span>
+      <span class="gap"></span>
+      <button class="pill go" onclick="alert('mock: scroll to the create flow below — assigning a pipeline IS creating a trigger')">＋ new trigger</button>
+    </div>
+    <div class="trow">
+      <div class="rline">
+        <span class="switch" title="enabled — click to disable"><span class="knob"></span></span>
+        <span class="nm">coder-repoA</span><span class="kv">→ ticket-to-merge@v3</span>
+        <span class="badge">native</span>
+        <span class="badge trust" title="per-trigger tier: auto at ≥20 runs with ≥95% pass over the last 20 · demotion automatic · lost/corrupt evidence lands on watch">🛡 auto · 27 runs · 20/20 last-20</span>
+        <span class="gap"></span>
+        <button class="pill go" onclick="alert('mock: window is CLOSED — the run-now marker is written and DEFERRED until the window opens (fail-closed); in-flight runs are never gated')">▶ run now</button>
+        <button class="pill" onclick="alert('mock: pause — lane-scoped marker; continuous stops firing, the in-flight run finishes')">⏸ pause</button>
+        <button class="pill" onclick="alert('mock: hard stop — no new dispatches for this trigger until start')">■ stop</button>
+        <button class="pill" onclick="alert('mock: opens the trigger editor — the create flow below, prefilled')">edit</button>
+      </div>
+      <div class="rline">
+        <span class="tchip">⟳ continuous — fires while work + capacity exist · one run per work item</span>
+        <span class="tchip">concurrency: skip if running</span>
+        <span class="tchip warnc">🕘 22:00–06:00 UTC · mon–fri (start day) · CLOSED — next open 22:00 · deferred: 1 run-now marker</span>
+        <span class="tchip">params repo=…/repoA · coder_agent=claude-code · coder_model=claude-opus-4-8</span>
+      </div>
+    </div>
+    <div class="trow">
+      <div class="rline">
+        <span class="switch" title="enabled"><span class="knob"></span></span>
+        <span class="nm">coder-repoB</span><span class="kv">→ ticket-to-merge@v3</span>
+        <span class="badge">native</span>
+        <span class="badge trust">🛡 watch · 12 runs · 11 pass</span>
+        <span class="gap"></span>
+        <button class="pill go" onclick="alert('mock: run dispatched — a fresh discrete run claims its work item')">▶ run now</button>
+        <button class="pill">⏸ pause</button><button class="pill">■ stop</button>
+        <button class="pill" onclick="alert('mock: trigger editor, prefilled')">edit</button>
+      </div>
+      <div class="rline">
+        <span class="tchip">⟳ continuous</span>
+        <span class="tchip">concurrency: ∥ parallel ≤ 2 — state tokens coder-repoB · coder-repoB@1</span>
+        <span class="tchip">🕘 no windows · always dispatchable</span>
+        <span class="tchip">params repo=…/repoB · coder_agent=claude-code · coder_model=claude-sonnet-5</span>
+      </div>
+    </div>
+    <div class="trow">
+      <div class="rline">
+        <span class="switch" title="enabled"><span class="knob"></span></span>
+        <span class="nm">qa-nightly</span><span class="kv">→ qa-sweep@v5</span>
+        <span class="badge">native</span>
+        <span class="badge trust">🛡 auto · 31 runs · 20/20 last-20</span>
+        <span class="gap"></span>
+        <button class="pill go" onclick="alert('mock: run dispatched')">▶ run now</button>
+        <button class="pill">⏸ pause</button><button class="pill">■ stop</button>
+        <button class="pill" onclick="alert('mock: trigger editor, prefilled')">edit</button>
+      </div>
+      <div class="rline">
+        <span class="tchip">🕐 schedule · 0 2 * * * (UTC — the cron parser's clock) · missed fires skip + warn</span>
+        <span class="tchip warnc">concurrency: queue · depth 1 · 1 held fire — a fire that came due while closed fires ONCE at window-open</span>
+        <span class="tchip okc">🕘 00:00–07:00 UTC · OPEN</span>
+        <span class="tchip">params repo=…/repoA · target=open PRs</span>
+      </div>
+    </div>
+    <div class="trow">
+      <div class="rline">
+        <span class="switch" title="enabled"><span class="knob"></span></span>
+        <span class="nm">release-notify</span><span class="kv">→ notify-release@v1</span>
+        <span class="badge">native</span>
+        <span class="badge trust">🛡 watch · 2 runs · 2 pass</span>
+        <span class="gap"></span>
+        <button class="pill go" onclick="alert('mock: run dispatched')">▶ run now</button>
+        <button class="pill">⏸ pause</button><button class="pill">■ stop</button>
+        <button class="pill" onclick="alert('mock: trigger editor, prefilled')">edit</button>
+      </div>
+      <div class="rline">
+        <span class="tchip">⚡ event · merge.done · map: pr_number = payload.item</span>
+        <span class="tchip">concurrency: skip if running</span>
+        <span class="tchip">🕘 no windows — events REDELIVER while a window is closed</span>
+        <span class="tchip">params repo=…/repoA · channel=needs-you</span>
+      </div>
+    </div>
+    <div class="trow">
+      <div class="rline">
+        <span class="switch" title="enabled"><span class="knob"></span></span>
+        <span class="nm">adhoc-research</span><span class="kv">→ research-digest@v2</span>
+        <span class="badge">native</span>
+        <span class="badge trust">🛡 watch · 3 runs · 3 pass</span>
+        <span class="gap"></span>
+        <button class="pill go" onclick="alert('mock: manual fire — required params without defaults need values here; the prompt channel does not exist engine-side yet (design question 3)')">▶ run now</button>
+        <button class="pill" onclick="alert('mock: trigger editor, prefilled')">edit</button>
+      </div>
+      <div class="rline">
+        <span class="tchip">👤 manual — run-now only</span>
+        <span class="tchip">concurrency: queue · depth 1</span>
+        <span class="tchip">params repo=…/repoA · topic=(required · no default) · depth=quick</span>
+      </div>
+    </div>
+    <div class="trow">
+      <div class="rline">
+        <span class="switch off" title="disabled — evidence still counts in the rollup"><span class="knob"></span></span>
+        <span class="nm">board-groom</span><span class="kv">→ board-groom@v1</span>
+        <span class="badge">shim · from roles.board-groom</span>
+        <span class="badge trust">🛡 auto · grandfathered role evidence</span>
+        <span class="gap"></span>
+        <button class="pill" onclick="alert('mock: re-enable')">start</button>
+        <button class="pill" onclick="alert('mock: shims are authored in config.yaml roles: — re-author into a native trigger file to edit here')">edit</button>
+      </div>
+      <div class="rline">
+        <span class="tchip">⟳ continuous</span>
+        <span class="tchip">params model=claude-opus-4-8 · account=default — the role's old settings became params</span>
+        <span class="tchip warnc">disabled — its tier STILL counts in the pipeline rollup (a pause never hides evidence)</span>
+      </div>
+    </div>
+    <div class="trow refused">
+      <div class="rline">
+        <span class="nm">qa-broken</span>
+        <span class="badge" style="border-color:var(--bad);color:var(--bad)">REFUSED</span>
+        <span class="kv" style="color:var(--bad)">firing.mode must be one of continuous, schedule, manual, event</span>
+        <span class="gap"></span>
+        <button class="pill" onclick="alert('mock: opens .autonomy/triggers/qa-broken.json — fixing + saving re-validates')">open file</button>
+      </div>
+      <div class="rline"><span class="note">never dispatches — an unreadable trigger restricts, never widens (fail-safe). Surfaced here, in the gallery strip, and as a REFUSED row on the trust CLI's stdout.</span></div>
+    </div>
+
+    <div class="flow">
+      <span class="eyebrow">＋ new trigger — "assign a pipeline to a workflow" IS creating one of these (writes .autonomy/triggers/&lt;name&gt;.json · name must equal the filename stem)</span>
+      <div class="step"><span class="n">1</span><div><b>bind a pipeline</b>
+        <div class="frow"><span class="lab"><span class="req">●</span> pipeline</span><select><option selected>ticket-to-merge · v3</option><option>qa-sweep · v5</option><option>research-digest · v2</option></select><span class="note">declares 4 params · 2 outputs — the form below is GENERATED from that declaration</span></div>
+      </div></div>
+      <div class="step"><span class="n">2</span><div><b>parameter values</b> <span class="note">precedence: pipeline saved default &lt; this trigger's override · a required param with neither → the run refuses</span>
+        <div class="frow"><span class="lab"><span class="req">●</span> repo · repo</span><select><option>…/repoA</option><option>…/repoB</option></select><span class="note">engine-registered checkouts only — never an arbitrary path</span></div>
+        <div class="frow"><span class="lab"><span class="req">●</span> coder_agent · agent</span><select><option>claude-code</option><option>codex</option></select></div>
+        <div class="frow"><span class="lab">coder_model · model</span><select><option selected>default: claude-sonnet-5</option><option>claude-opus-4-8</option></select><span class="note">unset = the pipeline's saved default</span></div>
+        <div class="frow"><span class="lab">board · string</span><input placeholder="optional"></div>
+        <div class="frow"><span class="lab">gh_token · secret</span><select><option>credential label: gh-bot</option></select><span class="note">resolved at run start · never logged · never argv · env channel to the session</span></div>
+      </div></div>
+      <div class="step"><span class="n">3</span><div><b>firing</b>
+        <span class="ctx"><button onclick="alert('mock: continuous — fires while work + capacity exist; one run per work item')">⟳ continuous</button><button class="on">🕐 schedule</button><button onclick="alert('mock: event — pick a kind + map payload fields to params')">⚡ event</button><button onclick="alert('mock: manual — run-now only')">👤 manual</button></span>
+        <div class="frow"><span class="lab">cron</span><input value="0 2 * * *"><span class="note">UTC — the same clock as run windows · missed fires while the machine was off: skip + warn, no catch-up storm</span></div>
+        <div class="frow"><span class="lab">event (if ⚡)</span><select><option>merge.done</option><option>pr.opened</option><option>issue.created</option><option>pr.synchronize</option></select><span class="note">payload map is {param: field} — e.g. pr_number: item · a sha field exists only on pr.synchronize payloads</span></div>
+      </div></div>
+      <div class="step"><span class="n">4</span><div><b>overlap policy</b> <span class="ctx"><button onclick="alert('mock: queue — hold the next fire until the current run ends; depth bounded at 1')">queue · depth 1</button><button class="on">skip if running</button><button onclick="alert('mock: parallel — up to N concurrent runs of this trigger, N ≤ 8; slots mint name@1… tokens')">∥ parallel ≤ 8</button></span></div></div>
+      <div class="step"><span class="n">5</span><div><b>run windows</b>
+        <div class="frow"><span class="lab">window</span><span class="kv">start 22:00 · end 06:00 · days mon tue wed thu fri</span><button class="pill" onclick="alert('mock: add a second window — up to 16')">＋ window</button></div>
+        <div class="note">UTC · end ≤ start wraps past midnight (days name the START day) · start-inclusive, end-exclusive · malformed fails CLOSED — a restriction you wrote can never widen · gates NEW starts only, in-flight runs finish</div>
+      </div></div>
+      <div class="step"><span class="n">6</span><div><span class="switch"><span class="knob"></span>enabled</span>
+        <button class="pill go" style="margin-left:10px" onclick="alert('mock: validates (unknown keys refused · name==stem · sidecar-suffix names refused) then writes .autonomy/triggers/coder-repoC.json')">create trigger</button></div></div>
+    </div>
+  </section>
+
+  <section id="v-runs" hidden>
+    <div class="vhead"><span class="eyebrow">runs — discrete: one run = one work item = one journal line = one trust sample · child runs indent under their caller</span></div>
+    <div class="runrow"><span class="oc acc">● dispatched</span><span><b>coder-repoA</b> → ticket-to-merge</span><span>at: code · session 3/16</span><span>started 12m ago</span><span class="gap"></span><button class="pill" onclick="lightRun()">⚡ light on canvas</button></div>
+    <div class="runrow"><span class="oc warn">◐ WAITING</span><span><b>coder-repoB</b> → ticket-to-merge</span><span>waiting at call node: qa — the call reserved its session at start; waiting ticks spend none</span><span>started 25m ago</span><span class="gap"></span><button class="pill" onclick="lightRun()">⚡ light on canvas</button></div>
+    <div class="runrow child"><span class="oc acc">● dispatched</span><span><b>coder-repoB.c0.qa</b> → qa-sweep</span><span>child run · parent_run ↑ · typed outputs return to the caller — even on failure (the findings loop)</span></div>
+    <div class="runrow"><span class="oc ok">✓ merged</span><span><b>coder-repoB@1</b> → ticket-to-merge</span><span>@1 = parallel slot token</span><span>PR #339 · 41m · 6 sessions</span><span>3h ago</span><span class="gap"></span><button class="pill" onclick="lightRun()">⚡ light on canvas</button></div>
+    <div class="runrow"><span class="oc ok">✓ pass</span><span><b>qa-nightly</b> → qa-sweep</span><span>12m · 2 sessions</span><span>02:00 UTC</span></div>
+    <div class="runrow"><span class="oc warn">⚠ parked</span><span><b>adhoc-research</b> → research-digest</span><span>needs-you — the failure path is part of the graph (notify + park ran)</span><span>yesterday</span></div>
+    <div class="runrow"><span class="oc bad">✕ capped</span><span><b>coder-repoA</b> → ticket-to-merge</span><span>coding-loop cap (20 rounds) hit — parked + flagged needs-you</span><span>yesterday</span></div>
+    <div class="note" style="margin-top:8px">"light on canvas" reuses the observed-lighting pass already shipped on the canvas — it flips to the 🎨 tab with the run's path lit. Design question 7: for a CHILD run, light the parent's call node, or open the child pipeline's own canvas?</div>
+  </section>
+
+  <section id="v-canvas" hidden>
+  <div class="sub">Left-to-right ranked layout. <b>Typed dependency edges</b> — <span style="color:var(--ok)">on success</span>, <span style="color:var(--bad)">on failure</span>, <span style="color:var(--dim)">on completion</span> — click any edge to cycle its type. Activities with no dependency between them stack in the <b>same rank and run in parallel</b> (docs ∥ tests; the three QA checks). Containers stay from v4: the <b>coding loop</b> (exit instructed · cap enforced) and the <b>QA stage</b> — click a container's tag for its own pane. The failure path IS part of the graph: any QA check fails → notify &amp; park. Click a node (or any palette type) for its <b>spec-sheet pane</b> on the right; toggle <b>last run</b> to light the observed path. <span style="color:var(--dim)">Build state: the canvas viewer/editor/search/minimap are SHIPPED. This pass reworks ONLY the top bar — see the note under it; for-each is still future.</span></div>
 
   <div class="layout">
     <aside class="palette" id="palette"></aside>
@@ -126,14 +413,13 @@ button:focus-visible,.node:focus-visible{outline:2px solid var(--accent);outline
         <button class="pill" onclick="alert('mock: template bumped to v4 — existing clones keep their pin')">save back</button>
         <button class="pill" onclick="alert('mock: saved as NEW template — name it')">save as new…</button>
         <span class="gap"></span>
-        <span class="badge trust" title="trust is earned per assignment: auto at ≥20 runs with ≥95% pass over the last 20; demotion is automatic">🛡 trust: watch · 12 runs · 11 pass</span>
-        <span class="pill on">⟳ continuous</span>
+        <span class="badge">params 4 · outputs 2</span>
+        <span class="badge trust" title="rollup = fail-safe floor over ALL valid triggers (disabled included): auto only when EVERY per-trigger tier reads auto">🛡 rollup: watch</span>
         <span class="pill" title="the pipeline's dispatch ceiling: at most this many node-sessions run at once — engine-owned">⛓ max_parallel 2 · enforced</span>
-        <button class="pill" title="end of window: graceful — finish the current activity, then stop" onclick="alert('mock: run window editor — window 22:00–06:00 weekdays · end-of-window behaviour: ● graceful (finish the current activity, no new dispatches) ○ hard (interrupt now) · outside the window now: next dispatch 22:00')">🕘 22:00–06:00 weekdays · graceful</button>
-        <span class="switch"><span class="knob"></span>enabled</span>
-        <button class="pill go" onclick="alert('mock: run dispatched')">▶ start</button>
+        <button class="pill" onclick="showView('triggers')" title="firing · enabled · run windows · run-now live on the TRIGGER now — this pipeline has 2 valid triggers + 1 refused file">⚡ triggers: 2 · 1 refused →</button>
         <button class="pill" id="obsbtn" onclick="toggleObserved()">⚡ last run</button>
       </div>
+      <div class="note" style="margin-top:6px">changed in this pass → the bar sheds the trigger-owned controls (<b>enabled · ⟳ firing · 🕘 run window · ▶ start</b>): they live on each trigger's card in the ⚡ triggers tab. The bar keeps what the pipeline owns — identity/provenance/versioning, declared params + outputs, caps, the trust rollup. Design question 9 confirms this relocation.</div>
       <div class="dagwrap" id="dagwrap">
         <svg class="edges" id="edgesvg"></svg>
         <div class="dag" id="dag"></div>
@@ -167,6 +453,7 @@ button:focus-visible,.node:focus-visible{outline:2px solid var(--accent);outline
     </main>
     <aside class="pane" id="pane"></aside>
   </div>
+  </section>
 </div>
 
 <script>
@@ -209,7 +496,7 @@ const NODES={
  plan:{t:"plan",nm:"write the plan",sum:"executable plan · flag vagueness",agent:"coder·thinking",brief:"Files, steps, test criteria. Too vague to plan → list the questions a human must answer."},
  viable:{t:"branch",nm:"plan viable?",sum:"the plan's own verdict steers the run",agent:"coder·thinking",brief:"Verdict: viable | too-vague."},
  ask:{t:"ask_human",nm:"ask the user",sum:"questions on the ticket · park it",agent:"coder·thinking",brief:"One needs-you comment with the questions. Label needs-info.",end:"■ end this run"},
- code:{t:"agent_task",nm:"work from the plan",sum:"next unmet plan item · TDD",agent:"coder·building",brief:"Work strictly from the plan; can't work as written → back to the thinking brain."},
+ code:{t:"agent_task",nm:"work from the plan",sum:"next unmet plan item · TDD",agent:"${params.coder_agent}",brief:"Work strictly from the plan; can't work as written → back to the thinking brain."},
  test:{t:"check",nm:"test vs the plan",sum:"run the plan's criteria",agent:"coder·building",brief:"Run the named criteria; report pass/remaining. Loop exit rides this verdict."},
  docs:{t:"agent_task",nm:"update the docs",sum:"runs in parallel with tests ∥",agent:"coder·building",brief:"Docs for the change: README, comments, changelog."},
  tests2:{t:"agent_task",nm:"extend the tests",sum:"runs in parallel with docs ∥",agent:"coder·building",brief:"Broaden coverage around the change beyond the plan's minimum."},
@@ -254,6 +541,7 @@ const EDGES=[
 let SEL="pick",OBSERVED=false;
 const COLORS={success:"var(--ok)",failure:"var(--bad)",completion:"var(--dim)"};
 function esc(x){return String(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;")}
+function isParamRef(a){return a.indexOf("$"+"{")===0}
 function card(id,extra){
   const n=NODES[id],obs=OBSERVED?(LASTRUN[id]?(LASTRUN[id]==="ok"?"":""):" dimmed"):"";
   const kind=n.t==="branch"?"diamond":"node "+(n.hard?"":"softb");
@@ -331,12 +619,14 @@ function renderPane(){
    <div class="frow"><span class="lab">step source</span><span class="badge">library · steps/${esc(SEL)}.md</span><span class="badge diverged" title="this use's brief differs from the library step">⚠ diverged</span></div>
    ${spec.req.map(([k,v])=>`<div class="frow"><span class="lab"><span class="req">●</span> ${k}</span>${field(k,v)}</div>`).join("")}
    <div class="frow"><span class="lab"><span class="req">●</span> runs as</span><select name="runs_as">
+     ${isParamRef(n.agent)?'<option selected>'+esc(n.agent)+' — supplied by the trigger (typed: agent)</option>':""}
      ${n.agent==="qa"?`<option selected>inherit — the stage's default: qa (sonnet)</option>`:""}
      <option ${n.agent.indexOf("thinking")>=0?"selected":""}>coder · 🧠 thinking (fable)</option>
-     <option ${n.agent.indexOf("building")>=0?"selected":""}>coder · 🔨 building (sonnet)</option>
+     <option ${n.agent.indexOf("building")>=0&&!isParamRef(n.agent)?"selected":""}>coder · 🔨 building (sonnet)</option>
      <option ${n.agent==="qa"?"":""}>qa (sonnet) — pin it even outside the stage</option>
      <option ${n.agent==="engine"?"selected":""}>the engine (no model)</option></select>
-     ${n.agent==="qa"?`<span class="note">a stage sets the default; a node may override</span>`:""}</div>
+     ${n.agent==="qa"?`<span class="note">a stage sets the default; a node may override</span>`:""}
+     ${isParamRef(n.agent)?`<span class="note">a ref, not a literal — the value comes from the trigger's params (or the pipeline's saved default)</span>`:""}</div>
    <div class="frow"><span class="lab">context</span><span class="ctx"><button class="on" onclick="alert('mock: inherits CLAUDE.md + skills')">project</button><button onclick="alert('mock: bare session, brief only — P2+ (P1 validator refuses it, honestly)')">own</button></span></div>
    ${n.hard?`<div class="guard">⚙️ <span><b>engine mechanics, not a prompt:</b> this activity executes in the engine — there is no brief to edit.</span></div>`:`
    <div class="frow"><span class="lab">its brief</span><span class="note" style="margin-left:auto">the library step's text, editable per use</span></div>
@@ -416,8 +706,18 @@ function previewType(t){
 function toggleObserved(){OBSERVED=!OBSERVED;
   document.getElementById("dagwrap").classList.toggle("observed",OBSERVED);
   document.getElementById("obsbtn").classList.toggle("on",OBSERVED);render();}
+const VIEWS=["gallery","triggers","runs","canvas"];
+function showView(v){
+  for(const k of VIEWS){
+    document.getElementById("v-"+k).hidden=(k!==v);
+    document.getElementById("tab-"+k).classList.toggle("on",k===v);
+  }
+  if(v==="canvas")requestAnimationFrame(drawEdges);
+}
+function lightRun(){showView("canvas");if(!OBSERVED)toggleObserved();}
 window.addEventListener("resize",()=>requestAnimationFrame(drawEdges));
 render();
+showView("gallery");
 </script>
 </body>
 </html>
