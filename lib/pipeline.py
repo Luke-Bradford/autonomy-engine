@@ -720,6 +720,152 @@ def _refuse_refs_in_activity_fields(doc, errors):
             scan("containers[%d]" % i, con)
 
 
+_RUN_FIELDS = ("id", "pipeline", "trigger", "repo")
+# Fields that are file PATHS resolved before substitution runs -- a ${} here
+# would dispatch a garbage path, so they stay ref-free forever.
+_REF_FREE_FIELDS = ("brief_ref", "legacy_prompt")
+
+
+def _ancestors(doc, uid):
+    """Strict ancestor UNIT ids of top-level unit `uid` over
+    effective_edges (traversal edges only -- back-edges excluded: an output
+    'from the future' via a back-edge is not statically guaranteed).
+    TOTAL over garbage doc shapes: check_refs runs inside validate_doc
+    BEFORE the node/edge shape checks, so a malformed edges list must
+    degrade to 'no ancestors' (which REFUSES node-output refs -- the safe
+    side) rather than crash the validator."""
+    parents = {}
+    try:
+        edges = effective_edges(doc)
+    except Exception:
+        return set()
+    for e in edges:
+        if not isinstance(e, dict) or e.get("back"):
+            continue
+        parents.setdefault(e.get("to"), set()).add(e.get("from"))
+    seen, stack = set(), list(parents.get(uid, ()))
+    while stack:
+        cur = stack.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        stack.extend(parents.get(cur, ()))
+    return seen
+
+
+def _check_expr_static(expr, declared_params, allowed_nodes, errors, where):
+    """Parse ONE ${...} body without resolving anything. Mirrors
+    _resolve_expr's grammar exactly -- if this accepts, resolution can only
+    fail on run-time-only facts (a node that wrote no outputs)."""
+    expr = expr.strip()
+    m = _CALL_RE.match(expr)
+    if m:
+        fn, raw = m.group(1), m.group(2)
+        spec = _ALLOWED_FUNCS.get(fn)
+        if spec is None:
+            errors.append("%s: unknown function %r (allowed: %s)"
+                          % (where, fn, ", ".join(sorted(_ALLOWED_FUNCS))))
+            return
+        _impl, lo, hi = spec
+        try:
+            args = _split_args(raw)
+        except PipelineError as exc:
+            errors.append("%s: %s" % (where, exc))
+            return
+        if len(args) < lo or (hi is not None and len(args) > hi):
+            errors.append("%s: function %r arity: expected %s, got %d"
+                          % (where, fn, lo if hi == lo else "%s+" % lo,
+                             len(args)))
+        for a in args:
+            a = a.strip()
+            if len(a) >= 2 and a[0] == a[-1] and a[0] in "'\"":
+                continue                              # string literal
+            if re.match(r"^-?\d+$", a):
+                continue                              # int literal
+            _check_expr_static(a, declared_params, allowed_nodes, errors,
+                               where)
+        return
+    parts = expr.split(".")
+    if parts[0] == "params" and len(parts) == 2:
+        decl = declared_params.get(parts[1])
+        if decl is None:
+            errors.append("%s: ${params.%s} is not a declared param"
+                          % (where, parts[1]))
+        elif decl.get("type") == "secret":
+            errors.append("%s: ${params.%s} is secret-typed -- secrets have "
+                          "no safe substitution sink in Phase B (briefs and "
+                          "runs_as land in files/argv; the env channel is "
+                          "Phase C)" % (where, parts[1]))
+        return
+    if parts[0] == "nodes" and len(parts) == 4 and parts[2] == "output":
+        if parts[1] not in allowed_nodes:
+            errors.append("%s: ${nodes.%s.output.%s} does not name a strict "
+                          "upstream node -- its outputs cannot exist yet"
+                          % (where, parts[1], parts[3]))
+        return
+    if parts[0] == "run" and len(parts) == 2:
+        if parts[1] not in _RUN_FIELDS:
+            errors.append("%s: ${run.%s} unknown (fields: %s)"
+                          % (where, parts[1], ", ".join(_RUN_FIELDS)))
+        return
+    errors.append("%s: unresolvable reference ${%s}" % (where, expr))
+
+
+def check_refs(doc, errors):
+    """Static validation of every ${...} in activity string fields (spec
+    S3.1: an unresolved/unknown ref or non-allowlisted function is a
+    VALIDATOR error -- refuse, don't run). Field-blind scan like
+    _refuse_refs_in_activity_fields was, except brief_ref/legacy_prompt
+    which must stay ref-free (they are paths, resolved before substitution).
+    Also refuses an unterminated '${' (substitute would raise at prepare
+    time -- catching it at validate time keeps 'validating == runnable')."""
+    declared = {p.get("name"): p for p in (doc.get("params") or [])
+                if isinstance(p, dict)}
+    con_of = {}
+    for con in (doc.get("containers") or []):
+        if isinstance(con, dict):
+            for ch in (con.get("children") or []):
+                con_of[ch] = con.get("id")
+
+    def scan(where, v, unit):
+        if isinstance(v, str):
+            if "${" in v.replace("$${", ""):
+                allowed = _ancestors(doc, unit) if unit else set()
+                # container children may also reference EARLIER SIBLINGS in
+                # the same container -- the walk runs them in order; Phase B
+                # does NOT statically allow that (the container is one unit
+                # to the walk; refusing is the safe side -- YAGNI).
+                protected = v.replace("$${", _ESC)
+                bodies = _REF_RE.findall(protected)
+                stripped = _REF_RE.sub("", protected)
+                if "${" in stripped:
+                    errors.append("%s: unterminated ${ reference" % where)
+                for b in bodies:
+                    _check_expr_static(b, declared, allowed, errors, where)
+        elif isinstance(v, dict):
+            for k, x in v.items():
+                scan("%s.%s" % (where, k), x, unit)
+        elif isinstance(v, list):
+            for j, x in enumerate(v):
+                scan("%s[%d]" % (where, j), x, unit)
+
+    for i, node in enumerate(doc.get("nodes") or []):
+        if not isinstance(node, dict):
+            continue
+        where = "nodes[%d]" % i
+        for f in _REF_FREE_FIELDS:
+            val = node.get(f)
+            if isinstance(val, str) and "${" in val:
+                errors.append("%s.%s: is a file path -- ${...} is never "
+                              "substituted in paths" % (where, f))
+        unit = con_of.get(node.get("id"), node.get("id"))
+        clean = {k: v for k, v in node.items() if k not in _REF_FREE_FIELDS}
+        scan(where, clean, unit)
+    for i, con in enumerate(doc.get("containers") or []):
+        if isinstance(con, dict):
+            scan("containers[%d]" % i, con, con.get("id"))
+
+
 def validate_doc(doc, pipeline_dir=None):
     """Full-document validation. Returns error strings, [] = valid.
     pipeline_dir enables brief_ref existence checks (None for wrapped docs)."""

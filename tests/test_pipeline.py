@@ -1702,5 +1702,102 @@ class Cp2HonestyHardeningTest(unittest.TestCase):
         self.assertEqual(pipeline.substitute("$${literal", ctx), "${literal")
 
 
+class CheckRefsTest(unittest.TestCase):
+    def _doc(self, nodes=None, edges=None, params=None):
+        d = {"name": "flow", "version": 1,
+             "caps": {"max_sessions_per_run": 16},
+             "params": params if params is not None else
+                 [{"name": "m", "type": "model", "default": "claude-sonnet-5"},
+                  {"name": "tok", "type": "secret"}],
+             "nodes": nodes or
+                 [{"id": "a", "type": "pick", "brief_ref": "a.md"},
+                  {"id": "b", "type": "agent_task", "brief_ref": "b.md"}],
+             "edges": edges if edges is not None else
+                 [{"from": "a", "to": "b", "on": "success"}]}
+        return d
+
+    def _errs(self, doc):
+        errors = []
+        pipeline.check_refs(doc, errors)
+        return errors
+
+    def test_declared_param_ref_ok(self):
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"model": "${params.m}"}
+        self.assertEqual(self._errs(d), [])
+
+    def test_undeclared_param_ref_refused(self):
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"model": "${params.ghost}"}
+        self.assertTrue(any("ghost" in e for e in self._errs(d)))
+
+    def test_secret_param_ref_refused_everywhere(self):
+        # Phase B has no safe sink for a secret (briefs/argv are files) --
+        # SD-8. The env channel lands with Phase C.
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"account": "${params.tok}"}
+        self.assertTrue(any("secret" in e for e in self._errs(d)))
+
+    def test_upstream_node_output_ref_ok(self):
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"model": "${nodes.a.output.model}"}
+        self.assertEqual(self._errs(d), [])
+
+    def test_downstream_or_sibling_node_ref_refused(self):
+        d = self._doc()
+        d["nodes"][0]["runs_as"] = {"model": "${nodes.b.output.x}"}   # downstream
+        self.assertTrue(self._errs(d))
+        d2 = self._doc(edges=[])                                       # siblings
+        d2["nodes"][0]["runs_as"] = {"model": "${nodes.b.output.x}"}
+        self.assertTrue(self._errs(d2))
+
+    def test_self_ref_refused(self):
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"model": "${nodes.b.output.x}"}
+        self.assertTrue(self._errs(d))
+
+    def test_unknown_node_ref_refused(self):
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"model": "${nodes.ghost.output.x}"}
+        self.assertTrue(self._errs(d))
+
+    def test_run_fields_closed_set(self):
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"model": "${run.id}"}
+        self.assertEqual(self._errs(d), [])
+        d["nodes"][1]["runs_as"] = {"model": "${run.hostname}"}
+        self.assertTrue(self._errs(d))
+
+    def test_function_allowlist_and_arity_static(self):
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"model": "${default(params.m, 'x')}"}
+        self.assertEqual(self._errs(d), [])
+        d["nodes"][1]["runs_as"] = {"model": "${danger(params.m)}"}
+        self.assertTrue(self._errs(d))
+        d["nodes"][1]["runs_as"] = {"model": "${slug()}"}
+        self.assertTrue(self._errs(d))
+
+    def test_brief_ref_and_legacy_prompt_stay_ref_free(self):
+        d = self._doc(nodes=[{"id": "a", "type": "pick",
+                              "brief_ref": "${params.m}.md"}], edges=[])
+        self.assertTrue(self._errs(d))
+        d2 = self._doc(nodes=[{"id": "a", "type": "agent_task",
+                               "legacy_prompt": "${params.m}"}], edges=[])
+        self.assertTrue(self._errs(d2))
+
+    def test_malformed_body_refused(self):
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"model": "${params.m"}      # unterminated
+        self.assertTrue(self._errs(d))
+
+    def test_escaped_literal_ignored(self):
+        d = self._doc()
+        d["nodes"][1]["runs_as"] = {"model": "$${params.m}"}
+        # An escaped literal is prose, not a ref -- but runs_as.model with a
+        # literal '${' still fails the CONCRETE model check at prepare time;
+        # statically it is not a reference error.
+        self.assertEqual([e for e in self._errs(d) if "reference" in e], [])
+
+
 if __name__ == "__main__":
     unittest.main()
