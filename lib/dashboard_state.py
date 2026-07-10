@@ -2550,6 +2550,146 @@ def _inflight_units(logdir, role):
             "status": state.get("status", "")}
 
 
+_RUN_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+_RESERVED_RUN_SUFFIXES = ("outputs", "verdict", "outcome")
+_CHILD_SEG_RE = re.compile(r"\.c(\d+)\.")
+
+
+def _parse_run_token(base, lane_hint=""):
+    """Parse a `.pipeline-run-<base>.json` filename base into run identity
+    (Phase D1, #383). The parse ORDER is the supervisor's canonical rule
+    (inflight_tokens / pipeline._child_token_name): strip a trailing
+    `@<digits>` slot FIRST, then the `--<lane>` suffix -- and lane is only
+    stripped when it matches lane_hint (the state file's own `lane` field),
+    because `-` is name-legal and a bare `a--b` can be a real trigger name.
+    RESERVED sidecar suffixes are never tokens (the Phase C phantom-token
+    lesson). Returns None for anything unparseable -- the caller degrades,
+    never guesses."""
+    if not isinstance(base, str) or not base:
+        return None
+    if base.rsplit(".", 1)[-1] in _RESERVED_RUN_SUFFIXES:
+        return None
+    name, slot = base, 0
+    if "@" in name:
+        head, _, tail = name.rpartition("@")
+        if not head or not tail or not tail.isdigit() or "@" in head:
+            return None
+        name, slot = head, int(tail)
+    lane = ""
+    if lane_hint and name.endswith("--%s" % lane_hint):
+        name, lane = name[:-(len(lane_hint) + 2)], lane_hint
+    if not _RUN_TOKEN_RE.match(name):
+        return None
+    parent = None
+    segs = list(_CHILD_SEG_RE.finditer(name))
+    if segs:
+        parent = name[:segs[-1].start()]
+    return {"token": base, "name": name, "lane": lane, "slot": slot,
+            "child": parent is not None, "parent": parent}
+
+
+def list_runs(logdir, journal_path, limit=20):
+    """The runs list (Phase D1, #383): in-flight rows from every
+    `.pipeline-run-*.json` state file (newest mtime first), then up to
+    `limit` finished rows from a bounded journal tail (newest first).
+    Keyed on the state/journal `trigger` field (decision 4 on #383); a
+    grandfather line with no trigger shows its `role` (display only).
+    Total: corrupt state -> an "unreadable" row (present-but-broken must
+    stay visible, never vanish); junk filenames/sidecars skipped; missing
+    journal -> in-flight rows only. Never raises."""
+    rows = []
+    try:
+        paths = glob.glob(os.path.join(logdir, ".pipeline-run-*.json"))
+    except Exception:
+        paths = []
+    dated = []
+    for p in paths:
+        try:
+            dated.append((os.path.getmtime(p), p))
+        except OSError:
+            continue
+    for _, p in sorted(dated, reverse=True):
+        base = os.path.basename(p)[len(".pipeline-run-"):-len(".json")]
+        if not isinstance(base, str) or not base:
+            continue
+        if base.rsplit(".", 1)[-1] in _RESERVED_RUN_SUFFIXES:
+            continue
+        state = None
+        try:
+            with open(p) as fh:
+                state = json.load(fh)
+        except Exception:
+            state = None
+        if not isinstance(state, dict):
+            state = {}
+        lane_hint = state.get("lane") if isinstance(state.get("lane"), str) \
+            else ""
+        tok = _parse_run_token(base, lane_hint=lane_hint)
+        if tok is None:
+            continue                      # junk filename: never a row
+        unreadable = not state
+        doc = state.get("doc")
+        trigger = state.get("trigger") or state.get("role") or tok["name"]
+        rows.append({
+            "token": base, "state": "in-flight",
+            "trigger": str(trigger),
+            "pipeline": (doc.get("name", "") if isinstance(doc, dict)
+                         else ""),
+            "status": "unreadable" if unreadable
+                      else str(state.get("status", "")),
+            "pass": None, "started": None,
+            "finished": None,
+            "sessions": state.get("sessions"),
+            "run_id": str(state.get("run_id", "")),
+            "parent_run": (str(state["parent_run"])
+                           if isinstance(state.get("parent_run"), str)
+                           else None),
+            "slot": tok["slot"], "lane": tok["lane"],
+            "child": tok["child"] or bool(state.get("parent_run")),
+        })
+    try:
+        with open(journal_path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - 65536))
+            chunk = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return rows
+    fin = 0
+    for line in reversed(chunk.splitlines()):
+        if fin >= limit:
+            break
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        trigger = rec.get("trigger") or rec.get("role") or ""
+        rows.append({
+            "token": None, "state": "finished",
+            "trigger": str(trigger),
+            "pipeline": str(rec.get("pipeline", "")),
+            "status": str(rec.get("outcome", "")),
+            "pass": bool(rec.get("pass")) if "pass" in rec else None,
+            "started": rec.get("started"),
+            "finished": rec.get("finished"),
+            "sessions": rec.get("sessions"),
+            "run_id": str(rec.get("run_id", "")),
+            "parent_run": (str(rec["parent_run"])
+                           if isinstance(rec.get("parent_run"), str)
+                           else None),
+            "slot": None,
+            "lane": str(rec.get("lane", "")),
+            "child": bool(rec.get("parent_run")),
+        })
+        fin += 1
+    return rows
+
+
 def build_pipeline_view(repo_path, role):
     """The /pipeline canvas read model (#357, P3a). Pure + TOTAL: every
     missing/corrupt artifact degrades to a field, never an exception. An

@@ -1759,6 +1759,134 @@ class ChildRunToleranceTest(unittest.TestCase):
         self.assertIn("roles", st)
 
 
+class ParseRunTokenTest(unittest.TestCase):
+    """Phase D1 (#383): the filename-token parse twin of the supervisor's
+    inflight_tokens rules -- strip @<digits> slot from the END, then
+    --<lane>; reserved sidecar suffixes are never tokens."""
+
+    def test_plain_token(self):
+        got = ds._parse_run_token("adhoc-digest")
+        self.assertEqual(got, {"token": "adhoc-digest", "name": "adhoc-digest",
+                               "lane": "", "slot": 0, "child": False,
+                               "parent": None})
+
+    def test_slot_stripped_from_end(self):
+        got = ds._parse_run_token("pr-sweep@1")
+        self.assertEqual(got["name"], "pr-sweep")
+        self.assertEqual(got["slot"], 1)
+
+    def test_lane_then_slot(self):
+        got = ds._parse_run_token("coder--qa@2", lane_hint="qa")
+        self.assertEqual((got["name"], got["lane"], got["slot"]),
+                         ("coder", "qa", 2))
+
+    def test_lane_hint_only_strips_matching_suffix(self):
+        # a trigger genuinely named a--b under NO lane keeps its full name
+        got = ds._parse_run_token("a--b", lane_hint="")
+        self.assertEqual(got["name"], "a--b")
+
+    def test_child_token(self):
+        got = ds._parse_run_token("adhoc-digest.c0.qa")
+        self.assertTrue(got["child"])
+        self.assertEqual(got["parent"], "adhoc-digest")
+
+    def test_depth2_child_parent_is_last_call_segment(self):
+        got = ds._parse_run_token("a.c0.qa.c1.x")
+        self.assertEqual(got["parent"], "a.c0.qa")
+
+    def test_reserved_sidecar_suffixes_never_tokens(self):
+        for base in ("x.outputs", "x.verdict", "p.c0.qa.outcome",
+                     "x.plan.outputs"):
+            self.assertIsNone(ds._parse_run_token(base))
+
+    def test_junk_refused(self):
+        for base in ("x@@", "x@bad", "x@", "", "a b", "../x", "x@1@2"):
+            self.assertIsNone(ds._parse_run_token(base))
+
+
+class ListRunsTest(unittest.TestCase):
+    """Phase D1 (#383): the runs list -- in-flight state files + a bounded
+    journal tail; child linkage + @slot rows; total (never raises)."""
+
+    FIXLOG = os.path.join(FIX, "var", "autonomy-logs")
+    FIXJOURNAL = os.path.join(FIXLOG, "journal.jsonl")
+
+    def test_fixture_inflight_and_journal_rows(self):
+        runs = ds.list_runs(self.FIXLOG, self.FIXJOURNAL)
+        by_token = dict((r["token"], r) for r in runs if r["token"])
+        self.assertIn("adhoc-digest", by_token)
+        self.assertIn("adhoc-digest.c0.qa", by_token)
+        self.assertIn("pr-sweep@1", by_token)
+        child = by_token["adhoc-digest.c0.qa"]
+        self.assertTrue(child["child"])
+        self.assertEqual(child["parent_run"],
+                         "adhoc-digest-20260709T220000-7001")
+        self.assertEqual(by_token["pr-sweep@1"]["slot"], 1)
+        self.assertEqual(by_token["adhoc-digest"]["pipeline"], "fixture-flow")
+        self.assertEqual(by_token["adhoc-digest"]["state"], "in-flight")
+        self.assertEqual(by_token["adhoc-digest"]["status"], "in_progress")
+
+    def test_fixture_journal_rows_trigger_keyed_and_child_flagged(self):
+        runs = ds.list_runs(self.FIXLOG, self.FIXJOURNAL)
+        fin = [r for r in runs if r["state"] == "finished"]
+        self.assertTrue(fin)
+        by_run = dict((r["run_id"], r) for r in fin)
+        self.assertIn("adhoc-digest-20260707T080000-6001", by_run)
+        cj = by_run.get("adhoc-digest.c0.qa-6002")
+        self.assertIsNotNone(cj)
+        self.assertTrue(cj["child"])
+        self.assertEqual(cj["trigger"], "adhoc-digest.c0.qa")
+        # grandfather display: the coder lines carry NO trigger -> role shown
+        coder = [r for r in fin if r["trigger"] == "coder"]
+        self.assertTrue(coder)
+
+    def test_inflight_first_then_journal_newest_first(self):
+        runs = ds.list_runs(self.FIXLOG, self.FIXJOURNAL)
+        states = [r["state"] for r in runs]
+        self.assertEqual(states, sorted(
+            states, key=lambda s: 0 if s == "in-flight" else 1))
+        fin = [r for r in runs if r["state"] == "finished"
+               and r.get("finished")]
+        self.assertEqual([r["finished"] for r in fin],
+                         sorted([r["finished"] for r in fin], reverse=True))
+
+    def test_corrupt_state_degrades_never_raises(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        with open(os.path.join(d, ".pipeline-run-broken.json"), "w") as fh:
+            fh.write("{not json")
+        runs = ds.list_runs(d, os.path.join(d, "journal.jsonl"))
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["status"], "unreadable")
+        self.assertEqual(runs[0]["token"], "broken")
+
+    def test_sidecars_and_junk_filenames_skipped(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        for fn in (".pipeline-run-x.outputs.json",
+                   ".pipeline-run-x.verdict.json",
+                   ".pipeline-run-p.c0.qa.outcome.json",
+                   ".pipeline-run-x@@.json"):
+            with open(os.path.join(d, fn), "w") as fh:
+                fh.write("{}")
+        self.assertEqual(ds.list_runs(d, os.path.join(d, "journal.jsonl")),
+                         [])
+
+    def test_journal_limit_bounds_finished_rows(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        j = os.path.join(d, "journal.jsonl")
+        with open(j, "w") as fh:
+            for i in range(30):
+                fh.write(json.dumps({"trigger": "t", "pipeline": "p",
+                                     "outcome": "success", "pass": True,
+                                     "run_id": "t-%d" % i, "finished": i,
+                                     "started": i}) + "\n")
+        runs = ds.list_runs(d, j, limit=5)
+        self.assertEqual(len(runs), 5)
+        self.assertEqual(runs[0]["run_id"], "t-29")
+
+
 if __name__ == "__main__":
     unittest.main()
 
