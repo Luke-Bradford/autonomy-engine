@@ -1318,7 +1318,13 @@ resolve_trigger_cron_due() {
       log "WARN cron: trigger name '$name' has invalid path chars -- ignored"
       continue
     fi
-    case "$kind" in shim|native) ;; *) kind="shim" ;; esac
+    # Hostile/malformed kind on the enumeration pipe: DROP the line, never
+    # clamp to shim (review round 3 -- a clamp could route a native trigger
+    # through legacy role dispatch; resolve_dispatch_triggers' discipline).
+    case "$kind" in shim|native) ;; *)
+      log "WARN cron: trigger '$name' has invalid kind on the enumeration line -- ignored"
+      continue ;;
+    esac
     marker="$VARDIR/cron/$name.last_fire"
     if [ ! -f "$marker" ]; then
       _cron_write_marker "$marker" "$now" \

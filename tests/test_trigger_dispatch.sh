@@ -251,6 +251,23 @@ check "queued marker written"       "native" "$(cat "$VARDIR/trigger-ctl/queued/
 rm -f "$LOGDIR"/.pipeline-run-*.json "$VARDIR/trigger-ctl/queued/nightly" "$VARDIR/cron/nightly.last_fire"
 rm -f "$repo/.autonomy/triggers"/*.json
 
+# hostile kind on the cron enumeration pipe is DROPPED, never clamped to
+# shim (review round 3: a clamp could route a native trigger through
+# legacy role dispatch -- resolve_dispatch_triggers' line-drop discipline)
+_triggers_enumerate() { printf 'evil\t* * * * *\twat\n'; }
+: >"$RS_FILE"
+resolve_trigger_cron_due
+check "hostile cron kind no fire"   "" "$(rs_calls)"
+check "hostile cron kind no marker" "1" "$([ -f "$VARDIR/cron/evil.last_fire" ] && echo 0 || echo 1)"
+# restore the REAL seam (unset -f would delete the sourced function too)
+_triggers_enumerate() {
+  if [ -n "${AUTONOMY_LANE:-}" ]; then
+    python3 "$ENGINE_HOME/lib/triggers.py" "$@" --lane "$AUTONOMY_LANE" 2>>"$SUPLOG"
+  else
+    python3 "$ENGINE_HOME/lib/triggers.py" "$@" 2>>"$SUPLOG"
+  fi
+}
+
 # --- dispatch_kind_of: kind comes from the run's OWN state, never a guess ------
 printf '{"fmt": 2, "doc": {}, "kind": "native", "status": "in_progress"}' \
   >"$LOGDIR/.pipeline-run-natv.json"
