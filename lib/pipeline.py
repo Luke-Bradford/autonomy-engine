@@ -1947,11 +1947,18 @@ def _collect_node_outputs(state_path, state):
     """{node_id: {name: value}} for every recorded-successful node, read
     TOTALLY from the sidecars (read_outputs: missing/corrupt -> {}). A node
     that wrote nothing simply has no entry -- a ref to it refuses at
-    substitute time with the Phase A 'unknown node output' error."""
+    substitute time with the Phase A 'unknown node output' error.
+    call_pipeline entries contribute on failure too (decision 8: a failed
+    QA child's findings are exactly the value the back-edge loops back);
+    plain nodes stay success-only (an errored session's sidecar is
+    untrustworthy)."""
     logdir = os.path.dirname(state_path)
     out = {}
     for entry in state.get("nodes_done", []):
-        if entry.get("outcome") != "success":
+        usable = entry.get("outcome") == "success" or (
+            entry.get("type") == "call_pipeline"
+            and entry.get("outcome") in ("success", "failure"))
+        if not usable:
             continue
         nid = entry.get("id")
         rel = _node_outputs_rel(state_path, nid)
@@ -2250,16 +2257,173 @@ def _prepare_step(state_path, state, uid, brief_path):
             "prompt": prompt, "verdict": verdict_rel, "runs_as": merged}
 
 
-def _pick(state_path, state, n, brief_path_for, journal_path):
-    """The dispatch protocol core: returns ("done", outcome-dict) or
-    ("steps", [step...]) with the chosen units MARKED dispatched (one
-    atomic state write). n is clamped to the doc's max_parallel AND the
-    remaining session budget (the run cap can never be overshot by a
-    batch -- Codex CP1)."""
+def _record_call_entry(state, uid, nid, outcome, extra):
+    """Append a call node's journal entry + resolve the unit terminal state
+    through the SAME rails a session record uses (via/back-edges/skips).
+    Does NOT touch state["sessions"] -- the budget is RESERVED at call START
+    (_start_call_unit, decision 4), never at consumption. Containers: a call
+    node inside a container advances container_pos exactly like
+    record_outcome's mid-container arm."""
     doc = state["doc"]
+    entry = {"id": nid, "type": "call_pipeline", "outcome": outcome,
+             "unit": uid,
+             "via": sorted(set(e["on"] for e in _incoming_edges(doc, uid)
+                               if _edge_state(state, e) == "satisfied")),
+             "session_log": ""}
+    entry.update(extra)
+    state["nodes_done"].append(entry)
+    unit = state["units"][uid]
+    unit.pop("child", None)
+    con = _con_by_id(doc, uid)
+    status = "success" if outcome == "success" else "failure"
+    if con is None:
+        unit["status"] = status
+    else:
+        pos = int(state["container_pos"].get(uid, 0))
+        children = con["children"]
+        if status == "failure":
+            unit["status"] = "failure"
+        elif pos == len(children) - 1:
+            # loop-exit verdicts come from sessions; a call as the last loop
+            # child exits on success (documented in docs/pipelines.md)
+            unit["status"] = "success"
+        else:
+            state["container_pos"][uid] = pos + 1
+            unit["status"] = "pending"
+    if unit["status"] not in ("pending", "dispatched"):
+        _traverse_back_edges(doc, state, uid)
+        _propagate_skips(doc, state)
+
+
+def _child_alive(child_state_path):
+    """EARNED liveness: the child state file exists, parses, and says
+    in_progress. A done-marked state (_finish's could-not-unlink marker) or
+    unreadable/garbage state is NOT alive -- treating it as alive would make
+    a lost sidecar wait forever (CP1; prevention-log #18: the reassuring
+    verdict is earned). Total reader."""
+    try:
+        with open(child_state_path, encoding="utf-8") as fh:
+            st = json.load(fh)
+        return isinstance(st, dict) and st.get("status") == "in_progress"
+    except (OSError, ValueError):
+        return False
+
+
+def _unlink_quiet(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _sweep_call_units(state_path, state):
+    """Consume terminal children of dispatched call units. The reclaim rule
+    refined for calls: sidecar present -> consume; child ALIVE (in_progress
+    by its own state, _child_alive) -> keep waiting (NEVER a duplicate
+    child); no sidecar + child not alive + state file GONE -> restart the
+    child (external interference; duplicate work beats a stranded run); no
+    usable sidecar + child done-or-garbage -> record failure
+    (prevention-log #18)."""
+    doc = state["doc"]
+    logdir = os.path.dirname(state_path)
+    for uid in _top_units(doc):
+        unit = state["units"][uid]
+        if unit.get("status") != "dispatched" or "child" not in unit:
+            continue
+        nid = _expected_node(doc, state, uid)
+        child = unit["child"]
+        lane = state.get("lane") or ""
+        child_base = "%s--%s" % (child, lane) if lane else child
+        child_state = os.path.join(logdir,
+                                   ".pipeline-run-%s.json" % child_base)
+        sidecar = os.path.join(logdir,
+                               ".pipeline-run-%s.outcome.json" % child_base)
+        try:
+            with open(sidecar, encoding="utf-8") as fh:
+                payload = json.load(fh)
+            if not isinstance(payload, dict):
+                raise ValueError("not an object")
+        except OSError:
+            if _child_alive(child_state):
+                continue                          # child alive: wait
+            if not os.path.exists(child_state):
+                del unit["child"]                 # vanished: restart
+                _start_call_unit(state_path, state, uid,
+                                 _node_by_id(doc, nid))
+                continue
+            # done-marked/garbage child state with NO sidecar: the outcome
+            # is unrecoverable -- record failure, never wait forever
+            _record_call_entry(state, uid, nid, "failure",
+                               {"child_run": child,
+                                "error": "child finished but its outcome "
+                                         "sidecar is missing"})
+            continue
+        except ValueError as exc:
+            if _child_alive(child_state):
+                continue                          # child alive: not terminal yet
+            _record_call_entry(state, uid, nid, "failure",
+                               {"child_run": child,
+                                "error": "corrupt child outcome: %s" % exc})
+            _unlink_quiet(sidecar)
+            continue
+        outcome = "success" if payload.get("outcome") == "success" \
+            else "failure"                        # earned, never defaulted
+        outs = payload.get("outputs")
+        if isinstance(outs, dict) and outs:
+            rel = _node_outputs_rel(state_path, nid)
+            path = os.path.join(logdir, os.path.basename(rel))
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(outs, fh)
+            os.replace(tmp, path)
+        extra = {"child_run": payload.get("run_id", child),
+                 "child_outcome": str(payload.get("outcome"))}
+        if "error" in payload:
+            extra["error"] = str(payload["error"])
+        _record_call_entry(state, uid, nid, outcome, extra)
+        _unlink_quiet(sidecar)
+
+
+def _start_call_unit(state_path, state, uid, node):
+    """Dispatch a call candidate: RESERVE one budget unit (decision 4 --
+    sessions += 1 at START, whatever happens next), then start the child
+    (wait:true parks the unit dispatched; wait:false records success NOW).
+    Start failures record a named unit failure -- the walk continues on
+    failure edges, never crashes (prevention-log #3: a refused call is a
+    loud failure, not a skipped node). A RESTART from the sweep (vanished
+    child) also passes through here and pays a fresh budget unit --
+    deliberate: restarts are dispatches, and the cap is what bounds a
+    pathological delete-restart loop."""
+    repo = (state.get("run") or {}).get("repo", "")
+    nid = node["id"]
+    state["sessions"] += 1                       # the cap counts dispatches
+    try:
+        child_name, _cpath = start_child_run(repo, state_path, state, node)
+    except PipelineError as exc:
+        _record_call_entry(state, uid, nid, "failure",
+                           {"child_run": "", "error": str(exc)})
+        return
+    if node.get("wait", True):
+        state["units"][uid]["status"] = "dispatched"
+        state["units"][uid]["child"] = child_name
+    else:
+        _record_call_entry(state, uid, nid, "success",
+                           {"child_run": child_name, "detached": True})
+
+
+def _pick(state_path, state, n, brief_path_for, journal_path):
+    """The dispatch protocol core: returns ("done", outcome-dict),
+    ("steps", [step...]) with the chosen units MARKED dispatched (one
+    atomic state write), or ("waiting", None) when every dispatched unit
+    is a call unit waiting on its child. n is clamped to the doc's
+    max_parallel AND the remaining session budget (the run cap can never
+    be overshot by a batch -- Codex CP1); call dispatches reserve their
+    budget unit before the step budget is computed, so the two channels
+    share ONE cap."""
+    doc = state["doc"]
+    _sweep_call_units(state_path, state)
     cap = doc["caps"]["max_sessions_per_run"]
-    avail = cap - state["sessions"]
-    if avail <= 0 and not _any_dispatched(doc, state):
+    if cap - state["sessions"] <= 0 and not _any_dispatched(doc, state):
         return "done", _finish(state, state_path, "capped", journal_path)
     candidates = _pick_candidates(doc, state)
     if not candidates:
@@ -2278,14 +2442,39 @@ def _pick(state_path, state, n, brief_path_for, journal_path):
                                 "refusing" % (", ".join(pending), state_path))
         return "done", _finish(state, state_path, _walk_outcome(doc, state),
                                journal_path)
+    # Call pass FIRST: reservations land before the step budget is computed
+    # (the plan's interleaved loop could overshoot the cap when a call and
+    # agent steps shared one frontier -- the old code's cannot-overshoot
+    # guarantee is preserved by sequencing the two passes).
+    step_candidates = []
+    for uid in candidates:
+        nid = _expected_node(doc, state, uid)
+        node = _node_by_id(doc, nid)
+        if node is not None and node.get("type") == "call_pipeline":
+            if state["units"][uid]["status"] == "dispatched":
+                continue                # waiting on its child (sweep owns it)
+            if state["sessions"] >= cap:
+                continue                # budget spent: stays pending (dec. 4)
+            _start_call_unit(state_path, state, uid, node)
+            continue
+        step_candidates.append(uid)
+    avail = cap - state["sessions"]
     n_eff = max(1, min(n, int(doc["caps"].get("max_parallel", 1)), avail))
     steps = []
-    for uid in candidates[:n_eff]:
+    for uid in step_candidates[:n_eff]:
         steps.append(_prepare_step(state_path, state, uid,
                                    brief_path_for(uid)))
         state["units"][uid]["status"] = "dispatched"
     _atomic_write_json(state_path, state)
-    return "steps", steps
+    if steps:
+        return "steps", steps
+    if _any_dispatched(doc, state):
+        return "waiting", None
+    # every candidate this pass was a call unit that resolved immediately
+    # (wait:false or start-failure) -- re-enter for the next frontier; the
+    # tail recursion is bounded (each re-entry consumed candidates into
+    # terminal states or finishes/waits -- at most len(units) frames)
+    return _pick(state_path, state, n, brief_path_for, journal_path)
 
 
 def next_node(state_path, brief_out, journal_path=""):
@@ -2295,13 +2484,17 @@ def next_node(state_path, brief_out, journal_path=""):
                          journal_path)
     if kind == "done":
         return result
+    if kind == "waiting":
+        return {"status": "waiting"}
     return result[0]
 
 
 def ready_set(state_path, brief_dir, n, journal_path=""):
     """The batch view: up to n steps (clamped), units marked dispatched.
     [] when the run just finished (the finish itself has already happened,
-    exactly like next_node's done path)."""
+    exactly like next_node's done path); the sentinel string "WAITING" when
+    every dispatched unit is a call unit waiting on its child run (Phase C
+    -- the CLI is the only non-test consumer and prints it verbatim)."""
     state = _load_state(state_path)
     _guard_in_progress(state, state_path)
     base = os.path.basename(state_path)
@@ -2313,6 +2506,8 @@ def ready_set(state_path, brief_dir, n, journal_path=""):
         journal_path)
     if kind == "done":
         return []
+    if kind == "waiting":
+        return "WAITING"
     return result
 
 
@@ -2515,6 +2710,9 @@ def main(argv):
         if step["status"] == "done":
             print("DONE %s" % step["outcome"])
             return 0
+        if step["status"] == "waiting":
+            print("WAITING")
+            return 0
         _print_step(step)
         return 0
     if cmd == "ready":
@@ -2532,6 +2730,9 @@ def main(argv):
         except (IndexError, PipelineError) as exc:
             print("pipeline ready: %s" % exc, file=sys.stderr)
             return 1
+        if steps == "WAITING":
+            print("WAITING")
+            return 0
         if not steps:
             print("DONE")
             return 0

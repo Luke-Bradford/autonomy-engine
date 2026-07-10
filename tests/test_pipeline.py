@@ -2081,14 +2081,16 @@ class _ChildFixture(unittest.TestCase):
         if node_params is not None:
             doc["nodes"][1]["params"] = node_params
         state_path = os.path.join(self.logdir, ".pipeline-run-%s.json" % name)
+        units = dict((u, {"status": "pending"}) for u in
+                     pipeline._top_units(doc))
+        units["code"] = {"status": "success"}
         state = {"fmt": 2, "run_id": "%s-x-1" % name, "role": name,
                  "lane": "", "doc": dict(doc, edges=pipeline.effective_edges(doc)),
                  "meta": {}, "trigger": name, "kind": "native", "params": {},
                  "run": {"id": "%s-x-1" % name, "pipeline": doc["name"],
                          "trigger": name, "repo": self.repo},
                  "started": 1, "sessions": 0,
-                 "units": {"code": {"status": "success"},
-                           "qa": {"status": "pending"}},
+                 "units": units,
                  "container_pos": {}, "rounds": {}, "bounces": {},
                  "nodes_done": [{"id": "code", "type": "agent_task",
                                  "outcome": "success", "unit": "code",
@@ -2251,6 +2253,227 @@ class ChildOutcomeSidecarTest(_ChildFixture):
         pipeline._finish(st, sp, "success", self.journal)
         self.assertFalse(os.path.exists(os.path.join(
             self.logdir, ".pipeline-run-par.c0.qa.outcome.json")))
+
+
+class CallWalkTest(_ChildFixture):
+    def setUp(self):
+        super().setUp()
+        self.pdir = os.path.join(self.repo, ".autonomy", "pipelines", "parent")
+        os.makedirs(self.pdir)
+        for fn, text in (
+                ("code.md", "do code"),
+                ("z.md", "do z"),
+                ("fix.md",
+                 "fix these: ${default(nodes.qa.output.findings, 'none')}")):
+            with open(os.path.join(self.pdir, fn), "w") as fh:
+                fh.write(text)
+
+    def _pstate(self, doc=None, name="par", sessions=0, cap=None):
+        doc = doc if doc is not None else _call_doc()
+        if cap is not None:
+            doc["caps"]["max_sessions_per_run"] = cap
+        sp, st = self._parent_state(name=name, doc=doc)
+        st["meta"] = {"pipeline_dir": self.pdir}
+        st["sessions"] = sessions
+        pipeline._atomic_write_json(sp, st)
+        return sp, st
+
+    def _ready(self, sp):
+        return pipeline.ready_set(sp, self.logdir, 8,
+                                  journal_path=self.journal)
+
+    def _finish_child(self, payload, child="par.c0.qa"):
+        os.unlink(os.path.join(self.logdir,
+                               ".pipeline-run-%s.json" % child))
+        with open(os.path.join(self.logdir,
+                  ".pipeline-run-%s.outcome.json" % child), "w") as fh:
+            json.dump(payload, fh)
+
+    def test_call_candidate_starts_child_and_waits(self):
+        sp, st = self._pstate()
+        out = self._ready(sp)
+        self.assertEqual(out, "WAITING")
+        child_state = os.path.join(self.logdir,
+                                   ".pipeline-run-par.c0.qa.json")
+        self.assertTrue(os.path.isfile(child_state))
+        with open(sp) as fh:
+            st2 = json.load(fh)
+        self.assertEqual(st2["units"]["qa"]["status"], "dispatched")
+        self.assertEqual(st2["units"]["qa"]["child"], "par.c0.qa")
+
+    def test_waiting_while_child_alive(self):
+        sp, st = self._pstate()
+        self._ready(sp)
+        self.assertEqual(self._ready(sp), "WAITING")   # no duplicate child
+        self.assertEqual(
+            1, len([f for f in os.listdir(self.logdir) if ".c0.qa" in f
+                    and f.endswith(".json")]))
+
+    def test_child_outcome_consumed_records_and_republishes_outputs(self):
+        sp, st = self._pstate()
+        self._ready(sp)
+        self._finish_child({"run_id": "c", "outcome": "success",
+                            "outputs": {"findings": "f1"}})
+        out = self._ready(sp)                     # run finishes: [] (DONE path)
+        self.assertEqual(out, [])
+        # the call node's own outputs sidecar now serves ${nodes.qa.output.*}
+        got = pipeline.read_outputs(os.path.join(
+            self.logdir, ".pipeline-run-par.qa.outputs.json"))
+        self.assertEqual(got, {"findings": "f1"})
+        # journal line: outcome success, one call entry with child_run
+        with open(self.journal) as fh:
+            rec = json.loads(fh.read().splitlines()[-1])
+        self.assertEqual(rec["outcome"], "success")
+        entries = [n for n in rec["nodes"] if n["id"] == "qa"]
+        self.assertEqual(entries[0]["type"], "call_pipeline")
+        self.assertTrue(entries[0]["child_run"])
+
+    def test_child_failure_drives_failure_edges(self):
+        # decision 8 end-to-end: a FAILED child's parked findings compile
+        # into the failure-path brief.
+        doc = _call_doc()
+        doc["nodes"].append({"id": "fix", "type": "agent_task",
+                             "brief_ref": "fix.md"})
+        doc["edges"].append({"from": "qa", "to": "fix", "on": "failure"})
+        sp, st = self._pstate(doc=doc)
+        self._ready(sp)
+        self._finish_child({"run_id": "c", "outcome": "failure",
+                            "outputs": {"findings": "f-val"}})
+        steps = self._ready(sp)
+        self.assertEqual([s["node"] for s in steps], ["fix"])
+        with open(steps[0]["prompt"]) as fh:
+            brief = fh.read()
+        self.assertIn("f-val", brief)
+
+    def test_corrupt_sidecar_child_gone_records_failure(self):
+        sp, st = self._pstate()
+        self._ready(sp)
+        os.unlink(os.path.join(self.logdir, ".pipeline-run-par.c0.qa.json"))
+        with open(os.path.join(self.logdir,
+                  ".pipeline-run-par.c0.qa.outcome.json"), "w") as fh:
+            fh.write("{junk")
+        self.assertEqual(self._ready(sp), [])
+        with open(self.journal) as fh:
+            rec = json.loads(fh.read().splitlines()[-1])
+        self.assertEqual(rec["outcome"], "failure")
+        entry = [n for n in rec["nodes"] if n["id"] == "qa"][0]
+        self.assertIn("corrupt", entry["error"])
+
+    def test_child_vanished_restarts(self):
+        sp, st = self._pstate()
+        self._ready(sp)
+        os.unlink(os.path.join(self.logdir, ".pipeline-run-par.c0.qa.json"))
+        out = self._ready(sp)
+        self.assertEqual(out, "WAITING")
+        self.assertTrue(os.path.isfile(os.path.join(
+            self.logdir, ".pipeline-run-par.c0.qa.json")))   # fresh child
+        with open(sp) as fh:
+            st2 = json.load(fh)
+        self.assertEqual(st2["units"]["qa"]["status"], "dispatched")
+
+    def test_wait_false_records_success_immediately(self):
+        doc = _call_doc(wait=False)
+        doc["nodes"].append({"id": "z", "type": "agent_task",
+                             "brief_ref": "z.md"})
+        doc["edges"].append({"from": "qa", "to": "z", "on": "success"})
+        sp, st = self._pstate(doc=doc)
+        steps = self._ready(sp)                   # z ready in the SAME call
+        self.assertEqual([s["node"] for s in steps], ["z"])
+        with open(sp) as fh:
+            st2 = json.load(fh)
+        self.assertEqual(st2["units"]["qa"]["status"], "success")
+        self.assertTrue(os.path.isfile(os.path.join(
+            self.logdir, ".pipeline-run-par.c0.qa.json")))
+        entry = [n for n in st2["nodes_done"] if n["id"] == "qa"][0]
+        self.assertIs(entry["detached"], True)
+
+    def test_call_start_failure_records_unit_failure(self):
+        doc = _call_doc()
+        doc["nodes"][1]["pipeline"] = "ghost"
+        sp, st = self._pstate(doc=doc)
+        self.assertEqual(self._ready(sp), [])
+        with open(self.journal) as fh:
+            rec = json.loads(fh.read().splitlines()[-1])
+        self.assertEqual(rec["outcome"], "failure")
+        entry = [n for n in rec["nodes"] if n["id"] == "qa"][0]
+        self.assertIn("ghost", entry["error"])
+
+    def test_call_start_reserves_session_budget(self):
+        # decision 4: sessions += 1 at call START; consumption does not
+        # increment again; a following agent node then cap-finishes.
+        doc = _call_doc()
+        doc["nodes"].append({"id": "z", "type": "agent_task",
+                             "brief_ref": "z.md"})
+        doc["edges"].append({"from": "qa", "to": "z", "on": "success"})
+        sp, st = self._pstate(doc=doc, cap=1)
+        self.assertEqual(self._ready(sp), "WAITING")
+        with open(sp) as fh:
+            st2 = json.load(fh)
+        self.assertEqual(st2["sessions"], 1)      # RESERVED at start
+        self._finish_child({"run_id": "c", "outcome": "success",
+                            "outputs": {}})
+        self.assertEqual(self._ready(sp), [])     # cap spent -> capped finish
+        with open(self.journal) as fh:
+            rec = json.loads(fh.read().splitlines()[-1])
+        self.assertEqual(rec["outcome"], "capped")
+        self.assertEqual(rec["sessions"], 1)      # consume did NOT increment
+
+    def test_budget_exhausted_leaves_call_pending(self):
+        # cap spent + a batch outstanding: the call unit is NOT started and
+        # stays pending (never a silent skip); the reclaimed agent step
+        # still returns.
+        doc = _call_doc()
+        sp, st = self._pstate(doc=doc, sessions=9)   # cap 9, all spent
+        st["units"]["code"] = {"status": "dispatched"}
+        st["units"]["qa"] = {"status": "pending"}
+        st["nodes_done"] = []
+        for f in os.listdir(self.logdir):
+            if f.endswith(".code.outputs.json"):
+                os.unlink(os.path.join(self.logdir, f))
+        pipeline._atomic_write_json(sp, st)
+        steps = self._ready(sp)
+        self.assertEqual([s["node"] for s in steps], ["code"])
+        with open(sp) as fh:
+            st2 = json.load(fh)
+        self.assertEqual(st2["units"]["qa"]["status"], "pending")
+        self.assertFalse(os.path.exists(os.path.join(
+            self.logdir, ".pipeline-run-par.c0.qa.json")))
+
+    def test_done_marked_child_without_sidecar_records_failure(self):
+        sp, st = self._pstate()
+        self._ready(sp)
+        child = os.path.join(self.logdir, ".pipeline-run-par.c0.qa.json")
+        with open(child) as fh:
+            cst = json.load(fh)
+        cst["status"] = "done"                    # _finish's unlink-failed marker
+        pipeline._atomic_write_json(child, cst)
+        self.assertEqual(self._ready(sp), [])     # NEVER an eternal wait (CP1)
+        with open(self.journal) as fh:
+            rec = json.loads(fh.read().splitlines()[-1])
+        entry = [n for n in rec["nodes"] if n["id"] == "qa"][0]
+        self.assertIn("sidecar is missing", entry["error"])
+
+    def test_reclaim_coexists_with_waiting_call(self):
+        # CP1 pin: dispatched plain units re-emit as steps, so WAITING can
+        # never mask reclaim -- a crashed agent session is re-prepared while
+        # a call unit's child is still being waited on.
+        doc = _call_doc()
+        doc["nodes"].append({"id": "z", "type": "agent_task",
+                             "brief_ref": "z.md"})
+        doc["edges"].append({"from": "code", "to": "z", "on": "success"})
+        sp, st = self._pstate(doc=doc)
+        steps = self._ready(sp)          # starts qa's child AND prepares z
+        self.assertEqual([s["node"] for s in steps], ["z"])
+        # crash: z never recorded -- the next ready re-prepares it (reclaim)
+        # instead of collapsing to WAITING on qa's live child
+        steps = self._ready(sp)
+        self.assertEqual([s["node"] for s in steps], ["z"])
+
+    def test_next_node_reports_waiting(self):
+        sp, st = self._pstate()
+        out = pipeline.next_node(sp, os.path.join(self.logdir, "b.md"),
+                                 journal_path=self.journal)
+        self.assertEqual(out, {"status": "waiting"})
 
 
 class CallNameHeadroomTest(_ChildFixture):
