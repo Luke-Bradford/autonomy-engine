@@ -87,6 +87,58 @@ class TestSetModelPlan(unittest.TestCase):
         self.assertIn("error", dc.set_model_plan(self.repo, "claude-sonnet-5", "", "forever"))
 
 
+class TestTriggerCtlPlan(unittest.TestCase):
+    """Phase D1 (#383): the pure per-trigger marker planner. Path
+    mechanics ONLY -- mode/fire-readiness/lane-routing validation happens
+    in the caller (bin/dashboard.py execute path); the planner charset-
+    gates and shapes the plan, never touches the filesystem."""
+
+    def test_fire_touches_fire_marker(self):
+        p = dc.trigger_ctl_plan("/w/tree", "trigger_fire", "adhoc-digest")
+        self.assertEqual(p["touch"],
+                         "/w/tree/var/trigger-ctl/fire/adhoc-digest")
+
+    def test_stop_touches_stop_marker(self):
+        p = dc.trigger_ctl_plan("/w/tree", "trigger_stop", "coder")
+        self.assertEqual(p["touch"],
+                         "/w/tree/var/trigger-ctl/stop/coder")
+
+    def test_resume_removes_stop_marker(self):
+        p = dc.trigger_ctl_plan("/w/tree", "trigger_resume", "coder")
+        self.assertEqual(p["remove"],
+                         "/w/tree/var/trigger-ctl/stop/coder")
+
+    def test_lane_suffix_matches_supervisor_convention(self):
+        p = dc.trigger_ctl_plan("/w/tree", "trigger_stop", "coder",
+                                lane_suffix="qa")
+        self.assertEqual(p["touch"],
+                         "/w/tree/var/trigger-ctl/stop/coder--qa")
+
+    def test_bad_name_charset_refused(self):
+        for bad in ("../x", "", "a b", "x/y", None):
+            p = dc.trigger_ctl_plan("/w/tree", "trigger_fire", bad)
+            self.assertIn("error", p)
+
+    def test_reserved_sidecar_name_refused(self):
+        # a trigger named *.outcome can never be a real trigger
+        # (validate_trigger refuses it at mint) -- the planner refuses too.
+        p = dc.trigger_ctl_plan("/w/tree", "trigger_stop", "x.outcome")
+        self.assertIn("error", p)
+
+    def test_bad_lane_charset_refused(self):
+        p = dc.trigger_ctl_plan("/w/tree", "trigger_stop", "coder",
+                                lane_suffix="../x")
+        self.assertIn("error", p)
+
+    def test_unknown_action_refused(self):
+        p = dc.trigger_ctl_plan("/w/tree", "trigger_nuke", "coder")
+        self.assertIn("error", p)
+
+    def test_actions_tuple_exported(self):
+        self.assertEqual(dc.TRIGGER_CTL_ACTIONS,
+                         ("trigger_fire", "trigger_stop", "trigger_resume"))
+
+
 class TestControlPlan(unittest.TestCase):
     def setUp(self):
         self.repo = "/w/tree"
