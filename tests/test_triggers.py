@@ -68,10 +68,12 @@ class ValidateTriggerTest(unittest.TestCase):
         self.assertTrue(triggers.validate_trigger(
             _trig(firing={"mode": "sometimes"}), "coder-a"))
 
-    def test_event_mode_deferred_refusal_names_phase(self):
+    def test_event_mode_live_but_bare_mode_still_refuses(self):
+        # Phase C FLIP of the deferred-mode pin: event is a live firing mode
+        # now; a bare {"mode": "event"} still refuses -- it names no event.
         errs = triggers.validate_trigger(
             _trig(firing={"mode": "event"}), "coder-a")
-        self.assertTrue(any("Phase C" in e for e in errs))
+        self.assertTrue(any("firing.event" in e for e in errs), errs)
 
     def test_schedule_mode_requires_valid_cron(self):
         errs = triggers.validate_trigger(
@@ -438,6 +440,73 @@ class CliTest(unittest.TestCase):
         rc, out, _ = self._run("manual", self.repo)
         self.assertEqual(rc, 0)
         self.assertNotIn("qa\t", out)
+
+
+class EventTriggerSchemaTest(unittest.TestCase):
+    def _trig(self, firing=None, **kw):
+        t = {"name": "qa-on-pr", "pipeline": "qa-sweep",
+             "params": {"repo": "/r"},
+             "firing": firing or {"mode": "event", "event": "pr.opened",
+                                  "map": {"pr": "item"}}}
+        t.update(kw)
+        return t
+
+    def test_event_mode_validates(self):
+        self.assertEqual(triggers.validate_trigger(self._trig(), "qa-on-pr"),
+                         [])
+
+    def test_event_kind_closed_vocabulary(self):
+        for bad in ("session.done", "push", ""):
+            t = self._trig({"mode": "event", "event": bad})
+            self.assertTrue(triggers.validate_trigger(t, "qa-on-pr"), bad)
+
+    def test_map_fields_closed(self):
+        t = self._trig({"mode": "event", "event": "pr.opened",
+                        "map": {"pr": "body"}})
+        self.assertTrue(triggers.validate_trigger(t, "qa-on-pr"))
+
+    def test_sha_only_for_synchronize(self):
+        t = self._trig({"mode": "event", "event": "pr.opened",
+                        "map": {"s": "sha"}})
+        self.assertTrue(triggers.validate_trigger(t, "qa-on-pr"))
+        t = self._trig({"mode": "event", "event": "pr.synchronize",
+                        "map": {"s": "sha"}})
+        self.assertEqual(triggers.validate_trigger(t, "qa-on-pr"), [])
+
+    def test_map_overlap_with_static_params_refused(self):
+        t = self._trig({"mode": "event", "event": "pr.opened",
+                        "map": {"repo": "item"}})
+        self.assertTrue(triggers.validate_trigger(t, "qa-on-pr"))
+
+    def test_queue_policy_refused_for_event_mode(self):
+        t = self._trig(concurrency={"policy": "queue", "max": 1})
+        self.assertTrue(triggers.validate_trigger(t, "qa-on-pr"))
+
+    def test_event_key_refused_on_other_modes(self):
+        t = self._trig({"mode": "continuous", "event": "pr.opened"})
+        self.assertTrue(triggers.validate_trigger(t, "qa-on-pr"))
+        t = self._trig({"mode": "continuous", "map": {"x": "item"}})
+        self.assertTrue(triggers.validate_trigger(t, "qa-on-pr"))
+
+
+class EventCliTest(CliTest):
+    def test_event_lists_native_event_triggers(self):
+        # shims are Task 10 -- until then `event` lists NATIVES only
+        self._write("qa-on-pr", {
+            "name": "qa-on-pr", "pipeline": "qa-sweep", "params": {},
+            "firing": {"mode": "event", "event": "pr.opened"}})
+        rc, out, _ = self._run("event", self.repo)
+        self.assertEqual(rc, 0)
+        self.assertIn("qa-on-pr\tnative\tpr.opened\tskip\t1\n", out)
+
+    def test_event_trigger_absent_from_other_listings(self):
+        self._write("qa-on-pr", {
+            "name": "qa-on-pr", "pipeline": "qa-sweep", "params": {},
+            "firing": {"mode": "event", "event": "pr.opened"}})
+        for sub in ("dispatch", "cron", "manual"):
+            rc, out, _ = self._run(sub, self.repo)
+            self.assertEqual(rc, 0, sub)
+            self.assertNotIn("qa-on-pr", out, sub)
 
 
 if __name__ == "__main__":

@@ -1632,13 +1632,16 @@ def _resolve_run_params(repo, doc, overrides, *, known_repos=None,
 
 
 def start_run_trigger(repo, trigger_name, state_path, lane="", *,
-                      known_repos=None, known_accounts=None):
+                      known_repos=None, known_accounts=None,
+                      event_fields=None):
     """Start a run for a NATIVE trigger: load+validate the trigger, resolve
     the pipeline BY NAME, resolve params (required-unset refuses HERE,
     before a session is burned -- _resolve_run_params, shared with
     start_child_run), run the repo/account existence checks, write fmt-2
-    state. A shim with pipeline '' never reaches this function -- shims
-    start through start_run(repo, role)."""
+    state. event_fields = the event payload for an event-mode trigger's
+    firing.map (decision 13); refused on non-event triggers, required when
+    the trigger maps. A shim with pipeline '' never reaches this function
+    -- shims start through start_run(repo, role)."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import triggers as triggers_mod
     import roles
@@ -1661,9 +1664,36 @@ def start_run_trigger(repo, trigger_name, state_path, lane="", *,
         raise PipelineError("trigger %r collides with an enabled event role "
                             "-- event triggers land in a later phase; "
                             "refusing (double-dispatch)" % trigger_name)
+    firing = trig.get("firing") or {}
+    overrides = dict(trig["params"])
+    mapping = firing.get("map") or {}
+    if event_fields is not None and firing.get("mode") != "event":
+        raise PipelineError("trigger %r: event fields supplied to a "
+                            "non-event trigger -- refusing" % trigger_name)
+    if firing.get("mode") == "event" and mapping and event_fields is None:
+        raise PipelineError("trigger %r maps event payload fields but no "
+                            "event fields were supplied -- an event run "
+                            "starts from the event resolver" % trigger_name)
+    if event_fields is not None:
+        fields = dict(event_fields)
+        fields.setdefault("event", firing.get("event", ""))
+        for pname, fld in mapping.items():
+            if fld not in fields or fields[fld] in (None, ""):
+                raise PipelineError("trigger %r: event payload has no field "
+                                    "%r for param %r" % (trigger_name, fld,
+                                                         pname))
+            overrides[pname] = fields[fld]
     doc, meta = resolve_pipeline_doc(repo, trig["pipeline"])
     _check_call_name_headroom(doc, trigger_name)
-    params = _resolve_run_params(repo, doc, trig["params"],
+    if event_fields is not None:
+        decl_types = {p.get("name"): p.get("type")
+                      for p in (doc.get("params") or []) if isinstance(p, dict)}
+        for pname in mapping:
+            if decl_types.get(pname) == "secret":
+                raise PipelineError("trigger %r: firing.map targets secret "
+                                    "param %r -- an event payload is never a "
+                                    "credential" % (trigger_name, pname))
+    params = _resolve_run_params(repo, doc, overrides,
                                  known_repos=known_repos,
                                  known_accounts=known_accounts)
     doc = dict(doc)
@@ -2767,18 +2797,50 @@ def main(argv):
         return 0
     if cmd == "start":
         # start <repo> <name> <state-file> [--lane <l>] [--kind shim|native]
+        #       [--event-field k=v ...]
         # default shim = start_run(repo, role): every pre-Phase-B caller
         # unchanged; native = start_run_trigger (trigger-started run).
+        # Collect the repeatable --event-field BEFORE _split_opts (it only
+        # handles single-valued opts). k is closed to item|sha ('event' is
+        # implicit); v charset-gated -- payload fields land in params.
+        ev_fields, rest2 = {}, []
+        i = 0
+        while i < len(rest):
+            if rest[i] == "--event-field" and i + 1 < len(rest):
+                kv = rest[i + 1]
+                k, _, v = kv.partition("=")
+                if k not in ("item", "sha") or not v or \
+                        not re.match(r"^[A-Za-z0-9:._-]{1,128}$", v):
+                    print("pipeline start: bad --event-field %r" % kv,
+                          file=sys.stderr)
+                    return 2
+                if k in ev_fields:
+                    # payload mapping is a control boundary: a silent
+                    # last-wins on a duplicate field is fail-open (CP1)
+                    print("pipeline start: duplicate --event-field %r" % k,
+                          file=sys.stderr)
+                    return 2
+                ev_fields[k] = v
+                i += 2
+            else:
+                rest2.append(rest[i])
+                i += 1
+        rest = rest2
         opts = {"--lane": "", "--kind": "shim"}
         pos = _split_opts(rest, opts)
         if opts["--kind"] not in ("shim", "native"):
             print("pipeline start: --kind must be shim|native",
                   file=sys.stderr)
             return 2
+        if ev_fields and opts["--kind"] != "native":
+            print("pipeline start: --event-field requires --kind native",
+                  file=sys.stderr)
+            return 2
         try:
             if opts["--kind"] == "native":
                 state = start_run_trigger(pos[0], pos[1], pos[2],
-                                          lane=opts["--lane"])
+                                          lane=opts["--lane"],
+                                          event_fields=ev_fields or None)
             else:
                 state = start_run(pos[0], pos[1], pos[2],
                                   lane=opts["--lane"])

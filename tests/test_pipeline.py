@@ -2596,6 +2596,98 @@ class SecretChannelTest(unittest.TestCase):
         self.assertEqual(out, {"tok": "gh-token"})
 
 
+class EventStartChannelTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        pdir = os.path.join(self.repo, ".autonomy", "pipelines", "evflow")
+        self.tdir = os.path.join(self.repo, ".autonomy", "triggers")
+        self.logdir = os.path.join(self.repo, "var", "autonomy-logs")
+        for d in (pdir, self.tdir, self.logdir):
+            os.makedirs(d)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("engine:\n  label: t\n")
+        doc = {"name": "evflow", "version": 1,
+               "caps": {"max_sessions_per_run": 4},
+               "params": [
+                   {"name": "pr", "type": "number", "required": False},
+                   {"name": "ev", "type": "string", "required": False},
+                   {"name": "tok", "type": "secret", "required": False}],
+               "nodes": [{"id": "a", "type": "pick", "brief_ref": "a.md"}],
+               "edges": []}
+        with open(os.path.join(pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(pdir, "a.md"), "w") as fh:
+            fh.write("work item ${default(params.pr, 'none')}")
+        self.state = os.path.join(self.logdir, ".pipeline-run-evt.json")
+
+    def _trigger(self, firing, params=None):
+        with open(os.path.join(self.tdir, "evt.json"), "w") as fh:
+            json.dump({"name": "evt", "pipeline": "evflow",
+                       "params": params or {}, "firing": firing}, fh)
+
+    def _start(self, event_fields=None):
+        return pipeline.start_run_trigger(
+            self.repo, "evt", self.state,
+            known_repos=lambda: set(), known_accounts=lambda: set(),
+            event_fields=event_fields)
+
+    def test_mapped_field_resolves_typed(self):
+        self._trigger({"mode": "event", "event": "pr.opened",
+                       "map": {"pr": "item", "ev": "event"}})
+        st = self._start(event_fields={"item": "42"})
+        self.assertEqual(st["params"]["pr"], 42)       # coerced to number
+        self.assertEqual(st["params"]["ev"], "pr.opened")  # implicit field
+
+    def test_event_fields_on_continuous_trigger_refuses(self):
+        self._trigger({"mode": "continuous"})
+        with self.assertRaises(pipeline.PipelineError):
+            self._start(event_fields={"item": "42"})
+
+    def test_mapped_trigger_without_event_fields_refuses(self):
+        self._trigger({"mode": "event", "event": "pr.opened",
+                       "map": {"pr": "item"}})
+        with self.assertRaises(pipeline.PipelineError):
+            self._start()
+
+    def test_map_targeting_secret_param_refuses(self):
+        self._trigger({"mode": "event", "event": "pr.opened",
+                       "map": {"tok": "item"}})
+        with self.assertRaises(pipeline.PipelineError) as cm:
+            self._start(event_fields={"item": "42"})
+        self.assertIn("credential", str(cm.exception))
+
+    def test_missing_mapped_field_refuses(self):
+        self._trigger({"mode": "event", "event": "pr.synchronize",
+                       "map": {"pr": "item", "ev": "sha"}})
+        with self.assertRaises(pipeline.PipelineError):
+            self._start(event_fields={"item": "42"})   # no sha supplied
+
+    def test_cli_event_field_charset_and_duplicates(self):
+        self._trigger({"mode": "event", "event": "pr.opened",
+                       "map": {"pr": "item"}})
+        base = ["start", self.repo, "evt", self.state, "--kind", "native"]
+        # duplicate field: fail-open last-wins refused (CP1)
+        rc = pipeline.main(base + ["--event-field", "item=1",
+                                   "--event-field", "item=2"])
+        self.assertEqual(rc, 2)
+        # bad key / bad value charset
+        rc = pipeline.main(base + ["--event-field", "body=x"])
+        self.assertEqual(rc, 2)
+        rc = pipeline.main(base + ["--event-field", "item=4;2"])
+        self.assertEqual(rc, 2)
+        # --event-field with --kind shim = usage error
+        rc = pipeline.main(["start", self.repo, "evt", self.state,
+                            "--kind", "shim", "--event-field", "item=1"])
+        self.assertEqual(rc, 2)
+        # the good shape starts the run
+        rc = pipeline.main(base + ["--event-field", "item=42"])
+        self.assertEqual(rc, 0)
+        with open(self.state) as fh:
+            self.assertEqual(json.load(fh)["params"]["pr"], 42)
+
+
 class SecretMessageAuditTest(unittest.TestCase):
     def test_secret_failure_message_names_param_never_value(self):
         # Secret error paths must carry the NAME only -- the message flows
