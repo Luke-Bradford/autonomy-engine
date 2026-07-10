@@ -407,7 +407,9 @@ rm -f "$LOGDIR"/.pipeline-run-*.json
 # invokes NO adapter -- stub only the established seams. The manual-fire
 # tests above stubbed run_session itself; re-source the real supervisor to
 # get it back (the BASH_SOURCE guard makes sourcing side-effect free), then
-# re-apply this file's env.
+# re-apply this file's env. The WAITING signal reaches the REAL
+# resolve_pipeline_ready through the python3 seam (redefining the function
+# here would trip CI shellcheck's SC2218 on the earlier call).
 # shellcheck source=/dev/null
 source "$ENGINE_HOME/bin/supervisor.sh"
 AUTONOMY_TARGET_REPO="$repo"
@@ -421,14 +423,13 @@ resolve_role_dispatch() {
   ROLE_PROMPT="p"; ROLE_SCOPE=""; ROLE_MODEL=""; ROLE_EFFORT=""
   ROLE_ACCOUNT=""; ROLE_AGENT=""; return 0
 }
-resolve_pipeline_ready() {
-  PIPE_DONE=0; PIPE_WAIT=1; PB_COUNT=0
-  PB_NODE=(); PB_PROMPT=(); PB_VERDICT=()
-  PB_MODEL=(); PB_EFFORT=(); PB_ACCOUNT=(); PB_AGENT=()
-  return 0
-}
+: >"$LOGDIR/.pipeline-run-coder.json"     # state exists -> no start call
+python3() { echo "WAITING"; }
 run_session coder shim; rc=$?
 check "waiting run_session rc is dispatch-skip" "2" "$rc"
+check "waiting run_session set the flag" "1" "$PIPE_WAIT"
+unset -f python3
+rm -f "$LOGDIR"/.pipeline-run-*.json
 
 # Main-loop wiring (grep-level, the file's established pattern): the waiting
 # branch paces WITHOUT entering the outcome case (no error backoff, no
