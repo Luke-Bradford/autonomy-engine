@@ -813,6 +813,89 @@ resolve_dispatch_roles() {
   _roles_enumerate dispatch "$AUTONOMY_TARGET_REPO"
 }
 
+# --- trigger dispatch (pipeline+trigger model Phase B, #374) ------------------
+# The supervisor enumerates TRIGGERS (native .autonomy/triggers/*.json files
+# + auto-shimmed roles) instead of roles. Built BEHIND the role path: these
+# functions exist alongside resolve_dispatch_roles and the main loop swaps
+# over only in the cutover commit, after the parity tests pass.
+#
+# Dispatch tokens are 'name' (run slot 0 -- filename identical to the legacy
+# per-role state file, so pre-cutover in-flight runs resume) or 'name@<slot>'
+# (parallel policy, slots 1..max-1). '@' is outside the name charset, so the
+# split is unambiguous; every token from disk or enumeration is charset-gated
+# before it reaches a filename or argv (prevention-log #6).
+token_name() {
+  local t="$1" n="${1%%@*}"
+  case "$n" in *[!A-Za-z0-9._-]*|"") return 1 ;; esac
+  case "$t" in
+    "$n") ;;
+    "$n"@*) case "${t#"$n"@}" in *[!0-9]*|"") return 1 ;; esac ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$n"
+}
+
+token_slot() {
+  local t="$1"
+  case "$t" in
+    *@*) printf '%s' "${t##*@}" ;;
+    *)   printf '0' ;;
+  esac
+}
+
+_triggers_enumerate() {
+  if [ -n "${AUTONOMY_LANE:-}" ]; then
+    python3 "$ENGINE_HOME/lib/triggers.py" "$@" --lane "$AUTONOMY_LANE" 2>>"$SUPLOG"
+  else
+    python3 "$ENGINE_HOME/lib/triggers.py" "$@" 2>>"$SUPLOG"
+  fi
+}
+
+# TRIG_* parallel arrays (bash 3.2), refreshed each tick by
+# resolve_dispatch_triggers: names + kind/policy/max per index. Every field
+# is re-validated here before it can steer a dispatch (prevention-log #6 --
+# the enumeration crosses a pipe from python).
+resolve_dispatch_triggers() {
+  local out line name kind policy max i=0
+  TRIG_NAME=(); TRIG_KIND=(); TRIG_POLICY=(); TRIG_MAX=()
+  out="$(_triggers_enumerate dispatch "$AUTONOMY_TARGET_REPO")" || return 1
+  while IFS=$'\t' read -r name kind policy max; do
+    [ -n "$name" ] || continue
+    case "$name" in *[!A-Za-z0-9._-]*) continue ;; esac
+    case "$kind" in shim|native) ;; *) continue ;; esac
+    case "$policy" in queue|skip|parallel) ;; *) continue ;; esac
+    case "$max" in *[!0-9]*|"") continue ;; esac
+    TRIG_NAME[i]="$name"; TRIG_KIND[i]="$kind"
+    TRIG_POLICY[i]="$policy"; TRIG_MAX[i]="$max"
+    printf '%s\n' "$name"
+    i=$((i + 1))
+  done <<<"$out"
+}
+
+trigger_kind_of()   { _trig_field_of "$1" KIND; }
+trigger_policy_of() { _trig_field_of "$1" POLICY; }
+trigger_max_of()    { _trig_field_of "$1" MAX; }
+
+_trig_field_of() {
+  local name="$1" field="$2" i=0
+  while [ "$i" -lt "${#TRIG_NAME[@]}" ]; do
+    if [ "${TRIG_NAME[i]}" = "$name" ]; then
+      case "$field" in
+        KIND)   printf '%s' "${TRIG_KIND[i]}" ;;
+        POLICY) printf '%s' "${TRIG_POLICY[i]}" ;;
+        MAX)    printf '%s' "${TRIG_MAX[i]}" ;;
+      esac
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  # Not in this tick's enumeration: an in-flight token for a trigger that
+  # was disabled/removed mid-run. Advance-only defaults -- kind falls back
+  # to shim ONLY for state files that predate the cutover; refusing here
+  # would strand a live run (the cutover parity suite pins this).
+  case "$field" in KIND) printf 'shim' ;; POLICY) printf 'skip' ;; MAX) printf '1' ;; esac
+}
+
 # --- cron scheduler (W1, issue #85) -----------------------------------------
 # Enumerate the target repo's cron roles as NAME<TAB>SCHEDULE lines (roles.py
 # cron contract; schedules never contain a tab). Behind a function so tests can
@@ -1122,12 +1205,16 @@ compose_session_rules() {
 # Lane-scoped like fingerprint_state_file: one supervisor per lane shares
 # LOGDIR, so an unscoped state file would let two lanes advance or corrupt
 # each other's runs. Same [--<lane>] suffix convention.
+# Slot 0 keeps the LEGACY filename (Phase B parity invariant 2: an in-flight
+# run started before the trigger cutover resumes identically after). Slots
+# 1..max-1 exist only for a parallel-policy trigger's overlapping runs.
 pipeline_state_file() {
-  local role="$1" lane="${AUTONOMY_LANE:-}"
+  local role="$1" slot="${2:-0}" lane="${AUTONOMY_LANE:-}" suffix=""
+  [ "$slot" != "0" ] && suffix="@$slot"
   if [ -n "$lane" ]; then
-    printf '%s/.pipeline-run-%s--%s.json' "$LOGDIR" "$role" "$lane"
+    printf '%s/.pipeline-run-%s--%s%s.json' "$LOGDIR" "$role" "$lane" "$suffix"
   else
-    printf '%s/.pipeline-run-%s.json' "$LOGDIR" "$role"
+    printf '%s/.pipeline-run-%s%s.json' "$LOGDIR" "$role" "$suffix"
   fi
 }
 
@@ -1180,6 +1267,41 @@ inflight_roles() {
   done
 }
 
+# Slot-aware sibling of inflight_roles (Phase B): emits dispatch TOKENS
+# ('name' or 'name@<slot>'). The state basename is <name>[--<lane>][@<slot>],
+# so the @<slot> suffix strips FIRST, then the --<lane> suffix, then the
+# charset gate (Codex CP1: lane-first never matches '--qa@2' and silently
+# ignores a lane's slotted in-flight run). inflight_roles stays until the
+# cutover deletes its last caller.
+inflight_tokens() {
+  local f base slot lane="${AUTONOMY_LANE:-}"
+  for f in "$LOGDIR"/.pipeline-run-*.json; do
+    [ -f "$f" ] || continue
+    base="$(basename "$f")"
+    base="${base#.pipeline-run-}"
+    base="${base%.json}"
+    slot=""
+    case "$base" in
+      *@*)
+        slot="${base##*@}"
+        case "$slot" in *[!0-9]*|"") log "WARN pipeline: ignoring state file with invalid slot: $f"; continue ;; esac
+        base="${base%@*}" ;;
+    esac
+    if [ -n "$lane" ]; then
+      case "$base" in
+        *--"$lane") base="${base%--"$lane"}" ;;
+        *) continue ;;
+      esac
+    else
+      case "$base" in *--*) continue ;; esac
+    fi
+    case "$base" in
+      *[!A-Za-z0-9._-]*|"") log "WARN pipeline: ignoring state file with invalid trigger token: $f"; continue ;;
+    esac
+    if [ -n "$slot" ]; then printf '%s@%s\n' "$base" "$slot"; else printf '%s\n' "$base"; fi
+  done
+}
+
 # Resolve the role's CURRENT ready set (P2b, #351) into parallel PB_* arrays
 # (bash 3.2 regular arrays; index i = block i). Starts a run when none is in
 # flight. Per-block runs_as values are re-validated here before they can
@@ -1187,19 +1309,21 @@ inflight_roles() {
 # PB_COUNT + PIPE_DONE and arrays PB_NODE PB_PROMPT PB_VERDICT
 # PB_MODEL PB_EFFORT PB_ACCOUNT PB_AGENT ('' = no override).
 resolve_pipeline_ready() {
-  local role="$1" max="${2:-1}" state out line key val i
+  local role="$1" max="${2:-1}" slot="${3:-0}" kind="${4:-shim}" state out line key val i
   PB_NODE=(); PB_PROMPT=(); PB_VERDICT=()
   PB_MODEL=(); PB_EFFORT=(); PB_ACCOUNT=(); PB_AGENT=()
   PB_COUNT=0; PIPE_DONE=0
-  state="$(pipeline_state_file "$role")"
+  # Two-arg callers (pre-Phase-B) get slot 0 + kind shim -- byte-identical.
+  state="$(pipeline_state_file "$role" "$slot")"
   if [ ! -f "$state" ]; then
     if [ -n "${AUTONOMY_LANE:-}" ]; then
       python3 "$ENGINE_HOME/lib/pipeline.py" start \
         "$AUTONOMY_TARGET_REPO" "$role" "$state" \
-        --lane "$AUTONOMY_LANE" >>"$SUPLOG" 2>&1 || return 1
+        --lane "$AUTONOMY_LANE" --kind "$kind" >>"$SUPLOG" 2>&1 || return 1
     else
       python3 "$ENGINE_HOME/lib/pipeline.py" start \
-        "$AUTONOMY_TARGET_REPO" "$role" "$state" >>"$SUPLOG" 2>&1 || return 1
+        "$AUTONOMY_TARGET_REPO" "$role" "$state" \
+        --kind "$kind" >>"$SUPLOG" 2>&1 || return 1
     fi
   fi
   if ! out="$(python3 "$ENGINE_HOME/lib/pipeline.py" ready "$state" \
@@ -1330,9 +1454,14 @@ sweep_ephemeral_worktrees() {
 # the session as errored) because losing run-state consistency silently
 # would corrupt the walk.
 record_pipeline_outcome() {
-  local role="$1" node="$2" outcome="$3" session_log="$4" verdict="$5"
+  # $1 is a dispatch TOKEN (name or name@slot; a bare role IS the slot-0
+  # token, so every pre-Phase-B caller is byte-identical). A bad token
+  # refuses -- it would derive a wrong state path.
+  local token="$1" node="$2" outcome="$3" session_log="$4" verdict="$5" name slot
+  name="$(token_name "$token")" || { log "pipeline: bad record token '$token' -- REFUSING"; return 1; }
+  slot="$(token_slot "$token")"
   python3 "$ENGINE_HOME/lib/pipeline.py" record \
-    "$(pipeline_state_file "$role")" "$node" "$outcome" \
+    "$(pipeline_state_file "$name" "$slot")" "$node" "$outcome" \
     --session-log "$session_log" \
     --verdict "$verdict" \
     --journal "$LOGDIR/journal.jsonl" >>"$SUPLOG" 2>&1
@@ -1415,13 +1544,28 @@ materialize_planner() {
 }
 
 run_session() {
-  local role="${1:-${ROLE:-coder}}"
+  local token="${1:-${ROLE:-coder}}" kind="${2:-shim}" role slot
+  role="$(token_name "$token")" || { log "dispatch: bad token '$token' -- REFUSING"; return 2; }
+  slot="$(token_slot "$token")"
   preflight || return $?
   materialize_planner
 
-  if ! resolve_role_dispatch "$role"; then
-    log "dispatch: cannot resolve settings for role '$role' -- REFUSING session (fail-safe; see supervisor.log)"
-    return 2
+  if [ "$kind" = "shim" ]; then
+    if ! resolve_role_dispatch "$role"; then
+      log "dispatch: cannot resolve settings for role '$role' -- REFUSING session (fail-safe; see supervisor.log)"
+      return 2
+    fi
+  else
+    # NATIVE trigger (Phase B): roles are dissolved -- no role settings, no
+    # scope directive. Model/effort/account/agent come from the pipeline's
+    # own (substituted) runs_as via the ready blocks; the rules file is the
+    # pack's hard_rules alone (compose_session_rules passes it through
+    # verbatim when the scope line is empty). This is configured behaviour
+    # for a NEW surface, not a silent widening of an existing one.
+    # shellcheck disable=SC2034  # ROLE_PROMPT: same cross-function consumer
+    # as resolve_role_dispatch's (the pipeline runner reads it, see :1128).
+    ROLE_PROMPT=""; ROLE_SCOPE=""; ROLE_MODEL=""; ROLE_EFFORT=""
+    ROLE_ACCOUNT=""; ROLE_AGENT=""
   fi
 
   # P1 (#345): every role dispatches through the pipeline runner. P2b
@@ -1430,7 +1574,7 @@ run_session() {
   # adapter sourcing so a node's runs_as.agent override selects the adapter,
   # and BEFORE resolve_session_settings so node model/effort sit in the
   # ROLE_* slot.
-  if ! resolve_pipeline_ready "$role" 8; then
+  if ! resolve_pipeline_ready "$role" 8 "$slot" "$kind"; then
     log "dispatch: cannot resolve pipeline ready set for role '$role' -- REFUSING session (fail-safe; see supervisor.log)"
     return 2
   fi
@@ -1513,12 +1657,16 @@ run_session() {
     return 2
   fi
 
-  log_knob_notes "$AUTONOMY_TARGET_REPO" "$role"
+  # Knob notes are keyed to a roles: entry a native trigger does not have --
+  # a spurious roles.py error in the log every tick would be noise, not truth.
+  [ "$kind" = "shim" ] && log_knob_notes "$AUTONOMY_TARGET_REPO" "$role"
 
+  # The TOKEN flows down (name@slot); for slot 0 it is byte-equal to the
+  # bare role, so the legacy path's argv is unchanged (parity invariant 7).
   if [ "$PB_COUNT" -eq 1 ]; then
-    run_single_session "$role" "$env_lines" "$rules_file" "$auth_note"
+    run_single_session "$token" "$env_lines" "$rules_file" "$auth_note"
   else
-    dispatch_batch "$role" "$env_lines" "$rules_file" "$auth_note"
+    dispatch_batch "$token" "$env_lines" "$rules_file" "$auth_note"
   fi
 }
 
@@ -1598,8 +1746,13 @@ run_single_session() {
 # SD-7). Worktrees are removed after records (verdicts live under each
 # session's own var/autonomy-logs).
 dispatch_batch() {
+  # $1 is a dispatch TOKEN (see record_pipeline_outcome) -- name+slot derive
+  # the state path; the bare name would read the wrong file for slot >= 1.
   local role="$1" env_lines="$2" rules_file="$3" auth_note="$4"
-  local state; state="$(pipeline_state_file "$role")"
+  local state _bn _bs
+  _bn="$(token_name "$role")" || { log "pipeline: bad batch token '$role' -- REFUSING"; return 2; }
+  _bs="$(token_slot "$role")"
+  state="$(pipeline_state_file "$_bn" "$_bs")"
   # Inside the repo tree but SAFE only because var/ is gitignored (the
   # engine's onboard/doctor guarantee): preflight's status check + stash
   # sweep never see it, and `git worktree add` accepts a nested ignored

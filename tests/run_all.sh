@@ -60,4 +60,7 @@ python3 -m unittest tests.test_settings -v || fail=1
 echo "=== python: test_pipeline ==="
 python3 -m unittest tests.test_pipeline -v || fail=1
 
+echo "=== python: test_triggers ==="
+python3 -m unittest tests.test_triggers -v || fail=1
+
 if [ "$fail" -eq 0 ]; then echo "ALL SUITES PASS"; exit 0; else echo "ONE OR MORE SUITES FAILED"; exit 1; fi
