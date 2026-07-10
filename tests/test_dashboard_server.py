@@ -1951,6 +1951,28 @@ class TestTriggerRoutes(unittest.TestCase):
         self.assertTrue(os.path.isfile(
             self._marker("stop", "qa-sweep--qa")))
 
+    def test_shadow_config_lane_removal_refuses(self):
+        # Codex CP2 (D1): lane authority reads the SD-34 EFFECTIVE config.
+        # Committed config still declares lane qa, but the var-live shadow
+        # (what the supervisor actually runs) has dropped the lanes block --
+        # the trigger's qa lane is now undeclared, so the marker refuses.
+        self._add_lane_trigger()
+        shadow_dir = os.path.join(self.repo, "var", "autonomy")
+        os.makedirs(shadow_dir, exist_ok=True)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml")) as fh:
+            committed = fh.read()
+        shadow = "".join(l for l in committed.splitlines(True)
+                         if "lanes:" not in l and "worktree:" not in l
+                         and l.strip() not in ("main:", "qa:"))
+        with open(os.path.join(shadow_dir, "config.yaml"), "w") as fh:
+            fh.write(shadow)
+        r = self._post({"action": "trigger_stop", "repo": self.repo,
+                        "name": "qa-sweep"})
+        self.assertEqual(r["code"], 409)
+        self.assertIn("undeclared lane", self._payload(r)["error"])
+        self.assertFalse(os.path.exists(
+            self._marker("stop", "qa-sweep--qa")))
+
     def test_unresolvable_lane_service_refuses_writes_nothing(self):
         self._add_lane_trigger()
         real = dashboard.dcx.find_lane_service

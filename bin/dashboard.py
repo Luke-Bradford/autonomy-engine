@@ -1267,11 +1267,8 @@ def execute_control(repo, action, lane=None):
         # lanes authority the supervisor's --lane gate uses.
         if not dcx.is_valid_lane_name(lane):
             return {"ok": False, "error": "invalid lane name"}
-        try:
-            with open(os.path.join(repo, ".autonomy", "config.yaml"),
-                      encoding="utf-8") as fh:
-                config = config_parser.parse(fh.read())
-        except (OSError, ValueError):
+        config = _effective_lane_config(repo)
+        if config is None:
             return {"ok": False, "error": "cannot read .autonomy/config.yaml "
                                           "-- refusing lane control"}
         # ds.roles_schema (not a direct import): the hot-reload order rebinds
@@ -1320,6 +1317,21 @@ def execute_control(repo, action, lane=None):
     return {"ok": True, "message": plan.get("message", "done")}
 
 
+def _effective_lane_config(repo):
+    """The SD-34 EFFECTIVE config (var-live shadow beats committed) for lane
+    authority -- the same resolution trigger/role enumeration reads, so a
+    lane edited out of the live shadow can never validate a control (Codex
+    CP2 on D1: a committed-only read could mint a marker for a lane the
+    effective supervisor config will not dispatch). None = unreadable."""
+    try:
+        path = config_parser.effective_config_path(
+            os.path.join(repo, ".autonomy", "config.yaml"))
+        with open(path, encoding="utf-8") as fh:
+            return config_parser.parse(fh.read())
+    except (OSError, ValueError):
+        return None
+
+
 def execute_trigger_ctl(repo, action, name):
     """Per-trigger marker lifecycle (Phase D1, #383): run-now / stop /
     resume through the supervisor's existing lane-scoped markers under
@@ -1347,11 +1359,8 @@ def execute_trigger_ctl(repo, action, name):
         return {"ok": False,
                 "error": "unknown trigger %r (refused/broken triggers "
                          "cannot take markers)" % name}
-    try:
-        with open(os.path.join(repo, ".autonomy", "config.yaml"),
-                  encoding="utf-8") as fh:
-            config = config_parser.parse(fh.read())
-    except (OSError, ValueError):
+    config = _effective_lane_config(repo)
+    if config is None:
         return {"ok": False, "error": "cannot read .autonomy/config.yaml "
                                       "-- refusing trigger control"}
     if not ds.roles_schema.lanes_valid(config):
