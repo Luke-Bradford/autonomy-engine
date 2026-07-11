@@ -2925,8 +2925,14 @@ def _gallery_rows(repo_path, trigs, rollup):
             # a symlinked var entry is not a sanctioned shadow -- the
             # resolver ignores it (effective_pipeline_dir), so listing it
             # would render a row the resolver refuses to serve (D3 CP1).
+            # Reserved scratch suffixes (.staging/.bak/.trash + the
+            # sidecar) are writer-owned junk, never assets: a mid-write or
+            # failed-cleanup leftover must not render as a card (#388).
             if fn in seen or not os.path.isdir(p) \
-                    or (d == var_root and os.path.islink(p)):
+                    or (d == var_root
+                        and (os.path.islink(p)
+                             or fn.endswith(
+                                 pipeline_mod.RESERVED_PIPE_SUFFIXES))):
                 continue
             seen.add(fn)
             names.append(fn)
@@ -3036,10 +3042,22 @@ def build_triggers_view(repo_path, now=None):
                         if isinstance(r, dict))
     view["rollup"] = rollup
     try:
-        default_lane = roles_schema.default_lane(
-            roles_schema._load_config(repo_path)[0] or {})
+        cfg_blk = roles_schema._load_config(repo_path)[0] or {}
+    except Exception:
+        cfg_blk = {}
+    try:
+        default_lane = roles_schema.default_lane(cfg_blk)
     except Exception:
         default_lane = "main"
+    # #388: names a role would re-shim if this native file vanished (the
+    # delete confirm names the exec-semantics flip BACK). Total-guarded to
+    # empty -- by the time a card renders, enumerate_triggers already
+    # proved the config readable, so this is belt-and-braces only.
+    try:
+        shim_names = set(s.get("name")
+                         for s in triggers_mod.shim_triggers(cfg_blk))
+    except Exception:
+        shim_names = set()
     for t in sorted(trigs, key=lambda x: x.get("name", "")):
         name = t.get("name", "")
         firing = t.get("firing") if isinstance(t.get("firing"), dict) else {}
@@ -3063,6 +3081,14 @@ def build_triggers_view(repo_path, now=None):
         if firing.get("mode") == "manual":
             fire_params = _declared_params(
                 _bound_doc(repo_path, t.get("pipeline") or ""))
+        # #388: the delete/reset controls key on these three. has_shadow
+        # mirrors effective_trigger_path's sanction rule (regular
+        # non-symlink file) -- a squatter the resolver ignores must not
+        # grow a delete button it would refuse.
+        tshadow = os.path.join(repo_path, "var", "autonomy", "triggers",
+                               "%s.json" % name)
+        tcommitted = os.path.join(repo_path, ".autonomy", "triggers",
+                                  "%s.json" % name)
         view["triggers"].append({
             "name": name, "kind": t.get("kind", ""),
             "pipeline": t.get("pipeline") or "",
@@ -3083,6 +3109,10 @@ def build_triggers_view(repo_path, now=None):
             "queued": flags["queued"], "backoff": flags["backoff"],
             "fire_ready": ready, "fire_block_reason": reason,
             "fire_params": fire_params,
+            "has_shadow": (os.path.isfile(tshadow)
+                           and not os.path.islink(tshadow)),
+            "has_committed": os.path.isfile(tcommitted),
+            "shim_behind": name in shim_names,
         })
     try:
         view["pipelines"] = _gallery_rows(repo_path, trigs, rollup)
