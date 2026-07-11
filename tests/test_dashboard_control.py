@@ -1074,17 +1074,46 @@ class PipelineSaveTest(unittest.TestCase):
         self.assertIn("must match", res["error"])
         self.assertFalse(os.path.isdir(self._shadow(repo)))
 
-    def test_no_committed_dir_refused_even_with_orphan_shadow(self):
-        # BOUND pipelines only: a name with no committed pack is not editable
-        # even if an orphan shadow exists (Codex CP1 #5).
+    def test_neither_dir_refused_shadow_only_saves(self):
+        # D3 (#383) gate lift: a name with NEITHER a committed pack NOR a
+        # shadow dir still refuses (create-by-save would bypass
+        # pipeline_create's collision + provenance discipline), but a
+        # shadow-ONLY dir -- the pipeline_create case -- is now editable.
         repo = self._repo()
-        orphan = os.path.join(repo, "var", "autonomy", "pipelines", "ghost")
-        os.makedirs(orphan)
-        with open(os.path.join(orphan, "pipeline.json"), "w") as fh:
-            json.dump(dict(self.doc, name="ghost"), fh)
         res = dc.pipeline_save(repo, "ghost", dict(self.doc, name="ghost"), {})
         self.assertFalse(res["ok"])
-        self.assertIn("no committed pipeline", res["error"])
+        self.assertIn("no pipeline", res["error"])
+        shadow_only = os.path.join(repo, "var", "autonomy", "pipelines", "solo")
+        os.makedirs(shadow_only)
+        doc = dict(self.doc, name="solo")
+        with open(os.path.join(shadow_only, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        for n in ("a", "b"):
+            with open(os.path.join(shadow_only, n + ".md"), "w") as fh:
+                fh.write("brief %s\n" % n)
+        res = dc.pipeline_save(repo, "solo", dict(doc, version=2), {})
+        self.assertTrue(res["ok"], res)
+        with open(os.path.join(shadow_only, "pipeline.json")) as fh:
+            self.assertEqual(json.load(fh)["version"], 2)
+
+    def test_invalid_shadow_only_missing_briefs_refuses(self):
+        # CP1 regression (D3): an INVALID shadow-only dir (brief file gone)
+        # cannot seed itself -- a save that does not POST the missing briefs
+        # refuses at the staged re-validate; posting them succeeds.
+        repo = self._repo()
+        shadow_only = os.path.join(repo, "var", "autonomy", "pipelines", "solo")
+        os.makedirs(shadow_only)
+        doc = dict(self.doc, name="solo")
+        with open(os.path.join(shadow_only, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)               # briefs MISSING -> dir invalid
+        res = dc.pipeline_save(repo, "solo", doc, {})
+        self.assertFalse(res["ok"])
+        self.assertFalse(os.path.isfile(os.path.join(shadow_only, "a.md")))
+        res = dc.pipeline_save(repo, "solo", doc,
+                               {"a.md": "posted a\n", "b.md": "posted b\n"})
+        self.assertTrue(res["ok"], res)
+        with open(os.path.join(shadow_only, "a.md")) as fh:
+            self.assertEqual(fh.read(), "posted a\n")
 
     def test_only_referenced_briefs_copied_no_symlinks(self):
         # staging is built from the doc's brief_refs -- never a blind copytree,
@@ -1381,3 +1410,271 @@ class TriggerCtlPlanParamsTest(unittest.TestCase):
         p = dc.trigger_ctl_plan("/w/tree", "trigger_fire", "adhoc",
                                 fire_params={"q": float("nan")})
         self.assertIn("error", p)
+
+
+class PipelineCreateTest(unittest.TestCase):
+    """Phase D3 (#383): pipeline create-from-blank / clone into the SD-34
+    var shadow + the provenance sidecar. SD-29/SD-37 discipline via the
+    mkdir-CLAIM install shape (claim -> stage -> provenance -> rename over
+    our own empty claim); every refusal leaves the tree byte-identical and
+    every dashboard-created pipeline HAS a sidecar (binary end-state)."""
+
+    def _repo(self, gitignore="var/\n"):
+        repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        if gitignore is not None:
+            with open(os.path.join(repo, ".gitignore"), "w") as fh:
+                fh.write(gitignore)
+        committed = os.path.join(repo, ".autonomy", "pipelines", "flow")
+        os.makedirs(committed)
+        self.doc = {"name": "flow", "version": 3,
+                    "caps": {"max_sessions_per_run": 16},
+                    "nodes": [{"id": "a", "type": "pick", "brief_ref": "a.md"},
+                              {"id": "b", "type": "check", "brief_ref": "b.md"}],
+                    "edges": [{"from": "a", "to": "b", "on": "success"}]}
+        with open(os.path.join(committed, "pipeline.json"), "w") as fh:
+            json.dump(self.doc, fh)
+        for n in ("a", "b"):
+            with open(os.path.join(committed, n + ".md"), "w") as fh:
+                fh.write("brief %s\n" % n)
+        return repo
+
+    def _shadow(self, repo, name):
+        return os.path.join(repo, "var", "autonomy", "pipelines", name)
+
+    def _sidecar(self, repo, name):
+        return self._shadow(repo, name) + ".provenance.json"
+
+    def _tree(self, repo):
+        """Full recursive snapshot {relpath: kind/bytes} for byte-identical
+        refusal assertions (symlinks recorded as their target)."""
+        snap = {}
+        for root, dirs, files in os.walk(repo):
+            if ".git" in dirs:
+                dirs.remove(".git")
+            for d in dirs:
+                p = os.path.join(root, d)
+                rel = os.path.relpath(p, repo)
+                snap[rel] = ("LINK", os.readlink(p)) if os.path.islink(p) \
+                    else "DIR"
+            for f in files:
+                p = os.path.join(root, f)
+                rel = os.path.relpath(p, repo)
+                if os.path.islink(p):
+                    snap[rel] = ("LINK", os.readlink(p))
+                else:
+                    with open(p, "rb") as fh:
+                        snap[rel] = fh.read()
+        return snap
+
+    # -- blank ------------------------------------------------------------
+
+    def test_blank_create_dir_doc_brief_provenance(self):
+        import pipeline as pl
+        repo = self._repo()
+        res = dc.pipeline_create(repo, "fresh")
+        self.assertTrue(res["ok"], res)
+        shadow = self._shadow(repo, "fresh")
+        doc = pl.load_doc(os.path.join(shadow, "pipeline.json"))
+        self.assertEqual(pl.validate_doc(doc, shadow), [])   # starter PIN
+        self.assertEqual(doc["name"], "fresh")
+        self.assertEqual(len(doc["nodes"]), 1)
+        ref = doc["nodes"][0]["brief_ref"]
+        self.assertTrue(os.path.isfile(os.path.join(shadow, ref)))
+        with open(self._sidecar(repo, "fresh")) as fh:
+            prov = json.load(fh)
+        self.assertEqual(prov["created"], "blank")
+        self.assertIsInstance(prov["at"], int)
+        self.assertNotIn("source", prov)
+
+    def test_blank_brief_prose_survives_substitution(self):
+        # brief TEXT is substituted at prepare time -- the starter's
+        # ${...} prose must be $${-escaped or the first run would refuse
+        # (the Phase C footer lesson). Pin it against the real engine.
+        import pipeline as pl
+        out = pl.substitute(dc._BLANK_BRIEF, {})
+        self.assertIn("${params.<name>}", out)
+
+    def test_blank_create_is_dispatch_resolvable(self):
+        # a trigger can bind the created name (the D2 flow) -- dispatch's
+        # own resolver loads the shadow-only doc.
+        import pipeline as pl
+        repo = self._repo()
+        self.assertTrue(dc.pipeline_create(repo, "fresh")["ok"])
+        pdir = pl.effective_pipeline_dir(repo, "fresh")
+        self.assertEqual(pdir, self._shadow(repo, "fresh"))
+        doc = pl.load_doc(os.path.join(pdir, "pipeline.json"))
+        self.assertEqual(pl.validate_doc(doc, pdir), [])
+
+    # -- clone ------------------------------------------------------------
+
+    def test_clone_copies_briefs_rewrites_name_keeps_version(self):
+        repo = self._repo()
+        res = dc.pipeline_create(repo, "flow2", source="flow")
+        self.assertTrue(res["ok"], res)
+        shadow = self._shadow(repo, "flow2")
+        with open(os.path.join(shadow, "pipeline.json")) as fh:
+            doc = json.load(fh)
+        self.assertEqual(doc["name"], "flow2")
+        self.assertEqual(doc["version"], 3)          # lineage kept
+        self.assertEqual(doc["edges"], self.doc["edges"])
+        for n in ("a.md", "b.md"):
+            with open(os.path.join(shadow, n)) as fh:
+                self.assertEqual(fh.read(), "brief %s\n" % n[0])
+        with open(self._sidecar(repo, "flow2")) as fh:
+            prov = json.load(fh)
+        self.assertEqual(prov["created"], "clone")
+        self.assertEqual(prov["source"], "flow")
+        self.assertEqual(prov["source_version"], 3)
+
+    def test_clone_fingerprint_is_the_shared_content_rule(self):
+        # ONE fingerprint rule (pipeline.content_fingerprint: doc + briefs)
+        # for the writer and the gallery reader -- recomputing over the
+        # installed shadow must reproduce the recorded value exactly.
+        import pipeline as pl
+        repo = self._repo()
+        self.assertTrue(dc.pipeline_create(repo, "flow2", source="flow")["ok"])
+        shadow = self._shadow(repo, "flow2")
+        doc = pl.load_doc(os.path.join(shadow, "pipeline.json"))
+        with open(self._sidecar(repo, "flow2")) as fh:
+            self.assertEqual(json.load(fh)["fingerprint"],
+                             pl.content_fingerprint(doc, shadow))
+
+    def test_bool_source_version_written_as_none(self):
+        # `version: true` validates today (bool is an int subclass,
+        # verified empirically -- the PREMISE assert below keeps this test
+        # honest if the validator ever tightens); the reader's exact
+        # schema rejects bools -- the writer coerces to the honest None so
+        # the sidecar is never dropped whole (Codex CP2). Unconditional
+        # asserts per review round 1: a guarded assert could pass vacuously.
+        import pipeline as pl
+        repo = self._repo()
+        committed = os.path.join(repo, ".autonomy", "pipelines", "flow")
+        with open(os.path.join(committed, "pipeline.json"), "w") as fh:
+            json.dump(dict(self.doc, version=True), fh)
+        self.assertEqual(pl.validate_doc(dict(self.doc, version=True),
+                                         committed), [])   # premise pin
+        res = dc.pipeline_create(repo, "flow2", source="flow")
+        self.assertTrue(res["ok"], res)
+        with open(self._sidecar(repo, "flow2")) as fh:
+            self.assertIsNone(json.load(fh)["source_version"])
+
+    def test_clone_of_effective_shadow_doc(self):
+        # cloning a locally-edited pipeline clones what the operator SEES
+        # (the effective doc = the shadow), not the stale committed pack.
+        repo = self._repo()
+        self.assertTrue(dc.pipeline_save(repo, "flow", dict(self.doc, version=9),
+                                         {"a.md": "edited a\n"})["ok"])
+        self.assertTrue(dc.pipeline_create(repo, "flow2", source="flow")["ok"])
+        shadow = self._shadow(repo, "flow2")
+        with open(os.path.join(shadow, "pipeline.json")) as fh:
+            self.assertEqual(json.load(fh)["version"], 9)
+        with open(os.path.join(shadow, "a.md")) as fh:
+            self.assertEqual(fh.read(), "edited a\n")
+
+    # -- refusals (each leaves the tree byte-identical) ---------------------
+
+    def _refused(self, repo, name, source=None, needle=None):
+        before = self._tree(repo)
+        res = dc.pipeline_create(repo, name, source=source)
+        self.assertFalse(res["ok"], res)
+        if needle:
+            self.assertIn(needle, res["error"])
+        self.assertEqual(self._tree(repo), before)   # byte-identical
+        return res
+
+    def test_charset_name_refused(self):
+        self._refused(self._repo(), "../evil")
+
+    def test_reserved_suffix_refused(self):
+        repo = self._repo()
+        for nm in ("x.staging", "x.bak", "x.provenance.json"):
+            self._refused(repo, nm, needle="reserved")
+
+    def test_source_equals_name_refused(self):
+        self._refused(self._repo(), "flow2", source="flow2",
+                      needle="different name")
+
+    def test_empty_source_refused_not_blank(self):
+        # a malformed clone request must refuse, never degrade to a blank
+        # create (CP1).
+        self._refused(self._repo(), "flow2", source="")
+
+    def test_missing_source_refused(self):
+        self._refused(self._repo(), "flow2", source="nosuch")
+
+    def test_invalid_source_refused_no_laundering(self):
+        repo = self._repo()
+        bad = os.path.join(repo, ".autonomy", "pipelines", "bad")
+        os.makedirs(bad)
+        with open(os.path.join(bad, "pipeline.json"), "w") as fh:
+            fh.write("{ not json")
+        self._refused(repo, "bad2", source="bad")
+
+    def test_symlinked_source_brief_refuses(self):
+        # a source whose brief is a symlink cannot clone: staging copies
+        # regular files only, the staged re-validate flags the missing brief
+        # (never silently drops it, never follows the link).
+        repo = self._repo()
+        committed = os.path.join(repo, ".autonomy", "pipelines", "flow")
+        os.remove(os.path.join(committed, "b.md"))
+        os.symlink("/etc/passwd", os.path.join(committed, "b.md"))
+        self._refused(repo, "flow2", source="flow")
+
+    def test_collision_committed_dir_refused(self):
+        self._refused(self._repo(), "flow", needle="exists")
+
+    def test_collision_committed_file_squatter_refused(self):
+        repo = self._repo()
+        with open(os.path.join(repo, ".autonomy", "pipelines", "squat"),
+                  "w") as fh:
+            fh.write("junk")
+        self._refused(repo, "squat", needle="exists")
+
+    def test_collision_shadow_refused(self):
+        repo = self._repo()
+        vroot = os.path.join(repo, "var", "autonomy", "pipelines")
+        os.makedirs(os.path.join(vroot, "asdir"))
+        with open(os.path.join(vroot, "asfile"), "w") as fh:
+            fh.write("junk")
+        os.symlink("/nonexistent", os.path.join(vroot, "aslink"))
+        for nm in ("asdir", "asfile", "aslink"):
+            self._refused(repo, nm, needle="exists")
+
+    def test_gitignore_missing_refused(self):
+        self._refused(self._repo(gitignore=None), "fresh", needle="gitignore")
+
+    def test_sidecar_squatter_refused(self):
+        repo = self._repo()
+        vroot = os.path.join(repo, "var", "autonomy", "pipelines")
+        os.makedirs(os.path.join(vroot, "d1.provenance.json"))
+        self._refused(repo, "d1")
+        os.symlink("/nonexistent", os.path.join(vroot, "d2.provenance.json"))
+        self._refused(repo, "d2")
+
+    def test_orphan_sidecar_overwritten(self):
+        # a REGULAR-FILE sidecar orphaned by a hand-removed dir must not
+        # brick the name forever -- the new create overwrites it.
+        repo = self._repo()
+        vroot = os.path.join(repo, "var", "autonomy", "pipelines")
+        os.makedirs(vroot)
+        with open(os.path.join(vroot, "fresh.provenance.json"), "w") as fh:
+            fh.write('{"created": "clone", "stale": true}')
+        self.assertTrue(dc.pipeline_create(repo, "fresh")["ok"])
+        with open(self._sidecar(repo, "fresh")) as fh:
+            prov = json.load(fh)
+        self.assertEqual(prov["created"], "blank")
+        self.assertNotIn("stale", prov)
+
+    def test_provenance_install_failure_rolls_back(self):
+        # a directory squatting the sidecar's .tmp path makes the provenance
+        # install fail -> the WHOLE create rolls back (binary end-state,
+        # no unprovenanced dashboard-created dir survives).
+        repo = self._repo()
+        vroot = os.path.join(repo, "var", "autonomy", "pipelines")
+        os.makedirs(os.path.join(vroot, "fresh.provenance.json.tmp"))
+        before = self._tree(repo)
+        res = dc.pipeline_create(repo, "fresh")
+        self.assertFalse(res["ok"], res)
+        self.assertEqual(self._tree(repo), before)

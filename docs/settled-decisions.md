@@ -402,6 +402,32 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     *(#383; specs/2026-07-11-pipeline-model-phaseD2-trigger-save.md;
     plans/2026-07-11-pipeline-model-phaseD2-trigger-save.md.)*
 
+44. **Phase D3 scope: pipeline creation is `pipeline_create` (blank/clone)
+    into the SD-34 shadow with a provenance SIDECAR; provenance is display
+    truth, never a doc field** (2026-07-11, #383 D3 build; decision 2 of the
+    2026-07-10 comment — the LAST D slice). ONE control action: `source`
+    absent = blank starter, present = clone of the source's EFFECTIVE doc
+    (invalid source refuses — no laundering); collisions with a committed
+    OR shadow name refuse (lexists — superseding a committed pack is
+    `pipeline_save`'s EDIT semantics, not create); the mkdir-CLAIM install
+    shape closes the check→rename race; the provenance record
+    `var/autonomy/pipelines/<name>.provenance.json`
+    (`pipeline.provenance_path`) installs LAST with rollback — a created
+    pipeline exists WITH its sidecar or not at all. Provenance lives
+    beside the dir, not in it (the writer's stale-prune owns the dir) and
+    not in the document (`validate_doc`'s unknown-key honesty gate stays
+    closed); the reader is total with an exact schema — junk is `None`,
+    never a fabricated lineage; `diverged` is a canonical-serialize
+    content compare against the clone-time fingerprint, absent on any
+    doubt. `pipeline_save` edits shadow-only pipelines too; a name with
+    NEITHER dir still refuses (create-by-save would bypass the
+    discipline). Binding a new pipeline flows through D2's `trigger_save`
+    — no new binding surface. Still deferred: pipeline/trigger delete +
+    reset-shadow-to-committed (one future "shadow lifecycle" slice);
+    save-back-to-template (SD-34 forbids dashboard writes to committed).
+    *(#383; specs/2026-07-11-pipeline-model-phaseD3-pipeline-create.md;
+    plans/2026-07-11-pipeline-model-phaseD3-pipeline-create.md.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could

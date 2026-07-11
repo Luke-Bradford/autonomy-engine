@@ -478,6 +478,7 @@ def format_cmd_error(cmd_name, stderr):
 
 import subprocess as _subprocess  # noqa: E402  (writer-only dependency)
 import shutil as _shutil  # noqa: E402  (pipeline_save dir stage/rollback)
+import time as _time  # noqa: E402  (pipeline_create provenance timestamp, D3)
 
 import sys as _sys  # noqa: E402
 _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1149,11 +1150,14 @@ def pipeline_save(repo, name, doc, briefs):
         return {"ok": False, "error": "; ".join(errs)}
     committed = os.path.join(repo, ".autonomy", "pipelines", name)
     shadow = os.path.join(repo, "var", "autonomy", "pipelines", name)
-    # BOUND pipelines only: a name with no committed pack is not editable even
-    # if an orphan shadow exists (Codex CP1 #5).
-    if not os.path.isdir(committed):
+    # D3 (#383) gate lift: editable = a committed pack OR an existing
+    # (non-symlink) shadow dir -- the pipeline_create case has no committed
+    # counterpart. A name with NEITHER still refuses: create-by-save would
+    # bypass pipeline_create's collision + provenance discipline.
+    if not (os.path.isdir(committed)
+            or (os.path.isdir(shadow) and not os.path.islink(shadow))):
         return {"ok": False, "error":
-                "no committed pipeline %r to edit (bind one first)" % name}
+                "no pipeline %r to edit (create it first)" % name}
     # A symlinked or non-directory shadow path is NOT a sanctioned shadow:
     # refuse BEFORE we seed/stage, so the writer can never read or write
     # through a symlink out of var/ (path-escape guard, Codex CP2).
@@ -1259,6 +1263,265 @@ def pipeline_save(repo, name, doc, briefs):
     return {"ok": True, "path": os.path.relpath(shadow, repo),
             "message": "saved to the live pipeline shadow -- applies next run "
                        "(the committed pack is untouched)"}
+
+
+# --- Phase D3 (#383): pipeline create-from-blank / clone -------------------
+# pipeline_save's SD-29/SD-37 discipline applied to CREATION: charset gate
+# before any path build, gitignore guard, stage -> re-validate -> deep-compare,
+# atomic install, refusal leaves the tree byte-identical. Two D3-specific
+# shapes: the mkdir CLAIM (an atomic exclusive hold on the name -- a bare
+# rename could silently replace an empty dir a racer created between the
+# collision check and the install, CP1) and the PROVENANCE sidecar
+# <name>.provenance.json (pipeline.provenance_path -- a sibling of the dir,
+# never inside it: the pipeline_save stale-prune owns the dir's contents).
+# Binary end-state: a created pipeline exists WITH its sidecar, or nothing
+# changed -- a provenance install failure rolls the whole create back.
+# Accepted bound (CP2, matches pipeline_save/trigger_save): the writer's own
+# scratch suffixes (<name>.staging, <sidecar>.tmp) are a RESERVED namespace --
+# stale regular-file/dir junk there is reclaimed at write time, not preserved
+# through a refusal; nothing outside that namespace is ever touched by a
+# refusal, and a squatter the reclaim cannot remove refuses with a rollback.
+
+_RESERVED_PIPE_SUFFIXES = (".staging", ".bak", ".provenance.json")
+
+# $${ = the substitution engine's literal-${ escape: brief TEXT is
+# substituted at prepare time, so unescaped ${...} prose would make the
+# starter's first run refuse (the Phase C _OUTPUTS_FOOTER lesson).
+_BLANK_BRIEF = """# work -- starter brief
+
+Describe the task this activity performs. The session reads this brief as
+its instructions; keep it concrete and self-contained.
+
+- Reference declared params as $${params.<name>} after declaring them in the
+  document's `params` list (the canvas pane edits both).
+- Add more activities from the palette and connect them with edges; rename
+  this brief alongside its node id.
+"""
+
+
+def _blank_doc(name):
+    """The blank-starter document: the smallest doc validate_doc accepts.
+    Pinned by test (a validator schema drift breaks the build, never the
+    operator's create button)."""
+    return {"name": name, "version": 1,
+            "caps": {"max_sessions_per_run": 4},
+            "nodes": [{"id": "work", "type": "agent_task",
+                       "brief_ref": "work.md"}],
+            "edges": [], "containers": []}
+
+
+def pipeline_create(repo, name, source=None):
+    """Create a NEW pipeline dir in the SD-34 var shadow
+    <repo>/var/autonomy/pipelines/<name>/ from the blank starter (source
+    None) or by cloning an existing pipeline (source = its name; the
+    EFFECTIVE doc is cloned -- what the operator sees). Returns
+    {ok: True, path, message} / {ok: False, error}; every refusal leaves
+    the filesystem byte-identical."""
+    import pipeline as _pl
+    # charset gates BEFORE any path is built (prevention-log #6). A present
+    # non-str/empty source refuses here -- a malformed clone request must
+    # never degrade to a blank create (CP1).
+    if not _pl.valid_pipeline_name(name):
+        return {"ok": False, "error": "pipeline name has invalid charset"}
+    if source is not None and not _pl.valid_pipeline_name(source):
+        return {"ok": False, "error": "clone source has invalid charset"}
+    if source == name:
+        return {"ok": False,
+                "error": "a clone needs a different name than its source"}
+    for suf in _RESERVED_PIPE_SUFFIXES:
+        if name.endswith(suf):
+            return {"ok": False, "error":
+                    "pipeline name ends in the reserved suffix %r" % suf}
+    if not _var_live_protected(repo, os.path.join("var", "autonomy",
+                                                  "pipelines")):
+        return {"ok": False, "error":
+                "var/ is not covered by this repo's .gitignore -- the loop's "
+                "preflight would sweep the pipeline shadow. Add a 'var/' line "
+                "to .gitignore (and commit it) first."}
+    committed = os.path.join(repo, ".autonomy", "pipelines", name)
+    shadow = os.path.join(repo, "var", "autonomy", "pipelines", name)
+    sidecar = _pl.provenance_path(repo, name)
+    # Collision: ANYTHING at either path refuses (lexists -- a committed
+    # FILE squatter or a broken symlink counts; creating a shadow over a
+    # committed pack would silently supersede it, which is pipeline_save's
+    # EDIT semantics, not create).
+    if os.path.lexists(committed) or os.path.lexists(shadow):
+        return {"ok": False,
+                "error": "pipeline %r already exists" % name}
+    # Sidecar hygiene: absent or a regular non-symlink file (an ORPHAN from
+    # a hand-removed dir is overwritten -- it must not brick the name); a
+    # dir/symlink squatting it refuses (the trigger_save shadow rule).
+    if os.path.islink(sidecar) or (os.path.exists(sidecar)
+                                   and not os.path.isfile(sidecar)):
+        return {"ok": False, "error":
+                "the provenance sidecar path is not a clean file -- refusing"}
+    # Seed: blank starter, or the source's EFFECTIVE doc (load + validate
+    # must be CLEAN -- an invalid source never clones, prevention-log #3).
+    briefs_from = None
+    if source is None:
+        newdoc = _blank_doc(name)
+        posted_briefs = {"work.md": _BLANK_BRIEF}
+        src_version = None
+    else:
+        posted_briefs = {}
+        try:
+            pdir = _pl.effective_pipeline_dir(repo, source)
+            srcdoc = _pl.load_doc(os.path.join(pdir, "pipeline.json"))
+            errs = _pl.validate_doc(srcdoc, pdir)
+        except (_pl.PipelineError, OSError) as exc:
+            return {"ok": False,
+                    "error": "clone source %r is not loadable: %s"
+                             % (source, exc)}
+        except Exception as exc:   # validator totality (prevention-log #21)
+            return {"ok": False,
+                    "error": "clone source %r failed validation: %s"
+                             % (source, exc)}
+        if errs:
+            return {"ok": False, "error":
+                    "clone source %r is invalid -- fix it first: %s"
+                    % (source, "; ".join(errs))}
+        newdoc = dict(srcdoc)
+        newdoc["name"] = name            # the ONLY rewritten field
+        briefs_from = pdir
+        src_version = srcdoc.get("version")
+    try:
+        serialized = json.dumps(newdoc, indent=2, sort_keys=True,
+                                allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        return {"ok": False,
+                "error": "pipeline is not representable as JSON: %s" % exc}
+    if len(serialized.encode("utf-8")) > _PIPELINE_DOC_CAP:
+        return {"ok": False,
+                "error": "pipeline document exceeds %d bytes"
+                         % _PIPELINE_DOC_CAP}
+    staging = shadow + ".staging"
+    prov_tmp = sidecar + ".tmp"
+    # Parent dirs we are about to create must ALSO vanish on a refusal
+    # (byte-identical means no new empty dirs either).
+    made_parents = []
+    p = os.path.dirname(shadow)
+    while p and not os.path.exists(p) and p != repo:
+        made_parents.append(p)
+        p = os.path.dirname(p)
+
+    def _cleanup(claimed, installed):
+        _shutil.rmtree(staging, ignore_errors=True)
+        try:
+            os.unlink(prov_tmp)
+        except OSError:
+            pass
+        try:
+            if installed:
+                _shutil.rmtree(shadow, ignore_errors=True)
+            elif claimed:
+                os.rmdir(shadow)     # only ever OUR empty claim dir
+        except OSError:
+            pass                     # a stuffed claim is not ours to rmtree
+        for d in made_parents:       # deepest-first; rmdir only if empty
+            try:
+                os.rmdir(d)
+            except OSError:
+                break                # someone else populated it -- keep
+
+    # CLAIM the name atomically (mkdir): the exclusive hold that closes the
+    # check->install window -- a concurrent create loses here with EEXIST.
+    try:
+        os.makedirs(os.path.dirname(shadow), exist_ok=True)
+        os.mkdir(shadow)
+    except FileExistsError:
+        _cleanup(claimed=False, installed=False)   # drop any parents we made
+        return {"ok": False, "error": "pipeline %r already exists" % name}
+    except OSError as exc:
+        _cleanup(claimed=False, installed=False)
+        return {"ok": False,
+                "error": "could not claim the pipeline dir: %s" % exc}
+    try:
+        _shutil.rmtree(staging, ignore_errors=True)
+        os.makedirs(staging)
+        with open(os.path.join(staging, "pipeline.json"), "w",
+                  encoding="utf-8") as fh:
+            fh.write(serialized)
+        for node in (newdoc.get("nodes") or []):
+            ref = node.get("brief_ref") if isinstance(node, dict) else None
+            if not (isinstance(ref, str) and _pl._valid_brief_ref(ref)):
+                continue                       # validate_doc flagged it
+            dst = os.path.join(staging, ref)
+            if os.path.exists(dst):
+                continue
+            if ref in posted_briefs:
+                with open(dst, "w", encoding="utf-8") as fh:
+                    fh.write(posted_briefs[ref])
+            elif briefs_from is not None:
+                src = os.path.join(briefs_from, ref)
+                # regular files only, never symlinks (the pipeline_save
+                # staging rule) -- a missing copy is caught by the staged
+                # re-validate below, never silently dropped.
+                if os.path.isfile(src) and not os.path.islink(src):
+                    _shutil.copyfile(src, dst)
+        reloaded = _pl.load_doc(os.path.join(staging, "pipeline.json"))
+        errs2 = _pl.validate_doc(reloaded, staging)
+        if errs2:
+            _cleanup(claimed=True, installed=False)
+            return {"ok": False, "error": "; ".join(errs2)}
+        if reloaded != newdoc:                 # SD-29 lossy-emit guard
+            _cleanup(claimed=True, installed=False)
+            return {"ok": False, "error":
+                    "re-parse mismatch: the written document would not read "
+                    "back identically -- write refused"}
+        # Content fingerprint over the STAGED tree (doc + briefs -- a brief
+        # edit must flip `diverged`, Codex CP2); staged files all exist
+        # post-validate, so a raise here is a staging failure.
+        fingerprint = (_pl.content_fingerprint(reloaded, staging)
+                       if source is not None else None)
+    except (OSError, _pl.PipelineError) as exc:
+        _cleanup(claimed=True, installed=False)
+        return {"ok": False, "error": "could not stage the pipeline: %s" % exc}
+    # Install content: rename atomically replaces OUR OWN empty claim dir
+    # (rename over a non-empty dir fails -- a racer who stuffed the claim
+    # produces a refusal, never a half-install).
+    try:
+        os.rename(staging, shadow)
+    except OSError as exc:
+        _cleanup(claimed=True, installed=False)
+        return {"ok": False,
+                "error": "could not install the pipeline: %s" % exc}
+    # Provenance LAST (binary end-state): a failure rolls the whole create
+    # back -- no unprovenanced dashboard-created dir survives, and the
+    # refusal stays byte-identical (a pre-existing ORPHAN sidecar is only
+    # replaced after everything else has succeeded).
+    prov = {"created": "blank" if source is None else "clone",
+            "at": int(_time.time())}
+    if source is not None:
+        prov["source"] = source
+        # bool is an int subclass; a doc with `version: true` validates
+        # today, and the reader's exact schema rejects bools -- coerce to
+        # the honest None rather than writing a sidecar the reader drops
+        # whole (Codex CP2).
+        prov["source_version"] = (src_version
+                                  if isinstance(src_version, int)
+                                  and not isinstance(src_version, bool)
+                                  else None)
+        prov["fingerprint"] = fingerprint
+    try:
+        prov_bytes = json.dumps(prov, indent=2, sort_keys=True,
+                                allow_nan=False) + "\n"
+        if os.path.islink(prov_tmp) or os.path.exists(prov_tmp):
+            os.unlink(prov_tmp)      # stale junk; unlink never follows
+        fd = os.open(prov_tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(prov_bytes)
+        os.replace(prov_tmp, sidecar)
+    except (OSError, ValueError) as exc:
+        _cleanup(claimed=True, installed=True)
+        return {"ok": False,
+                "error": "could not record provenance -- create rolled "
+                         "back: %s" % exc}
+    what = ("blank starter" if source is None
+            else "clone of %r" % source)
+    return {"ok": True, "path": os.path.relpath(shadow, repo),
+            "message": "created pipeline %r (%s) in the live shadow -- "
+                       "bind a trigger to run it (the committed pack is "
+                       "untouched)" % (name, what)}
 
 
 # --- Phase D2 (#383): trigger create/edit -> var-live FILE shadow writer -----

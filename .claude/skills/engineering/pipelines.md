@@ -222,8 +222,21 @@ transient → kept) and threads the marker path through
 `pipeline._resolve_run_params` twice (merged vs saved-only) so the
 verdict is start-parity by construction. Payload projections:
 `pipelines[].params` + `triggers[].fire_params` (`_declared_params` /
-`_bound_doc`). Still deferred: trigger delete / reset-shadow-to-committed
-(disable or remove the shadow by hand), run-now on non-manual modes. The page treats node ids as
+`_bound_doc`). **D3 (#383) shipped pipeline CREATION**: `pipeline_create`
+control action = blank starter or clone into the SD-34 shadow dir via a
+mkdir-CLAIM install (claim → stage → rename-over-own-empty-claim →
+provenance LAST w/ rollback — binary end-state); provenance sidecar
+`var/autonomy/pipelines/<name>.provenance.json` (path rule =
+`pipeline.provenance_path`, reader `_read_provenance` EXACT-schema total);
+gallery `source` grew `local` (shadow-only dir) + `provenance` w/
+`diverged` (canonical-serialize content hash vs the clone fingerprint);
+`pipeline_save` now edits shadow-only pipelines too (neither-dir still
+refuses — create-by-save would bypass the collision/provenance
+discipline). Collisions (committed OR shadow, lexists) refuse; invalid
+clone source refuses (no laundering); reserved suffixes `.staging/.bak/
+.provenance.json` refused at mint. Still deferred: trigger/pipeline
+delete + reset-shadow-to-committed (disable or remove the shadow by
+hand), run-now on non-manual modes. The page treats node ids as
 UNTRUSTED (invalid docs render): delegated `data-*` listeners, full-coverage
 `esc()`. Fixture: `tests/fixtures/repo-alpha` binds `coder → fixture-flow` and
 ships a walker-shaped `journal.jsonl`; tests needing an unbound role take tmp
@@ -248,6 +261,7 @@ containers, intra-container edges, `context: own`. Canvas EDITING SHIPPED (P3b,
 SD-38 — minimap + search/filter, client-only over `curDoc()`, no new payload/
 write surface; minimap gates on HORIZONTAL overflow only; zoom deferred to keep
 the editor's `getBoundingClientRect` gesture geometry unscaled). Still deferred
-on the canvas: reset-shadow-to-committed and provenance diff (both need a write
-surface or a new payload), canvas zoom, and binding-a-new-pipeline (P4 gallery).
+on the canvas: reset-shadow-to-committed (a write surface; pairs w/ delete),
+canvas zoom. Creating/cloning pipelines + template-vs-clone provenance
+(incl. the `diverged` content-hash flag) SHIPPED in Phase D3 (#383).
 Full brief round-trip already shipped in P3b (`VIEW.briefs` + `briefText`).

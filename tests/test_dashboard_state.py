@@ -4316,3 +4316,193 @@ class TestBuildPipelineView(unittest.TestCase):
         v = ds.build_pipeline_view(repo, "coder")
         self.assertNotIn("pick.md", v["briefs"])       # dropped, no crash
         self.assertIn("plan.md", v["briefs"])          # siblings still read
+
+
+class GalleryProvenanceTest(BuildTriggersViewTest):
+    """Phase D3 (#383): gallery source value `local` (shadow-only dir) +
+    the provenance sidecar projection. The reader is TOTAL with an EXACT
+    schema -- junk can neither crash the payload nor fabricate a lineage
+    claim (silence is the safe side of a display lie)."""
+
+    def _git(self, d):
+        subprocess.run(["git", "init", "-q", d], check=True)
+        with open(os.path.join(d, ".gitignore"), "w") as fh:
+            fh.write("var/\n")
+        # _mini_repo's committed doc omits `edges`, which validate_doc
+        # requires -- an INVALID doc is a fine display fixture but refuses
+        # as a clone SOURCE (no laundering). Make it valid for clone tests.
+        pj = os.path.join(d, ".autonomy", "pipelines", "flow",
+                          "pipeline.json")
+        with open(pj) as fh:
+            doc = json.load(fh)
+        doc["edges"] = []
+        with open(pj, "w") as fh:
+            json.dump(doc, fh)
+        return d
+
+    def _local(self, d, name, doc_extra=None):
+        """Hand-made shadow-only pipeline dir (valid one-node doc)."""
+        pdir = os.path.join(d, "var", "autonomy", "pipelines", name)
+        os.makedirs(pdir)
+        doc = {"name": name, "version": 1,
+               "caps": {"max_sessions_per_run": 4},
+               "nodes": [{"id": "work", "type": "agent_task",
+                          "brief_ref": "work.md"}],
+               "edges": [], "containers": []}
+        doc.update(doc_extra or {})
+        with open(os.path.join(pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(pdir, "work.md"), "w") as fh:
+            fh.write("work brief\n")
+        return pdir
+
+    def _sidecar(self, d, name, payload):
+        vroot = os.path.join(d, "var", "autonomy", "pipelines")
+        os.makedirs(vroot, exist_ok=True)
+        p = os.path.join(vroot, "%s.provenance.json" % name)
+        with open(p, "w") as fh:
+            if isinstance(payload, str):
+                fh.write(payload)
+            else:
+                json.dump(payload, fh)
+        return p
+
+    def _rows(self, d):
+        return dict((p["name"], p)
+                    for p in ds.build_triggers_view(d)["pipelines"])
+
+    def test_shadow_only_dir_is_source_local(self):
+        d = self._mini_repo({})
+        self._local(d, "solo")
+        rows = self._rows(d)
+        self.assertEqual(rows["solo"]["source"], "local")
+        self.assertTrue(rows["solo"]["valid"])
+        self.assertIsNone(rows["solo"]["provenance"])   # no sidecar: no claim
+        self.assertEqual(rows["flow"]["source"], "committed")
+        self.assertIsNone(rows["flow"]["provenance"])
+
+    def test_blank_provenance_projected(self):
+        d = self._mini_repo({})
+        self._local(d, "solo")
+        self._sidecar(d, "solo", {"created": "blank", "at": 1783080000})
+        prov = self._rows(d)["solo"]["provenance"]
+        self.assertEqual(prov, {"created": "blank", "at": 1783080000})
+
+    def test_clone_provenance_diverged_flips_on_edit(self):
+        # writer-driven: pipeline_create's fingerprint must read back as
+        # NOT diverged (writer/reader canonicalization parity), then a doc
+        # edit flips it. fingerprint itself is not part of the payload.
+        import dashboard_control as dcx
+        d = self._git(self._mini_repo({}))
+        self.assertTrue(dcx.pipeline_create(d, "flow2", source="flow")["ok"])
+        prov = self._rows(d)["flow2"]["provenance"]
+        self.assertEqual(prov["created"], "clone")
+        self.assertEqual(prov["source"], "flow")
+        self.assertEqual(prov["source_version"], 1)
+        self.assertIs(prov["diverged"], False)
+        self.assertNotIn("fingerprint", prov)
+        pj = os.path.join(d, "var", "autonomy", "pipelines", "flow2",
+                          "pipeline.json")
+        with open(pj) as fh:
+            doc = json.load(fh)
+        doc["version"] = 2
+        with open(pj, "w") as fh:
+            json.dump(doc, fh)
+        prov = self._rows(d)["flow2"]["provenance"]
+        self.assertIs(prov["diverged"], True)
+
+    def test_reformatted_but_equal_doc_is_not_diverged(self):
+        # diverged is a CONTENT verdict: rewriting the file with different
+        # whitespace/key order but identical content stays False (the
+        # reader recomputes the canonical serialization, never raw bytes).
+        import dashboard_control as dcx
+        d = self._git(self._mini_repo({}))
+        self.assertTrue(dcx.pipeline_create(d, "flow2", source="flow")["ok"])
+        pj = os.path.join(d, "var", "autonomy", "pipelines", "flow2",
+                          "pipeline.json")
+        with open(pj) as fh:
+            doc = json.load(fh)
+        with open(pj, "w") as fh:
+            json.dump(doc, fh, sort_keys=False)   # same content, new bytes
+        prov = self._rows(d)["flow2"]["provenance"]
+        self.assertIs(prov["diverged"], False)
+
+    def test_brief_edit_flips_diverged(self):
+        # briefs are pipeline content: the fingerprint covers doc + briefs
+        # (pipeline.content_fingerprint), so editing only a brief must
+        # read as diverged too (Codex CP2 -- a doc-only hash would leave
+        # the gallery claiming "not diverged" after a brief rewrite).
+        import dashboard_control as dcx
+        d = self._git(self._mini_repo({}))
+        self.assertTrue(dcx.pipeline_create(d, "flow2", source="flow")["ok"])
+        brief = os.path.join(d, "var", "autonomy", "pipelines", "flow2",
+                             "pick.md")
+        with open(brief, "w") as fh:
+            fh.write("rewritten brief\n")
+        prov = self._rows(d)["flow2"]["provenance"]
+        self.assertIs(prov["diverged"], True)
+
+    def test_junk_sidecars_read_as_none(self):
+        d = self._mini_repo({})
+        cases = [
+            "{not json",                                     # unparseable
+            '"a string"',                                    # non-dict
+            {"created": "made-up", "at": 1},                 # bad created
+            {"created": "blank"},                            # at missing
+            {"created": "blank", "at": True},                # bool is not an epoch
+            {"created": "blank", "at": 1, "extra": 1},       # unknown key
+            {"created": "clone", "at": 1},                   # clone w/o lineage
+            {"created": "clone", "at": 1, "source": "../up",
+             "source_version": 1, "fingerprint": "sha256:" + "0" * 64},
+            {"created": "clone", "at": 1, "source": "flow",
+             "source_version": "3", "fingerprint": "sha256:" + "0" * 64},
+            {"created": "clone", "at": 1, "source": "flow",
+             "source_version": 1, "fingerprint": "md5:junk"},
+        ]
+        for i, payload in enumerate(cases):
+            name = "junk%d" % i
+            self._local(d, name)
+            self._sidecar(d, name, payload)
+        rows = self._rows(d)
+        for i in range(len(cases)):
+            self.assertIsNone(rows["junk%d" % i]["provenance"],
+                              "case %d fabricated a claim" % i)
+
+    def test_sidecar_next_to_committed_ignored(self):
+        # a sidecar for a name that HAS a committed pack is stale junk --
+        # never attached (the row is a template, not a local creation).
+        d = self._mini_repo({})
+        self._sidecar(d, "flow", {"created": "blank", "at": 1})
+        rows = self._rows(d)
+        self.assertEqual(rows["flow"]["source"], "committed")
+        self.assertIsNone(rows["flow"]["provenance"])
+
+    def test_symlinked_var_entry_skipped(self):
+        # effective_pipeline_dir ignores a symlinked shadow as unsanctioned;
+        # the gallery must not list a row the resolver refuses to serve.
+        d = self._mini_repo({})
+        target = self._local(d, "realdir")
+        vroot = os.path.join(d, "var", "autonomy", "pipelines")
+        os.symlink(target, os.path.join(vroot, "ghostlink"))
+        rows = self._rows(d)
+        self.assertNotIn("ghostlink", rows)
+        self.assertIn("realdir", rows)
+
+    def test_invalid_local_dir_renders_errors_with_provenance(self):
+        # a broken local clone still shows its lineage (the doc errors and
+        # the provenance are independent truths); diverged stays ABSENT --
+        # no doc to compare, no claim.
+        d = self._mini_repo({})
+        pdir = self._local(d, "brokeclone")
+        with open(os.path.join(pdir, "pipeline.json"), "w") as fh:
+            fh.write("{corrupt")
+        self._sidecar(d, "brokeclone",
+                      {"created": "clone", "at": 1, "source": "flow",
+                       "source_version": 1,
+                       "fingerprint": "sha256:" + "0" * 64})
+        rows = self._rows(d)
+        self.assertFalse(rows["brokeclone"]["valid"])
+        self.assertTrue(rows["brokeclone"]["errors"])
+        prov = rows["brokeclone"]["provenance"]
+        self.assertEqual(prov["source"], "flow")
+        self.assertNotIn("diverged", prov)

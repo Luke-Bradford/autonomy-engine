@@ -2860,20 +2860,73 @@ def _trigger_marker_flags(repo_path, name, lane_suffix):
     return flags
 
 
+_PROV_FP_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def _read_provenance(repo_path, name):
+    """TOTAL reader for a created pipeline's provenance sidecar (Phase D3,
+    #383; path rule = pipeline.provenance_path). EXACT schema or None --
+    a stale/hand-made sidecar must not fabricate a lineage claim, and the
+    safe side of a display lie is silence (never a crash, prevention-log
+    #21). bools are rejected where ints are required (bool is an int
+    subclass)."""
+    try:
+        p = pipeline_mod.provenance_path(repo_path, name)
+        if os.path.islink(p) or not os.path.isfile(p) \
+                or os.path.getsize(p) > 65536:
+            return None
+        with open(p, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            return None
+        created, at = data.get("created"), data.get("at")
+        if created not in ("blank", "clone") \
+                or not isinstance(at, int) or isinstance(at, bool):
+            return None
+        out = {"created": created, "at": at}
+        allowed = {"created", "at"}
+        if created == "clone":
+            allowed |= {"source", "source_version", "fingerprint"}
+            src = data.get("source")
+            ver = data.get("source_version")
+            fp = data.get("fingerprint")
+            if not pipeline_mod.valid_pipeline_name(src):
+                return None
+            if ver is not None and (not isinstance(ver, int)
+                                    or isinstance(ver, bool)):
+                return None
+            if not (isinstance(fp, str) and _PROV_FP_RE.match(fp)):
+                return None
+            out.update({"source": src, "source_version": ver,
+                        "fingerprint": fp})
+        if set(data) - allowed:
+            return None
+        return out
+    except Exception:
+        return None
+
+
 def _gallery_rows(repo_path, trigs, rollup):
     """Pipeline gallery cards: union of committed + var-shadow pipeline DIR
     stems, each loaded through effective_pipeline_dir (SD-34/SD-37 -- a
     present-but-invalid shadow renders its errors, never falls back), plus
-    a 'wrapped' row per shim trigger with no binding. Total per row."""
+    a 'wrapped' row per shim trigger with no binding. Total per row.
+    D3 (#383): source grows `local` (shadow dir with NO committed
+    counterpart) + the provenance sidecar projection."""
+    var_root = os.path.join(repo_path, "var", "autonomy", "pipelines")
     names, seen = [], set()
-    for d in (os.path.join(repo_path, ".autonomy", "pipelines"),
-              os.path.join(repo_path, "var", "autonomy", "pipelines")):
+    for d in (os.path.join(repo_path, ".autonomy", "pipelines"), var_root):
         try:
             entries = sorted(os.listdir(d))
         except OSError:
             continue
         for fn in entries:
-            if fn in seen or not os.path.isdir(os.path.join(d, fn)):
+            p = os.path.join(d, fn)
+            # a symlinked var entry is not a sanctioned shadow -- the
+            # resolver ignores it (effective_pipeline_dir), so listing it
+            # would render a row the resolver refuses to serve (D3 CP1).
+            if fn in seen or not os.path.isdir(p) \
+                    or (d == var_root and os.path.islink(p)):
                 continue
             seen.add(fn)
             names.append(fn)
@@ -2886,25 +2939,49 @@ def _gallery_rows(repo_path, trigs, rollup):
         row = {"name": name, "version": None, "source": "committed",
                "valid": False, "errors": [], "nodes": 0, "params": [],
                "triggers": sorted(by_pipeline.get(name, [])),
-               "tier": rollup.get(name)}
+               "tier": rollup.get(name), "provenance": None}
         if not pipeline_mod.valid_pipeline_name(name):
             row["errors"] = ["pipeline dir name has invalid charset"]
             rows.append(row)
             continue
+        prov = None
         try:
             pdir = pipeline_mod.effective_pipeline_dir(repo_path, name)
             if os.path.normpath(pdir).startswith(
                     os.path.normpath(os.path.join(repo_path, "var")) + os.sep):
-                row["source"] = "shadow"
+                # `shadow` = local edits OVER a committed pack; `local` =
+                # a created pipeline with no committed counterpart (D3).
+                has_committed = os.path.isdir(os.path.join(
+                    repo_path, ".autonomy", "pipelines", name))
+                row["source"] = "shadow" if has_committed else "local"
+                if not has_committed:
+                    # provenance only speaks for LOCAL rows -- a sidecar
+                    # next to a committed pack is stale junk, ignored.
+                    prov = _read_provenance(repo_path, name)
             doc = pipeline_mod.load_doc(os.path.join(pdir, "pipeline.json"))
         except Exception as exc:
             row["errors"] = [str(exc)]
+            if prov:
+                prov.pop("fingerprint", None)   # lineage yes, diverged: no doc, no claim
+                row["provenance"] = prov
             rows.append(row)
             continue
         try:
             errs = pipeline_mod.validate_doc(doc, pdir)
         except Exception as exc:   # validator totality boundary (#21)
             errs = ["validator error: %s" % exc]
+        if prov:
+            fp = prov.pop("fingerprint", None)
+            if prov.get("created") == "clone" and fp:
+                try:
+                    # content fingerprint = doc + briefs (ONE rule with the
+                    # writer: pipeline.content_fingerprint) -- a brief edit
+                    # flips diverged too, not only a doc edit (Codex CP2).
+                    prov["diverged"] = (
+                        fp != pipeline_mod.content_fingerprint(doc, pdir))
+                except Exception:
+                    pass            # no comparison, no claim (key absent)
+            row["provenance"] = prov
         nodes = doc.get("nodes")
         row.update({"version": doc.get("version"),
                     "valid": not errs, "errors": errs,
@@ -2917,7 +2994,8 @@ def _gallery_rows(repo_path, trigs, rollup):
         nm = t.get("name", "")
         rows.append({"name": nm, "version": None, "source": "wrapped",
                      "valid": True, "errors": [], "nodes": 1, "params": [],
-                     "triggers": [nm], "tier": rollup.get(nm)})
+                     "triggers": [nm], "tier": rollup.get(nm),
+                     "provenance": None})
     return rows
 
 

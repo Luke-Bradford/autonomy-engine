@@ -1397,6 +1397,15 @@ class EffectivePipelineDirTest(unittest.TestCase):
         self.assertEqual(pipeline.effective_pipeline_dir(self.repo, "flow"),
                          self.committed)
 
+    def test_provenance_path_is_the_shadow_sibling(self):
+        # D3 (#383): the ONE sidecar path rule -- a SIBLING of the shadow
+        # dir (never inside it, never a doc field), shared by the
+        # dashboard writer and the gallery reader.
+        self.assertEqual(
+            pipeline.provenance_path(self.repo, "flow"),
+            os.path.join(self.repo, "var", "autonomy", "pipelines",
+                         "flow.provenance.json"))
+
     def test_shadow_with_pipeline_json_wins(self):
         d = self._shadow()
         with open(os.path.join(d, "pipeline.json"), "w") as fh:

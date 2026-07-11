@@ -454,11 +454,23 @@ immediately if the result is runnable.
 
 **The trigger views.** `/pipeline` opens on four tabs:
 
-- **🗂 pipelines** — one card per pipeline (committed or locally-edited)
-  with its version, activity count, trust rollup, and the triggers bound to
-  it. An invalid pipeline shows its errors on the card. **＋ trigger**
-  opens the trigger form pre-bound to that pipeline. Creating and cloning
-  pipelines from here is not built yet (the button says so).
+- **🗂 pipelines** — one card per pipeline with its version, activity
+  count, trust rollup, the triggers bound to it, and a **provenance
+  badge**: `template` is a committed pack (the shareable default);
+  `template · local edits` means the canvas has saved a local shadow over
+  it; `created blank` and `clone · from <source>@v<N>` are pipelines
+  created from this page; a clone that has been edited since shows
+  `⚠ diverged`. An invalid pipeline shows its errors on the card.
+  **＋ trigger** opens the trigger form pre-bound to that pipeline.
+  - **＋ new pipeline / ⧉ clone** create a pipeline in the **local shadow**
+    (`var/autonomy/pipelines/<name>/`): blank gives a minimal one-activity
+    starter you then edit on the canvas; clone copies an existing
+    pipeline — document and briefs — under a new name and records where it
+    came from. A name that already exists (committed or local) is
+    refused, and an invalid pipeline refuses to clone (fix it first). The
+    new pipeline runs once a trigger binds it — creation alone starts
+    nothing. Deleting a created pipeline is not built yet: remove the
+    shadow directory (and its `.provenance.json` sibling) by hand.
 - **⚡ triggers** — one card per trigger: firing mode (continuous /
   schedule / manual / event), enabled state, overlap policy, run-window
   state, parameter count, per-trigger trust tier, and any pending markers
