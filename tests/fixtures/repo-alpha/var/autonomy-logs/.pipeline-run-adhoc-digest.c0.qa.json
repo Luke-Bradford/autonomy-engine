@@ -1,6 +1,5 @@
 {"fmt": 2, "run_id": "adhoc-digest.c0.qa-7002",
- "trigger": "adhoc-digest.c0.qa", "kind": "native",
- "role": "adhoc-digest.c0.qa", "lane": "",
+ "trigger": "adhoc-digest.c0.qa", "kind": "native", "lane": "",
  "parent_run": "adhoc-digest-20260709T220000-7001", "parent_node": "qa",
  "call_depth": 1, "status": "in_progress", "sessions": 1,
  "run": {"id": "adhoc-digest.c0.qa-7002", "pipeline": "fixture-flow",

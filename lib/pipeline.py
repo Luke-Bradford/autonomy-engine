@@ -1595,9 +1595,11 @@ def start_run(repo, role, state_path, lane=""):
     # trigger/kind/params/run: ONE state shape with trigger-started runs
     # (Phase B) -- the walk code never branches on kind. For a shim the
     # trigger IS the role (name byte-equal, the trust-continuity contract).
+    # `trigger` is the ONE name field (#390): the deprecated `role` twin is
+    # no longer minted; readers tolerate it on pre-drop states.
     state = {"fmt": 2,
              "run_id": run_id,
-             "role": role, "lane": lane, "doc": doc, "meta": meta,
+             "lane": lane, "doc": doc, "meta": meta,
              "trigger": role, "kind": "shim", "params": {},
              "run": {"id": run_id, "pipeline": doc["name"],
                      "trigger": role, "repo": repo},
@@ -1767,11 +1769,11 @@ def start_run_trigger(repo, trigger_name, state_path, lane="", *,
     ident = "%s--%s" % (trigger_name, lane) if lane else trigger_name
     run_id = "%s-%s-%d" % (ident, time.strftime("%Y%m%dT%H%M%S"),
                            os.getpid())
-    # "role": trigger_name keeps every existing state consumer -- journal,
-    # dashboard state-file glob, ledger -- working without a branch; Phase E
-    # renames the key when trust re-keys.
+    # `trigger` is the ONE name field (#390). The Phase B `role` twin that
+    # kept pre-trigger consumers working is dropped -- trust re-keyed in
+    # Phase E, the dashboard learned triggers in Phase D.
     state = {"fmt": 2, "run_id": run_id,
-             "role": trigger_name, "lane": lane, "doc": doc, "meta": meta,
+             "lane": lane, "doc": doc, "meta": meta,
              "trigger": trigger_name, "kind": "native", "params": params,
              "run": {"id": run_id, "pipeline": doc["name"],
                      "trigger": trigger_name, "repo": repo},
@@ -1874,7 +1876,7 @@ def start_child_run(repo, parent_state_path, parent_state, node):
     run_id = "%s-%s-%d" % (child_name, time.strftime("%Y%m%dT%H%M%S"),
                            os.getpid())
     state = {"fmt": 2, "run_id": run_id,
-             "role": child_name, "lane": lane, "doc": doc, "meta": meta,
+             "lane": lane, "doc": doc, "meta": meta,
              "trigger": child_name, "kind": "native", "params": params,
              "run": {"id": run_id, "pipeline": doc["name"],
                      "trigger": child_name, "repo": repo},
@@ -2183,9 +2185,11 @@ def _journal_append(journal_path, state):
     nodes_done = state.get("nodes_done") or []
     rec = {
         "run_id": state.get("run_id", ""),
+        # Post-#390 states mint no `role` -- the field lands "" and the
+        # ledger keys on `trigger`; a LEGACY in-flight state finishing
+        # after the drop still lands its grandfatherable role (SD-41).
         "role": state.get("role", ""),
-        # Additive Phase B field: evidence for Phase E's per-trigger trust
-        # re-key starts accumulating now; ledger() does NOT read it yet.
+        # The trust ledger's key since Phase E (SD-41).
         "trigger": state.get("trigger", ""),
         # Additive Phase C field: links a child run's line to its parent.
         "parent_run": state.get("parent_run", ""),

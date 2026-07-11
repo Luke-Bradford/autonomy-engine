@@ -452,6 +452,22 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     skips reserved-suffix entries. *(#388;
     specs/2026-07-11-pipeline-model-shadow-lifecycle.md.)*
 
+46. **The state-file `role` key is DROPPED from every mint; `trigger` is the
+    ONE name field** (2026-07-11, #390 — SD-41's deferred drop, executed
+    once Phase D completed). No mint (`start_run`, `start_run_trigger`,
+    `start_child_run`) writes `role`; readers TOLERATE the key on states
+    minted before the drop and never consult or require it (display keys
+    `trigger`, then the parsed token name — the filename truth). Journal
+    lines are never touched: `_journal_append` keeps its total
+    `state.get("role", "")` read, so a post-drop state lands `role: ""`
+    (the ledger keys `trigger`, present on every Phase-B+ state) while a
+    LEGACY in-flight state finishing after the drop still lands its
+    grandfatherable `role`; the dashboard's journal readers key
+    trigger-first with the `role` fallback kept for immutable pre-Phase-B
+    lines. Re-adding the key, or a reader that requires it, is a
+    regression. *(#390;
+    plans/2026-07-11-state-role-twin-drop.md.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could
