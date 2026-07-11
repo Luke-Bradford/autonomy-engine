@@ -1092,6 +1092,18 @@ class FireParamsCheckTest(unittest.TestCase):
         self._write('{"q": "' + "x" * 70000 + '"}')
         self.assertEqual(self._check()[0], "payload")
 
+    def test_non_utf8_payload_is_payload_class(self):
+        # review WARNING: fh.read() raises UnicodeDecodeError (a ValueError,
+        # not OSError) on non-UTF-8 bytes -- a decode failure is
+        # DETERMINISTIC (the bytes will never decode), so it must classify
+        # 'payload' (remove the marker), never crash firecheck.
+        self._trigger()
+        with open(self.payload, "wb") as fh:
+            fh.write(b"\xff\xfe\x00bad bytes")
+        cls, reason = self._check()
+        self.assertEqual(cls, "payload")
+        self.assertIn("UTF-8", reason)
+
     def test_unregistered_repo_payload_is_payload_class(self):
         # CP2 finding 2: firecheck runs the SAME existence checks start does
         # (_resolve_run_params), so a payload naming an unregistered repo is

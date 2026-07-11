@@ -515,7 +515,13 @@ def fire_params_check(repo, name, path):
         with open(path, encoding="utf-8") as fh:
             raw = fh.read(65537)
     except OSError as exc:
-        return "transient", "payload unreadable: %s" % exc
+        return "transient", "payload unreadable: %s" % exc     # I/O hiccup
+    except UnicodeDecodeError:
+        # non-UTF-8 bytes are a DETERMINISTIC fault (they will never
+        # decode) -- classify 'payload' so the marker is removed, never
+        # crash firecheck with an uncaught traceback (review WARNING;
+        # UnicodeDecodeError is a ValueError, not an OSError).
+        return "payload", "run-now payload is not valid UTF-8 text"
     if len(raw) > 65536:
         return "payload", "run-now payload exceeds 65536 bytes"
     if not raw.strip():

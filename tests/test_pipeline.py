@@ -3257,6 +3257,9 @@ class FireParamsTest(unittest.TestCase):
         with open(pf, "w") as fh:
             fh.write('{"q": "' + "x" * 70000 + '"}')
         self.assertEqual(self._cli(["--params-file", pf]), 1)
+        with open(pf, "wb") as fh:            # non-UTF-8 bytes -> clean rc 1,
+            fh.write(b"\xff\xfe\x00")         # not an uncaught UnicodeDecodeError
+        self.assertEqual(self._cli(["--params-file", pf]), 1)
         self.assertFalse(os.path.exists(self.state))
 
     def test_cli_empty_params_file_means_no_overrides(self):

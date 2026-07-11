@@ -2907,6 +2907,13 @@ def main(argv):
                 print("pipeline start: params file unreadable: %s" % exc,
                       file=sys.stderr)
                 return 1
+            except UnicodeDecodeError:
+                # non-UTF-8 bytes -> clean rc 1, not an uncaught traceback
+                # (UnicodeDecodeError is a ValueError, not OSError -- review
+                # WARNING); start is strict, so any corrupt payload refuses.
+                print("pipeline start: params file is not valid UTF-8",
+                      file=sys.stderr)
+                return 1
             if len(raw) > 65536:
                 print("pipeline start: params file exceeds 65536 bytes",
                       file=sys.stderr)
