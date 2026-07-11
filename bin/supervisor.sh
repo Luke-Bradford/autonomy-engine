@@ -1170,7 +1170,7 @@ trigger_start_token_for() {   # $1=name; show-backed capacity gate, rc 1 = full
 # Capture-then-case, never producer|grep (prevention-log #7/#11).
 resolve_manual_fires() {
   local d f name manual_list mname mpolicy mmax
-  local policy max slot tok params_file
+  local policy max slot tok params_file fc_rc
   d="$(trigger_ctl_dir fire)"
   [ -d "$d" ] || return 0
   manual_list="$(_triggers_enumerate manual "$AUTONOMY_TARGET_REPO")" || {
@@ -1220,9 +1220,16 @@ resolve_manual_fires() {
     # the safe side). Empty markers stay the D1 existence-only path.
     params_file=""
     if [ -s "$f" ]; then
+      # firecheck's rc 1/3 are its NORMAL non-ok signals (transient / bad
+      # payload), NOT errors. This function runs under `set -uo pipefail`,
+      # NOT `set -e` (prevention-log #17: the supervisor is the set-e
+      # exemption), so a bare command's non-zero rc never aborts the loop;
+      # capture it into fc_rc via `|| fc_rc=$?` so the intent is explicit
+      # and a future `set -e` could not change it either (the `||` guards).
+      fc_rc=0
       python3 "$ENGINE_HOME/lib/triggers.py" firecheck \
-        "$AUTONOMY_TARGET_REPO" "$name" "$f" >>"$SUPLOG" 2>&1
-      case $? in
+        "$AUTONOMY_TARGET_REPO" "$name" "$f" >>"$SUPLOG" 2>&1 || fc_rc=$?
+      case $fc_rc in
         0) params_file="$f" ;;
         3)
           log "WARN trigger-ctl: run-now payload for '$name' is invalid -- removing (fire lost; re-fire from the dashboard)"
