@@ -1282,7 +1282,7 @@ def pipeline_save(repo, name, doc, briefs):
 # through a refusal; nothing outside that namespace is ever touched by a
 # refusal, and a squatter the reclaim cannot remove refuses with a rollback.
 
-_RESERVED_PIPE_SUFFIXES = (".staging", ".bak", ".provenance.json")
+_RESERVED_PIPE_SUFFIXES = _pipeline.RESERVED_PIPE_SUFFIXES   # one tuple (#388)
 
 # $${ = the substitution engine's literal-${ escape: brief TEXT is
 # substituted at prepare time, so unescaped ${...} prose would make the
@@ -1626,3 +1626,319 @@ def trigger_save(repo, name, trig):
     message += _trigger_save_warns(repo, trig)
     return {"ok": True, "path": os.path.relpath(shadow, repo),
             "message": message}
+
+# --- #388: shadow lifecycle -- trigger/pipeline delete + reset-to-committed --
+# ONE writer rule: remove the var shadow. What happens next is defined by the
+# SD-34 resolvers themselves (effective_trigger_path / effective_pipeline_dir):
+# a committed counterpart resurfaces (reset-to-committed), a role of the same
+# name re-shims (the D2 materialise flip runs BACKWARD), a shadow-only asset
+# is gone for good. COMMITTED assets are never deletable from the dashboard
+# (SD-34: the dashboard writes var/ only).
+#
+# Every gate runs BEFORE the first mutation, so a refusal leaves the tree
+# byte-identical. The guards are FAIL-CLOSED (prevention-log #18): evidence
+# that cannot be read/attributed refuses, and every refusal names the
+# blocking artifact so over-refusal is explainable.
+#
+# Scan scope is THIS repo's var/ only -- deliberate, not a shortcut: a
+# separate lane service runs --repo <its own worktree> and resolves every
+# trigger/pipeline/shadow from THAT checkout, so this repo's shadow delete
+# cannot change what it resolves (its runs/markers are not endangered).
+# Own-service lanes run against THIS repo (state files + markers here,
+# --<lane>-suffixed) and the over-match below covers them.
+
+
+def _token_matches(entry, name):
+    """Does a run-token base / marker basename belong to trigger `name`?
+    Deliberate OVER-match on the canonical token grammar's separators
+    (dashboard_state._parse_run_token / the supervisor's inflight_tokens):
+    an EXACT parse is fail-OPEN here, because lane-stripping needs the
+    state file's own `lane` field and an unreadable state would hide
+    <name>--<lane> from it. `--` ambiguity (a trigger literally named
+    "a--b" vs trigger "a" on lane "b") lands on the refusing side."""
+    if entry == name or entry.startswith(name + "--"):
+        return True
+    return bool(re.match(r"^%s\.c\d+\." % re.escape(name), entry))
+
+
+def _strip_slot(base):
+    """Strip one trailing @<digits> slot marker (the token grammar's rule:
+    slot is stripped FIRST, before any lane suffix)."""
+    if "@" in base:
+        head, _, tail = base.rpartition("@")
+        if head and tail.isdigit():
+            return head
+    return base
+
+
+def _inflight_bases(repo):
+    """(bases, error): every in-flight run-token base under
+    var/autonomy-logs. A present state file IS an in-flight run
+    (pipeline._finish unlinks on completion). A MISSING dir is provably
+    empty (state can only exist inside it); any other listing failure
+    means absence cannot be proven -> (None, reason) and the caller
+    refuses (prevention-log #18). Reserved sidecar suffixes share the
+    glob namespace and can outlive their run -- skipped (final
+    dot-component rule, the _parse_run_token discipline)."""
+    logdir = os.path.join(repo, "var", "autonomy-logs")
+    try:
+        entries = os.listdir(logdir)
+    except FileNotFoundError:
+        return [], None
+    except OSError as exc:
+        return None, "cannot list %s: %s" % (logdir, exc)
+    bases = []
+    for fn in entries:
+        if not (fn.startswith(".pipeline-run-") and fn.endswith(".json")):
+            continue
+        base = fn[len(".pipeline-run-"):-len(".json")]
+        if not base:
+            continue
+        if base.rsplit(".", 1)[-1] in _pipeline._RESERVED_SIDECAR_SUFFIXES:
+            continue
+        bases.append(base)
+    return bases, None
+
+
+def _pending_markers(repo):
+    """(entries, error): [(kind, basename)] across the fire/ + queued/
+    marker dirs (stop/backoff never block a delete: per-NAME state that
+    stays honest for a resurfaced twin). Missing dir = provably empty;
+    any other listing failure refuses. Dotfiles are NOT skipped -- a
+    .DS_Store here reads as an unattributable marker and refuses loudly
+    (the message names it), which beats a skip a dot-named trigger's
+    marker could hide behind."""
+    out = []
+    for kind in ("fire", "queued"):
+        d = os.path.join(repo, "var", "trigger-ctl", kind)
+        try:
+            names = os.listdir(d)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            return None, "cannot list %s: %s" % (d, exc)
+        out.extend((kind, n) for n in sorted(names))
+    return out, None
+
+
+def trigger_delete(repo, name):
+    """Delete the SD-34 trigger FILE shadow
+    <repo>/var/autonomy/triggers/<name>.json. The committed twin (reset)
+    or the same-name role shim (the D2 materialise flip, backward)
+    resurfaces by construction; a shadow-only trigger is gone for good.
+    The shadow's CONTENT is never read -- deleting an invalid/corrupt
+    shadow is precisely the recovery path this action provides. Returns
+    {ok, path, message} / {ok: False, error}; refusals leave the tree
+    byte-identical."""
+    if not _pipeline.valid_pipeline_name(name):
+        return {"ok": False, "error": "trigger name has invalid charset"}
+    shadow = os.path.join(repo, "var", "autonomy", "triggers",
+                          "%s.json" % name)
+    committed = os.path.join(repo, ".autonomy", "triggers", "%s.json" % name)
+    if os.path.islink(shadow) or (os.path.exists(shadow)
+                                  and not os.path.isfile(shadow)):
+        # the resolver ignores symlinked shadows; unlinking a squatter the
+        # resolver never served would "succeed" at nothing -- refuse and
+        # name it (the trigger_save shape).
+        return {"ok": False, "error":
+                "the trigger shadow path is not a clean file -- refusing"}
+    if not os.path.isfile(shadow):
+        if os.path.isfile(committed):
+            return {"ok": False, "error":
+                    "trigger %r is a committed pack trigger with no local "
+                    "shadow -- the dashboard only removes var/ shadows "
+                    "(SD-34); edit or remove it in the repo" % name}
+        return {"ok": False,
+                "error": "no trigger shadow %r to remove" % name}
+    bases, err = _inflight_bases(repo)
+    if err:
+        return {"ok": False,
+                "error": "cannot prove no in-flight run -- %s" % err}
+    for base in bases:
+        if _token_matches(_strip_slot(base), name):
+            return {"ok": False, "error":
+                    "trigger %r has an in-flight run (%s) -- let it finish "
+                    "or stop it before deleting" % (name, base)}
+    markers, err = _pending_markers(repo)
+    if err:
+        return {"ok": False,
+                "error": "cannot prove no pending fire -- %s" % err}
+    for kind, entry in markers:
+        if _token_matches(entry, name):
+            return {"ok": False, "error":
+                    "trigger %r has a pending %s marker (%s) -- let the "
+                    "supervisor consume it or remove it first"
+                    % (name, kind, entry)}
+    try:
+        os.unlink(shadow)
+    except OSError as exc:
+        return {"ok": False,
+                "error": "could not remove the trigger shadow: %s" % exc}
+    # What resurfaces (display truth, total -- a probe failure degrades to
+    # the generic wording, never blocks a delete that already happened).
+    message = "trigger %r removed" % name
+    if os.path.isfile(committed):
+        message += " -- the committed trigger resurfaces next tick"
+    else:
+        try:
+            import roles as _roles
+            cfg, rc = _roles._load_config(repo)
+            if rc == 0 and cfg is not None and any(
+                    t.get("name") == name
+                    for t in _triggers.shim_triggers(cfg)):
+                message += (" -- the role shim resurfaces: role prompt/"
+                            "scope/model settings apply to its runs again")
+        except Exception:
+            pass
+    return {"ok": True, "path": os.path.relpath(shadow, repo),
+            "message": message}
+
+
+def pipeline_delete(repo, name):
+    """Delete the SD-34 pipeline DIR shadow
+    <repo>/var/autonomy/pipelines/<name>/ plus its provenance sidecar.
+    Detach is ONE atomic rename into the delete-owned <name>.trash
+    scratch (a live rmtree could partially mutate before failing; sharing
+    the writers' .staging would race a concurrent create/save), then a
+    best-effort rmtree of the trash. Returns {ok, path, message} /
+    {ok: False, error}; refusals leave the tree byte-identical."""
+    if not _pipeline.valid_pipeline_name(name):
+        return {"ok": False, "error": "pipeline name has invalid charset"}
+    committed = os.path.join(repo, ".autonomy", "pipelines", name)
+    shadow = os.path.join(repo, "var", "autonomy", "pipelines", name)
+    if os.path.islink(shadow) or (os.path.exists(shadow)
+                                  and not os.path.isdir(shadow)):
+        return {"ok": False, "error":
+                "the pipeline shadow path is not a clean directory -- "
+                "refusing"}
+    if not os.path.isdir(shadow):
+        if os.path.isdir(committed):
+            return {"ok": False, "error":
+                    "pipeline %r is a committed template with no local "
+                    "shadow -- the dashboard only removes var/ shadows "
+                    "(SD-34); edit or remove it in the repo" % name}
+        return {"ok": False,
+                "error": "no pipeline shadow %r to remove" % name}
+    # In-flight guard: attribution is by CONTENT (the run's embedded doc);
+    # state that cannot PROVE its pipeline != name refuses (unreadable,
+    # non-dict, missing/malformed doc -- malformed evidence IS unreadable
+    # evidence, prevention-log #18). Mid-run brief reads come from the
+    # pipeline dir, so deleting under a live run is fail-open.
+    logdir = os.path.join(repo, "var", "autonomy-logs")
+    bases, err = _inflight_bases(repo)
+    if err:
+        return {"ok": False,
+                "error": "cannot prove no in-flight run -- %s" % err}
+    for base in bases:
+        run_pipeline = None
+        try:
+            with open(os.path.join(logdir, ".pipeline-run-%s.json" % base),
+                      encoding="utf-8") as fh:
+                state = json.load(fh)
+            doc = state.get("doc") if isinstance(state, dict) else None
+            nm = doc.get("name") if isinstance(doc, dict) else None
+            run_pipeline = nm if isinstance(nm, str) else None
+        except Exception:
+            run_pipeline = None
+        if run_pipeline is None:
+            return {"ok": False, "error":
+                    "run state %r is unreadable -- cannot prove it is not "
+                    "a run of %r; clean it up first" % (base, name)}
+        if run_pipeline == name:
+            return {"ok": False, "error":
+                    "pipeline %r has an in-flight run (%s) -- let it "
+                    "finish or stop it before deleting" % (name, base)}
+    # Marker guard: a pending fire/queued marker consumed after the delete
+    # would start against the resurfaced twin (or refuse and burn a
+    # backoff). An entry refuses when it matches a trigger BOUND here,
+    # when it matches a REFUSED trigger-file stem (binding unknowable --
+    # incl. the good--x prefix ambiguity, CP1 pass 2), or when it matches
+    # no known trigger at all (unattributable junk).
+    markers, err = _pending_markers(repo)
+    if err:
+        return {"ok": False,
+                "error": "cannot prove no pending fire -- %s" % err}
+    if markers:
+        try:
+            trigs, _warns = _triggers.enumerate_triggers(
+                repo, dispatchable_only=False)
+        except Exception as exc:
+            return {"ok": False, "error":
+                    "cannot enumerate triggers to attribute pending "
+                    "markers: %s" % exc}
+        bound = {}
+        for t in trigs:
+            if isinstance(t, dict) and isinstance(t.get("name"), str):
+                bound[t["name"]] = t.get("pipeline") or ""
+        stems = set()
+        for d in (os.path.join(repo, ".autonomy", "triggers"),
+                  os.path.join(repo, "var", "autonomy", "triggers")):
+            try:
+                stems.update(fn[:-len(".json")] for fn in os.listdir(d)
+                             if fn.endswith(".json"))
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                return {"ok": False, "error":
+                        "cannot list %s to attribute pending markers: %s"
+                        % (d, exc)}
+        refused_stems = stems - set(bound)
+        for kind, entry in markers:
+            hits = [t for t in bound if _token_matches(entry, t)]
+            if any(bound[t] == name for t in hits):
+                which = sorted(t for t in hits if bound[t] == name)[0]
+                return {"ok": False, "error":
+                        "trigger %r is bound to %r and has a pending %s "
+                        "marker (%s) -- let the supervisor consume it or "
+                        "remove it first" % (which, name, kind, entry)}
+            if any(_token_matches(entry, s) for s in refused_stems):
+                return {"ok": False, "error":
+                        "pending %s marker %r matches a broken trigger "
+                        "file -- its binding is unknowable; fix or remove "
+                        "the trigger (or the marker) first" % (kind, entry)}
+            if not hits:
+                return {"ok": False, "error":
+                        "pending %s marker %r matches no known trigger -- "
+                        "cannot prove it is not %r's; remove it or let "
+                        "the supervisor consume it" % (kind, entry, name)}
+    # Detach: reclaim the delete's OWN stale scratch, then ONE atomic
+    # rename after which the resolver provably no longer sees the shadow.
+    trash = shadow + ".trash"
+    try:
+        if os.path.islink(trash):
+            os.unlink(trash)
+        elif os.path.isdir(trash):
+            _shutil.rmtree(trash)
+        elif os.path.exists(trash):
+            os.unlink(trash)
+    except OSError as exc:
+        return {"ok": False, "error":
+                "could not reclaim the stale scratch %r: %s"
+                % (os.path.basename(trash), exc)}
+    try:
+        os.rename(shadow, trash)
+    except OSError as exc:
+        return {"ok": False,
+                "error": "could not detach the pipeline shadow: %s" % exc}
+    _shutil.rmtree(trash, ignore_errors=True)
+    # Sidecar AFTER the detach (the point of no return). A removal failure
+    # is REPORTED, never silent: the leftover is invisible to the reader
+    # (only rows with a dir consult provenance) and re-create overwrites
+    # orphans (the D3 rules).
+    note = ""
+    sidecar = _pipeline.provenance_path(repo, name)
+    try:
+        if os.path.islink(sidecar) or os.path.exists(sidecar):
+            os.unlink(sidecar)
+    except OSError as exc:
+        note = (" -- its provenance sidecar could not be removed (%s); "
+                "the leftover is inert and a future create overwrites it"
+                % exc)
+    if os.path.isdir(committed):
+        message = ("local shadow of %r removed -- the committed template "
+                   "is live again (next runs read it)" % name)
+    else:
+        message = ("pipeline %r removed -- triggers still bound to it "
+                   "will refuse to start until rebound or deleted" % name)
+    return {"ok": True, "path": os.path.relpath(shadow, repo),
+            "message": message + note}
