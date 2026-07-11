@@ -38,10 +38,14 @@ per-feature write endpoint is still forbidden — new mutations become
   validates (defense in depth). Lifecycle actions: `pause`/`resume`/`stop`/
   `start`; plus `set_model`, `config_set`, `repo_add`/`repo_remove`,
   `cred_*`, `acct_*`, the workstream-authoring set (`ws_add`, `ws_set`,
-  `ws_prompt_set`, `repo_init`, `pipeline_save`, and `trigger_save` — #383
+  `ws_prompt_set`, `repo_init`, `pipeline_save`, `trigger_save` — #383
   D2, the SD-29 writer over the SD-34 trigger FILE shadow
   `var/autonomy/triggers/<name>.json`; validator-refused content never
-  lands, refusals leave the shadow byte-identical), and the per-trigger
+  lands, refusals leave the shadow byte-identical — and `pipeline_create`
+  — #383 D3, blank/clone creation into `var/autonomy/pipelines/<name>/`
+  + the `<name>.provenance.json` sidecar via a mkdir-claim install;
+  collisions with committed OR shadow names refuse, an invalid clone
+  source refuses, refusals leave the tree byte-identical), and the per-trigger
   marker set (`trigger_fire`/`trigger_stop`/`trigger_resume`, #383 D1 —
   enumeration-derived validation + `find_lane_service` lane routing in
   `execute_trigger_ctl`; writes ONLY `var/trigger-ctl/{fire,stop}/`,
