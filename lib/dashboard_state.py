@@ -14,7 +14,6 @@ environment-coupled edges (pid liveness, git/gh state) are injected so the
 whole module is testable without a process table or the network.
 """
 import glob
-import hashlib
 import json
 import os
 import re
@@ -2975,10 +2974,11 @@ def _gallery_rows(repo_path, trigs, rollup):
             fp = prov.pop("fingerprint", None)
             if prov.get("created") == "clone" and fp:
                 try:
-                    cur = json.dumps(doc, indent=2, sort_keys=True,
-                                     allow_nan=False)
-                    prov["diverged"] = (fp != "sha256:" + hashlib.sha256(
-                        cur.encode("utf-8")).hexdigest())
+                    # content fingerprint = doc + briefs (ONE rule with the
+                    # writer: pipeline.content_fingerprint) -- a brief edit
+                    # flips diverged too, not only a doc edit (Codex CP2).
+                    prov["diverged"] = (
+                        fp != pipeline_mod.content_fingerprint(doc, pdir))
                 except Exception:
                     pass            # no comparison, no claim (key absent)
             row["provenance"] = prov

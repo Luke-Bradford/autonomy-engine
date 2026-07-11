@@ -1528,15 +1528,31 @@ class PipelineCreateTest(unittest.TestCase):
         self.assertEqual(prov["source"], "flow")
         self.assertEqual(prov["source_version"], 3)
 
-    def test_clone_fingerprint_matches_installed_doc(self):
-        import hashlib
+    def test_clone_fingerprint_is_the_shared_content_rule(self):
+        # ONE fingerprint rule (pipeline.content_fingerprint: doc + briefs)
+        # for the writer and the gallery reader -- recomputing over the
+        # installed shadow must reproduce the recorded value exactly.
+        import pipeline as pl
         repo = self._repo()
         self.assertTrue(dc.pipeline_create(repo, "flow2", source="flow")["ok"])
-        with open(os.path.join(self._shadow(repo, "flow2"),
-                               "pipeline.json"), "rb") as fh:
-            digest = hashlib.sha256(fh.read()).hexdigest()
+        shadow = self._shadow(repo, "flow2")
+        doc = pl.load_doc(os.path.join(shadow, "pipeline.json"))
         with open(self._sidecar(repo, "flow2")) as fh:
-            self.assertEqual(json.load(fh)["fingerprint"], "sha256:" + digest)
+            self.assertEqual(json.load(fh)["fingerprint"],
+                             pl.content_fingerprint(doc, shadow))
+
+    def test_bool_source_version_written_as_none(self):
+        # `version: true` validates today (bool is an int subclass); the
+        # reader's exact schema rejects bools -- the writer coerces to the
+        # honest None so the sidecar is never dropped whole (Codex CP2).
+        repo = self._repo()
+        committed = os.path.join(repo, ".autonomy", "pipelines", "flow")
+        with open(os.path.join(committed, "pipeline.json"), "w") as fh:
+            json.dump(dict(self.doc, version=True), fh)
+        res = dc.pipeline_create(repo, "flow2", source="flow")
+        if res["ok"]:      # only meaningful while the validator accepts it
+            with open(self._sidecar(repo, "flow2")) as fh:
+                self.assertIsNone(json.load(fh)["source_version"])
 
     def test_clone_of_effective_shadow_doc(self):
         # cloning a locally-edited pipeline clones what the operator SEES

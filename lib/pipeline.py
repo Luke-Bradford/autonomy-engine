@@ -21,6 +21,7 @@ CLI (roles.py conventions; rc 0 ok / 1 invalid / 2 unreadable):
       [--session-log <p>] [--verdict <p>] [--journal <p>]
   pipeline.py ledger <journal-file> <trigger> [--pipeline <name>] [--native]
 """
+import hashlib
 import json
 import os
 import re
@@ -382,6 +383,31 @@ def provenance_path(repo, name):
     Same PRECONDITION as effective_pipeline_dir: `name` is charset-valid."""
     return os.path.join(repo, "var", "autonomy", "pipelines",
                         "%s.provenance.json" % name)
+
+
+def content_fingerprint(doc, pipeline_dir):
+    """The clone-provenance CONTENT fingerprint (Phase D3, #383): sha256
+    over the canonical doc serialization PLUS every declared brief's bytes
+    (sorted by ref, NUL-framed). Briefs are part of a pipeline's content --
+    a fingerprint over pipeline.json alone would leave a brief edit
+    reading "not diverged" (a display lie; Codex CP2). One home so the
+    writer (records at clone time) and the gallery reader (recomputes for
+    `diverged`) can never drift. RAISES on any unreadable piece -- the
+    caller decides refusal (writer) vs no-claim (reader)."""
+    h = hashlib.sha256()
+    h.update(json.dumps(doc, indent=2, sort_keys=True,
+                        allow_nan=False).encode("utf-8"))
+    refs = set()
+    for node in (doc.get("nodes") or []):
+        if isinstance(node, dict):
+            ref = node.get("brief_ref")
+            if isinstance(ref, str) and _valid_brief_ref(ref):
+                refs.add(ref)
+    for ref in sorted(refs):
+        h.update(b"\0" + ref.encode("utf-8") + b"\0")
+        with open(os.path.join(pipeline_dir, ref), "rb") as fh:
+            h.update(fh.read())
+    return "sha256:" + h.hexdigest()
 
 
 def effective_edges(doc):

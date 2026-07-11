@@ -478,8 +478,7 @@ def format_cmd_error(cmd_name, stderr):
 
 import subprocess as _subprocess  # noqa: E402  (writer-only dependency)
 import shutil as _shutil  # noqa: E402  (pipeline_save dir stage/rollback)
-import hashlib as _hashlib  # noqa: E402  (pipeline_create provenance, D3)
-import time as _time  # noqa: E402  (provenance timestamp, D3)
+import time as _time  # noqa: E402  (pipeline_create provenance timestamp, D3)
 
 import sys as _sys  # noqa: E402
 _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1277,6 +1276,11 @@ def pipeline_save(repo, name, doc, briefs):
 # never inside it: the pipeline_save stale-prune owns the dir's contents).
 # Binary end-state: a created pipeline exists WITH its sidecar, or nothing
 # changed -- a provenance install failure rolls the whole create back.
+# Accepted bound (CP2, matches pipeline_save/trigger_save): the writer's own
+# scratch suffixes (<name>.staging, <sidecar>.tmp) are a RESERVED namespace --
+# stale regular-file/dir junk there is reclaimed at write time, not preserved
+# through a refusal; nothing outside that namespace is ever touched by a
+# refusal, and a squatter the reclaim cannot remove refuses with a rollback.
 
 _RESERVED_PIPE_SUFFIXES = (".staging", ".bak", ".provenance.json")
 
@@ -1464,6 +1468,11 @@ def pipeline_create(repo, name, source=None):
             return {"ok": False, "error":
                     "re-parse mismatch: the written document would not read "
                     "back identically -- write refused"}
+        # Content fingerprint over the STAGED tree (doc + briefs -- a brief
+        # edit must flip `diverged`, Codex CP2); staged files all exist
+        # post-validate, so a raise here is a staging failure.
+        fingerprint = (_pl.content_fingerprint(reloaded, staging)
+                       if source is not None else None)
     except (OSError, _pl.PipelineError) as exc:
         _cleanup(claimed=True, installed=False)
         return {"ok": False, "error": "could not stage the pipeline: %s" % exc}
@@ -1484,10 +1493,15 @@ def pipeline_create(repo, name, source=None):
             "at": int(_time.time())}
     if source is not None:
         prov["source"] = source
+        # bool is an int subclass; a doc with `version: true` validates
+        # today, and the reader's exact schema rejects bools -- coerce to
+        # the honest None rather than writing a sidecar the reader drops
+        # whole (Codex CP2).
         prov["source_version"] = (src_version
-                                  if isinstance(src_version, int) else None)
-        prov["fingerprint"] = "sha256:" + _hashlib.sha256(
-            serialized.encode("utf-8")).hexdigest()
+                                  if isinstance(src_version, int)
+                                  and not isinstance(src_version, bool)
+                                  else None)
+        prov["fingerprint"] = fingerprint
     try:
         prov_bytes = json.dumps(prov, indent=2, sort_keys=True,
                                 allow_nan=False) + "\n"

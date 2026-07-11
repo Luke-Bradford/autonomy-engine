@@ -4427,6 +4427,21 @@ class GalleryProvenanceTest(BuildTriggersViewTest):
         prov = self._rows(d)["flow2"]["provenance"]
         self.assertIs(prov["diverged"], False)
 
+    def test_brief_edit_flips_diverged(self):
+        # briefs are pipeline content: the fingerprint covers doc + briefs
+        # (pipeline.content_fingerprint), so editing only a brief must
+        # read as diverged too (Codex CP2 -- a doc-only hash would leave
+        # the gallery claiming "not diverged" after a brief rewrite).
+        import dashboard_control as dcx
+        d = self._git(self._mini_repo({}))
+        self.assertTrue(dcx.pipeline_create(d, "flow2", source="flow")["ok"])
+        brief = os.path.join(d, "var", "autonomy", "pipelines", "flow2",
+                             "pick.md")
+        with open(brief, "w") as fh:
+            fh.write("rewritten brief\n")
+        prov = self._rows(d)["flow2"]["provenance"]
+        self.assertIs(prov["diverged"], True)
+
     def test_junk_sidecars_read_as_none(self):
         d = self._mini_repo({})
         cases = [
