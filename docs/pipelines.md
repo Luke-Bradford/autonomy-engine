@@ -456,21 +456,45 @@ immediately if the result is runnable.
 
 - **🗂 pipelines** — one card per pipeline (committed or locally-edited)
   with its version, activity count, trust rollup, and the triggers bound to
-  it. An invalid pipeline shows its errors on the card. Creating and cloning
-  pipelines from here is not built yet (the buttons say so).
+  it. An invalid pipeline shows its errors on the card. **＋ trigger**
+  opens the trigger form pre-bound to that pipeline. Creating and cloning
+  pipelines from here is not built yet (the button says so).
 - **⚡ triggers** — one card per trigger: firing mode (continuous /
   schedule / manual / event), enabled state, overlap policy, run-window
   state, parameter count, per-trigger trust tier, and any pending markers
-  (a queued fire, an error backoff, a stop freeze). Two controls work
-  today: **▶ run now** writes a run-now marker for a **manual-mode**
-  trigger — the supervisor fires it on its next pass, or holds it while the
-  trigger is disabled or outside its run window; **■ stop / ▶ resume** set
-  and clear the freeze marker (a stopped trigger starts nothing and its
-  in-flight runs hold in place). Run-now is disabled, with the reason
-  shown, when firing would be refused — for example a required parameter
-  with no value. Enabling/disabling and editing a trigger from this page is
-  not built yet. A trigger file the engine refuses to load appears here
-  verbatim, and also in the dashboard's "Needs you" queue.
+  (a queued fire, an error backoff, a stop freeze). The controls:
+  - **＋ new trigger / ✎ edit** open the trigger form: pick the pipeline,
+    the firing mode (with its cron string or event + payload mapping),
+    overlap policy, run windows, and a **typed input per parameter the
+    pipeline declares** (booleans offer unset/true/false; enums offer
+    their choices; a blank input means "use the pipeline's default").
+    Saving **validates first** — an invalid trigger is refused with the
+    reasons, and nothing lands. Saves go to a **local shadow**
+    (`var/autonomy/triggers/<name>.json`); the committed pack stays the
+    shareable default. A save whose pipeline is missing, or whose
+    parameters would not currently resolve, still lands — with a warning —
+    so you can stage work in progress; such a trigger refuses to start
+    until fixed, and its card says why.
+  - **the enabled switch** disables/enables a trigger (disable = drain: no
+    new runs, in-flight runs finish). Editing or toggling a trigger that
+    was synthesised from a legacy `roles:` entry **converts it to a native
+    trigger file** — the page asks first, because the role's own
+    prompt/model settings stop applying: the pipeline's own configuration
+    drives the run from then on.
+  - **▶ run now** fires a **manual-mode** trigger on the supervisor's next
+    pass (or holds while disabled / outside its run window). When the
+    pipeline declares parameters, run-now opens a form to **override them
+    for this one run** (pipeline default < trigger's saved value < your
+    run-now value); the payload is validated before anything is written,
+    and secret parameters are never accepted here. Run-now is disabled,
+    with the reason shown, when firing would be refused.
+  - **■ stop / ▶ resume** set and clear the freeze marker (a stopped
+    trigger starts nothing and its in-flight runs hold in place).
+
+  A trigger file the engine refuses to load appears here verbatim, and
+  also in the dashboard's "Needs you" queue. Deleting a trigger (or
+  resetting a locally-edited one back to the committed file) is not built
+  yet — disable it, or remove the shadow file by hand.
 - **▶ runs** — in-flight runs first (one row per parallel slot), then the
   recent history. A run started by `call_pipeline` indents under its
   caller; **💡 canvas** opens that run's own graph lit with its progress,

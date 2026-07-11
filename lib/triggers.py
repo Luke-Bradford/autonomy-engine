@@ -494,6 +494,97 @@ def trust_rollup(repo, journal_path, trigs=None):
     return rows, rollup, warnings
 
 
+def fire_params_check(repo, name, path):
+    """Classify a run-now fire-marker PAYLOAD for the supervisor (Phase D2,
+    #383). Returns (cls, reason):
+      "ok"        -- payload usable (or empty = no overrides).
+      "payload"   -- DETERMINISTICALLY bad payload (unparseable, non-object,
+                     non-scalar value, undeclared key, secret target, or a
+                     resolve failure ONLY the merged set has): the caller
+                     removes the marker loudly -- keeping it would retry a
+                     deterministic refusal forever.
+      "transient" -- the trigger/pipeline side failed (unreadable trigger,
+                     missing doc) OR the SAVED params already fail without
+                     the payload (the pre-existing D1 bound): keep + defer,
+                     under-fire is the safe side.
+    Both dry runs go through pipeline._resolve_run_params -- the EXACT call
+    start_run_trigger makes -- so the verdict inherits the start-time
+    repo/account existence checks too (start-parity by construction).
+    Secret refusals name the KEY only, never the value (SD-8)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = fh.read(65537)
+    except OSError as exc:
+        return "transient", "payload unreadable: %s" % exc     # I/O hiccup
+    except UnicodeDecodeError:
+        # non-UTF-8 bytes are a DETERMINISTIC fault (they will never
+        # decode) -- classify 'payload' so the marker is removed, never
+        # crash firecheck with an uncaught traceback (review WARNING;
+        # UnicodeDecodeError is a ValueError, not an OSError).
+        return "payload", "run-now payload is not valid UTF-8 text"
+    if len(raw) > 65536:
+        return "payload", "run-now payload exceeds 65536 bytes"
+    if not raw.strip():
+        return "ok", None
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        return "payload", "run-now payload is not valid JSON: %s" % exc
+    if not isinstance(payload, dict):
+        return "payload", "run-now payload must be a JSON object"
+    try:
+        trig = load_trigger(repo, name)
+        doc, _meta = pipeline.resolve_pipeline_doc(repo, trig["pipeline"])
+    except PipelineError as exc:
+        return "transient", str(exc)
+    declared = doc.get("params") or []
+    by_name = {p["name"]: p for p in declared
+               if isinstance(p, dict) and isinstance(p.get("name"), str)}
+    # Validate EVERY payload value in isolation first: undeclared key,
+    # secret target, non-scalar, a type/enum that will not coerce, or a
+    # repo/account value that does not exist are all DETERMINISTIC payload
+    # faults -- "payload" regardless of the saved params' own state (CP2:
+    # an undeclared key was masked as transient when the saved set also
+    # failed, so the marker was kept forever). Only AFTER the payload is
+    # individually clean is a residual merged failure attributable to the
+    # saved trigger / a required-unset param -> transient.
+    payload_typed = {}
+    for k, v in payload.items():
+        p = by_name.get(k)
+        if p is None:
+            return "payload", "run-now payload sets undeclared param %r" % k
+        if p.get("type") == "secret":
+            return "payload", ("run-now payload targets secret param %r "
+                               "-- a fire payload is never a credential"
+                               % k)
+        if isinstance(v, (dict, list)):
+            return "payload", "run-now param %r must be a scalar" % k
+        try:
+            payload_typed[k] = pipeline._coerce(k, p.get("type"), v,
+                                                p.get("choices"))
+        except PipelineError as exc:
+            return "payload", str(exc)
+    try:
+        # existence of the payload's OWN repo/account values -- the same
+        # check start runs, deterministic given the registry (CP2 finding 2)
+        pipeline.check_param_existence(
+            declared, payload_typed,
+            known_repos=pipeline._registered_repos,
+            known_accounts=pipeline._known_accounts)
+    except PipelineError as exc:
+        return "payload", str(exc)
+    saved = dict(trig.get("params") or {})
+    merged = dict(saved)
+    merged.update(payload)
+    try:
+        pipeline._resolve_run_params(repo, doc, merged)
+        return "ok", None
+    except PipelineError as merged_exc:
+        # every payload value validated above -> a residual failure is the
+        # saved trigger's / a required-unset param's, not the payload's
+        return "transient", str(merged_exc)
+
+
 def _cli_opts(args):
     """Positionals + (--lane, --now). --now is the run-window clock's
     test seam: digits-only epoch (argv-boundary gate, prevention-log #6);
@@ -653,6 +744,18 @@ def main(argv):
         for p in sorted(rollup):
             print("PIPELINE\t%s\t%s" % (p, rollup[p]))
         return 0
+    if cmd == "firecheck":
+        # Run-now payload classification for resolve_manual_fires (Phase
+        # D2, #383): rc 0 = usable, rc 3 = bad payload (caller removes the
+        # marker loudly), rc 1 = transient (caller keeps + defers).
+        if len(pos) != 3:
+            print("usage: triggers.py firecheck <repo> <name> <payload-file>",
+                  file=sys.stderr)
+            return 2
+        cls, reason = fire_params_check(pos[0], pos[1], pos[2])
+        if reason:
+            print("triggers firecheck: %s" % reason, file=sys.stderr)
+        return {"ok": 0, "payload": 3}.get(cls, 1)
     if cmd == "validate":
         try:
             trigs, warns = enumerate_triggers(pos[0], lane)

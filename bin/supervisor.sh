@@ -1170,7 +1170,7 @@ trigger_start_token_for() {   # $1=name; show-backed capacity gate, rc 1 = full
 # Capture-then-case, never producer|grep (prevention-log #7/#11).
 resolve_manual_fires() {
   local d f name manual_list mname mpolicy mmax
-  local policy max slot tok
+  local policy max slot tok params_file fc_rc
   d="$(trigger_ctl_dir fire)"
   [ -d "$d" ] || return 0
   manual_list="$(_triggers_enumerate manual "$AUTONOMY_TARGET_REPO")" || {
@@ -1211,7 +1211,35 @@ resolve_manual_fires() {
       continue
     fi
     if [ "$slot" = "0" ]; then tok="$name"; else tok="$name@$slot"; fi
-    if run_session "$tok" native; then
+    # Run-now params payload (Phase D2, #383): a non-empty marker BODY is
+    # a JSON params object. firecheck classifies it -- rc 0 = usable
+    # (the marker path travels to `pipeline.py start --params-file`);
+    # rc 3 = deterministically bad, remove LOUDLY (keeping it would retry
+    # a deterministic refusal forever -- the queued invalid-kind
+    # discipline); anything else = transient, keep + defer (under-fire is
+    # the safe side). Empty markers stay the D1 existence-only path.
+    params_file=""
+    if [ -s "$f" ]; then
+      # firecheck's rc 1/3 are its NORMAL non-ok signals (transient / bad
+      # payload), NOT errors. This function runs under `set -uo pipefail`,
+      # NOT `set -e` (prevention-log #17: the supervisor is the set-e
+      # exemption), so a bare command's non-zero rc never aborts the loop;
+      # capture it into fc_rc via `|| fc_rc=$?` so the intent is explicit
+      # and a future `set -e` could not change it either (the `||` guards).
+      fc_rc=0
+      python3 "$ENGINE_HOME/lib/triggers.py" firecheck \
+        "$AUTONOMY_TARGET_REPO" "$name" "$f" >>"$SUPLOG" 2>&1 || fc_rc=$?
+      case $fc_rc in
+        0) params_file="$f" ;;
+        3)
+          log "WARN trigger-ctl: run-now payload for '$name' is invalid -- removing (fire lost; re-fire from the dashboard)"
+          rm -f "$f" 2>>"$SUPLOG" || true; continue ;;
+        *)
+          log "NOTE trigger '$name': payload check unavailable -- fire deferred (marker kept)"
+          continue ;;
+      esac
+    fi
+    if run_session "$tok" native "$params_file"; then
       rm -f "$f" 2>>"$SUPLOG" || true
     else
       log "WARN manual fire for '$name' rc=$? -- marker kept for retry"
@@ -1770,7 +1798,10 @@ inflight_tokens() {
 # PB_COUNT + PIPE_DONE and arrays PB_NODE PB_PROMPT PB_VERDICT
 # PB_MODEL PB_EFFORT PB_ACCOUNT PB_AGENT ('' = no override).
 resolve_pipeline_ready() {
-  local role="$1" max="${2:-1}" slot="${3:-0}" kind="${4:-shim}" state out line key val i _sv _sl
+  # params_file (5th arg, Phase D2): the run-now payload file -- applied
+  # ONLY on the start-a-new-run arm; optional-with-empty-default so every
+  # pre-D2 caller is byte-identical.
+  local role="$1" max="${2:-1}" slot="${3:-0}" kind="${4:-shim}" params_file="${5:-}" state out line key val i _sv _sl
   PB_NODE=(); PB_PROMPT=(); PB_VERDICT=()
   PB_MODEL=(); PB_EFFORT=(); PB_ACCOUNT=(); PB_AGENT=(); PB_SECRET=()
   PB_COUNT=0; PIPE_DONE=0; PIPE_WAIT=0
@@ -1780,12 +1811,16 @@ resolve_pipeline_ready() {
     if [ -n "${AUTONOMY_LANE:-}" ]; then
       python3 "$ENGINE_HOME/lib/pipeline.py" start \
         "$AUTONOMY_TARGET_REPO" "$role" "$state" \
-        --lane "$AUTONOMY_LANE" --kind "$kind" >>"$SUPLOG" 2>&1 || return 1
+        --lane "$AUTONOMY_LANE" --kind "$kind" \
+        ${params_file:+--params-file "$params_file"} >>"$SUPLOG" 2>&1 || return 1
     else
       python3 "$ENGINE_HOME/lib/pipeline.py" start \
         "$AUTONOMY_TARGET_REPO" "$role" "$state" \
-        --kind "$kind" >>"$SUPLOG" 2>&1 || return 1
+        --kind "$kind" \
+        ${params_file:+--params-file "$params_file"} >>"$SUPLOG" 2>&1 || return 1
     fi
+  elif [ -n "$params_file" ]; then
+    log "NOTE pipeline: run-now params ignored -- run already in flight (params apply at start)"
   fi
   if ! out="$(python3 "$ENGINE_HOME/lib/pipeline.py" ready "$state" \
       --max "$max" --brief-dir "$LOGDIR" \
@@ -2035,7 +2070,11 @@ materialize_planner() {
 }
 
 run_session() {
-  local token="${1:-${ROLE:-coder}}" kind="${2:-shim}" role slot
+  # params_file (Phase D2, #383): the run-now payload marker path, threaded
+  # to the start arm only. OPTIONAL-with-empty-default: every pre-D2 call
+  # site (main loop, queued drain, event starts) passes through unchanged
+  # and empty means "no overrides".
+  local token="${1:-${ROLE:-coder}}" kind="${2:-shim}" params_file="${3:-}" role slot
   role="$(token_name "$token")" || { log "dispatch: bad token '$token' -- REFUSING"; return 2; }
   slot="$(token_slot "$token")"
   preflight || return $?
@@ -2065,7 +2104,7 @@ run_session() {
   # adapter sourcing so a node's runs_as.agent override selects the adapter,
   # and BEFORE resolve_session_settings so node model/effort sit in the
   # ROLE_* slot.
-  if ! resolve_pipeline_ready "$role" 8 "$slot" "$kind"; then
+  if ! resolve_pipeline_ready "$role" 8 "$slot" "$kind" "$params_file"; then
     log "dispatch: cannot resolve pipeline ready set for role '$role' -- REFUSING session (fail-safe; see supervisor.log)"
     return 2
   fi

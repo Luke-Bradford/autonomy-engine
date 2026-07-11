@@ -948,5 +948,205 @@ class RunWindowCliTest(unittest.TestCase):
         self.assertEqual(triggers.main(["dispatch", self.tmp, "--now"]), 2)
 
 
+class FireParamsCheckTest(unittest.TestCase):
+    """Phase D2 (#383): fire_params_check classifies a run-now payload for
+    the supervisor -- 'payload' (deterministically bad: remove the marker),
+    'transient' (trigger/pipeline side failed OR the saved params already
+    fail without the payload: keep + defer), 'ok'. Both dry runs go through
+    pipeline._resolve_run_params so the verdict is start-parity BY
+    CONSTRUCTION (CP1 pass-1 finding 4: a bare resolve_params would miss
+    the repo/account existence checks)."""
+
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        pdir = os.path.join(self.repo, ".autonomy", "pipelines", "pflow")
+        self.tdir = os.path.join(self.repo, ".autonomy", "triggers")
+        os.makedirs(pdir)
+        os.makedirs(self.tdir)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("engine:\n  label: t\n")
+        doc = {"name": "pflow", "version": 1,
+               "caps": {"max_sessions_per_run": 4},
+               "params": [
+                   {"name": "q", "type": "string", "required": True},
+                   {"name": "n", "type": "number", "required": False},
+                   {"name": "tok", "type": "secret", "required": False}],
+               "nodes": [{"id": "a", "type": "pick", "brief_ref": "a.md"}],
+               "edges": []}
+        with open(os.path.join(pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(pdir, "a.md"), "w") as fh:
+            fh.write("work on ${params.q}")
+        self.payload = os.path.join(self.repo, "payload.json")
+
+    def _trigger(self, params=None):
+        with open(os.path.join(self.tdir, "adhoc.json"), "w") as fh:
+            json.dump({"name": "adhoc", "pipeline": "pflow",
+                       "params": (params if params is not None
+                                  else {"q": "saved"}),
+                       "firing": {"mode": "manual"}}, fh)
+
+    def _write(self, text):
+        with open(self.payload, "w") as fh:
+            fh.write(text)
+
+    def _check(self):
+        return triggers.fire_params_check(self.repo, "adhoc", self.payload)
+
+    def test_valid_payload_is_ok(self):
+        self._trigger()
+        self._write('{"q": "override", "n": 3}')
+        cls, reason = self._check()
+        self.assertEqual(cls, "ok")
+        self.assertIsNone(reason)
+
+    def test_empty_payload_is_ok(self):
+        self._trigger()
+        self._write("")
+        self.assertEqual(self._check()[0], "ok")
+
+    def test_junk_json_is_payload_class(self):
+        self._trigger()
+        self._write("{nope")
+        self.assertEqual(self._check()[0], "payload")
+
+    def test_non_object_is_payload_class(self):
+        self._trigger()
+        self._write('["q"]')
+        self.assertEqual(self._check()[0], "payload")
+
+    def test_non_scalar_value_is_payload_class(self):
+        self._trigger()
+        self._write('{"q": ["x"]}')
+        cls, reason = self._check()
+        self.assertEqual(cls, "payload")
+        self.assertIn("scalar", reason)
+
+    def test_undeclared_key_is_payload_class(self):
+        self._trigger()
+        self._write('{"ghost": "x"}')
+        self.assertEqual(self._check()[0], "payload")
+
+    def test_secret_target_is_payload_class_without_echo(self):
+        self._trigger()
+        self._write('{"tok": "hunter2 raw!"}')
+        cls, reason = self._check()
+        self.assertEqual(cls, "payload")
+        self.assertIn("tok", reason)
+        self.assertNotIn("hunter2", reason)
+
+    def test_type_mismatch_is_payload_class(self):
+        self._trigger()
+        self._write('{"n": "abc"}')
+        self.assertEqual(self._check()[0], "payload")
+
+    def test_saved_params_already_failing_is_transient(self):
+        # required q unset in BOTH saved and payload: the D1 bound, not the
+        # payload's fault -- keep the marker (under-fire is the safe side).
+        self._trigger(params={})
+        self._write('{"n": 3}')
+        self.assertEqual(self._check()[0], "transient")
+
+    def test_bad_payload_key_stays_payload_when_saved_also_fails(self):
+        # CP2: an undeclared payload key is DETERMINISTICALLY the payload's
+        # fault even when the saved params ALSO fail (required q unset) --
+        # the marker must be removed (rc 3), never kept forever.
+        self._trigger(params={})            # required q unset -> saved fails
+        self._write('{"ghost": "x"}')       # ...AND an undeclared payload key
+        self.assertEqual(self._check()[0], "payload")
+
+    def test_bad_type_payload_stays_payload_when_saved_also_fails(self):
+        self._trigger(params={})
+        self._write('{"n": "abc"}')         # deterministic type fault
+        self.assertEqual(self._check()[0], "payload")
+
+    def test_payload_fixing_a_missing_required_is_ok(self):
+        self._trigger(params={})
+        self._write('{"q": "supplied"}')
+        self.assertEqual(self._check()[0], "ok")
+
+    def test_broken_trigger_is_transient(self):
+        with open(os.path.join(self.tdir, "adhoc.json"), "w") as fh:
+            fh.write("{corrupt")
+        self._write('{"q": "x"}')
+        self.assertEqual(self._check()[0], "transient")
+
+    def test_missing_pipeline_is_transient(self):
+        with open(os.path.join(self.tdir, "adhoc.json"), "w") as fh:
+            json.dump({"name": "adhoc", "pipeline": "ghost",
+                       "params": {}, "firing": {"mode": "manual"}}, fh)
+        self._write('{"q": "x"}')
+        self.assertEqual(self._check()[0], "transient")
+
+    def test_unreadable_payload_is_transient(self):
+        self._trigger()
+        self.assertEqual(
+            triggers.fire_params_check(self.repo, "adhoc",
+                                       self.payload + ".ghost")[0],
+            "transient")
+
+    def test_oversize_payload_is_payload_class(self):
+        self._trigger()
+        self._write('{"q": "' + "x" * 70000 + '"}')
+        self.assertEqual(self._check()[0], "payload")
+
+    def test_non_utf8_payload_is_payload_class(self):
+        # review WARNING: fh.read() raises UnicodeDecodeError (a ValueError,
+        # not OSError) on non-UTF-8 bytes -- a decode failure is
+        # DETERMINISTIC (the bytes will never decode), so it must classify
+        # 'payload' (remove the marker), never crash firecheck.
+        self._trigger()
+        with open(self.payload, "wb") as fh:
+            fh.write(b"\xff\xfe\x00bad bytes")
+        cls, reason = self._check()
+        self.assertEqual(cls, "payload")
+        self.assertIn("UTF-8", reason)
+
+    def test_unregistered_repo_payload_is_payload_class(self):
+        # CP2 finding 2: firecheck runs the SAME existence checks start does
+        # (_resolve_run_params), so a payload naming an unregistered repo is
+        # a deterministic PAYLOAD fault -- removed, not retried forever.
+        pdir = os.path.join(self.repo, ".autonomy", "pipelines", "pflow")
+        with open(os.path.join(pdir, "pipeline.json")) as fh:
+            doc = json.load(fh)
+        doc["params"] = [{"name": "target", "type": "repo", "required": True}]
+        with open(os.path.join(pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(pdir, "a.md"), "w") as fh:
+            fh.write("no refs")
+        with open(os.path.join(self.tdir, "adhoc.json"), "w") as fh:
+            json.dump({"name": "adhoc", "pipeline": "pflow",
+                       "params": {"target": "/good"},
+                       "firing": {"mode": "manual"}}, fh)
+        real = pipeline._registered_repos
+        pipeline._registered_repos = lambda: {"/good"}
+        try:
+            self._write('{"target": "/ghost"}')
+            self.assertEqual(self._check()[0], "payload")
+            self._write('{"target": "/good"}')
+            self.assertEqual(self._check()[0], "ok")
+        finally:
+            pipeline._registered_repos = real
+
+    def test_firecheck_cli_rc_parity(self):
+        self._trigger()
+        self._write('{"q": "override"}')
+        self.assertEqual(
+            triggers.main(["firecheck", self.repo, "adhoc", self.payload]),
+            0)
+        self._write('{"ghost": "x"}')
+        self.assertEqual(
+            triggers.main(["firecheck", self.repo, "adhoc", self.payload]),
+            3)
+        with open(os.path.join(self.tdir, "adhoc.json"), "w") as fh:
+            fh.write("{corrupt")
+        self.assertEqual(
+            triggers.main(["firecheck", self.repo, "adhoc", self.payload]),
+            1)
+        self.assertEqual(triggers.main(["firecheck", self.repo]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

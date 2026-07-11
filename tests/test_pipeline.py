@@ -3131,5 +3131,147 @@ class LazyDefaultTest(unittest.TestCase):
             pipeline.substitute("${default(params.m, 'fb')}", ctx), "fb")
 
 
+class FireParamsTest(unittest.TestCase):
+    """Phase D2 (#383): the run-now params channel. fire_params merges as
+    the LAST-precedence invoker override (pipeline default < trigger saved
+    < payload); manual-mode-only; secrets and non-scalars refused in the
+    channel itself (CP1 pass-2 finding 1: _coerce passes any value through
+    for string-typed params); CLI --params-file gates."""
+
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        pdir = os.path.join(self.repo, ".autonomy", "pipelines", "pflow")
+        self.tdir = os.path.join(self.repo, ".autonomy", "triggers")
+        self.logdir = os.path.join(self.repo, "var", "autonomy-logs")
+        for d in (pdir, self.tdir, self.logdir):
+            os.makedirs(d)
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
+                  "w") as fh:
+            fh.write("engine:\n  label: t\n")
+        doc = {"name": "pflow", "version": 1,
+               "caps": {"max_sessions_per_run": 4},
+               "params": [
+                   {"name": "q", "type": "string", "required": True},
+                   {"name": "topic", "type": "string",
+                    "default": "general"},
+                   {"name": "tok", "type": "secret", "required": False}],
+               "nodes": [{"id": "a", "type": "pick", "brief_ref": "a.md"}],
+               "edges": []}
+        with open(os.path.join(pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(pdir, "a.md"), "w") as fh:
+            fh.write("dig into ${params.q} (${params.topic})")
+        self.state = os.path.join(self.logdir, ".pipeline-run-adhoc.json")
+
+    def _trigger(self, mode="manual", params=None):
+        with open(os.path.join(self.tdir, "adhoc.json"), "w") as fh:
+            json.dump({"name": "adhoc", "pipeline": "pflow",
+                       "params": (params if params is not None
+                                  else {"q": "saved"}),
+                       "firing": {"mode": mode}}, fh)
+
+    def _start(self, fire_params=None):
+        return pipeline.start_run_trigger(
+            self.repo, "adhoc", self.state,
+            known_repos=lambda: set(), known_accounts=lambda: set(),
+            fire_params=fire_params)
+
+    def test_payload_overrides_saved_params(self):
+        self._trigger()
+        st = self._start(fire_params={"q": "payload"})
+        self.assertEqual(st["params"]["q"], "payload")
+        self.assertEqual(st["params"]["topic"], "general")   # default kept
+
+    def test_absent_payload_key_keeps_saved_value(self):
+        self._trigger()
+        st = self._start(fire_params={"topic": "focus"})
+        self.assertEqual(st["params"]["q"], "saved")
+        self.assertEqual(st["params"]["topic"], "focus")
+
+    def test_none_fire_params_is_the_plain_path(self):
+        self._trigger()
+        st = self._start()
+        self.assertEqual(st["params"]["q"], "saved")
+
+    def test_fire_params_on_non_manual_trigger_refuses(self):
+        self._trigger(mode="continuous")
+        with self.assertRaises(pipeline.PipelineError) as cm:
+            self._start(fire_params={"q": "x"})
+        self.assertIn("manual", str(cm.exception))
+        self.assertFalse(os.path.exists(self.state))
+
+    def test_fire_params_targeting_secret_refuses_without_echo(self):
+        # SecretMessageAudit: the refusal names the KEY, never the value --
+        # a misconfigured caller may have pasted a real credential.
+        self._trigger()
+        with self.assertRaises(pipeline.PipelineError) as cm:
+            self._start(fire_params={"tok": "hunter2 raw!"})
+        self.assertIn("tok", str(cm.exception))
+        self.assertNotIn("hunter2", str(cm.exception))
+
+    def test_fire_params_must_be_a_dict(self):
+        self._trigger()
+        with self.assertRaises(pipeline.PipelineError):
+            self._start(fire_params=["q"])
+
+    def test_non_scalar_payload_value_refuses(self):
+        self._trigger()
+        with self.assertRaises(pipeline.PipelineError) as cm:
+            self._start(fire_params={"q": ["x"]})
+        self.assertIn("scalar", str(cm.exception))
+
+    def test_undeclared_payload_key_refuses(self):
+        self._trigger()
+        with self.assertRaises(pipeline.PipelineError):
+            self._start(fire_params={"ghost": "x"})
+
+    def _cli(self, extra):
+        return pipeline.main(["start", self.repo, "adhoc", self.state,
+                              "--kind", "native"] + extra)
+
+    def test_cli_params_file_round_trip(self):
+        self._trigger()
+        pf = os.path.join(self.repo, "payload.json")
+        with open(pf, "w") as fh:
+            json.dump({"q": "from-file"}, fh)
+        self.assertEqual(self._cli(["--params-file", pf]), 0)
+        with open(self.state) as fh:
+            self.assertEqual(json.load(fh)["params"]["q"], "from-file")
+
+    def test_cli_params_file_gates(self):
+        self._trigger()
+        pf = os.path.join(self.repo, "payload.json")
+        with open(pf, "w") as fh:
+            fh.write("{}")
+        rc = pipeline.main(["start", self.repo, "adhoc", self.state,
+                            "--kind", "shim", "--params-file", pf])
+        self.assertEqual(rc, 2)                  # native-only channel
+        self.assertEqual(self._cli(["--params-file", pf + ".ghost"]), 1)
+        with open(pf, "w") as fh:
+            fh.write("{nope")
+        self.assertEqual(self._cli(["--params-file", pf]), 1)
+        with open(pf, "w") as fh:
+            fh.write('["q"]')
+        self.assertEqual(self._cli(["--params-file", pf]), 1)
+        with open(pf, "w") as fh:
+            fh.write('{"q": "' + "x" * 70000 + '"}')
+        self.assertEqual(self._cli(["--params-file", pf]), 1)
+        with open(pf, "wb") as fh:            # non-UTF-8 bytes -> clean rc 1,
+            fh.write(b"\xff\xfe\x00")         # not an uncaught UnicodeDecodeError
+        self.assertEqual(self._cli(["--params-file", pf]), 1)
+        self.assertFalse(os.path.exists(self.state))
+
+    def test_cli_empty_params_file_means_no_overrides(self):
+        # empty content = NO overrides (None), never a present-but-empty
+        # channel (CP1 pass-2 finding 3).
+        self._trigger()
+        pf = os.path.join(self.repo, "payload.json")
+        open(pf, "w").close()
+        self.assertEqual(self._cli(["--params-file", pf]), 0)
+        with open(self.state) as fh:
+            self.assertEqual(json.load(fh)["params"]["q"], "saved")
+
+
 if __name__ == "__main__":
     unittest.main()

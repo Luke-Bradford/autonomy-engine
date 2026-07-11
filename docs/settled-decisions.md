@@ -373,6 +373,35 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     *(#383; specs/2026-07-10-pipeline-model-phaseD1-triggers-read.md;
     plans/2026-07-10-pipeline-model-phaseD1-triggers-read.md.)*
 
+43. **Phase D2 scope: trigger authoring writes the SD-34 FILE shadow via
+    `trigger_save`; run-now gains a validated params payload** (2026-07-11,
+    #383 D2 build; decisions 2+3 of the 2026-07-10 comment). `trigger_save`
+    is SD-29 for a single JSON file (validate_trigger-before with name==stem,
+    gitignore guard, `allow_nan=False` canonical serialize + re-parse
+    compare, O_EXCL no-follow atomic install; every refusal leaves the
+    shadow byte-identical) writing ONLY `var/autonomy/triggers/<name>.json`.
+    A missing pipeline binding or unresolvable saved params WARN on a
+    successful save, never refuse — refusing would block DISABLING a
+    trigger whose pipeline vanished (the fail-open direction). A shim
+    edit/toggle MATERIALISES a native file — a deliberate ONE-WAY
+    execution-semantics change (role settings stop applying; the doc's
+    runs_as drives the run) confirmed in the browser before the first save;
+    wrapped-role shims (no pipeline binding) and multi-event shims refuse
+    honestly. The run-now payload rides the fire marker's BODY (empty =
+    the D1 marker byte-identical): precedence pipeline default < trigger
+    saved params < payload; secrets refused at write AND `firecheck` AND
+    `start_run_trigger` (three layers, one rule; refusals name the key,
+    never the value). The supervisor classifies a non-empty body via
+    `triggers.py firecheck` — deterministically-bad payloads remove the
+    marker LOUDLY (never an endless retry), transient failures defer with
+    the marker kept; the verdict dry-runs `pipeline._resolve_run_params`
+    (merged vs saved-only), so it is start-parity by construction. Still
+    deferred: trigger delete / reset-shadow-to-committed (a different
+    write-surface semantics — pairs with D3's gallery lifecycle), run-now
+    on non-manual modes.
+    *(#383; specs/2026-07-11-pipeline-model-phaseD2-trigger-save.md;
+    plans/2026-07-11-pipeline-model-phaseD2-trigger-save.md.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could

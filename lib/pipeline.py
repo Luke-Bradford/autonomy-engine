@@ -1633,15 +1633,19 @@ def _resolve_run_params(repo, doc, overrides, *, known_repos=None,
 
 def start_run_trigger(repo, trigger_name, state_path, lane="", *,
                       known_repos=None, known_accounts=None,
-                      event_fields=None):
+                      event_fields=None, fire_params=None):
     """Start a run for a NATIVE trigger: load+validate the trigger, resolve
     the pipeline BY NAME, resolve params (required-unset refuses HERE,
     before a session is burned -- _resolve_run_params, shared with
     start_child_run), run the repo/account existence checks, write fmt-2
     state. event_fields = the event payload for an event-mode trigger's
     firing.map (decision 13); refused on non-event triggers, required when
-    the trigger maps. A shim with pipeline '' never reaches this function
-    -- shims start through start_run(repo, role)."""
+    the trigger maps. fire_params (Phase D2, #383) = an operator run-now
+    payload, the LAST-precedence invoker override (pipeline default <
+    trigger saved params < payload); manual-mode triggers only, secret
+    targets and non-scalar values refused in the channel itself. A shim
+    with pipeline '' never reaches this function -- shims start through
+    start_run(repo, role)."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import triggers as triggers_mod
     trig = triggers_mod.load_trigger(repo, trigger_name)
@@ -1658,6 +1662,12 @@ def start_run_trigger(repo, trigger_name, state_path, lane="", *,
     firing = trig.get("firing") or {}
     overrides = dict(trig["params"])
     mapping = firing.get("map") or {}
+    if fire_params is not None:
+        if firing.get("mode") != "manual":
+            raise PipelineError("trigger %r: run-now params apply to "
+                                "manual-mode triggers only" % trigger_name)
+        if not isinstance(fire_params, dict):
+            raise PipelineError("run-now params must be a JSON object")
     if event_fields is not None and firing.get("mode") != "event":
         raise PipelineError("trigger %r: event fields supplied to a "
                             "non-event trigger -- refusing" % trigger_name)
@@ -1684,6 +1694,23 @@ def start_run_trigger(repo, trigger_name, state_path, lane="", *,
                 raise PipelineError("trigger %r: firing.map targets secret "
                                     "param %r -- an event payload is never a "
                                     "credential" % (trigger_name, pname))
+    if fire_params is not None:
+        decl_types = {p.get("name"): p.get("type")
+                      for p in (doc.get("params") or []) if isinstance(p, dict)}
+        for pname, pval in fire_params.items():
+            if decl_types.get(pname) == "secret":
+                # NAME only, never the value (SecretMessageAudit): a
+                # misconfigured caller may have pasted a real credential.
+                raise PipelineError("trigger %r: run-now params target "
+                                    "secret param %r -- a fire payload is "
+                                    "never a credential"
+                                    % (trigger_name, pname))
+            if isinstance(pval, (dict, list)):
+                # _coerce passes any value through for string-typed params
+                # -- the scalar rule is enforced in the channel itself.
+                raise PipelineError("run-now param %r must be a scalar"
+                                    % pname)
+        overrides.update(fire_params)
     params = _resolve_run_params(repo, doc, overrides,
                                  known_repos=known_repos,
                                  known_accounts=known_accounts)
@@ -2854,7 +2881,7 @@ def main(argv):
                 rest2.append(rest[i])
                 i += 1
         rest = rest2
-        opts = {"--lane": "", "--kind": "shim"}
+        opts = {"--lane": "", "--kind": "shim", "--params-file": ""}
         pos = _split_opts(rest, opts)
         if opts["--kind"] not in ("shim", "native"):
             print("pipeline start: --kind must be shim|native",
@@ -2864,11 +2891,51 @@ def main(argv):
             print("pipeline start: --event-field requires --kind native",
                   file=sys.stderr)
             return 2
+        if opts["--params-file"] and opts["--kind"] != "native":
+            print("pipeline start: --params-file requires --kind native",
+                  file=sys.stderr)
+            return 2
+        # Run-now payload (Phase D2, #383): bounded read; empty content =
+        # NO overrides (never a present-but-empty channel); junk refuses --
+        # start is strict, the supervisor's firecheck classified removal.
+        fire_params = None
+        if opts["--params-file"]:
+            try:
+                with open(opts["--params-file"], encoding="utf-8") as fh:
+                    raw = fh.read(65537)
+            except OSError as exc:
+                print("pipeline start: params file unreadable: %s" % exc,
+                      file=sys.stderr)
+                return 1
+            except UnicodeDecodeError:
+                # non-UTF-8 bytes -> clean rc 1, not an uncaught traceback
+                # (UnicodeDecodeError is a ValueError, not OSError -- review
+                # WARNING); start is strict, so any corrupt payload refuses.
+                print("pipeline start: params file is not valid UTF-8",
+                      file=sys.stderr)
+                return 1
+            if len(raw) > 65536:
+                print("pipeline start: params file exceeds 65536 bytes",
+                      file=sys.stderr)
+                return 1
+            if raw.strip():
+                try:
+                    payload = json.loads(raw)
+                except ValueError as exc:
+                    print("pipeline start: params file is not valid JSON: "
+                          "%s" % exc, file=sys.stderr)
+                    return 1
+                if not isinstance(payload, dict):
+                    print("pipeline start: params file must hold a JSON "
+                          "object", file=sys.stderr)
+                    return 1
+                fire_params = payload
         try:
             if opts["--kind"] == "native":
                 state = start_run_trigger(pos[0], pos[1], pos[2],
                                           lane=opts["--lane"],
-                                          event_fields=ev_fields or None)
+                                          event_fields=ev_fields or None,
+                                          fire_params=fire_params)
             else:
                 state = start_run(pos[0], pos[1], pos[2],
                                   lane=opts["--lane"])

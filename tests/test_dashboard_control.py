@@ -1193,3 +1193,191 @@ class PipelineSaveTest(unittest.TestCase):
                                          {})["ok"])
         with open(os.path.join(self._shadow(repo), "a.md")) as fh:
             self.assertEqual(fh.read(), "shadow a\n")  # from shadow, not committed
+
+
+class TriggerSaveTest(unittest.TestCase):
+    """Phase D2 (#383): the SD-29 writer over the SD-34 trigger FILE shadow
+    var/autonomy/triggers/<name>.json. Validate-before (validate_trigger,
+    name==stem), gitignore guard, allow_nan canonical serialize + re-parse
+    compare, symlink-refusing atomic install; every refusal leaves the
+    shadow byte-identical. Binding/params problems WARN on success, never
+    refuse (a save must be able to DISABLE a trigger whose pipeline
+    vanished)."""
+
+    def _repo(self, gitignore="var/\n", with_pipeline=True):
+        repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        if gitignore is not None:
+            with open(os.path.join(repo, ".gitignore"), "w") as fh:
+                fh.write(gitignore)
+        if with_pipeline:
+            pdir = os.path.join(repo, ".autonomy", "pipelines", "flow")
+            os.makedirs(pdir)
+            doc = {"name": "flow", "version": 1,
+                   "caps": {"max_sessions_per_run": 4},
+                   "params": [{"name": "q", "type": "string",
+                               "required": True}],
+                   "nodes": [{"id": "a", "type": "pick",
+                              "brief_ref": "a.md"}],
+                   "edges": []}
+            with open(os.path.join(pdir, "pipeline.json"), "w") as fh:
+                json.dump(doc, fh)
+            with open(os.path.join(pdir, "a.md"), "w") as fh:
+                fh.write("work ${params.q}\n")
+        return repo
+
+    def _trig(self, **over):
+        t = {"name": "adhoc", "pipeline": "flow",
+             "params": {"q": "saved"},
+             "firing": {"mode": "manual"},
+             "concurrency": {"policy": "skip", "max": 1},
+             "enabled": True}
+        t.update(over)
+        return t
+
+    def _shadow(self, repo, name="adhoc"):
+        return os.path.join(repo, "var", "autonomy", "triggers",
+                            "%s.json" % name)
+
+    def test_create_writes_canonical_shadow(self):
+        repo = self._repo()
+        res = dc.trigger_save(repo, "adhoc", self._trig())
+        self.assertTrue(res["ok"], res)
+        with open(self._shadow(repo)) as fh:
+            raw = fh.read()
+        self.assertEqual(json.loads(raw), self._trig())
+        self.assertEqual(
+            raw, json.dumps(self._trig(), indent=2, sort_keys=True) + "\n")
+        self.assertNotIn("WARNING", res["message"])
+
+    def test_overwrite_replaces_content(self):
+        repo = self._repo()
+        self.assertTrue(dc.trigger_save(repo, "adhoc", self._trig())["ok"])
+        res = dc.trigger_save(repo, "adhoc", self._trig(enabled=False))
+        self.assertTrue(res["ok"], res)
+        with open(self._shadow(repo)) as fh:
+            self.assertFalse(json.load(fh)["enabled"])
+
+    def _refused_leaves_shadow(self, repo, name, trig, needle):
+        before = None
+        if os.path.isfile(self._shadow(repo, name)):
+            with open(self._shadow(repo, name), "rb") as fh:
+                before = fh.read()
+        res = dc.trigger_save(repo, name, trig)
+        self.assertFalse(res.get("ok"), res)
+        self.assertIn(needle, res["error"])
+        if before is None:
+            self.assertFalse(os.path.exists(self._shadow(repo, name)))
+        else:
+            with open(self._shadow(repo, name), "rb") as fh:
+                self.assertEqual(fh.read(), before)
+
+    def test_bad_name_charset_refused(self):
+        repo = self._repo()
+        self._refused_leaves_shadow(repo, "../x", self._trig(), "charset")
+
+    def test_non_dict_refused(self):
+        repo = self._repo()
+        self._refused_leaves_shadow(repo, "adhoc", ["nope"], "object")
+
+    def test_validator_errors_refuse(self):
+        repo = self._repo()
+        # unknown key (the shim-internal events_csv can never be written)
+        t = self._trig()
+        t["firing"] = {"mode": "event", "event": "pr.opened",
+                       "events_csv": "pr.opened"}
+        self._refused_leaves_shadow(repo, "adhoc", t, "unknown key")
+        # name != stem
+        self._refused_leaves_shadow(repo, "other", self._trig(), "stem")
+        # explicit empty run_windows
+        self._refused_leaves_shadow(repo, "adhoc",
+                                    self._trig(run_windows=[]),
+                                    "run_windows")
+
+    def test_gitignore_missing_refused(self):
+        repo = self._repo(gitignore=None)
+        self._refused_leaves_shadow(repo, "adhoc", self._trig(),
+                                    "gitignore")
+
+    def test_symlinked_shadow_refused(self):
+        repo = self._repo()
+        outside = os.path.join(repo, "outside.json")
+        with open(outside, "w") as fh:
+            fh.write("{}")
+        os.makedirs(os.path.dirname(self._shadow(repo)))
+        os.symlink(outside, self._shadow(repo))
+        res = dc.trigger_save(repo, "adhoc", self._trig())
+        self.assertFalse(res.get("ok"))
+        with open(outside) as fh:
+            self.assertEqual(fh.read(), "{}")     # never written through
+
+    def test_tmp_symlink_squatter_cannot_redirect(self):
+        repo = self._repo()
+        outside = os.path.join(repo, "outside.json")
+        with open(outside, "w") as fh:
+            fh.write("untouched")
+        os.makedirs(os.path.dirname(self._shadow(repo)))
+        os.symlink(outside, self._shadow(repo) + ".tmp")
+        res = dc.trigger_save(repo, "adhoc", self._trig())
+        self.assertTrue(res["ok"], res)           # squatter replaced
+        with open(outside) as fh:
+            self.assertEqual(fh.read(), "untouched")
+        with open(self._shadow(repo)) as fh:
+            self.assertEqual(json.load(fh), self._trig())
+
+    def test_byte_cap_refused(self):
+        repo = self._repo()
+        t = self._trig(params={"q": "x" * 70000})
+        self._refused_leaves_shadow(repo, "adhoc", t, "bytes")
+
+    def test_nan_refused(self):
+        repo = self._repo()
+        t = self._trig(params={"q": float("inf")})
+        self._refused_leaves_shadow(repo, "adhoc", t, "JSON")
+
+    def test_missing_pipeline_warns_but_saves(self):
+        repo = self._repo(with_pipeline=False)
+        res = dc.trigger_save(repo, "adhoc", self._trig())
+        self.assertTrue(res["ok"], res)
+        self.assertIn("WARNING", res["message"])
+        self.assertIn("flow", res["message"])
+
+    def test_unresolvable_params_warn_but_save(self):
+        repo = self._repo()
+        res = dc.trigger_save(repo, "adhoc", self._trig(params={}))
+        self.assertTrue(res["ok"], res)           # required q unset
+        self.assertIn("WARNING", res["message"])
+
+
+class TriggerCtlPlanParamsTest(unittest.TestCase):
+    """Phase D2 (#383): the fire plan gains an optional params payload --
+    non-empty params become the marker BODY ({'write', 'content'}); empty
+    keeps the D1 {'touch'} empty-marker byte-parity."""
+
+    def test_fire_with_params_plans_a_write(self):
+        p = dc.trigger_ctl_plan("/w/tree", "trigger_fire", "adhoc",
+                                fire_params={"q": "x", "n": 3})
+        self.assertEqual(p["write"],
+                         "/w/tree/var/trigger-ctl/fire/adhoc")
+        self.assertEqual(p["content"],
+                         json.dumps({"q": "x", "n": 3}, sort_keys=True,
+                                    allow_nan=False))
+
+    def test_fire_without_params_stays_a_touch(self):
+        for empty in (None, {}):
+            p = dc.trigger_ctl_plan("/w/tree", "trigger_fire", "adhoc",
+                                    fire_params=empty)
+            self.assertEqual(p["touch"],
+                             "/w/tree/var/trigger-ctl/fire/adhoc")
+
+    def test_params_on_non_fire_actions_refused(self):
+        for act in ("trigger_stop", "trigger_resume"):
+            p = dc.trigger_ctl_plan("/w/tree", act, "adhoc",
+                                    fire_params={"q": "x"})
+            self.assertIn("error", p)
+
+    def test_nan_params_refused(self):
+        p = dc.trigger_ctl_plan("/w/tree", "trigger_fire", "adhoc",
+                                fire_params={"q": float("nan")})
+        self.assertIn("error", p)

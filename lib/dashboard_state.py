@@ -2748,7 +2748,7 @@ def list_runs(logdir, journal_path, limit=20):
     return rows
 
 
-def trigger_fire_ready(repo_path, trig):
+def trigger_fire_ready(repo_path, trig, overrides=None):
     """(ok, reason) -- may this trigger take a run-now fire marker? The
     SAME verdict the write side must reach (Phase D1: bin/dashboard.py's
     execute path calls this exact helper -- read/write can't drift).
@@ -2757,7 +2757,11 @@ def trigger_fire_ready(repo_path, trig):
     dead control); then a DRY pipeline.resolve_params over the doc's
     declared params + the trigger's saved params -- the same refusal
     start_run_trigger would reach, caught HERE instead of burning a
-    backoff after the marker fires. Total: any failure -> (False, reason),
+    backoff after the marker fires. overrides (Phase D2) = a run-now
+    params payload merged LAST (pipeline default < saved < payload);
+    non-dict shapes, non-scalar values and declared-secret targets refuse
+    (the refusal names the KEY, never the value -- SD-8). None keeps the
+    D1 verdict byte-identical. Total: any failure -> (False, reason),
     never raises."""
     try:
         firing = trig.get("firing") if isinstance(trig, dict) else None
@@ -2772,11 +2776,60 @@ def trigger_fire_ready(repo_path, trig):
         declared = doc.get("params")
         declared = declared if isinstance(declared, list) else []
         params = trig.get("params")
-        params = params if isinstance(params, dict) else {}
-        pipeline_mod.resolve_params(declared, params)
+        params = dict(params) if isinstance(params, dict) else {}
+        if overrides is not None:
+            if not isinstance(overrides, dict):
+                return False, "run-now params must be a JSON object"
+            decl_types = {p.get("name"): p.get("type") for p in declared
+                          if isinstance(p, dict)}
+            for k, v in overrides.items():
+                if decl_types.get(k) == "secret":
+                    return False, ("run-now params target secret param %r "
+                                   "-- a fire payload is never a "
+                                   "credential" % k)
+                if isinstance(v, (dict, list)):
+                    return False, "run-now param %r must be a scalar" % k
+            params.update(overrides)
+        # _resolve_run_params (not bare resolve_params) so the write-side
+        # verdict runs the SAME repo/account existence checks firecheck and
+        # start do -- a payload naming an unregistered repo/account is
+        # refused HERE, not accepted then rejected downstream (CP2 finding 2).
+        pipeline_mod._resolve_run_params(repo_path, doc, params)
         return True, None
     except Exception as exc:
         return False, "pipeline/params not fireable: %s" % exc
+
+
+def _declared_params(doc):
+    """The doc's declared params projected for the authoring form / the
+    run-now overlay: [{name, type, required, default?, choices?}]. Total --
+    junk declaration entries are dropped; a secret's DEFAULT is a
+    credential LABEL (non-secret, SD-8), safe to show."""
+    out = []
+    decls = doc.get("params") if isinstance(doc, dict) else None
+    for p in (decls if isinstance(decls, list) else []):
+        if not (isinstance(p, dict) and isinstance(p.get("name"), str)):
+            continue
+        row = {"name": p["name"], "type": p.get("type"),
+               "required": bool(p.get("required"))}
+        if "default" in p:
+            row["default"] = p["default"]
+        if isinstance(p.get("choices"), list):
+            row["choices"] = p["choices"]
+        out.append(row)
+    return out
+
+
+def _bound_doc(repo_path, binding):
+    """The bound pipeline doc for a projection, or None on ANY failure
+    (total -- the projections degrade to [], never crash the payload)."""
+    try:
+        if not pipeline_mod.valid_pipeline_name(binding):
+            return None
+        pdir = pipeline_mod.effective_pipeline_dir(repo_path, binding)
+        return pipeline_mod.load_doc(os.path.join(pdir, "pipeline.json"))
+    except Exception:
+        return None
 
 
 def _trigger_marker_flags(repo_path, name, lane_suffix):
@@ -2831,7 +2884,7 @@ def _gallery_rows(repo_path, trigs, rollup):
     rows = []
     for name in sorted(names):
         row = {"name": name, "version": None, "source": "committed",
-               "valid": False, "errors": [], "nodes": 0,
+               "valid": False, "errors": [], "nodes": 0, "params": [],
                "triggers": sorted(by_pipeline.get(name, [])),
                "tier": rollup.get(name)}
         if not pipeline_mod.valid_pipeline_name(name):
@@ -2855,14 +2908,15 @@ def _gallery_rows(repo_path, trigs, rollup):
         nodes = doc.get("nodes")
         row.update({"version": doc.get("version"),
                     "valid": not errs, "errors": errs,
-                    "nodes": len(nodes) if isinstance(nodes, list) else 0})
+                    "nodes": len(nodes) if isinstance(nodes, list) else 0,
+                    "params": _declared_params(doc)})
         rows.append(row)
     for t in trigs:
         if t.get("pipeline"):
             continue
         nm = t.get("name", "")
         rows.append({"name": nm, "version": None, "source": "wrapped",
-                     "valid": True, "errors": [], "nodes": 1,
+                     "valid": True, "errors": [], "nodes": 1, "params": [],
                      "triggers": [nm], "tier": rollup.get(nm)})
     return rows
 
@@ -2923,6 +2977,14 @@ def build_triggers_view(repo_path, now=None):
                      "queued": False, "backoff": None}
         led = tier_by_name.get(name) or {}
         ready, reason = trigger_fire_ready(repo_path, t)
+        # Run-now overlay schema (Phase D2): the bound doc's declared
+        # params, manual-mode triggers only; any doc failure degrades to []
+        # (the overlay simply doesn't offer inputs -- fire_ready already
+        # carries the honest verdict).
+        fire_params = []
+        if firing.get("mode") == "manual":
+            fire_params = _declared_params(
+                _bound_doc(repo_path, t.get("pipeline") or ""))
         view["triggers"].append({
             "name": name, "kind": t.get("kind", ""),
             "pipeline": t.get("pipeline") or "",
@@ -2942,6 +3004,7 @@ def build_triggers_view(repo_path, now=None):
             "fire_pending": flags["fire_pending"],
             "queued": flags["queued"], "backoff": flags["backoff"],
             "fire_ready": ready, "fire_block_reason": reason,
+            "fire_params": fire_params,
         })
     try:
         view["pipelines"] = _gallery_rows(repo_path, trigs, rollup)

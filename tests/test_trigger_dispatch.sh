@@ -177,9 +177,10 @@ printf '{"name":"always-on","pipeline":"flow","firing":{"mode":"continuous"}}' \
   >"$repo/.autonomy/triggers/always-on.json"
 
 # File-based recorder: resolve_trigger_cron_due fires inside a pipeline
-# subshell, so a variable would not escape.
+# subshell, so a variable would not escape. The 3rd field (the D2 run-now
+# params file) is recorded ONLY when non-empty, so pre-D2 pins hold.
 RS_FILE="$tmp/rs_calls"; : >"$RS_FILE"
-run_session() { printf ' %s:%s' "$1" "$2" >>"$RS_FILE"; return 0; }
+run_session() { printf ' %s:%s%s' "$1" "$2" "${3:+:$3}" >>"$RS_FILE"; return 0; }
 rs_calls() { cat "$RS_FILE"; }
 
 mkdir -p "$VARDIR/trigger-ctl/fire"
@@ -210,6 +211,69 @@ resolve_manual_fires
 check "default lane skips qa marker" "" "$(rs_calls)"
 check "qa marker left in place"      "0" "$([ -f "$VARDIR/trigger-ctl/fire/push-now--qa" ] && echo 0 || echo 1)"
 rm -f "$VARDIR/trigger-ctl/fire/push-now--qa"
+
+# --- run-now params payload (Phase D2, #383) ----------------------------------
+# A non-empty fire-marker BODY is a params payload: firecheck (real python
+# seam) classifies it -- rc 0 threads the marker path into run_session as the
+# params file; rc 3 removes the marker loudly (deterministic refusal, no
+# endless retry); rc 1 keeps it (transient). Empty markers stay the D1 path.
+mkdir -p "$repo/.autonomy/pipelines/pflow"
+printf '{"name":"pflow","version":1,"caps":{"max_sessions_per_run":4},"params":[{"name":"q","type":"string","required":true}],"nodes":[{"id":"a","type":"pick","brief_ref":"a.md"}],"edges":[]}' \
+  >"$repo/.autonomy/pipelines/pflow/pipeline.json"
+printf 'work %s\n' '${params.q}' >"$repo/.autonomy/pipelines/pflow/a.md"
+printf '{"name":"para","pipeline":"pflow","params":{"q":"saved"},"firing":{"mode":"manual"}}' \
+  >"$repo/.autonomy/triggers/para.json"
+
+: >"$RS_FILE"
+printf '{"q":"override"}' >"$VARDIR/trigger-ctl/fire/para"
+resolve_manual_fires
+check "payload fire passes params file" \
+  " para:native:$VARDIR/trigger-ctl/fire/para" "$(rs_calls)"
+check "payload marker consumed" "1" \
+  "$([ -f "$VARDIR/trigger-ctl/fire/para" ] && echo 0 || echo 1)"
+
+# deterministically-bad payloads (junk JSON, undeclared key): marker REMOVED
+# loudly, no dispatch -- keeping it would retry a deterministic refusal
+# forever (the queued invalid-kind discipline).
+for bad in '{nope' '{"ghost":1}'; do
+  : >"$RS_FILE"
+  printf '%s' "$bad" >"$VARDIR/trigger-ctl/fire/para"
+  resolve_manual_fires
+  check "bad payload no run ($bad)" "" "$(rs_calls)"
+  check "bad payload marker removed ($bad)" "1" \
+    "$([ -f "$VARDIR/trigger-ctl/fire/para" ] && echo 0 || echo 1)"
+done
+
+# transient (trigger binds a MISSING pipeline -- enumerable, doc unreadable):
+# marker KEPT, no dispatch, defer.
+printf '{"name":"ghosty","pipeline":"ghost","firing":{"mode":"manual"}}' \
+  >"$repo/.autonomy/triggers/ghosty.json"
+: >"$RS_FILE"
+printf '{"q":"x"}' >"$VARDIR/trigger-ctl/fire/ghosty"
+resolve_manual_fires
+check "transient payload no run"    "" "$(rs_calls)"
+check "transient payload marker kept" "0" \
+  "$([ -f "$VARDIR/trigger-ctl/fire/ghosty" ] && echo 0 || echo 1)"
+rm -f "$VARDIR/trigger-ctl/fire/ghosty" "$repo/.autonomy/triggers/ghosty.json"
+
+# empty marker stays the D1 existence-only path: NO params-file field.
+: >"$RS_FILE"
+: >"$VARDIR/trigger-ctl/fire/para"
+resolve_manual_fires
+check "empty marker fires plain"    " para:native" "$(rs_calls)"
+
+# end-to-end threading: resolve_pipeline_ready appends --params-file on the
+# START arm -- the REAL pipeline.py start runs and the state carries the
+# override (start-parity, no argv stub).
+pf="$tmp/payload.json"; printf '{"q":"threaded"}' >"$pf"
+resolve_pipeline_ready para 1 0 native "$pf"
+check "ready start rc" "0" "$?"
+check "state carries payload override" "threaded" \
+  "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["params"]["q"])' \
+     "$LOGDIR/.pipeline-run-para.json")"
+rm -f "$LOGDIR"/.pipeline-run-para*.json "$LOGDIR"/para*.brief.md
+rm -f "$repo/.autonomy/triggers/para.json"
+rm -rf "$repo/.autonomy/pipelines/pflow"
 
 # --- queued fires ---------------------------------------------------------------
 # fixture is a SCHEDULE trigger: only the cron resolver mints queued markers,

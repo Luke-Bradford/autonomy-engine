@@ -349,7 +349,8 @@ def find_lane_service(repo, lane, launch_agents_dir, default_lane=None):
 TRIGGER_CTL_ACTIONS = ("trigger_fire", "trigger_stop", "trigger_resume")
 
 
-def trigger_ctl_plan(marker_repo, action, name, lane_suffix=""):
+def trigger_ctl_plan(marker_repo, action, name, lane_suffix="",
+                     fire_params=None):
     """Pure plan for a per-trigger marker write (Phase D1, #383).
     marker_repo = the VERIFIED consuming supervisor's repo (the caller
     resolves lanes via find_lane_service, execute_control-style);
@@ -359,10 +360,15 @@ def trigger_ctl_plan(marker_repo, action, name, lane_suffix=""):
     (prevention-log #6, via triggers.marker_basename -- the one
     supervisor-parity rule) and refuses reserved sidecar suffixes
     (defense in depth: validate_trigger already refuses them at mint).
-    Never touches the filesystem. fire/stop markers are EMPTY files;
-    queued/ and backoff/ are supervisor-owned and never planned here."""
+    Never touches the filesystem. fire markers are EMPTY files, or (Phase
+    D2) carry a validated run-now params payload as their BODY -- the
+    caller already validated it via trigger_fire_ready; stop markers stay
+    empty; queued/ and backoff/ are supervisor-owned and never planned
+    here."""
     if action not in TRIGGER_CTL_ACTIONS:
         return {"error": "unknown trigger action"}
+    if fire_params and action != "trigger_fire":
+        return {"error": "params only apply to trigger_fire"}
     try:
         base = _triggers.marker_basename(name, lane_suffix or "")
     except Exception as exc:
@@ -376,9 +382,19 @@ def trigger_ctl_plan(marker_repo, action, name, lane_suffix=""):
         return {"remove": path,
                 "message": "stop marker removed — %s resumes" % base}
     if action == "trigger_fire":
-        return {"touch": path,
-                "message": "run-now marker set for %s — the supervisor "
-                           "fires it on its next tick" % base}
+        message = ("run-now marker set for %s — the supervisor "
+                   "fires it on its next tick" % base)
+        if fire_params:
+            # allow_nan=False: plain dumps emits Infinity, which
+            # round-trips EQUAL -- refuse it here like trigger_save does.
+            try:
+                content = json.dumps(fire_params, sort_keys=True,
+                                     allow_nan=False)
+            except (TypeError, ValueError) as exc:
+                return {"error": "run-now params are not representable "
+                                 "as JSON: %s" % exc}
+            return {"write": path, "content": content, "message": message}
+        return {"touch": path, "message": message}
     return {"touch": path,
             "message": "stop marker set — %s is frozen (no new fires, no "
                        "advance) until resumed" % base}
@@ -1243,3 +1259,107 @@ def pipeline_save(repo, name, doc, briefs):
     return {"ok": True, "path": os.path.relpath(shadow, repo),
             "message": "saved to the live pipeline shadow -- applies next run "
                        "(the committed pack is untouched)"}
+
+
+# --- Phase D2 (#383): trigger create/edit -> var-live FILE shadow writer -----
+# SD-29 mechanics for a single JSON file: validate BEFORE any write
+# (triggers.validate_trigger enforces name==stem and refuses unknown keys, so
+# the shim-internal kind/events_csv can never land on disk), gitignore guard,
+# canonical serialize (allow_nan=False -- plain dumps emits Infinity, which
+# round-trips EQUAL and would pass the compare), re-parse compare, no-follow
+# atomic install. Every refusal leaves the shadow byte-identical. Saving under
+# a shim's name MATERIALISES a native trigger (Phase B supersession); the page
+# confirms the execution-semantics flip before that first save.
+
+_TRIGGER_DOC_CAP = 65536
+
+
+def _trigger_save_warns(repo, trig):
+    """Non-blocking save warnings: a binding that does not currently resolve
+    and/or saved params that do not dry-resolve. WARN, never refuse -- a save
+    must be able to DISABLE a trigger whose pipeline vanished, and
+    mid-authoring saves are legitimate; an unresolvable trigger never
+    dispatches (start refuses) and the card shows the reason. Total: any
+    probe failure degrades to the warning (or silence), never blocks."""
+    import pipeline as _pl
+    warns = ""
+    binding = trig.get("pipeline") or ""
+    doc = None
+    try:
+        pdir = _pl.effective_pipeline_dir(repo, binding)
+        doc = _pl.load_doc(os.path.join(pdir, "pipeline.json"))
+    except Exception:
+        return (" -- WARNING: pipeline %r not found; the trigger will "
+                "refuse to start until it exists" % binding)
+    try:
+        declared = doc.get("params")
+        declared = declared if isinstance(declared, list) else []
+        params = trig.get("params")
+        params = params if isinstance(params, dict) else {}
+        _pl.resolve_params(declared, params)
+    except Exception as exc:
+        warns += (" -- WARNING: params do not currently resolve: %s" % exc)
+    return warns
+
+
+def trigger_save(repo, name, trig):
+    """Whole-document save of ONE trigger into the SD-34 FILE shadow
+    <repo>/var/autonomy/triggers/<name>.json. Returns {ok, path, message}
+    or {ok: False, error}; every refusal leaves the shadow byte-identical."""
+    if not _pipeline.valid_pipeline_name(name):
+        return {"ok": False, "error": "trigger name has invalid charset"}
+    if not isinstance(trig, dict):
+        return {"ok": False, "error": "trigger must be a JSON object"}
+    errs = _triggers.validate_trigger(trig, name)
+    if errs:
+        return {"ok": False, "error": "; ".join(errs)}
+    if not _var_live_protected(repo, os.path.join("var", "autonomy",
+                                                  "triggers")):
+        return {"ok": False, "error":
+                "var/ is not covered by this repo's .gitignore -- the loop's "
+                "preflight would sweep the trigger shadow. Add a 'var/' line "
+                "to .gitignore (and commit it) first."}
+    try:
+        serialized = json.dumps(trig, indent=2, sort_keys=True,
+                                allow_nan=False) + "\n"
+    except (TypeError, ValueError) as exc:
+        return {"ok": False,
+                "error": "trigger is not representable as JSON: %s" % exc}
+    if len(serialized.encode("utf-8")) > _TRIGGER_DOC_CAP:
+        return {"ok": False,
+                "error": "trigger exceeds %d bytes" % _TRIGGER_DOC_CAP}
+    if json.loads(serialized) != trig:
+        return {"ok": False, "error":
+                "re-parse mismatch: the written trigger would not read back "
+                "identically -- write refused"}
+    shadow = os.path.join(repo, "var", "autonomy", "triggers",
+                          "%s.json" % name)
+    if os.path.islink(shadow) or (os.path.exists(shadow)
+                                  and not os.path.isfile(shadow)):
+        # the resolver ignores symlinked shadows; writing through one would
+        # escape var/ (the pipeline_save refusal shape)
+        return {"ok": False, "error":
+                "the trigger shadow path is not a clean file -- refusing"}
+    tmp = shadow + ".tmp"
+    try:
+        os.makedirs(os.path.dirname(shadow), exist_ok=True)
+        if os.path.islink(tmp) or os.path.exists(tmp):
+            os.unlink(tmp)          # stale junk; unlink never follows
+        # O_EXCL: a racing squatter between unlink and open fails the save
+        # rather than redirecting the write out of var/ (CP1 finding 2).
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(serialized)
+        os.replace(tmp, shadow)
+    except OSError as exc:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return {"ok": False,
+                "error": "could not write the trigger: %s" % exc}
+    message = ("saved to the live trigger shadow -- applies next tick "
+               "(the committed pack is untouched)")
+    message += _trigger_save_warns(repo, trig)
+    return {"ok": True, "path": os.path.relpath(shadow, repo),
+            "message": message}

@@ -1332,7 +1332,7 @@ def _effective_lane_config(repo):
         return None
 
 
-def execute_trigger_ctl(repo, action, name):
+def execute_trigger_ctl(repo, action, name, fire_params=None):
     """Per-trigger marker lifecycle (Phase D1, #383): run-now / stop /
     resume through the supervisor's existing lane-scoped markers under
     var/trigger-ctl/{fire,stop}/. Validation is ENUMERATION-derived (the
@@ -1344,7 +1344,17 @@ def execute_trigger_ctl(repo, action, name):
     non-default lane -> that lane's verified service worktree (or this
     repo when its own service runs the lane), basename <name>--<lane>;
     no/refusing service -> refuse, never guess a worktree.
-    queued/ and backoff/ are supervisor-owned -- never written here."""
+    queued/ and backoff/ are supervisor-owned -- never written here.
+    fire_params (D2): the RAW posted run-now payload -- None = absent
+    (the D1 empty-marker path); {} = same (the UI omits empty overrides);
+    a non-dict REFUSES (never degraded to an empty-marker fire); params
+    on stop/resume refuse."""
+    if fire_params is not None and not isinstance(fire_params, dict):
+        return {"ok": False, "error": "run-now params must be a JSON object"}
+    if not fire_params:                      # {} == absent
+        fire_params = None
+    if fire_params and action != "trigger_fire":
+        return {"ok": False, "error": "params only apply to trigger_fire"}
     try:
         trigs, _warns = ds.triggers_mod.enumerate_triggers(
             repo, dispatchable_only=False)
@@ -1385,18 +1395,32 @@ def execute_trigger_ctl(repo, action, name):
         # --lane el): markers stay HERE, still with the lane suffix.
     if action == "trigger_fire":
         # The SAME verdict the read payload shows (ds.trigger_fire_ready:
-        # manual mode + a dry resolve_params) -- read/write can't drift.
-        ready, reason = ds.trigger_fire_ready(repo, trig)
+        # manual mode + a dry resolve_params, D2: overrides merged LAST)
+        # -- read/write can't drift.
+        ready, reason = ds.trigger_fire_ready(repo, trig,
+                                              overrides=fire_params)
         if not ready:
             return {"ok": False, "error": reason or "trigger not fireable"}
     plan = dcx.trigger_ctl_plan(marker_repo, action, name,
-                                lane_suffix=lane_suffix)
+                                lane_suffix=lane_suffix,
+                                fire_params=fire_params)
     if "error" in plan:
         return {"ok": False, "error": plan["error"]}
     try:
         if "touch" in plan:
             os.makedirs(os.path.dirname(plan["touch"]), exist_ok=True)
             open(plan["touch"], "a").close()
+        elif "write" in plan:
+            # the D2 params marker body: no-follow O_EXCL tmp + atomic
+            # replace (the trigger_save install discipline)
+            os.makedirs(os.path.dirname(plan["write"]), exist_ok=True)
+            tmp = plan["write"] + ".tmp"
+            if os.path.islink(tmp) or os.path.exists(tmp):
+                os.unlink(tmp)
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(plan["content"])
+            os.replace(tmp, plan["write"])
         elif "remove" in plan:
             if os.path.exists(plan["remove"]):
                 os.remove(plan["remove"])
@@ -1646,7 +1670,8 @@ class Handler(BaseHTTPRequestHandler):
         # -- it does NOT uncap the read (#366 review WARNING). pipeline_save's
         # per-brief/per-doc 200 KiB caps are SEMANTIC refusals layered on top.
         if (path != "/api/chat" and length > 8192
-                and body.get("action") not in ("ws_prompt_set", "pipeline_save")):
+                and body.get("action") not in ("ws_prompt_set", "pipeline_save",
+                                               "trigger_save")):
             self.close_connection = True
             self._send(400, b'{"error":"bad request"}')
             return
@@ -1662,7 +1687,7 @@ class Handler(BaseHTTPRequestHandler):
         _cred_actions = ("cred_set", "cred_delete", "cred_assign", "cred_unassign")
         _acct_actions = ("acct_set", "acct_delete")
         _ws_actions = ("ws_add", "ws_set", "ws_prompt_set", "repo_init",
-                       "pipeline_save")
+                       "pipeline_save", "trigger_save")
         if (action not in ("set_model", "config_set", "repo_add", "repo_remove")
                 and action not in _cred_actions
                 and action not in _acct_actions
@@ -1715,9 +1740,13 @@ class Handler(BaseHTTPRequestHandler):
         if action in dcx.TRIGGER_CTL_ACTIONS:
             # D1 (#383): per-trigger marker lifecycle (run-now/stop/resume).
             # Enumeration-derived validation + execute_control-style lane
-            # routing live in execute_trigger_ctl.
-            result = execute_trigger_ctl(repo, action,
-                                         str(body.get("name") or ""))
+            # routing live in execute_trigger_ctl. D2: trigger_fire may
+            # carry a params payload -- the RAW posted shape passes through
+            # so junk is REFUSED, never silently dropped into an
+            # empty-marker fire (CP1 pass-2 finding 2).
+            result = execute_trigger_ctl(
+                repo, action, str(body.get("name") or ""),
+                fire_params=body["params"] if "params" in body else None)
             self._send(200 if result.get("ok") else 409,
                        json.dumps(result).encode("utf-8"))
             return
@@ -1745,6 +1774,14 @@ class Handler(BaseHTTPRequestHandler):
                     repo, str(body.get("name") or ""),
                     doc if isinstance(doc, dict) else None,
                     briefs if isinstance(briefs, dict) else {})
+            elif action == "trigger_save":
+                # D2 (#383): whole-doc save into the var-live trigger FILE
+                # shadow. Policy + refusal semantics live in
+                # dashboard_control.trigger_save (SD-29 over SD-34).
+                trig = body.get("trigger")
+                result = dcx.trigger_save(
+                    repo, str(body.get("name") or ""),
+                    trig if isinstance(trig, dict) else None)
             else:                       # repo_init: idempotent pack scaffold
                 result = execute_repo_init(repo)
             self._send(200 if result.get("ok") else 409,
