@@ -1687,7 +1687,7 @@ class Handler(BaseHTTPRequestHandler):
         _cred_actions = ("cred_set", "cred_delete", "cred_assign", "cred_unassign")
         _acct_actions = ("acct_set", "acct_delete")
         _ws_actions = ("ws_add", "ws_set", "ws_prompt_set", "repo_init",
-                       "pipeline_save", "trigger_save")
+                       "pipeline_save", "trigger_save", "pipeline_create")
         if (action not in ("set_model", "config_set", "repo_add", "repo_remove")
                 and action not in _cred_actions
                 and action not in _acct_actions
@@ -1782,6 +1782,19 @@ class Handler(BaseHTTPRequestHandler):
                 result = dcx.trigger_save(
                     repo, str(body.get("name") or ""),
                     trig if isinstance(trig, dict) else None)
+            elif action == "pipeline_create":
+                # D3 (#383): create-from-blank / clone into the var shadow.
+                # `source` contract PINNED (CP1): absent/null = blank;
+                # non-str refuses; a present string (even "") flows to the
+                # writer VERBATIM -- a malformed clone request refuses,
+                # never degrades to a blank create.
+                source = body.get("source")
+                if source is not None and not isinstance(source, str):
+                    result = {"ok": False,
+                              "error": "clone source must be a string"}
+                else:
+                    result = dcx.pipeline_create(
+                        repo, str(body.get("name") or ""), source)
             else:                       # repo_init: idempotent pack scaffold
                 result = execute_repo_init(repo)
             self._send(200 if result.get("ok") else 409,

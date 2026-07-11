@@ -2116,3 +2116,93 @@ class TriggerSaveRouteTest(TestTriggerRoutes):
             self.assertEqual(r["code"], 409, act)
         self.assertFalse(os.path.exists(
             self._marker("stop", "paramfire")))
+
+
+class TestPipelineCreateRoute(TestPipelineSaveRoute):
+    """Phase D3 (#383): POST /api/control action=pipeline_create --
+    blank-starter / clone creation into the var shadow + the provenance
+    sidecar. Inherits the pipeline_save harness (token gauntlet, managed-
+    repo gate, tmp git repo with a committed valid `flow`)."""
+
+    def _get(self, path):
+        h = dashboard.Handler.__new__(dashboard.Handler)
+        h.path = path
+        captured = {}
+        h._send = lambda code, body, ctype="application/json": captured.update(
+            code=code, body=body, ctype=ctype)
+        h.do_GET()
+        return captured
+
+    def _vpath(self, *parts):
+        return os.path.join(self.repo, "var", "autonomy", "pipelines", *parts)
+
+    def test_blank_create_200_dir_and_sidecar(self):
+        r = self._post({"action": "pipeline_create", "repo": self.repo,
+                        "name": "fresh"})
+        self.assertEqual(r["code"], 200)
+        self.assertTrue(json.loads(r["body"])["ok"])
+        self.assertTrue(os.path.isfile(self._vpath("fresh", "pipeline.json")))
+        with open(self._vpath("fresh.provenance.json")) as fh:
+            self.assertEqual(json.load(fh)["created"], "blank")
+
+    def test_clone_200_and_visible_in_gallery(self):
+        import urllib.parse
+        r = self._post({"action": "pipeline_create", "repo": self.repo,
+                        "name": "flow2", "source": "flow"})
+        self.assertEqual(r["code"], 200)
+        got = self._get("/api/triggers?repo=%s"
+                        % urllib.parse.quote(self.repo, safe=""))
+        rows = dict((p["name"], p)
+                    for p in json.loads(got["body"])["pipelines"])
+        self.assertEqual(rows["flow2"]["source"], "local")
+        self.assertEqual(rows["flow2"]["provenance"]["source"], "flow")
+        self.assertIs(rows["flow2"]["provenance"]["diverged"], False)
+
+    def test_created_pipeline_editable_via_pipeline_save(self):
+        self.assertEqual(self._post({"action": "pipeline_create",
+                                     "repo": self.repo,
+                                     "name": "fresh"})["code"], 200)
+        with open(self._vpath("fresh", "pipeline.json")) as fh:
+            doc = json.load(fh)
+        doc["version"] = 2
+        r = self._post({"action": "pipeline_save", "repo": self.repo,
+                        "name": "fresh", "doc": doc, "briefs": {}})
+        self.assertEqual(r["code"], 200)
+        with open(self._vpath("fresh", "pipeline.json")) as fh:
+            self.assertEqual(json.load(fh)["version"], 2)
+
+    def test_collision_409_disk_untouched(self):
+        r = self._post({"action": "pipeline_create", "repo": self.repo,
+                        "name": "flow"})              # committed collision
+        self.assertEqual(r["code"], 409)
+        self.assertFalse(os.path.lexists(self._vpath("flow")))
+        self.assertFalse(os.path.lexists(self._vpath("flow.provenance.json")))
+
+    def test_source_contract_pinned(self):
+        # absent -> blank (covered above); null -> blank; non-str -> 409;
+        # "" -> 409 in the WRITER (charset), never a silent blank (CP1).
+        r = self._post({"action": "pipeline_create", "repo": self.repo,
+                        "name": "n1", "source": None})
+        self.assertEqual(r["code"], 200)
+        with open(self._vpath("n1.provenance.json")) as fh:
+            self.assertEqual(json.load(fh)["created"], "blank")
+        r = self._post({"action": "pipeline_create", "repo": self.repo,
+                        "name": "n2", "source": 5})
+        self.assertEqual(r["code"], 409)
+        r = self._post({"action": "pipeline_create", "repo": self.repo,
+                        "name": "n3", "source": ""})
+        self.assertEqual(r["code"], 409)
+        self.assertIn("charset", json.loads(r["body"])["error"])
+        for nm in ("n2", "n3"):
+            self.assertFalse(os.path.lexists(self._vpath(nm)))
+
+    def test_bad_token_403_no_create(self):
+        r = self._post({"action": "pipeline_create", "repo": self.repo,
+                        "name": "fresh"}, token="wrong")
+        self.assertEqual(r["code"], 403)
+        self.assertFalse(os.path.lexists(self._vpath("fresh")))
+
+    def test_unmanaged_repo_400(self):
+        r = self._post({"action": "pipeline_create", "repo": "/nope",
+                        "name": "fresh"})
+        self.assertEqual(r["code"], 400)
