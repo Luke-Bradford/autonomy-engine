@@ -1986,3 +1986,133 @@ class TestTriggerRoutes(unittest.TestCase):
         self.assertEqual(r["code"], 409)
         self.assertFalse(os.path.exists(
             self._marker("stop", "qa-sweep--qa")))
+
+
+class TriggerSaveRouteTest(TestTriggerRoutes):
+    """Phase D2 (#383): the trigger_save action + the run-now params body
+    on trigger_fire. Inherits the D1 route pins (they must survive)."""
+
+    def setUp(self):
+        import subprocess
+        super().setUp()
+        subprocess.run(["git", "init", "-q", self.repo], check=True)
+        with open(os.path.join(self.repo, ".gitignore"), "w") as fh:
+            fh.write("var/\n")
+        pdir = os.path.join(self.repo, ".autonomy", "pipelines",
+                            "paramflow")
+        os.makedirs(pdir)
+        doc = {"name": "paramflow", "version": 1,
+               "caps": {"max_sessions_per_run": 4},
+               "params": [{"name": "q", "type": "string",
+                           "required": True},
+                          {"name": "n", "type": "number", "default": 3}],
+               "nodes": [{"id": "a", "type": "pick", "brief_ref": "a.md"}],
+               "edges": []}
+        with open(os.path.join(pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(pdir, "a.md"), "w") as fh:
+            fh.write("work ${params.q}\n")
+        with open(os.path.join(self.repo, ".autonomy", "triggers",
+                               "paramfire.json"), "w") as fh:
+            json.dump({"name": "paramfire", "pipeline": "paramflow",
+                       "params": {"q": "saved"},
+                       "firing": {"mode": "manual"}}, fh)
+
+    def test_api_triggers_happy(self):
+        # the D1 pin runs UNMODIFIED in the parent class; this subclass's
+        # fixture adds paramfire, so the inherited copy re-pins the
+        # superset here.
+        import urllib.parse
+        got = self._get("/api/triggers?repo=%s"
+                        % urllib.parse.quote(self.repo, safe=""))
+        self.assertEqual(got["code"], 200)
+        p = self._payload(got)
+        self.assertEqual(sorted(t["name"] for t in p["triggers"]),
+                         ["adhoc-digest", "coder", "paramfire", "pr-sweep"])
+
+    def _shadow(self, name):
+        return os.path.join(self.repo, "var", "autonomy", "triggers",
+                            "%s.json" % name)
+
+    def _valid_trig(self, **over):
+        t = {"name": "authored", "pipeline": "paramflow",
+             "params": {"q": "hello"}, "firing": {"mode": "manual"},
+             "enabled": True}
+        t.update(over)
+        return t
+
+    def test_trigger_save_valid_writes_shadow(self):
+        r = self._post({"action": "trigger_save", "repo": self.repo,
+                        "name": "authored", "trigger": self._valid_trig()})
+        self.assertEqual(r["code"], 200, r)
+        with open(self._shadow("authored")) as fh:
+            self.assertEqual(json.load(fh), self._valid_trig())
+
+    def test_trigger_save_invalid_409_disk_untouched(self):
+        t = self._valid_trig()
+        t["firing"] = {"mode": "warp"}
+        r = self._post({"action": "trigger_save", "repo": self.repo,
+                        "name": "authored", "trigger": t})
+        self.assertEqual(r["code"], 409)
+        self.assertFalse(os.path.exists(self._shadow("authored")))
+
+    def test_trigger_save_non_dict_409(self):
+        r = self._post({"action": "trigger_save", "repo": self.repo,
+                        "name": "authored", "trigger": ["nope"]})
+        self.assertEqual(r["code"], 409)
+
+    def test_trigger_save_unmanaged_400(self):
+        r = self._post({"action": "trigger_save", "repo": "/nope",
+                        "name": "authored", "trigger": self._valid_trig()})
+        self.assertEqual(r["code"], 400)
+
+    def test_trigger_save_oversize_allowance(self):
+        big = self._valid_trig(params={"q": "x" * 20000})
+        r = self._post({"action": "trigger_save", "repo": self.repo,
+                        "name": "authored", "trigger": big})
+        self.assertEqual(r["code"], 200, r)      # >8KiB body accepted
+        # ...but any OTHER action at that size keeps the classic 8KiB cap
+        r = self._post({"action": "config_set", "repo": self.repo,
+                        "key": "board.owner", "value": "x" * 20000})
+        self.assertEqual(r["code"], 400)
+
+    def test_fire_with_params_writes_marker_body(self):
+        r = self._post({"action": "trigger_fire", "repo": self.repo,
+                        "name": "paramfire", "params": {"q": "override"}})
+        self.assertEqual(r["code"], 200, r)
+        with open(self._marker("fire", "paramfire")) as fh:
+            self.assertEqual(fh.read(),
+                             json.dumps({"q": "override"}, sort_keys=True))
+
+    def test_fire_with_bad_params_409_no_marker(self):
+        for params in ({"ghost": "x"}, {"q": ["list"]}, {"n": "abc"}):
+            r = self._post({"action": "trigger_fire", "repo": self.repo,
+                            "name": "paramfire", "params": params})
+            self.assertEqual(r["code"], 409, params)
+            self.assertFalse(os.path.exists(
+                self._marker("fire", "paramfire")))
+
+    def test_fire_params_non_dict_409(self):
+        # the raw posted shape is refused, never degraded to an
+        # empty-marker fire (CP1 pass-2 finding 2)
+        for params in ([], "x", 3):
+            r = self._post({"action": "trigger_fire", "repo": self.repo,
+                            "name": "paramfire", "params": params})
+            self.assertEqual(r["code"], 409, params)
+            self.assertFalse(os.path.exists(
+                self._marker("fire", "paramfire")))
+
+    def test_fire_empty_params_is_the_d1_empty_marker(self):
+        r = self._post({"action": "trigger_fire", "repo": self.repo,
+                        "name": "paramfire", "params": {}})
+        self.assertEqual(r["code"], 200, r)
+        self.assertEqual(os.path.getsize(
+            self._marker("fire", "paramfire")), 0)
+
+    def test_params_on_stop_or_resume_409(self):
+        for act in ("trigger_stop", "trigger_resume"):
+            r = self._post({"action": act, "repo": self.repo,
+                            "name": "paramfire", "params": {"q": "x"}})
+            self.assertEqual(r["code"], 409, act)
+        self.assertFalse(os.path.exists(
+            self._marker("stop", "paramfire")))
