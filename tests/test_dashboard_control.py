@@ -1542,17 +1542,23 @@ class PipelineCreateTest(unittest.TestCase):
                              pl.content_fingerprint(doc, shadow))
 
     def test_bool_source_version_written_as_none(self):
-        # `version: true` validates today (bool is an int subclass); the
-        # reader's exact schema rejects bools -- the writer coerces to the
-        # honest None so the sidecar is never dropped whole (Codex CP2).
+        # `version: true` validates today (bool is an int subclass,
+        # verified empirically -- the PREMISE assert below keeps this test
+        # honest if the validator ever tightens); the reader's exact
+        # schema rejects bools -- the writer coerces to the honest None so
+        # the sidecar is never dropped whole (Codex CP2). Unconditional
+        # asserts per review round 1: a guarded assert could pass vacuously.
+        import pipeline as pl
         repo = self._repo()
         committed = os.path.join(repo, ".autonomy", "pipelines", "flow")
         with open(os.path.join(committed, "pipeline.json"), "w") as fh:
             json.dump(dict(self.doc, version=True), fh)
+        self.assertEqual(pl.validate_doc(dict(self.doc, version=True),
+                                         committed), [])   # premise pin
         res = dc.pipeline_create(repo, "flow2", source="flow")
-        if res["ok"]:      # only meaningful while the validator accepts it
-            with open(self._sidecar(repo, "flow2")) as fh:
-                self.assertIsNone(json.load(fh)["source_version"])
+        self.assertTrue(res["ok"], res)
+        with open(self._sidecar(repo, "flow2")) as fh:
+            self.assertIsNone(json.load(fh)["source_version"])
 
     def test_clone_of_effective_shadow_doc(self):
         # cloning a locally-edited pipeline clones what the operator SEES
