@@ -45,7 +45,15 @@ per-feature write endpoint is still forbidden — new mutations become
   — #383 D3, blank/clone creation into `var/autonomy/pipelines/<name>/`
   + the `<name>.provenance.json` sidecar via a mkdir-claim install;
   collisions with committed OR shadow names refuse, an invalid clone
-  source refuses, refusals leave the tree byte-identical), and the per-trigger
+  source refuses, refusals leave the tree byte-identical — and
+  `pipeline_delete` / `trigger_delete` — #388 shadow lifecycle: remove
+  the var-shadow asset ONLY (reset-to-committed when a committed twin
+  exists; a materialised shim's role re-shims); fail-closed guards
+  refuse while an in-flight run token or a pending fire/queued marker
+  matches the asset (unattributable/refused-stem markers refuse too);
+  pipeline detach = atomic rename into the delete-owned `.trash`
+  reserved suffix + sidecar cleanup; refusals leave the tree
+  byte-identical), and the per-trigger
   marker set (`trigger_fire`/`trigger_stop`/`trigger_resume`, #383 D1 —
   enumeration-derived validation + `find_lane_service` lane routing in
   `execute_trigger_ctl`; writes ONLY `var/trigger-ctl/{fire,stop}/`,

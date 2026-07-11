@@ -469,8 +469,17 @@ immediately if the result is runnable.
     came from. A name that already exists (committed or local) is
     refused, and an invalid pipeline refuses to clone (fix it first). The
     new pipeline runs once a trigger binds it — creation alone starts
-    nothing. Deleting a created pipeline is not built yet: remove the
-    shadow directory (and its `.provenance.json` sibling) by hand.
+    nothing.
+  - **🗑 delete / ⟲ reset** remove a pipeline's local shadow (and its
+    provenance record). On a created pipeline that is a full **delete** —
+    triggers still bound to it show a missing-pipeline warning until
+    rebound or deleted. On a locally-edited template it is a **reset**:
+    the committed template becomes live again. Committed templates
+    themselves are never deletable from the page — edit or remove them in
+    the repo. The page asks first, naming what happens; the delete is
+    **refused while the pipeline has a run in flight or a pending fire is
+    queued** (let it finish, or stop it), and a refusal changes nothing
+    on disk.
 - **⚡ triggers** — one card per trigger: firing mode (continuous /
   schedule / manual / event), enabled state, overlap policy, run-window
   state, parameter count, per-trigger trust tier, and any pending markers
@@ -503,10 +512,21 @@ immediately if the result is runnable.
   - **■ stop / ▶ resume** set and clear the freeze marker (a stopped
     trigger starts nothing and its in-flight runs hold in place).
 
+  - **🗑 delete / ⟲ reset** remove a trigger's local shadow file. On a
+    locally-edited trigger that shadows a committed one it is a
+    **reset** — the committed trigger resurfaces. On a trigger that was
+    converted from a legacy `roles:` entry, deleting the file brings the
+    **role's synthesised trigger back** — the conversion runs in reverse,
+    and the role's own prompt/model settings apply again; the page's
+    confirmation says so. A trigger that exists only as a local file is
+    removed for good. Deletes are **refused while the trigger has a run
+    in flight or a pending fire/queued marker** (a fire consumed after
+    the delete would land on whatever resurfaces), and a refusal changes
+    nothing on disk. Committed trigger files are not deletable from the
+    page.
+
   A trigger file the engine refuses to load appears here verbatim, and
-  also in the dashboard's "Needs you" queue. Deleting a trigger (or
-  resetting a locally-edited one back to the committed file) is not built
-  yet — disable it, or remove the shadow file by hand.
+  also in the dashboard's "Needs you" queue.
 - **▶ runs** — in-flight runs first (one row per parallel slot), then the
   recent history. A run started by `call_pipeline` indents under its
   caller; **💡 canvas** opens that run's own graph lit with its progress,

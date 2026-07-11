@@ -234,9 +234,25 @@ gallery `source` grew `local` (shadow-only dir) + `provenance` w/
 refuses — create-by-save would bypass the collision/provenance
 discipline). Collisions (committed OR shadow, lexists) refuse; invalid
 clone source refuses (no laundering); reserved suffixes `.staging/.bak/
-.provenance.json` refused at mint. Still deferred: trigger/pipeline
-delete + reset-shadow-to-committed (disable or remove the shadow by
-hand), run-now on non-manual modes. The page treats node ids as
+.provenance.json/.trash` (`pipeline.RESERVED_PIPE_SUFFIXES`, the neutral
+home) refused at mint. **#388 shipped the shadow LIFECYCLE**:
+`trigger_delete`/`pipeline_delete` control actions remove the var-shadow
+asset only (ONE writer rule — what resurfaces is the SD-34 resolver's own
+fallback: committed twin = reset, same-name role = the shim re-shims
+[D2's materialise flip reversed, confirm-named], shadow-only = gone;
+committed assets never dashboard-deletable). Fail-closed guards before
+any mutation: in-flight token scan (filename over-match for triggers —
+exact lane-stripping would be fail-open on unreadable state; content
+attribution for pipelines, unprovable state refuses) + fire/queued marker
+attribution (bound / refused-stem / unattributable all refuse; stop/
+backoff never block); ENOENT = provably-empty, other listing errors
+refuse; scan scope = the managed repo only (separate lane services
+resolve from their own checkout — unaffected by this repo's shadow).
+Pipeline detach = atomic rename into the delete-owned `.trash` scratch +
+provenance-sidecar cleanup; gallery listing skips reserved-suffix
+entries. Payload booleans `has_shadow`/`has_committed`/`shim_behind`
+drive the 🗑/⟲ card controls. Still deferred: run-now on non-manual
+modes. The page treats node ids as
 UNTRUSTED (invalid docs render): delegated `data-*` listeners, full-coverage
 `esc()`. Fixture: `tests/fixtures/repo-alpha` binds `coder → fixture-flow` and
 ships a walker-shaped `journal.jsonl`; tests needing an unbound role take tmp
