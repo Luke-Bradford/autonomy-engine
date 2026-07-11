@@ -1687,7 +1687,8 @@ class Handler(BaseHTTPRequestHandler):
         _cred_actions = ("cred_set", "cred_delete", "cred_assign", "cred_unassign")
         _acct_actions = ("acct_set", "acct_delete")
         _ws_actions = ("ws_add", "ws_set", "ws_prompt_set", "repo_init",
-                       "pipeline_save", "trigger_save", "pipeline_create")
+                       "pipeline_save", "trigger_save", "pipeline_create",
+                       "pipeline_delete", "trigger_delete")
         if (action not in ("set_model", "config_set", "repo_add", "repo_remove")
                 and action not in _cred_actions
                 and action not in _acct_actions
@@ -1795,6 +1796,15 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     result = dcx.pipeline_create(
                         repo, str(body.get("name") or ""), source)
+            elif action in ("pipeline_delete", "trigger_delete"):
+                # #388: shadow lifecycle -- remove the var-shadow asset
+                # (reset-to-committed when a committed twin exists). All
+                # guards + refusal semantics live in dashboard_control;
+                # the body is a name (classic 8 KiB cap, no oversize
+                # allowance).
+                fn = (dcx.pipeline_delete if action == "pipeline_delete"
+                      else dcx.trigger_delete)
+                result = fn(repo, str(body.get("name") or ""))
             else:                       # repo_init: idempotent pack scaffold
                 result = execute_repo_init(repo)
             self._send(200 if result.get("ok") else 409,

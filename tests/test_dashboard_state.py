@@ -4506,3 +4506,111 @@ class GalleryProvenanceTest(BuildTriggersViewTest):
         prov = rows["brokeclone"]["provenance"]
         self.assertEqual(prov["source"], "flow")
         self.assertNotIn("diverged", prov)
+
+
+class ShadowLifecycleFieldsTest(unittest.TestCase):
+    """#388: the three additive booleans the delete/reset controls key on
+    (has_shadow / has_committed / shim_behind) + gallery hygiene for the
+    writers' reserved scratch suffixes."""
+
+    def _repo(self, config="roles: {}\n"):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        os.makedirs(os.path.join(d, ".autonomy", "triggers"))
+        pdir = os.path.join(d, ".autonomy", "pipelines", "flow")
+        os.makedirs(pdir)
+        with open(os.path.join(pdir, "pipeline.json"), "w") as fh:
+            json.dump({"name": "flow", "version": 1,
+                       "caps": {"max_sessions_per_run": 5},
+                       "nodes": [{"id": "pick", "type": "pick",
+                                  "brief_ref": "pick.md"}]}, fh)
+        with open(os.path.join(pdir, "pick.md"), "w") as fh:
+            fh.write("pick brief\n")
+        with open(os.path.join(d, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write(config)
+        return d
+
+    def _trigger(self, repo, name, where, raw=None):
+        d = os.path.join(repo, "var", "autonomy", "triggers") \
+            if where == "var" else os.path.join(repo, ".autonomy", "triggers")
+        os.makedirs(d, exist_ok=True)
+        p = os.path.join(d, "%s.json" % name)
+        with open(p, "w") as fh:
+            fh.write(raw if raw is not None else json.dumps(
+                {"name": name, "pipeline": "flow",
+                 "firing": {"mode": "manual"}}))
+        return p
+
+    def _row(self, repo, name):
+        view = ds.build_triggers_view(repo)
+        self.assertNotIn("error", view)
+        by_name = dict((t["name"], t) for t in view["triggers"])
+        self.assertIn(name, by_name)
+        return by_name[name]
+
+    def test_committed_only_native(self):
+        repo = self._repo()
+        self._trigger(repo, "adhoc", "committed")
+        row = self._row(repo, "adhoc")
+        self.assertFalse(row["has_shadow"])
+        self.assertTrue(row["has_committed"])
+        self.assertFalse(row["shim_behind"])
+
+    def test_shadow_over_committed(self):
+        repo = self._repo()
+        self._trigger(repo, "adhoc", "committed")
+        self._trigger(repo, "adhoc", "var")
+        row = self._row(repo, "adhoc")
+        self.assertTrue(row["has_shadow"])
+        self.assertTrue(row["has_committed"])
+
+    def test_materialised_shim(self):
+        repo = self._repo(config="roles:\n  adhoc:\n    enabled: true\n"
+                                 "    pipeline: flow\n")
+        self._trigger(repo, "adhoc", "var")
+        row = self._row(repo, "adhoc")
+        self.assertEqual(row["kind"], "native")
+        self.assertTrue(row["has_shadow"])
+        self.assertFalse(row["has_committed"])
+        self.assertTrue(row["shim_behind"])
+
+    def test_bare_native(self):
+        repo = self._repo()
+        self._trigger(repo, "adhoc", "var")
+        row = self._row(repo, "adhoc")
+        self.assertTrue(row["has_shadow"])
+        self.assertFalse(row["has_committed"])
+        self.assertFalse(row["shim_behind"])
+
+    def test_shim_row(self):
+        repo = self._repo(config="roles:\n  coder:\n    enabled: true\n"
+                                 "    pipeline: flow\n")
+        row = self._row(repo, "coder")
+        self.assertEqual(row["kind"], "shim")
+        self.assertFalse(row["has_shadow"])
+        self.assertFalse(row["has_committed"])
+        self.assertTrue(row["shim_behind"])
+
+    def test_symlinked_shadow_not_sanctioned(self):
+        # parity with effective_trigger_path: a symlinked shadow is ignored
+        # by the resolver, so the delete control must not be offered on it
+        repo = self._repo()
+        self._trigger(repo, "adhoc", "committed")
+        vdir = os.path.join(repo, "var", "autonomy", "triggers")
+        os.makedirs(vdir)
+        os.symlink("/nonexistent", os.path.join(vdir, "adhoc.json"))
+        row = self._row(repo, "adhoc")
+        self.assertFalse(row["has_shadow"])
+
+    def test_gallery_skips_reserved_scratch_dirs(self):
+        # a failed-cleanup .trash (or a mid-write .staging/.bak) must never
+        # render as a pipeline card -- scratch is never an asset
+        repo = self._repo()
+        vroot = os.path.join(repo, "var", "autonomy", "pipelines")
+        for suf in (".trash", ".staging", ".bak"):
+            os.makedirs(os.path.join(vroot, "flow" + suf))
+        view = ds.build_triggers_view(repo)
+        names = [p["name"] for p in view["pipelines"]]
+        self.assertIn("flow", names)
+        for suf in (".trash", ".staging", ".bak"):
+            self.assertNotIn("flow" + suf, names)

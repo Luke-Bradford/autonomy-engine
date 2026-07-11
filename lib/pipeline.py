@@ -385,6 +385,17 @@ def provenance_path(repo, name):
                         "%s.provenance.json" % name)
 
 
+# The pipeline-shadow SIBLING namespace the dashboard writers own
+# (#383 D3 + #388): <name>.staging/.bak = writer scratch, .provenance.json
+# = the D3 sidecar, .trash = pipeline_delete's detach target (its OWN
+# suffix -- sharing .staging would race a concurrent create/save under the
+# ThreadingHTTPServer). pipeline_create mint-refuses names ending in any
+# of these; the gallery listing skips them. Lives HERE so the writer
+# (dashboard_control) and the reader (dashboard_state) share one tuple
+# without importing each other (the marker_basename precedent).
+RESERVED_PIPE_SUFFIXES = (".staging", ".bak", ".provenance.json", ".trash")
+
+
 def content_fingerprint(doc, pipeline_dir):
     """The clone-provenance CONTENT fingerprint (Phase D3, #383): sha256
     over the canonical doc serialization PLUS every declared brief's bytes

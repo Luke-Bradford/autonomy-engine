@@ -371,3 +371,20 @@ occurrence of the class in the touched scope in the same commit, and say so
 in the reply ("scanned siblings: X, Y also widened / already guarded
 because …"). A one-site fix to a class finding is a partial fix the next
 round will find.**
+
+## 22. Prose that flows through `pipeline.substitute()` must `$${`-escape its `${` examples
+
+*Origin: Phase B's `_OUTPUTS_FOOTER` (caught in the Phase C plan's own
+escape rule) + the D3 blank-starter brief (caught in pre-push self-review,
+PR #387) — the same class twice.* Brief TEXT is substituted at prepare
+time, so any documentation prose that mentions `${params.x}`-style syntax
+inside a brief, footer, or template that reaches `compile_brief`/
+`_prepare_step` is EXECUTED as a reference, not displayed — an undeclared
+example ref makes the pipeline's very first run refuse (fail-safe, but a
+baffling out-of-box failure the author shipped as documentation). **Rule:
+any string literal in engine code or pack templates that (a) documents the
+`${…}` syntax and (b) travels through `substitute()` must write `$${…}`
+(the engine's literal-`${` escape), and the test pins the rendered output
+against the REAL `pipeline.substitute` — not a copy of the escape rule.**
+Grep sites at write time: footer constants, starter briefs, scaffolded
+`.md` templates under `templates/`.

@@ -1195,6 +1195,34 @@ function trigSwitch(t){
                                  : "edits the trigger file (var shadow)";
   return `<span class="switch${on}" data-act="trigger_toggle" data-name="${esc(t.name)}" title="${t.enabled ? "disable" : "enable"} — ${what}"><span class="knob"></span></span>`;
 }
+/* #388 shadow lifecycle: the delete/reset control keys on the payload's
+   has_shadow/has_committed/shim_behind facts. Only a NATIVE trigger with a
+   sanctioned var-shadow file is deletable; the meaning forks on what
+   resurfaces (the SD-34 resolver's own fallback order). */
+function trigLifeBtn(t){
+  if(t.kind !== "native") return "";
+  if(!t.has_shadow)
+    return `<span class="off" title="committed trigger — remove it from the pack, not the dashboard">🗑</span>`;
+  if(t.has_committed)
+    return `<button class="pill" data-act="trig_delete" data-name="${esc(t.name)}" title="discard the local file — the committed trigger resurfaces">⟲ reset</button>`;
+  return `<button class="pill" data-act="trig_delete" data-name="${esc(t.name)}" title="${t.shim_behind ? "delete the native file — the role shim of the same name resurfaces" : "delete this trigger for good"}">🗑 delete</button>`;
+}
+function trigDeleteConfirm(t){
+  if(t.has_committed)
+    return "Discard the local file of trigger '" + t.name + "'?\n" +
+      "The committed trigger resurfaces next tick.\n\nContinue?";
+  let msg;
+  if(t.shim_behind)
+    msg = "Delete the native trigger '" + t.name + "'?\n" +
+      "The role shim of the same name resurfaces — role prompt/scope/" +
+      "model settings apply to its runs again (the materialise flip, " +
+      "reversed).";
+  else
+    msg = "Delete trigger '" + t.name + "'?\nIt is removed for good.";
+  if(t.enabled)
+    msg += "\nThis trigger is ENABLED — its current firing config stops applying.";
+  return msg + "\n\nContinue?";
+}
 function renderTriggers(tv){
   ensureTrigSkeleton();
   const box = document.getElementById("trigcards");
@@ -1221,6 +1249,7 @@ function renderTriggers(tv){
         ${t.stopped
           ? `<button class="pill" data-act="trigger_resume" data-name="${esc(t.name)}" title="remove the stop marker">▶ resume</button>`
           : `<button class="pill" data-act="trigger_stop" data-name="${esc(t.name)}" title="freeze: no new fires, no advance">■ stop</button>`}
+        ${trigLifeBtn(t)}
       </div>
       <div class="rline">
         ${modeChip(t)}
@@ -1525,13 +1554,57 @@ function renderGallery(tv){
         ? `<span class="off" title="wrapped role — no pipeline directory to clone">⧉ clone</span>`
         : p.valid
           ? `<button class="pill" data-act="pipe_clone" data-name="${esc(p.name)}" title="create a new pipeline from a copy of this one">⧉ clone</button>`
-          : `<span class="off" title="fix the pipeline first — an invalid document refuses to clone">⧉ clone</span>`}</div>
+          : `<span class="off" title="fix the pipeline first — an invalid document refuses to clone">⧉ clone</span>`}${pipeLifeBtn(p)}</div>
     </div>`;
   }
   h += `</div>`;
   for(const w of (tv.refused || []))
     h += `<div class="refbar">${esc(w)}</div>`;
   box.innerHTML = h;
+}
+/* #388 shadow lifecycle on the gallery: `shadow` = local edits over a
+   committed template (reset discards them), `local` = a created pipeline
+   (delete removes it + its provenance sidecar); committed templates are
+   not dashboard-deletable (SD-34). */
+function pipeLifeBtn(p){
+  if(p.source === "shadow")
+    return `<button class="pill" data-act="pipe_delete" data-name="${esc(p.name)}" title="discard the local edits — the committed template resurfaces">⟲ reset</button>`;
+  if(p.source === "local")
+    return `<button class="pill" data-act="pipe_delete" data-name="${esc(p.name)}" title="delete this pipeline (removes the var shadow and its provenance record)">🗑 delete</button>`;
+  if(p.source === "committed")
+    return `<span class="off" title="committed template — edit or remove it in the repo, not the dashboard">🗑</span>`;
+  return "";
+}
+function pipeDeleteConfirm(p){
+  if(p.source === "shadow")
+    return "Discard the local edits of pipeline '" + p.name + "'?\n" +
+      "The committed template becomes live again (next runs read it)." +
+      "\n\nContinue?";
+  let msg = "Delete pipeline '" + p.name + "'?";
+  const bound = p.triggers || [];
+  if(bound.length){
+    const parts = bound.map(n => {
+      const t = ((TRIGDATA || {}).triggers || []).find(x => x.name === n);
+      return n + (t && t.enabled ? " (ENABLED)" : "");
+    });
+    msg += "\nTriggers bound to it — " + parts.join(", ") +
+      " — will show missing-pipeline until rebound or deleted.";
+  }
+  return msg + "\n\nContinue?";
+}
+async function pipeDelete(name){
+  if(!hasToken()) return;
+  const m = document.getElementById("galmsg");
+  try{
+    const res = await fetch("/api/control", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({action: "pipeline_delete", token: CTOKEN,
+                            repo: REPO, name: name})});
+    const out = await res.json().catch(() => ({}));
+    if(m) m.textContent = out.ok ? (out.message || "deleted")
+                                 : "refused: " + (out.error || ("HTTP " + res.status));
+    if(out.ok){ TRIGSIG = ""; await tickLists(); }
+  }catch(e){ if(m) m.textContent = "delete failed: " + e; }
 }
 let GALFORM = null;   // {source: ""|name} -- outside the tick re-render
 function openGalForm(source){
@@ -1617,6 +1690,10 @@ document.getElementById("v-triggers").addEventListener("click", e => {
     trigSave(doc.name, doc); return;
   }
   if(act === "trigger_toggle"){ if(t) toggleTrigger(t); return; }
+  if(act === "trig_delete"){
+    if(t && window.confirm(trigDeleteConfirm(t))) trigCtl("trigger_delete", name);
+    return;
+  }
   if(act === "fire_open"){ if(t) openFireForm(t); return; }
   if(act === "fire_send"){
     trigCtl("trigger_fire", name, collectFormParams())
@@ -1656,6 +1733,12 @@ document.getElementById("v-gallery").addEventListener("click", e => {
   }
   if(act === "pipe_new"){ openGalForm(""); return; }
   if(act === "pipe_clone"){ openGalForm(b.dataset.name || ""); return; }
+  if(act === "pipe_delete"){
+    const nm = b.dataset.name || "";
+    const p = ((TRIGDATA || {}).pipelines || []).find(x => x.name === nm);
+    if(p && window.confirm(pipeDeleteConfirm(p))) pipeDelete(nm);
+    return;
+  }
   if(act === "pipe_cancel"){ closeGalForm(); return; }
   if(act === "pipe_create_send"){
     const name = (document.getElementById("gf-name") || {value: ""}).value.trim();

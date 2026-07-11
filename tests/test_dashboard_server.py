@@ -2206,3 +2206,102 @@ class TestPipelineCreateRoute(TestPipelineSaveRoute):
         r = self._post({"action": "pipeline_create", "repo": "/nope",
                         "name": "fresh"})
         self.assertEqual(r["code"], 400)
+
+
+class ShadowDeleteRouteTest(TestPipelineSaveRoute):
+    """#388: POST /api/control actions trigger_delete + pipeline_delete.
+    Same gauntlet as every control action; bodies are a name (classic
+    8 KiB cap, NOT the oversize allowance); refusals are 409 and leave
+    the disk untouched."""
+
+    def _shadow_pipeline(self):
+        r = self._post({"action": "pipeline_save", "repo": self.repo,
+                        "name": "flow", "doc": self._valid_doc(),
+                        "briefs": {}})
+        self.assertEqual(r["code"], 200)
+        return os.path.join(self.repo, "var", "autonomy", "pipelines",
+                            "flow")
+
+    def _shadow_trigger(self, name="adhoc"):
+        d = os.path.join(self.repo, "var", "autonomy", "triggers")
+        os.makedirs(d, exist_ok=True)
+        p = os.path.join(d, "%s.json" % name)
+        with open(p, "w") as fh:
+            json.dump({"name": name, "pipeline": "flow",
+                       "firing": {"mode": "manual"}}, fh)
+        return p
+
+    def test_pipeline_delete_resets_to_committed_200(self):
+        shadow = self._shadow_pipeline()
+        r = self._post({"action": "pipeline_delete", "repo": self.repo,
+                        "name": "flow"})
+        self.assertEqual(r["code"], 200)
+        out = json.loads(r["body"])
+        self.assertTrue(out["ok"], out)
+        self.assertIn("committed template", out["message"])
+        self.assertFalse(os.path.exists(shadow))
+        self.assertTrue(os.path.isfile(os.path.join(
+            self.repo, ".autonomy", "pipelines", "flow", "pipeline.json")))
+
+    def test_trigger_delete_200(self):
+        p = self._shadow_trigger()
+        r = self._post({"action": "trigger_delete", "repo": self.repo,
+                        "name": "adhoc"})
+        self.assertEqual(r["code"], 200)
+        self.assertTrue(json.loads(r["body"])["ok"])
+        self.assertFalse(os.path.exists(p))
+
+    def test_pipeline_delete_refusal_409_disk_untouched(self):
+        shadow = self._shadow_pipeline()
+        logdir = os.path.join(self.repo, "var", "autonomy-logs")
+        os.makedirs(logdir, exist_ok=True)
+        with open(os.path.join(logdir, ".pipeline-run-coder.json"),
+                  "w") as fh:
+            json.dump({"fmt": 2, "doc": {"name": "flow"}}, fh)
+        r = self._post({"action": "pipeline_delete", "repo": self.repo,
+                        "name": "flow"})
+        self.assertEqual(r["code"], 409)
+        self.assertTrue(os.path.isfile(os.path.join(shadow,
+                                                    "pipeline.json")))
+
+    def test_trigger_delete_committed_only_409(self):
+        d = os.path.join(self.repo, ".autonomy", "triggers")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "adhoc.json"), "w") as fh:
+            json.dump({"name": "adhoc", "pipeline": "flow",
+                       "firing": {"mode": "manual"}}, fh)
+        r = self._post({"action": "trigger_delete", "repo": self.repo,
+                        "name": "adhoc"})
+        self.assertEqual(r["code"], 409)
+        self.assertTrue(os.path.isfile(os.path.join(d, "adhoc.json")))
+
+    def test_bad_token_403(self):
+        self._shadow_trigger()
+        r = self._post({"action": "trigger_delete", "repo": self.repo,
+                        "name": "adhoc"}, token="wrong")
+        self.assertEqual(r["code"], 403)
+
+    def test_unmanaged_repo_400(self):
+        r = self._post({"action": "pipeline_delete", "repo": "/nope",
+                        "name": "flow"})
+        self.assertEqual(r["code"], 400)
+
+    def test_nonstr_name_charset_409(self):
+        r = self._post({"action": "pipeline_delete", "repo": self.repo,
+                        "name": {"evil": 1}})
+        self.assertEqual(r["code"], 409)
+
+    def test_deleted_pipeline_leaves_gallery_and_reset_flips_source(self):
+        # end-to-end payload truth: a created pipeline's card vanishes on
+        # delete; a shadowed template flips back to source=committed
+        import dashboard_state as ds2
+        self._shadow_pipeline()
+        gal = {p["name"]: p for p in
+               ds2.build_triggers_view(self.repo)["pipelines"]}
+        self.assertEqual(gal["flow"]["source"], "shadow")
+        r = self._post({"action": "pipeline_delete", "repo": self.repo,
+                        "name": "flow"})
+        self.assertEqual(r["code"], 200)
+        gal = {p["name"]: p for p in
+               ds2.build_triggers_view(self.repo)["pipelines"]}
+        self.assertEqual(gal["flow"]["source"], "committed")

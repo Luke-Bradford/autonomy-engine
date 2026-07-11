@@ -1589,7 +1589,7 @@ class PipelineCreateTest(unittest.TestCase):
 
     def test_reserved_suffix_refused(self):
         repo = self._repo()
-        for nm in ("x.staging", "x.bak", "x.provenance.json"):
+        for nm in ("x.staging", "x.bak", "x.provenance.json", "x.trash"):
             self._refused(repo, nm, needle="reserved")
 
     def test_source_equals_name_refused(self):
@@ -1677,4 +1677,437 @@ class PipelineCreateTest(unittest.TestCase):
         before = self._tree(repo)
         res = dc.pipeline_create(repo, "fresh")
         self.assertFalse(res["ok"], res)
+        self.assertEqual(self._tree(repo), before)
+
+
+class _ShadowLifecycleFixture(unittest.TestCase):
+    """Shared fixture for the #388 shadow-lifecycle writers: a repo with a
+    committed pipeline `flow`, a parseable config, and helpers to plant
+    state files (in-flight runs), trigger files and trigger-ctl markers."""
+
+    def _repo(self, config="roles: {}\n"):
+        repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        with open(os.path.join(repo, ".gitignore"), "w") as fh:
+            fh.write("var/\n")
+        os.makedirs(os.path.join(repo, ".autonomy"))
+        if config is not None:
+            with open(os.path.join(repo, ".autonomy", "config.yaml"),
+                      "w") as fh:
+                fh.write(config)
+        committed = os.path.join(repo, ".autonomy", "pipelines", "flow")
+        os.makedirs(committed)
+        doc = {"name": "flow", "version": 1,
+               "caps": {"max_sessions_per_run": 4},
+               "nodes": [{"id": "a", "type": "pick", "brief_ref": "a.md"}],
+               "edges": []}
+        with open(os.path.join(committed, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(committed, "a.md"), "w") as fh:
+            fh.write("brief a\n")
+        return repo
+
+    def _trig_shadow(self, repo, name="adhoc"):
+        return os.path.join(repo, "var", "autonomy", "triggers",
+                            "%s.json" % name)
+
+    def _pipe_shadow(self, repo, name):
+        return os.path.join(repo, "var", "autonomy", "pipelines", name)
+
+    def _write_trigger(self, repo, name="adhoc", where="var",
+                       pipeline="flow", raw=None):
+        d = os.path.join(repo, "var", "autonomy", "triggers") \
+            if where == "var" else os.path.join(repo, ".autonomy", "triggers")
+        os.makedirs(d, exist_ok=True)
+        p = os.path.join(d, "%s.json" % name)
+        if raw is not None:
+            with open(p, "w") as fh:
+                fh.write(raw)
+            return p
+        with open(p, "w") as fh:
+            json.dump({"name": name, "pipeline": pipeline,
+                       "firing": {"mode": "manual"}}, fh)
+        return p
+
+    def _state(self, repo, base, content="valid", pipeline="flow"):
+        d = os.path.join(repo, "var", "autonomy-logs")
+        os.makedirs(d, exist_ok=True)
+        p = os.path.join(d, ".pipeline-run-%s.json" % base)
+        with open(p, "w") as fh:
+            if content == "valid":
+                json.dump({"fmt": 2, "status": "in_progress",
+                           "doc": {"name": pipeline}}, fh)
+            else:
+                fh.write(content)
+        return p
+
+    def _marker(self, repo, kind, basename):
+        d = os.path.join(repo, "var", "trigger-ctl", kind)
+        os.makedirs(d, exist_ok=True)
+        p = os.path.join(d, basename)
+        with open(p, "w") as fh:
+            fh.write("")
+        return p
+
+    def _tree(self, repo):
+        snap = {}
+        for root, dirs, files in os.walk(repo):
+            if ".git" in dirs:
+                dirs.remove(".git")
+            for d in dirs:
+                p = os.path.join(root, d)
+                rel = os.path.relpath(p, repo)
+                snap[rel] = ("LINK", os.readlink(p)) if os.path.islink(p) \
+                    else "DIR"
+            for f in files:
+                p = os.path.join(root, f)
+                rel = os.path.relpath(p, repo)
+                if os.path.islink(p):
+                    snap[rel] = ("LINK", os.readlink(p))
+                else:
+                    with open(p, "rb") as fh:
+                        snap[rel] = fh.read()
+        return snap
+
+
+class TriggerDeleteTest(_ShadowLifecycleFixture):
+    """#388: trigger_delete removes ONLY the var-shadow trigger file;
+    committed triggers refuse (SD-34); in-flight tokens and pending
+    fire/queued markers refuse fail-closed; every refusal leaves the tree
+    byte-identical."""
+
+    def _refused(self, repo, name, needle):
+        before = self._tree(repo)
+        res = dc.trigger_delete(repo, name)
+        self.assertFalse(res.get("ok"), res)
+        self.assertIn(needle, res["error"])
+        self.assertEqual(self._tree(repo), before)
+        return res
+
+    def test_charset_refused(self):
+        self._refused(self._repo(), "../evil", "charset")
+
+    def test_absent_shadow_with_committed_refuses_sd34(self):
+        repo = self._repo()
+        self._write_trigger(repo, where="committed")
+        self._refused(repo, "adhoc", "committed")
+
+    def test_absent_shadow_nothing_refuses(self):
+        self._refused(self._repo(), "adhoc", "no trigger shadow")
+
+    def test_symlink_shadow_refuses(self):
+        repo = self._repo()
+        os.makedirs(os.path.dirname(self._trig_shadow(repo)))
+        os.symlink("/nonexistent", self._trig_shadow(repo))
+        self._refused(repo, "adhoc", "not a clean file")
+
+    def test_dir_shadow_refuses(self):
+        repo = self._repo()
+        os.makedirs(self._trig_shadow(repo))
+        self._refused(repo, "adhoc", "not a clean file")
+
+    def test_inflight_exact_token_refuses(self):
+        repo = self._repo()
+        self._write_trigger(repo)
+        self._state(repo, "adhoc")
+        self._refused(repo, "adhoc", "in-flight")
+
+    def test_inflight_slot_token_refuses(self):
+        repo = self._repo()
+        self._write_trigger(repo)
+        self._state(repo, "adhoc@2")
+        self._refused(repo, "adhoc", "in-flight")
+
+    def test_inflight_lane_token_refuses(self):
+        repo = self._repo()
+        self._write_trigger(repo)
+        self._state(repo, "adhoc--beta")
+        self._refused(repo, "adhoc", "in-flight")
+
+    def test_inflight_child_token_refuses(self):
+        repo = self._repo()
+        self._write_trigger(repo)
+        self._state(repo, "adhoc.c0.qa")
+        self._refused(repo, "adhoc", "in-flight")
+
+    def test_inflight_unreadable_state_still_matches_by_filename(self):
+        # attribution is by FILENAME -- corrupt content cannot hide a run
+        repo = self._repo()
+        self._write_trigger(repo)
+        self._state(repo, "adhoc@1", content="{corrupt")
+        self._refused(repo, "adhoc", "in-flight")
+
+    def test_unrelated_tokens_do_not_block(self):
+        repo = self._repo()
+        self._write_trigger(repo)
+        for base in ("adhoc2", "adhocx", "adhoc.charlie", "other--adhoc"):
+            self._state(repo, base)
+        # reserved sidecar suffixes share the glob namespace and can
+        # outlive their run -- never evidence of an in-flight run
+        self._state(repo, "adhoc.outputs", content='{"x": 1}')
+        self._state(repo, "adhoc.work.outputs", content='{"x": 1}')
+        self._state(repo, "adhoc.c0.qa.outcome", content='{"x": 1}')
+        res = dc.trigger_delete(repo, "adhoc")
+        self.assertTrue(res["ok"], res)
+        self.assertFalse(os.path.exists(self._trig_shadow(repo)))
+
+    def test_fire_marker_refuses(self):
+        repo = self._repo()
+        self._write_trigger(repo)
+        self._marker(repo, "fire", "adhoc")
+        self._refused(repo, "adhoc", "fire")
+
+    def test_queued_lane_marker_refuses(self):
+        repo = self._repo()
+        self._write_trigger(repo)
+        self._marker(repo, "queued", "adhoc--beta")
+        self._refused(repo, "adhoc", "queued")
+
+    def test_stop_and_backoff_markers_do_not_block(self):
+        repo = self._repo()
+        self._write_trigger(repo)
+        self._marker(repo, "stop", "adhoc")
+        self._marker(repo, "backoff", "adhoc")
+        self.assertTrue(dc.trigger_delete(repo, "adhoc")["ok"])
+
+    def test_other_triggers_markers_do_not_block(self):
+        repo = self._repo()
+        self._write_trigger(repo)
+        self._marker(repo, "fire", "other")
+        self.assertTrue(dc.trigger_delete(repo, "adhoc")["ok"])
+
+    def test_unlistable_logs_dir_refuses(self):
+        repo = self._repo()
+        self._write_trigger(repo)
+        d = os.path.join(repo, "var", "autonomy-logs")
+        os.makedirs(d)
+        os.chmod(d, 0)
+        self.addCleanup(os.chmod, d, 0o755)
+        res = dc.trigger_delete(repo, "adhoc")
+        self.assertFalse(res.get("ok"), res)
+        self.assertIn("cannot", res["error"])
+
+    def test_success_plain_delete(self):
+        repo = self._repo()
+        self._write_trigger(repo)
+        res = dc.trigger_delete(repo, "adhoc")
+        self.assertTrue(res["ok"], res)
+        self.assertFalse(os.path.exists(self._trig_shadow(repo)))
+        self.assertIn("removed", res["message"])
+
+    def test_success_message_committed_resurfaces(self):
+        repo = self._repo()
+        self._write_trigger(repo, where="committed")
+        self._write_trigger(repo, where="var")
+        res = dc.trigger_delete(repo, "adhoc")
+        self.assertTrue(res["ok"], res)
+        self.assertIn("committed trigger resurfaces", res["message"])
+        # the committed twin is untouched
+        self.assertTrue(os.path.isfile(os.path.join(
+            repo, ".autonomy", "triggers", "adhoc.json")))
+
+    def test_success_message_shim_resurfaces(self):
+        # a materialised shim's native file: the role of the same name
+        # re-shims -- the exec-semantics flip runs BACKWARD; the message
+        # names it (the page confirm mirrors it).
+        repo = self._repo(config="roles:\n  adhoc:\n    enabled: true\n")
+        self._write_trigger(repo, where="var")
+        res = dc.trigger_delete(repo, "adhoc")
+        self.assertTrue(res["ok"], res)
+        self.assertIn("role shim resurfaces", res["message"])
+
+
+class PipelineDeleteTest(_ShadowLifecycleFixture):
+    """#388: pipeline_delete removes ONLY the var-shadow pipeline dir +
+    its provenance sidecar via an atomic rename-detach into the
+    delete-owned `.trash` scratch namespace. Committed templates refuse
+    (SD-34); in-flight runs (content-attributed, unprovable state
+    refuses) and pending markers of bound/unattributable triggers refuse
+    fail-closed; every refusal leaves the tree byte-identical."""
+
+    def _shadow_flow(self, repo, name="flow", doc_name=None):
+        """Plant a shadow dir for `name` (default: shadows the committed
+        `flow` -- the reset case)."""
+        shadow = self._pipe_shadow(repo, name)
+        os.makedirs(shadow)
+        with open(os.path.join(shadow, "pipeline.json"), "w") as fh:
+            json.dump({"name": doc_name or name, "version": 2,
+                       "caps": {"max_sessions_per_run": 4},
+                       "nodes": [{"id": "a", "type": "pick",
+                                  "brief_ref": "a.md"}], "edges": []}, fh)
+        with open(os.path.join(shadow, "a.md"), "w") as fh:
+            fh.write("edited brief\n")
+        return shadow
+
+    def _refused(self, repo, name, needle):
+        before = self._tree(repo)
+        res = dc.pipeline_delete(repo, name)
+        self.assertFalse(res.get("ok"), res)
+        self.assertIn(needle, res["error"])
+        self.assertEqual(self._tree(repo), before)
+        return res
+
+    def test_charset_refused(self):
+        self._refused(self._repo(), "../evil", "charset")
+
+    def test_absent_shadow_with_committed_refuses_sd34(self):
+        self._refused(self._repo(), "flow", "committed")
+
+    def test_absent_both_refuses(self):
+        self._refused(self._repo(), "ghost", "no pipeline shadow")
+
+    def test_symlink_shadow_refuses(self):
+        repo = self._repo()
+        vroot = os.path.join(repo, "var", "autonomy", "pipelines")
+        os.makedirs(vroot)
+        os.symlink("/nonexistent", os.path.join(vroot, "flow"))
+        self._refused(repo, "flow", "not a clean directory")
+
+    def test_file_shadow_refuses(self):
+        repo = self._repo()
+        vroot = os.path.join(repo, "var", "autonomy", "pipelines")
+        os.makedirs(vroot)
+        with open(os.path.join(vroot, "flow"), "w") as fh:
+            fh.write("junk")
+        self._refused(repo, "flow", "not a clean directory")
+
+    def test_inflight_run_of_this_pipeline_refuses(self):
+        repo = self._repo()
+        self._shadow_flow(repo)
+        self._state(repo, "sometrigger", pipeline="flow")
+        self._refused(repo, "flow", "in-flight")
+
+    def test_inflight_unreadable_state_refuses(self):
+        repo = self._repo()
+        self._shadow_flow(repo)
+        self._state(repo, "sometrigger", content="{corrupt")
+        self._refused(repo, "flow", "cannot prove")
+
+    def test_inflight_nondict_and_docless_state_refuse(self):
+        repo = self._repo()
+        self._shadow_flow(repo)
+        self._state(repo, "t1", content="[1, 2]")
+        self._refused(repo, "flow", "cannot prove")
+        os.unlink(os.path.join(repo, "var", "autonomy-logs",
+                               ".pipeline-run-t1.json"))
+        self._state(repo, "t2", content='{"fmt": 2, "status": "x"}')
+        self._refused(repo, "flow", "cannot prove")
+
+    def test_unrelated_inflight_doc_does_not_block(self):
+        repo = self._repo()
+        self._shadow_flow(repo)
+        self._state(repo, "sometrigger", pipeline="otherpipe")
+        self.assertTrue(dc.pipeline_delete(repo, "flow")["ok"])
+
+    def test_reserved_sidecar_states_do_not_block(self):
+        repo = self._repo()
+        self._shadow_flow(repo)
+        self._state(repo, "t.a.outputs", content="{corrupt")
+        self._state(repo, "t.verdict", content="{corrupt")
+        self.assertTrue(dc.pipeline_delete(repo, "flow")["ok"])
+
+    def test_bound_native_trigger_fire_marker_refuses(self):
+        repo = self._repo()
+        self._shadow_flow(repo)
+        self._write_trigger(repo, name="adhoc", pipeline="flow")
+        self._marker(repo, "fire", "adhoc")
+        self._refused(repo, "flow", "adhoc")
+
+    def test_bound_shim_trigger_queued_marker_refuses(self):
+        repo = self._repo(config="roles:\n  coder:\n    enabled: true\n"
+                                 "    pipeline: flow\n")
+        self._shadow_flow(repo)
+        self._marker(repo, "queued", "coder")
+        self._refused(repo, "flow", "coder")
+
+    def test_unattributable_marker_refuses(self):
+        repo = self._repo()
+        self._shadow_flow(repo)
+        self._marker(repo, "fire", "junkname")
+        self._refused(repo, "flow", "junkname")
+
+    def test_refused_stem_marker_refuses(self):
+        # a broken trigger file's binding is unknowable -- its marker
+        # cannot be proven not-ours (CP1 pass 2)
+        repo = self._repo()
+        self._shadow_flow(repo)
+        self._write_trigger(repo, name="bad", raw="{corrupt")
+        self._marker(repo, "fire", "bad")
+        self._refused(repo, "flow", "bad")
+
+    def test_prefix_ambiguous_refused_stem_marker_refuses(self):
+        # marker `good--x`: valid trigger `good` is bound ELSEWHERE, but a
+        # refused trigger literally named `good--x` bound HERE also exists
+        # -- attribution to `good` alone would be fail-open (CP1 pass 2)
+        repo = self._repo()
+        self._shadow_flow(repo)
+        self._write_trigger(repo, name="good", pipeline="otherpipe")
+        self._write_trigger(repo, name="good--x", raw="{corrupt")
+        self._marker(repo, "fire", "good--x")
+        self._refused(repo, "flow", "good--x")
+
+    def test_marker_of_valid_trigger_bound_elsewhere_passes(self):
+        repo = self._repo()
+        self._shadow_flow(repo)
+        self._write_trigger(repo, name="other", pipeline="otherpipe")
+        self._marker(repo, "fire", "other")
+        self.assertTrue(dc.pipeline_delete(repo, "flow")["ok"])
+
+    def test_config_unreadable_refuses_when_markers_pend(self):
+        repo = self._repo(config="[unparseable\n")
+        self._shadow_flow(repo)
+        self._marker(repo, "fire", "whatever")
+        self._refused(repo, "flow", "enumerate")
+
+    def test_success_reset_removes_shadow_and_stale_sidecar(self):
+        repo = self._repo()
+        self._shadow_flow(repo)
+        vroot = os.path.join(repo, "var", "autonomy", "pipelines")
+        with open(os.path.join(vroot, "flow.provenance.json"), "w") as fh:
+            fh.write('{"created": "blank", "at": 1}')
+        res = dc.pipeline_delete(repo, "flow")
+        self.assertTrue(res["ok"], res)
+        self.assertIn("committed template", res["message"])
+        self.assertFalse(os.path.exists(self._pipe_shadow(repo, "flow")))
+        self.assertFalse(os.path.exists(
+            os.path.join(vroot, "flow.provenance.json")))
+        self.assertFalse(os.path.exists(
+            self._pipe_shadow(repo, "flow") + ".trash"))
+        # the committed template is untouched and resolves again
+        import pipeline as pl
+        self.assertEqual(pl.effective_pipeline_dir(repo, "flow"),
+                         os.path.join(repo, ".autonomy", "pipelines", "flow"))
+
+    def test_success_full_delete_of_created_pipeline(self):
+        # create -> delete round-trip: dir AND sidecar gone
+        repo = self._repo()
+        self.assertTrue(dc.pipeline_create(repo, "fresh")["ok"])
+        res = dc.pipeline_delete(repo, "fresh")
+        self.assertTrue(res["ok"], res)
+        self.assertIn("removed", res["message"])
+        self.assertFalse(os.path.exists(self._pipe_shadow(repo, "fresh")))
+        self.assertFalse(os.path.exists(
+            self._pipe_shadow(repo, "fresh") + ".provenance.json"))
+        self.assertFalse(os.path.exists(
+            self._pipe_shadow(repo, "fresh") + ".trash"))
+
+    def test_stale_trash_reclaimed(self):
+        repo = self._repo()
+        self._shadow_flow(repo)
+        stale = self._pipe_shadow(repo, "flow") + ".trash"
+        os.makedirs(os.path.join(stale, "junkdir"))
+        res = dc.pipeline_delete(repo, "flow")
+        self.assertTrue(res["ok"], res)
+        self.assertFalse(os.path.exists(stale))
+
+    def test_rename_failure_refuses_byte_identical(self):
+        from unittest import mock
+        repo = self._repo()
+        self._shadow_flow(repo)
+        before = self._tree(repo)
+        with mock.patch("os.rename", side_effect=OSError("disk says no")):
+            res = dc.pipeline_delete(repo, "flow")
+        self.assertFalse(res.get("ok"), res)
+        self.assertIn("detach", res["error"])
         self.assertEqual(self._tree(repo), before)

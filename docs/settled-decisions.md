@@ -428,6 +428,30 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     *(#383; specs/2026-07-11-pipeline-model-phaseD3-pipeline-create.md;
     plans/2026-07-11-pipeline-model-phaseD3-pipeline-create.md.)*
 
+45. **Shadow lifecycle: delete and reset-to-committed are ONE operation —
+    remove the var shadow — and its guards are fail-closed** (2026-07-11,
+    #388; the SD-43/SD-44 deferred pair). `trigger_delete` /
+    `pipeline_delete` remove ONLY the SD-34 var-shadow asset (+ the D3
+    provenance sidecar); what happens next is defined by the resolvers'
+    own fallback order, never a second code path: a committed twin
+    resurfaces (reset), a same-name role re-shims (D2's materialise flip
+    reversed — the page confirm names it), a shadow-only asset is gone
+    (bound triggers keep the honest missing-pipeline state). Committed
+    assets are never dashboard-deletable. Guards run BEFORE any mutation
+    (refusals byte-identical) and refuse on anything unprovable: in-flight
+    tokens (filename over-match for triggers; content attribution for
+    pipelines with malformed state refusing), pending fire/queued markers
+    (bound, refused-stem and unattributable entries all refuse;
+    stop/backoff never block — per-name state stays honest for a
+    resurfaced twin), unlistable dirs (ENOENT alone is provably empty).
+    Scan scope is the managed repo only — a separate lane service
+    resolves from its OWN checkout, so this repo's shadow delete cannot
+    affect it. Pipeline detach is an atomic rename into the delete-owned
+    `.trash` reserved suffix (sharing the writers' `.staging` would race
+    concurrent create/save under the ThreadingHTTPServer); the gallery
+    skips reserved-suffix entries. *(#388;
+    specs/2026-07-11-pipeline-model-shadow-lifecycle.md.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could
