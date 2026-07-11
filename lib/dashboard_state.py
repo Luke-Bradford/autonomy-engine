@@ -2558,7 +2558,12 @@ def _journal_last_run(journal_path, role, pipeline_name):
             continue       # RecursionError): skip, the reader stays total
         if not isinstance(rec, dict):
             continue
-        if rec.get("role") != role or rec.get("pipeline") != pipeline_name:
+        # Trigger-first (#390): post-drop lines carry role:"" -- a role-only
+        # match would freeze the lighting at the last pre-drop run. Old
+        # lines (role, no trigger) keep matching via the fallback; a shim's
+        # trigger name is byte-equal to its role (SD-41).
+        if (rec.get("trigger") or rec.get("role")) != role \
+                or rec.get("pipeline") != pipeline_name:
             continue
         nodes = rec.get("nodes")
         return {"run_id": rec.get("run_id", ""),
@@ -2687,7 +2692,10 @@ def list_runs(logdir, journal_path, limit=20):
             continue                      # junk filename: never a row
         unreadable = not state
         doc = state.get("doc")
-        trigger = state.get("trigger") or state.get("role") or tok["name"]
+        # #390: `trigger` is the state's ONE name field; a legacy state's
+        # `role` twin is tolerated but never consulted (the token name is
+        # the filename truth and byte-equals a real legacy state's role).
+        trigger = state.get("trigger") or tok["name"]
         rows.append({
             "token": base, "state": "in-flight",
             "trigger": str(trigger),
@@ -3201,6 +3209,15 @@ def _pipeline_view_by_token(repo_path, logdir, token):
         return {"error": "state file for %r unreadable" % (token,)}
     if not isinstance(state, dict):
         return {"error": "state file for %r unreadable" % (token,)}
+    # Reparse with the state's OWN lane (list_runs parity; CP2 on #390):
+    # the first parse ran before the state was readable, so a lane-scoped
+    # token would keep its --<lane> tail glued to the name and render it
+    # in run.trigger while run.lane read "". Hintless tok stays the
+    # fallback for junk-lane states.
+    lane_hint = state.get("lane") if isinstance(state.get("lane"), str) \
+        else ""
+    if lane_hint:
+        tok = _parse_run_token(token, lane_hint=lane_hint) or tok
     view = {"repo": os.path.basename(repo_path.rstrip("/")),
             "path": repo_path, "role": None}
     doc = state.get("doc") if isinstance(state.get("doc"), dict) else None
@@ -3247,8 +3264,8 @@ def _pipeline_view_by_token(repo_path, logdir, token):
     view["run"] = {
         "token": token,
         "run_id": str(state.get("run_id", "")),
-        "trigger": str(state.get("trigger") or state.get("role")
-                       or tok["name"]),
+        # #390: a legacy state's `role` twin is tolerated, never consulted.
+        "trigger": str(state.get("trigger") or tok["name"]),
         "status": str(state.get("status", "")),
         "parent_run": (str(state["parent_run"])
                        if isinstance(state.get("parent_run"), str)

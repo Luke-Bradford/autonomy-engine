@@ -1,5 +1,5 @@
 {"fmt": 2, "run_id": "pr-sweep-20260709T230000-7003",
- "trigger": "pr-sweep", "kind": "native", "role": "pr-sweep", "lane": "",
+ "trigger": "pr-sweep", "kind": "native", "lane": "",
  "params": {}, "status": "in_progress", "sessions": 2,
  "run": {"id": "pr-sweep-20260709T230000-7003", "pipeline": "fixture-flow",
          "trigger": "pr-sweep", "repo": "tests/fixtures/repo-alpha"},

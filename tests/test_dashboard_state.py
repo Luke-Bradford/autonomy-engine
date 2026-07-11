@@ -1733,9 +1733,8 @@ class TestParseAutonomyQuestion(unittest.TestCase):
 
 class ChildRunToleranceTest(unittest.TestCase):
     def test_child_run_state_files_never_crash_build_repo_state(self):
-        # Phase C: child/slotted state files land in var/autonomy-logs; the
-        # dashboard keeps the ROLE view until Phase D -- children are
-        # invisible to its glob, but they must never crash the build.
+        # Phase C origin: child/slotted state files land in var/autonomy-logs
+        # -- whatever the page renders, they must never crash the build.
         d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, d, True)
         os.makedirs(os.path.join(d, ".autonomy"))
@@ -1743,7 +1742,8 @@ class ChildRunToleranceTest(unittest.TestCase):
         os.makedirs(logdir)
         with open(os.path.join(d, ".autonomy", "config.yaml"), "w") as fh:
             fh.write("roles:\n  coder:\n    enabled: true\n")
-        child = {"fmt": 2, "run_id": "coder.c0.qa-x-1", "role": "coder.c0.qa",
+        child = {"fmt": 2, "run_id": "coder.c0.qa-x-1",
+                 "trigger": "coder.c0.qa", "kind": "native",
                  "lane": "", "doc": {"name": "qa-sweep", "nodes": []},
                  "meta": {}, "parent_run": "coder-x-1", "parent_node": "qa",
                  "call_depth": 1, "call_path": ["p", "qa-sweep"],
@@ -1839,6 +1839,43 @@ class ListRunsTest(unittest.TestCase):
         # grandfather display: the coder lines carry NO trigger -> role shown
         coder = [r for r in fin if r["trigger"] == "coder"]
         self.assertTrue(coder)
+
+    def test_post_drop_state_trigger_from_state_field(self):
+        # #390: a state minted after the drop has NO role key; the row's
+        # trigger comes from the state's own trigger field (lane-scoped
+        # filename proves it is not filename-derived).
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        state = {"fmt": 2, "run_id": "night-batch-x-1",
+                 "trigger": "night-batch", "kind": "native",
+                 "lane": "night", "status": "in_progress", "sessions": 1,
+                 "doc": {"name": "flow"}}
+        with open(os.path.join(d, ".pipeline-run-night-batch--night.json"),
+                  "w") as fh:
+            json.dump(state, fh)
+        runs = ds.list_runs(d, os.path.join(d, "journal.jsonl"))
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["trigger"], "night-batch")
+        self.assertEqual(runs[0]["lane"], "night")
+
+    def test_legacy_state_role_key_tolerated_and_ignored(self):
+        # #390 tolerate-and-ignore: a legacy pre-drop state still carries
+        # `role` -- readers must neither crash NOR consult it. The stale
+        # alias differs from the token name to prove the key is ignored;
+        # the row renders the filename truth.
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        state = {"fmt": 2, "run_id": "coder-x-1",
+                 "role": "stale-alias",           # legacy pre-drop state
+                 "lane": "night", "status": "in_progress", "sessions": 1,
+                 "doc": {"name": "flow"}}
+        with open(os.path.join(d, ".pipeline-run-coder--night.json"),
+                  "w") as fh:
+            json.dump(state, fh)
+        runs = ds.list_runs(d, os.path.join(d, "journal.jsonl"))
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["trigger"], "coder")   # token name, not role
+        self.assertEqual(runs[0]["lane"], "night")      # lane_hint stripped
 
     def test_inflight_first_then_journal_newest_first(self):
         runs = ds.list_runs(self.FIXLOG, self.FIXJOURNAL)
@@ -2355,6 +2392,56 @@ class PipelineViewByNameTokenTest(unittest.TestCase):
                        "units": {}}, fh)
         view = ds.build_pipeline_view(d, token="pr-sweep.c1.qa")
         self.assertEqual(view["run"]["parent_token"], "pr-sweep@1")
+
+    def test_by_token_legacy_role_key_tolerated_and_ignored(self):
+        # #390: run.trigger keys the state's trigger field; a legacy state's
+        # stale `role` alias is tolerated but never consulted -- absent a
+        # trigger field the token name (filename truth) renders.
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        logdir = os.path.join(d, "var", "autonomy-logs")
+        os.makedirs(logdir)
+        with open(os.path.join(logdir, ".pipeline-run-coder.json"),
+                  "w") as fh:
+            json.dump({"fmt": 2, "run_id": "coder-x-1",
+                       "role": "stale-alias",     # legacy pre-drop state
+                       "status": "in_progress",
+                       "doc": {"name": "fixture-flow", "nodes": []},
+                       "units": {}}, fh)
+        view = ds.build_pipeline_view(d, token="coder")
+        self.assertEqual(view["run"]["trigger"], "coder")
+
+    def test_by_token_lane_scoped_reparses_with_state_lane(self):
+        # CP2 on #390: the token parses BEFORE the state is readable, so a
+        # lane-scoped token needs a REPARSE with the state's own lane
+        # (list_runs parity) -- or run.trigger renders "coder--night" and
+        # run.lane "". Pins BOTH shapes: a current state (trigger field)
+        # gets its lane back; a legacy role-only state falls back to the
+        # correctly-stripped token name.
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        logdir = os.path.join(d, "var", "autonomy-logs")
+        os.makedirs(logdir)
+        cur = {"fmt": 2, "run_id": "coder-x-1", "trigger": "coder",
+               "lane": "night", "status": "in_progress",
+               "doc": {"name": "fixture-flow", "nodes": []}, "units": {}}
+        with open(os.path.join(logdir,
+                               ".pipeline-run-coder--night.json"),
+                  "w") as fh:
+            json.dump(cur, fh)
+        v = ds.build_pipeline_view(d, token="coder--night")
+        self.assertEqual(v["run"]["trigger"], "coder")
+        self.assertEqual(v["run"]["lane"], "night")
+        legacy = {"fmt": 2, "run_id": "qa-x-1",
+                  "role": "qa",                 # legacy pre-drop state
+                  "lane": "night", "status": "in_progress",
+                  "doc": {"name": "fixture-flow", "nodes": []}, "units": {}}
+        with open(os.path.join(logdir, ".pipeline-run-qa--night.json"),
+                  "w") as fh:
+            json.dump(legacy, fh)
+        v = ds.build_pipeline_view(d, token="qa--night")
+        self.assertEqual(v["run"]["trigger"], "qa")   # stripped token name
+        self.assertEqual(v["run"]["lane"], "night")
 
     def test_by_token_grammar_matrix(self):
         ok = ds.build_pipeline_view(FIX, token="pr-sweep@1")
@@ -4182,6 +4269,24 @@ class TestBuildPipelineView(unittest.TestCase):
         self.assertTrue(v["errors"])
         self.assertEqual(v["edges_effective"], [])
 
+    def test_last_run_matches_post_drop_journal_line_trigger_first(self):
+        # #390: post-drop journal lines carry role:"" + trigger -- the
+        # observed-lighting matcher must key trigger-first or the canvas
+        # freezes at the last pre-drop run. The fixture's older coder lines
+        # are role-only (grandfather shape); the appended NEWER line is
+        # post-drop shape and must win.
+        repo = self._tmp_repo()
+        j = os.path.join(repo, "var", "autonomy-logs", "journal.jsonl")
+        line = {"role": "", "trigger": "coder", "pipeline": "fixture-flow",
+                "run_id": "coder-postdrop-1", "outcome": "failure",
+                "pass": False, "started": 1751900000,
+                "finished": 1751900600, "sessions": 1, "nodes": []}
+        with open(j, "a") as fh:
+            fh.write(json.dumps(line) + "\n")
+        v = ds.build_pipeline_view(repo, "coder")
+        self.assertEqual(v["last_run"]["run_id"], "coder-postdrop-1")
+        self.assertFalse(v["last_run"]["pass"])
+
     def test_missing_journal_means_no_lighting(self):
         repo = self._tmp_repo()
         os.remove(os.path.join(repo, "var", "autonomy-logs", "journal.jsonl"))
@@ -4192,7 +4297,7 @@ class TestBuildPipelineView(unittest.TestCase):
 
     def test_inflight_state_projected(self):
         repo = self._tmp_repo()
-        state = {"fmt": 2, "run_id": "coder-x-1", "role": "coder",
+        state = {"fmt": 2, "run_id": "coder-x-1", "trigger": "coder",
                  "doc": {"name": "fixture-flow"}, "sessions": 3,
                  "units": {"pick": {"status": "success"},
                            "plan": {"status": "dispatched"},

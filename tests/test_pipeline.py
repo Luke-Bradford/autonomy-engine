@@ -1093,7 +1093,10 @@ class JournalLedgerTest(unittest.TestCase):
             lines = fh.read().splitlines()
         self.assertEqual(len(lines), 1)
         rec = json.loads(lines[0])
-        self.assertEqual(rec["role"], "coder")
+        # #390: the state twin is dropped -- new lines key on `trigger`;
+        # `role` stays in the line schema, empty for post-drop states.
+        self.assertEqual(rec["role"], "")
+        self.assertEqual(rec["trigger"], "coder")
         self.assertEqual(rec["pipeline"], "legacy-coder")
         self.assertTrue(rec["wrapped"])
         self.assertEqual(rec["outcome"], "success")
@@ -1812,7 +1815,7 @@ class SubstitutionWiringTest(unittest.TestCase):
                 fh.write(text)
         d = dict(doc)
         d["edges"] = pipeline.effective_edges(d)
-        st = {"fmt": 2, "run_id": "t1-x-1", "role": "t1", "lane": "",
+        st = {"fmt": 2, "run_id": "t1-x-1", "lane": "",
               "doc": d,
               "meta": {"pipeline_dir": self.pdir, "wrapped": False,
                        "from": "flow", "from_version": 1},
@@ -2009,6 +2012,12 @@ class StartRunTriggerTest(unittest.TestCase):
         self.assertEqual(st["run"]["trigger"], "t1")
         self.assertEqual(st["run"]["repo"], self.repo)
 
+    def test_native_mint_carries_no_role_key(self):
+        # #390: the deprecated twin is dropped; `trigger` is the name field.
+        self._trigger()
+        st = self._start()
+        self.assertNotIn("role", st)
+
     def test_required_unset_refuses_before_any_state_write(self):
         t = {"name": "t1", "pipeline": "flow", "params": {},
              "firing": {"mode": "continuous"}}
@@ -2160,7 +2169,7 @@ class _ChildFixture(unittest.TestCase):
         units = dict((u, {"status": "pending"}) for u in
                      pipeline._top_units(doc))
         units["code"] = {"status": "success"}
-        state = {"fmt": 2, "run_id": "%s-x-1" % name, "role": name,
+        state = {"fmt": 2, "run_id": "%s-x-1" % name,
                  "lane": "", "doc": dict(doc, edges=pipeline.effective_edges(doc)),
                  "meta": {}, "trigger": name, "kind": "native", "params": {},
                  "run": {"id": "%s-x-1" % name, "pipeline": doc["name"],
@@ -2194,6 +2203,16 @@ class ChildRunTest(_ChildFixture):
         self.assertEqual(child["parent_node"], "qa")
         self.assertEqual(child["call_depth"], 1)
         self.assertEqual(child["call_path"], ["parent", "qa-sweep"])
+
+    def test_child_mint_carries_no_role_key(self):
+        # #390: child states key on `trigger` like every other mint.
+        sp, st = self._parent_state()
+        _name, cpath = pipeline.start_child_run(
+            self.repo, sp, st, st["doc"]["nodes"][1])
+        with open(cpath) as fh:
+            child = json.load(fh)
+        self.assertNotIn("role", child)
+        self.assertEqual(child["trigger"], "par.c0.qa")
 
     def test_cycle_refused(self):
         sp, st = self._parent_state()
@@ -2246,7 +2265,7 @@ class ChildOutcomeSidecarTest(_ChildFixture):
                           "brief_ref": "scan.md"}],
                "edges": []}
         sp = os.path.join(self.logdir, ".pipeline-run-par.c0.qa.json")
-        st = {"fmt": 2, "run_id": "par.c0.qa-x-1", "role": "par.c0.qa",
+        st = {"fmt": 2, "run_id": "par.c0.qa-x-1",
               "lane": "", "doc": doc, "meta": {}, "trigger": "par.c0.qa",
               "kind": "native", "params": {},
               "run": {"id": "par.c0.qa-x-1", "pipeline": "qa-sweep",
@@ -2667,7 +2686,7 @@ class SecretChannelTest(unittest.TestCase):
             fh.write("use the env token")
         doc = self._doc()
         sp = os.path.join(logdir, ".pipeline-run-s.json")
-        state = {"fmt": 2, "run_id": "s-x-1", "role": "s", "lane": "",
+        state = {"fmt": 2, "run_id": "s-x-1", "lane": "",
                  "doc": dict(doc, edges=[]), "meta": {"pipeline_dir": pdir},
                  "trigger": "s", "kind": "native",
                  "params": {"tok": "gh-token"},
@@ -2825,7 +2844,47 @@ class JournalTriggerFieldTest(unittest.TestCase):
         with open(self.journal) as fh:
             rec = json.loads(fh.read().splitlines()[0])
         self.assertEqual(rec["trigger"], "coder")
-        self.assertEqual(rec["role"], "coder")      # ledger keys stay put
+        # #390: `role` is no longer minted into state -- the ledger keys on
+        # `trigger` (SD-41); the journal field survives, empty.
+        self.assertEqual(rec["role"], "")
+
+
+class StateRoleDropTest(unittest.TestCase):
+    """#390: run state files mint NO `role` key -- `trigger` is the ONE
+    name field (SD-41's deferred drop, legal after Phase D). Journal lines
+    are never touched: a LEGACY in-flight state that finishes post-drop
+    still lands its grandfatherable `role`."""
+
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, True)
+        os.makedirs(os.path.join(self.repo, ".autonomy"))
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("engine:\n  label: t\n")   # no roles block -> coder wraps
+        with open(os.path.join(self.repo, ".autonomy", "loop_prompt.md"), "w") as fh:
+            fh.write("legacy prompt\n")
+        self.state = os.path.join(self.repo, "state.json")
+        self.journal = os.path.join(self.repo, "journal.jsonl")
+
+    def test_shim_mint_carries_no_role_key(self):
+        st = pipeline.start_run(self.repo, "coder", self.state)
+        self.assertNotIn("role", st)
+        self.assertEqual(st["trigger"], "coder")
+        with open(self.state) as fh:
+            self.assertNotIn("role", json.load(fh))
+
+    def test_legacy_state_journal_append_preserves_role(self):
+        # legacy pre-drop state: `role`, NO `trigger` (pre-Phase-B shape).
+        # Its evidence must land grandfatherable, never blanked.
+        legacy = {"fmt": 2, "run_id": "coder-x-1", "role": "coder",
+                  "lane": "", "doc": {"name": "flow"}, "meta": {},
+                  "started": 1, "sessions": 2, "outcome": "success",
+                  "nodes_done": [], "bounces": {}}
+        pipeline._journal_append(self.journal, legacy)
+        with open(self.journal) as fh:
+            rec = json.loads(fh.read().splitlines()[0])
+        self.assertEqual(rec["role"], "coder")
+        self.assertEqual(rec["trigger"], "")
 
 
 class CheckRefsTest(unittest.TestCase):

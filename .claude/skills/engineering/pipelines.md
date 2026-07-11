@@ -84,10 +84,15 @@ in them), `run_session <token> <kind>` (`shim` = the role path
 byte-identical; `native` = no role settings, runs_as from the doc),
 per-trigger markers under `var/trigger-ctl/{fire,queued,stop,backoff}/`,
 enumeration failure = idle tick (SD-12's coder fallback RETIRED). State
-gains `trigger`/`kind`/`params`/`run`; journal carries `trigger`,
-`parent_run` and (Phase E) `kind` -- the ledger was re-keyed on
-`trigger` in Phase E (shim trigger name == role name BYTE-EQUAL is what
-makes the grandfather clause sound).
+carries `trigger`/`kind`/`params`/`run` -- `trigger` is the ONE name
+field (#390 dropped the deprecated `role` twin from every mint; readers
+tolerate-and-ignore it on pre-drop states, never require it). Journal
+carries `trigger`, `parent_run` and (Phase E) `kind` -- the ledger was
+re-keyed on `trigger` in Phase E (shim trigger name == role name
+BYTE-EQUAL is what makes the grandfather clause sound); journal lines
+are never rewritten, and new lines land `role: ""` for post-drop states
+while a legacy in-flight state finishing after the drop still lands its
+grandfatherable `role`.
 
 ## Child runs + secrets (Phase C #376, SD-40)
 
