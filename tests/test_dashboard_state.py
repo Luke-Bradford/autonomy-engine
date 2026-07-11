@@ -2065,6 +2065,114 @@ class BuildTriggersViewTest(unittest.TestCase):
         self.assertIn("ticket", t["fire_block_reason"])
 
 
+class FireParamsProjectionTest(BuildTriggersViewTest):
+    """Phase D2 (#383): declared-params projections for the authoring form
+    (pipelines[].params) and the run-now overlay (triggers[].fire_params),
+    plus the trigger_fire_ready overrides verdict the write side shares."""
+
+    DECLS = [{"name": "q", "type": "string", "required": True},
+             {"name": "n", "type": "number", "default": 3},
+             {"name": "kind", "type": "enum", "choices": ["a", "b"],
+              "required": False},
+             {"name": "tok", "type": "secret", "default": "gh-label"}]
+
+    def _params_repo(self, trig_params=None, mode="manual"):
+        return self._mini_repo(
+            {"adhoc": {"name": "adhoc", "pipeline": "flow",
+                       "params": (trig_params if trig_params is not None
+                                  else {"q": "saved"}),
+                       "firing": {"mode": mode}}},
+            pipeline_params=self.DECLS)
+
+    def test_gallery_rows_carry_declared_params(self):
+        d = self._params_repo()
+        view = ds.build_triggers_view(d)
+        gal = dict((p["name"], p) for p in view["pipelines"])
+        params = dict((p["name"], p) for p in gal["flow"]["params"])
+        self.assertEqual(sorted(params), ["kind", "n", "q", "tok"])
+        self.assertTrue(params["q"]["required"])
+        self.assertEqual(params["n"]["default"], 3)
+        self.assertNotIn("default", params["q"])
+        self.assertEqual(params["kind"]["choices"], ["a", "b"])
+        self.assertEqual(params["tok"]["type"], "secret")
+        # a secret's default is a LABEL (non-secret, SD-8) -- included so
+        # the form can show it
+        self.assertEqual(params["tok"]["default"], "gh-label")
+
+    def test_invalid_doc_gallery_params_empty(self):
+        d = self._params_repo()
+        with open(os.path.join(d, ".autonomy", "pipelines", "flow",
+                               "pipeline.json"), "w") as fh:
+            fh.write("{corrupt")
+        view = ds.build_triggers_view(d)
+        gal = dict((p["name"], p) for p in view["pipelines"])
+        self.assertEqual(gal["flow"]["params"], [])
+
+    def test_manual_trigger_row_carries_fire_params(self):
+        d = self._params_repo()
+        view = ds.build_triggers_view(d)
+        t = [x for x in view["triggers"] if x["name"] == "adhoc"][0]
+        self.assertEqual([p["name"] for p in t["fire_params"]],
+                         [p["name"] for p in
+                          ds._declared_params({"params": self.DECLS})])
+        self.assertTrue(t["fire_ready"])          # saved q + defaults
+
+    def test_non_manual_trigger_fire_params_empty(self):
+        d = self._params_repo(mode="continuous")
+        view = ds.build_triggers_view(d)
+        t = [x for x in view["triggers"] if x["name"] == "adhoc"][0]
+        self.assertEqual(t["fire_params"], [])
+
+    def test_unreadable_doc_fire_params_empty(self):
+        d = self._params_repo()
+        with open(os.path.join(d, ".autonomy", "pipelines", "flow",
+                               "pipeline.json"), "w") as fh:
+            fh.write("{corrupt")
+        view = ds.build_triggers_view(d)
+        t = [x for x in view["triggers"] if x["name"] == "adhoc"][0]
+        self.assertEqual(t["fire_params"], [])
+
+    def _trig(self, params=None, mode="manual"):
+        return {"name": "adhoc", "pipeline": "flow",
+                "params": params if params is not None else {"q": "saved"},
+                "firing": {"mode": mode}}
+
+    def test_fire_ready_overrides_none_is_d1_verdict(self):
+        d = self._params_repo()
+        ok, reason = ds.trigger_fire_ready(d, self._trig())
+        self.assertTrue(ok)
+        ok, reason = ds.trigger_fire_ready(d, self._trig(params={}))
+        self.assertFalse(ok)                      # required q unset
+        self.assertIn("q", reason)
+
+    def test_fire_ready_overrides_fix_missing_required(self):
+        d = self._params_repo()
+        ok, reason = ds.trigger_fire_ready(d, self._trig(params={}),
+                                           overrides={"q": "supplied"})
+        self.assertTrue(ok, reason)
+
+    def test_fire_ready_overrides_refusals(self):
+        d = self._params_repo()
+        trig = self._trig()
+        ok, reason = ds.trigger_fire_ready(d, trig, overrides=["q"])
+        self.assertFalse(ok)
+        ok, reason = ds.trigger_fire_ready(d, trig,
+                                           overrides={"ghost": "x"})
+        self.assertFalse(ok)
+        ok, reason = ds.trigger_fire_ready(d, trig,
+                                           overrides={"q": ["list"]})
+        self.assertFalse(ok)
+        self.assertIn("scalar", reason)
+        ok, reason = ds.trigger_fire_ready(
+            d, trig, overrides={"tok": "hunter2 raw!"})
+        self.assertFalse(ok)
+        self.assertIn("tok", reason)
+        self.assertNotIn("hunter2", reason)      # never echo the value
+        ok, reason = ds.trigger_fire_ready(d, trig,
+                                           overrides={"n": "abc"})
+        self.assertFalse(ok)                      # type mismatch
+
+
 class RepoStateTriggersTest(unittest.TestCase):
     """Phase D1 (#383): build_repo_state's additive trigger keys -- light
     rows for the fleet rail + trust for the repo card/needs-you. Nothing
