@@ -2790,7 +2790,11 @@ def trigger_fire_ready(repo_path, trig, overrides=None):
                 if isinstance(v, (dict, list)):
                     return False, "run-now param %r must be a scalar" % k
             params.update(overrides)
-        pipeline_mod.resolve_params(declared, params)
+        # _resolve_run_params (not bare resolve_params) so the write-side
+        # verdict runs the SAME repo/account existence checks firecheck and
+        # start do -- a payload naming an unregistered repo/account is
+        # refused HERE, not accepted then rejected downstream (CP2 finding 2).
+        pipeline_mod._resolve_run_params(repo_path, doc, params)
         return True, None
     except Exception as exc:
         return False, "pipeline/params not fireable: %s" % exc

@@ -1049,6 +1049,19 @@ class FireParamsCheckTest(unittest.TestCase):
         self._write('{"n": 3}')
         self.assertEqual(self._check()[0], "transient")
 
+    def test_bad_payload_key_stays_payload_when_saved_also_fails(self):
+        # CP2: an undeclared payload key is DETERMINISTICALLY the payload's
+        # fault even when the saved params ALSO fail (required q unset) --
+        # the marker must be removed (rc 3), never kept forever.
+        self._trigger(params={})            # required q unset -> saved fails
+        self._write('{"ghost": "x"}')       # ...AND an undeclared payload key
+        self.assertEqual(self._check()[0], "payload")
+
+    def test_bad_type_payload_stays_payload_when_saved_also_fails(self):
+        self._trigger(params={})
+        self._write('{"n": "abc"}')         # deterministic type fault
+        self.assertEqual(self._check()[0], "payload")
+
     def test_payload_fixing_a_missing_required_is_ok(self):
         self._trigger(params={})
         self._write('{"q": "supplied"}')
@@ -1078,6 +1091,32 @@ class FireParamsCheckTest(unittest.TestCase):
         self._trigger()
         self._write('{"q": "' + "x" * 70000 + '"}')
         self.assertEqual(self._check()[0], "payload")
+
+    def test_unregistered_repo_payload_is_payload_class(self):
+        # CP2 finding 2: firecheck runs the SAME existence checks start does
+        # (_resolve_run_params), so a payload naming an unregistered repo is
+        # a deterministic PAYLOAD fault -- removed, not retried forever.
+        pdir = os.path.join(self.repo, ".autonomy", "pipelines", "pflow")
+        with open(os.path.join(pdir, "pipeline.json")) as fh:
+            doc = json.load(fh)
+        doc["params"] = [{"name": "target", "type": "repo", "required": True}]
+        with open(os.path.join(pdir, "pipeline.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(pdir, "a.md"), "w") as fh:
+            fh.write("no refs")
+        with open(os.path.join(self.tdir, "adhoc.json"), "w") as fh:
+            json.dump({"name": "adhoc", "pipeline": "pflow",
+                       "params": {"target": "/good"},
+                       "firing": {"mode": "manual"}}, fh)
+        real = pipeline._registered_repos
+        pipeline._registered_repos = lambda: {"/good"}
+        try:
+            self._write('{"target": "/ghost"}')
+            self.assertEqual(self._check()[0], "payload")
+            self._write('{"target": "/good"}')
+            self.assertEqual(self._check()[0], "ok")
+        finally:
+            pipeline._registered_repos = real
 
     def test_firecheck_cli_rc_parity(self):
         self._trigger()

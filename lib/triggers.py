@@ -531,15 +531,42 @@ def fire_params_check(repo, name, path):
         doc, _meta = pipeline.resolve_pipeline_doc(repo, trig["pipeline"])
     except PipelineError as exc:
         return "transient", str(exc)
-    decl_types = {p.get("name"): p.get("type")
-                  for p in (doc.get("params") or []) if isinstance(p, dict)}
+    declared = doc.get("params") or []
+    by_name = {p["name"]: p for p in declared
+               if isinstance(p, dict) and isinstance(p.get("name"), str)}
+    # Validate EVERY payload value in isolation first: undeclared key,
+    # secret target, non-scalar, a type/enum that will not coerce, or a
+    # repo/account value that does not exist are all DETERMINISTIC payload
+    # faults -- "payload" regardless of the saved params' own state (CP2:
+    # an undeclared key was masked as transient when the saved set also
+    # failed, so the marker was kept forever). Only AFTER the payload is
+    # individually clean is a residual merged failure attributable to the
+    # saved trigger / a required-unset param -> transient.
+    payload_typed = {}
     for k, v in payload.items():
-        if decl_types.get(k) == "secret":
+        p = by_name.get(k)
+        if p is None:
+            return "payload", "run-now payload sets undeclared param %r" % k
+        if p.get("type") == "secret":
             return "payload", ("run-now payload targets secret param %r "
                                "-- a fire payload is never a credential"
                                % k)
         if isinstance(v, (dict, list)):
             return "payload", "run-now param %r must be a scalar" % k
+        try:
+            payload_typed[k] = pipeline._coerce(k, p.get("type"), v,
+                                                p.get("choices"))
+        except PipelineError as exc:
+            return "payload", str(exc)
+    try:
+        # existence of the payload's OWN repo/account values -- the same
+        # check start runs, deterministic given the registry (CP2 finding 2)
+        pipeline.check_param_existence(
+            declared, payload_typed,
+            known_repos=pipeline._registered_repos,
+            known_accounts=pipeline._known_accounts)
+    except PipelineError as exc:
+        return "payload", str(exc)
     saved = dict(trig.get("params") or {})
     merged = dict(saved)
     merged.update(payload)
@@ -547,11 +574,9 @@ def fire_params_check(repo, name, path):
         pipeline._resolve_run_params(repo, doc, merged)
         return "ok", None
     except PipelineError as merged_exc:
-        try:
-            pipeline._resolve_run_params(repo, doc, saved)
-        except PipelineError:
-            return "transient", str(merged_exc)    # saved-only fails too
-        return "payload", str(merged_exc)
+        # every payload value validated above -> a residual failure is the
+        # saved trigger's / a required-unset param's, not the payload's
+        return "transient", str(merged_exc)
 
 
 def _cli_opts(args):

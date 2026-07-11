@@ -2172,6 +2172,30 @@ class FireParamsProjectionTest(BuildTriggersViewTest):
                                            overrides={"n": "abc"})
         self.assertFalse(ok)                      # type mismatch
 
+    def test_fire_ready_existence_parity_with_start(self):
+        # CP2 finding 2: the write-side verdict runs the SAME existence
+        # checks start does (_resolve_run_params), so a payload naming an
+        # unregistered repo is refused HERE, not accepted then rejected at
+        # firecheck/start.
+        d = self._mini_repo(
+            {"adhoc": {"name": "adhoc", "pipeline": "flow",
+                       "params": {"target": "/good"},
+                       "firing": {"mode": "manual"}}},
+            pipeline_params=[{"name": "target", "type": "repo",
+                              "required": True}])
+        trig = {"name": "adhoc", "pipeline": "flow",
+                "params": {"target": "/good"}, "firing": {"mode": "manual"}}
+        real = ds.pipeline_mod._registered_repos
+        ds.pipeline_mod._registered_repos = lambda: {"/good"}
+        try:
+            ok, _ = ds.trigger_fire_ready(d, trig)          # saved good
+            self.assertTrue(ok)
+            ok, reason = ds.trigger_fire_ready(
+                d, trig, overrides={"target": "/ghost"})
+            self.assertFalse(ok)                            # existence
+        finally:
+            ds.pipeline_mod._registered_repos = real
+
 
 class RepoStateTriggersTest(unittest.TestCase):
     """Phase D1 (#383): build_repo_state's additive trigger keys -- light
