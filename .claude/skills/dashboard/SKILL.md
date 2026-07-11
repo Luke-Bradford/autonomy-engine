@@ -38,12 +38,21 @@ per-feature write endpoint is still forbidden — new mutations become
   validates (defense in depth). Lifecycle actions: `pause`/`resume`/`stop`/
   `start`; plus `set_model`, `config_set`, `repo_add`/`repo_remove`,
   `cred_*`, `acct_*`, the workstream-authoring set (`ws_add`, `ws_set`,
-  `ws_prompt_set`, `repo_init`, `pipeline_save`), and the per-trigger
+  `ws_prompt_set`, `repo_init`, `pipeline_save`, and `trigger_save` — #383
+  D2, the SD-29 writer over the SD-34 trigger FILE shadow
+  `var/autonomy/triggers/<name>.json`; validator-refused content never
+  lands, refusals leave the shadow byte-identical), and the per-trigger
   marker set (`trigger_fire`/`trigger_stop`/`trigger_resume`, #383 D1 —
   enumeration-derived validation + `find_lane_service` lane routing in
   `execute_trigger_ctl`; writes ONLY `var/trigger-ctl/{fire,stop}/`,
-  `queued/`+`backoff/` are supervisor-owned). The action whitelist in
-  `do_POST` is the authority — check it, don't trust this list's freshness.
+  `queued/`+`backoff/` are supervisor-owned). D2: `trigger_fire` may carry
+  a `params` object — validated by `trigger_fire_ready(overrides=)` (the
+  read side's exact helper; secrets refused, non-dict shapes refused) and
+  written as the fire marker's JSON BODY; an empty/absent payload keeps
+  the D1 empty-marker byte-parity. Oversize-read allowance (>8 KiB, hard
+  256 KiB ceiling): `ws_prompt_set`, `pipeline_save`, `trigger_save`. The
+  action whitelist in `do_POST` is the authority — check it, don't trust
+  this list's freshness.
 - **Render data can be hostile.** Pages that render degraded/invalid
   artifacts (the `/pipeline` viewer shows INVALID docs by design) must
   treat ids/strings from the payload as untrusted: full-coverage escaping

@@ -198,13 +198,32 @@ list tabs render `GET /api/triggers` (= `build_triggers_view`: trigger
 cards + per-trigger tiers + rollup + REFUSED verbatim + `list_runs`)
 behind their own raw-bytes guard. Lifecycle: `/api/control` actions
 `trigger_fire`/`trigger_stop`/`trigger_resume` write the supervisor's
-lane-scoped `var/trigger-ctl/{fire,stop}/` markers (EMPTY files;
-`marker_basename` in lib/triggers.py is the one basename rule both sides
-share; `queued/`+`backoff/` stay supervisor-owned/read-only; fire is
+lane-scoped `var/trigger-ctl/{fire,stop}/` markers (`marker_basename` in
+lib/triggers.py is the one basename rule both sides share;
+`queued/`+`backoff/` stay supervisor-owned/read-only; fire is
 manual-mode-only, gated by `trigger_fire_ready` = the same dry
-resolve_params verdict the payload shows). Per-trigger PAUSE
-(`enabled:false`) is a trigger-FILE edit = D2's `trigger_save`; the D1 UI
-shows it read-only. The page treats node ids as
+resolve_params verdict the payload shows). **D2 (#383) shipped trigger
+AUTHORING**: `trigger_save` = the SD-29 writer over the SD-34 trigger
+FILE shadow `var/autonomy/triggers/<name>.json` (validate_trigger-before,
+gitignore guard, allow_nan=False canonical serialize + re-parse compare,
+O_EXCL no-follow atomic install; binding/params problems WARN on success
+— a save must be able to disable a trigger whose pipeline vanished); the
+⚡ tab's create/edit form + enabled toggle ride it (a shim edit/toggle
+MATERIALISES a native file after a confirm naming the execution-semantics
+flip; wrapped-role + multi-event shims refuse honestly). Run-now gained
+the PARAMS channel: the fire marker's BODY is a validated JSON payload
+(precedence: pipeline default < trigger saved < payload; secrets refused
+at write/firecheck/start — three layers, one rule);
+`resolve_manual_fires` classifies a non-empty body via `triggers.py
+firecheck` (rc 3 = deterministically bad → marker removed loudly; rc 1 =
+transient → kept) and threads the marker path through
+`run_session`/`resolve_pipeline_ready` into `pipeline.py start
+--params-file`. `fire_params_check` dry-runs
+`pipeline._resolve_run_params` twice (merged vs saved-only) so the
+verdict is start-parity by construction. Payload projections:
+`pipelines[].params` + `triggers[].fire_params` (`_declared_params` /
+`_bound_doc`). Still deferred: trigger delete / reset-shadow-to-committed
+(disable or remove the shadow by hand), run-now on non-manual modes. The page treats node ids as
 UNTRUSTED (invalid docs render): delegated `data-*` listeners, full-coverage
 `esc()`. Fixture: `tests/fixtures/repo-alpha` binds `coder → fixture-flow` and
 ships a walker-shaped `journal.jsonl`; tests needing an unbound role take tmp
