@@ -1646,6 +1646,17 @@ def trigger_save(repo, name, trig):
 # cannot change what it resolves (its runs/markers are not endangered).
 # Own-service lanes run against THIS repo (state files + markers here,
 # --<lane>-suffixed) and the over-match below covers them.
+#
+# Guard-to-mutation window (accepted bound, Codex CP2): no lock spans the
+# supervisor and this process, so a marker/run minted BETWEEN the scan and
+# the unlink/rename is possible -- and harmless by sequential equivalence:
+# every such interleaving is indistinguishable from "the delete completed
+# first, then the other actor acted", a state the system already handles
+# fail-safe (a post-delete start refuses loudly at resolve; a post-delete
+# fire lands on the resurfaced twin, exactly as one minted a millisecond
+# later would). The guards exist to stop the operator deleting under a
+# KNOWN live run/marker, not to serialize against future ones -- which no
+# scan could.
 
 
 def _token_matches(entry, name):
@@ -1903,6 +1914,11 @@ def pipeline_delete(repo, name):
                         "the supervisor consume it" % (kind, entry, name)}
     # Detach: reclaim the delete's OWN stale scratch, then ONE atomic
     # rename after which the resolver provably no longer sees the shadow.
+    # The reclaim runs before the last refusable step, so "byte-identical"
+    # means: nothing OUTSIDE the delete-owned scratch namespace is ever
+    # touched by a refusal -- reserved-suffix junk is reclaimed at write
+    # time, not preserved through one (the pipeline_create/trigger_save
+    # precedent, the D3 accepted bound).
     trash = shadow + ".trash"
     try:
         if os.path.islink(trash):
