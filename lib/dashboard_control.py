@@ -1280,12 +1280,15 @@ def pipeline_save(repo, name, doc, briefs):
 
 _RESERVED_PIPE_SUFFIXES = (".staging", ".bak", ".provenance.json")
 
+# $${ = the substitution engine's literal-${ escape: brief TEXT is
+# substituted at prepare time, so unescaped ${...} prose would make the
+# starter's first run refuse (the Phase C _OUTPUTS_FOOTER lesson).
 _BLANK_BRIEF = """# work -- starter brief
 
 Describe the task this activity performs. The session reads this brief as
 its instructions; keep it concrete and self-contained.
 
-- Reference declared params as ${params.<name>} after declaring them in the
+- Reference declared params as $${params.<name>} after declaring them in the
   document's `params` list (the canvas pane edits both).
 - Add more activities from the palette and connect them with edges; rename
   this brief alongside its node id.
@@ -1422,8 +1425,10 @@ def pipeline_create(repo, name, source=None):
         os.makedirs(os.path.dirname(shadow), exist_ok=True)
         os.mkdir(shadow)
     except FileExistsError:
+        _cleanup(claimed=False, installed=False)   # drop any parents we made
         return {"ok": False, "error": "pipeline %r already exists" % name}
     except OSError as exc:
+        _cleanup(claimed=False, installed=False)
         return {"ok": False,
                 "error": "could not claim the pipeline dir: %s" % exc}
     try:

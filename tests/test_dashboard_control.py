@@ -1488,6 +1488,14 @@ class PipelineCreateTest(unittest.TestCase):
         self.assertIsInstance(prov["at"], int)
         self.assertNotIn("source", prov)
 
+    def test_blank_brief_prose_survives_substitution(self):
+        # brief TEXT is substituted at prepare time -- the starter's
+        # ${...} prose must be $${-escaped or the first run would refuse
+        # (the Phase C footer lesson). Pin it against the real engine.
+        import pipeline as pl
+        out = pl.substitute(dc._BLANK_BRIEF, {})
+        self.assertIn("${params.<name>}", out)
+
     def test_blank_create_is_dispatch_resolvable(self):
         # a trigger can bind the created name (the D2 flow) -- dispatch's
         # own resolver loads the shadow-only doc.
