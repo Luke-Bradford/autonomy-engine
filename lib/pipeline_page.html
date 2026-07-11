@@ -189,6 +189,14 @@ svg.edges path.hit{pointer-events:stroke;cursor:pointer}
 .switch.off .knob{right:auto;left:2px;opacity:.6}
 .pill.go{border-color:var(--ok-dim);color:var(--ok)}
 .pill:disabled{opacity:.45;cursor:not-allowed}
+.switch[data-act]{cursor:pointer}
+.trigform{background:var(--panel);border:1px solid var(--accent);border-radius:var(--r);padding:12px;margin-bottom:10px}
+.trigform .frow{display:flex;align-items:center;gap:8px;margin:5px 0;flex-wrap:wrap}
+.trigform .lab{color:var(--mut);font-size:11px;min-width:110px;font-family:var(--mono)}
+.trigform input,.trigform select{background:var(--panel2);border:1px solid var(--hair2);color:var(--ink);font-family:var(--mono);font-size:11px;border-radius:5px;padding:4px 7px}
+.trigform input[readonly]{opacity:.7;cursor:not-allowed}
+.trigform .sect{margin-top:8px;border-top:1px solid var(--hair);padding-top:8px}
+.trigform label.note{display:inline-flex;align-items:center;gap:2px}
 .runrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);padding:8px 12px;margin-bottom:6px;font-size:12.5px}
 .runrow.child{margin-left:34px;border-style:dashed}
 .runrow .oc{font-family:var(--mono);font-size:11px}
@@ -1088,7 +1096,11 @@ function revertNow(){
 }
 document.getElementById("savebtn").addEventListener("click", saveNow);
 document.getElementById("revertbtn").addEventListener("click", revertNow);
-window.addEventListener("beforeunload", e => { if(DIRTY){ e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("beforeunload", e => {
+  // canvas dirty edits OR an open trigger-authoring form (a fire overlay
+  // is cheap to redo -- not guarded)
+  if(DIRTY || (TRIGFORM && TRIGFORM.kind !== "fire")){ e.preventDefault(); e.returnValue = ""; }
+});
 
 /* ---- data flow ---- */
 /* ---- Phase D1 (#383): tabs + list views ------------------------------- */
@@ -1143,25 +1155,69 @@ function markerChips(t){
     h += `<span class="tchip warnc">backoff ×${Number(t.backoff.count)||0} until ${new Date(t.backoff.until*1000).toISOString().slice(11,16)}Z</span>`;
   return h;
 }
-function renderTriggers(tv){
+/* ---- Phase D2 (#383): trigger authoring (create/edit/toggle) + the
+   run-now params overlay. The form lives in #trigform, a STATIC sibling of
+   the re-rendered #trigcards -- a live tick never clobbers an open form
+   (the #202 bar). One doc shape feeds create/edit/toggle: empty optionals
+   are OMITTED (params {}, lane "", run_windows [], map {}); the
+   shim-internal kind/events_csv are never emitted (the server refuses them
+   anyway -- the client just follows the schema). */
+const TRIG_MODES = ["continuous", "schedule", "manual", "event"];
+const TRIG_EVENTS = ["pr.opened", "issue.created", "merge.done", "pr.synchronize"];
+const WDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+let TRIGFORM = null;      // {kind: "create"|"edit"|"fire", name?, seed?}
+
+function ensureTrigSkeleton(){
   const box = document.getElementById("v-triggers");
-  let h = `<div class="vhead"><span class="eyebrow">triggers</span>` +
-          `<span class="note">enable/disable + trigger editing land in D2; ▶ run-now applies to manual-mode triggers</span></div>` +
-          `<div id="trigmsg"></div>`;
+  if(document.getElementById("trigcards")) return;
+  box.innerHTML = `<div class="vhead"><span class="eyebrow">triggers</span>` +
+    `<span class="note">the switch enables/disables (a shim edit converts the role into a native trigger); ▶ run-now fires manual triggers — declared params open a typed form</span>` +
+    `<span class="gap"></span><button class="pill go" data-act="trig_new">＋ new trigger</button></div>` +
+    `<div id="trigmsg"></div><div id="trigform" class="trigform" hidden></div><div id="trigcards"></div>`;
+}
+function pipeParams(name){
+  const p = ((TRIGDATA || {}).pipelines || []).find(x => x.name === name);
+  return (p && p.params) || [];
+}
+/* a shim that can materialise: has a pipeline binding, and (for event
+   roles) a SINGLE event -- one native trigger carries one firing.event. */
+function trigAuthorable(t){
+  return !!t.pipeline &&
+    !(t.kind === "shim" && t.mode === "event" && String(t.event || "").indexOf(",") >= 0);
+}
+function trigSwitch(t){
+  const on = t.enabled ? "" : " off";
+  if(!t.pipeline)
+    return `<span class="switch${on}" title="wrapped role — a native trigger needs a pipeline binding; edit the role on the config page"><span class="knob"></span></span>`;
+  if(!trigAuthorable(t))
+    return `<span class="switch${on}" title="multi-event role — one native trigger carries ONE event; author per-event triggers instead"><span class="knob"></span></span>`;
+  const what = t.kind === "shim" ? "converts the role shim into a native trigger file"
+                                 : "edits the trigger file (var shadow)";
+  return `<span class="switch${on}" data-act="trigger_toggle" data-name="${esc(t.name)}" title="${t.enabled ? "disable" : "enable"} — ${what}"><span class="knob"></span></span>`;
+}
+function renderTriggers(tv){
+  ensureTrigSkeleton();
+  const box = document.getElementById("trigcards");
+  let h = "";
   if(tv.error) h += `<div class="refbar">${esc(tv.error)}</div>`;
   for(const t of (tv.triggers || [])){
     const pipe = t.pipeline || t.name;
     const sel = t.pipeline ? {name: t.pipeline} : {role: t.name};
     const fireTitle = t.fire_ready ? "write a run-now marker" : (t.fire_block_reason || "not fireable");
+    const hasP = (t.fire_params || []).length > 0;
+    const fireBtn = hasP
+      ? `<button class="pill go" data-act="fire_open" data-name="${esc(t.name)}" title="run now — opens the typed params form">▶ run now…</button>`
+      : `<button class="pill go" data-act="trigger_fire" data-name="${esc(t.name)}" ${t.fire_ready ? "" : "disabled"} title="${esc(fireTitle)}">▶ run now</button>`;
     h += `<div class="trow" data-name="${esc(t.name)}">
       <div class="rline">
-        <span class="switch${t.enabled ? "" : " off"}" title="enable/disable lands in D2 (it edits the trigger file)"><span class="knob"></span></span>
+        ${trigSwitch(t)}
         <span class="nm">${esc(t.name)}</span>
         <span class="kv">→ <a href="${esc(canvasHref(sel))}">${esc(pipe)}</a></span>
         <span class="badge">${esc(t.kind)}</span>
         ${tierBadge(t.tier, t.runs, t.passes)}
         <span class="gap"></span>
-        <button class="pill go" data-act="trigger_fire" data-name="${esc(t.name)}" ${t.fire_ready ? "" : "disabled"} title="${esc(fireTitle)}">▶ run now</button>
+        ${fireBtn}
+        ${trigAuthorable(t) ? `<button class="pill" data-act="trig_edit" data-name="${esc(t.name)}" title="${t.kind === "shim" ? "edit — converts the shim into a native trigger file" : "edit the trigger file (var shadow)"}">✎ edit</button>` : ""}
         ${t.stopped
           ? `<button class="pill" data-act="trigger_resume" data-name="${esc(t.name)}" title="remove the stop marker">▶ resume</button>`
           : `<button class="pill" data-act="trigger_stop" data-name="${esc(t.name)}" title="freeze: no new fires, no advance">■ stop</button>`}
@@ -1180,6 +1236,200 @@ function renderTriggers(tv){
   for(const w of (tv.refused || []))
     h += `<div class="trow refused"><div class="rline"><span class="badge" style="color:var(--bad);border-color:var(--bad)">REFUSED</span><span class="kv">${esc(w)}</span></div></div>`;
   box.innerHTML = h;
+}
+function paramInput(p, cur, ph){
+  const key = esc(p.name);
+  let inp;
+  if(p.type === "bool"){
+    const v = (cur === true || cur === "true") ? "true"
+            : (cur === false || cur === "false") ? "false" : "";
+    // tri-state: a checkbox cannot express "omit", and an unchecked box
+    // would fabricate a false override (CP1 pass-2 finding 4)
+    inp = `<select data-param="${key}" data-ptype="bool">
+      <option value=""${v === "" ? " selected" : ""}>(unset)</option>
+      <option value="true"${v === "true" ? " selected" : ""}>true</option>
+      <option value="false"${v === "false" ? " selected" : ""}>false</option></select>`;
+  } else if(p.type === "enum"){
+    const opts = [`<option value=""${cur == null ? " selected" : ""}>(unset)</option>`]
+      .concat((p.choices || []).map(c =>
+        `<option value="${esc(c)}"${String(cur) === String(c) ? " selected" : ""}>${esc(c)}</option>`));
+    inp = `<select data-param="${key}" data-ptype="enum">${opts.join("")}</select>`;
+  } else {
+    const hint = ph != null ? ph
+               : ("default" in p) ? "default: " + String(p.default)
+               : (p.required ? "required" : "optional");
+    inp = `<input data-param="${key}" data-ptype="${esc(p.type || "string")}" type="${p.type === "number" ? "number" : "text"}" value="${cur == null ? "" : esc(String(cur))}" placeholder="${esc(hint)}">`;
+  }
+  const req = p.required ? ` <span style="color:var(--bad)">*</span>` : "";
+  const note = p.type === "secret" ? ` <span class="note">credential LABEL, never the secret value</span>` : "";
+  return `<div class="frow"><span class="lab">${key} <span class="note">${esc(p.type || "string")}</span>${req}</span>${inp}${note}</div>`;
+}
+function collectFormParams(){
+  const params = {};
+  document.querySelectorAll("#trigform [data-param]").forEach(el => {
+    const v = el.value;
+    if(v === "" || v == null) return;                 // blank = omit
+    const t = el.dataset.ptype;
+    let out = v;
+    if(t === "bool") out = (v === "true");
+    else if(t === "number"){ const n = Number(v); out = isNaN(n) ? v : n; }
+    params[el.dataset.param] = out;
+  });
+  return params;
+}
+function readTrigForm(){
+  const g = id => document.getElementById(id);
+  const doc = {name: ((g("tf-name") || {}).value || "").trim(),
+               pipeline: (g("tf-pipe") || {}).value || "",
+               firing: {mode: (g("tf-mode") || {}).value || "manual"},
+               enabled: !!(g("tf-enabled") || {}).checked};
+  if(doc.firing.mode === "schedule")
+    doc.firing.schedule = ((g("tf-sched") || {}).value || "").trim();
+  if(doc.firing.mode === "event"){
+    doc.firing.event = (g("tf-event") || {}).value || "";
+    const map = {};
+    document.querySelectorAll("#trigform select[data-map]").forEach(s => {
+      if(s.value) map[s.dataset.map] = s.value;
+    });
+    if(Object.keys(map).length) doc.firing.map = map;
+  }
+  const pol = (g("tf-policy") || {}).value || "skip";
+  doc.concurrency = {policy: pol,
+                     max: pol === "parallel"
+                       ? Math.max(1, Number((g("tf-max") || {}).value) || 1) : 1};
+  const lane = ((g("tf-lane") || {}).value || "").trim();
+  if(lane) doc.lane = lane;
+  const params = collectFormParams();
+  if(Object.keys(params).length) doc.params = params;
+  const wins = [];
+  document.querySelectorAll("#trigform .winrow").forEach(row => {
+    const st = (row.querySelector('[data-win="start"]') || {}).value || "";
+    const en = (row.querySelector('[data-win="end"]') || {}).value || "";
+    if(!st && !en) return;
+    const w = {start: st, end: en};
+    const days = [...row.querySelectorAll("[data-day]")].filter(c => c.checked)
+      .map(c => c.dataset.day);
+    if(days.length && days.length < 7) w.days = days;   // all/none = every day
+    wins.push(w);
+  });
+  if(wins.length) doc.run_windows = wins;
+  return doc;
+}
+function openTrigForm(seed, isEdit){
+  TRIGFORM = {kind: isEdit ? "edit" : "create",
+              name: isEdit ? seed.name : null, seed: seed || {}};
+  drawTrigForm();
+}
+function closeTrigForm(){
+  TRIGFORM = null;
+  const box = document.getElementById("trigform");
+  box.hidden = true; box.innerHTML = "";
+}
+function drawTrigForm(){
+  const box = document.getElementById("trigform");
+  const s = TRIGFORM.seed || {}, isEdit = TRIGFORM.kind === "edit";
+  const pipes = ((TRIGDATA || {}).pipelines || [])
+    .filter(p => p.source !== "wrapped").map(p => p.name);
+  const pipe = pipes.indexOf(s.pipeline) >= 0 ? s.pipeline : (pipes[0] || "");
+  const firing = s.firing || {};
+  const mode = TRIG_MODES.indexOf(firing.mode) >= 0 ? firing.mode : "manual";
+  const conc = s.concurrency || {policy: "skip", max: 1};
+  const saved = s.params || {};
+  let h = `<div class="frow"><span class="eyebrow">${isEdit ? "edit trigger" : "new trigger"}</span>` +
+    `<span class="note">saves to the live trigger shadow (var/autonomy/triggers) — the committed pack is untouched</span></div>`;
+  h += `<div class="frow"><span class="lab">name</span><input id="tf-name" value="${esc(s.name || "")}"${isEdit ? " readonly" : ""} placeholder="[A-Za-z0-9._-]{1,64}"></div>`;
+  h += `<div class="frow"><span class="lab">pipeline</span><select id="tf-pipe">${pipes.map(n => `<option${n === pipe ? " selected" : ""}>${esc(n)}</option>`).join("")}</select></div>`;
+  h += `<div class="frow"><span class="lab">firing</span><select id="tf-mode">${TRIG_MODES.map(m => `<option${m === mode ? " selected" : ""}>${esc(m)}</option>`).join("")}</select>`;
+  if(mode === "schedule") h += `<input id="tf-sched" value="${esc(firing.schedule || "")}" placeholder="5-field cron, e.g. 0 9 * * *" size="18">`;
+  if(mode === "event") h += `<select id="tf-event">${TRIG_EVENTS.map(ev => `<option${ev === (firing.event || TRIG_EVENTS[0]) ? " selected" : ""}>${esc(ev)}</option>`).join("")}</select>`;
+  h += `</div>`;
+  if(mode === "event"){
+    const decl = pipeParams(pipe).filter(p => p.type !== "secret");
+    const map = firing.map || {};
+    const fields = ["item", "event"].concat(
+      (firing.event || TRIG_EVENTS[0]) === "pr.synchronize" ? ["sha"] : []);
+    if(decl.length){
+      h += `<div class="sect"><span class="lab">payload → params</span>`;
+      for(const p of decl)
+        h += `<div class="frow"><span class="lab">${esc(p.name)}</span><select data-map="${esc(p.name)}"><option value="">—</option>${fields.map(f => `<option${map[p.name] === f ? " selected" : ""}>${esc(f)}</option>`).join("")}</select></div>`;
+      h += `</div>`;
+    }
+  }
+  h += `<div class="frow"><span class="lab">concurrency</span><select id="tf-policy">${["skip", "queue", "parallel"].map(p => `<option${p === (conc.policy || "skip") ? " selected" : ""}>${esc(p)}</option>`).join("")}</select>`;
+  if((conc.policy || "skip") === "parallel") h += `<input id="tf-max" type="number" min="1" max="8" value="${Number(conc.max) || 1}" style="width:60px">`;
+  h += `</div>`;
+  h += `<div class="frow"><span class="lab">enabled</span><input id="tf-enabled" type="checkbox"${s.enabled === false ? "" : " checked"}></div>`;
+  h += `<div class="frow"><span class="lab">lane</span><input id="tf-lane" value="${esc(s.lane || "")}" placeholder="(default lane)"></div>`;
+  h += `<div class="sect"><span class="lab">run windows (UTC)</span>`;
+  (s.run_windows || []).forEach((w, i) => {
+    h += `<div class="frow winrow"><input data-win="start" type="time" value="${esc(w.start || "")}"> → <input data-win="end" type="time" value="${esc(w.end || "")}"> `;
+    h += WDAYS.map(d => `<label class="note"><input type="checkbox" data-day="${d}"${!w.days || w.days.indexOf(d) >= 0 ? " checked" : ""}>${d}</label>`).join("");
+    h += `<button class="pill" data-act="win_del" data-idx="${i}" title="remove this window">✕</button></div>`;
+  });
+  h += `<div class="frow"><button class="pill" data-act="win_add">＋ window</button><span class="note">none = always dispatchable; end ≤ start wraps past midnight</span></div></div>`;
+  const decl = pipeParams(pipe);
+  h += `<div class="sect"><span class="lab">parameters${decl.length ? "" : " — none declared"}</span>`;
+  for(const p of decl)
+    h += paramInput(p, (p.name in saved) ? saved[p.name] : null, null);
+  h += `</div>`;
+  h += `<div class="frow"><button class="pill save" data-act="trig_save_form">save trigger</button><button class="pill" data-act="trig_cancel">cancel</button></div>`;
+  box.innerHTML = h; box.hidden = false;
+}
+function openFireForm(t){
+  TRIGFORM = {kind: "fire", name: t.name};
+  const box = document.getElementById("trigform");
+  const saved = t.params || {};
+  let h = `<div class="frow"><span class="eyebrow">run now · ${esc(t.name)}</span>` +
+    `<span class="note">blank = the trigger's saved value / pipeline default; the payload is validated before the marker is written</span></div>`;
+  for(const p of (t.fire_params || [])){
+    const ph = (p.name in saved) ? "saved: " + String(saved[p.name])
+             : ("default" in p) ? "default: " + String(p.default)
+             : (p.required ? "required" : "optional");
+    h += paramInput(p, null, ph);
+  }
+  h += `<div class="frow"><button class="pill go" data-act="fire_send" data-name="${esc(t.name)}">▶ fire</button><button class="pill" data-act="trig_cancel">cancel</button></div>`;
+  box.innerHTML = h; box.hidden = false;
+}
+function trigDocFromRow(t){
+  const doc = {name: t.name, pipeline: t.pipeline,
+               firing: {mode: t.mode}, enabled: !!t.enabled,
+               concurrency: {policy: (t.concurrency || {}).policy || "skip",
+                             max: (t.concurrency || {}).max || 1}};
+  if(t.mode === "schedule" && t.schedule) doc.firing.schedule = t.schedule;
+  if(t.mode === "event"){
+    doc.firing.event = t.event;
+    if(t.map && Object.keys(t.map).length) doc.firing.map = t.map;
+  }
+  if(t.lane) doc.lane = t.lane;
+  if(t.params && Object.keys(t.params).length) doc.params = t.params;
+  if(t.run_windows && t.run_windows.length) doc.run_windows = t.run_windows;
+  return doc;
+}
+const SHIM_CONFIRM = name =>
+  "This converts the role shim '" + name + "' into a NATIVE trigger:\n" +
+  "role prompt/scope/model settings no longer apply — the pipeline's own " +
+  "runs_as and briefs drive the run.\nOne-way until the shadow file " +
+  "(var/autonomy/triggers) is removed by hand.\n\nContinue?";
+function toggleTrigger(t){
+  if(!trigAuthorable(t)) return;
+  if(t.kind === "shim" && !window.confirm(SHIM_CONFIRM(t.name))) return;
+  const doc = trigDocFromRow(t);
+  doc.enabled = !t.enabled;
+  trigSave(t.name, doc);
+}
+async function trigSave(name, doc){
+  if(!hasToken()) return;
+  const m = document.getElementById("trigmsg");
+  try{
+    const res = await fetch("/api/control", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({action: "trigger_save", token: CTOKEN,
+                            repo: REPO, name: name, trigger: doc})});
+    const out = await res.json().catch(() => ({}));
+    if(m) m.textContent = out.ok ? (out.message || "saved")
+                                 : "refused: " + (out.error || ("HTTP " + res.status));
+    if(out.ok){ closeTrigForm(); TRIGSIG = ""; await tickLists(); }
+  }catch(e){ if(m) m.textContent = "save failed: " + e; }
 }
 function runRow(r){
   let oc;
@@ -1236,7 +1486,9 @@ function renderGallery(tv){
       ${p.errors && p.errors.length ? `<div class="refbar">${p.errors.map(esc).join("<br>")}</div>` : ""}
       <div class="kv">${Number(p.nodes)||0} activities</div>
       <div class="tchips">${chips || `<span class="tchip">no triggers</span>`}</div>
-      <div class="acts"><a href="${esc(open)}">open canvas</a><span class="off" title="trigger create/edit lands in D2">＋ trigger (D2)</span><span class="off" title="pipeline clone lands in D3">⧉ clone (D3)</span></div>
+      <div class="acts"><a href="${esc(open)}">open canvas</a>${p.source === "wrapped"
+        ? `<span class="off" title="wrapped role — a native trigger needs a pipeline binding">＋ trigger</span>`
+        : `<button class="pill" data-act="trig_new" data-pipeline="${esc(p.name)}" title="create a trigger bound to this pipeline">＋ trigger</button>`}<span class="off" title="pipeline clone lands in D3">⧉ clone (D3)</span></div>
     </div>`;
   }
   h += `</div>`;
@@ -1244,33 +1496,33 @@ function renderGallery(tv){
     h += `<div class="refbar">${esc(w)}</div>`;
   box.innerHTML = h;
 }
-async function trigCtl(action, name){
-  if(!hasToken()) return;
+async function trigCtl(action, name, params){
+  if(!hasToken()) return null;
   try{
+    const body = {action: action, name: name, token: CTOKEN, repo: REPO};
+    if(params && Object.keys(params).length) body.params = params;
     const res = await fetch("/api/control", {method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({action: action, name: name, token: CTOKEN, repo: REPO})});
+      body: JSON.stringify(body)});
     const out = await res.json();
     const m = document.getElementById("trigmsg");
     if(m) m.textContent = out.ok ? (out.message || "done")
                                  : "refused: " + (out.error || "");
     TRIGSIG = "";                 // force a fresh render with the new marker state
     await tickLists();
-  }catch(e){ /* transient; next tick re-syncs */ }
+    return out;
+  }catch(e){ return null; /* transient; next tick re-syncs */ }
 }
 async function tickLists(){
   try{
     const res = await fetch("/api/triggers?repo=" + encodeURIComponent(REPO));
     const raw = await res.text();
     if(raw === TRIGSIG) return;        // unchanged payload -> zero DOM writes
-    const msg = (document.getElementById("trigmsg") || {}).textContent || "";
     TRIGSIG = raw;
     TRIGDATA = JSON.parse(raw);
-    renderTriggers(TRIGDATA);
-    renderRuns(TRIGDATA);
+    renderTriggers(TRIGDATA);          // #trigcards only -- #trigmsg and an
+    renderRuns(TRIGDATA);              // open #trigform are static siblings
     renderGallery(TRIGDATA);
-    const m = document.getElementById("trigmsg");
-    if(m && msg) m.textContent = msg;  // keep the last action's outcome visible
   }catch(e){ /* transient fetch/parse hiccup: keep the last good render */ }
 }
 document.getElementById("tabs").addEventListener("click", e => {
@@ -1278,9 +1530,54 @@ document.getElementById("tabs").addEventListener("click", e => {
   if(b) switchView(b.dataset.view);
 });
 document.getElementById("v-triggers").addEventListener("click", e => {
-  const b = e.target.closest("button[data-act]");
+  const b = e.target.closest("[data-act]");
   if(!b || b.disabled) return;
-  trigCtl(b.dataset.act, b.dataset.name);
+  const act = b.dataset.act, name = b.dataset.name || "";
+  const t = name && ((TRIGDATA || {}).triggers || []).find(x => x.name === name);
+  if(act === "trig_new"){ openTrigForm({pipeline: b.dataset.pipeline || ""}, false); return; }
+  if(act === "trig_cancel"){ closeTrigForm(); return; }
+  if(act === "trig_edit"){ if(t) openTrigForm(trigDocFromRow(t), true); return; }
+  if(act === "trig_save_form"){
+    const doc = readTrigForm();
+    if(TRIGFORM && TRIGFORM.kind === "edit") doc.name = TRIGFORM.name;  // identity kept
+    trigSave(doc.name, doc); return;
+  }
+  if(act === "trigger_toggle"){ if(t) toggleTrigger(t); return; }
+  if(act === "fire_open"){ if(t) openFireForm(t); return; }
+  if(act === "fire_send"){
+    trigCtl("trigger_fire", name, collectFormParams())
+      .then(out => { if(out && out.ok) closeTrigForm(); });
+    return;
+  }
+  if(act === "win_add" || act === "win_del"){
+    if(!TRIGFORM || TRIGFORM.kind === "fire") return;
+    const seed = readTrigForm();
+    if(TRIGFORM.kind === "edit") seed.name = TRIGFORM.name;
+    seed.run_windows = seed.run_windows || [];
+    if(act === "win_add") seed.run_windows.push({start: "09:00", end: "17:00"});
+    else seed.run_windows.splice(Number(b.dataset.idx) || 0, 1);
+    TRIGFORM.seed = seed; drawTrigForm(); return;
+  }
+  trigCtl(act, name);
+});
+/* pipeline/mode/event/policy changes re-shape the form: collect what is
+   typed so far, then redraw (the form is outside the tick re-render). */
+document.getElementById("v-triggers").addEventListener("change", e => {
+  if(!TRIGFORM || TRIGFORM.kind === "fire") return;
+  if(["tf-pipe", "tf-mode", "tf-event", "tf-policy"].indexOf(e.target.id) < 0) return;
+  const seed = readTrigForm();
+  if(TRIGFORM.kind === "edit") seed.name = TRIGFORM.name;
+  TRIGFORM.seed = seed;
+  drawTrigForm();
+});
+document.getElementById("v-gallery").addEventListener("click", e => {
+  const b = e.target.closest("[data-act]");
+  if(!b) return;
+  if(b.dataset.act === "trig_new"){
+    switchView("triggers");
+    ensureTrigSkeleton();
+    openTrigForm({pipeline: b.dataset.pipeline || ""}, false);
+  }
 });
 
 async function loadPickers(){
