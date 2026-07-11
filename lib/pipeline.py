@@ -373,6 +373,17 @@ def effective_pipeline_dir(repo, name):
     return committed
 
 
+def provenance_path(repo, name):
+    """The ONE path rule for a created pipeline's provenance sidecar
+    (Phase D3, #383): a SIBLING of the shadow dir, never inside it (the
+    pipeline_save stale-prune owns the dir's contents) and never a doc
+    field (validate_doc's unknown-key honesty gate stays closed). Lives
+    here so the dashboard writer and the gallery reader share one rule.
+    Same PRECONDITION as effective_pipeline_dir: `name` is charset-valid."""
+    return os.path.join(repo, "var", "autonomy", "pipelines",
+                        "%s.provenance.json" % name)
+
+
 def effective_edges(doc):
     """Declared edges, or -- when the document declares none (P1 docs,
     wrapped roles) -- the implicit success-chain over top-level units.
