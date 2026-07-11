@@ -1382,6 +1382,10 @@ function openFireForm(t){
   let h = `<div class="frow"><span class="eyebrow">run now · ${esc(t.name)}</span>` +
     `<span class="note">blank = the trigger's saved value / pipeline default; the payload is validated before the marker is written</span></div>`;
   for(const p of (t.fire_params || [])){
+    if(p.type === "secret") continue;   // a fire payload is never a
+                                        // credential -- the server refuses
+                                        // it; offering the input would be a
+                                        // dead control
     const ph = (p.name in saved) ? "saved: " + String(saved[p.name])
              : ("default" in p) ? "default: " + String(p.default)
              : (p.required ? "required" : "optional");
