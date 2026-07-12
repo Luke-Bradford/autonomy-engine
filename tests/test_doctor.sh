@@ -495,4 +495,41 @@ check "scaffolded skill -> INFO present" "0" \
   "$(grep -q 'INFO pack skill .working-under-the-loop. present' <<<"$pk_out2" && echo 0 || echo 1)"
 rm -rf "$pk"
 
+# --- trigger awareness (#378): diagnostic-only INFO, never a failure --------
+tr="$(mktemp -d)"
+mkdir -p "$tr/.autonomy/triggers"
+cat > "$tr/.autonomy/config.yaml" <<'YAML'
+roles:
+  coder:
+    enabled: true
+YAML
+# a DISABLED native trigger must still be reported (dispatchable_only=False)
+cat > "$tr/.autonomy/triggers/manual-x.json" <<'JSON'
+{"name":"manual-x","pipeline":"ticket-to-merge","firing":{"mode":"manual"},"enabled":false}
+JSON
+tr_out="$(doctor_triggers_report "$tr")"; tr_rc=$?
+check "trigger report -> rc 0 (never a failure)" "0" "$tr_rc"
+check "disabled native trigger is reported (INFO, dispatchable_only=False)" "0" \
+  "$(grep -q "INFO trigger 'manual-x' (manual, native, disabled) -> pipeline 'ticket-to-merge'" <<<"$tr_out" && echo 0 || echo 1)"
+check "the coder role shim is reported too" "0" \
+  "$(grep -q "INFO trigger 'coder' (continuous, shim, enabled)" <<<"$tr_out" && echo 0 || echo 1)"
+check "trigger report never WARN/FAILs on a clean pack" "0" \
+  "$(grep -Eq '^(WARN|FAIL)' <<<"$tr_out" && echo 1 || echo 0)"
+
+# a REFUSED (invalid) native trigger is a WARN row, still rc 0 (SD-6)
+cat > "$tr/.autonomy/triggers/broken.json" <<'JSON'
+{"name":"broken","firing":{"mode":"nope"}}
+JSON
+tr_bad="$(doctor_triggers_report "$tr")"; tr_bad_rc=$?
+check "refused trigger -> WARN row, still rc 0" "0" \
+  "$([ "$tr_bad_rc" = "0" ] && grep -q '^WARN trigger: refused' <<<"$tr_bad" && echo 0 || echo 1)"
+
+# fail-safe: an UNREADABLE config must INFO-skip and return 0, never FAIL
+rm -f "$tr/.autonomy/config.yaml"
+tr_ur="$(doctor_triggers_report "$tr")"; tr_ur_rc=$?
+check "unreadable config -> rc 0 (fail-safe, SD-6)" "0" "$tr_ur_rc"
+check "unreadable config -> INFO skip line (never FAIL)" "0" \
+  "$(grep -q 'INFO could not enumerate triggers' <<<"$tr_ur" && echo 0 || echo 1)"
+rm -rf "$tr"
+
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi

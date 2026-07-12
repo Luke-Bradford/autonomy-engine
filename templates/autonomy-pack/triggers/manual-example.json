@@ -1,0 +1,6 @@
+{
+  "name": "manual-example",
+  "pipeline": "ticket-to-merge",
+  "firing": { "mode": "manual" },
+  "enabled": false
+}

@@ -22,6 +22,12 @@ check "roles/researcher.md scaffolded (W5b, #127)" "0" "$([ -f "$tmp/.autonomy/r
 check "roles/pm.md scaffolded (W5c, #89)" "0" "$([ -f "$tmp/.autonomy/roles/pm.md" ] && echo 0 || echo 1)"
 check "qa/decide.sh scaffolded (subdirectory, #13)" "0" "$([ -f "$tmp/.autonomy/qa/decide.sh" ] && echo 0 || echo 1)"
 
+# #378: the recursive scaffold lands the starter trigger files (+ README) with
+# no onboard code change -- proves the triggers/ dir rides the generic copy.
+check "triggers/continuous-example.json scaffolded (#378)" "0" "$([ -f "$tmp/.autonomy/triggers/continuous-example.json" ] && echo 0 || echo 1)"
+check "triggers/on-pr-sync-example.json scaffolded (#378)" "0" "$([ -f "$tmp/.autonomy/triggers/on-pr-sync-example.json" ] && echo 0 || echo 1)"
+check "triggers/README.md scaffolded (#378)" "0" "$([ -f "$tmp/.autonomy/triggers/README.md" ] && echo 0 || echo 1)"
+
 # SD-31 (#90): the scaffold must NOT ship a plausible-looking board name -- a
 # title that references a board nobody created makes board.sh warn-skip for the
 # repo's whole life while looking configured. Empty = explicitly unconfigured

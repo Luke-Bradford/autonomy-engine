@@ -1,0 +1,10 @@
+{
+  "name": "on-pr-sync-example",
+  "pipeline": "ticket-to-merge",
+  "firing": {
+    "mode": "event",
+    "event": "pr.synchronize",
+    "map": { "ticket": "item", "head_sha": "sha" }
+  },
+  "enabled": false
+}

@@ -325,6 +325,13 @@ fires and how overlapping runs behave:
   `var/autonomy/triggers/<name>.json` beats the committed one; a
   present-but-invalid shadow refuses that trigger (never a silent
   fallback to the committed file).
+- **Starter files:** onboarding scaffolds one inert example per firing
+  mode into `.autonomy/triggers/` (`continuous-example`, `nightly-example`,
+  `on-pr-sync-example`, `manual-example`), each `"enabled": false` so a
+  fresh onboard never auto-arms a loop. They exist to be copied and edited;
+  see `.autonomy/triggers/README.md`. `bin/doctor.sh <repo>` reports every
+  trigger — validity, mode, native-vs-shim, enabled/disabled, bound
+  pipeline — as read-only INFO lines (it never provisions).
 
 **Existing `roles:` configs keep working unchanged.** On every tick the
 engine synthesises a trigger per enabled loop role (continuous), cron

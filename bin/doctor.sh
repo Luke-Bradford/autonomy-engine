@@ -353,6 +353,38 @@ doctor_pack_skills_check() {
   return 0
 }
 
+# triggers (#378): INFO-only trigger awareness -- one line per trigger
+# (validity, firing mode, native-vs-shim supersession, enabled/disabled,
+# bound pipeline), sourced from the SAME enumeration the supervisor uses
+# (lib/triggers.py report, dispatchable_only=False so disabled starters
+# show). Diagnostic-only: refusals are WARN lines, an unreadable config is
+# an INFO skip, and this NEVER FAILs the report (best-effort periphery).
+doctor_triggers_report() {
+  local repo="$1" _out _tag _name _mode _kind _en _pipe
+  # Capture first (a `python | while` pipe under pipefail would SIGPIPE on an
+  # early loop exit -- prevention-log #7); the `||` branch fires when the
+  # report rc!=0 (config unreadable) so it never trips the caller.
+  _out="$(python3 "$DOCTOR_HOME/lib/triggers.py" report "$repo" 2>/dev/null)" \
+    || { echo "INFO could not enumerate triggers (config unreadable?) -- skipping trigger report"; return 0; }
+  if [ -z "$_out" ]; then
+    echo "INFO no triggers found (.autonomy/triggers/) and no roles: shims"
+    return 0
+  fi
+  # bash-3.2: here-doc feed (no mapfile, no producer|while pipe). Rows are
+  # TAB-delimited. A TRIGGER row is exactly 5 fields; a WARN row is one
+  # (its reason -- the report verb flattens tabs in reasons), so it lands
+  # wholly in _name and _mode.._pipe stay empty.
+  while IFS=$'\t' read -r _tag _name _mode _kind _en _pipe; do
+    case "$_tag" in
+      TRIGGER) echo "INFO trigger '$_name' ($_mode, $_kind, $_en) -> pipeline '$_pipe'" ;;
+      WARN)    echo "WARN trigger: $_name" ;;
+    esac
+  done <<EOF
+$_out
+EOF
+  return 0
+}
+
 doctor_full_report() {
   local repo="$1" hard_fail=0
   echo "== doctor.sh report: $repo =="
@@ -414,6 +446,7 @@ doctor_full_report() {
   doctor_lane_report "$repo"
   doctor_agents_check
   doctor_pack_skills_check "$repo"
+  doctor_triggers_report "$repo"
 
   doctor_gh_auth_check "$repo"
 

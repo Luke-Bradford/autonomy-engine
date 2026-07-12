@@ -1,0 +1,7 @@
+{
+  "name": "nightly-example",
+  "pipeline": "ticket-to-merge",
+  "firing": { "mode": "schedule", "schedule": "0 3 * * *" },
+  "concurrency": { "policy": "skip", "max": 1 },
+  "enabled": false
+}
