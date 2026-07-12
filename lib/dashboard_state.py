@@ -2259,6 +2259,9 @@ def _read_config(repo_path):
         "fallback": overlay.get("fallback") or (g("agent.model.fallback") or ""),
         "effort": overlay.get("effort") or (g("agent.effort") or ""),
         "merge_gate": g("merge_gate.strategy") or "",
+        # #378 Task 5: orphan sidecar sweep policy (prune/report/off) -- default
+        # "prune" matches doctor/gc's default when the knob is unset.
+        "orphan_sidecar_action": g("pipelines.orphan_sidecar_action") or "prune",
         "board_owner": overlay.get("board_owner") or (g("board.owner") or ""),
         "board_title": (overlay.get("board_project_title")
                         or (g("board.project_title") or "")),
