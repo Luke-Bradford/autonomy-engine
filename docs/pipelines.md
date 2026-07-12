@@ -252,10 +252,18 @@ fires and how overlapping runs behave:
 - **`firing.mode`** is `continuous` (fires every loop tick while work
   and capacity exist), `schedule` (5-field cron in `firing.schedule`;
   missed fires while the machine was off are skipped with a warning,
-  never replayed as a storm), `manual` (fires when the operator drops
-  a file named after the trigger into `var/trigger-ctl/fire/`; the
-  marker is consumed on start, kept when the trigger is at capacity or
-  disabled), or `event` (below).
+  never replayed as a storm), `manual` (fires only on an operator
+  run-now), or `event` (below). A run-now fire — a file named after the
+  trigger in `var/trigger-ctl/fire/` — works on **manual, continuous
+  and schedule** triggers alike: it starts one run through the ordinary
+  dispatch path, capacity-gated by the trigger's own overlap policy.
+  The marker is consumed on start and kept (deferred) while the trigger
+  is at capacity, disabled, stopped, or outside its run window. On a
+  schedule trigger the fire is an **extra** run — the schedule itself
+  is untouched, so the next cron fire still happens exactly when it
+  would have. An event trigger never fires from a marker (its runs
+  start from event deliveries); such a marker is removed with a
+  warning.
 - **`firing.mode: event`** fires on repository events. `firing.event`
   names one of the four kinds the engine polls — `pr.opened`,
   `issue.created`, `merge.done`, `pr.synchronize` — and an optional
@@ -290,7 +298,7 @@ fires and how overlapping runs behave:
   `days: ["fri"]` covers Friday night into Saturday morning). Omit the
   key for always-dispatchable; an explicit empty list is refused. New
   runs only: in-flight runs finish their current activity and keep
-  advancing past the boundary. Manual fire markers and queued fires
+  advancing past the boundary. Run-now fire markers and queued fires
   wait for the window to open; a schedule fire that came due while the
   window was closed fires once at window-open (never a replay storm);
   event tokens redeliver at window-open. Two accepted bounds: window
@@ -300,11 +308,14 @@ fires and how overlapping runs behave:
   first-sight behaviour). `triggers.py show` prints
   `WINDOW=open|closed`.
 - **`enabled: false`** pauses the trigger: no new fires, in-flight runs
-  drain gracefully. Pending manual and queued fire markers are kept and
-  fire on re-enable (a queued fire is a new start, so it re-checks
+  drain gracefully. Pending run-now and queued fire markers are kept and
+  fire on re-enable (a deferred fire is a new start, so it re-checks
   enabled/mode/window before running). A hard stop is the file `var/trigger-ctl/stop/<name>`:
   no new fires AND in-flight runs freeze in place (state preserved;
-  remove the file to resume mid-run). A trigger whose sessions error
+  remove the file to resume mid-run) — a stop also holds any pending
+  run-now fire, which fires on resume. An error backoff does not hold
+  an explicit run-now fire (the operator's fire overrides the machine's
+  caution). A trigger whose sessions error
   backs off individually (exponential, per trigger) so one broken
   trigger never monopolises the loop's retries. Under a lane supervisor
   every marker name carries the lane suffix — `stop/<name>--<lane>`,
@@ -502,12 +513,19 @@ immediately if the result is runnable.
     trigger file** — the page asks first, because the role's own
     prompt/model settings stop applying: the pipeline's own configuration
     drives the run from then on.
-  - **▶ run now** fires a **manual-mode** trigger on the supervisor's next
-    pass (or holds while disabled / outside its run window). When the
-    pipeline declares parameters, run-now opens a form to **override them
-    for this one run** (pipeline default < trigger's saved value < your
-    run-now value); the payload is validated before anything is written,
-    and secret parameters are never accepted here. Run-now is disabled,
+  - **▶ run now** fires a **manual, continuous or schedule** trigger on
+    the supervisor's next pass (or holds while disabled / stopped /
+    outside its run window). On a continuous trigger it starts one run
+    ahead of the loop's round-robin; on a schedule trigger it starts one
+    extra run and leaves the schedule untouched. When the pipeline
+    declares parameters and the trigger is a native file, run-now opens
+    a form to **override them for this one run** (pipeline default <
+    trigger's saved value < your run-now value); the payload is
+    validated before anything is written, and secret parameters are
+    never accepted here. A trigger synthesised from a legacy `roles:`
+    entry fires through the role path and takes no parameters (convert
+    it to a native trigger to use them). Event triggers never fire from
+    here — their runs start from event deliveries. Run-now is disabled,
     with the reason shown, when firing would be refused.
   - **■ stop / ▶ resume** set and clear the freeze marker (a stopped
     trigger starts nothing and its in-flight runs hold in place).

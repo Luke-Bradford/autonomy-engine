@@ -527,19 +527,29 @@ class CliTest(unittest.TestCase):
         rc, _, _ = self._run("frobnicate", self.repo)
         self.assertEqual(rc, 2)
 
-    def test_manual_lists_only_gated_manual_triggers(self):
-        # The manual list is the DISPATCH gate for fire markers (CP2): it
-        # comes from enumerate_triggers, so validity/collision/lane/enabled
-        # gating is inherited -- never a bare load_trigger.
+    def test_fireable_lists_the_marker_dispatchable_modes(self):
+        # #392: the fireable list is the fire-marker DISPATCH gate -- from
+        # enumerate_triggers (validity/collision/lane/enabled inherited,
+        # never a bare load_trigger), covering manual + continuous +
+        # schedule with mode/kind columns (the supervisor routes the
+        # session and the params channel on them).
         self._write("push-now", _trig(name="push-now",
                                       firing={"mode": "manual"}))
         self._write("always-on", _trig(name="always-on"))
-        rc, out, _ = self._run("manual", self.repo)
+        rc, out, _ = self._run("fireable", self.repo)
         self.assertEqual(rc, 0)
-        self.assertIn("push-now\tskip\t1\n", out)
-        self.assertNotIn("always-on", out)
+        self.assertIn("push-now\tmanual\tnative\tskip\t1\n", out)
+        self.assertIn("always-on\tcontinuous\tnative\tskip\t1\n", out)
+        self.assertIn("coder\tcontinuous\tshim\tskip\t1\n", out)
+        self.assertIn("pm\tschedule\tshim\tskip\t1\n", out)
 
-    def test_manual_native_supersedes_event_role(self):
+    def test_manual_verb_retired(self):
+        # #392 replaced `manual` with `fireable` in the same commit -- a
+        # lingering twin verb is the SD-46 class.
+        rc, _, _ = self._run("manual", self.repo)
+        self.assertEqual(rc, 2)
+
+    def test_fireable_native_supersedes_event_role(self):
         # Phase C FLIP: a manual native named like an event role is ordinary
         # supersession -- it lists (and the role's event shim is suppressed).
         with open(os.path.join(self.repo, ".autonomy", "config.yaml"),
@@ -548,9 +558,9 @@ class CliTest(unittest.TestCase):
                      "    trigger:\n      type: event\n"
                      "      on: [pr.opened]\n")
         self._write("qa", _trig(name="qa", firing={"mode": "manual"}))
-        rc, out, _ = self._run("manual", self.repo)
+        rc, out, _ = self._run("fireable", self.repo)
         self.assertEqual(rc, 0)
-        self.assertIn("qa\t", out)
+        self.assertIn("qa\tmanual\t", out)
         rc, out, _ = self._run("event", self.repo)
         self.assertNotIn("qa\t", out)      # the event shim stays suppressed
 
@@ -616,7 +626,7 @@ class EventCliTest(CliTest):
         self._write("qa-on-pr", {
             "name": "qa-on-pr", "pipeline": "qa-sweep", "params": {},
             "firing": {"mode": "event", "event": "pr.opened"}})
-        for sub in ("dispatch", "cron", "manual"):
+        for sub in ("dispatch", "cron", "fireable"):
             rc, out, _ = self._run(sub, self.repo)
             self.assertEqual(rc, 0, sub)
             self.assertNotIn("qa-on-pr", out, sub)
@@ -909,7 +919,7 @@ class RunWindowCliTest(unittest.TestCase):
         self._trigger("night-man", firing={"mode": "manual"},
                       run_windows=self.NIGHT)
         for verb, name in (("cron", "night-cron"), ("event", "night-ev"),
-                           ("manual", "night-man")):
+                           ("fireable", "night-man")):
             inside = self._run_main_capture(
                 [verb, self.tmp, "--now", str(self.INSIDE)])
             outside = self._run_main_capture(

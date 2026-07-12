@@ -1859,13 +1859,37 @@ class TestTriggerRoutes(unittest.TestCase):
         self.assertEqual(os.path.getsize(
             self._marker("fire", "adhoc-digest")), 0)
 
-    def test_fire_non_manual_refused(self):
+    def test_fire_continuous_writes_marker_event_refused(self):
+        # #392 FLIP: continuous triggers (shim coder, native pr-sweep) take
+        # a fire marker now; EVENT mode keeps refusing -- an event run's
+        # identity is its event token.
         for name in ("coder", "pr-sweep"):
             r = self._post({"action": "trigger_fire", "repo": self.repo,
                             "name": name})
-            self.assertEqual(r["code"], 409)
-            self.assertIn("manual", self._payload(r)["error"])
-            self.assertFalse(os.path.exists(self._marker("fire", name)))
+            self.assertEqual(r["code"], 200, name)
+            self.assertTrue(os.path.isfile(self._marker("fire", name)))
+            self.assertEqual(os.path.getsize(self._marker("fire", name)),
+                             0, name)
+            os.unlink(self._marker("fire", name))
+        with open(os.path.join(self.repo, ".autonomy", "triggers",
+                               "on-pr.json"), "w") as fh:
+            json.dump({"name": "on-pr", "pipeline": "fixture-flow",
+                       "firing": {"mode": "event", "event": "pr.opened"}},
+                      fh)
+        r = self._post({"action": "trigger_fire", "repo": self.repo,
+                        "name": "on-pr"})
+        self.assertEqual(r["code"], 409)
+        self.assertIn("event", self._payload(r)["error"])
+        self.assertFalse(os.path.exists(self._marker("fire", "on-pr")))
+
+    def test_fire_shim_with_params_refused(self):
+        # #392 decision 4: the role/shim path has no params channel -- a
+        # payload on a shim refuses server-side, no marker lands.
+        r = self._post({"action": "trigger_fire", "repo": self.repo,
+                        "name": "coder", "params": {"q": "x"}})
+        self.assertEqual(r["code"], 409)
+        self.assertIn("native", self._payload(r)["error"])
+        self.assertFalse(os.path.exists(self._marker("fire", "coder")))
 
     def test_stop_resume_roundtrip(self):
         r = self._post({"action": "trigger_stop", "repo": self.repo,

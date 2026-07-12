@@ -165,7 +165,7 @@ _triggers_enumerate() {
   fi
 }
 
-# --- manual fire markers -------------------------------------------------------
+# --- fire markers (manual + continuous + schedule, #392) ----------------------
 # Real trigger files + the real triggers.py drive the identity check.
 mkdir -p "$repo/.autonomy/triggers" "$repo/.autonomy/pipelines/flow"
 printf '{"name":"flow","version":1,"caps":{"max_sessions_per_run":4},"nodes":[{"id":"a","type":"pick","brief_ref":"a.md"}],"edges":[]}' \
@@ -186,18 +186,83 @@ rs_calls() { cat "$RS_FILE"; }
 mkdir -p "$VARDIR/trigger-ctl/fire"
 : >"$VARDIR/trigger-ctl/fire/push-now"
 : >"$VARDIR/trigger-ctl/fire/bad;name"
-: >"$VARDIR/trigger-ctl/fire/always-on"     # non-manual -> WARN-removed
-resolve_manual_fires
+resolve_fire_markers
 check "manual fire ran once"        " push-now:native" "$(rs_calls)"
 check "manual marker consumed"      "1" "$([ -f "$VARDIR/trigger-ctl/fire/push-now" ] && echo 0 || echo 1)"
 check "bad-charset marker removed"  "1" "$([ -f "$VARDIR/trigger-ctl/fire/bad;name" ] && echo 0 || echo 1)"
-check "non-manual marker removed"   "1" "$([ -f "$VARDIR/trigger-ctl/fire/always-on" ] && echo 0 || echo 1)"
+
+# #392 FLIP: a continuous trigger's fire marker = ONE immediate start
+# through the ordinary dispatch path (pre-#392 it was WARN-removed).
+: >"$RS_FILE"
+: >"$VARDIR/trigger-ctl/fire/always-on"
+resolve_fire_markers
+check "continuous fire ran"         " always-on:native" "$(rs_calls)"
+check "continuous marker consumed"  "1" "$([ -f "$VARDIR/trigger-ctl/fire/always-on" ] && echo 0 || echo 1)"
+
+# #392: a schedule fire = one EXTRA run now; the cron last_fire marker is
+# byte-untouched (the cron resolver stays its sole writer -- run-now never
+# consumes the next due fire).
+printf '{"name":"sched-x","pipeline":"flow","firing":{"mode":"schedule","schedule":"0 6 * * *"}}' \
+  >"$repo/.autonomy/triggers/sched-x.json"
+mkdir -p "$VARDIR/cron"
+printf '12345' >"$VARDIR/cron/sched-x.last_fire"
+: >"$RS_FILE"
+: >"$VARDIR/trigger-ctl/fire/sched-x"
+resolve_fire_markers
+check "schedule fire ran"           " sched-x:native" "$(rs_calls)"
+check "schedule marker consumed"    "1" "$([ -f "$VARDIR/trigger-ctl/fire/sched-x" ] && echo 0 || echo 1)"
+check "cron last_fire untouched"    "12345" "$(cat "$VARDIR/cron/sched-x.last_fire")"
+rm -f "$VARDIR/cron/sched-x.last_fire"
+
+# #392: a continuous SHIM (the config's loop role) fires through the ROLE
+# path -- kind travels from the enumeration line, empty body only.
+: >"$RS_FILE"
+: >"$VARDIR/trigger-ctl/fire/coder"
+resolve_fire_markers
+check "shim fire ran via role path" " coder:shim" "$(rs_calls)"
+check "shim marker consumed"        "1" "$([ -f "$VARDIR/trigger-ctl/fire/coder" ] && echo 0 || echo 1)"
+
+# #392: a params payload on a SHIM is a deterministic refusal -- removed
+# loudly (the shim start path has no params channel), even while BUSY:
+# payload classification precedes the capacity defer arm (CP1).
+: >"$RS_FILE"
+: >"$LOGDIR/.pipeline-run-coder.json"
+printf '{"q":"x"}' >"$VARDIR/trigger-ctl/fire/coder"
+resolve_fire_markers
+check "shim payload no run"         "" "$(rs_calls)"
+check "shim payload marker removed" "1" "$([ -f "$VARDIR/trigger-ctl/fire/coder" ] && echo 0 || echo 1)"
+rm -f "$LOGDIR"/.pipeline-run-*.json
+
+# #392: event mode never fires from a marker (an event run's identity is
+# its event token) -- removed loudly with the reason.
+printf '{"name":"evx","pipeline":"flow","firing":{"mode":"event","event":"pr.opened"}}' \
+  >"$repo/.autonomy/triggers/evx.json"
+: >"$RS_FILE"
+: >"$VARDIR/trigger-ctl/fire/evx"
+resolve_fire_markers
+check "event fire no run"           "" "$(rs_calls)"
+check "event marker removed"        "1" "$([ -f "$VARDIR/trigger-ctl/fire/evx" ] && echo 0 || echo 1)"
+rm -f "$repo/.autonomy/triggers/evx.json" "$repo/.autonomy/triggers/sched-x.json"
+
+# #392: the STOP sentinel defers fires (stop + fire = contradictory
+# operator instructions; the fail-safe side keeps the marker until resume).
+mkdir -p "$VARDIR/trigger-ctl/stop"
+: >"$VARDIR/trigger-ctl/stop/push-now"
+: >"$RS_FILE"
+: >"$VARDIR/trigger-ctl/fire/push-now"
+resolve_fire_markers
+check "stopped fire did not run"    "" "$(rs_calls)"
+check "stopped fire marker kept"    "0" "$([ -f "$VARDIR/trigger-ctl/fire/push-now" ] && echo 0 || echo 1)"
+rm -f "$VARDIR/trigger-ctl/stop/push-now"
+: >"$RS_FILE"
+resolve_fire_markers
+check "resumed fire ran"            " push-now:native" "$(rs_calls)"
 
 # at capacity: marker KEPT for retry, no session
 : >"$RS_FILE"
 : >"$LOGDIR/.pipeline-run-push-now.json"
 : >"$VARDIR/trigger-ctl/fire/push-now"
-resolve_manual_fires
+resolve_fire_markers
 check "manual at capacity no run"   "" "$(rs_calls)"
 check "manual marker kept"          "0" "$([ -f "$VARDIR/trigger-ctl/fire/push-now" ] && echo 0 || echo 1)"
 rm -f "$LOGDIR"/.pipeline-run-*.json "$VARDIR/trigger-ctl/fire/push-now"
@@ -207,7 +272,7 @@ rm -f "$LOGDIR"/.pipeline-run-*.json "$VARDIR/trigger-ctl/fire/push-now"
 # its own suffix (trigger must belong to that lane in config).
 : >"$RS_FILE"
 : >"$VARDIR/trigger-ctl/fire/push-now--qa"
-resolve_manual_fires
+resolve_fire_markers
 check "default lane skips qa marker" "" "$(rs_calls)"
 check "qa marker left in place"      "0" "$([ -f "$VARDIR/trigger-ctl/fire/push-now--qa" ] && echo 0 || echo 1)"
 rm -f "$VARDIR/trigger-ctl/fire/push-now--qa"
@@ -226,7 +291,7 @@ printf '{"name":"para","pipeline":"pflow","params":{"q":"saved"},"firing":{"mode
 
 : >"$RS_FILE"
 printf '{"q":"override"}' >"$VARDIR/trigger-ctl/fire/para"
-resolve_manual_fires
+resolve_fire_markers
 check "payload fire passes params file" \
   " para:native:$VARDIR/trigger-ctl/fire/para" "$(rs_calls)"
 check "payload marker consumed" "1" \
@@ -238,11 +303,22 @@ check "payload marker consumed" "1" \
 for bad in '{nope' '{"ghost":1}'; do
   : >"$RS_FILE"
   printf '%s' "$bad" >"$VARDIR/trigger-ctl/fire/para"
-  resolve_manual_fires
+  resolve_fire_markers
   check "bad payload no run ($bad)" "" "$(rs_calls)"
   check "bad payload marker removed ($bad)" "1" \
     "$([ -f "$VARDIR/trigger-ctl/fire/para" ] && echo 0 || echo 1)"
 done
+
+# #392 CP1: a deterministic-bad payload is removed even AT CAPACITY --
+# classification precedes the defer arms (parking it would retry forever).
+: >"$RS_FILE"
+: >"$LOGDIR/.pipeline-run-para.json"
+printf '{"ghost":1}' >"$VARDIR/trigger-ctl/fire/para"
+resolve_fire_markers
+check "bad payload at capacity no run" "" "$(rs_calls)"
+check "bad payload at capacity removed" "1" \
+  "$([ -f "$VARDIR/trigger-ctl/fire/para" ] && echo 0 || echo 1)"
+rm -f "$LOGDIR"/.pipeline-run-*.json
 
 # transient (trigger binds a MISSING pipeline -- enumerable, doc unreadable):
 # marker KEPT, no dispatch, defer.
@@ -250,7 +326,7 @@ printf '{"name":"ghosty","pipeline":"ghost","firing":{"mode":"manual"}}' \
   >"$repo/.autonomy/triggers/ghosty.json"
 : >"$RS_FILE"
 printf '{"q":"x"}' >"$VARDIR/trigger-ctl/fire/ghosty"
-resolve_manual_fires
+resolve_fire_markers
 check "transient payload no run"    "" "$(rs_calls)"
 check "transient payload marker kept" "0" \
   "$([ -f "$VARDIR/trigger-ctl/fire/ghosty" ] && echo 0 || echo 1)"
@@ -259,7 +335,7 @@ rm -f "$VARDIR/trigger-ctl/fire/ghosty" "$repo/.autonomy/triggers/ghosty.json"
 # empty marker stays the D1 existence-only path: NO params-file field.
 : >"$RS_FILE"
 : >"$VARDIR/trigger-ctl/fire/para"
-resolve_manual_fires
+resolve_fire_markers
 check "empty marker fires plain"    " para:native" "$(rs_calls)"
 
 # end-to-end threading: resolve_pipeline_ready appends --params-file on the
@@ -313,10 +389,38 @@ _trigger_show_fields() {
   SHOW_MODE="manual"; SHOW_ENABLED="true"; SHOW_POLICY="skip"
   SHOW_MAX=1; SHOW_WINDOW="closed"
 }
-resolve_manual_fires
+resolve_fire_markers
 check "window-closed manual marker kept" "0" \
   "$([ -f "$VARDIR/trigger-ctl/fire/night-push" ] && echo 0 || echo 1)"
 check "window-closed manual did not run" "" "$(rs_calls)"
+
+# #392: the fallback keep/remove discipline is mode-generic -- a
+# window-closed or disabled CONTINUOUS trigger keeps its marker; an
+# event-mode trigger's marker is removed with the reason; the fallback
+# can only KEEP or REMOVE, never fire.
+_trigger_show_fields() {
+  SHOW_MODE="continuous"; SHOW_ENABLED="true"; SHOW_POLICY="skip"
+  SHOW_MAX=1; SHOW_WINDOW="closed"
+}
+resolve_fire_markers
+check "window-closed continuous marker kept" "0" \
+  "$([ -f "$VARDIR/trigger-ctl/fire/night-push" ] && echo 0 || echo 1)"
+_trigger_show_fields() {
+  SHOW_MODE="continuous"; SHOW_ENABLED="false"; SHOW_POLICY="skip"
+  SHOW_MAX=1; SHOW_WINDOW="open"
+}
+resolve_fire_markers
+check "disabled continuous marker kept" "0" \
+  "$([ -f "$VARDIR/trigger-ctl/fire/night-push" ] && echo 0 || echo 1)"
+check "fallback never fired" "" "$(rs_calls)"
+_trigger_show_fields() {
+  SHOW_MODE="event"; SHOW_ENABLED="true"; SHOW_POLICY="skip"
+  SHOW_MAX=1; SHOW_WINDOW="open"
+}
+resolve_fire_markers
+check "event fallback marker removed" "1" \
+  "$([ -f "$VARDIR/trigger-ctl/fire/night-push" ] && echo 0 || echo 1)"
+check "event fallback did not run" "" "$(rs_calls)"
 rm -f "$VARDIR/trigger-ctl/fire/night-push"
 
 # queued: window-closed defers the drain, marker kept.
@@ -597,7 +701,7 @@ rm -f "$VARDIR/trigger-ctl/stop/coder" "$VARDIR/trigger-ctl/backoff/qa" \
 sup="$ENGINE_HOME/bin/supervisor.sh"
 check "loop enumerates triggers"    "1" "$(grep -c 'trig_names="\$(resolve_dispatch_triggers)"' "$sup")"
 check "loop cron via triggers"      "1" "$(grep -c '^    resolve_trigger_cron_due$' "$sup")"
-check "loop consumes manual fires"  "1" "$(grep -c '^    resolve_manual_fires$' "$sup")"
+check "loop consumes fire markers"  "1" "$(grep -c '^    resolve_fire_markers$' "$sup")"
 check "loop consumes queued fires"  "1" "$(grep -c '^    resolve_queued_fires$' "$sup")"
 check "loop inflight via tokens"    "1" "$(grep -c 'inflight_list="\$(filter_dispatchable_tokens' "$sup")"
 check "empty board inflight-only"   "1" "$(grep -c 'dispatch_list="\$inflight_list"' "$sup")"
@@ -820,7 +924,7 @@ log() { :; }
 # --- Phase D1 (#383): dashboard-minted marker parity --------------------------
 # A fire marker created through dashboard_control.trigger_ctl_plan (the
 # dashboard write path's planner + the same touch mechanics) must be consumed
-# by resolve_manual_fires byte-identically to a hand-touched one.
+# by resolve_fire_markers byte-identically to a hand-touched one.
 # Earlier sections leave the enumeration/show seams STUBBED and the line-584
 # re-source put the REAL run_session back -- restore the real seams and
 # re-stub the recorder (this file's established save/restore pattern).
@@ -860,7 +964,7 @@ printf '{"name":"push-now","pipeline":"flow","firing":{"mode":"manual"}}' \
   >"$repo/.autonomy/triggers/push-now.json"
 minted="$(dash_plan_touch "$repo" trigger_fire push-now "")"
 check "dashboard-minted marker path" "$VARDIR/trigger-ctl/fire/push-now" "$minted"
-resolve_manual_fires
+resolve_fire_markers
 check "dashboard-minted fire ran"      " push-now:native" "$(rs_calls)"
 check "dashboard-minted marker consumed" "1" \
   "$([ -f "$VARDIR/trigger-ctl/fire/push-now" ] && echo 0 || echo 1)"

@@ -1713,9 +1713,16 @@ def start_run_trigger(repo, trigger_name, state_path, lane="", *,
     overrides = dict(trig["params"])
     mapping = firing.get("map") or {}
     if fire_params is not None:
-        if firing.get("mode") != "manual":
-            raise PipelineError("trigger %r: run-now params apply to "
-                                "manual-mode triggers only" % trigger_name)
+        # #392: run-now covers manual/continuous/schedule. Event mode keeps
+        # refusing -- an event run's identity is the event token, and this
+        # CLI-facing gate is one of the three run-now refusal layers (the
+        # marker resolver and trigger_fire_ready are the others; the plain
+        # fire_params=None start stays legal HERE because it is the event
+        # resolver's own start path).
+        if firing.get("mode") not in ("manual", "continuous", "schedule"):
+            raise PipelineError("trigger %r: run-now params do not apply "
+                                "to event-mode triggers -- an event run "
+                                "starts from its event" % trigger_name)
         if not isinstance(fire_params, dict):
             raise PipelineError("run-now params must be a JSON object")
     if event_fields is not None and firing.get("mode") != "event":
