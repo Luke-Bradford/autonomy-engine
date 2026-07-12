@@ -1,0 +1,7 @@
+{
+  "name": "continuous-example",
+  "pipeline": "ticket-to-merge",
+  "firing": { "mode": "continuous" },
+  "concurrency": { "policy": "skip", "max": 1 },
+  "enabled": false
+}

@@ -1158,5 +1158,104 @@ class FireParamsCheckTest(unittest.TestCase):
         self.assertEqual(triggers.main(["firecheck", self.repo]), 2)
 
 
+_ENGINE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+class PackStarterTriggersTest(unittest.TestCase):
+    """The shipped starter trigger files (#378) must validate against the
+    REAL engine -- a broken starter would refuse the operator's first run
+    (the prevention-log #22 class: pin templates against the real gate, not
+    a copy of the rule)."""
+
+    STARTERS = os.path.join(_ENGINE_ROOT, "templates", "autonomy-pack",
+                            "triggers")
+
+    def _files(self):
+        return [f for f in sorted(os.listdir(self.STARTERS))
+                if f.endswith(".json")]
+
+    def test_at_least_one_per_firing_mode(self):
+        modes = set()
+        for fn in self._files():
+            with open(os.path.join(self.STARTERS, fn)) as fh:
+                modes.add(json.load(fh)["firing"]["mode"])
+        self.assertEqual(modes,
+                         {"continuous", "schedule", "event", "manual"})
+
+    def test_every_starter_validates_and_is_inert(self):
+        files = self._files()
+        self.assertTrue(files, "no starter trigger files shipped")
+        for fn in files:
+            stem = fn[:-len(".json")]
+            with open(os.path.join(self.STARTERS, fn)) as fh:
+                obj = json.load(fh)
+            with self.subTest(starter=fn):
+                self.assertEqual(triggers.validate_trigger(obj, stem), [],
+                                 "%s must validate clean" % fn)
+                # inert by default -- onboard must never auto-arm a loop.
+                self.assertIs(obj.get("enabled"), False,
+                              "%s must ship enabled:false" % fn)
+                # `kind` is INJECTED at load (enumerate_triggers) and is not
+                # in _TRIGGER_KEYS -- an authored `kind` refuses (fail-open
+                # prevention-log #3). Starters must not carry it.
+                self.assertNotIn("kind", obj)
+                # bound pipeline is the shipped starter -- no dangling ref.
+                self.assertEqual(obj["pipeline"], "ticket-to-merge")
+                self.assertTrue(os.path.isdir(os.path.join(
+                    _ENGINE_ROOT, "templates", "autonomy-pack", "pipelines",
+                    obj["pipeline"])))
+
+    def test_readme_is_ignored_by_enumeration(self):
+        # A README.md living beside the *.json starters must not be read as a
+        # trigger (the *.json glob in _trigger_stems).
+        self.assertTrue(os.path.isfile(
+            os.path.join(self.STARTERS, "README.md")))
+
+
+class ReportCliTest(CliTest):
+    """The doctor-facing `report` verb (#378): dispatchable_only=False so
+    DISABLED starters are visible; INFO-only, refusals are WARN rows."""
+
+    def test_report_arity_guard(self):
+        rc, _, err = self._run("report")
+        self.assertEqual(rc, 2)
+        self.assertIn("usage", err)
+
+    def test_report_shows_disabled_native_with_kind_and_pipeline(self):
+        self._write("off-x", _trig(name="off-x", enabled=False,
+                                   firing={"mode": "manual"}))
+        rc, out, _ = self._run("report", self.repo)
+        self.assertEqual(rc, 0)
+        # dispatchable_only=False -> a disabled trigger is still listed.
+        self.assertIn("TRIGGER\toff-x\tmanual\tnative\tdisabled\t"
+                      "ticket-to-merge\n", out)
+        # and the shims (from the CliTest fixture config) still appear.
+        self.assertIn("TRIGGER\tcoder\tcontinuous\tshim\tenabled\t", out)
+
+    def test_report_refused_file_is_a_warn_row(self):
+        self._write("bad", {"name": "bad", "firing": {"mode": "wat"}})
+        rc, out, _ = self._run("report", self.repo)
+        self.assertEqual(rc, 0)             # doctor is diagnostic-only, SD-6
+        self.assertIn("WARN\t", out)
+        self.assertIn("refused", out)
+
+    def test_report_flattens_tabs_in_warn_rows(self):
+        # The tab-delimited contract must survive a reason string that itself
+        # contains a tab (matches the `trust` verb's REFUSED flattening).
+        # Patch the enumeration seam to force a tabbed warn deterministically.
+        real = triggers.enumerate_triggers
+        triggers.enumerate_triggers = \
+            lambda *a, **k: ([], ["refused trigger 'x':\tbad\tthing"])
+        try:
+            rc, out, _ = self._run("report", self.repo)
+        finally:
+            triggers.enumerate_triggers = real
+        self.assertEqual(rc, 0)
+        warn_lines = [ln for ln in out.splitlines() if ln.startswith("WARN")]
+        self.assertTrue(warn_lines)
+        for line in warn_lines:
+            self.assertEqual(line.count("\t"), 1)   # only the field separator
+
+
 if __name__ == "__main__":
     unittest.main()

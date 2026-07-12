@@ -705,6 +705,33 @@ def main(argv):
                 print("%s\t%s\t%s\t%s\t%d" % (t["name"], mode, t["kind"],
                                               c["policy"], c["max"]))
         return 0
+    if cmd == "report":
+        # Doctor-facing INFO surface (#378). dispatchable_only=False so a
+        # DISABLED starter is still visible (the `validate` verb's
+        # dispatchable enumeration hides them). One tab row per trigger +
+        # WARN rows; the caller (doctor.sh) prefixes INFO/WARN. rc 0 on any
+        # readable config -- refusals are WARN rows, not a failing report
+        # (doctor is diagnostic-only, never provisions). Tabs in a warn
+        # reason are flattened so the row stays 2-field parseable (the
+        # `trust` verb's REFUSED contract).
+        if len(pos) != 1:
+            print("usage: triggers.py report <repo> [--lane <l>]",
+                  file=sys.stderr)
+            return 2
+        try:
+            trigs, warns = enumerate_triggers(pos[0], lane,
+                                              dispatchable_only=False)
+        except PipelineError as exc:
+            print("triggers report: %s" % exc, file=sys.stderr)
+            return 1
+        for w in warns:
+            print("WARN\t%s" % w.replace("\t", " "))
+        for t in sorted(trigs, key=lambda x: x["name"]):
+            print("TRIGGER\t%s\t%s\t%s\t%s\t%s" % (
+                t["name"], t["firing"]["mode"], t.get("kind", ""),
+                "enabled" if t.get("enabled", True) else "disabled",
+                t.get("pipeline") or t["name"]))
+        return 0
     if cmd == "show":
         if len(pos) != 2:
             print("usage: triggers.py show <repo> <name>", file=sys.stderr)
