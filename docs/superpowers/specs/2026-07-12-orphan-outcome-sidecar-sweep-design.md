@@ -54,9 +54,12 @@ This is safe-by-construction, not a fail-open gamble: detection is
 false-negative-only (a sidecar is pruned only when NO live state claims it, and
 the match errs toward over-claiming — see Detection), so a prune default can
 never delete a sidecar a live parent still needs. **Resolution of an ambiguous
-value (prevention-log #6, enum re-gate at the point of use):**
-`unset` → `prune` (the product default); a NON-empty junk value or an unreadable
-config → `report` (garbage never *earns* the destructive action — fail-safe).
+value (prevention-log #6, verified empirically):** `config_parser.py` exits
+rc 1 with empty stdout for BOTH an unset key AND an unreadable config — the two
+are indistinguishable at the CLI, and both collapse to the `prune` DEFAULT (safe:
+the detection is config-independent, so a config problem never causes an
+unsafe deletion — only genuine orphans are pruned). Only a PRESENT non-empty
+junk value falls to `report` (garbage never *earns* the destructive action).
 
 ## Non-negotiables that shape this
 
@@ -142,8 +145,10 @@ orphan_child_sidecars(repo) -> {"orphans": [basename, ...], "unreadable": int}
         names = []
         for unit in units.values():
            if not isinstance(unit, dict): raise ValueError     # no partial claims
-           if unit.get("child"):
-              names.append(unit["child"])
+           child = unit.get("child")
+           if child:
+              if not isinstance(child, str): raise ValueError  # non-str -> unreadable (no TypeError at match)
+              names.append(child)
      except (OSError, ValueError):
         unreadable += 1                        # fail-closed: this state's claims are unknown
         continue
@@ -201,7 +206,8 @@ after it. Reads the knob (shadow-aware, enum-gated), best-effort, INFO/WARN,
 NEVER sets `hard_fail`:
 
 ```sh
-_action="$(python3 "$DOCTOR_HOME/lib/config_parser.py" "$repo/.autonomy/config.yaml" pipelines.orphan_sidecar_action 2>/dev/null || echo prune)"
+# rc1/empty (unset OR unreadable) -> "" -> reports (doctor never prunes). `|| true`.
+_action="$(python3 "$DOCTOR_HOME/lib/config_parser.py" "$repo/.autonomy/config.yaml" pipelines.orphan_sidecar_action 2>/dev/null || true)"
 # doctor is READ-ONLY: only `off` changes its behavior; every other value
 # (prune default, report, unset, junk) reports identically. No prune here.
 case "$_action" in
@@ -236,9 +242,10 @@ enum-gate it (prevention-log #6), and pass `"$PWD"` (absolute, post-cd) to
 python:
 
 ```sh
-# unreadable config -> report (safe). Then resolve the value: unset -> the
-# prune default; a NON-empty junk value -> report (garbage never earns prune).
-_action="$(python3 "$ENGINE_HOME/lib/config_parser.py" "$REPO/.autonomy/config.yaml" pipelines.orphan_sidecar_action 2>/dev/null || echo report)"
+# rc1/empty (unset OR unreadable, indistinguishable) -> the prune default; a
+# PRESENT junk value -> report (never earns prune). `|| true` (total under set -e).
+# $PWD (post-cd, absolute) so a relative --repo still resolves the config.
+_action="$(python3 "$ENGINE_HOME/lib/config_parser.py" "$PWD/.autonomy/config.yaml" pipelines.orphan_sidecar_action 2>/dev/null || true)"
 case "$_action" in off|report|prune) ;; "") _action=prune ;; *) _action=report ;; esac
 if [ "$_action" = "off" ]; then
   echo "== orphaned pipeline run-outcome sidecars: sweep disabled (pipelines.orphan_sidecar_action=off) =="
@@ -327,6 +334,18 @@ badge; temporal pass (no per-tick churn).
 5. GC early `exit 0` skips local sweep → sweep relocated before the fetch gate.
 6. `|| true` masks rc 1 → `if ! _sweep=…` with a named SKIP.
 7. Duplicated suffix literals → reuse `_RESERVED_SIDECAR_SUFFIXES`.
+
+Plan CP1 (second pass, against the implementation plan), all folded:
+
+8. `config_parser.py` exits rc1/empty for an unset key AND an unreadable config
+   (verified) → `|| echo report` mis-resolved unset to `report`; fixed to
+   `|| true` + `case ""→prune`; unreadable collapses to the safe prune default.
+9. GC read `"$REPO/.autonomy/config.yaml"` AFTER `cd "$REPO"` → relative-`--repo`
+   break; use `"$PWD/..."`.
+10. Non-string `unit["child"]` → `TypeError` at `c + "--"` (escapes totality) →
+    `raise ValueError` (counts unreadable).
+11. GC test `git commit` fails with no configured identity → `git init` only
+    (`git worktree prune` needs no commit).
 
 ## Out of scope (deliberate)
 

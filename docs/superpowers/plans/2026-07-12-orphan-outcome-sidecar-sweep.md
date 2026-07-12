@@ -132,6 +132,14 @@ class OrphanSidecarsTest(unittest.TestCase):
         self._state("run1", raw='{"status":"in_progress","units":[]}')
         self.assertEqual(pipeline.orphan_child_sidecars(self.repo)["unreadable"], 1)
 
+    def test_non_string_child_is_unreadable(self):
+        # a non-str child must NOT reach `c + "--"` (TypeError) -- counts unreadable
+        self._sidecar("run1.c0.callX")
+        self._state("run1", raw='{"units":{"u":{"child":123}}}')
+        res = pipeline.orphan_child_sidecars(self.repo)
+        self.assertEqual(res["unreadable"], 1)
+        self.assertEqual(res["orphans"], [".pipeline-run-run1.c0.callX.outcome.json"])
+
     def test_reserved_suffix_files_ignored(self):
         # a per-node outputs/verdict sidecar is neither a state nor an orphan
         with open(os.path.join(self.logdir,
@@ -197,8 +205,11 @@ def orphan_child_sidecars(repo):
             for unit in units.values():
                 if not isinstance(unit, dict):
                     raise ValueError
-                if unit.get("child"):
-                    names.append(unit["child"])
+                child = unit.get("child")
+                if child:
+                    if not isinstance(child, str):
+                        raise ValueError        # non-str child -> unreadable (no TypeError later)
+                    names.append(child)
         except (OSError, ValueError):
             unreadable += 1
             continue
@@ -431,7 +442,11 @@ Add after `doctor_triggers_report` (~line 386) in `bin/doctor.sh`:
 # INFO/WARN, never FAILs the report. Capture-first (pipefail, prevention-log #7).
 doctor_orphan_sidecars_report() {
   local repo="$1" _action _out _tag _val
-  _action="$(python3 "$DOCTOR_HOME/lib/config_parser.py" "$repo/.autonomy/config.yaml" pipelines.orphan_sidecar_action 2>/dev/null || echo prune)"
+  # config_parser exits rc1 (empty) for BOTH an unset key and an unreadable
+  # config -- indistinguishable, both collapse to the prune default (safe:
+  # detection is config-independent). doctor is READ-ONLY, so only `off` matters
+  # -- unset/prune/report/junk all just report. `|| true`: rc1 -> empty.
+  _action="$(python3 "$DOCTOR_HOME/lib/config_parser.py" "$repo/.autonomy/config.yaml" pipelines.orphan_sidecar_action 2>/dev/null || true)"
   case "$_action" in
     off) echo "INFO orphan run-outcome sidecar sweep disabled (pipelines.orphan_sidecar_action=off)"; return 0 ;;
   esac
@@ -506,7 +521,7 @@ check() { if [ "$2" = "$3" ]; then pass=$((pass+1)); else fail=$((fail+1)); \
 # sidecar sweep runs BEFORE the fetch gate, so no origin is needed.
 mkrepo() {
   local d; d="$(mktemp -d)"
-  ( cd "$d" && git init -q && git commit -q --allow-empty -m init ) >/dev/null 2>&1
+  ( cd "$d" && git init -q ) >/dev/null 2>&1   # no commit needed: `git worktree prune` works on a commit-less repo (avoids the unset-user.identity failure)
   mkdir -p "$d/.autonomy" "$d/var/autonomy-logs"
   printf 'engine:\n  default_branch: main\n' > "$d/.autonomy/config.yaml"
   echo "$d"
@@ -569,9 +584,13 @@ before the `echo "== delete local branches ..."` block, insert:
 
 ```bash
 # orphan run-outcome sidecar sweep (#378): LOCAL, so it runs BEFORE the fetch
-# gate below (which exit 0s on a network failure). Config-driven + fail-closed;
-# `off`+junk never prune (prevention-log #6); reader total under set -e (#17).
-_action="$(python3 "$ENGINE_HOME/lib/config_parser.py" "$REPO/.autonomy/config.yaml" pipelines.orphan_sidecar_action 2>/dev/null || echo report)"
+# gate below (which exit 0s on a network failure). config_parser exits rc1
+# (empty) for BOTH an unset key and an unreadable config; both collapse to the
+# prune DEFAULT (safe -- detection is config-independent). A PRESENT junk value
+# -> report (never earns prune, prevention-log #6). `|| true` keeps it total
+# under set -e (#17). Post-cd, read via $PWD (absolute) so a relative --repo
+# still resolves the config.
+_action="$(python3 "$ENGINE_HOME/lib/config_parser.py" "$PWD/.autonomy/config.yaml" pipelines.orphan_sidecar_action 2>/dev/null || true)"
 case "$_action" in off|report|prune) ;; "") _action=prune ;; *) _action=report ;; esac
 if [ "$_action" = "off" ]; then
   echo "== orphaned pipeline run-outcome sidecars: sweep disabled (pipelines.orphan_sidecar_action=off) =="
