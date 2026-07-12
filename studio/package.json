@@ -1,0 +1,27 @@
+{
+  "name": "autonomy-studio",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @autonomy-studio/shared build && concurrently -n server,web -c blue,green \"pnpm --filter @autonomy-studio/server dev\" \"pnpm --filter @autonomy-studio/web dev\"",
+    "build": "pnpm --filter @autonomy-studio/shared build && pnpm --filter @autonomy-studio/server build && pnpm --filter @autonomy-studio/web build",
+    "typecheck": "pnpm --filter @autonomy-studio/shared build && pnpm -r run typecheck",
+    "test": "pnpm --filter @autonomy-studio/shared build && pnpm -r run test",
+    "lint": "eslint . && prettier --check .",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "concurrently": "10.0.3",
+    "eslint": "10.7.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-react-refresh": "0.5.3",
+    "globals": "17.7.0",
+    "prettier": "3.9.5",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.63.0"
+  }
+}
