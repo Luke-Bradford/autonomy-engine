@@ -4,7 +4,16 @@ import { openDb } from './db/client.js';
 import { appMeta } from './db/schema.js';
 import { eq } from 'drizzle-orm';
 
-const PORT = Number(process.env.PORT ?? 8080);
+export function resolvePort(raw: string | undefined): number {
+  if (raw === undefined || raw === '') return 8080;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    throw new Error(`Invalid PORT "${raw}" — must be an integer 1–65535`);
+  }
+  return n;
+}
+
+const PORT = resolvePort(process.env.PORT);
 const HOST = '127.0.0.1';
 const DB_PATH = process.env.DB_PATH ?? 'data/app.sqlite';
 

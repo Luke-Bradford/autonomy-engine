@@ -3,9 +3,10 @@ packages:
 
 # pnpm blocks arbitrary install/postinstall scripts by default (supply-chain
 # guard). better-sqlite3 needs its native-addon build (node-gyp/prebuild-
-# install) and esbuild (a vite/vitest transitive dep) needs its postinstall
-# to fetch its platform binary — both explicitly allow-listed via
-# `pnpm approve-builds --all`, nothing else runs install scripts.
+# install) and esbuild (a vite/vitest transitive dep) needs its postinstall to
+# fetch its platform binary — both explicitly allow-listed here. `allowBuilds`
+# is the field pnpm 11 recognizes (it auto-writes this block; the older
+# `onlyBuiltDependencies` list yields ERR_PNPM_IGNORED_BUILDS on pnpm 11.12).
 allowBuilds:
   better-sqlite3: true
   esbuild: true

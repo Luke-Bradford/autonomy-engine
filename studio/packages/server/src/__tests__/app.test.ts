@@ -8,7 +8,22 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 const tmpDir = mkdtempSync(join(tmpdir(), 'autonomy-studio-server-test-'));
 process.env.DB_PATH = join(tmpDir, 'test.sqlite');
 
-const { buildApp } = await import('../index.js');
+const { buildApp, resolvePort } = await import('../index.js');
+
+describe('resolvePort', () => {
+  it('defaults to 8080 when unset or empty', () => {
+    expect(resolvePort(undefined)).toBe(8080);
+    expect(resolvePort('')).toBe(8080);
+  });
+  it('parses a valid port', () => {
+    expect(resolvePort('9099')).toBe(9099);
+  });
+  it('throws (never NaN) on a non-numeric or out-of-range value', () => {
+    expect(() => resolvePort('abc')).toThrow(/Invalid PORT/);
+    expect(() => resolvePort('0')).toThrow(/Invalid PORT/);
+    expect(() => resolvePort('70000')).toThrow(/Invalid PORT/);
+  });
+});
 
 describe('server app', () => {
   const app = buildApp();
