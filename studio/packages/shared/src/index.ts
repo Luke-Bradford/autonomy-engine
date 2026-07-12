@@ -1,0 +1,14 @@
+import { z } from 'zod';
+
+/**
+ * The FE/BE contract for the `GET /api/hello` endpoint. Kept deliberately tiny
+ * for the P0a skeleton: it exists only to prove that a Zod schema authored
+ * once in `@autonomy-studio/shared` validates data on the server AND supplies
+ * an inferred type consumed by the web client.
+ */
+export const HelloSchema = z.object({
+  message: z.string(),
+  ts: z.number(),
+});
+
+export type Hello = z.infer<typeof HelloSchema>;

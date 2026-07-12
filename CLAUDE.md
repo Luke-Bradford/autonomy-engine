@@ -9,7 +9,20 @@ that the engine reads. eBull is the first consumer.
 
 Design + build history: `docs/design.md`, `docs/implementation-plan.md`.
 
-## Non-negotiables (every change respects these — the CI review bot enforces them)
+## `studio/` — the re-platform (different rules)
+
+`studio/` is a **ground-up re-platform** of this engine into an ADF-style,
+config-driven, open-source AI-automation harness (TypeScript: React + React Flow /
+Fastify / Drizzle+SQLite). The bash/python engine at the repo ROOT (`bin/`,
+`lib/`, `tests/`, `templates/`, `start`) is the PROTOTYPE + spec source and stays
+until `studio/` supersedes it. **The non-negotiables below (bash 3.2, python
+stdlib only, shellcheck, guard clauses) apply to the ENGINE only — NOT to
+`studio/`.** `studio/` has its own conventions: TypeScript strict + ESM, Zod
+schemas shared FE/BE, vitest, eslint (flat) + prettier, pnpm workspaces; gated by
+the `studio-ci` workflow. Target architecture + phased plan:
+`studio/docs/2026-07-12-target-architecture.md`, `studio/docs/BACKLOG.md`.
+
+## Non-negotiables (ENGINE ROOT only — the CI review bot enforces them; `studio/` exempt)
 
 - **macOS `/bin/bash` 3.2.57 compatible.** NO `mapfile`/`readarray`, NO globstar/`**`, NO associative
   arrays (`declare -A`), NO `${var,,}`/`${var^^}`. This engine runs on the operator's Mac; bash 3.2
