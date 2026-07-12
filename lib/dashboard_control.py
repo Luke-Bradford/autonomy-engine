@@ -138,6 +138,9 @@ CONFIG_PAGE_KEYS = {
     # Slice 3a: the pair's thinking tier -- materialized into the planner
     # agent file by the supervisor each session (valid_model_id re-checks).
     "agent.planner.model": lambda v: bool(MODEL_RE.match(v)),
+    # #378: the orphan run-outcome sidecar sweep policy (off/report/prune) --
+    # read by doctor.sh + worktree_gc.sh; lands in the var-live shadow.
+    "pipelines.orphan_sidecar_action": lambda v: v in ("off", "report", "prune"),
     "merge_gate.strategy": lambda v: v in VALID_STRATEGIES,
 }
 

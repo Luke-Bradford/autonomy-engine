@@ -380,6 +380,14 @@ class TestConfigSetPlan(unittest.TestCase):
         p = self.plan("board.owner", "  padded-org  ")
         self.assertEqual(p["live_set"], {"board.owner": "padded-org"})
 
+    def test_orphan_sidecar_action_is_page_editable(self):
+        for v in ("off", "report", "prune"):
+            r = self.plan("pipelines.orphan_sidecar_action", v)
+            self.assertEqual(r.get("live_set"),
+                             {"pipelines.orphan_sidecar_action": v})
+        bad = self.plan("pipelines.orphan_sidecar_action", "wipe")
+        self.assertIn("error", bad)
+
 
 class TestRepoRegistryPlans(unittest.TestCase):
     """#47: add/remove watched repos from the page. The registry file is the
