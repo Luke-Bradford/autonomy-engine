@@ -3357,5 +3357,132 @@ class FireParamsTest(unittest.TestCase):
             self.assertEqual(json.load(fh)["params"]["q"], "saved")
 
 
+class OrphanSidecarsTest(unittest.TestCase):
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, True)
+        self.logdir = os.path.join(self.repo, "var", "autonomy-logs")
+        os.makedirs(self.logdir)
+
+    def _sidecar(self, child_base, payload=None):
+        p = os.path.join(self.logdir, ".pipeline-run-%s.outcome.json" % child_base)
+        with open(p, "w") as fh:
+            json.dump(payload or {"run_id": child_base, "outcome": "success"}, fh)
+        return p
+
+    def _state(self, base, units=None, raw=None):
+        p = os.path.join(self.logdir, ".pipeline-run-%s.json" % base)
+        with open(p, "w") as fh:
+            if raw is not None:
+                fh.write(raw)
+            else:
+                json.dump({"status": "in_progress", "units": units or {}}, fh)
+        return p
+
+    def test_missing_logdir_is_empty(self):
+        shutil.rmtree(self.logdir)
+        self.assertEqual(pipeline.orphan_child_sidecars(self.repo),
+                         {"orphans": [], "unreadable": 0})
+
+    def test_orphan_with_no_claim_is_flagged(self):
+        self._sidecar("run1.c0.callX")
+        res = pipeline.orphan_child_sidecars(self.repo)
+        self.assertEqual(res["orphans"], [".pipeline-run-run1.c0.callX.outcome.json"])
+        self.assertEqual(res["unreadable"], 0)
+
+    def test_claimed_sidecar_not_flagged_no_lane(self):
+        self._sidecar("run1.c0.callX")
+        self._state("run1", units={"u1": {"status": "dispatched",
+                                          "child": "run1.c0.callX"}})
+        self.assertEqual(pipeline.orphan_child_sidecars(self.repo)["orphans"], [])
+
+    def test_claimed_sidecar_not_flagged_with_lane(self):
+        # sidecar carries --alpha; parent stores the LANE-LESS child + lane field
+        self._sidecar("run1.c0.callX--alpha")
+        self._state("run1--alpha", units={"u1": {"status": "dispatched",
+                                                 "child": "run1.c0.callX"}})
+        self.assertEqual(pipeline.orphan_child_sidecars(self.repo)["orphans"], [])
+
+    def test_claim_survives_torn_lane_field(self):
+        # lane field absent on the parent state, but the sidecar has --alpha:
+        # lane-agnostic startswith() still claims it (fail-safe, CP1 #1)
+        self._sidecar("run1.c0.callX--alpha")
+        self._state("run1", units={"u1": {"child": "run1.c0.callX"}})
+        self.assertEqual(pipeline.orphan_child_sidecars(self.repo)["orphans"], [])
+
+    def test_child_claim_on_non_dispatched_unit(self):
+        self._sidecar("run1.c0.callX")
+        self._state("run1", units={"u1": {"status": "success",
+                                          "child": "run1.c0.callX"}})
+        self.assertEqual(pipeline.orphan_child_sidecars(self.repo)["orphans"], [])
+
+    def test_unreadable_state_counted_no_partial_claim(self):
+        self._sidecar("run1.c0.callX")
+        self._state("run1", raw="{not json")
+        res = pipeline.orphan_child_sidecars(self.repo)
+        self.assertEqual(res["unreadable"], 1)
+        self.assertEqual(res["orphans"], [".pipeline-run-run1.c0.callX.outcome.json"])
+
+    def test_non_dict_units_is_unreadable(self):
+        self._state("run1", raw='{"status":"in_progress","units":[]}')
+        self.assertEqual(pipeline.orphan_child_sidecars(self.repo)["unreadable"], 1)
+
+    def test_non_string_child_is_unreadable(self):
+        # a non-str child must NOT reach `c + "--"` (TypeError) -- counts unreadable
+        self._sidecar("run1.c0.callX")
+        self._state("run1", raw='{"units":{"u":{"child":123}}}')
+        res = pipeline.orphan_child_sidecars(self.repo)
+        self.assertEqual(res["unreadable"], 1)
+        self.assertEqual(res["orphans"], [".pipeline-run-run1.c0.callX.outcome.json"])
+
+    def test_reserved_suffix_files_ignored(self):
+        # a per-node outputs/verdict sidecar is neither a state nor an orphan
+        with open(os.path.join(self.logdir,
+                  ".pipeline-run-run1.nodeA.outputs.json"), "w") as fh:
+            fh.write("{}")
+        with open(os.path.join(self.logdir,
+                  ".pipeline-run-run1.nodeA.verdict.json"), "w") as fh:
+            fh.write("{}")
+        self.assertEqual(pipeline.orphan_child_sidecars(self.repo),
+                         {"orphans": [], "unreadable": 0})
+
+    def _run_cli(self, *args):
+        import io, contextlib
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = pipeline.main(["orphans"] + list(args))
+        return rc, out.getvalue()
+
+    def test_cli_reports_without_pruning(self):
+        p = self._sidecar("run1.c0.callX")
+        rc, out = self._run_cli(self.repo)
+        self.assertEqual(rc, 0)
+        self.assertIn("ORPHAN\t.pipeline-run-run1.c0.callX.outcome.json", out)
+        self.assertTrue(os.path.exists(p))          # report mode never deletes
+
+    def test_cli_prune_removes_orphan_keeps_claimed(self):
+        orphan = self._sidecar("run1.c0.callX")
+        keep = self._sidecar("run2.c0.callY")
+        self._state("run2", units={"u1": {"child": "run2.c0.callY"}})
+        rc, out = self._run_cli(self.repo, "--prune")
+        self.assertEqual(rc, 0)
+        self.assertIn("PRUNED\t.pipeline-run-run1.c0.callX.outcome.json", out)
+        self.assertFalse(os.path.exists(orphan))
+        self.assertTrue(os.path.exists(keep))
+
+    def test_cli_prune_held_back_when_unreadable(self):
+        p = self._sidecar("run1.c0.callX")
+        self._state("run1x", raw="{bad")
+        rc, out = self._run_cli(self.repo, "--prune")
+        self.assertEqual(rc, 0)
+        self.assertIn("UNREADABLE\t1", out)
+        self.assertIn("ORPHAN\t.pipeline-run-run1.c0.callX.outcome.json", out)
+        self.assertTrue(os.path.exists(p))          # fail-closed: not pruned
+
+    def test_cli_bad_args(self):
+        rc, _ = self._run_cli()                     # no repo
+        self.assertEqual(rc, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
