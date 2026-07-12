@@ -2253,12 +2253,20 @@ def _read_config(repo_path):
     # keys came from the overlay so the UI can label them "local override".
     overlay = read_config_overlay(os.path.join(
         repo_path, "var", "autonomy-logs", "config-overrides"))
+    _osa = g("pipelines.orphan_sidecar_action")
     return {
         "agent": g("agent.type") or "",
         "model": overlay.get("model") or (g("agent.model.primary") or ""),
         "fallback": overlay.get("fallback") or (g("agent.model.fallback") or ""),
         "effort": overlay.get("effort") or (g("agent.effort") or ""),
         "merge_gate": g("merge_gate.strategy") or "",
+        # #378 Task 5: orphan sidecar sweep policy (prune/report/off) -- default
+        # "prune" matches doctor/gc's default when the knob is unset.
+        # mirror worktree_gc.sh's resolution so the page shows the EFFECTIVE
+        # value: unset->prune (default), valid->itself, present junk->report
+        # (prevention-log #15: never echo a raw invalid value as usable).
+        "orphan_sidecar_action": (_osa if _osa in ("off", "report", "prune")
+                                  else ("prune" if not _osa else "report")),
         "board_owner": overlay.get("board_owner") or (g("board.owner") or ""),
         "board_title": (overlay.get("board_project_title")
                         or (g("board.project_title") or "")),

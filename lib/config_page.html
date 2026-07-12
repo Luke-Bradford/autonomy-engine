@@ -871,6 +871,7 @@ function cfgRepoCard(r,i){
       ${cfgFieldList(enc,"agent.model.primary","model",c.model)}
       ${cfgFieldList(enc,"agent.model.fallback","fallback",c.fallback)}
       ${cfgSelect(enc,"agent.effort","effort",EFFORT_CHOICES.filter(e=>e),c.effort)}
+      ${cfgSelect(enc,"pipelines.orphan_sidecar_action","orphan sidecar sweep",["prune","report","off"],c.orphan_sidecar_action)}
       ${cfgReadonly("merge gate",c.merge_gate,"structural — edit via config.yaml + PR (#87)")}
       ${orgZone(r.org,enc)}
       ${addWs}

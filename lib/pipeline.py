@@ -1805,6 +1805,69 @@ def _run_outcome_rel(state_path):
     return "var/autonomy-logs/%s.outcome.json" % _state_base(state_path)
 
 
+def _reserved_state_suffix(name):
+    """True when a .pipeline-run-*.json name is actually a reserved sidecar
+    (.outputs/.verdict/.outcome) sharing the state-file glob -- not a run state."""
+    stem = name[:-len(".json")]
+    return stem.rsplit(".", 1)[-1] in _RESERVED_SIDECAR_SUFFIXES
+
+
+def orphan_child_sidecars(repo):
+    """Child-run outcome sidecars (.pipeline-run-<child-base>.outcome.json under
+    <repo>/var/autonomy-logs) that NO live run state claims -- litter from a
+    parent hand-deleted mid-wait or a wait:false detached child. Forward-claim,
+    LANE-AGNOSTIC: a live parent stores the lane-less child in unit["child"]; the
+    sidecar appends the lane after "--" (see _sweep_call_units). A sidecar core X
+    is claimed iff some claimed lane-less child C has X == C or X.startswith(C+"--")
+    -- the only error direction is over-claiming (under-prune), never fail-open.
+    TOTAL over on-disk junk (prevention-log #12): a non-dict state/units/unit
+    counts toward `unreadable` and contributes NO claims (fail-closed), never
+    raises. Missing logdir is provably empty; any other listdir error propagates.
+    Returns {"orphans": sorted[basename], "unreadable": int}."""
+    logdir = os.path.join(repo, "var", "autonomy-logs")
+    try:
+        entries = os.listdir(logdir)
+    except FileNotFoundError:
+        return {"orphans": [], "unreadable": 0}
+    claimed = set()
+    unreadable = 0
+    for name in entries:
+        if not (name.startswith(".pipeline-run-") and name.endswith(".json")):
+            continue
+        if _reserved_state_suffix(name):
+            continue
+        try:
+            with open(os.path.join(logdir, name), encoding="utf-8") as fh:
+                state = json.load(fh)
+            if not isinstance(state, dict):
+                raise ValueError
+            units = state.get("units")
+            if not isinstance(units, dict):
+                raise ValueError
+            names = []
+            for unit in units.values():
+                if not isinstance(unit, dict):
+                    raise ValueError
+                child = unit.get("child")
+                if child:
+                    if not isinstance(child, str):
+                        raise ValueError        # non-str child -> unreadable (no TypeError later)
+                    names.append(child)
+        except (OSError, ValueError):
+            unreadable += 1
+            continue
+        claimed.update(names)
+    orphans = []
+    for name in entries:
+        if not (name.startswith(".pipeline-run-")
+                and name.endswith(".outcome.json")):
+            continue
+        x = name[len(".pipeline-run-"):-len(".outcome.json")]
+        if not any(x == c or x.startswith(c + "--") for c in claimed):
+            orphans.append(name)
+    return {"orphans": sorted(orphans), "unreadable": unreadable}
+
+
 def _child_token_name(parent_state_path, parent_state, node_id):
     """<parent-name>.c<parent-slot>.<node-id> -- parsed from the state
     FILENAME with inflight_tokens' exact rules (strip @slot from the end,
@@ -2902,6 +2965,32 @@ def main(argv):
             print("pipeline wrap: %s" % exc, file=sys.stderr)
             return 1
         print(json.dumps(doc, indent=2, sort_keys=True))
+        return 0
+    if cmd == "orphans":
+        prune = "--prune" in rest
+        pos = [a for a in rest if a != "--prune"]
+        if len(pos) != 1:
+            print("usage: pipeline.py orphans <repo> [--prune]", file=sys.stderr)
+            return 2
+        repo = pos[0]
+        try:
+            res = orphan_child_sidecars(repo)
+        except OSError as exc:
+            print("pipeline orphans: %s" % exc, file=sys.stderr)
+            return 1
+        if res["unreadable"]:
+            print("UNREADABLE\t%d" % res["unreadable"])
+        can_prune = prune and res["unreadable"] == 0
+        logdir = os.path.join(repo, "var", "autonomy-logs")
+        for name in res["orphans"]:
+            if can_prune:
+                try:
+                    os.unlink(os.path.join(logdir, name))
+                    print("PRUNED\t%s" % name)
+                    continue
+                except OSError:
+                    pass
+            print("ORPHAN\t%s" % name)
         return 0
     if cmd == "start":
         # start <repo> <name> <state-file> [--lane <l>] [--kind shim|native]

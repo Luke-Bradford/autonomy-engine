@@ -539,6 +539,47 @@ class TestConfigOverlay(unittest.TestCase):
             self.assertEqual(cfg["model"], "claude-sonnet-5", repr(dirty))
             self.assertEqual(cfg["overrides"], {}, repr(dirty))
 
+    def test_orphan_sidecar_action_defaults_to_prune_when_unset(self):
+        # #378 Task 5: config.yaml above has no pipelines.orphan_sidecar_action --
+        # the projection must default to "prune" (matches doctor/gc default),
+        # never None/"" (which would render an unselected dropdown).
+        cfg = ds._read_config(self.repo)
+        self.assertEqual(cfg["orphan_sidecar_action"], "prune")
+
+    def test_orphan_sidecar_action_reflects_explicit_value(self):
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("agent:\n  model:\n    primary: claude-sonnet-5\n  effort: low\n"
+                      "pipelines:\n  orphan_sidecar_action: report\n")
+        cfg = ds._read_config(self.repo)
+        self.assertEqual(cfg["orphan_sidecar_action"], "report")
+
+    def test_orphan_sidecar_action_off_passes_through_unchanged(self):
+        # A valid value must pass through unchanged -- not just "report"/"prune".
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("agent:\n  model:\n    primary: claude-sonnet-5\n  effort: low\n"
+                      "pipelines:\n  orphan_sidecar_action: off\n")
+        cfg = ds._read_config(self.repo)
+        self.assertEqual(cfg["orphan_sidecar_action"], "off")
+
+    def test_orphan_sidecar_action_prune_passes_through_unchanged(self):
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("agent:\n  model:\n    primary: claude-sonnet-5\n  effort: low\n"
+                      "pipelines:\n  orphan_sidecar_action: prune\n")
+        cfg = ds._read_config(self.repo)
+        self.assertEqual(cfg["orphan_sidecar_action"], "prune")
+
+    def test_orphan_sidecar_action_junk_value_resolves_to_report(self):
+        # #378 review finding #1 (prevention-log #15, display-honesty): a
+        # present-but-invalid value must NOT be echoed raw -- bin/worktree_gc.sh
+        # resolves junk -> "report" via its case statement, so the dashboard
+        # must show "report" too (display == effective), never the raw junk
+        # string (which the page's cfgSelect can't even render as selected).
+        with open(os.path.join(self.repo, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("agent:\n  model:\n    primary: claude-sonnet-5\n  effort: low\n"
+                      "pipelines:\n  orphan_sidecar_action: wipe\n")
+        cfg = ds._read_config(self.repo)
+        self.assertEqual(cfg["orphan_sidecar_action"], "report")
+
 
 class TestSessionParse(unittest.TestCase):
     def test_completed_session_status_and_result(self):
