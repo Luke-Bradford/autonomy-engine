@@ -36,6 +36,40 @@ cd "$REPO" || exit 1
 echo "== prune stale worktree admin entries =="
 git worktree prune -v
 
+# orphan run-outcome sidecar sweep (#378): LOCAL, so it runs BEFORE the fetch
+# gate below (which exit 0s on a network failure). config_parser exits rc1
+# (empty) for BOTH an unset key and an unreadable config; both collapse to the
+# prune DEFAULT (safe -- detection is config-independent). A PRESENT junk value
+# -> report (never earns prune, prevention-log #6). `|| true` keeps it total
+# under set -e (#17). Post-cd, read via $PWD (absolute) so a relative --repo
+# still resolves the config.
+_action="$(python3 "$ENGINE_HOME/lib/config_parser.py" "$PWD/.autonomy/config.yaml" pipelines.orphan_sidecar_action 2>/dev/null || true)"
+case "$_action" in off|report|prune) ;; "") _action=prune ;; *) _action=report ;; esac
+if [ "$_action" = "off" ]; then
+  echo "== orphaned pipeline run-outcome sidecars: sweep disabled (pipelines.orphan_sidecar_action=off) =="
+else
+  echo "== orphaned pipeline run-outcome sidecars (pipelines.orphan_sidecar_action=$_action) =="
+  _oflag=""; [ "$_action" = "prune" ] && _oflag="--prune"
+  # $_oflag is intentionally unquoted: an empty flag must vanish from argv,
+  # not become an empty positional arg (shellcheck -S warning does not flag
+  # this pattern; no disable needed -- verified empirically at write time).
+  if ! _osweep="$(python3 "$ENGINE_HOME/lib/pipeline.py" orphans "$PWD" $_oflag 2>/dev/null)"; then
+    echo "  SKIP: could not sweep run-outcome sidecars (logdir unreadable) -- nothing pruned"
+  else
+    _opruned=0
+    while IFS=$'\t' read -r _otag _oval; do
+      case "$_otag" in
+        PRUNED)     echo "  pruned orphan sidecar: $_oval"; _opruned=$((_opruned + 1)) ;;
+        ORPHAN)     echo "  orphan sidecar (report-only): $_oval" ;;
+        UNREADABLE) echo "  SKIP: $_oval unreadable state file(s) -- not pruning (a corrupt live parent may still own a sidecar)" ;;
+      esac
+    done <<EOF
+$_osweep
+EOF
+    [ "$_action" = "prune" ] && echo "  ($_opruned orphan sidecar(s) removed)"
+  fi
+fi
+
 echo "== delete local branches merged into origin/$DEFAULT_BRANCH =="
 if ! git fetch origin -q 2>/dev/null || ! git rev-parse --verify -q "origin/$DEFAULT_BRANCH" >/dev/null 2>&1; then
   echo "  SKIP: 'git fetch origin' failed or origin/$DEFAULT_BRANCH unresolved -- not deleting against a stale ref"
