@@ -2760,12 +2760,18 @@ def trigger_fire_ready(repo_path, trig, overrides=None):
     """(ok, reason) -- may this trigger take a run-now fire marker? The
     SAME verdict the write side must reach (Phase D1: bin/dashboard.py's
     execute path calls this exact helper -- read/write can't drift).
-    Manual mode only (the supervisor's resolve_manual_fires WARN-removes a
-    fire marker for any other mode -- a run-now button there would be a
-    dead control); then a DRY pipeline.resolve_params over the doc's
-    declared params + the trigger's saved params -- the same refusal
-    start_run_trigger would reach, caught HERE instead of burning a
-    backoff after the marker fires. overrides (Phase D2) = a run-now
+    Manual, continuous and schedule modes fire (#392; the supervisor's
+    resolve_fire_markers consumes their markers); EVENT mode refuses --
+    an event run's identity is its event token, and a marker fire has
+    none. A SHIM (kind == "shim") fires empty-body through the role path:
+    overrides refuse (the shim start path has no params channel --
+    materialise the trigger), and the params DRY-RUN IS SKIPPED because
+    `start_run` never resolves params -- dry-running the doc would refuse
+    fires the loop itself dispatches (parity means parity with the actual
+    start path). Natives keep the DRY pipeline._resolve_run_params over
+    the doc's declared params + the trigger's saved params -- the same
+    refusal start_run_trigger would reach, caught HERE instead of burning
+    a backoff after the marker fires. overrides (Phase D2) = a run-now
     params payload merged LAST (pipeline default < saved < payload);
     non-dict shapes, non-scalar values and declared-secret targets refuse
     (the refusal names the KEY, never the value -- SD-8). None keeps the
@@ -2773,9 +2779,16 @@ def trigger_fire_ready(repo_path, trig, overrides=None):
     never raises."""
     try:
         firing = trig.get("firing") if isinstance(trig, dict) else None
-        if not isinstance(firing, dict) or firing.get("mode") != "manual":
-            return False, ("run-now applies to manual-mode triggers "
-                           "(other modes are a D2 extension)")
+        mode = firing.get("mode") if isinstance(firing, dict) else None
+        if mode not in ("manual", "continuous", "schedule"):
+            return False, ("run-now applies to manual/continuous/schedule "
+                           "triggers -- an event run starts from its event")
+        if trig.get("kind") == "shim":
+            if overrides:
+                return False, ("run-now params need a native trigger -- "
+                               "the role/shim path has no params channel "
+                               "(edit the trigger to materialise it)")
+            return True, None
         binding = trig.get("pipeline") or ""
         if not pipeline_mod.valid_pipeline_name(binding):
             return False, "pipeline binding invalid"
@@ -3081,12 +3094,17 @@ def build_triggers_view(repo_path, now=None):
                      "queued": False, "backoff": None}
         led = tier_by_name.get(name) or {}
         ready, reason = trigger_fire_ready(repo_path, t)
-        # Run-now overlay schema (Phase D2): the bound doc's declared
-        # params, manual-mode triggers only; any doc failure degrades to []
-        # (the overlay simply doesn't offer inputs -- fire_ready already
-        # carries the honest verdict).
+        # Run-now overlay schema (Phase D2, widened by #392): the bound
+        # doc's declared params for NATIVE manual/continuous/schedule
+        # triggers -- the modes whose start path takes the payload. Shims
+        # never offer the form (the role path has no params channel) and
+        # event mode never fires from a marker; any doc failure degrades
+        # to [] (the overlay simply doesn't offer inputs -- fire_ready
+        # already carries the honest verdict).
         fire_params = []
-        if firing.get("mode") == "manual":
+        if (t.get("kind") == "native"
+                and firing.get("mode") in ("manual", "continuous",
+                                           "schedule")):
             fire_params = _declared_params(
                 _bound_doc(repo_path, t.get("pipeline") or ""))
         # #388: the delete/reset controls key on these three. has_shadow

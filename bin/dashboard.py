@@ -1395,8 +1395,9 @@ def execute_trigger_ctl(repo, action, name, fire_params=None):
         # --lane el): markers stay HERE, still with the lane suffix.
     if action == "trigger_fire":
         # The SAME verdict the read payload shows (ds.trigger_fire_ready:
-        # manual mode + a dry resolve_params, D2: overrides merged LAST)
-        # -- read/write can't drift.
+        # manual/continuous/schedule modes, #392; natives dry-run
+        # _resolve_run_params, shims are empty-body only; D2: overrides
+        # merged LAST) -- read/write can't drift.
         ready, reason = ds.trigger_fire_ready(repo, trig,
                                               overrides=fire_params)
         if not ready:

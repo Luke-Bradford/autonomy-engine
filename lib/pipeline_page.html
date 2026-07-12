@@ -1171,7 +1171,7 @@ function ensureTrigSkeleton(){
   const box = document.getElementById("v-triggers");
   if(document.getElementById("trigcards")) return;
   box.innerHTML = `<div class="vhead"><span class="eyebrow">triggers</span>` +
-    `<span class="note">the switch enables/disables (a shim edit converts the role into a native trigger); ▶ run-now fires manual triggers — declared params open a typed form</span>` +
+    `<span class="note">the switch enables/disables (a shim edit converts the role into a native trigger); ▶ run-now fires manual/continuous/schedule triggers (event runs start from their events) — declared params open a typed form</span>` +
     `<span class="gap"></span><button class="pill go" data-act="trig_new">＋ new trigger</button></div>` +
     `<div id="trigmsg"></div><div id="trigform" class="trigform" hidden></div><div id="trigcards"></div>`;
 }
@@ -1231,7 +1231,12 @@ function renderTriggers(tv){
   for(const t of (tv.triggers || [])){
     const pipe = t.pipeline || t.name;
     const sel = t.pipeline ? {name: t.pipeline} : {role: t.name};
-    const fireTitle = t.fire_ready ? "write a run-now marker" : (t.fire_block_reason || "not fireable");
+    const fireTitle = t.fire_ready
+      ? (t.kind === "shim" ? "start one run now through the role path"
+         : t.mode === "schedule" ? "fire one extra run now — the schedule is untouched"
+         : t.mode === "continuous" ? "start one run now — ahead of the round-robin"
+         : "write a run-now marker")
+      : (t.fire_block_reason || "not fireable");
     const hasP = (t.fire_params || []).length > 0;
     const fireBtn = hasP
       ? `<button class="pill go" data-act="fire_open" data-name="${esc(t.name)}" title="run now — opens the typed params form">▶ run now…</button>`

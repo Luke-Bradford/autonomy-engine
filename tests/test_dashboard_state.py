@@ -1978,8 +1978,12 @@ class BuildTriggersViewTest(unittest.TestCase):
         self.assertFalse(by_name["pr-sweep"]["enabled"])
         self.assertEqual(view["rollup"], {"fixture-flow": "watch"})
         self.assertTrue(by_name["adhoc-digest"]["fire_ready"])
-        self.assertFalse(by_name["coder"]["fire_ready"])
-        self.assertIn("manual", by_name["coder"]["fire_block_reason"])
+        # #392 FLIP: a continuous SHIM is fireable (empty-body, role path);
+        # pre-#392 every non-manual mode read not-fireable.
+        self.assertTrue(by_name["coder"]["fire_ready"])
+        self.assertIsNone(by_name["coder"]["fire_block_reason"])
+        self.assertEqual(by_name["coder"]["fire_params"], [])
+        self.assertTrue(by_name["pr-sweep"]["fire_ready"])
         for t in by_name.values():
             self.assertTrue(t["window_open"])
             self.assertFalse(t["stopped"])
@@ -2113,12 +2117,15 @@ class FireParamsProjectionTest(BuildTriggersViewTest):
               "required": False},
              {"name": "tok", "type": "secret", "default": "gh-label"}]
 
-    def _params_repo(self, trig_params=None, mode="manual"):
+    def _params_repo(self, trig_params=None, mode="manual",
+                     firing_extra=None):
+        firing = {"mode": mode}
+        firing.update(firing_extra or {})
         return self._mini_repo(
             {"adhoc": {"name": "adhoc", "pipeline": "flow",
                        "params": (trig_params if trig_params is not None
                                   else {"q": "saved"}),
-                       "firing": {"mode": mode}}},
+                       "firing": firing}},
             pipeline_params=self.DECLS)
 
     def test_gallery_rows_carry_declared_params(self):
@@ -2154,11 +2161,74 @@ class FireParamsProjectionTest(BuildTriggersViewTest):
                           ds._declared_params({"params": self.DECLS})])
         self.assertTrue(t["fire_ready"])          # saved q + defaults
 
-    def test_non_manual_trigger_fire_params_empty(self):
-        d = self._params_repo(mode="continuous")
+    def test_native_continuous_and_schedule_carry_fire_params(self):
+        # #392: the run-now overlay extends to native continuous/schedule
+        # triggers -- the payload channel is start-legal for them now.
+        for mode, extra in (("continuous", {}),
+                            ("schedule", {"schedule": "0 6 * * *"})):
+            d = self._params_repo(mode=mode, firing_extra=extra)
+            view = ds.build_triggers_view(d)
+            t = [x for x in view["triggers"] if x["name"] == "adhoc"][0]
+            self.assertEqual([p["name"] for p in t["fire_params"]],
+                             [p["name"] for p in
+                              ds._declared_params({"params": self.DECLS})],
+                             mode)
+            self.assertTrue(t["fire_ready"], mode)
+
+    def test_event_trigger_fire_params_empty_and_not_ready(self):
+        # #392: event mode never fires from a marker -- no form, disabled
+        # button with the honest reason.
+        d = self._params_repo(mode="event",
+                              firing_extra={"event": "pr.opened"})
         view = ds.build_triggers_view(d)
         t = [x for x in view["triggers"] if x["name"] == "adhoc"][0]
         self.assertEqual(t["fire_params"], [])
+        self.assertFalse(t["fire_ready"])
+        self.assertIn("event", t["fire_block_reason"])
+
+    def test_shim_trigger_fire_params_empty_and_ready(self):
+        # #392 decision 4: a shim fires through the role path -- no params
+        # form, and NO dry params run (start_run never resolves params, so
+        # a dry _resolve_run_params would refuse fires the loop itself
+        # dispatches -- parity means parity with the actual start path).
+        d = self._params_repo()
+        with open(os.path.join(d, ".autonomy", "config.yaml"), "w") as fh:
+            fh.write("roles:\n  looper:\n    enabled: true\n"
+                     "    pipeline: flow\n")
+        view = ds.build_triggers_view(d)
+        t = [x for x in view["triggers"] if x["name"] == "looper"][0]
+        self.assertEqual(t["kind"], "shim")
+        self.assertEqual(t["fire_params"], [])
+        self.assertTrue(t["fire_ready"])   # doc requires q -- parity holds
+
+    def test_shim_overrides_refuse(self):
+        d = self._params_repo()
+        trig = {"name": "looper", "pipeline": "flow", "kind": "shim",
+                "firing": {"mode": "continuous"}}
+        ok, reason = ds.trigger_fire_ready(d, trig)
+        self.assertTrue(ok, reason)
+        ok, reason = ds.trigger_fire_ready(d, trig, overrides={"q": "x"})
+        self.assertFalse(ok)
+        self.assertIn("native", reason)
+
+    def test_fire_ready_event_mode_refuses(self):
+        d = self._params_repo()
+        trig = self._trig(mode="event")
+        trig["firing"]["event"] = "pr.opened"
+        ok, reason = ds.trigger_fire_ready(d, trig)
+        self.assertFalse(ok)
+        self.assertIn("event", reason)
+
+    def test_fire_ready_native_continuous_runs_the_dry_params_check(self):
+        # natives keep the exact _resolve_run_params dry-run in every
+        # fireable mode -- required-unset refuses, saved params satisfy.
+        d = self._params_repo(mode="continuous")
+        ok, reason = ds.trigger_fire_ready(d, self._trig(mode="continuous"))
+        self.assertTrue(ok, reason)
+        ok, reason = ds.trigger_fire_ready(
+            d, self._trig(params={}, mode="continuous"))
+        self.assertFalse(ok)
+        self.assertIn("q", reason)
 
     def test_unreadable_doc_fire_params_empty(self):
         d = self._params_repo()

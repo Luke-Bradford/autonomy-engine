@@ -1160,21 +1160,29 @@ trigger_start_token_for() {   # $1=name; show-backed capacity gate, rc 1 = full
   if [ "$slot" = "0" ]; then printf '%s' "$name"; else printf '%s@%s' "$name" "$slot"; fi
 }
 
-# Operator 'run now' markers for MANUAL triggers. Marker name = trigger
-# name. The DISPATCH gate is `triggers.py manual` -- derived from
-# enumerate_triggers, so validity / event-role collision / lane / enabled
-# gating is inherited (Codex CP2: a bare `show` reads the trigger file with
-# no config context and would bypass the event-collision refusal). `show`
-# decides only keep-vs-remove for a marker naming a currently-DISABLED
-# manual trigger (kept until enabled); it never gates a fire.
-# Capture-then-case, never producer|grep (prevention-log #7/#11).
-resolve_manual_fires() {
-  local d f name manual_list mname mpolicy mmax
-  local policy max slot tok params_file fc_rc
+# Operator 'run now' markers -- manual + continuous + schedule triggers
+# (#392; event mode never fires from a marker: an event run's identity is
+# its event token, and guessing one would mint a run the event machinery
+# never saw). Marker name = trigger name. The DISPATCH gate is
+# `triggers.py fireable` -- derived from enumerate_triggers, so validity /
+# event-role collision / lane / enabled gating is inherited (Codex CP2 on
+# D1: a bare `show` reads the trigger file with no config context and
+# would bypass the event-collision refusal). `show` decides only
+# keep-vs-remove for a marker naming a trigger OUTSIDE the fireable list
+# (disabled / window-closed fireable modes keep; event and anything else
+# remove); it can never FIRE. A continuous fire = one immediate start
+# ahead of the round-robin (the shared capacity gates bound the total); a
+# schedule fire = one extra run that never touches the cron last_fire
+# marker (the cron resolver stays its sole writer); a shim fires through
+# the role path, empty body only (the shim start path has no params
+# channel). Capture-then-case, never producer|grep (prevention-log #7/#11).
+resolve_fire_markers() {
+  local d f name fireable_list mname mmode mkind mpolicy mmax
+  local mode kind policy max slot tok params_file fc_rc
   d="$(trigger_ctl_dir fire)"
   [ -d "$d" ] || return 0
-  manual_list="$(_triggers_enumerate manual "$AUTONOMY_TARGET_REPO")" || {
-    log "WARN trigger-ctl: manual enumeration failed -- fire markers kept this tick"
+  fireable_list="$(_triggers_enumerate fireable "$AUTONOMY_TARGET_REPO")" || {
+    log "WARN trigger-ctl: fireable enumeration failed -- fire markers kept this tick"
     return 0
   }
   for f in "$d"/*; do
@@ -1185,41 +1193,63 @@ resolve_manual_fires() {
         log "WARN trigger-ctl: fire marker with invalid name -- removing"
         rm -f "$f" 2>>"$SUPLOG" || true; continue ;;
     esac
-    policy=""; max=""
-    while IFS=$'\t' read -r mname mpolicy mmax; do
-      if [ "$mname" = "$name" ]; then policy="$mpolicy"; max="$mmax"; fi
-    done <<<"$manual_list"
-    if [ -z "$policy" ]; then
-      # Not a dispatchable manual trigger this tick: keep the marker ONLY
-      # for the disabled-manual case (resumes on re-enable); anything else
-      # (non-manual, refused, colliding, unknown) is removed loudly.
-      _trigger_show_fields "$name"
-      if [ "$SHOW_MODE" = "manual" ] && [ "$SHOW_ENABLED" = "false" ]; then
-        log "NOTE trigger '$name' is disabled -- fire marker kept until enabled"
-      elif [ "$SHOW_MODE" = "manual" ] && [ "$SHOW_WINDOW" = "closed" ]; then
-        log "NOTE trigger '$name' is outside its run window -- fire marker kept"
-      else
-        log "WARN trigger-ctl: '$name' is not a dispatchable manual trigger -- removing its fire marker"
-        rm -f "$f" 2>>"$SUPLOG" || true
+    mode=""; kind=""; policy=""; max=""
+    while IFS=$'\t' read -r mname mmode mkind mpolicy mmax; do
+      if [ "$mname" = "$name" ]; then
+        mode="$mmode"; kind="$mkind"; policy="$mpolicy"; max="$mmax"
       fi
+    done <<<"$fireable_list"
+    if [ -z "$mode" ]; then
+      # Not in the fireable list this tick: `show` decides KEEP vs REMOVE
+      # only -- it can never fire (a bare file read has no enumeration
+      # context). A disabled / window-closed fireable-mode trigger keeps
+      # its marker (resumes on re-enable / window-open); event mode and
+      # anything else (refused, colliding, unknown) is removed loudly.
+      _trigger_show_fields "$name"
+      case "$SHOW_MODE" in
+        manual|continuous|schedule)
+          if [ "$SHOW_ENABLED" = "false" ]; then
+            log "NOTE trigger '$name' is disabled -- fire marker kept until enabled"
+          elif [ "$SHOW_WINDOW" = "closed" ]; then
+            log "NOTE trigger '$name' is outside its run window -- fire marker kept"
+          else
+            log "WARN trigger-ctl: '$name' is not a fireable trigger this tick -- removing its fire marker"
+            rm -f "$f" 2>>"$SUPLOG" || true
+          fi ;;
+        event)
+          log "WARN trigger-ctl: run-now does not apply to event trigger '$name' (an event run starts from its event) -- removing its fire marker"
+          rm -f "$f" 2>>"$SUPLOG" || true ;;
+        *)
+          log "WARN trigger-ctl: '$name' is not a fireable trigger -- removing its fire marker"
+          rm -f "$f" 2>>"$SUPLOG" || true ;;
+      esac
       continue
     fi
-    [ "$policy" = "parallel" ] || max=1
-    case "$max" in *[!0-9]*|"") max=1 ;; esac
-    if ! slot="$(trigger_free_slot "$name" "$max")"; then
-      log "NOTE trigger '$name': at capacity -- manual fire deferred (marker kept)"
-      continue
-    fi
-    if [ "$slot" = "0" ]; then tok="$name"; else tok="$name@$slot"; fi
+    case "$kind" in
+      shim|native) ;;
+      *)
+        # Never guess a kind (the cron resolver's rule -- a guess could
+        # route a native trigger through legacy role dispatch): defer.
+        log "WARN trigger-ctl: '$name' has invalid kind on the enumeration line -- fire deferred (marker kept)"
+        continue ;;
+    esac
     # Run-now params payload (Phase D2, #383): a non-empty marker BODY is
-    # a JSON params object. firecheck classifies it -- rc 0 = usable
-    # (the marker path travels to `pipeline.py start --params-file`);
-    # rc 3 = deterministically bad, remove LOUDLY (keeping it would retry
-    # a deterministic refusal forever -- the queued invalid-kind
-    # discipline); anything else = transient, keep + defer (under-fire is
-    # the safe side). Empty markers stay the D1 existence-only path.
+    # a JSON params object. Classification runs BEFORE the stop/capacity
+    # defer arms (#392 CP1) -- a deterministic refusal is removed loudly
+    # even while the trigger is stopped or busy; parking it behind a defer
+    # would retry a deterministic refusal forever. firecheck: rc 0 =
+    # usable (the marker path travels to `pipeline.py start
+    # --params-file`); rc 3 = deterministically bad, remove LOUDLY;
+    # anything else = transient, keep + defer (under-fire is the safe
+    # side). Empty markers stay the D1 existence-only path. A SHIM with a
+    # payload is deterministically bad by construction: the shim/role
+    # start path has no params channel.
     params_file=""
     if [ -s "$f" ]; then
+      if [ "$kind" = "shim" ]; then
+        log "WARN trigger-ctl: run-now params for '$name' need a native trigger (the role path has no params channel) -- removing (re-fire without params, or materialise the trigger)"
+        rm -f "$f" 2>>"$SUPLOG" || true; continue
+      fi
       # firecheck's rc 1/3 are its NORMAL non-ok signals (transient / bad
       # payload), NOT errors. This function runs under `set -uo pipefail`,
       # NOT `set -e` (prevention-log #17: the supervisor is the set-e
@@ -1239,10 +1269,25 @@ resolve_manual_fires() {
           continue ;;
       esac
     fi
-    if run_session "$tok" native "$params_file"; then
+    # Stop sentinel defers fires (#392): stop + fire are contradictory
+    # operator instructions -- the fail-safe side holds the fire until
+    # resume names the intent. Error backoff deliberately does NOT defer
+    # an explicit fire (operator intent overrides machine caution).
+    if trigger_stopped "$name"; then
+      log "NOTE trigger '$name' is stopped -- fire deferred (marker kept until resume)"
+      continue
+    fi
+    [ "$policy" = "parallel" ] || max=1
+    case "$max" in *[!0-9]*|"") max=1 ;; esac
+    if ! slot="$(trigger_free_slot "$name" "$max")"; then
+      log "NOTE trigger '$name': at capacity -- fire deferred (marker kept)"
+      continue
+    fi
+    if [ "$slot" = "0" ]; then tok="$name"; else tok="$name@$slot"; fi
+    if run_session "$tok" "$kind" "$params_file"; then
       rm -f "$f" 2>>"$SUPLOG" || true
     else
-      log "WARN manual fire for '$name' rc=$? -- marker kept for retry"
+      log "WARN fire for '$name' rc=$? -- marker kept for retry"
     fi
   done
   return 0
@@ -2596,10 +2641,13 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     # behaves byte-for-byte as before.
     heartbeat "cron-check" "checking scheduled roles" ""
     # CUTOVER (#374): shim cron roles arrive through the trigger enumeration
-    # -- same markers, same first-sight/skip-and-warn semantics. Manual fire
-    # markers and deferred (queue-policy) fires drain in the same window.
+    # -- same markers, same first-sight/skip-and-warn semantics. Run-now fire
+    # markers (manual/continuous/schedule, #392) and deferred (queue-policy)
+    # fires drain in the same window; a schedule fire coming due this tick
+    # drains BEFORE the markers, so a same-tick run-now may defer one tick
+    # at capacity (spec'd accepted bound).
     resolve_trigger_cron_due
-    resolve_manual_fires
+    resolve_fire_markers
     resolve_queued_fires
 
     # Event bus (W2, #86): wake event roles on new board/PR state, under the

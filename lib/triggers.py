@@ -11,7 +11,7 @@ Fail-safe: a malformed trigger REFUSES (named reason) and NEVER falls back
 to legacy role dispatch -- a broken trigger that shadows a role name must
 not silently resurrect the role path the operator replaced.
 
-CLI verbs: dispatch, cron, event, manual, show, validate,
+CLI verbs: dispatch, cron, event, fireable, show, validate,
 trust <repo> <journal> (per-trigger rows + per-pipeline rollup).
 """
 import datetime
@@ -677,27 +677,33 @@ def main(argv):
             print("%s\t%s\t%s\t%s\t%d" % (t["name"], t["kind"], spec,
                                           c["policy"], c["max"]))
         return 0
-    if cmd == "manual":
-        # The manual-fire DISPATCH gate (Codex CP2): derived from
-        # enumerate_triggers so validity / event-role collision / lane /
-        # enabled gating is inherited -- a bare load_trigger (show) would
-        # bypass the collision refusal that only enumeration knows about.
+    if cmd == "fireable":
+        # The fire-marker DISPATCH gate (#392; replaced `manual` -- run-now
+        # covers manual + continuous + schedule; event runs start from the
+        # event resolver, never a marker). Derived from enumerate_triggers
+        # so validity / event-role collision / lane / enabled gating is
+        # inherited -- a bare load_trigger (show) would bypass the
+        # collision refusal that only enumeration knows about. mode + kind
+        # travel on the line: the supervisor routes the session (shim =
+        # role path) and the params channel (native-only) on them.
         if len(pos) != 1:
-            print("usage: triggers.py manual <repo> [--lane <l>]",
+            print("usage: triggers.py fireable <repo> [--lane <l>]",
                   file=sys.stderr)
             return 2
         try:
             trigs, warns = enumerate_triggers(pos[0], lane)
         except PipelineError as exc:
-            print("triggers manual: %s" % exc, file=sys.stderr)
+            print("triggers fireable: %s" % exc, file=sys.stderr)
             return 1
         for w in warns:
             print("WARN %s" % w, file=sys.stderr)
         trigs = [t for t in trigs if in_run_window(t, now)]
         for t in trigs:
-            if t["firing"]["mode"] == "manual":
+            mode = t["firing"]["mode"]
+            if mode in ("manual", "continuous", "schedule"):
                 c = t["concurrency"]
-                print("%s\t%s\t%d" % (t["name"], c["policy"], c["max"]))
+                print("%s\t%s\t%s\t%s\t%d" % (t["name"], mode, t["kind"],
+                                              c["policy"], c["max"]))
         return 0
     if cmd == "show":
         if len(pos) != 2:
@@ -745,7 +751,7 @@ def main(argv):
             print("PIPELINE\t%s\t%s" % (p, rollup[p]))
         return 0
     if cmd == "firecheck":
-        # Run-now payload classification for resolve_manual_fires (Phase
+        # Run-now payload classification for resolve_fire_markers (Phase
         # D2, #383): rc 0 = usable, rc 3 = bad payload (caller removes the
         # marker loudly), rc 1 = transient (caller keeps + defers).
         if len(pos) != 3:

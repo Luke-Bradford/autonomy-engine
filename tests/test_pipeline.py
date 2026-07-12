@@ -3232,12 +3232,14 @@ class FireParamsTest(unittest.TestCase):
             fh.write("dig into ${params.q} (${params.topic})")
         self.state = os.path.join(self.logdir, ".pipeline-run-adhoc.json")
 
-    def _trigger(self, mode="manual", params=None):
+    def _trigger(self, mode="manual", params=None, firing_extra=None):
+        firing = {"mode": mode}
+        firing.update(firing_extra or {})
         with open(os.path.join(self.tdir, "adhoc.json"), "w") as fh:
             json.dump({"name": "adhoc", "pipeline": "pflow",
                        "params": (params if params is not None
                                   else {"q": "saved"}),
-                       "firing": {"mode": mode}}, fh)
+                       "firing": firing}, fh)
 
     def _start(self, fire_params=None):
         return pipeline.start_run_trigger(
@@ -3262,11 +3264,25 @@ class FireParamsTest(unittest.TestCase):
         st = self._start()
         self.assertEqual(st["params"]["q"], "saved")
 
-    def test_fire_params_on_non_manual_trigger_refuses(self):
+    def test_fire_params_on_continuous_trigger_starts(self):
+        # #392: the run-now channel widened -- continuous and schedule
+        # triggers take the payload; only event mode keeps refusing (a
+        # marker fire has no event token to stand on).
         self._trigger(mode="continuous")
+        st = self._start(fire_params={"q": "payload"})
+        self.assertEqual(st["params"]["q"], "payload")
+
+    def test_fire_params_on_schedule_trigger_starts(self):
+        self._trigger(mode="schedule",
+                      firing_extra={"schedule": "0 6 * * *"})
+        st = self._start(fire_params={"q": "payload"})
+        self.assertEqual(st["params"]["q"], "payload")
+
+    def test_fire_params_on_event_trigger_refuses(self):
+        self._trigger(mode="event", firing_extra={"event": "pr.opened"})
         with self.assertRaises(pipeline.PipelineError) as cm:
             self._start(fire_params={"q": "x"})
-        self.assertIn("manual", str(cm.exception))
+        self.assertIn("event", str(cm.exception))
         self.assertFalse(os.path.exists(self.state))
 
     def test_fire_params_targeting_secret_refuses_without_echo(self):

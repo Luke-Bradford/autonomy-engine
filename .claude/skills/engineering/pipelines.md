@@ -62,10 +62,12 @@ from `roles:` (loop→continuous, cron→schedule, event→event with
 `events_csv`, a shim-internal field). A native file supersedes its
 same-name shim; a BROKEN native file refuses AND keeps the shim
 suppressed (never fall back to role dispatch). CLI:
-`dispatch/cron/event/manual/show/validate/trust` (the four
-dispatch-facing verbs -- dispatch/cron/event/manual -- filter by
+`dispatch/cron/event/fireable/show/validate/trust` (the four
+dispatch-facing verbs -- dispatch/cron/event/fireable -- filter by
 `run_windows`; every verb takes a `--now <epoch>` digits-only test
-seam). Firing modes:
+seam; `fireable` replaced `manual` in #392 -- it lists the fire-marker
+dispatchable modes manual/continuous/schedule with mode+kind columns).
+Firing modes:
 continuous/schedule/manual/event — event carries `firing.event` (closed
 vocabulary `pr.opened/issue.created/merge.done/pr.synchronize`;
 `session.done` is shim-internal) + `firing.map {param: item|sha|event}`
@@ -174,7 +176,7 @@ fail-CLOSED on any junk shape. The gate lives at the four
 dispatch-facing CLI verbs, so NEW starts are blocked while in-flight
 tokens keep advancing (they never pass enumeration). `show` prints
 `WINDOW=open|closed`; supervisor `_trigger_show_fields` inits
-`SHOW_WINDOW=closed` and only the literal `open` opens; manual fire
+`SHOW_WINDOW=closed` and only the literal `open` opens; run-now fire
 markers + queued fires DEFER (marker kept) while closed. Accepted
 bounds: one-tick end-boundary precision; first-sight at window-open
 seeds without firing.
@@ -205,9 +207,12 @@ behind their own raw-bytes guard. Lifecycle: `/api/control` actions
 `trigger_fire`/`trigger_stop`/`trigger_resume` write the supervisor's
 lane-scoped `var/trigger-ctl/{fire,stop}/` markers (`marker_basename` in
 lib/triggers.py is the one basename rule both sides share;
-`queued/`+`backoff/` stay supervisor-owned/read-only; fire is
-manual-mode-only, gated by `trigger_fire_ready` = the same dry
-resolve_params verdict the payload shows). **D2 (#383) shipped trigger
+`queued/`+`backoff/` stay supervisor-owned/read-only; fire covers
+manual/continuous/schedule modes (#392 — event refuses: an event run's
+identity is its event token), gated by `trigger_fire_ready` = the same
+dry resolve_params verdict the payload shows; shims fire EMPTY-BODY
+through the role path w/ NO dry params run — `start_run` never resolves
+params, so parity means skipping the check). **D2 (#383) shipped trigger
 AUTHORING**: `trigger_save` = the SD-29 writer over the SD-34 trigger
 FILE shadow `var/autonomy/triggers/<name>.json` (validate_trigger-before,
 gitignore guard, allow_nan=False canonical serialize + re-parse compare,
@@ -219,11 +224,17 @@ flip; wrapped-role + multi-event shims refuse honestly). Run-now gained
 the PARAMS channel: the fire marker's BODY is a validated JSON payload
 (precedence: pipeline default < trigger saved < payload; secrets refused
 at write/firecheck/start — three layers, one rule);
-`resolve_manual_fires` classifies a non-empty body via `triggers.py
-firecheck` (rc 3 = deterministically bad → marker removed loudly; rc 1 =
-transient → kept) and threads the marker path through
+`resolve_fire_markers` (renamed from `resolve_manual_fires` in #392;
+enumeration gate = `triggers.py fireable`) classifies a non-empty body
+via `triggers.py firecheck` BEFORE its stop/capacity defer arms (a
+deterministic refusal is removed loudly even while stopped/busy; rc 3 =
+deterministically bad → marker removed loudly; rc 1 = transient → kept;
+shim + body = removed loudly, the role path has no params channel) and
+threads the marker path through
 `run_session`/`resolve_pipeline_ready` into `pipeline.py start
---params-file`. `fire_params_check` dry-runs
+--params-file`; the stop sentinel defers fires (kept until resume), a
+schedule fire never touches the cron last_fire marker, and backoff does
+NOT defer an explicit fire. `fire_params_check` dry-runs
 `pipeline._resolve_run_params` twice (merged vs saved-only) so the
 verdict is start-parity by construction. Payload projections:
 `pipelines[].params` + `triggers[].fire_params` (`_declared_params` /
@@ -256,8 +267,8 @@ resolve from their own checkout — unaffected by this repo's shadow).
 Pipeline detach = atomic rename into the delete-owned `.trash` scratch +
 provenance-sidecar cleanup; gallery listing skips reserved-suffix
 entries. Payload booleans `has_shadow`/`has_committed`/`shim_behind`
-drive the 🗑/⟲ card controls. Still deferred: run-now on non-manual
-modes. The page treats node ids as
+drive the 🗑/⟲ card controls. Run-now on non-manual modes SHIPPED
+(#392, SD-47). The page treats node ids as
 UNTRUSTED (invalid docs render): delegated `data-*` listeners, full-coverage
 `esc()`. Fixture: `tests/fixtures/repo-alpha` binds `coder → fixture-flow` and
 ships a walker-shaped `journal.jsonl`; tests needing an unbound role take tmp

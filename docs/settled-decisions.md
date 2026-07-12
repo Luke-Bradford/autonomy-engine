@@ -468,6 +468,30 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     regression. *(#390;
     plans/2026-07-11-state-role-twin-drop.md.)*
 
+47. **Run-now covers manual, continuous and schedule triggers; event mode
+    refuses at every layer** (2026-07-12, #392 — the SD-42/SD-43/SD-44
+    deferred extension). A fire marker = ONE immediate start through the
+    ordinary dispatch path, capacity-gated by the trigger's own concurrency
+    policy (the marker itself is the queue — never a `queued/` marker); a
+    schedule fire is an EXTRA run that never reads or advances the cron
+    `last_fire` marker (the cron resolver stays its sole writer); an event
+    trigger never fires from a marker — its run's identity is the event
+    token — and the refusal is loud at the marker resolver,
+    `trigger_fire_ready`, and `start_run_trigger`'s `fire_params` gate (the
+    plain start stays legal: it is the event resolver's own path). Shims
+    fire EMPTY-BODY through the role path; a params payload on a shim is a
+    deterministic loud removal, and their fire verdict skips the params
+    dry-run (`start_run` never resolves params — parity with the actual
+    start). Payload classification runs BEFORE the stop/capacity defer arms
+    (a deterministic refusal is never parked); the STOP sentinel now defers
+    fires for every mode (kept until resume — stop + fire are contradictory
+    operator instructions, fail-safe side holds), while error backoff does
+    NOT defer an explicit fire. The `triggers.py manual` verb is replaced by
+    `fireable` (name/mode/kind/policy/max; the dispatch-facing window-gated
+    set); `resolve_manual_fires` is renamed `resolve_fire_markers`. The
+    not-in-list `show` fallback can only KEEP or REMOVE a marker, never
+    fire. *(#392; specs/2026-07-12-run-now-non-manual-modes.md.)*
+
 ## Adding an entry
 
 A decision belongs here when the operator settled it and future work could
