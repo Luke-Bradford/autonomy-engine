@@ -385,6 +385,36 @@ EOF
   return 0
 }
 
+# orphan run-outcome sidecars (#378): report-only. doctor is READ-ONLY -- only
+# `off` changes behavior; prune/report/unset/junk all just report. Best-effort:
+# INFO/WARN, never FAILs the report. Capture-first (pipefail, prevention-log #7).
+doctor_orphan_sidecars_report() {
+  local repo="$1" _action _out _tag _val
+  # config_parser exits rc1 (empty) for BOTH an unset key and an unreadable
+  # config -- indistinguishable, both collapse to the prune default (safe:
+  # detection is config-independent). doctor is READ-ONLY, so only `off` matters
+  # -- unset/prune/report/junk all just report. `|| true`: rc1 -> empty.
+  _action="$(python3 "$DOCTOR_HOME/lib/config_parser.py" "$repo/.autonomy/config.yaml" pipelines.orphan_sidecar_action 2>/dev/null || true)"
+  case "$_action" in
+    off) echo "INFO orphan run-outcome sidecar sweep disabled (pipelines.orphan_sidecar_action=off)"; return 0 ;;
+  esac
+  _out="$(python3 "$DOCTOR_HOME/lib/pipeline.py" orphans "$repo" 2>/dev/null)" \
+    || { echo "INFO could not sweep run-outcome sidecars -- skipping"; return 0; }
+  if [ -z "$_out" ]; then
+    echo "INFO no orphan run-outcome sidecars"
+    return 0
+  fi
+  while IFS=$'\t' read -r _tag _val; do
+    case "$_tag" in
+      ORPHAN)     echo "WARN orphan run-outcome sidecar (no parent awaiting it): $_val" ;;
+      UNREADABLE) echo "INFO $_val unreadable pipeline state file(s) -- orphan detection is partial" ;;
+    esac
+  done <<EOF
+$_out
+EOF
+  return 0
+}
+
 doctor_full_report() {
   local repo="$1" hard_fail=0
   echo "== doctor.sh report: $repo =="
@@ -447,6 +477,7 @@ doctor_full_report() {
   doctor_agents_check
   doctor_pack_skills_check "$repo"
   doctor_triggers_report "$repo"
+  doctor_orphan_sidecars_report "$repo"
 
   doctor_gh_auth_check "$repo"
 

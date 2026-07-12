@@ -532,4 +532,25 @@ check "unreadable config -> INFO skip line (never FAIL)" "0" \
   "$(grep -q 'INFO could not enumerate triggers' <<<"$tr_ur" && echo 0 || echo 1)"
 rm -rf "$tr"
 
+# --- orphan sidecar report (#378) ---
+orp="$(mktemp -d)"
+mkdir -p "$orp/.autonomy" "$orp/var/autonomy-logs"
+printf 'engine:\n  default_branch: main\n' > "$orp/.autonomy/config.yaml"
+printf '{"run_id":"x","outcome":"success"}' \
+  > "$orp/var/autonomy-logs/.pipeline-run-run1.c0.callX.outcome.json"
+
+# default (unset) -> doctor reports the orphan (WARN)
+msg="$(doctor_orphan_sidecars_report "$orp" 2>&1 || true)"
+check "orphan reported as WARN" "0" \
+  "$(printf '%s' "$msg" | grep -q 'WARN orphan run-outcome sidecar' && echo 0 || echo 1)"
+
+# action=off -> disabled INFO, no WARN
+printf 'pipelines:\n  orphan_sidecar_action: "off"\n' >> "$orp/.autonomy/config.yaml"
+msg="$(doctor_orphan_sidecars_report "$orp" 2>&1 || true)"
+check "off -> disabled INFO" "0" \
+  "$(printf '%s' "$msg" | grep -q 'sweep disabled' && echo 0 || echo 1)"
+check "off -> no WARN" "1" \
+  "$(printf '%s' "$msg" | grep -q 'WARN orphan' && echo 0 || echo 1)"
+rm -rf "$orp"
+
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; exit 0; else echo "$fails CHECK(S) FAILED"; exit 1; fi
