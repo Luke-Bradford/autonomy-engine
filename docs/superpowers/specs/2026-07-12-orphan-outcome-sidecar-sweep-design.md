@@ -44,14 +44,19 @@ doctor/gc with no new plumbing.
 
 | Value | doctor.sh | worktree_gc.sh |
 |-------|-----------|----------------|
-| `report` **(default)** | detect + NAME orphans (WARN) | detect + NAME orphans, delete NOTHING |
-| `prune` | detect + NAME orphans (WARN) — read-only by nature | delete each orphan (named; fail-closed on unreadable state) |
+| `prune` **(default)** | detect + NAME orphans (WARN) — read-only by nature | delete each orphan (named; fail-closed on unreadable state) |
+| `report` | detect + NAME orphans (WARN) | detect + NAME orphans, delete NOTHING |
 | `off` | one INFO "sweep disabled" | skip the section |
 
-**Default `report`** (fail-safe; SD-5 "the safe default, never silently the
-stronger auto-acting strategy"). Deletion is opt-in — the operator flips the
-knob to `prune` in the site. Unset / junk value → `report` (enum re-gate at the
-point of use, prevention-log #6).
+**Default `prune`** — cleanup is on out of the box (operator direction: gc's job
+is to reclaim; the knob dials it *down* to `report`/`off`, it does not opt *in*).
+This is safe-by-construction, not a fail-open gamble: detection is
+false-negative-only (a sidecar is pruned only when NO live state claims it, and
+the match errs toward over-claiming — see Detection), so a prune default can
+never delete a sidecar a live parent still needs. **Resolution of an ambiguous
+value (prevention-log #6, enum re-gate at the point of use):**
+`unset` → `prune` (the product default); a NON-empty junk value or an unreadable
+config → `report` (garbage never *earns* the destructive action — fail-safe).
 
 ## Non-negotiables that shape this
 
@@ -196,11 +201,11 @@ after it. Reads the knob (shadow-aware, enum-gated), best-effort, INFO/WARN,
 NEVER sets `hard_fail`:
 
 ```sh
-_action="$(python3 "$DOCTOR_HOME/lib/config_parser.py" "$repo/.autonomy/config.yaml" pipelines.orphan_sidecar_action 2>/dev/null || echo report)"
+_action="$(python3 "$DOCTOR_HOME/lib/config_parser.py" "$repo/.autonomy/config.yaml" pipelines.orphan_sidecar_action 2>/dev/null || echo prune)"
+# doctor is READ-ONLY: only `off` changes its behavior; every other value
+# (prune default, report, unset, junk) reports identically. No prune here.
 case "$_action" in
   off) echo "INFO orphan run-outcome sidecar sweep disabled (pipelines.orphan_sidecar_action=off)"; return 0 ;;
-  report|prune) ;;                # doctor is read-only either way
-  *) _action=report ;;            # junk -> safe default (prevention-log #6)
 esac
 _out="$(python3 "$DOCTOR_HOME/lib/pipeline.py" orphans "$repo" 2>/dev/null)" \
   || { echo "INFO could not sweep run-outcome sidecars -- skipping"; return 0; }
@@ -231,8 +236,10 @@ enum-gate it (prevention-log #6), and pass `"$PWD"` (absolute, post-cd) to
 python:
 
 ```sh
+# unreadable config -> report (safe). Then resolve the value: unset -> the
+# prune default; a NON-empty junk value -> report (garbage never earns prune).
 _action="$(python3 "$ENGINE_HOME/lib/config_parser.py" "$REPO/.autonomy/config.yaml" pipelines.orphan_sidecar_action 2>/dev/null || echo report)"
-case "$_action" in off|report|prune) ;; *) _action=report ;; esac
+case "$_action" in off|report|prune) ;; "") _action=prune ;; *) _action=report ;; esac
 if [ "$_action" = "off" ]; then
   echo "== orphaned pipeline run-outcome sidecars: sweep disabled (pipelines.orphan_sidecar_action=off) =="
 else
@@ -268,7 +275,7 @@ is the explicit prune tool and already names every branch it removes.
 - `lib/config_page.html`: one `<select data-key="pipelines.orphan_sidecar_action">`
   (options off / report / prune) beside the operational knobs, wired to the
   existing save path (like `agent.effort`). Current value seeded from the config
-  payload; unset shows `report`.
+  payload; unset shows the `prune` default.
 
 Dashboard edit → browser-verify loop (dashboard skill: kill the 8787 dashboard
 pid so the watchdog relaunches with new code; temporal + interaction pass).
