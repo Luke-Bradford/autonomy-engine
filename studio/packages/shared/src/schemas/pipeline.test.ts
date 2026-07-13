@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { CATALOG_VERSION } from './version.js';
 import {
+  CallConfigSchema,
+  ContainerSchema,
   EdgeOnSchema,
   EdgeSchema,
   NewPipelineSchema,
@@ -138,6 +140,70 @@ describe('EdgeSchema', () => {
   });
 });
 
+describe('ContainerSchema', () => {
+  it('round-trips a stage container', () => {
+    const c = { id: 'stg', kind: 'stage', children: ['a', 'b'] };
+    expect(ContainerSchema.parse(c)).toEqual(c);
+  });
+
+  it('round-trips a loop container with exitWhen/maxRounds/join', () => {
+    const c = {
+      id: 'lp',
+      kind: 'loop',
+      children: ['w', 'check'],
+      exitWhen: '${nodes.check.output.done}',
+      maxRounds: 5,
+      join: 'all',
+    };
+    expect(ContainerSchema.parse(c)).toEqual(c);
+  });
+
+  it('rejects an unknown kind', () => {
+    expect(() => ContainerSchema.parse({ id: 'x', kind: 'fan', children: [] })).toThrow();
+  });
+
+  it('rejects a non-positive maxRounds', () => {
+    expect(() =>
+      ContainerSchema.parse({ id: 'x', kind: 'loop', children: [], maxRounds: 0 }),
+    ).toThrow();
+  });
+});
+
+describe('CallConfigSchema', () => {
+  it('round-trips an empty-params call', () => {
+    const c = { pipelineVersionId: 'pv_2', params: {} };
+    expect(CallConfigSchema.parse(c)).toEqual(c);
+  });
+
+  it('round-trips params + wait', () => {
+    const c = { pipelineVersionId: '${params.child}', params: { topic: 'x' }, wait: true };
+    expect(CallConfigSchema.parse(c)).toEqual(c);
+  });
+
+  it('requires params (no implicit default)', () => {
+    expect(() => CallConfigSchema.parse({ pipelineVersionId: 'pv_2' })).toThrow();
+  });
+});
+
+describe('NodeSchema call variant', () => {
+  it('round-trips a call_pipeline node with a call config', () => {
+    const n = {
+      id: 'caller',
+      type: 'call_pipeline',
+      config: {},
+      position: { x: 0, y: 0 },
+      call: { pipelineVersionId: 'pv_2', params: {} },
+    };
+    expect(NodeSchema.parse(n)).toEqual(n);
+  });
+
+  it('a plain node (no call) still parses unchanged (backward-tolerant)', () => {
+    const n = { id: 'plain', type: 'agent_task', config: {}, position: { x: 0, y: 0 } };
+    expect(NodeSchema.parse(n)).toEqual(n);
+    expect(NodeSchema.parse(n)).not.toHaveProperty('call');
+  });
+});
+
 const pipeline = {
   id: 'pipe_1',
   ownerId: null,
@@ -181,6 +247,7 @@ const pipelineVersion = {
     },
   ],
   edges: [],
+  containers: [],
   catalogVersion: CATALOG_VERSION,
   createdAt: 1700000000000,
 };
@@ -201,6 +268,13 @@ describe('PipelineVersionSchema', () => {
         nodes: [{ id: 'bad' }],
       }),
     ).toThrow();
+  });
+
+  it('defaults containers to [] when the key is absent (backward-tolerant)', () => {
+    const { containers, ...withoutContainers } = pipelineVersion;
+    void containers;
+    const parsed = PipelineVersionSchema.parse(withoutContainers);
+    expect(parsed.containers).toEqual([]);
   });
 });
 

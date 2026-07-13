@@ -1,4 +1,11 @@
-import type { Edge, Param, PipelineVersion, SubstitutionContext } from './types.js';
+import type {
+  Container,
+  Edge,
+  Node,
+  Param,
+  PipelineVersion,
+  SubstitutionContext,
+} from './types.js';
 import { ParamResolveError, SubstituteError } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -482,6 +489,202 @@ export function validateRefs(doc: Pick<PipelineVersion, 'params' | 'nodes' | 'ed
     const soft = graph.soft.get(node.id) ?? new Set<string>();
     scan(`nodes.${node.id}.config`, node.config, { declared, guaranteed, reachable, soft }, errors);
   }
+  return errors;
+}
+
+// --- validateDoc (structural static validation, run at pipeline-SAVE time) --
+
+/** A pipeline-version resolver: the `nodes` of another version, for the call graph. */
+export type PipelineResolver = (
+  pipelineVersionId: string,
+) => Pick<PipelineVersion, 'nodes'> | undefined;
+
+export interface ValidateDocOptions {
+  /** This version's own id — catches a direct self-call + seeds the call graph. */
+  selfId?: string;
+  /** Resolve another version's `nodes`, for cross-pipeline cycle/depth analysis. */
+  resolvePipeline?: PipelineResolver;
+  /** Max call-graph depth (hops from this version). Default 3. */
+  maxCallDepth?: number;
+}
+
+/**
+ * PURE structural validation of a pipeline's P2c constructs, at SAVE time
+ * (complements `validateRefs`, which checks the `${}` language). Returns error
+ * strings (`[]` = valid). Enforces:
+ *  - container children exist as nodes and are DISJOINT across containers;
+ *  - a loop declares an `exitWhen` or a `maxRounds` (else it never terminates),
+ *    and a stage carries no `exitWhen`;
+ *  - a container's `exitWhen` is a valid `${}` expr over its OWN child outputs;
+ *  - a `back` edge's `to` is an ANCESTOR (a loop/stage container, or an upstream
+ *    node) that forward-reaches its `from`;
+ *  - a `call_pipeline` node introduces no cycle and no path deeper than
+ *    `maxCallDepth` over the (statically-resolvable) call graph.
+ */
+export function validateDoc(
+  doc: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'>,
+  options: ValidateDocOptions = {},
+): string[] {
+  const errors: string[] = [];
+  const nodeIdSet = new Set(doc.nodes.map((n) => n.id));
+  const containers = doc.containers ?? [];
+  const declared = new Map<string, Param>();
+  for (const p of doc.params) declared.set(p.name, p);
+
+  // Container children: existence + disjointness; loop/stage exit configuration.
+  const childOwner = new Map<string, string>();
+  for (const c of containers) {
+    for (const ch of c.children) {
+      if (!nodeIdSet.has(ch)) {
+        errors.push(`container '${c.id}': child '${ch}' is not a node in this pipeline`);
+      }
+      const prev = childOwner.get(ch);
+      if (prev !== undefined && prev !== c.id) {
+        errors.push(
+          `container '${c.id}': child '${ch}' already belongs to container '${prev}' (children must be disjoint)`,
+        );
+      } else {
+        childOwner.set(ch, c.id);
+      }
+    }
+    if (c.kind === 'loop' && c.exitWhen === undefined && c.maxRounds === undefined) {
+      errors.push(
+        `container '${c.id}': a loop needs an exitWhen or a maxRounds (else it never exits)`,
+      );
+    }
+    if (c.kind === 'stage' && c.exitWhen !== undefined) {
+      errors.push(`container '${c.id}': exitWhen is only meaningful on a loop, not a stage`);
+    }
+    if (c.exitWhen !== undefined) validateExitWhen(c, declared, errors);
+  }
+
+  // Back-edge ancestry: `to` must forward-reach `from` (a container also
+  // "reaches" — encloses — its own children).
+  const reach = forwardReach(doc, containers);
+  for (const e of doc.edges) {
+    if (!e.back) continue;
+    const fromTarget = reach.get(e.to) ?? new Set<string>();
+    if (!fromTarget.has(e.from)) {
+      errors.push(
+        `back-edge '${e.id}': its target '${e.to}' must be an ancestor of '${e.from}' ` +
+          '(a loop/stage container or an upstream node that reaches it)',
+      );
+    }
+  }
+
+  errors.push(...validateCallGraph(doc, options));
+  return errors;
+}
+
+/** Validate a container's `exitWhen` `${}` refs point only at its OWN children. */
+function validateExitWhen(c: Container, declared: Map<string, Param>, errors: string[]): void {
+  if (c.exitWhen === undefined) return;
+  const where = `container.${c.id}.exitWhen`;
+  const scope: ScanScope = {
+    declared,
+    guaranteed: new Set(c.children), // a child's output is in-scope for exit
+    reachable: new Set<string>(),
+    soft: new Set<string>(),
+  };
+  // Reuse the shared scanner so exitWhen agrees with the `${}` runtime grammar.
+  scan(where, c.exitWhen, scope, errors);
+  if (!c.exitWhen.split('$${').join(ESC).includes('${')) {
+    errors.push(`${where}: exitWhen must be a \${...} expression over child outputs`);
+  }
+}
+
+/**
+ * Forward reachability over the doc's forward edges (node OR container
+ * endpoints), PLUS containment: a container reaches (encloses) its own
+ * children, so a back-edge from a child to its enclosing loop/stage counts the
+ * container as an ancestor.
+ */
+function forwardReach(
+  doc: Pick<PipelineVersion, 'nodes' | 'edges'>,
+  containers: Container[],
+): Map<string, Set<string>> {
+  const endpoints = new Set<string>([
+    ...doc.nodes.map((n) => n.id),
+    ...containers.map((c) => c.id),
+  ]);
+  const adj = new Map<string, string[]>();
+  for (const id of endpoints) adj.set(id, []);
+  for (const e of doc.edges) {
+    if (e.back) continue;
+    if (endpoints.has(e.from) && endpoints.has(e.to)) adj.get(e.from)!.push(e.to);
+  }
+  for (const c of containers) {
+    for (const ch of c.children) if (endpoints.has(ch)) adj.get(c.id)!.push(ch);
+  }
+  const reach = new Map<string, Set<string>>();
+  for (const id of endpoints) {
+    const seen = new Set<string>();
+    const stack = [...(adj.get(id) ?? [])];
+    while (stack.length) {
+      const cur = stack.pop() as string;
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+      for (const nxt of adj.get(cur) ?? []) stack.push(nxt);
+    }
+    reach.set(id, seen);
+  }
+  return reach;
+}
+
+/** The literal (non-`${}`) call targets of a set of nodes. */
+function literalCallTargets(nodes: Pick<Node, 'call'>[]): string[] {
+  const out: string[] = [];
+  for (const n of nodes) {
+    if (n.call === undefined) continue;
+    const pv = n.call.pipelineVersionId;
+    if (!pv.includes('${')) out.push(pv); // dynamic ids can't be resolved statically
+  }
+  return out;
+}
+
+/**
+ * Refuse a `call_pipeline` cycle / a path deeper than `maxCallDepth`. A direct
+ * self-call is caught from `selfId` alone; the broader graph needs a
+ * `resolvePipeline` to fetch each callee's `nodes` (a dynamic `${}` target is
+ * skipped — it cannot be resolved at save time).
+ */
+function validateCallGraph(
+  doc: Pick<PipelineVersion, 'nodes'>,
+  options: ValidateDocOptions,
+): string[] {
+  const errors: string[] = [];
+  const maxDepth = options.maxCallDepth ?? 3;
+  const { selfId, resolvePipeline } = options;
+
+  if (selfId !== undefined) {
+    for (const t of literalCallTargets(doc.nodes)) {
+      if (t === selfId)
+        errors.push(`call_pipeline cycle: a node calls its own version '${selfId}'`);
+    }
+  }
+  if (resolvePipeline === undefined || selfId === undefined) return errors;
+
+  // `depth` counts call HOPS from this version (root = 0). `maxDepth` hops are
+  // allowed; entering a version deeper than that is an error.
+  const path: string[] = [selfId];
+  const dfs = (pvId: string, nodes: Pick<Node, 'call'>[], depth: number): void => {
+    if (depth > maxDepth) {
+      errors.push(`call_pipeline depth exceeds ${maxDepth} at version '${pvId}'`);
+      return;
+    }
+    for (const t of literalCallTargets(nodes)) {
+      if (path.includes(t)) {
+        errors.push(`call_pipeline cycle: version '${t}' is reachable from itself`);
+        continue;
+      }
+      const childDoc = resolvePipeline(t);
+      if (childDoc === undefined) continue; // unresolvable callee — not analyzable
+      path.push(t);
+      dfs(t, childDoc.nodes, depth + 1);
+      path.pop();
+    }
+  };
+  dfs(selfId, doc.nodes, 0);
   return errors;
 }
 
