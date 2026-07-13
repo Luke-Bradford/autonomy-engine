@@ -180,10 +180,7 @@ describe('spawnSupervised', () => {
       maxOutputBytes,
     });
 
-    const [, result] = await Promise.all([
-      collectEvents(supervised.events),
-      supervised.result,
-    ]);
+    const [, result] = await Promise.all([collectEvents(supervised.events), supervised.result]);
 
     // The combined arrival across both streams exceeds the shared budget, so
     // the framer must trip (truncated) rather than buffer ~40 MB / ~2x the cap.
