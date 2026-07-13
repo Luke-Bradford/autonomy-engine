@@ -19,8 +19,21 @@ import { loadEngineEvents } from '../events.js';
 import { createExecutor } from '../executor.js';
 import { createConnectorRegistry, type ConnectorRegistry } from '../../connectors/registry.js';
 import type { ActivityEvent, ConnectorAdapter } from '../../connectors/types.js';
+import type { Supervisor } from '../../workers/process-supervisor.js';
 
 type Db = ReturnType<typeof freshDb>['db'];
+
+// A no-op supervisor: these tests exercise `http`/fake adapters, never
+// `agent_cli`, so its spawn/reap are never called — it only satisfies the
+// registry's dependency shape.
+const noopSupervisor: Supervisor = {
+  spawnSupervised: () => {
+    throw new Error('noopSupervisor.spawnSupervised should not be called in these tests');
+  },
+  reapAllSupervised: () => Promise.resolve(),
+};
+const testRegistry = (): ConnectorRegistry =>
+  createConnectorRegistry({ supervisor: noopSupervisor });
 
 let KEY: Uint8Array;
 beforeAll(async () => {
@@ -84,7 +97,7 @@ function deps(db: Db, over: { adapters?: ConnectorRegistry; concurrency?: number
       db,
       masterKey: KEY,
       resolveDoc,
-      adapters: over.adapters ?? createConnectorRegistry(),
+      adapters: over.adapters ?? testRegistry(),
       concurrency: over.concurrency,
     }),
   };
@@ -110,7 +123,7 @@ async function seedConnection(
 function fakeHttpAdapter(run: ConnectorAdapter['runActivity']): ConnectorRegistry {
   const adapter: ConnectorAdapter = {
     kind: 'http',
-    configSchema: createConnectorRegistry().get('http')!.configSchema,
+    configSchema: testRegistry().get('http')!.configSchema,
     testConnection: () => Promise.resolve({ ok: true }),
     runActivity: run,
   };
@@ -197,7 +210,10 @@ describe('createExecutor — loud pre-flight failures (no bogus node.dispatched)
     });
   });
 
-  it('a connection kind with no registered adapter fails loudly (P3a: llm_call)', async () => {
+  it('a connection kind absent from the registry fails loudly (misconfigured registry)', async () => {
+    // P3b registers an adapter for every kind, so this exercises the executor's
+    // "no adapter" guard directly via an EMPTY registry — a run must never hang
+    // silently on a kind the registry happens not to carry.
     const db = freshDb().db;
     const connId = await seedConnection(db, 'anthropic_api', {}, 'sk-x');
     const pvId = seedVersion(db, [
@@ -211,7 +227,8 @@ describe('createExecutor — loud pre-flight failures (no bogus node.dispatched)
     ]);
     const run = seedRun(db, pvId);
 
-    const state = await startRun(deps(db), run);
+    const emptyRegistry: ConnectorRegistry = new Map();
+    const state = await startRun(deps(db, { adapters: emptyRegistry }), run);
     expect(state.status).toBe('failure');
     expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
       error: expect.stringContaining("no adapter for connection kind 'anthropic_api'"),

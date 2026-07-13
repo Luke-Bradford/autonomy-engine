@@ -2,3 +2,7 @@
 export * from './types.js';
 export * from './registry.js';
 export { httpAdapter } from './http.js';
+export { anthropicAdapter } from './anthropic.js';
+export { openaiAdapter } from './openai.js';
+export { ollamaAdapter } from './ollama.js';
+export { createAgentAdapter } from './agent.js';

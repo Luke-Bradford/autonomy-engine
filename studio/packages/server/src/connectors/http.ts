@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
+import { redactSecrets } from './redact.js';
 
 /**
  * The `http` connector adapter: a generic HTTP request activity (the MVP
@@ -99,7 +100,10 @@ export const httpAdapter: ConnectorAdapter = {
       }
       return { ok: true };
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      return {
+        ok: false,
+        error: redactSecrets(err instanceof Error ? err.message : String(err), [secret]),
+      };
     } finally {
       clearTimeout(timer);
     }
@@ -182,13 +186,22 @@ export const httpAdapter: ConnectorAdapter = {
           error: `http request timed out after ${timeoutMs}ms`,
         };
       } else if (err instanceof TypeError) {
-        // A malformed request (bad URL, forbidden header, etc.) — never succeeds as-is.
-        yield { type: 'failed', kind: 'permanent', error: err.message };
+        // A malformed request (bad URL, forbidden header, etc.) — never succeeds
+        // as-is. Redact outgoing header values: a header-validation TypeError
+        // quotes the bad value verbatim, which could be the secret bearer token.
+        yield {
+          type: 'failed',
+          kind: 'permanent',
+          error: redactSecrets(err.message, Object.values(requestHeaders)),
+        };
       } else {
         yield {
           type: 'failed',
           kind: 'transient',
-          error: err instanceof Error ? err.message : String(err),
+          error: redactSecrets(
+            err instanceof Error ? err.message : String(err),
+            Object.values(requestHeaders),
+          ),
         };
       }
     } finally {

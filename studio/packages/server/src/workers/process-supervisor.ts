@@ -53,7 +53,15 @@ export interface SpawnSupervisedOptions {
   command: string;
   args?: string[];
   cwd?: string;
-  env?: Record<string, string>;
+  /**
+   * Environment for the child. It is MERGED onto the parent's environment
+   * (execa's default `extendEnv`), so the child inherits `PATH` etc. A key
+   * mapped to `undefined` UNSETS the inherited var in the child — the
+   * `agent_cli` adapter uses this to strip the harness's own secret-bearing
+   * vars (the secrets master key) so an arbitrary agent subprocess never sees
+   * them.
+   */
+  env?: Record<string, string | undefined>;
   /** Hard wall-clock timeout. Exceeding it tree-kills the process. */
   timeoutMs?: number;
   /**
