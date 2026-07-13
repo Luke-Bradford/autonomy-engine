@@ -2,3 +2,6 @@
 // Lives in `shared` so both web and server import one engine; NO I/O anywhere.
 export * from './types.js';
 export * from './params.js';
+
+// P2b — the pure event-sourced reducer + acyclic DAG walk.
+export * from './reduce.js';

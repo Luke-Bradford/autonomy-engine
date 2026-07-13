@@ -732,8 +732,13 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges'>): Graph {
   return { guaranteed, reachable, soft };
 }
 
-/** Declared edges, or the implicit success-chain over node order when none. */
-function effectiveEdges(doc: Pick<PipelineVersion, 'nodes' | 'edges'>): Edge[] {
+/**
+ * Declared edges, or the implicit success-chain over node order when none.
+ * Exported as the SSOT for "edge-less docs synthesize the success-chain" — the
+ * walk (`engine/reduce.ts`) and the dominance analysis here must agree on the
+ * one canonical edge set, so both read it from this single function.
+ */
+export function effectiveEdges(doc: Pick<PipelineVersion, 'nodes' | 'edges'>): Edge[] {
   if (doc.edges.length > 0) return doc.edges;
   const out: Edge[] = [];
   for (let i = 0; i + 1 < doc.nodes.length; i += 1) {
