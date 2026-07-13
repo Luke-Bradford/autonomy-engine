@@ -19,6 +19,7 @@
     "fastify": "5.10.0",
     "libsodium-wrappers": "0.8.4",
     "nanoid": "^5",
+    "p-limit": "^7.3.0",
     "zod": "4.4.3"
   },
   "devDependencies": {

@@ -23,3 +23,6 @@ export * from './portability/index.js';
 
 // P2a — the pure `${}` parameter language (inert substitution + validateRefs).
 export * from './engine/index.js';
+
+// P3 — the activity catalog (pure metadata; server supplies the adapters).
+export * from './catalog/index.js';

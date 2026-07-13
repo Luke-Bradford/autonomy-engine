@@ -40,30 +40,35 @@ export type DocResolver = (pipelineVersionId: string) => PipelineVersion;
 export type ExecutorCommand = Extract<EngineCommand, { type: 'dispatchNode' | 'startChild' }>;
 
 /**
- * Performs a single reducer command and returns the durable event(s) it
- * produced, IN ORDER. For a `dispatchNode` the real executor eventually yields
+ * Performs a single reducer command, YIELDING the durable events it produces,
+ * IN ORDER, as an async stream. For a `dispatchNode` the executor yields
  * `node.dispatched{idempotent}` then a terminal `node.succeeded`/`node.failed`;
- * for a `startChild` it yields a `call.returned`. A P2 stub returns them
- * synchronously; the async signature is what P3's real (subprocess) executor
- * needs. The driver appends+folds whatever events come back — the executor
- * never touches the DB or state itself.
+ * for a `startChild` it yields a `call.returned`. The driver appends+folds each
+ * event AS IT ARRIVES — the executor never touches the DB or state itself.
  *
- * CRASH-SAFETY CONTRACT (load-bearing for the boot reconciler — P3 MUST honour
- * it): `node.dispatched{idempotent}` MUST become durable BEFORE the activity's
- * side effect begins. The reconciler recovers a `dispatched` node by its
- * PERSISTED idempotent flag (re-run if idempotent, else freeze the run), but a
- * node left `ready` — the reducer decided a dispatch whose `node.dispatched`
- * never persisted — is re-dispatched blindly, on the premise the side effect
- * never started. That premise holds ONLY if `node.dispatched` is durable first.
- * A P3 executor that runs the side effect and THEN returns
- * `[node.dispatched, terminal]` as one batch (as the P2 stub does — sound only
- * because it has no real side effect) would violate this: a crash after a
- * billed LLM call / spawned subprocess but before the append would leave the
- * node `ready` with no idempotent record → a silent double-execution on resume.
- * P3 must append `node.dispatched` as its own durable step ahead of the work.
+ * CRASH-SAFETY CONTRACT (load-bearing for the boot reconciler) — and why the
+ * return type is a STREAM, not a batch: `node.dispatched{idempotent}` MUST
+ * become durable BEFORE the activity's side effect begins. The reconciler
+ * recovers a `dispatched` node by its PERSISTED idempotent flag (re-run if
+ * idempotent, else freeze the run), but a node left `ready` — the reducer
+ * decided a dispatch whose `node.dispatched` never persisted — is re-dispatched
+ * blindly, on the premise the side effect never started. That premise holds
+ * ONLY if `node.dispatched` is durable first.
+ *
+ * The `AsyncIterable` return STRUCTURALLY enforces this: the driver's
+ * `for await` pulls `node.dispatched`, appends+folds it (durable), and only
+ * THEN requests the next event — at which point an async-generator executor
+ * resumes past its `yield node.dispatched` and runs the side effect. A crash
+ * after a billed LLM call / spawned subprocess but before the terminal event
+ * therefore always leaves the node `dispatched` (caught by the idempotent
+ * gate), never `ready`. A batch return (`[node.dispatched, terminal]` at once,
+ * as the P2 stub did — sound only because it had no real side effect) could not
+ * make that ordering guarantee. The executor maps every operational failure to
+ * a terminal `node.failed`/`call.returned{failure}` event and must not throw
+ * for expected errors; a thrown bug still leaves `node.dispatched` durable.
  */
 export interface Executor {
-  perform(command: ExecutorCommand, runId: string): EngineEvent[] | Promise<EngineEvent[]>;
+  perform(command: ExecutorCommand, runId: string): AsyncIterable<EngineEvent>;
 }
 
 export interface DriverDeps {
@@ -145,7 +150,11 @@ export async function pump(
     }
 
     const command = queue.shift()!;
-    const events: EngineEvent[] =
+    // `finishRun` is the driver's OWN command — a single `run.finished` event
+    // (a sync array, which `for await` iterates too). `dispatchNode`/`startChild`
+    // go to the executor, which STREAMS its events so `node.dispatched` is folded
+    // (durable) before the side effect runs — see the `Executor` contract doc.
+    const source: Iterable<EngineEvent> | AsyncIterable<EngineEvent> =
       command.type === 'finishRun'
         ? [
             {
@@ -155,10 +164,10 @@ export async function pump(
               reason: command.reason,
             },
           ]
-        : await Promise.resolve(deps.executor.perform(command, state.runId));
+        : deps.executor.perform(command, state.runId);
 
     let terminal = false;
-    for (const event of events) {
+    for await (const event of source) {
       appendEngineEvent(deps.db, event);
       const result = engine.reduce(state, event);
       state = result.state;

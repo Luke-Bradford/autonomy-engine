@@ -53,7 +53,10 @@ import { appendEngineEvent, loadEngineEvents } from './events.js';
  * fail-loud rather than silently mis-driving a run.
  */
 const refuseToExecute: Executor = {
-  perform() {
+  // Throws synchronously ON CALL (not merely on iteration): the finalize path
+  // carries only `finishRun` — the driver's own command — so this is never
+  // invoked; if a bug ever routed a dispatch/startChild here, fail loud.
+  perform(): AsyncIterable<EngineEvent> {
     throw new Error('reconcile finalize path must not dispatch — expected only finishRun');
   },
 };
