@@ -51,6 +51,7 @@ describe('portability routes (export + import)', () => {
         data: {
           pipeline,
           versions: [{ ...version }],
+          strippedConnectionRefs: [],
         },
       });
 

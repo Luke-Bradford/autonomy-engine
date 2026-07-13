@@ -30,10 +30,20 @@ export type PipelineVersionExport = z.infer<typeof PipelineVersionExportSchema>;
  * `@autonomy-studio/server`'s `portability/export.ts`). Runs/triggers bound
  * to this pipeline are NOT included — out of scope for P1c (per-entity
  * export, no dependency-bundling).
+ *
+ * `strippedConnectionRefs` is the set of node ids (across all `versions`)
+ * whose ORIGINAL `connectionId` was non-null before export nulled it (see
+ * `stripNodeConnectionId` in `export.ts`) — i.e. nodes that actually need a
+ * connection rebind on import. Nodes that never had a `connectionId` are NOT
+ * in this list. `exportPipeline` always populates it; `.default([])` only
+ * exists so an OLDER envelope (predating this field) still parses rather
+ * than refusing outright — those envelopes simply report zero
+ * `unresolvedConnectionRef` attention items on import.
  */
 export const PipelineExportDataSchema = z.object({
   pipeline: PipelineSchema,
   versions: z.array(PipelineVersionExportSchema),
+  strippedConnectionRefs: z.array(z.string().min(1)).default([]),
 });
 export type PipelineExportData = z.infer<typeof PipelineExportDataSchema>;
 

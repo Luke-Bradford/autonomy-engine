@@ -64,6 +64,66 @@ describe('importEnvelope: pipeline', () => {
     expect(getPipelineVersion(db, importedVersion.id)).toEqual(importedVersion);
   });
 
+  it('reports unresolvedConnectionRef only for nodes that originally had a connectionId, not connection-less nodes', () => {
+    const { db } = freshDb();
+    const connection = createConnection(db, {
+      ownerId: 'owner-a',
+      name: 'C',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Mixed' });
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [
+        {
+          id: 'bound',
+          type: 'llm_call',
+          config: {},
+          connectionId: connection.id,
+          position: { x: 0, y: 0 },
+        },
+        { id: 'unbound', type: 'llm_call', config: {}, position: { x: 1, y: 1 } },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const envelope = exportPipeline(db, pipeline.id, 'owner-a');
+    const result = importEnvelope(db, 'owner-b', envelope);
+
+    expect(result.kind).toBe('pipeline');
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+    expect(result.attention).toEqual([{ type: 'unresolvedConnectionRef', nodeId: 'bound' }]);
+    expect(result.attention).toHaveLength(1);
+  });
+
+  it('no unresolvedConnectionRef attention items when no node had a connectionId', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'No connections' });
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [
+        { id: 'a', type: 'llm_call', config: {}, position: { x: 0, y: 0 } },
+        { id: 'b', type: 'llm_call', config: {}, position: { x: 1, y: 1 } },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const envelope = exportPipeline(db, pipeline.id, 'owner-a');
+    const result = importEnvelope(db, 'owner-b', envelope);
+
+    expect(result.kind).toBe('pipeline');
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+    expect(result.attention.filter((a) => a.type === 'unresolvedConnectionRef')).toEqual([]);
+  });
+
   it('accepts a raw JSON string body (not just a parsed object)', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'P' });

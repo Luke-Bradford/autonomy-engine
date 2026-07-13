@@ -51,7 +51,72 @@ describe('exportPipeline', () => {
     expect(envelope.data.pipeline.id).toBe(pipeline.id);
     expect(envelope.data.versions).toHaveLength(2);
     expect(envelope.data.versions[0]!.nodes[0]!.connectionId).toBeNull();
+    expect(envelope.data.strippedConnectionRefs).toEqual(['n1']);
     expect(JSON.stringify(envelope)).not.toContain(connection.id);
+  });
+
+  it('strippedConnectionRefs lists only the nodes that actually had a connectionId', () => {
+    const { db } = freshDb();
+    const connection = createConnection(db, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'Mixed' });
+    const versionInput: NewPipelineVersion = {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [
+        {
+          id: 'bound',
+          type: 'llm_call',
+          config: {},
+          connectionId: connection.id,
+          position: { x: 0, y: 0 },
+        },
+        {
+          id: 'unbound',
+          type: 'llm_call',
+          config: {},
+          position: { x: 1, y: 1 },
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    };
+    createPipelineVersion(db, versionInput);
+
+    const envelope = exportPipeline(db, pipeline.id, 'local');
+    if (envelope.kind !== 'pipeline') throw new Error('unreachable');
+
+    expect(envelope.data.strippedConnectionRefs).toEqual(['bound']);
+    for (const node of envelope.data.versions[0]!.nodes) {
+      expect(node.connectionId).toBeNull();
+    }
+  });
+
+  it('strippedConnectionRefs is empty when no node has a connectionId', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'No connections' });
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [
+        { id: 'a', type: 'llm_call', config: {}, position: { x: 0, y: 0 } },
+        { id: 'b', type: 'llm_call', config: {}, position: { x: 1, y: 1 } },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const envelope = exportPipeline(db, pipeline.id, 'local');
+    if (envelope.kind !== 'pipeline') throw new Error('unreachable');
+
+    expect(envelope.data.strippedConnectionRefs).toEqual([]);
   });
 
   it('404s (NotFoundError) for a nonexistent pipeline', () => {

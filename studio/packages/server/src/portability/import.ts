@@ -30,17 +30,23 @@ function importPipelineEnvelope(
   ownerId: string,
   envelope: Extract<ExportEnvelope, { kind: 'pipeline' }>,
 ): ImportResult {
-  const { pipeline: exportedPipeline, versions: exportedVersions } = envelope.data;
+  const {
+    pipeline: exportedPipeline,
+    versions: exportedVersions,
+    strippedConnectionRefs,
+  } = envelope.data;
   const pipeline = createPipeline(db, { ownerId, name: exportedPipeline.name });
 
-  const attention: ImportAttentionItem[] = [];
+  // Only nodes actually recorded here HAD a connection stripped on export —
+  // every node's `connectionId` is nulled by export regardless (see
+  // `stripNodeConnectionId`), so checking `connectionId === null` here would
+  // false-positive-flood nodes that never referenced a connection at all.
+  const attention: ImportAttentionItem[] = strippedConnectionRefs.map((nodeId) => ({
+    type: 'unresolvedConnectionRef',
+    nodeId,
+  }));
   const versions = exportedVersions.map((exportedVersion) => {
-    const nodes = exportedVersion.nodes.map((node) => {
-      if (node.connectionId === null) {
-        attention.push({ type: 'unresolvedConnectionRef', nodeId: node.id });
-      }
-      return toDbNode(node);
-    });
+    const nodes = exportedVersion.nodes.map(toDbNode);
     const input: NewPipelineVersion = {
       pipelineId: pipeline.id,
       params: exportedVersion.params,

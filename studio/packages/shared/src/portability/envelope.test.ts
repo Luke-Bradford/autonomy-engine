@@ -34,6 +34,7 @@ const validPipelineEnvelope = {
         createdAt: 1700000000000,
       },
     ],
+    strippedConnectionRefs: [],
   },
 };
 
@@ -70,6 +71,15 @@ describe('ExportEnvelopeSchema', () => {
     expect(() =>
       ExportEnvelopeSchema.parse({ ...validPipelineEnvelope, data: { nope: true } }),
     ).toThrow();
+  });
+
+  it('defaults strippedConnectionRefs to [] for an older envelope that predates the field', () => {
+    const { strippedConnectionRefs, ...dataWithoutField } = validPipelineEnvelope.data;
+    void strippedConnectionRefs;
+    const legacyEnvelope = { ...validPipelineEnvelope, data: dataWithoutField };
+    const result = ExportEnvelopeSchema.parse(legacyEnvelope);
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+    expect(result.data.strippedConnectionRefs).toEqual([]);
   });
 });
 
