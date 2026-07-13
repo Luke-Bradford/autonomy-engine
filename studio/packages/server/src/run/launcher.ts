@@ -136,55 +136,73 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     else inFlightByTrigger.set(triggerId, n);
   }
 
-  /**
-   * Terminalize a run whose background drive threw UNEXPECTEDLY (the driver maps
-   * every EXPECTED activity failure to a terminal event itself, so reaching
-   * here is a bug/bad-doc, not a normal failure). Keep the append-log
-   * authoritative:
-   *   - If the run already emitted events (the fault was mid-pump, after
-   *     `run.started`), append a `run.interrupted` event and sync from the fold
-   *     — exactly as the boot reconciler does — so the durable log and the row
-   *     never diverge (the P6 monitor tails that log).
-   *   - If there are NO events (the fault was before `run.started`, e.g. a bad
-   *     doc), there is no event-sourced lifecycle to preserve; the row is pure
-   *     provenance, so a direct lifecycle patch to `interrupted` is correct.
-   * Never clobbers a run that actually reached a terminal fact before the throw.
-   */
   // `TERMINAL_RUN` is the engine's SSOT for run-lifecycle-terminal, typed over
   // the narrower `RunLifecycleStatus`; a DB row's `status` is the wider
   // `RunStatus`, so widen the set's element type for this membership check.
   const isTerminalRow = (status: string): boolean =>
     (TERMINAL_RUN as ReadonlySet<string>).has(status);
 
+  /**
+   * Terminalize a run whose background drive threw UNEXPECTEDLY (the driver maps
+   * every EXPECTED activity failure to a terminal event itself, so reaching
+   * here is a bug/bad-doc, not a normal failure). Keep the append-log the
+   * authoritative source of truth (the P6 monitor tails it):
+   *   - NO events (the fault was before `run.started`, e.g. a bad doc) → there
+   *     is no event-sourced lifecycle to preserve; the row is pure provenance,
+   *     so a direct lifecycle patch to `interrupted` is correct.
+   *   - a non-terminal log (the fault was mid-pump, after `run.started`) →
+   *     APPEND a `run.interrupted` event FIRST (this needs no doc, so the
+   *     terminal fact is durable in the log even if the doc is now unresolvable),
+   *     THEN sync the row: from a proper fold when the doc resolves (as the boot
+   *     reconciler does), or by a direct patch if `resolveDoc` throws. Either
+   *     way the row and the log agree on `interrupted` — never diverge.
+   * A run reaching `terminalizeInterrupted` always has a NON-terminal log
+   * (startRun returns normally once `run.finished` is appended, so a throw means
+   * the run never finished); the `isTerminalRow` guard is belt-and-suspenders so
+   * a concurrently-terminalized row is never clobbered.
+   */
   function terminalizeInterrupted(runId: string): void {
-    try {
-      const events = loadEngineEvents(db, runId);
-      const run = getRun(db, runId);
-      if (run === null) return;
-      if (events.length === 0) {
-        if (!isTerminalRow(run.status)) {
-          updateRun(db, runId, { status: 'interrupted', finishedAt: Date.now() });
-        }
-        return;
-      }
-      const engine = buildEngine(deps.resolveDoc(run.pipelineVersionId));
-      const state = engine.projectRunState(events);
-      if (TERMINAL_RUN.has(state.status)) {
-        syncRunLifecycle(db, runId, state);
-        return;
-      }
-      const interrupted: EngineEvent = { type: 'run.interrupted', runId, reason: 'drive_failed' };
-      appendEngineEvent(db, interrupted);
-      syncRunLifecycle(db, runId, engine.reduce(state, interrupted).state);
-    } catch (cleanupErr) {
-      // Even the cleanup failed (e.g. `resolveDoc` is itself what blew up). Fall
-      // back to a best-effort direct patch so the slot is freed and no zombie
-      // `running`/`pending` row lingers; log for diagnosis.
-      deps.log?.error({ err: cleanupErr, runId }, 'run interrupt-cleanup failed');
+    const patchRow = (): void => {
       const run = getRun(db, runId);
       if (run !== null && !isTerminalRow(run.status)) {
         updateRun(db, runId, { status: 'interrupted', finishedAt: Date.now() });
       }
+    };
+    let events: EngineEvent[];
+    let run: ReturnType<typeof getRun>;
+    try {
+      events = loadEngineEvents(db, runId);
+      run = getRun(db, runId);
+    } catch (cleanupErr) {
+      deps.log?.error({ err: cleanupErr, runId }, 'run interrupt-cleanup read failed');
+      return;
+    }
+    if (run === null || isTerminalRow(run.status)) return;
+    if (events.length === 0) {
+      patchRow();
+      return;
+    }
+    // Non-terminal log: record the terminal fact in the LOG first (no doc
+    // needed), so the log stays authoritative even if the fold below can't run.
+    const interrupted: EngineEvent = { type: 'run.interrupted', runId, reason: 'drive_failed' };
+    try {
+      appendEngineEvent(db, interrupted);
+    } catch (appendErr) {
+      // Couldn't even append — best-effort patch so no zombie row lingers.
+      deps.log?.error({ err: appendErr, runId }, 'run interrupt append failed');
+      patchRow();
+      return;
+    }
+    try {
+      const engine = buildEngine(deps.resolveDoc(run.pipelineVersionId));
+      const state = engine.reduce(engine.projectRunState(events), interrupted).state;
+      syncRunLifecycle(db, runId, state);
+    } catch (foldErr) {
+      // The doc is unresolvable (e.g. its version was deleted). The
+      // `run.interrupted` event is ALREADY durable in the log; just make the row
+      // agree via a direct patch — log and row still converge on `interrupted`.
+      deps.log?.error({ err: foldErr, runId }, 'run interrupt fold failed; row patched directly');
+      patchRow();
     }
   }
 
@@ -262,10 +280,19 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     }
 
     if (policy === 'parallel') {
-      // `max` is guaranteed present for `parallel` by ConcurrencySchema.
-      const cap = max as number;
-      if (active >= cap) {
-        return { outcome: 'skipped', reason: `parallel cap of ${cap} reached` };
+      // `max` is guaranteed present + positive for `parallel` by
+      // ConcurrencySchema. Defense-in-depth against a row written before that
+      // refinement existed (or restored from an older export): a missing/invalid
+      // cap must FAIL CLOSED (skip), never coerce to NaN and let `active >= NaN`
+      // admit every fire unbounded.
+      if (max === undefined || !Number.isInteger(max) || max < 1) {
+        return {
+          outcome: 'skipped',
+          reason: 'parallel trigger has no valid concurrency max (misconfigured)',
+        };
+      }
+      if (active >= max) {
+        return { outcome: 'skipped', reason: `parallel cap of ${max} reached` };
       }
       return { outcome: 'started', runId: launch(trigger) };
     }

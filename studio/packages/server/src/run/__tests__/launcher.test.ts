@@ -155,6 +155,24 @@ describe('RunLauncher — parallel', () => {
     expect(runs).toHaveLength(2);
     expect(runs.every((r) => r.status === 'running')).toBe(true);
   });
+
+  it('fails closed (skip) for a parallel trigger with no max (legacy/corrupted row)', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const base = seedTrigger(db, {
+      pipelineVersionId: pvId,
+      concurrency: { policy: 'parallel', max: 2 },
+    });
+    // A row that bypassed the schema refinement (pre-refinement / older export):
+    // parallel with no `max`. Must skip, never admit unbounded via `active >= NaN`.
+    const bad = { ...base, concurrency: { policy: 'parallel' } } as unknown as Trigger;
+    const launcher = createRunLauncher(deps(db));
+
+    const result = launcher.fire(bad);
+    expect(result.outcome).toBe('skipped');
+    expect(result.reason).toContain('misconfigured');
+    expect(listRuns(db, { triggerId: base.id })).toHaveLength(0);
+  });
 });
 
 describe('RunLauncher — queue', () => {
@@ -271,6 +289,38 @@ describe('RunLauncher — background failure', () => {
     expect(events[0]?.type).toBe('run.started');
     // The row's status is reachable by folding the durable log, not out-of-band.
     expect(events.some((e) => e.type === 'run.interrupted')).toBe(true);
+  });
+
+  it('still appends run.interrupted when the doc becomes unresolvable during cleanup', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId });
+    // resolveDoc succeeds for startRun (call 1, appends run.started) but throws
+    // for the cleanup fold (call 2) — the case where the version vanished mid-
+    // flight. The terminal fact must still land in the LOG, not just the row.
+    let calls = 0;
+    const resolveDoc: DocResolver = (id) => {
+      calls += 1;
+      if (calls >= 2) throw new Error('doc vanished mid-cleanup');
+      const pv = getPipelineVersion(db, id);
+      if (pv === null) throw new Error(`no pv ${id}`);
+      return pv;
+    };
+    const throwingExecutor: Executor = {
+      perform(): AsyncIterable<EngineEvent> {
+        throw new Error('executor blew up');
+      },
+    };
+    const launcher = createRunLauncher({ db, resolveDoc, executor: throwingExecutor });
+
+    const result = launcher.fire(trigger);
+    await launcher.whenIdle();
+
+    const events = loadEngineEvents(db, result.runId!);
+    // run.interrupted is durable in the LOG even though the fold could not run…
+    expect(events.some((e) => e.type === 'run.interrupted')).toBe(true);
+    // …and the row was patched to agree — log and row converge, never diverge.
+    expect(getRun(db, result.runId!)?.status).toBe('interrupted');
   });
 });
 
