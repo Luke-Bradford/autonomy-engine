@@ -20,3 +20,6 @@ export * from './schemas/index.js';
 
 // P1c — version-stamped JSON export/import envelope + upgrade framework.
 export * from './portability/index.js';
+
+// P2a — the pure `${}` parameter language (inert substitution + validateRefs).
+export * from './engine/index.js';

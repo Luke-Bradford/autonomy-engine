@@ -15,7 +15,7 @@ import {
 } from './pipeline.js';
 
 describe('ParamTypeSchema', () => {
-  it.each(['string', 'number', 'boolean', 'json'])('accepts %s', (t) => {
+  it.each(['string', 'number', 'boolean', 'json', 'secret'])('accepts %s', (t) => {
     expect(ParamTypeSchema.parse(t)).toBe(t);
   });
 

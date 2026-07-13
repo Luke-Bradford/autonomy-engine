@@ -7,7 +7,11 @@ import { CATALOG_VERSION } from './version.js';
  * unknown keys refused, per the target architecture's mined param-language
  * semantics).
  */
-export const ParamTypeSchema = z.enum(['string', 'number', 'boolean', 'json']);
+// `secret` names a param whose value is a credential LABEL, never substituted:
+// the `${}` engine STRIPS secret params from every substitution context and
+// `validateRefs` refuses a `${params.<secret>}` ref anywhere. Its value resolves
+// only executor-side at the env sink (see `engine/params.ts`).
+export const ParamTypeSchema = z.enum(['string', 'number', 'boolean', 'json', 'secret']);
 export type ParamType = z.infer<typeof ParamTypeSchema>;
 
 export const ParamSchema = z.object({
