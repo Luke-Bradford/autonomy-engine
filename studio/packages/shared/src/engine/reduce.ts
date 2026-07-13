@@ -1067,21 +1067,32 @@ function cmp(a: string, b: string): number {
 
 /**
  * A DETERMINISTIC child run id from (parent runId, callNodeId, attemptId) — a
- * pure FNV-1a hash, so a crash-replay re-emits the SAME `startChild` and child
- * creation is idempotent. No clock/random.
+ * pure 128-bit FNV-1a hash, so a crash-replay re-emits the SAME `startChild` and
+ * child creation is idempotent. No clock/random.
+ *
+ * The width matters: `childRunId` is not just an idempotency key — `onCallReturned`
+ * VERIFIES a `call.returned` event's child identity against the re-derived id, so
+ * a collision would let a foreign child terminalize the wrong call node. A 32-bit
+ * hash is birthday-vulnerable at ~2^16 triples; 128 bits makes a collision
+ * negligible across any realistic run/attempt volume.
  */
 function deterministicChildRunId(runId: string, callNodeId: string, attemptId: string): string {
-  return `child_${fnv1a(`${runId}\x00${callNodeId}\x00${attemptId}`)}`;
+  return `child_${fnv1a128(`${runId}\x00${callNodeId}\x00${attemptId}`)}`;
 }
 
-/** FNV-1a 32-bit hash → 8-hex. Pure. */
-function fnv1a(s: string): string {
-  let h = 0x811c9dc5;
+// FNV-1a 128-bit (BigInt) — the standard parameters. Pure; no clock/random.
+const FNV128_OFFSET = 0x6c62272e07bb014262b821756295c58dn;
+const FNV128_PRIME = 0x0000000001000000000000000000013bn;
+const FNV128_MASK = (1n << 128n) - 1n;
+
+/** FNV-1a 128-bit hash → 32-hex. Pure. */
+function fnv1a128(s: string): string {
+  let h = FNV128_OFFSET;
   for (let i = 0; i < s.length; i += 1) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
+    h ^= BigInt(s.charCodeAt(i));
+    h = (h * FNV128_PRIME) & FNV128_MASK;
   }
-  return (h >>> 0).toString(16).padStart(8, '0');
+  return h.toString(16).padStart(32, '0');
 }
 
 /** One declared output entry, as read from a node's `config.outputs`. */

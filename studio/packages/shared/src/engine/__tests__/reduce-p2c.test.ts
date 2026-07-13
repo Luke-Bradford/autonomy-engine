@@ -503,7 +503,7 @@ describe('call_pipeline', () => {
     const idB = (b.commands.find((c) => c.type === 'startChild') as { childRunId: string })
       .childRunId;
     expect(idA).toBe(idB); // deterministic
-    expect(idA).toMatch(/^child_[0-9a-f]{8}$/);
+    expect(idA).toMatch(/^child_[0-9a-f]{32}$/); // 128-bit FNV-1a → 32 hex
   });
 
   it('ignores a call.returned naming an UNEXPECTED childRunId (foreign/misrouted child)', () => {
