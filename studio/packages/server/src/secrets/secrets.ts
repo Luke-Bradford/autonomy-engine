@@ -283,12 +283,13 @@ export async function decrypt(blob: string, key: Uint8Array): Promise<string> {
   const nonceBytes = s.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
   const tagBytes = s.crypto_aead_xchacha20poly1305_ietf_ABYTES;
 
-  let raw: Buffer;
-  try {
-    raw = Buffer.from(blob, 'base64');
-  } catch {
-    throw new SecretDecryptionError('Malformed secret blob (not valid base64)');
-  }
+  // `Buffer.from(str, 'base64')` never throws on malformed base64 — Node
+  // just decodes whatever valid characters it can find and silently ignores
+  // the rest (verified empirically: `Buffer.from('###', 'base64')` returns
+  // an empty buffer, not a thrown error). The malformed-input case is
+  // already correctly caught below by the length/tag checks, so a
+  // try/catch here was dead code that could never run.
+  const raw = Buffer.from(blob, 'base64');
 
   if (raw.length < HEADER_BYTES + nonceBytes + tagBytes) {
     throw new SecretDecryptionError('Malformed secret blob (too short)');
