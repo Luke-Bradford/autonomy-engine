@@ -18,9 +18,6 @@ export const RUN_FIELDS = ['id', 'pipelineVersionId', 'triggerId', 'parentRunId'
 /** Sentinel used to protect a `$${` literal escape during a substitution pass. */
 const ESC = '\x00AE_DOLLAR_BRACE\x00';
 
-/** `${ ... }` — one reference/expression body (a body may not contain `}`). */
-const REF_G = /\$\{([^}]*)\}/g;
-const REF_FULL = /^\$\{([^}]*)\}$/;
 /** A function call: `name(args)`. Dotall so a nested call may span the args. */
 const CALL_RE = /^([a-z_]+)\((.*)\)$/s;
 const INT_RE = /^-?\d+$/;
@@ -250,6 +247,73 @@ function checkArity(name: string, spec: FnSpec, got: number): void {
   }
 }
 
+// --- the `${...}` boundary scanner (SSOT shared by substitute + validateRefs) -
+
+/** One located `${...}` reference: `s[start..start+1] === '${'`, `s[end] === '}'`. */
+interface RefMatch {
+  start: number;
+  end: number;
+  body: string;
+}
+
+/**
+ * Find the index of the `}` that closes a `${` body starting at `bodyStart`
+ * (the index right after the opening `${`), or `-1` if none closes before the
+ * end of `s`. Honors quoted string literals (a `}`, `{`, `(`, `)` inside a
+ * quoted arg is literal — mirrors `splitArgs`' quote rule: a quote is closed
+ * by the next occurrence of the SAME quote character, no backslash escaping)
+ * and nested `(`/`)` / `{`/`}` depth, so e.g. `default(params.a, "b}c")` is
+ * walked to its real end rather than truncated at the first `}`.
+ */
+function findRefEnd(s: string, bodyStart: number): number {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = bodyStart; i < s.length; i += 1) {
+    const ch = s[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+    } else if (ch === '(' || ch === '{') {
+      depth += 1;
+    } else if (ch === ')') {
+      depth -= 1;
+    } else if (ch === '}') {
+      if (depth === 0) return i;
+      depth -= 1;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Scan `s` left-to-right for every `${...}` reference using `findRefEnd` for
+ * each body's boundary. `s` must already have `$${` escapes sentinel-protected
+ * by the caller, so a literal `${` never survives into this scan. Matches are
+ * non-overlapping (scanning resumes right after each match's closing `}`).
+ *
+ * `unterminatedAt` is the index of a `${` with no matching top-level `}`
+ * before the end of `s`, or `null` if every opener closed. Scanning stops at
+ * the first unterminated opener — by construction nothing valid can follow
+ * inside a body that never found its close (there is, definitionally, no
+ * further unquoted `}` anywhere after it in `s`).
+ */
+function scanTemplateRefs(s: string): { matches: RefMatch[]; unterminatedAt: number | null } {
+  const matches: RefMatch[] = [];
+  let i = 0;
+  while (i < s.length) {
+    const open = s.indexOf('${', i);
+    if (open === -1) break;
+    const end = findRefEnd(s, open + 2);
+    if (end === -1) return { matches, unterminatedAt: open };
+    matches.push({ start: open, end, body: s.slice(open + 2, end) });
+    i = end + 1;
+  }
+  return { matches, unterminatedAt: null };
+}
+
 // --- substitute (the security-critical inert single pass) -------------------
 
 /**
@@ -277,30 +341,39 @@ export function substitute(value: unknown, ctx: SubstitutionContext): unknown {
   }
   if (typeof value !== 'string') return value;
 
-  // Protect the `$${` escape, then detect any unterminated opener: strip every
-  // well-formed `${...}` and if a bare `${` survives, it is a typo — RAISE
-  // (never leave it as a silent literal).
+  // Protect the `$${` escape, then scan for every `${...}` boundary. An
+  // unterminated opener (no matching top-level `}`) is a typo — RAISE (never
+  // leave it as a silent literal).
   const protectedStr = value.split('$${').join(ESC);
-  if (protectedStr.replace(REF_G, '').includes('${')) {
+  const { matches, unterminatedAt } = scanTemplateRefs(protectedStr);
+  if (unterminatedAt !== null) {
     throw new SubstituteError(
       `unterminated \${...} reference in ${JSON.stringify(value)} ` +
         '(write $${ for a literal ${)',
     );
   }
 
-  const whole = REF_FULL.exec(protectedStr);
-  if (whole) {
+  if (
+    matches.length === 1 &&
+    matches[0]!.start === 0 &&
+    matches[0]!.end === protectedStr.length - 1
+  ) {
     // Whole-string ref → preserve the resolved value's native type.
-    const out = evalExpr(parseExpr(whole[1] as string), ctx);
+    const out = evalExpr(parseExpr(matches[0]!.body), ctx);
     return typeof out === 'string' ? out.split(ESC).join('${') : out;
   }
 
-  // Embedded ref(s) → coerce each to string. `String.replace` with a function
-  // replacer scans the ORIGINAL string once and inserts replacements literally,
-  // so this pass is inherently inert (no rescanning of resolved values).
-  const result = protectedStr.replace(REF_G, (_m, body: string) =>
-    toStr(evalExpr(parseExpr(body), ctx)),
-  );
+  // Embedded ref(s) → coerce each to string. Walking the ORIGINAL (protected)
+  // string once and splicing in each match's resolved value keeps this pass
+  // inherently inert — a resolved value is never itself rescanned.
+  let result = '';
+  let cursor = 0;
+  for (const m of matches) {
+    result += protectedStr.slice(cursor, m.start);
+    result += toStr(evalExpr(parseExpr(m.body), ctx));
+    cursor = m.end + 1;
+  }
+  result += protectedStr.slice(cursor);
   return result.split(ESC).join('${');
 }
 
@@ -425,15 +498,16 @@ interface ScanScope {
 
 function scan(where: string, value: unknown, scope: ScanScope, errors: string[]): void {
   if (typeof value === 'string') {
-    if (!value.split('$${').join('').includes('${')) return;
     const protectedStr = value.split('$${').join(ESC);
-    if (protectedStr.replace(REF_G, '').includes('${')) {
+    if (!protectedStr.includes('${')) return;
+    // Same boundary scanner as `substitute` (quote/paren/brace-aware), so the
+    // runtime and static-validation paths agree on where a `${...}` body ends.
+    const { matches, unterminatedAt } = scanTemplateRefs(protectedStr);
+    if (unterminatedAt !== null) {
       errors.push(`${where}: unterminated \${ reference`);
     }
-    let m: RegExpExecArray | null;
-    const re = new RegExp(REF_G.source, 'g');
-    while ((m = re.exec(protectedStr)) !== null) {
-      checkExprStatic(parseExprSafe(m[1] as string, where, errors), scope, errors, where, false);
+    for (const m of matches) {
+      checkExprStatic(parseExprSafe(m.body, where, errors), scope, errors, where, false);
     }
     return;
   }
@@ -518,6 +592,15 @@ function checkExprStatic(
   if (parts[0] === 'nodes' && parts.length === 4 && parts[2] === 'output') {
     const id = parts[1] as string;
     if (scope.guaranteed.has(id)) return; // dominates + succeeded → available
+    // KNOWN RESTRICTION (safe false-reject, not fixed here): `softOk` is only
+    // threaded to `default()`'s OWN first-arg ref — a non-dominating node
+    // output wrapped in another fn call inside that first arg (e.g.
+    // `default(slug(nodes.x.output.v), "fb")`) is statically rejected even
+    // though `evalExpr`'s `default` case would actually catch the resulting
+    // `MissingNodeOutputError` at runtime and fall back correctly (the arg is
+    // evaluated as a whole before the absence check). Over-refusing here is
+    // safe (never a false-accept); a pipeline author must reference the bare
+    // node output as `default`'s first arg to satisfy the static checker.
     if (softOk && (scope.reachable.has(id) || scope.soft.has(id))) return;
     if (scope.reachable.has(id) || scope.soft.has(id)) {
       errors.push(

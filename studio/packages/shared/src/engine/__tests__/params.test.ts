@@ -188,6 +188,51 @@ describe('substitute — escape / malformed / typing', () => {
 });
 
 // ===========================================================================
+// substitute — the ${} boundary scanner honors quotes + nested parens
+//
+// The boundary used to be found with a naive `[^}]*` regex, which truncated a
+// body containing a `}` inside a quoted string arg. These regression tests
+// pin the FIXED behaviour: such a `}` is now part of the body, not the
+// terminator. (No existing test previously asserted the old truncating
+// behaviour, so this is a pure widening — no prior test changes behaviour.)
+// ===========================================================================
+
+describe('substitute — quote/paren-aware ${} boundary scanning', () => {
+  it('a `}` inside a quoted string arg does not truncate the body', () => {
+    // params.a absent → default() falls back to the whole quoted literal,
+    // which itself contains a `}` — the body must have been captured whole.
+    expect(substitute('${default(params.a, "b}c")}', ctx({ params: { a: '' } }))).toBe('b}c');
+  });
+
+  it('concat(...) with a `}`-containing string arg resolves', () => {
+    const c = ctx({ params: { x: 'foo' } });
+    expect(substitute('${concat(params.x, "}")}', c)).toBe('foo}');
+  });
+
+  it('nested calls each with a `}`-containing string arg resolve', () => {
+    const c = ctx({ params: { a: 'A' } });
+    expect(substitute('${default(concat(params.a, "}"), "fb")}', c)).toBe('A}');
+  });
+
+  it('a genuinely unterminated ${ (missing final brace) still throws', () => {
+    // Same body as the passing case above, minus the closing `}` — depth
+    // returns to 0 after the call's `)` but no top-level `}` ever appears.
+    expect(() => substitute('${default(params.a, "b}c")', ctx({ params: { a: '' } }))).toThrow(
+      SubstituteError,
+    );
+  });
+
+  it('the inertness/no-injection regression still holds alongside the new scanner', () => {
+    const c = ctx({ params: { x: '${params.y}', y: 'SHOULD_NOT_APPEAR' } });
+    expect(substitute('${params.x}', c)).toBe('${params.y}');
+  });
+
+  it('$${ literal-escape still works alongside the new scanner', () => {
+    expect(substitute('$${not.a.ref}', ctx())).toBe('${not.a.ref}');
+  });
+});
+
+// ===========================================================================
 // resolveRunParams
 // ===========================================================================
 
@@ -313,6 +358,18 @@ describe('validateRefs — params + functions', () => {
   it('flags an unknown run field', () => {
     const d = doc([node('a', { brief: '${run.bogus}' })], [], declared);
     expect(validateRefs(d).join('\n')).toMatch(/run field/);
+  });
+
+  it('agrees with substitute: a `}` inside a quoted arg does not truncate the body', () => {
+    // Same boundary scanner as `substitute` — a clean expression whose only
+    // `}` is inside a quoted string arg must not be misparsed/flagged.
+    const d = doc([node('a', { brief: '${default(params.topic, "b}c")}' })], [], declared);
+    expect(validateRefs(d)).toEqual([]);
+  });
+
+  it('still flags a genuinely unterminated ${ once the body contains a quoted `}`', () => {
+    const d = doc([node('a', { brief: '${default(params.topic, "b}c")' })], [], declared);
+    expect(validateRefs(d).join('\n')).toMatch(/unterminated/);
   });
 });
 
