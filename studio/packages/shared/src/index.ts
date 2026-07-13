@@ -12,3 +12,8 @@ export const HelloSchema = z.object({
 });
 
 export type Hello = z.infer<typeof HelloSchema>;
+
+// P1a data model — Connection/Pipeline+Version/Trigger/Run/RunEvent/Secret
+// Zod schemas + inferred types, the single source of truth shared by
+// `@autonomy-studio/server` and `@autonomy-studio/web`.
+export * from './schemas/index.js';

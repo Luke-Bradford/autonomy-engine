@@ -21,6 +21,10 @@ export function openDb(dbPath: string): DbHandle {
 
   const sqlite = new Database(dbPath);
   sqlite.pragma('journal_mode = WAL');
+  // better-sqlite3 (like SQLite itself) does NOT enforce FOREIGN KEY
+  // constraints unless this pragma is set per-connection — without it every
+  // `REFERENCES ...` clause in the schema is silently decorative.
+  sqlite.pragma('foreign_keys = ON');
 
   runMigrations(sqlite);
 

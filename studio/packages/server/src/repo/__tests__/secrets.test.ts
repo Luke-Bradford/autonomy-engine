@@ -1,0 +1,77 @@
+import { describe, expect, it } from 'vitest';
+import { secrets } from '../../db/schema.js';
+import {
+  createSecret,
+  deleteSecret,
+  getSecret,
+  getSecretByRef,
+  listSecrets,
+  updateSecretCiphertext,
+} from '../secrets.js';
+import { freshDb } from './helpers.js';
+
+describe('secrets repo', () => {
+  it('creates and reads back a secret by id and by ref', () => {
+    const { db } = freshDb();
+    const created = createSecret(db, { ref: 'anthropic-key-1', ciphertext: 'opaque-blob-1' });
+    expect(created.id).toMatch(/^sec_/);
+    expect(getSecret(db, created.id)).toEqual(created);
+    expect(getSecretByRef(db, 'anthropic-key-1')).toEqual(created);
+  });
+
+  it('returns null for a missing id/ref', () => {
+    const { db } = freshDb();
+    expect(getSecret(db, 'sec_missing')).toBeNull();
+    expect(getSecretByRef(db, 'no-such-ref')).toBeNull();
+  });
+
+  it('lists all secrets', () => {
+    const { db } = freshDb();
+    const a = createSecret(db, { ref: 'ref-a', ciphertext: 'blob-a' });
+    const b = createSecret(db, { ref: 'ref-b', ciphertext: 'blob-b' });
+    expect(
+      listSecrets(db)
+        .map((s) => s.id)
+        .sort(),
+    ).toEqual([a.id, b.id].sort());
+  });
+
+  it('rotates ciphertext under the same ref via updateSecretCiphertext', () => {
+    const { db } = freshDb();
+    const created = createSecret(db, { ref: 'anthropic-key-1', ciphertext: 'old-blob' });
+    const rotated = updateSecretCiphertext(db, created.id, 'new-blob');
+    expect(rotated!.ciphertext).toBe('new-blob');
+    expect(rotated!.ref).toBe('anthropic-key-1');
+    expect(rotated!.id).toBe(created.id);
+  });
+
+  it('deletes a secret', () => {
+    const { db } = freshDb();
+    const created = createSecret(db, { ref: 'anthropic-key-1', ciphertext: 'blob' });
+    expect(deleteSecret(db, created.id)).toBe(true);
+    expect(getSecret(db, created.id)).toBeNull();
+  });
+
+  it('rejects a duplicate ref at the DB layer (unique index enforced)', () => {
+    const { db } = freshDb();
+    createSecret(db, { ref: 'dup-ref', ciphertext: 'blob-1' });
+
+    const row = {
+      id: 'sec_dup_2',
+      ref: 'dup-ref',
+      ciphertext: 'blob-2',
+      createdAt: Date.now(),
+    };
+    expect(() => db.insert(secrets).values(row).run()).toThrow();
+  });
+
+  it('never round-trips plaintext — ciphertext is stored/read back exactly as given, opaque to this layer', () => {
+    const { db } = freshDb();
+    const created = createSecret(db, { ref: 'anthropic-key-1', ciphertext: 'base64:AAAA' });
+    // This module has no decrypt/encrypt awareness at all; asserting the
+    // stored value is bit-for-bit what was handed in (never re-derived,
+    // never logged as a side channel) is the whole of its "never plaintext"
+    // contract at this layer — actual encryption is `secrets/secrets.ts`'s.
+    expect(getSecret(db, created.id)!.ciphertext).toBe('base64:AAAA');
+  });
+});

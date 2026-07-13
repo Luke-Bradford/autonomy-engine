@@ -17,7 +17,8 @@
     "drizzle-orm": "0.45.2",
     "execa": "9.6.1",
     "fastify": "5.10.0",
-    "libsodium-wrappers": "0.8.4"
+    "libsodium-wrappers": "0.8.4",
+    "nanoid": "^5"
   },
   "devDependencies": {
     "@types/better-sqlite3": "7.6.13",
