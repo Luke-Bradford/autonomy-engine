@@ -111,6 +111,57 @@ describe('triggers routes', () => {
     expect(res.statusCode).toBe(404);
   });
 
+  it('unbound-trigger guard: cannot CREATE an enabled trigger with a null pipelineVersionId', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/triggers',
+      payload: { ...triggerBody(pipelineVersionId), pipelineVersionId: null, enabled: true },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('bad_request');
+  });
+
+  it('unbound-trigger guard: a DISABLED unbound trigger IS allowed (draft/import shape)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/triggers',
+      payload: { ...triggerBody(pipelineVersionId), pipelineVersionId: null, enabled: false },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().pipelineVersionId).toBe(null);
+    expect(res.json().enabled).toBe(false);
+  });
+
+  it('unbound-trigger guard: PATCH cannot enable an unbound trigger, nor unbind an enabled one', async () => {
+    const draft = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: { ...triggerBody(pipelineVersionId), pipelineVersionId: null, enabled: false },
+      })
+    ).json();
+    const enableUnbound = await app.inject({
+      method: 'PATCH',
+      url: `/api/triggers/${draft.id}`,
+      payload: { enabled: true },
+    });
+    expect(enableUnbound.statusCode).toBe(400);
+
+    const bound = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: triggerBody(pipelineVersionId),
+      })
+    ).json();
+    const unbindEnabled = await app.inject({
+      method: 'PATCH',
+      url: `/api/triggers/${bound.id}`,
+      payload: { pipelineVersionId: null },
+    });
+    expect(unbindEnabled.statusCode).toBe(400);
+  });
+
   describe('pipelineVersionId cross-owner reference seam', () => {
     let otherOwnerVersionId: string;
 

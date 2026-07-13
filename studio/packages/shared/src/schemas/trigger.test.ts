@@ -117,6 +117,11 @@ describe('TriggerSchema', () => {
   it('rejects a webhook trigger missing webhook.secretRef', () => {
     expect(() => TriggerSchema.parse({ ...trigger, webhook: {} })).toThrow();
   });
+
+  it('accepts a null pipelineVersionId (an unbound trigger, e.g. freshly imported)', () => {
+    const unbound = { ...trigger, pipelineVersionId: null };
+    expect(TriggerSchema.parse(unbound)).toEqual(unbound);
+  });
 });
 
 describe('NewTriggerSchema', () => {

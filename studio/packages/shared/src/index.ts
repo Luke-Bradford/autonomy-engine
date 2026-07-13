@@ -17,3 +17,6 @@ export type Hello = z.infer<typeof HelloSchema>;
 // Zod schemas + inferred types, the single source of truth shared by
 // `@autonomy-studio/server` and `@autonomy-studio/web`.
 export * from './schemas/index.js';
+
+// P1c — version-stamped JSON export/import envelope + upgrade framework.
+export * from './portability/index.js';

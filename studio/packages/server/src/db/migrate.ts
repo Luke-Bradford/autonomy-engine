@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
 
-const MIGRATIONS_DIR = join(
+export const MIGRATIONS_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
   '..',
   '..',
@@ -19,7 +19,10 @@ const MIGRATIONS_DIR = join(
  * entire migration surface (one table), and it keeps the boot path dependency
  * -free.
  */
-export function runMigrations(sqlite: Database.Database): { applied: string[] } {
+export function runMigrations(
+  sqlite: Database.Database,
+  migrationsDir: string = MIGRATIONS_DIR,
+): { applied: string[] } {
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS __migrations (
       name TEXT PRIMARY KEY,
@@ -34,24 +37,73 @@ export function runMigrations(sqlite: Database.Database): { applied: string[] } 
       .map((row) => (row as { name: string }).name),
   );
 
-  const files = readdirSync(MIGRATIONS_DIR)
+  const files = readdirSync(migrationsDir)
     .filter((name) => name.endsWith('.sql'))
     .sort();
+  const pending = files.filter((file) => !alreadyApplied.has(file));
+
+  if (pending.length === 0) return { applied: [] };
+
+  // Foreign-key enforcement must be OFF while any migration recreates a
+  // table (SQLite has no `ALTER TABLE ... ALTER COLUMN`; the documented
+  // procedure — https://www.sqlite.org/lang_altertable.html#otheralter — is
+  // CREATE new / INSERT-SELECT / DROP old / RENAME). Verified empirically:
+  // with `foreign_keys` ON, `DROP TABLE` on a table another table's FK
+  // references performs an IMPLICIT DELETE that fires that FK's
+  // `ON DELETE` action (e.g. `SET NULL`) against every referencing row —
+  // which would silently null out e.g. `runs.trigger_id` for real,
+  // unrelated data when a migration recreates `triggers` (see the 0003
+  // migration). `PRAGMA foreign_keys` is ALSO a documented no-op inside a
+  // transaction, so it must be toggled here, outside every per-file
+  // `sqlite.transaction()` below, not inside one.
+  const foreignKeysWereOn = sqlite.pragma('foreign_keys', { simple: true }) === 1;
+  if (foreignKeysWereOn) sqlite.pragma('foreign_keys = OFF');
 
   const applied: string[] = [];
+  try {
+    for (const file of pending) {
+      const sql = readFileSync(join(migrationsDir, file), 'utf8');
+      const applyMigration = sqlite.transaction(() => {
+        sqlite.exec(sql);
 
-  for (const file of files) {
-    if (alreadyApplied.has(file)) continue;
+        // Integrity check runs INSIDE this migration's transaction, BEFORE it
+        // is recorded in `__migrations`. With `foreign_keys` OFF for the batch
+        // (required for the table-recreate procedure above), a migration that
+        // introduces a dangling reference would NOT raise at apply time.
+        // `PRAGMA foreign_key_check` is a point-in-time integrity scan
+        // independent of the enforcement pragma (verified empirically: same
+        // violations whether `foreign_keys` is ON or OFF). Throwing here rolls
+        // back the WHOLE transaction — including the `__migrations` insert — so
+        // a bad migration fails loudly AND is NOT persisted: it is neither
+        // committed nor marked applied, so a corrected migration + restart
+        // applies cleanly (rather than persist-then-throw, which would mark the
+        // bad migration "applied", skip it on restart, and wedge the app on
+        // this same check forever).
+        const violations = sqlite.pragma('foreign_key_check') as Array<{
+          table: string;
+          rowid: number | bigint | null;
+          parent: string;
+          fkid: number;
+        }>;
+        if (violations.length > 0) {
+          const [first] = violations;
+          throw new Error(
+            `Migration integrity violation in '${file}': left a dangling foreign key — table ` +
+              `'${first!.table}' rowid ${String(first!.rowid)} references missing row in ` +
+              `'${first!.parent}' (${violations.length} violation(s) total). Migration rolled ` +
+              `back — not applied.`,
+          );
+        }
 
-    const sql = readFileSync(join(MIGRATIONS_DIR, file), 'utf8');
-    const applyMigration = sqlite.transaction(() => {
-      sqlite.exec(sql);
-      sqlite
-        .prepare('INSERT INTO __migrations (name, applied_at) VALUES (?, ?)')
-        .run(file, new Date().toISOString());
-    });
-    applyMigration();
-    applied.push(file);
+        sqlite
+          .prepare('INSERT INTO __migrations (name, applied_at) VALUES (?, ?)')
+          .run(file, new Date().toISOString());
+      });
+      applyMigration();
+      applied.push(file);
+    }
+  } finally {
+    if (foreignKeysWereOn) sqlite.pragma('foreign_keys = ON');
   }
 
   return { applied };

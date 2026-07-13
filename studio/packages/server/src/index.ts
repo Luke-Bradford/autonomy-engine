@@ -11,6 +11,7 @@ import { connectionsRoutes } from './routes/connections.js';
 import { pipelinesRoutes } from './routes/pipelines.js';
 import { triggersRoutes } from './routes/triggers.js';
 import { runsRoutes } from './routes/runs.js';
+import { importRoutes } from './routes/import.js';
 import './context.js';
 
 export function resolvePort(raw: string | undefined): number {
@@ -79,6 +80,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   await fastify.register(pipelinesRoutes);
   await fastify.register(triggersRoutes);
   await fastify.register(runsRoutes);
+  await fastify.register(importRoutes);
 
   fastify.get('/health', async () => ({ ok: true }));
 

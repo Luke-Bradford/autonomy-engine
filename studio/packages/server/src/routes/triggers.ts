@@ -9,8 +9,9 @@ import {
   listTriggers,
   updateTrigger,
 } from '../repo/index.js';
-import { NotFoundError } from '../errors.js';
+import { BadRequestError, NotFoundError } from '../errors.js';
 import { requireOwned } from './util.js';
+import { exportTrigger } from '../portability/index.js';
 import type { Principal } from '../auth/principal.js';
 import type { Db } from '../repo/types.js';
 
@@ -31,12 +32,17 @@ function toPublic(trigger: Trigger) {
  * `requireOwned` used everywhere else collapses "doesn't exist" and "exists
  * but isn't yours" into the same 404, matching every other resource in this
  * API (see `util.ts`).
+ *
+ * `null` (an unbound trigger — see `TriggerSchema.pipelineVersionId`) is
+ * always a no-op here: there is nothing to own-check, and creating/patching a
+ * trigger to `null` is always allowed regardless of who's asking.
  */
 function requireOwnedPipelineVersion(
   db: Db,
-  pipelineVersionId: string,
+  pipelineVersionId: string | null,
   principal: Principal,
 ): void {
+  if (pipelineVersionId === null) return;
   const version = getPipelineVersion(db, pipelineVersionId);
   if (!version) throw new NotFoundError('pipelineVersion', pipelineVersionId);
   requireOwned(
@@ -47,11 +53,28 @@ function requireOwnedPipelineVersion(
   );
 }
 
+/**
+ * "unbound trigger never fires" — the WRITE-boundary second line of defense.
+ * `pipelineVersionId` is nullable (an imported/draft trigger is unbound), so
+ * an ENABLED trigger MUST carry a binding: enabling an unbound trigger is
+ * refused here so the API can't create a runnable-but-unbindable trigger. The
+ * import path forces `enabled:false` (arrives inert); the PRIMARY guarantee
+ * remains the P4 scheduler refusing to fire a null-bound trigger.
+ */
+function assertBindableIfEnabled(enabled: boolean, pipelineVersionId: string | null): void {
+  if (enabled && pipelineVersionId === null) {
+    throw new BadRequestError(
+      'an enabled trigger must have a pipelineVersionId — bind a pipeline version or set enabled:false',
+    );
+  }
+}
+
 export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
 
   fastify.post('/api/triggers', async (request, reply) => {
     const body = TriggerWriteBodySchema.parse(request.body);
+    assertBindableIfEnabled(body.enabled, body.pipelineVersionId);
     requireOwnedPipelineVersion(db, body.pipelineVersionId, request.principal);
     const created = createTrigger(db, { ...body, ownerId: request.principal.ownerId });
     reply.status(201).send(toPublic(created));
@@ -82,6 +105,12 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
     if (body.pipelineVersionId !== undefined) {
       requireOwnedPipelineVersion(db, body.pipelineVersionId, request.principal);
     }
+    // Guard the EFFECTIVE post-patch state (a patch touching only `enabled`
+    // must still be checked against the existing binding, and vice versa).
+    const effEnabled = body.enabled ?? existing.enabled;
+    const effPipelineVersionId =
+      body.pipelineVersionId !== undefined ? body.pipelineVersionId : existing.pipelineVersionId;
+    assertBindableIfEnabled(effEnabled, effPipelineVersionId);
     const updated = updateTrigger(db, existing.id, body);
     if (!updated) throw new NotFoundError('trigger', existing.id);
     return toPublic(updated);
@@ -96,5 +125,11 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
     );
     deleteTrigger(db, existing.id);
     reply.status(204).send();
+  });
+
+  // Version-stamped JSON export (P1c). `exportTrigger` does its own
+  // owner-check (404 if not owned), same outcome as `requireOwned` above.
+  fastify.get<{ Params: { id: string } }>('/api/triggers/:id/export', async (request) => {
+    return exportTrigger(db, request.params.id, request.principal.ownerId);
   });
 };

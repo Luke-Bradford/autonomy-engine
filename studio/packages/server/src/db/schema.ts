@@ -117,9 +117,12 @@ export const triggers = sqliteTable(
     id: text('id').primaryKey(),
     ownerId: text('owner_id'),
     name: text('name').notNull(),
-    pipelineVersionId: text('pipeline_version_id')
-      .notNull()
-      .references(() => pipelineVersions.id, { onDelete: 'cascade' }),
+    // Nullable (see `TriggerSchema.pipelineVersionId` in
+    // `@autonomy-studio/shared`): an "unbound" trigger — freshly imported, or
+    // authored before its pipeline exists — transiently has no version bound.
+    pipelineVersionId: text('pipeline_version_id').references(() => pipelineVersions.id, {
+      onDelete: 'cascade',
+    }),
     params: text('params', { mode: 'json' }).notNull().$type<Record<string, unknown>>(),
     mode: text('mode', { enum: asEnumTuple(TriggerModeSchema.options) })
       .notNull()

@@ -53,6 +53,16 @@ describe('triggers repo', () => {
     expect(() => createTrigger(db, buildTriggerInput('pv_does_not_exist'))).toThrow();
   });
 
+  it('creates and reads back an UNBOUND trigger (P1c: null pipelineVersionId, e.g. freshly imported)', () => {
+    const { db } = freshDb();
+    const created = createTrigger(db, {
+      ...buildTriggerInput('pv_unused'),
+      pipelineVersionId: null,
+    });
+    expect(created.pipelineVersionId).toBeNull();
+    expect(getTrigger(db, created.id)).toEqual(created);
+  });
+
   it('lists triggers, optionally filtered by pipelineVersionId', () => {
     const { db } = freshDb();
     const version = setupPipelineVersion(db);

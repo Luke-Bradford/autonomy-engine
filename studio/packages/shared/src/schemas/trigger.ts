@@ -44,7 +44,17 @@ export const TriggerSchema = z.object({
   id: z.string().min(1),
   ownerId: z.string().min(1).nullable(),
   name: z.string().min(1),
-  pipelineVersionId: z.string().min(1),
+  /**
+   * Nullable: an "unbound" trigger transiently has no pipeline version bound
+   * (freshly imported via `packages/server/src/portability` — a standalone
+   * Trigger export always nulls this, since a foreign workspace's version id
+   * is meaningless — or authored before its pipeline exists). Nothing in
+   * P1-P3 reads this field to actually fire a run (no scheduler/executor
+   * exists yet), so an unbound trigger is inert until the operator rebinds
+   * it via `PATCH /api/triggers/:id`; a future scheduler (P4) must refuse to
+   * fire a trigger with a null binding.
+   */
+  pipelineVersionId: z.string().min(1).nullable(),
   params: z.record(z.string(), z.unknown()),
   mode: TriggerModeSchema,
   schedule: z.string().min(1).nullable(),

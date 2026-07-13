@@ -1,5 +1,6 @@
 import { ZodError } from 'zod';
 import type { FastifyInstance } from 'fastify';
+import { ImportError } from '@autonomy-studio/shared';
 import { PipelineHasRunsError } from './repo/index.js';
 
 /**
@@ -15,6 +16,20 @@ export class NotFoundError extends Error {
   constructor(resource: string, id: string) {
     super(`${resource} "${id}" not found`);
     this.name = 'NotFoundError';
+  }
+}
+
+/**
+ * Thrown by a route handler for a request that is well-formed + passes schema
+ * validation but violates a business rule (e.g. enabling an unbound trigger).
+ * The message is author-constructed and client-safe (no input echo, no
+ * internal detail) — unlike Fastify's own parser 4xx messages, so it is
+ * surfaced verbatim (mirrors `NotFoundError`/`ImportError`).
+ */
+export class BadRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BadRequestError';
   }
 }
 
@@ -65,6 +80,20 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     if (error instanceof PipelineHasRunsError) {
       request.log.warn({ err: error }, 'conflict: pipeline has run history');
       reply.status(409).send({ error: 'conflict', message: error.message });
+      return;
+    }
+
+    // Thrown by `parseAndUpgradeEnvelope`/`importEnvelope` (P1c) for a
+    // malformed, incompatible (newer schemaVersion/catalogVersion than this
+    // build supports), or otherwise-refused import envelope. `error.message`
+    // is already client-safe — see `ImportError`'s own doc comment.
+    if (error instanceof ImportError) {
+      reply.status(400).send({ error: 'import_error', message: error.message });
+      return;
+    }
+
+    if (error instanceof BadRequestError) {
+      reply.status(400).send({ error: 'bad_request', message: error.message });
       return;
     }
 
