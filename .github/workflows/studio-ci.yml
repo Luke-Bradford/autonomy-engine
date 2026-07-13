@@ -24,8 +24,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: studio/pnpm-lock.yaml
+
+      # NOTE: we do NOT use setup-node's `cache: pnpm`. That helper resolves the
+      # store via `pnpm store path` run from the repo ROOT, where it cannot see
+      # studio/pnpm-workspace.yaml's `storeDir: .pnpm-store` (action steps ignore
+      # `defaults.run.working-directory`), so it targets the GLOBAL store — which
+      # `pnpm install` (run in studio/) never populates. On any lockfile change
+      # the post-job cache-save then fails with "path does not exist". We cache
+      # the real store dir explicitly instead.
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: studio/.pnpm-store
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('studio/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
 
       - name: Install
         run: pnpm install --frozen-lockfile

@@ -37,11 +37,14 @@ export interface RecordingExecutor extends Executor {
 }
 
 /**
- * A synchronous, deterministic STUB executor for P2 tests. It turns a
- * `dispatchNode` into `[node.dispatched, node.succeeded|node.failed]` (or just
- * `[node.dispatched]` when the plan says `hang`), and a `startChild` into
- * `[call.returned]`. It performs no real work — it only fabricates the events
- * the real P3 executor would produce, so the driver's reduce↔persist loop can
+ * A deterministic STUB executor for driver/reconciler tests. It STREAMS the
+ * events the real P3 executor would produce: a `dispatchNode` yields
+ * `node.dispatched` then a terminal `node.succeeded`/`node.failed` (or only
+ * `node.dispatched` when the plan says `hang`), and a `startChild` yields a
+ * `call.returned` (or nothing when the child hangs). Being an async generator,
+ * it honours the crash-safety ordering the driver relies on — `node.dispatched`
+ * is yielded (and so folded/durable) before any terminal — the same shape the
+ * real executor uses. It performs no real work, so the reduce↔persist loop can
  * be exercised end-to-end against a real DB.
  */
 export function makeStubExecutor(opts: StubExecutorOptions = {}): RecordingExecutor {
@@ -51,51 +54,48 @@ export function makeStubExecutor(opts: StubExecutorOptions = {}): RecordingExecu
   return {
     dispatched,
     startedChildren,
-    perform(command: ExecutorCommand, runId: string): EngineEvent[] {
+    async *perform(command: ExecutorCommand, runId: string): AsyncGenerator<EngineEvent> {
       if (command.type === 'dispatchNode') {
         dispatched.push(command.attemptId);
         const plan = opts.nodes?.[command.nodeId] ?? {};
-        const dispatch: EngineEvent = {
+        yield {
           type: 'node.dispatched',
           runId,
           nodeId: command.nodeId,
           attemptId: command.attemptId,
           idempotent: plan.idempotent ?? true,
         };
-        if (plan.hang === true) return [dispatch];
-        const terminal: EngineEvent =
-          (plan.outcome ?? 'success') === 'success'
-            ? {
-                type: 'node.succeeded',
-                runId,
-                nodeId: command.nodeId,
-                attemptId: command.attemptId,
-                outputs: plan.outputs ?? {},
-              }
-            : {
-                type: 'node.failed',
-                runId,
-                nodeId: command.nodeId,
-                attemptId: command.attemptId,
-                error: plan.error ?? 'boom',
-              };
-        return [dispatch, terminal];
+        if (plan.hang === true) return;
+        yield (plan.outcome ?? 'success') === 'success'
+          ? {
+              type: 'node.succeeded',
+              runId,
+              nodeId: command.nodeId,
+              attemptId: command.attemptId,
+              outputs: plan.outputs ?? {},
+            }
+          : {
+              type: 'node.failed',
+              runId,
+              nodeId: command.nodeId,
+              attemptId: command.attemptId,
+              error: plan.error ?? 'boom',
+            };
+        return;
       }
 
       // startChild
       startedChildren.push(command.attemptId);
-      if (opts.child?.hang === true) return [];
-      return [
-        {
-          type: 'call.returned',
-          runId,
-          callNodeId: command.callNodeId,
-          attemptId: command.attemptId,
-          childRunId: command.childRunId,
-          childOutcome: opts.child?.childOutcome ?? 'success',
-          outputs: opts.child?.outputs ?? {},
-        },
-      ];
+      if (opts.child?.hang === true) return;
+      yield {
+        type: 'call.returned',
+        runId,
+        callNodeId: command.callNodeId,
+        attemptId: command.attemptId,
+        childRunId: command.childRunId,
+        childOutcome: opts.child?.childOutcome ?? 'success',
+        outputs: opts.child?.outputs ?? {},
+      };
     },
   };
 }

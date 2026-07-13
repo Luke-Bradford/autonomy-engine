@@ -1,0 +1,4 @@
+// P3 — the activity catalog (pure metadata; the executable adapters live
+// server-side). One import surface for both the executor and the authoring UI.
+export * from './types.js';
+export * from './registry.js';

@@ -7,6 +7,9 @@ import { resolveMasterKey } from './secrets/secrets.js';
 import { createSupervisor } from './workers/process-supervisor.js';
 import { getPipelineVersion } from './repo/pipeline-versions.js';
 import { reconcileOnBoot } from './run/reconcile.js';
+import { createExecutor } from './run/executor.js';
+import { createConnectorRegistry } from './connectors/registry.js';
+import type { DocResolver } from './run/driver.js';
 import { registerAuthHook } from './auth/principal.js';
 import { registerErrorHandler } from './errors.js';
 import { connectionsRoutes } from './routes/connections.js';
@@ -81,24 +84,31 @@ export async function buildApp(opts?: BuildAppOptions) {
   const bootRow = db.select().from(appMeta).where(eq(appMeta.key, bootKey)).get();
   fastify.log.info({ bootRow }, 'app_meta boot round-trip');
 
-  // P2d boot reconcile: any `runs` row still `running` could not have survived
-  // this restart (the driver is in-process). Freeze runs whose non-idempotent
-  // activity was in flight (`interrupted`/needs-attention); re-sync any row
-  // whose log already ended terminal. No executor is passed here — the real
-  // one arrives in P3 — so idempotent-RESUMABLE runs are only DEFERRED (their
-  // recovery is picked up once an executor exists), never silently re-run. In
-  // P2 nothing yet creates a `running` run outside tests, so this is a no-op in
-  // practice; it is wired now so the recovery path exists from the first boot.
-  const reconcileReport = await reconcileOnBoot({
+  // The run engine's impure boundary: a doc resolver (a run's immutable
+  // pipeline version) + the real connector-facing executor. P3a ships the
+  // `http` adapter; other connector kinds fail their node loudly until P3b.
+  const resolveDoc: DocResolver = (pipelineVersionId) => {
+    const pv = getPipelineVersion(db, pipelineVersionId);
+    if (pv === null) {
+      throw new Error(`pipeline version '${pipelineVersionId}' not found`);
+    }
+    return pv;
+  };
+  const executor = createExecutor({
     db,
-    resolveDoc: (pipelineVersionId) => {
-      const pv = getPipelineVersion(db, pipelineVersionId);
-      if (pv === null) {
-        throw new Error(`boot reconcile: pipeline version '${pipelineVersionId}' not found`);
-      }
-      return pv;
-    },
+    masterKey: masterKeyResolution.key,
+    resolveDoc,
+    adapters: createConnectorRegistry(),
   });
+
+  // P2d/P3 boot reconcile: any `runs` row still `running` could not have
+  // survived this restart (the driver is in-process). Freeze runs whose
+  // non-idempotent activity was in flight (`interrupted`); re-sync a row whose
+  // log already ended terminal; and now, WITH a real executor, actually RESUME
+  // an idempotent-resumable run (previously only deferred). Nothing yet creates
+  // a `running` run outside tests (manual fire is P4), so this is a no-op in
+  // practice today; it is wired so the recovery path exists from the first boot.
+  const reconcileReport = await reconcileOnBoot({ db, resolveDoc, executor });
   fastify.log.info({ reconcileReport }, 'boot reconcile complete');
 
   // Auth seam + the one global error handler, registered before any route so
