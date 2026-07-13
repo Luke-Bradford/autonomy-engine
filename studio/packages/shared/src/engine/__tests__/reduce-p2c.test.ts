@@ -455,6 +455,45 @@ describe('call_pipeline', () => {
     expect(state.status).toBe('success'); // failure handled by the completion edge
   });
 
+  it('a FAILED child with a MISTYPED declared output does not store the mistyped payload', () => {
+    // The findings loop keeps a failed child's outputs — but declared-typed
+    // outputs are still contract-checked so mistyped data can't enter ${}.
+    const caller = node(
+      'caller',
+      { outputs: [{ name: 'findings', type: 'string' }] },
+      { type: 'call_pipeline', call: { pipelineVersionId: 'pv_child', params: {} } },
+    );
+    const eng = engine([caller]);
+    const r0 = eng.reduce(eng.seedState(), started());
+    const child = (r0.commands.find((c) => c.type === 'startChild') as { childRunId: string })
+      .childRunId;
+    const r1 = eng.reduce(
+      r0.state,
+      returned('caller', 'caller#0', 'failure', { findings: 123 }, child),
+    );
+    expect(r1.state.nodes.caller!.status).toBe('failure');
+    expect(r1.state.outputs.caller).toBeUndefined(); // mistyped output NOT stored
+    expect(r1.diagnostics.join(' ')).toContain('invalid outputs');
+  });
+
+  it('a FAILED child with a CORRECTLY typed declared output DOES store it (findings loop)', () => {
+    const caller = node(
+      'caller',
+      { outputs: [{ name: 'findings', type: 'string' }] },
+      { type: 'call_pipeline', call: { pipelineVersionId: 'pv_child', params: {} } },
+    );
+    const eng = engine([caller]);
+    const r0 = eng.reduce(eng.seedState(), started());
+    const child = (r0.commands.find((c) => c.type === 'startChild') as { childRunId: string })
+      .childRunId;
+    const r1 = eng.reduce(
+      r0.state,
+      returned('caller', 'caller#0', 'failure', { findings: 'bug-42' }, child),
+    );
+    expect(r1.state.nodes.caller!.status).toBe('failure');
+    expect(r1.state.outputs.caller).toEqual({ findings: 'bug-42' }); // well-typed → stored
+  });
+
   it('mints a DETERMINISTIC childRunId (same run+node+attempt → same id; new attempt → new id)', () => {
     const eng = engine([callNode('caller', 'pv_child')]);
     const a = eng.reduce(eng.seedState(), started());

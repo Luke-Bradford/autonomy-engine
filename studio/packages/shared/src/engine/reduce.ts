@@ -822,14 +822,18 @@ export function createEngine(doc: EngineDoc): Engine {
       }
       const node = nodeById.get(event.callNodeId)!;
       const decl = declaredOutputs(node);
-      if (event.childOutcome === 'success') {
-        const errs = validateOutputs(decl, event.outputs);
-        if (errs.length > 0) {
-          diagnostics.push(
-            `call node '${event.callNodeId}' child returned invalid outputs: ${errs.join('; ')}`,
-          );
-          return settle(withNode(state, event.callNodeId, { status: 'failure' }), diagnostics);
-        }
+      // Validate declared outputs on BOTH outcomes. A FAILED child still returns
+      // projected outputs (the findings loop) — but they flow into `state.outputs`
+      // and thus into `${}` substitution, so mistyped outputs must never be stored
+      // regardless of outcome. On any type violation the node terminalizes as
+      // `failure` with NO stored outputs (on success this is the existing
+      // fail-the-node behavior; on failure it drops the mistyped payload).
+      const errs = validateOutputs(decl, event.outputs);
+      if (errs.length > 0) {
+        diagnostics.push(
+          `call node '${event.callNodeId}' child returned invalid outputs: ${errs.join('; ')}`,
+        );
+        return settle(withNode(state, event.callNodeId, { status: 'failure' }), diagnostics);
       }
       const stored = storeOutputs(decl, event.outputs);
       let next = withNode(state, event.callNodeId, { status: event.childOutcome });
