@@ -19,6 +19,20 @@ export class NotFoundError extends Error {
   }
 }
 
+/**
+ * Thrown by a route handler for a request that is well-formed + passes schema
+ * validation but violates a business rule (e.g. enabling an unbound trigger).
+ * The message is author-constructed and client-safe (no input echo, no
+ * internal detail) — unlike Fastify's own parser 4xx messages, so it is
+ * surfaced verbatim (mirrors `NotFoundError`/`ImportError`).
+ */
+export class BadRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BadRequestError';
+  }
+}
+
 /** Narrow, non-message-only check (mirrors `repo/pipelines.ts`'s
  * `isForeignKeyRestrictError`): a `code` starting with `SQLITE_CONSTRAINT`
  * is better-sqlite3's family of extended result codes for every constraint
@@ -75,6 +89,11 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     // is already client-safe — see `ImportError`'s own doc comment.
     if (error instanceof ImportError) {
       reply.status(400).send({ error: 'import_error', message: error.message });
+      return;
+    }
+
+    if (error instanceof BadRequestError) {
+      reply.status(400).send({ error: 'bad_request', message: error.message });
       return;
     }
 
