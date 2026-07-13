@@ -71,6 +71,68 @@ describe('encrypt / decrypt', () => {
       SecretDecryptionError,
     );
   });
+
+  it('throws SecretDecryptionError when a header byte ([version][algo]) is flipped', async () => {
+    const blob = await encrypt('header-must-be-authenticated', TEST_KEY);
+    const raw = Buffer.from(blob, 'base64');
+
+    // Flip a bit in the 2-byte header (index 0 or 1), leaving the
+    // nonce/ciphertext/tag completely untouched.
+    raw[0] = raw[0]! ^ 0x01;
+    const tamperedBlob = raw.toString('base64');
+
+    expect(tamperedBlob).not.toBe(blob);
+    await expect(decrypt(tamperedBlob, TEST_KEY)).rejects.toThrow(SecretDecryptionError);
+  });
+
+  it('binds the header as AEAD associated data (encrypt does not pass null AD)', async () => {
+    // White-box check that `encrypt` really authenticates the header rather
+    // than leaving it as unauthenticated clear-text: decrypting the SAME
+    // real ciphertext (produced by our own `encrypt`) via the raw libsodium
+    // primitive succeeds when given the real header bytes as AD, but fails
+    // when given `null` AD -- which is exactly what the OLD (vulnerable)
+    // implementation passed. This is exercising the real crypto primitive
+    // against a real blob, not a mock.
+    const blob = await encrypt('bound-to-header', TEST_KEY);
+    const raw = Buffer.from(blob, 'base64');
+
+    const nonceBytes = sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
+    const header = new Uint8Array(raw.subarray(0, 2));
+    const nonce = new Uint8Array(raw.subarray(2, 2 + nonceBytes));
+    const ciphertext = new Uint8Array(raw.subarray(2 + nonceBytes));
+
+    const plaintext = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+      null,
+      ciphertext,
+      header,
+      nonce,
+      TEST_KEY,
+      'text',
+    );
+    expect(plaintext).toBe('bound-to-header');
+
+    expect(() =>
+      sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+        null,
+        ciphertext,
+        null,
+        nonce,
+        TEST_KEY,
+        'text',
+      ),
+    ).toThrow();
+  });
+
+  it('rejects an encrypt key that is not exactly 32 bytes', async () => {
+    const shortKey = sodium.randombytes_buf(16);
+    await expect(encrypt('whatever', shortKey)).rejects.toThrow(/32 bytes/);
+  });
+
+  it('rejects a decrypt key that is not exactly 32 bytes', async () => {
+    const blob = await encrypt('whatever', TEST_KEY);
+    const longKey = sodium.randombytes_buf(64);
+    await expect(decrypt(blob, longKey)).rejects.toThrow(/32 bytes/);
+  });
 });
 
 describe('resolveMasterKey', () => {

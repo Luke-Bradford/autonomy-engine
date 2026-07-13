@@ -1,8 +1,9 @@
 import { existsSync, mkdtempSync } from 'node:fs';
+import { getEventListeners } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { spawnSupervised, type OutputLineEvent } from '../process-supervisor.js';
+import { reapAllSupervised, spawnSupervised, type OutputLineEvent } from '../process-supervisor.js';
 
 /**
  * All fixtures below drive `process.execPath` with an inline `-e` script —
@@ -111,11 +112,15 @@ describe('spawnSupervised', () => {
     expect(existsSync(sentinelPath)).toBe(false);
   }, 10_000);
 
-  it('bounds memory on a flooding process and reports truncated', async () => {
+  it('bounds COMBINED stdout+stderr memory on a flooding process and reports truncated', async () => {
+    // Flood BOTH streams concurrently. Before the fix, each stream had its
+    // own independent LineFramer with the full `maxOutputBytes` budget, so
+    // the real ceiling was ~2x the documented "stdout+stderr combined" cap.
     const script = `
       const chunk = 'x'.repeat(1024) + '\\n';
       for (let i = 0; i < 20000; i++) {
         process.stdout.write(chunk);
+        process.stderr.write(chunk);
       }
     `;
 
@@ -137,9 +142,143 @@ describe('spawnSupervised', () => {
       (sum, e) => sum + Buffer.byteLength(e.line, 'utf8') + 1,
       0,
     );
-    // The collected (emitted) buffer must be capped near the budget, not
-    // anywhere close to the ~20MB the script actually wrote.
+    // The COMBINED (stdout+stderr) total must be capped near the single
+    // shared budget, not ~2x it (the pre-fix bug: one full budget per
+    // stream), and nowhere close to the ~40MB the script actually wrote.
     expect(collectedBytes).toBeLessThanOrEqual(maxOutputBytes + 4096);
     expect(collectedBytes).toBeGreaterThan(0);
+
+    const stdoutBytes = events
+      .filter((e) => e.stream === 'stdout')
+      .reduce((sum, e) => sum + Buffer.byteLength(e.line, 'utf8') + 1, 0);
+    const stderrBytes = events
+      .filter((e) => e.stream === 'stderr')
+      .reduce((sum, e) => sum + Buffer.byteLength(e.line, 'utf8') + 1, 0);
+    // Both streams got a slice of the SAME shared budget (proving it's
+    // genuinely shared, not two independent per-stream caps).
+    expect(stdoutBytes).toBeGreaterThan(0);
+    expect(stderrBytes).toBeGreaterThan(0);
   }, 15_000);
+
+  it('resolves (does not hang) and cleanly closes the stream on a spawn failure (ENOENT)', async () => {
+    // Empirically (verified independently with a raw `execa(..., { reject:
+    // false })` call before writing this test): execa 9.6.1 does NOT reject
+    // or hang on a spawn failure — it resolves with a "failed" result
+    // (`pid: undefined`, `exitCode`/`signal` both `undefined`). This test
+    // pins that `spawnSupervised` surfaces that as a normal resolved
+    // `SupervisedResult`, not a hang.
+    const supervised = spawnSupervised({ command: 'this-command-does-not-exist-xyz-123' });
+
+    const hangGuard = new Promise<never>((_, reject) => {
+      setTimeout(
+        () => reject(new Error('spawnSupervised did not resolve within the hang guard')),
+        3000,
+      );
+    });
+
+    const [events, result] = (await Promise.race([
+      Promise.all([collectEvents(supervised.events), supervised.result]),
+      hangGuard,
+    ])) as [OutputLineEvent[], Awaited<typeof supervised.result>];
+
+    expect(events).toEqual([]);
+    expect(result.exitCode).toBeNull();
+    expect(result.signal).toBeNull();
+    expect(result.timedOut).toBe(false);
+    expect(result.aborted).toBe(false);
+    expect(result.killed).toBe(false);
+  }, 5_000);
+
+  it('removes the AbortSignal "abort" listener once settled (no accumulation on a shared signal)', async () => {
+    const controller = new AbortController();
+
+    const supervised = spawnSupervised({
+      command: process.execPath,
+      args: ['-e', 'process.exit(0);'],
+      signal: controller.signal,
+    });
+
+    expect(getEventListeners(controller.signal, 'abort').length).toBe(1);
+
+    await Promise.all([collectEvents(supervised.events), supervised.result]);
+
+    // The child ran to completion without the signal ever aborting — if the
+    // listener weren't cleaned up on settle, it would sit on this signal
+    // forever, accumulating one more per spawn on a shared/long-lived
+    // controller.
+    expect(getEventListeners(controller.signal, 'abort').length).toBe(0);
+  }, 10_000);
+
+  it('settles cleanly (no crash, no stray escalate timer) when timeout and abort race each other', async () => {
+    const script = `setInterval(() => {}, 1000);`;
+    const controller = new AbortController();
+
+    const supervised = spawnSupervised({
+      command: process.execPath,
+      args: ['-e', script],
+      timeoutMs: 100,
+      signal: controller.signal,
+    });
+
+    // Fire the abort right on top of the timeout so both triggers race to
+    // kill the same child. Before the `triggerKill` idempotency fix, this
+    // could schedule two independent SIGTERM->SIGKILL escalate timers.
+    setTimeout(() => controller.abort(), 100);
+
+    const [, result] = await Promise.all([collectEvents(supervised.events), supervised.result]);
+
+    expect(result.killed).toBe(true);
+    expect(result.exitCode === 0 && result.signal === null).toBe(false);
+  }, 10_000);
+
+  it('reapAllSupervised does not throw when a tracked process has already exited (ESRCH-as-success)', async () => {
+    const supervised = spawnSupervised({
+      command: process.execPath,
+      args: ['-e', 'process.exit(0);'],
+    });
+
+    // Race the reap against the child's own near-instant natural exit --
+    // whichever wins, `killTree`'s ESRCH branch (process group already
+    // gone) must be treated as a successful no-op, never thrown.
+    await expect(reapAllSupervised()).resolves.toBeUndefined();
+
+    const result = await supervised.result;
+    expect(result.exitCode === 0 || result.signal !== null).toBe(true);
+  }, 10_000);
+
+  it('reapAllSupervised tree-kills every live supervised child, including a grandchild (shutdown-reap contract)', async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'process-supervisor-reap-'));
+    const sentinelPath = join(tmpDir, 'sentinel.txt');
+
+    // Same shape as the timeout tree-kill test above, but with no
+    // `timeoutMs`/`signal` at all -- the ONLY thing that stops this child
+    // (and its grandchild) is a deliberate `reapAllSupervised()` call, the
+    // same path a graceful server shutdown (SIGTERM/SIGINT) exercises.
+    const parentScript = `
+      const { spawn } = require('child_process');
+      const grandchildScript = "setTimeout(() => { require('fs').writeFileSync(process.argv[1], 'wrote'); }, 900);";
+      spawn(process.execPath, ['-e', grandchildScript, process.argv[1]], { stdio: 'ignore' });
+      setInterval(() => {}, 1000);
+    `;
+
+    const supervised = spawnSupervised({
+      command: process.execPath,
+      args: ['-e', parentScript, sentinelPath],
+    });
+
+    // Give the parent a moment to actually spawn its grandchild before we
+    // reap.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    await reapAllSupervised();
+
+    const result = await supervised.result;
+    expect(result.killed).toBe(true);
+    expect(result.exitCode === 0 && result.signal === null).toBe(false);
+
+    // Wait past the grandchild's would-be write time (900ms) to prove it
+    // never happened, not merely that we hadn't checked yet.
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    expect(existsSync(sentinelPath)).toBe(false);
+  }, 10_000);
 });

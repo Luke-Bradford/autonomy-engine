@@ -20,7 +20,15 @@
  *   clear.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname } from 'node:path';
 import sodium from 'libsodium-wrappers';
 
@@ -47,6 +55,12 @@ const BLOB_VERSION = 1;
 /** Algorithm tag byte — 1 == XChaCha20-Poly1305-IETF (the only kind so far). */
 const ALGO_XCHACHA20POLY1305_IETF = 1;
 const HEADER_BYTES = 2;
+/**
+ * Byte length of an XChaCha20-Poly1305 (IETF) key. Checked explicitly at the
+ * top of `encrypt`/`decrypt` — a clear, immediate error beats relying on
+ * libsodium's own (less specific) internal validation of a bad key.
+ */
+const KEY_BYTES = 32;
 
 let sodiumReady: Promise<typeof sodium> | undefined;
 
@@ -87,18 +101,50 @@ function decodeKeyMaterial(
 }
 
 /**
+ * Opens `path` once and performs the permission check and the read against
+ * that SAME file descriptor — never re-opening by path partway through —
+ * so a swap/symlink race between the permission check and the subsequent
+ * read (TOCTOU) cannot substitute a different file after the check passes.
+ * `statSync(path)` followed by `readFileSync(path)` are two separate
+ * syscalls against the path and are racy; `fstatSync(fd)` + reading from
+ * that fd are not.
+ *
  * POSIX-oriented: refuses a key file that grants ANY group/other
  * permission bits. On platforms without POSIX mode bits (Windows) this
  * check is best-effort — `stat` mode there does not reflect the real ACL,
  * so it can only catch the POSIX-style cases, not Windows ACL misconfigs.
+ *
+ * Returns `null` if `path` does not exist (caller falls through to key
+ * generation); throws if it exists but is not sufficiently locked down, or
+ * on any other I/O error.
  */
-function assertKeyFilePermissionsAreSecure(path: string): void {
-  const mode = statSync(path).mode & 0o777;
-  if ((mode & 0o077) !== 0) {
-    throw new Error(
-      `Refusing to use master key file at "${path}": mode ${mode.toString(8)} grants group/other ` +
-        `access. Fix with \`chmod 600 ${path}\` before restarting.`,
-    );
+function readKeyFileSecurely(path: string): string | null {
+  let fd: number;
+  try {
+    fd = openSync(path, 'r');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+
+  try {
+    const mode = fstatSync(fd).mode & 0o777;
+    if ((mode & 0o077) !== 0) {
+      throw new Error(
+        `Refusing to use master key file at "${path}": mode ${mode.toString(8)} grants group/other ` +
+          `access. Fix with \`chmod 600 ${path}\` before restarting.`,
+      );
+    }
+
+    const chunks: Buffer[] = [];
+    const readBuffer = Buffer.alloc(4096);
+    let bytesRead: number;
+    while ((bytesRead = readSync(fd, readBuffer, 0, readBuffer.length, null)) > 0) {
+      chunks.push(Buffer.from(readBuffer.subarray(0, bytesRead)));
+    }
+    return Buffer.concat(chunks).toString('utf8');
+  } finally {
+    closeSync(fd);
   }
 }
 
@@ -127,9 +173,8 @@ export async function resolveMasterKey(
   }
 
   const keyFilePath = env.AUTONOMY_MASTER_KEY_FILE ?? DEFAULT_MASTER_KEY_FILE;
-  if (existsSync(keyFilePath)) {
-    assertKeyFilePermissionsAreSecure(keyFilePath);
-    const raw = readFileSync(keyFilePath, 'utf8');
+  const raw = readKeyFileSecurely(keyFilePath);
+  if (raw !== null) {
     const decoded = decodeKeyMaterial(raw, keyBytes, s);
     if (!decoded) {
       throw new Error(
@@ -158,33 +203,44 @@ export async function resolveMasterKey(
 /**
  * Encrypts `plaintext` with XChaCha20-Poly1305 (IETF) under `key`, returning
  * a single self-describing base64 blob: `[version][algo][nonce][ciphertext+tag]`.
- * A fresh random nonce is drawn for every call.
+ * A fresh random nonce is drawn for every call. The `[version][algo]` header
+ * is passed to the AEAD as associated data (authenticated but not
+ * encrypted), so `decrypt` fails the auth-tag check if either header byte is
+ * altered in transit/at rest — the header is no longer just clear-text
+ * trusted at face value.
  */
 export async function encrypt(plaintext: string, key: Uint8Array): Promise<string> {
+  if (key.length !== KEY_BYTES) {
+    throw new Error(`encrypt: key must be exactly ${KEY_BYTES} bytes, got ${key.length}`);
+  }
+
   const s = await loadSodium();
+  const header = new Uint8Array([BLOB_VERSION, ALGO_XCHACHA20POLY1305_IETF]);
   const nonce = s.randombytes_buf(s.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
   const ciphertext = s.crypto_aead_xchacha20poly1305_ietf_encrypt(
     plaintext,
-    null,
+    header,
     null,
     nonce,
     key,
   );
 
-  const blob = Buffer.concat([
-    Buffer.from([BLOB_VERSION, ALGO_XCHACHA20POLY1305_IETF]),
-    Buffer.from(nonce),
-    Buffer.from(ciphertext),
-  ]);
+  const blob = Buffer.concat([Buffer.from(header), Buffer.from(nonce), Buffer.from(ciphertext)]);
   return blob.toString('base64');
 }
 
 /**
- * Decrypts a blob produced by `encrypt`. Verifies the Poly1305 auth tag;
- * throws `SecretDecryptionError` (never returns garbage) on a tampered
- * blob, a wrong key, or a malformed/unsupported blob.
+ * Decrypts a blob produced by `encrypt`. Verifies the Poly1305 auth tag over
+ * the ciphertext AND the `[version][algo]` header (passed back in as
+ * associated data, matching `encrypt`); throws `SecretDecryptionError`
+ * (never returns garbage) on a tampered blob (including a tampered header),
+ * a wrong key, or a malformed/unsupported blob.
  */
 export async function decrypt(blob: string, key: Uint8Array): Promise<string> {
+  if (key.length !== KEY_BYTES) {
+    throw new Error(`decrypt: key must be exactly ${KEY_BYTES} bytes, got ${key.length}`);
+  }
+
   const s = await loadSodium();
   const nonceBytes = s.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
   const tagBytes = s.crypto_aead_xchacha20poly1305_ietf_ABYTES;
@@ -206,14 +262,23 @@ export async function decrypt(blob: string, key: Uint8Array): Promise<string> {
     throw new SecretDecryptionError(`Unsupported secret blob version/algo (${version}/${algo})`);
   }
 
+  const header = new Uint8Array(raw.subarray(0, HEADER_BYTES));
   const nonce = new Uint8Array(raw.subarray(HEADER_BYTES, HEADER_BYTES + nonceBytes));
   const ciphertext = new Uint8Array(raw.subarray(HEADER_BYTES + nonceBytes));
 
   try {
-    return s.crypto_aead_xchacha20poly1305_ietf_decrypt(null, ciphertext, null, nonce, key, 'text');
+    return s.crypto_aead_xchacha20poly1305_ietf_decrypt(
+      null,
+      ciphertext,
+      header,
+      nonce,
+      key,
+      'text',
+    );
   } catch {
-    // libsodium throws on auth-tag mismatch (tampered ciphertext or wrong
-    // key) — surface a clear, non-leaky domain error, never partial output.
+    // libsodium throws on auth-tag mismatch (tampered ciphertext, tampered
+    // header, or wrong key) — surface a clear, non-leaky domain error, never
+    // partial output.
     throw new SecretDecryptionError('Failed to decrypt secret (tampered blob or wrong key)');
   }
 }
