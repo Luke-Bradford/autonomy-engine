@@ -10,19 +10,34 @@
  *   dies with no cleanup, the child does *not* get reclaimed by the OS — it
  *   is reparented to init and keeps running. Detached does not mean
  *   self-terminating.
- * - This module compensates by tracking every live supervised pid in a
- *   module-level set and installing one-time `SIGTERM`/`SIGINT` handlers
- *   that tree-kill every live child before the process finishes exiting,
- *   plus a synchronous best-effort `SIGKILL` sweep on the `'exit'` event as
- *   a last resort. `reapAllSupervised()` is also exported so a server
- *   shutdown path (or a test) can trigger the same reap deterministically.
- * - This covers a GRACEFUL shutdown only (`SIGTERM`/`SIGINT`, i.e. a normal
- *   `systemctl restart`/deploy/Ctrl-C). It does NOT cover a hard `SIGKILL`
- *   or panic of the server process itself — no in-process code can run once
- *   the process is killed with `SIGKILL` or the machine loses power, so any
- *   subprocess tree from an in-flight run in that scenario is orphaned and
- *   left running. That case is NOT this module's job to fix: recovering
- *   from it is the run-recovery model's problem (per
+ * - This module is a LIBRARY, not the host process — it does NOT own
+ *   `SIGTERM`/`SIGINT` or call `process.exit()`. A library that exits the
+ *   process on its own signal handler would hard-terminate the whole server
+ *   ahead of the host's own graceful-shutdown sequence (e.g. Fastify's
+ *   `close()`/connection-drain), racing or short-circuiting it. It
+ *   compensates by tracking every live supervised pid in a module-level map
+ *   and exporting `reapAllSupervised()` — the HOST app MUST call this from
+ *   ITS OWN graceful-shutdown sequence (e.g. a Fastify `onClose` hook,
+ *   BEFORE the process actually exits) so an in-flight subprocess tree does
+ *   not survive a restart/deploy. This module does not decide when the
+ *   process exits; it only reaps what it's told to, when it's told to.
+ * - As a last-resort backstop (NOT a substitute for the host wiring
+ *   `reapAllSupervised()` into its own shutdown), this module installs one
+ *   synchronous `process.on('exit', …)` handler that best-effort SIGKILLs
+ *   the process GROUP of every still-live supervised child. `'exit'`
+ *   handlers run synchronously while the process is already committed to
+ *   exiting — they cannot be async, cannot delay or prevent the exit, and
+ *   do not suppress Node's default signal handling, so installing this
+ *   backstop is always safe for a library to do.
+ * - Graceful shutdown (the tree actually getting reaped) happens IFF the
+ *   host wires `reapAllSupervised()` into its shutdown path; the `'exit'`
+ *   backstop only covers what it can catch synchronously and is
+ *   best-effort, not a guarantee. A hard `SIGKILL`/panic of the server
+ *   process itself is unrecoverable from in-process code — no in-process
+ *   code can run once the process is killed with `SIGKILL` or the machine
+ *   loses power, so any subprocess tree from an in-flight run in that
+ *   scenario is orphaned and left running. That case is NOT this module's
+ *   job to fix: recovering from it is the run-recovery model's problem (per
  *   `docs/2026-07-12-target-architecture.md`), reconciling any run left in
  *   `running` state to `interrupted` on the next boot, not by silently
  *   re-attaching to a surviving PID.
@@ -284,34 +299,24 @@ const liveSupervised = new Map<number, { markKilled: () => void }>();
 
 let shutdownHandlersInstalled = false;
 
-const SIGNAL_EXIT_CODES: Record<'SIGTERM' | 'SIGINT', number> = {
-  SIGTERM: 143,
-  SIGINT: 130,
-};
-
 /**
- * Registers the process-level `SIGTERM`/`SIGINT`/`'exit'` handlers exactly
- * once (across however many times `spawnSupervised` is called) so a
- * deliberate server shutdown reaps every in-flight supervised subprocess
- * tree instead of orphaning it. See the module-level contract doc.
+ * Registers the process-level `'exit'` backstop exactly once (across
+ * however many times `spawnSupervised` is called). This module does NOT
+ * install `SIGTERM`/`SIGINT` handlers and does NOT call `process.exit()` —
+ * see the module-level contract doc for why a library must not own process
+ * exit. The HOST app is responsible for calling `reapAllSupervised()` from
+ * its own graceful-shutdown sequence; this backstop only covers whatever
+ * that reap couldn't finish (or wasn't given the chance to run) before the
+ * event loop drains.
  */
 function installShutdownHandlersOnce(): void {
   if (shutdownHandlersInstalled) return;
   shutdownHandlersInstalled = true;
 
-  const handleTerminationSignal = (signal: 'SIGTERM' | 'SIGINT'): void => {
-    void reapAllSupervised().finally(() => {
-      process.exit(SIGNAL_EXIT_CODES[signal]);
-    });
-  };
-
-  process.on('SIGTERM', () => handleTerminationSignal('SIGTERM'));
-  process.on('SIGINT', () => handleTerminationSignal('SIGINT'));
-
-  // 'exit' handlers must be synchronous — this is the last-resort net for
-  // whatever `reapAllSupervised` couldn't finish (or wasn't given the
-  // chance to run) before the event loop drains. Best-effort SIGKILL
-  // straight to each live process group; no waiting for grace periods.
+  // 'exit' handlers must be synchronous, cannot prevent the process from
+  // exiting, and do not suppress Node's default signal handling — so this
+  // is always safe for a library to install. Best-effort SIGKILL straight
+  // to each live process group; no waiting for grace periods.
   process.on('exit', () => {
     for (const pid of liveSupervised.keys()) {
       try {
@@ -326,11 +331,19 @@ function installShutdownHandlersOnce(): void {
 /**
  * Best-effort tree-kill of every currently-supervised child: SIGTERM, a
  * grace period, then SIGKILL for anything still alive. This is the
- * deliberate graceful-shutdown reap — call it from the server's shutdown
- * path (it is also wired automatically to `SIGTERM`/`SIGINT`) so an
- * in-flight subprocess tree does not survive a restart/deploy. Per the
- * module-level contract doc, this cannot help with a hard `SIGKILL`/panic
- * of the server process itself.
+ * deliberate graceful-shutdown reap.
+ *
+ * THE HOST APP MUST CALL THIS from its own graceful-shutdown sequence
+ * (e.g. a Fastify `onClose` hook, or its own `SIGTERM`/`SIGINT` handler)
+ * BEFORE the process actually exits — this module deliberately does NOT
+ * install its own `SIGTERM`/`SIGINT` handlers or call `process.exit()` (see
+ * the module-level contract doc: a library must not own process exit, and
+ * must not swallow the default terminate-on-signal behaviour either). If
+ * the host never wires this in, only the synchronous best-effort `'exit'`
+ * backstop applies, and a hard `SIGKILL`/panic of the server process itself
+ * is unrecoverable from in-process code either way — that case reconciles
+ * via the boot-time run-recovery reconciler (`running` → `interrupted`),
+ * not via this function.
  */
 export async function reapAllSupervised(): Promise<void> {
   const entries = Array.from(liveSupervised.entries());

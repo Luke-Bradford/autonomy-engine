@@ -281,4 +281,28 @@ describe('spawnSupervised', () => {
     await new Promise((resolve) => setTimeout(resolve, 900));
     expect(existsSync(sentinelPath)).toBe(false);
   }, 10_000);
+
+  it('reapAllSupervised is a safe no-op when nothing is currently supervised', async () => {
+    // No spawn at all in this test — `liveSupervised` is guaranteed empty.
+    // This is the "host calls reapAllSupervised() but nothing was running"
+    // case (e.g. shutdown right after boot) and must resolve cleanly.
+    await expect(reapAllSupervised()).resolves.toBeUndefined();
+  });
+
+  it('reapAllSupervised is idempotent: a second call after everything is already reaped is a safe no-op', async () => {
+    const script = `setInterval(() => {}, 1000);`;
+
+    const supervised = spawnSupervised({ command: process.execPath, args: ['-e', script] });
+
+    // Give it a moment to actually be spawned/tracked before reaping.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    await reapAllSupervised();
+    const result = await supervised.result;
+    expect(result.killed).toBe(true);
+
+    // The child is gone and no longer tracked — calling reapAllSupervised()
+    // again must not throw, hang, or attempt to re-kill anything.
+    await expect(reapAllSupervised()).resolves.toBeUndefined();
+  }, 10_000);
 });

@@ -29,7 +29,8 @@ import {
   readSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import sodium from 'libsodium-wrappers';
 
 export type MasterKeySource = 'env' | 'file' | 'generated';
@@ -49,7 +50,18 @@ export class SecretDecryptionError extends Error {
   }
 }
 
-export const DEFAULT_MASTER_KEY_FILE = 'data/secrets/master.key';
+/**
+ * Absolute, `process.cwd()`-INDEPENDENT default location for the master key
+ * file. This MUST resolve to the same path on every start of the server on
+ * a given machine, regardless of what directory it happens to be launched
+ * from — a cwd-relative default (e.g. `data/secrets/master.key`) would
+ * silently resolve to a *different* file if the server is ever started from
+ * a different working directory, and `resolveMasterKey` would then find no
+ * key there and generate a brand-new one, permanently orphaning every
+ * secret encrypted under the old key. Computed once at module load via
+ * `os.homedir()`, which is itself cwd-independent.
+ */
+export const DEFAULT_MASTER_KEY_FILE = join(homedir(), '.autonomy-studio', 'secrets', 'master.key');
 
 const BLOB_VERSION = 1;
 /** Algorithm tag byte — 1 == XChaCha20-Poly1305-IETF (the only kind so far). */
@@ -149,11 +161,37 @@ function readKeyFileSecurely(path: string): string | null {
 }
 
 /**
+ * Resolves the absolute path of the master key file, in order:
+ * - `AUTONOMY_MASTER_KEY_FILE` env, honored as-is if already absolute
+ *   (resolved against `process.cwd()` only in the unusual case it's
+ *   relative — callers should prefer an absolute value).
+ * - `AUTONOMY_DATA_DIR` env, as the base of a `secrets/master.key` path
+ *   under it.
+ * - `DEFAULT_MASTER_KEY_FILE`, a fixed absolute default that does NOT
+ *   depend on `process.cwd()` — see its own doc comment for why that
+ *   matters.
+ */
+function resolveMasterKeyFilePath(env: NodeJS.ProcessEnv): string {
+  const explicit = env.AUTONOMY_MASTER_KEY_FILE;
+  if (explicit !== undefined && explicit !== '') {
+    return isAbsolute(explicit) ? explicit : resolve(explicit);
+  }
+
+  const dataDir = env.AUTONOMY_DATA_DIR;
+  if (dataDir !== undefined && dataDir !== '') {
+    return resolve(dataDir, 'secrets', 'master.key');
+  }
+
+  return DEFAULT_MASTER_KEY_FILE;
+}
+
+/**
  * Resolves the 32-byte master key used to encrypt/decrypt all secrets, in
  * order: `AUTONOMY_MASTER_KEY` env (base64 or hex) → a mounted key file at
- * `AUTONOMY_MASTER_KEY_FILE` (default `data/secrets/master.key`, must be
- * 0600) → generate a new key, persist it 0600, and return/log a loud
- * warning. Never silently falls back to plaintext.
+ * the path from `resolveMasterKeyFilePath` (must be 0600) → generate a new
+ * key, persist it 0600 at that same resolved path, and return/log a loud
+ * warning naming the absolute path written. Never silently falls back to
+ * plaintext.
  */
 export async function resolveMasterKey(
   env: NodeJS.ProcessEnv = process.env,
@@ -172,7 +210,7 @@ export async function resolveMasterKey(
     return { key: decoded, source: 'env' };
   }
 
-  const keyFilePath = env.AUTONOMY_MASTER_KEY_FILE ?? DEFAULT_MASTER_KEY_FILE;
+  const keyFilePath = resolveMasterKeyFilePath(env);
   const raw = readKeyFileSecurely(keyFilePath);
   if (raw !== null) {
     const decoded = decodeKeyMaterial(raw, keyBytes, s);
@@ -191,11 +229,11 @@ export async function resolveMasterKey(
   });
   chmodSync(keyFilePath, 0o600); // belt-and-braces against a permissive umask
   const warning =
-    `AUTONOMY MASTER KEY WAS AUTO-GENERATED at "${keyFilePath}". This key encrypts ` +
-    'ALL secrets at rest — back it up now (a password manager or your infra secrets ' +
-    'store), or every existing secret becomes permanently undecryptable if this file ' +
-    'is lost. Set AUTONOMY_MASTER_KEY or AUTONOMY_MASTER_KEY_FILE to pin your own key ' +
-    'instead of relying on auto-generation.';
+    `AUTONOMY MASTER KEY WAS AUTO-GENERATED at absolute path "${keyFilePath}". This key ` +
+    'encrypts ALL secrets at rest — back it up now (a password manager or your infra ' +
+    'secrets store), or every existing secret becomes permanently undecryptable if this ' +
+    'file is lost. Set AUTONOMY_MASTER_KEY or AUTONOMY_MASTER_KEY_FILE to pin your own ' +
+    'key instead of relying on auto-generation.';
   console.warn(warning);
   return { key: generated, source: 'generated', warning };
 }

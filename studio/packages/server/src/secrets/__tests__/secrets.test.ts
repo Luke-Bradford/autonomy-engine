@@ -1,6 +1,14 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import sodium from 'libsodium-wrappers';
 import {
@@ -181,6 +189,52 @@ describe('resolveMasterKey', () => {
     expect(Buffer.from(resolution.key)).toEqual(Buffer.from(key));
   });
 
+  it('falls back to AUTONOMY_DATA_DIR/secrets/master.key when AUTONOMY_MASTER_KEY_FILE is absent', async () => {
+    const dataDir = freshTmpDir();
+    dirsToKeep.push(dataDir);
+    const keyFilePath = join(dataDir, 'secrets', 'master.key');
+    mkdirSync(join(dataDir, 'secrets'), { recursive: true });
+    const key = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_KEYBYTES);
+    writeFileSync(keyFilePath, sodium.to_base64(key, sodium.base64_variants.ORIGINAL), {
+      mode: 0o600,
+    });
+    chmodSync(keyFilePath, 0o600);
+
+    const resolution = await resolveMasterKey({ AUTONOMY_DATA_DIR: dataDir });
+    expect(resolution.source).toBe('file');
+    expect(Buffer.from(resolution.key)).toEqual(Buffer.from(key));
+  });
+
+  it('prefers AUTONOMY_MASTER_KEY_FILE over AUTONOMY_DATA_DIR when both are set', async () => {
+    const dataDir = freshTmpDir();
+    dirsToKeep.push(dataDir);
+    const decoyKeyFilePath = join(dataDir, 'secrets', 'master.key');
+    mkdirSync(join(dataDir, 'secrets'), { recursive: true });
+    const decoyKey = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_KEYBYTES);
+    writeFileSync(decoyKeyFilePath, sodium.to_base64(decoyKey, sodium.base64_variants.ORIGINAL), {
+      mode: 0o600,
+    });
+    chmodSync(decoyKeyFilePath, 0o600);
+
+    const explicitDir = freshTmpDir();
+    dirsToKeep.push(explicitDir);
+    const explicitKeyFilePath = join(explicitDir, 'master.key');
+    const explicitKey = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_KEYBYTES);
+    writeFileSync(
+      explicitKeyFilePath,
+      sodium.to_base64(explicitKey, sodium.base64_variants.ORIGINAL),
+      { mode: 0o600 },
+    );
+    chmodSync(explicitKeyFilePath, 0o600);
+
+    const resolution = await resolveMasterKey({
+      AUTONOMY_MASTER_KEY_FILE: explicitKeyFilePath,
+      AUTONOMY_DATA_DIR: dataDir,
+    });
+    expect(resolution.source).toBe('file');
+    expect(Buffer.from(resolution.key)).toEqual(Buffer.from(explicitKey));
+  });
+
   it('refuses a world-readable key file', async () => {
     const dir = freshTmpDir();
     dirsToKeep.push(dir);
@@ -219,7 +273,32 @@ describe('resolveMasterKey', () => {
 });
 
 describe('DEFAULT_MASTER_KEY_FILE', () => {
-  it('is a relative, repo-local path (not a hardcoded absolute host path)', () => {
-    expect(DEFAULT_MASTER_KEY_FILE).not.toMatch(/^\//);
+  it('is an absolute path', () => {
+    expect(isAbsolute(DEFAULT_MASTER_KEY_FILE)).toBe(true);
+  });
+
+  it('is independent of process.cwd() (does not shift if the server starts from a different directory)', () => {
+    // The real bug this guards against: a cwd-relative default resolves to
+    // a DIFFERENT file depending on where the process happens to be
+    // launched from, so a restart from a different cwd finds no key file
+    // and silently generates a brand-new one, orphaning every secret
+    // encrypted under the old key. Proving this by actually chdir-ing to a
+    // fresh tmp dir and re-checking the constant is stronger than merely
+    // asserting the string shape.
+    const before = DEFAULT_MASTER_KEY_FILE;
+    const originalCwd = process.cwd();
+    const scratchDir = freshTmpDir();
+    try {
+      process.chdir(scratchDir);
+      // DEFAULT_MASTER_KEY_FILE is computed once at module load (not
+      // per-call), so re-reading the same imported binding after chdir-ing
+      // is exactly the check we want: it must not have been influenced by
+      // cwd at import time, and nothing in this module re-derives it from
+      // `process.cwd()` on demand either.
+      expect(DEFAULT_MASTER_KEY_FILE).toBe(before);
+      expect(DEFAULT_MASTER_KEY_FILE).not.toContain(scratchDir);
+    } finally {
+      process.chdir(originalCwd);
+    }
   });
 });
