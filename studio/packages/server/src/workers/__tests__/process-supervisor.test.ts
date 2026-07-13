@@ -90,9 +90,17 @@ describe('spawnSupervised', () => {
     // sentinel file after a delay comfortably longer than our kill+grace
     // window, then the parent idles forever. If tree-kill works, the
     // grandchild dies with the group and the sentinel is never written.
+    //
+    // The grandchild's write delay (3000ms) is deliberately WELL beyond the
+    // kill window — timeoutMs (200ms) + SIGTERM->SIGKILL grace (~500ms) is
+    // ~700ms nominal, but under heavy parallel-suite CPU contention the kill
+    // can slip to ~1.5-2s; 3000ms keeps a wide margin so the reap always
+    // lands first (was 900ms, which flaked under load — a timing race, not a
+    // logic bug). We then wait PAST 3000ms so "sentinel absent" proves the
+    // grandchild was reaped, not merely that we checked too early.
     const parentScript = `
       const { spawn } = require('child_process');
-      const grandchildScript = "setTimeout(() => { require('fs').writeFileSync(process.argv[1], 'wrote'); }, 900);";
+      const grandchildScript = "setTimeout(() => { require('fs').writeFileSync(process.argv[1], 'wrote'); }, 3000);";
       spawn(process.execPath, ['-e', grandchildScript, process.argv[1]], { stdio: 'ignore' });
       setInterval(() => {}, 1000);
     `;
@@ -106,11 +114,9 @@ describe('spawnSupervised', () => {
     const [, result] = await Promise.all([collectEvents(supervised.events), supervised.result]);
     expect(result.timedOut).toBe(true);
 
-    // Wait past the grandchild's would-be write time (900ms) to prove it
-    // never happened, not merely that we hadn't checked yet.
-    await new Promise((resolve) => setTimeout(resolve, 900));
+    await new Promise((resolve) => setTimeout(resolve, 3500));
     expect(existsSync(sentinelPath)).toBe(false);
-  }, 10_000);
+  }, 15_000);
 
   it('bounds COMBINED stdout+stderr memory on a flooding process and reports truncated', async () => {
     // Flood BOTH streams concurrently. Before the fix, each stream had its
