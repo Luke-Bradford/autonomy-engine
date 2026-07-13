@@ -1,152 +1,213 @@
-# P2 — the pure event-sourced engine (spec)
+# P2 — the pure event-sourced engine (spec v1)
 
-*2026-07-13. The core of autonomy-studio: a PURE, deterministic run engine that
-ports the prototype's hard-won pipeline semantics (`../autonomy-engine`
-`lib/pipeline.py`) into TypeScript. NO I/O, NO connectors, NO executor (P3) — the
-engine emits COMMANDS; a driver performs them and feeds EVENTS back. Builds on the
-P1 data model (`packages/shared/src/schemas/*`, the `runs`/`run_events` tables +
-repo). Lives in `packages/server/src/engine/` (pure) with its own test suite.*
+*2026-07-13. v1 folds Codex CP1. The core of autonomy-studio: a PURE,
+deterministic run engine porting the prototype's pipeline semantics
+(`../autonomy-engine/lib/pipeline.py`) into TypeScript. NO I/O, NO connectors, NO
+executor (P3). Builds on P1 (schemas + `runs`/`run_events` tables + repo). Lives in
+`packages/shared/src/engine/` (the pure reducer + `${}` language, importable by
+web + server) with persistence/driver wiring in `packages/server/src/run/`.*
 
-## Why pure + event-sourced
+## The invariant (CP1-hardened): commands out, state changes only on events
 
-Purity + durability + (future) live streaming reconcile via one boundary:
-- **Engine = pure reducer:** `reduce(runState, event) → { state, commands[] }`.
-  No clock, no random, no I/O, no DB. Deterministic → exhaustively unit-testable
-  against the mined edge cases.
-- **Driver** (a thin loop, tested here with a STUB executor; the real one is P3)
-  performs each `command`, then feeds `events` back into `reduce`.
-- **`run_events`** (append-only, from P1a) is the source of truth; run/node state
-  is a materialized projection = folding `reduce` over the event log. Rebuildable
-  from events; the monitoring feed (P6) is a live tail.
+- **Reducer is pure:** `reduce(state, event) → { state, commands[], diagnostics[] }`.
+  No clock/random/I-O. Deterministic → fully replayable.
+- **A command NEVER changes state.** The reducer emits commands (requests to the
+  driver). The DRIVER performs a command, then appends the resulting **event** to
+  `run_events`; only folding that event through `reduce` changes state. So a crash
+  between "command emitted" and "event appended" simply re-emits the command on
+  replay — no lost/duplicated work.
+- **`run_events`** (append-only, P1a) is the sole source of truth; `RunState` is a
+  projection = fold `reduce` over the log. The monitor (P6) is a live tail.
+- **Deterministic `attemptId`:** every dispatch mints `attemptId = \`${nodeId}#${n}\``
+  where `n = NodeState.attempts` (count of prior attempts, from state — pure, no
+  random). Every attempt-bearing event carries its `attemptId`; **an event whose
+  `attemptId` is not the node's CURRENT attempt is ignored** (a stale pre-restart
+  executor result can never fold into a re-dispatched node — the CP1 correctness fix).
 
 ## Scope (P2) / non-goals
 
-IN: the reducer + walk semantics + the `${}` parameter language + typed
-params/outputs + a run-state projection + a boot reconciler + a stub-driver test
-harness. OUT (later): real activity execution / connectors / subprocess
-(P3), the scheduler + triggers firing (P4), `call_pipeline` CHILD spawning as real
-runs (the reducer MODELS the call as a command + awaits a child-outcome event, but
-spawning a real child run is P3/P4), the web monitor (P6).
+IN: the reducer + walk + the `${}` language + typed params/outputs + the RunState
+projection + fold-to-fixpoint driver loop (with a STUB executor for tests) + the
+boot reconciler. OUT: real activity execution / connectors / subprocess (P3),
+scheduler + trigger firing (P4), spawning a `call_pipeline` child as a REAL run
+(P2 models the call as a `startChild` command + awaits a `call.returned` event; the
+actual child run is created by the driver in P3/P4), the web monitor (P6).
 
-## Run state (projection) + event/command vocab
+## Event / command vocabulary
 
-`RunState` (in-memory projection, mirrors the `runs`/`run_events` rows):
-`{ runId, pipelineVersionId, params, status, nodes: Record<nodeId, NodeState>,
-containers: Record<id, ContainerState>, bounces: Record<edgeKey, number>,
-outputs: Record<nodeId, Record<name, value>> }`. `NodeState.status ∈
-pending|ready|dispatched|success|failure|skipped|waiting`. Run `status ∈
-pending|running|success|failure|interrupted`.
+**Events** (durable facts appended by the driver/reconciler):
+- `run.started`
+- `node.dispatched { nodeId, attemptId, idempotent: boolean }` — the driver ACCEPTED
+  the dispatch (idempotency is decided at dispatch time from the P3 catalog and
+  PERSISTED here; boot-reconcile never recomputes it — CP1 Q4).
+- `node.succeeded { nodeId, attemptId, outputs }`
+- `node.failed { nodeId, attemptId, error }`
+- `call.returned { callNodeId, attemptId, childRunId, childOutcome, outputs }`
+- `run.resumed { reason: "boot_reconcile" }` + `node.retryRequested { nodeId,
+  previousAttemptId, reason }` — boot reconcile appends these; the reducer then
+  emits a fresh `dispatchNode` (retry is an ENGINE decision, kept distinct from the
+  driver-accepted `node.dispatched` — CP1).
+- `run.finished { outcome: success | failure, reason? }` — the TERMINAL fact
+  (replay never depends on a side effect outside the log). `capped` is
+  `failure{reason:"capped"}` (one terminal vocabulary — CP1).
+- `node.output { nodeId, name, value }` — **observability/streaming ONLY**; a `${}`
+  ref may read a node's `outputs` ONLY after that node's terminal
+  `node.succeeded` (with typed-output validation). Partial outputs never feed
+  substitution (CP1).
 
-**Events** (facts the driver feeds in): `run.started` · `node.dispatched` ·
-`node.succeeded{outputs}` · `node.failed{error}` · `node.output{name,value}` ·
-`call.returned{childOutcome, outputs}` (a `call_pipeline` child finished) ·
-`run.interrupted` (boot reconcile).
-**Commands** (the reducer's requests to the driver): `dispatchNode{nodeId,
-preparedInput}` (run this activity) · `startChild{callNodeId, pipelineVersionId,
-params}` (spawn a call_pipeline child) · `finishRun{outcome}` (persist terminal
-state). The driver never decides control flow — it only executes commands + reports
-events.
+**Commands** (reducer → driver, no state change): `dispatchNode { nodeId, attemptId,
+preparedInput }` · `startChild { callNodeId, attemptId, childRunId, pipelineVersionId,
+params }` (childRunId deterministic from parent+callNode+attempt → idempotent child
+creation — CP1 Q1) · `finishRun { outcome, reason? }` (asks the driver to append
+`run.finished` + persist terminal `runs.status`).
 
-`reduce` is total: an event for an unknown/terminal node is a no-op (idempotent
-replay); it never throws on a well-typed event.
+**Fold-to-fixpoint (CP1 Q2):** after folding one event, the reducer re-evaluates
+readiness and emits ALL newly-ready nodes' commands in a STABLE deterministic order
+(sorted by nodeId); the driver owns concurrency, the reducer owns readiness.
 
-## The `${}` parameter language (ported verbatim — the crown jewel)
+## RunState (projection)
 
-Refs: `${params.<name>}`, `${nodes.<id>.output.<name>}`, `${run.<field>}` (closed
-field set) + a CLOSED pure-function allowlist (`default(x, fallback)`,
-`concat(...)`, `slug(x)`, … — extend deliberately, NO `eval`). Type-checked.
-Secrets are refused anywhere in the language (a secret-typed param used in a
-`${}` is a static error).
-- **Values are INERT:** substitution is a SINGLE pass that NEVER rescans its
-  replacements (the no-injection property — port the prototype's regression test:
-  a param value containing `${…}` is emitted literally, not re-resolved).
-- **Static ref-validation at pipeline SAVE time** (a pure `validateRefs(doc)`
-  returning a list of errors, wired into the P1 pipeline-version create + surfaced
-  in P5 as node badges): declared params only; node-output refs must be UPSTREAM
-  (or an earlier sibling in a container) of the referencing node; function arity
-  checked; `brief`/prompt fields are ref-free-or-substituted per node type.
-- `substitute(value, ctx)` and `substituteDoc(doc, ctx)` are pure; the engine
-  substitutes a node's input at `dispatchNode` command time from the run's
-  params + upstream outputs.
+`{ runId, pipelineVersionId, params, status: pending|running|success|failure|
+interrupted, nodes: Record<nodeId, { status: pending|ready|dispatched|success|
+failure|skipped|waiting, attempts, currentAttemptId? }>, outputs: Record<nodeId,
+Record<name,value>> (populated ONLY on node.succeeded), containers: Record<id,
+ContainerState>, bounces: Record<edgeKey, number>, sessions }`.
 
-## Walk semantics (ported — the P2a "semantic decisions")
+**Reducer totality (CP1):** an event for a DIFFERENT run or an obsolete node that
+cannot exist in this pipeline version by construction → no-op. But a well-typed
+event that is IMPOSSIBLE for the current state (e.g. `node.succeeded` for a
+`pending` node) is NOT silently ignored — it appends a `diagnostics[]` entry and,
+if it would corrupt the log's meaning, drives `run.finished{failure,
+reason:"invalid_event"}`. Absence of evidence is never treated as success.
 
-- **Typed edges** `{from, to, on: success|failure|completion, back?, maxBounces?}`.
-  A node's terminal outcome fires its matching edges; `completion` fires on either.
-  Edge-less docs synthesize an implicit success-chain (one engine, both shapes).
-- **Readiness / join:** a node becomes `ready` when its incoming edges are
-  satisfied per its `join: all|any` (all = every required predecessor terminal on a
-  matching edge; any = at least one). Ready nodes are emitted as `dispatchNode`
-  commands (one per ready node; batching/parallelism is the driver's concern, the
-  reducer just marks them dispatched).
-- **Skip propagation:** a node with no satisfiable incoming edge (all preds failed
-  on a channel it doesn't handle) → `skipped`; skip propagates downstream.
-- **Back-edges:** traversal-only, target must be an ancestor (loop/stage); each
-  traversal increments `bounces[edgeKey]`; exceeding `maxBounces` → the run
-  `capped`/fails (mined). No infinite loops.
-- **Containers** (loop/stage): children walk internally; the container's outcome
-  (from its exit node / `exit_when`) fires the container's outer edges.
-- **`call_pipeline`:** a call node emits `startChild`; its state is `waiting`
-  until a `call.returned` event; a failed child still returns projected outputs
-  (findings loop); depth-bounded + cycle-refused (validated at save time).
-- **Run termination:** all top-level units terminal → `finishRun{success}` unless
-  an unhandled failure → `finishRun{failure}`; a session/step cap → `capped`.
+## Walk semantics — precise (CP1 truth table)
+
+**Edges** `{ from, to, on: success|failure|completion, back?, maxBounces? }`.
+`edgeKey = hash(from, to, on)` — STABLE across doc saves/reorders (never an array
+index — CP1). Edge-less docs synthesize the implicit success-chain (one engine,
+both shapes).
+
+**Per-incoming-edge state** for a node: `satisfied` (predecessor reached a terminal
+outcome matching this edge's `on`), `unsatisfied-terminal` (predecessor terminal on
+a channel this edge does NOT match — will never satisfy), `pending` (predecessor not
+yet terminal), `impossible` (predecessor `skipped`, or `unsatisfied-terminal` with
+no other path). **Readiness:**
+- `join: all` → ready when EVERY incoming edge is `satisfied`; if ANY is `impossible`
+  → the node is `skipped`; else `pending`.
+- `join: any` → ready when ≥1 incoming edge is `satisfied`; `skipped` only when ALL
+  are `impossible`; else `pending`.
+**Skip propagation:** a `skipped` node makes its outgoing edges `impossible` for
+successors (recurse). A node with NO incoming edges is a root (ready at start).
+
+**Outcome routing:** a node's terminal outcome (`success`/`failure`) fires its
+matching `on:` edges + any `on:completion` edge. An unhandled `failure` (no
+`failure`/`completion` edge from a failed node, and it's not inside a container that
+catches it) → the run fails.
+
+**Back-edges** (`back: true`): traversal-only; `to` must be an ANCESTOR (loop/stage
+container). Each traversal `bounces[edgeKey]++`; exceeding `maxBounces` →
+`finishRun{failure, reason:"capped"}`. On traversal, the loop body's node states
+RESET to `pending` (and their `outputs` are cleared — a re-run recomputes them);
+the container's own accumulated outputs policy is specified per container kind below.
+
+## Containers (loop | stage) — lifecycle
+
+A container `{ id, kind, children[], exit_when?, join?, runs_as? }` owns a child
+NAMESPACE (child node ids are unique within it; `${nodes.<child>.output}` refs are
+resolved within the container's scope + its visible ancestors). Lifecycle:
+- **enter:** container `active`; its root children become ready.
+- **internal walk:** children walk by the same rules; a child `skipped` does NOT
+  fail the container (it's an internal branch).
+- **exit:** a `stage` exits when all children are terminal; a `loop` re-enters via
+  its back-edge until `exit_when` (a `${}` boolean over child outputs) is true OR
+  `max_rounds`/bounce cap hits. `exit_when` is evaluated only when the round's
+  children are all terminal (never races still-running children — CP1).
+- **outcome:** the container's terminal outcome (success/failure, from its exit
+  node or an unhandled child failure) fires the container's OUTER edges. Container
+  `outputs` = the declared `outputs` projected from its children's outputs at exit.
+
+## `call_pipeline`
+
+A call node emits `startChild{childRunId (deterministic), pipelineVersionId, params}`;
+its state is `waiting` until a `call.returned{childRunId, childOutcome, outputs}`
+event. `childOutcome` may be failure and STILL return projected outputs (the findings
+loop). Depth ≤ N and call-cycle refusal are validated at pipeline-SAVE time
+(`validateRefs`/`validateDoc`), not at run time. The reducer is NOT child-agnostic —
+parent waiting is core control flow (CP1 Q1).
+
+## The `${}` language (ported; in `shared`, no server imports — CP1 Q3)
+
+Refs `${params.x}` · `${nodes.<id>.output.<name>}` · `${run.<field>}` (closed set) +
+a CLOSED pure-fn allowlist (`default(x,fb)`, `concat(...)`, `slug(x)`, …; NO eval).
+- **INERT single pass:** substitution NEVER rescans replacements (port the
+  no-injection regression: a param value containing `${…}` is emitted literally).
+- **Literal escape:** `$${` emits a literal `${` (port the prototype's rule).
+  Malformed/unterminated `${` RAISES at validate time (never a silent literal).
+- **Type preservation:** a WHOLE-string ref (`"${params.count}"`) preserves the
+  native type (number/bool/object); an EMBEDDED ref (`"n=${params.count}"`) coerces
+  to string. Arrays/objects recurse deterministically.
+- **`validateRefs(doc)`** (pure, at save time, surfaced as P5 node badges): declared
+  params only; secret-typed params refused anywhere; node-output refs validated by
+  **availability/dominance** — a ref to a node reachable only on a `failure`/
+  `completion` branch, or a not-guaranteed-available loop sibling, must be wrapped in
+  `default(...)`; unconditional refs require the target to DOMINATE (be on every path
+  to) the referencing node (CP1). Function arity checked. `brief`/prompt fields per
+  node type.
 
 ## Typed params/outputs
 
-Ported from P1 schemas (`Param`, `Output`). At run START, `resolveRunParams(doc,
-overrides)` (pure): pipeline default < caller override, coerce to the declared
-type, refuse a required-unset or a type mismatch. Node `outputs` are validated
-against the node's declared output types when a `node.succeeded{outputs}` event
-folds in (a bad-typed output → the node fails, `unvalidated data never crosses`).
+`resolveRunParams(doc, overrides)` (pure) at run start: default < override, coerce to
+declared type, refuse required-unset / type-mismatch. On `node.succeeded{outputs}`,
+each output is validated against the node's declared output type; a bad-typed output
+fails the node (`unvalidated data never crosses`).
 
-## Boot reconciler + resume policy
+## Boot reconciler + resume (the one impure boundary)
 
-`reconcileOnBoot(db)` (the one impure boundary, at startup, tested against a real
-tmp DB): any `runs` row still `running`/`dispatched` after a restart could not have
-survived → apply the per-activity resume policy: an idempotent activity → re-emit
-`node.dispatched` (re-run); a non-idempotent one (an LLM call, an `agent_cli`) →
-mark the node/run `interrupted` (needs-attention). Emits `run.interrupted` events;
-never silently resumes. (The activity-idempotency flag comes from the P3 catalog;
-P2 threads a `NodeState.idempotent?` hint defaulting to non-idempotent = the safe
-side.)
+`reconcileOnBoot(db)` at startup (tested vs a real tmp DB): any `runs` row still
+`running` and any node still `dispatched` after a restart could not have survived.
+For each such node, read its PERSISTED `idempotent` flag (from its `node.dispatched`
+event — never recomputed — CP1 Q4): idempotent → append `run.resumed` +
+`node.retryRequested{previousAttemptId}` (the reducer then emits a fresh
+`dispatchNode` with a NEW attemptId, so the stale executor result is ignored);
+non-idempotent (LLM call, agent_cli) → mark the node/run `interrupted`
+(needs-attention). Never silently resumes.
 
-## Architecture / files
+## Files
 
-`packages/server/src/engine/`: `state.ts` (RunState + projection folder),
-`reduce.ts` (the pure reducer + walk), `params.ts` (the `${}` language:
-`substitute`, `resolveRunParams`, `validateRefs`), `types.ts` (Event/Command
-unions). `packages/server/src/run/`: `reconcile.ts` (boot) + a `driver.ts` skeleton
-that loops reduce↔executor with a STUB executor for tests (the real executor is
-P3). All engine code is I/O-free; only `reconcile`/`driver` touch the repo.
+`packages/shared/src/engine/`: `types.ts` (Event/Command/RunState unions),
+`params.ts` (`substitute`, `resolveRunParams`, `validateRefs`), `reduce.ts` (the
+pure reducer + walk). `packages/server/src/run/`: `reconcile.ts` (boot),
+`driver.ts` (the reduce↔executor fixpoint loop; a STUB executor for tests, the real
+one is P3). Engine code is I/O-free; only `reconcile`/`driver` touch the repo.
 
-## Testing (the bar for a ported core)
+## Testing (the ported-core bar)
 
-A test suite MIRRORING the prototype's edge cases — port each as a TS case:
-- `${}` language: every ref kind, the closed fn allowlist + arity, type-check
-  failures, secret-ref refusal, and the INERTNESS regression (a `${}` inside a
-  param value is emitted literally, single-pass, never re-resolved).
-- `validateRefs`: undeclared param, downstream/self node-output ref, bad arity,
-  earlier-sibling legality — each rejected/accepted correctly.
-- Walk: success/failure/completion routing; join all vs any; skip propagation;
-  back-edge bounce cap; container outcome edges; implicit success-chain synthesis;
-  unhandled-failure fails the run; caps.
-- `call_pipeline`: waiting→call.returned, failed-child-still-returns-outputs,
-  depth/cycle refusal (save-time).
-- Reducer totality: unknown/terminal-node events are no-ops; full replay of an
-  event log reconstructs the same RunState (event-sourcing invariant).
-- Reconcile: a `running` row → interrupted (non-idempotent) or re-dispatched
-  (idempotent), against a real tmp DB.
+Port each prototype edge case as a TS case + the event-sourcing invariants:
+- **Replay determinism:** folding an event log twice yields the identical RunState;
+  a stale-`attemptId` event is ignored (the pre-restart-result test).
+- **`${}`:** every ref kind, allowlist arity, type-check + secret-ref refusal, the
+  INERTNESS regression, `$${` literal, type-preservation (whole vs embedded),
+  malformed-brace raise.
+- **validateRefs:** undeclared param, self/downstream ref, failure-branch ref needs
+  `default()`, dominance, loop-sibling availability — each accepted/rejected.
+- **Walk:** the full join truth table (all/any × satisfied/unsatisfied-terminal/
+  pending/impossible), skip propagation, success/failure/completion routing,
+  unhandled-failure fails run, implicit success-chain.
+- **Back-edge:** stable edgeKey across a doc reorder, bounce cap → capped, loop body
+  reset on traversal.
+- **Containers:** stage exit-when-all-terminal, loop exit_when/max_rounds, child-skip
+  doesn't fail container, container outcome fires outer edges, child namespace.
+- **call_pipeline:** waiting→call.returned, failed-child-still-returns-outputs,
+  deterministic childRunId, depth/cycle refused at save time.
+- **Reducer totality:** different-run event no-op; impossible same-run event →
+  diagnostic / invalid_event failure (NOT silent).
+- **Reconcile:** idempotent → retryRequested + new attempt (stale result ignored);
+  non-idempotent → interrupted; against a real tmp DB.
 
-## Open questions for CP1
+## Resolved (was Open questions)
 
-1. Is modelling `call_pipeline` as a `startChild` COMMMAND (child spawning deferred
-   to P3/P4) the right P2 boundary, or should the reducer stay child-agnostic
-   until then?
-2. Batch vs one-at-a-time ready-node dispatch — keep the reducer emitting ALL
-   ready nodes as commands (driver decides concurrency), matching the prototype's
-   batch protocol?
-3. `validateRefs` lives in `shared` (so P5's canvas can call it client-side too)
-   or `server`? It's pure + needed both sides — lean `shared`.
-4. The reconciler's idempotency source: default non-idempotent now (safe), wire the
-   real per-activity flag in P3 — confirm that's the right sequencing.
+Q1 `call_pipeline` = startChild+call.returned WITH correlation ids + idempotent child
+creation, reducer NOT child-agnostic. Q2 emit all ready nodes after fold-to-fixpoint,
+stable order, driver owns concurrency. Q3 `${}` + validateRefs in `shared`, no server
+imports. Q4 default non-idempotent, persist the decision in `node.dispatched`, never
+recompute at boot.
