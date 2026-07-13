@@ -68,8 +68,8 @@ export async function buildApp(opts?: BuildAppOptions) {
   // One process supervisor PER app instance (not a module global), so this
   // app's graceful-shutdown reap tree-kills ONLY the `agent_cli` subprocesses
   // it spawned — never another app instance's (test isolation, multi-tenant).
-  // The real consumer (the `agent_cli` connector) arrives in a later P3 slice;
-  // it is created and reaped here now so the shutdown contract holds from boot.
+  // It is injected into the connector registry below, where the `agent_cli`
+  // adapter spawns through it; its `reapAllSupervised()` is wired into shutdown.
   const supervisor = createSupervisor();
   fastify.decorate('supervisor', supervisor);
 
@@ -85,8 +85,9 @@ export async function buildApp(opts?: BuildAppOptions) {
   fastify.log.info({ bootRow }, 'app_meta boot round-trip');
 
   // The run engine's impure boundary: a doc resolver (a run's immutable
-  // pipeline version) + the real connector-facing executor. P3a ships the
-  // `http` adapter; other connector kinds fail their node loudly until P3b.
+  // pipeline version) + the real connector-facing executor. P3b completes the
+  // adapter set (`http`, `anthropic_api`, `openai_api`, `ollama`, `agent_cli`);
+  // a Connection kind with no adapter still fails its node loudly at dispatch.
   const resolveDoc: DocResolver = (pipelineVersionId) => {
     const pv = getPipelineVersion(db, pipelineVersionId);
     if (pv === null) {
@@ -98,7 +99,7 @@ export async function buildApp(opts?: BuildAppOptions) {
     db,
     masterKey: masterKeyResolution.key,
     resolveDoc,
-    adapters: createConnectorRegistry(),
+    adapters: createConnectorRegistry({ supervisor }),
   });
 
   // P2d/P3 boot reconcile: any `runs` row still `running` could not have

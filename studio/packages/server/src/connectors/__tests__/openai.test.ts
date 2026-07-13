@@ -1,0 +1,96 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { openaiAdapter } from '../openai.js';
+import type { ActivityContext, ActivityEvent } from '../types.js';
+
+async function drain(stream: AsyncIterable<ActivityEvent>): Promise<ActivityEvent[]> {
+  const events: ActivityEvent[] = [];
+  for await (const e of stream) events.push(e);
+  return events;
+}
+
+function ctx(over: Partial<ActivityContext> = {}): ActivityContext {
+  return {
+    runId: 'run_1',
+    nodeId: 'n1',
+    attemptId: 'n1#0',
+    input: over.input ?? { prompt: 'hi', model: 'gpt-4o' },
+    connectionConfig: over.connectionConfig ?? {},
+    signal: over.signal ?? new AbortController().signal,
+  };
+}
+
+afterEach(() => vi.restoreAllMocks());
+
+function fakeResponse(status: number, body: unknown): Response {
+  return {
+    status,
+    text: () => Promise.resolve(typeof body === 'string' ? body : JSON.stringify(body)),
+    headers: new Headers(),
+  } as unknown as Response;
+}
+
+const OK_BODY = {
+  choices: [{ message: { role: 'assistant', content: 'the answer' }, finish_reason: 'stop' }],
+};
+
+describe('openaiAdapter.runActivity', () => {
+  it('POSTs chat/completions and surfaces content + finish_reason', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(openaiAdapter.runActivity(ctx(), 'sk-oai'));
+    expect(events).toEqual([
+      { type: 'succeeded', outputs: { text: 'the answer', stopReason: 'stop' } },
+    ]);
+    const [url, init] = fetchSpy.mock.calls[0]! as [string, RequestInit];
+    expect(url).toBe('https://api.openai.com/v1/chat/completions');
+    expect((init.headers as Record<string, string>)['Authorization']).toBe('Bearer sk-oai');
+    const body = JSON.parse(init.body as string);
+    expect(body.messages).toEqual([{ role: 'user', content: 'hi' }]);
+  });
+
+  it('prepends a system message when provided', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(
+      openaiAdapter.runActivity(
+        ctx({ input: { prompt: 'hi', model: 'gpt-4o', system: 'be brief' } }),
+        'sk',
+      ),
+    );
+    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.messages).toEqual([
+      { role: 'system', content: 'be brief' },
+      { role: 'user', content: 'hi' },
+    ]);
+  });
+
+  it('honors a custom baseUrl (OpenAI-compatible gateway)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(
+      openaiAdapter.runActivity(
+        ctx({ connectionConfig: { baseUrl: 'https://api.groq.com/openai/v1/' } }),
+        'sk',
+      ),
+    );
+    expect(fetchSpy.mock.calls[0]![0]).toBe('https://api.groq.com/openai/v1/chat/completions');
+  });
+
+  it('fails permanent when no model is resolvable', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const events = await drain(openaiAdapter.runActivity(ctx({ input: { prompt: 'hi' } }), 'sk'));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('fails permanent (no request) with no API key', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const events = await drain(openaiAdapter.runActivity(ctx(), null));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('maps 429 to rate_limit and never echoes the secret', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(429, 'slow down'));
+    const events = await drain(openaiAdapter.runActivity(ctx(), 'sk-secret-xyz'));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'rate_limit' });
+    expect(JSON.stringify(events)).not.toContain('sk-secret-xyz');
+  });
+});
