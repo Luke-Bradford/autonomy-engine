@@ -8,3 +8,4 @@ dist/
 data/
 .DS_Store
 .scaffold-report.md
+.spike-report.md
