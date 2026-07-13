@@ -154,16 +154,22 @@ describe('spawnSupervised', () => {
     expect(collectedBytes).toBeLessThanOrEqual(maxOutputBytes + 4096);
     expect(collectedBytes).toBeGreaterThan(0);
 
+    // The shared-vs-per-stream distinction is proven by the COMBINED cap above
+    // (a per-stream cap would allow ~2x maxOutputBytes). We deliberately do NOT
+    // assert each stream individually got a slice: a genuinely SHARED budget may
+    // be consumed by EITHER stream in any proportion — including entirely by
+    // whichever floods first, since the interleaving of two flooding pipes is
+    // not deterministic across platforms (a fast Linux CI runner regularly
+    // drains one stream's full 64KB before the other is scheduled). Requiring
+    // both > 0 was therefore racy AND contradicted the shared semantics under
+    // test; the split need only account for the whole.
     const stdoutBytes = events
       .filter((e) => e.stream === 'stdout')
       .reduce((sum, e) => sum + Buffer.byteLength(e.line, 'utf8') + 1, 0);
     const stderrBytes = events
       .filter((e) => e.stream === 'stderr')
       .reduce((sum, e) => sum + Buffer.byteLength(e.line, 'utf8') + 1, 0);
-    // Both streams got a slice of the SAME shared budget (proving it's
-    // genuinely shared, not two independent per-stream caps).
-    expect(stdoutBytes).toBeGreaterThan(0);
-    expect(stderrBytes).toBeGreaterThan(0);
+    expect(stdoutBytes + stderrBytes).toBe(collectedBytes);
   }, 15_000);
 
   it('bounds COMBINED memory on a NEWLINE-FREE flood on both streams (partial-buffer path)', async () => {
