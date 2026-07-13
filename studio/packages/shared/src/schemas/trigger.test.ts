@@ -45,6 +45,15 @@ describe('ConcurrencySchema', () => {
   it('rejects a zero max', () => {
     expect(() => ConcurrencySchema.parse({ policy: 'parallel', max: 0 })).toThrow();
   });
+
+  it('rejects parallel without a max (unbounded fan-out footgun)', () => {
+    expect(() => ConcurrencySchema.parse({ policy: 'parallel' })).toThrow();
+  });
+
+  it('rejects a max on a single-slot policy', () => {
+    expect(() => ConcurrencySchema.parse({ policy: 'queue', max: 2 })).toThrow();
+    expect(() => ConcurrencySchema.parse({ policy: 'skip_if_running', max: 2 })).toThrow();
+  });
 });
 
 describe('RunWindowSchema', () => {

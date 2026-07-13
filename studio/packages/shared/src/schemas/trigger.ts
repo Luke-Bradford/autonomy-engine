@@ -6,11 +6,34 @@ export type TriggerMode = z.infer<typeof TriggerModeSchema>;
 export const ConcurrencyPolicySchema = z.enum(['queue', 'skip_if_running', 'parallel']);
 export type ConcurrencyPolicy = z.infer<typeof ConcurrencyPolicySchema>;
 
-export const ConcurrencySchema = z.object({
-  policy: ConcurrencyPolicySchema,
-  /** Only meaningful for `parallel`; omitted for `queue`/`skip_if_running`. */
-  max: z.number().int().positive().optional(),
-});
+export const ConcurrencySchema = z
+  .object({
+    policy: ConcurrencyPolicySchema,
+    /**
+     * The cap on simultaneous runs — REQUIRED for `parallel` (an omitted cap
+     * would be an unbounded fan-out footgun), and FORBIDDEN for
+     * `queue`/`skip_if_running` (both are implicitly single-slot, so a `max`
+     * there is meaningless and rejected rather than silently ignored). The
+     * P4 scheduler/launcher reads this to admit or gate a fire.
+     */
+    max: z.number().int().positive().optional(),
+  })
+  .superRefine((c, ctx) => {
+    if (c.policy === 'parallel' && c.max === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['max'],
+        message: 'parallel concurrency requires a positive `max` (the cap on simultaneous runs)',
+      });
+    }
+    if (c.policy !== 'parallel' && c.max !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['max'],
+        message: `\`max\` is only valid for the 'parallel' policy, not '${c.policy}'`,
+      });
+    }
+  });
 export type Concurrency = z.infer<typeof ConcurrencySchema>;
 
 /**

@@ -8,6 +8,7 @@ import { createSupervisor } from './workers/process-supervisor.js';
 import { getPipelineVersion } from './repo/pipeline-versions.js';
 import { reconcileOnBoot } from './run/reconcile.js';
 import { createExecutor } from './run/executor.js';
+import { createRunLauncher } from './run/launcher.js';
 import { createConnectorRegistry } from './connectors/registry.js';
 import type { DocResolver } from './run/driver.js';
 import { registerAuthHook } from './auth/principal.js';
@@ -112,6 +113,13 @@ export async function buildApp(opts?: BuildAppOptions) {
   const reconcileReport = await reconcileOnBoot({ db, resolveDoc, executor });
   fastify.log.info({ reconcileReport }, 'boot reconcile complete');
 
+  // P4a: the run launcher — the one place a trigger becomes a run (manual fire
+  // now; the scheduler + webhooks reuse it in P4b/P4c). Per-app, sharing this
+  // instance's driver boundary (db + doc resolver + real executor), so
+  // "unbound never fires" + concurrency admission are enforced in ONE place.
+  const runLauncher = createRunLauncher({ db, resolveDoc, executor, log: fastify.log });
+  fastify.decorate('runLauncher', runLauncher);
+
   // Auth seam + the one global error handler, registered before any route so
   // every request (and every thrown error) is covered.
   registerAuthHook(fastify);
@@ -140,6 +148,11 @@ export async function buildApp(opts?: BuildAppOptions) {
   // wiring, so no in-flight `agent_cli` subprocess tree survives a graceful
   // restart/deploy.
   fastify.addHook('onClose', async () => {
+    // Stop the launcher FIRST (no new fires, drop the queue) so nothing new
+    // spawns while we reap; in-flight background runs are left to settle or be
+    // recovered by the boot reconciler on next start. Then tree-kill any
+    // in-flight `agent_cli` subprocess.
+    runLauncher.stop();
     await supervisor.reapAllSupervised();
   });
 

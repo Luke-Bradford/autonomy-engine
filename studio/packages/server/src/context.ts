@@ -1,5 +1,6 @@
 import type { Db } from './repo/types.js';
 import type { Supervisor } from './workers/process-supervisor.js';
+import type { RunLauncher } from './run/launcher.js';
 
 /**
  * Ambient `FastifyInstance` augmentation for the app-scoped state routes and
@@ -18,5 +19,10 @@ declare module 'fastify' {
      * `onClose`) tree-kills ONLY the subprocesses IT spawned, so two apps in
      * one process never reap each other's `agent_cli` children. */
     supervisor: Supervisor;
+    /** This app instance's run launcher: the one place a trigger becomes a
+     * run (manual fire + P4 scheduler/webhooks), enforcing "unbound never
+     * fires" + concurrency admission. Per-app so its in-flight/queue state
+     * never leaks across instances. */
+    runLauncher: RunLauncher;
   }
 }

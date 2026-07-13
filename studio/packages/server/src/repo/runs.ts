@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import {
   NewRunSchema,
   RunLifecyclePatchSchema,
@@ -88,6 +88,35 @@ export function updateRun(db: Db, id: string, patch: RunLifecyclePatch): Run | n
   const updated = RunSchema.parse({ ...existing, ...parsedPatch, id: existing.id });
   db.update(runs).set(updated).where(eq(runs.id, id)).run();
   return updated;
+}
+
+/**
+ * Non-terminal run statuses — a run in one of these still occupies a
+ * concurrency slot for its trigger. Terminal = `success`/`failure`/`skipped`/
+ * `interrupted`. (`skipped` is terminal; the concurrency gate never CREATES a
+ * skipped run row, but a node-driven skip that terminalizes a whole run must
+ * still free the slot.)
+ */
+const ACTIVE_RUN_STATUSES = [
+  'pending',
+  'running',
+  'waiting',
+] as const satisfies readonly RunStatus[];
+
+/**
+ * Count a trigger's currently-active (non-terminal) runs — the P4 concurrency
+ * gate's authoritative, restart-safe source of truth. A run row is durable
+ * from creation and survives a process restart (to be resumed by the boot
+ * reconciler), whereas an in-memory counter does not; basing admission on the
+ * DB keeps the gate correct across a crash mid-run. Filtered in SQL, backed by
+ * `runs_status_idx` + the trigger filter.
+ */
+export function countActiveRunsForTrigger(db: Db, triggerId: string): number {
+  return db
+    .select({ id: runs.id })
+    .from(runs)
+    .where(and(eq(runs.triggerId, triggerId), inArray(runs.status, [...ACTIVE_RUN_STATUSES])))
+    .all().length;
 }
 
 export function deleteRun(db: Db, id: string): boolean {

@@ -257,6 +257,72 @@ describe('triggers routes', () => {
     });
   });
 
+  describe('POST /api/triggers/:id/fire — manual fire', () => {
+    it('fires a bound trigger: 202 started, and the run drives to success end-to-end', async () => {
+      const created = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/triggers',
+          payload: triggerBody(pipelineVersionId),
+        })
+      ).json();
+
+      const fireRes = await app.inject({ method: 'POST', url: `/api/triggers/${created.id}/fire` });
+      expect(fireRes.statusCode).toBe(202);
+      const result = fireRes.json();
+      expect(result.outcome).toBe('started');
+      expect(result.runId).toBeDefined();
+
+      // The run drives in the background — wait for it, then confirm success
+      // + provenance through the public run API (the "fire → it runs" bar).
+      await app.runLauncher.whenIdle();
+      const runRes = await app.inject({ method: 'GET', url: `/api/runs/${result.runId}` });
+      expect(runRes.statusCode).toBe(200);
+      expect(runRes.json().status).toBe('success');
+      expect(runRes.json().triggerId).toBe(created.id);
+    });
+
+    it('fires a DISABLED (but bound) trigger: manual fire is independent of `enabled`', async () => {
+      const created = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/triggers',
+          payload: { ...triggerBody(pipelineVersionId), enabled: false },
+        })
+      ).json();
+
+      const fireRes = await app.inject({ method: 'POST', url: `/api/triggers/${created.id}/fire` });
+      expect(fireRes.statusCode).toBe(202);
+      expect(fireRes.json().outcome).toBe('started');
+      await app.runLauncher.whenIdle();
+    });
+
+    it('refuses to fire an unbound trigger: 400 bad_request ("unbound never fires")', async () => {
+      const draft = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/triggers',
+          payload: { ...triggerBody(pipelineVersionId), pipelineVersionId: null, enabled: false },
+        })
+      ).json();
+
+      const fireRes = await app.inject({ method: 'POST', url: `/api/triggers/${draft.id}/fire` });
+      expect(fireRes.statusCode).toBe(400);
+      expect(fireRes.json().error).toBe('bad_request');
+    });
+
+    it('404 for a missing trigger', async () => {
+      const res = await app.inject({ method: 'POST', url: '/api/triggers/trig_missing/fire' });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('404 (not 403) for another owner’s trigger — same opacity as every other route', async () => {
+      const other = createTrigger(app.db, newTriggerInput(pipelineVersionId, 'someone-else'));
+      const res = await app.inject({ method: 'POST', url: `/api/triggers/${other.id}/fire` });
+      expect(res.statusCode).toBe(404);
+    });
+  });
+
   describe('TriggerPublic projection', () => {
     it('strips webhook.secretRef from create/get/list/update responses', async () => {
       const webhookBody = {
