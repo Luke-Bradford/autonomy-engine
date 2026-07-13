@@ -19,6 +19,9 @@ function buildMinimalApp() {
   app.get('/bad', async () => {
     return z.object({ x: z.string() }).parse({});
   });
+  app.post('/echo', async (request) => {
+    return request.body;
+  });
   return app;
 }
 
@@ -63,6 +66,24 @@ describe('registerErrorHandler', () => {
     expect(Array.isArray(body.issues)).toBe(true);
     expect(body.issues[0]).toHaveProperty('path');
     expect(body.issues[0]).toHaveProperty('message');
+    await app.close();
+  });
+
+  it("maps a malformed JSON body to a generic 4xx message, never echoing a fragment of the caller's own body", async () => {
+    const app = buildMinimalApp();
+    await app.ready();
+    const secretLookingFragment = 'not-json-but-looks-like-{"leaked":"fragment_marker_xyz"';
+    const res = await app.inject({
+      method: 'POST',
+      url: '/echo',
+      headers: { 'content-type': 'application/json' },
+      payload: secretLookingFragment,
+    });
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(res.statusCode).toBeLessThan(500);
+    const body = res.json();
+    expect(body).toEqual({ error: 'bad_request', message: 'Malformed request' });
+    expect(JSON.stringify(body)).not.toContain('fragment_marker_xyz');
     await app.close();
   });
 });

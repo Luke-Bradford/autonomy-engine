@@ -101,4 +101,38 @@ describe('runs routes (read-only)', () => {
     const res = await app.inject({ method: 'GET', url: '/api/runs/run_missing' });
     expect(res.statusCode).toBe(404);
   });
+
+  it('filters by pipelineVersionId/triggerId/parentRunId query params', async () => {
+    const run = createRun(app.db, {
+      ownerId: 'local',
+      pipelineVersionId,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/runs?pipelineVersionId=${pipelineVersionId}`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().map((r: { id: string }) => r.id)).toContain(run.id);
+  });
+
+  it('validation: a non-string query param value -> 400', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      // Fastify parses repeated query keys into an array, which fails the
+      // Zod string schema — invalid shape, not a value the repo should ever see.
+      url: '/api/runs?pipelineVersionId=a&pipelineVersionId=b',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('validation_error');
+  });
+
+  it('validation: an empty-string query param value -> 400', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/runs?triggerId=' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('validation_error');
+  });
 });

@@ -81,9 +81,15 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     // which throws before any route handler runs) carry a `statusCode` in
     // the 4xx range — handled defensively even though today's routes
     // validate manually with the shared Zod schemas rather than a Fastify
-    // route `schema` option.
+    // route `schema` option. Unlike the ZodError branch above (whose
+    // `issues` are value-free — a path + a fixed message, never an echo of
+    // the caller's input), Fastify's own parser error `message` can quote a
+    // fragment of the malformed body straight back at the client. The
+    // generic message here avoids that echo; the real error (with detail)
+    // still reaches the server log.
     if (hasNumericStatusCode(error)) {
-      reply.status(error.statusCode).send({ error: 'bad_request', message: error.message });
+      request.log.warn({ err: error }, 'malformed request');
+      reply.status(error.statusCode).send({ error: 'bad_request', message: 'Malformed request' });
       return;
     }
 

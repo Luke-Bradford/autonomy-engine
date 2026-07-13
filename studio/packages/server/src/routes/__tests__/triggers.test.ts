@@ -96,18 +96,147 @@ describe('triggers routes', () => {
     expect(res.json().error).toBe('validation_error');
   });
 
-  it('constraint violation: creating a trigger for a nonexistent pipeline version is a 409', async () => {
+  it('creating a trigger for a nonexistent pipeline version is a 404 (same shape as a missing resource, not a DB-constraint 409)', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/triggers',
       payload: triggerBody('pv_does_not_exist'),
     });
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error).toBe('conflict');
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('not_found');
   });
 
   it('404 for a missing trigger', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/triggers/trig_missing' });
     expect(res.statusCode).toBe(404);
+  });
+
+  describe('pipelineVersionId cross-owner reference seam', () => {
+    let otherOwnerVersionId: string;
+
+    beforeAll(() => {
+      const pipeline = createPipeline(app.db, { ownerId: 'someone-else', name: 'Not mine' });
+      const version = createPipelineVersion(app.db, {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      otherOwnerVersionId = version.id;
+    });
+
+    it('POST: binding a pipelineVersionId owned by a different owner is 404, indistinguishable from a missing one', async () => {
+      const missingRes = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: triggerBody('pv_does_not_exist'),
+      });
+      const crossOwnerRes = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: triggerBody(otherOwnerVersionId),
+      });
+      // Same status code and error shape either way — the client-visible id
+      // in the message is the id it already supplied itself (not a leak);
+      // what must never differ is 404-missing vs 404-unowned vs a 201/409
+      // split that would let a caller distinguish "doesn't exist" from
+      // "exists but isn't yours".
+      expect(crossOwnerRes.statusCode).toBe(404);
+      expect(crossOwnerRes.statusCode).toBe(missingRes.statusCode);
+      expect(crossOwnerRes.json().error).toBe('not_found');
+      expect(crossOwnerRes.json().error).toBe(missingRes.json().error);
+    });
+
+    it('POST: binding an owned pipelineVersionId still works', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: triggerBody(pipelineVersionId),
+      });
+      expect(res.statusCode).toBe(201);
+    });
+
+    it('PATCH: rebinding pipelineVersionId to one owned by a different owner is 404', async () => {
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: triggerBody(pipelineVersionId),
+      });
+      const trigger = created.json();
+
+      const patchRes = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${trigger.id}`,
+        payload: { pipelineVersionId: otherOwnerVersionId },
+      });
+      expect(patchRes.statusCode).toBe(404);
+
+      // The trigger's binding is untouched by the rejected patch.
+      const getRes = await app.inject({ method: 'GET', url: `/api/triggers/${trigger.id}` });
+      expect(getRes.json().pipelineVersionId).toBe(pipelineVersionId);
+    });
+
+    it('PATCH: rebinding pipelineVersionId to another owned version still works', async () => {
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: triggerBody(pipelineVersionId),
+      });
+      const trigger = created.json();
+
+      const anotherOwnedPipeline = createPipeline(app.db, { ownerId: 'local', name: 'Also mine' });
+      const anotherOwnedVersion = createPipelineVersion(app.db, {
+        pipelineId: anotherOwnedPipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+
+      const patchRes = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${trigger.id}`,
+        payload: { pipelineVersionId: anotherOwnedVersion.id },
+      });
+      expect(patchRes.statusCode).toBe(200);
+      expect(patchRes.json().pipelineVersionId).toBe(anotherOwnedVersion.id);
+    });
+  });
+
+  describe('TriggerPublic projection', () => {
+    it('strips webhook.secretRef from create/get/list/update responses', async () => {
+      const webhookBody = {
+        ...triggerBody(pipelineVersionId),
+        mode: 'webhook' as const,
+        schedule: null,
+        webhook: { secretRef: 'secret_should_never_leak', idempotencyWindowSeconds: 300 },
+      };
+
+      const createRes = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: webhookBody,
+      });
+      expect(createRes.statusCode).toBe(201);
+      const created = createRes.json();
+      expect(created.webhook).toEqual({ idempotencyWindowSeconds: 300 });
+      expect(JSON.stringify(created)).not.toContain('secret_should_never_leak');
+
+      const getRes = await app.inject({ method: 'GET', url: `/api/triggers/${created.id}` });
+      expect(JSON.stringify(getRes.json())).not.toContain('secret_should_never_leak');
+
+      const listRes = await app.inject({ method: 'GET', url: '/api/triggers' });
+      expect(JSON.stringify(listRes.json())).not.toContain('secret_should_never_leak');
+
+      const patchRes = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${created.id}`,
+        payload: { enabled: false },
+      });
+      expect(JSON.stringify(patchRes.json())).not.toContain('secret_should_never_leak');
+    });
   });
 });

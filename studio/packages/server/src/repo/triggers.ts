@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   NewTriggerSchema,
   TriggerSchema,
@@ -27,11 +27,30 @@ export function getTrigger(db: Db, id: string): Trigger | null {
   return row ? TriggerSchema.parse(row) : null;
 }
 
-export function listTriggers(db: Db, pipelineVersionId?: string): Trigger[] {
+export interface ListTriggersFilter {
+  pipelineVersionId?: string;
+  /** Filters in SQL, like `listConnections`/`listPipelines` — never loaded
+   * then filtered in the route. */
+  ownerId?: string;
+}
+
+export function listTriggers(db: Db, filter: ListTriggersFilter = {}): Trigger[] {
+  const conditions = [];
+  if (filter.pipelineVersionId !== undefined) {
+    conditions.push(eq(triggers.pipelineVersionId, filter.pipelineVersionId));
+  }
+  if (filter.ownerId !== undefined) {
+    conditions.push(eq(triggers.ownerId, filter.ownerId));
+  }
+
   const rows =
-    pipelineVersionId === undefined
-      ? db.select().from(triggers).all()
-      : db.select().from(triggers).where(eq(triggers.pipelineVersionId, pipelineVersionId)).all();
+    conditions.length > 0
+      ? db
+          .select()
+          .from(triggers)
+          .where(and(...conditions))
+          .all()
+      : db.select().from(triggers).all();
   return rows.map((row) => TriggerSchema.parse(row));
 }
 

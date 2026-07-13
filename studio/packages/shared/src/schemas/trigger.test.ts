@@ -5,8 +5,10 @@ import {
   NewTriggerSchema,
   RunWindowSchema,
   TriggerModeSchema,
+  TriggerPublicSchema,
   TriggerSchema,
   WebhookConfigSchema,
+  WebhookPublicConfigSchema,
 } from './trigger.js';
 
 describe('TriggerModeSchema', () => {
@@ -124,5 +126,34 @@ describe('NewTriggerSchema', () => {
     void createdAt;
     void updatedAt;
     expect(NewTriggerSchema.parse(insert)).toEqual(insert);
+  });
+});
+
+describe('WebhookPublicConfigSchema', () => {
+  it('never carries secretRef', () => {
+    const parsed = WebhookPublicConfigSchema.parse({
+      secretRef: 'secret_1',
+      idempotencyWindowSeconds: 300,
+    });
+    expect(parsed).not.toHaveProperty('secretRef');
+    expect(parsed).toEqual({ idempotencyWindowSeconds: 300 });
+  });
+});
+
+describe('TriggerPublicSchema', () => {
+  it('never carries webhook.secretRef', () => {
+    const webhookTrigger = {
+      ...trigger,
+      mode: 'webhook',
+      webhook: { secretRef: 'secret_1', idempotencyWindowSeconds: 300 },
+    };
+    const parsed = TriggerPublicSchema.parse(webhookTrigger);
+    expect(parsed.webhook).not.toHaveProperty('secretRef');
+    expect(parsed.webhook).toEqual({ idempotencyWindowSeconds: 300 });
+  });
+
+  it('round-trips a null webhook unchanged', () => {
+    const parsed = TriggerPublicSchema.parse(trigger);
+    expect(parsed.webhook).toBeNull();
   });
 });

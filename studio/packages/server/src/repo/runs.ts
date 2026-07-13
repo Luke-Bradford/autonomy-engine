@@ -34,6 +34,9 @@ export interface ListRunsFilter {
   pipelineVersionId?: string;
   triggerId?: string;
   parentRunId?: string;
+  /** Filters in SQL, like `listConnections`/`listPipelines` — never loaded
+   * then filtered in the route. */
+  ownerId?: string;
 }
 
 export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
@@ -46,6 +49,9 @@ export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
   }
   if (filter.parentRunId !== undefined) {
     conditions.push(eq(runs.parentRunId, filter.parentRunId));
+  }
+  if (filter.ownerId !== undefined) {
+    conditions.push(eq(runs.ownerId, filter.ownerId));
   }
 
   const rows =

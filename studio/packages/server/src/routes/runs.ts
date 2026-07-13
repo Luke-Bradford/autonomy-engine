@@ -1,6 +1,19 @@
+import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
 import { getRun, listRunEvents, listRuns } from '../repo/index.js';
 import { requireOwned } from './util.js';
+
+/**
+ * `pipelineVersionId`/`triggerId`/`parentRunId` are opaque ids, not
+ * fielded/typed values — validated only for shape (non-empty strings) before
+ * they reach the repo layer, same discipline every request-body route
+ * already applies via a Zod schema.
+ */
+const ListRunsQuerystringSchema = z.object({
+  pipelineVersionId: z.string().min(1).optional(),
+  triggerId: z.string().min(1).optional(),
+  parentRunId: z.string().min(1).optional(),
+});
 
 /**
  * READ-ONLY: runs are created by the engine/scheduler in later phases (P2-P4)
@@ -9,15 +22,16 @@ import { requireOwned } from './util.js';
 export const runsRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
 
-  fastify.get<{
-    Querystring: { pipelineVersionId?: string; triggerId?: string; parentRunId?: string };
-  }>('/api/runs', async (request) => {
-    const { pipelineVersionId, triggerId, parentRunId } = request.query;
-    // `listRuns`'s filter doesn't support `ownerId` at the repo layer —
-    // owner scoping is applied here, same as `triggers.ts`.
-    return listRuns(db, { pipelineVersionId, triggerId, parentRunId }).filter(
-      (run) => run.ownerId === request.principal.ownerId,
+  fastify.get('/api/runs', async (request) => {
+    const { pipelineVersionId, triggerId, parentRunId } = ListRunsQuerystringSchema.parse(
+      request.query,
     );
+    return listRuns(db, {
+      pipelineVersionId,
+      triggerId,
+      parentRunId,
+      ownerId: request.principal.ownerId,
+    });
   });
 
   fastify.get<{ Params: { id: string } }>('/api/runs/:id', async (request) => {
