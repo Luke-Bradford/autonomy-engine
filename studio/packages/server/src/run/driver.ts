@@ -1,0 +1,203 @@
+import {
+  createEngine,
+  resolveRunParams,
+  type Engine,
+  type EngineCommand,
+  type EngineEvent,
+  type PipelineVersion,
+  type Run,
+  type RunLifecycleStatus,
+  type RunState,
+} from '@autonomy-studio/shared';
+import { getRun, updateRun } from '../repo/runs.js';
+import type { Db } from '../repo/types.js';
+import { appendEngineEvent, loadEngineEvents } from './events.js';
+
+/**
+ * P2d — the run DRIVER: the one impure boundary that turns the pure reducer's
+ * COMMANDS into durable side effects and folds the resulting EVENTS back. The
+ * engine (`@autonomy-studio/shared`) has no I/O; the driver owns the DB writes
+ * and the executor hand-off, so the reducer stays replayable.
+ *
+ * The loop (per the P2 spec's "commands out, state changes only on events"):
+ *   1. the reducer emits commands (`dispatchNode` / `startChild` / `finishRun`);
+ *   2. the driver PERFORMS each command, producing durable event(s);
+ *   3. each event is APPENDED to `run_events` and then FOLDED — only the fold
+ *      changes state — yielding the next batch of commands;
+ *   4. repeat until the queue drains or the run reaches a terminal fact.
+ * A crash between "command emitted" and "event appended" simply re-emits the
+ * command on the next replay (boot reconcile), so no work is lost or doubled.
+ *
+ * The EXECUTOR (which actually runs an activity via its connector) is injected:
+ * P2 tests pass a synchronous STUB; P3 supplies the real `p-limit` worker pool.
+ * The driver owns nothing connector-specific — it only sequences reduce↔persist.
+ */
+
+/** Resolve a run's immutable pipeline version (its graph + declared params). */
+export type DocResolver = (pipelineVersionId: string) => PipelineVersion;
+
+/** The commands an executor performs — `finishRun` is handled by the driver. */
+export type ExecutorCommand = Extract<EngineCommand, { type: 'dispatchNode' | 'startChild' }>;
+
+/**
+ * Performs a single reducer command and returns the durable event(s) it
+ * produced, IN ORDER. For a `dispatchNode` the real executor eventually yields
+ * `node.dispatched{idempotent}` then a terminal `node.succeeded`/`node.failed`;
+ * for a `startChild` it yields a `call.returned`. A P2 stub returns them
+ * synchronously; the async signature is what P3's real (subprocess) executor
+ * needs. The driver appends+folds whatever events come back — the executor
+ * never touches the DB or state itself.
+ *
+ * CRASH-SAFETY CONTRACT (load-bearing for the boot reconciler — P3 MUST honour
+ * it): `node.dispatched{idempotent}` MUST become durable BEFORE the activity's
+ * side effect begins. The reconciler recovers a `dispatched` node by its
+ * PERSISTED idempotent flag (re-run if idempotent, else freeze the run), but a
+ * node left `ready` — the reducer decided a dispatch whose `node.dispatched`
+ * never persisted — is re-dispatched blindly, on the premise the side effect
+ * never started. That premise holds ONLY if `node.dispatched` is durable first.
+ * A P3 executor that runs the side effect and THEN returns
+ * `[node.dispatched, terminal]` as one batch (as the P2 stub does — sound only
+ * because it has no real side effect) would violate this: a crash after a
+ * billed LLM call / spawned subprocess but before the append would leave the
+ * node `ready` with no idempotent record → a silent double-execution on resume.
+ * P3 must append `node.dispatched` as its own durable step ahead of the work.
+ */
+export interface Executor {
+  perform(command: ExecutorCommand, runId: string): EngineEvent[] | Promise<EngineEvent[]>;
+}
+
+export interface DriverDeps {
+  db: Db;
+  resolveDoc: DocResolver;
+  executor: Executor;
+}
+
+/** Run-lifecycle statuses that are terminal (the run stops advancing). */
+const TERMINAL_RUN: ReadonlySet<RunLifecycleStatus> = new Set<RunLifecycleStatus>([
+  'success',
+  'failure',
+  'interrupted',
+]);
+
+/**
+ * A belt-and-suspenders bound on driver iterations. The reducer already
+ * GUARANTEES termination (every back-edge/container has a bounce/round cap, and
+ * `validateDoc` requires them), so a validated doc can never reach this. It
+ * exists only so an unforeseen reducer bug fails a run SAFELY (a `capped`
+ * terminal) instead of spinning this loop forever in a headless server.
+ */
+const MAX_DRIVER_STEPS = 1_000_000;
+
+/** Build the pure engine for a run from its immutable pipeline version's graph. */
+export function buildEngine(pv: PipelineVersion): Engine {
+  return createEngine({ nodes: pv.nodes, edges: pv.edges, containers: pv.containers });
+}
+
+/**
+ * Project the DB run's current lifecycle status/finishedAt from the reduced
+ * `RunState`. Only touches `runs` when something actually changed (idempotent);
+ * `finishedAt` is stamped ONCE, the first time the run reaches a terminal
+ * status, and never moved. `RunLifecycleStatus` is a subset of the DB's
+ * `RunStatus`, so the mapping is identity.
+ */
+export function syncRunLifecycle(db: Db, runId: string, state: RunState): void {
+  const existing = getRun(db, runId);
+  if (existing === null) return;
+  const status = state.status;
+  const finishedAt = TERMINAL_RUN.has(status)
+    ? (existing.finishedAt ?? Date.now())
+    : existing.finishedAt;
+  if (existing.status === status && existing.finishedAt === finishedAt) return;
+  updateRun(db, runId, { status, finishedAt });
+}
+
+/**
+ * The reduce↔persist fixpoint. Drains `commands` (and everything they cascade),
+ * appending every produced event and folding it. Stops when the queue empties
+ * or the run reaches a terminal fact. Returns the final projected state.
+ *
+ * `finishRun` is the DRIVER's own command (it appends `run.finished` + persists
+ * the terminal `runs.status`); `dispatchNode`/`startChild` go to the executor.
+ */
+export async function pump(
+  deps: DriverDeps,
+  engine: Engine,
+  initialState: RunState,
+  commands: EngineCommand[],
+): Promise<RunState> {
+  let state = initialState;
+  const queue: EngineCommand[] = [...commands];
+  let steps = 0;
+
+  while (queue.length > 0) {
+    if (++steps > MAX_DRIVER_STEPS) {
+      // Fail-safe: terminalize rather than hang. See MAX_DRIVER_STEPS.
+      const capped: EngineEvent = {
+        type: 'run.finished',
+        runId: state.runId,
+        outcome: 'failure',
+        reason: 'capped',
+      };
+      appendEngineEvent(deps.db, capped);
+      state = engine.reduce(state, capped).state;
+      syncRunLifecycle(deps.db, state.runId, state);
+      break;
+    }
+
+    const command = queue.shift()!;
+    const events: EngineEvent[] =
+      command.type === 'finishRun'
+        ? [
+            {
+              type: 'run.finished',
+              runId: state.runId,
+              outcome: command.outcome,
+              reason: command.reason,
+            },
+          ]
+        : await Promise.resolve(deps.executor.perform(command, state.runId));
+
+    let terminal = false;
+    for (const event of events) {
+      appendEngineEvent(deps.db, event);
+      const result = engine.reduce(state, event);
+      state = result.state;
+      syncRunLifecycle(deps.db, state.runId, state);
+      queue.push(...result.commands);
+      if (TERMINAL_RUN.has(state.status)) {
+        terminal = true;
+        break;
+      }
+    }
+    if (terminal) break;
+  }
+
+  return state;
+}
+
+/**
+ * Start a fresh run: resolve its params (secrets stripped), append `run.started`
+ * and drive it to quiescence. Refuses a run that already has a log — starting is
+ * for a `pending` run; a crashed run is resumed by the boot reconciler instead.
+ */
+export async function startRun(deps: DriverDeps, run: Run): Promise<RunState> {
+  if (loadEngineEvents(deps.db, run.id).length > 0) {
+    throw new Error(`run '${run.id}' already has an event log — use the boot reconciler to resume`);
+  }
+  const pv = deps.resolveDoc(run.pipelineVersionId);
+  const resolvedParams = resolveRunParams(pv, run.params);
+  const engine = buildEngine(pv);
+
+  const started: EngineEvent = {
+    type: 'run.started',
+    runId: run.id,
+    pipelineVersionId: run.pipelineVersionId,
+    params: resolvedParams,
+  };
+  appendEngineEvent(deps.db, started);
+  const result = engine.reduce(engine.seedState(), started);
+  syncRunLifecycle(deps.db, run.id, result.state);
+  return pump(deps, engine, result.state, result.commands);
+}
+
+export { TERMINAL_RUN };

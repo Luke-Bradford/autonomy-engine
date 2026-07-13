@@ -908,16 +908,31 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
-   * `run.resumed` (boot reconcile): re-emit the pending COMMAND for every node
-   * the reducer had already decided but whose driver-side event never landed
-   * before the crash. Two cases:
-   *   - a `ready` node → re-emit `dispatchNode` (the driver never accepted it).
-   *   - a `waiting` call node → re-emit `startChild`. A crash between emitting
-   *     `startChild` and the child actually being created leaves the node stuck
-   *     `waiting` forever otherwise; the DETERMINISTIC `childRunId` makes the
-   *     re-emit idempotent (the driver's child creation keys on it).
-   * Both re-emits carry the node's EXISTING `currentAttemptId` (no new attempt),
-   * so a duplicate late event from the original try is stale-rejected.
+   * `run.resumed` (boot reconcile): re-derive every COMMAND the reducer had
+   * already decided but whose driver-side effect never landed before the crash.
+   * Two mechanisms, because a crash can drop TWO kinds of ephemeral command:
+   *
+   * 1. A node whose command was emitted but its accepting event never persisted:
+   *    - a `ready` node → re-emit `dispatchNode` (the driver never accepted it).
+   *    - a `waiting` call node → re-emit `startChild`. A crash between emitting
+   *      `startChild` and the child being created leaves the node stuck
+   *      `waiting` forever otherwise; the DETERMINISTIC `childRunId` makes the
+   *      re-emit idempotent (the driver's child creation keys on it).
+   *    Both re-emits carry the node's EXISTING `currentAttemptId` (no new
+   *    attempt), so a duplicate late event from the original try is stale-
+   *    rejected. `settle` (below) CANNOT re-derive these — those nodes are no
+   *    longer `pending`, so its readiness walk skips them.
+   *
+   * 2. The walk's own ephemeral output — re-run `settle`. Its `finishRun` /
+   *    dispatch commands live only in the reducer's return value, so a crash
+   *    between a node's terminal event and the `run.finished` the driver was
+   *    about to append DROPS the `finishRun`: the log ends at `node.succeeded`
+   *    with no terminal fact, and the projection is stuck `running` with no
+   *    live node for mechanism (1) to recover. Re-running `settle` regenerates
+   *    that `finishRun` (and dispatches any genuinely-pending newly-ready node,
+   *    and re-fires the unhandled-failure short-circuit), so the reconciler can
+   *    finalize the run. `settle` skips the `ready`/`waiting`/`dispatched` nodes
+   *    handled above, so the two mechanisms never emit for the same node.
    */
   function onResumed(state: RunState, diagnostics: string[]): ReduceResult {
     const commands: EngineCommand[] = [];
@@ -958,7 +973,8 @@ export function createEngine(doc: EngineDoc): Engine {
         });
       }
     }
-    return { state, commands, diagnostics };
+    const settled = settle(state, diagnostics);
+    return { state: settled.state, commands: [...commands, ...settled.commands], diagnostics };
   }
 
   // --- the pure reducer (the exact 2-arg contract) --------------------------
@@ -973,7 +989,10 @@ export function createEngine(doc: EngineDoc): Engine {
     if (event.runId !== state.runId) return { state, commands: [], diagnostics };
 
     if (state.status !== 'running') {
-      if (event.type !== 'run.finished') {
+      // `run.finished` / `run.interrupted` are terminal-transition events: a
+      // duplicate one on an already-terminal run is a benign no-op, not a
+      // malformed log, so it earns no diagnostic.
+      if (event.type !== 'run.finished' && event.type !== 'run.interrupted') {
         diagnostics.push(`event '${event.type}' on a '${state.status}' run is ignored`);
       }
       return { state, commands: [], diagnostics };
@@ -1010,6 +1029,12 @@ export function createEngine(doc: EngineDoc): Engine {
         return onRetryRequested(state, event, diagnostics);
       case 'run.resumed':
         return onResumed(state, diagnostics);
+      case 'run.interrupted':
+        // Terminal: the boot reconciler froze a run whose non-idempotent node
+        // was in flight at crash time. No command — the run stops here (the
+        // in-flight node stays `dispatched`/needs-attention); an operator
+        // decides what to do next. See the event's doc in `types.ts`.
+        return { state: { ...state, status: 'interrupted' }, commands: [], diagnostics };
     }
   }
 

@@ -561,6 +561,95 @@ describe('run.finished totality guard', () => {
 });
 
 // ===========================================================================
+// `run.interrupted` — the boot-reconciler's "cannot safely resume" terminal
+// ===========================================================================
+
+describe('run.interrupted', () => {
+  it('folds a running run to interrupted, leaving the in-flight node dispatched', () => {
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state; // dispatch a#0
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state; // a is `dispatched`
+    const r = eng.reduce(s, { type: 'run.interrupted', runId: RUN, reason: 'non_idempotent' });
+    expect(r.state.status).toBe('interrupted');
+    // The node is NOT terminalized — it stays dispatched/needs-attention.
+    expect(r.state.nodes.a!.status).toBe('dispatched');
+    expect(r.commands).toEqual([]);
+    expect(r.diagnostics).toEqual([]);
+  });
+
+  it('is a benign no-op (no diagnostic) on an already-terminal run', () => {
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    s = eng.reduce(s, succeeded('a', attempt('a'))).state;
+    s = eng.reduce(s, { type: 'run.finished', runId: RUN, outcome: 'success' }).state;
+    const r = eng.reduce(s, { type: 'run.interrupted', runId: RUN, reason: 'late' });
+    expect(r.state.status).toBe('success'); // unchanged
+    expect(r.diagnostics).toEqual([]);
+  });
+
+  it('ignores a run.interrupted for a DIFFERENT run', () => {
+    const eng = engine([node('a')]);
+    const s = eng.reduce(eng.seedState(), started()).state;
+    const r = eng.reduce(s, { type: 'run.interrupted', runId: 'other', reason: 'x' });
+    expect(r.state.status).toBe('running');
+    expect(r.diagnostics).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// `run.resumed` reconstructs a crash-dropped `finishRun`
+// ===========================================================================
+
+describe('run.resumed reconstructs a dropped finishRun', () => {
+  it('re-emits finishRun{success} for a run whose every node is terminal but run.finished never landed', () => {
+    // Simulate a crash between the terminal node event and run.finished: fold up
+    // to node.succeeded (taking only .state, so the emitted finishRun is dropped
+    // exactly as a crash would drop it). The projection is stuck `running`.
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    s = eng.reduce(s, succeeded('a', attempt('a'))).state;
+    expect(s.status).toBe('running');
+    expect(s.nodes.a!.status).toBe('success');
+
+    // A ready/waiting-only resume would emit NOTHING here (no live node); the
+    // walk re-run is what regenerates the dropped terminal command.
+    const r = eng.reduce(s, { type: 'run.resumed', runId: RUN, reason: 'boot_reconcile' });
+    expect(r.commands).toContainEqual({ type: 'finishRun', outcome: 'success' });
+  });
+
+  it('re-emits finishRun{failure} for a crash-dropped unhandled failure', () => {
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    s = eng.reduce(s, failed('a', attempt('a'))).state; // finishRun{failure} dropped
+    expect(s.status).toBe('running');
+
+    const r = eng.reduce(s, { type: 'run.resumed', runId: RUN, reason: 'boot_reconcile' });
+    expect(r.commands).toContainEqual({
+      type: 'finishRun',
+      outcome: 'failure',
+      reason: 'node_failed:a',
+    });
+  });
+
+  it('still re-emits a ready node dispatch (mechanism 1) alongside the walk re-run', () => {
+    // A chain a→b: a succeeded, b dispatch decided (ready) but node.dispatched
+    // never landed. Resume must re-emit b's dispatch (not finishRun — b is live).
+    const eng = engine([node('a'), node('b')], [edge('a', 'b', 'success')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    s = eng.reduce(s, succeeded('a', attempt('a'))).state; // emits dispatch b → b ready
+    expect(s.nodes.b!.status).toBe('ready');
+
+    const r = eng.reduce(s, { type: 'run.resumed', runId: RUN, reason: 'boot_reconcile' });
+    expect(dispatchIds(r.commands)).toEqual(['b']);
+    expect(r.commands.some((c) => c.type === 'finishRun')).toBe(false);
+  });
+});
+
+// ===========================================================================
 // `node.retryRequested` — only a dispatched/ready node may be retried
 // ===========================================================================
 
