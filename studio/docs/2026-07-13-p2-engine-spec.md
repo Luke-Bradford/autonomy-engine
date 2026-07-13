@@ -96,6 +96,15 @@ no other path). **Readiness:**
   → the node is `skipped`; else `pending`.
 - `join: any` → ready when ≥1 incoming edge is `satisfied`; `skipped` only when ALL
   are `impossible`; else `pending`.
+
+> Footnote: the impl's `join:all` "any dead → skipped" check treats `dead` as
+> `impossible` ∪ `unsatisfied-terminal`, not `impossible` alone — an
+> `unsatisfied-terminal` edge (predecessor terminal on a channel this edge does
+> NOT match) can never become `satisfied` either, so `join:all` must skip on it
+> too, or the node would wait on it forever (a deadlock). Read literally, the
+> bullet above says "if ANY is `impossible`"; a future edit should not narrow
+> the code to match that prose — `unsatisfied-terminal` skips `join:all` too.
+
 **Skip propagation:** a `skipped` node makes its outgoing edges `impossible` for
 successors (recurse). A node with NO incoming edges is a root (ready at start).
 
