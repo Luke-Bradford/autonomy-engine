@@ -24,24 +24,38 @@ export function resolvePort(raw: string | undefined): number {
 
 const PORT = resolvePort(process.env.PORT);
 const HOST = '127.0.0.1';
-const DB_PATH = process.env.DB_PATH ?? 'data/app.sqlite';
 
-export async function buildApp() {
+export interface BuildAppOptions {
+  /** Overrides `process.env.DB_PATH` / the built-in default. Call-time only — never a module-eval-time global. */
+  dbPath?: string;
+  /** Overrides `process.env.AUTONOMY_MASTER_KEY_FILE` for this app instance only; threaded through to `resolveMasterKey`. */
+  masterKeyFile?: string;
+}
+
+export async function buildApp(opts?: BuildAppOptions) {
   const fastify = Fastify({ logger: true });
+  const dbPath = opts?.dbPath ?? process.env.DB_PATH ?? 'data/app.sqlite';
 
   // Resolve the secret-encryption master key ONCE per process, at boot,
   // fail-fast: `resolveMasterKey()` throws a clear error (never falls back
   // to plaintext) if it cannot resolve one, which rejects this promise and
   // must stop the server from ever accepting a request — see
   // `secrets/secrets.ts` for the resolution order (env -> key file ->
-  // generate-with-warning) and the module's threat-model doc.
-  const masterKeyResolution = await resolveMasterKey();
+  // generate-with-warning) and the module's threat-model doc. When
+  // `opts.masterKeyFile` is given (test isolation), it takes precedence over
+  // the process-wide `AUTONOMY_MASTER_KEY_FILE` env var so concurrent app
+  // instances in the same process never contend over one key file.
+  const masterKeyEnv =
+    opts?.masterKeyFile !== undefined
+      ? { ...process.env, AUTONOMY_MASTER_KEY_FILE: opts.masterKeyFile }
+      : process.env;
+  const masterKeyResolution = await resolveMasterKey(masterKeyEnv);
   fastify.log.info({ masterKeySource: masterKeyResolution.source }, 'secret master key resolved');
   if (masterKeyResolution.warning) {
     fastify.log.warn(masterKeyResolution.warning);
   }
 
-  const { db } = openDb(DB_PATH);
+  const { db } = openDb(dbPath);
   fastify.decorate('db', db);
   fastify.decorate('masterKey', masterKeyResolution.key);
 
