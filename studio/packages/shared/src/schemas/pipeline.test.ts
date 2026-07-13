@@ -7,6 +7,7 @@ import {
   NewPipelineVersionSchema,
   NodeSchema,
   OutputSchema,
+  OutputTypeSchema,
   ParamSchema,
   ParamTypeSchema,
   PipelineSchema,
@@ -15,7 +16,7 @@ import {
 } from './pipeline.js';
 
 describe('ParamTypeSchema', () => {
-  it.each(['string', 'number', 'boolean', 'json'])('accepts %s', (t) => {
+  it.each(['string', 'number', 'boolean', 'json', 'secret'])('accepts %s', (t) => {
     expect(ParamTypeSchema.parse(t)).toBe(t);
   });
 
@@ -40,10 +41,29 @@ describe('ParamSchema', () => {
   });
 });
 
+describe('OutputTypeSchema', () => {
+  it.each(['string', 'number', 'boolean', 'json'])('accepts %s', (t) => {
+    expect(OutputTypeSchema.parse(t)).toBe(t);
+  });
+
+  it('rejects secret (an output is never secret-typed — no leak channel)', () => {
+    expect(() => OutputTypeSchema.parse('secret')).toThrow();
+  });
+});
+
 describe('OutputSchema', () => {
   it('round-trips a valid output', () => {
     const output = { name: 'summary', type: 'string' };
     expect(OutputSchema.parse(output)).toEqual(output);
+  });
+
+  it.each(['number', 'boolean', 'json'])('round-trips a %s-typed output', (type) => {
+    const output = { name: 'x', type };
+    expect(OutputSchema.parse(output)).toEqual(output);
+  });
+
+  it('rejects a secret-typed output (outputs are never stripped downstream)', () => {
+    expect(() => OutputSchema.parse({ name: 'summary', type: 'secret' })).toThrow();
   });
 });
 

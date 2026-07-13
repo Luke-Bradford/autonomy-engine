@@ -7,7 +7,11 @@ import { CATALOG_VERSION } from './version.js';
  * unknown keys refused, per the target architecture's mined param-language
  * semantics).
  */
-export const ParamTypeSchema = z.enum(['string', 'number', 'boolean', 'json']);
+// `secret` names a param whose value is a credential LABEL, never substituted:
+// the `${}` engine STRIPS secret params from every substitution context and
+// `validateRefs` refuses a `${params.<secret>}` ref anywhere. Its value resolves
+// only executor-side at the env sink (see `engine/params.ts`).
+export const ParamTypeSchema = z.enum(['string', 'number', 'boolean', 'json', 'secret']);
 export type ParamType = z.infer<typeof ParamTypeSchema>;
 
 export const ParamSchema = z.object({
@@ -20,9 +24,18 @@ export const ParamSchema = z.object({
 });
 export type Param = z.infer<typeof ParamSchema>;
 
+// Outputs get their OWN type vocabulary: every `ParamType` EXCEPT `secret`. An
+// output flows raw into `ctx.nodeOutputs` and on into downstream `${}`
+// substitution — unlike params, outputs are never stripped — so a
+// secret-typed output would be a live credential-leak channel. `secret` names
+// a param-only concept (a credential LABEL); it is nonsensical as a produced
+// value.
+export const OutputTypeSchema = ParamTypeSchema.exclude(['secret']);
+export type OutputType = z.infer<typeof OutputTypeSchema>;
+
 export const OutputSchema = z.object({
   name: z.string().min(1),
-  type: ParamTypeSchema,
+  type: OutputTypeSchema,
   description: z.string().optional(),
 });
 export type Output = z.infer<typeof OutputSchema>;

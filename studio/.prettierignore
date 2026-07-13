@@ -4,3 +4,7 @@ pnpm-lock.yaml
 *.sqlite
 *.sqlite-*
 packages/server/drizzle/migrations/*.sql
+# Prose docs are IDE-markdown-linted, not prettier-gated: prettier's markdown
+# reflow mangles hard-wrapped lines around inline code (e.g. the P2 spec's
+# `${nodeId}#${n}` lines). Code inside docs is illustrative, not compiled.
+docs
