@@ -65,6 +65,36 @@ export function runMigrations(
       const sql = readFileSync(join(migrationsDir, file), 'utf8');
       const applyMigration = sqlite.transaction(() => {
         sqlite.exec(sql);
+
+        // Integrity check runs INSIDE this migration's transaction, BEFORE it
+        // is recorded in `__migrations`. With `foreign_keys` OFF for the batch
+        // (required for the table-recreate procedure above), a migration that
+        // introduces a dangling reference would NOT raise at apply time.
+        // `PRAGMA foreign_key_check` is a point-in-time integrity scan
+        // independent of the enforcement pragma (verified empirically: same
+        // violations whether `foreign_keys` is ON or OFF). Throwing here rolls
+        // back the WHOLE transaction — including the `__migrations` insert — so
+        // a bad migration fails loudly AND is NOT persisted: it is neither
+        // committed nor marked applied, so a corrected migration + restart
+        // applies cleanly (rather than persist-then-throw, which would mark the
+        // bad migration "applied", skip it on restart, and wedge the app on
+        // this same check forever).
+        const violations = sqlite.pragma('foreign_key_check') as Array<{
+          table: string;
+          rowid: number | bigint | null;
+          parent: string;
+          fkid: number;
+        }>;
+        if (violations.length > 0) {
+          const [first] = violations;
+          throw new Error(
+            `Migration integrity violation in '${file}': left a dangling foreign key — table ` +
+              `'${first!.table}' rowid ${String(first!.rowid)} references missing row in ` +
+              `'${first!.parent}' (${violations.length} violation(s) total). Migration rolled ` +
+              `back — not applied.`,
+          );
+        }
+
         sqlite
           .prepare('INSERT INTO __migrations (name, applied_at) VALUES (?, ?)')
           .run(file, new Date().toISOString());
@@ -74,31 +104,6 @@ export function runMigrations(
     }
   } finally {
     if (foreignKeysWereOn) sqlite.pragma('foreign_keys = ON');
-  }
-
-  // With `foreign_keys` OFF for the whole batch above (required for the
-  // table-recreate procedure — see the comment above), a migration that
-  // introduces a dangling reference (e.g. an INSERT/UPDATE against a
-  // recreated table that no longer satisfies an FK) would NOT raise at
-  // apply time — enforcement was off. `PRAGMA foreign_key_check` is a
-  // point-in-time integrity scan that is independent of the enforcement
-  // pragma (verified empirically: it reports the same violations whether
-  // `foreign_keys` is ON or OFF), so running it once here, after the whole
-  // batch, catches anything a bad migration left behind and fails loudly
-  // instead of silently persisting invalid refs.
-  const violations = sqlite.pragma('foreign_key_check') as Array<{
-    table: string;
-    rowid: number | bigint | null;
-    parent: string;
-    fkid: number;
-  }>;
-  if (violations.length > 0) {
-    const [first] = violations;
-    throw new Error(
-      `Migration integrity violation: applying [${applied.join(', ')}] left a dangling foreign ` +
-        `key — table '${first!.table}' rowid ${String(first!.rowid)} references missing row in ` +
-        `'${first!.parent}' (${violations.length} violation(s) total)`,
-    );
   }
 
   return { applied };

@@ -7,16 +7,19 @@ import { runMigrations } from '../migrate.js';
 
 /**
  * Regression test for the `PRAGMA foreign_key_check` guard `runMigrations`
- * runs after applying a batch (see `migrate.ts`): while `foreign_keys` is
- * OFF for the whole pending-migration batch (necessary for the 0003-style
- * table-recreate procedure), a migration that leaves a dangling FK reference
- * behind would otherwise apply silently — enforcement was off, so SQLite
- * never raises at INSERT time. These tests use a throwaway migrations
- * directory (via `runMigrations`'s `migrationsDir` param) with hand-crafted
- * `.sql` files, rather than the real `drizzle/migrations`, so a deliberately
- * bad migration never touches production migration history.
+ * runs INSIDE each migration's transaction, before recording it in
+ * `__migrations` (see `migrate.ts`): while `foreign_keys` is OFF for the
+ * pending-migration batch (necessary for the 0003-style table-recreate
+ * procedure), a migration that leaves a dangling FK reference behind would
+ * otherwise apply silently — enforcement was off, so SQLite never raises at
+ * INSERT time. Because the check runs in-transaction, a violation ROLLS BACK
+ * the migration (not committed, not marked applied) rather than persisting a
+ * bad migration and wedging the app on restart. These tests use a throwaway
+ * migrations directory (via `runMigrations`'s `migrationsDir` param) with
+ * hand-crafted `.sql` files, so a deliberately bad migration never touches
+ * production migration history.
  */
-describe('runMigrations: post-batch foreign_key_check', () => {
+describe('runMigrations: in-transaction foreign_key_check', () => {
   const createdDirs: string[] = [];
 
   afterEach(() => {
@@ -55,6 +58,20 @@ describe('runMigrations: post-batch foreign_key_check', () => {
     expect(() => runMigrations(sqlite, dir)).toThrow(
       /Migration integrity violation.*table 'child'.*rowid.*references missing row in 'parent'/s,
     );
+
+    // The guarantee: the bad migration is ROLLED BACK, not persisted — it is
+    // NOT recorded in `__migrations` (so a corrected migration + restart
+    // applies cleanly, rather than the bad one being marked "applied" and
+    // skipped forever), and its table changes are gone too (whole txn rolled
+    // back). This is what makes "fails loudly instead of persisting" true.
+    const recorded = sqlite.prepare('SELECT COUNT(*) AS n FROM __migrations').get() as {
+      n: number;
+    };
+    expect(recorded.n).toBe(0);
+    const childTable = sqlite
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='child'")
+      .get();
+    expect(childTable).toBeUndefined();
 
     sqlite.close();
   });
