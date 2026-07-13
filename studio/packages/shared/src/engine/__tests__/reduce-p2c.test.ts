@@ -196,6 +196,48 @@ describe('back-edges', () => {
     expect(Object.values(state.bounces)).toEqual([3]); // the 3rd exceeded cap 2
   });
 
+  it('does NOT fire while a parallel body sibling is still in-flight (no spurious invalid_event)', () => {
+    // gen fans out to fast + slow, both feed check (join:any). A back-edge
+    // check -> gen resets body {gen, fast, slow, check}. When check FAILS via the
+    // fast branch while `slow` is still dispatched, firing on the source alone
+    // would reset the in-flight `slow`; its late result would then fold onto a
+    // `pending` node → a spurious finishRun{invalid_event}. The whole-body gate
+    // holds the bounce until `slow` is terminal.
+    const eng = engine(
+      [node('gen'), node('fast'), node('slow'), node('check', { join: 'any' }), node('done')],
+      [
+        edge('gen', 'fast', 'success'),
+        edge('gen', 'slow', 'success'),
+        edge('fast', 'check', 'success'),
+        edge('slow', 'check', 'success'),
+        edge('check', 'gen', 'failure', { back: true, maxBounces: 3 }),
+        edge('check', 'done', 'success'),
+      ],
+    );
+    let s = eng.reduce(eng.seedState(), started()).state; // dispatch gen#0
+    s = eng.reduce(s, dispatched('gen', 'gen#0')).state;
+    s = eng.reduce(s, succeeded('gen', 'gen#0')).state; // fast#0 + slow#0 dispatched
+    s = eng.reduce(s, dispatched('fast', 'fast#0')).state;
+    s = eng.reduce(s, succeeded('fast', 'fast#0')).state; // check ready (join:any) → check#0
+    s = eng.reduce(s, dispatched('slow', 'slow#0')).state; // slow accepted, still in-flight
+    s = eng.reduce(s, dispatched('check', 'check#0')).state;
+    const atFail = eng.reduce(s, failed('check', 'check#0')); // back-edge satisfied but slow live
+    s = atFail.state;
+    expect(s.status).toBe('running');
+    expect(s.nodes.slow!.status).toBe('dispatched'); // NOT reset out from under the driver
+    expect(atFail.commands).toEqual([]); // held: waiting for slow to finish
+    expect(atFail.diagnostics.join(' ')).not.toContain('invalid_event');
+    expect(Object.keys(s.bounces)).toHaveLength(0); // no bounce fired yet
+
+    // slow's LATE result folds cleanly (slow terminal), THEN the back-edge fires.
+    const afterSlow = eng.reduce(s, succeeded('slow', 'slow#0'));
+    s = afterSlow.state;
+    expect(afterSlow.diagnostics.join(' ')).not.toContain('invalid');
+    expect(Object.values(s.bounces)).toEqual([1]); // fired exactly once, post-terminal
+    expect(s.nodes.gen!.status).toBe('ready'); // round 2 re-dispatched
+    expect(s.nodes.gen!.currentAttemptId).toBe('gen#1'); // fresh monotonic attempt
+  });
+
   it('edgeKey is STABLE across a doc edge reorder (same bounces key both ways)', () => {
     const fwd = edge('gen', 'check', 'success');
     const back = edge('check', 'gen', 'failure', { back: true, maxBounces: 2 });
@@ -268,6 +310,7 @@ describe('containers — stage', () => {
     );
     expect(state.nodes.a!.status).toBe('failure');
     expect(state.containers.stg!.status).toBe('failure'); // unhandled child failure
+    expect(state.containers.stg!.reason).toBe('child_failed:a'); // reason recorded
     expect(state.nodes.recover!.status).toBe('success'); // outer completion caught it
     expect(state.status).toBe('success');
   });
@@ -322,6 +365,7 @@ describe('containers — loop', () => {
       },
     );
     expect(state.containers.lp!.status).toBe('failure'); // capped
+    expect(state.containers.lp!.reason).toBe('capped'); // reason recorded
     expect(state.containers.lp!.round).toBe(1); // round 0 then round 1 hit the cap
     expect(state.nodes.recover!.status).toBe('success'); // outer completion caught the cap
     expect(state.status).toBe('success');
@@ -423,6 +467,50 @@ describe('call_pipeline', () => {
     expect(idA).toMatch(/^child_[0-9a-f]{8}$/);
   });
 
+  it('ignores a call.returned naming an UNEXPECTED childRunId (foreign/misrouted child)', () => {
+    // The event names the CURRENT attempt but the WRONG child — it must not
+    // terminalize the call node or store its (untrusted) outputs.
+    const eng = engine([callNode('caller', 'pv_child')]);
+    const r0 = eng.reduce(eng.seedState(), started());
+    const good = (r0.commands.find((c) => c.type === 'startChild') as { childRunId: string })
+      .childRunId;
+    const bad = eng.reduce(
+      r0.state,
+      returned('caller', 'caller#0', 'success', { leaked: 'x' }, 'child_deadbeef'),
+    );
+    expect(bad.state.nodes.caller!.status).toBe('waiting'); // NOT terminalized
+    expect(bad.state.outputs.caller).toBeUndefined(); // foreign outputs NOT stored
+    expect(bad.commands).toEqual([]);
+    expect(bad.diagnostics.join(' ')).toContain('unexpected childRunId');
+    // The genuine child (correct id) still resolves the call node.
+    const ok = eng.reduce(r0.state, returned('caller', 'caller#0', 'success', {}, good));
+    expect(ok.state.nodes.caller!.status).toBe('success');
+  });
+
+  it('run.resumed re-emits startChild for a WAITING call node (crash before child creation)', () => {
+    const eng = engine([callNode('caller', 'pv_child')]);
+    const r0 = eng.reduce(eng.seedState(), started());
+    const childRunId = (r0.commands.find((c) => c.type === 'startChild') as { childRunId: string })
+      .childRunId;
+    expect(r0.state.nodes.caller!.status).toBe('waiting');
+
+    const resumed = eng.reduce(r0.state, {
+      type: 'run.resumed',
+      runId: RUN,
+      reason: 'boot_reconcile',
+    });
+    const start = resumed.commands.find((c) => c.type === 'startChild') as Extract<
+      EngineCommand,
+      { type: 'startChild' }
+    >;
+    expect(start).toBeDefined();
+    expect(start.callNodeId).toBe('caller');
+    expect(start.attemptId).toBe('caller#0'); // SAME attempt — not a new dispatch
+    expect(start.childRunId).toBe(childRunId); // idempotent id → safe re-creation
+    expect(start.pipelineVersionId).toBe('pv_child');
+    expect(resumed.state).toEqual(r0.state); // resume emits commands; state unchanged
+  });
+
   it('ignores a STALE call.returned (an attemptId that is not the node current attempt)', () => {
     // A loop container re-dispatches the call node, minting a fresh attempt; a
     // late return for the PRIOR attempt must not fold.
@@ -434,9 +522,12 @@ describe('call_pipeline', () => {
       [edge('caller', 'check', 'success')],
       [loop('lp', ['caller', 'check'], '${nodes.check.output.done}', 5)],
     );
-    let s = eng.reduce(eng.seedState(), started()).state; // lp active; caller waiting caller#0
+    const r0 = eng.reduce(eng.seedState(), started()); // lp active; caller waiting caller#0
+    let s = r0.state;
+    const child0 = (r0.commands.find((c) => c.type === 'startChild') as { childRunId: string })
+      .childRunId;
     expect(s.nodes.caller!.currentAttemptId).toBe('caller#0');
-    s = eng.reduce(s, returned('caller', 'caller#0', 'success', {})).state; // caller success round 0
+    s = eng.reduce(s, returned('caller', 'caller#0', 'success', {}, child0)).state; // caller success round 0
     s = eng.reduce(s, dispatched('check', 'check#0')).state;
     s = eng.reduce(s, succeeded('check', 'check#0', { done: false })).state; // round 0 fails exit → reset
     // Round 1: caller re-dispatched with a NEW attempt.

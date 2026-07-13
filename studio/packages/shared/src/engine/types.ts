@@ -139,6 +139,9 @@ export const ContainerRunStateSchema = z.object({
   status: ContainerRunStatusSchema,
   round: z.number().int().nonnegative(),
   outputs: z.record(z.string(), z.unknown()),
+  /** Why a container terminated (`capped`, `child_failed`, `exitWhen_error`) —
+   * observability only; unset while active/pending or on a clean exit. */
+  reason: z.string().optional(),
 });
 export type ContainerRunState = z.infer<typeof ContainerRunStateSchema>;
 

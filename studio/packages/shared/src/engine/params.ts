@@ -526,10 +526,37 @@ export function validateDoc(
   options: ValidateDocOptions = {},
 ): string[] {
   const errors: string[] = [];
-  const nodeIdSet = new Set(doc.nodes.map((n) => n.id));
+  const nodeIdList = doc.nodes.map((n) => n.id);
+  const nodeIdSet = new Set(nodeIdList);
   const containers = doc.containers ?? [];
   const declared = new Map<string, Param>();
   for (const p of doc.params) declared.set(p.name, p);
+
+  // GLOBAL id uniqueness: node ids and container ids share ONE namespace (the
+  // projection keys `state.nodes` / `state.outputs` / `endpointOutcome` by id),
+  // so a duplicate or a node/container collision silently corrupts state.
+  const idKind = new Map<string, 'node' | 'container'>();
+  for (const id of nodeIdList) {
+    if (idKind.has(id)) errors.push(`duplicate node id '${id}' (ids must be globally unique)`);
+    else idKind.set(id, 'node');
+  }
+  for (const c of containers) {
+    const prior = idKind.get(c.id);
+    if (prior !== undefined) {
+      errors.push(
+        `container id '${c.id}' collides with an existing ${prior} id ` +
+          '(node and container ids share one namespace)',
+      );
+    } else idKind.set(c.id, 'container');
+  }
+
+  // Node-only forward reachability + the container index, for the back-edge
+  // reset-body (no-progress) guard below — computed via the SSOT helpers so the
+  // reducer and this validator agree on which nodes a bounce resets.
+  const containerById = new Map<string, Container>(containers.map((c) => [c.id, c]));
+  const nodeAdj = nodeForwardAdjacency(doc);
+  const descendants = new Map<string, Set<string>>();
+  for (const id of nodeIdList) descendants.set(id, forwardDescendants(id, nodeAdj));
 
   // Container children: existence + disjointness; loop/stage exit configuration.
   const childOwner = new Map<string, string>();
@@ -547,9 +574,10 @@ export function validateDoc(
         childOwner.set(ch, c.id);
       }
     }
-    if (c.kind === 'loop' && c.exitWhen === undefined && c.maxRounds === undefined) {
+    if (c.kind === 'loop' && c.exitWhen === undefined) {
       errors.push(
-        `container '${c.id}': a loop needs an exitWhen or a maxRounds (else it never exits)`,
+        `container '${c.id}': a loop needs an exitWhen ` +
+          '(maxRounds is only the round cap, not the exit condition)',
       );
     }
     if (c.kind === 'stage' && c.exitWhen !== undefined) {
@@ -558,8 +586,36 @@ export function validateDoc(
     if (c.exitWhen !== undefined) validateExitWhen(c, declared, errors);
   }
 
+  // A child's FORWARD edges must stay WITHIN its container: a cross-boundary
+  // edge (exactly one endpoint a child, or children of different containers)
+  // breaks encapsulation — the outside node would run from the child's terminal
+  // before the container exits. Back-edges are exempt (a child may back-edge to
+  // its own enclosing container). Top-level ↔ container-id edges are fine (both
+  // have no child-owner).
+  for (const e of doc.edges) {
+    if (e.back) continue;
+    const fromOwner = childOwner.get(e.from);
+    const toOwner = childOwner.get(e.to);
+    if (fromOwner !== toOwner) {
+      const loc = (id: string, owner: string | undefined): string =>
+        owner !== undefined ? `'${id}' (child of '${owner}')` : `'${id}'`;
+      errors.push(
+        `edge '${e.id}': crosses a container boundary ${loc(e.from, fromOwner)} → ` +
+          `${loc(e.to, toOwner)}; a child's forward edges must stay within its container`,
+      );
+    }
+  }
+
+  // The FORWARD graph (all edges minus `back:true`) must be a DAG — a forward
+  // cycle deadlocks the walk (its nodes never become ready; `settle` emits no
+  // command and never finishes → a silent hang).
+  errors.push(...forwardCycleErrors(doc, containers));
+
   // Back-edge ancestry: `to` must forward-reach `from` (a container also
-  // "reaches" — encloses — its own children).
+  // "reaches" — encloses — its own children). Plus every back-edge MUST declare
+  // `maxBounces` (an unbounded loop never terminates) and must actually make
+  // PROGRESS — its reset body must include its own source, else firing it resets
+  // nothing and `fireBackEdges` re-sees the same satisfied edge forever.
   const reach = forwardReach(doc, containers);
   for (const e of doc.edges) {
     if (!e.back) continue;
@@ -568,6 +624,19 @@ export function validateDoc(
       errors.push(
         `back-edge '${e.id}': its target '${e.to}' must be an ancestor of '${e.from}' ` +
           '(a loop/stage container or an upstream node that reaches it)',
+      );
+    }
+    if (e.maxBounces === undefined) {
+      errors.push(
+        `back-edge '${e.id}': must declare maxBounces ` + '(an unbounded back-edge loops forever)',
+      );
+    }
+    const body = backEdgeResetBody(e, nodeIdList, descendants, containerById);
+    if (body.length === 0 || !body.includes(e.from)) {
+      errors.push(
+        `back-edge '${e.id}': makes no progress — its reset body must include its ` +
+          `source '${e.from}' (a container-targeted back-edge whose source is outside ` +
+          'the container, or a body that never re-runs the source, re-fires forever)',
       );
     }
   }
@@ -591,6 +660,51 @@ function validateExitWhen(c: Container, declared: Map<string, Param>, errors: st
   if (!c.exitWhen.split('$${').join(ESC).includes('${')) {
     errors.push(`${where}: exitWhen must be a \${...} expression over child outputs`);
   }
+}
+
+/**
+ * Detect a cycle in the FORWARD edge graph (all edges except `back:true`), over
+ * node + container endpoints. Kahn's algorithm: any endpoint left with residual
+ * in-degree after the topological sweep sits in (or downstream of) a cycle.
+ * Returns a single error naming those endpoints, or `[]` when the graph is a DAG.
+ */
+function forwardCycleErrors(
+  doc: Pick<PipelineVersion, 'nodes' | 'edges'>,
+  containers: Container[],
+): string[] {
+  const endpoints = new Set<string>([
+    ...doc.nodes.map((n) => n.id),
+    ...containers.map((c) => c.id),
+  ]);
+  const adj = new Map<string, string[]>();
+  const indeg = new Map<string, number>();
+  for (const id of endpoints) {
+    adj.set(id, []);
+    indeg.set(id, 0);
+  }
+  for (const e of doc.edges) {
+    if (e.back) continue;
+    if (!endpoints.has(e.from) || !endpoints.has(e.to)) continue;
+    adj.get(e.from)!.push(e.to);
+    indeg.set(e.to, (indeg.get(e.to) ?? 0) + 1);
+  }
+  const queue = [...endpoints].filter((id) => (indeg.get(id) ?? 0) === 0);
+  let removed = 0;
+  while (queue.length) {
+    const id = queue.shift() as string;
+    removed += 1;
+    for (const nxt of adj.get(id) ?? []) {
+      const d = (indeg.get(nxt) ?? 0) - 1;
+      indeg.set(nxt, d);
+      if (d === 0) queue.push(nxt);
+    }
+  }
+  if (removed >= endpoints.size) return [];
+  const stuck = [...endpoints].filter((id) => (indeg.get(id) ?? 0) > 0).sort();
+  return [
+    `forward cycle detected involving {${stuck.join(', ')}} — the forward graph must be a ` +
+      'DAG (mark a loop edge back:true with a maxBounces cap)',
+  ];
 }
 
 /**
@@ -959,4 +1073,62 @@ function intersect(a: Set<string>, b: Set<string>): Set<string> {
   const out = new Set<string>();
   for (const x of a) if (b.has(x)) out.add(x);
   return out;
+}
+
+// --- back-edge reset body (SSOT shared by the reducer + validateDoc) ---------
+
+/**
+ * Node-only forward adjacency (back-edges AND container endpoints excluded).
+ * SSOT for "what nodes a node forward-reaches", used to compute a back-edge's
+ * reset body identically in the reducer and in `validateDoc`.
+ */
+export function nodeForwardAdjacency(
+  doc: Pick<PipelineVersion, 'nodes' | 'edges'>,
+): Map<string, string[]> {
+  const idSet = new Set(doc.nodes.map((n) => n.id));
+  const adj = new Map<string, string[]>();
+  for (const n of doc.nodes) adj.set(n.id, []);
+  for (const e of effectiveEdges(doc)) {
+    if (e.back) continue;
+    if (idSet.has(e.from) && idSet.has(e.to)) adj.get(e.from)!.push(e.to);
+  }
+  return adj;
+}
+
+/** Forward-reachable node ids from `start` (NOT including `start`). */
+export function forwardDescendants(start: string, adj: Map<string, string[]>): Set<string> {
+  const seen = new Set<string>();
+  const stack = [...(adj.get(start) ?? [])];
+  while (stack.length) {
+    const cur = stack.pop() as string;
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    for (const nxt of adj.get(cur) ?? []) stack.push(nxt);
+  }
+  return seen;
+}
+
+/**
+ * A back-edge's RESET BODY — the nodes it returns to `pending` on a bounce:
+ *   - target is a container → its children.
+ *   - target is a node → the nodes on forward paths target..source (inclusive).
+ * SSOT: the reducer (`fireBackEdges`) and `validateDoc`'s no-progress guard both
+ * read this so they can never disagree on which nodes a bounce resets.
+ */
+export function backEdgeResetBody(
+  be: Edge,
+  nodeIds: string[],
+  descendants: Map<string, Set<string>>,
+  containerById: Map<string, Container>,
+): string[] {
+  const targetContainer = containerById.get(be.to);
+  if (targetContainer !== undefined) return [...targetContainer.children];
+  const fromTarget = descendants.get(be.to) ?? new Set<string>();
+  const body: string[] = [];
+  for (const n of nodeIds) {
+    const reachedByTarget = n === be.to || fromTarget.has(n);
+    const reachesSource = n === be.from || (descendants.get(n)?.has(be.from) ?? false);
+    if (reachedByTarget && reachesSource) body.push(n);
+  }
+  return body;
 }
