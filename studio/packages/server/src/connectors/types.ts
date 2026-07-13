@@ -22,17 +22,6 @@ import type { ConnectionKind } from '@autonomy-studio/shared';
  */
 export type ConnectorErrorKind = 'auth' | 'rate_limit' | 'transient' | 'permanent' | 'cancelled';
 
-/** A classified connector failure. Adapters throw this OR yield a `failed` event. */
-export class ConnectorError extends Error {
-  constructor(
-    readonly kind: ConnectorErrorKind,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'ConnectorError';
-  }
-}
-
 /**
  * The read-only context an adapter runs against. Contains NO secret material —
  * the plaintext secret is a SEPARATE argument to `runActivity`/`testConnection`,

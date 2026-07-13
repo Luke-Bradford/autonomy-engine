@@ -167,3 +167,49 @@ describe('httpAdapter.runActivity', () => {
     ]);
   });
 });
+
+describe('httpAdapter.testConnection', () => {
+  it('probes WITH the secret as a bearer token (auth-gated endpoints are exercised)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, ''));
+
+    const result = await httpAdapter.testConnection(
+      { baseUrl: 'https://api.example.com' },
+      'sk-live-token',
+    );
+
+    expect(result).toEqual({ ok: true });
+    const init = fetchSpy.mock.calls[0]![1] as RequestInit;
+    expect(init.method).toBe('HEAD');
+    expect((init.headers as Record<string, string>)['Authorization']).toBe('Bearer sk-live-token');
+  });
+
+  it('reports NOT ok on a 401 (bad/missing credential), never leaking the secret', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(401, ''));
+
+    const result = await httpAdapter.testConnection(
+      { baseUrl: 'https://api.example.com' },
+      'sk-wrong',
+    );
+
+    expect(result).toEqual({ ok: false, error: 'authentication failed (HTTP 401)' });
+    expect(JSON.stringify(result)).not.toContain('sk-wrong');
+  });
+
+  it('treats a non-401 4xx (e.g. 403/405 on a bare HEAD) as reachable, not a failure', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(403, ''));
+    const result = await httpAdapter.testConnection({ baseUrl: 'https://api.example.com' }, null);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('asserts only a valid config when there is no baseUrl to probe (no fetch)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const result = await httpAdapter.testConnection({}, 'sk-unused');
+    expect(result).toEqual({ ok: true });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid connection config', async () => {
+    const result = await httpAdapter.testConnection({ timeoutMs: -5 }, null);
+    expect(result.ok).toBe(false);
+  });
+});

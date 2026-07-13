@@ -64,7 +64,7 @@ export const httpAdapter: ConnectorAdapter = {
   kind: 'http',
   configSchema: httpConnectionConfigSchema,
 
-  async testConnection(config) {
+  async testConnection(config, secret) {
     const parsed = httpConnectionConfigSchema.safeParse(config);
     if (!parsed.success) {
       return { ok: false, error: `invalid http connection config: ${parsed.error.message}` };
@@ -78,8 +78,25 @@ export const httpAdapter: ConnectorAdapter = {
       parsed.data.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
     );
     try {
-      // A HEAD reaches the host; ANY response (even 4xx) proves reachability.
-      await fetch(baseUrl, { method: 'HEAD', signal: controller.signal });
+      // Probe WITH the credential (mirroring a real request), so an auth-gated
+      // endpoint is exercised as it would be at run time — otherwise a bad or
+      // missing secret would still report ok. The secret is sent, never returned.
+      const probeHeaders: Record<string, string> = {
+        ...(parsed.data.headers ?? {}),
+        ...(secret !== null ? { Authorization: `Bearer ${secret}` } : {}),
+      };
+      // A HEAD reaches the host; ANY response proves reachability EXCEPT a 401,
+      // which specifically means the credential is bad/missing. We do NOT treat
+      // 403/404/405 as a failure — a HEAD to a bare root legitimately yields
+      // those even with a valid token, so failing on them would be a false negative.
+      const res = await fetch(baseUrl, {
+        method: 'HEAD',
+        headers: probeHeaders,
+        signal: controller.signal,
+      });
+      if (res.status === 401) {
+        return { ok: false, error: 'authentication failed (HTTP 401)' };
+      }
       return { ok: true };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
