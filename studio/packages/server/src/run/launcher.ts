@@ -1,6 +1,13 @@
-import type { Trigger } from '@autonomy-studio/shared';
+import type { EngineEvent, Trigger } from '@autonomy-studio/shared';
 import { countActiveRunsForTrigger, createRun, getRun, updateRun } from '../repo/runs.js';
-import { startRun, type DriverDeps } from './driver.js';
+import {
+  buildEngine,
+  startRun,
+  syncRunLifecycle,
+  TERMINAL_RUN,
+  type DriverDeps,
+} from './driver.js';
+import { appendEngineEvent, loadEngineEvents } from './events.js';
 
 /**
  * P4a — the run LAUNCHER: the one place a trigger becomes a run. Manual fire
@@ -76,14 +83,86 @@ export interface RunLauncherDeps extends DriverDeps {
   log?: LauncherLog;
 }
 
-const TERMINAL_RUN_STATUSES = new Set(['success', 'failure', 'skipped', 'interrupted']);
-
 export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
   const { db } = deps;
   const inFlight = new Set<Promise<void>>();
   /** Per-trigger FIFO of fires waiting for the (single) `queue` slot to free. */
   const queues = new Map<string, Trigger[]>();
+  /**
+   * Per-trigger count of runs this launcher is CURRENTLY driving (promise not
+   * yet settled). This is what advances the `queue`: a run's `finally`
+   * decrements it and drains, so the next queued fire starts as soon as the
+   * previous DRIVE ends — even if that run came to rest non-terminal (a crash
+   * mid-dispatch, or a future `waiting` call node), which the DB active-count
+   * would still report as occupying the slot and thus stall the queue forever.
+   * Admission (`fire`) still uses the DB count (`countActiveRunsForTrigger`)
+   * because that is restart-safe (a resumed run counts after a reboot, when
+   * this in-memory map is empty); the drain uses the in-memory count because it
+   * must reliably fire on promise-settle in THIS process.
+   */
+  const inFlightByTrigger = new Map<string, number>();
   let stopped = false;
+
+  function incInFlight(triggerId: string): void {
+    inFlightByTrigger.set(triggerId, (inFlightByTrigger.get(triggerId) ?? 0) + 1);
+  }
+  function decInFlight(triggerId: string): void {
+    const n = (inFlightByTrigger.get(triggerId) ?? 1) - 1;
+    if (n <= 0) inFlightByTrigger.delete(triggerId);
+    else inFlightByTrigger.set(triggerId, n);
+  }
+
+  /**
+   * Terminalize a run whose background drive threw UNEXPECTEDLY (the driver maps
+   * every EXPECTED activity failure to a terminal event itself, so reaching
+   * here is a bug/bad-doc, not a normal failure). Keep the append-log
+   * authoritative:
+   *   - If the run already emitted events (the fault was mid-pump, after
+   *     `run.started`), append a `run.interrupted` event and sync from the fold
+   *     — exactly as the boot reconciler does — so the durable log and the row
+   *     never diverge (the P6 monitor tails that log).
+   *   - If there are NO events (the fault was before `run.started`, e.g. a bad
+   *     doc), there is no event-sourced lifecycle to preserve; the row is pure
+   *     provenance, so a direct lifecycle patch to `interrupted` is correct.
+   * Never clobbers a run that actually reached a terminal fact before the throw.
+   */
+  // `TERMINAL_RUN` is the engine's SSOT for run-lifecycle-terminal, typed over
+  // the narrower `RunLifecycleStatus`; a DB row's `status` is the wider
+  // `RunStatus`, so widen the set's element type for this membership check.
+  const isTerminalRow = (status: string): boolean =>
+    (TERMINAL_RUN as ReadonlySet<string>).has(status);
+
+  function terminalizeInterrupted(runId: string): void {
+    try {
+      const events = loadEngineEvents(db, runId);
+      const run = getRun(db, runId);
+      if (run === null) return;
+      if (events.length === 0) {
+        if (!isTerminalRow(run.status)) {
+          updateRun(db, runId, { status: 'interrupted', finishedAt: Date.now() });
+        }
+        return;
+      }
+      const engine = buildEngine(deps.resolveDoc(run.pipelineVersionId));
+      const state = engine.projectRunState(events);
+      if (TERMINAL_RUN.has(state.status)) {
+        syncRunLifecycle(db, runId, state);
+        return;
+      }
+      const interrupted: EngineEvent = { type: 'run.interrupted', runId, reason: 'drive_failed' };
+      appendEngineEvent(db, interrupted);
+      syncRunLifecycle(db, runId, engine.reduce(state, interrupted).state);
+    } catch (cleanupErr) {
+      // Even the cleanup failed (e.g. `resolveDoc` is itself what blew up). Fall
+      // back to a best-effort direct patch so the slot is freed and no zombie
+      // `running`/`pending` row lingers; log for diagnosis.
+      deps.log?.error({ err: cleanupErr, runId }, 'run interrupt-cleanup failed');
+      const run = getRun(db, runId);
+      if (run !== null && !isTerminalRow(run.status)) {
+        updateRun(db, runId, { status: 'interrupted', finishedAt: Date.now() });
+      }
+    }
+  }
 
   /** Create the run row (durable, `pending`) and drive it in the background. */
   function launch(trigger: Trigger): string {
@@ -108,37 +187,34 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       params: trigger.params,
     });
 
+    incInFlight(trigger.id);
     const p = (async () => {
       try {
         await startRun(deps, run);
       } catch (err) {
         deps.log?.error({ err, runId: run.id, triggerId: trigger.id }, 'run drive failed');
-        // Terminalize as `interrupted` ONLY if the run is not already terminal,
-        // so an unexpected fault frees the trigger's slot and never leaves a
-        // zombie `running`/`pending` row — without clobbering a run that
-        // actually finished before the throw.
-        const current = getRun(db, run.id);
-        if (current !== null && !TERMINAL_RUN_STATUSES.has(current.status)) {
-          updateRun(db, run.id, { status: 'interrupted', finishedAt: Date.now() });
-        }
+        terminalizeInterrupted(run.id);
       }
     })();
 
     inFlight.add(p);
     void p.finally(() => {
       inFlight.delete(p);
+      decInFlight(trigger.id);
       drainQueue(trigger.id);
     });
     return run.id;
   }
 
-  /** When a `queue`-policy run settles, start the next queued fire if the slot
-   * is now free. A no-op for other policies (they never enqueue). */
+  /** When a `queue`-policy run's DRIVE ends, start the next queued fire if this
+   * launcher is no longer driving one for the trigger. Gated on the in-memory
+   * in-flight count (not the DB count) so a run that rests non-terminal still
+   * advances the queue. A no-op for other policies (they never enqueue). */
   function drainQueue(triggerId: string): void {
     if (stopped) return;
     const q = queues.get(triggerId);
     if (q === undefined || q.length === 0) return;
-    if (countActiveRunsForTrigger(db, triggerId) > 0) return;
+    if ((inFlightByTrigger.get(triggerId) ?? 0) > 0) return;
     const next = q.shift()!;
     if (q.length === 0) queues.delete(triggerId);
     launch(next);
@@ -181,10 +257,12 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
   }
 
   async function whenIdle(): Promise<void> {
-    // Each settling run's `finally` drains its queue (possibly adding a new
-    // in-flight run) BEFORE `allSettled` resolves — the `finally` is registered
-    // in `launch()` (during `fire()`), ahead of this `allSettled` — so the loop
-    // re-checks and never returns with work still pending.
+    // A settling run's `finally` decrements the in-flight count and drains its
+    // queue — reliably launching the next queued fire (adding a new in-flight
+    // run) BEFORE this `allSettled` resolves, since that `finally` is registered
+    // in `launch()`, ahead of this `allSettled`. So `inFlight` is never empty
+    // while a queue still holds work: looping until `inFlight` drains awaits
+    // every in-flight AND queued run to quiescence.
     while (inFlight.size > 0) {
       await Promise.allSettled([...inFlight]);
     }

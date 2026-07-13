@@ -3,6 +3,7 @@ import {
   CATALOG_VERSION,
   type Concurrency,
   type Edge,
+  type EngineEvent,
   type NewPipelineVersion,
   type Node,
   type Trigger,
@@ -13,7 +14,7 @@ import { createTrigger } from '../../repo/triggers.js';
 import { getRun, listRuns } from '../../repo/runs.js';
 import { loadEngineEvents } from '../events.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { type DocResolver, type DriverDeps } from '../driver.js';
+import { type DocResolver, type DriverDeps, type Executor } from '../driver.js';
 import { createRunLauncher, UnboundTriggerError } from '../launcher.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 
@@ -177,13 +178,35 @@ describe('RunLauncher — queue', () => {
   });
 });
 
+describe('RunLauncher — queue drains even when a run rests non-terminal', () => {
+  it('advances the queue when the previous drive ends at a non-terminal rest (crash sim)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    // `hang` comes to rest at `running` (node dispatched, no terminal) — the DB
+    // active-count stays 1, so a DB-gated drain would stall the queue forever.
+    // The in-memory in-flight count still hits 0 on promise-settle, so the drain
+    // must launch the queued fire regardless.
+    const launcher = createRunLauncher(deps(db, { nodes: { a: { hang: true } } }));
+
+    expect(launcher.fire(trigger).outcome).toBe('started');
+    expect(launcher.fire(trigger).outcome).toBe('queued');
+
+    await launcher.whenIdle();
+
+    // Both fires produced a run (the queued one drained despite the first
+    // resting non-terminal) — proving the queue did not stall.
+    expect(listRuns(db, { triggerId: trigger.id })).toHaveLength(2);
+  });
+});
+
 describe('RunLauncher — background failure', () => {
-  it('terminalizes a run `interrupted` when the drive throws unexpectedly', async () => {
+  it('terminalizes `interrupted` via a DIRECT patch when the drive throws before run.started', async () => {
     const { db } = freshDb();
     const pvId = seedVersion(db);
     const trigger = seedTrigger(db, { pipelineVersionId: pvId });
-    // resolveDoc throws AFTER the run row exists (createRun succeeds via FK),
-    // simulating an unexpected fault during the background drive.
+    // resolveDoc throws BEFORE startRun appends run.started (createRun already
+    // succeeded via FK), so there is no event log — a direct lifecycle patch.
     const resolveDoc: DocResolver = () => {
       throw new Error('doc blew up');
     };
@@ -194,6 +217,40 @@ describe('RunLauncher — background failure', () => {
     await launcher.whenIdle();
 
     expect(getRun(db, result.runId!)?.status).toBe('interrupted');
+    // No run.started ever landed, so the log stays empty (nothing to diverge).
+    expect(loadEngineEvents(db, result.runId!)).toHaveLength(0);
+  });
+
+  it('APPENDS run.interrupted (log stays authoritative) when the drive throws AFTER run.started', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId });
+    // An executor that throws on dispatch — run.started is already durable, then
+    // the pump faults mid-drive. The launcher must keep the event log the source
+    // of truth: append a run.interrupted event, not just patch the row.
+    const throwingExecutor: Executor = {
+      // Throws synchronously on call (same shape as reconcile's refuseToExecute)
+      // — the driver's `for await` never even starts.
+      perform(): AsyncIterable<EngineEvent> {
+        throw new Error('executor blew up');
+      },
+    };
+    const resolveDoc: DocResolver = (id) => {
+      const pv = getPipelineVersion(db, id);
+      if (pv === null) throw new Error(`no pv ${id}`);
+      return pv;
+    };
+    const launcher = createRunLauncher({ db, resolveDoc, executor: throwingExecutor });
+
+    const result = launcher.fire(trigger);
+    await launcher.whenIdle();
+
+    const run = getRun(db, result.runId!);
+    expect(run?.status).toBe('interrupted');
+    const events = loadEngineEvents(db, result.runId!);
+    expect(events[0]?.type).toBe('run.started');
+    // The row's status is reachable by folding the durable log, not out-of-band.
+    expect(events.some((e) => e.type === 'run.interrupted')).toBe(true);
   });
 });
 
