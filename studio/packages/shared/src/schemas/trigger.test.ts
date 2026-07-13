@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ConcurrencyPolicySchema,
   ConcurrencySchema,
+  ConcurrencyWriteSchema,
   NewTriggerSchema,
   RunWindowSchema,
   TriggerModeSchema,
@@ -31,7 +32,7 @@ describe('ConcurrencyPolicySchema', () => {
   });
 });
 
-describe('ConcurrencySchema', () => {
+describe('ConcurrencySchema (stored/read — lenient)', () => {
   it('round-trips queue with no max', () => {
     const c = { policy: 'queue' };
     expect(ConcurrencySchema.parse(c)).toEqual(c);
@@ -42,8 +43,36 @@ describe('ConcurrencySchema', () => {
     expect(ConcurrencySchema.parse(c)).toEqual(c);
   });
 
-  it('rejects a zero max', () => {
+  it('rejects a zero/negative max (still a base-type constraint)', () => {
     expect(() => ConcurrencySchema.parse({ policy: 'parallel', max: 0 })).toThrow();
+  });
+
+  it('READS legacy rows the write-rule would reject (migration-safe): parallel-no-max + single-slot-with-max', () => {
+    // Persisted under an older, looser schema — must not throw on read.
+    expect(ConcurrencySchema.parse({ policy: 'parallel' })).toEqual({ policy: 'parallel' });
+    expect(ConcurrencySchema.parse({ policy: 'queue', max: 2 })).toEqual({
+      policy: 'queue',
+      max: 2,
+    });
+  });
+});
+
+describe('ConcurrencyWriteSchema (write-boundary — strict cross-field rule)', () => {
+  it('accepts parallel with a max and single-slot policies with no max', () => {
+    expect(ConcurrencyWriteSchema.parse({ policy: 'parallel', max: 4 })).toEqual({
+      policy: 'parallel',
+      max: 4,
+    });
+    expect(ConcurrencyWriteSchema.parse({ policy: 'queue' })).toEqual({ policy: 'queue' });
+  });
+
+  it('rejects parallel without a max (unbounded fan-out footgun)', () => {
+    expect(() => ConcurrencyWriteSchema.parse({ policy: 'parallel' })).toThrow();
+  });
+
+  it('rejects a max on a single-slot policy', () => {
+    expect(() => ConcurrencyWriteSchema.parse({ policy: 'queue', max: 2 })).toThrow();
+    expect(() => ConcurrencyWriteSchema.parse({ policy: 'skip_if_running', max: 2 })).toThrow();
   });
 });
 

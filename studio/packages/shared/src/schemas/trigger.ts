@@ -6,12 +6,47 @@ export type TriggerMode = z.infer<typeof TriggerModeSchema>;
 export const ConcurrencyPolicySchema = z.enum(['queue', 'skip_if_running', 'parallel']);
 export type ConcurrencyPolicy = z.infer<typeof ConcurrencyPolicySchema>;
 
+/**
+ * STORED/READ shape — deliberately LENIENT (no cross-field refinement) so it
+ * parses ANY historically-valid row. `max` is `positive().optional()`. The
+ * cross-field rule (parallel⇒max, single-slot⇒no-max) is a WRITE concern
+ * (`ConcurrencyWriteSchema`), NOT enforced here: tightening the stored-shape
+ * schema would make a trigger row persisted under an older, looser schema throw
+ * on READ (`getTrigger`/`listTriggers` parse via `TriggerSchema`) rather than
+ * merely being defended against at fire-time. The launcher's fail-closed
+ * fire-time guard is the runtime backstop for such a legacy/corrupted row.
+ */
 export const ConcurrencySchema = z.object({
   policy: ConcurrencyPolicySchema,
-  /** Only meaningful for `parallel`; omitted for `queue`/`skip_if_running`. */
+  /** The cap on simultaneous runs — only meaningful for `parallel`. */
   max: z.number().int().positive().optional(),
 });
 export type Concurrency = z.infer<typeof ConcurrencySchema>;
+
+/**
+ * WRITE-boundary shape — the stored shape PLUS the cross-field rule enforced on
+ * every CREATE/UPDATE (via `NewTriggerSchema`): `parallel` REQUIRES a positive
+ * `max` (an omitted cap would be an unbounded fan-out footgun) and
+ * `queue`/`skip_if_running` FORBID `max` (both are implicitly single-slot, so a
+ * `max` is meaningless and rejected rather than silently ignored). Shared so the
+ * client can pre-validate the same way the server does.
+ */
+export const ConcurrencyWriteSchema = ConcurrencySchema.superRefine((c, ctx) => {
+  if (c.policy === 'parallel' && c.max === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['max'],
+      message: 'parallel concurrency requires a positive `max` (the cap on simultaneous runs)',
+    });
+  }
+  if (c.policy !== 'parallel' && c.max !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['max'],
+      message: `\`max\` is only valid for the 'parallel' policy, not '${c.policy}'`,
+    });
+  }
+});
 
 /**
  * `[{start,end,days?}]` in UTC, fail-CLOSED, wraps past midnight (e.g.
@@ -67,10 +102,16 @@ export const TriggerSchema = z.object({
 });
 export type Trigger = z.infer<typeof TriggerSchema>;
 
+// WRITE shape: strips server-set fields AND swaps in `ConcurrencyWriteSchema`,
+// so every CREATE/UPDATE (routes, `createTrigger`, import) enforces the
+// cross-field concurrency rule while the stored `TriggerSchema` stays lenient
+// on read (see `ConcurrencySchema`).
 export const NewTriggerSchema = TriggerSchema.omit({
   id: true,
   createdAt: true,
   updatedAt: true,
+}).extend({
+  concurrency: ConcurrencyWriteSchema,
 });
 // z.input, not z.infer/z.output — see the note on NewConnection in
 // connection.ts for why every insert type in this package uses it.

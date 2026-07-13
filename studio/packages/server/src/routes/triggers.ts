@@ -11,6 +11,7 @@ import {
 } from '../repo/index.js';
 import { BadRequestError, NotFoundError } from '../errors.js';
 import { requireOwned } from './util.js';
+import { UnboundTriggerError } from '../run/launcher.js';
 import { exportTrigger } from '../portability/index.js';
 import type { Principal } from '../auth/principal.js';
 import type { Db } from '../repo/types.js';
@@ -131,5 +132,36 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
   // owner-check (404 if not owned), same outcome as `requireOwned` above.
   fastify.get<{ Params: { id: string } }>('/api/triggers/:id/export', async (request) => {
     return exportTrigger(db, request.params.id, request.principal.ownerId);
+  });
+
+  /**
+   * P4a — manual fire ("run now"). An explicit operator action, deliberately
+   * INDEPENDENT of the trigger's `enabled` flag (that flag gates AUTOMATIC
+   * firing — schedule/webhook — whereas a manual fire is a direct request, the
+   * same "Trigger now"/"Debug" affordance ADF-style tools give a paused
+   * trigger) and independent of `mode` (you may manually fire a scheduled
+   * trigger). The launcher still enforces the two invariants for EVERY fire
+   * path: an unbound trigger is refused (400), and the trigger's concurrency
+   * policy decides started/queued/skipped.
+   *
+   * `202 Accepted`: an admitted run drives in the BACKGROUND (watch it live in
+   * P6); a `queued`/`skipped` outcome is still a well-defined success.
+   */
+  fastify.post<{ Params: { id: string } }>('/api/triggers/:id/fire', async (request, reply) => {
+    const trigger = requireOwned(
+      getTrigger(db, request.params.id),
+      request.principal,
+      'trigger',
+      request.params.id,
+    );
+    try {
+      const result = fastify.runLauncher.fire(trigger);
+      reply.status(202).send(result);
+    } catch (err) {
+      if (err instanceof UnboundTriggerError) {
+        throw new BadRequestError(err.message);
+      }
+      throw err;
+    }
   });
 };
