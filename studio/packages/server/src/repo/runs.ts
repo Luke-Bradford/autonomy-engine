@@ -1,4 +1,4 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, count, eq, inArray } from 'drizzle-orm';
 import {
   NewRunSchema,
   RunLifecyclePatchSchema,
@@ -112,11 +112,12 @@ const ACTIVE_RUN_STATUSES = [
  * `runs_status_idx` + the trigger filter.
  */
 export function countActiveRunsForTrigger(db: Db, triggerId: string): number {
-  return db
-    .select({ id: runs.id })
+  const row = db
+    .select({ n: count() })
     .from(runs)
     .where(and(eq(runs.triggerId, triggerId), inArray(runs.status, [...ACTIVE_RUN_STATUSES])))
-    .all().length;
+    .get();
+  return row?.n ?? 0;
 }
 
 export function deleteRun(db: Db, id: string): boolean {
