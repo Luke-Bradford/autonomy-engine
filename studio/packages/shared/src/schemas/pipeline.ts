@@ -47,12 +47,31 @@ export const PositionSchema = z.object({
 export type Position = z.infer<typeof PositionSchema>;
 
 /**
+ * The `call_pipeline` config on a Node (P2c). A node carrying a `call` is a call
+ * node: the engine emits `startChild` (a deterministic child run id) and holds
+ * the node `waiting` until a `call.returned` event. `pipelineVersionId` may be a
+ * literal id or a `${}` param/output ref resolved at dispatch time. A FAILED
+ * child still returns projected `outputs` (the findings loop).
+ */
+export const CallConfigSchema = z.object({
+  pipelineVersionId: z.string().min(1),
+  /** Param overrides passed to the child run (an empty object when none). */
+  params: z.record(z.string(), z.unknown()),
+  wait: z.boolean().optional(),
+});
+export type CallConfig = z.infer<typeof CallConfigSchema>;
+
+/**
  * An activity instance on the canvas. `type` names an entry in the Activity
  * Catalog (validated against the catalog elsewhere — this schema only checks
  * shape, not that `type` is a currently-known catalog entry, since an
  * imported pipeline authored on an older catalog must still *parse*; the
  * upgrade/validate pass is a separate concern). `config` is the typed
  * activity settings blob for that `type`.
+ *
+ * A node carrying a `call` config is a `call_pipeline` node (P2c) — a plain
+ * activity node and a call node coexist via this OPTIONAL discriminant, so
+ * existing docs (no `call`) still parse unchanged.
  */
 export const NodeSchema = z.object({
   id: z.string().min(1),
@@ -60,6 +79,7 @@ export const NodeSchema = z.object({
   config: z.record(z.string(), z.unknown()),
   connectionId: z.string().min(1).optional(),
   position: PositionSchema,
+  call: CallConfigSchema.optional(),
 });
 export type Node = z.infer<typeof NodeSchema>;
 
@@ -76,6 +96,30 @@ export const EdgeSchema = z.object({
   maxBounces: z.number().int().nonnegative().optional(),
 });
 export type Edge = z.infer<typeof EdgeSchema>;
+
+/**
+ * A control-flow CONTAINER (P2c): a `loop` or `stage` grouping child nodes into
+ * a namespace with its own lifecycle. `children` are node ids (unique within the
+ * container, disjoint across containers — validated at save time). `exitWhen` (a
+ * `${}` boolean over child outputs, loop only) and `maxRounds` bound a loop; a
+ * `stage` exits once all children are terminal. `join` gates the container's own
+ * readiness from its incoming OUTER edges (default `all`), mirroring a node's.
+ */
+export const ContainerKindSchema = z.enum(['loop', 'stage']);
+export type ContainerKind = z.infer<typeof ContainerKindSchema>;
+
+export const ContainerSchema = z.object({
+  id: z.string().min(1),
+  kind: ContainerKindSchema,
+  children: z.array(z.string().min(1)),
+  /** `${}` boolean over child outputs; evaluated only when a round is terminal. Loop only. */
+  exitWhen: z.string().optional(),
+  /** Hard cap on loop rounds — reaching it without `exitWhen` caps the loop. */
+  maxRounds: z.number().int().positive().optional(),
+  /** Readiness rule over the container's own incoming OUTER edges (default `all`). */
+  join: z.enum(['all', 'any']).optional(),
+});
+export type Container = z.infer<typeof ContainerSchema>;
 
 export const PipelineSchema = z.object({
   id: z.string().min(1),
@@ -109,6 +153,9 @@ export const PipelineVersionSchema = z.object({
   outputs: z.array(OutputSchema),
   nodes: z.array(NodeSchema),
   edges: z.array(EdgeSchema),
+  /** Control-flow containers (loop/stage). Default `[]` — backward-tolerant so
+   * a pre-P2c doc with no `containers` key still parses. */
+  containers: z.array(ContainerSchema).default([]),
   catalogVersion: z.number().int(),
   createdAt: z.number().int(),
 });

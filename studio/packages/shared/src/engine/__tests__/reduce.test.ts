@@ -73,6 +73,8 @@ function runAll(eng: Engine, params: Record<string, unknown>, plan: Plan) {
       apply({ type: 'run.finished', runId: RUN, outcome: c.outcome, reason: c.reason });
       continue;
     }
+    // These P2b docs are container-/call-free, so `startChild` never occurs.
+    if (c.type !== 'dispatchNode') continue;
     apply(dispatched(c.nodeId, c.attemptId));
     const p = plan[c.nodeId] ?? { outcome: 'success' };
     apply(

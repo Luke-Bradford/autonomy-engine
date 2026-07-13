@@ -1,4 +1,7 @@
 node_modules/
+# pnpm's content store — pinned here via `storeDir` in pnpm-workspace.yaml so a
+# cross-volume runner never leaks a stray `.pnpm-store/` into the parent repo.
+.pnpm-store/
 dist/
 *.local
 .env

@@ -3,6 +3,9 @@ __pycache__/
 .DS_Store
 .superpowers/
 .screenshots/
+# pnpm content-addressed store — a build artifact (a stray one can appear at the
+# repo root when pnpm is run with a root store-dir); never tracked.
+.pnpm-store/
 
 # Loop runtime artifacts written by the supervisor when autonomy-engine runs
 # on ITSELF (session logs + the process lock). Anchored to the repo root so the

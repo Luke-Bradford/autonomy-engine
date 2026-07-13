@@ -1,10 +1,18 @@
 import { z } from 'zod';
-import type { Param, Output, Node, Edge, PipelineVersion } from '../schemas/pipeline.js';
+import type {
+  Param,
+  Output,
+  Node,
+  Edge,
+  Container,
+  CallConfig,
+  PipelineVersion,
+} from '../schemas/pipeline.js';
 
 // Re-export the P1 schema types so engine consumers have one import surface for
 // the language's inputs. These are NOT redefined here — they are the single
 // source of truth in `../schemas/pipeline.ts`.
-export type { Param, Output, Node, Edge, PipelineVersion };
+export type { Param, Output, Node, Edge, Container, CallConfig, PipelineVersion };
 
 /**
  * The read-only context a `${...}` expression resolves against. PURE input:
@@ -72,8 +80,8 @@ export class ParamResolveError extends Error {
  * - `dispatched` — the driver accepted the dispatch (`node.dispatched` folded).
  * - `success` / `failure` — terminal, from `node.succeeded` / `node.failed`.
  * - `skipped`    — an incoming edge became impossible under the join rule.
- * - `waiting`    — a `call_pipeline` node awaiting `call.returned` (P2c; defined
- *                  here so the vocabulary is stable, never reached by P2b's walk).
+ * - `waiting`    — a `call_pipeline` node that emitted `startChild` and is
+ *                  awaiting its `call.returned` event (P2c).
  *
  * `attempts` is a monotonic counter minted-from, not random: every dispatch
  * takes `attemptId = \`${nodeId}#${attempts}\`` then increments. A result event
@@ -108,13 +116,45 @@ export const RunLifecycleStatusSchema = z.enum([
 export type RunLifecycleStatus = z.infer<typeof RunLifecycleStatusSchema>;
 
 /**
+ * A container's lifecycle state within a run (P2c).
+ * - `pending` — not yet entered (its incoming OUTER edges unsatisfied).
+ * - `active`  — entered; its children are walking internally.
+ * - `success` / `failure` — terminal (from its exit condition, or an unhandled
+ *   child failure / a loop hitting `maxRounds` without `exitWhen`).
+ * - `skipped` — an incoming OUTER edge became impossible under the join rule.
+ *
+ * `round` is the 0-based loop round index (a `stage` stays at 0). `outputs` is
+ * the container's projected outputs at exit (child outputs merged, sorted).
+ */
+export const ContainerRunStatusSchema = z.enum([
+  'pending',
+  'active',
+  'success',
+  'failure',
+  'skipped',
+]);
+export type ContainerRunStatus = z.infer<typeof ContainerRunStatusSchema>;
+
+export const ContainerRunStateSchema = z.object({
+  status: ContainerRunStatusSchema,
+  round: z.number().int().nonnegative(),
+  outputs: z.record(z.string(), z.unknown()),
+  /** Why a container terminated (`capped`, `child_failed`, `exitWhen_error`) —
+   * observability only; unset while active/pending or on a clean exit. */
+  reason: z.string().optional(),
+});
+export type ContainerRunState = z.infer<typeof ContainerRunStateSchema>;
+
+/**
  * The projection folded from a run's event log. `pending` is the pre-`run.started`
  * seed; `interrupted` is only reachable via the P2d boot reconciler (a
  * non-idempotent node that could not have survived a restart). `outputs` is
  * populated ONLY on `node.succeeded` (partial `node.output` observability events
  * never enter it — no unvalidated/partial data feeds `${}` substitution).
- * `bounces` (per back-edge) and `sessions` (agent-session correlation) are defined
- * for P2c/P3 and stay `{}` under P2b's acyclic walk.
+ * `bounces` (per back-edge, keyed by a STABLE `edgeKey`) counts back-edge
+ * traversals (P2c); `containers` holds each container's lifecycle state (P2c);
+ * `sessions` (agent-session correlation) is defined for P3. All stay `{}` under
+ * P2b's acyclic, container-free walk.
  */
 export const RunStateSchema = z.object({
   runId: z.string(),
@@ -123,6 +163,7 @@ export const RunStateSchema = z.object({
   status: RunLifecycleStatusSchema,
   nodes: z.record(z.string(), NodeRunStateSchema),
   outputs: z.record(z.string(), z.record(z.string(), z.unknown())),
+  containers: z.record(z.string(), ContainerRunStateSchema),
   bounces: z.record(z.string(), z.number().int().nonnegative()),
   sessions: z.record(z.string(), z.unknown()),
 });
@@ -139,7 +180,7 @@ export type RunOutcome = z.infer<typeof RunOutcomeSchema>;
  * `node.retryRequested` are the ENGINE-decision (retry) variants the P2d boot
  * reconciler will emit — the reducer HANDLES them here (a fresh dispatch with a
  * new attempt), kept distinct from the driver-accepted `node.dispatched`.
- * `call.returned` is P2c (call_pipeline) — deferred, not in this union yet.
+ * `call.returned` (P2c) resolves a `waiting` `call_pipeline` node.
  */
 export const EngineEventSchema = z.discriminatedUnion('type', [
   z.object({
@@ -173,6 +214,19 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     error: z.string(),
   }),
   z.object({
+    // A spawned `call_pipeline` child returned. `childOutcome` may be `failure`
+    // and STILL carry projected `outputs` (the findings loop). Stale-rejected
+    // like any attempt-bearing result: an `attemptId` that is not the call
+    // node's current attempt is ignored (a pre-restart child result).
+    type: z.literal('call.returned'),
+    runId: z.string(),
+    callNodeId: z.string(),
+    attemptId: z.string(),
+    childRunId: z.string(),
+    childOutcome: RunOutcomeSchema,
+    outputs: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
     type: z.literal('run.finished'),
     runId: z.string(),
     outcome: RunOutcomeSchema,
@@ -203,8 +257,9 @@ export type EngineEvent = z.infer<typeof EngineEventSchema>;
 
 /**
  * Requests from the reducer to the driver. A command NEVER changes state — the
- * driver performs it and appends the resulting event. `startChild` (call_pipeline)
- * is P2c — deferred, not in this union yet.
+ * driver performs it and appends the resulting event. `startChild` (P2c) asks
+ * the driver to spawn a `call_pipeline` child; the reducer awaits a
+ * `call.returned` event before the call node leaves `waiting`.
  */
 export const EngineCommandSchema = z.discriminatedUnion('type', [
   z.object({
@@ -212,6 +267,18 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     nodeId: z.string(),
     attemptId: z.string(),
     preparedInput: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
+    // Spawn a `call_pipeline` child. `childRunId` is DETERMINISTIC from
+    // (parent runId + callNodeId + attempt) so a crash-replay re-emits the SAME
+    // command and the driver's child creation is idempotent (CP1 Q1).
+    type: z.literal('startChild'),
+    callNodeId: z.string(),
+    attemptId: z.string(),
+    childRunId: z.string(),
+    /** Resolved literal id (a `${}` ref in the call config is substituted first). */
+    pipelineVersionId: z.string(),
+    params: z.record(z.string(), z.unknown()),
   }),
   z.object({
     type: z.literal('finishRun'),

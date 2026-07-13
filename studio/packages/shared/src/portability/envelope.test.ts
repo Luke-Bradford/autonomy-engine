@@ -30,6 +30,7 @@ const validPipelineEnvelope = {
         outputs: [],
         nodes: [],
         edges: [],
+        containers: [],
         catalogVersion: CATALOG_VERSION,
         createdAt: 1700000000000,
       },
