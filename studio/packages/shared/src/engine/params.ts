@@ -7,6 +7,7 @@ import type {
   SubstitutionContext,
 } from './types.js';
 import { ParamResolveError, SubstituteError } from './types.js';
+import { declaredOutputNames } from './outputs.js';
 
 // ---------------------------------------------------------------------------
 // The `${...}` parameter language (ported from lib/pipeline.py's S3.1 resolver).
@@ -483,11 +484,22 @@ export function validateRefs(doc: Pick<PipelineVersion, 'params' | 'nodes' | 'ed
 
   const graph = computeGraph(doc);
 
+  // Each producer's declared output names (req c), computed once. The SSOT is
+  // the same `config.outputs` the reducer stores/validates against, so a name
+  // static validation accepts is exactly one the run would keep at `succeeded`.
+  const outputsById = new Map<string, Set<string> | null>();
+  for (const node of doc.nodes) outputsById.set(node.id, declaredOutputNames(node));
+
   for (const node of doc.nodes) {
     const guaranteed = graph.guaranteed.get(node.id) ?? new Set<string>();
     const reachable = graph.reachable.get(node.id) ?? new Set<string>();
     const soft = graph.soft.get(node.id) ?? new Set<string>();
-    scan(`nodes.${node.id}.config`, node.config, { declared, guaranteed, reachable, soft }, errors);
+    scan(
+      `nodes.${node.id}.config`,
+      node.config,
+      { declared, guaranteed, reachable, soft, outputsById },
+      errors,
+    );
   }
   return errors;
 }
@@ -810,6 +822,14 @@ interface ScanScope {
   reachable: Set<string>;
   /** Back-edge-visible sibling node ids — readable only inside `default()`. */
   soft: Set<string>;
+  /**
+   * Producer node id → its DECLARED output names (from `config.outputs`), or
+   * `null` when it declares no contract. A `${nodes.X.output.NAME}` whose NAME
+   * is absent from a non-`null` set can only fail at run time, so it is rejected
+   * (req c). Absent from the map (or `undefined`) → no name-check for that id.
+   * Populated by `validateRefs`; omitted elsewhere (e.g. `validateExitWhen`).
+   */
+  outputsById?: Map<string, Set<string> | null>;
 }
 
 function scan(where: string, value: unknown, scope: ScanScope, errors: string[]): void {
@@ -907,6 +927,21 @@ function checkExprStatic(
   }
   if (parts[0] === 'nodes' && parts.length === 4 && parts[2] === 'output') {
     const id = parts[1] as string;
+    const name = parts[3] as string;
+    // req (c): reject an output NAME the producer does not declare. A bare ref
+    // to an absent output can only throw at run time (dispatch-prep fails), so
+    // it is invalid regardless of dominance. EXCLUDED inside `default()`'s
+    // first arg (`softOk`), where a missing node output is caught and the
+    // fallback used — an unknown name resolves fine there, so rejecting it
+    // would be a false reject. A producer with no declared contract (`null`)
+    // has no enforceable names; an id absent from the map is not checked.
+    const declaredNames = scope.outputsById?.get(id);
+    if (!softOk && declaredNames != null && !declaredNames.has(name)) {
+      errors.push(
+        `${where}: \${nodes.${id}.output.${name}} — node '${id}' declares no output named '${name}'`,
+      );
+      return;
+    }
     if (scope.guaranteed.has(id)) return; // dominates + succeeded → available
     // KNOWN RESTRICTION (safe false-reject, not fixed here): `softOk` is only
     // threaded to `default()`'s OWN first-arg ref — a non-dominating node

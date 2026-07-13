@@ -473,3 +473,77 @@ describe('validateRefs — node-output availability / dominance', () => {
     expect(validateRefs(d)).toEqual([]);
   });
 });
+
+// ===========================================================================
+// validateRefs — node-output NAME against the producer's DECLARED outputs
+// (deferred req c). A ref to `${nodes.X.output.NAME}` where X DECLARES an
+// output contract (`config.outputs`) but has no output named NAME can only
+// fail at run time, so it is rejected statically — the same `config.outputs`
+// the reducer uses as its runtime output SSOT (storeOutputs/validateOutputs).
+// ===========================================================================
+
+describe('validateRefs — node-output NAME against declared outputs (req c)', () => {
+  // A producer node that DECLARES an output contract via `config.outputs`.
+  function producer(id: string, outputs: { name: string; type: string }[]): Node {
+    return node(id, { outputs });
+  }
+
+  it('a ref to a DECLARED output name is ok', () => {
+    const d = doc(
+      [producer('a', [{ name: 'v', type: 'string' }]), node('b', { in: '${nodes.a.output.v}' })],
+      [edge('a', 'b', 'success')],
+    );
+    expect(validateRefs(d)).toEqual([]);
+  });
+
+  it('a ref to an UNDECLARED output name is an error (producer declares a contract)', () => {
+    const d = doc(
+      [
+        producer('a', [{ name: 'v', type: 'string' }]),
+        node('b', { in: '${nodes.a.output.missing}' }),
+      ],
+      [edge('a', 'b', 'success')],
+    );
+    expect(validateRefs(d).join('\n')).toMatch(/declares no output named 'missing'/);
+  });
+
+  it('a producer with NO declared outputs enforces no name contract (any name ok)', () => {
+    // config `{}` → no `outputs` array → the reducer stores the whole payload,
+    // so any referenced name may exist at run time; nothing to reject statically.
+    const d = doc(
+      [node('a', {}), node('b', { in: '${nodes.a.output.anything}' })],
+      [edge('a', 'b', 'success')],
+    );
+    expect(validateRefs(d)).toEqual([]);
+  });
+
+  it('an undeclared name inside default() is NOT rejected (runtime falls back)', () => {
+    // `default(nodes.a.output.missing, "fb")` catches the missing output and
+    // uses the fallback, so an unknown name resolves fine — a static reject
+    // here would be a false reject.
+    const d = doc(
+      [
+        producer('a', [{ name: 'v', type: 'string' }]),
+        node('b', { in: '${default(nodes.a.output.missing, "fb")}' }),
+      ],
+      [edge('a', 'b', 'success')],
+    );
+    expect(validateRefs(d)).toEqual([]);
+  });
+
+  it('the accepted-name set matches what the reducer would store (consistency)', () => {
+    // `v` is declared → accepted; `w` is not → rejected. This is exactly the
+    // set `storeOutputs` keeps, so static validation and runtime storage agree.
+    const decls = [{ name: 'v', type: 'string' }];
+    const okay = doc(
+      [producer('a', decls), node('b', { in: '${nodes.a.output.v}' })],
+      [edge('a', 'b', 'success')],
+    );
+    const bad = doc(
+      [producer('a', decls), node('b', { in: '${nodes.a.output.w}' })],
+      [edge('a', 'b', 'success')],
+    );
+    expect(validateRefs(okay)).toEqual([]);
+    expect(validateRefs(bad).join('\n')).toMatch(/declares no output named 'w'/);
+  });
+});
