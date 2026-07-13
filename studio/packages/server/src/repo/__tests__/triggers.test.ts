@@ -60,7 +60,17 @@ describe('triggers repo', () => {
     const a = createTrigger(db, buildTriggerInput(version.id));
     createTrigger(db, buildTriggerInput(otherVersion.id));
 
-    expect(listTriggers(db, version.id)).toEqual([a]);
+    expect(listTriggers(db, { pipelineVersionId: version.id })).toEqual([a]);
+    expect(listTriggers(db)).toHaveLength(2);
+  });
+
+  it('lists triggers filtered by ownerId, in SQL (never over-fetched then filtered)', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    const mine = createTrigger(db, buildTriggerInput(version.id));
+    createTrigger(db, { ...buildTriggerInput(version.id), ownerId: 'someone-else' });
+
+    expect(listTriggers(db, { ownerId: 'local' })).toEqual([mine]);
     expect(listTriggers(db)).toHaveLength(2);
   });
 

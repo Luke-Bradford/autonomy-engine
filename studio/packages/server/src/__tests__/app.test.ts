@@ -2,13 +2,16 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { FastifyInstance } from 'fastify';
+import { buildApp, resolvePort } from '../index.js';
 
-// The DB path must be set before `../index.js` is imported, since it reads
-// process.env.DB_PATH at module-eval time to open the database.
+// `dbPath`/`masterKeyFile` are passed as call-time options to `buildApp()`
+// rather than via `process.env` — `process.env` is process-global and
+// shared across concurrently-running test files in the same vitest worker,
+// so mutating it would let two test files stomp each other's DB path.
 const tmpDir = mkdtempSync(join(tmpdir(), 'autonomy-studio-server-test-'));
-process.env.DB_PATH = join(tmpDir, 'test.sqlite');
-
-const { buildApp, resolvePort } = await import('../index.js');
+const dbPath = join(tmpDir, 'test.sqlite');
+const masterKeyFile = join(tmpDir, 'master.key');
 
 describe('resolvePort', () => {
   it('defaults to 8080 when unset or empty', () => {
@@ -26,9 +29,10 @@ describe('resolvePort', () => {
 });
 
 describe('server app', () => {
-  const app = buildApp();
+  let app: FastifyInstance;
 
   beforeAll(async () => {
+    app = await buildApp({ dbPath, masterKeyFile });
     await app.ready();
   });
 

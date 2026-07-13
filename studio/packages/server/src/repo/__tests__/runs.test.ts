@@ -81,6 +81,16 @@ describe('runs repo', () => {
     expect(listRuns(db)).toHaveLength(4);
   });
 
+  it('filters listRuns by ownerId, in SQL (never over-fetched then filtered)', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    const mine = createRun(db, buildRunInput(version.id));
+    createRun(db, buildRunInput(version.id, { ownerId: 'someone-else' }));
+
+    expect(listRuns(db, { ownerId: 'local' })).toEqual([mine]);
+    expect(listRuns(db)).toHaveLength(2);
+  });
+
   it('updates run lifecycle fields (status/lease/heartbeat/finishedAt)', () => {
     const { db } = freshDb();
     const version = setupPipelineVersion(db);

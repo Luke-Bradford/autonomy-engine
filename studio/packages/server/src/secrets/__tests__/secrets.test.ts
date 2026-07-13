@@ -19,16 +19,22 @@ import {
   resolveMasterKey,
 } from '../secrets.js';
 
+// A fixed 32-byte test key — never used for anything but these tests. Must
+// be generated only AFTER `sodium.ready` resolves, so it cannot be a
+// module-top-level `const`: `sodium`'s wasm init is shared per-process, and
+// computing this eagerly at import time raced other test files in the same
+// vitest worker over whether it had finished loading yet
+// (`TypeError: default.randombytes_buf is not a function`, intermittent).
+let TEST_KEY: Uint8Array;
+
 beforeAll(async () => {
   await sodium.ready;
+  TEST_KEY = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_KEYBYTES);
 });
 
 function freshTmpDir(): string {
   return mkdtempSync(join(tmpdir(), 'autonomy-secrets-test-'));
 }
-
-// A fixed 32-byte test key — never used for anything but these tests.
-const TEST_KEY = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_KEYBYTES);
 
 describe('encrypt / decrypt', () => {
   it('round-trips plain ASCII', async () => {

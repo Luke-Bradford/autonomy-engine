@@ -65,3 +65,33 @@ export const NewTriggerSchema = TriggerSchema.omit({
 // z.input, not z.infer/z.output — see the note on NewConnection in
 // connection.ts for why every insert type in this package uses it.
 export type NewTrigger = z.input<typeof NewTriggerSchema>;
+
+/**
+ * `webhook.secretRef` with `secretRef` stripped — mirrors
+ * `WebhookConfigSchema` minus its one required field, same shape a client
+ * should see as `ConnectionPublicSchema` gives for a connection's
+ * `secretRef`. NOTE: plain `.omit({ secretRef: true })` does NOT work here —
+ * `WebhookConfigSchema`'s `.catchall(z.unknown())` re-admits any key not in
+ * the declared shape (that's the whole point of a catchall: pass unknown
+ * keys through), so an omitted-from-the-shape `secretRef` still round-trips
+ * as an unrecognized/catchall key. A `.transform()` that deletes the key
+ * from the parsed output is the only way to actually drop it.
+ */
+export const WebhookPublicConfigSchema = WebhookConfigSchema.transform((webhook) => {
+  const { secretRef, ...rest } = webhook;
+  void secretRef;
+  return rest;
+});
+export type WebhookPublicConfig = z.infer<typeof WebhookPublicConfigSchema>;
+
+/**
+ * Client-facing projection with `webhook.secretRef` stripped, so a trigger
+ * response never reveals which secret record backs its webhook. It's an
+ * opaque ref rather than secret material, but this keeps the hardening
+ * symmetric with `ConnectionPublicSchema` (defense-in-depth, not because the
+ * ref alone is exploitable).
+ */
+export const TriggerPublicSchema = TriggerSchema.extend({
+  webhook: WebhookPublicConfigSchema.nullable(),
+});
+export type TriggerPublic = z.infer<typeof TriggerPublicSchema>;
