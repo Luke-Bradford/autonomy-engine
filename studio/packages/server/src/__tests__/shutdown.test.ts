@@ -2,7 +2,6 @@ import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { spawnSupervised } from '../workers/process-supervisor.js';
 import { buildTestApp } from './build-test-app.js';
 
 describe('server shutdown', () => {
@@ -28,7 +27,11 @@ describe('server shutdown', () => {
       setInterval(() => {}, 1000);
     `;
 
-    const supervised = spawnSupervised({
+    // Spawn through the APP'S OWN supervisor (`app.supervisor`), the same
+    // instance `onClose` reaps — this is what proves the per-app wiring, not a
+    // shared module global (a separate `createSupervisor()` here would NOT be
+    // reaped by `app.close()`, which is exactly the isolation we now want).
+    const supervised = app.supervisor.spawnSupervised({
       command: process.execPath,
       args: ['-e', parentScript, sentinelPath],
     });

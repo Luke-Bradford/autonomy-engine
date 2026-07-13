@@ -2,8 +2,8 @@ import { existsSync, mkdtempSync } from 'node:fs';
 import { getEventListeners } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { reapAllSupervised, spawnSupervised, type OutputLineEvent } from '../process-supervisor.js';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { createSupervisor, type Supervisor, type OutputLineEvent } from '../process-supervisor.js';
 
 /**
  * All fixtures below drive `process.execPath` with an inline `-e` script —
@@ -19,6 +19,14 @@ async function collectEvents(events: AsyncIterable<OutputLineEvent>): Promise<Ou
 }
 
 describe('spawnSupervised', () => {
+  // A FRESH supervisor instance per test: its own live-pid registry, so a
+  // `reapAllSupervised()` here never reaches another test's (or another app's)
+  // children. This is the per-instance isolation the factory provides.
+  let sup: Supervisor;
+  beforeEach(() => {
+    sup = createSupervisor();
+  });
+
   it('streams line-framed stdout in order', async () => {
     const script = `
       let i = 0;
@@ -29,7 +37,7 @@ describe('spawnSupervised', () => {
       }, 15);
     `;
 
-    const supervised = spawnSupervised({ command: process.execPath, args: ['-e', script] });
+    const supervised = sup.spawnSupervised({ command: process.execPath, args: ['-e', script] });
     const [events, result] = await Promise.all([
       collectEvents(supervised.events),
       supervised.result,
@@ -47,7 +55,7 @@ describe('spawnSupervised', () => {
   it('tree-kills a long-running script on hard timeout', async () => {
     const script = `setInterval(() => {}, 1000);`;
 
-    const supervised = spawnSupervised({
+    const supervised = sup.spawnSupervised({
       command: process.execPath,
       args: ['-e', script],
       timeoutMs: 200,
@@ -66,7 +74,7 @@ describe('spawnSupervised', () => {
     const script = `setInterval(() => {}, 1000);`;
     const controller = new AbortController();
 
-    const supervised = spawnSupervised({
+    const supervised = sup.spawnSupervised({
       command: process.execPath,
       args: ['-e', script],
       signal: controller.signal,
@@ -105,7 +113,7 @@ describe('spawnSupervised', () => {
       setInterval(() => {}, 1000);
     `;
 
-    const supervised = spawnSupervised({
+    const supervised = sup.spawnSupervised({
       command: process.execPath,
       args: ['-e', parentScript, sentinelPath],
       timeoutMs: 200,
@@ -131,7 +139,7 @@ describe('spawnSupervised', () => {
     `;
 
     const maxOutputBytes = 64 * 1024;
-    const supervised = spawnSupervised({
+    const supervised = sup.spawnSupervised({
       command: process.execPath,
       args: ['-e', script],
       maxOutputBytes,
@@ -186,7 +194,7 @@ describe('spawnSupervised', () => {
       }
     `;
     const maxOutputBytes = 64 * 1024;
-    const supervised = spawnSupervised({
+    const supervised = sup.spawnSupervised({
       command: process.execPath,
       args: ['-e', script],
       maxOutputBytes,
@@ -206,7 +214,7 @@ describe('spawnSupervised', () => {
     // (`pid: undefined`, `exitCode`/`signal` both `undefined`). This test
     // pins that `spawnSupervised` surfaces that as a normal resolved
     // `SupervisedResult`, not a hang.
-    const supervised = spawnSupervised({ command: 'this-command-does-not-exist-xyz-123' });
+    const supervised = sup.spawnSupervised({ command: 'this-command-does-not-exist-xyz-123' });
 
     const hangGuard = new Promise<never>((_, reject) => {
       setTimeout(
@@ -231,7 +239,7 @@ describe('spawnSupervised', () => {
   it('removes the AbortSignal "abort" listener once settled (no accumulation on a shared signal)', async () => {
     const controller = new AbortController();
 
-    const supervised = spawnSupervised({
+    const supervised = sup.spawnSupervised({
       command: process.execPath,
       args: ['-e', 'process.exit(0);'],
       signal: controller.signal,
@@ -252,7 +260,7 @@ describe('spawnSupervised', () => {
     const script = `setInterval(() => {}, 1000);`;
     const controller = new AbortController();
 
-    const supervised = spawnSupervised({
+    const supervised = sup.spawnSupervised({
       command: process.execPath,
       args: ['-e', script],
       timeoutMs: 100,
@@ -271,7 +279,7 @@ describe('spawnSupervised', () => {
   }, 10_000);
 
   it('reapAllSupervised does not throw when a tracked process has already exited (ESRCH-as-success)', async () => {
-    const supervised = spawnSupervised({
+    const supervised = sup.spawnSupervised({
       command: process.execPath,
       args: ['-e', 'process.exit(0);'],
     });
@@ -279,7 +287,7 @@ describe('spawnSupervised', () => {
     // Race the reap against the child's own near-instant natural exit --
     // whichever wins, `killTree`'s ESRCH branch (process group already
     // gone) must be treated as a successful no-op, never thrown.
-    await expect(reapAllSupervised()).resolves.toBeUndefined();
+    await expect(sup.reapAllSupervised()).resolves.toBeUndefined();
 
     const result = await supervised.result;
     expect(result.exitCode === 0 || result.signal !== null).toBe(true);
@@ -300,7 +308,7 @@ describe('spawnSupervised', () => {
       setInterval(() => {}, 1000);
     `;
 
-    const supervised = spawnSupervised({
+    const supervised = sup.spawnSupervised({
       command: process.execPath,
       args: ['-e', parentScript, sentinelPath],
     });
@@ -309,7 +317,7 @@ describe('spawnSupervised', () => {
     // reap.
     await new Promise((resolve) => setTimeout(resolve, 150));
 
-    await reapAllSupervised();
+    await sup.reapAllSupervised();
 
     const result = await supervised.result;
     expect(result.killed).toBe(true);
@@ -325,23 +333,71 @@ describe('spawnSupervised', () => {
     // No spawn at all in this test — `liveSupervised` is guaranteed empty.
     // This is the "host calls reapAllSupervised() but nothing was running"
     // case (e.g. shutdown right after boot) and must resolve cleanly.
-    await expect(reapAllSupervised()).resolves.toBeUndefined();
+    await expect(sup.reapAllSupervised()).resolves.toBeUndefined();
   });
 
   it('reapAllSupervised is idempotent: a second call after everything is already reaped is a safe no-op', async () => {
     const script = `setInterval(() => {}, 1000);`;
 
-    const supervised = spawnSupervised({ command: process.execPath, args: ['-e', script] });
+    const supervised = sup.spawnSupervised({ command: process.execPath, args: ['-e', script] });
 
     // Give it a moment to actually be spawned/tracked before reaping.
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    await reapAllSupervised();
+    await sup.reapAllSupervised();
     const result = await supervised.result;
     expect(result.killed).toBe(true);
 
     // The child is gone and no longer tracked — calling reapAllSupervised()
     // again must not throw, hang, or attempt to re-kill anything.
-    await expect(reapAllSupervised()).resolves.toBeUndefined();
+    await expect(sup.reapAllSupervised()).resolves.toBeUndefined();
+  }, 10_000);
+
+  it('two supervisor instances are ISOLATED: reaping one leaves the other running (factory req a)', async () => {
+    // The load-bearing property of the createSupervisor() factory: each
+    // instance has its OWN live-pid registry, so instance A's shutdown reap
+    // must NOT touch instance B's children. (With the old module-global
+    // registry, `reapAllSupervised()` reaped EVERYTHING — two apps in one
+    // process would kill each other's subprocesses on either's shutdown.)
+    const tmpDir = mkdtempSync(join(tmpdir(), 'process-supervisor-isolation-'));
+    const sentinelPath = join(tmpDir, 'b-alive.txt');
+
+    const supA = createSupervisor();
+    const supB = createSupervisor();
+
+    // A's child just idles. B's child proves it's still ALIVE by writing a
+    // sentinel after 300ms, then idles. The sentinel is the real discriminator:
+    // `killed`/`markKilled` flips true under EITHER isolation or leakage (it is
+    // set by whichever reap runs), so it cannot distinguish them — only "did B's
+    // child survive A's reap long enough to write" can.
+    const childA = supA.spawnSupervised({
+      command: process.execPath,
+      args: ['-e', `setInterval(() => {}, 1000);`],
+    });
+    const bScript = `setTimeout(() => require('fs').writeFileSync(process.argv[1], 'alive'), 300); setInterval(() => {}, 1000);`;
+    const childB = supB.spawnSupervised({
+      command: process.execPath,
+      args: ['-e', bScript, sentinelPath],
+    });
+
+    // Let both actually spawn/track, then reap ONLY A — well before B's 300ms
+    // sentinel write. Under leakage, this SIGTERMs B's child too, so B never
+    // writes; under isolation, B is untouched and writes on schedule.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await supA.reapAllSupervised();
+
+    const resultA = await childA.result;
+    expect(resultA.killed).toBe(true);
+    expect(resultA.exitCode === 0 && resultA.signal === null).toBe(false);
+
+    // Wait well past B's 300ms write (generous margin for CI scheduling jitter),
+    // WITHOUT reaping B. The sentinel's presence proves B survived A's reap.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(existsSync(sentinelPath)).toBe(true);
+
+    // Cleanup: B's own reap kills B's child (and confirms the reap works).
+    await supB.reapAllSupervised();
+    const resultB = await childB.result;
+    expect(resultB.killed).toBe(true);
   }, 10_000);
 });

@@ -4,7 +4,7 @@ import { HelloSchema, type Hello } from '@autonomy-studio/shared';
 import { openDb } from './db/client.js';
 import { appMeta } from './db/schema.js';
 import { resolveMasterKey } from './secrets/secrets.js';
-import { reapAllSupervised } from './workers/process-supervisor.js';
+import { createSupervisor } from './workers/process-supervisor.js';
 import { getPipelineVersion } from './repo/pipeline-versions.js';
 import { reconcileOnBoot } from './run/reconcile.js';
 import { registerAuthHook } from './auth/principal.js';
@@ -61,6 +61,14 @@ export async function buildApp(opts?: BuildAppOptions) {
   const { db } = openDb(dbPath);
   fastify.decorate('db', db);
   fastify.decorate('masterKey', masterKeyResolution.key);
+
+  // One process supervisor PER app instance (not a module global), so this
+  // app's graceful-shutdown reap tree-kills ONLY the `agent_cli` subprocesses
+  // it spawned — never another app instance's (test isolation, multi-tenant).
+  // The real consumer (the `agent_cli` connector) arrives in a later P3 slice;
+  // it is created and reaped here now so the shutdown contract holds from boot.
+  const supervisor = createSupervisor();
+  fastify.decorate('supervisor', supervisor);
 
   // Prove the DB round-trips on boot: upsert a "last_boot" row, then read it
   // straight back.
@@ -121,7 +129,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   // wiring, so no in-flight `agent_cli` subprocess tree survives a graceful
   // restart/deploy.
   fastify.addHook('onClose', async () => {
-    await reapAllSupervised();
+    await supervisor.reapAllSupervised();
   });
 
   return fastify;

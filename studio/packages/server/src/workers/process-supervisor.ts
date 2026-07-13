@@ -15,12 +15,16 @@
  *   process on its own signal handler would hard-terminate the whole server
  *   ahead of the host's own graceful-shutdown sequence (e.g. Fastify's
  *   `close()`/connection-drain), racing or short-circuiting it. It
- *   compensates by tracking every live supervised pid in a module-level map
- *   and exporting `reapAllSupervised()` — the HOST app MUST call this from
- *   ITS OWN graceful-shutdown sequence (e.g. a Fastify `onClose` hook,
- *   BEFORE the process actually exits) so an in-flight subprocess tree does
- *   not survive a restart/deploy. This module does not decide when the
- *   process exits; it only reaps what it's told to, when it's told to.
+ *   compensates by having each `createSupervisor()` instance track its OWN
+ *   live supervised pids and expose `reapAllSupervised()` — the HOST app MUST
+ *   call ITS supervisor's `reapAllSupervised()` from ITS OWN graceful-shutdown
+ *   sequence (e.g. a Fastify `onClose` hook, BEFORE the process actually
+ *   exits) so an in-flight subprocess tree does not survive a restart/deploy.
+ *   The live-pid registry is PER INSTANCE (not a module global), so one app's
+ *   shutdown reap never touches another app's children; only the process-wide
+ *   `'exit'` backstop is shared (there is one process). This module does not
+ *   decide when the process exits; it only reaps what it's told to, when it's
+ *   told to.
  * - As a last-resort backstop (NOT a substitute for the host wiring
  *   `reapAllSupervised()` into its own shutdown), this module installs one
  *   synchronous `process.on('exit', …)` handler that best-effort SIGKILLs
@@ -281,60 +285,97 @@ async function killTree(pid: number, signal: NodeJS.Signals): Promise<void> {
   }
 }
 
-/** Live pids currently under supervision, keyed by pid, with a callback to
- * mark that spawn's own result as "killed" when reaped via
- * `reapAllSupervised` (a graceful-shutdown reap, not a timeout/abort). */
-const liveSupervised = new Map<number, { markKilled: () => void }>();
-
-let shutdownHandlersInstalled = false;
+/** Live pids under supervision, keyed by pid, with a callback to mark that
+ * spawn's own result "killed" when reaped via `reapAllSupervised` (a
+ * graceful-shutdown reap, not a timeout/abort). One map PER supervisor
+ * instance (see `createSupervisor`), never a module global. */
+type LiveSupervisedMap = Map<number, { markKilled: () => void }>;
 
 /**
- * Registers the process-level `'exit'` backstop exactly once (across
- * however many times `spawnSupervised` is called). This module does NOT
- * install `SIGTERM`/`SIGINT` handlers and does NOT call `process.exit()` —
- * see the module-level contract doc for why a library must not own process
- * exit. The HOST app is responsible for calling `reapAllSupervised()` from
- * its own graceful-shutdown sequence; this backstop only covers whatever
- * that reap couldn't finish (or wasn't given the chance to run) before the
- * event loop drains.
+ * The `'exit'` backstop is process-wide (there is only one process), so it is
+ * shared across EVERY supervisor instance: each instance registers its own
+ * `LiveSupervisedMap` here, and the one installed handler reaps them all. This
+ * is the only remaining module-level state — deliberately NOT the live-pid
+ * registry itself (that is per-instance, so one app's shutdown reap never
+ * touches another app's children — the isolation the `createSupervisor` factory
+ * exists to provide).
  */
-function installShutdownHandlersOnce(): void {
-  if (shutdownHandlersInstalled) return;
-  shutdownHandlersInstalled = true;
+const exitBackstopLiveMaps = new Set<LiveSupervisedMap>();
+let exitBackstopInstalled = false;
+
+/**
+ * Registers the process-level `'exit'` backstop exactly once (however many
+ * supervisor instances are created). This module does NOT install
+ * `SIGTERM`/`SIGINT` handlers and does NOT call `process.exit()` — see the
+ * module-level contract doc for why a library must not own process exit. Each
+ * HOST app is responsible for calling ITS OWN supervisor's `reapAllSupervised()`
+ * from its graceful-shutdown sequence; this backstop only covers whatever those
+ * reaps couldn't finish (or weren't given the chance to run) before the event
+ * loop drains, across all instances.
+ */
+function installExitBackstopOnce(): void {
+  if (exitBackstopInstalled) return;
+  exitBackstopInstalled = true;
 
   // 'exit' handlers must be synchronous, cannot prevent the process from
   // exiting, and do not suppress Node's default signal handling — so this
   // is always safe for a library to install. Best-effort SIGKILL straight
   // to each live process group; no waiting for grace periods.
   process.on('exit', () => {
-    for (const pid of liveSupervised.keys()) {
-      try {
-        process.kill(-pid, 'SIGKILL');
-      } catch {
-        // Best-effort; nothing more we can do synchronously during exit.
+    for (const live of exitBackstopLiveMaps) {
+      for (const pid of live.keys()) {
+        try {
+          process.kill(-pid, 'SIGKILL');
+        } catch {
+          // Best-effort; nothing more we can do synchronously during exit.
+        }
       }
     }
   });
 }
 
 /**
- * Best-effort tree-kill of every currently-supervised child: SIGTERM, a
- * grace period, then SIGKILL for anything still alive. This is the
- * deliberate graceful-shutdown reap.
- *
- * THE HOST APP MUST CALL THIS from its own graceful-shutdown sequence
- * (e.g. a Fastify `onClose` hook, or its own `SIGTERM`/`SIGINT` handler)
- * BEFORE the process actually exits — this module deliberately does NOT
- * install its own `SIGTERM`/`SIGINT` handlers or call `process.exit()` (see
- * the module-level contract doc: a library must not own process exit, and
- * must not swallow the default terminate-on-signal behaviour either). If
- * the host never wires this in, only the synchronous best-effort `'exit'`
- * backstop applies, and a hard `SIGKILL`/panic of the server process itself
- * is unrecoverable from in-process code either way — that case reconciles
- * via the boot-time run-recovery reconciler (`running` → `interrupted`),
- * not via this function.
+ * A per-app process supervisor: its own live-pid registry (so its shutdown reap
+ * touches ONLY its own children) plus a share of the one process-wide `'exit'`
+ * backstop. The host (`buildApp`) creates ONE per app instance and injects it
+ * where subprocess workers are spawned (the `agent_cli` connector), wiring
+ * `reapAllSupervised()` into its own `onClose`. Two apps in one process (test
+ * isolation, multi-tenant) get independent supervisors that never reap each
+ * other's subprocess trees.
  */
-export async function reapAllSupervised(): Promise<void> {
+export interface Supervisor {
+  spawnSupervised(opts: SpawnSupervisedOptions): SupervisedProcess;
+  reapAllSupervised(): Promise<void>;
+}
+
+export function createSupervisor(): Supervisor {
+  const liveSupervised: LiveSupervisedMap = new Map();
+  installExitBackstopOnce();
+  exitBackstopLiveMaps.add(liveSupervised);
+  return {
+    spawnSupervised: (opts) => spawnSupervisedImpl(liveSupervised, opts),
+    reapAllSupervised: () => reapAllSupervisedImpl(liveSupervised),
+  };
+}
+
+/**
+ * Best-effort tree-kill of every child supervised BY THIS INSTANCE: SIGTERM, a
+ * grace period, then SIGKILL for anything still alive. This is the deliberate
+ * graceful-shutdown reap.
+ *
+ * THE HOST APP MUST CALL ITS SUPERVISOR'S `reapAllSupervised()` from its own
+ * graceful-shutdown sequence (e.g. a Fastify `onClose` hook, or its own
+ * `SIGTERM`/`SIGINT` handler) BEFORE the process actually exits — this module
+ * deliberately does NOT install its own `SIGTERM`/`SIGINT` handlers or call
+ * `process.exit()` (see the module-level contract doc: a library must not own
+ * process exit, and must not swallow the default terminate-on-signal behaviour
+ * either). If the host never wires this in, only the synchronous best-effort
+ * `'exit'` backstop applies, and a hard `SIGKILL`/panic of the server process
+ * itself is unrecoverable from in-process code either way — that case
+ * reconciles via the boot-time run-recovery reconciler (`running` →
+ * `interrupted`), not via this function.
+ */
+async function reapAllSupervisedImpl(liveSupervised: LiveSupervisedMap): Promise<void> {
   const entries = Array.from(liveSupervised.entries());
   if (entries.length === 0) return;
 
@@ -347,9 +388,10 @@ export async function reapAllSupervised(): Promise<void> {
   );
 }
 
-export function spawnSupervised(opts: SpawnSupervisedOptions): SupervisedProcess {
-  installShutdownHandlersOnce();
-
+function spawnSupervisedImpl(
+  liveSupervised: LiveSupervisedMap,
+  opts: SpawnSupervisedOptions,
+): SupervisedProcess {
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   const queue = new AsyncEventQueue<OutputLineEvent>();
 
