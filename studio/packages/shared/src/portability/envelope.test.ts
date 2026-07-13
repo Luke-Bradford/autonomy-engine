@@ -206,6 +206,46 @@ describe('parseAndUpgradeEnvelope', () => {
       );
     });
 
+    it('throws ImportError when a registered upgrader OVERSHOOTS past schemaVersion + 1', () => {
+      // A single upgrader that jumps straight from 0 to SCHEMA_VERSION + 1
+      // (skipping 1, and skipping SCHEMA_VERSION itself) must be rejected —
+      // otherwise it could silently skip an intermediate version's own
+      // upgrader, or land past `SCHEMA_VERSION` undetected.
+      const overshootingUpgrader: Upgrader = (env) => {
+        const e = env as Record<string, unknown>;
+        return { ...e, schemaVersion: SCHEMA_VERSION + 1 };
+      };
+      const olderEnvelope = { ...validPipelineEnvelope, schemaVersion: 0 };
+      expect(() =>
+        parseAndUpgradeEnvelope(olderEnvelope, new Map([[0, overshootingUpgrader]])),
+      ).toThrow(ImportError);
+    });
+
+    it('throws ImportError on a version GAP with no upgrader registered for the intermediate version', () => {
+      // Two hops below SCHEMA_VERSION (-1 -> 0 -> 1), but only the FIRST
+      // hop's upgrader is registered — the chain must not be able to skip
+      // straight from -1 to SCHEMA_VERSION even if such an upgrader existed;
+      // here it simply has nowhere to go once it reaches schemaVersion 0.
+      const upgradeMinusOneToZero: Upgrader = (env) => {
+        const e = env as Record<string, unknown>;
+        return { ...e, schemaVersion: 0 };
+      };
+      const legacyEnvelope = { ...validPipelineEnvelope, schemaVersion: -1 };
+      expect(() =>
+        parseAndUpgradeEnvelope(legacyEnvelope, new Map([[-1, upgradeMinusOneToZero]])),
+      ).toThrow(ImportError);
+    });
+
+    it('a normal one-step chain lands EXACTLY on SCHEMA_VERSION', () => {
+      const upgradeZeroToOne: Upgrader = (env) => {
+        const e = env as Record<string, unknown>;
+        return { ...e, schemaVersion: 1 };
+      };
+      const olderEnvelope = { ...validPipelineEnvelope, schemaVersion: 0 };
+      const result = parseAndUpgradeEnvelope(olderEnvelope, new Map([[0, upgradeZeroToOne]]));
+      expect(result.schemaVersion).toBe(SCHEMA_VERSION);
+    });
+
     it('throws ImportError when a registered upgrader returns a malformed (non-object) envelope', () => {
       const brokenUpgrader: Upgrader = () => 'not-an-object';
       const olderEnvelope = { ...validPipelineEnvelope, schemaVersion: 0 };

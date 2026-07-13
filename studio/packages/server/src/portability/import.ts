@@ -111,11 +111,21 @@ function importTriggerEnvelope(
   // `webhook` is likewise always null: a webhook trigger's `secretRef` is
   // never exported/imported (same reasoning as a connection secret), so
   // there is no valid `WebhookConfigSchema` value to reconstruct here.
+  //
+  // `enabled` is ALSO forced false here, regardless of what the envelope
+  // carried: an imported trigger is unbound (`pipelineVersionId: null`)
+  // by construction, so `enabled: true` + unbound would otherwise rest
+  // solely on the future P4 scheduler's null-check to never fire it.
+  // Defense-in-depth — the importer must explicitly rebind + re-enable via
+  // the normal routes before this trigger can run. The P4 scheduler must
+  // STILL refuse to fire a null-bound trigger; that null-check remains the
+  // primary guarantee, this is a belt-and-braces second line of defense.
   const created = createTrigger(db, {
     ...rest,
     ownerId,
     pipelineVersionId: null,
     webhook: null,
+    enabled: false,
   });
 
   return { kind: 'trigger', trigger: TriggerPublicSchema.parse(created), attention };

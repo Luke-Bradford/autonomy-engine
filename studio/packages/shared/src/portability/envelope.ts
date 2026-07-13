@@ -216,17 +216,36 @@ export function parseAndUpgradeEnvelope(
       );
     }
     const nextVersion = upgraded.schemaVersion;
+    // Each registered upgrader must advance EXACTLY one version — a gap
+    // (nextVersion <= schemaVersion, already impossible for a well-behaved
+    // upgrader chain since the missing-upgrader check above would have
+    // caught it) or an OVERSHOOT (nextVersion > schemaVersion + 1) would
+    // otherwise let a single upgrader silently skip past an intermediate
+    // version's own upgrader (or past SCHEMA_VERSION itself). Requiring
+    // exactly `schemaVersion + 1` makes the chain walk one step at a time,
+    // no matter how many hops separate the envelope's version from
+    // `SCHEMA_VERSION`.
     if (
       typeof nextVersion !== 'number' ||
       !Number.isInteger(nextVersion) ||
-      nextVersion <= schemaVersion
+      nextVersion !== schemaVersion + 1
     ) {
       throw new ImportError(
-        `Upgrader from schemaVersion ${schemaVersion} did not advance schemaVersion`,
+        `Upgrader from schemaVersion ${schemaVersion} must produce schemaVersion ${schemaVersion + 1} exactly (got ${String(nextVersion)})`,
       );
     }
     current = upgraded;
     schemaVersion = nextVersion;
+  }
+
+  // Defense-in-depth: the loop invariant above should already guarantee
+  // this, but assert it explicitly before validating against the current
+  // schema — a future refactor of the loop must not be able to silently
+  // hand an under/over-shot envelope to `ExportEnvelopeSchema`.
+  if (schemaVersion !== SCHEMA_VERSION) {
+    throw new ImportError(
+      `Cannot import: upgrade chain ended at schemaVersion ${schemaVersion}, expected ${SCHEMA_VERSION}`,
+    );
   }
 
   const result = ExportEnvelopeSchema.safeParse(current);

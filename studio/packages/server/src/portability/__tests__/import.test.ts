@@ -174,6 +174,32 @@ describe('importEnvelope: trigger', () => {
     expect(result.attention).toHaveLength(2);
   });
 
+  it('forces enabled: false on import, even when the envelope had enabled: true (unbound trigger must arrive inert)', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db, 'owner-a');
+    const trigger = createTrigger(db, {
+      ownerId: 'owner-a',
+      name: 'Was enabled',
+      pipelineVersionId: version.id,
+      params: {},
+      mode: 'manual',
+      schedule: null,
+      webhook: null,
+      concurrency: { policy: 'queue' },
+      runWindows: null,
+      enabled: true,
+    });
+
+    const envelope = exportTrigger(db, trigger.id, 'owner-a');
+    expect((envelope.data as { enabled: boolean }).enabled).toBe(true);
+
+    const result = importEnvelope(db, 'owner-b', envelope);
+    expect(result.kind).toBe('trigger');
+    if (result.kind !== 'trigger') throw new Error('unreachable');
+    expect(result.trigger.enabled).toBe(false);
+    expect(result.trigger.pipelineVersionId).toBeNull();
+  });
+
   it('a manual (non-webhook) trigger only reports unboundPipelineVersion', () => {
     const { db } = freshDb();
     const version = setupPipelineVersion(db, 'owner-a');

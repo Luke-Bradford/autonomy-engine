@@ -19,7 +19,10 @@ export const MIGRATIONS_DIR = join(
  * entire migration surface (one table), and it keeps the boot path dependency
  * -free.
  */
-export function runMigrations(sqlite: Database.Database): { applied: string[] } {
+export function runMigrations(
+  sqlite: Database.Database,
+  migrationsDir: string = MIGRATIONS_DIR,
+): { applied: string[] } {
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS __migrations (
       name TEXT PRIMARY KEY,
@@ -34,7 +37,7 @@ export function runMigrations(sqlite: Database.Database): { applied: string[] } 
       .map((row) => (row as { name: string }).name),
   );
 
-  const files = readdirSync(MIGRATIONS_DIR)
+  const files = readdirSync(migrationsDir)
     .filter((name) => name.endsWith('.sql'))
     .sort();
   const pending = files.filter((file) => !alreadyApplied.has(file));
@@ -59,7 +62,7 @@ export function runMigrations(sqlite: Database.Database): { applied: string[] } 
   const applied: string[] = [];
   try {
     for (const file of pending) {
-      const sql = readFileSync(join(MIGRATIONS_DIR, file), 'utf8');
+      const sql = readFileSync(join(migrationsDir, file), 'utf8');
       const applyMigration = sqlite.transaction(() => {
         sqlite.exec(sql);
         sqlite
@@ -71,6 +74,31 @@ export function runMigrations(sqlite: Database.Database): { applied: string[] } 
     }
   } finally {
     if (foreignKeysWereOn) sqlite.pragma('foreign_keys = ON');
+  }
+
+  // With `foreign_keys` OFF for the whole batch above (required for the
+  // table-recreate procedure — see the comment above), a migration that
+  // introduces a dangling reference (e.g. an INSERT/UPDATE against a
+  // recreated table that no longer satisfies an FK) would NOT raise at
+  // apply time — enforcement was off. `PRAGMA foreign_key_check` is a
+  // point-in-time integrity scan that is independent of the enforcement
+  // pragma (verified empirically: it reports the same violations whether
+  // `foreign_keys` is ON or OFF), so running it once here, after the whole
+  // batch, catches anything a bad migration left behind and fails loudly
+  // instead of silently persisting invalid refs.
+  const violations = sqlite.pragma('foreign_key_check') as Array<{
+    table: string;
+    rowid: number | bigint | null;
+    parent: string;
+    fkid: number;
+  }>;
+  if (violations.length > 0) {
+    const [first] = violations;
+    throw new Error(
+      `Migration integrity violation: applying [${applied.join(', ')}] left a dangling foreign ` +
+        `key — table '${first!.table}' rowid ${String(first!.rowid)} references missing row in ` +
+        `'${first!.parent}' (${violations.length} violation(s) total)`,
+    );
   }
 
   return { applied };
