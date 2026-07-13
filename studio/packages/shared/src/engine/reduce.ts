@@ -1,4 +1,3 @@
-import { z } from 'zod';
 import type {
   Container,
   Edge,
@@ -12,8 +11,8 @@ import type {
   RunState,
   SubstitutionContext,
 } from './types.js';
-import { OutputSchema } from '../schemas/pipeline.js';
 import type { OutputType } from '../schemas/pipeline.js';
+import { declaredOutputs, type DeclaredOutput } from './outputs.js';
 import {
   backEdgeResetBody,
   effectiveEdges,
@@ -1118,18 +1117,6 @@ function fnv1a128(s: string): string {
     h = (h * FNV128_PRIME) & FNV128_MASK;
   }
   return h.toString(16).padStart(32, '0');
-}
-
-/** One declared output entry, as read from a node's `config.outputs`. */
-type DeclaredOutput = { name: string; type: OutputType };
-
-/**
- * A node's declared `outputs` (from `config.outputs`), or `null` when none are
- * declared / the field is malformed.
- */
-function declaredOutputs(node: Node): DeclaredOutput[] | null {
-  const parsed = z.array(OutputSchema).safeParse(node.config['outputs']);
-  return parsed.success ? parsed.data : null;
 }
 
 /**
