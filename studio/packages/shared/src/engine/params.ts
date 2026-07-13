@@ -259,14 +259,18 @@ interface RefMatch {
 /**
  * Find the index of the `}` that closes a `${` body starting at `bodyStart`
  * (the index right after the opening `${`), or `-1` if none closes before the
- * end of `s`. Honors quoted string literals (a `}`, `{`, `(`, `)` inside a
- * quoted arg is literal — mirrors `splitArgs`' quote rule: a quote is closed
- * by the next occurrence of the SAME quote character, no backslash escaping)
- * and nested `(`/`)` / `{`/`}` depth, so e.g. `default(params.a, "b}c")` is
- * walked to its real end rather than truncated at the first `}`.
+ * end of `s`. The closer is the first `}` that is NOT inside a quoted string
+ * literal (quote rule mirrors `splitArgs`: a quote is closed by the next
+ * occurrence of the SAME quote character, no backslash escaping). An unquoted
+ * `}` cannot legally appear elsewhere in an expression body — refs don't nest
+ * and expressions have no bare braces — so a `}` inside a string arg (e.g.
+ * `default(params.a, "b}c")`) is skipped by the quote tracking, while a
+ * premature/stray unquoted `}` just yields a body that `parseExpr` rejects with
+ * a clear error (fail-loud). Deliberately NO paren/brace depth counter: a
+ * single shared counter desynced on unbalanced parens (`${foo(a))}`) and could
+ * swallow past the real boundary; the closer is purely the first unquoted `}`.
  */
 function findRefEnd(s: string, bodyStart: number): number {
-  let depth = 0;
   let quote: string | null = null;
   for (let i = bodyStart; i < s.length; i += 1) {
     const ch = s[i];
@@ -276,13 +280,8 @@ function findRefEnd(s: string, bodyStart: number): number {
     }
     if (ch === "'" || ch === '"') {
       quote = ch;
-    } else if (ch === '(' || ch === '{') {
-      depth += 1;
-    } else if (ch === ')') {
-      depth -= 1;
     } else if (ch === '}') {
-      if (depth === 0) return i;
-      depth -= 1;
+      return i;
     }
   }
   return -1;

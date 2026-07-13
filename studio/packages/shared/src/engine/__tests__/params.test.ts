@@ -156,6 +156,17 @@ describe('substitute — escape / malformed / typing', () => {
     );
   });
 
+  it('finds the closer at the first unquoted } and fails loud on unbalanced parens (no depth desync)', () => {
+    // `}` inside a quoted string arg is skipped (real boundary is the last `}`).
+    expect(substitute('${default(params.a, "b}c")}', ctx({ params: { a: null } }))).toBe('b}c');
+    expect(substitute('${concat(params.a, "}")}', ctx({ params: { a: 'x' } }))).toBe('x}');
+    // An unbalanced extra `)` must NOT desync the scanner past the closer — the
+    // closer is the first unquoted `}`, and the malformed body fails loud.
+    expect(() => substitute('${foo(params.a))}', ctx({ params: { a: 1 } }))).toThrow(
+      SubstituteError,
+    );
+  });
+
   it('whole-string ref preserves native type', () => {
     expect(substitute('${params.n}', ctx({ params: { n: 7 } }))).toBe(7);
     expect(substitute('${params.b}', ctx({ params: { b: true } }))).toBe(true);
