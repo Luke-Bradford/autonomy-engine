@@ -252,6 +252,19 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     previousAttemptId: z.string(),
     reason: z.string(),
   }),
+  z.object({
+    // The event-sourced representation of the boot reconciler's "this run
+    // cannot be safely resumed" verdict (P2d). Appended when a run had a
+    // NON-idempotent activity in flight at crash time (an LLM call that may
+    // already be billed, an `agent_cli` subprocess) — re-running it could
+    // double-execute a side effect, so the run is frozen `interrupted` /
+    // needs-attention rather than silently resumed. Folding it is the ONLY way
+    // `RunState.status` becomes `interrupted`, so the projection and the
+    // durable log never disagree (the projection is never patched out-of-band).
+    type: z.literal('run.interrupted'),
+    runId: z.string(),
+    reason: z.string(),
+  }),
 ]);
 export type EngineEvent = z.infer<typeof EngineEventSchema>;
 

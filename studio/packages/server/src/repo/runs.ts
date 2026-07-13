@@ -6,6 +6,7 @@ import {
   type NewRun,
   type Run,
   type RunLifecyclePatch,
+  type RunStatus,
 } from '@autonomy-studio/shared';
 import { runs } from '../db/schema.js';
 import { newId } from './ids.js';
@@ -37,6 +38,9 @@ export interface ListRunsFilter {
   /** Filters in SQL, like `listConnections`/`listPipelines` — never loaded
    * then filtered in the route. */
   ownerId?: string;
+  /** The boot reconciler's "find all `running` rows" scan (backed by
+   * `runs_status_idx`) — filtered in SQL, never loaded-then-filtered. */
+  status?: RunStatus;
 }
 
 export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
@@ -52,6 +56,9 @@ export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
   }
   if (filter.ownerId !== undefined) {
     conditions.push(eq(runs.ownerId, filter.ownerId));
+  }
+  if (filter.status !== undefined) {
+    conditions.push(eq(runs.status, filter.status));
   }
 
   const rows =
