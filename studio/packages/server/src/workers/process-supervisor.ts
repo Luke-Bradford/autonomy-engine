@@ -168,12 +168,6 @@ class SharedByteBudget {
     }
     return true;
   }
-
-  /** Trips the budget directly, with no byte accounting (see the unbounded
-   * single-line guard in `LineFramer.push`). */
-  markExceeded(): void {
-    this.exceeded = true;
-  }
 }
 
 /**
@@ -188,7 +182,6 @@ class LineFramer {
   private partial = '';
 
   constructor(
-    private readonly maxBytes: number,
     private readonly budget: SharedByteBudget,
     private readonly onLine: (line: string) => void,
   ) {}
@@ -200,6 +193,18 @@ class LineFramer {
   push(chunk: Buffer): void {
     if (this.budget.exceeded) return;
 
+    // Charge EVERY incoming byte against the SHARED budget on arrival — before
+    // buffering or emitting. This is what makes the cap a true stdout+stderr
+    // COMBINED bound: retained partial buffers and emitted lines alike draw
+    // from one total, so even a newline-FREE flood on BOTH streams trips at
+    // maxOutputBytes rather than 2x it. `partial` therefore never exceeds the
+    // remaining budget, so the un-terminated single-"line" case is bounded too
+    // (no separate per-stream guard needed).
+    if (!this.budget.tryConsume(chunk.byteLength)) {
+      this.partial = '';
+      return;
+    }
+
     this.partial += chunk.toString('utf8');
 
     let newlineIndex: number;
@@ -208,21 +213,6 @@ class LineFramer {
       this.partial = this.partial.slice(newlineIndex + 1);
       const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
       this.emit(line);
-      if (this.budget.exceeded) {
-        this.partial = '';
-        return;
-      }
-    }
-
-    // No newline found yet — guard against an unbounded single "line" (e.g.
-    // a flood with no `\n`) growing the retained buffer forever. This check
-    // runs AFTER the chunk has already been appended above, so `partial` can
-    // transiently overshoot `maxBytes` by up to one stream chunk (Node's
-    // default highWaterMark, ~64 KiB) before being cleared here — bounded
-    // and acceptable, not a hard cap.
-    if (Buffer.byteLength(this.partial, 'utf8') > this.maxBytes) {
-      this.budget.markExceeded();
-      this.partial = '';
     }
   }
 
@@ -238,11 +228,10 @@ class LineFramer {
     }
   }
 
+  // Bytes were already charged to the shared budget on arrival in `push`, so
+  // emitting (here and from `flush`) never re-charges — it only surfaces a
+  // completed line to the consumer.
   private emit(line: string): void {
-    const bytes = Buffer.byteLength(line, 'utf8') + 1;
-    if (!this.budget.tryConsume(bytes)) {
-      return;
-    }
     this.onLine(line);
   }
 }
@@ -434,10 +423,10 @@ export function spawnSupervised(opts: SpawnSupervisedOptions): SupervisedProcess
   }
 
   const outputBudget = new SharedByteBudget(maxOutputBytes);
-  const stdoutFramer = new LineFramer(maxOutputBytes, outputBudget, (line) => {
+  const stdoutFramer = new LineFramer(outputBudget, (line) => {
     queue.push({ stream: 'stdout', line });
   });
-  const stderrFramer = new LineFramer(maxOutputBytes, outputBudget, (line) => {
+  const stderrFramer = new LineFramer(outputBudget, (line) => {
     queue.push({ stream: 'stderr', line });
   });
 

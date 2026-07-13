@@ -160,6 +160,36 @@ describe('spawnSupervised', () => {
     expect(stderrBytes).toBeGreaterThan(0);
   }, 15_000);
 
+  it('bounds COMBINED memory on a NEWLINE-FREE flood on both streams (partial-buffer path)', async () => {
+    // The regression the review caught: with per-emit charging, un-terminated
+    // partial buffers escaped the shared cap, so a NEWLINE-FREE flood on both
+    // streams could retain ~2x maxOutputBytes before either framer tripped.
+    // Charging on ARRIVAL (in LineFramer.push) bounds the partials too. No
+    // '\n' is ever written, so the flood lives entirely in the partial buffers.
+    const script = `
+      const chunk = 'x'.repeat(4096);   // NO newline, ever
+      for (let i = 0; i < 20000; i++) {
+        process.stdout.write(chunk);
+        process.stderr.write(chunk);
+      }
+    `;
+    const maxOutputBytes = 64 * 1024;
+    const supervised = spawnSupervised({
+      command: process.execPath,
+      args: ['-e', script],
+      maxOutputBytes,
+    });
+
+    const [, result] = await Promise.all([
+      collectEvents(supervised.events),
+      supervised.result,
+    ]);
+
+    // The combined arrival across both streams exceeds the shared budget, so
+    // the framer must trip (truncated) rather than buffer ~40 MB / ~2x the cap.
+    expect(result.truncated).toBe(true);
+  }, 15_000);
+
   it('resolves (does not hang) and cleanly closes the stream on a spawn failure (ENOENT)', async () => {
     // Empirically (verified independently with a raw `execa(..., { reject:
     // false })` call before writing this test): execa 9.6.1 does NOT reject
