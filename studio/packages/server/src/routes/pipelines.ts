@@ -11,6 +11,7 @@ import {
 } from '../repo/index.js';
 import { NotFoundError } from '../errors.js';
 import { requireOwned } from './util.js';
+import { exportPipeline } from '../portability/index.js';
 
 /** `ownerId` is stamped from `request.principal`, never client-supplied. */
 const PipelineWriteBodySchema = NewPipelineSchema.omit({ ownerId: true });
@@ -113,4 +114,11 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
   // is immutable once written (see `repo/pipeline-versions.ts` — the module
   // exports no `updatePipelineVersion`/delete at all). A new version is
   // always a new POST to `.../versions`.
+
+  // Version-stamped JSON export (P1c), the pipeline + ALL of its versions.
+  // `exportPipeline` does its own owner-check (404 if not owned), same
+  // outcome as `requireOwned` above.
+  fastify.get<{ Params: { id: string } }>('/api/pipelines/:id/export', async (request) => {
+    return exportPipeline(db, request.params.id, request.principal.ownerId);
+  });
 };

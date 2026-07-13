@@ -20,6 +20,7 @@ import { newId } from '../repo/ids.js';
 import { encrypt } from '../secrets/secrets.js';
 import { NotFoundError } from '../errors.js';
 import { requireOwned } from './util.js';
+import { exportConnection } from '../portability/index.js';
 
 /**
  * The client-facing write body: everything `NewConnectionSchema` needs
@@ -126,5 +127,11 @@ export const connectionsRoutes: FastifyPluginAsync = async (fastify) => {
       if (secretRow) deleteSecret(db, secretRow.id);
     }
     reply.status(204).send();
+  });
+
+  // Version-stamped JSON export (P1c). `exportConnection` does its own
+  // owner-check (404 if not owned) and NEVER includes `secretRef`.
+  fastify.get<{ Params: { id: string } }>('/api/connections/:id/export', async (request) => {
+    return exportConnection(db, request.params.id, request.principal.ownerId);
   });
 };

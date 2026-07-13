@@ -11,6 +11,7 @@ import {
 } from '../repo/index.js';
 import { NotFoundError } from '../errors.js';
 import { requireOwned } from './util.js';
+import { exportTrigger } from '../portability/index.js';
 import type { Principal } from '../auth/principal.js';
 import type { Db } from '../repo/types.js';
 
@@ -31,12 +32,17 @@ function toPublic(trigger: Trigger) {
  * `requireOwned` used everywhere else collapses "doesn't exist" and "exists
  * but isn't yours" into the same 404, matching every other resource in this
  * API (see `util.ts`).
+ *
+ * `null` (an unbound trigger — see `TriggerSchema.pipelineVersionId`) is
+ * always a no-op here: there is nothing to own-check, and creating/patching a
+ * trigger to `null` is always allowed regardless of who's asking.
  */
 function requireOwnedPipelineVersion(
   db: Db,
-  pipelineVersionId: string,
+  pipelineVersionId: string | null,
   principal: Principal,
 ): void {
+  if (pipelineVersionId === null) return;
   const version = getPipelineVersion(db, pipelineVersionId);
   if (!version) throw new NotFoundError('pipelineVersion', pipelineVersionId);
   requireOwned(
@@ -96,5 +102,11 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
     );
     deleteTrigger(db, existing.id);
     reply.status(204).send();
+  });
+
+  // Version-stamped JSON export (P1c). `exportTrigger` does its own
+  // owner-check (404 if not owned), same outcome as `requireOwned` above.
+  fastify.get<{ Params: { id: string } }>('/api/triggers/:id/export', async (request) => {
+    return exportTrigger(db, request.params.id, request.principal.ownerId);
   });
 };

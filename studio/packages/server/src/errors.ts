@@ -1,5 +1,6 @@
 import { ZodError } from 'zod';
 import type { FastifyInstance } from 'fastify';
+import { ImportError } from '@autonomy-studio/shared';
 import { PipelineHasRunsError } from './repo/index.js';
 
 /**
@@ -65,6 +66,15 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     if (error instanceof PipelineHasRunsError) {
       request.log.warn({ err: error }, 'conflict: pipeline has run history');
       reply.status(409).send({ error: 'conflict', message: error.message });
+      return;
+    }
+
+    // Thrown by `parseAndUpgradeEnvelope`/`importEnvelope` (P1c) for a
+    // malformed, incompatible (newer schemaVersion/catalogVersion than this
+    // build supports), or otherwise-refused import envelope. `error.message`
+    // is already client-safe — see `ImportError`'s own doc comment.
+    if (error instanceof ImportError) {
+      reply.status(400).send({ error: 'import_error', message: error.message });
       return;
     }
 

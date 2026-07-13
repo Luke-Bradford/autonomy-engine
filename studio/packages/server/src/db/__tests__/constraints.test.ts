@@ -157,6 +157,35 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
     ).toThrow(/CHECK constraint failed/);
   });
 
+  it('triggers.pipeline_version_id accepts NULL (P1c: an unbound trigger)', () => {
+    const { db, sqlite } = freshDb();
+    const trigger = db
+      .insert(triggers)
+      .values({
+        id: 'trig_unbound',
+        ownerId: null,
+        name: 'Unbound',
+        pipelineVersionId: null,
+        params: {},
+        mode: 'manual',
+        schedule: null,
+        webhook: null,
+        concurrency: { policy: 'queue' },
+        runWindows: null,
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      })
+      .returning()
+      .get();
+    expect(trigger.pipelineVersionId).toBeNull();
+
+    const row = sqlite
+      .prepare('SELECT pipeline_version_id FROM triggers WHERE id = ?')
+      .get('trig_unbound') as { pipeline_version_id: string | null };
+    expect(row.pipeline_version_id).toBeNull();
+  });
+
   it('FK rejects creating a connection with a bogus secretRef', () => {
     const { db } = freshDb();
     expect(() =>
