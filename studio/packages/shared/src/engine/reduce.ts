@@ -254,7 +254,9 @@ export function createEngine(doc: EngineDoc): Engine {
     const started: RunState = {
       runId: event.runId,
       pipelineVersionId: event.pipelineVersionId,
-      params: event.params,
+      // Copy, never alias, the event's `params` object — `event` is the logged
+      // fact and must never be mutated through a reference held in `state`.
+      params: { ...event.params },
       status: 'running',
       nodes,
       outputs: {},
@@ -271,8 +273,17 @@ export function createEngine(doc: EngineDoc): Engine {
   ): ReduceResult {
     const ns = state.nodes[event.nodeId];
     if (ns === undefined) return { state, commands: [], diagnostics }; // node not in doc
+    if (ns.currentAttemptId === undefined) {
+      // No attempt was EVER minted for this node (it was never made ready) —
+      // distinct from "stale": there is no real prior attempt this could be
+      // late for, so this is IMPOSSIBLE in normal flow, not a benign no-op.
+      diagnostics.push(
+        `impossible node.dispatched for node '${event.nodeId}' in status '${ns.status}' (no current attempt)`,
+      );
+      return { state, commands: [], diagnostics };
+    }
     if (event.attemptId !== ns.currentAttemptId) {
-      return { state, commands: [], diagnostics }; // stale / not the live attempt → no-op
+      return { state, commands: [], diagnostics }; // stale — a real prior attempt, not the live one
     }
     if (ns.status === 'ready') {
       return {
@@ -302,14 +313,25 @@ export function createEngine(doc: EngineDoc): Engine {
         return { state, commands: [], diagnostics }; // STALE pre-restart result → ignored
       }
       const node = nodeById.get(event.nodeId)!;
-      const errs = validateOutputs(node, event.outputs);
+      const decl = declaredOutputs(node);
+      const errs = validateOutputs(decl, event.outputs);
       if (errs.length > 0) {
         // A bad-typed output FAILS the node — unvalidated data never crosses.
         diagnostics.push(`node '${event.nodeId}' produced invalid outputs: ${errs.join('; ')}`);
         return settle(withNode(state, event.nodeId, { status: 'failure' }), diagnostics);
       }
+      // SECURITY: store ONLY the node's DECLARED output keys, dropping anything
+      // else the executor's event carried — an undeclared key (e.g. a
+      // secret-ish value) must never persist into `state.outputs` and become
+      // refable via `${nodes.x.output.<undeclared>}`. A node with no declared
+      // `outputs` at all has no contract to enforce, so its whole payload
+      // passes through unchanged (unlike a partially-declared node).
+      const storedOutputs =
+        decl === null
+          ? { ...event.outputs }
+          : Object.fromEntries(decl.map((d) => [d.name, event.outputs[d.name]]));
       let next = withNode(state, event.nodeId, { status: 'success' });
-      next = { ...next, outputs: { ...next.outputs, [event.nodeId]: { ...event.outputs } } };
+      next = { ...next, outputs: { ...next.outputs, [event.nodeId]: storedOutputs } };
       return settle(next, diagnostics);
     }
     if (ns.status === 'pending') {
@@ -352,6 +374,15 @@ export function createEngine(doc: EngineDoc): Engine {
     if (event.attemptId !== ns.currentAttemptId) {
       return { state, commands: [], diagnostics };
     }
+    if (ns.status === 'success') {
+      // The SAME attempt cannot have both succeeded and failed — this is not
+      // a duplicate, it is a contradiction in the log. State stays terminal
+      // (success) either way; only the diagnostic differs.
+      diagnostics.push(
+        `contradiction: node.failed for node '${event.nodeId}' names the same attempt that already succeeded`,
+      );
+      return { state, commands: [], diagnostics };
+    }
     diagnostics.push(`duplicate node.failed for already-terminal node '${event.nodeId}'`);
     return { state, commands: [], diagnostics };
   }
@@ -368,8 +399,19 @@ export function createEngine(doc: EngineDoc): Engine {
   ): ReduceResult {
     const ns = state.nodes[event.nodeId];
     if (ns === undefined) return { state, commands: [], diagnostics };
-    if (event.previousAttemptId !== ns.currentAttemptId || ns.status === 'pending') {
-      return { state, commands: [], diagnostics }; // stale/irrelevant retry → no-op
+    if (!LIVE_NODE.has(ns.status)) {
+      // Only a `dispatched` node (the boot-reconcile case) — or, arguably, a
+      // `ready` one — may be retried. A `pending` node was never dispatched;
+      // an already-terminal (`success`/`failure`/`skipped`) node must never be
+      // resurrected (it would clear validated outputs and re-dispatch a node
+      // the run already resolved) — surface it instead of silently no-op'ing.
+      diagnostics.push(
+        `impossible node.retryRequested for node '${event.nodeId}' in status '${ns.status}' (not dispatched/ready)`,
+      );
+      return { state, commands: [], diagnostics };
+    }
+    if (event.previousAttemptId !== ns.currentAttemptId) {
+      return { state, commands: [], diagnostics }; // stale/superseded retry → no-op
     }
     const attemptId = `${event.nodeId}#${ns.attempts}`;
     let next = withNode(state, event.nodeId, {
@@ -452,8 +494,32 @@ export function createEngine(doc: EngineDoc): Engine {
     }
 
     switch (event.type) {
-      case 'run.finished':
+      case 'run.finished': {
+        // Totality guard: a `success` claim must be BACKED by reality — every
+        // node terminal AND no unhandled failure sitting in state — or it is
+        // an impossible/forged event (e.g. a race with a still-pending node)
+        // and must not silently terminalize the run. `failure` is intentionally
+        // NOT gated here: it is the reducer's OWN fail-safe correction for an
+        // impossible event elsewhere (settle()'s prepInput-failure branch,
+        // onSucceeded/onFailed's never-dispatched-node branch) — those paths
+        // never flip a node to 'failure' themselves, so gating `failure` the
+        // same way would make that corrective `run.finished` event ALSO
+        // impossible to apply, and the run could never actually terminalize.
+        if (
+          event.outcome === 'success' &&
+          !(allTerminal(state.nodes) && firstUnhandledFailure(state.nodes) === null)
+        ) {
+          diagnostics.push(
+            `impossible run.finished{success}: the run has a live/pending node or an unhandled failure`,
+          );
+          return {
+            state,
+            commands: [{ type: 'finishRun', outcome: 'failure', reason: 'invalid_event' }],
+            diagnostics,
+          };
+        }
         return { state: { ...state, status: event.outcome }, commands: [], diagnostics };
+      }
       case 'node.output':
         // Observability only — partial outputs never mutate state / feed `${}`.
         return { state, commands: [], diagnostics };
@@ -505,23 +571,39 @@ function nodeJoin(node: Node): 'all' | 'any' {
   return node.config['join'] === 'any' ? 'any' : 'all';
 }
 
+/** One declared output entry, as read from a node's `config.outputs`. */
+type DeclaredOutput = { name: string; type: OutputType };
+
 /**
- * Validate a `node.succeeded`'s outputs against the node's declared output types
- * (read from `config.outputs`, an optional `Output[]` the P3 catalog will
- * formalize). A missing or mistyped declared output is an error → the node fails.
- * A node without declared outputs validates trivially (nothing to check).
+ * A node's declared `outputs` (from `config.outputs`, an optional `Output[]`
+ * the P3 catalog will formalize), or `null` when none are declared / the field
+ * is malformed — the single parse shared by validation and output-storage
+ * filtering, so the two can never disagree on what "declared" means.
  */
-function validateOutputs(node: Node, outputs: Record<string, unknown>): string[] {
+function declaredOutputs(node: Node): DeclaredOutput[] | null {
   const parsed = z.array(OutputSchema).safeParse(node.config['outputs']);
-  if (!parsed.success) return [];
+  return parsed.success ? parsed.data : null;
+}
+
+/**
+ * Validate a `node.succeeded`'s outputs against the node's declared output
+ * types. A missing or mistyped declared output is an error → the node fails.
+ * A node without declared outputs (`decl === null`) validates trivially
+ * (nothing to check).
+ */
+function validateOutputs(
+  decl: DeclaredOutput[] | null,
+  outputs: Record<string, unknown>,
+): string[] {
+  if (decl === null) return [];
   const errs: string[] = [];
-  for (const decl of parsed.data) {
-    if (!Object.prototype.hasOwnProperty.call(outputs, decl.name)) {
-      errs.push(`missing declared output '${decl.name}'`);
+  for (const d of decl) {
+    if (!Object.prototype.hasOwnProperty.call(outputs, d.name)) {
+      errs.push(`missing declared output '${d.name}'`);
       continue;
     }
-    if (!matchesType(outputs[decl.name], decl.type)) {
-      errs.push(`output '${decl.name}' is not of declared type '${decl.type}'`);
+    if (!matchesType(outputs[d.name], d.type)) {
+      errs.push(`output '${d.name}' is not of declared type '${d.type}'`);
     }
   }
   return errs;

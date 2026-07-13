@@ -467,3 +467,203 @@ describe('fold-to-fixpoint', () => {
     expect(dispatchIds(r.commands)).toEqual(['root_a', 'root_z']);
   });
 });
+
+// ===========================================================================
+// SECURITY — node.succeeded stores ONLY the node's declared output keys
+// ===========================================================================
+
+describe('declared-output filtering (security)', () => {
+  it('drops an undeclared key an executor sneaks into node.succeeded outputs', () => {
+    const eng = engine(
+      [
+        node('a', { outputs: [{ name: 'safe', type: 'string' }] }),
+        node('b', {
+          // References BOTH the declared and the undeclared key.
+          safe: '${nodes.a.output.safe}',
+          leaked: '${default(nodes.a.output.secret, "fallback")}',
+        }),
+      ],
+      [edge('a', 'b', 'success')],
+    );
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const r = eng.reduce(s, succeeded('a', attempt('a'), { safe: 'ok', secret: 'do-not-persist' }));
+
+    // Only the declared key is stored — the undeclared one is dropped entirely.
+    expect(r.state.outputs.a).toEqual({ safe: 'ok' });
+    expect(r.state.outputs.a).not.toHaveProperty('secret');
+
+    const b = r.commands.find((c) => c.type === 'dispatchNode' && c.nodeId === 'b') as
+      { preparedInput: Record<string, unknown> } | undefined;
+    expect(b).toBeDefined();
+    // The undeclared ref resolves via default()'s MissingNodeOutput fallback,
+    // never the leaked value — proving it never crossed into substitution.
+    expect(b!.preparedInput).toEqual({ safe: 'ok', leaked: 'fallback' });
+  });
+
+  it('a node with NO declared outputs still passes its whole payload through (no contract to enforce)', () => {
+    const eng = engine(
+      [node('a'), node('b', { msg: '${nodes.a.output.greeting}' })],
+      [edge('a', 'b', 'success')],
+    );
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const r = eng.reduce(s, succeeded('a', attempt('a'), { greeting: 'hi' }));
+    expect(r.state.outputs.a).toEqual({ greeting: 'hi' });
+  });
+});
+
+// ===========================================================================
+// `run.finished` totality guard — a `success` claim must be backed by reality
+// ===========================================================================
+
+describe('run.finished totality guard', () => {
+  it('an early/forged run.finished{success} with a still-pending node is REJECTED, not silently applied', () => {
+    const eng = engine([node('a'), node('b')], [edge('a', 'b', 'success')]);
+    const s = eng.reduce(eng.seedState(), started()).state; // b still pending
+    const r = eng.reduce(s, { type: 'run.finished', runId: RUN, outcome: 'success' });
+    expect(r.state.status).toBe('running'); // NOT silently terminalized
+    expect(r.diagnostics.length).toBeGreaterThan(0);
+    expect(r.diagnostics.join(' ')).toContain('impossible run.finished');
+    expect(r.commands).toContainEqual({
+      type: 'finishRun',
+      outcome: 'failure',
+      reason: 'invalid_event',
+    });
+  });
+
+  it('a genuine run.finished{success} once every node is terminal is accepted', () => {
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    s = eng.reduce(s, succeeded('a', attempt('a'))).state;
+    const r = eng.reduce(s, { type: 'run.finished', runId: RUN, outcome: 'success' });
+    expect(r.state.status).toBe('success');
+  });
+
+  it("a run.finished{failure} is always accepted (the reducer's own fail-safe escape valve)", () => {
+    // Mirrors settle()'s own unhandled-failure exit: b never dispatched, yet
+    // the correcting run.finished{failure} must still be able to terminalize.
+    const eng = engine([node('a'), node('b')], [edge('a', 'b', 'success')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const failedResult = eng.reduce(s, failed('a', attempt('a')));
+    const r = eng.reduce(failedResult.state, {
+      type: 'run.finished',
+      runId: RUN,
+      outcome: 'failure',
+      reason: 'node_failed:a',
+    });
+    expect(r.state.status).toBe('failure');
+  });
+});
+
+// ===========================================================================
+// `node.retryRequested` — only a dispatched/ready node may be retried
+// ===========================================================================
+
+describe('node.retryRequested status guard', () => {
+  it('a retry for an already-SUCCESS node is a no-op + diagnostic (outputs kept, not resurrected)', () => {
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    s = eng.reduce(s, succeeded('a', attempt('a'), { ok: true })).state;
+
+    const r = eng.reduce(s, {
+      type: 'node.retryRequested',
+      runId: RUN,
+      nodeId: 'a',
+      previousAttemptId: attempt('a'),
+      reason: 'boot_reconcile',
+    });
+    expect(r.state).toEqual(s); // no state change at all
+    expect(r.state.nodes.a!.status).toBe('success');
+    expect(r.state.outputs.a).toEqual({ ok: true }); // outputs kept
+    expect(r.commands).toEqual([]);
+    expect(r.diagnostics.length).toBeGreaterThan(0);
+  });
+
+  it('a retry for a still-PENDING node (never dispatched) is a no-op + diagnostic', () => {
+    const eng = engine([node('a'), node('b')], [edge('a', 'b', 'success')]);
+    const s = eng.reduce(eng.seedState(), started()).state; // b pending
+    const r = eng.reduce(s, {
+      type: 'node.retryRequested',
+      runId: RUN,
+      nodeId: 'b',
+      previousAttemptId: 'b#0',
+      reason: 'boot_reconcile',
+    });
+    expect(r.state).toEqual(s);
+    expect(r.diagnostics.length).toBeGreaterThan(0);
+  });
+
+  it('a retry for a DISPATCHED node (the real boot-reconcile case) still mints a fresh attempt', () => {
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const r = eng.reduce(s, {
+      type: 'node.retryRequested',
+      runId: RUN,
+      nodeId: 'a',
+      previousAttemptId: attempt('a'),
+      reason: 'boot_reconcile',
+    });
+    expect(r.state.nodes.a!.currentAttemptId).toBe('a#1');
+    expect(dispatchIds(r.commands)).toEqual(['a']);
+    expect(r.diagnostics).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// `node.dispatched` — an impossible (never-ready) case is diagnosed, not
+// silently swallowed as "stale"; the normal handshake keeps working
+// ===========================================================================
+
+describe('node.dispatched impossible-case diagnostic', () => {
+  it('a node.dispatched for a never-ready PENDING node is diagnosed as impossible, not a silent stale no-op', () => {
+    const eng = engine([node('a'), node('b')], [edge('a', 'b', 'success')]);
+    const s = eng.reduce(eng.seedState(), started()).state; // b is pending, never made ready
+    const r = eng.reduce(s, dispatched('b', 'b#0'));
+    expect(r.state).toEqual(s); // no state change
+    expect(r.diagnostics.length).toBeGreaterThan(0);
+    expect(r.diagnostics.join(' ')).toContain('impossible');
+  });
+
+  it('the normal ready→dispatched handshake still works (deadlock-free)', () => {
+    const eng = engine([node('a')]);
+    const s = eng.reduce(eng.seedState(), started()).state; // a is ready, attemptId a#0
+    expect(s.nodes.a!.status).toBe('ready');
+    const r = eng.reduce(s, dispatched('a', 'a#0'));
+    expect(r.state.nodes.a!.status).toBe('dispatched');
+    expect(r.diagnostics).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// Minor: run.started copies params (never aliases the event), and a
+// same-attempt success→failed contradiction gets a distinct diagnostic
+// ===========================================================================
+
+describe('minor hardening', () => {
+  it('run.started stores params via a COPY, never a reference to the event object', () => {
+    const eng = engine([node('a')]);
+    const eventParams = { topic: 'launch' };
+    const ev = started(eventParams);
+    const s = eng.reduce(eng.seedState(), ev).state;
+    expect(s.params).toEqual({ topic: 'launch' });
+    expect(s.params).not.toBe(eventParams); // not the same object reference
+    // Mutating the original logged event's params object must never leak in.
+    (eventParams as Record<string, unknown>)['topic'] = 'mutated';
+    expect(s.params['topic']).toBe('launch');
+  });
+
+  it('a node.failed naming the SAME attempt as an already-success node is a CONTRADICTION, not a duplicate', () => {
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    s = eng.reduce(s, succeeded('a', attempt('a'))).state;
+    const r = eng.reduce(s, failed('a', attempt('a')));
+    expect(r.state.nodes.a!.status).toBe('success'); // stays terminal/safe
+    expect(r.diagnostics.join(' ')).toContain('contradiction');
+  });
+});
