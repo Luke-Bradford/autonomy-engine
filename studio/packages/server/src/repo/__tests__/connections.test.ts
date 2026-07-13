@@ -6,6 +6,7 @@ import {
   listConnections,
   updateConnection,
 } from '../connections.js';
+import { createSecret, deleteSecret } from '../secrets.js';
 import { freshDb } from './helpers.js';
 
 const newConnection = {
@@ -76,5 +77,54 @@ describe('connections repo', () => {
     expect(() =>
       createConnection(db, { ...newConnection, kind: 'not_a_real_kind' as never }),
     ).toThrow();
+  });
+
+  describe('secretRef FK', () => {
+    it('creates and round-trips a connection pointing at a real secret', () => {
+      const { db } = freshDb();
+      const secret = createSecret(db, { ref: 'anthropic-key-1', ciphertext: 'blob' });
+      const created = createConnection(db, { ...newConnection, secretRef: secret.ref });
+      expect(getConnection(db, created.id)).toEqual(created);
+    });
+
+    it('rejects creating a connection with a bogus secretRef (FK enforced)', () => {
+      const { db } = freshDb();
+      expect(() =>
+        createConnection(db, { ...newConnection, secretRef: 'sec_does_not_exist' }),
+      ).toThrow();
+    });
+
+    it('rejects deleting a secret that a connection still references (ON DELETE RESTRICT)', () => {
+      const { db } = freshDb();
+      const secret = createSecret(db, { ref: 'anthropic-key-2', ciphertext: 'blob' });
+      createConnection(db, { ...newConnection, secretRef: secret.ref });
+
+      expect(() => deleteSecret(db, secret.id)).toThrow();
+    });
+
+    it('allows deleting a secret no connection references', () => {
+      const { db } = freshDb();
+      const secret = createSecret(db, { ref: 'anthropic-key-3', ciphertext: 'blob' });
+      expect(deleteSecret(db, secret.id)).toBe(true);
+    });
+  });
+
+  it('corrupt-row read: a hand-crafted row with malformed JSON in `config` makes getConnection throw', () => {
+    const { db, sqlite } = freshDb();
+    // Bypasses Drizzle's JSON serialization entirely (a raw better-sqlite3
+    // insert with a non-JSON string in the `config` column) — the kind of
+    // row that could only land here via direct DB tampering, a bug in an
+    // older writer, or a botched manual migration. `getConnection` must
+    // still fail loudly instead of silently handing back a corrupt value:
+    // Drizzle's JSON-mode column read (`JSON.parse`) throws on the way in.
+    sqlite
+      .prepare(
+        `INSERT INTO connections (id, owner_id, name, kind, config, secret_ref, created_at, updated_at)
+         VALUES (?, NULL, 'x', 'http', 'not-valid-json{', NULL, 1, 1)`,
+      )
+      .run('conn_corrupt');
+
+    expect(() => getConnection(db, 'conn_corrupt')).toThrow();
+    expect(() => listConnections(db)).toThrow();
   });
 });

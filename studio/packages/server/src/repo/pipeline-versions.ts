@@ -17,6 +17,12 @@ import type { Db } from './types.js';
  * writer on the same `pipelineId` (better-sqlite3 is a single connection,
  * but `db.transaction` still gives us the atomic read+insert for free and
  * documents the intent).
+ *
+ * NOTE: this `max()+1` numbering relies on better-sqlite3's synchronous,
+ * single-writer connection model (no other connection can interleave a write
+ * between the read and the insert). The `pipeline_versions_pipeline_id_version_idx`
+ * UNIQUE index is the real backstop against any cross-connection race, not
+ * this transaction.
  */
 export function createPipelineVersion(db: Db, input: NewPipelineVersion): PipelineVersion {
   const parsed = NewPipelineVersionSchema.parse(input);

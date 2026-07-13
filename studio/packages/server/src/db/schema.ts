@@ -1,16 +1,19 @@
 import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
-import type {
-  Concurrency,
-  ConnectionKind,
-  Edge,
-  Node,
-  Output,
-  Param,
-  RunStatus,
-  RunWindow,
-  TriggerMode,
-  WebhookConfig,
+import {
+  ConnectionKindSchema,
+  RunStatusSchema,
+  TriggerModeSchema,
+  type Concurrency,
+  type ConnectionKind,
+  type Edge,
+  type Node,
+  type Output,
+  type Param,
+  type RunStatus,
+  type RunWindow,
+  type TriggerMode,
+  type WebhookConfig,
 } from '@autonomy-studio/shared';
 
 /**
@@ -22,17 +25,19 @@ export const appMeta = sqliteTable('app_meta', {
   value: text('value').notNull(),
 });
 
-const CONNECTION_KINDS = ['anthropic_api', 'openai_api', 'ollama', 'agent_cli', 'http'] as const;
-const TRIGGER_MODES = ['manual', 'schedule', 'webhook', 'event', 'continuous'] as const;
-const RUN_STATUSES = [
-  'pending',
-  'running',
-  'success',
-  'failure',
-  'skipped',
-  'waiting',
-  'interrupted',
-] as const;
+// The Drizzle `text(col, { enum: [...] })` value lists come straight from the
+// Zod schemas in `@autonomy-studio/shared` (`.options` on a `z.enum(...)`) —
+// ONE source of truth for the enum vocabulary. Previously this file
+// duplicated the value lists as local `as const` arrays, which could silently
+// drift from the Zod schemas; see the review that flagged it.
+//
+// `asEnumTuple` narrows `.options`'s `T[]` down to the non-empty-tuple shape
+// Drizzle's `{ enum: [...] }` config wants (`readonly [string, ...string[]]`)
+// — a type-level cast only; the values themselves still come from the Zod
+// schema at runtime, so the enum vocabulary has exactly one source.
+function asEnumTuple<T extends string>(options: readonly T[]): [T, ...T[]] {
+  return options as [T, ...T[]];
+}
 
 /**
  * A named worker binding (`Connection` in `@autonomy-studio/shared`).
@@ -44,9 +49,18 @@ export const connections = sqliteTable(
     id: text('id').primaryKey(),
     ownerId: text('owner_id'),
     name: text('name').notNull(),
-    kind: text('kind', { enum: CONNECTION_KINDS }).notNull().$type<ConnectionKind>(),
+    kind: text('kind', { enum: asEnumTuple(ConnectionKindSchema.options) })
+      .notNull()
+      .$type<ConnectionKind>(),
     config: text('config', { mode: 'json' }).notNull().$type<Record<string, unknown>>(),
-    secretRef: text('secret_ref'),
+    // Nullable (a connection need not use a secret), but when present it MUST
+    // resolve to a real `secrets.ref` row — RESTRICT so a secret can't be
+    // deleted out from under a connection still pointing at it. Forward
+    // reference to `secrets` (defined further down this file) via the same
+    // lazy-callback pattern `runs.parentRunId`'s self-reference uses below.
+    secretRef: text('secret_ref').references((): AnySQLiteColumn => secrets.ref, {
+      onDelete: 'restrict',
+    }),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
@@ -107,7 +121,9 @@ export const triggers = sqliteTable(
       .notNull()
       .references(() => pipelineVersions.id, { onDelete: 'cascade' }),
     params: text('params', { mode: 'json' }).notNull().$type<Record<string, unknown>>(),
-    mode: text('mode', { enum: TRIGGER_MODES }).notNull().$type<TriggerMode>(),
+    mode: text('mode', { enum: asEnumTuple(TriggerModeSchema.options) })
+      .notNull()
+      .$type<TriggerMode>(),
     schedule: text('schedule'),
     webhook: text('webhook', { mode: 'json' }).$type<WebhookConfig | null>(),
     concurrency: text('concurrency', { mode: 'json' }).notNull().$type<Concurrency>(),
@@ -139,7 +155,9 @@ export const runs = sqliteTable(
       onDelete: 'set null',
     }),
     params: text('params', { mode: 'json' }).notNull().$type<Record<string, unknown>>(),
-    status: text('status', { enum: RUN_STATUSES }).notNull().$type<RunStatus>(),
+    status: text('status', { enum: asEnumTuple(RunStatusSchema.options) })
+      .notNull()
+      .$type<RunStatus>(),
     leaseUntil: integer('lease_until'),
     heartbeatAt: integer('heartbeat_at'),
     startedAt: integer('started_at').notNull(),
@@ -148,6 +166,11 @@ export const runs = sqliteTable(
   (table) => [
     index('runs_pipeline_version_id_idx').on(table.pipelineVersionId),
     index('runs_trigger_id_idx').on(table.triggerId),
+    // `status`: the boot-reconciler's "find all running rows" scan.
+    // `owner_id`: per-owner run listing. `started_at`: time-ordered listing.
+    index('runs_status_idx').on(table.status),
+    index('runs_owner_id_idx').on(table.ownerId),
+    index('runs_started_at_idx').on(table.startedAt),
     index('runs_parent_run_id_idx').on(table.parentRunId),
   ],
 );

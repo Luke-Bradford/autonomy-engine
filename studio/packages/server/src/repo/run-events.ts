@@ -14,6 +14,12 @@ import type { Db } from './types.js';
  * no update/delete export in this module. `seq` is monotonic per `runId`,
  * starting at 0, computed inside a transaction alongside the insert (same
  * read-max-then-insert pattern as `pipeline-versions.ts`, same rationale).
+ *
+ * NOTE: this `max()+1` numbering relies on better-sqlite3's synchronous,
+ * single-writer connection model (no other connection can interleave a write
+ * between the read and the insert). The `run_events_run_id_seq_idx` UNIQUE
+ * index is the real backstop against any cross-connection race, not this
+ * transaction.
  */
 export function appendRunEvent(db: Db, input: NewRunEvent): RunEvent {
   const parsed = NewRunEventSchema.parse(input);

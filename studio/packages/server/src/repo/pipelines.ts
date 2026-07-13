@@ -50,7 +50,56 @@ export function updatePipeline(
   return updated;
 }
 
+/**
+ * Thrown by `deletePipeline` when the pipeline has run history. `pipelines`
+ * -> `pipeline_versions` is `ON DELETE CASCADE`, but `pipeline_versions` ->
+ * `runs` is (deliberately) `ON DELETE RESTRICT` — runs are immutable audit
+ * history, never silently swept away by deleting their pipeline. That makes
+ * the RESTRICT-on-history case an INTENTIONAL outcome, not a bug: this error
+ * surfaces it clearly instead of leaking an opaque `SqliteError` (or, worse,
+ * a `false` return that reads identically to "no such pipeline").
+ */
+export class PipelineHasRunsError extends Error {
+  constructor(public readonly pipelineId: string) {
+    super(
+      `Cannot delete pipeline "${pipelineId}": it has run history. ` +
+        'pipeline_versions -> runs is ON DELETE RESTRICT by design (runs are ' +
+        'immutable audit history) — delete/archive the runs first, or keep the pipeline.',
+    );
+    this.name = 'PipelineHasRunsError';
+  }
+}
+
+/** Narrow, non-message-only check that a thrown error is the SQLite foreign
+ * key constraint failure (vs. some unrelated error we should let propagate
+ * unchanged) — both `code` (better-sqlite3's SQLite extended result code)
+ * and the standard SQLite message text are checked so an unrelated
+ * `SQLITE_CONSTRAINT_*` failure isn't misreported as "has runs". */
+function isForeignKeyRestrictError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = (err as { code?: unknown }).code;
+  return (
+    typeof code === 'string' &&
+    code.startsWith('SQLITE_CONSTRAINT') &&
+    err.message.includes('FOREIGN KEY constraint failed')
+  );
+}
+
+/**
+ * Deletes a pipeline, cascading its `pipeline_versions` (and, transitively,
+ * any `triggers` bound to those versions). Throws `PipelineHasRunsError`
+ * instead of letting an opaque FK error escape when the pipeline has run
+ * history (see `PipelineHasRunsError`). Returns `false` only for "no such
+ * pipeline" (never conflated with the has-runs case).
+ */
 export function deletePipeline(db: Db, id: string): boolean {
-  const result = db.delete(pipelines).where(eq(pipelines.id, id)).run();
-  return result.changes > 0;
+  try {
+    const result = db.delete(pipelines).where(eq(pipelines.id, id)).run();
+    return result.changes > 0;
+  } catch (err) {
+    if (isForeignKeyRestrictError(err)) {
+      throw new PipelineHasRunsError(id);
+    }
+    throw err;
+  }
 }

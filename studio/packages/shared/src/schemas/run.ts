@@ -26,8 +26,8 @@ export const RunSchema = z.object({
   parentRunId: z.string().min(1).nullable(),
   params: z.record(z.string(), z.unknown()),
   status: RunStatusSchema,
-  leaseUntil: z.number().nullable(),
-  heartbeatAt: z.number().nullable(),
+  leaseUntil: z.number().int().nullable(),
+  heartbeatAt: z.number().int().nullable(),
   startedAt: z.number().int(),
   finishedAt: z.number().int().nullable(),
 });
@@ -53,6 +53,26 @@ export const NewRunSchema = RunSchema.omit({
 // matters concretely: `status` has `.default('pending')`, so z.input is what
 // keeps it optional for callers of `createRun`).
 export type NewRun = z.input<typeof NewRunSchema>;
+
+/**
+ * The ONLY shape `updateRun` accepts: the run-lifecycle fields the
+ * executor/boot-reconciler mutate as a run progresses. Every immutable
+ * binding field (`pipelineVersionId`, `triggerId`, `parentRunId`, `params`,
+ * `startedAt`) is deliberately absent — `.strict()` means a patch carrying
+ * any of them (or any other unrecognized key) is rejected by `.parse()`
+ * rather than silently stripped, so `updateRun` cannot be used to rewrite a
+ * run's immutable bindings/provenance even by an `as any`/`as never` cast
+ * around the TS type.
+ */
+export const RunLifecyclePatchSchema = RunSchema.pick({
+  status: true,
+  leaseUntil: true,
+  heartbeatAt: true,
+  finishedAt: true,
+})
+  .partial()
+  .strict();
+export type RunLifecyclePatch = z.infer<typeof RunLifecyclePatchSchema>;
 
 /**
  * Append-only event log entry — the source of truth for run/node state (the

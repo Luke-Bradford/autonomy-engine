@@ -3,6 +3,7 @@ import {
   NewRunEventSchema,
   NewRunSchema,
   RunEventSchema,
+  RunLifecyclePatchSchema,
   RunSchema,
   RunStatusSchema,
 } from './run.js';
@@ -58,6 +59,48 @@ describe('RunSchema', () => {
 
   it('rejects an invalid status', () => {
     expect(() => RunSchema.parse({ ...run, status: 'cancelled' })).toThrow();
+  });
+
+  it('rejects a non-integer leaseUntil', () => {
+    expect(() => RunSchema.parse({ ...run, leaseUntil: 1700000005000.5 })).toThrow();
+  });
+
+  it('rejects a non-integer heartbeatAt', () => {
+    expect(() => RunSchema.parse({ ...run, heartbeatAt: 1700000004000.5 })).toThrow();
+  });
+});
+
+describe('RunLifecyclePatchSchema', () => {
+  it('accepts a patch with only lifecycle fields', () => {
+    const patch = { status: 'running' as const, leaseUntil: 1700000005000 };
+    expect(RunLifecyclePatchSchema.parse(patch)).toEqual(patch);
+  });
+
+  it('accepts an empty patch', () => {
+    expect(RunLifecyclePatchSchema.parse({})).toEqual({});
+  });
+
+  it('rejects a patch touching an immutable-binding field (pipelineVersionId)', () => {
+    expect(() =>
+      RunLifecyclePatchSchema.parse({ status: 'running', pipelineVersionId: 'pv_2' }),
+    ).toThrow();
+  });
+
+  it('rejects a patch touching params', () => {
+    expect(() => RunLifecyclePatchSchema.parse({ params: { changed: true } })).toThrow();
+  });
+
+  it('rejects a patch touching startedAt', () => {
+    expect(() => RunLifecyclePatchSchema.parse({ startedAt: 0 })).toThrow();
+  });
+
+  it('rejects a patch touching triggerId or parentRunId', () => {
+    expect(() => RunLifecyclePatchSchema.parse({ triggerId: 'trig_1' })).toThrow();
+    expect(() => RunLifecyclePatchSchema.parse({ parentRunId: 'run_1' })).toThrow();
+  });
+
+  it('rejects any other unrecognized key', () => {
+    expect(() => RunLifecyclePatchSchema.parse({ notAField: true })).toThrow();
   });
 });
 

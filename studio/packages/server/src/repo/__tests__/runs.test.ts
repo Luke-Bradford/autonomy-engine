@@ -107,6 +107,24 @@ describe('runs repo', () => {
     expect(updateRun(db, 'run_missing', { status: 'running' })).toBeNull();
   });
 
+  it('rejects an updateRun patch touching an immutable-binding field, even bypassing the TS type', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    const created = createRun(db, buildRunInput(version.id));
+
+    // `RunLifecyclePatch` has no `pipelineVersionId`/`triggerId`/
+    // `parentRunId`/`params`/`startedAt` field, so this is a type error at
+    // the call site (the `as never` cast simulates a caller bypassing that
+    // compile-time guard) — `RunLifecyclePatchSchema`'s `.strict()` must
+    // still reject it at runtime.
+    expect(() => updateRun(db, created.id, { pipelineVersionId: 'pv_other' } as never)).toThrow();
+    expect(() => updateRun(db, created.id, { params: { changed: true } } as never)).toThrow();
+    expect(() => updateRun(db, created.id, { startedAt: 0 } as never)).toThrow();
+
+    // The run is untouched by the rejected patches.
+    expect(getRun(db, created.id)).toEqual(created);
+  });
+
   it('deletes a run', () => {
     const { db } = freshDb();
     const version = setupPipelineVersion(db);
