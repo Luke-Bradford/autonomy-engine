@@ -176,6 +176,26 @@ describe('RunLauncher — queue', () => {
     expect(runs).toHaveLength(2);
     expect(runs.every((r) => r.status === 'success')).toBe(true);
   });
+
+  it('skips a fire once the queue is at its depth cap (bounded in-memory queue)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    // Cap the queue at 1 waiter and keep the active run in flight (hang) so the
+    // slot never frees during the burst.
+    const launcher = createRunLauncher({
+      ...deps(db, { nodes: { a: { hang: true } } }),
+      maxQueueDepth: 1,
+    });
+
+    expect(launcher.fire(trigger).outcome).toBe('started'); // takes the slot
+    expect(launcher.fire(trigger).outcome).toBe('queued'); // fills the 1-deep queue
+    const overflow = launcher.fire(trigger);
+    expect(overflow.outcome).toBe('skipped');
+    expect(overflow.reason).toContain('queue is full');
+
+    await launcher.whenIdle();
+  });
 });
 
 describe('RunLauncher — queue drains even when a run rests non-terminal', () => {

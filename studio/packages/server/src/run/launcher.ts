@@ -81,12 +81,35 @@ export interface RunLauncher {
 
 export interface RunLauncherDeps extends DriverDeps {
   log?: LauncherLog;
+  /** Per-trigger `queue` depth cap; defaults to `DEFAULT_MAX_QUEUE_DEPTH`. */
+  maxQueueDepth?: number;
 }
+
+/**
+ * Default per-trigger cap on `queue`-policy fires waiting for the slot. A burst
+ * beyond this (a flappy webhook, a runaway manual loop) skips with a reason
+ * rather than growing the in-memory queue unboundedly. Generous enough that
+ * normal bursts queue fine; a config-driven bound can come with P4b/c.
+ */
+export const DEFAULT_MAX_QUEUE_DEPTH = 1000;
 
 export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
   const { db } = deps;
   const inFlight = new Set<Promise<void>>();
-  /** Per-trigger FIFO of fires waiting for the (single) `queue` slot to free. */
+  /**
+   * Per-trigger FIFO of fires waiting for the (single) `queue` slot to free.
+   *
+   * IN-MEMORY, and bounded to `MAX_QUEUE_DEPTH` per trigger (a full queue skips
+   * with a reason rather than growing unboundedly under a burst — e.g. a flappy
+   * webhook in P4c). CONSCIOUS TRADEOFF: a queued fire has no run row yet (the
+   * row is created only when it drains to the slot), so a process crash/restart
+   * silently drops everything still queued. That is acceptable for P4a — a
+   * dropped MANUAL queued fire is re-fired by the operator, and a dropped
+   * SCHEDULED/webhook fire is re-evaluated on the next tick (P4b/c). The durable
+   * close (persist queued fires + a boot-reconciler sweep to recover them) is
+   * the same follow-up as the `pending`-orphan window in `launch()`; kept out of
+   * this slice so P4a stays scoped to manual fire + concurrency.
+   */
   const queues = new Map<string, Trigger[]>();
   /**
    * Per-trigger count of runs this launcher is CURRENTLY driving (promise not
@@ -101,6 +124,7 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
    * must reliably fire on promise-settle in THIS process.
    */
   const inFlightByTrigger = new Map<string, number>();
+  const maxQueueDepth = deps.maxQueueDepth ?? DEFAULT_MAX_QUEUE_DEPTH;
   let stopped = false;
 
   function incInFlight(triggerId: string): void {
@@ -246,9 +270,12 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       return { outcome: 'started', runId: launch(trigger) };
     }
 
-    // `queue`: single-slot, FIFO. Start now if idle, else enqueue.
+    // `queue`: single-slot, FIFO. Start now if idle, else enqueue (bounded).
     if (active > 0) {
       const q = queues.get(trigger.id) ?? [];
+      if (q.length >= maxQueueDepth) {
+        return { outcome: 'skipped', reason: `queue is full (max ${maxQueueDepth} pending)` };
+      }
       q.push(trigger);
       queues.set(trigger.id, q);
       return { outcome: 'queued' };
