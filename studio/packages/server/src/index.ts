@@ -9,6 +9,7 @@ import { getPipelineVersion } from './repo/pipeline-versions.js';
 import { reconcileOnBoot } from './run/reconcile.js';
 import { createExecutor } from './run/executor.js';
 import { createRunLauncher } from './run/launcher.js';
+import { createScheduler } from './scheduler/scheduler.js';
 import { createConnectorRegistry } from './connectors/registry.js';
 import type { DocResolver } from './run/driver.js';
 import { registerAuthHook } from './auth/principal.js';
@@ -120,6 +121,14 @@ export async function buildApp(opts?: BuildAppOptions) {
   const runLauncher = createRunLauncher({ db, resolveDoc, executor, log: fastify.log });
   fastify.decorate('runLauncher', runLauncher);
 
+  // P4b: the scheduler — fires `schedule`-mode triggers on their cron (UTC)
+  // through the launcher above, gated by each trigger's run windows. Per-app
+  // (mirrors the launcher/supervisor); trigger routes re-`sync()` it after any
+  // write, and `sync()` here schedules whatever is already enabled at boot.
+  const scheduler = createScheduler({ db, launcher: runLauncher, log: fastify.log });
+  fastify.decorate('scheduler', scheduler);
+  scheduler.sync();
+
   // Auth seam + the one global error handler, registered before any route so
   // every request (and every thrown error) is covered.
   registerAuthHook(fastify);
@@ -148,10 +157,12 @@ export async function buildApp(opts?: BuildAppOptions) {
   // wiring, so no in-flight `agent_cli` subprocess tree survives a graceful
   // restart/deploy.
   fastify.addHook('onClose', async () => {
-    // Stop the launcher FIRST (no new fires, drop the queue) so nothing new
-    // spawns while we reap; in-flight background runs are left to settle or be
+    // Stop the scheduler FIRST (no further cron ticks can call the launcher),
+    // then the launcher (no new fires, drop the queue) so nothing new spawns
+    // while we reap; in-flight background runs are left to settle or be
     // recovered by the boot reconciler on next start. Then tree-kill any
     // in-flight `agent_cli` subprocess.
+    scheduler.stop();
     runLauncher.stop();
     await supervisor.reapAllSupervised();
   });

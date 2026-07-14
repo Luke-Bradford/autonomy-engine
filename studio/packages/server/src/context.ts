@@ -1,6 +1,7 @@
 import type { Db } from './repo/types.js';
 import type { Supervisor } from './workers/process-supervisor.js';
 import type { RunLauncher } from './run/launcher.js';
+import type { Scheduler } from './scheduler/scheduler.js';
 
 /**
  * Ambient `FastifyInstance` augmentation for the app-scoped state routes and
@@ -24,5 +25,10 @@ declare module 'fastify' {
      * fires" + concurrency admission. Per-app so its in-flight/queue state
      * never leaks across instances. */
     runLauncher: RunLauncher;
+    /** This app instance's scheduler: fires `schedule`-mode triggers on their
+     * cron (UTC) through the launcher, gated by run windows. Per-app so its
+     * cron set never leaks across instances. Routes call `.sync()` after any
+     * trigger write; `buildApp` syncs at boot and `.stop()`s it on close. */
+    scheduler: Scheduler;
   }
 }

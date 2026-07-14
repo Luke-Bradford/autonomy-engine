@@ -54,6 +54,28 @@ export function listTriggers(db: Db, filter: ListTriggersFilter = {}): Trigger[]
   return rows.map((row) => TriggerSchema.parse(row));
 }
 
+/**
+ * Like `listTriggers()` with no filter, but RESILIENT: a row that fails schema
+ * validation is skipped (and reported via `onSkip`) instead of throwing out the
+ * whole list. The scheduler uses this so ONE corrupt/legacy/hand-edited trigger
+ * row can't dark-out ALL scheduling — matching the per-cron isolation the
+ * scheduler already gives a bad cron string. (The normal `listTriggers` stays
+ * strict: a route surfacing a poison row as a 500 is the right behaviour there.)
+ */
+export function listParsedTriggers(
+  db: Db,
+  onSkip?: (id: unknown, err: unknown) => void,
+): Trigger[] {
+  const rows = db.select().from(triggers).all();
+  const parsed: Trigger[] = [];
+  for (const row of rows) {
+    const result = TriggerSchema.safeParse(row);
+    if (result.success) parsed.push(result.data);
+    else onSkip?.((row as { id?: unknown }).id, result.error);
+  }
+  return parsed;
+}
+
 export function updateTrigger(db: Db, id: string, patch: Partial<NewTrigger>): Trigger | null {
   const existing = getTrigger(db, id);
   if (!existing) return null;
