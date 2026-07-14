@@ -1,4 +1,4 @@
-import type { EngineEvent, Trigger } from '@autonomy-studio/shared';
+import type { EngineEvent, FireOutcome, FireResult, Trigger } from '@autonomy-studio/shared';
 import { countActiveRunsForTrigger, createRun, getRun, updateRun } from '../repo/runs.js';
 import {
   buildEngine,
@@ -38,16 +38,11 @@ import { appendEngineEvent, loadEngineEvents } from './events.js';
  * multi-tenant).
  */
 
-/** The outcome of a single `fire()`. */
-export type FireOutcome = 'started' | 'queued' | 'skipped';
-
-export interface FireResult {
-  outcome: FireOutcome;
-  /** The created run's id — present iff `outcome === 'started'`. */
-  runId?: string;
-  /** Why admission was refused — present iff `outcome === 'skipped'`. */
-  reason?: string;
-}
+// The fire outcome/result wire shape is the shared `FireResultSchema` SSOT
+// (`@autonomy-studio/shared`) — re-exported here so existing importers (the
+// scheduler, tests) keep resolving `FireResult`/`FireOutcome` from `launcher.js`
+// while the web client validates the same `202` body against that one schema.
+export type { FireOutcome, FireResult };
 
 /** Thrown by `fire()` when a trigger has no bound pipeline version. */
 export class UnboundTriggerError extends Error {

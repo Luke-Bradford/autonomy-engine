@@ -137,7 +137,8 @@ td button + button {
   margin-left: 0.4rem;
 }
 
-.connection-form {
+.connection-form,
+.trigger-form {
   margin-top: 1.5rem;
   padding: 1rem 1.25rem;
   background: var(--panel);
@@ -149,7 +150,8 @@ td button + button {
   max-width: 480px;
 }
 
-.connection-form label {
+.connection-form label,
+.trigger-form label {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
@@ -157,9 +159,19 @@ td button + button {
   color: var(--muted);
 }
 
+/* A checkbox reads as a single inline row, not a stacked label/control. */
+.trigger-form label.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .connection-form input,
 .connection-form select,
-.connection-form textarea {
+.connection-form textarea,
+.trigger-form input,
+.trigger-form select,
+.trigger-form textarea {
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);
@@ -168,7 +180,12 @@ td button + button {
   font: inherit;
 }
 
-.connection-form textarea {
+.trigger-form label.checkbox input {
+  width: auto;
+}
+
+.connection-form textarea,
+.trigger-form textarea {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   resize: vertical;
 }
@@ -180,4 +197,22 @@ td button + button {
 
 .error {
   color: var(--error);
+}
+
+.notice {
+  color: var(--muted);
+}
+
+/* One-time reveal of a freshly-minted webhook secret. */
+.secret-reveal {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-width: 640px;
+}
+
+.secret-reveal code {
+  word-break: break-all;
 }
