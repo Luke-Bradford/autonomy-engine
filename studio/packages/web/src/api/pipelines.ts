@@ -17,9 +17,13 @@ const PipelineVersionListSchema = z.array(PipelineVersionSchema);
  * routes use (`packages/server/src/routes/pipelines.ts`), so the form's
  * client-side validation is identical to the server's — one source of truth.
  * `ownerId` is stamped server-side from the principal; `pipelineId` comes from
- * the route param, never the body.
+ * the route param, never the body. `PipelineWriteSchema` is a module-local (its
+ * only external consumer is the derived `PipelineWrite` type); `createPipeline`
+ * parses through it so the same shared shape validates the body client-side
+ * before the POST. `PipelineVersionWriteSchema` is exported because the
+ * canvas-doc tests parse against it.
  */
-export const PipelineWriteSchema = NewPipelineSchema.omit({ ownerId: true });
+const PipelineWriteSchema = NewPipelineSchema.omit({ ownerId: true });
 export type PipelineWrite = z.input<typeof PipelineWriteSchema>;
 
 export const PipelineVersionWriteSchema = NewPipelineVersionSchema.omit({ pipelineId: true });
@@ -48,7 +52,11 @@ export function listPipelineVersions(
 
 /** Create a pipeline (`POST /api/pipelines`). The server assigns the id. */
 export function createPipeline(body: PipelineWrite): Promise<Pipeline> {
-  return apiFetch('/api/pipelines', { method: 'POST', body, schema: PipelineSchema });
+  return apiFetch('/api/pipelines', {
+    method: 'POST',
+    body: PipelineWriteSchema.parse(body),
+    schema: PipelineSchema,
+  });
 }
 
 /**
