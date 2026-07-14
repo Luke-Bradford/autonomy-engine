@@ -1,6 +1,7 @@
 import type { Db } from './repo/types.js';
 import type { Supervisor } from './workers/process-supervisor.js';
 import type { RunLauncher } from './run/launcher.js';
+import type { RunEventBus } from './run/event-bus.js';
 import type { Scheduler } from './scheduler/scheduler.js';
 
 /**
@@ -30,5 +31,10 @@ declare module 'fastify' {
      * cron set never leaks across instances. Routes call `.sync()` after any
      * trigger write; `buildApp` syncs at boot and `.stop()`s it on close. */
     scheduler: Scheduler;
+    /** This app instance's live-run-monitor event bus (P6). The run driver
+     * publishes every appended `run_events` envelope to it; the run-events
+     * WebSocket route subscribes per run. Per-app so two instances in one
+     * process never cross-deliver each other's run events. */
+    runEventBus: RunEventBus;
   }
 }

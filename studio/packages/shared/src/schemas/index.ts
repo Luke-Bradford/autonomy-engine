@@ -4,5 +4,6 @@ export * from './pipeline.js';
 export * from './trigger.js';
 export * from './fire-result.js';
 export * from './run.js';
+export * from './run-stream.js';
 export * from './secret.js';
 export * from './webhook-delivery.js';

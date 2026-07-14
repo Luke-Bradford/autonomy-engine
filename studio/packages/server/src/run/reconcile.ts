@@ -2,6 +2,7 @@ import type { EngineEvent, RunState } from '@autonomy-studio/shared';
 import { listRuns } from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
 import { buildEngine, pump, syncRunLifecycle, type DocResolver, type Executor } from './driver.js';
+import type { RunEventBus } from './event-bus.js';
 import { appendEngineEvent, loadEngineEvents } from './events.js';
 
 /**
@@ -73,6 +74,12 @@ export interface ReconcileDeps {
    * (which need no executor) are ALWAYS applied.
    */
   executor?: Executor;
+  /** P6 — the live-monitor bus, threaded through so reconcile-appended events
+   * (`run.interrupted`/`run.resumed`/…) publish through the same choke point.
+   * Boot reconcile runs before the server accepts connections, so nothing is
+   * watching yet; wiring it keeps the append path uniform (every appended event
+   * publishes) rather than being a live requirement today. */
+  bus?: RunEventBus;
 }
 
 export interface ReconcileReport {
@@ -148,7 +155,7 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
     if (notProvablyIdempotent.length > 0) {
       const reason = `non_idempotent_in_flight:${notProvablyIdempotent.map((n) => n.id).join(',')}`;
       const interrupted: EngineEvent = { type: 'run.interrupted', runId: run.id, reason };
-      appendEngineEvent(deps.db, interrupted);
+      appendEngineEvent(deps.db, interrupted, deps.bus);
       syncRunLifecycle(deps.db, run.id, engine.reduce(state, interrupted).state);
       report.interrupted.push(run.id);
       continue;
@@ -189,10 +196,15 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
       continue;
     }
 
-    for (const ev of reconcileEvents) appendEngineEvent(deps.db, ev);
+    for (const ev of reconcileEvents) appendEngineEvent(deps.db, ev, deps.bus);
     syncRunLifecycle(deps.db, run.id, next);
     await pump(
-      { db: deps.db, resolveDoc: deps.resolveDoc, executor: deps.executor ?? refuseToExecute },
+      {
+        db: deps.db,
+        resolveDoc: deps.resolveDoc,
+        executor: deps.executor ?? refuseToExecute,
+        bus: deps.bus,
+      },
       engine,
       next,
       commands,
