@@ -155,6 +155,21 @@ toolbox, properties panel, expression builder, live run visualisation).
 | U14b | Schedule/recurrence builder + webhook | Manage |
 | U14c | Run-windows + concurrency policy | Manage |
 | U15 | Home hub + Settings | Manage |
+| **U16** | **Params/Variables/Outputs/Globals AUTHORING** (T14) — the bottom-pane tab to *define* what the `${}` flyout references; routed through `toVersionBody` (currently discards them) | Author |
+| **U17** | **Undo/redo** (T14) — reversible-command store; land EARLY (before U6*) | Author |
+| **U18** | **Save-vs-Publish reconciliation** (T14) — command-bar states: DB-only `Save→v` vs git-connected `Save/Commit→branch` + `Publish→active` + CAS-stale "pull first"; Manage **Git** section | Author/Manage |
+| **U19** | **Outcome-by-source-handle** (T14) — colored/labeled handles per ActivityDefinition (operational success/failure/completion/skipped; control `true/false`/case), NOT the retro dropdown | Author |
+| **U20** | **`call_pipeline` authoring** (T14) — target-pipeline picker + param-map + call-graph validation + Monitor child-run drill | Author/Monitor |
+| **U21** | copy/paste + multi-select + marquee + group move/delete (T14) | Author |
+| **U22** | version-history / picker (open/compare/restore; trigger bind-to-version) (T14) | Author/Manage |
+| **U23** | container-config forms (loop `exitWhen`/`timeout`; foreach `items`/`batchCount`; bounce caps) + domain-container↔RF-parentId mapping + drag-into-container drop mechanics (T14) | Author |
+| **U24** | **Activity drill-in panel** (T13) — per-node input/output/error+kind/attempts/duration/prompt+completion(redacted)/tool-calls/cost | Monitor |
+| **U25** | Monitor status-enum + R2 reconciled with S6 (`queued`/`waiting`+reason/`skipped`); waiting/retrying overlay states (T13) | Monitor |
+| **U26** | filter pane (status/pipeline/time-range server-side/annotation/trigger) + trigger-runs + tumbling-window views (T13) | Monitor |
+| **U27** | cost column + per-run/rollup consumption surface + completeness flag (T13) | Monitor |
+| **U28** | cancel-run/cancel-activity (T13) + **rerun-distinct render** (copied-vs-executed frontier, RS6) + rerun-history grouping | Monitor |
+| **U29** | cross-run Gantt (group by pipeline/annotation) (T13) | Monitor |
+| **R3** | (deferred) structured validation diagnostics → node-level issue mapping (U8b) | Server |
 | R3 + U8b | (deferred) structured diagnostics | later |
 | U12b | (deferred) true timeline model | later |
 
