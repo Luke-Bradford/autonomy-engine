@@ -122,17 +122,29 @@ export type NewTrigger = z.input<typeof NewTriggerSchema>;
  * `WebhookConfigSchema` minus its one required field, same shape a client
  * should see as `ConnectionPublicSchema` gives for a connection's
  * `secretRef`. NOTE: plain `.omit({ secretRef: true })` does NOT work here —
- * `WebhookConfigSchema`'s `.catchall(z.unknown())` re-admits any key not in
- * the declared shape (that's the whole point of a catchall: pass unknown
- * keys through), so an omitted-from-the-shape `secretRef` still round-trips
- * as an unrecognized/catchall key. A `.transform()` that deletes the key
- * from the parsed output is the only way to actually drop it.
+ * a `.catchall(z.unknown())` re-admits any key not in the declared shape
+ * (that's the whole point of a catchall: pass unknown keys through), so an
+ * omitted-from-the-shape `secretRef` still round-trips as an
+ * unrecognized/catchall key. A `.transform()` that deletes the key from the
+ * parsed output is the only way to actually drop it.
+ *
+ * IDEMPOTENT by design: `secretRef` is OPTIONAL on the INPUT here (unlike the
+ * stored `WebhookConfigSchema`, where it is required). This projection must
+ * accept BOTH a full stored config (server-side `toPublic`, secretRef present
+ * → stripped) AND an already-public config that has no `secretRef` (a client
+ * re-parsing a `TriggerPublic` response through the same shared schema — the
+ * web API client does exactly this). If `secretRef` were required here, that
+ * second parse would throw `expected string, received undefined`, breaking
+ * every list/edit of a webhook trigger once its secret has been provisioned.
  */
-export const WebhookPublicConfigSchema = WebhookConfigSchema.transform((webhook) => {
-  const { secretRef, ...rest } = webhook;
-  void secretRef;
-  return rest;
-});
+export const WebhookPublicConfigSchema = z
+  .object({ secretRef: z.string().min(1).optional() })
+  .catchall(z.unknown())
+  .transform((webhook) => {
+    const { secretRef, ...rest } = webhook;
+    void secretRef;
+    return rest;
+  });
 export type WebhookPublicConfig = z.infer<typeof WebhookPublicConfigSchema>;
 
 /**

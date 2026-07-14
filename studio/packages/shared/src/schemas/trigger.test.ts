@@ -172,6 +172,14 @@ describe('WebhookPublicConfigSchema', () => {
     expect(parsed).not.toHaveProperty('secretRef');
     expect(parsed).toEqual({ idempotencyWindowSeconds: 300 });
   });
+
+  it('is idempotent — re-parsing an already-stripped config does not throw', () => {
+    // The web API client re-parses a `TriggerPublic` response (secretRef
+    // already gone) through this same shared schema. secretRef is optional on
+    // input, so a config with no secretRef round-trips instead of throwing.
+    const alreadyPublic = { idempotencyWindowSeconds: 300 };
+    expect(WebhookPublicConfigSchema.parse(alreadyPublic)).toEqual(alreadyPublic);
+  });
 });
 
 describe('TriggerPublicSchema', () => {
@@ -189,5 +197,21 @@ describe('TriggerPublicSchema', () => {
   it('round-trips a null webhook unchanged', () => {
     const parsed = TriggerPublicSchema.parse(trigger);
     expect(parsed.webhook).toBeNull();
+  });
+
+  it('is idempotent — re-parsing its own output does not throw (client re-parse)', () => {
+    // Regression: the server sends `TriggerPublic` (webhook.secretRef stripped),
+    // and the web API client validates that body through TriggerPublicSchema
+    // again. A non-idempotent public webhook schema threw here, breaking every
+    // list/edit of a provisioned webhook trigger.
+    const webhookTrigger = {
+      ...trigger,
+      mode: 'webhook',
+      schedule: null,
+      webhook: { secretRef: 'secret_1', idempotencyWindowSeconds: 300 },
+    };
+    const once = TriggerPublicSchema.parse(webhookTrigger);
+    const twice = TriggerPublicSchema.parse(once);
+    expect(twice.webhook).toEqual({ idempotencyWindowSeconds: 300 });
   });
 });

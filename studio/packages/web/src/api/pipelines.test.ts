@@ -1,0 +1,60 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { listPipelines, listPipelineVersions } from './pipelines';
+
+const pipeline = {
+  id: 'pl_1',
+  ownerId: 'local',
+  name: 'My pipeline',
+  createdAt: 1,
+  updatedAt: 1,
+};
+
+const version = {
+  id: 'plv_1',
+  pipelineId: 'pl_1',
+  version: 3,
+  params: [],
+  outputs: [],
+  nodes: [],
+  edges: [],
+  containers: [],
+  catalogVersion: 1,
+  createdAt: 1,
+};
+
+function stubFetch(status: number, jsonBody: unknown) {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: status >= 200 && status < 300,
+    status,
+    json: () => Promise.resolve(jsonBody),
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('pipelines API', () => {
+  it('lists pipelines and hits GET /api/pipelines', async () => {
+    const fetchMock = stubFetch(200, [pipeline]);
+    const out = await listPipelines();
+    expect(out).toEqual([pipeline]);
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/pipelines');
+  });
+
+  it('lists a pipeline’s versions and encodes the id in the path', async () => {
+    const fetchMock = stubFetch(200, [version]);
+    const out = await listPipelineVersions('pl/1');
+    expect(out).toEqual([version]);
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/pipelines/pl%2F1/versions');
+  });
+
+  it('validates versions through the shared schema — a bad row rejects', async () => {
+    const bad: Record<string, unknown> = { ...version };
+    delete bad.version;
+    stubFetch(200, [bad]);
+    await expect(listPipelineVersions('pl_1')).rejects.toThrow();
+  });
+});
