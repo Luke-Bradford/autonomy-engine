@@ -28,7 +28,7 @@ shapes are one click, but the underlying activity + contract is uniform (composa
 | --- | --- | --- | --- |
 | **Generate** | `outputMode:text` | `text` | content, drafting, summarize |
 | **Extract / structured** | `outputMode:structured` + `outputSchema` | typed fields → `${nodes.x.output.field}` | unstructured→data |
-| **Classify / route** | `outputSchema` = enum | `category` → drives `success`/branch edges | decisioning |
+| **Classify / route** | `outputSchema` = enum | typed `category` OUTPUT (this node just succeeds); a **downstream `switch` routes on `${nodes.<id>.output.category}`** (T8, mandatory `default`) | decisioning |
 | **Judge / score** | `outputSchema` = `{score, reason}` | `score` | eval, gates |
 | **Advisor: think** | `reasoningEffort:high`, no tools | `text`/plan | plan, analysis |
 | **Advisor: implement** | tools/agent, action-taking | `result` | execution |

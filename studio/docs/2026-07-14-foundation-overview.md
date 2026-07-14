@@ -29,7 +29,9 @@ L3  P7 packaging (Docker / OSS self-host)
 | `2026-07-14-foundation-llm-activity-model.md` | L1 | L1–L12 |
 | `2026-07-14-foundation-git-publish.md` | L1 | G1–G10 |
 | `2026-07-14-foundation-activity-library.md` | L1 | A0–A15 |
-| `2026-07-14-foundation-scheduler-lifecycle.md` | L1 | S1–S10 |
+| `2026-07-14-foundation-scheduler-lifecycle.md` | L1 | S1–S11 |
+| `2026-07-14-foundation-expression-language.md` | L1 | E1–E8 |
+| `2026-07-14-foundation-challenge-findings.md` | review | T1–T14 |
 | `2026-07-14-adf-grade-ui-design.md` | L2 | U0–U15 (+R1/R2) |
 | `2026-07-12-target-architecture.md` | ref | — |
 
@@ -133,6 +135,65 @@ verified (UI epic's mandatory Playwright gate).
   gate: **writing-plans** decomposes these series into the loop queue, then the supervisor appends
   the ordered work to `prompt.md` (position vs P7 = operator's call) + adds the **browser-verify
   gate** for UI tickets, and re-arms the driver (after closing `[mvp-ready]` #428).
+
+## Round-1 challenge amendments (authoritative edit-list; writing-plans applies these)
+
+The adversarial E2E challenge (`…-challenge-findings.md`, T1–T14) produced these binding design
+decisions. Each is the SSOT for the edit its owning spec receives.
+
+- **T1 → NEW Spec #6 (expression language)** — the `${}` function catalog + interpolation + system
+  vars. Prereq alongside F0. **DONE (spec written).**
+- **T2 trigger-context (→ #5 + #6):** add a durable **`run.triggerContext` seed event** (folded by the
+  reducer; no out-of-band preload). Add general **`${trigger.*}` per trigger type** (schedule
+  `scheduledTime/startTime`; event `body/eventData`; window `windowStart/End`) + **`${run.*}`/
+  `${pipeline.*}` system vars** (#6). Allow **expression-valued trigger param bindings** + a **run-now
+  param-override body** (`POST /triggers/:id/fire`), resolved fire-time (`pipeline default < trigger
+  binding < run-now override`), validated at save.
+- **T3 propagate corrections (→ #1/#2/#4 bodies):** move the unified `Edge` **discriminated union**
+  into #1 as the single owner (`{on:success|failure|completion|skipped}` operational vs
+  `{on:branch, branch}` business); strip #1 D4's per-feature retry-timer prose (superseded by #5 S1);
+  fix #2's classify table ("category output → downstream `switch`", NOT "drives success edges"); fix
+  #4's `if` catalog row (→ `true/false` branches) + drop A0's "amends #1". **Surgical fixes applied
+  below.**
+- **T4 loop-dataflow (→ #4 + #1):** `foreach` gets a **first-class aggregate output**
+  `results: Array<childOutputShape>` (input-order-stable regardless of `batchCount`), addressable as
+  `${nodes.<foreach>.output.results}`; extend `OutputSpec`/`validateRefs` for array-of-child-shape.
+  Document **outputs are round-local + cleared on loop re-entry; only variables persist across
+  iterations** (fix the validateRefs diagnostic). Specify container output projection (the A3 TODO).
+- **T5 subscription/CLI LLM (→ #2):** add a **`cli`/`agent` connection kind `llm_call` accepts** +
+  single-shot CLI adapter (`claude -p`/`codex exec` → stdout completion); a **quota/reset-window**
+  primitive (sub cap → durable "wait until reset", not blind retry); split `meteringStatus →
+  metered|unpriced|unknown`; run-cost projection carries a **completeness flag** (unmetered ⇒ "≥").
+- **T6 `Node.config.outputs` (→ #1):** define `Node.config.outputs?: OutputSpec[]` (the home for #2's
+  lowered structured schema) + validation/canonicalization/git rules; add `${nodes.x.status}`; decide
+  deep `[]` addressing (permissive, runtime-validated — #6 E7).
+- **T7 multi-edge JOIN (→ #1 D5):** specify **AND across predecessors, OR among conditions on one
+  predecessor** (ADF `dependsOn`) + characterization tests with F1.
+- **T8 classify→switch (→ #2/#4):** the pattern + a **mandatory `default`** + save-time switch
+  case-exhaustiveness vs the enum output.
+- **T9 connection params (→ #2/#1):** connection **parameters** (non-secret, expression-bound at
+  dispatch) + `connectionId`/`model` as validated `${}` refs (route Anthropic-vs-OpenAI by param).
+- **T10 `SecretRef` sink (→ #1 D8):** a node-config secure field can carry a `SecretRef` resolved at
+  dispatch (never logged) — secrets reach a non-connection activity (e.g. an `http_request` auth
+  header) without a bespoke connection kind. This is the "canonical SecretRef" the overview promised.
+- **T11 `ToolDef` + tool side-effects (→ #2):** define `ToolDef`; **MVP tools are read-only/pure**
+  (opaque-telemetry model stays honest) — side-effecting tools promote to the deferred event-modeled
+  resumable-loop sub-spec.
+- **T12 events + read-models (→ #5/#1/UI):** add `trigger.fired`/`run.created`/`run.admitted`,
+  `node.skipped`/`edge.notTaken`, foreach lifecycle events; extend R1/R2 with `triggerContext`/
+  `windowContext`/version `provenance`/`activePointerAtCreation`.
+- **T13 monitor surfaces (→ UI + #5):** reconcile the UI status enum + R2 with S6 (v1); add
+  activity-drill-in, trigger-runs, tumbling-window, filter+time-range (server-side), cost-column,
+  cancel, **rerun-distinct render** (copied-vs-executed frontier), cross-run Gantt; event-source
+  workspace mutations + publish history for non-version audit.
+- **T14 UI authoring (→ UI epic):** add param/var/output/global **authoring** surface, **undo/redo**
+  (early — reversible-command store), the **Save-vs-Publish reconciliation** ticket, **outcome-by-
+  source-handle** + `if`/`switch` per-branch handles, **`call_pipeline` authoring**, copy/paste,
+  multi-select, version-history/picker, container-config forms, drag-drop drop mechanics; annotate
+  every UI ticket's hard dependency on its foundation schema.
+- **Tier-3** notes (connection probe, prompt-caching cost, refusal taxonomy, DST run-windows,
+  shell/git activity, webhook payload contract, env-override globals, etc.) fold as spec caveats or
+  explicit deferrals in each owning spec.
 
 ## Open cross-spec decisions (for the operator)
 

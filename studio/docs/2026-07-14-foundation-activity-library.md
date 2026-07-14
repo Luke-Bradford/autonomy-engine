@@ -22,7 +22,7 @@ in #1 (contract/policy/secure), #2 (AI activities); this says WHAT activities ex
 | --- | --- | --- |
 | `set_variable` / `append_variable` | Set/Append Variable | Spec #1 F6 |
 | `return` | Set-pipeline-return-value | Spec #1 F6; child→parent output |
-| `if` (condition) | If Condition | branch on a `${}` boolean → success/failure edges |
+| `if` (condition) | If Condition | branch on a `${}` boolean → **`true`/`false` business-branch edges** (NOT success/failure) |
 | `switch` | Switch | branch on a `${}` value → N cases |
 | `foreach` | ForEach | **container exists** (loop) — formalize item-iteration + parallelism cap |
 | `until` | Until | **container exists** (loop + exitWhen) |
@@ -57,7 +57,7 @@ Rationale: **control-flow completeness** first (real pipelines need branching/it
 
 | # | Ticket |
 | --- | --- |
-| **A0** | **Branch/outcome model** (PREREQUISITE): named branches for condition nodes — edges gain `on:'branch', branch:'<name>'`; `if`→`true`/`false`, `switch`→named case/default. Keeps `success/failure/skipped/completion` for *operational* outcome, not business routing. **Amends #1 `EdgeOnSchema`.** |
+| **A0** | **Branch/outcome model** (PREREQUISITE): named branches for condition nodes — edges gain `on:'branch', branch:'<name>'`; `if`→`true`/`false`, `switch`→named case/default. Keeps `success/failure/skipped/completion` for *operational* outcome, not business routing. **The unified `Edge` discriminated union is OWNED BY #1 (T3); A0 only IMPLEMENTS `if`/`switch` against that final schema.** |
 | A1 | `if` control activity → `true`/`false` branches (`condition.evaluated` event) |
 | A2 | `switch` control activity → named case/default branches (`switch.evaluated` event) |
 | A3 | `until` on the existing `loop` container — document do-while semantics (expr after each round, cap-failure reason, output projection, zero-iteration) |
