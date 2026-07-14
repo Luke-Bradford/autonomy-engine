@@ -74,14 +74,28 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
   const onSave = useCallback(async () => {
     setSaving(true);
     setSaveMsg(null);
+    // Snapshot the exact graph being saved. Store mutations always produce new
+    // array references, so reference-equality tells us whether the operator
+    // edited during the in-flight POST.
+    const savedNodes = store.getState().nodes;
+    const savedEdges = store.getState().edges;
     try {
       const created = await createPipelineVersion(
         pipelineId,
-        toVersionBody(store.getState().loaded, store.getState().nodes, store.getState().edges),
+        toVersionBody(store.getState().loaded, savedNodes, savedEdges),
       );
-      // Rebase the canvas onto the new immutable version: clears `dirty` and
-      // makes the next save carry THIS version's params/outputs/containers.
-      store.getState().loadVersion(created);
+      const s = store.getState();
+      if (s.nodes === savedNodes && s.edges === savedEdges) {
+        // Nothing changed during the request: rebase fully onto the new
+        // immutable version (clears `dirty`, and the next save carries THIS
+        // version's params/outputs/containers).
+        s.loadVersion(created);
+      } else {
+        // The operator kept editing while the save was in flight — keep their
+        // edits (and `dirty`), but point `loaded` at the new version so the
+        // next save carries forward from it.
+        s.rebaseLoaded(created);
+      }
       setSaveMsg(`Saved v${created.version}.`);
     } catch (err) {
       setSaveMsg(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -249,8 +263,11 @@ function NodePanel({
   const [text, setText] = useState(() => JSON.stringify(editable, null, 2));
   const [error, setError] = useState<string | null>(null);
 
+  // Kinds this activity accepts, PLUS whatever is currently bound — so a node
+  // bound to an off-kind connection (e.g. loaded from an older doc) still shows
+  // its real binding instead of silently reading as "— none —".
   const eligible = entry
-    ? connections.filter((c) => entry.connectionKinds.includes(c.kind))
+    ? connections.filter((c) => entry.connectionKinds.includes(c.kind) || c.id === connectionId)
     : connections;
 
   function apply() {

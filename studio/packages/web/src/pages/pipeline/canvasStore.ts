@@ -33,6 +33,12 @@ export interface CanvasState {
   addCount: number;
 
   loadVersion(v: PipelineVersion | null): void;
+  /**
+   * Point `loaded` at a new version WITHOUT touching the working graph or the
+   * dirty flag — used after a save when the operator kept editing during the
+   * in-flight request, so their edits are not clobbered by the just-saved graph.
+   */
+  rebaseLoaded(v: PipelineVersion): void;
   addNode(type: string): void;
   moveNode(id: string, position: Position): void;
   deleteNode(id: string): void;
@@ -73,6 +79,10 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         dirty: false,
         addCount: 0,
       });
+    },
+
+    rebaseLoaded(v) {
+      set({ loaded: v });
     },
 
     addNode(type) {

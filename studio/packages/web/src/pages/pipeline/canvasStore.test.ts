@@ -44,6 +44,19 @@ describe('canvasStore', () => {
     expect(st.nodes).not.toBe(version().nodes);
   });
 
+  it('rebaseLoaded repoints `loaded` but keeps the working graph and dirty flag', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version({ version: 1 }));
+    s.getState().addNode('http_request'); // makes it dirty, 3 nodes
+    const before = s.getState().nodes;
+    const v2 = version({ id: 'plv_2', version: 2 });
+    s.getState().rebaseLoaded(v2);
+    const st = s.getState();
+    expect(st.loaded).toBe(v2); // future carry-forward uses the new version
+    expect(st.nodes).toBe(before); // working edits untouched
+    expect(st.dirty).toBe(true); // still dirty — edits not yet persisted
+  });
+
   it('addNode appends a node seeded from the catalog and marks dirty', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(null);
