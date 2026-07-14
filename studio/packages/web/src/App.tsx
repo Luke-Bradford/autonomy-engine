@@ -1,5 +1,6 @@
 import { useRoute } from './router';
 import { ConnectionsPage } from './pages/ConnectionsPage';
+import { PipelinesPage } from './pages/PipelinesPage';
 import { TriggersPage } from './pages/TriggersPage';
 
 interface NavItem {
@@ -10,13 +11,13 @@ interface NavItem {
 
 /**
  * The nav mirrors the MVP-bar flow (Connections → Pipelines → Triggers → Runs).
- * Connections (P5a) and Triggers (P5b) are built; Pipelines (P5c canvas) and
- * Runs (P6 live monitor) are honest placeholders so the shell is complete and
- * later phases drop straight in without reworking navigation.
+ * Connections (P5a), Pipelines (P5c canvas), and Triggers (P5b) are built; Runs
+ * (P6 live monitor) is an honest placeholder so the shell is complete and the
+ * final phase drops straight in without reworking navigation.
  */
 const NAV: NavItem[] = [
   { path: '/connections', label: 'Connections', ready: true },
-  { path: '/pipelines', label: 'Pipelines', ready: false },
+  { path: '/pipelines', label: 'Pipelines', ready: true },
   { path: '/triggers', label: 'Triggers', ready: true },
   { path: '/runs', label: 'Runs', ready: false },
 ];
@@ -32,7 +33,7 @@ function ComingSoon({ label, phase }: { label: string; phase: string }) {
 
 function routeContent(path: string) {
   // Default to Connections (the built page) for '/' and any unknown route.
-  if (path === '/pipelines') return <ComingSoon label="Pipelines" phase="P5c (canvas)" />;
+  if (path === '/pipelines') return <PipelinesPage />;
   if (path === '/triggers') return <TriggersPage />;
   if (path === '/runs') return <ComingSoon label="Runs" phase="P6 (live monitor)" />;
   return <ConnectionsPage />;
