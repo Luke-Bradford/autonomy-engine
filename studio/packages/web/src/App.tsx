@@ -1,70 +1,68 @@
-import { useEffect, useState } from 'react';
-import { ReactFlow, Background, Controls, MiniMap, type Node, type Edge } from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
-import type { Hello } from '@autonomy-studio/shared';
-import { useCounterStore } from './store';
+import { useRoute } from './router';
+import { ConnectionsPage } from './pages/ConnectionsPage';
 
-const initialNodes: Node[] = [
-  { id: '1', position: { x: 0, y: 0 }, data: { label: 'Trigger' } },
-  { id: '2', position: { x: 200, y: 100 }, data: { label: 'Activity' } },
+interface NavItem {
+  path: string;
+  label: string;
+  ready: boolean;
+}
+
+/**
+ * The nav mirrors the MVP-bar flow (Connections → Pipelines → Triggers → Runs).
+ * Only Connections is built in P5a; the rest are honest placeholders so the
+ * shell is complete and later phases (P5b triggers, P5c canvas, P6 runs) drop
+ * straight in without reworking navigation.
+ */
+const NAV: NavItem[] = [
+  { path: '/connections', label: 'Connections', ready: true },
+  { path: '/pipelines', label: 'Pipelines', ready: false },
+  { path: '/triggers', label: 'Triggers', ready: false },
+  { path: '/runs', label: 'Runs', ready: false },
 ];
 
-const initialEdges: Edge[] = [{ id: 'e1-2', source: '1', target: '2' }];
-
-function HelloBanner() {
-  const [hello, setHello] = useState<Hello | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/hello')
-      .then((res) => {
-        if (!res.ok) throw new Error(`request failed: ${res.status}`);
-        return res.json() as Promise<Hello>;
-      })
-      .then((data) => {
-        if (!cancelled) setHello(data);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (error) return <p role="alert">Failed to load /api/hello: {error}</p>;
-  if (!hello) return <p>Loading /api/hello…</p>;
+function ComingSoon({ label, phase }: { label: string; phase: string }) {
   return (
-    <p>
-      {hello.message} <small>(ts: {new Date(hello.ts).toISOString()})</small>
-    </p>
+    <section>
+      <h2>{label}</h2>
+      <p>This section arrives in {phase}.</p>
+    </section>
   );
 }
 
-function Counter() {
-  const count = useCounterStore((state) => state.count);
-  const increment = useCounterStore((state) => state.increment);
-  return (
-    <button type="button" onClick={increment}>
-      zustand count: {count}
-    </button>
-  );
+function routeContent(path: string) {
+  // Default to Connections (the built page) for '/' and any unknown route.
+  if (path === '/pipelines') return <ComingSoon label="Pipelines" phase="P5c (canvas)" />;
+  if (path === '/triggers') return <ComingSoon label="Triggers" phase="P5b" />;
+  if (path === '/runs') return <ComingSoon label="Runs" phase="P6 (live monitor)" />;
+  return <ConnectionsPage />;
 }
 
 export default function App() {
+  const path = useRoute();
+  const activePath = path === '/' ? '/connections' : path;
+
   return (
-    <main>
-      <h1>autonomy-studio</h1>
-      <HelloBanner />
-      <Counter />
-      <div style={{ width: '100%', height: 400 }}>
-        <ReactFlow nodes={initialNodes} edges={initialEdges} fitView>
-          <Background />
-          <Controls />
-          <MiniMap />
-        </ReactFlow>
-      </div>
-    </main>
+    <div className="app-shell">
+      <aside className="sidebar">
+        <h1 className="brand">autonomy&nbsp;studio</h1>
+        <nav aria-label="Primary">
+          <ul>
+            {NAV.map((item) => (
+              <li key={item.path}>
+                <a
+                  href={`#${item.path}`}
+                  aria-current={activePath === item.path ? 'page' : undefined}
+                  className={activePath === item.path ? 'active' : undefined}
+                >
+                  {item.label}
+                  {!item.ready && <span className="badge">soon</span>}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      </aside>
+      <main className="content">{routeContent(activePath)}</main>
+    </div>
   );
 }
