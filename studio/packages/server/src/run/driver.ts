@@ -11,6 +11,7 @@ import {
 } from '@autonomy-studio/shared';
 import { getRun, updateRun } from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
+import type { RunEventBus } from './event-bus.js';
 import { appendEngineEvent, loadEngineEvents } from './events.js';
 
 /**
@@ -75,6 +76,10 @@ export interface DriverDeps {
   db: Db;
   resolveDoc: DocResolver;
   executor: Executor;
+  /** P6 — the live-monitor bus. When present, every event this driver appends is
+   * published to it (after the durable append) so a watching WS client tails the
+   * run in real time. Optional: P2/P3 driver tests run without a bus unchanged. */
+  bus?: RunEventBus;
 }
 
 /** Run-lifecycle statuses that are terminal (the run stops advancing). */
@@ -143,7 +148,7 @@ export async function pump(
         outcome: 'failure',
         reason: 'capped',
       };
-      appendEngineEvent(deps.db, capped);
+      appendEngineEvent(deps.db, capped, deps.bus);
       state = engine.reduce(state, capped).state;
       syncRunLifecycle(deps.db, state.runId, state);
       break;
@@ -168,7 +173,7 @@ export async function pump(
 
     let terminal = false;
     for await (const event of source) {
-      appendEngineEvent(deps.db, event);
+      appendEngineEvent(deps.db, event, deps.bus);
       const result = engine.reduce(state, event);
       state = result.state;
       syncRunLifecycle(deps.db, state.runId, state);
@@ -203,7 +208,7 @@ export async function startRun(deps: DriverDeps, run: Run): Promise<RunState> {
     pipelineVersionId: run.pipelineVersionId,
     params: resolvedParams,
   };
-  appendEngineEvent(deps.db, started);
+  appendEngineEvent(deps.db, started, deps.bus);
   const result = engine.reduce(engine.seedState(), started);
   syncRunLifecycle(deps.db, run.id, result.state);
   return pump(deps, engine, result.state, result.commands);

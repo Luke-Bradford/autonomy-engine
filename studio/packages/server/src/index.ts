@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import fastifyWebsocket from '@fastify/websocket';
 import { eq } from 'drizzle-orm';
 import { HelloSchema, type Hello } from '@autonomy-studio/shared';
 import { openDb } from './db/client.js';
@@ -9,6 +10,7 @@ import { getPipelineVersion } from './repo/pipeline-versions.js';
 import { reconcileOnBoot } from './run/reconcile.js';
 import { createExecutor } from './run/executor.js';
 import { createRunLauncher } from './run/launcher.js';
+import { createRunEventBus } from './run/event-bus.js';
 import { createScheduler } from './scheduler/scheduler.js';
 import { createConnectorRegistry } from './connectors/registry.js';
 import type { DocResolver } from './run/driver.js';
@@ -19,6 +21,7 @@ import { pipelinesRoutes } from './routes/pipelines.js';
 import { triggersRoutes } from './routes/triggers.js';
 import { webhooksRoutes } from './routes/webhooks.js';
 import { runsRoutes } from './routes/runs.js';
+import { runStreamRoutes } from './routes/run-stream.js';
 import { importRoutes } from './routes/import.js';
 import './context.js';
 
@@ -76,6 +79,17 @@ export async function buildApp(opts?: BuildAppOptions) {
   const supervisor = createSupervisor();
   fastify.decorate('supervisor', supervisor);
 
+  // P6 — the live-run-monitor event bus (per app instance, mirroring the
+  // supervisor/launcher). The run driver publishes every appended `run_events`
+  // envelope to it through the ONE append choke point; the run-events WebSocket
+  // route subscribes per run. A subscriber that throws is isolated here (logged,
+  // never re-thrown) so a broken tail can never disrupt the driver's pump.
+  const runEventBus = createRunEventBus({
+    onListenerError: (err, runId) =>
+      fastify.log.error({ err, runId }, 'run-event subscriber threw'),
+  });
+  fastify.decorate('runEventBus', runEventBus);
+
   // Prove the DB round-trips on boot: upsert a "last_boot" row, then read it
   // straight back.
   const bootKey = 'last_boot';
@@ -112,14 +126,20 @@ export async function buildApp(opts?: BuildAppOptions) {
   // an idempotent-resumable run (previously only deferred). Nothing yet creates
   // a `running` run outside tests (manual fire is P4), so this is a no-op in
   // practice today; it is wired so the recovery path exists from the first boot.
-  const reconcileReport = await reconcileOnBoot({ db, resolveDoc, executor });
+  const reconcileReport = await reconcileOnBoot({ db, resolveDoc, executor, bus: runEventBus });
   fastify.log.info({ reconcileReport }, 'boot reconcile complete');
 
   // P4a: the run launcher — the one place a trigger becomes a run (manual fire
   // now; the scheduler + webhooks reuse it in P4b/P4c). Per-app, sharing this
   // instance's driver boundary (db + doc resolver + real executor), so
   // "unbound never fires" + concurrency admission are enforced in ONE place.
-  const runLauncher = createRunLauncher({ db, resolveDoc, executor, log: fastify.log });
+  const runLauncher = createRunLauncher({
+    db,
+    resolveDoc,
+    executor,
+    log: fastify.log,
+    bus: runEventBus,
+  });
   fastify.decorate('runLauncher', runLauncher);
 
   // P4b: the scheduler — fires `schedule`-mode triggers on their cron (UTC)
@@ -135,11 +155,17 @@ export async function buildApp(opts?: BuildAppOptions) {
   registerAuthHook(fastify);
   registerErrorHandler(fastify);
 
+  // @fastify/websocket must be registered before any `{ websocket: true }` route;
+  // it applies process-wide (fastify-plugin), so the auth `onRequest` hook above
+  // still runs for the upgrade request and stamps `request.principal`.
+  await fastify.register(fastifyWebsocket);
+
   await fastify.register(connectionsRoutes);
   await fastify.register(pipelinesRoutes);
   await fastify.register(triggersRoutes);
   await fastify.register(webhooksRoutes);
   await fastify.register(runsRoutes);
+  await fastify.register(runStreamRoutes);
   await fastify.register(importRoutes);
 
   fastify.get('/health', async () => ({ ok: true }));

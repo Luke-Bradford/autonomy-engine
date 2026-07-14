@@ -181,7 +181,7 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     // needed), so the log stays authoritative even if the fold below can't run.
     const interrupted: EngineEvent = { type: 'run.interrupted', runId, reason: 'drive_failed' };
     try {
-      appendEngineEvent(db, interrupted);
+      appendEngineEvent(db, interrupted, deps.bus);
     } catch (appendErr) {
       // Couldn't even append — best-effort patch so no zombie row lingers.
       deps.log?.error({ err: appendErr, runId }, 'run interrupt append failed');
