@@ -65,22 +65,61 @@ L3  P7 packaging (Docker / OSS self-host)
    decision (control outcomes, variable writes, metering) is a durable event before the walk depends
    on it.
 
-## Master build order (the load-bearing prerequisites first)
+## Master build order (CORRECTED per integration review)
 
-Across all L1 specs, these must land early because everything else leans on them:
+Prerequisites are tighter than the first draft — each of the next few OWNS a schema/primitive that
+later specs assume, so they must be single-owner and early:
 
 1. **#1 F0** — structured failure `kind` on `node.failed` (gates ALL retry/policy).
-2. **#4 A0** — branch/outcome model + **#1 F1** `skipped` edge + success-semantics tests (gates
-   `if`/`switch` and clean routing/monitoring).
-3. **#1 F2c** retry-scheduler primitive → generalized as **#4 A5** durable-wait (gates `wait`/`webhook`).
-4. **#1 secure (F4) + connection secret-config split (#4 A10)** — the secret model (gates
-   secureOutput refs, credentialed connectors, git secret-reconcile #3 G8).
-5. **#1 D6 ActivityDefinition contract (F9a)** — the seam every later activity migrates onto.
-6. Then breadth: #2 LLM (L*), #4 control/file (A*), #3 git/publish (G*), interleaved by value.
-7. **L2 UI epic** renders as each L1 capability lands — Shell (U0–U3) can start anytime (model-
-   agnostic); Author/Monitor deepen as the model + read-models (R1/R2) arrive; **Publish command
-   (UI) needs #3**.
-8. **L3 P7** packaging last.
+2. **Unified edge/branch schema (ONE ticket in #1, merges F1 + #4 A0)** — `Edge.condition` as a
+   discriminated union: operational `{on: success|failure|completion|skipped}` vs business
+   `{on: branch, branch}`. Settle it ONCE; `#4` `if`/`switch` implement against the final schema.
+3. **Minimal ActivityDefinition contract (split from #1 F9a, EARLY)** — the universal seam #2/#4/UI
+   all assume; migrations come later.
+4. **Node-level dynamic outputs (`Node.config.outputs` in #1)** — first-class validated output
+   override so #2's `outputSchema` lowering has a real home.
+5. **Generic durable-scheduler primitive (ONE early ticket)** — driver-owned alarm abstraction;
+   **retry (#1), `wait` (#4), and `webhook`-expiry all consume it** (retry is NOT its own primitive).
+6. **Policy/retry/timeout (#1)** on top of the scheduler.
+7. **Unified secret model (ONE `SecretRef`/`SecretSink`/redaction contract in #1)** — secure
+   outputs can't drive `${}`, secrets resolve only at approved sink fields, git import→`needs_secret`,
+   log stores redacted metadata only (opaque handle = later extension, not an alternate live design).
+8. Then breadth by value: #2 LLM (L*), #4 control/file (A*), #3 git/publish (G* — G1/G2/G4 parser
+   work can run early; G6–G8 gate on version-identity + scheduler-binding + secret-readiness).
+9. **L2 UI epic** renders as L1 lands — Shell (U0–U3) anytime (model-agnostic); Author/Monitor deepen
+   with the model + read-models (R1/R2); **+ a UI Publish-reconciliation ticket** (DB-only
+   Save-as-version vs git-connected Save/Commit+Publish; Manage Git section; supersedes the UI epic's
+   "no Publish" note).
+10. **L3 P7** packaging last.
+
+## Integration review — corrections (folded 2026-07-14)
+
+Codex's cross-spec pass surfaced these; they amend the specs (writing-plans applies them):
+
+- **Edge/branch = ONE schema, one owner (#1).** Remove #4 A0's "amends #1 later"; fix #4's catalog
+  table that still said `if` routes via success/failure — `if`→`true/false`, `switch`→named cases,
+  as **business `branch` edges**, distinct from operational outcome.
+- **Scheduler primitive is ONE early abstraction**, not retry-first-then-generalized.
+- **ActivityDefinition minimal-contract EARLY** (split the migrations off).
+- **`Node.config.outputs` is first-class in #1** (ActivityDefinition declares static/default outputs;
+  node config specializes for schema-driven activities; git canonicalization + UI must render it).
+- **One canonical secret contract in #1** (`SecretRef`/sink/redaction) — the other specs reference it
+  instead of each restating prohibit/handle/secureFields/secretStatus.
+- **RBAC/multi-user is a deliberate v1 limitation** — single-principal/local workspace; `ownerId`
+  fields are future-safe boundaries only; multi-user publish permissions + auth = a later spec.
+
+### Two cross-cutting systems the overview under-counted (now 9–11)
+
+9. **Schema / versioning / validation / canonicalization** — save-time validation + structured
+   diagnostics + ActivityDefinition schemas + `config.outputs` + git canonical hashes + import
+   upgrade are ONE shared concern across authoring, git, UI diagnostics, and runtime dispatch.
+10. **Scheduler, triggers & run lifecycle** — retry timers, `wait`, webhook parking, recurrence
+    builder, per-pipeline concurrency, bind-to-version, disabled imports, active-pointer resolution,
+    queued/waiting statuses, monitor timelines. **Candidate for its own deepening spec (#5)** before
+    `wait`/`webhook`/concurrency (G7/U14/U12b) build.
+11. **Observability / read-model** — cost/usage, retry history, timer + external waits, tool
+    telemetry, audit, git provenance, run duration, alert hooks: ONE event-taxonomy + read-model +
+    redaction + durable-timestamp design (alerts later, but the data model must be deliberate).
 
 **MVP-usable bar is already met** (Connection→pipeline→trigger→fire→watch). This foundation makes it
 ADF-GRADE + genuinely general-purpose; ship it in value order, each ticket merged green + browser-
@@ -96,9 +135,14 @@ verified (UI epic's mandatory Playwright gate).
 ## Open cross-spec decisions (for the operator)
 
 1. **Epic position** — foundation before / interleaved with / after P7 packaging?
-2. **Scope for a first cut** — everything (big), or a "**ADF-grade v1**" subset (e.g. variables +
-   policy/retry + branch model + if/switch/foreach + real LLM adapters + structured output + basic
-   git export), deferring cloud storage / tools-loop / rerun-from-failed / external-wait?
+2. **Scope for a first cut** — Codex's recommended **coherent "ADF-grade v1" slice** (favor
+   coherence over breadth): `F0` · unified edge/branch · minimal ActivityDefinition · typed dynamic
+   outputs (`config.outputs`) · inert `${}` with vars/globals validation · secret v1 (prohibit/
+   redact) · generic scheduler + retry + `wait` · `if`/`switch` · real LLM **text + structured
+   output** · basic Monitor read-models (R1/R2) · DB-only Save/versioning · git **export/import**
+   (without full CAS Publish). **Defer**: `foreach` (until item-aggregation + variable determinism
+   fully specced), webhook/external-wait, cloud storage, tool-loops, rerun-from-failed, alerts, RBAC,
+   full git PR/Publish UX. — accept this v1, or widen/narrow?
 3. **Autonomy** — supervised per-fire vs the continuous driver (with the new Playwright gate).
 4. The per-spec open questions (each doc's tail) — most resolved; a few product calls remain
    (SecureString, single-vs-env active pointer, in-process tools vs CLI-only).
