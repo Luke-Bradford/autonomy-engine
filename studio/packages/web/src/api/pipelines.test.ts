@@ -3,7 +3,6 @@ import {
   createPipeline,
   createPipelineVersion,
   deletePipeline,
-  getPipeline,
   listPipelines,
   listPipelineVersions,
 } from './pipelines';
@@ -73,12 +72,6 @@ describe('pipelines API', () => {
     const init = fetchMock.mock.calls[0]![1] as RequestInit;
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body as string)).toEqual({ name: 'My pipeline' });
-  });
-
-  it('getPipeline encodes the id in the path', async () => {
-    const fetchMock = stubFetch(200, pipeline);
-    await getPipeline('pl/1');
-    expect(fetchMock.mock.calls[0]![0]).toBe('/api/pipelines/pl%2F1');
   });
 
   it('deletePipeline DELETEs and resolves void on 204', async () => {

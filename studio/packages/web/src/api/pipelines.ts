@@ -51,11 +51,6 @@ export function createPipeline(body: PipelineWrite): Promise<Pipeline> {
   return apiFetch('/api/pipelines', { method: 'POST', body, schema: PipelineSchema });
 }
 
-/** Fetch one pipeline (`GET /api/pipelines/:id`); 404 → `ApiError(404)`. */
-export function getPipeline(id: string, signal?: AbortSignal): Promise<Pipeline> {
-  return apiFetch(`/api/pipelines/${encodeURIComponent(id)}`, { schema: PipelineSchema, signal });
-}
-
 /**
  * Delete a pipeline (`DELETE /api/pipelines/:id`, 204). The server refuses
  * (409 `pipeline_has_runs`) when the pipeline has run history — the caller
