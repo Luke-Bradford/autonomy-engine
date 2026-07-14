@@ -56,7 +56,8 @@ folder? · concurrency? · variables?: VariableDef[]`. Old versions parse unchan
 - **Params** stay read-only-in-run. Type set = ADF parity **String/Int/Float/Bool/Array/
   Object**. (`SecureString` — see D8; NOT folded into today's `secret`.)
 - **Variables** — NEW, mutable in-run. `VariableDef = { name, type, default? }`. **Types =
-  ADF parity String/Bool/Array**; `number` is a documented **Studio extension**, not parity.
+  `string | bool | array | number`** — `number` is FIRST-CLASS (Round-2 C2: the LLM-judge aggregate
+  flow needs a numeric accumulator; a doc-only "ADF parity" note doesn't block it).
   - New reducer state `RunState.variables` (**parse default `{}`**).
   - Mutations are events only: **`variable.set` / `variable.append`**. New control
     activities `set_variable` / `append_variable` emit them (engine-evaluated — see D6).

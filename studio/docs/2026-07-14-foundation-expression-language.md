@@ -63,8 +63,12 @@ is typed; `validateRefs` checks arity + arg/return types at save. **v1 catalog (
 
 - **Logical/comparison:** `and or not equals greater greaterOrEquals less lessOrEquals if`
 - **String:** `concat substring replace split trim toLower toUpper startsWith endsWith indexOf
-  lastIndexOf guid` (+ `length empty` via collection)
-- **Collection:** `length empty contains first last take skip join intersection union createArray range`
+  lastIndexOf` (+ `length empty` via collection). **`guid` REMOVED from v1** (non-deterministic —
+  see Round-2 hardening; use `${run.runId}` for uniqueness).
+- **Collection:** `length empty contains first last take skip join intersection union createArray
+  range` + **array reshape/aggregate (NEW, Round-2 C2):** `filter(array, <${item} predicate>)`
+  `map(array, <${item} projection>)` `sum(array) avg(array) count(array, <${item} predicate>)` —
+  closed forms binding `${item}`, no lambda syntax, order-preserving.
 - **Conversion:** `string int float bool array json coalesce base64 base64ToString
   encodeUriComponent decodeUriComponent`
 - **Math:** `add sub mul div mod min max`
@@ -124,10 +128,52 @@ its own dispatch stamp) — documented; use `${run.startedAt}` for a run-stable 
 | E7 | Deep `[]`/`.` addressing into `json`/`any` outputs (runtime-validated escape hatch) |
 | E8 | Validation profiles (generic vs trigger-binding) + `${trigger.*}` context-scoping (with #5) |
 
+## Round-2 hardening (folded from validation)
+
+- **Non-deterministic functions are PROHIBITED unless dispatch-stamped.** `rand`, host entropy, and
+  live-clock are non-goals. **`guid()` removed from v1** (no logged fact to bind to → different on
+  replay). `utcNow()` is allowed ONLY where a **`node.dispatched` stamp exists** (connector-dispatched
+  activity config) and binds to it. It is **NOT available in reducer/control-activity expressions**
+  (`if`/`switch`/`filter`/`set_variable` conditions) or trigger-binding expressions — those have no
+  dispatch event; use the seeded **`${run.startedAt}`** (run-stable) or `${trigger.scheduledTime}`
+  instead. (Rule closes the codex + subagent C1 replay hole.)
+- **Numeric variables are FIRST-CLASS (not an extension)** — #1 D2 gains `number`. Together with the
+  new `sum/avg/count/filter/map` array forms, the **flagship LLM-judge aggregate flow** (fan-out N →
+  judge → `avg(nodes.each.output.results) >= 7` or `count(results, ${greaterOrEquals(item.score,7)})
+  >= 3`) is now buildable (Round-2 C2).
+- **Interpolation mode is decided AFTER canonical-trimming the field**, so a stray trailing space
+  can't silently flip `${greater(a,b)}` from boolean to the string `"true"`. `validateRefs` emits a
+  targeted diagnostic when a lone-expression-plus-whitespace would demote a boolean/number to string;
+  force string mode with `string(expr)` (Round-2 I1).
+- **`${item}` is valid in a `foreach` body OR inside a `filter`/`map`/`count` array form** — the
+  nearest enclosing iteration binds it (Round-2 M1 / round-1 T4). The `filter` activity's output array
+  is named **`.items`** (`${nodes.<filter>.output.items}`).
+- **Container output projection is concrete:** an `until`/`loop`/`foreach` container declares
+  `outputs: OutputSpec[]`, each projected from a named child output of the **last completed round**
+  (`draft := nodes.generate.output.text`); `foreach` additionally exposes the order-stable aggregate
+  `results: Array<childShape>`. (Closes the codex round-2 remaining gap on #1 the content + data
+  pipelines needed.)
+- **Rerun-from-failed stamp rule:** copied frontier nodes **retain their ORIGINAL run's**
+  dispatch-stamped facts (`utcNow`/`${run.runId}` reflect the source run); re-executed nodes get the
+  new run's stamps. "Identical on replay" is a same-run guarantee; a reseeded rerun is a new run
+  carrying copied facts (Round-2 I2 — reconcile with T13's copied-vs-executed render).
+- **`json()` output is DATA, never rescanned** even if a parsed value is itself the string
+  `"${secret}"` — the single-pass no-rescan rule applies to resolved values of every function. There
+  is deliberately **no `expr()`** "evaluate string as expression" function.
+- **Secret-sink designation** lives in the ActivityDefinition contract (T10 `SecretRef` secure
+  fields); `validateRefs` **rejects** a secure `${global.*}`/`SecretRef` used anywhere but a declared
+  secret sink (e.g. `concat(global.apiKey, …)` fails at save).
+- **Resource limits:** the resolver enforces caps (max resolved-value size, max deep-path depth, max
+  array length for `map`/`filter`/aggregate) — inertness prevents injection, but not resource abuse
+  from a huge `${nodes.http.output.body}`.
+- **Naming:** system-var fields are **camelCase** (`run.runId`, `pipeline.triggerTime`,
+  `trigger.scheduledTime`) — SSOT; the challenge/amendment PascalCase (`RunId`) is reconciled to this.
+
 ## Non-goals
 
-- Data-flow/mapping-expression functions (not our domain). No regex/`eval`/user-defined functions in
-  v1. No implicit type coercion beyond the explicit conversion fns.
+- Data-flow/mapping-expression functions (not our domain). No regex/`eval`/`expr()`/user-defined
+  functions in v1. No implicit type coercion beyond the explicit conversion fns. No non-deterministic
+  functions (`rand`/`guid`/host entropy) in reducer-evaluated expressions.
 
 ## Open questions (for Codex / re-challenge)
 

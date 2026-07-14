@@ -24,7 +24,7 @@ in #1 (contract/policy/secure), #2 (AI activities); this says WHAT activities ex
 | `return` | Set-pipeline-return-value | Spec #1 F6; child→parent output |
 | `if` (condition) | If Condition | branch on a `${}` boolean → **`true`/`false` business-branch edges** (NOT success/failure) |
 | `switch` | Switch | branch on a `${}` value → N cases |
-| `foreach` | ForEach | **container exists** (loop) — formalize item-iteration + parallelism cap |
+| `foreach` | ForEach | **NEW item-based container kind** (A4/T4) — NOT the round-based `loop`; item-iteration + aggregate output + parallelism cap |
 | `until` | Until | **container exists** (loop + exitWhen) |
 | `wait` | Wait | pause N seconds (driver timer → event; like retry timer in #1) |
 | `fail` | Fail | force-fail with a message (error-path testing) |
@@ -103,7 +103,8 @@ These extend UI-epic Monitor (U10–U12) + #1 audit; listed here so they're not 
 
 ## Codex-hardened CORE (folded)
 
-- **Branch model is a prerequisite (A0), and it amends #1.** `if`/`switch` must NOT overload
+- **Branch model is a prerequisite (A0); the unified `Edge` union is OWNED BY #1 (T3), A0 only
+  implements `if`/`switch` against it.** `if`/`switch` must NOT overload
   `success/failure` for business routing (poisons success-semantics + monitoring). Add named
   **branch** edges (`on:'branch', branch:'<name>'`); `if`→`true`/`false`, `switch`→case/default.
   Operational `success/failure/skipped/completion` stay for activity outcome. This extends #1's
