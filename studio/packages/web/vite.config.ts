@@ -8,7 +8,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': `http://127.0.0.1:${SERVER_PORT}`,
+      // `ws: true` proxies the WebSocket upgrade for the P6 live-run tail
+      // (`/api/runs/:id/events/stream`) as well as the REST calls under `/api`.
+      '/api': { target: `http://127.0.0.1:${SERVER_PORT}`, ws: true },
       '/health': `http://127.0.0.1:${SERVER_PORT}`,
     },
   },

@@ -317,3 +317,81 @@ td button + button {
 .secret-reveal code {
   word-break: break-all;
 }
+
+/* ── P6 live run monitor ─────────────────────────────────────────────────── */
+
+/* A small status pill, shared by run-level and node-level state. The colour
+   families read at a glance: neutral (pending/waiting), blue (in flight),
+   green (success), red (failure/interrupted), muted (skipped). */
+.run-status,
+.node-status,
+.stream-phase {
+  font-size: 0.72rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+  white-space: nowrap;
+}
+
+.run-status-running,
+.node-status-running,
+.stream-phase-replaying,
+.stream-phase-connecting {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.run-status-success,
+.node-status-success {
+  color: #58d68d;
+  border-color: #58d68d;
+}
+
+.run-status-failure,
+.run-status-interrupted,
+.node-status-failure,
+.stream-phase-error {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.run-status-pending,
+.run-status-waiting,
+.node-status-waiting,
+.stream-phase-closed {
+  color: var(--muted);
+}
+
+/* The blinking "● live" indicator, so a running stream is unmistakable. */
+.stream-phase-live {
+  color: #58d68d;
+  border-color: #58d68d;
+  animation: live-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.run-meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 1rem;
+  margin: 1rem 0;
+}
+
+.run-meta dt {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.run-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.event-feed td {
+  font-size: 0.85rem;
+}
