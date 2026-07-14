@@ -207,9 +207,18 @@ rerun (gated).**
 - LLM-activity DEPTH → Foundation Spec #2. Git/publish → #3. File/copy activity library → #4.
 - No UI (UI epic renders this). No `SecureString` broadening of `secret` (D8, decided in review).
 
-## Open questions (remaining after Codex)
+## Resolved open questions (decided 2026-07-14)
 
-1. `SecureString` params — separate encrypted-run-param, or defer entirely? (D8)
-2. secureOutput downstream: hard-prohibit refs vs opaque secret handle? (D8)
-3. Variables in parallel: hard-reject (current design) vs opt-in nondeterminism flag — confirm.
-4. Rerun-from-failed `call_pipeline`: always-fresh-child vs provenance-mapping — decide in the RS sub-spec.
+1. **`SecureString` params — DEFERRED.** Keep `secret` as the connection credential label
+   (unchanged). Secret needs are met by connections today; run-scoped secret *params* are a
+   later slice (own ticket) — not folded into `secret`, never plaintext run input.
+2. **secureOutput downstream — two-phase.** MVP (F4): `validateDoc` **hard-prohibits** a
+   `${nodes.x.output}` ref where `x` has `secureOutput` (simple, safe). TARGET (later): an
+   **opaque secret handle** (`secret://run/<node>`) stored encrypted, resolved at
+   dispatch-time so secrets can flow activity→activity without ever hitting the log.
+   Spec both; build the prohibit first.
+3. **Variables in parallel — hard-reject** (current design), with an explicit
+   `allowNondeterministicVars` container opt-in. Matches the engine's deterministic posture.
+4. **Rerun-from-failed `call_pipeline`** — decided in the RS sub-spec; default lean =
+   always spawn a fresh child for any non-frontier call node (provenance-mapping is the
+   optimization, only if reuse is needed).
