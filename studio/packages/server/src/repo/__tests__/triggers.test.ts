@@ -6,10 +6,37 @@ import {
   createTrigger,
   deleteTrigger,
   getTrigger,
+  listParsedTriggers,
   listTriggers,
   updateTrigger,
 } from '../triggers.js';
+import { triggers } from '../../db/schema.js';
 import { freshDb } from './helpers.js';
+
+/** Insert a row DIRECTLY (bypassing `createTrigger`'s schema validation) whose
+ * `concurrency` JSON has an out-of-enum policy — the DB has no CHECK on that
+ * JSON column, so the row persists but `TriggerSchema.parse` rejects it. Used
+ * to simulate a corrupt/legacy row. */
+function insertPoisonRow(db: ReturnType<typeof freshDb>['db'], id: string): void {
+  db.insert(triggers)
+    .values({
+      id,
+      ownerId: 'local',
+      name: 'poison',
+      pipelineVersionId: null,
+      params: {},
+      mode: 'schedule',
+      schedule: '0 2 * * *',
+      webhook: null,
+      // Out-of-enum policy: valid JSON, rejected by ConcurrencySchema.
+      concurrency: { policy: 'nope' } as unknown as { policy: 'queue' },
+      runWindows: null,
+      enabled: true,
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    .run();
+}
 
 function setupPipelineVersion(db: ReturnType<typeof freshDb>['db']) {
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
@@ -101,5 +128,23 @@ describe('triggers repo', () => {
     const created = createTrigger(db, buildTriggerInput(version.id));
     expect(deleteTrigger(db, created.id)).toBe(true);
     expect(getTrigger(db, created.id)).toBeNull();
+  });
+
+  describe('listParsedTriggers — resilient to a corrupt row', () => {
+    it('skips (and reports) an unparseable row while returning the good ones', () => {
+      const { db } = freshDb();
+      const version = setupPipelineVersion(db);
+      const good = createTrigger(db, buildTriggerInput(version.id));
+      insertPoisonRow(db, 'trig_poison');
+
+      // The strict list throws on the poison row...
+      expect(() => listTriggers(db)).toThrow();
+
+      // ...but the resilient list returns the good one and reports the bad id.
+      const skipped: unknown[] = [];
+      const parsed = listParsedTriggers(db, (id) => skipped.push(id));
+      expect(parsed.map((t) => t.id)).toEqual([good.id]);
+      expect(skipped).toEqual(['trig_poison']);
+    });
   });
 });

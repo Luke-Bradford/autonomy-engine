@@ -26,3 +26,6 @@ export * from './engine/index.js';
 
 // P3 — the activity catalog (pure metadata; server supplies the adapters).
 export * from './catalog/index.js';
+
+// P4b — the pure run-window evaluator (scheduler's automatic-fire gate).
+export * from './triggers/run-window.js';
