@@ -223,9 +223,11 @@ describe('TriggersPage', () => {
     expect(screen.getByText('/api/webhooks/trg_1')).toBeInTheDocument();
   });
 
-  it('does not send `webhook` on edit so an existing secret is preserved', async () => {
+  it('omits `webhook` when editing a trigger that STAYS a webhook, preserving its secret', async () => {
     const user = userEvent.setup();
-    listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
+    listTriggersMock.mockResolvedValue([
+      trigger({ name: 'Hook', mode: 'webhook', schedule: null, webhook: { foo: 1 } }),
+    ]);
     render(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
@@ -233,6 +235,47 @@ describe('TriggersPage', () => {
 
     await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
     const [, patch] = updateMock.mock.calls[0]!;
+    // PATCH is partial; omitting `webhook` leaves the stored secret intact.
     expect(patch).not.toHaveProperty('webhook');
+  });
+
+  it('clears `webhook` when editing a trigger AWAY from webhook mode (no stale secret)', async () => {
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([
+      trigger({ name: 'Hook', mode: 'webhook', schedule: null, webhook: { foo: 1 } }),
+    ]);
+    render(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    // Switch away from webhook — the stored secret must be actively cleared.
+    await user.selectOptions(form.getByLabelText('Mode'), 'manual');
+    await user.click(form.getByRole('button', { name: /Save changes/i }));
+
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    const [, patch] = updateMock.mock.calls[0]!;
+    expect(patch).toHaveProperty('webhook', null);
+  });
+
+  it('guards "Fire now" against a double-click while a fire is in flight', async () => {
+    const user = userEvent.setup();
+    // Hold the fire pending so a second click can race the first.
+    let resolveFire!: (v: { outcome: 'started'; runId: string }) => void;
+    fireMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveFire = resolve;
+      }),
+    );
+    listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
+    render(<TriggersPage />);
+    const fireBtn = await screen.findByRole('button', { name: /Fire Nightly now/i });
+    await user.click(fireBtn);
+    // Button reflects the in-flight state and is disabled.
+    expect(fireBtn).toBeDisabled();
+    expect(fireBtn).toHaveTextContent(/Firing/i);
+    await user.click(fireBtn);
+    expect(fireMock).toHaveBeenCalledTimes(1);
+
+    resolveFire({ outcome: 'started', runId: 'run_9' });
+    await waitFor(() => expect(fireBtn).not.toBeDisabled());
   });
 });

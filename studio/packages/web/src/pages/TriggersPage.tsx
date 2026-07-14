@@ -85,6 +85,10 @@ export function TriggersPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  // The id of the trigger whose "Fire now" is currently in flight, so the
+  // button can be disabled to prevent a rapid double-click dispatching two
+  // fires before `actionMsg` updates.
+  const [firingId, setFiringId] = useState<string | null>(null);
   const [webhookSecret, setWebhookSecret] = useState<{
     triggerName: string;
     secret: string;
@@ -155,23 +159,31 @@ export function TriggersPage() {
     [refresh],
   );
 
-  const onFire = useCallback(async (t: TriggerPublic) => {
-    setActionMsg(null);
-    try {
-      const result = await fireTrigger(t.id);
-      const detail =
-        result.outcome === 'started'
-          ? `started (run ${result.runId ?? '?'})`
-          : result.outcome === 'skipped'
-            ? `skipped — ${result.reason ?? 'no reason given'}`
-            : 'queued';
-      setActionMsg(`Fired "${t.name}": ${detail}.`);
-    } catch (err) {
-      setActionMsg(
-        `Fire failed for "${t.name}": ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }, []);
+  const onFire = useCallback(
+    async (t: TriggerPublic) => {
+      // Guard against a double-click firing twice before the request resolves.
+      if (firingId) return;
+      setActionMsg(null);
+      setFiringId(t.id);
+      try {
+        const result = await fireTrigger(t.id);
+        const detail =
+          result.outcome === 'started'
+            ? `started (run ${result.runId ?? '?'})`
+            : result.outcome === 'skipped'
+              ? `skipped — ${result.reason ?? 'no reason given'}`
+              : 'queued';
+        setActionMsg(`Fired "${t.name}": ${detail}.`);
+      } catch (err) {
+        setActionMsg(
+          `Fire failed for "${t.name}": ${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        setFiringId(null);
+      }
+    },
+    [firingId],
+  );
 
   const onProvisionSecret = useCallback(async (t: TriggerPublic) => {
     setActionMsg(null);
@@ -265,9 +277,10 @@ export function TriggersPage() {
                   <button
                     type="button"
                     onClick={() => void onFire(t)}
+                    disabled={firingId === t.id}
                     aria-label={`Fire ${t.name} now`}
                   >
-                    Fire now
+                    {firingId === t.id ? 'Firing…' : 'Fire now'}
                   </button>
                   <button type="button" onClick={() => setForm(formForEdit(t))}>
                     Edit
@@ -397,11 +410,21 @@ function TriggerForm({
     setSaving(true);
     try {
       if (editing && form.id) {
-        // Omit `webhook` on edit so an already-provisioned secret is preserved
-        // (PATCH is partial; sending `webhook:null` would clear it).
-        const { webhook: _webhook, ...patch } = parsed.data;
-        void _webhook;
-        await updateTrigger(form.id, patch);
+        if (form.mode === 'webhook') {
+          // Editing a trigger that stays a webhook: OMIT `webhook` so an
+          // already-provisioned secret is preserved (PATCH is partial; sending
+          // `webhook:null` would clear it, and this form has no secret to
+          // re-send — it is provisioned out-of-band via "Webhook secret").
+          const { webhook: _webhook, ...patch } = parsed.data;
+          void _webhook;
+          await updateTrigger(form.id, patch);
+        } else {
+          // Switching AWAY from webhook mode: send `webhook:null` (already set
+          // in fullBody) to actively clear any previously-provisioned secret,
+          // so a stale secret can't persist on a non-webhook trigger or be
+          // silently resurrected if the mode is later switched back.
+          await updateTrigger(form.id, parsed.data);
+        }
       } else {
         await createTrigger(parsed.data);
       }
