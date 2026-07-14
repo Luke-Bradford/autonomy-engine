@@ -17,7 +17,10 @@ self-deriving (replay/boot-reconcile would reconstruct a different state — the
 New run `R2` (rerun-from-failed of `R1`) begins:
 `run.started{ pipelineVersionId, params, rerunOf: R1 }` →
 **`run.reseeded{ sourceRunId: R1, frontier: NodeId[], copiedNodeStates, copiedOutputs,
-copiedVariables, copiedContainers, childLinks? }`** → the reducer folds it, marking every `frontier`
+copiedVariables, copiedContainers, childLinks?, copiedTriggerContext }`** — **`copiedTriggerContext`
+carries R1's frozen `run.triggerContext` (cross-spec fix, git-challenge hunt): a rerun of a
+schedule/event/window-triggered run MUST reuse the original `${trigger.*}` values, or refs valid in R1
+fail on rerun.** → the reducer folds it, marking every `frontier`
 node **terminal-success (copied, not executed)** with its copied outputs, and seeding
 `run.variables`/container states. Dispatch then proceeds from the ready set beyond the frontier — the
 same walk as a normal run.

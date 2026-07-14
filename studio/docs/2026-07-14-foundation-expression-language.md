@@ -176,6 +176,37 @@ its own dispatch stamp) — documented; use `${run.startedAt}` for a run-stable 
 - **Naming:** system-var fields are **camelCase** (`run.runId`, `pipeline.triggerTime`,
   `trigger.scheduledTime`) — SSOT; the challenge/amendment PascalCase (`RunId`) is reconciled to this.
 
+## Spike-hardened (validated in code, 2026-07-14 — throwaway parser+typer+eval, 28 tests green)
+
+Parser, eval, interpolation, and injection-inertness all held. The gaps are in TYPING + the fn model:
+- **Static typing of array-forms is "theatre" without an array/element type.** The type vocabulary is
+  `string|number|boolean|json` — **no array type, no element shape**. So a `foreach`'s `results` is
+  opaque `json`, and `avg(map(results, item.score))` — even a **misspelled `item.badField`** — gets
+  **no edit-time error**. DECISION REQUIRED: either **extend the vocabulary with `array<T>` +
+  `record<{…}>` element shapes** (so judge-gate refs type-check), or **drop the static-safety claim**
+  and state array-forms are runtime-checked only. (`OutputSpec` for a structured LLM output should
+  carry the element shape so `${item.field}` in a downstream `filter` types.)
+- **The function calling-convention needs a redesign.** `map/filter/count` predicates must be
+  captured as **unevaluated ASTs re-run per element with `item` bound** (lazy, per-element) — the flat
+  `impl(args)` (eager-map-all-args) model can't express it. Spec a per-fn convention: **eager args vs
+  a lambda arg**; `item` is legal ONLY inside that lambda arg (top-level `${item.x}` hard-errors).
+- **`and`/`or` do NOT short-circuit** as variadic eager fns — `and(false, nodes.missing.output.x)`
+  **throws** instead of returning false. DECISION: make `and`/`or` lazy (like `default`) so a cheap
+  guard protects an absent second term, OR document eager semantics loudly.
+- **Concrete bugs to fix in the grammar:** add a real **number literal** (shipped `INT_RE=/^-?\d+$/`
+  turns `7.5` into a broken ref) + boolean literal; **`count` is arity-overloaded** (`count(arr)` vs
+  `count(arr,pred)`) and `avg` is 1-arg-over-array — the flat allowlist needs typed, shape-aware
+  signatures. **Nested `${}` inside a predicate is structurally impossible** (the boundary scanner
+  closes at the first `}`) — the **bare-predicate rule is normative**, state it.
+- **SSOT bug (must fix):** the spec's example expressions use `run.runId`/`run.startedAt`, but the
+  shipped `RUN_FIELDS = [id, pipelineVersionId, triggerId, parentRunId]` — `runId` is `id` and
+  `startedAt` **doesn't exist**. Reconcile `RUN_FIELDS` + `SubstitutionContext.run` to the spec names
+  (add `startedAt`), or the dynamic-filename expression is rejected today.
+- **`if.condition` / `foreach.items` MUST be whole-value mode** (reject embedded interpolation) —
+  proven that an embedded boolean silently coerces to the string `"true"`.
+- **Inertness invariant to PRESERVE when adding array-forms:** `map`/`filter` must eval element ASTs,
+  **never re-parse a resolved string** — keeps the no-injection guarantee (verified in the spike).
+
 ## Non-goals
 
 - Data-flow/mapping-expression functions (not our domain). No regex/`eval`/`expr()`/user-defined

@@ -197,6 +197,26 @@ toolbox, properties panel, expression builder, live run visualisation).
 - **Non-breaking:** build the shell alongside; migrate pages into hubs; MVP never breaks
   between merges; `studio` CI stays green.
 
+## Spike-hardened — U0 Fluent v9 × React Flow (validated in a real browser, 2026-07-14)
+
+**Green light:** Fluent v9 (`@fluentui/react-components`) + `@xyflow/react` v12 coexist with ZERO
+console errors; the headline risk — a Fluent `Popover`/`Menu` opened FROM a canvas node under
+zoom+pan — **anchors correctly** (Floating UI reads the live transform, portals to `document.body`).
+Bounded punch-list the epic MUST specify:
+- **U0 must deliver an `--xy-*` → Fluent-token THEME BRIDGE stylesheet** — the single biggest miss.
+  Theming the Fluent app does NOT theme React Flow's own chrome: in dark mode the **Controls, MiniMap,
+  and edge-label backgrounds stay WHITE** (RF drives them off its own `--xy-controls-*`/`--xy-minimap-*`/
+  `--xy-edge-label-*` vars, defaulting light). Map them from Fluent tokens under both themes.
+- **U1: `FluentProvider` is the theme SSOT** — one `data-theme` toggle drives BOTH the Fluent theme AND
+  the `--xy-*` vars. Shell layout needs explicit `grid-template-rows` (RF needs an explicitly-sized parent).
+- **U1/U6: render menus/flyouts via Fluent's DEFAULT portal (to body); NEVER reparent a surface into
+  the RF viewport** (`.react-flow__viewport`) — that double-applies the transform. Add `nodrag`/`nowheel`
+  to interactive in-node controls so gestures aren't hijacked.
+- **U6/perf: budget + code-split Fluent** — `+64 kB gzip` in ONE un-split chunk from the barrel import;
+  use subpath imports + `manualChunks` for `@fluentui/*`+`@griffel/*`. Note: Griffel emits NO build-time
+  CSS (runtime `<head>` injection) → any CSP/SSR work targets `createDOMRenderer`/`nonce`, not a CSS file.
+- **Env note:** the workspace is **React 19** (not 18); Fluent v9's peer range satisfies it.
+
 ## Non-goals (YAGNI)
 
 - No engine/reducer *semantics* changes (read-only read-models R1/R2 allowed).

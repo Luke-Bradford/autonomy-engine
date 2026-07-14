@@ -151,6 +151,36 @@ a worker, heartbeats; a **lease-expiry alarm** (S1) reclaims a dead worker's run
   tumbling-window-bound pipelines** (save-time context validation), not global to manual/schedule runs.
 - **Late-alarm observability:** every due event carries `scheduledFor`, `firedAt`, `latenessMs`.
 
+## Spike-hardened (validated in code, 2026-07-14 — throwaway outbox prototype, 11 tests green)
+
+- **BIGGEST: D4 retry is NOT implementable without a reducer change.** Today `node.failed` →
+  `settle` → `firstUnhandledFailureTop` → `finishRun{failure}` **terminalizes the run on the first
+  unhandled failure**, and `node.retryRequested` only fires from a LIVE node — never a terminal
+  `failure`. `node.retryDue` **isn't in `EngineEventSchema`** (the reducer rejects it). **D4 must add
+  either (i) a retryable-failure HOLD state** (a `transient` failure with attempts remaining does NOT
+  terminalize — the node parks pending-retry) **or (ii) a re-open event** for a failed node. This is a
+  real engine-design decision, not a driver detail — **spec it before F2b/F2c build.**
+- **S1 fire = ONE `better-sqlite3.transaction()`** wrapping `appendEngineEvent` + `UPDATE …
+  status='fired'`. Nesting works: `appendEngineEvent`'s own drizzle tx drops to a **SAVEPOINT** and
+  rolls back together on throw — so S1 reuses it as-is (no refactor). The `seq = MAX+1` compute must
+  sit inside that tx (single-writer SQLite backs it).
+- **`dedupeKey` schema is a SPEC artifact, not impl detail:** `(kind, ref, discriminator)` where
+  discriminator = **attempt-n** (retry) / **round-r** (loop) / **tick-epoch** (cron). `dedupeKey`
+  alone is NOT globally unique; omitting the attempt number makes attempt-2's retry collide with
+  attempt-1's already-`fired` row → it **silently never arms**. `nextRetryAt`/backoff is a STORED fact
+  in `scheduled_wakeups.dueAt`, never recomputed at fold time (reducer stays clock-free; dispatch
+  stamp on `run_events.ts`, replay-stable — proven by folding the log twice with `Date.now` shifted).
+- **Exactly-once is fiction; the real contract is at-least-once + idempotent fold.** The unique
+  `(kind,dedupeKey)` dedupes ARMING; **`attemptId` staleness dedupes DELIVERY** (a duplicate wakeup
+  re-appends `node.retryRequested{previousAttemptId}`, folded as a no-op once `currentAttemptId`
+  advanced). State both layers.
+- **Croner → table-claim loop.** On boot, claim overdue rows (don't just rebuild in-memory crons);
+  add an explicit **catch-up policy** for alarms whose `dueAt` passed during downtime (fire-once /
+  coalesce / skip per kind). Pending wakeups survive restart because they are ROWS — the headline S1
+  win, proven.
+- **Multi-worker needs a LEASE column** (`claimed_by`, `claim_expires`) before the single-writer
+  `MAX+1`/single-claim assumptions can relax — flag on any S-tier that scales the scheduler.
+
 ## Non-goals
 
 - Broad event sources (file/queue/db-change) beyond HTTP/webhook — later.

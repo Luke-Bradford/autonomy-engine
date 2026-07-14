@@ -149,6 +149,48 @@ reconcile are core. Corrections:
 | G9 | PR open/observe via git-host API (GitHub first) — else guided manual |
 | G10 | Conflict/divergence UX; multi-remote/auth polish |
 
+## Challenge-hardened CORE v2 (2026-07-14 — read the SHIPPED P1c code; MAJOR reshape)
+
+P1c is a **cross-workspace COPY primitive** (mints new ids, NULLs every internal ref
+`node.connectionId`/`trigger.pipelineVersionId`/`node.call.pipelineVersionId`, forces
+`enabled:false`, no stable identity, no archive) — **the wrong base for authoring/backup/delete.**
+Three things MUST land before #3 is buildable, then the rest is specifiable:
+- **① Stable resource+version identity.** A `resourceId` on pipelines AND **versions** (`(pipelineId,
+  DB-version#)` is NOT stable across machines). Trigger→version, `call_pipeline`, `rerunOf`, and CAS
+  provenance all depend on it. **Both export AND import fork** portable-strip (new ids) vs
+  workspace-git (preserve-by-resourceId, recurse into `node.call` + `${}` version refs to remap).
+- **② Real `archived` state, wired to trigger-disable.** `deletePipeline` HARD-THROWS with runs
+  (`PipelineHasRunsError`) → a git-delete of a pipeline-with-runs **deadlocks the atomic pull**; and a
+  deleted/archived pipeline's concrete-bound triggers **keep firing** ("unbound never fires" only
+  null-checks). Git-delete → **archive** (new column, filtered from scheduler/list/dispatch) → **disable
+  dependent triggers**. Never DB-delete on import.
+- **③ A defined WORKING-COPY / draft model.** "Save = commit" leaves NO representation of a dirty DB
+  edit → flow-2 reconcile + re-import clobber are unbuildable. Pin what the editable working config IS
+  (a mutable draft row? the latest version? the worktree) before commit/drift semantics mean anything.
+- **Drift gate uses the WRONG reference** — "descendant of collab-HEAD" defeats feature branches; the
+  correct base is **the commit the DB was imported from**. And the real serialization point is the
+  push non-fast-forward / PR-merge, so the gate is advisory — state it honestly.
+- **Publish must be EVENT-SOURCED** — the active-pointer is a mutable last-writer row that can't answer
+  "who published v5 before v7." Append `pipeline.published{from,to,commit,blob,by,at}` (+ `repo.connected`,
+  `pipeline.archived`, `import.applied`) to a **workspace-audit log**; the pointer becomes a projection
+  (satisfies overview T13).
+- **Secret gate must be at DISPATCH, not just enable-time** — a secret removed AFTER a trigger is
+  enabled fires a secretless run. The executor refuses to dispatch a node whose connection ≠ `ready`.
+  `secretStatus`/connection `enabled` are net-new schema. Add the connection→dependent-triggers reverse
+  index for post-hoc secret changes.
+- **DB-only "bind to active" is DEAD** (Publish requires git) → local-first births every trigger
+  unbound. Give DB-only workspaces a git-independent active pointer OR a **"bind to latest version"**
+  fallback when no repo is connected.
+- **Git mechanics are a SKETCH** — spec the concrete `GitProvider`: commands (`fetch`/`rev-parse`/
+  `merge-base --is-ancestor`/`status --porcelain`/`commit`/`push`), **auth model** (PAT/SSH/credential-
+  helper), conflict-detection, and the **worktree location + lifecycle** (studio authors in the DB —
+  where is the checkout Commit serializes into, owned across concurrent sessions?). Highest unbuildability risk.
+- **Canonical hash: enumerate the volatile-excluded set** — exclude `id/version/createdAt/catalogVersion/
+  node.position` (else a canvas node-drag mints a spurious immutable version + Publish candidate);
+  canonicalize key order + number formatting.
+- Whole-workspace export needs `workspace`/`global-params` envelope KINDS (don't exist) + the RS reseed
+  `sourceRunId`/`rerunOf` dangle after a round-trip unless version ids remap by resourceId (① again).
+
 ## Non-goals
 
 - No environment-promotion pipelines (dev/test/prod) — user's own CI beyond the repo.
