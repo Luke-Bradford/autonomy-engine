@@ -7,6 +7,7 @@ import {
   type TriggerPublic,
 } from '@autonomy-studio/shared';
 import { ApiError } from '../api/client';
+import { navigate } from '../router';
 import { listPipelines, listPipelineVersions } from '../api/pipelines';
 import {
   createTrigger,
@@ -89,6 +90,9 @@ export function TriggersPage() {
   // button can be disabled to prevent a rapid double-click dispatching two
   // fires before `actionMsg` updates.
   const [firingId, setFiringId] = useState<string | null>(null);
+  // The run id of the most recent successful "Fire now", so we can offer a
+  // one-click jump to its live monitor (the last step of the MVP-bar flow).
+  const [watchRunId, setWatchRunId] = useState<string | null>(null);
   const [webhookSecret, setWebhookSecret] = useState<{
     triggerName: string;
     secret: string;
@@ -164,6 +168,7 @@ export function TriggersPage() {
       // Guard against a double-click firing twice before the request resolves.
       if (firingId) return;
       setActionMsg(null);
+      setWatchRunId(null);
       setFiringId(t.id);
       try {
         const result = await fireTrigger(t.id);
@@ -174,6 +179,7 @@ export function TriggersPage() {
               ? `skipped — ${result.reason ?? 'no reason given'}`
               : 'queued';
         setActionMsg(`Fired "${t.name}": ${detail}.`);
+        if (result.outcome === 'started' && result.runId) setWatchRunId(result.runId);
       } catch (err) {
         setActionMsg(
           `Fire failed for "${t.name}": ${err instanceof Error ? err.message : String(err)}`,
@@ -226,6 +232,14 @@ export function TriggersPage() {
       {actionMsg && (
         <p role="status" className="notice">
           {actionMsg}
+          {watchRunId && (
+            <>
+              {' '}
+              <button type="button" onClick={() => navigate(`/runs/${watchRunId}`)}>
+                Watch live →
+              </button>
+            </>
+          )}
         </p>
       )}
 

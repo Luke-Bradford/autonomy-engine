@@ -2,6 +2,8 @@ import { useRoute } from './router';
 import { ConnectionsPage } from './pages/ConnectionsPage';
 import { PipelinesPage } from './pages/PipelinesPage';
 import { TriggersPage } from './pages/TriggersPage';
+import { RunsPage } from './pages/runs/RunsPage';
+import { RunDetailPage } from './pages/runs/RunDetailPage';
 
 interface NavItem {
   path: string;
@@ -11,37 +13,41 @@ interface NavItem {
 
 /**
  * The nav mirrors the MVP-bar flow (Connections → Pipelines → Triggers → Runs).
- * Connections (P5a), Pipelines (P5c canvas), and Triggers (P5b) are built; Runs
- * (P6 live monitor) is an honest placeholder so the shell is complete and the
- * final phase drops straight in without reworking navigation.
+ * All four are now built: Connections (P5a), Pipelines (P5c canvas), Triggers
+ * (P5b), and Runs (P6 live monitor).
  */
 const NAV: NavItem[] = [
   { path: '/connections', label: 'Connections', ready: true },
   { path: '/pipelines', label: 'Pipelines', ready: true },
   { path: '/triggers', label: 'Triggers', ready: true },
-  { path: '/runs', label: 'Runs', ready: false },
+  { path: '/runs', label: 'Runs', ready: true },
 ];
 
-function ComingSoon({ label, phase }: { label: string; phase: string }) {
-  return (
-    <section>
-      <h2>{label}</h2>
-      <p>This section arrives in {phase}.</p>
-    </section>
-  );
-}
+const RUN_DETAIL_PREFIX = '/runs/';
 
 function routeContent(path: string) {
   // Default to Connections (the built page) for '/' and any unknown route.
   if (path === '/pipelines') return <PipelinesPage />;
   if (path === '/triggers') return <TriggersPage />;
-  if (path === '/runs') return <ComingSoon label="Runs" phase="P6 (live monitor)" />;
+  if (path === '/runs') return <RunsPage />;
+  if (path.startsWith(RUN_DETAIL_PREFIX)) {
+    const id = decodeURIComponent(path.slice(RUN_DETAIL_PREFIX.length));
+    // key={id} so navigating between runs remounts with fresh state.
+    return id ? <RunDetailPage key={id} runId={id} /> : <RunsPage />;
+  }
   return <ConnectionsPage />;
+}
+
+/** The nav section a path belongs to (so a run-detail path keeps Runs active). */
+function navSection(path: string): string {
+  if (path === '/') return '/connections';
+  if (path === '/runs' || path.startsWith(RUN_DETAIL_PREFIX)) return '/runs';
+  return path;
 }
 
 export default function App() {
   const path = useRoute();
-  const activePath = path === '/' ? '/connections' : path;
+  const activePath = navSection(path);
 
   return (
     <div className="app-shell">
@@ -64,7 +70,7 @@ export default function App() {
           </ul>
         </nav>
       </aside>
-      <main className="content">{routeContent(activePath)}</main>
+      <main className="content">{routeContent(path)}</main>
     </div>
   );
 }
