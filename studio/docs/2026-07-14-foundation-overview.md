@@ -195,6 +195,29 @@ decisions. Each is the SSOT for the edit its owning spec receives.
   shell/git activity, webhook payload contract, env-override globals, etc.) fold as spec caveats or
   explicit deferrals in each owning spec.
 
+## Round-3 fold (amendments written INTO owning specs)
+
+Round-3 confirmatory trace: the 3 fresh scenarios build, but found the T-amendments were recorded
+here yet **not written into owning-spec ticket lists** (so unbuildable). Now fixed — the critical
+amendments got real tickets: **#1 F13** (`Node.config.outputs`+`nodes.status`, T6) **F14** (multi-edge
+JOIN, T7) **F15** (`SecretRef` sink, T10); **#5 S12** (trigger param-bindings + run-now override, T2);
+**#2 L13** (dynamic connection/model, T9) **L14** (CLI/subscription kind, T5); **#4 A16** (webhook
+typed-output + callBackUri, HITL) **A17** (until wall-clock timeout). Plus:
+- **A business `branch` edge MAY also carry a bounce-cap `back:true`** (T3 edge union) — so a
+  3-way switch can loop on one arm (approval "needs-changes" → redraft), stashing feedback via
+  `set_variable` first (T4: outputs are round-local, variables persist).
+- **`foreach` is IN v1** (operator chose full breadth) — so #6's LLM-judge **aggregate flow is a v1
+  capability**; the "defer foreach" line in open-decision 2 is superseded.
+- **`filter` activity (`.items`, monitored/over-cap arrays) vs `filter(array,pred)` expression
+  (small inline reshape, resource-capped)** — the split is the resource cap; documented in #4/#6.
+- Remaining Tier-3/editorial (webhook v1 inclusion, prompt-caching cost, DST run-windows, foreach
+  lifecycle event names) stay as explicit per-spec deferrals.
+
+**Build-readiness after 3 rounds:** engine-semantics (edge union, scheduler primitive, secret rule,
+inert `${}`+catalog, failure-kind, cost-as-facts) are coherent + buildable; the previously-orphaned
+dynamic-invocation layer (T2/T6/T9) + webhook payload now have owning-spec tickets. **The design is
+build-ready for writing-plans.**
+
 ## Open cross-spec decisions (for the operator)
 
 1. **Epic position** — foundation before / interleaved with / after P7 packaging?

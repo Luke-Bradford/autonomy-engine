@@ -202,6 +202,9 @@ rerun (gated).**
 | F11 | Rerun (simple, same version) |
 | RS | **sub-spec:** rerun-from-failed reseed-event + frontier semantics |
 | F12a–e | rerun-from-failed (basic / reseed event / frontier algo / containers / call_pipeline) — after RS |
+| **F13** | **`Node.config.outputs: OutputSpec[]` (T6)** — node-level typed output override (the home for #2's lowered structured schema + `foreach`/webhook outputs) + validation + canonicalization + `${nodes.x.status}` read. **Prerequisite — #2/#4/#6 depend on it.** |
+| **F14** | **Multi-incoming-edge JOIN semantics (T7):** AND across predecessors, OR among conditions on one predecessor (ADF `dependsOn`) + characterization tests (with F1). |
+| **F15** | **`SecretRef` config-field sink (T10):** a node-config secure field carries a `SecretRef`, resolved at dispatch, never logged — a secret reaches a non-connection activity (e.g. an `http_request` auth header); `validateRefs` rejects a secure ref anywhere but a declared sink. |
 
 ## Non-goals
 

@@ -135,6 +135,8 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 | L11a | `agent_task` subprocess telemetry (output/exitCode/summary) | 3 |
 | L11b | opt-in structured protocol (JSON-to-file / sentinel block) + schema validation | 3 |
 | L12 | Multi-turn / conversation state (agentic loop owns history; single-shot stays stateless) | 3 |
+| **L13** | **Connection parameterization + dynamic routing (T9):** non-secret **connection parameters** (expression-bound at dispatch); **`connectionId`/`model` as validated `${}` refs** (route Anthropic-vs-OpenAI by param in ONE node). Since `connectionId` is a top-level `Node` field, this ADDS an expression pass there (or the blessed fallback: `switch(${params.provider})` → fixed-connection nodes → converge). | 2 |
+| **L14** | **`cli`/subscription connection kind (T5):** a CLI-agent connection `llm_call` accepts + single-shot adapter (`claude -p`/`codex exec` → stdout); quota/reset-window primitive; `meteringStatus` metered/unpriced/unknown + run-cost completeness flag. | 1 |
 
 ## How it hangs together (with #1 and the rest)
 

@@ -138,9 +138,16 @@ its own dispatch stamp) — documented; use `${run.startedAt}` for a run-stable 
   dispatch event; use the seeded **`${run.startedAt}`** (run-stable) or `${trigger.scheduledTime}`
   instead. (Rule closes the codex + subagent C1 replay hole.)
 - **Numeric variables are FIRST-CLASS (not an extension)** — #1 D2 gains `number`. Together with the
-  new `sum/avg/count/filter/map` array forms, the **flagship LLM-judge aggregate flow** (fan-out N →
-  judge → `avg(nodes.each.output.results) >= 7` or `count(results, ${greaterOrEquals(item.score,7)})
-  >= 3`) is now buildable (Round-2 C2).
+  new `sum/avg/count/filter/map` array forms, the **flagship LLM-judge aggregate flow** is now
+  buildable (Round-2 C2). **Predicate/projection args are BARE expressions, NOT nested `${}`** (the
+  whole thing is already inside one `${}`):
+  `${and(greaterOrEquals(avg(map(nodes.each.output.results, item.score)), 7),
+  greaterOrEquals(count(nodes.each.output.results, greaterOrEquals(item.score, 8)), 3))}`.
+- **`foreach` aggregate output shape is concrete (Round-3):** `${nodes.<foreach>.output.results}` is
+  `Array<T>` where **T = the flattened named outputs object of the loop's designated child** (e.g. the
+  `extract` node's `{sku, qty, keep}`), input-order-stable. So `${item.field}` inside a downstream
+  `filter`/`map` over `results` binds to that child-output element shape and **type-checks**. (Not the
+  raw child-node envelope — the projected outputs object.)
 - **Interpolation mode is decided AFTER canonical-trimming the field**, so a stray trailing space
   can't silently flip `${greater(a,b)}` from boolean to the string `"true"`. `validateRefs` emits a
   targeted diagnostic when a lone-expression-plus-whitespace would demote a boolean/number to string;

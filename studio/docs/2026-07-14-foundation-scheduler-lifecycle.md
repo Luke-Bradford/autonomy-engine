@@ -110,6 +110,7 @@ a worker, heartbeats; a **lease-expiry alarm** (S1) reclaims a dead worker's run
 | S9 | Tumbling-window: window-domain EVENTS (`window.created/runCreated/…`) + projection + config-versioned window key + single-fire |
 | S10 | Tumbling-window: bounded backfill (maxBackfillWindows + durable cursor, incremental via S1) |
 | S11 | Tumbling-window: self-dependency (blocked windows in state, NOT runs) + per-trigger retry/concurrency + `${trigger.window*}` (context-scoped) |
+| **S12** | **Trigger→pipeline PARAM BINDINGS + run-now override (T2, load-bearing):** the durable **`run.triggerContext` seed event**; **expression-valued trigger param bindings** (`{param: ${trigger.scheduledTime}}` / `${trigger.body.x}`) resolved fire-time; a **`POST /api/triggers/:id/fire` run-now param-override body**; precedence **pipeline-default < trigger-binding < run-now override**; save-time validation. Unblocks event/schedule/manual dynamic invocation. |
 
 ## Codex-hardened CORE (folded)
 

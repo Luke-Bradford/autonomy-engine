@@ -73,6 +73,8 @@ Rationale: **control-flow completeness** first (real pipelines need branching/it
 | A13 | `webhook` = **external-wait** (`externalWait.created`/`completed`/`expired`; run parks `waiting` until an inbound correlated+authed route appends completion; timeout/default path) |
 | A14 | cloud storage connector kinds (S3/blob, secret-backed via A10) — later |
 | A15 | `script`/`shell` (or fold into `agent_task`) |
+| **A16** | **`webhook` typed-output + callback contract (Round-3, HITL):** inject a `callBackUri` + correlation token into the outbound trigger; the inbound authed/replay-protected payload is validated against a declared **`outputSchema`** → lowered to `config.outputs` so `${nodes.webhook.output.decision}` type-checks (ADF `reportStatusOnCallBack`). Unblocks human-approval + any callback-driven external system. |
+| **A17** | **`until`/loop wall-clock `timeout`** (ADF parity) — a duration bound alongside the bounce-cap count, so a long human/external loop is time-bounded (consumes the #5 S1 alarm). |
 
 Data activities (`copy`/`lookup`/`transform`) get their own spec if/when a dataset abstraction is
 justified — not in this foundation set.
