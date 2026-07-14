@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { listPipelines, listPipelineVersions } from './pipelines';
+import {
+  createPipeline,
+  createPipelineVersion,
+  deletePipeline,
+  getPipeline,
+  listPipelines,
+  listPipelineVersions,
+} from './pipelines';
 
 const pipeline = {
   id: 'pl_1',
@@ -56,5 +63,42 @@ describe('pipelines API', () => {
     delete bad.version;
     stubFetch(200, [bad]);
     await expect(listPipelineVersions('pl_1')).rejects.toThrow();
+  });
+
+  it('createPipeline POSTs the write body and returns the parsed pipeline', async () => {
+    const fetchMock = stubFetch(201, pipeline);
+    const out = await createPipeline({ name: 'My pipeline' });
+    expect(out).toEqual(pipeline);
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/pipelines');
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ name: 'My pipeline' });
+  });
+
+  it('getPipeline encodes the id in the path', async () => {
+    const fetchMock = stubFetch(200, pipeline);
+    await getPipeline('pl/1');
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/pipelines/pl%2F1');
+  });
+
+  it('deletePipeline DELETEs and resolves void on 204', async () => {
+    const fetchMock = stubFetch(204, undefined);
+    await expect(deletePipeline('pl/1')).resolves.toBeUndefined();
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/pipelines/pl%2F1');
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).method).toBe('DELETE');
+  });
+
+  it('createPipelineVersion POSTs to the versions path and parses the result', async () => {
+    const fetchMock = stubFetch(201, version);
+    const out = await createPipelineVersion('pl/1', {
+      params: [],
+      outputs: [],
+      containers: [],
+      nodes: [],
+      edges: [],
+    });
+    expect(out).toEqual(version);
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/pipelines/pl%2F1/versions');
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).method).toBe('POST');
   });
 });

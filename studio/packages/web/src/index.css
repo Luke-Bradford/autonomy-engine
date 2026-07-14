@@ -203,6 +203,107 @@ td button + button {
   color: var(--muted);
 }
 
+/* --- Pipeline authoring canvas (P5c) ------------------------------------- */
+
+/* The canvas needs the full content width; the default 900px cap is for the
+   list/form pages. `:has` scopes the override to the canvas page only. */
+.content:has(.canvas-page) {
+  max-width: none;
+}
+
+.canvas-grid {
+  display: grid;
+  grid-template-columns: 180px 1fr 320px;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.palette,
+.property-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.palette h3,
+.property-panel h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.property-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.property-panel select,
+.property-panel textarea {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.45rem 0.55rem;
+  font: inherit;
+}
+
+.property-panel textarea {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  resize: vertical;
+}
+
+/* React Flow needs an explicitly-sized parent. */
+.canvas-wrap {
+  height: 620px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.flow-node {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.7rem;
+  min-width: 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.flow-node.selected {
+  border-color: var(--accent);
+}
+
+.flow-node-sub {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.badge-list {
+  margin-top: 1rem;
+  padding: 0.6rem 0.9rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--error);
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.badge-list ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.1rem;
+  color: var(--muted);
+}
+
 /* One-time reveal of a freshly-minted webhook secret. */
 .secret-reveal {
   margin-top: 1rem;

@@ -1,0 +1,88 @@
+import { describe, expect, it } from 'vitest';
+import {
+  PipelineVersionSchema,
+  type Edge,
+  type Node,
+  type PipelineVersion,
+} from '@autonomy-studio/shared';
+import { PipelineVersionWriteSchema } from '../../api/pipelines';
+import { toVersionBody, validateCanvas } from './canvasDoc';
+
+function node(id: string, config: Record<string, unknown> = {}): Node {
+  return { id, type: 'http_request', config, position: { x: 0, y: 0 } };
+}
+
+function edge(id: string, from: string, to: string, on: Edge['on'] = 'success'): Edge {
+  return { id, from, to, on };
+}
+
+const loaded: PipelineVersion = PipelineVersionSchema.parse({
+  id: 'plv_1',
+  pipelineId: 'pl_1',
+  version: 2,
+  params: [{ name: 'topic', type: 'string', required: true }],
+  outputs: [{ name: 'result', type: 'string' }],
+  nodes: [],
+  edges: [],
+  containers: [{ id: 'c1', kind: 'stage', children: [] }],
+  catalogVersion: 1,
+  createdAt: 1,
+});
+
+describe('toVersionBody', () => {
+  it('carries params/outputs/containers from the loaded version and uses the current graph', () => {
+    const nodes = [node('a'), node('b')];
+    const edges = [edge('e', 'a', 'b')];
+    const body = toVersionBody(loaded, nodes, edges);
+    expect(body.params).toEqual(loaded.params);
+    expect(body.outputs).toEqual(loaded.outputs);
+    expect(body.containers).toEqual(loaded.containers);
+    expect(body.nodes).toEqual(nodes);
+    expect(body.edges).toEqual(edges);
+  });
+
+  it('omits catalogVersion so the server stamps the current one on save', () => {
+    const body = toVersionBody(loaded, [], []);
+    expect(body).not.toHaveProperty('catalogVersion');
+  });
+
+  it('first-run (no loaded version) yields empty params/outputs/containers', () => {
+    const body = toVersionBody(null, [node('a')], []);
+    expect(body.params).toEqual([]);
+    expect(body.outputs).toEqual([]);
+    expect(body.containers).toEqual([]);
+    expect(body.nodes).toHaveLength(1);
+  });
+
+  it('produces a body that parses cleanly through the shared write schema', () => {
+    const body = toVersionBody(loaded, [node('a'), node('b')], [edge('e', 'a', 'b')]);
+    expect(() => PipelineVersionWriteSchema.parse(body)).not.toThrow();
+  });
+});
+
+describe('validateCanvas', () => {
+  it('a valid two-node success chain has no issues', () => {
+    const nodes = [node('a'), node('b')];
+    const edges = [edge('e', 'a', 'b')];
+    expect(validateCanvas(nodes, edges, [], [])).toEqual([]);
+  });
+
+  it('an empty doc has no issues', () => {
+    expect(validateCanvas([], [], [], [])).toEqual([]);
+  });
+
+  it('surfaces a validateRefs error — a config ref to a non-existent node output', () => {
+    // `a` references the output of a node that does not exist: validateRefs
+    // rejects the ref ("does not name an upstream node").
+    const nodes = [node('a', { url: '${nodes.ghost.output.body}' })];
+    const issues = validateCanvas(nodes, [], [], []);
+    expect(issues.length).toBeGreaterThan(0);
+  });
+
+  it('surfaces a validateDoc error — a forward cycle deadlocks the walk', () => {
+    const nodes = [node('a'), node('b')];
+    const edges = [edge('e1', 'a', 'b'), edge('e2', 'b', 'a')];
+    const issues = validateCanvas(nodes, edges, [], []);
+    expect(issues.length).toBeGreaterThan(0);
+  });
+});
