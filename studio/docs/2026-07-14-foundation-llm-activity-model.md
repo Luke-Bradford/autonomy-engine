@@ -60,22 +60,36 @@ LlmCallConfig = {
 
 - **Prompt** — `messages[]` role-tagged; every `content` runs the INERT `${}` pass
   (`${params}`/`${vars}`/`${nodes.x.output}`/`${global}`) from #1. `system` shorthand allowed.
-- **Structured output** — `outputSchema` → the activity's **typed outputs** are the schema's
-  fields (so `validateRefs` can type-check `${nodes.x.output.field}` downstream). Enforce via
-  the provider's JSON/structured mode or tool-call where available; else **parse-and-validate
-  with ONE repair retry** (re-prompt with the validation error) before failing `permanent`.
+- **Structured output** — `outputSchema` is a **restricted schema SUBSET** (object root, finite
+  named properties, scalar/json/array/object types, required-vs-optional, NO open
+  `additionalProperties` for addressable fields, NO `oneOf/anyOf` unless lowered to `json`).
+  At **save-time it is LOWERED into `config.outputs` (`OutputSpec[]`)** — the SSOT `validateRefs`
+  already understands — so `${nodes.x.output.field}` type-checks against declared outputs, NOT an
+  arbitrary JSON-Schema path. Optional fields type as nullable/optional in the checker. Enforce
+  via the provider's JSON/tool mode where available; else parse-and-validate. **Strict validation:
+  strip unknown keys, no implicit coercion; store only the validated/normalized object in
+  `node.succeeded.outputs`** (raw completion kept separately only if non-secure).
+- **Repair is an INTERNAL sub-call, NOT a new engine attempt.** A parse-validate-repair re-prompt
+  is another billed provider request *inside the same `attemptId = node#n`* (internal
+  `repairIndex`). The node still terminalizes once. Usage/cost include BOTH calls.
+- **Schema pinning:** the immutable `PipelineVersion` stores the exact `outputSchema` + generated
+  `outputs`; old runs replay against their own contract. An edit makes a new version.
 - **Reasoning** — `reasoningEffort` maps per provider (Claude extended-thinking budget, o-series
   effort, etc.); ollama/others: best-effort or ignored with a note.
 
 ## Outputs, usage & cost (first-class)
 
-Every LLM activity emits, alongside its declared outputs:
-- **`usage`**: `{ inputTokens, outputTokens, model, provider, latencyMs, stopReason }`.
-- **`costEstimate`**: computed from a **model price table** (built-in, updatable; per-connection
-  override) — `inputTokens*inPrice + outputTokens*outPrice`.
-- These land in the event log as a structured **`activity.metered` event** (or on
-  `node.succeeded.usage`) → a **run-cost projection** (per-run + per-pipeline rollup) surfaced in
-  Monitor. Addresses the real-spend concern; general (not coding-specific).
+Cost/usage are **immutable FACTS stamped in the event log**, never recomputed:
+- An **`activity.metered` event PER provider response** (incl. repair calls AND failed calls that
+  still bill), carrying `{ runId, nodeId, attemptId, provider, model, inputTokens, outputTokens,
+  inUnitPrice, outUnitPrice, priceTableVersion, costEstimate, providerRequestId?, ts(driver),
+  meteringStatus: 'metered'|'unknown' }`. Prices come from a **model price table** (built-in,
+  updatable; per-connection override) captured AT run-time — a future price change never alters a
+  past run's cost.
+- The **run-cost projection** SUMS these events only (deterministic). Per-run + per-pipeline rollup
+  → Monitor. **Crash-window residual (documented):** a provider may bill before `activity.metered`
+  is appended; mitigate by appending immediately after each response + carrying `providerRequestId`
+  for later reconciliation. Metering is best-effort absent external billing reconciliation.
 
 ## Logging / observability
 
@@ -107,14 +121,19 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 | L1 | `llm_call` config v2: role `messages[]` + sampling + `${}` in content | 1 |
 | L2 | Real adapters: anthropic/openai/ollama `llm_call` (text mode) + usage capture | 1 |
 | L3 | `reasoningEffort` mapping per provider | 1 |
-| L4 | Structured output: `outputSchema` → typed outputs + provider JSON-mode + repair-retry | 2 |
+| L4a | `outputSchema` subset + save-time lowering to `config.outputs` + validation | 2 |
+| L4b | provider JSON/tool mode adapters + strict parse/validate | 2 |
+| L4c | repair sub-call (internal, same attempt) + metering of both calls | 2 |
 | L5 | Model **price table** + `costEstimate` + `activity.metered` event | 2 |
 | L6 | **Run-cost projection** + rollup (per run / pipeline) | 2 |
 | L7 | LLM `errorMap` (rate-limit→transient + `retry-after`) wired to #1 policy | 2 |
 | L8 | Palette **recipes** (Generate/Extract/Classify/Judge presets) | 2 |
 | L9 | Prompt/completion secure capture + verbose reasoning log | 2 |
-| L10 | In-process **tools / tool-use loop** (`tools[]`, `maxToolIterations`, MCP) | 3 |
-| L11 | `agent_task` structured-output capture + richer subprocess telemetry | 3 |
+| L10a | local tool contract + single tool call (opaque driver-internal) | 3 |
+| L10b | bounded tool loop + telemetry (non-state observability events) + cancellation | 3 |
+| L10c | MCP servers + tool security policy | 3 |
+| L11a | `agent_task` subprocess telemetry (output/exitCode/summary) | 3 |
+| L11b | opt-in structured protocol (JSON-to-file / sentinel block) + schema validation | 3 |
 | L12 | Multi-turn / conversation state (agentic loop owns history; single-shot stays stateless) | 3 |
 
 ## How it hangs together (with #1 and the rest)
@@ -128,6 +147,31 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 - Usage/cost → **audit + monitoring** (#1 D7 + UI Monitor).
 - Reasoning/tools = the "advisor thinking/implementing" the operator asked for; general-purpose
   across content/data/decisioning/coding.
+
+## Invariants & Codex-hardened decisions (folded from review)
+
+- **Replay NEVER re-calls the model.** LLM output, parsed structured output, stopReason, usage,
+  cost, tool-trace summaries are **facts in the log**; the reducer folds them. A model call happens
+  only on a NEW dispatch attempt (policy retry or explicit rerun), never on replay.
+- **Tools (L10) MVP = opaque driver-internal:** the multi-step tool loop runs inside the driver as
+  ONE node attempt → one terminal `node.succeeded/failed`, plus **non-state observability events**
+  (`tool.called` etc.) + per-response metering. Node stays non-idempotent. Resumable, event-modeled
+  tool loops (`tool.requested/completed` + continuation state) = a separate sub-spec, not v1.
+- **`agent_task` structured output needs an opt-in PROTOCOL** (JSON to a known file path OR a
+  sentinel-delimited block OR a wrapper contract), validated after exit. Without it, expose only
+  `output`/`exitCode`/`summary` — arbitrary CLI stdout is not typeable.
+- **Telemetry vs content split for secure:** ALWAYS log usage/model/provider/latency/stopReason
+  (non-sensitive). Prompt/completion are `secure*`-eligible → redacted at emit-time (log
+  hash/length/token-count, not text). A **secure structured output cannot drive typed `${}`**
+  (#1 D8) — prohibit the downstream ref or use the opaque handle.
+- **Prompt budgeting / truncation:** preflight token estimate; fail `permanent` BEFORE the call
+  when prompt/schema/tool-history clearly exceed the model window; treat `stopReason=length`
+  (truncated output that fails schema validation) as a first-class non-success.
+- **Cost-on-retry / idempotency:** every policy retry is a NEW `attemptId`; every provider response
+  under every attempt is metered; unknown billing → `meteringStatus:'unknown'`. Rerun/retry UI
+  warns "may incur additional cost."
+- **Reasoning-trace capture defaults OFF** (huge / provider-restricted / sensitive) — store
+  summaries/metadata; full trace requires explicit verbose logging + secure redaction.
 
 ## Non-goals
 
