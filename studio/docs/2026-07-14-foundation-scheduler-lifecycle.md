@@ -99,16 +99,56 @@ a worker, heartbeats; a **lease-expiry alarm** (S1) reclaims a dead worker's run
 
 | # | Ticket |
 | --- | --- |
-| S1 | Durable-scheduler primitive (`scheduled_wakeups` + boot re-arm) — retry/wait/webhook re-point onto it |
-| S2 | Recurrence model + compile (frequency/interval/advanced/timeZone) + cron escape-hatch |
-| S3 | Per-pipeline concurrency admission (queue overflow) in the launcher |
-| S4 | Run lifecycle status model + `waiting` sub-states + durable transitions |
-| S5 | Run leasing/heartbeat + lease-expiry reclaim (on S1) + boot-reconcile formalization |
-| S6 | Event/webhook trigger firing via the event bus + `externalWait` (with #4 A13) |
-| S7 | Tumbling-window: window-state ledger + `${trigger.window*}` + single-fire-per-window |
-| S8 | Tumbling-window: backfill (bounded) |
-| S9 | Tumbling-window: self-dependency (offset/size) admission |
-| S10 | Tumbling-window: per-trigger retry policy + concurrency cap |
+| S1 | **Durable-alarm OUTBOX** (`scheduled_wakeups` + at-least-once + dedupe keys + boot re-arm) + ONE consumer (retry) |
+| S2 | Migrate `wait` (#4) + `webhook`-expiry (#4) onto S1 |
+| S3 | Run lifecycle status model (`pending|queued|running|waiting|terminal` + reason) — all transitions durable events |
+| S4 | Lease/slot release for `queued`+`waiting` runs (split execution-lease from lifecycle) |
+| S5 | Recurrence model + croner-as-calculator producing wakeup rows + schedule catch-up (no-backfill, ≤1 late) |
+| S6 | Admission: per-trigger + per-pipeline (both-must-pass) + fair queue (durable `queuedAt`, round-robin) |
+| S7 | Lease-expiry reclaim with generation tokens (on S1) + boot-reconcile formalization |
+| S8 | Event/webhook trigger firing via event bus + `externalWait` (with #4 A13) |
+| S9 | Tumbling-window: window-domain EVENTS (`window.created/runCreated/…`) + projection + config-versioned window key + single-fire |
+| S10 | Tumbling-window: bounded backfill (maxBackfillWindows + durable cursor, incremental via S1) |
+| S11 | Tumbling-window: self-dependency (blocked windows in state, NOT runs) + per-trigger retry/concurrency + `${trigger.window*}` (context-scoped) |
+
+## Codex-hardened CORE (folded)
+
+- **S1 = an at-least-once durable-alarm OUTBOX, not exactly-once.** Row `{id, kind, ref, dueAt,
+  dedupeKey, status, claimedAt, firedAt, supersededBy?}`, **unique `(kind, dedupeKey)`**. Fire =
+  append the domain `*.due` event + mark fired **in ONE SQLite txn**; duplicate delivery folds as a
+  no-op (uniqueness). The **event log is the domain truth; `scheduled_wakeups` is driver infra.**
+- **Typed `ref` + freshness predicate per kind** (runId/nodeId/attemptId/timerId/triggerId/
+  windowKey/leaseToken) — every due event re-checks currency before it fires, so stale retries /
+  expired leases / disabled triggers can't emit valid-looking events.
+- **Croner is a RECURRENCE CALCULATOR, not a firing source.** It computes "next occurrence" →
+  writes a durable wakeup row. On wakeup: re-read trigger state (no-op/`trigger.fireSuppressed` if
+  disabled/unbound/out-of-window), fire through the launcher, persist the next occurrence.
+- **Reducer command idempotency:** `scheduleRetry`/`scheduleWait` commands **upsert by deterministic
+  key** (commands re-emit on replay) — the log's `node.retryScheduled`/`timer.scheduled` is the
+  fact, appended atomically with the row.
+- **Catch-up policy is explicit per kind:** schedule = **no backfill** (≤1 late fire then next
+  future); tumbling = **bounded** backfill; retry/wait/webhook/lease = overdue fires on boot.
+- **`waiting`/`queued` runs release the execution LEASE and (by default) the concurrency SLOT** —
+  a run parked on a timer/webhook/dependency for hours must not occupy a worker or a slot. `running`
+  = actively executing; resumption is event-driven. (`queued` = pre-admission; `waiting.reason` =
+  timer/external/dependency, whole-run or node-scoped, defined per case.)
+- **Every lifecycle transition is a durable event** (`run.queued/admitted/waiting/resumed/
+  interrupted/finished`, `trigger.fireSkipped/Suppressed`) — no status-only DB mutation except
+  event-derived projections.
+- **Admission = BOTH per-trigger AND per-pipeline capacity;** overflow enters ONE admission queue
+  ordered by durable `queuedAt` with per-trigger round-robin (no monopoly). `skip_if_running`
+  applies before queueing.
+- **Lease-expiry alarms carry a generation token** (`leaseToken`/expected `leaseUntil`); reclaim
+  only if the current row still holds that token and is expired (heartbeats supersede old alarms).
+- **Tumbling state = projection, not truth.** Window lifecycle is domain events; the
+  `tumbling_window_state` table is a materialized projection with uniqueness. **Window key =
+  `{triggerId, triggerConfigVersion, windowStartIsoUtc, interval}`** (editing a tumbling trigger
+  mints a new config epoch). **Blocked/backfill windows live in window state, NOT as full runs**
+  (avoid flooding the run table); exactly one run materializes per window when deps + capacity allow,
+  pinned to the **trigger's version at materialization time** (never a later active pointer).
+- **`${trigger.windowStart/End}`** — typed timestamps, inert, **allowed ONLY in
+  tumbling-window-bound pipelines** (save-time context validation), not global to manual/schedule runs.
+- **Late-alarm observability:** every due event carries `scheduledFor`, `firedAt`, `latenessMs`.
 
 ## Non-goals
 
