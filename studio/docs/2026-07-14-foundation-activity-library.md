@@ -57,17 +57,22 @@ Rationale: **control-flow completeness** first (real pipelines need branching/it
 
 | # | Ticket |
 | --- | --- |
-| A1 | `if`/condition control activity (+ boolean `${}` eval) |
-| A2 | `switch` control activity (N cases) |
-| A3 | `foreach` — formalize item-iteration on the loop container (+ parallel cap, #1 var-reject) |
-| A4 | `until` — formalize on the loop container (exitWhen already exists) |
-| A5 | `wait` (driver timer → event) |
-| A6 | `fail` + `filter` |
-| A7 | `execute_pipeline` first-class activity (surface `call_pipeline`) |
-| A8 | `fs`/storage connector kind + `file_read`/`file_write` |
-| A9 | `file_copy`/`file_move`/`file_delete`/`file_list` |
-| A10 | `webhook` (wait-for-callback) |
-| A11 | `script`/`shell` (or fold into `agent_task`) |
+| **A0** | **Branch/outcome model** (PREREQUISITE): named branches for condition nodes — edges gain `on:'branch', branch:'<name>'`; `if`→`true`/`false`, `switch`→named case/default. Keeps `success/failure/skipped/completion` for *operational* outcome, not business routing. **Amends #1 `EdgeOnSchema`.** |
+| A1 | `if` control activity → `true`/`false` branches (`condition.evaluated` event) |
+| A2 | `switch` control activity → named case/default branches (`switch.evaluated` event) |
+| A3 | `until` on the existing `loop` container — document do-while semantics (expr after each round, cap-failure reason, output projection, zero-iteration) |
+| A4 | **`foreach` = a NEW container kind** (item-based): `items`, `${item}` context, `batchCount`/parallel cap, deterministic per-item output aggregation + namespacing, variable rules. **Amends #1 container model.** |
+| A5 | **Shared durable-wait scheduler primitive** (generalizes #1's retry timer): `timer.waitScheduled`/`timer.due` |
+| A6 | `wait` (on A5) |
+| A7 | `fail` (+ optional `assert`) → `node.failed` |
+| A8 | `filter` — array-safe `${}` predicate (whole-expression, closed-fn, order-preserving) → `node.succeeded` outputs |
+| A9 | `execute_pipeline` first-class (surface `call_pipeline`) |
+| A10 | **Connection secret-model split** (public vs secret config) — prerequisite for credentialed connectors |
+| A11 | local `fs` connector (non-secret config + server-side **allowlisted roots + path-traversal guard**) + `file_read`/`file_write` |
+| A12 | `file_copy`/`file_move`/`file_delete`/`file_list` |
+| A13 | `webhook` = **external-wait** (`externalWait.created`/`completed`/`expired`; run parks `waiting` until an inbound correlated+authed route appends completion; timeout/default path) |
+| A14 | cloud storage connector kinds (S3/blob, secret-backed via A10) — later |
+| A15 | `script`/`shell` (or fold into `agent_task`) |
 
 Data activities (`copy`/`lookup`/`transform`) get their own spec if/when a dataset abstraction is
 justified — not in this foundation set.
@@ -95,6 +100,32 @@ These extend UI-epic Monitor (U10–U12) + #1 audit; listed here so they're not 
 - File/storage introduces a **new connector kind** (`fs`/`storage`) — the first non-http/LLM
   connector, exercising the #1 "connection config non-secret for every kind" revisit (deferred req
   from P3) for credentialed storage (S3 keys etc.).
+
+## Codex-hardened CORE (folded)
+
+- **Branch model is a prerequisite (A0), and it amends #1.** `if`/`switch` must NOT overload
+  `success/failure` for business routing (poisons success-semantics + monitoring). Add named
+  **branch** edges (`on:'branch', branch:'<name>'`); `if`→`true`/`false`, `switch`→case/default.
+  Operational `success/failure/skipped/completion` stay for activity outcome. This extends #1's
+  `EdgeOnSchema` — do A0 before F1's skipped work settles, and reconcile pipeline-success semantics.
+- **`foreach` is a NEW container kind, not the loop.** The existing `loop` container is round-based
+  over the same children (clears outputs each round, `exitWhen`) — that's `until`. `foreach` is
+  **item-based**: `items` array, `${item}` context, parallel `batchCount`, deterministic per-item
+  output aggregation + per-item namespacing, and #1's parallel-variable-mutation reject applies.
+- **`webhook` is external-wait, NOT a timer.** `wait` = a scheduled `timer.due`. `webhook` **parks
+  the run `waiting`** until an inbound, **correlated + authed + replay-protected** HTTP route
+  appends `externalWait.completed` (or `expired` on timeout). Distinct suspend/resume source; both
+  reuse the shared durable-wait primitive (A5) but with different event families.
+- **Control activities are engine-evaluated but STILL emit durable events** — no silent projection
+  mutation in `settle`. `condition.evaluated`, `switch.evaluated`, `variable.set`, `node.failed`
+  (fail), `node.succeeded`+outputs (filter): the decision/output is a fact in the log before the
+  downstream walk depends on it (state = fold(events)).
+- **Array `${}` (filter/foreach.items) stays within the INERT model:** whole-expression predicates
+  only, closed-fn allowlist, no rescanning / side-effects / wall-clock, stable ordering;
+  `${item}` with save-time validation; `filter` preserves input order.
+- **Storage exposes the connection-secret model immediately** — so the secret-config split (A10)
+  lands **before** any credentialed connector. Local `fs` is allowed earlier only if scoped to
+  non-secret config + **server-side allowlisted roots + path-traversal guard**.
 
 ## Non-goals
 

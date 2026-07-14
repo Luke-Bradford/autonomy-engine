@@ -94,18 +94,60 @@ promote-active. The command bar gains **Publish** when a repo is connected.
 - **#1 secrets:** connection secrets never leave the encrypted store; git holds config only.
 - **P1c:** the file layout = P1c's envelope, one-resource-per-file; import = P1c import + upgrade.
 
-## Ticket decomposition (G-series, ordered; each ≈ a fire)
+## Codex-hardened CORE (folded — these are load-bearing, NOT polish)
+
+Codex confirmed Option A **only if** stable IDs + drift detection + CAS publish + dependency/secret
+reconcile are core. Corrections:
+
+- **Stable resource IDs, path cosmetic.** Each file carries a stable `resourceId` (+ its own
+  `schemaVersion`/`catalogVersion`); path is `pipelines/<slug>.json` (regenerated), NOT identity.
+  Import classifies by ID: same-id-new-path = **rename**; missing-file-DB-exists = **proposed
+  delete/archive** (archive — runs restrict hard-delete); new-id = **create**; same-path-diff-id =
+  **conflict**.
+- **P1c import SPLITS into two modes.** `portable import` = today's behavior (new IDs, unbound —
+  for copy). `workspace git import` = **upsert by stable `resourceId`, preserve internal refs
+  (ownership-validated), new immutable version ONLY when the CANONICAL content hash changes**
+  (hash canonical post-upgrade content, excluding volatile fields; SHA-256 as an optimization,
+  parsed-object compare on mismatch).
+- **`active` is NEVER a stored trigger binding.** Triggers always store a **concrete
+  `pipelineVersionId`** (preserves #1 immutability + "unbound never fires"). "Bind to active" =
+  a creation-time convenience that resolves ONCE. Live-follow, if ever, = a distinct visible
+  `bindingMode: follow_active` resolved atomically at fire time with audit — not the default.
+- **Publish = atomic compare-and-set.** Active-pointer row = `{pipelineId, activeVersionId,
+  sourceCommit, sourceBlobSha, updatedBy, updatedAt}`. Publish requires the expected-previous
+  active/commit; a stale publish is **refused** ("pull/import first"). Publish only from a DB
+  version whose source commit/blob is known.
+- **Secret readiness is a real runtime GATE.** Add connection `secretStatus: not_required | ready
+  | needs_secret` + `enabled`. A node bound to a secret-bearing connection **fails validation/
+  import unless `ready`**; a trigger referencing unresolved connections imports **disabled** and
+  cannot be enabled until validation passes. Attention-text is not enough.
+- **Drift/branch-HEAD gate.** Track observed collaboration-branch HEAD. Before commit: require the
+  working branch is a descendant (else "pull/rebase first"). Block commit/import/publish while the
+  worktree is conflicted / HEAD unknown / upstream relation unknown.
+- **`GitProvider` capability interface** — CLI git first (Docker image includes git);
+  isomorphic-git only a future fallback if bundle demands.
+- **Per-file upgrade + all-or-nothing pull.** Each resource file upgrades independently (P1c
+  framework), then a cross-resource graph validation; the pull transaction is atomic except the
+  secrets-provisioning post-step.
+- **Workspace/owner-scoped from day one** — `workspace_git`, active pointers, the resource-state
+  ledger, and stable IDs all carry `ownerId`; never a cross-workspace DB-id reference.
+- **Audit git provenance** — imported versions persist `commitSha, branch, filePath, blobSha`
+  (with #1's author/changeNote) → "what is running?" is answerable.
+
+## Ticket decomposition (G-series, reordered; each ≈ a fire)
 
 | # | Ticket |
 | --- | --- |
-| G1 | Git-friendly file layout + per-resource serialize (config-only connections) |
-| G2 | `workspace_git` config + connect-repo (local repo first; remote/auth next) |
-| G3 | Commit-to-working-branch (Save) with author/message |
-| G4 | Pull/import collaboration branch → new versions + upsert (idempotent, secret-safe) |
-| G5 | `active` version pointer + Publish (promote) + default-bind-to-active |
-| G6 | PR open/observe via git-host API (GitHub first) — else guided manual |
-| G7 | Secret-reconcile on import (needs-secret disabled state + supply flow) |
-| G8 | Multi-remote / auth polish; conflict + divergence handling |
+| G1 | Resource envelopes: stable `resourceId`, canonical JSON, per-file schemaVersion, path policy |
+| G2 | `workspace_git` (owner-scoped) + `GitProvider` CLI + repo status/fetch/HEAD tracking |
+| G3 | Export/commit to working branch + **branch-HEAD descendant guard** + author/message |
+| G4 | Workspace-git import PARSER/upgrader (per-file, no writes) |
+| G5 | Transactional reconcile: create/update/**rename**/**delete-archive** classification |
+| G6 | `active` pointer (provenance) + **CAS Publish** + resolve-once bind-to-active |
+| G7 | Trigger binding reconcile (concrete version / contentHash; absent → disabled) + scheduler-invariant tests |
+| G8 | Secret reconcile: connection `secretStatus`/`enabled` **readiness gate** + supply flow |
+| G9 | PR open/observe via git-host API (GitHub first) — else guided manual |
+| G10 | Conflict/divergence UX; multi-remote/auth polish |
 
 ## Non-goals
 
