@@ -4,6 +4,7 @@ import {
   ConnectionKindSchema,
   RunStatusSchema,
   TriggerModeSchema,
+  WebhookDeliveryOutcomeSchema,
   type Concurrency,
   type ConnectionKind,
   type Edge,
@@ -14,6 +15,7 @@ import {
   type RunWindow,
   type TriggerMode,
   type WebhookConfig,
+  type WebhookDeliveryOutcome,
 } from '@autonomy-studio/shared';
 
 /**
@@ -215,4 +217,36 @@ export const secrets = sqliteTable(
     createdAt: integer('created_at').notNull(),
   },
   (table) => [uniqueIndex('secrets_ref_idx').on(table.ref)],
+);
+
+/**
+ * Durable webhook-delivery ledger (`WebhookDelivery`) — the source of truth for
+ * replay protection + caller idempotency. `(trigger_id, idempotency_key)` is
+ * UNIQUE: the launcher admits a given delivery at most once, even across a
+ * restart (the row survives; an in-memory cache would not). `received_at` is
+ * indexed for age-based pruning. See `packages/server/src/routes/webhooks.ts`.
+ */
+export const webhookDeliveries = sqliteTable(
+  'webhook_deliveries',
+  {
+    id: text('id').primaryKey(),
+    triggerId: text('trigger_id')
+      .notNull()
+      .references(() => triggers.id, { onDelete: 'cascade' }),
+    idempotencyKey: text('idempotency_key').notNull(),
+    outcome: text('outcome', {
+      enum: asEnumTuple(WebhookDeliveryOutcomeSchema.options),
+    })
+      .notNull()
+      .$type<WebhookDeliveryOutcome>(),
+    // Bare column, no FK to `runs` on purpose: the ledger is provenance, never
+    // joined for correctness, and a run may be deleted while its delivery record
+    // is kept — a dangling `run_id` is harmless (see the 0004 migration note).
+    runId: text('run_id'),
+    receivedAt: integer('received_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('webhook_deliveries_trigger_key_idx').on(table.triggerId, table.idempotencyKey),
+    index('webhook_deliveries_received_at_idx').on(table.receivedAt),
+  ],
 );

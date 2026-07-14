@@ -72,7 +72,11 @@ describe('0003 migration: foreign-key safety on an upgrading (non-fresh) DB', ()
       .run('run_1', 'pv_1', 'trig_1');
 
     const { applied } = runMigrations(sqlite);
-    expect(applied).toEqual(['0003_p1c_trigger_unbound_pipeline_version.sql']);
+    // 0003 is the migration under test; assert it ran (rather than pinning the
+    // WHOLE pending set, which any later migration — e.g. 0004 — would grow).
+    // The runner applies files in filename order, so 0003 precedes any newer
+    // one, and the FK toggle wraps the whole run.
+    expect(applied).toContain('0003_p1c_trigger_unbound_pipeline_version.sql');
 
     const run = sqlite.prepare('SELECT trigger_id FROM runs WHERE id = ?').get('run_1') as {
       trigger_id: string | null;
