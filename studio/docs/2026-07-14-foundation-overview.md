@@ -29,6 +29,7 @@ L3  P7 packaging (Docker / OSS self-host)
 | `2026-07-14-foundation-llm-activity-model.md` | L1 | L1–L12 |
 | `2026-07-14-foundation-git-publish.md` | L1 | G1–G10 |
 | `2026-07-14-foundation-activity-library.md` | L1 | A0–A15 |
+| `2026-07-14-foundation-scheduler-lifecycle.md` | L1 | S1–S10 |
 | `2026-07-14-adf-grade-ui-design.md` | L2 | U0–U15 (+R1/R2) |
 | `2026-07-12-target-architecture.md` | ref | — |
 
@@ -78,8 +79,9 @@ later specs assume, so they must be single-owner and early:
    all assume; migrations come later.
 4. **Node-level dynamic outputs (`Node.config.outputs` in #1)** — first-class validated output
    override so #2's `outputSchema` lowering has a real home.
-5. **Generic durable-scheduler primitive (ONE early ticket)** — driver-owned alarm abstraction;
-   **retry (#1), `wait` (#4), and `webhook`-expiry all consume it** (retry is NOT its own primitive).
+5. **Generic durable-scheduler primitive (#5 S1, ONE early ticket)** — driver-owned alarm
+   abstraction owned by Spec #5; **retry (#1), `wait` (#4), `webhook`-expiry (#4), tumbling windows
+   + schedule ticks + lease-expiry (#5) all consume it** (retry is NOT its own primitive).
 6. **Policy/retry/timeout (#1)** on top of the scheduler.
 7. **Unified secret model (ONE `SecretRef`/`SecretSink`/redaction contract in #1)** — secure
    outputs can't drive `${}`, secrets resolve only at approved sink fields, git import→`needs_secret`,
