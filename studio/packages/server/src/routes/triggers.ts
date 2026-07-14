@@ -1,14 +1,20 @@
+import { randomBytes } from 'node:crypto';
 import type { FastifyPluginAsync } from 'fastify';
 import { NewTriggerSchema, TriggerPublicSchema, type Trigger } from '@autonomy-studio/shared';
 import {
+  createSecret,
   createTrigger,
   deleteTrigger,
   getPipeline,
   getPipelineVersion,
+  getSecretByRef,
   getTrigger,
   listTriggers,
+  updateSecretCiphertext,
   updateTrigger,
 } from '../repo/index.js';
+import { newId } from '../repo/ids.js';
+import { encrypt } from '../secrets/secrets.js';
 import { BadRequestError, NotFoundError } from '../errors.js';
 import { requireOwned } from './util.js';
 import { UnboundTriggerError } from '../run/launcher.js';
@@ -172,4 +178,52 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
       throw err;
     }
   });
+
+  /**
+   * P4c — provision (or rotate) a webhook trigger's per-trigger secret. The
+   * server MINTS a high-entropy secret, stores only its ciphertext, and returns
+   * the plaintext EXACTLY ONCE (never persisted in plaintext, never logged, and
+   * never readable again — like a personal access token). The caller signs its
+   * `POST /api/webhooks/:id` requests with this secret (see
+   * `../webhooks/verify.ts`). Rotating replaces the ciphertext IN PLACE under
+   * the trigger's existing `secretRef`, so old signatures stop verifying at
+   * once. Owner-scoped; only valid for a `webhook`-mode trigger.
+   */
+  fastify.post<{ Params: { id: string } }>(
+    '/api/triggers/:id/webhook-secret',
+    async (request, reply) => {
+      const { masterKey } = fastify;
+      const trigger = requireOwned(
+        getTrigger(db, request.params.id),
+        request.principal,
+        'trigger',
+        request.params.id,
+      );
+      if (trigger.mode !== 'webhook') {
+        throw new BadRequestError("a webhook secret can only be set on a 'webhook'-mode trigger");
+      }
+      // 32 bytes = 256 bits of entropy, URL-safe.
+      const secret = randomBytes(32).toString('base64url');
+      const ciphertext = await encrypt(secret, masterKey);
+
+      const existing = trigger.webhook ? getSecretByRef(db, trigger.webhook.secretRef) : null;
+      let secretRef: string;
+      if (existing) {
+        // Rotate in place — the trigger's `secretRef` is stable across a rotation.
+        updateSecretCiphertext(db, existing.id, ciphertext);
+        secretRef = existing.ref;
+      } else {
+        secretRef = createSecret(db, { ref: newId('whsecref'), ciphertext }).ref;
+      }
+
+      const updated = updateTrigger(db, trigger.id, {
+        webhook: { ...(trigger.webhook ?? {}), secretRef },
+      });
+      if (!updated) throw new NotFoundError('trigger', trigger.id);
+
+      // The plaintext `secret` is returned ONCE and never again — the operator
+      // must copy it now. `deliveryUrl` is where signed deliveries are POSTed.
+      reply.status(200).send({ secret, deliveryUrl: `/api/webhooks/${trigger.id}` });
+    },
+  );
 };

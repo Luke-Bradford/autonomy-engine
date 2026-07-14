@@ -17,6 +17,7 @@ import { registerErrorHandler } from './errors.js';
 import { connectionsRoutes } from './routes/connections.js';
 import { pipelinesRoutes } from './routes/pipelines.js';
 import { triggersRoutes } from './routes/triggers.js';
+import { webhooksRoutes } from './routes/webhooks.js';
 import { runsRoutes } from './routes/runs.js';
 import { importRoutes } from './routes/import.js';
 import './context.js';
@@ -137,6 +138,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   await fastify.register(connectionsRoutes);
   await fastify.register(pipelinesRoutes);
   await fastify.register(triggersRoutes);
+  await fastify.register(webhooksRoutes);
   await fastify.register(runsRoutes);
   await fastify.register(importRoutes);
 
