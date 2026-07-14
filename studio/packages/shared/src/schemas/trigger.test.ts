@@ -180,6 +180,23 @@ describe('WebhookPublicConfigSchema', () => {
     const alreadyPublic = { idempotencyWindowSeconds: 300 };
     expect(WebhookPublicConfigSchema.parse(alreadyPublic)).toEqual(alreadyPublic);
   });
+
+  it('preserves secretRef structural validation — an empty secretRef is still rejected', () => {
+    // Being derived from `WebhookConfigSchema`, the only relaxation is
+    // secretRef → optional; its `.min(1)` check is retained, so a
+    // present-but-empty secretRef is still a boundary violation, not passed
+    // through as an unknown/catchall key.
+    expect(() => WebhookPublicConfigSchema.parse({ secretRef: '' })).toThrow();
+  });
+
+  it('passes unknown keys through (catchall retained through the derivation)', () => {
+    const parsed = WebhookPublicConfigSchema.parse({
+      secretRef: 'secret_1',
+      replayProtection: true,
+      idempotencyWindowSeconds: 300,
+    });
+    expect(parsed).toEqual({ replayProtection: true, idempotencyWindowSeconds: 300 });
+  });
 });
 
 describe('TriggerPublicSchema', () => {
