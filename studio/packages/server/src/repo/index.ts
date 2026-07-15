@@ -8,3 +8,4 @@ export * from './runs.js';
 export * from './run-events.js';
 export * from './secrets.js';
 export * from './webhook-deliveries.js';
+export * from './scheduled-wakeups.js';

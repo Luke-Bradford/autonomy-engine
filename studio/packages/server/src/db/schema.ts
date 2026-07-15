@@ -4,6 +4,7 @@ import {
   ConnectionKindSchema,
   RunStatusSchema,
   TriggerModeSchema,
+  WakeupStatusSchema,
   WebhookDeliveryOutcomeSchema,
   type Concurrency,
   type ConnectionKind,
@@ -14,6 +15,8 @@ import {
   type RunStatus,
   type RunWindow,
   type TriggerMode,
+  type WakeupRef,
+  type WakeupStatus,
   type WebhookConfig,
   type WebhookDeliveryOutcome,
 } from '@autonomy-studio/shared';
@@ -248,5 +251,45 @@ export const webhookDeliveries = sqliteTable(
   (table) => [
     uniqueIndex('webhook_deliveries_trigger_key_idx').on(table.triggerId, table.idempotencyKey),
     index('webhook_deliveries_received_at_idx').on(table.receivedAt),
+  ],
+);
+
+/**
+ * #5 S1 — the durable-alarm OUTBOX (`ScheduledWakeup`): the ONE time-based
+ * firing primitive every feature consumes (retry, `wait`, webhook expiry,
+ * schedule ticks, tumbling windows, lease expiry) instead of owning a
+ * `setTimeout` that a restart silently loses.
+ *
+ * `(kind, dedupe_key)` is UNIQUE — it dedupes ARMING, so a reducer command
+ * that re-emits on replay upserts the same row rather than arming a second
+ * alarm. The event log remains the domain truth; this table is driver infra
+ * (never part of a resource response), like `webhook_deliveries`.
+ *
+ * `kind` is an OPEN string (no enum): the handler registry in
+ * `scheduler/alarms.ts` is the runtime authority, and pinning a durable field
+ * to an enum is a back-compat trap. `status` IS closed. See the 0005 migration
+ * for why the two differ, and for why `claimed_at`/`superseded_by` are absent.
+ */
+export const scheduledWakeups = sqliteTable(
+  'scheduled_wakeups',
+  {
+    id: text('id').primaryKey(),
+    kind: text('kind').notNull(),
+    /** Per-kind typed handle (`{runId, nodeId, attemptId}`, `{triggerId}`, …);
+     * each handler declares a `refSchema`, checked when the alarm is armed. */
+    ref: text('ref', { mode: 'json' }).notNull().$type<WakeupRef>(),
+    /** Epoch ms; a STORED fact (backoff is never recomputed at fold time). */
+    dueAt: integer('due_at').notNull(),
+    /** ALWAYS derived via `buildDedupeKey(kind, ref, discriminator)`. */
+    dedupeKey: text('dedupe_key').notNull(),
+    status: text('status', { enum: asEnumTuple(WakeupStatusSchema.options) })
+      .notNull()
+      .$type<WakeupStatus>(),
+    firedAt: integer('fired_at'),
+  },
+  (table) => [
+    uniqueIndex('scheduled_wakeups_kind_dedupe_key_idx').on(table.kind, table.dedupeKey),
+    // The claim scan ("pending rows due by now") — the only hot query.
+    index('scheduled_wakeups_status_due_at_idx').on(table.status, table.dueAt),
   ],
 );

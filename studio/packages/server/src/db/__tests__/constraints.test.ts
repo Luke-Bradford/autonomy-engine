@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { connections, pipelineVersions, pipelines, runEvents, runs, triggers } from '../schema.js';
+import {
+  connections,
+  pipelineVersions,
+  pipelines,
+  runEvents,
+  runs,
+  scheduledWakeups,
+  triggers,
+} from '../schema.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 
 /**
@@ -441,5 +449,69 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
 
     db.delete(runs).where(eq(runs.id, run.id)).run();
     expect(db.select().from(runEvents).where(eq(runEvents.id, evt.id)).get()).toBeUndefined();
+  });
+});
+
+describe('#5 S1 scheduled_wakeups constraints (raw db access)', () => {
+  const row = {
+    id: 'wku_1',
+    kind: 'retry',
+    ref: { runId: 'run_1' },
+    dueAt: 1_000,
+    dedupeKey: 'retry:{"runId":"run_1"}:attempt-1',
+    status: 'pending' as const,
+    firedAt: null,
+  };
+
+  it('UNIQUE (kind, dedupe_key) refuses a duplicate alarm at the DB level', () => {
+    // `armWakeup` returns the existing row rather than inserting a second, so
+    // the repo tests never reach this index. It is the backstop that makes
+    // arm-idempotency an INVARIANT rather than a convention: a raw insert (or a
+    // future writer that forgets the read-then-insert) is refused by the
+    // database itself.
+    const { db } = freshDb();
+    db.insert(scheduledWakeups).values(row).run();
+    expect(() =>
+      db
+        .insert(scheduledWakeups)
+        .values({ ...row, id: 'wku_2' })
+        .run(),
+    ).toThrow(/UNIQUE constraint failed/);
+  });
+
+  it('UNIQUE is scoped to (kind, dedupe_key) — the same key under another kind is a distinct alarm', () => {
+    const { db } = freshDb();
+    db.insert(scheduledWakeups).values(row).run();
+    expect(() =>
+      db
+        .insert(scheduledWakeups)
+        .values({ ...row, id: 'wku_2', kind: 'timer' })
+        .run(),
+    ).not.toThrow();
+  });
+
+  it('CHECK rejects an out-of-enum status', () => {
+    const { db } = freshDb();
+    expect(() =>
+      db
+        .insert(scheduledWakeups)
+        .values({ ...row, status: 'claimed' as never })
+        .run(),
+    ).toThrow(/CHECK constraint failed/);
+  });
+
+  it('accepts ANY kind — `kind` is deliberately open, with no CHECK', () => {
+    // The mirror of the test above, and the point of the asymmetry: `status` is
+    // a settled, closed vocabulary; `kind` is not. A CHECK on `kind` would need
+    // a table-recreate migration for every new consumer, and would pin a
+    // durable field to today's vocabulary. The handler registry
+    // (`scheduler/alarms.ts`) is the runtime authority instead.
+    const { db } = freshDb();
+    expect(() =>
+      db
+        .insert(scheduledWakeups)
+        .values({ ...row, kind: 'a_kind_invented_in_2027' })
+        .run(),
+    ).not.toThrow();
   });
 });
