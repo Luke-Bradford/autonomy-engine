@@ -28,6 +28,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
   {
     type: 'http_request',
     title: 'HTTP Request',
+    kind: 'execution',
+    category: 'general',
     idempotent: false,
     connectionKinds: ['http'],
     outputs: [out('status', 'number'), out('body', 'string'), out('headers', 'json')],
@@ -41,6 +43,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
   {
     type: 'llm_call',
     title: 'LLM Call',
+    kind: 'execution',
+    category: 'ai',
     idempotent: false,
     connectionKinds: ['anthropic_api', 'openai_api', 'ollama'],
     outputs: [out('text', 'string'), out('stopReason', 'string')],
@@ -55,6 +59,10 @@ const ENTRIES: ActivityCatalogEntry[] = [
   {
     type: 'agent_task',
     title: 'Agent Task',
+    kind: 'execution',
+    // Spec #4 files `agent_task` under "Execution — AI (Spec #2)" next to
+    // `llm_call`: an external CLI agent is an AI activity, not its own class.
+    category: 'ai',
     idempotent: false,
     connectionKinds: ['agent_cli'],
     outputs: [out('output', 'string'), out('exitCode', 'number')],

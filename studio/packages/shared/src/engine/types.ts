@@ -278,6 +278,15 @@ export const FAILURE_CODES = {
   UNKNOWN_ACTIVITY: 'unknown_activity',
   /** The activity needs a runner the executor does not have. */
   NO_EXECUTOR: 'no_executor',
+  /**
+   * A CONTROL activity (#1 D6) reached the executor. Control activities are
+   * engine-evaluated pure transitions the reducer handles natively, so this is
+   * an ENGINE-INVARIANT violation, not a missing runner — categorically
+   * different from `NO_EXECUTOR` ("this execution activity has no connector
+   * yet"), and kept distinct so an operator can tell a framework bug from an
+   * unbuilt feature without string-matching the message.
+   */
+  CONTROL_NOT_DISPATCHABLE: 'control_not_dispatchable',
   /** The activity requires a connection but the node names none. */
   CONNECTION_MISSING: 'connection_missing',
   /** The node's `connectionId` resolves to no row. */

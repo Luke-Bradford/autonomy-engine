@@ -1,7 +1,10 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import sodium from 'libsodium-wrappers';
+import { z } from 'zod';
 import {
   CATALOG_VERSION,
+  type ActivityCatalog,
+  type ActivityCatalogEntry,
   type ConnectionKind,
   type NewPipelineVersion,
   type Node,
@@ -90,7 +93,12 @@ function resolveDocFor(db: Db): DocResolver {
 
 function deps(
   db: Db,
-  over: { adapters?: ConnectorRegistry; concurrency?: number; masterKey?: Uint8Array } = {},
+  over: {
+    adapters?: ConnectorRegistry;
+    concurrency?: number;
+    masterKey?: Uint8Array;
+    catalog?: ActivityCatalog;
+  } = {},
 ) {
   const resolveDoc = resolveDocFor(db);
   return {
@@ -102,6 +110,7 @@ function deps(
       resolveDoc,
       adapters: over.adapters ?? testRegistry(),
       concurrency: over.concurrency,
+      catalog: over.catalog,
     }),
   };
 }
@@ -267,6 +276,92 @@ describe('createExecutor — loud pre-flight failures (no bogus node.dispatched)
     expect(failed).toMatchObject({ kind: 'permanent', code: 'secret_undecryptable' });
     // The message must never leak crypto detail (see resolveConnection).
     expect((failed as { error: string }).error).not.toContain('sk-encrypted');
+  });
+});
+
+describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () => {
+  /**
+   * A one-entry catalog. The MVP set is entirely `execution`-with-a-connection,
+   * so these contract branches are unreachable through the shipped catalog —
+   * injecting one keeps them exercised rather than dead defensive code.
+   */
+  function catalogOf(over: Partial<ActivityCatalogEntry> & { type: string }): ActivityCatalog {
+    const entry: ActivityCatalogEntry = {
+      title: 'Test Activity',
+      kind: 'execution',
+      category: 'general',
+      idempotent: false,
+      connectionKinds: [],
+      outputs: [],
+      configSchema: z.object({}),
+      ...over,
+    };
+    return new Map([[entry.type, entry]]);
+  }
+
+  function nodeOfType(type: string, connectionId?: string): Node {
+    seq += 1;
+    return { id: 'n1', type, config: {}, connectionId, position: { x: seq, y: 0 } };
+  }
+
+  it('a CONTROL activity is never dispatched to a connector (engine-evaluated)', async () => {
+    // Control activities are pure reducer transitions (#1 D6, #4 "Reducer
+    // handles them natively"), so one arriving at the executor is an engine
+    // invariant violation — fail loud, and NEVER touch an adapter.
+    //
+    // The fixture is deliberately CONTRADICTORY — a control activity that also
+    // names a connector — because that is the only shape in which the guard is
+    // load-bearing: delete it and this run reaches the adapter and SUCCEEDS.
+    // (With `connectionKinds: []` the run would fail `no_executor` anyway, so
+    // the assertions below would pass with or without the guard.)
+    let adapterRan = false;
+    const adapters = fakeHttpAdapter(async function* () {
+      adapterRan = true;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [nodeOfType('test_control', connId)]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, {
+        adapters,
+        catalog: catalogOf({ type: 'test_control', kind: 'control', connectionKinds: ['http'] }),
+      }),
+      run,
+    );
+
+    expect(state.status).toBe('failure');
+    expect(eventTypes(db, run.id)).not.toContain('node.dispatched');
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+      error: expect.stringContaining('control'),
+      kind: 'permanent',
+      code: 'control_not_dispatchable',
+    });
+    expect(adapterRan).toBe(false);
+  });
+
+  it('an EXECUTION activity declaring no connection still fails no_executor', async () => {
+    // Keying dispatch off `kind` must not swallow this case: an execution
+    // activity with no connector is the "future built-in runner" slot, and it
+    // stays a loud, distinct failure rather than a confusing connection error.
+    const db = freshDb().db;
+    const pvId = seedVersion(db, [nodeOfType('test_builtin')]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, { catalog: catalogOf({ type: 'test_builtin', kind: 'execution' }) }),
+      run,
+    );
+
+    expect(state.status).toBe('failure');
+    expect(eventTypes(db, run.id)).not.toContain('node.dispatched');
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+      error: expect.stringContaining('has no executor'),
+      kind: 'permanent',
+      code: 'no_executor',
+    });
   });
 });
 
