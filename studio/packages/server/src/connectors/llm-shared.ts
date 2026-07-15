@@ -192,6 +192,43 @@ export function errorExcerpt(bodyText: string): string {
   return trimmed.length > 500 ? `${trimmed.slice(0, 500)}…` : trimmed;
 }
 
+/** Sentinel for "no readable stop reason" — see `coerceStopReason` for why. */
+const STOP_REASON_UNKNOWN = 'unknown';
+
+/**
+ * The single answer to "what goes in `llm_call`'s `stopReason` output" (#457).
+ *
+ * WHY IT MATTERS: the catalog declares `llm_call.outputs` as `[text: string,
+ * stopReason: string]`. That declaration is inert metadata on its own, but
+ * `canvasStore` seeds every palette-created node's `config.outputs` from it, so
+ * for those nodes it already IS the runtime contract (`outputContract` reads the
+ * node's own `config.outputs`; #456/F13b would make it the default for nodes
+ * made via API/import/CLI too). The reducer's `validateOutputs` type-checks each
+ * declared output at `node.succeeded`, and `matchesType(null, 'string')` is
+ * false — so yielding `null` here terminalizes the node as a FAILURE with
+ * `output 'stopReason' is not of declared type 'string'`: a diagnostic about the
+ * ADAPTER's untruth, blamed on the author's node.
+ *
+ * All three LLM adapters route through this one function so the catalog has a
+ * single, honest counterparty. Each provider names the field differently
+ * (Anthropic `stop_reason`, OpenAI `finish_reason`, Ollama `done_reason`) and
+ * each can omit it on a shape the adapter does not anticipate; a value the
+ * provider DID send is passed through verbatim — it is not ours to reinterpret
+ * (cross-provider normalization is spec #2's I6, still open).
+ *
+ * The sentinel is deliberately NOT `'stop'`: that is a real OpenAI
+ * `finish_reason`, so it would make an unreadable response indistinguishable
+ * from a normal completion for any downstream
+ * `${nodes.x.output.stopReason} == 'stop'` branch — and it is absent from
+ * Anthropic's vocabulary, so it would invent a value that provider never emits.
+ * `unknown` appears in no first-party provider's documented vocabulary. (A
+ * bespoke OpenAI-compatible gateway or local runner can of course put any string
+ * in the field; passthrough is still right — we report what we were told.)
+ */
+export function coerceStopReason(value: unknown): string {
+  return typeof value === 'string' ? value : STOP_REASON_UNKNOWN;
+}
+
 /**
  * A bounded liveness/credential probe for the "test connection" UI: a GET to a
  * provider's cheap list endpoint (models / tags). A 2xx proves reachability +

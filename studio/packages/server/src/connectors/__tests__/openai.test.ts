@@ -34,6 +34,30 @@ const OK_BODY = {
 };
 
 describe('openaiAdapter.runActivity', () => {
+  // #457 — a missing `finish_reason` is realistic here beyond OpenAI itself:
+  // `baseUrl` points this adapter at any OpenAI-COMPATIBLE gateway, which need
+  // not populate it. See `coerceStopReason` for the contract rationale.
+  it.each([
+    ['absent', { message: { content: 'x' } }],
+    ['a non-string', { message: { content: 'x' }, finish_reason: 42 }],
+    ['null', { message: { content: 'x' }, finish_reason: null }],
+  ])('yields a string stopReason when finish_reason is %s', async (_label, choice) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, { choices: [choice] }));
+    const events = await drain(openaiAdapter.runActivity(ctx(), 'sk-oai'));
+    expect(events[0]).toMatchObject({ type: 'succeeded', outputs: { stopReason: 'unknown' } });
+    const outputs = (events[0] as Extract<ActivityEvent, { type: 'succeeded' }>).outputs;
+    expect(typeof outputs.stopReason).toBe('string');
+  });
+
+  it('yields a string stopReason when the response carries no choices at all', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, {}));
+    const events = await drain(openaiAdapter.runActivity(ctx(), 'sk-oai'));
+    expect(events[0]).toMatchObject({
+      type: 'succeeded',
+      outputs: { text: '', stopReason: 'unknown' },
+    });
+  });
+
   it('POSTs chat/completions and surfaces content + finish_reason', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     const events = await drain(openaiAdapter.runActivity(ctx(), 'sk-oai'));

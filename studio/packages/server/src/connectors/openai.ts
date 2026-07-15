@@ -2,6 +2,7 @@ import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.j
 import {
   DEFAULT_LLM_TIMEOUT_MS,
   classifyHttpStatus,
+  coerceStopReason,
   errorExcerpt,
   llmConnectionConfigSchema,
   llmPost,
@@ -22,7 +23,9 @@ import {
  * There is NO safe universal default model, so a call with neither a node
  * `model` nor a connection default `model` fails `permanent` with a clear
  * message rather than guessing. A 2xx yields `succeeded{ text, stopReason }`
- * from `choices[0]`; a non-2xx is mapped by `classifyHttpStatus`.
+ * from `choices[0]` (`stopReason` via `coerceStopReason`, which keeps the
+ * declared `string` type when a gateway omits `finish_reason`); a non-2xx is
+ * mapped by `classifyHttpStatus`.
  */
 
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
@@ -121,7 +124,9 @@ export const openaiAdapter: ConnectorAdapter = {
       type: 'succeeded',
       outputs: {
         text: typeof text === 'string' ? text : '',
-        stopReason: (first as { finish_reason?: unknown } | undefined)?.finish_reason ?? null,
+        stopReason: coerceStopReason(
+          (first as { finish_reason?: unknown } | undefined)?.finish_reason,
+        ),
       },
     };
   },
