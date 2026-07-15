@@ -611,12 +611,22 @@ export function createEngine(doc: EngineDoc): Engine {
     if (defect !== null) throw new SubstituteError(defect);
     const out = substitute(src, buildCtx(state));
     if (typeof out === 'boolean') return out;
-    // A whole-value ref preserves native type, but a `string`-typed output may
-    // still carry "true" (an LLM/CLI activity commonly emits one). Coercing it
-    // is a TYPE concern: #6 E6 removes this line in the same ticket that adds the
-    // static boolean-condition check, so the loud runtime failure lands together
-    // with the save-time rejection that prevents it.
-    return out === 'true';
+    // #6 E6 — the RUN-TIME half of the boolean-condition rule, landing with the
+    // save-time check (`validateExitWhen`) that warns the author first.
+    //
+    // This used to coerce (`return out === 'true'`), which made a `string`-typed
+    // "true" work by accident while the SAME activity emitting "yes" — or the
+    // padded " true" — burned every round and reported the misleading `capped`.
+    // A value that only worked by accident now says so, and says it on round 0.
+    //
+    // The save-time half cannot close this alone: `validateDoc` is advisory (its
+    // only caller is the canvas badge; the server never calls it — #444), so a
+    // git import or a direct POST reaches this reducer unchecked. Same
+    // both-halves rule E2 set for the MODE check, for the same reason.
+    throw new SubstituteError(
+      `exitWhen must resolve to a boolean, got ${typeof out} — ` +
+        "compare it explicitly (e.g. ${equals(nodes.check.output.done, 'true')})",
+    );
   }
 
   /** A container's projected outputs = its children's outputs merged (sorted). */

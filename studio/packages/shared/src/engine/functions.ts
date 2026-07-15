@@ -1,4 +1,5 @@
 import type { Expr } from './expr.js';
+import type { ParamType } from '../schemas/pipeline.js';
 import { SubstituteError } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -50,6 +51,54 @@ import { SubstituteError } from './types.js';
  * at RUN time (a loud throw), not at edit time. E6 owns closing that gap.
  */
 export type SigType = 'string' | 'number' | 'boolean' | 'array' | 'any';
+
+/**
+ * The DECLARED type vocabulary (`ParamType`/`OutputType`) mapped onto the sig
+ * vocabulary — one map, because `OutputType` IS `ParamType` minus `secret`.
+ *
+ * `json` → `any`: it names "some structure", which may be an array, an object,
+ * or a scalar. Minting `array` for it would be a false-accept (a `json` param
+ * holding a scalar would pass an `array` arg-check and throw at run).
+ *
+ * `secret` → `any` is unreachable in practice: `checkExprStatic` hard-rejects a
+ * `${params.<secret>}` ref before inference runs (a secret never enters the `${}`
+ * language). It maps to the harmless value rather than throwing, so a future
+ * caller cannot turn a leak-prevention rule into a crash.
+ */
+export function sigOfDeclared(t: ParamType): SigType {
+  switch (t) {
+    case 'string':
+    case 'number':
+    case 'boolean':
+      return t;
+    case 'json':
+    case 'secret':
+      return 'any';
+  }
+}
+
+/**
+ * Is a value of type `actual` usable where `expected` is wanted? The STATIC
+ * mirror of `matchesSig`, and the SSOT both `checkExprStatic` (#6 E6) and any
+ * future field-type check read, so the two can never word the rule differently.
+ *
+ * `any` is assignable in BOTH directions, and each direction is a separate call:
+ *  - `any` as EXPECTED — a fn arg declared `any` genuinely takes anything.
+ *  - `any` as ACTUAL — the ESCAPE HATCH. A `json` param, a no-contract node
+ *    output, and every `${item.x}` path all infer `any` (E4: no element type).
+ *    There is no cast function, so rejecting those where a `boolean` is wanted
+ *    would be a false-REJECT the author cannot work around.
+ *
+ * That asymmetry with E3's "over-refusal is safe" rule is deliberate and is the
+ * same trade E4 recorded: the refusals E3 hardened protect against a doc that
+ * SAVES and then THROWS with no `default()` rescue. Here the unsound direction
+ * is already owned — an `any` that turns out wrong throws at run, which is
+ * exactly the run-time-checked-only cost E4 accepted when it declined to mint
+ * `array<T>`. Widening the check further is #2's `OutputSpec` work, not E6's.
+ */
+export function assignableTo(actual: SigType, expected: SigType): boolean {
+  return actual === 'any' || expected === 'any' || actual === expected;
+}
 
 /**
  * The evaluator injected into a `special` fn. Passing this in (rather than
@@ -165,7 +214,13 @@ function typeName(v: unknown): string {
   return typeof v;
 }
 
-function matchesSig(v: unknown, t: SigType): boolean {
+/**
+ * Does a RESOLVED value satisfy a sig type? The run-time half of the type rule
+ * (`assignableTo` is the static half). Exported so the catalog's declared `ret`
+ * can be pinned against what each fn actually returns — E6 types every call by
+ * `ret`, so a wrong one mis-infers silently.
+ */
+export function matchesSig(v: unknown, t: SigType): boolean {
   switch (t) {
     case 'any':
       return true;
@@ -187,14 +242,23 @@ function expect(fn: string, v: unknown, t: SigType, at: string): unknown {
   return v;
 }
 
+/**
+ * The sig type a fn expects at arg position `i`. A variadic fn's LAST declared
+ * type covers the whole tail; an undeclared position is `any`.
+ *
+ * SSOT for the indexing rule, read by BOTH the run-time check (`checkArgTypes`
+ * below) and the save-time one (`params.ts` `checkExprStatic`, #6 E6). Two
+ * copies of this arithmetic could disagree about a variadic tail, and the static
+ * half would then reject what the run-time half accepts.
+ */
+export function argSigAt(spec: FnSpec, i: number): SigType {
+  if (spec.variadic) return spec.args[Math.min(i, spec.args.length - 1)] ?? 'any';
+  return spec.args[i] ?? 'any';
+}
+
 /** Type-check already-resolved EAGER args against the fn's signature. */
 export function checkArgTypes(name: string, spec: FnSpec, args: unknown[]): void {
-  args.forEach((v, i) => {
-    const t =
-      (spec.variadic ? (spec.args[Math.min(i, spec.args.length - 1)] ?? 'any') : spec.args[i]) ??
-      'any';
-    expect(name, v, t, `argument ${i + 1}`);
-  });
+  args.forEach((v, i) => expect(name, v, argSigAt(spec, i), `argument ${i + 1}`));
 }
 
 /** A `special` fn's own arg check (its args are evaluated lazily, one at a time). */
@@ -204,6 +268,27 @@ function expectBool(fn: string, v: unknown, at: string): boolean {
 
 function num(fn: string, v: unknown, at: string): number {
   return expect(fn, v, 'number', at) as number;
+}
+
+/**
+ * A conversion's RESULT, refused if it overflowed to `Infinity`.
+ *
+ * `float`'s own regex accepts an exponent, so a `json` param carrying "1e400"
+ * converts to `Infinity` — which the `number` sig REJECTS (it requires a FINITE
+ * number). `int` overflows the same way on a long enough digit string. That made
+ * the declared `ret: 'number'` a lie in a corner, which #6 E6 cannot afford: it
+ * types every call by `ret`.
+ *
+ * Refusing at the CONVERSION (where the offending value is named) rather than
+ * letting `Infinity` escape is also the better diagnostic: every numeric arg
+ * check downstream would otherwise reject it with a baffling "argument 1 must be
+ * a number, got Infinity", attributed to the wrong function.
+ */
+function finite(fn: string, n: number): number {
+  if (!Number.isFinite(n)) {
+    throw new SubstituteError(`function '${fn}': the value overflows to ${String(n)}`);
+  }
+  return n;
 }
 
 function str(fn: string, v: unknown, at: string): string {
@@ -745,8 +830,14 @@ export const FUNCTIONS: Readonly<Record<string, FnSpec>> = Object.freeze({
   // shape. Its AST is re-evaluated per element with `item` bound; a resolved
   // string is never re-parsed, which is what keeps the array forms inert.
   filter: {
+    // arg1 is the PREDICATE: `boolean`, not `any`. A `special` fn's `args` is
+    // read by the static checker only (`checkArgTypes` runs on the eager path
+    // alone), so declaring it accurately costs nothing at run time — `run` below
+    // already enforces it via `expectBool`. Before E6 nothing read `args` here,
+    // so `any` was harmless; now it would silently disable the one predicate
+    // check the type vocabulary CAN express.
     call: 'special',
-    args: ['array', 'any'],
+    args: ['array', 'boolean'],
     minArgs: 2,
     ret: 'array',
     lambdaArgs: [1],
@@ -756,6 +847,9 @@ export const FUNCTIONS: Readonly<Record<string, FnSpec>> = Object.freeze({
       ),
   },
   map: {
+    // arg1 stays `any`, unlike `filter`/`count`: it is a PROJECTION, not a
+    // predicate — `map(rows, item.score)` may produce any type, and `run` below
+    // type-checks nothing. Declaring `boolean` here would reject every real use.
     call: 'special',
     args: ['array', 'any'],
     minArgs: 2,
@@ -769,8 +863,10 @@ export const FUNCTIONS: Readonly<Record<string, FnSpec>> = Object.freeze({
   // Arity-overloaded (the spike): `count(arr)` is a length, `count(arr, pred)`
   // is a conditional tally.
   count: {
+    // arg1 is the PREDICATE — `boolean`, for `filter`'s reason. The overload is
+    // unaffected: `minArgs: 1` means the checker only types arg1 when present.
     call: 'special',
-    args: ['array', 'any'],
+    args: ['array', 'boolean'],
     minArgs: 1,
     ret: 'number',
     lambdaArgs: [1],
@@ -811,7 +907,7 @@ export const FUNCTIONS: Readonly<Record<string, FnSpec>> = Object.freeze({
     impl: (a) => {
       const v = a[0];
       if (typeof v === 'number' && Number.isFinite(v)) return Math.trunc(v);
-      if (typeof v === 'string' && /^\s*-?\d+\s*$/.test(v)) return Number(v.trim());
+      if (typeof v === 'string' && /^\s*-?\d+\s*$/.test(v)) return finite('int', Number(v.trim()));
       throw new SubstituteError(`function 'int': cannot convert ${typeName(v)} to an integer`);
     },
   },
@@ -825,7 +921,9 @@ export const FUNCTIONS: Readonly<Record<string, FnSpec>> = Object.freeze({
       if (typeof v === 'number' && Number.isFinite(v)) return v;
       // A DECIMAL literal only: bare `Number()` accepts `0x10`/`0b101`/`0o7`,
       // which is exactly the implicit reinterpretation this language forbids.
-      if (typeof v === 'string' && /^\s*-?\d+(\.\d+)?([eE][+-]?\d+)?\s*$/.test(v)) return Number(v);
+      if (typeof v === 'string' && /^\s*-?\d+(\.\d+)?([eE][+-]?\d+)?\s*$/.test(v)) {
+        return finite('float', Number(v));
+      }
       throw new SubstituteError(`function 'float': cannot convert ${typeName(v)} to a number`);
     },
   },

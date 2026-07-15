@@ -137,7 +137,7 @@ its own dispatch stamp) — documented; use `${run.startedAt}` for a run-stable 
 | E3 | Reference resolver over namespaces (params/vars/global/nodes.output/nodes.status/run/pipeline/item) — **PARTIALLY SHIPPED 2026-07-15**: `run.*` (SSOT fix + `startedAt`) + `nodes.<id>.status` landed. The rest is BLOCKED on unbuilt prerequisites, each with a named owner: `vars.*` → #1 D2, `global.*` → #1 D3, `item` → **PARTIALLY delivered at E4**: the array-form binding (`filter`/`map`/`count`) is LEXICAL and needed no `foreach`, so it shipped with the catalog; the `foreach`-BODY binding remains #4 A4's, `pipeline.*` → needs a doc widening (`PipelineVersionSchema` has no `name`; `EngineDoc` carries only nodes/edges/containers) + #5's seed for `triggerType`/`triggerName`/`triggerTime`, `run.attempt` → #1 D4 (the `attempts` fact exists but is node-scoped; a run-scoped `${run.*}` has no single answer for it). Re-open the remaining surface as each lands. |
 | E4 | Function catalog impl + per-fn type signatures (logical/string/collection/conversion/math) — **SHIPPED 2026-07-15**: the closed catalog lives in `engine/functions.ts` (SSOT, one entry per fn) and the CALLING CONVENTION is now DATA (`call: 'eager' \| 'special'`, `lambdaArgs`, `staticSoftArg`) read by BOTH the evaluator and the static checker, so neither special-cases a fn by name. `and`/`or`/`if` short-circuit; `filter`/`map`/`count` bind `${item}` per element; `count` is arity-overloaded. See the E4 block below. |
 | E5 | Date fns + dispatch-stamped time — **SPLIT 2026-07-15. E5a SHIPPED:** the 12 date fns that take an EXPLICIT timestamp (`formatDateTime addDays addHours addMinutes addSeconds addToTime subtractFromTime startOfDay startOfHour startOfMonth dayOfWeek dayOfMonth`), all UTC, all pure — `${run.startedAt}` (E3) is the run-stable source. See the E5a block below. **E5b FILED as #450 (`needs-design`):** `utcNow()` binds a `node.dispatched` stamp that DOES NOT EXIST — the reducer resolves node config in `prepInput` at the `pending→ready` transition, strictly BEFORE the executor yields `node.dispatched` (which carries no timestamp field at all), and `onDispatched` never re-preps. Binding it needs a dispatch-handshake change to crash-safety-critical code, so it is an operator-gated call, not an unattended one. `pipeline.*` from seed remains blocked on #5 + the doc widening E3 recorded. |
-| E6 | `validateRefs` typing: infer expr type, check against field-expected type; boolean-condition + array-items checks |
+| E6 | `validateRefs` typing: infer expr type, check against field-expected type; boolean-condition + array-items checks — **SHIPPED 2026-07-15**: `inferExprType` (`params.ts`) types every literal/ref/call, and `checkExprStatic` now checks each fn ARG against `spec.args` at save — the save-time mirror of run-time `checkArgTypes`, reading the same signature data through one shared `argSigAt`. `exitWhen` gains its BOOLEAN field check (save) **and** `evalExitWhen`'s `out === 'true'` coercion is REMOVED (run) — both halves, per E2's rule. E4's declared `ret` is load-bearing for the first time. See the E6 block below for the four recorded deviations. |
 | E7 | Deep `[]`/`.` addressing into `json`/`any` outputs (runtime-validated escape hatch) |
 | E8 | Validation profiles (generic vs trigger-binding) + `${trigger.*}` context-scoping (with #5) |
 
@@ -465,11 +465,52 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
     `${equals(nodes.check.status,'success')}` needs `equals` (**E4**), and the
     string-where-boolean-expected rejection is **E6**'s type check — consistent with E2's split
     (E2 owns the MODE check, E6 the TYPE check). Refusing availability here would misattribute a
-    type defect to a scope rule.
+    type defect to a scope rule. **SHIPPED at E6 (2026-07-15)**: that type check is now live at the
+    foot of `validateExitWhen`, with the run-time half in `evalExitWhen` (see the E6 block).
   - **Known safe false-rejects** (over-refusal is safe; a later ticket may narrow them): a status ref
     in the node config of a doc that can re-run (a back-edge or a loop container), and any
     container's own status (`nodes.<containerId>.status` — node-only analysis, though a container's
     projected *outputs* do resolve at run time).
+- **The E6 block — typing (implemented 2026-07-15).** `inferExprType` types literals, calls (by
+  `spec.ret`), `params.*` (declared type), `nodes.*.output.*` (declared `OutputType`),
+  `nodes.*.status` (`string`), and `run.*` (`string`). `checkExprStatic` then checks every fn ARG
+  against `spec.args`. Four decisions, each a deviation worth naming rather than discovering:
+  - **`any` is assignable in BOTH directions, and that is the whole design.** Not an oversight: a
+    `json` param, a no-contract node output, and every `${item.x}` path all infer `any` (E4's
+    no-element-type decision), and there is **no cast function** — so refusing `any` where a
+    `boolean` is wanted would be a false-REJECT with no author workaround. The check therefore fires
+    only where BOTH sides are known, and it can never reject what the run-time check accepts.
+    Sound direction, deliberately chosen — it inverts E3's "over-refusal is safe" because there the
+    unsafe direction was a doc that SAVES then THROWS with no `default()` rescue; here that cost is
+    already owned by E4.
+  - **"array-items checks" is LIVE at the fn-arg level and INERT on refs — recorded, not fixed.**
+    `ParamType`/`OutputType` are `string|number|boolean|json(|secret)`: **there is no `array`
+    declared type**. So `${nodes.each.output.results}` and `${params.nums}` infer `json`→`any` and
+    satisfy any `array` position unconditionally; the check bites only on a literal or a call
+    (`${sum('x')}`). Widening `OutputTypeSchema` is **#2**'s `OutputSpec` work on durable-schema
+    surface — doing it here would front-run #2 exactly as E4 refused to mint `array<T>` because it
+    would front-run E6. The cost is real and owned: a misspelled `${item.badField}` is still a RUN
+    -time throw.
+  - **Relational fns get NO static arg check** — `equals`/`greater`/`greaterOrEquals`/`less`/
+    `lessOrEquals` declare `args:['any','any']` because `order()` requires *two numbers or two
+    strings*, a constraint `SigType` cannot express. So `${greater('a', 3)}` still passes save and
+    throws at run, and the flagship judge-gate comparison gets no arg check. A relational/type-var
+    vocabulary is real design work and front-runs nothing — it is simply not E6's.
+  - **`${run.*}` is typed `string`, INCLUDING the nullable fields.** `triggerId`/`parentRunId` are
+    seeded literal `null` by the reducer today (#5 owns the real seed). Typing them `any` would be
+    strictly WEAKER, not safer — `any` additionally accepts `${add(run.triggerId, 1)}`, and the
+    run-time null throws under either typing. `SigType` has no null, so no static type here can
+    close that gap; it is **#5**'s. (`run.startedAt` folds null only for a pre-E3 log — a legacy
+    shape, not a live one.)
+  - **Two fixes E6's premise forced.** (1) `evalExitWhen`'s `out === 'true'` **coercion is removed**
+    — the shipped code named E6 as its owner, and the save-time check alone cannot bind because
+    `validateDoc` is advisory (#444), so a git import reaches the reducer unchecked. BREAKING and
+    deliberate: a `string`-typed "true" used to exit by accident while the same activity emitting
+    "yes" burned every round and reported the misleading `capped`. (2) **`float`/`int` refuse a
+    non-finite result**: `float`'s regex accepts an exponent, so a `json` param carrying `"1e400"`
+    returned `Infinity` — which the `number` sig REJECTS (it requires finite), making the declared
+    `ret:'number'` a lie in the one corner E6 now trusts. Pinned by a table test over **all 69**
+    catalog entries, with an exhaustiveness guard so a new fn cannot skip the audit.
 
 ## Non-goals
 
