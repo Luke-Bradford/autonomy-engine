@@ -206,6 +206,13 @@ export async function startRun(deps: DriverDeps, run: Run): Promise<RunState> {
     type: 'run.started',
     runId: run.id,
     pipelineVersionId: run.pipelineVersionId,
+    // Stamped from the run ROW, not a fresh clock: `runs.started_at` already
+    // owns "when did this run start", so reading the clock again here would give
+    // one named fact two durable answers that silently disagree — by minutes,
+    // once #5's scheduler admits queued runs. Logging it as a fact (rather than
+    // letting the reducer read a clock) is what keeps `${run.startedAt}`
+    // identical on every replay.
+    startedAt: new Date(run.startedAt).toISOString(),
     params: resolvedParams,
   };
   appendEngineEvent(deps.db, started, deps.bus);

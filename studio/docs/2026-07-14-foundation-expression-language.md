@@ -46,8 +46,8 @@ dynamic/dynamic-name sub-fields (ADF parity: `nodes.x.output.rows[params.i].sku`
 | `vars.<name>` | pipeline variable (mutable) | #1 D2; typed |
 | `global.<name>` | workspace global param (read-only) | #1 D3; secure globals resolve ONLY at secret sinks (#1 D8) |
 | `nodes.<id>.output[.deep]` | an upstream node's typed outputs | deep `[]`/`.` into a `json`-typed output = `any` (runtime-validated) unless the output declares a schema |
-| `nodes.<id>.status` | `success \| failure \| skipped` | **NEW (T6)** — enables the ADF `@activity().Status` fan-in/OR pattern |
-| `run.<field>` | run system vars: `runId`, `startedAt`, `parentRunId?`, `attempt` | **NEW (T2/C3)** |
+| `nodes.<id>.status` | `success \| failure \| skipped` | **NEW (T6)** — enables the ADF `@activity().Status` fan-in/OR pattern. **SHIPPED at E3**; readable only where the node is *guaranteed settled* — see the E3 block below |
+| `run.<field>` | run system vars: `runId`, `startedAt`, `pipelineVersionId`, `triggerId`, `parentRunId` | **NEW (T2/C3)**. **SHIPPED at E3** — `RUN_FIELDS` in `engine/params.ts` is the SSOT; `attempt` awaits #1 D4 (no attempt fact exists until retry does) |
 | `pipeline.<field>` | `name`, `version`, `triggerType`, `triggerName?`, `triggerTime?` | **NEW** — ADF `@pipeline().*` |
 | `trigger.<field>` | trigger context per type (schedule: `scheduledTime`,`startTime`; event: `body.*`,`eventData.*`; window: `windowStart`,`windowEnd`) | **NEW (T2)** — from the `run.triggerContext` seed event (#5); **context-validated** |
 | `item[.field]` / `item[i]` | current `foreach` element | valid ONLY inside the nearest enclosing `foreach` (#4 A4); save-time scope-checked |
@@ -121,7 +121,7 @@ its own dispatch stamp) — documented; use `${run.startedAt}` for a run-stable 
 | --- | --- |
 | E1 | Expression grammar + parser (refs, `[]`/`.`, function calls, literals) + AST |
 | E2 | Interpolation model (whole-value type-preserving vs string) + `$${` escape + single-pass inert eval |
-| E3 | Reference resolver over namespaces (params/vars/global/nodes.output/nodes.status/run/pipeline/item) |
+| E3 | Reference resolver over namespaces (params/vars/global/nodes.output/nodes.status/run/pipeline/item) — **PARTIALLY SHIPPED 2026-07-15**: `run.*` (SSOT fix + `startedAt`) + `nodes.<id>.status` landed. The rest is BLOCKED on unbuilt prerequisites, each with a named owner: `vars.*` → #1 D2, `global.*` → #1 D3, `item` → #4 A4 (`foreach`), `pipeline.*` → needs a doc widening (`PipelineVersionSchema` has no `name`; `EngineDoc` carries only nodes/edges/containers) + #5's seed for `triggerType`/`triggerName`/`triggerTime`, `run.attempt` → #1 D4. Re-open the remaining surface as each lands. |
 | E4 | Function catalog impl + per-fn type signatures (logical/string/collection/conversion/math) |
 | E5 | Date fns + dispatch-stamped time (`utcNow` binds node.dispatched stamp; `run/pipeline` from seed) |
 | E6 | `validateRefs` typing: infer expr type, check against field-expected type; boolean-condition + array-items checks |
@@ -219,10 +219,22 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
   `count(arr,pred)`) and `avg` is 1-arg-over-array — the flat allowlist needs typed, shape-aware
   signatures. **Nested `${}` inside a predicate is structurally impossible** (the boundary scanner
   closes at the first `}`) — the **bare-predicate rule is normative**, state it.
-- **SSOT bug (must fix):** the spec's example expressions use `run.runId`/`run.startedAt`, but the
-  shipped `RUN_FIELDS = [id, pipelineVersionId, triggerId, parentRunId]` — `runId` is `id` and
-  `startedAt` **doesn't exist**. Reconcile `RUN_FIELDS` + `SubstitutionContext.run` to the spec names
-  (add `startedAt`), or the dynamic-filename expression is rejected today.
+- **SSOT bug — FIXED at E3 (2026-07-15, implemented).** Was: the spec's example expressions use
+  `run.runId`/`run.startedAt`, but the shipped `RUN_FIELDS = [id, pipelineVersionId, triggerId,
+  parentRunId]` — `runId` was `id` and `startedAt` didn't exist, so the dynamic-filename expression
+  was rejected. Now `RUN_FIELDS = [runId, startedAt, pipelineVersionId, triggerId, parentRunId]`.
+  - `run.id` was **renamed, not aliased** — the set is documented CLOSED, so two spellings of one
+    field would be the very drift this fixed. No doc/fixture/seed used the old name.
+  - `pipelineVersionId`/`triggerId` are kept beyond this spec's namespace table (which listed only
+    `runId, startedAt, parentRunId?, attempt`): they already worked, and removing a live field is a
+    bigger break than recording the deviation. The table above is amended to match the code.
+  - **`startedAt` is a LOGGED FACT, not a clock read:** it rides in the `run.started` PAYLOAD
+    (`reduce` folds payloads only — reading the envelope `ts` column would widen the reducer's
+    contract and break CP1), stamped by the driver from the run ROW (`runs.started_at`) so one named
+    fact never gets two disagreeing durable answers. The field is **optional** for durable
+    back-compat: a pre-E3 `run.started` row must still parse and folds to `null`.
+  - `triggerId`/`parentRunId` still resolve to `null` for every run — they are not carried in
+    `RunState`. Live-but-always-null is a known gap, owned by #5 (trigger context) / P2c (child runs).
 - **`if.condition` / `foreach.items` MUST be whole-value mode** (reject embedded interpolation) —
   proven that an embedded boolean silently coerces to the string `"true"`.
   - **E2 (shipped) — the whole-value-required field list is SSOT; extend it HERE:** `exitWhen`
@@ -245,6 +257,41 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
     precisely — owning it in both places double-reports it at save and mislabels it at run.
 - **Inertness invariant to PRESERVE when adding array-forms:** `map`/`filter` must eval element ASTs,
   **never re-parse a resolved string** — keeps the no-injection guarantee (verified in the spike).
+- **`${nodes.<id>.status}` availability — the `settled` analysis (E3, 2026-07-15, implemented).**
+  A status ref asks a DIFFERENT question from an output ref, so it needed its own must-analysis
+  (`computeGraph.settled`) rather than reusing `guaranteed`:
+  - `guaranteed[R]` = "did X **succeed** on every path to R" (gates `${nodes.X.output.*}`).
+  - `settled[R]` = "is X guaranteed **terminal** (success|failure|skipped) on every path to R".
+    Weaker, and that gap IS the feature: a status is readable on exactly the failure/completion/
+    skipped paths where an output is not, which is what makes the ADF fan-in/OR pattern expressible.
+  - **Vocabulary is the TERMINAL set only.** `TerminalNodeStatusSchema` in `engine/types.ts` is the
+    SSOT, shared with the reducer's `EndpointOutcome` so they cannot drift. A live status
+    (`pending`/`ready`/`dispatched`/`waiting`) is a RACE, not a value → run-time **throw**.
+  - **The throw is a plain `SubstituteError`, never `MissingNodeOutputError`** — `default()` catches
+    the latter, so routing through it would let `${default(nodes.a.status,'none')}` silently report a
+    verdict the run never reached. For the same reason the save-time check **ignores `softOk`**:
+    relaxing inside `default()` would accept a doc that still throws at run, with no escape hatch.
+  - **Settledness does NOT propagate through an `on:'skipped'` edge.** A node is skipped as soon as
+    ONE incoming group is dead, while its OTHER predecessors may still be RUNNING — so a skipped
+    predecessor is itself terminal but vouches for nothing upstream. (The same inversion `guaranteed`
+    already handles, for a subtler reason.) The skipped node itself stays readable — it IS terminal.
+  - **Two conservative refusals**, both found by counterexample at the planning gate, both
+    FALSE-ACCEPTS (the one direction that is never safe — a doc accepted at save that throws at run):
+    - **`any` join + a container predecessor → `settled = ∅`.** `computeGraph` is node-only, but the
+      reducer's readiness graph spans nodes ∪ containers, so a container edge is invisible to the
+      analysis and live in the engine. Under `any`, R dispatches the moment the container satisfies
+      while a tracked sibling still runs. Under `all` an untracked predecessor only ADDS a
+      requirement, so ignoring it stays sound — hence the scoping. **The identical hole existed in
+      `guaranteed` and is fixed in the same pass** (proven by test: the pre-fix analysis accepted
+      `${nodes.a.output.text}` on that shape), so the two analyses can never disagree about one graph.
+    - **Any back-edge in the doc → `settled = ∅` doc-wide.** A bounce RESETS its body to `pending`
+      mid-run, so a settled node can un-settle while an off-body node stays ready. Refused rather
+      than modelled. This does NOT affect a loop's `exitWhen`, which is the flagship status use:
+      `validateExitWhen` builds its own scope where every child is terminal by the reducer's own
+      precondition (`stepContainers` only evaluates `exitWhen` once all children are terminal).
+  - **Known safe false-rejects** (over-refusal is safe; a later ticket may narrow them): a status ref
+    inside a looping doc's node config, and any container's own status (`nodes.<containerId>.status`
+    — node-only analysis, though a container's projected *outputs* do resolve at run time).
 
 ## Non-goals
 

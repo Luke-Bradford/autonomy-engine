@@ -389,13 +389,89 @@ describe('preparedInput substitution', () => {
     expect(b!.preparedInput).toEqual({ msg: 'hi', topic: 'launch' });
   });
 
-  it('the root node dispatch substitutes ${run.id} and ${params.*}', () => {
-    const eng = engine([node('a', { rid: '${run.id}', t: '${params.topic}' })]);
+  it('the root node dispatch substitutes ${run.runId} and ${params.*}', () => {
+    const eng = engine([node('a', { rid: '${run.runId}', t: '${params.topic}' })]);
     const r = eng.reduce(eng.seedState(), started({ topic: 'x' }));
     const a = r.commands.find((c) => c.type === 'dispatchNode') as {
       preparedInput: Record<string, unknown>;
     };
     expect(a.preparedInput).toEqual({ rid: RUN, t: 'x' });
+  });
+});
+
+// ===========================================================================
+// #6 E3 — ${run.startedAt} + ${nodes.<id>.status} resolve from LOGGED FACTS
+// ===========================================================================
+
+describe('run.startedAt — the seeded, replay-stable timestamp', () => {
+  const STAMP = '2026-07-15T09:00:00.000Z';
+  const stamped = (): EngineEvent => ({
+    type: 'run.started',
+    runId: RUN,
+    pipelineVersionId: PV,
+    startedAt: STAMP,
+    params: {},
+  });
+
+  it('folds the stamp into state and substitutes it', () => {
+    const eng = engine([node('a', { at: '${run.startedAt}' })]);
+    const r = eng.reduce(eng.seedState(), stamped());
+    expect(r.state.startedAt).toBe(STAMP);
+    const a = r.commands.find((c) => c.type === 'dispatchNode') as {
+      preparedInput: Record<string, unknown>;
+    };
+    expect(a.preparedInput).toEqual({ at: STAMP });
+  });
+
+  // The reducer reads no clock, so the ONLY input is the logged fact — folding
+  // the same log twice must give the same answer, which is what makes
+  // `${run.startedAt}` safe to use in a durable name (a commit path, a filename).
+  it('is identical on replay', () => {
+    const eng = engine([node('a', { at: '${run.startedAt}' })]);
+    const first = eng.projectRunState([stamped()]);
+    const second = eng.projectRunState([stamped()]);
+    expect(second.startedAt).toBe(first.startedAt);
+    expect(second).toEqual(first);
+  });
+
+  // A `run.started` row appended before E3 carries no stamp. It must still fold
+  // (never throw), which is why the event field is optional.
+  it('folds a pre-E3 log with no stamp to null', () => {
+    const eng = engine([node('a', {})]);
+    expect(eng.reduce(eng.seedState(), started()).state.startedAt).toBeNull();
+  });
+});
+
+describe('${nodes.<id>.status} — resolves from the run log (#6 E3 T6)', () => {
+  it('reads an upstream FAILURE, where the output is unavailable', () => {
+    // The ADF fan-in/OR shape: `b` runs only on a's failure and reports which
+    // way a went. This is the case the status handle exists for — a's outputs do
+    // not exist on this path, so nothing else could express it.
+    const eng = engine(
+      [node('a'), node('b', { saw: '${nodes.a.status}' })],
+      [edge('a', 'b', 'failure')],
+    );
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const r = eng.reduce(s, failed('a', attempt('a'), 'boom'));
+    const b = r.commands.find((c) => c.type === 'dispatchNode' && c.nodeId === 'b') as {
+      preparedInput: Record<string, unknown>;
+    };
+    expect(b.preparedInput).toEqual({ saw: 'failure' });
+  });
+
+  it('reads an upstream SUCCESS', () => {
+    const eng = engine(
+      [node('a'), node('b', { saw: '${nodes.a.status}' })],
+      [edge('a', 'b', 'success')],
+    );
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const r = eng.reduce(s, succeeded('a', attempt('a'), {}));
+    const b = r.commands.find((c) => c.type === 'dispatchNode' && c.nodeId === 'b') as {
+      preparedInput: Record<string, unknown>;
+    };
+    expect(b.preparedInput).toEqual({ saw: 'success' });
   });
 });
 

@@ -15,6 +15,7 @@ function ctx(over: Partial<SubstitutionContext> = {}): SubstitutionContext {
   return {
     params: over.params ?? {},
     nodeOutputs: over.nodeOutputs ?? {},
+    nodeStatuses: over.nodeStatuses ?? {},
     run: over.run ?? {},
   };
 }
@@ -52,21 +53,83 @@ describe('substitute — reference resolution', () => {
   });
 
   it('resolves ${run.<field>} from the closed set', () => {
-    const c = ctx({ run: { id: 'run_1' } });
-    expect(substitute('${run.id}', c)).toBe('run_1');
+    const c = ctx({ run: { runId: 'run_1' } });
+    expect(substitute('${run.runId}', c)).toBe('run_1');
   });
 
   it('throws on an unknown run field (closed set)', () => {
-    expect(() => substitute('${run.nope}', ctx({ run: { id: 'r' } }))).toThrow(SubstituteError);
+    expect(() => substitute('${run.nope}', ctx({ run: { runId: 'r' } }))).toThrow(SubstituteError);
   });
 
-  it('exposes RUN_FIELDS as the closed SSOT', () => {
-    expect([...RUN_FIELDS]).toContain('id');
-    expect([...RUN_FIELDS]).not.toContain('nope');
+  // #6 E3: the spec's spike-hardened "SSOT bug (must fix)" — the shipped set
+  // spelled the run id `id` and had no `startedAt` at all, so the spec's own
+  // dynamic-filename example (`file_${params.env}_${run.runId}.json`) was
+  // REJECTED. `run.id` is renamed, not aliased: the set is documented as CLOSED,
+  // and a second spelling in a closed set is exactly the SSOT drift E3 fixes.
+  it('exposes RUN_FIELDS as the closed SSOT, reconciled to the spec names', () => {
+    expect([...RUN_FIELDS]).toContain('runId');
+    expect([...RUN_FIELDS]).toContain('startedAt');
+    expect([...RUN_FIELDS]).not.toContain('id');
+  });
+
+  it('rejects the pre-E3 ${run.id} spelling', () => {
+    expect(() => substitute('${run.id}', ctx({ run: { runId: 'r' } }))).toThrow(SubstituteError);
+  });
+
+  it('resolves ${run.startedAt} — the run-stable timestamp', () => {
+    const c = ctx({ run: { runId: 'r', startedAt: '2026-07-15T09:00:00.000Z' } });
+    expect(substitute('file_${run.startedAt}.json', c)).toBe('file_2026-07-15T09:00:00.000Z.json');
+  });
+
+  // A run whose log predates the `startedAt` fact resolves it to null rather
+  // than throwing: the field is a durable back-compat optional (see the
+  // `run.started` event), so an old log must still fold + resolve.
+  it('resolves ${run.startedAt} to null when the run log carries no stamp', () => {
+    expect(substitute('${run.startedAt}', ctx({ run: { runId: 'r', startedAt: null } }))).toBe(
+      null,
+    );
   });
 
   it('throws on an undeclared param reference', () => {
     expect(() => substitute('${params.missing}', ctx())).toThrow(SubstituteError);
+  });
+});
+
+// ===========================================================================
+// ${nodes.<id>.status} — the T6 fan-in / OR handle
+// ===========================================================================
+
+describe('substitute — ${nodes.<id>.status}', () => {
+  it('resolves each terminal status', () => {
+    for (const s of ['success', 'failure', 'skipped'] as const) {
+      expect(substitute('${nodes.a.status}', ctx({ nodeStatuses: { a: s } }))).toBe(s);
+    }
+  });
+
+  // The language's vocabulary is the TERMINAL set only. A live status
+  // (`pending`/`ready`/`dispatched`/`waiting`) is a race, not a value: it means
+  // the author asked for a verdict the run has not reached.
+  it('throws on a non-terminal status rather than leaking a live one', () => {
+    for (const s of ['pending', 'ready', 'dispatched', 'waiting'] as const) {
+      expect(() => substitute('${nodes.a.status}', ctx({ nodeStatuses: { a: s } }))).toThrow(
+        SubstituteError,
+      );
+    }
+  });
+
+  it('throws on an unknown node id', () => {
+    expect(() => substitute('${nodes.ghost.status}', ctx())).toThrow(SubstituteError);
+  });
+
+  // A status error is a plain SubstituteError, NOT the internal
+  // MissingNodeOutputError that `default()` catches — otherwise `default()`
+  // would silently paper over a genuine race/typo with its fallback.
+  it('is NOT swallowed by default()', () => {
+    const c = ctx({ nodeStatuses: { a: 'dispatched' } });
+    expect(() => substitute("${default(nodes.a.status, 'none')}", c)).toThrow(SubstituteError);
+    expect(() => substitute("${default(nodes.ghost.status, 'none')}", ctx())).toThrow(
+      SubstituteError,
+    );
   });
 });
 
@@ -773,5 +836,114 @@ describe('validateWholeValue — the reusable whole-value-required checker', () 
 
   it('returns null when it reported an error', () => {
     expect(validateWholeValue('f.cond', 'x=${a.b}', [], 'condition')).toBeNull();
+  });
+});
+
+// ===========================================================================
+// validateRefs — ${nodes.<id>.status} availability (`settled`, #6 E3)
+// ===========================================================================
+//
+// The availability rule for a STATUS ref is "is `x` guaranteed TERMINAL here",
+// which is a different question from `guaranteed`'s "did `x` SUCCEED here" —
+// hence its own must-analysis. These tests pin the two false-accepts the
+// planning gate found by counterexample; each would statically accept a doc
+// that then THROWS at run time, with no `default()` escape hatch.
+
+describe('validateRefs — ${nodes.<id>.status} (#6 E3 T6)', () => {
+  it('reads a status where the OUTPUT is not readable (the ADF fan-in/OR case)', () => {
+    // `b` runs only when `a` FAILED, so a's outputs do not exist here — but a is
+    // unambiguously terminal, which is the whole point of the status handle.
+    const nodes = [node('a', {}), node('b', { note: '${nodes.a.status}' })];
+    expect(validateRefs(doc(nodes, [edge('a', 'b', 'failure')]))).toEqual([]);
+
+    const bad = [node('a', {}), node('b', { note: '${nodes.a.output.text}' })];
+    expect(validateRefs(doc(bad, [edge('a', 'b', 'failure')]))).not.toEqual([]);
+  });
+
+  it('reads a status transitively through a success chain', () => {
+    const nodes = [node('a', {}), node('b', {}), node('c', { note: '${nodes.a.status}' })];
+    const edges = [edge('a', 'b', 'success'), edge('b', 'c', 'success')];
+    expect(validateRefs(doc(nodes, edges))).toEqual([]);
+  });
+
+  it('rejects a status ref to a node that is not upstream at all', () => {
+    const nodes = [node('a', { note: '${nodes.b.status}' }), node('b', {})];
+    expect(validateRefs(doc(nodes, [edge('a', 'b', 'success')]))).not.toEqual([]);
+  });
+
+  // COUNTEREXAMPLE A (planning gate): `join:'any'` + a CONTAINER predecessor.
+  // `computeGraph` tracks node ids only, but the reducer's readiness graph spans
+  // nodes ∪ containers — so the container edge is invisible here and live there.
+  // Under `any`, R dispatches the moment the container satisfies, while `a` is
+  // still running. Nothing tracked is guaranteed → the analysis must yield ∅.
+  it("rejects a status ref under join:'any' with an untracked (container) predecessor", () => {
+    const nodes = [node('a', {}), node('r', { join: 'any', note: '${nodes.a.status}' })];
+    const edges = [edge('c', 'r', 'success'), edge('a', 'r', 'success')];
+    expect(validateRefs(doc(nodes, edges))).not.toEqual([]);
+  });
+
+  it("accepts the same shape under join:'all' (an untracked pred only ADDS a requirement)", () => {
+    const nodes = [node('a', {}), node('r', { note: '${nodes.a.status}' })];
+    const edges = [edge('c', 'r', 'success'), edge('a', 'r', 'success')];
+    expect(validateRefs(doc(nodes, edges))).toEqual([]);
+  });
+
+  // COUNTEREXAMPLE A' (planning gate): the SKIP INVERSION. `r` is skipped as soon
+  // as ONE incoming group is dead — its OTHER predecessors may still be running.
+  // So a skipped `r` says nothing about `a`, and settledness must NOT propagate
+  // through an `on:'skipped'` edge (the same inversion `guaranteed` handles).
+  it('does not propagate settledness through a skipped edge', () => {
+    const nodes = [
+      node('a', {}),
+      node('x', {}),
+      node('r', {}),
+      node('s', { note: '${nodes.a.status}' }),
+    ];
+    const edges = [edge('x', 'r', 'success'), edge('a', 'r', 'success'), edge('r', 's', 'skipped')];
+    expect(validateRefs(doc(nodes, edges))).not.toEqual([]);
+  });
+
+  it('still reads the SKIPPED node itself, which is terminal by definition', () => {
+    const nodes = [node('a', {}), node('r', {}), node('s', { note: '${nodes.r.status}' })];
+    const edges = [edge('a', 'r', 'success'), edge('r', 's', 'skipped')];
+    expect(validateRefs(doc(nodes, edges))).toEqual([]);
+  });
+
+  // COUNTEREXAMPLE B (planning gate): a back-edge bounce RESETS its body to
+  // `pending` mid-run, so a node that had settled can un-settle while an
+  // off-body sibling stays ready. Refused doc-wide rather than modelled.
+  it('refuses a status ref anywhere in a doc carrying a back-edge', () => {
+    const nodes = [node('a', {}), node('b', { note: '${nodes.a.status}' }), node('z', {})];
+    const edges = [
+      edge('a', 'b', 'success'),
+      edge('b', 'z', 'success'),
+      { ...edge('z', 'a', 'success', true), maxBounces: 2 },
+    ];
+    const errors = validateRefs(doc(nodes, edges));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/back-edge/);
+  });
+});
+
+// ===========================================================================
+// validateRefs — the `guaranteed` false-accept the status work uncovered
+// ===========================================================================
+
+describe("validateRefs — join:'any' + an untracked predecessor (#6 E3)", () => {
+  // The SAME hole as counterexample A, on the pre-existing OUTPUT rule: under
+  // `any`, `r` may dispatch on the container edge alone while `a` is still
+  // running, so a's outputs are NOT guaranteed. Tracked-edge-only intersection
+  // silently accepted this. Fixed alongside `settled` so the two analyses cannot
+  // disagree about the same graph.
+  it("rejects an output ref under join:'any' with an untracked predecessor", () => {
+    const nodes = [node('a', {}), node('r', { join: 'any', note: '${nodes.a.output.text}' })];
+    const edges = [edge('c', 'r', 'success'), edge('a', 'r', 'success')];
+    expect(validateRefs(doc(nodes, edges))).not.toEqual([]);
+  });
+
+  it("still accepts an output ref under the default 'all' join", () => {
+    const nodes = [node('a', {}), node('r', { note: '${nodes.a.output.text}' })];
+    const edges = [edge('c', 'r', 'success'), edge('a', 'r', 'success')];
+    expect(validateRefs(doc(nodes, edges))).toEqual([]);
   });
 });
