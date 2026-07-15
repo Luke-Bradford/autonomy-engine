@@ -9,10 +9,15 @@ export * from './expr.js';
 // (`FnSpec`/`EvalIn`) and the arg-checking helpers are the evaluator's private
 // seam — `params.ts` imports them directly from the module. Publishing them
 // would make engine-internal machinery part of `@autonomy-studio/shared`'s API
-// by accident, which is the same trap that kept `MissingNodeOutputError`
+// by accident, which is the same trap that kept `MissingValueError`
 // private. Only the surface a CONSUMER needs is exported: the caps (for a UI to
 // explain a limit) and the catalog's NAMES (for editor autocomplete at U-series).
-export { MAX_ARRAY_ELEMENTS, MAX_ARRAY_ELEMENTS_TOTAL, listFunctions } from './functions.js';
+export {
+  MAX_ARRAY_ELEMENTS,
+  MAX_ARRAY_ELEMENTS_TOTAL,
+  MAX_PATH_DEPTH,
+  listFunctions,
+} from './functions.js';
 export type { SigType } from './functions.js';
 export * from './params.js';
 

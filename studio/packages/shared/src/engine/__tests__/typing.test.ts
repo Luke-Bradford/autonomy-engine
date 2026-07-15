@@ -194,17 +194,37 @@ describe('validateRefs — `${run.*}` typing', () => {
 });
 
 // ===========================================================================
-// E7's boundary must not move
+// #6 E7 — a deep path infers `any` (the escape hatch), and the inference MUST
+// agree with `checkExprStatic` about what a ref means.
 // ===========================================================================
 
-describe('validateRefs — an index-bearing ref stays E7’s refusal ONLY', () => {
-  it('reports exactly one error and never a type error', () => {
-    // `checkExprStatic` returns early on an index-bearing ref, before walking the
-    // index's own sub-expression. Inference MUST agree (`any`, no walk), or this
-    // gains a second, misattributed report — and E7 is silently half-unblocked.
-    const out = refsIn('${not(nodes.a.output.rows[0])}');
+describe('validateRefs — a deep-path ref infers `any` (#6 E7)', () => {
+  const producer = node('a', {
+    outputs: [
+      { name: 'rows', type: 'json' },
+      { name: 'title', type: 'string' },
+    ],
+  });
+
+  it('accepts a deep ref wherever a KNOWN type is expected — `any` never false-rejects', () => {
+    // Spec L111: deep into a json/any output is `any`, runtime-validated. There
+    // is no cast fn, so a refusal here would have no author workaround.
+    for (const expr of [
+      '${not(nodes.a.output.rows[0])}', // boolean expected
+      '${add(nodes.a.output.rows[0].n, 1)}', // number expected
+      '${length(nodes.a.output.rows[0].list)}', // array expected
+      "${concat(nodes.a.output.rows[0].sku, '!')}", // string expected
+    ]) {
+      expect(refsIn(expr, [], producer)).toBe('');
+    }
+  });
+
+  it('reports a deep path into a SCALAR root exactly once, as a shape error', () => {
+    // Inference and `checkExprStatic` must agree: one defect, one error. (Before
+    // E7 this shape was the E7 refusal; the boundary moved, the rule did not.)
+    const out = refsIn('${not(nodes.a.output.title[0])}', [], producer);
     expect(out.split('\n')).toHaveLength(1);
-    expect(out).toMatch(/E7|index/i);
+    expect(out).toMatch(/string/);
     expect(out).not.toMatch(/argument/i);
   });
 });

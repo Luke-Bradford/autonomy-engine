@@ -18,9 +18,11 @@ import { SubstituteError } from './types.js';
 //   call    := NAME '(' [ expr { ',' expr } ] ')'
 //   ref     := field { '.' field | '[' expr ']' }
 //
-// SCOPE: `[]` addressing PARSES here into `segments`, but RESOLVING it is #6
-// E7. Until E7 lands, `params.ts` refuses any index-bearing ref outright — so
-// the grammar accepts strictly more than the language currently resolves.
+// `[]` addressing PARSES here into `segments`; RESOLVING it is #6 E7's walk in
+// `params.ts` (SHIPPED — `refRoot` decides where a path's root ends, and
+// `walkPath` addresses into the `json`/`any` value beyond it). This module still
+// decides SHAPE only, never meaning: an unknown namespace or an over-deep path
+// parses cleanly here and is refused there.
 // ---------------------------------------------------------------------------
 
 /** One node of a parsed `${}` expression. The AST is the grammar's SSOT. */
