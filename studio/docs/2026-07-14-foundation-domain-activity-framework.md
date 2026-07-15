@@ -118,14 +118,20 @@ secureInput?, secureOutput? }`. Split across the pure/impure boundary:
 - **The `Edge` union is settled here** (T3): operational `{on: success|failure|completion|
   skipped}` vs business `{on:'branch', branch}`. `EdgeOnSchema` stays OPERATIONAL-ONLY (the
   canvas renders it as a dropdown); `branch` is a separate union member. Branch edges are
-  **parse-safe but save-refused** by `validateDoc` until #4 A0/A1/A2 ship the activities
-  that emit a branch outcome — nothing can satisfy one before then.
+  **parse-safe and INERT** until #4 A0/A1/A2 ship the activities that emit a branch outcome
+  — nothing can satisfy one before then. `validateDoc` reports one, but that is **advisory,
+  not a gate**: its only caller is the canvas, which renders a badge and still permits Save,
+  and the server never validates (**#444**). The **reducer's diagnostic is the real
+  observability**, which is why F1 put one there rather than trusting the checker.
 - **A `skipped` edge inverts its predecessor's guarantees** (`computeGraph`): a node runs on
   a skip precisely because the predecessor's own dependency was NOT met, so NOTHING upstream
   is guaranteed through it. Inheriting the predecessor's `guaranteed` set made `validateRefs`
   ACCEPT a doc that then hard-failed at dispatch (`prepInput` throws → `invalid_event`).
-- **Success semantics — characterization tests written; reconcile is F1b.** Three cases match
-  the ADF target and are pinned; two DIVERGE and are pinned as-is with the divergence named:
+- **Success semantics — characterization tests written; reconcile is F1b.** All five cases D5
+  called for are covered (incl. **skipped child inside a stage**, which also pins that a
+  skipped child never fails its container and that F14's grouping applies to child readiness).
+  Four match the ADF target and are pinned; two DIVERGE and are pinned as-is with the
+  divergence named:
   1. **Do-If-Else.** ADF: "When previous activity fails: node Upon Success is skipped and its
      parent node failed; overall pipeline fails." Studio treats ANY failure carrying an
      outgoing `failure`/`completion` edge as handled → **success**.

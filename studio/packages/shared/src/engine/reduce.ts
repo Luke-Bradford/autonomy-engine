@@ -277,8 +277,11 @@ export function createEngine(doc: EngineDoc): Engine {
       else states.push(edgeState(e, state));
     }
     // Order-independent (`every`/`some`), so Map iteration order can't affect
-    // the result — the reducer stays pure and replay-stable.
-    const groups = [...byPredecessor.values()].map((states): Readiness | 'dead' =>
+    // the result — the reducer stays pure and replay-stable. A GROUP is never
+    // 'skipped' (only a whole entity is), hence its own type rather than
+    // `Readiness`.
+    type Group = 'ready' | 'dead' | 'pending';
+    const groups = [...byPredecessor.values()].map((states): Group =>
       states.some((s) => s === 'satisfied') ? 'ready' : states.every(dead) ? 'dead' : 'pending',
     );
 
@@ -366,10 +369,14 @@ export function createEngine(doc: EngineDoc): Engine {
   /**
    * A `branch` edge cannot be satisfied until #4 A0/A1/A2 ship the `if`/`switch`
    * activities that emit a branch outcome, so anything depending on one skips.
-   * Say so: `validateDoc` refuses to SAVE a branch edge, but that gate is
-   * client-side today, so a doc imported from git (or POSTed directly) can still
-   * reach the reducer. A diagnostic makes the cause visible instead of leaving
-   * an operator staring at a silently skipped subgraph.
+   * Say so.
+   *
+   * This diagnostic is the ONLY thing that makes that visible: `validateDoc`
+   * reports a branch edge, but advisorily — its lone caller is the canvas, which
+   * renders a badge and still allows Save, and the server never validates at all
+   * (#444). So a branch edge reaches the reducer whether it came from git, a
+   * direct POST, or the canvas itself. Without this, an operator just sees a
+   * silently skipped subgraph.
    */
   function noteInertBranch(id: string, incoming: Edge[], diagnostics: string[]): void {
     if (!incoming.some((e) => e.on === 'branch')) return;
@@ -466,7 +473,7 @@ export function createEngine(doc: EngineDoc): Engine {
    * and clear their outputs — a fresh round recomputes them. Back-edges are
    * considered in STABLE edgeKey order.
    */
-  function fireBackEdges(state: RunState): Step {
+  function fireBackEdges(state: RunState, diagnostics: string[]): Step {
     for (const be of [...backEdges].sort((a, b) => cmp(stableEdgeKey(a), stableEdgeKey(b)))) {
       if (edgeState(be, state) !== 'satisfied') continue;
       const key = stableEdgeKey(be);
@@ -488,7 +495,16 @@ export function createEngine(doc: EngineDoc): Engine {
       // maxBounces is REQUIRED by validateDoc; the defensive cap both bounds an
       // unvalidated doc AND clamps a declared one, so no body can spin longer
       // than the ceiling inside a single reduce (see DEFENSIVE_BOUNCE_CAP).
+      // Say so when it bites: a doc declaring 50_000 that stops at 10_000 would
+      // otherwise report `capped` while the author reads their own doc and sees
+      // a cap that was never honoured.
       const cap = Math.min(be.maxBounces ?? DEFENSIVE_BOUNCE_CAP, DEFENSIVE_BOUNCE_CAP);
+      if (be.maxBounces !== undefined && be.maxBounces > DEFENSIVE_BOUNCE_CAP && count === 1) {
+        diagnostics.push(
+          `back-edge '${be.from}'→'${be.to}': declared maxBounces ${be.maxBounces} exceeds the ` +
+            `engine ceiling ${DEFENSIVE_BOUNCE_CAP} and was clamped to it`,
+        );
+      }
       if (count > cap) {
         return {
           state: withBounce,
@@ -646,7 +662,7 @@ export function createEngine(doc: EngineDoc): Engine {
     const commands: EngineCommand[] = [];
 
     for (;;) {
-      const fired = fireBackEdges(state);
+      const fired = fireBackEdges(state, diagnostics);
       if (fired.finish) return { state: fired.state, commands: [fired.finish], diagnostics };
       if (fired.changed) {
         state = fired.state;

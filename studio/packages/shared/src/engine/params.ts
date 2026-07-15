@@ -620,11 +620,17 @@ export function validateDoc(
 
   // Business `branch` edges: the union is settled here (spec #1 owns it, T3) so
   // #4 can build `if`/`switch` against a final schema — but no activity emits a
-  // branch outcome yet, so a saved branch edge would silently skip everything
-  // downstream. Refuse it at save time; PARSE stays permissive so a git import
-  // round-trips one unchanged. #4 A0/A1/A2 replaces this with the real rule
-  // ("branch edges must come from a node whose activity declares branches",
-  // which needs the ActivityDefinition contract).
+  // branch outcome yet, so a branch edge would silently skip everything
+  // downstream. Report it; PARSE stays permissive so a git import round-trips
+  // one unchanged.
+  //
+  // NB this is ADVISORY, not a gate: `validateDoc`'s only caller is the canvas
+  // (`web/.../canvasDoc.ts`), which renders the result as a badge and does NOT
+  // block Save, and the server never calls it at all (#444). The reducer's
+  // diagnostic is what actually makes an inert branch edge observable at run
+  // time. #4 A0/A1/A2 replaces this rule with the real one ("a branch edge's
+  // source must declare that branch"), which needs the ActivityDefinition
+  // contract.
   for (const e of doc.edges) {
     if (e.on !== 'branch') continue;
     errors.push(

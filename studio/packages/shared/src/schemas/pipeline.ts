@@ -102,6 +102,14 @@ const edgeBase = {
   to: z.string().min(1),
   /** Traversal-only back-edge (loop), enforced against `maxBounces`. */
   back: z.boolean().optional(),
+  /**
+   * Bounce cap for a `back` edge. `validateDoc` REQUIRES one on every back-edge.
+   * The engine also applies a hard ceiling (`DEFENSIVE_BOUNCE_CAP`, 10_000) and
+   * CLAMPS a larger declared value down to it — a skip-only loop body runs every
+   * bounce synchronously inside one `reduce()`, so an unbounded cap would block
+   * the driver's event loop. Declaring more than the ceiling is not an error
+   * (the doc stays savable) but is clamped, with a reducer diagnostic saying so.
+   */
   maxBounces: z.number().int().nonnegative().optional(),
 };
 
@@ -117,7 +125,9 @@ export type OperationalEdge = z.infer<typeof OperationalEdgeSchema>;
  *
  * The activities that EMIT a branch outcome (`if`/`switch`) are spec #4
  * A0/A1/A2; this schema is settled here (spec #1 owns the union) so they build
- * against a final shape. Until then `validateDoc` refuses one at save time.
+ * against a final shape. Until then a branch edge is INERT — it can never be
+ * satisfied, `validateDoc` reports it (advisory only — see #444), and the
+ * reducer emits a diagnostic rather than stranding the downstream silently.
  */
 export const BranchEdgeSchema = z.object({
   ...edgeBase,

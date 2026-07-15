@@ -332,15 +332,21 @@ describe('validateDoc — container boundary encapsulation', () => {
 });
 
 // ===========================================================================
-// Business `branch` edges — the save-time gate (#1 owns the union, T3)
+// Business `branch` edges — reported as inert (#1 owns the union, T3)
 // ===========================================================================
 
-describe('validateDoc — business branch edges are not authorable yet', () => {
+describe('validateDoc — business branch edges are reported as inert', () => {
   // The union is settled HERE so #4 A0/A1/A2 can build `if`/`switch` against a
   // final schema — but until an activity actually emits a branch outcome, a
   // branch edge can never be satisfied. Parse stays permissive (a git import
-  // must round-trip one); SAVE refuses it, naming the ticket that lifts this.
-  it('rejects a branch edge and names the ticket that lifts the gate', () => {
+  // must round-trip one); `validateDoc` reports it, naming the ticket that
+  // lifts it.
+  //
+  // ADVISORY, not a gate: the only caller is the canvas, which renders the
+  // result as a badge and still permits Save, and the server never validates
+  // (#444). The reducer's diagnostic (edge-model.test.ts) is the real run-time
+  // observability — which is why F1 put one there rather than trust this.
+  it('reports a branch edge and names the ticket that lifts it', () => {
     const d = doc(
       [node('if_1'), node('t')],
       [{ id: 'e1', from: 'if_1', to: 't', on: 'branch', branch: 'true' }],

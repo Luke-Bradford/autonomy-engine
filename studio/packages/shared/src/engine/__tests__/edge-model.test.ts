@@ -340,13 +340,33 @@ describe('a skip-only loop body cannot spin (bounce cap is a real ceiling)', () 
         { id: 'b->a:back', from: 'b', to: 'a', on: 'skipped', back: true, maxBounces: 100_000_000 },
       ],
     );
-    const started = Date.now();
-    const { finish, state } = runAll(eng);
+    const { finish, state, diagnostics } = runAll(eng);
     expect(finish?.outcome).toBe('failure');
     expect(finish?.reason).toBe('capped');
     // Clamped to the defensive ceiling (10_000) rather than honouring 100M.
+    // This bound IS the timing assertion: unclamped, this doc took 62s of
+    // synchronous CPU in a single reduce(). No wall-clock assert — it would
+    // flake on a loaded runner and prove nothing this doesn't.
     expect(state.bounces['b\x00a\x00skipped\x00']).toBeLessThanOrEqual(10_001);
-    expect(Date.now() - started).toBeLessThan(5_000);
+    // ...and the operator is TOLD their declared cap was overridden, rather
+    // than reading `capped` while their doc says 100_000_000.
+    expect(diagnostics.join('\n')).toMatch(/declared maxBounces 100000000 exceeds/);
+    expect(diagnostics.join('\n')).toMatch(/clamped/);
+  });
+
+  it('does NOT clamp-warn for a maxBounces within the ceiling', () => {
+    const eng = engine(
+      [node('x'), node('a'), node('b')],
+      [
+        edge('x', 'a', 'failure'),
+        edge('a', 'b', 'success'),
+        { id: 'b->a:back', from: 'b', to: 'a', on: 'skipped', back: true, maxBounces: 3 },
+      ],
+    );
+    const { finish, state, diagnostics } = runAll(eng);
+    expect(finish?.reason).toBe('capped'); // honoured the doc's own small cap
+    expect(state.bounces['b\x00a\x00skipped\x00']).toBe(4);
+    expect(diagnostics.join('\n')).not.toMatch(/clamped/);
   });
 });
 
@@ -360,7 +380,76 @@ describe('business branch edges are INERT until #4 A0/A1/A2', () => {
     const { state, diagnostics } = runAll(eng);
     expect(state.nodes.if_1!.status).toBe('success');
     expect(state.nodes.t!.status).toBe('skipped');
-    expect(diagnostics.join('\n')).toMatch(/branch/i);
+    // Match the EXPLANATION, not just the word "branch" — the edge id itself
+    // contains "branch", so /branch/i would pass on a diagnostic that merely
+    // echoed it back and told the operator nothing.
+    expect(diagnostics.join('\n')).toMatch(/can never be satisfied/);
+    expect(diagnostics.join('\n')).toMatch(/A0|A1|A2|if\/switch/);
+  });
+
+  // The container skip path is a SEPARATE call site (`settle`'s container loop,
+  // not `tryDispatchNode`), so it needs its own coverage — a branch edge into a
+  // stage must explain itself the same way.
+  it('a branch edge into a CONTAINER explains itself too', () => {
+    const eng = createEngine({
+      nodes: [node('if_1'), node('child')],
+      edges: [branchEdge('if_1', 'stg', 'true')],
+      containers: [{ id: 'stg', kind: 'stage', children: ['child'] }],
+    });
+    const { state, diagnostics } = runAll(eng);
+    expect(state.containers.stg!.status).toBe('skipped');
+    expect(diagnostics.join('\n')).toMatch(/'stg'/);
+    expect(diagnostics.join('\n')).toMatch(/can never be satisfied/);
+  });
+});
+
+describe('containers — skipped + JOIN inside a stage', () => {
+  // D5 names "skipped child inside a stage" as a REQUIRED characterization
+  // case, and it is the only one that exercises the separate container walk
+  // (`stepContainers`/`firstUnhandledChildFailure`) rather than the top-level
+  // one — so both the skip routing and F14's grouping need pinning here.
+  it('a skipped child does not fail its stage, and the stage succeeds', () => {
+    const eng = createEngine({
+      nodes: [node('a'), node('b')],
+      // a succeeds → a->b(failure) is unsatisfied-terminal → b skipped.
+      edges: [{ id: 'a->b:failure', from: 'a', to: 'b', on: 'failure' }],
+      containers: [{ id: 'stg', kind: 'stage', children: ['a', 'b'] }],
+    });
+    const { state, finish } = runAll(eng);
+    expect(state.nodes.b!.status).toBe('skipped');
+    expect(state.containers.stg!.status).toBe('success');
+    expect(finish?.outcome).toBe('success');
+  });
+
+  it('an on:skipped edge routes BETWEEN children of a stage', () => {
+    const eng = createEngine({
+      nodes: [node('a'), node('b'), node('h')],
+      edges: [
+        { id: 'a->b:failure', from: 'a', to: 'b', on: 'failure' }, // a succeeds → b skipped
+        { id: 'b->h:skipped', from: 'b', to: 'h', on: 'skipped' }, // caught inside the stage
+      ],
+      containers: [{ id: 'stg', kind: 'stage', children: ['a', 'b', 'h'] }],
+    });
+    const { state } = runAll(eng);
+    expect(state.nodes.b!.status).toBe('skipped');
+    expect(state.nodes.h!.status).toBe('success');
+    expect(state.containers.stg!.status).toBe('success');
+  });
+
+  it('F14 grouping applies to CHILD readiness too — OR within one predecessor', () => {
+    // Same shape as the top-level OR test, but entirely inside a stage: `d`
+    // resolves via childIncoming, a different call path.
+    const eng = createEngine({
+      nodes: [node('a'), node('d')],
+      edges: [
+        { id: 'a->d:success', from: 'a', to: 'd', on: 'success' },
+        { id: 'a->d:skipped', from: 'a', to: 'd', on: 'skipped' },
+      ],
+      containers: [{ id: 'stg', kind: 'stage', children: ['a', 'd'] }],
+    });
+    const { state } = runAll(eng);
+    expect(state.nodes.d!.status).toBe('success'); // edge-wise AND would skip it
+    expect(state.containers.stg!.status).toBe('success');
   });
 });
 
@@ -396,13 +485,16 @@ describe('pipeline success semantics — CHARACTERIZATION (D5; reconcile = F1b)'
     expect(finish?.outcome).toBe('success');
   });
 
-  it('MATCHES ADF: a root skipped by impossible incoming edges → success', () => {
+  it('MATCHES ADF: a node skipped by an impossible incoming edge → success', () => {
+    // Assert on `a` — the node whose OWN incoming edge became impossible (x
+    // succeeded, so x--failure-->a can never fire). `b` is skipped by
+    // propagation, which is a different property (pinned separately above).
     const eng = engine(
       [node('x'), node('a'), node('b')],
       [edge('x', 'a', 'failure'), edge('a', 'b', 'success')],
     );
     const { state, finish } = runAll(eng);
-    expect(state.nodes.b!.status).toBe('skipped');
+    expect(state.nodes.a!.status).toBe('skipped');
     expect(finish?.outcome).toBe('success');
   });
 
