@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PipelineVersionSchema, type PipelineVersion } from '@autonomy-studio/shared';
+import { EdgeSchema, PipelineVersionSchema, type PipelineVersion } from '@autonomy-studio/shared';
 import { createCanvasStore } from './canvasStore';
 
 function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
@@ -141,12 +141,59 @@ describe('canvasStore', () => {
     expect(s.getState().selected).toBeNull();
   });
 
-  it('updateEdgeOn changes the branch of the targeted edge', () => {
+  it('updateEdgeOn changes the `on` outcome of the targeted edge', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(version());
     s.getState().updateEdgeOn('e_1', 'completion');
     expect(s.getState().edges[0]!.on).toBe('completion');
     expect(s.getState().dirty).toBe(true);
+  });
+
+  // Retyping a BUSINESS branch edge to an operational outcome must drop the
+  // `branch` routing key. A naive `{...e, on}` strands it on an edge that no
+  // longer routes by it — a doc that then fails `EdgeSchema` (the union has no
+  // operational member carrying `branch`). Reachable via a git-imported doc:
+  // the canvas can't author a branch edge, but it can load and retype one.
+  it('updateEdgeOn drops the business `branch` key when retyping a branch edge', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        edges: [{ id: 'e_1', from: 'n_a', to: 'n_b', on: 'branch', branch: 'true' }],
+      }),
+    );
+    s.getState().updateEdgeOn('e_1', 'success');
+
+    const edge = s.getState().edges[0]!;
+    expect(edge.on).toBe('success');
+    expect(edge).not.toHaveProperty('branch');
+    // The retyped edge must still be a VALID member of the union.
+    expect(() => EdgeSchema.parse(edge)).not.toThrow();
+  });
+
+  // The same retype must preserve the shared `edgeBase` fields — dropping
+  // `branch` must not drop the back-edge cap along with it.
+  it('updateEdgeOn preserves back/maxBounces when retyping a branch back-edge', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        edges: [
+          {
+            id: 'e_1',
+            from: 'n_b',
+            to: 'n_a',
+            on: 'branch',
+            branch: 'retry',
+            back: true,
+            maxBounces: 3,
+          },
+        ],
+      }),
+    );
+    s.getState().updateEdgeOn('e_1', 'failure');
+
+    const edge = s.getState().edges[0]!;
+    expect(edge).toMatchObject({ on: 'failure', back: true, maxBounces: 3 });
+    expect(edge).not.toHaveProperty('branch');
   });
 
   it('updateNodeConfig replaces the config of the targeted node', () => {
