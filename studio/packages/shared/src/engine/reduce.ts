@@ -72,10 +72,20 @@ const TERMINAL_NODE = new Set<NodeRunState['status']>(['success', 'failure', 'sk
 const LIVE_NODE = new Set<NodeRunState['status']>(['ready', 'dispatched']);
 
 /**
- * A defensive hard cap on back-edge traversals used ONLY when a back-edge has no
- * `maxBounces` (which `validateDoc` requires — this bounds any doc that bypassed
- * validation, e.g. constructed directly via `createEngine`, so a no-progress
- * body can never spin forever). A validated doc always hits its own smaller cap.
+ * A defensive hard CEILING on back-edge traversals — both the fallback when a
+ * back-edge declares no `maxBounces` (which `validateDoc` requires, so this
+ * bounds a doc that bypassed validation) and an upper clamp on a declared one.
+ *
+ * The clamp is load-bearing, not belt-and-braces. Bounces normally cost a round
+ * of real I/O: firing a back-edge resets its body to `pending`, the body then
+ * DISPATCHES (non-terminal), and the whole-body-terminal gate blocks a refire
+ * until the driver's events land — so the driver paces the loop. A body reached
+ * only by `skipped` edges never dispatches (reset → skipped → terminal →
+ * refire), so every bounce runs synchronously inside ONE `reduce()` with no I/O
+ * between them. `maxBounces` has no schema upper bound, so an unclamped
+ * `maxBounces: 100_000_000` burns ~60s of CPU in a single call and blocks the
+ * in-process driver's event loop. Clamping here (rather than rejecting the doc
+ * at save time) keeps it fail-safe: no previously-valid doc becomes unsavable.
  */
 const DEFENSIVE_BOUNCE_CAP = 10_000;
 
@@ -363,9 +373,12 @@ export function createEngine(doc: EngineDoc): Engine {
    */
   function noteInertBranch(id: string, incoming: Edge[], diagnostics: string[]): void {
     if (!incoming.some((e) => e.on === 'branch')) return;
+    // Deliberately worded as a contributing cause, not THE cause: the entity may
+    // also have a genuinely dead operational predecessor, and claiming the branch
+    // edge is why would send an operator down the wrong path.
     diagnostics.push(
-      `'${id}' skipped: an incoming 'branch' edge can never be satisfied — no activity emits a ` +
-        `branch outcome yet (#4 A0/A1/A2 implement if/switch against this schema)`,
+      `'${id}' was skipped and has an incoming 'branch' edge, which can never be satisfied — no ` +
+        `activity emits a branch outcome yet (#4 A0/A1/A2 implement if/switch against this schema)`,
     );
   }
 
@@ -472,9 +485,10 @@ export function createEngine(doc: EngineDoc): Engine {
       // traversal that exceeds the cap (so `bounces` reflects the true count).
       const count = (state.bounces[key] ?? 0) + 1;
       const withBounce: RunState = { ...state, bounces: { ...state.bounces, [key]: count } };
-      // maxBounces is REQUIRED by validateDoc; the defensive fallback bounds any
-      // unvalidated doc so a no-progress body can never spin forever.
-      const cap = be.maxBounces ?? DEFENSIVE_BOUNCE_CAP;
+      // maxBounces is REQUIRED by validateDoc; the defensive cap both bounds an
+      // unvalidated doc AND clamps a declared one, so no body can spin longer
+      // than the ceiling inside a single reduce (see DEFENSIVE_BOUNCE_CAP).
+      const cap = Math.min(be.maxBounces ?? DEFENSIVE_BOUNCE_CAP, DEFENSIVE_BOUNCE_CAP);
       if (count > cap) {
         return {
           state: withBounce,

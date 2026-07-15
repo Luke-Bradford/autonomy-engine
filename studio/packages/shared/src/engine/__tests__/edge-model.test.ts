@@ -286,6 +286,29 @@ describe('JOIN semantics (F14 / T7)', () => {
   // characterized as a divergence in the D5 block below (the run short-circuits
   // before the skip can reach the handler); F1b owns the decision.
 
+  // The ONE shape whose outcome F14 changes for docs that already exist: a
+  // predecessor with 2+ edges to the SAME target under join:'all'. The canvas
+  // can author it today (`connect` dedupes only on exact (from,to,on)).
+  //
+  // Old rule (edge-wise AND): `a` fails → the success arm is dead → `d` skipped.
+  // New rule: `a`'s group has a satisfied arm (completion) → `d` runs. The new
+  // behaviour is the intended ADF one, and this pins it deliberately.
+  //
+  // CONSEQUENCE (see the PR + the filed reconcile ticket): folding an OLD log
+  // for this shape now yields a different state, so a run that already recorded
+  // `run.finished{success}` projects as still-running on replay. Runs are
+  // event-sourced, so any reducer change has this property — F1b and D4's retry
+  // change will hit it too; the authority rule belongs in the reconciler.
+  it('F14 changes this shape deliberately — completion arm rescues a failed predecessor', () => {
+    const eng = engine(
+      [node('a'), node('d')],
+      [edge('a', 'd', 'success'), edge('a', 'd', 'completion')],
+    );
+    const { state, finish } = runAll(eng, { a: 'failure' });
+    expect(state.nodes.d!.status).toBe('success'); // old rule: 'skipped'
+    expect(finish?.outcome).toBe('success'); // a's failure is handled by the completion edge
+  });
+
   it('join:any is unchanged — one satisfied arm is enough', () => {
     const eng = engine(
       [node('a'), node('b'), node('d', { join: 'any' }), node('catch')],
@@ -293,6 +316,37 @@ describe('JOIN semantics (F14 / T7)', () => {
     );
     const { state } = runAll(eng, { b: 'failure' });
     expect(state.nodes.d!.status).toBe('success');
+  });
+});
+
+describe('a skip-only loop body cannot spin (bounce cap is a real ceiling)', () => {
+  // Newly reachable via F1. An OPERATIONAL back-edge can't spin inside one
+  // reduce: firing it resets the body to `pending`, the body then DISPATCHES
+  // (status `ready`, non-terminal), so the whole-body-terminal gate blocks a
+  // refire until real events land — the driver's I/O paces the loop. A body
+  // reached only by `skipped` edges never dispatches: reset → skipped →
+  // terminal → refire, with NO I/O in between. So every bounce runs
+  // synchronously inside a single `reduce()`, and `maxBounces` has no upper
+  // bound in the schema — `maxBounces: 100_000_000` would burn minutes of CPU
+  // in one call, blocking the in-process driver's event loop.
+  it('caps a skip-only back-edge at the defensive ceiling, not at a huge maxBounces', () => {
+    const eng = engine(
+      [node('x'), node('a'), node('b')],
+      [
+        edge('x', 'a', 'failure'), // x succeeds → a skipped
+        edge('a', 'b', 'success'), // a skipped → b skipped too
+        // b is skipped, so this back-edge is satisfied; its body {a,b} is all
+        // terminal, so it resets → both skip again → it fires again, forever.
+        { id: 'b->a:back', from: 'b', to: 'a', on: 'skipped', back: true, maxBounces: 100_000_000 },
+      ],
+    );
+    const started = Date.now();
+    const { finish, state } = runAll(eng);
+    expect(finish?.outcome).toBe('failure');
+    expect(finish?.reason).toBe('capped');
+    // Clamped to the defensive ceiling (10_000) rather than honouring 100M.
+    expect(state.bounces['b\x00a\x00skipped\x00']).toBeLessThanOrEqual(10_001);
+    expect(Date.now() - started).toBeLessThan(5_000);
   });
 });
 
