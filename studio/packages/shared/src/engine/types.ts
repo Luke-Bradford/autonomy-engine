@@ -174,6 +174,70 @@ export const RunOutcomeSchema = z.enum(['success', 'failure']);
 export type RunOutcome = z.infer<typeof RunOutcomeSchema>;
 
 /**
+ * #1 F0 — the engine's structured failure taxonomy: the RETRY-DECISION axis, and
+ * the ONLY thing retry/routing may key off (never `error` TEXT).
+ *
+ * Deliberately 3-valued, and NOT the same set as the connector adapters'
+ * richer 5-kind `ConnectorErrorKind` (`auth`/`rate_limit`/`transient`/
+ * `permanent`/`cancelled`). Those are PROVIDER-facing; these are the reducer's
+ * decision. The adapter set maps DOWN onto this at the executor seam
+ * (`connectors/error-kind.ts`) with the dropped detail preserved losslessly in
+ * `code` — e.g. `auth` → `{kind:'permanent', code:'auth'}`, `rate_limit` →
+ * `{kind:'transient', code:'rate_limit'}`. Spec #2's error taxonomy fixes that
+ * mapping (429 → transient, 401/403 → permanent, abort → cancelled).
+ *
+ * Keeping the engine set at 3 is what stops the reducer from having to answer a
+ * policy question ("is `auth` retryable?") that F2a/F9a own.
+ */
+export const FailureKindSchema = z.enum(['transient', 'permanent', 'cancelled']);
+export type FailureKind = z.infer<typeof FailureKindSchema>;
+
+/**
+ * The `node.failed.code` values the ENGINE itself mints or keys off — one source
+ * of truth, so no producer hand-spells a durable identifier.
+ *
+ * `code` stays an OPEN `z.string()` in the schema on purpose: it is a durable
+ * event field, so an enum would be a back-compat trap (an old event carrying a
+ * retired code must still parse, and an activity may mint its own provider
+ * code). These are just the ones we own.
+ */
+export const FAILURE_CODES = {
+  /** Provider throttled the call (connector `rate_limit`) — a backoff candidate. */
+  RATE_LIMIT: 'rate_limit',
+  /** Bad/expired credentials (connector `auth`) — permanent until reconfigured. */
+  AUTH: 'auth',
+  /**
+   * RESERVED for #1 D4/F3: the POLICY timeout the driver terminalizes as
+   * `node.failed{kind:'transient', code:'timeout'}`. Declared here so F3 cannot
+   * mint a rival spelling. NOT an adapter's own internal timeout — that arrives
+   * as a plain connector `transient`.
+   */
+  TIMEOUT: 'timeout',
+  /** The adapter's stream ended with no terminal event (contract violation). */
+  ADAPTER_NO_TERMINAL: 'adapter_no_terminal',
+  /** The adapter threw instead of yielding a terminal `failed` (a bug). */
+  ADAPTER_THREW: 'adapter_threw',
+  /** The run's doc has no node with the dispatched id. */
+  NODE_NOT_FOUND: 'node_not_found',
+  /** The node's activity type is absent from the catalog. */
+  UNKNOWN_ACTIVITY: 'unknown_activity',
+  /** The activity needs a runner the executor does not have. */
+  NO_EXECUTOR: 'no_executor',
+  /** The activity requires a connection but the node names none. */
+  CONNECTION_MISSING: 'connection_missing',
+  /** The node's `connectionId` resolves to no row. */
+  CONNECTION_NOT_FOUND: 'connection_not_found',
+  /** The bound connection's kind is not one the activity accepts. */
+  CONNECTION_KIND_INVALID: 'connection_kind_invalid',
+  /** No adapter is registered for the bound connection's kind. */
+  NO_ADAPTER: 'no_adapter',
+  /** The connection's `secretRef` resolves to no row. */
+  SECRET_NOT_FOUND: 'secret_not_found',
+  /** The connection's secret exists but could not be decrypted. */
+  SECRET_UNDECRYPTABLE: 'secret_undecryptable',
+} as const;
+
+/**
  * The durable facts the driver/reconciler append to `run_events`; folding them
  * through `reduce` is the ONLY way state changes. Every attempt-bearing event
  * carries its `attemptId` for stale-rejection. `run.resumed` /
@@ -211,7 +275,18 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     runId: z.string(),
     nodeId: z.string(),
     attemptId: z.string(),
+    /** Human-readable detail. NEVER parsed for control flow — that is `kind`. */
     error: z.string(),
+    /**
+     * #1 F0 — the machine-readable failure class. `.default('permanent')` is
+     * the parse boundary for events stored BEFORE this field existed: safe,
+     * because `permanent` never retries. Note `EngineEvent` is the z.infer
+     * OUTPUT type, so the default does NOT let a new producer omit `kind` —
+     * every construction site must state it, which is the point.
+     */
+    kind: FailureKindSchema.default('permanent'),
+    /** Optional machine detail (see `FAILURE_CODES`); an open vocabulary. */
+    code: z.string().optional(),
   }),
   z.object({
     // A spawned `call_pipeline` child returned. `childOutcome` may be `failure`

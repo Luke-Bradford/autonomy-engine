@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Edge, EngineCommand, EngineEvent, Node } from '../types.js';
+import type { Edge, EngineCommand, EngineEvent, FailureKind, Node } from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
 
 // --- helpers ---------------------------------------------------------------
@@ -34,8 +34,19 @@ function succeeded(
 ): EngineEvent {
   return { type: 'node.succeeded', runId: RUN, nodeId, attemptId, outputs };
 }
-function failed(nodeId: string, attemptId: string, error = 'boom'): EngineEvent {
-  return { type: 'node.failed', runId: RUN, nodeId, attemptId, error };
+/**
+ * `kind` (#1 F0) defaults to `permanent` — the same value the parse boundary
+ * gives a pre-F0 event, so these cases keep asserting exactly what they did
+ * before the field existed. The reducer does not read `kind` yet (F2b does);
+ * the scope-lock test below pins that.
+ */
+function failed(
+  nodeId: string,
+  attemptId: string,
+  error = 'boom',
+  kind: FailureKind = 'permanent',
+): EngineEvent {
+  return { type: 'node.failed', runId: RUN, nodeId, attemptId, error, kind };
 }
 function attempt(nodeId: string, n = 0): string {
   return `${nodeId}#${n}`;
@@ -756,5 +767,42 @@ describe('minor hardening', () => {
     const r = eng.reduce(s, failed('a', attempt('a')));
     expect(r.state.nodes.a!.status).toBe('success'); // stays terminal/safe
     expect(r.diagnostics.join(' ')).toContain('contradiction');
+  });
+});
+
+describe('#1 F0 — failure kind is CARRIED, not yet acted on (scope lock)', () => {
+  // F0 introduces the field ONLY. The retry-eligibility decision that keys off
+  // `kind:'transient'` belongs to F2b, and cannot land before F2a's `Node.policy`
+  // schema and #5 S1's durable alarm exist — a reducer that "helpfully" retried
+  // here would emit a command nothing can serve, and would need wall-clock to
+  // schedule it (breaking reducer purity). These tests fail the moment retry is
+  // added without its prerequisites.
+  for (const kind of ['transient', 'permanent', 'cancelled'] as const) {
+    it(`settles a '${kind}' failure to terminal 'failure' with no retry command`, () => {
+      const eng = engine([node('a')]);
+      let s = eng.reduce(eng.seedState(), started()).state;
+      s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+
+      const r = eng.reduce(s, failed('a', attempt('a'), 'boom', kind));
+
+      expect(r.state.nodes.a!.status).toBe('failure');
+      expect(r.state.nodes.a!.attempts).toBe(1);
+      // No dispatch command → the node is NOT re-attempted, whatever the kind.
+      expect(r.commands.filter((c) => c.type === 'dispatchNode')).toEqual([]);
+    });
+  }
+
+  it('a transient failure finishes the run as failure — identical to a permanent one (today)', () => {
+    const run = (kind: FailureKind): EngineCommand[] => {
+      const eng = engine([node('a')]);
+      let s = eng.reduce(eng.seedState(), started()).state;
+      s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+      return eng.reduce(s, failed('a', attempt('a'), 'boom', kind)).commands;
+    };
+
+    expect(run('transient')).toEqual(run('permanent'));
+    expect(run('transient')).toContainEqual(
+      expect.objectContaining({ type: 'finishRun', outcome: 'failure' }),
+    );
   });
 });
