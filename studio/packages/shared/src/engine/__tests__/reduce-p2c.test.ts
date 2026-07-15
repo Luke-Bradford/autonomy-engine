@@ -469,13 +469,24 @@ describe('containers — loop exitWhen interpolation mode (E2)', () => {
     expect(state.containers.lp!.reason).toBe('exitWhen_error');
   });
 
-  it('a string-typed "true" output still exits (the E6 coercion is deliberately kept)', () => {
-    // A `string`-typed output carrying "true" is common from an LLM/CLI activity.
-    // Removing this coercion is #6 E6's job — it lands with the static
-    // boolean-condition check that would warn the author at save time.
+  // #6 E6 — the RUN-TIME half of the boolean-condition rule. Was: a string-typed
+  // "true" exited the loop via an `out === 'true'` coercion. E6 removes it, per
+  // the promise the shipped code carried ("#6 E6 removes this line in the same
+  // ticket that adds the static boolean-condition check").
+  //
+  // The save-time half alone cannot close this: `validateDoc` is ADVISORY (its
+  // only caller is the canvas badge; the server never calls it — #444), so a git
+  // import or a direct POST reaches the reducer unchecked. Same both-halves rule
+  // E2 set for the MODE check, for the same reason.
+  it('a string-typed "true" output FAILS LOUDLY — the E6 coercion is removed', () => {
+    // BREAKING, deliberate. A `string`-typed output carrying "true" is common
+    // from an LLM/CLI activity, and the coercion made it silently work — so the
+    // author never learned their `exitWhen` was not a boolean, and the identical
+    // node emitting "yes" (or " true") burned every round and reported the
+    // misleading `capped`. The authored fix is explicit: `${equals(x, 'true')}`.
     const eng = engine(
       [node('check', { outputs: [{ name: 'done', type: 'string' }] }), node('final')],
-      [edge('lp', 'final', 'success')],
+      [edge('lp', 'final', 'completion')],
       [loop('lp', ['check'], '${nodes.check.output.done}', 5)],
     );
     const { state } = drive(
@@ -483,7 +494,26 @@ describe('containers — loop exitWhen interpolation mode (E2)', () => {
       {},
       { outcomeFor: () => ({ outcome: 'success', outputs: { done: 'true' } }) },
     );
+    expect(state.containers.lp!.status).toBe('failure');
+    expect(state.containers.lp!.reason).toBe('exitWhen_error');
+    expect(state.containers.lp!.round).toBe(0); // failed immediately, burned no rounds
+  });
+
+  it('the explicit `equals` form is how a string-typed output exits', () => {
+    // The migration path for the test above — and what E6's save-time check
+    // steers the author to before the run ever happens.
+    const eng = engine(
+      [node('check', { outputs: [{ name: 'done', type: 'string' }] }), node('final')],
+      [edge('lp', 'final', 'success')],
+      [loop('lp', ['check'], "${equals(nodes.check.output.done, 'true')}", 5)],
+    );
+    const { state } = drive(
+      eng,
+      {},
+      { outcomeFor: () => ({ outcome: 'success', outputs: { done: 'true' } }) },
+    );
     expect(state.containers.lp!.status).toBe('success');
+    expect(state.containers.lp!.round).toBe(0);
   });
 });
 

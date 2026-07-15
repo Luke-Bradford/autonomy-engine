@@ -368,6 +368,21 @@ describe('typed-output validation', () => {
     expect(r.state.nodes.a!.status).toBe('success');
     expect(r.state.outputs.a).toEqual({ count: 7 });
   });
+
+  // #6 E6 — `number` means FINITE here too. `matchesType` used to accept any
+  // `!isNaN` value, so a declared-`number` output could hold `Infinity` while
+  // the fn-signature check (`matchesSig`) rejects exactly that — two definitions
+  // of one word in one engine. E6 types `${nodes.a.output.count}` as `number`
+  // from this very declaration, so the looser one had to go.
+  it('a NON-FINITE number output FAILS the node (number means finite)', () => {
+    const eng = engine([node('a', { outputs: [{ name: 'count', type: 'number' }] })]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const r = eng.reduce(s, succeeded('a', attempt('a'), { count: Number.POSITIVE_INFINITY }));
+    expect(r.state.nodes.a!.status).toBe('failure');
+    expect(r.state.outputs.a).toBeUndefined();
+    expect(r.diagnostics.join(' ')).toContain('invalid outputs');
+  });
 });
 
 // ===========================================================================

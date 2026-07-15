@@ -7,16 +7,20 @@ import type {
   SubstitutionContext,
 } from './types.js';
 import { ParamResolveError, SubstituteError, TERMINAL_NODE } from './types.js';
-import { declaredOutputNames } from './outputs.js';
+import type { DeclaredOutput } from './outputs.js';
+import { declaredOutputs } from './outputs.js';
 import type { Expr, TemplateMode } from './expr.js';
 import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
-import type { EvalIn, FnSpec } from './functions.js';
+import type { EvalIn, FnSpec, SigType } from './functions.js';
 import {
   FUNCTIONS,
   MAX_ARRAY_ELEMENTS_TOTAL,
+  argSigAt,
   arity,
+  assignableTo,
   checkArgTypes,
   listFunctions,
+  sigOfDeclared,
   toStr,
 } from './functions.js';
 
@@ -572,11 +576,21 @@ function coerce(name: string, type: Param['type'], value: unknown): unknown {
       // this currently happens to match: that governs what an author may write
       // inside `${}`, this governs what an inbound param VALUE may be coerced
       // from. The two are free to diverge — don't merge them into one constant.
-      if (typeof value === 'number' && !Number.isNaN(value)) return value;
+      //
+      // FINITE, not merely `!isNaN` (#6 E6): `number` means finite everywhere
+      // else in this engine (`matchesSig` has always enforced it on every fn
+      // arg), and E6 types `${params.n}` from this very declaration. Accepting
+      // `Infinity` here seeded a declared-`number` param that then FAILED its own
+      // arg check at run — and it is reachable over HTTP, because `1e400` is
+      // valid JSON and `JSON.parse` yields `Infinity`.
+      if (typeof value === 'number' && Number.isFinite(value)) return value;
       if (typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value.trim())) {
-        return Number(value.trim());
+        // The regex has no exponent, but 310 digits overflow anyway — so the
+        // finite check belongs on the RESULT, not on the shape of the input.
+        const n = Number(value.trim());
+        if (Number.isFinite(n)) return n;
       }
-      throw new ParamResolveError(`param '${name}': expected number`);
+      throw new ParamResolveError(`param '${name}': expected a finite number`);
     }
     case 'boolean': {
       if (typeof value === 'boolean') return value;
@@ -615,11 +629,11 @@ export function validateRefs(
 
   const graph = computeGraph(doc);
 
-  // Each producer's declared output names (req c), computed once. The SSOT is
-  // the same `config.outputs` the reducer stores/validates against, so a name
-  // static validation accepts is exactly one the run would keep at `succeeded`.
-  const outputsById = new Map<string, Set<string> | null>();
-  for (const node of doc.nodes) outputsById.set(node.id, declaredOutputNames(node));
+  // Each producer's declared outputs (req c + E6 typing), computed once. The
+  // SSOT is the same `config.outputs` the reducer stores/validates against, so a
+  // name static validation accepts is exactly one the run would keep at
+  // `succeeded`, and the TYPE it infers is the one the reducer enforces there.
+  const outputsById = outputsByIdOf(doc.nodes);
 
   for (const node of doc.nodes) {
     const guaranteed = graph.guaranteed.get(node.id) ?? new Set<string>();
@@ -675,6 +689,7 @@ export function validateDoc(
   const containers = doc.containers ?? [];
   const declared = new Map<string, Param>();
   for (const p of doc.params) declared.set(p.name, p);
+  const outputsById = outputsByIdOf(doc.nodes);
 
   // GLOBAL id uniqueness: node ids and container ids share ONE namespace (the
   // projection keys `state.nodes` / `state.outputs` / `endpointOutcome` by id),
@@ -727,7 +742,7 @@ export function validateDoc(
     if (c.kind === 'stage' && c.exitWhen !== undefined) {
       errors.push(`container '${c.id}': exitWhen is only meaningful on a loop, not a stage`);
     }
-    if (c.exitWhen !== undefined) validateExitWhen(c, declared, errors);
+    if (c.exitWhen !== undefined) validateExitWhen(c, declared, outputsById, errors);
   }
 
   // A child's FORWARD edges must stay WITHIN its container: a cross-boundary
@@ -811,11 +826,26 @@ export function validateDoc(
 }
 
 /** Validate a container's `exitWhen` `${}` refs point only at its OWN children. */
-function validateExitWhen(c: Container, declared: Map<string, Param>, errors: string[]): void {
+function validateExitWhen(
+  c: Container,
+  declared: Map<string, Param>,
+  outputsById: Map<string, DeclaredOutput[] | null>,
+  errors: string[],
+): void {
   if (c.exitWhen === undefined) return;
   const where = `container.${c.id}.exitWhen`;
   const scope: ScanScope = {
     declared,
+    // E6 needs the child producers' declared output types to type the exitWhen
+    // expression — without them `${nodes.check.output.done}` is `any` and the
+    // boolean check never fires on the shape every real loop uses.
+    //
+    // A deliberate CONSEQUENCE: the undeclared-output-NAME refusal that
+    // `validateRefs` applies doc-wide now applies inside `exitWhen` too, where
+    // the absent map previously disabled it. That gap was never intentional —
+    // the rule (a name the producer does not declare can only throw at run) is
+    // no less true here.
+    outputsById,
     guaranteed: new Set(c.children), // a child's output is in-scope for exit
     // Every child is SETTLED here by construction: the reducer only evaluates
     // `exitWhen` once every child is terminal (`stepContainers`), so unlike the
@@ -824,12 +854,10 @@ function validateExitWhen(c: Container, declared: Map<string, Param>, errors: st
     //
     // AVAILABILITY only. It does NOT make a bare `${nodes.check.status}` a usable
     // exitWhen: the field needs a BOOLEAN, and a status resolves to the string
-    // `'success'`, which `evalExitWhen` reads as not-true — the loop would burn
-    // every round and report the misleading `capped`. The usable form is
-    // `${equals(nodes.check.status, 'success')}`, which needs `equals` (E4); the
-    // string-where-boolean-expected rejection is E6's type check, per E2's split
-    // (E2 owns the MODE check, E6 the TYPE check). Refusing availability here
-    // instead would misattribute a type defect to a scope rule.
+    // `'success'`. The usable form is `${equals(nodes.check.status, 'success')}`.
+    // That refusal is the TYPE check at the foot of this function (#6 E6), per
+    // E2's split (E2 owns the MODE check, E6 the TYPE check) — refusing
+    // availability HERE instead would misattribute a type defect to a scope rule.
     settled: new Set(c.children),
     reachable: new Set<string>(),
     soft: new Set<string>(),
@@ -862,6 +890,27 @@ function validateExitWhen(c: Container, declared: Map<string, Param>, errors: st
     errors.push(
       `${where}: exitWhen must reference child outputs, not the constant ` +
         `\${${whole.body.trim()}}`,
+    );
+    return; // a constant is one defect; don't also report its type
+  }
+
+  // THE FIELD TYPE (#6 E6). `exitWhen` needs a BOOLEAN, and this is the check
+  // E2 deferred here when it split the rule: E2 owns the MODE (is it a
+  // whole-value `${expr}`?), E6 owns the TYPE (does that expr yield a boolean?).
+  //
+  // The case this exists for: a bare `${nodes.check.status}` resolves to the
+  // string 'success', which is never boolean-true, so the loop burned every
+  // round and reported the misleading `capped`. The usable form is
+  // `${equals(nodes.check.status, 'success')}`.
+  //
+  // Advisory, like everything in `validateDoc` (#444) — `evalExitWhen` throws on
+  // the same defect at RUN time, which is what actually binds. Both halves or
+  // the rule is decorative.
+  const type = inferExprType(parsed, scope);
+  if (!assignableTo(type, 'boolean')) {
+    errors.push(
+      `${where}: exitWhen must be a boolean expression, got ${type} — ` +
+        `wrap it in a comparison (e.g. \${equals(${whole.body.trim()}, 'success')})`,
     );
   }
 }
@@ -1035,13 +1084,16 @@ interface ScanScope {
   /** Back-edge-visible sibling node ids — readable only inside `default()`. */
   soft: Set<string>;
   /**
-   * Producer node id → its DECLARED output names (from `config.outputs`), or
-   * `null` when it declares no contract. A `${nodes.X.output.NAME}` whose NAME
-   * is absent from a non-`null` set can only fail at run time, so it is rejected
+   * Producer node id → its DECLARED outputs (from `config.outputs`), or `null`
+   * when it declares no contract. A `${nodes.X.output.NAME}` whose NAME is
+   * absent from a non-`null` list can only fail at run time, so it is rejected
    * (req c). Absent from the map (or `undefined`) → no name-check for that id.
-   * Populated by `validateRefs`; omitted elsewhere (e.g. `validateExitWhen`).
+   *
+   * Carries the full `{name, type}` — ONE map serving both the name-check and
+   * E6's type inference, per `outputs.ts`'s SSOT rule. A second, type-only map
+   * could drift from this one about which outputs a node declares.
    */
-  outputsById?: Map<string, Set<string> | null>;
+  outputsById?: Map<string, DeclaredOutput[] | null>;
 }
 
 function scan(where: string, value: unknown, scope: ScanScope, errors: string[]): void {
@@ -1088,6 +1140,85 @@ function parseExprSafe(body: string, where: string, errors: string[]): Expr {
 }
 
 /**
+ * Every node's declared outputs, keyed by id — the shape `ScanScope.outputsById`
+ * wants. One helper so `validateRefs` and `validateExitWhen` build it the same
+ * way and cannot disagree about a node's contract.
+ */
+function outputsByIdOf(nodes: readonly Node[]): Map<string, DeclaredOutput[] | null> {
+  const m = new Map<string, DeclaredOutput[] | null>();
+  for (const node of nodes) m.set(node.id, declaredOutputs(node));
+  return m;
+}
+
+/**
+ * Infer an expression's RESULT type (#6 E6). `any` means "not statically known"
+ * — `assignableTo` accepts it in both directions, so an `any` never causes a
+ * refusal. That is the safe default here: there is no cast function, so a
+ * false-REJECT has no author workaround.
+ *
+ * The rule for a ref the surrounding `checkExprStatic` ALREADY errored on is
+ * `any` — one defect, one error. Inference never adds a second, type-flavoured
+ * report for a ref that is simply unresolvable.
+ *
+ * `itemInScope` is not a parameter: an `${item}` path infers `any` wherever it
+ * appears (E4 decided the element shape is run-time-only — `SigType` has no
+ * element type), and its SCOPE is `checkExprStatic`'s to police.
+ */
+function inferExprType(expr: Expr, scope: ScanScope): SigType {
+  if (expr.kind === 'str') return 'string';
+  if (expr.kind === 'num') return 'number';
+  if (expr.kind === 'bool') return 'boolean';
+  if (expr.kind === 'call') {
+    // An unknown fn is already reported; `any` keeps it to that one error.
+    return FUNCTIONS[expr.name]?.ret ?? 'any';
+  }
+
+  // A reference. `fieldPath` is the SSOT for segmentation — never split
+  // `source`. `null` means the ref carries an `[]` index: E7's refusal, already
+  // reported. Return `any` WITHOUT walking the index's own sub-expression —
+  // `checkExprStatic` returns early there too, and the two must agree or E7 is
+  // half-unblocked by the back door (its note about recursing into `index.expr`
+  // applies here identically when it lands).
+  const parts = fieldPath(expr);
+  if (parts === null) return 'any';
+
+  if (parts[0] === 'item') return 'any'; // element shape is run-time-only (E4)
+
+  if (parts[0] === 'params' && parts.length === 2) {
+    const decl = scope.declared.get(parts[1] as string);
+    // Undeclared (reported) and secret (reported, and never substituted) both
+    // fall to `any` rather than manufacturing a second error.
+    return decl === undefined ? 'any' : sigOfDeclared(decl.type);
+  }
+
+  if (parts[0] === 'nodes' && parts.length === 4 && parts[2] === 'output') {
+    const declared = scope.outputsById?.get(parts[1] as string);
+    // No contract (`null`), producer not in the map, or a name the producer does
+    // not declare (reported already) → no static type.
+    if (declared == null) return 'any';
+    const out = declared.find((d) => d.name === parts[3]);
+    return out === undefined ? 'any' : sigOfDeclared(out.type);
+  }
+
+  // A status is the STRING 'success'|'failure'|'skipped' — typed even when it is
+  // unavailable here (availability is a separate, already-reported question).
+  // This is what makes a bare `${nodes.x.status}` a rejectable `exitWhen`.
+  if (parts[0] === 'nodes' && parts.length === 3 && parts[2] === 'status') return 'string';
+
+  // Every `RUN_FIELDS` member is a string. `triggerId`/`parentRunId` are seeded
+  // `null` by the reducer today (#5 owns the real seed), and typing them `any`
+  // instead would be strictly WEAKER, not safer: `any` additionally accepts
+  // `${add(run.triggerId, 1)}`, and the run-time null throws under either
+  // typing. The nullability gap is #5's to close, and no static type here can
+  // paper over it — `SigType` has no null.
+  if (parts[0] === 'run' && parts.length === 2) {
+    return (RUN_FIELDS as readonly string[]).includes(parts[1] as string) ? 'string' : 'any';
+  }
+
+  return 'any'; // unresolvable — already reported
+}
+
+/**
  * Static-check ONE parsed expression. Mirrors `evalExpr`'s grammar exactly — if
  * this accepts, resolution can only fail on run-time-only facts.
  *
@@ -1128,7 +1259,7 @@ function checkExprStatic(
       );
     }
     const lambdas = spec.lambdaArgs ?? [];
-    expr.args.forEach((a, i) =>
+    expr.args.forEach((a, i) => {
       checkExprStatic(
         a,
         scope,
@@ -1138,8 +1269,33 @@ function checkExprStatic(
         // `item` stays in scope for anything nested inside a lambda arg; a
         // SIBLING arg of the same call does not inherit it.
         itemInScope || lambdas.includes(i),
-      ),
-    );
+      );
+      // ARG TYPING (#6 E6) — the save-time mirror of run-time `checkArgTypes`,
+      // reading the same `spec.args` with the same variadic-tail rule, so the
+      // two cannot disagree about which type a position wants. It fires for
+      // `special` fns too: their `args` describes what `run` enforces itself
+      // (`filter`'s `expectBool` on the predicate), and only the EAGER path goes
+      // through `checkArgTypes`.
+      //
+      // Reports only where BOTH sides are known — `assignableTo` waves `any`
+      // through in either direction.
+      //
+      // It is NOT true that this only rejects what the run-time check would also
+      // reject: `${and(false, 'x')}` short-circuits to `false` at run and never
+      // type-checks arg 2, but is rejected here. That over-refusal is E4's
+      // recorded position, pinned by `functions.test.ts`'s "laziness does NOT
+      // relax the static checker" — the checker cannot know arg0 is `false`, and
+      // relaxing it would equally accept `${and(true, 'x')}`, which THROWS at run
+      // with no escape hatch. Over-refusing a short-circuited arg is safe; that
+      // false-accept is not.
+      const actual = inferExprType(a, scope);
+      if (!assignableTo(actual, argSigAt(spec, i))) {
+        errors.push(
+          `${where}: function '${expr.name}': argument ${i + 1} must be a ` +
+            `${argSigAt(spec, i)}, got ${actual}`,
+        );
+      }
+    });
     return;
   }
 
@@ -1195,8 +1351,8 @@ function checkExprStatic(
     // fallback used — an unknown name resolves fine there, so rejecting it
     // would be a false reject. A producer with no declared contract (`null`)
     // has no enforceable names; an id absent from the map is not checked.
-    const declaredNames = scope.outputsById?.get(id);
-    if (!softOk && declaredNames != null && !declaredNames.has(name)) {
+    const declaredOuts = scope.outputsById?.get(id);
+    if (!softOk && declaredOuts != null && !declaredOuts.some((d) => d.name === name)) {
       errors.push(
         `${where}: \${nodes.${id}.output.${name}} — node '${id}' declares no output named '${name}'`,
       );
