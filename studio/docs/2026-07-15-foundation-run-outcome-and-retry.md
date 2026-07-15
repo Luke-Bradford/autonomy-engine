@@ -1,0 +1,523 @@
+# Foundation joint spec — run-outcome semantics + retry state machine (F1b + F2b)
+
+**Owns:** #1 **F1b** (pipeline success-semantics reconcile, issue #442) and #1 **F2b** (reducer
+retry-eligibility, the D4 HOLD). One spec, because they are **the same predicate**: both are about
+what `settle` counts as a run-ending failure.
+
+**Status: ALL FIVE decisions SETTLED. F1b is unblocked** (behind its one prerequisite, #443).
+F2b depends on F1b, and must ship with F2c.
+
+(c) was briefly raised as an operator fork (**#475**) on the belief that the only rule satisfying both
+the fail-safe invariant and #472's "labels deleted honestly" bar was unproven. A spike proved it —
+**#475 is CLOSED, dissolved by evidence, not by a judgement call**. See §C.2.
+
+**Why this document exists.** Spec #1 line 223 said the hold-vs-reopen fork was "#5's"; spec #5's
+own spike-hardened block said "D4 must add either (i)… or (ii)… — spec it before F2b/F2c build",
+deferring to D4. The fork was **genuinely unowned by both**, which is what let it slip to the point
+where F2b was the next ticket in the build order with no settled semantics under it. This spec is
+now the SSOT for run-outcome + retry semantics; #1 D4/D5 and #5's block point here.
+
+**Provenance.** Operator decision #472 (2026-07-15) settled the D4 fork as **HOLD**, and directed
+that it be specced **jointly** with #442 before any F2b code. Every claim below marked *(probed)* was
+verified against the real reducer — see [Evidence](#evidence-probed-not-argued).
+
+---
+
+## The five questions this spec was directed to answer
+
+| # | Question | Verdict |
+|---|---|---|
+| (a) | **D4 HOLD** — a retry-eligible `transient` failure parks non-terminally | **SETTLED** — §A |
+| (b) | **#442 divergence 2** — eager short-circuit vs drain-to-fixpoint; do they converge with (a)? | **SETTLED** — §B. *Partial* convergence: the operator's hypothesis is half right, and the other half is a latent bug. |
+| (c) | **#442 divergence 1** — "handled ⇒ success" | **SETTLED** — §C. Leaf-evaluation **AND** absorption ("option 3"). Strict ADF parity is fail-open under `join:'any'` (**P1**); the safe minimal fix leaves an ADF divergence pinned forever. The conjunction satisfies both, and was probed. |
+| (d) | **Container parity** — `firstUnhandledChildFailure` short-circuits identically | **SETTLED** — §D |
+| (e) | **#443 posture** — a reducer change re-folds already-bound run logs | **SETTLED** — §E |
+
+---
+
+## Evidence (probed, not argued)
+
+Run against the real `createEngine`/`reduce`, real events, no mocks. Two probes, both throwaway (the
+precedent is spec #5's outbox prototype); their **findings** are recorded here because they are the
+only evidence anyone has for the blast radius. `reduce.ts` is byte-identical to `origin/main` on this
+branch — verify with `git diff origin/main -- studio/packages/shared/src/engine/reduce.ts`.
+
+- **Drain probe** — removed the `firstUnhandledFailureTop` short-circuit (`reduce.ts:735-742`),
+  changed nothing else. Yields P1, P2, P3, P4 and §B.3's cost figure.
+- **Option-3 probe** — drain + the §C.4 predicate, routed through **both** call sites. Yields §C.3's
+  verdict table and the blast radius. Full engine suite: **572 passed, 5 failed** — and the 5 are
+  exactly the blast-radius table.
+
+Everything else in this document is **argued**, and says so. Where a claim is argued and load-bearing,
+it is marked.
+
+**P1 — `join:'any'` absorbs a wholly unhandled failure under strict ADF leaf-evaluation.**
+Doc: `a --success--> d`, `p --success--> d`, `d` has `join:'any'`. `a` fails and carries **no**
+`failure`/`completion` edge — no catch exists anywhere in the doc.
+
+```text
+today (short-circuit):  a=failure  p=success  d=pending   finish = failure / node_failed:a
+drained:                a=failure  p=success  d=success   forward leaves = {d} → all succeeded
+```
+
+`d`'s `a`-group is dead but its `p`-group is satisfied, so `join:'any'` runs it. `a` and `p` both
+have out-edges, so the only forward leaf is `d`, and `d` succeeded. Strict ADF ("*Pipeline result is
+success if and only if all nodes evaluated succeed*") therefore reports **success on a run whose
+node failed with no handler at all**. This is the decisive fact in §C: it is **fail-open**, and it is
+**studio-specific — ADF has no `join:'any'`**, so the rule studio would be copying was never designed
+against this shape. It is what eliminates strict ADF parity, and §C.3's absorption conjunct exists
+precisely to close it (probed: the same doc reports **failure** under the settled rule).
+
+`join:'any'` is not a contrived shape: `nodeJoin` (`params.ts:1911`) is a deliberate SSOT shared by
+the reducer and static validation, `params.ts:1741-1747` already carries a false-accept hazard
+analysis scoped specifically to `any`, and it is pinned by a live test (`reduce.test.ts:212`). It is
+API-authorable via `node.config.join`; note it has **no canvas affordance today** (`join` is typed on
+`ContainerSchema` but reaches a node through the untyped `config` record), which lowers its frequency
+but not its validity.
+
+**P2 — the outcome predicate has TWO call sites, and drain breaks the second one.** Same probe:
+
+```text
+drained:  finish = failure / reason: 'invalid_event'
+```
+
+`settle` emitted `finishRun{success}` → the driver appended `run.finished{success}` → **the reducer
+called its own event impossible** and returned `finishRun{failure, invalid_event}` with
+`state.status` stuck at `running`. Cause: `firstUnhandledFailureTop` is called at **`reduce.ts:735`**
+(settle) *and* **`reduce.ts:1157`** (the `run.finished` impossibility check). Changing one and not
+the other makes the reducer contradict itself **on a brand-new run**, and a stuck-`running` row is
+exactly what `reconcile.ts:136` selects and can re-drive. See §B.
+
+**P3 — the pinned characterization tests contain a contradiction.** `edge-model.test.ts:486`
+(`MATCHES ADF: a skipped final branch after a failed condition → success`) builds `a --failure--> handler`,
+`a --success--> b` and fails `a`. `edge-model.test.ts:532` (`DIVERGES from ADF: a failure is "handled"
+by any failure edge → success (F1b)`) builds `a --failure--> onFail`, `a --success--> onOk` and fails
+`a`. These are **isomorphic up to node renaming**, assert the **identical** outcome (`success`), and
+carry **opposite labels**. Both are the ADF Do-If-Else shape, which ADF fails. The `MATCHES ADF`
+label at `:486` is simply **wrong** — whatever (c) decides, that pin moves with `:532`, and D5's
+claim that "four match the ADF target" is really three.
+
+**P4 — verified non-findings** (recorded so a later fire does not re-litigate them):
+- **The bounce cap and the skip-only-spin test survive drain untouched.** Drain touches neither
+  `fireBackEdges` nor the whole-body-terminal gate; the spin test passes under the drain probe. The
+  `DEFENSIVE_BOUNCE_CAP` reasoning at `reduce.ts:82-92` holds verbatim.
+- **A forward cycle cannot hang leaf-evaluation.** Leaf-evaluation only runs once
+  `allTopLevelTerminal` holds; a forward cycle's nodes never terminalize, so it is never reached.
+  Terminating by construction, not by a guard.
+
+---
+
+## §A — (a) D4 HOLD: the retry state machine **[SETTLED]**
+
+Settled by operator decision #472. Re-open was rejected on the merits *there* and is not re-litigated
+here: `settle` emits `finishRun{failure}` the moment an unhandled failure appears, so a `transient`
+failure that folds a node to terminal ends the run **before** any `node.retryDue` could arrive —
+re-open is only reachable via a `settle` change that **is** the HOLD.
+
+### A.1 The status
+
+Add a **new, NON-terminal** `NodeRunStatus`: **`retry_pending`**.
+
+The name is deliberate over `held`/`retrying`: it reads correctly in the UI's node overlay (U-series)
+and states the *reason* it is parked, not the mechanism. It is **not** in `TerminalNodeStatusSchema`,
+so — for free, with no new predicate — `TERMINAL_NODE` excludes it, `endpointOutcome` returns `null`,
+every readiness/outcome path treats it as live, and `allTopLevelTerminal` is false while a node is
+held. This is where the operator's convergence hypothesis pays off (§B).
+
+`retry_pending` is not terminal, so `TERMINAL_NODE` (`types.ts:143-148`) needs no change.
+
+**Do not trust that `satisfies` guard, and fix its comment while you are here.** `types.ts:144-147`
+claims *"adding an 8th `NodeRunStatus` that is terminal, and forgetting it here, is a type error
+rather than a silently-permissive engine."* **That is false — probed.** Adding an 8th terminal status
+to `NodeRunStatusSchema` and omitting it from `TerminalNodeStatusSchema` **compiles clean**:
+`satisfies readonly NodeRunStatus[]` pins only the *subset* direction (terminal ⊆ status), which the
+surrounding `new Set<NodeRunStatus>(...)` already pins. It catches a terminal option that is not a
+valid status; it cannot catch a *forgotten* one. Harmless for `retry_pending` (non-terminal), but a
+later fire adding a genuinely terminal status would be trusting a guard that does not exist.
+
+### A.2 The event + command triple (do not ship a partial one)
+
+Spec #1 D4 (`…domain-activity-framework.md`, the three bullets under D4) specifies **three** primitives. **Verified: none of them exist** —
+`EngineCommandSchema` (`types.ts:432`) is `dispatchNode | startChild | finishRun`, and
+`scheduleRetry`/`node.retryScheduled`/`node.retryDue` appear in `studio/packages` **only in comments**
+(`scheduler/alarms.ts:28`, `repo/scheduled-wakeups.ts:49`, `schemas/wakeup.ts:8` — S1 already
+anticipates them). Operator directive (a) named only `node.retryDue`; that is not enough, because
+**`scheduleRetry` is F2b's own output**. F2b must add:
+
+| Primitive | Kind | Owner | Notes |
+|---|---|---|---|
+| `scheduleRetry{nodeId, failedAttemptId}` | **command** | reducer (F2b) | Emitted when a `transient` failure is retry-eligible. Pure — no clock. Consumed by S1's outbox; its dedupe discriminator is **attempt-n** (spec #5's spike block: omitting the attempt number makes attempt-2's retry collide with attempt-1's already-`fired` row and **silently never arm**). |
+| `node.retryScheduled{nodeId, nextAttemptAt}` | **event** | driver (F2c) | The durable fact. `nextAttemptAt` is **stored**, never recomputed at fold time — the reducer stays clock-free. |
+| `node.retryDue{nodeId, previousAttemptId}` | **event** | driver (F2c) | Folds → re-dispatch. Must be added to `EngineEventSchema`. |
+
+### A.3 Retry-eligibility (the pure decision)
+
+On `node.failed` for a live node, F2b decides:
+
+```text
+eligible  ⇔  kind === 'transient'  ∧  attempts < (policy.retry ?? 0)
+```
+
+`permanent`/`cancelled` never retry (D4). `policy` is F2a's `NodePolicySchema` (merged, `88a6ed2`);
+`policy.retry` absent means "policy says nothing" → **0** → never eligible, so every existing doc is
+unaffected. Eligible → fold to `retry_pending` + emit `scheduleRetry`. Not eligible → fold to
+`failure` exactly as today.
+
+**The `?? 0` is a v1 shortcut with a stated expiry — do not cement it.** F2a's schema
+(`pipeline.ts:180-185`) explicitly requires: *"`0` is meaningful and is NOT the same fact as absent …
+F2b must preserve that difference once a catalog/global default exists."* `retry ?? 0` **erases** that
+distinction: it collapses "explicitly never retry this node" and "policy says nothing" into the same
+value. That is safe **today** and only today — no catalog/global default exists, so both genuinely
+mean 0. The moment F13b's catalog default or a global policy default lands, absent must resolve to
+*the default* while an explicit `0` must still mean *never*. F2b must therefore keep absent and `0`
+distinguishable at the read site (`policy.retry === undefined` vs `=== 0`), not normalize them.
+
+**Accept the widening, and say why.** #472 flagged that this couples the reducer to retry POLICY:
+`settle`'s notion of a run-ending failure becomes policy-dependent. That is real and it is accepted —
+it is intrinsic to HOLD, which the operator chose. It is *bounded*: the reducer reads `policy.retry`
+and `attempts` and nothing else, and `policy` is already part of the **immutable bound version**, so
+the read is replay-stable by construction. It does not read the clock, the driver, or any mutable
+row.
+
+### A.4 The `LIVE_NODE` guard — decide, don't inherit
+
+`LIVE_NODE = {ready, dispatched}` (`reduce.ts:75`) has exactly **three** uses: `onSucceeded`
+(`reduce.ts:868`), `onFailed` (`:911`), and `onRetryRequested`'s "impossible" diagnostic (`:1021`).
+`onCallReturned` is **not** one of them — it gates on `ns.status === 'waiting'` (`reduce.ts:952`), and
+`waiting` is not even in `LIVE_NODE`. A `retry_pending` node is in none of these sets (neither
+`ready`/`dispatched` nor `waiting`), which is the property that matters.
+
+**Decision: do NOT widen `LIVE_NODE`.** Widening it would silently let a late `node.succeeded` fold
+onto a held node in those three handlers. Instead `node.retryDue` gets its **own** handler with a
+`status === 'retry_pending'` guard, mints the next `attemptId` from `attempts` (as every other
+dispatch does), and emits `dispatchNode`. `node.retryRequested` (the existing boot-decision event)
+keeps its `LIVE_NODE` guard and stays **distinct** from `node.retryDue` — D4 says so explicitly.
+
+### A.5 HOLD has no boot-recovery path of its own — F2b hard-depends on F2c/S1
+
+`onResumed` (`reduce.ts:1089-1127`) re-emits commands only for `ready` (→ `dispatchNode`) and
+`waiting` (→ `startChild`). A `retry_pending` node matches neither, so `onResumed` emits nothing;
+`settle` cannot finish the run (held ⇒ non-terminal ⇒ `allTopLevelTerminal` false); and
+`reconcile.ts`'s `dispatchedNodes()` selects only `status === 'dispatched'`, so it is not interrupted
+either. **Net: after a crash, a held run stays `running` forever unless S1's `scheduled_wakeups` row
+re-arms it.**
+
+That is the correct design — the durable alarm row **is** the recovery mechanism, and re-deriving a
+retry from the projection would double-arm it. But it makes the dependency explicit and
+**load-bearing**: **F2b shipped without F2c is a hang, not a degraded retry.** Build order is
+therefore F1b → F2b **+** F2c together, or F2b behind a policy that no doc can set. Do not ship F2b
+alone.
+
+### A.6 Interaction with loop rounds
+
+`resetNodes` (`reduce.ts:691-707`) resets a body to `pending` and keeps `attempts` **monotonic** so a
+stale result can never fold. A `retry_pending` node caught in a back-edge reset is reset like any
+other — correct, and it is why `attempts` monotonicity must not be "fixed" to reset per round.
+`fireBackEdges`'s whole-body-terminal gate (`reduce.ts:507-511`) tests `TERMINAL_NODE`, so a held
+node **blocks a bounce** until its retry resolves. Correct and free.
+
+---
+
+## §B — (b) Drain-to-fixpoint **[SETTLED]**, and the convergence answer
+
+**Decision: `settle` drains to a fixpoint.** It no longer emits `finishRun{failure}` the moment
+`firstUnhandledFailureTop` finds an unhandled failure (`reduce.ts:735-742` is deleted). The walk
+runs to completion; the run's outcome is evaluated **once every top-level entity is terminal**.
+
+Drain is required under **every** option in §C — it is what makes #442's core complaint go away (the
+handler that "stays `pending` forever" now runs). So it is settled independently of (c).
+
+### B.1 The convergence answer: PARTIAL — the operator's hypothesis is half right
+
+The operator asked whether HOLD "falls out naturally rather than as a special case" under drain, and
+said to test it rather than assume. Tested:
+
+- **TRUE, and it is the good half.** A held node is simply not terminal, so `allTopLevelTerminal` is
+  false and the run cannot finish. `firstUnhandledFailureTop` needs **no** "don't count a
+  retry-eligible failure" clause; `stepContainers`' `children.every(TERMINAL_NODE)` gate
+  (`reduce.ts:555`) makes a container wait for the retry with no code at all. Under drain, HOLD is
+  purely "add a non-terminal status" — exactly as hoped, and a real simplification of F2b.
+- **FALSE, and the rider hides a bug.** The claim "no change to the outcome predicate is needed" is
+  wrong: **P2**. The predicate has two call sites (`reduce.ts:735`, `reduce.ts:1157`) and changing
+  one alone makes the reducer reject its own `run.finished{success}` on every affected doc.
+
+### B.2 Mandatory: ONE predicate, one definition
+
+F1b **must** extract the run-outcome decision into a single function and route **both** sites through
+it. This is a `TERMINAL_NODE`-style SSOT requirement, not a style preference: the two sites answer
+"is this run's outcome success?" and a divergence between them is unrepresentable-by-construction or
+it is a latent `invalid_event`. `reduce.ts:787-789` and `reduce.ts:1155-1167` must not be able to
+disagree.
+
+### B.3 The cost of drain — stated, not buried
+
+Dropping the short-circuit means **an already-doomed run dispatches every independent branch to
+completion** (probed: with `a` failed-unhandled and an independent chain `p1→p2→p3`, today dispatches
+`{a, p1}`; drained dispatches `{a, p1, p2, p3}` — strictly more work). The *final outcome* is
+unchanged under the settled design (drain + §C.4's predicate both route through §B.2), though not
+under the bare drain probe, which reaches `invalid_event` via P2.
+
+ADF does exactly this. But **ADF activities are not billed per token, and studio's are** — studio
+nodes are LLM calls and HTTP posts. Drain therefore costs real money and real side effects on runs
+already known to be doomed. This is accepted because the alternative is #442's actual bug (handlers
+that never run), and because it is what makes the outcome evaluable at all. It is **not** free, and
+an operator who sees spend on a doomed run should find this paragraph rather than be surprised.
+
+*No mitigation is available under the settled rule.* Option 2 (the rejected minimal fix) could have
+kept the eager short-circuit as a pure optimisation for the unhandled-failure case; under §C.3 the
+verdict genuinely depends on draining — `:564` is green precisely *because* the walk drained far
+enough for `eh` to run — so the spend cannot be optimised away without changing the answer. That is a
+real, un-obvious cost of the decision, and it is accepted knowingly rather than discovered later.
+
+---
+
+## §C — (c) "handled ⇒ success" **[SETTLED — option 3, probed]**
+
+### C.1 The defect
+
+`firstUnhandledFailureTop` (`reduce.ts:312-320`) treats a failure as *handled* if it carries **any**
+outgoing `failure`/`completion` edge. ADF instead evaluates **leaves**: *"Evaluate outcome for all
+leaves activities. If a leaf activity was skipped, we evaluate its parent activity instead. Pipeline
+result is success if and only if all nodes evaluated succeed."*
+
+Correcting #442's framing: it says studio's rule is wrong because a handler "does not have to be a
+real catch". **That is not the difference** — under ADF, `a --failure--> h` with no other branch also
+succeeds. The *actual* difference is that studio is missing the **skipped-leaf ⇒ evaluate-parent**
+rule, which is what makes ADF fail Do-If-Else (`:486`/`:532`).
+
+### C.2 Why this looked like a fork, and why it is not
+
+This was raised as **#475** because two operator-stated principles appeared to be in opposition:
+
+- **"Fail-safe, never fail-open"** (CLAUDE.md, non-negotiable) **eliminates strict ADF parity
+  (option 1)** — see **P1**: under `join:'any'`, ADF's leaf rule reports **success** on a run whose
+  node failed with no catch anywhere. ADF has no `join:'any'`, so the rule studio would be copying
+  was never designed against this shape. This elimination stands and is not revisited.
+- **"The spec is right when those `DIVERGES from ADF` labels can be deleted honestly"** (#472)
+  **eliminates the safe minimal fix (option 2)**, which leaves `:564`'s divergence pinned forever.
+
+**A third rule satisfies both, and it was probed rather than argued — so the fork dissolves.**
+#475 is closed with this evidence. The decision is **option 3**.
+
+### C.3 The decision: leaf-evaluation **AND** absorption
+
+A run FAILS iff **either** conjunct fails:
+
+1. **Absorption** — every `failure` top-level entity must be *absorbed*. A failure is absorbed iff a
+   satisfied outgoing `failure`/`completion` edge has a target that actually **RAN**, or its
+   skip-taint transitively reaches a satisfied `on:'skipped'` catch whose target **RAN**. A taint that
+   merely *evaporates* — the successor ran for an unrelated reason, e.g. `join:'any'` satisfied by a
+   different predecessor — is **not** absorption. This conjunct is what closes P1.
+2. **Leaf-evaluation** — every forward leaf must evaluate to success; a `skipped` leaf **recurses** to
+   its parents instead. This conjunct is what closes divergence 1 (`:486`/`:532`).
+
+Probed verdicts (real reducer, real events, full engine suite):
+
+| Shape | Verdict | Why it is right |
+|---|---|---|
+| **P1** `join:'any'`, `a` fails with no catch | **failure** | Fail-safe restored — the taint evaporates at `d`, so `a` is unabsorbed. |
+| **`:564`** ADF "Generic error handling" | **success** | `a`'s taint reaches `c --skipped--> eh`, which ran → absorbed. No skipped leaf. **The label deletes.** |
+| **`:486`/`:532`** Do-If-Else | **failure** | `a` *is* absorbed (its `failure` edge caught), but the skipped leaf `onOk`/`b` recurses to `a`, which failed. **Divergence 1 closed.** |
+| **`:507`** genuine Try-Catch | **success** | Absorbed, and its only leaf ran. Preserved. |
+| **`:170`** failure whose only out-edge is `on:'skipped'` | **failure** | A skip edge off a *failed* node is `unsatisfied-terminal` — never satisfied. Preserved. |
+
+**Both conjuncts are load-bearing** — neither alone is correct. Leaf-eval alone is option 1 (fails P1);
+absorption alone leaves Do-If-Else green (fails `:532`).
+
+**It does not collide with D5's settled rule** that *"an `on:'skipped'` edge does NOT count as handling
+a failure"* (spec #1 D5, pinned by `edge-model.test.ts:170`). Absorption reads `on:'skipped'` edges
+only along a **skip-taint** — and a skip edge hanging off a *failed* node is `unsatisfied-terminal`
+(`reduce.ts:247-251`), so it can never be "satisfied by a node that ran". The two rules are
+compatible by construction, not by coincidence.
+
+### C.4 Implementation sketch (probed; ~45 lines, no new helper)
+
+Built entirely on the precomputed `topOutgoing`/`topIncoming` (`reduce.ts:171-180`). `edgeState` and
+`endpointOutcome` are reused as-is. Container parity (§D) uses `childOutgoing`/`childIncoming`.
+
+```ts
+const ran = (id) => ['success', 'failure'].includes(endpointOutcome(id, state));
+const isDead = (es) => es === 'impossible' || es === 'unsatisfied-terminal';
+
+// A SKIPPED node's taint is absorbed iff it reaches a satisfied on:'skipped' catch that RAN.
+absorbedSkip(id, seen):                       // `seen` guards a cycle; revisit ⇒ false
+  for e of topOutgoing(id):
+    if e.on === 'skipped' && edgeState(e) === 'satisfied' && ran(e.to)          -> true
+    if isDead(edgeState(e)) && outcome(e.to) === 'skipped' && absorbedSkip(e.to, seen) -> true
+  false
+
+// A FAILED node is absorbed iff a satisfied failure/completion catch RAN, or its taint reaches one.
+absorbedFailure(id):
+  for e of topOutgoing(id):
+    if (e.on === 'failure' || e.on === 'completion') && edgeState(e) === 'satisfied' && ran(e.to) -> true
+    if isDead(edgeState(e)) && outcome(e.to) === 'skipped' && absorbedSkip(e.to, new Set())       -> true
+  false
+
+evalEndpoint(id, seen):                       // ADF: skipped leaf ⇒ evaluate parents, RECURSIVELY
+  if outcome(id) === 'failure' -> id          // the blamed node
+  if outcome(id) !== 'skipped' -> null
+  for e of topIncoming(id): if (b = evalEndpoint(e.from, seen)) -> b
+  null
+
+runOutcomeFailure(state):                     // null ⇒ success. THE single predicate (§B.2).
+  for id of sortedTopEntities where outcome(id) === 'failure':
+    if !absorbedFailure(id) -> id             // conjunct 1
+  for id of sortedTopEntities where topOutgoing(id).isEmpty:   // forward leaves
+    if (b = evalEndpoint(id, new Set())) -> b // conjunct 2
+  null
+```
+
+`runOutcomeFailure` is the ONE predicate both call sites route through (§B.2). It is pure, reads only
+`state` + the bound graph, and terminates by construction: `seen` bounds both recursions, and it is
+only ever reached once `allTopLevelTerminal` holds.
+
+### C.5 Sub-decisions
+
+1. **"Which parent?" — SETTLED: ALL parents are evaluated; ANY evaluated failure fails the run.**
+   ADF's prose says "parent" (singular) and studio nodes have many predecessors, so this looked open.
+   ADF's own sentence settles it: *"success if and only if **all nodes evaluated** succeed"* — every
+   parent is evaluated, so one failed parent fails the run. This is the rule probed above, and it is
+   also the fail-safe direction. **It is what flips `reduce.test.ts:195`** (see the blast radius):
+   under an "ALL parents must fail" reading `:195` would stay green, so this is a real, deliberate
+   choice, not an incidental one.
+2. **Recursion is required, not optional.** `edge-model.test.ts:513`
+   (`MATCHES ADF: a node skipped by an impossible incoming edge`; edges at `:519` — `x --failure--> a`,
+   `a --success--> b`) only stays green if a skipped parent recurses to *its* parent (`b` skipped →
+   `a` skipped → `x` succeeded). Not a fork — pinned by an existing test, stated so F1b does not
+   "simplify" it away.
+3. **What is a leaf, given back-edges? — F1b decides, WITH a test.** `firstUnhandledFailureTop` merges
+   `topOutgoing` **and `backOutgoing`** today (`reduce.ts:315`), so a node whose only
+   failure/completion out-edge is a **back**-edge is "handled". The sketch above is **forward-only**
+   (`topOutgoing` excludes back-edges by construction — `reduce.ts:148-153`), so that node becomes an
+   unabsorbed failure and fails the run. **No existing test covers this shape** — the full suite
+   passed under the probe. It is narrow (a satisfied failure back-edge normally resets its body and
+   re-runs, so the node does not sit terminal-`failure` at drain; an exhausted one already finishes
+   the run with `capped`), so it is an implementation detail for F1b rather than a product fork —
+   **but F1b must pin it with a test either way, not leave it to fall out.**
+4. **`finishRun.reason` — SETTLED: keep `node_failed:<id>`, and mean the BLAMED node.** Under
+   leaf-eval the blamed node can sit far **upstream** of the leaf that triggered evaluation
+   (Do-If-Else reports `node_failed:a`, reached via skipped leaf `b`). The string is unchanged, so the
+   blast radius stays at 5 tests; what changes is that an operator can no longer infer from it that
+   `a` had no handler. Accepted: the alternative (a richer reason naming both leaf and blamed node)
+   moves 5 further tests for a diagnostic nicety, and is a cheap follow-up if operators ask.
+   `capped`/`invalid_event` are unaffected.
+
+### C.6 Reuse — the machinery already exists (do not add a helper)
+
+- **Do NOT build leaf-evaluation on `nodeForwardAdjacency`/`forwardDescendants`** (`params.ts:1951`,
+  `:1955-1956`). Those are **node-only** — back-edges *and container endpoints* are excluded by
+  construction. Leaf evaluation must range over top-level **entities** (nodes ∪ containers), so
+  reusing them would silently drop containers from the leaf set.
+- **`reduce.ts:171-180` already precomputes everything needed.** Leaves are
+  `sortedTopEntities.filter(id => topOutgoing.get(id)!.length === 0)`. The parent-walk's reverse
+  adjacency is **`topIncoming`** — it already exists; there is no reverse-adjacency gap.
+  `childOutgoing`/`childIncoming` (`reduce.ts:190-201`) are the identical pair for container parity.
+
+## §D — (d) Container parity **[SETTLED]**
+
+**Decision: whatever (c) settles applies verbatim to containers**, via `childOutgoing`/`childIncoming`
+over `c.children` (§C.6). A container's outcome is decided by the same predicate as the run's,
+scoped to its children — one rule, two scopes.
+
+Two facts that shrink this to almost nothing:
+
+- **Containers already drain.** `stepContainers` only decides after
+  `c.children.every(TERMINAL_NODE)` (`reduce.ts:555`), so divergence 2 is a **top-level-only** defect.
+  `firstUnhandledChildFailure` (`reduce.ts:327-335`) short-circuits the *decision*, not the walk.
+- **But the top-level short-circuit still kills in-flight containers**, because
+  `firstUnhandledFailureTop` fires while a container is mid-round and ends the whole run. Drain (§B)
+  fixes that as a side effect.
+
+So (d) reduces to: **`firstUnhandledChildFailure` must be replaced by the same predicate as
+`firstUnhandledFailureTop`, not left behind.** It is called out because the two functions are
+near-duplicates (`reduce.ts:312` / `:327`) and a fire that fixes only the top-level one leaves
+containers on the old semantics **silently** — nothing would fail.
+
+Existing container pins (`edge-model.test.ts:436-478`) must keep passing; a skipped child must still
+never fail its stage.
+
+---
+
+## §E — (e) #443 posture **[SETTLED]**
+
+**Decision: the LOG is authoritative over the projection for terminality. #443 is a PREREQUISITE of
+F1b, not a follow-up.**
+
+**Why it stops being theoretical.** Runs are event-sourced (`state = fold(run_events)`) with the
+**current** reducer, so any semantics change re-folds already-finished logs. F1b is the change that
+makes this bite at scale: an old log that recorded `run.finished{success}` under "handled ⇒ success"
+(every Do-If-Else doc) re-folds under any (c) option to a run that should have **failed**. The
+`run.finished{success}` impossibility check then fires, returns `finishRun{failure, invalid_event}`,
+and leaves `state.status === 'running'`. `reconcile.ts:136` selects exactly `status='running'` rows
+and decides via the **projection** — so the fast path is missed, `run.resumed` is appended, and **an
+already-succeeded run re-executes a node's side effect.**
+
+P2 shows the same `invalid_event` shape arising on a **brand-new** run from the two-predicate-site
+bug — same failure mode, two independent causes. §B.2 fixes the new-run cause; this fixes the old-log
+class.
+
+**The rule** (per #443's own recommendation): if a run's log **ends in a terminal `run.finished`**,
+resync the row from that fact and never re-derive it under a newer reducer. `run_events` is the
+source of truth and `run.finished` is a durable fact; second-guessing it via a re-fold is the
+**fail-open** direction, and this repo's rule is fail-safe. This immunises the whole class (any
+reducer change vs. any pre-existing log), not just F1b's instance.
+
+**Explicitly NOT doing (v1): versioning reducer semantics per pipeline version.** A catalog/version
+marker so old logs fold under the rules they were written under is the "correct" answer and is
+**heavier than v1 needs**. Deferred, with the tradeoff stated: without it, every future reducer
+ticket re-opens this question for **in-flight** runs.
+
+**Residual risk, accepted and named:** log-authoritative terminality only immunises **finished** runs.
+A run that is genuinely **in-flight across a deploy** still folds under the new reducer and can
+project differently from what its driver believed. That window is narrow (crash + upgrade + an
+affected doc shape), it is strictly smaller than today's, and closing it needs the version marker
+above. Accepted for v1.
+
+---
+
+## Blast radius — the tests that move
+
+**Measured under the option-3 probe (the settled rule): exactly 5 tests across 2 files** — the full
+engine suite ran 572 passed / 5 failed, and the 5 failures are this table. An F1b fire that moves a
+*different* set has done something this spec did not sanction; one that moves *more* has almost
+certainly changed the `finishRun.reason` vocabulary (C.5.4 keeps it deliberately, which is what holds
+the number at 5 — under a richer reason string, 5 further tests move).
+
+| Test | Today | Under the settled rule | Why |
+|---|---|---|---|
+| `edge-model.test.ts:486` `MATCHES ADF: a skipped final branch…` | `success` | `failure` | **Mislabelled (P3)** — isomorphic to `:532`, and ADF fails it. The `MATCHES ADF` label is wrong and goes. |
+| `edge-model.test.ts:532` `DIVERGES from ADF: a failure is "handled" by any failure edge` | `success` | `failure` | The Do-If-Else divergence — closed by the leaf conjunct. **The label deletes.** |
+| `edge-model.test.ts:564` `DIVERGES from ADF: an unhandled failure short-circuits…` | `b`,`c`,`eh` = `pending`; `failure` | all run; `success` | Drain makes the handler run; absorption makes the run green. **The label deletes** — ADF's Generic error handling pattern now works end-to-end. |
+| `reduce.test.ts:195` `join:all — an unsatisfied-terminal incoming edge SKIPS the node` | `success` | `failure` | **A real pin, not a characterization test** — the loudest signal in this table. `b` fails and *is* absorbed by `catch`, but the skipped leaf `d` recurses to `b`. Deliberate, and **contingent on C.5.1's ANY-parent rule** (under "ALL parents must fail" it would stay green). Its comment "b's failure was handled" must be rewritten, not deleted. |
+| `reduce.test.ts:315` `an implicit-chain failure is unhandled → run fails` | `n2` = `pending` | `n2` = `skipped` | Benign/observational — drain lets `n2` reach `skipped` where today the short-circuit leaves it `pending`. `state.status` stays `failure` (`:319` still passes). |
+
+Unaffected and **must stay green** (verified under the probe): the bounce-cap + skip-only-spin tests
+(P4), every container pin, every other `join` semantics pin, the Try-Catch/Try-Catch-Proceed and
+generic-error-handling JOIN pins, and the branch-inertness diagnostics.
+
+**A fire will first see 8 failures, not 5.** Deleting the short-circuit alone (drain, before the §C.4
+predicate lands) breaks 8; leaf-eval + absorption + the shared predicate restore 3 of them. That is
+expected — do not treat the intermediate state as a regression.
+
+---
+
+## Build order
+
+1. **#443** — log-authoritative terminality (§E). **The one prerequisite** — settled, unblocked,
+   buildable today, and F1b must not land before it (§E explains why F1b is what makes it bite).
+2. **F1b** — drain (§B) + the single shared `runOutcomeFailure` predicate (§B.2, §C.4) + container
+   parity (§D) + the 5 blast-radius test moves + C.5.3's back-edge/leaf test. One fire.
+3. **F2b + F2c together** — `retry_pending`, the `scheduleRetry`/`retryScheduled`/`retryDue` triple,
+   the `node.retryDue` handler. **Not F2b alone** (§A.5).
+   **Fix first, inside F2b** (carried from F2b's ticket row, and F2b is the ticket that makes it
+   bite): `driver.ts`'s pump appends the **parsed** event (`appendEngineEvent`) but folds the **raw**
+   one (`engine.reduce(state, event)`). Inert while nothing reads `kind` — but F2b's eligibility rule
+   reads exactly `kind`, so an untyped event would be *stored* `kind:'permanent'` (the parse default)
+   while the *live* reducer saw `undefined`: live and replay disagree, and the disagreement decides
+   whether a node retries. Reduce the value `appendEngineEvent` parses, not its input.
+
+## Non-goals
+
+- Re-litigating HOLD vs re-open (#472 settled it; §A).
+- Per-version reducer-semantics markers (§E).
+- Branch-edge activation — `if`/`switch` remain #4 A0/A1/A2; branch edges stay inert.

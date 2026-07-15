@@ -84,7 +84,13 @@ later specs assume, so they must be single-owner and early:
 5. **Generic durable-scheduler primitive (#5 S1, ONE early ticket)** — driver-owned alarm
    abstraction owned by Spec #5; **retry (#1), `wait` (#4), `webhook`-expiry (#4), tumbling windows
    + schedule ticks + lease-expiry (#5) all consume it** (retry is NOT its own primitive).
-6. **Policy/retry/timeout (#1)** on top of the scheduler.
+6. **Policy/retry/timeout (#1)** on top of the scheduler. **F2a SHIPPED** (`Node.policy` schema,
+   inert). The rest is specced in
+   [`2026-07-15-foundation-run-outcome-and-retry.md`](./2026-07-15-foundation-run-outcome-and-retry.md)
+   — the joint **F1b + F2b** spec (#472 settled D4 as **HOLD**; F1b and F2b are the same predicate,
+   so they are specced together). All five questions are settled there. Order within this
+   item: **#443** (log-authoritative terminality — the one prerequisite) → **F1b** → **F2b + F2c
+   together, never F2b alone**.
 7. **Unified secret model (ONE `SecretRef`/`SecretSink`/redaction contract in #1)** — secure
    outputs can't drive `${}`, secrets resolve only at approved sink fields, git import→`needs_secret`,
    log stores redacted metadata only (opaque handle = later extension, not an alternate live design).
