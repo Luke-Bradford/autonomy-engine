@@ -342,6 +342,99 @@ describe('PipelineVersionSchema', () => {
     const parsed = PipelineVersionSchema.parse(withoutContainers);
     expect(parsed.containers).toEqual([]);
   });
+
+  // F13a — the READ path stays tolerant ON PURPOSE. This schema parses every
+  // stored row (`repo/pipeline-versions.ts` getPipelineVersion/list), so
+  // refusing a malformed `config.outputs` here would make an already-stored row
+  // unreadable: the pipeline could not be opened in the UI to be REPAIRED, and
+  // runs bound to that version could not load. A corrupt contract is refused on
+  // WRITE (NewPipelineVersionSchema) and FAILS THE NODE at run time
+  // (`engine/outputs.ts`) — it is never silently honoured, but it stays
+  // readable. Same principle as NodeSchema's shape-only `type` and the
+  // backward-tolerant `containers` default above.
+  it('still READS a stored row whose config.outputs is malformed (repairable, not bricked)', () => {
+    const legacy = {
+      ...pipelineVersion,
+      nodes: [
+        {
+          id: 'node_1',
+          type: 'llm_call',
+          config: { outputs: [{ name: 'text', type: 'nonsense' }] },
+          position: { x: 0, y: 0 },
+        },
+      ],
+    };
+    expect(() => PipelineVersionSchema.parse(legacy)).not.toThrow();
+  });
+});
+
+// F13a — the WRITE path is where a corrupt `config.outputs` is refused. These
+// cases are the counterpart to PipelineVersionSchema's read-tolerance test.
+describe('NewPipelineVersionSchema — config.outputs is refused on write (F13a)', () => {
+  function withNodeConfig(config: Record<string, unknown>) {
+    const { id, version, createdAt, ...rest } = pipelineVersion;
+    void id;
+    void version;
+    void createdAt;
+    return {
+      ...rest,
+      nodes: [{ id: 'node_1', type: 'llm_call', config, position: { x: 0, y: 0 } }],
+    };
+  }
+
+  it('accepts a node with no declared outputs (absent = no contract)', () => {
+    expect(() => NewPipelineVersionSchema.parse(withNodeConfig({}))).not.toThrow();
+  });
+
+  it('accepts a valid declared outputs override', () => {
+    const parsed = NewPipelineVersionSchema.parse(
+      withNodeConfig({ outputs: [{ name: 'text', type: 'string' }] }),
+    );
+    expect(parsed.nodes[0]?.config['outputs']).toEqual([{ name: 'text', type: 'string' }]);
+  });
+
+  it('rejects an unknown output type', () => {
+    expect(() =>
+      NewPipelineVersionSchema.parse(withNodeConfig({ outputs: [{ name: 'text', type: 'nope' }] })),
+    ).toThrow();
+  });
+
+  it('rejects a secret-typed output (a live credential-leak channel)', () => {
+    expect(() =>
+      NewPipelineVersionSchema.parse(
+        withNodeConfig({ outputs: [{ name: 'token', type: 'secret' }] }),
+      ),
+    ).toThrow();
+  });
+
+  it('rejects outputs that is not an array', () => {
+    expect(() => NewPipelineVersionSchema.parse(withNodeConfig({ outputs: 'text' }))).toThrow();
+  });
+
+  // `storeOutputs` does Object.fromEntries(decl.map(...)) — duplicates silently
+  // collapse last-wins, so a dupe is real state corruption, not a style nit.
+  it('rejects duplicate output names', () => {
+    expect(() =>
+      NewPipelineVersionSchema.parse(
+        withNodeConfig({
+          outputs: [
+            { name: 'text', type: 'string' },
+            { name: 'text', type: 'number' },
+          ],
+        }),
+      ),
+    ).toThrow();
+  });
+
+  // `refRoot` addresses `${nodes.<id>.output.<name>}` with a SINGLE-segment
+  // name, so a dotted name is unaddressable as itself.
+  it('rejects an output name the expression language cannot address', () => {
+    expect(() =>
+      NewPipelineVersionSchema.parse(
+        withNodeConfig({ outputs: [{ name: 'a.b', type: 'string' }] }),
+      ),
+    ).toThrow();
+  });
 });
 
 describe('NewPipelineVersionSchema', () => {

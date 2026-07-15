@@ -40,6 +40,73 @@ export const OutputSchema = z.object({
 });
 export type Output = z.infer<typeof OutputSchema>;
 
+/**
+ * What a NODE-level output name may be (`Node.config.outputs`, #1 F13a).
+ *
+ * `refRoot` (`engine/params.ts`) addresses `${nodes.<id>.output.<name>}` by
+ * splitting on `.` and taking a SINGLE segment as the name — so an output named
+ * `a.b` is unaddressable as itself: it silently aliases output `a` plus deep
+ * field `b` (#6 E7). Constraining the name to an identifier keeps "declarable"
+ * and "referenceable" the same set.
+ *
+ * Deliberately NOT applied to `OutputSchema` itself: that schema is shared with
+ * PIPELINE-level `outputs`, which are not `${}`-addressable and are parsed on
+ * the READ path (see `PipelineVersionSchema`) — tightening it there would brick
+ * stored rows for a rule that does not apply to them.
+ *
+ * Not exported: `NodeOutputsSchema` is the seam every consumer should use, so
+ * the rule has one enforcement point rather than a regex others can re-apply
+ * inconsistently.
+ */
+const NODE_OUTPUT_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * A node's `config.outputs` declaration — the SSOT for what a VALID contract
+ * looks like, used by BOTH the write-path schema (`StrictNodeSchema` below,
+ * which refuses a corrupt one at save) and the run-time reader
+ * (`engine/outputs.ts` `outputContract`, which fails the node on a corrupt one).
+ * One schema so the two can never disagree about what "valid" means.
+ */
+const NodeOutputsSchema = z.array(OutputSchema).superRefine((outputs, ctx) => {
+  const seen = new Set<string>();
+  for (const [i, o] of outputs.entries()) {
+    if (!NODE_OUTPUT_NAME_RE.test(o.name)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [i, 'name'],
+        message:
+          `output name '${o.name}' is not addressable: a \${nodes.<id>.output.<name>} ` +
+          'reference takes a single identifier segment',
+      });
+    }
+    // `storeOutputs` (engine/reduce.ts) builds the stored record with
+    // Object.fromEntries(decl.map(...)) — duplicate names silently collapse
+    // last-wins, so a duplicate is state corruption, not a style nit.
+    if (seen.has(o.name)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [i, 'name'],
+        message: `duplicate output name '${o.name}' (output names must be unique within a node)`,
+      });
+    }
+    seen.add(o.name);
+  }
+});
+
+/**
+ * A node's `config.outputs` FIELD — `NodeOutputsSchema` plus the rule that the
+ * field may be absent (`undefined` = "no contract", legal by design).
+ *
+ * This is the schema BOTH readers parse: `StrictNodeSchema` below (write path)
+ * and `engine/outputs.ts` `outputContract` (run time). Putting the
+ * absent-is-legal rule IN the schema — rather than each caller special-casing
+ * `undefined` before parsing — is what keeps it a single fact. The two live in
+ * different layers (`engine/` imports `schemas/`, never the reverse), so
+ * without this they would be two copies of one rule that must change in
+ * lockstep — the drift `engine/outputs.ts`'s SSOT rule exists to prevent.
+ */
+export const NodeOutputsFieldSchema = NodeOutputsSchema.optional();
+
 export const PositionSchema = z.object({
   x: z.number(),
   y: z.number(),
@@ -82,6 +149,36 @@ export const NodeSchema = z.object({
   call: CallConfigSchema.optional(),
 });
 export type Node = z.infer<typeof NodeSchema>;
+
+/**
+ * `NodeSchema` + the semantic checks a node must pass to be SAVED (#1 F13a).
+ * Today: `config.outputs`, if present, must be a valid `NodeOutputsSchema`.
+ *
+ * WHY a separate schema rather than refining `NodeSchema`: `NodeSchema` is
+ * parsed on the READ path too (`PipelineVersionSchema.parse(row)` runs on every
+ * stored row — `repo/pipeline-versions.ts`). Refining it would make an
+ * already-stored row with a corrupt contract unreadable — the pipeline could not
+ * be opened in the UI to be REPAIRED, and runs bound to that version could not
+ * load. That would trade a silent fail-open for an unrecoverable brick. So:
+ * **strict on write, tolerant on read, fail-safe at run time** (a corrupt
+ * contract fails the node — `engine/outputs.ts`), which is defence in depth
+ * rather than a single schema chokepoint.
+ *
+ * This mirrors `NodeSchema`'s existing shape-only stance on `type` (an older
+ * catalog's doc must still parse) and the backward-tolerant `containers`
+ * default — the validate/upgrade pass is deliberately a separate concern.
+ */
+export const StrictNodeSchema = NodeSchema.superRefine((node, ctx) => {
+  const parsed = NodeOutputsFieldSchema.safeParse(node.config['outputs']);
+  if (parsed.success) return; // valid, or absent (= no contract, legal)
+  for (const issue of parsed.error.issues) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['config', 'outputs', ...issue.path],
+      message: issue.message,
+    });
+  }
+});
 
 /**
  * A predecessor's OPERATIONAL outcome — what the activity itself did. These are
@@ -221,5 +318,8 @@ export const NewPipelineVersionSchema = PipelineVersionSchema.omit({
   createdAt: true,
 }).extend({
   catalogVersion: z.number().int().default(CATALOG_VERSION),
+  // The WRITE path is strict (#1 F13a) — `PipelineVersionSchema` above stays
+  // read-tolerant. See `StrictNodeSchema` for why the asymmetry is deliberate.
+  nodes: z.array(StrictNodeSchema),
 });
 export type NewPipelineVersion = z.input<typeof NewPipelineVersionSchema>;

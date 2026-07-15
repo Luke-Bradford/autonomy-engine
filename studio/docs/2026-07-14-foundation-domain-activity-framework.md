@@ -232,6 +232,73 @@ the migrations**. What landed, and the decisions a later ticket must not re-liti
 - **`CATALOG_VERSION` untouched:** adding metadata FIELDS to existing entries breaks no older
   export. #4 adding new activity TYPES will need the bump.
 
+#### F13a block (BUILT 2026-07-15 — the FIELD + its validation)
+
+The build order splits this ticket the way F9a split: **F13a = the field + validation** (here);
+**F13b (#456) = the catalog-default/override resolution**. What landed, and the decisions a later
+ticket must not re-litigate:
+
+- **The bug this fixed was a silent FAIL-OPEN, not a missing feature.** `config.outputs` already
+  existed and was already read by the reducer (`storeOutputs`/`validateOutputs`) and by
+  `validateRefs`. But `declaredOutputs` returned `DeclaredOutput[] | null` from a permissive
+  `safeParse`, and that `null` meant BOTH "no `outputs` key" and "an `outputs` key I could not
+  parse". So one typo (`type: 'strng'`) silently disabled output type-checking, undeclared-key
+  filtering AND `${}` ref-name-checking for that node, with no diagnostic on any path. A corrupt
+  contract read as "no contract" is the exact shape of the merge-gate invariant's prohibition (a
+  `gh` API failure is never "CI-green"). **`outputContract` is now three-state — `absent` |
+  `invalid` | `declared` — and the reducer FAILS a node whose contract is `invalid`.** `absent`
+  stays permissive BY DESIGN: an unconfigured node is not an error.
+- **`NodeOutputsSchema` (`schemas/pipeline.ts`) is the ONE definition of a valid contract**, read
+  by BOTH the write-path `StrictNodeSchema` and the run-time `outputContract`. Two definitions
+  would drift about what "valid" means — the same SSOT rule `engine/outputs.ts` already carried.
+- **Strict on WRITE, tolerant on READ, fail-safe at RUN.** The teeth are on
+  `NewPipelineVersionSchema` (via `StrictNodeSchema`), NOT on `NodeSchema`. **Deliberate:**
+  `PipelineVersionSchema.parse(row)` runs on every stored row (`repo/pipeline-versions.ts`), so
+  refining `NodeSchema` would make an already-corrupt row throw on READ — the pipeline could not
+  be opened in the UI to be REPAIRED and runs bound to that version could not load. That trades a
+  silent fail-open for an unrecoverable brick. Note `NewPipelineVersionSchema` derives from
+  `PipelineVersionSchema` via `.omit()`, so the strict node schema must be re-declared in the
+  `.extend({})` — refining `NodeSchema` cannot tighten one without the other. This mirrors
+  `NodeSchema`'s existing shape-only stance on `type` and the backward-tolerant `containers`
+  default: the validate/upgrade pass is a separate concern. **The three layers are defence in
+  depth, not redundancy** — the run-time refusal is what actually protects a pre-F13a row, since
+  the read path lets it through by design.
+- **Output names are identifier-shaped** (`NODE_OUTPUT_NAME_RE`). `refRoot` (`engine/params.ts`)
+  addresses `${nodes.<id>.output.<name>}` by taking a SINGLE `.`-segment as the name, so an output
+  named `a.b` silently aliased output `a` + deep field `b` (#6 E7) — declarable but unaddressable.
+  Applied to the NODE-level list only, NOT to `OutputSchema`: that schema is shared with
+  PIPELINE-level `outputs`, which are not `${}`-addressable and ARE parsed on the read path.
+- **Names are unique.** `storeOutputs` builds the stored record with `Object.fromEntries`, so
+  duplicates silently collapsed last-wins — state corruption, not a style nit.
+- **`validateDoc` reports a corrupt contract ONCE per node**, not once per ref against it (one
+  root cause; per-ref errors would bury it). That report is ADVISORY (#444) — the write-path parse
+  is the actual refusal.
+- **NOT decided here:** whether the catalog's `outputs` becomes a node's DEFAULT contract → F13b
+  (#456). Today the catalog entry is inert metadata and the only lowering is `canvasStore.ts`'s
+  client-side palette seed, so a node made via API/import/CLI carries NO contract. F13b is blocked
+  on **#457** (the catalog is not adapter-true: `stopReason` is declared `string`, two adapters
+  can yield `null`) — found while building this ticket.
+- **Canonicalization is NOT this ticket's** despite F13's row naming it: canonical JSON / key
+  ordering is **#3 G1**'s ("canonicalize key order + number formatting"). T6 also scopes "git
+  rules" here; those go with canonicalization to **G1** for the same reason.
+- **This is a REDUCER-SEMANTICS change, so it re-folds old logs — a new instance of #443.** A
+  pre-F13a run whose version carries a corrupt contract folded `node.succeeded` → `success` (whole
+  payload stored); it now folds to `failure`. The FINISHED-run case is largely contained
+  (`reconcileOnBoot` selects only `status='running'` rows), but the **in-flight** case needs only a
+  restart mid-run — the normal reconcile path. Probed against a real pre-F13a log: the successor
+  node re-folds to `pending` even though it was genuinely `dispatched` (its side effect already
+  fired), so `dispatchedNodes(state)` returns `[]`, reconcile's `notProvablyIdempotent` guard finds
+  nothing, no `run.interrupted` is appended, and the run is **silently finalized as `failure`**
+  while the successor's real execution is orphaned. The new semantics are correct and are the point
+  of the ticket; the defect is that a reducer change silently re-interprets a bound version — which
+  is exactly the authority gap **#443** exists to close. F13a is on #443's list alongside F1b
+  (#442) and D4 retry. **Immutable-version binding is structurally intact** (nothing mutates a
+  version row; strictness gates only NEW rows) — what changes is the INTERPRETATION of an
+  already-bound version, which is #443's subject, not this ticket's to fix.
+- **Duplicate names are fixed at NODE level only.** Pipeline-level `params`/`outputs` still accept
+  duplicates and resolve last-wins silently (`resolveRunParams`) — the same defect this ticket
+  calls state corruption, left because F13 is node-scoped. Filed as **#458**, not forgotten.
+
 ### D7 — Audit & lifecycle
 
 - **Version audit:** add `author`(principal) + `changeNote?` to `PipelineVersion`;
@@ -302,7 +369,7 @@ rerun (gated).**
 | F11 | Rerun (simple, same version) |
 | RS | **sub-spec:** rerun-from-failed reseed-event + frontier semantics |
 | F12a–e | rerun-from-failed (basic / reseed event / frontier algo / containers / call_pipeline) — after RS |
-| **F13** | **`Node.config.outputs: OutputSpec[]` (T6)** — node-level typed output override (the home for #2's lowered structured schema + `foreach`/webhook outputs) + validation + canonicalization + `${nodes.x.status}` read. **Prerequisite — #2/#4/#6 depend on it.** |
+| **F13** | **`Node.config.outputs: OutputSpec[]` (T6)** — node-level typed output override (the home for #2's lowered structured schema + `foreach`/webhook outputs) + validation + canonicalization + `${nodes.x.status}` read. **Prerequisite — #2/#4/#6 depend on it.** **SPLIT 2026-07-15** (the F9a minimal/migrations precedent). **F13a SHIPPED:** the FIELD + its validation. `config.outputs` existed but was an untyped escape hatch read through a permissive `safeParse` whose `null` conflated **absent** with **malformed** — a silent FAIL-OPEN (one typo, e.g. `type: 'strng'`, disabled output type-checking, key-filtering AND ref-name-checking for that node, with no diagnostic anywhere). `outputContract` (`engine/outputs.ts`) is now three-state (`absent`/`invalid`/`declared`) and the reducer FAILS a node whose contract is `invalid`; `NodeOutputsSchema` (`schemas/pipeline.ts`) is the ONE definition of valid (unique + identifier-shaped names — `refRoot` addresses a single segment, so `a.b` was undeclarable-but-unaddressable), read by BOTH the write-path `StrictNodeSchema` and the run-time reader. **Strict on WRITE (`NewPipelineVersionSchema`), tolerant on READ, fail-safe at RUN** — deliberate: `PipelineVersionSchema` parses every stored row, so refusing there would brick a corrupt row out of the UI that must REPAIR it. `${nodes.x.status}` → shipped at #6 E3; deep `[]` → E7; canonicalization → **#3 G1** (canonical JSON is G1's, not this ticket's). See the F13a block below. **F13b FILED as #456:** the catalog-default/override RESOLUTION (the word "override" presupposes a default that does not exist yet — the catalog's `outputs` is inert metadata and the only lowering is `canvasStore.ts`'s CLIENT-SIDE palette seed, so any node made via API/import/CLI carries no contract at all). Blocked behind adapter truth: **#457** (`stopReason ?? null` vs declared `string`). |
 | ~~**F14**~~ | **BUILT** (with F1) — multi-incoming-edge JOIN semantics (T7): AND across predecessors, OR among conditions on one predecessor (ADF `dependsOn`). The OR is what makes `skipped` usable: `computeReadiness` previously ANDed across every EDGE, so two conditions on one predecessor could never both satisfy and the target always skipped. `join:'any'` is unchanged by the grouping (OR distributes over OR). |
 | **F15** | **`SecretRef` config-field sink (T10):** a node-config secure field carries a `SecretRef`, resolved at dispatch, never logged — a secret reaches a non-connection activity (e.g. an `http_request` auth header); `validateRefs` rejects a secure ref anywhere but a declared sink. |
 
