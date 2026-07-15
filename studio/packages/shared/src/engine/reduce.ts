@@ -14,7 +14,7 @@ import type {
 } from './types.js';
 import { SubstituteError, TERMINAL_NODE } from './types.js';
 import type { OutputType } from '../schemas/pipeline.js';
-import { declaredOutputs, type DeclaredOutput } from './outputs.js';
+import { outputContract, type CheckedContract, type OutputContract } from './outputs.js';
 import {
   backEdgeResetBody,
   effectiveEdges,
@@ -870,13 +870,18 @@ export function createEngine(doc: EngineDoc): Engine {
         return { state, commands: [], diagnostics };
       }
       const node = nodeById.get(event.nodeId)!;
-      const decl = declaredOutputs(node);
-      const errs = validateOutputs(decl, event.outputs);
-      if (errs.length > 0) {
-        diagnostics.push(`node '${event.nodeId}' produced invalid outputs: ${errs.join('; ')}`);
+      const { errs, checked } = validateOutputs(outputContract(node), event.outputs);
+      if (checked === null || errs.length > 0) {
+        // `checked === null` ⇒ a corrupt CONFIG, not a bad result: say so rather
+        // than blaming the node for producing what its author mis-declared.
+        diagnostics.push(
+          checked === null
+            ? `node '${event.nodeId}' has invalid config: ${errs.join('; ')}`
+            : `node '${event.nodeId}' produced invalid outputs: ${errs.join('; ')}`,
+        );
         return settle(withNode(state, event.nodeId, { status: 'failure' }), diagnostics);
       }
-      const stored = storeOutputs(decl, event.outputs);
+      const stored = storeOutputs(checked, event.outputs);
       let next = withNode(state, event.nodeId, { status: 'success' });
       next = { ...next, outputs: { ...next.outputs, [event.nodeId]: stored } };
       return settle(next, diagnostics);
@@ -965,21 +970,24 @@ export function createEngine(doc: EngineDoc): Engine {
         return { state, commands: [], diagnostics };
       }
       const node = nodeById.get(event.callNodeId)!;
-      const decl = declaredOutputs(node);
       // Validate declared outputs on BOTH outcomes. A FAILED child still returns
       // projected outputs (the findings loop) — but they flow into `state.outputs`
       // and thus into `${}` substitution, so mistyped outputs must never be stored
       // regardless of outcome. On any type violation the node terminalizes as
       // `failure` with NO stored outputs (on success this is the existing
       // fail-the-node behavior; on failure it drops the mistyped payload).
-      const errs = validateOutputs(decl, event.outputs);
-      if (errs.length > 0) {
+      const { errs, checked } = validateOutputs(outputContract(node), event.outputs);
+      if (checked === null || errs.length > 0) {
+        // A corrupt contract is THIS call node's own config defect — never
+        // report it as the child pipeline returning something wrong.
         diagnostics.push(
-          `call node '${event.callNodeId}' child returned invalid outputs: ${errs.join('; ')}`,
+          checked === null
+            ? `call node '${event.callNodeId}' has invalid config: ${errs.join('; ')}`
+            : `call node '${event.callNodeId}' child returned invalid outputs: ${errs.join('; ')}`,
         );
         return settle(withNode(state, event.callNodeId, { status: 'failure' }), diagnostics);
       }
-      const stored = storeOutputs(decl, event.outputs);
+      const stored = storeOutputs(checked, event.outputs);
       let next = withNode(state, event.callNodeId, { status: event.childOutcome });
       next = { ...next, outputs: { ...next.outputs, [event.callNodeId]: stored } };
       return settle(next, diagnostics);
@@ -1264,27 +1272,44 @@ function fnv1a128(s: string): string {
  * Store ONLY a node's DECLARED output keys, dropping anything else the executor
  * carried (an undeclared key must never become refable). A node with no
  * declared outputs has no contract to enforce → its whole payload passes.
+ *
+ * Takes a `CheckedContract`, so an `invalid` one cannot reach the
+ * whole-payload branch: `validateOutputs` errors first and terminalizes the
+ * node. That is a TYPE guarantee rather than a comment — see `CheckedContract`.
  */
 function storeOutputs(
-  decl: DeclaredOutput[] | null,
+  contract: CheckedContract,
   outputs: Record<string, unknown>,
 ): Record<string, unknown> {
-  return decl === null
-    ? { ...outputs }
-    : Object.fromEntries(decl.map((d) => [d.name, outputs[d.name]]));
+  return contract.kind === 'declared'
+    ? Object.fromEntries(contract.outputs.map((d) => [d.name, outputs[d.name]]))
+    : { ...outputs };
 }
 
 /**
- * Validate a result's outputs against declared output types. A missing or
- * mistyped declared output is an error. No declared outputs → trivially valid.
+ * Validate a result's outputs against the node's output contract. A missing or
+ * mistyped declared output is an error. `absent` (no contract) → trivially
+ * valid. `invalid` (a CORRUPT contract) → an error, never "no contract": see
+ * `OutputContract` for why conflating those two fails open (#1 F13a).
+ *
+ * NARROWS on success: a `null` return means the contract is `CheckedContract`,
+ * which is what lets `storeOutputs` refuse an `invalid` one at the type level.
  */
 function validateOutputs(
-  decl: DeclaredOutput[] | null,
+  contract: OutputContract,
   outputs: Record<string, unknown>,
-): string[] {
-  if (decl === null) return [];
+): { errs: string[]; checked: CheckedContract | null } {
+  // A corrupt contract is a CONFIG defect, not a bad result — the node produced
+  // nothing wrong. Worded to match `validateDoc`'s `config.outputs is
+  // malformed` so both paths are greppable together, and kept distinct from the
+  // caller's "produced invalid outputs" framing (which would blame the node, or
+  // on the call path the CHILD PIPELINE, for the author's typo).
+  if (contract.kind === 'invalid') {
+    return { errs: [`config.outputs is malformed (${contract.reason})`], checked: null };
+  }
+  if (contract.kind === 'absent') return { errs: [], checked: contract };
   const errs: string[] = [];
-  for (const d of decl) {
+  for (const d of contract.outputs) {
     if (!Object.prototype.hasOwnProperty.call(outputs, d.name)) {
       errs.push(`missing declared output '${d.name}'`);
       continue;
@@ -1293,7 +1318,7 @@ function validateOutputs(
       errs.push(`output '${d.name}' is not of declared type '${d.type}'`);
     }
   }
-  return errs;
+  return { errs, checked: contract };
 }
 
 function matchesType(value: unknown, type: OutputType): boolean {

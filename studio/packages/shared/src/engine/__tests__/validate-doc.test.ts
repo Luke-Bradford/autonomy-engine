@@ -38,6 +38,50 @@ function doc(
 }
 
 // ===========================================================================
+// config.outputs — a corrupt contract is REPORTED, not silently ignored (F13a)
+// ===========================================================================
+
+describe('validateDoc — config.outputs (F13a)', () => {
+  it('reports a malformed config.outputs', () => {
+    const d = doc([node('a', { outputs: [{ name: 'text', type: 'strng' }] })]);
+    expect(validateDoc(d).join(' ')).toContain("node 'a': config.outputs is malformed");
+  });
+
+  it('reports duplicate output names', () => {
+    const d = doc([
+      node('a', {
+        outputs: [
+          { name: 'text', type: 'string' },
+          { name: 'text', type: 'number' },
+        ],
+      }),
+    ]);
+    expect(validateDoc(d).join(' ')).toContain('duplicate output name');
+  });
+
+  it('reports a malformed contract ONCE per node, not once per ref against it', () => {
+    const d = doc(
+      [
+        node('a', { outputs: [{ name: 'text', type: 'strng' }] }),
+        node('b', { x: '${nodes.a.output.text}', y: '${nodes.a.output.other}' }),
+      ],
+      [edge('a', 'b', 'success')],
+    );
+    const malformed = validateDoc(d).filter((e) => e.includes('config.outputs is malformed'));
+    expect(malformed).toHaveLength(1);
+  });
+
+  it('says nothing about a node with no declared outputs', () => {
+    expect(validateDoc(doc([node('a')])).join(' ')).not.toContain('config.outputs');
+  });
+
+  it('says nothing about a valid contract', () => {
+    const d = doc([node('a', { outputs: [{ name: 'text', type: 'string' }] })]);
+    expect(validateDoc(d).join(' ')).not.toContain('config.outputs');
+  });
+});
+
+// ===========================================================================
 // Container children — existence + disjointness + loop/stage config
 // ===========================================================================
 

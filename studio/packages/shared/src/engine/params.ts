@@ -7,8 +7,8 @@ import type {
   SubstitutionContext,
 } from './types.js';
 import { ParamResolveError, SubstituteError, TERMINAL_NODE } from './types.js';
-import type { DeclaredOutput } from './outputs.js';
-import { declaredOutputs } from './outputs.js';
+import type { OutputContract } from './outputs.js';
+import { outputContract } from './outputs.js';
 import type { Expr, ExprSegment, TemplateMode } from './expr.js';
 import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
 import type { EvalIn, FnSpec, SigType } from './functions.js';
@@ -888,6 +888,19 @@ export function validateDoc(
     } else idKind.set(c.id, 'container');
   }
 
+  // A CORRUPT `config.outputs` (#1 F13a). Reported HERE as a readable
+  // diagnostic so the authoring UI can show it; `StrictNodeSchema` is what
+  // actually REFUSES it on save (this validator is advisory — see #444), and
+  // the reducer fails the node at run time. Reported once per node: every
+  // `${nodes.<id>.output.*}` ref against a corrupt contract has the same one
+  // root cause, so per-ref errors would just bury it.
+  for (const node of doc.nodes) {
+    const contract = outputsById.get(node.id);
+    if (contract?.kind === 'invalid') {
+      errors.push(`node '${node.id}': config.outputs is malformed (${contract.reason})`);
+    }
+  }
+
   // Node-only forward reachability + the container index, for the back-edge
   // reset-body (no-progress) guard below — computed via the SSOT helpers so the
   // reducer and this validator agree on which nodes a bounce resets.
@@ -1008,7 +1021,7 @@ export function validateDoc(
 function validateExitWhen(
   c: Container,
   declared: Map<string, Param>,
-  outputsById: Map<string, DeclaredOutput[] | null>,
+  outputsById: Map<string, OutputContract>,
   errors: string[],
 ): void {
   if (c.exitWhen === undefined) return;
@@ -1271,8 +1284,20 @@ interface ScanScope {
    * Carries the full `{name, type}` — ONE map serving both the name-check and
    * E6's type inference, per `outputs.ts`'s SSOT rule. A second, type-only map
    * could drift from this one about which outputs a node declares.
+   *
+   * Only a `declared` contract carries enforceable names/types: `absent` has no
+   * contract, and `invalid` is reported once by `validateDoc` (below) rather
+   * than manufacturing a second error per ref against a contract that is
+   * already known to be corrupt (#1 F13a).
+   *
+   * NOTE that "reported by `validateDoc`" is a claim about the CALLER: a
+   * `validateRefs`-only caller (it is separately exported) gets no such report,
+   * and ref-name checking against a corrupt contract stays silently disabled for
+   * it. The live authoring path calls both (`web/.../canvasDoc.ts`). The
+   * run-time refusal in the reducer is what makes that safe rather than
+   * fail-open.
    */
-  outputsById?: Map<string, DeclaredOutput[] | null>;
+  outputsById?: Map<string, OutputContract>;
 }
 
 function scan(where: string, value: unknown, scope: ScanScope, errors: string[]): void {
@@ -1319,13 +1344,13 @@ function parseExprSafe(body: string, where: string, errors: string[]): Expr {
 }
 
 /**
- * Every node's declared outputs, keyed by id — the shape `ScanScope.outputsById`
+ * Every node's output CONTRACT, keyed by id — the shape `ScanScope.outputsById`
  * wants. One helper so `validateRefs` and `validateExitWhen` build it the same
  * way and cannot disagree about a node's contract.
  */
-function outputsByIdOf(nodes: readonly Node[]): Map<string, DeclaredOutput[] | null> {
-  const m = new Map<string, DeclaredOutput[] | null>();
-  for (const node of nodes) m.set(node.id, declaredOutputs(node));
+function outputsByIdOf(nodes: readonly Node[]): Map<string, OutputContract> {
+  const m = new Map<string, OutputContract>();
+  for (const node of nodes) m.set(node.id, outputContract(node));
   return m;
 }
 
@@ -1382,11 +1407,12 @@ function refRootType(root: RefRoot, scope: ScanScope): SigType {
       return decl === undefined ? 'any' : sigOfDeclared(decl.type);
     }
     case 'nodeOutput': {
-      const declared = scope.outputsById?.get(root.id);
-      // No contract (`null`), producer not in the map, or a name the producer
-      // does not declare (reported already) → no static type.
-      if (declared == null) return 'any';
-      const out = declared.find((d) => d.name === root.name);
+      const contract = scope.outputsById?.get(root.id);
+      // No contract (`absent`), a corrupt one (`invalid` — reported once by
+      // validateDoc), producer not in the map, or a name the producer does not
+      // declare (reported already) → no static type.
+      if (contract?.kind !== 'declared') return 'any';
+      const out = contract.outputs.find((d) => d.name === root.name);
       return out === undefined ? 'any' : sigOfDeclared(out.type);
     }
     // A status is the STRING 'success'|'failure'|'skipped' — typed even when it
@@ -1604,10 +1630,12 @@ function checkRefRoot(
     // it is invalid regardless of dominance. EXCLUDED inside `default()`'s
     // first arg (`softOk`), where a missing node output is caught and the
     // fallback used — an unknown name resolves fine there, so rejecting it
-    // would be a false reject. A producer with no declared contract (`null`)
-    // has no enforceable names; an id absent from the map is not checked.
-    const declaredOuts = scope.outputsById?.get(id);
-    if (!softOk && declaredOuts != null && !declaredOuts.some((d) => d.name === name)) {
+    // would be a false reject. A producer with no declared contract (`absent`)
+    // has no enforceable names; a corrupt one (`invalid`) is reported once by
+    // validateDoc; an id absent from the map is not checked.
+    const contract = scope.outputsById?.get(id);
+    const declaredOuts = contract?.kind === 'declared' ? contract.outputs : null;
+    if (!softOk && declaredOuts !== null && !declaredOuts.some((d) => d.name === name)) {
       errors.push(
         `${where}: \${nodes.${id}.output.${name}} — node '${id}' declares no output named '${name}'`,
       );
