@@ -301,3 +301,67 @@ export function scanTemplateRefs(s: string): {
   }
   return { matches, unterminatedAt: null };
 }
+
+// --- #6 E2: the interpolation MODE classifier (SSOT) -------------------------
+
+/**
+ * How a field's text uses the `${}` language. Spec #6's two-mode model:
+ *
+ *  - `literal` — no `${}` at all. Still carries `$${` escapes to restore.
+ *  - `whole` — the field is EXACTLY one `${expr}`, so the resolved value keeps
+ *    its native type (`${params.n}` with n=42 yields the number 42).
+ *  - `interpolated` — one or more `${}` embedded in text; every segment is
+ *    string-coerced and concatenated.
+ *
+ * `scanned` is the PROTECTED string (escapes replaced by sentinels) that a
+ * match's `start`/`end` index into. It is returned because those offsets are
+ * meaningless against the raw input — a caller splicing `matches` MUST slice
+ * `scanned`, never the original.
+ *
+ * `matches` is populated in EVERY mode (empty for `literal`, the single covering
+ * match for `whole`), so a caller that just wants "every `${}` in this field,
+ * whatever the mode" — the static ref-scan does — reads it here instead of
+ * re-deriving the boundary scan. `whole` additionally exposes `body` for the one
+ * question only it answers.
+ *
+ * `unterminatedAt` reports a `${` that never closed; the classifier NEVER
+ * throws, because its callers hold different policies (`substitute` raises,
+ * `validateRefs` collects the error and keeps checking so the canvas can badge
+ * every problem at once). A field with an open brace is never `whole`.
+ *
+ * CAUTION: when `unterminatedAt !== null`, `matches` holds only the refs found
+ * BEFORE the open brace — scanning stops there. A caller that splices `matches`
+ * without checking `unterminatedAt` would silently TRUNCATE its output instead
+ * of failing loudly. Check `unterminatedAt` first, always.
+ */
+export type TemplateMode = {
+  matches: RefMatch[];
+  scanned: string;
+  unterminatedAt: number | null;
+} & ({ mode: 'literal' } | { mode: 'whole'; body: string } | { mode: 'interpolated' });
+
+/**
+ * Classify `s`'s interpolation mode — the ONE decision `substitute` (evaluator)
+ * and `validateWholeValue` (static checker) share, so they can never disagree
+ * about whether a field preserves its type.
+ *
+ * Classifies the string AS GIVEN: trimming is deliberately the CALLER's choice.
+ * Spec #6 Round-2 I1 ("mode is decided after canonical-trimming the field")
+ * applies ONLY to whole-value-REQUIRED fields — `exitWhen` today, `if.condition`
+ * / `foreach.items` at #4 — where a stray space demoting a boolean to the string
+ * `"true"` is unambiguously a bug. Trimming HERE would instead re-type every
+ * ordinary template: `"${nodes.a.output.text}\n"` is a normal prompt/file-body
+ * field, and a blanket trim would flip it to whole-value mode — silently eating
+ * the newline and emitting an array where a string belongs.
+ */
+export function interpolationMode(s: string): TemplateMode {
+  const scanned = protectEscapes(s);
+  const { matches, unterminatedAt } = scanTemplateRefs(scanned);
+  if (unterminatedAt !== null) return { mode: 'interpolated', matches, scanned, unterminatedAt };
+  if (matches.length === 0) return { mode: 'literal', matches, scanned, unterminatedAt: null };
+  const only = matches[0] as RefMatch;
+  if (matches.length === 1 && only.start === 0 && only.end === scanned.length - 1) {
+    return { mode: 'whole', body: only.body, matches, scanned, unterminatedAt: null };
+  }
+  return { mode: 'interpolated', matches, scanned, unterminatedAt: null };
+}

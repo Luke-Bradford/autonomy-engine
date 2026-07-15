@@ -394,6 +394,99 @@ describe('containers — loop', () => {
   });
 });
 
+// #6 E2 — `exitWhen` mode enforcement at RUN time. `validateDoc` is advisory
+// only (its sole caller is the canvas badge, which does not block Save, and the
+// server never calls it — see params.ts), so the reducer is the ONLY place an
+// embedded exitWhen can actually be stopped. A git import or a direct POST
+// reaches the engine with no save-time check at all.
+describe('containers — loop exitWhen interpolation mode (E2)', () => {
+  it('a PADDED lone exitWhen exits the loop — the trim decides the mode (I1)', () => {
+    // Pre-E2 this resolved to the STRING "true" and only exited by way of a
+    // `out === 'true'` coercion hack. Now it is genuinely a boolean.
+    const eng = engine(
+      [node('check', { outputs: [{ name: 'done', type: 'boolean' }] }), node('final')],
+      [edge('lp', 'final', 'success')],
+      [loop('lp', ['check'], ' ${nodes.check.output.done} ', 5)],
+    );
+    const { state } = drive(
+      eng,
+      {},
+      { outcomeFor: () => ({ outcome: 'success', outputs: { done: true } }) },
+    );
+    expect(state.containers.lp!.status).toBe('success');
+    expect(state.containers.lp!.round).toBe(0); // exited on the FIRST round
+    expect(state.nodes.final!.status).toBe('success');
+  });
+
+  it('an EMBEDDED exitWhen fails LOUDLY instead of silently spinning to maxRounds', () => {
+    // The bug this closes: `"done=${x}"` resolves to the string "done=true",
+    // which is never boolean-true, so the loop burned every round and then
+    // reported `capped` — a misleading reason for what is an authoring error.
+    const eng = engine(
+      [node('check', { outputs: [{ name: 'done', type: 'boolean' }] }), node('after')],
+      [edge('lp', 'after', 'completion')],
+      [loop('lp', ['check'], 'done=${nodes.check.output.done}', 3)],
+    );
+    const { state } = drive(
+      eng,
+      {},
+      { outcomeFor: () => ({ outcome: 'success', outputs: { done: true } }) },
+    );
+    expect(state.containers.lp!.status).toBe('failure');
+    expect(state.containers.lp!.reason).toBe('exitWhen_error'); // NOT 'capped'
+    expect(state.containers.lp!.round).toBe(0); // failed immediately, burned no rounds
+  });
+
+  it('a LITERAL exitWhen fails loudly (deliberate change: it used to exit via coercion)', () => {
+    // BREAKING, deliberate: `exitWhen: 'true'` is not an expression, and
+    // `validateDoc` has always rejected it — but it silently "worked" at run
+    // time via the `out === 'true'` string coercion, exiting after round one.
+    // A doc that only ran by accident now says so.
+    const eng = engine(
+      [node('check'), node('after')],
+      [edge('lp', 'after', 'completion')],
+      [loop('lp', ['check'], 'true', 3)],
+    );
+    const { state } = drive(eng, {});
+    expect(state.containers.lp!.status).toBe('failure');
+    expect(state.containers.lp!.reason).toBe('exitWhen_error');
+  });
+
+  it('an UNTERMINATED exitWhen reports the grammar error, not a mode error', () => {
+    // The mode check stays silent on an open brace and falls through to
+    // `substitute`, which raises the precise diagnostic. Pins the fall-through.
+    const eng = engine(
+      [node('check', { outputs: [{ name: 'done', type: 'boolean' }] }), node('after')],
+      [edge('lp', 'after', 'completion')],
+      [loop('lp', ['check'], '${nodes.check.output.done', 3)],
+    );
+    const { state } = drive(
+      eng,
+      {},
+      { outcomeFor: () => ({ outcome: 'success', outputs: { done: true } }) },
+    );
+    expect(state.containers.lp!.status).toBe('failure');
+    expect(state.containers.lp!.reason).toBe('exitWhen_error');
+  });
+
+  it('a string-typed "true" output still exits (the E6 coercion is deliberately kept)', () => {
+    // A `string`-typed output carrying "true" is common from an LLM/CLI activity.
+    // Removing this coercion is #6 E6's job — it lands with the static
+    // boolean-condition check that would warn the author at save time.
+    const eng = engine(
+      [node('check', { outputs: [{ name: 'done', type: 'string' }] }), node('final')],
+      [edge('lp', 'final', 'success')],
+      [loop('lp', ['check'], '${nodes.check.output.done}', 5)],
+    );
+    const { state } = drive(
+      eng,
+      {},
+      { outcomeFor: () => ({ outcome: 'success', outputs: { done: 'true' } }) },
+    );
+    expect(state.containers.lp!.status).toBe('success');
+  });
+});
+
 describe('containers — namespace isolation', () => {
   it('two containers projecting the SAME output name do not collide', () => {
     const eng = engine(
