@@ -121,8 +121,8 @@ its own dispatch stamp) — documented; use `${run.startedAt}` for a run-stable 
 | --- | --- |
 | E1 | Expression grammar + parser (refs, `[]`/`.`, function calls, literals) + AST |
 | E2 | Interpolation model (whole-value type-preserving vs string) + `$${` escape + single-pass inert eval |
-| E3 | Reference resolver over namespaces (params/vars/global/nodes.output/nodes.status/run/pipeline/item) — **PARTIALLY SHIPPED 2026-07-15**: `run.*` (SSOT fix + `startedAt`) + `nodes.<id>.status` landed. The rest is BLOCKED on unbuilt prerequisites, each with a named owner: `vars.*` → #1 D2, `global.*` → #1 D3, `item` → #4 A4 (`foreach`), `pipeline.*` → needs a doc widening (`PipelineVersionSchema` has no `name`; `EngineDoc` carries only nodes/edges/containers) + #5's seed for `triggerType`/`triggerName`/`triggerTime`, `run.attempt` → #1 D4 (the `attempts` fact exists but is node-scoped; a run-scoped `${run.*}` has no single answer for it). Re-open the remaining surface as each lands. |
-| E4 | Function catalog impl + per-fn type signatures (logical/string/collection/conversion/math) |
+| E3 | Reference resolver over namespaces (params/vars/global/nodes.output/nodes.status/run/pipeline/item) — **PARTIALLY SHIPPED 2026-07-15**: `run.*` (SSOT fix + `startedAt`) + `nodes.<id>.status` landed. The rest is BLOCKED on unbuilt prerequisites, each with a named owner: `vars.*` → #1 D2, `global.*` → #1 D3, `item` → **PARTIALLY delivered at E4**: the array-form binding (`filter`/`map`/`count`) is LEXICAL and needed no `foreach`, so it shipped with the catalog; the `foreach`-BODY binding remains #4 A4's, `pipeline.*` → needs a doc widening (`PipelineVersionSchema` has no `name`; `EngineDoc` carries only nodes/edges/containers) + #5's seed for `triggerType`/`triggerName`/`triggerTime`, `run.attempt` → #1 D4 (the `attempts` fact exists but is node-scoped; a run-scoped `${run.*}` has no single answer for it). Re-open the remaining surface as each lands. |
+| E4 | Function catalog impl + per-fn type signatures (logical/string/collection/conversion/math) — **SHIPPED 2026-07-15**: the closed catalog lives in `engine/functions.ts` (SSOT, one entry per fn) and the CALLING CONVENTION is now DATA (`call: 'eager' \| 'special'`, `lambdaArgs`, `staticSoftArg`) read by BOTH the evaluator and the static checker, so neither special-cases a fn by name. `and`/`or`/`if` short-circuit; `filter`/`map`/`count` bind `${item}` per element; `count` is arity-overloaded. See the E4 block below. |
 | E5 | Date fns + dispatch-stamped time (`utcNow` binds node.dispatched stamp; `run/pipeline` from seed) |
 | E6 | `validateRefs` typing: infer expr type, check against field-expected type; boolean-condition + array-items checks |
 | E7 | Deep `[]`/`.` addressing into `json`/`any` outputs (runtime-validated escape hatch) |
@@ -207,18 +207,65 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
   `record<{…}>` element shapes** (so judge-gate refs type-check), or **drop the static-safety claim**
   and state array-forms are runtime-checked only. (`OutputSpec` for a structured LLM output should
   carry the element shape so `${item.field}` in a downstream `filter` types.)
+  - **DECIDED at E4 (2026-07-15): runtime-checked only, for now.** `SigType` is
+    `string|number|boolean|array|any` — `array` carries NO element type. The element shape belongs to
+    a structured output's `OutputSpec` (**#2**) and to **E6**'s inference; minting `array<T>`/
+    `record<{…}>` at E4 would front-run both with nothing to consume it. The cost is REAL and owned:
+    a misspelled `${item.badField}` throws at RUN time, not at edit time. **Signatures are not
+    decorative** — `checkArgTypes` enforces them at run time, which is what makes the no-implicit-
+    coercion non-goal an actual rule (`${add('2', 3)}` throws). E6 consumes the same `sig` data for
+    inference and owns closing the edit-time gap.
 - **The function calling-convention needs a redesign.** `map/filter/count` predicates must be
   captured as **unevaluated ASTs re-run per element with `item` bound** (lazy, per-element) — the flat
   `impl(args)` (eager-map-all-args) model can't express it. Spec a per-fn convention: **eager args vs
   a lambda arg**; `item` is legal ONLY inside that lambda arg (top-level `${item.x}` hard-errors).
+  - **SHIPPED at E4.** The convention is DATA on the catalog entry, not a name-check:
+    `call:'eager'` (args resolved + signature-checked, then `impl`) vs `call:'special'` (the fn gets
+    the unevaluated arg ASTs + an injected `EvalIn{eval,soft,withItem}` and controls its own
+    evaluation). `lambdaArgs` is read by BOTH the evaluator (to bind `item`) and the static checker
+    (to decide where `${item}` is legal), so the two cannot drift. The pre-E4 `default`-by-NAME
+    branches in `evalExpr` + `checkExprStatic` are DELETED. A bare `${item}` (no path) is the element
+    itself — spec-required for scalar arrays (`filter(nums, greater(item, 5))`).
 - **`and`/`or` do NOT short-circuit** as variadic eager fns — `and(false, nodes.missing.output.x)`
   **throws** instead of returning false. DECISION: make `and`/`or` lazy (like `default`) so a cheap
   guard protects an absent second term, OR document eager semantics loudly.
+  - **DECIDED at E4: lazy.** `and`/`or` short-circuit, and **`if` joined them** — its branches have
+    the identical hazard (an eager `if` evaluates the untaken branch), and a conditional that
+    evaluates both arms is not what any author means.
+  - **CRITICAL: this is a RUN-TIME property ONLY — the static checker is NOT relaxed to match.**
+    `checkExprStatic` still rejects a non-guaranteed output in ANY arg of a short-circuiting fn.
+    That false-reject is deliberate: the checker cannot know arg0 is `false`, so treating later args
+    as soft would equally accept `${and(true, nodes.a.output.v)}` — a doc that passes save and then
+    THROWS at run with **no escape hatch**. Over-refusal is safe; that false-accept is not (the same
+    call E3 made for `${nodes.x.status}`). Laziness earns its keep on the **unvalidated** path
+    (`validateRefs` is advisory — the server never calls it, #444) and in author-expectation parity.
+    The author-facing form for reading a not-guaranteed output stays `default(nodes.a.output.v, '')`.
+    **Pinned by test** (`functions.test.ts` — "laziness does NOT relax the static checker").
 - **Concrete bugs to fix in the grammar:** add a real **number literal** (shipped `INT_RE=/^-?\d+$/`
   turns `7.5` into a broken ref) + boolean literal; **`count` is arity-overloaded** (`count(arr)` vs
   `count(arr,pred)`) and `avg` is 1-arg-over-array — the flat allowlist needs typed, shape-aware
   signatures. **Nested `${}` inside a predicate is structurally impossible** (the boundary scanner
   closes at the first `}`) — the **bare-predicate rule is normative**, state it.
+  - Number/boolean literals shipped at **E1**; `count`'s 1-or-2 arity and `avg`'s array form shipped
+    at **E4** (arity is derived from the signature: `variadic ? ∞ : args.length`). The
+    bare-predicate rule needed no code — the E1 boundary scanner makes it structural — and is now
+    pinned by test.
+  - **There is NO `null` literal** (the grammar is `number | boolean | string`), so `coalesce`'s
+    null-coalescing is driven by REFS, never a written `null`. `coalesce` (null/undefined only) and
+    `default` (also `''`/`false`, and rescues a MISSING output) are deliberately distinct fns.
+- **Deviations from the v1 catalog list, recorded (E4):** `slug` and `default` are KEPT though the
+  spec's line-64-77 list names neither — both are LIVE today and `default` is the only way to read a
+  reachable-but-not-guaranteed output; removing a live fn is a bigger break than recording the
+  deviation (the precedent this spec set for `pipelineVersionId` at E3). **`base64`/`base64ToString`
+  are hand-rolled** (UTF-8 + base64 in-module): `shared` is the pure engine — `lib` is ES2023 with no
+  DOM/node types — so `Buffer`/`btoa`/`TextEncoder` would break both the typecheck and the
+  no-host-access rule.
+- **Resource limits — the array cap shipped at E4** (`MAX_ARRAY_ELEMENTS = 10_000`), applied to array
+  **PRODUCERS** (`range`/`createArray`/`split`/`union`/`intersection`/`array`) as well as consumers
+  (`map`/`filter`/`count`/`sum`/`avg`/`take`/`skip`/`join`): a producer allocates BEFORE any
+  consumer's check could fire, so `${range(0, 2000000000)}` would OOM the pure reducer from an
+  unvalidated doc. The cap is pure + deterministic, so replay is unaffected. Max resolved-value size
+  and max deep-path depth remain OUT (E7/general).
 - **SSOT bug — FIXED at E3 (2026-07-15, implemented).** Was: the spec's example expressions use
   `run.runId`/`run.startedAt`, but the shipped `RUN_FIELDS = [id, pipelineVersionId, triggerId,
   parentRunId]` — `runId` was `id` and `startedAt` didn't exist, so the dynamic-filename expression

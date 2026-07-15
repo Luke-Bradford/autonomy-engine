@@ -10,6 +10,8 @@ import { ParamResolveError, SubstituteError, TERMINAL_NODE } from './types.js';
 import { declaredOutputNames } from './outputs.js';
 import type { Expr, TemplateMode } from './expr.js';
 import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
+import type { EvalIn, FnSpec } from './functions.js';
+import { FUNCTIONS, arity, checkArgTypes, listFunctions, toStr } from './functions.js';
 
 // ---------------------------------------------------------------------------
 // The `${...}` parameter language (ported from lib/pipeline.py's S3.1 resolver).
@@ -64,62 +66,13 @@ class MissingNodeOutputError extends SubstituteError {
   }
 }
 
-// --- the closed pure-function allowlist (SSOT: one entry per fn) -------------
-
-interface FnSpec {
-  /** Applies to already-resolved args. Never performs I/O; must be pure. */
-  impl: (args: unknown[]) => unknown;
-  minArgs: number;
-  /** `null` = variadic (no upper bound). */
-  maxArgs: number | null;
-}
-
-/**
- * Extend the language by adding ONE entry here. `default` is listed for its
- * arity/allowlist metadata (the static checker + arity guard read it) but is
- * evaluated specially in `evalExpr` because it is lazy (its first arg may be an
- * absent node output). Adding a fn is a single edit — the parser, evaluator and
- * validator all read this map.
- */
-const ALLOWED_FUNCS: Record<string, FnSpec> = {
-  default: {
-    impl: (a) => (isAbsent(a[0]) ? a[1] : a[0]),
-    minArgs: 2,
-    maxArgs: 2,
-  },
-  concat: {
-    impl: (a) => a.map(toStr).join(''),
-    minArgs: 1,
-    maxArgs: null,
-  },
-  slug: {
-    impl: (a) => slug(a[0]),
-    minArgs: 1,
-    maxArgs: 1,
-  },
-};
-
-/** A value `default()` treats as "missing" and replaces with its fallback. */
-function isAbsent(v: unknown): boolean {
-  return v === null || v === undefined || v === '' || v === false;
-}
-
-function slug(v: unknown): string {
-  const s = toStr(v)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  return s || 'x';
-}
-
-/** Coerce a resolved value to a string (embedded-ref + concat semantics). */
-function toStr(v: unknown): string {
-  if (v === null || v === undefined) return '';
-  if (typeof v === 'boolean') return v ? 'true' : 'false';
-  if (typeof v === 'string') return v;
-  if (typeof v === 'number' || typeof v === 'bigint') return String(v);
-  return JSON.stringify(v);
-}
+// --- the closed pure-function allowlist --------------------------------------
+//
+// The catalog itself (one entry per fn, plus the eager/special calling
+// convention and the per-fn type signatures) is `functions.ts` — #6 E4. This
+// module is its only consumer: the evaluator below reads a spec's `call`/
+// `lambdaArgs`, and the static checker reads `lambdaArgs`/`staticSoftArg`, so
+// neither special-cases a function by NAME.
 
 // --- reference shape (segments are the SSOT — `source` is never re-parsed) ---
 
@@ -158,9 +111,58 @@ function deferredToE7(source: string): SubstituteError {
 
 // --- the evaluator ----------------------------------------------------------
 
-function resolveRef(expr: Extract<Expr, { kind: 'ref' }>, ctx: SubstitutionContext): unknown {
+/**
+ * The evaluation scope: the run's facts (`ctx`) plus the LEXICAL binding of
+ * `item` (#6 E4).
+ *
+ * `item` rides here rather than on `SubstitutionContext` because it is lexical,
+ * not a run fact: it exists only inside a `filter`/`map`/`count` lambda arg, and
+ * a nested array form must REBIND it for its own elements (spec #6 Round-2 M1:
+ * "the nearest enclosing iteration binds it"). A child `Env` is created per
+ * element, so the reducer's purity is untouched — nothing is mutated.
+ *
+ * The box (`{ value }`) distinguishes "bound to `undefined`" from "not bound".
+ * When #4 A4 lands, a `foreach` body seeds this same field.
+ */
+interface Env {
+  ctx: SubstitutionContext;
+  item?: { value: unknown };
+}
+
+function resolveRef(expr: Extract<Expr, { kind: 'ref' }>, env: Env): unknown {
+  const ctx = env.ctx;
   const parts = fieldPath(expr);
+  // NB `${item[0]}` lands HERE, not in the `item` branch below: an index-bearing
+  // path has no plain field path, so it is refused as E7 work. The message says
+  // "into an output" while `item` is not an output — a known misattribution,
+  // accepted because the refusal itself is correct and E7 owns the fix.
   if (parts === null) throw deferredToE7(expr.source);
+
+  // `${item}` / `${item.<path>}` (#6 E4) — bound ONLY inside a lambda arg.
+  //
+  // A bare `${item}` (no path) is the element itself: `filter(params.nums,
+  // greater(item, 5))` over a scalar array is the spec's own v1 shape.
+  //
+  // Unbound is a plain `SubstituteError`, never `MissingNodeOutputError`:
+  // `default()` catches the latter, so routing an out-of-scope `item` through it
+  // would let `${default(item.x, 'fb')}` silently return the fallback for what is
+  // really a scope error. Same reasoning as E3's status refusal.
+  if (parts[0] === 'item') {
+    if (env.item === undefined) {
+      throw new SubstituteError(
+        `\${${expr.source}}: 'item' is only bound inside a filter/map/count ` +
+          'predicate — it has no value here',
+      );
+    }
+    let cur: unknown = env.item.value;
+    for (const name of parts.slice(1)) {
+      if (cur === null || typeof cur !== 'object' || !(name in (cur as object))) {
+        throw new SubstituteError(`\${${expr.source}}: the current item has no field '${name}'`);
+      }
+      cur = (cur as Record<string, unknown>)[name];
+    }
+    return cur;
+  }
 
   if (parts[0] === 'params' && parts.length === 2) {
     const name = parts[1] as string;
@@ -210,40 +212,24 @@ function resolveRef(expr: Extract<Expr, { kind: 'ref' }>, ctx: SubstitutionConte
   throw new SubstituteError(`unresolvable reference \${${expr.source}}`);
 }
 
-function evalExpr(expr: Expr, ctx: SubstitutionContext): unknown {
+function evalExpr(expr: Expr, env: Env): unknown {
   switch (expr.kind) {
     case 'str':
     case 'num':
     case 'bool':
       return expr.value;
     case 'ref':
-      return resolveRef(expr, ctx);
+      return resolveRef(expr, env);
     case 'call': {
-      if (expr.name === 'default') {
-        if (expr.args.length !== 2) {
-          throw new SubstituteError(
-            `function 'default' arity: expected 2, got ${expr.args.length}`,
-          );
-        }
-        let first: unknown;
-        try {
-          first = evalExpr(expr.args[0] as Expr, ctx);
-        } catch (err) {
-          if (err instanceof MissingNodeOutputError) {
-            return evalExpr(expr.args[1] as Expr, ctx);
-          }
-          throw err;
-        }
-        return isAbsent(first) ? evalExpr(expr.args[1] as Expr, ctx) : first;
-      }
-      const spec = ALLOWED_FUNCS[expr.name];
+      const spec = FUNCTIONS[expr.name];
       if (spec === undefined) {
         throw new SubstituteError(`unknown function '${expr.name}' (allowed: ${allowedFnNames()})`);
       }
       checkArity(expr.name, spec, expr.args.length);
-      const args = expr.args.map((a) => evalExpr(a, ctx));
       try {
-        return spec.impl(args);
+        return spec.call === 'special'
+          ? spec.run(expr.args, evalIn(env))
+          : callEager(expr.name, spec, expr.args, env);
       } catch (err) {
         if (err instanceof SubstituteError) throw err;
         const msg = err instanceof Error ? err.message : String(err);
@@ -253,15 +239,56 @@ function evalExpr(expr: Expr, ctx: SubstitutionContext): unknown {
   }
 }
 
+/** Resolve every arg, type-check against the signature, then apply. */
+function callEager(
+  name: string,
+  spec: Extract<FnSpec, { call: 'eager' }>,
+  args: Expr[],
+  env: Env,
+): unknown {
+  const values = args.map((a) => evalExpr(a, env));
+  checkArgTypes(name, spec, values);
+  return spec.impl(values);
+}
+
+/**
+ * The evaluator handed to a `special` fn. `soft` keeps the try/catch — and so
+ * `MissingNodeOutputError` itself — PRIVATE to this module: the catalog gets a
+ * yes/no answer instead of an error class, so `functions.ts` never imports back.
+ */
+function evalIn(env: Env): EvalIn {
+  return {
+    eval: (e) => evalExpr(e, env),
+    soft: (e) => {
+      try {
+        return { ok: true, value: evalExpr(e, env) };
+      } catch (err) {
+        if (err instanceof MissingNodeOutputError) return { ok: false };
+        throw err;
+      }
+    },
+    // A fresh child Env per element: `item` is rebound, never mutated, so a
+    // nested array form shadows its parent and nothing leaks to a sibling arg.
+    withItem: (e, item) => evalExpr(e, { ...env, item: { value: item } }),
+  };
+}
+
 function allowedFnNames(): string {
-  return Object.keys(ALLOWED_FUNCS).sort().join(', ');
+  return listFunctions().join(', ');
 }
 
 function checkArity(name: string, spec: FnSpec, got: number): void {
-  if (got < spec.minArgs || (spec.maxArgs !== null && got > spec.maxArgs)) {
-    const expected = spec.maxArgs === spec.minArgs ? `${spec.minArgs}` : `${spec.minArgs}+`;
-    throw new SubstituteError(`function '${name}' arity: expected ${expected}, got ${got}`);
+  const { min, max } = arity(spec);
+  if (got < min || (max !== null && got > max)) {
+    throw new SubstituteError(
+      `function '${name}' arity: expected ${arityText(min, max)}, got ${got}`,
+    );
   }
+}
+
+function arityText(min: number, max: number | null): string {
+  if (max === null) return `${min}+`;
+  return max === min ? `${min}` : `${min}-${max}`;
 }
 
 // --- substitute (the security-critical inert single pass) -------------------
@@ -311,7 +338,7 @@ export function substitute(value: unknown, ctx: SubstitutionContext): unknown {
 
   if (mode.mode === 'whole') {
     // Whole-value → preserve the resolved value's native type.
-    const out = evalExpr(parseExpr(mode.body), ctx);
+    const out = evalExpr(parseExpr(mode.body), { ctx });
     return typeof out === 'string' ? restoreEscapes(out) : out;
   }
 
@@ -323,7 +350,7 @@ export function substitute(value: unknown, ctx: SubstitutionContext): unknown {
   let cursor = 0;
   for (const m of mode.matches) {
     result += mode.scanned.slice(cursor, m.start);
-    result += toStr(evalExpr(parseExpr(m.body), ctx));
+    result += toStr(evalExpr(parseExpr(m.body), { ctx }));
     cursor = m.end + 1;
   }
   result += mode.scanned.slice(cursor);
@@ -993,9 +1020,21 @@ function parseExprSafe(body: string, where: string, errors: string[]): Expr {
 
 /**
  * Static-check ONE parsed expression. Mirrors `evalExpr`'s grammar exactly — if
- * this accepts, resolution can only fail on run-time-only facts. `softOk` is
- * true only inside `default()`'s first argument (the one place a back-edge or
- * non-dominating node output may be read).
+ * this accepts, resolution can only fail on run-time-only facts.
+ *
+ * `softOk` is true only inside the arg a fn declares as `staticSoftArg`
+ * (`default`'s first — the one place a back-edge or non-dominating node output
+ * may be read). `itemInScope` is true only inside a `lambdaArgs` position, where
+ * `${item}` is bound.
+ *
+ * Both come from the CATALOG rather than a name check, so the checker and the
+ * evaluator read one declaration of each fn's convention.
+ *
+ * DELIBERATELY NOT relaxed for `and`/`or`/`if`, which short-circuit at run time:
+ * this checker cannot know that arg0 is `false`, so treating their later args as
+ * soft would equally accept `${and(true, nodes.a.output.v)}` — a doc that passes
+ * save and then THROWS at run with no escape hatch. Over-refusing is safe; a
+ * false-accept here is not (the same call E3 made for `${nodes.x.status}`).
  */
 function checkExprStatic(
   expr: Expr,
@@ -1003,32 +1042,35 @@ function checkExprStatic(
   errors: string[],
   where: string,
   softOk: boolean,
+  itemInScope = false,
 ): void {
   if (expr.kind === 'str' || expr.kind === 'num' || expr.kind === 'bool') return;
   if (expr.kind === 'call') {
-    if (expr.name === 'default') {
-      if (expr.args.length !== 2) {
-        errors.push(`${where}: function 'default' arity: expected 2, got ${expr.args.length}`);
-      }
-      expr.args.forEach((a, i) => checkExprStatic(a, scope, errors, where, i === 0));
-      return;
-    }
-    const spec = ALLOWED_FUNCS[expr.name];
+    const spec = FUNCTIONS[expr.name];
     if (spec === undefined) {
       errors.push(`${where}: unknown function '${expr.name}' (allowed: ${allowedFnNames()})`);
       return;
     }
-    if (
-      expr.args.length < spec.minArgs ||
-      (spec.maxArgs !== null && expr.args.length > spec.maxArgs)
-    ) {
-      const expected = spec.maxArgs === spec.minArgs ? `${spec.minArgs}` : `${spec.minArgs}+`;
+    const { min, max } = arity(spec);
+    if (expr.args.length < min || (max !== null && expr.args.length > max)) {
       errors.push(
-        `${where}: function '${expr.name}' arity: expected ${expected}, got ${expr.args.length}`,
+        `${where}: function '${expr.name}' arity: expected ${arityText(min, max)}, ` +
+          `got ${expr.args.length}`,
       );
     }
-    // Function args never inherit `default`'s laziness.
-    expr.args.forEach((a) => checkExprStatic(a, scope, errors, where, false));
+    const lambdas = spec.lambdaArgs ?? [];
+    expr.args.forEach((a, i) =>
+      checkExprStatic(
+        a,
+        scope,
+        errors,
+        where,
+        i === spec.staticSoftArg,
+        // `item` stays in scope for anything nested inside a lambda arg; a
+        // SIBLING arg of the same call does not inherit it.
+        itemInScope || lambdas.includes(i),
+      ),
+    );
     return;
   }
 
@@ -1046,6 +1088,19 @@ function checkExprStatic(
   const parts = fieldPath(expr);
   if (parts === null) {
     errors.push(`${where}: ${deferredToE7(expr.source).message}`);
+    return;
+  }
+  // `${item}` (#6 E4) — legal ONLY inside a lambda arg. The ELEMENT'S OWN shape
+  // is not checked here: the type vocabulary has no element type, so a misspelled
+  // `${item.badField}` is a run-time throw, not an edit-time error (E4's recorded
+  // decision — E6 + #2's `OutputSpec` own closing that gap).
+  if (parts[0] === 'item') {
+    if (!itemInScope) {
+      errors.push(
+        `${where}: \${${expr.source}} — 'item' is only bound inside a ` +
+          'filter/map/count predicate',
+      );
+    }
     return;
   }
   if (parts[0] === 'params' && parts.length === 2) {
