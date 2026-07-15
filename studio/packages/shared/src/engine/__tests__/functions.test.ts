@@ -194,6 +194,14 @@ describe('no implicit coercion', () => {
     expect(substitute('${lessOrEquals(mul(-1, 0), 0)}', ctx())).toBe(true);
   });
 
+  it('names the actual value when a non-finite number is rejected', () => {
+    // NaN/Infinity are `typeof 'number'` but the `number` sig requires FINITE,
+    // so a naive typeName gives the baffling "must be a number, got number".
+    const c = ctx({ params: { nan: NaN, inf: Infinity } });
+    expect(() => substitute('${add(params.nan, 1)}', c)).toThrow(/got NaN/);
+    expect(() => substitute('${add(params.inf, 1)}', c)).toThrow(/got Infinity/);
+  });
+
   it('float() rejects radix prefixes (no implicit reinterpretation)', () => {
     expect(() => substitute("${float('0x10')}", ctx())).toThrow(SubstituteError);
     expect(substitute("${float('4.5')}", ctx())).toBe(4.5);

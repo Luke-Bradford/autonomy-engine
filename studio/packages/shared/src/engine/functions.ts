@@ -156,6 +156,10 @@ function slug(v: unknown): string {
 function typeName(v: unknown): string {
   if (v === null) return 'null';
   if (Array.isArray(v)) return 'array';
+  // `NaN`/`Infinity` ARE `typeof 'number'`, but the `number` sig rejects them
+  // (it requires a FINITE number), so reporting them as "number" yields the
+  // baffling "must be a number, got number". Name the actual value instead.
+  if (typeof v === 'number' && !Number.isFinite(v)) return Number.isNaN(v) ? 'NaN' : String(v);
   return typeof v;
 }
 
