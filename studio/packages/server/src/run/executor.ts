@@ -1,8 +1,10 @@
 import pLimit from 'p-limit';
 import {
   catalog as sharedCatalog,
+  FAILURE_CODES,
   type ActivityCatalog,
   type EngineEvent,
+  type FailureKind,
   type Node,
 } from '@autonomy-studio/shared';
 import { getRun } from '../repo/runs.js';
@@ -11,6 +13,7 @@ import { getSecretByRef } from '../repo/secrets.js';
 import { decrypt } from '../secrets/secrets.js';
 import type { Db } from '../repo/types.js';
 import type { ConnectorRegistry } from '../connectors/registry.js';
+import { toEngineFailure } from '../connectors/error-kind.js';
 import type { ActivityContext, ConnectorAdapter } from '../connectors/types.js';
 import type { DocResolver, Executor, ExecutorCommand } from './driver.js';
 
@@ -52,9 +55,19 @@ export interface ExecutorDeps {
   concurrency?: number;
 }
 
-/** A terminal `node.failed` for `nodeId`/`attemptId` (before OR after dispatch). */
-function nodeFailed(runId: string, nodeId: string, attemptId: string, error: string): EngineEvent {
-  return { type: 'node.failed', runId, nodeId, attemptId, error };
+/**
+ * A terminal `node.failed` for `nodeId`/`attemptId` (before OR after dispatch).
+ * `failure` carries the STRUCTURED classification (#1 F0): `kind` is the
+ * machine-readable retry axis, `error` is human detail only. The kind is never
+ * formatted into the message — a retry layer must never parse text.
+ */
+function nodeFailed(
+  runId: string,
+  nodeId: string,
+  attemptId: string,
+  failure: { error: string; kind: FailureKind; code?: string },
+): EngineEvent {
+  return { type: 'node.failed', runId, nodeId, attemptId, ...failure };
 }
 
 export function createExecutor(deps: ExecutorDeps): Executor {
@@ -71,15 +84,21 @@ export function createExecutor(deps: ExecutorDeps): Executor {
 
   /**
    * Resolve the adapter + plaintext secret + connection config for a node whose
-   * activity requires a connection. Returns an error STRING (→ `node.failed`)
+   * activity requires a connection. Returns a structured error (→ `node.failed`)
    * or the resolved bundle. All pure reads — safe to run before `node.dispatched`.
+   *
+   * Every cause carries its OWN `code`: six distinct misconfigurations funnel
+   * through one call site, and an operator (and F9a's `errorMap`) must be able
+   * to tell "you never bound a connection" from "your key won't decrypt" without
+   * string-matching the message. All are `permanent` — a config mistake does not
+   * fix itself on a retry.
    */
   async function resolveConnection(
     node: Node,
     kinds: readonly string[],
     activityType: string,
   ): Promise<
-    | { error: string }
+    | { error: string; code: string }
     | {
         adapter: ConnectorAdapter;
         secret: string | null;
@@ -87,32 +106,53 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       }
   > {
     if (node.connectionId === undefined) {
-      return { error: `activity '${activityType}' requires a connection but the node has none` };
+      return {
+        error: `activity '${activityType}' requires a connection but the node has none`,
+        code: FAILURE_CODES.CONNECTION_MISSING,
+      };
     }
     const connection = getConnection(deps.db, node.connectionId);
     if (connection === null) {
-      return { error: `connection '${node.connectionId}' not found` };
+      return {
+        error: `connection '${node.connectionId}' not found`,
+        code: FAILURE_CODES.CONNECTION_NOT_FOUND,
+      };
     }
     if (!kinds.includes(connection.kind)) {
       return {
         error: `connection kind '${connection.kind}' is not valid for activity '${activityType}' (expected: ${kinds.join(', ')})`,
+        code: FAILURE_CODES.CONNECTION_KIND_INVALID,
       };
     }
     const adapter = deps.adapters.get(connection.kind);
     if (adapter === undefined) {
-      return { error: `no adapter for connection kind '${connection.kind}'` };
+      return {
+        error: `no adapter for connection kind '${connection.kind}'`,
+        code: FAILURE_CODES.NO_ADAPTER,
+      };
     }
     let secret: string | null = null;
     if (connection.secretRef !== null) {
       const secretRow = getSecretByRef(deps.db, connection.secretRef);
       if (secretRow === null) {
-        return { error: `secret '${connection.secretRef}' not found` };
+        // Defence in depth, not a reachable state: `connections.secret_ref` is an
+        // FK onto `secrets.ref` with `onDelete: 'restrict'`, so a dangling ref is
+        // rejected at insert AND the referenced secret cannot be deleted out from
+        // under it. Kept (with its own code) so a future schema change that
+        // relaxes the FK surfaces loudly instead of NPE-ing.
+        return {
+          error: `secret '${connection.secretRef}' not found`,
+          code: FAILURE_CODES.SECRET_NOT_FOUND,
+        };
       }
       try {
         secret = await decrypt(secretRow.ciphertext, deps.masterKey);
       } catch {
         // NEVER echo the underlying decrypt error (could leak ciphertext/key detail).
-        return { error: `secret '${connection.secretRef}' could not be decrypted` };
+        return {
+          error: `secret '${connection.secretRef}' could not be decrypted`,
+          code: FAILURE_CODES.SECRET_UNDECRYPTABLE,
+        };
       }
     }
     return { adapter, secret, connectionConfig: connection.config };
@@ -142,16 +182,38 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           events.push({ type: 'node.succeeded', runId, nodeId, attemptId, outputs: ev.outputs });
           return events;
         } else {
-          events.push(nodeFailed(runId, nodeId, attemptId, `${ev.kind}: ${ev.error}`));
+          // F0: map the adapter's PROVIDER kind onto the engine's retry axis and
+          // carry the message through RAW. This used to be `${ev.kind}: ${ev.error}`
+          // — a classification recoverable only by parsing text.
+          events.push(
+            nodeFailed(runId, nodeId, attemptId, { error: ev.error, ...toEngineFailure(ev.kind) }),
+          );
           return events;
         }
       }
       // Stream ended with no terminal — an adapter contract violation.
-      events.push(nodeFailed(runId, nodeId, attemptId, 'adapter produced no terminal event'));
+      events.push(
+        nodeFailed(runId, nodeId, attemptId, {
+          error: 'adapter produced no terminal event',
+          kind: 'permanent',
+          code: FAILURE_CODES.ADAPTER_NO_TERMINAL,
+        }),
+      );
       return events;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      events.push(nodeFailed(runId, nodeId, attemptId, message));
+      // An unexpected throw is an adapter BUG of unknown cause, not a classified
+      // failure — adapters signal a real cancel/transient by yielding a terminal
+      // `failed` themselves. `permanent` is the safe read: it never retries, so a
+      // broken adapter cannot retry-loop, and (no MVP activity being idempotent)
+      // a blind retry could repeat a side effect that already happened.
+      events.push(
+        nodeFailed(runId, nodeId, attemptId, {
+          error: message,
+          kind: 'permanent',
+          code: FAILURE_CODES.ADAPTER_THREW,
+        }),
+      );
       return events;
     } finally {
       controller.abort();
@@ -167,12 +229,20 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // --- pre-flight (pure reads; node stays `ready` on any failure here) ------
     const node = resolveNode(runId, nodeId);
     if (node === null) {
-      yield nodeFailed(runId, nodeId, attemptId, `node '${nodeId}' not found in the run's doc`);
+      yield nodeFailed(runId, nodeId, attemptId, {
+        error: `node '${nodeId}' not found in the run's doc`,
+        kind: 'permanent',
+        code: FAILURE_CODES.NODE_NOT_FOUND,
+      });
       return;
     }
     const entry = catalog.get(node.type);
     if (entry === undefined) {
-      yield nodeFailed(runId, nodeId, attemptId, `unknown activity type '${node.type}'`);
+      yield nodeFailed(runId, nodeId, attemptId, {
+        error: `unknown activity type '${node.type}'`,
+        kind: 'permanent',
+        code: FAILURE_CODES.UNKNOWN_ACTIVITY,
+      });
       return;
     }
 
@@ -182,14 +252,22 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     if (entry.connectionKinds.length > 0) {
       const resolved = await resolveConnection(node, entry.connectionKinds, node.type);
       if ('error' in resolved) {
-        yield nodeFailed(runId, nodeId, attemptId, resolved.error);
+        yield nodeFailed(runId, nodeId, attemptId, {
+          error: resolved.error,
+          kind: 'permanent',
+          code: resolved.code,
+        });
         return;
       }
       ({ adapter, secret, connectionConfig } = resolved);
     } else {
       // No MVP activity is connection-less; a future built-in runner would go
       // here. Fail loud rather than silently no-op.
-      yield nodeFailed(runId, nodeId, attemptId, `activity '${node.type}' has no executor`);
+      yield nodeFailed(runId, nodeId, attemptId, {
+        error: `activity '${node.type}' has no executor`,
+        kind: 'permanent',
+        code: FAILURE_CODES.NO_EXECUTOR,
+      });
       return;
     }
 

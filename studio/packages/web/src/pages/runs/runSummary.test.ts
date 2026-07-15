@@ -56,7 +56,14 @@ describe('deriveNodeActivity', () => {
         attemptId: 'b#0',
         idempotent: true,
       }),
-      envelope({ type: 'node.failed', runId: 'r', nodeId: 'b', attemptId: 'b#0', error: 'boom' }),
+      envelope({
+        type: 'node.failed',
+        runId: 'r',
+        nodeId: 'b',
+        attemptId: 'b#0',
+        error: 'boom',
+        kind: 'permanent',
+      }),
     ];
     const activity = deriveNodeActivity(events);
     expect(activity).toEqual([
@@ -88,7 +95,14 @@ describe('deriveNodeActivity', () => {
         attemptId: 'a#0',
         idempotent: true,
       }),
-      envelope({ type: 'node.failed', runId: 'r', nodeId: 'a', attemptId: 'a#0', error: 'x' }),
+      envelope({
+        type: 'node.failed',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#0',
+        error: 'x',
+        kind: 'transient',
+      }),
       envelope({
         type: 'node.retryRequested',
         runId: 'r',

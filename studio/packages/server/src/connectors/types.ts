@@ -11,14 +11,19 @@ import type { ConnectionKind } from '@autonomy-studio/shared';
  */
 
 /**
- * The defined error taxonomy (mined + review). It classifies WHY an activity
- * failed so a later retry/routing layer can decide retry-vs-fail; P3a maps every
- * kind to a terminal `node.failed` (no retry yet) with the kind in the message.
+ * The PROVIDER-facing error taxonomy (mined + review). It classifies WHY an
+ * activity failed, in the terms a provider actually reports.
  * - `auth`      — bad/again-needed credentials (a `secret` problem).
  * - `rate_limit`— throttled by the provider; a backoff-retry candidate.
  * - `transient` — network blip / 5xx / timeout; a retry candidate.
  * - `permanent` — a request that will never succeed as-is (bad input, 4xx-ish).
  * - `cancelled` — aborted via the `AbortSignal` (run cancel / shutdown).
+ *
+ * This is NOT the engine's taxonomy: the executor maps every kind onto the
+ * 3-valued `FailureKind` (the reducer's retry-decision axis) via
+ * `error-kind.ts::toEngineFailure`, keeping the narrowed-away detail in
+ * `node.failed.code`. The kind is a FIELD on the event — never formatted into
+ * the message (#1 F0). Retry itself is still not wired (F2b).
  */
 export type ConnectorErrorKind = 'auth' | 'rate_limit' | 'transient' | 'permanent' | 'cancelled';
 

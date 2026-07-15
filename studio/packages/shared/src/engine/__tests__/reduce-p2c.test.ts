@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Container, Edge, EngineCommand, EngineEvent, Node } from '../types.js';
+import type { Container, Edge, EngineCommand, EngineEvent, FailureKind, Node } from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
 
 // --- helpers ---------------------------------------------------------------
@@ -42,8 +42,15 @@ function succeeded(
 ): EngineEvent {
   return { type: 'node.succeeded', runId: RUN, nodeId, attemptId, outputs };
 }
-function failed(nodeId: string, attemptId: string, error = 'boom'): EngineEvent {
-  return { type: 'node.failed', runId: RUN, nodeId, attemptId, error };
+/** `kind` (#1 F0) defaults to `permanent` — the pre-F0 parse default, so these
+ *  container/walk cases assert unchanged behaviour. */
+function failed(
+  nodeId: string,
+  attemptId: string,
+  error = 'boom',
+  kind: FailureKind = 'permanent',
+): EngineEvent {
+  return { type: 'node.failed', runId: RUN, nodeId, attemptId, error, kind };
 }
 function returned(
   callNodeId: string,

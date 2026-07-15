@@ -88,14 +88,17 @@ function resolveDocFor(db: Db): DocResolver {
   };
 }
 
-function deps(db: Db, over: { adapters?: ConnectorRegistry; concurrency?: number } = {}) {
+function deps(
+  db: Db,
+  over: { adapters?: ConnectorRegistry; concurrency?: number; masterKey?: Uint8Array } = {},
+) {
   const resolveDoc = resolveDocFor(db);
   return {
     db,
     resolveDoc,
     executor: createExecutor({
       db,
-      masterKey: KEY,
+      masterKey: over.masterKey ?? KEY,
       resolveDoc,
       adapters: over.adapters ?? testRegistry(),
       concurrency: over.concurrency,
@@ -181,6 +184,9 @@ describe('createExecutor — loud pre-flight failures (no bogus node.dispatched)
     expect(types).toContain('node.failed');
     expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
       error: expect.stringContaining("unknown activity type 'no_such_activity'"),
+      // A misconfigured doc never succeeds on a retry → `permanent`.
+      kind: 'permanent',
+      code: 'unknown_activity',
     });
   });
 
@@ -194,6 +200,8 @@ describe('createExecutor — loud pre-flight failures (no bogus node.dispatched)
     expect(eventTypes(db, run.id)).not.toContain('node.dispatched');
     expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
       error: expect.stringContaining('requires a connection'),
+      kind: 'permanent',
+      code: 'connection_missing',
     });
   });
 
@@ -207,6 +215,8 @@ describe('createExecutor — loud pre-flight failures (no bogus node.dispatched)
     expect(state.status).toBe('failure');
     expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
       error: expect.stringContaining("connection kind 'anthropic_api' is not valid"),
+      kind: 'permanent',
+      code: 'connection_kind_invalid',
     });
   });
 
@@ -232,31 +242,87 @@ describe('createExecutor — loud pre-flight failures (no bogus node.dispatched)
     expect(state.status).toBe('failure');
     expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
       error: expect.stringContaining("no adapter for connection kind 'anthropic_api'"),
+      kind: 'permanent',
+      code: 'no_adapter',
     });
+  });
+
+  it('an undecryptable secret fails loudly with its OWN code, echoing NOTHING of the ciphertext', async () => {
+    // `resolveConnection` funnels six distinct misconfigurations through one
+    // call site, so each needs its own `code` for an operator (and F9a's
+    // `errorMap`) to tell them apart without string-matching the message.
+    // This is the realistic one: the master key rotated (or the ciphertext
+    // corrupted), so a secret that exists cannot be opened.
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, 'sk-encrypted-under-the-OLD-key');
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x' })]);
+    const run = seedRun(db, pvId);
+
+    const otherKey = new Uint8Array(32).fill(9);
+    const state = await startRun(deps(db, { masterKey: otherKey }), run);
+
+    expect(state.status).toBe('failure');
+    expect(eventTypes(db, run.id)).not.toContain('node.dispatched');
+    const failed = loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed');
+    expect(failed).toMatchObject({ kind: 'permanent', code: 'secret_undecryptable' });
+    // The message must never leak crypto detail (see resolveConnection).
+    expect((failed as { error: string }).error).not.toContain('sk-encrypted');
   });
 });
 
-describe('createExecutor — error taxonomy → node.failed', () => {
-  for (const kind of ['auth', 'rate_limit', 'transient', 'permanent', 'cancelled'] as const) {
-    it(`maps a '${kind}' adapter failure to node.failed with the kind in the message`, async () => {
+describe('createExecutor — error taxonomy → node.failed{kind, code} (#1 F0)', () => {
+  // The executor seam maps the adapters' 5-kind PROVIDER taxonomy down onto the
+  // engine's 3-kind RETRY-DECISION axis, preserving the dropped detail in
+  // `code`. This table IS the contract (spec #2's error taxonomy fixes it:
+  // 429 → transient, 401/403 → permanent, abort → cancelled).
+  const TAXONOMY = [
+    { adapter: 'auth', kind: 'permanent', code: 'auth' },
+    { adapter: 'rate_limit', kind: 'transient', code: 'rate_limit' },
+    { adapter: 'transient', kind: 'transient', code: undefined },
+    { adapter: 'permanent', kind: 'permanent', code: undefined },
+    { adapter: 'cancelled', kind: 'cancelled', code: undefined },
+  ] as const;
+
+  for (const row of TAXONOMY) {
+    it(`maps a '${row.adapter}' adapter failure → kind '${row.kind}'${row.code ? ` + code '${row.code}'` : ' (no code)'}`, async () => {
       const db = freshDb().db;
       const connId = await seedConnection(db, 'http', {}, null);
       const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x' })]);
       const run = seedRun(db, pvId);
 
       const adapters = fakeHttpAdapter(async function* (): AsyncIterable<ActivityEvent> {
-        yield { type: 'failed', kind, error: 'boom' };
+        yield { type: 'failed', kind: row.adapter, error: 'boom' };
       });
 
       const state = await startRun(deps(db, { adapters }), run);
       expect(state.status).toBe('failure');
       // node.dispatched IS present — the failure is at the adapter (post-dispatch).
       expect(eventTypes(db, run.id)).toContain('node.dispatched');
-      expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
-        error: `${kind}: boom`,
-      });
+      const failed = loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed');
+      expect(failed).toMatchObject({ kind: row.kind });
+      expect((failed as { code?: string } | undefined)?.code).toBe(row.code);
     });
   }
+
+  it('carries the adapter message through RAW — the kind is a FIELD, never a string prefix', async () => {
+    // F0's core fix: the old executor string-formatted `${kind}: ${error}` into
+    // `error`, which made the classification only recoverable by parsing text.
+    // Any retry/routing layer must read `kind`; `error` stays human detail.
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x' })]);
+    const run = seedRun(db, pvId);
+
+    const adapters = fakeHttpAdapter(async function* (): AsyncIterable<ActivityEvent> {
+      yield { type: 'failed', kind: 'rate_limit', error: 'boom' };
+    });
+
+    await startRun(deps(db, { adapters }), run);
+
+    const failed = loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed');
+    expect(failed).toMatchObject({ error: 'boom', kind: 'transient', code: 'rate_limit' });
+    expect((failed as { error: string }).error).not.toContain('rate_limit:');
+  });
 
   it('an adapter that yields no terminal event fails the node (contract violation)', async () => {
     const db = freshDb().db;
@@ -271,6 +337,8 @@ describe('createExecutor — error taxonomy → node.failed', () => {
     expect(state.status).toBe('failure');
     expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
       error: expect.stringContaining('no terminal event'),
+      kind: 'permanent',
+      code: 'adapter_no_terminal',
     });
   });
 
@@ -291,6 +359,12 @@ describe('createExecutor — error taxonomy → node.failed', () => {
     expect(eventTypes(db, run.id)).toContain('node.dispatched');
     expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
       error: 'kaboom',
+      // An unexpected THROW is an adapter bug of unknown cause. `permanent` is
+      // the safe classification: once F2b keys retry off `kind`, a `transient`
+      // here would retry-loop a buggy adapter, and no MVP activity is
+      // idempotent — so a blind retry could repeat a real side effect.
+      kind: 'permanent',
+      code: 'adapter_threw',
     });
   });
 });

@@ -1,4 +1,4 @@
-import type { EngineEvent } from '@autonomy-studio/shared';
+import type { EngineEvent, FailureKind } from '@autonomy-studio/shared';
 import type { Executor, ExecutorCommand } from '../driver.js';
 
 /** How the stub should resolve a dispatched node. */
@@ -6,6 +6,8 @@ export interface NodePlan {
   outcome?: 'success' | 'failure';
   outputs?: Record<string, unknown>;
   error?: string;
+  /** The `node.failed.kind` for a `failure` outcome (#1 F0). Default `permanent`. */
+  kind?: FailureKind;
   /** Persisted into `node.dispatched.idempotent` (default `true`). */
   idempotent?: boolean;
   /**
@@ -80,6 +82,9 @@ export function makeStubExecutor(opts: StubExecutorOptions = {}): RecordingExecu
               nodeId: command.nodeId,
               attemptId: command.attemptId,
               error: plan.error ?? 'boom',
+              // #1 F0: `permanent` mirrors the parse default, so driver/reconcile
+              // cases assert the same behaviour they did pre-F0.
+              kind: plan.kind ?? 'permanent',
             };
         return;
       }
