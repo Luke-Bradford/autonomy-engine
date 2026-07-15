@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Edge, EdgeOn, Node, Param, PipelineVersion, SubstitutionContext } from '../types.js';
 import { ParamResolveError, SubstituteError } from '../types.js';
-import { RUN_FIELDS, resolveRunParams, substitute, validateRefs } from '../params.js';
+import {
+  RUN_FIELDS,
+  resolveRunParams,
+  substitute,
+  validateRefs,
+  validateWholeValue,
+} from '../params.js';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -666,5 +672,106 @@ describe('validateRefs — node-output NAME against declared outputs (req c)', (
     );
     expect(validateRefs(okay)).toEqual([]);
     expect(validateRefs(bad).join('\n')).toMatch(/declares no output named 'w'/);
+  });
+});
+
+// ===========================================================================
+// #6 E2 — the interpolation model.
+//
+// `substitute` already resolved whole-value vs embedded before E2; E2 lifts the
+// mode decision into ONE SSOT (`interpolationMode`) that the evaluator and the
+// static checkers share, and adds `validateWholeValue` for the fields where an
+// embedded expression is a BUG rather than a choice (spec #6's spike-hardened
+// block: "`if.condition` / `foreach.items` MUST be whole-value mode ... proven
+// that an embedded boolean silently coerces to the string 'true'").
+//
+// The guards below pin `substitute`'s semantics as UNCHANGED — E2 is a pure
+// refactor there. They exist because the obvious reading of Round-2 I1 ("mode
+// is decided after canonical-trimming the field") is a blanket trim inside
+// `substitute`, which would silently re-type every `"${x}\n"` template and eat
+// the newline. The trim belongs to whole-value-REQUIRED fields only.
+// ===========================================================================
+
+describe('substitute — interpolation mode (E2 refactor: semantics UNCHANGED)', () => {
+  it('an exact lone ${} preserves the resolved value native type', () => {
+    expect(substitute('${params.n}', ctx({ params: { n: 42 } }))).toBe(42);
+    expect(substitute('${params.f}', ctx({ params: { f: true } }))).toBe(true);
+    expect(substitute('${params.o}', ctx({ params: { o: [1, 2] } }))).toEqual([1, 2]);
+  });
+
+  it('an embedded ${} coerces to string', () => {
+    expect(substitute('n=${params.n}', ctx({ params: { n: 42 } }))).toBe('n=42');
+  });
+
+  it('does NOT trim a padded lone ${}: it stays embedded, and the padding survives', () => {
+    // Round-2 I1's trim is scoped to whole-value-REQUIRED fields (exitWhen /
+    // #4's if.condition, foreach.items) — NOT to every config string.
+    expect(substitute(' ${params.n} ', ctx({ params: { n: 42 } }))).toBe(' 42 ');
+  });
+
+  it('does NOT eat a trailing newline, nor re-type the value (the blanket-trim trap)', () => {
+    // `"${x}\n"` is an ordinary prompt/file-body template. A blanket trim would
+    // flip it to whole-value mode: the \n vanishes and an array output stops
+    // being a string. Both are silent wrong-value bugs.
+    expect(substitute('${params.text}\n', ctx({ params: { text: 'hi' } }))).toBe('hi\n');
+    expect(substitute('${params.rows}\n', ctx({ params: { rows: [1, 2] } }))).toBe('[1,2]\n');
+  });
+
+  it('a literal field is returned with its $${ escapes restored', () => {
+    // Literal is its own mode now; it must still unescape (there is no ref to
+    // resolve, but `$${` still means a literal `${`).
+    expect(substitute('$${not.a.ref}', ctx())).toBe('${not.a.ref}');
+    expect(substitute('plain text', ctx())).toBe('plain text');
+  });
+
+  it('INERTNESS holds across the refactor: a resolved value is never rescanned', () => {
+    const c = ctx({ params: { evil: '${params.secret}', secret: 'LEAKED' } });
+    expect(substitute('${params.evil}', c)).toBe('${params.secret}');
+    expect(substitute('x=${params.evil}', c)).toBe('x=${params.secret}');
+  });
+});
+
+describe('validateWholeValue — the reusable whole-value-required checker', () => {
+  const check = (v: string): string[] => {
+    const errors: string[] = [];
+    validateWholeValue('f.cond', v, errors, 'condition');
+    return errors;
+  };
+
+  it('accepts an exact lone ${} expression', () => {
+    expect(check('${nodes.a.output.done}')).toEqual([]);
+  });
+
+  it('accepts a PADDED lone ${} — the canonical trim decides the mode (I1)', () => {
+    // The whole point of I1: a stray space must not demote the boolean.
+    expect(check(' ${nodes.a.output.done} ')).toEqual([]);
+    expect(check('${nodes.a.output.done}\n')).toEqual([]);
+  });
+
+  it('rejects an embedded expression, naming the string-coercion trap', () => {
+    expect(check('done=${nodes.a.output.done}').join(' ')).toContain('whole-value');
+  });
+
+  it('rejects a literal (no expression at all)', () => {
+    expect(check('true').join(' ')).toContain('must be a ${...} expression');
+  });
+
+  it('stays SILENT on an unterminated ${ — the grammar scan owns that diagnostic', () => {
+    // It must not report the open brace as a MODE defect: the caller always
+    // scans for grammar errors too, so owning it here would double-report it.
+    // `validate-doc.test.ts` pins the "reported exactly once" property end-to-end,
+    // which is the only place that claim is meaningful.
+    expect(check('${nodes.a.output.done')).toEqual([]);
+  });
+
+  it('returns the parsed whole-value body so the caller need not rescan', () => {
+    const errors: string[] = [];
+    const got = validateWholeValue('f.cond', ' ${nodes.a.output.done} ', errors, 'condition');
+    expect(errors).toEqual([]);
+    expect(got?.body).toBe('nodes.a.output.done');
+  });
+
+  it('returns null when it reported an error', () => {
+    expect(validateWholeValue('f.cond', 'x=${a.b}', [], 'condition')).toBeNull();
   });
 });

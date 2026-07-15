@@ -148,10 +148,31 @@ its own dispatch stamp) — documented; use `${run.startedAt}` for a run-stable 
   `extract` node's `{sku, qty, keep}`), input-order-stable. So `${item.field}` inside a downstream
   `filter`/`map` over `results` binds to that child-output element shape and **type-checks**. (Not the
   raw child-node envelope — the projected outputs object.)
-- **Interpolation mode is decided AFTER canonical-trimming the field**, so a stray trailing space
-  can't silently flip `${greater(a,b)}` from boolean to the string `"true"`. `validateRefs` emits a
-  targeted diagnostic when a lone-expression-plus-whitespace would demote a boolean/number to string;
-  force string mode with `string(expr)` (Round-2 I1).
+- **Interpolation mode is decided AFTER canonical-trimming the field — on whole-value-REQUIRED
+  fields ONLY** (the authoritative list lives in the Spike-hardened block below; do not restate it
+  here), so a stray trailing space can't silently flip `${greater(a,b)}` from boolean to the string
+  `"true"`. Those fields **reject** an embedded expression outright (it can only ever resolve to a
+  string, so the condition is never boolean-true); force string mode with `string(expr)`.
+  (Round-2 I1, **scoped at E2** — see the amendment below.)
+  - **AMENDED at E2 (2026-07-15, implemented):** the trim is NOT blanket. Trimming *every* field
+    was code-validated as a silent data-loss bug: `"${nodes.a.output.text}\n"` — an ordinary
+    prompt/file-body template — flips to whole-value mode, **eating the newline** and emitting a
+    number/array where a string belongs (`trim()` strips `\n`, not just spaces). Mode is therefore
+    classified on the field **as written**; the canonical trim is the *caller's* choice and is
+    applied only where an embedded expression is unambiguously a defect.
+  - The original "`validateRefs` emits a targeted diagnostic when a lone-expression-plus-whitespace
+    would demote a boolean/number to string" is **WITHDRAWN — the shape has no defect left to
+    diagnose** once the trim is scoped. It splits cleanly in two, and neither half is a bug:
+    - on a **whole-value-required** field, the canonical trim makes ` ${greater(a,b)} ` whole-value,
+      so it yields a boolean — nothing demotes;
+    - on **any other** field, ` ${greater(a,b)} ` is string interpolation *as written* — the author
+      typed the padding, so `" true "` is the correct and intended result. There is no boolean
+      expectation to violate, and a diagnostic here would fire on correct code.
+
+    The genuine residual risk — a field that *expects* a boolean/number but is handed an
+    interpolated string — is caught by **E6**'s general rule (infer the expression's type, check it
+    against the field's expected type), not by a whitespace heuristic. E2 owns the *mode* check;
+    E6 owns the *type* check. Nothing is orphaned.
 - **`${item}` is valid in a `foreach` body OR inside a `filter`/`map`/`count` array form** — the
   nearest enclosing iteration binds it (Round-2 M1 / round-1 T4). The `filter` activity's output array
   is named **`.items`** (`${nodes.<filter>.output.items}`).
@@ -204,6 +225,24 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
   (add `startedAt`), or the dynamic-filename expression is rejected today.
 - **`if.condition` / `foreach.items` MUST be whole-value mode** (reject embedded interpolation) —
   proven that an embedded boolean silently coerces to the string `"true"`.
+  - **E2 (shipped) — the whole-value-required field list is SSOT; extend it HERE:** `exitWhen`
+    (#1 loop containers, live today — `until` (#4 A3) is this same field, not a second one),
+    `if.condition` + `foreach.items` + `switch` case selectors + `filter` predicates (#4).
+    `exitWhen` was ADDED to this list at E2: it is the same shape and the only such field that
+    exists yet, and the defect was live — a padded `' ${done} '` resolved to `" true "`, which is
+    not `"true"`, so the loop burned every round and reported the misleading reason `capped`.
+  - **The rule needs BOTH halves — and they share one core.** `validateDoc`/`validateRefs` are
+    **advisory**: their only caller is the canvas badge, which does not block Save, and the server
+    never calls them (#444), so a git import or a direct POST reaches the engine unchecked. So a
+    whole-value-required field is checked at save AND at run, or the rule is decorative. The two
+    halves cannot be one function (one accumulates into `errors[]`, the other must throw), so
+    `engine/params.ts` factors the judgement + message set into `defectOf` and exposes it as:
+    - `validateWholeValue(where, value, errors, noun)` — save-time, accumulates;
+    - `wholeValueDefect(value, noun)` — run-time, returns the message to throw.
+
+    #4 calls these rather than restating the rule. Both stay SILENT on an unterminated `${`: that
+    is a *grammar* defect, owned by the grammar scan (`scan` / `substitute`), which reports it
+    precisely — owning it in both places double-reports it at save and mislabels it at run.
 - **Inertness invariant to PRESERVE when adding array-forms:** `map`/`filter` must eval element ASTs,
   **never re-parse a resolved string** — keeps the no-injection guarantee (verified in the spike).
 

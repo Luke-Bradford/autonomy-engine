@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { SubstituteError } from '../types.js';
-import { parseExpr, protectEscapes, restoreEscapes, scanTemplateRefs } from '../expr.js';
+import {
+  interpolationMode,
+  parseExpr,
+  protectEscapes,
+  restoreEscapes,
+  scanTemplateRefs,
+} from '../expr.js';
 import { substitute } from '../params.js';
 
 // ===========================================================================
@@ -274,6 +280,94 @@ describe('scanTemplateRefs / protectEscapes / restoreEscapes', () => {
     expect(protectedStr).not.toContain('$${');
     expect(scanTemplateRefs(protectedStr).matches).toEqual([]); // an escape is NOT a ref
     expect(restoreEscapes(protectedStr)).toBe('a ${x} b');
+  });
+});
+
+// ===========================================================================
+// #6 E2 — `interpolationMode`: the ONE classifier for a field's mode. Before
+// E2 the boundary arithmetic was inlined in `substitute`, so nothing else could
+// ask "is this field a whole-value expression?" without re-deriving it. These
+// pin the classifier itself; the mode's CONSEQUENCES are pinned in
+// `params.test.ts` (substitute/validateWholeValue) and `reduce-p2c.test.ts`
+// (exitWhen).
+//
+// It classifies the RAW string: trimming is the CALLER's choice, made only for
+// whole-value-REQUIRED fields (spec #6 Round-2 I1). A blanket trim here would
+// silently re-type `"${x}\n"` — a prompt/file-body template — from an embedded
+// string to a whole-value number/array, and drop the newline.
+// ===========================================================================
+
+describe('interpolationMode — the mode SSOT', () => {
+  it('classifies a field with no ${} as literal', () => {
+    expect(interpolationMode('just text')).toMatchObject({ mode: 'literal' });
+  });
+
+  it('classifies an exact lone ${} as whole-value, exposing the body', () => {
+    expect(interpolationMode('${params.n}')).toMatchObject({
+      mode: 'whole',
+      body: 'params.n',
+    });
+  });
+
+  it('classifies a ${} in surrounding text as interpolated', () => {
+    const m = interpolationMode('n=${params.n}');
+    expect(m.mode).toBe('interpolated');
+    if (m.mode !== 'interpolated') throw new Error('unreachable');
+    expect(m.matches.map((x) => x.body)).toEqual(['params.n']);
+  });
+
+  it('classifies two adjacent ${} as interpolated (not whole-value)', () => {
+    expect(interpolationMode('${params.a}${params.b}')).toMatchObject({
+      mode: 'interpolated',
+    });
+  });
+
+  it('does NOT trim: padding around a lone ${} still reads as interpolated', () => {
+    // The trim is the caller's, per-field. Proven here so a later blanket trim
+    // cannot land silently.
+    expect(interpolationMode(' ${params.n} ')).toMatchObject({ mode: 'interpolated' });
+    expect(interpolationMode('${params.n}\n')).toMatchObject({ mode: 'interpolated' });
+  });
+
+  it('a $${ escape is literal, never a ref', () => {
+    expect(interpolationMode('$${not.a.ref}')).toMatchObject({ mode: 'literal' });
+  });
+
+  it('reports an unterminated opener WITHOUT throwing (callers set the policy)', () => {
+    // `substitute` throws on this; `validateRefs` collects it and keeps going.
+    // A throwing SSOT would break the canvas badge, so it must only report.
+    const m = interpolationMode('${params.x');
+    expect(m.unterminatedAt).toBe(0);
+    expect(m.mode).toBe('interpolated'); // never whole-value while a brace is open
+  });
+
+  it('exposes `matches` in EVERY mode, so a ref-scan need not re-derive them', () => {
+    // The static ref-scan wants every ref regardless of mode. If `whole` withheld
+    // its match, that caller would have to re-run the boundary scan — which is
+    // exactly the duplication this SSOT exists to remove.
+    expect(interpolationMode('plain').matches).toEqual([]);
+    expect(interpolationMode('${params.n}').matches.map((m) => m.body)).toEqual(['params.n']);
+    expect(interpolationMode('a${params.x}b${params.y}').matches.map((m) => m.body)).toEqual([
+      'params.x',
+      'params.y',
+    ]);
+  });
+
+  it('on an unterminated opener, `matches` holds only the refs BEFORE it', () => {
+    // Documented trap: splicing these without checking `unterminatedAt` would
+    // silently truncate. Pinned so the shape is deliberate, not incidental.
+    const m = interpolationMode('${params.a}${params.b');
+    expect(m.unterminatedAt).toBe(11);
+    expect(m.matches.map((x) => x.body)).toEqual(['params.a']);
+  });
+
+  it('`scanned` is the exact string the matches index into', () => {
+    // A match's start/end are offsets — into the PROTECTED string, not the raw
+    // input. Returning that string is what keeps a caller's splice honest.
+    const m = interpolationMode('a $${esc} b ${params.x}');
+    if (m.mode !== 'interpolated') throw new Error('unreachable');
+    const only = m.matches[0]!;
+    expect(m.scanned.slice(only.start, only.end + 1)).toBe('${params.x}');
   });
 });
 

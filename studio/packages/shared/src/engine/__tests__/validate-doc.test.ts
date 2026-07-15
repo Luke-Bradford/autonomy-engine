@@ -107,6 +107,65 @@ describe('validateDoc — containers', () => {
     },
   );
 
+  // #6 E2 — `exitWhen` is a whole-value-REQUIRED field: an embedded expression
+  // resolves to the STRING "true"/"false", never a boolean, so the loop silently
+  // spins to maxRounds instead of exiting. Spec #6's spike proved this shape.
+  it('rejects an EMBEDDED exitWhen (it would coerce the boolean to a string)', () => {
+    const d = doc(
+      [node('w', { outputs: [{ name: 'done', type: 'boolean' }] })],
+      [],
+      [{ id: 'lp', kind: 'loop', children: ['w'], exitWhen: 'done=${nodes.w.output.done}' }],
+    );
+    expect(validateDoc(d).join(' ')).toContain('whole-value');
+  });
+
+  it('accepts a PADDED lone exitWhen — the canonical trim decides the mode (I1)', () => {
+    // A stray space must not demote the boolean. This is Round-2 I1's whole point.
+    const d = doc(
+      [node('w', { outputs: [{ name: 'done', type: 'boolean' }] })],
+      [],
+      [{ id: 'lp', kind: 'loop', children: ['w'], exitWhen: ' ${nodes.w.output.done} ' }],
+    );
+    expect(validateDoc(d)).toEqual([]);
+  });
+
+  it('reports an embedded CONSTANT exitWhen as embedded, not as a constant', () => {
+    // Pre-E2 the constant rule scanned every match, so `x=${true}` was reported
+    // as a constant though the real defect is the embedding. One mode decision,
+    // one accurate diagnostic.
+    const errors = doc(
+      [node('w')],
+      [],
+      [{ id: 'lp', kind: 'loop', children: ['w'], exitWhen: 'x=${true}' }],
+    );
+    const joined = validateDoc(errors).join(' ');
+    expect(joined).toContain('whole-value');
+    expect(joined).not.toContain('not the constant');
+  });
+
+  it('reports an unterminated exitWhen EXACTLY once', () => {
+    // The mode check and the grammar scan both look at this field; only the
+    // grammar scan owns the message. Two identical badges is a real (if small)
+    // regression, so pin the count end-to-end where "once" actually means
+    // something — `validateWholeValue` alone cannot make this claim.
+    const d = doc(
+      [node('w')],
+      [],
+      [{ id: 'lp', kind: 'loop', children: ['w'], exitWhen: '${nodes.w.output.done' }],
+    );
+    const errors = validateDoc(d).filter((e) => e.includes('unterminated'));
+    expect(errors).toHaveLength(1);
+  });
+
+  it('rejects a LITERAL exitWhen without claiming it is interpolated', () => {
+    // `exitWhen: 'true'` has no braces at all — the embedded-interpolation
+    // message would be factually wrong. Distinct modes, distinct diagnostics.
+    const d = doc([node('w')], [], [{ id: 'lp', kind: 'loop', children: ['w'], exitWhen: 'true' }]);
+    const joined = validateDoc(d).join(' ');
+    expect(joined).toContain('exitWhen must be a ${...} expression');
+    expect(joined).not.toContain('text around the braces');
+  });
+
   it('rejects an exitWhen referencing a non-child node output', () => {
     const d = doc(
       [node('w'), node('outsider', { outputs: [{ name: 'done', type: 'boolean' }] })],
@@ -183,6 +242,21 @@ describe('validateDoc — call graph', () => {
   it('rejects a direct self-call (a node calling its own version)', () => {
     const d = doc([callNode('caller', 'pv_self')]);
     expect(validateDoc(d, { selfId: 'pv_self' }).join(' ')).toContain('calls its own version');
+  });
+
+  // #6 E2 — a `$${`-escaped call target is a LITERAL id, not a dynamic `${}` one.
+  // The old `includes('${')` test read the escape as dynamic and silently dropped
+  // the node from the cycle/depth analysis, exempting it from both checks.
+  it('a $${-escaped call target is literal — it does NOT escape cycle detection', () => {
+    const d = doc([callNode('caller', '$${pv_self}')]);
+    // The id the run would actually call is `${pv_self}` (substitute unescapes it
+    // and resolves no refs), so that is the id the call graph must analyse.
+    expect(validateDoc(d, { selfId: '${pv_self}' }).join(' ')).toContain('calls its own version');
+  });
+
+  it('a genuinely dynamic ${} call target is still skipped (unresolvable at save)', () => {
+    const d = doc([callNode('caller', '${params.target}')]);
+    expect(validateDoc(d, { selfId: 'pv_self' })).toEqual([]);
   });
 
   it('rejects a call CYCLE across pipelines (A → B → A)', () => {

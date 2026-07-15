@@ -8,8 +8,8 @@ import type {
 } from './types.js';
 import { ParamResolveError, SubstituteError } from './types.js';
 import { declaredOutputNames } from './outputs.js';
-import type { Expr } from './expr.js';
-import { parseExpr, protectEscapes, restoreEscapes, scanTemplateRefs } from './expr.js';
+import type { Expr, TemplateMode } from './expr.js';
+import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
 
 // ---------------------------------------------------------------------------
 // The `${...}` parameter language (ported from lib/pipeline.py's S3.1 resolver).
@@ -246,40 +246,126 @@ export function substitute(value: unknown, ctx: SubstitutionContext): unknown {
   }
   if (typeof value !== 'string') return value;
 
-  // Protect the `$${` escape, then scan for every `${...}` boundary. An
-  // unterminated opener (no matching top-level `}`) is a typo — RAISE (never
-  // leave it as a silent literal).
-  const protectedStr = protectEscapes(value);
-  const { matches, unterminatedAt } = scanTemplateRefs(protectedStr);
-  if (unterminatedAt !== null) {
+  // Classify via the shared SSOT (#6 E2), so the evaluator and the static
+  // checkers can never disagree on a field's mode. An unterminated opener (no
+  // matching top-level `}`) is a typo — RAISE (never leave it a silent literal).
+  // The classifier only REPORTS it; raising is this caller's policy.
+  const mode = interpolationMode(value);
+  if (mode.unterminatedAt !== null) {
     throw new SubstituteError(
       `unterminated \${...} reference in ${JSON.stringify(value)} ` +
         '(write $${ for a literal ${)',
     );
   }
 
-  if (
-    matches.length === 1 &&
-    matches[0]!.start === 0 &&
-    matches[0]!.end === protectedStr.length - 1
-  ) {
-    // Whole-string ref → preserve the resolved value's native type.
-    const out = evalExpr(parseExpr(matches[0]!.body), ctx);
+  // Deliberately NOT trimmed: mode is decided on the field AS WRITTEN. The
+  // canonical trim of spec #6 Round-2 I1 belongs to whole-value-REQUIRED fields
+  // only (`validateWholeValue` / `evalExitWhen`) — trimming here would silently
+  // re-type `"${x}\n"`, a normal template, and eat the newline.
+  if (mode.mode === 'literal') return restoreEscapes(mode.scanned);
+
+  if (mode.mode === 'whole') {
+    // Whole-value → preserve the resolved value's native type.
+    const out = evalExpr(parseExpr(mode.body), ctx);
     return typeof out === 'string' ? restoreEscapes(out) : out;
   }
 
-  // Embedded ref(s) → coerce each to string. Walking the ORIGINAL (protected)
+  // Embedded ref(s) → coerce each to string. Walking the SCANNED (protected)
   // string once and splicing in each match's resolved value keeps this pass
-  // inherently inert — a resolved value is never itself rescanned.
+  // inherently inert — a resolved value is never itself rescanned. The offsets
+  // index `mode.scanned`, never `value`.
   let result = '';
   let cursor = 0;
-  for (const m of matches) {
-    result += protectedStr.slice(cursor, m.start);
+  for (const m of mode.matches) {
+    result += mode.scanned.slice(cursor, m.start);
     result += toStr(evalExpr(parseExpr(m.body), ctx));
     cursor = m.end + 1;
   }
-  result += protectedStr.slice(cursor);
+  result += mode.scanned.slice(cursor);
   return restoreEscapes(result);
+}
+
+// --- whole-value-REQUIRED fields (#6 E2) ------------------------------------
+//
+// A field where an embedded expression is not a choice but a BUG: the result can
+// only ever be a STRING, so a boolean condition is never boolean-true. Spec #6's
+// list: `exitWhen` (live today), `if.condition` / `foreach.items` / `switch` case
+// selectors / `filter` predicates (#4).
+//
+// The rule needs BOTH halves — save-time (`validateWholeValue`, advisory: the
+// canvas badge) and run-time (`wholeValueDefect`, binding: the reducer, since a
+// git import or a direct POST never passes through save-time validation). Both
+// read `defectOf` so the two halves can never word or judge the rule differently.
+
+/**
+ * The MODE defect in a whole-value-required field, or `null` if it is a proper
+ * whole-value `${expr}`.
+ *
+ * `null` ALSO for an unterminated `${`: that is a GRAMMAR defect, and the grammar
+ * scan already reports it precisely (`scan` at save time, `substitute` at run
+ * time). Owning it here too would double-report it at save and mislabel it as a
+ * mode defect at run time.
+ *
+ * `noun` names the field in the diagnostic (`exitWhen`, `condition`, `items`).
+ */
+function defectOf(mode: TemplateMode, noun: string): string | null {
+  if (mode.unterminatedAt !== null) return null; // grammar's to report, not ours
+  if (mode.mode === 'literal') return `${noun} must be a \${...} expression`;
+  if (mode.mode === 'interpolated') {
+    return (
+      `${noun} must be a whole-value \${...} expression — text around the braces ` +
+      'makes it an interpolated STRING, so a boolean result silently becomes ' +
+      '"true"/"false" and never compares equal to a boolean'
+    );
+  }
+  return null;
+}
+
+/**
+ * The whole-value defect in `value`, or `null` if it is well-formed (or carries
+ * an unterminated `${`, which the grammar reports). For the RUN-TIME half of the
+ * rule, which throws rather than accumulating — see `reduce.ts` `evalExitWhen`.
+ *
+ * This is where spec #6 Round-2 I1's canonical trim lives: mode is decided AFTER
+ * trimming, so a stray space or newline cannot demote a boolean to the string
+ * `"true"`. Deliberately SCOPED here rather than applied inside `substitute`:
+ * trimming every field would silently re-type `"${x}\n"` — an ordinary template
+ * — and eat the newline.
+ *
+ * RAIL: only ever call this on DOC TEXT, never on a `substitute` result —
+ * pointing it at a resolved value would re-read data as template and break the
+ * no-injection guarantee.
+ */
+export function wholeValueDefect(value: string, noun: string): string | null {
+  return defectOf(interpolationMode(value.trim()), noun);
+}
+
+/**
+ * SAVE-TIME half: report a whole-value-required defect into `errors`. Returns the
+ * classified `whole` result (so the caller reads `body` without rescanning), or
+ * `null` if the field was not a clean whole-value expression.
+ *
+ * NB the returned `scanned`/match offsets index the TRIMMED text, not `value` —
+ * this classifies `value.trim()`. Read `body`; do not splice these offsets
+ * against the original field.
+ *
+ * PRECONDITION: callers must also `scan` the field for grammar/ref errors — this
+ * checks MODE only, and stays silent on an unterminated `${` so it is reported
+ * exactly once (by `scan`).
+ */
+export function validateWholeValue(
+  where: string,
+  value: string,
+  errors: string[],
+  noun: string,
+): Extract<TemplateMode, { mode: 'whole' }> | null {
+  const mode = interpolationMode(value.trim());
+  const defect = defectOf(mode, noun);
+  if (defect !== null) {
+    errors.push(`${where}: ${defect}`);
+    return null;
+  }
+  return mode.mode === 'whole' ? mode : null; // non-whole + no defect = unterminated
 }
 
 // --- resolveRunParams -------------------------------------------------------
@@ -592,29 +678,33 @@ function validateExitWhen(c: Container, declared: Map<string, Param>, errors: st
   };
   // Reuse the shared scanner so exitWhen agrees with the `${}` runtime grammar.
   scan(where, c.exitWhen, scope, errors);
-  const protectedStr = protectEscapes(c.exitWhen);
-  if (!protectedStr.includes('${')) {
-    errors.push(`${where}: exitWhen must be a \${...} expression over child outputs`);
-    return;
-  }
+
+  // `exitWhen` is whole-value-REQUIRED: an embedded expression resolves to a
+  // STRING, so the loop can never see a boolean and silently burns every round
+  // before reporting `capped` (#6 E2; the reducer enforces the same rule at run
+  // time, which is what actually binds — see `evalExitWhen`). One classification
+  // serves both this rule and the constant rule below.
+  const whole = validateWholeValue(where, c.exitWhen, errors, 'exitWhen');
+  if (whole === null) return;
+
   // A CONSTANT is not an exit condition: `${true}` exits the loop after round
   // one and `${false}` never exits at all (it degrades to the maxRounds cap).
   // Literals only became parseable at #6 E1 — before that they failed as
   // unresolvable refs, so the ref-scan above caught them for free. It no longer
-  // does, hence this explicit rule.
-  for (const m of scanTemplateRefs(protectedStr).matches) {
-    let parsed: Expr;
-    try {
-      parsed = parseExpr(m.body);
-    } catch {
-      continue; // malformed — already reported by `scan` above
-    }
-    if (parsed.kind === 'str' || parsed.kind === 'num' || parsed.kind === 'bool') {
-      errors.push(
-        `${where}: exitWhen must reference child outputs, not the constant ` +
-          `\${${m.body.trim()}}`,
-      );
-    }
+  // does, hence this explicit rule. Checking the WHOLE-VALUE body (not every
+  // match) also makes it precise: `x=${true}` is an embedding defect, already
+  // reported as such above, and is no longer double-reported as a constant.
+  let parsed: Expr;
+  try {
+    parsed = parseExpr(whole.body);
+  } catch {
+    return; // malformed — already reported by `scan` above
+  }
+  if (parsed.kind === 'str' || parsed.kind === 'num' || parsed.kind === 'bool') {
+    errors.push(
+      `${where}: exitWhen must reference child outputs, not the constant ` +
+        `\${${whole.body.trim()}}`,
+    );
   }
 }
 
@@ -701,13 +791,21 @@ function forwardReach(
   return reach;
 }
 
-/** The literal (non-`${}`) call targets of a set of nodes. */
+/**
+ * The literal (non-`${}`) call targets of a set of nodes — a dynamic id cannot
+ * be resolved at save time, so it is skipped by the cycle/depth analysis.
+ *
+ * Classified through the mode SSOT rather than a bare `includes('${')`: that
+ * test read a `$${`-escaped id as dynamic and dropped it from the call graph,
+ * silently exempting it from the cycle + depth checks. `literal` mode also means
+ * the target is the UNESCAPED text, which is the id the run would actually call.
+ */
 function literalCallTargets(nodes: Pick<Node, 'call'>[]): string[] {
   const out: string[] = [];
   for (const n of nodes) {
     if (n.call === undefined) continue;
-    const pv = n.call.pipelineVersionId;
-    if (!pv.includes('${')) out.push(pv); // dynamic ids can't be resolved statically
+    const mode = interpolationMode(n.call.pipelineVersionId);
+    if (mode.mode === 'literal') out.push(restoreEscapes(mode.scanned));
   }
   return out;
 }
@@ -778,15 +876,15 @@ interface ScanScope {
 
 function scan(where: string, value: unknown, scope: ScanScope, errors: string[]): void {
   if (typeof value === 'string') {
-    const protectedStr = protectEscapes(value);
-    if (!protectedStr.includes('${')) return;
-    // Same boundary scanner as `substitute` (quote/paren/brace-aware), so the
-    // runtime and static-validation paths agree on where a `${...}` body ends.
-    const { matches, unterminatedAt } = scanTemplateRefs(protectedStr);
-    if (unterminatedAt !== null) {
+    // The same classifier `substitute` reads, so the runtime and static paths
+    // agree on where a `${...}` body ends. `matches` is populated in every mode,
+    // so this scan is mode-AGNOSTIC: it checks every ref the field contains,
+    // whether the field is whole-value or interpolated.
+    const mode = interpolationMode(value);
+    if (mode.unterminatedAt !== null) {
       errors.push(`${where}: unterminated \${ reference`);
     }
-    for (const m of matches) {
+    for (const m of mode.matches) {
       checkExprStatic(parseExprSafe(m.body, where, errors), scope, errors, where, false);
     }
     return;

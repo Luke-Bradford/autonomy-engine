@@ -11,6 +11,7 @@ import type {
   RunState,
   SubstitutionContext,
 } from './types.js';
+import { SubstituteError } from './types.js';
 import type { OutputType } from '../schemas/pipeline.js';
 import { declaredOutputs, type DeclaredOutput } from './outputs.js';
 import {
@@ -19,6 +20,7 @@ import {
   forwardDescendants,
   nodeForwardAdjacency,
   substitute,
+  wholeValueDefect,
 } from './params.js';
 
 // ---------------------------------------------------------------------------
@@ -567,13 +569,38 @@ export function createEngine(doc: EngineDoc): Engine {
     return { state, changed: false };
   }
 
-  /** Evaluate a loop's `exitWhen` (`${}` boolean) over the round's child outputs. */
+  /**
+   * Evaluate a loop's `exitWhen` (`${}` boolean) over the round's child outputs.
+   *
+   * `exitWhen` is a whole-value-REQUIRED field (#6 E2 / spec #6 Round-2 I1): the
+   * canonical TRIM decides the mode, so a stray space or newline cannot demote
+   * the boolean to a string. An embedded expression is refused outright — it can
+   * only ever resolve to a string, so the loop would never see `true` and would
+   * silently burn every round before reporting the misleading reason `capped`.
+   * Throwing here surfaces it as `exitWhen_error` on the very first round.
+   *
+   * This is the enforcement point that BINDS: `validateDoc`'s whole-value rule is
+   * advisory (its only caller is the canvas badge, which does not block Save, and
+   * the server never calls it), so a git import or a direct POST reaches the
+   * engine unchecked. Pure + replay-safe: trim/classify are deterministic on the
+   * doc, so a replay of the same log reaches the same verdict.
+   */
   function evalExitWhen(c: Container, state: RunState): boolean {
     if (c.exitWhen === undefined) return false;
-    const out = substitute(c.exitWhen, buildCtx(state));
+    const src = c.exitWhen.trim();
+    // `wholeValueDefect` is the SSOT the save-time half reads too, so the two can
+    // never judge or word the rule differently. It returns null for an
+    // unterminated `${` — that falls through so `substitute` raises its own
+    // precise grammar error rather than being mislabelled a mode defect.
+    const defect = wholeValueDefect(src, 'exitWhen');
+    if (defect !== null) throw new SubstituteError(defect);
+    const out = substitute(src, buildCtx(state));
     if (typeof out === 'boolean') return out;
-    // A whole-string ref preserves native type; anything else is truthy-coerced
-    // conservatively: only an explicit `true`/'true' exits.
+    // A whole-value ref preserves native type, but a `string`-typed output may
+    // still carry "true" (an LLM/CLI activity commonly emits one). Coercing it
+    // is a TYPE concern: #6 E6 removes this line in the same ticket that adds the
+    // static boolean-condition check, so the loud runtime failure lands together
+    // with the save-time rejection that prevents it.
     return out === 'true';
   }
 
