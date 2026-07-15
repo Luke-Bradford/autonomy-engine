@@ -175,4 +175,16 @@ describe('deriveRunLifecycle', () => {
     const events = [envelope({ type: 'run.interrupted', runId: 'r', reason: 'boot' })];
     expect(deriveRunLifecycle(events)).toBe('interrupted');
   });
+  it('a resume AFTER a terminal shows running again — the VIEW rule, not the log rule', () => {
+    // This is the deliberate divergence from the server's `terminalFactFromLog`
+    // (#443), which reads the last TERMINAL fact and must never let a resume erase
+    // it. This is a live view: a resume tailing in means the run is going again.
+    // Pinned so a later "unify these two" fire cannot silently break one of them.
+    const events = [
+      envelope({ type: 'run.started', runId: 'r', pipelineVersionId: 'pv', params: {} }),
+      envelope({ type: 'run.finished', runId: 'r', outcome: 'success' }),
+      envelope({ type: 'run.resumed', runId: 'r', reason: 'boot_reconcile' }),
+    ];
+    expect(deriveRunLifecycle(events)).toBe('running');
+  });
 });

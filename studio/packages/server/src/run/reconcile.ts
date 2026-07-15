@@ -136,26 +136,14 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
   for (const run of listRuns(deps.db, { status: 'running' })) {
     const events = loadEngineEvents(deps.db, run.id);
 
-    // #443 — THE LOG IS AUTHORITATIVE OVER THE PROJECTION FOR TERMINALITY.
-    // If the log records a terminal fact, this run IS over: the row's `running`
-    // status is merely stale (a crash between the terminal append and its
-    // lifecycle sync). Re-sync the row FROM THE LOG and move on — never re-derive
-    // a recorded terminal under a newer reducer.
-    //
-    // This must NOT consult the projection. Runs re-fold with the CURRENT
-    // reducer, so a semantics change (F1b's run-outcome rule, F13a's output
-    // contract, E6's `exitWhen` typing — see #443's comments) can fold an old log
-    // that recorded `run.finished{success}` back into a LIVE-looking run. Trusting
-    // the projection there misses this fast path, appends `run.resumed`, and
-    // RE-EXECUTES a finished run's side effects. Fail-open; this repo's rule is
-    // fail-safe.
-    //
-    // Hoisted above `buildEngine` deliberately: reading the log's own fact needs
-    // no pipeline version, so a finished run whose doc no longer resolves is
-    // resynced rather than throwing and stranding every later run in this loop.
-    // (`launcher.ts`'s `terminalizeInterrupted` takes the same care for the same
-    // reason.) A run with a NON-terminal log and an unresolvable doc still throws
-    // here — a pre-existing, separate fault; see #443's PR.
+    // #443 — the LOG is authoritative over the projection for terminality: a
+    // recorded terminal fact stands, so the row is merely stale (a crash between
+    // the terminal append and its lifecycle sync). Deliberately does NOT consult
+    // the projection — a reducer change re-folds this log, and trusting a re-fold
+    // that contradicts the log's own terminal is what RE-EXECUTES a finished run's
+    // side effects. Hoisted above `buildEngine` because the log needs no doc, so an
+    // unresolvable version cannot strand a finished run (or the ones after it in
+    // this loop). See `terminalFactFromLog` for the rule and its cost.
     const terminal = terminalFactFromLog(events);
     if (terminal !== null) {
       syncRunLifecycle(deps.db, run.id, terminal);
@@ -165,6 +153,20 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
 
     const engine = buildEngine(deps.resolveDoc(run.pipelineVersionId));
     const state = engine.projectRunState(events);
+
+    // Defensive, and unreachable today: a `running` row whose log has no
+    // `run.started` (the projection is then the `pending` seed). `updateRun`'s
+    // only non-test callers derive the status from real state, so a row cannot
+    // reach `running` before its `run.started` is durable. Kept because the
+    // alternative is appending `run.resumed` to a log with no `run.started` — the
+    // terminal check above no longer covers this, as `pending` is not a terminal
+    // fact.
+    if (state.status === 'pending') {
+      syncRunLifecycle(deps.db, run.id, state.status);
+      report.resynced.push(run.id);
+      continue;
+    }
+
     const inFlight = dispatchedNodes(state);
     const notProvablyIdempotent = inFlight.filter(
       ({ id, attemptId }) => idempotentFlagFor(events, id, attemptId) !== true,

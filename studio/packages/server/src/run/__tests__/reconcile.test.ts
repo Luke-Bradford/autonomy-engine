@@ -376,6 +376,12 @@ describe('reconcileOnBoot — #443 the LOG is authoritative over the projection'
       idempotent: true,
     });
     appendEngineEvent(db, { type: 'run.interrupted', runId: run.id, reason: 'drive_failed' });
+    // A `run.resumed` AFTER the interrupt — the shape a pre-#443 reconcile pass
+    // would itself have appended. Without it this test is pure characterization
+    // (the old projection also folded to `interrupted` and took its own fast
+    // path); with it, only reading back PAST the resume to the terminal fact keeps
+    // the run frozen. Nothing else covers interrupted-under-a-resume.
+    appendEngineEvent(db, { type: 'run.resumed', runId: run.id, reason: 'boot_reconcile' });
     updateRun(db, run.id, { status: 'running', finishedAt: null });
 
     const executor = makeStubExecutor();

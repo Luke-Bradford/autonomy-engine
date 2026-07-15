@@ -64,18 +64,32 @@ export function loadEngineEvents(db: Db, runId: string): EngineEvent[] {
  * finished run look live and be re-driven, re-executing side effects. So callers
  * deciding "is this run over?" read the fact here and never re-derive it.
  *
+ * `events` MUST be in append (`seq`) order — `loadEngineEvents` is the only
+ * sanctioned source. An unsorted array reads the wrong terminal.
+ *
  * **The LAST terminal event wins**, for three reasons:
  *   1. `pump` breaks the instant the run goes terminal (`driver.ts`), so nothing
  *      is appended after an ACCEPTED terminal — the last one is the driver's own
  *      final conclusion.
- *   2. It is FAIL-SAFE on the one multi-terminal log the driver can produce:
- *      `pump` appends `run.finished` BEFORE folding it, so a finish the reducer
- *      REJECTS is durable, followed by the `finishRun{failure, invalid_event}` it
- *      returned instead. Reading the FIRST terminal would resync the rejected
- *      `success`.
+ *   2. On the one multi-terminal log the driver can produce, it is the only
+ *      correct read: `pump` appends `run.finished` BEFORE folding it, so a finish
+ *      the reducer REJECTS is durable, followed by the
+ *      `finishRun{failure, invalid_event}` it returned instead. Reading the FIRST
+ *      terminal would resync the rejected `success`.
  *   3. The shipped run-detail page already derives its lifecycle last-wins from
  *      this same log (`web/.../runSummary.ts`), so `runs.status` and what the
  *      operator is SHOWN cannot disagree about the same log.
+ *
+ * **The named cost (probed).** If a crash lands BETWEEN a rejected
+ * `run.finished{success}` and its replacement, the log holds that success alone
+ * and this reports `success` where the old projection-based path reported
+ * `failure`. That is accepted, not overlooked: this function cannot distinguish
+ * "an OLD reducer accepted this success" (where `success` is the right answer, and
+ * is the entire point of #443) from "the CURRENT reducer rejects it" (where
+ * `failure` is) — only the per-version reducer marker §E defers could, and
+ * re-deriving to find out is the fail-open direction this rule exists to stop.
+ * It needs a self-inconsistent reducer at write time — which is the two-call-site
+ * bug F1b §B.2 fixes — AND a crash inside that window.
  *
  * The invariant this rests on is narrow and exact: **no TERMINAL event is
  * appended after an ACCEPTED terminal event** (`launcher.ts`'s

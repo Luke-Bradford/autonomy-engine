@@ -10,14 +10,20 @@ import {
  * #443 — the SSOT for "is this event a durable TERMINAL run fact, and what
  * lifecycle status does it record".
  *
- * Before this existed the terminal-event set was hard-coded in FOUR places
- * (`reduce.ts`'s already-terminal early-return, the reducer's own transitions,
- * the WS stream's close check, and the web run-detail page's log derivation).
+ * The set/mapping was hard-coded in four places; three now route through this SSOT
+ * (`reduce.ts`'s already-terminal early-return, the WS stream's close check, the
+ * web run-detail page's log derivation). The reducer's own `run.finished`/
+ * `run.interrupted` TRANSITIONS still name them directly, deliberately — those are
+ * semantics (guarded by an impossibility check), not fact-reading.
+ *
  * #443's rule — the LOG is authoritative over the projection for terminality —
- * makes that mapping load-bearing for a run's `runs.status`, so a 5th copy that
+ * makes this mapping load-bearing for a run's `runs.status`, so a copy that
  * silently drifts is exactly the hazard the ticket is about.
  *
- * These tests guard the SSOT itself, so every consumer inherits one answer.
+ * These tests guard the SSOT itself, so every consumer inherits one answer. The
+ * count assertion below is the ONLY guard on the fail-open drift direction (a new
+ * terminal variant added to `EngineEventSchema` but forgotten in
+ * `TERMINAL_RUN_EVENT_TYPES` reads as non-terminal, and does NOT fail typecheck).
  */
 
 const run = { runId: 'r1' } as const;

@@ -457,17 +457,27 @@ export const TERMINAL_RUN_EVENT: ReadonlySet<EngineEvent['type']> = new Set(
  * the reducer answers "what does the CURRENT semantics make of it", and when they
  * disagree on an old log the log wins.
  *
- * The `switch` is exhaustive over `TerminalRunEvent` with NO default, so adding a
- * type to `TERMINAL_RUN_EVENT_TYPES` without mapping it here is a COMPILE error.
- * (A real guard, unlike `TERMINAL_NODE`'s `satisfies` above, which only pins the
- * subset direction — see the joint F1b/F2b spec §A.1.)
+ * Guards, and EXACTLY what each covers — the two drift directions are not equally
+ * protected, so do not read one as the other:
+ *   - Adding a type to `TERMINAL_RUN_EVENT_TYPES` and not mapping it below is a
+ *     COMPILE error (the `switch` is exhaustive over `TerminalRunEvent` with no
+ *     default). A real guard, unlike `TERMINAL_NODE`'s `satisfies` above, which
+ *     only pins the subset direction — see the joint F1b/F2b spec §A.1.
+ *   - Adding a terminal variant to `EngineEventSchema` and FORGETTING this list is
+ *     NOT a compile error — it silently reads as non-terminal, which is #443's own
+ *     failure mode. That direction is caught only by the count assertion in
+ *     `__tests__/terminal-run-event.test.ts`; keep it.
  */
 export function terminalStatusOf(event: EngineEvent): RunLifecycleStatus | null {
   if (!(TERMINAL_RUN_EVENT as ReadonlySet<string>).has(event.type)) return null;
   const terminal = event as TerminalRunEvent;
   switch (terminal.type) {
     case 'run.finished':
-      return terminal.outcome === 'success' ? 'success' : 'failure';
+      // Returned directly, NOT via a `success ? : failure` ternary: `RunOutcome`
+      // is a subset of `RunLifecycleStatus`, so if it ever gains a third member
+      // this is a compile error, where the ternary would silently map it to
+      // `failure`. (`reduce.ts`'s own transition does the same.)
+      return terminal.outcome;
     case 'run.interrupted':
       return 'interrupted';
   }

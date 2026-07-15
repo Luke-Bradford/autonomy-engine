@@ -456,11 +456,37 @@ P2 shows the same `invalid_event` shape arising on a **brand-new** run from the 
 bug — same failure mode, two independent causes. §B.2 fixes the new-run cause; this fixes the old-log
 class.
 
-**The rule** (per #443's own recommendation): if a run's log **ends in a terminal `run.finished`**,
-resync the row from that fact and never re-derive it under a newer reducer. `run_events` is the
-source of truth and `run.finished` is a durable fact; second-guessing it via a re-fold is the
-**fail-open** direction, and this repo's rule is fail-safe. This immunises the whole class (any
-reducer change vs. any pre-existing log), not just F1b's instance.
+**The rule** (per #443's own recommendation): if a run's log records a terminal fact, resync the row
+from that fact and never re-derive it under a newer reducer. `run_events` is the source of truth and
+`run.finished` is a durable fact; second-guessing it via a re-fold is the **fail-open** direction, and
+this repo's rule is fail-safe. This immunises the whole class (any reducer change vs. any pre-existing
+log), not just F1b's instance.
+
+**SHIPPED (`terminalFactFromLog`, `run/events.ts`), and the built rule is finer than the sentence
+above — read this, not the sentence, when building F1b.** #443's prose said "ends in a terminal
+`run.finished`". As built it is **the LAST terminal event wins**, over `run.finished` **and**
+`run.interrupted`:
+
+- An "ends in" rule re-drives forever any log with a **trailing non-terminal** — and pre-#443 logs
+  have exactly that (`[… run.finished, run.resumed, node.dispatched …]`), because appending
+  `run.resumed` over a terminal **is** the bug. Last-terminal-wins heals them; "ends in" cannot.
+- It is the only correct read of the one multi-terminal log the driver can produce: `pump` appends
+  `run.finished` **before** folding it, so a REJECTED finish is durable, followed by the
+  `finishRun{failure, invalid_event}` returned instead. Reading the FIRST terminal resyncs the
+  rejected `success`.
+- The invariant it rests on is exact: **no TERMINAL event is appended after an ACCEPTED terminal
+  event**. NON-terminal events legitimately may — which is why F2c's `node.retryDue` and P3b's
+  `call.returned` are free to land later. `launcher.ts`'s `terminalizeInterrupted` gated on the ROW,
+  not the log, and violated it (a throw in pump's fold/sync after the durable `run.finished` append
+  landed there with the row still `running`, so it appended `run.interrupted` over an accepted
+  terminal); fixed in the same PR. **Anything F1b/F2b adds that appends a terminal must honour it.**
+
+**Named cost, probed, accepted:** if a crash lands between a rejected `run.finished{success}` and its
+replacement, the log holds that success alone and the row resyncs `success` where the old
+projection-based path resynced `failure`. Inherent to the rule — the reconciler cannot distinguish "an
+OLD reducer accepted this" (where `success` is right, and is the point of #443) from "the CURRENT
+reducer rejects it", and only the version marker deferred below could. It needs a self-inconsistent
+reducer at write time — **the two-call-site bug §B.2 fixes** — plus a crash inside that window.
 
 **Explicitly NOT doing (v1): versioning reducer semantics per pipeline version.** A catalog/version
 marker so old logs fold under the rules they were written under is the "correct" answer and is

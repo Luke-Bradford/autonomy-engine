@@ -362,9 +362,13 @@ describe('RunLauncher — #443 never bury a terminal log under a false interrupt
     await launcher.whenIdle();
 
     const events = loadEngineEvents(db, result.runId!);
-    // Precondition — assert the window was actually hit, so this test can never
-    // silently degrade into testing nothing.
-    expect(updates).toBeGreaterThanOrEqual(2);
+    // Precondition tripwire — assert the fault hit the write we MEANT (the
+    // `run.finished` sync), so this test can never silently degrade into testing
+    // nothing. Exactly 3 `update` accesses: #1 run.started, #2 the faulted
+    // terminal sync, #3 `terminalizeInterrupted` syncing the row from the log. If
+    // a future write lands earlier in `startRun`, this fails loudly rather than
+    // faulting at the wrong point while still passing.
+    expect(updates).toBe(3);
     expect(events.filter((e) => e.type === 'run.finished')).toHaveLength(1);
 
     // THE FIX: the log's terminal fact is left intact. Burying it under a
