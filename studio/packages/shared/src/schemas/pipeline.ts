@@ -129,6 +129,129 @@ export const CallConfigSchema = z.object({
 export type CallConfig = z.infer<typeof CallConfigSchema>;
 
 /**
+ * Per-activity execution policy (spec #1 D4). Every knob is optional: an absent
+ * `policy` means "no policy", which is legal and is the default for every node
+ * authored to date.
+ *
+ * **This field is INERT as of F2a — it is a declared, validated, persisted knob
+ * that NOTHING reads yet.** Each consumer is a named, sequenced ticket, not an
+ * open question: `retry`/`retryIntervalSeconds` → F2b (reducer retry-eligibility,
+ * keyed off F0's failure `kind`) + F2c (driver durable scheduling via S1's
+ * `scheduled_wakeups` outbox); `timeoutSeconds` → F3. This mirrors F9a, which
+ * shipped `ActivityDefinition.kind` as honest metadata with a ZERO production
+ * delta rather than guessing its consumer's shape.
+ *
+ * `secureInput`/`secureOutput` — which spec #1 D4 lists in this object — are
+ * deliberately NOT declared here; they ship with **F4**, whose ticket row owns
+ * "emit-time redaction + downstream-ref rule" (see also spec #1's
+ * resolved-question 2, which sequences the prohibit-first behaviour F4 builds).
+ * Note the specs say F4 makes those fields TRUE; that F2a must therefore not
+ * DECLARE them is this ticket's own inference, and it rests on the security
+ * argument alone: a `secureOutput: true` accepted but not honoured is a fail-open
+ * — the operator marks an output secret and it is still written to the event log
+ * in plaintext, whereas an absent field fails loudly at save. That is why the
+ * secure fields wait and the retry knobs do not: a dropped retry costs
+ * availability, a dropped redaction discloses a secret.
+ */
+export const NodePolicySchema = z.object({
+  /**
+   * Wall-clock budget for one attempt. F3 terminalizes an over-budget attempt
+   * via `node.failed{kind:'transient', code:'timeout'}` so retry policy then
+   * applies uniformly and boot-recovery can tell timed-out from crashed.
+   *
+   * Named `timeoutSeconds`, not the spec's bare `timeout`, so this object never
+   * mixes units with the spec-verbatim `retryIntervalSeconds`.
+   *
+   * Unbounded above 0 HERE, on purpose: spec #1 D4 bounds only
+   * `retryIntervalSeconds`, and the real semantic ceiling is F3's to set from
+   * enforcement experience. A read-path range can only ever be WIDENED (see
+   * `NodeSchema.policy`), so inventing one here would be a guess F3 could not
+   * take back. The fat-finger guard lives on the WRITE path instead
+   * (`StrictNodePolicySchema`), where a bound can move freely in either
+   * direction without making a stored row unreadable.
+   *
+   * SEAM FOR F3 (a named question, not a discovery): connection-level
+   * `config.timeoutMs` already bounds a single HTTP/LLM exchange
+   * (`connectors/http.ts`, `connectors/llm-shared.ts`). Which one wins, and
+   * whether this bounds the attempt or the whole node, is `timeoutScope` — the
+   * field F9a explicitly declined to declare ahead of its consumer.
+   */
+  timeoutSeconds: z.number().int().positive().optional(),
+  /**
+   * Max RETRIES after the first attempt (so `retry: 2` = up to 3 attempts).
+   * `0` is meaningful and is NOT the same fact as absent: `0` is the operator
+   * explicitly pinning "never retry this node", absent is "policy says nothing".
+   * F2b must preserve that difference once a catalog/global default exists.
+   */
+  retry: z.number().int().min(0).optional(),
+  /**
+   * Delay between attempts. Bounds are spec #1 D4 verbatim (30–86400). F2c
+   * stores the computed next-attempt time as `scheduled_wakeups.dueAt` — a
+   * STORED fact, never recomputed at fold time (spec #5's spike block: the
+   * reducer stays clock-free and replay-stable).
+   */
+  retryIntervalSeconds: z.number().int().min(30).max(86400).optional(),
+});
+export type NodePolicy = z.infer<typeof NodePolicySchema>;
+
+/**
+ * `NodePolicySchema` + the rules a policy must pass to be SAVED. Applied ONLY
+ * via `StrictNodeSchema` below (write path); `NodeSchema` stays read-tolerant.
+ *
+ * WHY `.strict()` is on the write path and not the read path: an unknown key is
+ * silently STRIPPED by default, so a `{ secureOutput: true }` posted before F4
+ * lands would be accepted, dropped, and the operator would believe redaction was
+ * on — the whole point of the F4 deferral above. But the READ path must keep
+ * stripping rather than throwing, or a row this version cannot parse is a
+ * pipeline that cannot be opened in the UI to be repaired. Since every write is
+ * gated here, such a row arises only from a version DOWNGRADE against an
+ * existing DB (an import carrying a later studio's field is refused, not
+ * stored). That is F13a's strict-on-write / tolerant-on-read asymmetry, applied
+ * to a typed field.
+ */
+/**
+ * A fat-finger guard on `timeoutSeconds`, NOT a semantic bound — F3 owns the
+ * real one. One year is far past any legitimate single-attempt budget, so a
+ * value above it is a typo (a stray zero, or ms passed where seconds were
+ * meant), never an intent.
+ *
+ * WHY this is a write-path rule and not a `.max()` on `NodePolicySchema`: a
+ * range on the read path can only ever be widened, so a ceiling there would be a
+ * guess F3 could never take back. Here it costs F3 nothing — a write-path bound
+ * can tighten or relax freely, because no stored row becomes unreadable.
+ */
+const TIMEOUT_SECONDS_SANITY_CEILING = 31_536_000;
+
+const StrictNodePolicySchema = NodePolicySchema.strict().superRefine((policy, ctx) => {
+  if (
+    policy.timeoutSeconds !== undefined &&
+    policy.timeoutSeconds > TIMEOUT_SECONDS_SANITY_CEILING
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['timeoutSeconds'],
+      message:
+        `timeoutSeconds ${policy.timeoutSeconds} exceeds ${TIMEOUT_SECONDS_SANITY_CEILING} ` +
+        '(one year) — that is a single attempt budget, so this is almost certainly a typo ' +
+        '(milliseconds passed as seconds?)',
+    });
+  }
+  // An interval with no retry to space out is dead config the operator almost
+  // certainly believes is live. Cheap to refuse at save, and no stored row can
+  // carry one yet. NB: if a later ticket gives `retry` a catalog/global DEFAULT
+  // (the #456/F13b shape), this rule must relax — relaxing is back-compat-safe.
+  if (policy.retryIntervalSeconds !== undefined && (policy.retry ?? 0) < 1) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['retryIntervalSeconds'],
+      message:
+        'retryIntervalSeconds has no effect without retry >= 1 (it spaces out retries; ' +
+        'set retry, or drop the interval)',
+    });
+  }
+});
+
+/**
  * An activity instance on the canvas. `type` names an entry in the Activity
  * Catalog (validated against the catalog elsewhere — this schema only checks
  * shape, not that `type` is a currently-known catalog entry, since an
@@ -147,12 +270,39 @@ export const NodeSchema = z.object({
   connectionId: z.string().min(1).optional(),
   position: PositionSchema,
   call: CallConfigSchema.optional(),
+  /**
+   * Per-activity execution policy (#1 D4/F2a) — INERT, see `NodePolicySchema`.
+   *
+   * Declared on the READ schema because `createPipelineVersion` spreads the
+   * PARSED value into the stored row (`repo/pipeline-versions.ts`) and this is a
+   * plain `z.object`, which strips unknown keys — a policy declared only on the
+   * write-path `StrictNodeSchema` would never persist at all.
+   *
+   * Shape + ranges live here; `.strict()` + the cross-field rule are write-only
+   * (`StrictNodeSchema`). A range is safe on the read path because this version
+   * can already judge it — but only ever WIDEN one once rows carry policies:
+   * narrowing makes a stored row unreadable, and an unreadable pipeline cannot
+   * be opened to be repaired. A later narrowing belongs on `StrictNodeSchema`.
+   */
+  policy: NodePolicySchema.optional(),
 });
 export type Node = z.infer<typeof NodeSchema>;
 
 /**
  * `NodeSchema` + the semantic checks a node must pass to be SAVED (#1 F13a).
- * Today: `config.outputs`, if present, must be a valid `NodeOutputsSchema`.
+ * Today: `config.outputs`, if present, must be a valid `NodeOutputsSchema`; and
+ * `policy`, if present, must pass `StrictNodePolicySchema` (#1 F2a).
+ *
+ * The two are enforced by DIFFERENT mechanisms, and the difference is forced by
+ * Zod, not taste. `config` is a `z.record(z.string(), z.unknown())` — an opaque
+ * blob that preserves every key — so `config.outputs` is still raw when
+ * `superRefine` runs, and F13a can `safeParse` it there. But `policy` is a TYPED
+ * field: `NodeSchema` has already parsed it, stripping unknown keys, before any
+ * `superRefine` body runs. A `.strict()` re-parse inside `superRefine` would be
+ * handed the already-cleaned object and could never see the unknown key it
+ * exists to refuse — it would silently pass. Re-declaring `policy` via
+ * `.extend()` puts the strict schema in the PARSE itself, the only place that
+ * sees raw input.
  *
  * WHY a separate schema rather than refining `NodeSchema`: `NodeSchema` is
  * parsed on the READ path too (`PipelineVersionSchema.parse(row)` runs on every
@@ -168,7 +318,9 @@ export type Node = z.infer<typeof NodeSchema>;
  * catalog's doc must still parse) and the backward-tolerant `containers`
  * default — the validate/upgrade pass is deliberately a separate concern.
  */
-export const StrictNodeSchema = NodeSchema.superRefine((node, ctx) => {
+export const StrictNodeSchema = NodeSchema.extend({
+  policy: StrictNodePolicySchema.optional(),
+}).superRefine((node, ctx) => {
   const parsed = NodeOutputsFieldSchema.safeParse(node.config['outputs']);
   if (parsed.success) return; // valid, or absent (= no contract, legal)
   for (const issue of parsed.error.issues) {

@@ -7,6 +7,7 @@ import {
   EdgeSchema,
   NewPipelineSchema,
   NewPipelineVersionSchema,
+  NodePolicySchema,
   NodeSchema,
   OutputSchema,
   OutputTypeSchema,
@@ -434,6 +435,166 @@ describe('NewPipelineVersionSchema — config.outputs is refused on write (F13a)
         withNodeConfig({ outputs: [{ name: 'a.b', type: 'string' }] }),
       ),
     ).toThrow();
+  });
+});
+
+describe('NodePolicySchema (#1 F2a)', () => {
+  it('accepts a full policy', () => {
+    const policy = { timeoutSeconds: 300, retry: 3, retryIntervalSeconds: 30 };
+    expect(NodePolicySchema.parse(policy)).toEqual(policy);
+  });
+
+  it('accepts an empty policy (every knob is optional)', () => {
+    expect(NodePolicySchema.parse({})).toEqual({});
+  });
+
+  // `retry: 0` is NOT the same fact as an absent `retry`. Absent = "policy says
+  // nothing about retries"; 0 = the operator explicitly said "never retry".
+  // F2b keys off the difference, so the schema must preserve it.
+  it('accepts retry: 0 as an explicit never-retry', () => {
+    expect(NodePolicySchema.parse({ retry: 0 })).toEqual({ retry: 0 });
+  });
+
+  it.each([-1, 1.5, Number.NaN])('rejects retry %p', (retry) => {
+    expect(() => NodePolicySchema.parse({ retry })).toThrow();
+  });
+
+  // Bounds are spec #1 D4, verbatim: retryIntervalSeconds?(30–86400).
+  it.each([30, 86400])('accepts retryIntervalSeconds %p (spec bound)', (s) => {
+    expect(NodePolicySchema.parse({ retry: 1, retryIntervalSeconds: s })).toEqual({
+      retry: 1,
+      retryIntervalSeconds: s,
+    });
+  });
+
+  it.each([29, 86401, 60.5])('rejects retryIntervalSeconds %p', (s) => {
+    expect(() => NodePolicySchema.parse({ retry: 1, retryIntervalSeconds: s })).toThrow();
+  });
+
+  it.each([0, -1, 1.5])('rejects timeoutSeconds %p', (t) => {
+    expect(() => NodePolicySchema.parse({ timeoutSeconds: t })).toThrow();
+  });
+
+  it('accepts a large timeoutSeconds (no invented ceiling — F3 owns any real bound)', () => {
+    expect(NodePolicySchema.parse({ timeoutSeconds: 604800 })).toEqual({ timeoutSeconds: 604800 });
+  });
+});
+
+describe('NodeSchema — policy (#1 F2a)', () => {
+  const node = {
+    id: 'node_1',
+    type: 'llm_call',
+    config: {},
+    position: { x: 0, y: 0 },
+  };
+
+  // `createPipelineVersion` spreads the PARSED value into the stored row, and
+  // `NodeSchema` is a plain z.object (strips unknown keys) — so a policy absent
+  // from THIS schema would be dropped at write and never persist at all.
+  it('round-trips a policy through the read schema', () => {
+    const withPolicy = { ...node, policy: { retry: 2, retryIntervalSeconds: 60 } };
+    expect(NodeSchema.parse(withPolicy)).toEqual(withPolicy);
+  });
+
+  it('accepts a node without a policy (absent = no policy, legal)', () => {
+    expect(NodeSchema.parse(node)).toEqual(node);
+  });
+
+  it('rejects a policy that is not an object', () => {
+    expect(() => NodeSchema.parse({ ...node, policy: 'retry-please' })).toThrow();
+  });
+});
+
+describe('NewPipelineVersionSchema — policy is refused on write (#1 F2a)', () => {
+  function withNodePolicy(policy: unknown) {
+    const { id, version, createdAt, ...rest } = pipelineVersion;
+    void id;
+    void version;
+    void createdAt;
+    return {
+      ...rest,
+      nodes: [{ id: 'node_1', type: 'llm_call', config: {}, position: { x: 0, y: 0 }, policy }],
+    };
+  }
+
+  it('accepts a valid policy', () => {
+    expect(() =>
+      NewPipelineVersionSchema.parse(withNodePolicy({ retry: 2, retryIntervalSeconds: 60 })),
+    ).not.toThrow();
+  });
+
+  // The motivating case: `secureOutput` ships with F4, the ticket that adds the
+  // redaction making it true. Zod strips unknown keys by default, so without
+  // `.strict()` this would be accepted and dropped — the operator would believe
+  // the output was redacted while it still hit the event log in plaintext.
+  it('refuses an unknown policy key such as an F4-era secureOutput', () => {
+    expect(() => NewPipelineVersionSchema.parse(withNodePolicy({ secureOutput: true }))).toThrow();
+  });
+
+  // A fat-finger guard (review nitpick on #474), deliberately write-path-only:
+  // a read-path range can only ever widen, so a ceiling there would be a guess
+  // F3 could not take back.
+  it('refuses a timeoutSeconds past the one-year sanity ceiling', () => {
+    expect(() =>
+      NewPipelineVersionSchema.parse(withNodePolicy({ timeoutSeconds: 31_536_001 })),
+    ).toThrow();
+  });
+
+  it('accepts a timeoutSeconds at the ceiling', () => {
+    expect(() =>
+      NewPipelineVersionSchema.parse(withNodePolicy({ timeoutSeconds: 31_536_000 })),
+    ).not.toThrow();
+  });
+
+  it('still READS a stored row whose timeoutSeconds is past the ceiling (write-path guard only)', () => {
+    const legacy = {
+      ...pipelineVersion,
+      nodes: [
+        {
+          id: 'node_1',
+          type: 'llm_call',
+          config: {},
+          position: { x: 0, y: 0 },
+          policy: { timeoutSeconds: 31_536_001 },
+        },
+      ],
+    };
+    expect(PipelineVersionSchema.parse(legacy).nodes[0]!.policy).toEqual({
+      timeoutSeconds: 31_536_001,
+    });
+  });
+
+  it('refuses an out-of-range retryIntervalSeconds', () => {
+    expect(() =>
+      NewPipelineVersionSchema.parse(withNodePolicy({ retry: 1, retryIntervalSeconds: 5 })),
+    ).toThrow();
+  });
+
+  // Dead config the operator believes is live: an interval with nothing to
+  // space out. Cheap to refuse at save, and there are no legacy rows to brick.
+  it.each([{ retryIntervalSeconds: 60 }, { retry: 0, retryIntervalSeconds: 60 }])(
+    'refuses retryIntervalSeconds without a retry that would use it (%p)',
+    (policy) => {
+      expect(() => NewPipelineVersionSchema.parse(withNodePolicy(policy))).toThrow();
+    },
+  );
+
+  // The F13a asymmetry, applied to policy: strict on WRITE, tolerant on READ.
+  // A stored row must stay READABLE so the pipeline can be opened and repaired.
+  it('still READS a stored row whose policy has an unknown key (repairable, not bricked)', () => {
+    const legacy = {
+      ...pipelineVersion,
+      nodes: [
+        {
+          id: 'node_1',
+          type: 'llm_call',
+          config: {},
+          position: { x: 0, y: 0 },
+          policy: { retry: 1, secureOutput: true },
+        },
+      ],
+    };
+    expect(() => PipelineVersionSchema.parse(legacy)).not.toThrow();
   });
 });
 

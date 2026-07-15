@@ -64,6 +64,34 @@ describe('importEnvelope: pipeline', () => {
     expect(getPipelineVersion(db, importedVersion.id)).toEqual(importedVersion);
   });
 
+  // #1 F2a. `policy` round-trips for free — `NodeExportSchema` derives from
+  // `NodeSchema` and both `stripNodeConnectionId` and `toDbNode` spread the rest
+  // of the node — so no code here NAMES it. This pins that: a refactor
+  // re-declaring a node field-by-field would drop it silently, surfacing only
+  // once F2b/F3 read it and a configured retry/timeout never fired.
+  it('preserves a node policy across export -> import (#1 F2a)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Policied' });
+    const policy = { timeoutSeconds: 300, retry: 2, retryIntervalSeconds: 60 };
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [{ id: 'n1', type: 'llm_call', config: {}, position: { x: 0, y: 0 }, policy }],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const result = importEnvelope(db, 'owner-b', exportPipeline(db, pipeline.id, 'owner-a'));
+
+    expect(result.kind).toBe('pipeline');
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+    const importedVersion = result.versions[0]!;
+    expect(importedVersion.nodes[0]!.policy).toEqual(policy);
+    // Round-tripped through the real repo, not just the in-memory result.
+    expect(getPipelineVersion(db, importedVersion.id)!.nodes[0]!.policy).toEqual(policy);
+  });
+
   it('reports unresolvedConnectionRef only for nodes that originally had a connectionId, not connection-less nodes', () => {
     const { db } = freshDb();
     const connection = createConnection(db, {
