@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Edge, Node, Param, PipelineVersion, SubstitutionContext } from '../types.js';
+import type { Edge, EdgeOn, Node, Param, PipelineVersion, SubstitutionContext } from '../types.js';
 import { SubstituteError } from '../types.js';
 import { MAX_ARRAY_ELEMENTS, listFunctions } from '../functions.js';
 import { substitute, validateRefs } from '../params.js';
@@ -29,6 +29,10 @@ let nodeSeq = 0;
 function node(id: string, config: Record<string, unknown>): Node {
   nodeSeq += 1;
   return { id, type: 'agent_task', config, position: { x: nodeSeq, y: 0 } };
+}
+
+function edge(from: string, to: string, on: EdgeOn): Edge {
+  return { id: `${from}->${to}:${on}`, from, to, on, back: false };
 }
 
 function doc(
@@ -134,6 +138,13 @@ describe('item scoping', () => {
   it('${item[0]} is refused (E7 owns [] addressing)', () => {
     expect(() => substitute('${map(params.nums, item[0])}', rows)).toThrow(/E7|\[\]/);
   });
+
+  it('resolves OWN properties only — never through the prototype chain', () => {
+    // `in` would hand back a real host function as resolved node config.
+    for (const path of ['item.constructor', 'item.toString', 'item.__proto__']) {
+      expect(() => substitute(`\${map(params.rows, ${path})}`, rows)).toThrow(/has no field/);
+    }
+  });
 });
 
 // ===========================================================================
@@ -175,6 +186,19 @@ describe('no implicit coercion', () => {
     expect(substitute("${equals('a', 'a')}", ctx())).toBe(true);
   });
 
+  it('equals() agrees with the ordering fns about -0', () => {
+    // Object.is(-0, 0) is false, which would contradict greaterOrEquals AND
+    // lessOrEquals both answering true for the same pair.
+    expect(substitute('${equals(mul(-1, 0), 0)}', ctx())).toBe(true);
+    expect(substitute('${greaterOrEquals(mul(-1, 0), 0)}', ctx())).toBe(true);
+    expect(substitute('${lessOrEquals(mul(-1, 0), 0)}', ctx())).toBe(true);
+  });
+
+  it('float() rejects radix prefixes (no implicit reinterpretation)', () => {
+    expect(() => substitute("${float('0x10')}", ctx())).toThrow(SubstituteError);
+    expect(substitute("${float('4.5')}", ctx())).toBe(4.5);
+  });
+
   it('concat() IS contractually string-coercing (ADF parity)', () => {
     expect(substitute("${concat('n=', 42, true)}", ctx())).toBe('n=42true');
   });
@@ -211,6 +235,36 @@ describe('resource limits', () => {
     expect(() => substitute('${map(params.big, item)}', ctx({ params: { big } }))).toThrow(
       /too large|cap/i,
     );
+  });
+
+  it('split() bounds the result BEFORE allocating', () => {
+    const s = 'x'.repeat(MAX_ARRAY_ELEMENTS + 1);
+    expect(() => substitute("${split(params.s, '')}", ctx({ params: { s } }))).toThrow(
+      /too large|cap/i,
+    );
+  });
+
+  it('bounds the TOTAL work of one field, not just each array', () => {
+    // Every array here sits exactly AT the per-array cap, so every per-array
+    // check passes while 10^8 elements are materialised. Only the
+    // per-evaluation budget can see the product.
+    expect(() =>
+      substitute(
+        `\${length(map(range(0, ${MAX_ARRAY_ELEMENTS}), range(0, ${MAX_ARRAY_ELEMENTS})))}`,
+        ctx(),
+      ),
+    ).toThrow(/too many array elements/i);
+  });
+
+  it('does NOT cap the fns that allocate nothing — they are the escape hatch', () => {
+    // An over-cap array must stay inspectable, or the author cannot write the
+    // guard that avoids the cap, and take/skip cannot bring it back under.
+    const c = ctx({ params: { big: Array.from({ length: MAX_ARRAY_ELEMENTS + 1 }, (_, i) => i) } });
+    expect(substitute('${length(params.big)}', c)).toBe(MAX_ARRAY_ELEMENTS + 1);
+    expect(substitute('${empty(params.big)}', c)).toBe(false);
+    expect(substitute('${first(params.big)}', c)).toBe(0);
+    expect(substitute('${length(take(params.big, 3))}', c)).toBe(3);
+    expect(substitute('${length(map(take(params.big, 3), item))}', c)).toBe(3);
   });
 });
 
@@ -269,15 +323,32 @@ describe('E3 loop-closer', () => {
 // ===========================================================================
 
 describe('validateRefs — laziness does NOT relax the static checker', () => {
+  // The fixture must be a REACHABLE-but-NOT-GUARANTEED ref, or this pins
+  // nothing: an unknown node id fails on the "does not name an upstream node"
+  // branch, which fires whether or not the checker is soft. `a --failure--> h
+  // --success--> d` is the discriminating shape — `a` runs on every path to `d`
+  // but only SUCCEEDS on paths where `d` is unreachable, so `guaranteed[a] = ∅`
+  // and the soft path is the only thing that could accept it.
+  const notGuaranteed = (prompt: string) =>
+    validateRefs(
+      doc(
+        [node('a', {}), node('h', {}), node('d', { prompt })],
+        [edge('a', 'h', 'failure'), edge('h', 'd', 'success')],
+      ),
+    ).join('\n');
+
   it('still rejects a non-guaranteed output inside a short-circuiting and()', () => {
-    // INTENTIONAL false-reject. The checker cannot know arg0 is `false`, so
-    // relaxing this would equally accept `and(true, nodes.a.output.v)` — which
-    // throws at run with NO escape hatch. Same reasoning as E3's status rule.
-    const errs = validateRefs(doc([node('b', { prompt: '${and(false, nodes.a.output.v)}' })], []));
-    expect(errs.join('\n')).toMatch(/nodes\.a\.output\.v/);
+    // INTENTIONAL false-reject, and the load-bearing one: the checker cannot
+    // know arg0 is `false`, so relaxing it would equally accept
+    // `and(true, nodes.a.output.v)` — a doc that saves clean and THROWS at run
+    // with no escape hatch. Same reasoning as E3's status rule.
+    expect(notGuaranteed('${and(false, nodes.a.output.v)}')).toMatch(/wrap it in default/);
+    expect(notGuaranteed('${or(true, nodes.a.output.v)}')).toMatch(/wrap it in default/);
+    expect(notGuaranteed("${if(false, nodes.a.output.v, 'x')}")).toMatch(/wrap it in default/);
   });
 
-  it('default() still rescues a missing node output in its first arg', () => {
+  it('...while default() — and ONLY default() — still opens the soft path', () => {
+    expect(notGuaranteed('${default(nodes.a.output.v, "fb")}')).toBe('');
     expect(substitute("${default(nodes.missing.output.x, 'fb')}", ctx())).toBe('fb');
   });
 });
@@ -331,6 +402,14 @@ describe('catalog families', () => {
     const c = ctx({ params: { s: 'héllo — 日本 🎉' } });
     expect(substitute('${base64ToString(base64(params.s))}', c)).toBe('héllo — 日本 🎉');
     expect(() => substitute("${base64ToString('not base64!')}", ctx())).toThrow(SubstituteError);
+  });
+
+  it('base64ToString() rejects malformed input as a clean SubstituteError', () => {
+    // Each of these previously either escaped as a raw RangeError or decoded
+    // silently to something the input never legitimately represented.
+    for (const bad of ['97+/vw==' /* cp out of range */, 'wIA=' /* overlong C0 80 */, 'A']) {
+      expect(() => substitute(`\${base64ToString('${bad}')}`, ctx())).toThrow(SubstituteError);
+    }
   });
 
   it('math fns', () => {

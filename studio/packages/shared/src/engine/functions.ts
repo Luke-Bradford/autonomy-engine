@@ -111,6 +111,21 @@ export type FnSpec = FnSpecBase &
  */
 export const MAX_ARRAY_ELEMENTS = 10_000;
 
+/**
+ * Cap on the TOTAL elements one field's evaluation may materialise.
+ *
+ * The per-array cap alone is not enough: it is per-ARRAY, so
+ * `${length(map(range(0,10000), range(0,10000)))}` passes every individual
+ * check (each array is exactly at the cap) while allocating 10^8 elements —
+ * and a third nesting reaches 10^12. `MAX_ARRAY_ELEMENTS` therefore bounds the
+ * SHAPE of any one array, and this bounds the WORK of the whole evaluation.
+ *
+ * Charged in `params.ts` at the one site every array-producing call funnels
+ * through, so no fn can forget it. Purely a counter — deterministic, so replay
+ * is unaffected.
+ */
+export const MAX_ARRAY_ELEMENTS_TOTAL = 100_000;
+
 // --- shared coercion helpers (moved here from params.ts: the catalog needs them
 // at module-init, and `substitute` imports `toStr` back for embedded refs) -----
 
@@ -124,11 +139,11 @@ export function toStr(v: unknown): string {
 }
 
 /** A value `default()` treats as "missing" and replaces with its fallback. */
-export function isAbsent(v: unknown): boolean {
+function isAbsent(v: unknown): boolean {
   return v === null || v === undefined || v === '' || v === false;
 }
 
-export function slug(v: unknown): string {
+function slug(v: unknown): string {
   const s = toStr(v)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
@@ -189,18 +204,44 @@ function str(fn: string, v: unknown, at: string): string {
   return expect(fn, v, 'string', at) as string;
 }
 
+/**
+ * Type-check an array arg. Deliberately does NOT cap: `length`/`empty`/`first`/
+ * `last`/`contains`/`take`/`skip` allocate nothing and must stay usable on an
+ * over-cap array — `take` and `skip` are exactly how an author brings a huge
+ * `${nodes.http.output.body}` back UNDER the cap, so capping them would remove
+ * the only escape hatch and make an oversized array wholly unusable. Spec #6
+ * Round-2 scopes the cap to the fns that LOOP or MATERIALISE (`capped`, below).
+ */
 function arr(fn: string, v: unknown, at: string): unknown[] {
-  return capped(fn, expect(fn, v, 'array', at) as unknown[]);
+  return expect(fn, v, 'array', at) as unknown[];
 }
 
-/** Enforce `MAX_ARRAY_ELEMENTS` on an array entering or leaving a fn. */
+/** Enforce `MAX_ARRAY_ELEMENTS` on ONE array a fn loops over or materialises. */
 function capped(fn: string, a: unknown[]): unknown[] {
-  if (a.length > MAX_ARRAY_ELEMENTS) {
+  cap(fn, a.length);
+  return a;
+}
+
+/** Enforce the single-array cap on a COUNT — before allocating, where possible. */
+function cap(fn: string, n: number): number {
+  if (n > MAX_ARRAY_ELEMENTS) {
     throw new SubstituteError(
-      `function '${fn}': array is too large (${a.length} elements, cap ${MAX_ARRAY_ELEMENTS})`,
+      `function '${fn}': array is too large (${n} elements, cap ${MAX_ARRAY_ELEMENTS})`,
     );
   }
-  return a;
+  return n;
+}
+
+/** An array a fn will LOOP over: type-checked AND capped. */
+function loopArr(fn: string, v: unknown, at: string): unknown[] {
+  return capped(fn, arr(fn, v, at));
+}
+
+/** Count non-overlapping occurrences of `sep` in `s`, allocating nothing. */
+function occurrences(s: string, sep: string): number {
+  let n = 0;
+  for (let i = s.indexOf(sep); i !== -1; i = s.indexOf(sep, i + sep.length)) n += 1;
+  return n;
 }
 
 /** The arity bounds implied by a signature. */
@@ -233,6 +274,11 @@ function order(fn: string, a: unknown, b: unknown): number {
  * createArray('a'))` is answerable; everything else is identity.
  */
 function deepEquals(a: unknown, b: unknown): boolean {
+  // Numbers compare with `===`, NOT `Object.is`: `Object.is(-0, 0)` is false,
+  // which would make `equals(mul(-1, 0), 0)` false while `greaterOrEquals` AND
+  // `lessOrEquals` both say true — a silent contradiction between the equality
+  // and ordering fns, reachable from data via `mul(<negative>, 0)`.
+  if (typeof a === 'number' && typeof b === 'number') return a === b;
   if (Object.is(a, b)) return true;
   if (typeof a !== typeof b) return false;
   if (Array.isArray(a) && Array.isArray(b)) {
@@ -261,6 +307,9 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 // browser and server.
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/** Smallest code point each UTF-8 sequence length may legally encode (anti-overlong). */
+const MIN_CP = [0, 0, 0x80, 0x800, 0x10000] as const;
 
 function utf8Bytes(s: string): number[] {
   const out: number[] = [];
@@ -302,6 +351,13 @@ function utf8Str(bytes: number[]): string {
         throw new SubstituteError("function 'base64ToString': not valid UTF-8");
       cp = (cp << 6) | (bk & 0x3f);
     }
+    // Validate the DECODED code point, not just the byte framing: an out-of-range
+    // cp would otherwise escape as a raw `RangeError` from `fromCodePoint`, and
+    // an overlong/surrogate encoding would silently decode to a character the
+    // input did not legitimately represent.
+    if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff) || cp < (MIN_CP[len] ?? 0)) {
+      throw new SubstituteError("function 'base64ToString': not valid UTF-8");
+    }
     out += String.fromCodePoint(cp);
     i += len;
   }
@@ -328,6 +384,11 @@ function base64Decode(s: string): string {
   if (/[^A-Za-z0-9+/]/.test(clean)) {
     throw new SubstituteError("function 'base64ToString': not valid base64");
   }
+  // A length ≡ 1 (mod 4) is structurally impossible — 6 bits cannot be a byte.
+  // Without this, `base64ToString('A')` would silently return ''.
+  if (clean.length % 4 === 1) {
+    throw new SubstituteError("function 'base64ToString': not valid base64");
+  }
   const bytes: number[] = [];
   let acc = 0;
   let bits = 0;
@@ -344,7 +405,7 @@ function base64Decode(s: string): string {
 
 // --- the catalog (SSOT: extend the language by adding ONE entry here) --------
 
-export const FUNCTIONS: Record<string, FnSpec> = {
+export const FUNCTIONS: Readonly<Record<string, FnSpec>> = Object.freeze({
   // -- logical / comparison --------------------------------------------------
   // `and`/`or`/`if` are `special` so they SHORT-CIRCUIT. The spike proved the
   // eager variadic form throws on `and(false, nodes.missing.output.x)` instead
@@ -491,7 +552,15 @@ export const FUNCTIONS: Record<string, FnSpec> = {
     args: ['string', 'string'],
     minArgs: 2,
     ret: 'array',
-    impl: (a) => capped('split', (a[0] as string).split(a[1] as string)),
+    // Bound the result BEFORE allocating: counting occurrences is a scan with no
+    // allocation, whereas splitting a 200k-char string first would materialise
+    // 200k strings and only then notice. Same discipline as `range`.
+    impl: (a) => {
+      const s = a[0] as string;
+      const sep = a[1] as string;
+      cap('split', sep === '' ? s.length : occurrences(s, sep) + 1);
+      return s.split(sep);
+    },
   },
   trim: {
     call: 'eager',
@@ -569,7 +638,7 @@ export const FUNCTIONS: Record<string, FnSpec> = {
     impl: (a) => {
       const c = a[0];
       if (typeof c === 'string') return c.includes(str('contains', a[1], 'argument 2'));
-      return arr('contains', c, 'argument 1').some((x) => deepEquals(x, a[1]));
+      return loopArr('contains', c, 'argument 1').some((x) => deepEquals(x, a[1]));
     },
   },
   first: {
@@ -600,7 +669,7 @@ export const FUNCTIONS: Record<string, FnSpec> = {
     minArgs: 2,
     ret: 'string',
     impl: (a) =>
-      arr('join', a[0], 'argument 1')
+      loopArr('join', a[0], 'argument 1')
         .map(toStr)
         .join(a[1] as string),
   },
@@ -611,7 +680,7 @@ export const FUNCTIONS: Record<string, FnSpec> = {
     minArgs: 2,
     ret: 'array',
     impl: (a) => {
-      const [head, ...rest] = a.map((x, i) => arr('intersection', x, `argument ${i + 1}`));
+      const [head, ...rest] = a.map((x, i) => loopArr('intersection', x, `argument ${i + 1}`));
       return capped(
         'intersection',
         (head as unknown[]).filter((x) => rest.every((o) => o.some((y) => deepEquals(x, y)))),
@@ -627,11 +696,14 @@ export const FUNCTIONS: Record<string, FnSpec> = {
     impl: (a) => {
       const out: unknown[] = [];
       for (const [i, x] of a.entries()) {
-        for (const el of arr('union', x, `argument ${i + 1}`)) {
+        for (const el of loopArr('union', x, `argument ${i + 1}`)) {
           if (!out.some((y) => deepEquals(el, y))) out.push(el);
+          // Check INSIDE the loop: `union` is variadic, so N args each at the
+          // cap would accumulate N × cap before a post-hoc check could fire.
+          cap('union', out.length);
         }
       }
-      return capped('union', out);
+      return out;
     },
   },
   createArray: {
@@ -673,7 +745,7 @@ export const FUNCTIONS: Record<string, FnSpec> = {
     ret: 'array',
     lambdaArgs: [1],
     run: (args, ev) =>
-      arr('filter', ev.eval(args[0] as Expr), 'argument 1').filter((el) =>
+      loopArr('filter', ev.eval(args[0] as Expr), 'argument 1').filter((el) =>
         expectBool('filter', ev.withItem(args[1] as Expr, el), 'the predicate'),
       ),
   },
@@ -684,7 +756,7 @@ export const FUNCTIONS: Record<string, FnSpec> = {
     ret: 'array',
     lambdaArgs: [1],
     run: (args, ev) =>
-      arr('map', ev.eval(args[0] as Expr), 'argument 1').map((el) =>
+      loopArr('map', ev.eval(args[0] as Expr), 'argument 1').map((el) =>
         ev.withItem(args[1] as Expr, el),
       ),
   },
@@ -697,7 +769,7 @@ export const FUNCTIONS: Record<string, FnSpec> = {
     ret: 'number',
     lambdaArgs: [1],
     run: (args, ev) => {
-      const a = arr('count', ev.eval(args[0] as Expr), 'argument 1');
+      const a = loopArr('count', ev.eval(args[0] as Expr), 'argument 1');
       if (args.length === 1) return a.length;
       return a.filter((el) =>
         expectBool('count', ev.withItem(args[1] as Expr, el), 'the predicate'),
@@ -745,7 +817,9 @@ export const FUNCTIONS: Record<string, FnSpec> = {
     impl: (a) => {
       const v = a[0];
       if (typeof v === 'number' && Number.isFinite(v)) return v;
-      if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
+      // A DECIMAL literal only: bare `Number()` accepts `0x10`/`0b101`/`0o7`,
+      // which is exactly the implicit reinterpretation this language forbids.
+      if (typeof v === 'string' && /^\s*-?\d+(\.\d+)?([eE][+-]?\d+)?\s*$/.test(v)) return Number(v);
       throw new SubstituteError(`function 'float': cannot convert ${typeName(v)} to a number`);
     },
   },
@@ -768,7 +842,9 @@ export const FUNCTIONS: Record<string, FnSpec> = {
     args: ['any'],
     minArgs: 1,
     ret: 'array',
-    impl: (a) => (Array.isArray(a[0]) ? capped('array', a[0]) : [a[0]]),
+    // Not capped: it materialises nothing new (an array arg passes straight
+    // through), and a wrapped scalar is exactly one element.
+    impl: (a) => (Array.isArray(a[0]) ? a[0] : [a[0]]),
   },
   // Parses TEXT into DATA. The result is never rescanned, even if a parsed value
   // is itself the string `"${secret}"` (spec #6 Round-2) — `substitute` does not
@@ -890,14 +966,18 @@ export const FUNCTIONS: Record<string, FnSpec> = {
     ret: 'number',
     impl: (a) => Math.max(...(a as number[])),
   },
-};
+});
 
 // --- impl helpers for the overloaded collection fns --------------------------
 
-/** A string or an array — the two things `length`/`empty` accept. */
+/**
+ * A string or an array — the two things `length`/`empty` accept. NOT capped:
+ * asking an over-cap array how long it is must WORK, or the author cannot even
+ * write the guard (`if(greater(length(x), 10000), …)`) that avoids the cap.
+ */
 function sized(fn: string, v: unknown): { length: number } {
   if (typeof v === 'string') return v;
-  if (Array.isArray(v)) return capped(fn, v);
+  if (Array.isArray(v)) return v;
   throw new SubstituteError(
     `function '${fn}': argument 1 must be a string or an array, got ${typeName(v)}`,
   );
@@ -916,7 +996,7 @@ function at(fn: string, v: unknown, idx: 0 | -1): unknown {
 
 /** An array whose elements must ALL be numbers (`sum`/`avg`). */
 function numbers(fn: string, v: unknown): number[] {
-  return arr(fn, v, 'argument 1').map((x, i) => num(fn, x, `element ${i + 1}`));
+  return capped(fn, arr(fn, v, 'argument 1')).map((x, i) => num(fn, x, `element ${i + 1}`));
 }
 
 /** A non-negative integer count/index. */

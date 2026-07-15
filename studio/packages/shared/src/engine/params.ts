@@ -11,7 +11,14 @@ import { declaredOutputNames } from './outputs.js';
 import type { Expr, TemplateMode } from './expr.js';
 import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
 import type { EvalIn, FnSpec } from './functions.js';
-import { FUNCTIONS, arity, checkArgTypes, listFunctions, toStr } from './functions.js';
+import {
+  FUNCTIONS,
+  MAX_ARRAY_ELEMENTS_TOTAL,
+  arity,
+  checkArgTypes,
+  listFunctions,
+  toStr,
+} from './functions.js';
 
 // ---------------------------------------------------------------------------
 // The `${...}` parameter language (ported from lib/pipeline.py's S3.1 resolver).
@@ -127,6 +134,38 @@ function deferredToE7(source: string): SubstituteError {
 interface Env {
   ctx: SubstitutionContext;
   item?: { value: unknown };
+  /**
+   * Elements materialised so far by THIS field's evaluation. Shared by every
+   * child Env (the object is passed by reference, deliberately), so nesting
+   * cannot escape it — see `charge`.
+   */
+  budget: { spent: number };
+}
+
+/** A fresh evaluation scope for one field. */
+function newEnv(ctx: SubstitutionContext): Env {
+  return { ctx, budget: { spent: 0 } };
+}
+
+/**
+ * Charge an array-producing call against the per-evaluation budget.
+ *
+ * The per-array cap bounds ONE array; this bounds the whole evaluation. Without
+ * it `${length(map(range(0,10000), range(0,10000)))}` allocates 10^8 elements
+ * while every individual array sits exactly AT the cap — the per-array check
+ * cannot see the product. Charging here (the one place every call's result
+ * passes through) means no fn can forget it, and a fn added later inherits the
+ * bound for free.
+ */
+function charge(env: Env, out: unknown): void {
+  if (!Array.isArray(out)) return;
+  env.budget.spent += out.length;
+  if (env.budget.spent > MAX_ARRAY_ELEMENTS_TOTAL) {
+    throw new SubstituteError(
+      `expression materialises too many array elements ` +
+        `(over ${MAX_ARRAY_ELEMENTS_TOTAL} in one field)`,
+    );
+  }
 }
 
 function resolveRef(expr: Extract<Expr, { kind: 'ref' }>, env: Env): unknown {
@@ -156,7 +195,16 @@ function resolveRef(expr: Extract<Expr, { kind: 'ref' }>, env: Env): unknown {
     }
     let cur: unknown = env.item.value;
     for (const name of parts.slice(1)) {
-      if (cur === null || typeof cur !== 'object' || !(name in (cur as object))) {
+      // `hasOwnProperty`, NEVER `in`: `in` walks the PROTOTYPE CHAIN, so
+      // `${item.constructor}` would hand back a real host function (and
+      // `${item.__proto__}` an object's prototype) as resolved node config —
+      // escaping the data model and defeating `toStr`'s string contract. Matches
+      // the own-property rule every sibling branch in this function uses.
+      if (
+        cur === null ||
+        typeof cur !== 'object' ||
+        !Object.prototype.hasOwnProperty.call(cur, name)
+      ) {
         throw new SubstituteError(`\${${expr.source}}: the current item has no field '${name}'`);
       }
       cur = (cur as Record<string, unknown>)[name];
@@ -227,9 +275,12 @@ function evalExpr(expr: Expr, env: Env): unknown {
       }
       checkArity(expr.name, spec, expr.args.length);
       try {
-        return spec.call === 'special'
-          ? spec.run(expr.args, evalIn(env))
-          : callEager(expr.name, spec, expr.args, env);
+        const out =
+          spec.call === 'special'
+            ? spec.run(expr.args, evalIn(env))
+            : callEager(expr.name, spec, expr.args, env);
+        charge(env, out);
+        return out;
       } catch (err) {
         if (err instanceof SubstituteError) throw err;
         const msg = err instanceof Error ? err.message : String(err);
@@ -336,9 +387,13 @@ export function substitute(value: unknown, ctx: SubstitutionContext): unknown {
   // re-type `"${x}\n"`, a normal template, and eat the newline.
   if (mode.mode === 'literal') return restoreEscapes(mode.scanned);
 
+  // ONE Env — and so ONE element budget — for the whole field: a field with
+  // several embedded refs must not get a fresh allowance per `${}`.
+  const env = newEnv(ctx);
+
   if (mode.mode === 'whole') {
     // Whole-value → preserve the resolved value's native type.
-    const out = evalExpr(parseExpr(mode.body), { ctx });
+    const out = evalExpr(parseExpr(mode.body), env);
     return typeof out === 'string' ? restoreEscapes(out) : out;
   }
 
@@ -350,7 +405,7 @@ export function substitute(value: unknown, ctx: SubstitutionContext): unknown {
   let cursor = 0;
   for (const m of mode.matches) {
     result += mode.scanned.slice(cursor, m.start);
-    result += toStr(evalExpr(parseExpr(m.body), { ctx }));
+    result += toStr(evalExpr(parseExpr(m.body), env));
     cursor = m.end + 1;
   }
   result += mode.scanned.slice(cursor);

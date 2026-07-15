@@ -211,9 +211,11 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
     `string|number|boolean|array|any` — `array` carries NO element type. The element shape belongs to
     a structured output's `OutputSpec` (**#2**) and to **E6**'s inference; minting `array<T>`/
     `record<{…}>` at E4 would front-run both with nothing to consume it. The cost is REAL and owned:
-    a misspelled `${item.badField}` throws at RUN time, not at edit time. **Signatures are not
-    decorative** — `checkArgTypes` enforces them at run time, which is what makes the no-implicit-
-    coercion non-goal an actual rule (`${add('2', 3)}` throws). E6 consumes the same `sig` data for
+    a misspelled `${item.badField}` throws at RUN time, not at edit time. **The ARG signatures are
+    not decorative** — `checkArgTypes` enforces `args` at run time, which is what makes the
+    no-implicit-coercion non-goal an actual rule (`${add('2', 3)}` throws). The declared RETURN type
+    (`ret`) is the honest exception: nothing reads it today (flattening every `ret` to `'any'` keeps
+    the suite green), it is declared FOR **E6**, which consumes the same signature data for
     inference and owns closing the edit-time gap.
 - **The function calling-convention needs a redesign.** `map/filter/count` predicates must be
   captured as **unevaluated ASTs re-run per element with `item` bound** (lazy, per-element) — the flat
@@ -260,12 +262,23 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
   are hand-rolled** (UTF-8 + base64 in-module): `shared` is the pure engine — `lib` is ES2023 with no
   DOM/node types — so `Buffer`/`btoa`/`TextEncoder` would break both the typecheck and the
   no-host-access rule.
-- **Resource limits — the array cap shipped at E4** (`MAX_ARRAY_ELEMENTS = 10_000`), applied to array
-  **PRODUCERS** (`range`/`createArray`/`split`/`union`/`intersection`/`array`) as well as consumers
-  (`map`/`filter`/`count`/`sum`/`avg`/`take`/`skip`/`join`): a producer allocates BEFORE any
-  consumer's check could fire, so `${range(0, 2000000000)}` would OOM the pure reducer from an
-  unvalidated doc. The cap is pure + deterministic, so replay is unaffected. Max resolved-value size
-  and max deep-path depth remain OUT (E7/general).
+- **Resource limits — TWO caps shipped at E4**, because one is not enough:
+  - `MAX_ARRAY_ELEMENTS = 10_000` bounds the SHAPE of any ONE array. Applied to the fns that
+    **MATERIALISE** (`range`/`createArray`/`split`/`union`/`intersection`) and those that **LOOP**
+    (`map`/`filter`/`count`/`sum`/`avg`/`join`/`contains`) — a producer allocates BEFORE any
+    consumer's check could fire, so `${range(0, 2000000000)}` would OOM the pure reducer from an
+    unvalidated doc. `split`/`union`/`range` bound the result BEFORE allocating (counting is a scan;
+    splitting first would materialise the array it means to refuse).
+  - `MAX_ARRAY_ELEMENTS_TOTAL = 100_000` bounds the WORK of one FIELD's evaluation. The per-array cap
+    is per-ARRAY, so `${length(map(range(0,10000), range(0,10000)))}` passes every individual check
+    while allocating 10^8 (a third nesting reaches 10^12). Charged in `evalExpr` — the one site every
+    call funnels through — so no fn can forget it and a later fn inherits it free.
+  - **Deliberately NOT capped:** `length`/`empty`/`first`/`last`/`take`/`skip` allocate nothing, and
+    `take`/`skip` are exactly how an author brings an oversized `${nodes.http.output.body}` back
+    UNDER the cap. Capping them made an over-cap array wholly unusable — you could not even ask its
+    length to guard against it.
+  - Both caps are pure + deterministic, so replay is unaffected. Max resolved-value size and max
+    deep-path depth remain OUT (E7/general).
 - **SSOT bug — FIXED at E3 (2026-07-15, implemented).** Was: the spec's example expressions use
   `run.runId`/`run.startedAt`, but the shipped `RUN_FIELDS = [id, pipelineVersionId, triggerId,
   parentRunId]` — `runId` was `id` and `startedAt` didn't exist, so the dynamic-filename expression
