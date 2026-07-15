@@ -1008,28 +1008,28 @@ export const FUNCTIONS: Readonly<Record<string, FnSpec>> = Object.freeze({
     args: ['string', 'number'],
     minArgs: 2,
     ret: 'string',
-    impl: (a) => addFixed('addDays', a, FIXED_UNIT_MS['Day'] as number),
+    impl: (a) => addFixed('addDays', a, FIXED_UNIT_MS.Day),
   },
   addHours: {
     call: 'eager',
     args: ['string', 'number'],
     minArgs: 2,
     ret: 'string',
-    impl: (a) => addFixed('addHours', a, FIXED_UNIT_MS['Hour'] as number),
+    impl: (a) => addFixed('addHours', a, FIXED_UNIT_MS.Hour),
   },
   addMinutes: {
     call: 'eager',
     args: ['string', 'number'],
     minArgs: 2,
     ret: 'string',
-    impl: (a) => addFixed('addMinutes', a, FIXED_UNIT_MS['Minute'] as number),
+    impl: (a) => addFixed('addMinutes', a, FIXED_UNIT_MS.Minute),
   },
   addSeconds: {
     call: 'eager',
     args: ['string', 'number'],
     minArgs: 2,
     ret: 'string',
-    impl: (a) => addFixed('addSeconds', a, FIXED_UNIT_MS['Second'] as number),
+    impl: (a) => addFixed('addSeconds', a, FIXED_UNIT_MS.Second),
   },
   addToTime: {
     call: 'eager',
@@ -1148,16 +1148,8 @@ function count0(fn: string, v: unknown): number {
  * accept-set can be WIDENED later back-compatibly; it could not be narrowed.
  */
 const ISO_TS_RE =
-  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:?\d{2})$/;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})$/;
 
-/**
- * The representable range: year 0001 through 9999 (.NET `DateTime`'s range).
- *
- * Bounded to 4-digit years so every value this module RETURNS is re-parseable by
- * `ISO_TS_RE` — outside it `toISOString()` emits an expanded form
- * (`+275760-09-13T…`) that our own parser would then reject, silently breaking
- * composition (`addDays(addDays(t, n), 1)`).
- */
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 function isLeapYear(y: number): boolean {
@@ -1190,6 +1182,16 @@ function utcMs(
   return t;
 }
 
+/**
+ * The representable range: year 0001 through 9999 (.NET `DateTime`'s range).
+ *
+ * Bounded to 4-digit years so every value this module RETURNS is re-parseable by
+ * `ISO_TS_RE` — outside it `toISOString()` emits an expanded form
+ * (`+275760-09-13T…`) that our own parser would then reject, silently breaking
+ * composition (`addDays(addDays(t, n), 1)`). Enforced at BOTH boundaries:
+ * `parseTs` (so it holds of inputs — `\d{4}` admits year 0000) and `isoOf` (so
+ * it holds of results).
+ */
 const MIN_TIME_MS = utcMs(1, 1, 1, 0, 0, 0, 0);
 const MAX_TIME_MS = utcMs(9999, 12, 31, 23, 59, 59, 999);
 
@@ -1276,8 +1278,18 @@ function addFixed(fn: string, a: unknown[], unitMs: number): string {
   return isoOf(fn, parseTs(fn, a[0], 'argument 1') + interval(fn, a[1]) * unitMs);
 }
 
-/** Fixed-width units, in ms. Month/Year are NOT here — they are calendar units. */
-const FIXED_UNIT_MS: Readonly<Record<string, number>> = Object.freeze({
+/**
+ * Fixed-width units, in ms — the SSOT for both the multiplier and the NAME.
+ *
+ * Deliberately NOT typed `Record<string, number>`: that key type would make every
+ * lookup `number | undefined` under `noUncheckedIndexedAccess` and force an
+ * `as number` at each call site — a cast pointing the wrong way. A unit added to
+ * `TIME_UNITS` with no multiplier here would then read `undefined`, the cast
+ * would silence it, and `n * undefined` = `NaN` would surface as a misleading
+ * "out of range" from `isoOf` instead of a compile error. Keeping the literal
+ * key type makes that combination unrepresentable.
+ */
+const FIXED_UNIT_MS = Object.freeze({
   Second: 1000,
   Minute: 60_000,
   Hour: 3_600_000,
@@ -1285,8 +1297,22 @@ const FIXED_UNIT_MS: Readonly<Record<string, number>> = Object.freeze({
   Week: 604_800_000,
 });
 
-/** The closed `addToTime`/`subtractFromTime` unit vocabulary (ADF's names). */
-const TIME_UNITS = ['Second', 'Minute', 'Hour', 'Day', 'Week', 'Month', 'Year'] as const;
+type FixedUnit = keyof typeof FIXED_UNIT_MS;
+
+function isFixedUnit(u: string): u is FixedUnit {
+  return Object.prototype.hasOwnProperty.call(FIXED_UNIT_MS, u);
+}
+
+/** Calendar units — width depends on the date, so they CLAMP rather than multiply. */
+const CALENDAR_UNITS = ['Month', 'Year'] as const;
+
+/**
+ * The closed `addToTime`/`subtractFromTime` unit vocabulary (ADF's names),
+ * DERIVED so each name exists once: a new fixed unit needs only a `FIXED_UNIT_MS`
+ * entry and is then accepted, listed in the error message, and multiplied — with
+ * no third place to forget.
+ */
+const TIME_UNITS: readonly string[] = [...Object.keys(FIXED_UNIT_MS), ...CALENDAR_UNITS];
 
 /**
  * Add whole months, CLAMPING to the end of a short month — .NET `AddMonths`
@@ -1316,14 +1342,14 @@ function shiftBy(fn: string, a: unknown[], sign: 1 | -1): string {
   const ms = parseTs(fn, a[0], 'argument 1');
   const n = sign * interval(fn, a[1]);
   const unit = str(fn, a[2], 'argument 3');
-  if (!(TIME_UNITS as readonly string[]).includes(unit)) {
+  if (unit === 'Month') return isoOf(fn, addMonths(ms, n));
+  if (unit === 'Year') return isoOf(fn, addMonths(ms, n * 12));
+  if (!isFixedUnit(unit)) {
     throw new SubstituteError(
       `function '${fn}': argument 3 must be one of ${TIME_UNITS.join(', ')} (case-sensitive)`,
     );
   }
-  if (unit === 'Month') return isoOf(fn, addMonths(ms, n));
-  if (unit === 'Year') return isoOf(fn, addMonths(ms, n * 12));
-  return isoOf(fn, ms + n * (FIXED_UNIT_MS[unit] as number));
+  return isoOf(fn, ms + n * FIXED_UNIT_MS[unit]);
 }
 
 /** `startOfDay`/`startOfHour`/`startOfMonth` — zero everything below the unit. */
@@ -1377,28 +1403,21 @@ const FORMAT_TOKENS: Readonly<Record<string, (d: Date) => string>> = Object.free
 function formatDateTime(fn: string, a: unknown[]): string {
   const dt = new Date(parseTs(fn, a[0], 'argument 1'));
   const format = str(fn, a[1], 'argument 2');
-  let out = '';
-  for (let i = 0; i < format.length;) {
-    const ch = format[i] as string;
-    let j = i;
-    while (j < format.length && format[j] === ch) j += 1;
-    const run = format.slice(i, j);
-    if (/[A-Za-z]/.test(ch)) {
-      const token = FORMAT_TOKENS[run];
-      if (token === undefined) {
-        throw new SubstituteError(
-          `function '${fn}': '${run}' is not a format token ` +
-            `(the closed set is ${Object.keys(FORMAT_TOKENS).join(', ')}; ` +
-            'letters cannot appear literally — assemble with concat)',
-        );
-      }
-      out += token(dt);
-    } else {
-      out += run;
+  // `([\s\S])\1*` is one run of the same character. `[\s\S]`, not `.`, because
+  // `.` excludes newlines — which would split a run around one and silently
+  // change the output of a multi-line format.
+  return format.replace(/([\s\S])\1*/g, (run, ch: string) => {
+    if (!/[A-Za-z]/.test(ch)) return run;
+    const token = FORMAT_TOKENS[run];
+    if (token === undefined) {
+      throw new SubstituteError(
+        `function '${fn}': '${run}' is not a format token ` +
+          `(the closed set is ${Object.keys(FORMAT_TOKENS).join(', ')}; ` +
+          'letters cannot appear literally — assemble with concat)',
+      );
     }
-    i = j;
-  }
-  return out;
+    return token(dt);
+  });
 }
 
 /** Every catalog name, sorted — for diagnostics and allowlist assertions. */

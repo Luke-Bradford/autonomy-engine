@@ -594,6 +594,11 @@ describe('E5a formatDateTime — a CLOSED token set', () => {
     expect(substitute("${formatDateTime(params.t, 'dd.MM.yyyy @ HH:mm')}", c)).toBe(
       '15.07.2026 @ 10:30',
     );
+    // A newline is a literal like any other: the run-scanner must not treat it
+    // as a boundary that splits the tokens around it.
+    expect(substitute("${formatDateTime(params.t, 'yyyy\n\nHH')}", c)).toBe('2026\n\n10');
+    expect(substitute("${formatDateTime(params.t, '')}", c)).toBe('');
+    expect(substitute("${formatDateTime(params.t, '-- :: ..')}", c)).toBe('-- :: ..');
   });
 
   it('REJECTS an unknown token rather than emitting it raw', () => {

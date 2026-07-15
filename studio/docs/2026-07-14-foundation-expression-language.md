@@ -72,14 +72,27 @@ is typed; `validateRefs` checks arity + arg/return types at save. **v1 catalog (
 - **Conversion:** `string int float bool array json coalesce base64 base64ToString
   encodeUriComponent decodeUriComponent`
 - **Math:** `add sub mul div mod min max`
-- **Date (dispatch-stamped, see §Time):** `utcNow formatDateTime addDays addHours addMinutes
-  addSeconds addToTime subtractFromTime convertTimeZone startOfDay startOfHour startOfMonth
-  dayOfWeek dayOfMonth ticks`
+- **Date (see §Time):** ~~`utcNow`~~ `formatDateTime addDays addHours addMinutes
+  addSeconds addToTime subtractFromTime` ~~`convertTimeZone`~~ `startOfDay startOfHour startOfMonth
+  dayOfWeek dayOfMonth` ~~`ticks`~~ — **3 of the 15 are ABSENT as shipped** (struck through):
+  `utcNow` → E5b/**#450**, `ticks` + `convertTimeZone` → scoped out. This list is normative and
+  CLOSED, so the absences are marked HERE rather than only in the E5a deviations block below — a
+  reader takes an unmarked name in a closed allowlist as a fn that exists.
 
 Extension is a deliberate, allowlisted act (new fn → catalog entry + type sig + validator). No user
 code, no regex `eval`, no host functions. (Data-flow/mapping functions are out of scope — not our domain.)
 
 ## Time & other dispatch-stamped values (replay-safe)
+
+> **AMENDED 2026-07-15 (E5a) — the dispatch stamp described below DOES NOT EXIST, and `utcNow()` is
+> NOT shipped.** `node.dispatched` carries `runId/nodeId/attemptId/idempotent` and **no timestamp
+> field** (`engine/types.ts`), and the reducer resolves node config in `prepInput` at the
+> `pending→ready` transition — strictly BEFORE any dispatch event for that attempt. The paragraph
+> below is the DESIGN INTENT, not the shipped engine; delivering it needs a dispatch-handshake
+> change, tracked as **E5b / #450**. **Use `${run.startedAt}`** (E3, run-stable, live today) — which
+> is already what the Round-2 rule below directs authors to in every place `utcNow()` was to be
+> prohibited. The rest of this section (the pure-reducer rationale, the logged-fact model) stands
+> and is exactly why #450 cannot simply read a clock.
 
 The reducer is pure, so `utcNow()`, `${run.runId}`, `${pipeline.triggerTime}`, `${trigger.*}` cannot
 read a live clock. Resolution: they read **immutable facts already in the run's own log** —
@@ -137,6 +150,14 @@ its own dispatch stamp) — documented; use `${run.startedAt}` for a run-stable 
   (`if`/`switch`/`filter`/`set_variable` conditions) or trigger-binding expressions — those have no
   dispatch event; use the seeded **`${run.startedAt}`** (run-stable) or `${trigger.scheduledTime}`
   instead. (Rule closes the codex + subagent C1 replay hole.)
+  - **AMENDED at E5a (2026-07-15): NO such stamp exists, so `utcNow()` is not shipped at all** and
+    this rule currently has no surface to govern — see the §Time amendment and **#450**. The
+    remainder is LIVE and unaffected: `guid`/`rand` stay out, and the **E5a date fns hold this line
+    by construction** — every one takes an EXPLICIT timestamp, so the catalog has no zero-arg clock
+    read to prohibit. `${run.startedAt}` (this rule's own prescribed substitute) is live since E3.
+    NB when #450 lands, re-decide this prohibition rather than assume it: two of the three options
+    bind a fact that exists in control expressions too, which would make "those have no dispatch
+    event" — the stated REASON for the ban — no longer the reason.
 - **Numeric variables are FIRST-CLASS (not an extension)** — #1 D2 gains `number`. Together with the
   new `sum/avg/count/filter/map` array forms, the **flagship LLM-judge aggregate flow** is now
   buildable (Round-2 C2). **Predicate/projection args are BARE expressions, NOT nested `${}`** (the
