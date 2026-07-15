@@ -379,12 +379,16 @@ export function createEngine(doc: EngineDoc): Engine {
    * silently skipped subgraph.
    */
   function noteInertBranch(id: string, incoming: Edge[], diagnostics: string[]): void {
-    if (!incoming.some((e) => e.on === 'branch')) return;
+    const inert = incoming.filter((e) => e.on === 'branch').length;
+    if (inert === 0) return;
+    // Count them: on a fan-in, a hardcoded singular undercounts the cause and
+    // sends the operator hunting ONE edge when several are inert.
+    const subject = inert === 1 ? `an incoming 'branch' edge` : `${inert} incoming 'branch' edges`;
     // Deliberately worded as a contributing cause, not THE cause: the entity may
     // also have a genuinely dead operational predecessor, and claiming the branch
     // edge is why would send an operator down the wrong path.
     diagnostics.push(
-      `'${id}' was skipped and has an incoming 'branch' edge, which can never be satisfied — no ` +
+      `'${id}' was skipped and has ${subject}, which can never be satisfied — no ` +
         `activity emits a branch outcome yet (#4 A0/A1/A2 implement if/switch against this schema)`,
     );
   }

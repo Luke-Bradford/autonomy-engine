@@ -401,6 +401,31 @@ describe('business branch edges are INERT until #4 A0/A1/A2', () => {
     expect(diagnostics.join('\n')).toMatch(/'stg'/);
     expect(diagnostics.join('\n')).toMatch(/can never be satisfied/);
   });
+
+  // A fan-in of branch edges: the diagnostic must account for ALL of them. A
+  // hardcoded singular ("has an incoming 'branch' edge") undercounts the cause
+  // and would send an operator hunting one edge when several are inert.
+  it('counts EVERY inert branch predecessor, not just one', () => {
+    const eng = engine(
+      [node('if_1'), node('if_2'), node('t')],
+      [branchEdge('if_1', 't', 'true'), branchEdge('if_2', 't', 'false')],
+    );
+    const { state, diagnostics } = runAll(eng);
+    expect(state.nodes.t!.status).toBe('skipped');
+
+    const text = diagnostics.join('\n');
+    expect(text).toMatch(/can never be satisfied/);
+    // Names the count, and reads as a plural — not "an incoming 'branch' edge".
+    expect(text).toMatch(/2 incoming 'branch' edges/);
+  });
+
+  // The singular wording must survive the pluralisation — an off-by-one that
+  // reported "1 incoming 'branch' edges" would be its own papercut.
+  it('still reads naturally for a single inert branch predecessor', () => {
+    const eng = engine([node('if_1'), node('t')], [branchEdge('if_1', 't', 'true')]);
+    const { diagnostics } = runAll(eng);
+    expect(diagnostics.join('\n')).toMatch(/has an incoming 'branch' edge,/);
+  });
 });
 
 describe('containers — skipped + JOIN inside a stage', () => {
