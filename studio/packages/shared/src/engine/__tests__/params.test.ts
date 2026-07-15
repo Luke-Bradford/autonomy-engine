@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Edge, Node, Param, PipelineVersion, SubstitutionContext } from '../types.js';
+import type { Edge, EdgeOn, Node, Param, PipelineVersion, SubstitutionContext } from '../types.js';
 import { ParamResolveError, SubstituteError } from '../types.js';
 import { RUN_FIELDS, resolveRunParams, substitute, validateRefs } from '../params.js';
 
@@ -19,7 +19,7 @@ function node(id: string, config: Record<string, unknown>): Node {
   return { id, type: 'agent_task', config, position: { x: nodeSeq, y: 0 } };
 }
 
-function edge(from: string, to: string, on: Edge['on'], back = false): Edge {
+function edge(from: string, to: string, on: EdgeOn, back = false): Edge {
   return { id: `${from}->${to}:${on}${back ? ':back' : ''}`, from, to, on, back };
 }
 
@@ -427,6 +427,38 @@ describe('validateRefs — node-output availability / dominance', () => {
     // a DOES dominate d → unconditional ref to a is fine.
     const domOk = doc([...nodes.slice(0, 3), node('d', { in: '${nodes.a.output.v}' })], edges);
     expect(validateRefs(domOk)).toEqual([]);
+  });
+
+  // A `skipped` edge inverts the guarantee its predecessor carried: `c` runs
+  // only when `b` was SKIPPED, and `b` is skipped precisely because `a` did NOT
+  // succeed. Inheriting b's `guaranteed` set (which contains `a`) into `c`
+  // would assert a succeeded on the one path where it provably didn't — the
+  // checker would ACCEPT the doc and the run would then hard-fail at dispatch
+  // (`prepInput` throws → finishRun{invalid_event}).
+  it('a ref through a skipped edge is NOT guaranteed — nothing upstream survives a skip', () => {
+    const edges = [edge('a', 'b', 'success'), edge('b', 'c', 'skipped')];
+    const bad = doc(
+      [node('a', {}), node('b', {}), node('c', { in: '${nodes.a.output.v}' })],
+      edges,
+    );
+    expect(validateRefs(bad).join('\n')).toMatch(/wrap it in default/);
+
+    // default() is the correct escape hatch — it tolerates the absent output.
+    const ok = doc(
+      [node('a', {}), node('b', {}), node('c', { in: '${default(nodes.a.output.v, "fb")}' })],
+      edges,
+    );
+    expect(validateRefs(ok)).toEqual([]);
+  });
+
+  it("a ref to the skipped predecessor's OWN output is not guaranteed either", () => {
+    // b was skipped → b never produced an output at all.
+    const edges = [edge('a', 'b', 'success'), edge('b', 'c', 'skipped')];
+    const bad = doc(
+      [node('a', {}), node('b', {}), node('c', { in: '${nodes.b.output.v}' })],
+      edges,
+    );
+    expect(validateRefs(bad).join('\n')).toMatch(/wrap it in default/);
   });
 
   it('a failure-branch-only ref needs default(); with default() it is ok', () => {

@@ -72,10 +72,20 @@ const TERMINAL_NODE = new Set<NodeRunState['status']>(['success', 'failure', 'sk
 const LIVE_NODE = new Set<NodeRunState['status']>(['ready', 'dispatched']);
 
 /**
- * A defensive hard cap on back-edge traversals used ONLY when a back-edge has no
- * `maxBounces` (which `validateDoc` requires — this bounds any doc that bypassed
- * validation, e.g. constructed directly via `createEngine`, so a no-progress
- * body can never spin forever). A validated doc always hits its own smaller cap.
+ * A defensive hard CEILING on back-edge traversals — both the fallback when a
+ * back-edge declares no `maxBounces` (which `validateDoc` requires, so this
+ * bounds a doc that bypassed validation) and an upper clamp on a declared one.
+ *
+ * The clamp is load-bearing, not belt-and-braces. Bounces normally cost a round
+ * of real I/O: firing a back-edge resets its body to `pending`, the body then
+ * DISPATCHES (non-terminal), and the whole-body-terminal gate blocks a refire
+ * until the driver's events land — so the driver paces the loop. A body reached
+ * only by `skipped` edges never dispatches (reset → skipped → terminal →
+ * refire), so every bounce runs synchronously inside ONE `reduce()` with no I/O
+ * between them. `maxBounces` has no schema upper bound, so an unclamped
+ * `maxBounces: 100_000_000` burns ~60s of CPU in a single call and blocks the
+ * in-process driver's event loop. Clamping here (rather than rejecting the doc
+ * at save time) keeps it fail-safe: no previously-valid doc becomes unsavable.
  */
 const DEFENSIVE_BOUNCE_CAP = 10_000;
 
@@ -89,12 +99,19 @@ type Readiness = 'ready' | 'skipped' | 'pending';
 type EndpointOutcome = 'success' | 'failure' | 'skipped' | null;
 
 /**
- * A STABLE key for an edge, from (from, to, on) — NOT an array index — so a
- * doc save/reorder never changes which `bounces[...]` counter a back-edge maps
- * to (CP1). `\x00` is a delimiter that cannot occur in an id/enum.
+ * A STABLE key for an edge, from (from, to, on, branch) — NOT an array index —
+ * so a doc save/reorder never changes which `bounces[...]` counter a back-edge
+ * maps to (CP1). `\x00` is a delimiter that cannot occur in an id/enum.
+ *
+ * The `branch` label is part of the key because two arms of one switch share
+ * (from, to, 'branch'): without it, `X --branch:a--> Y` and `X --branch:b--> Y`
+ * would share a single bounce counter (halving `maxBounces`) and resolve each
+ * other's reset body. Unreachable while branch edges are inert (nothing emits a
+ * branch outcome until #4 A0/A1/A2) — kept correct by construction so the
+ * collision can't be introduced later by a ticket that isn't looking for it.
  */
 function stableEdgeKey(e: Edge): string {
-  return `${e.from}\x00${e.to}\x00${e.on}`;
+  return `${e.from}\x00${e.to}\x00${e.on}\x00${e.on === 'branch' ? e.branch : ''}`;
 }
 
 /**
@@ -215,7 +232,15 @@ export function createEngine(doc: EngineDoc): Engine {
     if (!endpointIds.has(edge.from)) return 'impossible';
     const oc = endpointOutcome(edge.from, state);
     if (oc === null) return 'pending';
-    if (oc === 'skipped') return 'impossible';
+    // Business routing: no activity emits a branch outcome yet (#4 A0/A1/A2), so
+    // a branch edge can never satisfy. `settle` reports this as a diagnostic
+    // rather than letting the downstream strand silently.
+    if (edge.on === 'branch') return 'unsatisfied-terminal';
+    if (oc === 'skipped') {
+      // A skip propagates unless something explicitly catches it. `completion`
+      // does NOT catch it: the activity never ran, so it never completed.
+      return edge.on === 'skipped' ? 'satisfied' : 'impossible';
+    }
     if (oc === 'success') {
       return edge.on === 'success' || edge.on === 'completion'
         ? 'satisfied'
@@ -226,23 +251,47 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
-   * The CP1 join truth table over an entity's incoming edges. No incoming edge
-   * → a root (ready). `dead` = `impossible` ∪ `unsatisfied-terminal` (an edge
-   * that can never satisfy). `all` → ready iff every edge satisfied, skipped iff
-   * any dead, else pending. `any` → ready iff ≥1 satisfied, skipped iff all
-   * dead, else pending.
+   * The join truth table over an entity's incoming edges (CP1, corrected by
+   * F14/T7). No incoming edge → a root (ready).
+   *
+   * Edges are grouped BY PREDECESSOR first: **AND across predecessors, OR among
+   * the conditions on one predecessor** (ADF `dependsOn`). The OR is what makes
+   * multi-condition dependencies expressible at all — `a --success--> d` plus
+   * `a --skipped--> d` are alternatives, and ANDing them edge-wise (as this did
+   * before F14) meant one was always dead, so `d` could never run.
+   *
+   * A predecessor group is `satisfied` if ANY of its conditions satisfied,
+   * `dead` if ALL of them are dead (`impossible` ∪ `unsatisfied-terminal`),
+   * else `pending`. Then `all` → ready iff every group satisfied, skipped iff
+   * any group dead; `any` → ready iff ≥1 group satisfied, skipped iff all dead.
+   * (`any` is unchanged by the grouping: OR distributes over OR.)
    */
   function computeReadiness(incoming: Edge[], join: 'all' | 'any', state: RunState): Readiness {
     if (incoming.length === 0) return 'ready';
-    const states = incoming.map((e) => edgeState(e, state));
     const dead = (s: EdgeState): boolean => s === 'impossible' || s === 'unsatisfied-terminal';
+
+    const byPredecessor = new Map<string, EdgeState[]>();
+    for (const e of incoming) {
+      const states = byPredecessor.get(e.from);
+      if (states === undefined) byPredecessor.set(e.from, [edgeState(e, state)]);
+      else states.push(edgeState(e, state));
+    }
+    // Order-independent (`every`/`some`), so Map iteration order can't affect
+    // the result — the reducer stays pure and replay-stable. A GROUP is never
+    // 'skipped' (only a whole entity is), hence its own type rather than
+    // `Readiness`.
+    type Group = 'ready' | 'dead' | 'pending';
+    const groups = [...byPredecessor.values()].map((states): Group =>
+      states.some((s) => s === 'satisfied') ? 'ready' : states.every(dead) ? 'dead' : 'pending',
+    );
+
     if (join === 'all') {
-      if (states.every((s) => s === 'satisfied')) return 'ready';
-      if (states.some(dead)) return 'skipped';
+      if (groups.every((g) => g === 'ready')) return 'ready';
+      if (groups.some((g) => g === 'dead')) return 'skipped';
       return 'pending';
     }
-    if (states.some((s) => s === 'satisfied')) return 'ready';
-    if (states.every(dead)) return 'skipped';
+    if (groups.some((g) => g === 'ready')) return 'ready';
+    if (groups.every((g) => g === 'dead')) return 'skipped';
     return 'pending';
   }
 
@@ -318,6 +367,33 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
+   * A `branch` edge cannot be satisfied until #4 A0/A1/A2 ship the `if`/`switch`
+   * activities that emit a branch outcome, so anything depending on one skips.
+   * Say so.
+   *
+   * This diagnostic is the ONLY thing that makes that visible: `validateDoc`
+   * reports a branch edge, but advisorily — its lone caller is the canvas, which
+   * renders a badge and still allows Save, and the server never validates at all
+   * (#444). So a branch edge reaches the reducer whether it came from git, a
+   * direct POST, or the canvas itself. Without this, an operator just sees a
+   * silently skipped subgraph.
+   */
+  function noteInertBranch(id: string, incoming: Edge[], diagnostics: string[]): void {
+    const inert = incoming.filter((e) => e.on === 'branch').length;
+    if (inert === 0) return;
+    // Count them: on a fan-in, a hardcoded singular undercounts the cause and
+    // sends the operator hunting ONE edge when several are inert.
+    const subject = inert === 1 ? `an incoming 'branch' edge` : `${inert} incoming 'branch' edges`;
+    // Deliberately worded as a contributing cause, not THE cause: the entity may
+    // also have a genuinely dead operational predecessor, and claiming the branch
+    // edge is why would send an operator down the wrong path.
+    diagnostics.push(
+      `'${id}' was skipped and has ${subject}, which can never be satisfied — no ` +
+        `activity emits a branch outcome yet (#4 A0/A1/A2 implement if/switch against this schema)`,
+    );
+  }
+
+  /**
    * Try to advance ONE pending node (top-level or a child): skip it, dispatch
    * it (`dispatchNode`), or — for a `call_pipeline` node — emit `startChild` and
    * hold it `waiting`. A prep-input failure short-circuits to `invalid_event`.
@@ -333,8 +409,10 @@ export function createEngine(doc: EngineDoc): Engine {
     if (ns.status !== 'pending') return { state, changed: false };
     const node = nodeById.get(id)!;
     const r = computeReadiness(incoming, nodeJoin(node), state);
-    if (r === 'skipped')
+    if (r === 'skipped') {
+      noteInertBranch(id, incoming, diagnostics);
       return { state: withNode(state, id, { status: 'skipped' }), changed: true };
+    }
     if (r !== 'ready') return { state, changed: false };
 
     const attemptId = `${id}#${ns.attempts}`;
@@ -399,7 +477,7 @@ export function createEngine(doc: EngineDoc): Engine {
    * and clear their outputs — a fresh round recomputes them. Back-edges are
    * considered in STABLE edgeKey order.
    */
-  function fireBackEdges(state: RunState): Step {
+  function fireBackEdges(state: RunState, diagnostics: string[]): Step {
     for (const be of [...backEdges].sort((a, b) => cmp(stableEdgeKey(a), stableEdgeKey(b)))) {
       if (edgeState(be, state) !== 'satisfied') continue;
       const key = stableEdgeKey(be);
@@ -418,9 +496,19 @@ export function createEngine(doc: EngineDoc): Engine {
       // traversal that exceeds the cap (so `bounces` reflects the true count).
       const count = (state.bounces[key] ?? 0) + 1;
       const withBounce: RunState = { ...state, bounces: { ...state.bounces, [key]: count } };
-      // maxBounces is REQUIRED by validateDoc; the defensive fallback bounds any
-      // unvalidated doc so a no-progress body can never spin forever.
-      const cap = be.maxBounces ?? DEFENSIVE_BOUNCE_CAP;
+      // maxBounces is REQUIRED by validateDoc; the defensive cap both bounds an
+      // unvalidated doc AND clamps a declared one, so no body can spin longer
+      // than the ceiling inside a single reduce (see DEFENSIVE_BOUNCE_CAP).
+      // Say so when it bites: a doc declaring 50_000 that stops at 10_000 would
+      // otherwise report `capped` while the author reads their own doc and sees
+      // a cap that was never honoured.
+      const cap = Math.min(be.maxBounces ?? DEFENSIVE_BOUNCE_CAP, DEFENSIVE_BOUNCE_CAP);
+      if (be.maxBounces !== undefined && be.maxBounces > DEFENSIVE_BOUNCE_CAP && count === 1) {
+        diagnostics.push(
+          `back-edge '${be.from}'→'${be.to}': declared maxBounces ${be.maxBounces} exceeds the ` +
+            `engine ceiling ${DEFENSIVE_BOUNCE_CAP} and was clamped to it`,
+        );
+      }
       if (count > cap) {
         return {
           state: withBounce,
@@ -578,7 +666,7 @@ export function createEngine(doc: EngineDoc): Engine {
     const commands: EngineCommand[] = [];
 
     for (;;) {
-      const fired = fireBackEdges(state);
+      const fired = fireBackEdges(state, diagnostics);
       if (fired.finish) return { state: fired.state, commands: [fired.finish], diagnostics };
       if (fired.changed) {
         state = fired.state;
@@ -615,6 +703,7 @@ export function createEngine(doc: EngineDoc): Engine {
             state = enterContainer(state, id);
             changed = true;
           } else if (r === 'skipped') {
+            noteInertBranch(id, topIncoming.get(id)!, diagnostics);
             state = withContainer(state, id, { status: 'skipped' });
             changed = true;
           }

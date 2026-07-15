@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   PipelineVersionSchema,
   type Edge,
+  type EdgeOn,
   type Node,
   type PipelineVersion,
 } from '@autonomy-studio/shared';
@@ -12,7 +13,7 @@ function node(id: string, config: Record<string, unknown> = {}): Node {
   return { id, type: 'http_request', config, position: { x: 0, y: 0 } };
 }
 
-function edge(id: string, from: string, to: string, on: Edge['on'] = 'success'): Edge {
+function edge(id: string, from: string, to: string, on: EdgeOn = 'success'): Edge {
   return { id, from, to, on };
 }
 

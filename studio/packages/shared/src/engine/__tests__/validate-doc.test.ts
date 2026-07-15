@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { Container, Edge, Node, Param, PipelineVersion } from '../types.js';
+import type {
+  Container,
+  Edge,
+  EdgeOn,
+  Node,
+  OperationalEdge,
+  Param,
+  PipelineVersion,
+} from '../types.js';
 import { validateDoc, type PipelineResolver } from '../params.js';
 
 // --- helpers ---------------------------------------------------------------
@@ -12,7 +20,12 @@ function node(id: string, config: Record<string, unknown> = {}, extra: Partial<N
 function callNode(id: string, pipelineVersionId: string): Node {
   return node(id, {}, { type: 'call_pipeline', call: { pipelineVersionId, params: {} } });
 }
-function edge(from: string, to: string, on: Edge['on'], extra: Partial<Edge> = {}): Edge {
+function edge(
+  from: string,
+  to: string,
+  on: EdgeOn,
+  extra: Partial<Omit<OperationalEdge, 'on'>> = {},
+): Edge {
   return { id: `${from}->${to}:${on}`, from, to, on, ...extra };
 }
 function doc(
@@ -313,6 +326,46 @@ describe('validateDoc — container boundary encapsulation', () => {
       [node('a'), node('b'), node('after')],
       [edge('a', 'b', 'success'), edge('stg', 'after', 'success')],
       [{ id: 'stg', kind: 'stage', children: ['a', 'b'] }],
+    );
+    expect(validateDoc(d)).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// Business `branch` edges — reported as inert (#1 owns the union, T3)
+// ===========================================================================
+
+describe('validateDoc — business branch edges are reported as inert', () => {
+  // The union is settled HERE so #4 A0/A1/A2 can build `if`/`switch` against a
+  // final schema — but until an activity actually emits a branch outcome, a
+  // branch edge can never be satisfied. Parse stays permissive (a git import
+  // must round-trip one); `validateDoc` reports it, naming the ticket that
+  // lifts it.
+  //
+  // ADVISORY, not a gate: the only caller is the canvas, which renders the
+  // result as a badge and still permits Save, and the server never validates
+  // (#444). The reducer's diagnostic (edge-model.test.ts) is the real run-time
+  // observability — which is why F1 put one there rather than trust this.
+  it('reports a branch edge and names the ticket that lifts it', () => {
+    const d = doc(
+      [node('if_1'), node('t')],
+      [{ id: 'e1', from: 'if_1', to: 't', on: 'branch', branch: 'true' }],
+    );
+    const errors = validateDoc(d).join(' ');
+    expect(errors).toContain("edge 'e1'");
+    expect(errors).toMatch(/branch/i);
+    expect(errors).toMatch(/A0|A1|A2|if\/switch/);
+  });
+
+  it('still accepts the four operational conditions', () => {
+    const d = doc(
+      [node('a'), node('b')],
+      [
+        edge('a', 'b', 'success'),
+        edge('a', 'b', 'failure'),
+        edge('a', 'b', 'completion'),
+        edge('a', 'b', 'skipped'),
+      ],
     );
     expect(validateDoc(d)).toEqual([]);
   });

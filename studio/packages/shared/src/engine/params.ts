@@ -618,6 +618,27 @@ export function validateDoc(
     }
   }
 
+  // Business `branch` edges: the union is settled here (spec #1 owns it, T3) so
+  // #4 can build `if`/`switch` against a final schema — but no activity emits a
+  // branch outcome yet, so a branch edge would silently skip everything
+  // downstream. Report it; PARSE stays permissive so a git import round-trips
+  // one unchanged.
+  //
+  // NB this is ADVISORY, not a gate: `validateDoc`'s only caller is the canvas
+  // (`web/.../canvasDoc.ts`), which renders the result as a badge and does NOT
+  // block Save, and the server never calls it at all (#444). The reducer's
+  // diagnostic is what actually makes an inert branch edge observable at run
+  // time. #4 A0/A1/A2 replaces this rule with the real one ("a branch edge's
+  // source must declare that branch"), which needs the ActivityDefinition
+  // contract.
+  for (const e of doc.edges) {
+    if (e.on !== 'branch') continue;
+    errors.push(
+      `edge '${e.id}': business 'branch' edges are not routable yet — the if/switch activities ` +
+        `that emit a branch outcome land with #4 A0/A1/A2`,
+    );
+  }
+
   // The FORWARD graph (all edges minus `back:true`) must be a DAG — a forward
   // cycle deadlocks the walk (its nodes never become ready; `settle` emits no
   // command and never finishes → a silent hang).
@@ -1049,10 +1070,20 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges'>): Graph {
     if (incoming.length > 0) {
       let acc: Set<string> | null = null;
       for (const { from, on } of incoming) {
-        const base = new Set(guaranteed.get(from) ?? new Set<string>());
+        // A `skipped` edge INVERTS its predecessor's guarantees: this node runs
+        // only when `from` was skipped, and `from` is skipped precisely because
+        // ITS dependency was not met — so nothing `from` was guaranteed on its
+        // own (never-taken) path holds here. Inheriting that set would assert a
+        // node succeeded on the one path where it provably didn't: the checker
+        // would accept the doc and the run would then hard-fail at dispatch.
+        // Nothing upstream is guaranteed through a skip.
+        const base =
+          on === 'skipped' ? new Set<string>() : new Set(guaranteed.get(from) ?? new Set<string>());
         if (on === 'success') base.add(from);
-        // failure/completion: `from` ran but did not necessarily succeed → its
-        // outputs are NOT guaranteed; only what was guaranteed before it is.
+        // failure/completion/branch: `from` ran but did not necessarily succeed
+        // (a branch edge implies it did, but branch routing is inert until #4
+        // A0 — staying conservative can only over-reject, never over-accept) →
+        // its outputs are NOT guaranteed; only what was guaranteed before it is.
         acc = acc === null ? base : intersect(acc, base);
       }
       guaranteed.set(id, acc ?? new Set());

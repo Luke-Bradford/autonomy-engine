@@ -4,6 +4,9 @@ import type {
   Output,
   Node,
   Edge,
+  EdgeOn,
+  OperationalEdge,
+  BranchEdge,
   Container,
   CallConfig,
   PipelineVersion,
@@ -12,7 +15,18 @@ import type {
 // Re-export the P1 schema types so engine consumers have one import surface for
 // the language's inputs. These are NOT redefined here — they are the single
 // source of truth in `../schemas/pipeline.ts`.
-export type { Param, Output, Node, Edge, Container, CallConfig, PipelineVersion };
+export type {
+  Param,
+  Output,
+  Node,
+  Edge,
+  EdgeOn,
+  OperationalEdge,
+  BranchEdge,
+  Container,
+  CallConfig,
+  PipelineVersion,
+};
 
 /**
  * The read-only context a `${...}` expression resolves against. PURE input:

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useStore } from 'zustand';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
-  EdgeOnSchema,
   catalog,
   getActivity,
   type ConnectionPublic,
@@ -14,6 +13,18 @@ import { listConnections } from '../../api/connections';
 import { createCanvasStore } from './canvasStore';
 import { toVersionBody, validateCanvas } from './canvasDoc';
 import { FlowCanvas } from './FlowCanvas';
+
+/**
+ * The edge conditions this dropdown offers. Deliberately NOT
+ * `EdgeOnSchema.options`: the engine also routes `skipped` now (#1 F1) and the
+ * schema carries business `branch` edges, but surfacing either here is a
+ * RENDERED change that has to clear the browser-verify gate, and it belongs to
+ * the tickets that own edge authoring — U6a (typed-edge styling + branch
+ * picker) and U19 (outcome-by-source-handle, which retires this dropdown
+ * outright). Pinning the list keeps an engine-semantics ticket invisible to the
+ * canvas; U6a/U19 widen it deliberately, with a browser check.
+ */
+const AUTHORABLE_EDGE_ON: readonly EdgeOn[] = ['success', 'failure', 'completion'];
 
 /** Pick the highest-numbered version, or null when a pipeline has none yet. */
 function latestVersion(versions: PipelineVersion[]): PipelineVersion | null {
@@ -198,7 +209,7 @@ function PropertyPanel({
             value={edge.on}
             onChange={(e) => store.getState().updateEdgeOn(edge.id, e.target.value as EdgeOn)}
           >
-            {EdgeOnSchema.options.map((on) => (
+            {AUTHORABLE_EDGE_ON.map((on) => (
               <option key={on} value={on}>
                 {on}
               </option>

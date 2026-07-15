@@ -4,6 +4,7 @@ import {
   type EdgeOn,
   type Edge,
   type Node,
+  type OperationalEdge,
   type PipelineVersion,
   type Position,
 } from '@autonomy-studio/shared';
@@ -13,6 +14,23 @@ import { newLocalId } from '../../lib/ids';
 export interface Selection {
   kind: 'node' | 'edge';
   id: string;
+}
+
+/**
+ * Retype an edge to an operational outcome. An operational edge routes by `on`
+ * alone, so the business `branch` label is dropped — `{...e, on}` would strand
+ * it on an edge that no longer routes by it. Narrowing on the `on` discriminant
+ * first is what makes `branch` destructurable without a cast; the rest-spread
+ * (rather than an explicit field list) carries `back`/`maxBounces` and any
+ * future `edgeBase` field through untouched.
+ *
+ * Reachable only for an imported branch edge — the canvas can't author one.
+ */
+function toOperationalEdge(e: Edge, on: EdgeOn): OperationalEdge {
+  if (e.on !== 'branch') return { ...e, on };
+  const { branch, ...rest } = e;
+  void branch; // discard: lint has no ignoreRestSiblings/varsIgnorePattern here
+  return { ...rest, on };
 }
 
 export interface CanvasState {
@@ -151,7 +169,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
     updateEdgeOn(id, on) {
       if (!get().edges.some((e) => e.id === id)) return;
       set((s) => ({
-        edges: s.edges.map((e) => (e.id === id ? { ...e, on } : e)),
+        edges: s.edges.map((e) => (e.id === id ? toOperationalEdge(e, on) : e)),
         dirty: true,
       }));
     },

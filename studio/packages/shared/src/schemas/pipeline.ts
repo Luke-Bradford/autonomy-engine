@@ -83,18 +83,66 @@ export const NodeSchema = z.object({
 });
 export type Node = z.infer<typeof NodeSchema>;
 
-export const EdgeOnSchema = z.enum(['success', 'failure', 'completion']);
+/**
+ * A predecessor's OPERATIONAL outcome — what the activity itself did. These are
+ * ADF's four dependency conditions and they are deliberately distinct:
+ * `completion` fires after the activity ran (success OR failure), while
+ * `skipped` fires when the activity never ran at all. A skip is therefore NOT a
+ * completion — it propagates until an `on:'skipped'` edge catches it.
+ *
+ * This enum is operational-only: business routing is the `branch` member of
+ * `EdgeSchema` below, never a value here (spec #1 D5, #4 A0).
+ */
+export const EdgeOnSchema = z.enum(['success', 'failure', 'completion', 'skipped']);
 export type EdgeOn = z.infer<typeof EdgeOnSchema>;
 
-export const EdgeSchema = z.object({
+const edgeBase = {
   id: z.string().min(1),
   from: z.string().min(1),
   to: z.string().min(1),
-  on: EdgeOnSchema,
   /** Traversal-only back-edge (loop), enforced against `maxBounces`. */
   back: z.boolean().optional(),
+  /**
+   * Bounce cap for a `back` edge. `validateDoc` REQUIRES one on every back-edge.
+   * The engine also applies a hard ceiling (`DEFENSIVE_BOUNCE_CAP`, 10_000) and
+   * CLAMPS a larger declared value down to it — a skip-only loop body runs every
+   * bounce synchronously inside one `reduce()`, so an unbounded cap would block
+   * the driver's event loop. Declaring more than the ceiling is not an error
+   * (the doc stays savable) but is clamped, with a reducer diagnostic saying so.
+   */
   maxBounces: z.number().int().nonnegative().optional(),
+};
+
+/** An edge keyed off the predecessor's operational outcome. */
+export const OperationalEdgeSchema = z.object({ ...edgeBase, on: EdgeOnSchema });
+export type OperationalEdge = z.infer<typeof OperationalEdgeSchema>;
+
+/**
+ * An edge keyed off a BUSINESS decision the predecessor made: `if` → `true`/
+ * `false`, `switch` → a named case/`default`. The `branch` label is the routing
+ * key, so it is required. A branch edge may also be a capped back-edge — a
+ * 3-way switch can loop on one arm (an approval's "needs-changes" → redraft).
+ *
+ * The activities that EMIT a branch outcome (`if`/`switch`) are spec #4
+ * A0/A1/A2; this schema is settled here (spec #1 owns the union) so they build
+ * against a final shape. Until then a branch edge is INERT — it can never be
+ * satisfied, `validateDoc` reports it (advisory only — see #444), and the
+ * reducer emits a diagnostic rather than stranding the downstream silently.
+ */
+export const BranchEdgeSchema = z.object({
+  ...edgeBase,
+  on: z.literal('branch'),
+  branch: z.string().min(1),
 });
+export type BranchEdge = z.infer<typeof BranchEdgeSchema>;
+
+/**
+ * Operational outcome vs business routing, discriminated on `on`. Keeping them
+ * one union (rather than an optional `branch` field) is what stops `if`/`switch`
+ * overloading `success`/`failure` for routing — which would poison both
+ * pipeline-success semantics and monitoring.
+ */
+export const EdgeSchema = z.discriminatedUnion('on', [OperationalEdgeSchema, BranchEdgeSchema]);
 export type Edge = z.infer<typeof EdgeSchema>;
 
 /**
