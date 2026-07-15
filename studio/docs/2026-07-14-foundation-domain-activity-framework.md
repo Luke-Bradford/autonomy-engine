@@ -144,17 +144,26 @@ secureInput?, secureOutput? }`. Split across the pure/impure boundary:
   ~~Four match the ADF target~~ **THREE match** — `edge-model.test.ts:486`
   (`MATCHES ADF: a skipped final branch after a failed condition`) is **MISLABELLED**: it is
   isomorphic to the `:532` divergence pin (same Do-If-Else shape, same outcome, opposite label), and
-  ADF fails it. Two DIVERGE and are pinned as-is with the divergence named:
+  ADF fails it. Two DIVERGED and were pinned as-is with the divergence named — **BOTH are now CLOSED
+  by F1b (SHIPPED); the paragraphs below describe the PRE-F1b reducer and are kept as the record of
+  what was fixed.** The SSOT for the settled semantics is
+  `2026-07-15-foundation-run-outcome-and-retry.md`; every `DIVERGES from ADF` label is deleted, and
+  the mislabelled `:486` now asserts the ADF verdict too.
   1. **Do-If-Else.** ADF: "When previous activity fails: node Upon Success is skipped and its
-     parent node failed; overall pipeline fails." Studio treats ANY failure carrying an
-     outgoing `failure`/`completion` edge as handled → **success**.
-  2. **Eager short-circuit (the sharper one).** `settle` emits `finishRun{failure}` the moment
-     `firstUnhandledFailureTop` finds an unhandled failure, so the rest of the graph never
-     settles. ADF lets the walk finish and evaluates leaves only at the end — so ADF's own
+     parent node failed; overall pipeline fails." Studio treated ANY failure carrying an
+     outgoing `failure`/`completion` edge as handled → **success**. **CLOSED** — the
+     leaf-evaluation conjunct (a `skipped` leaf recurses to its parents) now fails the run.
+  2. **Eager short-circuit (the sharper one).** `settle` emitted `finishRun{failure}` the moment
+     the outcome predicate found an unhandled failure, so the rest of the graph never
+     settled. ADF lets the walk finish and evaluates leaves only at the end — so ADF's own
      **"Generic error handling"** pattern (UponFailure+UponSkip from the LAST activity to a
-     handler, reached by skip-propagation from an EARLIER failure) **cannot work here**: the
-     handler stays `pending` forever. F1b must decide whether an unhandled failure ends the
-     run eagerly or merely marks it doomed while the walk drains.
+     handler, reached by skip-propagation from an EARLIER failure) **could not work here**: the
+     handler stayed `pending` forever. ~~F1b must decide whether an unhandled failure ends the
+     run eagerly or merely marks it doomed while the walk drains.~~ **DECIDED: `settle` DRAINS to a
+     fixpoint** and evaluates the outcome once, at the end. The Generic-error-handling pattern now
+     works end-to-end. The accepted cost is that a doomed run dispatches every independent branch to
+     completion — real spend, since studio's nodes are LLM calls, and un-optimisable because the
+     verdict depends on draining.
 
 ### D6 — Activity Definition contract (framework SSOT) — **F9a MINIMAL BUILT 2026-07-15**
 

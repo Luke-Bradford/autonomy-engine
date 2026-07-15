@@ -15,11 +15,19 @@
  *    conditions on ONE predecessor. Without the OR, `a --success--> d` +
  *    `a --skipped--> d` could never both satisfy, so `d` always skipped —
  *    which is exactly the ADF Try-Catch-Proceed shape D5 adds `skipped` for.
- * 3. **Success semantics (D5) — CHARACTERIZATION ONLY.** These tests record
- *    what the reducer does TODAY, including where it diverges from the ADF
- *    target. D5 says change `finishRun` only if the tests show divergence, and
- *    that reconcile is its own ticket (F1b) — so the divergence is documented
- *    and asserted here, not fixed.
+ * 3. **Success semantics — the run-outcome predicate (D5 + F1b).** These began
+ *    as CHARACTERIZATION ONLY: they recorded what the reducer did, including
+ *    three cases labelled `DIVERGES from ADF`, because D5 said reconcile was
+ *    its own ticket. **F1b did that reconcile**, so they are now ASSERTIONS of
+ *    the ADF target, not recordings, and every `DIVERGES` label is gone. The
+ *    one place studio deliberately does NOT match ADF is the `join:'any'` pin,
+ *    which says so in place and explains why (ADF has no such join, and ADF's
+ *    rule is fail-OPEN under it).
+ *
+ *    Two of the original labels were themselves wrong, which is worth
+ *    remembering: `MATCHES ADF: a skipped final branch…` and
+ *    `DIVERGES from ADF: a failure is "handled"…` were isomorphic up to node
+ *    renaming, asserted the identical outcome, and carried OPPOSITE labels.
  */
 import { describe, expect, it } from 'vitest';
 import type { Edge, EngineCommand, EngineEvent, Node } from '../types.js';
@@ -431,7 +439,7 @@ describe('business branch edges are INERT until #4 A0/A1/A2', () => {
 describe('containers — skipped + JOIN inside a stage', () => {
   // D5 names "skipped child inside a stage" as a REQUIRED characterization
   // case, and it is the only one that exercises the separate container walk
-  // (`stepContainers`/`firstUnhandledChildFailure`) rather than the top-level
+  // (`stepContainers`/`containerOutcomeFailure`) rather than the top-level
   // one — so both the skip routing and F14's grouping need pinning here.
   it('a skipped child does not fail its stage, and the stage succeeds', () => {
     const eng = createEngine({
@@ -478,12 +486,27 @@ describe('containers — skipped + JOIN inside a stage', () => {
   });
 });
 
-describe('pipeline success semantics — CHARACTERIZATION (D5; reconcile = F1b)', () => {
-  // Recorded, not endorsed. Each case notes whether it MATCHES the ADF target
-  // ("Evaluate outcome for all leaves… If a leaf activity was skipped, we
-  // evaluate its parent activity instead. Pipeline result is success if and
-  // only if all nodes evaluated succeed") so F1b has an exact starting point.
-  it('MATCHES ADF: a skipped final branch after a failed condition → success', () => {
+describe('pipeline success semantics — the run-outcome predicate (F1b)', () => {
+  // F1b RECONCILED these against the ADF target ("Evaluate outcome for all
+  // leaves… If a leaf activity was skipped, we evaluate its parent activity
+  // instead. Pipeline result is success if and only if all nodes evaluated
+  // succeed"). They are now ASSERTED, not merely recorded.
+  //
+  // The rule (joint spec §C.3) is a CONJUNCTION — a run fails iff either half
+  // fails, and neither half alone is correct:
+  //   1. ABSORPTION — every `failure` entity must be absorbed by a satisfied
+  //      failure/completion catch that RAN, or by a skip-taint reaching a
+  //      satisfied on:'skipped' catch that RAN. Leaf-evaluation ALONE is
+  //      strict ADF parity, which is FAIL-OPEN under studio's `join:'any'`
+  //      (ADF has no such join) — see the `join:'any'` pin below.
+  //   2. LEAF-EVALUATION — every forward leaf must evaluate to success; a
+  //      `skipped` leaf recurses to its parents. Absorption ALONE leaves the
+  //      ADF Do-If-Else shape green.
+  it('ADF Do-If-Else: a skipped final branch after a failed condition → FAILURE', () => {
+    // Was labelled `MATCHES ADF … → success`. That label was doubly wrong: ADF
+    // FAILS this shape, and it is isomorphic (up to renaming) to the
+    // Do-If-Else case below that was labelled a DIVERGENCE. Two labels,
+    // opposite claims, identical graph — the pair is what exposed it.
     const eng = engine(
       [node('a'), node('handler'), node('b')],
       [edge('a', 'handler', 'failure'), edge('a', 'b', 'success')],
@@ -491,7 +514,10 @@ describe('pipeline success semantics — CHARACTERIZATION (D5; reconcile = F1b)'
     const { state, finish } = runAll(eng, { a: 'failure' });
     expect(state.nodes.b!.status).toBe('skipped');
     expect(state.nodes.handler!.status).toBe('success');
-    expect(finish?.outcome).toBe('success');
+    // `a` IS absorbed (its failure edge caught), but the skipped leaf `b`
+    // recurses to its parent `a`, which failed.
+    expect(finish?.outcome).toBe('failure');
+    expect(finish?.reason).toBe('node_failed:a');
   });
 
   it('MATCHES ADF: a skipped top-level leaf with no parent → success', () => {
@@ -523,13 +549,17 @@ describe('pipeline success semantics — CHARACTERIZATION (D5; reconcile = F1b)'
     expect(finish?.outcome).toBe('success');
   });
 
-  // ---- the DIVERGENCE (F1b owns the decision) -----------------------------
+  // ---- the former DIVERGENCE, now closed by F1b ---------------------------
   // ADF Do-If-Else: "When previous activity fails: node Upon Success is skipped
-  // and its parent node failed; overall pipeline fails." Studio treats ANY
-  // failure carrying an outgoing failure/completion edge as "handled" and
-  // returns success — even when the handler is a plain downstream node rather
-  // than a real catch. Asserted as-is so F1b's change is a visible diff.
-  it('DIVERGES from ADF: a failure is "handled" by any failure edge → success (F1b)', () => {
+  // and its parent node failed; overall pipeline fails." Studio used to treat
+  // ANY failure carrying an outgoing failure/completion edge as "handled" and
+  // return success. The leaf conjunct closes it: the skipped `onOk` recurses to
+  // `a`, which failed.
+  //
+  // Note the real difference was never "the handler isn't a real catch" (#442's
+  // framing) — under ADF, `a --failure--> h` with no other branch also succeeds
+  // (pinned below). It was the missing skipped-leaf ⇒ evaluate-parent rule.
+  it('ADF Do-If-Else: a failure with a skipped sibling branch → FAILURE', () => {
     const eng = engine(
       [node('a'), node('onFail'), node('onOk')],
       [edge('a', 'onFail', 'failure'), edge('a', 'onOk', 'success')],
@@ -537,8 +567,13 @@ describe('pipeline success semantics — CHARACTERIZATION (D5; reconcile = F1b)'
     const { state, finish } = runAll(eng, { a: 'failure' });
     expect(state.nodes.a!.status).toBe('failure');
     expect(state.nodes.onOk!.status).toBe('skipped');
-    // ADF would fail this run (a leaf's parent failed). Studio succeeds:
-    expect(finish?.outcome).toBe('success');
+    expect(state.nodes.onFail!.status).toBe('success');
+    expect(finish?.outcome).toBe('failure');
+    // The BLAMED node sits UPSTREAM of the leaf that triggered evaluation: the
+    // reason names `a`, reached via the skipped leaf `onOk`. The vocabulary is
+    // deliberately unchanged (§C.5.4), so an operator can no longer infer from
+    // it that `a` had no handler.
+    expect(finish?.reason).toBe('node_failed:a');
   });
 
   it('an UNhandled failure still fails the run', () => {
@@ -548,20 +583,17 @@ describe('pipeline success semantics — CHARACTERIZATION (D5; reconcile = F1b)'
     expect(finish?.reason).toBe('node_failed:a');
   });
 
-  // The sharpest divergence found by these tests, and the one F1b most needs:
-  // studio SHORT-CIRCUITS on an unhandled top-level failure (`settle` emits
-  // finishRun{failure} the moment `firstUnhandledFailureTop` finds one), so the
-  // rest of the graph never settles. ADF instead lets the walk finish and only
-  // then evaluates leaves, which is why its own "Generic error handling"
-  // pattern — UponFailure+UponSkip from the LAST activity to a handler, so an
-  // EARLIER failure reaches the handler by skip-propagation — cannot work here:
-  // the handler stays pending forever.
+  // The sharpest divergence these tests found, and the one F1b most needed.
+  // Studio used to SHORT-CIRCUIT on an unhandled top-level failure (`settle`
+  // emitted finishRun{failure} the moment the predicate found one), so the rest
+  // of the graph never settled and ADF's own "Generic error handling" pattern —
+  // UponFailure+UponSkip from the LAST activity to a handler, so an EARLIER
+  // failure reaches the handler by skip-propagation — could not work at all:
+  // the handler stayed `pending` forever. That was #442's core complaint.
   //
-  // Both arms of the pattern that don't cross the short-circuit DO work (see
-  // the JOIN block). Fixing this means deciding whether an unhandled failure
-  // ends the run eagerly or merely marks it doomed while the walk drains —
-  // squarely F1b's call, not a schema ticket's.
-  it('DIVERGES from ADF: an unhandled failure short-circuits before a skip can propagate (F1b)', () => {
+  // `settle` now DRAINS to a fixpoint and evaluates the outcome once every
+  // top-level entity is terminal, so the handler runs and the run is green.
+  it('ADF Generic error handling: a failure reaches the handler by skip-propagation → SUCCESS', () => {
     const eng = engine(
       [node('a'), node('b'), node('c'), node('eh')],
       [
@@ -572,11 +604,227 @@ describe('pipeline success semantics — CHARACTERIZATION (D5; reconcile = F1b)'
       ],
     );
     const { state, finish } = runAll(eng, { a: 'failure' });
+    // The walk drains: a's skip-taint propagates b → c, and `eh` runs via the
+    // skip arm (its two edges share ONE predecessor, so F14's OR satisfies it).
+    expect(state.nodes.b!.status).toBe('skipped');
+    expect(state.nodes.c!.status).toBe('skipped');
+    expect(state.nodes.eh!.status).toBe('success');
+    // `a` is ABSORBED: its taint transitively reaches `c --skipped--> eh`, a
+    // satisfied skip catch whose target RAN. And there is no skipped leaf —
+    // `eh` is the only forward leaf, and it succeeded.
+    expect(finish?.outcome).toBe('success');
+  });
+
+  // ---- absorption: the conjunct that keeps the leaf rule fail-SAFE ---------
+  // Strict ADF leaf-evaluation ALONE reports SUCCESS here — the decisive fact
+  // that eliminated ADF parity as an option (joint spec P1). `d`'s `a`-group is
+  // dead but its `p`-group is satisfied, so `join:'any'` runs it; `a` and `p`
+  // both have out-edges, so `d` is the ONLY forward leaf, and `d` succeeded.
+  // A run whose node failed with NO catch anywhere would report success.
+  //
+  // `join:'any'` is studio-specific — ADF has no such join, so the rule studio
+  // would have been copying was never designed against this shape.
+  it("join:'any': a wholly unhandled failure absorbed by a live sibling → FAILURE", () => {
+    const eng = engine(
+      [node('a'), node('p'), node('d', { join: 'any' })],
+      [edge('a', 'd', 'success'), edge('p', 'd', 'success')],
+    );
+    const { state, finish } = runAll(eng, { a: 'failure' });
+    expect(state.nodes.d!.status).toBe('success'); // p->d satisfied the `any` join
+    // `a` carries NO failure/completion edge at all, and its taint EVAPORATES at
+    // `d` — `d` ran for an unrelated reason (a different predecessor), which is
+    // NOT absorption. Fail-safe: the run fails.
     expect(finish?.outcome).toBe('failure');
     expect(finish?.reason).toBe('node_failed:a');
-    // ADF would skip b and c, then run `eh` via the skip arm. Studio stops:
-    expect(state.nodes.b!.status).toBe('pending');
-    expect(state.nodes.c!.status).toBe('pending');
-    expect(state.nodes.eh!.status).toBe('pending');
+  });
+});
+
+describe('absorption requires a catch that actually RAN (§C.5.3 — back-edges)', () => {
+  // §C.5.3 asked F1b to decide what a "leaf" is given back-edges, and to pin it.
+  // Decided: the predicate is FORWARD-only (`topOutgoing` excludes back-edges by
+  // construction) where the pre-F1b one merged `backOutgoing`.
+  //
+  // Pinning that honestly means pinning what is actually OBSERVABLE, which is
+  // NOT forward-only-ness: a satisfied failure back-edge is consumed by
+  // `fireBackEdges` at the top of `settle` and never survives to the predicate,
+  // so re-merging back-edges leaves the whole suite green (mutation-verified).
+  // There is no reachable doc that distinguishes the two, and a test asserting
+  // otherwise would be theatre.
+  //
+  // What IS observable — and what these two pin — is the `ran()` requirement
+  // that closes the old fail-open: the pre-F1b predicate asked only whether a
+  // failure/completion edge EXISTED, never whether its target ran.
+  it('is unobservable on a VALID doc: a satisfied failure back-edge bounces, never sitting terminal', () => {
+    // The canonical retry loop. `check` fails, its back-edge is satisfied, and
+    // `fireBackEdges` runs at the TOP of `settle` — long before the outcome
+    // predicate at the fixpoint. So `check` is RESET, not left terminal-failure
+    // holding a back-edge. (An exhausted budget finishes the run `capped`
+    // instead — also before the predicate. Both are pinned in reduce-p2c.)
+    const eng = engine(
+      [node('gen'), node('check')],
+      [
+        edge('gen', 'check', 'success'),
+        {
+          id: 'check->gen:failure',
+          from: 'check',
+          to: 'gen',
+          on: 'failure',
+          back: true,
+          maxBounces: 3,
+        },
+      ],
+    );
+    let checkCalls = 0;
+    const { state, finish } = runAll(eng, {
+      // check fails once (→ bounce), then succeeds.
+      get check(): 'success' | 'failure' {
+        checkCalls += 1;
+        return checkCalls === 1 ? 'failure' : 'success';
+      },
+    });
+    expect(state.nodes.check!.status).toBe('success');
+    expect(Object.values(state.bounces)).toEqual([1]);
+    expect(finish?.outcome).toBe('success');
+  });
+
+  it('a failure back-edge that can NEVER fire is unabsorbed → run fails (this was fail-OPEN)', () => {
+    // The only shape that reaches the predicate holding a back-edge: one whose
+    // reset body can never go terminal, so `fireBackEdges`' whole-body gate
+    // never opens. `lp` is skipped, so its child `c1` never activates and stays
+    // `pending` forever — while every TOP-LEVEL entity (g, a, lp) is terminal.
+    //
+    // Pre-F1b this run reported SUCCESS: `a` held a failure edge, so it read
+    // "handled" though the catch could never run. Fail-open, and exactly the
+    // direction this repo forbids. (Mutation-verified in both directions:
+    // against `origin/main`'s reducer this doc returns finishRun{success}.)
+    //
+    // What closes it is `ran(e.to)` — `lp` is `skipped`, so it never ran and
+    // cannot absorb. Note this pin does NOT depend on the predicate being
+    // forward-only: it holds either way, because `ran()` is the operative
+    // clause. See the block comment above.
+    //
+    // `validateDoc` REJECTS this doc ("makes no progress — its reset body must
+    // include its source"), so it is unreachable through the canvas. It is
+    // pinned anyway because `validateDoc` is ADVISORY: its only caller is the
+    // canvas badge, the server never calls it (#444), so a git import or a
+    // direct POST reaches this reducer unchecked. Same reasoning `evalExitWhen`
+    // records for the whole-value rule — the reducer is the half that BINDS.
+    const eng = createEngine({
+      nodes: [node('g'), node('a'), node('c1')],
+      edges: [
+        edge('g', 'lp', 'failure'), // g succeeds → lp skipped → c1 never runs
+        edge('lp', 'a', 'skipped'), // …but the skip routes to `a`, which runs
+        { id: 'a->lp:failure', from: 'a', to: 'lp', on: 'failure', back: true, maxBounces: 3 },
+      ],
+      containers: [{ id: 'lp', kind: 'stage', children: ['c1'] }],
+    });
+    const { state, finish } = runAll(eng, { a: 'failure' });
+    expect(state.containers.lp!.status).toBe('skipped');
+    expect(state.nodes.c1!.status).toBe('pending'); // the body gate never opens
+    expect(state.nodes.a!.status).toBe('failure');
+    expect(Object.values(state.bounces)).toEqual([]); // the back-edge never fired
+    expect(finish?.outcome).toBe('failure');
+    expect(finish?.reason).toBe('node_failed:a');
+  });
+});
+
+describe('the outcome predicate terminates, and is bounded', () => {
+  // The `seen` guards are load-bearing, and NOT for the reason a forward cycle
+  // suggests. A forward cycle's nodes never terminalize, so leaf-evaluation
+  // (which only runs once every top-level entity IS terminal) is never reached
+  // on one. But a cycle whose nodes are all terminal-`skipped` IS reachable: the
+  // skip enters from OUTSIDE the cycle, so every node in it resolves without
+  // ever running.
+  //
+  // `forwardCycleErrors` rejects these docs at save time — and is advisory
+  // (#444), like every save-time rule the reducer must not lean on.
+  //
+  // BOTH walks need their OWN pin: they are reached by DIFFERENT conjuncts, so
+  // one test cannot cover both. Each is mutation-verified — deleting just that
+  // walk's guard hangs exactly its own test and leaves the other green. (A hang,
+  // not a RangeError: the walks are iterative, so an unguarded revisit loops
+  // forever inside one synchronous `reduce()`. vitest cannot interrupt that —
+  // the whole worker wedges, which is what the driver's pump would do too.)
+  it('evalEndpoint: a cycle of skipped nodes does not hang (conjunct 2)', () => {
+    const eng = engine(
+      [node('x'), node('a'), node('b'), node('c')],
+      [
+        edge('x', 'a', 'failure'), // x succeeds → a's only live group is dead → a skipped
+        edge('a', 'b', 'success'),
+        edge('b', 'a', 'success'), // the cycle: a → b → a, both skipped
+        edge('b', 'c', 'success'), // c is the forward leaf that triggers evaluation
+      ],
+    );
+    const { state, finish } = runAll(eng);
+    expect(state.nodes.a!.status).toBe('skipped');
+    expect(state.nodes.b!.status).toBe('skipped');
+    expect(state.nodes.c!.status).toBe('skipped');
+    // The leaf `c` walks b → a → x; `x` succeeded, so nothing is blamed, and the
+    // revisit of `b` terminates instead of walking forever.
+    expect(finish?.outcome).toBe('success');
+  });
+
+  it('absorbedSkip: a FAILED node whose taint enters a skipped cycle does not hang (conjunct 1)', () => {
+    // Reached only via conjunct 1 — `f` fails, so `absorbedFailure` follows its
+    // dead edge into the taint walk, which then circles s1 → s2 → s1. The test
+    // above never reaches this walk: its doc has no failed node at all.
+    const eng = engine(
+      [node('f'), node('s1'), node('s2')],
+      [
+        edge('f', 's1', 'success'), // f fails → s1's group dead → s1 skipped
+        edge('s1', 's2', 'success'),
+        edge('s2', 's1', 'success'), // the cycle, both skipped
+      ],
+    );
+    const { state, finish } = runAll(eng, { f: 'failure' });
+    expect(state.nodes.s1!.status).toBe('skipped');
+    expect(state.nodes.s2!.status).toBe('skipped');
+    // No `on:'skipped'` catch anywhere, so the taint is never absorbed and `f`
+    // is blamed — the point is that deciding that TERMINATES.
+    expect(finish?.outcome).toBe('failure');
+    expect(finish?.reason).toBe('node_failed:f');
+  });
+
+  // NOT pinned, deliberately: stack depth. Both walks are ITERATIVE, because a
+  // recursive form makes the reducer's stack depth O(chain length) on a doc the
+  // engine does not control, and a RangeError thrown from inside the PURE
+  // reducer crashes the driver's pump. That was measured on the recursive draft
+  // of this predicate — fine at 4k chained nodes, `RangeError: Maximum call
+  // stack size exceeded` at 5k, where the flat loop it replaced coped — so the
+  // iterative form is a real fix, not a precaution.
+  //
+  // There is no test because an HONEST one costs ~4s: recursion survives to
+  // ~4k, so any doc small enough to be a cheap test passes either way and would
+  // pin nothing. At the size that DOES discriminate, `settle`'s fixpoint is
+  // already O(n²) (~4s for one drive at 5k, measured), so such a doc is
+  // unusable for reasons that dwarf the stack. The iterative form costs nothing
+  // to keep; a 4s test that pins the engine's worst-case scaling alongside the
+  // property would be the more fragile asset.
+});
+
+describe('container parity — ONE rule, two scopes (§D)', () => {
+  // §D: whatever the run-outcome rule is, it applies VERBATIM to a container's
+  // children via childOutgoing/childIncoming. Called out because the old
+  // top-level and child predicates were near-duplicates, so a fire that fixed
+  // only the top-level one would have left containers on the old semantics
+  // SILENTLY — nothing would have failed.
+  it('the ADF Do-If-Else shape INSIDE a stage fails the stage, and the run', () => {
+    const eng = createEngine({
+      nodes: [node('a'), node('onFail'), node('onOk')],
+      edges: [edge('a', 'onFail', 'failure'), edge('a', 'onOk', 'success')],
+      containers: [{ id: 'stg', kind: 'stage', children: ['a', 'onFail', 'onOk'] }],
+    });
+    const { state, finish } = runAll(eng, { a: 'failure' });
+    expect(state.nodes.onFail!.status).toBe('success');
+    expect(state.nodes.onOk!.status).toBe('skipped');
+    // Same verdict as the identical shape at top level: `a` is absorbed by
+    // `onFail`, but the skipped leaf `onOk` recurses to `a`, which failed.
+    expect(state.containers.stg!.status).toBe('failure');
+    // A sanctioned consequence, stated because nothing pinned it before: a loop
+    // body containing this shape now FAILS its container instead of re-rounding.
+    // The container's own failure is then judged at TOP level by the same
+    // predicate — `stg` has no outer catch, so it is unabsorbed and fails the run.
+    expect(finish?.outcome).toBe('failure');
+    expect(finish?.reason).toBe('node_failed:stg');
   });
 });

@@ -154,8 +154,11 @@ a worker, heartbeats; a **lease-expiry alarm** (S1) reclaims a dead worker's run
 ## Spike-hardened (validated in code, 2026-07-14 — throwaway outbox prototype, 11 tests green)
 
 - **BIGGEST: D4 retry is NOT implementable without a reducer change — RESOLVED 2026-07-15, and it is
-  NOT this spec's to own.** Today `node.failed` → `settle` → `firstUnhandledFailureTop` →
-  `finishRun{failure}` **terminalizes the run on the first unhandled failure**, and
+  NOT this spec's to own.** ~~Today~~ **(pre-F1b; F1b has since SHIPPED the drain — `settle` no
+  longer short-circuits, and the outcome predicate is now the single `runOutcomeFailure`. The
+  sentence is kept because it is why the fork existed.)** `node.failed` → `settle` →
+  `firstUnhandledFailureTop` → `finishRun{failure}` **terminalized the run on the first unhandled
+  failure**, and
   `node.retryRequested` only fires from a LIVE node — never a terminal `failure`. `node.retryDue`
   **isn't in `EngineEventSchema`** (the reducer rejects it). The fork — **(i) a retryable-failure HOLD
   state or (ii) a re-open event** — was settled as **(i) HOLD** by **#472**, and is specced in
