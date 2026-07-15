@@ -28,7 +28,9 @@ import { SubstituteError } from './types.js';
 // PURITY: every impl is pure and total-or-throwing. No clock, no I/O, no host
 // access, no entropy — `guid`/`rand` are deliberately absent (spec #6 Round-2:
 // they have no logged fact to bind to, so they would break replay). The date
-// fns land at E5, where `utcNow()` binds a `node.dispatched` stamp.
+// fns (E5a) hold that line by taking an EXPLICIT timestamp and working in UTC;
+// `utcNow()` is NOT here, because binding it to a `node.dispatched` stamp needs
+// a dispatch-handshake change (E5b) — see the catalog's date section.
 // ---------------------------------------------------------------------------
 
 /**
@@ -970,6 +972,117 @@ export const FUNCTIONS: Readonly<Record<string, FnSpec>> = Object.freeze({
     ret: 'number',
     impl: (a) => Math.max(...(a as number[])),
   },
+
+  // -- date (#6 E5a) ---------------------------------------------------------
+  // Every one takes an EXPLICIT timestamp and works in UTC — no clock, no host
+  // timezone, no tzdata — so the family is pure and replay-identical.
+  // `${run.startedAt}` (E3) is the run-stable source.
+  //
+  // THREE fns from spec #6's line-75 list are deliberately ABSENT, each because
+  // it fails a non-negotiable rather than because it was forgotten (recorded as
+  // deviations in the spec, per the precedent E4 set for `slug`/`default`):
+  //
+  //   - `utcNow()` — E5b. It must bind the driver-stamped `node.dispatched`
+  //     time, but the reducer resolves node config in `prepInput` at the
+  //     `pending→ready` transition, BEFORE any dispatch stamp exists (and
+  //     `node.dispatched` carries no timestamp field at all). Binding it needs a
+  //     change to the dispatch handshake, which is crash-safety-critical.
+  //   - `ticks()` — 100ns units since 0001-01-01 is ~6.4e17 today, far above
+  //     `Number.MAX_SAFE_INTEGER`. It would PASS the `number` signature and then
+  //     be silently wrong below the second (`sub(ticks(b), ticks(a))` over a 1ms
+  //     gap yields 9984, not 10000). Silent wrongness is worse than absence.
+  //   - `convertTimeZone()` — needs a tz database. `Intl` supplies one, but it
+  //     is the HOST's ICU data: it varies by Node build and mutates as
+  //     governments change DST rules, so folding one log on two hosts could
+  //     diverge — breaking replay-safety. (Same call as the hand-rolled base64:
+  //     the pure engine does not reach for host facilities.)
+  formatDateTime: {
+    call: 'eager',
+    args: ['string', 'string'],
+    minArgs: 2,
+    ret: 'string',
+    impl: (a) => formatDateTime('formatDateTime', a),
+  },
+  addDays: {
+    call: 'eager',
+    args: ['string', 'number'],
+    minArgs: 2,
+    ret: 'string',
+    impl: (a) => addFixed('addDays', a, FIXED_UNIT_MS['Day'] as number),
+  },
+  addHours: {
+    call: 'eager',
+    args: ['string', 'number'],
+    minArgs: 2,
+    ret: 'string',
+    impl: (a) => addFixed('addHours', a, FIXED_UNIT_MS['Hour'] as number),
+  },
+  addMinutes: {
+    call: 'eager',
+    args: ['string', 'number'],
+    minArgs: 2,
+    ret: 'string',
+    impl: (a) => addFixed('addMinutes', a, FIXED_UNIT_MS['Minute'] as number),
+  },
+  addSeconds: {
+    call: 'eager',
+    args: ['string', 'number'],
+    minArgs: 2,
+    ret: 'string',
+    impl: (a) => addFixed('addSeconds', a, FIXED_UNIT_MS['Second'] as number),
+  },
+  addToTime: {
+    call: 'eager',
+    args: ['string', 'number', 'string'],
+    minArgs: 3,
+    ret: 'string',
+    impl: (a) => shiftBy('addToTime', a, 1),
+  },
+  subtractFromTime: {
+    call: 'eager',
+    args: ['string', 'number', 'string'],
+    minArgs: 3,
+    ret: 'string',
+    impl: (a) => shiftBy('subtractFromTime', a, -1),
+  },
+  startOfDay: {
+    call: 'eager',
+    args: ['string'],
+    minArgs: 1,
+    ret: 'string',
+    impl: (a) => startOf('startOfDay', a, 'day'),
+  },
+  startOfHour: {
+    call: 'eager',
+    args: ['string'],
+    minArgs: 1,
+    ret: 'string',
+    impl: (a) => startOf('startOfHour', a, 'hour'),
+  },
+  startOfMonth: {
+    call: 'eager',
+    args: ['string'],
+    minArgs: 1,
+    ret: 'string',
+    impl: (a) => startOf('startOfMonth', a, 'month'),
+  },
+  // 0=Sunday — ADF parity, and what `triggers/run-window.ts` already reads via
+  // `getUTCDay()`. A different numbering here would ship two weekday
+  // conventions in one product.
+  dayOfWeek: {
+    call: 'eager',
+    args: ['string'],
+    minArgs: 1,
+    ret: 'number',
+    impl: (a) => new Date(parseTs('dayOfWeek', a[0], 'argument 1')).getUTCDay(),
+  },
+  dayOfMonth: {
+    call: 'eager',
+    args: ['string'],
+    minArgs: 1,
+    ret: 'number',
+    impl: (a) => new Date(parseTs('dayOfMonth', a[0], 'argument 1')).getUTCDate(),
+  },
 });
 
 // --- impl helpers for the overloaded collection fns --------------------------
@@ -1010,6 +1123,272 @@ function count0(fn: string, v: unknown): number {
     throw new SubstituteError(`function '${fn}': the count must be a non-negative integer`);
   }
   return n;
+}
+
+// --- dates (#6 E5a) ----------------------------------------------------------
+//
+// Every date fn takes an EXPLICIT timestamp and works in UTC. That is what keeps
+// the family pure: no clock, no host timezone, no tz database — so folding a run
+// log twice, on any host, yields the same value (spec #6's replay-safety
+// invariant). `${run.startedAt}` (E3) is the run-stable source; `utcNow()` is
+// E5b, and the two fns needing a tz/exact-long are recorded deviations — see the
+// catalog's date section.
+//
+// These are the first `Date` uses in the pure engine. `Date` is used ONLY as
+// UTC calendar arithmetic over an explicit instant — never `new Date()`,
+// never `Date.now()`, never a local-time getter.
+
+/**
+ * The one accepted timestamp shape: ISO-8601 date-time with an EXPLICIT offset.
+ *
+ * Deliberately strict, because `new Date(s)` is not: it reads an offset-less
+ * `2026-07-15T10:30:00` as LOCAL time (host-dependent) and accepts
+ * implementation-defined free text like `July 4, 2026`. Either would make a
+ * resolved value depend on the host — the replay hazard spec #6 forbids. The
+ * accept-set can be WIDENED later back-compatibly; it could not be narrowed.
+ */
+const ISO_TS_RE =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:?\d{2})$/;
+
+/**
+ * The representable range: year 0001 through 9999 (.NET `DateTime`'s range).
+ *
+ * Bounded to 4-digit years so every value this module RETURNS is re-parseable by
+ * `ISO_TS_RE` — outside it `toISOString()` emits an expanded form
+ * (`+275760-09-13T…`) that our own parser would then reject, silently breaking
+ * composition (`addDays(addDays(t, n), 1)`).
+ */
+const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+function isLeapYear(y: number): boolean {
+  return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+}
+
+function daysInMonth(y: number, month0: number): number {
+  return month0 === 1 && isLeapYear(y) ? 29 : (DAYS_IN_MONTH[month0] as number);
+}
+
+/**
+ * `Date.UTC` for a full year — it maps years 0-99 to 1900+y, which would turn
+ * `0026-01-01` into 1926. Corrected via `setUTCFullYear`, which does not.
+ */
+function utcMs(
+  y: number,
+  month1: number,
+  d: number,
+  h: number,
+  mi: number,
+  s: number,
+  ms: number,
+): number {
+  const t = Date.UTC(y, month1 - 1, d, h, mi, s, ms);
+  if (y >= 0 && y < 100) {
+    const dt = new Date(t);
+    dt.setUTCFullYear(y);
+    return dt.getTime();
+  }
+  return t;
+}
+
+const MIN_TIME_MS = utcMs(1, 1, 1, 0, 0, 0, 0);
+const MAX_TIME_MS = utcMs(9999, 12, 31, 23, 59, 59, 999);
+
+/** Parse an accepted timestamp to epoch-ms, or throw. */
+function parseTs(fn: string, v: unknown, at: string): number {
+  const s = str(fn, v, at);
+  const m = ISO_TS_RE.exec(s);
+  // Never echo the value: a misconfigured doc may have routed a secret here, and
+  // `SubstituteError` messages are client-safe by contract (`types.ts`).
+  const refuse = (why: string): never => {
+    throw new SubstituteError(`function '${fn}': ${at} ${why}`);
+  };
+  if (m === null) {
+    return refuse(
+      "must be an ISO-8601 timestamp with an explicit offset, like '2026-07-15T10:30:00Z' " +
+        "or '2026-07-15T10:30:00+01:00'",
+    );
+  }
+  const [y, mo, d, h, mi, s2] = m.slice(1, 7).map((x) => Number(x)) as [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  // Sub-millisecond precision is TRUNCATED, not refused: real APIs emit
+  // microseconds (RFC3339 allows any number of digits) and a `Date` is
+  // millisecond-resolution, so refusing them would make these fns unusable on an
+  // ordinary HTTP output. The loss is the representation's own limit.
+  const ms = Number((m[7] ?? '').padEnd(3, '0').slice(0, 3));
+  if (mo < 1 || mo > 12) return refuse('has a month outside 1-12');
+  if (h > 23 || mi > 59 || s2 > 59) return refuse('has a time outside 00:00:00-23:59:59');
+  if (d < 1 || d > daysInMonth(y, mo - 1))
+    return refuse('has a day that does not exist in its month');
+  const offset = m[8] as string;
+  let offsetMs = 0;
+  if (offset !== 'Z') {
+    const sign = offset.startsWith('-') ? -1 : 1;
+    const digits = offset.slice(1).replace(':', '');
+    const oh = Number(digits.slice(0, 2));
+    const om = Number(digits.slice(2, 4));
+    if (oh > 23 || om > 59) return refuse('has an offset outside ±23:59');
+    offsetMs = sign * (oh * 3600000 + om * 60000);
+  }
+  return utcMs(y, mo, d, h, mi, s2, ms) - offsetMs;
+}
+
+/** Render epoch-ms back to the canonical shape, refusing an unrepresentable instant. */
+function isoOf(fn: string, ms: number): string {
+  if (!Number.isFinite(ms) || ms < MIN_TIME_MS || ms > MAX_TIME_MS) {
+    throw new SubstituteError(
+      `function '${fn}': the result is out of range (only years 0001-9999 are representable)`,
+    );
+  }
+  return new Date(ms).toISOString();
+}
+
+/**
+ * A whole-number interval. Fractions are refused rather than truncated:
+ * `addDays(t, 0.5)` reads as "half a day" but would silently floor to zero —
+ * `addHours(t, 12)` says what it means.
+ */
+function interval(fn: string, v: unknown): number {
+  const n = num(fn, v, 'argument 2');
+  if (!Number.isInteger(n)) {
+    throw new SubstituteError(`function '${fn}': argument 2 must be a whole number of units`);
+  }
+  return n;
+}
+
+/** `addDays`/`addHours`/`addMinutes`/`addSeconds` — one fixed-width unit each. */
+function addFixed(fn: string, a: unknown[], unitMs: number): string {
+  return isoOf(fn, parseTs(fn, a[0], 'argument 1') + interval(fn, a[1]) * unitMs);
+}
+
+/** Fixed-width units, in ms. Month/Year are NOT here — they are calendar units. */
+const FIXED_UNIT_MS: Readonly<Record<string, number>> = Object.freeze({
+  Second: 1000,
+  Minute: 60_000,
+  Hour: 3_600_000,
+  Day: 86_400_000,
+  Week: 604_800_000,
+});
+
+/** The closed `addToTime`/`subtractFromTime` unit vocabulary (ADF's names). */
+const TIME_UNITS = ['Second', 'Minute', 'Hour', 'Day', 'Week', 'Month', 'Year'] as const;
+
+/**
+ * Add whole months, CLAMPING to the end of a short month — .NET `AddMonths`
+ * semantics. `2026-01-31 + 1 Month` has no exact answer; clamping yields
+ * Feb 28 (Feb 29 in a leap year), where naive ms arithmetic would overflow into
+ * March and silently skip a month.
+ */
+function addMonths(ms: number, n: number): number {
+  const dt = new Date(ms);
+  const total = dt.getUTCFullYear() * 12 + dt.getUTCMonth() + n;
+  const y = Math.floor(total / 12);
+  const month0 = total - y * 12;
+  const day = Math.min(dt.getUTCDate(), daysInMonth(y, month0));
+  return utcMs(
+    y,
+    month0 + 1,
+    day,
+    dt.getUTCHours(),
+    dt.getUTCMinutes(),
+    dt.getUTCSeconds(),
+    dt.getUTCMilliseconds(),
+  );
+}
+
+/** The shared body of `addToTime` (`sign` 1) and `subtractFromTime` (`sign` -1). */
+function shiftBy(fn: string, a: unknown[], sign: 1 | -1): string {
+  const ms = parseTs(fn, a[0], 'argument 1');
+  const n = sign * interval(fn, a[1]);
+  const unit = str(fn, a[2], 'argument 3');
+  if (!(TIME_UNITS as readonly string[]).includes(unit)) {
+    throw new SubstituteError(
+      `function '${fn}': argument 3 must be one of ${TIME_UNITS.join(', ')} (case-sensitive)`,
+    );
+  }
+  if (unit === 'Month') return isoOf(fn, addMonths(ms, n));
+  if (unit === 'Year') return isoOf(fn, addMonths(ms, n * 12));
+  return isoOf(fn, ms + n * (FIXED_UNIT_MS[unit] as number));
+}
+
+/** `startOfDay`/`startOfHour`/`startOfMonth` — zero everything below the unit. */
+function startOf(fn: string, a: unknown[], unit: 'month' | 'day' | 'hour'): string {
+  const dt = new Date(parseTs(fn, a[0], 'argument 1'));
+  return isoOf(
+    fn,
+    utcMs(
+      dt.getUTCFullYear(),
+      dt.getUTCMonth() + 1,
+      unit === 'month' ? 1 : dt.getUTCDate(),
+      unit === 'hour' ? dt.getUTCHours() : 0,
+      0,
+      0,
+      0,
+    ),
+  );
+}
+
+function pad(n: number, width: number): string {
+  return String(n).padStart(width, '0');
+}
+
+/**
+ * The CLOSED `formatDateTime` token set. Each renders a UTC field.
+ *
+ * Closed + reject-unknown, like `float`'s decimal-only regex and `replace`'s
+ * literal needle: emitting an unimplemented .NET token (`yy`) raw would hand the
+ * author `yy-07-15` and let them believe it worked.
+ */
+const FORMAT_TOKENS: Readonly<Record<string, (d: Date) => string>> = Object.freeze({
+  yyyy: (d) => pad(d.getUTCFullYear(), 4),
+  MM: (d) => pad(d.getUTCMonth() + 1, 2),
+  dd: (d) => pad(d.getUTCDate(), 2),
+  HH: (d) => pad(d.getUTCHours(), 2),
+  mm: (d) => pad(d.getUTCMinutes(), 2),
+  ss: (d) => pad(d.getUTCSeconds(), 2),
+  fff: (d) => pad(d.getUTCMilliseconds(), 3),
+});
+
+/**
+ * Render an instant through the closed token set.
+ *
+ * Scans runs of the SAME character (.NET's convention), so `yyyyMMdd`
+ * tokenises without separators. An alphabetic run must BE a token; anything
+ * else passes through literally. There is deliberately no quoted-literal
+ * syntax — the format arg is already inside a `${}` string literal, and the ISO
+ * shape needs no formatting (values ARE ISO), so anything richer composes with
+ * `concat(formatDateTime(t,'yyyy-MM-dd'), ' at ', formatDateTime(t,'HH:mm'))`.
+ */
+function formatDateTime(fn: string, a: unknown[]): string {
+  const dt = new Date(parseTs(fn, a[0], 'argument 1'));
+  const format = str(fn, a[1], 'argument 2');
+  let out = '';
+  for (let i = 0; i < format.length;) {
+    const ch = format[i] as string;
+    let j = i;
+    while (j < format.length && format[j] === ch) j += 1;
+    const run = format.slice(i, j);
+    if (/[A-Za-z]/.test(ch)) {
+      const token = FORMAT_TOKENS[run];
+      if (token === undefined) {
+        throw new SubstituteError(
+          `function '${fn}': '${run}' is not a format token ` +
+            `(the closed set is ${Object.keys(FORMAT_TOKENS).join(', ')}; ` +
+            'letters cannot appear literally — assemble with concat)',
+        );
+      }
+      out += token(dt);
+    } else {
+      out += run;
+    }
+    i = j;
+  }
+  return out;
 }
 
 /** Every catalog name, sorted — for diagnostics and allowlist assertions. */

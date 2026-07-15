@@ -222,8 +222,31 @@ describe('purity', () => {
     expect(listFunctions()).not.toContain('rand');
   });
 
-  it('has no date fn yet — utcNow binds a dispatch stamp at E5', () => {
+  // E5a ships the date fns that take an EXPLICIT timestamp — all pure. The three
+  // the spec's line-75 list names but that are NOT here each fail a
+  // non-negotiable, and their absence is pinned so re-adding one is a deliberate
+  // act with a decision behind it, not an accident.
+  it('has no utcNow — it needs a dispatch stamp that does not exist yet (E5b)', () => {
     expect(listFunctions()).not.toContain('utcNow');
+  });
+
+  it('has no ticks — it cannot be exact in a float (E5a deviation)', () => {
+    expect(listFunctions()).not.toContain('ticks');
+  });
+
+  it('has no convertTimeZone — host tzdata would break replay (E5a deviation)', () => {
+    expect(listFunctions()).not.toContain('convertTimeZone');
+  });
+
+  it('no date fn reads a clock — every one takes an explicit timestamp', () => {
+    // The catalog is pure, so the SAME call must yield the SAME value forever.
+    // A clock read would make these two differ (or drift on replay).
+    const c = ctx({ params: { t: '2026-07-15T10:30:00.000Z' } });
+    expect(substitute('${addDays(params.t, 1)}', c)).toBe(substitute('${addDays(params.t, 1)}', c));
+    // ...and there is no zero-arg date fn to read one WITH.
+    for (const fn of ['addDays', 'formatDateTime', 'startOfDay', 'dayOfWeek']) {
+      expect(() => substitute(`\${${fn}()}`, ctx())).toThrow(SubstituteError);
+    }
   });
 });
 
@@ -379,6 +402,191 @@ describe('validateRefs — laziness does NOT relax the static checker', () => {
 // ===========================================================================
 // Per-family representative coverage
 // ===========================================================================
+
+// ===========================================================================
+// #6 E5a — the date fns. Every one takes an EXPLICIT timestamp and works in
+// UTC, so the whole family is pure: no clock, no host timezone, no tzdata.
+// `${run.startedAt}` (E3) is the run-stable source; `utcNow()` is E5b.
+// ===========================================================================
+
+describe('E5a date fns — parsing is STRICT', () => {
+  const T = '2026-07-15T10:30:00.000Z';
+
+  it('rejects what `new Date()` would silently guess at', () => {
+    // Each of these PARSES under `new Date(...)`, which is exactly the problem:
+    // its non-ISO handling is implementation-defined, so a doc that resolved one
+    // way on one engine could resolve another way on the next — the replay
+    // hazard spec #6 line 20 forbids. We parse ourselves and refuse instead.
+    for (const bad of [
+      'July 4, 2026', // impl-defined free text
+      '2026-07-15T10:30:00', // no offset: `new Date` reads this as LOCAL time
+      '2026-07-15', // date-only: no time of day
+      '2026-13-01T00:00:00Z', // month 13
+      '2026-02-30T00:00:00Z', // never existed
+      'now',
+      '',
+    ]) {
+      expect(() => substitute('${addDays(params.t, 1)}', ctx({ params: { t: bad } }))).toThrow(
+        SubstituteError,
+      );
+    }
+  });
+
+  it('accepts Z and a numeric offset, and normalises to UTC', () => {
+    expect(substitute('${addDays(params.t, 0)}', ctx({ params: { t: T } }))).toBe(T);
+    // +01:00 is one hour AHEAD of UTC, so the instant is 09:30Z.
+    expect(
+      substitute('${addDays(params.t, 0)}', ctx({ params: { t: '2026-07-15T10:30:00+01:00' } })),
+    ).toBe('2026-07-15T09:30:00.000Z');
+    expect(
+      substitute('${addDays(params.t, 0)}', ctx({ params: { t: '2026-07-15T10:30:00-0500' } })),
+    ).toBe('2026-07-15T15:30:00.000Z');
+  });
+
+  it('PRESERVES milliseconds — `${run.startedAt}` carries them', () => {
+    // The driver stamps `run.started.startedAt` from the run row via
+    // `toISOString()`, so it always has 3 fractional digits. Rounding them off
+    // here would make `addDays(run.startedAt, 0)` != `run.startedAt`.
+    const c = ctx({ run: { startedAt: '2026-07-15T10:30:00.872Z' } });
+    expect(substitute('${addDays(run.startedAt, 0)}', c)).toBe('2026-07-15T10:30:00.872Z');
+  });
+
+  it('truncates sub-millisecond precision rather than refusing it', () => {
+    // Real APIs emit microseconds (RFC3339 allows any number of digits) and a
+    // Date is millisecond-resolution, so refusing these would make the date fns
+    // unusable on an ordinary HTTP output. The loss is at the representation's
+    // limit and is documented.
+    expect(
+      substitute('${addDays(params.t, 0)}', ctx({ params: { t: '2026-07-15T10:30:00.872999Z' } })),
+    ).toBe('2026-07-15T10:30:00.872Z');
+  });
+
+  it('throws on a null `${run.startedAt}` instead of coercing it', () => {
+    // `RunState.startedAt` is nullable — it folds to null for a pre-E3 log. The
+    // throw is loud and correct; coercing null to the epoch would be a silent lie.
+    expect(() =>
+      substitute('${addDays(run.startedAt, 1)}', ctx({ run: { startedAt: null } })),
+    ).toThrow(SubstituteError);
+  });
+});
+
+describe('E5a date fns — arithmetic', () => {
+  const T = '2026-07-15T10:30:00.000Z';
+  const c = ctx({ params: { t: T } });
+
+  it('adds each unit', () => {
+    expect(substitute('${addDays(params.t, 1)}', c)).toBe('2026-07-16T10:30:00.000Z');
+    expect(substitute('${addHours(params.t, 2)}', c)).toBe('2026-07-15T12:30:00.000Z');
+    expect(substitute('${addMinutes(params.t, 15)}', c)).toBe('2026-07-15T10:45:00.000Z');
+    expect(substitute('${addSeconds(params.t, 30)}', c)).toBe('2026-07-15T10:30:30.000Z');
+  });
+
+  it('subtracts on a negative interval, and composes', () => {
+    expect(substitute('${addDays(params.t, -1)}', c)).toBe('2026-07-14T10:30:00.000Z');
+    // Fns compose because every one returns the same ISO shape it accepts.
+    expect(substitute('${addHours(addDays(params.t, 1), 2)}', c)).toBe('2026-07-16T12:30:00.000Z');
+  });
+
+  it('crosses a month/year boundary', () => {
+    expect(
+      substitute('${addDays(params.t, 1)}', ctx({ params: { t: '2026-12-31T23:00:00.000Z' } })),
+    ).toBe('2027-01-01T23:00:00.000Z');
+  });
+
+  it('rejects a fractional interval', () => {
+    // `addDays(t, 0.5)` reads as "half a day" but would silently truncate;
+    // `addHours(t, 12)` says it exactly.
+    expect(() => substitute('${addDays(params.t, 0.5)}', c)).toThrow(SubstituteError);
+  });
+
+  it('refuses to run off the end of time', () => {
+    // A raw `toISOString()` on an out-of-range Date throws `RangeError: Invalid
+    // time value`, which would surface as a baffling "function 'addDays' failed".
+    expect(() => substitute('${addDays(params.t, 1000000000000)}', c)).toThrow(/out of range/i);
+  });
+
+  it('addToTime/subtractFromTime take a unit, and reject an unknown one', () => {
+    expect(substitute("${addToTime(params.t, 1, 'Week')}", c)).toBe('2026-07-22T10:30:00.000Z');
+    expect(substitute("${addToTime(params.t, 1, 'Year')}", c)).toBe('2027-07-15T10:30:00.000Z');
+    expect(substitute("${subtractFromTime(params.t, 2, 'Hour')}", c)).toBe(
+      '2026-07-15T08:30:00.000Z',
+    );
+    expect(() => substitute("${addToTime(params.t, 1, 'Fortnight')}", c)).toThrow(SubstituteError);
+    // Case-sensitive: one spelling per unit, like every other closed set here.
+    expect(() => substitute("${addToTime(params.t, 1, 'week')}", c)).toThrow(SubstituteError);
+  });
+
+  it('CLAMPS a month add to the end of a short month', () => {
+    // Jan 31 + 1 Month has no exact answer. .NET's AddMonths clamps to the last
+    // valid day (Feb 28/29); naive ms arithmetic would overflow into March.
+    const jan31 = ctx({ params: { t: '2026-01-31T12:00:00.000Z' } });
+    expect(substitute("${addToTime(params.t, 1, 'Month')}", jan31)).toBe(
+      '2026-02-28T12:00:00.000Z',
+    );
+    const leap = ctx({ params: { t: '2028-01-31T12:00:00.000Z' } });
+    expect(substitute("${addToTime(params.t, 1, 'Month')}", leap)).toBe('2028-02-29T12:00:00.000Z');
+    // Feb 29 + 1 Year clamps the same way.
+    const feb29 = ctx({ params: { t: '2028-02-29T12:00:00.000Z' } });
+    expect(substitute("${addToTime(params.t, 1, 'Year')}", feb29)).toBe('2029-02-28T12:00:00.000Z');
+  });
+});
+
+describe('E5a date fns — truncation + fields', () => {
+  const c = ctx({ params: { t: '2026-07-15T10:30:45.123Z' } });
+
+  it('startOfDay/startOfHour/startOfMonth zero everything below the unit', () => {
+    expect(substitute('${startOfDay(params.t)}', c)).toBe('2026-07-15T00:00:00.000Z');
+    expect(substitute('${startOfHour(params.t)}', c)).toBe('2026-07-15T10:00:00.000Z');
+    expect(substitute('${startOfMonth(params.t)}', c)).toBe('2026-07-01T00:00:00.000Z');
+  });
+
+  it('dayOfWeek is 0=Sunday (ADF parity, and what run-window.ts already uses)', () => {
+    // 2026-07-15 is a Wednesday. `isWithinRunWindows` reads `getUTCDay()`, so a
+    // different numbering here would ship two weekday conventions in one product.
+    expect(substitute('${dayOfWeek(params.t)}', c)).toBe(3);
+    expect(
+      substitute('${dayOfWeek(params.t)}', ctx({ params: { t: '2026-07-19T00:00:00Z' } })),
+    ).toBe(0);
+  });
+
+  it('dayOfMonth', () => {
+    expect(substitute('${dayOfMonth(params.t)}', c)).toBe(15);
+  });
+});
+
+describe('E5a formatDateTime — a CLOSED token set', () => {
+  const c = ctx({ params: { t: '2026-07-15T10:30:45.123Z' } });
+
+  it('formats the documented tokens', () => {
+    expect(substitute("${formatDateTime(params.t, 'yyyy-MM-dd')}", c)).toBe('2026-07-15');
+    expect(substitute("${formatDateTime(params.t, 'yyyy-MM-dd HH:mm:ss')}", c)).toBe(
+      '2026-07-15 10:30:45',
+    );
+    expect(substitute("${formatDateTime(params.t, 'dd/MM/yyyy')}", c)).toBe('15/07/2026');
+    // Same-character runs split, so an unpunctuated format still tokenises.
+    expect(substitute("${formatDateTime(params.t, 'yyyyMMdd')}", c)).toBe('20260715');
+    // `fff` round-trips the ms that `${run.startedAt}` carries.
+    expect(substitute("${formatDateTime(params.t, 'HH:mm:ss.fff')}", c)).toBe('10:30:45.123');
+  });
+
+  it('passes non-alphabetic characters through literally', () => {
+    expect(substitute("${formatDateTime(params.t, 'dd.MM.yyyy @ HH:mm')}", c)).toBe(
+      '15.07.2026 @ 10:30',
+    );
+  });
+
+  it('REJECTS an unknown token rather than emitting it raw', () => {
+    // `yy` is a real .NET token we do not implement. Emitting it literally would
+    // hand the author "yy-07-15" and let them think it worked.
+    expect(() => substitute("${formatDateTime(params.t, 'yy-MM-dd')}", c)).toThrow(SubstituteError);
+    // A literal 'T' is alphabetic, so it is an unknown token, not a passthrough.
+    // The ISO shape needs no formatting (values ARE ISO); assemble anything else
+    // with `concat`.
+    expect(() => substitute('${formatDateTime(params.t, "yyyy-MM-dd\'T\'HH:mm")}', c)).toThrow(
+      SubstituteError,
+    );
+  });
+});
 
 describe('catalog families', () => {
   it('string fns', () => {

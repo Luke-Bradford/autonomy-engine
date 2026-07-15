@@ -123,7 +123,7 @@ its own dispatch stamp) — documented; use `${run.startedAt}` for a run-stable 
 | E2 | Interpolation model (whole-value type-preserving vs string) + `$${` escape + single-pass inert eval |
 | E3 | Reference resolver over namespaces (params/vars/global/nodes.output/nodes.status/run/pipeline/item) — **PARTIALLY SHIPPED 2026-07-15**: `run.*` (SSOT fix + `startedAt`) + `nodes.<id>.status` landed. The rest is BLOCKED on unbuilt prerequisites, each with a named owner: `vars.*` → #1 D2, `global.*` → #1 D3, `item` → **PARTIALLY delivered at E4**: the array-form binding (`filter`/`map`/`count`) is LEXICAL and needed no `foreach`, so it shipped with the catalog; the `foreach`-BODY binding remains #4 A4's, `pipeline.*` → needs a doc widening (`PipelineVersionSchema` has no `name`; `EngineDoc` carries only nodes/edges/containers) + #5's seed for `triggerType`/`triggerName`/`triggerTime`, `run.attempt` → #1 D4 (the `attempts` fact exists but is node-scoped; a run-scoped `${run.*}` has no single answer for it). Re-open the remaining surface as each lands. |
 | E4 | Function catalog impl + per-fn type signatures (logical/string/collection/conversion/math) — **SHIPPED 2026-07-15**: the closed catalog lives in `engine/functions.ts` (SSOT, one entry per fn) and the CALLING CONVENTION is now DATA (`call: 'eager' \| 'special'`, `lambdaArgs`, `staticSoftArg`) read by BOTH the evaluator and the static checker, so neither special-cases a fn by name. `and`/`or`/`if` short-circuit; `filter`/`map`/`count` bind `${item}` per element; `count` is arity-overloaded. See the E4 block below. |
-| E5 | Date fns + dispatch-stamped time (`utcNow` binds node.dispatched stamp; `run/pipeline` from seed) |
+| E5 | Date fns + dispatch-stamped time — **SPLIT 2026-07-15. E5a SHIPPED:** the 12 date fns that take an EXPLICIT timestamp (`formatDateTime addDays addHours addMinutes addSeconds addToTime subtractFromTime startOfDay startOfHour startOfMonth dayOfWeek dayOfMonth`), all UTC, all pure — `${run.startedAt}` (E3) is the run-stable source. See the E5a block below. **E5b FILED as #450 (`needs-design`):** `utcNow()` binds a `node.dispatched` stamp that DOES NOT EXIST — the reducer resolves node config in `prepInput` at the `pending→ready` transition, strictly BEFORE the executor yields `node.dispatched` (which carries no timestamp field at all), and `onDispatched` never re-preps. Binding it needs a dispatch-handshake change to crash-safety-critical code, so it is an operator-gated call, not an unattended one. `pipeline.*` from seed remains blocked on #5 + the doc widening E3 recorded. |
 | E6 | `validateRefs` typing: infer expr type, check against field-expected type; boolean-condition + array-items checks |
 | E7 | Deep `[]`/`.` addressing into `json`/`any` outputs (runtime-validated escape hatch) |
 | E8 | Validation profiles (generic vs trigger-binding) + `${trigger.*}` context-scoping (with #5) |
@@ -255,6 +255,26 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
   - **There is NO `null` literal** (the grammar is `number | boolean | string`), so `coalesce`'s
     null-coalescing is driven by REFS, never a written `null`. `coalesce` (null/undefined only) and
     `default` (also `''`/`false`, and rescues a MISSING output) are deliberately distinct fns.
+- **Deviations from the v1 catalog list, recorded (E5a) — three date fns are ABSENT**, each because
+  it fails a NON-NEGOTIABLE, not because it was forgotten. Pinned by test in `functions.test.ts`, so
+  re-adding one is a deliberate act with a decision behind it:
+  - **`utcNow`** → E5b / **#450**. The architecture cannot bind it yet (see the E5 row above). The
+    author-facing substitute is `${run.startedAt}` — which is already what the Round-2 rule above
+    directs authors to in exactly the places `utcNow()` is prohibited.
+  - **`ticks`** → SCOPED OUT. 100ns units since 0001-01-01 is ~6.4e17 today, far above
+    `Number.MAX_SAFE_INTEGER` (~9.0e15). The trap is that it would **pass** the `number` signature
+    (`Number.isFinite` holds) and then be silently WRONG below the second: `sub(ticks(b), ticks(a))`
+    over a 1ms gap yields 9984, not 10000 (day-scale diffs stay exact, so it looks fine in testing).
+    A decimal STRING would be exact but would not compose with `add`/`sub`; widening `SigType` with a
+    long/bigint type would front-run **E6** exactly as E4 refused to mint `array<T>`. Silent
+    wrongness is worse than absence, so it is absent.
+  - **`convertTimeZone`** → SCOPED OUT. It needs a tz database. `Intl.DateTimeFormat({timeZone})`
+    DOES typecheck under `lib:["ES2023"]` (probed — the availability premise is not the blocker), but
+    it reads the HOST's ICU data, which varies by Node build and MUTATES as governments change DST
+    rules. Folding one log on two hosts could then diverge, breaking the "pure + replay-safe"
+    invariant at line 20 — the one property the whole spec leans on. Same call as the hand-rolled
+    base64 below: the pure engine does not reach for host facilities. (Hand-rolling a tzdb is absurd;
+    a tz-aware fn needs a durable, version-pinned tz source — a real ticket, not a catalog entry.)
 - **Deviations from the v1 catalog list, recorded (E4):** `slug` and `default` are KEPT though the
   spec's line-64-77 list names neither — both are LIVE today and `default` is the only way to read a
   reachable-but-not-guaranteed output; removing a live fn is a bigger break than recording the
@@ -286,6 +306,51 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
     length to guard against it.
   - Both caps are pure + deterministic, so replay is unaffected. Max resolved-value size and max
     deep-path depth remain OUT (E7/general).
+- **E5a date fns — the decisions (2026-07-15, implemented).** These are the first `Date` uses in the
+  pure engine (`shared/src` had no non-test `new Date(` before this). `Date` is used ONLY as UTC
+  calendar arithmetic over an EXPLICIT instant — never `new Date()`, never `Date.now()`, never a
+  local-time getter — which is what keeps the family pure and the absent `utcNow` the ONLY gap.
+  - **Parsing is STRICT and hand-rolled, because `new Date(s)` is not.** It reads an offset-less
+    `2026-07-15T10:30:00` as **LOCAL** time (host-dependent — verified: `2026-07-14T23:00:00.000Z`
+    on a BST host) and accepts implementation-defined free text (`July 4, 2026`). Either would make
+    a resolved value depend on the HOST, the replay hazard line 20 forbids. Accepted: ISO-8601
+    date-time with an explicit `Z`/`±HH:MM`/`±HHMM` offset, normalised to UTC. **Rejected:**
+    offset-less, date-only, free text, and impossible dates (`2026-02-30`). The accept-set can be
+    WIDENED back-compatibly later; it could not be narrowed — hence the tight v1.
+  - **Milliseconds are PRESERVED; sub-ms is TRUNCATED.** `${run.startedAt}` is stamped via
+    `toISOString()` and always carries 3 fractional digits, so normalising to `.000Z` would make
+    `addDays(run.startedAt, 0) != run.startedAt`. Conversely RFC3339 allows any number of digits
+    (real APIs emit microseconds) and a `Date` is ms-resolution, so REFUSING those would make the
+    date fns unusable on an ordinary HTTP output; the loss is the representation's own limit.
+  - **Range is years 0001-9999** (.NET `DateTime`'s range), so every value these fns RETURN is
+    re-parseable by their own parser: outside it `toISOString()` emits an expanded form
+    (`+275760-09-13T…`) that the strict parser would reject, silently breaking composition
+    (`addDays(addDays(t, n), 1)`). Out-of-range throws a clean `SubstituteError` — a raw
+    `toISOString()` would throw `RangeError: Invalid time value`, surfacing as a baffling
+    "function 'addDays' failed".
+  - **Fractional intervals are REFUSED.** `addDays(t, 0.5)` reads as "half a day" but would floor to
+    zero; `addHours(t, 12)` says it exactly.
+  - **`addToTime`/`subtractFromTime` take a CLOSED, case-sensitive unit vocabulary** (ADF's names):
+    `Second Minute Hour Day Week Month Year`. Month/Year are CALENDAR units and **CLAMP** to the end
+    of a short month (.NET `AddMonths`): `2026-01-31 + 1 Month` → `2026-02-28` (`2028` → `02-29`),
+    where naive ms arithmetic would overflow into March and silently skip a month.
+  - **`dayOfWeek` is 0=Sunday** — ADF parity, and what `triggers/run-window.ts` already reads via
+    `getUTCDay()`. A different numbering would ship two weekday conventions in one product.
+  - **`formatDateTime` is a CLOSED token set** — `yyyy MM dd HH mm ss fff` — scanning runs of the
+    SAME character (.NET's convention, so `yyyyMMdd` tokenises without separators). An alphabetic run
+    must BE a token; everything else passes through literally. Rejecting an unknown token is the same
+    call as `float`'s decimal-only regex: emitting an unimplemented `yy` raw would hand the author
+    `yy-07-15` and let them believe it worked. **No quoted-literal syntax** (so no literal `'T'`):
+    the format arg already sits inside a `${}` string literal, and the ISO shape needs no formatting
+    because values ARE ISO — anything richer composes with
+    `concat(formatDateTime(t,'yyyy-MM-dd'), ' at ', formatDateTime(t,'HH:mm'))`.
+  - **No trailing `format` arg** on `addDays`/`addToTime`/… (ADF has one). `substring` proves optional
+    args work under the `minArgs` model, so this is a choice: `formatDateTime(addDays(t,1),'…')`
+    composes and keeps ONE formatting path.
+  - **A null `${run.startedAt}` THROWS** rather than coercing (`RunState.startedAt` folds to `null`
+    for a pre-E3 log). Loud beats a silent epoch-1970. Pinned by test.
+  - **No new resource cap.** These return scalars/strings and allocate nothing array-shaped; the
+    array caps are irrelevant here and max resolved-value size stays OUT (E7/general).
 - **SSOT bug — FIXED at E3 (2026-07-15, implemented).** Was: the spec's example expressions use
   `run.runId`/`run.startedAt`, but the shipped `RUN_FIELDS = [id, pipelineVersionId, triggerId,
   parentRunId]` — `runId` was `id` and `startedAt` didn't exist, so the dynamic-filename expression
