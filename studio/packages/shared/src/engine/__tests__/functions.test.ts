@@ -461,6 +461,27 @@ describe('E5a date fns — parsing is STRICT', () => {
     ).toBe('2026-07-15T10:30:00.872Z');
   });
 
+  it('enforces the representable range on INPUT, not just on a result', () => {
+    // `\d{4}` admits year 0000, which is outside the documented 0001-9999 range.
+    // Only the fns that RENDER a timestamp pass through the result check, so the
+    // range has to be enforced at the parse boundary or it holds for `addDays`
+    // and silently does not for `dayOfWeek`/`formatDateTime`.
+    const y0 = ctx({ params: { t: '0000-01-01T00:00:00Z' } });
+    expect(() => substitute('${addDays(params.t, 1)}', y0)).toThrow(/range/i);
+    expect(() => substitute('${dayOfWeek(params.t)}', y0)).toThrow(/range/i);
+    expect(() => substitute("${formatDateTime(params.t, 'yyyy-MM-dd')}", y0)).toThrow(/range/i);
+    // The boundary years themselves are representable.
+    expect(
+      substitute('${dayOfWeek(params.t)}', ctx({ params: { t: '0001-01-01T00:00:00Z' } })),
+    ).toBe(1);
+    expect(
+      substitute(
+        "${formatDateTime(params.t, 'yyyy')}",
+        ctx({ params: { t: '9999-12-31T23:59:59.999Z' } }),
+      ),
+    ).toBe('9999');
+  });
+
   it('throws on a null `${run.startedAt}` instead of coercing it', () => {
     // `RunState.startedAt` is nullable — it folds to null for a pre-E3 log. The
     // throw is loud and correct; coercing null to the epoch would be a silent lie.

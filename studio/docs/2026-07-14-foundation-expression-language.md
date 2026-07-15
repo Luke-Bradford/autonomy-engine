@@ -311,9 +311,11 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
   calendar arithmetic over an EXPLICIT instant — never `new Date()`, never `Date.now()`, never a
   local-time getter — which is what keeps the family pure and the absent `utcNow` the ONLY gap.
   - **Parsing is STRICT and hand-rolled, because `new Date(s)` is not.** It reads an offset-less
-    `2026-07-15T10:30:00` as **LOCAL** time (host-dependent — verified: `2026-07-14T23:00:00.000Z`
-    on a BST host) and accepts implementation-defined free text (`July 4, 2026`). Either would make
-    a resolved value depend on the HOST, the replay hazard line 20 forbids. Accepted: ISO-8601
+    `2026-07-15T10:30:00` as **LOCAL** time and accepts implementation-defined free text
+    (`July 4, 2026`). Measured: that one string parses to `2026-07-15T09:30:00.000Z` on a
+    `Europe/London` host and to `2026-07-15T10:30:00.000Z` under `TZ=UTC` — **the same doc,
+    two instants, decided by the host**. That is exactly the replay hazard line 20 forbids: the
+    reducer would fold one log into two different states. Accepted: ISO-8601
     date-time with an explicit `Z`/`±HH:MM`/`±HHMM` offset, normalised to UTC. **Rejected:**
     offset-less, date-only, free text, and impossible dates (`2026-02-30`). The accept-set can be
     WIDENED back-compatibly later; it could not be narrowed — hence the tight v1.

@@ -1235,7 +1235,17 @@ function parseTs(fn: string, v: unknown, at: string): number {
     if (oh > 23 || om > 59) return refuse('has an offset outside ±23:59');
     offsetMs = sign * (oh * 3600000 + om * 60000);
   }
-  return utcMs(y, mo, d, h, mi, s2, ms) - offsetMs;
+  const t = utcMs(y, mo, d, h, mi, s2, ms) - offsetMs;
+  // The range is checked HERE, not only in `isoOf`, so it holds of INPUTS as
+  // well as results. `\d{4}` admits year 0000, which is outside the range — and
+  // only the fns that RENDER a timestamp pass through `isoOf`, so without this
+  // `addDays('0000-01-01T00:00:00Z', 1)` refused while
+  // `dayOfWeek('0000-01-01T00:00:00Z')` answered 6 and `formatDateTime` emitted
+  // '0000-01-01'. One boundary, one rule.
+  if (t < MIN_TIME_MS || t > MAX_TIME_MS) {
+    return refuse('is outside the representable range (only years 0001-9999)');
+  }
+  return t;
 }
 
 /** Render epoch-ms back to the canonical shape, refusing an unrepresentable instant. */
