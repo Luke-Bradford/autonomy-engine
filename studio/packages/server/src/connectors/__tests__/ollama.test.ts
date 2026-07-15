@@ -69,12 +69,16 @@ describe('ollamaAdapter.runActivity', () => {
     expect((init.headers as Record<string, string>)['Authorization']).toBe('Bearer proxy-token');
   });
 
-  it('defaults stopReason to "stop" when done_reason is absent', async () => {
+  // #457 — CHANGED: this adapter used to default an absent `done_reason` to
+  // `'stop'`. It was the only adapter honouring its declared `string` type, but
+  // it did so by inventing a REAL provider value. All three now share
+  // `coerceStopReason` — see its docblock for why the sentinel is not `'stop'`.
+  it('defaults stopReason to the "unknown" sentinel when done_reason is absent', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       fakeResponse(200, { message: { content: 'x' }, done: true }),
     );
     const events = await drain(ollamaAdapter.runActivity(ctx(), null));
-    expect(events[0]).toMatchObject({ type: 'succeeded', outputs: { stopReason: 'stop' } });
+    expect(events[0]).toMatchObject({ type: 'succeeded', outputs: { stopReason: 'unknown' } });
   });
 
   it('fails permanent when no model is resolvable', async () => {

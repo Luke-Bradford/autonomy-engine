@@ -40,6 +40,23 @@ const OK_BODY = {
 };
 
 describe('anthropicAdapter.runActivity', () => {
+  // #457 — `stop_reason` is absent on any response shape this adapter does not
+  // anticipate (and `null` on a streaming one); `?? null` used to yield `null`
+  // there, failing the node. See `coerceStopReason` for the contract rationale.
+  it.each([
+    ['absent', {}],
+    ['a non-string', { stop_reason: 42 }],
+    ['null', { stop_reason: null }],
+  ])('yields a string stopReason when stop_reason is %s', async (_label, over) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, { content: [{ type: 'text', text: 'x' }], ...over }),
+    );
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk-ant-key'));
+    expect(events[0]).toMatchObject({ type: 'succeeded', outputs: { stopReason: 'unknown' } });
+    const outputs = (events[0] as Extract<ActivityEvent, { type: 'succeeded' }>).outputs;
+    expect(typeof outputs.stopReason).toBe('string');
+  });
+
   it('POSTs the Messages API and surfaces concatenated text + stopReason', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
 

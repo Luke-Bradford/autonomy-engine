@@ -3,6 +3,7 @@ import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.j
 import {
   DEFAULT_LLM_TIMEOUT_MS,
   classifyHttpStatus,
+  coerceStopReason,
   errorExcerpt,
   llmConnectionConfigSchema,
   llmPost,
@@ -21,7 +22,8 @@ import {
  *
  * A completed 2xx response yields `succeeded{ text, stopReason }` — `text` is
  * the concatenation of the response's `text`-type content blocks; `stopReason`
- * is the API's `stop_reason`. A non-2xx is a real failure (no completion),
+ * is the API's `stop_reason` via `coerceStopReason` (which keeps the declared
+ * `string` type when the field is absent). A non-2xx is a real failure (no completion),
  * mapped by `classifyHttpStatus`. The whole exchange is bounded by a timeout
  * (default 120s, overridable via `config.timeoutMs`) so a hung provider can
  * never permanently hold a worker-pool slot.
@@ -145,7 +147,7 @@ export const anthropicAdapter: ConnectorAdapter = {
       type: 'succeeded',
       outputs: {
         text: extractText(parsed.json),
-        stopReason: (parsed.json as { stop_reason?: unknown }).stop_reason ?? null,
+        stopReason: coerceStopReason((parsed.json as { stop_reason?: unknown }).stop_reason),
       },
     };
   },

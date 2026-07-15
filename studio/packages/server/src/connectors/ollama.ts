@@ -2,6 +2,7 @@ import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.j
 import {
   DEFAULT_LLM_TIMEOUT_MS,
   classifyHttpStatus,
+  coerceStopReason,
   errorExcerpt,
   llmConnectionConfigSchema,
   llmPost,
@@ -21,7 +22,8 @@ import {
  *
  * Like `openai_api`, there is no safe default model — a call with no resolvable
  * `model` fails `permanent`. A 2xx yields `succeeded{ text, stopReason }` from
- * the response's `message.content` / `done_reason`.
+ * the response's `message.content` / `done_reason` (the latter via
+ * `coerceStopReason`, shared with the other two adapters since #457).
  */
 
 const DEFAULT_OLLAMA_BASE_URL = 'http://localhost:11434';
@@ -110,7 +112,7 @@ export const ollamaAdapter: ConnectorAdapter = {
       type: 'succeeded',
       outputs: {
         text: typeof text === 'string' ? text : '',
-        stopReason: typeof doneReason === 'string' ? doneReason : 'stop',
+        stopReason: coerceStopReason(doneReason),
       },
     };
   },
