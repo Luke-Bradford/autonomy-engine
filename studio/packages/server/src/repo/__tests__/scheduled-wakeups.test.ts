@@ -127,6 +127,22 @@ describe('#5 S1 — listDueWakeups (the claim scan)', () => {
     expect(due.map((r) => r.dueAt)).toEqual([100, 200]);
   });
 
+  it('breaks dueAt ties on id, so the claim order is stable across ticks', () => {
+    // Alarms armed in the SAME millisecond are common (a fan-out arms a batch at
+    // once). Without a tie-breaker SQLite may return equal-`dueAt` rows in a
+    // different order across ticks and restarts, so a restarted or replayed tick
+    // could claim the same-due batch in a different order than the run before it.
+    const armed = [armRetry(db, 'z', 100), armRetry(db, 'a', 100), armRetry(db, 'm', 100)];
+    const expected = [...armed].map((r) => r.id).sort();
+
+    // Same query, repeatedly: the order must be identical AND id-ascending.
+    for (let i = 0; i < 5; i++) {
+      const due = listDueWakeups(db, { kinds: ['retry'], now: 250 });
+      expect(due.map((r) => r.id)).toEqual(expected);
+    }
+    expect(listPendingWakeups(db).map((r) => r.id)).toEqual(expected);
+  });
+
   it('excludes rows not yet due', () => {
     armRetry(db, 'attempt-1', 5_000);
     expect(listDueWakeups(db, { kinds: ['retry'], now: 4_999 })).toHaveLength(0);

@@ -81,7 +81,11 @@ export function armWakeup(db: Db, input: ArmWakeupInput): ScheduledWakeup {
  * Claiming-then-discarding would lose the alarm; claiming-then-erroring would
  * spin it every tick.
  *
- * Oldest-first so a late alarm is never starved by a fresher one.
+ * Oldest-first so a late alarm is never starved by a fresher one. `id` breaks
+ * `dueAt` ties: alarms armed in the same millisecond are common (a fan-out arms
+ * a batch at once), and without a tie-breaker SQLite may order them differently
+ * across ticks and restarts — so a replayed or restarted tick could claim the
+ * same-due batch in a different order than the run that came before it.
  */
 export function listDueWakeups(
   db: Db,
@@ -101,7 +105,7 @@ export function listDueWakeups(
         inArray(scheduledWakeups.kind, [...opts.kinds]),
       ),
     )
-    .orderBy(asc(scheduledWakeups.dueAt))
+    .orderBy(asc(scheduledWakeups.dueAt), asc(scheduledWakeups.id))
     .all();
   return rows.map((row) => ScheduledWakeupSchema.parse(row));
 }
@@ -159,7 +163,7 @@ export function listPendingWakeups(db: Db): ScheduledWakeup[] {
     .select()
     .from(scheduledWakeups)
     .where(eq(scheduledWakeups.status, 'pending'))
-    .orderBy(asc(scheduledWakeups.dueAt))
+    .orderBy(asc(scheduledWakeups.dueAt), asc(scheduledWakeups.id))
     .all();
   return rows.map((row) => ScheduledWakeupSchema.parse(row));
 }
