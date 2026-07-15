@@ -9,12 +9,13 @@ import type {
 import { ParamResolveError, SubstituteError, TERMINAL_NODE } from './types.js';
 import type { DeclaredOutput } from './outputs.js';
 import { declaredOutputs } from './outputs.js';
-import type { Expr, TemplateMode } from './expr.js';
+import type { Expr, ExprSegment, TemplateMode } from './expr.js';
 import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
 import type { EvalIn, FnSpec, SigType } from './functions.js';
 import {
   FUNCTIONS,
   MAX_ARRAY_ELEMENTS_TOTAL,
+  MAX_PATH_DEPTH,
   argSigAt,
   arity,
   assignableTo,
@@ -66,14 +67,25 @@ export const RUN_FIELDS = [
 ] as const;
 
 /**
- * Missing node-output — a distinct error so `default()` (the ONE lazy function)
- * can treat an absent node output as "use the fallback" while a typo'd param or
- * run field stays a hard error. Internal to this module.
+ * A value that ISN'T THERE — a distinct error so `default()` (the one rescuing
+ * function) can treat data absence as "use the fallback" while a typo'd param,
+ * an out-of-scope `item` or a wrong SHAPE stays a hard error. Internal to this
+ * module (`EvalIn.soft` hands the catalog a yes/no, never the class).
+ *
+ * RENAMED from `MissingNodeOutputError` at #6 E7: it now also covers a missing
+ * key or an out-of-range index anywhere a deep path walks — including into a
+ * `json` param or a bound `item`, neither of which is a node output — so the old
+ * name would have lied about three of its four sites.
+ *
+ * The line this class draws is DATA ABSENCE vs DOC DEFECT, and it is what E3/E4
+ * were actually reasoning about when they refused to route a status race or an
+ * unbound `item` through it: `default()` must rescue a value the data legitimately
+ * may not carry, and must NEVER mask a defect whose fix is to edit the doc.
  */
-class MissingNodeOutputError extends SubstituteError {
+class MissingValueError extends SubstituteError {
   constructor(message: string) {
     super(message);
-    this.name = 'MissingNodeOutputError';
+    this.name = 'MissingValueError';
   }
 }
 
@@ -88,35 +100,72 @@ class MissingNodeOutputError extends SubstituteError {
 // --- reference shape (segments are the SSOT — `source` is never re-parsed) ---
 
 /**
- * A ref's path as plain field NAMES, or `null` if any segment is an `[]` index.
+ * A ref's LEADING field names — the run of plain `.field` segments before the
+ * first `[]` index, which is the region a namespace root can occupy.
  *
  * `segments` — not `source` — is the structural SSOT: a quoted index like
  * `m['b.c']` is ONE segment but TWO dot-parts, so splitting `source` on `.`
  * would disagree with the grammar on the doc's own meaning.
  */
-function fieldPath(expr: Extract<Expr, { kind: 'ref' }>): string[] | null {
+function leadingFields(segments: ExprSegment[]): string[] {
   const names: string[] = [];
-  for (const seg of expr.segments) {
-    if (seg.kind !== 'field') return null;
+  for (const seg of segments) {
+    if (seg.kind !== 'field') break;
     names.push(seg.name);
   }
   return names;
 }
 
 /**
- * The refusal for a ref carrying `[]` deep addressing. E1 parses `[]` into the
- * AST; RESOLVING it is E7 (the runtime-validated escape hatch into `json`/`any`
- * outputs). Until then such a ref is refused — loudly, at save AND at run time.
+ * What a reference NAMES, and how many leading segments say it (#6 E7).
  *
- * This MUST be a plain `SubstituteError`, never a `MissingNodeOutputError`:
- * `default()` catches the latter and would silently substitute its fallback, so
- * `${default(nodes.a.output.rows[0], 'fb')}` would validate clean today and
- * then SILENTLY CHANGE MEANING when E7 lands.
+ * ONE answer to "where does the root end", read by all THREE consumers —
+ * `resolveRef` (run), `checkExprStatic` (save) and `inferExprType` (E6). Before
+ * E7 each re-derived it from its own `parts[0] === 'nodes' && parts.length === 4
+ * && parts[2] === 'output'` predicate; E7 has to turn every one of those from
+ * `=== N` into `>= N` (a root may now carry a deep TAIL), and three copies of one
+ * new invariant is exactly the drift `typing.test.ts`'s "inference MUST agree
+ * with checkExprStatic" test exists to catch.
+ *
+ * The root region is FIELDS ONLY: `leadingFields` stops at the first index, so
+ * `${nodes[params.i].output.x}` matches nothing here and is refused outright. A
+ * DYNAMIC output name would defeat the declared-name check (which is only
+ * enforceable against a literal), and a dynamic namespace or node id is
+ * meaningless. Consequence, recorded: an output name containing `.`/`[`/`]` stays
+ * unaddressable — as it was before E7, since the grammar reserves those chars.
  */
-function deferredToE7(source: string): SubstituteError {
-  return new SubstituteError(
-    `\${${source}}: deep [] addressing into an output is not supported yet ` +
-      '(it parses, but resolving it lands with #6 E7)',
+type RefRoot =
+  | { kind: 'item'; arity: 1 }
+  | { kind: 'params'; name: string; arity: 2 }
+  | { kind: 'nodeOutput'; id: string; name: string; arity: 4 }
+  | { kind: 'nodeStatus'; id: string; arity: 3 }
+  | { kind: 'run'; field: string; arity: 2 };
+
+function refRoot(fields: string[]): RefRoot | null {
+  const [ns, a, b, c] = fields;
+  if (ns === 'item') return { kind: 'item', arity: 1 };
+  if (ns === 'params' && fields.length >= 2) return { kind: 'params', name: a as string, arity: 2 };
+  if (ns === 'nodes' && fields.length >= 4 && b === 'output') {
+    return { kind: 'nodeOutput', id: a as string, name: c as string, arity: 4 };
+  }
+  if (ns === 'nodes' && fields.length >= 3 && b === 'status') {
+    return { kind: 'nodeStatus', id: a as string, arity: 3 };
+  }
+  if (ns === 'run' && fields.length >= 2) return { kind: 'run', field: a as string, arity: 2 };
+  return null;
+}
+
+/**
+ * The path-length defect in a ref, or `null`. Both halves of the rule read this
+ * (`resolveRef` throws it, `checkExprStatic` accumulates it), so save and run can
+ * never disagree about which paths are too deep. See `MAX_PATH_DEPTH` for why the
+ * cap is not decorative.
+ */
+function pathDepthDefect(expr: Extract<Expr, { kind: 'ref' }>): string | null {
+  if (expr.segments.length <= MAX_PATH_DEPTH) return null;
+  return (
+    `\${${expr.source.slice(0, 40)}…}: reference path is too deep ` +
+    `(${expr.segments.length} segments, max ${MAX_PATH_DEPTH})`
   );
 }
 
@@ -171,96 +220,226 @@ function charge(env: Env, out: unknown): void {
   }
 }
 
+/**
+ * Resolve a reference: its ROOT (a run fact or the lexical `item`), then the
+ * deep `[]`/`.` TAIL over that value (#6 E7).
+ */
 function resolveRef(expr: Extract<Expr, { kind: 'ref' }>, env: Env): unknown {
+  const root = refRoot(leadingFields(expr.segments));
+  if (root === null) throw new SubstituteError(`unresolvable reference \${${expr.source}}`);
+  const tooDeep = pathDepthDefect(expr);
+  if (tooDeep !== null) throw new SubstituteError(tooDeep);
+  const value = resolveRoot(expr, root, env);
+  return walkPath(value, expr.segments.slice(root.arity), env, expr.source);
+}
+
+/** The root value a reference names, before any deep addressing. */
+function resolveRoot(expr: Extract<Expr, { kind: 'ref' }>, root: RefRoot, env: Env): unknown {
   const ctx = env.ctx;
-  const parts = fieldPath(expr);
-  // NB `${item[0]}` lands HERE, not in the `item` branch below: an index-bearing
-  // path has no plain field path, so it is refused as E7 work. The message says
-  // "into an output" while `item` is not an output — a known misattribution,
-  // accepted because the refusal itself is correct and E7 owns the fix.
-  if (parts === null) throw deferredToE7(expr.source);
-
-  // `${item}` / `${item.<path>}` (#6 E4) — bound ONLY inside a lambda arg.
-  //
-  // A bare `${item}` (no path) is the element itself: `filter(params.nums,
-  // greater(item, 5))` over a scalar array is the spec's own v1 shape.
-  //
-  // Unbound is a plain `SubstituteError`, never `MissingNodeOutputError`:
-  // `default()` catches the latter, so routing an out-of-scope `item` through it
-  // would let `${default(item.x, 'fb')}` silently return the fallback for what is
-  // really a scope error. Same reasoning as E3's status refusal.
-  if (parts[0] === 'item') {
-    if (env.item === undefined) {
-      throw new SubstituteError(
-        `\${${expr.source}}: 'item' is only bound inside a filter/map/count ` +
-          'predicate — it has no value here',
-      );
-    }
-    let cur: unknown = env.item.value;
-    for (const name of parts.slice(1)) {
-      // `hasOwnProperty`, NEVER `in`: `in` walks the PROTOTYPE CHAIN, so
-      // `${item.constructor}` would hand back a real host function (and
-      // `${item.__proto__}` an object's prototype) as resolved node config —
-      // escaping the data model and defeating `toStr`'s string contract. Matches
-      // the own-property rule every sibling branch in this function uses.
-      if (
-        cur === null ||
-        typeof cur !== 'object' ||
-        !Object.prototype.hasOwnProperty.call(cur, name)
-      ) {
-        throw new SubstituteError(`\${${expr.source}}: the current item has no field '${name}'`);
+  switch (root.kind) {
+    // `${item}` / `${item.<path>}` (#6 E4) — bound ONLY inside a lambda arg.
+    //
+    // A bare `${item}` (no path) is the element itself: `filter(params.nums,
+    // greater(item, 5))` over a scalar array is the spec's own v1 shape.
+    //
+    // Unbound is a plain `SubstituteError`, never `MissingValueError`:
+    // `default()` catches the latter, so routing an out-of-scope `item` through
+    // it would let `${default(item.x, 'fb')}` silently return the fallback for
+    // what is really a scope error. Same reasoning as E3's status refusal.
+    case 'item': {
+      if (env.item === undefined) {
+        throw new SubstituteError(
+          `\${${expr.source}}: 'item' is only bound inside a filter/map/count ` +
+            'predicate — it has no value here',
+        );
       }
-      cur = (cur as Record<string, unknown>)[name];
+      return env.item.value;
     }
-    return cur;
+    case 'params': {
+      if (!Object.prototype.hasOwnProperty.call(ctx.params, root.name)) {
+        throw new SubstituteError(`unknown param reference \${params.${root.name}}`);
+      }
+      return ctx.params[root.name];
+    }
+    case 'nodeOutput': {
+      const outs = ctx.nodeOutputs[root.id];
+      if (outs === undefined || !Object.prototype.hasOwnProperty.call(outs, root.name)) {
+        throw new MissingValueError(`unknown node output \${nodes.${root.id}.output.${root.name}}`);
+      }
+      return outs[root.name];
+    }
+    // `${nodes.<id>.status}` (#6 E3 T6) — the ADF `@activity().Status` fan-in/OR
+    // handle. Its vocabulary is the TERMINAL set only.
+    //
+    // Both refusals below are plain `SubstituteError`s, NEVER `MissingValueError`:
+    // `default()` catches that one, so routing through it would let
+    // `${default(nodes.a.status, 'none')}` silently return "none" for a real
+    // dispatch race or a typo'd node id — reporting a verdict the run never
+    // reached. A status either IS settled or the expression is wrong.
+    case 'nodeStatus': {
+      const status = ctx.nodeStatuses[root.id];
+      if (status === undefined) {
+        throw new SubstituteError(`\${nodes.${root.id}.status}: no node '${root.id}' in this run`);
+      }
+      if (!TERMINAL_NODE.has(status)) {
+        throw new SubstituteError(
+          `\${nodes.${root.id}.status}: node '${root.id}' has not settled here — a status is ` +
+            `readable only once it is success/failure/skipped`,
+        );
+      }
+      return status;
+    }
+    case 'run': {
+      if (!Object.prototype.hasOwnProperty.call(ctx.run, root.field)) {
+        throw new SubstituteError(`unknown run field \${run.${root.field}}`);
+      }
+      return ctx.run[root.field];
+    }
   }
+}
 
-  if (parts[0] === 'params' && parts.length === 2) {
-    const name = parts[1] as string;
-    if (!Object.prototype.hasOwnProperty.call(ctx.params, name)) {
-      throw new SubstituteError(`unknown param reference \${params.${name}}`);
-    }
-    return ctx.params[name];
+// --- the deep walk (#6 E7) — the runtime-validated escape hatch --------------
+//
+// Spec #6 L48/L111: deep `[]`/`.` into a `json`/`any` value is `any` — there is
+// no static type to check it against (E4: `SigType` has no element type), so the
+// walk IS the validation. ONE walk serves every root, so `item` (whose bespoke
+// `.`-only walk E4 shipped) and a node output cannot drift.
+//
+// The walk is INERT: it SELECTS a sub-value of an already-resolved value and
+// never re-parses it, so a deep-resolved `"${secret}"` is still emitted
+// literally. It is also READ-ONLY — it never assigns — so there is no
+// prototype-pollution vector.
+//
+// The error CLASS carries the rule (see `MissingValueError`):
+//   MISSING (rescuable by `default()`) — an absent own property, an out-of-range
+//     index, or a step onto null/undefined: the data legitimately varies, and on
+//     an untyped path `default()` is the author's ONLY tool.
+//   SHAPE (plain, never rescued) — a field on a scalar or an array, an index into
+//     a scalar, or a nonsense index: the DOC is wrong, and masking that would
+//     hide a defect whose fix is to edit the doc.
+
+/** Walk `tail` over `start`. `tail` is `[]` for an ordinary (non-deep) ref. */
+function walkPath(start: unknown, tail: ExprSegment[], env: Env, source: string): unknown {
+  let cur = start;
+  for (const seg of tail) {
+    cur =
+      seg.kind === 'field'
+        ? stepField(cur, seg.name, source)
+        : stepIndex(cur, evalExpr(seg.expr, env), source);
   }
-  if (parts[0] === 'nodes' && parts.length === 4 && parts[2] === 'output') {
-    const id = parts[1] as string;
-    const name = parts[3] as string;
-    const outs = ctx.nodeOutputs[id];
-    if (outs === undefined || !Object.prototype.hasOwnProperty.call(outs, name)) {
-      throw new MissingNodeOutputError(`unknown node output \${nodes.${id}.output.${name}}`);
-    }
-    return outs[name];
+  return cur;
+}
+
+/**
+ * `.field` — an own property of a plain object.
+ *
+ * `hasOwnProperty`, NEVER `in`: `in` walks the PROTOTYPE CHAIN, so
+ * `${x.constructor}` would hand back a real host function as resolved node
+ * config, escaping the data model and defeating `toStr`'s string contract.
+ *
+ * The `typeof` and array guards are LOAD-BEARING, not defensive tidying — a
+ * primitive BOXES, so `hasOwnProperty` alone says yes to host surface:
+ *   - `hasOwnProperty('abc', 'length')` is TRUE (and `('abc')[0]` is 'a'), so
+ *     without the `typeof` guard `${run.runId[0]}` resolves to 'r' and
+ *     `${nodes.a.output.text.length}` to a number;
+ *   - `hasOwnProperty([], 'length')` is TRUE, so without the array guard
+ *     `${nodes.a.output.rows.length}` becomes an accidental alias for the
+ *     catalog's `length()`.
+ * A field NEVER applies to an array: `[]` is the one way to index one. This
+ * narrows two accidental capabilities of E4's item walk (`${item.length}` and
+ * `${item.0}`, neither designed, tested nor documented) — `[]`, which E7 adds, is
+ * the designed form for both.
+ */
+function stepField(cur: unknown, name: string, source: string): unknown {
+  if (cur === null || cur === undefined) {
+    throw new MissingValueError(
+      `\${${source}}: has no field '${name}' — the value before it is ${
+        cur === null ? 'null' : 'absent'
+      }`,
+    );
   }
-  // `${nodes.<id>.status}` (#6 E3 T6) — the ADF `@activity().Status` fan-in/OR
-  // handle. Its vocabulary is the TERMINAL set only.
-  //
-  // Both refusals below are plain `SubstituteError`s, NEVER
-  // `MissingNodeOutputError`: `default()` catches that one, so routing through it
-  // would let `${default(nodes.a.status, 'none')}` silently return "none" for a
-  // real dispatch race or a typo'd node id — reporting a verdict the run never
-  // reached. A status either IS settled or the expression is wrong.
-  if (parts[0] === 'nodes' && parts.length === 3 && parts[2] === 'status') {
-    const id = parts[1] as string;
-    const status = ctx.nodeStatuses[id];
-    if (status === undefined) {
-      throw new SubstituteError(`\${nodes.${id}.status}: no node '${id}' in this run`);
-    }
-    if (!TERMINAL_NODE.has(status)) {
+  if (Array.isArray(cur)) {
+    throw new SubstituteError(
+      `\${${source}}: cannot read field '${name}' on an array — index it with ` +
+        `[] (or use length()/first()/last())`,
+    );
+  }
+  if (typeof cur !== 'object') {
+    throw new SubstituteError(
+      `\${${source}}: cannot read field '${name}' — the value before it is a ` +
+        `${typeof cur}, not an object`,
+    );
+  }
+  if (!Object.prototype.hasOwnProperty.call(cur, name)) {
+    throw new MissingValueError(`\${${source}}: has no field '${name}'`);
+  }
+  return (cur as Record<string, unknown>)[name];
+}
+
+/**
+ * `[expr]` — an array index, or a dynamic/quoted object key (spec #6 L40-41).
+ *
+ * A null/undefined INDEX is refused rather than coerced: `toStr(null)` is `''`,
+ * and `run.triggerId` is seeded literal `null` for every run today, so
+ * `${params.cfg[run.triggerId]}` would silently look up the own property `''`.
+ * A null is never a key.
+ */
+function stepIndex(cur: unknown, idx: unknown, source: string): unknown {
+  if (cur === null || cur === undefined) {
+    throw new MissingValueError(
+      `\${${source}}: cannot index — the value before it is ${cur === null ? 'null' : 'absent'}`,
+    );
+  }
+  if (typeof idx !== 'number' && typeof idx !== 'string') {
+    throw new SubstituteError(
+      `\${${source}}: an index must be a number or a string, got ${
+        idx === null ? 'null' : Array.isArray(idx) ? 'array' : typeof idx
+      }`,
+    );
+  }
+  // A non-finite number is refused for EVERY container shape, before the
+  // array/object split — `String(Infinity)` is `'Infinity'`, so the object branch
+  // would otherwise silently look up an own property spelled `Infinity`, which is
+  // the same silent-wrong-key hazard the null refusal above exists to stop. It is
+  // REACHABLE, not theoretical: `1e999` is valid JSON, so a `json` param or an
+  // HTTP body carries `Infinity` straight through `JSON.parse` (E6 made `number`
+  // mean FINITE at every other boundary for exactly this reason).
+  if (typeof idx === 'number' && !Number.isFinite(idx)) {
+    throw new SubstituteError(
+      `\${${source}}: an index must be a finite number, got ${Number.isNaN(idx) ? 'NaN' : String(idx)}`,
+    );
+  }
+  if (Array.isArray(cur)) {
+    if (typeof idx !== 'number' || !Number.isInteger(idx) || idx < 0) {
+      // `String`, not `JSON.stringify`: the latter renders a non-finite number as
+      // `null`, so an Infinity index would report the baffling "got null".
+      const got = typeof idx === 'string' ? `'${idx}'` : String(idx);
       throw new SubstituteError(
-        `\${nodes.${id}.status}: node '${id}' has not settled here — a status is ` +
-          `readable only once it is success/failure/skipped`,
+        `\${${source}}: an array index must be a non-negative whole number, got ${got}`,
       );
     }
-    return status;
-  }
-  if (parts[0] === 'run' && parts.length === 2) {
-    const field = parts[1] as string;
-    if (!Object.prototype.hasOwnProperty.call(ctx.run, field)) {
-      throw new SubstituteError(`unknown run field \${run.${field}}`);
+    // Out of range is ABSENCE, not a doc defect — `default()` rescues it.
+    if (idx >= cur.length) {
+      throw new MissingValueError(
+        `\${${source}}: index ${idx} is past the end of a ${cur.length}-element array`,
+      );
     }
-    return ctx.run[field];
+    return cur[idx];
   }
-  throw new SubstituteError(`unresolvable reference \${${expr.source}}`);
+  if (typeof cur !== 'object') {
+    throw new SubstituteError(
+      `\${${source}}: cannot index into a ${typeof cur} — only an array or an object`,
+    );
+  }
+  // A JSON object's keys are strings, so a number index addresses `{"0": …}`.
+  // `String`, not `toStr`: `idx` is a string or a FINITE number by the guards
+  // above, and `toStr` would coerce null/undefined to `''` — the silent-wrong-key
+  // hazard those guards exist to refuse.
+  const key = typeof idx === 'number' ? String(idx) : idx;
+  if (!Object.prototype.hasOwnProperty.call(cur, key)) {
+    throw new MissingValueError(`\${${source}}: has no field '${key}'`);
+  }
+  return (cur as Record<string, unknown>)[key];
 }
 
 /**
@@ -322,7 +501,7 @@ function callEager(
 
 /**
  * The evaluator handed to a `special` fn. `soft` keeps the try/catch — and so
- * `MissingNodeOutputError` itself — PRIVATE to this module: the catalog gets a
+ * `MissingValueError` itself — PRIVATE to this module: the catalog gets a
  * yes/no answer instead of an error class, so `functions.ts` never imports back.
  */
 function evalIn(env: Env): EvalIn {
@@ -332,7 +511,7 @@ function evalIn(env: Env): EvalIn {
       try {
         return { ok: true, value: evalExpr(e, env) };
       } catch (err) {
-        if (err instanceof MissingNodeOutputError) return { ok: false };
+        if (err instanceof MissingValueError) return { ok: false };
         throw err;
       }
     },
@@ -1173,49 +1352,58 @@ function inferExprType(expr: Expr, scope: ScanScope): SigType {
     return FUNCTIONS[expr.name]?.ret ?? 'any';
   }
 
-  // A reference. `fieldPath` is the SSOT for segmentation — never split
-  // `source`. `null` means the ref carries an `[]` index: E7's refusal, already
-  // reported. Return `any` WITHOUT walking the index's own sub-expression —
-  // `checkExprStatic` returns early there too, and the two must agree or E7 is
-  // half-unblocked by the back door (its note about recursing into `index.expr`
-  // applies here identically when it lands).
-  const parts = fieldPath(expr);
-  if (parts === null) return 'any';
+  // A reference. `refRoot` is the SSOT for segmentation — never split `source`.
+  const root = refRoot(leadingFields(expr.segments));
+  if (root === null) return 'any'; // unresolvable — already reported
 
-  if (parts[0] === 'item') return 'any'; // element shape is run-time-only (E4)
+  // A DEEP path is `any` (#6 E7, spec L111): it addresses into a `json`/`any`
+  // value, which has no element type to infer (E4). `assignableTo` waves `any`
+  // through both ways, so the escape hatch never false-rejects downstream — the
+  // walk validates it at run time instead.
+  if (expr.segments.length > root.arity) return 'any';
+  return refRootType(root, scope);
+}
 
-  if (parts[0] === 'params' && parts.length === 2) {
-    const decl = scope.declared.get(parts[1] as string);
-    // Undeclared (reported) and secret (reported, and never substituted) both
-    // fall to `any` rather than manufacturing a second error.
-    return decl === undefined ? 'any' : sigOfDeclared(decl.type);
+/**
+ * The static type of a reference's ROOT value — before any deep addressing.
+ *
+ * Split out of `inferExprType` at E7 because the SCALAR-ROOT rule needs it: a
+ * deep path is FOR a `json`/`any` root (spec L48), so `checkExprStatic` must ask
+ * for the root's own type even where the whole expression infers `any`.
+ */
+function refRootType(root: RefRoot, scope: ScanScope): SigType {
+  switch (root.kind) {
+    case 'item':
+      return 'any'; // element shape is run-time-only (E4)
+    case 'params': {
+      const decl = scope.declared.get(root.name);
+      // Undeclared (reported) and secret (reported, and never substituted) both
+      // fall to `any` rather than manufacturing a second error.
+      return decl === undefined ? 'any' : sigOfDeclared(decl.type);
+    }
+    case 'nodeOutput': {
+      const declared = scope.outputsById?.get(root.id);
+      // No contract (`null`), producer not in the map, or a name the producer
+      // does not declare (reported already) → no static type.
+      if (declared == null) return 'any';
+      const out = declared.find((d) => d.name === root.name);
+      return out === undefined ? 'any' : sigOfDeclared(out.type);
+    }
+    // A status is the STRING 'success'|'failure'|'skipped' — typed even when it
+    // is unavailable here (availability is a separate, already-reported
+    // question). This is what makes a bare `${nodes.x.status}` a rejectable
+    // `exitWhen`.
+    case 'nodeStatus':
+      return 'string';
+    // Every `RUN_FIELDS` member is a string. `triggerId`/`parentRunId` are seeded
+    // `null` by the reducer today (#5 owns the real seed), and typing them `any`
+    // instead would be strictly WEAKER, not safer: `any` additionally accepts
+    // `${add(run.triggerId, 1)}`, and the run-time null throws under either
+    // typing. The nullability gap is #5's to close, and no static type here can
+    // paper over it — `SigType` has no null.
+    case 'run':
+      return (RUN_FIELDS as readonly string[]).includes(root.field) ? 'string' : 'any';
   }
-
-  if (parts[0] === 'nodes' && parts.length === 4 && parts[2] === 'output') {
-    const declared = scope.outputsById?.get(parts[1] as string);
-    // No contract (`null`), producer not in the map, or a name the producer does
-    // not declare (reported already) → no static type.
-    if (declared == null) return 'any';
-    const out = declared.find((d) => d.name === parts[3]);
-    return out === undefined ? 'any' : sigOfDeclared(out.type);
-  }
-
-  // A status is the STRING 'success'|'failure'|'skipped' — typed even when it is
-  // unavailable here (availability is a separate, already-reported question).
-  // This is what makes a bare `${nodes.x.status}` a rejectable `exitWhen`.
-  if (parts[0] === 'nodes' && parts.length === 3 && parts[2] === 'status') return 'string';
-
-  // Every `RUN_FIELDS` member is a string. `triggerId`/`parentRunId` are seeded
-  // `null` by the reducer today (#5 owns the real seed), and typing them `any`
-  // instead would be strictly WEAKER, not safer: `any` additionally accepts
-  // `${add(run.triggerId, 1)}`, and the run-time null throws under either
-  // typing. The nullability gap is #5's to close, and no static type here can
-  // paper over it — `SigType` has no null.
-  if (parts[0] === 'run' && parts.length === 2) {
-    return (RUN_FIELDS as readonly string[]).includes(parts[1] as string) ? 'string' : 'any';
-  }
-
-  return 'any'; // unresolvable — already reported
 }
 
 /**
@@ -1299,27 +1487,94 @@ function checkExprStatic(
     return;
   }
 
-  // A reference. `segments` is the SSOT — never split `source` (a quoted index
-  // `m['b.c']` is one segment but two dot-parts). A ref carrying an `[]` index
-  // is refused REGARDLESS of `softOk`: E7 owns resolving it, and letting
-  // `default()`'s soft path accept it would validate a doc clean today that
-  // silently changes meaning when E7 lands.
-  //
-  // E7 NOTE: this returns before walking an index's OWN sub-expression, so
-  // `${nodes.n.output.rows[params.tok]}` currently reports only the E7 refusal.
-  // When E7 makes these resolvable it MUST recurse into each `index.expr`, or
-  // the secret-param rule below gains a hole (a secret-typed `${params.tok}`
-  // hidden inside an index would go unreported).
-  const parts = fieldPath(expr);
-  if (parts === null) {
-    errors.push(`${where}: ${deferredToE7(expr.source).message}`);
+  // A reference. `refRoot` is the SSOT for what a path names (never split
+  // `source`: a quoted index `m['b.c']` is one segment but two dot-parts).
+  const root = refRoot(leadingFields(expr.segments));
+  if (root === null) {
+    // Includes an index in the ROOT region (`${nodes[params.i].output.x}`):
+    // `leadingFields` stops at the first index, so nothing matches. Refused at
+    // save AND run, so the secret rule needs no recursion here — an index expr
+    // in the root region never resolves. Only a TAIL index does; see below.
+    errors.push(`${where}: unresolvable reference \${${expr.source}}`);
     return;
   }
+  const tooDeep = pathDepthDefect(expr);
+  if (tooDeep !== null) {
+    errors.push(`${where}: ${tooDeep}`);
+    return;
+  }
+  const tail = expr.segments.slice(root.arity);
+
+  // #6 E7 — WALK EVERY TAIL INDEX EXPR. Pre-E7 this branch returned before
+  // reaching an index's own sub-expression, which was sound only while the ref
+  // itself was refused. Now that `[]` RESOLVES, skipping the recursion would put
+  // a real hole in the rules below: a secret-typed `${params.tok}` smuggled into
+  // `${nodes.a.output.rows[params.tok]}` would go unreported.
+  //
+  // `softOk`/`itemInScope` are THREADED from this ref's own position, mirroring
+  // the runtime exactly: `default`'s `ev.soft` wraps the WHOLE arg-0 evaluation,
+  // so a `MissingValueError` raised from an index expr IS rescued at run — and
+  // forcing `false` here would manufacture a false-reject.
+  for (const seg of tail) {
+    if (seg.kind !== 'index') continue;
+    checkExprStatic(seg.expr, scope, errors, where, softOk, itemInScope);
+    // And TYPE it. `stepIndex` refuses a non-number/non-string index for EVERY
+    // container shape, before it even splits array-vs-object, so an index whose
+    // type is statically KNOWN to be boolean/array can never resolve for any
+    // data — a TRUE-reject, exactly like the scalar-root rule below, and the
+    // same call the sibling arg-typing 40 lines up already makes.
+    //
+    // `number`/`string`/`any` all stay open, and that is not conservatism: the
+    // indexed value is `any`, so it may be an OBJECT at run and a string index
+    // its key. `assignableTo` cannot express the `number|string` union, hence the
+    // explicit test.
+    const idxType = inferExprType(seg.expr, scope);
+    if (idxType !== 'any' && idxType !== 'number' && idxType !== 'string') {
+      errors.push(
+        `${where}: \${${expr.source}} — an index must be a number or a string, got ${idxType}`,
+      );
+    }
+  }
+
+  checkRefRoot(expr, root, scope, errors, where, softOk, itemInScope);
+
+  // #6 E7 — the SCALAR-ROOT rule. Deep addressing is FOR a `json`/`any` value
+  // (spec L48: "deep [] / . into a json-typed output = any"). A root whose type
+  // is statically KNOWN to be a scalar can never carry a sub-path, so this is a
+  // TRUE-reject, not a conservative one: `matchesType` enforces the declared type
+  // at `node.succeeded`, so a `string`-declared output cannot hold an object, and
+  // `run.*`/`.status` are strings by construction. The run-time walk refuses the
+  // same shapes (`stepField`/`stepIndex`), so the rule has both halves.
+  //
+  // A declared `OutputType` is never `array` (it is `ParamType` minus `secret`),
+  // so for a REF the root type is always one of string|number|boolean|any and the
+  // `array` case cannot arise here.
+  if (tail.length > 0) {
+    const rootType = refRootType(root, scope);
+    if (rootType !== 'any') {
+      errors.push(
+        `${where}: \${${expr.source}} — deep addressing needs a json/any value, ` +
+          `but this one is a ${rootType}`,
+      );
+    }
+  }
+}
+
+/** The availability/declaration rules for a ref's ROOT (`refRoot`'s kinds). */
+function checkRefRoot(
+  expr: Extract<Expr, { kind: 'ref' }>,
+  root: RefRoot,
+  scope: ScanScope,
+  errors: string[],
+  where: string,
+  softOk: boolean,
+  itemInScope: boolean,
+): void {
   // `${item}` (#6 E4) — legal ONLY inside a lambda arg. The ELEMENT'S OWN shape
   // is not checked here: the type vocabulary has no element type, so a misspelled
   // `${item.badField}` is a run-time throw, not an edit-time error (E4's recorded
   // decision — E6 + #2's `OutputSpec` own closing that gap).
-  if (parts[0] === 'item') {
+  if (root.kind === 'item') {
     if (!itemInScope) {
       errors.push(
         `${where}: \${${expr.source}} — 'item' is only bound inside a ` +
@@ -1328,8 +1583,8 @@ function checkExprStatic(
     }
     return;
   }
-  if (parts[0] === 'params' && parts.length === 2) {
-    const name = parts[1] as string;
+  if (root.kind === 'params') {
+    const name = root.name;
     const decl = scope.declared.get(name);
     if (decl === undefined) {
       errors.push(`${where}: \${params.${name}} is not a declared param`);
@@ -1341,9 +1596,9 @@ function checkExprStatic(
     }
     return;
   }
-  if (parts[0] === 'nodes' && parts.length === 4 && parts[2] === 'output') {
-    const id = parts[1] as string;
-    const name = parts[3] as string;
+  if (root.kind === 'nodeOutput') {
+    const id = root.id;
+    const name = root.name;
     // req (c): reject an output NAME the producer does not declare. A bare ref
     // to an absent output can only throw at run time (dispatch-prep fails), so
     // it is invalid regardless of dominance. EXCLUDED inside `default()`'s
@@ -1364,20 +1619,20 @@ function checkExprStatic(
     // output wrapped in another fn call inside that first arg (e.g.
     // `default(slug(nodes.x.output.v), "fb")`) is statically rejected even
     // though `evalExpr`'s `default` case would actually catch the resulting
-    // `MissingNodeOutputError` at runtime and fall back correctly (the arg is
+    // `MissingValueError` at runtime and fall back correctly (the arg is
     // evaluated as a whole before the absence check). Over-refusing here is
     // safe (never a false-accept); a pipeline author must reference the bare
     // node output as `default`'s first arg to satisfy the static checker.
     if (softOk && (scope.reachable.has(id) || scope.soft.has(id))) return;
     if (scope.reachable.has(id) || scope.soft.has(id)) {
       errors.push(
-        `${where}: \${nodes.${id}.output.${parts[3]}} is not guaranteed here — ` +
+        `${where}: \${nodes.${id}.output.${name}} is not guaranteed here — ` +
           'wrap it in default() (it is reachable only on a failure/completion ' +
           'branch or a loop round, or does not dominate this node)',
       );
     } else {
       errors.push(
-        `${where}: \${nodes.${id}.output.${parts[3]}} does not name an upstream ` +
+        `${where}: \${nodes.${id}.output.${name}} does not name an upstream ` +
           'node (a self, downstream, or unrelated node has no output here)',
       );
     }
@@ -1390,12 +1645,13 @@ function checkExprStatic(
   // expressible at all.
   //
   // `softOk` is deliberately IGNORED: `default()` only rescues a
-  // `MissingNodeOutputError`, and `resolveRef` raises a plain `SubstituteError`
+  // `MissingValueError`, and `resolveRoot` raises a plain `SubstituteError`
   // for an unsettled status, so relaxing the check inside `default()` would
   // accept a doc at save that still THROWS at run — a manufactured false-accept
-  // with no escape hatch (same reasoning as the E7 refusal above).
-  if (parts[0] === 'nodes' && parts.length === 3 && parts[2] === 'status') {
-    const id = parts[1] as string;
+  // with no escape hatch (the same call E3 made, and the reason the SHAPE half
+  // of E7's walk is likewise never rescuable).
+  if (root.kind === 'nodeStatus') {
+    const id = root.id;
     if (scope.settled.has(id)) return;
     if (scope.reachable.has(id) || scope.soft.has(id)) {
       errors.push(
@@ -1411,15 +1667,11 @@ function checkExprStatic(
     }
     return;
   }
-  if (parts[0] === 'run' && parts.length === 2) {
-    if (!(RUN_FIELDS as readonly string[]).includes(parts[1] as string)) {
-      errors.push(
-        `${where}: \${run.${parts[1]}} is not a known run field (${RUN_FIELDS.join(', ')})`,
-      );
-    }
-    return;
+  if (!(RUN_FIELDS as readonly string[]).includes(root.field)) {
+    errors.push(
+      `${where}: \${run.${root.field}} is not a known run field (${RUN_FIELDS.join(', ')})`,
+    );
   }
-  errors.push(`${where}: unresolvable reference \${${expr.source}}`);
 }
 
 // --- the graph / dominance helper -------------------------------------------

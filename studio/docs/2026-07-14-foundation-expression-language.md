@@ -42,10 +42,10 @@ dynamic/dynamic-name sub-fields (ADF parity: `nodes.x.output.rows[params.i].sku`
 
 | Namespace | Resolves to | Notes |
 | --- | --- | --- |
-| `params.<name>` | pipeline parameter (read-only in run) | typed; default < trigger < run-now override |
+| `params.<name>[.deep]` | pipeline parameter (read-only in run) | typed; default < trigger < run-now override. **AMENDED at E7:** a `json` param takes a deep `[]`/`.` path on the same terms as a `json` output — the rule is the root's TYPE, not its namespace |
 | `vars.<name>` | pipeline variable (mutable) | #1 D2; typed |
 | `global.<name>` | workspace global param (read-only) | #1 D3; secure globals resolve ONLY at secret sinks (#1 D8) |
-| `nodes.<id>.output[.deep]` | an upstream node's typed outputs | deep `[]`/`.` into a `json`-typed output = `any` (runtime-validated) unless the output declares a schema |
+| `nodes.<id>.output[.deep]` | an upstream node's typed outputs | deep `[]`/`.` into a `json`-typed output = `any` (runtime-validated) unless the output declares a schema. **SHIPPED at E7**; a statically-known SCALAR root (a `string`-typed output, `run.*`, `.status`) carries no deep path — see the E7 block. The "declares a schema" clause is vacuous today: no sub-schema surface exists (#2's `OutputSpec` owns it) |
 | `nodes.<id>.status` | `success \| failure \| skipped` | **NEW (T6)** — enables the ADF `@activity().Status` fan-in/OR pattern. **SHIPPED at E3**; readable only where the node is *guaranteed settled* — see the E3 block below |
 | `run.<field>` | run system vars: `runId`, `startedAt`, `pipelineVersionId`, `triggerId`, `parentRunId` | **NEW (T2/C3)**. **SHIPPED at E3** — `RUN_FIELDS` in `engine/params.ts` is the SSOT; `attempt` is SCOPE-OUT: `NodeRunState.attempts` already exists (incremented by `onRetryRequested`), but it is NODE-scoped while `buildCtx` is RUN-scoped, so exposing it needs a per-node binding decision — #1 D4 |
 | `pipeline.<field>` | `name`, `version`, `triggerType`, `triggerName?`, `triggerTime?` | **NEW** — ADF `@pipeline().*` |
@@ -110,6 +110,12 @@ its own dispatch stamp) — documented; use `${run.startedAt}` for a run-stable 
   `boolean`; a `foreach.items` must be an array).
 - **Deep `[]`/`.` into a `json`/`any` output** is `any` — not statically typed; documented as a
   runtime-validated escape hatch (parity with ADF's untyped `@activity().output.x`).
+  - **SHIPPED at E7 (2026-07-15, implemented).** `any` in, `any` out: `assignableTo` waves it
+    through both ways, so a deep ref never false-rejects downstream and the walk validates it at
+    run time. The converse is a TRUE-reject and is enforced: a root whose type is statically KNOWN
+    to be a scalar can never carry a sub-path (`matchesType` enforces the declared type at
+    `node.succeeded`, so a `string`-declared output cannot hold an object), so `${…title.foo}`,
+    `${run.runId.foo}` and `${nodes.a.status.foo}` are refused at save AND at run.
 - **Structured diagnostics** (which node/field/token) are the deferred R3/U8b work; v1 emits
   whole-doc plus best-effort node attribution (challenge T14/I10 notes the UI limit).
 - **Validation profiles (T2/monitor):** `validateRefs` runs in a *context* — a generic-pipeline
@@ -138,7 +144,7 @@ its own dispatch stamp) — documented; use `${run.startedAt}` for a run-stable 
 | E4 | Function catalog impl + per-fn type signatures (logical/string/collection/conversion/math) — **SHIPPED 2026-07-15**: the closed catalog lives in `engine/functions.ts` (SSOT, one entry per fn) and the CALLING CONVENTION is now DATA (`call: 'eager' \| 'special'`, `lambdaArgs`, `staticSoftArg`) read by BOTH the evaluator and the static checker, so neither special-cases a fn by name. `and`/`or`/`if` short-circuit; `filter`/`map`/`count` bind `${item}` per element; `count` is arity-overloaded. See the E4 block below. |
 | E5 | Date fns + dispatch-stamped time — **SPLIT 2026-07-15. E5a SHIPPED:** the 12 date fns that take an EXPLICIT timestamp (`formatDateTime addDays addHours addMinutes addSeconds addToTime subtractFromTime startOfDay startOfHour startOfMonth dayOfWeek dayOfMonth`), all UTC, all pure — `${run.startedAt}` (E3) is the run-stable source. See the E5a block below. **E5b FILED as #450 (`needs-design`):** `utcNow()` binds a `node.dispatched` stamp that DOES NOT EXIST — the reducer resolves node config in `prepInput` at the `pending→ready` transition, strictly BEFORE the executor yields `node.dispatched` (which carries no timestamp field at all), and `onDispatched` never re-preps. Binding it needs a dispatch-handshake change to crash-safety-critical code, so it is an operator-gated call, not an unattended one. `pipeline.*` from seed remains blocked on #5 + the doc widening E3 recorded. |
 | E6 | `validateRefs` typing: infer expr type, check against field-expected type; boolean-condition + array-items checks — **SHIPPED 2026-07-15**: `inferExprType` (`params.ts`) types every literal/ref/call, and `checkExprStatic` now checks each fn ARG against `spec.args` at save — the save-time mirror of run-time `checkArgTypes`, reading the same signature data through one shared `argSigAt`. `exitWhen` gains its BOOLEAN field check (save) **and** `evalExitWhen`'s `out === 'true'` coercion is REMOVED (run) — both halves, per E2's rule. E4's declared `ret` is load-bearing for the first time — which forced `number` to mean FINITE at all three boundaries (`coerce`/`matchesType` admitted `Infinity`; `matchesSig` never did). See the E6 block below for the recorded deviations. |
-| E7 | Deep `[]`/`.` addressing into `json`/`any` outputs (runtime-validated escape hatch) |
+| E7 | Deep `[]`/`.` addressing into `json`/`any` outputs (runtime-validated escape hatch) — **SHIPPED 2026-07-15**: `[]` parsed since E1 but every index-bearing ref was refused; it now RESOLVES. `refRoot` in `params.ts` is the SSOT for what a path NAMES and where its root ENDS (read by the evaluator, the static checker AND E6's inference, which each re-derived it before), and ONE `walkPath` serves every root — so E4's bespoke `item` walk is gone. The rule is the root's TYPE, not its namespace: a deep tail is legal on a `json`/`any` root ONLY (a `json` param included), and a statically-known scalar root carries none. `MAX_PATH_DEPTH` is the third resource cap. See the E7 block below. |
 | E8 | Validation profiles (generic vs trigger-binding) + `${trigger.*}` context-scoping (with #5) |
 
 ## Round-2 hardening (folded from validation)
@@ -381,6 +387,115 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
     run would make it a character-by-character oracle: `'ghp_aBc…'` → "'g' is not a format token".)
   - **No new resource cap.** These return scalars/strings and allocate nothing array-shaped; the
     array caps are irrelevant here and max resolved-value size stays OUT (E7/general).
+- **E7 deep addressing — the decisions (2026-07-15, implemented).** E1 parsed `[]` into `segments`
+  and left `params.ts` refusing every index-bearing ref; E7 resolves it. The rule is the root's
+  TYPE, not its namespace — refusing a `json` PARAM's deep path while allowing a `json` OUTPUT's
+  would be a second, arbitrary rule, so `${params.cfg.host}` works and the namespace table's
+  `params` row is amended to match.
+  - **`refRoot` is the SSOT for what a path names and where its root ENDS**, read by all THREE
+    consumers (evaluator, static checker, E6 inference). Each previously re-derived its own
+    `parts[0]==='nodes' && parts.length===4 && parts[2]==='output'`; E7 has to turn every one from
+    `===N` into `>=N`, and three copies of one new invariant is the drift `typing.test.ts`'s
+    "inference MUST agree with checkExprStatic" test exists to catch. ONE `walkPath` likewise
+    replaces E4's bespoke `item` walk — `item` and a node output cannot drift about `.`.
+  - **The ROOT region is FIELDS ONLY.** `${nodes[params.i].output.x}` is refused: a dynamic output
+    name would defeat the declared-name check (only enforceable against a literal), and a dynamic
+    namespace/node id is meaningless. Consequence, recorded: an output name containing `.`/`[`/`]`
+    stays unaddressable (as before E7 — the grammar reserves those chars). This is also why the
+    secret rule needs no recursion there: a root-region index never resolves.
+  - **The error CLASS carries the escape hatch's whole safety story**, and the line is DATA ABSENCE
+    vs DOC DEFECT — which is what E3/E4 were actually reasoning about when they refused to route a
+    status race or an unbound `item` through the rescue class:
+    - **MISSING → `MissingValueError` (rescuable by `default()`):** an absent own property, an
+      out-of-range index, or a step onto `null`/`undefined`. A deep path has NO static safety (E4:
+      `SigType` has no element type), so `default()` is the author's ONLY tool, and a missing key
+      IS the normal case for an untyped JSON body. The `null` case is not optional polish:
+      `isAbsent` already treats `null` as absent, so `${default(nodes.a.output.body.opt,'fb')}` is
+      `'fb'` today — classing a null INTERMEDIATE as SHAPE would make
+      `${default(…body.opt.x,'fb')}` throw for `{opt:null}` but return `'fb'` for `{opt:{}}`:
+      identical author intent, class decided by whether the API omits the key or spells it `null`.
+    - **SHAPE → plain `SubstituteError` (never rescued):** a field on a scalar or an ARRAY, an
+      index into a scalar, a negative/fractional/non-number array index. The DOC is wrong, not the
+      data; masking it would hide a defect whose fix is to edit the doc.
+    - Returning `undefined` for a miss was REFUSED: `toStr(undefined)===''`, so a bare
+      `${nodes.a.output.body.typo}` would emit an empty string and call it a result.
+    - `MissingNodeOutputError` is RENAMED `MissingValueError` — it now covers misses in a `json`
+      param and a bound `item`, neither of which is a node output, so the old name lied about three
+      of its four sites. Still private (the catalog gets a yes/no via `EvalIn.soft`, never a class).
+  - **A NULL or NON-FINITE index is refused, never coerced** — one rule, two reachable spellings of
+    the same silent-wrong-key hazard, both refused BEFORE the array/object split:
+    - `toStr(null)` is `''` and `run.triggerId` is seeded literal `null` for EVERY run today, so
+      `${params.cfg[run.triggerId]}` would silently look up the own property `''`;
+    - `String(Infinity)` is `'Infinity'`, and **`1e999` is valid JSON** — so a `json` param or an
+      HTTP body carries `Infinity` straight through `JSON.parse` and
+      `${params.cfg[params.body.n]}` would key the property spelled `Infinity`. This is E6's own
+      recorded rule (`number` means FINITE at every boundary) applied to E7's new boundary.
+    A null is never a key. (The array branch reports a bad index with `String`, not
+    `JSON.stringify`: the latter renders a non-finite number as `null`, so an Infinity index would
+    have reported the baffling "got null".)
+  - **An index is TYPED at save, not only at run.** `stepIndex` refuses a non-number/non-string
+    index for EVERY container shape, so an index whose inferred type is statically KNOWN to be
+    `boolean`/`array` can never resolve for any data — a TRUE-reject, the same call the sibling
+    arg-typing already makes, and the same both-halves rule E2 set. `number`/`string`/`any` all stay
+    open, and that is NOT conservatism: the indexed value is `any`, so it may be an OBJECT at run
+    and a string index its key.
+  - **Known asymmetry, recorded:** an out-of-range index is MISSING (rescuable) but a NEGATIVE or
+    FRACTIONAL one is SHAPE (not), even though both can come from DATA
+    (`${default(nodes.a.output.rows[params.off],'fb')}` falls back for `off=9` and throws for
+    `off=-1`). The line is deliberate — `rows[9]` asks for an element that could have been there,
+    while `rows[-1]` is not an index at all — but it is the one place the class is decided by the
+    index's SHAPE rather than the data's variance, so a later ticket should know it was seen.
+  - **The walk's `typeof`/array guards are LOAD-BEARING, not defensive tidying** (measured, not
+    reasoned): a primitive BOXES, so `hasOwnProperty('abc','length')` is TRUE and `('abc')[0]` is
+    `'a'` — without the `typeof cur === 'object'` guard, `${run.runId[0]}` resolves to `'r'` and
+    `${nodes.a.output.text.length}` to a number, handing back host object surface as resolved node
+    config. `hasOwnProperty([],'length')` is TRUE too, so an array needs its OWN guard or
+    `${…rows.length}` becomes an accidental alias for the catalog's `length()`.
+  - **Two accidental capabilities of E4's item walk are NARROWED, pinned by test** so a later
+    ticket does not "fix" them back: `${item.length}` (see above) and `${item.0}` — a field NEVER
+    applies to an array; `[]`, which E7 adds, is the designed form for both. Neither was designed,
+    tested or documented (E4 shipped 2026-07-15, one day before).
+  - **A JSON-own `__proto__` RESOLVES as ordinary data.** `JSON.parse('{"__proto__":{…}}')` creates
+    an OWN `__proto__` property (verified), and node outputs / `json()` results ARE `JSON.parse`
+    output — so this is data, not the prototype. The walk is READ-ONLY (it never assigns), so there
+    is no pollution vector, and refusing it would make a legitimate payload unreadable. The
+    prototype CHAIN is still never walked (`hasOwnProperty({},'constructor')` is false).
+  - **Inertness holds by construction:** the walk SELECTS a sub-value of an already-resolved value
+    and never re-parses it, so a deep-resolved `"${secret}"` is still emitted literally.
+  - **`MAX_PATH_DEPTH = 64` — the third resource cap, and NOT decorative.** The first E7 plan
+    omitted it, arguing the E1 parser already pays O(path length) so capping the walk saves nothing.
+    That was REFUTED and the refutation measured — record the reasoning, because the cap looks
+    redundant until you see why it isn't:
+    - the parse happens ONCE; a path inside a lambda arg is re-walked ONCE PER ELEMENT, and ~50k
+      lambda invocations fit inside the shipped element budget;
+    - `charge()` counts ARRAYS ONLY, so a deep path resolving to a SCALAR spends NOTHING against
+      `MAX_ARRAY_ELEMENTS_TOTAL` — **the array budget cannot see this work at all**. (Nor does an
+      intermediate array TRAVERSED by an index get charged: selection is O(1), not a scan. That is
+      correct, and it is precisely the gap this cap covers — the two are recorded together.)
+    - "N-deep data is bounded by the payload" is false: `JSON.parse` accepts **50,000-deep** nesting
+      from a 300KB body, and a `json` param takes any parsed value as-is off a run-now override.
+    - measured against the guarded walk: depth 5,000 × 50k invocations = 2.5e8 lookups (~1.1s);
+      depth 20,000 = 1e9 (~4.4s) of blocked PURE reducer, per field — from a doc `validateRefs`
+      never saw (#444: advisory, and the server never calls it, so a git import or a direct POST
+      arrives unvalidated). The same hostile-doc threat model that justified `MAX_ARRAY_ELEMENTS`.
+    - 64 sits in a WIDE safe band: the deepest path this spec itself writes is 6 segments, so it
+      false-rejects nothing a human authors while bounding the pathological walk to ~17ms. The
+      "decorative vs false-rejecting" dichotomy was false — a cap low enough to bind on real JSON
+      (say 16) would be a false-reject with NO workaround (a path cannot be split across calls).
+    - Enforced at BOTH halves (save + run) per E2's rule, since `validateRefs` is advisory.
+    - **SCOPE — it bounds the per-REFERENCE path axis ONLY** (`${a.b.c…}`). Expression NESTING
+      (`${add(1,add(1,…))}`) is an orthogonal axis, is bounded by no cap, and overflows the stack at
+      ~2000 levels — where `validateRefs` throws a RAW `RangeError` despite being a pure validator
+      that contracts to RETURN errors. PRE-EXISTING (E1's recursive parser is the first wall, and it
+      recurses to build the AST before any checker sees it), so E7 adds a door to a room that was
+      already open, not the room: **filed as #453**, with a `MAX_EXPR_DEPTH` in `parseExpr` as the
+      suggested fix. The reducer contains the run-time half (`prepInput`'s catch → `prepFailure`).
+  - **`max resolved-value size` stays OUT — E7 is the WRONG OWNER.** Deep addressing only ever makes
+    a value SMALLER (it SELECTS a sub-value); the largest resolved value comes from a NON-deep ref
+    (`${nodes.http.output.body}`, live since P2a). It remains a general concern, not this ticket's.
+  - **Spec line 48's "unless the output declares a schema" is VACUOUS today** — `OutputSchema` is
+    `{name,type,description?}`; there is no sub-schema surface. The element shape is #2's
+    `OutputSpec` work, which E4 and E6 both recorded a refusal to front-run. Not forgotten: absent.
 - **SSOT bug — FIXED at E3 (2026-07-15, implemented).** Was: the spec's example expressions use
   `run.runId`/`run.startedAt`, but the shipped `RUN_FIELDS = [id, pipelineVersionId, triggerId,
   parentRunId]` — `runId` was `id` and `startedAt` didn't exist, so the dynamic-filename expression
@@ -429,7 +544,7 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
   - **Vocabulary is the TERMINAL set only.** `TerminalNodeStatusSchema` in `engine/types.ts` is the
     SSOT, shared with the reducer's `EndpointOutcome` so they cannot drift. A live status
     (`pending`/`ready`/`dispatched`/`waiting`) is a RACE, not a value → run-time **throw**.
-  - **The throw is a plain `SubstituteError`, never `MissingNodeOutputError`** — `default()` catches
+  - **The throw is a plain `SubstituteError`, never `MissingValueError`** (renamed at E7) — `default()` catches
     the latter, so routing through it would let `${default(nodes.a.status,'none')}` silently report a
     verdict the run never reached. For the same reason the save-time check **ignores `softOk`**:
     relaxing inside `default()` would accept a doc that still throws at run, with no escape hatch.

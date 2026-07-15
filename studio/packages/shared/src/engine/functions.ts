@@ -179,6 +179,39 @@ export const MAX_ARRAY_ELEMENTS = 10_000;
  */
 export const MAX_ARRAY_ELEMENTS_TOTAL = 100_000;
 
+/**
+ * Cap on a reference's PATH LENGTH — `${a.b[0].c}` is 4 segments (#6 E7).
+ *
+ * The third of spec #6's three "Resource limits" caps. It lives here beside the
+ * other two, but — exactly like `MAX_ARRAY_ELEMENTS_TOTAL` — it is ENFORCED in
+ * `params.ts`, at both halves of the rule: `resolveRef` (run time) and
+ * `checkExprStatic` (save time).
+ *
+ * It is NOT decorative, and the array budget does NOT already cover it:
+ *  - `charge()` counts ARRAYS ONLY, so a deep path resolving to a SCALAR spends
+ *    NOTHING against `MAX_ARRAY_ELEMENTS_TOTAL` — the walk is invisible to it;
+ *  - a path inside a lambda arg is re-walked ONCE PER ELEMENT (`withItem`), and
+ *    ~50k lambda invocations fit inside the shipped element budget;
+ *  - the walk only stops early on a non-object, and deep DATA is cheap to come
+ *    by: `JSON.parse` accepts 50,000-deep nesting from a 300KB body, and a
+ *    `json` param takes any already-parsed value as-is off a run-now override.
+ * Measured against the guarded walk: depth 5,000 x 50k invocations = 2.5e8
+ * lookups (~1.1s); depth 20,000 = 1e9 lookups (~4.4s) — of blocked PURE reducer,
+ * per field, from a doc `validateRefs` never saw (#444: it is advisory, and the
+ * server never calls it, so a git import or a direct POST arrives unvalidated).
+ * That is the same hostile-doc threat model that justified `MAX_ARRAY_ELEMENTS`.
+ *
+ * 64 sits in the wide safe band between the two failure modes: the deepest path
+ * spec #6 itself writes is 6 segments (`nodes.x.output.rows[params.i].sku`), so
+ * it false-rejects nothing a human authors, while bounding the pathological walk
+ * to ~17ms. A cap low enough to bind on real JSON (say 16) would be a false
+ * reject with NO author workaround — a path cannot be split across calls.
+ *
+ * Pure + deterministic (it reads the AST's shape, never data), so replay is
+ * unaffected.
+ */
+export const MAX_PATH_DEPTH = 64;
+
 // --- shared coercion helpers (moved here from params.ts: the catalog needs them
 // at module-init, and `substitute` imports `toStr` back for embedded refs) -----
 

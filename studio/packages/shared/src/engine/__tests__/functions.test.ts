@@ -135,8 +135,39 @@ describe('item scoping', () => {
     expect(errs).toEqual([]);
   });
 
-  it('${item[0]} is refused (E7 owns [] addressing)', () => {
-    expect(() => substitute('${map(params.nums, item[0])}', rows)).toThrow(/E7|\[\]/);
+  it('${item[0]} indexes the element (#6 E7 — `[]` now resolves)', () => {
+    // Pre-E7 this was refused with a message about "an output", which `item` is
+    // not — a misattribution E4 recorded and E7 owns fixing. `[]` binds the same
+    // element as `.`, so an array-of-arrays element indexes naturally.
+    const grid = ctx({ params: { grid: [['a1', 'a2'], ['b1']] } });
+    expect(substitute('${map(params.grid, item[0])}', grid)).toEqual(['a1', 'b1']);
+  });
+
+  it('${item.length} / ${item.0} on an array are REFUSED (#6 E7 narrowed them)', () => {
+    // E4's item walk let a FIELD segment address an array, so `${item.length}`
+    // aliased the catalog's length() and `${item.0}` was a second way to index —
+    // both accidental (hasOwnProperty([], 'length') is true), neither designed.
+    // E7's unified walk refuses a field on an array; `[]` is the one way.
+    // Pinned HERE, on `item` itself, because the recorded worry is a later ticket
+    // re-adding an item-SPECIFIC branch — which a nodes.*-rooted test would miss.
+    const grid = ctx({ params: { grid: [['a1', 'a2']] } });
+    expect(() => substitute('${map(params.grid, item.length)}', grid)).toThrow(/array/);
+    expect(() => substitute('${map(params.grid, item.0)}', grid)).toThrow(/array/);
+    expect(substitute('${map(params.grid, length(item))}', grid)).toEqual([2]); // designed forms
+    expect(substitute('${map(params.grid, item[0])}', grid)).toEqual(['a1']);
+  });
+
+  it('${default(item.maybe, "fb")} rescues an absent field (#6 E7 error classes)', () => {
+    // A deliberate change: pre-E7 a missing field on a BOUND item threw plainly.
+    // E7's class line is DATA ABSENCE vs DOC DEFECT — a heterogeneous json array
+    // legitimately varies, so `default()` must rescue it. An UNBOUND `item` stays
+    // a plain (unrescuable) SubstituteError: that is a scope defect, not absence.
+    const rows = ctx({ params: { rows: [{ sku: 'S1' }, {}] } });
+    expect(substitute("${map(params.rows, default(item.sku, 'none'))}", rows)).toEqual([
+      'S1',
+      'none',
+    ]);
+    expect(() => substitute("${default(item.sku, 'none')}", rows)).toThrow(/only bound inside/);
   });
 
   it('resolves OWN properties only — never through the prototype chain', () => {

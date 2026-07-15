@@ -16,6 +16,7 @@ import {
   validateRefs,
   validateWholeValue,
 } from '../params.js';
+import { MAX_PATH_DEPTH } from '../functions.js';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -131,7 +132,7 @@ describe('substitute — ${nodes.<id>.status}', () => {
   });
 
   // A status error is a plain SubstituteError, NOT the internal
-  // MissingNodeOutputError that `default()` catches — otherwise `default()`
+  // MissingValueError that `default()` catches — otherwise `default()`
   // would silently paper over a genuine race/typo with its fallback.
   it('is NOT swallowed by default()', () => {
     const c = ctx({ nodeStatuses: { a: 'dispatched' } });
@@ -277,7 +278,7 @@ describe('substitute — escape / malformed / typing', () => {
 });
 
 // ===========================================================================
-// #6 E1 — literals evaluate; `[]` addressing parses but defers to E7
+// #6 E1 — literals evaluate (`[]` addressing is E7's, below)
 // ===========================================================================
 
 describe('substitute — literal expressions (#6 E1)', () => {
@@ -306,23 +307,250 @@ describe('substitute — literal expressions (#6 E1)', () => {
   });
 });
 
-describe('substitute — `[]` deep addressing defers to E7 (#6 E1)', () => {
-  const deep = ctx({ nodeOutputs: { a: { rows: [{ sku: 'S1' }] } }, params: { i: 0 } });
+// ===========================================================================
+// #6 E7 — deep `[]`/`.` addressing (the runtime-validated escape hatch)
+//
+// E1 parsed `[]` into `segments` and `params.ts` refused any index-bearing ref
+// outright; E7 RESOLVES it. Spec #6 L40-41 ("Path supports dot access and `[]`
+// bracket access for array indices and dynamic/dynamic-name sub-fields — ADF
+// parity: nodes.x.output.rows[params.i].sku") + L111-112 ("Deep `[]`/`.` into a
+// `json`/`any` output is `any` — a runtime-validated escape hatch").
+// ===========================================================================
 
-  it('THROWS a plain SubstituteError naming E7 (never resolves half-way)', () => {
-    expect(() => substitute('${nodes.a.output.rows[0]}', deep)).toThrow(/E7/);
-    expect(() => substitute('${nodes.a.output.rows[params.i].sku}', deep)).toThrow(/E7/);
+describe('substitute — deep `[]`/`.` addressing resolves (#6 E7)', () => {
+  const deep = ctx({
+    nodeOutputs: { a: { rows: [{ sku: 'S1' }, { sku: 'S2' }], body: { user: { name: 'ada' } } } },
+    params: { i: 1, cfg: { host: 'h1', 'a.b': 'dotted', '0': 'zero' } },
   });
 
-  it('is NOT swallowed by default() as an absent node output', () => {
-    // If the E7 refusal were a MissingNodeOutputError, `default()` would catch
-    // it and silently return the fallback — the doc would validate clean now
-    // and SILENTLY CHANGE MEANING once E7 lands. It must propagate.
-    expect(() => substitute("${default(nodes.a.output.rows[0], 'fb')}", deep)).toThrow(/E7/);
+  it('resolves the spec’s own example shape — a literal index into an output', () => {
+    expect(substitute('${nodes.a.output.rows[0].sku}', deep)).toBe('S1');
+  });
+
+  it('resolves a DYNAMIC index (spec L41: rows[params.i].sku)', () => {
+    expect(substitute('${nodes.a.output.rows[params.i].sku}', deep)).toBe('S2');
+  });
+
+  it('resolves a deep `.` path into a json output', () => {
+    expect(substitute('${nodes.a.output.body.user.name}', deep)).toBe('ada');
+  });
+
+  it('resolves a deep path into a json PARAM (the rule is the root TYPE, not the namespace)', () => {
+    expect(substitute('${params.cfg.host}', deep)).toBe('h1');
+  });
+
+  it('resolves a QUOTED dynamic name — ONE segment, TWO dot-parts', () => {
+    // `source` must never be split on `.`: `cfg['a.b']` is a single key.
+    expect(substitute("${params.cfg['a.b']}", deep)).toBe('dotted');
+  });
+
+  it('indexes an OBJECT with a number key (JSON keys are strings)', () => {
+    expect(substitute('${params.cfg[0]}', deep)).toBe('zero');
+  });
+
+  it('preserves the native type in whole-value mode', () => {
+    expect(substitute('${nodes.a.output.rows[0]}', deep)).toEqual({ sku: 'S1' });
+    expect(substitute('${nodes.a.output.body.user}', deep)).toEqual({ name: 'ada' });
+  });
+
+  it('coerces to string when embedded', () => {
+    expect(substitute('sku=${nodes.a.output.rows[1].sku}', deep)).toBe('sku=S2');
   });
 
   it('throws on an unterminated bracket', () => {
     expect(() => substitute('${params.a[0}', ctx({ params: { a: [1] } }))).toThrow(SubstituteError);
+  });
+});
+
+describe('substitute — deep addressing: MISSING is rescuable, SHAPE is not (#6 E7)', () => {
+  // The error-class line. A deep path has NO static safety (E4: `SigType` has no
+  // element type), so `default()` is the author's ONLY tool — and a missing key
+  // is the NORMAL case for an untyped json body. But a WRONG SHAPE is a doc
+  // defect, and routing that through the rescue class would mask it (E3's rule).
+  const c = ctx({
+    nodeOutputs: {
+      a: { body: { user: { name: 'ada' }, opt: null }, rows: [{ sku: 'S1' }], text: 'hello' },
+    },
+  });
+
+  it('a missing own property is RESCUABLE by default()', () => {
+    expect(substitute("${default(nodes.a.output.body.nope, 'fb')}", c)).toBe('fb');
+    expect(substitute("${default(nodes.a.output.body.user.nope, 'fb')}", c)).toBe('fb');
+  });
+
+  it('a missing own property BARE throws — never a silent empty string', () => {
+    // toStr(undefined) === '', so returning undefined would emit '' and call it
+    // a result. Loud beats silent (E5a's "loud beats a silent epoch-1970").
+    expect(() => substitute('${nodes.a.output.body.nope}', c)).toThrow(SubstituteError);
+    expect(() => substitute('x=${nodes.a.output.body.nope}', c)).toThrow(SubstituteError);
+  });
+
+  it('an out-of-range array index is RESCUABLE by default()', () => {
+    expect(substitute("${default(nodes.a.output.rows[9], 'fb')}", c)).toBe('fb');
+    expect(() => substitute('${nodes.a.output.rows[9]}', c)).toThrow(SubstituteError);
+  });
+
+  it('a NULL intermediate is MISSING, not SHAPE — `null` is JSON’s "optional field"', () => {
+    // `isAbsent` already treats null as absent, so `default(…body.opt,'fb')` is
+    // 'fb' today. If a null intermediate were SHAPE, `default(…body.opt.x,'fb')`
+    // would THROW for {opt:null} but return 'fb' for {opt:{}} — identical author
+    // intent, class decided by whether the API omits the key or spells it null.
+    expect(substitute("${default(nodes.a.output.body.opt, 'fb')}", c)).toBe('fb');
+    expect(substitute("${default(nodes.a.output.body.opt.x, 'fb')}", c)).toBe('fb');
+    expect(() => substitute('${nodes.a.output.body.opt.x}', c)).toThrow(SubstituteError);
+  });
+
+  it('a field on a SCALAR is SHAPE — default() must NOT rescue it', () => {
+    // The doc is wrong, not the data. Masking it would hide a real defect.
+    expect(() => substitute("${default(nodes.a.output.text.foo, 'fb')}", c)).toThrow(
+      /not an object|cannot read field/i,
+    );
+  });
+
+  it('an index into a SCALAR is SHAPE — default() must NOT rescue it', () => {
+    expect(() => substitute("${default(nodes.a.output.text[0], 'fb')}", c)).toThrow(
+      /cannot index|not an array/i,
+    );
+  });
+
+  it.each([
+    ['negative', '${nodes.a.output.rows[-1]}'],
+    ['fractional', '${nodes.a.output.rows[0.5]}'],
+    ['boolean', '${nodes.a.output.rows[true]}'],
+    ['an array', '${nodes.a.output.rows[createArray(1)]}'],
+  ])('refuses %s as an array index (SHAPE, not rescuable)', (_label, expr) => {
+    expect(() => substitute(expr, c)).toThrow(SubstituteError);
+    expect(() => substitute(`\${default(${expr.slice(2, -1)}, 'fb')}`, c)).toThrow(SubstituteError);
+  });
+
+  it('refuses a NON-FINITE index rather than keying the string "Infinity"', () => {
+    // `1e999` is valid JSON, so `JSON.parse` hands back Infinity and a `json`
+    // param carries it straight in — the same silent-wrong-key hazard as null:
+    // String(Infinity) is 'Infinity', which is a perfectly good own property.
+    const inf = ctx({
+      params: { cfg: { Infinity: 'boom', NaN: 'boom' }, blob: JSON.parse('{"n":1e999}') },
+    });
+    expect(() => substitute('${params.cfg[params.blob.n]}', inf)).toThrow(/finite/);
+    expect(() => substitute('${params.cfg[div(0, 0)]}', inf)).toThrow(SubstituteError);
+  });
+
+  it('names a non-finite ARRAY index honestly (JSON.stringify would say "null")', () => {
+    const inf = ctx({
+      nodeOutputs: { a: { rows: [1] } },
+      params: { blob: JSON.parse('{"n":1e999}') },
+    });
+    expect(() => substitute('${nodes.a.output.rows[params.blob.n]}', inf)).toThrow(/Infinity/);
+  });
+
+  it('refuses a NULL index rather than keying the empty string', () => {
+    // toStr(null) === '', and `run.triggerId` is seeded literal null for EVERY
+    // run today (spec L399) — so `${params.cfg[run.triggerId]}` would silently
+    // look up the own property ''. A null is never a key.
+    const n = ctx({ params: { cfg: { '': 'empty-key' } }, run: { triggerId: null } });
+    expect(() => substitute('${params.cfg[run.triggerId]}', n)).toThrow(SubstituteError);
+  });
+});
+
+describe('substitute — deep addressing never leaks host surface (#6 E7)', () => {
+  // The walk resolves OWN properties of PLAIN objects/arrays only. Without the
+  // `typeof === 'object'` guard a string BOXES (hasOwnProperty('abc','length')
+  // is TRUE), handing back host object surface as resolved node config.
+  const c = ctx({
+    nodeOutputs: { a: { text: 'hello', rows: [1, 2, 3], obj: { x: 1 } } },
+    run: { runId: 'run_1' },
+  });
+
+  it('does not index into a STRING (${run.runId[0]} must not be "r")', () => {
+    expect(() => substitute('${run.runId[0]}', c)).toThrow(SubstituteError);
+    expect(() => substitute('${nodes.a.output.text[0]}', c)).toThrow(SubstituteError);
+  });
+
+  it('does not read a STRING’s boxed .length', () => {
+    expect(() => substitute('${nodes.a.output.text.length}', c)).toThrow(SubstituteError);
+  });
+
+  it('does not read an ARRAY’s .length — that is the catalog’s length(), not a field', () => {
+    // hasOwnProperty([], 'length') is TRUE, so this needs its own guard.
+    expect(() => substitute('${nodes.a.output.rows.length}', c)).toThrow(SubstituteError);
+    expect(substitute('${length(nodes.a.output.rows)}', c)).toBe(3); // the designed form
+  });
+
+  it('does not index an array with a FIELD segment — `[]` is the one way', () => {
+    expect(() => substitute('${nodes.a.output.rows.0}', c)).toThrow(SubstituteError);
+    expect(substitute('${nodes.a.output.rows[0]}', c)).toBe(1); // the designed form
+  });
+
+  it('never walks the prototype chain', () => {
+    for (const path of ['constructor', 'toString', 'hasOwnProperty']) {
+      expect(() => substitute(`\${nodes.a.output.obj.${path}}`, c)).toThrow(SubstituteError);
+    }
+  });
+
+  it('a JSON-own `__proto__` resolves as ORDINARY DATA (and pollutes nothing)', () => {
+    // JSON.parse('{"__proto__":{...}}') creates an OWN `__proto__` property, so
+    // this is real data, not the prototype. The walk is READ-ONLY — it never
+    // assigns — so there is no pollution vector; refusing it would instead make
+    // a legitimate (if cursed) API payload unreadable.
+    const parsed = ctx({ nodeOutputs: { a: { body: JSON.parse('{"__proto__":{"x":1}}') } } });
+    expect(substitute('${nodes.a.output.body.__proto__.x}', parsed)).toBe(1);
+    expect(({} as Record<string, unknown>)['x']).toBeUndefined();
+  });
+});
+
+describe('substitute — deep addressing stays INERT (#6 E7)', () => {
+  it('emits a resolved value containing ${...} LITERALLY', () => {
+    // The security invariant: the walk SELECTS a sub-value of an already-resolved
+    // value and never re-parses it, so untrusted data cannot become code.
+    const c = ctx({ nodeOutputs: { a: { body: { evil: '${params.secret}' } } } });
+    expect(substitute('${nodes.a.output.body.evil}', c)).toBe('${params.secret}');
+    expect(substitute('v=${nodes.a.output.body.evil}', c)).toBe('v=${params.secret}');
+  });
+});
+
+describe('substitute — MAX_PATH_DEPTH bounds the walk (#6 E7)', () => {
+  // The walk re-runs PER LAMBDA ELEMENT and `charge()` counts ARRAYS ONLY, so a
+  // deep path returning a scalar spends NOTHING against MAX_ARRAY_ELEMENTS_TOTAL
+  // — the array budget cannot see this work. JSON.parse accepts 50k-deep nesting
+  // and a `json` param takes any parsed value as-is off a run-now override, so
+  // deep DATA is reachable; validateRefs is advisory (#444), so an unvalidated
+  // doc reaches the engine. Measured: depth 20000 x 50k invocations = 1e9
+  // lookups = ~4.4s of blocked PURE reducer, per field.
+  function deepData(n: number): Record<string, unknown> {
+    let v: Record<string, unknown> = { end: 'leaf' };
+    for (let i = 0; i < n; i += 1) v = { a: v };
+    return v;
+  }
+
+  it('the array budget does NOT see the walk — which is WHY this cap exists', () => {
+    // The three budget facts the cap's rationale rests on, pinned together:
+    //  1. a walk RETURNING an array is charged (it flows through evalExpr);
+    //  2. an INDEX EXPR is charged (same reason);
+    //  3. an intermediate array TRAVERSED by an index is NOT — selection is O(1),
+    //     not a scan, so charging it would be dishonest.
+    // (3) is exactly the hole MAX_PATH_DEPTH covers: a deep path returning a
+    // SCALAR spends NOTHING, so the element budget can never bound the walk.
+    const big = Array.from({ length: 9_000 }, (_, i) => i);
+    const c = ctx({ params: { wrap: { rows: big } } });
+    // (1) RESOLVING the array 12 times charges 12 x 9k = 108k > the 100k budget.
+    const resolved = Array.from({ length: 12 }, () => '${params.wrap.rows}').join(',');
+    expect(() => substitute(resolved, c)).toThrow(/too many array elements/);
+    // (2)+(3) INDEXING it 12 times spends nothing — the traversed array is never
+    // handed to evalExpr, and each walk returns a scalar. Same 12 x 9k of data.
+    const indexed = Array.from({ length: 12 }, () => '${params.wrap.rows[0]}').join(',');
+    expect(substitute(indexed, c)).toBe(new Array(12).fill('0').join(','));
+  });
+
+  it('resolves a path AT the cap', () => {
+    const c = ctx({ params: { d: deepData(MAX_PATH_DEPTH - 3) } });
+    const path = `params.d.${'a.'.repeat(MAX_PATH_DEPTH - 3)}end`;
+    expect(substitute(`\${${path}}`, c)).toBe('leaf');
+  });
+
+  it('refuses a path OVER the cap (and default() does not rescue it)', () => {
+    const c = ctx({ params: { d: deepData(MAX_PATH_DEPTH + 10) } });
+    const path = `params.d.${'a.'.repeat(MAX_PATH_DEPTH + 10)}end`;
+    expect(() => substitute(`\${${path}}`, c)).toThrow(/deep|depth|MAX_PATH_DEPTH|segments/i);
+    expect(() => substitute(`\${default(${path}, 'fb')}`, c)).toThrow(/deep|depth|segments/i);
   });
 });
 
@@ -343,25 +571,141 @@ describe('validateRefs — a malformed expression is reported ONCE (#6 E1)', () 
   });
 });
 
-describe('validateRefs — `[]` deep addressing is reported at SAVE time (#6 E1)', () => {
-  it('reports an index-bearing ref rather than accepting it', () => {
-    const nodes = [
-      node('a', { outputs: [{ name: 'rows', type: 'json' }] }),
-      node('b', { prompt: '${nodes.a.output.rows[0]}' }),
-    ];
-    const errors = validateRefs(doc(nodes, [edge('a', 'b', 'success')]));
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toMatch(/E7/);
+describe('validateRefs — deep `[]`/`.` addressing at SAVE time (#6 E7)', () => {
+  const producer = node('a', {
+    outputs: [
+      { name: 'rows', type: 'json' },
+      { name: 'title', type: 'string' },
+    ],
   });
 
-  it('reports it inside default() too (softOk must not hide it)', () => {
-    const nodes = [
-      node('a', { outputs: [{ name: 'rows', type: 'json' }] }),
-      node('b', { prompt: "${default(nodes.a.output.rows[0], 'fb')}" }),
-    ];
+  it('ACCEPTS a deep path into a json-typed output', () => {
+    const nodes = [producer, node('b', { prompt: '${nodes.a.output.rows[0].sku}' })];
+    expect(validateRefs(doc(nodes, [edge('a', 'b', 'success')]))).toEqual([]);
+  });
+
+  it('ACCEPTS a deep path into a no-contract node (nothing declared => any)', () => {
+    const nodes = [node('a', {}), node('b', { prompt: '${nodes.a.output.body.x[0]}' })];
+    expect(validateRefs(doc(nodes, [edge('a', 'b', 'success')]))).toEqual([]);
+  });
+
+  it('ACCEPTS a deep path into a json param', () => {
+    const nodes = [node('b', { prompt: "${params.cfg['a.b'].host}" })];
+    expect(validateRefs(doc(nodes, [], [{ name: 'cfg', type: 'json', required: true }]))).toEqual(
+      [],
+    );
+  });
+
+  it('ACCEPTS a deep ref inside default() (the soft path)', () => {
+    const nodes = [producer, node('b', { prompt: "${default(nodes.a.output.rows[0].sku, 'fb')}" })];
+    expect(validateRefs(doc(nodes, [edge('a', 'b', 'success')]))).toEqual([]);
+  });
+
+  // --- the scalar-root rule: deep is FOR json/any (spec L48) ----------------
+
+  it('REJECTS a deep path into a string-typed output (statically known scalar)', () => {
+    const nodes = [producer, node('b', { prompt: '${nodes.a.output.title.foo}' })];
     const errors = validateRefs(doc(nodes, [edge('a', 'b', 'success')]));
     expect(errors).toHaveLength(1);
-    expect(errors[0]).toMatch(/E7/);
+    expect(errors[0]).toMatch(/string/);
+  });
+
+  it('REJECTS a deep path into a number param', () => {
+    const nodes = [node('b', { prompt: '${params.n[0]}' })];
+    const errors = validateRefs(doc(nodes, [], [{ name: 'n', type: 'number', required: true }]));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/number/);
+  });
+
+  it.each([
+    ['a run field', '${run.runId.foo}'],
+    ['a node status', '${nodes.a.status.foo}'],
+  ])('REJECTS a deep path into %s (both are strings)', (_label, expr) => {
+    const nodes = [producer, node('b', { prompt: expr })];
+    const errors = validateRefs(doc(nodes, [edge('a', 'b', 'success')]));
+    // Exactly one: the scalar-root rule, not also an availability report — the
+    // no-double-report property the single `refRoot` SSOT exists to give.
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/string/);
+  });
+
+  // --- the E7 NOTE's hole: an index expr must be WALKED ----------------------
+
+  it('reports a SECRET param hidden inside an index (the E7 NOTE’s hole)', () => {
+    // Pre-E7 the ref returned before walking `index.expr`, so a secret smuggled
+    // into an index went unreported. Resolving `[]` without recursing here would
+    // have opened a real hole in the secret rule.
+    const nodes = [producer, node('b', { prompt: '${nodes.a.output.rows[params.tok]}' })];
+    const errors = validateRefs(
+      doc(nodes, [edge('a', 'b', 'success')], [{ name: 'tok', type: 'secret', required: true }]),
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/secret/);
+  });
+
+  it.each([
+    ['an undeclared param', '${nodes.a.output.rows[params.nope]}', /not a declared param/],
+    ['an unknown function', '${nodes.a.output.rows[bogus(1)]}', /unknown function/],
+    ['a non-upstream node output', '${nodes.a.output.rows[nodes.zz.output.i]}', /upstream/],
+  ])('reports %s inside an index', (_label, expr, re) => {
+    const nodes = [producer, node('b', { prompt: expr })];
+    const errors = validateRefs(doc(nodes, [edge('a', 'b', 'success')]));
+    expect(errors).toHaveLength(1); // one defect, one error
+    expect(errors[0]).toMatch(re);
+  });
+
+  // --- the ROOT checks survive a deep tail ----------------------------------
+
+  it('still name-checks the ROOT output of a deep ref', () => {
+    const nodes = [producer, node('b', { prompt: '${nodes.a.output.NOPE.x}' })];
+    const errors = validateRefs(doc(nodes, [edge('a', 'b', 'success')]));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/declares no output named 'NOPE'/);
+  });
+
+  it('still enforces DOMINANCE on a deep ref', () => {
+    const nodes = [producer, node('b', { prompt: '${nodes.a.output.rows[0].sku}' })];
+    // No edge a->b: `a` does not dominate `b`, so its output is unavailable.
+    const errors = validateRefs(doc(nodes, [edge('b', 'a', 'success')]));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/upstream|not guaranteed/);
+  });
+
+  it('refuses an index in the ROOT region (a namespace/id/output name is literal)', () => {
+    // A dynamic output name would defeat the declared-name check, so the root is
+    // FIELDS ONLY; `leadingFields` stops at the first index and nothing matches.
+    const nodes = [producer, node('b', { prompt: '${nodes[0].output.rows}' })];
+    const errors = validateRefs(doc(nodes, [edge('a', 'b', 'success')]));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/unresolvable reference/);
+  });
+
+  it.each([
+    ['a boolean literal', '${nodes.a.output.rows[true]}'],
+    ['a boolean-returning call', '${nodes.a.output.rows[equals(1, 1)]}'],
+    ['an array-returning call', '${nodes.a.output.rows[createArray(1)]}'],
+  ])('REJECTS %s as an index — it can never resolve, for any data', (_label, expr) => {
+    const nodes = [producer, node('b', { prompt: expr })];
+    const errors = validateRefs(doc(nodes, [edge('a', 'b', 'success')]));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/index must be a number or a string/);
+  });
+
+  it.each([
+    ['a number', '${nodes.a.output.rows[0]}'],
+    ['a string (the indexed value may be an object at run)', "${nodes.a.output.rows['k']}"],
+    ['an any-typed ref', '${nodes.a.output.rows[nodes.a.output.rows]}'],
+  ])('ACCEPTS %s as an index', (_label, expr) => {
+    const nodes = [producer, node('b', { prompt: expr })];
+    expect(validateRefs(doc(nodes, [edge('a', 'b', 'success')]))).toEqual([]);
+  });
+
+  it('reports a path over MAX_PATH_DEPTH at SAVE time too (both halves)', () => {
+    const path = `params.cfg.${'a.'.repeat(MAX_PATH_DEPTH + 10)}end`;
+    const nodes = [node('b', { prompt: `\${${path}}` })];
+    const errors = validateRefs(doc(nodes, [], [{ name: 'cfg', type: 'json', required: true }]));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/deep|depth|segments/i);
   });
 });
 
