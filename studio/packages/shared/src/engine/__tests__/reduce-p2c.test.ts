@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import type { Container, Edge, EngineCommand, EngineEvent, FailureKind, Node } from '../types.js';
+import type {
+  Container,
+  Edge,
+  EdgeOn,
+  EngineCommand,
+  EngineEvent,
+  FailureKind,
+  Node,
+  OperationalEdge,
+} from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
 
 // --- helpers ---------------------------------------------------------------
@@ -18,7 +27,12 @@ function callNode(
   return node(id, {}, { type: 'call_pipeline', call: { pipelineVersionId, params } });
 }
 
-function edge(from: string, to: string, on: Edge['on'], extra: Partial<Edge> = {}): Edge {
+function edge(
+  from: string,
+  to: string,
+  on: EdgeOn,
+  extra: Partial<Omit<OperationalEdge, 'on'>> = {},
+): Edge {
   return { id: `${from}->${to}:${on}`, from, to, on, ...extra };
 }
 

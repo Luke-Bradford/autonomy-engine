@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Edge, EngineCommand, EngineEvent, FailureKind, Node } from '../types.js';
+import type { Edge, EdgeOn, EngineCommand, EngineEvent, FailureKind, Node } from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
 
 // --- helpers ---------------------------------------------------------------
@@ -10,7 +10,7 @@ function node(id: string, config: Record<string, unknown> = {}): Node {
   return { id, type: 'agent_task', config, position: { x: seq, y: 0 } };
 }
 
-function edge(from: string, to: string, on: Edge['on']): Edge {
+function edge(from: string, to: string, on: EdgeOn): Edge {
   return { id: `${from}->${to}:${on}`, from, to, on };
 }
 

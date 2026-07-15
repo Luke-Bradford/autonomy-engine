@@ -3,6 +3,7 @@ import {
   CATALOG_VERSION,
   type Concurrency,
   type Edge,
+  type EdgeOn,
   type EngineEvent,
   type NewPipelineVersion,
   type Node,
@@ -25,7 +26,7 @@ function node(id: string, extra: Partial<Node> = {}): Node {
   seq += 1;
   return { id, type: 'agent_task', config: {}, position: { x: seq, y: 0 }, ...extra };
 }
-function edge(from: string, to: string, on: Edge['on'] = 'success'): Edge {
+function edge(from: string, to: string, on: EdgeOn = 'success'): Edge {
   return { id: `${from}->${to}:${on}`, from, to, on };
 }
 

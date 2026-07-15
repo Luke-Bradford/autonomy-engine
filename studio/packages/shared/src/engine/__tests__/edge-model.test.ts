@@ -1,0 +1,411 @@
+/**
+ * The unified edge/outcome model — spec #1 D5 (F1) + F14, with the business
+ * `branch` member #4 A0 implements against.
+ *
+ * Three things are pinned here:
+ *
+ * 1. **`skipped` routing (F1).** A skipped predecessor used to make EVERY
+ *    outgoing edge impossible, so a skip swallowed the rest of the graph. An
+ *    `on:'skipped'` edge now catches it. `completion` deliberately does NOT
+ *    fire on a skip — ADF's four paths are distinct ("Upon Completion | …after
+ *    the current activity completed, regardless if it succeeded or not" vs
+ *    "Upon Skip | …if the activity itself didn't run"), so a skip propagates
+ *    unless something explicitly catches it.
+ * 2. **JOIN semantics (F14/T7).** AND across predecessors, OR among the
+ *    conditions on ONE predecessor. Without the OR, `a --success--> d` +
+ *    `a --skipped--> d` could never both satisfy, so `d` always skipped —
+ *    which is exactly the ADF Try-Catch-Proceed shape D5 adds `skipped` for.
+ * 3. **Success semantics (D5) — CHARACTERIZATION ONLY.** These tests record
+ *    what the reducer does TODAY, including where it diverges from the ADF
+ *    target. D5 says change `finishRun` only if the tests show divergence, and
+ *    that reconcile is its own ticket (F1b) — so the divergence is documented
+ *    and asserted here, not fixed.
+ */
+import { describe, expect, it } from 'vitest';
+import type { Edge, EngineCommand, EngineEvent, Node } from '../types.js';
+import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
+
+let seq = 0;
+function node(id: string, config: Record<string, unknown> = {}): Node {
+  seq += 1;
+  return { id, type: 'agent_task', config, position: { x: seq, y: 0 } };
+}
+
+function edge(
+  from: string,
+  to: string,
+  on: 'success' | 'failure' | 'completion' | 'skipped',
+): Edge {
+  return { id: `${from}->${to}:${on}`, from, to, on };
+}
+
+function branchEdge(from: string, to: string, branch: string): Edge {
+  return { id: `${from}->${to}:branch:${branch}`, from, to, on: 'branch', branch };
+}
+
+function engine(nodes: Node[], edges: Edge[] = []): Engine {
+  return createEngine({ nodes, edges } satisfies EngineDoc);
+}
+
+const RUN = 'r1';
+const PV = 'pv1';
+
+/**
+ * Drive a run to completion, resolving each dispatched node from `outcomes`
+ * (default: success), and report the `finishRun` the engine asked for plus
+ * every diagnostic it emitted. Same command-QUEUE shape as `reduce.test.ts`'s
+ * `runAll` — a reduce can emit several `dispatchNode`s at once (a fan-out), so
+ * draining a queue rather than taking the first command is load-bearing. The
+ * real reducer, real events, no mocks.
+ */
+function runAll(eng: Engine, outcomes: Record<string, 'success' | 'failure'> = {}) {
+  let state = eng.seedState();
+  const pending: EngineCommand[] = [];
+  const diagnostics: string[] = [];
+  let finish: { outcome: 'success' | 'failure'; reason?: string } | undefined;
+
+  const apply = (ev: EngineEvent): void => {
+    const r = eng.reduce(state, ev);
+    state = r.state;
+    diagnostics.push(...r.diagnostics);
+    pending.push(...r.commands);
+  };
+
+  apply({ type: 'run.started', runId: RUN, pipelineVersionId: PV, params: {} });
+  let guard = 0;
+  while (pending.length) {
+    if (guard++ > 2000) throw new Error('driver did not converge');
+    const c = pending.shift()!;
+    if (c.type === 'finishRun') {
+      finish = { outcome: c.outcome, reason: c.reason };
+      apply({ type: 'run.finished', runId: RUN, outcome: c.outcome, reason: c.reason });
+      continue;
+    }
+    if (c.type !== 'dispatchNode') continue; // these docs are call-free
+    apply({
+      type: 'node.dispatched',
+      runId: RUN,
+      nodeId: c.nodeId,
+      attemptId: c.attemptId,
+      idempotent: true,
+    });
+    apply(
+      (outcomes[c.nodeId] ?? 'success') === 'failure'
+        ? {
+            type: 'node.failed',
+            runId: RUN,
+            nodeId: c.nodeId,
+            attemptId: c.attemptId,
+            error: 'boom',
+            kind: 'permanent',
+          }
+        : {
+            type: 'node.succeeded',
+            runId: RUN,
+            nodeId: c.nodeId,
+            attemptId: c.attemptId,
+            outputs: {},
+          },
+    );
+  }
+  return { state, finish, diagnostics };
+}
+
+describe('skipped edges (F1)', () => {
+  it('an on:skipped edge CATCHES a skipped predecessor', () => {
+    // x succeeds → x->a(failure) is unsatisfied-terminal → a skipped.
+    // a->handler(skipped) must now fire: this is the whole point of F1.
+    const eng = engine(
+      [node('x'), node('a'), node('handler')],
+      [edge('x', 'a', 'failure'), edge('a', 'handler', 'skipped')],
+    );
+    const { state, finish } = runAll(eng);
+    expect(state.nodes.a!.status).toBe('skipped');
+    expect(state.nodes.handler!.status).toBe('success');
+    expect(finish?.outcome).toBe('success');
+  });
+
+  it('a skipped predecessor does NOT satisfy a success edge', () => {
+    const eng = engine(
+      [node('x'), node('a'), node('b')],
+      [edge('x', 'a', 'failure'), edge('a', 'b', 'success')],
+    );
+    const { state } = runAll(eng);
+    expect(state.nodes.a!.status).toBe('skipped');
+    expect(state.nodes.b!.status).toBe('skipped'); // skip propagates
+  });
+
+  it('completion does NOT fire on a skip — a skip is not a completion (ADF)', () => {
+    // The distinction is load-bearing: if `completion` swallowed skips, "run
+    // this whatever happened" would also run for activities that never ran.
+    const eng = engine(
+      [node('x'), node('a'), node('after')],
+      [edge('x', 'a', 'failure'), edge('a', 'after', 'completion')],
+    );
+    const { state } = runAll(eng);
+    expect(state.nodes.a!.status).toBe('skipped');
+    expect(state.nodes.after!.status).toBe('skipped');
+  });
+
+  it('completion still fires on both success and failure', () => {
+    const eng = engine(
+      [node('ok'), node('bad'), node('afterOk'), node('afterBad')],
+      [edge('ok', 'afterOk', 'completion'), edge('bad', 'afterBad', 'completion')],
+    );
+    const { state } = runAll(eng, { bad: 'failure' });
+    expect(state.nodes.afterOk!.status).toBe('success');
+    expect(state.nodes.afterBad!.status).toBe('success');
+  });
+
+  it('an on:skipped edge does NOT fire when the predecessor actually ran', () => {
+    const eng = engine([node('a'), node('h')], [edge('a', 'h', 'skipped')]);
+    const { state } = runAll(eng);
+    expect(state.nodes.a!.status).toBe('success');
+    expect(state.nodes.h!.status).toBe('skipped');
+  });
+
+  // ADF "Generic error handling": UponFailure and UponSkip both land on one
+  // handler. An on:skipped edge must NOT count as handling a FAILURE — if it
+  // did, a failed node with only a skip-edge would silently pass the run.
+  it('a failed node whose only outgoing edge is on:skipped is UNHANDLED → run fails', () => {
+    const eng = engine([node('a'), node('h')], [edge('a', 'h', 'skipped')]);
+    const { state, finish } = runAll(eng, { a: 'failure' });
+    expect(state.nodes.a!.status).toBe('failure');
+    expect(finish?.outcome).toBe('failure');
+    expect(finish?.reason).toBe('node_failed:a');
+  });
+});
+
+describe('JOIN semantics (F14 / T7)', () => {
+  // The F14 fix. Before: join:'all' ANDed across every EDGE, so two conditions
+  // on one predecessor could never both satisfy → the target always skipped.
+  it('OR among conditions on ONE predecessor — success|skipped both land on d', () => {
+    const eng = engine(
+      [node('a'), node('d')],
+      [edge('a', 'd', 'success'), edge('a', 'd', 'skipped')],
+    );
+    const { state } = runAll(eng);
+    expect(state.nodes.a!.status).toBe('success');
+    expect(state.nodes.d!.status).toBe('success'); // the success arm satisfied it
+  });
+
+  it('OR among conditions on ONE predecessor — the skip arm satisfies it', () => {
+    const eng = engine(
+      [node('x'), node('a'), node('d')],
+      [edge('x', 'a', 'failure'), edge('a', 'd', 'success'), edge('a', 'd', 'skipped')],
+    );
+    const { state } = runAll(eng);
+    expect(state.nodes.a!.status).toBe('skipped');
+    expect(state.nodes.d!.status).toBe('success'); // caught by the skipped arm
+  });
+
+  // ADF Try-Catch-Proceed. Note the shape: `proceed` is deliberately NOT
+  // connected to `try` ("Add second activity, but don't connect to the first
+  // activity") — it hangs off the HANDLER by two paths, which is what makes
+  // "Next Activity will run regardless if First Activity succeeds or not"
+  // work. Per the doc's note: "Multiple paths can point to the same activity.
+  // For example, UponSuccess and UponSkip can both point to one activity."
+  // Wiring `try --success--> proceed` as well would be WRONG: try's group goes
+  // dead when it fails, and the AND across predecessors would skip proceed.
+  it('ADF Try-Catch-Proceed — proceed runs whether the handler ran or was skipped', () => {
+    const tryCatch = (): Edge[] => [
+      edge('try', 'handler', 'failure'),
+      edge('handler', 'proceed', 'success'),
+      edge('handler', 'proceed', 'skipped'),
+    ];
+    // try SUCCEEDS → handler skipped → proceed still runs (the skip arm).
+    const ok = runAll(engine([node('try'), node('handler'), node('proceed')], tryCatch()));
+    expect(ok.state.nodes.handler!.status).toBe('skipped');
+    expect(ok.state.nodes.proceed!.status).toBe('success');
+    expect(ok.finish?.outcome).toBe('success');
+
+    // try FAILS → handler runs and succeeds → proceed runs (the success arm).
+    const bad = runAll(engine([node('try'), node('handler'), node('proceed')], tryCatch()), {
+      try: 'failure',
+    });
+    expect(bad.state.nodes.handler!.status).toBe('success');
+    expect(bad.state.nodes.proceed!.status).toBe('success');
+    expect(bad.finish?.outcome).toBe('success'); // try's failure was handled
+  });
+
+  it('AND across predecessors still holds — a dead predecessor skips the target', () => {
+    // d needs BOTH a and b. b fails (handled), so b's group is dead → d skipped
+    // even though a's group is satisfied.
+    const eng = engine(
+      [node('a'), node('b'), node('d', { join: 'all' }), node('catch')],
+      [edge('a', 'd', 'success'), edge('b', 'd', 'success'), edge('b', 'catch', 'failure')],
+    );
+    const { state } = runAll(eng, { b: 'failure' });
+    expect(state.nodes.d!.status).toBe('skipped');
+  });
+
+  it('AND across predecessors, OR within each — d runs when every group has an arm', () => {
+    // a succeeds (success arm); b fails → its failure arm satisfies. Both
+    // groups satisfied → d runs. Under the old edge-wise AND this was skipped.
+    const eng = engine(
+      [node('a'), node('b'), node('d', { join: 'all' })],
+      [
+        edge('a', 'd', 'success'),
+        edge('a', 'd', 'skipped'),
+        edge('b', 'd', 'success'),
+        edge('b', 'd', 'failure'),
+      ],
+    );
+    const { state, finish } = runAll(eng, { b: 'failure' });
+    expect(state.nodes.d!.status).toBe('success');
+    expect(finish?.outcome).toBe('success'); // b's failure IS handled (b->d on failure)
+  });
+
+  // ADF "Generic error handling": a sequential chain, then "Connect both
+  // UponFailure and UponSkip paths from the last activity to the error handling
+  // activity" — so the handler catches BOTH "the last step failed" and "an
+  // earlier step failed, so the last step never ran". The doc's contract: "will
+  // only run if any of the previous activities fails. It will not run if they
+  // all succeed." Needs skip-propagation AND the OR within one predecessor.
+  const genericErrorHandling = (): Edge[] => [
+    edge('a', 'b', 'success'),
+    edge('b', 'c', 'success'),
+    edge('c', 'eh', 'failure'),
+    edge('c', 'eh', 'skipped'),
+  ];
+  const chain = (): Node[] => [node('a'), node('b'), node('c'), node('eh')];
+
+  it('ADF generic error handling — handler does NOT run when everything succeeds', () => {
+    const { state } = runAll(engine(chain(), genericErrorHandling()));
+    expect(state.nodes.c!.status).toBe('success');
+    expect(state.nodes.eh!.status).toBe('skipped'); // both arms dead
+  });
+
+  it('ADF generic error handling — handler runs when the LAST activity fails', () => {
+    const { state } = runAll(engine(chain(), genericErrorHandling()), { c: 'failure' });
+    expect(state.nodes.eh!.status).toBe('success'); // caught by the failure arm
+  });
+
+  // NOTE: the third case of this pattern — an EARLIER activity fails, so the
+  // skip propagates down the chain to the handler — does NOT work today. It is
+  // characterized as a divergence in the D5 block below (the run short-circuits
+  // before the skip can reach the handler); F1b owns the decision.
+
+  it('join:any is unchanged — one satisfied arm is enough', () => {
+    const eng = engine(
+      [node('a'), node('b'), node('d', { join: 'any' }), node('catch')],
+      [edge('a', 'd', 'success'), edge('b', 'd', 'success'), edge('b', 'catch', 'failure')],
+    );
+    const { state } = runAll(eng, { b: 'failure' });
+    expect(state.nodes.d!.status).toBe('success');
+  });
+});
+
+describe('business branch edges are INERT until #4 A0/A1/A2', () => {
+  // The schema is settled HERE (T3: #1 owns the union) so `if`/`switch` can be
+  // built against a final shape. But no activity emits a branch outcome yet, so
+  // a branch edge cannot be satisfied. This pins that it degrades OBSERVABLY
+  // (diagnostic) rather than silently stranding the downstream.
+  it('a branch edge never satisfies, and says why', () => {
+    const eng = engine([node('if_1'), node('t')], [branchEdge('if_1', 't', 'true')]);
+    const { state, diagnostics } = runAll(eng);
+    expect(state.nodes.if_1!.status).toBe('success');
+    expect(state.nodes.t!.status).toBe('skipped');
+    expect(diagnostics.join('\n')).toMatch(/branch/i);
+  });
+});
+
+describe('pipeline success semantics — CHARACTERIZATION (D5; reconcile = F1b)', () => {
+  // Recorded, not endorsed. Each case notes whether it MATCHES the ADF target
+  // ("Evaluate outcome for all leaves… If a leaf activity was skipped, we
+  // evaluate its parent activity instead. Pipeline result is success if and
+  // only if all nodes evaluated succeed") so F1b has an exact starting point.
+  it('MATCHES ADF: a skipped final branch after a failed condition → success', () => {
+    const eng = engine(
+      [node('a'), node('handler'), node('b')],
+      [edge('a', 'handler', 'failure'), edge('a', 'b', 'success')],
+    );
+    const { state, finish } = runAll(eng, { a: 'failure' });
+    expect(state.nodes.b!.status).toBe('skipped');
+    expect(state.nodes.handler!.status).toBe('success');
+    expect(finish?.outcome).toBe('success');
+  });
+
+  it('MATCHES ADF: a skipped top-level leaf with no parent → success', () => {
+    const eng = engine(
+      [node('x'), node('leaf')],
+      [edge('x', 'leaf', 'failure')], // x succeeds → leaf skipped
+    );
+    const { state, finish } = runAll(eng);
+    expect(state.nodes.leaf!.status).toBe('skipped');
+    expect(finish?.outcome).toBe('success');
+  });
+
+  it('MATCHES ADF: failure caught by a catch branch that then succeeds → success', () => {
+    const eng = engine([node('a'), node('catch')], [edge('a', 'catch', 'failure')]);
+    const { finish } = runAll(eng, { a: 'failure' });
+    expect(finish?.outcome).toBe('success');
+  });
+
+  it('MATCHES ADF: a root skipped by impossible incoming edges → success', () => {
+    const eng = engine(
+      [node('x'), node('a'), node('b')],
+      [edge('x', 'a', 'failure'), edge('a', 'b', 'success')],
+    );
+    const { state, finish } = runAll(eng);
+    expect(state.nodes.b!.status).toBe('skipped');
+    expect(finish?.outcome).toBe('success');
+  });
+
+  // ---- the DIVERGENCE (F1b owns the decision) -----------------------------
+  // ADF Do-If-Else: "When previous activity fails: node Upon Success is skipped
+  // and its parent node failed; overall pipeline fails." Studio treats ANY
+  // failure carrying an outgoing failure/completion edge as "handled" and
+  // returns success — even when the handler is a plain downstream node rather
+  // than a real catch. Asserted as-is so F1b's change is a visible diff.
+  it('DIVERGES from ADF: a failure is "handled" by any failure edge → success (F1b)', () => {
+    const eng = engine(
+      [node('a'), node('onFail'), node('onOk')],
+      [edge('a', 'onFail', 'failure'), edge('a', 'onOk', 'success')],
+    );
+    const { state, finish } = runAll(eng, { a: 'failure' });
+    expect(state.nodes.a!.status).toBe('failure');
+    expect(state.nodes.onOk!.status).toBe('skipped');
+    // ADF would fail this run (a leaf's parent failed). Studio succeeds:
+    expect(finish?.outcome).toBe('success');
+  });
+
+  it('an UNhandled failure still fails the run', () => {
+    const eng = engine([node('a'), node('b')], [edge('a', 'b', 'success')]);
+    const { finish } = runAll(eng, { a: 'failure' });
+    expect(finish?.outcome).toBe('failure');
+    expect(finish?.reason).toBe('node_failed:a');
+  });
+
+  // The sharpest divergence found by these tests, and the one F1b most needs:
+  // studio SHORT-CIRCUITS on an unhandled top-level failure (`settle` emits
+  // finishRun{failure} the moment `firstUnhandledFailureTop` finds one), so the
+  // rest of the graph never settles. ADF instead lets the walk finish and only
+  // then evaluates leaves, which is why its own "Generic error handling"
+  // pattern — UponFailure+UponSkip from the LAST activity to a handler, so an
+  // EARLIER failure reaches the handler by skip-propagation — cannot work here:
+  // the handler stays pending forever.
+  //
+  // Both arms of the pattern that don't cross the short-circuit DO work (see
+  // the JOIN block). Fixing this means deciding whether an unhandled failure
+  // ends the run eagerly or merely marks it doomed while the walk drains —
+  // squarely F1b's call, not a schema ticket's.
+  it('DIVERGES from ADF: an unhandled failure short-circuits before a skip can propagate (F1b)', () => {
+    const eng = engine(
+      [node('a'), node('b'), node('c'), node('eh')],
+      [
+        edge('a', 'b', 'success'),
+        edge('b', 'c', 'success'),
+        edge('c', 'eh', 'failure'),
+        edge('c', 'eh', 'skipped'),
+      ],
+    );
+    const { state, finish } = runAll(eng, { a: 'failure' });
+    expect(finish?.outcome).toBe('failure');
+    expect(finish?.reason).toBe('node_failed:a');
+    // ADF would skip b and c, then run `eh` via the skip arm. Studio stops:
+    expect(state.nodes.b!.status).toBe('pending');
+    expect(state.nodes.c!.status).toBe('pending');
+    expect(state.nodes.eh!.status).toBe('pending');
+  });
+});

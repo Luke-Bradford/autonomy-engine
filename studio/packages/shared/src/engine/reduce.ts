@@ -89,12 +89,19 @@ type Readiness = 'ready' | 'skipped' | 'pending';
 type EndpointOutcome = 'success' | 'failure' | 'skipped' | null;
 
 /**
- * A STABLE key for an edge, from (from, to, on) — NOT an array index — so a
- * doc save/reorder never changes which `bounces[...]` counter a back-edge maps
- * to (CP1). `\x00` is a delimiter that cannot occur in an id/enum.
+ * A STABLE key for an edge, from (from, to, on, branch) — NOT an array index —
+ * so a doc save/reorder never changes which `bounces[...]` counter a back-edge
+ * maps to (CP1). `\x00` is a delimiter that cannot occur in an id/enum.
+ *
+ * The `branch` label is part of the key because two arms of one switch share
+ * (from, to, 'branch'): without it, `X --branch:a--> Y` and `X --branch:b--> Y`
+ * would share a single bounce counter (halving `maxBounces`) and resolve each
+ * other's reset body. Unreachable while branch edges are inert (nothing emits a
+ * branch outcome until #4 A0/A1/A2) — kept correct by construction so the
+ * collision can't be introduced later by a ticket that isn't looking for it.
  */
 function stableEdgeKey(e: Edge): string {
-  return `${e.from}\x00${e.to}\x00${e.on}`;
+  return `${e.from}\x00${e.to}\x00${e.on}\x00${e.on === 'branch' ? e.branch : ''}`;
 }
 
 /**
@@ -215,7 +222,15 @@ export function createEngine(doc: EngineDoc): Engine {
     if (!endpointIds.has(edge.from)) return 'impossible';
     const oc = endpointOutcome(edge.from, state);
     if (oc === null) return 'pending';
-    if (oc === 'skipped') return 'impossible';
+    // Business routing: no activity emits a branch outcome yet (#4 A0/A1/A2), so
+    // a branch edge can never satisfy. `settle` reports this as a diagnostic
+    // rather than letting the downstream strand silently.
+    if (edge.on === 'branch') return 'unsatisfied-terminal';
+    if (oc === 'skipped') {
+      // A skip propagates unless something explicitly catches it. `completion`
+      // does NOT catch it: the activity never ran, so it never completed.
+      return edge.on === 'skipped' ? 'satisfied' : 'impossible';
+    }
     if (oc === 'success') {
       return edge.on === 'success' || edge.on === 'completion'
         ? 'satisfied'
@@ -226,23 +241,44 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
-   * The CP1 join truth table over an entity's incoming edges. No incoming edge
-   * → a root (ready). `dead` = `impossible` ∪ `unsatisfied-terminal` (an edge
-   * that can never satisfy). `all` → ready iff every edge satisfied, skipped iff
-   * any dead, else pending. `any` → ready iff ≥1 satisfied, skipped iff all
-   * dead, else pending.
+   * The join truth table over an entity's incoming edges (CP1, corrected by
+   * F14/T7). No incoming edge → a root (ready).
+   *
+   * Edges are grouped BY PREDECESSOR first: **AND across predecessors, OR among
+   * the conditions on one predecessor** (ADF `dependsOn`). The OR is what makes
+   * multi-condition dependencies expressible at all — `a --success--> d` plus
+   * `a --skipped--> d` are alternatives, and ANDing them edge-wise (as this did
+   * before F14) meant one was always dead, so `d` could never run.
+   *
+   * A predecessor group is `satisfied` if ANY of its conditions satisfied,
+   * `dead` if ALL of them are dead (`impossible` ∪ `unsatisfied-terminal`),
+   * else `pending`. Then `all` → ready iff every group satisfied, skipped iff
+   * any group dead; `any` → ready iff ≥1 group satisfied, skipped iff all dead.
+   * (`any` is unchanged by the grouping: OR distributes over OR.)
    */
   function computeReadiness(incoming: Edge[], join: 'all' | 'any', state: RunState): Readiness {
     if (incoming.length === 0) return 'ready';
-    const states = incoming.map((e) => edgeState(e, state));
     const dead = (s: EdgeState): boolean => s === 'impossible' || s === 'unsatisfied-terminal';
+
+    const byPredecessor = new Map<string, EdgeState[]>();
+    for (const e of incoming) {
+      const states = byPredecessor.get(e.from);
+      if (states === undefined) byPredecessor.set(e.from, [edgeState(e, state)]);
+      else states.push(edgeState(e, state));
+    }
+    // Order-independent (`every`/`some`), so Map iteration order can't affect
+    // the result — the reducer stays pure and replay-stable.
+    const groups = [...byPredecessor.values()].map((states): Readiness | 'dead' =>
+      states.some((s) => s === 'satisfied') ? 'ready' : states.every(dead) ? 'dead' : 'pending',
+    );
+
     if (join === 'all') {
-      if (states.every((s) => s === 'satisfied')) return 'ready';
-      if (states.some(dead)) return 'skipped';
+      if (groups.every((g) => g === 'ready')) return 'ready';
+      if (groups.some((g) => g === 'dead')) return 'skipped';
       return 'pending';
     }
-    if (states.some((s) => s === 'satisfied')) return 'ready';
-    if (states.every(dead)) return 'skipped';
+    if (groups.some((g) => g === 'ready')) return 'ready';
+    if (groups.every((g) => g === 'dead')) return 'skipped';
     return 'pending';
   }
 
@@ -318,6 +354,22 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
+   * A `branch` edge cannot be satisfied until #4 A0/A1/A2 ship the `if`/`switch`
+   * activities that emit a branch outcome, so anything depending on one skips.
+   * Say so: `validateDoc` refuses to SAVE a branch edge, but that gate is
+   * client-side today, so a doc imported from git (or POSTed directly) can still
+   * reach the reducer. A diagnostic makes the cause visible instead of leaving
+   * an operator staring at a silently skipped subgraph.
+   */
+  function noteInertBranch(id: string, incoming: Edge[], diagnostics: string[]): void {
+    if (!incoming.some((e) => e.on === 'branch')) return;
+    diagnostics.push(
+      `'${id}' skipped: an incoming 'branch' edge can never be satisfied — no activity emits a ` +
+        `branch outcome yet (#4 A0/A1/A2 implement if/switch against this schema)`,
+    );
+  }
+
+  /**
    * Try to advance ONE pending node (top-level or a child): skip it, dispatch
    * it (`dispatchNode`), or — for a `call_pipeline` node — emit `startChild` and
    * hold it `waiting`. A prep-input failure short-circuits to `invalid_event`.
@@ -333,8 +385,10 @@ export function createEngine(doc: EngineDoc): Engine {
     if (ns.status !== 'pending') return { state, changed: false };
     const node = nodeById.get(id)!;
     const r = computeReadiness(incoming, nodeJoin(node), state);
-    if (r === 'skipped')
+    if (r === 'skipped') {
+      noteInertBranch(id, incoming, diagnostics);
       return { state: withNode(state, id, { status: 'skipped' }), changed: true };
+    }
     if (r !== 'ready') return { state, changed: false };
 
     const attemptId = `${id}#${ns.attempts}`;
@@ -615,6 +669,7 @@ export function createEngine(doc: EngineDoc): Engine {
             state = enterContainer(state, id);
             changed = true;
           } else if (r === 'skipped') {
+            noteInertBranch(id, topIncoming.get(id)!, diagnostics);
             state = withContainer(state, id, { status: 'skipped' });
             changed = true;
           }

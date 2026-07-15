@@ -106,18 +106,36 @@ secureInput?, secureOutput? }`. Split across the pure/impure boundary:
   **`node.failed{kind:'transient', code:'timeout'}`** so boot-recovery distinguishes
   timed-out from crashed. Retry policy then applies uniformly.
 
-### D5 — Dependency conditions + pipeline-success semantics
+### D5 — Dependency conditions + pipeline-success semantics — **F1/F14 BUILT; F1b OPEN**
 
-- Add **`skipped`** to `EdgeOnSchema` → `success|failure|completion|skipped` (parse-safe
-  for old docs; note: old CLIENTS won't understand it). Unlocks Try-Catch / Do-If-Else /
-  Do-If-Skip-Else.
-- **Success semantics — TESTS FIRST, then reconcile.** Current reducer: success when all
-  top-level entities terminal + no unhandled top-level failure (a skipped top-level leaf
-  can currently yield success). Target (ADF): success iff every leaf succeeds; skipped leaf
-  → evaluate parent. Write characterization tests for: skipped final branch after a failed
-  condition; skipped child inside a stage; skipped top-level leaf with no parent; failure
-  caught by a catch branch that then succeeds; a root skipped by impossible incoming edges.
-  Only change `finishRun` logic if the tests show divergence.
+- **`skipped` is in `EdgeOnSchema`** → `success|failure|completion|skipped` (parse-safe for
+  old docs; note: old CLIENTS won't understand it). Unlocks Try-Catch / Do-If-Else /
+  Do-If-Skip-Else. **`completion` deliberately does NOT fire on a skip** — ADF's four paths
+  are distinct ("Upon Completion … after the current activity completed, regardless if it
+  succeeded or not" vs "Upon Skip … if the activity itself didn't run"), so a skip
+  propagates until an `on:'skipped'` edge catches it. An `on:'skipped'` edge likewise does
+  NOT count as *handling* a failure.
+- **The `Edge` union is settled here** (T3): operational `{on: success|failure|completion|
+  skipped}` vs business `{on:'branch', branch}`. `EdgeOnSchema` stays OPERATIONAL-ONLY (the
+  canvas renders it as a dropdown); `branch` is a separate union member. Branch edges are
+  **parse-safe but save-refused** by `validateDoc` until #4 A0/A1/A2 ship the activities
+  that emit a branch outcome — nothing can satisfy one before then.
+- **A `skipped` edge inverts its predecessor's guarantees** (`computeGraph`): a node runs on
+  a skip precisely because the predecessor's own dependency was NOT met, so NOTHING upstream
+  is guaranteed through it. Inheriting the predecessor's `guaranteed` set made `validateRefs`
+  ACCEPT a doc that then hard-failed at dispatch (`prepInput` throws → `invalid_event`).
+- **Success semantics — characterization tests written; reconcile is F1b.** Three cases match
+  the ADF target and are pinned; two DIVERGE and are pinned as-is with the divergence named:
+  1. **Do-If-Else.** ADF: "When previous activity fails: node Upon Success is skipped and its
+     parent node failed; overall pipeline fails." Studio treats ANY failure carrying an
+     outgoing `failure`/`completion` edge as handled → **success**.
+  2. **Eager short-circuit (the sharper one).** `settle` emits `finishRun{failure}` the moment
+     `firstUnhandledFailureTop` finds an unhandled failure, so the rest of the graph never
+     settles. ADF lets the walk finish and evaluates leaves only at the end — so ADF's own
+     **"Generic error handling"** pattern (UponFailure+UponSkip from the LAST activity to a
+     handler, reached by skip-propagation from an EARLIER failure) **cannot work here**: the
+     handler stays `pending` forever. F1b must decide whether an unhandled failure ends the
+     run eagerly or merely marks it doomed while the walk drains.
 
 ### D6 — Activity Definition contract (framework SSOT)
 
@@ -191,8 +209,8 @@ rerun (gated).**
 | # | Ticket |
 |---|--------|
 | **F0** | `node.failed.kind` structured failure field (+ default) — PREREQUISITE |
-| F1 | `skipped` edge condition + success-semantics characterization tests |
-| F1b | success-semantics reconcile (only if tests diverge) |
+| ~~F1~~ | **BUILT** — `skipped` edge condition + the unified `Edge` union (merges #4 A0's schema half) + success-semantics characterization tests |
+| F1b | **OPEN — tests DID diverge (2 ways, both pinned): Do-If-Else "handled ⇒ success", and the eager short-circuit that makes ADF's generic-error-handling pattern unreachable.** See D5. |
 | F2a | `Node.policy` schema + validation |
 | F2b | reducer retry-eligibility decision (keyed off `kind`). **Fix this first:** `driver.ts`'s pump appends the PARSED event (`appendEngineEvent`) but folds the RAW one (`engine.reduce(state, event)`). Inert while nothing reads `kind` — but F2b is exactly the ticket that makes it bite: any event reaching the pump untyped would be stored `kind:'permanent'` (the parse default) while the live reducer saw `undefined`, so live and replay could disagree. Reduce the value `appendEngineEvent` parses, not its input. |
 | F2c | driver durable retry scheduling (`node.retryScheduled/retryDue`) |
@@ -216,7 +234,7 @@ rerun (gated).**
 | RS | **sub-spec:** rerun-from-failed reseed-event + frontier semantics |
 | F12a–e | rerun-from-failed (basic / reseed event / frontier algo / containers / call_pipeline) — after RS |
 | **F13** | **`Node.config.outputs: OutputSpec[]` (T6)** — node-level typed output override (the home for #2's lowered structured schema + `foreach`/webhook outputs) + validation + canonicalization + `${nodes.x.status}` read. **Prerequisite — #2/#4/#6 depend on it.** |
-| **F14** | **Multi-incoming-edge JOIN semantics (T7):** AND across predecessors, OR among conditions on one predecessor (ADF `dependsOn`) + characterization tests (with F1). |
+| ~~**F14**~~ | **BUILT** (with F1) — multi-incoming-edge JOIN semantics (T7): AND across predecessors, OR among conditions on one predecessor (ADF `dependsOn`). The OR is what makes `skipped` usable: `computeReadiness` previously ANDed across every EDGE, so two conditions on one predecessor could never both satisfy and the target always skipped. `join:'any'` is unchanged by the grouping (OR distributes over OR). |
 | **F15** | **`SecretRef` config-field sink (T10):** a node-config secure field carries a `SecretRef`, resolved at dispatch, never logged — a secret reaches a non-connection activity (e.g. an `http_request` auth header); `validateRefs` rejects a secure ref anywhere but a declared sink. |
 
 ## Non-goals

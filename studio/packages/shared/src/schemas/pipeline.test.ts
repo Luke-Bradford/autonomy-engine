@@ -106,12 +106,24 @@ describe('NodeSchema', () => {
 });
 
 describe('EdgeOnSchema', () => {
-  it.each(['success', 'failure', 'completion'])('accepts %s', (on) => {
+  it.each(['success', 'failure', 'completion', 'skipped'])('accepts %s', (on) => {
     expect(EdgeOnSchema.parse(on)).toBe(on);
   });
 
   it('rejects an unknown edge condition', () => {
     expect(() => EdgeOnSchema.parse('retry')).toThrow();
+  });
+
+  // `EdgeOnSchema` is the OPERATIONAL set only. Business routing (`branch`) is a
+  // separate member of the `EdgeSchema` union and must never leak in here — the
+  // canvas renders this enum as its condition dropdown, and an operational
+  // outcome is not a business branch (spec #1 D5 / #4 A0).
+  it('rejects branch — business routing is not an operational outcome', () => {
+    expect(() => EdgeOnSchema.parse('branch')).toThrow();
+  });
+
+  it('is exactly the four operational outcomes', () => {
+    expect(EdgeOnSchema.options).toEqual(['success', 'failure', 'completion', 'skipped']);
   });
 });
 
@@ -137,6 +149,60 @@ describe('EdgeSchema', () => {
     expect(() =>
       EdgeSchema.parse({ id: 'e1', from: 'a', to: 'b', on: 'success', maxBounces: -1 }),
     ).toThrow();
+  });
+
+  it('round-trips an operational skipped edge', () => {
+    const edge = { id: 'e3', from: 'a', to: 'handler', on: 'skipped' };
+    expect(EdgeSchema.parse(edge)).toEqual(edge);
+  });
+
+  // --- the business `branch` member (#1 owns the union, T3; #4 A0 implements
+  // `if`/`switch` against it) -----------------------------------------------
+
+  it('round-trips a business branch edge carrying its label', () => {
+    const edge = { id: 'e4', from: 'if_1', to: 'node_2', on: 'branch', branch: 'true' };
+    expect(EdgeSchema.parse(edge)).toEqual(edge);
+  });
+
+  it('rejects a branch edge with no label — the label IS the routing key', () => {
+    expect(() => EdgeSchema.parse({ id: 'e4', from: 'if_1', to: 'n', on: 'branch' })).toThrow();
+  });
+
+  it('rejects an empty branch label', () => {
+    expect(() =>
+      EdgeSchema.parse({ id: 'e4', from: 'if_1', to: 'n', on: 'branch', branch: '' }),
+    ).toThrow();
+  });
+
+  // Round-3 fold: "A business `branch` edge MAY also carry a bounce-cap
+  // `back:true`" — a 3-way switch can loop on one arm (approval needs-changes →
+  // redraft), so the loop machinery must compose with branch routing.
+  it('round-trips a branch edge that is also a capped back-edge', () => {
+    const edge = {
+      id: 'e5',
+      from: 'switch_1',
+      to: 'redraft',
+      on: 'branch',
+      branch: 'needs-changes',
+      back: true,
+      maxBounces: 3,
+    };
+    expect(EdgeSchema.parse(edge)).toEqual(edge);
+  });
+
+  it('rejects an unknown discriminant', () => {
+    expect(() => EdgeSchema.parse({ id: 'e1', from: 'a', to: 'b', on: 'retry' })).toThrow();
+  });
+
+  // A `branch` label is meaningless on an operational edge; the union strips it
+  // rather than carrying a field the reducer would never read.
+  it('strips a stray branch label from an operational edge', () => {
+    expect(EdgeSchema.parse({ id: 'e1', from: 'a', to: 'b', on: 'success', branch: 'x' })).toEqual({
+      id: 'e1',
+      from: 'a',
+      to: 'b',
+      on: 'success',
+    });
   });
 });
 

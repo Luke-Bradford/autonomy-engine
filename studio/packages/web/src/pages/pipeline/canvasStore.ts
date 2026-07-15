@@ -151,7 +151,16 @@ export function createCanvasStore(): StoreApi<CanvasState> {
     updateEdgeOn(id, on) {
       if (!get().edges.some((e) => e.id === id)) return;
       set((s) => ({
-        edges: s.edges.map((e) => (e.id === id ? { ...e, on } : e)),
+        edges: s.edges.map((e) => {
+          if (e.id !== id) return e;
+          // Retyping to an operational outcome drops the business `branch`
+          // label — `{...e, on}` would strand it on an edge that no longer
+          // routes by it. (Reachable only for an imported branch edge; the
+          // canvas can't author one.)
+          const { branch, ...rest } = e as typeof e & { branch?: string };
+          void branch;
+          return { ...rest, on };
+        }),
         dirty: true,
       }));
     },
