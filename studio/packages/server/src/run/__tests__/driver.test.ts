@@ -118,8 +118,11 @@ describe('driver — failure routing', () => {
 
     expect(state.status).toBe('failure');
     expect(state.nodes.a!.status).toBe('failure');
-    // b never dispatched (its only edge was a success edge from a failed node).
-    expect(state.nodes.b!.status).toBe('pending');
+    // b is never DISPATCHED (its only edge was a success edge from a failed
+    // node) — it is `skipped`, the verdict F1b's drain lets it reach. Same
+    // benign flip as the shared suite's implicit-chain pin: pre-F1b the eager
+    // short-circuit froze it at `pending` mid-walk.
+    expect(state.nodes.b!.status).toBe('skipped');
     expect(getRun(db, run.id)!.status).toBe('failure');
     const log = loadEngineEvents(db, run.id);
     expect(types(log)).toContain('node.failed');

@@ -193,7 +193,7 @@ describe('join truth table', () => {
   });
 
   it('join:all — an unsatisfied-terminal incoming edge SKIPS the node', () => {
-    // b fails (handled by b->catch on failure); d(join:all) needs a AND b on success.
+    // b fails (caught by b->catch on failure); d(join:all) needs a AND b on success.
     const eng = engine(
       [node('a'), node('b'), node('d', { join: 'all' }), node('catch')],
       [edge('a', 'd', 'success'), edge('b', 'd', 'success'), edge('b', 'catch', 'failure')],
@@ -201,7 +201,14 @@ describe('join truth table', () => {
     const { state } = runAll(eng, {}, { b: { outcome: 'failure' } });
     expect(state.nodes.d!.status).toBe('skipped'); // b->d unsatisfied-terminal
     expect(state.nodes.catch!.status).toBe('success');
-    expect(state.status).toBe('success'); // b's failure was handled
+    // The READINESS assertions above are what this test is for, and they are
+    // unchanged. The run OUTCOME flipped in F1b and the old comment here said
+    // "b's failure was handled" — true, but no longer sufficient: `b` IS
+    // absorbed by `catch`, yet the skipped leaf `d` recurses to its parents and
+    // finds `b` failed. Every parent is evaluated and ANY evaluated failure
+    // fails the run (§C.5.1), so an "ALL parents must fail" reading — under
+    // which this would stay green — is explicitly NOT the rule.
+    expect(state.status).toBe('failure');
   });
 
   it('join:any — one satisfied edge is enough to run', () => {
@@ -315,7 +322,11 @@ describe('implicit success-chain', () => {
   it('an implicit-chain failure is unhandled → run fails', () => {
     const eng = engine([node('n1'), node('n2')], []);
     const { state } = runAll(eng, {}, { n1: { outcome: 'failure' } });
-    expect(state.nodes.n2!.status).toBe('pending'); // never reached
+    // `skipped`, not `pending`: F1b's drain lets the walk finish, so n2 reaches
+    // its real verdict (its only incoming edge is unsatisfied-terminal) instead
+    // of being frozen mid-walk by the old eager short-circuit. Observational —
+    // n2 is not dispatched either way, and the run outcome is unchanged.
+    expect(state.nodes.n2!.status).toBe('skipped');
     expect(state.status).toBe('failure');
   });
 });

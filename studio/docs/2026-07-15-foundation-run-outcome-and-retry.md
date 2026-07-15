@@ -4,8 +4,9 @@
 retry-eligibility, the D4 HOLD). One spec, because they are **the same predicate**: both are about
 what `settle` counts as a run-ending failure.
 
-**Status: ALL FIVE decisions SETTLED. F1b is unblocked** (behind its one prerequisite, #443).
-F2b depends on F1b, and must ship with F2c.
+**Status: ALL FIVE decisions SETTLED. #443 SHIPPED (`f732950`); F1b SHIPPED** — see the build order.
+**NEXT: F2b + F2c together, never F2b alone** (§A.5 — F2b without F2c is a hang, not a degraded
+retry). F2b's first task is the `driver.ts` parsed-vs-raw fold bug carried in the build order below.
 
 (c) was briefly raised as an operator fork (**#475**) on the belief that the only rule satisfying both
 the fail-safe invariant and #472's "labels deleted honestly" bar was unproven. A spike proved it —
@@ -39,8 +40,11 @@ verified against the real reducer — see [Evidence](#evidence-probed-not-argued
 
 Run against the real `createEngine`/`reduce`, real events, no mocks. Two probes, both throwaway (the
 precedent is spec #5's outbox prototype); their **findings** are recorded here because they are the
-only evidence anyone has for the blast radius. `reduce.ts` is byte-identical to `origin/main` on this
-branch — verify with `git diff origin/main -- studio/packages/shared/src/engine/reduce.ts`.
+only evidence anyone has for the blast radius. ~~`reduce.ts` is byte-identical to `origin/main` on
+this branch — verify with `git diff origin/main -- …/reduce.ts`.~~ **That instruction was true only
+on the SPEC's branch** (this document landed before any F1b code, so the probes had to prove they
+left nothing behind). F1b has since shipped, so `reduce.ts` is *deliberately* no longer identical;
+the sentence is struck rather than deleted so a reader who remembers it is not left wondering.
 
 - **Drain probe** — removed the `firstUnhandledFailureTop` short-circuit (`reduce.ts:735-742`),
   changed nothing else. Yields P1, P2, P3, P4 and §B.3's cost figure.
@@ -103,7 +107,32 @@ claim that "four match the ADF target" is really three.
   `DEFENSIVE_BOUNCE_CAP` reasoning at `reduce.ts:82-92` holds verbatim.
 - **A forward cycle cannot hang leaf-evaluation.** Leaf-evaluation only runs once
   `allTopLevelTerminal` holds; a forward cycle's nodes never terminalize, so it is never reached.
-  Terminating by construction, not by a guard.
+  ~~Terminating by construction, not by a guard.~~
+
+  **CORRECTED BY F1b (build-time, probed).** The first sentence holds; the conclusion does **not**,
+  and it was the more dangerous half. A **skip-propagated** cycle *is* reachable with every node
+  terminal: the skip enters from OUTSIDE the cycle, so each node resolves to `skipped` without ever
+  running, `allTopLevelTerminal` holds, and the walk goes straight into it —
+  `x --failure--> a`, `a --success--> b`, `b --success--> a`, `b --success--> c` with `x` succeeding.
+  Termination is **by the guard, not by construction**; without it the pure reducer loops forever
+  inside one synchronous `reduce()`, wedging the driver's pump. §C.4's sketch made this worse by
+  passing `seen` and never adding to it — fixed below.
+
+  **Both walks need their own pin**, and this is the trap: they are reached by DIFFERENT conjuncts.
+  The cycle doc above only exercises **leaf-evaluation** (conjunct 2) — it has no failed node, so it
+  never enters `absorbedSkip`. Reaching that one needs a FAILED node whose taint enters the cycle
+  (`f --success--> s1`, `s1 --success--> s2`, `s2 --success--> s1`, `f` fails). Shipped with one pin
+  each, both mutation-verified: deleting either guard hangs its own test and leaves the other green.
+
+  **A second, separate hazard the same shape exposes: stack depth.** F1b's first draft implemented
+  both walks recursively (as §C.4's sketch reads). Depth is then O(chain length) on a doc the engine
+  does not control — measured: fine at 4k chained skipped nodes, `RangeError: Maximum call stack size
+  exceeded` at 5k, where the flat loop it replaced coped. That is a `throw` from inside the PURE
+  reducer. **Both walks ship ITERATIVE (explicit stack)**; `evalEndpoint` pushes parents in reverse
+  edge order so LIFO reproduces the recursive form's doc-order, first-match-wins blame, which
+  `finishRun.reason` names. Deliberately NOT pinned by a test: recursion survives to ~4k, so any doc
+  cheap enough to test passes either way, and at the size that discriminates `settle` is already
+  O(n²) (~4s per drive at 5k, measured) — such a doc is unusable for reasons that dwarf the stack.
 
 ---
 
@@ -335,12 +364,25 @@ compatible by construction, not by coincidence.
 Built entirely on the precomputed `topOutgoing`/`topIncoming` (`reduce.ts:171-180`). `edgeState` and
 `endpointOutcome` are reused as-is. Container parity (§D) uses `childOutgoing`/`childIncoming`.
 
+**Two corrections applied when this was built** — the sketch below is the corrected one:
+1. **The `seen` guards must actually `add`.** As first written, both recursions passed `seen` and
+   never added to it, so a literal transcription infinitely recurses on the P4 shape. Check-then-add
+   at function entry, on **both** `absorbedSkip` and `evalEndpoint`.
+2. **Lookups are `?? []`, never `!`.** At top scope the maps are keyed by top-level entities, but
+   their *values* can name a child when a cross-boundary edge exists (`reduce.ts:177-179` pushes
+   `topNode → child` into `topOutgoing`), so the recursion can address an id the map has no key for.
+   `validateDoc` forbids that edge and is **advisory** (#444) — the same reason this whole predicate
+   must be robust on an unvalidated doc. The pre-F1b code already used `?? []`; not regressing it is
+   the requirement.
+
 ```ts
 const ran = (id) => ['success', 'failure'].includes(endpointOutcome(id, state));
 const isDead = (es) => es === 'impossible' || es === 'unsatisfied-terminal';
 
 // A SKIPPED node's taint is absorbed iff it reaches a satisfied on:'skipped' catch that RAN.
 absorbedSkip(id, seen):                       // `seen` guards a cycle; revisit ⇒ false
+  if seen.has(id) -> false
+  seen.add(id)
   for e of topOutgoing(id):
     if e.on === 'skipped' && edgeState(e) === 'satisfied' && ran(e.to)          -> true
     if isDead(edgeState(e)) && outcome(e.to) === 'skipped' && absorbedSkip(e.to, seen) -> true
@@ -354,6 +396,8 @@ absorbedFailure(id):
   false
 
 evalEndpoint(id, seen):                       // ADF: skipped leaf ⇒ evaluate parents, RECURSIVELY
+  if seen.has(id) -> null
+  seen.add(id)
   if outcome(id) === 'failure' -> id          // the blamed node
   if outcome(id) !== 'skipped' -> null
   for e of topIncoming(id): if (b = evalEndpoint(e.from, seen)) -> b
@@ -394,6 +438,21 @@ only ever reached once `allTopLevelTerminal` holds.
    re-runs, so the node does not sit terminal-`failure` at drain; an exhausted one already finishes
    the run with `capped`), so it is an implementation detail for F1b rather than a product fork —
    **but F1b must pin it with a test either way, not leave it to fall out.**
+
+   **RESOLVED by F1b: forward-only, and the "pin it either way" instruction cannot be honoured as
+   written — because there is nothing observable to pin.** The suspicion in the parenthetical is
+   correct and complete: `fireBackEdges` runs at the TOP of `settle`, so a satisfied failure
+   back-edge is *always* consumed (bounce, or `capped`) before the walk reaches a fixpoint and the
+   predicate runs. Mutation-verified: **re-merging back-edges into the predicate leaves the entire
+   suite green**, so a test asserting forward-only-ness would pass under both rules — theatre, not a
+   pin. What F1b pinned instead is the **reachable** pair: (i) a satisfied failure back-edge bounces
+   rather than reaching the predicate, and (ii) the shape that *does* reach it holding a back-edge —
+   one whose reset body can never go terminal (a body node inside a skipped container; `validateDoc`
+   rejects it, and is advisory) — where the **pre-F1b reducer reported `success`** on a run whose
+   node failed with a catch that could never run. That fail-open is closed by the **`ran(e.to)`**
+   clause in `absorbedFailure`, NOT by forward-only-ness (it holds under either), and *that* is what
+   the test locks. **Lesson: "pin it either way" presumes the decision is observable. When it isn't,
+   say so and pin the property that actually changed.**
 4. **`finishRun.reason` — SETTLED: keep `node_failed:<id>`, and mean the BLAMED node.** Under
    leaf-eval the blamed node can sit far **upstream** of the leaf that triggered evaluation
    (Do-If-Else reports `node_failed:a`, reached via skipped leaf `b`). The string is unchanged, so the
@@ -509,6 +568,20 @@ engine suite ran 572 passed / 5 failed, and the 5 failures are this table. An F1
 certainly changed the `finishRun.reason` vocabulary (C.5.4 keeps it deliberately, which is what holds
 the number at 5 — under a richer reason string, 5 further tests move).
 
+> **CORRECTION (F1b, build-time): the real number is 6, and the 5 was a measuring artefact.** The
+> probe ran the **engine** suite (`packages/shared/src/engine`); `studio-ci` runs `pnpm test`, which
+> is `pnpm -r run test` across the **workspace**. The 6th is
+> **`packages/server/src/run/__tests__/driver.test.ts:122`** (`an unhandled node failure fails the
+> run (row + projection)`), which seeds exactly `a --success--> b` and fails `a`, then asserts
+> `b` is `pending`. Under drain `b` reaches `skipped` — the *same* benign/observational flip this
+> table already sanctions for `reduce.test.ts:315`, and the run outcome is unchanged. It moved with
+> the identical rationale.
+>
+> This is a trap worth naming, because the sentence above tells the next fire that an unsanctioned
+> failure means *its predicate is wrong* — the tempting response to the 6th failure is to start
+> rewriting a correct predicate. **A spec's blast radius is only as wide as the suite that measured
+> it: state the suite, not just the number.**
+
 | Test | Today | Under the settled rule | Why |
 |---|---|---|---|
 | `edge-model.test.ts:486` `MATCHES ADF: a skipped final branch…` | `success` | `failure` | **Mislabelled (P3)** — isomorphic to `:532`, and ADF fails it. The `MATCHES ADF` label is wrong and goes. |
@@ -516,6 +589,7 @@ the number at 5 — under a richer reason string, 5 further tests move).
 | `edge-model.test.ts:564` `DIVERGES from ADF: an unhandled failure short-circuits…` | `b`,`c`,`eh` = `pending`; `failure` | all run; `success` | Drain makes the handler run; absorption makes the run green. **The label deletes** — ADF's Generic error handling pattern now works end-to-end. |
 | `reduce.test.ts:195` `join:all — an unsatisfied-terminal incoming edge SKIPS the node` | `success` | `failure` | **A real pin, not a characterization test** — the loudest signal in this table. `b` fails and *is* absorbed by `catch`, but the skipped leaf `d` recurses to `b`. Deliberate, and **contingent on C.5.1's ANY-parent rule** (under "ALL parents must fail" it would stay green). Its comment "b's failure was handled" must be rewritten, not deleted. |
 | `reduce.test.ts:315` `an implicit-chain failure is unhandled → run fails` | `n2` = `pending` | `n2` = `skipped` | Benign/observational — drain lets `n2` reach `skipped` where today the short-circuit leaves it `pending`. `state.status` stays `failure` (`:319` still passes). |
+| `driver.test.ts:122` `an unhandled node failure fails the run (row + projection)` **(the 6th — not in the probe's suite)** | `b` = `pending` | `b` = `skipped` | Identical to `:315`, in `packages/server`. Same benign flip; `state.status`/row stay `failure`. |
 
 Unaffected and **must stay green** (verified under the probe): the bounce-cap + skip-only-spin tests
 (P4), every container pin, every other `join` semantics pin, the Try-Catch/Try-Catch-Proceed and
@@ -529,10 +603,25 @@ expected — do not treat the intermediate state as a regression.
 
 ## Build order
 
-1. **#443** — log-authoritative terminality (§E). **The one prerequisite** — settled, unblocked,
-   buildable today, and F1b must not land before it (§E explains why F1b is what makes it bite).
+1. **#443** — log-authoritative terminality (§E). **SHIPPED** (`f732950`, PR #478).
 2. **F1b** — drain (§B) + the single shared `runOutcomeFailure` predicate (§B.2, §C.4) + container
-   parity (§D) + the 5 blast-radius test moves + C.5.3's back-edge/leaf test. One fire.
+   parity (§D) + the blast-radius test moves + C.5.3's back-edge/leaf test. **SHIPPED** — one fire,
+   as specced. All three call sites (`settle`'s fixpoint, `stepContainers`, the `run.finished`
+   impossibility check) route through the one predicate; every `DIVERGES from ADF` label is deleted
+   and its test now asserts the ADF verdict. Corrections this spec earned at build time, each probed:
+   P4's cycle claim (the guard is load-bearing — a skip-propagated cycle is reachable), §C.4's sketch
+   (`seen` never added; `?? []` not `!`), and the blast radius (**6**, not 5 — the probe measured the
+   engine suite, CI runs the workspace).
+
+   **C.5.3 resolved, and it found a real fail-open.** On a doc `validateDoc` accepts, the divergence
+   is **unobservable**: `fireBackEdges` runs at the top of `settle`, so a satisfied failure back-edge
+   always bounces (or caps) before the predicate ever sees its source sitting terminal-`failure`. The
+   one shape that reaches the predicate holding a back-edge is one whose reset body can **never** go
+   terminal — a body node inside a skipped container — which `validateDoc` rejects ("makes no
+   progress") but which reaches the reducer unchecked via git import or a direct POST, because
+   `validateDoc` is advisory (#444). Pre-F1b that doc reported **`success`** on a run whose node
+   failed with a handler that could never run (mutation-verified in both directions). Forward-only
+   absorption closes it. Both halves are pinned.
 3. **F2b + F2c together** — `retry_pending`, the `scheduleRetry`/`retryScheduled`/`retryDue` triple,
    the `node.retryDue` handler. **Not F2b alone** (§A.5).
    **Fix first, inside F2b** (carried from F2b's ticket row, and F2b is the ticket that makes it

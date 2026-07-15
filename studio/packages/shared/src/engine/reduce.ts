@@ -75,6 +75,17 @@ export interface Engine {
 const LIVE_NODE = new Set<NodeRunState['status']>(['ready', 'dispatched']);
 
 /**
+ * An edge that can never satisfy — its predecessor is terminal and settled the
+ * wrong way (`unsatisfied-terminal`), or the edge is structurally unreachable
+ * (`impossible`). The SSOT for both readers: `computeReadiness` (a dead GROUP
+ * skips its successor) and `outcomeFailure` (a dead edge is where a skip-taint
+ * travels). They must never be able to disagree on what "dead" means — the
+ * outcome predicate follows taint along exactly the edges readiness killed.
+ */
+const isEdgeStateDead = (s: EdgeState): boolean =>
+  s === 'impossible' || s === 'unsatisfied-terminal';
+
+/**
  * A defensive hard CEILING on back-edge traversals — both the fallback when a
  * back-edge declares no `maxBounces` (which `validateDoc` requires, so this
  * bounds a doc that bypassed validation) and an upper clamp on a declared one.
@@ -179,12 +190,11 @@ export function createEngine(doc: EngineDoc): Engine {
     if (topIncoming.has(e.to)) topIncoming.get(e.to)!.push(e);
   }
 
-  // Back-edges by source endpoint (for "is this failure handled?" and firing).
-  const backOutgoing = new Map<string, Edge[]>();
-  for (const e of backEdges) {
-    if (!backOutgoing.has(e.from)) backOutgoing.set(e.from, []);
-    backOutgoing.get(e.from)!.push(e);
-  }
+  // (F1b removed a `backOutgoing` index here. Its ONLY reader was the old
+  // "is this failure handled?" predicate, which counted a failure/completion
+  // BACK-edge as handling — fail-open when that edge never fires. The outcome
+  // predicate is forward-only; back-edges still drive `fireBackEdges` via
+  // `backEdges`/`backBodyByKey` below.)
 
   // Per-container internal readiness graph (over its children).
   const childIncoming = new Map<string, Edge[]>();
@@ -276,7 +286,6 @@ export function createEngine(doc: EngineDoc): Engine {
    */
   function computeReadiness(incoming: Edge[], join: 'all' | 'any', state: RunState): Readiness {
     if (incoming.length === 0) return 'ready';
-    const dead = (s: EdgeState): boolean => s === 'impossible' || s === 'unsatisfied-terminal';
 
     const byPredecessor = new Map<string, EdgeState[]>();
     for (const e of incoming) {
@@ -290,7 +299,11 @@ export function createEngine(doc: EngineDoc): Engine {
     // `Readiness`.
     type Group = 'ready' | 'dead' | 'pending';
     const groups = [...byPredecessor.values()].map((states): Group =>
-      states.some((s) => s === 'satisfied') ? 'ready' : states.every(dead) ? 'dead' : 'pending',
+      states.some((s) => s === 'satisfied')
+        ? 'ready'
+        : states.every(isEdgeStateDead)
+          ? 'dead'
+          : 'pending',
     );
 
     if (join === 'all') {
@@ -304,34 +317,189 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
-   * The first TOP-LEVEL entity (node or container) that is `failure` with no
-   * outgoing `failure`/`completion` edge (forward OR back) — an unhandled
-   * failure that fails the whole run. A child's failure is NOT scanned here; it
-   * is caught (or not) inside its container.
+   * THE outcome predicate (F1b, joint spec §C.3/§C.4) — the single definition
+   * of "did this scope's outcome fail", returning the BLAMED entity id or
+   * `null` for success.
+   *
+   * A scope FAILS iff EITHER conjunct fails. Both are load-bearing:
+   *
+   *   1. **Absorption** — every `failure` entity must be absorbed: by a
+   *      satisfied outgoing `failure`/`completion` edge whose target actually
+   *      RAN, or by a skip-taint that transitively reaches a satisfied
+   *      `on:'skipped'` catch whose target RAN. A taint that merely EVAPORATES
+   *      — the successor ran for an unrelated reason, e.g. a `join:'any'`
+   *      satisfied by a different predecessor — is NOT absorption.
+   *   2. **Leaf-evaluation** — every forward leaf must evaluate to success; a
+   *      `skipped` leaf RECURSES to its parents instead (ADF: "Evaluate outcome
+   *      for all leaves… If a leaf activity was skipped, we evaluate its parent
+   *      activity instead. Pipeline result is success if and only if all nodes
+   *      evaluated succeed"). ALL parents are evaluated and ANY evaluated
+   *      failure fails the scope — ADF's own "all nodes evaluated" settles the
+   *      "which parent?" question, and it is the fail-safe direction.
+   *
+   * Neither conjunct alone is correct. ADF's leaf rule ALONE is **fail-open**
+   * under `join:'any'` — a join ADF does not have, so the rule was never
+   * designed against the shape: a wholly uncaught failure whose taint dies at a
+   * live sibling leaves no skipped leaf to evaluate, and the run reports
+   * success (pinned in `edge-model.test.ts`). Absorption alone leaves the ADF
+   * Do-If-Else shape green.
+   *
+   * SCOPED so the run and a container share ONE rule (§D): pass the top-level
+   * entity/edge maps, or a container's child ones. A container's outcome is
+   * decided by the same predicate as the run's, scoped to its children.
+   *
+   * Pure — reads `state` and the bound graph only, never the clock or a mutable
+   * row, so it is replay-stable. Both walks carry a `seen` set and terminate on
+   * a revisit: a skip-PROPAGATED cycle IS reachable here (every node in it is
+   * terminal-`skipped`, so unlike a forward cycle it does not stall the walk
+   * before evaluation), and without the guard the walk never ends.
+   *
+   * **Both walks are ITERATIVE (an explicit stack), not recursive, and that is a
+   * requirement rather than a preference.** The predicate they replaced was a
+   * flat loop; a recursive form makes the reducer's stack depth O(chain length)
+   * on a doc it does not control, and a `RangeError` thrown from inside the PURE
+   * reducer crashes the driver's pump. Measured before this was changed: a
+   * skipped chain blew the stack at ~5k entities where the old code was fine.
+   * No node-count cap exists (`pipeline.ts`'s `nodes` is a bare `z.array`), and
+   * the doc need not be validated (#444) — so the bound must come from the walk.
+   *
+   * Lookups are `?? []`, never `!`: `validateDoc` forbids a cross-boundary
+   * forward edge, but it is ADVISORY (its only caller is the canvas badge; the
+   * server never calls it — #444), so a git import or a direct POST can reach
+   * this reducer with an edge whose endpoint is absent from the scope's map.
    */
-  function firstUnhandledFailureTop(state: RunState): string | null {
-    for (const id of sortedTopEntities) {
+  function outcomeFailure(
+    entities: readonly string[],
+    outgoing: ReadonlyMap<string, Edge[]>,
+    incoming: ReadonlyMap<string, Edge[]>,
+    state: RunState,
+  ): string | null {
+    const outs = (id: string): readonly Edge[] => outgoing.get(id) ?? [];
+    const ins = (id: string): readonly Edge[] => incoming.get(id) ?? [];
+    const ran = (id: string): boolean => {
+      const oc = endpointOutcome(id, state);
+      return oc === 'success' || oc === 'failure';
+    };
+
+    /**
+     * A SKIPPED entity's taint, followed to a satisfied `on:'skipped'` catch
+     * that RAN. Iterative (see the note above); order is irrelevant to a
+     * boolean, so a plain LIFO stack is enough.
+     */
+    function absorbedSkip(from: string, seen: Set<string>): boolean {
+      const stack = [from];
+      while (stack.length > 0) {
+        const id = stack.pop()!;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        for (const e of outs(id)) {
+          const es = edgeState(e, state);
+          if (e.on === 'skipped' && es === 'satisfied' && ran(e.to)) return true;
+          if (isEdgeStateDead(es) && endpointOutcome(e.to, state) === 'skipped') stack.push(e.to);
+        }
+      }
+      return false;
+    }
+
+    /**
+     * Conjunct 1, per entity.
+     *
+     * Each dead edge starts a FRESH `absorbedSkip` walk, so overlapping skip
+     * subgraphs are re-walked once per candidate — a multiplicative cost on top
+     * of `settle`'s already-O(n²) worst case, worth knowing before a large-doc
+     * benchmark surprises someone. It is bounded (candidates × taint subgraph)
+     * and invisible at real doc sizes, so it is not optimised here.
+     *
+     * If it ever needs to be: sharing ONE `seen` across the walks is safe, but
+     * only because of an asymmetry worth stating rather than rediscovering. A
+     * walk that returns `false` has drained its stack, so every id it marked is
+     * *proven* non-absorbing and re-walking it can only return `false` again. A
+     * walk that returns `true` short-circuits mid-scan and leaves ids marked but
+     * unexplored — reusing THAT set would be unsound. Since a `true` ends the
+     * whole predicate for this entity, the set is discarded exactly when it
+     * would have been unsafe to keep.
+     */
+    function absorbedFailure(id: string): boolean {
+      for (const e of outs(id)) {
+        const es = edgeState(e, state);
+        if ((e.on === 'failure' || e.on === 'completion') && es === 'satisfied' && ran(e.to)) {
+          return true;
+        }
+        if (
+          isEdgeStateDead(es) &&
+          endpointOutcome(e.to, state) === 'skipped' &&
+          absorbedSkip(e.to, new Set())
+        ) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    /**
+     * Conjunct 2, per leaf: the blamed id, or `null` if this endpoint evaluates
+     * clean. Iterative (see the note above). Parents are pushed in REVERSE edge
+     * order so the LIFO stack pops them in doc order — this reproduces the
+     * depth-first, first-match-wins blame the recursive form gave, which is what
+     * `finishRun.reason` names, so it must not drift.
+     */
+    function evalEndpoint(from: string, seen: Set<string>): string | null {
+      const stack = [from];
+      while (stack.length > 0) {
+        const id = stack.pop()!;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const oc = endpointOutcome(id, state);
+        if (oc === 'failure') return id;
+        if (oc !== 'skipped') continue;
+        const parents = ins(id);
+        for (let i = parents.length - 1; i >= 0; i -= 1) stack.push(parents[i]!.from);
+      }
+      return null;
+    }
+
+    for (const id of entities) {
       if (endpointOutcome(id, state) !== 'failure') continue;
-      const outs = [...(topOutgoing.get(id) ?? []), ...(backOutgoing.get(id) ?? [])];
-      const handled = outs.some((e) => e.on === 'failure' || e.on === 'completion');
-      if (!handled) return id;
+      if (!absorbedFailure(id)) return id;
+    }
+    // Forward leaves. These maps exclude back-edges by construction, so this
+    // predicate is forward-only where the pre-F1b one merged `backOutgoing`
+    // (§C.5.3). That difference is **deliberate but unobservable**, and the
+    // distinction is worth stating precisely rather than overclaiming: a
+    // satisfied failure back-edge is consumed by `fireBackEdges` at the TOP of
+    // `settle` — it bounces (resetting its source, so the source is no longer
+    // terminal-`failure`) or exhausts its budget and finishes the run `capped`
+    // — long before the walk reaches a fixpoint and this predicate runs. So no
+    // reachable doc lets a terminal-`failure` node arrive here still holding
+    // one, and mutation-testing agrees: re-merging back-edges into `outs`
+    // leaves the whole suite green. It is NOT pinned, because there is nothing
+    // observable to pin.
+    //
+    // What DOES close the fail-open the old code had is the `ran(e.to)`
+    // requirement in `absorbedFailure`, which IS pinned: the old predicate
+    // asked only whether a failure/completion edge EXISTED, so a handler that
+    // could never run still read as handling.
+    for (const id of entities) {
+      if (outs(id).length > 0) continue;
+      const blamed = evalEndpoint(id, new Set());
+      if (blamed !== null) return blamed;
     }
     return null;
   }
 
+  /** THE predicate at TOP-LEVEL scope (§B.2). `null` ⇒ the run succeeded. */
+  function runOutcomeFailure(state: RunState): string | null {
+    return outcomeFailure(sortedTopEntities, topOutgoing, topIncoming, state);
+  }
+
   /**
-   * The first child of `c` that is `failure` with no INTERNAL outgoing
-   * `failure`/`completion` edge — an unhandled child failure that fails the
-   * CONTAINER (not the run). A child `skipped` never fails the container.
+   * The SAME predicate scoped to a container's children (§D) — one rule, two
+   * scopes. An unhandled child failure fails the CONTAINER, not the run; the
+   * container's own `failure` is then absorbed (or not) by its OUTER edges at
+   * top level, which is a separate decision made by `runOutcomeFailure`.
    */
-  function firstUnhandledChildFailure(c: Container, state: RunState): string | null {
-    for (const ch of [...c.children].sort()) {
-      if (state.nodes[ch]?.status !== 'failure') continue;
-      const outs = childOutgoing.get(ch) ?? [];
-      const handled = outs.some((e) => e.on === 'failure' || e.on === 'completion');
-      if (!handled) return ch;
-    }
-    return null;
+  function containerOutcomeFailure(c: Container, state: RunState): string | null {
+    return outcomeFailure([...c.children].sort(), childOutgoing, childIncoming, state);
   }
 
   /** Every TOP-LEVEL entity is terminal (waiting/active/pending count as live). */
@@ -554,11 +722,18 @@ export function createEngine(doc: EngineDoc): Engine {
       if (cs.status !== 'active') continue;
       if (!c.children.every((ch) => TERMINAL_NODE.has(state.nodes[ch]!.status))) continue;
 
-      const unhandled = firstUnhandledChildFailure(c, state);
-      if (unhandled !== null) {
-        diagnostics.push(`container '${cid}' failed: unhandled child failure '${unhandled}'`);
+      // The BLAMED child, which is not necessarily an UNHANDLED one: under
+      // leaf-evaluation the blame can land on a child whose own failure WAS
+      // absorbed, reached by a skipped leaf recursing to its parents. Saying
+      // "unhandled" here would be affirmatively false in exactly the case the
+      // container-parity test drives. §C.5.4 accepted that the opaque
+      // `child_failed:<id>` reason string no longer implies "had no handler";
+      // it did not sanction a diagnostic that states it in prose.
+      const blamed = containerOutcomeFailure(c, state);
+      if (blamed !== null) {
+        diagnostics.push(`container '${cid}' failed: child '${blamed}' failed`);
         return {
-          state: exitContainer(state, c, 'failure', `child_failed:${unhandled}`),
+          state: exitContainer(state, c, 'failure', `child_failed:${blamed}`),
           changed: true,
         };
       }
@@ -709,9 +884,26 @@ export function createEngine(doc: EngineDoc): Engine {
   /**
    * Re-evaluate readiness to a fixpoint. Each pass, in order: fire a satisfied
    * back-edge (a loop iteration); advance an active container (exit/re-round);
-   * short-circuit on a top-level unhandled failure; then dispatch/skip/enter all
-   * newly-ready top-level entities and active-container children in STABLE
-   * order. When every top-level entity is terminal, emit `finishRun{success}`.
+   * then dispatch/skip/enter all newly-ready top-level entities and
+   * active-container children in STABLE order. When every top-level entity is
+   * terminal, `runOutcomeFailure` decides the run's outcome.
+   *
+   * F1b DRAINS: there is no longer an eager short-circuit on the first unhandled
+   * top-level failure. The walk always runs to completion and the outcome is
+   * evaluated once, at the fixpoint. That is what makes ADF's "Generic error
+   * handling" pattern work at all (the handler a skip-taint reaches used to stay
+   * `pending` forever — #442's core complaint), and it is what makes the outcome
+   * evaluable: the verdict genuinely depends on how far the walk drained.
+   *
+   * **The cost is real and is accepted knowingly, not overlooked.** An
+   * already-doomed run now dispatches every independent branch to completion —
+   * strictly more work than the short-circuit did. ADF does exactly this, but
+   * ADF activities are not billed per token and studio's are (its nodes are LLM
+   * calls and HTTP posts), so drain costs real money and real side effects on
+   * runs already known to be doomed. It cannot be optimised back: under the
+   * settled predicate the outcome DEPENDS on draining, so an eager exit would
+   * change the answer, not just the cost. An operator seeing spend on a doomed
+   * run should find this paragraph.
    */
   function settle(startState: RunState, diagnostics: string[]): ReduceResult {
     let state = startState;
@@ -730,15 +922,6 @@ export function createEngine(doc: EngineDoc): Engine {
       if (stepped.changed) {
         state = stepped.state;
         continue;
-      }
-
-      const failed = firstUnhandledFailureTop(state);
-      if (failed !== null) {
-        return {
-          state,
-          commands: [{ type: 'finishRun', outcome: 'failure', reason: `node_failed:${failed}` }],
-          diagnostics,
-        };
       }
 
       let changed = false;
@@ -785,7 +968,12 @@ export function createEngine(doc: EngineDoc): Engine {
     }
 
     if (allTopLevelTerminal(state)) {
-      commands.push({ type: 'finishRun', outcome: 'success' });
+      const blamed = runOutcomeFailure(state);
+      commands.push(
+        blamed === null
+          ? { type: 'finishRun', outcome: 'success' }
+          : { type: 'finishRun', outcome: 'failure', reason: `node_failed:${blamed}` },
+      );
     }
     return { state, commands, diagnostics };
   }
@@ -1153,9 +1341,17 @@ export function createEngine(doc: EngineDoc): Engine {
 
     switch (event.type) {
       case 'run.finished': {
+        // Routed through the SAME `runOutcomeFailure` as `settle` (§B.2). This
+        // is an SSOT requirement, not a style preference: these two sites answer
+        // the identical question ("is this run's outcome success?"), and a
+        // divergence between them is a latent `invalid_event` — `settle` would
+        // emit `finishRun{success}`, the driver would append `run.finished`, and
+        // the reducer would then call its own event impossible and strand the
+        // run at `status:'running'` (which `reconcile` re-drives). Measured, not
+        // theorised: changing one site alone reproduces exactly that.
         if (
           event.outcome === 'success' &&
-          !(allTopLevelTerminal(state) && firstUnhandledFailureTop(state) === null)
+          !(allTopLevelTerminal(state) && runOutcomeFailure(state) === null)
         ) {
           diagnostics.push(
             `impossible run.finished{success}: the run has a live/pending node or an unhandled failure`,
