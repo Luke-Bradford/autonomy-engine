@@ -479,10 +479,14 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
     `json` param, a no-contract node output, and every `${item.x}` path all infer `any` (E4's
     no-element-type decision), and there is **no cast function** — so refusing `any` where a
     `boolean` is wanted would be a false-REJECT with no author workaround. The check therefore fires
-    only where BOTH sides are known, and it can never reject what the run-time check accepts.
-    Sound direction, deliberately chosen — it inverts E3's "over-refusal is safe" because there the
-    unsafe direction was a doc that SAVES then THROWS with no `default()` rescue; here that cost is
-    already owned by E4.
+    only where BOTH sides are known. Sound direction, deliberately chosen — it inverts E3's
+    "over-refusal is safe" because there the unsafe direction was a doc that SAVES then THROWS with
+    no `default()` rescue; here that cost is already owned by E4.
+    - It does **NOT** follow that the checker only rejects what the run-time check rejects, and the
+      code says so: `${and(false, 'x')}` short-circuits to `false` at run (arg 2 is never
+      type-checked) but is refused at save. That is E4's **pinned** position, not a bug — the
+      checker cannot know arg0 is `false`, and relaxing it would equally accept `${and(true, 'x')}`,
+      which throws at run with no escape hatch.
   - **"array-items checks" is LIVE at the fn-arg level and INERT on refs — recorded, not fixed.**
     `ParamType`/`OutputType` are `string|number|boolean|json(|secret)`: **there is no `array`
     declared type**. So `${nodes.each.output.results}` and `${params.nums}` infer `json`→`any` and
@@ -506,11 +510,27 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
     — the shipped code named E6 as its owner, and the save-time check alone cannot bind because
     `validateDoc` is advisory (#444), so a git import reaches the reducer unchecked. BREAKING and
     deliberate: a `string`-typed "true" used to exit by accident while the same activity emitting
-    "yes" burned every round and reported the misleading `capped`. (2) **`float`/`int` refuse a
-    non-finite result**: `float`'s regex accepts an exponent, so a `json` param carrying `"1e400"`
-    returned `Infinity` — which the `number` sig REJECTS (it requires finite), making the declared
-    `ret:'number'` a lie in the one corner E6 now trusts. Pinned by a table test over **all 69**
-    catalog entries, with an exhaustiveness guard so a new fn cannot skip the audit.
+    "yes" burned every round and reported the misleading `capped`. **This is the first reducer
+    change whose semantics DIVERGE on replay** — an old log that exited via the coercion re-folds to
+    `exitWhen_error`. Finished runs are inert (`reconcileOnBoot` selects `status='running'` only),
+    so the exposure is a run still marked running from a crash window — i.e. **#443**'s known
+    hazard, which this converts from latent to reachable. Recorded, not fixed here: #443 owns it.
+  - **`number` means FINITE — one definition, three boundaries (fixed at E6).** The engine carried
+    TWO: `matchesSig` (every fn arg) required finite, while `coerce` (inbound params) and
+    `matchesType` (declared outputs) accepted any `!isNaN` value — i.e. `Infinity`. E6 made the
+    first definition load-bearing (it types every call by `ret` and every ref by its declaration),
+    so the divergence stopped being academic: a declared-`number` param could hold `Infinity`, infer
+    `number`, and then FAIL its own arg check at run — **reachable over HTTP**, since `1e400` is
+    valid JSON and `JSON.parse` yields `Infinity`. Now finite is enforced at all three
+    (`coerce`, `matchesType`, `matchesSig`), non-finite ARITHMETIC results are refused where they
+    arise (`add`/`sub`/`mul`/`div`/`sum`/`avg`, which overflow from perfectly finite args —
+    `1e308*1e308`; `min`/`max` cannot), the conversion fns (`float`/`int`) refuse an overflowing
+    input, and a non-finite number LITERAL is a grammar error. Refusing at the point of production
+    is also the only honest diagnostic: an escaped `Infinity` surfaces as "argument 1 must be a
+    number, got Infinity" attributed to the *next*, innocent function.
+    - Pinned by a table test over **all 69** catalog entries (with an exhaustiveness guard, so a new
+      fn cannot skip the audit) **plus** explicit overflow cases per boundary — the table alone
+      cannot catch this, since it samples one happy value per fn.
 
 ## Non-goals
 

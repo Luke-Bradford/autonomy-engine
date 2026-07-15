@@ -60,10 +60,12 @@ export type SigType = 'string' | 'number' | 'boolean' | 'array' | 'any';
  * or a scalar. Minting `array` for it would be a false-accept (a `json` param
  * holding a scalar would pass an `array` arg-check and throw at run).
  *
- * `secret` → `any` is unreachable in practice: `checkExprStatic` hard-rejects a
- * `${params.<secret>}` ref before inference runs (a secret never enters the `${}`
- * language). It maps to the harmless value rather than throwing, so a future
- * caller cannot turn a leak-prevention rule into a crash.
+ * `secret` → `any` is LOAD-BEARING, not defensive — do not "tidy" it into a
+ * throw. `checkExprStatic` reports a `${params.<secret>}` ref and then keeps
+ * walking, so inference DOES reach this arm on every secret ref. `any` is also
+ * the right answer for it: the ref is already reported, and a second,
+ * type-flavoured error for the same defect helps nobody. (A secret's value never
+ * enters the `${}` language at all — its only sink is the executor env channel.)
  */
 export function sigOfDeclared(t: ParamType): SigType {
   switch (t) {
@@ -271,18 +273,23 @@ function num(fn: string, v: unknown, at: string): number {
 }
 
 /**
- * A conversion's RESULT, refused if it overflowed to `Infinity`.
+ * A numeric RESULT, refused if it is not finite.
  *
- * `float`'s own regex accepts an exponent, so a `json` param carrying "1e400"
- * converts to `Infinity` — which the `number` sig REJECTS (it requires a FINITE
- * number). `int` overflows the same way on a long enough digit string. That made
- * the declared `ret: 'number'` a lie in a corner, which #6 E6 cannot afford: it
- * types every call by `ret`.
+ * `number` means FINITE in this engine — that is what `matchesSig` has always
+ * enforced on every fn argument. So a fn that RETURNS a non-finite number
+ * declares `ret: 'number'` and lies, and #6 E6 cannot afford that: it types
+ * every call by `ret`.
  *
- * Refusing at the CONVERSION (where the offending value is named) rather than
- * letting `Infinity` escape is also the better diagnostic: every numeric arg
- * check downstream would otherwise reject it with a baffling "argument 1 must be
- * a number, got Infinity", attributed to the wrong function.
+ * Two ways one arises, both real: a CONVERSION (`float`'s regex accepts an
+ * exponent, so "1e400" → `Infinity`; `int` on a long enough digit string), and
+ * ARITHMETIC on two perfectly finite args (`1e308 * 1e308`). The second is the
+ * nastier one — nothing is out of range going in, so the doc SAVES CLEAN and
+ * throws at run.
+ *
+ * Refusing HERE, where the offending value is produced, is also the only place
+ * the diagnostic can be honest: letting `Infinity` escape means the NEXT fn
+ * rejects it with a baffling "argument 1 must be a number, got Infinity",
+ * attributed to a function that did nothing wrong.
  */
 function finite(fn: string, n: number): number {
   if (!Number.isFinite(n)) {
@@ -883,7 +890,11 @@ export const FUNCTIONS: Readonly<Record<string, FnSpec>> = Object.freeze({
     args: ['array'],
     minArgs: 1,
     ret: 'number',
-    impl: (a) => numbers('sum', a[0]).reduce((x, y) => x + y, 0),
+    impl: (a) =>
+      finite(
+        'sum',
+        numbers('sum', a[0]).reduce((x, y) => x + y, 0),
+      ),
   },
   avg: {
     call: 'eager',
@@ -893,7 +904,15 @@ export const FUNCTIONS: Readonly<Record<string, FnSpec>> = Object.freeze({
     impl: (a) => {
       const ns = numbers('avg', a[0]);
       if (ns.length === 0) throw new SubstituteError("function 'avg': the array is empty");
-      return ns.reduce((x, y) => x + y, 0) / ns.length;
+      // The SUM can overflow even where the mean would be in range — guard the
+      // running total, not just the quotient, or the result is a silent NaN/∞.
+      return finite(
+        'avg',
+        finite(
+          'avg',
+          ns.reduce((x, y) => x + y, 0),
+        ) / ns.length,
+      );
     },
   },
 
@@ -1018,21 +1037,21 @@ export const FUNCTIONS: Readonly<Record<string, FnSpec>> = Object.freeze({
     args: ['number', 'number'],
     minArgs: 2,
     ret: 'number',
-    impl: (a) => (a[0] as number) + (a[1] as number),
+    impl: (a) => finite('add', (a[0] as number) + (a[1] as number)),
   },
   sub: {
     call: 'eager',
     args: ['number', 'number'],
     minArgs: 2,
     ret: 'number',
-    impl: (a) => (a[0] as number) - (a[1] as number),
+    impl: (a) => finite('sub', (a[0] as number) - (a[1] as number)),
   },
   mul: {
     call: 'eager',
     args: ['number', 'number'],
     minArgs: 2,
     ret: 'number',
-    impl: (a) => (a[0] as number) * (a[1] as number),
+    impl: (a) => finite('mul', (a[0] as number) * (a[1] as number)),
   },
   div: {
     call: 'eager',
@@ -1041,7 +1060,7 @@ export const FUNCTIONS: Readonly<Record<string, FnSpec>> = Object.freeze({
     ret: 'number',
     impl: (a) => {
       if ((a[1] as number) === 0) throw new SubstituteError("function 'div': division by zero");
-      return (a[0] as number) / (a[1] as number);
+      return finite('div', (a[0] as number) / (a[1] as number));
     },
   },
   mod: {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Container, Edge, EdgeOn, Node, Param, PipelineVersion } from '../types.js';
 import { FUNCTIONS, assignableTo, matchesSig, sigOfDeclared, type SigType } from '../functions.js';
-import { substitute, validateDoc, validateRefs } from '../params.js';
+import { resolveRunParams, substitute, validateDoc, validateRefs } from '../params.js';
 
 // ---------------------------------------------------------------------------
 // #6 E6 — `validateRefs` TYPING. The checker infers an expression's result type
@@ -371,26 +371,93 @@ describe('the catalog’s declared `ret` is honest (E6 reads it)', () => {
   });
 });
 
-// The overflow corner `ret` could not otherwise honour. `float`'s own regex
-// accepts an exponent, so a `json` param can carry "1e400" → `Infinity`, which
-// the `number` sig REJECTS (it requires a FINITE number). E6 makes `ret:'number'`
-// load-bearing, so the fn is fixed to refuse the overflow at the CONVERSION —
-// where the value is named — rather than leak an `Infinity` that every numeric
-// arg-check downstream rejects with a baffling "must be a number, got Infinity".
-describe('numeric conversion refuses a non-finite result (keeps `ret: number` true)', () => {
-  const c = { params: { big: '1e400' }, nodeOutputs: {}, nodeStatuses: {}, run: {} };
+// ===========================================================================
+// `number` means FINITE — everywhere, one definition
+// ===========================================================================
+
+// The engine had TWO definitions of "number": `matchesSig` (the fn signature
+// check) required a FINITE number, while `coerce` (inbound params) and
+// `matchesType` (declared outputs) accepted anything `!isNaN` — i.e. `Infinity`.
+// E6 made `matchesSig`'s definition load-bearing (it types every call by `ret`),
+// so the divergence stopped being academic: a declared-`number` param holding
+// `Infinity` infers `number` and then FAILS its own arg check at run.
+//
+// These pin the single definition, at each of the three places a non-finite
+// number could enter or arise. Together they are what make `ret:'number'`
+// honest — a claim E6 relies on and therefore has to earn.
+describe('`number` is FINITE at every boundary (E6’s `ret: number` premise)', () => {
+  const c = (params: Record<string, unknown>) => ({
+    params,
+    nodeOutputs: {},
+    nodeStatuses: {},
+    run: {},
+  });
 
   it('float() refuses an overflowing literal instead of returning Infinity', () => {
-    expect(() => substitute('${float(params.big)}', c)).toThrow(/overflow|too large|finite/i);
+    // `float`'s regex accepts an exponent, so this reaches `Number()` and
+    // overflows — the value is named HERE, so the error belongs here.
+    expect(() => substitute('${float(params.big)}', c({ big: '1e400' }))).toThrow(/overflow/i);
   });
 
-  it('int() refuses an overflowing literal instead of returning Infinity', () => {
-    const big = { ...c, params: { big: '9'.repeat(400) } };
-    expect(() => substitute('${int(params.big)}', big)).toThrow(/overflow|too large|finite/i);
+  it('int() refuses an overflowing digit string instead of returning Infinity', () => {
+    expect(() => substitute('${int(params.big)}', c({ big: '9'.repeat(400) }))).toThrow(
+      /overflow/i,
+    );
   });
 
-  it('still converts an ordinary value', () => {
-    expect(substitute('${float(params.big)}', { ...c, params: { big: '2.5' } })).toBe(2.5);
-    expect(substitute('${int(params.big)}', { ...c, params: { big: '2' } })).toBe(2);
+  it('arithmetic refuses a result that overflows two FINITE args', () => {
+    // The corner the first pass missed: no conversion involved, both args are
+    // finite and in-range, and the result is not. Without the guard the doc
+    // SAVES CLEAN and throws at run inside the NEXT fn, misattributed:
+    // "function 'add': argument 1 must be a number, got Infinity".
+    const big = c({ big: 1e308 });
+    expect(() => substitute('${mul(params.big, params.big)}', big)).toThrow(/overflow/i);
+    expect(() => substitute('${add(params.big, params.big)}', big)).toThrow(/overflow/i);
+    expect(() => substitute('${sub(params.big, mul(params.big, -10))}', big)).toThrow(/overflow/i);
+    expect(() => substitute('${div(params.big, 0.1)}', big)).toThrow(/overflow/i);
+  });
+
+  it('sum()/avg() refuse an overflowing aggregate', () => {
+    const big = c({ rows: [1e308, 1e308] });
+    expect(() => substitute('${sum(params.rows)}', big)).toThrow(/overflow/i);
+    expect(() => substitute('${avg(params.rows)}', big)).toThrow(/overflow/i);
+  });
+
+  it('a non-finite number LITERAL is a grammar error, not a silent Infinity', () => {
+    // `NUM_RE` has no exponent, but 310 digits overflow anyway. The parser owns
+    // this: `inferExprType` types a `num` literal `number` unconditionally.
+    expect(() => substitute(`\${add(${'9'.repeat(310)}, 1)}`, c({}))).toThrow(/overflow/i);
+  });
+
+  it('still computes ordinary values (no false refusal)', () => {
+    expect(substitute('${float(params.big)}', c({ big: '2.5' }))).toBe(2.5);
+    expect(substitute('${int(params.big)}', c({ big: '2' }))).toBe(2);
+    expect(substitute('${mul(params.big, 2)}', c({ big: 3 }))).toBe(6);
+    expect(substitute('${sum(params.rows)}', c({ rows: [1, 2, 3] }))).toBe(6);
   });
 });
+
+describe('an inbound `number` param must be FINITE (boundary validation)', () => {
+  // REACHABLE OVER HTTP: `1e400` is valid JSON, and `JSON.parse` yields
+  // `Infinity` — so a POSTed param override reached `coerce`, passed its
+  // `!isNaN` check, and seeded a declared-`number` param with `Infinity`.
+  const decl = { params: [param('n', 'number')] };
+
+  it('refuses an overflowing inbound number', () => {
+    expect(() => resolveRunParams(decl, { n: Number.POSITIVE_INFINITY })).toThrow(/finite/i);
+  });
+
+  it('refuses an overflowing inbound number STRING (310 digits, no exponent)', () => {
+    expect(() => resolveRunParams(decl, { n: '9'.repeat(310) })).toThrow(/finite/i);
+  });
+
+  it('accepts an ordinary inbound number', () => {
+    expect(resolveRunParams(decl, { n: 2 })).toEqual({ n: 2 });
+    expect(resolveRunParams(decl, { n: '2.5' })).toEqual({ n: 2.5 });
+  });
+});
+
+// The THIRD boundary — a declared `number` OUTPUT — lives in the reducer
+// (`matchesType`, the `node.succeeded` output contract). It is pinned in
+// `reduce.test.ts` alongside the other output-validation rules rather than here,
+// so the contract's cases stay in one place.

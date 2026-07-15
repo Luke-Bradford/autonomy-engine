@@ -23,11 +23,8 @@ export function declaredOutputs(node: Node): DeclaredOutput[] | null {
   return parsed.success ? parsed.data : null;
 }
 
-/**
- * The declared output NAMES of a node, or `null` when it declares no contract
- * (in which case a referenced name cannot be rejected statically).
- */
-export function declaredOutputNames(node: Node): Set<string> | null {
-  const decl = declaredOutputs(node);
-  return decl === null ? null : new Set(decl.map((d) => d.name));
-}
+// `declaredOutputNames` (a names-only `Set` view) was REMOVED at #6 E6: the
+// static checker now needs each output's TYPE as well as its name, so it reads
+// `declaredOutputs` directly and `ScanScope.outputsById` carries the full
+// `{name,type}`. A names-only view would be a second answer to "what does this
+// node declare?" — exactly the drift this module's SSOT rule exists to prevent.

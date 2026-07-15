@@ -576,11 +576,21 @@ function coerce(name: string, type: Param['type'], value: unknown): unknown {
       // this currently happens to match: that governs what an author may write
       // inside `${}`, this governs what an inbound param VALUE may be coerced
       // from. The two are free to diverge — don't merge them into one constant.
-      if (typeof value === 'number' && !Number.isNaN(value)) return value;
+      //
+      // FINITE, not merely `!isNaN` (#6 E6): `number` means finite everywhere
+      // else in this engine (`matchesSig` has always enforced it on every fn
+      // arg), and E6 types `${params.n}` from this very declaration. Accepting
+      // `Infinity` here seeded a declared-`number` param that then FAILED its own
+      // arg check at run — and it is reachable over HTTP, because `1e400` is
+      // valid JSON and `JSON.parse` yields `Infinity`.
+      if (typeof value === 'number' && Number.isFinite(value)) return value;
       if (typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value.trim())) {
-        return Number(value.trim());
+        // The regex has no exponent, but 310 digits overflow anyway — so the
+        // finite check belongs on the RESULT, not on the shape of the input.
+        const n = Number(value.trim());
+        if (Number.isFinite(n)) return n;
       }
-      throw new ParamResolveError(`param '${name}': expected number`);
+      throw new ParamResolveError(`param '${name}': expected a finite number`);
     }
     case 'boolean': {
       if (typeof value === 'boolean') return value;
@@ -1268,8 +1278,16 @@ function checkExprStatic(
       // through `checkArgTypes`.
       //
       // Reports only where BOTH sides are known — `assignableTo` waves `any`
-      // through in either direction. So this NEVER rejects what the run-time
-      // check would accept; it surfaces a subset of the same defects earlier.
+      // through in either direction.
+      //
+      // It is NOT true that this only rejects what the run-time check would also
+      // reject: `${and(false, 'x')}` short-circuits to `false` at run and never
+      // type-checks arg 2, but is rejected here. That over-refusal is E4's
+      // recorded position, pinned by `functions.test.ts`'s "laziness does NOT
+      // relax the static checker" — the checker cannot know arg0 is `false`, and
+      // relaxing it would equally accept `${and(true, 'x')}`, which THROWS at run
+      // with no escape hatch. Over-refusing a short-circuited arg is safe; that
+      // false-accept is not.
       const actual = inferExprType(a, scope);
       if (!assignableTo(actual, argSigAt(spec, i))) {
         errors.push(

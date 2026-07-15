@@ -1300,8 +1300,12 @@ function matchesType(value: unknown, type: OutputType): boolean {
   switch (type) {
     case 'string':
       return typeof value === 'string';
+    // FINITE, not merely `!isNaN` (#6 E6). `number` means finite everywhere else
+    // in this engine (`matchesSig` enforces it on every fn arg), and E6 types
+    // `${nodes.x.output.n}` from this very declaration — so admitting `Infinity`
+    // here would seed an output that fails its own type check downstream.
     case 'number':
-      return typeof value === 'number' && !Number.isNaN(value);
+      return typeof value === 'number' && Number.isFinite(value);
     case 'boolean':
       return typeof value === 'boolean';
     case 'json':

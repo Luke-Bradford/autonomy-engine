@@ -98,7 +98,20 @@ export function parseExpr(bodyRaw: string): Expr {
     return { kind: 'call', name, args };
   }
 
-  if (NUM_RE.test(body)) return { kind: 'num', value: Number(body) };
+  if (NUM_RE.test(body)) {
+    // FINITE only (#6 E6). `NUM_RE` has no exponent, but 310 digits still
+    // overflow to `Infinity` — and a `num` node is typed `number` by
+    // `inferExprType` unconditionally, so an infinite literal would be a value
+    // whose own declared type rejects it. The grammar owns its literals: refuse
+    // here rather than mint one no fn will accept.
+    const value = Number(body);
+    if (!Number.isFinite(value)) {
+      throw new SubstituteError(
+        `malformed expression: number literal '${body}' overflows to ${String(value)}`,
+      );
+    }
+    return { kind: 'num', value };
+  }
   return parseRef(body);
 }
 
