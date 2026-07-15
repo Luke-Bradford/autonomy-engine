@@ -176,14 +176,15 @@ export function createAlarmClock(deps: AlarmClockDeps): AlarmClock {
    * Fire ONE alarm. The transaction wraps the handler AND the settle, so the
    * two are inseparable: an append that committed without its settle would
    * re-fire and double-append; a settle that committed without its append would
-   * lose the alarm silently. Returns the post-commit work, or `null` if the
-   * fire did not commit.
+   * lose the alarm silently. Returns the work to run once the fire is durable;
+   * THROWS if it did not commit (there is no "failed quietly" return — a fire
+   * either committed or it rolled back and the alarm is still pending).
    */
   function fireOne(
     row: ScheduledWakeup,
     handler: WakeupHandler,
     firedAt: number,
-  ): { events: RunEvent[]; afterCommit?: () => void } | null {
+  ): { events: RunEvent[]; afterCommit?: () => void } {
     const delivery: WakeupDelivery = {
       scheduledFor: row.dueAt,
       firedAt,
@@ -235,7 +236,7 @@ export function createAlarmClock(deps: AlarmClockDeps): AlarmClock {
         // handler must never throw past this loop.
         if (handler === undefined) continue;
 
-        let committed: { events: RunEvent[]; afterCommit?: () => void } | null = null;
+        let committed: { events: RunEvent[]; afterCommit?: () => void };
         try {
           committed = fireOne(row, handler, at);
         } catch (err) {
@@ -252,8 +253,6 @@ export function createAlarmClock(deps: AlarmClockDeps): AlarmClock {
           }
           continue;
         }
-
-        if (committed === null) continue;
 
         // POST-COMMIT ONLY, and never inside the transaction above.
         //
