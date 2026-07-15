@@ -25,6 +25,20 @@ import type { Db } from './types.js';
 
 /** `armWakeup` returns the durable row; `dedupeKey` is derived, never passed. */
 export function armWakeup(db: Db, input: ArmWakeupInput): ScheduledWakeup {
+  return armInternal(db, input).row;
+}
+
+/**
+ * The arm, plus WHETHER it actually inserted.
+ *
+ * `armWakeup` deliberately hides `created`: for its callers, "armed" and
+ * "already armed" are the same successful outcome — that indifference IS the
+ * replay idempotency. `supersedeWakeup` is the one caller for which the
+ * difference is load-bearing (an upsert that resolved to a PRE-EXISTING row has
+ * not armed anything), so it reads this instead of trying to infer the same
+ * fact from the returned row's status.
+ */
+function armInternal(db: Db, input: ArmWakeupInput): { row: ScheduledWakeup; created: boolean } {
   const parsed = ArmWakeupInputSchema.parse(input);
   const dedupeKey = buildDedupeKey({
     kind: parsed.kind,
@@ -43,7 +57,7 @@ export function armWakeup(db: Db, input: ArmWakeupInput): ScheduledWakeup {
     // be a no-op, not a resurrection. It also makes an armed alarm immutable —
     // `dueAt` moves only via `supersedeWakeup`, which mints a new key.
     const existing = selectByKey(tx, parsed.kind, dedupeKey);
-    if (existing !== null) return existing;
+    if (existing !== null) return { row: existing, created: false };
 
     const row: ScheduledWakeup = {
       id: newId('wku'),
@@ -56,7 +70,7 @@ export function armWakeup(db: Db, input: ArmWakeupInput): ScheduledWakeup {
       supersededBy: null,
     };
     tx.insert(scheduledWakeups).values(row).run();
-    return ScheduledWakeupSchema.parse(row);
+    return { row: ScheduledWakeupSchema.parse(row), created: true };
   });
 }
 
@@ -187,7 +201,23 @@ export function supersedeWakeup(
       );
     }
 
-    const replacement = armWakeup(tx, opts.next);
+    // The same-key check above is NOT sufficient, because the hazard belongs to
+    // what the arm RESOLVES TO, not to the key we compared. Arming is
+    // upsert-if-absent and returns the existing row whatever its status, so a
+    // replacement key colliding with ANY prior row — a spent `fired` one under
+    // a different key, say, from a discriminator this ref has used before —
+    // would hand back that spent row while we cancelled the live alarm below:
+    // zero pending alarms, no throw, nothing logged. `created` is the only
+    // honest signal that this call actually armed something.
+    const { row: replacement, created } = armInternal(tx, opts.next);
+    if (!created) {
+      throw new WakeupSupersedeError(
+        `cannot supersede '${old.id}': the replacement's dedupeKey ('${nextKey}') already exists ` +
+          `as wakeup '${replacement.id}' (status '${replacement.status}'), so arming it resolved ` +
+          `to that row instead of arming a new alarm. Give the replacement an unused ` +
+          `discriminator.`,
+      );
+    }
     settleWakeup(tx, old.id, { status: 'cancelled', firedAt: at, supersededBy: replacement.id });
     return replacement;
   });
