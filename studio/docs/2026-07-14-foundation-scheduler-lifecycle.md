@@ -160,7 +160,7 @@ a worker, heartbeats; a **lease-expiry alarm** (S1) reclaims a dead worker's run
   **isn't in `EngineEventSchema`** (the reducer rejects it). The fork — **(i) a retryable-failure HOLD
   state or (ii) a re-open event** — was settled as **(i) HOLD** by **#472**, and is specced in
   [`2026-07-15-foundation-run-outcome-and-retry.md`](./2026-07-15-foundation-run-outcome-and-retry.md),
-  jointly with F1b (#442) because they are the same predicate. **Ownership was the real defect:** this
+  jointly with F1b (#442) because they are the same predicate (all five questions now settled there). **Ownership was the real defect:** this
   bullet said "spec it before F2b/F2c build" while spec #1 line 223 called the fork "#5's" — each spec
   deferred to the other, so nobody owned it and it slipped to the point where F2b was next in the
   build order with no semantics under it. The joint spec is now the SSOT; this spec keeps only the

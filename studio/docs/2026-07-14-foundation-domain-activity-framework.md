@@ -136,10 +136,9 @@ secureInput?, secureOutput? }`. Split across the pure/impure boundary:
 - **Success semantics — characterization tests written; reconcile is F1b.**
   **→ F1b is now specced in
   [`2026-07-15-foundation-run-outcome-and-retry.md`](./2026-07-15-foundation-run-outcome-and-retry.md)**,
-  jointly with F2b (same predicate). That spec settles drain-to-fixpoint, container parity and the
-  #443 posture; the "handled ⇒ success" rule itself is an **OPEN FORK (#475)** — strict ADF parity
-  is **fail-open** under studio's `join:'any'` (which ADF does not have), so it collides with the
-  fail-safe invariant. Do not build F1b until #475 settles.
+  jointly with F2b (same predicate). That spec settles all five questions, incl. the "handled ⇒ success"
+  rule: **leaf-evaluation AND absorption** (strict ADF parity alone is **fail-open** under studio's
+  `join:'any'`, which ADF does not have). Both `DIVERGES from ADF` labels below delete under it.
   All five cases D5 called for are covered (incl. **skipped child inside a stage**, which also pins
   that a skipped child never fails its container and that F14's grouping applies to child readiness).
   ~~Four match the ADF target~~ **THREE match** — `edge-model.test.ts:486`
@@ -364,9 +363,9 @@ rerun (gated).**
 |---|--------|
 | **F0** | `node.failed.kind` structured failure field (+ default) — PREREQUISITE |
 | ~~F1~~ | **BUILT** — `skipped` edge condition + the unified `Edge` union (merges #4 A0's schema half) + success-semantics characterization tests |
-| F1b | **OPEN — SPECCED, BLOCKED on #475.** Tests DID diverge (2 ways, both pinned): Do-If-Else "handled ⇒ success", and the eager short-circuit that makes ADF's generic-error-handling pattern unreachable. **Specced jointly with F2b in `2026-07-15-foundation-run-outcome-and-retry.md`** (same predicate). SETTLED there: drain-to-fixpoint, ONE shared outcome predicate (it has **two** call sites — `reduce.ts:735` and `:1157` — and changing one alone makes the reducer reject its own `run.finished{success}`), container parity, and #443-as-prerequisite. **BLOCKED:** the "handled ⇒ success" rule is an open fork (#475) — strict ADF parity is fail-open under `join:'any'`. Blast radius measured: 5 tests, 2 files. See D5. |
+| F1b | **OPEN — fully specced; buildable once #443 lands.** Tests DID diverge (2 ways, both pinned). Decisions, evidence, implementation sketch and blast radius: **[`2026-07-15-foundation-run-outcome-and-retry.md`](./2026-07-15-foundation-run-outcome-and-retry.md)** (the joint F1b+F2b spec — same predicate, so one spec). See D5. |
 | F2a | `Node.policy` schema + validation — **SHIPPED 2026-07-15** (`88a6ed2`), inert |
-| F2b | reducer retry-eligibility decision (keyed off `kind`). **SPECCED in `2026-07-15-foundation-run-outcome-and-retry.md`** (jointly with F1b; #472 settled HOLD). That spec adds the non-terminal `retry_pending` status + the FULL `scheduleRetry`(command)/`node.retryScheduled`/`node.retryDue` triple — **none of the three exist today** (`EngineCommandSchema` is `dispatchNode\|startChild\|finishRun`), and `scheduleRetry` is F2b's own output. **Ship F2b WITH F2c, never alone:** `onResumed` re-emits only for `ready`/`waiting`, so a held node has no boot-recovery path — S1's `scheduled_wakeups` row IS the liveness mechanism, and F2b without it is a hang, not a degraded retry. Depends on F1b. **Fix this first:** `driver.ts`'s pump appends the PARSED event (`appendEngineEvent`) but folds the RAW one (`engine.reduce(state, event)`). Inert while nothing reads `kind` — but F2b is exactly the ticket that makes it bite: any event reaching the pump untyped would be stored `kind:'permanent'` (the parse default) while the live reducer saw `undefined`, so live and replay could disagree. Reduce the value `appendEngineEvent` parses, not its input. |
+| F2b | reducer retry-eligibility decision (keyed off `kind`). **Fully specced in [`2026-07-15-foundation-run-outcome-and-retry.md`](./2026-07-15-foundation-run-outcome-and-retry.md)** (#472 settled HOLD): the `retry_pending` status, the full command/event triple, and why **F2b must ship WITH F2c, never alone**. Depends on F1b. **Fix this first:** `driver.ts`'s pump appends the PARSED event (`appendEngineEvent`) but folds the RAW one (`engine.reduce(state, event)`). Inert while nothing reads `kind` — but F2b is exactly the ticket that makes it bite: any event reaching the pump untyped would be stored `kind:'permanent'` (the parse default) while the live reducer saw `undefined`, so live and replay could disagree. Reduce the value `appendEngineEvent` parses, not its input. |
 | F2c | driver durable retry scheduling (`node.retryScheduled/retryDue`) |
 | F3 | `policy.timeout` → `node.failed{code:timeout}` event |
 | F4 | `secureInput/secureOutput` emit-time redaction + downstream-ref rule |

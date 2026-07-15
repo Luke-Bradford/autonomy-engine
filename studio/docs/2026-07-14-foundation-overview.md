@@ -88,8 +88,8 @@ later specs assume, so they must be single-owner and early:
    inert). The rest is specced in
    [`2026-07-15-foundation-run-outcome-and-retry.md`](./2026-07-15-foundation-run-outcome-and-retry.md)
    — the joint **F1b + F2b** spec (#472 settled D4 as **HOLD**; F1b and F2b are the same predicate,
-   so they are specced together). Order within this item: **#443** (log-authoritative terminality —
-   prerequisite) → **#475** (the one open fork: "handled ⇒ success") → **F1b** → **F2b + F2c
+   so they are specced together). All five questions are settled there. Order within this
+   item: **#443** (log-authoritative terminality — the one prerequisite) → **F1b** → **F2b + F2c
    together, never F2b alone**.
 7. **Unified secret model (ONE `SecretRef`/`SecretSink`/redaction contract in #1)** — secure
    outputs can't drive `${}`, secrets resolve only at approved sink fields, git import→`needs_secret`,
