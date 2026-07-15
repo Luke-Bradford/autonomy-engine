@@ -388,3 +388,22 @@ any string literal in engine code or pack templates that (a) documents the
 against the REAL `pipeline.substitute` — not a copy of the escape rule.**
 Grep sites at write time: footer constants, starter briefs, scaffolded
 `.md` templates under `templates/`.
+
+## 23. A workflow fix does NOT apply to an already-open PR — `pull_request` loads the workflow from the PR's HEAD
+
+*Origin: #468/#469 — the review bot's charter excluded `studio/`, so it
+declined to review TypeScript diffs and emitted an arbitrary verdict. The
+charter fix merged to `main`; the blocked PR #466 was then close/reopened to
+re-fire the gate, and returned the IDENTICAL out-of-scope verdict.* For
+`pull_request` events GitHub loads the workflow DEFINITION from the PR's **head
+commit**, not from the base branch and not from the recomputed merge ref.
+`actions/checkout` does check out `refs/pull/N/merge` — so the fixed code can be
+sitting right there on disk — but the STEPS that run come from head's copy of
+the YAML. Code and workflow-definition come from different places. The evidence
+was in the job log: the old `cat > build_prompt.py << 'PYEOF'` heredoc ran
+against head `9f4bb84`, which predated the fix. **Rule: a CI/workflow fix
+reaches an open PR only when that PR's BRANCH contains it — merge/rebase `main`
+into the branch (and push) before concluding the fix did or did not work. Closing
+and reopening re-fires the trigger (prevention-log #5) but changes nothing about
+which YAML is used. Verify which definition actually ran by grepping the job log
+for a line only the new code emits — never infer it from "the fix is on main".**
