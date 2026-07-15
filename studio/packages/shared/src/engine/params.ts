@@ -8,27 +8,26 @@ import type {
 } from './types.js';
 import { ParamResolveError, SubstituteError } from './types.js';
 import { declaredOutputNames } from './outputs.js';
+import type { Expr } from './expr.js';
+import { parseExpr, protectEscapes, restoreEscapes, scanTemplateRefs } from './expr.js';
 
 // ---------------------------------------------------------------------------
 // The `${...}` parameter language (ported from lib/pipeline.py's S3.1 resolver).
 //
-// A hand-rolled parser + evaluator over a CLOSED grammar. There is NO `eval`
-// and NO `new Function` anywhere: `${__import__(...)}` is simply an unknown
-// function reference that RAISES. The security-critical property is INERTNESS —
-// substitution scans a string ONCE and never rescans a replacement, so a
-// resolved value that itself contains `${...}` is emitted literally (the
-// no-injection guarantee). See `substitute`.
+// The GRAMMAR (parser + AST) lives in `expr.ts`; this module is the EVALUATOR
+// (`substitute`) + the static checker (`validateRefs`/`validateDoc`) built on
+// it. Both read the one parser, so they can never disagree on what an
+// expression means. There is NO `eval` and NO `new Function` anywhere:
+// `${__import__(...)}` is simply an unknown function reference that RAISES.
+//
+// The security-critical property is INERTNESS — substitution scans a string
+// ONCE and never rescans a replacement, so a resolved value that itself
+// contains `${...}` is emitted literally (the no-injection guarantee). See
+// `substitute`.
 // ---------------------------------------------------------------------------
 
 /** Closed field set readable via `${run.<field>}`. SSOT — extend here only. */
 export const RUN_FIELDS = ['id', 'pipelineVersionId', 'triggerId', 'parentRunId'] as const;
-
-/** Sentinel used to protect a `$${` literal escape during a substitution pass. */
-const ESC = '\x00AE_DOLLAR_BRACE\x00';
-
-/** A function call: `name(args)`. Dotall so a nested call may span the args. */
-const CALL_RE = /^([a-z_]+)\((.*)\)$/s;
-const INT_RE = /^-?\d+$/;
 
 /**
  * Missing node-output — a distinct error so `default()` (the ONE lazy function)
@@ -99,82 +98,47 @@ function toStr(v: unknown): string {
   return JSON.stringify(v);
 }
 
-// --- the parser (grammar SSOT shared by evaluator + static validator) -------
-
-type Expr =
-  | { kind: 'call'; name: string; args: Expr[] }
-  | { kind: 'ref'; path: string }
-  | { kind: 'str'; value: string }
-  | { kind: 'num'; value: number };
+// --- reference shape (segments are the SSOT — `source` is never re-parsed) ---
 
 /**
- * Top-level `${...}` body: a function call or a dotted reference (never a bare
- * literal — mirrors the prototype, where `${5}` is an unresolvable ref). Throws
- * `SubstituteError` on unbalanced quotes/parens inside a call's args.
+ * A ref's path as plain field NAMES, or `null` if any segment is an `[]` index.
+ *
+ * `segments` — not `source` — is the structural SSOT: a quoted index like
+ * `m['b.c']` is ONE segment but TWO dot-parts, so splitting `source` on `.`
+ * would disagree with the grammar on the doc's own meaning.
  */
-function parseExpr(bodyRaw: string): Expr {
-  const body = bodyRaw.trim();
-  const m = CALL_RE.exec(body);
-  if (m) {
-    const name = m[1] as string;
-    const args = splitArgs(m[2] as string).map(parseArg);
-    return { kind: 'call', name, args };
+function fieldPath(expr: Extract<Expr, { kind: 'ref' }>): string[] | null {
+  const names: string[] = [];
+  for (const seg of expr.segments) {
+    if (seg.kind !== 'field') return null;
+    names.push(seg.name);
   }
-  return { kind: 'ref', path: body };
-}
-
-/** One function argument: a string literal, int literal, nested call, or ref. */
-function parseArg(tokRaw: string): Expr {
-  const tok = tokRaw.trim();
-  if (tok.length >= 2 && tok[0] === tok[tok.length - 1] && (tok[0] === "'" || tok[0] === '"')) {
-    return { kind: 'str', value: tok.slice(1, -1) };
-  }
-  if (CALL_RE.test(tok)) return parseExpr(tok);
-  if (INT_RE.test(tok)) return { kind: 'num', value: Number(tok) };
-  return { kind: 'ref', path: tok };
+  return names;
 }
 
 /**
- * Top-level comma split honoring quotes and nested parens — a hand tokenizer,
- * so arbitrary code can never execute. Throws on unbalanced quotes/parens.
+ * The refusal for a ref carrying `[]` deep addressing. E1 parses `[]` into the
+ * AST; RESOLVING it is E7 (the runtime-validated escape hatch into `json`/`any`
+ * outputs). Until then such a ref is refused — loudly, at save AND at run time.
+ *
+ * This MUST be a plain `SubstituteError`, never a `MissingNodeOutputError`:
+ * `default()` catches the latter and would silently substitute its fallback, so
+ * `${default(nodes.a.output.rows[0], 'fb')}` would validate clean today and
+ * then SILENTLY CHANGE MEANING when E7 lands.
  */
-function splitArgs(s: string): string[] {
-  const args: string[] = [];
-  let buf = '';
-  let depth = 0;
-  let quote: string | null = null;
-  for (const ch of s) {
-    if (quote) {
-      buf += ch;
-      if (ch === quote) quote = null;
-    } else if (ch === "'" || ch === '"') {
-      quote = ch;
-      buf += ch;
-    } else if (ch === '(') {
-      depth += 1;
-      buf += ch;
-    } else if (ch === ')') {
-      depth -= 1;
-      buf += ch;
-    } else if (ch === ',' && depth === 0) {
-      args.push(buf.trim());
-      buf = '';
-    } else {
-      buf += ch;
-    }
-  }
-  if (quote !== null || depth !== 0) {
-    throw new SubstituteError('malformed expression: unbalanced quotes/parens');
-  }
-  const tail = buf.trim();
-  if (tail || args.length) args.push(tail);
-  return args;
+function deferredToE7(source: string): SubstituteError {
+  return new SubstituteError(
+    `\${${source}}: deep [] addressing into an output is not supported yet ` +
+      '(it parses, but resolving it lands with #6 E7)',
+  );
 }
 
 // --- the evaluator ----------------------------------------------------------
 
-function resolveRef(path: string, ctx: SubstitutionContext): unknown {
-  const parts = path.split('.');
+function resolveRef(expr: Extract<Expr, { kind: 'ref' }>, ctx: SubstitutionContext): unknown {
+  const parts = fieldPath(expr);
+  if (parts === null) throw deferredToE7(expr.source);
+
   if (parts[0] === 'params' && parts.length === 2) {
     const name = parts[1] as string;
     if (!Object.prototype.hasOwnProperty.call(ctx.params, name)) {
@@ -198,17 +162,17 @@ function resolveRef(path: string, ctx: SubstitutionContext): unknown {
     }
     return ctx.run[field];
   }
-  throw new SubstituteError(`unresolvable reference \${${path}}`);
+  throw new SubstituteError(`unresolvable reference \${${expr.source}}`);
 }
 
 function evalExpr(expr: Expr, ctx: SubstitutionContext): unknown {
   switch (expr.kind) {
     case 'str':
-      return expr.value;
     case 'num':
+    case 'bool':
       return expr.value;
     case 'ref':
-      return resolveRef(expr.path, ctx);
+      return resolveRef(expr, ctx);
     case 'call': {
       if (expr.name === 'default') {
         if (expr.args.length !== 2) {
@@ -255,72 +219,6 @@ function checkArity(name: string, spec: FnSpec, got: number): void {
   }
 }
 
-// --- the `${...}` boundary scanner (SSOT shared by substitute + validateRefs) -
-
-/** One located `${...}` reference: `s[start..start+1] === '${'`, `s[end] === '}'`. */
-interface RefMatch {
-  start: number;
-  end: number;
-  body: string;
-}
-
-/**
- * Find the index of the `}` that closes a `${` body starting at `bodyStart`
- * (the index right after the opening `${`), or `-1` if none closes before the
- * end of `s`. The closer is the first `}` that is NOT inside a quoted string
- * literal (quote rule mirrors `splitArgs`: a quote is closed by the next
- * occurrence of the SAME quote character, no backslash escaping). An unquoted
- * `}` cannot legally appear elsewhere in an expression body — refs don't nest
- * and expressions have no bare braces — so a `}` inside a string arg (e.g.
- * `default(params.a, "b}c")`) is skipped by the quote tracking, while a
- * premature/stray unquoted `}` just yields a body that `parseExpr` rejects with
- * a clear error (fail-loud). Deliberately NO paren/brace depth counter: a
- * single shared counter desynced on unbalanced parens (`${foo(a))}`) and could
- * swallow past the real boundary; the closer is purely the first unquoted `}`.
- */
-function findRefEnd(s: string, bodyStart: number): number {
-  let quote: string | null = null;
-  for (let i = bodyStart; i < s.length; i += 1) {
-    const ch = s[i];
-    if (quote) {
-      if (ch === quote) quote = null;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-    } else if (ch === '}') {
-      return i;
-    }
-  }
-  return -1;
-}
-
-/**
- * Scan `s` left-to-right for every `${...}` reference using `findRefEnd` for
- * each body's boundary. `s` must already have `$${` escapes sentinel-protected
- * by the caller, so a literal `${` never survives into this scan. Matches are
- * non-overlapping (scanning resumes right after each match's closing `}`).
- *
- * `unterminatedAt` is the index of a `${` with no matching top-level `}`
- * before the end of `s`, or `null` if every opener closed. Scanning stops at
- * the first unterminated opener — by construction nothing valid can follow
- * inside a body that never found its close (there is, definitionally, no
- * further unquoted `}` anywhere after it in `s`).
- */
-function scanTemplateRefs(s: string): { matches: RefMatch[]; unterminatedAt: number | null } {
-  const matches: RefMatch[] = [];
-  let i = 0;
-  while (i < s.length) {
-    const open = s.indexOf('${', i);
-    if (open === -1) break;
-    const end = findRefEnd(s, open + 2);
-    if (end === -1) return { matches, unterminatedAt: open };
-    matches.push({ start: open, end, body: s.slice(open + 2, end) });
-    i = end + 1;
-  }
-  return { matches, unterminatedAt: null };
-}
-
 // --- substitute (the security-critical inert single pass) -------------------
 
 /**
@@ -351,7 +249,7 @@ export function substitute(value: unknown, ctx: SubstitutionContext): unknown {
   // Protect the `$${` escape, then scan for every `${...}` boundary. An
   // unterminated opener (no matching top-level `}`) is a typo — RAISE (never
   // leave it as a silent literal).
-  const protectedStr = value.split('$${').join(ESC);
+  const protectedStr = protectEscapes(value);
   const { matches, unterminatedAt } = scanTemplateRefs(protectedStr);
   if (unterminatedAt !== null) {
     throw new SubstituteError(
@@ -367,7 +265,7 @@ export function substitute(value: unknown, ctx: SubstitutionContext): unknown {
   ) {
     // Whole-string ref → preserve the resolved value's native type.
     const out = evalExpr(parseExpr(matches[0]!.body), ctx);
-    return typeof out === 'string' ? out.split(ESC).join('${') : out;
+    return typeof out === 'string' ? restoreEscapes(out) : out;
   }
 
   // Embedded ref(s) → coerce each to string. Walking the ORIGINAL (protected)
@@ -381,7 +279,7 @@ export function substitute(value: unknown, ctx: SubstitutionContext): unknown {
     cursor = m.end + 1;
   }
   result += protectedStr.slice(cursor);
-  return result.split(ESC).join('${');
+  return restoreEscapes(result);
 }
 
 // --- resolveRunParams -------------------------------------------------------
@@ -443,6 +341,10 @@ export function resolveRunParams(
 function coerce(name: string, type: Param['type'], value: unknown): unknown {
   switch (type) {
     case 'number': {
+      // Deliberately independent of `expr.ts`'s number-LITERAL grammar, which
+      // this currently happens to match: that governs what an author may write
+      // inside `${}`, this governs what an inbound param VALUE may be coerced
+      // from. The two are free to diverge — don't merge them into one constant.
       if (typeof value === 'number' && !Number.isNaN(value)) return value;
       if (typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value.trim())) {
         return Number(value.trim());
@@ -690,8 +592,29 @@ function validateExitWhen(c: Container, declared: Map<string, Param>, errors: st
   };
   // Reuse the shared scanner so exitWhen agrees with the `${}` runtime grammar.
   scan(where, c.exitWhen, scope, errors);
-  if (!c.exitWhen.split('$${').join(ESC).includes('${')) {
+  const protectedStr = protectEscapes(c.exitWhen);
+  if (!protectedStr.includes('${')) {
     errors.push(`${where}: exitWhen must be a \${...} expression over child outputs`);
+    return;
+  }
+  // A CONSTANT is not an exit condition: `${true}` exits the loop after round
+  // one and `${false}` never exits at all (it degrades to the maxRounds cap).
+  // Literals only became parseable at #6 E1 — before that they failed as
+  // unresolvable refs, so the ref-scan above caught them for free. It no longer
+  // does, hence this explicit rule.
+  for (const m of scanTemplateRefs(protectedStr).matches) {
+    let parsed: Expr;
+    try {
+      parsed = parseExpr(m.body);
+    } catch {
+      continue; // malformed — already reported by `scan` above
+    }
+    if (parsed.kind === 'str' || parsed.kind === 'num' || parsed.kind === 'bool') {
+      errors.push(
+        `${where}: exitWhen must reference child outputs, not the constant ` +
+          `\${${m.body.trim()}}`,
+      );
+    }
   }
 }
 
@@ -855,7 +778,7 @@ interface ScanScope {
 
 function scan(where: string, value: unknown, scope: ScanScope, errors: string[]): void {
   if (typeof value === 'string') {
-    const protectedStr = value.split('$${').join(ESC);
+    const protectedStr = protectEscapes(value);
     if (!protectedStr.includes('${')) return;
     // Same boundary scanner as `substitute` (quote/paren/brace-aware), so the
     // runtime and static-validation paths agree on where a `${...}` body ends.
@@ -879,14 +802,20 @@ function scan(where: string, value: unknown, scope: ScanScope, errors: string[])
   }
 }
 
-/** Parse an expr for static checking; a malformed body yields a null-ish ref. */
+/**
+ * Parse an expr for static checking. A malformed body is reported ONCE, here,
+ * and yields an inert literal — `checkExprStatic` returns early on a literal,
+ * so the caller adds no second, misleading error. (A null-ish REF would be
+ * walked as a reference and re-reported as `unresolvable reference ${}`,
+ * naming an empty ref that appears nowhere in the doc.)
+ */
 function parseExprSafe(body: string, where: string, errors: string[]): Expr {
   try {
     return parseExpr(body);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     errors.push(`${where}: ${msg}`);
-    return { kind: 'ref', path: '' };
+    return { kind: 'str', value: '' };
   }
 }
 
@@ -903,7 +832,7 @@ function checkExprStatic(
   where: string,
   softOk: boolean,
 ): void {
-  if (expr.kind === 'str' || expr.kind === 'num') return;
+  if (expr.kind === 'str' || expr.kind === 'num' || expr.kind === 'bool') return;
   if (expr.kind === 'call') {
     if (expr.name === 'default') {
       if (expr.args.length !== 2) {
@@ -931,8 +860,22 @@ function checkExprStatic(
     return;
   }
 
-  // A dotted reference.
-  const parts = expr.path.split('.');
+  // A reference. `segments` is the SSOT — never split `source` (a quoted index
+  // `m['b.c']` is one segment but two dot-parts). A ref carrying an `[]` index
+  // is refused REGARDLESS of `softOk`: E7 owns resolving it, and letting
+  // `default()`'s soft path accept it would validate a doc clean today that
+  // silently changes meaning when E7 lands.
+  //
+  // E7 NOTE: this returns before walking an index's OWN sub-expression, so
+  // `${nodes.n.output.rows[params.tok]}` currently reports only the E7 refusal.
+  // When E7 makes these resolvable it MUST recurse into each `index.expr`, or
+  // the secret-param rule below gains a hole (a secret-typed `${params.tok}`
+  // hidden inside an index would go unreported).
+  const parts = fieldPath(expr);
+  if (parts === null) {
+    errors.push(`${where}: ${deferredToE7(expr.source).message}`);
+    return;
+  }
   if (parts[0] === 'params' && parts.length === 2) {
     const name = parts[1] as string;
     const decl = scope.declared.get(name);
@@ -996,7 +939,7 @@ function checkExprStatic(
     }
     return;
   }
-  errors.push(`${where}: unresolvable reference \${${expr.path}}`);
+  errors.push(`${where}: unresolvable reference \${${expr.source}}`);
 }
 
 // --- the graph / dominance helper -------------------------------------------

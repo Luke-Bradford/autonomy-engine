@@ -96,6 +96,17 @@ describe('validateDoc — containers', () => {
     expect(validateDoc(d).join(' ')).toContain('exitWhen is only meaningful on a loop');
   });
 
+  // A constant is not an exit condition: `${true}` exits after round one and
+  // `${false}` never exits. These were unresolvable-ref errors until literals
+  // became parseable at #6 E1, so the rule is now explicit.
+  it.each(['${true}', '${false}', '${7.5}', "${'done'}"])(
+    'rejects the constant exitWhen %s',
+    (exitWhen) => {
+      const d = doc([node('w')], [], [{ id: 'lp', kind: 'loop', children: ['w'], exitWhen }]);
+      expect(validateDoc(d).join(' ')).toContain('must reference child outputs, not the constant');
+    },
+  );
+
   it('rejects an exitWhen referencing a non-child node output', () => {
     const d = doc(
       [node('w'), node('outsider', { outputs: [{ name: 'done', type: 'boolean' }] })],
