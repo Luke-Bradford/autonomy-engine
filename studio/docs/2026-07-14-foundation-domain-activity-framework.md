@@ -93,6 +93,12 @@ approved secret sinks (D8). New table + REST; `validateRefs` resolves global nam
 
 ### D4 — Per-activity policy (event-modeled)
 
+> **The reducer's retry STATE MACHINE is specced in
+> [`2026-07-15-foundation-run-outcome-and-retry.md`](./2026-07-15-foundation-run-outcome-and-retry.md)**
+> (the joint F1b+F2b spec), not here. #472 settled the hold-vs-reopen fork as **HOLD**; that spec
+> owns `retry_pending`, the `scheduleRetry`/`node.retryScheduled`/`node.retryDue` triple, and the
+> F2b→F2c dependency. D4 below stays the SSOT for the policy SHAPE and the pure/impure split.
+
 Optional `Node.policy = { timeout?, retry?(≥0), retryIntervalSeconds?(30–86400),
 secureInput?, secureOutput? }`. Split across the pure/impure boundary:
 - **Reducer (pure):** on `node.failed{kind:'transient'}` with `attempts < retry`, decides
@@ -127,11 +133,19 @@ secureInput?, secureOutput? }`. Split across the pure/impure boundary:
   a skip precisely because the predecessor's own dependency was NOT met, so NOTHING upstream
   is guaranteed through it. Inheriting the predecessor's `guaranteed` set made `validateRefs`
   ACCEPT a doc that then hard-failed at dispatch (`prepInput` throws → `invalid_event`).
-- **Success semantics — characterization tests written; reconcile is F1b.** All five cases D5
-  called for are covered (incl. **skipped child inside a stage**, which also pins that a
-  skipped child never fails its container and that F14's grouping applies to child readiness).
-  Four match the ADF target and are pinned; two DIVERGE and are pinned as-is with the
-  divergence named:
+- **Success semantics — characterization tests written; reconcile is F1b.**
+  **→ F1b is now specced in
+  [`2026-07-15-foundation-run-outcome-and-retry.md`](./2026-07-15-foundation-run-outcome-and-retry.md)**,
+  jointly with F2b (same predicate). That spec settles drain-to-fixpoint, container parity and the
+  #443 posture; the "handled ⇒ success" rule itself is an **OPEN FORK (#475)** — strict ADF parity
+  is **fail-open** under studio's `join:'any'` (which ADF does not have), so it collides with the
+  fail-safe invariant. Do not build F1b until #475 settles.
+  All five cases D5 called for are covered (incl. **skipped child inside a stage**, which also pins
+  that a skipped child never fails its container and that F14's grouping applies to child readiness).
+  ~~Four match the ADF target~~ **THREE match** — `edge-model.test.ts:486`
+  (`MATCHES ADF: a skipped final branch after a failed condition`) is **MISLABELLED**: it is
+  isomorphic to the `:532` divergence pin (same Do-If-Else shape, same outcome, opposite label), and
+  ADF fails it. Two DIVERGE and are pinned as-is with the divergence named:
   1. **Do-If-Else.** ADF: "When previous activity fails: node Upon Success is skipped and its
      parent node failed; overall pipeline fails." Studio treats ANY failure carrying an
      outgoing `failure`/`completion` edge as handled → **success**.
@@ -220,9 +234,12 @@ the migrations**. What landed, and the decisions a later ticket must not re-liti
   worse than an absent one — every later spec would build against the guess). Each is
   sequencing, NOT an open design question: `inputs` (no consumer; `configSchema` types the
   blob; `ParamSpec` does not exist) · `supportsPolicy`/`retryableFailureKinds`/`timeoutScope`
-  (F2a/F2b/F3; D4 below is fully specified — the hold-vs-reopen fork is **#5's**, about the
-  reducer's retry state machine, and none of these three shapes depend on it; NB `kind`
-  already answers the near-term need, since spec #4 gives control activities no policy) ·
+  (F2a/F2b/F3; D4 below specifies the policy shape and the event flow, but NOT the reducer's
+  retry state machine — that fork was **unowned**: this line called it "#5's" while #5's own
+  spike block deferred it back to D4. Settled by **#472** (HOLD) and now specced in
+  `2026-07-15-foundation-run-outcome-and-retry.md`, jointly with F1b/#442 because they are the
+  same predicate. None of these three shapes depend on it; NB `kind` already answers the
+  near-term need, since spec #4 gives control activities no policy) ·
   `errorMap` (F9b/c/d — classification today is per-CONNECTION-KIND in `toEngineFailure`, and
   the adapters deliberately disagree: an `http` 4xx is data, an `llm_call` 4xx is a failure)
   · `secure*Fields` (F4/F15; resolved-question 2 already decided prohibit-first) ·
@@ -347,9 +364,9 @@ rerun (gated).**
 |---|--------|
 | **F0** | `node.failed.kind` structured failure field (+ default) — PREREQUISITE |
 | ~~F1~~ | **BUILT** — `skipped` edge condition + the unified `Edge` union (merges #4 A0's schema half) + success-semantics characterization tests |
-| F1b | **OPEN — tests DID diverge (2 ways, both pinned): Do-If-Else "handled ⇒ success", and the eager short-circuit that makes ADF's generic-error-handling pattern unreachable.** See D5. |
-| F2a | `Node.policy` schema + validation |
-| F2b | reducer retry-eligibility decision (keyed off `kind`). **Fix this first:** `driver.ts`'s pump appends the PARSED event (`appendEngineEvent`) but folds the RAW one (`engine.reduce(state, event)`). Inert while nothing reads `kind` — but F2b is exactly the ticket that makes it bite: any event reaching the pump untyped would be stored `kind:'permanent'` (the parse default) while the live reducer saw `undefined`, so live and replay could disagree. Reduce the value `appendEngineEvent` parses, not its input. |
+| F1b | **OPEN — SPECCED, BLOCKED on #475.** Tests DID diverge (2 ways, both pinned): Do-If-Else "handled ⇒ success", and the eager short-circuit that makes ADF's generic-error-handling pattern unreachable. **Specced jointly with F2b in `2026-07-15-foundation-run-outcome-and-retry.md`** (same predicate). SETTLED there: drain-to-fixpoint, ONE shared outcome predicate (it has **two** call sites — `reduce.ts:735` and `:1157` — and changing one alone makes the reducer reject its own `run.finished{success}`), container parity, and #443-as-prerequisite. **BLOCKED:** the "handled ⇒ success" rule is an open fork (#475) — strict ADF parity is fail-open under `join:'any'`. Blast radius measured: 5 tests, 2 files. See D5. |
+| F2a | `Node.policy` schema + validation — **SHIPPED 2026-07-15** (`88a6ed2`), inert |
+| F2b | reducer retry-eligibility decision (keyed off `kind`). **SPECCED in `2026-07-15-foundation-run-outcome-and-retry.md`** (jointly with F1b; #472 settled HOLD). That spec adds the non-terminal `retry_pending` status + the FULL `scheduleRetry`(command)/`node.retryScheduled`/`node.retryDue` triple — **none of the three exist today** (`EngineCommandSchema` is `dispatchNode\|startChild\|finishRun`), and `scheduleRetry` is F2b's own output. **Ship F2b WITH F2c, never alone:** `onResumed` re-emits only for `ready`/`waiting`, so a held node has no boot-recovery path — S1's `scheduled_wakeups` row IS the liveness mechanism, and F2b without it is a hang, not a degraded retry. Depends on F1b. **Fix this first:** `driver.ts`'s pump appends the PARSED event (`appendEngineEvent`) but folds the RAW one (`engine.reduce(state, event)`). Inert while nothing reads `kind` — but F2b is exactly the ticket that makes it bite: any event reaching the pump untyped would be stored `kind:'permanent'` (the parse default) while the live reducer saw `undefined`, so live and replay could disagree. Reduce the value `appendEngineEvent` parses, not its input. |
 | F2c | driver durable retry scheduling (`node.retryScheduled/retryDue`) |
 | F3 | `policy.timeout` → `node.failed{code:timeout}` event |
 | F4 | `secureInput/secureOutput` emit-time redaction + downstream-ref rule |

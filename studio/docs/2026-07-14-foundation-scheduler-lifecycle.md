@@ -153,13 +153,20 @@ a worker, heartbeats; a **lease-expiry alarm** (S1) reclaims a dead worker's run
 
 ## Spike-hardened (validated in code, 2026-07-14 — throwaway outbox prototype, 11 tests green)
 
-- **BIGGEST: D4 retry is NOT implementable without a reducer change.** Today `node.failed` →
-  `settle` → `firstUnhandledFailureTop` → `finishRun{failure}` **terminalizes the run on the first
-  unhandled failure**, and `node.retryRequested` only fires from a LIVE node — never a terminal
-  `failure`. `node.retryDue` **isn't in `EngineEventSchema`** (the reducer rejects it). **D4 must add
-  either (i) a retryable-failure HOLD state** (a `transient` failure with attempts remaining does NOT
-  terminalize — the node parks pending-retry) **or (ii) a re-open event** for a failed node. This is a
-  real engine-design decision, not a driver detail — **spec it before F2b/F2c build.**
+- **BIGGEST: D4 retry is NOT implementable without a reducer change — RESOLVED 2026-07-15, and it is
+  NOT this spec's to own.** Today `node.failed` → `settle` → `firstUnhandledFailureTop` →
+  `finishRun{failure}` **terminalizes the run on the first unhandled failure**, and
+  `node.retryRequested` only fires from a LIVE node — never a terminal `failure`. `node.retryDue`
+  **isn't in `EngineEventSchema`** (the reducer rejects it). The fork — **(i) a retryable-failure HOLD
+  state or (ii) a re-open event** — was settled as **(i) HOLD** by **#472**, and is specced in
+  [`2026-07-15-foundation-run-outcome-and-retry.md`](./2026-07-15-foundation-run-outcome-and-retry.md),
+  jointly with F1b (#442) because they are the same predicate. **Ownership was the real defect:** this
+  bullet said "spec it before F2b/F2c build" while spec #1 line 223 called the fork "#5's" — each spec
+  deferred to the other, so nobody owned it and it slipped to the point where F2b was next in the
+  build order with no semantics under it. The joint spec is now the SSOT; this spec keeps only the
+  scheduler-side consequence: **S1's `scheduled_wakeups` row is the liveness mechanism for a held
+  node** (`onResumed` re-emits only for `ready`/`waiting`, so HOLD has no other boot-recovery path) —
+  which is why F2b must ship with F2c.
 - **S1 fire = ONE `better-sqlite3.transaction()`** wrapping `appendEngineEvent` + `UPDATE …
   status='fired'`. Nesting works: `appendEngineEvent`'s own drizzle tx drops to a **SAVEPOINT** and
   rolls back together on throw — so S1 reuses it as-is (no refactor). The `seq = MAX+1` compute must
