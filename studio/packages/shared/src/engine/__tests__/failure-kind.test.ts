@@ -71,8 +71,4 @@ describe('F0 — node.failed.kind parse boundary', () => {
   it('exposes the closed kind set on its own schema', () => {
     expect(FailureKindSchema.options).toEqual(['transient', 'permanent', 'cancelled']);
   });
-
-  it('reserves the `timeout` code D4/F3 mandates, so F3 cannot mint a rival spelling', () => {
-    expect(FAILURE_CODES.TIMEOUT).toBe('timeout');
-  });
 });

@@ -36,27 +36,24 @@ the Activity Definition contract.
 - Catalog registry has **`idempotent`** per activity (false for all MVP activities;
   boot-recovery persists the dispatch-time value).
 - Connectors classify `auth|rate_limit|transient|permanent|cancelled` (`ConnectorErrorKind`,
-  `connectors/types.ts`) but the reducer does NOT act on it. **(Corrected during F0 build: this
-  line previously said `transient|permanent|cancelled` — the connector set is FIVE, not three.
-  That mismatch is what makes F0 a MAPPING ticket, not a plumbing one.)**
+  `connectors/types.ts`) — FIVE kinds, not three — but the reducer does NOT act on it.
 
 ## Design
 
-### F0 (PREREQUISITE) — structured failure `kind`  — **BUILT**
+### F0 (PREREQUISITE) — structured failure `kind` — **BUILT**
 
-Everything retry-related depends on this. Add `kind: 'transient'|'permanent'|'cancelled'`
-(and optional `code`) to the **`node.failed` event payload**. **Parse default for old
+Everything retry-related depends on this. `kind: 'transient'|'permanent'|'cancelled'`
+(and optional `code`) on the **`node.failed` event payload**. **Parse default for old
 events: `permanent`.** The reducer keys retry/routing off `kind` ONLY, never off `error` text.
 
-**The 3-vs-5 seam (settled during build; #2's error taxonomy is the SSOT).** The engine's
-`kind` is the 3-valued RETRY-DECISION axis; the connectors' 5-kind `ConnectorErrorKind` is
-PROVIDER-facing. They are different sets on purpose — a 3-valued engine set keeps the pure
-reducer from having to answer a policy question ("is `auth` retryable?") that F2a/F9a own.
-The adapter set maps DOWN at the executor seam (`connectors/error-kind.ts::toEngineFailure`),
-losing nothing: the detail lands in `code` (`auth` → `{permanent, code:'auth'}`; `rate_limit`
-→ `{transient, code:'rate_limit'}`; the other three pass through with no code). So the spec's
-original "connectors already produce it" is only half-true — they produce an ADJACENT
-taxonomy that F0 maps.
+**The 3-vs-5 seam (#2's error taxonomy is the SSOT).** The engine's `kind` is the 3-valued
+RETRY-DECISION axis; the connectors' 5-kind `ConnectorErrorKind` is PROVIDER-facing. They are
+different sets on purpose — a 3-valued engine set keeps the pure reducer from having to answer
+a policy question ("is `auth` retryable?") that F2a/F9a own. The adapter set maps DOWN at the
+executor seam (`connectors/error-kind.ts::toEngineFailure`), losing nothing: the detail lands
+in `code` (`auth` → `{permanent, code:'auth'}`; `rate_limit` → `{transient, code:'rate_limit'}`;
+the other three pass through with no code). F0 is therefore a MAPPING ticket — the connectors
+do not "already produce" the engine kind, they produce an ADJACENT taxonomy.
 
 `FAILURE_CODES` (`engine/types.ts`) is the single source of truth for engine-minted codes;
 the schema keeps `code` an open `z.string()` deliberately (an enum would be a back-compat
@@ -197,7 +194,7 @@ rerun (gated).**
 | F1 | `skipped` edge condition + success-semantics characterization tests |
 | F1b | success-semantics reconcile (only if tests diverge) |
 | F2a | `Node.policy` schema + validation |
-| F2b | reducer retry-eligibility decision (keyed off `kind`) |
+| F2b | reducer retry-eligibility decision (keyed off `kind`). **Fix this first:** `driver.ts`'s pump appends the PARSED event (`appendEngineEvent`) but folds the RAW one (`engine.reduce(state, event)`). Inert while nothing reads `kind` — but F2b is exactly the ticket that makes it bite: any event reaching the pump untyped would be stored `kind:'permanent'` (the parse default) while the live reducer saw `undefined`, so live and replay could disagree. Reduce the value `appendEngineEvent` parses, not its input. |
 | F2c | driver durable retry scheduling (`node.retryScheduled/retryDue`) |
 | F3 | `policy.timeout` → `node.failed{code:timeout}` event |
 | F4 | `secureInput/secureOutput` emit-time redaction + downstream-ref rule |
