@@ -267,8 +267,8 @@ export const webhookDeliveries = sqliteTable(
  *
  * `kind` is an OPEN string (no enum): the handler registry in
  * `scheduler/alarms.ts` is the runtime authority, and pinning a durable field
- * to an enum is a back-compat trap. `status` IS closed — see the 0005
- * migration for why the two differ, and why there is no `claimed` state.
+ * to an enum is a back-compat trap. `status` IS closed. See the 0005 migration
+ * for why the two differ, and for why `claimed_at`/`superseded_by` are absent.
  */
 export const scheduledWakeups = sqliteTable(
   'scheduled_wakeups',
@@ -286,11 +286,6 @@ export const scheduledWakeups = sqliteTable(
       .notNull()
       .$type<WakeupStatus>(),
     firedAt: integer('fired_at'),
-    /** Bare column, no self-FK: it is provenance for `supersedeWakeup`, never
-     * joined for correctness — the same call the `webhook_deliveries.run_id`
-     * note above makes. An FK would also add a cascade path into an audit
-     * trail, whose whole value is that it outlives what it describes. */
-    supersededBy: text('superseded_by'),
   },
   (table) => [
     uniqueIndex('scheduled_wakeups_kind_dedupe_key_idx').on(table.kind, table.dedupeKey),

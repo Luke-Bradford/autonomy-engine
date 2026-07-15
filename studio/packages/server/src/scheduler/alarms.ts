@@ -3,6 +3,9 @@ import type { ArmWakeupInput, RunEvent, ScheduledWakeup, WakeupRef } from '@auto
 import { armWakeup, getWakeup, listDueWakeups, settleWakeup } from '../repo/scheduled-wakeups.js';
 import type { Db } from '../repo/types.js';
 import type { RunEventBus } from '../run/event-bus.js';
+// The log seam this module needs is byte-identical to the cron scheduler's, and
+// lives in the same directory — so it is imported rather than re-declared.
+import type { SchedulerLog } from './scheduler.js';
 
 /**
  * #5 S1 — the ALARM CLOCK: the driver-owned half of the durable-alarm outbox,
@@ -48,13 +51,6 @@ import type { RunEventBus } from '../run/event-bus.js';
  * once `currentAttemptId` has advanced). Both layers are load-bearing.
  */
 
-/** Minimal logger seam — Fastify's `log` satisfies it (as `SchedulerLog` does). */
-export interface AlarmLog {
-  error(obj: unknown, msg?: string): void;
-  warn(obj: unknown, msg?: string): void;
-  debug(obj: unknown, msg?: string): void;
-}
-
 /**
  * Late-alarm observability (spec #5): the clock supplies the numbers, each
  * handler decides what its own event records. `latenessMs` is how long past
@@ -86,8 +82,17 @@ export type WakeupFireResult =
       status: 'fired';
       /** Envelopes the handler appended; the clock publishes them after commit. */
       events?: RunEvent[];
-      /** Work to SPAWN once the fire is durable. See the contract above. */
-      afterCommit?: () => void;
+      /**
+       * Work to SPAWN once the fire is durable. See the contract above.
+       *
+       * `Promise<void>` is in the type ON PURPOSE. TypeScript's void-return
+       * rule makes an `async () => {...}` assignable to a bare `() => void`, so
+       * declaring it sync would not KEEP handlers sync — it would only stop the
+       * clock from awaiting the promise, and the rejection of the async work
+       * this seam exists to spawn would float away as an unhandled rejection.
+       * Admitting the async case is what lets the clock settle it.
+       */
+      afterCommit?: () => void | Promise<void>;
     }
   | { status: 'suppressed'; reason: string; events?: RunEvent[] };
 
@@ -120,7 +125,7 @@ export interface AlarmClockDeps {
   now?: () => number;
   /** When present, events a handler appended are published AFTER commit. */
   bus?: RunEventBus;
-  log?: AlarmLog;
+  log?: SchedulerLog;
 }
 
 export interface AlarmClock {
@@ -135,8 +140,6 @@ export interface AlarmClock {
   tick(): void;
   /** Stop firing and refuse new alarms. Idempotent. */
   stop(): void;
-  /** The kinds this clock serves — introspection and tests. */
-  registeredKinds(): string[];
 }
 
 export function createAlarmClock(deps: AlarmClockDeps): AlarmClock {
@@ -272,8 +275,16 @@ export function createAlarmClock(deps: AlarmClockDeps): AlarmClock {
         } catch (err) {
           log?.error({ err, wakeupId: row.id }, 'alarm clock: publishing a fired alarm failed');
         }
+        // `Promise.resolve(...)` normalises both cases: a sync throw is caught
+        // by the try, an async rejection by the `.catch`. Without the latter, a
+        // rejected `afterCommit` would escape as an unhandled rejection —
+        // exactly the fault `scheduler.ts:100-103` documents for croner and
+        // defends against twice. Deliberately NOT awaited: the fire is already
+        // committed and spawned work must not hold up the remaining alarms.
         try {
-          committed.afterCommit?.();
+          void Promise.resolve(committed.afterCommit?.()).catch((err: unknown) => {
+            log?.error({ err, wakeupId: row.id }, 'alarm clock: afterCommit failed');
+          });
         } catch (err) {
           log?.error({ err, wakeupId: row.id }, 'alarm clock: afterCommit failed');
         }
@@ -289,7 +300,7 @@ export function createAlarmClock(deps: AlarmClockDeps): AlarmClock {
     stopped = true;
   }
 
-  return { arm, tick, stop, registeredKinds: () => [...handlers.keys()] };
+  return { arm, tick, stop };
 }
 
 /** A due row that was settled between the scan and its fire — skip, never re-fire. */

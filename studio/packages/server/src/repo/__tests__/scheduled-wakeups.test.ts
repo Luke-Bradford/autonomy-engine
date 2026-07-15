@@ -7,12 +7,10 @@ import { openDb } from '../../db/client.js';
 import {
   armWakeup,
   cancelWakeup,
-  getWakeup,
   getWakeupByKey,
   listDueWakeups,
   listPendingWakeups,
   settleWakeup,
-  supersedeWakeup,
 } from '../scheduled-wakeups.js';
 import type { Db } from '../types.js';
 import { freshDb } from './helpers.js';
@@ -39,7 +37,6 @@ describe('#5 S1 — armWakeup', () => {
     const row = armRetry(db, 'attempt-1');
     expect(row.status).toBe('pending');
     expect(row.firedAt).toBeNull();
-    expect(row.supersededBy).toBeNull();
     expect(row.dedupeKey).toBe(
       buildDedupeKey({ kind: 'retry', ref: RETRY_REF, discriminator: 'attempt-1' }),
     );
@@ -54,7 +51,11 @@ describe('#5 S1 — armWakeup', () => {
     expect(listPendingWakeups(db)).toHaveLength(1);
   });
 
-  it('does NOT move dueAt on re-arm — an armed alarm is immutable; use supersedeWakeup', () => {
+  it('does NOT move dueAt on re-arm — an armed alarm is IMMUTABLE', () => {
+    // There is deliberately no way to move a `dueAt`: re-scheduling (a backoff
+    // push-out, a lease heartbeat) is S7's `supersede`, which needs a durable
+    // `supersededBy` slot and a consumer to pin its semantics. Until then, a
+    // later alarm is a NEW alarm under a new discriminator.
     const first = armRetry(db, 'attempt-1', 1_000);
     const second = armRetry(db, 'attempt-1', 9_999);
     expect(second.dueAt).toBe(1_000);
@@ -138,7 +139,7 @@ describe('#5 S1 — listDueWakeups (the claim scan)', () => {
     const b = armRetry(db, 'attempt-2', 100);
     settleWakeup(db, b.id, { status: 'suppressed', firedAt: 150 });
     const c = armRetry(db, 'attempt-3', 100);
-    cancelWakeup(db, c.id);
+    cancelWakeup(db, c.id, 150);
 
     expect(listDueWakeups(db, { kinds: ['retry'], now: 9_999 })).toHaveLength(0);
   });
@@ -189,7 +190,7 @@ describe('#5 S1 — listDueWakeups (the claim scan)', () => {
   });
 });
 
-describe('#5 S1 — settle / cancel / supersede', () => {
+describe('#5 S1 — settle / cancel', () => {
   let db: Db;
   beforeEach(() => {
     db = freshDb().db;
@@ -218,127 +219,14 @@ describe('#5 S1 — settle / cancel / supersede', () => {
 
   it('cancels a pending alarm', () => {
     const row = armRetry(db, 'attempt-1');
-    expect(cancelWakeup(db, row.id)?.status).toBe('cancelled');
+    expect(cancelWakeup(db, row.id, 5_000)?.status).toBe('cancelled');
     expect(listPendingWakeups(db)).toHaveLength(0);
   });
 
   it('cancelling an already-fired alarm is refused', () => {
     const row = armRetry(db, 'attempt-1');
     settleWakeup(db, row.id, { status: 'fired', firedAt: 5_000 });
-    expect(cancelWakeup(db, row.id)).toBeNull();
+    expect(cancelWakeup(db, row.id, 9_000)).toBeNull();
     expect(getWakeupByKey(db, 'retry', row.dedupeKey)?.status).toBe('fired');
-  });
-
-  it('supersede cancels the old alarm, arms the new one, and links them', () => {
-    // The `dueAt`-mover: a heartbeat pushing a lease alarm out, or a backoff
-    // re-schedule. Spec #5: "heartbeats supersede old alarms".
-    const old = armRetry(db, 'attempt-1', 1_000);
-
-    const next = supersedeWakeup(db, {
-      kind: 'retry',
-      oldDedupeKey: old.dedupeKey,
-      next: { kind: 'retry', ref: RETRY_REF, dueAt: 9_000, discriminator: 'attempt-1-backoff-2' },
-    });
-
-    const settledOld = getWakeupByKey(db, 'retry', old.dedupeKey);
-    expect(settledOld?.status).toBe('cancelled');
-    expect(settledOld?.supersededBy).toBe(next.id);
-    expect(next.status).toBe('pending');
-    expect(next.dueAt).toBe(9_000);
-    expect(listPendingWakeups(db)).toHaveLength(1);
-  });
-
-  it('supersede REFUSES to reuse the old key — that would silently no-op the re-arm', () => {
-    // The UNIQUE (kind, dedupeKey) index makes arming upsert-if-absent, which
-    // is what gives replay its idempotency. So a supersede that kept the same
-    // key would find the cancelled row and return IT — the new alarm would
-    // never arm, the exact silent-no-arm the spike documents. The replacement
-    // must carry a NEW discriminator, and this refuses loudly if it does not.
-    const old = armRetry(db, 'attempt-1', 1_000);
-    expect(() =>
-      supersedeWakeup(db, {
-        kind: 'retry',
-        oldDedupeKey: old.dedupeKey,
-        next: { kind: 'retry', ref: RETRY_REF, dueAt: 9_000, discriminator: 'attempt-1' },
-      }),
-    ).toThrow(/same dedupeKey/i);
-  });
-
-  it('supersede REFUSES a replacement key that already exists — even a spent one under a DIFFERENT key', () => {
-    // The same-key guard above is not enough, because the hazard is a property
-    // of what the ARM RESOLVES TO, not of the key compared against the old one.
-    // `armWakeup` is upsert-if-absent and returns the existing row whatever its
-    // status (load-bearing for replay). So a replacement whose key collides
-    // with ANY prior row — here a spent `fired` one, e.g. a lease heartbeat
-    // reusing a `tick-<n>` discriminator that already fired — would resolve to
-    // that spent row while the live alarm still got cancelled: zero pending
-    // alarms, no throw, nothing logged. The silent-no-arm the spike documents,
-    // reached by the path the key check does not cover.
-    const spent = armWakeup(db, {
-      kind: 'retry',
-      ref: RETRY_REF,
-      dueAt: 500,
-      discriminator: 'tick-2',
-    });
-    settleWakeup(db, spent.id, { status: 'fired', firedAt: 600 });
-    const live = armRetry(db, 'tick-1', 1_000);
-
-    expect(() =>
-      supersedeWakeup(db, {
-        kind: 'retry',
-        oldDedupeKey: live.dedupeKey,
-        next: { kind: 'retry', ref: RETRY_REF, dueAt: 9_000, discriminator: 'tick-2' },
-      }),
-    ).toThrow(/already exists/i);
-
-    // The live alarm must survive: refusing rolls back, so we lose nothing.
-    expect(getWakeupByKey(db, 'retry', live.dedupeKey)?.status).toBe('pending');
-    expect(listPendingWakeups(db)).toHaveLength(1);
-  });
-
-  it('supersede REFUSES a replacement key that is already armed (it would return the wrong alarm)', () => {
-    // The other half: the colliding row is `pending`. Nothing is lost, but the
-    // caller asked to arm at 9_000 and would silently receive somebody else's
-    // alarm due at 2_000 — a supersede that did not do what it was asked.
-    const other = armRetry(db, 'tick-2', 2_000);
-    const live = armRetry(db, 'tick-1', 1_000);
-
-    expect(() =>
-      supersedeWakeup(db, {
-        kind: 'retry',
-        oldDedupeKey: live.dedupeKey,
-        next: { kind: 'retry', ref: RETRY_REF, dueAt: 9_000, discriminator: 'tick-2' },
-      }),
-    ).toThrow(/already exists/i);
-
-    expect(getWakeupByKey(db, 'retry', live.dedupeKey)?.status).toBe('pending');
-    expect(getWakeup(db, other.id)?.dueAt).toBe(2_000);
-  });
-
-  it('supersede is ATOMIC: a refused replacement leaves the old alarm armed', () => {
-    const old = armRetry(db, 'attempt-1', 1_000);
-    expect(() =>
-      supersedeWakeup(db, {
-        kind: 'retry',
-        oldDedupeKey: old.dedupeKey,
-        next: { kind: 'retry', ref: RETRY_REF, dueAt: 9_000, discriminator: 'attempt-1' },
-      }),
-    ).toThrow();
-    // The old alarm must NOT have been cancelled by a half-applied supersede —
-    // that would lose the alarm entirely.
-    expect(getWakeupByKey(db, 'retry', old.dedupeKey)?.status).toBe('pending');
-    expect(listPendingWakeups(db)).toHaveLength(1);
-  });
-
-  it('supersede refuses when the old alarm is not pending', () => {
-    const old = armRetry(db, 'attempt-1', 1_000);
-    settleWakeup(db, old.id, { status: 'fired', firedAt: 2_000 });
-    expect(() =>
-      supersedeWakeup(db, {
-        kind: 'retry',
-        oldDedupeKey: old.dedupeKey,
-        next: { kind: 'retry', ref: RETRY_REF, dueAt: 9_000, discriminator: 'attempt-2' },
-      }),
-    ).toThrow(/not pending/i);
   });
 });

@@ -461,7 +461,6 @@ describe('#5 S1 scheduled_wakeups constraints (raw db access)', () => {
     dedupeKey: 'retry:{"runId":"run_1"}:attempt-1',
     status: 'pending' as const,
     firedAt: null,
-    supersededBy: null,
   };
 
   it('UNIQUE (kind, dedupe_key) refuses a duplicate alarm at the DB level', () => {

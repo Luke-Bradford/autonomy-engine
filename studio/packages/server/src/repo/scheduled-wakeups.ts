@@ -23,22 +23,15 @@ import type { Db } from './types.js';
  * outcome or resurrect a spent alarm.
  */
 
-/** `armWakeup` returns the durable row; `dedupeKey` is derived, never passed. */
-export function armWakeup(db: Db, input: ArmWakeupInput): ScheduledWakeup {
-  return armInternal(db, input).row;
-}
-
 /**
- * The arm, plus WHETHER it actually inserted.
+ * Arm a durable alarm. `dedupeKey` is DERIVED (never passed), so no caller can
+ * hand-spell a key and skip the discriminator.
  *
- * `armWakeup` deliberately hides `created`: for its callers, "armed" and
- * "already armed" are the same successful outcome — that indifference IS the
- * replay idempotency. `supersedeWakeup` is the one caller for which the
- * difference is load-bearing (an upsert that resolved to a PRE-EXISTING row has
- * not armed anything), so it reads this instead of trying to infer the same
- * fact from the returned row's status.
+ * Idempotent by `(kind, dedupeKey)`: re-arming returns the existing row rather
+ * than a second alarm. "Armed" and "already armed" are deliberately the same
+ * successful outcome — that indifference IS the replay idempotency.
  */
-function armInternal(db: Db, input: ArmWakeupInput): { row: ScheduledWakeup; created: boolean } {
+export function armWakeup(db: Db, input: ArmWakeupInput): ScheduledWakeup {
   const parsed = ArmWakeupInputSchema.parse(input);
   const dedupeKey = buildDedupeKey({
     kind: parsed.kind,
@@ -54,10 +47,14 @@ function armInternal(db: Db, input: ArmWakeupInput): { row: ScheduledWakeup; cre
     //
     // Returning the EXISTING row whatever its status is the load-bearing half:
     // a replayed `scheduleRetry` for an attempt whose alarm already fired must
-    // be a no-op, not a resurrection. It also makes an armed alarm immutable —
-    // `dueAt` moves only via `supersedeWakeup`, which mints a new key.
+    // be a no-op, not a resurrection. It also makes an armed alarm IMMUTABLE —
+    // there is deliberately no way to move a `dueAt`. Re-scheduling (a backoff
+    // push-out, a lease heartbeat) is S7's `supersede`, which needs a durable
+    // `supersededBy` slot and a consumer to pin its semantics; neither exists
+    // yet. Until then a caller that wants a later alarm arms a NEW one under a
+    // new discriminator.
     const existing = selectByKey(tx, parsed.kind, dedupeKey);
-    if (existing !== null) return { row: existing, created: false };
+    if (existing !== null) return existing;
 
     const row: ScheduledWakeup = {
       id: newId('wku'),
@@ -67,10 +64,9 @@ function armInternal(db: Db, input: ArmWakeupInput): { row: ScheduledWakeup; cre
       dedupeKey,
       status: 'pending',
       firedAt: null,
-      supersededBy: null,
     };
     tx.insert(scheduledWakeups).values(row).run();
-    return { row: ScheduledWakeupSchema.parse(row), created: true };
+    return ScheduledWakeupSchema.parse(row);
   });
 }
 
@@ -123,15 +119,11 @@ export function listDueWakeups(
 export function settleWakeup(
   db: Db,
   id: string,
-  settle: { status: Exclude<WakeupStatus, 'pending'>; firedAt: number; supersededBy?: string },
+  settle: { status: Exclude<WakeupStatus, 'pending'>; firedAt: number },
 ): ScheduledWakeup | null {
   const updated = db
     .update(scheduledWakeups)
-    .set({
-      status: settle.status,
-      firedAt: settle.firedAt,
-      supersededBy: settle.supersededBy ?? null,
-    })
+    .set({ status: settle.status, firedAt: settle.firedAt })
     .where(and(eq(scheduledWakeups.id, id), eq(scheduledWakeups.status, 'pending')))
     .returning()
     .all();
@@ -142,85 +134,14 @@ export function settleWakeup(
 /**
  * Disarm a pending alarm (a `wait` node cancelled, a trigger deleted). Returns
  * `null` if it was not pending — a fired alarm cannot be un-fired.
- */
-export function cancelWakeup(db: Db, id: string, opts?: { at?: number }): ScheduledWakeup | null {
-  return settleWakeup(db, id, { status: 'cancelled', firedAt: opts?.at ?? Date.now() });
-}
-
-export class WakeupSupersedeError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'WakeupSupersedeError';
-  }
-}
-
-/**
- * Replace a pending alarm with a new one, atomically: cancel the old row (with
- * `supersededBy` naming its replacement) and arm the new one, in ONE
- * transaction. The `dueAt` mover — a heartbeat pushing a lease alarm out, a
- * backoff re-schedule (spec #5: "heartbeats supersede old alarms").
  *
- * The replacement MUST carry a new `discriminator`, and this refuses loudly if
- * it does not. Reason: arming is upsert-if-absent keyed by (kind, dedupeKey) —
- * that is exactly what gives replay its idempotency — so a same-key supersede
- * would find the just-cancelled row and return IT. The new alarm would never
- * arm, and nothing would say so: the silent-no-arm failure the spike documents.
- * Refusing turns a caller bug into an exception instead of a lost alarm.
- *
- * Atomic in the direction that matters: a refused replacement rolls the cancel
- * back, so a bad supersede leaves the old alarm ARMED rather than losing both.
+ * `at` is required rather than defaulted to `Date.now()`: every other time value
+ * in this module is a caller-supplied FACT, which is what makes "`dueAt` is
+ * stored, never recomputed" true. A repo function that reads the clock itself
+ * would be the one exception, and exceptions are how that invariant erodes.
  */
-export function supersedeWakeup(
-  db: Db,
-  opts: { kind: string; oldDedupeKey: string; next: ArmWakeupInput; at?: number },
-): ScheduledWakeup {
-  const at = opts.at ?? Date.now();
-  return db.transaction((tx) => {
-    const old = selectByKey(tx, opts.kind, opts.oldDedupeKey);
-    if (old === null) {
-      throw new WakeupSupersedeError(
-        `cannot supersede: no '${opts.kind}' wakeup with dedupeKey '${opts.oldDedupeKey}'`,
-      );
-    }
-    if (old.status !== 'pending') {
-      throw new WakeupSupersedeError(
-        `cannot supersede '${old.id}': it is not pending (status '${old.status}')`,
-      );
-    }
-
-    const nextKey = buildDedupeKey({
-      kind: opts.next.kind,
-      ref: opts.next.ref,
-      discriminator: opts.next.discriminator,
-    });
-    if (opts.next.kind === opts.kind && nextKey === opts.oldDedupeKey) {
-      throw new WakeupSupersedeError(
-        `cannot supersede '${old.id}' with the same dedupeKey ('${nextKey}'): arming is ` +
-          `upsert-by-key, so the replacement would silently resolve to the superseded row and ` +
-          `never arm. Give the replacement a new discriminator.`,
-      );
-    }
-
-    // The same-key check above is NOT sufficient, because the hazard belongs to
-    // what the arm RESOLVES TO, not to the key we compared. Arming is
-    // upsert-if-absent and returns the existing row whatever its status, so a
-    // replacement key colliding with ANY prior row — a spent `fired` one under
-    // a different key, say, from a discriminator this ref has used before —
-    // would hand back that spent row while we cancelled the live alarm below:
-    // zero pending alarms, no throw, nothing logged. `created` is the only
-    // honest signal that this call actually armed something.
-    const { row: replacement, created } = armInternal(tx, opts.next);
-    if (!created) {
-      throw new WakeupSupersedeError(
-        `cannot supersede '${old.id}': the replacement's dedupeKey ('${nextKey}') already exists ` +
-          `as wakeup '${replacement.id}' (status '${replacement.status}'), so arming it resolved ` +
-          `to that row instead of arming a new alarm. Give the replacement an unused ` +
-          `discriminator.`,
-      );
-    }
-    settleWakeup(tx, old.id, { status: 'cancelled', firedAt: at, supersededBy: replacement.id });
-    return replacement;
-  });
+export function cancelWakeup(db: Db, id: string, at: number): ScheduledWakeup | null {
+  return settleWakeup(db, id, { status: 'cancelled', firedAt: at });
 }
 
 export function getWakeupByKey(db: Db, kind: string, dedupeKey: string): ScheduledWakeup | null {

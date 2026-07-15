@@ -9,9 +9,10 @@ import {
 describe('#5 S1 — WakeupStatus vocabulary', () => {
   it('is exactly the four reachable states', () => {
     // Each has a distinct writer: `pending` (arm), `fired`/`suppressed` (the
-    // clock's fire txn), `cancelled` (cancel/supersede). A status nothing can
-    // write would be the same unreachable-surface defect as a column no code
-    // sets — see the `claimedAt` note in `wakeup.ts`.
+    // clock's fire txn), `cancelled` (cancelWakeup, and S7's supersede later).
+    // A status nothing can write would be the same unreachable-surface defect
+    // as a column no code sets — see the 0005 migration's note on why
+    // `claimed_at`/`superseded_by` are absent.
     expect(WakeupStatusSchema.options).toEqual(['pending', 'fired', 'suppressed', 'cancelled']);
   });
 });
@@ -132,7 +133,6 @@ describe('#5 S1 — ScheduledWakeupSchema is the durable row', () => {
     dedupeKey: 'retry:{"nodeId":"a","runId":"run_1"}:attempt-1',
     status: 'pending' as const,
     firedAt: null,
-    supersededBy: null,
   };
 
   it('parses a pending row', () => {

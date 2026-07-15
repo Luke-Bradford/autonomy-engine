@@ -194,36 +194,55 @@ What the hardened blocks above said, and what actually shipped:
   SAVEPOINT (proven against the real append path, not asserted) · at-least-once + idempotent fold ·
   typed per-kind `ref`, validated at **arm** time via each handler's `refSchema` · `dueAt` a STORED
   fact · late-alarm `scheduledFor`/`firedAt`/`latenessMs` · rows survive restart (proven against a
-  real file, closed and re-opened — not `:memory:`) · overdue-fires-on-boot needs no special path.
+  real file, closed and re-opened — not `:memory:`) · overdue-fires-on-boot needs no special code
+  path (an alarm whose `dueAt` passed is simply due, and the first `tick()` claims it). **The boot
+  PATH itself — a ticker, a `start()`, the `buildApp` wiring — lands with the first consumer (F2b),
+  since a cadence with no handler has nothing to fire;** what S1 proves is that pending rows survive
+  and a fresh clock fires them.
 - **`kind` is an OPEN string, `status` a closed enum + CHECK.** No consumer exists yet, so a `kind`
   vocabulary would be speculative *and* a durable back-compat trap. The **handler registry is the
   runtime authority**: an unregistered kind is never claimed (the scan filters by registered kind),
   so its row stays `pending`, visible and recoverable rather than claimed-and-dropped or spinning.
-- **AMENDED — no `claimed` status, and no `claimedAt` column** (the Codex row shape above lists
-  it). The spike proved the fire is one transaction, which removes the suspension point a claim
-  step exists to protect: a persisted `claimed` would exist only to be swept after a crash, and a
-  crash mid-fire already rolls back to `pending` — which IS the at-least-once contract. Shipping the
-  column with no writer would be the unreachable-surface defect this ticket otherwise avoids. The
-  multi-worker claim lease (`claimed_by`/`claim_expires`) the spike flags for a later S-tier lands
-  as one coherent change **if** the scheduler outgrows better-sqlite3's single writer. In-tick
-  re-entrancy is an in-memory flag, not a DB state.
+- **AMENDED — the row ships the fields that have a WRITER; `claimedAt` and `supersededBy` are
+  absent.** The Codex row shape is `{id, kind, ref, dueAt, dedupeKey, status, claimedAt, firedAt,
+  supersededBy?}`. One rationale, applied consistently — **a column with no writer is unreachable
+  surface**, the same defect this table avoids by keeping `kind` open rather than guessing a
+  vocabulary:
+  - `claimedAt` / a `claimed` status — the spike proved the fire is ONE transaction, which removes
+    the suspension point a claim step exists to protect. A persisted `claimed` would exist only to
+    be swept after a crash; a crash mid-fire already rolls back to `pending`, re-delivered next
+    tick, which IS the at-least-once contract. The multi-worker claim lease
+    (`claimed_by`/`claim_expires`) the spike flags for a later S-tier lands as one coherent change
+    **if** this outgrows better-sqlite3's single writer. In-tick re-entrancy is an in-memory flag.
+  - `supersededBy` + `supersede` (cancel-old + arm-new) — **S7 surface, deferred to S7** (#465).
+    Its only spec anchor is *"heartbeats supersede old alarms"*, which the ticket table places at
+    S7 (lease-expiry generation tokens). It was built here first and the pre-PR review found it had
+    already produced a silent-lost-alarm: the guard compared the replacement KEY, but arming is
+    upsert-if-absent, so a replacement colliding with any pre-existing row returned that spent row
+    while the live alarm was still cancelled. Exactly what a primitive with no consumer to pin its
+    semantics gets wrong. It lands at S7 via `ALTER TABLE ... ADD COLUMN superseded_by TEXT`
+    (native in SQLite — not the table-recreate a CHECK change would need).
+  - **Consequence, stated plainly:** an armed alarm is IMMUTABLE — there is no way to move a
+    `dueAt`. A caller wanting a later alarm arms a NEW one under a new discriminator.
 - **AMENDED — `isFresh` is not a separate registry predicate.** Freshness is `fire`'s discriminated
   return (`fired` | `suppressed{reason}`), because a suppression must be able to append its OWN
   durable event (`trigger.fireSuppressed`) in the same transaction as the settle — a boolean
   predicate + a status-only mutation would violate this spec's "no status-only DB mutation" rule.
 - **NEW — handlers are synchronous and may touch only `db`; anything that SPAWNS work returns via
   `afterCommit`.** Found by the planning gate and verified in code, not theorised:
-  `launcher.fire()` returns synchronously but its synchronous prefix already writes the `runs` row,
-  appends `run.started` and publishes to the bus before it suspends (`run/launcher.ts:210-218`) —
+  `launcher.fire()` returns synchronously but its synchronous prefix already writes the `runs` row
+  (`run/launcher.ts:219`), then appends `run.started` and publishes to the bus via the un-awaited
+  IIFE at `run/launcher.ts:228-230` → `run/driver.ts:205-220`, all before the first suspension —
   so the obvious "fire a run from a handler" would, inside the fire tx, let a rollback erase a run
   row that a detached async drive kept appending against, after live WS subscribers had already seen
   its `run.started`. For the same reason the clock publishes handler events to the bus **after**
   commit rather than letting handlers pass the bus to `appendEngineEvent` (which publishes
   immediately after its append). **S5/S8 must use `afterCommit` to reach the launcher.**
-- **`supersedeWakeup` is the only `dueAt` mover** (heartbeat push-out, backoff re-schedule): cancel
-  old + arm new in one tx, linked by `supersededBy`. It **refuses a same-key replacement** — since
-  arming is upsert-by-key, that would silently resolve to the superseded row and never arm; the
-  replacement must carry a new discriminator.
+  `afterCommit` is typed `() => void | Promise<void>` and the clock SETTLES the promise: TypeScript's
+  void-return rule would make an `async` handler assignable to a bare `() => void`, and its rejection
+  would then float past the tick's synchronous guard as an unhandled rejection — the fault
+  `scheduler.ts:100-103` documents for croner and defends twice. Spawning work is overwhelmingly
+  async, so that is the likely case, not the edge.
 - **DEFERRED — the per-kind `catchUp` policy field** (`fire`/`coalesce`/`skip`). The *behaviour*
   this spec mandates for retry/wait/webhook/lease ("overdue fires on boot") ships and is tested; the
   *field* does not, because no consumer needs a non-`fire` policy yet and its semantics would be

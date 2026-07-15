@@ -13,10 +13,12 @@ import { z } from 'zod';
  * about the run itself. Like `webhook_deliveries`, it is never reachable from an
  * HTTP client projection.
  *
- * Lives in `shared` (not server-local) for a mechanical reason, not a
- * client-facing one: `db/schema.ts` sources every enum column's vocabulary from
- * the Zod `.options` via `asEnumTuple(...)`, so `WakeupStatusSchema` must be
- * importable from `@autonomy-studio/shared` for the enum to have ONE source.
+ * Lives in `shared` on the `webhook-delivery.ts` PRECEDENT, which is the exact
+ * same case: driver infra, never in a resource response, no FE reader — and it
+ * lives here anyway, so its enum can be the one source `db/schema.ts` feeds to
+ * `asEnumTuple(...)`. (That SSOT rule requires the vocabulary to come from Zod,
+ * not strictly to live in this package — a server-local module could satisfy it
+ * too. Convention, followed deliberately, rather than necessity.)
  */
 
 /**
@@ -31,16 +33,15 @@ import { z } from 'zod';
  *   freshness check said no. Spec #5: "every due event re-checks currency
  *   before it fires, so stale retries / expired leases / disabled triggers
  *   can't emit valid-looking events."
- * - `cancelled` — disarmed before it came due (a `wait` node cancelled), or
- *   replaced by `supersedeWakeup` (then `supersededBy` names the replacement).
+ * - `cancelled` — disarmed before it came due (a `wait` node cancelled, a
+ *   trigger deleted). Also the slot S7's `supersede` will reuse when a lease
+ *   heartbeat replaces an alarm.
  *
  * Deliberately NO `claimed`: the fire is ONE transaction (handler + status
  * update together — see `scheduler/alarms.ts`), so there is no suspension point
- * between picking a row up and settling it, and a persisted `claimed` state
- * would exist only to be swept up after a crash. The multi-worker claim LEASE
- * (`claimed_by`/`claim_expires`/`claimedAt`) that spec #5's spike block flags as
- * a later S-tier lands as one coherent change when the scheduler actually
- * scales past better-sqlite3's single writer.
+ * between picking a row up and settling it. The 0005 migration carries the full
+ * argument, and the matching reason `claimedAt`/`supersededBy` are absent from
+ * the row.
  */
 export const WakeupStatusSchema = z.enum(['pending', 'fired', 'suppressed', 'cancelled']);
 export type WakeupStatus = z.infer<typeof WakeupStatusSchema>;
@@ -77,8 +78,9 @@ export type WakeupRef = z.infer<typeof WakeupRefSchema>;
  * `Object.values(ref).join(':')` would make `{a:'x:y'}` and `{a:'x',b:'y'}`
  * collide. Pinned by test.
  *
- * (This is NOT #3 G1's canonicalizer — that one hashes pipeline docs for git,
- * and owns number formatting + nesting this deliberately does not have.)
+ * (Not to be confused with the canonicalizer #3 G1 WILL own — that one is
+ * unbuilt, and will hash pipeline docs for git, owning the number formatting +
+ * nesting this deliberately does not have.)
  */
 function serializeRef(ref: WakeupRef): string {
   const entries = Object.keys(ref)
@@ -126,8 +128,8 @@ export function buildDedupeKey(input: {
  * The caller-facing input to the ONE write path a wakeup row has (`armWakeup`).
  *
  * Named for the call, not `NewScheduledWakeup`, following the note in
- * `webhook-delivery.ts`: `id`/`status`/`firedAt`/`supersededBy` are all
- * server-set, so an insert schema spanning them would mis-model the write path.
+ * `webhook-delivery.ts`: `id`/`status`/`firedAt` are all server-set, so an
+ * insert schema spanning them would mis-model the write path.
  * The caller supplies WHEN (`dueAt`), WHAT (`kind`), AT-WHAT (`ref`) and
  * WHICH-OCCURRENCE (`discriminator`); the `dedupeKey` is DERIVED from those via
  * `buildDedupeKey`, never passed in — so no caller can hand-spell a key and
@@ -164,7 +166,5 @@ export const ScheduledWakeupSchema = z.object({
   status: WakeupStatusSchema,
   /** Epoch ms the clock settled this row; null while `pending`. */
   firedAt: z.number().int().nullable(),
-  /** The replacement row's id when `supersedeWakeup` cancelled this one. */
-  supersededBy: z.string().min(1).nullable(),
 });
 export type ScheduledWakeup = z.infer<typeof ScheduledWakeupSchema>;

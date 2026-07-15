@@ -28,14 +28,26 @@
 -- table-recreate migration to add each new kind). The alarm clock's handler
 -- REGISTRY is the runtime authority — an unregistered kind is never claimed.
 --
--- No `claimed` status and no `claimed_at` column: the fire is ONE transaction
--- (handler + status update), so there is no suspension point between picking a
--- row up and settling it, and a persisted `claimed` state would exist only to
--- be swept after a crash. A crash mid-fire rolls back and leaves the row
--- `pending` — re-delivered next tick, which IS the at-least-once contract. The
--- multi-worker claim lease (`claimed_by`/`claim_expires`) that spec #5's spike
--- block flags for a later S-tier lands as one coherent change if the scheduler
--- ever scales past better-sqlite3's single writer.
+-- COLUMNS DELIBERATELY ABSENT — the spec's row shape is
+-- `{id, kind, ref, dueAt, dedupeKey, status, claimedAt, firedAt, supersededBy?}`;
+-- this table ships the fields that have a WRITER, and no others. One rationale,
+-- two omissions (the full argument lives in the spec's "S1 — SHIPPED" block):
+--
+--   * `claimed_at` / a `claimed` status — the fire is ONE transaction (handler +
+--     status update), so there is no suspension point between picking a row up
+--     and settling it. A persisted `claimed` would exist only to be swept after
+--     a crash; a crash mid-fire already rolls back to `pending`, re-delivered
+--     next tick, which IS the at-least-once contract. The multi-worker claim
+--     lease (`claimed_by`/`claim_expires`) the spike flags for a later S-tier
+--     lands as one coherent change if this outgrows the single writer.
+--   * `superseded_by` — its only writer would be `supersede` (cancel-old +
+--     arm-new), whose sole spec anchor is S7's lease-heartbeat generation
+--     tokens. No consumer exists to pin its semantics, so it lands at S7 via
+--     `ALTER TABLE ... ADD COLUMN superseded_by TEXT` (native in SQLite; not the
+--     table-recreate a CHECK change would need).
+--
+-- A column with no writer is unreachable surface — the same defect this table
+-- avoids by keeping `kind` open rather than guessing a vocabulary.
 --
 -- No FK on `ref`: it is a per-kind typed JSON handle (runId/nodeId/attemptId/
 -- triggerId/windowKey/leaseToken), not one column, and its shape varies by
@@ -58,8 +70,7 @@ CREATE TABLE scheduled_wakeups (
   due_at INTEGER NOT NULL,
   dedupe_key TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('pending', 'fired', 'suppressed', 'cancelled')),
-  fired_at INTEGER,
-  superseded_by TEXT
+  fired_at INTEGER
 );
 
 CREATE UNIQUE INDEX scheduled_wakeups_kind_dedupe_key_idx

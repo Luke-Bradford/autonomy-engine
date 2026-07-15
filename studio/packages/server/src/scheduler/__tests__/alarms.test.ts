@@ -406,7 +406,12 @@ describe('#5 S1 — post-commit effects never leak out of a rolled-back fire', (
     const handler = spyHandler({
       fire: () => {
         settleWakeup(db, armedId, { status: 'fired', firedAt: 1 });
-        return { status: 'fired', afterCommit: () => (ran = true) };
+        return {
+          status: 'fired',
+          afterCommit: () => {
+            ran = true;
+          },
+        };
       },
     });
     const clock = createAlarmClock({ db, handlers: [handler], now: () => 5_000, log: silentLog() });
@@ -415,6 +420,37 @@ describe('#5 S1 — post-commit effects never leak out of a rolled-back fire', (
     clock.tick();
 
     expect(ran).toBe(false);
+  });
+
+  it('settles a REJECTED async afterCommit instead of floating it as an unhandled rejection', async () => {
+    // TypeScript's void-return rule makes `async () => {...}` assignable to a
+    // bare `() => void`, so a sync-only guard (`try { afterCommit() } catch`)
+    // cannot catch a rejection — it escapes the tick entirely and, in a
+    // headless server, becomes an unhandled rejection that can take the process
+    // down. "Spawning work" is overwhelmingly async, and this seam exists
+    // exactly to spawn work, so the async case is the LIKELY one, not the edge.
+    // `scheduler.ts:100-103` documents this same fault for croner and defends
+    // it twice; the clock must not defend it once.
+    const log = silentLog();
+    const handler = spyHandler({
+      fire: () => ({
+        status: 'fired',
+        afterCommit: async () => {
+          await Promise.resolve();
+          throw new Error('spawn failed');
+        },
+      }),
+    });
+    const clock = createAlarmClock({ db, handlers: [handler], now: () => 5_000, log });
+    const armed = clock.arm({ kind: 'retry', ref: RETRY_REF, dueAt: 1_000, discriminator: 'a-1' });
+
+    expect(() => clock.tick()).not.toThrow();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // The rejection was caught and logged, not floated...
+    expect(log.error).toHaveBeenCalled();
+    // ...and the fire stays committed: re-delivering it would double-append.
+    expect(getWakeup(db, armed.id)?.status).toBe('fired');
   });
 
   it('an afterCommit that throws does not lose the fire (already committed) nor crash the tick', () => {
