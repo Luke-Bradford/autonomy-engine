@@ -1406,14 +1406,19 @@ function formatDateTime(fn: string, a: unknown[]): string {
   // `([\s\S])\1*` is one run of the same character. `[\s\S]`, not `.`, because
   // `.` excludes newlines — which would split a run around one and silently
   // change the output of a multi-line format.
-  return format.replace(/([\s\S])\1*/g, (run, ch: string) => {
+  return format.replace(/([\s\S])\1*/g, (run, ch: string, offset: number) => {
     if (!/[A-Za-z]/.test(ch)) return run;
     const token = FORMAT_TOKENS[run];
     if (token === undefined) {
+      // Report the POSITION, never the text. The format arg is a resolved value
+      // like any other — it can be a ref, not a literal — and `SubstituteError`
+      // messages are client-safe by contract (`types.ts`), which is why `parseTs`
+      // refuses to echo its own argument. Echoing the offending run here would
+      // turn a misrouted `${global.apiKey}` into a character-by-character oracle.
       throw new SubstituteError(
-        `function '${fn}': '${run}' is not a format token ` +
+        `function '${fn}': argument 2 has an unknown format token at position ${offset} ` +
           `(the closed set is ${Object.keys(FORMAT_TOKENS).join(', ')}; ` +
-          'letters cannot appear literally — assemble with concat)',
+          'ASCII letters cannot appear literally — assemble with concat)',
       );
     }
     return token(dt);

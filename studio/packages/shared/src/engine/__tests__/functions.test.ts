@@ -482,6 +482,39 @@ describe('E5a date fns — parsing is STRICT', () => {
     ).toBe('9999');
   });
 
+  it('gets the CENTURY leap rule right (not just the /4 rule)', () => {
+    // 1900 is NOT a leap year (divisible by 100, not by 400); 2000 IS. A bare
+    // `y % 4 === 0` passes every other date test in this file.
+    expect(() =>
+      substitute('${addDays(params.t, 0)}', ctx({ params: { t: '1900-02-29T00:00:00Z' } })),
+    ).toThrow(/day that does not exist/);
+    expect(
+      substitute('${addDays(params.t, 0)}', ctx({ params: { t: '2000-02-29T00:00:00Z' } })),
+    ).toBe('2000-02-29T00:00:00.000Z');
+  });
+
+  it('applies the MINUTES of a half-hour offset, not just the hours', () => {
+    // India (+05:30), Chatham (+12:45) and friends. Dropping the minutes term
+    // leaves every whole-hour offset correct, so it hides in plain sight.
+    expect(
+      substitute('${addDays(params.t, 0)}', ctx({ params: { t: '2026-07-15T10:30:00+01:30' } })),
+    ).toBe('2026-07-15T09:00:00.000Z');
+    expect(
+      substitute('${addDays(params.t, 0)}', ctx({ params: { t: '2026-07-15T10:30:00+05:30' } })),
+    ).toBe('2026-07-15T05:00:00.000Z');
+  });
+
+  it('pads a SHORT fractional second — `.1` is 100ms, not 1ms', () => {
+    // ISO fractions are decimal, so `.1` = 100ms. Reading the digits as an
+    // integer would make `.1Z` one millisecond.
+    expect(
+      substitute('${addDays(params.t, 0)}', ctx({ params: { t: '2026-07-15T10:30:00.1Z' } })),
+    ).toBe('2026-07-15T10:30:00.100Z');
+    expect(
+      substitute('${addDays(params.t, 0)}', ctx({ params: { t: '2026-07-15T10:30:00.12Z' } })),
+    ).toBe('2026-07-15T10:30:00.120Z');
+  });
+
   it('throws on a null `${run.startedAt}` instead of coercing it', () => {
     // `RunState.startedAt` is nullable — it folds to null for a pre-E3 log. The
     // throw is loud and correct; coercing null to the epoch would be a silent lie.
@@ -588,6 +621,36 @@ describe('E5a formatDateTime — a CLOSED token set', () => {
     expect(substitute("${formatDateTime(params.t, 'yyyyMMdd')}", c)).toBe('20260715');
     // `fff` round-trips the ms that `${run.startedAt}` carries.
     expect(substitute("${formatDateTime(params.t, 'HH:mm:ss.fff')}", c)).toBe('10:30:45.123');
+  });
+
+  it('zero-pads `yyyy` to 4 digits for a sub-1000 year', () => {
+    // Every other year in this suite is 4 digits already, where the pad width is
+    // a no-op — so a wrong width would go unnoticed and then emit a `0099` year
+    // as `99`, which our own parser would refuse to read back.
+    expect(
+      substitute(
+        "${formatDateTime(params.t, 'yyyy-MM-dd')}",
+        ctx({ params: { t: '0099-07-15T10:30:00Z' } }),
+      ),
+    ).toBe('0099-07-15');
+  });
+
+  it('passes a NON-ASCII letter through — the token set is ASCII-only', () => {
+    // `/[A-Za-z]/` does not match `年`/`м`, so they are literals. Documented as
+    // such: the refusal message says "ASCII letters", because claiming "letters
+    // cannot appear literally" would be false.
+    expect(substitute("${formatDateTime(params.t, 'yyyy年MM月dd日')}", c)).toBe('2026年07月15日');
+  });
+
+  it('never echoes the format string in a refusal — it is a resolved value', () => {
+    // Argument 2 can be a REF, so echoing the offending run would turn a
+    // misrouted secret into a character-by-character oracle. `parseTs` already
+    // holds this line for argument 1; the message names a POSITION instead.
+    const secret = ctx({ params: { t: '2026-07-15T10:30:00Z', fmt: 'ghp_aBcDeF123' } });
+    expect(() => substitute('${formatDateTime(params.t, params.fmt)}', secret)).toThrow(/position/);
+    expect(() => substitute('${formatDateTime(params.t, params.fmt)}', secret)).not.toThrow(
+      /ghp_|aBcDeF/,
+    );
   });
 
   it('passes non-alphabetic characters through literally', () => {

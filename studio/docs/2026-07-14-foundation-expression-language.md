@@ -360,8 +360,10 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
   - **`dayOfWeek` is 0=Sunday** — ADF parity, and what `triggers/run-window.ts` already reads via
     `getUTCDay()`. A different numbering would ship two weekday conventions in one product.
   - **`formatDateTime` is a CLOSED token set** — `yyyy MM dd HH mm ss fff` — scanning runs of the
-    SAME character (.NET's convention, so `yyyyMMdd` tokenises without separators). An alphabetic run
-    must BE a token; everything else passes through literally. Rejecting an unknown token is the same
+    SAME character (.NET's convention, so `yyyyMMdd` tokenises without separators). An **ASCII-letter**
+    run (`/[A-Za-z]/`) must BE a token; everything else passes through literally — including non-ASCII
+    letters, so `'yyyy年MM月'` → `'2026年07月'` works and the refusal says "ASCII letters", which is
+    what the scanner actually means. Rejecting an unknown token is the same
     call as `float`'s decimal-only regex: emitting an unimplemented `yy` raw would hand the author
     `yy-07-15` and let them believe it worked. **No quoted-literal syntax** (so no literal `'T'`):
     the format arg already sits inside a `${}` string literal, and the ISO shape needs no formatting
@@ -372,6 +374,11 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
     composes and keeps ONE formatting path.
   - **A null `${run.startedAt}` THROWS** rather than coercing (`RunState.startedAt` folds to `null`
     for a pre-E3 log). Loud beats a silent epoch-1970. Pinned by test.
+  - **No refusal echoes its argument.** `SubstituteError` messages are client-safe by contract, and a
+    timestamp/format arg is a resolved value like any other — it can be a `${ref}`, so a misrouted
+    secret must not come back out through an error. `parseTs` names the expected SHAPE and
+    `formatDateTime` names the offending POSITION; neither quotes the text. (Echoing the bad format
+    run would make it a character-by-character oracle: `'ghp_aBc…'` → "'g' is not a format token".)
   - **No new resource cap.** These return scalars/strings and allocate nothing array-shaped; the
     array caps are irrelevant here and max resolved-value size stays OUT (E7/general).
 - **SSOT bug — FIXED at E3 (2026-07-15, implemented).** Was: the spec's example expressions use
