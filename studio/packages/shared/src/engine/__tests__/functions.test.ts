@@ -256,6 +256,21 @@ describe('resource limits', () => {
     ).toThrow(/too many array elements/i);
   });
 
+  it('bounds array CONSUMPTION, not just materialisation', () => {
+    // `sum()` scans a near-cap array and returns a SCALAR. Charging only
+    // array-shaped results of CALLS would let these scan 10k elements each while
+    // spending nothing — the budget would bound allocation, not work.
+    const at = Array.from({ length: MAX_ARRAY_ELEMENTS }, (_, i) => i);
+    const c = ctx({ params: { a: at, b: at, c: at } });
+    expect(substitute('${add(sum(params.a), sum(params.b))}', c)).toBe(99_990_000);
+    // ...and a re-resolved array inside a lambda is quadratic: `b` is resolved
+    // once PER ELEMENT of `a`, which is 10^6 elements of real work.
+    const k = Array.from({ length: 1000 }, (_, i) => i);
+    expect(() =>
+      substitute('${count(params.a, contains(params.b, item))}', ctx({ params: { a: k, b: k } })),
+    ).toThrow(/too many array elements/i);
+  });
+
   it('does NOT cap the fns that allocate nothing — they are the escape hatch', () => {
     // An over-cap array must stay inspectable, or the author cannot write the
     // guard that avoids the cap, and take/skip cannot bring it back under.

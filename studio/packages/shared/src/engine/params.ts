@@ -148,14 +148,13 @@ function newEnv(ctx: SubstitutionContext): Env {
 }
 
 /**
- * Charge an array-producing call against the per-evaluation budget.
+ * Charge an array flowing through the evaluation against the per-field budget.
  *
- * The per-array cap bounds ONE array; this bounds the whole evaluation. Without
- * it `${length(map(range(0,10000), range(0,10000)))}` allocates 10^8 elements
- * while every individual array sits exactly AT the cap — the per-array check
- * cannot see the product. Charging here (the one place every call's result
- * passes through) means no fn can forget it, and a fn added later inherits the
- * bound for free.
+ * The per-array cap bounds ONE array; this bounds the whole field. Without it
+ * `${length(map(range(0,10000), range(0,10000)))}` allocates 10^8 elements while
+ * every individual array sits exactly AT the cap — the per-array check cannot
+ * see the product. Called from `evalExpr`, the one node every value passes
+ * through, so no fn can forget it and a fn added later inherits the bound free.
  */
 function charge(env: Env, out: unknown): void {
   if (!Array.isArray(out)) return;
@@ -260,7 +259,25 @@ function resolveRef(expr: Extract<Expr, { kind: 'ref' }>, env: Env): unknown {
   throw new SubstituteError(`unresolvable reference \${${expr.source}}`);
 }
 
+/**
+ * Evaluate one expression node and CHARGE its result against the budget.
+ *
+ * Charging wraps EVERY node — not just a call that returns an array — because
+ * consuming an array is as much work as producing one: `sum(params.big)` scans
+ * 10k elements and returns a scalar, so charging only array-shaped RESULTS of
+ * CALLS would let `add(sum(a), add(sum(b), …))`, or a re-resolved array inside a
+ * lambda (`count(a, contains(b, item))`, which resolves `b` once PER ELEMENT),
+ * do the work the budget claims to bound while spending nothing. Charging at the
+ * one node every value passes through keeps the bound honest: an array is
+ * charged each time it is resolved OR produced.
+ */
 function evalExpr(expr: Expr, env: Env): unknown {
+  const out = evalExprInner(expr, env);
+  charge(env, out);
+  return out;
+}
+
+function evalExprInner(expr: Expr, env: Env): unknown {
   switch (expr.kind) {
     case 'str':
     case 'num':
@@ -275,12 +292,9 @@ function evalExpr(expr: Expr, env: Env): unknown {
       }
       checkArity(expr.name, spec, expr.args.length);
       try {
-        const out =
-          spec.call === 'special'
-            ? spec.run(expr.args, evalIn(env))
-            : callEager(expr.name, spec, expr.args, env);
-        charge(env, out);
-        return out;
+        return spec.call === 'special'
+          ? spec.run(expr.args, evalIn(env))
+          : callEager(expr.name, spec, expr.args, env);
       } catch (err) {
         if (err instanceof SubstituteError) throw err;
         const msg = err instanceof Error ? err.message : String(err);

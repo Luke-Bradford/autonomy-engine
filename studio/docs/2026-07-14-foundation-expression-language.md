@@ -271,8 +271,15 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
     splitting first would materialise the array it means to refuse).
   - `MAX_ARRAY_ELEMENTS_TOTAL = 100_000` bounds the WORK of one FIELD's evaluation. The per-array cap
     is per-ARRAY, so `${length(map(range(0,10000), range(0,10000)))}` passes every individual check
-    while allocating 10^8 (a third nesting reaches 10^12). Charged in `evalExpr` — the one site every
-    call funnels through — so no fn can forget it and a later fn inherits it free.
+    while allocating 10^8 (a third nesting reaches 10^12). Charged in `evalExpr` — the one node every
+    value passes through — so no fn can forget it and a later fn inherits it free.
+    **Consumption is charged, not just materialisation:** an array is charged each time it is
+    RESOLVED as well as each time it is produced, because scanning an array is as much work as
+    building one. Charging only the array-shaped RESULT of a call would let `add(sum(a), add(sum(b),
+    …))` — each `sum` scanning a near-cap array and returning a SCALAR — or a re-resolved array
+    inside a lambda (`count(a, contains(b, item))` resolves `b` once PER ELEMENT, i.e. quadratic) do
+    exactly the work the budget claims to bound while spending nothing. (Review-bot WARNING on PR
+    #449; the claim was fixed in the code rather than weakened in the doc.)
   - **Deliberately NOT capped:** `length`/`empty`/`first`/`last`/`take`/`skip` allocate nothing, and
     `take`/`skip` are exactly how an author brings an oversized `${nodes.http.output.body}` back
     UNDER the cap. Capping them made an over-cap array wholly unusable — you could not even ask its
