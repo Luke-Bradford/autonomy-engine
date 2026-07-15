@@ -401,7 +401,24 @@ export function createEngine(doc: EngineDoc): Engine {
       return false;
     }
 
-    /** Conjunct 1, per entity. */
+    /**
+     * Conjunct 1, per entity.
+     *
+     * Each dead edge starts a FRESH `absorbedSkip` walk, so overlapping skip
+     * subgraphs are re-walked once per candidate — a multiplicative cost on top
+     * of `settle`'s already-O(n²) worst case, worth knowing before a large-doc
+     * benchmark surprises someone. It is bounded (candidates × taint subgraph)
+     * and invisible at real doc sizes, so it is not optimised here.
+     *
+     * If it ever needs to be: sharing ONE `seen` across the walks is safe, but
+     * only because of an asymmetry worth stating rather than rediscovering. A
+     * walk that returns `false` has drained its stack, so every id it marked is
+     * *proven* non-absorbing and re-walking it can only return `false` again. A
+     * walk that returns `true` short-circuits mid-scan and leaves ids marked but
+     * unexplored — reusing THAT set would be unsound. Since a `true` ends the
+     * whole predicate for this entity, the set is discarded exactly when it
+     * would have been unsafe to keep.
+     */
     function absorbedFailure(id: string): boolean {
       for (const e of outs(id)) {
         const es = edgeState(e, state);
