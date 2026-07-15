@@ -9,7 +9,7 @@ import {
 } from '@autonomy-studio/shared';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
-import { createRun, getRun, updateRun } from '../../repo/runs.js';
+import { createRun, getRun, listRuns, updateRun } from '../../repo/runs.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { buildEngine, startRun, type DocResolver } from '../driver.js';
 import { appendEngineEvent, loadEngineEvents } from '../events.js';
@@ -231,6 +231,254 @@ describe('reconcileOnBoot — resync a torn terminal write', () => {
     expect(report.resumed).toEqual([]);
     expect(report.interrupted).toEqual([]);
     expect(getRun(db, run.id)!.status).toBe('success');
+  });
+
+  /**
+   * Pins the `state.status === 'pending'` branch: a `running` row whose log has
+   * no `run.started` (the projection is then the `pending` seed). Unreachable
+   * via the real callers, which is exactly why it is pinned here rather than
+   * left to bit-rot — and why it is a re-sync and NOT an assertion: the boot
+   * loop has no per-run try/catch, so throwing on one malformed row would
+   * strand every run AFTER it, the same fail-safety property #443 established
+   * by hoisting `terminalFactFromLog` above `buildEngine`.
+   */
+  it('re-syncs a running row whose log has no `run.started`, appending nothing', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const run = seedRun(db, pvId);
+
+    // A `running` row with an EMPTY log: the projection seeds to `pending`.
+    updateRun(db, run.id, { status: 'running', finishedAt: null });
+    expect(loadEngineEvents(db, run.id)).toEqual([]);
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+    });
+
+    expect(report.resynced).toEqual([run.id]);
+    expect(report.resumed).toEqual([]);
+    expect(getRun(db, run.id)!.status).toBe('pending');
+    // The load-bearing half: NO `run.resumed` appended to a log with no
+    // `run.started` — the corruption the branch exists to prevent.
+    expect(loadEngineEvents(db, run.id)).toEqual([]);
+  });
+
+  it('a `run.started`-less row does not strand the runs after it in the loop', async () => {
+    const { db } = freshDb();
+
+    // Ordered so the malformed row is reconciled BEFORE the healthy one.
+    const bad = seedRun(db, seedVersion(db, [node('a')]));
+    updateRun(db, bad.id, { status: 'running', finishedAt: null });
+
+    const good = seedRun(db, seedVersion(db, [node('b')]));
+    await startRun({ db, resolveDoc: resolveDocFor(db), executor: makeStubExecutor() }, good);
+    updateRun(db, good.id, { status: 'running', finishedAt: null });
+
+    // This test's whole value is the EARLY-EXIT shape (a `continue` that became
+    // a `break`/throw strands `good`), which only bites when `bad` is reconciled
+    // first. `listRuns` has no ORDER BY, so that order is SQLite's scan order,
+    // not a guarantee — assert it, or adding one silently voids this test.
+    expect(listRuns(db, { status: 'running' }).map((r) => r.id)).toEqual([bad.id, good.id]);
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+    });
+
+    // Both reconciled: the malformed row is survivable, not fatal to the loop.
+    expect(report.resynced).toContain(bad.id);
+    expect(report.resynced).toContain(good.id);
+    expect(getRun(db, good.id)!.status).toBe('success');
+  });
+});
+
+describe('reconcileOnBoot — #443 the LOG is authoritative over the projection', () => {
+  /**
+   * #443. Runs are event-sourced (`state = fold(run_events)`) with the CURRENT
+   * reducer, so ANY reducer semantics change re-folds already-finished logs. When
+   * the re-fold disagrees with a log that already recorded `run.finished`, the old
+   * projection-based check here missed its fast path and RE-DROVE a finished run —
+   * re-executing a node's side effect.
+   *
+   * The log below is HAND-AUTHORED (synthetic), and deliberately so: it pins the
+   * MECHANISM — "the log records a terminal fact the current reducer would not
+   * re-derive" — not any one reducer change's provenance. Today the current
+   * reducer rejects this `run.finished{success}` (the `a --completion--> d` arm
+   * rescues failed `a`, so `d` is `ready` and the run does not look finished),
+   * which is exactly what makes the projection say `running`. F1b will make the
+   * same shape reachable from logs an OLD reducer legitimately ACCEPTED (every
+   * Do-If-Else doc), at scale. The reconciler cannot tell the two apart — and
+   * under this rule it does not need to: it never re-derives a recorded terminal.
+   */
+  function seedTerminalLogTheReducerWontReDerive(db: Db) {
+    const pvId = seedVersion(
+      db,
+      [node('a'), node('d')],
+      [edge('a', 'd', 'success'), edge('a', 'd', 'completion')],
+    );
+    const run = seedRun(db, pvId);
+    appendEngineEvent(db, {
+      type: 'run.started',
+      runId: run.id,
+      pipelineVersionId: pvId,
+      params: {},
+    });
+    appendEngineEvent(db, {
+      type: 'node.dispatched',
+      runId: run.id,
+      nodeId: 'a',
+      attemptId: 'a#0',
+      idempotent: true,
+    });
+    appendEngineEvent(db, {
+      type: 'node.failed',
+      runId: run.id,
+      nodeId: 'a',
+      attemptId: 'a#0',
+      error: 'boom',
+      kind: 'permanent',
+    });
+    // The durable terminal fact.
+    appendEngineEvent(db, { type: 'run.finished', runId: run.id, outcome: 'success' });
+    // The torn write: a crash between the terminal append and its lifecycle sync.
+    updateRun(db, run.id, { status: 'running', finishedAt: null });
+
+    // Precondition — the whole point: the CURRENT reducer re-folds this log to a
+    // LIVE run that disagrees with its own recorded terminal fact.
+    const state = buildEngine(getPipelineVersion(db, pvId)!).projectRunState(
+      loadEngineEvents(db, run.id),
+    );
+    expect(state.status).toBe('running');
+    expect(state.nodes.d!.status).toBe('ready');
+    return run;
+  }
+
+  it('re-syncs from the log and NEVER re-executes a finished run’s side effect', async () => {
+    const { db } = freshDb();
+    const run = seedTerminalLogTheReducerWontReDerive(db);
+    const before = loadEngineEvents(db, run.id).length;
+
+    const executor = makeStubExecutor();
+    const report = await reconcileOnBoot({ db, resolveDoc: resolveDocFor(db), executor });
+
+    expect(report.resynced).toEqual([run.id]);
+    expect(report.resumed).toEqual([]);
+    expect(report.finalized).toEqual([]);
+    // THE damage this ticket exists to prevent: before the fix this was ['d#0'].
+    expect(executor.dispatched).toEqual([]);
+    // The append-only log gains NOTHING — no `run.resumed`, no contradictory 2nd terminal.
+    expect(loadEngineEvents(db, run.id).length).toBe(before);
+    expect(getRun(db, run.id)!.status).toBe('success');
+    expect(getRun(db, run.id)!.finishedAt).not.toBeNull();
+  });
+
+  it('takes the LAST terminal event: a rejected finish then its accepted replacement ⇒ failure', async () => {
+    // `pump` appends `run.finished` BEFORE folding it (driver.ts:176-177), so a
+    // finish the reducer REJECTS is durably in the log, followed by the
+    // `finishRun{failure, invalid_event}` it returns instead. Reading the FIRST
+    // terminal would resync the rejected `success` — fail-OPEN. The last terminal
+    // event is the driver's actual conclusion.
+    const { db } = freshDb();
+    const run = seedTerminalLogTheReducerWontReDerive(db);
+    appendEngineEvent(db, {
+      type: 'run.finished',
+      runId: run.id,
+      outcome: 'failure',
+      reason: 'invalid_event',
+    });
+    updateRun(db, run.id, { status: 'running', finishedAt: null });
+
+    const executor = makeStubExecutor();
+    const report = await reconcileOnBoot({ db, resolveDoc: resolveDocFor(db), executor });
+
+    expect(report.resynced).toEqual([run.id]);
+    expect(executor.dispatched).toEqual([]);
+    expect(getRun(db, run.id)!.status).toBe('failure');
+  });
+
+  it('heals a log ALREADY corrupted by this bug (a resume appended after a terminal)', async () => {
+    // Logs written before this fix can contain `run.resumed` AFTER a terminal —
+    // that is precisely what the old code did. A rule keyed on "the log's LAST
+    // event is terminal" would re-drive such a run forever; last-TERMINAL-wins
+    // heals it. (`run.resumed` is not a terminal fact and cannot erase one.)
+    const { db } = freshDb();
+    const run = seedTerminalLogTheReducerWontReDerive(db);
+    appendEngineEvent(db, { type: 'run.resumed', runId: run.id, reason: 'boot_reconcile' });
+    updateRun(db, run.id, { status: 'running', finishedAt: null });
+    const before = loadEngineEvents(db, run.id).length;
+
+    const executor = makeStubExecutor();
+    const report = await reconcileOnBoot({ db, resolveDoc: resolveDocFor(db), executor });
+
+    expect(report.resynced).toEqual([run.id]);
+    expect(executor.dispatched).toEqual([]);
+    expect(loadEngineEvents(db, run.id).length).toBe(before);
+    expect(getRun(db, run.id)!.status).toBe('success');
+  });
+
+  it('treats `run.interrupted` as a terminal fact too, and never resumes it', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const run = seedRun(db, pvId);
+    appendEngineEvent(db, {
+      type: 'run.started',
+      runId: run.id,
+      pipelineVersionId: pvId,
+      params: {},
+    });
+    appendEngineEvent(db, {
+      type: 'node.dispatched',
+      runId: run.id,
+      nodeId: 'a',
+      attemptId: 'a#0',
+      idempotent: true,
+    });
+    appendEngineEvent(db, { type: 'run.interrupted', runId: run.id, reason: 'drive_failed' });
+    // A `run.resumed` AFTER the interrupt — the shape a pre-#443 reconcile pass
+    // would itself have appended. Without it this test is pure characterization
+    // (the old projection also folded to `interrupted` and took its own fast
+    // path); with it, only reading back PAST the resume to the terminal fact keeps
+    // the run frozen. Nothing else covers interrupted-under-a-resume.
+    appendEngineEvent(db, { type: 'run.resumed', runId: run.id, reason: 'boot_reconcile' });
+    updateRun(db, run.id, { status: 'running', finishedAt: null });
+
+    const executor = makeStubExecutor();
+    const report = await reconcileOnBoot({ db, resolveDoc: resolveDocFor(db), executor });
+
+    expect(report.resynced).toEqual([run.id]);
+    expect(report.interrupted).toEqual([]);
+    expect(executor.dispatched).toEqual([]);
+    expect(getRun(db, run.id)!.status).toBe('interrupted');
+  });
+
+  it('re-syncs a terminal-log run whose DOC no longer resolves (the log needs no doc)', async () => {
+    // Reading the log's terminal fact needs no pipeline version, so the check is
+    // hoisted ABOVE `buildEngine`. Same reasoning as `launcher.ts`'s
+    // `terminalizeInterrupted`: record/read the terminal fact where no doc is
+    // needed, so an unresolvable doc cannot strand a finished run.
+    const { db } = freshDb();
+    const run = seedTerminalLogTheReducerWontReDerive(db);
+    const healthy = seedTerminalLogTheReducerWontReDerive(db);
+
+    const executor = makeStubExecutor();
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: (id) => {
+        if (id === run.pipelineVersionId) throw new Error('version deleted');
+        const pv = getPipelineVersion(db, id);
+        if (pv === null) throw new Error(`no pv ${id}`);
+        return pv;
+      },
+      executor,
+    });
+
+    // Both resynced — and the unresolvable one did not abort the loop for the other.
+    expect(report.resynced.sort()).toEqual([run.id, healthy.id].sort());
+    expect(getRun(db, run.id)!.status).toBe('success');
+    expect(getRun(db, healthy.id)!.status).toBe('success');
   });
 });
 

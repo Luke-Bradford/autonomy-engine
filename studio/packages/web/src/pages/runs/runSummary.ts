@@ -1,4 +1,9 @@
-import { EngineEventSchema, type RunEvent, type RunLifecycleStatus } from '@autonomy-studio/shared';
+import {
+  EngineEventSchema,
+  terminalStatusOf,
+  type RunEvent,
+  type RunLifecycleStatus,
+} from '@autonomy-studio/shared';
 
 /**
  * PURE derivations the live-run view renders from a run's event log. They take
@@ -119,6 +124,17 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
  * The run's lifecycle status AS THE LOG SEES IT, or `null` if no lifecycle event
  * has landed yet (the caller then shows the run row's REST status). Later events
  * win, so a `run.finished` after `run.started` yields the terminal outcome.
+ *
+ * The terminal events map through `terminalStatusOf` — the engine's SSOT (#443),
+ * shared with the reducer and the boot reconciler, so this page and `runs.status`
+ * can never disagree about what a `run.finished` MEANS.
+ *
+ * Deliberately NOT the same rule as the server's `terminalFactFromLog`, which
+ * takes the last TERMINAL event: this is a live VIEW, so a `run.resumed` tailing
+ * in must show the run as running again. `terminalFactFromLog` answers a
+ * different question — "what terminal fact does this log durably record" — where a
+ * resume must never erase the terminal under it. Same mapping, different rule, by
+ * intent.
  */
 export function deriveRunLifecycle(events: RunEvent[]): RunLifecycleStatus | null {
   let status: RunLifecycleStatus | null = null;
@@ -126,19 +142,11 @@ export function deriveRunLifecycle(events: RunEvent[]): RunLifecycleStatus | nul
     const parsed = EngineEventSchema.safeParse(row.payload);
     if (!parsed.success) continue;
     const e = parsed.data;
-    switch (e.type) {
-      case 'run.started':
-      case 'run.resumed':
-        status = 'running';
-        break;
-      case 'run.finished':
-        status = e.outcome === 'success' ? 'success' : 'failure';
-        break;
-      case 'run.interrupted':
-        status = 'interrupted';
-        break;
-      default:
-        break;
+    const terminal = terminalStatusOf(e);
+    if (terminal !== null) {
+      status = terminal;
+    } else if (e.type === 'run.started' || e.type === 'run.resumed') {
+      status = 'running';
     }
   }
   return status;

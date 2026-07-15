@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { TERMINAL_RUN_EVENT } from '@autonomy-studio/shared';
 import type { RunEvent, RunStreamServerMessage } from '@autonomy-studio/shared';
 import { getRun, listRunEvents } from '../repo/index.js';
 import { requireOwned } from './util.js';
@@ -42,8 +43,10 @@ const CLOSE_NOT_FOUND = 4404;
 /** Normal closure once a terminal event has been delivered. */
 const CLOSE_NORMAL = 1000;
 
+/** Whether an envelope carries the run's terminal fact (the stream then closes).
+ * `TERMINAL_RUN_EVENT` is the engine's SSOT for that set (#443). */
 function isTerminalEvent(event: RunEvent): boolean {
-  return event.type === 'run.finished' || event.type === 'run.interrupted';
+  return (TERMINAL_RUN_EVENT as ReadonlySet<string>).has(event.type);
 }
 
 export const runStreamRoutes: FastifyPluginAsync = async (fastify) => {

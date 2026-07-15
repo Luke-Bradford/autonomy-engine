@@ -3,7 +3,7 @@ import { listRuns } from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
 import { buildEngine, pump, syncRunLifecycle, type DocResolver, type Executor } from './driver.js';
 import type { RunEventBus } from './event-bus.js';
-import { appendEngineEvent, loadEngineEvents } from './events.js';
+import { appendEngineEvent, loadEngineEvents, terminalFactFromLog } from './events.js';
 
 /**
  * P2d — the BOOT RECONCILER: the run engine's recovery boundary. An in-process
@@ -135,14 +135,39 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
 
   for (const run of listRuns(deps.db, { status: 'running' })) {
     const events = loadEngineEvents(deps.db, run.id);
+
+    // #443 — the LOG is authoritative over the projection for terminality: a
+    // recorded terminal fact stands, so the row is merely stale (a crash between
+    // the terminal append and its lifecycle sync). Deliberately does NOT consult
+    // the projection — a reducer change re-folds this log, and trusting a re-fold
+    // that contradicts the log's own terminal is what RE-EXECUTES a finished run's
+    // side effects. Hoisted above `buildEngine` because the log needs no doc, so an
+    // unresolvable version cannot strand a finished run (or the ones after it in
+    // this loop). See `terminalFactFromLog` for the rule and its cost.
+    const terminal = terminalFactFromLog(events);
+    if (terminal !== null) {
+      syncRunLifecycle(deps.db, run.id, terminal);
+      report.resynced.push(run.id);
+      continue;
+    }
+
     const engine = buildEngine(deps.resolveDoc(run.pipelineVersionId));
     const state = engine.projectRunState(events);
 
-    // Defensive: if the LOG already ended on a terminal fact, the row's
-    // `running` status is merely stale (a crash between the terminal append and
-    // its lifecycle sync). Re-sync the row from the projection and move on.
-    if (state.status !== 'running') {
-      syncRunLifecycle(deps.db, run.id, state);
+    // Defensive, and unreachable today: a `running` row whose log has no
+    // `run.started` (the projection is then the `pending` seed). `updateRun`'s
+    // only non-test callers derive the status from real state, so a row cannot
+    // reach `running` before its `run.started` is durable. Kept because the
+    // alternative is appending `run.resumed` to a log with no `run.started` — the
+    // terminal check above no longer covers this, as `pending` is not a terminal
+    // fact. Deleting it measurably corrupts: the run falls through to the resume
+    // path, which appends that orphan `run.resumed` AND reports the run
+    // `finalized` though it never finished. A re-sync, not an assertion: this
+    // loop has no per-run try/catch, so a throw would strand every run after it.
+    // Pinned by the two `run.started`-less tests in `reconcile.test.ts`, which
+    // fail if this branch is removed — so it cannot bit-rot silently.
+    if (state.status === 'pending') {
+      syncRunLifecycle(deps.db, run.id, state.status);
       report.resynced.push(run.id);
       continue;
     }
@@ -156,7 +181,7 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
       const reason = `non_idempotent_in_flight:${notProvablyIdempotent.map((n) => n.id).join(',')}`;
       const interrupted: EngineEvent = { type: 'run.interrupted', runId: run.id, reason };
       appendEngineEvent(deps.db, interrupted, deps.bus);
-      syncRunLifecycle(deps.db, run.id, engine.reduce(state, interrupted).state);
+      syncRunLifecycle(deps.db, run.id, engine.reduce(state, interrupted).state.status);
       report.interrupted.push(run.id);
       continue;
     }
@@ -197,7 +222,7 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
     }
 
     for (const ev of reconcileEvents) appendEngineEvent(deps.db, ev, deps.bus);
-    syncRunLifecycle(deps.db, run.id, next);
+    syncRunLifecycle(deps.db, run.id, next.status);
     await pump(
       {
         db: deps.db,

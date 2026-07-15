@@ -325,6 +325,60 @@ describe('RunLauncher — background failure', () => {
   });
 });
 
+describe('RunLauncher — #443 never bury a terminal log under a false interrupt', () => {
+  it('syncs the row FROM the log (no run.interrupted) when the post-terminal sync throws', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId });
+
+    // Fault-inject #443's exact window. `pump` appends `run.finished` (DURABLE)
+    // and only THEN folds it and syncs the row — so a DB write fault in that sync
+    // throws out of `startRun` and lands in the launcher's catch, with a run whose
+    // LOG already records success but whose ROW still says `running`.
+    //
+    // `syncRunLifecycle` only writes when the status actually CHANGES, so for this
+    // single-node run the updates are exactly: #1 `run.started` (pending→running)
+    // and #2 `run.finished` (running→success). Faulting #2 IS the window.
+    let updates = 0;
+    const faultyDb = new Proxy(db, {
+      get(target, prop) {
+        if (prop === 'update') {
+          updates += 1;
+          if (updates === 2) throw new Error('db write fault after the terminal append');
+        }
+        const value = Reflect.get(target, prop) as unknown;
+        // Bind to the REAL target (never the proxy): drizzle's internals must not
+        // re-enter this trap while servicing the call.
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as typeof db;
+
+    const launcher = createRunLauncher({
+      db: faultyDb,
+      resolveDoc: deps(db).resolveDoc,
+      executor: makeStubExecutor(),
+    });
+    const result = launcher.fire(trigger);
+    await launcher.whenIdle();
+
+    const events = loadEngineEvents(db, result.runId!);
+    // Precondition tripwire — assert the fault hit the write we MEANT (the
+    // `run.finished` sync), so this test can never silently degrade into testing
+    // nothing. Exactly 3 `update` accesses: #1 run.started, #2 the faulted
+    // terminal sync, #3 `terminalizeInterrupted` syncing the row from the log. If
+    // a future write lands earlier in `startRun`, this fails loudly rather than
+    // faulting at the wrong point while still passing.
+    expect(updates).toBe(3);
+    expect(events.filter((e) => e.type === 'run.finished')).toHaveLength(1);
+
+    // THE FIX: the log's terminal fact is left intact. Burying it under a
+    // `run.interrupted` would make the boot reconciler — which #443 makes
+    // LOG-authoritative — resync a SUCCEEDED run to `interrupted`.
+    expect(events.some((e) => e.type === 'run.interrupted')).toBe(false);
+    expect(getRun(db, result.runId!)?.status).toBe('success');
+  });
+});
+
 describe('RunLauncher — stop', () => {
   it('skips new fires after stop()', () => {
     const { db } = freshDb();

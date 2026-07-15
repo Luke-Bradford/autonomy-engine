@@ -424,6 +424,66 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
 export type EngineEvent = z.infer<typeof EngineEventSchema>;
 
 /**
+ * The event types that record a run's TERMINAL fact — the SSOT, declared as one
+ * list so the set and the mapping below cannot drift apart.
+ *
+ * #443 makes this load-bearing: the LOG is authoritative over the projection for
+ * terminality, so "which events are terminal" decides whether a crash survivor is
+ * re-driven (re-executing side effects) or merely re-synced. Before this it was
+ * hard-coded in four separate places.
+ */
+const TERMINAL_RUN_EVENT_TYPES = ['run.finished', 'run.interrupted'] as const;
+
+/** The terminal-run-event variants of `EngineEvent`, derived from the one list. */
+type TerminalRunEvent = Extract<EngineEvent, { type: (typeof TERMINAL_RUN_EVENT_TYPES)[number] }>;
+
+/**
+ * Runtime membership test for "this event type records a terminal run fact".
+ * Typed over `EngineEvent['type']`; widen to `ReadonlySet<string>` to test a
+ * durable envelope's `type` column (as `TERMINAL_RUN`'s callers already do).
+ */
+export const TERMINAL_RUN_EVENT: ReadonlySet<EngineEvent['type']> = new Set(
+  TERMINAL_RUN_EVENT_TYPES,
+);
+
+/**
+ * The lifecycle status an event RECORDS as a durable fact, or `null` if it is not
+ * a terminal run event.
+ *
+ * This is the SSOT for the terminal-event SET and for the LOG's reading of it —
+ * NOT for `reduce.ts`'s `run.finished` transition, which sits behind an
+ * impossibility check and so is deliberately conditional where this is not. The
+ * distinction is the point of #443: this answers "what fact does the log record",
+ * the reducer answers "what does the CURRENT semantics make of it", and when they
+ * disagree on an old log the log wins.
+ *
+ * Guards, and EXACTLY what each covers — the two drift directions are not equally
+ * protected, so do not read one as the other:
+ *   - Adding a type to `TERMINAL_RUN_EVENT_TYPES` and not mapping it below is a
+ *     COMPILE error (the `switch` is exhaustive over `TerminalRunEvent` with no
+ *     default). A real guard, unlike `TERMINAL_NODE`'s `satisfies` above, which
+ *     only pins the subset direction — see the joint F1b/F2b spec §A.1.
+ *   - Adding a terminal variant to `EngineEventSchema` and FORGETTING this list is
+ *     NOT a compile error — it silently reads as non-terminal, which is #443's own
+ *     failure mode. That direction is caught only by the count assertion in
+ *     `__tests__/terminal-run-event.test.ts`; keep it.
+ */
+export function terminalStatusOf(event: EngineEvent): RunLifecycleStatus | null {
+  if (!(TERMINAL_RUN_EVENT as ReadonlySet<string>).has(event.type)) return null;
+  const terminal = event as TerminalRunEvent;
+  switch (terminal.type) {
+    case 'run.finished':
+      // Returned directly, NOT via a `success ? : failure` ternary: `RunOutcome`
+      // is a subset of `RunLifecycleStatus`, so if it ever gains a third member
+      // this is a compile error, where the ternary would silently map it to
+      // `failure`. (`reduce.ts`'s own transition does the same.)
+      return terminal.outcome;
+    case 'run.interrupted':
+      return 'interrupted';
+  }
+}
+
+/**
  * Requests from the reducer to the driver. A command NEVER changes state — the
  * driver performs it and appends the resulting event. `startChild` (P2c) asks
  * the driver to spawn a `call_pipeline` child; the reducer awaits a

@@ -407,3 +407,26 @@ into the branch (and push) before concluding the fix did or did not work. Closin
 and reopening re-fires the trigger (prevention-log #5) but changes nothing about
 which YAML is used. Verify which definition actually ran by grepping the job log
 for a line only the new code emits — never infer it from "the fix is on main".**
+
+## 24. Making a fact authoritative promotes every previously-benign write to it into a load-bearing one
+
+*Origin: #443's planning gate. The reconciler's terminality check moved from the
+PROJECTION to the LOG. `launcher.ts`'s `terminalizeInterrupted` gated on the
+run ROW, not the log, so a throw in the driver's fold/sync AFTER the durable
+`run.finished` append landed there with the row still `running` — and it appended
+`run.interrupted` on top of an accepted terminal.* Before the authority flip that
+write was **benign**: the projection folded the spurious event to a no-op
+(`reduce.ts` early-returns on an already-terminal run), so nothing observed it.
+The moment the LOG became authoritative it became active corruption — the boot
+reconciler would resync a SUCCEEDED run to `interrupted`. Nothing in the diff
+touched that file; a test would not have caught it (the old behaviour was
+correct); and its own doc comment asserted the case was impossible (**"A run
+reaching `terminalizeInterrupted` always has a NON-terminal log"** — false).
+**Rule: when a change makes some fact authoritative — a log over a projection, a
+column over a derivation, one field over another — enumerate every WRITER of that
+fact before shipping, not just the readers you are changing. Writes that were
+harmless because something downstream absorbed them are exactly what breaks, and
+they are invisible to the diff and to the existing tests.** Corollary (recurring,
+cf. #21): a comment asserting an invariant is not evidence the invariant holds —
+`grep` the producers. Both the false comment and the guard were fixed in the same
+PR as the flip.
