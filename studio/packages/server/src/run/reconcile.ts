@@ -160,7 +160,12 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
     // reach `running` before its `run.started` is durable. Kept because the
     // alternative is appending `run.resumed` to a log with no `run.started` — the
     // terminal check above no longer covers this, as `pending` is not a terminal
-    // fact.
+    // fact. Deleting it measurably corrupts: the run falls through to the resume
+    // path, which appends that orphan `run.resumed` AND reports the run
+    // `finalized` though it never finished. A re-sync, not an assertion: this
+    // loop has no per-run try/catch, so a throw would strand every run after it.
+    // Pinned by the two `run.started`-less tests in `reconcile.test.ts`, which
+    // fail if this branch is removed — so it cannot bit-rot silently.
     if (state.status === 'pending') {
       syncRunLifecycle(deps.db, run.id, state.status);
       report.resynced.push(run.id);

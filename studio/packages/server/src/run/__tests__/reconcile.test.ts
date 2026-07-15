@@ -9,7 +9,7 @@ import {
 } from '@autonomy-studio/shared';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
-import { createRun, getRun, updateRun } from '../../repo/runs.js';
+import { createRun, getRun, listRuns, updateRun } from '../../repo/runs.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { buildEngine, startRun, type DocResolver } from '../driver.js';
 import { appendEngineEvent, loadEngineEvents } from '../events.js';
@@ -231,6 +231,67 @@ describe('reconcileOnBoot — resync a torn terminal write', () => {
     expect(report.resumed).toEqual([]);
     expect(report.interrupted).toEqual([]);
     expect(getRun(db, run.id)!.status).toBe('success');
+  });
+
+  /**
+   * Pins the `state.status === 'pending'` branch: a `running` row whose log has
+   * no `run.started` (the projection is then the `pending` seed). Unreachable
+   * via the real callers, which is exactly why it is pinned here rather than
+   * left to bit-rot — and why it is a re-sync and NOT an assertion: the boot
+   * loop has no per-run try/catch, so throwing on one malformed row would
+   * strand every run AFTER it, the same fail-safety property #443 established
+   * by hoisting `terminalFactFromLog` above `buildEngine`.
+   */
+  it('re-syncs a running row whose log has no `run.started`, appending nothing', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const run = seedRun(db, pvId);
+
+    // A `running` row with an EMPTY log: the projection seeds to `pending`.
+    updateRun(db, run.id, { status: 'running', finishedAt: null });
+    expect(loadEngineEvents(db, run.id)).toEqual([]);
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+    });
+
+    expect(report.resynced).toEqual([run.id]);
+    expect(report.resumed).toEqual([]);
+    expect(getRun(db, run.id)!.status).toBe('pending');
+    // The load-bearing half: NO `run.resumed` appended to a log with no
+    // `run.started` — the corruption the branch exists to prevent.
+    expect(loadEngineEvents(db, run.id)).toEqual([]);
+  });
+
+  it('a `run.started`-less row does not strand the runs after it in the loop', async () => {
+    const { db } = freshDb();
+
+    // Ordered so the malformed row is reconciled BEFORE the healthy one.
+    const bad = seedRun(db, seedVersion(db, [node('a')]));
+    updateRun(db, bad.id, { status: 'running', finishedAt: null });
+
+    const good = seedRun(db, seedVersion(db, [node('b')]));
+    await startRun({ db, resolveDoc: resolveDocFor(db), executor: makeStubExecutor() }, good);
+    updateRun(db, good.id, { status: 'running', finishedAt: null });
+
+    // This test's whole value is the EARLY-EXIT shape (a `continue` that became
+    // a `break`/throw strands `good`), which only bites when `bad` is reconciled
+    // first. `listRuns` has no ORDER BY, so that order is SQLite's scan order,
+    // not a guarantee — assert it, or adding one silently voids this test.
+    expect(listRuns(db, { status: 'running' }).map((r) => r.id)).toEqual([bad.id, good.id]);
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+    });
+
+    // Both reconciled: the malformed row is survivable, not fatal to the loop.
+    expect(report.resynced).toContain(bad.id);
+    expect(report.resynced).toContain(good.id);
+    expect(getRun(db, good.id)!.status).toBe('success');
   });
 });
 
