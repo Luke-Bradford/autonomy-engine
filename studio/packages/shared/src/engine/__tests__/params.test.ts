@@ -199,6 +199,95 @@ describe('substitute — escape / malformed / typing', () => {
 });
 
 // ===========================================================================
+// #6 E1 — literals evaluate; `[]` addressing parses but defers to E7
+// ===========================================================================
+
+describe('substitute — literal expressions (#6 E1)', () => {
+  it('a whole-value literal is type-preserving', () => {
+    // spec #6 §Syntax: "Inside the braces is an expression (refs, function
+    // calls, literals)". `${7.5}` is the number 7.5, not the string "7.5".
+    expect(substitute('${7.5}', ctx())).toBe(7.5);
+    expect(substitute('${-2.5}', ctx())).toBe(-2.5);
+    expect(substitute('${42}', ctx())).toBe(42);
+    expect(substitute('${true}', ctx())).toBe(true);
+    expect(substitute('${false}', ctx())).toBe(false);
+    expect(substitute("${'hello'}", ctx())).toBe('hello');
+  });
+
+  it('an embedded literal coerces to string', () => {
+    expect(substitute('n=${7.5}', ctx())).toBe('n=7.5');
+  });
+
+  it('passes a FLOAT literal through a function arg', () => {
+    expect(substitute("${concat('n=', 7.5)}", ctx())).toBe('n=7.5');
+    expect(substitute("${concat('b=', true)}", ctx())).toBe('b=true');
+  });
+
+  it('still rejects a bareword that is not a literal', () => {
+    expect(() => substitute('${truex}', ctx())).toThrow(SubstituteError);
+  });
+});
+
+describe('substitute — `[]` deep addressing defers to E7 (#6 E1)', () => {
+  const deep = ctx({ nodeOutputs: { a: { rows: [{ sku: 'S1' }] } }, params: { i: 0 } });
+
+  it('THROWS a plain SubstituteError naming E7 (never resolves half-way)', () => {
+    expect(() => substitute('${nodes.a.output.rows[0]}', deep)).toThrow(/E7/);
+    expect(() => substitute('${nodes.a.output.rows[params.i].sku}', deep)).toThrow(/E7/);
+  });
+
+  it('is NOT swallowed by default() as an absent node output', () => {
+    // If the E7 refusal were a MissingNodeOutputError, `default()` would catch
+    // it and silently return the fallback — the doc would validate clean now
+    // and SILENTLY CHANGE MEANING once E7 lands. It must propagate.
+    expect(() => substitute("${default(nodes.a.output.rows[0], 'fb')}", deep)).toThrow(/E7/);
+  });
+
+  it('throws on an unterminated bracket', () => {
+    expect(() => substitute('${params.a[0}', ctx({ params: { a: [1] } }))).toThrow(SubstituteError);
+  });
+});
+
+describe('validateRefs — a malformed expression is reported ONCE (#6 E1)', () => {
+  // E1 made `parseExpr` throw on bodies that previously degraded to a ref, so
+  // the parse-failure fallback is now hit routinely. It must not also emit a
+  // second `unresolvable reference ${}` naming an empty ref absent from the doc.
+  it.each([
+    ['an empty body', '${}'],
+    ['an unterminated bracket', '${params.a[0}'],
+    ['a stray bracket', '${a]b}'],
+    ['an empty path segment', '${params..a}'],
+    ['junk after a string literal', "${'a' junk 'b'}"],
+  ])('reports %s exactly once', (_label, expr) => {
+    const errors = validateRefs(doc([node('n', { prompt: expr })], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).not.toMatch(/unresolvable reference \$\{\}/);
+  });
+});
+
+describe('validateRefs — `[]` deep addressing is reported at SAVE time (#6 E1)', () => {
+  it('reports an index-bearing ref rather than accepting it', () => {
+    const nodes = [
+      node('a', { outputs: [{ name: 'rows', type: 'json' }] }),
+      node('b', { prompt: '${nodes.a.output.rows[0]}' }),
+    ];
+    const errors = validateRefs(doc(nodes, [edge('a', 'b', 'success')]));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/E7/);
+  });
+
+  it('reports it inside default() too (softOk must not hide it)', () => {
+    const nodes = [
+      node('a', { outputs: [{ name: 'rows', type: 'json' }] }),
+      node('b', { prompt: "${default(nodes.a.output.rows[0], 'fb')}" }),
+    ];
+    const errors = validateRefs(doc(nodes, [edge('a', 'b', 'success')]));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/E7/);
+  });
+});
+
+// ===========================================================================
 // substitute — the ${} boundary scanner honors quotes + nested parens
 //
 // The boundary used to be found with a naive `[^}]*` regex, which truncated a
