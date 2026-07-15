@@ -160,11 +160,15 @@ export const NodePolicySchema = z.object({
    * applies uniformly and boot-recovery can tell timed-out from crashed.
    *
    * Named `timeoutSeconds`, not the spec's bare `timeout`, so this object never
-   * mixes units with the spec-verbatim `retryIntervalSeconds`. Deliberately
-   * UNBOUNDED above 0: spec #1 D4 bounds only `retryIntervalSeconds`, and any
-   * real ceiling is F3's to set from enforcement experience — an invented one
-   * would be a guess a later ticket has to unpick (widening is back-compat-safe;
-   * narrowing is not).
+   * mixes units with the spec-verbatim `retryIntervalSeconds`.
+   *
+   * Unbounded above 0 HERE, on purpose: spec #1 D4 bounds only
+   * `retryIntervalSeconds`, and the real semantic ceiling is F3's to set from
+   * enforcement experience. A read-path range can only ever be WIDENED (see
+   * `NodeSchema.policy`), so inventing one here would be a guess F3 could not
+   * take back. The fat-finger guard lives on the WRITE path instead
+   * (`StrictNodePolicySchema`), where a bound can move freely in either
+   * direction without making a stored row unreadable.
    *
    * SEAM FOR F3 (a named question, not a discovery): connection-level
    * `config.timeoutMs` already bounds a single HTTP/LLM exchange
@@ -205,7 +209,33 @@ export type NodePolicy = z.infer<typeof NodePolicySchema>;
  * stored). That is F13a's strict-on-write / tolerant-on-read asymmetry, applied
  * to a typed field.
  */
+/**
+ * A fat-finger guard on `timeoutSeconds`, NOT a semantic bound — F3 owns the
+ * real one. One year is far past any legitimate single-attempt budget, so a
+ * value above it is a typo (a stray zero, or ms passed where seconds were
+ * meant), never an intent.
+ *
+ * WHY this is a write-path rule and not a `.max()` on `NodePolicySchema`: a
+ * range on the read path can only ever be widened, so a ceiling there would be a
+ * guess F3 could never take back. Here it costs F3 nothing — a write-path bound
+ * can tighten or relax freely, because no stored row becomes unreadable.
+ */
+const TIMEOUT_SECONDS_SANITY_CEILING = 31_536_000;
+
 const StrictNodePolicySchema = NodePolicySchema.strict().superRefine((policy, ctx) => {
+  if (
+    policy.timeoutSeconds !== undefined &&
+    policy.timeoutSeconds > TIMEOUT_SECONDS_SANITY_CEILING
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['timeoutSeconds'],
+      message:
+        `timeoutSeconds ${policy.timeoutSeconds} exceeds ${TIMEOUT_SECONDS_SANITY_CEILING} ` +
+        '(one year) — that is a single attempt budget, so this is almost certainly a typo ' +
+        '(milliseconds passed as seconds?)',
+    });
+  }
   // An interval with no retry to space out is dead config the operator almost
   // certainly believes is live. Cheap to refuse at save, and no stored row can
   // carry one yet. NB: if a later ticket gives `retry` a catalog/global DEFAULT

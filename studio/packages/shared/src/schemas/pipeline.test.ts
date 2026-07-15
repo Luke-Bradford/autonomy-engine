@@ -531,6 +531,39 @@ describe('NewPipelineVersionSchema — policy is refused on write (#1 F2a)', () 
     expect(() => NewPipelineVersionSchema.parse(withNodePolicy({ secureOutput: true }))).toThrow();
   });
 
+  // A fat-finger guard (review nitpick on #474), deliberately write-path-only:
+  // a read-path range can only ever widen, so a ceiling there would be a guess
+  // F3 could not take back.
+  it('refuses a timeoutSeconds past the one-year sanity ceiling', () => {
+    expect(() =>
+      NewPipelineVersionSchema.parse(withNodePolicy({ timeoutSeconds: 31_536_001 })),
+    ).toThrow();
+  });
+
+  it('accepts a timeoutSeconds at the ceiling', () => {
+    expect(() =>
+      NewPipelineVersionSchema.parse(withNodePolicy({ timeoutSeconds: 31_536_000 })),
+    ).not.toThrow();
+  });
+
+  it('still READS a stored row whose timeoutSeconds is past the ceiling (write-path guard only)', () => {
+    const legacy = {
+      ...pipelineVersion,
+      nodes: [
+        {
+          id: 'node_1',
+          type: 'llm_call',
+          config: {},
+          position: { x: 0, y: 0 },
+          policy: { timeoutSeconds: 31_536_001 },
+        },
+      ],
+    };
+    expect(PipelineVersionSchema.parse(legacy).nodes[0]!.policy).toEqual({
+      timeoutSeconds: 31_536_001,
+    });
+  });
+
   it('refuses an out-of-range retryIntervalSeconds', () => {
     expect(() =>
       NewPipelineVersionSchema.parse(withNodePolicy({ retry: 1, retryIntervalSeconds: 5 })),
