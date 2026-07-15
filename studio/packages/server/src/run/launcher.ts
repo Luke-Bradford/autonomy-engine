@@ -7,7 +7,7 @@ import {
   TERMINAL_RUN,
   type DriverDeps,
 } from './driver.js';
-import { appendEngineEvent, loadEngineEvents } from './events.js';
+import { appendEngineEvent, loadEngineEvents, terminalFactFromLog } from './events.js';
 
 /**
  * P4a — the run LAUNCHER: the one place a trigger becomes a run. Manual fire
@@ -151,10 +151,20 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
    *     THEN sync the row: from a proper fold when the doc resolves (as the boot
    *     reconciler does), or by a direct patch if `resolveDoc` throws. Either
    *     way the row and the log agree on `interrupted` — never diverge.
-   * A run reaching `terminalizeInterrupted` always has a NON-terminal log
-   * (startRun returns normally once `run.finished` is appended, so a throw means
-   * the run never finished); the `isTerminalRow` guard is belt-and-suspenders so
-   * a concurrently-terminalized row is never clobbered.
+   * A run reaching here CAN already have a terminal LOG (#443) — this used to
+   * claim it could not, which was WRONG: `pump` appends `run.finished` and only
+   * THEN folds it and syncs the row, so a throw in either step leaves the terminal
+   * fact durable while the row is still `running`, and `startRun` throws, landing
+   * here. Appending `run.interrupted` on top would bury a run's real terminal fact
+   * under a false one — and since #443 makes the LOG authoritative for
+   * terminality, the boot reconciler would then resync a SUCCEEDED run to
+   * `interrupted`. So a terminal log means: append NOTHING, just sync the row to
+   * what the log already says. `isTerminalRow` stays too, so a concurrently
+   * terminalized row is never clobbered.
+   *
+   * This is the one producer that could append a terminal event AFTER an accepted
+   * terminal event — the exact invariant `terminalFactFromLog` rests on. Keep it
+   * that way.
    */
   function terminalizeInterrupted(runId: string): void {
     const patchRow = (): void => {
@@ -177,6 +187,14 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       patchRow();
       return;
     }
+    // The LOG already records a terminal fact: the run really did finish, and the
+    // throw was in the fold/sync AFTER the durable append. Sync the row from that
+    // fact — never append a contradicting terminal over it (#443).
+    const terminal = terminalFactFromLog(events);
+    if (terminal !== null) {
+      syncRunLifecycle(db, runId, terminal);
+      return;
+    }
     // Non-terminal log: record the terminal fact in the LOG first (no doc
     // needed), so the log stays authoritative even if the fold below can't run.
     const interrupted: EngineEvent = { type: 'run.interrupted', runId, reason: 'drive_failed' };
@@ -191,7 +209,7 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     try {
       const engine = buildEngine(deps.resolveDoc(run.pipelineVersionId));
       const state = engine.reduce(engine.projectRunState(events), interrupted).state;
-      syncRunLifecycle(db, runId, state);
+      syncRunLifecycle(db, runId, state.status);
     } catch (foldErr) {
       // The doc is unresolvable (e.g. its version was deleted). The
       // `run.interrupted` event is ALREADY durable in the log; just make the row

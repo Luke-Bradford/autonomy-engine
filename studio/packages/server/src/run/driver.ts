@@ -104,16 +104,22 @@ export function buildEngine(pv: PipelineVersion): Engine {
 }
 
 /**
- * Project the DB run's current lifecycle status/finishedAt from the reduced
- * `RunState`. Only touches `runs` when something actually changed (idempotent);
- * `finishedAt` is stamped ONCE, the first time the run reaches a terminal
- * status, and never moved. `RunLifecycleStatus` is a subset of the DB's
- * `RunStatus`, so the mapping is identity.
+ * Sync the DB run's lifecycle status/finishedAt to `status`. Only touches `runs`
+ * when something actually changed (idempotent); `finishedAt` is stamped ONCE, the
+ * first time the run reaches a terminal status, and never moved.
+ * `RunLifecycleStatus` is a subset of the DB's `RunStatus`, so the mapping is
+ * identity.
+ *
+ * Takes the STATUS, not a `RunState`: a row's lifecycle is not always sourced
+ * from a projection. #443 makes the run's LOG authoritative over the projection
+ * for terminality, so the reconciler syncs a finished row straight from the log's
+ * `run.finished` without folding at all — passing a whole `RunState` here would
+ * imply a projection is required, which is exactly the coupling #443 removes.
+ * Every caller only ever had `state.status` to give.
  */
-export function syncRunLifecycle(db: Db, runId: string, state: RunState): void {
+export function syncRunLifecycle(db: Db, runId: string, status: RunLifecycleStatus): void {
   const existing = getRun(db, runId);
   if (existing === null) return;
-  const status = state.status;
   const finishedAt = TERMINAL_RUN.has(status)
     ? (existing.finishedAt ?? Date.now())
     : existing.finishedAt;
@@ -150,7 +156,7 @@ export async function pump(
       };
       appendEngineEvent(deps.db, capped, deps.bus);
       state = engine.reduce(state, capped).state;
-      syncRunLifecycle(deps.db, state.runId, state);
+      syncRunLifecycle(deps.db, state.runId, state.status);
       break;
     }
 
@@ -176,7 +182,7 @@ export async function pump(
       appendEngineEvent(deps.db, event, deps.bus);
       const result = engine.reduce(state, event);
       state = result.state;
-      syncRunLifecycle(deps.db, state.runId, state);
+      syncRunLifecycle(deps.db, state.runId, state.status);
       queue.push(...result.commands);
       if (TERMINAL_RUN.has(state.status)) {
         terminal = true;
@@ -217,7 +223,7 @@ export async function startRun(deps: DriverDeps, run: Run): Promise<RunState> {
   };
   appendEngineEvent(deps.db, started, deps.bus);
   const result = engine.reduce(engine.seedState(), started);
-  syncRunLifecycle(deps.db, run.id, result.state);
+  syncRunLifecycle(deps.db, run.id, result.state.status);
   return pump(deps, engine, result.state, result.commands);
 }
 

@@ -12,7 +12,7 @@ import type {
   SubstitutionContext,
   TerminalNodeStatus,
 } from './types.js';
-import { SubstituteError, TERMINAL_NODE } from './types.js';
+import { SubstituteError, TERMINAL_NODE, terminalStatusOf } from './types.js';
 import type { OutputType } from '../schemas/pipeline.js';
 import { outputContract, type CheckedContract, type OutputContract } from './outputs.js';
 import {
@@ -1141,10 +1141,11 @@ export function createEngine(doc: EngineDoc): Engine {
     if (event.runId !== state.runId) return { state, commands: [], diagnostics };
 
     if (state.status !== 'running') {
-      // `run.finished` / `run.interrupted` are terminal-transition events: a
-      // duplicate one on an already-terminal run is a benign no-op, not a
-      // malformed log, so it earns no diagnostic.
-      if (event.type !== 'run.finished' && event.type !== 'run.interrupted') {
+      // A terminal-transition event (`run.finished`/`run.interrupted`) arriving
+      // on an already-terminal run is a benign no-op, not a malformed log, so it
+      // earns no diagnostic. `terminalStatusOf` is the SSOT for that set (#443) —
+      // the log-authoritative reconciler reads the same one.
+      if (terminalStatusOf(event) === null) {
         diagnostics.push(`event '${event.type}' on a '${state.status}' run is ignored`);
       }
       return { state, commands: [], diagnostics };
