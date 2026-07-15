@@ -13,6 +13,9 @@ done
 echo "=== python: test_config_parser ==="
 python3 -m unittest tests.test_config_parser -v || fail=1
 
+echo "=== python: test_review_prompt ==="
+python3 -m unittest tests.test_review_prompt -v || fail=1
+
 echo "=== python: test_roles ==="
 python3 -m unittest tests.test_roles -v || fail=1
 
