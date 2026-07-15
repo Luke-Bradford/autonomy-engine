@@ -246,6 +246,24 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       return;
     }
 
+    // The ActivityDefinition's `kind` (#1 D6) is now the PRIMARY dispatch
+    // discriminant, checked ahead of the `connectionKinds` proxy below (which
+    // survives, to separate connector-dispatched from the future built-in
+    // runner). On its own that proxy conflated a CONTROL activity — never
+    // dispatched at all — with an execution activity whose runner does not
+    // exist yet: different causes, so they now carry different codes.
+    if (entry.kind === 'control') {
+      // Control activities are pure reducer transitions (#4: "Reducer handles
+      // them natively"), so one reaching the executor means the engine routed
+      // it wrong — a bug, not a misconfiguration. Loud, never a silent no-op.
+      yield nodeFailed(runId, nodeId, attemptId, {
+        error: `control activity '${node.type}' is engine-evaluated and must never be dispatched`,
+        kind: 'permanent',
+        code: FAILURE_CODES.CONTROL_NOT_DISPATCHABLE,
+      });
+      return;
+    }
+
     let adapter: ConnectorAdapter;
     let secret: string | null;
     let connectionConfig: Record<string, unknown>;
@@ -261,8 +279,11 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       }
       ({ adapter, secret, connectionConfig } = resolved);
     } else {
-      // No MVP activity is connection-less; a future built-in runner would go
-      // here. Fail loud rather than silently no-op.
+      // An EXECUTION activity is connector-dispatched by definition (spec #4),
+      // so this is a catalog defect today — but it stays the "future built-in
+      // runner" slot. Fail loud rather than falling into `resolveConnection`
+      // with an empty allowlist, which would report a confusing connection
+      // error for what is really a missing runner.
       yield nodeFailed(runId, nodeId, attemptId, {
         error: `activity '${node.type}' has no executor`,
         kind: 'permanent',

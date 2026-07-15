@@ -40,3 +40,33 @@ describe('activity catalog', () => {
     expect(http.configSchema.safeParse({ method: 'GET' }).success).toBe(false);
   });
 });
+
+// --- F9a: the ActivityDefinition contract (#1 D6) ---------------------------
+
+describe('activity definition contract (#1 D6)', () => {
+  it('every MVP activity is connector-dispatched (kind: execution)', () => {
+    // Pins the claim F9a's spec block makes: no CONTROL entry exists yet, so
+    // the executor's control guard is unreachable through the shipped catalog
+    // and F9a's production behaviour delta is zero. The first control activity
+    // arrives with #4's A-series (if/switch/wait/…) and lands here.
+    for (const entry of catalog.values()) {
+      expect(entry.kind).toBe('execution');
+    }
+  });
+
+  it('categorises the MVP set per spec #4 (agent_task is an AI activity, not its own class)', () => {
+    expect(getActivity('http_request')!.category).toBe('general');
+    expect(getActivity('llm_call')!.category).toBe('ai');
+    // Spec #4 lists `agent_task` under "Execution — AI (Spec #2)" alongside
+    // `llm_call` — an external CLI agent is an AI activity, not a third class.
+    expect(getActivity('agent_task')!.category).toBe('ai');
+  });
+});
+
+// A `kind`/`category` SHAPE test is deliberately absent: both are typed fields
+// on literal entries, so TS strict already rejects an unknown value at compile
+// time and the runtime assertion could never fire. The rule "an EXECUTION
+// activity declares >=1 connectionKind" is deliberately NOT pinned either — it
+// holds for today's catalog but is NOT a law: `executor.ts` reserves execution +
+// no connection as the future built-in-runner slot (and tests it fails cleanly
+// as `no_executor`), so asserting it would trip the first ticket to use it.

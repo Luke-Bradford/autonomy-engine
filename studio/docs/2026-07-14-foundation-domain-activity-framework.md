@@ -143,7 +143,7 @@ secureInput?, secureOutput? }`. Split across the pure/impure boundary:
      handler stays `pending` forever. F1b must decide whether an unhandled failure ends the
      run eagerly or merely marks it doomed while the walk drains.
 
-### D6 — Activity Definition contract (framework SSOT)
+### D6 — Activity Definition contract (framework SSOT) — **F9a MINIMAL BUILT 2026-07-15**
 
 ```ts
 ActivityDefinition = {
@@ -168,6 +168,69 @@ ActivityDefinition = {
   activities.
 - Migrate `http_request`/`llm_call`/`agent_task` onto it (keep their `idempotent`). SSOT
   read by the UI palette (U5), properties panel (U7), and validation.
+
+#### F9a spike-hardened block (BUILT 2026-07-15 — the MINIMAL contract)
+
+The build order splits this ticket: **F9a-minimal = the contract shape** (here); **F9b/c/d =
+the migrations**. What landed, and the decisions a later ticket must not re-litigate:
+
+- **The catalog IS the ActivityDefinition.** `ActivityCatalogEntry`
+  (`shared/src/catalog/types.ts`) already carried `type`/`title`/`idempotent`/
+  `connectionKinds`/`outputs`/`configSchema`; F9a ADDED the two seam fields rather than
+  minting a rival type. `export type ActivityDefinition = ActivityCatalogEntry` gives D6's
+  noun without a rename churning consumers.
+- **`kind: 'execution'|'control'`** — the dispatch discriminant. It is now the executor's
+  PRIMARY branch, checked AHEAD of the `connectionKinds.length > 0` proxy — which survives
+  (it still separates connector-dispatched from the built-in-runner slot). The proxy alone
+  conflated "needs no connection" with "not connector-dispatched".
+- **`category` + `ACTIVITY_CATEGORIES`** (ordered SSOT for U5's palette groups). Values are
+  taken from THIS spec-set's own headings — spec #4 files `agent_task` under
+  **"Execution — AI"** next to `llm_call`, so there is no `agent` category. Ships
+  `['general','ai']`; #4 adds `control`/`data` with the first activity that needs them.
+  Extending is free — a category is never persisted in a doc. **Why `category` is exempt from
+  the "don't declare ahead of the consumer" rule below** (its consumer, U5, is also unbuilt):
+  the rule bites where a GUESSED SHAPE would be built against — `ParamSpec` does not exist,
+  and `retryableFailureKinds` would encode a retry model D4/#5 have not settled. A category is
+  a trivial string enum whose values are read off this spec-set's own headings, carries no
+  semantics for anything to build against wrongly, and costs one line to extend.
+- **CORRECTION to a tempting premise:** "control activities are impossible before F9a" is
+  **FALSE**. `call_pipeline` is already a shipped, engine-evaluated, non-connector activity —
+  the reducer routes it structurally on `Node.call` (`reduce.ts:436`) and it never reaches
+  the executor's DISPATCH path. It does reach the executor: as a `startChild` command, which
+  P3a currently deferral-fails (`executor.ts`; P3b/A9 owns the real child spawn). It is not
+  catalogued at all (A9 surfaces it). `connectionKinds: [] ⇒ NO_EXECUTOR` only ever blocked a
+  control activity that gets *dispatched*, and control activities are never dispatched.
+- **THE OPEN FORK — how does the REDUCER learn a node is control?** No spec settles it, and
+  F9a deliberately does NOT decide it. Two live options: (a) read this `kind`, which needs
+  the catalog injected into `createEngine(doc)` — it takes no catalog today, has ONE
+  production call site (`server/src/run/driver.ts`), and `engine/` imports nothing from
+  `catalog/`; or (b) a structural config discriminant, the precedent being `call_pipeline`.
+  **#4's A1/A2 owns this call.** Until it lands, `kind` is honest metadata + an executor
+  guard: the production behaviour delta of F9a is ZERO (all three entries are `execution`
+  with a non-empty `connectionKinds`, so the re-keyed branch evaluates identically).
+- **`CONTROL_NOT_DISPATCHABLE` is its own failure code**, not a reuse of `NO_EXECUTOR`:
+  a control activity at the executor is an ENGINE-INVARIANT violation (a bug), whereas
+  `NO_EXECUTOR` means "this execution activity's runner is not built yet". `executor.ts`'s
+  own rule is that every cause carries its own code so an operator never string-matches a
+  message; `FAILURE_CODES.TIMEOUT` is the precedent for reserving one ahead of its ticket.
+  The `execution` + empty-`connectionKinds` → `NO_EXECUTOR` guard is KEPT, so the "future
+  built-in runner" slot still fails cleanly instead of falling into `resolveConnection` with
+  an empty allowlist (which would report a confusing connection error).
+- **Deliberately NOT declared** (a field whose shape is guessed ahead of its consumer is
+  worse than an absent one — every later spec would build against the guess). Each is
+  sequencing, NOT an open design question: `inputs` (no consumer; `configSchema` types the
+  blob; `ParamSpec` does not exist) · `supportsPolicy`/`retryableFailureKinds`/`timeoutScope`
+  (F2a/F2b/F3; D4 below is fully specified — the hold-vs-reopen fork is **#5's**, about the
+  reducer's retry state machine, and none of these three shapes depend on it; NB `kind`
+  already answers the near-term need, since spec #4 gives control activities no policy) ·
+  `errorMap` (F9b/c/d — classification today is per-CONNECTION-KIND in `toEngineFailure`, and
+  the adapters deliberately disagree: an `http` 4xx is data, an `llm_call` 4xx is a failure)
+  · `secure*Fields` (F4/F15; resolved-question 2 already decided prohibit-first) ·
+  `supportsCancel` (the `AbortSignal` is unconditional; nothing would read it).
+- **Not wired into `validateDoc`** (an unknown `node.type` stays a run-time, not save-time,
+  error) — that is A0/#444 territory.
+- **`CATALOG_VERSION` untouched:** adding metadata FIELDS to existing entries breaks no older
+  export. #4 adding new activity TYPES will need the bump.
 
 ### D7 — Audit & lifecycle
 
@@ -231,7 +294,7 @@ rerun (gated).**
 | F7c | secure globals → secret store |
 | F8a | pipeline props schema (desc/annotations/folder/concurrency) |
 | F8b | per-pipeline concurrency enforcement (scheduler/launcher) |
-| F9a | ActivityDefinition contract type (+ idempotent/cancel/timeoutScope/secure/errorMap) |
+| F9a | ActivityDefinition contract type (+ idempotent/cancel/timeoutScope/secure/errorMap) — **MINIMAL SHIPPED 2026-07-15** (build-order item 3: "minimal contract EARLY, migrations later"). The existing `ActivityCatalogEntry` IS the ActivityDefinition; it gained `kind: 'execution'\|'control'` (the dispatch discriminant — now the executor's PRIMARY branch, checked ahead of the retained `connectionKinds.length > 0` proxy, with a distinct `CONTROL_NOT_DISPATCHABLE` code) + `category`/`ACTIVITY_CATEGORIES` (U5's palette groups, values per spec #4's headings — `agent_task` is `ai`, there is no `agent` class) + an `ActivityDefinition` alias. `cancel`/`timeoutScope`/`secure`/`errorMap`/`inputs` are deliberately NOT declared — each is sequencing behind a named owner (F2a/F3/F4/F15/F9b-d), not an open question. **Production delta is ZERO** and the reducer does not read `kind` yet: **whether A1/A2 route control via this `kind` or a structural discriminant (the `call_pipeline` precedent) is an OPEN FORK no spec settles — #4 owns it.** See the F9a spike-hardened block under D6. |
 | F9b | migrate `http_request` onto it |
 | F9c | migrate `llm_call` |
 | F9d | migrate `agent_task` + catalog consumers |
