@@ -6,7 +6,7 @@ import type {
   PipelineVersion,
   SubstitutionContext,
 } from './types.js';
-import { ParamResolveError, SubstituteError } from './types.js';
+import { ParamResolveError, SubstituteError, TERMINAL_NODE } from './types.js';
 import { declaredOutputNames } from './outputs.js';
 import type { Expr, TemplateMode } from './expr.js';
 import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
@@ -26,8 +26,31 @@ import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
 // `substitute`.
 // ---------------------------------------------------------------------------
 
-/** Closed field set readable via `${run.<field>}`. SSOT — extend here only. */
-export const RUN_FIELDS = ['id', 'pipelineVersionId', 'triggerId', 'parentRunId'] as const;
+/**
+ * Closed field set readable via `${run.<field>}`. SSOT — extend here only.
+ *
+ * Reconciled to spec #6's names at E3 (its spike-hardened "SSOT bug (must fix)"):
+ * the run id is `runId`, not `id`, and `startedAt` now exists — before this the
+ * spec's own dynamic-filename example (`file_${params.env}_${run.runId}.json`)
+ * was REJECTED by the shipped resolver.
+ *
+ * `run.id` is RENAMED, not aliased. The set is documented as closed, so carrying
+ * two spellings of one field would be precisely the drift this fixes; no doc,
+ * fixture or seed used the old spelling.
+ *
+ * `pipelineVersionId`/`triggerId` are kept beyond the spec's line-50 table (which
+ * lists `runId, startedAt, parentRunId?, attempt`): they already worked, and
+ * removing a live field is a bigger break than documenting the deviation. The
+ * spec is amended to match. `attempt` awaits #1 D4 (retry) — there is no attempt
+ * fact to read until a retry can happen.
+ */
+export const RUN_FIELDS = [
+  'runId',
+  'startedAt',
+  'pipelineVersionId',
+  'triggerId',
+  'parentRunId',
+] as const;
 
 /**
  * Missing node-output — a distinct error so `default()` (the ONE lazy function)
@@ -154,6 +177,28 @@ function resolveRef(expr: Extract<Expr, { kind: 'ref' }>, ctx: SubstitutionConte
       throw new MissingNodeOutputError(`unknown node output \${nodes.${id}.output.${name}}`);
     }
     return outs[name];
+  }
+  // `${nodes.<id>.status}` (#6 E3 T6) — the ADF `@activity().Status` fan-in/OR
+  // handle. Its vocabulary is the TERMINAL set only.
+  //
+  // Both refusals below are plain `SubstituteError`s, NEVER
+  // `MissingNodeOutputError`: `default()` catches that one, so routing through it
+  // would let `${default(nodes.a.status, 'none')}` silently return "none" for a
+  // real dispatch race or a typo'd node id — reporting a verdict the run never
+  // reached. A status either IS settled or the expression is wrong.
+  if (parts[0] === 'nodes' && parts.length === 3 && parts[2] === 'status') {
+    const id = parts[1] as string;
+    const status = ctx.nodeStatuses[id];
+    if (status === undefined) {
+      throw new SubstituteError(`\${nodes.${id}.status}: no node '${id}' in this run`);
+    }
+    if (!TERMINAL_NODE.has(status)) {
+      throw new SubstituteError(
+        `\${nodes.${id}.status}: node '${id}' has not settled here — a status is ` +
+          `readable only once it is success/failure/skipped`,
+      );
+    }
+    return status;
   }
   if (parts[0] === 'run' && parts.length === 2) {
     const field = parts[1] as string;
@@ -465,7 +510,9 @@ function coerce(name: string, type: Param['type'], value: unknown): unknown {
  * unterminated `${` is an error; and node-output refs are validated by
  * AVAILABILITY / DOMINANCE over the doc's edge graph (see `computeGraph`).
  */
-export function validateRefs(doc: Pick<PipelineVersion, 'params' | 'nodes' | 'edges'>): string[] {
+export function validateRefs(
+  doc: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'>,
+): string[] {
   const errors: string[] = [];
   const declared = new Map<string, Param>();
   for (const p of doc.params) declared.set(p.name, p);
@@ -480,12 +527,13 @@ export function validateRefs(doc: Pick<PipelineVersion, 'params' | 'nodes' | 'ed
 
   for (const node of doc.nodes) {
     const guaranteed = graph.guaranteed.get(node.id) ?? new Set<string>();
+    const settled = graph.settled.get(node.id) ?? new Set<string>();
     const reachable = graph.reachable.get(node.id) ?? new Set<string>();
     const soft = graph.soft.get(node.id) ?? new Set<string>();
     scan(
       `nodes.${node.id}.config`,
       node.config,
-      { declared, guaranteed, reachable, soft, outputsById },
+      { declared, guaranteed, settled, reachable, soft, outputsById },
       errors,
     );
   }
@@ -673,6 +721,20 @@ function validateExitWhen(c: Container, declared: Map<string, Param>, errors: st
   const scope: ScanScope = {
     declared,
     guaranteed: new Set(c.children), // a child's output is in-scope for exit
+    // Every child is SETTLED here by construction: the reducer only evaluates
+    // `exitWhen` once every child is terminal (`stepContainers`), so unlike the
+    // doc-level analysis this needs no conservatism — the gate is the reducer's
+    // own precondition.
+    //
+    // AVAILABILITY only. It does NOT make a bare `${nodes.check.status}` a usable
+    // exitWhen: the field needs a BOOLEAN, and a status resolves to the string
+    // `'success'`, which `evalExitWhen` reads as not-true — the loop would burn
+    // every round and report the misleading `capped`. The usable form is
+    // `${equals(nodes.check.status, 'success')}`, which needs `equals` (E4); the
+    // string-where-boolean-expected rejection is E6's type check, per E2's split
+    // (E2 owns the MODE check, E6 the TYPE check). Refusing availability here
+    // instead would misattribute a type defect to a scope rule.
+    settled: new Set(c.children),
     reachable: new Set<string>(),
     soft: new Set<string>(),
   };
@@ -860,6 +922,18 @@ interface ScanScope {
   declared: Map<string, Param>;
   /** Node ids whose SUCCESS (outputs) is guaranteed on every path here. */
   guaranteed: Set<string>;
+  /**
+   * Node ids guaranteed TERMINAL here — the availability rule for
+   * `${nodes.<id>.status}`. A SUPERSET of `guaranteed` in the ordinary case (a
+   * node whose outputs are readable has necessarily settled), but not derivable
+   * from it: the two answer different questions, and `settled` is deliberately
+   * empty in shapes where `guaranteed` is not (a looping doc).
+   *
+   * REQUIRED, not optional: an omitted set reads as "nothing is settled" and
+   * would silently reject every status ref in that scope, so the compiler must
+   * force each call site to make the choice explicitly.
+   */
+  settled: Set<string>;
   /** Node ids that MAY run before this one on some path (forward-reachable). */
   reachable: Set<string>;
   /** Back-edge-visible sibling node ids — readable only inside `default()`. */
@@ -1029,6 +1103,34 @@ function checkExprStatic(
     }
     return;
   }
+  // `${nodes.<id>.status}` (#6 E3 T6). Availability is `settled` — "is `id`
+  // guaranteed TERMINAL here" — NOT `guaranteed`, which asks whether it
+  // SUCCEEDED. A status is readable on exactly the failure/completion/skipped
+  // paths where an output is not, which is what makes the fan-in/OR pattern
+  // expressible at all.
+  //
+  // `softOk` is deliberately IGNORED: `default()` only rescues a
+  // `MissingNodeOutputError`, and `resolveRef` raises a plain `SubstituteError`
+  // for an unsettled status, so relaxing the check inside `default()` would
+  // accept a doc at save that still THROWS at run — a manufactured false-accept
+  // with no escape hatch (same reasoning as the E7 refusal above).
+  if (parts[0] === 'nodes' && parts.length === 3 && parts[2] === 'status') {
+    const id = parts[1] as string;
+    if (scope.settled.has(id)) return;
+    if (scope.reachable.has(id) || scope.soft.has(id)) {
+      errors.push(
+        `${where}: \${nodes.${id}.status} is not settled here — '${id}' may still be ` +
+          'running when this node dispatches (it is reachable only on some paths, ' +
+          "sits behind an 'any' join, or lives in a doc whose back-edge can reset it)",
+      );
+    } else {
+      errors.push(
+        `${where}: \${nodes.${id}.status} does not name an upstream node ` +
+          '(a self, downstream, or unrelated node has no status here)',
+      );
+    }
+    return;
+  }
   if (parts[0] === 'run' && parts.length === 2) {
     if (!(RUN_FIELDS as readonly string[]).includes(parts[1] as string)) {
       errors.push(
@@ -1045,6 +1147,8 @@ function checkExprStatic(
 interface Graph {
   /** nodeId → node ids whose SUCCESS is guaranteed on every path to it. */
   guaranteed: Map<string, Set<string>>;
+  /** nodeId → node ids guaranteed TERMINAL (settled) on every path to it. */
+  settled: Map<string, Set<string>>;
   /** nodeId → node ids forward-reachable (may run before it on some path). */
   reachable: Map<string, Set<string>>;
   /** nodeId → back-edge-visible sibling node ids (default()-only reads). */
@@ -1062,13 +1166,50 @@ interface Graph {
  * X→success edge (so X actually succeeded and its outputs exist). That is
  * exactly "X dominates R on the success graph" — the spec's dominance rule.
  */
-function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges'>): Graph {
+function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers'>): Graph {
   const nodeIds = doc.nodes.map((n) => n.id);
   const idSet = new Set(nodeIds);
-  const forward = effectiveEdges(doc).filter(
-    (e) => !e.back && idSet.has(e.from) && idSet.has(e.to),
-  );
+  const effective = effectiveEdges(doc);
+  const forward = effective.filter((e) => !e.back && idSet.has(e.from) && idSet.has(e.to));
   const back = doc.edges.filter((e) => e.back && idSet.has(e.from) && idSet.has(e.to));
+
+  // Nodes with an incoming forward edge from an UNTRACKED endpoint — in practice
+  // a CONTAINER (node and container ids share one endpoint namespace, and this
+  // analysis is node-only, so a container predecessor is invisible here while
+  // being fully live in the reducer's readiness graph).
+  //
+  // This asymmetry only bites under an `any` join, and there it is a
+  // FALSE-ACCEPT, which is the one direction that is never safe: `r` dispatches
+  // the moment the container satisfies, while a tracked sibling is still
+  // running. Intersecting over the tracked edges alone silently asserts the
+  // sibling settled. Under `all`, an untracked predecessor merely ADDS a
+  // requirement — every tracked predecessor must satisfy regardless — so
+  // ignoring it stays sound, which is why this is scoped to `any`.
+  const nodeById = new Map(doc.nodes.map((n) => [n.id, n]));
+  const untrackedAnyJoin = new Set<string>();
+  for (const e of effective) {
+    if (e.back || !idSet.has(e.to) || idSet.has(e.from)) continue;
+    const to = nodeById.get(e.to);
+    if (to !== undefined && nodeJoin(to) === 'any') untrackedAnyJoin.add(e.to);
+  }
+
+  // A doc that can RE-RUN a node cannot support a stable `settled` answer: a
+  // node that had settled goes back to `pending` mid-run while a node outside
+  // the re-run body stays ready and dispatches. Rather than model that, `settled`
+  // is refused doc-wide for such a doc (see `Graph.settled`).
+  //
+  // The reducer resets nodes from TWO places, and both must be covered — missing
+  // either is a FALSE-ACCEPT, the one direction that is never safe here:
+  //   - `fireBackEdges` → `resetNodes`, for a `back:true` edge; and
+  //   - `resetContainerRound` → `resetNodes(state, c.children)`, when a LOOP
+  //     container starts another round. A loop re-rounds off `exitWhen`/
+  //     `maxRounds` alone and carries NO back-edge, so an edge-only test misses
+  //     it entirely (verified by test: a loop child's status accepted at save,
+  //     then killing the run with `invalid_event` at dispatch).
+  // A `stage` never re-rounds (`stepContainers` exits it once its children are
+  // terminal), so it must NOT disable status refs.
+  const canReRunNodes =
+    doc.edges.some((e) => e.back === true) || doc.containers.some((c) => c.kind === 'loop');
 
   // Predecessors (forward), for reachability + the must-analysis.
   const preds = new Map<string, { from: string; on: string }[]>();
@@ -1096,20 +1237,24 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges'>): Graph {
     reachable.set(id, acc);
   }
 
-  // guaranteed[R] via a topological pass (Kahn). The forward graph is a DAG
-  // (back-edges removed); any node stranded in a residual cycle keeps the safe
-  // empty set (which refuses unconditional refs).
+  // guaranteed[R] + settled[R] via ONE topological pass (Kahn). The forward
+  // graph is a DAG (back-edges removed); any node stranded in a residual cycle
+  // keeps the safe empty set (which refuses unconditional refs).
   const guaranteed = new Map<string, Set<string>>();
+  const settled = new Map<string, Set<string>>();
   const indegWork = new Map(indeg);
   const queue = nodeIds.filter((id) => (indegWork.get(id) ?? 0) === 0);
-  for (const id of nodeIds) if (!queue.includes(id)) guaranteed.set(id, new Set());
-  for (const id of queue) guaranteed.set(id, new Set());
+  for (const id of nodeIds) {
+    guaranteed.set(id, new Set());
+    settled.set(id, new Set());
+  }
 
   while (queue.length) {
     const id = queue.shift() as string;
     const incoming = preds.get(id)!;
     if (incoming.length > 0) {
       let acc: Set<string> | null = null;
+      let sacc: Set<string> | null = null;
       for (const { from, on } of incoming) {
         // A `skipped` edge INVERTS its predecessor's guarantees: this node runs
         // only when `from` was skipped, and `from` is skipped precisely because
@@ -1126,8 +1271,42 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges'>): Graph {
         // A0 — staying conservative can only over-reject, never over-accept) →
         // its outputs are NOT guaranteed; only what was guaranteed before it is.
         acc = acc === null ? base : intersect(acc, base);
+
+        // SETTLED asks a strictly weaker question than `guaranteed` — "did
+        // `from` reach a terminal state", not "did it SUCCEED" — so it holds on
+        // every edge kind, including the failure/completion/skipped paths where
+        // outputs are unavailable. That gap IS the point: it is what makes the
+        // ADF `@activity().Status` fan-in/OR pattern expressible.
+        //
+        // Reaching this node via ANY edge proves `from` itself is terminal, so
+        // `from` is always added. What `from` in turn vouches for is a different
+        // question, and the skip inversion applies there too: a node is skipped
+        // as soon as ONE incoming group is dead, and its OTHER predecessors may
+        // still be RUNNING at that moment — so a skipped `from` is terminal while
+        // its own upstream may not be.
+        //
+        // The intersection below subsumes this for a fully-TRACKED graph (every
+        // element of settled[from] survives only if it survives the dead group's
+        // own edge, and that group's predecessor is terminal). The inversion is
+        // load-bearing for exactly the case the intersection cannot see: an
+        // UNTRACKED (container) predecessor under an `all` join. There `from` is
+        // skipped by the untracked group dying, while its tracked siblings —
+        // which are all settled[from] contains — may still be in flight. Pinned
+        // by test: "does not inherit a skipped node's own predecessors (untracked
+        // predecessor)".
+        const sbase =
+          on === 'skipped' ? new Set<string>() : new Set(settled.get(from) ?? new Set<string>());
+        sbase.add(from);
+        sacc = sacc === null ? sbase : intersect(sacc, sbase);
       }
       guaranteed.set(id, acc ?? new Set());
+      settled.set(id, sacc ?? new Set());
+    }
+    // Applied HERE, inside the topological pass rather than as a post-pass, so a
+    // descendant reading this node's set can only ever read the zeroed one.
+    if (untrackedAnyJoin.has(id)) {
+      guaranteed.set(id, new Set());
+      settled.set(id, new Set());
     }
     for (const e of forward) {
       if (e.from !== id) continue;
@@ -1136,6 +1315,12 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges'>): Graph {
       if (d === 0) queue.push(e.to);
     }
   }
+
+  // Doc-wide `settled` refusal for a doc that can re-run nodes (see
+  // `canReRunNodes`). Note this does NOT disable `${nodes.<child>.status}` inside
+  // a loop's own `exitWhen`: `validateExitWhen` builds its own scope, where every
+  // child is terminal by the reducer's own precondition.
+  if (canReRunNodes) for (const id of nodeIds) settled.set(id, new Set());
 
   // soft[R]: back-edge sources whose outputs R may read ONLY inside default().
   // A source `s` is soft-visible to R iff R is the back-edge target (or a
@@ -1153,7 +1338,18 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges'>): Graph {
     }
   }
 
-  return { guaranteed, reachable, soft };
+  return { guaranteed, settled, reachable, soft };
+}
+
+/**
+ * A node's join rule from `config.join` (`'any'` opt-in; default `'all'`).
+ * SSOT shared by the reducer's readiness rule (`computeReadiness`) and this
+ * module's availability analysis — the two MUST agree on when a node can run,
+ * or static validation describes a different engine than the one that executes.
+ * Lives here, like `effectiveEdges`, because `reduce.ts` imports `params.ts`.
+ */
+export function nodeJoin(node: Pick<Node, 'config'>): 'all' | 'any' {
+  return node.config['join'] === 'any' ? 'any' : 'all';
 }
 
 /**

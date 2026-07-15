@@ -230,7 +230,12 @@ describe('the bare-predicate rule is structural (spec #6 Round-2)', () => {
 
   it('so a nested ${} predicate fails LOUD rather than resolving', () => {
     expect(() =>
-      substitute('${count(a, ${item.x})}', { params: {}, nodeOutputs: {}, run: {} }),
+      substitute('${count(a, ${item.x})}', {
+        params: {},
+        nodeOutputs: {},
+        nodeStatuses: {},
+        run: {},
+      }),
     ).toThrow(SubstituteError);
   });
 

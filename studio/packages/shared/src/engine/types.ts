@@ -38,12 +38,21 @@ export type {
  * - `nodeOutputs` — a node's declared outputs, populated ONLY once that node has
  *                reached a terminal `node.succeeded` (partial outputs never feed
  *                substitution). Keyed by nodeId, then by output name.
+ * - `nodeStatuses` — every node's CURRENT status, backing `${nodes.<id>.status}`
+ *                (#6 E3 T6). Deliberately the whole `NodeRunStatus`, not just the
+ *                terminal subset: the map reports what the run knows, and
+ *                REFUSING a non-terminal read is the resolver's judgement, not a
+ *                gap in the data. Equally deliberately a status-only projection
+ *                rather than `RunState.nodes` itself — `attempts` /
+ *                `currentAttemptId` are engine bookkeeping and must not become
+ *                readable by the expression language.
  * - `run`      — a CLOSED field set describing the current run's identity (see
  *                `RUN_FIELDS`). `${run.<field>}` may read only these names.
  */
 export interface SubstitutionContext {
   params: Record<string, unknown>;
   nodeOutputs: Record<string, Record<string, unknown>>;
+  nodeStatuses: Record<string, NodeRunStatus>;
   run: Record<string, unknown>;
 }
 
@@ -112,6 +121,32 @@ export const NodeRunStatusSchema = z.enum([
 ]);
 export type NodeRunStatus = z.infer<typeof NodeRunStatusSchema>;
 
+/**
+ * The TERMINAL subset of `NodeRunStatus` — a node that will never change again.
+ * This is one vocabulary serving three consumers, so it lives here rather than
+ * in either of them: the reducer's edge/readiness model (`endpointOutcome`), a
+ * container's exit gate, and the `${nodes.<id>.status}` expression handle
+ * (#6 E3 T6), whose language-level vocabulary is EXACTLY this set.
+ *
+ * Declared in `types.ts` specifically so `params.ts` can read it: `reduce.ts`
+ * already imports `params.ts` (`effectiveEdges`, `backEdgeResetBody`, …), so
+ * owning it there and importing it back would be a cycle.
+ */
+export const TerminalNodeStatusSchema = z.enum(['success', 'failure', 'skipped']);
+export type TerminalNodeStatus = z.infer<typeof TerminalNodeStatusSchema>;
+
+/**
+ * Runtime membership test for `TerminalNodeStatusSchema`. Derived from the
+ * schema's own options rather than hand-listed, so the set and the type can
+ * never drift apart.
+ */
+export const TERMINAL_NODE: ReadonlySet<NodeRunStatus> = new Set<NodeRunStatus>(
+  // `satisfies` pins the subset relationship at COMPILE time: adding an 8th
+  // `NodeRunStatus` that is terminal, and forgetting it here, is a type error
+  // rather than a silently-permissive engine.
+  TerminalNodeStatusSchema.options satisfies readonly NodeRunStatus[],
+);
+
 export const NodeRunStateSchema = z.object({
   status: NodeRunStatusSchema,
   attempts: z.number().int().nonnegative(),
@@ -173,6 +208,12 @@ export type ContainerRunState = z.infer<typeof ContainerRunStateSchema>;
 export const RunStateSchema = z.object({
   runId: z.string(),
   pipelineVersionId: z.string(),
+  /**
+   * When the run started, ISO-8601 UTC — the run-stable timestamp behind
+   * `${run.startedAt}` (#6 E3). `null` for a log appended before the fact was
+   * carried (see `run.started.startedAt`), and pre-seed.
+   */
+  startedAt: z.string().nullable(),
   params: z.record(z.string(), z.unknown()),
   status: RunLifecycleStatusSchema,
   nodes: z.record(z.string(), NodeRunStateSchema),
@@ -265,6 +306,22 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     type: z.literal('run.started'),
     runId: z.string(),
     pipelineVersionId: z.string(),
+    /**
+     * When the run started, ISO-8601 UTC — the LOGGED FACT behind
+     * `${run.startedAt}` (#6 E3). It lives in the PAYLOAD, not the envelope's
+     * `ts` column, because `reduce` folds payloads only: reading the envelope
+     * would mean widening the reducer's contract, and the CP1 invariant is that
+     * a pure fold of the payload log IS the state. Stamped by the driver from
+     * the run ROW (`runs.started_at`), never from a fresh clock — one named fact
+     * must not have two durable answers, and the reducer must stay clock-free
+     * so replay is deterministic.
+     *
+     * OPTIONAL for durable back-compat: `run.started` rows appended before E3
+     * carry no stamp and MUST still parse on replay (they fold to `null`).
+     * Deliberately NOT `.datetime()` — a durable field with a format enum is a
+     * back-compat trap, the same reasoning `node.failed.code` records below.
+     */
+    startedAt: z.string().optional(),
     /** Already-resolved run params (post `resolveRunParams`, secrets stripped). */
     params: z.record(z.string(), z.unknown()),
   }),

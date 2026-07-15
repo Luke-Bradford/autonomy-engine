@@ -10,8 +10,9 @@ import type {
   ReduceResult,
   RunState,
   SubstitutionContext,
+  TerminalNodeStatus,
 } from './types.js';
-import { SubstituteError } from './types.js';
+import { SubstituteError, TERMINAL_NODE } from './types.js';
 import type { OutputType } from '../schemas/pipeline.js';
 import { declaredOutputs, type DeclaredOutput } from './outputs.js';
 import {
@@ -19,6 +20,7 @@ import {
   effectiveEdges,
   forwardDescendants,
   nodeForwardAdjacency,
+  nodeJoin,
   substitute,
   wholeValueDefect,
 } from './params.js';
@@ -70,7 +72,6 @@ export interface Engine {
   projectRunState(events: EngineEvent[]): RunState;
 }
 
-const TERMINAL_NODE = new Set<NodeRunState['status']>(['success', 'failure', 'skipped']);
 const LIVE_NODE = new Set<NodeRunState['status']>(['ready', 'dispatched']);
 
 /**
@@ -97,8 +98,13 @@ type EdgeState = 'satisfied' | 'unsatisfied-terminal' | 'pending' | 'impossible'
 /** A node's computed readiness given its incoming edges' states + join rule. */
 type Readiness = 'ready' | 'skipped' | 'pending';
 
-/** A terminal outcome for an endpoint (node OR container), or `null` if live. */
-type EndpointOutcome = 'success' | 'failure' | 'skipped' | null;
+/**
+ * A terminal outcome for an endpoint (node OR container), or `null` if live.
+ * Pinned to the language's `TerminalNodeStatus` vocabulary rather than
+ * re-spelling it, so the reducer's outcome model and `${nodes.<id>.status}`
+ * cannot drift apart.
+ */
+type EndpointOutcome = TerminalNodeStatus | null;
 
 /**
  * A STABLE key for an edge, from (from, to, on, branch) — NOT an array index —
@@ -338,13 +344,22 @@ export function createEngine(doc: EngineDoc): Engine {
    * `node.succeeded` (and a `call.returned`, whose outputs are recorded even on
    * a failing child) plus a container's projected outputs at exit. `triggerId`/
    * `parentRunId` are not carried in `RunState` here, so they resolve to `null`.
+   *
+   * `nodeStatuses` projects `state.nodes` down to bare statuses — the language
+   * reads a node's verdict, never its `attempts`/`currentAttemptId` bookkeeping.
+   * `startedAt` comes from the `run.started` FACT, so it is stable across the
+   * whole run and identical on replay (`null` for a pre-E3 log).
    */
   function buildCtx(state: RunState): SubstitutionContext {
+    const nodeStatuses: Record<string, NodeRunState['status']> = {};
+    for (const [id, ns] of Object.entries(state.nodes)) nodeStatuses[id] = ns.status;
     return {
       params: state.params,
       nodeOutputs: state.outputs,
+      nodeStatuses,
       run: {
-        id: state.runId,
+        runId: state.runId,
+        startedAt: state.startedAt,
         pipelineVersionId: state.pipelineVersionId,
         triggerId: null,
         parentRunId: null,
@@ -786,6 +801,10 @@ export function createEngine(doc: EngineDoc): Engine {
     const started: RunState = {
       runId: event.runId,
       pipelineVersionId: event.pipelineVersionId,
+      // The fact, verbatim from the log — never a clock read. `undefined` (a log
+      // appended before E3 carried the stamp) folds to `null`, so replay of an
+      // old run stays deterministic instead of throwing.
+      startedAt: event.startedAt ?? null,
       params: { ...event.params },
       status: 'running',
       nodes,
@@ -1157,6 +1176,7 @@ export function createEngine(doc: EngineDoc): Engine {
     return {
       runId: '',
       pipelineVersionId: '',
+      startedAt: null,
       params: {},
       status: 'pending',
       nodes: {},
@@ -1188,11 +1208,6 @@ function withNode(state: RunState, id: string, patch: Partial<NodeRunState>): Ru
 function withContainer(state: RunState, id: string, patch: Partial<ContainerRunState>): RunState {
   const prev = state.containers[id]!;
   return { ...state, containers: { ...state.containers, [id]: { ...prev, ...patch } } };
-}
-
-/** A node's join rule from `config.join` (`'any'` opt-in; default `'all'`). */
-function nodeJoin(node: Node): 'all' | 'any' {
-  return node.config['join'] === 'any' ? 'any' : 'all';
 }
 
 /** A container's join rule over its OUTER incoming edges (default `all`). */

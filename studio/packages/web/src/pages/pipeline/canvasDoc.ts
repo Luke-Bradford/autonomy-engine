@@ -49,6 +49,9 @@ export function validateCanvas(
 ): string[] {
   return [
     ...validateDoc({ params, nodes, edges, containers }),
-    ...validateRefs({ params, nodes, edges }),
+    // `containers` is load-bearing for `validateRefs` too, not just structural:
+    // a LOOP container re-runs its children, which is what makes a
+    // `${nodes.<id>.status}` ref unanswerable in that doc (#6 E3).
+    ...validateRefs({ params, nodes, edges, containers }),
   ];
 }
