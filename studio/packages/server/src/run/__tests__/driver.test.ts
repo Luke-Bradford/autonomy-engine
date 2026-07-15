@@ -11,6 +11,8 @@ import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion } from '../../repo/pipeline-versions.js';
 import { getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun, getRun } from '../../repo/runs.js';
+import { runs } from '../../db/schema.js';
+import { eq } from 'drizzle-orm';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { buildEngine, startRun, type DocResolver, type DriverDeps } from '../driver.js';
 import { loadEngineEvents } from '../events.js';
@@ -170,5 +172,57 @@ describe('driver — startRun guards', () => {
     expect(state.nodes.a!.status).toBe('dispatched');
     expect(getRun(db, run.id)!.status).toBe('running');
     expect(getRun(db, run.id)!.finishedAt).toBeNull();
+  });
+});
+
+// ===========================================================================
+// #6 E3 — `run.started.startedAt` is stamped from the run ROW
+// ===========================================================================
+
+describe('startRun — the startedAt fact', () => {
+  // `runs.started_at` already owns "when did this run start". Stamping the event
+  // from a FRESH clock instead would give one named fact two durable answers that
+  // silently disagree — by minutes, once #5's scheduler admits queued runs.
+  //
+  // The row is BACKDATED here rather than started immediately, which is what
+  // gives the test teeth: created-then-started-microseconds-later lands both
+  // spellings in the same millisecond, so a fresh-clock regression would pass
+  // unnoticed (confirmed by mutation). An hour-old row is the real queued-run
+  // shape, and it separates them unambiguously.
+  it('stamps the event from runs.started_at, not a fresh clock', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const created = seedRun(db, pvId);
+    const admittedAt = created.startedAt - 3_600_000;
+    db.update(runs).set({ startedAt: admittedAt }).where(eq(runs.id, created.id)).run();
+    const run = getRun(db, created.id)!;
+    expect(run.startedAt).toBe(admittedAt); // the row is genuinely backdated
+
+    await startRun(deps(db), run);
+
+    const started = loadEngineEvents(db, run.id).find((e) => e.type === 'run.started') as Extract<
+      EngineEvent,
+      { type: 'run.started' }
+    >;
+    expect(started.startedAt).toBe(new Date(admittedAt).toISOString());
+  });
+
+  // The whole point of logging it as a fact: the reducer reads no clock, so the
+  // value a `${run.startedAt}` expression sees is fixed by the log alone.
+  // The whole point of logging it as a FACT: the reducer reads no clock, so
+  // replaying the log alone reproduces the value a `${run.startedAt}` expression
+  // saw — no live clock can drift into it.
+  it('replays from the log to the same value', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a', { config: { at: '${run.startedAt}' } })]);
+    const created = seedRun(db, pvId);
+    const admittedAt = created.startedAt - 3_600_000;
+    db.update(runs).set({ startedAt: admittedAt }).where(eq(runs.id, created.id)).run();
+
+    await startRun(deps(db), getRun(db, created.id)!);
+
+    const engine = buildEngine(getPipelineVersion(db, pvId)!);
+    const state = engine.projectRunState(loadEngineEvents(db, created.id));
+    expect(state.startedAt).toBe(new Date(admittedAt).toISOString());
   });
 });

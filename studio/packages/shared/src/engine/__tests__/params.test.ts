@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { Edge, EdgeOn, Node, Param, PipelineVersion, SubstitutionContext } from '../types.js';
+import type {
+  Container,
+  Edge,
+  EdgeOn,
+  Node,
+  Param,
+  PipelineVersion,
+  SubstitutionContext,
+} from '../types.js';
 import { ParamResolveError, SubstituteError } from '../types.js';
 import {
   RUN_FIELDS,
@@ -34,8 +42,9 @@ function doc(
   nodes: Node[],
   edges: Edge[],
   params: Param[] = [],
-): Pick<PipelineVersion, 'params' | 'nodes' | 'edges'> {
-  return { params, nodes, edges };
+  containers: Container[] = [],
+): Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'> {
+  return { params, nodes, edges, containers };
 }
 
 // ===========================================================================
@@ -903,6 +912,21 @@ describe('validateRefs — ${nodes.<id>.status} (#6 E3 T6)', () => {
     expect(validateRefs(doc(nodes, edges))).not.toEqual([]);
   });
 
+  // The shape that makes the skip inversion LOAD-BEARING rather than merely
+  // conservative — the intersection alone cannot catch this one, because the
+  // thing that kills `r` is invisible to the analysis.
+  //
+  // `r` has an untracked (container) predecessor `c` and a tracked one `a`, under
+  // the default `all` join. `c` being skipped kills r's `c` group → `r` is
+  // skipped — while `a` may still be RUNNING. So settled[r] = {a} names a live
+  // node, and `s`, reached by r's skip, must not inherit it. Without the
+  // inversion this is accepted and then throws at dispatch.
+  it("does not inherit a skipped node's own predecessors (untracked predecessor)", () => {
+    const nodes = [node('a', {}), node('r', {}), node('s', { note: '${nodes.a.status}' })];
+    const edges = [edge('c', 'r', 'success'), edge('a', 'r', 'success'), edge('r', 's', 'skipped')];
+    expect(validateRefs(doc(nodes, edges))).not.toEqual([]);
+  });
+
   it('still reads the SKIPPED node itself, which is terminal by definition', () => {
     const nodes = [node('a', {}), node('r', {}), node('s', { note: '${nodes.r.status}' })];
     const edges = [edge('a', 'r', 'success'), edge('r', 's', 'skipped')];
@@ -912,6 +936,38 @@ describe('validateRefs — ${nodes.<id>.status} (#6 E3 T6)', () => {
   // COUNTEREXAMPLE B (planning gate): a back-edge bounce RESETS its body to
   // `pending` mid-run, so a node that had settled can un-settle while an
   // off-body sibling stays ready. Refused doc-wide rather than modelled.
+  // A LOOP container re-runs its children with NO back-edge in the doc
+  // (`resetContainerRound` fires off `exitWhen`/`maxRounds` alone), so an
+  // edge-only guard misses it. Caught by BOTH pre-PR review lenses: the shape
+  // below validated clean and then killed the run —
+  // `finishRun{failure, invalid_event}`, "dispatch prep failed for node 'r':
+  // ${nodes.z.status}: node 'z' has not settled here".
+  it('refuses a status ref in a doc carrying a LOOP container (it re-runs children)', () => {
+    const nodes = [
+      node('z', {}),
+      node('q', {}),
+      node('w', {}),
+      node('r', { saw: '${nodes.z.status}' }),
+    ];
+    const edges = [edge('z', 'w', 'success'), edge('w', 'r', 'success')];
+    const loop = {
+      id: 'c',
+      kind: 'loop' as const,
+      children: ['z', 'q'],
+      exitWhen: '${nodes.q.output.done}',
+    };
+    expect(validateRefs(doc(nodes, edges, [], [loop]))).not.toEqual([]);
+  });
+
+  // ...but a STAGE never re-rounds (`stepContainers` exits it once its children
+  // are terminal), so it must not disable the handle.
+  it('still allows a status ref in a doc whose only container is a STAGE', () => {
+    const nodes = [node('z', {}), node('w', { saw: '${nodes.z.status}' })];
+    const edges = [edge('z', 'w', 'success')];
+    const stage = { id: 'c', kind: 'stage' as const, children: ['z'] };
+    expect(validateRefs(doc(nodes, edges, [], [stage]))).toEqual([]);
+  });
+
   it('refuses a status ref anywhere in a doc carrying a back-edge', () => {
     const nodes = [node('a', {}), node('b', { note: '${nodes.a.status}' }), node('z', {})];
     const edges = [

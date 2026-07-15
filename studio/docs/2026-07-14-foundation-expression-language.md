@@ -47,7 +47,7 @@ dynamic/dynamic-name sub-fields (ADF parity: `nodes.x.output.rows[params.i].sku`
 | `global.<name>` | workspace global param (read-only) | #1 D3; secure globals resolve ONLY at secret sinks (#1 D8) |
 | `nodes.<id>.output[.deep]` | an upstream node's typed outputs | deep `[]`/`.` into a `json`-typed output = `any` (runtime-validated) unless the output declares a schema |
 | `nodes.<id>.status` | `success \| failure \| skipped` | **NEW (T6)** — enables the ADF `@activity().Status` fan-in/OR pattern. **SHIPPED at E3**; readable only where the node is *guaranteed settled* — see the E3 block below |
-| `run.<field>` | run system vars: `runId`, `startedAt`, `pipelineVersionId`, `triggerId`, `parentRunId` | **NEW (T2/C3)**. **SHIPPED at E3** — `RUN_FIELDS` in `engine/params.ts` is the SSOT; `attempt` awaits #1 D4 (no attempt fact exists until retry does) |
+| `run.<field>` | run system vars: `runId`, `startedAt`, `pipelineVersionId`, `triggerId`, `parentRunId` | **NEW (T2/C3)**. **SHIPPED at E3** — `RUN_FIELDS` in `engine/params.ts` is the SSOT; `attempt` is SCOPE-OUT: `NodeRunState.attempts` already exists (incremented by `onRetryRequested`), but it is NODE-scoped while `buildCtx` is RUN-scoped, so exposing it needs a per-node binding decision — #1 D4 |
 | `pipeline.<field>` | `name`, `version`, `triggerType`, `triggerName?`, `triggerTime?` | **NEW** — ADF `@pipeline().*` |
 | `trigger.<field>` | trigger context per type (schedule: `scheduledTime`,`startTime`; event: `body.*`,`eventData.*`; window: `windowStart`,`windowEnd`) | **NEW (T2)** — from the `run.triggerContext` seed event (#5); **context-validated** |
 | `item[.field]` / `item[i]` | current `foreach` element | valid ONLY inside the nearest enclosing `foreach` (#4 A4); save-time scope-checked |
@@ -121,7 +121,7 @@ its own dispatch stamp) — documented; use `${run.startedAt}` for a run-stable 
 | --- | --- |
 | E1 | Expression grammar + parser (refs, `[]`/`.`, function calls, literals) + AST |
 | E2 | Interpolation model (whole-value type-preserving vs string) + `$${` escape + single-pass inert eval |
-| E3 | Reference resolver over namespaces (params/vars/global/nodes.output/nodes.status/run/pipeline/item) — **PARTIALLY SHIPPED 2026-07-15**: `run.*` (SSOT fix + `startedAt`) + `nodes.<id>.status` landed. The rest is BLOCKED on unbuilt prerequisites, each with a named owner: `vars.*` → #1 D2, `global.*` → #1 D3, `item` → #4 A4 (`foreach`), `pipeline.*` → needs a doc widening (`PipelineVersionSchema` has no `name`; `EngineDoc` carries only nodes/edges/containers) + #5's seed for `triggerType`/`triggerName`/`triggerTime`, `run.attempt` → #1 D4. Re-open the remaining surface as each lands. |
+| E3 | Reference resolver over namespaces (params/vars/global/nodes.output/nodes.status/run/pipeline/item) — **PARTIALLY SHIPPED 2026-07-15**: `run.*` (SSOT fix + `startedAt`) + `nodes.<id>.status` landed. The rest is BLOCKED on unbuilt prerequisites, each with a named owner: `vars.*` → #1 D2, `global.*` → #1 D3, `item` → #4 A4 (`foreach`), `pipeline.*` → needs a doc widening (`PipelineVersionSchema` has no `name`; `EngineDoc` carries only nodes/edges/containers) + #5's seed for `triggerType`/`triggerName`/`triggerTime`, `run.attempt` → #1 D4 (the `attempts` fact exists but is node-scoped; a run-scoped `${run.*}` has no single answer for it). Re-open the remaining surface as each lands. |
 | E4 | Function catalog impl + per-fn type signatures (logical/string/collection/conversion/math) |
 | E5 | Date fns + dispatch-stamped time (`utcNow` binds node.dispatched stamp; `run/pipeline` from seed) |
 | E6 | `validateRefs` typing: infer expr type, check against field-expected type; boolean-condition + array-items checks |
@@ -275,8 +275,12 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
     ONE incoming group is dead, while its OTHER predecessors may still be RUNNING — so a skipped
     predecessor is itself terminal but vouches for nothing upstream. (The same inversion `guaranteed`
     already handles, for a subtler reason.) The skipped node itself stays readable — it IS terminal.
-  - **Two conservative refusals**, both found by counterexample at the planning gate, both
-    FALSE-ACCEPTS (the one direction that is never safe — a doc accepted at save that throws at run):
+    The edge-wise intersection subsumes this for a fully-TRACKED graph; the inversion is
+    **load-bearing** for the case the intersection cannot see — an UNTRACKED predecessor under an
+    `all` join, where the untracked group dying skips the node while its tracked siblings are still
+    in flight. (Pinned by mutation: dropping the inversion fails that test and nothing else.)
+  - **Three conservative refusals**, each a FALSE-ACCEPT if missed — the one direction that is never
+    safe here (a doc accepted at save that then throws at run, with no `default()` escape hatch):
     - **`any` join + a container predecessor → `settled = ∅`.** `computeGraph` is node-only, but the
       reducer's readiness graph spans nodes ∪ containers, so a container edge is invisible to the
       analysis and live in the engine. Under `any`, R dispatches the moment the container satisfies
@@ -284,14 +288,26 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
       requirement, so ignoring it stays sound — hence the scoping. **The identical hole existed in
       `guaranteed` and is fixed in the same pass** (proven by test: the pre-fix analysis accepted
       `${nodes.a.output.text}` on that shape), so the two analyses can never disagree about one graph.
-    - **Any back-edge in the doc → `settled = ∅` doc-wide.** A bounce RESETS its body to `pending`
-      mid-run, so a settled node can un-settle while an off-body node stays ready. Refused rather
-      than modelled. This does NOT affect a loop's `exitWhen`, which is the flagship status use:
-      `validateExitWhen` builds its own scope where every child is terminal by the reducer's own
-      precondition (`stepContainers` only evaluates `exitWhen` once all children are terminal).
+    - **A doc that can RE-RUN a node → `settled = ∅` doc-wide.** A re-run returns a settled node to
+      `pending` while a node outside the re-run body stays ready and dispatches. The reducer resets
+      from **two** places and both must be covered: `fireBackEdges` (a `back:true` edge) **and**
+      `resetContainerRound` (a **LOOP container**, which re-rounds off `exitWhen`/`maxRounds` alone
+      and carries NO back-edge — so an edge-only test misses it, and `validateRefs` had to be widened
+      to take `containers` to see it at all). A `stage` never re-rounds and does NOT disable the
+      handle. Both halves are pinned by mutation.
+  - **`exitWhen` gets its own scope** (`validateExitWhen`), where every child IS settled by the
+    reducer's own precondition (`stepContainers` only evaluates `exitWhen` once all children are
+    terminal) — so the doc-wide loop refusal above does not reach it. NB this is AVAILABILITY only:
+    a bare `${nodes.check.status}` is still not a usable `exitWhen`, because the field needs a
+    BOOLEAN and a status resolves to the string `'success'`. The usable form
+    `${equals(nodes.check.status,'success')}` needs `equals` (**E4**), and the
+    string-where-boolean-expected rejection is **E6**'s type check — consistent with E2's split
+    (E2 owns the MODE check, E6 the TYPE check). Refusing availability here would misattribute a
+    type defect to a scope rule.
   - **Known safe false-rejects** (over-refusal is safe; a later ticket may narrow them): a status ref
-    inside a looping doc's node config, and any container's own status (`nodes.<containerId>.status`
-    — node-only analysis, though a container's projected *outputs* do resolve at run time).
+    in the node config of a doc that can re-run (a back-edge or a loop container), and any
+    container's own status (`nodes.<containerId>.status` — node-only analysis, though a container's
+    projected *outputs* do resolve at run time).
 
 ## Non-goals
 

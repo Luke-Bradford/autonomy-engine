@@ -510,7 +510,9 @@ function coerce(name: string, type: Param['type'], value: unknown): unknown {
  * unterminated `${` is an error; and node-output refs are validated by
  * AVAILABILITY / DOMINANCE over the doc's edge graph (see `computeGraph`).
  */
-export function validateRefs(doc: Pick<PipelineVersion, 'params' | 'nodes' | 'edges'>): string[] {
+export function validateRefs(
+  doc: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'>,
+): string[] {
   const errors: string[] = [];
   const declared = new Map<string, Param>();
   for (const p of doc.params) declared.set(p.name, p);
@@ -719,12 +721,19 @@ function validateExitWhen(c: Container, declared: Map<string, Param>, errors: st
   const scope: ScanScope = {
     declared,
     guaranteed: new Set(c.children), // a child's output is in-scope for exit
-    // Every child is SETTLED here by construction, and this is exactly where the
-    // T6 status handle earns its keep: `exitWhen: '${nodes.check.status}'` — exit
-    // once the check reached ANY terminal outcome — is the loop-shaped fan-in the
-    // handle exists for. The reducer only evaluates `exitWhen` once every child
-    // is terminal (`stepContainers`), so unlike the doc-level analysis this
-    // needs no conservatism: the gate is the reducer's own precondition.
+    // Every child is SETTLED here by construction: the reducer only evaluates
+    // `exitWhen` once every child is terminal (`stepContainers`), so unlike the
+    // doc-level analysis this needs no conservatism — the gate is the reducer's
+    // own precondition.
+    //
+    // AVAILABILITY only. It does NOT make a bare `${nodes.check.status}` a usable
+    // exitWhen: the field needs a BOOLEAN, and a status resolves to the string
+    // `'success'`, which `evalExitWhen` reads as not-true — the loop would burn
+    // every round and report the misleading `capped`. The usable form is
+    // `${equals(nodes.check.status, 'success')}`, which needs `equals` (E4); the
+    // string-where-boolean-expected rejection is E6's type check, per E2's split
+    // (E2 owns the MODE check, E6 the TYPE check). Refusing availability here
+    // instead would misattribute a type defect to a scope rule.
     settled: new Set(c.children),
     reachable: new Set<string>(),
     soft: new Set<string>(),
@@ -1157,7 +1166,7 @@ interface Graph {
  * X→success edge (so X actually succeeded and its outputs exist). That is
  * exactly "X dominates R on the success graph" — the spec's dominance rule.
  */
-function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges'>): Graph {
+function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers'>): Graph {
   const nodeIds = doc.nodes.map((n) => n.id);
   const idSet = new Set(nodeIds);
   const effective = effectiveEdges(doc);
@@ -1184,11 +1193,23 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges'>): Graph {
     if (to !== undefined && nodeJoin(to) === 'any') untrackedAnyJoin.add(e.to);
   }
 
-  // A back-edge bounce RESETS its body to `pending` mid-run (`fireBackEdges` →
-  // `resetNodes`), so a node that had settled can UN-settle while an off-body
-  // node stays ready — settledness is not stable in a doc that loops. Rather
-  // than model that, `settled` is refused doc-wide here (see `Graph.settled`).
-  const hasBackEdge = doc.edges.some((e) => e.back === true);
+  // A doc that can RE-RUN a node cannot support a stable `settled` answer: a
+  // node that had settled goes back to `pending` mid-run while a node outside
+  // the re-run body stays ready and dispatches. Rather than model that, `settled`
+  // is refused doc-wide for such a doc (see `Graph.settled`).
+  //
+  // The reducer resets nodes from TWO places, and both must be covered — missing
+  // either is a FALSE-ACCEPT, the one direction that is never safe here:
+  //   - `fireBackEdges` → `resetNodes`, for a `back:true` edge; and
+  //   - `resetContainerRound` → `resetNodes(state, c.children)`, when a LOOP
+  //     container starts another round. A loop re-rounds off `exitWhen`/
+  //     `maxRounds` alone and carries NO back-edge, so an edge-only test misses
+  //     it entirely (verified by test: a loop child's status accepted at save,
+  //     then killing the run with `invalid_event` at dispatch).
+  // A `stage` never re-rounds (`stepContainers` exits it once its children are
+  // terminal), so it must NOT disable status refs.
+  const canReRunNodes =
+    doc.edges.some((e) => e.back === true) || doc.containers.some((c) => c.kind === 'loop');
 
   // Predecessors (forward), for reachability + the must-analysis.
   const preds = new Map<string, { from: string; on: string }[]>();
@@ -1258,14 +1279,21 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges'>): Graph {
         // ADF `@activity().Status` fan-in/OR pattern expressible.
         //
         // Reaching this node via ANY edge proves `from` itself is terminal, so
-        // `from` is always added. But the same skip inversion applies to what
-        // `from` in turn vouches for, for a subtler reason than above: a node is
-        // skipped as soon as ONE incoming group is dead, and its OTHER
-        // predecessors may still be RUNNING at that moment. So a skipped `from`
-        // is terminal while its own upstream may not be — inheriting
-        // settled[from] through a skip would assert a node had settled that is
-        // still in flight (verified by test: "does not propagate settledness
-        // through a skipped edge").
+        // `from` is always added. What `from` in turn vouches for is a different
+        // question, and the skip inversion applies there too: a node is skipped
+        // as soon as ONE incoming group is dead, and its OTHER predecessors may
+        // still be RUNNING at that moment — so a skipped `from` is terminal while
+        // its own upstream may not be.
+        //
+        // The intersection below subsumes this for a fully-TRACKED graph (every
+        // element of settled[from] survives only if it survives the dead group's
+        // own edge, and that group's predecessor is terminal). The inversion is
+        // load-bearing for exactly the case the intersection cannot see: an
+        // UNTRACKED (container) predecessor under an `all` join. There `from` is
+        // skipped by the untracked group dying, while its tracked siblings —
+        // which are all settled[from] contains — may still be in flight. Pinned
+        // by test: "does not inherit a skipped node's own predecessors (untracked
+        // predecessor)".
         const sbase =
           on === 'skipped' ? new Set<string>() : new Set(settled.get(from) ?? new Set<string>());
         sbase.add(from);
@@ -1288,11 +1316,11 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges'>): Graph {
     }
   }
 
-  // Doc-wide `settled` refusal for a looping doc (see `hasBackEdge`). Note this
-  // does NOT disable `${nodes.<child>.status}` inside a loop's `exitWhen`, which
-  // is the flagship use: `validateExitWhen` builds its own scope, where every
-  // child is terminal by construction.
-  if (hasBackEdge) for (const id of nodeIds) settled.set(id, new Set());
+  // Doc-wide `settled` refusal for a doc that can re-run nodes (see
+  // `canReRunNodes`). Note this does NOT disable `${nodes.<child>.status}` inside
+  // a loop's own `exitWhen`: `validateExitWhen` builds its own scope, where every
+  // child is terminal by the reducer's own precondition.
+  if (canReRunNodes) for (const id of nodeIds) settled.set(id, new Set());
 
   // soft[R]: back-edge sources whose outputs R may read ONLY inside default().
   // A source `s` is soft-visible to R iff R is the back-edge target (or a
