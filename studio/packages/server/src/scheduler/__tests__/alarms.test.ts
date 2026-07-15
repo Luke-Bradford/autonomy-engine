@@ -445,10 +445,15 @@ describe('#5 S1 — post-commit effects never leak out of a rolled-back fire', (
     const armed = clock.arm({ kind: 'retry', ref: RETRY_REF, dueAt: 1_000, discriminator: 'a-1' });
 
     expect(() => clock.tick()).not.toThrow();
-    await new Promise((resolve) => setTimeout(resolve, 10));
 
     // The rejection was caught and logged, not floated...
-    expect(log.error).toHaveBeenCalled();
+    // The clock deliberately does NOT await `afterCommit` (spawned work must
+    // not hold up the remaining alarms), so there is no promise to await here.
+    // `vi.waitFor` RETRIES until the log lands rather than assuming a fixed
+    // delay is long enough: a hard-coded `setTimeout(10)` is a latent CI flake
+    // (a loaded runner can outrun any constant) — prevention-log #9, prove it
+    // structurally, never by elapsed time.
+    await vi.waitFor(() => expect(log.error).toHaveBeenCalled());
     // ...and the fire stays committed: re-delivering it would double-append.
     expect(getWakeup(db, armed.id)?.status).toBe('fired');
   });
