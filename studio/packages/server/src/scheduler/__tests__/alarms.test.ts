@@ -20,7 +20,8 @@ import {
 import type { Db } from '../../repo/types.js';
 import { createRunEventBus } from '../../run/event-bus.js';
 import { appendEngineEvent, loadEngineEvents } from '../../run/events.js';
-import { createAlarmClock, type WakeupHandler } from '../alarms.js';
+import { createAlarmClock, type AlarmClockDeps, type WakeupHandler } from '../alarms.js';
+import { silentLog } from './testLog.js';
 
 /**
  * #5 S1 — the alarm clock. Real DB, real transactions, real `appendEngineEvent`,
@@ -80,9 +81,24 @@ describe('#5 S1 — the alarm clock fires due alarms', () => {
     db = freshDb().db;
   });
 
+  it('requires a `log` dependency — it is a required key of AlarmClockDeps, not optional (#470)', () => {
+    // #470: `log` was `log?:`, so a caller could omit it and every failure path
+    // (`log?.error(...)`) passed silently. This asserts the PROPERTY directly —
+    // `log` is required — instead of a bare `@ts-expect-error` on a construct
+    // site, which cannot pin an error code (TS has no such syntax) and would
+    // therefore keep "passing" if some unrelated future error landed on that
+    // line, silently stopping guarding this regression. If `log` reverts to
+    // optional, `AlarmClockDeps['log']` widens to `SchedulerLog | undefined`,
+    // `undefined extends …` is true, `LogRequired` collapses to `never`, and
+    // `const _: never = true` fails to compile — a precise tripwire.
+    type LogRequired = undefined extends AlarmClockDeps['log'] ? never : true;
+    const logIsRequired: LogRequired = true;
+    expect(logIsRequired).toBe(true);
+  });
+
   it('fires a due alarm and settles the row `fired`', () => {
     const handler = spyHandler();
-    const clock = createAlarmClock({ db, handlers: [handler], now: () => 5_000 });
+    const clock = createAlarmClock({ db, handlers: [handler], now: () => 5_000, log: silentLog() });
     const armed = clock.arm({ kind: 'retry', ref: RETRY_REF, dueAt: 1_000, discriminator: 'a-1' });
 
     clock.tick();
@@ -94,7 +110,7 @@ describe('#5 S1 — the alarm clock fires due alarms', () => {
 
   it('does not fire an alarm that is not yet due', () => {
     const handler = spyHandler();
-    const clock = createAlarmClock({ db, handlers: [handler], now: () => 999 });
+    const clock = createAlarmClock({ db, handlers: [handler], now: () => 999, log: silentLog() });
     clock.arm({ kind: 'retry', ref: RETRY_REF, dueAt: 1_000, discriminator: 'a-1' });
 
     clock.tick();
@@ -114,7 +130,7 @@ describe('#5 S1 — the alarm clock fires due alarms', () => {
         return { status: 'fired' };
       },
     });
-    const clock = createAlarmClock({ db, handlers: [handler], now: () => 5_500 });
+    const clock = createAlarmClock({ db, handlers: [handler], now: () => 5_500, log: silentLog() });
     clock.arm({ kind: 'retry', ref: RETRY_REF, dueAt: 1_000, discriminator: 'a-1' });
 
     clock.tick();
@@ -128,7 +144,12 @@ describe('#5 S1 — the alarm clock fires due alarms', () => {
     // simply due, and the boot's first tick claims it.
     armWakeup(db, { kind: 'retry', ref: RETRY_REF, dueAt: 100, discriminator: 'a-1' });
     const handler = spyHandler();
-    const clock = createAlarmClock({ db, handlers: [handler], now: () => 999_999 });
+    const clock = createAlarmClock({
+      db,
+      handlers: [handler],
+      now: () => 999_999,
+      log: silentLog(),
+    });
 
     clock.tick();
 
@@ -143,7 +164,7 @@ describe('#5 S1 — the alarm clock fires due alarms', () => {
         return { status: 'fired' };
       },
     });
-    const clock = createAlarmClock({ db, handlers: [handler], now: () => 9_000 });
+    const clock = createAlarmClock({ db, handlers: [handler], now: () => 9_000, log: silentLog() });
     clock.arm({ kind: 'retry', ref: RETRY_REF, dueAt: 300, discriminator: 'c' });
     clock.arm({ kind: 'retry', ref: RETRY_REF, dueAt: 100, discriminator: 'a' });
     clock.arm({ kind: 'retry', ref: RETRY_REF, dueAt: 200, discriminator: 'b' });
@@ -155,7 +176,12 @@ describe('#5 S1 — the alarm clock fires due alarms', () => {
 
   it('never claims a kind it has no handler for', () => {
     armWakeup(db, { kind: 'from_the_future', ref: RETRY_REF, dueAt: 100, discriminator: 'x' });
-    const clock = createAlarmClock({ db, handlers: [spyHandler()], now: () => 9_000 });
+    const clock = createAlarmClock({
+      db,
+      handlers: [spyHandler()],
+      now: () => 9_000,
+      log: silentLog(),
+    });
 
     clock.tick();
 
@@ -186,7 +212,7 @@ describe('#5 S1 — freshness: a stale alarm is SUPPRESSED, not fired', () => {
         };
       },
     });
-    const clock = createAlarmClock({ db, handlers: [handler], now: () => 5_000 });
+    const clock = createAlarmClock({ db, handlers: [handler], now: () => 5_000, log: silentLog() });
     const armed = clock.arm({ kind: 'retry', ref: RETRY_REF, dueAt: 1_000, discriminator: 'a-1' });
 
     clock.tick();
@@ -223,7 +249,7 @@ describe('#5 S1 — the fire is ONE transaction (the spike`s core claim)', () =>
         return { status: 'fired', events: [appendEngineEvent(tx, ev).record] };
       },
     });
-    const clock = createAlarmClock({ db, handlers: [handler], now: () => 5_000 });
+    const clock = createAlarmClock({ db, handlers: [handler], now: () => 5_000, log: silentLog() });
     const armed = clock.arm({
       kind: 'retry',
       ref: { runId, nodeId: 'a' },
@@ -325,7 +351,13 @@ describe('#5 S1 — post-commit effects never leak out of a rolled-back fire', (
         events: [appendEngineEvent(tx, { type: 'run.interrupted', runId, reason: 'ok' }).record],
       }),
     });
-    const clock = createAlarmClock({ db, handlers: [handler], now: () => 5_000, bus });
+    const clock = createAlarmClock({
+      db,
+      handlers: [handler],
+      now: () => 5_000,
+      bus,
+      log: silentLog(),
+    });
     clock.arm({ kind: 'retry', ref: RETRY_REF, dueAt: 1_000, discriminator: 'a-1' });
 
     clock.tick();
@@ -386,7 +418,7 @@ describe('#5 S1 — post-commit effects never leak out of a rolled-back fire', (
         },
       }),
     });
-    const clock = createAlarmClock({ db, handlers: [handler], now: () => 5_000 });
+    const clock = createAlarmClock({ db, handlers: [handler], now: () => 5_000, log: silentLog() });
     armedId = clock.arm({ kind: 'retry', ref: RETRY_REF, dueAt: 1_000, discriminator: 'a-1' }).id;
 
     clock.tick();
@@ -487,7 +519,12 @@ describe('#5 S1 — arm validates the ref against the kind`s schema', () => {
     // Spec #5: "Typed `ref` + freshness predicate per kind". Validating when
     // the alarm is armed fails at the call site that wrote the bad ref, rather
     // than hours later in a background tick with nobody to tell.
-    const clock = createAlarmClock({ db, handlers: [spyHandler()], now: () => 0 });
+    const clock = createAlarmClock({
+      db,
+      handlers: [spyHandler()],
+      now: () => 0,
+      log: silentLog(),
+    });
     expect(() =>
       clock.arm({ kind: 'retry', ref: { runId: 'run_1' }, dueAt: 1, discriminator: 'a-1' }),
     ).toThrow();
@@ -497,7 +534,12 @@ describe('#5 S1 — arm validates the ref against the kind`s schema', () => {
   it('refuses to arm a kind with no registered handler', () => {
     // Otherwise the row would sit pending forever, never claimed — an alarm
     // that looks armed but can never fire.
-    const clock = createAlarmClock({ db, handlers: [spyHandler()], now: () => 0 });
+    const clock = createAlarmClock({
+      db,
+      handlers: [spyHandler()],
+      now: () => 0,
+      log: silentLog(),
+    });
     expect(() =>
       clock.arm({ kind: 'nope', ref: RETRY_REF, dueAt: 1, discriminator: 'a-1' }),
     ).toThrow(/no handler/i);
@@ -505,7 +547,12 @@ describe('#5 S1 — arm validates the ref against the kind`s schema', () => {
 
   it('refuses duplicate handler kinds at construction', () => {
     expect(() =>
-      createAlarmClock({ db, handlers: [spyHandler(), spyHandler()], now: () => 0 }),
+      createAlarmClock({
+        db,
+        handlers: [spyHandler(), spyHandler()],
+        now: () => 0,
+        log: silentLog(),
+      }),
     ).toThrow(/duplicate/i);
   });
 });
@@ -562,7 +609,7 @@ describe('#5 S1 — the tick is safe to run in a headless server', () => {
     // killed by shutdown timing alone. The row is durable and the next boot's
     // sweep fires it, so accepting the arm costs nothing and loses nothing.
     const handler = spyHandler();
-    const clock = createAlarmClock({ db, handlers: [handler], now: () => 9_000 });
+    const clock = createAlarmClock({ db, handlers: [handler], now: () => 9_000, log: silentLog() });
     clock.arm({ kind: 'retry', ref: RETRY_REF, dueAt: 1, discriminator: 'a-1' });
 
     clock.stop();
@@ -598,10 +645,6 @@ describe('#5 S1 — the tick is safe to run in a headless server', () => {
     expect(handler.calls).toBe(1);
   });
 });
-
-function silentLog() {
-  return { error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
-}
 
 /** A Db whose every read throws — proves the tick's structural try/catch. */
 function brokenDb(): Db {

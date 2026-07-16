@@ -37,7 +37,8 @@ import type { Db } from '../repo/types.js';
  * app instances (test isolation, multi-tenant).
  */
 
-/** Minimal logger seam (Fastify's `log` satisfies it); optional for tests. */
+/** Minimal logger seam (Fastify's `log` satisfies it). REQUIRED on the deps
+ * (#470); tests supply `silentLog()`. */
 export interface SchedulerLog {
   error(obj: unknown, msg?: string): void;
   warn(obj: unknown, msg?: string): void;
@@ -71,7 +72,13 @@ export interface SchedulerDeps {
   db: Db;
   /** The run launcher — only its `fire` is used. */
   launcher: Pick<RunLauncher, 'fire'>;
-  log?: SchedulerLog;
+  /**
+   * REQUIRED (#470): every tick/sync failure path (`dispatch` catch, invalid
+   * cron, corrupt/unparseable trigger row, list-on-sync fault) reports through
+   * `log`. Optional would let a caller omit it and swallow those faults
+   * silently — an absent logger must not be manufactured as a benign no-op.
+   */
+  log: SchedulerLog;
   /** Clock seam for run-window evaluation; defaults to the wall clock. */
   now?: () => Date;
 }
@@ -109,24 +116,24 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (trigger === null || !isSchedulable(trigger)) return;
       // DEFERRED REQ: unbound never fires. Belt to the launcher's suspenders.
       if (trigger.pipelineVersionId === null) {
-        deps.log?.debug({ triggerId }, 'scheduler: skip — trigger is unbound');
+        deps.log.debug({ triggerId }, 'scheduler: skip — trigger is unbound');
         return;
       }
       // Automatic-fire gate: run windows block NEW starts (manual fire is exempt).
       if (!isWithinRunWindows(trigger.runWindows, now())) {
-        deps.log?.debug({ triggerId }, 'scheduler: skip — outside run window');
+        deps.log.debug({ triggerId }, 'scheduler: skip — outside run window');
         return;
       }
       launcher.fire(trigger);
     } catch (err) {
       if (err instanceof UnboundTriggerError) {
         // Raced to unbound between the check above and the fire — safe skip.
-        deps.log?.debug({ triggerId }, 'scheduler: skip — trigger became unbound');
+        deps.log.debug({ triggerId }, 'scheduler: skip — trigger became unbound');
         return;
       }
       // Any other fault (a DB read error, a launcher bug) must not crash the
       // tick — log and move on; the next tick re-reads fresh state.
-      deps.log?.error({ err, triggerId }, 'scheduler: tick failed');
+      deps.log.error({ err, triggerId }, 'scheduler: tick failed');
     }
   }
 
@@ -143,7 +150,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // An invalid cron expression must never crash `sync()` — fail safe by
       // leaving this trigger unscheduled and logging loudly. (The trigger
       // schema does not yet validate cron syntax, so a bad string can exist.)
-      deps.log?.warn({ err, triggerId: t.id, schedule }, 'scheduler: invalid cron expression');
+      deps.log.warn({ err, triggerId: t.id, schedule }, 'scheduler: invalid cron expression');
     }
   }
 
@@ -156,10 +163,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // dark-out ALL scheduling, the same blast-radius the per-cron try/catch
       // in `scheduleOne` exists to prevent.
       all = listParsedTriggers(db, (triggerId, err) =>
-        deps.log?.warn({ err, triggerId }, 'scheduler: skipping unparseable trigger row'),
+        deps.log.warn({ err, triggerId }, 'scheduler: skipping unparseable trigger row'),
       );
     } catch (err) {
-      deps.log?.error({ err }, 'scheduler: failed to list triggers on sync');
+      deps.log.error({ err }, 'scheduler: failed to list triggers on sync');
       return;
     }
     const desired = new Map<string, Trigger>();

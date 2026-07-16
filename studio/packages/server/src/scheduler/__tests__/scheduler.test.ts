@@ -13,7 +13,8 @@ import { createTrigger, deleteTrigger, updateTrigger } from '../../repo/triggers
 import { triggers } from '../../db/schema.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { UnboundTriggerError, type FireResult } from '../../run/launcher.js';
-import { createScheduler } from '../scheduler.js';
+import { createScheduler, type SchedulerDeps } from '../scheduler.js';
+import { silentLog } from './testLog.js';
 
 type Db = ReturnType<typeof freshDb>['db'];
 
@@ -70,6 +71,21 @@ function fakeLauncher() {
 const NOON = () => new Date('2026-07-15T12:00:00.000Z');
 
 describe('Scheduler — sync() builds the cron set', () => {
+  it('requires a `log` dependency — it is a required key of SchedulerDeps, not optional (#470)', () => {
+    // #470: `log` was `log?:`, so a caller could omit it and every failure path
+    // (`deps.log?.error(...)` — a dispatch fault, invalid cron, corrupt trigger
+    // row, list-on-sync error) passed silently. This asserts the PROPERTY
+    // directly — `log` is required — instead of a bare `@ts-expect-error` on a
+    // construct site, which cannot pin an error code and would keep "passing" if
+    // an unrelated future error landed on that line. If `log` reverts to
+    // optional, `SchedulerDeps['log']` widens to `SchedulerLog | undefined`,
+    // `undefined extends …` is true, `LogRequired` collapses to `never`, and
+    // `const _: never = true` fails to compile — a precise tripwire.
+    type LogRequired = undefined extends SchedulerDeps['log'] ? never : true;
+    const logIsRequired: LogRequired = true;
+    expect(logIsRequired).toBe(true);
+  });
+
   it('schedules only enabled, schedule-mode, scheduled triggers', () => {
     const { db } = freshDb();
     const pv = seedVersion(db);
@@ -78,7 +94,12 @@ describe('Scheduler — sync() builds the cron set', () => {
     seedTrigger(db, { pipelineVersionId: pv, mode: 'manual', schedule: null }); // manual
     seedTrigger(db, { pipelineVersionId: pv, mode: 'webhook', schedule: null }); // webhook
 
-    const scheduler = createScheduler({ db, launcher: fakeLauncher(), now: NOON });
+    const scheduler = createScheduler({
+      db,
+      launcher: fakeLauncher(),
+      now: NOON,
+      log: silentLog(),
+    });
     scheduler.sync();
 
     expect(scheduler.scheduledTriggerIds()).toEqual([wanted.id]);
@@ -90,7 +111,12 @@ describe('Scheduler — sync() builds the cron set', () => {
     const pv = seedVersion(db);
     const a = seedTrigger(db, { pipelineVersionId: pv, schedule: '0 * * * *' });
     const b = seedTrigger(db, { pipelineVersionId: pv, schedule: '*/5 * * * *' });
-    const scheduler = createScheduler({ db, launcher: fakeLauncher(), now: NOON });
+    const scheduler = createScheduler({
+      db,
+      launcher: fakeLauncher(),
+      now: NOON,
+      log: silentLog(),
+    });
     scheduler.sync();
     expect(scheduler.scheduledTriggerIds().sort()).toEqual([a.id, b.id].sort());
 
@@ -162,7 +188,12 @@ describe('Scheduler — sync() builds the cron set', () => {
     const { db } = freshDb();
     const pv = seedVersion(db);
     seedTrigger(db, { pipelineVersionId: pv });
-    const scheduler = createScheduler({ db, launcher: fakeLauncher(), now: NOON });
+    const scheduler = createScheduler({
+      db,
+      launcher: fakeLauncher(),
+      now: NOON,
+      log: silentLog(),
+    });
     scheduler.stop();
     scheduler.sync();
     expect(scheduler.scheduledTriggerIds()).toEqual([]);
@@ -175,7 +206,7 @@ describe('Scheduler — dispatch() fire gating', () => {
     const pv = seedVersion(db);
     const t = seedTrigger(db, { pipelineVersionId: pv });
     const launcher = fakeLauncher();
-    const scheduler = createScheduler({ db, launcher, now: NOON });
+    const scheduler = createScheduler({ db, launcher, now: NOON, log: silentLog() });
 
     scheduler.dispatch(t.id);
 
@@ -190,7 +221,7 @@ describe('Scheduler — dispatch() fire gating', () => {
     // directly via the repo to prove the scheduler's own defense.
     const t = seedTrigger(db, { pipelineVersionId: null });
     const launcher = fakeLauncher();
-    const scheduler = createScheduler({ db, launcher, now: NOON });
+    const scheduler = createScheduler({ db, launcher, now: NOON, log: silentLog() });
 
     scheduler.dispatch(t.id);
 
@@ -206,7 +237,7 @@ describe('Scheduler — dispatch() fire gating', () => {
     const gone = seedTrigger(db, { pipelineVersionId: pv });
     deleteTrigger(db, gone.id);
     const launcher = fakeLauncher();
-    const scheduler = createScheduler({ db, launcher, now: NOON });
+    const scheduler = createScheduler({ db, launcher, now: NOON, log: silentLog() });
 
     scheduler.dispatch(disabled.id);
     scheduler.dispatch(manual.id);
@@ -226,13 +257,16 @@ describe('Scheduler — dispatch() fire gating', () => {
     const launcher = fakeLauncher();
 
     // 12:00 UTC — inside.
-    createScheduler({ db, launcher, now: NOON }).dispatch(t.id);
+    createScheduler({ db, launcher, now: NOON, log: silentLog() }).dispatch(t.id);
     expect(launcher.fire).toHaveBeenCalledTimes(1);
 
     // 20:00 UTC — outside; no additional fire.
-    createScheduler({ db, launcher, now: () => new Date('2026-07-15T20:00:00.000Z') }).dispatch(
-      t.id,
-    );
+    createScheduler({
+      db,
+      launcher,
+      now: () => new Date('2026-07-15T20:00:00.000Z'),
+      log: silentLog(),
+    }).dispatch(t.id);
     expect(launcher.fire).toHaveBeenCalledTimes(1);
   });
 
@@ -245,7 +279,7 @@ describe('Scheduler — dispatch() fire gating', () => {
         throw new UnboundTriggerError(t.id);
       }),
     };
-    const scheduler = createScheduler({ db, launcher, now: NOON });
+    const scheduler = createScheduler({ db, launcher, now: NOON, log: silentLog() });
 
     expect(() => scheduler.dispatch(t.id)).not.toThrow();
     scheduler.stop();

@@ -131,7 +131,14 @@ export interface AlarmClockDeps {
   now?: () => number;
   /** When present, events a handler appended are published AFTER commit. */
   bus?: RunEventBus;
-  log?: SchedulerLog;
+  /**
+   * REQUIRED (#470): every failure path here (`fireOne`/`tick` afterCommit +
+   * publish faults) reports through `log`, and this is late-alarm observability
+   * the S1 primitive exists to provide. Optional would let a caller omit it and
+   * discard those faults silently — an absent logger must not be manufactured
+   * as a benign no-op. Tests pass `silentLog()`.
+   */
+  log: SchedulerLog;
 }
 
 export interface AlarmClock {
@@ -229,7 +236,7 @@ export function createAlarmClock(deps: AlarmClockDeps): AlarmClock {
         throw new StaleWakeupError(row.id);
       }
       if (result.status === 'suppressed') {
-        log?.debug(
+        log.debug(
           { wakeupId: row.id, kind: row.kind, reason: result.reason },
           'alarm clock: suppressed a stale alarm',
         );
@@ -260,12 +267,12 @@ export function createAlarmClock(deps: AlarmClockDeps): AlarmClock {
           committed = fireOne(row, handler, at);
         } catch (err) {
           if (err instanceof StaleWakeupError) {
-            log?.debug({ wakeupId: row.id }, 'alarm clock: skip — settled since the scan');
+            log.debug({ wakeupId: row.id }, 'alarm clock: skip — settled since the scan');
           } else {
             // The fire rolled back: the row is still pending, so the next tick
             // re-delivers it. That IS the at-least-once contract, so this is a
             // log, not a failure — and one bad alarm must not stop the others.
-            log?.error(
+            log.error(
               { err, wakeupId: row.id, kind: row.kind },
               'alarm clock: fire failed — alarm stays pending for the next tick',
             );
@@ -289,7 +296,7 @@ export function createAlarmClock(deps: AlarmClockDeps): AlarmClock {
         try {
           for (const event of committed.events) bus?.publish(event);
         } catch (err) {
-          log?.error({ err, wakeupId: row.id }, 'alarm clock: publishing a fired alarm failed');
+          log.error({ err, wakeupId: row.id }, 'alarm clock: publishing a fired alarm failed');
         }
         // `Promise.resolve(...)` normalises both cases: a sync throw is caught
         // by the try, an async rejection by the `.catch`. Without the latter, a
@@ -299,14 +306,14 @@ export function createAlarmClock(deps: AlarmClockDeps): AlarmClock {
         // committed and spawned work must not hold up the remaining alarms.
         try {
           void Promise.resolve(committed.afterCommit?.()).catch((err: unknown) => {
-            log?.error({ err, wakeupId: row.id }, 'alarm clock: afterCommit failed');
+            log.error({ err, wakeupId: row.id }, 'alarm clock: afterCommit failed');
           });
         } catch (err) {
-          log?.error({ err, wakeupId: row.id }, 'alarm clock: afterCommit failed');
+          log.error({ err, wakeupId: row.id }, 'alarm clock: afterCommit failed');
         }
       }
     } catch (err) {
-      log?.error({ err }, 'alarm clock: tick failed');
+      log.error({ err }, 'alarm clock: tick failed');
     } finally {
       ticking = false;
     }
