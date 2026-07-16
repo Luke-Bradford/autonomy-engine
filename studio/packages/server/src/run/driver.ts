@@ -14,6 +14,7 @@ import {
   type ScheduledWakeup,
 } from '@autonomy-studio/shared';
 import { getRun, updateRun } from '../repo/runs.js';
+import { getPipelineVersion } from '../repo/pipeline-versions.js';
 import type { Db } from '../repo/types.js';
 import type { RunDrives } from './drives.js';
 import type { RunEventBus } from './event-bus.js';
@@ -46,8 +47,66 @@ import { recordRunDiagnostics } from '../repo/run-diagnostics.js';
  * The driver owns nothing connector-specific — it only sequences reduce↔persist.
  */
 
-/** Resolve a run's immutable pipeline version (its graph + declared params). */
+/**
+ * Resolve a run's immutable pipeline version (its graph + declared params).
+ *
+ * CONTRACT (#508): a resolver MUST throw {@link DocUnresolvableError} — and only
+ * that — when the version cannot be resolved (the row is gone). Any OTHER throw
+ * is treated by callers as a TRANSIENT fault (a DB blip). The boot reconciler
+ * keys off this distinction: a `DocUnresolvableError` means the run can never be
+ * driven again (versions are immutable — a missing one never returns), so it is
+ * terminalized `interrupted`; a transient throw leaves the run `running` for the
+ * next boot. Collapsing the two would either strand a healthy run behind a blip
+ * or leak a permanently-dead run's slot forever — fail-open in one direction or
+ * the other. See `reconcile.ts`.
+ *
+ * NOT (yet) exhaustive over "permanent": #508 classifies the version being GONE.
+ * A version row that is PRESENT but no longer parses (a `ZodError` from
+ * `getPipelineVersion`, e.g. after a schema tightening — and versions are
+ * immutable, so it never repairs) is ALSO permanent but currently throws a
+ * non-`DocUnresolvableError` and so is treated transient. Same sibling-leak class,
+ * tracked separately — do not read "not-found" as the only permanent case.
+ */
 export type DocResolver = (pipelineVersionId: string) => PipelineVersion;
+
+/**
+ * A run's pipeline version cannot be resolved: the row is GONE. Distinct from a
+ * transient resolver failure (a DB error), and deliberately so — pipeline
+ * versions are immutable (DB `RAISE(ABORT)` triggers), so "not found" is
+ * PERMANENT: it never becomes resolvable on a later boot. Callers that must
+ * distinguish "can never recover" from "try again next boot" branch on this type
+ * (`reconcile.ts` terminalizes on it, files any other throw as transient).
+ *
+ * Sets `name` for the same reason `ReconcileInvariantError`/`StaleWakeupError`
+ * do: a typed sentinel exists to be recognisable, and an unnamed subclass prints
+ * as a bare `Error`. Still an `Error` subclass, so existing `instanceof Error` /
+ * `.message` catches (`executor.ts`, `retry-alarm.ts`) are unaffected.
+ */
+export class DocUnresolvableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DocUnresolvableError';
+  }
+}
+
+/**
+ * The ONE production {@link DocResolver}: reads the immutable version row and
+ * throws {@link DocUnresolvableError} when it is gone — the resolver is the only
+ * thing that knows "gone", so the classification lives HERE rather than being
+ * re-derived by every consumer (#508). A factory (not an inline closure in
+ * `index.ts`) so the throw-on-missing contract is unit-testable without booting
+ * the app — the contract, not just the reconciler that reads it, is what closes
+ * the re-`failed`-forever leak, so it is pinned directly.
+ */
+export function makeDocResolver(db: Db): DocResolver {
+  return (pipelineVersionId) => {
+    const pv = getPipelineVersion(db, pipelineVersionId);
+    if (pv === null) {
+      throw new DocUnresolvableError(`pipeline version '${pipelineVersionId}' not found`);
+    }
+    return pv;
+  };
+}
 
 /** The commands an executor performs — `finishRun` is handled by the driver. */
 export type ExecutorCommand = Extract<EngineCommand, { type: 'dispatchNode' | 'startChild' }>;
