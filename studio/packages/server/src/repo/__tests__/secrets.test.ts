@@ -4,6 +4,7 @@ import {
   createSecret,
   deleteSecret,
   getSecret,
+  getSecretByName,
   getSecretByRef,
   listNamedSecrets,
   listSecrets,
@@ -118,6 +119,35 @@ describe('secrets repo', () => {
         .map((s) => s.id)
         .sort(),
     ).toEqual([a.id, b.id].sort());
+  });
+
+  it('getSecretByName resolves the owner-scoped standalone secret (item 7 / S3 dispatch)', () => {
+    const { db } = freshDb();
+    const mine = createSecret(db, {
+      ref: 'ref-mine',
+      ciphertext: 'blob-mine',
+      ownerId: 'local',
+      name: 'stripe-key',
+    });
+    // Same NAME, different owner — must not leak across the owner boundary.
+    createSecret(db, {
+      ref: 'ref-other',
+      ciphertext: 'blob-other',
+      ownerId: 'someone-else',
+      name: 'stripe-key',
+    });
+    expect(getSecretByName(db, 'stripe-key', 'local')!.id).toBe(mine.id);
+    // Wrong owner / wrong name → null (the executor maps this to config_secret_not_found).
+    expect(getSecretByName(db, 'stripe-key', 'nobody')).toBeNull();
+    expect(getSecretByName(db, 'no-such-name', 'local')).toBeNull();
+  });
+
+  it('getSecretByName never resolves a connection-owned secret (name is NULL)', () => {
+    const { db } = freshDb();
+    // Connection-owned secrets carry name = NULL, so a name lookup can never
+    // reach one — a node cannot reference a connection credential by guessing.
+    createSecret(db, { ref: 'ref-conn', ciphertext: 'blob' });
+    expect(getSecretByName(db, 'ref-conn', 'local')).toBeNull();
   });
 
   it('two owners may use the SAME name (uniqueness is per-owner)', () => {

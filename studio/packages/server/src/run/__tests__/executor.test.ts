@@ -8,6 +8,7 @@ import {
   type ConnectionKind,
   type NewPipelineVersion,
   type Node,
+  type PipelineVersion,
 } from '@autonomy-studio/shared';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
@@ -545,6 +546,272 @@ describe('createExecutor — call_pipeline (startChild) deferral is safe', () =>
         alarms: refuseToArm,
       }),
     ).resolves.toBeDefined();
+  });
+});
+
+describe('createExecutor — config-sink secrets: dispatch resolution + redaction (item 7 / S3)', () => {
+  // A synthetic activity that declares a secret SINK. No REAL activity declares
+  // one until S4, and the SAVE gate (`createPipelineVersion`) uses the REAL
+  // catalog, so a stored version can't carry a marker at a synthetic sink. These
+  // tests therefore inject the sink catalog into the EXECUTOR and feed it the
+  // marker-doc through a custom `resolveDoc` — exercising the real resolution +
+  // redaction path against a doc the executor really would run.
+  function sinkCatalog(over: Partial<ActivityCatalogEntry> = {}): ActivityCatalog {
+    const entry: ActivityCatalogEntry = {
+      type: 'secret_sink_test',
+      title: 'Sink Test',
+      kind: 'execution',
+      category: 'general',
+      idempotent: false,
+      connectionKinds: ['http'],
+      outputs: [],
+      configSchema: z.record(z.string(), z.unknown()),
+      secretSinkFields: ['secretHeaders'],
+      ...over,
+    };
+    return new Map([[entry.type, entry]]);
+  }
+
+  /** A stored trivial version (satisfies the run FK) whose doc is REPLACED by
+   * `markerNode` — the marker never passes the real-catalog save gate, so the
+   * executor reads it via `resolveDoc`, not the DB row. */
+  function seedMarkerRun(
+    db: Db,
+    markerNode: Node,
+    opts: { ownerId?: string | null } = {},
+  ): { doc: PipelineVersion; runId: string } {
+    const ownerId = opts.ownerId === undefined ? 'local' : opts.ownerId;
+    const pipeline = createPipeline(db, { ownerId: ownerId ?? 'local', name: 'P' });
+    const stored = createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [httpNode('placeholder', undefined, {})],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    const doc: PipelineVersion = { ...stored, nodes: [markerNode] };
+    const run = createRun(db, {
+      ownerId,
+      pipelineVersionId: stored.id,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+    return { doc, runId: run.id };
+  }
+
+  function depsForDoc(
+    db: Db,
+    doc: PipelineVersion,
+    over: { adapters?: ConnectorRegistry; masterKey?: Uint8Array; catalog?: ActivityCatalog } = {},
+  ) {
+    const resolveDoc: DocResolver = (id) => {
+      if (id === doc.id) return doc;
+      throw new Error(`unexpected pv ${id}`);
+    };
+    return {
+      db,
+      resolveDoc,
+      executor: createExecutor({
+        db,
+        masterKey: over.masterKey ?? KEY,
+        resolveDoc,
+        adapters: over.adapters ?? testRegistry(),
+        catalog: over.catalog ?? sinkCatalog(),
+      }),
+      alarms: refuseToArm,
+    };
+  }
+
+  /** A synthetic node carrying a `{$secret}` marker at the declared sink. */
+  async function seedNamedSecret(db: Db, name: string, plaintext: string, ownerId = 'local') {
+    createSecret(db, {
+      ref: `sref-${(seq += 1)}`,
+      ciphertext: await encrypt(plaintext, KEY),
+      ownerId,
+      name,
+    });
+  }
+
+  function markerNode(name: string, connectionId: string): Node {
+    seq += 1;
+    return {
+      id: 'n1',
+      type: 'secret_sink_test',
+      config: { secretHeaders: { 'X-Api-Key': { $secret: name } } },
+      connectionId,
+      position: { x: seq, y: 0 },
+    };
+  }
+
+  it('resolves the marker into secretFields (keyed by config path), never persisting the plaintext', async () => {
+    const db = freshDb().db;
+    const PLAINTEXT = 'sk-config-sink-value';
+    await seedNamedSecret(db, 'my-key', PLAINTEXT);
+    const connId = await seedConnection(db, 'http', {}, null);
+    const { doc, runId } = seedMarkerRun(db, markerNode('my-key', connId));
+
+    let received: Readonly<Record<string, string>> | undefined = { UNSET: 'yes' };
+    let inputAtAdapter: unknown;
+    const adapters = fakeHttpAdapter(async function* (ctx, _secret, secretFields) {
+      received = secretFields;
+      inputAtAdapter = ctx.input;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+
+    const state = await startRun(depsForDoc(db, doc, { adapters }), getRun(db, runId)!);
+    expect(state.status).toBe('success');
+
+    // The adapter got the decrypted plaintext keyed by CONFIG PATH...
+    expect(received).toEqual({ 'secretHeaders.X-Api-Key': PLAINTEXT });
+    // ...ctx.input STILL carries only the inert marker (a NAME, safe to log)...
+    expect((inputAtAdapter as Record<string, unknown>).secretHeaders).toEqual({
+      'X-Api-Key': { $secret: 'my-key' },
+    });
+    // ...and NOTHING plaintext is in the durable log (event OR preparedInput).
+    const raw = JSON.stringify(loadEngineEvents(db, runId));
+    expect(raw).not.toContain(PLAINTEXT);
+    expect(raw).not.toContain('preparedInput');
+  });
+
+  it('a marker naming a MISSING secret fails permanent (config_secret_not_found) with NO node.dispatched', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const { doc, runId } = seedMarkerRun(db, markerNode('no-such-secret', connId));
+
+    const state = await startRun(depsForDoc(db, doc), getRun(db, runId)!);
+    expect(state.status).toBe('failure');
+    // Pre-flight resolution → node fails while still `ready`, no durable dispatch.
+    expect(eventTypes(db, runId)).not.toContain('node.dispatched');
+    expect(loadEngineEvents(db, runId).find((e) => e.type === 'node.failed')).toMatchObject({
+      error: expect.stringContaining("secret 'no-such-secret' not found"),
+      kind: 'permanent',
+      code: 'config_secret_not_found',
+    });
+  });
+
+  it('a config-sink secret that will not decrypt fails config_secret_undecryptable, leaking no ciphertext', async () => {
+    const db = freshDb().db;
+    await seedNamedSecret(db, 'rotated-key', 'sk-under-the-OLD-key');
+    const connId = await seedConnection(db, 'http', {}, null);
+    const { doc, runId } = seedMarkerRun(db, markerNode('rotated-key', connId));
+
+    const otherKey = new Uint8Array(32).fill(9);
+    const state = await startRun(depsForDoc(db, doc, { masterKey: otherKey }), getRun(db, runId)!);
+
+    expect(state.status).toBe('failure');
+    expect(eventTypes(db, runId)).not.toContain('node.dispatched');
+    const failed = loadEngineEvents(db, runId).find((e) => e.type === 'node.failed');
+    expect(failed).toMatchObject({ kind: 'permanent', code: 'config_secret_undecryptable' });
+    expect((failed as { error: string }).error).not.toContain('sk-under');
+  });
+
+  it('owner-scopes the lookup — a secret owned by ANOTHER owner is not-found for this run', async () => {
+    const db = freshDb().db;
+    // The name exists, but under a DIFFERENT owner than the run.
+    await seedNamedSecret(db, 'shared-name', 'not-yours', 'someone-else');
+    const connId = await seedConnection(db, 'http', {}, null);
+    const { doc, runId } = seedMarkerRun(db, markerNode('shared-name', connId), {
+      ownerId: 'local',
+    });
+
+    const state = await startRun(depsForDoc(db, doc), getRun(db, runId)!);
+    expect(state.status).toBe('failure');
+    expect(loadEngineEvents(db, runId).find((e) => e.type === 'node.failed')).toMatchObject({
+      code: 'config_secret_not_found',
+    });
+  });
+
+  it('a NULL-owner run cannot resolve a standalone secret (fail-closed, no owner namespace)', async () => {
+    const db = freshDb().db;
+    // Even a globally-present name must not resolve for a run with no owner.
+    await seedNamedSecret(db, 'orphan-key', 'value', 'local');
+    const connId = await seedConnection(db, 'http', {}, null);
+    const { doc, runId } = seedMarkerRun(db, markerNode('orphan-key', connId), { ownerId: null });
+
+    const state = await startRun(depsForDoc(db, doc), getRun(db, runId)!);
+    expect(state.status).toBe('failure');
+    expect(loadEngineEvents(db, runId).find((e) => e.type === 'node.failed')).toMatchObject({
+      code: 'config_secret_not_found',
+    });
+  });
+
+  it('redacts a resolved plaintext an adapter echoes into a node.output AND node.succeeded outputs', async () => {
+    const db = freshDb().db;
+    const PLAINTEXT = 'sk-leaky-value';
+    await seedNamedSecret(db, 'leaky', PLAINTEXT);
+    const connId = await seedConnection(db, 'http', {}, null);
+    const { doc, runId } = seedMarkerRun(db, markerNode('leaky', connId));
+
+    // A hostile/buggy adapter that echoes the plaintext into both an output
+    // stream event and the final outputs — the executor choke point must scrub both.
+    const adapters = fakeHttpAdapter(async function* (): AsyncIterable<ActivityEvent> {
+      yield { type: 'output', name: 'dbg', value: `saw ${PLAINTEXT} here` };
+      yield { type: 'succeeded', outputs: { echoed: { nested: PLAINTEXT } } };
+    });
+
+    const state = await startRun(depsForDoc(db, doc, { adapters }), getRun(db, runId)!);
+    expect(state.status).toBe('success');
+
+    const events = loadEngineEvents(db, runId);
+    const out = events.find((e) => e.type === 'node.output') as { value: unknown } | undefined;
+    expect(out?.value).toBe('saw *** here');
+    const ok = events.find((e) => e.type === 'node.succeeded') as
+      { outputs: Record<string, unknown> } | undefined;
+    expect(ok?.outputs).toEqual({ echoed: { nested: '***' } });
+    // Belt-and-braces: the plaintext appears NOWHERE in the durable log.
+    expect(JSON.stringify(events)).not.toContain(PLAINTEXT);
+  });
+
+  it('redacts a resolved plaintext an adapter echoes into a node.failed error message', async () => {
+    const db = freshDb().db;
+    const PLAINTEXT = 'sk-in-the-error';
+    await seedNamedSecret(db, 'errkey', PLAINTEXT);
+    const connId = await seedConnection(db, 'http', {}, null);
+    const { doc, runId } = seedMarkerRun(db, markerNode('errkey', connId));
+
+    const adapters = fakeHttpAdapter(async function* (): AsyncIterable<ActivityEvent> {
+      yield { type: 'failed', kind: 'permanent', error: `boom: ${PLAINTEXT}` };
+    });
+
+    const state = await startRun(depsForDoc(db, doc, { adapters }), getRun(db, runId)!);
+    expect(state.status).toBe('failure');
+    const failed = loadEngineEvents(db, runId).find((e) => e.type === 'node.failed') as
+      { error: string } | undefined;
+    expect(failed?.error).toBe('boom: ***');
+    expect(JSON.stringify(loadEngineEvents(db, runId))).not.toContain(PLAINTEXT);
+  });
+
+  it('folds the CONNECTION secret into the same choke-point pass (no scrub asymmetry)', async () => {
+    // Deviation (b)'s guarantee: once a config sink pulls the choke point on,
+    // the connection `secret` is redacted from the SAME emitted events — not
+    // just the config-sink plaintext. Prove it with a NON-null connection secret
+    // the adapter echoes alongside the config secret.
+    const db = freshDb().db;
+    const CONFIG_PLAINTEXT = 'sk-config-sink';
+    const CONN_PLAINTEXT = 'sk-connection-cred';
+    await seedNamedSecret(db, 'cfg', CONFIG_PLAINTEXT);
+    const connId = await seedConnection(db, 'http', {}, CONN_PLAINTEXT);
+    const { doc, runId } = seedMarkerRun(db, markerNode('cfg', connId));
+
+    const adapters = fakeHttpAdapter(async function* (): AsyncIterable<ActivityEvent> {
+      // A hostile adapter echoing BOTH plaintexts it was handed.
+      yield {
+        type: 'failed',
+        kind: 'permanent',
+        error: `leak ${CONN_PLAINTEXT} and ${CONFIG_PLAINTEXT}`,
+      };
+    });
+
+    const state = await startRun(depsForDoc(db, doc, { adapters }), getRun(db, runId)!);
+    expect(state.status).toBe('failure');
+    const failed = loadEngineEvents(db, runId).find((e) => e.type === 'node.failed') as
+      { error: string } | undefined;
+    expect(failed?.error).toBe('leak *** and ***');
+    const raw = JSON.stringify(loadEngineEvents(db, runId));
+    expect(raw).not.toContain(CONN_PLAINTEXT);
+    expect(raw).not.toContain(CONFIG_PLAINTEXT);
   });
 });
 

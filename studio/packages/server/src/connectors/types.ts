@@ -8,6 +8,15 @@ import type { ConnectionKind } from '@autonomy-studio/shared';
  * adapter is the ONLY place a plaintext secret is used — the executor fetches +
  * decrypts it at dispatch and passes it here as a separate argument; it never
  * enters `ActivityContext` (which may be logged) or any persisted event.
+ *
+ * A SECOND secret channel (item 7 / S3, the unified secret model): a config
+ * field declared a secret SINK (`ActivityCatalogEntry.secretSinkFields`) may
+ * carry a `{ "$secret": "<name>" }` marker, which the executor resolves at
+ * dispatch into `secretFields` — the optional third `runActivity` argument,
+ * keyed by CONFIG PATH (e.g. `secretHeaders.X-Api-Key`) → plaintext. Like
+ * `secret`, it is a separate arg, NEVER merged into `ctx.input`/`preparedInput`
+ * or any event; `ctx.input` retains only the inert `{$secret:name}` MARKER (a
+ * name, safe to log). An adapter that declares no sink ignores it.
  */
 
 /**
@@ -65,6 +74,17 @@ export interface ConnectorAdapter {
     config: Record<string, unknown>,
     secret: string | null,
   ): Promise<{ ok: boolean; error?: string }>;
-  /** Run one activity, streaming progress then exactly one terminal event. */
-  runActivity(ctx: ActivityContext, secret: string | null): AsyncIterable<ActivityEvent>;
+  /**
+   * Run one activity, streaming progress then exactly one terminal event.
+   * `secretFields` (item 7 / S3) carries dispatch-resolved config-sink secrets
+   * keyed by config path; optional + backward-compatible (an adapter with no
+   * declared sink omits/ignores it). NEVER echo a resolved value back into an
+   * output or error message — the executor scrubs them defensively, but the
+   * adapter is the first line (see the http adapter, S4).
+   */
+  runActivity(
+    ctx: ActivityContext,
+    secret: string | null,
+    secretFields?: Readonly<Record<string, string>>,
+  ): AsyncIterable<ActivityEvent>;
 }

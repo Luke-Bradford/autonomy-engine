@@ -1,6 +1,7 @@
 import pLimit from 'p-limit';
 import {
   catalog as sharedCatalog,
+  collectSecretSinkMarkers,
   FAILURE_CODES,
   type ActivityCatalog,
   type EngineEvent,
@@ -9,8 +10,9 @@ import {
 } from '@autonomy-studio/shared';
 import { getRun } from '../repo/runs.js';
 import { getConnection } from '../repo/connections.js';
-import { getSecretByRef } from '../repo/secrets.js';
+import { getSecretByRef, getSecretByName } from '../repo/secrets.js';
 import { decrypt } from '../secrets/secrets.js';
+import { deepRedactSecrets, redactSecrets } from '../connectors/redact.js';
 import type { Db } from '../repo/types.js';
 import type { ConnectorRegistry } from '../connectors/registry.js';
 import { toEngineFailure } from '../connectors/error-kind.js';
@@ -79,16 +81,103 @@ function nodeFailed(
   return { type: 'node.failed', runId, nodeId, attemptId, ...failure };
 }
 
+/**
+ * Item 7 / S3 — scrub every held plaintext from an outbound adapter event before
+ * it becomes durable. Only the value-bearing shapes can carry a leak: a
+ * `node.output` (both its `name` AND `value` — an adapter could build either from
+ * a resolved secret), a `node.succeeded` outputs map, and a `node.failed` message
+ * (a string). Every other event type (`node.dispatched`, `call.returned`) carries
+ * no adapter value and passes through untouched. Deep for structured values,
+ * string for the leaf/message; both reuse the connector redaction helpers.
+ * (`node.output` is inert in the reducer — pure observability — so scrubbing its
+ * `name` cannot change run semantics; it only keeps a plaintext out of the log.)
+ */
+function redactEventPlaintexts(
+  ev: EngineEvent,
+  plaintexts: readonly (string | null)[],
+): EngineEvent {
+  if (ev.type === 'node.output') {
+    return {
+      ...ev,
+      name: redactSecrets(ev.name, plaintexts),
+      value: deepRedactSecrets(ev.value, plaintexts),
+    };
+  }
+  if (ev.type === 'node.succeeded') {
+    return { ...ev, outputs: deepRedactSecrets(ev.outputs, plaintexts) as Record<string, unknown> };
+  }
+  if (ev.type === 'node.failed') {
+    return { ...ev, error: redactSecrets(ev.error, plaintexts) };
+  }
+  return ev;
+}
+
 export function createExecutor(deps: ExecutorDeps): Executor {
   const limit = pLimit(deps.concurrency ?? 4);
   const catalog = deps.catalog ?? sharedCatalog;
 
-  /** Resolve the node object for a dispatch command from the run's doc. */
-  function resolveNode(runId: string, nodeId: string): Node | null {
+  /**
+   * Resolve the node object AND the run's owner for a dispatch command. The
+   * `ownerId` is the namespace a `{$secret}` config-sink marker resolves within
+   * (item 7 / S3) — a node only ever reaches a secret its run's owner holds.
+   */
+  function resolveNode(
+    runId: string,
+    nodeId: string,
+  ): { node: Node; ownerId: string | null } | null {
     const run = getRun(deps.db, runId);
     if (run === null) return null;
     const pv = deps.resolveDoc(run.pipelineVersionId);
-    return pv.nodes.find((n) => n.id === nodeId) ?? null;
+    const node = pv.nodes.find((n) => n.id === nodeId) ?? null;
+    return node === null ? null : { node, ownerId: run.ownerId };
+  }
+
+  /**
+   * Resolve a node's `{ "$secret": "<name>" }` config-sink markers (item 7 / S3)
+   * into a plaintext side channel keyed by config PATH. Walks ONLY the activity's
+   * declared `secretSinkFields` via the SAME `collectSecretSinkMarkers` traversal
+   * the save-time gate uses (no drift — a version this reaches was gated), so a
+   * marker outside a sink is never resolved. Owner-scoped: a null-owner run has
+   * no namespace to resolve within, so any marker it carries fails closed.
+   *
+   * Returns a structured error (→ permanent `node.failed`) or the resolved map.
+   * Every cause carries its OWN code, distinct from the CONNECTION-secret codes,
+   * so an operator can tell a dangling node-config secret from a dangling
+   * connection credential. All `permanent` — a config typo does not self-heal.
+   * The empty-sink fast path means this is a pure no-op for every activity that
+   * declares no sink (all of them until S4), so no stored version can even carry
+   * a marker to resolve (fail-closed, spec §4.3).
+   */
+  async function resolveConfigSecrets(
+    sinkFields: readonly string[],
+    preparedInput: Record<string, unknown>,
+    ownerId: string | null,
+  ): Promise<{ error: string; code: string } | { secretFields: Record<string, string> }> {
+    if (sinkFields.length === 0) return { secretFields: {} };
+    const markers = collectSecretSinkMarkers(preparedInput, sinkFields);
+    if (markers.length === 0) return { secretFields: {} };
+    const secretFields: Record<string, string> = {};
+    for (const { path, name } of markers) {
+      // A null-owner run cannot own a standalone (named) secret — resolve to
+      // not-found rather than let `owner_id = NULL` silently match nothing.
+      const row = ownerId === null ? null : getSecretByName(deps.db, name, ownerId);
+      if (row === null) {
+        return {
+          error: `secret '${name}' not found`,
+          code: FAILURE_CODES.CONFIG_SECRET_NOT_FOUND,
+        };
+      }
+      try {
+        secretFields[path] = await decrypt(row.ciphertext, deps.masterKey);
+      } catch {
+        // NEVER echo the decrypt error (could leak ciphertext/key detail).
+        return {
+          error: `secret '${name}' could not be decrypted`,
+          code: FAILURE_CODES.CONFIG_SECRET_UNDECRYPTABLE,
+        };
+      }
+    }
+    return { secretFields };
   }
 
   /**
@@ -177,6 +266,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     adapter: ConnectorAdapter,
     ctx: ActivityContext,
     secret: string | null,
+    secretFields: Record<string, string>,
     controller: AbortController,
     runId: string,
     nodeId: string,
@@ -184,7 +274,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   ): Promise<EngineEvent[]> {
     const events: EngineEvent[] = [];
     try {
-      for await (const ev of adapter.runActivity(ctx, secret)) {
+      for await (const ev of adapter.runActivity(ctx, secret, secretFields)) {
         if (ev.type === 'output') {
           events.push({ type: 'node.output', runId, nodeId, name: ev.name, value: ev.value });
         } else if (ev.type === 'succeeded') {
@@ -236,8 +326,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     const { nodeId, attemptId } = command;
 
     // --- pre-flight (pure reads; node stays `ready` on any failure here) ------
-    const node = resolveNode(runId, nodeId);
-    if (node === null) {
+    const resolvedNode = resolveNode(runId, nodeId);
+    if (resolvedNode === null) {
       yield nodeFailed(runId, nodeId, attemptId, {
         error: `node '${nodeId}' not found in the run's doc`,
         kind: 'permanent',
@@ -245,6 +335,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       });
       return;
     }
+    const { node, ownerId } = resolvedNode;
     const entry = catalog.get(node.type);
     if (entry === undefined) {
       yield nodeFailed(runId, nodeId, attemptId, {
@@ -301,6 +392,30 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       return;
     }
 
+    // Resolve config-sink `{$secret}` markers (item 7 / S3) in the PRE-FLIGHT,
+    // alongside the connection secret. Spec §4.1 places this AFTER
+    // `node.dispatched`, but it is the same PURE-READ class as
+    // `resolveConnection` (DB fetch + decrypt) and this module's load-bearing
+    // ordering is that EVERY pure read runs before `node.dispatched` — so a
+    // config error fails the node while still `ready`, with no spurious durable
+    // `node.dispatched`, exactly as a bad connection secret does. Both codes are
+    // `permanent`, so the run outcome is identical to the spec's placement; this
+    // is the consistent, crash-safe seam. A no-op unless a sink is declared.
+    const resolvedSecrets = await resolveConfigSecrets(
+      entry.secretSinkFields ?? [],
+      command.preparedInput,
+      ownerId,
+    );
+    if ('error' in resolvedSecrets) {
+      yield nodeFailed(runId, nodeId, attemptId, {
+        error: resolvedSecrets.error,
+        kind: 'permanent',
+        code: resolvedSecrets.code,
+      });
+      return;
+    }
+    const { secretFields } = resolvedSecrets;
+
     // --- the side effect (node.dispatched durable FIRST, then the adapter) ----
     yield {
       type: 'node.dispatched',
@@ -320,9 +435,21 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       signal: controller.signal,
     };
     const events = await limit(() =>
-      runAdapter(adapter, ctx, secret, controller, runId, nodeId, attemptId),
+      runAdapter(adapter, ctx, secret, secretFields, controller, runId, nodeId, attemptId),
     );
-    for (const ev of events) yield ev;
+    // F4 output/error redaction (item 7 / S3), the executor CHOKE POINT: it holds
+    // every plaintext this node touched (the connection `secret` + the resolved
+    // config-sink values), so it is the last place to guarantee none reaches a
+    // durable event — independent of whether an adapter remembered to redact its
+    // own output/error. Runs ONLY when this node resolved a config sink (the
+    // list is otherwise empty), so it is a strict no-op — never walked — for
+    // every activity today; the connection `secret` is folded into the same pass
+    // then, so there is no asymmetry where one secret is scrubbed and the other
+    // is not.
+    const plaintexts =
+      Object.keys(secretFields).length > 0 ? [secret, ...Object.values(secretFields)] : [];
+    for (const ev of events)
+      yield plaintexts.length > 0 ? redactEventPlaintexts(ev, plaintexts) : ev;
   }
 
   return {

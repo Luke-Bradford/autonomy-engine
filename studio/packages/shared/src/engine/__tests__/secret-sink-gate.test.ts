@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Node, PipelineVersion } from '../types.js';
-import { scanSecretSinks, validateRefs } from '../params.js';
+import { collectSecretSinkMarkers, scanSecretSinks, validateRefs } from '../params.js';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -111,6 +111,66 @@ describe('scanSecretSinks — §2 marker-shape rules (at a declared sink)', () =
   it('rejects a non-string $secret value', () => {
     const errors = scan({ apiKey: { $secret: 123 } }, ['apiKey']);
     expect(errors.length).toBeGreaterThan(0);
+  });
+});
+
+// --- collectSecretSinkMarkers (item 7 / S3): the DISPATCH-time companion ----
+// It MUST visit the exact same positions the gate blesses (shared traversal, no
+// drift) and return config-RELATIVE `{path, name}` pairs for VALID in-sink
+// markers only. The executor keys its resolved-plaintext side channel by `path`.
+
+describe('collectSecretSinkMarkers — collects valid in-sink markers only', () => {
+  it('collects a marker directly at a sink (config-relative path, no prefix)', () => {
+    expect(collectSecretSinkMarkers({ apiKey: MARKER }, ['apiKey'])).toEqual([
+      { path: 'apiKey', name: 'stripe-key' },
+    ]);
+  });
+
+  it('collects markers NESTED under a sink field with dotted paths, key-sorted', () => {
+    expect(
+      collectSecretSinkMarkers({ secretHeaders: { 'X-Api-Key': MARKER, Authorization: MARKER } }, [
+        'secretHeaders',
+      ]),
+    ).toEqual([
+      // Object keys are visited sorted (deterministic), so Authorization first.
+      { path: 'secretHeaders.Authorization', name: 'stripe-key' },
+      { path: 'secretHeaders.X-Api-Key', name: 'stripe-key' },
+    ]);
+  });
+
+  it('collects a marker inside an ARRAY under a sink field with [i] paths', () => {
+    expect(collectSecretSinkMarkers({ keys: [MARKER] }, ['keys'])).toEqual([
+      { path: 'keys[0]', name: 'stripe-key' },
+    ]);
+  });
+
+  it('NEVER collects a marker outside a declared sink (parity with the gate reject)', () => {
+    expect(
+      collectSecretSinkMarkers({ url: MARKER, body: { auth: MARKER } }, ['secretHeaders']),
+    ).toEqual([]);
+  });
+
+  it('skips a malformed marker even AT a sink (only { $secret: <non-empty string> } resolves)', () => {
+    // A stored version cannot hold these (the save gate rejects them); the
+    // resolver skips rather than resolve garbage — defence in depth.
+    expect(collectSecretSinkMarkers({ apiKey: { $secret: 123 } }, ['apiKey'])).toEqual([]);
+    expect(collectSecretSinkMarkers({ apiKey: { $secret: 'x', extra: 1 } }, ['apiKey'])).toEqual(
+      [],
+    );
+  });
+
+  it('is empty when the activity declares no sinks (fail-closed — nothing to resolve)', () => {
+    expect(collectSecretSinkMarkers({ apiKey: MARKER }, [])).toEqual([]);
+  });
+
+  it('collects the SAME positions the gate accepts (no drift)', () => {
+    // Everything the gate leaves error-free at a sink is exactly what the
+    // resolver collects — the shared traversal makes this hold by construction.
+    const config = { secretHeaders: { Authorization: MARKER }, url: 'https://x' };
+    expect(scan(config, ['secretHeaders'])).toEqual([]);
+    expect(collectSecretSinkMarkers(config, ['secretHeaders'])).toEqual([
+      { path: 'secretHeaders.Authorization', name: 'stripe-key' },
+    ]);
   });
 });
 

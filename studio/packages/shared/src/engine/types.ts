@@ -371,6 +371,21 @@ export const FAILURE_CODES = {
   SECRET_NOT_FOUND: 'secret_not_found',
   /** The connection's secret exists but could not be decrypted. */
   SECRET_UNDECRYPTABLE: 'secret_undecryptable',
+  /**
+   * A `{ "$secret": "<name>" }` config-sink marker (item 7 / S3) names a
+   * standalone secret that resolves to no row for the run's owner. Distinct from
+   * `SECRET_NOT_FOUND` (a CONNECTION credential), so an operator can tell a
+   * dangling node-config secret from a dangling connection secret without
+   * string-matching. `permanent` — a config typo does not self-heal on retry.
+   */
+  CONFIG_SECRET_NOT_FOUND: 'config_secret_not_found',
+  /**
+   * A config-sink secret exists but could not be decrypted (key rotated /
+   * ciphertext corrupt). Distinct from `SECRET_UNDECRYPTABLE` for the same
+   * connection-vs-config reason. `permanent`; the message NEVER echoes the
+   * decrypt error (could leak ciphertext/key detail).
+   */
+  CONFIG_SECRET_UNDECRYPTABLE: 'config_secret_undecryptable',
 } as const;
 
 /**
