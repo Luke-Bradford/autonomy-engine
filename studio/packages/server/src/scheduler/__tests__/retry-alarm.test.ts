@@ -442,6 +442,28 @@ function getRunState(db: Db, deps: DriverDeps, runId: string) {
 /** Let the clock's `afterCommit` pump (deliberately not awaited) run to rest. */
 const settle = () => new Promise((r) => setTimeout(r, 20));
 
+/**
+ * Wait until `check` holds, polling the durable log. Used to reach a precise
+ * mid-drive moment WITHOUT betting on wall-clock timing: a fixed sleep that
+ * assumed "by now the pump has reached node d" would pass on this machine and
+ * flake on a loaded CI box — and a flaky concurrency test is worse than none,
+ * because it gets retried until green.
+ */
+async function until(check: () => boolean, label: string): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    // Tolerant by design: before `run.started` folds there are no nodes to look
+    // at, so an early poll legitimately throws rather than returning false.
+    // "Not there yet" and "cannot tell yet" are the same answer to this loop.
+    try {
+      if (check()) return;
+    } catch {
+      // keep waiting
+    }
+    await new Promise((r) => setTimeout(r, 2));
+  }
+  throw new Error(`timed out waiting for: ${label}`);
+}
+
 // ===========================================================================
 // #1 F2c/B1 — EXACTLY ONE DRIVE PER RUN (the regression this branch stopped for)
 // ===========================================================================
@@ -570,10 +592,13 @@ describe('F2c/B1 — two due alarms must not start two concurrent drives', () =>
     // Drive in the BACKGROUND under the run's lock, exactly as the launcher does.
     const launcherDrive = drives.serialize(run.id, () => startRun(deps, run));
 
-    // `a` is held and its alarm is ARMED, while `d` is still in flight.
-    await new Promise((r) => setTimeout(r, 20));
+    // Wait for the exact moment the test needs: `a` held, its alarm ARMED, and
+    // `d` still in flight — i.e. a genuinely live drive with a due-able alarm.
+    await until(
+      () => getRunState(db, deps, run.id).nodes.d!.status === 'dispatched',
+      'd to be dispatched (the launcher drive is live)',
+    );
     expect(getRunState(db, deps, run.id).nodes.a!.status).toBe('retry_pending');
-    expect(getRunState(db, deps, run.id).nodes.d!.status).toBe('dispatched');
     expect(listPendingWakeups(db)).toHaveLength(1);
 
     planA.outcome = 'success';
