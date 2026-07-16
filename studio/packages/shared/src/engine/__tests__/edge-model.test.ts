@@ -70,6 +70,7 @@ function runAll(eng: Engine, outcomes: Record<string, 'success' | 'failure'> = {
   let state = eng.seedState();
   const pending: EngineCommand[] = [];
   const diagnostics: string[] = [];
+  const order: string[] = [];
   let finish: { outcome: 'success' | 'failure'; reason?: string } | undefined;
 
   const apply = (ev: EngineEvent): void => {
@@ -90,6 +91,7 @@ function runAll(eng: Engine, outcomes: Record<string, 'success' | 'failure'> = {
       continue;
     }
     if (c.type !== 'dispatchNode') continue; // these docs are call-free
+    order.push(c.nodeId);
     apply({
       type: 'node.dispatched',
       runId: RUN,
@@ -116,7 +118,7 @@ function runAll(eng: Engine, outcomes: Record<string, 'success' | 'failure'> = {
           },
     );
   }
-  return { state, finish, diagnostics };
+  return { state, finish, diagnostics, order };
 }
 
 describe('skipped edges (F1)', () => {
@@ -483,6 +485,161 @@ describe('containers — skipped + JOIN inside a stage', () => {
     const { state } = runAll(eng);
     expect(state.nodes.d!.status).toBe('success'); // edge-wise AND would skip it
     expect(state.containers.stg!.status).toBe('success');
+  });
+});
+
+/**
+ * #480 — a CROSS-BOUNDARY forward edge must not absorb a failure at top scope.
+ *
+ * `validateDoc` forbids these edges outright, but it is ADVISORY (#444): its
+ * only caller is the canvas badge, so a git import or a direct POST reaches the
+ * reducer unchecked. The reducer therefore has to be fail-SAFE on the shape by
+ * itself rather than assume validation removed it.
+ *
+ * The MECHANISM — why the fix touches `topOutgoing` and deliberately not
+ * `topIncoming` — is documented where it lives, in `createEngine`'s index build
+ * (`reduce.ts`). Kept there rather than restated here so the two cannot drift.
+ * What this block adds is why each PIN exists.
+ *
+ * The fix changes one index but has TWO observable consequences, one pin each:
+ * absorption no longer fires on the edge (test 1), and the source can become a
+ * forward LEAF, so leaf-evaluation reaches its failed ancestor (test 2).
+ *
+ * The rest are NETS, not fix-tests — they pass before and after. They exist
+ * because the obvious generalization (drop the edge from `topIncoming` too)
+ * breaks them while every other test in this package stays green.
+ */
+describe('cross-boundary edges (#480)', () => {
+  it('a failure edge into a container CHILD does not absorb — the run FAILS', () => {
+    // `a` is a child of stage `c`, so `h --failure--> a` never reaches c's
+    // internal walk: `a` runs as a stage root regardless of what `h` did. The
+    // edge must therefore be inert for absorption too. Before the fix it sat in
+    // `topOutgoing['h']` and read as "a satisfied failure edge whose target
+    // RAN" — h's failure looked handled and the run reported SUCCESS.
+    const eng = createEngine({
+      nodes: [node('h'), node('a')],
+      edges: [edge('h', 'a', 'failure')],
+      containers: [{ id: 'c', kind: 'stage', children: ['a'] }],
+    });
+    const { finish } = runAll(eng, { h: 'failure' });
+    expect(finish?.outcome).toBe('failure');
+    expect(finish?.reason).toBe('node_failed:h');
+  });
+
+  it('the neutralized edge is REPORTED — the operator is told it was ignored', () => {
+    // `validateDoc` would flag this doc, but nothing calls it on the way in
+    // (#444), so without a diagnostic the operator sees `node_failed:h` with no
+    // hint that the handler edge they authored was voided. Same reasoning — and
+    // the same conclusion — as `noteInertBranch`.
+    const eng = createEngine({
+      nodes: [node('h'), node('a')],
+      edges: [edge('h', 'a', 'failure')],
+      containers: [{ id: 'c', kind: 'stage', children: ['a'] }],
+    });
+    const { diagnostics } = runAll(eng, { h: 'failure' });
+    expect(
+      diagnostics.some((d) => d.includes("edge 'h->a:failure'") && d.includes('IGNORED')),
+    ).toBe(true);
+  });
+
+  it('a LIVE child → top edge is NOT reported as neutralized', () => {
+    // The honesty pin for the diagnostic above. This edge is cross-boundary too,
+    // but it still routes (it skips `t`), so claiming it was ignored would be a
+    // lie — only edges actually dropped from `topOutgoing` are reported.
+    const eng = createEngine({
+      nodes: [node('h'), node('t')],
+      edges: [edge('h', 't', 'failure')],
+      containers: [{ id: 'c', kind: 'stage', children: ['h'] }],
+    });
+    const { diagnostics } = runAll(eng);
+    expect(diagnostics.some((d) => d.includes('IGNORED'))).toBe(false);
+  });
+
+  it('the source becomes a forward LEAF — a cleanly-handled failure still fails the run', () => {
+    // The SECOND consequence, and the most surprising thing about this fix: `p`'s
+    // failure IS properly handled (`q` runs), yet the run now fails.
+    //
+    // `h` is skipped (p did not succeed) and its only outgoing edge is the
+    // illegal one into `a`. Neutralizing that edge leaves `h` with no outgoing
+    // edge at all, so it is now a forward leaf — and F1b's settled rule is that
+    // a SKIPPED leaf recurses to its parents, where `p` failed. Correct: it is
+    // exactly the outcome the doc would have had if the illegal edge had never
+    // been authored, which is the whole point of neutralizing it.
+    const eng = createEngine({
+      nodes: [node('p'), node('q'), node('h'), node('a')],
+      edges: [
+        edge('p', 'q', 'failure'), // q RUNS — p's failure is absorbed
+        edge('p', 'h', 'success'), // p failed → h skipped
+        edge('h', 'a', 'success'), // the illegal cross-boundary edge
+      ],
+      containers: [{ id: 'c', kind: 'stage', children: ['a'] }],
+    });
+    const { state, finish } = runAll(eng, { p: 'failure' });
+    expect(state.nodes.q!.status).toBe('success');
+    expect(state.nodes.h!.status).toBe('skipped');
+    expect(finish?.outcome).toBe('failure');
+    expect(finish?.reason).toBe('node_failed:p');
+  });
+
+  it('a CHILD → top failure edge still SKIPS its target when the child succeeds', () => {
+    // The direction-2 net. `h` succeeds, so `h --failure--> t` is
+    // unsatisfied-terminal and `t` must skip. If the edge were also dropped
+    // from `topIncoming`, `t` would have no incoming edges, become a root, and
+    // run its failure handler on a wholly successful run.
+    const eng = createEngine({
+      nodes: [node('h'), node('t')],
+      edges: [edge('h', 't', 'failure')],
+      containers: [{ id: 'c', kind: 'stage', children: ['h'] }],
+    });
+    const { state, finish } = runAll(eng);
+    expect(state.nodes.h!.status).toBe('success');
+    expect(state.nodes.t!.status).toBe('skipped');
+    expect(finish?.outcome).toBe('success');
+  });
+
+  it('a CHILD → top success edge still ORDERS its target after the child', () => {
+    // The same net, on dispatch order rather than status: `t` must not run
+    // before the child that produces its input. Silent otherwise — `t` would
+    // still reach `success`, just with `${nodes.h.outputs.*}` resolved against
+    // an absent output.
+    const eng = createEngine({
+      nodes: [node('h'), node('t')],
+      edges: [edge('h', 't', 'success')],
+      containers: [{ id: 'c', kind: 'stage', children: ['h'] }],
+    });
+    const { order } = runAll(eng);
+    expect(order).toEqual(['h', 't']);
+  });
+
+  it('a failure edge to a CONTAINER ID still absorbs — that edge is not cross-boundary', () => {
+    // The non-regression pin. `validateDoc` explicitly allows top ↔ container-id
+    // edges (neither endpoint is a child), so this must keep absorbing: it is
+    // the difference between neutralizing cross-boundary edges and breaking
+    // container-targeted ones.
+    const eng = createEngine({
+      nodes: [node('h'), node('a')],
+      edges: [edge('h', 'c', 'failure')],
+      containers: [{ id: 'c', kind: 'stage', children: ['a'] }],
+    });
+    const { state, finish } = runAll(eng, { h: 'failure' });
+    expect(state.containers.c!.status).toBe('success');
+    expect(finish?.outcome).toBe('success');
+  });
+
+  it('CONTAINER scope stays fail-safe on the MIRRORED shape (source inside the container)', () => {
+    // The asymmetry the ticket noted. Note this is test 1 mirrored, not repeated:
+    // there the container held the TARGET, here it holds the SOURCE. At container
+    // scope `childOutgoing` already excludes the cross-boundary edge, so the
+    // child's failure was never absorbed and the container fails. Pinned so the
+    // top-scope fix cannot silently change the scope that was already right.
+    const eng = createEngine({
+      nodes: [node('h'), node('a')],
+      edges: [edge('h', 'a', 'failure')],
+      containers: [{ id: 'c', kind: 'stage', children: ['h'] }],
+    });
+    const { state, finish } = runAll(eng, { h: 'failure' });
+    expect(state.containers.c!.status).toBe('failure');
+    expect(finish?.outcome).toBe('failure');
   });
 });
 

@@ -209,8 +209,43 @@ export function createEngine(doc: EngineDoc): Engine {
     topIncoming.set(id, []);
     topOutgoing.set(id, []);
   }
+  // #480: a CROSS-BOUNDARY edge — exactly one endpoint a child, or children of
+  // DIFFERENT containers (`params.ts`'s `validateDoc` states the same rule as
+  // `fromOwner !== toOwner`; keep the two in step) — is excluded from
+  // `topOutgoing`, and ONLY from `topOutgoing`. `validateDoc` forbids the shape
+  // but ADVISORILY (see the note on the outcome predicate below), so the
+  // reducer neutralizes it rather than assuming validation removed it.
+  //
+  // The two indexes are deliberately asymmetric:
+  //   - top → CHILD: already inert for readiness (`childIncoming` takes
+  //     INTERNAL edges only), so the child runs for reasons unrelated to the
+  //     source. Left in `topOutgoing` it read as a satisfied failure/completion
+  //     edge whose target RAN, absorbing a failure nothing handled — fail-open.
+  //     Dropping it can also make the source a forward leaf (if it has no other
+  //     top-level outgoing edge), and leaf-evaluation then blames its failed
+  //     ancestor. Both conjuncts move the same way: strictly more blame.
+  //   - CHILD → top: already absent from `topOutgoing` (its source is a child,
+  //     so it is not a `topOutgoing` key), but LOAD-BEARING in `topIncoming` —
+  //     it is what still skips the top-level target when the child does not
+  //     take the edge. Dropping it there would leave that target with no
+  //     incoming edges, making it a root that fires unconditionally
+  //     (`computeReadiness`: empty incoming ⇒ 'ready') — a WORSE fail-open than
+  //     the one being fixed. So the `topIncoming` guard stays exactly as it was.
+  //     Pinned in `edge-model.test.ts`.
+  //
+  // Scoped to CHILD → top deliberately: for a child → its OWN container id the
+  // reasoning above does NOT hold (that edge makes the container wait on a child
+  // it must first activate — a pre-existing stall, #488, neither caused nor
+  // fixed here).
+  const neutralizedCrossBoundary: Edge[] = [];
   for (const e of topForwardEdges) {
-    if (topOutgoing.has(e.from)) topOutgoing.get(e.from)!.push(e);
+    const crossBoundary = childToContainer.get(e.from) !== childToContainer.get(e.to);
+    if (topOutgoing.has(e.from)) {
+      // Recorded only when the edge would OTHERWISE have been indexed here, so
+      // the diagnostic never claims to have voided an edge that still routes.
+      if (crossBoundary) neutralizedCrossBoundary.push(e);
+      else topOutgoing.get(e.from)!.push(e);
+    }
     if (topIncoming.has(e.to)) topIncoming.get(e.to)!.push(e);
   }
 
@@ -1024,6 +1059,21 @@ export function createEngine(doc: EngineDoc): Engine {
         diagnostics.push('impossible run.started: this run has already started');
       }
       return { state, commands: [], diagnostics };
+    }
+    // #480: say so when a cross-boundary edge is voided. Same reasoning as
+    // `noteInertBranch`, and deliberately the same conclusion: `validateDoc`
+    // reports the shape but advisorily — its lone caller is the canvas, which
+    // badges and still allows Save, and the server never validates (#444). So
+    // the doc arrives from git or a direct POST and this is the ONLY thing that
+    // makes the neutralization visible. Without it the operator sees an
+    // unhandled failure with no hint that the handler edge they authored was
+    // ignored. Emitted once per run, after the already-started guard.
+    for (const e of neutralizedCrossBoundary) {
+      diagnostics.push(
+        `edge '${e.id}' ('${e.from}' → '${e.to}') crosses a container boundary and is IGNORED: ` +
+          `a child's forward edges must stay within its container, so it cannot route or handle ` +
+          `an outcome — it is treated as if it were not authored`,
+      );
     }
     const nodes: Record<string, NodeRunState> = {};
     for (const id of nodeIds) nodes[id] = { status: 'pending', attempts: 0, retries: 0 };
