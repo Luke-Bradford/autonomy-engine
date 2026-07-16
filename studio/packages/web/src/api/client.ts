@@ -1,24 +1,12 @@
 import type { ZodType } from 'zod';
+import { ApiErrorBodySchema } from '@autonomy-studio/shared';
+import type { ApiErrorBody } from '@autonomy-studio/shared';
 
-/**
- * The shape every server error handler branch returns (see
- * `packages/server/src/errors.ts`): a stable `error` code, an optional
- * client-safe `message`, and (for `validation_error`) a list of Zod issues.
- * Nothing else is ever forwarded to the client, so this is the whole contract.
- */
-interface ApiErrorBody {
-  error?: string;
-  message?: string;
-  issues?: Array<{ path?: string; message?: string }>;
-  /**
-   * Present (and `true`) only when the server capped `issues[]` — its absence
-   * means the list is complete (#496). `totalIssues` is the pre-cap count, so
-   * a client can state "showing N of totalIssues" rather than silently
-   * rendering a truncated tail as the whole story.
-   */
-  truncated?: boolean;
-  totalIssues?: number;
-}
+// `ApiErrorBody`/`ApiErrorBodySchema` are the SSOT for the error-response
+// contract, authored once in `@autonomy-studio/shared` and shared with the
+// server error handler (which builds every response `satisfies ApiErrorBody`).
+// The hand-rolled interface that used to live here mirrored that shape by hand
+// and could drift silently — see `packages/server/src/errors.ts` and #525.
 
 /**
  * A non-2xx response. `status` is the HTTP code; `message` is the best
@@ -101,7 +89,13 @@ export async function apiFetch<T = unknown>(path: string, opts: ApiRequest<T> = 
   if (!res.ok) {
     let parsed: ApiErrorBody | undefined;
     try {
-      parsed = (await res.json()) as ApiErrorBody;
+      // Parse (not blind-cast) through the shared contract: a body that does
+      // not match is treated as absent rather than trusted by type assertion.
+      // `safeParse` — never `.parse()` — because we must not throw a SECOND
+      // error while handling the first; a malformed error body just falls back
+      // to `messageFromBody`'s generic `request failed (<status>)`.
+      const result = ApiErrorBodySchema.safeParse(await res.json());
+      parsed = result.success ? result.data : undefined;
     } catch {
       parsed = undefined;
     }

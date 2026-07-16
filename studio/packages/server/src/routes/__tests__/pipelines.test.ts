@@ -222,7 +222,7 @@ describe('pipelines routes', () => {
       });
       const body = res.json();
 
-      // REGRESSION PIN on the client contract (`web/src/api/client.ts`'s
+      // REGRESSION PIN on the client contract (`@autonomy-studio/shared`'s
       // `ApiErrorBody`). `messageFromBody` returns `message` when present, and
       // otherwise joins `issues` READ AS OBJECTS (`issue.path`/`issue.message`).
       // So `message` is what the canvas renders today, and the object shape is
