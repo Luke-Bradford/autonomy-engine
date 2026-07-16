@@ -22,14 +22,14 @@ function buildMinimalApp() {
   // Drives the ZodError branch with an arbitrary issue count: an array of
   // `count` numbers parsed against `z.array(z.string())` yields exactly one
   // "expected string" issue per element.
-  app.get('/manybad/:count', async (request) => {
-    const count = Number((request.params as { count: string }).count);
+  app.get<{ Params: { count: string } }>('/manybad/:count', async (request) => {
+    const count = Number(request.params.count);
     return z.array(z.string()).parse(new Array(count).fill(0));
   });
   // Drives the InvalidPipelineDocError (`invalid_pipeline_doc`) branch with an
   // arbitrary issue count.
-  app.get('/manydoc/:count', async (request) => {
-    const count = Number((request.params as { count: string }).count);
+  app.get<{ Params: { count: string } }>('/manydoc/:count', async (request) => {
+    const count = Number(request.params.count);
     throw new InvalidPipelineDocError(Array.from({ length: count }, (_v, i) => `issue ${i}`));
   });
   app.post('/echo', async (request) => {
