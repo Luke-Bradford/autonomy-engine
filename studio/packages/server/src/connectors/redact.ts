@@ -25,6 +25,18 @@ export function redactSecrets(
 }
 
 /**
+ * The recursion ceiling for `deepRedactSecrets`. Unlike the static-config
+ * walkers (which run on an author-controlled doc), this runs on ADAPTER OUTPUT —
+ * an external, potentially adversarial response body — so an unbounded walk
+ * could stack-overflow the process on a pathologically deep value. A structured
+ * output that legitimately nests this deep does not exist, so the cap only ever
+ * trips on hostile input; when it does, the over-deep subtree is replaced
+ * WHOLESALE with the redaction sentinel (below) rather than walked — fail-SAFE
+ * (never leak, never crash), the same never-leak posture as `redactSecrets`.
+ */
+const MAX_REDACT_DEPTH = 100;
+
+/**
  * Item 7 / S3 — the STRUCTURED-value counterpart of `redactSecrets`, for a
  * `node.output`/`node.succeeded.outputs` value an adapter might echo a resolved
  * secret into. Recurses objects/arrays and `redactSecrets`-scrubs every STRING
@@ -32,7 +44,9 @@ export function redactSecrets(
  * secret is a string, so only string leaves can carry one. The tree is rebuilt
  * (never mutated in place). Same accepted tradeoff as `redactSecrets`: a
  * legitimate string that merely CONTAINS a secret substring is redacted too —
- * the safe side, and unavoidable without provenance tracking.
+ * the safe side, and unavoidable without provenance tracking. Recursion is
+ * bounded by `MAX_REDACT_DEPTH` (see there) — a subtree deeper than that is
+ * replaced by the sentinel rather than walked.
  *
  * The executor runs this ONLY when a node actually resolved config-sink secrets
  * (the plaintext list is non-empty), so it is a strict no-op — never walked —
@@ -41,15 +55,34 @@ export function redactSecrets(
 export function deepRedactSecrets(
   value: unknown,
   secrets: readonly (string | null | undefined)[],
+  depth = 0,
 ): unknown {
+  // At the ceiling, redact the whole remaining subtree — conservatively assume
+  // it could carry a secret we can no longer walk to, and never overflow.
+  if (depth >= MAX_REDACT_DEPTH) return '***';
   if (typeof value === 'string') return redactSecrets(value, secrets);
-  if (Array.isArray(value)) return value.map((v) => deepRedactSecrets(v, secrets));
+  if (Array.isArray(value)) return value.map((v) => deepRedactSecrets(v, secrets, depth + 1));
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = deepRedactSecrets(v, secrets);
+      out[k] = deepRedactSecrets(v, secrets, depth + 1);
     }
     return out;
   }
   return value;
+}
+
+/**
+ * A typed wrapper of `deepRedactSecrets` for a `Record` value (a node's
+ * `outputs` map). Rebuilds the record's own values, each deep-redacted, so the
+ * caller gets a `Record<string, unknown>` back with NO unchecked cast — the
+ * top-level shape is known (it is the outputs map), only the values are opaque.
+ */
+export function deepRedactRecord(
+  record: Record<string, unknown>,
+  secrets: readonly (string | null | undefined)[],
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(record)) out[k] = deepRedactSecrets(v, secrets);
+  return out;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deepRedactSecrets, redactSecrets } from '../redact.js';
+import { deepRedactRecord, deepRedactSecrets, redactSecrets } from '../redact.js';
 
 describe('redactSecrets — string substring scrub', () => {
   it('replaces every occurrence of each non-empty secret with ***', () => {
@@ -44,5 +44,32 @@ describe('deepRedactSecrets — structured value scrub (item 7 / S3)', () => {
     const out = deepRedactSecrets(value, [SECRET]);
     expect(value).toEqual({ a: [SECRET] }); // original untouched
     expect(out).toEqual({ a: ['***'] });
+  });
+
+  it('bounds recursion (adversarially deep value cannot stack-overflow) — over-deep subtree becomes the sentinel', () => {
+    // Build a value nested well past the ceiling; the walk must terminate and
+    // never leak, replacing the over-deep subtree wholesale with '***'.
+    let deep: unknown = SECRET;
+    for (let i = 0; i < 500; i++) deep = { next: deep };
+    const out = deepRedactSecrets(deep, [SECRET]);
+    // Walk down what we can and assert it terminates in the sentinel, never the
+    // raw secret (and the call itself did not throw).
+    let cur: unknown = out;
+    let depth = 0;
+    while (cur !== null && typeof cur === 'object' && 'next' in cur) {
+      cur = (cur as { next: unknown }).next;
+      depth++;
+    }
+    expect(cur).toBe('***');
+    expect(depth).toBeLessThan(500);
+    expect(JSON.stringify(out)).not.toContain(SECRET);
+  });
+});
+
+describe('deepRedactRecord — typed outputs-map wrapper', () => {
+  it('deep-redacts each value and returns a typed record (no cast needed)', () => {
+    const secret = 'sk-x';
+    const rec: Record<string, unknown> = { a: secret, b: { c: [secret] }, n: 1 };
+    expect(deepRedactRecord(rec, [secret])).toEqual({ a: '***', b: { c: ['***'] }, n: 1 });
   });
 });

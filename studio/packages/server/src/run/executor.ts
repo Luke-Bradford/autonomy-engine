@@ -12,7 +12,7 @@ import { getRun } from '../repo/runs.js';
 import { getConnection } from '../repo/connections.js';
 import { getSecretByRef, getSecretByName } from '../repo/secrets.js';
 import { decrypt } from '../secrets/secrets.js';
-import { deepRedactSecrets, redactSecrets } from '../connectors/redact.js';
+import { deepRedactRecord, deepRedactSecrets, redactSecrets } from '../connectors/redact.js';
 import type { Db } from '../repo/types.js';
 import type { ConnectorRegistry } from '../connectors/registry.js';
 import { toEngineFailure } from '../connectors/error-kind.js';
@@ -104,7 +104,7 @@ function redactEventPlaintexts(
     };
   }
   if (ev.type === 'node.succeeded') {
-    return { ...ev, outputs: deepRedactSecrets(ev.outputs, plaintexts) as Record<string, unknown> };
+    return { ...ev, outputs: deepRedactRecord(ev.outputs, plaintexts) };
   }
   if (ev.type === 'node.failed') {
     return { ...ev, error: redactSecrets(ev.error, plaintexts) };
