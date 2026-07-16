@@ -10,6 +10,14 @@ interface ApiErrorBody {
   error?: string;
   message?: string;
   issues?: Array<{ path?: string; message?: string }>;
+  /**
+   * Present (and `true`) only when the server capped `issues[]` — its absence
+   * means the list is complete (#496). `totalIssues` is the pre-cap count, so
+   * a client can state "showing N of totalIssues" rather than silently
+   * rendering a truncated tail as the whole story.
+   */
+  truncated?: boolean;
+  totalIssues?: number;
 }
 
 /**
@@ -34,11 +42,20 @@ function messageFromBody(status: number, body: ApiErrorBody | undefined): string
   if (!body) return `request failed (${status})`;
   if (body.message) return body.message;
   if (body.issues && body.issues.length > 0) {
-    return body.issues
+    const joined = body.issues
       .map((issue) =>
         issue.path ? `${issue.path}: ${issue.message ?? ''}` : (issue.message ?? ''),
       )
       .join('; ');
+    // If the server capped the list, name the remainder rather than presenting
+    // the shown subset as the whole (#496). `message`-bearing errors (e.g.
+    // `invalid_pipeline_doc`) never reach here — they return above — and carry
+    // their own bounded summary, so this suffix is the ZodError join path only.
+    if (body.truncated && typeof body.totalIssues === 'number') {
+      const rest = body.totalIssues - body.issues.length;
+      if (rest > 0) return `${joined}; …and ${rest} more`;
+    }
+    return joined;
   }
   if (body.error) return body.error;
   return `request failed (${status})`;

@@ -141,6 +141,27 @@ describe('pipeline-versions repo — the write gate (#444)', () => {
   });
 });
 
+describe('InvalidPipelineDocError message (#496)', () => {
+  it('keeps every issue on `.issues` but bounds the human message', () => {
+    const issues = Array.from({ length: 150 }, (_v, i) => `issue ${i}`);
+    const err = new InvalidPipelineDocError(issues);
+    // The structured list is COMPLETE — the cap lives at the HTTP boundary
+    // (errors.ts), never on the error object itself.
+    expect(err.issues).toHaveLength(150);
+    // The message names the total + the remainder, and drops the tail rather
+    // than joining an O(doc) string.
+    expect(err.message).toContain('150 issues');
+    expect(err.message).toContain('…and 50 more');
+    expect(err.message).not.toContain('issue 149');
+  });
+
+  it('joins a small list whole, with no "…and N more" suffix', () => {
+    const err = new InvalidPipelineDocError(['a', 'b']);
+    expect(err.message).toContain('a; b');
+    expect(err.message).not.toContain('more');
+  });
+});
+
 describe('pipeline-versions repo', () => {
   it('creates version 1 for a brand-new pipeline', () => {
     const { db } = freshDb();

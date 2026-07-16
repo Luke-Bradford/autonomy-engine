@@ -84,6 +84,23 @@ describe('apiFetch', () => {
     );
   });
 
+  it('states the remainder when a capped validation_error body is truncated (#496)', async () => {
+    mockFetch(400, {
+      error: 'validation_error',
+      issues: [
+        { path: 'a', message: 'x' },
+        { path: 'b', message: 'y' },
+      ],
+      truncated: true,
+      totalIssues: 152,
+    });
+    // The joined message shows what the body carried, then names the remainder
+    // (total minus shown), so the client never silently renders "first N of many".
+    await expect(apiFetch('/api/connections', { method: 'POST', body: {} })).rejects.toThrow(
+      'a: x; b: y; …and 150 more',
+    );
+  });
+
   it('falls back to a generic message when the error body is unparseable', async () => {
     vi.stubGlobal(
       'fetch',

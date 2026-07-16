@@ -53,6 +53,15 @@ const HOST = '127.0.0.1';
  */
 const ALARM_TICK_MS = 1_000;
 
+/**
+ * Max request body size. Equal to Fastify's own default (1 MiB) — set
+ * EXPLICITLY so the bound is a stated decision, not an inherited default worth
+ * re-verifying on every Fastify upgrade. It is the upstream cap the error
+ * handler's `ISSUE_LIST_CAP` complements: this bounds what a caller can POST;
+ * that bounds what a validation failure of it returns (#496).
+ */
+const REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
+
 export interface BuildAppOptions {
   /** Overrides `process.env.DB_PATH` / the built-in default. Call-time only — never a module-eval-time global. */
   dbPath?: string;
@@ -61,7 +70,7 @@ export interface BuildAppOptions {
 }
 
 export async function buildApp(opts?: BuildAppOptions) {
-  const fastify = Fastify({ logger: true });
+  const fastify = Fastify({ logger: true, bodyLimit: REQUEST_BODY_LIMIT_BYTES });
   const dbPath = opts?.dbPath ?? process.env.DB_PATH ?? 'data/app.sqlite';
 
   // Resolve the secret-encryption master key ONCE per process, at boot,
