@@ -71,7 +71,7 @@ export const ApiErrorBodySchema = z.object({
   issues: z.array(ApiErrorIssueSchema).optional(),
   /** `true` iff the server capped `issues[]`; absent means the list is whole. */
   truncated: z.boolean().optional(),
-  /** The pre-cap issue count — present iff `truncated` (so a client can say "N of totalIssues"). */
-  totalIssues: z.number().optional(),
+  /** The pre-cap issue count — present iff `truncated` (so a client can say "N of totalIssues"). A count, so a non-negative integer. */
+  totalIssues: z.number().int().nonnegative().optional(),
 });
 export type ApiErrorBody = z.infer<typeof ApiErrorBodySchema>;
