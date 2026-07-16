@@ -64,6 +64,18 @@ describe('deepRedactSecrets — structured value scrub (item 7 / S3)', () => {
     expect(depth).toBeLessThan(500);
     expect(JSON.stringify(out)).not.toContain(SECRET);
   });
+
+  it('round-trips a JSON-sourced __proto__ key as an OWN data property, not a prototype mutation', () => {
+    // The choke point walks adversarial external adapter output. A field literally
+    // named `__proto__` (a real own property after JSON.parse) must survive as a
+    // data property, never silently vanish or poison the prototype.
+    const value = JSON.parse('{"__proto__": {"leak": "sk-x"}, "ok": 1}') as Record<string, unknown>;
+    const out = deepRedactSecrets(value, ['sk-x']) as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(out, '__proto__')).toBe(true);
+    expect(out['__proto__']).toEqual({ leak: '***' });
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype); // prototype untouched
+    expect(out.ok).toBe(1);
+  });
 });
 
 describe('deepRedactRecord — typed outputs-map wrapper', () => {
@@ -71,5 +83,13 @@ describe('deepRedactRecord — typed outputs-map wrapper', () => {
     const secret = 'sk-x';
     const rec: Record<string, unknown> = { a: secret, b: { c: [secret] }, n: 1 };
     expect(deepRedactRecord(rec, [secret])).toEqual({ a: '***', b: { c: ['***'] }, n: 1 });
+  });
+
+  it('round-trips a __proto__ key faithfully (own data property, prototype intact)', () => {
+    const rec = JSON.parse('{"__proto__": "sk-x"}') as Record<string, unknown>;
+    const out = deepRedactRecord(rec, ['sk-x']);
+    expect(Object.prototype.hasOwnProperty.call(out, '__proto__')).toBe(true);
+    expect(out['__proto__']).toBe('***');
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype);
   });
 });

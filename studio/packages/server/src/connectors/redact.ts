@@ -37,6 +37,19 @@ export function redactSecrets(
 const MAX_REDACT_DEPTH = 100;
 
 /**
+ * Set an OWN data property, faithfully — even for a key named `__proto__`. Plain
+ * `out[k] = v` treats `__proto__` as the prototype accessor, so a JSON-sourced
+ * field literally named `__proto__` (a real own property after `JSON.parse`)
+ * would silently vanish or mutate the prototype instead of round-tripping. This
+ * choke point walks ADVERSARIAL external adapter output, so it must copy every
+ * key as data, not as a magic accessor. `Object.defineProperty` writes an own
+ * data property regardless of the key.
+ */
+function setDataProperty(out: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(out, key, { value, writable: true, enumerable: true, configurable: true });
+}
+
+/**
  * Item 7 / S3 — the STRUCTURED-value counterpart of `redactSecrets`, for a
  * `node.output`/`node.succeeded.outputs` value an adapter might echo a resolved
  * secret into. Recurses objects/arrays and `redactSecrets`-scrubs every STRING
@@ -65,7 +78,7 @@ export function deepRedactSecrets(
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = deepRedactSecrets(v, secrets, depth + 1);
+      setDataProperty(out, k, deepRedactSecrets(v, secrets, depth + 1));
     }
     return out;
   }
@@ -83,6 +96,7 @@ export function deepRedactRecord(
   secrets: readonly (string | null | undefined)[],
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(record)) out[k] = deepRedactSecrets(v, secrets);
+  for (const [k, v] of Object.entries(record))
+    setDataProperty(out, k, deepRedactSecrets(v, secrets));
   return out;
 }
