@@ -43,6 +43,29 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
+ * Bounds how deep any walk may descend the node-`config` TREE (nested
+ * objects/arrays) before it refuses. `config` is `z.record(z.string(),
+ * z.unknown())` — opaque to Zod, so a stored/run-now config can nest
+ * arbitrarily deep. Every recursor over the tree — `substitute` (RUN),
+ * `scan` (the `${}` SAVE walk) and `walkConfigForMarkers`/`walkMarkerRegion`
+ * (the `{$secret}` SAVE gate + DISPATCH resolver) — checks this cap at entry, so
+ * a pathological config fails with a CLEAN error/throw instead of overflowing
+ * the stack (`RangeError`). This is the config-TREE axis; it is ORTHOGONAL to
+ * `MAX_EXPR_DEPTH` (expression AST nesting, `expr.ts`) and `MAX_PATH_DEPTH` (ref
+ * path segments, `functions.ts`) — neither of those bounds the tree walk. It is
+ * the SAME axis as server-side `MAX_REDACT_DEPTH` (`connectors/redact.ts`, which
+ * caps the resolved-config redaction walk at 100); the two compose safely — a
+ * config within this 64 cap is comfortably within redaction's 100 ceiling. The
+ * config-tree analogue of #453, which bounded expression nesting for the same
+ * class of raw-`RangeError` bug. 64 is reasoned by analogy to the sibling caps,
+ * not a measured overflow point: a native stack blows in the low thousands of
+ * frames (#453 measured ~2000 for the expression walk), and real config is a
+ * handful of levels deep, so 64 is a wide safe band the cap only ever bites a
+ * pathological input against.
+ */
+export const MAX_CONFIG_DEPTH = 64;
+
+/**
  * Closed field set readable via `${run.<field>}`. SSOT — extend here only.
  *
  * Reconciled to spec #6's names at E3 (its spike-hardened "SSOT bug (must fix)"):
@@ -555,14 +578,20 @@ function arityText(min: number, max: number | null): string {
  * string. Arrays/objects recurse deterministically (object keys sorted). A
  * non-string scalar passes through untouched.
  */
-export function substitute(value: unknown, ctx: SubstitutionContext): unknown {
+export function substitute(value: unknown, ctx: SubstitutionContext, depth = 0): unknown {
+  // Bound the config-TREE recursion so a pathologically nested config raises a
+  // clean `SubstituteError` a node-failure catch handles, never a raw stack
+  // overflow (the RUN half of #537; the SAVE half is `scan`/`scanSecretSinks`).
+  if (depth > MAX_CONFIG_DEPTH) {
+    throw new SubstituteError(`config nested too deep (over ${MAX_CONFIG_DEPTH} levels)`);
+  }
   if (Array.isArray(value)) {
-    return value.map((v) => substitute(v, ctx));
+    return value.map((v) => substitute(v, ctx, depth + 1));
   }
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-      out[key] = substitute((value as Record<string, unknown>)[key], ctx);
+      out[key] = substitute((value as Record<string, unknown>)[key], ctx, depth + 1);
     }
     return out;
   }
@@ -880,13 +909,22 @@ export function scanSecretSinks(
   // drift" hazard (#473). They share ONE traversal (`walkConfigForMarkers`);
   // this call only supplies the gate's per-marker ACTION (reject-or-shape-check),
   // the resolver supplies its own (resolve-or-fail). Neither owns the walk.
-  walkConfigForMarkers(where, config, sinkFields, (path, value, allowed) => {
-    if (!allowed) {
-      errors.push(`${path}: secret reference is not allowed here`);
-      return;
-    }
-    validateSecretMarker(path, value, errors);
-  });
+  walkConfigForMarkers(
+    where,
+    config,
+    sinkFields,
+    (path, value, allowed) => {
+      if (!allowed) {
+        errors.push(`${path}: secret reference is not allowed here`);
+        return;
+      }
+      validateSecretMarker(path, value, errors);
+    },
+    // Bound the shared config-TREE walk (#537): the SAVE gate reports a clean
+    // error past the cap, so a pathological config fails validation rather than
+    // overflowing the stack. The `${}` `scan` (sibling walk) caps identically.
+    (path) => errors.push(`${path}: config nested too deep (over ${MAX_CONFIG_DEPTH} levels)`),
+  );
 }
 
 /**
@@ -909,13 +947,20 @@ function walkConfigForMarkers(
   config: unknown,
   sinkFields: readonly string[],
   visit: (path: string, value: unknown, allowed: boolean) => void,
+  onTooDeep?: (path: string) => void,
 ): void {
+  // The config ROOT is always depth 0, so no cap check here — all recursion (and
+  // so the config-TREE depth cap, #537) lives in `walkMarkerRegion`, which every
+  // child descends through starting at depth 1. `onTooDeep` is how a caller with
+  // an error sink (the SAVE gate) surfaces a clean over-depth error; a caller
+  // without one (the DISPATCH resolver) simply STOPS past the cap — fail-safe,
+  // since a marker below an over-deep cut was never blessed by the gate.
   if (isSecretRef(config)) {
     visit(where, config, false);
     return;
   }
   if (Array.isArray(config)) {
-    config.forEach((v, i) => walkMarkerRegion(`${where}[${i}]`, v, false, visit));
+    config.forEach((v, i) => walkMarkerRegion(`${where}[${i}]`, v, false, visit, onTooDeep, 1));
     return;
   }
   if (config === null || typeof config !== 'object') return;
@@ -925,6 +970,8 @@ function walkConfigForMarkers(
       (config as Record<string, unknown>)[key],
       sinkFields.includes(key),
       visit,
+      onTooDeep,
+      1,
     );
   }
 }
@@ -935,18 +982,33 @@ function walkMarkerRegion(
   value: unknown,
   allowed: boolean,
   visit: (path: string, value: unknown, allowed: boolean) => void,
+  onTooDeep?: (path: string) => void,
+  depth = 0,
 ): void {
+  if (depth > MAX_CONFIG_DEPTH) {
+    onTooDeep?.(path);
+    return;
+  }
   if (isSecretRef(value)) {
     visit(path, value, allowed);
     return;
   }
   if (Array.isArray(value)) {
-    value.forEach((v, i) => walkMarkerRegion(`${path}[${i}]`, v, allowed, visit));
+    value.forEach((v, i) =>
+      walkMarkerRegion(`${path}[${i}]`, v, allowed, visit, onTooDeep, depth + 1),
+    );
     return;
   }
   if (value !== null && typeof value === 'object') {
     for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-      walkMarkerRegion(`${path}.${key}`, (value as Record<string, unknown>)[key], allowed, visit);
+      walkMarkerRegion(
+        `${path}.${key}`,
+        (value as Record<string, unknown>)[key],
+        allowed,
+        visit,
+        onTooDeep,
+        depth + 1,
+      );
     }
   }
 }
@@ -1554,7 +1616,15 @@ interface ScanScope {
   outputsById?: Map<string, OutputContract>;
 }
 
-function scan(where: string, value: unknown, scope: ScanScope, errors: string[]): void {
+function scan(where: string, value: unknown, scope: ScanScope, errors: string[], depth = 0): void {
+  // Bound the config-TREE recursion so a pathologically nested config is
+  // reported as a collected error, never a raw `RangeError` this pure validator
+  // is not contracted to throw (the SAVE half of #537, paired with `substitute`
+  // on the RUN half). `scanSecretSinks` caps the sibling `{$secret}` walk.
+  if (depth > MAX_CONFIG_DEPTH) {
+    errors.push(`${where}: config nested too deep (over ${MAX_CONFIG_DEPTH} levels)`);
+    return;
+  }
   if (typeof value === 'string') {
     // The same classifier `substitute` reads, so the runtime and static paths
     // agree on where a `${...}` body ends. `matches` is populated in every mode,
@@ -1570,12 +1640,12 @@ function scan(where: string, value: unknown, scope: ScanScope, errors: string[])
     return;
   }
   if (Array.isArray(value)) {
-    value.forEach((v, i) => scan(`${where}[${i}]`, v, scope, errors));
+    value.forEach((v, i) => scan(`${where}[${i}]`, v, scope, errors, depth + 1));
     return;
   }
   if (value !== null && typeof value === 'object') {
     for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-      scan(`${where}.${key}`, (value as Record<string, unknown>)[key], scope, errors);
+      scan(`${where}.${key}`, (value as Record<string, unknown>)[key], scope, errors, depth + 1);
     }
   }
 }

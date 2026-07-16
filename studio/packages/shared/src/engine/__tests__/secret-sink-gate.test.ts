@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Node, PipelineVersion } from '../types.js';
-import { collectSecretSinkMarkers, scanSecretSinks, validateRefs } from '../params.js';
+import {
+  MAX_CONFIG_DEPTH,
+  collectSecretSinkMarkers,
+  scanSecretSinks,
+  validateRefs,
+} from '../params.js';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -203,5 +208,53 @@ describe('validateRefs — fail-closed: no activity declares a secret sink (S2)'
   it('refuses a marker under an UNKNOWN activity type (getActivity undefined ⇒ no sinks)', () => {
     const errors = validateRefs(doc([node('not_a_real_type', { x: MARKER })]));
     expect(errors.some((e) => /secret reference is not allowed here/.test(e))).toBe(true);
+  });
+});
+
+describe('MAX_CONFIG_DEPTH bounds the marker walk on BOTH paths (#537)', () => {
+  // Both the SAVE-time gate (`scanSecretSinks`) and the DISPATCH-time resolver
+  // (`collectSecretSinkMarkers`) share ONE traversal (`walkConfigForMarkers`)
+  // over an opaque, attacker-controlled `config`. A pathologically nested config
+  // overflowed the stack before this cap. See params.test.ts for the shared-axis
+  // rationale (config tree, distinct from expression nesting / ref-path depth).
+  function deepConfig(n: number): Record<string, unknown> {
+    let v: Record<string, unknown> = { end: 'leaf' };
+    for (let i = 0; i < n; i += 1) v = { a: v };
+    return v;
+  }
+
+  it('the SAVE gate reports a clean error past the cap — no RangeError', () => {
+    let thrown: unknown;
+    const errors: string[] = [];
+    try {
+      // Nest the deep tree UNDER a declared sink so the walk descends in-region.
+      scanSecretSinks(
+        'nodes.n.config',
+        { sink: deepConfig(MAX_CONFIG_DEPTH + 50) },
+        ['sink'],
+        errors,
+      );
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeUndefined();
+    expect(errors.join('\n')).not.toMatch(/Maximum call stack/i);
+    expect(errors.join('\n')).toMatch(/config nested too deep/i);
+  });
+
+  it('the DISPATCH resolver fail-safe STOPS at the cap — no throw, no markers', () => {
+    // Defence-in-depth: no stored version can hold an over-deep config (the save
+    // gate rejects it), and `substitute` overflows first on the run path anyway.
+    // If one somehow reaches here, stopping is fail-safe — markers below the cut
+    // were never blessed by the gate, so not resolving them is correct.
+    let thrown: unknown;
+    let out: { path: string; name: string }[] = [];
+    try {
+      out = collectSecretSinkMarkers({ sink: deepConfig(MAX_CONFIG_DEPTH + 50) }, ['sink']);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeUndefined();
+    expect(out).toEqual([]);
   });
 });
