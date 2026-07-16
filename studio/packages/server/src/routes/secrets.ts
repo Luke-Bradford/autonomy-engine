@@ -30,7 +30,19 @@ const MAX_SECRET_VALUE_LEN = 16384;
 
 const SecretWriteBodySchema = z
   .object({
-    name: z.string().min(1).max(MAX_SECRET_NAME_LEN),
+    // The name is an exact-match lookup KEY — F15's `{ "$secret": "<name>" }`
+    // sink resolves by it, and it is listed/deleted by it. So it must be
+    // non-blank AND already trimmed: a whitespace-only name (`" "` passes
+    // `min(1)`) or one with leading/trailing whitespace (`"key "` vs `"key"`)
+    // is a silent lookup footgun. Reject it loudly at the boundary rather than
+    // mutating the client's input by trimming.
+    name: z
+      .string()
+      .min(1)
+      .max(MAX_SECRET_NAME_LEN)
+      .refine((s) => s.trim() === s && s.length > 0, {
+        message: 'name must not be blank or have leading/trailing whitespace',
+      }),
     secret: z.string().min(1).max(MAX_SECRET_VALUE_LEN),
   })
   .strict();

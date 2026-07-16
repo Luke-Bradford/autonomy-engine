@@ -115,6 +115,26 @@ describe('secrets routes (item 7 / S1 — the standalone secret SOURCE)', () => 
     }
   });
 
+  it('a blank or untrimmed name is a 400 — the name is an exact-match lookup key', async () => {
+    const app2 = await buildTestApp();
+    try {
+      const whitespaceOnly = await app2.inject({
+        method: 'POST',
+        url: '/api/secrets',
+        payload: { name: '   ', secret: 'p' },
+      });
+      expect(whitespaceOnly.statusCode).toBe(400);
+      const leadingTrailing = await app2.inject({
+        method: 'POST',
+        url: '/api/secrets',
+        payload: { name: ' stripe-key ', secret: 'p' },
+      });
+      expect(leadingTrailing.statusCode).toBe(400);
+    } finally {
+      await app2.close();
+    }
+  });
+
   it('an over-long name / secret is a 400 — the encrypt-and-store payload is bounded', async () => {
     const app2 = await buildTestApp();
     try {
