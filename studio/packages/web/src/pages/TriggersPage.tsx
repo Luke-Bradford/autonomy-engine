@@ -450,7 +450,7 @@ function TriggerForm({
   }
 
   return (
-    <form className="trigger-form" onSubmit={onSubmit} aria-label="Trigger form">
+    <form className="trigger-form" onSubmit={(e) => void onSubmit(e)} aria-label="Trigger form">
       <h3>{editing ? 'Edit trigger' : 'New trigger'}</h3>
 
       <label>

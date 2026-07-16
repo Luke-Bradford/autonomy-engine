@@ -225,7 +225,11 @@ function ConnectionForm({
   }
 
   return (
-    <form className="connection-form" onSubmit={onSubmit} aria-label="Connection form">
+    <form
+      className="connection-form"
+      onSubmit={(e) => void onSubmit(e)}
+      aria-label="Connection form"
+    >
       <h3>{editing ? 'Edit connection' : 'New connection'}</h3>
 
       <label>
