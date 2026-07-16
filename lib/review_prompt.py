@@ -334,14 +334,16 @@ def build_payload(scope, diff, pr_description, comments_raw):
         # text blocks) — the cap is a function of DIFF SIZE, and 16000 was only
         # ever sized against the diffs of the day. 32000 restores the headroom.
         #
-        # Raising this is safe in the fail-safe direction: the workflow's guard
-        # cannot mistake a truncated review for an APPROVE (it banners the
-        # comment and fails the job). But note the guard has a HOLE this failure
-        # exposed — when thinking eats the ENTIRE budget there are no text blocks
-        # at all, so the workflow dies at its earlier `No text block` check and
-        # prints a raw API dump instead of the "bump max_tokens" message it has
-        # ready. Still fail-safe (nothing is certified), just needlessly hard to
-        # diagnose; worth closing next time this file is open.
+        # Raising this is safe in the fail-safe direction: the guard cannot
+        # mistake a truncated review for an APPROVE (it banners the comment and
+        # fails the job). The HOLE this comment used to flag — thinking eating
+        # the ENTIRE budget leaves zero text blocks, which died on a raw API
+        # dump rather than the actionable message — is CLOSED by extract_review
+        # below (#504). Do not raise this without reading #505 first: the call
+        # is a non-streaming curl with no --max-time on a job with no
+        # timeout-minutes, and ~32000 is already about 2x the documented
+        # non-streaming guidance. 128K is Sonnet 5's STREAMING ceiling, not a
+        # budget available here.
         "max_tokens": 32000,
         "thinking": {"type": "adaptive"},
         "output_config": {"effort": "medium"},
@@ -354,6 +356,116 @@ def build_payload(scope, diff, pr_description, comments_raw):
         ],
         "messages": [{"role": "user", "content": user_prompt}],
     }
+
+
+# --- response extraction (#504) ---------------------------------------------
+#
+# Lifted OUT of an inline `python3 -c` heredoc in claude-review.yml, for the
+# same reason #501 lifted the verdict extractor and #468 lifted the charter:
+# an inline heredoc is untestable, and untestability is how each of those bugs
+# survived. The workflow's own comment at the build step says exactly that.
+#
+# The HOLE this closes -- flagged at the `max_tokens` constant above as "worth
+# closing next time this file is open", and this is that time. When adaptive
+# thinking spends the ENTIRE budget the response carries thinking blocks and no
+# text at all, so the heredoc died at its generic `No text block` check and
+# printed a raw API dump, while the actionable "raise max_tokens" message it
+# already had sat unreachable behind a stop_reason check further down. Always
+# fail-safe (nothing was ever certified), just needlessly hard to diagnose.
+# #504 raises `effort`, which raises P(thinking eats the budget) -- so the
+# diagnosis has to land BEFORE the effort does.
+#
+# Every path here fails CLOSED: a response we cannot read is not an approval,
+# which is #501's rule applied one layer earlier.
+
+
+class ReviewExtractionError(Exception):
+    """The API response cannot yield a usable review body."""
+
+
+# ONE source for "which file holds max_tokens", because the answer has already
+# drifted once: the heredoc's banner said "Bump max_tokens in
+# .github/workflows/claude-review.yml" long after the constant moved into this
+# module, so the one message an operator reads at 3am sent them to the wrong
+# file. Both the banner and the budget-exhaustion error interpolate this -- a
+# second literal is a second thing to forget.
+_BUDGET_HINT = "Raise `max_tokens` in lib/review_prompt.py (see #505 first) or split the PR."
+
+_TRUNCATION_BANNER = (
+    "> :warning: **Review truncated by the max_tokens cap — findings below may "
+    "be incomplete. " + _BUDGET_HINT + "**\n\n"
+)
+
+
+def _usage(response):
+    # Callers are downstream of extract_review's own isinstance check.
+    return response.get("usage", {})
+
+
+def extract_review(response):
+    """Return (comment_text, stop_reason) from a Messages API response dict.
+
+    Raises ReviewExtractionError -- with a message that names the actual
+    failure -- rather than returning anything the gate could mistake for a
+    review.
+    """
+    if not isinstance(response, dict):
+        raise ReviewExtractionError("response is not a JSON object: %r" % (response,))
+
+    content = response.get("content")
+    if not content or not isinstance(content, list):
+        raise ReviewExtractionError(
+            "unexpected response shape -- no usable `content`:\n%s"
+            % json.dumps(response, indent=2)
+        )
+
+    stop_reason = response.get("stop_reason") or ""
+    text_blocks = [b for b in content if isinstance(b, dict) and b.get("type") == "text"]
+
+    if not text_blocks:
+        if stop_reason == "max_tokens":
+            raise ReviewExtractionError(
+                "adaptive thinking consumed the ENTIRE max_tokens budget: the "
+                "response carries no review text at all "
+                "(stop_reason=max_tokens, usage=%s). %s"
+                % (json.dumps(_usage(response), sort_keys=True), _BUDGET_HINT)
+            )
+        raise ReviewExtractionError(
+            "no text block in response content (stop_reason=%r):\n%s"
+            % (stop_reason, json.dumps(response, indent=2))
+        )
+
+    # JOIN every text block, never just the first. A partial comment was merely
+    # untidy until #501 made the verdict a required check: a reply split across
+    # blocks would post a truncated review AND fail the assert as verdict-less
+    # though the model emitted one -- a false red that is near-impossible to
+    # diagnose from the error. (PR #500 was a SINGLE block, so it is not
+    # evidence for this; interleaved thinking is what splits blocks.)
+    #
+    # Joined on a BLANK LINE, not the empty string: blocks carry no
+    # trailing-newline guarantee, so an empty join can glue a findings line onto
+    # the `### Verdict` heading that follows it, killing the start-of-line
+    # anchor extract_verdict needs and reding the check for no reason. Separate
+    # blocks are separate markdown; a blank line is the faithful seam.
+    #
+    # The type check is not paranoia about the API: `"\n\n".join` on a non-str
+    # raises a bare TypeError, and a raw traceback is the generic-dump failure
+    # this whole function exists to delete. Fail closed WITH a diagnosis.
+    parts = []
+    for block in text_blocks:
+        value = block.get("text")
+        if not isinstance(value, str):
+            raise ReviewExtractionError(
+                "a text block carries a non-string `text` (%r) -- malformed "
+                "response:\n%s" % (value, json.dumps(response, indent=2))
+            )
+        parts.append(value)
+    text = "\n\n".join(parts)
+
+    if stop_reason == "max_tokens":
+        text = _TRUNCATION_BANNER + text
+
+    return text, stop_reason
 
 
 def _read(path, default=""):
@@ -384,22 +496,75 @@ def _verdict_main(path):
     return 0
 
 
+_USAGE = (
+    "usage: review_prompt.py <files.txt> <pr.diff> <pr_description.txt> "
+    "<pr_comments.txt> <request.json>\n"
+    "       review_prompt.py --verdict <review.txt>\n"
+    "       review_prompt.py --extract <response.json> <review.txt> "
+    "<stop_reason.txt>\n"
+)
+
+
+def _extract_main(response_path, review_path, stop_reason_path):
+    """`--extract <response.json> <review.txt> <stop_reason.txt>` (#504).
+
+    Writes stop_reason.txt only on success: a caller that reads it can trust it
+    describes a review that actually exists.
+    """
+    try:
+        with open(response_path, encoding="utf-8") as fh:
+            response = json.load(fh)
+    except (OSError, ValueError) as exc:
+        sys.stderr.write(
+            "review_prompt: cannot read the API response %s (%s). An unreadable "
+            "response is not an approval; failing the gate.\n" % (response_path, exc)
+        )
+        return 1
+
+    try:
+        text, stop_reason = extract_review(response)
+    except ReviewExtractionError as exc:
+        sys.stderr.write("review_prompt: %s\n" % exc)
+        return 1
+
+    with open(review_path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    with open(stop_reason_path, "w", encoding="utf-8") as fh:
+        fh.write(stop_reason)
+
+    sys.stdout.write(
+        "review extracted (stop_reason=%r, usage=%s)\n"
+        % (stop_reason, json.dumps(_usage(response), sort_keys=True))
+    )
+    return 0
+
+
 def main(argv):
     """CLI for the workflow: review_prompt.py <files.txt> <diff> <desc> <comments> <out>
 
-    Also `review_prompt.py --verdict <review.txt>` (#501), so the gate calls this
-    TESTED extractor instead of an inline heredoc -- untestability is exactly how
-    #468 survived, per the comment in claude-review.yml.
+    Also `review_prompt.py --verdict <review.txt>` (#501) and
+    `review_prompt.py --extract <response.json> <review.txt> <stop_reason.txt>`
+    (#504), so the gate calls these TESTED extractors instead of inline
+    heredocs -- untestability is exactly how #468 survived, per the comment in
+    claude-review.yml.
     """
-    if len(argv) == 3 and argv[1] == "--verdict":
-        return _verdict_main(argv[2])
+    # Dispatch on the FLAG first, then check its arity. Matching arity first
+    # and falling through on a mismatch is how `--extract a b c EXTRA` became a
+    # silent BUILD: the flag is swallowed as files.txt (unreadable -> "" ->
+    # scope MIXED), the caller's last argument is OVERWRITTEN with a request
+    # payload, and it exits 0 having done the wrong thing entirely. An exit-0
+    # wrong operation is the exact failure shape this module is lifting out of
+    # the workflow's heredoc -- it must not be reintroduced by the dispatcher.
+    if len(argv) > 1 and argv[1].startswith("--"):
+        if argv[1] == "--verdict" and len(argv) == 3:
+            return _verdict_main(argv[2])
+        if argv[1] == "--extract" and len(argv) == 5:
+            return _extract_main(argv[2], argv[3], argv[4])
+        sys.stderr.write("review_prompt: bad flag or arity: %s\n\n%s" % (argv[1], _USAGE))
+        return 2
 
     if len(argv) != 6:
-        sys.stderr.write(
-            "usage: review_prompt.py <files.txt> <pr.diff> <pr_description.txt> "
-            "<pr_comments.txt> <request.json>\n"
-            "       review_prompt.py --verdict <review.txt>\n"
-        )
+        sys.stderr.write(_USAGE)
         return 2
 
     files_path, diff_path, desc_path, comments_path, out_path = argv[1:]

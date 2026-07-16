@@ -134,51 +134,14 @@ jobs:
             exit 1
           fi
 
-          # HEED THE QUOTING: this whole script is a DOUBLE-QUOTED shell string,
-          # so a double quote or a backtick anywhere in it -- comments included
-          # -- is shell syntax, not Python. A double quote ENDS the string and
-          # silently truncates the script; a backtick runs its contents as a
-          # command. Both fail SILENTLY: the step still exits 0, having written
-          # no review.txt. Single quotes only. (Learned the hard way on #501:
-          # a comment mentioning a quoted string cost a full CI round.)
-          python3 -c "
-          import json, sys
-          data = json.load(open('response.json'))
-          if 'content' not in data or not data['content']:
-              print('Unexpected response shape:', json.dumps(data, indent=2))
-              sys.exit(1)
-          stop_reason = data.get('stop_reason') or ''
-          text_blocks = [b for b in data['content'] if b.get('type') == 'text']
-          if not text_blocks:
-              print('No text block in response content:', json.dumps(data, indent=2))
-              sys.exit(1)
-          # JOIN every text block, never just the first. A partial comment was
-          # merely untidy until #501 made the verdict a required check: a reply
-          # split across blocks would post a truncated review AND fail the
-          # assert as verdict-less though the model emitted one -- a false red
-          # that is near-impossible to diagnose from the error. (PR #500 was a
-          # SINGLE block, so it is not evidence for this; interleaved thinking
-          # is what splits blocks.)
-          # Joined on a BLANK LINE, not the empty string: blocks carry no
-          # trailing-newline guarantee, so an empty join can glue a findings
-          # line onto the Verdict heading that follows it, killing the
-          # start-of-line anchor the extractor needs and reding the check for no
-          # reason. Separate blocks are separate markdown; a blank line is the
-          # faithful seam.
-          text = '\n\n'.join(b['text'] for b in text_blocks)
-          with open('stop_reason.txt', 'w') as f:
-              f.write(stop_reason)
-          if stop_reason == 'max_tokens':
-              text = (
-                  '> :warning: **Review truncated by max_tokens cap — findings below may be incomplete. '
-                  'Bump max_tokens in .github/workflows/claude-review.yml or split the PR.**\n\n'
-                  + text
-              )
-          with open('review.txt', 'w') as f:
-              f.write(text)
-          usage = data.get('usage', {})
-          print(f'Review extracted (stop_reason={stop_reason!r}, usage={usage})')
-          "
+          # #504: was an inline `python3 -c` heredoc; now a TESTED extractor
+          # (lib/review_prompt.py, tests/test_review_prompt.py) for the same
+          # reason #501 lifted the verdict extractor and #468 lifted the
+          # charter -- an inline heredoc is untestable, and that is how each of
+          # those bugs survived. Rationale and the failure it closes live at
+          # `extract_review`; this line must not restate them and drift.
+          # Exits non-zero on every unusable response, which reds the step.
+          python3 lib/review_prompt.py --extract response.json review.txt stop_reason.txt
 
       - name: Post review comment
         if: steps.docs_only.outputs.docs_only != 'true'

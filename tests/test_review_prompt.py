@@ -396,6 +396,21 @@ class TestExtractVerdict(unittest.TestCase):
         text = "### Verdict\r\n**APPROVE** -- fine.\r\n"
         self.assertEqual(review_prompt.extract_verdict(text), "APPROVE")
 
+    def test_the_REAL_banner_constant_does_not_break_extraction(self):
+        # Pins the SHIPPED constant, not a synthetic copy of it. The old test
+        # here hardcoded the banner's then-current wording, so #504 rewrote the
+        # real banner -- adding backticks, the very character _FENCE keys on --
+        # and this property went on passing without touching it. A test that
+        # cannot see the thing it guards is not guarding it.
+        self.assertEqual(review_prompt._FENCE.findall(review_prompt._TRUNCATION_BANNER), [])
+        self.assertIsNone(review_prompt.extract_verdict(review_prompt._TRUNCATION_BANNER))
+        self.assertEqual(
+            review_prompt.extract_verdict(
+                review_prompt._TRUNCATION_BANNER + "### Verdict\n**APPROVE** -- ok.\n"
+            ),
+            "APPROVE",
+        )
+
     def test_the_max_tokens_banner_does_not_break_extraction(self):
         # The banner is PREPENDED above the review; it must not shadow the
         # section nor be mistaken for one.
@@ -492,6 +507,249 @@ class TestVerdictCli(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertIn(STUDIO_MARKER, json.loads(out.read_text())["system"][0]["text"])
+
+
+class TestExtractReview(unittest.TestCase):
+    """#504: the response->comment step, lifted out of an untestable heredoc.
+
+    Why, and the failure it closes: see the comment at `extract_review`.
+    """
+
+    @staticmethod
+    def _response(blocks, stop_reason="end_turn", usage=None):
+        return {
+            "content": blocks,
+            "stop_reason": stop_reason,
+            "usage": usage or {"output_tokens": 100},
+        }
+
+    @staticmethod
+    def _text(s):
+        return {"type": "text", "text": s}
+
+    def test_a_single_text_block_passes_through_unchanged(self):
+        text, stop = review_prompt.extract_review(self._response([self._text("hello")]))
+        self.assertEqual(text, "hello")
+        self.assertEqual(stop, "end_turn")
+
+    def test_every_text_block_is_joined_never_just_the_first(self):
+        # A reply split across blocks (interleaved thinking does this) must not
+        # post a truncated review -- and, since #501, must not lose the verdict.
+        text, _ = review_prompt.extract_review(
+            self._response([self._text("### [BLOCKING]"), self._text("### Verdict")])
+        )
+        self.assertIn("### [BLOCKING]", text)
+        self.assertIn("### Verdict", text)
+
+    def test_blocks_are_joined_on_a_blank_line_so_the_verdict_still_extracts(self):
+        # The SEAM CONTRACT, round-tripped through the real extractor rather
+        # than asserted as a string shape. Blocks carry no trailing-newline
+        # guarantee: an empty join glues the findings line onto the `### Verdict`
+        # heading, killing the start-of-line anchor extract_verdict needs and
+        # reding the check for no reason. This can only pass while the two agree.
+        text, _ = review_prompt.extract_review(
+            self._response(
+                [self._text("`a.sh:1` -- unquoted."), self._text("### Verdict\n**APPROVE** -- ok.\n")]
+            )
+        )
+        self.assertEqual(review_prompt.extract_verdict(text), "APPROVE")
+
+    def test_blocks_are_selected_by_TYPE_not_by_carrying_a_text_key(self):
+        # Raw reasoning must never reach the PR comment. The non-text block here
+        # carries a `text` key ON PURPOSE: with a bare {"type": "thinking",
+        # "thinking": ...} fixture this test passes even with the type filter
+        # deleted, because .get("text") yields nothing to notice. The invariant
+        # is "select on type", so the fixture has to make a type-blind selector
+        # actually leak.
+        text, _ = review_prompt.extract_review(
+            self._response(
+                [
+                    {"type": "thinking", "thinking": "reasoning", "text": "LEAKED"},
+                    self._text("### Verdict\n**APPROVE** -- ok.\n"),
+                ]
+            )
+        )
+        self.assertNotIn("LEAKED", text)
+        self.assertNotIn("reasoning", text)
+        self.assertEqual(review_prompt.extract_verdict(text), "APPROVE")
+
+    def test_a_truncated_review_is_bannered_and_still_returned(self):
+        # Fail-safe, not fail-silent: the operator still reads what was written.
+        text, stop = review_prompt.extract_review(
+            self._response([self._text("### Verdict\n**APPROVE**\n")], stop_reason="max_tokens")
+        )
+        self.assertEqual(stop, "max_tokens")
+        self.assertIn("truncated", text.lower())
+        self.assertIn("**APPROVE**", text)
+
+    def test_both_budget_messages_carry_the_SAME_hint_and_cannot_drift(self):
+        # The heredoc's banner said ".github/workflows/claude-review.yml" long
+        # after the constant moved into this module -- the one message an
+        # operator reads at 3am sent them to the wrong file. So this pins the
+        # two sites AGAINST _BUDGET_HINT rather than against a literal: two
+        # independent assertions on the same expected string would both stay
+        # green while the banner and the error drifted apart.
+        banner, _ = review_prompt.extract_review(
+            self._response([self._text("x")], stop_reason="max_tokens")
+        )
+        with self.assertRaises(review_prompt.ReviewExtractionError) as ctx:
+            review_prompt.extract_review(
+                self._response([{"type": "thinking", "thinking": "..."}], stop_reason="max_tokens")
+            )
+        for message in (banner, str(ctx.exception)):
+            self.assertIn(review_prompt._BUDGET_HINT, message)
+        # And the hint must still name the file that actually holds the knob.
+        self.assertIn("lib/review_prompt.py", review_prompt._BUDGET_HINT)
+        self.assertNotIn("claude-review.yml", review_prompt._BUDGET_HINT)
+
+    def test_thinking_eating_the_whole_budget_is_diagnosed_by_name(self):
+        # THE HOLE (#504). Thinking-only content + stop_reason=max_tokens is the
+        # exact shape studio PR #484 returned (output_tokens=16000,
+        # thinking_tokens=16000, zero text blocks).
+        with self.assertRaises(review_prompt.ReviewExtractionError) as ctx:
+            review_prompt.extract_review(
+                self._response(
+                    [{"type": "thinking", "thinking": "..."}],
+                    stop_reason="max_tokens",
+                    usage={"output_tokens": 32000, "thinking_tokens": 32000},
+                )
+            )
+        msg = str(ctx.exception)
+        self.assertIn("max_tokens", msg)
+        self.assertIn("lib/review_prompt.py", msg)
+        # The usage numbers are the whole diagnosis -- they are what tell the
+        # operator the budget was spent on thinking rather than on findings.
+        self.assertIn("32000", msg)
+
+    def test_no_text_block_without_max_tokens_still_refuses(self):
+        # Fail-closed on the shape we have no story for, too.
+        with self.assertRaises(review_prompt.ReviewExtractionError):
+            review_prompt.extract_review(
+                self._response([{"type": "thinking", "thinking": "..."}], stop_reason="end_turn")
+            )
+
+    def test_an_empty_or_missing_content_refuses(self):
+        # subTest so the first failure does not hide which shapes still break.
+        for response in ({"content": []}, {"stop_reason": "end_turn"}, {}, {"content": {}}):
+            with self.subTest(response=response):
+                with self.assertRaises(review_prompt.ReviewExtractionError):
+                    review_prompt.extract_review(response)
+
+    def test_a_non_dict_response_refuses(self):
+        for response in (None, [], "APPROVE"):
+            with self.subTest(response=response):
+                with self.assertRaises(review_prompt.ReviewExtractionError):
+                    review_prompt.extract_review(response)
+
+    def test_a_non_string_text_is_DIAGNOSED_not_a_raw_traceback(self):
+        # `"\n\n".join` on a non-str raises a bare TypeError. Exit is still 1
+        # so the gate stays closed either way -- but a traceback is the generic
+        # dump this function exists to delete, so the refusal must say what is
+        # wrong with the response.
+        for bad in (None, 123, {"nested": "block"}):
+            with self.subTest(text=bad):
+                with self.assertRaises(review_prompt.ReviewExtractionError) as ctx:
+                    review_prompt.extract_review(
+                        self._response([{"type": "text", "text": bad}])
+                    )
+                self.assertIn("non-string", str(ctx.exception))
+
+
+class TestExtractCli(unittest.TestCase):
+    """The workflow calls the TESTED extractor -- not an untestable heredoc."""
+
+    def _run(self, response_text):
+        with tempfile.TemporaryDirectory() as tmp:
+            resp = Path(tmp) / "response.json"
+            review = Path(tmp) / "review.txt"
+            stop = Path(tmp) / "stop_reason.txt"
+            resp.write_text(response_text, encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(CLI), "--extract", str(resp), str(review), str(stop)],
+                capture_output=True,
+                text=True,
+            )
+            return proc, (review.read_text() if review.exists() else None), (
+                stop.read_text() if stop.exists() else None
+            )
+
+    def test_cli_writes_the_review_and_the_stop_reason(self):
+        proc, review, stop = self._run(
+            json.dumps(
+                {
+                    "content": [{"type": "text", "text": "### Verdict\n**APPROVE** -- ok.\n"}],
+                    "stop_reason": "end_turn",
+                    "usage": {"output_tokens": 12},
+                }
+            )
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(review_prompt.extract_verdict(review), "APPROVE")
+        self.assertEqual(stop, "end_turn")
+
+    def test_cli_refuses_and_writes_NOTHING_when_thinking_ate_the_budget(self):
+        # stop_reason.txt must not appear: a caller reading it would otherwise
+        # be reading a stop_reason for a review that does not exist.
+        proc, review, stop = self._run(
+            json.dumps(
+                {
+                    "content": [{"type": "thinking", "thinking": "..."}],
+                    "stop_reason": "max_tokens",
+                    "usage": {"output_tokens": 32000, "thinking_tokens": 32000},
+                }
+            )
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("max_tokens", proc.stderr)
+        self.assertIn("lib/review_prompt.py", proc.stderr)
+        self.assertIsNone(review)
+        self.assertIsNone(stop)
+
+    def test_cli_refuses_on_malformed_json(self):
+        proc, _, _ = self._run("{not json")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("not an approval", proc.stderr)
+
+    def test_cli_refuses_on_a_missing_file(self):
+        proc = subprocess.run(
+            [sys.executable, str(CLI), "--extract", "/nonexistent/r.json", "/tmp/a", "/tmp/b"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 1)
+
+    def test_a_wrong_arity_flag_REFUSES_and_never_falls_through_to_the_build(self):
+        # The dispatcher matched arity BEFORE the flag, so a 6-arg --extract
+        # fell through to the build path: `--extract` was swallowed as
+        # files.txt, and the caller's LAST argument was overwritten with a
+        # request payload -- on exit 0. An exit-0 wrong operation is the exact
+        # failure shape this module lifts out of the workflow's heredoc.
+        with tempfile.TemporaryDirectory() as tmp:
+            victim = Path(tmp) / "victim.txt"
+            victim.write_text("ORIGINAL", encoding="utf-8")
+            # EVERY argument is an absolute tmp path, including the ones that
+            # only matter when the guard is broken: on the fall-through this
+            # test exists to catch, the last argument is an OUTPUT path, so
+            # relative names here would litter the repo root on failure (they
+            # did) and a run from a different cwd would land somewhere else
+            # again. A test must not write outside its tmpdir even when the
+            # code it guards is broken.
+            def p(name):
+                return str(Path(tmp) / name)
+
+            for argv in (
+                ["--extract", p("a.json"), p("b.txt"), p("c.txt"), str(victim)],  # too many
+                ["--extract", p("a.json")],                                       # too few
+                ["--verdict", p("a.txt"), p("b.txt"), p("c.txt"), str(victim)],   # too many
+                ["--wat", p("a"), p("b"), p("c"), str(victim)],                   # unknown flag
+            ):
+                with self.subTest(argv=argv):
+                    proc = subprocess.run(
+                        [sys.executable, str(CLI)] + argv, capture_output=True, text=True
+                    )
+                    self.assertEqual(proc.returncode, 2, proc.stdout)
+                    self.assertNotIn("review scope=", proc.stdout)
+                    self.assertEqual(victim.read_text(), "ORIGINAL")
 
 
 if __name__ == "__main__":
