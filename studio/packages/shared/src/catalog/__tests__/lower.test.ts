@@ -62,6 +62,20 @@ describe('lowerNodeOutputs', () => {
     expect(getActivity('http_request')!.outputs[0]!.name).toBe('status');
   });
 
+  it('seeds a node that is a container (loop/stage) child like any other', () => {
+    // `lowerNodeOutputs` takes the FLAT `nodes[]` array and never sees
+    // `containers` — a container references its children by id, so a child node
+    // is just an ordinary entry here. There is no separate nested-node path:
+    // membership is invisible to this helper, so a would-be loop/stage child is
+    // seeded exactly like a top-level node.
+    const [child] = lowerNodeOutputs([node('loop_child', 'http_request')]);
+    expect(child!.config['outputs']).toEqual([
+      { name: 'status', type: 'number' },
+      { name: 'body', type: 'string' },
+      { name: 'headers', type: 'json' },
+    ]);
+  });
+
   it('preserves the rest of the node config while seeding outputs', () => {
     const [lowered] = lowerNodeOutputs([node('a', 'http_request', { url: 'https://x' })]);
     expect(lowered!.config['url']).toBe('https://x');

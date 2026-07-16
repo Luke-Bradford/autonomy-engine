@@ -35,12 +35,18 @@ import { getActivity } from './registry.js';
  * (`engine/outputs.ts`) so `catalog/` imports only schema TYPES from
  * `engine`/`schemas` (no runtime `catalog → engine` edge — those layers are
  * catalog-free by design). For the WRITE caller the literal check is exactly
- * `outputContract`'s `absent`: that caller (`createPipelineVersion`) has already
- * run the nodes through `StrictNodeSchema` — which refuses a corrupt (`invalid`)
- * `outputs` — so by then only `absent`/`declared` remain and `=== undefined`
- * selects precisely `absent`. That equivalence is the caller's context; the
- * "never overwrite a present value" rule above is what keeps this safe even for a
- * caller that has not.
+ * `outputContract`'s `absent`, and the reason is an ordering that is easy to
+ * misread. `createPipelineVersion` passes `parsed.nodes`, where `parsed` is the
+ * output of `NewPipelineVersionSchema.parse` — and that schema's `nodes` field is
+ * itself `z.array(StrictNodeSchema)`. So the nodes handed to this helper have
+ * ALREADY been through `StrictNodeSchema` (which refuses a corrupt `invalid`
+ * `outputs`) via that FIRST parse, before lowering — leaving only `absent`/
+ * `declared`, so `=== undefined` selects precisely `absent`. (The `z.array(
+ * StrictNodeSchema).parse(lowerNodeOutputs(...))` wrapper at the call site is a
+ * SECOND, distinct pass: it re-validates the SEEDED configs AFTER lowering, per
+ * F13a's strict-on-write invariant — not the pass this equivalence rests on.)
+ * That equivalence is the caller's context; the "never overwrite a present value"
+ * rule above is what keeps this safe even for a caller that has not parsed first.
  *
  * An UNKNOWN type (no catalog entry) and an uncatalogued `call_pipeline` node are
  * left `absent` — there is no catalog default to seed, and a call node's outputs
