@@ -3,6 +3,7 @@ import {
   CATALOG_VERSION,
   type Edge,
   type EdgeOn,
+  type Engine,
   type EngineEvent,
   type Node,
   type NewPipelineVersion,
@@ -317,5 +318,59 @@ describe('driver — reduce-first finishRun (#477)', () => {
     expect(
       (publishedFinishes[0]!.payload as Extract<EngineEvent, { type: 'run.finished' }>).outcome,
     ).toBe('success');
+  });
+
+  // A `running` state to feed a wrapped engine whose `reduce` never accepts.
+  function runningState(db: Db) {
+    const pvId = seedVersion(db, [node('a')]);
+    const run = seedRun(db, pvId);
+    const engine = buildEngine(getPipelineVersion(db, pvId)!);
+    appendEngineEvent(db, {
+      type: 'run.started',
+      runId: run.id,
+      pipelineVersionId: pvId,
+      startedAt: new Date(run.startedAt).toISOString(),
+      params: {},
+    });
+    const state = engine.projectRunState(loadEngineEvents(db, run.id));
+    expect(state.status).toBe('running');
+    return { engine, state, runId: run.id };
+  }
+
+  // The reduce-first loop's termination is STRUCTURAL, not a matter of trusting
+  // the reducer's "failure is always accepted" contract: a reducer that keeps
+  // rejecting the driver's own finish (always offering a fresh replacement) hits
+  // the fold cap and THROWS (→ the caller's `terminalizeInterrupted`) rather than
+  // spinning forever under the per-run lock.
+  it('throws instead of spinning when the reducer never converges to an accepted finish', async () => {
+    const { db } = freshDb();
+    const { engine, state } = runningState(db);
+    const neverAccepts: Engine = {
+      ...engine,
+      // Always non-terminal, always a fresh finishRun replacement → never accepts.
+      reduce: (s) => ({
+        state: s,
+        commands: [{ type: 'finishRun', outcome: 'failure', reason: 'invalid_event' }],
+        diagnostics: ['forced non-convergence'],
+      }),
+    };
+    await expect(
+      pump(deps(db), neverAccepts, state, [{ type: 'finishRun', outcome: 'success' }]),
+    ).rejects.toThrow(/did not converge/);
+  });
+
+  // The other backstop: a reducer that rejects with NO replacement finishRun (so
+  // there is nothing to fold in the rejected event's place) throws rather than
+  // building a `run.finished` from an undefined command.
+  it('throws when the reducer rejects with no replacement finishRun', async () => {
+    const { db } = freshDb();
+    const { engine, state } = runningState(db);
+    const noReplacement: Engine = {
+      ...engine,
+      reduce: (s) => ({ state: s, commands: [], diagnostics: ['rejected, no replacement'] }),
+    };
+    await expect(
+      pump(deps(db), noReplacement, state, [{ type: 'finishRun', outcome: 'success' }]),
+    ).rejects.toThrow(/no replacement finishRun/);
   });
 });
