@@ -115,6 +115,26 @@ describe('secrets routes (item 7 / S1 — the standalone secret SOURCE)', () => 
     }
   });
 
+  it('an over-long name / secret is a 400 — the encrypt-and-store payload is bounded', async () => {
+    const app2 = await buildTestApp();
+    try {
+      const longName = await app2.inject({
+        method: 'POST',
+        url: '/api/secrets',
+        payload: { name: 'n'.repeat(256), secret: 'p' },
+      });
+      expect(longName.statusCode).toBe(400);
+      const longSecret = await app2.inject({
+        method: 'POST',
+        url: '/api/secrets',
+        payload: { name: 'ok', secret: 's'.repeat(16385) },
+      });
+      expect(longSecret.statusCode).toBe(400);
+    } finally {
+      await app2.close();
+    }
+  });
+
   it('DELETE removes a standalone secret; a second GET no longer lists it', async () => {
     const app2 = await buildTestApp();
     try {

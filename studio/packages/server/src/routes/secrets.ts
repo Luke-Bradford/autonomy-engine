@@ -21,10 +21,17 @@ import { requireOwned } from './util.js';
  * attempt to smuggle `ownerId`/`ref` is rejected loudly rather than silently
  * dropped — no reason to be lenient about unknown keys on this route.
  */
+// Upper bounds so a client cannot submit an unbounded payload to be encrypted
+// and stored. `name` is a short human-chosen identifier; `secret` is generous
+// enough for any realistic credential (an RSA-4096 PEM is ~3.2 KB, a full cert
+// chain a few KB more) while still capping the encrypt-and-store cost.
+const MAX_SECRET_NAME_LEN = 255;
+const MAX_SECRET_VALUE_LEN = 16384;
+
 const SecretWriteBodySchema = z
   .object({
-    name: z.string().min(1),
-    secret: z.string().min(1),
+    name: z.string().min(1).max(MAX_SECRET_NAME_LEN),
+    secret: z.string().min(1).max(MAX_SECRET_VALUE_LEN),
   })
   .strict();
 
