@@ -18,6 +18,7 @@ import type { OutputType } from '../schemas/pipeline.js';
 import { outputContract, type CheckedContract, type OutputContract } from './outputs.js';
 import {
   backEdgeResetBody,
+  containerMembership,
   effectiveEdges,
   forwardDescendants,
   nodeForwardAdjacency,
@@ -249,8 +250,49 @@ export function createEngine(doc: EngineDoc): Engine {
   // container's REAL children still run, so a doc that is wrong in one place does
   // not silently stop dispatching work that was authored correctly.
   const rawContainers: Container[] = doc.containers ?? [];
+  // Membership is resolved to ONE owner per child by the shared
+  // `containerMembership` SSOT (FIRST-declared-wins), so this reducer and
+  // `validateDoc` can never disagree on who owns a child — the divergence #492
+  // closed, where the validator resolved FIRST-wins and reported it while this
+  // map silently took the LAST owner. Two different questions hang off a
+  // container's children and the two must stay SEPARATE:
+  //   - "does this child have node state to read, under THIS container?" — the
+  //     filtered `containers.children` below, which is what stops the reducer
+  //     throwing (#487) AND what neutralizes a duplicate down to its one owner.
+  //   - "who OWNS this id?" — this map, which CLASSIFIES EDGES (internal vs
+  //     top-level vs cross-boundary) and must reflect what the author wrote.
+  // Membership is built over RAW children (not the #487-filtered set): deriving
+  // it from the filtered set would conflate the two, and the effect is not
+  // academic — dropping a container-id child would delete it from this map, so an
+  // edge leaving it silently stops being cross-boundary, is no longer voided from
+  // `topOutgoing`, and absorbs a failure that nothing handled — the exact
+  // fail-open #480 closed, re-opened for one doc class, flipping a run from
+  // `failure` to `success`. Pinned both ways in `malformed-doc.test.ts`.
+  const { owner: childToContainer, duplicates: childDuplicates } =
+    containerMembership(rawContainers);
+  const childSet = new Set(childToContainer.keys());
+  // #492: a NODE child claimed by more than one container is IGNORED in every
+  // container but its first-declared owner (below, `kept` drops it), so exactly
+  // one container enters, dispatches, awaits and projects it. Say so — same
+  // neutralize-and-diagnose posture as the non-node case. A NON-node duplicate is
+  // already fully described by the non-node message (it runs nowhere), so the
+  // duplicate framing, which promises it runs under its first owner, would be a
+  // lie for it — reported only for node children.
+  for (const { child, first, container } of childDuplicates) {
+    if (!nodeById.has(child)) continue;
+    docDefects.push(
+      `container '${container}': child '${child}' also belongs to container '${first}' and is ` +
+        `IGNORED here: a child must belong to exactly one container, so it is entered, ` +
+        `dispatched and awaited only under '${first}' (its first-declared owner) — treated as ` +
+        `if it were not authored in '${container}'`,
+    );
+  }
   const containers: Container[] = rawContainers.map((c) => {
-    const kept = c.children.filter((ch) => nodeById.has(ch));
+    // Keep a child only if it is a node AND this container is its resolved owner:
+    // the first conjunct neutralizes a non-node id (#487), the second neutralizes
+    // a duplicate down to its one owner (#492). Both keep every downstream reader
+    // correct BY CONSTRUCTION rather than by remembering to guard.
+    const kept = c.children.filter((ch) => nodeById.has(ch) && childToContainer.get(ch) === c.id);
     if (kept.length === c.children.length) return c;
     for (const ch of c.children) {
       if (nodeById.has(ch)) continue;
@@ -264,28 +306,10 @@ export function createEngine(doc: EngineDoc): Engine {
   });
   const containerById = new Map<string, Container>(containers.map((c) => [c.id, c]));
   const containerIds = containers.map((c) => c.id);
-  // Membership is read from the RAW children, and that is load-bearing rather
-  // than incidental. Two different questions hang off a container's children and
-  // the #487 filter must answer only ONE of them:
-  //   - "does this child have node state to read?" — the filtered `containers`
-  //     above, which is what stops the reducer throwing.
-  //   - "who OWNS this id?" — this map, which CLASSIFIES EDGES (internal vs
-  //     top-level vs cross-boundary) and must reflect what the author actually
-  //     wrote.
-  // Deriving membership from the filtered set conflates them, and the effect is
-  // not academic: dropping a container-id child would delete it from this map, so
-  // an edge leaving it silently stops being cross-boundary, is no longer voided
-  // from `topOutgoing`, and absorbs a failure that nothing handled — the exact
-  // fail-open #480 closed, re-opened for one doc class, flipping a run from
-  // `failure` to `success`. A doc that never threw would have changed answer.
-  // Symmetrically, two children of one container would stop being INTERNAL to it,
-  // freeing the target to fire as an unconditional root.
-  // Pinned both ways in `malformed-doc.test.ts`.
-  const childToContainer = new Map<string, string>();
-  for (const c of rawContainers) for (const ch of c.children) childToContainer.set(ch, c.id);
-  const childSet = new Set(childToContainer.keys());
-  // Unaffected by raw-vs-filtered: the filter only ever removes NON-node ids, and
-  // this filters node ids.
+  // Derived from `childSet` (the membership keys over RAW children), NOT the
+  // `kept`-filtered bodies: a top-level node is one no container claims. A
+  // duplicate node child is still claimed (by its first owner), so it stays out
+  // of `topLevelNodeIds` — it does not leak back as an unconditional root.
   const topLevelNodeIds = nodeIds.filter((id) => !childSet.has(id));
 
   // Endpoints for edges = node ids ∪ container ids (an OUTER edge may name a
@@ -1329,12 +1353,14 @@ export function createEngine(doc: EngineDoc): Engine {
    * they are not stuck on anything and naming them would point the reader at an
    * innocent bystander.
    *
-   * DEDUPED, because a child can be listed by more than one container. That doc
-   * is invalid and `childToContainer` is last-wins over it (#492), but this is a
-   * REPORTER: it must describe what it finds, not assume the doc is well-formed
-   * — the whole reason it runs is that the doc was never validated. Without the
-   * dedupe a node in two active containers is named twice (probed:
-   * `{c1, c2, n1, n2, n1, n2}`), which contradicts this docblock.
+   * The `Set` DEDUPES defensively. Since #492 that is belt-and-suspenders rather
+   * than load-bearing: `childToContainer` is now FIRST-wins and a duplicate child
+   * is neutralized out of every non-owning container's body (`containers` above),
+   * so a node appears in exactly ONE container's `children` and can no longer be
+   * named twice by two active containers. It is kept anyway — this is a REPORTER
+   * over a doc the write gate never validated, and describing what it finds
+   * without assuming well-formedness is cheaper to keep than to reason about
+   * removing if that neutralization ever changes.
    *
    * CAPPED for the same reason `run.started` loops over `docDefects` instead of
    * spreading them: `children` has no schema max and a pre-#444-gate row was

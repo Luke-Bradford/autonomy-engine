@@ -389,3 +389,129 @@ describe('an empty-bodied LOOP must not spin the reducer forever', () => {
     expect(errors).toEqual([expect.stringContaining('makes no progress')]);
   });
 });
+
+describe('#492 — a child shared by two containers must resolve to ONE owner, and say so', () => {
+  // The fourth malformed shape, and the one the earlier sweep (#487/#488) left
+  // out on its own boundary: a doc whose container children are NOT disjoint.
+  // `validateDoc` already reports it ("must be disjoint", `childOwner` FIRST-wins,
+  // params.ts) and the write gate refuses it (#444) — but rows written before
+  // that gate were never validated and still reach the reducer. Before this fix
+  // the reducer's `childToContainer` was LAST-wins and SILENT: with `n1` a child
+  // of both `c1` and `c2`, `n1` ran once yet BOTH containers claimed success off
+  // that single execution and BOTH projected its outputs, with NOTHING saying the
+  // doc was ambiguous — a data-shaped lie.
+  //
+  // The fix mirrors #480/#487's neutralize-and-diagnose posture: membership is
+  // now FIRST-wins (agreeing with the validator, whose error names the FIRST
+  // owner as incumbent), derived from ONE shared helper (`containerMembership`)
+  // so validator and reducer can never disagree, and the duplicate child is
+  // dropped from every non-first container's effective body so exactly one
+  // container enters, dispatches, awaits and projects it.
+
+  it('says so: the ambiguous child is reported once per run, naming its first owner', () => {
+    const eng = createEngine({
+      nodes: [node('n1')],
+      edges: [],
+      containers: [
+        { id: 'c1', kind: 'stage', children: ['n1'] },
+        { id: 'c2', kind: 'stage', children: ['n1'] },
+      ],
+    } satisfies EngineDoc);
+    const { diagnostics } = runAll(eng);
+    const hit = diagnostics.filter((d) => d.includes("'n1'") && d.includes('IGNORED'));
+    expect(hit).toHaveLength(1);
+    // Names the non-first container it is ignored in, and the first-declared
+    // owner it runs under — the same FIRST-wins verdict the validator states.
+    expect(hit[0]).toContain("container 'c2'");
+    expect(hit[0]).toContain("'c1'");
+    expect(hit[0]).toContain('first-declared owner');
+  });
+
+  // The observable proof that membership is FIRST-wins, not last-wins: attribute
+  // the shared child's FAILURE. Under FIRST-wins `n1` belongs to `c1`, so `c1`
+  // fails on the unhandled child failure and its outer failure-handler fires;
+  // `c2` is left empty and succeeds vacuously. Under the old LAST-wins the answer
+  // is the exact mirror image (`c2` fails, `c1` empty→success, the handler
+  // skips), so this pins the direction unambiguously.
+  it('the FIRST container owns the shared child; its failure fails c1, not c2', () => {
+    const eng = createEngine({
+      nodes: [node('n1'), node('handler')],
+      edges: [{ id: 'e', from: 'c1', to: 'handler', on: 'failure' }],
+      containers: [
+        { id: 'c1', kind: 'stage', children: ['n1'] },
+        { id: 'c2', kind: 'stage', children: ['n1'] },
+      ],
+    } satisfies EngineDoc);
+    const { state, order } = runAll(eng, { outcomes: { n1: 'failure' } });
+    expect(order).toEqual(['n1', 'handler']);
+    expect(state.containers['c1']?.status).toBe('failure');
+    expect(state.containers['c2']?.status).toBe('success');
+    expect(state.nodes['handler']?.status).toBe('success');
+  });
+
+  // Ticket point 3, pinned directly: the non-first container must NOT project the
+  // shared child's outputs. `runAll` hardcodes empty outputs, so this drives the
+  // reducer by hand to give `n1` a real output and asserts `c2` projects none of
+  // it — `${nodes.c2.output.x}` no longer resolves off an execution `c2` does not
+  // own. (Bespoke rather than an extra `runAll` option on purpose: #499 already
+  // tracks that harness's drift.)
+  it('the non-first container projects NONE of the shared child outputs', () => {
+    const eng = createEngine({
+      nodes: [node('n1')],
+      edges: [],
+      containers: [
+        { id: 'c1', kind: 'stage', children: ['n1'] },
+        { id: 'c2', kind: 'stage', children: ['n1'] },
+      ],
+    } satisfies EngineDoc);
+    let state = eng.seedState();
+    const pending: EngineCommand[] = [];
+    const apply = (ev: EngineEvent): void => {
+      const r = eng.reduce(state, ev);
+      state = r.state;
+      pending.push(...r.commands);
+    };
+    apply({ type: 'run.started', runId: RUN, pipelineVersionId: PV, params: {} });
+    let guard = 0;
+    while (pending.length) {
+      if (guard++ > 2000) throw new Error('driver did not converge');
+      const c = pending.shift()!;
+      if (c.type === 'finishRun') {
+        apply({ type: 'run.finished', runId: RUN, outcome: c.outcome, reason: c.reason });
+        continue;
+      }
+      if (c.type !== 'dispatchNode') continue;
+      apply({
+        type: 'node.dispatched',
+        runId: RUN,
+        nodeId: c.nodeId,
+        attemptId: c.attemptId,
+        idempotent: true,
+      });
+      apply({
+        type: 'node.succeeded',
+        runId: RUN,
+        nodeId: c.nodeId,
+        attemptId: c.attemptId,
+        outputs: { x: 1 },
+      });
+    }
+    expect(state.outputs['c1']).toEqual({ x: 1 });
+    expect(state.outputs['c2']).toEqual({});
+  });
+
+  // Agreement pin: the validator flags the SAME doc, so the reducer neutralizing
+  // it is closing a gap the validator only warns about — not inventing a rule.
+  it('validateDoc still reports the shared child as a disjointness error', () => {
+    const errors = validateDoc({
+      params: [],
+      nodes: [{ id: 'n1', type: 'agent_task', config: {}, position: { x: 0, y: 0 } }],
+      edges: [],
+      containers: [
+        { id: 'c1', kind: 'stage', children: ['n1'] },
+        { id: 'c2', kind: 'stage', children: ['n1'] },
+      ],
+    } as never);
+    expect(errors.join(' ')).toContain('must be disjoint');
+  });
+});

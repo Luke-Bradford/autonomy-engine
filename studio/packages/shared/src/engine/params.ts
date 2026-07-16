@@ -953,19 +953,27 @@ export function validateDoc(
   for (const id of nodeIdList) descendants.set(id, forwardDescendants(id, nodeAdj));
 
   // Container children: existence + disjointness; loop/stage exit configuration.
-  const childOwner = new Map<string, string>();
+  // Ownership (disjointness) is resolved by the shared `containerMembership` SSOT,
+  // FIRST-declared-wins, so the reducer classifies edges and neutralizes duplicates
+  // against the SAME owner this validator names — the divergence #492 closed, where
+  // the reducer silently took the LAST owner instead. Existence and loop/stage
+  // config stay here.
+  const { owner: childOwner } = containerMembership(containers);
   for (const c of containers) {
     for (const ch of c.children) {
       if (!nodeIdSet.has(ch)) {
         errors.push(`container '${c.id}': child '${ch}' is not a node in this pipeline`);
       }
-      const prev = childOwner.get(ch);
-      if (prev !== undefined && prev !== c.id) {
+      // Disjointness read from the shared owner map (FIRST-wins): a child whose
+      // resolved owner is some OTHER container is a duplicate here. Emitted per
+      // occurrence, interleaved with the existence error, to keep this validator's
+      // error ARRAY — not just its message text — byte-identical to the pre-#492
+      // pass this replaced.
+      const own = childOwner.get(ch);
+      if (own !== undefined && own !== c.id) {
         errors.push(
-          `container '${c.id}': child '${ch}' already belongs to container '${prev}' (children must be disjoint)`,
+          `container '${c.id}': child '${ch}' already belongs to container '${own}' (children must be disjoint)`,
         );
-      } else {
-        childOwner.set(ch, c.id);
       }
     }
     if (c.kind === 'loop' && c.exitWhen === undefined) {
@@ -2061,4 +2069,55 @@ export function backEdgeResetBody(
     if (reachedByTarget && reachesSource) body.push(n);
   }
   return body;
+}
+
+/** A single re-declaration of an already-owned container child, in document order. */
+export interface ContainerChildDuplicate {
+  /** the child id claimed by more than one container. */
+  readonly child: string;
+  /** the FIRST container that declared it — the owner that wins. */
+  readonly first: string;
+  /** the later container whose claim is overridden. */
+  readonly container: string;
+}
+
+/** Container membership resolved to ONE owner per child, plus the claims it overrode. */
+export interface ContainerMembership {
+  /** child id → the FIRST container that declared it. */
+  readonly owner: Map<string, string>;
+  /** each re-declaration of an already-owned child, in document order. */
+  readonly duplicates: readonly ContainerChildDuplicate[];
+}
+
+/**
+ * Resolve which container OWNS each child, FIRST-declared-wins, and collect the
+ * later claims that resolution overrode.
+ *
+ * SSOT: `validateDoc` (which turns `duplicates` into "must be disjoint" errors)
+ * and the reducer (which uses `owner` to classify edges and neutralizes each
+ * duplicate out of every non-owning container's body, reporting it as a
+ * `docDefect`) both read this — so the two can never disagree on who owns a
+ * child. That disagreement was #492: the validator resolved FIRST-wins and
+ * reported it, while the reducer's `childToContainer` silently took the LAST
+ * owner, so a non-disjoint doc had two containers both claiming success off one
+ * child execution with nothing saying the doc was ambiguous.
+ *
+ * Built over RAW children — a non-node id gets an owner too. Existence is a
+ * SEPARATE question each caller answers itself; membership must reflect what the
+ * author wrote so edge classification stays honest (the reason the reducer reads
+ * membership from raw, not `#487`-filtered, children).
+ */
+export function containerMembership(containers: Container[]): ContainerMembership {
+  const owner = new Map<string, string>();
+  const duplicates: ContainerChildDuplicate[] = [];
+  for (const c of containers) {
+    for (const ch of c.children) {
+      const prev = owner.get(ch);
+      if (prev === undefined) owner.set(ch, c.id);
+      else if (prev !== c.id) duplicates.push({ child: ch, first: prev, container: c.id });
+      // prev === c.id (one container lists a child twice) is not a
+      // cross-container duplicate — it already resolves to this container.
+    }
+  }
+  return { owner, duplicates };
 }
