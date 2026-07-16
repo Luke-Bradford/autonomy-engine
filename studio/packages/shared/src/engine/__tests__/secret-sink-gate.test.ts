@@ -69,6 +69,18 @@ describe('scanSecretSinks — reject off-sink', () => {
     const errors = scan({ a: MARKER, b: { c: MARKER } }, []);
     expect(errors.length).toBe(2);
   });
+
+  it('refuses a marker even when config is a top-level ARRAY (no field ⇒ no sink)', () => {
+    const errors: string[] = [];
+    scanSecretSinks('nodes.n.config', [MARKER] as unknown, ['secretHeaders'], errors);
+    expect(errors).toEqual(['nodes.n.config[0]: secret reference is not allowed here']);
+  });
+
+  it('refuses a config that is itself a bare marker', () => {
+    const errors: string[] = [];
+    scanSecretSinks('nodes.n.config', MARKER as unknown, ['$secret'], errors);
+    expect(errors).toEqual(['nodes.n.config: secret reference is not allowed here']);
+  });
 });
 
 describe('scanSecretSinks — §2 marker-shape rules (at a declared sink)', () => {
@@ -77,6 +89,17 @@ describe('scanSecretSinks — §2 marker-shape rules (at a declared sink)', () =
     // Message is PRESENT; the existing `${}` scan may also flag the inner ref,
     // so assert presence, not an exact count.
     expect(errors.some((e) => /literal/.test(e))).toBe(true);
+  });
+
+  it('rejects a name carrying a $${ escape (substitute would rewrite it to a different name)', () => {
+    // `substitute` recurses into the marker and turns `foo$${x}` into `foo${x}`,
+    // so the gated name would differ from the S3-resolved name — refuse it.
+    const errors = scan({ apiKey: { $secret: 'foo$${x}' } }, ['apiKey']);
+    expect(errors.some((e) => /literal/.test(e))).toBe(true);
+  });
+
+  it('accepts a plain literal name at a sink (the happy path)', () => {
+    expect(scan({ apiKey: { $secret: 'prod/db-password' } }, ['apiKey'])).toEqual([]);
   });
 
   it('rejects a marker with an extra key (strict)', () => {

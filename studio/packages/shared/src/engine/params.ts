@@ -875,13 +875,21 @@ export function scanSecretSinks(
   sinkFields: readonly string[],
   errors: string[],
 ): void {
-  if (config === null || typeof config !== 'object' || Array.isArray(config)) return;
   // Defensive: a `config` shaped like a bare marker (a top-level `$secret` key)
   // is never at a sink — the `config` root is not itself a field.
   if (isSecretRef(config)) {
     errors.push(`${where}: secret reference is not allowed here`);
     return;
   }
+  // A non-object `config` has no field NAMES, so nothing under it is a sink ⇒
+  // any marker it holds is refused (`allowed = false`). `StrictNodeSchema` keeps
+  // `config` an object today, so this is defence-in-depth parity with the `${}`
+  // `scan` (which also recurses a top-level array), never a live path.
+  if (Array.isArray(config)) {
+    config.forEach((v, i) => walkSecretMarkers(`${where}[${i}]`, v, false, errors));
+    return;
+  }
+  if (config === null || typeof config !== 'object') return;
   for (const key of Object.keys(config as Record<string, unknown>).sort()) {
     walkSecretMarkers(
       `${where}.${key}`,
@@ -938,9 +946,17 @@ function validateSecretMarker(where: string, value: unknown, errors: string[]): 
   // The `$secret` value must be a LITERAL name — a `${}` inside it would let
   // `substitute` interpolate it, defeating the "secret stays out of the inert
   // expression language" guarantee (spec §2). Same classifier the runtime reads.
-  const mode = interpolationMode(parsed.data.$secret);
-  if (mode.unterminatedAt !== null || mode.matches.length > 0) {
-    errors.push(`${where}: secret name must be a literal, not a \${} expression`);
+  //
+  // The `$${` escape is refused for the SAME invariant: `substitute` recurses
+  // into the marker and rewrites `$${` → `${` (`expr.ts` restoreEscapes), so an
+  // authored `foo$${x}` would resolve at S3 as a DIFFERENT name (`foo${x}`) than
+  // the one this gate blessed. Rejecting it guarantees the name `validateRefs`
+  // approves is byte-for-byte the name dispatch resolves — the marker really
+  // does "survive substitution unchanged" (spec §2), not merely look like it.
+  const name = parsed.data.$secret;
+  const mode = interpolationMode(name);
+  if (mode.unterminatedAt !== null || mode.matches.length > 0 || name.includes('$${')) {
+    errors.push(`${where}: secret name must be a literal, not a \${} expression or $\${ escape`);
   }
 }
 
