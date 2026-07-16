@@ -61,14 +61,46 @@ export type Output = z.infer<typeof OutputSchema>;
 const NODE_OUTPUT_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /**
+ * A `superRefine` body that refuses duplicate `name`s in a list of named
+ * declarations. A duplicate NAME is state corruption, not a style nit: every
+ * consumer indexes these lists by name and so silently COLLAPSES a duplicate
+ * last-wins — `resolveRunParams`'s `byName` map (`engine/params.ts`), the
+ * `declared` maps in `validateDoc`/`validateRefs`, and `storeOutputs`'s
+ * `Object.fromEntries` (`engine/reduce.ts`). So `${params.x}` with two `x`s
+ * resolves to whichever is LAST, and a doc reorder (a canvas save, a git
+ * round-trip) can change what a pipeline MEANS with no diff to its logic.
+ *
+ * Extracted so node-level `config.outputs` (#1 F13a) and pipeline-level
+ * `params`/`outputs` (#458) enforce ONE rule, worded consistently, from one
+ * place. `label`/`scope` shape the message (e.g. `'output'`/`'within a node'`);
+ * the emitted issue `path` is `[i, 'name']` so callers can prefix their own
+ * field name. Applied on the WRITE path only — see `NewPipelineVersionSchema`.
+ */
+function refuseDuplicateNames(label: string, scope: string) {
+  return (items: readonly { name: string }[], ctx: z.RefinementCtx): void => {
+    const seen = new Set<string>();
+    for (const [i, item] of items.entries()) {
+      if (seen.has(item.name)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [i, 'name'],
+          message: `duplicate ${label} name '${item.name}' (${label} names must be unique ${scope})`,
+        });
+      }
+      seen.add(item.name);
+    }
+  };
+}
+
+/**
  * A node's `config.outputs` declaration — the SSOT for what a VALID contract
  * looks like, used by BOTH the write-path schema (`StrictNodeSchema` below,
  * which refuses a corrupt one at save) and the run-time reader
  * (`engine/outputs.ts` `outputContract`, which fails the node on a corrupt one).
  * One schema so the two can never disagree about what "valid" means.
  */
+const refuseDuplicateNodeOutputNames = refuseDuplicateNames('output', 'within a node');
 const NodeOutputsSchema = z.array(OutputSchema).superRefine((outputs, ctx) => {
-  const seen = new Set<string>();
   for (const [i, o] of outputs.entries()) {
     if (!NODE_OUTPUT_NAME_RE.test(o.name)) {
       ctx.addIssue({
@@ -79,18 +111,10 @@ const NodeOutputsSchema = z.array(OutputSchema).superRefine((outputs, ctx) => {
           'reference takes a single identifier segment',
       });
     }
-    // `storeOutputs` (engine/reduce.ts) builds the stored record with
-    // Object.fromEntries(decl.map(...)) — duplicate names silently collapse
-    // last-wins, so a duplicate is state corruption, not a style nit.
-    if (seen.has(o.name)) {
-      ctx.addIssue({
-        code: 'custom',
-        path: [i, 'name'],
-        message: `duplicate output name '${o.name}' (output names must be unique within a node)`,
-      });
-    }
-    seen.add(o.name);
   }
+  // Duplicate NAMES silently collapse last-wins in `storeOutputs`'s
+  // Object.fromEntries — same rule as pipeline-level params/outputs (#458).
+  refuseDuplicateNodeOutputNames(outputs, ctx);
 });
 
 /**
@@ -498,5 +522,11 @@ export const NewPipelineVersionSchema = PipelineVersionSchema.omit({
   // The WRITE path is strict (#1 F13a) — `PipelineVersionSchema` above stays
   // read-tolerant. See `StrictNodeSchema` for why the asymmetry is deliberate.
   nodes: z.array(StrictNodeSchema),
+  // Duplicate pipeline-level param/output NAMES are refused on write (#458) —
+  // the twin of the node-level `config.outputs` rule (F13a). Same asymmetry: the
+  // read schema above stays tolerant so an already-stored duplicate-carrying row
+  // (immutable, unrepairable-in-place) can still be opened in the UI to re-author.
+  params: z.array(ParamSchema).superRefine(refuseDuplicateNames('param', 'within the pipeline')),
+  outputs: z.array(OutputSchema).superRefine(refuseDuplicateNames('output', 'within the pipeline')),
 });
 export type NewPipelineVersion = z.input<typeof NewPipelineVersionSchema>;
