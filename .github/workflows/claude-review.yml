@@ -145,7 +145,19 @@ jobs:
           if not text_blocks:
               print('No text block in response content:', json.dumps(data, indent=2))
               sys.exit(1)
-          text = text_blocks[0]['text']
+          # JOIN every text block, never just the first. A partial comment was
+          # merely untidy until #501 made the verdict a required check: a reply
+          # split across blocks would post a truncated review AND fail the
+          # assert with 'no verdict' though the model emitted one -- a false red
+          # that is near-impossible to diagnose from the error. (PR #500 was a
+          # SINGLE block, so it is not evidence for this; interleaved thinking
+          # is what splits blocks.)
+          # Joined on a BLANK LINE, not '': blocks carry no trailing-newline
+          # guarantee, so '' can glue "...findings." to "### Verdict", killing
+          # the `^` anchor the extractor needs and reding the check for no
+          # reason. Separate blocks are separate markdown; a blank line is the
+          # faithful seam.
+          text = '\n\n'.join(b['text'] for b in text_blocks)
           with open('stop_reason.txt', 'w') as f:
               f.write(stop_reason)
           if stop_reason == 'max_tokens':
@@ -178,3 +190,51 @@ jobs:
             exit 1
           fi
           echo "stop_reason=$STOP_REASON"
+
+      # #501: `review` is REQUIRED under branch protection, so a green check is
+      # what GitHub lets a merge through on. It went green on a review that
+      # rendered NO verdict (PR #500: 6023 tokens of plain-text reasoning,
+      # stop_reason `end_turn` so the max_tokens guard correctly never fired,
+      # ending "Final answer below." -- its own last line concluded REQUEST
+      # CHANGES). A missing verdict is not an approval, exactly as a `gh`
+      # failure is never CI-green.
+      #
+      # The MERGE RAIL was never exposed: safe_merge.sh:137/141 reads the
+      # comment BODY and refuses without an APPROVE. The gap is this check, and
+      # the studio build loop, which merges with `gh pr merge` on "all required
+      # green" and never calls safe_merge.
+      #
+      # RUNS AFTER the comment is posted, so the operator still reads the review
+      # body even when it is unusable as a gate -- and after the max_tokens
+      # guard, because a truncated review is ALSO verdict-less and that guard's
+      # "raise max_tokens or split the PR" message is the actionable one.
+      #
+      # The doc-only guard is load-bearing, not ceremony: `review.txt` is
+      # written by a doc-only-guarded step, so it never exists on that path and
+      # an unguarded assert would RED every doc-only PR with no way to clear a
+      # required check. (Same deadlock SHAPE as #183 -- a doc-only PR that
+      # cannot merge -- though #183 was the merge gate diverging from the
+      # bot-skip predicate, which #192 unified; not the same mechanism.)
+      #
+      # SCOPE: asserts a verdict was RENDERED, not that it was an approval.
+      # REQUEST CHANGES still exits 0 -- see #502.
+      - name: Fail workflow when the review rendered no verdict
+        if: steps.docs_only.outputs.docs_only != 'true'
+        run: |
+          set -uo pipefail
+          set +e
+          VERDICT=$(python3 lib/review_prompt.py --verdict review.txt)
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -eq 1 ]; then
+            echo "::error::Claude review posted NO usable verdict — the review gate certifies nothing, so it fails closed (#501). Re-run this job."
+            exit 1
+          fi
+          if [ "$STATUS" -ne 0 ]; then
+            # Distinct from "no verdict": the extractor itself is broken (a
+            # traceback is on stderr above). Same fail-closed outcome, but do
+            # not send the operator hunting the model's output for our bug.
+            echo "::error::lib/review_prompt.py --verdict crashed (exit $STATUS) — the gate cannot certify this review. See the traceback above."
+            exit 1
+          fi
+          echo "verdict=$VERDICT"
