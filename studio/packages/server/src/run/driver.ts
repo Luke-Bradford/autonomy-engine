@@ -138,6 +138,9 @@ export interface DriverDeps {
    * mirroring `AlarmClockDeps.now`. The REDUCER never reads a clock — this is
    * the impure half of D4's split, and the time it produces is STORED. */
   now?: () => number;
+  /** Minimal logger seam; optional for tests. Lives on the DRIVER boundary, not
+   * just the launcher's, because every drive entry point reports the same faults. */
+  log?: DriveLog;
 }
 
 /** Run-lifecycle statuses that are terminal (the run stops advancing). */
@@ -348,6 +351,106 @@ export async function pump(
   return state;
 }
 
+/** Minimal logger seam (Fastify's `log` satisfies it); optional for tests. */
+export interface DriveLog {
+  error(obj: unknown, msg?: string): void;
+}
+
+/** What `terminalizeInterrupted` needs — no executor, no alarms, no lock. */
+export type TerminalizeDeps = Pick<DriverDeps, 'db' | 'resolveDoc' | 'bus' | 'log'>;
+
+/**
+ * `TERMINAL_RUN` is the engine's SSOT for run-lifecycle-terminal, typed over the
+ * narrower `RunLifecycleStatus`; a DB row's `status` is the wider `RunStatus`, so
+ * widen the set's element type for this membership check.
+ */
+const isTerminalRow = (status: string): boolean => (TERMINAL_RUN as ReadonlySet<string>).has(status);
+
+/**
+ * Terminalize a run whose background drive threw UNEXPECTEDLY (the driver maps
+ * every EXPECTED activity failure to a terminal event itself, so reaching
+ * here is a bug/bad-doc, not a normal failure). Keep the append-log the
+ * authoritative source of truth (the P6 monitor tails it):
+ *   - NO events (the fault was before `run.started`, e.g. a bad doc) → there
+ *     is no event-sourced lifecycle to preserve; the row is pure provenance,
+ *     so a direct lifecycle patch to `interrupted` is correct.
+ *   - a non-terminal log (the fault was mid-pump, after `run.started`) →
+ *     APPEND a `run.interrupted` event FIRST (this needs no doc, so the
+ *     terminal fact is durable in the log even if the doc is now unresolvable),
+ *     THEN sync the row: from a proper fold when the doc resolves (as the boot
+ *     reconciler does), or by a direct patch if `resolveDoc` throws. Either
+ *     way the row and the log agree on `interrupted` — never diverge.
+ * A run reaching here CAN already have a terminal LOG (#443) — this used to
+ * claim it could not, which was WRONG: `pump` appends `run.finished` and only
+ * THEN folds it and syncs the row, so a throw in either step leaves the terminal
+ * fact durable while the row is still `running`, and `startRun` throws, landing
+ * here. Appending `run.interrupted` on top would bury a run's real terminal fact
+ * under a false one — and since #443 makes the LOG authoritative for
+ * terminality, the boot reconciler would then resync a SUCCEEDED run to
+ * `interrupted`. So a terminal log means: append NOTHING, just sync the row to
+ * what the log already says. `isTerminalRow` stays too, so a concurrently
+ * terminalized row is never clobbered.
+ *
+ * This is the one producer that could append a terminal event AFTER an accepted
+ * terminal event — the exact invariant `terminalFactFromLog` rests on. Keep it
+ * that way.
+ */
+export function terminalizeInterrupted(deps: TerminalizeDeps, runId: string): void {
+  const { db } = deps;
+  const patchRow = (): void => {
+    const run = getRun(db, runId);
+    if (run !== null && !isTerminalRow(run.status)) {
+      updateRun(db, runId, { status: 'interrupted', finishedAt: Date.now() });
+    }
+  };
+  let events: EngineEvent[];
+  let run: ReturnType<typeof getRun>;
+  try {
+    events = loadEngineEvents(db, runId);
+    run = getRun(db, runId);
+  } catch (cleanupErr) {
+    deps.log?.error({ err: cleanupErr, runId }, 'run interrupt-cleanup read failed');
+    return;
+  }
+  if (run === null || isTerminalRow(run.status)) return;
+  if (events.length === 0) {
+    patchRow();
+    return;
+  }
+  // The LOG already records a terminal fact: the run really did finish, and the
+  // throw was in the fold/sync AFTER the durable append. Sync the row from that
+  // fact — never append a contradicting terminal over it (#443).
+  const terminal = terminalFactFromLog(events);
+  if (terminal !== null) {
+    syncRunLifecycle(db, runId, terminal);
+    return;
+  }
+  // Non-terminal log: record the terminal fact in the LOG first (no doc
+  // needed), so the log stays authoritative even if the fold below can't run.
+  const interrupted: EngineEvent = { type: 'run.interrupted', runId, reason: 'drive_failed' };
+  let appended: ReturnType<typeof appendEngineEvent>;
+  try {
+    appended = appendEngineEvent(db, interrupted, deps.bus);
+  } catch (appendErr) {
+    // Couldn't even append — best-effort patch so no zombie row lingers.
+    deps.log?.error({ err: appendErr, runId }, 'run interrupt append failed');
+    patchRow();
+    return;
+  }
+  try {
+    const engine = buildEngine(deps.resolveDoc(run.pipelineVersionId));
+    // Fold the PARSED event, not the raw one — see `appendEngineEvent`.
+    const state = engine.reduce(engine.projectRunState(events), appended.event).state;
+    syncRunLifecycle(db, runId, state.status);
+  } catch (foldErr) {
+    // The doc is unresolvable (e.g. its version was deleted). The
+    // `run.interrupted` event is ALREADY durable in the log; just make the row
+    // agree via a direct patch — log and row still converge on `interrupted`.
+    deps.log?.error({ err: foldErr, runId }, 'run interrupt fold failed; row patched directly');
+    patchRow();
+  }
+}
+
 /**
  * The deps a DRIVE ENTRY POINT needs: the driver boundary plus the per-run lock.
  *
@@ -391,6 +494,25 @@ export interface DriveDeps extends DriverDeps {
  */
 export async function driveRun(deps: DriveDeps, runId: string): Promise<void> {
   await deps.drives.serialize(runId, async () => {
+    try {
+      await drive(deps, runId);
+    } catch (err) {
+      // The SAME handling the launcher gives an unexpectedly-thrown drive, and
+      // shared with it rather than re-implemented: without this, an identical
+      // fault is a visible needs-attention run when the LAUNCHER drives and a
+      // SILENT HANG when the alarm does — the run stays `running`, its alarm row
+      // is now spent, and the throw stops at the clock's floating `afterCommit`
+      // catch as one log line. That asymmetry between two entry points doing the
+      // same job is what produced B1; it does not get to survive B1's fix.
+      deps.log?.error({ err, runId }, 'retry drive failed');
+      terminalizeInterrupted(deps, runId);
+    }
+  });
+}
+
+/** `driveRun`'s critical section — already under the run's lock. */
+async function drive(deps: DriveDeps, runId: string): Promise<void> {
+  {
     const events = loadEngineEvents(deps.db, runId);
 
     // Hoisted above `resolveDoc` for the reason `reconcile.ts` documents: the log
@@ -414,7 +536,7 @@ export async function driveRun(deps: DriveDeps, runId: string): Promise<void> {
     const result = engine.resume(engine.projectRunState(events));
     syncRunLifecycle(deps.db, runId, result.state.status);
     await pump(deps, engine, result.state, result.commands);
-  });
+  }
 }
 
 /**

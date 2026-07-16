@@ -4,6 +4,7 @@ import {
   CATALOG_VERSION,
   DEFAULT_RETRY_INTERVAL_SECONDS,
   type Edge,
+  type EngineEvent,
   type NewPipelineVersion,
   type Node,
   type NodePolicy,
@@ -612,5 +613,45 @@ describe('F2c/B1 — two due alarms must not start two concurrent drives', () =>
     expect(executor.dispatched.filter((id: string) => id.startsWith('d#'))).toEqual(['d#0']);
     expect(loadEngineEvents(db, run.id).filter((e) => e.type === 'run.finished')).toHaveLength(1);
     expect(getRun(db, run.id)!.status).toBe('success');
+  });
+});
+
+describe('F2c — a retry drive that THROWS terminalizes, it does not hang silently', () => {
+  it('freezes the run interrupted, the same way the launcher does', async () => {
+    // Before this, the two drive entry points handled an identical fault
+    // differently: the LAUNCHER caught it and froze the run needs-attention,
+    // while the alarm's `afterCommit` let it escape to the clock's floating catch
+    // — one log line, run left `running`, its alarm row now spent, nothing to
+    // re-drive it until an unrelated restart. Same bug, visible one way and a
+    // silent hang the other. That asymmetry is what produced B1.
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a', { retry: 1 })]);
+    const run = seedRun(db, pvId);
+    let t = NOW;
+    const { deps, clock, drives } = harness(db, transientOnce('a'), () => t);
+
+    await startRun(deps, run);
+    expect(getRunState(db, deps, run.id).nodes.a!.status).toBe('retry_pending');
+
+    // The retry's re-dispatch throws OUT of the executor (a bug, not an expected
+    // activity failure — those become `node.failed` events and never reach here).
+    // Throws synchronously ON CALL rather than on iteration — the shape a real
+    // adapter bug takes, and the one `reconcile.ts`'s `refuseToExecute` uses.
+    deps.executor = {
+      perform(): AsyncIterable<EngineEvent> {
+        throw new Error('executor blew up on the retry');
+      },
+    };
+
+    t = NOW + DEFAULT_RETRY_INTERVAL_SECONDS * 1000;
+    clock.tick();
+    await drives.whenIdle();
+    await settle();
+
+    // Durable, event-sourced, and visible — not a `running` row and a log line.
+    const log = loadEngineEvents(db, run.id);
+    expect(log.map((e) => e.type)).toContain('run.interrupted');
+    expect(getRun(db, run.id)!.status).toBe('interrupted');
+    expect(getRun(db, run.id)!.finishedAt).not.toBeNull();
   });
 });

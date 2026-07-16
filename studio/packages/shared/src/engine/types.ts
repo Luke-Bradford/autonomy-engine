@@ -471,12 +471,19 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * WHEN the next attempt is due rather than leaving it in an ephemeral timer.
      *
      * Folding it is an inert no-op: the node is already `retry_pending` and the
-     * reducer must not read a clock. It exists for the LOG — as the durable
-     * answer to "when is this retry due", which the boot reconciler's re-arm and
-     * the run's raw event feed both read — and because §A.2 forbids shipping a
-     * partial triple. NOT to drive state. Note the monitor's per-node activity
-     * summary does not fold it yet (`web/…/runSummary.ts`), so a held node still
-     * renders as failed for the retry interval; the raw feed does show it.
+     * reducer must not read a clock. It exists for the LOG — the durable, audit-
+     * able answer to "when is this retry due" — and because §A.2 forbids shipping
+     * a partial triple. NOT to drive state.
+     *
+     * Nothing reads `nextAttemptAt` back today, and that is worth saying plainly
+     * rather than implying a consumer: the driver WRITES it (`armRetry`), the boot
+     * reconciler WRITES another when it re-arms a hold whose row was lost, and the
+     * run's raw event feed renders it. The alarm row — not this event — is what
+     * actually fires the retry and what the reconciler checks. So this is an
+     * operator/audit fact; if it ever disagrees with the row, the ROW is right.
+     * (The monitor's per-node activity summary does not fold it at all yet —
+     * `web/…/runSummary.ts`, tracked in #483 — so a held node renders as failed
+     * for the retry interval; only the raw feed shows it.)
      *
      * `nextAttemptAt` is a STORED fact (epoch ms), never recomputed at fold
      * time — that is what keeps replay deterministic (spec #5's spike block).

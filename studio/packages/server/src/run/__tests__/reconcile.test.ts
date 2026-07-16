@@ -821,14 +821,11 @@ describe('reconcileOnBoot — a run held on a node retry', () => {
     expect(last).toMatchObject({ type: 'run.interrupted', reason: 'retry_alarm_spent:a' });
   });
 
-  it('does not swallow a run that ALSO has a live idempotent node', async () => {
-    // The held branch is gated on there being no commands, so a run with real
-    // recoverable work still resumes — its held node is recovered by the alarm
-    // regardless.
-    const { db } = freshDb();
+  /** A run with BOTH a held node (`a`) and an independent in-flight one (`b`). */
+  async function seedHeldPlusInFlight(db: Db, alarms: RetryAlarms) {
     // EXPLICIT edges, because a doc with none gets an IMPLICIT CHAIN — which
     // would make `b` a downstream of `a` (and so `pending` behind the hold)
-    // rather than the independent in-flight node this test needs.
+    // rather than the independent in-flight node these tests need.
     const pvId = seedVersion(
       db,
       [node('root'), node('a', { policy: { retry: 1 } }), node('b')],
@@ -842,20 +839,100 @@ describe('reconcileOnBoot — a run held on a node retry', () => {
         executor: makeStubExecutor({
           nodes: { a: { outcome: 'failure', kind: 'transient' }, b: { hang: true } },
         }),
-        alarms: realAlarms(db),
+        alarms,
       },
       run,
     );
+    return run;
+  }
+
+  it('resumes a live idempotent node AND still reports the healthy hold', async () => {
+    const { db } = freshDb();
+    const alarms = realAlarms(db);
+    const run = await seedHeldPlusInFlight(db, alarms);
 
     const report = await reconcileOnBoot({
       db,
       resolveDoc: resolveDocFor(db),
       executor: makeStubExecutor(),
-      alarms: realAlarms(db),
+      alarms,
     });
 
-    expect(report.held).toEqual([]);
-    expect(report.rearmed).toEqual([]);
+    // BOTH, and that is the point: `b`'s recoverable work resumes, and `a` is
+    // still held on its (live) alarm. The two facts are independent, so the run
+    // appears in both buckets rather than one masking the other.
     expect(report.resumed).toEqual([run.id]);
+    expect(report.held).toEqual([run.id]);
+    expect(report.rearmed).toEqual([]);
+    expect(listPendingWakeups(db)).toHaveLength(1);
+  });
+
+  it('re-arms a hold on a run that ALSO has live work — the likeliest B2 case', async () => {
+    // The gate this pins the removal of ("only check the alarm when the run has
+    // no other commands — a run with live work resumes anyway, and its held node
+    // is recovered by the alarm regardless") is B2's false premise wearing an
+    // optimisation's clothes: if the row is MISSING there is no alarm.
+    //
+    // And the two conditions are POSITIVELY CORRELATED, so the gate skipped
+    // exactly the likeliest B2 case. `pump` drains `scheduleRetry` at the QUEUE
+    // TAIL, so the HOLD→ARM window IS the interval in which the sibling
+    // `dispatchNode` commands drain — a crash there leaves a held node with no
+    // alarm AND a sibling `dispatched`, which is precisely this shape.
+    //
+    // Measured under the gated version: `b` resumed and succeeded, `a` waited
+    // forever on an alarm that did not exist, the run rested `running` for the
+    // rest of the process's life, and the report called it `resumed` — nothing
+    // surfaced it. Only an unrelated restart healed it.
+    const { db } = freshDb();
+    const alarms = realAlarms(db);
+    const run = await seedHeldPlusInFlight(db, alarms);
+    // The crash window: the hold is durable, the arm never ran.
+    db.delete(scheduledWakeups).run();
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+      alarms,
+      now: () => 5_000,
+    });
+
+    // The live node resumed AND the stranded hold was healed.
+    expect(report.resumed).toEqual([run.id]);
+    expect(report.rearmed).toEqual([run.id]);
+    expect(report.held).toEqual([run.id]);
+
+    const pending = listPendingWakeups(db);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      kind: 'node_retry',
+      ref: { runId: run.id, nodeId: 'a', attemptId: 'a#0' },
+      status: 'pending',
+    });
+    expect(loadEngineEvents(db, run.id).map((e) => e.type)).toContain('node.retryScheduled');
+  });
+
+  it('does NOT resume a run whose hold is unrecoverable, even with live work', async () => {
+    // The interrupt must win over the resume: nothing can advance this run, so
+    // re-dispatching `b` would bill an activity for a run that is already over.
+    const { db } = freshDb();
+    const alarms = realAlarms(db);
+    const run = await seedHeldPlusInFlight(db, alarms);
+    const armed = listPendingWakeups(db)[0]!;
+    settleWakeup(db, armed.id, { status: 'fired', firedAt: 1_000 });
+
+    const recovery = makeStubExecutor();
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: recovery,
+      alarms,
+    });
+
+    expect(report.interrupted).toEqual([run.id]);
+    expect(report.resumed).toEqual([]);
+    expect(report.held).toEqual([]);
+    expect(recovery.dispatched).toEqual([]);
+    expect(getRun(db, run.id)!.status).toBe('interrupted');
   });
 });

@@ -36,7 +36,16 @@ export interface RunDrives {
    * the drive it is meant to await had even started.
    */
   serialize<T>(runId: string, work: () => Promise<T>): Promise<T>;
-  /** Resolve once every drive (including ones drives spawn) has settled. */
+  /**
+   * Resolve once every drive (including ones drives spawn) has settled.
+   *
+   * `whenIdle`/`idle`/`size` have NO production callers today — they are a TEST
+   * handle, and a necessary one rather than an indulgence: the alarm clock
+   * deliberately does not await `afterCommit` (a spawned drive must not hold up
+   * the remaining alarms), so without this there is no way to await an
+   * alarm-triggered drive, and a concurrency test would have to guess with a
+   * timer. Also the natural seam if graceful shutdown ever wants to drain drives.
+   */
   whenIdle(): Promise<void>;
   /** Whether any drive is running or queued. */
   idle(): boolean;
@@ -47,11 +56,19 @@ export interface RunDrives {
 export function createRunDrives(): RunDrives {
   /**
    * One `pLimit(1)` per run IS the per-run mutex: p-limit already gives FIFO
-   * ordering, synchronous registration (`pendingCount` reflects the call before
-   * it returns), and rejection isolation — all verified against p-limit@7, all
-   * pinned in `drives.test.ts`. It is already a dependency (`executor.ts`'s
-   * worker pool uses it), so hand-rolling a promise chain here would be a second,
-   * less-tested implementation of the same thing.
+   * ordering, synchronous registration, and rejection isolation (a rejected drive
+   * does not poison the chain) — all three verified against the pinned p-limit@7,
+   * and the ordering + isolation properties pinned in `drives.test.ts`. It is
+   * already a dependency (`executor.ts`'s worker pool uses it), so hand-rolling a
+   * promise chain here would be a second, less-tested implementation of the same
+   * thing.
+   *
+   * "Synchronous registration" means `activeCount` and `pendingCount` TOGETHER
+   * reflect the call before it returns — which is why the drain check below tests
+   * both. Measured, because the intuitive reading is wrong: `enqueue` calls
+   * `resumeNext()` synchronously, so an UNCONTENDED call (the common case — a
+   * fresh run's chain is empty) goes straight to `activeCount` and never appears
+   * in `pendingCount` at all.
    */
   const byRun = new Map<string, LimitFunction>();
   /** Every drive not yet settled — `whenIdle`'s handle, mirroring `launcher.ts`. */

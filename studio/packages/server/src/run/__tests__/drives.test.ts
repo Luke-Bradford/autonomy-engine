@@ -117,4 +117,34 @@ describe('createRunDrives', () => {
     // a leak, and `idle()`/`whenIdle()` would degrade with it.
     expect(drives.size()).toBe(0);
   });
+
+  it('KEEPS the entry while a second drive is queued behind the first', async () => {
+    // The contended case, and the one the cleanup's re-check exists for: the
+    // first drive settling must NOT drop a limiter that a queued drive is still
+    // waiting on. Dropping it would hand the queued caller — and everyone after
+    // it — a BRAND NEW lock, i.e. two concurrent drives for one run holding
+    // different mutexes. That is the exact bug this module prevents, reintroduced
+    // by its own garbage collection.
+    const drives = createRunDrives();
+    const order: string[] = [];
+
+    const first = drives.serialize('run-1', async () => {
+      await new Promise((r) => setTimeout(r, 10));
+      order.push('first');
+    });
+    const second = drives.serialize('run-1', async () => {
+      order.push('second');
+    });
+    expect(drives.size()).toBe(1);
+
+    await first;
+    // `first` has settled but `second` has not — the entry must survive, and it
+    // must be the SAME limiter, or the two drives were never serialized at all.
+    expect(drives.size()).toBe(1);
+
+    await second;
+    await drives.whenIdle();
+    expect(drives.size()).toBe(0);
+    expect(order).toEqual(['first', 'second']);
+  });
 });

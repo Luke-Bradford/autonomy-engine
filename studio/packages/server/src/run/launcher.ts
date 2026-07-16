@@ -1,13 +1,11 @@
-import type { EngineEvent, FireOutcome, FireResult, Trigger } from '@autonomy-studio/shared';
-import { countActiveRunsForTrigger, createRun, getRun, updateRun } from '../repo/runs.js';
+import type { FireOutcome, FireResult, Trigger } from '@autonomy-studio/shared';
+import { countActiveRunsForTrigger, createRun } from '../repo/runs.js';
 import {
-  buildEngine,
   startRun,
-  syncRunLifecycle,
-  TERMINAL_RUN,
+  terminalizeInterrupted,
   type DriveDeps,
+  type DriveLog,
 } from './driver.js';
-import { appendEngineEvent, loadEngineEvents, terminalFactFromLog } from './events.js';
 
 /**
  * P4a — the run LAUNCHER: the one place a trigger becomes a run. Manual fire
@@ -52,10 +50,11 @@ export class UnboundTriggerError extends Error {
   }
 }
 
-/** Minimal logger seam (Fastify's `log` satisfies it); optional for tests. */
-export interface LauncherLog {
-  error(obj: unknown, msg?: string): void;
-}
+/**
+ * The logger seam, re-exported from `driver.ts` where it now lives: the drive
+ * boundary owns it, because `driveRun` reports the same faults this does.
+ */
+export type LauncherLog = DriveLog;
 
 export interface RunLauncher {
   /**
@@ -75,7 +74,6 @@ export interface RunLauncher {
 }
 
 export interface RunLauncherDeps extends DriveDeps {
-  log?: LauncherLog;
   /** Per-trigger `queue` depth cap; defaults to `DEFAULT_MAX_QUEUE_DEPTH`. */
   maxQueueDepth?: number;
 }
@@ -131,96 +129,6 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     else inFlightByTrigger.set(triggerId, n);
   }
 
-  // `TERMINAL_RUN` is the engine's SSOT for run-lifecycle-terminal, typed over
-  // the narrower `RunLifecycleStatus`; a DB row's `status` is the wider
-  // `RunStatus`, so widen the set's element type for this membership check.
-  const isTerminalRow = (status: string): boolean =>
-    (TERMINAL_RUN as ReadonlySet<string>).has(status);
-
-  /**
-   * Terminalize a run whose background drive threw UNEXPECTEDLY (the driver maps
-   * every EXPECTED activity failure to a terminal event itself, so reaching
-   * here is a bug/bad-doc, not a normal failure). Keep the append-log the
-   * authoritative source of truth (the P6 monitor tails it):
-   *   - NO events (the fault was before `run.started`, e.g. a bad doc) → there
-   *     is no event-sourced lifecycle to preserve; the row is pure provenance,
-   *     so a direct lifecycle patch to `interrupted` is correct.
-   *   - a non-terminal log (the fault was mid-pump, after `run.started`) →
-   *     APPEND a `run.interrupted` event FIRST (this needs no doc, so the
-   *     terminal fact is durable in the log even if the doc is now unresolvable),
-   *     THEN sync the row: from a proper fold when the doc resolves (as the boot
-   *     reconciler does), or by a direct patch if `resolveDoc` throws. Either
-   *     way the row and the log agree on `interrupted` — never diverge.
-   * A run reaching here CAN already have a terminal LOG (#443) — this used to
-   * claim it could not, which was WRONG: `pump` appends `run.finished` and only
-   * THEN folds it and syncs the row, so a throw in either step leaves the terminal
-   * fact durable while the row is still `running`, and `startRun` throws, landing
-   * here. Appending `run.interrupted` on top would bury a run's real terminal fact
-   * under a false one — and since #443 makes the LOG authoritative for
-   * terminality, the boot reconciler would then resync a SUCCEEDED run to
-   * `interrupted`. So a terminal log means: append NOTHING, just sync the row to
-   * what the log already says. `isTerminalRow` stays too, so a concurrently
-   * terminalized row is never clobbered.
-   *
-   * This is the one producer that could append a terminal event AFTER an accepted
-   * terminal event — the exact invariant `terminalFactFromLog` rests on. Keep it
-   * that way.
-   */
-  function terminalizeInterrupted(runId: string): void {
-    const patchRow = (): void => {
-      const run = getRun(db, runId);
-      if (run !== null && !isTerminalRow(run.status)) {
-        updateRun(db, runId, { status: 'interrupted', finishedAt: Date.now() });
-      }
-    };
-    let events: EngineEvent[];
-    let run: ReturnType<typeof getRun>;
-    try {
-      events = loadEngineEvents(db, runId);
-      run = getRun(db, runId);
-    } catch (cleanupErr) {
-      deps.log?.error({ err: cleanupErr, runId }, 'run interrupt-cleanup read failed');
-      return;
-    }
-    if (run === null || isTerminalRow(run.status)) return;
-    if (events.length === 0) {
-      patchRow();
-      return;
-    }
-    // The LOG already records a terminal fact: the run really did finish, and the
-    // throw was in the fold/sync AFTER the durable append. Sync the row from that
-    // fact — never append a contradicting terminal over it (#443).
-    const terminal = terminalFactFromLog(events);
-    if (terminal !== null) {
-      syncRunLifecycle(db, runId, terminal);
-      return;
-    }
-    // Non-terminal log: record the terminal fact in the LOG first (no doc
-    // needed), so the log stays authoritative even if the fold below can't run.
-    const interrupted: EngineEvent = { type: 'run.interrupted', runId, reason: 'drive_failed' };
-    let appended: ReturnType<typeof appendEngineEvent>;
-    try {
-      appended = appendEngineEvent(db, interrupted, deps.bus);
-    } catch (appendErr) {
-      // Couldn't even append — best-effort patch so no zombie row lingers.
-      deps.log?.error({ err: appendErr, runId }, 'run interrupt append failed');
-      patchRow();
-      return;
-    }
-    try {
-      const engine = buildEngine(deps.resolveDoc(run.pipelineVersionId));
-      // Fold the PARSED event, not the raw one — see `appendEngineEvent`.
-      const state = engine.reduce(engine.projectRunState(events), appended.event).state;
-      syncRunLifecycle(db, runId, state.status);
-    } catch (foldErr) {
-      // The doc is unresolvable (e.g. its version was deleted). The
-      // `run.interrupted` event is ALREADY durable in the log; just make the row
-      // agree via a direct patch — log and row still converge on `interrupted`.
-      deps.log?.error({ err: foldErr, runId }, 'run interrupt fold failed; row patched directly');
-      patchRow();
-    }
-  }
-
   /** Create the run row (durable, `pending`) and drive it in the background. */
   function launch(trigger: Trigger): string {
     // Caller guarantees non-null (fire() throws UnboundTriggerError otherwise).
@@ -265,7 +173,7 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
         await startRun(deps, run);
       } catch (err) {
         deps.log?.error({ err, runId: run.id, triggerId: trigger.id }, 'run drive failed');
-        terminalizeInterrupted(run.id);
+        terminalizeInterrupted(deps, run.id);
       }
     });
 

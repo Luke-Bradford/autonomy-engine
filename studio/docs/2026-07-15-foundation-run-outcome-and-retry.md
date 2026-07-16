@@ -813,6 +813,32 @@ expected — do not treat the intermediate state as a regression.
    > two separate in-memory `stubAlarms()`, would have passed against exactly that. They now seed and
    > boot through one real db-backed store.
 
+   > ### What the PRE-PR review gate caught (both probed, both real)
+   >
+   > Recorded because the near-miss is the lesson, not a footnote:
+   >
+   > - **B2's heal was gated off in the case B2 most likely produces.** The `held`
+   >   branch was gated on `commands.length === 0`, inherited unquestioned from the
+   >   pre-B2 version, whose comment said a run with live work *"still resumes — its
+   >   held node is recovered by the alarm regardless"*. **That is B2's false premise
+   >   wearing an optimisation's clothes**: if the row is missing there IS no alarm.
+   >   And the two conditions are POSITIVELY CORRELATED — `pump` drains
+   >   `scheduleRetry` at the QUEUE TAIL, so the HOLD→ARM window IS the interval in
+   >   which the sibling `dispatchNode` commands drain; a crash there leaves a held
+   >   node with no alarm AND a sibling `dispatched`, i.e. exactly the skip case.
+   >   Reproduced: the sibling resumed and succeeded, the held node waited forever
+   >   on an alarm that did not exist, the run rested `running` for the rest of the
+   >   process's life, and the report called it `resumed`. The row check is now
+   >   unconditional; `commands.length` only decides whether the run ALSO resumes.
+   >   **The fix for a false premise reproduced the false premise one branch away.**
+   > - **`driveRun` did not terminalize a thrown drive; the launcher did.** The same
+   >   fault was a visible needs-attention run via the launcher and a SILENT HANG via
+   >   the alarm (run left `running`, alarm row now spent, the throw stopping at the
+   >   clock's floating `afterCommit` catch as one log line). `terminalizeInterrupted`
+   >   moved to `driver.ts` and both entry points share it. **An asymmetry between two
+   >   entry points doing the same job is what produced B1 in the first place**, so it
+   >   does not get to survive B1's fix.
+   >
    > ### Corrections this section earned at build time (each probed)
    >
    > - **`onResumed` swallowed a dispatch-prep throw** (`catch { continue }`) where every other
