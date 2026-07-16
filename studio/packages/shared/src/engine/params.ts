@@ -850,8 +850,9 @@ export interface ValidateDocOptions {
  * (complements `validateRefs`, which checks the `${}` language). Returns error
  * strings (`[]` = valid). Enforces:
  *  - container children exist as nodes and are DISJOINT across containers;
- *  - a loop declares an `exitWhen` or a `maxRounds` (else it never terminates),
- *    and a stage carries no `exitWhen`;
+ *  - a loop declares an `exitWhen` (a `maxRounds` is only the round cap, never
+ *    the exit condition) and has at least one child (an empty loop re-rounds
+ *    forever), and a stage carries no `exitWhen`;
  *  - a container's `exitWhen` is a valid `${}` expr over its OWN child outputs;
  *  - a `back` edge's `to` is an ANCESTOR (a loop/stage container, or an upstream
  *    node) that forward-reaches its `from`;
@@ -929,6 +930,18 @@ export function validateDoc(
       errors.push(
         `container '${c.id}': a loop needs an exitWhen ` +
           '(maxRounds is only the round cap, not the exit condition)',
+      );
+    }
+    // The container counterpart of the back-edge no-progress rule below. A loop
+    // with no children re-rounds forever: the round is vacuously terminal, the
+    // reset returns nothing to `pending`, so `exitWhen` can never change. The
+    // reducer refuses it too (`stepContainers` → `no_progress`) — it has to, this
+    // validator being advisory — but a doc this broken should be reported here as
+    // well, not only discovered at run time.
+    if (c.kind === 'loop' && c.children.length === 0) {
+      errors.push(
+        `container '${c.id}': makes no progress — a loop needs at least one child ` +
+          '(an empty loop re-rounds forever: a round resets nothing, so exitWhen never changes)',
       );
     }
     if (c.kind === 'stage' && c.exitWhen !== undefined) {

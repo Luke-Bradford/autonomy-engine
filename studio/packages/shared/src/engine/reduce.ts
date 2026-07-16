@@ -168,7 +168,42 @@ export function createEngine(doc: EngineDoc): Engine {
   const nodeIds = doc.nodes.map((n) => n.id);
   const nodeById = new Map<string, Node>(doc.nodes.map((n) => [n.id, n]));
 
-  const containers: Container[] = doc.containers ?? [];
+  // Every doc defect the bind detects, reported ONCE per run at `run.started`
+  // (drained below). One list, not one per defect class: `validateDoc` is
+  // advisory (#444), so these diagnostics are the only thing that makes a
+  // neutralization visible to an operator.
+  const docDefects: string[] = [];
+
+  // #487: a container child that is NOT a node id is neutralized here, at the
+  // bind, so every downstream reader is correct BY CONSTRUCTION rather than by
+  // remembering to guard. `seedState`/`run.started` seed `state.nodes` from
+  // `doc.nodes` alone, so a child with no node behind it has no entry and
+  // `stepContainers`' `state.nodes[ch]!.status` walked off the end — a TypeError
+  // out of the PURE reducer, which does not fail the run: it escapes the fold and
+  // kills the driver's pump. Fail-open in the worst place.
+  //
+  // The rule mirrors `validateDoc`'s own ("child '<x>' is not a node in this
+  // pipeline") — and the CLASS is that rule, not the nested-container shape it
+  // was reported as: a ghost id, a container id (studio does not nest
+  // containers), and a container's own id all land here.
+  //
+  // Posture is #480's: treat the defect as if it were not authored. The
+  // container's REAL children still run, so a doc that is wrong in one place does
+  // not silently stop dispatching work that was authored correctly.
+  const rawContainers: Container[] = doc.containers ?? [];
+  const containers: Container[] = rawContainers.map((c) => {
+    const kept = c.children.filter((ch) => nodeById.has(ch));
+    if (kept.length === c.children.length) return c;
+    for (const ch of c.children) {
+      if (nodeById.has(ch)) continue;
+      docDefects.push(
+        `container '${c.id}': child '${ch}' is not a node in this pipeline and is IGNORED: ` +
+          `a container's children must be nodes, so it cannot be entered, dispatched or ` +
+          `awaited — it is treated as if it were not authored`,
+      );
+    }
+    return { ...c, children: kept };
+  });
   const containerById = new Map<string, Container>(containers.map((c) => [c.id, c]));
   const containerIds = containers.map((c) => c.id);
   const childToContainer = new Map<string, string>();
@@ -233,18 +268,54 @@ export function createEngine(doc: EngineDoc): Engine {
   //     the one being fixed. So the `topIncoming` guard stays exactly as it was.
   //     Pinned in `edge-model.test.ts`.
   //
-  // Scoped to CHILD → top deliberately: for a child → its OWN container id the
-  // reasoning above does NOT hold (that edge makes the container wait on a child
-  // it must first activate — a pre-existing stall, #488, neither caused nor
-  // fixed here).
-  const neutralizedCrossBoundary: Edge[] = [];
+  // #488 is the ONE exception to "the `topIncoming` guard stays exactly as it
+  // was", and it is exactly the case the paragraph above does not cover: a child
+  // → its OWN enclosing container id. #480 kept child → top edges in
+  // `topIncoming` because they are load-bearing (they SKIP the target); for a
+  // child → its own container that reasoning inverts. The edge makes the
+  // container wait on a child it must first ACTIVATE — `h` only dispatches once
+  // `c` is active, `c` only becomes ready once `h` takes the edge — so nothing
+  // dispatches, no `finishRun` is ever emitted, and the run sits in `running`
+  // forever with no terminal event to reconcile against. A liveness failure, not
+  // a wrong answer.
+  //
+  // So the edge is INERT: the container is already the child's parent scope, and
+  // the edge encodes a dependency that inverts activation order. Dropping it from
+  // `topIncoming` leaves the container a root that activates — which is correct
+  // here, and is NOT the fail-open #480 warns about: that hazard is a target
+  // losing a gate it should have had, whereas this "gate" could never be
+  // satisfied by construction.
+  //
+  // Removing it from `topIncoming` also removes it from the outcome predicate
+  // (`ins`, in `outcomeFailure`'s leaf-blame walk). No blame is lost: the
+  // container now has no incoming edge, so it can never be a skipped leaf via
+  // this edge; and if it is skipped by OTHER incoming edges, its children never
+  // ran (`pending`, never `failure`), so they were never blamable anyway.
+  //
+  // The edge lands in NO index after this — `topOutgoing.has(e.from)` is already
+  // false (its source is a child) and `internalForwardByContainer` rejects it
+  // (`fc` = the container, `tc` = undefined) — which is the intended full
+  // inertness. Pinned in `malformed-doc.test.ts`.
   for (const e of topForwardEdges) {
     const crossBoundary = childToContainer.get(e.from) !== childToContainer.get(e.to);
     if (topOutgoing.has(e.from)) {
       // Recorded only when the edge would OTHERWISE have been indexed here, so
       // the diagnostic never claims to have voided an edge that still routes.
-      if (crossBoundary) neutralizedCrossBoundary.push(e);
-      else topOutgoing.get(e.from)!.push(e);
+      if (crossBoundary) {
+        docDefects.push(
+          `edge '${e.id}' ('${e.from}' → '${e.to}') crosses a container boundary and is ` +
+            `IGNORED: a child's forward edges must stay within its container, so it cannot ` +
+            `route or handle an outcome — it is treated as if it were not authored`,
+        );
+      } else topOutgoing.get(e.from)!.push(e);
+    }
+    if (childToContainer.get(e.from) === e.to) {
+      docDefects.push(
+        `edge '${e.id}' ('${e.from}' → '${e.to}') points at its own enclosing container and ` +
+          `is IGNORED: the container must activate before its child can run, so this edge ` +
+          `could only ever deadlock the run — it is treated as if it were not authored`,
+      );
+      continue;
     }
     if (topIncoming.has(e.to)) topIncoming.get(e.to)!.push(e);
   }
@@ -809,6 +880,35 @@ export function createEngine(doc: EngineDoc): Engine {
         return { state: exitContainer(state, c, 'failure', 'exitWhen_error'), changed: true };
       }
       if (exit) return { state: exitContainer(state, c, 'success'), changed: true };
+      // A loop with an EMPTY body cannot progress, so re-rounding it is provably
+      // non-terminating: the round is VACUOUSLY terminal, the reset returns
+      // nothing to `pending`, and round N+1 is bit-identical to round N — so
+      // `exitWhen` can never change. `settle` spun here SYNCHRONOUSLY at 100% CPU
+      // inside ONE `reduce()`, with no I/O to pace it and no timeout able to
+      // preempt it: the driver's event loop simply stopped.
+      //
+      // This is the same fixpoint argument, and the same verdict, as
+      // `validateDoc`'s back-edge no-progress rule ("makes no progress — its
+      // reset body must include its source ... re-fires forever"). The loop
+      // CONTAINER had no such guard in either the validator or the reducer; it
+      // does now, in both.
+      //
+      // Deliberately ABOVE the `maxRounds` cap. An empty loop with a `maxRounds`
+      // already terminated, reporting `capped` — but `capped` means "hit the
+      // round budget", which implies the rounds did work and a bigger budget
+      // might have helped. Both are false here. `no_progress` is the honest
+      // reason whatever the budget says.
+      //
+      // The empty body is reachable two ways: authored empty (schema-legal —
+      // `ContainerSchema.children` has no min length), or left empty by #487's
+      // normalization above when every child was a non-node id.
+      if (c.children.length === 0) {
+        diagnostics.push(
+          `container '${cid}' makes no progress: a loop with no children re-rounds forever ` +
+            `(its exitWhen cannot change, because a round resets nothing)`,
+        );
+        return { state: exitContainer(state, c, 'failure', 'no_progress'), changed: true };
+      }
       if (c.maxRounds !== undefined && cs.round + 1 >= c.maxRounds) {
         diagnostics.push(`container '${cid}' capped at maxRounds=${c.maxRounds}`);
         return { state: exitContainer(state, c, 'failure', 'capped'), changed: true };
@@ -1060,21 +1160,15 @@ export function createEngine(doc: EngineDoc): Engine {
       }
       return { state, commands: [], diagnostics };
     }
-    // #480: say so when a cross-boundary edge is voided. Same reasoning as
-    // `noteInertBranch`, and deliberately the same conclusion: `validateDoc`
-    // reports the shape but advisorily — its lone caller is the canvas, which
-    // badges and still allows Save, and the server never validates (#444). So
-    // the doc arrives from git or a direct POST and this is the ONLY thing that
-    // makes the neutralization visible. Without it the operator sees an
-    // unhandled failure with no hint that the handler edge they authored was
-    // ignored. Emitted once per run, after the already-started guard.
-    for (const e of neutralizedCrossBoundary) {
-      diagnostics.push(
-        `edge '${e.id}' ('${e.from}' → '${e.to}') crosses a container boundary and is IGNORED: ` +
-          `a child's forward edges must stay within its container, so it cannot route or handle ` +
-          `an outcome — it is treated as if it were not authored`,
-      );
-    }
+    // #480/#487/#488: say so when the bind voided something the author wrote.
+    // Same reasoning as `noteInertBranch`, and deliberately the same conclusion:
+    // `validateDoc` reports these shapes but advisorily — its lone caller is the
+    // canvas, which badges and still allows Save, and the server never validates
+    // (#444). So the doc arrives from git or a direct POST and this is the ONLY
+    // thing that makes the neutralization visible. Without it the operator sees a
+    // run behave nothing like the graph they authored, with no hint why. Emitted
+    // once per run, after the already-started guard.
+    diagnostics.push(...docDefects);
     const nodes: Record<string, NodeRunState> = {};
     for (const id of nodeIds) nodes[id] = { status: 'pending', attempts: 0, retries: 0 };
     const containerStates: Record<string, ContainerRunState> = {};
