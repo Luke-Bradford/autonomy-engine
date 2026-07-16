@@ -13,6 +13,7 @@ import {
   type Node,
   type Output,
   type Param,
+  type RunDiagnosticPhase,
   type RunStatus,
   type RunWindow,
   type TriggerMode,
@@ -209,6 +210,45 @@ export const runEvents = sqliteTable(
   (table) => [
     uniqueIndex('run_events_run_id_seq_idx').on(table.runId, table.seq),
     index('run_events_run_id_idx').on(table.runId),
+  ],
+);
+
+/**
+ * #497 — the sink for the pure reducer's `diagnostics` (`RunDiagnostic`).
+ *
+ * Deliberately NOT part of `run_events`: that log holds FACTS, and a diagnostic
+ * is a DERIVATION of (immutable doc + log). Keeping it off the log is what keeps
+ * it out of `EngineEventSchema` (so it re-folds no already-bound log — the #443
+ * question) and what stops a replay double-counting it. Nothing the engine gates
+ * on reads this table; it is an explanation channel only.
+ *
+ * `(run_id, seq, phase, ordinal)` is UNIQUE and every write is INSERT OR IGNORE,
+ * so re-deriving at the same log position is idempotent BY CONSTRUCTION. `phase`
+ * is in the key because `resume()` derives at the same `seq` as the fold before
+ * it; without it, two different derivations collide. Full account in the 0007
+ * migration.
+ */
+export const runDiagnostics = sqliteTable(
+  'run_diagnostics',
+  {
+    id: text('id').primaryKey(),
+    runId: text('run_id')
+      .notNull()
+      .references(() => runs.id, { onDelete: 'cascade' }),
+    seq: integer('seq').notNull(),
+    phase: text('phase').notNull().$type<RunDiagnosticPhase>(),
+    ordinal: integer('ordinal').notNull(),
+    message: text('message').notNull(),
+    ts: integer('ts').notNull(),
+  },
+  (table) => [
+    uniqueIndex('run_diagnostics_run_id_seq_phase_ordinal_idx').on(
+      table.runId,
+      table.seq,
+      table.phase,
+      table.ordinal,
+    ),
+    index('run_diagnostics_run_id_idx').on(table.runId),
   ],
 );
 

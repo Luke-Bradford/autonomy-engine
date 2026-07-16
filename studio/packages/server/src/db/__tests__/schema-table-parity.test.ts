@@ -4,11 +4,19 @@ import {
   ConnectionSchema,
   PipelineSchema,
   PipelineVersionSchema,
+  RunDiagnosticSchema,
   RunSchema,
   TriggerSchema,
 } from '@autonomy-studio/shared';
 import type { z } from 'zod';
-import { connections, pipelines, pipelineVersions, runs, triggers } from '../schema.js';
+import {
+  connections,
+  pipelines,
+  pipelineVersions,
+  runDiagnostics,
+  runs,
+  triggers,
+} from '../schema.js';
 
 /**
  * THE #473 CLASS TEST — a persisted field must have somewhere to persist TO.
@@ -52,6 +60,10 @@ const CASES: { name: string; table: Parameters<typeof getTableColumns>[0]; schem
     { name: 'triggers', table: triggers, schema: TriggerSchema },
     { name: 'connections', table: connections, schema: ConnectionSchema },
     { name: 'runs', table: runs, schema: RunSchema },
+    // #497. Infra-ish (driver-written, never client-authored) but it CROSSES the
+    // API boundary with a 1:1 Zod counterpart — `GET /api/runs/:id/diagnostics`
+    // returns exactly this shape — so unlike `run_events` it earns the guard.
+    { name: 'run_diagnostics', table: runDiagnostics, schema: RunDiagnosticSchema },
   ];
 
 describe('drizzle table ⇔ Zod schema parity (#473)', () => {

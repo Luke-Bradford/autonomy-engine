@@ -1237,9 +1237,11 @@ export function createEngine(doc: EngineDoc): Engine {
       // say. So the run can NEVER finish. Terminalize it rather than leave it
       // wedged `running` forever, holding a concurrency slot until an operator
       // notices. What lands in the LOG is the durable `run.finished` below; the
-      // diagnostic naming the entities does NOT (nothing reads `diagnostics` in
-      // production yet — see `stalledEntities`), so do not read this as closing
-      // the observability half of #491.
+      // diagnostic naming the entities lands in the `run_diagnostics` sink (#497
+      // — `recordRunDiagnostics` at every fold site), readable at
+      // `GET /api/runs/:id/diagnostics`. Both halves of #491 are now observable:
+      // the run's terminal `reason:'stalled'` says it could never finish, and
+      // `stalledEntities` says WHICH entities wedged it.
       //
       // `else if`, NOT `if`, and that is a correctness requirement rather than
       // style: a forward cycle does NOT imply a stall. The joint F1b/F2b spec
@@ -1281,17 +1283,20 @@ export function createEngine(doc: EngineDoc): Engine {
    * The entities a stalled run is stuck on. It must name the things that can
    * actually never terminalize, and nothing else.
    *
-   * WHERE THIS GOES, stated honestly because the obvious assumption is wrong and
-   * a `reason`-vs-diagnostic decision rests on it: NOTHING IN PRODUCTION READS
-   * `diagnostics` TODAY. Every non-test caller of `reduce` binds the result and
-   * takes `.state`/`.commands` only (`driver.ts`, `reconcile.ts`,
-   * `retry-alarm.ts`), so this string is currently observable in tests alone.
-   * That is a systemic gap, not this backstop's — every `docDefects` report
-   * (#480's ignored edge, #487's ghost child) is equally invisible — and it is
-   * filed rather than fixed here. So the operator-visible half of #491 is the
-   * DURABLE `run.finished{reason:'stalled'}`, which says the run could never
-   * finish; this says WHICH entities, and becomes visible when the sink lands.
-   * Do not describe it as the operator's signal until it is one.
+   * WHERE THIS GOES: the `run_diagnostics` sink (#497). Every production caller
+   * of `reduce` now records its fold's diagnostics there — `appendAndFold`, or a
+   * hand-paired `recordRunDiagnostics` where the append and fold must be split
+   * (`driver.ts`, `reconcile.ts`, `retry-alarm.ts`) — readable at
+   * `GET /api/runs/:id/diagnostics`. This closed the systemic gap for EVERY
+   * `docDefects` report (#480's ignored edge, #487's ghost child), not just this
+   * one. So both halves of #491 are operator-visible: the DURABLE
+   * `run.finished{reason:'stalled'}` says the run could never finish, and this
+   * says WHICH entities wedged it.
+   *
+   * The diagnostic is NOT an engine event, deliberately: it is a DERIVATION of
+   * (immutable doc + log), and putting a derivation in the event log would
+   * re-fold every bound log (#443) and double-count on replay. Off-log, keyed by
+   * `(runId, seq, phase, ordinal)` so a re-derivation is idempotent.
    *
    * Top-level entities carry the verdict, but naming only them is useless for a
    * container: a reader would see `c1` and learn nothing about WHICH of its

@@ -11,7 +11,13 @@ import {
   type RetryAlarms,
 } from './driver.js';
 import type { RunEventBus } from './event-bus.js';
-import { appendEngineEvent, loadEngineEvents, terminalFactFromLog } from './events.js';
+import {
+  appendAndFold,
+  appendEngineEvent,
+  loadEngineEvents,
+  terminalFactFromLog,
+} from './events.js';
+import { recordRunDiagnostics } from '../repo/run-diagnostics.js';
 
 /**
  * P2d — the BOOT RECONCILER: the run engine's recovery boundary. An in-process
@@ -329,14 +335,14 @@ function recoverHeld(
   if (spent.length > 0) {
     const reason = `retry_alarm_spent:${spent.join(',')}`;
     const interrupted: EngineEvent = { type: 'run.interrupted', runId: run.id, reason };
-    const appended = appendEngineEvent(deps.db, interrupted, deps.bus);
     // Synced from a FOLD, like the sibling interrupt path above — not from a
     // `terminalStatusOf(...) ?? 'interrupted'` default. That default is
     // unreachable today, but `types.ts` documents that forgetting to add an event
     // to `TERMINAL_RUN_EVENT_TYPES` is not a compile error and is #443's own
     // failure mode: the `??` would keep THIS function looking right while
     // `terminalFactFromLog` silently stopped seeing the fact. Folding fails loud.
-    syncRunLifecycle(deps.db, run.id, engine.reduce(state, appended.event).state.status);
+    const folded = appendAndFold(deps.db, deps.bus, engine, state, interrupted);
+    syncRunLifecycle(deps.db, run.id, folded.state.status);
     return 'interrupted';
   }
 
@@ -467,9 +473,9 @@ async function reconcileOne(deps: ReconcileDeps, report: ReconcileReport, run: R
   if (notProvablyIdempotent.length > 0) {
     const reason = `non_idempotent_in_flight:${notProvablyIdempotent.map((n) => n.id).join(',')}`;
     const interrupted: EngineEvent = { type: 'run.interrupted', runId: run.id, reason };
-    const appended = appendEngineEvent(deps.db, interrupted, deps.bus);
     // Fold the PARSED event, not the raw one — see `appendEngineEvent`.
-    syncRunLifecycle(deps.db, run.id, engine.reduce(state, appended.event).state.status);
+    const folded = appendAndFold(deps.db, deps.bus, engine, state, interrupted);
+    syncRunLifecycle(deps.db, run.id, folded.state.status);
     report.interrupted.push(run.id);
     return;
   }
@@ -492,10 +498,22 @@ async function reconcileOne(deps: ReconcileDeps, report: ReconcileReport, run: R
   ];
   let next = state;
   const commands = [];
+  // #497 — HELD per event, to be recorded against the `seq` each is appended at
+  // below. This site folds BEFORE it appends (it must know the commands to
+  // decide whether it can honour them), so it is the one place `appendAndFold`
+  // cannot serve; the diagnostics are paired to their event by index instead.
+  //
+  // Not an optional nicety here: since #491 this fold is where a run whose doc
+  // STALLS derives `finishRun{failure,'stalled'}` afresh (see the finalize
+  // bucket below), so this list holds the `stalledEntities` report naming WHICH
+  // entities wedged the run. Dropping it would leave boot-reconcile — one of the
+  // only two stall paths — still answering "why?" with nothing.
+  const foldDiagnostics: string[][] = [];
   for (const ev of reconcileEvents) {
     const result = engine.reduce(next, ev);
     next = result.state;
     commands.push(...result.commands);
+    foldDiagnostics.push(result.diagnostics);
   }
 
   // A run HELD on a retry (F2b) re-derives NOTHING above — `onResumed` skips
@@ -554,7 +572,18 @@ async function reconcileOne(deps: ReconcileDeps, report: ReconcileReport, run: R
     return;
   }
 
-  for (const ev of reconcileEvents) appendEngineEvent(deps.db, ev, deps.bus);
+  // The append the fold above was provisional on. Recording each event's
+  // diagnostics HERE — against the `seq` this append just assigned, on the same
+  // `db` handle — is what keeps #497's rule intact through the inversion: the
+  // DEFERRED path (above) folds and appends nothing, so it correctly records
+  // nothing. No `log` seam: `ReconcileDeps` deliberately carries no logger (a
+  // returned report is not droppable, an optional logger is), so a failed insert
+  // is dropped here rather than reported — acceptable for an explanation, never
+  // for a decision.
+  for (const [i, ev] of reconcileEvents.entries()) {
+    const { record } = appendEngineEvent(deps.db, ev, deps.bus);
+    recordRunDiagnostics(deps.db, run.id, record.seq, 'fold', foldDiagnostics[i]!);
+  }
   syncRunLifecycle(deps.db, run.id, next.status);
   await pump(
     {
