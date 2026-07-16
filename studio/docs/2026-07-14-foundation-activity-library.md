@@ -67,7 +67,7 @@ Rationale: **control-flow completeness** first (real pipelines need branching/it
 | A7 | `fail` (+ optional `assert`) → `node.failed` |
 | A8 | `filter` — array-safe `${}` predicate (whole-expression, closed-fn, order-preserving) → `node.succeeded` outputs |
 | A9 | `execute_pipeline` first-class (surface `call_pipeline`) |
-| A10 | **Connection secret-model split** (public vs secret config) — prerequisite for credentialed connectors |
+| A10 | **Connection secret-model split** (public vs secret config) — prerequisite for credentialed connectors. **DISPOSITION SETTLED — [`2026-07-16-foundation-unified-secret-model.md`](./2026-07-16-foundation-unified-secret-model.md) §5:** already satisfied for the single-secret connection (non-secret `config` + separate `secretRef`, public projection strips it); the only remainder is multi-secret / secret-in-`config`, deferred to the A11/A14 connectors that need it and resolved by adopting the F15 `{$secret}` marker inside `config` (not more `secret_ref` columns). Do NOT re-build the split. |
 | A11 | local `fs` connector (non-secret config + server-side **allowlisted roots + path-traversal guard**) + `file_read`/`file_write` |
 | A12 | `file_copy`/`file_move`/`file_delete`/`file_list` |
 | A13 | `webhook` = **external-wait** (`externalWait.created`/`completed`/`expired`; run parks `waiting` until an inbound correlated+authed route appends completion; timeout/default path) |

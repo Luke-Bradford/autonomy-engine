@@ -94,6 +94,11 @@ later specs assume, so they must be single-owner and early:
 7. **Unified secret model (ONE `SecretRef`/`SecretSink`/redaction contract in #1)** — secure
    outputs can't drive `${}`, secrets resolve only at approved sink fields, git import→`needs_secret`,
    log stores redacted metadata only (opaque handle = later extension, not an alternate live design).
+   **SPECCED — [`2026-07-16-foundation-unified-secret-model.md`](./2026-07-16-foundation-unified-secret-model.md)**
+   settles the whole phase: the SOURCE (a standalone name-addressable secret over the existing
+   `secrets` table) was unbuilt and is F15's real prerequisite; marker = `{$secret:"<name>"}`; F4
+   output redaction is a co-requisite; A10 is already satisfied for a single-secret connection.
+   Build order S1 source → S2 marker+gate → S3 dispatch+redaction → S4 http consumer + A10 note.
 8. Then breadth by value: #2 LLM (L*), #4 control/file (A*), #3 git/publish (G* — G1/G2/G4 parser
    work can run early; G6–G8 gate on version-identity + scheduler-binding + secret-readiness).
 9. **L2 UI epic** renders as L1 lands — Shell (U0–U3) anytime (model-agnostic); Author/Monitor deepen
