@@ -12,7 +12,7 @@
  * thing that lets the sharing be safe.
  */
 import { describe, expect, it } from 'vitest';
-import type { EngineCommand, EngineEvent, RunState } from '../../types.js';
+import type { EngineEvent } from '../../types.js';
 import type { Engine, EngineDoc } from '../../reduce.js';
 import { createEngine } from '../../reduce.js';
 import { driveRun, simpleResolve } from './run-driver.js';
@@ -96,19 +96,19 @@ describe('driveRun — the shared run-driver mechanic', () => {
     // can never empty, so a real convergence backstop must throw rather than
     // hang the process. This is the negative the 50-node test cannot reach: it
     // exercises `guard > 2000` directly, not just "a healthy run stays under it".
-    const emptyState = { status: 'running' } as unknown as RunState;
-    const runawayEngine = {
-      seedState: () => emptyState,
-      reduce: (): { state: RunState; commands: EngineCommand[]; diagnostics: string[] } => ({
-        state: emptyState,
+    const seed = createEngine({ nodes: [], edges: [] }).seedState();
+    const runawayEngine: Engine = {
+      seedState: () => seed,
+      reduce: () => ({
+        state: seed,
         commands: [
           { type: 'dispatchNode', nodeId: 'loop', attemptId: 'loop#0', preparedInput: {} },
         ],
         diagnostics: [],
       }),
-      projectRunState: () => emptyState,
-      resume: () => ({ state: emptyState, commands: [], diagnostics: [] }),
-    } as unknown as Engine;
+      projectRunState: () => seed,
+      resume: () => ({ state: seed, commands: [], diagnostics: [] }),
+    };
     const neverTerminates = (nodeId: string, attemptId: string, runId: string): EngineEvent => ({
       type: 'node.succeeded',
       runId,
