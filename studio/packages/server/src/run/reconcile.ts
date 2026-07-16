@@ -1,4 +1,9 @@
-import { terminalStatusOf, type EngineEvent, type RunState } from '@autonomy-studio/shared';
+import {
+  terminalStatusOf,
+  type ArmWakeupInput,
+  type EngineEvent,
+  type RunState,
+} from '@autonomy-studio/shared';
 import { listRuns } from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
 import {
@@ -202,8 +207,14 @@ function recoverHeld(
   state: RunState,
   heldNodes: string[],
 ): 'held' | 'rearmed' | 'interrupted' {
+  // CLASSIFY EVERY held node before changing anything. Deciding and acting in one
+  // pass would arm a sibling's alarm and only then discover another node is
+  // stranded — leaving a pending alarm on a run this function is about to freeze.
+  // (Harmless, as it happens: the handler's terminal check would suppress it. But
+  // "harmless because something downstream catches it" is not the same as not
+  // doing it, and the interrupt genuinely must take precedence.)
   const spent: string[] = [];
-  const rearmed: EngineEvent[] = [];
+  const missing: { nodeId: string; input: ArmWakeupInput }[] = [];
 
   for (const nodeId of heldNodes) {
     // The FAILED attempt, and provably so: `onFailed` gates on
@@ -219,36 +230,22 @@ function recoverHeld(
     });
     const existing = deps.alarms.find(input);
 
-    if (existing !== null && existing.status === 'pending') continue; // a healthy hold
-
-    if (existing !== null) {
+    if (existing === null) {
+      missing.push({ nodeId, input });
+    } else if (existing.status !== 'pending') {
       // The row exists but is SPENT (fired/suppressed/cancelled) while the node
-      // is still held — the alarm came and went without resolving the hold. This
-      // is NOT re-armable: `arm` would return this very row (same derived key)
-      // and change nothing, and the `node.retryScheduled` we would append from it
-      // would record a due time in the PAST for an alarm that will never fire
-      // again. Nothing can advance this run, so freeze it as needs-attention
-      // rather than report it as waiting.
+      // is still held — the alarm came and went without resolving the hold. NOT
+      // re-armable: `arm` would return this very row (same derived key) and
+      // change nothing, and the `node.retryScheduled` appended from it would
+      // record a due time in the PAST for an alarm that will never fire again.
+      // Nothing can advance this run, so freeze it as needs-attention rather
+      // than report it as waiting.
       spent.push(nodeId);
-      continue;
     }
-
-    const row = deps.alarms.arm(input);
-    rearmed.push({
-      type: 'node.retryScheduled',
-      runId: run.id,
-      nodeId,
-      attemptId: failedAttemptId,
-      // From the ARMED ROW, never the local computation — the same rule
-      // `armRetry` follows, so the log records when the alarm will actually fire.
-      nextAttemptAt: row.dueAt,
-    });
+    // else: a pending row — a healthy hold, nothing to do.
   }
 
   if (spent.length > 0) {
-    // Interrupt takes precedence over any re-arm above: the run is frozen either
-    // way, and a `node.retryScheduled` for a sibling would promise a retry the
-    // frozen run will never take.
     const reason = `retry_alarm_spent:${spent.join(',')}`;
     const interrupted: EngineEvent = { type: 'run.interrupted', runId: run.id, reason };
     const appended = appendEngineEvent(deps.db, interrupted, deps.bus);
@@ -256,8 +253,23 @@ function recoverHeld(
     return 'interrupted';
   }
 
-  if (rearmed.length === 0) return 'held';
-  for (const ev of rearmed) appendEngineEvent(deps.db, ev, deps.bus);
+  if (missing.length === 0) return 'held';
+  for (const { nodeId, input } of missing) {
+    const row = deps.alarms.arm(input);
+    appendEngineEvent(
+      deps.db,
+      {
+        type: 'node.retryScheduled',
+        runId: run.id,
+        nodeId,
+        attemptId: input.ref['attemptId']!,
+        // From the ARMED ROW, never the local computation — the same rule
+        // `armRetry` follows, so the log records when the alarm really fires.
+        nextAttemptAt: row.dueAt,
+      },
+      deps.bus,
+    );
+  }
   return 'rearmed';
 }
 
