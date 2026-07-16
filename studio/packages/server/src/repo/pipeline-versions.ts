@@ -121,11 +121,24 @@ export function createPipelineVersion(db: Db, input: NewPipelineVersion): Pipeli
   // a null-owner caller resolves other null-owner versions. MVP uses a single
   // fixed `'local'` principal, so this never triggers today; it is the honest
   // reading of "owner = the `ownerId` value" for a future multi-tenant swap.
-  const callerOwnerId = getPipeline(db, lowered.pipelineId)?.ownerId ?? null;
+  // Memoize `pipelineId -> ownerId` so a DFS that reaches the same pipeline by
+  // several call paths pays for the owner lookup once. The DFS is bounded by
+  // `maxCallDepth`, so this is a small redundancy — but the cache is one Map and
+  // costs nothing, and reads are safe to memoize: a pipeline's `ownerId` cannot
+  // change under a single synchronous validation pass.
+  const ownerIdByPipeline = new Map<string, string | null>();
+  const ownerIdOf = (pipelineId: string): string | null => {
+    const cached = ownerIdByPipeline.get(pipelineId);
+    if (cached !== undefined) return cached;
+    const ownerId = getPipeline(db, pipelineId)?.ownerId ?? null;
+    ownerIdByPipeline.set(pipelineId, ownerId);
+    return ownerId;
+  };
+  const callerOwnerId = ownerIdOf(lowered.pipelineId);
   const resolvePipeline: PipelineResolver = (calleeVersionId) => {
     const callee = getPipelineVersion(db, calleeVersionId);
     if (callee === null) return undefined; // gone/never-existed — not analyzable
-    const calleeOwnerId = getPipeline(db, callee.pipelineId)?.ownerId ?? null;
+    const calleeOwnerId = ownerIdOf(callee.pipelineId);
     if (calleeOwnerId !== callerOwnerId) return undefined; // cross-owner — never traverse/echo
     return { nodes: callee.nodes };
   };
