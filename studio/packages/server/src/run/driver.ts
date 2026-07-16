@@ -13,6 +13,7 @@ import {
   type RunState,
   type ScheduledWakeup,
 } from '@autonomy-studio/shared';
+import { ZodError } from 'zod';
 import { getRun, updateRun } from '../repo/runs.js';
 import { getPipelineVersion } from '../repo/pipeline-versions.js';
 import type { Db } from '../repo/types.js';
@@ -50,8 +51,9 @@ import { recordRunDiagnostics } from '../repo/run-diagnostics.js';
 /**
  * Resolve a run's immutable pipeline version (its graph + declared params).
  *
- * CONTRACT (#508): a resolver MUST throw {@link DocUnresolvableError} — and only
- * that — when the version cannot be resolved (the row is gone). Any OTHER throw
+ * CONTRACT (#508/#515): a resolver MUST throw {@link DocUnresolvableError} — and
+ * only that — when the version cannot be resolved: the row is GONE, or it is
+ * present but UNPARSEABLE (both permanent for an immutable row). Any OTHER throw
  * is treated by callers as a TRANSIENT fault (a DB blip). The boot reconciler
  * keys off this distinction: a `DocUnresolvableError` means the run can never be
  * driven again (versions are immutable — a missing one never returns), so it is
@@ -60,12 +62,16 @@ import { recordRunDiagnostics } from '../repo/run-diagnostics.js';
  * or leak a permanently-dead run's slot forever — fail-open in one direction or
  * the other. See `reconcile.ts`.
  *
- * NOT (yet) exhaustive over "permanent": #508 classifies the version being GONE.
- * A version row that is PRESENT but no longer parses (a `ZodError` from
- * `getPipelineVersion`, e.g. after a schema tightening — and versions are
- * immutable, so it never repairs) is ALSO permanent but currently throws a
- * non-`DocUnresolvableError` and so is treated transient. Same sibling-leak class,
- * tracked separately — do not read "not-found" as the only permanent case.
+ * PERMANENT is TWO classes, both terminal for an IMMUTABLE version (#508 + #515):
+ *  - the version row is GONE (`getPipelineVersion === null`) — never returns; and
+ *  - the row is PRESENT but no longer PARSES (a `ZodError` or a JSON `SyntaxError`
+ *    from `getPipelineVersion`, e.g. after a schema tightening across a deploy).
+ *    The row can never change (DB `RAISE(ABORT)`) and the schema is fixed for the
+ *    process, so decoding is deterministic — it never repairs on a later boot.
+ * `makeDocResolver` throws {@link DocUnresolvableError} for BOTH (the parse case
+ * as its {@link DocUnparseableError} subtype). A DB *read* fault throws a
+ * better-sqlite3 error (neither a `ZodError` nor a `SyntaxError`), so it is NOT
+ * reclassified and stays transient.
  */
 export type DocResolver = (pipelineVersionId: string) => PipelineVersion;
 
@@ -90,17 +96,62 @@ export class DocUnresolvableError extends Error {
 }
 
 /**
+ * A run's pipeline version is PRESENT but no longer PARSES (#515) — a `ZodError`
+ * (well-formed JSON that fails the schema, e.g. after a tightening across a
+ * deploy) or a `SyntaxError` (a stored json column is not valid JSON) from
+ * `getPipelineVersion`. A
+ * SUBTYPE of {@link DocUnresolvableError} on purpose: it is the same PERMANENT
+ * verdict (an immutable row + a fixed schema never re-parses), so every consumer
+ * that already branches on `instanceof DocUnresolvableError` (`reconcile.ts`
+ * terminalizes, `retry-alarm.ts` suppresses) treats it identically with ZERO
+ * change. The distinct type + `cause` carry the parse failure for diagnosis; the
+ * `run.interrupted` reason stays the shared `doc_unresolvable:<pvId>` because the
+ * operator remedy is the same for both (re-author the version).
+ */
+export class DocUnparseableError extends DocUnresolvableError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message);
+    this.name = 'DocUnparseableError';
+    if (options?.cause !== undefined) this.cause = options.cause;
+  }
+}
+
+/**
  * The ONE production {@link DocResolver}: reads the immutable version row and
- * throws {@link DocUnresolvableError} when it is gone — the resolver is the only
- * thing that knows "gone", so the classification lives HERE rather than being
- * re-derived by every consumer (#508). A factory (not an inline closure in
- * `index.ts`) so the throw-on-missing contract is unit-testable without booting
- * the app — the contract, not just the reconciler that reads it, is what closes
- * the re-`failed`-forever leak, so it is pinned directly.
+ * throws {@link DocUnresolvableError} for BOTH permanent classes — the resolver
+ * is the only thing that knows "gone" or "unparseable", so the classification
+ * lives HERE rather than being re-derived by every consumer (#508, #515). A
+ * factory (not an inline closure in `index.ts`) so the throw contract is
+ * unit-testable without booting the app — the contract, not just the reconciler
+ * that reads it, is what closes the re-`failed`-forever leak, so it is pinned
+ * directly.
+ *
+ * The `getPipelineVersion` call is wrapped so an UNPARSEABLE present row —
+ * permanent, see {@link DocUnparseableError} — is reclassified to that permanent
+ * subtype. Two throw shapes mean exactly that, and both come only from decoding
+ * the stored row: a `ZodError` (the JSON is well-formed but no longer satisfies
+ * the schema, e.g. after a tightening) and a `SyntaxError` (a stored json column
+ * is not valid JSON, so Drizzle's codec throws before the schema is even reached).
+ * Any OTHER throw is a DB *read* fault (a better-sqlite3 error is neither) —
+ * genuinely transient — and propagates unchanged, so a passing blip is never
+ * mistaken for a dead version. The reclassification lives here, not inside
+ * `getPipelineVersion`, so its other callers (routes, `listPipelineVersions`)
+ * still see the raw error their contexts want.
  */
 export function makeDocResolver(db: Db): DocResolver {
   return (pipelineVersionId) => {
-    const pv = getPipelineVersion(db, pipelineVersionId);
+    let pv: PipelineVersion | null;
+    try {
+      pv = getPipelineVersion(db, pipelineVersionId);
+    } catch (err) {
+      if (err instanceof ZodError || err instanceof SyntaxError) {
+        throw new DocUnparseableError(
+          `pipeline version '${pipelineVersionId}' is present but does not parse`,
+          { cause: err },
+        );
+      }
+      throw err;
+    }
     if (pv === null) {
       throw new DocUnresolvableError(`pipeline version '${pipelineVersionId}' not found`);
     }

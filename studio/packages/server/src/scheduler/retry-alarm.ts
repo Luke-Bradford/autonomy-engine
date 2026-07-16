@@ -4,6 +4,7 @@ import { getRun } from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
 import {
   buildEngine,
+  DocUnresolvableError,
   driveRun,
   syncRunLifecycle,
   RETRY_WAKEUP_KIND,
@@ -78,17 +79,31 @@ export function createRetryAlarmHandler(deps: RetryAlarmDeps): WakeupHandler {
       const run = getRun(tx, ref.runId);
       if (run === null) return { status: 'suppressed', reason: 'run_not_found' };
 
-      // The doc must resolve before anything else can be decided. A DELETED
-      // pipeline version throws here, and a throw inside the clock's transaction
-      // rolls back the settle — leaving the row `pending` and re-delivered on
-      // EVERY tick, forever, for a run that can never be driven again. Suppress
-      // instead: settle the alarm and stop. (The same hazard `reconcile.ts`
-      // avoids by reading the log before `buildEngine`.)
+      // The doc must resolve before anything else can be decided. A PERMANENTLY
+      // unresolvable version (`DocUnresolvableError` — gone, or present-but-
+      // unparseable, #508/#515) throws here, and a throw inside the clock's
+      // transaction rolls back the settle — leaving the row `pending` and
+      // re-delivered on EVERY tick, forever, for a run that can never be driven
+      // again. So SUPPRESS on that type: settle the alarm and stop.
+      //
+      // But ONLY that type. A NON-`DocUnresolvableError` throw — a transient DB
+      // blip, by the resolver's contract — is precisely what the rollback +
+      // redeliver is FOR: the retry should fire next tick, not be silently lost.
+      // Rethrow it (the clock leaves the row `pending`). Suppressing every throw
+      // would classify a passing blip as a dead run and drop the node's retry
+      // forever — the fail-open direction #508 split these types to avoid.
+      // (`buildEngine`/`createEngine` is total over a schema-valid doc — it folds
+      // defects into `docDefects` rather than throwing — so a throw here is the
+      // resolve, not the build; the same hazard `reconcile.ts` avoids by reading
+      // the log before `buildEngine`.)
       let engine;
       try {
         engine = buildEngine(deps.resolveDoc(run.pipelineVersionId));
-      } catch {
-        return { status: 'suppressed', reason: 'doc_unresolvable' };
+      } catch (err) {
+        if (err instanceof DocUnresolvableError) {
+          return { status: 'suppressed', reason: 'doc_unresolvable' };
+        }
+        throw err;
       }
 
       const state = engine.projectRunState(events);

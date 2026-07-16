@@ -500,18 +500,20 @@ async function reconcileOne(deps: ReconcileDeps, report: ReconcileReport, run: R
     return;
   }
 
-  // #508 — the doc is resolved HERE, and a PERMANENT resolve failure is
+  // #508/#515 — the doc is resolved HERE, and a PERMANENT resolve failure is
   // terminalized rather than left to re-`failed` on every boot forever. A
-  // `DocUnresolvableError` means the immutable version is gone and never returns
-  // (unlike a transient DB blip), so the run can never be driven again: freeze it
+  // `DocUnresolvableError` means the immutable version can never be driven again:
+  // either the row is GONE (#508) or it is PRESENT but no longer PARSES
+  // (`DocUnparseableError`, #515) — both permanent, since the row never changes
+  // and the schema is fixed for the process. So freeze the run
   // `interrupted`/needs-attention, freeing its concurrency slot. Any OTHER throw
-  // is transient — rethrow it to #479's per-run catch, which files it under
-  // `failed` and leaves the run `running` for the next boot (terminalizing a
+  // is transient (a DB blip) — rethrow it to #479's per-run catch, which files it
+  // under `failed` and leaves the run `running` for the next boot (terminalizing a
   // healthy run on a passing blip is fail-open the other way). This scopes to the
-  // `resolveDoc` call ONLY: the version being GONE (#508). A resolvable-but-
-  // otherwise-unbuildable version is a different, out-of-scope class and still
-  // falls through to `failed`. The verdict is derived from the resolver's TYPE
-  // (#491's derive-don't-guess), not inferred from a bare catch.
+  // `resolveDoc` call ONLY: a resolvable-but-otherwise-unbuildable version is a
+  // different, out-of-scope class and still falls through to `failed`. The verdict
+  // is derived from the resolver's TYPE (#491's derive-don't-guess), not inferred
+  // from a bare catch.
   //
   // ORDERING: this sits ABOVE the `pending` resync below (which needs the doc to
   // project). So a `running` row with NO `run.started` AND a gone version — both
