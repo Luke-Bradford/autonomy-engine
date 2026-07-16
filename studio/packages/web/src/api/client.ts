@@ -1,6 +1,5 @@
 import type { ZodType } from 'zod';
-import { ApiErrorBodySchema } from '@autonomy-studio/shared';
-import type { ApiErrorBody } from '@autonomy-studio/shared';
+import { ApiErrorBodySchema, type ApiErrorBody } from '@autonomy-studio/shared';
 
 // `ApiErrorBody`/`ApiErrorBodySchema` are the SSOT for the error-response
 // contract, authored once in `@autonomy-studio/shared` and shared with the
