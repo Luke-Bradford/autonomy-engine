@@ -31,15 +31,37 @@ const loaded: PipelineVersion = PipelineVersionSchema.parse({
 });
 
 describe('toVersionBody', () => {
-  it('carries params/outputs/containers from the loaded version and uses the current graph', () => {
+  // #485 — `toVersionBody` is the one HAND-LISTED PipelineVersion builder (the
+  // import path spreads). Every `.default()` field is optional in the wire body
+  // (`z.input`), so a future carry-forward field could be dropped here silently,
+  // exactly as `containers` was on import. Beyond the per-field value checks,
+  // this asserts the builder COVERS every field the wire body carries — minus
+  // the ones it deliberately does not send — so a new field added to the schema
+  // fails HERE until it is either carried or explicitly declared an omission.
+  it('carries EVERY carry-forward field from the loaded version — a class guard (#485)', () => {
     const nodes = [node('a'), node('b')];
     const edges = [edge('e', 'a', 'b')];
     const body = toVersionBody(loaded, nodes, edges);
+
+    // The distinctive values survive (containers is non-empty in `loaded`, so a
+    // drop-to-`[]` default would be visible, not masked).
     expect(body.params).toEqual(loaded.params);
     expect(body.outputs).toEqual(loaded.outputs);
     expect(body.containers).toEqual(loaded.containers);
     expect(body.nodes).toEqual(nodes);
     expect(body.edges).toEqual(edges);
+
+    // CLASS coverage. `catalogVersion` is the ONLY field `toVersionBody` omits
+    // on purpose — the server re-stamps the current catalog on save (asserted by
+    // the 'omits catalogVersion' test below). `pipelineId` is already absent from
+    // `PipelineVersionWriteSchema`. Any OTHER schema field missing from the body
+    // is the #485 defect.
+    const DELIBERATELY_OMITTED = ['catalogVersion'];
+    const carried = new Set(Object.keys(body));
+    const missing = Object.keys(PipelineVersionWriteSchema.shape).filter(
+      (key) => !DELIBERATELY_OMITTED.includes(key) && !carried.has(key),
+    );
+    expect(missing).toEqual([]);
   });
 
   it('omits catalogVersion so the server stamps the current one on save', () => {
