@@ -10,10 +10,14 @@
  * queue, which a deadlock simply drains. That gap is tracked separately; do not
  * read this file as "the reducer survives anything".
  *
- * Why these live in the reducer at all: `validateDoc` is ADVISORY (#444). Its
- * only caller is the canvas badge, which does not block Save, and the server
- * never calls it — so a git import or a direct `POST /api/pipelines/:id/versions`
- * reaches `createEngine`/`reduce` with an arbitrary doc. `reduce` is PURE and is
+ * Why these live in the reducer at all — and why they MUST STAY, now that #444
+ * gated the write path. The gate closed the DOOR: `createPipelineVersion`
+ * refuses a doc `validateDoc` rejects, so no NEW row can carry these shapes. It
+ * did not clean the house: every row written BEFORE that gate was never
+ * validated, is IMMUTABLE (so it cannot be repaired, only re-authored), and
+ * still reaches `createEngine`/`reduce`. Do not read "the server validates now"
+ * as licence to delete these guards — the docs they defend against are already
+ * in storage. `reduce` is PURE and is
  * the thing every run is folded through: its docblock says it must not throw on a
  * malformed doc, and a hang or a deadlock there is worse than a throw. So the
  * reducer NEUTRALIZES what the validator merely warns about (the posture #480

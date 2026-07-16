@@ -616,10 +616,11 @@ export function substitute(value: unknown, ctx: SubstitutionContext): unknown {
 // list: `exitWhen` (live today), `if.condition` / `foreach.items` / `switch` case
 // selectors / `filter` predicates (#4).
 //
-// The rule needs BOTH halves — save-time (`validateWholeValue`, advisory: the
-// canvas badge) and run-time (`wholeValueDefect`, binding: the reducer, since a
-// git import or a direct POST never passes through save-time validation). Both
-// read `defectOf` so the two halves can never word or judge the rule differently.
+// The rule needs BOTH halves — save-time (`validateWholeValue`: the canvas
+// badge, and the write path, which refuses such a doc as of #444) and run-time
+// (`wholeValueDefect`, binding: the reducer, since rows written before that gate
+// never passed through save-time validation). Both read `defectOf` so the two
+// halves can never word or judge the rule differently.
 
 /**
  * The MODE defect in a whole-value-required field, or `null` if it is a proper
@@ -829,6 +830,40 @@ export function validateRefs(
   return errors;
 }
 
+// --- validatePipelineDoc (the ONE composition both gates call) -------------
+
+/**
+ * The COMPLETE static validation of a pipeline doc: the union of the two pure
+ * validators. This is the SSOT for *which* rules a doc must satisfy, and both
+ * gates call it — the canvas badge (`web/.../canvasDoc.ts`) and the server
+ * write-gate (`server/.../repo/pipeline-versions.ts`, #444).
+ *
+ * It exists so those two can never drift apart. Hand-composing the two calls at
+ * each site would make "the badge shows exactly what the server refuses" a
+ * convention that holds only while every call site is remembered — the same
+ * per-site-convention class that silently dropped `containers` in #473. Here it
+ * holds by construction.
+ *
+ * `containers` is load-bearing for BOTH halves, not just the structural one: a
+ * LOOP container re-runs its children, which is what makes a
+ * `${nodes.<id>.status}` ref unanswerable in that doc (#6 E3).
+ *
+ * No `ValidateDocOptions` are passed, deliberately: `selfId`/`resolvePipeline`
+ * enable `call_pipeline` cycle+depth analysis, which needs a DB read (impure)
+ * and would make the server enforce a rule the canvas never checked — a doc
+ * that badges clean would newly 400. So `call_pipeline` cycles still reach the
+ * reducer unchecked; wiring an OWNER-SCOPED resolver is its own ticket (the
+ * resolver's errors echo another version's ids, which the #444 security
+ * argument does not cover).
+ *
+ * PURE: no I/O, no clock. Returns error strings; `[]` means valid.
+ */
+export function validatePipelineDoc(
+  doc: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'>,
+): string[] {
+  return [...validateDoc(doc), ...validateRefs(doc)];
+}
+
 // --- validateDoc (structural static validation, run at pipeline-SAVE time) --
 
 /** A pipeline-version resolver: the `nodes` of another version, for the call graph. */
@@ -891,8 +926,10 @@ export function validateDoc(
 
   // A CORRUPT `config.outputs` (#1 F13a). Reported HERE as a readable
   // diagnostic so the authoring UI can show it; `StrictNodeSchema` is what
-  // actually REFUSES it on save (this validator is advisory — see #444), and
-  // the reducer fails the node at run time. Reported once per node: every
+  // actually REFUSES it on save — it runs FIRST, so this rule is unreachable
+  // from the #444 write gate (a corrupt contract is a `ZodError`/400
+  // `validation_error`, never `invalid_pipeline_doc`) — and the reducer fails
+  // the node at run time. Reported once per node: every
   // `${nodes.<id>.output.*}` ref against a corrupt contract has the same one
   // root cause, so per-ref errors would just bury it.
   for (const node of doc.nodes) {
@@ -935,9 +972,10 @@ export function validateDoc(
     // The container counterpart of the back-edge no-progress rule below. A loop
     // with no children re-rounds forever: the round is vacuously terminal, the
     // reset returns nothing to `pending`, so `exitWhen` can never change. The
-    // reducer refuses it too (`stepContainers` → `no_progress`) — it has to, this
-    // validator being advisory — but a doc this broken should be reported here as
-    // well, not only discovered at run time.
+    // reducer refuses it too (`stepContainers` → `no_progress`) — it has to, for
+    // the rows written before the #444 write gate, which were never validated —
+    // but a doc this broken should be reported here as well, not only discovered
+    // at run time.
     // Counts only children that RESOLVE to a node, which is what makes this the
     // reducer's rule rather than a near-miss of it: the reducer tests the body it
     // will actually run (non-node children are neutralized at the bind), so a
@@ -982,13 +1020,13 @@ export function validateDoc(
   // downstream. Report it; PARSE stays permissive so a git import round-trips
   // one unchanged.
   //
-  // NB this is ADVISORY, not a gate: `validateDoc`'s only caller is the canvas
-  // (`web/.../canvasDoc.ts`), which renders the result as a badge and does NOT
-  // block Save, and the server never calls it at all (#444). The reducer's
-  // diagnostic is what actually makes an inert branch edge observable at run
-  // time. #4 A0/A1/A2 replaces this rule with the real one ("a branch edge's
-  // source must declare that branch"), which needs the ActivityDefinition
-  // contract.
+  // NB the WRITE PATH now refuses a doc this reports (#444 — the server calls
+  // `validatePipelineDoc` in `createPipelineVersion`), but rows written BEFORE
+  // that gate were never validated, so the reducer's diagnostic remains the
+  // thing that makes an inert branch edge observable at run time. Both halves
+  // are load-bearing; do not delete the reducer's on the strength of this one.
+  // #4 A0/A1/A2 replaces this rule with the real one ("a branch edge's source
+  // must declare that branch"), which needs the ActivityDefinition contract.
   for (const e of doc.edges) {
     if (e.on !== 'branch') continue;
     errors.push(
@@ -1114,9 +1152,9 @@ function validateExitWhen(
   // round and reported the misleading `capped`. The usable form is
   // `${equals(nodes.check.status, 'success')}`.
   //
-  // Advisory, like everything in `validateDoc` (#444) — `evalExitWhen` throws on
-  // the same defect at RUN time, which is what actually binds. Both halves or
-  // the rule is decorative.
+  // The write path refuses this now (#444), but rows written before that gate
+  // were never validated — `evalExitWhen` throws on the same defect at RUN time,
+  // which is what binds for those. Both halves or the rule is decorative.
   const type = inferExprType(parsed, scope);
   if (!assignableTo(type, 'boolean')) {
     errors.push(

@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { CATALOG_VERSION, ImportError, type NewPipelineVersion } from '@autonomy-studio/shared';
 import {
+  InvalidPipelineDocError,
   createConnection,
   createPipeline,
   createPipelineVersion,
   createSecret,
   createTrigger,
   getPipelineVersion,
+  listPipelineVersions,
+  listPipelines,
 } from '../../repo/index.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { exportConnection, exportPipeline, exportTrigger } from '../export.js';
@@ -64,6 +67,56 @@ describe('importEnvelope: pipeline', () => {
     expect(getPipelineVersion(db, importedVersion.id)).toEqual(importedVersion);
   });
 
+  // #444 + #459. The gate makes mid-import rejection a REAL class (before it,
+  // only a Zod parse could reject), so the import's atomicity stops being
+  // theoretical: without a transaction, a refused version leaves an orphan
+  // pipeline + the versions that happened to land first.
+  it('an INVALID version mid-envelope is refused and leaves NO orphan pipeline (#459)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'TwoVersions' });
+    const validInput: NewPipelineVersion = {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [{ id: 'n1', type: 'llm_call', config: {}, position: { x: 0, y: 0 } }],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    };
+    createPipelineVersion(db, validInput);
+    createPipelineVersion(db, validInput);
+
+    // Hand-edit the SECOND version into a forward cycle. This is the real
+    // threat model, not a contrivance: an export is a git-authorable file, and
+    // `parseAndUpgradeEnvelope` is deliberately permissive about graph rules so
+    // a doc round-trips unchanged — so the doc rules are the importer's job.
+    // Version 1 stays valid, which is exactly what makes a partial write
+    // possible: it lands before version 2 is refused.
+    const envelope = JSON.parse(JSON.stringify(exportPipeline(db, pipeline.id, 'owner-a')));
+    // Derive the two nodes from the REAL exported node so they satisfy the
+    // export schema (which requires an explicit `connectionId`) — the point of
+    // this test is a doc-RULE refusal, not a Zod-shape one, and those are
+    // different branches with different status codes.
+    const exportedNode = envelope.data.versions[1].nodes[0];
+    envelope.data.versions[1].nodes = [
+      { ...exportedNode, id: 'a' },
+      { ...exportedNode, id: 'b' },
+    ];
+    envelope.data.versions[1].edges = [
+      { id: 'e1', from: 'a', to: 'b', on: 'success' },
+      { id: 'e2', from: 'b', to: 'a', on: 'success' },
+    ];
+
+    expect(() => importEnvelope(db, 'owner-b', envelope)).toThrow(InvalidPipelineDocError);
+
+    // The importer's OWN pipeline row must not survive the refusal — and
+    // neither may version 1, which really was written before the throw.
+    const orphans = listPipelines(db, 'owner-b');
+    expect(orphans).toEqual([]);
+    // owner-a's source pipeline is untouched: a refused import is not a delete.
+    expect(listPipelines(db, 'owner-a')).toHaveLength(1);
+    expect(listPipelineVersions(db, pipeline.id)).toHaveLength(2);
+  });
+
   // #473 — the SECOND, independent loss point. Even with the `containers`
   // column fixed, `importPipelineEnvelope` rebuilt its `NewPipelineVersion`
   // field-by-field and simply never copied `containers`, so an imported
@@ -75,13 +128,31 @@ describe('importEnvelope: pipeline', () => {
     const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Containered' });
     const containers = [
       { id: 'c1', kind: 'stage' as const, children: ['n1'], join: 'all' as const },
-      { id: 'c2', kind: 'loop' as const, children: [], maxRounds: 5, exitWhen: '${true}' },
+      // `n2` + a child-output `exitWhen` are what make `c2` a VALID loop, now
+      // that the write path enforces the doc rules (#444). The invalidity was
+      // incidental to what this test proves (containers survive the round-trip)
+      // and was only reachable because nothing validated.
+      {
+        id: 'c2',
+        kind: 'loop' as const,
+        children: ['n2'],
+        maxRounds: 5,
+        exitWhen: '${nodes.n2.output.done}',
+      },
     ];
     const sourceVersion = createPipelineVersion(db, {
       pipelineId: pipeline.id,
       params: [],
       outputs: [],
-      nodes: [{ id: 'n1', type: 'llm_call', config: {}, position: { x: 0, y: 0 } }],
+      nodes: [
+        { id: 'n1', type: 'llm_call', config: {}, position: { x: 0, y: 0 } },
+        {
+          id: 'n2',
+          type: 'llm_call',
+          config: { outputs: [{ name: 'done', type: 'boolean' }] },
+          position: { x: 0, y: 0 },
+        },
+      ],
       edges: [],
       containers,
       catalogVersion: CATALOG_VERSION,

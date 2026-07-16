@@ -1,7 +1,7 @@
 import { ZodError } from 'zod';
 import type { FastifyInstance } from 'fastify';
 import { ImportError } from '@autonomy-studio/shared';
-import { PipelineHasRunsError } from './repo/index.js';
+import { InvalidPipelineDocError, PipelineHasRunsError } from './repo/index.js';
 
 /**
  * Thrown by a route handler when the requested resource does not exist OR
@@ -52,12 +52,19 @@ function hasNumericStatusCode(err: unknown): err is Error & { statusCode: number
 /**
  * Registers the ONE structured error handler for the whole app. Every branch
  * returns a small, fixed-shape body; nothing here ever forwards a raw
- * exception message, stack trace, or internal path to the client — the only
- * strings that reach the client are ones this handler constructs itself
- * (`NotFoundError`/`PipelineHasRunsError` messages are already
- * client-safe — they name a resource kind + an opaque id, nothing else).
- * The full error (with stack) is still logged server-side via
- * `request.log`, so nothing is lost for debugging.
+ * exception message, stack trace, or internal path to the client. The strings
+ * that reach the client are ones this handler (or an author-constructed,
+ * already-client-safe error) provides: `NotFoundError`/`PipelineHasRunsError`
+ * name a resource kind + an opaque id, nothing else.
+ *
+ * ONE branch echoes caller input, deliberately: `InvalidPipelineDocError`
+ * (#444) quotes ids/key-paths/`${}` text from the doc the caller just POSTed,
+ * because a validation diagnostic that names nothing is useless. It is safe
+ * only because that doc is owner-scoped and is the caller's own — see that
+ * branch's own note. No OTHER branch may echo input without the same argument.
+ *
+ * The full error (with stack) is still logged server-side via `request.log`,
+ * so nothing is lost for debugging.
  */
 export function registerErrorHandler(fastify: FastifyInstance): void {
   fastify.setErrorHandler((error: unknown, request, reply) => {
@@ -92,6 +99,37 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
       return;
     }
 
+    // The pipeline-doc write gate (#444). Thrown by `createPipelineVersion`
+    // for a doc that passes Zod but fails the engine's structural/`${}` rules.
+    //
+    // `issues` is OBJECT-shaped (`{ message }`), not `string[]`, because that
+    // is the pre-existing client contract: `web/src/api/client.ts`'s
+    // `ApiErrorBody` declares `issues?: Array<{ path?; message? }>`. Conforming
+    // to it (rather than forking a second shape) is the whole reason.
+    //
+    // `message` is what the canvas actually renders today — `messageFromBody`
+    // returns it before it ever looks at `issues` — so `issues` is currently
+    // belt-and-braces: it is what a UI listing them per-issue would read, and
+    // it is what keeps the body renderable if `message` were ever dropped.
+    //
+    // ECHO NOTE: unlike every other branch here, these strings are constructed
+    // by the shared validators, not by this handler, and they DO quote the
+    // caller's input — node/container ids, config KEY paths, and `${}`
+    // expression text. That is deliberate and safe: both write paths are
+    // owner-scoped before the guard runs, so the doc being described is always
+    // the caller's own, returned synchronously to the caller who just sent it.
+    // The validators are STATIC (they run pre-substitution), so no resolved
+    // param value, and no secret, exists at that point to leak — a secret-typed
+    // param ref is refused by NAME. See the PR for #444's security model.
+    if (error instanceof InvalidPipelineDocError) {
+      reply.status(400).send({
+        error: 'invalid_pipeline_doc',
+        message: error.message,
+        issues: error.issues.map((message) => ({ message })),
+      });
+      return;
+    }
+
     if (error instanceof BadRequestError) {
       reply.status(400).send({ error: 'bad_request', message: error.message });
       return;
@@ -112,7 +150,11 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     // validate manually with the shared Zod schemas rather than a Fastify
     // route `schema` option. Unlike the ZodError branch above (whose
     // `issues` are value-free — a path + a fixed message, never an echo of
-    // the caller's input), Fastify's own parser error `message` can quote a
+    // the caller's input; the `invalid_pipeline_doc` branch is the one
+    // deliberate exception, and is safe for reasons that do NOT apply here:
+    // this error can fire before any route handler, so before any owner
+    // check, and its text is a library's, not an author's), Fastify's own
+    // parser error `message` can quote a
     // fragment of the malformed body straight back at the client. The
     // generic message here avoids that echo; the real error (with detail)
     // still reaches the server log.

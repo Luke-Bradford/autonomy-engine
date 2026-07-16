@@ -514,8 +514,8 @@ describe('substitute — MAX_PATH_DEPTH bounds the walk (#6 E7)', () => {
   // deep path returning a scalar spends NOTHING against MAX_ARRAY_ELEMENTS_TOTAL
   // — the array budget cannot see this work. JSON.parse accepts 50k-deep nesting
   // and a `json` param takes any parsed value as-is off a run-now override, so
-  // deep DATA is reachable; validateRefs is advisory (#444), so an unvalidated
-  // doc reaches the engine. Measured: depth 20000 x 50k invocations = 1e9
+  // deep DATA is reachable — and a run-now override is a VALUE the #444 write
+  // gate never sees at all. Measured: depth 20000 x 50k invocations = 1e9
   // lookups = ~4.4s of blocked PURE reducer, per field.
   function deepData(n: number): Record<string, unknown> {
     let v: Record<string, unknown> = { end: 'leaf' };

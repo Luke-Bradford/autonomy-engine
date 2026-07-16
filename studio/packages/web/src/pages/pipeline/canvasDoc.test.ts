@@ -7,7 +7,7 @@ import {
   type PipelineVersion,
 } from '@autonomy-studio/shared';
 import { PipelineVersionWriteSchema } from '../../api/pipelines';
-import { toVersionBody, validateCanvas } from './canvasDoc';
+import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
 
 function node(id: string, config: Record<string, unknown> = {}): Node {
   return { id, type: 'http_request', config, position: { x: 0, y: 0 } };
@@ -85,5 +85,29 @@ describe('validateCanvas', () => {
     const edges = [edge('e1', 'a', 'b'), edge('e2', 'b', 'a')];
     const issues = validateCanvas(nodes, edges, [], []);
     expect(issues.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * #444. Save is now gated on `issues` because the SERVER refuses an invalid
+ * doc — the badge used to say "you can still save", which stopped being true.
+ * The predicate is extracted here (rather than asserted through a render) so it
+ * is testable without mounting ReactFlow in jsdom; the rendered result is
+ * covered by the browser-verify gate.
+ */
+describe('canSave (#444)', () => {
+  const OK = { saving: false, ready: true, issues: [] as string[] };
+
+  it('allows a save when the doc is valid and the canvas is ready', () => {
+    expect(canSave(OK)).toBe(true);
+  });
+
+  it('REFUSES a save while the doc has issues — the server would 400 it anyway', () => {
+    expect(canSave({ ...OK, issues: ['forward cycle detected involving {a, b}'] })).toBe(false);
+  });
+
+  it('still refuses while saving, or before the canvas is ready (unchanged)', () => {
+    expect(canSave({ ...OK, saving: true })).toBe(false);
+    expect(canSave({ ...OK, ready: false })).toBe(false);
   });
 });

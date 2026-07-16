@@ -2,10 +2,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { CATALOG_VERSION, type NewPipelineVersion } from '@autonomy-studio/shared';
+import { CATALOG_VERSION, type NewPipelineVersion, type Node } from '@autonomy-studio/shared';
 import { openDb } from '../../db/client.js';
 import { pipelineVersions } from '../../db/schema.js';
 import {
+  InvalidPipelineDocError,
   createPipelineVersion,
   getLatestPipelineVersion,
   getPipelineVersion,
@@ -14,6 +15,20 @@ import {
 import * as pipelineVersionsRepo from '../pipeline-versions.js';
 import { createPipeline } from '../pipelines.js';
 import { freshDb } from './helpers.js';
+
+/**
+ * A valid `loop` child + its exit condition, for the #473 container-persistence
+ * fixtures. A loop must have at least one child and an `exitWhen` that reads a
+ * CHILD's output (never a constant) — see `validate-doc.test.ts`, which owns
+ * those rules. The write path enforces them as of #444.
+ */
+const LOOP_CHILD_NODE: Node = {
+  id: 'node_2',
+  type: 'llm_call',
+  config: { outputs: [{ name: 'done', type: 'boolean' }] },
+  position: { x: 0, y: 0 },
+};
+const CHILD_EXIT_WHEN = '${nodes.node_2.output.done}';
 
 function buildVersionInput(pipelineId: string): NewPipelineVersion {
   return {
@@ -25,6 +40,100 @@ function buildVersionInput(pipelineId: string): NewPipelineVersion {
     catalogVersion: CATALOG_VERSION,
   };
 }
+
+describe('pipeline-versions repo — the write gate (#444)', () => {
+  it('REFUSES a forward cycle (the #491 doc) — nothing is written', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const input: NewPipelineVersion = {
+      ...buildVersionInput(pipeline.id),
+      params: [],
+      nodes: [
+        { id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } },
+        { id: 'b', type: 'agent_task', config: {}, position: { x: 0, y: 0 } },
+      ],
+      edges: [
+        { id: 'e1', from: 'a', to: 'b', on: 'success' },
+        { id: 'e2', from: 'b', to: 'a', on: 'success' },
+      ],
+    };
+
+    expect(() => createPipelineVersion(db, input)).toThrow(InvalidPipelineDocError);
+    // The refusal is a REFUSAL, not a partial write: a version row would be
+    // immutable (DB triggers RAISE(ABORT) on update), so a doc that lands here
+    // could never be repaired, only re-authored.
+    expect(listPipelineVersions(db, pipeline.id)).toEqual([]);
+  });
+
+  it("REFUSES a container's ghost child (the #487 doc)", () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    expect(() =>
+      createPipelineVersion(db, {
+        ...buildVersionInput(pipeline.id),
+        containers: [{ id: 'c1', kind: 'stage', children: ['ghost'], join: 'all' }],
+      }),
+    ).toThrow(InvalidPipelineDocError);
+  });
+
+  it('REFUSES an undeclared `${params.x}` ref (validateRefs is wired, not just validateDoc)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    expect(() =>
+      createPipelineVersion(db, {
+        ...buildVersionInput(pipeline.id),
+        params: [],
+        nodes: [
+          {
+            id: 'node_1',
+            type: 'llm_call',
+            config: { prompt: '${params.nope}' },
+            position: { x: 0, y: 0 },
+          },
+        ],
+      }),
+    ).toThrow(InvalidPipelineDocError);
+  });
+
+  it('carries EVERY issue on the error, not just the first', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    let caught: InvalidPipelineDocError | undefined;
+    try {
+      createPipelineVersion(db, {
+        ...buildVersionInput(pipeline.id),
+        params: [],
+        nodes: [
+          {
+            id: 'node_1',
+            type: 'llm_call',
+            config: { prompt: '${params.nope}' },
+            position: { x: 0, y: 0 },
+          },
+        ],
+        containers: [{ id: 'c1', kind: 'stage', children: ['ghost'], join: 'all' }],
+      });
+    } catch (err) {
+      caught = err as InvalidPipelineDocError;
+    }
+    expect(caught).toBeInstanceOf(InvalidPipelineDocError);
+    // One from each validator — proves the guard reports the whole doc's
+    // problems in one round-trip rather than making the author play whack-a-mole.
+    expect(caught?.issues).toEqual(
+      expect.arrayContaining([
+        "container 'c1': child 'ghost' is not a node in this pipeline",
+        'nodes.node_1.config.prompt: ${params.nope} is not a declared param',
+      ]),
+    );
+  });
+
+  it('ACCEPTS a valid doc — the gate refuses invalid docs, not all docs', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    expect(() => createPipelineVersion(db, buildVersionInput(pipeline.id))).not.toThrow();
+    expect(listPipelineVersions(db, pipeline.id)).toHaveLength(1);
+  });
+});
 
 describe('pipeline-versions repo', () => {
   it('creates version 1 for a brand-new pipeline', () => {
@@ -77,10 +186,25 @@ describe('pipeline-versions repo', () => {
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
     const containers = [
       { id: 'c1', kind: 'stage' as const, children: ['node_1'], join: 'all' as const },
-      { id: 'c2', kind: 'loop' as const, children: [], maxRounds: 3, exitWhen: '${true}' },
+      {
+        id: 'c2',
+        kind: 'loop' as const,
+        children: ['node_2'],
+        maxRounds: 3,
+        exitWhen: CHILD_EXIT_WHEN,
+      },
     ];
 
-    const created = createPipelineVersion(db, { ...buildVersionInput(pipeline.id), containers });
+    // `node_2` + a child-output `exitWhen` are what make `c2` a VALID loop, now
+    // that the write path enforces the doc rules (#444). The invalidity was
+    // always incidental to what this test proves (containers reach storage) —
+    // it was only ever reachable because nothing validated. Persistence is
+    // still asserted on the FULL two-container shape, unweakened.
+    const created = createPipelineVersion(db, {
+      ...buildVersionInput(pipeline.id),
+      nodes: [...buildVersionInput(pipeline.id).nodes, LOOP_CHILD_NODE],
+      containers,
+    });
 
     // The create RESPONSE is built from the in-memory input, so it looked
     // correct even while the write dropped the field — assert the RE-READ.

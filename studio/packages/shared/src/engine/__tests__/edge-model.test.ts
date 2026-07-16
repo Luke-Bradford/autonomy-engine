@@ -491,10 +491,10 @@ describe('containers — skipped + JOIN inside a stage', () => {
 /**
  * #480 — a CROSS-BOUNDARY forward edge must not absorb a failure at top scope.
  *
- * `validateDoc` forbids these edges outright, but it is ADVISORY (#444): its
- * only caller is the canvas badge, so a git import or a direct POST reaches the
- * reducer unchecked. The reducer therefore has to be fail-SAFE on the shape by
- * itself rather than assume validation removed it.
+ * `validateDoc` forbids these edges outright, and the write path refuses such a
+ * doc as of #444 — but rows written before that gate were never validated and
+ * still reach the reducer. The reducer therefore has to be fail-SAFE on the
+ * shape by itself rather than assume validation removed it.
  *
  * The MECHANISM — why the fix touches `topOutgoing` and deliberately not
  * `topIncoming` — is documented where it lives, in `createEngine`'s index build
@@ -862,10 +862,10 @@ describe('absorption requires a catch that actually RAN (§C.5.3 — back-edges)
     //
     // `validateDoc` REJECTS this doc ("makes no progress — its reset body must
     // include its source"), so it is unreachable through the canvas. It is
-    // pinned anyway because `validateDoc` is ADVISORY: its only caller is the
-    // canvas badge, the server never calls it (#444), so a git import or a
-    // direct POST reaches this reducer unchecked. Same reasoning `evalExitWhen`
-    // records for the whole-value rule — the reducer is the half that BINDS.
+    // pinned anyway because the #444 write gate only closed the DOOR: rows
+    // written before it were never validated, are immutable, and still reach
+    // this reducer. Same reasoning `evalExitWhen` records for the whole-value
+    // rule — the reducer is the half that BINDS for a doc already in storage.
     const eng = createEngine({
       nodes: [node('g'), node('a'), node('c1')],
       edges: [
@@ -893,8 +893,9 @@ describe('the outcome predicate terminates, and is bounded', () => {
   // skip enters from OUTSIDE the cycle, so every node in it resolves without
   // ever running.
   //
-  // `forwardCycleErrors` rejects these docs at save time — and is advisory
-  // (#444), like every save-time rule the reducer must not lean on.
+  // `forwardCycleErrors` rejects these docs at save time, and the write path
+  // refuses them as of #444 — but rows written before that gate were never
+  // validated, like every save-time rule the reducer must not lean on.
   //
   // BOTH walks need their OWN pin: they are reached by DIFFERENT conjuncts, so
   // one test cannot cover both. Each is mutation-verified — deleting just that

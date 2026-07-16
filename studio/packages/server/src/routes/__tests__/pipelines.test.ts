@@ -166,4 +166,81 @@ describe('pipelines routes', () => {
     });
     expect(res.statusCode).toBe(404);
   });
+
+  // #444 — the write gate over HTTP. The repo tests own the RULES; these own
+  // the wire contract: the status, the code, and the body shape the canvas
+  // actually renders.
+  describe('POST /versions refuses an invalid doc (#444)', () => {
+    async function postDoc(payload: Record<string, unknown>) {
+      const pipelineRes = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines',
+        payload: { name: 'Gated' },
+      });
+      const pipeline = pipelineRes.json();
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${pipeline.id}/versions`,
+        payload,
+      });
+      return { pipeline, res };
+    }
+
+    it('400 invalid_pipeline_doc for a forward cycle, and stores NOTHING', async () => {
+      const { pipeline, res } = await postDoc({
+        ...emptyVersionBody,
+        nodes: [
+          { id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } },
+          { id: 'b', type: 'agent_task', config: {}, position: { x: 0, y: 0 } },
+        ],
+        edges: [
+          { id: 'e1', from: 'a', to: 'b', on: 'success' },
+          { id: 'e2', from: 'b', to: 'a', on: 'success' },
+        ],
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('invalid_pipeline_doc');
+
+      const list = await app.inject({
+        method: 'GET',
+        url: `/api/pipelines/${pipeline.id}/versions`,
+      });
+      expect(list.json()).toEqual([]);
+    });
+
+    it('carries a `message` AND object-shaped `issues` — the shape the client renders', async () => {
+      const { res } = await postDoc({
+        ...emptyVersionBody,
+        nodes: [
+          {
+            id: 'a',
+            type: 'agent_task',
+            config: { prompt: '${params.nope}' },
+            position: { x: 0, y: 0 },
+          },
+        ],
+      });
+      const body = res.json();
+
+      // REGRESSION PIN on the client contract (`web/src/api/client.ts`'s
+      // `ApiErrorBody`). `messageFromBody` returns `message` when present, and
+      // otherwise joins `issues` READ AS OBJECTS (`issue.path`/`issue.message`).
+      // So `message` is what the canvas renders today, and the object shape is
+      // what keeps `issues` renderable rather than joining to `; ` if `message`
+      // were ever dropped. Both halves pinned.
+      expect(typeof body.message).toBe('string');
+      expect(body.message.length).toBeGreaterThan(0);
+      expect(body.issues).toEqual([
+        { message: 'nodes.a.config.prompt: ${params.nope} is not a declared param' },
+      ]);
+    });
+
+    it('still accepts a VALID doc (201) — the gate refuses invalid docs, not all docs', async () => {
+      const { res } = await postDoc({
+        ...emptyVersionBody,
+        nodes: [{ id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } }],
+      });
+      expect(res.statusCode).toBe(201);
+    });
+  });
 });

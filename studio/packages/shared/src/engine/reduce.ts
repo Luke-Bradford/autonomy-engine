@@ -169,8 +169,9 @@ export function createEngine(doc: EngineDoc): Engine {
   const nodeById = new Map<string, Node>(doc.nodes.map((n) => [n.id, n]));
 
   // Every doc defect the bind detects, reported ONCE per run at `run.started`
-  // (drained below). One list, not one per defect class: `validateDoc` is
-  // advisory (#444), so these diagnostics are the only thing that makes a
+  // (drained below). One list, not one per defect class: the write path refuses
+  // such a doc now (#444), but rows written before that gate were never
+  // validated, so these diagnostics remain the only thing that makes a
   // neutralization visible to an operator.
   const docDefects: string[] = [];
 
@@ -519,12 +520,13 @@ export function createEngine(doc: EngineDoc): Engine {
    * reducer crashes the driver's pump. Measured before this was changed: a
    * skipped chain blew the stack at ~5k entities where the old code was fine.
    * No node-count cap exists (`pipeline.ts`'s `nodes` is a bare `z.array`), and
-   * the doc need not be validated (#444) — so the bound must come from the walk.
+   * the doc need not be validated — so the bound must come from the walk.
    *
    * Lookups are `?? []`, never `!`: `validateDoc` forbids a cross-boundary
-   * forward edge, but it is ADVISORY (its only caller is the canvas badge; the
-   * server never calls it — #444), so a git import or a direct POST can reach
-   * this reducer with an edge whose endpoint is absent from the scope's map.
+   * forward edge, and the write path now REFUSES a doc that breaks that rule
+   * (#444) — but rows written before that gate were never validated, so such an
+   * edge can still reach this reducer with an endpoint absent from the scope's
+   * map. The gate closed the door; it did not clean the house.
    */
   function outcomeFailure(
     entities: readonly string[],
@@ -714,12 +716,11 @@ export function createEngine(doc: EngineDoc): Engine {
    * activities that emit a branch outcome, so anything depending on one skips.
    * Say so.
    *
-   * This diagnostic is the ONLY thing that makes that visible: `validateDoc`
-   * reports a branch edge, but advisorily — its lone caller is the canvas, which
-   * renders a badge and still allows Save, and the server never validates at all
-   * (#444). So a branch edge reaches the reducer whether it came from git, a
-   * direct POST, or the canvas itself. Without this, an operator just sees a
-   * silently skipped subgraph.
+   * This diagnostic is the ONLY thing that makes that visible for a doc already
+   * in storage: `validateDoc` reports a branch edge, and the write path now
+   * refuses one (#444) — but rows written before that gate were never validated,
+   * so such a doc still reaches the reducer. Without this, an operator just sees
+   * a silently skipped subgraph.
    */
   function noteInertBranch(id: string, incoming: Edge[], diagnostics: string[]): void {
     const inert = incoming.filter((e) => e.on === 'branch').length;
@@ -956,11 +957,12 @@ export function createEngine(doc: EngineDoc): Engine {
    * silently burn every round before reporting the misleading reason `capped`.
    * Throwing here surfaces it as `exitWhen_error` on the very first round.
    *
-   * This is the enforcement point that BINDS: `validateDoc`'s whole-value rule is
-   * advisory (its only caller is the canvas badge, which does not block Save, and
-   * the server never calls it), so a git import or a direct POST reaches the
-   * engine unchecked. Pure + replay-safe: trim/classify are deterministic on the
-   * doc, so a replay of the same log reaches the same verdict.
+   * This is the enforcement point that BINDS for a doc already in storage: the
+   * write path refuses one that breaks `validateDoc`'s whole-value rule now
+   * (#444), but rows written before that gate were never validated and still
+   * reach the engine unchecked. Pure + replay-safe: trim/classify are
+   * deterministic on the doc, so a replay of the same log reaches the same
+   * verdict.
    */
   function evalExitWhen(c: Container, state: RunState): boolean {
     if (c.exitWhen === undefined) return false;
@@ -981,10 +983,10 @@ export function createEngine(doc: EngineDoc): Engine {
     // padded " true" — burned every round and reported the misleading `capped`.
     // A value that only worked by accident now says so, and says it on round 0.
     //
-    // The save-time half cannot close this alone: `validateDoc` is advisory (its
-    // only caller is the canvas badge; the server never calls it — #444), so a
-    // git import or a direct POST reaches this reducer unchecked. Same
-    // both-halves rule E2 set for the MODE check, for the same reason.
+    // The save-time half cannot close this alone: the write path refuses such a
+    // doc now (#444), but rows written before that gate were never validated and
+    // still reach this reducer unchecked. Same both-halves rule E2 set for the
+    // MODE check, for the same reason.
     throw new SubstituteError(
       `exitWhen must resolve to a boolean, got ${typeof out} — ` +
         "compare it explicitly (e.g. ${equals(nodes.check.output.done, 'true')})",
@@ -1190,15 +1192,16 @@ export function createEngine(doc: EngineDoc): Engine {
     }
     // #480/#487/#488: say so when the bind voided something the author wrote.
     // Same reasoning as `noteInertBranch`, and deliberately the same conclusion:
-    // `validateDoc` reports these shapes but advisorily — its lone caller is the
-    // canvas, which badges and still allows Save, and the server never validates
-    // (#444). So the doc arrives from git or a direct POST and this is the ONLY
-    // thing that makes the neutralization visible. Without it the operator sees a
-    // run behave nothing like the graph they authored, with no hint why. Emitted
-    // once per run, after the already-started guard.
+    // `validateDoc` reports these shapes and the write path now refuses them
+    // (#444), but rows written before that gate were never validated, so such a
+    // doc still reaches the reducer and this stays the ONLY thing that makes the
+    // neutralization visible. Without it the operator sees a run behave nothing
+    // like the graph they authored, with no hint why. Emitted once per run,
+    // after the already-started guard.
     // A LOOP, not `push(...docDefects)`: a spread passes one argument per element
     // and blows the stack (`RangeError`) somewhere past ~100k of them. `children`
-    // has no schema max and this validator is advisory, so the count is
+    // has no schema max, and a pre-#444-gate row was never validated, so the
+    // count is
     // attacker-shaped, and the same standard the iterative walks in this file are
     // held to applies — a `RangeError` out of the PURE reducer kills the pump.
     for (const d of docDefects) diagnostics.push(d);

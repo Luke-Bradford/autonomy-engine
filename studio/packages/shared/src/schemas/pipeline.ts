@@ -399,8 +399,9 @@ export type OperationalEdge = z.infer<typeof OperationalEdgeSchema>;
  * The activities that EMIT a branch outcome (`if`/`switch`) are spec #4
  * A0/A1/A2; this schema is settled here (spec #1 owns the union) so they build
  * against a final shape. Until then a branch edge is INERT — it can never be
- * satisfied, `validateDoc` reports it (advisory only — see #444), and the
- * reducer emits a diagnostic rather than stranding the downstream silently.
+ * satisfied, `validateDoc` reports it and the write path refuses it (#444;
+ * PARSE stays permissive, so a pre-gate row still round-trips), and the reducer
+ * emits a diagnostic rather than stranding the downstream silently.
  */
 export const BranchEdgeSchema = z.object({
   ...edgeBase,
