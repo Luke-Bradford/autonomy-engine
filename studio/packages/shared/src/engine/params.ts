@@ -853,20 +853,27 @@ export function validateRefs(
  * LOOP container re-runs its children, which is what makes a
  * `${nodes.<id>.status}` ref unanswerable in that doc (#6 E3).
  *
- * No `ValidateDocOptions` are passed, deliberately: `selfId`/`resolvePipeline`
- * enable `call_pipeline` cycle+depth analysis, which needs a DB read (impure)
- * and would make the server enforce a rule the canvas never checked — a doc
- * that badges clean would newly 400. So `call_pipeline` cycles still reach the
- * reducer unchecked; wiring an OWNER-SCOPED resolver is its own ticket (the
- * resolver's errors echo another version's ids, which the #444 security
- * argument does not cover).
+ * `options` forwards to `validateDoc` and gates the `call_pipeline` cycle+depth
+ * analysis (#495). The two gates supply DIFFERENT options ON PURPOSE:
+ *  - the CANVAS badge passes NONE (`canvasDoc.ts`) — it has no DB, and enforcing
+ *    a rule the canvas never checked would newly 400 a doc that badges clean;
+ *  - the SERVER write gate passes `{ selfId, resolvePipeline }` where
+ *    `resolvePipeline` is OWNER-SCOPED (`repo/pipeline-versions.ts`, #495).
+ * This function stays PURE — it does no I/O and reads no clock. The DB read the
+ * call graph needs lives entirely in the resolver the SERVER injects; passing a
+ * function is not an effect, and `validateDoc` only invokes whatever resolver it
+ * is handed (the pure-core / injected-effect pattern `ValidateDocOptions` was
+ * built for). A cycle that only manifests DYNAMICALLY (an unresolvable `${}` or
+ * cross-owner callee) is still caught at run time by the reducer's `stalled`
+ * backstop (#491), which the static gate does not replace.
  *
- * PURE: no I/O, no clock. Returns error strings; `[]` means valid.
+ * Returns error strings; `[]` means valid.
  */
 export function validatePipelineDoc(
   doc: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'>,
+  options: ValidateDocOptions = {},
 ): string[] {
-  return [...validateDoc(doc), ...validateRefs(doc)];
+  return [...validateDoc(doc, options), ...validateRefs(doc)];
 }
 
 // --- validateDoc (structural static validation, run at pipeline-SAVE time) --

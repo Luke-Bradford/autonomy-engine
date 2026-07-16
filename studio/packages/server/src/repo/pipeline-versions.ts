@@ -7,11 +7,13 @@ import {
   StrictNodeSchema,
   validatePipelineDoc,
   type NewPipelineVersion,
+  type PipelineResolver,
   type PipelineVersion,
 } from '@autonomy-studio/shared';
 import { pipelineVersions } from '../db/schema.js';
 import { ISSUE_LIST_CAP } from '../limits.js';
 import { newId } from './ids.js';
+import { getPipeline } from './pipelines.js';
 import type { Db } from './types.js';
 
 /**
@@ -90,6 +92,49 @@ export function createPipelineVersion(db: Db, input: NewPipelineVersion): Pipeli
     nodes: z.array(StrictNodeSchema).parse(lowerNodeOutputs(parsed.nodes)),
   };
 
+  // Mint the id BEFORE validation so the call-graph analysis (#495) has a
+  // `selfId` — `validateCallGraph` short-circuits without one. The same id is
+  // reused for the insert below (id generation is a pure, order-free `nanoid`;
+  // minting it here instead of inside the txn changes nothing on the write).
+  // A brand-new version's id is unknowable to the author, so a literal self-call
+  // by id can never be authored; `selfId` here serves only to SEED the DFS root.
+  const id = newId('pv');
+
+  // OWNER-SCOPED `call_pipeline` resolver (#495). This closes the fail-open seam
+  // #444's write gate left: without a resolver, `validateCallGraph` cannot see
+  // past the caller's own doc, so a call chain that CYCLES or exceeds
+  // `maxCallDepth` reached the reducer unrefused. The resolver is SYNCHRONOUS
+  // (better-sqlite3 is synchronous), so `validatePipelineDoc` stays a pure core
+  // with the DB read injected here, in the impure server layer.
+  //
+  // SECURITY — the resolver is the boundary that keeps #444's echo-safety intact
+  // across the transitive call graph. `validateCallGraph` interpolates callee
+  // version ids into its error strings; #444's argument that an error only ever
+  // names the caller's OWN doc holds only if the walk never enters a version the
+  // caller does not own. So the resolver returns a callee's `nodes` ONLY when the
+  // callee's pipeline shares this caller's `ownerId`, and `undefined` otherwise —
+  // a cross-owner (or missing, or dynamic `${}`) callee is SKIPPED before its id
+  // can be echoed. Every id a 400 can carry is therefore either `selfId` or a
+  // successfully-resolved OWNED version.
+  //
+  // `null` owner (a legacy/unowned pipeline) is treated as one shared bucket:
+  // a null-owner caller resolves other null-owner versions. MVP uses a single
+  // fixed `'local'` principal, so this never triggers today; it is the honest
+  // reading of "owner = the `ownerId` value" for a future multi-tenant swap.
+  const callerOwnerId = getPipeline(db, lowered.pipelineId)?.ownerId ?? null;
+  const resolvePipeline: PipelineResolver = (calleeVersionId) => {
+    const callee = getPipelineVersion(db, calleeVersionId);
+    if (callee === null) return undefined; // gone/never-existed — not analyzable
+    const calleeOwnerId = getPipeline(db, callee.pipelineId)?.ownerId ?? null;
+    if (calleeOwnerId !== callerOwnerId) return undefined; // cross-owner — never traverse/echo
+    return { nodes: callee.nodes };
+  };
+  // Reads run BEFORE the transaction below; that is safe because a
+  // pipeline_versions row is IMMUTABLE once written (no update path), so a
+  // callee's `nodes` cannot change under us. A callee DELETED between this read
+  // and the insert is the only race, and a call to a now-gone version is caught
+  // at run time by #491's `stalled` backstop, not silently run.
+
   // THE write gate (#444). Every path that stores a pipeline_versions row —
   // the `POST /api/pipelines/:id/versions` route and the git-import path —
   // funnels through this ONE function, so guarding here binds both BY
@@ -107,7 +152,7 @@ export function createPipelineVersion(db: Db, input: NewPipelineVersion): Pipeli
   // answer for those rows: they no longer wedge a run forever, they terminalize
   // as `failure{reason:'stalled'}`. That is containment, NOT a substitute for
   // this gate — a stalled run is still a run the author never wanted.
-  const issues = validatePipelineDoc(lowered);
+  const issues = validatePipelineDoc(lowered, { selfId: id, resolvePipeline });
   if (issues.length > 0) throw new InvalidPipelineDocError(issues);
 
   return db.transaction((tx) => {
@@ -122,7 +167,7 @@ export function createPipelineVersion(db: Db, input: NewPipelineVersion): Pipeli
     // `parsed` would certify a seeded contract that is never written — the
     // worst outcome (validation passes against a contract the runtime lacks).
     const row: PipelineVersion = {
-      id: newId('pv'),
+      id, // minted above (before validation) so the call graph had a `selfId`
       ...lowered,
       version: nextVersion,
       createdAt: Date.now(),

@@ -8,7 +8,7 @@ import type {
   Param,
   PipelineVersion,
 } from '../types.js';
-import { validateDoc, type PipelineResolver } from '../params.js';
+import { validateDoc, validatePipelineDoc, type PipelineResolver } from '../params.js';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -347,6 +347,18 @@ describe('validateDoc — call graph', () => {
   it('skips a dynamic ${} call target (not statically resolvable — no false cycle)', () => {
     const d = doc([callNode('c', '${params.child}')]);
     expect(validateDoc(d, { selfId: 'pv_a' })).toEqual([]);
+  });
+
+  // validatePipelineDoc is the ONE composition both gates call. The server gate
+  // passes an owner-scoped resolver (#495); the canvas passes none. Pin that the
+  // options FORWARD, so the call graph runs only when a resolver is supplied —
+  // preserving canvas parity (a doc that badges clean is not newly refused).
+  it('validatePipelineDoc forwards options to validateDoc (call graph runs only with a resolver)', () => {
+    const d = doc([callNode('caller', 'pv_self')]);
+    expect(validatePipelineDoc(d)).toEqual([]); // no selfId → call graph does not run
+    expect(validatePipelineDoc(d, { selfId: 'pv_self' }).join(' ')).toContain(
+      'calls its own version',
+    );
   });
 });
 
