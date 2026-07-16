@@ -368,10 +368,18 @@ describe('F2b — the retry budget is PER LOOP ROUND, not per run lifetime', () 
 
 describe('F2b §A.5 — a held run has NO boot-recovery path of its own (by design)', () => {
   it('run.resumed emits NOTHING for a held node — the durable alarm row is its recovery', () => {
-    // This pins the DESIGNED behaviour, not an oversight: re-deriving a
-    // scheduleRetry here would DOUBLE-ARM the alarm that already survived the
-    // crash. It is also why F2b must never ship without F2c — a held run with no
-    // live alarm clock stays `running` forever.
+    // This pins the DESIGNED behaviour, not an oversight — but NOT for the reason
+    // this comment used to give ("re-deriving a scheduleRetry here would
+    // DOUBLE-ARM the alarm"). That premise was false: `armWakeup` is
+    // upsert-if-absent and returns the existing row whatever its status, so
+    // re-arming is free. The real reason is that the reducer is PURE and cannot
+    // read the alarm table, so it cannot answer the only question that matters —
+    // does a row actually exist? A crash between the HOLD becoming durable and
+    // the arm landing leaves a held node with NO alarm, and `reconcile.ts` (which
+    // CAN see the table) is what checks for that and re-arms.
+    //
+    // It is also why F2b must never ship without F2c — a held run with no live
+    // alarm clock stays `running` forever.
     const eng = engine([node('a', { retry: 1 })]);
     let s = inFlight(eng, 'a');
     s = eng.reduce(s, failed('a', 'a#0')).state;

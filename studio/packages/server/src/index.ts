@@ -1,14 +1,16 @@
 import Fastify from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import { eq } from 'drizzle-orm';
-import { HelloSchema, type Hello } from '@autonomy-studio/shared';
+import { buildDedupeKey, HelloSchema, type Hello } from '@autonomy-studio/shared';
 import { openDb } from './db/client.js';
 import { appMeta } from './db/schema.js';
 import { resolveMasterKey } from './secrets/secrets.js';
 import { createSupervisor } from './workers/process-supervisor.js';
 import { getPipelineVersion } from './repo/pipeline-versions.js';
+import { getWakeupByKey } from './repo/scheduled-wakeups.js';
 import { reconcileOnBoot } from './run/reconcile.js';
 import { createExecutor } from './run/executor.js';
+import { createRunDrives } from './run/drives.js';
 import { createRunLauncher } from './run/launcher.js';
 import { createRunEventBus } from './run/event-bus.js';
 import { createScheduler } from './scheduler/scheduler.js';
@@ -144,27 +146,34 @@ export async function buildApp(opts?: BuildAppOptions) {
   // the temporal-dead-zone window is shut before anything could enter it — and a
   // `const` states "assigned exactly once", where a `let` + undefined-check would
   // only pretend to handle a case that cannot happen.
-  const alarms: RetryAlarms = { arm: (input) => alarmClock.arm(input) };
-  const driverBoundary = { db, resolveDoc, executor, alarms, bus: runEventBus };
+  const alarms: RetryAlarms = {
+    arm: (input) => alarmClock.arm(input),
+    // Reads the row `arm` would return, from the SAME table `arm` writes (`arm`
+    // goes through the clock only to validate the kind + ref; both end at the
+    // `scheduled_wakeups` repo). The key is DERIVED from the same input by the
+    // same function, so the two halves cannot disagree about an alarm's identity.
+    find: (input) => getWakeupByKey(db, input.kind, buildDedupeKey(input)),
+  };
+  // F2c — the per-run DRIVE LOCK. ONE registry for the whole app, shared by every
+  // entry point that can pump a run (the launcher below, and the retry alarm's
+  // handler via `driverBoundary`). Sharing it is the entire mechanism: two
+  // registries would hand the launcher and the alarm separate locks for the same
+  // run, which serializes nothing and is precisely the divergence F2c fixes.
+  const drives = createRunDrives();
+  const driverBoundary = { db, resolveDoc, executor, alarms, drives, bus: runEventBus };
   const alarmClock: AlarmClock = createAlarmClock({
     db,
     handlers: [createRetryAlarmHandler(driverBoundary)],
     bus: runEventBus,
     log: fastify.log,
   });
-  // The clock is a SCAN, not a per-alarm timer: one tick sweeps every due row of
-  // every registered kind. The interval bounds retry LATENESS (an alarm fires at
-  // most this late), which `WakeupDelivery.latenessMs` reports honestly. It is
-  // `unref`'d so a pending tick can never hold the process open at shutdown.
-  const alarmTimer = setInterval(() => alarmClock.tick(), ALARM_TICK_MS);
-  alarmTimer.unref();
 
   // P2d/P3 boot reconcile: any `runs` row still `running` could not have
   // survived this restart (the driver is in-process). Freeze runs whose
   // non-idempotent activity was in flight (`interrupted`); re-sync a row whose
   // log already ended terminal; leave a run HELD on a retry to its durable alarm
-  // (F2c — re-deriving it here would double-arm); and, WITH a real executor,
-  // actually RESUME an idempotent-resumable run.
+  // — re-arming that alarm if the HOLD→ARM crash window lost it (F2c/B2); and,
+  // WITH a real executor, actually RESUME an idempotent-resumable run.
   //
   // Runs AFTER the clock is constructed, not before: a resumed run can fail
   // transiently mid-reconcile and arm a retry like any other.
@@ -176,6 +185,20 @@ export async function buildApp(opts?: BuildAppOptions) {
     bus: runEventBus,
   });
   fastify.log.info({ reconcileReport }, 'boot reconcile complete');
+
+  // The clock is a SCAN, not a per-alarm timer: one tick sweeps every due row of
+  // every registered kind. The interval bounds retry LATENESS (an alarm fires at
+  // most this late), which `WakeupDelivery.latenessMs` reports honestly. It is
+  // `unref`'d so a pending tick can never hold the process open at shutdown.
+  //
+  // Started strictly AFTER the reconcile above has been AWAITED, and that order is
+  // load-bearing (`reconcile.ts` documents the other half). The boot reconciler
+  // pumps runs WITHOUT the drive lock, which is safe only while it is the sole
+  // pump source; a 1s tick running against a run it is mid-`pump` on would be the
+  // two-concurrent-drives divergence F2c exists to prevent. Nothing else can pump
+  // yet either — the launcher and scheduler are constructed below.
+  const alarmTimer = setInterval(() => alarmClock.tick(), ALARM_TICK_MS);
+  alarmTimer.unref();
 
   // A held run's alarm may already be due (it was armed before the crash, and
   // the process was down past its `dueAt`). Sweep once at boot so a retry that
@@ -244,8 +267,14 @@ export async function buildApp(opts?: BuildAppOptions) {
     scheduler.stop();
     // The alarm clock is stopped alongside the scheduler and for the identical
     // reason: it is the OTHER thing that can start work on a timer. Clearing the
-    // interval stops future ticks; `stop()` also refuses new arms, so a run
-    // settling below cannot arm an alarm nothing will ever serve.
+    // interval stops future ticks; `stop()` stops firing.
+    //
+    // It does NOT refuse ARMS, and that is the point of stopping it this way. A
+    // run still settling below can fail transiently and arm a retry like any
+    // other; refusing that arm would turn an ordinary transient failure into a
+    // DEAD run, killed by nothing but our shutdown timing. The old reason given
+    // here — "an alarm nothing will ever serve" — was simply false: the row is
+    // DURABLE, and the boot sweep above serves it on the next start.
     clearInterval(alarmTimer);
     alarmClock.stop();
     runLauncher.stop();

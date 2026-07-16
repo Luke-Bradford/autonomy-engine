@@ -760,6 +760,96 @@ describe('run.resumed reconstructs a dropped finishRun', () => {
     expect(dispatchIds(r.commands)).toEqual(['b']);
     expect(r.commands.some((c) => c.type === 'finishRun')).toBe(false);
   });
+
+  it('a READY node whose dispatch prep throws terminalizes — it must not silently hang', () => {
+    // DEFENSIVE, and deliberately labelled as such: no log reaches this state
+    // today. `tryDispatchNode` PREPS BEFORE it folds, so a node only becomes
+    // `ready` once its prep has succeeded, and nothing later removes an upstream
+    // output (`resetNodes` is gated behind a whole-body-terminal back-edge, which
+    // a live `ready` node blocks). The state is therefore built by hand — the
+    // reducer must be TOTAL over states, not only over the ones today's events
+    // happen to produce.
+    //
+    // It is fixed anyway because of what F2c changes: `onResumed` was the ONLY
+    // dispatch derivation that swallowed a prep throw (`tryDispatchNode`,
+    // `onRetryDue` and `onRetryRequested` all terminalize with
+    // `finishRun{invalid_event}`), and that asymmetry was survivable only while
+    // resume ran once per boot. `driveRun` makes it the RUNTIME path for every
+    // retry, and it discards `onRetryDue`'s terminalize in favour of this
+    // derivation — so a swallowed throw here would be a permanent hang with a
+    // spent alarm. Closing the class costs six lines; leaving it depends on an
+    // unreachability argument holding forever.
+    const eng = engine([node('a'), node('b', { m: '${nodes.a.output.g}' })], [
+      edge('a', 'b', 'success'),
+    ]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    s = eng.reduce(s, succeeded('a', attempt('a'), { g: 'hi' })).state;
+    expect(s.nodes.b!.status).toBe('ready');
+
+    // Drop the output `b`'s prep depends on: `b` stays `ready`, its prep now throws.
+    const r = eng.resume({ ...s, outputs: {} });
+
+    expect(r.commands).toContainEqual({
+      type: 'finishRun',
+      outcome: 'failure',
+      reason: 'invalid_event',
+    });
+    expect(r.diagnostics.some((d) => d.includes("dispatch prep failed for node 'b'"))).toBe(true);
+  });
+});
+
+// ===========================================================================
+// #1 F2c — `engine.resume()`: the PURE seam `driveRun` re-derives commands from
+// ===========================================================================
+
+describe('engine.resume — the pure re-derivation seam (F2c)', () => {
+  it('yields exactly what folding run.resumed yields, without needing the event', () => {
+    // The seam exists because `driveRun` must re-project from the log INSIDE the
+    // per-run lock and recover the commands `projectRunState` discards — but it
+    // must NOT append `run.resumed`, which is BOOT's durable fact and would be a
+    // lie mid-run. Same derivation, no event: that equivalence is the contract,
+    // so it is asserted rather than assumed.
+    const eng = engine([node('a'), node('b')], [edge('a', 'b', 'success')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    s = eng.reduce(s, succeeded('a', attempt('a'))).state;
+
+    const viaEvent = eng.reduce(s, { type: 'run.resumed', runId: RUN, reason: 'boot_reconcile' });
+    const viaSeam = eng.resume(s);
+
+    expect(viaSeam.commands).toEqual(viaEvent.commands);
+    expect(viaSeam.state).toEqual(viaEvent.state);
+  });
+
+  it('is PURE — it appends nothing and leaves the input state untouched', () => {
+    const eng = engine([node('a')]);
+    const s = eng.reduce(eng.seedState(), started()).state;
+    const before = JSON.parse(JSON.stringify(s)) as unknown;
+
+    eng.resume(s);
+
+    expect(s).toEqual(before);
+  });
+
+  it('emits NOTHING for a terminal run — a settled run must never be re-driven', () => {
+    // `driveRun` already refuses a run whose LOG holds a terminal fact (#443);
+    // this is the engine-side backstop, so a caller that skipped that check
+    // cannot re-dispatch a finished run's nodes.
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    s = eng.reduce(s, succeeded('a', attempt('a'))).state;
+    s = eng.reduce(s, { type: 'run.finished', runId: RUN, outcome: 'success' }).state;
+    expect(s.status).toBe('success');
+
+    expect(eng.resume(s).commands).toEqual([]);
+  });
+
+  it('emits NOTHING for a pending (pre-run.started) state', () => {
+    const eng = engine([node('a')]);
+    expect(eng.resume(eng.seedState()).commands).toEqual([]);
+  });
 });
 
 // ===========================================================================

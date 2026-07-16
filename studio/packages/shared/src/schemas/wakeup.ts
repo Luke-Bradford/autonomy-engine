@@ -96,12 +96,22 @@ function serializeRef(ref: WakeupRef): string {
  * `(kind, ref, discriminator)`, where `discriminator` distinguishes the
  * OCCURRENCE: `attempt-<n>` (retry), `round-<r>` (loop), `tick-<epoch>` (cron).
  *
- * **`discriminator` is required, and that is the whole point.** The spike's
- * headline finding: omit the attempt number and attempt-2's retry collides with
- * attempt-1's already-`fired` row, so — because arming is an idempotent
- * upsert-if-absent — it **silently never arms**. No error, no retry, no trace.
- * Making the field impossible to forget is the fix; an empty string is rejected
- * for the same reason.
+ * **`discriminator` is required**, and the spike's headline finding is why: omit
+ * the occurrence and attempt-2's retry collides with attempt-1's already-`fired`
+ * row, so — because arming is an idempotent upsert-if-absent — it **silently
+ * never arms**. No error, no retry, no trace. Making the field impossible to
+ * forget is the fix; an empty string is rejected for the same reason.
+ *
+ * **Read that precisely, because it does not say what it looks like it says.**
+ * The key is `(kind, ref, discriminator)` — so the collision the spike found is
+ * only possible when the `ref` does NOT already carry the occurrence. It holds
+ * for a loop round (`ref` = the node) and a cron tick (`ref` = the trigger). It
+ * is VACUOUS for retry, whose `ref` is `{runId, nodeId, attemptId}`: two attempts
+ * already have different keys whatever their discriminators say, so retry's
+ * `attempt-<n>` prevents nothing. It is kept — the field is required and a
+ * redundant one costs nothing — but a kind whose `ref` pins the occurrence
+ * inherits none of this protection from its discriminator, and should not be
+ * designed as though it did.
  *
  * `kind` is included even though the index is `(kind, dedupeKey)` and the column
  * already carries it. Deliberate: it keeps the key SELF-DESCRIBING in logs and

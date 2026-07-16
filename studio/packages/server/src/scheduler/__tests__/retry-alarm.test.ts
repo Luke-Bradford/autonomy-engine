@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildDedupeKey,
   CATALOG_VERSION,
   DEFAULT_RETRY_INTERVAL_SECONDS,
+  type Edge,
   type NewPipelineVersion,
   type Node,
   type NodePolicy,
@@ -10,13 +12,21 @@ import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun, getRun } from '../../repo/runs.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { listPendingWakeups } from '../../repo/scheduled-wakeups.js';
+import { getWakeupByKey, listPendingWakeups } from '../../repo/scheduled-wakeups.js';
 import type { Db } from '../../repo/types.js';
-import { buildEngine, startRun, type DocResolver, type DriverDeps } from '../../run/driver.js';
+import {
+  buildEngine,
+  startRun,
+  type DocResolver,
+  type DriveDeps,
+  type DriverDeps,
+} from '../../run/driver.js';
+import { createRunDrives } from '../../run/drives.js';
 import { appendEngineEvent, loadEngineEvents } from '../../run/events.js';
 import {
   makeStubExecutor,
   type NodePlan,
+  type RecordingExecutor,
   type StubExecutorOptions,
 } from '../../run/__tests__/stub-executor.js';
 import { createAlarmClock, type AlarmClock } from '../alarms.js';
@@ -49,14 +59,14 @@ function node(id: string, policy?: NodePolicy): Node {
   };
 }
 
-function seedVersion(db: Db, nodes: Node[]): string {
+function seedVersion(db: Db, nodes: Node[], edges: Edge[] = []): string {
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
   const input: NewPipelineVersion = {
     pipelineId: pipeline.id,
     params: [],
     outputs: [],
     nodes,
-    edges: [],
+    edges,
     catalogVersion: CATALOG_VERSION,
   };
   return createPipelineVersion(db, input).id;
@@ -86,13 +96,21 @@ function harness(db: Db, executorOpts: StubExecutorOptions = {}, now: () => numb
     if (pv === null) throw new Error(`no pv ${id}`);
     return pv;
   };
-  const deps: DriverDeps = {
+  const drives = createRunDrives();
+  const deps: DriveDeps = {
     db,
     resolveDoc,
     executor: makeStubExecutor(executorOpts),
     // Referenced before its declaration, exactly as `index.ts` does it: `arm` is
     // only called at run time, so the TDZ window is closed by then.
-    alarms: { arm: (input) => clock.arm(input) },
+    alarms: {
+      arm: (input) => clock.arm(input),
+      // Backed by the same table `arm` writes — the production pairing.
+      find: (input) => getWakeupByKey(db, input.kind, buildDedupeKey(input)),
+    },
+    // ONE registry shared by every drive entry point, as `index.ts` does it. Two
+    // registries here would serialize nothing and quietly restore B1.
+    drives,
     now,
   };
   const clock: AlarmClock = createAlarmClock({
@@ -100,7 +118,15 @@ function harness(db: Db, executorOpts: StubExecutorOptions = {}, now: () => numb
     handlers: [createRetryAlarmHandler(deps)],
     now,
   });
-  return { deps, clock, resolveDoc };
+  return { deps, clock, drives, resolveDoc };
+}
+
+/**
+ * A node that is READY as soon as ANY incoming edge is satisfied. `join` is a
+ * CONFIG value (`nodeJoin` reads `node.config['join']`), not a `Node` field.
+ */
+function joinAny(id: string): Node {
+  return { ...node(id), config: { join: 'any' } };
 }
 
 const transientOnce = (nodeId: string): StubExecutorOptions => ({
@@ -180,6 +206,7 @@ describe("F2c — arming a retry (the driver half of D4's split)", () => {
         arm: () => {
           throw new Error('arm exploded');
         },
+        find: () => null,
       },
       now: () => NOW,
     };
@@ -376,11 +403,15 @@ describe('F2c — the alarm fires: the retry loop closes', () => {
       if (pv === null) throw new Error(`no pv ${id}`);
       return pv;
     };
-    const deps: DriverDeps = {
+    const deps: DriveDeps = {
       db,
       resolveDoc,
       executor: makeStubExecutor(transientOnce('a')),
-      alarms: { arm: (i) => clock.arm(i) },
+      alarms: {
+        arm: (i) => clock.arm(i),
+        find: (i) => getWakeupByKey(db, i.kind, buildDedupeKey(i)),
+      },
+      drives: createRunDrives(),
       now: () => t,
     };
     const clock: AlarmClock = createAlarmClock({
@@ -410,3 +441,151 @@ function getRunState(db: Db, deps: DriverDeps, runId: string) {
 
 /** Let the clock's `afterCommit` pump (deliberately not awaited) run to rest. */
 const settle = () => new Promise((r) => setTimeout(r, 20));
+
+// ===========================================================================
+// #1 F2c/B1 — EXACTLY ONE DRIVE PER RUN (the regression this branch stopped for)
+// ===========================================================================
+
+describe('F2c/B1 — two due alarms must not start two concurrent drives', () => {
+  /**
+   * The measured repro, kept in the shape it was measured in.
+   *
+   * Before the per-run drive lock, the alarm clock's `afterCommit` was a SECOND
+   * pump source alongside the launcher, and nothing serialized them. Each `pump`
+   * carries its own in-memory `RunState` (`driver.ts` — `let state =
+   * initialState`) and never re-reads the log, so two drives diverged permanently
+   * and BOTH wrote. With `a` and `b` retrying and both alarms due in ONE tick
+   * (the clock does not await `afterCommit`), the measurement was:
+   *
+   *   DISPATCHED: [..., "a#1", "b#1", "d#0", "d#0"]   ← d dispatched TWICE
+   *   RUN ROW: running        run.finished: absent    ← and then hung forever
+   *
+   * `d#0` twice under the SAME attemptId is a real LLM call billed twice: each
+   * pump minted `d#0` from its OWN state, so attempt-id stale-rejection never saw
+   * a mismatch and could not save it. The hang is the same divergence — neither
+   * pump's state ever satisfied the run's terminal condition.
+   *
+   * `join: 'any'` is what makes `d` reachable from either drive at once; under
+   * `join: 'all'` the same divergence instead dispatched `d` NEVER.
+   */
+  it('dispatches the shared successor ONCE and finishes the run', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [
+        node('root'),
+        node('a', { retry: 1 }),
+        node('b', { retry: 1 }),
+        joinAny('d'),
+      ],
+      [
+        { id: 'root->a', from: 'root', to: 'a', on: 'success' },
+        { id: 'root->b', from: 'root', to: 'b', on: 'success' },
+        { id: 'a->d', from: 'a', to: 'd', on: 'success' },
+        { id: 'b->d', from: 'b', to: 'd', on: 'success' },
+      ],
+    );
+    const run = seedRun(db, pvId);
+
+    // `a` and `b` fail transiently on their first attempt, then succeed — so both
+    // hold, both arm, and both alarms come due together.
+    const planA: NodePlan = { outcome: 'failure', kind: 'transient' };
+    const planB: NodePlan = { outcome: 'failure', kind: 'transient' };
+    let t = NOW;
+    const { deps, clock, drives } = harness(
+      db,
+      { nodes: { a: planA, b: planB } },
+      () => t,
+    );
+    const executor = deps.executor as RecordingExecutor;
+
+    await startRun(deps, run);
+
+    // Precondition: BOTH nodes held, BOTH alarms armed for the same instant.
+    const held = getRunState(db, deps, run.id);
+    expect(held.nodes.a!.status).toBe('retry_pending');
+    expect(held.nodes.b!.status).toBe('retry_pending');
+    expect(listPendingWakeups(db)).toHaveLength(2);
+    expect(new Set(listPendingWakeups(db).map((w) => w.dueAt)).size).toBe(1);
+
+    planA.outcome = 'success';
+    planB.outcome = 'success';
+
+    // ONE tick, BOTH alarms due: the clock fires them back to back and does not
+    // await either `afterCommit`, so both drives are in flight at once.
+    t = NOW + DEFAULT_RETRY_INTERVAL_SECONDS * 1000;
+    clock.tick();
+    await drives.whenIdle();
+    await settle();
+
+    // The retries both ran...
+    expect(executor.dispatched).toContain('a#1');
+    expect(executor.dispatched).toContain('b#1');
+    // ...and `d` was dispatched EXACTLY ONCE. This is the assertion: a second
+    // `d#0` is a duplicated real side effect, not a cosmetic log artefact.
+    expect(executor.dispatched.filter((id: string) => id.startsWith('d#'))).toEqual(['d#0']);
+
+    // ...and the run actually FINISHED rather than hanging.
+    const log = loadEngineEvents(db, run.id);
+    expect(log.filter((e) => e.type === 'run.finished')).toHaveLength(1);
+    expect(getRunState(db, deps, run.id).status).toBe('success');
+    expect(getRun(db, run.id)!.status).toBe('success');
+  });
+
+  it('an alarm firing while the LAUNCHER is still driving waits its turn', async () => {
+    // The other half of B1, and the one that made it reachable with a SINGLE
+    // retry: any parallel node outliving the retry interval leaves the launcher's
+    // pump live when the alarm fires — i.e. essentially every real LLM pipeline.
+    // The alarm's `fire()` transaction still commits mid-pump (better-sqlite3 is
+    // synchronous, so it lands at one of the pump's `await` points), but its
+    // DRIVE must queue behind the live one and re-project after it.
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [node('root'), node('a', { retry: 1 }), node('fast'), joinAny('d')],
+      [
+        { id: 'root->a', from: 'root', to: 'a', on: 'success' },
+        { id: 'root->fast', from: 'root', to: 'fast', on: 'success' },
+        { id: 'a->d', from: 'a', to: 'd', on: 'success' },
+        { id: 'fast->d', from: 'fast', to: 'd', on: 'success' },
+      ],
+    );
+    const run = seedRun(db, pvId);
+    const planA: NodePlan = { outcome: 'failure', kind: 'transient' };
+    let t = NOW;
+    // `d` is the node that OUTLIVES the retry interval, and it has to be `d`
+    // rather than a sibling: `pump` drains commands SEQUENTIALLY and pushes
+    // `scheduleRetry` at the QUEUE TAIL, so a slow sibling merely delays the arm
+    // instead of overlapping it (measured — the first draft of this test armed
+    // nothing before it ticked, and proved nothing). Here `fast` succeeds, `d`
+    // goes ready under `join:'any'`, the arm drains, and THEN `d` holds the pump
+    // open — so the alarm fires into a genuinely live drive.
+    const { deps, clock, drives } = harness(
+      db,
+      { nodes: { a: planA, d: { delayMs: 80 } } },
+      () => t,
+    );
+    const executor = deps.executor as RecordingExecutor;
+
+    // Drive in the BACKGROUND under the run's lock, exactly as the launcher does.
+    const launcherDrive = drives.serialize(run.id, () => startRun(deps, run));
+
+    // `a` is held and its alarm is ARMED, while `d` is still in flight.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(getRunState(db, deps, run.id).nodes.a!.status).toBe('retry_pending');
+    expect(getRunState(db, deps, run.id).nodes.d!.status).toBe('dispatched');
+    expect(listPendingWakeups(db)).toHaveLength(1);
+
+    planA.outcome = 'success';
+    t = NOW + DEFAULT_RETRY_INTERVAL_SECONDS * 1000;
+    clock.tick();
+
+    await launcherDrive;
+    await drives.whenIdle();
+    await settle();
+
+    expect(executor.dispatched.filter((id: string) => id.startsWith('d#'))).toEqual(['d#0']);
+    expect(loadEngineEvents(db, run.id).filter((e) => e.type === 'run.finished')).toHaveLength(1);
+    expect(getRun(db, run.id)!.status).toBe('success');
+  });
+});

@@ -4,10 +4,10 @@ import { getRun } from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
 import {
   buildEngine,
-  pump,
+  driveRun,
   syncRunLifecycle,
   RETRY_WAKEUP_KIND,
-  type DriverDeps,
+  type DriveDeps,
 } from '../run/driver.js';
 import { appendEngineEvent, loadEngineEvents, terminalFactFromLog } from '../run/events.js';
 import type { WakeupFireResult, WakeupHandler } from './alarms.js';
@@ -24,10 +24,15 @@ import type { WakeupFireResult, WakeupHandler } from './alarms.js';
  *   3. the alarm comes due → THIS handler appends `node.retryDue`, whose fold
  *      re-dispatches the node under a new attempt.
  *
- * This handler is the ONLY recovery path a held run has (§A.5): `onResumed`
- * re-derives nothing for `retry_pending` and the boot reconciler leaves it
- * alone, precisely because the durable alarm row already survived the crash and
- * re-deriving would DOUBLE-ARM it. That is why F2b could not ship without this.
+ * This handler is the ONLY thing that resolves a HOLD (§A.5): `onResumed`
+ * re-derives nothing for a `retry_pending` node and the boot reconciler does not
+ * select it, so a held run's entire recovery is the durable alarm row this
+ * consumes. That is why F2b could not ship without this — F2b alone is a hang,
+ * not a degraded retry.
+ *
+ * The boot reconciler is the ONE other party that touches this kind's rows, and
+ * only to re-arm a hold whose alarm the HOLD→ARM crash window lost. It does not
+ * fire them.
  */
 
 /**
@@ -41,8 +46,11 @@ export const RetryWakeupRefSchema = z.object({
   attemptId: z.string().min(1),
 });
 
-/** What the handler needs: the driver boundary, minus the executor's own deps. */
-export type RetryAlarmDeps = DriverDeps;
+/**
+ * What the handler needs: the driver boundary PLUS the per-run drive lock. The
+ * lock is what makes this a safe second pump source — see `driveRun`.
+ */
+export type RetryAlarmDeps = DriveDeps;
 
 export function createRetryAlarmHandler(deps: RetryAlarmDeps): WakeupHandler {
   return {
@@ -111,12 +119,21 @@ export function createRetryAlarmHandler(deps: RetryAlarmDeps): WakeupHandler {
       // a live subscriber an event that never existed.
       const appended = appendEngineEvent(tx, due);
 
-      // The fold is PURE, so it belongs inside the transaction — and it MUST be
-      // here rather than in `afterCommit`: `projectRunState` returns state only,
-      // discarding commands, so re-projecting after commit would silently lose
-      // the `dispatchNode` this event exists to produce and leave the run hung.
-      // Reducing the PARSED event (never the raw input) for the reason
-      // `appendEngineEvent` documents.
+      // The fold is PURE, so it belongs inside the transaction: it is what makes
+      // the run ROW agree with the event that just became durable, atomically
+      // with the settle. Reducing the PARSED event (never the raw input) for the
+      // reason `appendEngineEvent` documents.
+      //
+      // Its COMMANDS are deliberately DISCARDED. They are correct with respect to
+      // `state` — a projection taken inside this transaction — but `afterCommit`
+      // runs later, and by then another drive may have appended past it (this
+      // transaction can commit while the LAUNCHER is mid-pump; better-sqlite3 is
+      // synchronous, so it lands at one of that pump's `await` points, never
+      // mid-fold). Driving stale commands is precisely B1. `driveRun` re-projects
+      // under the run's lock and re-derives them from the log as it then stands;
+      // for this event that yields the IDENTICAL `dispatchNode` (`onRetryDue`
+      // folds the node to `ready` with its new `attemptId`, and `resume` re-emits
+      // a `ready` node's dispatch under that same id), so nothing is lost.
       const result = engine.reduce(state, appended.event);
       syncRunLifecycle(tx, ref.runId, result.state.status);
 
@@ -124,10 +141,9 @@ export function createRetryAlarmHandler(deps: RetryAlarmDeps): WakeupHandler {
         status: 'fired',
         events: [appended.record],
         // Spawning work is forbidden inside the transaction (this module's
-        // contract): `pump` drives the re-dispatched node, which bills real LLM
-        // calls — a rollback around that would erase the run's log while the
-        // detached drive kept appending to it.
-        afterCommit: () => pump(deps, engine, result.state, result.commands).then(() => undefined),
+        // contract): the drive bills real LLM calls, and a rollback around that
+        // would erase the run's log while the detached drive kept appending to it.
+        afterCommit: () => driveRun(deps, ref.runId),
       };
     },
   };

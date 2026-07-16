@@ -71,6 +71,29 @@ export interface Engine {
   reduce(state: RunState, event: EngineEvent): ReduceResult;
   /** Replay: fold `reduce` over a whole log from the seed (for tests + boot). */
   projectRunState(events: EngineEvent[]): RunState;
+  /**
+   * F2c — re-derive the COMMANDS a projection implies, appending NOTHING.
+   *
+   * `projectRunState` discards commands (they live only in `reduce`'s return
+   * value), so a driver that re-reads the log to get a fresh state loses the very
+   * dispatches it re-read for. This recovers them. It is the identical derivation
+   * `run.resumed` folds to — asserted, not assumed, in `reduce.test.ts` — exposed
+   * WITHOUT the event, because `run.resumed` is BOOT's durable fact: appending one
+   * mid-run to obtain its commands would log a crash recovery that never happened.
+   *
+   * PREMISE INVERSION, and the reason this seam is documented rather than merely
+   * exported: `onResumed` was written for "everything in flight was LOST", and
+   * `driveRun` calls it when nothing was. Under the per-run drive lock
+   * (`run/drives.ts`) that holds for `ready` nodes — no concurrent drive exists,
+   * so a `ready` node's dispatch provably never started. It does NOT yet hold for
+   * `waiting` call nodes: this re-emits `startChild` for every one, which would
+   * re-spawn a LIVE child pipeline. Latent only because P3's executor stubs
+   * `startChild` into an immediate `call.returned{failure}`, so no node ever
+   * persists `waiting`. Making the re-emit genuinely idempotent via the
+   * deterministic `childRunId` is P3b's obligation, and it is stated in the spec's
+   * build order — not an assumption this seam is entitled to make.
+   */
+  resume(state: RunState): ReduceResult;
 }
 
 const LIVE_NODE = new Set<NodeRunState['status']>(['ready', 'dispatched']);
@@ -1387,10 +1410,19 @@ export function createEngine(doc: EngineDoc): Engine {
    * re-emit, so a held run recovers NOTHING here: `settle` cannot finish it
    * (held ⇒ non-terminal), and `reconcile`'s `dispatchedNodes()` does not select
    * it either. Its recovery path is S1's DURABLE ALARM ROW, which survived the
-   * crash and re-fires on its own — re-deriving a `scheduleRetry` here would
-   * DOUBLE-ARM it. That is why F2b hard-depends on F2c/S1: without a live alarm
-   * clock a held run stays `running` forever. `reconcile.ts` reports such a run
-   * as `held` rather than resuming it.
+   * crash and re-fires on its own. That is why F2b hard-depends on F2c/S1:
+   * without a live alarm clock a held run stays `running` forever.
+   *
+   * The omission is correct for a reason this docblock USED TO GET WRONG, and the
+   * distinction matters to anyone editing here: it is NOT that re-deriving a
+   * `scheduleRetry` would double-arm (`armWakeup` is upsert-if-absent and returns
+   * the existing row whatever its status, so re-arming is free — that premise was
+   * false and was inherited unchecked into five places). It is that this function
+   * is PURE and cannot read the alarm table, so it cannot make the only check
+   * that matters: does a row actually EXIST? A crash between the HOLD becoming
+   * durable and the arm landing leaves a held node with NO alarm, and only a
+   * caller that can SEE the table can tell that apart from a healthy hold.
+   * `reconcile.ts` makes exactly that check and re-arms when the row is gone.
    *
    * 2. The walk's own ephemeral output — re-run `settle`. Its `finishRun` /
    *    dispatch commands live only in the reducer's return value, so a crash
@@ -1404,6 +1436,13 @@ export function createEngine(doc: EngineDoc): Engine {
    *    handled above, so the two mechanisms never emit for the same node.
    */
   function onResumed(state: RunState, diagnostics: string[]): ReduceResult {
+    // The `run.resumed` fold's own guards do not apply when `resume()` calls this
+    // directly, so re-state the one that matters: a run that is not `running` has
+    // nothing to re-derive, and re-emitting a dispatch for a settled run would
+    // re-execute its side effects. `driveRun` already refuses a terminal LOG
+    // (#443); this is the engine-side backstop for a caller that did not.
+    if (state.status !== 'running') return { state, commands: [], diagnostics };
+
     const commands: EngineCommand[] = [];
     for (const id of [...nodeIds].sort()) {
       const ns = state.nodes[id]!;
@@ -1413,8 +1452,16 @@ export function createEngine(doc: EngineDoc): Engine {
         let prepared: Record<string, unknown>;
         try {
           prepared = prepInput(state, node);
-        } catch {
-          continue;
+        } catch (err) {
+          // TERMINALIZE, never swallow — the same verdict `tryDispatchNode`,
+          // `onRetryDue` and `onRetryRequested` all reach from a prep throw. This
+          // branch alone used to `continue`, emitting nothing and leaving the node
+          // `ready`: non-terminal, so `settle` could not finish the run either,
+          // and the run hung `running` forever. Tolerable while resume ran once
+          // per boot; `driveRun` makes this the RUNTIME path for every retry AND
+          // discards `onRetryDue`'s terminalize in favour of it.
+          const failed = prepFailure(state, id, err, diagnostics);
+          return { state: failed.state, commands: [failed.finish!], diagnostics };
         }
         commands.push({
           type: 'dispatchNode',
@@ -1429,8 +1476,11 @@ export function createEngine(doc: EngineDoc): Engine {
           const ctx = buildCtx(state);
           pvId = String(substitute(node.call.pipelineVersionId, ctx));
           callParams = substitute(node.call.params, ctx) as Record<string, unknown>;
-        } catch {
-          continue;
+        } catch (err) {
+          // Terminalize for the same reason as the `ready` branch above, and to
+          // match `tryDispatchNode`'s own call-prep throw (`prepFailure`).
+          const failed = prepFailure(state, id, err, diagnostics);
+          return { state: failed.state, commands: [failed.finish!], diagnostics };
         }
         commands.push({
           type: 'startChild',
@@ -1545,7 +1595,14 @@ export function createEngine(doc: EngineDoc): Engine {
     return state;
   }
 
-  return { seedState, reduce, projectRunState };
+  return {
+    seedState,
+    reduce,
+    projectRunState,
+    // The SAME function `run.resumed` folds to — one derivation, two entry
+    // points, so the boot path and the drive path cannot drift apart.
+    resume: (state) => onResumed(state, []),
+  };
 }
 
 // --- shared pure helpers (no closure needed) --------------------------------

@@ -12,9 +12,16 @@ import type { RetryAlarms } from '../driver.js';
  * would make a replay look correct here while the real repo diverged.
  * `buildDedupeKey` is the real one, so the key rule cannot drift either.
  *
- * Tests wanting the REAL arming path use `armWakeup` against a real db instead;
- * this exists so the ~20 driver/executor/launcher tests that never retry can
- * satisfy the required seam in one line.
+ * `find` reads the SAME `byKey` map `arm` writes, and that is the property to
+ * preserve if this is ever rewritten: the reconciler's B2 check is "`arm` wrote
+ * nothing, therefore re-arm", so a stub whose `find` and `arm` disagreed would
+ * report every held run stranded — and would pass against a reconciler that was
+ * genuinely broken.
+ *
+ * Tests wanting the REAL arming path use `armWakeup` against a real db instead
+ * (`reconcile.test.ts`'s held cases must, since they assert on real rows); this
+ * exists so the ~20 driver/executor/launcher tests that never retry can satisfy
+ * the required seam in one line.
  */
 export interface StubAlarms extends RetryAlarms {
   /** Every row armed, in arm order (deduped — a re-arm adds nothing). */
@@ -32,6 +39,9 @@ export function stubAlarms(): StubAlarms {
   return {
     armed,
     armCalls,
+    find(input: ArmWakeupInput): ScheduledWakeup | null {
+      return byKey.get(`${input.kind}:${buildDedupeKey(input)}`) ?? null;
+    },
     arm(input: ArmWakeupInput): ScheduledWakeup {
       armCalls.push(input);
       const dedupeKey = buildDedupeKey(input);
@@ -64,4 +74,9 @@ export const refuseToArm: RetryAlarms = {
   arm() {
     throw new Error('this path must not arm a retry alarm');
   },
+  // `find` answers honestly rather than throwing: a path that provably never
+  // ARMS may still legitimately ASK (the reconciler checks every held run's row
+  // before deciding). "No alarm is armed" is the truthful answer for a store
+  // nothing has ever armed into.
+  find: () => null,
 };

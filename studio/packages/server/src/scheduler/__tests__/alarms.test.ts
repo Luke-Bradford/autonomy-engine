@@ -552,7 +552,15 @@ describe('#5 S1 — the tick is safe to run in a headless server', () => {
     expect(handler.calls).toBe(1);
   });
 
-  it('a stopped clock does not fire and refuses to arm', () => {
+  it('a stopped clock does not fire — but STILL ARMS, so shutdown cannot kill a run', () => {
+    // The arm half is the load-bearing assertion, and it is the opposite of what
+    // this test used to demand. `buildApp`'s `onClose` stops the clock while runs
+    // are still settling; a run that fails transiently in that window emits
+    // `scheduleRetry` like any other, and a clock that REFUSED the arm would
+    // leave its node `retry_pending` with no alarm — nothing would ever
+    // re-dispatch it, so an ordinary transient failure would become a DEAD run,
+    // killed by shutdown timing alone. The row is durable and the next boot's
+    // sweep fires it, so accepting the arm costs nothing and loses nothing.
     const handler = spyHandler();
     const clock = createAlarmClock({ db, handlers: [handler], now: () => 9_000 });
     clock.arm({ kind: 'retry', ref: RETRY_REF, dueAt: 1, discriminator: 'a-1' });
@@ -561,9 +569,10 @@ describe('#5 S1 — the tick is safe to run in a headless server', () => {
     clock.tick();
 
     expect(handler.calls).toBe(0);
-    expect(() =>
-      clock.arm({ kind: 'retry', ref: RETRY_REF, dueAt: 1, discriminator: 'a-2' }),
-    ).toThrow(/stopped/i);
+    const armed = clock.arm({ kind: 'retry', ref: RETRY_REF, dueAt: 1, discriminator: 'a-2' });
+    expect(armed.status).toBe('pending');
+    // Durable, not just returned — the next boot's sweep is what serves it.
+    expect(listPendingWakeups(db)).toHaveLength(2);
   });
 
   it('skips a row that was settled AFTER the scan snapshot', () => {

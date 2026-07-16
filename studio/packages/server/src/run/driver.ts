@@ -14,8 +14,9 @@ import {
 } from '@autonomy-studio/shared';
 import { getRun, updateRun } from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
+import type { RunDrives } from './drives.js';
 import type { RunEventBus } from './event-bus.js';
-import { appendEngineEvent, loadEngineEvents } from './events.js';
+import { appendEngineEvent, loadEngineEvents, terminalFactFromLog } from './events.js';
 
 /**
  * P2d — the run DRIVER: the one impure boundary that turns the pure reducer's
@@ -76,17 +77,37 @@ export interface Executor {
 }
 
 /**
- * The alarm-arming seam the driver needs to perform a `scheduleRetry` (F2c).
+ * The alarm seam the driver needs to perform a `scheduleRetry` (F2c), and that
+ * the boot reconciler needs to tell a healthy HOLD from a stranded one.
  *
- * Structurally satisfied by #5 S1's `AlarmClock.arm`, but declared HERE rather
- * than imported from `scheduler/alarms.ts` for two reasons: that module already
- * imports `run/event-bus.js` (so importing it back would close a cycle), and the
- * driver genuinely needs only this one method — a narrow seam keeps the retry
- * alarm testable with a three-line stub.
+ * Structurally satisfied by #5 S1's `AlarmClock.arm` + the wakeup repo's
+ * `getWakeupByKey`, but declared HERE rather than imported from
+ * `scheduler/alarms.ts` for two reasons: that module already imports
+ * `run/event-bus.js` (so importing it back would close a cycle), and the driver
+ * genuinely needs only these two methods — a narrow seam keeps the retry alarm
+ * testable with a small stub.
+ *
+ * `find` and `arm` MUST be backed by the SAME store. That is not a nicety: the
+ * reconciler's whole B2 check is "arm wrote nothing, therefore re-arm", so a
+ * `find` that reads a different store than `arm` writes would report every held
+ * run stranded — and a test whose stub split them would pass against a broken
+ * reconciler. Pairing them on one interface is what makes that impossible to
+ * wire wrong.
  */
 export interface RetryAlarms {
   /** Idempotent by `(kind, dedupeKey)`: a replayed arm returns the EXISTING row. */
   arm(input: ArmWakeupInput): ScheduledWakeup;
+  /**
+   * The row `arm(input)` would return, or `null` if none is armed. Keyed by the
+   * SAME derived `(kind, dedupeKey)` as `arm`, from the same input — never a
+   * hand-spelled key — so the two cannot disagree about identity.
+   *
+   * Returns the row WHATEVER its status: a spent (`fired`/`suppressed`/
+   * `cancelled`) row is not a live alarm, and `arm` will not replace it, so the
+   * caller must be able to see the difference. Collapsing that to a boolean here
+   * would hide the one case that is neither healthy nor re-armable.
+   */
+  find(input: ArmWakeupInput): ScheduledWakeup | null;
 }
 
 /**
@@ -165,6 +186,47 @@ export function syncRunLifecycle(db: Db, runId: string, status: RunLifecycleStat
 }
 
 /**
+ * The `ArmWakeupInput` for a node's retry alarm — the SSOT for that alarm's
+ * IDENTITY, shared by the two callers that must agree on it: `armRetry` (which
+ * arms it) and the boot reconciler (which asks whether it exists). A second
+ * hand-rolled copy of this shape in the reconciler would make the B2 check
+ * silently vacuous the first time either drifted — it would look up a key nothing
+ * ever armed, find nothing, and re-arm a healthy hold on every boot.
+ *
+ * `dueAt` is `now + the node's retryIntervalSeconds`, read from the run's
+ * IMMUTABLE bound version — the same doc the reducer read when it decided
+ * eligibility, so the two cannot disagree and a replay reads the identical value.
+ */
+export function retryArmInput(
+  deps: Pick<DriverDeps, 'resolveDoc' | 'now'>,
+  args: { runId: string; pipelineVersionId: string; nodeId: string; failedAttemptId: string },
+): ArmWakeupInput {
+  const now = deps.now ?? (() => Date.now());
+  const doc = deps.resolveDoc(args.pipelineVersionId);
+  const policy = doc.nodes.find((n) => n.id === args.nodeId)?.policy;
+  const intervalSeconds = policy?.retryIntervalSeconds ?? DEFAULT_RETRY_INTERVAL_SECONDS;
+  return {
+    kind: RETRY_WAKEUP_KIND,
+    // The per-kind `ref` shape S1 declares for retry. `attemptId` is not
+    // decoration: it is the handle the handler's freshness check needs to tell
+    // "this alarm is for the attempt still held" from "a stale one".
+    ref: { runId: args.runId, nodeId: args.nodeId, attemptId: args.failedAttemptId },
+    dueAt: now() + intervalSeconds * 1000,
+    // Spec #5's spike headline — "omit the attempt and attempt-2's retry collides
+    // with attempt-1's already-`fired` row, so it SILENTLY NEVER ARMS" — is
+    // VACUOUS FOR THIS KIND, and saying so is the point of this comment. The
+    // dedupe key is `kind:serializeRef(ref):discriminator` and retry's `ref`
+    // ALREADY carries `attemptId`, so the two attempts' keys differ whatever the
+    // discriminator holds; the collision it is credited with preventing cannot
+    // happen here. The spike's finding is real for kinds whose `ref` does NOT
+    // carry the occurrence (`round-<r>`, `tick-<epoch>`). Kept — a redundant
+    // discriminator costs nothing and S1 requires the field — but credited
+    // honestly, because the next author of a kind reads this to decide theirs.
+    discriminator: `attempt-${args.failedAttemptId}`,
+  };
+}
+
+/**
  * Perform a `scheduleRetry` (F2c): ARM the durable alarm, then hand back the
  * `node.retryScheduled` event recording when the retry is due. The impure half
  * of D4's split — the reducer decided ELIGIBLE, this decides WHEN.
@@ -188,29 +250,14 @@ function armRetry(
   state: RunState,
   command: Extract<EngineCommand, { type: 'scheduleRetry' }>,
 ): EngineEvent {
-  const now = deps.now ?? (() => Date.now());
-  // The policy comes from the run's IMMUTABLE bound version — the same doc the
-  // reducer read when it decided eligibility, so the two cannot disagree, and a
-  // replay reads the identical value.
-  const doc = deps.resolveDoc(state.pipelineVersionId);
-  const policy = doc.nodes.find((n) => n.id === command.nodeId)?.policy;
-  const intervalSeconds = policy?.retryIntervalSeconds ?? DEFAULT_RETRY_INTERVAL_SECONDS;
-
-  const row = deps.alarms.arm({
-    kind: RETRY_WAKEUP_KIND,
-    // The per-kind `ref` shape S1 declares for retry. `attemptId` is not
-    // decoration: it is the handle the handler's freshness check needs to tell
-    // "this alarm is for the attempt still held" from "a stale one".
-    ref: { runId: state.runId, nodeId: command.nodeId, attemptId: command.failedAttemptId },
-    dueAt: now() + intervalSeconds * 1000,
-    // Spec #5's spike headline: omit the attempt and attempt-2's retry collides
-    // with attempt-1's already-`fired` row, so — arming being an idempotent
-    // upsert-if-absent — it SILENTLY NEVER ARMS. The spec spells this
-    // `attempt-<n>`; the whole attemptId is used instead because it already
-    // encodes n (as `nodeId#n`) and needs no parsing back apart. Same
-    // discrimination, one less thing to get wrong.
-    discriminator: `attempt-${command.failedAttemptId}`,
-  });
+  const row = deps.alarms.arm(
+    retryArmInput(deps, {
+      runId: state.runId,
+      pipelineVersionId: state.pipelineVersionId,
+      nodeId: command.nodeId,
+      failedAttemptId: command.failedAttemptId,
+    }),
+  );
 
   return {
     type: 'node.retryScheduled',
@@ -262,9 +309,10 @@ export async function pump(
     //
     // `scheduleRetry` routes through this same `source` rather than appending on
     // its own: the loop below is what publishes to the P6 bus (so a watching
-    // client actually SEES the retry — the event's whole purpose), folds the
-    // PARSED event, and syncs the row. `armRetry` runs while building the array,
-    // which is what keeps the arm strictly BEFORE the append.
+    // client's raw event feed sees the retry as it is scheduled — note the
+    // monitor's per-node summary does not fold it yet), folds the PARSED event,
+    // and syncs the row. `armRetry` runs while building the array, which is what
+    // keeps the arm strictly BEFORE the append.
     const source: Iterable<EngineEvent> | AsyncIterable<EngineEvent> =
       command.type === 'finishRun'
         ? [
@@ -301,9 +349,82 @@ export async function pump(
 }
 
 /**
+ * The deps a DRIVE ENTRY POINT needs: the driver boundary plus the per-run lock.
+ *
+ * Separate from `DriverDeps` because the two answer different questions.
+ * `DriverDeps` is "what `pump` needs to perform commands"; this is "what is
+ * allowed to START a pump". Only the entry points carry it — the launcher and
+ * the retry alarm — which is the list `executor.ts`'s sequential-pump invariant
+ * actually depends on. The boot reconciler pumps too and deliberately does NOT
+ * carry it; see `reconcile.ts`'s header for why it cannot race.
+ */
+export interface DriveDeps extends DriverDeps {
+  drives: RunDrives;
+}
+
+/**
+ * F2c — drive a run that is ALREADY underway, from the log, under its lock. The
+ * ONE entry point for "something happened out of band; take this run further".
+ *
+ * Why every line of this is load-bearing (all of it measured, none of it
+ * theorised — see the joint spec's B1):
+ *
+ *  - **The lock.** The alarm clock is a SECOND pump source for a run the
+ *    launcher may still be driving. Two `pump`s each hold their own in-memory
+ *    `RunState` and never re-read the log, so they diverge permanently and both
+ *    write: a shared successor got dispatched TWICE under the same `attemptId` —
+ *    a real LLM call billed twice — and the run then hung with no `run.finished`.
+ *  - **Re-projecting INSIDE the lock.** Serializing alone does not fix it. A
+ *    second drive that waits its turn and then pumps a snapshot taken BEFORE the
+ *    wait is just as stale as one that never waited. The lock's only purpose is
+ *    to make this `loadEngineEvents` a fixed point nothing can append behind.
+ *  - **`engine.resume` rather than the caller's commands.** `projectRunState`
+ *    discards commands, so a fresh projection alone would silently drop the
+ *    dispatch this drive exists to perform. `resume` re-derives it — and re-derives
+ *    it from the CURRENT log, which is exactly why the caller's own commands
+ *    (computed against a projection this drive may have moved past) are discarded
+ *    rather than passed in.
+ *  - **The terminal check.** The LOG decides whether a run is over, never a
+ *    re-fold (#443). Two alarms due in one tick both queue a drive here; the
+ *    first finishes the run, and this is what stops the second from re-driving a
+ *    settled run's nodes.
+ */
+export async function driveRun(deps: DriveDeps, runId: string): Promise<void> {
+  await deps.drives.serialize(runId, async () => {
+    const events = loadEngineEvents(deps.db, runId);
+
+    // Hoisted above `resolveDoc` for the reason `reconcile.ts` documents: the log
+    // needs no doc, so an unresolvable version cannot strand a finished run.
+    const terminal = terminalFactFromLog(events);
+    if (terminal !== null) {
+      syncRunLifecycle(deps.db, runId, terminal);
+      return;
+    }
+
+    // Gone (deleted mid-flight): there is nothing to drive and nothing to record.
+    // Mirrors the retry handler's own `run_not_found` verdict. Without this the
+    // throw would land in the alarm clock's floating `afterCommit` catch and the
+    // run would silently never drive — a hang reported as a log line.
+    const run = getRun(deps.db, runId);
+    if (run === null) return;
+
+    // From the run ROW, not the projection: that is what lets the doc resolve
+    // before anything is folded.
+    const engine = buildEngine(deps.resolveDoc(run.pipelineVersionId));
+    const result = engine.resume(engine.projectRunState(events));
+    syncRunLifecycle(deps.db, runId, result.state.status);
+    await pump(deps, engine, result.state, result.commands);
+  });
+}
+
+/**
  * Start a fresh run: resolve its params (secrets stripped), append `run.started`
  * and drive it to quiescence. Refuses a run that already has a log — starting is
  * for a `pending` run; a crashed run is resumed by the boot reconciler instead.
+ *
+ * NOT self-locking: its caller (`launcher.ts`) wraps this AND its failure
+ * cleanup in one `drives.serialize`, so the interrupt append cannot interleave
+ * with another drive either. A lock taken here would leave that gap open.
  */
 export async function startRun(deps: DriverDeps, run: Run): Promise<RunState> {
   if (loadEngineEvents(deps.db, run.id).length > 0) {

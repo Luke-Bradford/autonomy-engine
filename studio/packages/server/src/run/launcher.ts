@@ -5,7 +5,7 @@ import {
   startRun,
   syncRunLifecycle,
   TERMINAL_RUN,
-  type DriverDeps,
+  type DriveDeps,
 } from './driver.js';
 import { appendEngineEvent, loadEngineEvents, terminalFactFromLog } from './events.js';
 
@@ -74,7 +74,7 @@ export interface RunLauncher {
   stop(): void;
 }
 
-export interface RunLauncherDeps extends DriverDeps {
+export interface RunLauncherDeps extends DriveDeps {
   log?: LauncherLog;
   /** Per-trigger `queue` depth cap; defaults to `DEFAULT_MAX_QUEUE_DEPTH`. */
   maxQueueDepth?: number;
@@ -226,14 +226,19 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     // Caller guarantees non-null (fire() throws UnboundTriggerError otherwise).
     const pipelineVersionId = trigger.pipelineVersionId as string;
     // The row is created `pending`, then `startRun` (below) flips it to
-    // `running` via `run.started` — both are CONSECUTIVE synchronous writes in
-    // this same tick (there is no `await` between them: `await startRun(...)`
-    // runs startRun's synchronous prefix — the `run.started` append + lifecycle
-    // sync — before it suspends). A hard crash (SIGKILL/power-loss) at that
-    // exact instruction boundary could orphan a `pending` row with no event log
-    // that the boot reconciler (which sweeps `running` rows) would not clear,
-    // wedging a single-slot trigger's concurrency gate. The window is sub-tick
-    // and operator-recoverable (delete the run row / re-fire); a reconciler
+    // `running` via `run.started`. Both land in this same tick, but they are no
+    // longer CONSECUTIVE synchronous writes: F2c routes the drive through
+    // `drives.serialize`, so `startRun`'s synchronous prefix (the `run.started`
+    // append + lifecycle sync) now runs one MICROTASK after this `createRun`
+    // rather than immediately after it. Microtasks drain before any I/O, so the
+    // window is unchanged in kind and still sub-tick — but the old comment's
+    // "there is no `await` between them" is no longer literally true, and this
+    // one says what is.
+    //
+    // A hard crash (SIGKILL/power-loss) in that window could orphan a `pending`
+    // row with no event log that the boot reconciler (which sweeps `running`
+    // rows) would not clear, wedging a single-slot trigger's concurrency gate.
+    // Operator-recoverable (delete the run row / re-fire); a reconciler
     // `pending`-orphan sweep is the durable close and is left to a follow-up so
     // this slice stays scoped to manual fire + concurrency.
     const run = createRun(db, {
@@ -245,14 +250,24 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     });
 
     incInFlight(trigger.id);
-    const p = (async () => {
+    // Under the run's DRIVE LOCK (F2c) — the launcher is one of the two things
+    // that can pump a run, the retry alarm is the other, and `executor.ts`'s
+    // "within a single run the driver's `pump` is sequential" invariant is now
+    // this lock rather than an accident of there having been only one caller.
+    //
+    // The lock spans the CATCH too, not just `startRun`: the cleanup APPENDS
+    // (`run.interrupted`) and reads the log to decide whether to, so leaving it
+    // outside would reopen the same divergence one level down — an alarm's drive
+    // could interleave between the failed pump and the interrupt that describes
+    // it. A fresh run's chain is empty, so this costs a microtask and no waiting.
+    const p = deps.drives.serialize(run.id, async () => {
       try {
         await startRun(deps, run);
       } catch (err) {
         deps.log?.error({ err, runId: run.id, triggerId: trigger.id }, 'run drive failed');
         terminalizeInterrupted(run.id);
       }
-    })();
+    });
 
     inFlight.add(p);
     void p.finally(() => {
