@@ -710,6 +710,11 @@ export function resolveRunParams(
   doc: Pick<PipelineVersion, 'params'>,
   overrides: Record<string, unknown>,
 ): Record<string, unknown> {
+  // LAST-WINS on duplicate names, deliberately left tolerant here: the WRITE
+  // gate (`NewPipelineVersionSchema`, #458) refuses duplicate param names, so a
+  // fresh doc can't reach this map with a collision. A pre-gate STORED row still
+  // can (the read schema stays tolerant to keep it repairable), and last-wins is
+  // the defined behaviour for those — not a silent bug to re-detect here.
   const byName = new Map<string, Param>();
   for (const p of doc.params) byName.set(p.name, p);
 

@@ -367,6 +367,33 @@ describe('PipelineVersionSchema', () => {
     };
     expect(() => PipelineVersionSchema.parse(legacy)).not.toThrow();
   });
+
+  // #458 — the READ path stays tolerant for pipeline-level `params`/`outputs`
+  // name-uniqueness too, for the SAME brick-guard reason as config.outputs
+  // above: `params`/`outputs` are IMMUTABLE once written, so refusing a stored
+  // duplicate-carrying row here would make it unopenable in the UI that must
+  // re-author it. The duplicate is refused on WRITE only (see below).
+  it('still READS a stored row with duplicate param names (repairable, not bricked)', () => {
+    const legacy = {
+      ...pipelineVersion,
+      params: [
+        { name: 'topic', type: 'string', required: true },
+        { name: 'topic', type: 'number', required: false },
+      ],
+    };
+    expect(() => PipelineVersionSchema.parse(legacy)).not.toThrow();
+  });
+
+  it('still READS a stored row with duplicate output names (repairable, not bricked)', () => {
+    const legacy = {
+      ...pipelineVersion,
+      outputs: [
+        { name: 'summary', type: 'string' },
+        { name: 'summary', type: 'number' },
+      ],
+    };
+    expect(() => PipelineVersionSchema.parse(legacy)).not.toThrow();
+  });
 });
 
 // F13a — the WRITE path is where a corrupt `config.outputs` is refused. These
@@ -435,6 +462,74 @@ describe('NewPipelineVersionSchema — config.outputs is refused on write (F13a)
         withNodeConfig({ outputs: [{ name: 'a.b', type: 'string' }] }),
       ),
     ).toThrow();
+  });
+});
+
+// #458 — pipeline-level `params`/`outputs` name-uniqueness is the twin of the
+// node-level `config.outputs` rule above (F13a). A duplicate NAME silently
+// collapses last-wins wherever the list is indexed by name — `resolveRunParams`
+// builds its `byName` map that way (`engine/params.ts`), so `${params.x}` with
+// two `x`s resolves to whichever is LAST, and a doc reorder (canvas save, git
+// round-trip) changes what the pipeline MEANS with no diff to its logic. Refused
+// on the WRITE path only, matching F13a's read-tolerant/write-strict asymmetry.
+describe('NewPipelineVersionSchema — duplicate pipeline-level param/output names are refused on write (#458)', () => {
+  function writeDoc(overrides: Record<string, unknown>) {
+    const { id, version, createdAt, ...rest } = pipelineVersion;
+    void id;
+    void version;
+    void createdAt;
+    return { ...rest, ...overrides };
+  }
+
+  it('accepts unique pipeline-level params and outputs (regression)', () => {
+    expect(() =>
+      NewPipelineVersionSchema.parse(
+        writeDoc({
+          params: [
+            { name: 'topic', type: 'string', required: true },
+            { name: 'depth', type: 'number', required: false },
+          ],
+          outputs: [
+            { name: 'summary', type: 'string' },
+            { name: 'count', type: 'number' },
+          ],
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('rejects duplicate param names', () => {
+    const result = NewPipelineVersionSchema.safeParse(
+      writeDoc({
+        params: [
+          { name: 'topic', type: 'string', required: true },
+          { name: 'topic', type: 'number', required: false },
+        ],
+      }),
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      // Locks the shared refinement's `path: [i, 'name']` contract so a refactor
+      // can't silently swap which field reports.
+      const issue = result.error.issues.find((i) => i.message.includes('duplicate param name'));
+      expect(issue?.path).toEqual(['params', 1, 'name']);
+    }
+  });
+
+  it('rejects duplicate output names', () => {
+    const result = NewPipelineVersionSchema.safeParse(
+      writeDoc({
+        outputs: [
+          { name: 'summary', type: 'string' },
+          { name: 'summary', type: 'number' },
+        ],
+      }),
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find((i) => i.message.includes('duplicate output name'));
+      expect(issue?.path).toEqual(['outputs', 1, 'name']);
+    }
   });
 });
 

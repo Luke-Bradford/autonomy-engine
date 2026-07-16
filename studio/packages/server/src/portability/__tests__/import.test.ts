@@ -178,6 +178,59 @@ describe('importEnvelope: pipeline', () => {
     expect(importedVersion.id).not.toBe(sourceVersion.id);
   });
 
+  // #458 — a git-authored envelope carrying duplicate pipeline-level param
+  // names is refused on import, not silently stored last-wins. The export schema
+  // derives from the READ-tolerant `PipelineVersionSchema`, so the duplicate
+  // survives `parseAndUpgradeEnvelope` and is caught by the write-strict
+  // `NewPipelineVersionSchema` inside `createPipelineVersion` — and the atomic
+  // import (#459) means no orphan pipeline is left behind.
+  it('refuses an imported envelope with duplicate pipeline-level param names (#458)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'DupParams' });
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [{ name: 'topic', type: 'string', required: true }],
+      outputs: [],
+      nodes: [{ id: 'n1', type: 'llm_call', config: {}, position: { x: 0, y: 0 } }],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const envelope = JSON.parse(JSON.stringify(exportPipeline(db, pipeline.id, 'owner-a')));
+    envelope.data.versions[0].params = [
+      { name: 'topic', type: 'string', required: true },
+      { name: 'topic', type: 'number', required: false },
+    ];
+
+    expect(() => importEnvelope(db, 'owner-b', envelope)).toThrow(/duplicate param name/);
+    // Atomic (#459): the refused import leaves no orphan for the importer.
+    expect(listPipelines(db, 'owner-b')).toEqual([]);
+  });
+
+  // The outputs half of the same write gate — same funnel, pinned at the import
+  // level too so neither field can regress silently.
+  it('refuses an imported envelope with duplicate pipeline-level output names (#458)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'DupOutputs' });
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [{ name: 'summary', type: 'string' }],
+      nodes: [{ id: 'n1', type: 'llm_call', config: {}, position: { x: 0, y: 0 } }],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const envelope = JSON.parse(JSON.stringify(exportPipeline(db, pipeline.id, 'owner-a')));
+    envelope.data.versions[0].outputs = [
+      { name: 'summary', type: 'string' },
+      { name: 'summary', type: 'number' },
+    ];
+
+    expect(() => importEnvelope(db, 'owner-b', envelope)).toThrow(/duplicate output name/);
+    expect(listPipelines(db, 'owner-b')).toEqual([]);
+  });
+
   // #1 F2a. `policy` round-trips for free — `NodeExportSchema` derives from
   // `NodeSchema` and both `stripNodeConnectionId` and `toDbNode` spread the rest
   // of the node — so no code here NAMES it. This pins that: a refactor
