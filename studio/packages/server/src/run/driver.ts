@@ -338,7 +338,14 @@ function driveFinishRun(
 ): RunState {
   let pending: Extract<EngineCommand, { type: 'finishRun' }> = command;
   const carried: string[] = [];
-  for (;;) {
+  // A rejected `success` yields a `failure` replacement, and a `failure` is
+  // ALWAYS accepted (the impossibility guard fires only for `success`), so this
+  // converges in ≤2 folds. The cap is a structural termination guarantee, not a
+  // real limit: a future reducer that keeps rejecting without converging would
+  // otherwise spin here holding the per-run lock. Exceeding it throws (→ the
+  // caller's `terminalizeInterrupted`), the same fail-safe as no-replacement.
+  const MAX_FINISH_FOLDS = 8;
+  for (let attempt = 1; ; attempt += 1) {
     const event: EngineEvent = {
       type: 'run.finished',
       runId: state.runId,
@@ -373,14 +380,17 @@ function driveFinishRun(
     const replacement = result.commands.find(
       (c): c is Extract<EngineCommand, { type: 'finishRun' }> => c.type === 'finishRun',
     );
-    if (replacement === undefined) {
-      // Unreachable with the current reducer (a rejected success always returns a
-      // `finishRun{failure}`, always accepted). A future reducer that rejects
-      // without a replacement is an invariant violation, not a hang — throw so
-      // the caller's `terminalizeInterrupted` records it, rather than looping or
-      // constructing a `run.finished` from an undefined command.
+    if (replacement === undefined || attempt >= MAX_FINISH_FOLDS) {
+      // Both branches are unreachable with the current reducer (a rejected
+      // success always returns a `finishRun{failure}`, always accepted, so this
+      // converges in one step). A future reducer that rejects without a
+      // replacement — or without ever converging — is an invariant violation,
+      // not a hang: throw so the caller's `terminalizeInterrupted` records it,
+      // rather than looping forever under the per-run lock or building a
+      // `run.finished` from an undefined command.
       throw new Error(
-        `reducer rejected run.finished for run '${state.runId}' with no replacement finishRun: ` +
+        `reducer did not converge to an accepted run.finished for run '${state.runId}' ` +
+          `(attempt ${attempt}${replacement === undefined ? ', no replacement finishRun' : ''}): ` +
           carried.join('; '),
       );
     }
