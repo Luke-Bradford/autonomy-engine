@@ -134,6 +134,13 @@ jobs:
             exit 1
           fi
 
+          # HEED THE QUOTING: this whole script is a DOUBLE-QUOTED shell string,
+          # so a double quote or a backtick anywhere in it -- comments included
+          # -- is shell syntax, not Python. A double quote ENDS the string and
+          # silently truncates the script; a backtick runs its contents as a
+          # command. Both fail SILENTLY: the step still exits 0, having written
+          # no review.txt. Single quotes only. (Learned the hard way on #501:
+          # a comment mentioning a quoted string cost a full CI round.)
           python3 -c "
           import json, sys
           data = json.load(open('response.json'))
@@ -148,13 +155,14 @@ jobs:
           # JOIN every text block, never just the first. A partial comment was
           # merely untidy until #501 made the verdict a required check: a reply
           # split across blocks would post a truncated review AND fail the
-          # assert with 'no verdict' though the model emitted one -- a false red
+          # assert as verdict-less though the model emitted one -- a false red
           # that is near-impossible to diagnose from the error. (PR #500 was a
           # SINGLE block, so it is not evidence for this; interleaved thinking
           # is what splits blocks.)
-          # Joined on a BLANK LINE, not '': blocks carry no trailing-newline
-          # guarantee, so '' can glue "...findings." to "### Verdict", killing
-          # the `^` anchor the extractor needs and reding the check for no
+          # Joined on a BLANK LINE, not the empty string: blocks carry no
+          # trailing-newline guarantee, so an empty join can glue a findings
+          # line onto the Verdict heading that follows it, killing the
+          # start-of-line anchor the extractor needs and reding the check for no
           # reason. Separate blocks are separate markdown; a blank line is the
           # faithful seam.
           text = '\n\n'.join(b['text'] for b in text_blocks)
