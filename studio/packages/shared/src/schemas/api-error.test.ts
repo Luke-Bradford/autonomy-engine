@@ -50,4 +50,27 @@ describe('ApiErrorBodySchema', () => {
     expect(parsed).toEqual({ error: 'not_found' });
     expect('futureField' in parsed).toBe(false);
   });
+
+  it('accepts every known error code the central handler emits', () => {
+    for (const error of [
+      'validation_error',
+      'not_found',
+      'conflict',
+      'import_error',
+      'invalid_pipeline_doc',
+      'bad_request',
+      'internal_error',
+    ]) {
+      expect(ApiErrorBodySchema.parse({ error }).error).toBe(error);
+    }
+  });
+
+  it('degrades an UNRECOGNISED future code to undefined but keeps the rest (client forward-compat)', () => {
+    // A newer server sending a code this build does not know must NOT collapse
+    // the whole body — `message` still surfaces to the (older) client. The
+    // `error` field alone drops to undefined via `.catch`; the parse succeeds.
+    const parsed = ApiErrorBodySchema.parse({ error: 'rate_limited', message: 'slow down' });
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.message).toBe('slow down');
+  });
 });
