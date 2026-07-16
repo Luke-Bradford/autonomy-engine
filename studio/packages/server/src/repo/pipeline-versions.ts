@@ -127,6 +127,13 @@ export function createPipelineVersion(db: Db, input: NewPipelineVersion): Pipeli
   // costs nothing, and reads are safe to memoize: a pipeline's `ownerId` cannot
   // change under a single synchronous validation pass.
   const ownerIdByPipeline = new Map<string, string | null>();
+  // `?? null` maps BOTH "pipeline record missing" and "exists but legitimately
+  // unowned" to `null`, so both land in the shared null-owner bucket described
+  // below. That conflation is safe today only because the MVP's fixed `'local'`
+  // principal never leaves `callerOwnerId` null, so the null bucket is never
+  // actually entered. A multi-tenant swap that introduces real null-owner callers
+  // MUST split these (a missing pipeline is a broken FK, not an unowned peer, and
+  // should resolve to `undefined`/skip, not join the caller's bucket).
   const ownerIdOf = (pipelineId: string): string | null => {
     const cached = ownerIdByPipeline.get(pipelineId);
     if (cached !== undefined) return cached;
