@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { CATALOG_VERSION, ImportError, type NewPipelineVersion } from '@autonomy-studio/shared';
+import {
+  CATALOG_VERSION,
+  ImportError,
+  PipelineVersionSchema,
+  type NewPipelineVersion,
+  type PipelineVersion,
+} from '@autonomy-studio/shared';
 import {
   InvalidPipelineDocError,
   createConnection,
@@ -176,6 +182,86 @@ describe('importEnvelope: pipeline', () => {
     // `Date.now()`, which can legitimately equal the source's in the same
     // millisecond.)
     expect(importedVersion.id).not.toBe(sourceVersion.id);
+  });
+
+  // #485 — the #473 import test above pins ONE field (`containers`).
+  // `importPipelineEnvelope` builds its `NewPipelineVersion` by hand, and every
+  // `.default()` field is optional in `z.input`, so a future field could be
+  // dropped there exactly as `containers` was, unseen until someone writes a
+  // field-specific round-trip. This generalizes the guard to the whole domain
+  // shape: author EVERY preserved field with a value that DIFFERS from its
+  // default, assert the fixture covers every preserved key (a new schema field
+  // fails HERE), then assert the RE-READ deep-equals it. `id`/`version`/
+  // `createdAt` are server-reassigned, `pipelineId` is re-pointed at the new
+  // pipeline, and node `connectionId` is nulled on export by design — those are
+  // not "preserved" and are excluded.
+  it('round-trip: EVERY domain field survives export → import — a class guard (#485)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'FullShape' });
+
+    const authored: NewPipelineVersion = {
+      pipelineId: pipeline.id,
+      params: [{ name: 'topic', type: 'string', required: true }],
+      outputs: [{ name: 'summary', type: 'string' }],
+      nodes: [
+        { id: 'n1', type: 'llm_call', config: { model: 'x' }, position: { x: 3, y: 4 } },
+        { id: 'n3', type: 'agent_task', config: {}, position: { x: 5, y: 6 } },
+        {
+          id: 'n2',
+          type: 'llm_call',
+          config: { outputs: [{ name: 'done', type: 'boolean' }] },
+          position: { x: 7, y: 8 },
+        },
+      ],
+      // A top-level edge (no endpoint is a container child) so the doc is valid.
+      edges: [{ id: 'e1', from: 'n1', to: 'n3', on: 'success' }],
+      containers: [
+        {
+          id: 'c1',
+          kind: 'loop',
+          children: ['n2'],
+          maxRounds: 5,
+          exitWhen: '${nodes.n2.output.done}',
+        },
+      ],
+      // NOT CATALOG_VERSION — import is an "upgrade path can still set an older
+      // value" (see `NewPipelineVersionSchema`), so a preserved older value is
+      // the meaningful assertion; a re-stamped one would silently equal the default.
+      catalogVersion: CATALOG_VERSION - 1,
+    };
+
+    // CLASS assertion: the fixture must populate every field the import is meant
+    // to preserve. A field added to `PipelineVersionSchema` with no fixture
+    // value fails HERE, forcing this test to be extended, not silently skipped.
+    const NOT_PRESERVED = ['id', 'version', 'createdAt', 'pipelineId'];
+    const preserved = Object.keys(PipelineVersionSchema.shape).filter(
+      (key) => !NOT_PRESERVED.includes(key),
+    );
+    expect(preserved.filter((key) => !(key in authored))).toEqual([]);
+
+    createPipelineVersion(db, authored);
+    const envelope = exportPipeline(db, pipeline.id, 'owner-a');
+    const result = importEnvelope(db, 'owner-b', envelope);
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+    expect(result.versions).toHaveLength(1);
+    const importedVersion = result.versions[0]!;
+
+    // RE-READ, never the import response (built from the in-memory input).
+    const reread = getPipelineVersion(db, importedVersion.id);
+    expect(reread).not.toBeNull();
+
+    // `nodes` is compared by the generic branch below, not special-cased: this
+    // fixture sets no node `connectionId` (that field IS export-nulled, and its
+    // round-trip is covered by the dedicated tests above), so authored and
+    // re-read node shapes are identical. Should a future author add a
+    // `connectionId`-bearing node here, this generic `toEqual` would FAIL loudly
+    // (export nulls it → import omits it) — forcing them to handle it, rather
+    // than a silent no-op branch hiding the divergence.
+    for (const key of preserved) {
+      expect(reread![key as keyof PipelineVersion]).toEqual(
+        authored[key as keyof NewPipelineVersion],
+      );
+    }
   });
 
   // #458 — a git-authored envelope carrying duplicate pipeline-level param

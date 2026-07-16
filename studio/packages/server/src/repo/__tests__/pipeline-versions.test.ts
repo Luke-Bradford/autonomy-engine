@@ -2,7 +2,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { CATALOG_VERSION, type NewPipelineVersion, type Node } from '@autonomy-studio/shared';
+import {
+  CATALOG_VERSION,
+  PipelineVersionSchema,
+  type NewPipelineVersion,
+  type Node,
+  type PipelineVersion,
+} from '@autonomy-studio/shared';
 import { openDb } from '../../db/client.js';
 import { pipelineVersions } from '../../db/schema.js';
 import {
@@ -240,6 +246,71 @@ describe('pipeline-versions repo', () => {
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // #485 — loss point 1 as a CLASS guard, not a snapshot. #473 proved a single
+  // field (`containers`) survives create -> re-read; but a field added to
+  // `PipelineVersionSchema` later slips past a one-field test. This authors
+  // EVERY persistable field with a value that DIFFERS from its schema default
+  // (a defaulted field dropped -> default reads back equal and proves nothing —
+  // the exact trap the pre-#473 fixture fell into, see the note on the
+  // containers test above), asserts the fixture COVERS every non-server key
+  // (so a new schema field fails here until this test is extended), then
+  // asserts the RE-READ — never the in-memory create response — deep-equals
+  // the authored value for every one of those keys.
+  //
+  // This guards the PERSIST/serialization path (loss point 1); the two
+  // hand-written builders (loss point 2) are guarded per-class in
+  // `portability/__tests__/import.test.ts` and `web`'s `canvasDoc.test.ts`.
+  it('PERSISTS every field — a class round-trip over the whole PipelineVersion (#485)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+
+    const authored: NewPipelineVersion = {
+      pipelineId: pipeline.id,
+      params: [{ name: 'topic', type: 'string', required: true }],
+      outputs: [{ name: 'summary', type: 'string' }],
+      nodes: [
+        { id: 'node_1', type: 'llm_call', config: { model: 'x' }, position: { x: 3, y: 4 } },
+        { id: 'node_3', type: 'agent_task', config: {}, position: { x: 5, y: 6 } },
+        LOOP_CHILD_NODE,
+      ],
+      // A top-level edge (neither endpoint is a container child) so the doc is
+      // valid — an edge crossing a container boundary is refused by the gate.
+      edges: [{ id: 'e1', from: 'node_1', to: 'node_3', on: 'success' }],
+      // Non-empty AND non-default: a dropped `containers` would default to `[]`
+      // and read back equal, masking the loss.
+      containers: [
+        { id: 'c1', kind: 'loop', children: ['node_2'], maxRounds: 3, exitWhen: CHILD_EXIT_WHEN },
+      ],
+      // Deliberately NOT CATALOG_VERSION — a dropped `catalogVersion` defaults to
+      // the current one, so an equal read-back would prove nothing. The write
+      // gate does not constrain this value (no catalog refs in `validatePipelineDoc`).
+      catalogVersion: CATALOG_VERSION - 1,
+    };
+
+    // CLASS assertion: the fixture must populate every field the schema expects
+    // to persist. A field added to `PipelineVersionSchema` with no fixture value
+    // fails HERE, forcing this test to be extended rather than silently
+    // under-covering — the same class-guard shape as `schema-table-parity`.
+    const SERVER_ASSIGNED = ['id', 'version', 'createdAt'];
+    const persistable = Object.keys(PipelineVersionSchema.shape).filter(
+      (key) => !SERVER_ASSIGNED.includes(key),
+    );
+    expect(persistable.filter((key) => !(key in authored))).toEqual([]);
+
+    const created = createPipelineVersion(db, authored);
+    const reread = getPipelineVersion(db, created.id);
+    expect(reread).not.toBeNull();
+
+    // Assert on the RE-READ, never the create response — the response is built
+    // from the in-memory input (`{ id, ...parsed }`), so it looks correct even
+    // while a write drops the field (#473's headline lesson).
+    for (const key of persistable) {
+      expect(reread![key as keyof PipelineVersion]).toEqual(
+        authored[key as keyof NewPipelineVersion],
+      );
     }
   });
 
