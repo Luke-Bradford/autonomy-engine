@@ -113,6 +113,14 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
       default:
         // run.started / run.finished / run.resumed / run.interrupted are
         // run-level (see deriveRunLifecycle), not node activity.
+        //
+        // F2b/F2c's `node.retryScheduled` + `node.retryDue` also land here, and
+        // they are NOT run-level — this is a known gap, not a classification. A
+        // node held for its retry interval keeps the RED `failure` pill its
+        // `node.failed` set, though it is waiting to be retried, not failed. The
+        // raw event feed below shows both events, so nothing is hidden; only this
+        // per-node summary is wrong. Tracked as its own ticket because the fix
+        // changes rendered UI and so needs the browser-verify gate.
         break;
     }
   }

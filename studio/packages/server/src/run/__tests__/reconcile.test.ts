@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildDedupeKey,
   CATALOG_VERSION,
   type Edge,
   type EdgeOn,
@@ -7,14 +8,22 @@ import {
   type Node,
   type NewPipelineVersion,
 } from '@autonomy-studio/shared';
+import { scheduledWakeups } from '../../db/schema.js';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun, getRun, listRuns, updateRun } from '../../repo/runs.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { buildEngine, startRun, type DocResolver } from '../driver.js';
+import {
+  armWakeup,
+  getWakeupByKey,
+  listPendingWakeups,
+  settleWakeup,
+} from '../../repo/scheduled-wakeups.js';
+import { buildEngine, startRun, type DocResolver, type RetryAlarms } from '../driver.js';
 import { appendEngineEvent, loadEngineEvents } from '../events.js';
 import { reconcileOnBoot } from '../reconcile.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
+import { stubAlarms } from './stub-alarms.js';
 
 type Db = ReturnType<typeof freshDb>['db'];
 
@@ -67,7 +76,15 @@ function resolveDocFor(db: Db): DocResolver {
 async function seedCrashedRun(db: Db, nodes: Node[], edges: Edge[], hangPlan: StubExecutorOptions) {
   const pvId = seedVersion(db, nodes, edges);
   const run = seedRun(db, pvId);
-  await startRun({ db, resolveDoc: resolveDocFor(db), executor: makeStubExecutor(hangPlan) }, run);
+  await startRun(
+    {
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(hangPlan),
+      alarms: stubAlarms(),
+    },
+    run,
+  );
   return run;
 }
 
@@ -91,7 +108,12 @@ describe('reconcileOnBoot — idempotent resume', () => {
     expect(state.nodes.a!.currentAttemptId).toBe('a#0');
 
     const recovery = makeStubExecutor({ nodes: { a: { outcome: 'success' } } });
-    const report = await reconcileOnBoot({ db, resolveDoc: resolveDocFor(db), executor: recovery });
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: recovery,
+      alarms: stubAlarms(),
+    });
 
     expect(report.resumed).toEqual([run.id]);
     expect(report.interrupted).toEqual([]);
@@ -117,6 +139,7 @@ describe('reconcileOnBoot — idempotent resume', () => {
       db,
       resolveDoc: resolveDocFor(db),
       executor: makeStubExecutor({ nodes: { a: { outcome: 'success', outputs: { v: 'fresh' } } } }),
+      alarms: stubAlarms(),
     });
 
     // The pre-crash executor's late result for a#0 lands after recovery.
@@ -143,7 +166,12 @@ describe('reconcileOnBoot — non-idempotent interrupt', () => {
     });
 
     const recovery = makeStubExecutor({ nodes: { a: { outcome: 'success' } } });
-    const report = await reconcileOnBoot({ db, resolveDoc: resolveDocFor(db), executor: recovery });
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: recovery,
+      alarms: stubAlarms(),
+    });
 
     expect(report.interrupted).toEqual([run.id]);
     expect(report.resumed).toEqual([]);
@@ -178,6 +206,7 @@ describe('reconcileOnBoot — non-idempotent interrupt', () => {
       db,
       resolveDoc: resolveDocFor(db),
       executor: makeStubExecutor(),
+      alarms: stubAlarms(),
     });
     expect(report.interrupted).toEqual([run.id]);
     const state = buildEngine(getPipelineVersion(db, run.pipelineVersionId)!).projectRunState(
@@ -198,7 +227,11 @@ describe('reconcileOnBoot — no executor defers resume', () => {
     });
 
     const before = loadEngineEvents(db, idem.id).length;
-    const report = await reconcileOnBoot({ db, resolveDoc: resolveDocFor(db) });
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      alarms: stubAlarms(),
+    });
 
     expect(report.deferred).toEqual([idem.id]);
     expect(report.interrupted).toEqual([nonIdem.id]);
@@ -215,7 +248,10 @@ describe('reconcileOnBoot — resync a torn terminal write', () => {
     const { db } = freshDb();
     const pvId = seedVersion(db, [node('a')]);
     const run = seedRun(db, pvId);
-    await startRun({ db, resolveDoc: resolveDocFor(db), executor: makeStubExecutor() }, run);
+    await startRun(
+      { db, resolveDoc: resolveDocFor(db), executor: makeStubExecutor(), alarms: stubAlarms() },
+      run,
+    );
     expect(getRun(db, run.id)!.status).toBe('success');
 
     // Simulate a crash AFTER the terminal event was appended but BEFORE the
@@ -226,6 +262,7 @@ describe('reconcileOnBoot — resync a torn terminal write', () => {
       db,
       resolveDoc: resolveDocFor(db),
       executor: makeStubExecutor(),
+      alarms: stubAlarms(),
     });
     expect(report.resynced).toEqual([run.id]);
     expect(report.resumed).toEqual([]);
@@ -255,6 +292,7 @@ describe('reconcileOnBoot — resync a torn terminal write', () => {
       db,
       resolveDoc: resolveDocFor(db),
       executor: makeStubExecutor(),
+      alarms: stubAlarms(),
     });
 
     expect(report.resynced).toEqual([run.id]);
@@ -273,7 +311,10 @@ describe('reconcileOnBoot — resync a torn terminal write', () => {
     updateRun(db, bad.id, { status: 'running', finishedAt: null });
 
     const good = seedRun(db, seedVersion(db, [node('b')]));
-    await startRun({ db, resolveDoc: resolveDocFor(db), executor: makeStubExecutor() }, good);
+    await startRun(
+      { db, resolveDoc: resolveDocFor(db), executor: makeStubExecutor(), alarms: stubAlarms() },
+      good,
+    );
     updateRun(db, good.id, { status: 'running', finishedAt: null });
 
     // This test's whole value is the EARLY-EXIT shape (a `continue` that became
@@ -286,6 +327,7 @@ describe('reconcileOnBoot — resync a torn terminal write', () => {
       db,
       resolveDoc: resolveDocFor(db),
       executor: makeStubExecutor(),
+      alarms: stubAlarms(),
     });
 
     // Both reconciled: the malformed row is survivable, not fatal to the loop.
@@ -362,7 +404,12 @@ describe('reconcileOnBoot — #443 the LOG is authoritative over the projection'
     const before = loadEngineEvents(db, run.id).length;
 
     const executor = makeStubExecutor();
-    const report = await reconcileOnBoot({ db, resolveDoc: resolveDocFor(db), executor });
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor,
+      alarms: stubAlarms(),
+    });
 
     expect(report.resynced).toEqual([run.id]);
     expect(report.resumed).toEqual([]);
@@ -392,7 +439,12 @@ describe('reconcileOnBoot — #443 the LOG is authoritative over the projection'
     updateRun(db, run.id, { status: 'running', finishedAt: null });
 
     const executor = makeStubExecutor();
-    const report = await reconcileOnBoot({ db, resolveDoc: resolveDocFor(db), executor });
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor,
+      alarms: stubAlarms(),
+    });
 
     expect(report.resynced).toEqual([run.id]);
     expect(executor.dispatched).toEqual([]);
@@ -411,7 +463,12 @@ describe('reconcileOnBoot — #443 the LOG is authoritative over the projection'
     const before = loadEngineEvents(db, run.id).length;
 
     const executor = makeStubExecutor();
-    const report = await reconcileOnBoot({ db, resolveDoc: resolveDocFor(db), executor });
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor,
+      alarms: stubAlarms(),
+    });
 
     expect(report.resynced).toEqual([run.id]);
     expect(executor.dispatched).toEqual([]);
@@ -446,7 +503,12 @@ describe('reconcileOnBoot — #443 the LOG is authoritative over the projection'
     updateRun(db, run.id, { status: 'running', finishedAt: null });
 
     const executor = makeStubExecutor();
-    const report = await reconcileOnBoot({ db, resolveDoc: resolveDocFor(db), executor });
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor,
+      alarms: stubAlarms(),
+    });
 
     expect(report.resynced).toEqual([run.id]);
     expect(report.interrupted).toEqual([]);
@@ -466,6 +528,7 @@ describe('reconcileOnBoot — #443 the LOG is authoritative over the projection'
     const executor = makeStubExecutor();
     const report = await reconcileOnBoot({
       db,
+      alarms: stubAlarms(),
       resolveDoc: (id) => {
         if (id === run.pipelineVersionId) throw new Error('version deleted');
         const pv = getPipelineVersion(db, id);
@@ -526,7 +589,12 @@ describe('reconcileOnBoot — finalize a crash-dropped finishRun', () => {
     const run = seedTerminalButUnfinished(db);
 
     const executor = makeStubExecutor();
-    const report = await reconcileOnBoot({ db, resolveDoc: resolveDocFor(db), executor });
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor,
+      alarms: stubAlarms(),
+    });
 
     expect(report.finalized).toEqual([run.id]);
     expect(report.resumed).toEqual([]);
@@ -540,7 +608,11 @@ describe('reconcileOnBoot — finalize a crash-dropped finishRun', () => {
     const { db } = freshDb();
     const run = seedTerminalButUnfinished(db);
 
-    const report = await reconcileOnBoot({ db, resolveDoc: resolveDocFor(db) });
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      alarms: stubAlarms(),
+    });
 
     expect(report.finalized).toEqual([run.id]);
     expect(report.deferred).toEqual([]);
@@ -563,7 +635,12 @@ describe('reconcileOnBoot — waiting call node', () => {
     const pvId = seedVersion(db, [callNode]);
     const run = seedRun(db, pvId);
     await startRun(
-      { db, resolveDoc: resolveDocFor(db), executor: makeStubExecutor({ child: { hang: true } }) },
+      {
+        db,
+        resolveDoc: resolveDocFor(db),
+        executor: makeStubExecutor({ child: { hang: true } }),
+        alarms: stubAlarms(),
+      },
       run,
     );
     let state = buildEngine(getPipelineVersion(db, pvId)!).projectRunState(
@@ -572,7 +649,12 @@ describe('reconcileOnBoot — waiting call node', () => {
     expect(state.nodes.call!.status).toBe('waiting');
 
     const recovery = makeStubExecutor({ child: { childOutcome: 'success' } });
-    const report = await reconcileOnBoot({ db, resolveDoc: resolveDocFor(db), executor: recovery });
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: recovery,
+      alarms: stubAlarms(),
+    });
 
     expect(report.resumed).toEqual([run.id]);
     expect(recovery.startedChildren.length).toBe(1);
@@ -581,5 +663,276 @@ describe('reconcileOnBoot — waiting call node', () => {
     );
     expect(state.status).toBe('success');
     expect(getRun(db, run.id)!.status).toBe('success');
+  });
+});
+
+// ===========================================================================
+// #1 F2b/F2c — a run HELD on a retry (§A.5)
+// ===========================================================================
+
+describe('reconcileOnBoot — a run held on a node retry', () => {
+  /**
+   * F2b creates a `running` row shape that did not exist before: one whose only
+   * live node is `retry_pending`. It re-derives NOTHING here — `onResumed` skips
+   * a held node deliberately, and `settle` cannot finish a run whose node is
+   * non-terminal — so without its own branch it falls through to the resume path
+   * and is reported `finalized` ("now terminalized"), which is simply false: it
+   * is waiting on its alarm. It would also collect a fresh, pointless
+   * `run.resumed` on EVERY boot.
+   *
+   * Whether leaving it alone is correct depends ENTIRELY on whether its alarm row
+   * actually exists, so these tests seed and boot through ONE REAL db-backed
+   * alarm store. They used to use two separate `stubAlarms()` — in-memory, and a
+   * different instance for the drive than for the boot — which meant no durable
+   * row ever existed and the "reports it HELD" case passed identically in the
+   * world where the reconciler stranded every held run forever. A held-run test
+   * that never looks at a real alarm row is not testing the hold.
+   */
+  const realAlarms = (db: Db): RetryAlarms => ({
+    arm: (input) => armWakeup(db, input),
+    find: (input) => getWakeupByKey(db, input.kind, buildDedupeKey(input)),
+  });
+
+  async function seedHeldRun(db: Db, alarms: RetryAlarms) {
+    const pvId = seedVersion(db, [node('a', { policy: { retry: 1 } })]);
+    const run = seedRun(db, pvId);
+    await startRun(
+      {
+        db,
+        resolveDoc: resolveDocFor(db),
+        executor: makeStubExecutor({ nodes: { a: { outcome: 'failure', kind: 'transient' } } }),
+        alarms,
+      },
+      run,
+    );
+    return run;
+  }
+
+  it('reports it HELD, appends nothing, and leaves its live alarm row alone', async () => {
+    const { db } = freshDb();
+    const alarms = realAlarms(db);
+    const run = await seedHeldRun(db, alarms);
+    const before = loadEngineEvents(db, run.id);
+    expect(before.map((e) => e.type)).toContain('node.retryScheduled');
+    // The premise of the whole branch: a REAL pending row survived the crash.
+    expect(listPendingWakeups(db)).toHaveLength(1);
+    const armedBefore = listPendingWakeups(db)[0];
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+      alarms,
+    });
+
+    expect(report.held).toEqual([run.id]);
+    expect(report.rearmed).toEqual([]);
+    expect(report.finalized).toEqual([]);
+    expect(report.resumed).toEqual([]);
+    expect(report.deferred).toEqual([]);
+    // Untouched: no `run.resumed`, no second alarm, still live awaiting its row.
+    expect(loadEngineEvents(db, run.id)).toEqual(before);
+    expect(getRun(db, run.id)!.status).toBe('running');
+    expect(listPendingWakeups(db)).toEqual([armedBefore]);
+  });
+
+  it('RE-ARMS a hold whose alarm the HOLD→ARM crash window lost (B2)', async () => {
+    // The window is real and WIDE: `node.failed` folds to `retry_pending` and only
+    // QUEUES `scheduleRetry`, which `pump` drains at the queue TAIL — so the hold
+    // is durable for however long the intervening commands take (minutes of LLM
+    // calls), with no alarm row yet. A crash in there leaves exactly this log.
+    //
+    // Reported `held` and left alone — the pre-B2 behaviour — this run is
+    // `running` FOREVER, across every subsequent boot: nothing re-derives a
+    // `scheduleRetry`, and the reconciler does not select a held node.
+    const { db } = freshDb();
+    const alarms = realAlarms(db);
+    const run = await seedHeldRun(db, alarms);
+    // Delete the row to reproduce the crash window (the hold is already durable).
+    db.delete(scheduledWakeups).run();
+    const before = loadEngineEvents(db, run.id);
+    expect(listPendingWakeups(db)).toHaveLength(0);
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+      alarms,
+      now: () => 5_000,
+    });
+
+    expect(report.rearmed).toEqual([run.id]);
+    // Still held — re-armed is WHY it is still held, so it is reported as both.
+    expect(report.held).toEqual([run.id]);
+    expect(report.interrupted).toEqual([]);
+
+    // A real, live, durable row keyed to the held attempt — the run can advance.
+    const pending = listPendingWakeups(db);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      kind: 'node_retry',
+      ref: { runId: run.id, nodeId: 'a', attemptId: 'a#0' },
+      status: 'pending',
+    });
+    // And the LOG says when it is now due — from the ARMED ROW, not a local
+    // computation. `armRetry` arms before it appends, so "no row" implies no
+    // `node.retryScheduled` either: this appends one rather than duplicating.
+    const appended = loadEngineEvents(db, run.id).slice(before.length);
+    expect(appended).toEqual([
+      {
+        type: 'node.retryScheduled',
+        runId: run.id,
+        nodeId: 'a',
+        attemptId: 'a#0',
+        nextAttemptAt: pending[0]!.dueAt,
+      },
+    ]);
+    expect(getRun(db, run.id)!.status).toBe('running');
+  });
+
+  it('INTERRUPTS a hold whose alarm row is SPENT — re-arming cannot heal that', async () => {
+    // The third arm, and the one a two-way present/absent check gets wrong.
+    // `armWakeup` returns the EXISTING row whatever its status, so re-arming a
+    // settled row changes nothing and the `node.retryScheduled` we would append
+    // from it would record a due time in the PAST for an alarm that will never
+    // fire again. The node is held, its alarm came and went, and nothing can
+    // advance the run — so freeze it as needs-attention rather than report a hang
+    // as a wait.
+    const { db } = freshDb();
+    const alarms = realAlarms(db);
+    const run = await seedHeldRun(db, alarms);
+    const armed = listPendingWakeups(db)[0]!;
+    settleWakeup(db, armed.id, { status: 'suppressed', firedAt: 1_000 });
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+      alarms,
+    });
+
+    expect(report.interrupted).toEqual([run.id]);
+    expect(report.held).toEqual([]);
+    expect(report.rearmed).toEqual([]);
+    expect(getRun(db, run.id)!.status).toBe('interrupted');
+    // Event-sourced, and it names WHY — an operator reading the log needs to know
+    // this was a spent alarm, not a failed activity.
+    const last = loadEngineEvents(db, run.id).at(-1);
+    expect(last).toMatchObject({ type: 'run.interrupted', reason: 'retry_alarm_spent:a' });
+  });
+
+  /** A run with BOTH a held node (`a`) and an independent in-flight one (`b`). */
+  async function seedHeldPlusInFlight(db: Db, alarms: RetryAlarms) {
+    // EXPLICIT edges, because a doc with none gets an IMPLICIT CHAIN — which
+    // would make `b` a downstream of `a` (and so `pending` behind the hold)
+    // rather than the independent in-flight node these tests need.
+    const pvId = seedVersion(
+      db,
+      [node('root'), node('a', { policy: { retry: 1 } }), node('b')],
+      [edge('root', 'a'), edge('root', 'b')],
+    );
+    const run = seedRun(db, pvId);
+    await startRun(
+      {
+        db,
+        resolveDoc: resolveDocFor(db),
+        executor: makeStubExecutor({
+          nodes: { a: { outcome: 'failure', kind: 'transient' }, b: { hang: true } },
+        }),
+        alarms,
+      },
+      run,
+    );
+    return run;
+  }
+
+  it('resumes a live idempotent node AND still reports the healthy hold', async () => {
+    const { db } = freshDb();
+    const alarms = realAlarms(db);
+    const run = await seedHeldPlusInFlight(db, alarms);
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+      alarms,
+    });
+
+    // BOTH, and that is the point: `b`'s recoverable work resumes, and `a` is
+    // still held on its (live) alarm. The two facts are independent, so the run
+    // appears in both buckets rather than one masking the other.
+    expect(report.resumed).toEqual([run.id]);
+    expect(report.held).toEqual([run.id]);
+    expect(report.rearmed).toEqual([]);
+    expect(listPendingWakeups(db)).toHaveLength(1);
+  });
+
+  it('re-arms a hold on a run that ALSO has live work — the likeliest B2 case', async () => {
+    // The gate this pins the removal of ("only check the alarm when the run has
+    // no other commands — a run with live work resumes anyway, and its held node
+    // is recovered by the alarm regardless") is B2's false premise wearing an
+    // optimisation's clothes: if the row is MISSING there is no alarm.
+    //
+    // And the two conditions are POSITIVELY CORRELATED, so the gate skipped
+    // exactly the likeliest B2 case. `pump` drains `scheduleRetry` at the QUEUE
+    // TAIL, so the HOLD→ARM window IS the interval in which the sibling
+    // `dispatchNode` commands drain — a crash there leaves a held node with no
+    // alarm AND a sibling `dispatched`, which is precisely this shape.
+    //
+    // Measured under the gated version: `b` resumed and succeeded, `a` waited
+    // forever on an alarm that did not exist, the run rested `running` for the
+    // rest of the process's life, and the report called it `resumed` — nothing
+    // surfaced it. Only an unrelated restart healed it.
+    const { db } = freshDb();
+    const alarms = realAlarms(db);
+    const run = await seedHeldPlusInFlight(db, alarms);
+    // The crash window: the hold is durable, the arm never ran.
+    db.delete(scheduledWakeups).run();
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+      alarms,
+      now: () => 5_000,
+    });
+
+    // The live node resumed AND the stranded hold was healed.
+    expect(report.resumed).toEqual([run.id]);
+    expect(report.rearmed).toEqual([run.id]);
+    expect(report.held).toEqual([run.id]);
+
+    const pending = listPendingWakeups(db);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      kind: 'node_retry',
+      ref: { runId: run.id, nodeId: 'a', attemptId: 'a#0' },
+      status: 'pending',
+    });
+    expect(loadEngineEvents(db, run.id).map((e) => e.type)).toContain('node.retryScheduled');
+  });
+
+  it('does NOT resume a run whose hold is unrecoverable, even with live work', async () => {
+    // The interrupt must win over the resume: nothing can advance this run, so
+    // re-dispatching `b` would bill an activity for a run that is already over.
+    const { db } = freshDb();
+    const alarms = realAlarms(db);
+    const run = await seedHeldPlusInFlight(db, alarms);
+    const armed = listPendingWakeups(db)[0]!;
+    settleWakeup(db, armed.id, { status: 'fired', firedAt: 1_000 });
+
+    const recovery = makeStubExecutor();
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: recovery,
+      alarms,
+    });
+
+    expect(report.interrupted).toEqual([run.id]);
+    expect(report.resumed).toEqual([]);
+    expect(report.held).toEqual([]);
+    expect(recovery.dispatched).toEqual([]);
+    expect(getRun(db, run.id)!.status).toBe('interrupted');
   });
 });

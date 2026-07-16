@@ -16,6 +16,18 @@ export interface NodePlan {
    * the state the boot reconciler must recover). Default `false`.
    */
   hang?: boolean;
+  /**
+   * Stay IN FLIGHT for this long before yielding the terminal event — a node
+   * that is genuinely slow rather than merely unfinished, so a `pump` is still
+   * live at a known point in the test.
+   *
+   * Distinct from `hang`, which never completes. This exists because F2c's whole
+   * hazard is a SECOND drive arriving while a FIRST is running, and every other
+   * plan here resolves synchronously — a test asserting "the alarm waited its
+   * turn" against a synchronous stub proves nothing, because the launcher's
+   * drive has already finished before the alarm fires.
+   */
+  delayMs?: number;
 }
 
 /** How the stub should resolve a `startChild` (a `call_pipeline` child). */
@@ -68,6 +80,13 @@ export function makeStubExecutor(opts: StubExecutorOptions = {}): RecordingExecu
           idempotent: plan.idempotent ?? true,
         };
         if (plan.hang === true) return;
+        // AFTER `node.dispatched` is yielded (and so folded + durable), never
+        // before: that ordering is the executor's crash-safety contract, and a
+        // delay in front of it would make this stub violate the very rule the
+        // reconciler's `ready`-vs-`dispatched` recovery depends on.
+        if (plan.delayMs !== undefined) {
+          await new Promise((resolve) => setTimeout(resolve, plan.delayMs));
+        }
         yield (plan.outcome ?? 'success') === 'success'
           ? {
               type: 'node.succeeded',

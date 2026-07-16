@@ -3,6 +3,7 @@ import type {
   Edge,
   EngineCommand,
   EngineEvent,
+  FailureKind,
   Node,
   NodeRunState,
   ContainerRunState,
@@ -70,6 +71,29 @@ export interface Engine {
   reduce(state: RunState, event: EngineEvent): ReduceResult;
   /** Replay: fold `reduce` over a whole log from the seed (for tests + boot). */
   projectRunState(events: EngineEvent[]): RunState;
+  /**
+   * F2c — re-derive the COMMANDS a projection implies, appending NOTHING.
+   *
+   * `projectRunState` discards commands (they live only in `reduce`'s return
+   * value), so a driver that re-reads the log to get a fresh state loses the very
+   * dispatches it re-read for. This recovers them. It is the identical derivation
+   * `run.resumed` folds to — asserted, not assumed, in `reduce.test.ts` — exposed
+   * WITHOUT the event, because `run.resumed` is BOOT's durable fact: appending one
+   * mid-run to obtain its commands would log a crash recovery that never happened.
+   *
+   * PREMISE INVERSION, and the reason this seam is documented rather than merely
+   * exported: `onResumed` was written for "everything in flight was LOST", and
+   * `driveRun` calls it when nothing was. Under the per-run drive lock
+   * (`run/drives.ts`) that holds for `ready` nodes — no concurrent drive exists,
+   * so a `ready` node's dispatch provably never started. It does NOT yet hold for
+   * `waiting` call nodes: this re-emits `startChild` for every one, which would
+   * re-spawn a LIVE child pipeline. Latent only because P3's executor stubs
+   * `startChild` into an immediate `call.returned{failure}`, so no node ever
+   * persists `waiting`. Making the re-emit genuinely idempotent via the
+   * deterministic `childRunId` is P3b's obligation, and it is stated in the spec's
+   * build order — not an assumption this seam is entitled to make.
+   */
+  resume(state: RunState): ReduceResult;
 }
 
 const LIVE_NODE = new Set<NodeRunState['status']>(['ready', 'dispatched']);
@@ -862,6 +886,16 @@ export function createEngine(doc: EngineDoc): Engine {
    * Reset a set of nodes to `pending` and CLEAR their `outputs` (a fresh loop
    * round recomputes them). `attempts` is kept MONOTONIC so a fresh dispatch
    * mints a NEW attemptId — a stale result from the prior round can never fold.
+   *
+   * `retries` IS cleared, and the split from `attempts` is the point (F2b): each
+   * loop round is a fresh execution of the node and gets its own retry budget,
+   * while attempt-ids keep marching so a prior round's result can never fold.
+   * Keying eligibility on `attempts` alone would let BOUNCES silently spend the
+   * operator's retries — see `NodeRunState.retries`.
+   *
+   * A `retry_pending` node caught in a reset is reset like any other (§A.6): its
+   * armed alarm then fires against a node that is no longer held, and both the
+   * clock's freshness check and `onRetryDue`'s own guard drop it.
    */
   function resetNodes(state: RunState, ids: string[]): RunState {
     let nodes = state.nodes;
@@ -871,7 +905,7 @@ export function createEngine(doc: EngineDoc): Engine {
       const ns = nodes[id];
       if (ns === undefined) continue;
       if (nodes === state.nodes) nodes = { ...nodes };
-      nodes[id] = { ...ns, status: 'pending', currentAttemptId: undefined };
+      nodes[id] = { ...ns, status: 'pending', currentAttemptId: undefined, retries: 0 };
       if (Object.prototype.hasOwnProperty.call(outputs, id)) {
         if (outputs === state.outputs) outputs = { ...outputs };
         delete outputs[id];
@@ -992,7 +1026,7 @@ export function createEngine(doc: EngineDoc): Engine {
       return { state, commands: [], diagnostics };
     }
     const nodes: Record<string, NodeRunState> = {};
-    for (const id of nodeIds) nodes[id] = { status: 'pending', attempts: 0 };
+    for (const id of nodeIds) nodes[id] = { status: 'pending', attempts: 0, retries: 0 };
     const containerStates: Record<string, ContainerRunState> = {};
     for (const c of containers)
       containerStates[c.id] = { status: 'pending', round: 0, outputs: {} };
@@ -1089,6 +1123,31 @@ export function createEngine(doc: EngineDoc): Engine {
     return { state, commands: [], diagnostics };
   }
 
+  /**
+   * F2b (D4) — is this failure retry-eligible? The reducer's whole half of the
+   * retry decision, and deliberately the smallest possible read: the failure's
+   * `kind` (F0), the node's `retries` so far, and `policy.retry` from the
+   * IMMUTABLE bound version. No clock, no driver, no mutable row — so it is
+   * replay-stable by construction.
+   *
+   * `permanent`/`cancelled` NEVER retry (D4). This couples `settle`'s notion of
+   * a run-ending failure to retry POLICY, which #472 flagged; that coupling is
+   * intrinsic to the HOLD the operator chose, and it is bounded to exactly these
+   * two reads.
+   */
+  function retryEligible(node: Node, ns: NodeRunState, kind: FailureKind): boolean {
+    if (kind !== 'transient') return false;
+    // Absent and explicit-0 are read DISTINCTLY and not normalized (`?? 0` would
+    // erase the difference). Both mean 0 today — no catalog/global default
+    // exists — but F2a's schema requires the distinction survive to F13b, where
+    // absent must resolve to THE DEFAULT while an explicit 0 still means
+    // "never retry this node". Keeping the read shaped like the eventual rule is
+    // what stops that from being a silent behaviour change later.
+    const declared = node.policy?.retry;
+    const budget = declared === undefined ? 0 : declared;
+    return ns.retries < budget;
+  }
+
   function onFailed(
     state: RunState,
     event: Extract<EngineEvent, { type: 'node.failed' }>,
@@ -1099,6 +1158,20 @@ export function createEngine(doc: EngineDoc): Engine {
     if (LIVE_NODE.has(ns.status)) {
       if (event.attemptId !== ns.currentAttemptId) {
         return { state, commands: [], diagnostics };
+      }
+      if (retryEligible(nodeById.get(event.nodeId)!, ns, event.kind)) {
+        // The HOLD (#472, §A). Fold to a NON-terminal status and ask the driver
+        // to arm the alarm. Deliberately does NOT call `settle`: the node is not
+        // terminal, so nothing new can have become ready or skipped, and the run
+        // cannot finish — `settle` would be a no-op walk. The node leaves this
+        // state ONLY via `node.retryDue` (or a back-edge reset).
+        return {
+          state: withNode(state, event.nodeId, { status: 'retry_pending' }),
+          commands: [
+            { type: 'scheduleRetry', nodeId: event.nodeId, failedAttemptId: event.attemptId },
+          ],
+          diagnostics,
+        };
       }
       return settle(withNode(state, event.nodeId, { status: 'failure' }), diagnostics);
     }
@@ -1199,6 +1272,75 @@ export function createEngine(doc: EngineDoc): Engine {
     return { state, commands: [], diagnostics };
   }
 
+  /**
+   * `node.retryDue` (F2b/F2c): the alarm fired — re-dispatch a HELD node under a
+   * NEW attempt.
+   *
+   * Guarded on `retry_pending`, NOT on `LIVE_NODE`, and that is a decision
+   * rather than an accident (§A.4). Widening `LIVE_NODE` to include
+   * `retry_pending` would have silently let a late `node.succeeded` fold onto a
+   * held node in `onSucceeded`/`onFailed`; a held node belongs to no existing
+   * guard set (it is neither `ready`/`dispatched` nor `waiting`), which is
+   * exactly the property that makes this safe.
+   *
+   * This is the ONE site that consumes the policy's retry budget (`retries + 1`)
+   * — see `NodeRunState.retries` for why that is not `attempts`.
+   */
+  function onRetryDue(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'node.retryDue' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    const ns = state.nodes[event.nodeId];
+    if (ns === undefined) return { state, commands: [], diagnostics };
+    if (ns.status !== 'retry_pending') {
+      // At-least-once delivery + a back-edge reset both reach here legitimately:
+      // a duplicate alarm for a node whose retry already dispatched, or one whose
+      // body was reset to `pending` by a loop round. The clock's handler
+      // suppresses both before appending, so this is the second layer (spec #5:
+      // "at-least-once + an idempotent fold"). A no-op, not a diagnostic — it is
+      // an expected delivery, not a malformed log.
+      return { state, commands: [], diagnostics };
+    }
+    if (event.previousAttemptId !== ns.currentAttemptId) {
+      // A stale alarm naming an attempt this node has moved past.
+      return { state, commands: [], diagnostics };
+    }
+    const attemptId = `${event.nodeId}#${ns.attempts}`;
+    const next = withNode(state, event.nodeId, {
+      status: 'ready',
+      attempts: ns.attempts + 1,
+      retries: ns.retries + 1,
+      currentAttemptId: attemptId,
+    });
+    // No stale-output clear here, unlike `onRetryRequested` below: a
+    // `retry_pending` node can ONLY have come from `onFailed`'s LIVE_NODE branch,
+    // and no failure path there stores outputs (`onCallReturned` is the one
+    // failure path that does, and it gates on `waiting`, which `onFailed` cannot
+    // reach). `onRetryRequested` recovers a node from `ready`/`dispatched`, which
+    // a `node.output` observability event cannot populate either — but it has the
+    // clear, so this asymmetry is deliberate and stated rather than silent.
+    let prepared: Record<string, unknown>;
+    try {
+      prepared = prepInput(next, nodeById.get(event.nodeId)!);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      diagnostics.push(`dispatch prep failed for node '${event.nodeId}': ${msg}`);
+      return {
+        state: next,
+        commands: [{ type: 'finishRun', outcome: 'failure', reason: 'invalid_event' }],
+        diagnostics,
+      };
+    }
+    return {
+      state: next,
+      commands: [
+        { type: 'dispatchNode', nodeId: event.nodeId, attemptId, preparedInput: prepared },
+      ],
+      diagnostics,
+    };
+  }
+
   function onRetryRequested(
     state: RunState,
     event: Extract<EngineEvent, { type: 'node.retryRequested' }>,
@@ -1263,6 +1405,25 @@ export function createEngine(doc: EngineDoc): Engine {
    *    rejected. `settle` (below) CANNOT re-derive these — those nodes are no
    *    longer `pending`, so its readiness walk skips them.
    *
+   * A `retry_pending` node is DELIBERATELY absent from mechanism (1), and this
+   * is the one place that omission looks like a bug (§A.5). It matches neither
+   * re-emit, so a held run recovers NOTHING here: `settle` cannot finish it
+   * (held ⇒ non-terminal), and `reconcile`'s `dispatchedNodes()` does not select
+   * it either. Its recovery path is S1's DURABLE ALARM ROW, which survived the
+   * crash and re-fires on its own. That is why F2b hard-depends on F2c/S1:
+   * without a live alarm clock a held run stays `running` forever.
+   *
+   * The omission is correct for a reason this docblock USED TO GET WRONG, and the
+   * distinction matters to anyone editing here: it is NOT that re-deriving a
+   * `scheduleRetry` would double-arm (`armWakeup` is upsert-if-absent and returns
+   * the existing row whatever its status, so re-arming is free — that premise was
+   * false and was inherited unchecked into five places). It is that this function
+   * is PURE and cannot read the alarm table, so it cannot make the only check
+   * that matters: does a row actually EXIST? A crash between the HOLD becoming
+   * durable and the arm landing leaves a held node with NO alarm, and only a
+   * caller that can SEE the table can tell that apart from a healthy hold.
+   * `reconcile.ts` makes exactly that check and re-arms when the row is gone.
+   *
    * 2. The walk's own ephemeral output — re-run `settle`. Its `finishRun` /
    *    dispatch commands live only in the reducer's return value, so a crash
    *    between a node's terminal event and the `run.finished` the driver was
@@ -1275,6 +1436,13 @@ export function createEngine(doc: EngineDoc): Engine {
    *    handled above, so the two mechanisms never emit for the same node.
    */
   function onResumed(state: RunState, diagnostics: string[]): ReduceResult {
+    // The `run.resumed` fold's own guards do not apply when `resume()` calls this
+    // directly, so re-state the one that matters: a run that is not `running` has
+    // nothing to re-derive, and re-emitting a dispatch for a settled run would
+    // re-execute its side effects. `driveRun` already refuses a terminal LOG
+    // (#443); this is the engine-side backstop for a caller that did not.
+    if (state.status !== 'running') return { state, commands: [], diagnostics };
+
     const commands: EngineCommand[] = [];
     for (const id of [...nodeIds].sort()) {
       const ns = state.nodes[id]!;
@@ -1284,8 +1452,16 @@ export function createEngine(doc: EngineDoc): Engine {
         let prepared: Record<string, unknown>;
         try {
           prepared = prepInput(state, node);
-        } catch {
-          continue;
+        } catch (err) {
+          // TERMINALIZE, never swallow — the same verdict `tryDispatchNode`,
+          // `onRetryDue` and `onRetryRequested` all reach from a prep throw. This
+          // branch alone used to `continue`, emitting nothing and leaving the node
+          // `ready`: non-terminal, so `settle` could not finish the run either,
+          // and the run hung `running` forever. Tolerable while resume ran once
+          // per boot; `driveRun` makes this the RUNTIME path for every retry AND
+          // discards `onRetryDue`'s terminalize in favour of it.
+          const failed = prepFailure(state, id, err, diagnostics);
+          return { state: failed.state, commands: [failed.finish!], diagnostics };
         }
         commands.push({
           type: 'dispatchNode',
@@ -1300,8 +1476,11 @@ export function createEngine(doc: EngineDoc): Engine {
           const ctx = buildCtx(state);
           pvId = String(substitute(node.call.pipelineVersionId, ctx));
           callParams = substitute(node.call.params, ctx) as Record<string, unknown>;
-        } catch {
-          continue;
+        } catch (err) {
+          // Terminalize for the same reason as the `ready` branch above, and to
+          // match `tryDispatchNode`'s own call-prep throw (`prepFailure`).
+          const failed = prepFailure(state, id, err, diagnostics);
+          return { state: failed.state, commands: [failed.finish!], diagnostics };
         }
         commands.push({
           type: 'startChild',
@@ -1374,6 +1553,14 @@ export function createEngine(doc: EngineDoc): Engine {
         return onFailed(state, event, diagnostics);
       case 'call.returned':
         return onCallReturned(state, event, diagnostics);
+      case 'node.retryScheduled':
+        // Inert BY DESIGN (§A.2): the durable record that the driver armed this
+        // node's retry alarm, carrying the `nextAttemptAt` the log/monitor needs.
+        // The node is already `retry_pending` and the reducer must not read a
+        // clock, so there is nothing to fold — the state change was `onFailed`'s.
+        return { state, commands: [], diagnostics };
+      case 'node.retryDue':
+        return onRetryDue(state, event, diagnostics);
       case 'node.retryRequested':
         return onRetryRequested(state, event, diagnostics);
       case 'run.resumed':
@@ -1408,7 +1595,14 @@ export function createEngine(doc: EngineDoc): Engine {
     return state;
   }
 
-  return { seedState, reduce, projectRunState };
+  return {
+    seedState,
+    reduce,
+    projectRunState,
+    // The SAME function `run.resumed` folds to — one derivation, two entry
+    // points, so the boot path and the drive path cannot drift apart.
+    resume: (state) => onResumed(state, []),
+  };
 }
 
 // --- shared pure helpers (no closure needed) --------------------------------

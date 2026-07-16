@@ -117,10 +117,12 @@ describe('substitute — ${nodes.<id>.status}', () => {
   });
 
   // The language's vocabulary is the TERMINAL set only. A live status
-  // (`pending`/`ready`/`dispatched`/`waiting`) is a race, not a value: it means
-  // the author asked for a verdict the run has not reached.
+  // (`pending`/`ready`/`dispatched`/`waiting`/`retry_pending`) is a race, not a
+  // value: it means the author asked for a verdict the run has not reached.
+  // `retry_pending` (F2b) is the newest member and needed no code change here —
+  // being outside `TerminalNodeStatusSchema` is the whole mechanism (§A.1).
   it('throws on a non-terminal status rather than leaking a live one', () => {
-    for (const s of ['pending', 'ready', 'dispatched', 'waiting'] as const) {
+    for (const s of ['pending', 'ready', 'dispatched', 'waiting', 'retry_pending'] as const) {
       expect(() => substitute('${nodes.a.status}', ctx({ nodeStatuses: { a: s } }))).toThrow(
         SubstituteError,
       );

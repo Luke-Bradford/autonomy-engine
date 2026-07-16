@@ -15,9 +15,11 @@ import { createTrigger } from '../../repo/triggers.js';
 import { getRun, listRuns } from '../../repo/runs.js';
 import { loadEngineEvents } from '../events.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { type DocResolver, type DriverDeps, type Executor } from '../driver.js';
+import { type DocResolver, type DriveDeps, type Executor } from '../driver.js';
+import { createRunDrives } from '../drives.js';
 import { createRunLauncher, UnboundTriggerError } from '../launcher.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
+import { stubAlarms } from './stub-alarms.js';
 
 type Db = ReturnType<typeof freshDb>['db'];
 
@@ -61,13 +63,22 @@ function seedTrigger(
   });
 }
 
-function deps(db: Db, executorOpts: StubExecutorOptions = {}): DriverDeps {
+function deps(db: Db, executorOpts: StubExecutorOptions = {}): DriveDeps {
   const resolveDoc: DocResolver = (id) => {
     const pv = getPipelineVersion(db, id);
     if (pv === null) throw new Error(`no pv ${id}`);
     return pv;
   };
-  return { db, resolveDoc, executor: makeStubExecutor(executorOpts) };
+  return {
+    db,
+    resolveDoc,
+    executor: makeStubExecutor(executorOpts),
+    alarms: stubAlarms(),
+    // The REAL registry, not a stub: it is pure in-memory bookkeeping with no I/O
+    // to fake, and the launcher's whole use of it (every drive runs under the
+    // run's lock) is only meaningful against the real serialization.
+    drives: createRunDrives(),
+  };
 }
 
 describe('RunLauncher — unbound never fires', () => {
@@ -249,7 +260,13 @@ describe('RunLauncher — background failure', () => {
     const resolveDoc: DocResolver = () => {
       throw new Error('doc blew up');
     };
-    const launcher = createRunLauncher({ db, resolveDoc, executor: makeStubExecutor() });
+    const launcher = createRunLauncher({
+      db,
+      resolveDoc,
+      executor: makeStubExecutor(),
+      alarms: stubAlarms(),
+      drives: createRunDrives(),
+    });
 
     const result = launcher.fire(trigger);
     expect(result.outcome).toBe('started');
@@ -279,7 +296,13 @@ describe('RunLauncher — background failure', () => {
       if (pv === null) throw new Error(`no pv ${id}`);
       return pv;
     };
-    const launcher = createRunLauncher({ db, resolveDoc, executor: throwingExecutor });
+    const launcher = createRunLauncher({
+      db,
+      resolveDoc,
+      executor: throwingExecutor,
+      alarms: stubAlarms(),
+      drives: createRunDrives(),
+    });
 
     const result = launcher.fire(trigger);
     await launcher.whenIdle();
@@ -312,7 +335,13 @@ describe('RunLauncher — background failure', () => {
         throw new Error('executor blew up');
       },
     };
-    const launcher = createRunLauncher({ db, resolveDoc, executor: throwingExecutor });
+    const launcher = createRunLauncher({
+      db,
+      resolveDoc,
+      executor: throwingExecutor,
+      alarms: stubAlarms(),
+      drives: createRunDrives(),
+    });
 
     const result = launcher.fire(trigger);
     await launcher.whenIdle();
@@ -357,6 +386,8 @@ describe('RunLauncher — #443 never bury a terminal log under a false interrupt
       db: faultyDb,
       resolveDoc: deps(db).resolveDoc,
       executor: makeStubExecutor(),
+      alarms: stubAlarms(),
+      drives: createRunDrives(),
     });
     const result = launcher.fire(trigger);
     await launcher.whenIdle();

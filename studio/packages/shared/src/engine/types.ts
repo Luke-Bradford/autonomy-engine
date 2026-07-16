@@ -105,6 +105,17 @@ export class ParamResolveError extends Error {
  * - `skipped`    — an incoming edge became impossible under the join rule.
  * - `waiting`    — a `call_pipeline` node that emitted `startChild` and is
  *                  awaiting its `call.returned` event (P2c).
+ * - `retry_pending` — F2b/D4's **HOLD**: a `transient` failure the node's policy
+ *                  still has budget for. NON-terminal, which is the whole design
+ *                  (see below), and resolved only by a `node.retryDue`.
+ *
+ * `retry_pending` is deliberately ABSENT from `TerminalNodeStatusSchema`, and
+ * that single fact is what implements the HOLD — no new predicate anywhere:
+ * `TERMINAL_NODE` excludes it, so `endpointOutcome` returns `null`, every
+ * readiness/outcome path treats the node as live, `allTopLevelTerminal` is false
+ * (so the run cannot finish while a node is held), a container's
+ * `children.every(TERMINAL_NODE)` gate waits for it, and `${nodes.<id>.status}`
+ * refuses to read it. See the joint F1b/F2b spec §A.1/§B.1.
  *
  * `attempts` is a monotonic counter minted-from, not random: every dispatch
  * takes `attemptId = \`${nodeId}#${attempts}\`` then increments. A result event
@@ -118,6 +129,7 @@ export const NodeRunStatusSchema = z.enum([
   'failure',
   'skipped',
   'waiting',
+  'retry_pending',
 ]);
 export type NodeRunStatus = z.infer<typeof NodeRunStatusSchema>;
 
@@ -141,9 +153,19 @@ export type TerminalNodeStatus = z.infer<typeof TerminalNodeStatusSchema>;
  * never drift apart.
  */
 export const TERMINAL_NODE: ReadonlySet<NodeRunStatus> = new Set<NodeRunStatus>(
-  // `satisfies` pins the subset relationship at COMPILE time: adding an 8th
-  // `NodeRunStatus` that is terminal, and forgetting it here, is a type error
-  // rather than a silently-permissive engine.
+  // `satisfies` pins ONLY the subset direction (terminal ⊆ status) — which the
+  // surrounding `new Set<NodeRunStatus>(...)` already pins anyway. It catches a
+  // terminal option that is not a valid status; it CANNOT catch a valid status
+  // that is terminal and was forgotten here.
+  //
+  // This comment used to claim the opposite ("adding an 8th NodeRunStatus that
+  // is terminal, and forgetting it here, is a type error"). That was FALSE —
+  // probed: adding a terminal status to `NodeRunStatusSchema` and omitting it
+  // below compiles clean. Harmless for F2b's `retry_pending` (non-terminal, and
+  // its omission is the DESIGN — see `NodeRunStatusSchema`), but a later fire
+  // adding a genuinely terminal status would be trusting a guard that does not
+  // exist. `terminalStatusOf` below shows what a real one looks like: an
+  // exhaustive `switch` with no `default`. Joint F1b/F2b spec §A.1.
   TerminalNodeStatusSchema.options satisfies readonly NodeRunStatus[],
 );
 
@@ -151,6 +173,41 @@ export const NodeRunStateSchema = z.object({
   status: NodeRunStatusSchema,
   attempts: z.number().int().nonnegative(),
   currentAttemptId: z.string().optional(),
+  /**
+   * F2b — POLICY retries taken for this node in the CURRENT loop round, and the
+   * ONLY counter retry-eligibility reads (`retries < policy.retry`).
+   *
+   * Deliberately NOT `attempts`, which the joint spec's §A.3 rule
+   * (`attempts < policy.retry`) named. Two independent defects made that wrong,
+   * both probed — see the spec's §A.3 build-time correction:
+   *
+   *  1. **Off by one.** `attempts` is incremented at DISPATCH (`reduce.ts`
+   *     mints `attemptId` from `attempts`, then increments), so it is already 1
+   *     at the first `node.failed`. `attempts < retry` therefore delivers
+   *     `retry: N` → N total attempts, where F2a's schema contract says
+   *     "`retry: 2` = up to 3 attempts" — and makes an explicit `retry: 1`
+   *     silently identical to `retry: 0`, the exact confusion §A.3's
+   *     absent-vs-explicit-0 rule exists to prevent.
+   *  2. **Loop rounds spend the budget.** `attempts` is kept MONOTONIC across a
+   *     back-edge reset (§A.6, and correctly so — it is what makes a stale
+   *     result from the prior round unfoldable). Keying eligibility on it makes
+   *     the retry budget run-LIFETIME: a loop-body node with `retry: 2` retries
+   *     in round 1 and, from round 3 on, has none — spent by BOUNCES, not by
+   *     failures.
+   *
+   * A separate counter fixes both at once and keeps §A.6 intact: `attempts`
+   * stays monotonic for attempt-id minting, `retries` counts policy retries and
+   * is CLEARED by `resetNodes` so every round gets its own budget. It also keeps
+   * the rule reading exactly like its English contract ("max retries after the
+   * first attempt"), with no off-by-one to re-break.
+   *
+   * It is incremented ONLY by `node.retryDue`. Boot-recovery's
+   * `node.retryRequested` does NOT touch it: re-running a node the crash lost is
+   * not a policy retry, and must not consume the operator's budget. That
+   * three-way conflation (policy retry / boot retry / loop round) is precisely
+   * what `attempts` alone cannot express.
+   */
+  retries: z.number().int().nonnegative(),
 });
 export type NodeRunState = z.infer<typeof NodeRunStateSchema>;
 
@@ -408,6 +465,55 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     reason: z.string(),
   }),
   z.object({
+    /**
+     * F2b/F2c (D4) — the durable fact that a held node's retry has been ARMED.
+     * Appended by the DRIVER once S1's alarm row exists, so the log records
+     * WHEN the next attempt is due rather than leaving it in an ephemeral timer.
+     *
+     * Folding it is an inert no-op: the node is already `retry_pending` and the
+     * reducer must not read a clock. It exists for the LOG — the durable, audit-
+     * able answer to "when is this retry due" — and because §A.2 forbids shipping
+     * a partial triple. NOT to drive state.
+     *
+     * Nothing reads `nextAttemptAt` back today, and that is worth saying plainly
+     * rather than implying a consumer: the driver WRITES it (`armRetry`), the boot
+     * reconciler WRITES another when it re-arms a hold whose row was lost, and the
+     * run's raw event feed renders it. The alarm row — not this event — is what
+     * actually fires the retry and what the reconciler checks. So this is an
+     * operator/audit fact; if it ever disagrees with the row, the ROW is right.
+     * (The monitor's per-node activity summary does not fold it at all yet —
+     * `web/…/runSummary.ts`, tracked in #483 — so a held node renders as failed
+     * for the retry interval; only the raw feed shows it.)
+     *
+     * `nextAttemptAt` is a STORED fact (epoch ms), never recomputed at fold
+     * time — that is what keeps replay deterministic (spec #5's spike block).
+     * The driver stamps it from the ARMED ROW's `dueAt`, not from a fresh
+     * computation, so a replayed arm logs the ORIGINAL due time.
+     */
+    type: z.literal('node.retryScheduled'),
+    runId: z.string(),
+    nodeId: z.string(),
+    /** The FAILED attempt this retry answers (the alarm's freshness handle). */
+    attemptId: z.string(),
+    nextAttemptAt: z.number().int(),
+  }),
+  z.object({
+    /**
+     * F2b/F2c (D4) — the held node's retry is DUE. Appended by the alarm clock's
+     * `node_retry` handler when S1's row comes due; folding it re-dispatches the
+     * node under a NEW attempt.
+     *
+     * DISTINCT from `node.retryRequested` (D4 says so explicitly): that one is
+     * the BOOT reconciler's crash-recovery decision and is guarded on
+     * `LIVE_NODE`; this one is the POLICY retry and is guarded on
+     * `retry_pending`. Only this one consumes the policy's retry budget.
+     */
+    type: z.literal('node.retryDue'),
+    runId: z.string(),
+    nodeId: z.string(),
+    previousAttemptId: z.string(),
+  }),
+  z.object({
     // The event-sourced representation of the boot reconciler's "this run
     // cannot be safely resumed" verdict (P2d). Appended when a run had a
     // NON-idempotent activity in flight at crash time (an LLM call that may
@@ -507,6 +613,23 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     /** Resolved literal id (a `${}` ref in the call config is substituted first). */
     pipelineVersionId: z.string(),
     params: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
+    /**
+     * F2b (D4) — "this node's `transient` failure is retry-eligible; arm its
+     * alarm." The reducer's half of the pure/impure split: it decides ELIGIBLE
+     * (a pure read of the bound version's `policy` + the node's `retries`), the
+     * DRIVER decides WHEN (`retryIntervalSeconds` against a real clock) and
+     * appends `node.retryScheduled` → later `node.retryDue`.
+     *
+     * Shape is spec-verbatim (#1 D4 and joint spec §A.2). Note the interval is
+     * NOT carried here: the driver reads it from the same IMMUTABLE bound
+     * version the reducer read, so the two cannot disagree, and the reducer
+     * stays clock-free.
+     */
+    type: z.literal('scheduleRetry'),
+    nodeId: z.string(),
+    failedAttemptId: z.string(),
   }),
   z.object({
     type: z.literal('finishRun'),

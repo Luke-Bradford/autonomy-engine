@@ -224,9 +224,20 @@ def build_payload(scope, diff, pr_description, comments_raw):
         "model": "claude-sonnet-5",
         # Must cover adaptive-thinking tokens PLUS the review text. At 5000 a
         # large diff spent the whole budget on thinking (stop_reason=max_tokens,
-        # 0 text) and the job failed. 16000 leaves room for both; the workflow's
-        # truncation guard still catches genuine overflow.
-        "max_tokens": 16000,
+        # 0 text) and the job failed. 16000 hit the SAME wall on a ~104k-token
+        # diff (studio PR #484: output_tokens=16000, thinking_tokens=16000, zero
+        # text blocks) — the cap is a function of DIFF SIZE, and 16000 was only
+        # ever sized against the diffs of the day. 32000 restores the headroom.
+        #
+        # Raising this is safe in the fail-safe direction: the workflow's guard
+        # cannot mistake a truncated review for an APPROVE (it banners the
+        # comment and fails the job). But note the guard has a HOLE this failure
+        # exposed — when thinking eats the ENTIRE budget there are no text blocks
+        # at all, so the workflow dies at its earlier `No text block` check and
+        # prints a raw API dump instead of the "bump max_tokens" message it has
+        # ready. Still fail-safe (nothing is certified), just needlessly hard to
+        # diagnose; worth closing next time this file is open.
+        "max_tokens": 32000,
         "thinking": {"type": "adaptive"},
         "output_config": {"effort": "medium"},
         "system": [

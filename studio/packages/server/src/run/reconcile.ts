@@ -1,7 +1,15 @@
-import type { EngineEvent, RunState } from '@autonomy-studio/shared';
+import type { ArmWakeupInput, Engine, EngineEvent, RunState } from '@autonomy-studio/shared';
 import { listRuns } from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
-import { buildEngine, pump, syncRunLifecycle, type DocResolver, type Executor } from './driver.js';
+import {
+  buildEngine,
+  pump,
+  retryArmInput,
+  syncRunLifecycle,
+  type DocResolver,
+  type Executor,
+  type RetryAlarms,
+} from './driver.js';
 import type { RunEventBus } from './event-bus.js';
 import { appendEngineEvent, loadEngineEvents, terminalFactFromLog } from './events.js';
 
@@ -45,6 +53,18 @@ import { appendEngineEvent, loadEngineEvents, terminalFactFromLog } from './even
  * so the projection and the durable log never diverge (`interrupted`/`resumed`/
  * `finalized` are reachable only by folding these events, never by an
  * out-of-band patch).
+ *
+ * ## Why this pumps WITHOUT the per-run drive lock
+ *
+ * F2c made "exactly one drive per run" structural (`run/drives.ts`), and the two
+ * RUNTIME entry points — the launcher and the retry alarm — carry the lock. This
+ * one does not, because at boot it is provably the only pump source: `buildApp`
+ * awaits `reconcileOnBoot` BEFORE it starts the alarm clock's interval and before
+ * the launcher or scheduler exist. That ordering is load-bearing rather than
+ * incidental — with the interval started first, a 1s tick would fire an alarm
+ * into a run this loop is mid-`pump` on, which is exactly B1 — so it is stated at
+ * its one call site too. Anything that ever calls this against a LIVE app must
+ * take the lock instead of relying on this paragraph.
  */
 
 /**
@@ -66,6 +86,15 @@ export interface ReconcileDeps {
   db: Db;
   resolveDoc: DocResolver;
   /**
+   * F2c — the alarm seam `pump` needs. REQUIRED for the same reason it is on
+   * `DriverDeps`: a resumed run can fail transiently and emit `scheduleRetry`
+   * like any other, and a driver that cannot arm it hangs the run. Its `find`
+   * half is what `recoverHeld` checks a hold's alarm row with.
+   */
+  alarms: RetryAlarms;
+  /** Clock seam (epoch ms) for a RE-ARMED retry's `dueAt`; mirrors `DriverDeps.now`. */
+  now?: () => number;
+  /**
    * When provided, resumable runs are DRIVEN to completion immediately (the
    * "reconciler + driver" of the P2d ticket). When absent — P2 boot, before P3
    * supplies the real executor — a resumable run is left untouched and reported
@@ -85,7 +114,17 @@ export interface ReconcileDeps {
 export interface ReconcileReport {
   /** Runs that got `run.resumed` + `node.retryRequested` and were re-driven. */
   resumed: string[];
-  /** Runs frozen `interrupted` (a non-idempotent activity was in flight). */
+  /**
+   * Runs frozen `interrupted`, for either of TWO reasons — the bucket has two
+   * producers and they are not the same story:
+   *   - a non-idempotent activity was in flight at crash time
+   *     (`non_idempotent_in_flight:<nodes>`); or
+   *   - a held node's retry alarm was SPENT, so nothing can ever advance the run
+   *     (`retry_alarm_spent:<nodes>` — see `recoverHeld`). Nothing was in flight
+   *     here; the alarm came and went.
+   * The `run.interrupted.reason` distinguishes them; an operator reading a boot
+   * report needs to know which.
+   */
   interrupted: string[];
   /** Resumable runs left for a later boot with an executor (no executor now). */
   deferred: string[];
@@ -95,6 +134,22 @@ export interface ReconcileReport {
    * executor required) — reached their terminal node event but crashed before
    * `run.finished`; now terminalized. */
   finalized: string[];
+  /**
+   * Runs still HELD on a node's retry (F2b's `retry_pending`) after recovery —
+   * i.e. ones that now have a live pending alarm row, whether it is the row that
+   * outlived the crash (left untouched) or one `recoverHeld` re-armed (those are
+   * listed in `rearmed` too). "Held" means the run is genuinely WAITING and will
+   * advance on its own; a hold that could not be made true again is `interrupted`
+   * instead, never reported here. Reported so a held run is visibly waiting rather
+   * than silently indistinguishable from a stuck one.
+   */
+  held: string[];
+  /**
+   * The subset of `held` whose alarm row was MISSING and has been re-armed. Non-
+   * empty means a crash landed in the HOLD→ARM window — worth seeing in a boot
+   * report rather than inferring from the log.
+   */
+  rearmed: string[];
 }
 
 /**
@@ -124,6 +179,114 @@ function dispatchedNodes(state: RunState): { id: string; attemptId: string }[] {
     .map((id) => ({ id, attemptId: state.nodes[id]!.currentAttemptId! }));
 }
 
+/**
+ * F2c/B2 — decide what a HELD run's alarm row actually says, and act on it.
+ *
+ * The premise this exists to kill: §A.5 originally said a held run needs nothing
+ * at boot, because "the durable alarm row IS the recovery mechanism, and
+ * re-deriving a retry from the projection would DOUBLE-ARM it". Both halves were
+ * wrong, and the safest-sounding option was the unrecoverable one:
+ *
+ *  - Re-arming cannot double-arm. `armWakeup` is upsert-if-absent and returns the
+ *    EXISTING row whatever its status ("a replayed `scheduleRetry` for an attempt
+ *    whose alarm already fired must be a no-op, not a resurrection" — its own
+ *    comment). Idempotence is exactly what makes re-arming free.
+ *  - The HOLD becomes durable strictly BEFORE the alarm exists. `node.failed`
+ *    folds to `retry_pending` and only QUEUES `scheduleRetry`; `pump` drains that
+ *    at the queue TAIL, so the gap spans every intervening command — minutes of
+ *    LLM calls, not a sub-tick window. A crash in there leaves a log projecting
+ *    to `retry_pending` with NO alarm row, and "do nothing" then strands the run
+ *    `running` FOREVER, across every subsequent boot.
+ *
+ * So the row is checked, not assumed, and there are THREE cases — not two.
+ * Reporting `held` for a run with no live alarm reports a hang as if it were a
+ * wait.
+ *
+ * Note what makes the missing-row case safe to heal: `armRetry` arms BEFORE it
+ * appends, so "no row" implies its `node.retryScheduled` never landed either.
+ * Appending one here therefore cannot duplicate a fact already in the log. The
+ * reverse window (row armed, append lost) costs only observability, which is the
+ * asymmetry `armRetry` chose deliberately.
+ */
+function recoverHeld(
+  deps: ReconcileDeps,
+  engine: Engine,
+  run: { id: string; pipelineVersionId: string },
+  state: RunState,
+  heldNodes: string[],
+): 'held' | 'rearmed' | 'interrupted' {
+  // CLASSIFY EVERY held node before changing anything. Deciding and acting in one
+  // pass would arm a sibling's alarm and only then discover another node is
+  // stranded — leaving a pending alarm on a run this function is about to freeze.
+  // (Harmless, as it happens: the handler's terminal check would suppress it. But
+  // "harmless because something downstream catches it" is not the same as not
+  // doing it, and the interrupt genuinely must take precedence.)
+  const spent: string[] = [];
+  const missing: { nodeId: string; failedAttemptId: string; input: ArmWakeupInput }[] = [];
+
+  for (const nodeId of heldNodes) {
+    // The FAILED attempt, and provably so: `onFailed` gates on
+    // `event.attemptId === ns.currentAttemptId` and its retry branch folds only
+    // `{status:'retry_pending'}`, leaving `currentAttemptId` untouched. So a held
+    // node's `currentAttemptId` IS the attempt its alarm is keyed to.
+    const failedAttemptId = state.nodes[nodeId]!.currentAttemptId!;
+    const input = retryArmInput(deps, {
+      runId: run.id,
+      pipelineVersionId: run.pipelineVersionId,
+      nodeId,
+      failedAttemptId,
+    });
+    const existing = deps.alarms.find(input);
+
+    if (existing === null) {
+      missing.push({ nodeId, failedAttemptId, input });
+    } else if (existing.status !== 'pending') {
+      // The row exists but is SPENT (fired/suppressed/cancelled) while the node
+      // is still held — the alarm came and went without resolving the hold. NOT
+      // re-armable: `arm` would return this very row (same derived key) and
+      // change nothing, and the `node.retryScheduled` appended from it would
+      // record a due time in the PAST for an alarm that will never fire again.
+      // Nothing can advance this run, so freeze it as needs-attention rather
+      // than report it as waiting.
+      spent.push(nodeId);
+    }
+    // else: a pending row — a healthy hold, nothing to do.
+  }
+
+  if (spent.length > 0) {
+    const reason = `retry_alarm_spent:${spent.join(',')}`;
+    const interrupted: EngineEvent = { type: 'run.interrupted', runId: run.id, reason };
+    const appended = appendEngineEvent(deps.db, interrupted, deps.bus);
+    // Synced from a FOLD, like the sibling interrupt path above — not from a
+    // `terminalStatusOf(...) ?? 'interrupted'` default. That default is
+    // unreachable today, but `types.ts` documents that forgetting to add an event
+    // to `TERMINAL_RUN_EVENT_TYPES` is not a compile error and is #443's own
+    // failure mode: the `??` would keep THIS function looking right while
+    // `terminalFactFromLog` silently stopped seeing the fact. Folding fails loud.
+    syncRunLifecycle(deps.db, run.id, engine.reduce(state, appended.event).state.status);
+    return 'interrupted';
+  }
+
+  if (missing.length === 0) return 'held';
+  for (const { nodeId, failedAttemptId, input } of missing) {
+    const row = deps.alarms.arm(input);
+    appendEngineEvent(
+      deps.db,
+      {
+        type: 'node.retryScheduled',
+        runId: run.id,
+        nodeId,
+        attemptId: failedAttemptId,
+        // From the ARMED ROW, never the local computation — the same rule
+        // `armRetry` follows, so the log records when the alarm really fires.
+        nextAttemptAt: row.dueAt,
+      },
+      deps.bus,
+    );
+  }
+  return 'rearmed';
+}
+
 export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileReport> {
   const report: ReconcileReport = {
     resumed: [],
@@ -131,6 +294,8 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
     deferred: [],
     resynced: [],
     finalized: [],
+    held: [],
+    rearmed: [],
   };
 
   for (const run of listRuns(deps.db, { status: 'running' })) {
@@ -180,8 +345,9 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
     if (notProvablyIdempotent.length > 0) {
       const reason = `non_idempotent_in_flight:${notProvablyIdempotent.map((n) => n.id).join(',')}`;
       const interrupted: EngineEvent = { type: 'run.interrupted', runId: run.id, reason };
-      appendEngineEvent(deps.db, interrupted, deps.bus);
-      syncRunLifecycle(deps.db, run.id, engine.reduce(state, interrupted).state.status);
+      const appended = appendEngineEvent(deps.db, interrupted, deps.bus);
+      // Fold the PARSED event, not the raw one — see `appendEngineEvent`.
+      syncRunLifecycle(deps.db, run.id, engine.reduce(state, appended.event).state.status);
       report.interrupted.push(run.id);
       continue;
     }
@@ -210,6 +376,44 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
       commands.push(...result.commands);
     }
 
+    // A run HELD on a retry (F2b) re-derives NOTHING above — `onResumed` skips
+    // `retry_pending` deliberately, and `settle` cannot finish a run whose node
+    // is non-terminal. So its alarm row is checked HERE, and — this is the part
+    // that is easy to get wrong — checked UNCONDITIONALLY, whatever else the run
+    // has to do.
+    //
+    // The obvious gate ("only when the run has no other commands, since a run
+    // with live work resumes anyway and its held node is recovered by the alarm
+    // regardless") is the EXACT false premise B2 exists to kill: if the alarm row
+    // is missing there IS no alarm, and this is the only thing that can tell.
+    // Worse, the two conditions are POSITIVELY CORRELATED, so the gate would skip
+    // precisely the likeliest B2 case — `pump` drains `scheduleRetry` at the
+    // QUEUE TAIL, so the HOLD→ARM window IS the interval in which the sibling
+    // `dispatchNode` commands are draining. A crash there leaves a held node with
+    // no alarm AND a sibling still `dispatched`. Measured under the gated version:
+    // the sibling resumes and succeeds, the held node waits forever on an alarm
+    // that does not exist, the run rests `running` for the rest of the process's
+    // life, and the report calls it `resumed`.
+    const heldNodes = Object.keys(next.nodes)
+      .sort()
+      .filter((id) => next.nodes[id]!.status === 'retry_pending');
+    if (heldNodes.length > 0) {
+      const verdict = recoverHeld(deps, engine, run, next, heldNodes);
+      if (verdict === 'interrupted') {
+        // Frozen: no alarm will ever resolve the hold, so do NOT also resume the
+        // live nodes — the run is over.
+        report.interrupted.push(run.id);
+        continue;
+      }
+      report.held.push(run.id);
+      if (verdict === 'rearmed') report.rearmed.push(run.id);
+      // `commands.length === 0` means the hold is the ONLY thing keeping this run
+      // alive — there is nothing to resume, so stop here rather than append a
+      // `run.resumed` that re-derives nothing. Otherwise fall through: the live
+      // nodes resume normally and the run is reported `resumed` AS WELL AS held.
+      if (commands.length === 0) continue;
+    }
+
     // `finishRun` is the driver's OWN command (no executor); `dispatchNode`/
     // `startChild` need one. A run that only needs its dropped `finishRun`
     // reconstructed can be FINALIZED with no executor; one with live work to
@@ -228,6 +432,7 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
         db: deps.db,
         resolveDoc: deps.resolveDoc,
         executor: deps.executor ?? refuseToExecute,
+        alarms: deps.alarms,
         bus: deps.bus,
       },
       engine,

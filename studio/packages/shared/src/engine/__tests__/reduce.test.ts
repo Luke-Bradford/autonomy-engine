@@ -760,6 +760,97 @@ describe('run.resumed reconstructs a dropped finishRun', () => {
     expect(dispatchIds(r.commands)).toEqual(['b']);
     expect(r.commands.some((c) => c.type === 'finishRun')).toBe(false);
   });
+
+  it('a READY node whose dispatch prep throws terminalizes — it must not silently hang', () => {
+    // DEFENSIVE, and deliberately labelled as such: no log reaches this state
+    // today. `tryDispatchNode` PREPS BEFORE it folds, so a node only becomes
+    // `ready` once its prep has succeeded, and nothing later removes an upstream
+    // output (`resetNodes` is gated behind a whole-body-terminal back-edge, which
+    // a live `ready` node blocks). The state is therefore built by hand — the
+    // reducer must be TOTAL over states, not only over the ones today's events
+    // happen to produce.
+    //
+    // It is fixed anyway because of what F2c changes: `onResumed` was the ONLY
+    // dispatch derivation that swallowed a prep throw (`tryDispatchNode`,
+    // `onRetryDue` and `onRetryRequested` all terminalize with
+    // `finishRun{invalid_event}`), and that asymmetry was survivable only while
+    // resume ran once per boot. `driveRun` makes it the RUNTIME path for every
+    // retry, and it discards `onRetryDue`'s terminalize in favour of this
+    // derivation — so a swallowed throw here would be a permanent hang with a
+    // spent alarm. Closing the class costs six lines; leaving it depends on an
+    // unreachability argument holding forever.
+    const eng = engine(
+      [node('a'), node('b', { m: '${nodes.a.output.g}' })],
+      [edge('a', 'b', 'success')],
+    );
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    s = eng.reduce(s, succeeded('a', attempt('a'), { g: 'hi' })).state;
+    expect(s.nodes.b!.status).toBe('ready');
+
+    // Drop the output `b`'s prep depends on: `b` stays `ready`, its prep now throws.
+    const r = eng.resume({ ...s, outputs: {} });
+
+    expect(r.commands).toContainEqual({
+      type: 'finishRun',
+      outcome: 'failure',
+      reason: 'invalid_event',
+    });
+    expect(r.diagnostics.some((d) => d.includes("dispatch prep failed for node 'b'"))).toBe(true);
+  });
+});
+
+// ===========================================================================
+// #1 F2c — `engine.resume()`: the PURE seam `driveRun` re-derives commands from
+// ===========================================================================
+
+describe('engine.resume — the pure re-derivation seam (F2c)', () => {
+  it('yields exactly what folding run.resumed yields, without needing the event', () => {
+    // The seam exists because `driveRun` must re-project from the log INSIDE the
+    // per-run lock and recover the commands `projectRunState` discards — but it
+    // must NOT append `run.resumed`, which is BOOT's durable fact and would be a
+    // lie mid-run. Same derivation, no event: that equivalence is the contract,
+    // so it is asserted rather than assumed.
+    const eng = engine([node('a'), node('b')], [edge('a', 'b', 'success')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    s = eng.reduce(s, succeeded('a', attempt('a'))).state;
+
+    const viaEvent = eng.reduce(s, { type: 'run.resumed', runId: RUN, reason: 'boot_reconcile' });
+    const viaSeam = eng.resume(s);
+
+    expect(viaSeam.commands).toEqual(viaEvent.commands);
+    expect(viaSeam.state).toEqual(viaEvent.state);
+  });
+
+  it('is PURE — it appends nothing and leaves the input state untouched', () => {
+    const eng = engine([node('a')]);
+    const s = eng.reduce(eng.seedState(), started()).state;
+    const before = JSON.parse(JSON.stringify(s)) as unknown;
+
+    eng.resume(s);
+
+    expect(s).toEqual(before);
+  });
+
+  it('emits NOTHING for a terminal run — a settled run must never be re-driven', () => {
+    // `driveRun` already refuses a run whose LOG holds a terminal fact (#443);
+    // this is the engine-side backstop, so a caller that skipped that check
+    // cannot re-dispatch a finished run's nodes.
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    s = eng.reduce(s, succeeded('a', attempt('a'))).state;
+    s = eng.reduce(s, { type: 'run.finished', runId: RUN, outcome: 'success' }).state;
+    expect(s.status).toBe('success');
+
+    expect(eng.resume(s).commands).toEqual([]);
+  });
+
+  it('emits NOTHING for a pending (pre-run.started) state', () => {
+    const eng = engine([node('a')]);
+    expect(eng.resume(eng.seedState()).commands).toEqual([]);
+  });
 });
 
 // ===========================================================================
@@ -872,15 +963,18 @@ describe('minor hardening', () => {
   });
 });
 
-describe('#1 F0 — failure kind is CARRIED, not yet acted on (scope lock)', () => {
-  // F0 introduces the field ONLY. The retry-eligibility decision that keys off
-  // `kind:'transient'` belongs to F2b, and cannot land before F2a's `Node.policy`
-  // schema and #5 S1's durable alarm exist — a reducer that "helpfully" retried
-  // here would emit a command nothing can serve, and would need wall-clock to
-  // schedule it (breaking reducer purity). These tests fail the moment retry is
-  // added without its prerequisites.
+describe('#1 F0/F2b — a failure kind alone never retries: policy is what opts a node in', () => {
+  // This block was F0's SCOPE LOCK ("kind is carried, not yet acted on"). F2b has
+  // now landed, so the old framing is stale — but the tests are NOT: they pin
+  // what is arguably F2b's most important property, which is that adding retry
+  // changed NOTHING for a node with no `policy`. None of these docs declare one,
+  // so eligibility is `retries < 0` — false — and a `transient` failure settles
+  // exactly as it did before F2b existed. Every doc written before this ticket is
+  // unaffected, and these are the tests that say so.
+  //
+  // The retry path itself (a node WITH a policy) is `retry-state-machine.test.ts`.
   for (const kind of ['transient', 'permanent', 'cancelled'] as const) {
-    it(`settles a '${kind}' failure to terminal 'failure' with no retry command`, () => {
+    it(`settles a '${kind}' failure with NO policy to terminal 'failure', no retry command`, () => {
       const eng = engine([node('a')]);
       let s = eng.reduce(eng.seedState(), started()).state;
       s = eng.reduce(s, dispatched('a', attempt('a'))).state;
@@ -894,7 +988,7 @@ describe('#1 F0 — failure kind is CARRIED, not yet acted on (scope lock)', () 
     });
   }
 
-  it('a transient failure finishes the run as failure — identical to a permanent one (today)', () => {
+  it('a transient failure finishes the run as failure — identical to a permanent one, absent a policy', () => {
     const run = (kind: FailureKind): EngineCommand[] => {
       const eng = engine([node('a')]);
       let s = eng.reduce(eng.seedState(), started()).state;

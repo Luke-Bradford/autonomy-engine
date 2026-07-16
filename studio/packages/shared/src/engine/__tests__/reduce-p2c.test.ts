@@ -123,6 +123,17 @@ function drive(eng: Engine, params: Record<string, unknown>, opts: DriveOpts = {
       apply({ type: 'run.finished', runId: RUN, outcome: c.outcome, reason: c.reason });
       continue;
     }
+    if (c.type === 'scheduleRetry') {
+      // Unreachable in this file: F2b only emits `scheduleRetry` for a node whose
+      // `policy.retry` gives it budget, and no doc here declares a policy. This
+      // driver has no clock, so serving it would mean inventing retry timing —
+      // fail loud instead of silently dropping a command (the same rule
+      // `reconcile.ts`'s `refuseToExecute` follows). F2b's own retry tests drive
+      // the real path.
+      throw new Error(
+        `p2c drive: unexpected scheduleRetry for '${c.nodeId}' — no doc here retries`,
+      );
+    }
     if (c.type === 'startChild') {
       const idx = attempts[c.callNodeId] ?? 0;
       attempts[c.callNodeId] = idx + 1;

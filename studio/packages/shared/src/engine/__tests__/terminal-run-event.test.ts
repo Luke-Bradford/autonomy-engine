@@ -87,6 +87,12 @@ describe('#443 — terminalStatusOf', () => {
       { type: 'node.output', ...run, nodeId: 'n1', name: 'chunk', value: 'x' },
       { type: 'run.resumed', ...run, reason: 'boot_reconcile' },
       { type: 'node.retryRequested', ...run, nodeId: 'n1', previousAttemptId: 'n1#0', reason: 'r' },
+      // F2b/F2c's retry pair. NON-terminal, and §E of the joint spec depends on
+      // that being deliberate: its invariant is "no TERMINAL event is appended
+      // after an ACCEPTED terminal event", and these two are exactly the
+      // non-terminal events it names as free to land later.
+      { type: 'node.retryScheduled', ...run, nodeId: 'n1', attemptId: 'n1#0', nextAttemptAt: 1 },
+      { type: 'node.retryDue', ...run, nodeId: 'n1', previousAttemptId: 'n1#0' },
     ];
     for (const event of nonTerminal) {
       expect(terminalStatusOf(event), `${event.type} must not be terminal`).toBeNull();

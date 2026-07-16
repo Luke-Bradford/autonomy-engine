@@ -21,14 +21,12 @@ import type { SchedulerLog } from './scheduler.js';
  * The reducer stays pure and clock-free: it emits "schedule an alarm" commands,
  * and wall-time lives here.
  *
- * NOT WIRED INTO `buildApp` YET, deliberately: this ticket is the master build
- * order's item 5 ("Generic durable-scheduler primitive — ONE early ticket"),
- * and its first consumer is item 6 (#1 D4 policy/retry), which needs a reducer
- * change spec #5's spike block calls out (a retryable-failure HOLD-or-reopen
- * state + `node.retryDue` in `EngineEventSchema`) plus F2a's `Node.policy`. The
- * consumer that lands first constructs the clock with its handler and wires the
- * lifecycle — rather than this ticket shipping an inert boot path with an empty
- * registry.
+ * WIRED INTO `buildApp` by its first consumer, #1 D4's node retry (F2c): that is
+ * where the clock is constructed with its handler registry and its tick interval,
+ * per the plan that this ticket (the build order's item 5) would ship the
+ * primitive and the consumer that landed first would wire the lifecycle — rather
+ * than an inert boot path with an empty registry. `scheduler/retry-alarm.ts` is
+ * that consumer and the worked example for the next one.
  *
  * ## The contract handlers must respect
  *
@@ -44,11 +42,19 @@ import type { SchedulerLog } from './scheduler.js';
  * for a run that no longer exists.
  *
  * Handlers must also be safe to invoke TWICE for the same row. Exactly-once is
- * fiction; the contract is **at-least-once + an idempotent fold**. The UNIQUE
+ * fiction; the contract is **at-least-once + a stale-delivery check**. The UNIQUE
  * (kind, dedupeKey) index dedupes ARMING; dedupe of DELIVERY is the consumer's
- * job, via staleness (a duplicate retry wakeup re-appends
- * `node.retryRequested{previousAttemptId}`, which the reducer folds as a no-op
- * once `currentAttemptId` has advanced). Both layers are load-bearing.
+ * job, via staleness. The retry handler is the worked example: a re-delivered
+ * `node_retry` alarm whose node has moved on (its retry already dispatched, or a
+ * loop round reset it) is SUPPRESSED — it returns `{status:'suppressed'}` and
+ * appends nothing at all, rather than appending an event it expects the reducer
+ * to no-op. Suppression is the cheaper and more honest layer: an event that folds
+ * to nothing is still a durable line claiming something happened.
+ *
+ * A handler MAY instead rely on an idempotent fold where its kind has no way to
+ * check currency up front — but it must have one of the two. `node.retryDue` also
+ * has the reducer's own `retry_pending` guard behind the suppression, and both are
+ * load-bearing.
  */
 
 /**
@@ -138,7 +144,17 @@ export interface AlarmClock {
   arm(input: ArmWakeupInput): ScheduledWakeup;
   /** Fire every alarm now due. Never throws. */
   tick(): void;
-  /** Stop firing and refuse new alarms. Idempotent. */
+  /**
+   * Stop FIRING. Idempotent.
+   *
+   * Arming deliberately still works after this. A stopped clock is a shutting-down
+   * one, and a run still settling during shutdown can fail transiently and arm a
+   * retry like any other — refusing it would convert an ordinary transient failure
+   * into a DEAD run (nothing else would ever re-dispatch that node). The row is
+   * DURABLE and swept by the next boot's tick, so an arm accepted here is served,
+   * just later. Refusing writes to protect a process that is going away anyway
+   * loses work; accepting them costs nothing.
+   */
   stop(): void;
 }
 
@@ -163,7 +179,7 @@ export function createAlarmClock(deps: AlarmClockDeps): AlarmClock {
   let ticking = false;
 
   function arm(input: ArmWakeupInput): ScheduledWakeup {
-    if (stopped) throw new Error('alarm clock: cannot arm — the clock is stopped');
+    // Intentionally NOT gated on `stopped` — see `AlarmClock.stop`.
     const handler = handlers.get(input.kind);
     if (handler === undefined) {
       throw new Error(

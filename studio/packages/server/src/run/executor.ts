@@ -40,6 +40,15 @@ import type { DocResolver, Executor, ExecutorCommand } from './driver.js';
  * concurrently-driven runs (P4's scheduler). It wraps only the side effect —
  * `node.dispatched` is not gated (it is cheap + must be durable first). Within a
  * single run the driver's `pump` is sequential; the cap bites across runs.
+ *
+ * That "within a single run the `pump` is sequential" is a real invariant this
+ * module relies on — and it is now ENFORCED, by `run/drives.ts`'s per-run lock,
+ * rather than merely true. It used to hold only because the LAUNCHER was the one
+ * thing that could pump a run; when F2c's retry alarm became a second entry
+ * point, nothing serialized them, and the measured result was a shared successor
+ * dispatched twice under one `attemptId` (a real adapter call billed twice) and
+ * then a permanent hang. If you add a THIRD way to start a drive, it goes through
+ * `driveRun` — this sentence is not a description, it is a requirement.
  */
 export interface ExecutorDeps {
   db: Db;
