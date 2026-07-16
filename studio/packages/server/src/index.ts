@@ -139,14 +139,11 @@ export async function buildApp(opts?: BuildAppOptions) {
   // accident: the driver ARMS alarms (a transient failure emits `scheduleRetry`),
   // while the clock's retry handler DRIVES runs (a due alarm re-dispatches the
   // node — whose next failure arms attempt-2's alarm). One lazy `arm` closes the
-  // loop; it cannot fire early, because nothing arms an alarm before the clock
-  // exists (the first arm needs a run, and runs start below).
-  // `alarmClock` is referenced by the `arm` closure ABOVE its own declaration.
-  // That is safe rather than clever: `arm` is only ever called at run time, long
-  // after this function body has finished, so the temporal-dead-zone window is
-  // closed before anything can enter it — and a `const` says "assigned exactly
-  // once" where a `let` + undefined-check would only pretend to handle a case
-  // that cannot happen.
+  // loop, referencing `alarmClock` above its own declaration. Safe rather than
+  // clever: `arm` only ever runs long after this function body has returned, so
+  // the temporal-dead-zone window is shut before anything could enter it — and a
+  // `const` states "assigned exactly once", where a `let` + undefined-check would
+  // only pretend to handle a case that cannot happen.
   const alarms: RetryAlarms = { arm: (input) => alarmClock.arm(input) };
   const driverBoundary = { db, resolveDoc, executor, alarms, bus: runEventBus };
   const alarmClock: AlarmClock = createAlarmClock({
@@ -159,7 +156,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   // every registered kind. The interval bounds retry LATENESS (an alarm fires at
   // most this late), which `WakeupDelivery.latenessMs` reports honestly. It is
   // `unref`'d so a pending tick can never hold the process open at shutdown.
-  const alarmTimer = setInterval(() => alarmClock?.tick(), ALARM_TICK_MS);
+  const alarmTimer = setInterval(() => alarmClock.tick(), ALARM_TICK_MS);
   alarmTimer.unref();
 
   // P2d/P3 boot reconcile: any `runs` row still `running` could not have
