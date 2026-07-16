@@ -643,6 +643,93 @@ describe('cross-boundary edges (#480)', () => {
   });
 });
 
+describe('cross-container child → child edge (#498)', () => {
+  // The one cross-boundary shape the #480 guard missed. `n1` is a child of `c1`
+  // and `n2` a child of `c2`: the authored edge `n1 → n2` lands in NO index —
+  // its source is not a top entity (so the crossBoundary report inside the
+  // `topOutgoing` block never fires) and its target is not a top entity (so
+  // `topIncoming` does not take it), and it is not the #488 own-container case.
+  // Every sibling shape in the family reports "IGNORED"; only this one was
+  // silent. The neutralization was already correct — a child's forward edge
+  // cannot cross a boundary — so the fix adds ONLY the missing diagnostic
+  // (observable since #497 gave `diagnostics` a durable sink).
+  const twoStages = (edges: Edge[]): EngineDoc => ({
+    nodes: [node('n1'), node('n2')],
+    edges,
+    containers: [
+      { id: 'c1', kind: 'stage', children: ['n1'] },
+      { id: 'c2', kind: 'stage', children: ['n2'] },
+    ],
+  });
+
+  it('the dropped edge is REPORTED as ignored', () => {
+    const eng = createEngine(twoStages([edge('n1', 'n2', 'success')]));
+    const { diagnostics } = runAll(eng);
+    expect(
+      diagnostics.some((d) => d.includes("edge 'n1->n2:success'") && d.includes('IGNORED')),
+    ).toBe(true);
+  });
+
+  it('is reported exactly ONCE — no duplicate diagnostic', () => {
+    const eng = createEngine(twoStages([edge('n1', 'n2', 'success')]));
+    const { diagnostics } = runAll(eng);
+    expect(diagnostics.filter((d) => d.includes("edge 'n1->n2:success'"))).toHaveLength(1);
+  });
+
+  it('each direction is reported independently', () => {
+    const eng = createEngine(twoStages([edge('n1', 'n2', 'success'), edge('n2', 'n1', 'success')]));
+    const { diagnostics } = runAll(eng);
+    expect(diagnostics.filter((d) => d.includes("edge 'n1->n2:success'"))).toHaveLength(1);
+    expect(diagnostics.filter((d) => d.includes("edge 'n2->n1:success'"))).toHaveLength(1);
+  });
+
+  it('routing is UNCHANGED — the edge stays neutralized, both children run', () => {
+    // The fix adds the diagnostic WITHOUT changing the outcome: with the edge
+    // neutralized, `c1` and `c2` are both roots, so `n1` and `n2` dispatch as
+    // their stage roots and the run succeeds. (Pre-fix behaviour, pinned so the
+    // diagnostic cannot be mistaken for a semantics change.)
+    const eng = createEngine(twoStages([edge('n1', 'n2', 'success')]));
+    const { state, finish } = runAll(eng);
+    expect(state.nodes.n1!.status).toBe('success');
+    expect(state.nodes.n2!.status).toBe('success');
+    expect(finish?.outcome).toBe('success');
+  });
+
+  it('a child → OTHER container ID edge still routes and is NOT reported', () => {
+    // Honesty non-regression, alongside the child→top pin above. This edge is
+    // cross-boundary too, but it is LOAD-BEARING in `topIncoming` (it skips the
+    // target container `c2` when `n1` does not take it), so it still routes —
+    // claiming it was ignored would be a lie. The new fall-through must not
+    // catch it.
+    const eng = createEngine({
+      nodes: [node('n1'), node('n2')],
+      edges: [edge('n1', 'c2', 'success')],
+      containers: [
+        { id: 'c1', kind: 'stage', children: ['n1'] },
+        { id: 'c2', kind: 'stage', children: ['n2'] },
+      ],
+    });
+    const { diagnostics } = runAll(eng);
+    expect(
+      diagnostics.some((d) => d.includes("edge 'n1->c2:success'") && d.includes('IGNORED')),
+    ).toBe(false);
+  });
+
+  it('a top → child edge is still reported EXACTLY once — the fall-through does not double it', () => {
+    // The other honesty guard on the new fall-through. A top→child edge is
+    // already reported by the top-source block (#480); the fall-through's
+    // `!topOutgoing.has(e.from)` discriminator is the ONLY thing stopping it
+    // reporting a SECOND time. Weaken that to a bare `else` and this count trips.
+    const eng = createEngine({
+      nodes: [node('h'), node('a')],
+      edges: [edge('h', 'a', 'success')],
+      containers: [{ id: 'c', kind: 'stage', children: ['a'] }],
+    });
+    const { diagnostics } = runAll(eng);
+    expect(diagnostics.filter((d) => d.includes("edge 'h->a:success'"))).toHaveLength(1);
+  });
+});
+
 describe('pipeline success semantics — the run-outcome predicate (F1b)', () => {
   // F1b RECONCILED these against the ADF target ("Evaluate outcome for all
   // leaves… If a leaf activity was skipped, we evaluate its parent activity
