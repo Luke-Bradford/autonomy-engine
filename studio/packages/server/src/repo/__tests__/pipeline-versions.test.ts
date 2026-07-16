@@ -141,6 +141,110 @@ describe('pipeline-versions repo — the write gate (#444)', () => {
   });
 });
 
+describe('pipeline-versions repo — the write gate call-graph (#495)', () => {
+  // A version whose single node CALLS another version. Built leaf-first so each
+  // callee already exists when its caller is authored — the only way a call
+  // chain can exist given immutable, server-minted version ids (you cannot
+  // forward-reference an unminted id).
+  function callVersionInput(pipelineId: string, calleeVersionId: string): NewPipelineVersion {
+    return {
+      pipelineId,
+      params: [],
+      outputs: [],
+      nodes: [
+        {
+          id: 'caller',
+          type: 'call_pipeline',
+          config: {},
+          position: { x: 0, y: 0 },
+          call: { pipelineVersionId: calleeVersionId, params: {} },
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    };
+  }
+  function leafVersionInput(pipelineId: string): NewPipelineVersion {
+    return {
+      pipelineId,
+      params: [],
+      outputs: [],
+      nodes: [{ id: 'leaf', type: 'agent_task', config: {}, position: { x: 0, y: 0 } }],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    };
+  }
+
+  /** Build an owned call chain head→…→leaf of the given depth, leaf-first, all
+   * under one pipeline. Returns the HEAD version (the one a further caller would
+   * call). `linkDepth` = number of call hops from the head to the leaf. */
+  function buildOwnedChain(
+    db: ReturnType<typeof freshDb>['db'],
+    ownerId: string,
+    linkDepth: number,
+  ) {
+    const pipeline = createPipeline(db, { ownerId, name: `chain-${ownerId}` });
+    let callee = createPipelineVersion(db, leafVersionInput(pipeline.id));
+    for (let i = 0; i < linkDepth; i += 1) {
+      callee = createPipelineVersion(db, callVersionInput(pipeline.id, callee.id));
+    }
+    return callee; // the head of the chain
+  }
+
+  it('REFUSES a call chain that exceeds maxCallDepth — nothing is written', () => {
+    const { db } = freshDb();
+    // head → vB → vC → leaf : head is 3 hops above the leaf. A new caller of
+    // head makes new(0)→head(1)→vB(2)→vC(3)→leaf(4): entering leaf at depth 4 > 3.
+    const head = buildOwnedChain(db, 'local', 3);
+    const caller = createPipeline(db, { ownerId: 'local', name: 'caller' });
+
+    expect(() => createPipelineVersion(db, callVersionInput(caller.id, head.id))).toThrow(
+      InvalidPipelineDocError,
+    );
+    // A refusal is a refusal — no partial write (immutable rows can't be repaired).
+    expect(listPipelineVersions(db, caller.id)).toEqual([]);
+  });
+
+  it('ACCEPTS a call chain within maxCallDepth', () => {
+    const { db } = freshDb();
+    // head → vB → leaf : new(0)→head(1)→vB(2)→leaf(3): deepest entry is depth 3,
+    // which is allowed (the rule refuses depth > 3).
+    const head = buildOwnedChain(db, 'local', 2);
+    const caller = createPipeline(db, { ownerId: 'local', name: 'caller' });
+
+    expect(() => createPipelineVersion(db, callVersionInput(caller.id, head.id))).not.toThrow();
+    expect(listPipelineVersions(db, caller.id)).toHaveLength(1);
+  });
+
+  it('ACCEPTS a single owned call — the gate refuses over-depth, not all calls', () => {
+    const { db } = freshDb();
+    const leaf = buildOwnedChain(db, 'local', 0); // just the leaf
+    const caller = createPipeline(db, { ownerId: 'local', name: 'caller' });
+    expect(() => createPipelineVersion(db, callVersionInput(caller.id, leaf.id))).not.toThrow();
+  });
+
+  it('does NOT traverse — nor echo the ids of — ANOTHER owner’s versions (owner-scoped resolver)', () => {
+    const { db } = freshDb();
+    // An OVER-DEPTH chain owned by someone else. A non-owner-scoped resolver
+    // WOULD walk into it and 400 the caller, echoing the other owner's version
+    // ids in the error body — the exact leak #444's echo-safety argument did not
+    // cover across the transitive graph.
+    const otherHead = buildOwnedChain(db, 'other', 3);
+    const caller = createPipeline(db, { ownerId: 'local', name: 'caller' });
+
+    let caught: InvalidPipelineDocError | undefined;
+    try {
+      createPipelineVersion(db, callVersionInput(caller.id, otherHead.id));
+    } catch (err) {
+      caught = err as InvalidPipelineDocError;
+    }
+    // The resolver returns undefined for a cross-owner callee, so the call graph
+    // is not analysed past the boundary: no depth error is raised at all.
+    expect(caught).toBeUndefined();
+    expect(listPipelineVersions(db, caller.id)).toHaveLength(1);
+  });
+});
+
 describe('InvalidPipelineDocError message (#496)', () => {
   it('keeps every issue on `.issues` but bounds the human message', () => {
     const issues = Array.from({ length: 150 }, (_v, i) => `issue ${i}`);
