@@ -71,4 +71,31 @@ describe('migrations', () => {
     expect(row).toBe(1);
     sqlite.close();
   });
+
+  // The RUNTIME truth for the `secrets_owner_name_idx` collation is the
+  // hand-rolled 0009 migration (`name COLLATE NOCASE`, `owner_id` BINARY), NOT
+  // the drizzle `sqliteTable(...).on(...)` declaration in `schema.ts` — that
+  // declaration is not applied at boot and only mirrors the SQL for the reader.
+  // This asserts the ACTUAL built index shape so a future edit to either half
+  // cannot silently drift the migration off the intended per-column collation
+  // (#533; NOCASE-name uniqueness + BINARY owner scoping are load-bearing
+  // TOGETHER — see `repo/secrets.ts`). `PRAGMA index_xinfo` exposes the
+  // resolved collation per key column in `coll`.
+  it('builds secrets_owner_name_idx with name COLLATE NOCASE and owner_id BINARY (#533)', () => {
+    const { sqlite } = openDb(':memory:');
+    const keyColumns = sqlite
+      .prepare("PRAGMA index_xinfo('secrets_owner_name_idx')")
+      .all()
+      .filter((row) => (row as { key: number }).key === 1)
+      .map((row) => {
+        const r = row as { name: string; coll: string };
+        return { name: r.name, coll: r.coll };
+      });
+
+    expect(keyColumns).toEqual([
+      { name: 'owner_id', coll: 'BINARY' },
+      { name: 'name', coll: 'NOCASE' },
+    ]);
+    sqlite.close();
+  });
 });
