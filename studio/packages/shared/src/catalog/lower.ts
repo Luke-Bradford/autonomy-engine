@@ -19,20 +19,28 @@ import { getActivity } from './registry.js';
  * one write choke point) calls this so EVERY stored version carries its contract,
  * regardless of client.
  *
- * ## What counts as "absent"
+ * ## What counts as "absent" — the helper's own, unconditional contract
  *
- * A node is seeded only when `config.outputs` is LITERALLY MISSING. This is the
- * `absent` case of `outputContract` (`engine/outputs.ts`), whose SSOT definition
- * is `NodeOutputsFieldSchema.safeParse(config.outputs).data === undefined` — which
- * holds iff the key is absent. A literal `config['outputs'] === undefined` check
- * is used here rather than `outputContract` so `catalog/` imports only schema
- * TYPES from `engine`/`schemas` (no runtime `catalog → engine` edge — the layering
- * `engine`/`schemas` are catalog-free by design). The two agree because this runs
- * AFTER the write-path `StrictNodeSchema` parse, which has already REFUSED any
- * corrupt (`invalid`) `outputs` — so only `absent`/`declared` reach here and the
- * literal check cannot mis-fire. A present-but-empty `outputs: []` is `declared`
- * ("declares nothing"), NOT absent, and is deliberately left untouched; a present
- * declared contract is the author's override and is never overwritten.
+ * A node is seeded ONLY when `config.outputs` is LITERALLY MISSING
+ * (`config['outputs'] === undefined`), and ANY present value is left exactly as
+ * it is. This holds regardless of how the input was produced — it is the helper's
+ * own guarantee, not a property borrowed from a caller: a present-but-EMPTY
+ * `outputs: []` ("declares nothing") is preserved, a present declared contract is
+ * the author's override and is preserved, and a present-but-CORRUPT `outputs` is
+ * ALSO left untouched (never seeded over) — so this can never fail open by masking
+ * a corrupt contract with a benign catalog default; the corrupt value stands for
+ * `StrictNodeSchema`/the reducer's `outputContract` to reject downstream.
+ *
+ * A literal `=== undefined` check is used rather than `outputContract`
+ * (`engine/outputs.ts`) so `catalog/` imports only schema TYPES from
+ * `engine`/`schemas` (no runtime `catalog → engine` edge — those layers are
+ * catalog-free by design). For the WRITE caller the literal check is exactly
+ * `outputContract`'s `absent`: that caller (`createPipelineVersion`) has already
+ * run the nodes through `StrictNodeSchema` — which refuses a corrupt (`invalid`)
+ * `outputs` — so by then only `absent`/`declared` remain and `=== undefined`
+ * selects precisely `absent`. That equivalence is the caller's context; the
+ * "never overwrite a present value" rule above is what keeps this safe even for a
+ * caller that has not.
  *
  * An UNKNOWN type (no catalog entry) and an uncatalogued `call_pipeline` node are
  * left `absent` — there is no catalog default to seed, and a call node's outputs
@@ -46,7 +54,9 @@ import { getActivity } from './registry.js';
  */
 export function lowerNodeOutputs(nodes: Node[]): Node[] {
   return nodes.map((node) => {
-    if (node.config['outputs'] !== undefined) return node; // present (declared/[]) — never overwrite
+    // Any present value — declared, empty [], or even corrupt — is left as-is;
+    // seeding only ever fills a LITERALLY absent key, never overwrites (see doc).
+    if (node.config['outputs'] !== undefined) return node;
     const entry = getActivity(node.type);
     if (entry === undefined) return node; // unknown type / call_pipeline — no default to seed
     return {
