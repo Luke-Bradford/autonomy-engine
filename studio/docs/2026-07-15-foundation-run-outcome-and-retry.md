@@ -4,13 +4,22 @@
 retry-eligibility, the D4 HOLD). One spec, because they are **the same predicate**: both are about
 what `settle` counts as a run-ending failure.
 
-**Status: ALL FIVE decisions SETTLED. #443 SHIPPED (`f732950`); F1b SHIPPED (`3a78658`); F2b + F2c
-SHIPPED — this spec is now fully BUILT.** See the build order for what each fire earned.
+**Status: ALL FIVE decisions SETTLED. #443 SHIPPED (`f732950`); F1b SHIPPED (`3a78658`). F2b + F2c
+are BUILT BUT NOT MERGED — see "F2c is blocked" in the build order before touching them.**
 
-**Two build-time corrections this spec owes its readers, both probed** (details at their sections):
-§A.3's eligibility formula was **wrong on two counts** and named the wrong counter (retry is keyed on
-a new `retries` field, not `attempts`); and the build order's parsed-vs-raw fold bug is **inert**, not
-the live retry-deciding bug it was billed as. Read those blocks before trusting either passage.
+**THREE build-time corrections this spec owes its readers, all probed** (details at their sections):
+
+1. **§A.3's eligibility formula is wrong on two counts** and names the wrong counter — retry keys on
+   a new `retries` field, not `attempts`.
+2. **The build order's parsed-vs-raw fold bug is INERT**, not the live retry-deciding bug it was
+   billed as.
+3. **§A.5's "re-deriving would DOUBLE-ARM it" is FALSE**, and it is the load-bearing justification
+   for doing nothing on boot. `armWakeup` is upsert-if-absent and returns the existing row *whatever
+   its status* (`repo/scheduled-wakeups.ts:56-57`, whose own comment says so). Re-arming is a no-op
+   when the row exists — which is exactly what makes the safe fix free, and what makes this spec's
+   advice to skip it a **permanent hang** for any run crashed between the HOLD and the ARM.
+
+Read those blocks before trusting the surrounding passages.
 
 (c) was briefly raised as an operator fork (**#475**) on the belief that the only rule satisfying both
 the fail-safe invariant and #472's "labels deleted honestly" bar was unproven. A spike proved it —
@@ -275,6 +284,34 @@ re-arms it.**
 > waiting on its alarm. It also collects a fresh `run.resumed` on EVERY boot. Fixed with an explicit
 > `held` bucket that appends nothing, gated on there being no commands so a run with a genuinely
 > recoverable node still resumes. **"The correct action is none at all" still needs code to say so.**
+
+> **CORRECTION — "re-deriving a `scheduleRetry` here would DOUBLE-ARM it" is FALSE, and this
+> paragraph's conclusion is therefore WRONG (probed, both review lenses, independently).**
+>
+> `armWakeup` (`repo/scheduled-wakeups.ts:34-71`) is **upsert-if-absent** and returns the EXISTING
+> row whatever its status. Its own comment states the intent verbatim: *"a replayed `scheduleRetry`
+> for an attempt whose alarm already fired must be a no-op, not a resurrection."* The dedupe key is
+> deterministic from durable state (`runId`, `nodeId`, `failedAttemptId`), so a re-derived arm
+> returns the existing row when there is one — and **creates one when a crash lost it**. Idempotence
+> is precisely what makes re-arming free.
+>
+> That matters because **the HOLD becomes durable strictly BEFORE the alarm exists.** `node.failed`
+> folds to `retry_pending` and only *queues* `scheduleRetry`; `pump` drains that command at the
+> QUEUE TAIL, so the gap spans every intervening command — minutes of LLM calls, not the sub-tick
+> window `launcher.ts` accepts. A crash in that window leaves a log projecting to `retry_pending`
+> with **no alarm row**, and this section's advice (plus the `held` bucket built on it) then
+> guarantees the run is **`running` forever, across every subsequent boot**. Probed: reconcile
+> reports `held`, arms nothing, and the run is unrecoverable without DB surgery.
+>
+> **The rule stands only when the row EXISTS.** The reconciler must look the alarm up by its derived
+> dedupe key (`getWakeupByKey` — which has no non-test caller today and exists for exactly this) and
+> re-arm when it is absent, or terminalize. Reporting `held` for a run with no live alarm reports a
+> hang as if it were a wait.
+>
+> **Lesson: an idempotence claim is a property of the code, not of the argument.** This one was
+> asserted here, then inherited unchecked by the reducer comment, the handler header, the reconciler
+> branch and a test name — five places, one unverified premise, and the safest-sounding option
+> ("do nothing") was the unrecoverable one.
 
 That is the correct design — the durable alarm row **is** the recovery mechanism, and re-deriving a
 retry from the projection would double-arm it. But it makes the dependency explicit and
@@ -668,11 +705,75 @@ expected — do not treat the intermediate state as a regression.
    failed with a handler that could never run (mutation-verified in both directions). Forward-only
    absorption closes it. Both halves are pinned.
 3. **F2b + F2c together** — `retry_pending`, the `scheduleRetry`/`retryScheduled`/`retryDue` triple,
-   the `node.retryDue` handler. **Not F2b alone** (§A.5). **SHIPPED** — one fire, as specced, plus
+   the `node.retryDue` handler. **Not F2b alone** (§A.5). **BUILT on branch
+   `feat/studio-f2b-f2c-retry-state-machine`, NOT MERGED — F2c is BLOCKED, see below.** Includes
    §A.3's corrected eligibility rule above, the `node_retry` alarm handler (S1's first real
-   consumer), the clock's boot wiring, and `reconcile`'s new `held` bucket (a run held on a retry
+   consumer), the clock's boot wiring, and `reconcile`'s `held` bucket (a run held on a retry
    re-derives no commands, so it was landing in `finalized` — "now terminalized" — and collecting a
    fresh `run.resumed` on every boot).
+
+   > ### F2c is BLOCKED on ONE unbuilt primitive: per-run drive serialization
+   >
+   > **F2b (the pure half) is verified correct by both review lenses. F2c (the driver half) ships a
+   > run that double-bills and hangs, and must not merge as-is.** Both blockers were found by the
+   > pre-PR gate and reproduced against the real engine. Neither is an operator fork — the fix
+   > direction is clear — but the first is a genuine new PRIMITIVE this spec never contemplated.
+   >
+   > **B1 — two concurrent `pump`s on one run (REPRODUCED).** `executor.ts:40` states the invariant:
+   > *"Within a single run the driver's `pump` is sequential."* That was structurally true only
+   > because the LAUNCHER was the sole pump source. F2c's alarm `afterCommit` is a SECOND source, and
+   > nothing serializes them. Each `pump` carries its own in-memory `RunState` (`driver.ts` —
+   > `let state = initialState`) and never re-reads the log, so two drives diverge permanently and
+   > both write. Measured on `root→a`, `root→b`, `a→d`, `b→d` with `d` `join:'any'`, `a`/`b`
+   > `retry:1` failing transiently once, both alarms due in ONE tick (the clock does not await
+   > `afterCommit`):
+   >
+   > ```text
+   > DISPATCHED: [... "a#1","b#1","d#0","d#0"]   ← d#0 dispatched TWICE, same attemptId
+   > RUN ROW: running        run.finished: absent  ← hangs forever
+   > ```
+   >
+   > A real LLM call billed twice, side effects twice; `attempts` monotonicity cannot save it,
+   > because each pump mints `d#0` from its OWN state so stale-rejection never sees a mismatch. It
+   > also hangs with only ONE retry plus any parallel node outliving the 30s `retryIntervalSeconds`
+   > floor — i.e. essentially every real LLM pipeline. Under `join:'all'` the successor is instead
+   > never dispatched at all.
+   >
+   > **The fix, and why it needs care.** Serializing alone is NOT sufficient: a second drive that
+   > waits and then pumps its own stale snapshot still hangs. It must (i) serialize per `runId`, and
+   > (ii) **re-project from the log inside the critical section**. Re-projection then loses the
+   > commands (`projectRunState` discards them), so the engine needs a pure
+   > `resume(state): ReduceResult` seam exposing the existing `onResumed` derivation WITHOUT
+   > appending a `run.resumed` (which is boot's durable fact and would be a lie here). Sketch:
+   > `afterCommit: () => drives.serialize(runId, () => { const s = project(load(runId));
+   > const r = engine.resume(s); return pump(deps, engine, r.state, r.commands); })`, with the
+   > launcher's `launch()` routed through the same per-app `drives` registry. The alarm's `fire()`
+   > must keep appending `node.retryDue` inside the clock's transaction (at-least-once demands the
+   > append and the settle be inseparable) — only the DRIVE moves.
+   >
+   > **B2 — a crash between the HOLD and the ARM strands the run permanently (REPRODUCED).** See the
+   > correction under §A.5: the double-arm premise is false, `armWakeup` is idempotent, and the
+   > `held` branch must re-arm when no row exists rather than report a hang as a wait.
+   >
+   > **Also outstanding (cheap, all real):** `scheduler/alarms.ts`'s header still says *"NOT WIRED
+   > INTO `buildApp` YET"* and describes this ticket as future work, and its at-least-once paragraph
+   > names `node.retryRequested` where the handler uses the deliberately-distinct `node.retryDue` and
+   > SUPPRESSES rather than re-appends · `index.ts`'s `alarmClock.stop()` refuses ARMS during
+   > shutdown, converting a normal transient failure into a dead run, and its comment's stated reason
+   > ("an alarm nothing will ever serve") is false because the row is durable and swept at boot ·
+   > `reconcile.test.ts`'s held test drives and boots with SEPARATE `stubAlarms()`, so no durable row
+   > ever exists and it passes identically in B2's broken world — it must seed through the real
+   > `armWakeup` and assert `listPendingWakeups` is non-empty · `web/.../runSummary.ts` drops both new
+   > events (a held node renders RED for the whole retry interval) while `types.ts`/`driver.ts`
+   > comments claim the monitor sees them — `node.retryRequested` already has the precedent case at
+   > `runSummary.ts:102` · the retry `discriminator` is fully redundant with `ref.attemptId`, so the
+   > collision it is credited with preventing cannot happen whatever its value (keep the field, fix
+   > the claim).
+   >
+   > **Lesson for the next fire: F2c's real dependency was never F2a or S1 — it was "exactly one
+   > drive per run".** The spec sequenced the EVENTS carefully and never asked who is allowed to
+   > pump. A second driver entry point is not a detail of the retry ticket; it is a foundational
+   > change to the run engine, and it deserved its own line in this build order.
    **Fix first, inside F2b** (carried from F2b's ticket row, and F2b is the ticket that makes it
    bite): `driver.ts`'s pump appends the **parsed** event (`appendEngineEvent`) but folds the **raw**
    one (`engine.reduce(state, event)`). Inert while nothing reads `kind` — but F2b's eligibility rule
