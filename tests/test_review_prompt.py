@@ -146,6 +146,15 @@ class TestBuildPayload(unittest.TestCase):
         # see the comment at the constant. Raised 5000 → 16000 → 32000, each time
         # after a real diff spent the whole budget on thinking and emitted none.
         self.assertEqual(p["max_tokens"], 32000)
+        # #504. Pinned because this is the knob the gate's quality rides on and
+        # it was the ONLY one unpinned: `max_tokens` had both a test and a
+        # rationale comment while `effort` sat at `medium` -- below the
+        # documented floor for intelligence-sensitive work -- asserted by
+        # nothing. A silent revert to `medium` must red the suite, not ship.
+        self.assertEqual(p["output_config"], {"effort": "xhigh"})
+        # Adaptive, not a fixed budget: `budget_tokens` is rejected outright on
+        # Sonnet 5, and depth is `effort`'s job.
+        self.assertEqual(p["thinking"], {"type": "adaptive"})
         self.assertEqual(p["system"][0]["cache_control"], {"type": "ephemeral"})
         self.assertIn(STUDIO_MARKER, p["system"][0]["text"])
 

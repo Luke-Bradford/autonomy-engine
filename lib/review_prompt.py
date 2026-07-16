@@ -346,7 +346,29 @@ def build_payload(scope, diff, pr_description, comments_raw):
         # budget available here.
         "max_tokens": 32000,
         "thinking": {"type": "adaptive"},
-        "output_config": {"effort": "medium"},
+        # `xhigh`, not `medium` (#504). Per the Claude API reference: xhigh is
+        # "the best setting for most coding and agentic use cases" on Sonnet 5
+        # and is Claude Code's own default, and a minimum of `high` is the
+        # documented floor for intelligence-sensitive work. A merge gate that
+        # reads a diff for defects is exactly that; `medium` was below the bar.
+        #
+        # Sonnet 5 "respects effort levels strictly, especially at the low end"
+        # -- which is the mechanism, not a footnote: `medium` was not
+        # underperforming by accident, it was doing what it was told. On PR #503
+        # (~300 lines) it returned a bare APPROVE in 27s with thinking_tokens=0
+        # and zero findings, while two thinking-tier reviews of that same diff
+        # found six real defects including a BLOCKING one.
+        #
+        # `thinking: adaptive` decides per REQUEST whether to think at all, so
+        # this is a floor on depth, not a guarantee of it -- effort raises the
+        # spend the model is willing to make, it does not force it. Do not read
+        # thinking_tokens=0 on some future run as this line having failed.
+        #
+        # Cost and latency go up. That is the trade, and it is the right
+        # direction for a gate an unattended loop merges on: a slow correct
+        # answer beats a fast rubber stamp. `max_tokens` is NOT raised to match
+        # -- see the constant above and #505 before touching it.
+        "output_config": {"effort": "xhigh"},
         "system": [
             {
                 "type": "text",
