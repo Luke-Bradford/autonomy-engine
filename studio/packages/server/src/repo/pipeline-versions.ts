@@ -2,12 +2,33 @@ import { asc, eq, max } from 'drizzle-orm';
 import {
   NewPipelineVersionSchema,
   PipelineVersionSchema,
+  validatePipelineDoc,
   type NewPipelineVersion,
   type PipelineVersion,
 } from '@autonomy-studio/shared';
 import { pipelineVersions } from '../db/schema.js';
 import { newId } from './ids.js';
 import type { Db } from './types.js';
+
+/**
+ * Thrown by `createPipelineVersion` for a doc that is schema-valid but fails
+ * the engine's STRUCTURAL/`${}` rules (#444). `issues` is the complete list
+ * (never just the first) so an author fixes the whole doc in one round-trip.
+ *
+ * Mapped to `400 invalid_pipeline_doc` by `errors.ts`. Defined here, in the
+ * repo layer, mirroring `PipelineHasRunsError`: the repo owns the rule, and
+ * `errors.ts` (which imports FROM repo) owns the HTTP mapping — importing the
+ * server-layer `BadRequestError` here would invert that dependency.
+ */
+export class InvalidPipelineDocError extends Error {
+  constructor(public readonly issues: string[]) {
+    super(
+      `Pipeline doc is invalid (${issues.length} issue${issues.length === 1 ? '' : 's'}): ` +
+        issues.join('; '),
+    );
+    this.name = 'InvalidPipelineDocError';
+  }
+}
 
 /**
  * PipelineVersion is IMMUTABLE once written (the ticket's headline
@@ -26,6 +47,22 @@ import type { Db } from './types.js';
  */
 export function createPipelineVersion(db: Db, input: NewPipelineVersion): PipelineVersion {
   const parsed = NewPipelineVersionSchema.parse(input);
+
+  // THE write gate (#444). Every path that stores a pipeline_versions row —
+  // the `POST /api/pipelines/:id/versions` route and the git-import path —
+  // funnels through this ONE function, so guarding here binds both BY
+  // CONSTRUCTION rather than asking each caller to remember. That matters
+  // more than usual here: a version is IMMUTABLE once written (DB triggers
+  // RAISE(ABORT) on update), so an invalid doc that gets in can never be
+  // repaired, only re-authored — and it reaches the pure reducer, where it
+  // deadlocks (#491), or did throw/spin until #487/#488/#493 neutralized it.
+  //
+  // WRITE-PATH ONLY, deliberately: reads never validate. Rows written before
+  // this gate existed are still unvalidated, so the reducer's own defences
+  // stay load-bearing (defence in depth) — this closes the door, it does not
+  // clean the house. #491's `stalled` backstop is the complementary answer.
+  const issues = validatePipelineDoc(parsed);
+  if (issues.length > 0) throw new InvalidPipelineDocError(issues);
 
   return db.transaction((tx) => {
     const maxRow = tx

@@ -155,9 +155,11 @@ const TERMINAL_RUN: ReadonlySet<RunLifecycleStatus> = new Set<RunLifecycleStatus
  * guarantee it once claimed to be. The old claim ("the reducer already
  * GUARANTEES termination … so a validated doc can never reach this") was false
  * three ways: `validateDoc` never required a container `maxRounds` (only a
- * back-edge `maxBounces`), it is advisory anyway (#444 — nothing is "validated"
- * on the way in), and this bounds the COMMAND-QUEUE pump, which is the wrong
- * layer for either shape that actually breaks liveness. A deadlocked doc drains
+ * back-edge `maxBounces`), it bound nothing on the way in (#444 gated the WRITE
+ * path afterwards, but rows written before that gate are still unvalidated, so
+ * a doc here is still not "validated"), and this bounds the COMMAND-QUEUE pump,
+ * which is the wrong layer for either shape that actually breaks liveness. A
+ * deadlocked doc drains
  * the queue and never comes back here; a spinning reducer never returns control
  * to this loop at all.
  *

@@ -25,7 +25,31 @@ function toDbNode(node: NodeExport): Node {
   return connectionId === null ? rest : { ...rest, connectionId };
 }
 
+/**
+ * ATOMIC (#459): a pipeline import is many writes — one `pipelines` row plus a
+ * version row per exported version — and any version can be REFUSED, either by
+ * `NewPipelineVersionSchema` or (as of #444) by the doc gate. Without a
+ * transaction the refusal lands mid-way, leaving an orphan pipeline and the
+ * versions that happened to precede it: an import that "failed" but still
+ * changed the database. #444 is what makes that likely rather than exotic, so
+ * the two ship together.
+ *
+ * `createPipelineVersion` opens its OWN `db.transaction`; better-sqlite3 drops
+ * a nested one to a `SAVEPOINT` and commits it with the outer scope, so passing
+ * the same `db` handle down composes and needs no tx threading. (Note this is
+ * NOT `scheduler/alarms.ts`'s idiom, which threads the `tx` handle into its
+ * callee; here the callee takes `db` and relies on better-sqlite3's native
+ * nesting instead. Both are safe — the rollback is verified by the test below.)
+ */
 function importPipelineEnvelope(
+  db: Db,
+  ownerId: string,
+  envelope: Extract<ExportEnvelope, { kind: 'pipeline' }>,
+): ImportResult {
+  return db.transaction(() => importPipelineEnvelopeInTx(db, ownerId, envelope));
+}
+
+function importPipelineEnvelopeInTx(
   db: Db,
   ownerId: string,
   envelope: Extract<ExportEnvelope, { kind: 'pipeline' }>,

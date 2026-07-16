@@ -471,10 +471,10 @@ describe('validateDoc — business branch edges are reported as inert', () => {
   // must round-trip one); `validateDoc` reports it, naming the ticket that
   // lifts it.
   //
-  // ADVISORY, not a gate: the only caller is the canvas, which renders the
-  // result as a badge and still permits Save, and the server never validates
-  // (#444). The reducer's diagnostic (edge-model.test.ts) is the real run-time
-  // observability — which is why F1 put one there rather than trust this.
+  // The write path refuses a doc this reports as of #444, but rows written
+  // before that gate were never validated. The reducer's diagnostic
+  // (edge-model.test.ts) is the real run-time observability for those — which is
+  // why F1 put one there rather than trust this half alone.
   it('reports a branch edge and names the ticket that lifts it', () => {
     const d = doc(
       [node('if_1'), node('t')],

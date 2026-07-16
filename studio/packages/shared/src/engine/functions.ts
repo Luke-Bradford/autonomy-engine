@@ -197,8 +197,9 @@ export const MAX_ARRAY_ELEMENTS_TOTAL = 100_000;
  *    `json` param takes any already-parsed value as-is off a run-now override.
  * Measured against the guarded walk: depth 5,000 x 50k invocations = 2.5e8
  * lookups (~1.1s); depth 20,000 = 1e9 lookups (~4.4s) — of blocked PURE reducer,
- * per field, from a doc `validateRefs` never saw (#444: it is advisory, and the
- * server never calls it, so a git import or a direct POST arrives unvalidated).
+ * per field, from a doc `validateRefs` never saw (#444: the write path refuses
+ * one now, but rows written before that gate arrived unvalidated — and a `json`
+ * param's VALUE comes off a run-now override the doc gate never sees at all).
  * That is the same hostile-doc threat model that justified `MAX_ARRAY_ELEMENTS`.
  *
  * 64 sits in the wide safe band between the two failure modes: the deepest path
@@ -547,8 +548,9 @@ export const FUNCTIONS: Readonly<Record<string, FnSpec>> = Object.freeze({
   // checker cannot know arg0 is `false`, so relaxing it would equally accept
   // `and(true, nodes.a.output.v)` — a doc that validates clean and then throws
   // at run with no escape hatch. Short-circuit's real value is defending the
-  // UNVALIDATED path (`validateRefs` is advisory; the server never calls it),
-  // plus parity with what an author expects `and`/`if` to mean.
+  // UNVALIDATED path (the write path refuses such a doc now — #444 — but rows
+  // written before that gate were never validated), plus parity with what an
+  // author expects `and`/`if` to mean.
   and: {
     call: 'special',
     args: ['boolean'],

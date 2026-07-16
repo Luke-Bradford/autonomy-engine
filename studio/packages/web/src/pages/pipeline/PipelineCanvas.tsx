@@ -11,7 +11,7 @@ import {
 import { createPipelineVersion, listPipelineVersions } from '../../api/pipelines';
 import { listConnections } from '../../api/connections';
 import { createCanvasStore } from './canvasStore';
-import { toVersionBody, validateCanvas } from './canvasDoc';
+import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
 import { FlowCanvas } from './FlowCanvas';
 
 /**
@@ -123,7 +123,11 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
           <button type="button" onClick={onBack}>
             ← Back to pipelines
           </button>
-          <button type="button" onClick={() => void onSave()} disabled={saving || !ready}>
+          <button
+            type="button"
+            onClick={() => void onSave()}
+            disabled={!canSave({ saving, ready, issues })}
+          >
             {saving ? 'Saving…' : 'Save version'}
           </button>
         </div>
@@ -134,8 +138,13 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
 
       {issues.length > 0 && (
         <div className="badge-list" role="status">
-          <strong>{issues.length} validation issue(s)</strong> — you can still save (versions are
-          immutable); a run will refuse an invalid graph.
+          {/* #444: this used to say "you can still save … a run will refuse an
+              invalid graph". Both halves were wrong — nothing refused a save,
+              and no run refused the doc either. The server now refuses it on
+              save, so the copy states what actually happens, and no more: the
+              graph on screen is an editable draft, so anything about immutable
+              stored versions would just read as "yours is unfixable". */}
+          <strong>{issues.length} validation issue(s)</strong> — fix these to save.
           <ul>
             {issues.map((msg) => (
               <li key={msg}>{msg}</li>

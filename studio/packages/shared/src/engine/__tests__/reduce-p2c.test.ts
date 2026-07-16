@@ -405,11 +405,10 @@ describe('containers — loop', () => {
   });
 });
 
-// #6 E2 — `exitWhen` mode enforcement at RUN time. `validateDoc` is advisory
-// only (its sole caller is the canvas badge, which does not block Save, and the
-// server never calls it — see params.ts), so the reducer is the ONLY place an
-// embedded exitWhen can actually be stopped. A git import or a direct POST
-// reaches the engine with no save-time check at all.
+// #6 E2 — `exitWhen` mode enforcement at RUN time. The write path refuses such a
+// doc as of #444, but rows written before that gate were never validated and are
+// immutable, so the reducer is the ONLY place an embedded exitWhen in an
+// ALREADY-STORED doc can be stopped.
 describe('containers — loop exitWhen interpolation mode (E2)', () => {
   it('a PADDED lone exitWhen exits the loop — the trim decides the mode (I1)', () => {
     // Pre-E2 this resolved to the STRING "true" and only exited by way of a
@@ -485,10 +484,10 @@ describe('containers — loop exitWhen interpolation mode (E2)', () => {
   // the promise the shipped code carried ("#6 E6 removes this line in the same
   // ticket that adds the static boolean-condition check").
   //
-  // The save-time half alone cannot close this: `validateDoc` is ADVISORY (its
-  // only caller is the canvas badge; the server never calls it — #444), so a git
-  // import or a direct POST reaches the reducer unchecked. Same both-halves rule
-  // E2 set for the MODE check, for the same reason.
+  // The save-time half alone cannot close this: the write path refuses such a
+  // doc now (#444), but rows written before that gate were never validated and
+  // still reach the reducer. Same both-halves rule E2 set for the MODE check,
+  // for the same reason.
   it('a string-typed "true" output FAILS LOUDLY — the E6 coercion is removed', () => {
     // BREAKING, deliberate. A `string`-typed output carrying "true" is common
     // from an LLM/CLI activity, and the coercion made it silently work — so the
