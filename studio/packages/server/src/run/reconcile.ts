@@ -415,10 +415,17 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
     }
 
     // `finishRun` is the driver's OWN command (no executor); `dispatchNode`/
-    // `startChild` need one. A run that only needs its dropped `finishRun`
-    // reconstructed can be FINALIZED with no executor; one with live work to
-    // re-run needs the executor — without it we DEFER, appending nothing we
-    // cannot follow through on.
+    // `startChild` need one. A run whose only command is a `finishRun` can be
+    // FINALIZED with no executor; one with live work to re-run needs the
+    // executor — without it we DEFER, appending nothing we cannot follow
+    // through on.
+    //
+    // TWO shapes reach the finalize path, not one: a run whose `finishRun` was
+    // DROPPED by a crash (the historical case), and — since #491 — a run whose
+    // doc STALLS, where `settle` derives `finishRun{failure,'stalled'}` afresh.
+    // The second is why this bucket matters beyond crash recovery: a run wedged
+    // by a pre-#444 doc is released at the next boot instead of holding its
+    // concurrency slot until an operator intervenes.
     const needsExecutor = commands.some((c) => c.type !== 'finishRun');
     if (needsExecutor && deps.executor === undefined) {
       report.deferred.push(run.id);

@@ -80,7 +80,7 @@ describe('validateCanvas', () => {
     expect(issues.length).toBeGreaterThan(0);
   });
 
-  it('surfaces a validateDoc error — a forward cycle deadlocks the walk', () => {
+  it('surfaces a validateDoc error — a forward cycle is refused', () => {
     const nodes = [node('a'), node('b')];
     const edges = [edge('e1', 'a', 'b'), edge('e2', 'b', 'a')];
     const issues = validateCanvas(nodes, edges, [], []);

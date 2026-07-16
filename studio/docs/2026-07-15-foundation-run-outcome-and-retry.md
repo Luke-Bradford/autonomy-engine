@@ -394,6 +394,46 @@ verdict genuinely depends on draining — `:564` is green precisely *because* th
 enough for `eh` to run — so the spend cannot be optimised away without changing the answer. That is a
 real, un-obvious cost of the decision, and it is accepted knowingly rather than discovered later.
 
+### B.4 The other exit from `settle` — the `stalled` backstop (#491, BUILT after F1b)
+
+§B defines what `settle` does when `allTopLevelTerminal` **holds**. It said nothing about the other
+branch, and that silence was a real gap: the walk could reach its fixpoint with the run non-terminal
+and simply **return no command**, leaving the run `running` forever, holding a concurrency slot, with
+nothing in the log saying why. A forward cycle is the canonical way in (probed on `origin/main`:
+`{a→b, b→a}` ⇒ `commands: []`, both nodes `pending`, **no diagnostic**).
+
+**The rule.** At the fixpoint, if the run is not all-top-level-terminal AND no node anywhere is in
+`ready` / `dispatched` / `waiting` / `retry_pending`, `settle` emits
+`finishRun{failure, reason:'stalled'}` — a DURABLE terminal — plus a diagnostic naming the
+never-terminal entities (deduped and capped, truncation stated).
+
+**What ships, stated exactly.** The **liveness** half is closed: the run terminalizes instead of
+wedging, and `reason:'stalled'` is durable in `run.finished`. The **observability** half is NOT:
+nothing in production reads `diagnostics` today, so the entity list is currently test-only. See
+§C.5's amendment — that gap is systemic (every `docDefects` report shares it) and is filed
+separately, not fixed here. Do not read this section as promising the operator a named cycle.
+
+Four things about it are load-bearing and were each probed rather than argued:
+
+1. **`else if`, not `if`.** A forward cycle does **not** imply a stall — §P4's skip-propagated cycle
+   terminalizes every node without running it and legitimately **succeeds**. A bare `if` would append
+   a contradictory second terminal after that success, which the driver's pump swallows silently.
+2. **The live set is not `LIVE_NODE`.** It must include `waiting` and `retry_pending`, which
+   `LIVE_NODE` deliberately excludes (§A.4). Getting this wrong tears down every **retrying** run —
+   the exact opposite of what §A landed. It is an exhaustive `switch`, so a 9th `NodeRunStatus` is a
+   compile error (verified: TS2366) rather than a silent default.
+3. **Conservative on purpose.** Any node awaiting an event vetoes the verdict, so the stall is
+   delayed until the last in-flight node resolves. A false negative is the pre-#491 hang; a false
+   positive tears down a healthy run. The bias is toward the former, deliberately.
+4. **Scope: readiness deadlock only.** A crash between §A.5's HOLD becoming durable and its alarm
+   being armed leaves a `retry_pending` node with no alarm. The backstop does **not** fire there (a
+   pure reducer cannot read the alarm table to know the row is missing); that is `reconcile.ts`'s
+   `recoverHeld`, at boot, by design.
+
+This is **containment, not permission**: #444's write gate still refuses a cyclic doc, and the
+reducer's shape-specific guards (#487/#488/#493) all stay load-bearing. A stalled run is still a run
+the author never wanted — it now fails honestly instead of hanging.
+
 ---
 
 ## §C — (c) "handled ⇒ success" **[SETTLED — option 3, probed]**
@@ -556,6 +596,23 @@ only ever reached once `allTopLevelTerminal` holds.
    `a` had no handler. Accepted: the alternative (a richer reason naming both leaf and blamed node)
    moves 5 further tests for a diagnostic nicety, and is a cheap follow-up if operators ask.
    `capped`/`invalid_event` are unaffected.
+
+   **AMENDED by #491 (build-time):** the vocabulary gained a fifth member, `stalled` (§B.4) — the
+   reason a run that can never finish is terminalized with. It does **not** disturb this decision:
+   `node_failed:<id>` still names the blamed node and still means exactly what it meant. `stalled`
+   deliberately interpolates **no** ids: a blamed node is ONE id, whereas a stalled run's stuck set
+   is unbounded in the doc's size, and capping it honestly (never manufacturing "these were all of
+   them") is the shared-truncation problem #496 already owns. So the reason stays a constant, as
+   `capped` already does, and the ids go to the diagnostic.
+
+   **State the cost plainly rather than implying a reach this has not got.** Nothing in production
+   reads `diagnostics` today — every non-test `reduce` caller takes `.state`/`.commands` only
+   (verified across `driver.ts`/`reconcile.ts`/`retry-alarm.ts`). So today an operator sees
+   `failure{reason:'stalled'}` and CANNOT learn which entities were stuck. That is accepted for now
+   because the durable reason already carries the actionable fact (this run can never finish, and it
+   is a doc defect), and because the gap is systemic rather than `stalled`'s — every `docDefects`
+   report is equally unobservable. It is filed as its own ticket. If that sink never lands, revisit
+   this decision rather than leaving the ids written to nowhere.
 
 ### C.6 Reuse — the machinery already exists (do not add a helper)
 
