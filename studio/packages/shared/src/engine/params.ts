@@ -958,16 +958,22 @@ export function validateDoc(
   // against the SAME owner this validator names — the divergence #492 closed, where
   // the reducer silently took the LAST owner instead. Existence and loop/stage
   // config stay here.
-  const { owner: childOwner, duplicates: childDuplicates } = containerMembership(containers);
-  for (const { child, first, container } of childDuplicates) {
-    errors.push(
-      `container '${container}': child '${child}' already belongs to container '${first}' (children must be disjoint)`,
-    );
-  }
+  const { owner: childOwner } = containerMembership(containers);
   for (const c of containers) {
     for (const ch of c.children) {
       if (!nodeIdSet.has(ch)) {
         errors.push(`container '${c.id}': child '${ch}' is not a node in this pipeline`);
+      }
+      // Disjointness read from the shared owner map (FIRST-wins): a child whose
+      // resolved owner is some OTHER container is a duplicate here. Emitted per
+      // occurrence, interleaved with the existence error, to keep this validator's
+      // error ARRAY — not just its message text — byte-identical to the pre-#492
+      // pass this replaced.
+      const own = childOwner.get(ch);
+      if (own !== undefined && own !== c.id) {
+        errors.push(
+          `container '${c.id}': child '${ch}' already belongs to container '${own}' (children must be disjoint)`,
+        );
       }
     }
     if (c.kind === 'loop' && c.exitWhen === undefined) {
