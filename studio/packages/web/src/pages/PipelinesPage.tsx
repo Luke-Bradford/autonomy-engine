@@ -153,7 +153,11 @@ export function PipelinesPage() {
         </table>
       )}
 
-      <form className="connection-form" aria-label="New pipeline" onSubmit={onCreate}>
+      <form
+        className="connection-form"
+        aria-label="New pipeline"
+        onSubmit={(e) => void onCreate(e)}
+      >
         <h3>New pipeline</h3>
         <label>
           Name
