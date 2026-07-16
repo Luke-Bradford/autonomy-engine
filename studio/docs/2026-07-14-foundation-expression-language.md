@@ -484,12 +484,16 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
       (say 16) would be a false-reject with NO workaround (a path cannot be split across calls).
     - Enforced at BOTH halves (save + run) per E2's rule, since `validateRefs` is advisory.
     - **SCOPE — it bounds the per-REFERENCE path axis ONLY** (`${a.b.c…}`). Expression NESTING
-      (`${add(1,add(1,…))}`) is an orthogonal axis, is bounded by no cap, and overflows the stack at
-      ~2000 levels — where `validateRefs` throws a RAW `RangeError` despite being a pure validator
-      that contracts to RETURN errors. PRE-EXISTING (E1's recursive parser is the first wall, and it
-      recurses to build the AST before any checker sees it), so E7 adds a door to a room that was
-      already open, not the room: **filed as #453**, with a `MAX_EXPR_DEPTH` in `parseExpr` as the
-      suggested fix. The reducer contains the run-time half (`prepInput`'s catch → `prepFailure`).
+      (`${add(1,add(1,…))}`) is an orthogonal axis with its OWN cap, `MAX_EXPR_DEPTH` — **SHIPPED
+      2026-07-16 (#453)**. It overflowed the stack at ~2000 levels, where `validateRefs` threw a RAW
+      `RangeError` despite being a pure validator that contracts to RETURN errors. PRE-EXISTING (E1's
+      recursive parser builds the AST before any checker sees it), so E7 added a door to a room that
+      was already open, not the room. Fix: `MAX_EXPR_DEPTH = 64` (the fourth resource cap, co-located
+      in `expr.ts` beside its sole enforcer `parseExpr`) refuses a body nested past the cap at PARSE
+      time, so the checker AND evaluator that WALK the AST are bounded for free — one guard covers
+      BOTH halves because both funnel through `parseExpr`. 64 is picked the same way E7 picked its
+      value (a human nests a handful; overflow is ~2000). The reducer contains the run-time half
+      (`prepInput`'s catch → `prepFailure`).
   - **`max resolved-value size` stays OUT — E7 is the WRONG OWNER.** Deep addressing only ever makes
     a value SMALLER (it SELECTS a sub-value); the largest resolved value comes from a NON-deep ref
     (`${nodes.http.output.body}`, live since P2a). It remains a general concern, not this ticket's.

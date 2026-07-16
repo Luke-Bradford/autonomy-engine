@@ -80,12 +80,63 @@ function isQuote(ch: string | undefined): boolean {
 // --- the parser -------------------------------------------------------------
 
 /**
+ * Cap on expression NESTING depth — `${add(1, add(1, …))}` and `${a[a[a…]]}`.
+ *
+ * The FOURTH of spec #6's "Resource limits" caps (the other three —
+ * `MAX_ARRAY_ELEMENTS`, `MAX_ARRAY_ELEMENTS_TOTAL`, `MAX_PATH_DEPTH` — live in
+ * `functions.ts`). It lives HERE because `parseExpr` is its SOLE enforcer: the
+ * grammar recurses to BUILD the AST, and the checker (`checkExprStatic`) and
+ * evaluator (`evalExpr`) then WALK that AST — so bounding the AST's depth at
+ * build time bounds every downstream walk for free. (It is co-located with its
+ * enforcer rather than beside the other three, which avoids adding a new
+ * runtime dependency edge from the grammar onto the catalog.)
+ *
+ * It is NOT decorative. `validateRefs` is a PURE static validator whose contract
+ * is to RETURN an error list, but on a ~2000-deep body its AST walk overflowed
+ * the native stack and it threw a raw `RangeError` — a contract violation its
+ * caller (the canvas badge) does not expect. Since #444 made `validateRefs`
+ * advisory (the server never calls it), an unvalidated doc reaches the engine
+ * from a git import or a direct POST — the same hostile-doc threat model that
+ * justified `MAX_ARRAY_ELEMENTS` and `MAX_PATH_DEPTH`. `MAX_PATH_DEPTH` bounds a
+ * per-reference PATH (`${a.b.c…}`); expression NESTING is an ORTHOGONAL axis it
+ * does not cover (#453).
+ *
+ * 64 mirrors `MAX_PATH_DEPTH`'s wide safe band: the deepest expression spec #6
+ * itself writes nests a handful of calls, while the stack overflows near ~2000 —
+ * so it false-rejects nothing a human authors while refusing the pathological
+ * case deterministically and early. Pure + deterministic (it reads the AST's
+ * SHAPE, never data), so a replay from a different call depth cannot diverge —
+ * the "pure + replay-safe" invariant spec #6 line 20 leans on.
+ */
+export const MAX_EXPR_DEPTH = 64;
+
+/**
  * Parse ONE expression (a `${...}` body, a function argument, or an index) —
  * the single entry point for the whole grammar. Whitespace inside the braces is
- * insignificant. Throws `SubstituteError` on any malformed body; a malformed
- * expression is NEVER silently reinterpreted as a literal or a ref.
+ * insignificant. Throws `SubstituteError` on any malformed body (including one
+ * nested past `MAX_EXPR_DEPTH`); a malformed expression is NEVER silently
+ * reinterpreted as a literal or a ref.
  */
 export function parseExpr(bodyRaw: string): Expr {
+  return parseExprAt(bodyRaw, 0);
+}
+
+/**
+ * The depth-tracking recursion behind {@link parseExpr}. The public entry seeds
+ * `depth` at 0 and every recursive edge — a call's arguments and a ref's index
+ * bodies — descends with `depth + 1`, so the guard here fires ~65 frames deep,
+ * far below the native overflow (~2000). Keeping `depth` on this PRIVATE helper
+ * (not a defaulted public parameter) means a callback that spreads extra args —
+ * `splitArgs(...).map(parseExpr)` used to pass the array INDEX as a phantom
+ * second argument — cannot silently corrupt the counter.
+ */
+function parseExprAt(bodyRaw: string, depth: number): Expr {
+  if (depth > MAX_EXPR_DEPTH) {
+    throw new SubstituteError(
+      `malformed expression: nesting too deep (over ${MAX_EXPR_DEPTH} levels)`,
+    );
+  }
+
   const body = bodyRaw.trim();
   if (body === '') throw new SubstituteError('malformed expression: empty expression');
 
@@ -96,7 +147,7 @@ export function parseExpr(bodyRaw: string): Expr {
   const m = CALL_RE.exec(body);
   if (m) {
     const name = m[1] as string;
-    const args = splitArgs(m[2] as string).map(parseExpr);
+    const args = splitArgs(m[2] as string).map((arg) => parseExprAt(arg, depth + 1));
     return { kind: 'call', name, args };
   }
 
@@ -114,7 +165,7 @@ export function parseExpr(bodyRaw: string): Expr {
     }
     return { kind: 'num', value };
   }
-  return parseRef(body);
+  return parseRefAt(body, depth);
 }
 
 /**
@@ -151,8 +202,13 @@ function parseStringLiteral(body: string): Expr {
  * `.`, `[` and `]` are consequently RESERVED in a field name: a node whose id
  * literally contains brackets (`arr[0]`) was addressable before `[]` became
  * grammar and is now read as an index. Accepted cost of ADF-parity addressing.
+ *
+ * `depth` is the caller's recursion depth: an index body is itself an expression
+ * parsed one level deeper, so it descends with `depth + 1` and is bounded by the
+ * same `MAX_EXPR_DEPTH` as call nesting (`${a[a[a…]]}` is the ref-path analogue
+ * of `${add(1, add(1, …))}`).
  */
-function parseRef(source: string): Expr {
+function parseRefAt(source: string, depth: number): Expr {
   const segments: ExprSegment[] = [];
   let i = 0;
 
@@ -183,7 +239,7 @@ function parseRef(source: string): Expr {
       if (inner.trim() === '') {
         throw new SubstituteError(`malformed expression: empty index '[]' in '${source}'`);
       }
-      segments.push({ kind: 'index', expr: parseExpr(inner) });
+      segments.push({ kind: 'index', expr: parseExprAt(inner, depth + 1) });
       i = close + 1;
     } else {
       // A stray `]` — `[` is consumed with its match, so this can only be junk.

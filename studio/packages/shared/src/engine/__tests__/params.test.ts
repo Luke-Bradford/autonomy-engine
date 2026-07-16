@@ -556,6 +556,47 @@ describe('substitute — MAX_PATH_DEPTH bounds the walk (#6 E7)', () => {
   });
 });
 
+describe('MAX_EXPR_DEPTH bounds expression NESTING at BOTH halves (#6 #453)', () => {
+  // A deeply-NESTED expression (`${add(1,add(1,…))}`) overflowed the stack when
+  // the checker/evaluator WALKED its AST. `validateRefs` — a PURE validator
+  // contracted to RETURN an error list — threw a raw `RangeError` (its caller,
+  // the canvas badge, does not expect a throw). `MAX_EXPR_DEPTH` in `parseExpr`
+  // refuses the deep AST before it is built, so BOTH halves are covered by the
+  // one change: the SAVE half (`validateRefs`→`parseExprSafe`, which collects
+  // the error) and the RUN half (`substitute`, which throws a clean error a
+  // caller's node-failure catch handles).
+  function deepExpr(k: number): string {
+    let s = '1';
+    for (let i = 0; i < k; i += 1) s = `add(0,${s})`;
+    return `\${${s}}`;
+  }
+
+  it('validateRefs REPORTS a collected error — it does NOT throw a raw RangeError', () => {
+    let thrown: unknown;
+    let errors: string[] = [];
+    try {
+      errors = validateRefs(doc([node('n', { prompt: deepExpr(2000) })], []));
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeUndefined();
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.join('\n')).not.toMatch(/Maximum call stack/i);
+  });
+
+  it('substitute throws a clean depth error, not a raw stack overflow', () => {
+    let thrown: unknown;
+    try {
+      substitute(deepExpr(2000), ctx());
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(SubstituteError);
+    expect((thrown as Error).message).not.toMatch(/Maximum call stack/i);
+    expect((thrown as Error).message).toMatch(/deep|depth|MAX_EXPR_DEPTH|nest/i);
+  });
+});
+
 describe('validateRefs — a malformed expression is reported ONCE (#6 E1)', () => {
   // E1 made `parseExpr` throw on bodies that previously degraded to a ref, so
   // the parse-failure fallback is now hit routinely. It must not also emit a
