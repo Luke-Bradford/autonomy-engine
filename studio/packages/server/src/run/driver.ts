@@ -179,6 +179,16 @@ const TERMINAL_RUN: ReadonlySet<RunLifecycleStatus> = new Set<RunLifecycleStatus
  */
 const MAX_DRIVER_STEPS = 1_000_000;
 
+/**
+ * Structural fold cap for `driveFinishRun`'s reduce-first loop. A rejected
+ * `success` yields a `failure` replacement and a `failure` is ALWAYS accepted
+ * (the impossibility guard fires only for `success`), so convergence takes ≤2
+ * folds — this is a backstop, never a real limit. It exists so a future reducer
+ * that keeps rejecting the driver's own finish cannot spin under the per-run
+ * lock: exceeding it throws (→ `terminalizeInterrupted`), never hangs.
+ */
+const MAX_FINISH_FOLDS = 8;
+
 /** Build the pure engine for a run from its immutable pipeline version's graph. */
 export function buildEngine(pv: PipelineVersion): Engine {
   return createEngine({ nodes: pv.nodes, edges: pv.edges, containers: pv.containers });
@@ -338,13 +348,9 @@ function driveFinishRun(
 ): RunState {
   let pending: Extract<EngineCommand, { type: 'finishRun' }> = command;
   const carried: string[] = [];
-  // A rejected `success` yields a `failure` replacement, and a `failure` is
-  // ALWAYS accepted (the impossibility guard fires only for `success`), so this
-  // converges in ≤2 folds. The cap is a structural termination guarantee, not a
-  // real limit: a future reducer that keeps rejecting without converging would
-  // otherwise spin here holding the per-run lock. Exceeding it throws (→ the
-  // caller's `terminalizeInterrupted`), the same fail-safe as no-replacement.
-  const MAX_FINISH_FOLDS = 8;
+  // `MAX_FINISH_FOLDS` (module scope) is the structural termination guarantee —
+  // convergence takes ≤2 folds in practice; the cap only stops a future reducer
+  // that never converges from spinning under the per-run lock.
   for (let attempt = 1; ; attempt += 1) {
     const event: EngineEvent = {
       type: 'run.finished',
