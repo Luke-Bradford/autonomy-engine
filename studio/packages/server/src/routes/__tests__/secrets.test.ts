@@ -95,6 +95,28 @@ describe('secrets routes (item 7 / S1 — the standalone secret SOURCE)', () => 
     }
   });
 
+  it('a case-variant of an existing name is a 409 — uniqueness is case-insensitive (#533)', async () => {
+    const app2 = await buildTestApp();
+    try {
+      const first = await app2.inject({
+        method: 'POST',
+        url: '/api/secrets',
+        payload: { name: 'stripe-key', secret: 'p1' },
+      });
+      expect(first.statusCode).toBe(201);
+      // Differs from the stored name only in ASCII case — the NOCASE unique
+      // index refuses it, so the owner cannot end up with two confusable rows.
+      const second = await app2.inject({
+        method: 'POST',
+        url: '/api/secrets',
+        payload: { name: 'Stripe-Key', secret: 'p2' },
+      });
+      expect(second.statusCode).toBe(409);
+    } finally {
+      await app2.close();
+    }
+  });
+
   it('an empty name / missing secret is a 400 at the boundary', async () => {
     const app2 = await buildTestApp();
     try {

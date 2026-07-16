@@ -1,4 +1,4 @@
-import { and, eq, isNotNull } from 'drizzle-orm';
+import { and, eq, isNotNull, sql } from 'drizzle-orm';
 import {
   NewSecretSchema,
   SecretSchema,
@@ -69,12 +69,19 @@ export function listNamedSecrets(db: Db, ownerId: string): Secret[] {
  * cannot match one). `ownerId` is required (non-null): a null-owner run has no
  * owner namespace to resolve within, and the executor short-circuits before
  * calling this. Mirrors `listNamedSecrets`' owner scope.
+ *
+ * The name comparison collates `NOCASE` (#533): `{ "$secret": "Stripe-Key" }`
+ * resolves the secret stored as `"stripe-key"`. This MATCHES the unique index
+ * (`schema.ts` `secrets_owner_name_idx`, also `name COLLATE NOCASE`) — the index
+ * guarantees at most one case-variant row per owner, so this `.get()` is
+ * deterministic (an owner cannot have two rows a fold would both match).
+ * `ownerId` compares BINARY (exact) — it is an opaque machine id, not folded.
  */
 export function getSecretByName(db: Db, name: string, ownerId: string): Secret | null {
   const row = db
     .select()
     .from(secrets)
-    .where(and(eq(secrets.ownerId, ownerId), eq(secrets.name, name)))
+    .where(and(eq(secrets.ownerId, ownerId), sql`${secrets.name} = ${name} COLLATE NOCASE`))
     .get();
   return row ? SecretSchema.parse(row) : null;
 }
