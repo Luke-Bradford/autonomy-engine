@@ -437,15 +437,22 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     const events = await limit(() =>
       runAdapter(adapter, ctx, secret, secretFields, controller, runId, nodeId, attemptId),
     );
-    // F4 output/error redaction (item 7 / S3), the executor CHOKE POINT: it holds
-    // every plaintext this node touched (the connection `secret` + the resolved
-    // config-sink values), so it is the last place to guarantee none reaches a
-    // durable event — independent of whether an adapter remembered to redact its
-    // own output/error. Runs ONLY when this node resolved a config sink (the
-    // list is otherwise empty), so it is a strict no-op — never walked — for
-    // every activity today; the connection `secret` is folded into the same pass
-    // then, so there is no asymmetry where one secret is scrubbed and the other
-    // is not.
+    // F4 output/error redaction (item 7 / S3): an ADDITIVE executor-level choke
+    // point that switches ON only for a node that resolved a config-sink secret
+    // — the NEW plaintext class S3 introduces, which no adapter is guaranteed to
+    // redact. When it fires it scrubs EVERY plaintext this node holds (the
+    // config-sink values AND the connection `secret`, folded into one pass), so
+    // within a config-sink node there is no split where one is scrubbed and the
+    // other leaks.
+    //
+    // It is deliberately GATED on a resolved config sink, NOT run for every node:
+    // a connection-only node (every activity until S4) keeps exactly its prior
+    // protection — the adapter redacts its own outgoing connection secret
+    // (`connectors/http.ts`) — so existing activities pay ZERO cost and see no
+    // behaviour change (no new deep-walk over their outputs). The executor layer
+    // exists to cover the config-sink plaintext the adapter contract does not; it
+    // does not replace the adapter's own connection-secret redaction, it stacks
+    // on top of it when a sink is present.
     const plaintexts =
       Object.keys(secretFields).length > 0 ? [secret, ...Object.values(secretFields)] : [];
     for (const ev of events)
