@@ -2,6 +2,7 @@ import { ZodError } from 'zod';
 import type { FastifyInstance } from 'fastify';
 import { ImportError } from '@autonomy-studio/shared';
 import { InvalidPipelineDocError, PipelineHasRunsError } from './repo/index.js';
+import { ISSUE_LIST_CAP } from './limits.js';
 
 /**
  * Thrown by a route handler when the requested resource does not exist OR
@@ -50,6 +51,26 @@ function hasNumericStatusCode(err: unknown): err is Error & { statusCode: number
 }
 
 /**
+ * Caps the response `issues[]` at `ISSUE_LIST_CAP` (both `issues[]`-bearing
+ * branches map an array whose length is proportional to the doc the caller
+ * POSTed, so an uncapped body is O(doc)), reporting truncation HONESTLY: when
+ * the list fits, `truncated`/`totalIssues` are omitted (their absence IS the
+ * signal the list is complete — `issues.length` is the true total, so nothing
+ * is hidden); when it overflows, both are present so the client knows a tail
+ * was dropped. An absent fact must never be manufactured as "that was all of
+ * them" — the F13a/#473 rule, mirrored from `repo/run-diagnostics.ts`'s cap
+ * marker (#496).
+ */
+function capIssues<T>(issues: T[]): {
+  issues: T[];
+  truncated?: true;
+  totalIssues?: number;
+} {
+  if (issues.length <= ISSUE_LIST_CAP) return { issues };
+  return { issues: issues.slice(0, ISSUE_LIST_CAP), truncated: true, totalIssues: issues.length };
+}
+
+/**
  * Registers the ONE structured error handler for the whole app. Every branch
  * returns a small, fixed-shape body; nothing here ever forwards a raw
  * exception message, stack trace, or internal path to the client. The strings
@@ -71,10 +92,12 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     if (error instanceof ZodError) {
       reply.status(400).send({
         error: 'validation_error',
-        issues: error.issues.map((issue) => ({
-          path: issue.path.join('.'),
-          message: issue.message,
-        })),
+        ...capIssues(
+          error.issues.map((issue) => ({
+            path: issue.path.join('.'),
+            message: issue.message,
+          })),
+        ),
       });
       return;
     }
@@ -124,8 +147,11 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     if (error instanceof InvalidPipelineDocError) {
       reply.status(400).send({
         error: 'invalid_pipeline_doc',
+        // `error.message` is already bounded at its source (the error class
+        // names the first N issues then states the remainder), so capping only
+        // `issues[]` here would not leave the body O(doc) via the message.
         message: error.message,
-        issues: error.issues.map((message) => ({ message })),
+        ...capIssues(error.issues.map((message) => ({ message }))),
       });
       return;
     }

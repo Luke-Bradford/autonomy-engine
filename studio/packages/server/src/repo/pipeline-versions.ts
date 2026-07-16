@@ -7,6 +7,7 @@ import {
   type PipelineVersion,
 } from '@autonomy-studio/shared';
 import { pipelineVersions } from '../db/schema.js';
+import { ISSUE_LIST_CAP } from '../limits.js';
 import { newId } from './ids.js';
 import type { Db } from './types.js';
 
@@ -24,10 +25,27 @@ export class InvalidPipelineDocError extends Error {
   constructor(public readonly issues: string[]) {
     super(
       `Pipeline doc is invalid (${issues.length} issue${issues.length === 1 ? '' : 's'}): ` +
-        issues.join('; '),
+        summarizeIssues(issues),
     );
     this.name = 'InvalidPipelineDocError';
   }
+}
+
+/**
+ * Bounds the human `message` (the client renders THIS, not `issues[]`, for this
+ * error — see `errors.ts` / `web/src/api/client.ts`): it names the first
+ * `ISSUE_LIST_CAP` issues, then states the remainder ("…and N more") instead of
+ * joining an O(doc) tail. `this.issues` always carries the COMPLETE list — only
+ * the summary string is bounded. Same `ISSUE_LIST_CAP` the response `issues[]`
+ * array uses (`limits.ts`): both are representations of the SAME list and
+ * neither may re-emit it whole. Truncation is STATED, never a silent tail drop
+ * (the F13a/#473 rule; #496); mirrors the "…and N more" idiom in
+ * `shared/src/engine/reduce.ts`'s stall diagnostic.
+ */
+function summarizeIssues(issues: string[]): string {
+  const named = issues.slice(0, ISSUE_LIST_CAP).join('; ');
+  const rest = issues.length - ISSUE_LIST_CAP;
+  return rest > 0 ? `${named}; …and ${rest} more` : named;
 }
 
 /**
