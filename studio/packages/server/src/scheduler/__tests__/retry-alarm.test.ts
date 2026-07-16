@@ -12,7 +12,7 @@ import { createRun, getRun } from '../../repo/runs.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { listPendingWakeups } from '../../repo/scheduled-wakeups.js';
 import type { Db } from '../../repo/types.js';
-import { startRun, type DocResolver, type DriverDeps } from '../../run/driver.js';
+import { buildEngine, startRun, type DocResolver, type DriverDeps } from '../../run/driver.js';
 import { appendEngineEvent, loadEngineEvents } from '../../run/events.js';
 import {
   makeStubExecutor,
@@ -218,6 +218,36 @@ describe("F2c — arming a retry (the driver half of D4's split)", () => {
   });
 });
 
+describe('F2c — the event-sourcing invariant survives a retry', () => {
+  it("a RETRIED run's log replays to the identical final state", async () => {
+    // The invariant the whole engine rests on (`state = fold(run_events)`), across
+    // the event sequence F2b/F2c introduces. It is what proves the new `retries`
+    // counter folds deterministically from the log rather than being live-only
+    // bookkeeping, and that `node.retryScheduled`'s no-op fold is genuinely inert
+    // on replay. The existing pin in `driver.test.ts` only covers a plain chain.
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a', { retry: 2, retryIntervalSeconds: 30 })]);
+    const run = seedRun(db, pvId);
+    const plan = flippablePlan('a');
+    let t = NOW;
+    const { deps, clock, resolveDoc } = harness(db, plan.opts, () => t);
+
+    await startRun(deps, run);
+    t = NOW + 30_000;
+    plan.succeedFromNowOn();
+    clock.tick();
+    await settle();
+
+    const live = getRunState(db, deps, run.id);
+    const replayed = buildEngine(resolveDoc(pvId)).projectRunState(loadEngineEvents(db, run.id));
+
+    expect(replayed).toEqual(live);
+    expect(replayed.status).toBe('success');
+    // The retry really happened — otherwise this asserts nothing interesting.
+    expect(replayed.nodes.a).toMatchObject({ status: 'success', retries: 1, attempts: 2 });
+  });
+});
+
 describe('F2c — the alarm fires: the retry loop closes', () => {
   it('re-dispatches the held node and finishes the run GREEN (the whole point)', async () => {
     const { db } = freshDb();
@@ -229,7 +259,7 @@ describe('F2c — the alarm fires: the retry loop closes', () => {
     const { deps, clock } = harness(db, plan.opts, () => t);
 
     await startRun(deps, run);
-    expect((await getRunState(db, deps, run.id)).nodes.a!.status).toBe('retry_pending');
+    expect(getRunState(db, deps, run.id).nodes.a!.status).toBe('retry_pending');
 
     // Not due yet: the clock must not fire it early.
     clock.tick();
@@ -242,7 +272,7 @@ describe('F2c — the alarm fires: the retry loop closes', () => {
     clock.tick();
     await settle();
 
-    const state = await getRunState(db, deps, run.id);
+    const state = getRunState(db, deps, run.id);
     expect(state.nodes.a!.status).toBe('success');
     expect(state.status).toBe('success');
     expect(getRun(db, run.id)!.status).toBe('success');
@@ -274,7 +304,7 @@ describe('F2c — the alarm fires: the retry loop closes', () => {
     clock.tick();
     await settle();
 
-    const state = await getRunState(db, deps, run.id);
+    const state = getRunState(db, deps, run.id);
     expect(state.nodes.a!.status).toBe('failure');
     expect(state.status).toBe('failure');
     expect(getRun(db, run.id)!.status).toBe('failure');
@@ -372,9 +402,8 @@ describe('F2c — the alarm fires: the retry loop closes', () => {
 });
 
 /** Project a run's CURRENT state from its durable log (never a cached handle). */
-async function getRunState(db: Db, deps: DriverDeps, runId: string) {
+function getRunState(db: Db, deps: DriverDeps, runId: string) {
   const run = getRun(db, runId)!;
-  const { buildEngine } = await import('../../run/driver.js');
   const engine = buildEngine(deps.resolveDoc(run.pipelineVersionId));
   return engine.projectRunState(loadEngineEvents(db, runId));
 }
