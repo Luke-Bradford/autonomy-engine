@@ -462,3 +462,20 @@ defended only as "defensive" — those are exactly the lines a future reader
 deletes, and exactly the lines no happy-path test covers. Corollary: a sentinel /
 allowlist / re-throw that discriminates two error classes needs a test **per
 class**, or the discrimination is untested even when the happy path is not.
+
+**(c) The third instance — the rule applies to the claim you just CORRECTED.**
+The same #479 fire produced one more, *after* this entry was written: the review
+bot found that the `failed` docblock's exclusivity rule (*"NOT exclusive of
+`held`/`rearmed`"*) had no test. That rule was the planning gate's **finding** —
+the plan's original "a failed run appears in no other bucket" was false, and
+correcting it was the gate working. But nobody then mutated the correction, so
+the PR fixing two instances of #25 shipped a third in the very docblock stating
+the lesson. **A freshly-reasoned invariant feels verified BECAUSE you reasoned
+about it** — that is precisely the state in which the mutation goes unwritten.
+So: apply the delete-and-run check to corrected claims and review findings, not
+only to code you authored. Second corollary, from the same test: **a
+characterization test (one pinning behaviour that is already correct) is written
+to pass, so passing is not evidence it binds.** Its first run is not the check —
+mutating the behaviour it claims to pin is. If the mutation stays green, the test
+is decoration. This is the mirror of TDD's see-it-fail step, for the case where
+the implementation already exists and there is no red phase to observe.
