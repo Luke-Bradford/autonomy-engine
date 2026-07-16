@@ -33,6 +33,7 @@ import {
 } from '../../run/__tests__/stub-executor.js';
 import { createAlarmClock, type AlarmClock } from '../alarms.js';
 import { createRetryAlarmHandler } from '../retry-alarm.js';
+import { silentLog } from './testLog.js';
 
 /**
  * #1 F2c — the DRIVER + CLOCK half of D4's retry, against a real DB, real
@@ -119,6 +120,7 @@ function harness(db: Db, executorOpts: StubExecutorOptions = {}, now: () => numb
     db,
     handlers: [createRetryAlarmHandler(deps)],
     now,
+    log: silentLog(),
   });
   return { deps, clock, drives, resolveDoc };
 }
@@ -422,6 +424,7 @@ describe('F2c — the alarm fires: the retry loop closes', () => {
       db,
       handlers: [createRetryAlarmHandler(deps)],
       now: () => t,
+      log: silentLog(),
     });
 
     await startRun(deps, run);
@@ -467,6 +470,7 @@ describe('F2c — the alarm fires: the retry loop closes', () => {
       db,
       handlers: [createRetryAlarmHandler(deps)],
       now: () => t,
+      log: silentLog(),
     });
 
     await startRun(deps, run);
