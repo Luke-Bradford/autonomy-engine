@@ -561,7 +561,10 @@ describe('createExecutor — worker-pool cap across concurrently-driven runs', (
       peak = Math.max(peak, live);
       await sleep(40);
       live -= 1;
-      yield { type: 'succeeded', outputs: {} };
+      // The http_request node now carries its catalog output contract (F13b/#456
+      // lowers it in on save), so a real adapter must yield those declared
+      // outputs or the node fails validation — mirror the real adapter here.
+      yield { type: 'succeeded', outputs: { status: 200, body: '', headers: {} } };
     });
 
     // ONE shared executor (shared p-limit) drives THREE runs concurrently.

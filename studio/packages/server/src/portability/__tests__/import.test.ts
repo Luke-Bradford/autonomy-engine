@@ -203,9 +203,23 @@ describe('importEnvelope: pipeline', () => {
       pipelineId: pipeline.id,
       params: [{ name: 'topic', type: 'string', required: true }],
       outputs: [{ name: 'summary', type: 'string' }],
+      // Each known-type node declares an EXPLICIT `config.outputs` so F13b
+      // lowering (#456) is a no-op — this test guards the export→import
+      // round-trip (loss point 1/2), not the catalog-default seeding, so an
+      // author override keeps the round-trip exact and the two concerns apart.
       nodes: [
-        { id: 'n1', type: 'llm_call', config: { model: 'x' }, position: { x: 3, y: 4 } },
-        { id: 'n3', type: 'agent_task', config: {}, position: { x: 5, y: 6 } },
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: { model: 'x', outputs: [{ name: 'text', type: 'string' }] },
+          position: { x: 3, y: 4 },
+        },
+        {
+          id: 'n3',
+          type: 'agent_task',
+          config: { outputs: [{ name: 'output', type: 'string' }] },
+          position: { x: 5, y: 6 },
+        },
         {
           id: 'n2',
           type: 'llm_call',

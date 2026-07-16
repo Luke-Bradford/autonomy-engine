@@ -28,7 +28,13 @@ type Db = ReturnType<typeof freshDb>['db'];
 let seq = 0;
 function node(id: string, extra: Partial<Node> = {}): Node {
   seq += 1;
-  return { id, type: 'agent_task', config: {}, position: { x: seq, y: 0 }, ...extra };
+  // An UNCATALOGUED type on purpose: these are run-mechanics fixtures driven by a
+  // type-agnostic stub executor, so the activity type is irrelevant — and an
+  // uncatalogued type keeps the node's output contract `absent` (F13b/#456 only
+  // lowers a catalog default into KNOWN types), so the stub's ad-hoc outputs pass
+  // through unfiltered exactly as they did before F13b. A catalogued placeholder
+  // would now carry a `declared` contract and fail its `{}` payload.
+  return { id, type: 'test_activity', config: {}, position: { x: seq, y: 0 }, ...extra };
 }
 function edge(from: string, to: string, on: EdgeOn = 'success'): Edge {
   return { id: `${from}->${to}:${on}`, from, to, on };

@@ -1,7 +1,10 @@
 import { asc, eq, max } from 'drizzle-orm';
+import { z } from 'zod';
 import {
+  lowerNodeOutputs,
   NewPipelineVersionSchema,
   PipelineVersionSchema,
+  StrictNodeSchema,
   validatePipelineDoc,
   type NewPipelineVersion,
   type PipelineVersion,
@@ -66,6 +69,27 @@ function summarizeIssues(issues: string[]): string {
 export function createPipelineVersion(db: Db, input: NewPipelineVersion): PipelineVersion {
   const parsed = NewPipelineVersionSchema.parse(input);
 
+  // #456 (F13b) — LOWER the catalog's canonical `outputs` into each known-type
+  // node whose `config.outputs` is absent, so a version stored via ANY client
+  // (API/import/CLI/test) carries the same contract the web palette seeds
+  // client-side (`lowerNodeOutputs`). Without this a non-web-created node
+  // persisted `absent`: the reducer stored the whole payload unchecked and
+  // `validateRefs` name-checked nothing — one activity type, two runtime
+  // contracts, decided by which client made the node.
+  //
+  // Runs AFTER the strict parse (before it, `input` is an unvalidated `z.input`)
+  // and BEFORE `validatePipelineDoc` below, so `validateRefs` name-checks every
+  // `${nodes.X.output.NAME}` ref against the SEEDED contract — that binding is
+  // the whole point. The lowered nodes are RE-PARSED through `StrictNodeSchema`
+  // to keep F13a's "strict on WRITE" invariant: this writes node configs the
+  // strict path never saw, and the closing `PipelineVersionSchema.parse` is
+  // read-tolerant, so without the re-parse a seeded contract would bypass the
+  // write-path validation the field is supposed to have.
+  const lowered = {
+    ...parsed,
+    nodes: z.array(StrictNodeSchema).parse(lowerNodeOutputs(parsed.nodes)),
+  };
+
   // THE write gate (#444). Every path that stores a pipeline_versions row —
   // the `POST /api/pipelines/:id/versions` route and the git-import path —
   // funnels through this ONE function, so guarding here binds both BY
@@ -83,20 +107,23 @@ export function createPipelineVersion(db: Db, input: NewPipelineVersion): Pipeli
   // answer for those rows: they no longer wedge a run forever, they terminalize
   // as `failure{reason:'stalled'}`. That is containment, NOT a substitute for
   // this gate — a stalled run is still a run the author never wanted.
-  const issues = validatePipelineDoc(parsed);
+  const issues = validatePipelineDoc(lowered);
   if (issues.length > 0) throw new InvalidPipelineDocError(issues);
 
   return db.transaction((tx) => {
     const maxRow = tx
       .select({ maxVersion: max(pipelineVersions.version) })
       .from(pipelineVersions)
-      .where(eq(pipelineVersions.pipelineId, parsed.pipelineId))
+      .where(eq(pipelineVersions.pipelineId, lowered.pipelineId))
       .get();
     const nextVersion = (maxRow?.maxVersion ?? 0) + 1;
 
+    // Persist the LOWERED doc (#456 G1): validating `lowered` but storing
+    // `parsed` would certify a seeded contract that is never written — the
+    // worst outcome (validation passes against a contract the runtime lacks).
     const row: PipelineVersion = {
       id: newId('pv'),
-      ...parsed,
+      ...lowered,
       version: nextVersion,
       createdAt: Date.now(),
     };

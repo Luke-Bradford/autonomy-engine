@@ -2,3 +2,4 @@
 // server-side). One import surface for both the executor and the authoring UI.
 export * from './types.js';
 export * from './registry.js';
+export * from './lower.js';

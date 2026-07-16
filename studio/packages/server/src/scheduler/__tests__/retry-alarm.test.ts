@@ -55,7 +55,10 @@ function node(id: string, policy?: NodePolicy): Node {
   seq += 1;
   return {
     id,
-    type: 'agent_task',
+    // Uncatalogued on purpose — see the same factory in `driver.test.ts`. Keeps
+    // the output contract `absent` so the stub's `{}` payload is not failed
+    // against a catalog contract F13b/#456 would lower into a known type.
+    type: 'test_activity',
     config: {},
     position: { x: seq, y: 0 },
     ...(policy && { policy }),
