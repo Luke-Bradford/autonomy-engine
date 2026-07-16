@@ -52,8 +52,10 @@ export function paginatedResponseSchema<T extends z.ZodTypeAny>(item: T) {
 }
 
 /** The decoded shape of `paginatedResponseSchema(item)` — the FE/BE-shared
- * page type. */
-export interface Paginated<T> {
+ * page type. The envelope fields (`nextCursor`) are derived from the schema via
+ * `z.infer` so the type follows the Zod SSOT; only `items` is re-declared to
+ * carry the caller's element type `T` (a generic function's `ReturnType` can't
+ * thread `T` through, so the array element is the one hand-supplied piece). */
+export type Paginated<T> = Omit<z.infer<ReturnType<typeof paginatedResponseSchema>>, 'items'> & {
   items: T[];
-  nextCursor: string | null;
-}
+};
