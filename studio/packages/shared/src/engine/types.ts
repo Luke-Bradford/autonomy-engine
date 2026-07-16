@@ -282,7 +282,21 @@ export const RunStateSchema = z.object({
 });
 export type RunState = z.infer<typeof RunStateSchema>;
 
-/** Terminal run outcome vocabulary (`capped` is `failure{reason:"capped"}`). */
+/**
+ * Terminal run outcome vocabulary. The outcome is binary; WHY carries in the
+ * free-text `reason` beside it. The reasons in use, so a reader does not have to
+ * grep for them (joint F1b/F2b spec §B):
+ *   - `node_failed:<id>` — the blamed node, which may sit far upstream of the
+ *     leaf that triggered evaluation.
+ *   - `stalled`          — #491: the walk can never finish (no entity can become
+ *                          ready, nothing awaits an event). Ids are deliberately
+ *                          NOT interpolated: unlike a single blamed node the set
+ *                          is unbounded in the doc's size, so it goes to the
+ *                          diagnostic and the reason stays a constant — the same
+ *                          call `capped` makes.
+ *   - `capped`           — the driver's MAX_DRIVER_STEPS fail-safe.
+ *   - `invalid_event`    — the reducer refused its own impossible event.
+ */
 export const RunOutcomeSchema = z.enum(['success', 'failure']);
 export type RunOutcome = z.infer<typeof RunOutcomeSchema>;
 

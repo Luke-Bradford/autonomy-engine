@@ -159,14 +159,15 @@ const TERMINAL_RUN: ReadonlySet<RunLifecycleStatus> = new Set<RunLifecycleStatus
  * path afterwards, but rows written before that gate are still unvalidated, so
  * a doc here is still not "validated"), and this bounds the COMMAND-QUEUE pump,
  * which is the wrong layer for either shape that actually breaks liveness. A
- * deadlocked doc drains
- * the queue and never comes back here; a spinning reducer never returns control
- * to this loop at all.
+ * deadlocked doc drains the queue and never comes back here; a spinning reducer
+ * never returns control to this loop at all.
  *
  * What it does bound: an unforeseen reducer bug that keeps EMITTING commands,
  * which it fails SAFELY (a `capped` terminal) rather than spinning a headless
- * server. Deadlock/spin defences live in the reducer itself — see
- * `malformed-doc.test.ts`.
+ * server. Deadlock/spin defences live in the reducer itself — the shape-specific
+ * ones in `malformed-doc.test.ts`, and #491's general liveness backstop in
+ * `settle` (a fixpoint awaiting nothing terminalizes as `failure{stalled}`),
+ * which is what actually closed the deadlock case named above.
  */
 const MAX_DRIVER_STEPS = 1_000_000;
 

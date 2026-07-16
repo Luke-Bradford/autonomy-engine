@@ -2,13 +2,19 @@
  * The reducer's own defences against three specific MALFORMED-doc shapes — the
  * sweep for #487, #488 and the empty-loop spin found while fixing them.
  *
- * THREE SHAPES, NOT THE CLASS. A forward cycle (`a → b → a`, at top level or
- * among a container's children) still wedges a run in `running` forever with no
- * `finishRun` — byte-for-byte #488's failure mode, from a doc `validateDoc` also
- * only warns about. There is no general backstop underneath: `settle` is an
- * unbounded `for(;;)`, and the driver's `MAX_DRIVER_STEPS` bounds the command
- * queue, which a deadlock simply drains. That gap is tracked separately; do not
- * read this file as "the reducer survives anything".
+ * THREE SHAPES, NOT THE CLASS — and the class now has its own answer elsewhere.
+ * This file's three guards are SHAPE-specific: they stop a throw, a deadlock and
+ * a spin at the exact places those arise. The general liveness backstop that
+ * sits underneath them all is #491's, in `settle` + `stalled-backstop.test.ts`:
+ * a fixpoint with nothing terminal and nothing awaiting an event terminalizes
+ * the run as `failure{reason:'stalled'}` rather than wedging it forever.
+ *
+ * The two are complementary and BOTH must stay. #488's fix restores LIVENESS for
+ * its shape (the child actually runs); the backstop only converts an unfixable
+ * hang into a diagnosed failure. A regression here would turn a run that works
+ * into a run that reports `stalled` — still broken, just no longer silent. So do
+ * not read the backstop as licence to delete these, and do not read this file as
+ * "the reducer survives anything" either.
  *
  * Why these live in the reducer at all — and why they MUST STAY, now that #444
  * gated the write path. The gate closed the DOOR: `createPipelineVersion`
@@ -52,9 +58,13 @@ const PV = 'pv1';
  * Worth knowing before trusting it: the `guard` catches NONE of the three
  * defects pinned here, and is kept only for parity with the other two copies. A
  * #487 doc throws inside `reduce`; a #488 doc drains the queue and simply exits
- * the loop (the `finish === undefined` assertion is what catches that); and the
- * empty loop spins INSIDE one `reduce()` call, which no driver-loop guard — and
- * no vitest `testTimeout`, the spin being synchronous — can preempt. The
+ * the loop, which is caught by the OUTCOME assertion (`finish?.outcome` is
+ * `'success'` only if the child really ran — and since #491 a regression there
+ * surfaces as `failure{reason:'stalled'}` rather than as the hang it once was;
+ * this docblock used to cite a `finish === undefined` assertion, which never
+ * existed in this file); and the empty loop spins INSIDE one `reduce()` call,
+ * which no driver-loop guard — and no vitest `testTimeout`, the spin being
+ * synchronous — can preempt. The
  * empty-loop pins therefore HANG rather than fail if they regress, which is the
  * honest cost of pinning a synchronous spin from inside the same process.
  */
@@ -240,9 +250,14 @@ describe('#487 — a container child that is not a node id must not THROW', () =
 describe('#488 — a child → its OWN container id forward edge must not DEADLOCK', () => {
   // The edge makes the container wait on a child it must first activate: `c`
   // waits for `h` via `topIncoming`, while `h` only dispatches once `c` is
-  // `active`. Mutual wait ⇒ no dispatch, no finishRun, run wedged `running`
-  // forever. The edge is INERT: the container is already the child's parent
-  // scope, so the edge encodes a dependency that inverts activation order.
+  // `active`. Mutual wait ⇒ nothing dispatches. Before #491 that wedged the run
+  // `running` forever; now the stalled backstop terminalizes it as
+  // `failure{reason:'stalled'}` — which is containment, NOT this guard becoming
+  // redundant. Without the guard the authored container never runs and the run
+  // reports `stalled`; with it, the child runs and the run succeeds. That is the
+  // difference this test pins. The edge is INERT: the container is already the
+  // child's parent scope, so the edge encodes a dependency that inverts
+  // activation order.
   it('the child runs and the run finishes', () => {
     const eng = createEngine({
       nodes: [node('h')],
@@ -270,7 +285,8 @@ describe('#488 — a child → its OWN container id forward edge must not DEADLO
   // top-level target when the child does not take it. Dropping those would leave
   // the target with no incoming edges — a root that fires unconditionally, a
   // WORSE fail-open. That reasoning does not extend to a child → its OWN
-  // container (which deadlocks), and only that case is excluded here.
+  // container (which strands the walk — `stalled` since #491), and only that
+  // case is excluded here.
   it('a child → a DIFFERENT top-level entity still gates that entity (#480 pin holds)', () => {
     const eng = createEngine({
       nodes: [node('h'), node('d')],

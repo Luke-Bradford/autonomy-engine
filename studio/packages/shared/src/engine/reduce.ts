@@ -99,6 +99,55 @@ export interface Engine {
 const LIVE_NODE = new Set<NodeRunState['status']>(['ready', 'dispatched']);
 
 /**
+ * #491 — is this node awaiting an event that can only arrive from OUTSIDE the
+ * reducer? The one question the stalled backstop in `settle` turns on.
+ *
+ * NOT `LIVE_NODE`, and the difference is the whole point. `LIVE_NODE` answers
+ * "may a result event fold onto this node" and deliberately excludes `waiting`
+ * and `retry_pending`; widening it would silently let a late `node.succeeded`
+ * fold onto a HELD node (see `onRetryDue`, §A.4), which is a property F2b
+ * depends on. This asks a different question and needs its own set — the two
+ * must be free to disagree.
+ *
+ * Definitionally this is `!TERMINAL_NODE.has(s) && s !== 'pending'`, and it is
+ * NOT written that way on purpose. An exhaustive `switch` with no `default` is
+ * the only guard that makes a 9th `NodeRunStatus` a COMPILE error here, forcing
+ * its author to decide which side it falls on — `types.ts` records that
+ * `TERMINAL_NODE`'s `satisfies` cannot do this, and points at `terminalStatusOf`
+ * as the pattern to copy. Collapsing this to the identity would delete that
+ * guard, and a status wrongly defaulted to "awaits nothing" tears down healthy
+ * runs while one wrongly defaulted to "awaits something" resurrects the hang.
+ *
+ * `pending` is the load-bearing `false`: it awaits READINESS, which only this
+ * reducer's own walk decides. At a `settle` fixpoint the walk has already had
+ * its say, so a `pending` node is one nothing will ever make ready.
+ *
+ * What each `true` is waiting for (kept here rather than beside its `case`, so
+ * the labels stay adjacent — eslint's `no-fallthrough` counts a case carrying
+ * only a comment as non-empty):
+ *   - `ready`         — `dispatchNode` was emitted; the driver owes `node.dispatched`.
+ *   - `dispatched`    — the executor owes a `node.succeeded` / `node.failed`.
+ *   - `waiting`       — a `call_pipeline` child owes a `call.returned`.
+ *   - `retry_pending` — S1's DURABLE ALARM row owes a `node.retryDue`. NOTHING is
+ *     in flight here, which is exactly why a naive "converged and idle" test
+ *     would tear down every retrying run.
+ */
+function awaitsExternalEvent(status: NodeRunState['status']): boolean {
+  switch (status) {
+    case 'ready':
+    case 'dispatched':
+    case 'waiting':
+    case 'retry_pending':
+      return true;
+    case 'pending':
+    case 'success':
+    case 'failure':
+    case 'skipped':
+      return false;
+  }
+}
+
+/**
  * An edge that can never satisfy — its predecessor is terminal and settled the
  * wrong way (`unsatisfied-terminal`), or the edge is structurally unreachable
  * (`impossible`). The SSOT for both readers: `computeReadiness` (a dead GROUP
@@ -303,9 +352,16 @@ export function createEngine(doc: EngineDoc): Engine {
   // child → its own container that reasoning inverts. The edge makes the
   // container wait on a child it must first ACTIVATE — `h` only dispatches once
   // `c` is active, `c` only becomes ready once `h` takes the edge — so nothing
-  // dispatches, no `finishRun` is ever emitted, and the run sits in `running`
-  // forever with no terminal event to reconcile against. A liveness failure, not
-  // a wrong answer.
+  // dispatches and the walk cannot progress. A liveness failure, not a wrong
+  // answer.
+  //
+  // What that costs is now DIFFERENT, and the difference is why this guard still
+  // earns its place: since #491 the run no longer sits in `running` forever with
+  // no terminal to reconcile against — the stalled backstop terminalizes it as
+  // `failure{reason:'stalled'}`. That is containment, not a fix. Without this
+  // guard the author's container never runs at all and the run reports `stalled`;
+  // with it, the container activates and the run does what was authored. Do not
+  // read the backstop as making this redundant.
   //
   // So the edge is INERT: the container is already the child's parent scope, and
   // the edge encodes a dependency that inverts activation order. Dropping it from
@@ -342,7 +398,8 @@ export function createEngine(doc: EngineDoc): Engine {
       docDefects.push(
         `edge '${e.id}' ('${e.from}' → '${e.to}') points at its own enclosing container and ` +
           `is IGNORED: the container must activate before its child can run, so this edge ` +
-          `could only ever deadlock the run — it is treated as if it were not authored`,
+          `could only ever strand the run (neither would ever start) — it is treated as if ` +
+          `it were not authored`,
       );
       continue;
     }
@@ -1173,8 +1230,113 @@ export function createEngine(doc: EngineDoc): Engine {
           ? { type: 'finishRun', outcome: 'success' }
           : { type: 'finishRun', outcome: 'failure', reason: `node_failed:${blamed}` },
       );
+    } else if (!Object.values(state.nodes).some((ns) => awaitsExternalEvent(ns.status))) {
+      // #491 — THE STALLED BACKSTOP. The walk has reached its fixpoint with the
+      // run non-terminal, and no node anywhere awaits an event. Nothing can ever
+      // change again: `pending` resolves only via this walk, which just had its
+      // say. So the run can NEVER finish. Terminalize it rather than leave it
+      // wedged `running` forever, holding a concurrency slot until an operator
+      // notices. What lands in the LOG is the durable `run.finished` below; the
+      // diagnostic naming the entities does NOT (nothing reads `diagnostics` in
+      // production yet — see `stalledEntities`), so do not read this as closing
+      // the observability half of #491.
+      //
+      // `else if`, NOT `if`, and that is a correctness requirement rather than
+      // style: a forward cycle does NOT imply a stall. The joint F1b/F2b spec
+      // (§P4) probes a SKIP-PROPAGATED cycle whose skip enters from outside, so
+      // every node terminalizes without running and `allTopLevelTerminal` holds
+      // — a run that legitimately SUCCEEDS. As a bare `if` this would append a
+      // second, contradictory `finishRun{failure}` after that success, which the
+      // driver's pump would silently swallow (it folds the first terminal and
+      // breaks). Pinned in `stalled-backstop.test.ts`.
+      //
+      // CONSERVATIVE BY DESIGN. Any node awaiting an event vetoes the verdict,
+      // even one on an unrelated branch, so the stall is DELAYED until the last
+      // in-flight node resolves. That costs a doomed run some wall-clock; the
+      // alternative — firing while something is still out there — tears down a
+      // HEALTHY run, which is far worse than the hang this replaces. A false
+      // negative is today's behaviour; a false positive is data loss with extra
+      // steps.
+      //
+      // WHAT THIS DOES NOT COVER, stated because it looks like a gap: a crash
+      // between F2b's HOLD becoming durable and its alarm being armed leaves a
+      // `retry_pending` node with no alarm to fire. This backstop deliberately
+      // does not fire there (`retry_pending` awaits an event, and a PURE reducer
+      // cannot read the alarm table to learn the row is missing). That is
+      // `reconcile.ts`'s `recoverHeld`, at boot, by design. This covers
+      // READINESS deadlock; alarm liveness is owned elsewhere.
+      diagnostics.push(
+        `run stalled: no entity can become ready and nothing is awaiting an event, so the ` +
+          `run can never finish — never-terminal: {${stalledEntitiesLabel(state)}}. Terminalized as ` +
+          `failure{reason:'stalled'} rather than wedged 'running' forever. The usual cause is ` +
+          `a forward cycle, which validateDoc rejects — but the write path only began ` +
+          `enforcing that at #444, and rows written before it were never validated.`,
+      );
+      commands.push({ type: 'finishRun', outcome: 'failure', reason: 'stalled' });
     }
     return { state, commands, diagnostics };
+  }
+
+  /**
+   * The entities a stalled run is stuck on. It must name the things that can
+   * actually never terminalize, and nothing else.
+   *
+   * WHERE THIS GOES, stated honestly because the obvious assumption is wrong and
+   * a `reason`-vs-diagnostic decision rests on it: NOTHING IN PRODUCTION READS
+   * `diagnostics` TODAY. Every non-test caller of `reduce` binds the result and
+   * takes `.state`/`.commands` only (`driver.ts`, `reconcile.ts`,
+   * `retry-alarm.ts`), so this string is currently observable in tests alone.
+   * That is a systemic gap, not this backstop's — every `docDefects` report
+   * (#480's ignored edge, #487's ghost child) is equally invisible — and it is
+   * filed rather than fixed here. So the operator-visible half of #491 is the
+   * DURABLE `run.finished{reason:'stalled'}`, which says the run could never
+   * finish; this says WHICH entities, and becomes visible when the sink lands.
+   * Do not describe it as the operator's signal until it is one.
+   *
+   * Top-level entities carry the verdict, but naming only them is useless for a
+   * container: a reader would see `c1` and learn nothing about WHICH of its
+   * children deadlocked. So an ACTIVE container contributes its non-terminal
+   * children too.
+   *
+   * A TERMINAL container's children are deliberately excluded. `settle` marks a
+   * container `skipped` without touching its children (and `exitContainer` does
+   * not either), so they sit `pending` for the life of the run — harmless, but
+   * they are not stuck on anything and naming them would point the reader at an
+   * innocent bystander.
+   *
+   * DEDUPED, because a child can be listed by more than one container. That doc
+   * is invalid and `childToContainer` is last-wins over it (#492), but this is a
+   * REPORTER: it must describe what it finds, not assume the doc is well-formed
+   * — the whole reason it runs is that the doc was never validated. Without the
+   * dedupe a node in two active containers is named twice (probed:
+   * `{c1, c2, n1, n2, n1, n2}`), which contradicts this docblock.
+   *
+   * CAPPED for the same reason `run.started` loops over `docDefects` instead of
+   * spreading them: `children` has no schema max and a pre-#444-gate row was
+   * never validated, so the count is attacker-shaped. Truncation is stated, never
+   * silent — an absent fact must not be manufactured as "that was all of them"
+   * (the F13a/#473 rule).
+   */
+  function stalledEntities(state: RunState): string[] {
+    const stuck = new Set(sortedTopEntities.filter((id) => endpointOutcome(id, state) === null));
+    for (const cid of [...containerIds].sort()) {
+      if (state.containers[cid]!.status !== 'active') continue;
+      for (const ch of [...containerById.get(cid)!.children].sort()) {
+        if (!TERMINAL_NODE.has(state.nodes[ch]!.status)) stuck.add(ch);
+      }
+    }
+    return [...stuck];
+  }
+
+  /** How many stuck ids the stall diagnostic names before truncating. */
+  const STALL_NAME_CAP = 50;
+
+  /** The stuck set as a diagnostic fragment: deduped, capped, honestly truncated. */
+  function stalledEntitiesLabel(state: RunState): string {
+    const stuck = stalledEntities(state);
+    const named = stuck.slice(0, STALL_NAME_CAP).join(', ');
+    const rest = stuck.length - STALL_NAME_CAP;
+    return rest > 0 ? `${named}, …and ${rest} more` : named;
   }
 
   // --- per-event reducers ---------------------------------------------------

@@ -8,7 +8,7 @@ import {
   type Node,
   type NewPipelineVersion,
 } from '@autonomy-studio/shared';
-import { scheduledWakeups } from '../../db/schema.js';
+import { pipelineVersions, scheduledWakeups } from '../../db/schema.js';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun, getRun, listRuns, updateRun } from '../../repo/runs.js';
@@ -934,5 +934,90 @@ describe('reconcileOnBoot — a run held on a node retry', () => {
     expect(report.held).toEqual([]);
     expect(recovery.dispatched).toEqual([]);
     expect(getRun(db, run.id)!.status).toBe('interrupted');
+  });
+});
+
+describe('reconcileOnBoot — #491: a run wedged by a PRE-GATE doc drains at boot', () => {
+  /**
+   * The row #491 actually exists for. #444's write gate refuses a cyclic doc, so
+   * `createPipelineVersion` CANNOT produce this one — it is inserted raw, which
+   * is exactly the real-world case: rows written before that gate landed were
+   * never validated, are IMMUTABLE (DB triggers RAISE(ABORT)), and still resolve
+   * and reach the reducer. That is why the reducer's backstop, not the gate, is
+   * what rescues them.
+   */
+  function seedWedgedByCycle(db: Db) {
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const pvId = 'pv_pre_gate_cycle';
+    db.insert(pipelineVersions)
+      .values({
+        id: pvId,
+        pipelineId: pipeline.id,
+        version: 1,
+        params: [],
+        outputs: [],
+        nodes: [node('a'), node('b')],
+        edges: [edge('a', 'b'), edge('b', 'a')],
+        containers: [],
+        catalogVersion: CATALOG_VERSION,
+        createdAt: 1,
+      })
+      .run();
+
+    const run = seedRun(db, pvId);
+    appendEngineEvent(db, {
+      type: 'run.started',
+      runId: run.id,
+      pipelineVersionId: pvId,
+      params: {},
+    });
+    updateRun(db, run.id, { status: 'running', finishedAt: null });
+    return run;
+  }
+
+  it('finalizes the wedged run to failure{stalled} — with NO executor', async () => {
+    const { db } = freshDb();
+    const run = seedWedgedByCycle(db);
+
+    // Precondition: the run really is wedged — running, nothing terminal.
+    const before = buildEngine(getPipelineVersion(db, run.pipelineVersionId)!).projectRunState(
+      loadEngineEvents(db, run.id),
+    );
+    expect(before.status).toBe('running');
+    expect(before.nodes.a!.status).toBe('pending');
+
+    // No executor on purpose: a stalled run's only command is the driver's own
+    // `finishRun`, so it must finalize without one rather than DEFER forever.
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      alarms: stubAlarms(),
+    });
+
+    expect(report.finalized).toEqual([run.id]);
+    expect(report.deferred).toEqual([]);
+    expect(report.resumed).toEqual([]);
+    expect(getRun(db, run.id)!.status).toBe('failure');
+
+    const events = loadEngineEvents(db, run.id);
+    expect(types(events)).toContain('run.finished');
+    const finished = events.find((e) => e.type === 'run.finished');
+    expect(finished).toMatchObject({ outcome: 'failure', reason: 'stalled' });
+  });
+
+  it('a second boot is a no-op — the terminal is appended once, not once per boot', async () => {
+    const { db } = freshDb();
+    const run = seedWedgedByCycle(db);
+    const deps = { db, resolveDoc: resolveDocFor(db), alarms: stubAlarms() };
+
+    await reconcileOnBoot(deps);
+    const afterFirst = loadEngineEvents(db, run.id).length;
+
+    // The run is terminal now, so it is no longer a `running` row to reconcile —
+    // a second boot must not append a second terminal.
+    const report = await reconcileOnBoot(deps);
+    expect(report.finalized).toEqual([]);
+    expect(loadEngineEvents(db, run.id).length).toBe(afterFirst);
+    expect(getRun(db, run.id)!.status).toBe('failure');
   });
 });

@@ -55,12 +55,16 @@ export function createPipelineVersion(db: Db, input: NewPipelineVersion): Pipeli
   // more than usual here: a version is IMMUTABLE once written (DB triggers
   // RAISE(ABORT) on update), so an invalid doc that gets in can never be
   // repaired, only re-authored — and it reaches the pure reducer, where it
-  // deadlocks (#491), or did throw/spin until #487/#488/#493 neutralized it.
+  // stalled the run until #491's backstop, or threw/spun until #487/#488/#493
+  // neutralized it.
   //
   // WRITE-PATH ONLY, deliberately: reads never validate. Rows written before
   // this gate existed are still unvalidated, so the reducer's own defences
   // stay load-bearing (defence in depth) — this closes the door, it does not
-  // clean the house. #491's `stalled` backstop is the complementary answer.
+  // clean the house. #491's `stalled` backstop LANDED and is the complementary
+  // answer for those rows: they no longer wedge a run forever, they terminalize
+  // as `failure{reason:'stalled'}`. That is containment, NOT a substitute for
+  // this gate — a stalled run is still a run the author never wanted.
   const issues = validatePipelineDoc(parsed);
   if (issues.length > 0) throw new InvalidPipelineDocError(issues);
 

@@ -1036,8 +1036,13 @@ export function validateDoc(
   }
 
   // The FORWARD graph (all edges minus `back:true`) must be a DAG — a forward
-  // cycle deadlocks the walk (its nodes never become ready; `settle` emits no
-  // command and never finishes → a silent hang).
+  // cycle wedges the walk: its nodes never become ready, so `settle` emits no
+  // command. #491's backstop now terminalizes such a run as
+  // `failure{reason:'stalled'}` instead of hanging it forever, but that is
+  // CONTAINMENT, not permission — the run still does nothing the author asked
+  // for, so this stays a hard error and #444's write gate still refuses the doc.
+  // (Not every forward cycle stalls: one whose skip enters from outside
+  // terminalizes every node without running it. It is refused all the same.)
   errors.push(...forwardCycleErrors(doc, containers));
 
   // Back-edge ancestry: `to` must forward-reach `from` (a container also
