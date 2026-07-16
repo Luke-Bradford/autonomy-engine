@@ -1,4 +1,4 @@
-import type { ArmWakeupInput, Engine, EngineEvent, RunState } from '@autonomy-studio/shared';
+import type { ArmWakeupInput, Engine, EngineEvent, Run, RunState } from '@autonomy-studio/shared';
 import { listRuns } from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
 import {
@@ -68,17 +68,61 @@ import { appendEngineEvent, loadEngineEvents, terminalFactFromLog } from './even
  */
 
 /**
+ * A violation of one of THIS loop's own invariants, as opposed to a fault in the
+ * run being reconciled. The per-run catch in `reconcileOnBoot` re-throws it.
+ *
+ * #479 gave that loop a per-run try/catch so one bad run cannot strand the rest.
+ * That guard must not also swallow `refuseToExecute` (below), whose entire
+ * purpose is to be unmissable: demoted to a `failed` entry it would surface only
+ * as one string inside a `fastify.log.info` at boot, which is not what an
+ * assertion is for. A sentinel keeps both properties — faults degrade one run,
+ * invariant violations still take the process down.
+ *
+ * Same shape as the scheduler's `StaleWakeupError` (`scheduler/alarms.ts`): a
+ * sentinel that lets a per-item catch tell an expected outcome from a real fault.
+ * Sets `name` for the same reason that one does — this class exists to be
+ * UNMISSABLE when it fires, and an unnamed subclass prints as a bare `Error`.
+ *
+ * EXPORTED for its tests, unlike `StaleWakeupError`. That is a real (small) cost,
+ * paid deliberately: this class and the re-throw that reads it are the entire
+ * justification for the per-run catch being broad, and a guard defended only by a
+ * comment is one a future reader deletes as ceremony. Its tests must be able to
+ * construct one, and `refuseToExecute`'s own path is not reachable from a natural
+ * fixture (see that const). Also honest as API: a caller of `reconcileOnBoot`
+ * genuinely can observe this — it is the one throw that escapes.
+ */
+export class ReconcileInvariantError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ReconcileInvariantError';
+  }
+}
+
+/**
  * The executor the finalize path passes to `pump` when NO real executor is
  * available: a run being finalized has only a `finishRun` command (the driver's
  * own), so the executor must never be invoked. This throws if it somehow is —
  * fail-loud rather than silently mis-driving a run.
+ *
+ * EXPORTED for the same reason as `ReconcileInvariantError`, and with the same
+ * reluctance: the CLASS it throws is load-bearing (a plain `Error` would be
+ * absorbed into `failed` by the per-run catch), its path is not reachable from a
+ * natural fixture, and an untested guard gets deleted as ceremony.
  */
-const refuseToExecute: Executor = {
+export const refuseToExecute: Executor = {
   // Throws synchronously ON CALL (not merely on iteration): the finalize path
   // carries only `finishRun` — the driver's own command — so this is never
   // invoked; if a bug ever routed a dispatch/startChild here, fail loud.
+  //
+  // REACHABLE, despite the `needsExecutor` gate at the call site: that gate
+  // inspects only the run's INITIAL commands, while `pump` drains a QUEUE that
+  // grows as it reduces. A `finishRun` whose fold emits a `dispatchNode` arrives
+  // here. That is a driver-invariant violation, so it throws the sentinel and
+  // #479's per-run catch re-throws it rather than filing it under `failed`.
   perform(): AsyncIterable<EngineEvent> {
-    throw new Error('reconcile finalize path must not dispatch — expected only finishRun');
+    throw new ReconcileInvariantError(
+      'reconcile finalize path must not dispatch — expected only finishRun',
+    );
   },
 };
 
@@ -150,6 +194,35 @@ export interface ReconcileReport {
    * report rather than inferring from the log.
    */
   rearmed: string[];
+  /**
+   * #479 — runs whose reconcile THREW, with the reason. The fault degraded that
+   * one run; every other run in the scan still reconciled.
+   *
+   * Carries the reason, not just the id, because this report IS the fault's only
+   * channel: `reconcileOnBoot` returns it and `index.ts` logs it verbatim
+   * (`fastify.log.info({ reconcileReport }, 'boot reconcile complete')`). A bare
+   * `string[]` would drop the one fact an operator needs. (This is also why
+   * there is no optional `log?` on `ReconcileDeps` — an optional logger is
+   * droppable, a returned-and-logged report is not.)
+   *
+   * EXCLUSIVITY — exact, because it is easy to state too strongly:
+   *   - Exclusive of the VERDICT buckets (`resumed`/`finalized`/`resynced`/
+   *     `interrupted`/`deferred`). Each is pushed at a `continue` or at the loop
+   *     tail — i.e. only once that run's reconcile has SUCCEEDED.
+   *   - NOT exclusive of `held`/`rearmed`. Those are pushed BEFORE the loop
+   *     falls through to `pump`, and they record work already durably committed
+   *     (`recoverHeld` armed the alarm row and appended `node.retryScheduled`).
+   *     A run in both is reporting the truth: the hold was recovered, the resume
+   *     was not. Un-pushing it would erase a committed fact.
+   *
+   * NON-GOAL: what happens to the faulted run ITSELF. It is left `running` — so
+   * a permanent fault re-`failed`s on every boot and holds a slot, and a
+   * transient one waits for a restart nothing schedules. Deliberate: a catch
+   * cannot tell the two apart, and terminalizing a healthy run on a passing
+   * error is fail-open in the other direction. Both halves are #508, which is
+   * where the reasoning lives — do not restate it here.
+   */
+  failed: Array<{ runId: string; reason: string }>;
 }
 
 /**
@@ -296,158 +369,204 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
     finalized: [],
     held: [],
     rearmed: [],
+    failed: [],
   };
 
   for (const run of listRuns(deps.db, { status: 'running' })) {
-    const events = loadEngineEvents(deps.db, run.id);
-
-    // #443 — the LOG is authoritative over the projection for terminality: a
-    // recorded terminal fact stands, so the row is merely stale (a crash between
-    // the terminal append and its lifecycle sync). Deliberately does NOT consult
-    // the projection — a reducer change re-folds this log, and trusting a re-fold
-    // that contradicts the log's own terminal is what RE-EXECUTES a finished run's
-    // side effects. Hoisted above `buildEngine` because the log needs no doc, so an
-    // unresolvable version cannot strand a finished run (or the ones after it in
-    // this loop). See `terminalFactFromLog` for the rule and its cost.
-    const terminal = terminalFactFromLog(events);
-    if (terminal !== null) {
-      syncRunLifecycle(deps.db, run.id, terminal);
-      report.resynced.push(run.id);
-      continue;
-    }
-
-    const engine = buildEngine(deps.resolveDoc(run.pipelineVersionId));
-    const state = engine.projectRunState(events);
-
-    // Defensive, and unreachable today: a `running` row whose log has no
-    // `run.started` (the projection is then the `pending` seed). `updateRun`'s
-    // only non-test callers derive the status from real state, so a row cannot
-    // reach `running` before its `run.started` is durable. Kept because the
-    // alternative is appending `run.resumed` to a log with no `run.started` — the
-    // terminal check above no longer covers this, as `pending` is not a terminal
-    // fact. Deleting it measurably corrupts: the run falls through to the resume
-    // path, which appends that orphan `run.resumed` AND reports the run
-    // `finalized` though it never finished. A re-sync, not an assertion: this
-    // loop has no per-run try/catch, so a throw would strand every run after it.
-    // Pinned by the two `run.started`-less tests in `reconcile.test.ts`, which
-    // fail if this branch is removed — so it cannot bit-rot silently.
-    if (state.status === 'pending') {
-      syncRunLifecycle(deps.db, run.id, state.status);
-      report.resynced.push(run.id);
-      continue;
-    }
-
-    const inFlight = dispatchedNodes(state);
-    const notProvablyIdempotent = inFlight.filter(
-      ({ id, attemptId }) => idempotentFlagFor(events, id, attemptId) !== true,
-    );
-
-    if (notProvablyIdempotent.length > 0) {
-      const reason = `non_idempotent_in_flight:${notProvablyIdempotent.map((n) => n.id).join(',')}`;
-      const interrupted: EngineEvent = { type: 'run.interrupted', runId: run.id, reason };
-      const appended = appendEngineEvent(deps.db, interrupted, deps.bus);
-      // Fold the PARSED event, not the raw one — see `appendEngineEvent`.
-      syncRunLifecycle(deps.db, run.id, engine.reduce(state, appended.event).state.status);
-      report.interrupted.push(run.id);
-      continue;
-    }
-
-    // Build (WITHOUT persisting yet) the reconcile events + the commands they
-    // regenerate: `run.resumed` re-derives the walk — re-emitting `ready`/
-    // `waiting` dispatches, dispatching any genuinely newly-ready pending node,
-    // AND regenerating the ephemeral `finishRun` a crash between a terminal node
-    // event and `run.finished` would have dropped — then a `node.retryRequested`
-    // per idempotent in-flight node re-dispatches it under a NEW attempt.
-    const reconcileEvents: EngineEvent[] = [
-      { type: 'run.resumed', runId: run.id, reason: 'boot_reconcile' },
-      ...inFlight.map(({ id, attemptId }): EngineEvent => ({
-        type: 'node.retryRequested',
+    // #479 — the per-run fault boundary. Boot reconcile IS the recovery path, so
+    // it is the worst place for an all-or-nothing failure mode: without this,
+    // ONE unresolvable pipeline version threw out of the whole function and every
+    // run after it in the scan was never resumed, interrupted, or re-synced.
+    //
+    // Wraps the WHOLE body, not just the `resolveDoc` call that motivated the
+    // ticket: the property wanted is "a fault degrades THAT run", and a catch
+    // around one known throw site leaves every other one able to strand the loop.
+    // The cost of the breadth — that it could mask a genuine bug — is paid by the
+    // sentinel re-throw below plus `failed` carrying the reason into the boot log.
+    //
+    // Partial side effects are survivable and were checked, not assumed: a throw
+    // from `pump` AFTER its events are appended leaves exactly the durable state
+    // it leaves today, because the append and the sync are separate statements
+    // either way. Today that ALSO crashes boot. The log is the SSOT and the
+    // projection is re-derived on the next boot, so catching is strictly better.
+    try {
+      // AWAITED inside the try — `reconcileOne` is async, so an unawaited call
+      // would reject OUTSIDE this catch and crash boot as an unhandled rejection,
+      // reinstating the exact fault #479 is closing.
+      await reconcileOne(deps, report, run);
+    } catch (err) {
+      if (err instanceof ReconcileInvariantError) throw err;
+      report.failed.push({
         runId: run.id,
-        nodeId: id,
-        previousAttemptId: attemptId,
-        reason: 'boot_reconcile',
-      })),
-    ];
-    let next = state;
-    const commands = [];
-    for (const ev of reconcileEvents) {
-      const result = engine.reduce(next, ev);
-      next = result.state;
-      commands.push(...result.commands);
+        reason: err instanceof Error ? err.message : String(err),
+      });
     }
-
-    // A run HELD on a retry (F2b) re-derives NOTHING above — `onResumed` skips
-    // `retry_pending` deliberately, and `settle` cannot finish a run whose node
-    // is non-terminal. So its alarm row is checked HERE, and — this is the part
-    // that is easy to get wrong — checked UNCONDITIONALLY, whatever else the run
-    // has to do.
-    //
-    // The obvious gate ("only when the run has no other commands, since a run
-    // with live work resumes anyway and its held node is recovered by the alarm
-    // regardless") is the EXACT false premise B2 exists to kill: if the alarm row
-    // is missing there IS no alarm, and this is the only thing that can tell.
-    // Worse, the two conditions are POSITIVELY CORRELATED, so the gate would skip
-    // precisely the likeliest B2 case — `pump` drains `scheduleRetry` at the
-    // QUEUE TAIL, so the HOLD→ARM window IS the interval in which the sibling
-    // `dispatchNode` commands are draining. A crash there leaves a held node with
-    // no alarm AND a sibling still `dispatched`. Measured under the gated version:
-    // the sibling resumes and succeeds, the held node waits forever on an alarm
-    // that does not exist, the run rests `running` for the rest of the process's
-    // life, and the report calls it `resumed`.
-    const heldNodes = Object.keys(next.nodes)
-      .sort()
-      .filter((id) => next.nodes[id]!.status === 'retry_pending');
-    if (heldNodes.length > 0) {
-      const verdict = recoverHeld(deps, engine, run, next, heldNodes);
-      if (verdict === 'interrupted') {
-        // Frozen: no alarm will ever resolve the hold, so do NOT also resume the
-        // live nodes — the run is over.
-        report.interrupted.push(run.id);
-        continue;
-      }
-      report.held.push(run.id);
-      if (verdict === 'rearmed') report.rearmed.push(run.id);
-      // `commands.length === 0` means the hold is the ONLY thing keeping this run
-      // alive — there is nothing to resume, so stop here rather than append a
-      // `run.resumed` that re-derives nothing. Otherwise fall through: the live
-      // nodes resume normally and the run is reported `resumed` AS WELL AS held.
-      if (commands.length === 0) continue;
-    }
-
-    // `finishRun` is the driver's OWN command (no executor); `dispatchNode`/
-    // `startChild` need one. A run whose only command is a `finishRun` can be
-    // FINALIZED with no executor; one with live work to re-run needs the
-    // executor — without it we DEFER, appending nothing we cannot follow
-    // through on.
-    //
-    // TWO shapes reach the finalize path, not one: a run whose `finishRun` was
-    // DROPPED by a crash (the historical case), and — since #491 — a run whose
-    // doc STALLS, where `settle` derives `finishRun{failure,'stalled'}` afresh.
-    // The second is why this bucket matters beyond crash recovery: a run wedged
-    // by a pre-#444 doc is released at the next boot instead of holding its
-    // concurrency slot until an operator intervenes.
-    const needsExecutor = commands.some((c) => c.type !== 'finishRun');
-    if (needsExecutor && deps.executor === undefined) {
-      report.deferred.push(run.id);
-      continue;
-    }
-
-    for (const ev of reconcileEvents) appendEngineEvent(deps.db, ev, deps.bus);
-    syncRunLifecycle(deps.db, run.id, next.status);
-    await pump(
-      {
-        db: deps.db,
-        resolveDoc: deps.resolveDoc,
-        executor: deps.executor ?? refuseToExecute,
-        alarms: deps.alarms,
-        bus: deps.bus,
-      },
-      engine,
-      next,
-      commands,
-    );
-    (needsExecutor ? report.resumed : report.finalized).push(run.id);
   }
 
   return report;
+}
+
+/**
+ * One run's reconcile — the unit #479's fault boundary wraps. Extracted from the
+ * loop so that boundary is a `try` around a call rather than a `try` wrapping
+ * 130 lines; each of the loop body's `continue`s is a `return` here.
+ *
+ * Throws on any per-run fault; the caller records it into `report.failed` and
+ * carries on with the next run. Its OWN invariant violations throw
+ * `ReconcileInvariantError`, which the caller re-throws — see that class.
+ */
+async function reconcileOne(deps: ReconcileDeps, report: ReconcileReport, run: Run): Promise<void> {
+  const events = loadEngineEvents(deps.db, run.id);
+
+  // #443 — the LOG is authoritative over the projection for terminality: a
+  // recorded terminal fact stands, so the row is merely stale (a crash between
+  // the terminal append and its lifecycle sync). Deliberately does NOT consult
+  // the projection — a reducer change re-folds this log, and trusting a re-fold
+  // that contradicts the log's own terminal is what RE-EXECUTES a finished run's
+  // side effects. Hoisted above `buildEngine` because the log needs no doc: a
+  // finished run whose version is gone still resyncs correctly here, rather than
+  // reaching `resolveDoc` and being reported `failed`. See `terminalFactFromLog`
+  // for the rule and its cost.
+  const terminal = terminalFactFromLog(events);
+  if (terminal !== null) {
+    syncRunLifecycle(deps.db, run.id, terminal);
+    report.resynced.push(run.id);
+    return;
+  }
+
+  const engine = buildEngine(deps.resolveDoc(run.pipelineVersionId));
+  const state = engine.projectRunState(events);
+
+  // Defensive, and unreachable today: a `running` row whose log has no
+  // `run.started` (the projection is then the `pending` seed). `updateRun`'s
+  // only non-test callers derive the status from real state, so a row cannot
+  // reach `running` before its `run.started` is durable. Kept because the
+  // alternative is appending `run.resumed` to a log with no `run.started` — the
+  // terminal check above no longer covers this, as `pending` is not a terminal
+  // fact. Deleting it measurably corrupts: the run falls through to the resume
+  // path, which appends that orphan `run.resumed` AND reports the run
+  // `finalized` though it never finished.
+  //
+  // A re-sync, not an assertion: `pending` is a LEGITIMATE state, so syncing the
+  // row to it is the truthful verdict. Throwing instead would file a healthy row
+  // under `failed`.
+  //
+  // Pinned by the two `run.started`-less tests in `reconcile.test.ts`, which
+  // fail if this branch is removed — so it cannot bit-rot silently.
+  if (state.status === 'pending') {
+    syncRunLifecycle(deps.db, run.id, state.status);
+    report.resynced.push(run.id);
+    return;
+  }
+
+  const inFlight = dispatchedNodes(state);
+  const notProvablyIdempotent = inFlight.filter(
+    ({ id, attemptId }) => idempotentFlagFor(events, id, attemptId) !== true,
+  );
+
+  if (notProvablyIdempotent.length > 0) {
+    const reason = `non_idempotent_in_flight:${notProvablyIdempotent.map((n) => n.id).join(',')}`;
+    const interrupted: EngineEvent = { type: 'run.interrupted', runId: run.id, reason };
+    const appended = appendEngineEvent(deps.db, interrupted, deps.bus);
+    // Fold the PARSED event, not the raw one — see `appendEngineEvent`.
+    syncRunLifecycle(deps.db, run.id, engine.reduce(state, appended.event).state.status);
+    report.interrupted.push(run.id);
+    return;
+  }
+
+  // Build (WITHOUT persisting yet) the reconcile events + the commands they
+  // regenerate: `run.resumed` re-derives the walk — re-emitting `ready`/
+  // `waiting` dispatches, dispatching any genuinely newly-ready pending node,
+  // AND regenerating the ephemeral `finishRun` a crash between a terminal node
+  // event and `run.finished` would have dropped — then a `node.retryRequested`
+  // per idempotent in-flight node re-dispatches it under a NEW attempt.
+  const reconcileEvents: EngineEvent[] = [
+    { type: 'run.resumed', runId: run.id, reason: 'boot_reconcile' },
+    ...inFlight.map(({ id, attemptId }): EngineEvent => ({
+      type: 'node.retryRequested',
+      runId: run.id,
+      nodeId: id,
+      previousAttemptId: attemptId,
+      reason: 'boot_reconcile',
+    })),
+  ];
+  let next = state;
+  const commands = [];
+  for (const ev of reconcileEvents) {
+    const result = engine.reduce(next, ev);
+    next = result.state;
+    commands.push(...result.commands);
+  }
+
+  // A run HELD on a retry (F2b) re-derives NOTHING above — `onResumed` skips
+  // `retry_pending` deliberately, and `settle` cannot finish a run whose node
+  // is non-terminal. So its alarm row is checked HERE, and — this is the part
+  // that is easy to get wrong — checked UNCONDITIONALLY, whatever else the run
+  // has to do.
+  //
+  // The obvious gate ("only when the run has no other commands, since a run
+  // with live work resumes anyway and its held node is recovered by the alarm
+  // regardless") is the EXACT false premise B2 exists to kill: if the alarm row
+  // is missing there IS no alarm, and this is the only thing that can tell.
+  // Worse, the two conditions are POSITIVELY CORRELATED, so the gate would skip
+  // precisely the likeliest B2 case — `pump` drains `scheduleRetry` at the
+  // QUEUE TAIL, so the HOLD→ARM window IS the interval in which the sibling
+  // `dispatchNode` commands are draining. A crash there leaves a held node with
+  // no alarm AND a sibling still `dispatched`. Measured under the gated version:
+  // the sibling resumes and succeeds, the held node waits forever on an alarm
+  // that does not exist, the run rests `running` for the rest of the process's
+  // life, and the report calls it `resumed`.
+  const heldNodes = Object.keys(next.nodes)
+    .sort()
+    .filter((id) => next.nodes[id]!.status === 'retry_pending');
+  if (heldNodes.length > 0) {
+    const verdict = recoverHeld(deps, engine, run, next, heldNodes);
+    if (verdict === 'interrupted') {
+      // Frozen: no alarm will ever resolve the hold, so do NOT also resume the
+      // live nodes — the run is over.
+      report.interrupted.push(run.id);
+      return;
+    }
+    report.held.push(run.id);
+    if (verdict === 'rearmed') report.rearmed.push(run.id);
+    // `commands.length === 0` means the hold is the ONLY thing keeping this run
+    // alive — there is nothing to resume, so stop here rather than append a
+    // `run.resumed` that re-derives nothing. Otherwise fall through: the live
+    // nodes resume normally and the run is reported `resumed` AS WELL AS held.
+    if (commands.length === 0) return;
+  }
+
+  // `finishRun` is the driver's OWN command (no executor); `dispatchNode`/
+  // `startChild` need one. A run whose only command is a `finishRun` can be
+  // FINALIZED with no executor; one with live work to re-run needs the
+  // executor — without it we DEFER, appending nothing we cannot follow
+  // through on.
+  //
+  // TWO shapes reach the finalize path, not one: a run whose `finishRun` was
+  // DROPPED by a crash (the historical case), and — since #491 — a run whose
+  // doc STALLS, where `settle` derives `finishRun{failure,'stalled'}` afresh.
+  // The second is why this bucket matters beyond crash recovery: a run wedged
+  // by a pre-#444 doc is released at the next boot instead of holding its
+  // concurrency slot until an operator intervenes.
+  const needsExecutor = commands.some((c) => c.type !== 'finishRun');
+  if (needsExecutor && deps.executor === undefined) {
+    report.deferred.push(run.id);
+    return;
+  }
+
+  for (const ev of reconcileEvents) appendEngineEvent(deps.db, ev, deps.bus);
+  syncRunLifecycle(deps.db, run.id, next.status);
+  await pump(
+    {
+      db: deps.db,
+      resolveDoc: deps.resolveDoc,
+      executor: deps.executor ?? refuseToExecute,
+      alarms: deps.alarms,
+      bus: deps.bus,
+    },
+    engine,
+    next,
+    commands,
+  );
+  (needsExecutor ? report.resumed : report.finalized).push(run.id);
 }

@@ -71,6 +71,27 @@ Issue numbers, or "None".
 - End the body with the Claude Code attribution line (repo convention).
 - Doc-only PRs skip the review bot but still get CI — say "doc-only" in the
   description so the missing review isn't chased.
+- **Deliver the body with `--body-file` + a QUOTED heredoc. Never
+  `gh pr create --body "…"`.** Our bodies are backtick-dense (every identifier
+  is a code span), and a double-quoted shell string makes every one of those a
+  COMMAND SUBSTITUTION. It fails in the worst way: `gh` still creates the PR,
+  the prose still reads fluently, and each `` `term` `` is silently replaced by
+  the empty output of a failed command — so "the report IS the fault's only
+  channel — `reconcileOnBoot` returns it" posts as "… channel —  returns it".
+  The stderr noise scrolls past; the corruption is only visible if you re-read
+  the posted body. Bit PR #509 (2026-07-16) on a ~50-span body. Same class as
+  the quoting hazard that cost a full CI round on #501 (a double-quoted
+  `python3 -c` in claude-review.yml) — that one was FIXED by lifting the script
+  out; this is the same trap at the `gh` call site.
+  ```sh
+  cat > /tmp/pr.md <<'EOF'   # the QUOTES on 'EOF' are the load-bearing part
+  ... body with `backticks`, $vars, ${braces} — all inert ...
+  EOF
+  gh pr create --title "…" --body-file /tmp/pr.md
+  ```
+  Applies to `gh issue create/comment` and `gh pr comment` too. **Then re-read
+  what posted** (`gh pr view <n> --json body --jq '.body'`) — for a body this is
+  the only check that catches it.
 
 ## Pre-submit check
 

@@ -19,9 +19,15 @@ import {
   listPendingWakeups,
   settleWakeup,
 } from '../../repo/scheduled-wakeups.js';
-import { buildEngine, startRun, type DocResolver, type RetryAlarms } from '../driver.js';
+import {
+  buildEngine,
+  startRun,
+  type DocResolver,
+  type Executor,
+  type RetryAlarms,
+} from '../driver.js';
 import { appendEngineEvent, loadEngineEvents } from '../events.js';
-import { reconcileOnBoot } from '../reconcile.js';
+import { ReconcileInvariantError, reconcileOnBoot, refuseToExecute } from '../reconcile.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
 
@@ -64,6 +70,24 @@ function resolveDocFor(db: Db): DocResolver {
     const pv = getPipelineVersion(db, id);
     if (pv === null) throw new Error(`no pv ${id}`);
     return pv;
+  };
+}
+
+/**
+ * `resolveDocFor` with ONE version made unresolvable — the shape every
+ * doc-can't-resolve test needs (#443's terminal case, #479's non-terminal one).
+ * A wrapper, not a copy: the base resolver's behaviour for every OTHER id is the
+ * half these tests must not accidentally vary.
+ */
+function resolveDocExcept(
+  db: Db,
+  deadPvId: string,
+  err: Error = new Error('version deleted'),
+): DocResolver {
+  const base = resolveDocFor(db);
+  return (id) => {
+    if (id === deadPvId) throw err;
+    return base(id);
   };
 }
 
@@ -529,12 +553,7 @@ describe('reconcileOnBoot — #443 the LOG is authoritative over the projection'
     const report = await reconcileOnBoot({
       db,
       alarms: stubAlarms(),
-      resolveDoc: (id) => {
-        if (id === run.pipelineVersionId) throw new Error('version deleted');
-        const pv = getPipelineVersion(db, id);
-        if (pv === null) throw new Error(`no pv ${id}`);
-        return pv;
-      },
+      resolveDoc: resolveDocExcept(db, run.pipelineVersionId),
       executor,
     });
 
@@ -935,6 +954,55 @@ describe('reconcileOnBoot — a run held on a node retry', () => {
     expect(recovery.dispatched).toEqual([]);
     expect(getRun(db, run.id)!.status).toBe('interrupted');
   });
+
+  /**
+   * An executor that throws ON CALL — the shape `refuseToExecute` uses, and the
+   * only way to fault `pump` itself: every `makeStubExecutor` plan resolves to
+   * EVENTS (`node.failed` is an outcome the reducer folds, not a fault).
+   */
+  function throwOnPerform(err: Error): Executor {
+    return {
+      perform(): AsyncIterable<EngineEvent> {
+        throw err;
+      },
+    };
+  }
+
+  it('reports a run as BOTH `held` and `failed` when the fault lands AFTER the hold', async () => {
+    // `failed`'s docblock CLAIMS this ("NOT exclusive of held/rearmed — those are
+    // pushed BEFORE the loop"), which is prevention-log #25's exact shape: the
+    // rule a comment argues for is the one with no test behind it.
+    //
+    // It is a REAL path, and one #479's catch newly created: `recoverHeld` pushes
+    // `held` at the top of `reconcileOne`, then this run falls through to `pump`
+    // (it has live work in `b`). A throw there is caught by the per-run boundary
+    // and filed under `failed` — with `held` already pushed and NOT unwound.
+    const { db } = freshDb();
+    const alarms = realAlarms(db);
+    const run = await seedHeldPlusInFlight(db, alarms);
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: throwOnPerform(new Error('executor died mid-resume')),
+      alarms,
+    });
+
+    // BOTH, and neither is wrong: the hold was RECOVERED (durably — the alarm is
+    // armed and `node.retryScheduled` is appended) before the fault, so un-pushing
+    // `held` would erase a committed fact. The run genuinely is held AND faulted.
+    expect(report.held).toEqual([run.id]);
+    expect(report.failed).toEqual([{ runId: run.id, reason: 'executor died mid-resume' }]);
+
+    // Still exclusive of the VERDICT buckets — `resumed` is pushed at the loop
+    // tail, which the throw never reached. This is the line that makes the
+    // docblock's distinction (verdicts vs work-already-committed) testable.
+    expect(report.resumed).toEqual([]);
+    expect(report.interrupted).toEqual([]);
+
+    // The hold's durable half survived the fault, which is WHY `held` stands.
+    expect(listPendingWakeups(db)).toHaveLength(1);
+  });
 });
 
 describe('reconcileOnBoot — #491: a run wedged by a PRE-GATE doc drains at boot', () => {
@@ -1019,5 +1087,146 @@ describe('reconcileOnBoot — #491: a run wedged by a PRE-GATE doc drains at boo
     expect(report.finalized).toEqual([]);
     expect(loadEngineEvents(db, run.id).length).toBe(afterFirst);
     expect(getRun(db, run.id)!.status).toBe('failure');
+  });
+});
+
+describe('reconcileOnBoot — #479 a per-run fault degrades THAT run, not the loop', () => {
+  /**
+   * #443 hoisted `terminalFactFromLog` ABOVE `buildEngine`, so a FINISHED run
+   * never depends on its doc. This is the same fail-safety property one layer
+   * out, for the case that hoist does not cover: a NON-terminal run still
+   * reaches `buildEngine`, and an unresolvable doc threw straight out of
+   * `reconcileOnBoot` — aborting the whole boot reconcile and stranding every
+   * run after the bad one in the scan. Boot reconcile IS the recovery path; it
+   * is the worst place for an all-or-nothing failure mode.
+   */
+  /** Two crashed non-terminal runs; `bad`'s doc will not resolve. */
+  async function seedBadThenGood(db: Db) {
+    // Both crash mid-dispatch (`run.started` + a hung node), so each gets PAST
+    // the terminal fast path and reaches `buildEngine` — the throw site.
+    const bad = await seedCrashedRun(db, [node('a')], [], {
+      nodes: { a: { hang: true, idempotent: true } },
+    });
+    const good = await seedCrashedRun(db, [node('b')], [], {
+      nodes: { b: { hang: true, idempotent: true } },
+    });
+
+    // This test's whole value is the EARLY-EXIT shape (a throw that escapes the
+    // loop strands `good`), which only bites when `bad` is reconciled FIRST.
+    // `listRuns` has no ORDER BY, so that order is SQLite's scan order, not a
+    // guarantee — assert it, or adding one silently voids these tests.
+    expect(listRuns(db, { status: 'running' }).map((r) => r.id)).toEqual([bad.id, good.id]);
+    return { bad, good };
+  }
+
+  it('a non-terminal run whose DOC will not resolve does not strand the runs after it', async () => {
+    const { db } = freshDb();
+    const { bad, good } = await seedBadThenGood(db);
+
+    const report = await reconcileOnBoot({
+      db,
+      alarms: stubAlarms(),
+      resolveDoc: resolveDocExcept(db, bad.pipelineVersionId),
+      executor: makeStubExecutor({ nodes: { b: { outcome: 'success' } } }),
+    });
+
+    // The load-bearing half: the healthy run behind the bad one still recovered.
+    expect(report.resumed).toEqual([good.id]);
+    expect(getRun(db, good.id)!.status).toBe('success');
+  });
+
+  it('reports the faulted run in `failed` with its reason, and in NO verdict bucket', async () => {
+    const { db } = freshDb();
+    const { bad } = await seedBadThenGood(db);
+
+    const report = await reconcileOnBoot({
+      db,
+      alarms: stubAlarms(),
+      resolveDoc: resolveDocExcept(db, bad.pipelineVersionId),
+      executor: makeStubExecutor({ nodes: { b: { outcome: 'success' } } }),
+    });
+
+    // The reason travels with the run id: `ReconcileReport` is the ONLY channel
+    // this fault has (`index.ts` logs the report verbatim), so a bare id list
+    // would drop the one fact an operator needs.
+    expect(report.failed).toEqual([{ runId: bad.id, reason: 'version deleted' }]);
+
+    // A fault is not a verdict. Each verdict bucket is pushed at a `continue` or
+    // at the loop tail — i.e. only once that run's reconcile SUCCEEDED — so a
+    // faulted run must appear in none of them.
+    for (const bucket of [
+      report.resumed,
+      report.finalized,
+      report.resynced,
+      report.interrupted,
+      report.deferred,
+    ]) {
+      expect(bucket).not.toContain(bad.id);
+    }
+
+    // The documented NON-GOAL, pinned so it cannot change silently: the faulted
+    // run is left `running`. A caught throw cannot tell a PERMANENT fault (the
+    // version is gone) from a TRANSIENT one, and terminalizing a healthy run on
+    // a transient throw is fail-open in the other direction. See `failed`'s
+    // docblock and the follow-up ticket it names.
+    expect(getRun(db, bad.id)!.status).toBe('running');
+  });
+});
+
+describe("reconcileOnBoot — #479 the fault boundary does NOT swallow this loop's own invariants", () => {
+  /**
+   * The per-run catch is deliberately BROAD (it wraps the whole body, not just
+   * the `resolveDoc` call that motivated #479). Its docblock argues that breadth
+   * is safe *because* `ReconcileInvariantError` is re-thrown rather than filed
+   * under `failed`.
+   *
+   * These two tests exist because the pre-PR correctness lens MUTATION-TESTED
+   * that argument and found nothing behind it: deleting the re-throw passed
+   * 474/474, and reverting `refuseToExecute` to a plain `Error` passed 474/474.
+   * A guard defended only by a comment is one a future reader deletes as
+   * ceremony — so the discrimination gets a test per class. See prevention-log
+   * #25.
+   */
+  it('re-throws a ReconcileInvariantError instead of filing it under `failed`', async () => {
+    const { db } = freshDb();
+    const bad = await seedCrashedRun(db, [node('a')], [], {
+      nodes: { a: { hang: true, idempotent: true } },
+    });
+
+    const boom = new ReconcileInvariantError('driver invariant violated');
+    const call = reconcileOnBoot({
+      db,
+      alarms: stubAlarms(),
+      // Thrown from INSIDE a run's reconcile — the exact position a per-run fault
+      // occupies. The only difference is its CLASS, which is the whole point: a
+      // plain Error here lands in `failed` (pinned by the sibling #479 block).
+      resolveDoc: resolveDocExcept(db, bad.pipelineVersionId, boom),
+      executor: makeStubExecutor(),
+    });
+
+    // Escapes the loop entirely: boot dies loudly rather than the fault being
+    // demoted to one string inside the boot report's `fastify.log.info`.
+    await expect(call).rejects.toThrow(boom);
+  });
+
+  it('`refuseToExecute` refuses with the SENTINEL, so the re-throw above can see it', async () => {
+    // The finalize path passes this executor to `pump` when no real one exists.
+    // It is REACHABLE despite the `needsExecutor` gate (that gate reads only the
+    // INITIAL commands, while `pump` drains a queue that grows) — but not from a
+    // natural fixture, so its contract is pinned directly: the class it throws is
+    // load-bearing, not incidental. A plain `Error` here would be silently
+    // absorbed into `failed` by the per-run catch.
+    // Throws synchronously ON CALL, not on iteration — so a plain call is the
+    // whole contract; there is no stream to drain.
+    //
+    // A REAL `dispatchNode` command, not a cast: this asserts the guard refuses
+    // the exact shape that reaches it (a `finishRun` whose fold emits a dispatch),
+    // and `{} as never` would let the command type drift out from under the test.
+    expect(() =>
+      refuseToExecute.perform(
+        { type: 'dispatchNode', nodeId: 'a', attemptId: 'a#0', preparedInput: {} },
+        'run-1',
+      ),
+    ).toThrow(ReconcileInvariantError);
   });
 });

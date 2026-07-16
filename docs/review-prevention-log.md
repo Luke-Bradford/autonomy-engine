@@ -430,3 +430,52 @@ they are invisible to the diff and to the existing tests.** Corollary (recurring
 cf. #21): a comment asserting an invariant is not evidence the invariant holds —
 `grep` the producers. Both the false comment and the guard were fixed in the same
 PR as the flip.
+
+## 25. The guard your comment ARGUES FOR is the one nothing tests — mutate it before you trust the argument
+
+*Origin: two independent findings in the same fire (2026-07-16), which is what
+makes it a rule rather than an anecdote.* (a) **#504**: the review bot's
+`output_config.effort` was the single knob the whole ticket was about — and the
+only one with no test, while its neighbour `max_tokens` had **both** a test and a
+rationale comment. (b) **#479**: the per-run catch's docblock argued the
+wrap-the-whole-body breadth was safe *because* "the cost of the breadth — that it
+could mask a genuine bug — is paid by the sentinel re-throw below". The pre-PR
+correctness lens mutation-tested that sentence: **deleting the re-throw line
+passed 474/474 tests, and reverting the sentinel to a plain `Error` also passed
+474/474.** The safety argument was load-bearing prose with nothing underneath it.
+
+The mechanism is not laziness — it is that **a guard is written to make a bad
+thing not happen, so the natural test ("the good path still works") passes with
+the guard deleted.** Prose is cheap to write and reads as evidence; the more
+carefully a comment argues that a design is safe, the more likely the argument is
+carrying weight the test suite is not. The two findings above are the same shape
+as #21 (*a review fix is a diff too*) and #24's corollary (*a comment asserting an
+invariant is not evidence the invariant holds*): the repo keeps rediscovering that
+**rationale is not verification**.
+
+**Rule: when you write a comment whose job is to justify a risk ("this is safe
+because X"), X needs its own test — and the way to check is to DELETE X and run
+the suite. If it stays green, the test suite does not know about X, and the next
+refactor will remove it as ceremony.** Cheap to apply: it is one revert and one
+`pnpm test`. Applies with double force to guards that are unreachable today and
+defended only as "defensive" — those are exactly the lines a future reader
+deletes, and exactly the lines no happy-path test covers. Corollary: a sentinel /
+allowlist / re-throw that discriminates two error classes needs a test **per
+class**, or the discrimination is untested even when the happy path is not.
+
+**(c) The third instance — the rule applies to the claim you just CORRECTED.**
+The same #479 fire produced one more, *after* this entry was written: the review
+bot found that the `failed` docblock's exclusivity rule (*"NOT exclusive of
+`held`/`rearmed`"*) had no test. That rule was the planning gate's **finding** —
+the plan's original "a failed run appears in no other bucket" was false, and
+correcting it was the gate working. But nobody then mutated the correction, so
+the PR fixing two instances of #25 shipped a third in the very docblock stating
+the lesson. **A freshly-reasoned invariant feels verified BECAUSE you reasoned
+about it** — that is precisely the state in which the mutation goes unwritten.
+So: apply the delete-and-run check to corrected claims and review findings, not
+only to code you authored. Second corollary, from the same test: **a
+characterization test (one pinning behaviour that is already correct) is written
+to pass, so passing is not evidence it binds.** Its first run is not the check —
+mutating the behaviour it claims to pin is. If the mutation stays green, the test
+is decoration. This is the mirror of TDD's see-it-fail step, for the case where
+the implementation already exists and there is no red phase to observe.
