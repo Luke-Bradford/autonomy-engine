@@ -593,7 +593,8 @@ describe('MAX_EXPR_DEPTH bounds expression NESTING at BOTH halves (#6 #453)', ()
     }
     expect(thrown).toBeInstanceOf(SubstituteError);
     expect((thrown as Error).message).not.toMatch(/Maximum call stack/i);
-    expect((thrown as Error).message).toMatch(/deep|depth|MAX_EXPR_DEPTH|nest/i);
+    // Specific to the depth-cap error, not any message containing "deep".
+    expect((thrown as Error).message).toMatch(/nesting too deep|MAX_EXPR_DEPTH/i);
   });
 });
 

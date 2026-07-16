@@ -102,8 +102,10 @@ function isQuote(ch: string | undefined): boolean {
  * does not cover (#453).
  *
  * 64 mirrors `MAX_PATH_DEPTH`'s wide safe band: the deepest expression spec #6
- * itself writes nests a handful of calls, while the stack overflows near ~2000 —
- * so it false-rejects nothing a human authors while refusing the pathological
+ * itself writes nests a handful of calls, while the stack overflows near ~2000
+ * (MEASURED, not reasoned by analogy: `validateRefs` returns cleanly at 500 and
+ * threw a raw `RangeError` at 2000 before this cap) — so 64 false-rejects
+ * nothing a human authors while refusing the pathological
  * case deterministically and early. Pure + deterministic (it reads the AST's
  * SHAPE, never data), so a replay from a different call depth cannot diverge —
  * the "pure + replay-safe" invariant spec #6 line 20 leans on.

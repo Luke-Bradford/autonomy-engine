@@ -417,7 +417,9 @@ describe('parseExpr — MAX_EXPR_DEPTH bounds expression NESTING (#6 #453)', () 
     }
     expect(thrown).toBeInstanceOf(SubstituteError);
     expect((thrown as Error).name).not.toBe('RangeError');
-    expect((thrown as Error).message).toMatch(/deep|depth|MAX_EXPR_DEPTH|nest/i);
+    // Specific to the depth-cap error, so it cannot pass on an unrelated
+    // message that merely contains "deep" (e.g. "deep copy").
+    expect((thrown as Error).message).toMatch(/nesting too deep|MAX_EXPR_DEPTH/i);
   });
 
   it('refuses an index body nested OVER the cap (the parseRef edge)', () => {
