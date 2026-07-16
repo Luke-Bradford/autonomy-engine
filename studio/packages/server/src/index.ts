@@ -21,6 +21,7 @@ import type { DocResolver, RetryAlarms } from './run/driver.js';
 import { registerAuthHook } from './auth/principal.js';
 import { registerErrorHandler } from './errors.js';
 import { connectionsRoutes } from './routes/connections.js';
+import { secretsRoutes } from './routes/secrets.js';
 import { pipelinesRoutes } from './routes/pipelines.js';
 import { triggersRoutes } from './routes/triggers.js';
 import { webhooksRoutes } from './routes/webhooks.js';
@@ -254,6 +255,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   await fastify.register(fastifyWebsocket);
 
   await fastify.register(connectionsRoutes);
+  await fastify.register(secretsRoutes);
   await fastify.register(pipelinesRoutes);
   await fastify.register(triggersRoutes);
   await fastify.register(webhooksRoutes);

@@ -253,9 +253,16 @@ export const runDiagnostics = sqliteTable(
 );
 
 /**
- * An encrypted-at-rest secret blob (`Secret`). `ref` is the stable handle
- * `connections.secret_ref` points at; unique. `ciphertext` is opaque to this
- * layer — produced/consumed by `packages/server/src/secrets/secrets.ts`.
+ * An encrypted-at-rest secret blob (`Secret`). `ref` is the stable machine
+ * handle `connections.secret_ref` points at; unique. `ciphertext` is opaque to
+ * this layer — produced/consumed by `packages/server/src/secrets/secrets.ts`.
+ *
+ * `owner_id` + `name` (item 7 / S1) are nullable: a connection-owned secret
+ * leaves both `NULL` (addressed only by `ref`); a standalone secret carries an
+ * owner + a user-chosen `name`, UNIQUE per owner so `{ "$secret": "<name>" }`
+ * (S2) resolves deterministically. A UNIQUE index over `(owner_id, name)` does
+ * NOT collide the many `(NULL, NULL)` connection secrets — SQLite treats NULLs
+ * as distinct in a UNIQUE index.
  */
 export const secrets = sqliteTable(
   'secrets',
@@ -263,9 +270,14 @@ export const secrets = sqliteTable(
     id: text('id').primaryKey(),
     ref: text('ref').notNull(),
     ciphertext: text('ciphertext').notNull(),
+    ownerId: text('owner_id'),
+    name: text('name'),
     createdAt: integer('created_at').notNull(),
   },
-  (table) => [uniqueIndex('secrets_ref_idx').on(table.ref)],
+  (table) => [
+    uniqueIndex('secrets_ref_idx').on(table.ref),
+    uniqueIndex('secrets_owner_name_idx').on(table.ownerId, table.name),
+  ],
 );
 
 /**

@@ -6,6 +6,7 @@ import {
   PipelineVersionSchema,
   RunDiagnosticSchema,
   RunSchema,
+  SecretSchema,
   TriggerSchema,
 } from '@autonomy-studio/shared';
 import type { z } from 'zod';
@@ -15,6 +16,7 @@ import {
   pipelineVersions,
   runDiagnostics,
   runs,
+  secrets,
   triggers,
 } from '../schema.js';
 
@@ -64,6 +66,12 @@ const CASES: { name: string; table: Parameters<typeof getTableColumns>[0]; schem
     // API boundary with a 1:1 Zod counterpart — `GET /api/runs/:id/diagnostics`
     // returns exactly this shape — so unlike `run_events` it earns the guard.
     { name: 'run_diagnostics', table: runDiagnostics, schema: RunDiagnosticSchema },
+    // item 7 / S1 — `secrets` gained `owner_id`/`name` for standalone,
+    // name-addressable secrets. It IS persisted + round-tripped (`createSecret`
+    // returns `SecretSchema.parse(row)`; every read re-parses), so a schema
+    // field with no column is the #473 defect here too. Its public projection
+    // crosses the API boundary; the full `SecretSchema` never does (ciphertext).
+    { name: 'secrets', table: secrets, schema: SecretSchema },
   ];
 
 describe('drizzle table ⇔ Zod schema parity (#473)', () => {

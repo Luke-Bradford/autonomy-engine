@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, isNotNull } from 'drizzle-orm';
 import {
   NewSecretSchema,
   SecretSchema,
@@ -41,6 +41,22 @@ export function listSecrets(db: Db): Secret[] {
   return db
     .select()
     .from(secrets)
+    .all()
+    .map((row) => SecretSchema.parse(row));
+}
+
+/**
+ * The STANDALONE secrets for one owner (item 7 / S1) — the surface `GET
+ * /api/secrets` exposes. Filters `name IS NOT NULL` so a connection-owned
+ * secret (minted internally, `name`/`ownerId` = `NULL`) is never listed here:
+ * those are managed only through the connection they belong to. Owner-scoped,
+ * mirroring `listConnections`.
+ */
+export function listNamedSecrets(db: Db, ownerId: string): Secret[] {
+  return db
+    .select()
+    .from(secrets)
+    .where(and(eq(secrets.ownerId, ownerId), isNotNull(secrets.name)))
     .all()
     .map((row) => SecretSchema.parse(row));
 }
