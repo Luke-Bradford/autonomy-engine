@@ -82,12 +82,23 @@ export interface ActivityCatalogEntry {
   outputs: Output[];
   /** Zod schema for this activity's non-secret config settings blob. */
   configSchema: z.ZodType;
+  /**
+   * Config field NAMES at which a `{ "$secret": "<name>" }` marker is permitted
+   * — a secret SINK (item 7 / S2, #1 F15). A marker is allowed only within the
+   * subtree of a declared sink field (its first `config` path segment must be
+   * one of these); `validateRefs` refuses a marker anywhere else. `undefined` =
+   * no sinks (every activity today, fail-CLOSED: no stored version can hold a
+   * marker until a consumer — `http_request`, S4 — declares one).
+   */
+  secretSinkFields?: readonly string[];
   // D6's remaining fields (`inputs`, `supportsPolicy`, `retryableFailureKinds`,
-  // `timeoutScope`, `errorMap`, `secure*Fields`, `supportsCancel`) are
+  // `timeoutScope`, `errorMap`, `secureOutputFields`, `supportsCancel`) are
   // deliberately NOT declared yet: each is sequencing behind a named owner
-  // (F2a/F2b/F3/F4/F15/F9b-d), not an open question. Spec #1's F9a block under
-  // D6 is the SSOT for why — it is not restated here, so the ticket that fills
-  // a field prunes ONE list, not two.
+  // (F2a/F2b/F3/F4/F9b-d — `secretSinkFields` above is F15's input sink, now
+  // declared; F4's `secureOutputFields` output/redaction slot is still pending),
+  // not an open question. Spec #1's F9a block under D6 is the SSOT for why — it
+  // is not restated here, so the ticket that fills a field prunes ONE list, not
+  // two.
 }
 
 /**

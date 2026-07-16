@@ -7,5 +7,6 @@ export * from './fire-result.js';
 export * from './run.js';
 export * from './run-stream.js';
 export * from './secret.js';
+export * from './secret-ref.js';
 export * from './webhook-delivery.js';
 export * from './wakeup.js';
