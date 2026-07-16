@@ -62,11 +62,19 @@ lessons extracted · APPROVE + CI green on the most recent commit.
 
 ## Reading the gate — the check is not the verdict (2026-07-04 incident)
 
-The required `review` CHECK going green only means the review WORKFLOW ran.
-The VERDICT lives in the bot's COMMENT ("## Claude Code Review" →
+The required `review` CHECK going green means the workflow ran **and the bot
+rendered a verdict** (#501) — it does **not** mean the verdict was APPROVE.
+`REQUEST CHANGES` is still a green check today; the fork on whether it should
+red is #502. The VERDICT lives in the bot's COMMENT ("## Claude Code Review" →
 `**APPROVE**` / `**REQUEST CHANGES**`), and `safe_merge` enforces the
 comment, freshness-compared against the head commit. A gate watcher that
 polls check buckets will call a PR "ready" that safe_merge then refuses.
+
+Before #501 green meant only "the API answered": a review that trailed off
+without a verdict passed the check (PR #500 — the bot's own reasoning had
+concluded REQUEST CHANGES). So **read the verdict, never the check bucket** —
+and if you merge with `gh pr merge` rather than `safe_merge`, that reading is
+the only thing standing between you and an uncertified merge.
 
 When watching a gate:
 

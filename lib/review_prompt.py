@@ -24,11 +24,111 @@ stdlib only -- no third-party imports (engine non-negotiable).
 """
 
 import json
+import re
 import sys
 
 SCOPE_ENGINE = "engine"
 SCOPE_STUDIO = "studio"
 SCOPE_MIXED = "mixed"
+
+# --- verdict extraction (#501) ----------------------------------------------
+#
+# The bug: `review` is a REQUIRED check, and it went GREEN on a review that
+# emitted NO verdict at all. On PR #500 the model spent 6023 output tokens
+# reasoning in PLAIN TEXT (thinking_tokens=0 under `thinking: adaptive`), ended
+# with "Final answer below." and stopped -- stop_reason `end_turn`, so the
+# max_tokens guard correctly never fired. Its own final line of reasoning read
+# "final verdict: REQUEST CHANGES", so the gate reported PASS on a review that
+# had concluded the opposite. Nothing asserted the verdict was ever rendered.
+#
+# This is the merge-gate invariant applied to the review gate: a `gh` failure is
+# never CI-green, and a MISSING verdict is never an APPROVE. The failure mode
+# here must be a loud red check, never a quiet pass.
+#
+# NOT the merge gate's predicate, and deliberately not unified with it.
+# `safe_merge.sh:137/141` greps the whole comment body for `APPROVE` /
+# `REQUEST CHANGES|[BLOCKING]` to answer a DIFFERENT question -- "does this
+# comment block me?" -- and `board.sh:332` mirrors those regexes bug-for-bug ON
+# PURPOSE (its comment at :308 says it must agree with the gate it watches, not
+# be independently stricter). This function answers "did the model emit its
+# MANDATED verdict section?" and so is deliberately strict where those are
+# deliberately loose. Unifying the three would silently loosen the merge gate
+# and break board.sh's pinned mirror. Leave them separate.
+VERDICTS = ("APPROVE", "REQUEST CHANGES", "NEEDS DISCUSSION")
+
+# Ambiguity resolves toward the NON-approving verdict, never toward APPROVE.
+# A verdict line naming two markers ("**REQUEST CHANGES** -- fix a.ts:9, then
+# this is an **APPROVE**") is a real shape, and answering None there would RED a
+# review that did its job -- a false red is a real cost, not a safe default,
+# because `enforce_admins: true` means it clears only by re-running. Precedence
+# is blocking-first, which is both the safe direction and the same order
+# `safe_merge.sh` already checks in (:137 blocking BEFORE :141 approve).
+_VERDICT_PRECEDENCE = ("REQUEST CHANGES", "NEEDS DISCUSSION", "APPROVE")
+
+# A fenced block is QUOTED text, never the rendered section. The model is prone
+# to restating its own required format mid-monologue ("Recall the output
+# format: ```### Verdict ...```") -- and the charter's own "the `### Verdict`
+# section is MANDATORY" line raises the odds of exactly that echo. Stripping
+# fences first removes the whole class deterministically. An UNTERMINATED fence
+# is stripped to EOF (`(?:```|\Z)`): everything after an unclosed fence is
+# code-shaped, and over-stripping only ever yields None -- a red check, which is
+# the safe direction.
+_FENCE = re.compile(r"```.*?(?:```|\Z)", re.DOTALL)
+
+# A real markdown heading LINE, never an inline mention: the model reasons
+# IN-BAND now, so it can name "### Verdict" mid-sentence. `^#{1,6}` excludes
+# that shape.
+_VERDICT_HEADING = re.compile(r"^#{1,6}[ \t]*Verdict\b[^\n]*$", re.MULTILINE | re.IGNORECASE)
+
+# The marker must be BOLD, as the charter mandates. Bare-word matching would be
+# fatally loose: "**REQUEST CHANGES** -- I would APPROVE once a.ts:9 is fixed"
+# names both verdicts in one honest sentence, and only the bold one is the
+# verdict. Bold-only also rejects "**APPROVED**", which is not the marker.
+_MARKERS = {
+    v: re.compile(r"\*\*[ \t]*" + v.replace(" ", "[ \t]+") + r"[ \t]*\*\*", re.IGNORECASE)
+    for v in VERDICTS
+}
+
+
+def extract_verdict(text):
+    """The verdict from a review body, or None when none was rendered.
+
+    None is the FAIL-SAFE answer and the caller MUST treat it as "not approved".
+
+    The thing being detected is "the model FINISHED", because the failure this
+    guards is a model that trails off mid-thought. So a verdict counts only when
+    it TERMINATES the response: last heading, one marker, and nothing but
+    whitespace after the marker's own line. Anchoring on the last `### Verdict`
+    alone is not enough and is at its weakest exactly when it matters -- in a
+    trailed-off monologue the last heading is a DRAFT or a QUOTE, so
+    "### Verdict / **APPROVE** / ...hmm, wait, actually a.ts:9 null-derefs...
+    Final answer below." would certify as APPROVE. The terminal rule rejects it:
+    a verdict the model kept arguing with is not a verdict it rendered.
+    """
+    if not text:
+        return None
+    scan = _FENCE.sub("\n", text)
+    headings = list(_VERDICT_HEADING.finditer(scan))
+    if not headings:
+        return None
+    # From the heading's START, so a verdict on the heading line itself
+    # ("### Verdict: **APPROVE**") still counts -- scanning from its end missed
+    # that and returned a false red. Leniency about WHERE the marker sits is
+    # safe; leniency about WHAT counts as one would be fail-open, so the marker
+    # stays strict and the terminal rule below does the real work.
+    body = scan[headings[-1].start() :]
+    found = [v for v in VERDICTS if _MARKERS[v].search(body)]
+    if not found:
+        return None
+    verdict = next(v for v in _VERDICT_PRECEDENCE if v in found)
+    match = _MARKERS[verdict].search(body)
+    # The rest of the marker's LINE is the mandated one-sentence reason; past
+    # that, only whitespace. Anything else means the model was still talking.
+    after = body[match.end() :]
+    newline = after.find("\n")
+    if newline != -1 and after[newline + 1 :].strip():
+        return None
+    return verdict
 
 STUDIO_PREFIX = "studio/"
 
@@ -183,6 +283,11 @@ _REVIEW_RULES_AND_FORMAT = (
     "charter above covers this diff; review it.\n\n"
     "## Output format -- one line per finding, no paragraphs\n"
     "Findings-only, one sentence each. No preamble, no narrative. Omit any empty section.\n"
+    "Respond with your FINAL ANSWER ONLY. Do not think out loud in the response: no "
+    "exploratory reasoning, no intermediate drafts, no meta-commentary about your own "
+    "process, no 'let me check...'. Do that work before you start writing. The `### "
+    "Verdict` section is MANDATORY and comes last -- a response that ends without it "
+    "fails the gate outright (#501), so never trail off before you reach it.\n"
     "### [BLOCKING] -- must fix before merge\n"
     "`file:line` -- what is wrong (one sentence).\n\n"
     "### [WARNING] -- should fix\n"
@@ -259,12 +364,41 @@ def _read(path, default=""):
         return default
 
 
+def _verdict_main(path):
+    """`--verdict <review.txt>`: print the verdict, or refuse with exit 1.
+
+    An unreadable review is not an approval either -- `_read` yields "" and that
+    extracts to None, so the missing-file path fails closed by construction.
+    """
+    verdict = extract_verdict(_read(path, ""))
+    if verdict is None:
+        sys.stderr.write(
+            "review_prompt: no verdict -- the review body has no unambiguous "
+            "'### Verdict' section naming exactly one of: %s.\n"
+            "A review that renders no verdict is NOT an approval; failing the "
+            "gate rather than passing it (#501). Re-run the review job.\n"
+            % ", ".join("**%s**" % v for v in VERDICTS)
+        )
+        return 1
+    sys.stdout.write(verdict + "\n")
+    return 0
+
+
 def main(argv):
-    """CLI for the workflow: review_prompt.py <files.txt> <diff> <desc> <comments> <out>"""
+    """CLI for the workflow: review_prompt.py <files.txt> <diff> <desc> <comments> <out>
+
+    Also `review_prompt.py --verdict <review.txt>` (#501), so the gate calls this
+    TESTED extractor instead of an inline heredoc -- untestability is exactly how
+    #468 survived, per the comment in claude-review.yml.
+    """
+    if len(argv) == 3 and argv[1] == "--verdict":
+        return _verdict_main(argv[2])
+
     if len(argv) != 6:
         sys.stderr.write(
             "usage: review_prompt.py <files.txt> <pr.diff> <pr_description.txt> "
             "<pr_comments.txt> <request.json>\n"
+            "       review_prompt.py --verdict <review.txt>\n"
         )
         return 2
 
