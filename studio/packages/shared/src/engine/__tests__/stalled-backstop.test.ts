@@ -199,11 +199,14 @@ describe('#491 — a run that can never finish is terminalized, not wedged', () 
     expect(named).not.toContain('ghost');
   });
 
-  it('names a child listed by TWO active containers exactly ONCE (#492 shape)', () => {
+  it('a child shared by two containers is named ONCE, under its one owner (#492)', () => {
     // The stuck set is a REPORTER over a doc nothing validated, so it must not
-    // assume disjoint children. `childToContainer` is last-wins over this doc
-    // (#492, open) — that divergence is not settled here; this only pins that the
-    // report does not say `n1` twice.
+    // name any id twice. Since #492 `childToContainer` is FIRST-wins and a
+    // duplicate child is neutralized out of every non-owning container's body, so
+    // `n1`/`n2` sit under `c1` alone and `c2` is emptied (→ succeeds, not active).
+    // The reporter names each stuck node once via `c1`; the `Set` dedupe is now
+    // belt-and-suspenders rather than the thing under test. Pinned so a regression
+    // to last-wins-and-keep-both — which would name `n1` twice — is caught.
     const eng = createEngine({
       nodes: [node('n1'), node('n2')],
       edges: [
