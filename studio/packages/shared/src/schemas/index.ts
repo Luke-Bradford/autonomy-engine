@@ -1,5 +1,6 @@
 export * from './version.js';
 export * from './api-error.js';
+export * from './pagination.js';
 export * from './connection.js';
 export * from './pipeline.js';
 export * from './trigger.js';

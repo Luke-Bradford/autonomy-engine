@@ -4,12 +4,14 @@ import {
   NewPipelineVersionSchema,
   PipelineSchema,
   PipelineVersionSchema,
+  paginatedResponseSchema,
   type Pipeline,
   type PipelineVersion,
 } from '@autonomy-studio/shared';
 import { apiFetch } from './client';
+import { fetchAllPages, pageQuery } from './pagination';
 
-const PipelineListSchema = z.array(PipelineSchema);
+const PipelinePageSchema = paginatedResponseSchema(PipelineSchema);
 const PipelineVersionListSchema = z.array(PipelineVersionSchema);
 
 /**
@@ -29,9 +31,15 @@ export type PipelineWrite = z.input<typeof PipelineWriteSchema>;
 export const PipelineVersionWriteSchema = NewPipelineVersionSchema.omit({ pipelineId: true });
 export type PipelineVersionWrite = z.input<typeof PipelineVersionWriteSchema>;
 
-/** Owner-scoped list of pipelines (`GET /api/pipelines`). */
+/**
+ * Owner-scoped list of pipelines (`GET /api/pipelines`). Keyset-paginated
+ * (#534); walks every page and returns the full list, so callers keep the same
+ * `Promise<T[]>` contract. The `signal` is threaded through every page fetch.
+ */
 export function listPipelines(signal?: AbortSignal): Promise<Pipeline[]> {
-  return apiFetch('/api/pipelines', { schema: PipelineListSchema, signal });
+  return fetchAllPages((cursor) =>
+    apiFetch(`/api/pipelines${pageQuery(cursor)}`, { schema: PipelinePageSchema, signal }),
+  );
 }
 
 /**

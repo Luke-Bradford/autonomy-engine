@@ -32,7 +32,7 @@ describe('connections routes', () => {
 
     const listRes = await app.inject({ method: 'GET', url: '/api/connections' });
     expect(listRes.statusCode).toBe(200);
-    expect(listRes.json().map((c: { id: string }) => c.id)).toContain(created.id);
+    expect(listRes.json().items.map((c: { id: string }) => c.id)).toContain(created.id);
 
     const patchRes = await app.inject({
       method: 'PATCH',
@@ -133,7 +133,7 @@ describe('connections routes', () => {
     });
 
     const listRes = await app.inject({ method: 'GET', url: '/api/connections' });
-    expect(listRes.json().map((c: { id: string }) => c.id)).not.toContain(other.id);
+    expect(listRes.json().items.map((c: { id: string }) => c.id)).not.toContain(other.id);
 
     const getRes = await app.inject({ method: 'GET', url: `/api/connections/${other.id}` });
     expect(getRes.statusCode).toBe(404);

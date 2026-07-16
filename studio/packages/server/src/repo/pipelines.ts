@@ -1,12 +1,14 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   NewPipelineSchema,
   PipelineSchema,
   type NewPipeline,
   type Pipeline,
+  type Paginated,
 } from '@autonomy-studio/shared';
 import { pipelines } from '../db/schema.js';
 import { newId } from './ids.js';
+import { afterCursor, pageOrder, toPage, type PageArgs } from './pagination.js';
 import type { Db } from './types.js';
 
 export function createPipeline(db: Db, input: NewPipeline): Pipeline {
@@ -33,6 +35,30 @@ export function listPipelines(db: Db, ownerId?: string): Pipeline[] {
       ? db.select().from(pipelines).all()
       : db.select().from(pipelines).where(eq(pipelines.ownerId, ownerId)).all();
   return rows.map((row) => PipelineSchema.parse(row));
+}
+
+/**
+ * The paginated, owner-scoped list surfaced by `GET /api/pipelines` (#534).
+ * Keyset over `created_at ASC, id ASC` (see `pagination.ts`). A SEPARATE fn
+ * from `listPipelines` (not a changed return type): pagination is its own
+ * bounded query, and `listPipelines` stays the unscoped primitive (`ownerId?` →
+ * all owners) the repo/portability tests exercise.
+ */
+export function listPipelinesPage(db: Db, ownerId: string, args: PageArgs): Paginated<Pipeline> {
+  const rows = db
+    .select()
+    .from(pipelines)
+    .where(
+      and(
+        eq(pipelines.ownerId, ownerId),
+        args.cursor ? afterCursor(pipelines.createdAt, pipelines.id, args.cursor) : undefined,
+      ),
+    )
+    .orderBy(...pageOrder(pipelines.createdAt, pipelines.id))
+    .limit(args.limit + 1)
+    .all()
+    .map((row) => PipelineSchema.parse(row));
+  return toPage(rows, args.limit);
 }
 
 /** Only `name` (and `ownerId`, unused by MVP callers) are mutable here — the

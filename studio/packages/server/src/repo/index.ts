@@ -1,5 +1,6 @@
 export * from './ids.js';
 export * from './types.js';
+export * from './pagination.js';
 export * from './connections.js';
 export * from './pipelines.js';
 export * from './pipeline-versions.js';

@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
 import { SecretPublicSchema, type Secret } from '@autonomy-studio/shared';
-import { createSecret, deleteSecret, getSecret, listNamedSecrets } from '../repo/index.js';
+import { createSecret, deleteSecret, getSecret, listNamedSecretsPage } from '../repo/index.js';
 import { newId } from '../repo/ids.js';
 import { encrypt } from '../secrets/secrets.js';
 import { NotFoundError } from '../errors.js';
-import { requireOwned } from './util.js';
+import { pageArgsFromQuery, requireOwned } from './util.js';
 
 /**
  * item 7 / S1 — the SOURCE. A STANDALONE, name-addressable secret, decoupled
@@ -75,7 +75,14 @@ export const secretsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get('/api/secrets', async (request) => {
-    return listNamedSecrets(db, request.principal.ownerId).map(toPublic);
+    // #534 — keyset-paginated envelope `{ items, nextCursor }`; each item is the
+    // public projection (no ciphertext/ref), `nextCursor` opaque.
+    const page = listNamedSecretsPage(
+      db,
+      request.principal.ownerId,
+      pageArgsFromQuery(request.query),
+    );
+    return { items: page.items.map(toPublic), nextCursor: page.nextCursor };
   });
 
   fastify.delete<{ Params: { id: string } }>('/api/secrets/:id', async (request, reply) => {

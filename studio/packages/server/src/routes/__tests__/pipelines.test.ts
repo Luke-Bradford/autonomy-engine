@@ -31,7 +31,7 @@ describe('pipelines routes', () => {
     expect(getRes.json()).toEqual(created);
 
     const listRes = await app.inject({ method: 'GET', url: '/api/pipelines' });
-    expect(listRes.json().map((p: { id: string }) => p.id)).toContain(created.id);
+    expect(listRes.json().items.map((p: { id: string }) => p.id)).toContain(created.id);
 
     const patchRes = await app.inject({
       method: 'PATCH',
@@ -131,7 +131,7 @@ describe('pipelines routes', () => {
   it('owner scoping: a pipeline belonging to a different owner is not visible', async () => {
     const other = createPipeline(app.db, { ownerId: 'someone-else', name: 'Not mine' });
     const listRes = await app.inject({ method: 'GET', url: '/api/pipelines' });
-    expect(listRes.json().map((p: { id: string }) => p.id)).not.toContain(other.id);
+    expect(listRes.json().items.map((p: { id: string }) => p.id)).not.toContain(other.id);
     const getRes = await app.inject({ method: 'GET', url: `/api/pipelines/${other.id}` });
     expect(getRes.statusCode).toBe(404);
   });
