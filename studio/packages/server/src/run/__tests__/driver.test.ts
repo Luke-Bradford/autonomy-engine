@@ -3,6 +3,7 @@ import {
   CATALOG_VERSION,
   type Edge,
   type EdgeOn,
+  type Engine,
   type EngineEvent,
   type Node,
   type NewPipelineVersion,
@@ -14,8 +15,11 @@ import { createRun, getRun } from '../../repo/runs.js';
 import { runs } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { buildEngine, startRun, type DocResolver, type DriverDeps } from '../driver.js';
-import { loadEngineEvents } from '../events.js';
+import { buildEngine, pump, startRun, type DocResolver, type DriverDeps } from '../driver.js';
+import { appendEngineEvent, loadEngineEvents } from '../events.js';
+import { createRunEventBus } from '../event-bus.js';
+import { listRunDiagnostics } from '../../repo/run-diagnostics.js';
+import type { RunEvent } from '@autonomy-studio/shared';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
 
@@ -228,5 +232,145 @@ describe('startRun — the startedAt fact', () => {
     const engine = buildEngine(getPipelineVersion(db, pvId)!);
     const state = engine.projectRunState(loadEngineEvents(db, created.id));
     expect(state.startedAt).toBe(new Date(admittedAt).toISOString());
+  });
+});
+
+describe('driver — reduce-first finishRun (#477)', () => {
+  // The driver's OWN `finishRun` is REDUCED before it is appended: its verdict is
+  // known without the log, so a `run.finished` the reducer would REJECT never
+  // becomes durable. Before #477 `pump` appended `run.finished` and only THEN
+  // folded it, so a rejected `run.finished{success}` sat durably in the log
+  // followed by its `finishRun{failure,invalid_event}` replacement — and a crash
+  // between the two left the rejected success as the sole terminal, which the
+  // #443 log-authoritative reconciler resyncs as `success` where it should be
+  // `failure`. Reducing first makes that impossible log unconstructible.
+  it('never appends a run.finished the reducer rejects; folds the replacement instead', async () => {
+    const { db } = freshDb();
+    // Node still `ready` (never dispatched) ⇒ the run is NOT actually finished,
+    // so `run.finished{success}` is impossible and the reducer rejects it.
+    const pvId = seedVersion(db, [node('a')]);
+    const run = seedRun(db, pvId);
+    const engine = buildEngine(getPipelineVersion(db, pvId)!);
+    // A realistic partial log: started, node `a` ready, nothing terminal.
+    appendEngineEvent(db, {
+      type: 'run.started',
+      runId: run.id,
+      pipelineVersionId: pvId,
+      startedAt: new Date(run.startedAt).toISOString(),
+      params: {},
+    });
+    const state = engine.projectRunState(loadEngineEvents(db, run.id));
+    expect(state.status).toBe('running');
+
+    const bus = createRunEventBus();
+    const published: RunEvent[] = [];
+    bus.subscribe(run.id, (e) => published.push(e));
+
+    const final = await pump({ ...deps(db), bus }, engine, state, [
+      { type: 'finishRun', outcome: 'success' },
+    ]);
+
+    // The run terminalizes as FAILURE (the reducer's replacement), never success.
+    expect(final.status).toBe('failure');
+    expect(getRun(db, run.id)!.status).toBe('failure');
+
+    // The impossible `run.finished{success}` is NOWHERE in the durable log.
+    const finishes = loadEngineEvents(db, run.id).filter((e) => e.type === 'run.finished');
+    expect(finishes).toHaveLength(1);
+    const finish = finishes[0] as Extract<EngineEvent, { type: 'run.finished' }>;
+    expect(finish.outcome).toBe('failure');
+    expect(finish.reason).toBe('invalid_event');
+
+    // The rejection diagnostic still reaches the durable sink (#497) — carried to
+    // the replacement's seq rather than dropped, since no rejected event exists.
+    const diags = listRunDiagnostics(db, run.id);
+    expect(diags.some((d) => d.message.includes('impossible run.finished{success}'))).toBe(true);
+
+    // A live watcher never sees a phantom `run.finished{success}` flicker.
+    const publishedFinishes = published.filter((e) => e.type === 'run.finished');
+    expect(publishedFinishes).toHaveLength(1);
+    expect(
+      (publishedFinishes[0]!.payload as Extract<EngineEvent, { type: 'run.finished' }>).outcome,
+    ).toBe('failure');
+  });
+
+  // Reduce-first must not break the ordinary ACCEPTED terminal: a genuine
+  // `finishRun{success}` still appends exactly one `run.finished{success}`,
+  // syncs the row, and publishes once.
+  it('appends an accepted run.finished{success} exactly once and publishes it', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const run = seedRun(db, pvId);
+
+    const bus = createRunEventBus();
+    const published: RunEvent[] = [];
+    bus.subscribe(run.id, (e) => published.push(e));
+
+    const state = await startRun({ ...deps(db), bus }, run);
+
+    expect(state.status).toBe('success');
+    expect(getRun(db, run.id)!.status).toBe('success');
+    const finishes = loadEngineEvents(db, run.id).filter((e) => e.type === 'run.finished');
+    expect(finishes).toHaveLength(1);
+    expect((finishes[0] as Extract<EngineEvent, { type: 'run.finished' }>).outcome).toBe('success');
+    const publishedFinishes = published.filter((e) => e.type === 'run.finished');
+    expect(publishedFinishes).toHaveLength(1);
+    expect(
+      (publishedFinishes[0]!.payload as Extract<EngineEvent, { type: 'run.finished' }>).outcome,
+    ).toBe('success');
+  });
+
+  // A `running` state to feed a wrapped engine whose `reduce` never accepts.
+  function runningState(db: Db) {
+    const pvId = seedVersion(db, [node('a')]);
+    const run = seedRun(db, pvId);
+    const engine = buildEngine(getPipelineVersion(db, pvId)!);
+    appendEngineEvent(db, {
+      type: 'run.started',
+      runId: run.id,
+      pipelineVersionId: pvId,
+      startedAt: new Date(run.startedAt).toISOString(),
+      params: {},
+    });
+    const state = engine.projectRunState(loadEngineEvents(db, run.id));
+    expect(state.status).toBe('running');
+    return { engine, state, runId: run.id };
+  }
+
+  // The reduce-first loop's termination is STRUCTURAL, not a matter of trusting
+  // the reducer's "failure is always accepted" contract: a reducer that keeps
+  // rejecting the driver's own finish (always offering a fresh replacement) hits
+  // the fold cap and THROWS (→ the caller's `terminalizeInterrupted`) rather than
+  // spinning forever under the per-run lock.
+  it('throws instead of spinning when the reducer never converges to an accepted finish', async () => {
+    const { db } = freshDb();
+    const { engine, state } = runningState(db);
+    const neverAccepts: Engine = {
+      ...engine,
+      // Always non-terminal, always a fresh finishRun replacement → never accepts.
+      reduce: (s) => ({
+        state: s,
+        commands: [{ type: 'finishRun', outcome: 'failure', reason: 'invalid_event' }],
+        diagnostics: ['forced non-convergence'],
+      }),
+    };
+    await expect(
+      pump(deps(db), neverAccepts, state, [{ type: 'finishRun', outcome: 'success' }]),
+    ).rejects.toThrow(/did not converge/);
+  });
+
+  // The other backstop: a reducer that rejects with NO replacement finishRun (so
+  // there is nothing to fold in the rejected event's place) throws rather than
+  // building a `run.finished` from an undefined command.
+  it('throws when the reducer rejects with no replacement finishRun', async () => {
+    const { db } = freshDb();
+    const { engine, state } = runningState(db);
+    const noReplacement: Engine = {
+      ...engine,
+      reduce: (s) => ({ state: s, commands: [], diagnostics: ['rejected, no replacement'] }),
+    };
+    await expect(
+      pump(deps(db), noReplacement, state, [{ type: 'finishRun', outcome: 'success' }]),
+    ).rejects.toThrow(/no replacement finishRun/);
   });
 });

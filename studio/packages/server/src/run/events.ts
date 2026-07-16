@@ -138,31 +138,37 @@ export function loadEngineEvents(db: Db, runId: string): EngineEvent[] {
  *   1. `pump` breaks the instant the run goes terminal (`driver.ts`), so nothing
  *      is appended after an ACCEPTED terminal — the last one is the driver's own
  *      final conclusion.
- *   2. On the one multi-terminal log the driver can produce, it is the only
- *      correct read: `pump` appends `run.finished` BEFORE folding it, so a finish
- *      the reducer REJECTS is durable, followed by the
- *      `finishRun{failure, invalid_event}` it returned instead. Reading the FIRST
- *      terminal would resync the rejected `success`.
+ *   2. It is the only correct read of a rejected-then-replacement multi-terminal
+ *      log: a `run.finished` the reducer REJECTS, durable, followed by the
+ *      `finishRun{failure, invalid_event}` it returned instead — reading the
+ *      FIRST terminal would resync the rejected `success`. Since #477 the DRIVER
+ *      no longer PRODUCES such a log (`driveFinishRun` reduces its own finish
+ *      before appending it, so a rejected finish is never made durable), but the
+ *      rule still guards two live sources: a log written by a pre-#477 driver,
+ *      and any future producer that appends a terminal it did not first accept.
  *   3. The shipped run-detail page already derives its lifecycle last-wins from
  *      this same log (`web/.../runSummary.ts`), so `runs.status` and what the
  *      operator is SHOWN cannot disagree about the same log.
  *
- * **The named cost (probed).** If a crash lands BETWEEN a rejected
- * `run.finished{success}` and its replacement, the log holds that success alone
- * and this reports `success` where the old projection-based path reported
- * `failure`. That is accepted, not overlooked: this function cannot distinguish
- * "an OLD reducer accepted this success" (where `success` is the right answer, and
- * is the entire point of #443) from "the CURRENT reducer rejects it" (where
- * `failure` is) — only the per-version reducer marker §E defers could, and
- * re-deriving to find out is the fail-open direction this rule exists to stop.
- * It needs a self-inconsistent reducer at write time — which is the two-call-site
- * bug F1b §B.2 fixes — AND a crash inside that window.
+ * **The named cost (probed), now closed at the source by #477.** If a crash lands
+ * BETWEEN a rejected `run.finished{success}` and its replacement, the log holds
+ * that success alone and this reports `success` where the old projection-based
+ * path reported `failure`. This function cannot distinguish "an OLD reducer
+ * accepted this success" (where `success` is the right answer, and is the entire
+ * point of #443) from "the CURRENT reducer rejects it" (where `failure` is) —
+ * only the per-version reducer marker §E defers could, and re-deriving to find
+ * out is the fail-open direction this rule exists to stop. #477 removes the
+ * WINDOW rather than resolving the ambiguity: `driveFinishRun` never appends a
+ * rejected finish, so a crash can no longer strand one as the sole terminal.
+ * The residual is a log written by a pre-#477 driver AND a crash inside that
+ * historical window — bounded and shrinking, not open-ended.
  *
  * The invariant this rests on is narrow and exact: **no TERMINAL event is
  * appended after an ACCEPTED terminal event** (`launcher.ts`'s
- * `terminalizeInterrupted` is the one producer that had to be taught this).
- * NON-terminal events legitimately may — a `run.resumed` from a pre-#443 log
- * already does, and it must not erase the terminal fact under it.
+ * `terminalizeInterrupted` is the one producer that had to be taught this;
+ * `driveFinishRun` upholds it by construction). NON-terminal events legitimately
+ * may — a `run.resumed` from a pre-#443 log already does, and it must not erase
+ * the terminal fact under it.
  *
  * This DELIBERATELY diverges from `projectRunState` on a log the current reducer
  * would re-fold differently — that divergence IS the ticket. Needs no pipeline
