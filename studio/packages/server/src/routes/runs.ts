@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
-import { getRun, listRunEvents, listRuns } from '../repo/index.js';
+import { getRun, listRunDiagnostics, listRunEvents, listRuns } from '../repo/index.js';
 import { requireOwned } from './util.js';
 
 /**
@@ -46,5 +46,25 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       request.params.id,
     );
     return listRunEvents(db, run.id);
+  });
+
+  /**
+   * #497 — the reducer's EXPLANATIONS for this run: why an edge was ignored, a
+   * container child neutralized, a branch inert, or which entities stalled it.
+   * Its DECISIONS are `/events` (the durable log); these say why.
+   *
+   * Owner-scoped through the RUN, exactly as `/events` is: `run_diagnostics`
+   * rows carry no `owner_id` of their own, so authorization is checked on the
+   * resource that has one. Authentication is not authorization — `request.principal`
+   * proves who is asking, `requireOwned` proves they may.
+   */
+  fastify.get<{ Params: { id: string } }>('/api/runs/:id/diagnostics', async (request) => {
+    const run = requireOwned(
+      getRun(db, request.params.id),
+      request.principal,
+      'run',
+      request.params.id,
+    );
+    return listRunDiagnostics(db, run.id);
   });
 };

@@ -1,11 +1,15 @@
 import {
   EngineEventSchema,
   terminalStatusOf,
+  type Engine,
   type EngineEvent,
+  type ReduceResult,
   type RunEvent,
   type RunLifecycleStatus,
+  type RunState,
 } from '@autonomy-studio/shared';
 import { appendRunEvent, listRunEvents } from '../repo/run-events.js';
+import { recordRunDiagnostics } from '../repo/run-diagnostics.js';
 import type { Db } from '../repo/types.js';
 import type { RunEventBus } from './event-bus.js';
 
@@ -56,6 +60,54 @@ export function appendEngineEvent(
   // isolates a broken subscriber), so it cannot disrupt the driver's pump.
   bus?.publish(record);
   return { record, event: parsed };
+}
+
+/**
+ * #497 — APPEND an event, FOLD it, and RECORD the fold's diagnostics: the three
+ * halves of one turn, bound to ONE `db` handle.
+ *
+ * This exists to make a class of bug unrepresentable rather than merely avoided.
+ * The rule is "whoever appends, records", and the hazard is that the recorder
+ * reaches a DIFFERENT handle than the append did. `retry-alarm.ts` is the live
+ * case: it appends inside the alarm clock's transaction (on `tx`) while also
+ * holding `deps.db`, and its rollback is the documented at-least-once contract.
+ * A diagnostic recorded on `deps.db` would survive a rollback that erased its
+ * event — and then, when the redelivery re-appended at that same `seq`, the
+ * insert's `OR IGNORE` would silently swallow the REAL diagnostics in favour of
+ * the orphans. Taking one `db` for all three steps means the two can never
+ * disagree, so no call site has to remember.
+ *
+ * Folds the PARSED event, never the raw input — see `appendEngineEvent`.
+ *
+ * NOT usable where the fold must precede the append (`reconcile.ts` derives its
+ * commands before deciding whether it can honour them, and appends only if it
+ * can). That site pairs each event's diagnostics to its `seq` by index at the
+ * append instead, which is the same rule reached the long way round.
+ */
+export function appendAndFold(
+  db: Db,
+  bus: RunEventBus | undefined,
+  engine: Pick<Engine, 'reduce'>,
+  state: RunState,
+  event: EngineEvent,
+  log?: DiagnosticLog,
+): ReduceResult & { record: RunEvent } {
+  const appended = appendEngineEvent(db, event, bus);
+  const result = engine.reduce(state, appended.event);
+  recordRunDiagnostics(
+    db,
+    appended.record.runId,
+    appended.record.seq,
+    'fold',
+    result.diagnostics,
+    log,
+  );
+  return { ...result, record: appended.record };
+}
+
+/** The `log` seam `recordRunDiagnostics` reports a failed insert through. */
+export interface DiagnosticLog {
+  error(obj: unknown, msg?: string): void;
 }
 
 /**

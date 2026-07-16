@@ -16,7 +16,14 @@ import { getRun, updateRun } from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
 import type { RunDrives } from './drives.js';
 import type { RunEventBus } from './event-bus.js';
-import { appendEngineEvent, loadEngineEvents, terminalFactFromLog } from './events.js';
+import {
+  appendAndFold,
+  appendEngineEvent,
+  loadEngineEvents,
+  terminalFactFromLog,
+} from './events.js';
+import { maxRunEventSeq } from '../repo/run-events.js';
+import { recordRunDiagnostics } from '../repo/run-diagnostics.js';
 
 /**
  * P2d — the run DRIVER: the one impure boundary that turns the pure reducer's
@@ -310,7 +317,7 @@ export async function pump(
         outcome: 'failure',
         reason: 'capped',
       };
-      state = engine.reduce(state, appendEngineEvent(deps.db, capped, deps.bus).event).state;
+      state = appendAndFold(deps.db, deps.bus, engine, state, capped, deps.log).state;
       syncRunLifecycle(deps.db, state.runId, state.status);
       break;
     }
@@ -347,8 +354,9 @@ export async function pump(
       // Fold the PARSED event, never the raw input: they differ wherever the
       // schema has a `.default()`, and `node.failed.kind` — the field F2b's
       // retry-eligibility keys off — is exactly that. See `appendEngineEvent`.
-      const appended = appendEngineEvent(deps.db, event, deps.bus);
-      const result = engine.reduce(state, appended.event);
+      // `appendAndFold` also records the fold's diagnostics against the seq it
+      // just appended at (#497) — the run's main derivation site.
+      const result = appendAndFold(deps.db, deps.bus, engine, state, event, deps.log);
       state = result.state;
       syncRunLifecycle(deps.db, state.runId, state.status);
       queue.push(...result.commands);
@@ -453,8 +461,14 @@ export function terminalizeInterrupted(deps: TerminalizeDeps, runId: string): vo
   try {
     const engine = buildEngine(deps.resolveDoc(run.pipelineVersionId));
     // Fold the PARSED event, not the raw one — see `appendEngineEvent`.
-    const state = engine.reduce(engine.projectRunState(events), appended.event).state;
-    syncRunLifecycle(db, runId, state.status);
+    //
+    // NOT `appendAndFold`: the append above deliberately sits in its OWN `try`,
+    // because it must become durable even when the doc cannot resolve and this
+    // fold therefore cannot run. So the record is paired to the append by hand,
+    // on the SAME `db` handle it used (#497's rule, reached the long way).
+    const result = engine.reduce(engine.projectRunState(events), appended.event);
+    recordRunDiagnostics(db, runId, appended.record.seq, 'fold', result.diagnostics, deps.log);
+    syncRunLifecycle(db, runId, result.state.status);
   } catch (foldErr) {
     // The doc is unresolvable (e.g. its version was deleted). The
     // `run.interrupted` event is ALREADY durable in the log; just make the row
@@ -547,6 +561,22 @@ async function drive(deps: DriveDeps, runId: string): Promise<void> {
     // before anything is folded.
     const engine = buildEngine(deps.resolveDoc(run.pipelineVersionId));
     const result = engine.resume(engine.projectRunState(events));
+    // #497 — `resume` folds NO event, so there is no appended `seq` to key its
+    // diagnostics to. They are keyed at the log position they were DERIVED AT
+    // (the max seq of the projection) under a distinct `phase`, which is exactly
+    // why `phase` is in the unique key: `retry-alarm.ts` appends `node.retryDue`
+    // at seq N, folds it, and its afterCommit drives straight here — where the
+    // projection's max seq IS N. Same key, two different derivations; without
+    // `phase` the insert's `OR IGNORE` would splice them into one list that is
+    // silently part-fold, part-resume.
+    //
+    // This is also the reason the sink is DURABLE rather than re-derived on read
+    // by an endpoint that folds the log: these diagnostics are not a function of
+    // the log, so no re-fold could reproduce them.
+    const at = maxRunEventSeq(deps.db, runId);
+    if (at !== null) {
+      recordRunDiagnostics(deps.db, runId, at, 'resume', result.diagnostics, deps.log);
+    }
     syncRunLifecycle(deps.db, runId, result.state.status);
     await pump(deps, engine, result.state, result.commands);
   }
@@ -582,10 +612,10 @@ export async function startRun(deps: DriverDeps, run: Run): Promise<RunState> {
     startedAt: new Date(run.startedAt).toISOString(),
     params: resolvedParams,
   };
-  const result = engine.reduce(
-    engine.seedState(),
-    appendEngineEvent(deps.db, started, deps.bus).event,
-  );
+  // #497: this fold is where `docDefects` drain — `onRunStarted` reports every
+  // defect the bind neutralized (#480/#487/#488), once per run. Before the sink
+  // existed they were derived here and dropped on the floor.
+  const result = appendAndFold(deps.db, deps.bus, engine, engine.seedState(), started, deps.log);
   syncRunLifecycle(deps.db, run.id, result.state.status);
   return pump(deps, engine, result.state, result.commands);
 }

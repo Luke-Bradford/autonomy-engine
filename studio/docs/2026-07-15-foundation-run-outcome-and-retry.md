@@ -408,10 +408,13 @@ nothing in the log saying why. A forward cycle is the canonical way in (probed o
 never-terminal entities (deduped and capped, truncation stated).
 
 **What ships, stated exactly.** The **liveness** half is closed: the run terminalizes instead of
-wedging, and `reason:'stalled'` is durable in `run.finished`. The **observability** half is NOT:
-nothing in production reads `diagnostics` today, so the entity list is currently test-only. See
-§C.5's amendment — that gap is systemic (every `docDefects` report shares it) and is filed
-separately, not fixed here. Do not read this section as promising the operator a named cycle.
+wedging, and `reason:'stalled'` is durable in `run.finished`. The **observability** half was NOT,
+when this was written — nothing in production read `diagnostics`, so the entity list was test-only.
+See §C.5's amendment for the systemic gap.
+
+**AMENDED by #497 (build-time):** the sink landed. `run_diagnostics` (a durable table OFF the event
+log — see §C.5.4) now receives every fold's diagnostics, read at `GET /api/runs/:id/diagnostics`, so
+the named never-terminal entities ARE operator-visible. Both halves of the backstop ship.
 
 Four things about it are load-bearing and were each probed rather than argued:
 
@@ -605,14 +608,24 @@ only ever reached once `allTopLevelTerminal` holds.
    them") is the shared-truncation problem #496 already owns. So the reason stays a constant, as
    `capped` already does, and the ids go to the diagnostic.
 
-   **State the cost plainly rather than implying a reach this has not got.** Nothing in production
-   reads `diagnostics` today — every non-test `reduce` caller takes `.state`/`.commands` only
-   (verified across `driver.ts`/`reconcile.ts`/`retry-alarm.ts`). So today an operator sees
-   `failure{reason:'stalled'}` and CANNOT learn which entities were stuck. That is accepted for now
-   because the durable reason already carries the actionable fact (this run can never finish, and it
-   is a doc defect), and because the gap is systemic rather than `stalled`'s — every `docDefects`
-   report is equally unobservable. It is filed as its own ticket. If that sink never lands, revisit
-   this decision rather than leaving the ids written to nowhere.
+   **State the cost plainly rather than implying a reach this has not got.** When this was written,
+   nothing in production read `diagnostics` — every non-test `reduce` caller took `.state`/`.commands`
+   only. So an operator saw `failure{reason:'stalled'}` and could NOT learn which entities were stuck.
+   That was accepted because the durable reason already carries the actionable fact (this run can
+   never finish, and it is a doc defect), and because the gap was systemic — every `docDefects` report
+   was equally unobservable. It was filed as its own ticket, with the standing instruction: if that
+   sink never lands, revisit this decision rather than leaving the ids written to nowhere.
+
+   **AMENDED by #497 (build-time):** the sink landed. `run_diagnostics` — a durable table OFF the
+   event log, deliberately NOT an engine event (a diagnostic is a DERIVATION of doc+log; putting it in
+   the log would re-fold every bound log per #443 and double-count on replay) — receives every fold's
+   diagnostics, keyed `(runId, seq, phase, ordinal)` so a re-derivation is idempotent, and is read at
+   `GET /api/runs/:id/diagnostics`. The stalled-entity ids are now observable, as is EVERY `docDefects`
+   report (#480/#487/#488). Two truncation caps now coexist and are NOT the same problem: this clause's
+   is **#496's** — capping the never-terminal id list WITHIN one `stalled` message; #497's is a
+   per-RUN cap on the number of diagnostic ROWS (`RUN_DIAGNOSTIC_CAP`, with a `phase='cap'` marker
+   row). Both follow the F13a/#473 "never manufacture 'that was all of them'" rule; #496's in-message
+   cap is still open.
 
 ### C.6 Reuse — the machinery already exists (do not add a helper)
 

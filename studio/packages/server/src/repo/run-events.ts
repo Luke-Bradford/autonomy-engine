@@ -54,6 +54,25 @@ export function listRunEvents(db: Db, runId: string): RunEvent[] {
   return rows.map((row) => RunEventSchema.parse(row));
 }
 
+/**
+ * The highest `seq` in a run's log, or `null` for an empty one.
+ *
+ * #497's `resume` sites need the log POSITION they are deriving at, and they
+ * hold `EngineEvent[]` (`loadEngineEvents`), which carries no `seq` — it is the
+ * parsed payload, not the envelope. Inferring it as `events.length - 1` would be
+ * sound today (seq is contiguous from 0: `max()+1` numbering, and this module
+ * exports no delete) but it is an INFERENCE across two modules, and a cheap
+ * authoritative read on a once-per-drive path is worth more than saving it.
+ */
+export function maxRunEventSeq(db: Db, runId: string): number | null {
+  const row = db
+    .select({ maxSeq: max(runEvents.seq) })
+    .from(runEvents)
+    .where(eq(runEvents.runId, runId))
+    .get();
+  return row?.maxSeq ?? null;
+}
+
 export function getRunEvent(db: Db, id: string): RunEvent | null {
   const row = db.select().from(runEvents).where(eq(runEvents.id, id)).get();
   return row ? RunEventSchema.parse(row) : null;

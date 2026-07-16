@@ -9,7 +9,7 @@ import {
   RETRY_WAKEUP_KIND,
   type DriveDeps,
 } from '../run/driver.js';
-import { appendEngineEvent, loadEngineEvents, terminalFactFromLog } from '../run/events.js';
+import { appendAndFold, loadEngineEvents, terminalFactFromLog } from '../run/events.js';
 import type { WakeupFireResult, WakeupHandler } from './alarms.js';
 
 /**
@@ -117,8 +117,7 @@ export function createRetryAlarmHandler(deps: RetryAlarmDeps): WakeupHandler {
       // the settle re-fires and double-dispatches. No bus here: the clock
       // publishes the returned envelopes AFTER commit, so a rollback cannot show
       // a live subscriber an event that never existed.
-      const appended = appendEngineEvent(tx, due);
-
+      //
       // The fold is PURE, so it belongs inside the transaction: it is what makes
       // the run ROW agree with the event that just became durable, atomically
       // with the settle. Reducing the PARSED event (never the raw input) for the
@@ -134,12 +133,20 @@ export function createRetryAlarmHandler(deps: RetryAlarmDeps): WakeupHandler {
       // for this event that yields the IDENTICAL `dispatchNode` (`onRetryDue`
       // folds the node to `ready` with its new `attemptId`, and `resume` re-emits
       // a `ready` node's dispatch under that same id), so nothing is lost.
-      const result = engine.reduce(state, appended.event);
+      //
+      // #497: the fold's diagnostics are recorded on `tx` — the SAME handle the
+      // append used — and that is a correctness requirement, not tidiness. This
+      // transaction's rollback IS the at-least-once contract above: recording on
+      // `deps.db` would leave a diagnostic at seq N for an event the rollback
+      // erased, and the redelivery's re-append at that same seq would then find
+      // the key taken and `OR IGNORE` the REAL diagnostics away. `appendAndFold`
+      // takes one handle for both steps so the two cannot diverge.
+      const result = appendAndFold(tx, undefined, engine, state, due);
       syncRunLifecycle(tx, ref.runId, result.state.status);
 
       return {
         status: 'fired',
-        events: [appended.record],
+        events: [result.record],
         // Spawning work is forbidden inside the transaction (this module's
         // contract): the drive bills real LLM calls, and a rollback around that
         // would erase the run's log while the detached drive kept appending to it.

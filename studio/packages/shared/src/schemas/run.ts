@@ -101,3 +101,49 @@ export const NewRunEventSchema = RunEventSchema.omit({
   ts: true,
 });
 export type NewRunEvent = z.input<typeof NewRunEventSchema>;
+
+/**
+ * #497 — WHERE THE PURE REDUCER'S `diagnostics` LAND.
+ *
+ * `reduce(state, event) → { state, commands, diagnostics }`. The first two are
+ * durable (`run_events` + the `runs` row); the third had no production consumer
+ * at all, so the "and say so" half of #480/#487/#488/#491 was written to nowhere.
+ * This is that sink.
+ *
+ * NOT an engine event, and that is the load-bearing decision. `run_events` is a
+ * log of FACTS; a diagnostic is a DERIVATION of (immutable doc + log). Storing a
+ * derivation as a fact would put it in `EngineEventSchema` — re-folding every
+ * already-bound log (the #443 authority question) — and make replay double-count
+ * it (the fold re-derives the diagnostic AND meets the stored one). So it gets
+ * its own table, off the event log, read by nothing the engine gates on.
+ *
+ * `phase` DISCRIMINATES THE DERIVATION, and is not decoration: `resume()` folds
+ * NO event, so it is keyed at the log position it was derived AT — which is the
+ * same `seq` as the fold that preceded it. Without `phase` in the key those two
+ * distinct derivations collide, and the insert's `OR IGNORE` splices them into
+ * one mis-attributed list.
+ * - `fold`   — derived by folding the event at `seq`.
+ * - `resume` — derived by `resume()` over the projection as of `seq`.
+ * - `cap`    — the truncation marker (see `RUN_DIAGNOSTIC_CAP`), at `seq: -1`.
+ */
+export const RUN_DIAGNOSTIC_PHASES = ['fold', 'resume', 'cap'] as const;
+export const RunDiagnosticPhaseSchema = z.enum(RUN_DIAGNOSTIC_PHASES);
+export type RunDiagnosticPhase = z.infer<typeof RunDiagnosticPhaseSchema>;
+
+export const RunDiagnosticSchema = z.object({
+  id: z.string().min(1),
+  runId: z.string().min(1),
+  /**
+   * The log position this was derived at. `-1` is the `cap` marker's sentinel —
+   * deliberately BELOW every real `seq` (which start at 0), so the standard
+   * `ORDER BY seq, ordinal` read surfaces "this list is incomplete" FIRST,
+   * before the diagnostics it is a caveat on.
+   */
+  seq: z.number().int().gte(-1),
+  phase: RunDiagnosticPhaseSchema,
+  /** Index within the one `diagnostics[]` this row came from — ties the order. */
+  ordinal: z.number().int().nonnegative(),
+  message: z.string().min(1),
+  ts: z.number().int(),
+});
+export type RunDiagnostic = z.infer<typeof RunDiagnosticSchema>;
