@@ -182,10 +182,12 @@ export const MAX_ARRAY_ELEMENTS_TOTAL = 100_000;
 /**
  * Cap on a reference's PATH LENGTH — `${a.b[0].c}` is 4 segments (#6 E7).
  *
- * The third of spec #6's three "Resource limits" caps. It lives here beside the
- * other two, but — exactly like `MAX_ARRAY_ELEMENTS_TOTAL` — it is ENFORCED in
+ * The third of spec #6's "Resource limits" caps to live here beside the other
+ * two — but exactly like `MAX_ARRAY_ELEMENTS_TOTAL` it is ENFORCED in
  * `params.ts`, at both halves of the rule: `resolveRef` (run time) and
- * `checkExprStatic` (save time).
+ * `checkExprStatic` (save time). It bounds a per-reference PATH only; the
+ * ORTHOGONAL expression-NESTING axis has its own cap, `MAX_EXPR_DEPTH`, which
+ * lives in `expr.ts` beside its sole enforcer `parseExpr` (#453).
  *
  * It is NOT decorative, and the array budget does NOT already cover it:
  *  - `charge()` counts ARRAYS ONLY, so a deep path resolving to a SCALAR spends

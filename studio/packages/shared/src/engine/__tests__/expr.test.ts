@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SubstituteError } from '../types.js';
 import {
   interpolationMode,
+  MAX_EXPR_DEPTH,
   parseExpr,
   protectEscapes,
   restoreEscapes,
@@ -373,6 +374,101 @@ describe('interpolationMode — the mode SSOT', () => {
     if (m.mode !== 'interpolated') throw new Error('unreachable');
     const only = m.matches[0]!;
     expect(m.scanned.slice(only.start, only.end + 1)).toBe('${params.x}');
+  });
+});
+
+describe('parseExpr — MAX_EXPR_DEPTH bounds expression NESTING (#6 #453)', () => {
+  // The NESTING axis (`${add(1,add(1,…))}`) is orthogonal to `MAX_PATH_DEPTH`'s
+  // per-reference PATH axis (`${a.b.c…}`). It was bounded by NO cap: `parseExpr`
+  // builds the AST by recursion, and the checker/evaluator then WALK that AST —
+  // so a ~2000-deep body overflowed the stack, and `validateRefs` (a PURE
+  // validator contracted to RETURN errors) threw a raw `RangeError`. Bounding
+  // depth in `parseExpr` — the ONE funnel — refuses the deep AST before it is
+  // built, so the checker and evaluator are bounded for free. Pure +
+  // deterministic (it reads shape, never data), so replay is unaffected.
+
+  // k nested `add(0, …)` wrappers around a literal `1`; the innermost `1` is
+  // parsed at depth k, so a k-deep body reaches recursion depth exactly k.
+  function nestCalls(k: number): string {
+    let s = '1';
+    for (let i = 0; i < k; i += 1) s = `add(0,${s})`;
+    return s;
+  }
+
+  // k nested `[]` indexes on a ref — the OTHER recursive edge (`parseRef` parses
+  // each index body through `parseExpr`), so it must be bounded by the same cap.
+  function nestIndex(k: number): string {
+    let s = 'a';
+    for (let i = 0; i < k; i += 1) s = `a[${s}]`;
+    return s;
+  }
+
+  it('parses a body nested AT the cap', () => {
+    expect(() => parseExpr(nestCalls(MAX_EXPR_DEPTH))).not.toThrow();
+    expect(() => parseExpr(nestIndex(MAX_EXPR_DEPTH))).not.toThrow();
+  });
+
+  it('refuses a call body nested OVER the cap — a SubstituteError, never a RangeError', () => {
+    let thrown: unknown;
+    try {
+      parseExpr(nestCalls(MAX_EXPR_DEPTH + 1));
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(SubstituteError);
+    expect((thrown as Error).name).not.toBe('RangeError');
+    // Specific to the depth-cap error, so it cannot pass on an unrelated
+    // message that merely contains "deep" (e.g. "deep copy").
+    expect((thrown as Error).message).toMatch(/nesting too deep|MAX_EXPR_DEPTH/i);
+  });
+
+  it('refuses an index body nested OVER the cap (the parseRef edge)', () => {
+    expect(() => parseExpr(nestIndex(MAX_EXPR_DEPTH + 1))).toThrow(SubstituteError);
+  });
+
+  // Interleave the two recursive edges in ONE path, so depth must accumulate
+  // ACROSS both a call-arg descent and a ref-index descent — not just within
+  // each in isolation. `add(0, a[add(0, a[…])])`, one level per wrap.
+  function mixedNest(k: number): string {
+    let s = '1';
+    for (let i = 0; i < k; i += 1) s = i % 2 === 0 ? `add(0,${s})` : `a[${s}]`;
+    return s;
+  }
+
+  it('bounds a MIXED call/index nesting by the same cap', () => {
+    expect(() => parseExpr(mixedNest(MAX_EXPR_DEPTH))).not.toThrow();
+    expect(() => parseExpr(mixedNest(MAX_EXPR_DEPTH + 1))).toThrow(SubstituteError);
+  });
+
+  it('refuses a pathologically deep body with a clean error, not a stack overflow', () => {
+    // ~2000 levels overflowed the native stack before this cap. Now it is
+    // refused far earlier, deterministically, as an ordinary malformed body.
+    let thrown: unknown;
+    try {
+      parseExpr(nestCalls(2000));
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(SubstituteError);
+    expect((thrown as Error).message).not.toMatch(/Maximum call stack/i);
+  });
+
+  it('a naturally shallow expression is unaffected', () => {
+    expect(parseExpr('add(1, mul(2, 3))')).toEqual({
+      kind: 'call',
+      name: 'add',
+      args: [
+        { kind: 'num', value: 1 },
+        {
+          kind: 'call',
+          name: 'mul',
+          args: [
+            { kind: 'num', value: 2 },
+            { kind: 'num', value: 3 },
+          ],
+        },
+      ],
+    });
   });
 });
 
