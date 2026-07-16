@@ -156,7 +156,12 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     if (sinkFields.length === 0) return { secretFields: {} };
     const markers = collectSecretSinkMarkers(preparedInput, sinkFields);
     if (markers.length === 0) return { secretFields: {} };
-    const secretFields: Record<string, string> = {};
+    // A null-prototype map: a marker `path` keyed into this is developer-authored
+    // catalog config (a sink field name), not external data, but keying a plain
+    // object by a path that happened to be `__proto__` would hit the prototype
+    // accessor rather than store data — the same class hardened in the redact
+    // walk. `Object.create(null)` makes EVERY key a plain data property.
+    const secretFields: Record<string, string> = Object.create(null) as Record<string, string>;
     for (const { path, name } of markers) {
       // A null-owner run cannot own a standalone (named) secret — resolve to
       // not-found rather than let `owner_id = NULL` silently match nothing.
