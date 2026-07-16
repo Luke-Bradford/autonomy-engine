@@ -875,65 +875,112 @@ export function scanSecretSinks(
   sinkFields: readonly string[],
   errors: string[],
 ): void {
-  // Defensive: a `config` shaped like a bare marker (a top-level `$secret` key)
-  // is never at a sink — the `config` root is not itself a field.
+  // The gate and the S3 DISPATCH-time resolver (`server/.../executor.ts`) MUST
+  // visit the EXACT same set of marker positions — the classic "two walkers
+  // drift" hazard (#473). They share ONE traversal (`walkConfigForMarkers`);
+  // this call only supplies the gate's per-marker ACTION (reject-or-shape-check),
+  // the resolver supplies its own (resolve-or-fail). Neither owns the walk.
+  walkConfigForMarkers(where, config, sinkFields, (path, value, allowed) => {
+    if (!allowed) {
+      errors.push(`${path}: secret reference is not allowed here`);
+      return;
+    }
+    validateSecretMarker(path, value, errors);
+  });
+}
+
+/**
+ * The ONE shared traversal over a node `config` that both the save-time gate
+ * (`scanSecretSinks`) and the dispatch-time resolver (`collectSecretSinkMarkers`)
+ * drive. It calls `visit(path, value, allowed)` at every `{$secret}`-shaped
+ * position (`isSecretRef` loose), carrying whether that position sits under a
+ * declared sink field. A detected marker is a LEAF — never recursed into (its
+ * `$secret` name is the value). A malformed marker is still DETECTED (loose
+ * check) so a consumer can reject it rather than let it slip through as config.
+ *
+ * `allowed` is decided by the marker's FIRST `config` path segment: a top-level
+ * field NAME in `sinkFields` makes its whole subtree in-region. The `config`
+ * root itself is not a field, so a bare-marker root (or anything in a
+ * non-object/array root) is always `allowed = false` — defence-in-depth parity
+ * with the `${}` `scan`, never a live path under `StrictNodeSchema`.
+ */
+function walkConfigForMarkers(
+  where: string,
+  config: unknown,
+  sinkFields: readonly string[],
+  visit: (path: string, value: unknown, allowed: boolean) => void,
+): void {
   if (isSecretRef(config)) {
-    errors.push(`${where}: secret reference is not allowed here`);
+    visit(where, config, false);
     return;
   }
-  // A non-object `config` has no field NAMES, so nothing under it is a sink ⇒
-  // any marker it holds is refused (`allowed = false`). `StrictNodeSchema` keeps
-  // `config` an object today, so this is defence-in-depth parity with the `${}`
-  // `scan` (which also recurses a top-level array), never a live path.
   if (Array.isArray(config)) {
-    config.forEach((v, i) => walkSecretMarkers(`${where}[${i}]`, v, false, errors));
+    config.forEach((v, i) => walkMarkerRegion(`${where}[${i}]`, v, false, visit));
     return;
   }
   if (config === null || typeof config !== 'object') return;
   for (const key of Object.keys(config as Record<string, unknown>).sort()) {
-    walkSecretMarkers(
+    walkMarkerRegion(
       `${where}.${key}`,
       (config as Record<string, unknown>)[key],
       sinkFields.includes(key),
-      errors,
+      visit,
     );
   }
 }
 
-/**
- * Recurse a config subtree carrying whether it is under a declared sink field.
- * A detected marker is NOT recursed into (its `$secret` name is a leaf); a
- * malformed marker is still DETECTED here (`isSecretRef` is loose) so it cannot
- * slip through as ordinary config — it is then rejected by the shape check.
- */
-function walkSecretMarkers(
-  where: string,
+/** Recurse a subtree carrying its in-sink `allowed` flag; a marker is a leaf. */
+function walkMarkerRegion(
+  path: string,
   value: unknown,
   allowed: boolean,
-  errors: string[],
+  visit: (path: string, value: unknown, allowed: boolean) => void,
 ): void {
   if (isSecretRef(value)) {
-    if (!allowed) {
-      errors.push(`${where}: secret reference is not allowed here`);
-      return;
-    }
-    validateSecretMarker(where, value, errors);
+    visit(path, value, allowed);
     return;
   }
   if (Array.isArray(value)) {
-    value.forEach((v, i) => walkSecretMarkers(`${where}[${i}]`, v, allowed, errors));
+    value.forEach((v, i) => walkMarkerRegion(`${path}[${i}]`, v, allowed, visit));
     return;
   }
   if (value !== null && typeof value === 'object') {
     for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-      walkSecretMarkers(
-        `${where}.${key}`,
-        (value as Record<string, unknown>)[key],
-        allowed,
-        errors,
-      );
+      walkMarkerRegion(`${path}.${key}`, (value as Record<string, unknown>)[key], allowed, visit);
     }
   }
+}
+
+/**
+ * DISPATCH-time (item 7 / S3) companion to the save-time gate: collect every
+ * VALID `{ "$secret": "<name>" }` marker sitting at a declared sink field of a
+ * node's `config`, as `{ path, name }` pairs. `path` is CONFIG-RELATIVE (no
+ * `nodes.<id>.config` prefix, no leading `.`) — e.g. `secretHeaders.X-Api-Key`
+ * — and is the KEY the executor's resolved-plaintext side channel uses, so an
+ * adapter correlates a resolved value to the exact config position.
+ *
+ * Uses the SAME `walkConfigForMarkers` traversal as `scanSecretSinks`, so the
+ * resolver can only ever resolve markers the gate already blessed (no drift).
+ * Markers OUTSIDE a sink are skipped (never resolved) — a stored version cannot
+ * contain one (the save gate rejects it), and skipping is the fail-safe read if
+ * one somehow appears. A marker that fails the STRICT shape check is likewise
+ * skipped: only `{ $secret: <non-empty string> }` (the gate's own contract) is
+ * returned, so a caller never resolves a malformed marker.
+ */
+export function collectSecretSinkMarkers(
+  config: unknown,
+  sinkFields: readonly string[],
+): { path: string; name: string }[] {
+  const out: { path: string; name: string }[] = [];
+  walkConfigForMarkers('', config, sinkFields, (path, value, allowed) => {
+    if (!allowed) return;
+    const parsed = SecretRefSchema.safeParse(value);
+    if (!parsed.success) return;
+    // `walkConfigForMarkers` seeds the root as `''`, so the first segment comes
+    // through as `.field` — strip the single leading dot to a clean rel path.
+    out.push({ path: path.replace(/^\./, ''), name: parsed.data.$secret });
+  });
+  return out;
 }
 
 /** Shape-validate a marker at a declared sink: strict schema + literal name (§2). */

@@ -61,6 +61,24 @@ export function listNamedSecrets(db: Db, ownerId: string): Secret[] {
     .map((row) => SecretSchema.parse(row));
 }
 
+/**
+ * DISPATCH-time resolution (item 7 / S3) of a `{ "$secret": "<name>" }` marker:
+ * the ONE standalone secret named `name` owned by `ownerId`. Owner-scoped by
+ * construction — a node can only ever reach a secret its run's owner holds, and
+ * NEVER a connection-owned secret (those carry `name = NULL`, so a name lookup
+ * cannot match one). `ownerId` is required (non-null): a null-owner run has no
+ * owner namespace to resolve within, and the executor short-circuits before
+ * calling this. Mirrors `listNamedSecrets`' owner scope.
+ */
+export function getSecretByName(db: Db, name: string, ownerId: string): Secret | null {
+  const row = db
+    .select()
+    .from(secrets)
+    .where(and(eq(secrets.ownerId, ownerId), eq(secrets.name, name)))
+    .get();
+  return row ? SecretSchema.parse(row) : null;
+}
+
 /** Rotation: replaces the ciphertext under the same stable `ref` so every
  * `Connection.secretRef` pointing at it keeps resolving. */
 export function updateSecretCiphertext(db: Db, id: string, ciphertext: string): Secret | null {
