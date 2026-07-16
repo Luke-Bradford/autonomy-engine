@@ -579,7 +579,7 @@ describe('createExecutor — config-sink secrets: dispatch resolution + redactio
     db: Db,
     markerNode: Node,
     opts: { ownerId?: string | null } = {},
-  ): { doc: PipelineVersion; runId: string } {
+  ): { doc: PipelineVersion; run: ReturnType<typeof createRun>; runId: string } {
     const ownerId = opts.ownerId === undefined ? 'local' : opts.ownerId;
     const pipeline = createPipeline(db, { ownerId: ownerId ?? 'local', name: 'P' });
     const stored = createPipelineVersion(db, {
@@ -598,7 +598,7 @@ describe('createExecutor — config-sink secrets: dispatch resolution + redactio
       parentRunId: null,
       params: {},
     });
-    return { doc, runId: run.id };
+    return { doc, run, runId: run.id };
   }
 
   function depsForDoc(
@@ -650,7 +650,7 @@ describe('createExecutor — config-sink secrets: dispatch resolution + redactio
     const PLAINTEXT = 'sk-config-sink-value';
     await seedNamedSecret(db, 'my-key', PLAINTEXT);
     const connId = await seedConnection(db, 'http', {}, null);
-    const { doc, runId } = seedMarkerRun(db, markerNode('my-key', connId));
+    const { doc, run, runId } = seedMarkerRun(db, markerNode('my-key', connId));
 
     let received: Readonly<Record<string, string>> | undefined = { UNSET: 'yes' };
     let inputAtAdapter: unknown;
@@ -660,7 +660,7 @@ describe('createExecutor — config-sink secrets: dispatch resolution + redactio
       yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
     });
 
-    const state = await startRun(depsForDoc(db, doc, { adapters }), getRun(db, runId)!);
+    const state = await startRun(depsForDoc(db, doc, { adapters }), run);
     expect(state.status).toBe('success');
 
     // The adapter got the decrypted plaintext keyed by CONFIG PATH...
@@ -678,9 +678,9 @@ describe('createExecutor — config-sink secrets: dispatch resolution + redactio
   it('a marker naming a MISSING secret fails permanent (config_secret_not_found) with NO node.dispatched', async () => {
     const db = freshDb().db;
     const connId = await seedConnection(db, 'http', {}, null);
-    const { doc, runId } = seedMarkerRun(db, markerNode('no-such-secret', connId));
+    const { doc, run, runId } = seedMarkerRun(db, markerNode('no-such-secret', connId));
 
-    const state = await startRun(depsForDoc(db, doc), getRun(db, runId)!);
+    const state = await startRun(depsForDoc(db, doc), run);
     expect(state.status).toBe('failure');
     // Pre-flight resolution → node fails while still `ready`, no durable dispatch.
     expect(eventTypes(db, runId)).not.toContain('node.dispatched');
@@ -695,10 +695,10 @@ describe('createExecutor — config-sink secrets: dispatch resolution + redactio
     const db = freshDb().db;
     await seedNamedSecret(db, 'rotated-key', 'sk-under-the-OLD-key');
     const connId = await seedConnection(db, 'http', {}, null);
-    const { doc, runId } = seedMarkerRun(db, markerNode('rotated-key', connId));
+    const { doc, run, runId } = seedMarkerRun(db, markerNode('rotated-key', connId));
 
     const otherKey = new Uint8Array(32).fill(9);
-    const state = await startRun(depsForDoc(db, doc, { masterKey: otherKey }), getRun(db, runId)!);
+    const state = await startRun(depsForDoc(db, doc, { masterKey: otherKey }), run);
 
     expect(state.status).toBe('failure');
     expect(eventTypes(db, runId)).not.toContain('node.dispatched');
@@ -712,11 +712,11 @@ describe('createExecutor — config-sink secrets: dispatch resolution + redactio
     // The name exists, but under a DIFFERENT owner than the run.
     await seedNamedSecret(db, 'shared-name', 'not-yours', 'someone-else');
     const connId = await seedConnection(db, 'http', {}, null);
-    const { doc, runId } = seedMarkerRun(db, markerNode('shared-name', connId), {
+    const { doc, run, runId } = seedMarkerRun(db, markerNode('shared-name', connId), {
       ownerId: 'local',
     });
 
-    const state = await startRun(depsForDoc(db, doc), getRun(db, runId)!);
+    const state = await startRun(depsForDoc(db, doc), run);
     expect(state.status).toBe('failure');
     expect(loadEngineEvents(db, runId).find((e) => e.type === 'node.failed')).toMatchObject({
       code: 'config_secret_not_found',
@@ -728,9 +728,11 @@ describe('createExecutor — config-sink secrets: dispatch resolution + redactio
     // Even a globally-present name must not resolve for a run with no owner.
     await seedNamedSecret(db, 'orphan-key', 'value', 'local');
     const connId = await seedConnection(db, 'http', {}, null);
-    const { doc, runId } = seedMarkerRun(db, markerNode('orphan-key', connId), { ownerId: null });
+    const { doc, run, runId } = seedMarkerRun(db, markerNode('orphan-key', connId), {
+      ownerId: null,
+    });
 
-    const state = await startRun(depsForDoc(db, doc), getRun(db, runId)!);
+    const state = await startRun(depsForDoc(db, doc), run);
     expect(state.status).toBe('failure');
     expect(loadEngineEvents(db, runId).find((e) => e.type === 'node.failed')).toMatchObject({
       code: 'config_secret_not_found',
@@ -742,7 +744,7 @@ describe('createExecutor — config-sink secrets: dispatch resolution + redactio
     const PLAINTEXT = 'sk-leaky-value';
     await seedNamedSecret(db, 'leaky', PLAINTEXT);
     const connId = await seedConnection(db, 'http', {}, null);
-    const { doc, runId } = seedMarkerRun(db, markerNode('leaky', connId));
+    const { doc, run, runId } = seedMarkerRun(db, markerNode('leaky', connId));
 
     // A hostile/buggy adapter that echoes the plaintext into both an output
     // stream event and the final outputs — the executor choke point must scrub both.
@@ -751,7 +753,7 @@ describe('createExecutor — config-sink secrets: dispatch resolution + redactio
       yield { type: 'succeeded', outputs: { echoed: { nested: PLAINTEXT } } };
     });
 
-    const state = await startRun(depsForDoc(db, doc, { adapters }), getRun(db, runId)!);
+    const state = await startRun(depsForDoc(db, doc, { adapters }), run);
     expect(state.status).toBe('success');
 
     const events = loadEngineEvents(db, runId);
@@ -769,13 +771,13 @@ describe('createExecutor — config-sink secrets: dispatch resolution + redactio
     const PLAINTEXT = 'sk-in-the-error';
     await seedNamedSecret(db, 'errkey', PLAINTEXT);
     const connId = await seedConnection(db, 'http', {}, null);
-    const { doc, runId } = seedMarkerRun(db, markerNode('errkey', connId));
+    const { doc, run, runId } = seedMarkerRun(db, markerNode('errkey', connId));
 
     const adapters = fakeHttpAdapter(async function* (): AsyncIterable<ActivityEvent> {
       yield { type: 'failed', kind: 'permanent', error: `boom: ${PLAINTEXT}` };
     });
 
-    const state = await startRun(depsForDoc(db, doc, { adapters }), getRun(db, runId)!);
+    const state = await startRun(depsForDoc(db, doc, { adapters }), run);
     expect(state.status).toBe('failure');
     const failed = loadEngineEvents(db, runId).find((e) => e.type === 'node.failed') as
       { error: string } | undefined;
@@ -793,7 +795,7 @@ describe('createExecutor — config-sink secrets: dispatch resolution + redactio
     const CONN_PLAINTEXT = 'sk-connection-cred';
     await seedNamedSecret(db, 'cfg', CONFIG_PLAINTEXT);
     const connId = await seedConnection(db, 'http', {}, CONN_PLAINTEXT);
-    const { doc, runId } = seedMarkerRun(db, markerNode('cfg', connId));
+    const { doc, run, runId } = seedMarkerRun(db, markerNode('cfg', connId));
 
     const adapters = fakeHttpAdapter(async function* (): AsyncIterable<ActivityEvent> {
       // A hostile adapter echoing BOTH plaintexts it was handed.
@@ -804,7 +806,7 @@ describe('createExecutor — config-sink secrets: dispatch resolution + redactio
       };
     });
 
-    const state = await startRun(depsForDoc(db, doc, { adapters }), getRun(db, runId)!);
+    const state = await startRun(depsForDoc(db, doc, { adapters }), run);
     expect(state.status).toBe('failure');
     const failed = loadEngineEvents(db, runId).find((e) => e.type === 'node.failed') as
       { error: string } | undefined;

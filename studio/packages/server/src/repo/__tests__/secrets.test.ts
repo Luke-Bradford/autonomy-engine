@@ -136,7 +136,7 @@ describe('secrets repo', () => {
       ownerId: 'someone-else',
       name: 'stripe-key',
     });
-    expect(getSecretByName(db, 'stripe-key', 'local')!.id).toBe(mine.id);
+    expect(getSecretByName(db, 'stripe-key', 'local')?.id).toBe(mine.id);
     // Wrong owner / wrong name → null (the executor maps this to config_secret_not_found).
     expect(getSecretByName(db, 'stripe-key', 'nobody')).toBeNull();
     expect(getSecretByName(db, 'no-such-name', 'local')).toBeNull();
