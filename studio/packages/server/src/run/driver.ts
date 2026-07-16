@@ -2,6 +2,7 @@ import {
   createEngine,
   resolveRunParams,
   DEFAULT_RETRY_INTERVAL_SECONDS,
+  EngineEventSchema,
   type ArmWakeupInput,
   type Engine,
   type EngineCommand,
@@ -291,12 +292,110 @@ function armRetry(
 }
 
 /**
+ * Perform the driver's OWN `finishRun` command REDUCE-FIRST (#477): fold the
+ * `run.finished` BEFORE appending it, and make it durable ONLY if the reducer
+ * ACCEPTS. Returns the terminal state (the row is synced here).
+ *
+ * **Why this ONE command inverts the append-then-fold order.** For an EXECUTOR
+ * event append-before-fold is a load-bearing crash-safety contract:
+ * `node.dispatched` must be durable before the side effect runs (see the
+ * `Executor` doc). `finishRun` is different — the reducer's verdict needs no log,
+ * so it is known before the append. `pump` used to append `run.finished` and
+ * only then fold it, so a `run.finished{success}` the reducer REJECTS (the
+ * impossibility check in `reduce.ts` — the run has a live/pending node or an
+ * unhandled failure) sat DURABLY in the log, followed by the
+ * `finishRun{failure,invalid_event}` it returned instead. A crash between those
+ * two appends left the rejected success as the log's ONLY terminal, and since
+ * #443 makes the LOG authoritative for terminality (`terminalFactFromLog`), the
+ * boot reconciler resyncs the row to `success` where it should be `failure`.
+ * Folding first makes that impossible log UNCONSTRUCTIBLE: the rejected event is
+ * never appended, so last-terminal-wins is unconditionally right.
+ *
+ * F1b (§B.2) removed the *cause* — the two outcome-predicate call sites that
+ * could disagree so `settle` emits a `finishRun{success}` the reducer then
+ * rejects. This removes the *class*: a mid-deploy reducer change (an old log
+ * re-driven by a newer reducer) can reject the driver's own finish too.
+ *
+ * A rejected `run.finished{success}` yields a replacement `finishRun{failure,
+ * invalid_event}`, and a `failure` outcome is ALWAYS accepted (the impossibility
+ * guard fires only for `success`), so the loop folds at most twice and
+ * terminates. The rejected fold's diagnostics are CARRIED to the seq of the
+ * event that actually lands — the rejected event has no seq of its own, so this
+ * is how #497's durable-sink guarantee is kept without inventing a phantom one.
+ *
+ * Crash-safety of the new order: a crash after the accepting fold but before the
+ * append leaves a NON-terminal log (its last event is the terminal NODE event,
+ * no `run.finished`) — exactly the "finalize a crash-dropped finishRun" case the
+ * boot reconciler already regenerates via `run.resumed` re-running the walk. So
+ * the inverted order trades an impossible-durable-terminal for a well-worn
+ * recoverable one.
+ */
+function driveFinishRun(
+  deps: DriverDeps,
+  engine: Engine,
+  state: RunState,
+  command: Extract<EngineCommand, { type: 'finishRun' }>,
+): RunState {
+  let pending: Extract<EngineCommand, { type: 'finishRun' }> = command;
+  const carried: string[] = [];
+  for (;;) {
+    const event: EngineEvent = {
+      type: 'run.finished',
+      runId: state.runId,
+      outcome: pending.outcome,
+      reason: pending.reason,
+    };
+    // Fold the PARSED event, never the raw one — the F2b invariant every fold
+    // site honours (see `appendEngineEvent`). `run.finished` carries no
+    // `.default()` today, so raw ≡ parsed, but folding the parsed value keeps
+    // this correct if one is ever added and mirrors the reconciler's hand-paired
+    // append/fold. `appendEngineEvent` re-parses idempotently on accept.
+    const parsed = EngineEventSchema.parse(event);
+    const result = engine.reduce(state, parsed);
+    if (TERMINAL_RUN.has(result.state.status)) {
+      // Accepted: the terminal is real — NOW make it durable (and publish), then
+      // record every carried + own diagnostic against its seq (#497).
+      const appended = appendEngineEvent(deps.db, parsed, deps.bus);
+      recordRunDiagnostics(
+        deps.db,
+        appended.record.runId,
+        appended.record.seq,
+        'fold',
+        [...carried, ...result.diagnostics],
+        deps.log,
+      );
+      syncRunLifecycle(deps.db, result.state.runId, result.state.status);
+      return result.state;
+    }
+    // Rejected: never append the impossible event. Follow the reducer's
+    // replacement, carrying the rejection's diagnostics to whatever event lands.
+    carried.push(...result.diagnostics);
+    const replacement = result.commands.find(
+      (c): c is Extract<EngineCommand, { type: 'finishRun' }> => c.type === 'finishRun',
+    );
+    if (replacement === undefined) {
+      // Unreachable with the current reducer (a rejected success always returns a
+      // `finishRun{failure}`, always accepted). A future reducer that rejects
+      // without a replacement is an invariant violation, not a hang — throw so
+      // the caller's `terminalizeInterrupted` records it, rather than looping or
+      // constructing a `run.finished` from an undefined command.
+      throw new Error(
+        `reducer rejected run.finished for run '${state.runId}' with no replacement finishRun: ` +
+          carried.join('; '),
+      );
+    }
+    pending = replacement;
+  }
+}
+
+/**
  * The reduce↔persist fixpoint. Drains `commands` (and everything they cascade),
  * appending every produced event and folding it. Stops when the queue empties
  * or the run reaches a terminal fact. Returns the final projected state.
  *
- * `finishRun` is the DRIVER's own command (it appends `run.finished` + persists
- * the terminal `runs.status`); `dispatchNode`/`startChild` go to the executor.
+ * `finishRun` is the DRIVER's own command — REDUCE-FIRST (`driveFinishRun`, #477:
+ * append only a finish the reducer accepts); `dispatchNode`/`startChild` go to
+ * the executor (append-before-fold, the crash-safety contract).
  */
 export async function pump(
   deps: DriverDeps,
@@ -323,31 +422,31 @@ export async function pump(
     }
 
     const command = queue.shift()!;
-    // `finishRun` and `scheduleRetry` are the driver's OWN commands, each a
-    // single event (a sync array, which `for await` iterates too).
-    // `dispatchNode`/`startChild` go to the executor, which STREAMS its events so
-    // `node.dispatched` is folded (durable) before the side effect runs — see the
-    // `Executor` contract doc.
+
+    // The driver's OWN `finishRun` is REDUCE-FIRST (#477): fold before append, so
+    // a `run.finished` the reducer would reject is never made durable. It always
+    // terminalizes, so nothing cascades and the pump stops here.
+    if (command.type === 'finishRun') {
+      state = driveFinishRun(deps, engine, state, command);
+      break;
+    }
+
+    // `scheduleRetry` is the driver's other OWN command — a single event (a sync
+    // array, which `for await` iterates too). `dispatchNode`/`startChild` go to
+    // the executor, which STREAMS its events so `node.dispatched` is folded
+    // (durable) before the side effect runs — see the `Executor` contract doc.
     //
-    // `scheduleRetry` routes through this same `source` rather than appending on
-    // its own: the loop below is what publishes to the P6 bus (so a watching
-    // client's raw event feed sees the retry as it is scheduled — note the
-    // monitor's per-node summary does not fold it yet), folds the PARSED event,
-    // and syncs the row. `armRetry` runs while building the array, which is what
-    // keeps the arm strictly BEFORE the append.
+    // `scheduleRetry` routes through this `source` rather than appending on its
+    // own: the loop below is what publishes to the P6 bus (so a watching client's
+    // raw event feed sees the retry as it is scheduled — note the monitor's
+    // per-node summary does not fold it yet), folds the PARSED event, and syncs
+    // the row. `armRetry` runs while building the array, which is what keeps the
+    // arm strictly BEFORE the append. Unlike `finishRun`, its event is not a
+    // verdict on its own event, so append-before-fold is fine.
     const source: Iterable<EngineEvent> | AsyncIterable<EngineEvent> =
-      command.type === 'finishRun'
-        ? [
-            {
-              type: 'run.finished',
-              runId: state.runId,
-              outcome: command.outcome,
-              reason: command.reason,
-            },
-          ]
-        : command.type === 'scheduleRetry'
-          ? [armRetry(deps, state, command)]
-          : deps.executor.perform(command, state.runId);
+      command.type === 'scheduleRetry'
+        ? [armRetry(deps, state, command)]
+        : deps.executor.perform(command, state.runId);
 
     let terminal = false;
     for await (const event of source) {
@@ -402,10 +501,14 @@ const isTerminalRow = (status: string): boolean =>
  *     reconciler does), or by a direct patch if `resolveDoc` throws. Either
  *     way the row and the log agree on `interrupted` — never diverge.
  * A run reaching here CAN already have a terminal LOG (#443) — this used to
- * claim it could not, which was WRONG: `pump` appends `run.finished` and only
- * THEN folds it and syncs the row, so a throw in either step leaves the terminal
- * fact durable while the row is still `running`, and `startRun` throws, landing
- * here. Appending `run.interrupted` on top would bury a run's real terminal fact
+ * claim it could not, which was WRONG: `pump` makes the terminal `run.finished`
+ * durable BEFORE it syncs the row, so a throw in between leaves the terminal fact
+ * in the log while the row is still `running`, and `startRun` throws, landing
+ * here. Post-#477 `driveFinishRun` folds its finish before appending it, but the
+ * append still precedes `recordRunDiagnostics`/`syncRunLifecycle` (and the
+ * `capped` fail-safe still appends-then-folds), so a throw after that durable
+ * append is exactly the gap — the log is terminal, the row is not.
+ * Appending `run.interrupted` on top would bury a run's real terminal fact
  * under a false one — and since #443 makes the LOG authoritative for
  * terminality, the boot reconciler would then resync a SUCCEEDED run to
  * `interrupted`. So a terminal log means: append NOTHING, just sync the row to

@@ -1890,11 +1890,13 @@ export function createEngine(doc: EngineDoc): Engine {
         // Routed through the SAME `runOutcomeFailure` as `settle` (§B.2). This
         // is an SSOT requirement, not a style preference: these two sites answer
         // the identical question ("is this run's outcome success?"), and a
-        // divergence between them is a latent `invalid_event` — `settle` would
-        // emit `finishRun{success}`, the driver would append `run.finished`, and
-        // the reducer would then call its own event impossible and strand the
-        // run at `status:'running'` (which `reconcile` re-drives). Measured, not
-        // theorised: changing one site alone reproduces exactly that.
+        // divergence between them is a latent `invalid_event` — `settle` emits
+        // `finishRun{success}` while this handler calls that same finish
+        // impossible, so the run ends `failure{invalid_event}` when settle judged
+        // it a success (pre-#477 it stranded at `status:'running'`, which
+        // `reconcile` re-drove; since #477 the driver folds first and terminalizes
+        // it inline). Either way the run's outcome contradicts settle's verdict.
+        // Measured, not theorised: changing one site alone reproduces exactly that.
         if (
           event.outcome === 'success' &&
           !(allTopLevelTerminal(state) && runOutcomeFailure(state) === null)

@@ -695,10 +695,13 @@ above — read this, not the sentence, when building F1b.** #443's prose said "e
 - An "ends in" rule re-drives forever any log with a **trailing non-terminal** — and pre-#443 logs
   have exactly that (`[… run.finished, run.resumed, node.dispatched …]`), because appending
   `run.resumed` over a terminal **is** the bug. Last-terminal-wins heals them; "ends in" cannot.
-- It is the only correct read of the one multi-terminal log the driver can produce: `pump` appends
-  `run.finished` **before** folding it, so a REJECTED finish is durable, followed by the
-  `finishRun{failure, invalid_event}` returned instead. Reading the FIRST terminal resyncs the
-  rejected `success`.
+- It is the only correct read of a rejected-then-replacement multi-terminal log: a REJECTED
+  `run.finished` durable, followed by the `finishRun{failure, invalid_event}` returned instead —
+  reading the FIRST terminal resyncs the rejected `success`. **Superseded by #477 as a driver
+  producer:** `pump` used to append `run.finished` before folding it; `driveFinishRun` now folds
+  its own finish first and never appends a rejected one, so the driver no longer PRODUCES such a
+  log. Last-terminal-wins is retained regardless — it still guards pre-#477 logs and any future
+  producer that appends a terminal it did not first accept.
 - The invariant it rests on is exact: **no TERMINAL event is appended after an ACCEPTED terminal
   event**. NON-terminal events legitimately may — which is why F2c's `node.retryDue` and P3b's
   `call.returned` are free to land later. `launcher.ts`'s `terminalizeInterrupted` gated on the ROW,
@@ -706,12 +709,16 @@ above — read this, not the sentence, when building F1b.** #443's prose said "e
   landed there with the row still `running`, so it appended `run.interrupted` over an accepted
   terminal); fixed in the same PR. **Anything F1b/F2b adds that appends a terminal must honour it.**
 
-**Named cost, probed, accepted:** if a crash lands between a rejected `run.finished{success}` and its
-replacement, the log holds that success alone and the row resyncs `success` where the old
-projection-based path resynced `failure`. Inherent to the rule — the reconciler cannot distinguish "an
-OLD reducer accepted this" (where `success` is right, and is the point of #443) from "the CURRENT
-reducer rejects it", and only the version marker deferred below could. It needs a self-inconsistent
-reducer at write time — **the two-call-site bug §B.2 fixes** — plus a crash inside that window.
+**Named cost, probed, accepted — window since CLOSED at the source by #477:** if a crash lands
+between a rejected `run.finished{success}` and its replacement, the log holds that success alone and
+the row resyncs `success` where the old projection-based path resynced `failure`. Inherent to the
+rule — the reconciler cannot distinguish "an OLD reducer accepted this" (where `success` is right,
+and is the point of #443) from "the CURRENT reducer rejects it", and only the version marker deferred
+below could. It needs a self-inconsistent reducer at write time — **the two-call-site bug §B.2
+fixes** — plus a crash inside that window. #477 removes the window itself: `driveFinishRun` never
+appends a rejected finish, so no crash can strand one as the sole terminal. The residual is only a
+log written by a **pre-#477** driver plus a crash inside that historical window — bounded, not
+open-ended.
 
 **Explicitly NOT doing (v1): versioning reducer semantics per pipeline version.** A catalog/version
 marker so old logs fold under the rules they were written under is the "correct" answer and is
