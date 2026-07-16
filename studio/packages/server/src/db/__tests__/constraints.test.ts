@@ -56,6 +56,7 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         outputs: [],
         nodes: [],
         edges: [],
+        containers: [],
         catalogVersion: 1,
         createdAt: 1,
       })
@@ -101,6 +102,7 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         outputs: [],
         nodes: [],
         edges: [],
+        containers: [],
         catalogVersion: 1,
         createdAt: 1,
       })
@@ -144,6 +146,7 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         outputs: [],
         nodes: [],
         edges: [],
+        containers: [],
         catalogVersion: 1,
         createdAt: 1,
       })
@@ -230,6 +233,7 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         outputs: [],
         nodes: [],
         edges: [],
+        containers: [],
         catalogVersion: 1,
         createdAt: 1,
       })
@@ -262,6 +266,7 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         outputs: [],
         nodes: [],
         edges: [],
+        containers: [],
         catalogVersion: 1,
         createdAt: 1,
       })
@@ -290,6 +295,7 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         outputs: [],
         nodes: [],
         edges: [],
+        containers: [],
         catalogVersion: 1,
         createdAt: 1,
       })
@@ -319,6 +325,7 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         outputs: [],
         nodes: [],
         edges: [],
+        containers: [],
         catalogVersion: 1,
         createdAt: 1,
       })
@@ -369,6 +376,7 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         outputs: [],
         nodes: [],
         edges: [],
+        containers: [],
         catalogVersion: 1,
         createdAt: 1,
       })
@@ -419,6 +427,7 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         outputs: [],
         nodes: [],
         edges: [],
+        containers: [],
         catalogVersion: 1,
         createdAt: 1,
       })

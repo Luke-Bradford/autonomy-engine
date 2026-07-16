@@ -8,6 +8,7 @@ import {
   WebhookDeliveryOutcomeSchema,
   type Concurrency,
   type ConnectionKind,
+  type Container,
   type Edge,
   type Node,
   type Output,
@@ -103,6 +104,11 @@ export const pipelineVersions = sqliteTable(
     outputs: text('outputs', { mode: 'json' }).notNull().$type<Output[]>(),
     nodes: text('nodes', { mode: 'json' }).notNull().$type<Node[]>(),
     edges: text('edges', { mode: 'json' }).notNull().$type<Edge[]>(),
+    // #473: absent until 0006 — every authored container was silently dropped
+    // on insert. `.notNull()` with no drizzle-level default is deliberate: it
+    // makes TypeScript refuse a raw insert that omits the key. (The column's
+    // SQL DEFAULT exists only to backfill pre-0006 rows — see the migration.)
+    containers: text('containers', { mode: 'json' }).notNull().$type<Container[]>(),
     catalogVersion: integer('catalog_version').notNull(),
     createdAt: integer('created_at').notNull(),
   },

@@ -1,0 +1,42 @@
+-- #473 DATA LOSS: `pipeline_versions` never had a `containers` column.
+--
+-- P2c added control-flow containers (loop/stage) to the domain model, the Zod
+-- schema, the validators, the routes and the canvas — but not to this table.
+-- Drizzle DROPS an unknown key on insert SILENTLY, so every stage/loop an
+-- operator authored was discarded at the moment of save: accepted, validated,
+-- echoed back in the create response (which is built from the in-memory input,
+-- not a re-read), and gone by the next read. `PipelineVersionSchema.containers`
+-- carries `.default([])`, so the read then MANUFACTURED an empty list — the
+-- loss was not merely silent but actively disguised as "this pipeline has no
+-- containers". No error on any path, at any layer.
+--
+-- ALTER ... ADD COLUMN is native in SQLite (no table recreate), so this does
+-- NOT disturb `0002`'s `pipeline_versions_no_update` / `_no_delete` triggers.
+-- Those stay correct here for a reason worth stating: both are `BEFORE UPDATE
+-- ON` / `BEFORE DELETE ON`, NOT column-scoped (`UPDATE OF ...`), so a column
+-- added after the fact is covered by the immutability guarantee automatically.
+--
+-- NOT NULL DEFAULT '[]' — SQLite REQUIRES a non-null default to add a NOT NULL
+-- column to a table with rows, and '[]' is the honest value for every existing
+-- row: their containers were never stored, and `pipeline_versions` is immutable
+-- (the no-update trigger `RAISE(ABORT)`s), so those versions are unrepairable
+-- in place — only re-authorable as a NEW version against this fixed schema. '[]'
+-- records what those rows actually ARE; there is nothing truer to write.
+--
+-- The DEFAULT is load-bearing ONLY for that backfill, and its scope is worth
+-- being precise about, because it is a fail-open in the wrong hands: a RAW SQL
+-- insert omitting `containers` would silently store '[]' rather than erroring.
+-- Nothing does that today — the sole production writer is the repo layer, whose
+-- drizzle insert TypeScript rejects unless `containers` is named (the column is
+-- `.notNull()` with no drizzle-level default). Note that guarantee binds the
+-- DRIZZLE call, not `createPipelineVersion`'s own argument: `NewPipelineVersion`
+-- is a `z.input`, where the write-side `.default([])` keeps `containers`
+-- optional, so Zod supplies `[]` before the insert ever sees it.
+--
+-- The guard against a REPEAT of this defect is therefore neither the default nor
+-- the NOT NULL, but the schema/table parity test
+-- (`db/__tests__/schema-table-parity.test.ts`): it asserts every Zod field has a
+-- column to persist to, which is the one check that can see a seam where both
+-- sides are individually well-typed. It fails RED on the pre-fix schema.
+
+ALTER TABLE pipeline_versions ADD COLUMN containers TEXT NOT NULL DEFAULT '[]';

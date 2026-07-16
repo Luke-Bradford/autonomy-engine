@@ -46,14 +46,21 @@ function importPipelineEnvelope(
     nodeId,
   }));
   const versions = exportedVersions.map((exportedVersion) => {
-    const nodes = exportedVersion.nodes.map(toDbNode);
+    // SPREAD, not a field-by-field rebuild (#473). Listing the fields by hand
+    // is what silently dropped `containers` on import: every field of
+    // `NewPipelineVersion` that has a `.default()` is OPTIONAL in `z.input`, so
+    // forgetting one type-checks cleanly and loses data at run time. Spreading
+    // keeps this in step with `PipelineVersionExportSchema` (which derives from
+    // `PipelineVersionSchema`) by construction, so a field added to the domain
+    // model imports without a change here. `id`/`version`/`createdAt` ride along
+    // harmlessly — `NewPipelineVersionSchema` omits them and Zod strips unknown
+    // keys, so the server still assigns all three (`createPipelineVersion`);
+    // the import tests pin that, since it is what keeps the module's
+    // "never reuses an exported id" invariant true under a spread.
     const input: NewPipelineVersion = {
+      ...exportedVersion,
       pipelineId: pipeline.id,
-      params: exportedVersion.params,
-      outputs: exportedVersion.outputs,
-      nodes,
-      edges: exportedVersion.edges,
-      catalogVersion: exportedVersion.catalogVersion,
+      nodes: exportedVersion.nodes.map(toDbNode),
     };
     return createPipelineVersion(db, input);
   });
