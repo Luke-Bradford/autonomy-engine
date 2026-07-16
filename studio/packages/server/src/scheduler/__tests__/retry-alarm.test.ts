@@ -495,12 +495,7 @@ describe('F2c/B1 — two due alarms must not start two concurrent drives', () =>
     const { db } = freshDb();
     const pvId = seedVersion(
       db,
-      [
-        node('root'),
-        node('a', { retry: 1 }),
-        node('b', { retry: 1 }),
-        joinAny('d'),
-      ],
+      [node('root'), node('a', { retry: 1 }), node('b', { retry: 1 }), joinAny('d')],
       [
         { id: 'root->a', from: 'root', to: 'a', on: 'success' },
         { id: 'root->b', from: 'root', to: 'b', on: 'success' },
@@ -515,11 +510,7 @@ describe('F2c/B1 — two due alarms must not start two concurrent drives', () =>
     const planA: NodePlan = { outcome: 'failure', kind: 'transient' };
     const planB: NodePlan = { outcome: 'failure', kind: 'transient' };
     let t = NOW;
-    const { deps, clock, drives } = harness(
-      db,
-      { nodes: { a: planA, b: planB } },
-      () => t,
-    );
+    const { deps, clock, drives } = harness(db, { nodes: { a: planA, b: planB } }, () => t);
     const executor = deps.executor as RecordingExecutor;
 
     await startRun(deps, run);

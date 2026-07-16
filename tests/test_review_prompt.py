@@ -142,7 +142,10 @@ class TestBuildPayload(unittest.TestCase):
     def test_payload_shape_and_cache_control(self):
         p = review_prompt.build_payload(review_prompt.SCOPE_STUDIO, "diff", "desc", "comments")
         self.assertEqual(p["model"], "claude-sonnet-5")
-        self.assertEqual(p["max_tokens"], 16000)
+        # Sized to cover adaptive thinking PLUS the review text on a large diff —
+        # see the comment at the constant. Raised 5000 → 16000 → 32000, each time
+        # after a real diff spent the whole budget on thinking and emitted none.
+        self.assertEqual(p["max_tokens"], 32000)
         self.assertEqual(p["system"][0]["cache_control"], {"type": "ephemeral"})
         self.assertIn(STUDIO_MARKER, p["system"][0]["text"])
 

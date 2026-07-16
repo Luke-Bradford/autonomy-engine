@@ -779,9 +779,10 @@ describe('run.resumed reconstructs a dropped finishRun', () => {
     // derivation — so a swallowed throw here would be a permanent hang with a
     // spent alarm. Closing the class costs six lines; leaving it depends on an
     // unreachability argument holding forever.
-    const eng = engine([node('a'), node('b', { m: '${nodes.a.output.g}' })], [
-      edge('a', 'b', 'success'),
-    ]);
+    const eng = engine(
+      [node('a'), node('b', { m: '${nodes.a.output.g}' })],
+      [edge('a', 'b', 'success')],
+    );
     let s = eng.reduce(eng.seedState(), started()).state;
     s = eng.reduce(s, dispatched('a', attempt('a'))).state;
     s = eng.reduce(s, succeeded('a', attempt('a'), { g: 'hi' })).state;

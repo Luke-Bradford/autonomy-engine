@@ -364,7 +364,8 @@ export type TerminalizeDeps = Pick<DriverDeps, 'db' | 'resolveDoc' | 'bus' | 'lo
  * narrower `RunLifecycleStatus`; a DB row's `status` is the wider `RunStatus`, so
  * widen the set's element type for this membership check.
  */
-const isTerminalRow = (status: string): boolean => (TERMINAL_RUN as ReadonlySet<string>).has(status);
+const isTerminalRow = (status: string): boolean =>
+  (TERMINAL_RUN as ReadonlySet<string>).has(status);
 
 /**
  * Terminalize a run whose background drive threw UNEXPECTEDLY (the driver maps

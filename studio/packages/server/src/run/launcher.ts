@@ -1,11 +1,6 @@
 import type { FireOutcome, FireResult, Trigger } from '@autonomy-studio/shared';
 import { countActiveRunsForTrigger, createRun } from '../repo/runs.js';
-import {
-  startRun,
-  terminalizeInterrupted,
-  type DriveDeps,
-  type DriveLog,
-} from './driver.js';
+import { startRun, terminalizeInterrupted, type DriveDeps, type DriveLog } from './driver.js';
 
 /**
  * P4a — the run LAUNCHER: the one place a trigger becomes a run. Manual fire
