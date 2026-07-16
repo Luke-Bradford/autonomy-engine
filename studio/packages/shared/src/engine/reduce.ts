@@ -177,10 +177,18 @@ export function createEngine(doc: EngineDoc): Engine {
   // #487: a container child that is NOT a node id is neutralized here, at the
   // bind, so every downstream reader is correct BY CONSTRUCTION rather than by
   // remembering to guard. `seedState`/`run.started` seed `state.nodes` from
-  // `doc.nodes` alone, so a child with no node behind it has no entry and
-  // `stepContainers`' `state.nodes[ch]!.status` walked off the end — a TypeError
-  // out of the PURE reducer, which does not fail the run: it escapes the fold and
-  // kills the driver's pump. Fail-open in the worst place.
+  // `doc.nodes` alone, so a child with no node behind it has no entry and the
+  // `state.nodes[<child>]!` reads walk off the end — a TypeError out of the PURE
+  // reducer, which does not fail the run: it escapes the fold and kills the
+  // driver's pump. Fail-open in the worst place.
+  //
+  // The site reached FIRST is `tryDispatchNode`, via `settle`'s per-container
+  // child-dispatch pass — a container is entered and its children dispatched in
+  // the same `settle` iteration, so the throw lands before `stepContainers` is
+  // re-entered. `stepContainers`' own `state.nodes[ch]!.status` is a latent
+  // SECOND site (#487 reported it as the only one). Both are fixed here by
+  // construction, which is the argument for normalizing at the bind rather than
+  // guarding the read that happened to be found.
   //
   // The rule mirrors `validateDoc`'s own ("child '<x>' is not a node in this
   // pipeline") — and the CLASS is that rule, not the nested-container shape it
@@ -206,9 +214,28 @@ export function createEngine(doc: EngineDoc): Engine {
   });
   const containerById = new Map<string, Container>(containers.map((c) => [c.id, c]));
   const containerIds = containers.map((c) => c.id);
+  // Membership is read from the RAW children, and that is load-bearing rather
+  // than incidental. Two different questions hang off a container's children and
+  // the #487 filter must answer only ONE of them:
+  //   - "does this child have node state to read?" — the filtered `containers`
+  //     above, which is what stops the reducer throwing.
+  //   - "who OWNS this id?" — this map, which CLASSIFIES EDGES (internal vs
+  //     top-level vs cross-boundary) and must reflect what the author actually
+  //     wrote.
+  // Deriving membership from the filtered set conflates them, and the effect is
+  // not academic: dropping a container-id child would delete it from this map, so
+  // an edge leaving it silently stops being cross-boundary, is no longer voided
+  // from `topOutgoing`, and absorbs a failure that nothing handled — the exact
+  // fail-open #480 closed, re-opened for one doc class, flipping a run from
+  // `failure` to `success`. A doc that never threw would have changed answer.
+  // Symmetrically, two children of one container would stop being INTERNAL to it,
+  // freeing the target to fire as an unconditional root.
+  // Pinned both ways in `malformed-doc.test.ts`.
   const childToContainer = new Map<string, string>();
-  for (const c of containers) for (const ch of c.children) childToContainer.set(ch, c.id);
+  for (const c of rawContainers) for (const ch of c.children) childToContainer.set(ch, c.id);
   const childSet = new Set(childToContainer.keys());
+  // Unaffected by raw-vs-filtered: the filter only ever removes NON-node ids, and
+  // this filters node ids.
   const topLevelNodeIds = nodeIds.filter((id) => !childSet.has(id));
 
   // Endpoints for edges = node ids ∪ container ids (an OUTER edge may name a
@@ -287,10 +314,11 @@ export function createEngine(doc: EngineDoc): Engine {
   // satisfied by construction.
   //
   // Removing it from `topIncoming` also removes it from the outcome predicate
-  // (`ins`, in `outcomeFailure`'s leaf-blame walk). No blame is lost: the
-  // container now has no incoming edge, so it can never be a skipped leaf via
-  // this edge; and if it is skipped by OTHER incoming edges, its children never
-  // ran (`pending`, never `failure`), so they were never blamable anyway.
+  // (`ins`, in `outcomeFailure`'s leaf-blame walk). No blame is lost, and the
+  // reason is the container's ACTIVATION rule, not its edge count (it may still
+  // hold other incoming edges): a container reached as a skipped leaf never went
+  // `active`, so its children never ran — they are `pending`, never `failure`, so
+  // `evalEndpoint` had nothing to blame through this edge either way.
   //
   // The edge lands in NO index after this — `topOutgoing.has(e.from)` is already
   // false (its source is a child) and `internalForwardByContainer` rejects it
@@ -1168,7 +1196,12 @@ export function createEngine(doc: EngineDoc): Engine {
     // thing that makes the neutralization visible. Without it the operator sees a
     // run behave nothing like the graph they authored, with no hint why. Emitted
     // once per run, after the already-started guard.
-    diagnostics.push(...docDefects);
+    // A LOOP, not `push(...docDefects)`: a spread passes one argument per element
+    // and blows the stack (`RangeError`) somewhere past ~100k of them. `children`
+    // has no schema max and this validator is advisory, so the count is
+    // attacker-shaped, and the same standard the iterative walks in this file are
+    // held to applies — a `RangeError` out of the PURE reducer kills the pump.
+    for (const d of docDefects) diagnostics.push(d);
     const nodes: Record<string, NodeRunState> = {};
     for (const id of nodeIds) nodes[id] = { status: 'pending', attempts: 0, retries: 0 };
     const containerStates: Record<string, ContainerRunState> = {};

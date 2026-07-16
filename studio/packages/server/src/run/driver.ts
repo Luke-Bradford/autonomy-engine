@@ -151,11 +151,20 @@ const TERMINAL_RUN: ReadonlySet<RunLifecycleStatus> = new Set<RunLifecycleStatus
 ]);
 
 /**
- * A belt-and-suspenders bound on driver iterations. The reducer already
- * GUARANTEES termination (every back-edge/container has a bounce/round cap, and
- * `validateDoc` requires them), so a validated doc can never reach this. It
- * exists only so an unforeseen reducer bug fails a run SAFELY (a `capped`
- * terminal) instead of spinning this loop forever in a headless server.
+ * A belt-and-suspenders bound on driver iterations, and NOT the general liveness
+ * guarantee it once claimed to be. The old claim ("the reducer already
+ * GUARANTEES termination … so a validated doc can never reach this") was false
+ * three ways: `validateDoc` never required a container `maxRounds` (only a
+ * back-edge `maxBounces`), it is advisory anyway (#444 — nothing is "validated"
+ * on the way in), and this bounds the COMMAND-QUEUE pump, which is the wrong
+ * layer for either shape that actually breaks liveness. A deadlocked doc drains
+ * the queue and never comes back here; a spinning reducer never returns control
+ * to this loop at all.
+ *
+ * What it does bound: an unforeseen reducer bug that keeps EMITTING commands,
+ * which it fails SAFELY (a `capped` terminal) rather than spinning a headless
+ * server. Deadlock/spin defences live in the reducer itself — see
+ * `malformed-doc.test.ts`.
  */
 const MAX_DRIVER_STEPS = 1_000_000;
 

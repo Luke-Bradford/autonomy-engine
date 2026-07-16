@@ -938,7 +938,13 @@ export function validateDoc(
     // reducer refuses it too (`stepContainers` → `no_progress`) — it has to, this
     // validator being advisory — but a doc this broken should be reported here as
     // well, not only discovered at run time.
-    if (c.kind === 'loop' && c.children.length === 0) {
+    // Counts only children that RESOLVE to a node, which is what makes this the
+    // reducer's rule rather than a near-miss of it: the reducer tests the body it
+    // will actually run (non-node children are neutralized at the bind), so a
+    // loop whose only child is a container id is empty to the reducer. Testing
+    // raw `children.length` here would let exactly that doc — the one that makes
+    // #487 and this fix inseparable — pass the validator and still fail the run.
+    if (c.kind === 'loop' && c.children.filter((ch) => nodeIdSet.has(ch)).length === 0) {
       errors.push(
         `container '${c.id}': makes no progress — a loop needs at least one child ` +
           '(an empty loop re-rounds forever: a round resets nothing, so exitWhen never changes)',

@@ -1,6 +1,14 @@
 /**
- * The reducer's own defences against a MALFORMED doc — the sweep for #487, #488
- * and the empty-loop spin found while fixing them.
+ * The reducer's own defences against three specific MALFORMED-doc shapes — the
+ * sweep for #487, #488 and the empty-loop spin found while fixing them.
+ *
+ * THREE SHAPES, NOT THE CLASS. A forward cycle (`a → b → a`, at top level or
+ * among a container's children) still wedges a run in `running` forever with no
+ * `finishRun` — byte-for-byte #488's failure mode, from a doc `validateDoc` also
+ * only warns about. There is no general backstop underneath: `settle` is an
+ * unbounded `for(;;)`, and the driver's `MAX_DRIVER_STEPS` bounds the command
+ * queue, which a deadlock simply drains. That gap is tracked separately; do not
+ * read this file as "the reducer survives anything".
  *
  * Why these live in the reducer at all: `validateDoc` is ADVISORY (#444). Its
  * only caller is the canvas badge, which does not block Save, and the server
@@ -33,13 +41,27 @@ const RUN = 'r1';
 const PV = 'pv1';
 
 /**
- * Drive a run to completion, resolving every dispatched node successfully.
- * Same command-QUEUE shape (and file-local convention) as `edge-model.test.ts`'s
- * and `reduce.test.ts`'s `runAll`. The `guard` is the point of the exercise here:
- * a doc that deadlocks emits no `finishRun` at all, so these tests assert on
- * `finish` being defined rather than trusting the loop to end.
+ * Drive a run to completion, resolving each dispatched node from `outcomes`
+ * (default: success). Same command-QUEUE shape (and file-local convention) as
+ * `edge-model.test.ts`'s and `reduce.test.ts`'s `runAll`.
+ *
+ * Worth knowing before trusting it: the `guard` catches NONE of the three
+ * defects pinned here, and is kept only for parity with the other two copies. A
+ * #487 doc throws inside `reduce`; a #488 doc drains the queue and simply exits
+ * the loop (the `finish === undefined` assertion is what catches that); and the
+ * empty loop spins INSIDE one `reduce()` call, which no driver-loop guard — and
+ * no vitest `testTimeout`, the spin being synchronous — can preempt. The
+ * empty-loop pins therefore HANG rather than fail if they regress, which is the
+ * honest cost of pinning a synchronous spin from inside the same process.
  */
-function runAll(eng: Engine, params: Record<string, unknown> = {}) {
+function runAll(
+  eng: Engine,
+  opts: {
+    params?: Record<string, unknown>;
+    outcomes?: Record<string, 'success' | 'failure'>;
+  } = {},
+) {
+  const { params = {}, outcomes = {} } = opts;
   let state = eng.seedState();
   const pending: EngineCommand[] = [];
   const diagnostics: string[] = [];
@@ -72,13 +94,24 @@ function runAll(eng: Engine, params: Record<string, unknown> = {}) {
       attemptId: c.attemptId,
       idempotent: true,
     });
-    apply({
-      type: 'node.succeeded',
-      runId: RUN,
-      nodeId: c.nodeId,
-      attemptId: c.attemptId,
-      outputs: {},
-    });
+    apply(
+      (outcomes[c.nodeId] ?? 'success') === 'failure'
+        ? {
+            type: 'node.failed',
+            runId: RUN,
+            nodeId: c.nodeId,
+            attemptId: c.attemptId,
+            error: 'boom',
+            kind: 'permanent',
+          }
+        : {
+            type: 'node.succeeded',
+            runId: RUN,
+            nodeId: c.nodeId,
+            attemptId: c.attemptId,
+            outputs: {},
+          },
+    );
   }
   return { state, finish, diagnostics, order };
 }
@@ -87,8 +120,9 @@ describe('#487 — a container child that is not a node id must not THROW', () =
   // The bug was reported as "a NESTED container", but the class is wider and is
   // exactly the one `validateDoc` already states (params.ts: "child '<x>' is not
   // a node in this pipeline"): ANY child id with no node behind it. `seedState`
-  // seeds `state.nodes` from `doc.nodes`, so `stepContainers`' `state.nodes[ch]!`
-  // walked off the end for every shape below.
+  // seeds `state.nodes` from `doc.nodes`, so every shape below threw on a
+  // `state.nodes[<child>]!` read — in `tryDispatchNode`, which `settle` reaches
+  // before `stepContainers` (the site #487 named).
   it('a NESTED container id as a child does not throw', () => {
     const eng = createEngine({
       nodes: [node('n1')],
@@ -141,6 +175,48 @@ describe('#487 — a container child that is not a node id must not THROW', () =
     expect(state.containers['inner']?.status).toBe('success');
     expect(state.containers['outer']?.status).toBe('success');
     expect(finish?.outcome).toBe('success');
+  });
+
+  // The two pins below exist because the first cut of this fix FAILED them. The
+  // filter must answer "does this child have node state?" WITHOUT also answering
+  // "who owns this id?" — deriving edge classification from the filtered set
+  // re-opens #480's fail-open for one doc class. Neither doc throws on the
+  // pre-#487 reducer, so a regression here would silently change the answer for
+  // docs that were working.
+  it('a dropped child does not un-cross its edges (#480 fail-open stays closed)', () => {
+    const eng = createEngine({
+      nodes: [node('g'), node('n1'), node('handler')],
+      edges: [
+        { id: 'e1', from: 'g', to: 'outer', on: 'failure' },
+        // `inner` is AUTHORED as a child of `outer`, so this edge leaves a
+        // container boundary and must stay voided — even though `inner` is
+        // dropped from `outer`'s effective body for being a container id.
+        { id: 'e2', from: 'inner', to: 'handler', on: 'failure' },
+      ],
+      containers: [
+        { id: 'outer', kind: 'stage', children: ['inner'] },
+        { id: 'inner', kind: 'stage', children: ['n1'] },
+      ],
+    } satisfies EngineDoc);
+    const { finish } = runAll(eng, { outcomes: { n1: 'failure' } });
+    expect(finish?.outcome).toBe('failure');
+  });
+
+  it('a dropped child does not free its SIBLINGS to fire as roots', () => {
+    const eng = createEngine({
+      nodes: [node('n1'), node('a')],
+      // `inner` and `a` are both authored children of `outer`, so this edge is
+      // INTERNAL to `outer` and must keep gating `a`.
+      edges: [{ id: 'e', from: 'inner', to: 'a', on: 'success' }],
+      containers: [
+        { id: 'outer', kind: 'stage', children: ['inner', 'a'] },
+        { id: 'inner', kind: 'stage', children: ['n1'] },
+      ],
+    } satisfies EngineDoc);
+    const { order } = runAll(eng);
+    // `a` waits for `inner` to succeed; it must not dispatch as an unconditional
+    // root of `outer`.
+    expect(order.indexOf('a')).toBeGreaterThan(order.indexOf('n1'));
   });
 
   it('says so: a dropped child is reported once per run', () => {
@@ -222,7 +298,7 @@ describe('an empty-bodied LOOP must not spin the reducer forever', () => {
 
   it('terminates with failure `no_progress` instead of spinning', () => {
     const eng = createEngine(EMPTY_LOOP);
-    const { finish, state } = runAll(eng, { go: 'no' });
+    const { finish, state } = runAll(eng, { params: { go: 'no' } });
     expect(finish?.outcome).toBe('failure');
     expect(state.containers['c']?.status).toBe('failure');
     expect(state.containers['c']?.reason).toBe('no_progress');
@@ -240,7 +316,7 @@ describe('an empty-bodied LOOP must not spin the reducer forever', () => {
         { id: 'inner', kind: 'stage', children: ['n1'] },
       ],
     } satisfies EngineDoc);
-    const { state } = runAll(eng, { go: 'no' });
+    const { state } = runAll(eng, { params: { go: 'no' } });
     expect(state.containers['lp']?.reason).toBe('no_progress');
   });
 
@@ -263,7 +339,7 @@ describe('an empty-bodied LOOP must not spin the reducer forever', () => {
         },
       ],
     } satisfies EngineDoc);
-    const { state } = runAll(eng, { go: 'no' });
+    const { state } = runAll(eng, { params: { go: 'no' } });
     expect(state.containers['c']?.reason).toBe('no_progress');
     expect(state.containers['c']?.round).toBe(0);
   });
