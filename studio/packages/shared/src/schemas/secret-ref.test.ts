@@ -41,4 +41,19 @@ describe('isSecretRef — the loose detector', () => {
     expect(isSecretRef({ url: 'https://x' })).toBe(false);
     expect(isSecretRef({})).toBe(false);
   });
+
+  it('narrows the value to `{ $secret: unknown }`, not a validated `SecretRef` (sound predicate)', () => {
+    const v: unknown = { $secret: 123 };
+    if (isSecretRef(v)) {
+      // The predicate proves ONLY that the key exists — the value stays
+      // `unknown`, so a caller cannot unsoundly treat it as a string without
+      // re-running `SecretRefSchema`. This line would be a type error if the
+      // predicate still claimed `v is SecretRef`.
+      // @ts-expect-error $secret is `unknown` here, not `string`
+      const _name: string = v.$secret;
+      void _name;
+      // Re-validating is the ONLY sound way to reach the literal name.
+      expect(SecretRefSchema.safeParse(v).success).toBe(false);
+    }
+  });
 });

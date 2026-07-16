@@ -37,8 +37,16 @@ export type SecretRef = z.infer<typeof SecretRefSchema>;
  * still trips the gate rather than slipping through as plain config. `$secret`
  * is a reserved marker key by construction; a config object may not use it as an
  * ordinary field name.
+ *
+ * The predicate narrows to `{ $secret: unknown }`, NOT `SecretRef` — the check
+ * proves only that the key EXISTS, never that its value is a non-empty string.
+ * Claiming `v is SecretRef` here would be an unsound cast: `{ $secret: 123 }`
+ * would type-narrow to `SecretRef` and let a caller read `.$secret as string`
+ * without ever re-running `SecretRefSchema`. Callers that need the validated
+ * shape (a literal name) must still `SecretRefSchema.safeParse` — which is
+ * exactly what the save-time gate does (`validateSecretMarker`).
  */
-export function isSecretRef(v: unknown): v is SecretRef {
+export function isSecretRef(v: unknown): v is { $secret: unknown } {
   return (
     typeof v === 'object' &&
     v !== null &&
