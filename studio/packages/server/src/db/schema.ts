@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 import {
@@ -259,10 +260,17 @@ export const runDiagnostics = sqliteTable(
  *
  * `owner_id` + `name` (item 7 / S1) are nullable: a connection-owned secret
  * leaves both `NULL` (addressed only by `ref`); a standalone secret carries an
- * owner + a user-chosen `name`, UNIQUE per owner so `{ "$secret": "<name>" }`
- * (S2) resolves deterministically. A UNIQUE index over `(owner_id, name)` does
- * NOT collide the many `(NULL, NULL)` connection secrets — SQLite treats NULLs
- * as distinct in a UNIQUE index.
+ * owner + a user-chosen `name`, UNIQUE per owner (case-insensitively — see
+ * below) so `{ "$secret": "<name>" }` (S2) resolves deterministically. A UNIQUE
+ * index over `(owner_id, name)` does NOT collide the many `(NULL, NULL)`
+ * connection secrets — SQLite treats NULLs as distinct in a UNIQUE index.
+ *
+ * `name` collates `NOCASE` in the unique index (#533): `"stripe-key"` and
+ * `"Stripe-Key"` are the SAME name per owner, so a case-variant is refused —
+ * the S3 lookup (`repo/secrets.ts` `getSecretByName`) folds case to match.
+ * `owner_id` stays BINARY (an opaque machine id, case-significant). The runtime
+ * DDL SSOT is the hand-rolled SQL migration (`drizzle/migrations/0009_*`), not
+ * this declaration — this `.on(...)` mirrors it so the two stay in step.
  */
 export const secrets = sqliteTable(
   'secrets',
@@ -276,7 +284,7 @@ export const secrets = sqliteTable(
   },
   (table) => [
     uniqueIndex('secrets_ref_idx').on(table.ref),
-    uniqueIndex('secrets_owner_name_idx').on(table.ownerId, table.name),
+    uniqueIndex('secrets_owner_name_idx').on(table.ownerId, sql`${table.name} COLLATE NOCASE`),
   ],
 );
 

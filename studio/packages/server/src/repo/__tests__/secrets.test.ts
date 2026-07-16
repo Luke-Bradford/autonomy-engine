@@ -142,6 +142,62 @@ describe('secrets repo', () => {
     expect(getSecretByName(db, 'no-such-name', 'local')).toBeNull();
   });
 
+  // #533 — secret names collate CASE-INSENSITIVELY for BOTH uniqueness and
+  // lookup (ASCII `COLLATE NOCASE`). The two halves are load-bearing TOGETHER:
+  // the NOCASE unique index guarantees at most ONE case-variant row per owner,
+  // so the NOCASE `.get()` lookup below is DETERMINISTIC. A NOCASE lookup
+  // WITHOUT the NOCASE index could match either of two coexisting rows
+  // (non-deterministic) — which is exactly the "half-measure just moves the
+  // mismatch" the ticket warns against, so neither half may be reverted alone.
+  it('getSecretByName resolves a case-variant name (lookup is case-insensitive)', () => {
+    const { db } = freshDb();
+    const mine = createSecret(db, {
+      ref: 'ref-mine',
+      ciphertext: 'blob-mine',
+      ownerId: 'local',
+      name: 'Stripe-Key',
+    });
+    // Stored casing is preserved verbatim; lookup folds ASCII case.
+    expect(getSecretByName(db, 'stripe-key', 'local')?.id).toBe(mine.id);
+    expect(getSecretByName(db, 'STRIPE-KEY', 'local')?.id).toBe(mine.id);
+    expect(getSecretByName(db, 'Stripe-Key', 'local')?.id).toBe(mine.id);
+  });
+
+  it('rejects a case-variant of an existing same-owner name (uniqueness is case-insensitive)', () => {
+    const { db } = freshDb();
+    createSecret(db, { ref: 'ref-1', ciphertext: 'blob-1', ownerId: 'local', name: 'stripe-key' });
+    expect(() =>
+      createSecret(db, {
+        ref: 'ref-2',
+        ciphertext: 'blob-2',
+        ownerId: 'local',
+        name: 'Stripe-Key',
+      }),
+    ).toThrow();
+  });
+
+  it('owner_id stays case-SENSITIVE — NOCASE is scoped to the name column only', () => {
+    const { db } = freshDb();
+    // Same name, owner ids differing only in case are DISTINCT owners: the
+    // NOCASE collation must not bleed onto owner_id (opaque machine ids compare
+    // exactly). Both rows coexist and each resolves within its own owner scope.
+    const lower = createSecret(db, {
+      ref: 'ref-lower',
+      ciphertext: 'blob-lower',
+      ownerId: 'local',
+      name: 'key',
+    });
+    const upper = createSecret(db, {
+      ref: 'ref-upper',
+      ciphertext: 'blob-upper',
+      ownerId: 'LOCAL',
+      name: 'key',
+    });
+    expect(lower.id).not.toBe(upper.id);
+    expect(getSecretByName(db, 'key', 'local')?.id).toBe(lower.id);
+    expect(getSecretByName(db, 'key', 'LOCAL')?.id).toBe(upper.id);
+  });
+
   it('getSecretByName never resolves a connection-owned secret (name is NULL)', () => {
     const { db } = freshDb();
     // Connection-owned secrets carry name = NULL, so a name lookup can never

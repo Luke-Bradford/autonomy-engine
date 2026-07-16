@@ -1,0 +1,39 @@
+-- #533 — secret NAME uniqueness + lookup collate CASE-INSENSITIVELY.
+--
+-- 0008 created `secrets_owner_name_idx` over `(owner_id, name)` with the default
+-- BINARY collation, so `"stripe-key"` and `"Stripe-Key"` could coexist for ONE
+-- owner. Once F15's `{ "$secret": "<name>" }` sink resolves by name (item 7 / S3,
+-- `getSecretByName`), two confusable names per owner are a silent lookup footgun
+-- — the SAME class as the blank/untrimmed-name footgun rejected loudly in
+-- 9061cce. This migration re-creates the index with `name COLLATE NOCASE` so a
+-- second case-variant name is refused (a 409 at the route), and the S3 lookup
+-- (also `COLLATE NOCASE`, `repo/secrets.ts`) folds case to match. The two halves
+-- are load-bearing TOGETHER: the NOCASE unique index guarantees at most ONE
+-- case-variant row per owner, which is what makes the NOCASE `.get()` lookup
+-- DETERMINISTIC. Deciding one without the other "just moves the mismatch" (#533).
+-- Rationale: `docs/2026-07-16-foundation-unified-secret-model.md` §"name namespace".
+--
+-- ONLY `name` is NOCASE. `owner_id` keeps BINARY: it is an opaque, machine-minted
+-- id whose case is significant — folding it would collapse distinct owners.
+--
+-- Two deliberate, documented properties of `NOCASE`:
+--   * ASCII-only fold — it folds `A`–`Z` only, so `"café-Key"` vs `"Café-Key"`
+--     (accented) do NOT dedup. Owner-chosen credential handles are ASCII in
+--     practice; a Unicode-aware fold is out of scope (v1, single-principal).
+--   * Storage casing is PRESERVED verbatim — only the comparison folds. The
+--     winning row keeps the exact name the user typed; lookup is case-insensitive.
+--
+-- DROP + CREATE (not an in-place ALTER — SQLite has no `ALTER INDEX`). The
+-- column-level alternative (`name TEXT COLLATE NOCASE`) was rejected: it needs a
+-- full table REBUILD of `secrets`, which is FK-referenced
+-- (`connections.secret_ref -> secrets.ref ON DELETE RESTRICT`) — disproportionate
+-- risk for a name-only concern. Recreating an INDEX touches neither the table nor
+-- the FK.
+--
+-- If two case-confusable names for one owner already existed, the recreate would
+-- ABORT loudly (a UNIQUE-index build over duplicate keys fails) — the correct
+-- fail-safe: never silently merge/drop a stored secret. No such data exists (0008
+-- shipped the same phase; no production data).
+
+DROP INDEX IF EXISTS secrets_owner_name_idx;
+CREATE UNIQUE INDEX secrets_owner_name_idx ON secrets (owner_id, name COLLATE NOCASE);

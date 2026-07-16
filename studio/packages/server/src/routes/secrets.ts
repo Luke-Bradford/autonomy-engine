@@ -30,12 +30,14 @@ const MAX_SECRET_VALUE_LEN = 16384;
 
 const SecretWriteBodySchema = z
   .object({
-    // The name is an exact-match lookup KEY — F15's `{ "$secret": "<name>" }`
-    // sink resolves by it, and it is listed/deleted by it. So it must be
-    // non-blank AND already trimmed: a whitespace-only name (`" "` passes
-    // `min(1)`) or one with leading/trailing whitespace (`"key "` vs `"key"`)
-    // is a silent lookup footgun. Reject it loudly at the boundary rather than
-    // mutating the client's input by trimming.
+    // The name is a lookup KEY — F15's `{ "$secret": "<name>" }` sink resolves
+    // by it (case-insensitively per #533: `UNIQUE(owner_id, name COLLATE
+    // NOCASE)`, so a case-variant is a 409), and it is listed/deleted by it. So
+    // it must be non-blank AND already trimmed: a whitespace-only name (`" "`
+    // passes `min(1)`) or one with leading/trailing whitespace (`"key "` vs
+    // `"key"`) is a silent lookup footgun that ASCII case-folding does NOT
+    // cover. Reject it loudly at the boundary rather than mutating the client's
+    // input by trimming.
     name: z
       .string()
       .min(1)
