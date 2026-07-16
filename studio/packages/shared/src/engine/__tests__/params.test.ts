@@ -582,6 +582,9 @@ describe('MAX_EXPR_DEPTH bounds expression NESTING at BOTH halves (#6 #453)', ()
     expect(thrown).toBeUndefined();
     expect(errors.length).toBeGreaterThan(0);
     expect(errors.join('\n')).not.toMatch(/Maximum call stack/i);
+    // Not just "some error": the collected message must name the depth cap, so a
+    // regression that swallowed the real error into a generic message would fail.
+    expect(errors.join('\n')).toMatch(/nesting too deep|MAX_EXPR_DEPTH/i);
   });
 
   it('substitute throws a clean depth error, not a raw stack overflow', () => {
