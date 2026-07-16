@@ -37,9 +37,10 @@
  * here too) is a courtesy to the author rather than the actual defence.
  */
 import { describe, expect, it } from 'vitest';
-import type { EngineCommand, EngineEvent, Node } from '../types.js';
+import type { Node } from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
 import { validateDoc } from '../params.js';
+import { drive, simpleResolve } from './helpers/run-driver.js';
 
 let seq = 0;
 function node(id: string): Node {
@@ -47,24 +48,20 @@ function node(id: string): Node {
   return { id, type: 'agent_task', config: {}, position: { x: seq, y: 0 } };
 }
 
-const RUN = 'r1';
-const PV = 'pv1';
-
 /**
  * Drive a run to completion, resolving each dispatched node from `outcomes`
- * (default: success). Same command-QUEUE shape (and file-local convention) as
- * `edge-model.test.ts`'s and `reduce.test.ts`'s `runAll`.
+ * (default: success). A thin adapter over the shared `drive` mechanic
+ * (`helpers/run-driver.ts`).
  *
- * Worth knowing before trusting it: the `guard` catches NONE of the three
- * defects pinned here, and is kept only for parity with the other two copies. A
- * #487 doc throws inside `reduce`; a #488 doc drains the queue and simply exits
+ * Worth knowing before trusting it against THIS file's defects: the shared
+ * `guard` catches NONE of the three pinned here. A #487 doc throws inside
+ * `reduce` (and `drive` deliberately does not try/catch, so it propagates to the
+ * `expect(...).not.toThrow()` pins); a #488 doc drains the queue and simply exits
  * the loop, which is caught by the OUTCOME assertion (`finish?.outcome` is
  * `'success'` only if the child really ran — and since #491 a regression there
- * surfaces as `failure{reason:'stalled'}` rather than as the hang it once was;
- * this docblock used to cite a `finish === undefined` assertion, which never
- * existed in this file); and the empty loop spins INSIDE one `reduce()` call,
- * which no driver-loop guard — and no vitest `testTimeout`, the spin being
- * synchronous — can preempt. The
+ * surfaces as `failure{reason:'stalled'}` rather than as the hang it once was);
+ * and the empty loop spins INSIDE one `reduce()` call, which no driver-loop guard
+ * — and no vitest `testTimeout`, the spin being synchronous — can preempt. The
  * empty-loop pins therefore HANG rather than fail if they regress, which is the
  * honest cost of pinning a synchronous spin from inside the same process.
  */
@@ -75,59 +72,7 @@ function runAll(
     outcomes?: Record<string, 'success' | 'failure'>;
   } = {},
 ) {
-  const { params = {}, outcomes = {} } = opts;
-  let state = eng.seedState();
-  const pending: EngineCommand[] = [];
-  const diagnostics: string[] = [];
-  const order: string[] = [];
-  let finish: { outcome: 'success' | 'failure'; reason?: string } | undefined;
-
-  const apply = (ev: EngineEvent): void => {
-    const r = eng.reduce(state, ev);
-    state = r.state;
-    diagnostics.push(...r.diagnostics);
-    pending.push(...r.commands);
-  };
-
-  apply({ type: 'run.started', runId: RUN, pipelineVersionId: PV, params });
-  let guard = 0;
-  while (pending.length) {
-    if (guard++ > 2000) throw new Error('driver did not converge');
-    const c = pending.shift()!;
-    if (c.type === 'finishRun') {
-      finish = { outcome: c.outcome, reason: c.reason };
-      apply({ type: 'run.finished', runId: RUN, outcome: c.outcome, reason: c.reason });
-      continue;
-    }
-    if (c.type !== 'dispatchNode') continue;
-    order.push(c.nodeId);
-    apply({
-      type: 'node.dispatched',
-      runId: RUN,
-      nodeId: c.nodeId,
-      attemptId: c.attemptId,
-      idempotent: true,
-    });
-    apply(
-      (outcomes[c.nodeId] ?? 'success') === 'failure'
-        ? {
-            type: 'node.failed',
-            runId: RUN,
-            nodeId: c.nodeId,
-            attemptId: c.attemptId,
-            error: 'boom',
-            kind: 'permanent',
-          }
-        : {
-            type: 'node.succeeded',
-            runId: RUN,
-            nodeId: c.nodeId,
-            attemptId: c.attemptId,
-            outputs: {},
-          },
-    );
-  }
-  return { state, finish, diagnostics, order };
+  return drive(eng, { params: opts.params, resolve: simpleResolve(opts.outcomes) });
 }
 
 describe('#487 — a container child that is not a node id must not THROW', () => {
@@ -453,8 +398,8 @@ describe('#492 — a child shared by two containers must resolve to ONE owner, a
   // shared child's outputs. `runAll` hardcodes empty outputs, so this drives the
   // reducer by hand to give `n1` a real output and asserts `c2` projects none of
   // it — `${nodes.c2.output.x}` no longer resolves off an execution `c2` does not
-  // own. (Bespoke rather than an extra `runAll` option on purpose: #499 already
-  // tracks that harness's drift.)
+  // own. Each dispatched child succeeds with `{ x: 1 }`, injected through the
+  // shared `drive`'s `resolve` seam (#499 folded the last hand-rolled copy here).
   it('the non-first container projects NONE of the shared child outputs', () => {
     const eng = createEngine({
       nodes: [node('n1')],
@@ -464,38 +409,15 @@ describe('#492 — a child shared by two containers must resolve to ONE owner, a
         { id: 'c2', kind: 'stage', children: ['n1'] },
       ],
     } satisfies EngineDoc);
-    let state = eng.seedState();
-    const pending: EngineCommand[] = [];
-    const apply = (ev: EngineEvent): void => {
-      const r = eng.reduce(state, ev);
-      state = r.state;
-      pending.push(...r.commands);
-    };
-    apply({ type: 'run.started', runId: RUN, pipelineVersionId: PV, params: {} });
-    let guard = 0;
-    while (pending.length) {
-      if (guard++ > 2000) throw new Error('driver did not converge');
-      const c = pending.shift()!;
-      if (c.type === 'finishRun') {
-        apply({ type: 'run.finished', runId: RUN, outcome: c.outcome, reason: c.reason });
-        continue;
-      }
-      if (c.type !== 'dispatchNode') continue;
-      apply({
-        type: 'node.dispatched',
-        runId: RUN,
-        nodeId: c.nodeId,
-        attemptId: c.attemptId,
-        idempotent: true,
-      });
-      apply({
+    const { state } = drive(eng, {
+      resolve: (nodeId, attemptId, runId) => ({
         type: 'node.succeeded',
-        runId: RUN,
-        nodeId: c.nodeId,
-        attemptId: c.attemptId,
+        runId,
+        nodeId,
+        attemptId,
         outputs: { x: 1 },
-      });
-    }
+      }),
+    });
     expect(state.outputs['c1']).toEqual({ x: 1 });
     expect(state.outputs['c2']).toEqual({});
   });

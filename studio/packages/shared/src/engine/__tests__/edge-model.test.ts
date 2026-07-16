@@ -30,8 +30,9 @@
  *    renaming, asserted the identical outcome, and carried OPPOSITE labels.
  */
 import { describe, expect, it } from 'vitest';
-import type { Edge, EngineCommand, EngineEvent, Node } from '../types.js';
+import type { Edge, Node } from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
+import { drive, simpleResolve } from './helpers/run-driver.js';
 
 let seq = 0;
 function node(id: string, config: Record<string, unknown> = {}): Node {
@@ -55,70 +56,15 @@ function engine(nodes: Node[], edges: Edge[] = []): Engine {
   return createEngine({ nodes, edges } satisfies EngineDoc);
 }
 
-const RUN = 'r1';
-const PV = 'pv1';
-
 /**
  * Drive a run to completion, resolving each dispatched node from `outcomes`
- * (default: success), and report the `finishRun` the engine asked for plus
- * every diagnostic it emitted. Same command-QUEUE shape as `reduce.test.ts`'s
- * `runAll` — a reduce can emit several `dispatchNode`s at once (a fan-out), so
- * draining a queue rather than taking the first command is load-bearing. The
- * real reducer, real events, no mocks.
+ * (default: success). A thin adapter over the shared `drive` mechanic
+ * (`helpers/run-driver.ts`) — see there for the queue-drain / `finishes` / guard
+ * rationale. Real reducer, real events, no mocks; `RUN`/`PV` are `drive`'s
+ * defaults.
  */
 function runAll(eng: Engine, outcomes: Record<string, 'success' | 'failure'> = {}) {
-  let state = eng.seedState();
-  const pending: EngineCommand[] = [];
-  const diagnostics: string[] = [];
-  const order: string[] = [];
-  let finish: { outcome: 'success' | 'failure'; reason?: string } | undefined;
-
-  const apply = (ev: EngineEvent): void => {
-    const r = eng.reduce(state, ev);
-    state = r.state;
-    diagnostics.push(...r.diagnostics);
-    pending.push(...r.commands);
-  };
-
-  apply({ type: 'run.started', runId: RUN, pipelineVersionId: PV, params: {} });
-  let guard = 0;
-  while (pending.length) {
-    if (guard++ > 2000) throw new Error('driver did not converge');
-    const c = pending.shift()!;
-    if (c.type === 'finishRun') {
-      finish = { outcome: c.outcome, reason: c.reason };
-      apply({ type: 'run.finished', runId: RUN, outcome: c.outcome, reason: c.reason });
-      continue;
-    }
-    if (c.type !== 'dispatchNode') continue; // these docs are call-free
-    order.push(c.nodeId);
-    apply({
-      type: 'node.dispatched',
-      runId: RUN,
-      nodeId: c.nodeId,
-      attemptId: c.attemptId,
-      idempotent: true,
-    });
-    apply(
-      (outcomes[c.nodeId] ?? 'success') === 'failure'
-        ? {
-            type: 'node.failed',
-            runId: RUN,
-            nodeId: c.nodeId,
-            attemptId: c.attemptId,
-            error: 'boom',
-            kind: 'permanent',
-          }
-        : {
-            type: 'node.succeeded',
-            runId: RUN,
-            nodeId: c.nodeId,
-            attemptId: c.attemptId,
-            outputs: {},
-          },
-    );
-  }
-  return { state, finish, diagnostics, order };
+  return drive(eng, { resolve: simpleResolve(outcomes) });
 }
 
 describe('skipped edges (F1)', () => {
