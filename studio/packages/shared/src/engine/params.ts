@@ -11,6 +11,8 @@ import type { OutputContract } from './outputs.js';
 import { outputContract } from './outputs.js';
 import type { Expr, ExprSegment, TemplateMode } from './expr.js';
 import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
+import { getActivity } from '../catalog/registry.js';
+import { SecretRefSchema, isSecretRef } from '../schemas/secret-ref.js';
 import type { EvalIn, FnSpec, SigType } from './functions.js';
 import {
   FUNCTIONS,
@@ -831,8 +833,131 @@ export function validateRefs(
       { declared, guaranteed, settled, reachable, soft, outputsById },
       errors,
     );
+    // Item 7 / S2: a `{ "$secret": "<name>" }` marker is valid ONLY within a
+    // declared sink field of this node's activity. `getActivity` reads the
+    // shared module catalog (no signature change to this fn or its callers,
+    // spec §3.2). An unknown type ⇒ no sinks ⇒ every marker refused. Because
+    // BOTH gates reach this via `validatePipelineDoc`, the canvas badge and the
+    // server write-gate refuse an ill-placed marker identically (the #473
+    // lesson, by construction).
+    scanSecretSinks(
+      `nodes.${node.id}.config`,
+      node.config,
+      getActivity(node.type)?.secretSinkFields ?? [],
+      errors,
+    );
   }
   return errors;
+}
+
+// --- secret-sink gate (item 7 / S2) ----------------------------------------
+
+/**
+ * PURE static gate for `{ "$secret": "<name>" }` markers in a node's `config`.
+ * A marker is permitted ONLY within the subtree of a declared sink field — its
+ * FIRST `config` path segment must be one of `sinkFields`. A marker anywhere
+ * else is refused (`<path>: secret reference is not allowed here`). At a sink,
+ * the marker's SHAPE is checked (strict `{ $secret: <non-empty string> }` and a
+ * LITERAL name — no `${}` expression, spec §2). Runs alongside the `${}` `scan`,
+ * never inside it: a marker is a distinguished object, not part of the inert
+ * expression language (#1 D8). `sinkFields` is `[]` for every activity until a
+ * consumer declares one (S4), so this is FAIL-CLOSED — no stored version can
+ * hold a marker until the same slice that can also resolve it.
+ *
+ * Exported so S2 can exercise the ACCEPT branch directly with a synthetic sink
+ * list — no real activity declares a sink yet, and `validateRefs` deliberately
+ * has no catalog-injection seam (spec §3.2). S4 owns the `validateRefs`-level
+ * accept test once `http_request` declares its sink.
+ */
+export function scanSecretSinks(
+  where: string,
+  config: unknown,
+  sinkFields: readonly string[],
+  errors: string[],
+): void {
+  // Defensive: a `config` shaped like a bare marker (a top-level `$secret` key)
+  // is never at a sink — the `config` root is not itself a field.
+  if (isSecretRef(config)) {
+    errors.push(`${where}: secret reference is not allowed here`);
+    return;
+  }
+  // A non-object `config` has no field NAMES, so nothing under it is a sink ⇒
+  // any marker it holds is refused (`allowed = false`). `StrictNodeSchema` keeps
+  // `config` an object today, so this is defence-in-depth parity with the `${}`
+  // `scan` (which also recurses a top-level array), never a live path.
+  if (Array.isArray(config)) {
+    config.forEach((v, i) => walkSecretMarkers(`${where}[${i}]`, v, false, errors));
+    return;
+  }
+  if (config === null || typeof config !== 'object') return;
+  for (const key of Object.keys(config as Record<string, unknown>).sort()) {
+    walkSecretMarkers(
+      `${where}.${key}`,
+      (config as Record<string, unknown>)[key],
+      sinkFields.includes(key),
+      errors,
+    );
+  }
+}
+
+/**
+ * Recurse a config subtree carrying whether it is under a declared sink field.
+ * A detected marker is NOT recursed into (its `$secret` name is a leaf); a
+ * malformed marker is still DETECTED here (`isSecretRef` is loose) so it cannot
+ * slip through as ordinary config — it is then rejected by the shape check.
+ */
+function walkSecretMarkers(
+  where: string,
+  value: unknown,
+  allowed: boolean,
+  errors: string[],
+): void {
+  if (isSecretRef(value)) {
+    if (!allowed) {
+      errors.push(`${where}: secret reference is not allowed here`);
+      return;
+    }
+    validateSecretMarker(where, value, errors);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((v, i) => walkSecretMarkers(`${where}[${i}]`, v, allowed, errors));
+    return;
+  }
+  if (value !== null && typeof value === 'object') {
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      walkSecretMarkers(
+        `${where}.${key}`,
+        (value as Record<string, unknown>)[key],
+        allowed,
+        errors,
+      );
+    }
+  }
+}
+
+/** Shape-validate a marker at a declared sink: strict schema + literal name (§2). */
+function validateSecretMarker(where: string, value: unknown, errors: string[]): void {
+  const parsed = SecretRefSchema.safeParse(value);
+  if (!parsed.success) {
+    errors.push(`${where}: malformed secret reference (expected { "$secret": "<name>" })`);
+    return;
+  }
+  // The `$secret` value must be a LITERAL name — a `${}` inside it would let
+  // `substitute` interpolate it, defeating the "secret stays out of the inert
+  // expression language" guarantee (spec §2). Same classifier the runtime reads.
+  //
+  // The `$${` escape is refused for the SAME invariant: `substitute` recurses
+  // into the marker and rewrites `$${` → `${` (`expr.ts` restoreEscapes), so an
+  // authored `foo$${x}` would resolve at S3 as a DIFFERENT name (`foo${x}`) than
+  // the one this gate blessed. Rejecting it guarantees the name `validateRefs`
+  // approves is byte-for-byte the name dispatch resolves — the marker really
+  // does "survive substitution unchanged" (spec §2), not merely look like it.
+  const name = parsed.data.$secret;
+  const mode = interpolationMode(name);
+  if (mode.unterminatedAt !== null || mode.matches.length > 0 || name.includes('$${')) {
+    errors.push(`${where}: secret name must be a literal, not a \${} expression or $\${ escape`);
+  }
 }
 
 // --- validatePipelineDoc (the ONE composition both gates call) -------------
