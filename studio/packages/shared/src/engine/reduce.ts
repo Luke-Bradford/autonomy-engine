@@ -377,21 +377,31 @@ export function createEngine(doc: EngineDoc): Engine {
   // `active`, so its children never ran — they are `pending`, never `failure`, so
   // `evalEndpoint` had nothing to blame through this edge either way.
   //
-  // The edge lands in NO index after this — `topOutgoing.has(e.from)` is already
-  // false (its source is a child) and `internalForwardByContainer` rejects it
-  // (`fc` = the container, `tc` = undefined) — which is the intended full
-  // inertness. Pinned in `malformed-doc.test.ts`.
+  // The #488 edge lands in NO index after this — `topOutgoing.has(e.from)` is
+  // already false (its source is a child) and `internalForwardByContainer`
+  // rejects it (`fc` = the container, `tc` = undefined) — but it IS reported
+  // (the #488 branch below) and then `continue`d, so "no index" here is not
+  // "silently dropped". The one OTHER shape that lands in no index — a child →
+  // child of a DIFFERENT container — was silently dropped until #498, and is now
+  // caught by the fall-through at the end of the loop. (Cross-container BACK
+  // edges are a deliberate non-goal: `params.ts`'s validator exempts `e.back`
+  // from the boundary rule, and they never reach `topForwardEdges` — only
+  // forward edges do.) Pinned in `malformed-doc.test.ts` and `edge-model.test.ts`.
+  //
+  // The cross-boundary diagnostic is shared by both report sites (the top-source
+  // guard and the child→child fall-through) so their wording cannot drift — the
+  // rule and the neutralization are identical; only the source's altitude differs.
+  const crossBoundaryDefect = (e: Edge): string =>
+    `edge '${e.id}' ('${e.from}' → '${e.to}') crosses a container boundary and is ` +
+    `IGNORED: a child's forward edges must stay within its container, so it cannot ` +
+    `route or handle an outcome — it is treated as if it were not authored`;
   for (const e of topForwardEdges) {
     const crossBoundary = childToContainer.get(e.from) !== childToContainer.get(e.to);
     if (topOutgoing.has(e.from)) {
       // Recorded only when the edge would OTHERWISE have been indexed here, so
       // the diagnostic never claims to have voided an edge that still routes.
       if (crossBoundary) {
-        docDefects.push(
-          `edge '${e.id}' ('${e.from}' → '${e.to}') crosses a container boundary and is ` +
-            `IGNORED: a child's forward edges must stay within its container, so it cannot ` +
-            `route or handle an outcome — it is treated as if it were not authored`,
-        );
+        docDefects.push(crossBoundaryDefect(e));
       } else topOutgoing.get(e.from)!.push(e);
     }
     if (childToContainer.get(e.from) === e.to) {
@@ -403,7 +413,17 @@ export function createEngine(doc: EngineDoc): Engine {
       );
       continue;
     }
+    // #498: a child → child of a DIFFERENT container reaches here indexed
+    // NOWHERE — the top-source guard above never fired (`e.from` is a child, so
+    // not a `topOutgoing` key), it is not the #488 own-container case, and
+    // `topIncoming` does not take it (`e.to` is a child, not a top entity). It
+    // is the same cross-boundary rule as the guard above (always cross-boundary
+    // by construction here — a same-container child pair is `internalForward`,
+    // never in `topForwardEdges`), reported at the one place it is actually
+    // dropped. `!topOutgoing.has(e.from)` is what distinguishes it from a
+    // top-source edge already reported/routed above.
     if (topIncoming.has(e.to)) topIncoming.get(e.to)!.push(e);
+    else if (!topOutgoing.has(e.from)) docDefects.push(crossBoundaryDefect(e));
   }
 
   // (F1b removed a `backOutgoing` index here. Its ONLY reader was the old
