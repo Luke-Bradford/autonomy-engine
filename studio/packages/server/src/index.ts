@@ -160,7 +160,22 @@ export async function buildApp(opts?: BuildAppOptions) {
   // registries would hand the launcher and the alarm separate locks for the same
   // run, which serializes nothing and is precisely the divergence F2c fixes.
   const drives = createRunDrives();
-  const driverBoundary = { db, resolveDoc, executor, alarms, drives, bus: runEventBus };
+  // `log` belongs HERE, on the shared boundary, not on the launcher alone. Both
+  // drive entry points terminalize a thrown drive through the same
+  // `terminalizeInterrupted`, and both report it through `deps.log` — so a
+  // boundary without a logger gives the alarm's drive a silent `log?.error(...)`
+  // while the launcher's identical fault is reported. That is the very
+  // launcher-vs-alarm asymmetry F2c exists to remove, reintroduced by wiring
+  // rather than by code.
+  const driverBoundary = {
+    db,
+    resolveDoc,
+    executor,
+    alarms,
+    drives,
+    bus: runEventBus,
+    log: fastify.log,
+  };
   const alarmClock: AlarmClock = createAlarmClock({
     db,
     handlers: [createRetryAlarmHandler(driverBoundary)],
@@ -210,10 +225,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   // now; the scheduler + webhooks reuse it in P4b/P4c). Per-app, sharing this
   // instance's driver boundary (db + doc resolver + real executor), so
   // "unbound never fires" + concurrency admission are enforced in ONE place.
-  const runLauncher = createRunLauncher({
-    ...driverBoundary,
-    log: fastify.log,
-  });
+  const runLauncher = createRunLauncher({ ...driverBoundary });
   fastify.decorate('runLauncher', runLauncher);
 
   // P4b: the scheduler — fires `schedule`-mode triggers on their cron (UTC)
