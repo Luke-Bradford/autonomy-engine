@@ -17,6 +17,7 @@ import { getWakeupByKey, listPendingWakeups } from '../../repo/scheduled-wakeups
 import type { Db } from '../../repo/types.js';
 import {
   buildEngine,
+  DocUnresolvableError,
   startRun,
   type DocResolver,
   type DriveDeps,
@@ -392,16 +393,18 @@ describe('F2c — the alarm fires: the retry loop closes', () => {
   it('SUPPRESSES rather than re-delivering forever when the pipeline version is gone', async () => {
     // A throw inside the clock's transaction rolls back the settle, so the row
     // stays pending and is retried on EVERY tick — an infinite error loop for a
-    // run that can never be driven again. It must settle instead.
+    // run that can never be driven again. It must settle instead. The gone case
+    // throws `DocUnresolvableError` (what the production `makeDocResolver` throws),
+    // which the handler recognises as PERMANENT and suppresses.
     const { db } = freshDb();
     const pvId = seedVersion(db, [node('a', { retry: 1 })]);
     const run = seedRun(db, pvId);
     let t = NOW;
     let deleted = false;
     const resolveDoc: DocResolver = (id) => {
-      if (deleted) throw new Error('version deleted');
+      if (deleted) throw new DocUnresolvableError('version deleted');
       const pv = getPipelineVersion(db, id);
-      if (pv === null) throw new Error(`no pv ${id}`);
+      if (pv === null) throw new DocUnresolvableError(`no pv ${id}`);
       return pv;
     };
     const deps: DriveDeps = {
@@ -430,6 +433,57 @@ describe('F2c — the alarm fires: the retry loop closes', () => {
     await settle();
 
     expect(listPendingWakeups(db)).toHaveLength(0);
+  });
+
+  it('does NOT suppress a TRANSIENT resolve fault — the alarm stays pending for the next tick', async () => {
+    // #515 gap 2 — the counterpart to the gone case. A NON-`DocUnresolvableError`
+    // throw is a transient DB blip: the retry should fire next tick, not be
+    // silently dropped. Suppressing every throw (the old bare catch) would settle
+    // the alarm and lose the node's retry FOREVER on a passing fault. So the throw
+    // rolls back the settle and the row stays `pending`.
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a', { retry: 1 })]);
+    const run = seedRun(db, pvId);
+    let t = NOW;
+    let blip = false;
+    const resolveDoc: DocResolver = (id) => {
+      if (blip) throw new Error('db read timed out');
+      const pv = getPipelineVersion(db, id);
+      if (pv === null) throw new DocUnresolvableError(`no pv ${id}`);
+      return pv;
+    };
+    const deps: DriveDeps = {
+      db,
+      resolveDoc,
+      executor: makeStubExecutor(transientOnce('a')),
+      alarms: {
+        arm: (i) => clock.arm(i),
+        find: (i) => getWakeupByKey(db, i.kind, buildDedupeKey(i)),
+      },
+      drives: createRunDrives(),
+      now: () => t,
+    };
+    const clock: AlarmClock = createAlarmClock({
+      db,
+      handlers: [createRetryAlarmHandler(deps)],
+      now: () => t,
+    });
+
+    await startRun(deps, run);
+    const armed = listPendingWakeups(db);
+    expect(armed).toHaveLength(1);
+
+    blip = true;
+    t = NOW + 60_000;
+    clock.tick();
+    await settle();
+
+    // Rolled back, NOT suppressed: the same alarm row is still pending, so a later
+    // tick (once the blip clears) still fires the retry.
+    const still = listPendingWakeups(db);
+    expect(still).toHaveLength(1);
+    expect(still[0]!.id).toBe(armed[0]!.id);
+    expect(still[0]!.status).toBe('pending');
   });
 });
 

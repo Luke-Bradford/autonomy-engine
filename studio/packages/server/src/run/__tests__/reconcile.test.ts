@@ -21,6 +21,7 @@ import {
 } from '../../repo/scheduled-wakeups.js';
 import {
   buildEngine,
+  DocUnparseableError,
   DocUnresolvableError,
   makeDocResolver,
   startRun,
@@ -1352,5 +1353,161 @@ describe('makeDocResolver — the production resolver classifies a gone version 
 
     const pvId = seedVersion(db, [node('a')]);
     expect(resolve(pvId).id).toBe(pvId);
+  });
+
+  /**
+   * #515 gap 1 — a PRESENT row that no longer PARSES is ALSO permanent (the row
+   * is immutable, the schema is fixed for the process, so `.parse` never succeeds
+   * on a later boot). Pre-#515 it threw a `ZodError` — a non-`DocUnresolvableError`
+   * — so the reconciler read it as transient and re-`failed` the run forever. Now
+   * it is reclassified to `DocUnparseableError`, a SUBTYPE of `DocUnresolvableError`
+   * so every `instanceof DocUnresolvableError` consumer terminalizes it unchanged.
+   * `createPipelineVersion` cannot produce this row (it validates on write); it is
+   * inserted raw, which is exactly the real case — a row valid under an older
+   * schema, immutable across the tightening.
+   */
+  it('throws DocUnparseableError (a DocUnresolvableError) for a present-but-unparseable row', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const pvId = 'pv_unparseable';
+    db.insert(pipelineVersions)
+      .values({
+        id: pvId,
+        pipelineId: pipeline.id,
+        version: 1,
+        params: [],
+        outputs: [],
+        // `z.array(NodeSchema)` on read rejects a non-array — a deterministic
+        // parse failure independent of NodeSchema's internals.
+        nodes: 'not-an-array' as unknown as Node[],
+        edges: [],
+        containers: [],
+        catalogVersion: CATALOG_VERSION,
+        createdAt: 1,
+      })
+      .run();
+
+    const resolve = makeDocResolver(db);
+    expect(() => resolve(pvId)).toThrow(DocUnparseableError);
+    // The SUBTYPE relationship is load-bearing: it is what routes this through the
+    // existing `instanceof DocUnresolvableError` terminalize/suppress branches.
+    try {
+      resolve(pvId);
+      expect.unreachable('resolve should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(DocUnresolvableError);
+    }
+  });
+
+  /**
+   * The SIBLING permanent shape: a stored json column that is not valid JSON. It
+   * throws a `SyntaxError` from Drizzle's codec (before the schema is reached),
+   * NOT a `ZodError` — but an immutable row's malformed JSON never repairs either,
+   * so it is the same permanent class and must reclassify identically. Written
+   * with the RAW `sqlite` handle (Drizzle serializes valid JSON on write, so this
+   * corrupt row cannot be produced through the ORM).
+   */
+  it('throws DocUnparseableError for a present row whose stored JSON is malformed', () => {
+    const { db, sqlite } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const pvId = 'pv_bad_json';
+    sqlite
+      .prepare(
+        `INSERT INTO pipeline_versions
+           (id, pipeline_id, version, params, outputs, nodes, edges, containers, catalog_version, created_at)
+         VALUES (?, ?, 1, '[]', '[]', ?, '[]', '[]', ?, 1)`,
+      )
+      // A deliberately malformed `nodes` JSON text — `JSON.parse` throws before
+      // the schema runs.
+      .run(pvId, pipeline.id, '{not valid json', CATALOG_VERSION);
+
+    const resolve = makeDocResolver(db);
+    expect(() => resolve(pvId)).toThrow(DocUnparseableError);
+    try {
+      resolve(pvId);
+      expect.unreachable('resolve should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(DocUnresolvableError);
+    }
+  });
+
+  /**
+   * The other side of the same coin: only a decode failure (`ZodError` /
+   * `SyntaxError`) is reclassified permanent. A DB *read* fault is a genuine
+   * transient blip and must stay transient — otherwise a passing DB error would
+   * strand a healthy run as `interrupted` (fail-open the other way). A stub `db`
+   * whose read throws a plain Error pins the propagation.
+   */
+  it('propagates a non-decode error (a transient DB fault) unchanged — not reclassified', () => {
+    const boom = new Error('db read timed out');
+    const brokenDb = {
+      select: () => {
+        throw boom;
+      },
+    } as unknown as Db;
+    const resolve = makeDocResolver(brokenDb);
+    expect(() => resolve('pv_x')).toThrow(boom);
+    expect(() => resolve('pv_x')).not.toThrow(DocUnresolvableError);
+  });
+});
+
+describe('reconcileOnBoot — #515 a present-but-unparseable version terminalizes, not re-fails forever', () => {
+  /**
+   * End-to-end companion to the resolver unit test: a `running` run whose
+   * immutable version row no longer parses must terminalize `interrupted`
+   * (`doc_unresolvable:<pvId>`) via the SAME path #508's gone-version case uses —
+   * the `DocUnparseableError` subtype flows through the existing `instanceof
+   * DocUnresolvableError` catch, so the fix needs no reconcile change. The run is
+   * hand-seeded (not `seedCrashedRun`, which drives through `resolveDocFor` and
+   * would itself throw on the bad row): a raw bad version + `run.started` +
+   * `running`, which reaches the resolve site directly.
+   */
+  it('terminalizes the run `interrupted` using the production resolver', async () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const pvId = 'pv_unparseable_run';
+    db.insert(pipelineVersions)
+      .values({
+        id: pvId,
+        pipelineId: pipeline.id,
+        version: 1,
+        params: [],
+        outputs: [],
+        nodes: 'not-an-array' as unknown as Node[],
+        edges: [],
+        containers: [],
+        catalogVersion: CATALOG_VERSION,
+        createdAt: 1,
+      })
+      .run();
+
+    const run = seedRun(db, pvId);
+    appendEngineEvent(db, {
+      type: 'run.started',
+      runId: run.id,
+      pipelineVersionId: pvId,
+      params: {},
+    });
+    updateRun(db, run.id, { status: 'running', finishedAt: null });
+
+    const report = await reconcileOnBoot({
+      db,
+      alarms: stubAlarms(),
+      resolveDoc: makeDocResolver(db),
+      executor: makeStubExecutor(),
+    });
+
+    // Terminalized, not failed — the production resolver's `DocUnparseableError`
+    // was read as permanent.
+    expect(report.interrupted).toEqual([run.id]);
+    expect(report.failed).toEqual([]);
+    expect(getRun(db, run.id)!.status).toBe('interrupted');
+
+    // The shared reason label: the remedy is the same as a gone version.
+    const interrupted = loadEngineEvents(db, run.id).find((e) => e.type === 'run.interrupted');
+    expect(interrupted).toMatchObject({
+      type: 'run.interrupted',
+      reason: `doc_unresolvable:${pvId}`,
+    });
   });
 });
