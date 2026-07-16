@@ -157,7 +157,7 @@ describe('run-events WebSocket (P6 live monitor)', () => {
 
   it('never re-sends an event already covered by the replay (seq dedupe)', async () => {
     const runId = newRun('local');
-    const seed = appendEngineEvent(app.db, started(runId, pipelineVersionId)); // seq 0
+    const seed = appendEngineEvent(app.db, started(runId, pipelineVersionId)).record; // seq 0
 
     const client = await connect(port, runId);
     await until(() => client.messages.some((m) => m.kind === 'replay_complete'));

@@ -17,6 +17,7 @@ import { createSecret } from '../../repo/secrets.js';
 import { encrypt } from '../../secrets/secrets.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { startRun, type DocResolver } from '../driver.js';
+import { refuseToArm } from './stub-alarms.js';
 import { reconcileOnBoot } from '../reconcile.js';
 import { loadEngineEvents } from '../events.js';
 import { createExecutor } from '../executor.js';
@@ -112,6 +113,9 @@ function deps(
       concurrency: over.concurrency,
       catalog: over.catalog,
     }),
+    // No doc here declares `policy.retry`, so no `scheduleRetry` can be emitted
+    // and nothing should ever arm — say so rather than accepting one silently.
+    alarms: refuseToArm,
   };
 }
 
@@ -534,7 +538,12 @@ describe('createExecutor — call_pipeline (startChild) deferral is safe', () =>
     // The boot reconciler must not throw on this run (no waiting node → no
     // startChild re-emit loop). It should be a no-op (run already terminal).
     await expect(
-      reconcileOnBoot({ db, resolveDoc: resolveDocFor(db), executor: deps(db).executor }),
+      reconcileOnBoot({
+        db,
+        resolveDoc: resolveDocFor(db),
+        executor: deps(db).executor,
+        alarms: refuseToArm,
+      }),
     ).resolves.toBeDefined();
   });
 });

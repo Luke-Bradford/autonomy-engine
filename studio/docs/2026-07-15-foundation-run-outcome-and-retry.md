@@ -4,9 +4,13 @@
 retry-eligibility, the D4 HOLD). One spec, because they are **the same predicate**: both are about
 what `settle` counts as a run-ending failure.
 
-**Status: ALL FIVE decisions SETTLED. #443 SHIPPED (`f732950`); F1b SHIPPED** — see the build order.
-**NEXT: F2b + F2c together, never F2b alone** (§A.5 — F2b without F2c is a hang, not a degraded
-retry). F2b's first task is the `driver.ts` parsed-vs-raw fold bug carried in the build order below.
+**Status: ALL FIVE decisions SETTLED. #443 SHIPPED (`f732950`); F1b SHIPPED (`3a78658`); F2b + F2c
+SHIPPED — this spec is now fully BUILT.** See the build order for what each fire earned.
+
+**Two build-time corrections this spec owes its readers, both probed** (details at their sections):
+§A.3's eligibility formula was **wrong on two counts** and named the wrong counter (retry is keyed on
+a new `retries` field, not `attempts`); and the build order's parsed-vs-raw fold bug is **inert**, not
+the live retry-deciding bug it was billed as. Read those blocks before trusting either passage.
 
 (c) was briefly raised as an operator fork (**#475**) on the belief that the only rule satisfying both
 the fail-safe invariant and #472's "labels deleted honestly" bar was unproven. A spike proved it —
@@ -164,7 +168,7 @@ surrounding `new Set<NodeRunStatus>(...)` already pins. It catches a terminal op
 valid status; it cannot catch a *forgotten* one. Harmless for `retry_pending` (non-terminal), but a
 later fire adding a genuinely terminal status would be trusting a guard that does not exist.
 
-### A.2 The event + command triple (do not ship a partial one)
+### A.2 The event + command triple (do not ship a partial one) — **BUILT as specced**
 
 Spec #1 D4 (`…domain-activity-framework.md`, the three bullets under D4) specifies **three** primitives. **Verified: none of them exist** —
 `EngineCommandSchema` (`types.ts:432`) is `dispatchNode | startChild | finishRun`, and
@@ -186,6 +190,38 @@ On `node.failed` for a live node, F2b decides:
 ```text
 eligible  ⇔  kind === 'transient'  ∧  attempts < (policy.retry ?? 0)
 ```
+
+> **CORRECTED BY F2b (build-time, probed). This formula is WRONG on two independent counts, and
+> the counter it names is the wrong one.** As built:
+>
+> ```text
+> eligible  ⇔  kind === 'transient'  ∧  retries < (policy.retry === undefined ? 0 : policy.retry)
+> ```
+>
+> where `retries` is a NEW `NodeRunState` field counting POLICY retries in the current loop round.
+> Both defects were found by the planning gate and confirmed against the real reducer:
+>
+> 1. **Off by one.** `attempts` increments at **DISPATCH** (`reduce.ts:603` mints `attemptId` from
+>    `ns.attempts`, `:641` folds `attempts + 1`), so it is already **1** at the first `node.failed`.
+>    `attempts < retry` therefore delivers `retry: N` → **N** total attempts, where F2a's schema says
+>    *"`retry: 2` = up to 3 attempts"* (`pipeline.ts:184`) — and collapses an explicit `retry: 1` into
+>    `retry: 0`, which is the very absent-vs-explicit-0 confusion §A.3 spends four paragraphs
+>    protecting. **A test asserting only "transient+budget ⇒ retry_pending" passes under the broken
+>    rule**; the pin has to count TOTAL attempts. It does (`retry-state-machine.test.ts`).
+> 2. **Loop rounds spend the budget.** §A.6 correctly requires `attempts` stay MONOTONIC across a
+>    back-edge reset — and never reconciles that with §A.3 reading it. A loop-body node with
+>    `retry: 2` retries in round 1 and, from round 3 on, has none: its budget was consumed by
+>    BOUNCES, not by failures. §A.6 and §A.3 were each right alone and wrong together.
+>
+> A separate counter fixes both and keeps §A.6 verbatim: `attempts` stays monotonic for attempt-id
+> minting and stale-rejection, `retries` is cleared by `resetNodes` so each round gets its own
+> budget, and the rule now reads exactly like its English contract with no off-by-one to re-break.
+> It also stops boot recovery (`node.retryRequested`) from silently eating the operator's budget —
+> `attempts` conflates policy retry, boot retry and loop round; `retries` counts only the first.
+>
+> **Lesson: a spec formula that names a field is asserting that field's semantics.** `attempts` was
+> load-bearing in three unrelated ways, and §A.3 borrowed it for a fourth without checking. Probe
+> the counter, not just the condition.
 
 `permanent`/`cancelled` never retry (D4). `policy` is F2a's `NodePolicySchema` (merged, `88a6ed2`);
 `policy.retry` absent means "policy says nothing" → **0** → never eligible, so every existing doc is
@@ -230,6 +266,15 @@ keeps its `LIVE_NODE` guard and stays **distinct** from `node.retryDue` — D4 s
 `reconcile.ts`'s `dispatchedNodes()` selects only `status === 'dispatched'`, so it is not interrupted
 either. **Net: after a crash, a held run stays `running` forever unless S1's `scheduled_wakeups` row
 re-arms it.**
+
+> **F2c build-time addendum — the reconciler needed a change this section did not predict.** The
+> analysis above is exactly right about `onResumed` and `dispatchedNodes()`, and stops one file
+> short. A held run reaches `reconcile.ts`'s resume path, re-derives **zero** commands, and so falls
+> through `needsExecutor` (`commands.some(...)` on an empty array is `false`) into
+> **`report.finalized`** — a bucket documented as *"now terminalized"*. It is not terminalized; it is
+> waiting on its alarm. It also collects a fresh `run.resumed` on EVERY boot. Fixed with an explicit
+> `held` bucket that appends nothing, gated on there being no commands so a run with a genuinely
+> recoverable node still resumes. **"The correct action is none at all" still needs code to say so.**
 
 That is the correct design — the durable alarm row **is** the recovery mechanism, and re-deriving a
 retry from the projection would double-arm it. But it makes the dependency explicit and
@@ -623,13 +668,31 @@ expected — do not treat the intermediate state as a regression.
    failed with a handler that could never run (mutation-verified in both directions). Forward-only
    absorption closes it. Both halves are pinned.
 3. **F2b + F2c together** — `retry_pending`, the `scheduleRetry`/`retryScheduled`/`retryDue` triple,
-   the `node.retryDue` handler. **Not F2b alone** (§A.5).
+   the `node.retryDue` handler. **Not F2b alone** (§A.5). **SHIPPED** — one fire, as specced, plus
+   §A.3's corrected eligibility rule above, the `node_retry` alarm handler (S1's first real
+   consumer), the clock's boot wiring, and `reconcile`'s new `held` bucket (a run held on a retry
+   re-derives no commands, so it was landing in `finalized` — "now terminalized" — and collecting a
+   fresh `run.resumed` on every boot).
    **Fix first, inside F2b** (carried from F2b's ticket row, and F2b is the ticket that makes it
    bite): `driver.ts`'s pump appends the **parsed** event (`appendEngineEvent`) but folds the **raw**
    one (`engine.reduce(state, event)`). Inert while nothing reads `kind` — but F2b's eligibility rule
    reads exactly `kind`, so an untyped event would be *stored* `kind:'permanent'` (the parse default)
    while the *live* reducer saw `undefined`: live and replay disagree, and the disagreement decides
    whether a node retries. Reduce the value `appendEngineEvent` parses, not its input.
+
+   > **CORRECTED BY F2b (build-time): the fix is right, its stated urgency is not.** "The
+   > disagreement decides whether a node retries" **overstates it — this is INERT, today and for
+   > `kind` specifically**, and a fire that believes otherwise will write a test that cannot fail.
+   > `kind` is the ONLY `.default()` in the whole event union, and both spellings of a missing one —
+   > raw `undefined` and the parsed `permanent` — are non-eligible under `kind !== 'transient'`. Live
+   > and replay reach the SAME verdict, so no retry decision changes either way. (It also needs a
+   > producer that bypasses the type: `EngineEvent` is the z.infer OUTPUT type, so `kind` is required
+   > in TS.) Fixed anyway, and fixed at the choke point rather than at `pump` alone —
+   > `appendEngineEvent` now returns `{record, event}` and every append-then-fold site folds
+   > `.event`. What that buys is the CLASS, not this instance: the next `.default()` added to a field
+   > the reducer reads would be a silent live-vs-replay divergence, which is not a bug anyone finds
+   > twice. **Lesson: state a latent bug's blast radius as latent.** An overstated one buys a
+   > confident test that pins nothing.
 
 ## Non-goals
 

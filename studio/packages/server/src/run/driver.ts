@@ -1,6 +1,8 @@
 import {
   createEngine,
   resolveRunParams,
+  DEFAULT_RETRY_INTERVAL_SECONDS,
+  type ArmWakeupInput,
   type Engine,
   type EngineCommand,
   type EngineEvent,
@@ -8,6 +10,7 @@ import {
   type Run,
   type RunLifecycleStatus,
   type RunState,
+  type ScheduledWakeup,
 } from '@autonomy-studio/shared';
 import { getRun, updateRun } from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
@@ -72,14 +75,48 @@ export interface Executor {
   perform(command: ExecutorCommand, runId: string): AsyncIterable<EngineEvent>;
 }
 
+/**
+ * The alarm-arming seam the driver needs to perform a `scheduleRetry` (F2c).
+ *
+ * Structurally satisfied by #5 S1's `AlarmClock.arm`, but declared HERE rather
+ * than imported from `scheduler/alarms.ts` for two reasons: that module already
+ * imports `run/event-bus.js` (so importing it back would close a cycle), and the
+ * driver genuinely needs only this one method — a narrow seam keeps the retry
+ * alarm testable with a three-line stub.
+ */
+export interface RetryAlarms {
+  /** Idempotent by `(kind, dedupeKey)`: a replayed arm returns the EXISTING row. */
+  arm(input: ArmWakeupInput): ScheduledWakeup;
+}
+
+/**
+ * The `kind` under which a node's retry alarm is armed. Matches the handler
+ * registered in `scheduler/retry-alarm.ts` — the clock refuses to arm a kind
+ * with no handler, so these two cannot silently drift apart.
+ */
+export const RETRY_WAKEUP_KIND = 'node_retry';
+
 export interface DriverDeps {
   db: Db;
   resolveDoc: DocResolver;
   executor: Executor;
+  /**
+   * F2c — the durable-alarm seam. REQUIRED, not optional, and deliberately so:
+   * the reducer can emit `scheduleRetry` for any doc that sets `policy.retry`,
+   * and a driver that cannot serve it would leave the node `retry_pending`
+   * forever with NO recovery path (§A.5 — a held run's only recovery IS its
+   * alarm row). Making it required moves that from a runtime hang to a compile
+   * error at every construction site.
+   */
+  alarms: RetryAlarms;
   /** P6 — the live-monitor bus. When present, every event this driver appends is
    * published to it (after the durable append) so a watching WS client tails the
    * run in real time. Optional: P2/P3 driver tests run without a bus unchanged. */
   bus?: RunEventBus;
+  /** Clock seam (epoch ms) for a retry's `dueAt`; defaults to the wall clock,
+   * mirroring `AlarmClockDeps.now`. The REDUCER never reads a clock — this is
+   * the impure half of D4's split, and the time it produces is STORED. */
+  now?: () => number;
 }
 
 /** Run-lifecycle statuses that are terminal (the run stops advancing). */
@@ -128,6 +165,63 @@ export function syncRunLifecycle(db: Db, runId: string, status: RunLifecycleStat
 }
 
 /**
+ * Perform a `scheduleRetry` (F2c): ARM the durable alarm, then hand back the
+ * `node.retryScheduled` event recording when the retry is due. The impure half
+ * of D4's split — the reducer decided ELIGIBLE, this decides WHEN.
+ *
+ * **The order is the whole design, and it is asymmetric.** Arming first means a
+ * crash before the append leaves an armed alarm that still fires, re-dispatches
+ * the node, and only loses a log line. The reverse — append, then arm — would on
+ * a crash leave a log that PROMISES a retry with no alarm to deliver it, and a
+ * node held forever: `onResumed` re-derives nothing for `retry_pending` and the
+ * boot reconciler does not select it (§A.5). One order costs observability, the
+ * other hangs the run.
+ *
+ * `nextAttemptAt` is read back from the ARMED ROW rather than the value computed
+ * here. `arm` is idempotent by `(kind, dedupeKey)`, so a replayed command returns
+ * the ORIGINAL row — logging the row's `dueAt` records the time the alarm will
+ * actually fire, where logging the local computation would record a fresh,
+ * fictional one. Same reason `run.started.startedAt` is stamped from the run row.
+ */
+function armRetry(
+  deps: DriverDeps,
+  state: RunState,
+  command: Extract<EngineCommand, { type: 'scheduleRetry' }>,
+): EngineEvent {
+  const now = deps.now ?? (() => Date.now());
+  // The policy comes from the run's IMMUTABLE bound version — the same doc the
+  // reducer read when it decided eligibility, so the two cannot disagree, and a
+  // replay reads the identical value.
+  const doc = deps.resolveDoc(state.pipelineVersionId);
+  const policy = doc.nodes.find((n) => n.id === command.nodeId)?.policy;
+  const intervalSeconds = policy?.retryIntervalSeconds ?? DEFAULT_RETRY_INTERVAL_SECONDS;
+
+  const row = deps.alarms.arm({
+    kind: RETRY_WAKEUP_KIND,
+    // The per-kind `ref` shape S1 declares for retry. `attemptId` is not
+    // decoration: it is the handle the handler's freshness check needs to tell
+    // "this alarm is for the attempt still held" from "a stale one".
+    ref: { runId: state.runId, nodeId: command.nodeId, attemptId: command.failedAttemptId },
+    dueAt: now() + intervalSeconds * 1000,
+    // Spec #5's spike headline: omit the attempt and attempt-2's retry collides
+    // with attempt-1's already-`fired` row, so — arming being an idempotent
+    // upsert-if-absent — it SILENTLY NEVER ARMS. The spec spells this
+    // `attempt-<n>`; the whole attemptId is used instead because it already
+    // encodes n (as `nodeId#n`) and needs no parsing back apart. Same
+    // discrimination, one less thing to get wrong.
+    discriminator: `attempt-${command.failedAttemptId}`,
+  });
+
+  return {
+    type: 'node.retryScheduled',
+    runId: state.runId,
+    nodeId: command.nodeId,
+    attemptId: command.failedAttemptId,
+    nextAttemptAt: row.dueAt,
+  };
+}
+
+/**
  * The reduce↔persist fixpoint. Drains `commands` (and everything they cascade),
  * appending every produced event and folding it. Stops when the queue empties
  * or the run reaches a terminal fact. Returns the final projected state.
@@ -154,17 +248,23 @@ export async function pump(
         outcome: 'failure',
         reason: 'capped',
       };
-      appendEngineEvent(deps.db, capped, deps.bus);
-      state = engine.reduce(state, capped).state;
+      state = engine.reduce(state, appendEngineEvent(deps.db, capped, deps.bus).event).state;
       syncRunLifecycle(deps.db, state.runId, state.status);
       break;
     }
 
     const command = queue.shift()!;
-    // `finishRun` is the driver's OWN command — a single `run.finished` event
-    // (a sync array, which `for await` iterates too). `dispatchNode`/`startChild`
-    // go to the executor, which STREAMS its events so `node.dispatched` is folded
-    // (durable) before the side effect runs — see the `Executor` contract doc.
+    // `finishRun` and `scheduleRetry` are the driver's OWN commands, each a
+    // single event (a sync array, which `for await` iterates too).
+    // `dispatchNode`/`startChild` go to the executor, which STREAMS its events so
+    // `node.dispatched` is folded (durable) before the side effect runs — see the
+    // `Executor` contract doc.
+    //
+    // `scheduleRetry` routes through this same `source` rather than appending on
+    // its own: the loop below is what publishes to the P6 bus (so a watching
+    // client actually SEES the retry — the event's whole purpose), folds the
+    // PARSED event, and syncs the row. `armRetry` runs while building the array,
+    // which is what keeps the arm strictly BEFORE the append.
     const source: Iterable<EngineEvent> | AsyncIterable<EngineEvent> =
       command.type === 'finishRun'
         ? [
@@ -175,12 +275,17 @@ export async function pump(
               reason: command.reason,
             },
           ]
-        : deps.executor.perform(command, state.runId);
+        : command.type === 'scheduleRetry'
+          ? [armRetry(deps, state, command)]
+          : deps.executor.perform(command, state.runId);
 
     let terminal = false;
     for await (const event of source) {
-      appendEngineEvent(deps.db, event, deps.bus);
-      const result = engine.reduce(state, event);
+      // Fold the PARSED event, never the raw input: they differ wherever the
+      // schema has a `.default()`, and `node.failed.kind` — the field F2b's
+      // retry-eligibility keys off — is exactly that. See `appendEngineEvent`.
+      const appended = appendEngineEvent(deps.db, event, deps.bus);
+      const result = engine.reduce(state, appended.event);
       state = result.state;
       syncRunLifecycle(deps.db, state.runId, state.status);
       queue.push(...result.commands);
@@ -221,8 +326,10 @@ export async function startRun(deps: DriverDeps, run: Run): Promise<RunState> {
     startedAt: new Date(run.startedAt).toISOString(),
     params: resolvedParams,
   };
-  appendEngineEvent(deps.db, started, deps.bus);
-  const result = engine.reduce(engine.seedState(), started);
+  const result = engine.reduce(
+    engine.seedState(),
+    appendEngineEvent(deps.db, started, deps.bus).event,
+  );
   syncRunLifecycle(deps.db, run.id, result.state.status);
   return pump(deps, engine, result.state, result.commands);
 }

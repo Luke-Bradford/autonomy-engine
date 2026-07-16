@@ -189,10 +189,34 @@ export const NodePolicySchema = z.object({
    * stores the computed next-attempt time as `scheduled_wakeups.dueAt` — a
    * STORED fact, never recomputed at fold time (spec #5's spike block: the
    * reducer stays clock-free and replay-stable).
+   *
+   * Absent means "policy says nothing", and F2c resolves that to
+   * `DEFAULT_RETRY_INTERVAL_SECONDS` below.
    */
   retryIntervalSeconds: z.number().int().min(30).max(86400).optional(),
 });
 export type NodePolicy = z.infer<typeof NodePolicySchema>;
+
+/**
+ * F2c — the delay used when a node sets `retry` but no `retryIntervalSeconds`.
+ *
+ * Neither spec #1 D4 nor the joint F1b/F2b spec states a default, and the two
+ * knobs are independent optionals, so `{retry: 2}` with no interval is a legal
+ * doc that needs an answer. `30` is the schema's own floor immediately above —
+ * declared HERE, next to that `.min(30)`, precisely so the default and the floor
+ * cannot drift into a default the schema itself would reject.
+ *
+ * It is also the conservative direction: the only other obvious reading of
+ * "unspecified" is "retry immediately", which turns a transient failure into a
+ * hot retry loop against a provider that is already throttling us.
+ *
+ * This is a v1 FALLBACK, not a policy decision: **F13b** (catalog defaults /
+ * overrides) is where an activity gets to say "my sensible retry interval is
+ * N". When it lands, this is the value it overrides — and, per `retry`'s note
+ * above, absent must then resolve to F13b's default while an explicit value
+ * still wins.
+ */
+export const DEFAULT_RETRY_INTERVAL_SECONDS = 30;
 
 /**
  * `NodePolicySchema` + the rules a policy must pass to be SAVED. Applied ONLY

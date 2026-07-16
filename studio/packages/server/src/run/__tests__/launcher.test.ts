@@ -18,6 +18,7 @@ import { freshDb } from '../../repo/__tests__/helpers.js';
 import { type DocResolver, type DriverDeps, type Executor } from '../driver.js';
 import { createRunLauncher, UnboundTriggerError } from '../launcher.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
+import { stubAlarms } from './stub-alarms.js';
 
 type Db = ReturnType<typeof freshDb>['db'];
 
@@ -67,7 +68,7 @@ function deps(db: Db, executorOpts: StubExecutorOptions = {}): DriverDeps {
     if (pv === null) throw new Error(`no pv ${id}`);
     return pv;
   };
-  return { db, resolveDoc, executor: makeStubExecutor(executorOpts) };
+  return { db, resolveDoc, executor: makeStubExecutor(executorOpts), alarms: stubAlarms() };
 }
 
 describe('RunLauncher — unbound never fires', () => {
@@ -249,7 +250,12 @@ describe('RunLauncher — background failure', () => {
     const resolveDoc: DocResolver = () => {
       throw new Error('doc blew up');
     };
-    const launcher = createRunLauncher({ db, resolveDoc, executor: makeStubExecutor() });
+    const launcher = createRunLauncher({
+      db,
+      resolveDoc,
+      executor: makeStubExecutor(),
+      alarms: stubAlarms(),
+    });
 
     const result = launcher.fire(trigger);
     expect(result.outcome).toBe('started');
@@ -279,7 +285,12 @@ describe('RunLauncher — background failure', () => {
       if (pv === null) throw new Error(`no pv ${id}`);
       return pv;
     };
-    const launcher = createRunLauncher({ db, resolveDoc, executor: throwingExecutor });
+    const launcher = createRunLauncher({
+      db,
+      resolveDoc,
+      executor: throwingExecutor,
+      alarms: stubAlarms(),
+    });
 
     const result = launcher.fire(trigger);
     await launcher.whenIdle();
@@ -312,7 +323,12 @@ describe('RunLauncher — background failure', () => {
         throw new Error('executor blew up');
       },
     };
-    const launcher = createRunLauncher({ db, resolveDoc, executor: throwingExecutor });
+    const launcher = createRunLauncher({
+      db,
+      resolveDoc,
+      executor: throwingExecutor,
+      alarms: stubAlarms(),
+    });
 
     const result = launcher.fire(trigger);
     await launcher.whenIdle();
@@ -357,6 +373,7 @@ describe('RunLauncher — #443 never bury a terminal log under a false interrupt
       db: faultyDb,
       resolveDoc: deps(db).resolveDoc,
       executor: makeStubExecutor(),
+      alarms: stubAlarms(),
     });
     const result = launcher.fire(trigger);
     await launcher.whenIdle();

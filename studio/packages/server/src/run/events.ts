@@ -22,15 +22,30 @@ import type { RunEventBus } from './event-bus.js';
  * column is always `event.runId` — the append-order (`seq` per run) is the
  * durable source of truth the projection folds over.
  *
- * Returns the durable `RunEvent` ENVELOPE (server-assigned `id`/`seq`/`ts`), not
- * the bare `EngineEvent`, so callers that need the monotonic `seq` (the P6 live
- * tail) have it. When a `bus` is supplied, the envelope is published to it AFTER
+ * Returns BOTH the durable `RunEvent` ENVELOPE (server-assigned `id`/`seq`/`ts`,
+ * for callers that need the monotonic `seq` — the P6 live tail) and the PARSED
+ * `EngineEvent`. When a `bus` is supplied, the envelope is published to it AFTER
  * the durable append — so a live subscriber never observes an event that is not
  * yet in the log, and the WS layer can dedupe replay-vs-live purely by `seq`.
  * This is the ONE append choke point, so every event the driver/reconciler
  * appends (whichever module) uniformly streams to any watching client.
+ *
+ * **Why `event` is returned, and why every caller must FOLD IT rather than its
+ * own input** (the joint F1b/F2b spec's build order names this as F2b's first
+ * task): this function APPENDS the parsed value but callers used to REDUCE the
+ * raw one. Those differ wherever the schema has a `.default()` — and
+ * `node.failed.kind` is exactly that: an event constructed without `kind` is
+ * STORED as `permanent` (the parse default) while the live reducer sees
+ * `undefined`. Inert while nothing read `kind`; F2b's retry-eligibility reads
+ * exactly it, so the live run and its replay would disagree about whether a node
+ * retries — the one class of bug event-sourcing is supposed to make impossible.
+ * Returning the parsed value is what lets the fold and the log be the same fact.
  */
-export function appendEngineEvent(db: Db, event: EngineEvent, bus?: RunEventBus): RunEvent {
+export function appendEngineEvent(
+  db: Db,
+  event: EngineEvent,
+  bus?: RunEventBus,
+): { record: RunEvent; event: EngineEvent } {
   // Re-validate on the way in too: a driver/reconciler bug that hands us a
   // malformed event fails HERE (before it is durably appended) rather than
   // silently corrupting a run's log to be discovered only on replay.
@@ -40,7 +55,7 @@ export function appendEngineEvent(db: Db, event: EngineEvent, bus?: RunEventBus)
   // is not yet in the log. `publish` is synchronous and never throws (it
   // isolates a broken subscriber), so it cannot disrupt the driver's pump.
   bus?.publish(record);
-  return record;
+  return { record, event: parsed };
 }
 
 /**

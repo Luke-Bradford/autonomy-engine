@@ -182,7 +182,7 @@ describe('#5 S1 — freshness: a stale alarm is SUPPRESSED, not fired', () => {
         return {
           status: 'suppressed',
           reason: 'trigger disabled',
-          events: [appendEngineEvent(tx, ev)],
+          events: [appendEngineEvent(tx, ev).record],
         };
       },
     });
@@ -220,7 +220,7 @@ describe('#5 S1 — the fire is ONE transaction (the spike`s core claim)', () =>
           previousAttemptId: 'att_1',
           reason: `alarm fired ${String(delivery.latenessMs)}ms late`,
         };
-        return { status: 'fired', events: [appendEngineEvent(tx, ev)] };
+        return { status: 'fired', events: [appendEngineEvent(tx, ev).record] };
       },
     });
     const clock = createAlarmClock({ db, handlers: [handler], now: () => 5_000 });
@@ -269,7 +269,7 @@ describe('#5 S1 — the fire is ONE transaction (the spike`s core claim)', () =>
         if (attempts === 1) throw new Error('transient');
         return {
           status: 'fired',
-          events: [appendEngineEvent(tx, { type: 'run.interrupted', runId, reason: 'ok' })],
+          events: [appendEngineEvent(tx, { type: 'run.interrupted', runId, reason: 'ok' }).record],
         };
       },
     });
@@ -322,7 +322,7 @@ describe('#5 S1 — post-commit effects never leak out of a rolled-back fire', (
     const handler = spyHandler({
       fire: (_row, _delivery, tx) => ({
         status: 'fired',
-        events: [appendEngineEvent(tx, { type: 'run.interrupted', runId, reason: 'ok' })],
+        events: [appendEngineEvent(tx, { type: 'run.interrupted', runId, reason: 'ok' }).record],
       }),
     });
     const clock = createAlarmClock({ db, handlers: [handler], now: () => 5_000, bus });

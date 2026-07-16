@@ -1,7 +1,14 @@
 import type { EngineEvent, RunState } from '@autonomy-studio/shared';
 import { listRuns } from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
-import { buildEngine, pump, syncRunLifecycle, type DocResolver, type Executor } from './driver.js';
+import {
+  buildEngine,
+  pump,
+  syncRunLifecycle,
+  type DocResolver,
+  type Executor,
+  type RetryAlarms,
+} from './driver.js';
 import type { RunEventBus } from './event-bus.js';
 import { appendEngineEvent, loadEngineEvents, terminalFactFromLog } from './events.js';
 
@@ -66,6 +73,12 @@ export interface ReconcileDeps {
   db: Db;
   resolveDoc: DocResolver;
   /**
+   * F2c — the alarm seam `pump` needs. REQUIRED for the same reason it is on
+   * `DriverDeps`: a resumed run can fail transiently and emit `scheduleRetry`
+   * like any other, and a driver that cannot arm it hangs the run.
+   */
+  alarms: RetryAlarms;
+  /**
    * When provided, resumable runs are DRIVEN to completion immediately (the
    * "reconciler + driver" of the P2d ticket). When absent — P2 boot, before P3
    * supplies the real executor — a resumable run is left untouched and reported
@@ -95,6 +108,13 @@ export interface ReconcileReport {
    * executor required) — reached their terminal node event but crashed before
    * `run.finished`; now terminalized. */
   finalized: string[];
+  /**
+   * Runs HELD on a node's retry (F2b's `retry_pending`), left untouched on
+   * purpose: their recovery is S1's durable alarm row, which outlived the crash
+   * and re-fires on its own (§A.5). Reported so a held run is visibly waiting
+   * rather than silently indistinguishable from a stuck one.
+   */
+  held: string[];
 }
 
 /**
@@ -131,6 +151,7 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
     deferred: [],
     resynced: [],
     finalized: [],
+    held: [],
   };
 
   for (const run of listRuns(deps.db, { status: 'running' })) {
@@ -180,8 +201,9 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
     if (notProvablyIdempotent.length > 0) {
       const reason = `non_idempotent_in_flight:${notProvablyIdempotent.map((n) => n.id).join(',')}`;
       const interrupted: EngineEvent = { type: 'run.interrupted', runId: run.id, reason };
-      appendEngineEvent(deps.db, interrupted, deps.bus);
-      syncRunLifecycle(deps.db, run.id, engine.reduce(state, interrupted).state.status);
+      const appended = appendEngineEvent(deps.db, interrupted, deps.bus);
+      // Fold the PARSED event, not the raw one — see `appendEngineEvent`.
+      syncRunLifecycle(deps.db, run.id, engine.reduce(state, appended.event).state.status);
       report.interrupted.push(run.id);
       continue;
     }
@@ -210,6 +232,25 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
       commands.push(...result.commands);
     }
 
+    // A run HELD on a retry (F2b) re-derives NOTHING here — `onResumed` skips
+    // `retry_pending` deliberately, and `settle` cannot finish a run whose node
+    // is non-terminal. Without this branch such a run falls through and is
+    // reported `finalized` ("now terminalized"), which is simply false: it is
+    // waiting on its alarm. It would also collect a fresh, pointless
+    // `run.resumed` on EVERY boot. Its real recovery is the durable alarm row
+    // that survived the crash (§A.5), so the correct action here is none at all.
+    //
+    // Gated on there being no commands, so a run that ALSO has a live idempotent
+    // node still resumes normally — its held node is recovered by the alarm
+    // regardless.
+    if (
+      commands.length === 0 &&
+      Object.values(next.nodes).some((n) => n.status === 'retry_pending')
+    ) {
+      report.held.push(run.id);
+      continue;
+    }
+
     // `finishRun` is the driver's OWN command (no executor); `dispatchNode`/
     // `startChild` need one. A run that only needs its dropped `finishRun`
     // reconstructed can be FINALIZED with no executor; one with live work to
@@ -228,6 +269,7 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
         db: deps.db,
         resolveDoc: deps.resolveDoc,
         executor: deps.executor ?? refuseToExecute,
+        alarms: deps.alarms,
         bus: deps.bus,
       },
       engine,

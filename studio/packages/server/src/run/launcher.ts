@@ -198,8 +198,9 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     // Non-terminal log: record the terminal fact in the LOG first (no doc
     // needed), so the log stays authoritative even if the fold below can't run.
     const interrupted: EngineEvent = { type: 'run.interrupted', runId, reason: 'drive_failed' };
+    let appended: ReturnType<typeof appendEngineEvent>;
     try {
-      appendEngineEvent(db, interrupted, deps.bus);
+      appended = appendEngineEvent(db, interrupted, deps.bus);
     } catch (appendErr) {
       // Couldn't even append — best-effort patch so no zombie row lingers.
       deps.log?.error({ err: appendErr, runId }, 'run interrupt append failed');
@@ -208,7 +209,8 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     }
     try {
       const engine = buildEngine(deps.resolveDoc(run.pipelineVersionId));
-      const state = engine.reduce(engine.projectRunState(events), interrupted).state;
+      // Fold the PARSED event, not the raw one — see `appendEngineEvent`.
+      const state = engine.reduce(engine.projectRunState(events), appended.event).state;
       syncRunLifecycle(db, runId, state.status);
     } catch (foldErr) {
       // The doc is unresolvable (e.g. its version was deleted). The

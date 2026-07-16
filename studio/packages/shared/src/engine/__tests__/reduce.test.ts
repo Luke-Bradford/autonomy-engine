@@ -872,15 +872,18 @@ describe('minor hardening', () => {
   });
 });
 
-describe('#1 F0 — failure kind is CARRIED, not yet acted on (scope lock)', () => {
-  // F0 introduces the field ONLY. The retry-eligibility decision that keys off
-  // `kind:'transient'` belongs to F2b, and cannot land before F2a's `Node.policy`
-  // schema and #5 S1's durable alarm exist — a reducer that "helpfully" retried
-  // here would emit a command nothing can serve, and would need wall-clock to
-  // schedule it (breaking reducer purity). These tests fail the moment retry is
-  // added without its prerequisites.
+describe('#1 F0/F2b — a failure kind alone never retries: policy is what opts a node in', () => {
+  // This block was F0's SCOPE LOCK ("kind is carried, not yet acted on"). F2b has
+  // now landed, so the old framing is stale — but the tests are NOT: they pin
+  // what is arguably F2b's most important property, which is that adding retry
+  // changed NOTHING for a node with no `policy`. None of these docs declare one,
+  // so eligibility is `retries < 0` — false — and a `transient` failure settles
+  // exactly as it did before F2b existed. Every doc written before this ticket is
+  // unaffected, and these are the tests that say so.
+  //
+  // The retry path itself (a node WITH a policy) is `retry-state-machine.test.ts`.
   for (const kind of ['transient', 'permanent', 'cancelled'] as const) {
-    it(`settles a '${kind}' failure to terminal 'failure' with no retry command`, () => {
+    it(`settles a '${kind}' failure with NO policy to terminal 'failure', no retry command`, () => {
       const eng = engine([node('a')]);
       let s = eng.reduce(eng.seedState(), started()).state;
       s = eng.reduce(s, dispatched('a', attempt('a'))).state;
@@ -894,7 +897,7 @@ describe('#1 F0 — failure kind is CARRIED, not yet acted on (scope lock)', () 
     });
   }
 
-  it('a transient failure finishes the run as failure — identical to a permanent one (today)', () => {
+  it('a transient failure finishes the run as failure — identical to a permanent one, absent a policy', () => {
     const run = (kind: FailureKind): EngineCommand[] => {
       const eng = engine([node('a')]);
       let s = eng.reduce(eng.seedState(), started()).state;

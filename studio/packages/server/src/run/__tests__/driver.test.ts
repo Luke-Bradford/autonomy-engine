@@ -17,6 +17,7 @@ import { freshDb } from '../../repo/__tests__/helpers.js';
 import { buildEngine, startRun, type DocResolver, type DriverDeps } from '../driver.js';
 import { loadEngineEvents } from '../events.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
+import { stubAlarms } from './stub-alarms.js';
 
 type Db = ReturnType<typeof freshDb>['db'];
 
@@ -58,7 +59,7 @@ function deps(db: Db, executorOpts: StubExecutorOptions = {}): DriverDeps {
     if (pv === null) throw new Error(`no pv ${id}`);
     return pv;
   };
-  return { db, resolveDoc, executor: makeStubExecutor(executorOpts) };
+  return { db, resolveDoc, executor: makeStubExecutor(executorOpts), alarms: stubAlarms() };
 }
 
 function types(events: EngineEvent[]): string[] {
