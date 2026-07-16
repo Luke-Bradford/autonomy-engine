@@ -479,3 +479,70 @@ to pass, so passing is not evidence it binds.** Its first run is not the check �
 mutating the behaviour it claims to pin is. If the mutation stays green, the test
 is decoration. This is the mirror of TDD's see-it-fail step, for the case where
 the implementation already exists and there is no red phase to observe.
+
+## 26. The SQUASH-MERGE COMMIT body is a second door into GitHub's closing grammar — and `closingIssuesReferences` cannot see it
+
+*Origin: PR #509's own merge, 2026-07-16, demonstrated live.* The merge body
+passed to `gh pr merge --body` contained the sentence `Phase-boundary bug sweep
+per the standing rule: fixed #479 before starting work-order item 7` — narrative
+prose, not an instruction to close anything. #479 closed at `07:19:30Z`, **one
+second after** the merge at `07:19:29Z`. The outcome happened to be correct
+(#479 *was* the issue the PR fixed), which is exactly what makes this worth
+logging: **it worked by luck, and the same sentence naming a ticket that had to
+stay open would have closed it silently.** The same body also said `Deliberately
+left #483, #477, #485` — those survived only because that sentence used no
+keyword.
+
+Entry #20 established the authoring rule and its mitigation: *check
+`gh pr view <n> --json closingIssuesReferences` BEFORE merging*. That probe is
+**PR-body-scoped and cannot catch this**, for two independent reasons:
+
+1. `closingIssuesReferences` is derived from the **PR body**. The merge
+   subject/body is authored **at merge time**, after any probe has run, and
+   never appears in that field.
+2. The merge commit lands on the **default branch**, where GitHub parses closing
+   keywords **natively** off the commit message. There is no PR-linked
+   intermediary to inspect.
+
+So a PR whose body is scrupulously clean — as #509's was, opening with *"Closes
+nothing automatically"* — can still close issues via a body typed into the merge
+command minutes later. The two channels are independent, and only one of them
+has a pre-merge probe.
+
+**Rule: the never-write-closing-keyword+#N rule of #20 governs EVERY text
+GitHub parses — the PR body, the squash subject, the squash body, and any commit
+message reaching the default branch. Treat the merge body as a PR body with no
+safety net: it has no `closingIssuesReferences` probe, and by the time it is
+wrong the merge has already happened.** Practical form: in a merge body, write
+issue refs as bare `#N` and reach for a non-keyword verb — *"addresses #N"*,
+*"the #N fix"*, *"per #N"* — reserving `fixed`/`closes`/`resolves` for nothing at
+all, since the deliberate close is a separate `gh issue close` anyway (which this
+repo already mandates, precisely because the grammar cannot be trusted). Same
+family as #20 and #24's corollary: the tool's behaviour, not your intent, decides
+what happens — and prose *about* an issue reads to GitHub exactly like an
+instruction *to* it.
+
+**Corollary — how to WRITE UP an incident like this without re-triggering it,
+measured 2026-07-16.** The first draft of this entry's own PR body reproduced the
+offending sentence in a **blockquote**, to illustrate it. `closingIssuesReferences`
+then listed #479 — the write-up re-linked the very ref it was documenting, which
+is #20's PR-#324 failure (*quoting* `does NOT close #90` closed #90 a third time)
+recurring inside the entry written to prevent it. Probed all three forms directly
+against the live PR:
+
+| form in a PR body | links the ref? |
+|---|---|
+| blockquote — `> fixed #N` | **YES** |
+| inline code span — `` `fixed #N` `` | no |
+| fenced code block | no |
+
+So #20's "quote-blind" is imprecise in a way that matters: **markdown quoting
+(a blockquote, or English quotation marks) does NOT suppress the link — a CODE
+SPAN or FENCED BLOCK does.** GitHub's linker skips code, not quotes. **Rule: when
+documenting a closing-grammar incident anywhere GitHub parses — PR body, review
+comment, merge body — put the offending text in a code span or fenced block, never
+a blockquote, and verify with `gh pr view <n> --json closingIssuesReferences`
+before merging.** The entries above and this one follow that form deliberately;
+that is why their `fixed #N` examples are in backticks. Note the file you are
+reading is safe either way — GitHub parses commit messages, PR bodies, and
+comments, not repo file contents — but the PR that lands a file like this is not.
