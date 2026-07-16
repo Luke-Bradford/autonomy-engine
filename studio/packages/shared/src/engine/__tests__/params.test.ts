@@ -10,6 +10,7 @@ import type {
 } from '../types.js';
 import { ParamResolveError, SubstituteError } from '../types.js';
 import {
+  MAX_CONFIG_DEPTH,
   RUN_FIELDS,
   resolveRunParams,
   substitute,
@@ -598,6 +599,92 @@ describe('MAX_EXPR_DEPTH bounds expression NESTING at BOTH halves (#6 #453)', ()
     expect((thrown as Error).message).not.toMatch(/Maximum call stack/i);
     // Specific to the depth-cap error, not any message containing "deep".
     expect((thrown as Error).message).toMatch(/nesting too deep|MAX_EXPR_DEPTH/i);
+  });
+});
+
+describe('MAX_CONFIG_DEPTH bounds the CONFIG-TREE walk at BOTH halves (#537)', () => {
+  // A node `config` is `z.record(z.string(), z.unknown())` — opaque to Zod, so it
+  // can nest arbitrarily deep. The SAVE walkers (`scan` for `${}`, `scanSecretSinks`
+  // for `{$secret}`) and the RUN walker (`substitute`) all recursed the config
+  // TREE with no cap, so a pathologically nested config overflowed the stack
+  // (`RangeError`) instead of failing cleanly. `MAX_CONFIG_DEPTH` bounds the
+  // config-TREE axis — distinct from `MAX_EXPR_DEPTH` (expression nesting) and
+  // `MAX_PATH_DEPTH` (ref path segments), neither of which sees this walk. Prior
+  // art: #453 did the identical thing for the expression-nesting axis.
+  function deepConfig(n: number): Record<string, unknown> {
+    let v: Record<string, unknown> = { end: 'leaf' };
+    for (let i = 0; i < n; i += 1) v = { a: v };
+    return v;
+  }
+
+  // ARRAY nesting exercises the `.map`/`.forEach` recursion edges (which carry
+  // `depth + 1` too), a parallel branch to the object recursion above.
+  function deepArrayConfig(n: number): Record<string, unknown> {
+    let v: unknown = 'leaf';
+    for (let i = 0; i < n; i += 1) v = [v];
+    return { nest: v };
+  }
+
+  it('validateRefs REPORTS a collected error — it does NOT throw a raw RangeError (save half, BOTH walkers)', () => {
+    // `scan` runs before `scanSecretSinks` on the SAME node config, so a deep
+    // config that overflowed EITHER save walker would throw here. A clean return
+    // proves BOTH the `${}` scan and the `{$secret}` marker walk are capped.
+    let thrown: unknown;
+    let errors: string[] = [];
+    try {
+      errors = validateRefs(doc([node('n', deepConfig(MAX_CONFIG_DEPTH + 50))], []));
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeUndefined();
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.join('\n')).not.toMatch(/Maximum call stack/i);
+    // Specific to the config-depth cap, not any message containing "deep".
+    expect(errors.join('\n')).toMatch(/config nested too deep/i);
+  });
+
+  it('accepts a config comfortably UNDER the cap (save half)', () => {
+    const errors = validateRefs(doc([node('n', deepConfig(MAX_CONFIG_DEPTH - 5))], []));
+    expect(errors.join('\n')).not.toMatch(/config nested too deep/i);
+  });
+
+  it('substitute throws a clean depth error, not a raw stack overflow (run half)', () => {
+    let thrown: unknown;
+    try {
+      substitute(deepConfig(MAX_CONFIG_DEPTH + 50), ctx());
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(SubstituteError);
+    expect((thrown as Error).message).not.toMatch(/Maximum call stack/i);
+    expect((thrown as Error).message).toMatch(/config nested too deep/i);
+  });
+
+  it('substitute round-trips a config comfortably UNDER the cap (run half)', () => {
+    const cfg = deepConfig(MAX_CONFIG_DEPTH - 5);
+    expect(substitute(cfg, ctx())).toEqual(cfg);
+  });
+
+  it('caps ARRAY nesting too, on both halves (the .map/.forEach recursion edges)', () => {
+    // Save half: a collected error, no RangeError.
+    let saveErrors: string[] = [];
+    let saveThrew: unknown;
+    try {
+      saveErrors = validateRefs(doc([node('n', deepArrayConfig(MAX_CONFIG_DEPTH + 50))], []));
+    } catch (e) {
+      saveThrew = e;
+    }
+    expect(saveThrew).toBeUndefined();
+    expect(saveErrors.join('\n')).toMatch(/config nested too deep/i);
+    // Run half: a clean SubstituteError, no RangeError.
+    let runThrew: unknown;
+    try {
+      substitute(deepArrayConfig(MAX_CONFIG_DEPTH + 50), ctx());
+    } catch (e) {
+      runThrew = e;
+    }
+    expect(runThrew).toBeInstanceOf(SubstituteError);
+    expect((runThrew as Error).message).toMatch(/config nested too deep/i);
   });
 });
 
