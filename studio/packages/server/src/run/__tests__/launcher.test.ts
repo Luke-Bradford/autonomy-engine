@@ -26,7 +26,10 @@ type Db = ReturnType<typeof freshDb>['db'];
 let seq = 0;
 function node(id: string, extra: Partial<Node> = {}): Node {
   seq += 1;
-  return { id, type: 'agent_task', config: {}, position: { x: seq, y: 0 }, ...extra };
+  // Uncatalogued on purpose — see the same factory in `driver.test.ts`. Keeps the
+  // output contract `absent` so a type-agnostic stub's `{}` payload is not failed
+  // against a catalog contract F13b/#456 would otherwise lower into a known type.
+  return { id, type: 'test_activity', config: {}, position: { x: seq, y: 0 }, ...extra };
 }
 function edge(from: string, to: string, on: EdgeOn = 'success'): Edge {
   return { id: `${from}->${to}:${on}`, from, to, on };

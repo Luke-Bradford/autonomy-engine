@@ -292,9 +292,23 @@ describe('pipeline-versions repo', () => {
       pipelineId: pipeline.id,
       params: [{ name: 'topic', type: 'string', required: true }],
       outputs: [{ name: 'summary', type: 'string' }],
+      // Each known-type node declares an EXPLICIT `config.outputs` so F13b
+      // lowering (#456) is a no-op here — this test guards the persist/round-trip
+      // path (loss point 1), not the catalog-default seeding, so an author
+      // override keeps the two concerns decoupled and the round-trip exact.
       nodes: [
-        { id: 'node_1', type: 'llm_call', config: { model: 'x' }, position: { x: 3, y: 4 } },
-        { id: 'node_3', type: 'agent_task', config: {}, position: { x: 5, y: 6 } },
+        {
+          id: 'node_1',
+          type: 'llm_call',
+          config: { model: 'x', outputs: [{ name: 'text', type: 'string' }] },
+          position: { x: 3, y: 4 },
+        },
+        {
+          id: 'node_3',
+          type: 'agent_task',
+          config: { outputs: [{ name: 'output', type: 'string' }] },
+          position: { x: 5, y: 6 },
+        },
         LOOP_CHILD_NODE,
       ],
       // A top-level edge (neither endpoint is a container child) so the doc is
@@ -333,6 +347,122 @@ describe('pipeline-versions repo', () => {
         authored[key as keyof NewPipelineVersion],
       );
     }
+  });
+
+  // #456 (F13b) — the catalog default is LOWERED into a node's `config.outputs`
+  // at save time, so a version stored via the API/import/CLI carries the same
+  // contract the web palette seeds client-side. Before F13b a known-type node
+  // created by any non-web client persisted `absent` (no contract), and the
+  // reducer stored the whole payload while `validateRefs` name-checked nothing.
+  describe('#456 (F13b) — catalog-default lowering', () => {
+    it('SEEDS an absent config.outputs from the catalog for a known type (persisted)', () => {
+      const { db } = freshDb();
+      const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+      const created = createPipelineVersion(db, {
+        ...buildVersionInput(pipeline.id),
+        nodes: [
+          { id: 'h', type: 'http_request', config: { url: 'https://x' }, position: { x: 0, y: 0 } },
+        ],
+      });
+      // The RE-READ carries the catalog contract, not just the create response.
+      const node = getPipelineVersion(db, created.id)!.nodes.find((n) => n.id === 'h')!;
+      expect(node.config['outputs']).toEqual([
+        { name: 'status', type: 'number' },
+        { name: 'body', type: 'string' },
+        { name: 'headers', type: 'json' },
+      ]);
+      // The rest of the config is untouched.
+      expect(node.config['url']).toBe('https://x');
+    });
+
+    it('RESPECTS an author-declared config.outputs — the override is never overwritten', () => {
+      const { db } = freshDb();
+      const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+      const declared = [{ name: 'only', type: 'string' }];
+      const created = createPipelineVersion(db, {
+        ...buildVersionInput(pipeline.id),
+        nodes: [
+          {
+            id: 'h',
+            type: 'http_request',
+            config: { url: 'https://x', outputs: declared },
+            position: { x: 0, y: 0 },
+          },
+        ],
+      });
+      const node = getPipelineVersion(db, created.id)!.nodes.find((n) => n.id === 'h')!;
+      expect(node.config['outputs']).toEqual(declared);
+    });
+
+    it('leaves an uncatalogued type absent — no catalog default to seed', () => {
+      const { db } = freshDb();
+      const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+      // `set_variable` is not in the MVP catalog, so it has no default contract.
+      const created = createPipelineVersion(db, {
+        ...buildVersionInput(pipeline.id),
+        nodes: [{ id: 'u', type: 'set_variable', config: {}, position: { x: 0, y: 0 } }],
+      });
+      const node = getPipelineVersion(db, created.id)!.nodes.find((n) => n.id === 'u')!;
+      expect(node.config['outputs']).toBeUndefined();
+    });
+
+    it('ACCEPTS a ${nodes.X.output.<catalogName>} ref against the seeded contract', () => {
+      const { db } = freshDb();
+      const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+      // `status` is one of http_request's catalog outputs — the ref resolves
+      // against the LOWERED contract even though the producer declared none.
+      expect(() =>
+        createPipelineVersion(db, {
+          ...buildVersionInput(pipeline.id),
+          params: [],
+          nodes: [
+            {
+              id: 'p',
+              type: 'http_request',
+              config: { url: 'https://x' },
+              position: { x: 0, y: 0 },
+            },
+            {
+              id: 'c',
+              type: 'llm_call',
+              config: { prompt: '${nodes.p.output.status}' },
+              position: { x: 1, y: 0 },
+            },
+          ],
+          edges: [{ id: 'e', from: 'p', to: 'c', on: 'success' }],
+        }),
+      ).not.toThrow();
+    });
+
+    it('REFUSES a ${nodes.X.output.<bogus>} ref now that the producer carries a contract (API/web alignment)', () => {
+      const { db } = freshDb();
+      const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+      // Before F13b this SAVED: the API-created producer had no contract, so
+      // validateRefs name-checked nothing. After F13b the producer carries its
+      // catalog contract, so a ref to an undeclared name is refused on write —
+      // the same verdict the web palette path always gave.
+      expect(() =>
+        createPipelineVersion(db, {
+          ...buildVersionInput(pipeline.id),
+          params: [],
+          nodes: [
+            {
+              id: 'p',
+              type: 'http_request',
+              config: { url: 'https://x' },
+              position: { x: 0, y: 0 },
+            },
+            {
+              id: 'c',
+              type: 'llm_call',
+              config: { prompt: '${nodes.p.output.bogus}' },
+              position: { x: 1, y: 0 },
+            },
+          ],
+          edges: [{ id: 'e', from: 'p', to: 'c', on: 'success' }],
+        }),
+      ).toThrow(InvalidPipelineDocError);
+    });
   });
 
   it('has no update path — the module exports no updatePipelineVersion (immutability invariant)', () => {

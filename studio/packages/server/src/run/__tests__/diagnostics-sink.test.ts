@@ -40,7 +40,11 @@ type Db = ReturnType<typeof freshDb>['db'];
 let seq = 0;
 function node(id: string): Node {
   seq += 1;
-  return { id, type: 'agent_task', config: {}, position: { x: seq, y: 0 } };
+  // Uncatalogued on purpose — see the same factory in `driver.test.ts`. Keeps
+  // the output contract `absent` so a well-formed run's `{}` payload is not
+  // failed against a catalog contract F13b/#456 would lower into a known type
+  // (which would record a spurious "missing declared output" diagnostic here).
+  return { id, type: 'test_activity', config: {}, position: { x: seq, y: 0 } };
 }
 
 /**

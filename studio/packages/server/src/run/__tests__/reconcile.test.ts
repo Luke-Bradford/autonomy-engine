@@ -39,7 +39,11 @@ type Db = ReturnType<typeof freshDb>['db'];
 let seq = 0;
 function node(id: string, extra: Partial<Node> = {}): Node {
   seq += 1;
-  return { id, type: 'agent_task', config: {}, position: { x: seq, y: 0 }, ...extra };
+  // Uncatalogued on purpose — see the same factory in `driver.test.ts`. Keeps the
+  // node's output contract `absent` so the stub's ad-hoc outputs (e.g. the
+  // `{ v: 'fresh' }` stale-attempt fixture below) pass through unfiltered, as they
+  // did before F13b/#456 lowered a catalog default into KNOWN types.
+  return { id, type: 'test_activity', config: {}, position: { x: seq, y: 0 }, ...extra };
 }
 function edge(from: string, to: string, on: EdgeOn = 'success'): Edge {
   return { id: `${from}->${to}:${on}`, from, to, on };
