@@ -64,6 +64,49 @@ describe('importEnvelope: pipeline', () => {
     expect(getPipelineVersion(db, importedVersion.id)).toEqual(importedVersion);
   });
 
+  // #473 — the SECOND, independent loss point. Even with the `containers`
+  // column fixed, `importPipelineEnvelope` rebuilt its `NewPipelineVersion`
+  // field-by-field and simply never copied `containers`, so an imported
+  // pipeline came back flat. `containers` is optional in `NewPipelineVersion`
+  // (`z.input`, because of the write-side `.default([])`), so the omission
+  // type-checked cleanly — nothing but this test can see it.
+  it('round-trip: containers survive export → import (#473)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Containered' });
+    const containers = [
+      { id: 'c1', kind: 'stage' as const, children: ['n1'], join: 'all' as const },
+      { id: 'c2', kind: 'loop' as const, children: [], maxRounds: 5, exitWhen: '${true}' },
+    ];
+    const sourceVersion = createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [{ id: 'n1', type: 'llm_call', config: {}, position: { x: 0, y: 0 } }],
+      edges: [],
+      containers,
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const envelope = exportPipeline(db, pipeline.id, 'owner-a');
+    const result = importEnvelope(db, 'owner-b', envelope);
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+    const importedVersion = result.versions[0]!;
+
+    // Assert the RE-READ, not the import response: the response is built from
+    // the in-memory input and so cannot witness a dropped write.
+    expect(getPipelineVersion(db, importedVersion.id)?.containers).toEqual(containers);
+
+    // The import spread (#473) means the exported `id` is now IN the object
+    // handed to `createPipelineVersion`, where the old field-by-field rebuild
+    // structurally excluded it. What keeps the module's "never reuses an
+    // exported id" invariant true is that `NewPipelineVersionSchema` omits the
+    // key and Zod strips it — a property no code NAMES, so it is pinned here
+    // rather than assumed. (`createdAt` is not asserted: the server stamps
+    // `Date.now()`, which can legitimately equal the source's in the same
+    // millisecond.)
+    expect(importedVersion.id).not.toBe(sourceVersion.id);
+  });
+
   // #1 F2a. `policy` round-trips for free — `NodeExportSchema` derives from
   // `NodeSchema` and both `stripNodeConnectionId` and `toDbNode` spread the rest
   // of the node — so no code here NAMES it. This pins that: a refactor

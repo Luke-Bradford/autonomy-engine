@@ -1,5 +1,9 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CATALOG_VERSION, type NewPipelineVersion } from '@autonomy-studio/shared';
+import { openDb } from '../../db/client.js';
 import { pipelineVersions } from '../../db/schema.js';
 import {
   createPipelineVersion,
@@ -60,6 +64,61 @@ describe('pipeline-versions repo', () => {
     expect(getLatestPipelineVersion(db, pipeline.id)).toEqual(v2);
   });
 
+  // #473 — the DATA-LOSS regression (full rationale in the 0006 migration).
+  //
+  // Note WHY the existing suite never caught this. It is not that these tests
+  // assert on `createPipelineVersion`'s return value — 'creates version 1'
+  // above genuinely re-reads via `getPipelineVersion`. It is that the shared
+  // fixture has NO containers, so the assertion compared `[]` to `[]` and the
+  // bug had nothing to destroy. A re-read only proves persistence if the thing
+  // under test is actually PRESENT in the fixture.
+  it('PERSISTS containers — a container survives the round-trip to storage (#473)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const containers = [
+      { id: 'c1', kind: 'stage' as const, children: ['node_1'], join: 'all' as const },
+      { id: 'c2', kind: 'loop' as const, children: [], maxRounds: 3, exitWhen: '${true}' },
+    ];
+
+    const created = createPipelineVersion(db, { ...buildVersionInput(pipeline.id), containers });
+
+    // The create RESPONSE is built from the in-memory input, so it looked
+    // correct even while the write dropped the field — assert the RE-READ.
+    expect(getPipelineVersion(db, created.id)?.containers).toEqual(containers);
+    expect(listPipelineVersions(db, pipeline.id)[0]?.containers).toEqual(containers);
+    expect(getLatestPipelineVersion(db, pipeline.id)?.containers).toEqual(containers);
+  });
+
+  it('PERSISTS containers across a real reopen — the user-visible #473 path', () => {
+    // The bug's actual symptom was "author a stage, reload the page, it's
+    // gone", so this is deliberately NOT run against `:memory:`: a real file,
+    // genuinely CLOSED, genuinely re-opened. Same idiom (and same reason) as
+    // the S1 restart test in `scheduled-wakeups.test.ts`. The in-memory case
+    // above already catches the dropped INSERT; this one proves the fix is
+    // DURABLE rather than an artefact of a single connection's session.
+    const dir = mkdtempSync(join(tmpdir(), 'studio-473-'));
+    const file = join(dir, 'containers.db');
+    const containers = [{ id: 'c1', kind: 'stage' as const, children: ['node_1'] }];
+    try {
+      const first = openDb(file);
+      const pipeline = createPipeline(first.db, { ownerId: 'local', name: 'P' });
+      const created = createPipelineVersion(first.db, {
+        ...buildVersionInput(pipeline.id),
+        containers,
+      });
+      first.sqlite.close(); // the reload
+
+      const reopened = openDb(file);
+      try {
+        expect(getPipelineVersion(reopened.db, created.id)?.containers).toEqual(containers);
+      } finally {
+        reopened.sqlite.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('has no update path — the module exports no updatePipelineVersion (immutability invariant)', () => {
     expect(
       (pipelineVersionsRepo as unknown as Record<string, unknown>)['updatePipelineVersion'],
@@ -79,6 +138,10 @@ describe('pipeline-versions repo', () => {
     const row = {
       id: 'pv_dup_1',
       ...input,
+      // `containers` is optional in `NewPipelineVersion` (`z.input`, via the
+      // write-side `.default([])`) but NOT NULL on the table, so a raw insert
+      // must name it — the repo path gets it from Zod's default instead.
+      containers: input.containers ?? [],
       catalogVersion: input.catalogVersion ?? CATALOG_VERSION,
       version: 1,
       createdAt: Date.now(),
