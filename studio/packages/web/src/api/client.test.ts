@@ -101,6 +101,19 @@ describe('apiFetch', () => {
     );
   });
 
+  it('falls back to a generic message when the error body violates the shared contract (#525)', async () => {
+    // A wrong-typed `message` (number, not string) is not a valid ApiErrorBody.
+    // The client parses through the shared schema, so it treats the body as
+    // absent and falls back to the generic message rather than trusting a
+    // blind cast — and never throws a second error while handling the first.
+    mockFetch(500, { error: 'internal_error', message: 42 });
+    const err = await apiFetch('/api/x').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(500);
+    expect((err as ApiError).message).toBe('request failed (500)');
+    expect((err as ApiError).body).toBeUndefined();
+  });
+
   it('falls back to a generic message when the error body is unparseable', async () => {
     vi.stubGlobal(
       'fetch',

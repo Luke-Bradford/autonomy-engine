@@ -1,6 +1,7 @@
 import { ZodError } from 'zod';
 import type { FastifyInstance } from 'fastify';
 import { ImportError } from '@autonomy-studio/shared';
+import type { ApiErrorBody } from '@autonomy-studio/shared';
 import { InvalidPipelineDocError, PipelineHasRunsError } from './repo/index.js';
 import { ISSUE_LIST_CAP } from './limits.js';
 
@@ -98,18 +99,18 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
             message: issue.message,
           })),
         ),
-      });
+      } satisfies ApiErrorBody);
       return;
     }
 
     if (error instanceof NotFoundError) {
-      reply.status(404).send({ error: 'not_found', message: error.message });
+      reply.status(404).send({ error: 'not_found', message: error.message } satisfies ApiErrorBody);
       return;
     }
 
     if (error instanceof PipelineHasRunsError) {
       request.log.warn({ err: error }, 'conflict: pipeline has run history');
-      reply.status(409).send({ error: 'conflict', message: error.message });
+      reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);
       return;
     }
 
@@ -118,7 +119,9 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     // build supports), or otherwise-refused import envelope. `error.message`
     // is already client-safe — see `ImportError`'s own doc comment.
     if (error instanceof ImportError) {
-      reply.status(400).send({ error: 'import_error', message: error.message });
+      reply
+        .status(400)
+        .send({ error: 'import_error', message: error.message } satisfies ApiErrorBody);
       return;
     }
 
@@ -126,9 +129,10 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     // for a doc that passes Zod but fails the engine's structural/`${}` rules.
     //
     // `issues` is OBJECT-shaped (`{ message }`), not `string[]`, because that
-    // is the pre-existing client contract: `web/src/api/client.ts`'s
-    // `ApiErrorBody` declares `issues?: Array<{ path?; message? }>`. Conforming
-    // to it (rather than forking a second shape) is the whole reason.
+    // is the shared client contract: `@autonomy-studio/shared`'s
+    // `ApiErrorBodySchema` declares `issues?: Array<{ path?; message? }>` (the
+    // `satisfies ApiErrorBody` on each send below enforces it). Conforming to
+    // it (rather than forking a second shape) is the whole reason.
     //
     // `message` is what the canvas actually renders today — `messageFromBody`
     // returns it before it ever looks at `issues` — so `issues` is currently
@@ -152,21 +156,24 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
         // `issues[]` here would not leave the body O(doc) via the message.
         message: error.message,
         ...capIssues(error.issues.map((message) => ({ message }))),
-      });
+      } satisfies ApiErrorBody);
       return;
     }
 
     if (error instanceof BadRequestError) {
-      reply.status(400).send({ error: 'bad_request', message: error.message });
+      reply
+        .status(400)
+        .send({ error: 'bad_request', message: error.message } satisfies ApiErrorBody);
       return;
     }
 
     const constraintCode = sqliteConstraintCode(error);
     if (constraintCode) {
       request.log.warn({ err: error, code: constraintCode }, 'constraint violation');
-      reply
-        .status(409)
-        .send({ error: 'conflict', message: 'The request conflicts with existing data.' });
+      reply.status(409).send({
+        error: 'conflict',
+        message: 'The request conflicts with existing data.',
+      } satisfies ApiErrorBody);
       return;
     }
 
@@ -186,7 +193,9 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     // still reaches the server log.
     if (hasNumericStatusCode(error)) {
       request.log.warn({ err: error }, 'malformed request');
-      reply.status(error.statusCode).send({ error: 'bad_request', message: 'Malformed request' });
+      reply
+        .status(error.statusCode)
+        .send({ error: 'bad_request', message: 'Malformed request' } satisfies ApiErrorBody);
       return;
     }
 
@@ -194,6 +203,6 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     reply.status(500).send({
       error: 'internal_error',
       message: 'An unexpected error occurred.',
-    });
+    } satisfies ApiErrorBody);
   });
 }
