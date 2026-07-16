@@ -1,7 +1,7 @@
 /**
- * Direct test of the shared synchronous run driver (`drive`) — the loop mechanic
- * that #499 extracted from the four (really five) hand-rolled copies in the
- * sibling engine tests.
+ * Direct test of the shared synchronous run driver (`driveRun`) — the loop
+ * mechanic that #499 extracted from the four (really five) hand-rolled copies in
+ * the sibling engine tests.
  *
  * WHY THIS FILE EXISTS. The objection to sharing a driver is that a bug in it
  * would hide across the whole suite — every reducer test folds the same wrong
@@ -12,9 +12,10 @@
  * thing that lets the sharing be safe.
  */
 import { describe, expect, it } from 'vitest';
-import type { EngineDoc } from '../../reduce.js';
+import type { EngineCommand, EngineEvent, RunState } from '../../types.js';
+import type { Engine, EngineDoc } from '../../reduce.js';
 import { createEngine } from '../../reduce.js';
-import { drive, simpleResolve } from './run-driver.js';
+import { driveRun, simpleResolve } from './run-driver.js';
 
 let seq = 0;
 function node(id: string): EngineDoc['nodes'][number] {
@@ -25,10 +26,10 @@ function edge(from: string, to: string): EngineDoc['edges'][number] {
   return { id: `${from}->${to}`, from, to, on: 'success' };
 }
 
-describe('drive — the shared run-driver mechanic', () => {
+describe('driveRun — the shared run-driver mechanic', () => {
   it('folds the exact event sequence for a linear two-node run', () => {
     const eng = createEngine({ nodes: [node('a'), node('b')], edges: [edge('a', 'b')] });
-    const { log, finish, finishes, order, diagnostics, state } = drive(eng, {
+    const { log, finish, finishes, order, diagnostics, state } = driveRun(eng, {
       resolve: simpleResolve({}),
     });
 
@@ -54,7 +55,7 @@ describe('drive — the shared run-driver mechanic', () => {
 
   it('resolves a node to failure via the simple resolver', () => {
     const eng = createEngine({ nodes: [node('x')], edges: [] });
-    const { finish, log } = drive(eng, { resolve: simpleResolve({ x: 'failure' }) });
+    const { finish, log } = driveRun(eng, { resolve: simpleResolve({ x: 'failure' }) });
     expect(finish?.outcome).toBe('failure');
     expect(log.map((e) => e.type)).toContain('node.failed');
   });
@@ -66,7 +67,7 @@ describe('drive — the shared run-driver mechanic', () => {
       nodes: [node('a'), node('b'), node('c')],
       edges: [edge('a', 'b'), edge('a', 'c')],
     });
-    const { order, finish } = drive(eng, { resolve: simpleResolve({}) });
+    const { order, finish } = driveRun(eng, { resolve: simpleResolve({}) });
     expect(order).toEqual(['a', 'b', 'c']);
     expect(finish?.outcome).toBe('success');
   });
@@ -74,7 +75,7 @@ describe('drive — the shared run-driver mechanic', () => {
   it('passes the runId through to the resolver', () => {
     const eng = createEngine({ nodes: [node('a')], edges: [] });
     const seen: string[] = [];
-    drive(eng, {
+    driveRun(eng, {
       runId: 'custom-run',
       resolve: (nodeId, attemptId, runId) => {
         seen.push(runId);
@@ -84,13 +85,37 @@ describe('drive — the shared run-driver mechanic', () => {
     expect(seen).toEqual(['custom-run']);
   });
 
-  it('throws if the driver does not converge (the guard is real)', () => {
-    // A resolver that never terminates a node would spin; assert the guard
-    // exists by feeding a resolver that re-opens work forever is impractical
-    // against the pure reducer, so instead pin the guard threshold indirectly:
-    // a healthy run of many nodes stays well under it and does NOT throw.
+  it('a healthy many-node run stays well under the guard threshold', () => {
     const nodes = Array.from({ length: 50 }, (_, i) => node(`n${i}`));
     const eng = createEngine({ nodes, edges: [] });
-    expect(() => drive(eng, { resolve: simpleResolve({}) })).not.toThrow();
+    expect(() => driveRun(eng, { resolve: simpleResolve({}) })).not.toThrow();
+  });
+
+  it('THROWS when the command queue never drains (the guard actually fires)', () => {
+    // A stub engine whose every reduce emits a fresh dispatchNode — the queue
+    // can never empty, so a real convergence backstop must throw rather than
+    // hang the process. This is the negative the 50-node test cannot reach: it
+    // exercises `guard > 2000` directly, not just "a healthy run stays under it".
+    const emptyState = { status: 'running' } as unknown as RunState;
+    const runawayEngine = {
+      seedState: () => emptyState,
+      reduce: (): { state: RunState; commands: EngineCommand[]; diagnostics: string[] } => ({
+        state: emptyState,
+        commands: [
+          { type: 'dispatchNode', nodeId: 'loop', attemptId: 'loop#0', preparedInput: {} },
+        ],
+        diagnostics: [],
+      }),
+      projectRunState: () => emptyState,
+      resume: () => ({ state: emptyState, commands: [], diagnostics: [] }),
+    } as unknown as Engine;
+    const neverTerminates = (nodeId: string, attemptId: string, runId: string): EngineEvent => ({
+      type: 'node.succeeded',
+      runId,
+      nodeId,
+      attemptId,
+      outputs: {},
+    });
+    expect(() => driveRun(runawayEngine, { resolve: neverTerminates })).toThrow(/did not converge/);
   });
 });

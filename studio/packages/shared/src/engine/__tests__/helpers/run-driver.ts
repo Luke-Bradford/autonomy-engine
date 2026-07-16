@@ -18,7 +18,7 @@
  * (a plain success/failure vs a rich `plan` with custom outputs/error). That is
  * the injected `resolve` seam — everything else is identical, so it lives here.
  * Callers keep their own thin `runAll` wrapper adapting their ergonomic signature
- * to `drive`, so no call site changed.
+ * to `driveRun`, so no call site changed.
  *
  * THE `finishes` COUNTER is load-bearing, not bookkeeping. It counts EVERY
  * `finishRun` the reducer emits rather than keeping only the first, and it is the
@@ -31,8 +31,9 @@
  * hangs the suite). It deliberately does NOT catch the shape-specific defects the
  * malformed-doc / stalled tests pin — those files document, beside their own
  * wrappers, why the guard cannot protect them (a synchronous spin inside one
- * `reduce`, a throw inside `reduce`, an outcome-assertion catch). `drive` NEVER
- * wraps `reduce` in try/catch: malformed-doc relies on a #487 throw propagating.
+ * `reduce`, a throw inside `reduce`, an outcome-assertion catch). `driveRun`
+ * NEVER wraps `reduce` in try/catch: malformed-doc relies on a #487 throw
+ * propagating.
  */
 import type { EngineCommand, EngineEvent } from '../../types.js';
 import type { Engine } from '../../reduce.js';
@@ -97,7 +98,7 @@ export function simpleResolve(
  * outcome event. A `startChild`/other command is skipped (these docs are
  * call-free by construction; a caller needing children drives its own).
  */
-export function drive(eng: Engine, opts: DriveOptions): DriveResult {
+export function driveRun(eng: Engine, opts: DriveOptions): DriveResult {
   const runId = opts.runId ?? DEFAULT_RUN_ID;
   const pipelineVersionId = opts.pipelineVersionId ?? DEFAULT_PV_ID;
   const params = opts.params ?? {};

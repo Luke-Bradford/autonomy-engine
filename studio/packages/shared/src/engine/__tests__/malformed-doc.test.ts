@@ -40,7 +40,7 @@ import { describe, expect, it } from 'vitest';
 import type { Node } from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
 import { validateDoc } from '../params.js';
-import { drive, simpleResolve } from './helpers/run-driver.js';
+import { driveRun, simpleResolve } from './helpers/run-driver.js';
 
 let seq = 0;
 function node(id: string): Node {
@@ -50,12 +50,12 @@ function node(id: string): Node {
 
 /**
  * Drive a run to completion, resolving each dispatched node from `outcomes`
- * (default: success). A thin adapter over the shared `drive` mechanic
+ * (default: success). A thin adapter over the shared `driveRun` mechanic
  * (`helpers/run-driver.ts`).
  *
  * Worth knowing before trusting it against THIS file's defects: the shared
  * `guard` catches NONE of the three pinned here. A #487 doc throws inside
- * `reduce` (and `drive` deliberately does not try/catch, so it propagates to the
+ * `reduce` (and `driveRun` deliberately does not try/catch, so it propagates to the
  * `expect(...).not.toThrow()` pins); a #488 doc drains the queue and simply exits
  * the loop, which is caught by the OUTCOME assertion (`finish?.outcome` is
  * `'success'` only if the child really ran — and since #491 a regression there
@@ -72,7 +72,7 @@ function runAll(
     outcomes?: Record<string, 'success' | 'failure'>;
   } = {},
 ) {
-  return drive(eng, { params: opts.params, resolve: simpleResolve(opts.outcomes) });
+  return driveRun(eng, { params: opts.params, resolve: simpleResolve(opts.outcomes) });
 }
 
 describe('#487 — a container child that is not a node id must not THROW', () => {
@@ -399,7 +399,7 @@ describe('#492 — a child shared by two containers must resolve to ONE owner, a
   // reducer by hand to give `n1` a real output and asserts `c2` projects none of
   // it — `${nodes.c2.output.x}` no longer resolves off an execution `c2` does not
   // own. Each dispatched child succeeds with `{ x: 1 }`, injected through the
-  // shared `drive`'s `resolve` seam (#499 folded the last hand-rolled copy here).
+  // shared `driveRun`'s `resolve` seam (#499 folded the last hand-rolled copy here).
   it('the non-first container projects NONE of the shared child outputs', () => {
     const eng = createEngine({
       nodes: [node('n1')],
@@ -409,7 +409,7 @@ describe('#492 — a child shared by two containers must resolve to ONE owner, a
         { id: 'c2', kind: 'stage', children: ['n1'] },
       ],
     } satisfies EngineDoc);
-    const { state } = drive(eng, {
+    const { state } = driveRun(eng, {
       resolve: (nodeId, attemptId, runId) => ({
         type: 'node.succeeded',
         runId,

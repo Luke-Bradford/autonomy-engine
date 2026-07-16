@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Edge, EdgeOn, EngineCommand, EngineEvent, FailureKind, Node } from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
-import { drive } from './helpers/run-driver.js';
+import { driveRun } from './helpers/run-driver.js';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -63,16 +63,16 @@ interface Plan {
 
 /**
  * Drive a whole run to quiescence, folding every command's resulting event
- * exactly as a P2d driver would. A thin adapter over the shared `drive` mechanic
- * (`helpers/run-driver.ts`); this file keeps its OWN resolver rather than the
+ * exactly as a P2d driver would. A thin adapter over the shared `driveRun`
+ * mechanic (`helpers/run-driver.ts`); this file keeps its OWN resolver rather than the
  * shared `simpleResolve`, because its per-node `plan` carries custom outputs and
  * error strings the simple form does not. Returns the shared `DriveResult` (its
  * `state` + full event `log` are what these tests read).
  */
 function runAll(eng: Engine, params: Record<string, unknown>, plan: Plan) {
-  return drive(eng, {
+  return driveRun(eng, {
     params,
-    // `succeeded`/`failed` hardcode the module `RUN`, which equals `drive`'s
+    // `succeeded`/`failed` hardcode the module `RUN`, which equals `driveRun`'s
     // default runId, so ignoring the passed `runId` here stays consistent.
     resolve: (nodeId, attemptId) => {
       const p = plan[nodeId] ?? { outcome: 'success' };

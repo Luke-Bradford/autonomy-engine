@@ -32,7 +32,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Edge, Node } from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
-import { drive, simpleResolve } from './helpers/run-driver.js';
+import { driveRun, simpleResolve } from './helpers/run-driver.js';
 
 let seq = 0;
 function node(id: string, config: Record<string, unknown> = {}): Node {
@@ -58,13 +58,13 @@ function engine(nodes: Node[], edges: Edge[] = []): Engine {
 
 /**
  * Drive a run to completion, resolving each dispatched node from `outcomes`
- * (default: success). A thin adapter over the shared `drive` mechanic
+ * (default: success). A thin adapter over the shared `driveRun` mechanic
  * (`helpers/run-driver.ts`) — see there for the queue-drain / `finishes` / guard
- * rationale. Real reducer, real events, no mocks; `RUN`/`PV` are `drive`'s
+ * rationale. Real reducer, real events, no mocks; `RUN`/`PV` are `driveRun`'s
  * defaults.
  */
 function runAll(eng: Engine, outcomes: Record<string, 'success' | 'failure'> = {}) {
-  return drive(eng, { resolve: simpleResolve(outcomes) });
+  return driveRun(eng, { resolve: simpleResolve(outcomes) });
 }
 
 describe('skipped edges (F1)', () => {

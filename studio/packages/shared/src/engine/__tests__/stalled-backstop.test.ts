@@ -29,7 +29,7 @@ import { describe, expect, it } from 'vitest';
 import type { EngineEvent, Node } from '../types.js';
 import type { NodePolicy } from '../../schemas/pipeline.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
-import { drive, simpleResolve } from './helpers/run-driver.js';
+import { driveRun, simpleResolve } from './helpers/run-driver.js';
 
 let seq = 0;
 function node(id: string, extra: Partial<Node> = {}): Node {
@@ -51,7 +51,7 @@ const STALL = 'run stalled';
 
 /**
  * Drive a run to completion, resolving each dispatched node from `outcomes`. A
- * thin adapter over the shared `drive` mechanic (`helpers/run-driver.ts`).
+ * thin adapter over the shared `driveRun` mechanic (`helpers/run-driver.ts`).
  *
  * The `guard` is decorative for THIS file's docs specifically: no doc here can
  * make it fire (every `finishRun` folds to a terminal run, after which `reduce`
@@ -59,13 +59,13 @@ const STALL = 'run stalled';
  * a regression is the assertions — a stall that fails to fire leaves
  * `finish === undefined`, which every positive pin asserts against.
  *
- * `finishes` (counted by `drive`, surfaced here) is load-bearing rather than
+ * `finishes` (counted by `driveRun`, surfaced here) is load-bearing rather than
  * bookkeeping: it is the ONLY thing that can catch the `else if` → `if`
  * regression, which the driver's pump would otherwise swallow silently (it folds
  * the first terminal and breaks). The `finishes === 1` pins below turn on it.
  */
 function runAll(eng: Engine, opts: { outcomes?: Record<string, 'success' | 'failure'> } = {}) {
-  return drive(eng, { resolve: simpleResolve(opts.outcomes) });
+  return driveRun(eng, { resolve: simpleResolve(opts.outcomes) });
 }
 
 const cycleDoc = (): EngineDoc =>
