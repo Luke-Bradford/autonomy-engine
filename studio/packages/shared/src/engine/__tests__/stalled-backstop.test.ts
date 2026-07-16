@@ -45,7 +45,7 @@ const started: EngineEvent = {
   params: {},
 };
 
-/** The stall diagnostic's stable prefix — the operator's only signal. */
+/** The stall diagnostic's stable prefix. Nothing in production reads it yet. */
 const STALL = 'run stalled';
 
 /**
@@ -166,6 +166,37 @@ describe('#491 — a run that can never finish is terminalized, not wedged', () 
     const stall = diagnostics.find((d) => d.startsWith(STALL));
     expect(stall).toContain('n1');
     expect(stall).toContain('n2');
+  });
+
+  it('reports a GHOST child inside an active container without throwing (#487 parity)', () => {
+    // The stuck set reads `state.nodes[ch]` for the children of every ACTIVE
+    // container, and it reads them UNGUARDED. That read is only sound because
+    // `containerById` is built from the #487-FILTERED containers (`kept =
+    // children.filter(ch => nodeById.has(ch))`), so a ghost id is gone before
+    // the reporter ever sees it — the same reason `stepContainers` may index
+    // `state.nodes[ch]!`. Pinned HERE because the guarantee lives in a
+    // constructor this file never touches: were the filter narrowed to the
+    // dispatch path alone, this reporter would throw a TypeError on exactly the
+    // unvalidated pre-#444 rows the backstop exists to terminalize, converting a
+    // wedged run into a crashed reduce.
+    const eng = createEngine({
+      nodes: [node('n1'), node('n2')],
+      edges: [
+        { id: 'e1', from: 'n1', to: 'n2', on: 'success' },
+        { id: 'e2', from: 'n2', to: 'n1', on: 'success' },
+      ],
+      containers: [{ id: 'c1', kind: 'stage', children: ['ghost', 'n1', 'n2'] }],
+    } as unknown as EngineDoc);
+    const { finish, diagnostics } = runAll(eng);
+    expect(finish).toEqual({ outcome: 'failure', reason: 'stalled' });
+    const stall = diagnostics.find((d) => d.startsWith(STALL))!;
+    // The REAL children are still named...
+    expect(stall).toContain('n1');
+    expect(stall).toContain('n2');
+    // ...and the ghost is not: it is treated as if it were not authored (#480's
+    // posture), so it cannot be "never-terminal" — it has no state to terminalize.
+    const named = /never-terminal: \{([^}]*)\}/.exec(stall)![1]!.split(', ');
+    expect(named).not.toContain('ghost');
   });
 
   it('names a child listed by TWO active containers exactly ONCE (#492 shape)', () => {
