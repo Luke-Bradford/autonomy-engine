@@ -19,7 +19,13 @@ import {
   listPendingWakeups,
   settleWakeup,
 } from '../../repo/scheduled-wakeups.js';
-import { buildEngine, startRun, type DocResolver, type RetryAlarms } from '../driver.js';
+import {
+  buildEngine,
+  startRun,
+  type DocResolver,
+  type Executor,
+  type RetryAlarms,
+} from '../driver.js';
 import { appendEngineEvent, loadEngineEvents } from '../events.js';
 import { ReconcileInvariantError, reconcileOnBoot, refuseToExecute } from '../reconcile.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
@@ -948,6 +954,55 @@ describe('reconcileOnBoot — a run held on a node retry', () => {
     expect(recovery.dispatched).toEqual([]);
     expect(getRun(db, run.id)!.status).toBe('interrupted');
   });
+
+  /**
+   * An executor that throws ON CALL — the shape `refuseToExecute` uses, and the
+   * only way to fault `pump` itself: every `makeStubExecutor` plan resolves to
+   * EVENTS (`node.failed` is an outcome the reducer folds, not a fault).
+   */
+  function throwOnPerform(err: Error): Executor {
+    return {
+      perform(): AsyncIterable<EngineEvent> {
+        throw err;
+      },
+    };
+  }
+
+  it('reports a run as BOTH `held` and `failed` when the fault lands AFTER the hold', async () => {
+    // `failed`'s docblock CLAIMS this ("NOT exclusive of held/rearmed — those are
+    // pushed BEFORE the loop"), which is prevention-log #25's exact shape: the
+    // rule a comment argues for is the one with no test behind it.
+    //
+    // It is a REAL path, and one #479's catch newly created: `recoverHeld` pushes
+    // `held` at the top of `reconcileOne`, then this run falls through to `pump`
+    // (it has live work in `b`). A throw there is caught by the per-run boundary
+    // and filed under `failed` — with `held` already pushed and NOT unwound.
+    const { db } = freshDb();
+    const alarms = realAlarms(db);
+    const run = await seedHeldPlusInFlight(db, alarms);
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: throwOnPerform(new Error('executor died mid-resume')),
+      alarms,
+    });
+
+    // BOTH, and neither is wrong: the hold was RECOVERED (durably — the alarm is
+    // armed and `node.retryScheduled` is appended) before the fault, so un-pushing
+    // `held` would erase a committed fact. The run genuinely is held AND faulted.
+    expect(report.held).toEqual([run.id]);
+    expect(report.failed).toEqual([{ runId: run.id, reason: 'executor died mid-resume' }]);
+
+    // Still exclusive of the VERDICT buckets — `resumed` is pushed at the loop
+    // tail, which the throw never reached. This is the line that makes the
+    // docblock's distinction (verdicts vs work-already-committed) testable.
+    expect(report.resumed).toEqual([]);
+    expect(report.interrupted).toEqual([]);
+
+    // The hold's durable half survived the fault, which is WHY `held` stands.
+    expect(listPendingWakeups(db)).toHaveLength(1);
+  });
 });
 
 describe('reconcileOnBoot — #491: a run wedged by a PRE-GATE doc drains at boot', () => {
@@ -1163,6 +1218,15 @@ describe("reconcileOnBoot — #479 the fault boundary does NOT swallow this loop
     // absorbed into `failed` by the per-run catch.
     // Throws synchronously ON CALL, not on iteration — so a plain call is the
     // whole contract; there is no stream to drain.
-    expect(() => refuseToExecute.perform({} as never, 'run-1')).toThrow(ReconcileInvariantError);
+    //
+    // A REAL `dispatchNode` command, not a cast: this asserts the guard refuses
+    // the exact shape that reaches it (a `finishRun` whose fold emits a dispatch),
+    // and `{} as never` would let the command type drift out from under the test.
+    expect(() =>
+      refuseToExecute.perform(
+        { type: 'dispatchNode', nodeId: 'a', attemptId: 'a#0', preparedInput: {} },
+        'run-1',
+      ),
+    ).toThrow(ReconcileInvariantError);
   });
 });
