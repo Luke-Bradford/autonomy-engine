@@ -1,8 +1,17 @@
-import type { ArmWakeupInput, Engine, EngineEvent, Run, RunState } from '@autonomy-studio/shared';
+import {
+  terminalStatusOf,
+  type ArmWakeupInput,
+  type Engine,
+  type EngineEvent,
+  type PipelineVersion,
+  type Run,
+  type RunState,
+} from '@autonomy-studio/shared';
 import { listRuns } from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
 import {
   buildEngine,
+  DocUnresolvableError,
   pump,
   retryArmInput,
   syncRunLifecycle,
@@ -165,13 +174,17 @@ export interface ReconcileReport {
   /** Runs that got `run.resumed` + `node.retryRequested` and were re-driven. */
   resumed: string[];
   /**
-   * Runs frozen `interrupted`, for either of TWO reasons — the bucket has two
+   * Runs frozen `interrupted`, for one of THREE reasons — the bucket has three
    * producers and they are not the same story:
    *   - a non-idempotent activity was in flight at crash time
    *     (`non_idempotent_in_flight:<nodes>`); or
    *   - a held node's retry alarm was SPENT, so nothing can ever advance the run
    *     (`retry_alarm_spent:<nodes>` — see `recoverHeld`). Nothing was in flight
-   *     here; the alarm came and went.
+   *     here; the alarm came and went; or
+   *   - the run's pipeline version is GONE (`doc_unresolvable:<pvId>` — #508, see
+   *     `terminalizeUnresolvable`). Versions are immutable, so it never returns;
+   *     the run can never be driven again, so it is frozen rather than left to
+   *     re-`failed` on every boot forever.
    * The `run.interrupted.reason` distinguishes them; an operator reading a boot
    * report needs to know which.
    */
@@ -221,12 +234,15 @@ export interface ReconcileReport {
    *     A run in both is reporting the truth: the hold was recovered, the resume
    *     was not. Un-pushing it would erase a committed fact.
    *
-   * NON-GOAL: what happens to the faulted run ITSELF. It is left `running` — so
-   * a permanent fault re-`failed`s on every boot and holds a slot, and a
-   * transient one waits for a restart nothing schedules. Deliberate: a catch
-   * cannot tell the two apart, and terminalizing a healthy run on a passing
-   * error is fail-open in the other direction. Both halves are #508, which is
-   * where the reasoning lives — do not restate it here.
+   * SCOPE: only TRANSIENT faults reach here now. The faulted run is left
+   * `running`, to be retried on the next boot — a transient fault (a DB blip, an
+   * executor throw) is expected to clear, and terminalizing a healthy run on a
+   * passing error is fail-open in the other direction. The PERMANENT half — a
+   * pipeline version that is GONE — is #508: `resolveDoc` throws the typed
+   * `DocUnresolvableError`, and `reconcileOne` terminalizes it `interrupted`
+   * (`doc_unresolvable:<pvId>`) BEFORE it can reach this catch, so it no longer
+   * re-`failed`s forever. A NON-`DocUnresolvableError` throw is, by the resolver's
+   * contract, transient — hence lands here.
    */
   failed: Array<{ runId: string; reason: string }>;
 }
@@ -380,9 +396,12 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
 
   for (const run of listRuns(deps.db, { status: 'running' })) {
     // #479 — the per-run fault boundary. Boot reconcile IS the recovery path, so
-    // it is the worst place for an all-or-nothing failure mode: without this,
-    // ONE unresolvable pipeline version threw out of the whole function and every
-    // run after it in the scan was never resumed, interrupted, or re-synced.
+    // it is the worst place for an all-or-nothing failure mode: without this, ONE
+    // run whose reconcile threw (originally an unresolvable version — now that
+    // permanent case is terminalized by #508 before it reaches here, but a
+    // transient DB fault or an executor throw from `pump` still can) threw out of
+    // the whole function and every run after it in the scan was never resumed,
+    // interrupted, or re-synced.
     //
     // Wraps the WHOLE body, not just the `resolveDoc` call that motivated the
     // ticket: the property wanted is "a fault degrades THAT run", and a catch
@@ -413,6 +432,47 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
 }
 
 /**
+ * #508 — terminalize a run whose pipeline version can NEVER be resolved.
+ *
+ * DOC-FREE by necessity: the version is gone, so there is no engine to fold
+ * through — the interrupt is recorded as a durable FACT in the log and the row is
+ * synced from `terminalStatusOf` (#443's SSOT for the fact an event records),
+ * never from a projection. This is the same primitive `terminalizeInterrupted`'s
+ * `foldErr → patchRow` branch reaches when a drive's doc turns out unresolvable
+ * (`driver.ts`) — inlined here because the call-site precondition is STRONGER:
+ * the `terminalFactFromLog` fast path above has PROVEN the log non-terminal, so
+ * this needs none of that function's re-load / terminal re-check / try-to-fold
+ * dance (which would only re-call the resolver to have it throw again into its
+ * own catch). It deliberately does NOT reuse `recoverHeld`'s `appendAndFold`
+ * either: that path HAS an engine and records fold-diagnostics (#497); with no
+ * doc there is no fold, and so no diagnostics to record.
+ *
+ * The reason follows the `interrupted` bucket's `<label>:<detail>` convention
+ * (`non_idempotent_in_flight:` / `retry_alarm_spent:`).
+ */
+function terminalizeUnresolvable(deps: ReconcileDeps, run: Run): void {
+  const interrupted: EngineEvent = {
+    type: 'run.interrupted',
+    runId: run.id,
+    reason: `doc_unresolvable:${run.pipelineVersionId}`,
+  };
+  appendEngineEvent(deps.db, interrupted, deps.bus);
+  // `terminalStatusOf`, not a `?? 'interrupted'` default: if `run.interrupted`
+  // ever drops out of `TERMINAL_RUN_EVENT_TYPES` (#443's silent-drift mode — the
+  // one direction the type system does NOT catch), fail LOUD via the sentinel
+  // rather than paper over it. The event is already durable, so the next boot's
+  // `terminalFactFromLog` would miss it too and the run would re-reconcile — an
+  // invariant violation, exactly what `ReconcileInvariantError` exists to surface.
+  const status = terminalStatusOf(interrupted);
+  if (status === null) {
+    throw new ReconcileInvariantError(
+      'run.interrupted must record a terminal fact — TERMINAL_RUN_EVENT_TYPES drift (#443)',
+    );
+  }
+  syncRunLifecycle(deps.db, run.id, status);
+}
+
+/**
  * One run's reconcile — the unit #479's fault boundary wraps. Extracted from the
  * loop so that boundary is a `try` around a call rather than a `try` wrapping
  * 130 lines; each of the loop body's `continue`s is a `return` here.
@@ -440,7 +500,37 @@ async function reconcileOne(deps: ReconcileDeps, report: ReconcileReport, run: R
     return;
   }
 
-  const engine = buildEngine(deps.resolveDoc(run.pipelineVersionId));
+  // #508 — the doc is resolved HERE, and a PERMANENT resolve failure is
+  // terminalized rather than left to re-`failed` on every boot forever. A
+  // `DocUnresolvableError` means the immutable version is gone and never returns
+  // (unlike a transient DB blip), so the run can never be driven again: freeze it
+  // `interrupted`/needs-attention, freeing its concurrency slot. Any OTHER throw
+  // is transient — rethrow it to #479's per-run catch, which files it under
+  // `failed` and leaves the run `running` for the next boot (terminalizing a
+  // healthy run on a passing blip is fail-open the other way). This scopes to the
+  // `resolveDoc` call ONLY: the version being GONE (#508). A resolvable-but-
+  // otherwise-unbuildable version is a different, out-of-scope class and still
+  // falls through to `failed`. The verdict is derived from the resolver's TYPE
+  // (#491's derive-don't-guess), not inferred from a bare catch.
+  //
+  // ORDERING: this sits ABOVE the `pending` resync below (which needs the doc to
+  // project). So a `running` row with NO `run.started` AND a gone version — both
+  // conditions unreachable via the real callers — terminalizes `interrupted`
+  // here rather than resyncing to `pending`. Harmless: both are truthful terminal
+  // verdicts for a dead run, and the two `run.started`-less pins use a RESOLVABLE
+  // doc, so they still exercise the `pending` branch.
+  let doc: PipelineVersion;
+  try {
+    doc = deps.resolveDoc(run.pipelineVersionId);
+  } catch (err) {
+    if (err instanceof DocUnresolvableError) {
+      terminalizeUnresolvable(deps, run);
+      report.interrupted.push(run.id);
+      return;
+    }
+    throw err;
+  }
+  const engine = buildEngine(doc);
   const state = engine.projectRunState(events);
 
   // Defensive, and unreachable today: a `running` row whose log has no

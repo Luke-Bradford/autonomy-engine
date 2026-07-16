@@ -6,7 +6,6 @@ import { openDb } from './db/client.js';
 import { appMeta } from './db/schema.js';
 import { resolveMasterKey } from './secrets/secrets.js';
 import { createSupervisor } from './workers/process-supervisor.js';
-import { getPipelineVersion } from './repo/pipeline-versions.js';
 import { getWakeupByKey } from './repo/scheduled-wakeups.js';
 import { reconcileOnBoot } from './run/reconcile.js';
 import { createExecutor } from './run/executor.js';
@@ -17,6 +16,7 @@ import { createScheduler } from './scheduler/scheduler.js';
 import { createAlarmClock, type AlarmClock } from './scheduler/alarms.js';
 import { createRetryAlarmHandler } from './scheduler/retry-alarm.js';
 import { createConnectorRegistry } from './connectors/registry.js';
+import { makeDocResolver } from './run/driver.js';
 import type { DocResolver, RetryAlarms } from './run/driver.js';
 import { registerAuthHook } from './auth/principal.js';
 import { registerErrorHandler } from './errors.js';
@@ -121,13 +121,11 @@ export async function buildApp(opts?: BuildAppOptions) {
   // pipeline version) + the real connector-facing executor. P3b completes the
   // adapter set (`http`, `anthropic_api`, `openai_api`, `ollama`, `agent_cli`);
   // a Connection kind with no adapter still fails its node loudly at dispatch.
-  const resolveDoc: DocResolver = (pipelineVersionId) => {
-    const pv = getPipelineVersion(db, pipelineVersionId);
-    if (pv === null) {
-      throw new Error(`pipeline version '${pipelineVersionId}' not found`);
-    }
-    return pv;
-  };
+  // #508 — the resolver throws `DocUnresolvableError` (not a plain `Error`) when
+  // the immutable version is gone, so the boot reconciler can tell a PERMANENT
+  // fault (terminalize) from a transient one (retry next boot). The contract +
+  // its test live with `makeDocResolver` in `driver.ts`.
+  const resolveDoc: DocResolver = makeDocResolver(db);
   const executor = createExecutor({
     db,
     masterKey: masterKeyResolution.key,

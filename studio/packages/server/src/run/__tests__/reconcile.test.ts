@@ -21,6 +21,8 @@ import {
 } from '../../repo/scheduled-wakeups.js';
 import {
   buildEngine,
+  DocUnresolvableError,
+  makeDocResolver,
   startRun,
   type DocResolver,
   type Executor,
@@ -74,15 +76,22 @@ function resolveDocFor(db: Db): DocResolver {
 }
 
 /**
- * `resolveDocFor` with ONE version made unresolvable — the shape every
- * doc-can't-resolve test needs (#443's terminal case, #479's non-terminal one).
- * A wrapper, not a copy: the base resolver's behaviour for every OTHER id is the
- * half these tests must not accidentally vary.
+ * `resolveDocFor` with ONE version made to throw — the shape every
+ * doc-can't-resolve test needs (#443's terminal case, #479's TRANSIENT one,
+ * #508's PERMANENT one). A wrapper, not a copy: the base resolver's behaviour for
+ * every OTHER id is the half these tests must not accidentally vary.
+ *
+ * The DEFAULT `err` is a TRANSIENT fault (a DB blip), not a deleted version:
+ * since #508 the deleted-version case is `DocUnresolvableError` and terminalizes
+ * `interrupted`, so a test wanting the "faulted run stays `running`/`failed`"
+ * behaviour (#479's fault boundary) must throw something that is NOT a
+ * `DocUnresolvableError`. The permanent case passes `new DocUnresolvableError(…)`
+ * explicitly.
  */
 function resolveDocExcept(
   db: Db,
   deadPvId: string,
-  err: Error = new Error('version deleted'),
+  err: Error = new Error('db read timed out'),
 ): DocResolver {
   const base = resolveDocFor(db);
   return (id) => {
@@ -1095,12 +1104,18 @@ describe('reconcileOnBoot — #479 a per-run fault degrades THAT run, not the lo
    * #443 hoisted `terminalFactFromLog` ABOVE `buildEngine`, so a FINISHED run
    * never depends on its doc. This is the same fail-safety property one layer
    * out, for the case that hoist does not cover: a NON-terminal run still
-   * reaches `buildEngine`, and an unresolvable doc threw straight out of
+   * reaches `buildEngine`, and a resolver fault threw straight out of
    * `reconcileOnBoot` — aborting the whole boot reconcile and stranding every
    * run after the bad one in the scan. Boot reconcile IS the recovery path; it
    * is the worst place for an all-or-nothing failure mode.
+   *
+   * The fault here is TRANSIENT (a DB blip): since #508 a PERMANENTLY
+   * unresolvable version (`DocUnresolvableError`) terminalizes `interrupted`
+   * rather than landing in `failed`, so it is no longer the fault that pins this
+   * boundary — see the `#508` block below. The boundary itself is fault-class
+   * agnostic (the catch wraps the whole body), so a transient fault proves it.
    */
-  /** Two crashed non-terminal runs; `bad`'s doc will not resolve. */
+  /** Two crashed non-terminal runs; `bad`'s resolver throws a TRANSIENT fault. */
   async function seedBadThenGood(db: Db) {
     // Both crash mid-dispatch (`run.started` + a hung node), so each gets PAST
     // the terminal fast path and reaches `buildEngine` — the throw site.
@@ -1119,7 +1134,7 @@ describe('reconcileOnBoot — #479 a per-run fault degrades THAT run, not the lo
     return { bad, good };
   }
 
-  it('a non-terminal run whose DOC will not resolve does not strand the runs after it', async () => {
+  it('a non-terminal run whose resolver throws transiently does not strand the runs after it', async () => {
     const { db } = freshDb();
     const { bad, good } = await seedBadThenGood(db);
 
@@ -1149,7 +1164,7 @@ describe('reconcileOnBoot — #479 a per-run fault degrades THAT run, not the lo
     // The reason travels with the run id: `ReconcileReport` is the ONLY channel
     // this fault has (`index.ts` logs the report verbatim), so a bare id list
     // would drop the one fact an operator needs.
-    expect(report.failed).toEqual([{ runId: bad.id, reason: 'version deleted' }]);
+    expect(report.failed).toEqual([{ runId: bad.id, reason: 'db read timed out' }]);
 
     // A fault is not a verdict. Each verdict bucket is pushed at a `continue` or
     // at the loop tail — i.e. only once that run's reconcile SUCCEEDED — so a
@@ -1164,11 +1179,11 @@ describe('reconcileOnBoot — #479 a per-run fault degrades THAT run, not the lo
       expect(bucket).not.toContain(bad.id);
     }
 
-    // The documented NON-GOAL, pinned so it cannot change silently: the faulted
-    // run is left `running`. A caught throw cannot tell a PERMANENT fault (the
-    // version is gone) from a TRANSIENT one, and terminalizing a healthy run on
-    // a transient throw is fail-open in the other direction. See `failed`'s
-    // docblock and the follow-up ticket it names.
+    // Pinned so it cannot change silently: a run faulted by a TRANSIENT throw is
+    // left `running`, to be retried on the next boot. Terminalizing a healthy run
+    // on a passing DB blip would be fail-open in the other direction. The
+    // PERMANENT counterpart (`DocUnresolvableError`) does terminalize — that is
+    // #508, pinned in its own block below; here the two must stay distinct.
     expect(getRun(db, bad.id)!.status).toBe('running');
   });
 });
@@ -1228,5 +1243,114 @@ describe("reconcileOnBoot — #479 the fault boundary does NOT swallow this loop
         'run-1',
       ),
     ).toThrow(ReconcileInvariantError);
+  });
+});
+
+describe('reconcileOnBoot — #508 a permanently unresolvable doc terminalizes, not re-fails forever', () => {
+  /**
+   * A `running` run whose immutable pipeline version is GONE can never be driven
+   * again — versions never come back (DB `RAISE(ABORT)` on any mutation). Pre-#508
+   * the resolver threw a plain Error into #479's per-run catch → `failed`, leaving
+   * the row `running`, so it re-`failed` on EVERY boot and held its concurrency
+   * slot forever. Now the resolver throws `DocUnresolvableError`, which the
+   * reconciler reads as PERMANENT and terminalizes `interrupted` (needs-attention):
+   * the slot is freed and the reason is a durable fact in the log + boot report.
+   * This is the derive-a-verdict shape #491 established, not an exception guess —
+   * the resolver's TYPE is the verdict.
+   */
+  it('terminalizes the run `interrupted` with a `doc_unresolvable:<pvId>` reason', async () => {
+    const { db } = freshDb();
+    // A crashed, non-terminal run (`run.started` + a hung node): it gets PAST the
+    // terminal fast path and reaches `buildEngine` — the resolve (throw) site.
+    const run = await seedCrashedRun(db, [node('a')], [], {
+      nodes: { a: { hang: true, idempotent: true } },
+    });
+
+    const report = await reconcileOnBoot({
+      db,
+      alarms: stubAlarms(),
+      resolveDoc: resolveDocExcept(
+        db,
+        run.pipelineVersionId,
+        new DocUnresolvableError('version deleted'),
+      ),
+      executor: makeStubExecutor(),
+    });
+
+    // Terminalized, not failed: the slot is freed and the run is visibly over.
+    expect(report.interrupted).toEqual([run.id]);
+    expect(report.failed).toEqual([]);
+    for (const bucket of [report.resumed, report.finalized, report.resynced, report.deferred]) {
+      expect(bucket).not.toContain(run.id);
+    }
+
+    const frozen = getRun(db, run.id)!;
+    expect(frozen.status).toBe('interrupted');
+    expect(frozen.finishedAt).not.toBeNull();
+
+    // The verdict is a durable, doc-free FACT in the log (not just a row patch),
+    // so the P6 monitor and a replay both see WHY the run ended.
+    const interrupted = loadEngineEvents(db, run.id).find((e) => e.type === 'run.interrupted');
+    expect(interrupted).toMatchObject({
+      type: 'run.interrupted',
+      reason: `doc_unresolvable:${run.pipelineVersionId}`,
+    });
+  });
+
+  it('is idempotent across a torn write: a second boot resyncs from the log, appending nothing', async () => {
+    const { db } = freshDb();
+    const run = await seedCrashedRun(db, [node('a')], [], {
+      nodes: { a: { hang: true, idempotent: true } },
+    });
+    const resolveDoc = resolveDocExcept(
+      db,
+      run.pipelineVersionId,
+      new DocUnresolvableError('version deleted'),
+    );
+
+    await reconcileOnBoot({ db, alarms: stubAlarms(), resolveDoc, executor: makeStubExecutor() });
+    const afterFirst = loadEngineEvents(db, run.id).length;
+    expect(types(loadEngineEvents(db, run.id))).toContain('run.interrupted');
+
+    // Simulate a crash BETWEEN the durable append and the lifecycle sync: the
+    // `run.interrupted` fact is in the log but the row is stuck `running`, so the
+    // next boot re-scans it. The `terminalFactFromLog` fast path (hoisted above
+    // `buildEngine`, #443) reads the terminal fact and resyncs — WITHOUT reaching
+    // the now-unresolvable doc and WITHOUT appending a second `run.interrupted`.
+    updateRun(db, run.id, { status: 'running', finishedAt: null });
+
+    const report = await reconcileOnBoot({
+      db,
+      alarms: stubAlarms(),
+      resolveDoc,
+      executor: makeStubExecutor(),
+    });
+
+    expect(report.resynced).toEqual([run.id]);
+    expect(report.interrupted).toEqual([]);
+    expect(report.failed).toEqual([]);
+    expect(getRun(db, run.id)!.status).toBe('interrupted');
+    expect(loadEngineEvents(db, run.id).length).toBe(afterFirst);
+  });
+});
+
+describe('makeDocResolver — the production resolver classifies a gone version as permanent', () => {
+  /**
+   * The half that actually closes the leak: `index.ts`'s real resolver must throw
+   * `DocUnresolvableError` (not a plain Error) when the version is gone, or the
+   * reconciler's classification above never fires in production. Pinned directly —
+   * a mutation reverting it to `throw new Error(...)` would otherwise survive with
+   * green reconciler tests (the mutation-survives-a-comment shape, prevention-log
+   * #25). One production `DocResolver` exists (`index.ts`, fanned out to
+   * executor/retry-alarm/reconcile), so this single pin covers every consumer.
+   */
+  it('throws DocUnresolvableError for a missing version and returns the row for a present one', () => {
+    const { db } = freshDb();
+    const resolve = makeDocResolver(db);
+
+    expect(() => resolve('pv_does_not_exist')).toThrow(DocUnresolvableError);
+
+    const pvId = seedVersion(db, [node('a')]);
+    expect(resolve(pvId).id).toBe(pvId);
   });
 });
