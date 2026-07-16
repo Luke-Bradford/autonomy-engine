@@ -26,9 +26,10 @@
  * retrying run — the exact opposite of what F2b landed.
  */
 import { describe, expect, it } from 'vitest';
-import type { EngineCommand, EngineEvent, Node } from '../types.js';
+import type { EngineEvent, Node } from '../types.js';
 import type { NodePolicy } from '../../schemas/pipeline.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
+import { driveRun, simpleResolve } from './helpers/run-driver.js';
 
 let seq = 0;
 function node(id: string, extra: Partial<Node> = {}): Node {
@@ -49,81 +50,22 @@ const started: EngineEvent = {
 const STALL = 'run stalled';
 
 /**
- * Drive a run to completion, resolving each dispatched node from `outcomes`.
- * Same command-QUEUE shape as `malformed-doc.test.ts`'s and `reduce.test.ts`'s
- * `runAll`, and the `guard` is decorative here for the same reason it is there:
- * no doc in this file can make it fire (every `finishRun` folds to a terminal
- * run, after which `reduce` returns early, and each node yields exactly two
- * events). What actually catches a regression is the assertions — a stall that
- * fails to fire leaves `finish === undefined`, which every positive pin asserts
- * against. It is kept for parity with its three siblings.
+ * Drive a run to completion, resolving each dispatched node from `outcomes`. A
+ * thin adapter over the shared `driveRun` mechanic (`helpers/run-driver.ts`).
  *
- * `finishes` counts terminals rather than keeping only the first, and that is
- * load-bearing rather than bookkeeping: it is the ONLY thing that can catch the
- * `else if` → `if` regression, which the driver's pump would otherwise swallow
- * silently (it folds the first terminal and breaks).
+ * The `guard` is decorative for THIS file's docs specifically: no doc here can
+ * make it fire (every `finishRun` folds to a terminal run, after which `reduce`
+ * returns early, and each node yields exactly two events). What actually catches
+ * a regression is the assertions — a stall that fails to fire leaves
+ * `finish === undefined`, which every positive pin asserts against.
+ *
+ * `finishes` (counted by `driveRun`, surfaced here) is load-bearing rather than
+ * bookkeeping: it is the ONLY thing that can catch the `else if` → `if`
+ * regression, which the driver's pump would otherwise swallow silently (it folds
+ * the first terminal and breaks). The `finishes === 1` pins below turn on it.
  */
-function runAll(
-  eng: Engine,
-  opts: { outcomes?: Record<string, 'success' | 'failure'> } = {},
-): {
-  finish: { outcome: 'success' | 'failure'; reason?: string } | undefined;
-  finishes: number;
-  diagnostics: string[];
-} {
-  const { outcomes = {} } = opts;
-  let state = eng.seedState();
-  const pending: EngineCommand[] = [];
-  const diagnostics: string[] = [];
-  let finish: { outcome: 'success' | 'failure'; reason?: string } | undefined;
-  let finishes = 0;
-
-  const apply = (ev: EngineEvent): void => {
-    const r = eng.reduce(state, ev);
-    state = r.state;
-    diagnostics.push(...r.diagnostics);
-    pending.push(...r.commands);
-  };
-
-  apply(started);
-  let guard = 0;
-  while (pending.length) {
-    if (guard++ > 2000) throw new Error('driver did not converge');
-    const c = pending.shift()!;
-    if (c.type === 'finishRun') {
-      finishes += 1;
-      if (finish === undefined) finish = { outcome: c.outcome, reason: c.reason };
-      apply({ type: 'run.finished', runId: RUN, outcome: c.outcome, reason: c.reason });
-      continue;
-    }
-    if (c.type !== 'dispatchNode') continue;
-    apply({
-      type: 'node.dispatched',
-      runId: RUN,
-      nodeId: c.nodeId,
-      attemptId: c.attemptId,
-      idempotent: true,
-    });
-    apply(
-      (outcomes[c.nodeId] ?? 'success') === 'failure'
-        ? {
-            type: 'node.failed',
-            runId: RUN,
-            nodeId: c.nodeId,
-            attemptId: c.attemptId,
-            error: 'boom',
-            kind: 'permanent',
-          }
-        : {
-            type: 'node.succeeded',
-            runId: RUN,
-            nodeId: c.nodeId,
-            attemptId: c.attemptId,
-            outputs: {},
-          },
-    );
-  }
-  return { finish, finishes, diagnostics };
+function runAll(eng: Engine, opts: { outcomes?: Record<string, 'success' | 'failure'> } = {}) {
+  return driveRun(eng, { resolve: simpleResolve(opts.outcomes) });
 }
 
 const cycleDoc = (): EngineDoc =>

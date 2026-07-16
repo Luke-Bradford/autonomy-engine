@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Edge, EdgeOn, EngineCommand, EngineEvent, FailureKind, Node } from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
+import { driveRun } from './helpers/run-driver.js';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -62,39 +63,24 @@ interface Plan {
 
 /**
  * Drive a whole run to quiescence, folding every command's resulting event
- * exactly as a P2d driver would (node.dispatched → planned outcome, finishRun →
- * run.finished). Returns the final projected state + the full event log.
+ * exactly as a P2d driver would. A thin adapter over the shared `driveRun`
+ * mechanic (`helpers/run-driver.ts`); this file keeps its OWN resolver rather than the
+ * shared `simpleResolve`, because its per-node `plan` carries custom outputs and
+ * error strings the simple form does not. Returns the shared `DriveResult` (its
+ * `state` + full event `log` are what these tests read).
  */
 function runAll(eng: Engine, params: Record<string, unknown>, plan: Plan) {
-  let state = eng.seedState();
-  const log: EngineEvent[] = [];
-  const pending: EngineCommand[] = [];
-  const apply = (ev: EngineEvent) => {
-    const r = eng.reduce(state, ev);
-    state = r.state;
-    log.push(ev);
-    for (const c of r.commands) pending.push(c);
-  };
-  apply(started(params));
-  let guard = 0;
-  while (pending.length) {
-    if (guard++ > 2000) throw new Error('driver did not converge');
-    const c = pending.shift()!;
-    if (c.type === 'finishRun') {
-      apply({ type: 'run.finished', runId: RUN, outcome: c.outcome, reason: c.reason });
-      continue;
-    }
-    // These P2b docs are container-/call-free, so `startChild` never occurs.
-    if (c.type !== 'dispatchNode') continue;
-    apply(dispatched(c.nodeId, c.attemptId));
-    const p = plan[c.nodeId] ?? { outcome: 'success' };
-    apply(
-      p.outcome === 'success'
-        ? succeeded(c.nodeId, c.attemptId, p.outputs ?? {})
-        : failed(c.nodeId, c.attemptId, p.error ?? 'boom'),
-    );
-  }
-  return { state, log };
+  return driveRun(eng, {
+    params,
+    // `succeeded`/`failed` hardcode the module `RUN`, which equals `driveRun`'s
+    // default runId, so ignoring the passed `runId` here stays consistent.
+    resolve: (nodeId, attemptId) => {
+      const p = plan[nodeId] ?? { outcome: 'success' };
+      return p.outcome === 'success'
+        ? succeeded(nodeId, attemptId, p.outputs ?? {})
+        : failed(nodeId, attemptId, p.error ?? 'boom');
+    },
+  });
 }
 
 function dispatchIds(cmds: EngineCommand[]): string[] {
