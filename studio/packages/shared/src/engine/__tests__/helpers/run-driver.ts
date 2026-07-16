@@ -35,9 +35,8 @@
  * NEVER wraps `reduce` in try/catch: malformed-doc relies on a #487 throw
  * propagating.
  */
-import type { EngineCommand, EngineEvent } from '../../types.js';
+import type { EngineCommand, EngineEvent, RunState } from '../../types.js';
 import type { Engine } from '../../reduce.js';
-import type { RunState } from '../../types.js';
 
 /** The default run/version identifiers every engine test uses. */
 const DEFAULT_RUN_ID = 'r1';
