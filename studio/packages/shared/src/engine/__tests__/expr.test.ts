@@ -426,6 +426,20 @@ describe('parseExpr — MAX_EXPR_DEPTH bounds expression NESTING (#6 #453)', () 
     expect(() => parseExpr(nestIndex(MAX_EXPR_DEPTH + 1))).toThrow(SubstituteError);
   });
 
+  // Interleave the two recursive edges in ONE path, so depth must accumulate
+  // ACROSS both a call-arg descent and a ref-index descent — not just within
+  // each in isolation. `add(0, a[add(0, a[…])])`, one level per wrap.
+  function mixedNest(k: number): string {
+    let s = '1';
+    for (let i = 0; i < k; i += 1) s = i % 2 === 0 ? `add(0,${s})` : `a[${s}]`;
+    return s;
+  }
+
+  it('bounds a MIXED call/index nesting by the same cap', () => {
+    expect(() => parseExpr(mixedNest(MAX_EXPR_DEPTH))).not.toThrow();
+    expect(() => parseExpr(mixedNest(MAX_EXPR_DEPTH + 1))).toThrow(SubstituteError);
+  });
+
   it('refuses a pathologically deep body with a clean error, not a stack overflow', () => {
     // ~2000 levels overflowed the native stack before this cap. Now it is
     // refused far earlier, deterministically, as an ordinary malformed body.
