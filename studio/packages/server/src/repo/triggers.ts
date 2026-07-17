@@ -1,20 +1,61 @@
 import { and, eq } from 'drizzle-orm';
 import {
   NewTriggerSchema,
+  RecurrenceSchema,
   TriggerSchema,
+  recurrenceToCron,
   type NewTrigger,
+  type Recurrence,
   type Trigger,
 } from '@autonomy-studio/shared';
 import { triggers } from '../db/schema.js';
 import { newId } from './ids.js';
 import type { Db } from './types.js';
 
+/**
+ * #5 S5b-1 — the recurrence↔schedule derivation, the SINGLE write-path authority
+ * for the two staying consistent. When a recurrence is set, `schedule` is a pure
+ * DERIVED cache of `recurrenceToCron(recurrence)` (never co-authored), so the
+ * firing chain's cron string (`isSchedulable`/`nextOccurrence`/`schedule_changed`)
+ * can never drift from the authored recurrence. When recurrence is null,
+ * `schedule` is the raw-cron escape-hatch as before. Applied by BOTH createTrigger
+ * and updateTrigger — and thus import, which routes through createTrigger.
+ */
+function deriveSchedule(recurrence: Recurrence | null, rawSchedule: string | null): string | null {
+  return recurrence !== null ? recurrenceToCron(recurrence) : rawSchedule;
+}
+
+/**
+ * The effective stored `schedule` for an UPDATE, given the effective recurrence
+ * and the patch. Mirrors `deriveSchedule` but honours PATCH semantics for the
+ * raw-cron half: `schedule` has no default, so an OMITTED `patch.schedule` is
+ * `undefined` (keep existing) while an explicit `null` clears it.
+ *   - recurrence in effect        → derived cron (authoritative).
+ *   - recurrence CLEARED this write → drop the stale derived cron; follow the
+ *     patch's raw `schedule` (or null) — never the old derived string.
+ *   - recurrence untouched & null   → the normal raw-cron path.
+ */
+function resolveUpdateSchedule(
+  existing: Trigger,
+  patch: Partial<NewTrigger>,
+  recurrence: Recurrence | null,
+): string | null {
+  if (recurrence !== null) return recurrenceToCron(recurrence);
+  if (patch.recurrence === null) return patch.schedule ?? null;
+  return patch.schedule !== undefined ? patch.schedule : existing.schedule;
+}
+
 export function createTrigger(db: Db, input: NewTrigger): Trigger {
   const parsed = NewTriggerSchema.parse(input);
+  // `recurrence` is `.nullable().optional()` on the write schema — an omitted
+  // (undefined) recurrence is "none" (null), the raw-cron path.
+  const recurrence = parsed.recurrence ?? null;
   const now = Date.now();
   const row: Trigger = {
     id: newId('trig'),
     ...parsed,
+    recurrence,
+    schedule: deriveSchedule(recurrence, parsed.schedule),
     createdAt: now,
     updatedAt: now,
   };
@@ -79,7 +120,23 @@ export function listParsedTriggers(
 export function updateTrigger(db: Db, id: string, patch: Partial<NewTrigger>): Trigger | null {
   const existing = getTrigger(db, id);
   if (!existing) return null;
-  const updated = TriggerSchema.parse({ ...existing, ...patch, updatedAt: Date.now() });
+  // The write field's 3-state on `patch.recurrence`: `undefined` = untouched
+  // (keep existing), `null` = cleared this write, object = set. Normalize through
+  // `RecurrenceSchema` (idempotent) so the type carries the defaulted `interval`
+  // — `Partial<NewTrigger>` is the `z.input` shape (interval optional), but
+  // `recurrenceToCron` needs the resolved `Recurrence`.
+  const recurrenceRaw = patch.recurrence !== undefined ? patch.recurrence : existing.recurrence;
+  const recurrence: Recurrence | null =
+    recurrenceRaw === null || recurrenceRaw === undefined
+      ? null
+      : RecurrenceSchema.parse(recurrenceRaw);
+  const updated = TriggerSchema.parse({
+    ...existing,
+    ...patch,
+    recurrence,
+    schedule: resolveUpdateSchedule(existing, patch, recurrence),
+    updatedAt: Date.now(),
+  });
   db.update(triggers).set(updated).where(eq(triggers.id, id)).run();
   return updated;
 }

@@ -529,6 +529,38 @@ describe('importEnvelope: trigger', () => {
     expect(result.attention).toHaveLength(2);
   });
 
+  it('#5 S5b-1: round-trips a recurrence through export→import (recurrence + derived cron preserved)', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db, 'owner-a');
+    const trigger = createTrigger(db, {
+      ownerId: 'owner-a',
+      name: 'Weekly',
+      pipelineVersionId: version.id,
+      params: {},
+      mode: 'schedule',
+      schedule: null,
+      recurrence: { frequency: 'week', schedule: { weekDays: [1, 5], hours: [8] } },
+      webhook: null,
+      concurrency: { policy: 'skip_if_running' },
+      runWindows: null,
+      enabled: true,
+    });
+
+    const envelope = exportTrigger(db, trigger.id, 'owner-a');
+    const result = importEnvelope(db, 'owner-b', envelope);
+    if (result.kind !== 'trigger') throw new Error('unreachable');
+
+    // The recurrence survives the round-trip (the #473 SECOND loss point — a
+    // builder that dropped the field would fail HERE, not at the schema⇔column
+    // seam); the derived cron is re-derived on import via `createTrigger`.
+    expect(result.trigger.recurrence).toEqual({
+      frequency: 'week',
+      interval: 1,
+      schedule: { weekDays: [1, 5], hours: [8] },
+    });
+    expect(result.trigger.schedule).toBe('0 8 * * 1,5');
+  });
+
   it('forces enabled: false on import, even when the envelope had enabled: true (unbound trigger must arrive inert)', () => {
     const { db } = freshDb();
     const version = setupPipelineVersion(db, 'owner-a');

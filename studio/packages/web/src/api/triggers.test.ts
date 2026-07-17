@@ -19,6 +19,7 @@ const sample = {
   webhook: null,
   concurrency: { policy: 'skip_if_running' as const },
   runWindows: null,
+  recurrence: null,
   enabled: true,
   createdAt: 1,
   updatedAt: 1,

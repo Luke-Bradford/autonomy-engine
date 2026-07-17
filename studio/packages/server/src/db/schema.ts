@@ -14,6 +14,7 @@ import {
   type Node,
   type Output,
   type Param,
+  type Recurrence,
   type RunDiagnosticPhase,
   type RunStatus,
   type RunWindow,
@@ -141,6 +142,10 @@ export const triggers = sqliteTable(
       .notNull()
       .$type<TriggerMode>(),
     schedule: text('schedule'),
+    // #5 S5b-1: the ADF recurrence object (`{frequency, interval, schedule?}`).
+    // Nullable JSON (the `run_windows` precedent) — null for a raw-cron /
+    // non-schedule trigger. `schedule` is the DERIVED cron cache of it.
+    recurrence: text('recurrence', { mode: 'json' }).$type<Recurrence | null>(),
     webhook: text('webhook', { mode: 'json' }).$type<WebhookConfig | null>(),
     concurrency: text('concurrency', { mode: 'json' }).notNull().$type<Concurrency>(),
     runWindows: text('run_windows', { mode: 'json' }).$type<RunWindow[] | null>(),
