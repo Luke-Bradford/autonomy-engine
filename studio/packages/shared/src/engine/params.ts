@@ -14,6 +14,7 @@ import type { Expr, ExprSegment, TemplateMode } from './expr.js';
 import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
 import { getActivity } from '../catalog/registry.js';
 import {
+  FAIL_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
   IF_BRANCH_TRUE,
   IF_BRANCH_FALSE,
@@ -1402,6 +1403,8 @@ export function validateDoc(
     if (node.type === IF_ACTIVITY_TYPE) validateIfCondition(node, errors);
     // #4 A2 — a `switch`'s `on` + `cases` shape (save-time half).
     if (node.type === SWITCH_ACTIVITY_TYPE) validateSwitchConfig(node, errors);
+    // #4 A7 — a `fail`'s `message` presence (save-time half).
+    if (node.type === FAIL_ACTIVITY_TYPE) validateFailConfig(node, errors);
   }
 
   // Node-only forward reachability + the container index, for the back-edge
@@ -1686,6 +1689,27 @@ function validateSwitchConfig(node: Node, errors: string[]): void {
       continue;
     }
     seen.add(c);
+  }
+}
+
+/**
+ * #4 A7 — the SAVE-TIME half of the `fail` `message` rule the reducer's
+ * `evalFailMessage` enforces at run time (both halves, or the rule is decorative).
+ * Advisory like every rule here (canvas badge + the #444 write gate). A `fail`
+ * needs a non-empty `message` string; its `${}` refs are already existence+grammar
+ * checked doc-wide by `validateRefs`, and the message is an EMBEDDED template (not
+ * whole-value-gated) the same way a `switch`'s `on` is — so this only pins the
+ * presence, matching the reducer's raw-`message` check (which fails a message-less
+ * fail LOUD as `invalid_event`).
+ */
+function validateFailConfig(node: Node, errors: string[]): void {
+  const where = `node.${node.id}.message`;
+  const raw = node.config['message'];
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    errors.push(
+      `${where}: a fail needs a non-empty message describing the failure ` +
+        `(e.g. 'validation rejected the input')`,
+    );
   }
 }
 

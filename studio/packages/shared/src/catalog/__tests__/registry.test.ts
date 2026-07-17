@@ -3,11 +3,12 @@ import { catalog, getActivity } from '../registry.js';
 
 describe('activity catalog', () => {
   it('exposes the MVP activity types', () => {
-    // `if` (#4 A1) is the first CONTROL activity; `switch` (#4 A2) the second —
-    // both engine-evaluated, catalogued so the palette/executor-guard/version
-    // know them.
+    // `if` (#4 A1) is the first CONTROL activity, `switch` (#4 A2) the second,
+    // `fail` (#4 A7) the third — all engine-evaluated, catalogued so the
+    // palette/executor-guard/version know them.
     expect([...catalog.keys()].sort()).toEqual([
       'agent_task',
+      'fail',
       'http_request',
       'if',
       'llm_call',
@@ -73,7 +74,7 @@ describe('activity definition contract (#1 D6)', () => {
     // (the executor's `CONTROL_NOT_DISPATCHABLE` guard is now reachable),
     // everything else is `execution`. An execution activity binds >=1 connection;
     // a control activity binds NONE (it never touches a connector).
-    for (const type of ['if', 'switch']) {
+    for (const type of ['if', 'switch', 'fail']) {
       expect(getActivity(type)!.kind).toBe('control');
       expect(getActivity(type)!.connectionKinds).toEqual([]);
       expect(getActivity(type)!.outputs).toEqual([]);
@@ -92,6 +93,15 @@ describe('activity definition contract (#1 D6)', () => {
     ).toBe(true);
     // Missing the required `on`.
     expect(sw.configSchema.safeParse({ cases: ['a'] }).success).toBe(false);
+  });
+
+  it('fail is a control activity exposing a message configSchema for the palette (#4 A7)', () => {
+    const fail = getActivity('fail')!;
+    expect(fail.category).toBe('control');
+    expect(fail.configSchema.safeParse({ message: 'rejected the input' }).success).toBe(true);
+    // Missing / empty message is refused by the palette schema.
+    expect(fail.configSchema.safeParse({}).success).toBe(false);
+    expect(fail.configSchema.safeParse({ message: '' }).success).toBe(false);
   });
 
   it('categorises the MVP set per spec #4 (agent_task is an AI activity, not its own class)', () => {

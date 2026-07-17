@@ -23,5 +23,10 @@
 // as `if` (3): a pre-A2 build does not route `switch`, treats its named-case
 // branch edges as inert, and SILENTLY strands everything downstream — so a doc
 // using `switch` must refuse to import there.
-export const CATALOG_VERSION = 4;
+// 5 (#4 A7): the `fail` control activity is a NEW catalog TYPE, same rationale as
+// `if`/`switch`: a pre-A7 build does not route `fail` — it treats the fail node as
+// an uncatalogued type (the executor fails it `UNKNOWN_ACTIVITY` rather than
+// force-failing with the authored message), so a doc using `fail` must refuse to
+// import there. Stamping 5 makes an older build reject it.
+export const CATALOG_VERSION = 5;
 export const SCHEMA_VERSION = 1;
