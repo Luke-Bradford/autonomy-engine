@@ -4,3 +4,4 @@ export * from './types.js';
 export * from './registry.js';
 export * from './lower.js';
 export * from './llm-config.js';
+export * from './fs-activity-config.js';

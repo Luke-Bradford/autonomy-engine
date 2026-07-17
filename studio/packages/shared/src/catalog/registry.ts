@@ -18,6 +18,14 @@ import {
   WEBHOOK_ACTIVITY_TYPE,
 } from './types.js';
 import { llmCallConfigSchema } from './llm-config.js';
+import {
+  fileCopyConfigSchema,
+  fileDeleteConfigSchema,
+  fileListConfigSchema,
+  fileMoveConfigSchema,
+  fileReadConfigSchema,
+  fileWriteConfigSchema,
+} from './fs-activity-config.js';
 
 /**
  * P3 MVP activity catalog. Each entry is STATIC and pure (see
@@ -305,7 +313,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     idempotent: true,
     connectionKinds: ['fs'],
     outputs: [out('content', 'string'), out('path', 'string')],
-    configSchema: z.object({ path: z.string().min(1) }),
+    configSchema: fileReadConfigSchema,
   },
   {
     // #4 A11 — the `file_write` EXECUTION activity. Same `fs` connector as
@@ -323,7 +331,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     idempotent: false,
     connectionKinds: ['fs'],
     outputs: [out('bytesWritten', 'number'), out('path', 'string')],
-    configSchema: z.object({ path: z.string().min(1), content: z.string() }),
+    configSchema: fileWriteConfigSchema,
   },
   {
     // #4 A12 — `file_copy`. Copies `source` → `dest`, both confined to the `fs`
@@ -340,7 +348,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     idempotent: false,
     connectionKinds: ['fs'],
     outputs: [out('bytesWritten', 'number'), out('source', 'string'), out('dest', 'string')],
-    configSchema: z.object({ source: z.string().min(1), dest: z.string().min(1) }),
+    configSchema: fileCopyConfigSchema,
   },
   {
     // #4 A12 — `file_move`. Atomic same-filesystem `rename(source, dest)`, both
@@ -356,7 +364,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     idempotent: false,
     connectionKinds: ['fs'],
     outputs: [out('source', 'string'), out('dest', 'string')],
-    configSchema: z.object({ source: z.string().min(1), dest: z.string().min(1) }),
+    configSchema: fileMoveConfigSchema,
   },
   {
     // #4 A12 — `file_delete`. `unlink`s a single regular file confined to the
@@ -371,7 +379,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     idempotent: false,
     connectionKinds: ['fs'],
     outputs: [out('path', 'string')],
-    configSchema: z.object({ path: z.string().min(1) }),
+    configSchema: fileDeleteConfigSchema,
   },
   {
     // #4 A12 — `file_list`. Lists the entries of a directory confined to the
@@ -389,7 +397,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     idempotent: true,
     connectionKinds: ['fs'],
     outputs: [out('entries', 'json'), out('path', 'string')],
-    configSchema: z.object({ path: z.string().min(1) }),
+    configSchema: fileListConfigSchema,
   },
 ];
 

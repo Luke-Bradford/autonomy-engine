@@ -312,6 +312,15 @@ describe('A13 — freshness: at-least-once + stale-delivery checks', () => {
 
     expect(listPendingWakeups(db)).toHaveLength(0);
     expect(loadEngineEvents(db, run.id).map((e) => e.type)).not.toContain('externalWait.expired');
+    // #580 — the orphan correlation row is SETTLED, not left `pending` forever. The
+    // run went terminal while `w` was parked, so no callback can ever complete it and
+    // no `externalWait.expired` is appended (the log is authoritative); the guarded
+    // settle in the `run_already_terminal` branch still cleans the row up to `expired`.
+    const orphan = getExternalWaitByTokenHash(
+      db,
+      hashExternalWaitToken(sign({ runId: run.id, nodeId: 'w', attemptId: 'w#0' })),
+    );
+    expect(orphan!.status).toBe('expired');
   });
 
   it('SUPPRESSES an expiry whose node already COMPLETED, never downgrading the row', async () => {

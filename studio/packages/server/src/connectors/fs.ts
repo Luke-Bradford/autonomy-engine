@@ -9,6 +9,12 @@ import {
   FILE_MOVE_ACTIVITY_TYPE,
   FILE_READ_ACTIVITY_TYPE,
   FILE_WRITE_ACTIVITY_TYPE,
+  fileCopyConfigSchema,
+  fileDeleteConfigSchema,
+  fileListConfigSchema,
+  fileMoveConfigSchema,
+  fileReadConfigSchema,
+  fileWriteConfigSchema,
 } from '@autonomy-studio/shared';
 import type {
   ActivityContext,
@@ -118,13 +124,10 @@ const fsConnectionConfigSchema = z.object({
   maxEntries: z.number().int().positive().optional(),
 });
 
-/** The per-activity settings, read from the node's prepared (substituted) `input`. */
-const fileReadInputSchema = z.object({ path: z.string().min(1) });
-const fileWriteInputSchema = z.object({ path: z.string().min(1), content: z.string() });
-const fileCopyInputSchema = z.object({ source: z.string().min(1), dest: z.string().min(1) });
-const fileMoveInputSchema = z.object({ source: z.string().min(1), dest: z.string().min(1) });
-const fileDeleteInputSchema = z.object({ path: z.string().min(1) });
-const fileListInputSchema = z.object({ path: z.string().min(1) });
+// The per-activity input shapes are the SHARED `file*ConfigSchema` (#578): the
+// SAME schema the catalog `configSchema` declares (`shared/catalog/fs-activity-
+// config.ts`), imported here so the palette metadata and this live-request guard
+// can never drift. `input` here is the node's prepared (substituted) value.
 
 /** Build a terminal `failed` event. */
 function failed(kind: ConnectorErrorKind, error: string): ActivityEvent {
@@ -376,7 +379,7 @@ async function atomicReplace(
 
 async function doWrite(
   cfg: z.infer<typeof fsConnectionConfigSchema>,
-  input: z.infer<typeof fileWriteInputSchema>,
+  input: z.infer<typeof fileWriteConfigSchema>,
   signal: AbortSignal,
   tmpSuffix: string,
 ): Promise<ActivityEvent> {
@@ -404,7 +407,7 @@ function direntType(d: Dirent): 'file' | 'directory' | 'symlink' | 'other' {
 
 async function doCopy(
   cfg: z.infer<typeof fsConnectionConfigSchema>,
-  input: z.infer<typeof fileCopyInputSchema>,
+  input: z.infer<typeof fileCopyConfigSchema>,
   signal: AbortSignal,
   tmpSuffix: string,
 ): Promise<ActivityEvent> {
@@ -453,7 +456,7 @@ async function doCopy(
 
 async function doMove(
   cfg: z.infer<typeof fsConnectionConfigSchema>,
-  input: z.infer<typeof fileMoveInputSchema>,
+  input: z.infer<typeof fileMoveConfigSchema>,
   signal: AbortSignal,
 ): Promise<ActivityEvent> {
   const resolved = await resolveSourceDest(cfg, input.source, input.dest, signal);
@@ -592,7 +595,7 @@ export const fsAdapter: ConnectorAdapter = {
     }
 
     if (ctx.activityType === FILE_READ_ACTIVITY_TYPE) {
-      const input = fileReadInputSchema.safeParse(ctx.input);
+      const input = fileReadConfigSchema.safeParse(ctx.input);
       if (!input.success) {
         yield failed('permanent', `invalid file_read activity config: ${input.error.message}`);
         return;
@@ -602,7 +605,7 @@ export const fsAdapter: ConnectorAdapter = {
     }
 
     if (ctx.activityType === FILE_WRITE_ACTIVITY_TYPE) {
-      const input = fileWriteInputSchema.safeParse(ctx.input);
+      const input = fileWriteConfigSchema.safeParse(ctx.input);
       if (!input.success) {
         yield failed('permanent', `invalid file_write activity config: ${input.error.message}`);
         return;
@@ -612,7 +615,7 @@ export const fsAdapter: ConnectorAdapter = {
     }
 
     if (ctx.activityType === FILE_COPY_ACTIVITY_TYPE) {
-      const input = fileCopyInputSchema.safeParse(ctx.input);
+      const input = fileCopyConfigSchema.safeParse(ctx.input);
       if (!input.success) {
         yield failed('permanent', `invalid file_copy activity config: ${input.error.message}`);
         return;
@@ -623,7 +626,7 @@ export const fsAdapter: ConnectorAdapter = {
     }
 
     if (ctx.activityType === FILE_MOVE_ACTIVITY_TYPE) {
-      const input = fileMoveInputSchema.safeParse(ctx.input);
+      const input = fileMoveConfigSchema.safeParse(ctx.input);
       if (!input.success) {
         yield failed('permanent', `invalid file_move activity config: ${input.error.message}`);
         return;
@@ -633,7 +636,7 @@ export const fsAdapter: ConnectorAdapter = {
     }
 
     if (ctx.activityType === FILE_DELETE_ACTIVITY_TYPE) {
-      const input = fileDeleteInputSchema.safeParse(ctx.input);
+      const input = fileDeleteConfigSchema.safeParse(ctx.input);
       if (!input.success) {
         yield failed('permanent', `invalid file_delete activity config: ${input.error.message}`);
         return;
@@ -643,7 +646,7 @@ export const fsAdapter: ConnectorAdapter = {
     }
 
     if (ctx.activityType === FILE_LIST_ACTIVITY_TYPE) {
-      const input = fileListInputSchema.safeParse(ctx.input);
+      const input = fileListConfigSchema.safeParse(ctx.input);
       if (!input.success) {
         yield failed('permanent', `invalid file_list activity config: ${input.error.message}`);
         return;
