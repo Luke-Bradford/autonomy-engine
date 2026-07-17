@@ -466,6 +466,20 @@ export const ContainerSchema = z.object({
   /** Hard cap on loop rounds — reaching it without `exitWhen` caps the loop. */
   maxRounds: z.number().int().positive().optional(),
   /**
+   * #4 A17 — whole-loop WALL-CLOCK bound in seconds, a durable-alarm safety net
+   * ALONGSIDE the `maxRounds` count. When the timeout elapses while the loop is
+   * still `active` (any round), the container FAILS with reason `timeout` and
+   * fires its outer failure edge — so an `until`-loop gated on a human/external
+   * event that never arrives is time-bounded, not merely round-bounded. Armed
+   * ONCE at container-enter (consumes the #5 S1 alarm, like `wait`), so it caps
+   * the loop's TOTAL wall-clock, not each round. Loop only (a `stage`/`foreach`
+   * does not re-round, so a wall-clock bound is meaningless there — refused by
+   * `validateDoc`). A STATIC number (unlike `wait`'s `${}` `seconds`): it is
+   * resolved at enter, before the loop body has run, so a `${}` over child
+   * outputs could not resolve anyway.
+   */
+  timeout: z.number().int().positive().optional(),
+  /**
    * `${}` whole-value expression resolving to an ARRAY over the container's OUTER
    * scope (params/trigger/upstream outputs — NOT its own children, which have not
    * run when it is evaluated). Foreach only: the body runs once per element with

@@ -229,6 +229,24 @@ describe('ContainerSchema', () => {
     expect(() => ContainerSchema.parse({ id: 'x', kind: 'fan', children: [] })).toThrow();
   });
 
+  it('round-trips a loop container with a wall-clock timeout (#4 A17)', () => {
+    const c = {
+      id: 'lp',
+      kind: 'loop',
+      children: ['w', 'check'],
+      exitWhen: '${nodes.check.output.done}',
+      timeout: 3600,
+    };
+    expect(ContainerSchema.parse(c)).toEqual(c);
+  });
+
+  it('rejects a non-positive / non-integer timeout (#4 A17)', () => {
+    const base = { id: 'lp', kind: 'loop', children: ['w'], exitWhen: '${x}' };
+    expect(() => ContainerSchema.parse({ ...base, timeout: 0 })).toThrow();
+    expect(() => ContainerSchema.parse({ ...base, timeout: -5 })).toThrow();
+    expect(() => ContainerSchema.parse({ ...base, timeout: 1.5 })).toThrow();
+  });
+
   it('rejects a non-positive maxRounds', () => {
     expect(() =>
       ContainerSchema.parse({ id: 'x', kind: 'loop', children: [], maxRounds: 0 }),

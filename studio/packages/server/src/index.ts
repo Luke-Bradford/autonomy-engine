@@ -19,6 +19,7 @@ import { createAlarmClock, type AlarmClock } from './scheduler/alarms.js';
 import { createRetryAlarmHandler } from './scheduler/retry-alarm.js';
 import { createWaitAlarmHandler } from './scheduler/wait-alarm.js';
 import { createExternalWaitAlarmHandler } from './scheduler/external-wait-alarm.js';
+import { createContainerTimeoutAlarmHandler } from './scheduler/container-timeout-alarm.js';
 import { createScheduleTickHandler } from './scheduler/schedule-tick.js';
 import { createConnectorRegistry } from './connectors/registry.js';
 import { makeDocResolver } from './run/driver.js';
@@ -284,6 +285,10 @@ export async function buildApp(opts?: BuildAppOptions) {
       // #4 A13 — the `webhook` EXPIRY handler (`node_external_wait`); S1's third
       // node-level consumer, appending `externalWait.expired` when no callback arrives.
       createExternalWaitAlarmHandler(driverBoundary),
+      // #4 A17 — the `loop` wall-clock timeout handler (`container_timeout`); S1's
+      // FIRST container-level consumer, appending `container.timedOut` when a loop
+      // outruns its wall-clock bound.
+      createContainerTimeoutAlarmHandler(driverBoundary),
       scheduleTickHandler,
     ],
     bus: runEventBus,

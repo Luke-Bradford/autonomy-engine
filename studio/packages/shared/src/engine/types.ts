@@ -274,9 +274,19 @@ export const ContainerRunStateSchema = z.object({
   round: z.number().int().nonnegative(),
   outputs: z.record(z.string(), z.unknown()),
   /** Why a container terminated (`capped`, `child_failed`, `exitWhen_error`,
-   * `no_progress`, `no_exit_condition`) — observability only; unset while
-   * active/pending or on a clean exit. */
+   * `no_progress`, `no_exit_condition`, `timeout`) — observability only; unset
+   * while active/pending or on a clean exit. */
   reason: z.string().optional(),
+  /**
+   * #4 A17 — LOOP only: the epoch-ms instant this loop's wall-clock `timeout`
+   * fires, stamped by the `container.timeoutScheduled` fold once the driver armed
+   * the alarm. Serves as an operator/audit fact AND the crash-recovery marker:
+   * an `active` loop with a `timeout` configured but `timeoutDueAt` UNSET has not
+   * yet had its alarm armed (the arm was lost in the enter→arm crash window), so
+   * `onResumed` re-emits `scheduleContainerTimeout` for it (idempotent). Unset for
+   * a loop with no `timeout`, and for stage/foreach.
+   */
+  timeoutDueAt: z.number().int().optional(),
   /**
    * FOREACH only (#4 A4): the resolved `items` array, snapshotted at enter so the
    * per-item `${item}` binding and the `results` index are stable for the whole
@@ -827,6 +837,47 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     previousAttemptId: z.string(),
   }),
   z.object({
+    /**
+     * #4 A17 — the durable fact that a `loop` container's WALL-CLOCK timeout has
+     * been armed on S1's alarm. Appended by the DRIVER once the alarm row exists
+     * (`armContainerTimeout`), so the log records WHEN the loop times out. The
+     * CONTAINER twin of `timer.waitScheduled`: it consumes the same A5 primitive
+     * (durable alarm + arm-before-append), but where a wait PARKS a node, this
+     * one parks NOTHING — the loop stays `active` and its children keep running.
+     * Its fold only STAMPS `timeoutDueAt` onto the container's run-state, which
+     * serves two purposes: an operator/audit fact ("when does this loop time
+     * out"), and the crash-recovery marker `onResumed` reads to tell an
+     * already-armed loop from one whose arm was lost in the enter→arm window.
+     *
+     * `dueAt` is a STORED fact (epoch ms), stamped from the ARMED ROW's `dueAt`,
+     * never recomputed at fold time — replay-deterministic, exactly as
+     * `timer.waitScheduled.dueAt` is. The arm precedes this append, so a loop that
+     * records this event always has a live alarm.
+     */
+    type: z.literal('container.timeoutScheduled'),
+    runId: z.string(),
+    containerId: z.string(),
+    dueAt: z.number().int(),
+  }),
+  z.object({
+    /**
+     * #4 A17 — a `loop` container's wall-clock timeout ELAPSED while it was still
+     * `active`. Appended by the alarm clock's `container_timeout` handler when S1's
+     * row comes due; folding it NEUTRALIZES the loop's still-live children (so a
+     * late child result cannot re-animate a node under an exited container) then
+     * FAILS the container (`active` → `failure`, reason `timeout`) and `settle`s,
+     * so the container's outer failure edge routes. The CONTAINER twin of
+     * `timer.due`, but where `timer.due` SUCCEEDS a wait node, this FAILS a
+     * container — a timeout is the loop's safety net, not a happy path. Guarded on
+     * the container being `active`, so an at-least-once redelivery, or a timeout
+     * for a loop that already exited via `exitWhen`/`maxRounds`/a child failure,
+     * folds as a no-op (the second layer behind the handler's own `active` guard).
+     */
+    type: z.literal('container.timedOut'),
+    runId: z.string(),
+    containerId: z.string(),
+  }),
+  z.object({
     // The event-sourced representation of the boot reconciler's "this run
     // cannot be safely resumed" verdict (P2d). Appended when a run had a
     // NON-idempotent activity in flight at crash time (an LLM call that may
@@ -1065,6 +1116,26 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     attemptId: z.string(),
     /** Resolved, non-negative, finite timeout in seconds (the reducer's pure half). */
     timeoutSeconds: z.number(),
+  }),
+  z.object({
+    /**
+     * #4 A17 — "this `loop` container has just gone `active` with a wall-clock
+     * `timeout`, so ARM its durable timeout alarm." A driver-OWN command like
+     * `scheduleWait` (no executor — the driver's `pump` routes it to
+     * `armContainerTimeout`, which arms S1's alarm THEN appends
+     * `container.timeoutScheduled`). Emitted ONCE at container-enter (and re-emitted
+     * idempotently by `onResumed` if the arm was lost pre-append), so it bounds the
+     * loop's TOTAL wall-clock. Unlike `scheduleWait`, `seconds` is a STATIC doc
+     * field (the driver could read it back off the immutable version) — it is still
+     * carried here for symmetry with the durable-alarm family and to keep the arm
+     * side effect-free of the doc. `ExecutorCommand` excludes it, so forgetting the
+     * pump branch is a COMPILE error. `containerId` is the loop; there is no attempt
+     * handle because a container timeout is armed once per run, not per attempt.
+     */
+    type: z.literal('scheduleContainerTimeout'),
+    containerId: z.string(),
+    /** Resolved, positive, finite whole-loop timeout in seconds (bounded at arm). */
+    seconds: z.number(),
   }),
   z.object({
     type: z.literal('finishRun'),

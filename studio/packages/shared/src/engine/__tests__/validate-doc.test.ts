@@ -145,6 +145,40 @@ describe('validateDoc — containers', () => {
     expect(validateDoc(d).join(' ')).toContain('exitWhen is only meaningful on a loop');
   });
 
+  // #4 A17 — a wall-clock `timeout` is loop-only (a stage/foreach cannot spin).
+  it('accepts a timeout on a loop', () => {
+    const d = doc(
+      [node('w'), node('check', { outputs: [{ name: 'done', type: 'boolean' }] })],
+      [edge('w', 'check', 'success')],
+      [
+        {
+          id: 'lp',
+          kind: 'loop',
+          children: ['w', 'check'],
+          exitWhen: '${nodes.check.output.done}',
+          timeout: 3600,
+        },
+      ],
+    );
+    expect(validateDoc(d)).toEqual([]);
+  });
+
+  it('rejects a timeout on a stage (loop-only)', () => {
+    const d = doc([node('a')], [], [{ id: 'stg', kind: 'stage', children: ['a'], timeout: 60 }]);
+    expect(validateDoc(d).join(' ')).toContain('timeout is only meaningful on a loop, not a stage');
+  });
+
+  it('rejects a timeout on a foreach (loop-only)', () => {
+    const d = doc(
+      [node('a')],
+      [],
+      [{ id: 'fe', kind: 'foreach', children: ['a'], items: '${params.xs}', timeout: 60 }],
+    );
+    expect(validateDoc(d).join(' ')).toContain(
+      'timeout is only meaningful on a loop, not a foreach',
+    );
+  });
+
   // A constant is not an exit condition: `${true}` exits after round one and
   // `${false}` never exits. These were unresolvable-ref errors until literals
   // became parseable at #6 E1, so the rule is now explicit.

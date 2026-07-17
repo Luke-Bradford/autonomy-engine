@@ -241,7 +241,11 @@ function stableEdgeKey(e: Edge): string {
 // clock; the resulting max wait is still ~253k years, past any real use. Module
 // scope: pure literals, so computed ONCE rather than per `createEngine` call.
 const NOW_CEILING_MS = 1e15;
-const MAX_WAIT_SECONDS = Math.floor((Number.MAX_SAFE_INTEGER - NOW_CEILING_MS) / 1000);
+// EXPORTED as the SSOT for the durable-alarm `dueAt` safe-integer ceiling: the
+// pure reducer bounds `wait`/`webhook` durations against it (throwing), and the
+// server's `armContainerTimeout` clamps A17's static container `timeout` against
+// the SAME value before computing `dueAt` — one constant, never a redeclared copy.
+export const MAX_WAIT_SECONDS = Math.floor((Number.MAX_SAFE_INTEGER - NOW_CEILING_MS) / 1000);
 
 /**
  * Bind a pipeline's graph and return the pure engine. All graph analysis
@@ -1749,6 +1753,34 @@ export function createEngine(doc: EngineDoc): Engine {
     return next;
   }
 
+  /**
+   * #4 A17 — ABANDON a timed-out loop's still-live children: flip each NON-terminal
+   * child to terminal `skipped` (clearing its attempt), so a late result for its
+   * in-flight dispatch folds to a benign no-op. Deliberately NOT `resetNodes`
+   * (→ `pending`): a late `node.succeeded`/`node.failed` for a `pending` node is
+   * treated by `onSucceeded`/`onFailed` as an IMPOSSIBLE log (never-dispatched →
+   * `finishRun{invalid_event}`), which would spuriously FAIL the whole run when the
+   * loop's outer failure edge is handled and the run keeps going. A TERMINAL status
+   * makes the same late event a "duplicate/stale terminal" no-op instead. Terminal
+   * children are left as-is (a child that genuinely succeeded this round keeps its
+   * result for the loop's partial output projection). `skipped` is the honest
+   * status: the loop timed out, so these children were abandoned mid-flight, not
+   * failed. Their in-flight executor work is not cancelled (no cancellation seam);
+   * an `external_wait_pending` child's correlation row/expiry alarm are likewise
+   * left to the existing orphan-settle sweep (#580) — the status flip already makes
+   * a late callback/expiry fold a no-op.
+   */
+  function abandonLiveChildren(state: RunState, ids: string[]): RunState {
+    let nodes = state.nodes;
+    for (const id of ids) {
+      const ns = nodes[id];
+      if (ns === undefined || TERMINAL_NODE.has(ns.status)) continue;
+      if (nodes === state.nodes) nodes = { ...nodes };
+      nodes[id] = { ...ns, status: 'skipped', currentAttemptId: undefined };
+    }
+    return nodes === state.nodes ? state : { ...state, nodes };
+  }
+
   /** Reset a loop container's children for a new round (attempts kept monotonic). */
   function resetContainerRound(state: RunState, c: Container): RunState {
     const cs = state.containers[c.id]!;
@@ -1895,6 +1927,23 @@ export function createEngine(doc: EngineDoc): Engine {
               changed = true;
             } else {
               state = enterContainer(state, id);
+              // #4 A17 — a `loop` with a wall-clock `timeout` arms its durable
+              // safety alarm the moment it goes `active`. Emitted HERE (the
+              // pending→active transition, guarded above) so it fires EXACTLY once
+              // per container lifetime — re-rounds keep the container `active` and
+              // never re-enter, so the bound is the loop's TOTAL wall-clock, not
+              // per-round. Loop-only: a `stage`/`foreach` does not re-round, so a
+              // timeout is meaningless (validateDoc refuses it there). The
+              // reducer's PURE half is emitting the resolved static `seconds`; the
+              // driver decides WHEN (`now + seconds*1000`) and stays the sole clock
+              // reader, exactly as `scheduleWait` does.
+              if (cc.kind === 'loop' && cc.timeout !== undefined) {
+                commands.push({
+                  type: 'scheduleContainerTimeout',
+                  containerId: id,
+                  seconds: cc.timeout,
+                });
+              }
               changed = true;
             }
           } else if (r === 'skipped') {
@@ -2552,6 +2601,74 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
+   * #4 A17 — fold `container.timeoutScheduled`: a `loop`'s wall-clock timeout alarm
+   * is armed, so STAMP `timeoutDueAt` onto its run-state. The container twin of
+   * `onWaitScheduled`, but it PARKS NOTHING (the loop stays `active`, its children
+   * keep running) — the stamp is the operator/audit fact AND the crash-recovery
+   * marker `onResumed` reads. Like `onWaitScheduled` it does NOT `settle`: nothing
+   * downstream changed, and the arm command was already emitted at enter. Guarded
+   * on the container being `active` at fold time — an at-least-once redelivery, or
+   * a scheduled event for a loop that already exited, is a no-op (never resurrect a
+   * terminal container's marker).
+   */
+  function onContainerTimeoutScheduled(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'container.timeoutScheduled' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    const cs = state.containers[event.containerId];
+    if (cs === undefined || cs.status !== 'active') {
+      return { state, commands: [], diagnostics };
+    }
+    return {
+      state: withContainer(state, event.containerId, { timeoutDueAt: event.dueAt }),
+      commands: [],
+      diagnostics,
+    };
+  }
+
+  /**
+   * #4 A17 — fold `container.timedOut`: a `loop`'s wall-clock timeout ELAPSED. If
+   * the loop is still `active`, NEUTRALIZE its still-live children then FAIL it
+   * (`active` → `failure`, reason `timeout`) and `settle` so its outer failure edge
+   * routes. The container twin of `onWaitDue`, but it FAILS rather than succeeds.
+   *
+   * The `abandonLiveChildren` call is load-bearing and UNIQUE to this exit: every
+   * OTHER container-failure path (`capped`/`child_failed`/`exitWhen_error`/
+   * `no_progress`) is only reached by `stepContainers` AFTER every child is
+   * terminal, so there is nothing live to neutralize. A timeout fires while
+   * children may be `dispatched` (a running LLM/HTTP call) or `external_wait_pending`
+   * (the canonical human-loop case). `exitContainer` alone does not touch children,
+   * so without the neutralization a late `node.succeeded`/`externalWait.completed`
+   * would still fold — either re-animating a node UNDER an already-exited container,
+   * or (if it landed on a `pending` reset) being read as an IMPOSSIBLE log and
+   * FAILING the whole run `invalid_event`. Both are real defects once the loop's
+   * outer failure edge is HANDLED (the ADF generic-error pattern this reducer
+   * drains) and the run keeps running. Flipping the live children to terminal
+   * `skipped` makes any late event a benign no-op — see `abandonLiveChildren`. The
+   * container is now terminal, so `settle` never re-visits those children.
+   *
+   * Guarded on `active`: an at-least-once redelivery, or a timeout for a loop that
+   * already exited via `exitWhen`/`maxRounds`/a child failure BEFORE the alarm
+   * fired, folds as a no-op (the second layer behind the handler's `active` guard).
+   */
+  function onContainerTimedOut(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'container.timedOut' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    const cs = state.containers[event.containerId];
+    if (cs === undefined || cs.status !== 'active') {
+      return { state, commands: [], diagnostics };
+    }
+    const c = containerById.get(event.containerId);
+    if (c === undefined) return { state, commands: [], diagnostics };
+    diagnostics.push(`container '${c.id}' timed out (wall-clock ${c.timeout}s)`);
+    const neutralized = abandonLiveChildren(state, c.children);
+    return settle(exitContainer(neutralized, c, 'failure', 'timeout'), diagnostics);
+  }
+
+  /**
    * #4 A13 — fold `externalWait.created`: a `webhook` node's expiry alarm +
    * correlation row are armed, so PARK it `ready` → `external_wait_pending`. The
    * external-wait twin of `onWaitScheduled` (and NOT inert, for the same reason: a
@@ -2955,6 +3072,34 @@ export function createEngine(doc: EngineDoc): Engine {
         });
       }
     }
+    // #4 A17 crash recovery: a `loop`'s timeout is armed at container-enter, but
+    // `projectRunState` keeps STATE, not COMMANDS — a crash in the tiny window
+    // between the enter settle and the arm+`container.timeoutScheduled` append
+    // re-derives the loop `active` with its arm command LOST and no `timeoutDueAt`
+    // stamp, so nothing would re-arm it and the loop would run wall-clock-unbounded
+    // (the exact hang A17 prevents — an `until`-loop gated on a never-arriving
+    // event has NO other bound). Re-emit ONLY for an `active` loop that has a
+    // `timeout` but no `timeoutDueAt` yet — i.e. the arm was genuinely lost before
+    // its append. A loop that DID arm has the marker set (the `container.timeoutScheduled`
+    // fold stamped it) and is skipped here, so this never double-arms a healthy loop.
+    // In the recovery case there is no surviving alarm row, so the re-arm arms FRESH
+    // from resume-time `now` — the timeout restarts from resume rather than preserving
+    // an original `dueAt` there is none of. (This is unlike the wait/webhook NODE forks,
+    // whose row usually DID commit, so their idempotent re-arm returns the existing row
+    // and keeps the original dueAt — see `armWait`.) A container arm is recovered here,
+    // not in `reconcile.ts`, because it hangs off the container, not a node.
+    for (const cid of [...containerIds].sort()) {
+      const cc = containerById.get(cid)!;
+      const ccs = state.containers[cid]!;
+      if (
+        cc.kind === 'loop' &&
+        cc.timeout !== undefined &&
+        ccs.status === 'active' &&
+        ccs.timeoutDueAt === undefined
+      ) {
+        commands.push({ type: 'scheduleContainerTimeout', containerId: cid, seconds: cc.timeout });
+      }
+    }
     const settled = settle(state, diagnostics);
     return { state: settled.state, commands: [...commands, ...settled.commands], diagnostics };
   }
@@ -3058,6 +3203,12 @@ export function createEngine(doc: EngineDoc): Engine {
         return onWaitScheduled(state, event, diagnostics);
       case 'timer.due':
         return onWaitDue(state, event, diagnostics);
+      case 'container.timeoutScheduled':
+        // #4 A17 — NOT inert: stamps the loop's `timeoutDueAt` (audit + the
+        // crash-recovery marker `onResumed` reads). Parks nothing.
+        return onContainerTimeoutScheduled(state, event, diagnostics);
+      case 'container.timedOut':
+        return onContainerTimedOut(state, event, diagnostics);
       case 'externalWait.created':
         // #4 A13 — NOT inert (like `timer.waitScheduled`): a webhook has no prior
         // hold event, so this fold parks the node `ready` → `external_wait_pending`.

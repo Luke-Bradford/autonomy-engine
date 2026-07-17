@@ -1553,6 +1553,14 @@ export function validateDoc(
     if (c.kind !== 'foreach' && c.items !== undefined) {
       errors.push(`container '${c.id}': items is only meaningful on a foreach, not a ${c.kind}`);
     }
+    // #4 A17 — `timeout` is a WALL-CLOCK bound on a re-rounding loop; a `stage`/
+    // `foreach` runs its body a fixed number of times and cannot spin, so a timeout
+    // there is a dead field. Refuse it LOUDLY (the reducer only arms it for a loop,
+    // so nothing else would surface a stray one), symmetric to the exitWhen/items
+    // loop-vs-foreach refusals.
+    if (c.kind !== 'loop' && c.timeout !== undefined) {
+      errors.push(`container '${c.id}': timeout is only meaningful on a loop, not a ${c.kind}`);
+    }
     // #4 A4 — a `foreach` iterates its body once per element of `items`; it needs
     // an items expression and takes NEITHER a loop's exitWhen NOR its maxRounds
     // (it is bounded by items.length, not a predicate/cap). A zero-CHILD foreach
