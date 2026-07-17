@@ -12,13 +12,15 @@ on:
 jobs:
   review:
     if: github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
-    # #505: GitHub's default job timeout is 6h. This caps a pathological hang far
-    # below that AND stays ABOVE the total retry budget so the outer timeout never
-    # kills the job mid-retry (which would skip the give-up logic). Budget: the
-    # Anthropic step ~15.25 min worst case (3x300s + backoff) dominates; the four
-    # gh steps add ~40s each worst case; total < ~19 min. 25 leaves headroom.
-    timeout-minutes: 25
+    # #505: runs on the SELF-HOSTED Mac-mini runner so the review can call
+    # `claude -p` on the operator's SUBSCRIPTION (keychain auth) instead of a
+    # metered ANTHROPIC_API_KEY curl. The runner must run in the user session
+    # (its LaunchAgent needs SessionCreate=false) or the login keychain is
+    # unreadable and claude reports "Not logged in".
+    runs-on: [self-hosted, claude-review]
+    # A backstop against a hung job (GitHub's default is 6h). The review itself
+    # is a single `claude -p` turn (~1-3 min) plus a few bounded gh calls.
+    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: write
@@ -27,6 +29,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Put Homebrew tools on PATH (self-hosted Mac)
+        # gh / python3 / claude live under /opt/homebrew on the Mac mini; the
+        # runner service PATH may not include it. Prepend for all later steps.
+        run: echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
 
       - name: Get PR diff
         # #505: `gh pr diff` is a live GitHub API call; a transient 503 here
@@ -145,70 +152,47 @@ jobs:
           }
           retry 5 3 get_desc || { echo "::error::gh pr view failed after retries"; exit 1; }
 
-      - name: Build request body
+      - name: Build review prompt
         # #468: the charter is SCOPE-AWARE and lives in lib/review_prompt.py
-        # (tested by tests/test_review_prompt.py), NOT inline here. This repo
-        # holds two codebases with disjoint rules -- the bash/Python engine at
-        # the root and the TypeScript re-platform in studio/ -- and one charter
-        # cannot review both. Reviewing a studio diff against engine invariants
-        # made the bot answer "out of scope, no findings apply" and then emit an
-        # ARBITRARY verdict, which an automated merge rail was reading as truth.
-        # An inline heredoc is untestable, which is exactly how that survived.
+        # (tested by tests/test_review_prompt.py), NOT inline here -- one charter
+        # cannot review both the bash/Python engine and the studio/ TypeScript,
+        # and reviewing a studio diff against engine invariants made the bot emit
+        # an ARBITRARY verdict a merge rail read as truth. An inline heredoc is
+        # untestable, which is how that survived.
+        # #505: `--prompt` builds a single `claude -p` PROMPT (charter + diff) for
+        # the SUBSCRIPTION transport; the charter, scope-awareness, and verdict
+        # extraction are byte-identical to the old metered-API path.
         if: steps.docs_only.outputs.docs_only != 'true'
         run: |
           set -euo pipefail
-          python3 lib/review_prompt.py \
-            pr_files.txt pr.diff pr_description.txt pr_comments.txt request.json
+          python3 lib/review_prompt.py --prompt \
+            pr_files.txt pr.diff pr_description.txt pr_comments.txt prompt.txt
 
-      - name: Call Claude API
+      - name: Review on the subscription (claude -p)
+        # #505: was a metered `curl` to api.anthropic.com with ANTHROPIC_API_KEY.
+        # 122 review runs/day drained the API allowance while the operator's
+        # subscription sat idle. Now runs on the self-hosted Mac runner via
+        # `claude -p` on the SUBSCRIPTION (keychain auth, apiKeySource=none) --
+        # zero per-token cost. `--setting-sources project,local` skips the
+        # USER-level persona while keeping keychain auth (the loop uses the same
+        # invocation); `< /dev/null` so claude does not block on stdin. stderr is
+        # kept OUT of response.json so the JSON parses cleanly.
+        #
+        # FAIL-SAFE: extract-cli is fail-closed (is_error / no result -> exit 1 ->
+        # red step), and the verdict guard below refuses a review that rendered no
+        # verdict. So a claude auth/transport failure reds the gate, never passes.
         if: steps.docs_only.outputs.docs_only != 'true'
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -uo pipefail
-          # shellcheck source=/dev/null
-          . lib/ci_retry.sh
-          # #505: the Anthropic call had NO timeout (GitHub's default job timeout
-          # is 6h) and no retry. `--connect-timeout`/`--max-time` bound a hung
-          # call; retry rides out a transient 5xx / 429 / network drop. A
-          # PERMANENT 4xx (a real request bug) exits immediately -- never retried,
-          # never mistaken for transient. A truncated/again-failing call still
-          # reds the step (fail-safe: the verdict guards downstream refuse a
-          # review that never arrived).
-          #
-          # BUDGET must fit under the job's `timeout-minutes: 20`, or the outer
-          # timeout kills the job mid-retry instead of letting the give-up logic
-          # run. Worst case here = 3 attempts x 300s max-time + (5s+10s) backoff
-          # = ~15.25 min, leaving headroom for the other (also-bounded) steps. A
-          # healthy call returns in 1-3 min; 300s is generous, not a target.
-          HTTP_STATUS=""
-          call_api() {
-            HTTP_STATUS=$(curl -sS --connect-timeout 30 --max-time 300 -w "%{http_code}" \
-              -H "x-api-key: $ANTHROPIC_API_KEY" \
-              -H "anthropic-version: 2023-06-01" \
-              -H "content-type: application/json" \
-              --data-binary @request.json \
-              -o response.json \
-              https://api.anthropic.com/v1/messages) || return 1   # curl transport failure -> transient
-            case "$HTTP_STATUS" in
-              2[0-9][0-9]) return 0 ;;                              # success
-              429|5[0-9][0-9]) echo "API HTTP $HTTP_STATUS (transient) -- will retry" >&2; return 1 ;;
-              *) echo "::error::Anthropic API HTTP $HTTP_STATUS (non-retryable); response:"; cat response.json; exit 1 ;;
-            esac
-          }
-          retry 3 5 call_api || { echo "::error::Anthropic API failed after retries (last HTTP ${HTTP_STATUS:-none})"; cat response.json 2>/dev/null || true; exit 1; }
-
-          echo "HTTP status: $HTTP_STATUS"
-          cat response.json
-
-          # #504: was an inline `python3 -c` heredoc; now a TESTED extractor
-          # (lib/review_prompt.py, tests/test_review_prompt.py) for the same
-          # reason #501 lifted the verdict extractor and #468 lifted the
-          # charter -- an inline heredoc is untestable, and that is how each of
-          # those bugs survived. Rationale and the failure it closes live at
-          # `extract_review`; this line must not restate them and drift.
-          # Exits non-zero on every unusable response, which reds the step.
-          python3 lib/review_prompt.py --extract response.json review.txt stop_reason.txt
+          claude -p "$(cat prompt.txt)" \
+            --model sonnet \
+            --setting-sources project,local \
+            --dangerously-skip-permissions \
+            --output-format json < /dev/null > response.json 2> claude-stderr.log || true
+          [ -s claude-stderr.log ] && { echo "--- claude -p stderr ---"; cat claude-stderr.log; } >&2 || true
+          # TESTED extractor (lib/review_prompt.py) -- #504/#501 lifted these out
+          # of untestable heredocs. Exits non-zero on every unusable output.
+          python3 lib/review_prompt.py --extract-cli response.json review.txt stop_reason.txt
 
       - name: Post review comment
         if: steps.docs_only.outputs.docs_only != 'true'
@@ -225,15 +209,11 @@ jobs:
           post_review() { gh pr comment "$PR_NUMBER" --body-file comment_body.txt; }
           retry 5 3 post_review || { echo "::error::gh pr comment (review) failed after retries"; exit 1; }
 
-      - name: Fail workflow on truncated review
-        if: steps.docs_only.outputs.docs_only != 'true'
-        run: |
-          STOP_REASON=$(cat stop_reason.txt)
-          if [ "$STOP_REASON" = "max_tokens" ]; then
-            echo "::error::Claude review hit max_tokens cap — review may be truncated. Raise max_tokens or split the PR."
-            exit 1
-          fi
-          echo "stop_reason=$STOP_REASON"
+      # #505: the old API-transport "Fail workflow on truncated review" step
+      # (keyed on stop_reason == max_tokens) was removed with the metered curl.
+      # `claude -p` does not return that stop_reason, and a truncated review is
+      # already caught downstream: extract-cli is fail-closed, and the verdict
+      # guard below reds the gate on any review that renders no verdict.
 
       # #501: `review` is REQUIRED under branch protection, so a green check is
       # what GitHub lets a merge through on. It went green on a review that

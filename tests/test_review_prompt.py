@@ -173,6 +173,63 @@ class TestBuildPayload(unittest.TestCase):
         self.assertIn("(no comments yet)", p["messages"][0]["content"])
 
 
+class TestBuildReviewPrompt(unittest.TestCase):
+    """The subscription `claude -p` transport (#505). Same charter + content as
+    the API path -- so a studio diff still gets the studio charter, an engine
+    diff the engine charter, and the verdict/findings instructions are present."""
+
+    def test_carries_the_scope_charter_plus_content(self):
+        pr = review_prompt.build_review_prompt(
+            review_prompt.SCOPE_STUDIO, "THEDIFF", "THEDESC", "THECOMMENTS"
+        )
+        self.assertIn(STUDIO_MARKER, pr)  # studio charter selected
+        self.assertNotIn(ENGINE_MARKER, pr)
+        self.assertIn("THEDIFF", pr)
+        self.assertIn("THEDESC", pr)
+        self.assertIn("THECOMMENTS", pr)
+        self.assertIn("### Verdict", pr)  # verdict still mandated
+
+    def test_engine_scope_gets_engine_charter(self):
+        pr = review_prompt.build_review_prompt(review_prompt.SCOPE_ENGINE, "d", "x", "")
+        self.assertIn(ENGINE_MARKER, pr)
+        self.assertNotIn(STUDIO_MARKER, pr)
+
+    def test_reviews_the_same_content_as_the_api_path(self):
+        # Both transports must review byte-identical reviewer content, or the two
+        # paths could disagree. build_review_prompt = charter + the same user body.
+        diff, desc, com = "D", "DESC", "COM"
+        api_body = review_prompt.build_payload(
+            review_prompt.SCOPE_ENGINE, diff, desc, com
+        )["messages"][0]["content"]
+        sub = review_prompt.build_review_prompt(review_prompt.SCOPE_ENGINE, diff, desc, com)
+        self.assertTrue(sub.endswith(api_body))
+
+
+class TestExtractCliResult(unittest.TestCase):
+    """`claude -p --output-format json` extraction -- fail-closed like the API one."""
+
+    def test_extracts_result_text_and_stop_reason(self):
+        text, stop = review_prompt.extract_cli_result(
+            {"is_error": False, "result": "### Verdict\n**APPROVE**", "stop_reason": "end_turn"}
+        )
+        self.assertIn("APPROVE", text)
+        self.assertEqual(stop, "end_turn")
+
+    def test_is_error_true_refuses(self):
+        with self.assertRaises(review_prompt.ReviewExtractionError):
+            review_prompt.extract_cli_result({"is_error": True, "result": "Not logged in"})
+
+    def test_missing_or_empty_result_refuses(self):
+        with self.assertRaises(review_prompt.ReviewExtractionError):
+            review_prompt.extract_cli_result({"is_error": False, "result": ""})
+        with self.assertRaises(review_prompt.ReviewExtractionError):
+            review_prompt.extract_cli_result({"is_error": False})
+
+    def test_non_dict_refuses(self):
+        with self.assertRaises(review_prompt.ReviewExtractionError):
+            review_prompt.extract_cli_result("not a dict")
+
+
 class TestCli(unittest.TestCase):
     """Drive the real CLI the workflow calls -- end to end, no mocks."""
 
