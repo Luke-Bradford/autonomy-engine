@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { Output } from '../schemas/pipeline.js';
 import { SecretRefSchema } from '../schemas/secret-ref.js';
 import type { ActivityCatalog, ActivityCatalogEntry } from './types.js';
+import { llmCallConfigSchema } from './llm-config.js';
 
 /**
  * P3 MVP activity catalog. Each entry is STATIC and pure (see
@@ -77,13 +78,10 @@ const ENTRIES: ActivityCatalogEntry[] = [
     idempotent: false,
     connectionKinds: ['anthropic_api', 'openai_api', 'ollama'],
     outputs: [out('text', 'string'), out('stopReason', 'string')],
-    configSchema: z.object({
-      prompt: z.string().min(1),
-      system: z.string().optional(),
-      model: z.string().optional(),
-      maxTokens: z.number().int().positive().optional(),
-      temperature: z.number().optional(),
-    }),
+    // #2 L1 — the SSOT config schema, shared with the three LLM adapters so the
+    // palette metadata and the live request validation can never desync (the
+    // same shared→server pattern `http_request` uses for `httpSecretHeadersSchema`).
+    configSchema: llmCallConfigSchema,
   },
   {
     type: 'agent_task',

@@ -1,7 +1,15 @@
 import { z } from 'zod';
 import type { ConnectionKind } from '@autonomy-studio/shared';
+import { llmCallConfigSchema, normalizeLlmRequest } from '@autonomy-studio/shared';
+import type { LlmCallConfig, LlmSampling, NormalizedLlmRequest } from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorErrorKind } from './types.js';
 import { redactSecrets } from './redact.js';
+
+// #2 L1 — the `llm_call` config schema + its normalization are the SSOT in
+// `@autonomy-studio/shared`; re-exported here so each adapter imports its LLM
+// machinery from ONE module. See `shared/src/catalog/llm-config.ts`.
+export { llmCallConfigSchema, normalizeLlmRequest };
+export type { LlmCallConfig, LlmSampling, NormalizedLlmRequest };
 
 /**
  * P3b — shared machinery for the LLM connector adapters (`anthropic_api`,
@@ -36,18 +44,6 @@ export const llmConnectionConfigSchema = z.object({
   timeoutMs: z.number().int().positive().optional(),
 });
 
-/** The per-activity `llm_call` settings, read from the node's prepared `input`. */
-export const llmRequestInputSchema = z.object({
-  prompt: z.string().min(1),
-  system: z.string().optional(),
-  /** Overrides the connection's default `model` for this node. */
-  model: z.string().optional(),
-  maxTokens: z.number().int().positive().optional(),
-  temperature: z.number().optional(),
-});
-
-export type LlmRequestInput = z.infer<typeof llmRequestInputSchema>;
-
 /**
  * Classify an HTTP status into the connector error taxonomy. Unlike the `http`
  * adapter — where a 4xx/5xx is real DATA the pipeline branches on — an LLM call
@@ -70,7 +66,7 @@ export function classifyHttpStatus(status: number): ConnectorErrorKind {
  * than guessing a provider-specific id.
  */
 export function resolveModel(
-  input: LlmRequestInput,
+  input: { model?: string },
   config: { model?: string },
   fallback?: string,
 ): string | null {

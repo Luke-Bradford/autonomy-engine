@@ -5,11 +5,12 @@ import {
   classifyHttpStatus,
   coerceStopReason,
   errorExcerpt,
+  llmCallConfigSchema,
   llmConnectionConfigSchema,
   llmPost,
   llmProbeGet,
-  llmRequestInputSchema,
   noCompletionFailure,
+  normalizeLlmRequest,
   parseJsonBody,
   resolveModel,
 } from './llm-shared.js';
@@ -101,7 +102,7 @@ export const anthropicAdapter: ConnectorAdapter = {
       yield { type: 'failed', kind: 'permanent', error: 'invalid anthropic_api connection config' };
       return;
     }
-    const input = llmRequestInputSchema.safeParse(ctx.input);
+    const input = llmCallConfigSchema.safeParse(ctx.input);
     if (!input.success) {
       yield {
         type: 'failed',
@@ -122,14 +123,21 @@ export const anthropicAdapter: ConnectorAdapter = {
     }
 
     const model = resolveModel(input.data, config.data, DEFAULT_MODEL);
+    const { system, messages, sampling } = normalizeLlmRequest(input.data);
     const baseUrl = (config.data.baseUrl ?? DEFAULT_ANTHROPIC_BASE_URL).replace(/\/+$/, '');
+    // The Messages API takes `system` as a top-level param (not a message), so
+    // the normalized system string lands here; sampling maps to Anthropic's
+    // names (`top_p`, `stop_sequences`), and it has no `seed`, so that knob is
+    // dropped for this provider (documented asymmetry, #2 L1).
     const requestBody: Record<string, unknown> = {
       model,
-      max_tokens: input.data.maxTokens ?? DEFAULT_MAX_TOKENS,
-      messages: [{ role: 'user', content: input.data.prompt }],
+      max_tokens: sampling.maxTokens ?? DEFAULT_MAX_TOKENS,
+      messages,
     };
-    if (input.data.system !== undefined) requestBody.system = input.data.system;
-    if (input.data.temperature !== undefined) requestBody.temperature = input.data.temperature;
+    if (system !== undefined) requestBody.system = system;
+    if (sampling.temperature !== undefined) requestBody.temperature = sampling.temperature;
+    if (sampling.topP !== undefined) requestBody.top_p = sampling.topP;
+    if (sampling.stop !== undefined) requestBody.stop_sequences = sampling.stop;
 
     const result = await llmPost(
       ctx,

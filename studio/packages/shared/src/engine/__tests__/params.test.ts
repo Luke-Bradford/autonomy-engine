@@ -67,6 +67,21 @@ describe('substitute — reference resolution', () => {
     expect(substitute('${params.topic}', ctx({ params: { topic: 'x' } }))).toBe('x');
   });
 
+  // #2 L1 — `${}` inside a `messages[].content` (a string nested in an
+  // array-of-objects) is resolved by the same config-tree walk, so the LLM
+  // config v2 needs no bespoke substitution. This locks that guarantee.
+  it('descends into a messages[]-shaped config, resolving ${} in nested content', () => {
+    const c = ctx({ params: { topic: 'otters', tone: 'terse' } });
+    const config = {
+      system: 'Be ${params.tone}.',
+      messages: [{ role: 'user', content: 'Write about ${params.topic}.' }],
+    };
+    expect(substitute(config, c)).toEqual({
+      system: 'Be terse.',
+      messages: [{ role: 'user', content: 'Write about otters.' }],
+    });
+  });
+
   it('resolves ${nodes.<id>.output.<name>}', () => {
     const c = ctx({ nodeOutputs: { pick: { item: 42 } } });
     expect(substitute('${nodes.pick.output.item}', c)).toBe(42);

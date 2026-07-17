@@ -120,3 +120,69 @@ describe('ollamaAdapter.runActivity', () => {
     expect(events[0]).toMatchObject({ type: 'failed', kind: 'transient' });
   });
 });
+
+// #2 L1 — config v2: role `messages[]`, with the system instruction as a
+// LEADING role:system message and sampling under `options`.
+describe('ollamaAdapter v2 config (L1)', () => {
+  it('prepends system as a role:system message and keeps non-system turn order', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(
+      ollamaAdapter.runActivity(
+        ctx({
+          input: {
+            model: 'llama3',
+            system: 'be terse',
+            messages: [
+              { role: 'user', content: 'u1' },
+              { role: 'assistant', content: 'a1' },
+            ],
+          },
+        }),
+        null,
+      ),
+    );
+    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.messages).toEqual([
+      { role: 'system', content: 'be terse' },
+      { role: 'user', content: 'u1' },
+      { role: 'assistant', content: 'a1' },
+    ]);
+  });
+
+  it('maps sampling under options (top_p, stop, seed, num_predict)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(
+      ollamaAdapter.runActivity(
+        ctx({
+          input: {
+            prompt: 'p',
+            model: 'llama3',
+            topP: 0.9,
+            stop: ['STOP'],
+            seed: 7,
+            maxTokens: 42,
+          },
+        }),
+        null,
+      ),
+    );
+    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.options.top_p).toBe(0.9);
+    expect(body.options.stop).toEqual(['STOP']);
+    expect(body.options.seed).toBe(7);
+    expect(body.options.num_predict).toBe(42);
+  });
+
+  it('validates the whole node.config — the seeded `outputs` key passes (non-strict)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      ollamaAdapter.runActivity(
+        ctx({
+          input: { prompt: 'p', model: 'llama3', outputs: [{ key: 'text', type: 'string' }] },
+        }),
+        null,
+      ),
+    );
+    expect(events[0]).toMatchObject({ type: 'succeeded' });
+  });
+});
