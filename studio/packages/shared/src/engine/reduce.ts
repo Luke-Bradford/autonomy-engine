@@ -15,6 +15,7 @@ import type {
 } from './types.js';
 import { SubstituteError, TERMINAL_NODE, terminalStatusOf } from './types.js';
 import {
+  FAIL_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
   IF_BRANCH_TRUE,
   IF_BRANCH_FALSE,
@@ -956,6 +957,28 @@ export function createEngine(doc: EngineDoc): Engine {
       });
       return { state: next, changed: true };
     }
+    if (node.type === FAIL_ACTIVITY_TYPE) {
+      // #4 A7 — a `control` `fail` is ENGINE-evaluated like `if`/`switch` (checked
+      // here, before `node.call` and dispatch — a node is one or the other), but it
+      // produces a FAILURE, not a branch. Resolve the `${}` `message` PURELY, hold
+      // the node `ready` (the driver owes `node.failed`, the same handshake `if`/
+      // `switch` use for their durable event), and emit a `failNode` command. NEVER
+      // handed to the executor. A missing/bad `message` throws → `prepFailure` →
+      // `finishRun{invalid_event}`, the same verdict a control-eval throw reaches.
+      let error: string;
+      try {
+        error = evalFailMessage(node, state, foreachItemOf(state, id));
+      } catch (err) {
+        return prepFailure(state, id, err, diagnostics);
+      }
+      const next = withNode(state, id, {
+        status: 'ready',
+        attempts: ns.attempts + 1,
+        currentAttemptId: attemptId,
+      });
+      commands.push({ type: 'failNode', nodeId: id, attemptId, error });
+      return { state: next, changed: true };
+    }
     if (node.call !== undefined) {
       // call_pipeline: resolve the (possibly `${}`) pipelineVersionId + params,
       // hold the node `waiting`, and ask the driver to spawn the child.
@@ -1387,6 +1410,34 @@ export function createEngine(doc: EngineDoc): Engine {
       );
     }
     return rawCases.includes(out) ? out : SWITCH_DEFAULT_BRANCH;
+  }
+
+  /**
+   * #4 A7 — resolve a `fail` node's authored `${}` `message` to the plain string
+   * the driver makes durable as `node.failed.error`. UNLIKE `if`/`switch` (which
+   * evaluate to a routing BRANCH), a `fail` produces a FAILURE — so this returns
+   * the resolved message text, and the caller emits a `failNode` command (not
+   * `evaluateControl`). Pure over `state`: `substitute` reads only bound outputs/
+   * params/trigger context (+ the `foreach` `item`), so a replay resolves the same
+   * message. The message is an EMBEDDED template (display text, e.g. `"rejected:
+   * ${nodes.check.output.reason}"`), NOT whole-value-gated the way an `if`'s
+   * boolean is — `String()` coerces whatever it resolves to, since a message is
+   * human text. Throws (→ `prepFailure` → `finishRun{invalid_event}`) on a
+   * missing/non-string/empty raw `message` — a malformed fail-config, distinct
+   * from the fail firing, fails the run LOUD rather than manufacturing a benign
+   * default message (mirrors `evalSwitchBranch`'s raw-`on` check and the
+   * project's "never manufacture an absent fact" rule). A `${}` that itself throws
+   * (a bad ref/mode defect) reaches the same verdict.
+   */
+  function evalFailMessage(node: Node, state: RunState, item?: { value: unknown }): string {
+    const raw = node.config['message'];
+    if (typeof raw !== 'string' || raw.trim() === '') {
+      throw new SubstituteError(
+        `fail node '${node.id}' has no 'message' — a fail force-fails with a ` +
+          "message describing the failure (e.g. 'validation rejected the input')",
+      );
+    }
+    return String(substitute(raw, buildCtx(state), 0, item));
   }
 
   /** The current round's children outputs, merged (sorted, last-key-wins). */
@@ -2325,6 +2376,29 @@ export function createEngine(doc: EngineDoc): Engine {
             branch,
             event: controlEvent,
           });
+          continue;
+        }
+        if (node.type === FAIL_ACTIVITY_TYPE) {
+          // #4 A7 crash recovery: a `fail` folds to `ready` after `tryDispatchNode`
+          // pushed `failNode`, but `projectRunState` keeps STATE, not COMMANDS — a
+          // crash between the predecessor's durable event and `node.failed` re-derives
+          // the node `ready` with its command lost, and without this fork nothing
+          // re-emits it, so the run hangs `ready` forever (the same reason the
+          // control-event fork above and `waiting && node.call` below re-emit).
+          // Recompute the message PURELY and re-emit. Idempotent: same
+          // `currentAttemptId`, and a duplicate `node.failed` folds as a
+          // stale/terminal no-op. Terminalize a `message` that now throws, the same
+          // verdict as the dispatch-prep branch below. Passes the `foreach` item
+          // (as `tryDispatchNode` does) so a `${item}`-bearing message in a foreach
+          // body re-resolves identically on recovery rather than throwing.
+          let error: string;
+          try {
+            error = evalFailMessage(node, state, foreachItemOf(state, id));
+          } catch (err) {
+            const failed = prepFailure(state, id, err, diagnostics);
+            return { state: failed.state, commands: [failed.finish], diagnostics };
+          }
+          commands.push({ type: 'failNode', nodeId: id, attemptId: ns.currentAttemptId, error });
           continue;
         }
         let prepared: Record<string, unknown>;

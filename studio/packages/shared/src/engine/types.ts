@@ -450,6 +450,15 @@ export const FAILURE_CODES = {
    * decrypt error (could leak ciphertext/key detail).
    */
   CONFIG_SECRET_UNDECRYPTABLE: 'config_secret_undecryptable',
+  /**
+   * #4 A7 — a `fail` control activity FORCE-FAILED the node with its authored
+   * `${}` message. Always `permanent` (a deliberate fail is deterministic, so
+   * retrying re-fails identically — `retryEligible` never fires on it). A stable
+   * marker so the monitor can tell an intentional fail from a connector error
+   * without string-matching the message; the node's `type` (`fail`) in the log
+   * says the same, so this is a convenience, not the sole signal.
+   */
+  FORCED_FAIL: 'forced_fail',
 } as const;
 
 /**
@@ -819,6 +828,28 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     attemptId: z.string(),
     branch: z.string(),
     event: z.enum(['condition.evaluated', 'switch.evaluated']),
+  }),
+  z.object({
+    /**
+     * #4 A7 — "this `control` `fail` node force-fails; make its failure durable."
+     * A driver-OWN command like `evaluateControl` (no executor, no connector — the
+     * driver's `pump` routes it to a synchronous single-event append). The reducer
+     * resolves the `${}` `message` PURELY (clock-free over run state, exactly as
+     * `evaluateControl` resolves its branch) into `error`, holds the node `ready`,
+     * and hands the driver this command; the driver appends `node.failed` with
+     * this `error`, `kind:'permanent'` and `code:'forced_fail'` (both fixed — a
+     * deliberate fail is deterministic and never retry-eligible) and folds it via
+     * the SAME `onFailed` handler a connector failure reaches.
+     *
+     * `ExecutorCommand` deliberately excludes it (it is not `dispatchNode`/
+     * `startChild`), so forgetting the pump branch is a COMPILE error. The
+     * `attemptId` is the fail node's current attempt, so a stale re-emit (a
+     * pre-restart evaluation) folds as a stale/terminal no-op.
+     */
+    type: z.literal('failNode'),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    error: z.string(),
   }),
   z.object({
     type: z.literal('finishRun'),

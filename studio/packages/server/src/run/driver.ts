@@ -3,6 +3,7 @@ import {
   resolveRunParams,
   DEFAULT_RETRY_INTERVAL_SECONDS,
   EngineEventSchema,
+  FAILURE_CODES,
   type ArmWakeupInput,
   type Engine,
   type EngineCommand,
@@ -589,6 +590,24 @@ export async function pump(
           nodeId: command.nodeId,
           attemptId: command.attemptId,
           branch: command.branch,
+        },
+      ];
+    } else if (command.type === 'failNode') {
+      // #4 A7 — the driver's OWN `failNode` command (a `control` `fail` force-fails):
+      // append `node.failed` with the message the reducer already resolved PURELY,
+      // fixed `kind:'permanent'` (a deliberate fail is deterministic → never
+      // retry-eligible) and `code:'forced_fail'`. Folded by the SAME `onFailed`
+      // handler a connector failure reaches, so the graph's `failure` edges (or an
+      // unhandled → run-fail) handle it. No executor, like `evaluateControl`.
+      source = [
+        {
+          type: 'node.failed',
+          runId: state.runId,
+          nodeId: command.nodeId,
+          attemptId: command.attemptId,
+          error: command.error,
+          kind: 'permanent',
+          code: FAILURE_CODES.FORCED_FAIL,
         },
       ];
     } else {

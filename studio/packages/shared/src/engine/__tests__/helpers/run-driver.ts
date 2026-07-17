@@ -146,6 +146,23 @@ export function driveRun(eng: Engine, opts: DriveOptions): DriveResult {
       });
       continue;
     }
+    // #4 A7 — the driver's OWN `failNode` command (a `control` `fail` force-fails):
+    // append `node.failed` with the message the reducer resolved, fixed
+    // `kind:'permanent'` + `code:'forced_fail'`. Mirrors the real driver's `pump`
+    // (`server/src/run/driver.ts` `failNode` branch); without it a fail node holds
+    // `ready` forever and the run never finishes (`finish` stays undefined).
+    if (c.type === 'failNode') {
+      apply({
+        type: 'node.failed',
+        runId,
+        nodeId: c.nodeId,
+        attemptId: c.attemptId,
+        error: c.error,
+        kind: 'permanent',
+        code: 'forced_fail',
+      });
+      continue;
+    }
     if (c.type !== 'dispatchNode') continue;
     order.push(c.nodeId);
     apply({

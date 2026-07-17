@@ -761,4 +761,36 @@ describe('validateDoc — branch edges route against the declared-branch rule (#
     expect(dupAndDefault).toMatch(/node\.sw\.cases\[1\]: duplicate case label 'a'/);
     expect(dupAndDefault).toMatch(/node\.sw\.cases\[2\]: a case may not be named 'default'/);
   });
+
+  // #4 A7 — a `fail` needs a non-empty `message` (the save-time half of the rule
+  // the reducer's `evalFailMessage` enforces at run time).
+  const failNode = (id: string, message: unknown): Node => node(id, { message }, { type: 'fail' });
+
+  it('accepts a fail with a non-empty message (embedded ${} allowed)', () => {
+    const ok = validateDoc(doc([failNode('f', 'rejected tier ${nodes.c.output.tier}')]));
+    expect(ok).toEqual([]);
+  });
+
+  it('rejects a fail whose message is missing, empty, or non-string', () => {
+    const missing = validateDoc(doc([node('f', {}, { type: 'fail' })])).join(' ');
+    expect(missing).toMatch(/node\.f\.message: a fail needs a non-empty message/);
+
+    const empty = validateDoc(doc([failNode('f', '   ')])).join(' ');
+    expect(empty).toMatch(/node\.f\.message: a fail needs a non-empty message/);
+
+    const nonString = validateDoc(doc([failNode('f', 42)])).join(' ');
+    expect(nonString).toMatch(/node\.f\.message: a fail needs a non-empty message/);
+  });
+
+  it('rejects a branch edge off a fail — a fail declares no branches', () => {
+    // A `fail` produces a FAILURE, not a branch: its downstream is a `failure`
+    // operational edge, so a `branch` edge off it is invalid.
+    const d = doc(
+      [failNode('f', 'boom'), node('t')],
+      [{ id: 'e1', from: 'f', to: 't', on: 'branch', branch: 'whatever' }],
+    );
+    const errors = validateDoc(d).join(' ');
+    expect(errors).toContain("edge 'e1'");
+    expect(errors).toMatch(/is not a branching activity/);
+  });
 });

@@ -58,6 +58,10 @@ function branchEdge(from: string, to: string, branch: string): Edge {
 function switchNode(id: string, on: string, cases: string[]): Node {
   return node(id, { type: 'switch', config: { on, cases } });
 }
+// #4 A7 — a real `fail` control node (catalogued kind:control).
+function failNode(id: string, message: string): Node {
+  return node(id, { type: 'fail', config: { message } });
+}
 
 function seedVersion(db: Db, nodes: Node[], edges: Edge[] = [], params: Param[] = []): string {
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
@@ -246,6 +250,54 @@ describe('driver — switch control activity routes through the REAL pump (#4 A2
     expect(replayed.branches['s']).toBe('default');
     expect(replayed.nodes.d!.status).toBe('success');
     expect(replayed.nodes.a!.status).toBe('skipped');
+  });
+});
+
+describe('driver — fail control activity routes through the REAL pump (#4 A7)', () => {
+  it('emits node.failed with the message, permanent kind, forced_fail code (never dispatches the fail)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [failNode('f', 'rejected: ${params.reason}')],
+      [],
+      [{ name: 'reason', type: 'string', required: true }],
+    );
+    const run = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params: { reason: 'bad input' },
+    });
+
+    const state = await startRun(deps(db), run);
+
+    expect(state.status).toBe('failure');
+    expect(state.nodes.f!.status).toBe('failure');
+
+    const log = loadEngineEvents(db, run.id);
+    // The pump's driver-own `failNode` branch appended a durable `node.failed` —
+    // the real driver.ts path, not just the shared harness.
+    const failed = log.find((e) => e.type === 'node.failed' && e.nodeId === 'f') as
+      Extract<EngineEvent, { type: 'node.failed' }> | undefined;
+    expect(failed?.error).toBe('rejected: bad input');
+    expect(failed?.kind).toBe('permanent');
+    expect(failed?.code).toBe('forced_fail');
+    // The fail is engine-evaluated: it must NEVER reach the executor as a dispatch.
+    expect(log.some((e) => e.type === 'node.dispatched' && e.nodeId === 'f')).toBe(false);
+  });
+
+  it('the persisted fail-run log replays to the identical state (event-sourcing invariant)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [failNode('f', 'boom')]);
+    const run = seedRun(db, pvId);
+
+    const driven = await startRun(deps(db), run);
+    const engine = buildEngine(getPipelineVersion(db, pvId)!);
+    const replayed = engine.projectRunState(loadEngineEvents(db, run.id));
+    expect(replayed).toEqual(driven);
+    expect(replayed.status).toBe('failure');
+    expect(replayed.nodes.f!.status).toBe('failure');
   });
 });
 

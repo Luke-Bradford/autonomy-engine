@@ -76,6 +76,18 @@ export const SWITCH_ACTIVITY_TYPE = 'switch';
 export const SWITCH_DEFAULT_BRANCH = 'default';
 
 /**
+ * The `Node.type` of the `fail` control activity (#4 A7). Same constant-SSOT
+ * rationale as `IF_ACTIVITY_TYPE`/`SWITCH_ACTIVITY_TYPE`: a typed identifier read
+ * STRUCTURALLY in the sites that must agree — the reducer's control-dispatch
+ * discriminant (`reduce.ts`, the `if`/`switch`/`call_pipeline` precedent), the
+ * save-time config rule (`validateDoc`'s `validateFailConfig`), and this catalog
+ * entry. Unlike `if`/`switch`, a `fail` produces a FAILURE (`node.failed`), not a
+ * branch — so it declares NO branch labels (a branch edge off a `fail` is
+ * correctly invalid) and has NO outputs.
+ */
+export const FAIL_ACTIVITY_TYPE = 'fail';
+
+/**
  * P3 — the ACTIVITY CATALOG entry: the static, pure metadata for one activity
  * `type` (the `type` on a pipeline `Node`). Lives in `shared` (no I/O) so the
  * SAME entry drives:

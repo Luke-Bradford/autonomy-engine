@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { Output } from '../schemas/pipeline.js';
 import { SecretRefSchema } from '../schemas/secret-ref.js';
 import type { ActivityCatalog, ActivityCatalogEntry } from './types.js';
-import { IF_ACTIVITY_TYPE, SWITCH_ACTIVITY_TYPE } from './types.js';
+import { FAIL_ACTIVITY_TYPE, IF_ACTIVITY_TYPE, SWITCH_ACTIVITY_TYPE } from './types.js';
 import { llmCallConfigSchema } from './llm-config.js';
 
 /**
@@ -138,6 +138,28 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: [],
     outputs: [],
     configSchema: z.object({ on: z.string().min(1), cases: z.array(z.string()) }),
+  },
+  {
+    // #4 A7 — the `fail` CONTROL activity. Same engine-evaluated shape as `if`/
+    // `switch` (`kind:'control'`, no connector, `CONTROL_NOT_DISPATCHABLE` on
+    // dispatch): the reducer routes it STRUCTURALLY by `type`. UNLIKE `if`/`switch`
+    // it produces a FAILURE, not a branch — a ready `fail` resolves its `${}`
+    // `message` PURELY and holds `ready` while the driver appends `node.failed`
+    // (`kind:'permanent'`, `code:'forced_fail'`), which the graph's `failure` edges
+    // then handle (unhandled → the run fails, ADF Fail's "fail the pipeline"). No
+    // `outputs` (a fail produces no data) and no branch labels (a branch edge off a
+    // `fail` is correctly invalid). `configSchema` is palette metadata; the
+    // save-time rule is `validateDoc`'s `validateFailConfig`. Cataloguing the TYPE
+    // bumped `CATALOG_VERSION` 4→5 so an older build refuses a fail-doc it cannot
+    // route rather than silently treating the fail node as inert.
+    type: FAIL_ACTIVITY_TYPE,
+    title: 'Fail',
+    kind: 'control',
+    category: 'control',
+    idempotent: false,
+    connectionKinds: [],
+    outputs: [],
+    configSchema: z.object({ message: z.string().min(1) }),
   },
 ];
 
