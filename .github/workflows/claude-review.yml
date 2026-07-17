@@ -173,10 +173,24 @@ jobs:
         # 122 review runs/day drained the API allowance while the operator's
         # subscription sat idle. Now runs on the self-hosted Mac runner via
         # `claude -p` on the SUBSCRIPTION (keychain auth, apiKeySource=none) --
-        # zero per-token cost. `--setting-sources project,local` skips the
-        # USER-level persona while keeping keychain auth (the loop uses the same
-        # invocation); `< /dev/null` so claude does not block on stdin. stderr is
-        # kept OUT of response.json so the JSON parses cleanly.
+        # zero per-token cost.
+        #
+        # SECURITY -- this reviews UNTRUSTED content (the diff/description/comments
+        # a PR carries) on a runner WITH keychain access, so the review must be a
+        # pure, sandboxed TEXT analysis that cannot execute anything:
+        #   * NO `--dangerously-skip-permissions` + `--allowedTools ""` -> the
+        #     model has zero tools, so a prompt-injection in the diff cannot run
+        #     Bash/Write/Edit (the #579 self-review's own BLOCKING finding).
+        #   * `--setting-sources ""` -> load NEITHER the operator's user persona
+        #     NOR the PR's checked-out `.claude/` (a malicious PR could otherwise
+        #     add a SessionStart hook, which executes shell DIRECTLY, bypassing
+        #     the tool allowlist). Keychain auth is independent of settings.
+        #   * prompt via STDIN (`< prompt.txt`), not `"$(cat …)"` as an argv -- a
+        #     large diff would otherwise blow ARG_MAX and spuriously red the gate.
+        # Residual, accepted: the workflow + tooling run from the PR's checkout,
+        # so a modified `review_prompt.py`/workflow could run code -- but only a
+        # SAME-REPO PR can, i.e. the operator or the loop (trusted); fork PRs are
+        # gated by GitHub's required-approval-for-outside-collaborators.
         #
         # FAIL-SAFE: extract-cli is fail-closed (is_error / no result -> exit 1 ->
         # red step), and the verdict guard below refuses a review that rendered no
@@ -184,11 +198,11 @@ jobs:
         if: steps.docs_only.outputs.docs_only != 'true'
         run: |
           set -uo pipefail
-          claude -p "$(cat prompt.txt)" \
+          claude -p \
             --model sonnet \
-            --setting-sources project,local \
-            --dangerously-skip-permissions \
-            --output-format json < /dev/null > response.json 2> claude-stderr.log || true
+            --allowedTools "" \
+            --setting-sources "" \
+            --output-format json < prompt.txt > response.json 2> claude-stderr.log || true
           [ -s claude-stderr.log ] && { echo "--- claude -p stderr ---"; cat claude-stderr.log; } >&2 || true
           # TESTED extractor (lib/review_prompt.py) -- #504/#501 lifted these out
           # of untestable heredocs. Exits non-zero on every unusable output.
