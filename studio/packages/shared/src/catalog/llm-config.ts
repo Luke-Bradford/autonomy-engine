@@ -63,7 +63,12 @@ export const llmCallConfigSchema = z
     // L1 sampling — mapped per-provider by the adapters (names differ).
     // `topP` is nucleus sampling: a probability, universally [0, 1].
     topP: z.number().min(0).max(1).optional(),
-    stop: z.array(z.string()).optional(),
+    // Elements are `.min(1)`: an empty stop STRING is invalid at every provider,
+    // so catch it at save-time. The ARRAY is intentionally left able to be empty
+    // — `stop: []` is benign (no stop sequences, equivalent to omitting the
+    // field), so rejecting it would be a false positive on an author who clears
+    // every stop entry.
+    stop: z.array(z.string().min(1)).optional(),
     seed: z.number().int().optional(),
   })
   .refine((c) => (c.prompt !== undefined) !== (c.messages !== undefined), {

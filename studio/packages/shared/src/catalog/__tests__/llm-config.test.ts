@@ -54,6 +54,14 @@ describe('llmCallConfigSchema', () => {
     expect(llmCallConfigSchema.safeParse({ prompt: 'hi', temperature: 1.5 }).success).toBe(true);
   });
 
+  it('rejects an empty-string `stop` element but allows an empty `stop` array', () => {
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi', stop: [''] }).success).toBe(false);
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi', stop: ['x', ''] }).success).toBe(false);
+    // `stop: []` is benign (no stop sequences) — not a save-time error.
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi', stop: [] }).success).toBe(true);
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi', stop: ['STOP'] }).success).toBe(true);
+  });
+
   it('rejects both `prompt` and `messages` (ambiguous)', () => {
     const r = llmCallConfigSchema.safeParse({
       prompt: 'hi',
