@@ -4,11 +4,12 @@ import {
   classifyHttpStatus,
   coerceStopReason,
   errorExcerpt,
+  llmCallConfigSchema,
   llmConnectionConfigSchema,
   llmPost,
   llmProbeGet,
-  llmRequestInputSchema,
   noCompletionFailure,
+  normalizeLlmRequest,
   parseJsonBody,
   resolveModel,
 } from './llm-shared.js';
@@ -54,7 +55,7 @@ export const ollamaAdapter: ConnectorAdapter = {
       yield { type: 'failed', kind: 'permanent', error: 'invalid ollama connection config' };
       return;
     }
-    const input = llmRequestInputSchema.safeParse(ctx.input);
+    const input = llmCallConfigSchema.safeParse(ctx.input);
     if (!input.success) {
       yield {
         type: 'failed',
@@ -73,13 +74,19 @@ export const ollamaAdapter: ConnectorAdapter = {
       return;
     }
 
+    const { system, messages: turns, sampling } = normalizeLlmRequest(input.data);
+    // Ollama's `/api/chat` carries the system instruction as a LEADING
+    // `role:system` message; sampling lives under `options` (`num_predict` is
+    // its name for max output tokens).
     const messages: { role: string; content: string }[] = [];
-    if (input.data.system !== undefined)
-      messages.push({ role: 'system', content: input.data.system });
-    messages.push({ role: 'user', content: input.data.prompt });
+    if (system !== undefined) messages.push({ role: 'system', content: system });
+    messages.push(...turns);
     const options: Record<string, unknown> = {};
-    if (input.data.temperature !== undefined) options.temperature = input.data.temperature;
-    if (input.data.maxTokens !== undefined) options.num_predict = input.data.maxTokens;
+    if (sampling.temperature !== undefined) options.temperature = sampling.temperature;
+    if (sampling.maxTokens !== undefined) options.num_predict = sampling.maxTokens;
+    if (sampling.topP !== undefined) options.top_p = sampling.topP;
+    if (sampling.stop !== undefined) options.stop = sampling.stop;
+    if (sampling.seed !== undefined) options.seed = sampling.seed;
     const requestBody: Record<string, unknown> = { model, messages, stream: false };
     if (Object.keys(options).length > 0) requestBody.options = options;
 

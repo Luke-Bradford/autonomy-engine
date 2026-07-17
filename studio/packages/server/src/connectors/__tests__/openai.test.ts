@@ -145,3 +145,60 @@ describe('openaiAdapter.runActivity', () => {
     expect(JSON.stringify(events)).not.toContain('sk-secret-xyz');
   });
 });
+
+// #2 L1 — config v2: role `messages[]` + sampling, with the system instruction
+// carried as a LEADING `role:system` message (Chat Completions has no top-level
+// system param).
+describe('openaiAdapter v2 config (L1)', () => {
+  it('prepends system as a role:system message and keeps non-system turn order', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(
+      openaiAdapter.runActivity(
+        ctx({
+          input: {
+            model: 'gpt-4o',
+            system: 'be terse',
+            messages: [
+              { role: 'user', content: 'u1' },
+              { role: 'assistant', content: 'a1' },
+            ],
+          },
+        }),
+        'sk',
+      ),
+    );
+    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.messages).toEqual([
+      { role: 'system', content: 'be terse' },
+      { role: 'user', content: 'u1' },
+      { role: 'assistant', content: 'a1' },
+    ]);
+  });
+
+  it('maps sampling to OpenAI names (top_p, stop, seed)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(
+      openaiAdapter.runActivity(
+        ctx({ input: { prompt: 'p', model: 'gpt-4o', topP: 0.9, stop: ['STOP'], seed: 7 } }),
+        'sk',
+      ),
+    );
+    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.top_p).toBe(0.9);
+    expect(body.stop).toEqual(['STOP']);
+    expect(body.seed).toBe(7);
+  });
+
+  it('validates the whole node.config — the seeded `outputs` key passes (non-strict)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      openaiAdapter.runActivity(
+        ctx({
+          input: { prompt: 'p', model: 'gpt-4o', outputs: [{ key: 'text', type: 'string' }] },
+        }),
+        'sk',
+      ),
+    );
+    expect(events[0]).toMatchObject({ type: 'succeeded' });
+  });
+});

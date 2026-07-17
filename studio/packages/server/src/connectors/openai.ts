@@ -4,11 +4,12 @@ import {
   classifyHttpStatus,
   coerceStopReason,
   errorExcerpt,
+  llmCallConfigSchema,
   llmConnectionConfigSchema,
   llmPost,
   llmProbeGet,
-  llmRequestInputSchema,
   noCompletionFailure,
+  normalizeLlmRequest,
   parseJsonBody,
   resolveModel,
 } from './llm-shared.js';
@@ -60,7 +61,7 @@ export const openaiAdapter: ConnectorAdapter = {
       yield { type: 'failed', kind: 'permanent', error: 'invalid openai_api connection config' };
       return;
     }
-    const input = llmRequestInputSchema.safeParse(ctx.input);
+    const input = llmCallConfigSchema.safeParse(ctx.input);
     if (!input.success) {
       yield {
         type: 'failed',
@@ -88,13 +89,18 @@ export const openaiAdapter: ConnectorAdapter = {
       return;
     }
 
+    const { system, messages: turns, sampling } = normalizeLlmRequest(input.data);
+    // Chat Completions carries the system instruction as a LEADING `role:system`
+    // message (not a top-level param), then the ordered non-system turns.
     const messages: { role: string; content: string }[] = [];
-    if (input.data.system !== undefined)
-      messages.push({ role: 'system', content: input.data.system });
-    messages.push({ role: 'user', content: input.data.prompt });
+    if (system !== undefined) messages.push({ role: 'system', content: system });
+    messages.push(...turns);
     const requestBody: Record<string, unknown> = { model, messages };
-    if (input.data.maxTokens !== undefined) requestBody.max_tokens = input.data.maxTokens;
-    if (input.data.temperature !== undefined) requestBody.temperature = input.data.temperature;
+    if (sampling.maxTokens !== undefined) requestBody.max_tokens = sampling.maxTokens;
+    if (sampling.temperature !== undefined) requestBody.temperature = sampling.temperature;
+    if (sampling.topP !== undefined) requestBody.top_p = sampling.topP;
+    if (sampling.stop !== undefined) requestBody.stop = sampling.stop;
+    if (sampling.seed !== undefined) requestBody.seed = sampling.seed;
 
     const baseUrl = (config.data.baseUrl ?? DEFAULT_OPENAI_BASE_URL).replace(/\/+$/, '');
     const result = await llmPost(

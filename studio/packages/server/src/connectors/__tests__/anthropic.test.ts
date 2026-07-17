@@ -221,3 +221,72 @@ describe('anthropicAdapter.runActivity', () => {
     expect(JSON.stringify(events)).toContain('timed out');
   });
 });
+
+// #2 L1 — config v2: role `messages[]`, sampling, `${}`-in-content (upstream),
+// with the Messages API's `system` as a TOP-LEVEL param.
+describe('anthropicAdapter v2 config (L1)', () => {
+  it('sends role-tagged messages and folds system to the top-level param', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(
+      anthropicAdapter.runActivity(
+        ctx({
+          input: {
+            messages: [
+              { role: 'user', content: 'u1' },
+              { role: 'system', content: 'mid-system' },
+              { role: 'assistant', content: 'a1' },
+            ],
+            system: 'top-system',
+          },
+        }),
+        'sk',
+      ),
+    );
+    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+    // Non-system turns keep order; system folds to the top-level param.
+    expect(body.messages).toEqual([
+      { role: 'user', content: 'u1' },
+      { role: 'assistant', content: 'a1' },
+    ]);
+    expect(body.system).toBe('top-system\n\nmid-system');
+  });
+
+  it('maps sampling to Anthropic names (top_p, stop_sequences) and DROPS seed', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { prompt: 'p', topP: 0.9, stop: ['STOP'], seed: 7, temperature: 0.3 } }),
+        'sk',
+      ),
+    );
+    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.top_p).toBe(0.9);
+    expect(body.stop_sequences).toEqual(['STOP']);
+    expect(body.temperature).toBe(0.3);
+    expect(body).not.toHaveProperty('seed'); // Anthropic has no seed param.
+    expect(body).not.toHaveProperty('stop');
+  });
+
+  it('validates against the whole node.config — the seeded `outputs` key passes (non-strict)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { prompt: 'p', outputs: [{ key: 'text', type: 'string' }] } }),
+        'sk',
+      ),
+    );
+    expect(events[0]).toMatchObject({ type: 'succeeded' });
+  });
+
+  it('fails permanent when the config sets both prompt and messages', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { prompt: 'p', messages: [{ role: 'user', content: 'x' }] } }),
+        'sk',
+      ),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
