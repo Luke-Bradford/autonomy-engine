@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { coerceStopReason } from '../llm-shared.js';
+import { coerceStopReason, noCompletionFailure } from '../llm-shared.js';
+
+/** #461 — a 2xx with no readable completion is a permanent failure, adapter-named. */
+describe('noCompletionFailure', () => {
+  it('is a permanent failure naming the adapter', () => {
+    expect(noCompletionFailure('openai_api')).toEqual({
+      type: 'failed',
+      kind: 'permanent',
+      error: 'openai_api returned a 2xx response with no completion',
+    });
+    expect(noCompletionFailure('anthropic_api').error).toContain('anthropic_api');
+    expect(noCompletionFailure('ollama').error).toContain('ollama');
+  });
+});
 
 /** #457 — see `coerceStopReason`'s docblock for the contract rationale. */
 describe('coerceStopReason', () => {

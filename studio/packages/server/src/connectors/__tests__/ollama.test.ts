@@ -81,6 +81,32 @@ describe('ollamaAdapter.runActivity', () => {
     expect(events[0]).toMatchObject({ type: 'succeeded', outputs: { stopReason: 'unknown' } });
   });
 
+  // #461 — a 2xx with NO readable completion is a permanent failure, not
+  // `succeeded{text:''}`.
+  it.each([
+    ['no message field', { done: true }],
+    ['a message with no content', { message: { role: 'assistant' } }],
+    ['a non-string content', { message: { content: 42 } }],
+  ])('fails permanent when the 2xx body carries %s', async (_label, body) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, body));
+    const events = await drain(ollamaAdapter.runActivity(ctx(), null));
+    expect(events).toEqual([
+      {
+        type: 'failed',
+        kind: 'permanent',
+        error: 'ollama returned a 2xx response with no completion',
+      },
+    ]);
+  });
+
+  it('succeeds with an explicit empty-string completion', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, { message: { content: '' }, done_reason: 'stop' }),
+    );
+    const events = await drain(ollamaAdapter.runActivity(ctx(), null));
+    expect(events).toEqual([{ type: 'succeeded', outputs: { text: '', stopReason: 'stop' } }]);
+  });
+
   it('fails permanent when no model is resolvable', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const events = await drain(ollamaAdapter.runActivity(ctx({ input: { prompt: 'hi' } }), null));

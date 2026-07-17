@@ -49,13 +49,40 @@ describe('openaiAdapter.runActivity', () => {
     expect(typeof outputs.stopReason).toBe('string');
   });
 
-  it('yields a string stopReason when the response carries no choices at all', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, {}));
+  // #461 — a 2xx with NO readable completion is a permanent failure, not
+  // `succeeded{text:''}`: the completion is the activity's product, and an
+  // absent/degenerate response structure means the provider returned no product.
+  it.each([
+    ['no choices field at all', {}],
+    ['an empty choices array', { choices: [] }],
+    ['a choice with no message', { choices: [{ finish_reason: 'stop' }] }],
+    ['a message with no content', { choices: [{ message: { role: 'assistant' } }] }],
+    ['a non-string content', { choices: [{ message: { content: 42 } }] }],
+    ['a null content (tool-call shape)', { choices: [{ message: { content: null } }] }],
+  ])('fails permanent when the 2xx body carries %s', async (_label, body) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, body));
     const events = await drain(openaiAdapter.runActivity(ctx(), 'sk-oai'));
-    expect(events[0]).toMatchObject({
-      type: 'succeeded',
-      outputs: { text: '', stopReason: 'unknown' },
-    });
+    expect(events).toEqual([
+      {
+        type: 'failed',
+        kind: 'permanent',
+        error: 'openai_api returned a 2xx response with no completion',
+      },
+    ]);
+  });
+
+  // The complement: a PRESENT-but-empty completion is a real result and succeeds
+  // — `stopReason` (e.g. content_filter) carries why; downstream can branch.
+  it('succeeds with an explicit empty-string completion', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, {
+        choices: [{ message: { content: '' }, finish_reason: 'content_filter' }],
+      }),
+    );
+    const events = await drain(openaiAdapter.runActivity(ctx(), 'sk-oai'));
+    expect(events).toEqual([
+      { type: 'succeeded', outputs: { text: '', stopReason: 'content_filter' } },
+    ]);
   });
 
   it('POSTs chat/completions and surfaces content + finish_reason', async () => {

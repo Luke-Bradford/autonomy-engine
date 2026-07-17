@@ -57,6 +57,39 @@ describe('anthropicAdapter.runActivity', () => {
     expect(typeof outputs.stopReason).toBe('string');
   });
 
+  // #461 — a 2xx with NO readable completion (absent/non-array `content`, or a
+  // content array with zero text-type blocks) is a permanent failure, not
+  // `succeeded{text:''}`. A tool_use-only response is text-mode-empty and fails
+  // here because tools are not wired yet (revisit at L4b/L10).
+  it.each([
+    ['no content field', {}],
+    ['a non-array content', { content: 'hi' }],
+    ['an empty content array', { content: [] }],
+    ['only non-text blocks', { content: [{ type: 'tool_use', id: 't', name: 'x', input: {} }] }],
+    // A text-type block whose `text` is not a string is malformed, not a present
+    // completion — it must route through the same absent-vs-present scrutiny.
+    ['a text block with a non-string text', { content: [{ type: 'text', text: 42 }] }],
+  ])('fails permanent when the 2xx body carries %s', async (_label, body) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, body));
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk-ant-key'));
+    expect(events).toEqual([
+      {
+        type: 'failed',
+        kind: 'permanent',
+        error: 'anthropic_api returned a 2xx response with no completion',
+      },
+    ]);
+  });
+
+  // The complement: a present text block (even an empty string) is a real result.
+  it('succeeds with a present-but-empty text block', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, { content: [{ type: 'text', text: '' }], stop_reason: 'end_turn' }),
+    );
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk-ant-key'));
+    expect(events).toEqual([{ type: 'succeeded', outputs: { text: '', stopReason: 'end_turn' } }]);
+  });
+
   it('POSTs the Messages API and surfaces concatenated text + stopReason', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
 

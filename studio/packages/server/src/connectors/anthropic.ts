@@ -9,6 +9,7 @@ import {
   llmPost,
   llmProbeGet,
   llmRequestInputSchema,
+  noCompletionFailure,
   parseJsonBody,
   resolveModel,
 } from './llm-shared.js';
@@ -20,11 +21,14 @@ import {
  * header (never surfaced in outputs or errors); the `llm_call` activity supplies
  * `prompt` / `system` / `model` / `maxTokens` / `temperature`.
  *
- * A completed 2xx response yields `succeeded{ text, stopReason }` — `text` is
- * the concatenation of the response's `text`-type content blocks; `stopReason`
- * is the API's `stop_reason` via `coerceStopReason` (which keeps the declared
- * `string` type when the field is absent). A non-2xx is a real failure (no completion),
- * mapped by `classifyHttpStatus`. The whole exchange is bounded by a timeout
+ * A completed 2xx response with a text completion yields `succeeded{ text,
+ * stopReason }` — `text` is the concatenation of the response's `text`-type
+ * content blocks; `stopReason` is the API's `stop_reason` via `coerceStopReason`
+ * (which keeps the declared `string` type when the field is absent). A 2xx with
+ * NO text completion (absent/non-array `content`, or zero text blocks) fails
+ * `permanent` via `noCompletionFailure` (#461) rather than succeeding with
+ * `text:''`. A non-2xx is a real failure (no completion), mapped by
+ * `classifyHttpStatus`. The whole exchange is bounded by a timeout
  * (default 120s, overridable via `config.timeoutMs`) so a hung provider can
  * never permanently hold a worker-pool slot.
  */
@@ -41,17 +45,28 @@ const anthropicConnectionConfigSchema = llmConnectionConfigSchema.extend({
   anthropicVersion: z.string().optional(),
 });
 
-/** Concatenate the `text`-type content blocks of a Messages API response. */
-function extractText(json: unknown): string {
+/**
+ * Concatenate the `text`-type content blocks of a Messages API response, or
+ * `null` when the response carries NO text completion (#461): a non-array
+ * `content` (absent/malformed), an empty array, or an array with zero
+ * text-type blocks whose `text` is a string (a tool_use-only response, or a
+ * malformed `{type:'text', text: <non-string>}` block — text-mode `llm_call`
+ * sends no tools, so this is treated as no-completion and revisited at L4b/L10). A
+ * present text block whose text is `''` is a REAL (if empty) completion and
+ * returns `''`, NOT `null`.
+ */
+function extractText(json: unknown): string | null {
   const content = (json as { content?: unknown }).content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter(
-      (b): b is { type: string; text: string } =>
-        typeof b === 'object' && b !== null && (b as { type?: unknown }).type === 'text',
-    )
-    .map((b) => b.text)
-    .join('');
+  if (!Array.isArray(content)) return null;
+  const textBlocks = content.filter(
+    (b): b is { type: string; text: string } =>
+      typeof b === 'object' &&
+      b !== null &&
+      (b as { type?: unknown }).type === 'text' &&
+      typeof (b as { text?: unknown }).text === 'string',
+  );
+  if (textBlocks.length === 0) return null;
+  return textBlocks.map((b) => b.text).join('');
 }
 
 export const anthropicAdapter: ConnectorAdapter = {
@@ -143,10 +158,15 @@ export const anthropicAdapter: ConnectorAdapter = {
       yield parsed.event;
       return;
     }
+    const text = extractText(parsed.json);
+    if (text === null) {
+      yield noCompletionFailure('anthropic_api');
+      return;
+    }
     yield {
       type: 'succeeded',
       outputs: {
-        text: extractText(parsed.json),
+        text,
         stopReason: coerceStopReason((parsed.json as { stop_reason?: unknown }).stop_reason),
       },
     };

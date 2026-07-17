@@ -8,6 +8,7 @@ import {
   llmPost,
   llmProbeGet,
   llmRequestInputSchema,
+  noCompletionFailure,
   parseJsonBody,
   resolveModel,
 } from './llm-shared.js';
@@ -21,9 +22,11 @@ import {
  * `Authorization: Bearer <secret>` and never surfaced.
  *
  * Like `openai_api`, there is no safe default model — a call with no resolvable
- * `model` fails `permanent`. A 2xx yields `succeeded{ text, stopReason }` from
- * the response's `message.content` / `done_reason` (the latter via
- * `coerceStopReason`, shared with the other two adapters since #457).
+ * `model` fails `permanent`. A 2xx with a readable completion yields
+ * `succeeded{ text, stopReason }` from the response's `message.content` /
+ * `done_reason` (the latter via `coerceStopReason`, shared with the other two
+ * adapters since #457); a 2xx with no `message.content` string fails `permanent`
+ * via `noCompletionFailure` (#461) rather than succeeding with `text:''`.
  */
 
 const DEFAULT_OLLAMA_BASE_URL = 'http://localhost:11434';
@@ -107,11 +110,17 @@ export const ollamaAdapter: ConnectorAdapter = {
     }
     const message = (parsed.json as { message?: { content?: unknown } }).message;
     const text = message?.content;
+    // #461 — a present string (even '') is a real completion; a missing message
+    // or non-string content is NO completion → fail rather than succeed with ''.
+    if (typeof text !== 'string') {
+      yield noCompletionFailure('ollama');
+      return;
+    }
     const doneReason = (parsed.json as { done_reason?: unknown }).done_reason;
     yield {
       type: 'succeeded',
       outputs: {
-        text: typeof text === 'string' ? text : '',
+        text,
         stopReason: coerceStopReason(doneReason),
       },
     };

@@ -8,6 +8,7 @@ import {
   llmPost,
   llmProbeGet,
   llmRequestInputSchema,
+  noCompletionFailure,
   parseJsonBody,
   resolveModel,
 } from './llm-shared.js';
@@ -22,10 +23,13 @@ import {
  *
  * There is NO safe universal default model, so a call with neither a node
  * `model` nor a connection default `model` fails `permanent` with a clear
- * message rather than guessing. A 2xx yields `succeeded{ text, stopReason }`
- * from `choices[0]` (`stopReason` via `coerceStopReason`, which keeps the
- * declared `string` type when a gateway omits `finish_reason`); a non-2xx is
- * mapped by `classifyHttpStatus`.
+ * message rather than guessing. A 2xx with a readable completion yields
+ * `succeeded{ text, stopReason }` from `choices[0]` (`stopReason` via
+ * `coerceStopReason`, which keeps the declared `string` type when a gateway
+ * omits `finish_reason`); a 2xx carrying NO completion (no `choices`, no
+ * `message`, non-string `content`) fails `permanent` via `noCompletionFailure`
+ * (#461) rather than manufacturing `text:''`; a non-2xx is mapped by
+ * `classifyHttpStatus`.
  */
 
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
@@ -120,10 +124,16 @@ export const openaiAdapter: ConnectorAdapter = {
     const choice = (parsed.json as { choices?: unknown }).choices;
     const first = Array.isArray(choice) ? choice[0] : undefined;
     const text = (first as { message?: { content?: unknown } } | undefined)?.message?.content;
+    // #461 — a present string (even '') is a real completion; anything else
+    // (no choices, no message, non-string/null content) is NO completion → fail.
+    if (typeof text !== 'string') {
+      yield noCompletionFailure('openai_api');
+      return;
+    }
     yield {
       type: 'succeeded',
       outputs: {
-        text: typeof text === 'string' ? text : '',
+        text,
         stopReason: coerceStopReason(
           (first as { finish_reason?: unknown } | undefined)?.finish_reason,
         ),
