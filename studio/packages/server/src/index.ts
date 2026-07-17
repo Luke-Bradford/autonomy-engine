@@ -408,6 +408,10 @@ export async function buildApp(opts?: BuildAppOptions) {
     return timer;
   };
 
+  // Both sweeps deliberately share the one `retentionSweepMs` interval (hourly
+  // housekeeping either way); each is independently disabled via its own
+  // `*RetentionMs: 0`. A per-ledger interval is not worth the extra option surface
+  // until an instance actually needs to sweep the two ledgers at different rates.
   const wakeupRetentionTimer = startRetentionSweep(
     'wakeup',
     wakeupRetentionMs,
