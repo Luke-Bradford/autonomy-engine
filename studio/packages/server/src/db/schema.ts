@@ -362,5 +362,15 @@ export const scheduledWakeups = sqliteTable(
     uniqueIndex('scheduled_wakeups_kind_dedupe_key_idx').on(table.kind, table.dedupeKey),
     // The claim scan ("pending rows due by now") — the only hot query.
     index('scheduled_wakeups_status_due_at_idx').on(table.status, table.dueAt),
+    // #464 — the RETENTION sweep ("settled rows older than the floor, oldest
+    // first"). A PARTIAL index on `fired_at` over SETTLED rows only: the sweep's
+    // `WHERE status <> 'pending' AND fired_at < ? ORDER BY fired_at` becomes an
+    // index range scan instead of a full sort of the settled set, which matters
+    // on the exact high-volume instance this ticket targets (and keeps the
+    // first-boot backlog drain fast). Pending rows are excluded from the index,
+    // so it never competes with the claim scan above.
+    index('scheduled_wakeups_retention_idx')
+      .on(table.firedAt)
+      .where(sql`${table.status} <> 'pending'`),
   ],
 );

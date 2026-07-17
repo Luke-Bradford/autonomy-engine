@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, lte } from 'drizzle-orm';
+import { and, asc, eq, inArray, lt, lte, ne } from 'drizzle-orm';
 import {
   ArmWakeupInputSchema,
   ScheduledWakeupSchema,
@@ -20,7 +20,10 @@ import type { Db } from './types.js';
  * The one invariant it does own: a settled row is FINAL. Arming is
  * upsert-if-absent and settling is a one-way door, so at-least-once delivery
  * (the same row picked up twice across a crash window) can never overwrite an
- * outcome or resurrect a spent alarm.
+ * outcome or resurrect a spent alarm. FINAL is about the OUTCOME, not the row's
+ * existence: `pruneSettledWakeups` (#464 retention) DELETES settled rows once
+ * they are provably past every consumer's re-arm window — it never rewrites an
+ * outcome or un-settles a row, so the invariant holds.
  */
 
 /**
@@ -172,6 +175,108 @@ export function deleteWakeup(db: Db, id: string): ScheduledWakeup | null {
     .all();
   const row = deleted[0];
   return row === undefined ? null : ScheduledWakeupSchema.parse(row);
+}
+
+/**
+ * #464 — RETENTION. Delete SETTLED rows (`fired`/`suppressed`/`cancelled`) whose
+ * `firedAt` is strictly before `before`, oldest-first, at most `limit` per call.
+ * Returns the number deleted. `limit` omitted = unbounded (delete every eligible
+ * row in one statement).
+ *
+ * Bounded + oldest-first ON PURPOSE: the caller DRAINS a backlog to a fixpoint
+ * (loop until a batch returns `< limit`), so a self-hosted instance that has
+ * piled up months of ticks is pruned in bounded batches rather than one
+ * unbounded DELETE holding the single writer lock. The boundary is EXCLUSIVE
+ * (`firedAt < before`, not `<=`): `before` is `now - retentionMs`, so a row
+ * exactly at the floor is still inside the safe window and survives.
+ *
+ * SAFETY — why deleting a settled row can never cause a double-fire. Arming is
+ * upsert-if-absent by `(kind, dedupeKey)`, and "re-arming a fired key is a
+ * no-op" (see `armWakeup`) is what makes replay idempotent. Deleting a fired row
+ * FREES its key, so a re-arm AFTER the delete would INSERT a fresh alarm and
+ * re-fire — safe ONLY once the key can no longer be re-armed. For every CURRENT
+ * kind that window is bounded by minutes–hours, far inside any sane
+ * `retentionMs` floor (default 30 days):
+ *   - `node_retry` (`{runId,nodeId,attemptId}`): a fired attempt's alarm is
+ *     re-armed only if the run's log is replayed and re-emits `scheduleRetry`
+ *     for that SAME attempt. The reducer never re-emits it for an attempt past
+ *     `retry_pending` (the F2b/#443 drain-to-fixpoint property), and boot
+ *     reconcile re-arms only PENDING holds lost in the HOLD→ARM window, never
+ *     fired ones; a terminal run never replays at all.
+ *   - `schedule_tick` (`{triggerId}`, `tick-<occurrenceEpoch>`): the reconciler
+ *     seeds only FUTURE occurrences, so a fired past occurrence is never
+ *     re-armed (catch-up is ≤1 late, minutes).
+ * A future kind with a longer re-arm window (e.g. #4 `wait`) MUST re-check this
+ * floor. Pending rows are never eligible here (only settled), so a far-future
+ * `wait` alarm still `pending` is untouched regardless of its age.
+ *
+ * (When #465's `supersede` lands, pruning a settled row a `superseded_by` points
+ * AT leaves a dangling reference — harmless: it is provenance only, no FK, never
+ * joined for correctness. No special handling needed here.)
+ */
+export function pruneSettledWakeups(db: Db, opts: { before: number; limit?: number }): number {
+  // Oldest-first, `id` breaking `firedAt` ties — the same total order
+  // `listDueWakeups`/`listPendingWakeups` use, so batch boundaries are stable
+  // across sweeps. Deleting via a subquery of ids (not `DELETE … LIMIT`, which
+  // throws unless better-sqlite3 is compiled with SQLITE_ENABLE_UPDATE_DELETE_LIMIT).
+  const doomed = db
+    .select({ id: scheduledWakeups.id })
+    .from(scheduledWakeups)
+    .where(and(ne(scheduledWakeups.status, 'pending'), lt(scheduledWakeups.firedAt, opts.before)))
+    .orderBy(asc(scheduledWakeups.firedAt), asc(scheduledWakeups.id));
+  const bounded = opts.limit === undefined ? doomed : doomed.limit(opts.limit);
+  const deleted = db
+    .delete(scheduledWakeups)
+    .where(inArray(scheduledWakeups.id, bounded))
+    .returning({ id: scheduledWakeups.id })
+    .all();
+  return deleted.length;
+}
+
+/** Default per-batch bound for `drainSettledWakeups` — big enough that a normal
+ * sweep is one batch, small enough that a months-deep backlog is pruned in
+ * bounded DELETEs rather than one statement holding the single writer lock. */
+export const RETENTION_BATCH = 1_000;
+
+/**
+ * Cap on batches a RECURRING sweep prunes per invocation (≤ 50k rows/tick).
+ * better-sqlite3 is synchronous and the server is single-threaded, so an
+ * UNBOUNDED drain-to-fixpoint on the hourly timer would block all in-flight HTTP
+ * requests for its whole duration if a backlog ever accumulated during operation
+ * (retention re-enabled after being off, a long pause). Bounding each recurring
+ * sweep keeps that stall short; the leftover of a large backlog drains across the
+ * following sweeps (each batch is a fast indexed DELETE). The BOOT sweep passes
+ * no cap — a one-time full drain before the server accepts requests.
+ */
+export const RETENTION_MAX_BATCHES_PER_SWEEP = 50;
+
+/**
+ * #464 — drain settled rows older than `before` in bounded batches until a batch
+ * comes back short (the fixpoint) OR `maxBatches` is reached. Returns the total
+ * deleted. Pure over the clock — the caller passes `before = now - retentionMs`.
+ *
+ * Signature mirrors `pruneSettledWakeups`' options object. `batch` defaults to
+ * `RETENTION_BATCH` and is clamped to ≥ 1 so a mistaken `batch <= 0` (which would
+ * prune 0 rows forever, since `0 < 0` never breaks the loop) can never spin.
+ * `maxBatches` (default unbounded) caps a single invocation so the recurring
+ * sweep can bound its blocking — see `RETENTION_MAX_BATCHES_PER_SWEEP`.
+ */
+export function drainSettledWakeups(
+  db: Db,
+  opts: { before: number; batch?: number; maxBatches?: number },
+): number {
+  const batch = Math.max(1, opts.batch ?? RETENTION_BATCH);
+  const maxBatches = opts.maxBatches ?? Infinity;
+  let total = 0;
+  let batches = 0;
+  for (;;) {
+    if (batches >= maxBatches) break;
+    const n = pruneSettledWakeups(db, { before: opts.before, limit: batch });
+    total += n;
+    batches++;
+    if (n < batch) break;
+  }
+  return total;
 }
 
 export function getWakeupByKey(db: Db, kind: string, dedupeKey: string): ScheduledWakeup | null {

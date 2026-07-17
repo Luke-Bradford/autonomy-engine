@@ -259,9 +259,14 @@ What the hardened blocks above said, and what actually shipped:
   guesswork. It is a registry field — code, no migration, no durable format — so it costs nothing to
   add with the first kind that needs it: **schedule ticks (S5, "≤1 late fire")** and **tumbling
   backfill (S10)**. Filed as #463.
-- **Retention is NOT solved** (#464): `fired`/`suppressed`/`cancelled` rows accumulate with no prune
-  path — the same gap `webhook_deliveries` has (#421). A retention policy needs the consumers'
-  replay semantics, which do not exist yet.
+- **Retention — SHIPPED (#464).** `fired`/`suppressed`/`cancelled` rows are pruned once older than a
+  floor (`WAKEUP_RETENTION_DAYS`, default 30 days; `0` disables): `pruneSettledWakeups` +
+  `drainSettledWakeups` (bounded, oldest-first, drained to a fixpoint) run at boot and on an hourly
+  `unref`'d sweep in `buildApp`, served by a partial `scheduled_wakeups_retention_idx` on `fired_at`
+  over settled rows. Safe because every current kind's re-arm window (minutes–hours) is orders of
+  magnitude inside the floor, so a fired key is never freed while it could still be re-armed (the full
+  per-kind argument is in `repo/scheduled-wakeups.ts`). `webhook_deliveries` still has the sibling gap
+  (#421); the two were deliberately NOT merged into one retention mechanism yet.
 - **NOT wired into `buildApp`.** The clock is constructed by its first consumer (F2b), rather than
   this ticket shipping an inert boot path with an empty registry.
 
