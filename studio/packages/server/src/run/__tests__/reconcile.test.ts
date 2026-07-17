@@ -30,6 +30,7 @@ import {
   type RetryAlarms,
 } from '../driver.js';
 import { appendEngineEvent, loadEngineEvents } from '../events.js';
+import { deriveExternalWaitToken } from '../../webhooks/external-wait-token.js';
 import { ReconcileInvariantError, reconcileOnBoot, refuseToExecute } from '../reconcile.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
@@ -1565,6 +1566,70 @@ describe('reconcileOnBoot — a run PARKED on a wait (#4 A6)', () => {
     expect(report.rearmed).toEqual([]);
     expect(report.interrupted).toEqual([]);
     // Untouched: no `run.resumed`, no second alarm, still running awaiting its row.
+    expect(loadEngineEvents(db, run.id)).toEqual(before);
+    expect(getRun(db, run.id)!.status).toBe('running');
+    expect(listPendingWakeups(db)).toEqual([armedBefore]);
+  });
+});
+
+describe('reconcileOnBoot — a run PARKED on a webhook external wait (#4 A13)', () => {
+  const MASTER_KEY = new Uint8Array(32).fill(9);
+  const sign = (a: { runId: string; nodeId: string; attemptId: string }) =>
+    deriveExternalWaitToken(MASTER_KEY, a);
+  const realAlarms = (db: Db): RetryAlarms => ({
+    arm: (input) => armWakeup(db, input),
+    find: (input) => getWakeupByKey(db, input.kind, buildDedupeKey(input)),
+  });
+
+  function webhookNode(id: string): Node {
+    seq += 1;
+    return { id, type: 'webhook', config: { timeoutSeconds: '${30}' }, position: { x: seq, y: 0 } };
+  }
+
+  async function seedParkedWebhook(db: Db, alarms: RetryAlarms) {
+    const pvId = seedVersion(db, [webhookNode('w')]);
+    const run = seedRun(db, pvId);
+    await startRun(
+      {
+        db,
+        resolveDoc: resolveDocFor(db),
+        executor: makeStubExecutor(),
+        alarms,
+        signExternalWaitToken: sign,
+      },
+      run,
+    );
+    return run;
+  }
+
+  it('reports it HELD, appends nothing, and leaves its live alarm row alone (the normal restart-while-parked case)', async () => {
+    // #4 A13 — the webhook counterpart of the wait HELD case. An `external_wait_pending`
+    // node re-derives nothing on resume and cannot finish, so it reaches the reconciler
+    // with no commands — and must NOT be mislabelled `finalized` nor get a spurious
+    // `run.resumed`. A webhook typically parks for a long time awaiting a human/external
+    // callback, so a restart while parked is its COMMON boot state.
+    const { db } = freshDb();
+    const alarms = realAlarms(db);
+    const run = await seedParkedWebhook(db, alarms);
+    const before = loadEngineEvents(db, run.id);
+    expect(before.map((e) => e.type)).toContain('externalWait.created');
+    expect(listPendingWakeups(db)).toHaveLength(1);
+    const armedBefore = listPendingWakeups(db)[0];
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+      alarms,
+      signExternalWaitToken: sign,
+    });
+
+    expect(report.held).toEqual([run.id]);
+    expect(report.finalized).toEqual([]);
+    expect(report.resumed).toEqual([]);
+    expect(report.rearmed).toEqual([]);
+    expect(report.interrupted).toEqual([]);
+    // Untouched: no spurious `run.resumed`, no second alarm, still running.
     expect(loadEngineEvents(db, run.id)).toEqual(before);
     expect(getRun(db, run.id)!.status).toBe('running');
     expect(listPendingWakeups(db)).toEqual([armedBefore]);

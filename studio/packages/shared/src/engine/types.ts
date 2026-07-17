@@ -124,8 +124,17 @@ export class ParamResolveError extends Error {
  *                  live alarm row (unlike `retry_pending`, entered by `node.failed`
  *                  BEFORE the arm, which is why retry needs a boot re-arm and wait
  *                  does not).
+ * - `external_wait_pending` — #4 A13's durable **external PARK**: a `webhook`
+ *                  control node paused awaiting an inbound HTTP callback. NON-
+ *                  terminal, resolved by `externalWait.completed` (→ `success`) or
+ *                  `externalWait.expired` (→ `failure`). Entered by
+ *                  `externalWait.created` — appended by the driver AFTER arming the
+ *                  expiry alarm + correlation row — so it too ALWAYS has a live
+ *                  alarm (the same arm-before-append discipline as `wait_pending`).
+ *                  The twin of `wait_pending` with a DIFFERENT resume source (an
+ *                  inbound callback, not a timer).
  *
- * `retry_pending`/`wait_pending` are deliberately ABSENT from
+ * `retry_pending`/`wait_pending`/`external_wait_pending` are deliberately ABSENT from
  * `TerminalNodeStatusSchema`, and that single fact is what implements the HOLD/PARK
  * — no new predicate anywhere:
  * `TERMINAL_NODE` excludes it, so `endpointOutcome` returns `null`, every
@@ -148,6 +157,7 @@ export const NodeRunStatusSchema = z.enum([
   'waiting',
   'retry_pending',
   'wait_pending',
+  'external_wait_pending',
 ]);
 export type NodeRunStatus = z.infer<typeof NodeRunStatusSchema>;
 
@@ -740,6 +750,72 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     previousAttemptId: z.string(),
   }),
   z.object({
+    /**
+     * #4 A13 — the durable fact that a `webhook` control node has PARKED awaiting
+     * an inbound HTTP callback. Appended by the DRIVER once the expiry alarm row +
+     * the correlation row exist (`armExternalWait`), so the log records WHEN the
+     * wait expires. The external-wait twin of `timer.waitScheduled`, and like it
+     * NOT inert: its fold TRANSITIONS the node `ready` → `external_wait_pending`.
+     *
+     * The correlation TOKEN is DELIBERATELY NOT carried here. `run_events` is
+     * served raw (`GET /api/runs/:id/events`), streamed over the P6 WS feed and
+     * fanned out on the bus — a bearer capability in that log would be a plaintext
+     * credential exposed for the life of the run and forever after. The token is
+     * instead DERIVED deterministically server-side (`HMAC(masterKey,
+     * runId|nodeId|attemptId)`, the `deterministicChildRunId` pattern) so it is
+     * re-derivable on demand from an owner-scoped endpoint and never persisted raw
+     * (only its `sha256` hash, in the correlation row, for the inbound lookup).
+     *
+     * `dueAt` is a STORED fact (epoch ms), stamped from the ARMED ROW's `dueAt`,
+     * never recomputed at fold time — replay-deterministic, exactly as
+     * `timer.waitScheduled.dueAt` is. The arm precedes this append, so an
+     * `external_wait_pending` node always has a live expiry alarm.
+     */
+    type: z.literal('externalWait.created'),
+    runId: z.string(),
+    nodeId: z.string(),
+    /** The attempt this external wait parks (the alarm/correlation freshness handle). */
+    attemptId: z.string(),
+    dueAt: z.number().int(),
+  }),
+  z.object({
+    /**
+     * #4 A13 — the parked `webhook` node's inbound callback ARRIVED. Appended by
+     * the `POST /api/external-wait/:token` route once it has authenticated the
+     * capability token and correlated it to this parked (runId, nodeId, attemptId).
+     * Folding it completes the wait (`external_wait_pending` → `success`, empty
+     * outputs — the payload is OPAQUE in A13; typed `outputSchema`→`config.outputs`
+     * is A16). The external-wait twin of `timer.due`: where `timer.due` fires from
+     * an alarm, this fires from an HTTP request. Guarded on `external_wait_pending`
+     * at the parked attempt, so an at-least-once / replayed callback folds as a
+     * no-op (the second layer behind the route's own row-status guard).
+     */
+    type: z.literal('externalWait.completed'),
+    runId: z.string(),
+    nodeId: z.string(),
+    previousAttemptId: z.string(),
+  }),
+  z.object({
+    /**
+     * #4 A13 — the parked `webhook` node's expiry alarm fired before any callback
+     * arrived. Appended by the alarm clock's `node_external_wait` handler when S1's
+     * expiry row comes due; folding it FAILS the node (`external_wait_pending` →
+     * `failure`) then `settle`s, so the node's `failure` edge routes the timeout /
+     * default path (or the run fails blaming it). Distinct from
+     * `externalWait.completed` for observability (the spec names it) and because a
+     * parked node is NOT `LIVE_NODE`, so `onFailed` (which guards on `LIVE_NODE`)
+     * cannot reach it — this fold is the external-wait's own terminal transition.
+     * A timeout is a PERMANENT failure (never policy-retried): the `failure` edge is
+     * the configurable escape hatch, matching A7 `fail`'s permanence. Guarded on
+     * `external_wait_pending` at the parked attempt (at-least-once redelivery, or an
+     * alarm for a node that already completed / reset, folds as a no-op).
+     */
+    type: z.literal('externalWait.expired'),
+    runId: z.string(),
+    nodeId: z.string(),
+    previousAttemptId: z.string(),
+  }),
+  z.object({
     // The event-sourced representation of the boot reconciler's "this run
     // cannot be safely resumed" verdict (P2d). Appended when a run had a
     // NON-idempotent activity in flight at crash time (an LLM call that may
@@ -957,6 +1033,27 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     attemptId: z.string(),
     /** Resolved, non-negative, finite duration in seconds (the reducer's pure half). */
     seconds: z.number(),
+  }),
+  z.object({
+    /**
+     * #4 A13 — "this `control` `webhook` node should PARK awaiting an inbound
+     * callback, with a timeout." A driver-OWN command like `scheduleWait` (no
+     * executor — the driver's `pump` routes it to `armExternalWait`, which derives
+     * the correlation token, upserts the correlation row + arms S1's EXPIRY alarm,
+     * THEN appends `externalWait.created`). Same pure/impure split as `scheduleWait`:
+     * the reducer resolves the `${}` `timeoutSeconds` PURELY over run state and
+     * hands the driver the resolved number; the driver decides WHEN the expiry is
+     * (`now + timeoutSeconds*1000`) and mints/stores the token (needs the master
+     * key + randomness the pure reducer cannot). `ExecutorCommand` excludes it, so
+     * forgetting the pump branch is a COMPILE error. `attemptId` is the webhook
+     * node's current attempt — the alarm + correlation freshness handle, and the
+     * replay-stable input the deterministic token derivation keys off.
+     */
+    type: z.literal('scheduleExternalWait'),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    /** Resolved, non-negative, finite timeout in seconds (the reducer's pure half). */
+    timeoutSeconds: z.number(),
   }),
   z.object({
     type: z.literal('finishRun'),

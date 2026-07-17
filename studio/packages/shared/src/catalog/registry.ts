@@ -15,6 +15,7 @@ import {
   IF_ACTIVITY_TYPE,
   SWITCH_ACTIVITY_TYPE,
   WAIT_ACTIVITY_TYPE,
+  WEBHOOK_ACTIVITY_TYPE,
 } from './types.js';
 import { llmCallConfigSchema } from './llm-config.js';
 
@@ -222,6 +223,39 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: [],
     outputs: [],
     configSchema: z.object({ seconds: z.string().min(1) }),
+  },
+  {
+    // #4 A13 — the `webhook` external-wait CONTROL activity. Engine-evaluated like
+    // `wait` (`kind:'control'`, no connector, `CONTROL_NOT_DISPATCHABLE` on
+    // dispatch): the reducer routes it STRUCTURALLY by `type`. Like `wait` it is
+    // DURABLE, but a DIFFERENT suspend/resume source — a ready `webhook` resolves
+    // its whole-value `${}` `timeoutSeconds` PURELY, and the driver ARMS S1's
+    // EXPIRY alarm (+ a correlation row) then appends `externalWait.created`,
+    // parking the node `external_wait_pending`. It resumes when an inbound,
+    // correlated + authed + replay-protected HTTP callback appends
+    // `externalWait.completed` (SUCCEEDS the node, no output — the payload is OPAQUE
+    // in A13; typed `outputSchema`→`config.outputs` is A16) OR the expiry alarm
+    // fires `externalWait.expired` (FOLDS the node to `failure`, so its `failure`
+    // edge is the timeout/default path). `outputs:[]` (no typed output yet) and no
+    // branch labels. `timeoutSeconds` is a WHOLE-VALUE `${}` number field like
+    // `wait.seconds` (an embedded template can only be a string, so
+    // `validateWebhookConfig` refuses it at save); `configSchema` is palette
+    // metadata, the save-time rule is `validateDoc`'s `validateWebhookConfig`, and
+    // the run-time type gate is `evalWebhookTimeoutSeconds` (finite, non-negative,
+    // bounded). A REQUIRED timeout guarantees a parked webhook always has a live
+    // alarm (it can never stall). `idempotent:false` is inert (a control node is
+    // never dispatched). Cataloguing the TYPE bumped `CATALOG_VERSION` 9→10 so an
+    // older build refuses a webhook-doc it cannot route rather than treating it
+    // inert. Config rides `Node.config` (not `Node.call`), so it is NOT a
+    // structural-call and is generically authorable (no palette exclusion).
+    type: WEBHOOK_ACTIVITY_TYPE,
+    title: 'Webhook (external wait)',
+    kind: 'control',
+    category: 'control',
+    idempotent: false,
+    connectionKinds: [],
+    outputs: [],
+    configSchema: z.object({ timeoutSeconds: z.string().min(1) }),
   },
   {
     // #4 A9 — the `execute_pipeline` CONTROL activity. It does NOT introduce a new

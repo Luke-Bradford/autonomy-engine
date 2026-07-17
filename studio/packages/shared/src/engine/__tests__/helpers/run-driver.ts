@@ -203,6 +203,35 @@ export function driveRun(eng: Engine, opts: DriveOptions): DriveResult {
       });
       continue;
     }
+    // #4 A13 — the driver's OWN `scheduleExternalWait` command (a `control`
+    // `webhook` parks awaiting an inbound callback): the real driver ARMS S1's
+    // expiry alarm + a correlation row then appends `externalWait.created`, and the
+    // node resumes when the inbound `POST /api/external-wait/:token` route appends
+    // `externalWait.completed` (or the expiry alarm appends `externalWait.expired`)
+    // — `server/src/run/driver.ts` `armExternalWait` + `routes/external-wait.ts` +
+    // `scheduler/external-wait-alarm.ts`. The harness has no HTTP layer/clock, so it
+    // models the HAPPY-PATH callback: fold `externalWait.created` then
+    // `externalWait.completed` immediately (exercising the park→resume state machine
+    // end to end). The EXPIRY path (`externalWait.expired` → `failure`) is a distinct
+    // choice a harness can't make, so it is driven directly via `reduce` in
+    // `webhook-routing.test.ts`; the route's real auth/replay/timing is covered
+    // server-side (`routes/__tests__`, `scheduler/__tests__/external-wait-alarm.test.ts`).
+    if (c.type === 'scheduleExternalWait') {
+      apply({
+        type: 'externalWait.created',
+        runId,
+        nodeId: c.nodeId,
+        attemptId: c.attemptId,
+        dueAt: 0,
+      });
+      apply({
+        type: 'externalWait.completed',
+        runId,
+        nodeId: c.nodeId,
+        previousAttemptId: c.attemptId,
+      });
+      continue;
+    }
     if (c.type !== 'dispatchNode') continue;
     order.push(c.nodeId);
     apply({

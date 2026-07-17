@@ -168,6 +168,13 @@ export interface ReconcileDeps {
    * watching yet; wiring it keeps the append path uniform (every appended event
    * publishes) rather than being a live requirement today. */
   bus?: RunEventBus;
+  /**
+   * #4 A13 — the webhook external-wait token signer `pump` needs to RESUME a `ready`
+   * webhook (its `scheduleExternalWait` re-armed via `armExternalWait`). Optional for
+   * the same reason as on `DriverDeps`: only a webhook doc needs it, and its absence
+   * throws loudly rather than hanging. Threaded through to the pump's driver boundary.
+   */
+  signExternalWaitToken?: (args: { runId: string; nodeId: string; attemptId: string }) => string;
 }
 
 export interface ReconcileReport {
@@ -275,14 +282,21 @@ function dispatchedNodes(state: RunState): { id: string; attemptId: string }[] {
 }
 
 /**
- * A run parked on a wait (#4 A6): at least one node is `wait_pending`. Deliberately
- * NOT the reducer's `awaitsExternalEvent`, which is a SUPERSET (it also matches
- * `ready`/`dispatched`/`waiting`/`retry_pending`) — the caller must match
- * `wait_pending` EXCLUSIVELY, so a run with a still-live `ready` node is resumed
- * normally rather than misreported `held`.
+ * A run parked on a DURABLE node alarm: at least one node is `wait_pending` (#4 A6)
+ * or `external_wait_pending` (#4 A13). BOTH are entered by an event appended AFTER
+ * the alarm/row arm, so a parked node always has a live alarm and needs no boot
+ * re-arm — the same disposition, and the same reason to catch it here rather than
+ * let it fall through the finalize path (a spurious `run.resumed` + a `finalized`
+ * misreport of a still-running parked run). Deliberately NOT the reducer's
+ * `awaitsExternalEvent`, which is a SUPERSET (it also matches
+ * `ready`/`dispatched`/`waiting`/`retry_pending`) — the caller must match the parked
+ * statuses EXCLUSIVELY, so a run with a still-live `ready` node is resumed normally
+ * rather than misreported `held`.
  */
-function hasWaitPendingNode(state: RunState): boolean {
-  return Object.values(state.nodes).some((n) => n.status === 'wait_pending');
+function hasDurableParkNode(state: RunState): boolean {
+  return Object.values(state.nodes).some(
+    (n) => n.status === 'wait_pending' || n.status === 'external_wait_pending',
+  );
 }
 
 /**
@@ -657,20 +671,23 @@ async function reconcileOne(deps: ReconcileDeps, report: ReconcileReport, run: R
     if (commands.length === 0) return;
   }
 
-  // A run PARKED on a wait (#4 A6) re-derives NOTHING above either — `onResumed`
-  // skips `wait_pending` (like `retry_pending`), and `settle` cannot finish a run
-  // whose node is non-terminal — so it reaches here with no commands. UNLIKE a
-  // retry hold it needs NO re-arm: a `wait_pending` node's alarm was armed BEFORE
-  // the `timer.waitScheduled` that parked it, so it always has a live row and the
-  // clock's boot tick fires it. But it must be caught HERE, not left to fall
-  // through: the finalize path below appends a spurious `run.resumed` (a no-op fold
-  // for a parked node) and MISreports a still-running parked run as `finalized`
-  // (`commands` is empty, so `needsExecutor` is false). Report it `held` — alive on
-  // a durable node alarm, nothing to resume, the same disposition as a retry hold —
-  // and stop, leaving its row untouched. Reached only when the wait is the ONLY
-  // live work: a run with a parked wait AND a ready sibling has `commands`, resumes
-  // normally, and its wait alarm fires independently.
-  if (commands.length === 0 && hasWaitPendingNode(next)) {
+  // A run PARKED on a durable node alarm — a `wait` (#4 A6, `wait_pending`) or a
+  // `webhook` (#4 A13, `external_wait_pending`) — re-derives NOTHING above either:
+  // `onResumed` skips both parked statuses (like `retry_pending`), and `settle`
+  // cannot finish a run whose node is non-terminal, so it reaches here with no
+  // commands. UNLIKE a retry hold it needs NO re-arm: the alarm was armed BEFORE the
+  // event that parked the node, so it always has a live row and the clock's boot
+  // tick fires it. But it must be caught HERE, not left to fall through: the finalize
+  // path below appends a spurious `run.resumed` (a no-op fold for a parked node) and
+  // MISreports a still-running parked run as `finalized` (`commands` is empty, so
+  // `needsExecutor` is false). Report it `held` — alive on a durable node alarm,
+  // nothing to resume, the same disposition as a retry hold — and stop, leaving its
+  // row untouched. Reached only when the park is the ONLY live work: a run with a
+  // parked node AND a ready sibling has `commands`, resumes normally, and its alarm
+  // fires independently. (A `webhook` external wait typically parks for a long time
+  // awaiting a human/external callback, so a restart while parked is its NORMAL, not
+  // exceptional, boot state.)
+  if (commands.length === 0 && hasDurableParkNode(next)) {
     report.held.push(run.id);
     return;
   }
@@ -713,6 +730,7 @@ async function reconcileOne(deps: ReconcileDeps, report: ReconcileReport, run: R
       executor: deps.executor ?? refuseToExecute,
       alarms: deps.alarms,
       bus: deps.bus,
+      signExternalWaitToken: deps.signExternalWaitToken,
     },
     engine,
     next,

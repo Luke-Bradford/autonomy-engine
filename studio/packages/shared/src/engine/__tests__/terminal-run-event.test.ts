@@ -108,6 +108,14 @@ describe('#443 — terminalStatusOf', () => {
       // are free to land after an accepted terminal (§E's invariant).
       { type: 'timer.waitScheduled', ...run, nodeId: 'n1', attemptId: 'n1#0', dueAt: 1 },
       { type: 'timer.due', ...run, nodeId: 'n1', previousAttemptId: 'n1#0' },
+      // #4 A13 — the external-wait family. NON-terminal, same shape as the timer
+      // pair: `externalWait.created` parks the node `external_wait_pending`,
+      // `externalWait.completed` folds it to `success` and `externalWait.expired` to
+      // `failure` — each folds a NODE, none is itself a run-terminating event, and
+      // all are free to land after an accepted terminal (§E's invariant).
+      { type: 'externalWait.created', ...run, nodeId: 'n1', attemptId: 'n1#0', dueAt: 1 },
+      { type: 'externalWait.completed', ...run, nodeId: 'n1', previousAttemptId: 'n1#0' },
+      { type: 'externalWait.expired', ...run, nodeId: 'n1', previousAttemptId: 'n1#0' },
     ];
     for (const event of nonTerminal) {
       expect(terminalStatusOf(event), `${event.type} must not be terminal`).toBeNull();

@@ -3,6 +3,7 @@ import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqli
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 import {
   ConnectionKindSchema,
+  ExternalWaitStatusSchema,
   RunStatusSchema,
   TriggerModeSchema,
   WakeupStatusSchema,
@@ -11,6 +12,7 @@ import {
   type ConnectionKind,
   type Container,
   type Edge,
+  type ExternalWaitStatus,
   type Node,
   type Output,
   type Param,
@@ -372,5 +374,56 @@ export const scheduledWakeups = sqliteTable(
     index('scheduled_wakeups_retention_idx')
       .on(table.firedAt)
       .where(sql`${table.status} <> 'pending'`),
+  ],
+);
+
+/**
+ * #4 A13 — the `webhook` external-wait CORRELATION store. When a `webhook` node
+ * parks (`external_wait_pending`), one row here links its parked
+ * `(run_id, node_id, attempt_id)` to the SHA-256 hash of its capability token, so
+ * an inbound `POST /api/external-wait/:token` route can authenticate a callback
+ * (by token → hash → this row) and correlate it to the exact parked attempt.
+ *
+ * `token_hash` is UNIQUE and indexed — the inbound lookup's only query. The RAW
+ * token is NEVER stored (only its hash): the row is read by an unauthenticated
+ * inbound route, and the token is re-DERIVED on demand (`HMAC(masterKey, ...)`,
+ * `webhooks/external-wait-token.ts`), never persisted in plaintext.
+ *
+ * UNIQUE (run_id, node_id, attempt_id) is load-bearing for crash recovery: a
+ * driver re-arm on resume upserts the SAME row (ON CONFLICT DO NOTHING) rather
+ * than minting a second token, mirroring `scheduled_wakeups`' `(kind, dedupe_key)`
+ * dedupe. `status` settles `pending` → `completed`/`expired` exactly once (every
+ * transition is `WHERE status = 'pending'`), so a completed row is never
+ * downgraded by a late timeout alarm. `expires_at` mirrors the expiry alarm's
+ * `due_at` (the audit fact for "when does this wait end"). Like `webhook_deliveries`
+ * / `scheduled_wakeups`, this is driver INFRA — never part of a resource response.
+ */
+export const externalWaits = sqliteTable(
+  'external_waits',
+  {
+    id: text('id').primaryKey(),
+    runId: text('run_id')
+      .notNull()
+      .references(() => runs.id, { onDelete: 'cascade' }),
+    nodeId: text('node_id').notNull(),
+    attemptId: text('attempt_id').notNull(),
+    /** SHA-256 hex of the capability token — the inbound lookup handle. */
+    tokenHash: text('token_hash').notNull(),
+    status: text('status', { enum: asEnumTuple(ExternalWaitStatusSchema.options) })
+      .notNull()
+      .$type<ExternalWaitStatus>(),
+    createdAt: integer('created_at').notNull(),
+    /** Epoch ms; mirrors the expiry alarm's `due_at`. */
+    expiresAt: integer('expires_at').notNull(),
+    /** Epoch ms the row settled (`completed`/`expired`); null while `pending`. */
+    resolvedAt: integer('resolved_at'),
+  },
+  (table) => [
+    uniqueIndex('external_waits_token_hash_idx').on(table.tokenHash),
+    uniqueIndex('external_waits_run_node_attempt_idx').on(
+      table.runId,
+      table.nodeId,
+      table.attemptId,
+    ),
   ],
 );

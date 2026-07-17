@@ -23,6 +23,7 @@ import {
   SWITCH_ACTIVITY_TYPE,
   SWITCH_DEFAULT_BRANCH,
   WAIT_ACTIVITY_TYPE,
+  WEBHOOK_ACTIVITY_TYPE,
 } from '../catalog/types.js';
 import type { OutputType } from '../schemas/pipeline.js';
 import { outputContract, type CheckedContract, type OutputContract } from './outputs.js';
@@ -148,6 +149,11 @@ const LIVE_NODE = new Set<NodeRunState['status']>(['ready', 'dispatched']);
  *     shape as `retry_pending`: nothing in flight, a durable alarm the only
  *     resolver — so `true`, or a run whose sole live node is waiting would be
  *     torn down `stalled` (the single highest-risk classification in this ticket).
+ *   - `external_wait_pending` — #4 A13: a `webhook` node owes an inbound
+ *     `externalWait.completed` (or its expiry alarm owes `externalWait.expired`).
+ *     Same shape as `wait_pending` — nothing in flight, resolved only by an
+ *     external event — so `true`, else a run whose sole live node is an external
+ *     wait is torn down `stalled` before any callback can arrive.
  */
 function awaitsExternalEvent(status: NodeRunState['status']): boolean {
   switch (status) {
@@ -156,6 +162,7 @@ function awaitsExternalEvent(status: NodeRunState['status']): boolean {
     case 'waiting':
     case 'retry_pending':
     case 'wait_pending':
+    case 'external_wait_pending':
       return true;
     case 'pending':
     case 'success':
@@ -1053,6 +1060,32 @@ export function createEngine(doc: EngineDoc): Engine {
       commands.push({ type: 'scheduleWait', nodeId: id, attemptId, seconds });
       return { state: next, changed: true };
     }
+    if (node.type === WEBHOOK_ACTIVITY_TYPE) {
+      // #4 A13 — a `control` `webhook` is ENGINE-evaluated like `wait` (checked
+      // here, before `node.call` and dispatch), and DURABLE, but PARKS awaiting an
+      // inbound callback rather than a timer. Resolve the `${}` `timeoutSeconds`
+      // PURELY, hold the node `ready` (the driver owes `externalWait.created`, the
+      // same handshake `wait` uses for `timer.waitScheduled`), and emit a
+      // `scheduleExternalWait` command carrying the resolved timeout. NEVER handed to
+      // the executor. A missing/bad `timeoutSeconds` throws → `prepFailure` →
+      // `finishRun{invalid_event}`. The node does NOT enter `external_wait_pending`
+      // here — that transition is `externalWait.created`'s fold, appended by the
+      // driver AFTER it arms the expiry alarm + correlation row, so an
+      // `external_wait_pending` node always has a live alarm.
+      let timeoutSeconds: number;
+      try {
+        timeoutSeconds = evalWebhookTimeoutSeconds(node, state, foreachItemOf(state, id));
+      } catch (err) {
+        return prepFailure(state, id, err, diagnostics);
+      }
+      const next = withNode(state, id, {
+        status: 'ready',
+        attempts: ns.attempts + 1,
+        currentAttemptId: attemptId,
+      });
+      commands.push({ type: 'scheduleExternalWait', nodeId: id, attemptId, timeoutSeconds });
+      return { state: next, changed: true };
+    }
     if (node.call !== undefined) {
       // call_pipeline: resolve the (possibly `${}`) pipelineVersionId + params,
       // hold the node `waiting`, and ask the driver to spawn the child.
@@ -1573,18 +1606,54 @@ export function createEngine(doc: EngineDoc): Engine {
    * is a valid sub-second wait, not an arm-time crash.
    */
   function evalWaitSeconds(node: Node, state: RunState, item?: { value: unknown }): number {
-    const raw = node.config['seconds'];
+    return evalDurationSeconds(node, state, item, 'seconds', 'wait');
+  }
+
+  /**
+   * #4 A13 — a `webhook` node's `${}` `timeoutSeconds`, resolved by the SAME
+   * whole-value/finite/bounded rules as a `wait`'s `seconds` (the shared
+   * `evalDurationSeconds` SSOT). The driver's `armExternalWait` turns it into the
+   * expiry `dueAt = now + timeoutSeconds*1000`. Required (a webhook must always be
+   * time-bounded — its own dispatch-prep throws on absence, so a parked webhook
+   * always has a live expiry alarm and can never stall).
+   */
+  function evalWebhookTimeoutSeconds(
+    node: Node,
+    state: RunState,
+    item?: { value: unknown },
+  ): number {
+    return evalDurationSeconds(node, state, item, 'timeoutSeconds', 'webhook');
+  }
+
+  /**
+   * #4 A6/A13 — the SSOT for resolving a durable-park node's `${}` DURATION field
+   * to the finite, non-negative, bounded number the driver turns into an alarm
+   * `dueAt`. Parameterised by the config key (`seconds` / `timeoutSeconds`) and the
+   * node NOUN (`wait` / `webhook`) so `wait` and `webhook` share one hardened rule —
+   * the whole-value gate (an embedded template can only produce a STRING),
+   * the fail-open guards (`Number([])`/`Number(false)`/`Number('')` all coerce to a
+   * manufactured `0`), and the `MAX_WAIT_SECONDS` overflow bound — instead of two
+   * copies that could drift.
+   */
+  function evalDurationSeconds(
+    node: Node,
+    state: RunState,
+    item: { value: unknown } | undefined,
+    field: string,
+    noun: string,
+  ): number {
+    const raw = node.config[field];
     if (typeof raw !== 'string' || raw.trim() === '') {
       throw new SubstituteError(
-        `wait node '${node.id}' has no 'seconds' — a wait parks for a number of ` +
+        `${noun} node '${node.id}' has no '${field}' — a ${noun} parks for a number of ` +
           'seconds (e.g. ${5} or ${nodes.check.output.retryAfter})',
       );
     }
     const src = raw.trim();
-    // Run-time whole-value gate, the SSOT `validateWaitConfig` reads at save —
+    // Run-time whole-value gate, the SSOT `validateDoc` reads at save —
     // enforced HERE too so a pre-gate legacy row (or any bypass of the save path)
     // fails LOUD instead of coercing an embedded template's string result.
-    const defect = wholeValueDefect(src, 'seconds');
+    const defect = wholeValueDefect(src, field);
     if (defect !== null) throw new SubstituteError(defect);
     const resolved = substitute(src, buildCtx(state), 0, item);
     // Accept a `number` (`${5}` / a number-typed ref) or a NON-EMPTY numeric
@@ -1606,23 +1675,23 @@ export function createEngine(doc: EngineDoc): Engine {
     }
     if (!Number.isFinite(seconds) || seconds < 0) {
       throw new SubstituteError(
-        `wait node '${node.id}' seconds must resolve to a finite, non-negative number ` +
+        `${noun} node '${node.id}' ${field} must resolve to a finite, non-negative number ` +
           `(got ${JSON.stringify(resolved)})`,
       );
     }
-    // Upper-bound `seconds` so the driver's `dueAt = now + seconds*1000` cannot
-    // overflow past a SAFE integer (→ ±Infinity / precision loss). An unbounded
-    // astronomical value passes the finite/non-negative gate here but then fails
-    // `ArmWakeupInputSchema`'s `z.number().int()` INSIDE `armWait` as a boot poison
-    // pill (the run re-throws on every resume) instead of failing LOUD here — the
-    // opposite tail of the fractional case `armWait` rounds. Reject at eval time so
-    // a bad duration fails the run cleanly, never the alarm arm. `MAX_WAIT_SECONDS`
-    // keeps the FULL `dueAt = now + seconds*1000` within `Number.MAX_SAFE_INTEGER`
-    // (it reserves headroom for `now` — see the constant), so no precision drift or
-    // overflow reaches the arm; the cap is still ~253k years, past any real wait.
+    // Upper-bound so the driver's `dueAt = now + seconds*1000` cannot overflow past
+    // a SAFE integer (→ ±Infinity / precision loss). An unbounded astronomical value
+    // passes the finite/non-negative gate here but then fails `ArmWakeupInputSchema`'s
+    // `z.number().int()` INSIDE the arm as a boot poison pill (the run re-throws on
+    // every resume) instead of failing LOUD here — the opposite tail of the
+    // fractional case the arm rounds. Reject at eval time so a bad duration fails the
+    // run cleanly, never the alarm arm. `MAX_WAIT_SECONDS` keeps the FULL
+    // `dueAt = now + seconds*1000` within `Number.MAX_SAFE_INTEGER` (it reserves
+    // headroom for `now` — see the constant), so no precision drift or overflow
+    // reaches the arm; the cap is still ~253k years, past any real wait.
     if (seconds > MAX_WAIT_SECONDS) {
       throw new SubstituteError(
-        `wait node '${node.id}' seconds ${seconds} exceeds the maximum ${MAX_WAIT_SECONDS} ` +
+        `${noun} node '${node.id}' ${field} ${seconds} exceeds the maximum ${MAX_WAIT_SECONDS} ` +
           '(a longer wait would overflow the alarm due time)',
       );
     }
@@ -2483,6 +2552,84 @@ export function createEngine(doc: EngineDoc): Engine {
     return settle(withNode(state, event.nodeId, { status: 'success' }), diagnostics);
   }
 
+  /**
+   * #4 A13 — fold `externalWait.created`: a `webhook` node's expiry alarm +
+   * correlation row are armed, so PARK it `ready` → `external_wait_pending`. The
+   * external-wait twin of `onWaitScheduled` (and NOT inert, for the same reason: a
+   * webhook has no prior hold event). Guarded on the node being `ready` at exactly
+   * this attempt (a stale/duplicate created event for a node that has moved on — an
+   * at-least-once re-arm, or a back-edge reset — is a no-op). Does NOT `settle`: the
+   * node is now parked, nothing downstream can advance until the callback/expiry.
+   */
+  function onExternalWaitCreated(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'externalWait.created' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    const ns = state.nodes[event.nodeId];
+    if (ns === undefined) return { state, commands: [], diagnostics };
+    if (ns.status !== 'ready' || ns.currentAttemptId !== event.attemptId) {
+      return { state, commands: [], diagnostics };
+    }
+    return {
+      state: withNode(state, event.nodeId, { status: 'external_wait_pending' }),
+      commands: [],
+      diagnostics,
+    };
+  }
+
+  /**
+   * #4 A13 — fold `externalWait.completed`: the parked `webhook` node's inbound
+   * callback arrived, so COMPLETE it (`external_wait_pending` → `success`, empty
+   * outputs — the payload is OPAQUE in A13). The external-wait twin of `onWaitDue`:
+   * where a wait completes on a `timer.due`, a webhook completes on an HTTP-route
+   * append, but both SUCCEED and `settle` so downstream `success` edges route.
+   * Guarded on `external_wait_pending` at the parked attempt (NOT `LIVE_NODE`,
+   * exactly as `onWaitDue`/`onRetryDue` guard): an at-least-once redelivery, or a
+   * completion naming an attempt the node has moved past, is a no-op. The route's
+   * own row-status guard is the first layer; this is the second (the pure fold).
+   */
+  function onExternalWaitCompleted(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'externalWait.completed' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    const ns = state.nodes[event.nodeId];
+    if (ns === undefined) return { state, commands: [], diagnostics };
+    if (ns.status !== 'external_wait_pending' || ns.currentAttemptId !== event.previousAttemptId) {
+      return { state, commands: [], diagnostics };
+    }
+    return settle(withNode(state, event.nodeId, { status: 'success' }), diagnostics);
+  }
+
+  /**
+   * #4 A13 — fold `externalWait.expired`: the parked `webhook` node's expiry alarm
+   * fired before any callback, so FAIL it (`external_wait_pending` → `failure`) then
+   * `settle` so its `failure` edge routes the timeout/default path (or the run fails
+   * blaming it). Mirrors `onFailed`'s terminal branch — a bare status flip to
+   * `failure` + `settle` IS the failure-recording path (`onFailed` records the same
+   * way, the kind/code riding the EVENT, not the projection). Distinct from a
+   * `node.failed` because an `external_wait_pending` node is NOT `LIVE_NODE`, so
+   * `onFailed` (which guards on `LIVE_NODE`) cannot reach it. A timeout is a
+   * PERMANENT failure by construction — this path never consults `policy.retry`, so
+   * an expiry is never re-parked (the `failure` edge is the configurable escape
+   * hatch, matching A7 `fail`'s permanence). Guarded on `external_wait_pending` at
+   * the parked attempt: an at-least-once redelivery, or an expiry naming an attempt
+   * the node has moved past (already completed / back-edge reset), is a no-op.
+   */
+  function onExternalWaitExpired(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'externalWait.expired' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    const ns = state.nodes[event.nodeId];
+    if (ns === undefined) return { state, commands: [], diagnostics };
+    if (ns.status !== 'external_wait_pending' || ns.currentAttemptId !== event.previousAttemptId) {
+      return { state, commands: [], diagnostics };
+    }
+    return settle(withNode(state, event.nodeId, { status: 'failure' }), diagnostics);
+  }
+
   function onRetryRequested(
     state: RunState,
     event: Extract<EngineEvent, { type: 'node.retryRequested' }>,
@@ -2703,6 +2850,36 @@ export function createEngine(doc: EngineDoc): Engine {
           });
           continue;
         }
+        if (node.type === WEBHOOK_ACTIVITY_TYPE) {
+          // #4 A13 crash recovery: a `webhook` folds to `ready` after
+          // `tryDispatchNode` pushed `scheduleExternalWait`, but `projectRunState`
+          // keeps STATE, not COMMANDS — a crash between the predecessor's durable
+          // event and `externalWait.created` (or between the alarm/row arm and that
+          // append) re-derives the node `ready` with its command lost, and without
+          // this fork nothing re-emits it, so the run hangs `ready` forever (the same
+          // reason the `wait`/control/`fail`/`filter` forks re-emit). Recompute
+          // `timeoutSeconds` PURELY and re-emit; `armExternalWait` is idempotent by
+          // the alarm's `(kind, dedupeKey)` AND the correlation row's
+          // `(runId,nodeId,attemptId)` uniqueness, so a re-arm returns the existing
+          // row and DETERMINISTICALLY re-derives the same token, keeping the ORIGINAL
+          // `dueAt`. Terminalize a `timeoutSeconds` that now throws, the same verdict
+          // as the dispatch-prep branch. Passes the `foreach` item so a
+          // `${item}`-bearing `timeoutSeconds` re-resolves identically (#569).
+          let timeoutSeconds: number;
+          try {
+            timeoutSeconds = evalWebhookTimeoutSeconds(node, state, foreachItemOf(state, id));
+          } catch (err) {
+            const failed = prepFailure(state, id, err, diagnostics);
+            return { state: failed.state, commands: [failed.finish], diagnostics };
+          }
+          commands.push({
+            type: 'scheduleExternalWait',
+            nodeId: id,
+            attemptId: ns.currentAttemptId,
+            timeoutSeconds,
+          });
+          continue;
+        }
         let prepared: Record<string, unknown>;
         try {
           prepared = prepInput(state, node);
@@ -2853,6 +3030,14 @@ export function createEngine(doc: EngineDoc): Engine {
         return onWaitScheduled(state, event, diagnostics);
       case 'timer.due':
         return onWaitDue(state, event, diagnostics);
+      case 'externalWait.created':
+        // #4 A13 — NOT inert (like `timer.waitScheduled`): a webhook has no prior
+        // hold event, so this fold parks the node `ready` → `external_wait_pending`.
+        return onExternalWaitCreated(state, event, diagnostics);
+      case 'externalWait.completed':
+        return onExternalWaitCompleted(state, event, diagnostics);
+      case 'externalWait.expired':
+        return onExternalWaitExpired(state, event, diagnostics);
       case 'node.retryRequested':
         return onRetryRequested(state, event, diagnostics);
       case 'run.resumed':

@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
 import { getRun, listRunDiagnostics, listRunEvents, listRuns } from '../repo/index.js';
+import { listPendingExternalWaitsByRun } from '../repo/external-waits.js';
+import { deriveExternalWaitToken } from '../webhooks/external-wait-token.js';
 import { requireOwned } from './util.js';
 
 /**
@@ -66,5 +68,37 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       request.params.id,
     );
     return listRunDiagnostics(db, run.id);
+  });
+
+  /**
+   * #4 A13 — the OWNER-scoped retrieval of a run's pending `webhook` external-wait
+   * callback URLs. Until A16 injects the URL into an outbound trigger, this is how
+   * the operator/an integration obtains the callback URL to hand to the external
+   * system awaiting a human/callback decision.
+   *
+   * Owner-scoped THROUGH the run (`requireOwned`) — authentication is not
+   * authorization: `request.principal` proves who is asking, `requireOwned` proves
+   * they own the run whose parked nodes' capability tokens this returns. The token
+   * is RE-DERIVED here (`HMAC(masterKey, ...)`, never read from a log or the row's
+   * hash), so a live bearer credential is only ever handed to the run's OWNER, on
+   * demand — never persisted in plaintext, never in the raw event feed.
+   */
+  fastify.get<{ Params: { id: string } }>('/api/runs/:id/external-waits', async (request) => {
+    const run = requireOwned(
+      getRun(db, request.params.id),
+      request.principal,
+      'run',
+      request.params.id,
+    );
+    return listPendingExternalWaitsByRun(db, run.id).map((wait) => ({
+      nodeId: wait.nodeId,
+      attemptId: wait.attemptId,
+      expiresAt: wait.expiresAt,
+      callbackPath: `/api/external-wait/${deriveExternalWaitToken(fastify.masterKey, {
+        runId: wait.runId,
+        nodeId: wait.nodeId,
+        attemptId: wait.attemptId,
+      })}`,
+    }));
   });
 };

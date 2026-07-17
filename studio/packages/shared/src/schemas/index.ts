@@ -7,6 +7,7 @@ export * from './recurrence.js';
 export * from './trigger.js';
 export * from './fire-result.js';
 export * from './run.js';
+export * from './external-wait.js';
 export * from './run-stream.js';
 export * from './secret.js';
 export * from './secret-ref.js';

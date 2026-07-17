@@ -6,8 +6,9 @@ describe('activity catalog', () => {
   it('exposes the MVP activity types', () => {
     // `if` (#4 A1) is the first CONTROL activity, `switch` (#4 A2) the second,
     // `fail` (#4 A7) the third, `filter` (#4 A8) the fourth, `wait` (#4 A5+A6) the
-    // fifth (and first DURABLE control activity) — all engine-evaluated, catalogued
-    // so the palette/executor-guard/version know them. `execute_pipeline` (#4 A9)
+    // fifth (and first DURABLE control activity), `webhook` (#4 A13) the sixth (the
+    // external-wait durable twin of `wait`) — all engine-evaluated, catalogued so
+    // the palette/executor-guard/version know them. `execute_pipeline` (#4 A9)
     // surfaces the pre-existing structural `Node.call` mechanism as a first-class
     // catalog TYPE (its config rides `node.call`, not `node.config`).
     expect([...catalog.keys()].sort()).toEqual([
@@ -26,6 +27,7 @@ describe('activity catalog', () => {
       'llm_call',
       'switch',
       'wait',
+      'webhook',
     ]);
   });
 

@@ -18,9 +18,12 @@ import { createScheduler } from './scheduler/scheduler.js';
 import { createAlarmClock, type AlarmClock } from './scheduler/alarms.js';
 import { createRetryAlarmHandler } from './scheduler/retry-alarm.js';
 import { createWaitAlarmHandler } from './scheduler/wait-alarm.js';
+import { createExternalWaitAlarmHandler } from './scheduler/external-wait-alarm.js';
 import { createScheduleTickHandler } from './scheduler/schedule-tick.js';
 import { createConnectorRegistry } from './connectors/registry.js';
 import { makeDocResolver } from './run/driver.js';
+import { createExternalWaitCompleter } from './run/external-wait-service.js';
+import { deriveExternalWaitToken } from './webhooks/external-wait-token.js';
 import type { DocResolver, RetryAlarms } from './run/driver.js';
 import { registerAuthHook } from './auth/principal.js';
 import { registerErrorHandler } from './errors.js';
@@ -29,6 +32,7 @@ import { secretsRoutes } from './routes/secrets.js';
 import { pipelinesRoutes } from './routes/pipelines.js';
 import { triggersRoutes } from './routes/triggers.js';
 import { webhooksRoutes } from './routes/webhooks.js';
+import { externalWaitRoutes } from './routes/external-wait.js';
 import { runsRoutes } from './routes/runs.js';
 import { runStreamRoutes } from './routes/run-stream.js';
 import { importRoutes } from './routes/import.js';
@@ -239,6 +243,15 @@ export async function buildApp(opts?: BuildAppOptions) {
   // while the launcher's identical fault is reported. That is the very
   // launcher-vs-alarm asymmetry F2c exists to remove, reintroduced by wiring
   // rather than by code.
+  // #4 A13 — the webhook external-wait token signer, closed over the master key so
+  // the driver derives a parked node's capability token without handling the key
+  // itself. The SAME derivation the routes use (`webhooks/external-wait-token.ts`),
+  // so the token the driver hashes into the row and the token the owner endpoint
+  // re-derives can never disagree. ONE closure, shared by the driver boundary AND
+  // the boot reconciler (which RESUMES a `ready` webhook and re-derives the same
+  // deterministic token) so the two cannot drift.
+  const signExternalWaitToken = (args: { runId: string; nodeId: string; attemptId: string }) =>
+    deriveExternalWaitToken(masterKeyResolution.key, args);
   const driverBoundary = {
     db,
     resolveDoc,
@@ -247,6 +260,7 @@ export async function buildApp(opts?: BuildAppOptions) {
     drives,
     bus: runEventBus,
     log: fastify.log,
+    signExternalWaitToken,
   };
   // #5 S5 — the `schedule_tick` handler moves schedule triggers off in-memory
   // crons onto this same durable clock. Its only extra dependency is the launcher
@@ -267,6 +281,9 @@ export async function buildApp(opts?: BuildAppOptions) {
       // #4 A5/A6 — the durable `wait` timer's `node_wait` handler; S1's second
       // node-level alarm consumer, wired here the same way retry's is.
       createWaitAlarmHandler(driverBoundary),
+      // #4 A13 — the `webhook` EXPIRY handler (`node_external_wait`); S1's third
+      // node-level consumer, appending `externalWait.expired` when no callback arrives.
+      createExternalWaitAlarmHandler(driverBoundary),
       scheduleTickHandler,
     ],
     bus: runEventBus,
@@ -288,6 +305,12 @@ export async function buildApp(opts?: BuildAppOptions) {
     executor,
     alarms,
     bus: runEventBus,
+    // #4 A13 — the reconciler RESUMES a `ready` webhook (a crash between the
+    // predecessor event and `externalWait.created` left its `scheduleExternalWait`
+    // un-armed), which re-derives the same deterministic token — so it needs the
+    // signer too, or `armExternalWait` would throw mid-reconcile. Same closure as
+    // the driver boundary above.
+    signExternalWaitToken,
   });
   fastify.log.info({ reconcileReport }, 'boot reconcile complete');
 
@@ -299,6 +322,12 @@ export async function buildApp(opts?: BuildAppOptions) {
   // a schedule row is already due at boot (#5 S5).
   const runLauncher = createRunLauncher({ ...driverBoundary });
   fastify.decorate('runLauncher', runLauncher);
+
+  // #4 A13 — the webhook external-wait COMPLETER: the run-side of
+  // `POST /api/external-wait/:token`. Shares the same driver boundary (so the
+  // completion append + downstream drive run under the shared per-run lock), exactly
+  // as `runLauncher` does.
+  fastify.decorate('externalWaitCompleter', createExternalWaitCompleter(driverBoundary));
 
   // P4b/#5 S5: the schedule RECONCILER — reconciles the durable `schedule_tick`
   // outbox rows against the DB's schedulable triggers (croner is a CALCULATOR
@@ -445,6 +474,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   await fastify.register(pipelinesRoutes);
   await fastify.register(triggersRoutes);
   await fastify.register(webhooksRoutes);
+  await fastify.register(externalWaitRoutes);
   await fastify.register(runsRoutes);
   await fastify.register(runStreamRoutes);
   await fastify.register(importRoutes);

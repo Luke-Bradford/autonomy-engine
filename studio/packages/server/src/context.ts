@@ -2,6 +2,7 @@ import type { Db } from './repo/types.js';
 import type { Supervisor } from './workers/process-supervisor.js';
 import type { RunLauncher } from './run/launcher.js';
 import type { RunEventBus } from './run/event-bus.js';
+import type { ExternalWaitCompleter } from './run/external-wait-service.js';
 import type { Scheduler } from './scheduler/scheduler.js';
 
 /**
@@ -26,6 +27,11 @@ declare module 'fastify' {
      * fires" + concurrency admission. Per-app so its in-flight/queue state
      * never leaks across instances. */
     runLauncher: RunLauncher;
+    /** #4 A13 — completes a parked `webhook` node from an inbound callback (the
+     * `POST /api/external-wait/:token` route). Per-app, sharing this instance's
+     * driver boundary so the completion append + downstream drive run under the same
+     * per-run lock as every other drive entry point. */
+    externalWaitCompleter: ExternalWaitCompleter;
     /** This app instance's schedule RECONCILER (#5 S5): reconciles the durable
      * `schedule_tick` outbox rows against the DB's schedulable triggers (croner is
      * a next-fire CALCULATOR now, not a firing source — the alarm clock fires).
