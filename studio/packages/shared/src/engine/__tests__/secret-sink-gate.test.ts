@@ -28,11 +28,12 @@ function scan(config: Record<string, unknown>, sinkFields: readonly string[]): s
 
 const MARKER = { $secret: 'stripe-key' } as const;
 
-// --- the gate against a SYNTHETIC sink-declaring activity -------------------
-// No real activity declares a `secretSinkFields` until S4 (`http_request`),
-// so the ACCEPT branch is exercised here by handing `scanSecretSinks` a
-// synthetic sink list directly (the real pure function, not a mock). S4 owns
-// the `validateRefs`-level accept test once `http_request` declares its sink.
+// --- the gate against a SYNTHETIC sink list --------------------------------
+// These exercise `scanSecretSinks` directly with a synthetic sink list (the
+// real pure function, not a mock) to cover arbitrary sink shapes/edge cases
+// independent of any one activity. The `validateRefs`-level accept test through
+// the REAL catalog — now that `http_request` declares `secretHeaders` (S4) —
+// lives in the "http_request secret sink (S4)" block below.
 
 describe('scanSecretSinks — accept at a declared sink', () => {
   it('accepts a marker directly AT a declared sink field', () => {
@@ -179,10 +180,20 @@ describe('collectSecretSinkMarkers — collects valid in-sink markers only', () 
   });
 });
 
-// --- FAIL-CLOSED through the real gate + real catalog ----------------------
+// --- the real gate + real catalog: http_request's sink is OPEN (S4) --------
+// `http_request` declares `secretHeaders` (S4), so `validateRefs` — driven by
+// the real catalog — ACCEPTS a marker there and REFUSES one anywhere else. Every
+// OTHER activity still declares no sink, so it stays fail-closed.
 
-describe('validateRefs — fail-closed: no activity declares a secret sink (S2)', () => {
-  it('refuses a marker in an http_request config (real catalog has no sink yet)', () => {
+describe('validateRefs — http_request secret sink (S4), fail-closed elsewhere', () => {
+  it('ACCEPTS a marker within the declared `secretHeaders` sink (S2 deferred this to S4)', () => {
+    const errors = validateRefs(
+      doc([node('http_request', { url: 'https://x', secretHeaders: { 'X-Api-Key': MARKER } })]),
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('refuses a marker OUTSIDE the sink (in `headers`) of an http_request config', () => {
     const errors = validateRefs(
       doc([node('http_request', { headers: { Authorization: MARKER } })]),
     );

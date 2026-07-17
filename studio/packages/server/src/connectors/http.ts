@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { HTTP_SECRET_HEADERS_FIELD, SecretRefSchema } from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import { redactSecrets } from './redact.js';
 
@@ -12,6 +13,16 @@ import { redactSecrets } from './redact.js';
  * `body`. A resolved `secret`, when present, is sent as `Authorization: Bearer
  * <secret>` — and is NEVER echoed back in the outputs (only the RESPONSE status,
  * body, and response headers are surfaced).
+ *
+ * A SECOND secret channel (item 7 / S4, the unified secret model): the node's
+ * `secretHeaders` config field is a declared secret SINK (header name →
+ * `{$secret:name}` marker). The executor resolves each marker at dispatch and
+ * hands the plaintext in via `secretFields`, keyed by CONFIG PATH
+ * (`secretHeaders.<headerName>`); this adapter merges those headers LAST — so a
+ * config-sink header is the request's final word (it beats a connection default,
+ * a request header, and the connection-secret Bearer). Like the connection
+ * secret, a resolved value is NEVER surfaced in an output; `ctx.input` retains
+ * only the inert marker (a name), so the plaintext lives only in `secretFields`.
  *
  * OUTCOME MAPPING (deliberate): a completed HTTP exchange is a `succeeded` event
  * REGARDLESS of status code — a 4xx/5xx is a real response the pipeline can
@@ -30,6 +41,16 @@ import { redactSecrets } from './redact.js';
 /** Default per-request timeout (ms) — bounds a hung endpoint. */
 const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
 
+/**
+ * The `secretFields` key prefix for the `secretHeaders` sink (item 7 / S4),
+ * derived from the shared SSOT field name (`HTTP_SECRET_HEADERS_FIELD`) so the
+ * catalog declaration and this consumer can't desync. A resolved plaintext
+ * arrives keyed `secretHeaders.<headerName>`; the header name is recovered by
+ * STRIPPING this prefix (not `split('.')`), so a header name that itself
+ * contains `.` (an RFC 7230 tchar) survives intact.
+ */
+const SECRET_HEADERS_PREFIX = `${HTTP_SECRET_HEADERS_FIELD}.`;
+
 /** The Connection-level (non-secret) config for an `http` connection. */
 const httpConnectionConfigSchema = z.object({
   baseUrl: z.string().optional(),
@@ -44,7 +65,29 @@ const httpRequestInputSchema = z.object({
   method: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
   body: z.string().optional(),
+  // The declared secret SINK (item 7 / S4): header name → inert `{$secret:name}`
+  // marker. Documentation-only here — the RESOLVED plaintext is read from the
+  // `secretFields` side channel, NEVER from this marker. Declared so a malformed
+  // value at the sink is caught rather than silently ignored.
+  secretHeaders: z.record(z.string(), SecretRefSchema).optional(),
 });
+
+/**
+ * Map the resolved `secretFields` (keyed by config path) to request headers.
+ * Only keys under the `secretHeaders` sink are consumed; the header name is the
+ * path with `secretHeaders.` stripped (prefix-strip, never `split`, so a dotted
+ * header name is preserved). Other sink paths — there are none for `http` today
+ * — are ignored, keeping this adapter's consumption scoped to what it declares.
+ */
+function sinkHeadersFrom(secretFields: Readonly<Record<string, string>>): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const [path, value] of Object.entries(secretFields)) {
+    if (path.startsWith(SECRET_HEADERS_PREFIX)) {
+      headers[path.slice(SECRET_HEADERS_PREFIX.length)] = value;
+    }
+  }
+  return headers;
+}
 
 /** Resolve a possibly-relative request url against an optional connection baseUrl. */
 function resolveUrl(baseUrl: string | undefined, url: string): string {
@@ -109,7 +152,11 @@ export const httpAdapter: ConnectorAdapter = {
     }
   },
 
-  async *runActivity(ctx: ActivityContext, secret: string | null): AsyncIterable<ActivityEvent> {
+  async *runActivity(
+    ctx: ActivityContext,
+    secret: string | null,
+    secretFields: Readonly<Record<string, string>> = {},
+  ): AsyncIterable<ActivityEvent> {
     const connConfig = httpConnectionConfigSchema.safeParse(ctx.connectionConfig);
     if (!connConfig.success) {
       yield { type: 'failed', kind: 'permanent', error: 'invalid http connection config' };
@@ -140,8 +187,12 @@ export const httpAdapter: ConnectorAdapter = {
     const requestHeaders: Record<string, string> = {
       ...(connConfig.data.headers ?? {}),
       ...(headers ?? {}),
-      // The secret (if any) is the LAST word and is never surfaced in outputs.
+      // The connection secret (if any) is a bearer default...
       ...(secret !== null ? { Authorization: `Bearer ${secret}` } : {}),
+      // ...but a resolved config-sink header (item 7 / S4) is the LAST word — it
+      // overrides even the Bearer. Both are never surfaced in outputs, and their
+      // values are redacted from any echoed error below.
+      ...sinkHeadersFrom(secretFields),
     };
 
     // Bound the WHOLE exchange (connect + headers + body read). The controller

@@ -25,6 +25,17 @@ describe('activity catalog', () => {
     expect(http.outputs.map((o) => o.name).sort()).toEqual(['body', 'headers', 'status']);
   });
 
+  it('http_request declares `secretHeaders` as its secret SINK (item 7 / S4)', () => {
+    // The FIRST real activity to open a sink — `validateRefs` accepts a
+    // `{$secret}` marker within `secretHeaders` and refuses it anywhere else.
+    expect(getActivity('http_request')!.secretSinkFields).toEqual(['secretHeaders']);
+  });
+
+  it('no OTHER MVP activity declares a secret sink yet (fail-closed elsewhere)', () => {
+    expect(getActivity('llm_call')!.secretSinkFields).toBeUndefined();
+    expect(getActivity('agent_task')!.secretSinkFields).toBeUndefined();
+  });
+
   it('llm_call binds any of the three LLM connection kinds', () => {
     expect(getActivity('llm_call')!.connectionKinds).toEqual([
       'anthropic_api',

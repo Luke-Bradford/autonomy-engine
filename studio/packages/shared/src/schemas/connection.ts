@@ -46,6 +46,13 @@ export type NewConnection = z.input<typeof NewConnectionSchema>;
  * non-secret for every kind, matching the architecture doc's "secrets
  * referenced, never inlined." Revisit if a future connector kind's config
  * needs a secret-shaped field.
+ *
+ * A10 marker-subsumption note (item 7 / S4): when that revisit lands (the
+ * `fs`/S3 connectors A11/A14, NOT item 7), the resolution is the SAME
+ * `{$secret:name}` marker the unified secret model already uses at a node's
+ * config sink (`ActivityCatalogEntry.secretSinkFields`) — one mechanism across
+ * node config and connection config, rather than more `secretRef` columns. Item
+ * 7 records the mechanism; it does not build the connection-config sink.
  */
 export const ConnectionPublicSchema = ConnectionSchema.omit({ secretRef: true });
 export type ConnectionPublic = z.infer<typeof ConnectionPublicSchema>;
