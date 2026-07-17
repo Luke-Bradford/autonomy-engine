@@ -31,12 +31,13 @@ afterEach(() => {
 });
 
 describe('connections API', () => {
-  it('lists connections and hits GET /api/connections', async () => {
-    const fetchMock = stubFetch(200, [sample]);
+  it('lists connections and hits GET /api/connections (paginated envelope, #534)', async () => {
+    const fetchMock = stubFetch(200, { items: [sample], nextCursor: null });
     const out = await listConnections();
     expect(out).toEqual([sample]);
     const [url, init] = fetchMock.mock.calls[0]!;
-    expect(url).toBe('/api/connections');
+    // The list is keyset-paginated: the wrapper requests a bounded page.
+    expect(url).toBe('/api/connections?limit=100');
     // GET is the default: no explicit method needed, and no body is sent.
     expect(init?.method ?? 'GET').toBe('GET');
     expect(out[0]).not.toHaveProperty('secretRef');
@@ -47,20 +48,20 @@ describe('connections API', () => {
     // this fails only if `listConnections` actually validates (not raw JSON).
     const noName: Record<string, unknown> = { ...sample };
     delete noName.name;
-    stubFetch(200, [noName]);
+    stubFetch(200, { items: [noName], nextCursor: null });
     await expect(listConnections()).rejects.toThrow();
   });
 
   it('strips a stray secretRef from a list response instead of surfacing it', async () => {
     // ConnectionPublicSchema strips unknown keys, so a stray secretRef is
     // dropped rather than surfaced — assert it is gone.
-    stubFetch(200, [{ ...sample, secretRef: 'sec_leak' }]);
+    stubFetch(200, { items: [{ ...sample, secretRef: 'sec_leak' }], nextCursor: null });
     const out = await listConnections();
     expect(out[0]).not.toHaveProperty('secretRef');
   });
 
   it('threads an AbortSignal through to fetch', async () => {
-    const fetchMock = stubFetch(200, []);
+    const fetchMock = stubFetch(200, { items: [], nextCursor: null });
     const controller = new AbortController();
     await listConnections(controller.signal);
     const [, init] = fetchMock.mock.calls[0]!;

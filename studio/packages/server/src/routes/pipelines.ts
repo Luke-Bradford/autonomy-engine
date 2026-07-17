@@ -6,11 +6,11 @@ import {
   deletePipeline,
   getPipeline,
   listPipelineVersions,
-  listPipelines,
+  listPipelinesPage,
   updatePipeline,
 } from '../repo/index.js';
 import { NotFoundError } from '../errors.js';
-import { requireOwned } from './util.js';
+import { pageArgsFromQuery, requireOwned } from './util.js';
 import { exportPipeline } from '../portability/index.js';
 
 /** `ownerId` is stamped from `request.principal`, never client-supplied. */
@@ -29,7 +29,8 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get('/api/pipelines', async (request) => {
-    return listPipelines(db, request.principal.ownerId);
+    // #534 — keyset-paginated envelope `{ items, nextCursor }`.
+    return listPipelinesPage(db, request.principal.ownerId, pageArgsFromQuery(request.query));
   });
 
   fastify.get<{ Params: { id: string } }>('/api/pipelines/:id', async (request) => {

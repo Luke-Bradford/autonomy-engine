@@ -4,9 +4,11 @@ import {
   SecretSchema,
   type NewSecret,
   type Secret,
+  type Paginated,
 } from '@autonomy-studio/shared';
 import { secrets } from '../db/schema.js';
 import { newId } from './ids.js';
+import { afterCursor, pageOrder, toPage, type PageArgs } from './pagination.js';
 import type { Db } from './types.js';
 
 /**
@@ -59,6 +61,32 @@ export function listNamedSecrets(db: Db, ownerId: string): Secret[] {
     .where(and(eq(secrets.ownerId, ownerId), isNotNull(secrets.name)))
     .all()
     .map((row) => SecretSchema.parse(row));
+}
+
+/**
+ * The paginated form of `listNamedSecrets` — the surface `GET /api/secrets`
+ * exposes (#534). Same owner-scope + `name IS NOT NULL` filter (a
+ * connection-owned secret is never listed), keyset over `created_at ASC, id
+ * ASC`. A SEPARATE fn from `listNamedSecrets` (not a changed return type):
+ * pagination is its own bounded query, and `listNamedSecrets` stays the
+ * array-returning form the repo tests exercise.
+ */
+export function listNamedSecretsPage(db: Db, ownerId: string, args: PageArgs): Paginated<Secret> {
+  const rows = db
+    .select()
+    .from(secrets)
+    .where(
+      and(
+        eq(secrets.ownerId, ownerId),
+        isNotNull(secrets.name),
+        args.cursor ? afterCursor(secrets.createdAt, secrets.id, args.cursor) : undefined,
+      ),
+    )
+    .orderBy(...pageOrder(secrets.createdAt, secrets.id))
+    .limit(args.limit + 1)
+    .all()
+    .map((row) => SecretSchema.parse(row));
+  return toPage(rows, args.limit);
 }
 
 /**

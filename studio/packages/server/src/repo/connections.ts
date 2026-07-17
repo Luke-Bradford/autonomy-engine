@@ -1,12 +1,14 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   ConnectionSchema,
   NewConnectionSchema,
   type Connection,
   type NewConnection,
+  type Paginated,
 } from '@autonomy-studio/shared';
 import { connections } from '../db/schema.js';
 import { newId } from './ids.js';
+import { afterCursor, pageOrder, toPage, type PageArgs } from './pagination.js';
 import type { Db } from './types.js';
 
 export function createConnection(db: Db, input: NewConnection): Connection {
@@ -38,6 +40,36 @@ export function listConnections(db: Db, ownerId?: string): Connection[] {
       ? db.select().from(connections).all()
       : db.select().from(connections).where(eq(connections.ownerId, ownerId)).all();
   return rows.map((row) => ConnectionSchema.parse(row));
+}
+
+/**
+ * The paginated, owner-scoped list surfaced by `GET /api/connections` (#534).
+ * Keyset over `created_at ASC, id ASC` (see `pagination.ts`); fetches one extra
+ * row to decide `nextCursor`. A SEPARATE fn from `listConnections` rather than a
+ * changed return type: pagination is its OWN bounded query (it cannot compose
+ * over a fn that already loaded every row), and `listConnections` stays the
+ * unscoped primitive (`ownerId?` → all owners) the repo tests exercise. The
+ * envelope thus lives only at the HTTP boundary.
+ */
+export function listConnectionsPage(
+  db: Db,
+  ownerId: string,
+  args: PageArgs,
+): Paginated<Connection> {
+  const rows = db
+    .select()
+    .from(connections)
+    .where(
+      and(
+        eq(connections.ownerId, ownerId),
+        args.cursor ? afterCursor(connections.createdAt, connections.id, args.cursor) : undefined,
+      ),
+    )
+    .orderBy(...pageOrder(connections.createdAt, connections.id))
+    .limit(args.limit + 1)
+    .all()
+    .map((row) => ConnectionSchema.parse(row));
+  return toPage(rows, args.limit);
 }
 
 export function updateConnection(

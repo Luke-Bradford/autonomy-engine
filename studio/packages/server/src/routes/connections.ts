@@ -12,14 +12,14 @@ import {
   deleteSecret,
   getConnection,
   getSecretByRef,
-  listConnections,
+  listConnectionsPage,
   updateConnection,
   updateSecretCiphertext,
 } from '../repo/index.js';
 import { newId } from '../repo/ids.js';
 import { encrypt } from '../secrets/secrets.js';
 import { NotFoundError } from '../errors.js';
-import { requireOwned } from './util.js';
+import { pageArgsFromQuery, requireOwned } from './util.js';
 import { exportConnection } from '../portability/index.js';
 
 /**
@@ -63,7 +63,14 @@ export const connectionsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get('/api/connections', async (request) => {
-    return listConnections(db, request.principal.ownerId).map(toPublic);
+    // #534 — keyset-paginated envelope `{ items, nextCursor }`; the public
+    // projection is applied per item, `nextCursor` passes through opaque.
+    const page = listConnectionsPage(
+      db,
+      request.principal.ownerId,
+      pageArgsFromQuery(request.query),
+    );
+    return { items: page.items.map(toPublic), nextCursor: page.nextCursor };
   });
 
   fastify.get<{ Params: { id: string } }>('/api/connections/:id', async (request) => {

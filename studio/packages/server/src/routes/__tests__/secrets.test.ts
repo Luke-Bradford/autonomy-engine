@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '@autonomy-studio/shared';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 
 describe('secrets routes (item 7 / S1 — the standalone secret SOURCE)', () => {
@@ -46,7 +47,8 @@ describe('secrets routes (item 7 / S1 — the standalone secret SOURCE)', () => 
       });
       const listRes = await app2.inject({ method: 'GET', url: '/api/secrets' });
       expect(listRes.statusCode).toBe(200);
-      const list = listRes.json();
+      const { items: list, nextCursor } = listRes.json();
+      expect(nextCursor).toBeNull();
       expect(list.map((s: { name: string }) => s.name).sort()).toEqual(['one', 'two']);
       for (const s of list) {
         expect(s).not.toHaveProperty('ciphertext');
@@ -69,7 +71,7 @@ describe('secrets routes (item 7 / S1 — the standalone secret SOURCE)', () => 
       });
       expect(connRes.statusCode).toBe(201);
       const listRes = await app2.inject({ method: 'GET', url: '/api/secrets' });
-      expect(listRes.json()).toEqual([]);
+      expect(listRes.json()).toEqual({ items: [], nextCursor: null });
     } finally {
       await app2.close();
     }
@@ -190,7 +192,7 @@ describe('secrets routes (item 7 / S1 — the standalone secret SOURCE)', () => 
       const delRes = await app2.inject({ method: 'DELETE', url: `/api/secrets/${created.id}` });
       expect(delRes.statusCode).toBe(204);
       const listRes = await app2.inject({ method: 'GET', url: '/api/secrets' });
-      expect(listRes.json()).toEqual([]);
+      expect(listRes.json()).toEqual({ items: [], nextCursor: null });
       // Deleting again is a 404 (gone == not-owned, indistinguishable).
       const delAgain = await app2.inject({ method: 'DELETE', url: `/api/secrets/${created.id}` });
       expect(delAgain.statusCode).toBe(404);
@@ -202,5 +204,103 @@ describe('secrets routes (item 7 / S1 — the standalone secret SOURCE)', () => 
   it('DELETE of an unknown id is a 404', async () => {
     const res = await app.inject({ method: 'DELETE', url: '/api/secrets/sec_missing' });
     expect(res.statusCode).toBe(404);
+  });
+
+  describe('pagination (#534)', () => {
+    async function seed(app2: FastifyInstance, n: number): Promise<void> {
+      for (let i = 0; i < n; i++) {
+        const res = await app2.inject({
+          method: 'POST',
+          url: '/api/secrets',
+          // Zero-padded so the created ids differ but names stay distinct.
+          payload: { name: `s-${String(i).padStart(3, '0')}`, secret: `p${i}` },
+        });
+        expect(res.statusCode).toBe(201);
+      }
+    }
+
+    /** Walks every page following `nextCursor`, returning the flattened names in
+     * server order — the exact shape a client's auto-paginator sees. */
+    async function collectAll(app2: FastifyInstance, limit: number): Promise<string[]> {
+      const names: string[] = [];
+      let cursor: string | undefined;
+      // Bounded so a bug can never hang the suite.
+      for (let page = 0; page < 100; page++) {
+        const qs = new URLSearchParams({ limit: String(limit) });
+        if (cursor !== undefined) qs.set('cursor', cursor);
+        const res = await app2.inject({ method: 'GET', url: `/api/secrets?${qs.toString()}` });
+        expect(res.statusCode).toBe(200);
+        const { items, nextCursor } = res.json();
+        expect(items.length).toBeLessThanOrEqual(limit);
+        for (const s of items) names.push(s.name);
+        if (nextCursor === null) return names;
+        cursor = nextCursor;
+      }
+      throw new Error('pagination did not terminate');
+    }
+
+    it('caps a page at the requested limit and continues via nextCursor with no gap or overlap', async () => {
+      const app2 = await buildTestApp();
+      try {
+        await seed(app2, 7);
+        const first = await app2.inject({ method: 'GET', url: '/api/secrets?limit=3' });
+        const firstPage = first.json();
+        expect(firstPage.items).toHaveLength(3);
+        expect(firstPage.nextCursor).not.toBeNull();
+
+        const all = await collectAll(app2, 3);
+        expect(all).toHaveLength(7);
+        // No duplicates across the page boundary.
+        expect(new Set(all).size).toBe(7);
+        // Every seeded name present exactly once.
+        expect([...all].sort()).toEqual(
+          Array.from({ length: 7 }, (_, i) => `s-${String(i).padStart(3, '0')}`),
+        );
+      } finally {
+        await app2.close();
+      }
+    });
+
+    it('defaults to DEFAULT_PAGE_SIZE when limit is omitted', async () => {
+      const app2 = await buildTestApp();
+      try {
+        // One more than the default so the first page is capped and a cursor is issued.
+        await seed(app2, DEFAULT_PAGE_SIZE + 1);
+        const res = await app2.inject({ method: 'GET', url: '/api/secrets' });
+        const page = res.json();
+        expect(page.items).toHaveLength(DEFAULT_PAGE_SIZE);
+        expect(page.nextCursor).not.toBeNull();
+      } finally {
+        await app2.close();
+      }
+    });
+
+    it('an empty list is { items: [], nextCursor: null }', async () => {
+      const app2 = await buildTestApp();
+      try {
+        const res = await app2.inject({ method: 'GET', url: '/api/secrets?limit=10' });
+        expect(res.json()).toEqual({ items: [], nextCursor: null });
+      } finally {
+        await app2.close();
+      }
+    });
+
+    it('a limit above MAX_PAGE_SIZE, below 1, or non-numeric is a 400 (no silent clamp)', async () => {
+      const tooBig = await app.inject({
+        method: 'GET',
+        url: `/api/secrets?limit=${MAX_PAGE_SIZE + 1}`,
+      });
+      expect(tooBig.statusCode).toBe(400);
+      const zero = await app.inject({ method: 'GET', url: '/api/secrets?limit=0' });
+      expect(zero.statusCode).toBe(400);
+      const nan = await app.inject({ method: 'GET', url: '/api/secrets?limit=abc' });
+      expect(nan.statusCode).toBe(400);
+    });
+
+    it('a malformed or stale cursor is a 400 — never silently treated as first page', async () => {
+      const res = await app.inject({ method: 'GET', url: '/api/secrets?cursor=not-a-cursor' });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('bad_request');
+    });
   });
 });

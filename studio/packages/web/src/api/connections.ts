@@ -2,9 +2,11 @@ import { z } from 'zod';
 import {
   ConnectionPublicSchema,
   NewConnectionSchema,
+  paginatedResponseSchema,
   type ConnectionPublic,
 } from '@autonomy-studio/shared';
 import { apiFetch } from './client';
+import { fetchAllPages, pageQuery } from './pagination';
 
 /**
  * The client-facing write body, reconstructed to match the server's local
@@ -23,11 +25,18 @@ export const ConnectionWriteSchema = NewConnectionSchema.omit({
 });
 export type ConnectionWrite = z.input<typeof ConnectionWriteSchema>;
 
-const ConnectionListSchema = z.array(ConnectionPublicSchema);
+const ConnectionPageSchema = paginatedResponseSchema(ConnectionPublicSchema);
 
-/** Owner-scoped list of connections (secrets never present — `ConnectionPublic`). */
+/**
+ * Owner-scoped list of connections (secrets never present — `ConnectionPublic`).
+ * `GET /api/connections` is keyset-paginated (#534); this walks every page and
+ * returns the full list, so callers see the same `Promise<T[]>` as before. The
+ * `signal` is threaded through every page fetch, preserving cancellation.
+ */
 export function listConnections(signal?: AbortSignal): Promise<ConnectionPublic[]> {
-  return apiFetch('/api/connections', { schema: ConnectionListSchema, signal });
+  return fetchAllPages((cursor) =>
+    apiFetch(`/api/connections${pageQuery(cursor)}`, { schema: ConnectionPageSchema, signal }),
+  );
 }
 
 export function createConnection(body: ConnectionWrite): Promise<ConnectionPublic> {

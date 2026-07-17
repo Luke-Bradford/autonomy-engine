@@ -43,11 +43,11 @@ afterEach(() => {
 });
 
 describe('pipelines API', () => {
-  it('lists pipelines and hits GET /api/pipelines', async () => {
-    const fetchMock = stubFetch(200, [pipeline]);
+  it('lists pipelines and hits GET /api/pipelines (paginated envelope, #534)', async () => {
+    const fetchMock = stubFetch(200, { items: [pipeline], nextCursor: null });
     const out = await listPipelines();
     expect(out).toEqual([pipeline]);
-    expect(fetchMock.mock.calls[0]![0]).toBe('/api/pipelines');
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/pipelines?limit=100');
   });
 
   it('lists a pipeline’s versions and encodes the id in the path', async () => {
