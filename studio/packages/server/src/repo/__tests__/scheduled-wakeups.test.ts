@@ -285,7 +285,11 @@ describe('#464 — pruneSettledWakeups (retention)', () => {
     firedAt: number,
   ) {
     const row = armRetry(db, discriminator);
-    return settleWakeup(db, row.id, { status, firedAt })!;
+    const settledRow = settleWakeup(db, row.id, { status, firedAt });
+    // The row was just armed (pending), so the settle always succeeds; assert it
+    // rather than `!` so a helper bug surfaces as a clear failure, not a later NPE.
+    if (settledRow === null) throw new Error(`failed to settle freshly-armed wakeup ${row.id}`);
+    return settledRow;
   }
 
   it('deletes settled rows OLDER than the cutoff, keeps NEWER ones', () => {
