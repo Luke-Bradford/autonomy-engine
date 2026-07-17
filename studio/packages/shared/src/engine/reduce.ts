@@ -2603,10 +2603,13 @@ export function createEngine(doc: EngineDoc): Engine {
           // branch PURELY (deterministic over the logged state) and re-emit.
           // Idempotent: same `currentAttemptId`, and a duplicate durable event
           // folds as a stale/terminal no-op. Terminalize a condition/`on` that now
-          // throws, the same verdict as the dispatch-prep branch below.
+          // throws, the same verdict as the dispatch-prep branch below. Passes the
+          // `foreach` item (as `tryDispatchNode` does, and as the `fail`/`filter`/
+          // `wait` forks below do) so a `${item}`-bearing condition/`on` in a foreach
+          // body re-resolves identically on recovery rather than throwing (#569).
           let branch: string;
           try {
-            branch = evalControlBranch(node, state);
+            branch = evalControlBranch(node, state, foreachItemOf(state, id));
           } catch (err) {
             const failed = prepFailure(state, id, err, diagnostics);
             return { state: failed.state, commands: [failed.finish], diagnostics };
@@ -2725,8 +2728,12 @@ export function createEngine(doc: EngineDoc): Engine {
         let callParams: Record<string, unknown>;
         try {
           const ctx = buildCtx(state);
-          pvId = String(substitute(node.call.pipelineVersionId, ctx));
-          callParams = substitute(node.call.params, ctx) as Record<string, unknown>;
+          // Pass the `foreach` item (as `tryDispatchNode`'s call-dispatch does) so a
+          // `${item}`-bearing `pipelineVersionId`/`params` in a foreach body
+          // re-resolves identically on recovery rather than throwing (#569).
+          const item = foreachItemOf(state, id);
+          pvId = String(substitute(node.call.pipelineVersionId, ctx, 0, item));
+          callParams = substitute(node.call.params, ctx, 0, item) as Record<string, unknown>;
         } catch (err) {
           // Terminalize for the same reason as the `ready` branch above, and to
           // match `tryDispatchNode`'s own call-prep throw (`prepFailure`).
