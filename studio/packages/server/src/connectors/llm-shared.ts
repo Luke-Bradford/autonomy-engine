@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ConnectionKind } from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorErrorKind } from './types.js';
 import { redactSecrets } from './redact.js';
 
@@ -184,6 +185,41 @@ export function parseJsonBody(
       },
     };
   }
+}
+
+/**
+ * #461 — the single failure event for a 2xx response that carries NO readable
+ * completion. The completion IS `llm_call`'s whole product; a provider that
+ * returns 200 but no completion structure (`{}`, `choices:[]`, a non-array
+ * `content`, zero text blocks) produced no product, and coercing that to
+ * `succeeded{text:''}` flows a manufactured-empty result downstream silently —
+ * the same fail-open shape the engine forbids elsewhere ("an absent fact must
+ * never be manufactured as a benign default").
+ *
+ * `permanent`, NOT `transient`: a 2xx means transport + server succeeded, so an
+ * unreadable BODY is a response-SHAPE problem a retry of the identical request
+ * won't fix — the same class as `parseJsonBody`'s non-JSON-2xx `permanent`.
+ * (`transient` is reserved for 5xx / timeout / network — see `classifyHttpStatus`
+ * and `llmPost`.) Retry policy never re-runs it (`retryEligible` gates on
+ * `transient`).
+ *
+ * A PRESENT-but-EMPTY completion (an explicit `content:''`, or an anthropic
+ * `[{type:'text',text:''}]`) is a REAL result and still succeeds — `stopReason`
+ * (e.g. `content_filter`, `length`) carries why and downstream can branch on it.
+ * Only structural ABSENCE fails.
+ *
+ * `kind` names the adapter so the durable `error` is traceable to a provider,
+ * matching the `<kind> HTTP <status>` errors (the generic `parseJsonBody`
+ * message is the one exception, and names a unique symptom instead).
+ */
+export function noCompletionFailure(
+  kind: ConnectionKind,
+): Extract<ActivityEvent, { type: 'failed' }> {
+  return {
+    type: 'failed',
+    kind: 'permanent',
+    error: `${kind} returned a 2xx response with no completion`,
+  };
 }
 
 /** A short, safe excerpt of a non-2xx response body for a failure `error`. */

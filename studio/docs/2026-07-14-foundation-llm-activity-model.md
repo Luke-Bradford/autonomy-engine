@@ -106,6 +106,15 @@ Cost/usage are **immutable FACTS stamped in the event log**, never recomputed:
 - **permanent**: 400 invalid-request, context-length-exceeded, content-filter, 401/403 auth.
 - **cancelled**: run aborted.
 A completed 2xx with an unparseable structured output → repair-retry, then `permanent`.
+A completed 2xx carrying **no readable completion** → `permanent` (#461, settled in-loop):
+absent/non-array response structure (`{}`, `choices:[]`, a non-array `content`) OR zero
+text-type blocks means the provider returned no product, not an empty one — the same
+response-shape class as an unparseable body, so it is NOT retried. A **present-but-empty**
+completion (an explicit `content:''`, or an anthropic `[{type:'text',text:''}]`) is a real
+result and **succeeds** — `stopReason` (e.g. `content_filter`, `length`) carries why and
+downstream can branch on it. A tool-call-only 2xx (OpenAI `content:null`+`finish_reason:
+'tool_calls'`, anthropic all-`tool_use` blocks) is text-mode-empty and fails `permanent`
+today **because tools are not wired** (revisit at L4b/L10).
 
 ## Connections (workers) — reuse #1, extend config
 
