@@ -527,6 +527,95 @@ describe('containers — loop exitWhen interpolation mode (E2)', () => {
   });
 });
 
+// #4 A3 — the `until` contract: a `loop` container is a DO-WHILE. These pin the
+// four facets the ticket names — expr-after-each-round (→ ≥1 iteration, never
+// zero), cap-failure reason (`capped`, already pinned at 'a loop that never
+// satisfies exitWhen is CAPPED' above), output projection (LAST round only), and
+// the zero-iteration/termination edge (a loop with no way to ever exit).
+describe('containers — loop do-while semantics (A3)', () => {
+  it('is a DO-WHILE: the body runs once even when exitWhen is true from round 0', () => {
+    // `stepContainers` only evaluates `exitWhen` once the round is fully TERMINAL,
+    // so the body ALWAYS runs at least once — the exit is checked AFTER the round,
+    // never before it. A loop can never iterate zero times.
+    const eng = engine(
+      [
+        node('work'),
+        node('check', { outputs: [{ name: 'done', type: 'boolean' }] }),
+        node('final'),
+      ],
+      [edge('work', 'check', 'success'), edge('lp', 'final', 'success')],
+      [loop('lp', ['work', 'check'], '${nodes.check.output.done}', 5)],
+    );
+    // exitWhen is satisfiable on the very FIRST round.
+    const { state } = drive(
+      eng,
+      {},
+      {
+        outcomeFor: (id) =>
+          id === 'check' ? { outcome: 'success', outputs: { done: true } } : { outcome: 'success' },
+      },
+    );
+    expect(state.nodes.work!.status).toBe('success'); // the body RAN (≥1 iteration)
+    expect(state.nodes.check!.status).toBe('success');
+    expect(state.containers.lp!.status).toBe('success');
+    expect(state.containers.lp!.round).toBe(0); // exactly once — no re-round
+    expect(state.nodes.final!.status).toBe('success'); // outer edge fired
+    expect(state.status).toBe('success');
+  });
+
+  it('projects the LAST round`s child outputs — prior rounds are cleared', () => {
+    // A round resets its children and CLEARS their outputs (`resetNodes`), so the
+    // container`s projected output reflects only the FINAL round. A child emitting
+    // a round-varying value must project the value from the round it exited on.
+    const eng = engine(
+      [
+        node('counter', { outputs: [{ name: 'n', type: 'number' }] }),
+        node('check', { outputs: [{ name: 'done', type: 'boolean' }] }),
+      ],
+      [edge('counter', 'check', 'success')],
+      [loop('lp', ['counter', 'check'], '${nodes.check.output.done}', 9)],
+    );
+    // Rounds 0,1 keep going; round 2 exits. counter.n = the round index (0,1,2).
+    const { state } = drive(
+      eng,
+      {},
+      {
+        outcomeFor: (id, idx) =>
+          id === 'counter'
+            ? { outcome: 'success', outputs: { n: idx } }
+            : { outcome: 'success', outputs: { done: idx >= 2 } },
+      },
+    );
+    expect(state.containers.lp!.status).toBe('success');
+    expect(state.containers.lp!.round).toBe(2);
+    // ONLY the final round`s value — not 0 (round 0) nor an accumulation.
+    expect(state.containers.lp!.outputs).toEqual({ done: true, n: 2 });
+    expect(state.outputs.lp).toEqual({ done: true, n: 2 }); // ${nodes.lp.output.n}
+  });
+
+  it('a loop with NEITHER exitWhen NOR maxRounds fails `no_exit_condition` (not an unbounded spin)', () => {
+    // `validateDoc` refuses such a doc at write time (#444: a loop needs an
+    // exitWhen), but an IMMUTABLE row written before that gate reaches the reducer
+    // unchecked — and with no exit condition and no cap it would re-round FOREVER
+    // (`evalExitWhen` returns false for an undefined exitWhen; no `maxRounds` cap
+    // ever fires). The reducer is the last line of defense: it runs the mandatory
+    // first round (do-while) then fails CLOSED rather than spin.
+    const noExit: Container = { id: 'lp', kind: 'loop', children: ['work'] };
+    const eng = engine(
+      [node('work'), node('recover')],
+      [edge('lp', 'recover', 'completion')],
+      [noExit],
+    );
+    const { state } = drive(eng, {});
+    expect(state.nodes.work!.status).toBe('success'); // the body ran ONCE (do-while)
+    expect(state.containers.lp!.status).toBe('failure');
+    expect(state.containers.lp!.reason).toBe('no_exit_condition');
+    expect(state.containers.lp!.round).toBe(0); // failed after round 0, did not re-round
+    expect(state.nodes.recover!.status).toBe('success'); // outer completion caught it
+    expect(state.status).toBe('success');
+  });
+});
+
 describe('containers — namespace isolation', () => {
   it('two containers projecting the SAME output name do not collide', () => {
     const eng = engine(

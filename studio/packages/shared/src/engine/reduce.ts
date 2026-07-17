@@ -1055,7 +1055,9 @@ export function createEngine(doc: EngineDoc): Engine {
    *   - a `stage` → SUCCEEDS.
    *   - a `loop` → `exitWhen` true → SUCCEEDS; else another round if the round
    *     budget (`maxRounds`) allows (reset children, `round++`); else CAPPED
-   *     (the container FAILS with reason `capped`).
+   *     (the container FAILS with reason `capped`). A loop that can never exit —
+   *     an empty body (`no_progress`) or neither `exitWhen` nor `maxRounds`
+   *     (`no_exit_condition`) — FAILS after its mandatory first round.
    * Containers are considered in STABLE id order.
    */
   function stepContainers(state: RunState, diagnostics: string[]): Step {
@@ -1121,6 +1123,34 @@ export function createEngine(doc: EngineDoc): Engine {
             `(its exitWhen cannot change, because a round resets nothing)`,
         );
         return { state: exitContainer(state, c, 'failure', 'no_progress'), changed: true };
+      }
+      // A loop with a non-empty body but NEITHER an `exitWhen` NOR a `maxRounds`
+      // can never terminate: `evalExitWhen` returns false for an undefined
+      // `exitWhen` (above), so the exit is unreachable, and with no cap the
+      // re-round below fires forever. Unlike the empty-body case this is NOT a
+      // synchronous spin — the body's children are real, so the driver paces each
+      // round — but it is still an authored infinite loop that never ends.
+      //
+      // `validateDoc` refuses such a doc at write time (#444: "a loop needs an
+      // exitWhen", UNCONDITIONALLY — a `maxRounds` is only the round cap, never the
+      // exit). But rows written before that gate were never validated and are
+      // IMMUTABLE, so this reducer is the only place one already in storage can be
+      // stopped — the same last-line-of-defense role `evalExitWhen`'s E2 mode check
+      // plays. Do-while is honoured: the mandatory first round has already run
+      // (this branch is only reached once the round is terminal); we fail CLOSED
+      // rather than re-round.
+      //
+      // The guard requires BOTH fields absent, deliberately asymmetric with the
+      // validator (which rejects a missing `exitWhen` regardless of `maxRounds`):
+      // a pre-gate row with a `maxRounds` but no `exitWhen` DOES terminate, via the
+      // `capped` cap below, so there is nothing to defend there. Do not "align" it
+      // to the validator — that would relabel a legitimately capped loop.
+      if (c.exitWhen === undefined && c.maxRounds === undefined) {
+        diagnostics.push(
+          `container '${cid}' has no exit condition: a loop with neither exitWhen nor ` +
+            `maxRounds re-rounds forever`,
+        );
+        return { state: exitContainer(state, c, 'failure', 'no_exit_condition'), changed: true };
       }
       if (c.maxRounds !== undefined && cs.round + 1 >= c.maxRounds) {
         diagnostics.push(`container '${cid}' capped at maxRounds=${c.maxRounds}`);
@@ -1301,8 +1331,10 @@ export function createEngine(doc: EngineDoc): Engine {
   /**
    * Terminate a container: set status + project outputs (also into `outputs`).
    * `reason` (observability) records WHY it terminated on a failure — `capped`
-   * (loop hit maxRounds), `child_failed:<id>` (unhandled child failure), or
-   * `exitWhen_error` (the exit expression threw). Omitted on a clean success.
+   * (loop hit maxRounds), `child_failed:<id>` (unhandled child failure),
+   * `exitWhen_error` (the exit expression threw), `no_progress` (an empty loop
+   * body) or `no_exit_condition` (a loop with neither exitWhen nor maxRounds).
+   * Omitted on a clean success.
    */
   function exitContainer(
     state: RunState,
