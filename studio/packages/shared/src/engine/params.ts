@@ -851,6 +851,82 @@ function coerce(name: string, type: Param['type'], value: unknown): unknown {
   }
 }
 
+// --- JSON-replay safety (#547) ----------------------------------------------
+
+/**
+ * The studio run model is EVENT-SOURCED: `run.params` and (once S8 feeds it)
+ * `${trigger.body}` land in the `run.started` / `run.triggerContext` events,
+ * which are `JSON.stringify`-ed to persist and replayed to rebuild `RunState`.
+ * `JSON.stringify` renders every non-finite number (`Infinity` / `-Infinity` /
+ * `NaN`) as `null`, so a non-finite value that enters a durable, replayed
+ * structure SILENTLY changes value on append→replay — a fidelity break
+ * indistinguishable from an authored `null`. And a non-finite is reachable over
+ * HTTP: `1e999` is valid JSON and `JSON.parse('{"x":1e999}')` yields
+ * `{x: Infinity}`.
+ *
+ * So every param INGESTION boundary refuses a non-finite number at entry
+ * (validate at system boundaries; never silently manufacture a lossy fact — the
+ * same posture as `coerce`'s finite-`number` check above, and F13a's fail-open
+ * contract). This is the ONE shared check every boundary reuses:
+ * `jsonReplaySafetyErrors` collects one path-labelled error per offending number
+ * (for the write schemas, which surface them as Zod issues → 400);
+ * `assertJsonReplaySafe` throws the first as a `SubstituteError` (for the
+ * fire-time resolution backstop, which every fire caller already maps:
+ * manual→400, schedule/webhook→skip-and-log).
+ *
+ * ONLY numbers are inspected — a string (a `${}` expression or a literal),
+ * boolean, `null`, or nested container is walked but never rejected on its own
+ * account. `-0` and any finite magnitude (e.g. `1e308`) pass; only `NaN` and
+ * `±Infinity` are refused. The tree walk is bounded by `MAX_CONFIG_DEPTH` (the
+ * same axis the config walkers use), so a pathologically nested value is
+ * reported, never a raw `RangeError`. The message is PATH-ONLY and never echoes
+ * the numeric value: the manual fire route surfaces a resolved binding's message
+ * in a client-facing 400 (`routes/triggers.ts`), whose contract is to never echo
+ * a resolved value.
+ */
+export function jsonReplaySafetyErrors(where: string, value: unknown): string[] {
+  const errors: string[] = [];
+  walkReplaySafe(where, value, 0, errors);
+  return errors;
+}
+
+function walkReplaySafe(where: string, value: unknown, depth: number, errors: string[]): void {
+  if (depth > MAX_CONFIG_DEPTH) {
+    errors.push(`${where}: config nested too deep (over ${MAX_CONFIG_DEPTH} levels)`);
+    return;
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      errors.push(`${where}: non-finite number refused (cannot be durably replayed)`);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((v, i) => walkReplaySafe(`${where}[${i}]`, v, depth + 1, errors));
+    return;
+  }
+  if (value !== null && typeof value === 'object') {
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      walkReplaySafe(`${where}.${key}`, (value as Record<string, unknown>)[key], depth + 1, errors);
+    }
+  }
+}
+
+/**
+ * Throwing form for the FIRE-TIME resolution backstop (boundary 3). A resolved
+ * trigger binding (or, once S8 feeds it, a `${trigger.body}` passthrough) — or a
+ * PRE-GATE stored literal that `substitute` passes through untouched — that came
+ * to rest a non-finite number is refused BEFORE it can be frozen into a run's
+ * params. Throws `SubstituteError`: the same class an unresolvable binding
+ * throws, so every fire caller maps it with no new catch arm.
+ */
+export function assertJsonReplaySafe(where: string, value: unknown): void {
+  const [first] = jsonReplaySafetyErrors(where, value);
+  if (first !== undefined) {
+    throw new SubstituteError(first);
+  }
+}
+
 // --- trigger param bindings (#5 S12b) ---------------------------------------
 
 /**
@@ -903,7 +979,16 @@ export function resolveTriggerBindings(
     run: {},
     trigger: triggerRoot(tc),
   };
-  return substitute(triggerParams, ctx) as Record<string, unknown>;
+  const resolved = substitute(triggerParams, ctx) as Record<string, unknown>;
+  // #547 — boundary 3 (fire-time backstop). A binding whose whole-value result
+  // is a non-finite number (a pre-gate stored literal `substitute` passes
+  // through untouched, or a `${trigger.body.n}` passthrough once S8 feeds a body)
+  // must not be frozen into a run's params, where it would `JSON.stringify` to
+  // `null` on the `run.started` append and replay as a silent-wrong `null`. The
+  // save-time boundary 1 (`TriggerParamsWriteSchema`) refuses a LITERAL non-finite
+  // on write; this catches the pre-gate/expression-produced cases fail-safe.
+  assertJsonReplaySafe('trigger param binding', resolved);
+  return resolved;
 }
 
 // --- validateRefs (pure static validation, run at pipeline-SAVE time) -------
@@ -1228,7 +1313,20 @@ export function validateDoc(
   const nodeIdSet = new Set(nodeIdList);
   const containers = doc.containers ?? [];
   const declared = new Map<string, Param>();
-  for (const p of doc.params) declared.set(p.name, p);
+  for (const p of doc.params) {
+    declared.set(p.name, p);
+    // #547 — a param DEFAULT is applied by `resolveRunParams` for any
+    // un-overridden param and, for a `json`-typed default, passed through
+    // `coerce` UNTOUCHED into `run.params` → the `run.started` event, where a
+    // non-finite number `JSON.stringify`s to `null` and replays silently-wrong.
+    // (A `number`-typed non-finite default already fails LOUD at `coerce`; this
+    // closes the `json` hole at the same save-time, write-path-only,
+    // by-construction gate as every other doc-integrity rule here — on an
+    // IMMUTABLE doc, so it can only be refused at write, never repaired later.)
+    if (Object.prototype.hasOwnProperty.call(p, 'default')) {
+      errors.push(...jsonReplaySafetyErrors(`param '${p.name}' default`, p.default));
+    }
+  }
   const outputsById = outputsByIdOf(doc.nodes);
 
   // GLOBAL id uniqueness: node ids and container ids share ONE namespace (the

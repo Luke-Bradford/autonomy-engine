@@ -101,6 +101,29 @@ describe('pipeline-versions repo — the write gate (#444)', () => {
     ).toThrow(InvalidPipelineDocError);
   });
 
+  // #547 (F1) — a json param DEFAULT carrying a non-finite is refused on write.
+  // resolveRunParams applies the default and coerce passes a json value through
+  // untouched, so an Infinity default would reach run.started and JSON.stringify
+  // to null; the immutable version could never be repaired, only re-authored.
+  it('REFUSES a non-finite json param default (#547 F1)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    expect(() =>
+      createPipelineVersion(db, {
+        ...buildVersionInput(pipeline.id),
+        params: [{ name: 'cfg', type: 'json', required: false, default: { x: Infinity } }],
+      }),
+    ).toThrow(InvalidPipelineDocError);
+    expect(listPipelineVersions(db, pipeline.id)).toEqual([]);
+    // A finite default is fine.
+    expect(() =>
+      createPipelineVersion(db, {
+        ...buildVersionInput(pipeline.id),
+        params: [{ name: 'cfg', type: 'json', required: false, default: { x: 1e308 } }],
+      }),
+    ).not.toThrow();
+  });
+
   it('carries EVERY issue on the error, not just the first', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });

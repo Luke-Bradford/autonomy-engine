@@ -13,10 +13,13 @@ import {
   MAX_CONFIG_DEPTH,
   RUN_FIELDS,
   TRIGGER_FIELDS,
+  assertJsonReplaySafe,
+  jsonReplaySafetyErrors,
   resolveRunParams,
   resolveTriggerBindings,
   substitute,
   triggerRoot,
+  validateDoc,
   validateRefs,
   validateTriggerBindings,
   validateWholeValue,
@@ -1615,6 +1618,37 @@ describe('resolveTriggerBindings — fire-time resolution (#5 S12b)', () => {
     expect(() => resolveTriggerBindings({ x: '${run.runId}' }, tc())).toThrow(SubstituteError);
     expect(() => resolveTriggerBindings({ x: '${params.foo}' }, tc())).toThrow(SubstituteError);
   });
+
+  // #547 boundary 3 — a non-finite result must not be frozen into run.params
+  // (it would JSON.stringify to null on run.started and replay silently-wrong).
+  it('throws for a pre-gate stored LITERAL non-finite param — fail-safe (#547)', () => {
+    // substitute passes a non-string literal through untouched, so a row that
+    // slipped past an older save gate reaches here as Infinity/NaN.
+    expect(() => resolveTriggerBindings({ n: Infinity }, tc())).toThrow(SubstituteError);
+    expect(() => resolveTriggerBindings({ n: NaN }, tc())).toThrow(SubstituteError);
+    expect(() => resolveTriggerBindings({ deep: { a: [-Infinity] } }, tc())).toThrow(
+      SubstituteError,
+    );
+  });
+
+  it('throws when a ${trigger.body.*} passthrough resolves to a non-finite (S8 shape) (#547)', () => {
+    expect(() =>
+      resolveTriggerBindings({ n: '${trigger.body.x}' }, tc({ body: { x: Infinity } })),
+    ).toThrow(SubstituteError);
+  });
+
+  it('passes a finite resolution through unchanged (#547)', () => {
+    expect(
+      resolveTriggerBindings(
+        { n: 1e308, z: -0, whole: '${trigger.body}' },
+        tc({ body: { ok: 3 } }),
+      ),
+    ).toEqual({
+      n: 1e308,
+      z: -0,
+      whole: { ok: 3 },
+    });
+  });
 });
 
 describe('validateTriggerBindings — save-time root restriction (#5 S12b)', () => {
@@ -1685,5 +1719,84 @@ describe('validateTriggerBindings — save-time root restriction (#5 S12b)', () 
 
   it('rejects a malformed expression (parse error), reported once', () => {
     expect(validateTriggerBindings({ a: '${trigger.}' }).length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('jsonReplaySafetyErrors / assertJsonReplaySafe — non-finite guard (#547)', () => {
+  it('accepts finite scalars, nested containers, and strings (returns [])', () => {
+    expect(jsonReplaySafetyErrors('v', 42)).toEqual([]);
+    expect(jsonReplaySafetyErrors('v', 1e308)).toEqual([]);
+    expect(jsonReplaySafetyErrors('v', -0)).toEqual([]); // Number.isFinite(-0) === true
+    expect(jsonReplaySafetyErrors('v', 'a-${x}-string')).toEqual([]);
+    expect(jsonReplaySafetyErrors('v', { a: 1, b: [2, { c: 3 }], d: null, e: true })).toEqual([]);
+    expect(jsonReplaySafetyErrors('v', null)).toEqual([]);
+    expect(jsonReplaySafetyErrors('v', undefined)).toEqual([]);
+  });
+
+  it('flags each non-finite number with a PATH-ONLY message that never echoes the value', () => {
+    // A single FIXED message form regardless of which non-finite it is, so it
+    // never echoes the value (surfaced in a client-facing 400 whose contract is
+    // to never echo a resolved value).
+    for (const bad of [Infinity, -Infinity, NaN]) {
+      const errs = jsonReplaySafetyErrors('root', bad);
+      expect(errs).toEqual(['root: non-finite number refused (cannot be durably replayed)']);
+    }
+  });
+
+  it('reports the path of a nested non-finite (array + object)', () => {
+    expect(jsonReplaySafetyErrors('params.x', { a: [{ b: Infinity }] })[0]).toMatch(
+      /^params\.x\.a\[0\]\.b: non-finite/,
+    );
+  });
+
+  it('reports EVERY non-finite in one pass', () => {
+    expect(jsonReplaySafetyErrors('v', { a: Infinity, b: NaN })).toHaveLength(2);
+  });
+
+  it('models the JSON.parse HTTP ingress: 1e999 → Infinity is flagged', () => {
+    const parsed = JSON.parse('{"x": 1e999}') as { x: number };
+    expect(parsed.x).toBe(Infinity);
+    expect(jsonReplaySafetyErrors('body', parsed)[0]).toMatch(/^body\.x: non-finite/);
+  });
+
+  it('reports over-depth rather than throwing a RangeError', () => {
+    let deep: unknown = Infinity;
+    for (let i = 0; i <= MAX_CONFIG_DEPTH + 2; i++) deep = { n: deep };
+    const errs = jsonReplaySafetyErrors('v', deep);
+    expect(errs.some((e) => e.includes('nested too deep'))).toBe(true);
+  });
+
+  it('assertJsonReplaySafe throws SubstituteError on the first non-finite, is a no-op when clean', () => {
+    expect(() => assertJsonReplaySafe('v', { ok: 1 })).not.toThrow();
+    expect(() => assertJsonReplaySafe('v', { bad: NaN })).toThrow(SubstituteError);
+  });
+});
+
+describe('validateDoc — param default replay-safety (#547 / F1)', () => {
+  const doc = (defaultValue: unknown) => ({
+    params: [{ name: 'x', type: 'json' as const, required: false, default: defaultValue }],
+    nodes: [],
+    edges: [],
+    containers: [],
+  });
+
+  it('refuses a json param default carrying a non-finite (the unguarded coerce passthrough)', () => {
+    const errs = validateDoc(doc({ v: Infinity }));
+    expect(errs.some((e) => /param 'x' default.*non-finite/.test(e))).toBe(true);
+  });
+
+  it('accepts a finite json param default', () => {
+    expect(validateDoc(doc({ v: 1e308, s: 'ok' }))).toEqual([]);
+  });
+
+  it('accepts a param with no default at all', () => {
+    expect(
+      validateDoc({
+        params: [{ name: 'x', type: 'json' as const, required: false }],
+        nodes: [],
+        edges: [],
+        containers: [],
+      }),
+    ).toEqual([]);
   });
 });

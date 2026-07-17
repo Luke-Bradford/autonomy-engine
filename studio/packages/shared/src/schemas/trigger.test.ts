@@ -197,6 +197,23 @@ describe('NewTriggerSchema', () => {
       n: 3,
     });
   });
+
+  // #547 — a literal non-finite param value (1e999 → Infinity over HTTP) is
+  // refused on write: stored, later fed to a run, and lost to null on the
+  // run.started JSON.stringify.
+  it('rejects a non-finite literal param value (#547)', () => {
+    expect(() => NewTriggerSchema.parse({ ...insert, params: { x: Infinity } })).toThrow(
+      /non-finite number refused/,
+    );
+    expect(() =>
+      NewTriggerSchema.parse({ ...insert, params: { deep: { a: [Number.NaN] } } }),
+    ).toThrow(/non-finite number refused/);
+    // A finite value + a ${} string binding both still pass.
+    expect(
+      NewTriggerSchema.parse({ ...insert, params: { n: 1e308, when: '${trigger.scheduledTime}' } })
+        .params,
+    ).toEqual({ n: 1e308, when: '${trigger.scheduledTime}' });
+  });
 });
 
 describe('TriggerSchema (stored/read) tolerates a binding the write path would refuse', () => {
