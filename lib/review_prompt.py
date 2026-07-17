@@ -346,11 +346,17 @@ def build_payload(scope, diff, pr_description, comments_raw):
         # budget available here.
         "max_tokens": 32000,
         "thinking": {"type": "adaptive"},
-        # `xhigh`, not `medium` (#504). Per the Claude API reference: xhigh is
-        # "the best setting for most coding and agentic use cases" on Sonnet 5
-        # and is Claude Code's own default, and a minimum of `high` is the
-        # documented floor for intelligence-sensitive work. A merge gate that
-        # reads a diff for defects is exactly that; `medium` was below the bar.
+        # `high` (operator, 2026-07-17, cost). `high` is the DOCUMENTED FLOOR for
+        # intelligence-sensitive work -- a merge gate reading a diff for defects
+        # is exactly that -- so it stays above the bar `medium` fell below (#504:
+        # `medium` rubber-stamped, bare APPROVE in 27s, missed six real defects).
+        #
+        # Was `xhigh` (#504). Dropped one notch to cut METERED API spend: the
+        # review bills per-token via ANTHROPIC_API_KEY (not the subscription the
+        # loop fires use), and `xhigh` reviews were ~17k output tokens each, ~98%
+        # of it thinking, times ~15 PRs/day times every re-review round. `high`
+        # roughly halves the thinking tokens while keeping a real review. If the
+        # gate starts missing defects at `high`, `xhigh` is the knob to turn back.
         #
         # Sonnet 5 "respects effort levels strictly, especially at the low end"
         # -- which is the mechanism, not a footnote: `medium` was not
@@ -364,11 +370,15 @@ def build_payload(scope, diff, pr_description, comments_raw):
         # spend the model is willing to make, it does not force it. Do not read
         # thinking_tokens=0 on some future run as this line having failed.
         #
-        # Cost and latency go up. That is the trade, and it is the right
-        # direction for a gate an unattended loop merges on: a slow correct
-        # answer beats a fast rubber stamp. `max_tokens` is NOT raised to match
-        # -- see the constant above and #505 before touching it.
-        "output_config": {"effort": "xhigh"},
+        # A correct answer that costs a little beats a fast rubber stamp -- the
+        # right direction for a gate an unattended loop merges on. This API bot
+        # is the INDEPENDENT backstop; the loop's two pre-PR subagent lenses
+        # (SUBSCRIPTION, no per-token charge) are the primary "review our own
+        # homework" pass, so the metered bot need not carry the deepest tier.
+        # `max_tokens` stays at its headroom value -- it is a CAP, not a charge
+        # (you pay for tokens generated, not the ceiling), so lowering it saves
+        # nothing and only risks truncation. See the constant above and #505.
+        "output_config": {"effort": "high"},
         "system": [
             {
                 "type": "text",
