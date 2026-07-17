@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { jsonReplaySafetyErrors } from '../engine/params.js';
+import { addParamsReplaySafetyIssues } from './replay-safety.js';
 
 /**
  * The outcome of a single trigger fire (`POST /api/triggers/:id/fire`, the P4b
@@ -53,10 +53,6 @@ export const FireRequestSchema = z
     // never becomes a silently-lossy run fact. Shared, so the web client
     // pre-validates identically.
     if (body.params === undefined) return;
-    for (const [name, value] of Object.entries(body.params)) {
-      for (const message of jsonReplaySafetyErrors(`params.${name}`, value)) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message });
-      }
-    }
+    addParamsReplaySafetyIssues(body.params, ctx);
   });
 export type FireRequest = z.infer<typeof FireRequestSchema>;
