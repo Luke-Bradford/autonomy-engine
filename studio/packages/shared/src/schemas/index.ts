@@ -3,6 +3,7 @@ export * from './api-error.js';
 export * from './pagination.js';
 export * from './connection.js';
 export * from './pipeline.js';
+export * from './recurrence.js';
 export * from './trigger.js';
 export * from './fire-result.js';
 export * from './run.js';

@@ -3,6 +3,8 @@ import type { FastifyInstance } from 'fastify';
 import { CATALOG_VERSION, type NewTrigger } from '@autonomy-studio/shared';
 import { createPipeline, createPipelineVersion, createTrigger } from '../../repo/index.js';
 import { getRun } from '../../repo/runs.js';
+import { listPendingWakeups } from '../../repo/scheduled-wakeups.js';
+import { SCHEDULE_TICK_KIND } from '../../scheduler/schedule-tick.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 
 function triggerBody(pipelineVersionId: string) {
@@ -426,6 +428,163 @@ describe('triggers routes', () => {
         payload: { enabled: false },
       });
       expect(JSON.stringify(patchRes.json())).not.toContain('secret_should_never_leak');
+    });
+  });
+
+  describe('#5 S5b-1 — recurrence authoring', () => {
+    function scheduleTicksFor(app: FastifyInstance, triggerId: string) {
+      return listPendingWakeups(app.db).filter(
+        (w) =>
+          w.kind === SCHEDULE_TICK_KIND &&
+          (w.ref as { triggerId?: string }).triggerId === triggerId,
+      );
+    }
+
+    it('creates a schedule trigger from a recurrence, derives the cron, and SEEDS a durable tick', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          ...triggerBody(pipelineVersionId),
+          schedule: null,
+          recurrence: { frequency: 'day', schedule: { hours: [9], minutes: [30] } },
+        },
+      });
+      expect(res.statusCode).toBe(201);
+      const created = res.json();
+      // The derived cron is the firing chain's `schedule`, and the authored
+      // recurrence round-trips (interval defaulted).
+      expect(created.schedule).toBe('30 9 * * *');
+      expect(created.recurrence).toEqual({
+        frequency: 'day',
+        interval: 1,
+        schedule: { hours: [9], minutes: [30] },
+      });
+      // THE LIVE-PRODUCER PROOF: the POST's `scheduler.sync()` armed a durable
+      // schedule_tick against the DERIVED cron — a recurrence trigger fires on
+      // schedule through the exact S5a chain, no new firing path.
+      const ticks = scheduleTicksFor(app, created.id);
+      expect(ticks).toHaveLength(1);
+      expect((ticks[0]!.ref as { schedule: string }).schedule).toBe('30 9 * * *');
+    });
+
+    it('re-derives the cron and re-seeds the tick when the recurrence is patched', async () => {
+      const create = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          ...triggerBody(pipelineVersionId),
+          schedule: null,
+          recurrence: { frequency: 'day', schedule: { hours: [9] } },
+        },
+      });
+      const id = create.json().id;
+
+      const patch = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${id}`,
+        payload: { recurrence: { frequency: 'week', schedule: { weekDays: [1], hours: [8] } } },
+      });
+      expect(patch.statusCode).toBe(200);
+      expect(patch.json().schedule).toBe('0 8 * * 1');
+
+      const ticks = scheduleTicksFor(app, id);
+      expect(ticks).toHaveLength(1);
+      expect((ticks[0]!.ref as { schedule: string }).schedule).toBe('0 8 * * 1');
+    });
+
+    it('rejects a recurrence on a non-schedule trigger (400)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          ...triggerBody(pipelineVersionId),
+          mode: 'manual',
+          schedule: null,
+          recurrence: { frequency: 'day' },
+        },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('rejects authoring both a recurrence AND a raw cron schedule (400)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          ...triggerBody(pipelineVersionId),
+          schedule: '0 0 * * *',
+          recurrence: { frequency: 'day' },
+        },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('PATCH rejects adding a recurrence to a non-schedule (manual) trigger (400, effective mode)', async () => {
+      // The consistency guard is REUSED on PATCH against the EFFECTIVE mode — a
+      // manual trigger patched with only a recurrence (mode untouched) is refused.
+      const create = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: { ...triggerBody(pipelineVersionId), mode: 'manual', schedule: null },
+      });
+      const id = create.json().id;
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${id}`,
+        payload: { recurrence: { frequency: 'day' } },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('PATCH rejects a raw cron schedule on an existing recurrence trigger (400, effective recurrence)', async () => {
+      // Existing recurrence trigger; a PATCH that adds a raw cron `schedule`
+      // (recurrence untouched, still live) is refused — `schedule` is derived.
+      const create = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          ...triggerBody(pipelineVersionId),
+          schedule: null,
+          recurrence: { frequency: 'day', schedule: { hours: [9] } },
+        },
+      });
+      const id = create.json().id;
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${id}`,
+        payload: { schedule: '0 0 * * *' },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('PATCH rejects supplying BOTH a new recurrence AND a raw cron in one request (400)', async () => {
+      const create = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: { ...triggerBody(pipelineVersionId), schedule: '0 2 * * *' },
+      });
+      const id = create.json().id;
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${id}`,
+        payload: { schedule: '0 0 * * *', recurrence: { frequency: 'day' } },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('rejects an unsupported interval > 1 (#550) with a helpful message', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          ...triggerBody(pipelineVersionId),
+          schedule: null,
+          recurrence: { frequency: 'day', interval: 2 },
+        },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.stringify(res.json())).toContain('#550');
     });
   });
 });

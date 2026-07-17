@@ -46,6 +46,7 @@ function trigger(overrides: Partial<TriggerPublic> = {}): TriggerPublic {
     webhook: null,
     concurrency: { policy: 'skip_if_running' },
     runWindows: null,
+    recurrence: null,
     enabled: true,
     createdAt: 1,
     updatedAt: 1,

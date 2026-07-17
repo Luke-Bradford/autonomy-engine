@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { validateTriggerBindings } from '../engine/params.js';
+import { RecurrenceSchema, RecurrenceWriteSchema } from './recurrence.js';
 
 export const TriggerModeSchema = z.enum(['manual', 'schedule', 'webhook', 'event', 'continuous']);
 export type TriggerMode = z.infer<typeof TriggerModeSchema>;
@@ -121,7 +122,23 @@ export const TriggerSchema = z.object({
   pipelineVersionId: z.string().min(1).nullable(),
   params: TriggerParamsSchema,
   mode: TriggerModeSchema,
+  /**
+   * The compiled cron string the firing chain reads (`isSchedulable`,
+   * `nextOccurrence`, the `schedule_changed` freshness compare). When
+   * `recurrence` is set this is a DERIVED cache of it (the repo write path
+   * recompiles it on every write, so the two can never diverge); when
+   * `recurrence` is null it is the raw cron escape-hatch a power user authored.
+   */
   schedule: z.string().min(1).nullable(),
+  /**
+   * #5 S5b-1 — the ADF-style structured recurrence (`{frequency, interval,
+   * schedule?}`), the authoring representation the UI round-trips and re-edits.
+   * Null for a raw-cron / non-schedule trigger. Read-lenient (stored shape);
+   * write validation + the recurrence↔schedule derivation live on the write
+   * path (`RecurrenceWriteSchema` + the repo). Bounds (start/end/timeZone) are
+   * S5b-2 (#549).
+   */
+  recurrence: RecurrenceSchema.nullable(),
   webhook: WebhookConfigSchema.nullable(),
   concurrency: ConcurrencySchema,
   runWindows: z.array(RunWindowSchema).nullable(),
@@ -144,6 +161,22 @@ export const NewTriggerSchema = TriggerSchema.omit({
   // Expression-valued param bindings are validated on the WRITE path only
   // (#5 S12b) — see `TriggerParamsWriteSchema`.
   params: TriggerParamsWriteSchema,
+  // #5 S5b-1: recurrence's intra-object rules (interval=1, per-frequency field
+  // validity) are enforced here as a FIELD-level effect so `NewTriggerSchema`
+  // stays a ZodObject (`.omit`/`.partial` on the routes keep working). The
+  // CROSS-field rules (recurrence⇒mode=schedule; schedule is derived, not
+  // co-authored) can't see other fields from here — they live in the repo write
+  // path + route (against the merged/effective row).
+  //
+  // `.nullable().optional()` — NOT `.default(null)` — is load-bearing for PATCH:
+  // it gives a clean THREE-state field (verified empirically: `.default(null)`
+  // is APPLIED by `.partial()`, so an unrelated PATCH would parse `recurrence:
+  // null` and silently CLEAR an existing recurrence). Here: OMITTED → `undefined`
+  // (untouched), explicit `null` → clear, object → set. A NEW authoring field, so
+  // omission is backward-compatible for existing clients/payloads. The stored
+  // `TriggerSchema.recurrence` stays required-nullable — every persisted row
+  // carries the column explicitly.
+  recurrence: RecurrenceWriteSchema.nullable().optional(),
 });
 // z.input, not z.infer/z.output — see the note on NewConnection in
 // connection.ts for why every insert type in this package uses it.

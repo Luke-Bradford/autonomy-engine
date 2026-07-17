@@ -130,6 +130,95 @@ describe('triggers repo', () => {
     expect(getTrigger(db, created.id)).toBeNull();
   });
 
+  describe('#5 S5b-1 — recurrence → derived schedule', () => {
+    it('derives the cron `schedule` from a recurrence on create, and round-trips the recurrence', () => {
+      const { db } = freshDb();
+      const version = setupPipelineVersion(db);
+      const created = createTrigger(db, {
+        ...buildTriggerInput(version.id),
+        schedule: null,
+        recurrence: { frequency: 'day', schedule: { hours: [9], minutes: [30] } },
+      });
+      // `schedule` is the DERIVED cron the firing chain reads...
+      expect(created.schedule).toBe('30 9 * * *');
+      // ...and the authored recurrence round-trips (interval defaulted to 1).
+      expect(created.recurrence).toEqual({
+        frequency: 'day',
+        interval: 1,
+        schedule: { hours: [9], minutes: [30] },
+      });
+      // Read-back proves it persisted (the #473 second loss point — a builder that
+      // drops the field would fail HERE, not just at the schema⇔column seam).
+      expect(getTrigger(db, created.id)).toEqual(created);
+    });
+
+    it('re-derives the schedule when the recurrence is updated', () => {
+      const { db } = freshDb();
+      const version = setupPipelineVersion(db);
+      const created = createTrigger(db, {
+        ...buildTriggerInput(version.id),
+        schedule: null,
+        recurrence: { frequency: 'day', schedule: { hours: [9] } },
+      });
+      expect(created.schedule).toBe('0 9 * * *');
+
+      const updated = updateTrigger(db, created.id, {
+        recurrence: { frequency: 'week', schedule: { weekDays: [1, 5], hours: [8] } },
+      });
+      expect(updated!.schedule).toBe('0 8 * * 1,5');
+      expect(updated!.recurrence?.frequency).toBe('week');
+    });
+
+    it('drops the stale derived cron when a recurrence is CLEARED (never leaks it as a raw cron)', () => {
+      const { db } = freshDb();
+      const version = setupPipelineVersion(db);
+      const created = createTrigger(db, {
+        ...buildTriggerInput(version.id),
+        schedule: null,
+        recurrence: { frequency: 'day', schedule: { hours: [9] } },
+      });
+      expect(created.schedule).toBe('0 9 * * *');
+
+      // Clear recurrence WITHOUT supplying a raw schedule → schedule becomes null,
+      // NOT the leftover '0 9 * * *' (which the operator never authored as a cron).
+      const cleared = updateTrigger(db, created.id, { recurrence: null });
+      expect(cleared!.recurrence).toBeNull();
+      expect(cleared!.schedule).toBeNull();
+    });
+
+    it('refuses a write-invalid recurrence on update at the REPO boundary (not just the route)', () => {
+      // The repo is "the single write-path authority": a caller bypassing the
+      // HTTP route (an admin script / later refactor) must still be refused a
+      // wrong-compiling recurrence (here: a `week` with no `weekDays`, which
+      // would otherwise derive `dow:'*'` = daily) — validated by
+      // `RecurrenceWriteSchema`, not the lenient read schema.
+      const { db } = freshDb();
+      const version = setupPipelineVersion(db);
+      const created = createTrigger(db, buildTriggerInput(version.id));
+      expect(() =>
+        updateTrigger(db, created.id, {
+          recurrence: { frequency: 'week' } as never,
+        }),
+      ).toThrow();
+    });
+
+    it('leaves recurrence + derived schedule untouched on an unrelated patch', () => {
+      const { db } = freshDb();
+      const version = setupPipelineVersion(db);
+      const created = createTrigger(db, {
+        ...buildTriggerInput(version.id),
+        schedule: null,
+        recurrence: { frequency: 'day', schedule: { hours: [9] } },
+      });
+      // A patch that does not mention recurrence must not clear it (the
+      // `.default(null)`-under-`.partial()` trap this field's `.optional()` avoids).
+      const patched = updateTrigger(db, created.id, { name: 'Renamed' });
+      expect(patched!.name).toBe('Renamed');
+      expect(patched!.recurrence?.frequency).toBe('day');
+      expect(patched!.schedule).toBe('0 9 * * *');
+    });
+  });
+
   describe('listParsedTriggers — resilient to a corrupt row', () => {
     it('skips (and reports) an unparseable row while returning the good ones', () => {
       const { db } = freshDb();

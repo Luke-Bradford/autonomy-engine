@@ -119,6 +119,7 @@ const trigger = {
   webhook: null,
   concurrency: { policy: 'skip_if_running' },
   runWindows: null,
+  recurrence: null,
   enabled: true,
   createdAt: 1700000000000,
   updatedAt: 1700000000000,

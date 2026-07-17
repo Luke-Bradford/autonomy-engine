@@ -5,7 +5,9 @@ import {
   NewTriggerSchema,
   SubstituteError,
   TriggerPublicSchema,
+  type Recurrence,
   type Trigger,
+  type TriggerMode,
 } from '@autonomy-studio/shared';
 import {
   createSecret,
@@ -82,12 +84,40 @@ function assertBindableIfEnabled(enabled: boolean, pipelineVersionId: string | n
   }
 }
 
+/**
+ * #5 S5b-1 — the recurrence CROSS-field rules, checked against the EFFECTIVE
+ * post-write state (mirrors `assertBindableIfEnabled`; a top-level Zod refine
+ * can't see across fields on a `.partial()` PATCH body). Two invariants:
+ *   - a recurrence only makes sense on a `schedule` trigger (it IS the schedule);
+ *   - `schedule` is DERIVED from `recurrence` (repo `deriveSchedule`), so a write
+ *     must not also author a raw cron `schedule` — that would be ignored/overwritten.
+ * The repo derivation is the runtime guarantee; these give a clean 400 up front.
+ */
+function assertRecurrenceConsistent(
+  mode: TriggerMode,
+  recurrence: Recurrence | null,
+  rawScheduleAuthored: boolean,
+): void {
+  if (recurrence === null) return;
+  if (mode !== 'schedule') {
+    throw new BadRequestError(
+      "a recurrence is only valid on a 'schedule' trigger — set mode:'schedule' or remove the recurrence",
+    );
+  }
+  if (rawScheduleAuthored) {
+    throw new BadRequestError(
+      'provide either a `recurrence` or a raw cron `schedule`, not both — `schedule` is derived from `recurrence`',
+    );
+  }
+}
+
 export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
 
   fastify.post('/api/triggers', async (request, reply) => {
     const body = TriggerWriteBodySchema.parse(request.body);
     assertBindableIfEnabled(body.enabled, body.pipelineVersionId);
+    assertRecurrenceConsistent(body.mode, body.recurrence ?? null, body.schedule !== null);
     requireOwnedPipelineVersion(db, body.pipelineVersionId, request.principal);
     const created = createTrigger(db, { ...body, ownerId: request.principal.ownerId });
     // Reconcile the durable `schedule_tick` rows so a newly-enabled schedule
@@ -127,6 +157,12 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
     const effPipelineVersionId =
       body.pipelineVersionId !== undefined ? body.pipelineVersionId : existing.pipelineVersionId;
     assertBindableIfEnabled(effEnabled, effPipelineVersionId);
+    // Recurrence 3-state on the PATCH body: undefined = untouched (keep existing),
+    // null = clear, object = set. `body.schedule` (a non-null string) is an
+    // author-supplied raw cron in THIS patch.
+    const effMode = body.mode ?? existing.mode;
+    const effRecurrence = body.recurrence !== undefined ? body.recurrence : existing.recurrence;
+    assertRecurrenceConsistent(effMode, effRecurrence, typeof body.schedule === 'string');
     const updated = updateTrigger(db, existing.id, body);
     if (!updated) throw new NotFoundError('trigger', existing.id);
     // Reconcile: a patch may enable/disable, rebind, change the schedule, or

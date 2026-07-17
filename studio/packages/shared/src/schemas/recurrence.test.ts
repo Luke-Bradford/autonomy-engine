@@ -1,0 +1,142 @@
+import { describe, expect, it } from 'vitest';
+import {
+  RecurrenceSchema,
+  RecurrenceWriteSchema,
+  recurrenceToCron,
+  type Recurrence,
+} from './recurrence.js';
+
+/**
+ * #5 S5b-1 — the ADF recurrence MODEL, compiled to a cron string ("croner under
+ * the hood"). This suite pins the compiler (the crux) and the write-boundary
+ * rules. Bounds (`startTime`/`endTime`/`timeZone`) are S5b-2 (#549); `interval > 1`
+ * is #550 — both are refused here rather than silently mis-compiled.
+ */
+
+const base = (over: Partial<Recurrence> = {}): Recurrence => ({
+  frequency: 'day',
+  interval: 1,
+  ...over,
+});
+
+describe('recurrenceToCron — the ADF recurrence → cron compiler (interval=1)', () => {
+  it('minute frequency fires every minute (schedule sub-fields are not part of it)', () => {
+    expect(recurrenceToCron(base({ frequency: 'minute' }))).toBe('* * * * *');
+  });
+
+  it('hour frequency defaults to the top of every hour', () => {
+    expect(recurrenceToCron(base({ frequency: 'hour' }))).toBe('0 * * * *');
+  });
+
+  it('hour frequency honours enumerated minutes (this is how "every 15 min" is authored)', () => {
+    expect(
+      recurrenceToCron(base({ frequency: 'hour', schedule: { minutes: [0, 15, 30, 45] } })),
+    ).toBe('0,15,30,45 * * * *');
+  });
+
+  it('day frequency defaults to midnight UTC', () => {
+    expect(recurrenceToCron(base({ frequency: 'day' }))).toBe('0 0 * * *');
+  });
+
+  it('day frequency honours hours + minutes (daily at 09:00 and 17:30)', () => {
+    expect(
+      recurrenceToCron(base({ frequency: 'day', schedule: { hours: [9, 17], minutes: [0, 30] } })),
+    ).toBe('0,30 9,17 * * *');
+  });
+
+  it('week frequency honours weekDays (Mon & Fri at 08:00)', () => {
+    expect(
+      recurrenceToCron(
+        base({ frequency: 'week', schedule: { weekDays: [1, 5], hours: [8], minutes: [0] } }),
+      ),
+    ).toBe('0 8 * * 1,5');
+  });
+
+  it('month frequency honours monthDays (the 1st and 15th at 06:00)', () => {
+    expect(
+      recurrenceToCron(base({ frequency: 'month', schedule: { monthDays: [1, 15], hours: [6] } })),
+    ).toBe('0 6 1,15 * *');
+  });
+
+  it('sorts and de-duplicates field values for a stable, canonical cron string', () => {
+    // Two authored recurrences that mean the same thing compile identically, so a
+    // no-op edit does not churn the derived `schedule` (and thus the freshness
+    // compare in the scheduler).
+    expect(
+      recurrenceToCron(
+        base({ frequency: 'day', schedule: { hours: [17, 9, 9], minutes: [30, 0] } }),
+      ),
+    ).toBe('0,30 9,17 * * *');
+  });
+});
+
+describe('RecurrenceWriteSchema — the write-boundary rules', () => {
+  const ok = (r: unknown) => RecurrenceWriteSchema.safeParse(r).success;
+  const err = (r: unknown) => {
+    const res = RecurrenceWriteSchema.safeParse(r);
+    return res.success ? '' : res.error.issues.map((i) => i.message).join(' | ');
+  };
+
+  it('accepts a minimal valid recurrence and defaults interval to 1', () => {
+    const parsed = RecurrenceWriteSchema.parse({ frequency: 'day' });
+    expect(parsed.interval).toBe(1);
+  });
+
+  it('rejects interval > 1 (#550 — not cron-expressible without a stepping calculator)', () => {
+    expect(ok(base({ interval: 2 }))).toBe(false);
+    expect(err(base({ interval: 2 }))).toMatch(/#550/);
+  });
+
+  it('requires weekDays for a weekly recurrence (a week with no day is not cron-expressible)', () => {
+    expect(ok(base({ frequency: 'week' }))).toBe(false);
+    expect(ok(base({ frequency: 'week', schedule: { weekDays: [1] } }))).toBe(true);
+  });
+
+  it('requires monthDays for a monthly recurrence', () => {
+    expect(ok(base({ frequency: 'month' }))).toBe(false);
+    expect(ok(base({ frequency: 'month', schedule: { monthDays: [1] } }))).toBe(true);
+  });
+
+  it('rejects a schedule sub-field the frequency does not honour', () => {
+    // weekDays on a daily recurrence is meaningless — reject, do not silently drop.
+    expect(ok(base({ frequency: 'day', schedule: { weekDays: [1] } }))).toBe(false);
+    // hours on an hourly recurrence (hourly already fires every hour) — reject.
+    expect(ok(base({ frequency: 'hour', schedule: { hours: [9] } }))).toBe(false);
+    // any sub-field on a per-minute recurrence — reject.
+    expect(ok(base({ frequency: 'minute', schedule: { minutes: [0] } }))).toBe(false);
+    // monthDays on a weekly recurrence — reject.
+    expect(ok(base({ frequency: 'week', schedule: { weekDays: [1], monthDays: [1] } }))).toBe(
+      false,
+    );
+  });
+
+  it('rejects out-of-range field values', () => {
+    expect(ok(base({ frequency: 'day', schedule: { hours: [24] } }))).toBe(false);
+    expect(ok(base({ frequency: 'day', schedule: { minutes: [60] } }))).toBe(false);
+    expect(ok(base({ frequency: 'week', schedule: { weekDays: [7] } }))).toBe(false);
+    expect(ok(base({ frequency: 'month', schedule: { monthDays: [0] } }))).toBe(false);
+    expect(ok(base({ frequency: 'month', schedule: { monthDays: [32] } }))).toBe(false);
+  });
+
+  it('every write-valid recurrence compiles without throwing (compiler totality)', () => {
+    const valids: Recurrence[] = [
+      base({ frequency: 'minute' }),
+      base({ frequency: 'hour', schedule: { minutes: [0, 30] } }),
+      base({ frequency: 'day', schedule: { hours: [9] } }),
+      base({ frequency: 'week', schedule: { weekDays: [0, 6] } }),
+      base({ frequency: 'month', schedule: { monthDays: [1, 28] } }),
+    ];
+    for (const r of valids) {
+      const parsed = RecurrenceWriteSchema.parse(r);
+      expect(() => recurrenceToCron(parsed)).not.toThrow();
+    }
+  });
+});
+
+describe('RecurrenceSchema — the lenient stored/read shape', () => {
+  it('parses a stored recurrence with interval > 1 (a row written before #550 tightened)', () => {
+    // Read must NOT reject what write does — the same lenient-read discipline as
+    // TriggerParamsSchema / ConcurrencySchema, so an older row never throws on read.
+    expect(RecurrenceSchema.safeParse({ frequency: 'day', interval: 3 }).success).toBe(true);
+  });
+});
