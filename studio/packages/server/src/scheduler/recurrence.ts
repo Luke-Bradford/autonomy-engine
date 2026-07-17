@@ -62,20 +62,24 @@ export interface OccurrenceBounds {
  * croner's `startAt`/`stopAt` are BOTH exclusive and second-truncated (FLOORED):
  * it fires an occurrence iff `occurrence > floor(startAt)` and `occurrence <
  * floor(stopAt)` (verified empirically). We expose a half-open `[startAt, stopAt)`
- * — inclusive start, exclusive end — instead:
- *   - `stopAt` EXCLUSIVE matches croner directly — pass it through.
- *   - `startAt` INCLUSIVE does NOT — so we hand croner `startAt - 1ms`. Because
- *     croner FLOORS to the second, `floor(startTime - 1ms)` is `floor(startTime)-1s`
- *     ONLY when `startTime` is exactly on a second (ms == 0) and `floor(startTime)`
- *     otherwise — so croner returns exactly "the first occurrence `>= startTime`"
- *     for minute-granular crons: an occurrence landing exactly on a whole-second
- *     `startTime` fires (inclusive), while a sub-second `startTime` (e.g.
- *     `…:00.500Z`) does NOT re-admit the earlier `…:00.000` slot. (A full `-1s`
- *     nudge would wrongly re-admit that sub-second-early slot.) The compiled
- *     schedules are 5-field crons (minute granularity — `recurrenceToCron`), whose
- *     occurrences all land on whole seconds; bounds only exist on a recurrence
- *     trigger, whose `schedule` is always such a compiled cron (a raw-cron
- *     escape-hatch trigger has no `recurrence`, thus no bounds).
+ * — inclusive start, exclusive end, to millisecond precision — by compensating for
+ * both the floor and the exclusivity SYMMETRICALLY:
+ *   - `startAt` INCLUSIVE: hand croner `startAt - 1ms`. Because croner FLOORS,
+ *     `floor(startAt - 1ms)` is `floor(startAt) - 1s` ONLY when `startAt` is exactly
+ *     on a second and `floor(startAt)` otherwise — so croner returns exactly "the
+ *     first occurrence `>= startAt`": an occurrence on a whole-second `startAt` fires
+ *     (inclusive), while a sub-second `startAt` (e.g. `…:00.500Z`) does NOT re-admit
+ *     the earlier `…:00.000` slot (a full `-1s` nudge would).
+ *   - `stopAt` EXCLUSIVE: hand croner `ceil(stopAt)` (rounded UP to the second).
+ *     `floor(ceil(stopAt))` is `stopAt` for a whole-second bound (exact exclusive
+ *     end — an occurrence AT `stopAt` is excluded) and `ceil(stopAt)` for a
+ *     sub-second bound, so an occurrence strictly before the raw `stopAt` instant
+ *     (e.g. the `…:00.000` slot under a `…:00.500Z` end) is NOT wrongly excluded.
+ * Both compensations rely only on: (a) croner floors + compares exclusively, and
+ * (b) the compiled schedules are 5-field crons (minute granularity —
+ * `recurrenceToCron`), whose occurrences all land on whole seconds. Bounds only
+ * exist on a recurrence trigger, whose `schedule` is always such a compiled cron (a
+ * raw-cron escape-hatch trigger has no `recurrence`, thus no bounds).
  *
  * These boundary semantics ARE croner-internal (floor + exclusivity), so croner is
  * EXACT-pinned (`10.0.1`, no caret — see `package.json`) and the guard against a
@@ -100,8 +104,12 @@ export function nextOccurrence(
     // clears croner's floored-exclusive comparison WITHOUT re-admitting a
     // sub-second-early slot (see the boundary contract above).
     if (bounds.startAt !== undefined) options.startAt = new Date(bounds.startAt - 1);
-    // Exclusive `stopAt`: croner-native, pass through.
-    if (bounds.stopAt !== undefined) options.stopAt = new Date(bounds.stopAt);
+    // Exclusive `stopAt`: round UP to the second so a sub-second end does not
+    // wrongly exclude an occurrence strictly before the raw instant, while a
+    // whole-second end stays an exact exclusive bound (symmetric to startAt).
+    if (bounds.stopAt !== undefined) {
+      options.stopAt = new Date(Math.ceil(bounds.stopAt / 1000) * 1000);
+    }
     cron = new Cron(schedule, options);
   } catch (err) {
     throw new InvalidScheduleError(schedule, err);

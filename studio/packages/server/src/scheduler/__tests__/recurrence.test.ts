@@ -108,6 +108,16 @@ describe('nextOccurrence — start/end bounds (a half-open firing window)', () =
     expect(next).toBeNull();
   });
 
+  it('a sub-second stopAt does NOT exclude an occurrence strictly before the raw instant', () => {
+    // stopAt 09:00:00.500 → the 09:00:00.000 slot is strictly BEFORE the end and
+    // must still fire (a raw floored stopAt would wrongly drop it); symmetric to
+    // the inclusive-start sub-second case.
+    const next = nextOccurrence(daily9, at('2026-08-01T00:00:00Z'), {
+      stopAt: at('2026-08-01T09:00:00.500Z'),
+    });
+    expect(next).toBe(at('2026-08-01T09:00:00Z'));
+  });
+
   it('an occurrence strictly before stopAt fires; the last one ends the chain', () => {
     // stopAt Aug 3 09:00: Aug 1 & Aug 2 fire; Aug 3 (== stopAt) does not.
     expect(
