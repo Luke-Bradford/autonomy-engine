@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { validateTriggerBindings } from '../engine/params.js';
+import { jsonReplaySafetyErrors, validateTriggerBindings } from '../engine/params.js';
 import { RecurrenceSchema, RecurrenceWriteSchema } from './recurrence.js';
 
 export const TriggerModeSchema = z.enum(['manual', 'schedule', 'webhook', 'event', 'continuous']);
@@ -97,6 +97,16 @@ export const TriggerParamsSchema = z.record(z.string(), z.unknown());
 export const TriggerParamsWriteSchema = TriggerParamsSchema.superRefine((params, ctx) => {
   for (const message of validateTriggerBindings(params)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+  }
+  // #547 — refuse a LITERAL non-finite number in any param VALUE (e.g.
+  // `{x: 1e999}` → `Infinity`): stored, later fed to a run, and lost to `null`
+  // on the `run.started` `JSON.stringify`. `jsonReplaySafetyErrors` walks each
+  // param's value tree; a `${...}` string binding is untouched (only numbers are
+  // inspected), so this composes with the binding check above.
+  for (const [name, value] of Object.entries(params)) {
+    for (const message of jsonReplaySafetyErrors(`params.${name}`, value)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+    }
   }
 });
 

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { jsonReplaySafetyErrors } from '../engine/params.js';
 
 /**
  * The outcome of a single trigger fire (`POST /api/triggers/:id/fire`, the P4b
@@ -40,7 +41,22 @@ export type FireResult = z.infer<typeof FireResultSchema>;
  * override surfaces as an interrupted run, not a request error, consistent with
  * a bad trigger-authored param today.
  */
-export const FireRequestSchema = z.object({
-  params: z.record(z.string(), z.unknown()).optional(),
-});
+export const FireRequestSchema = z
+  .object({
+    params: z.record(z.string(), z.unknown()).optional(),
+  })
+  .superRefine((body, ctx) => {
+    // #547 — the run-now override is frozen into `run.params` → `run.started`,
+    // which `JSON.stringify`-persists (non-finite → `null`) and replays. Refuse a
+    // non-finite number (incl. a `json`-typed override's nested field, which
+    // `resolveRunParams` passes through untouched) at this write boundary so it
+    // never becomes a silently-lossy run fact. Shared, so the web client
+    // pre-validates identically.
+    if (body.params === undefined) return;
+    for (const [name, value] of Object.entries(body.params)) {
+      for (const message of jsonReplaySafetyErrors(`params.${name}`, value)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+      }
+    }
+  });
 export type FireRequest = z.infer<typeof FireRequestSchema>;

@@ -374,6 +374,32 @@ describe('triggers routes', () => {
       expect(fireRes.json().error).toBe('bad_request');
     });
 
+    // #547 boundary 2 — a non-finite run-now override is refused at the fire
+    // write boundary (FireRequestSchema → ZodError → 400), BEFORE any run row is
+    // created, so it can never reach run.params / the run.started event.
+    it('400 for a non-finite run-now override param (#547)', async () => {
+      const created = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/triggers',
+          payload: triggerBody(pipelineVersionId),
+        })
+      ).json();
+
+      const fireRes = await app.inject({
+        method: 'POST',
+        url: `/api/triggers/${created.id}/fire`,
+        // JSON.parse of the request body yields Infinity for 1e999.
+        payload: '{"params":{"x":1e999}}',
+        headers: { 'content-type': 'application/json' },
+      });
+      expect(fireRes.statusCode).toBe(400);
+      // FireRequestSchema.parse throws a ZodError (the run-now body is parsed
+      // before the launcher's try/catch), mapped by the global handler.
+      expect(fireRes.json().error).toBe('validation_error');
+      expect(JSON.stringify(fireRes.json())).toMatch(/non-finite number refused/);
+    });
+
     it('an undeclared run-now override surfaces as an INTERRUPTED run, not a 400', async () => {
       const created = (
         await app.inject({
