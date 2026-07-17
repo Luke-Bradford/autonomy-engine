@@ -1,14 +1,24 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   mkdir,
   mkdtemp,
   readdir,
   readFile,
   realpath,
+  rename,
   rm,
   symlink,
   writeFile,
 } from 'node:fs/promises';
+
+// Mock `node:fs/promises` but pass every export straight through to the real
+// implementation — only `rename` becomes a spy (a real-behaving `vi.fn`) so a
+// single test can inject an `EXDEV` rejection to exercise `doMove`'s
+// cross-filesystem branch, which a single-temp-dir test cannot stage.
+vi.mock('node:fs/promises', async (importActual) => {
+  const actual = await importActual<typeof import('node:fs/promises')>();
+  return { ...actual, rename: vi.fn(actual.rename) };
+});
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fsAdapter } from '../fs.js';
@@ -381,6 +391,19 @@ describe('fs connector — A12 file_move', () => {
   it('a missing source is permanent (ENOENT)', async () => {
     const events = await drain(invoke(ctx('file_move', { source: 'nope.txt', dest: 'to.txt' })));
     expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+  });
+
+  it('a cross-filesystem move is permanent (EXDEV → compose copy+delete)', async () => {
+    // EXDEV is only reachable when source and dest live on different mounts,
+    // which a single-temp-dir test cannot stage; inject the errno'd rename
+    // rejection to exercise the real `doMove` EXDEV classification branch.
+    await writeFile(join(root, 'from.txt'), 'x', 'utf8');
+    const exdev = Object.assign(new Error('cross-device link'), { code: 'EXDEV' });
+    vi.mocked(rename).mockRejectedValueOnce(exdev);
+    const events = await drain(invoke(ctx('file_move', { source: 'from.txt', dest: 'to.txt' })));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect((events[0] as { error: string }).error).toMatch(/across filesystems \(EXDEV\)/);
+    expect(await readFile(join(root, 'from.txt'), 'utf8')).toBe('x'); // source untouched
   });
 });
 

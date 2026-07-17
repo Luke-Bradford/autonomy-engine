@@ -419,14 +419,18 @@ async function doCopy(
   let src: Awaited<ReturnType<typeof open>> | undefined;
   let bytesWritten = 0;
   try {
-    src = await open(sourcePath, fsConstants.O_RDONLY | O_NOFOLLOW);
-    const st = await src.stat();
+    // Capture the opened handle in a locally-typed const so the closure below
+    // keeps its non-null narrowing (TS loses it across the closure boundary);
+    // `src` still holds the same handle for `closeQuietly` in `finally`.
+    const source = await open(sourcePath, fsConstants.O_RDONLY | O_NOFOLLOW);
+    src = source;
+    const st = await source.stat();
     if (!st.isFile()) return failed('permanent', `source '${sourcePath}' is not a regular file`);
     const buffer = Buffer.allocUnsafe(64 * 1024);
     const failure = await atomicReplace(destPath, tmpSuffix, signal, async (dst) => {
       for (;;) {
         if (signal.aborted) throw new Error('file copy aborted');
-        const { bytesRead } = await src!.read(buffer, 0, buffer.length, null);
+        const { bytesRead } = await source.read(buffer, 0, buffer.length, null);
         if (bytesRead === 0) break;
         // A single `write` may be short (a full/slow FS), so loop until the whole
         // chunk lands — never silently drop the tail or over-count `bytesWritten`.
