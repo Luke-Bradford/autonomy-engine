@@ -131,6 +131,22 @@ export const WAIT_ACTIVITY_TYPE = 'wait';
 export const EXECUTE_PIPELINE_ACTIVITY_TYPE = 'execute_pipeline';
 
 /**
+ * The `Node.type`s of the `file_read` / `file_write` EXECUTION activities (#4
+ * A11) — the first non-http/LLM connector (`fs`). Named constants, not magic
+ * strings, because they are TYPED identifiers read in two agreeing places: the
+ * catalog entries here, and the server `fs` adapter's dispatch branch
+ * (`connectors/fs.ts`) — the `fs` connector is the FIRST to serve MORE THAN ONE
+ * activity type through ONE adapter (the registry is keyed by connection KIND,
+ * so the adapter must select the operation by `ctx.activityType`). A rename must
+ * reach both sites, so each string lives once. UNLIKE the control types above,
+ * these are `kind:'execution'` (connector-dispatched I/O), so cataloguing them
+ * bumps `CATALOG_VERSION` (an older build lacks the type AND the `fs` connection
+ * kind — it would fail `UNKNOWN_ACTIVITY`).
+ */
+export const FILE_READ_ACTIVITY_TYPE = 'file_read';
+export const FILE_WRITE_ACTIVITY_TYPE = 'file_write';
+
+/**
  * P3 — the ACTIVITY CATALOG entry: the static, pure metadata for one activity
  * `type` (the `type` on a pipeline `Node`). Lives in `shared` (no I/O) so the
  * SAME entry drives:

@@ -39,6 +39,25 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
     ).toThrow(/CHECK constraint failed/);
   });
 
+  it('CHECK accepts the `fs` connection kind (#4 A11 migration 0012)', () => {
+    const { db } = freshDb();
+    expect(() =>
+      db
+        .insert(connections)
+        .values({
+          id: 'conn_fs',
+          ownerId: null,
+          name: 'local files',
+          kind: 'fs',
+          config: { roots: ['/srv/data'] },
+          secretRef: null,
+          createdAt: 1,
+          updatedAt: 1,
+        })
+        .run(),
+    ).not.toThrow();
+  });
+
   it('CHECK rejects an out-of-enum triggers.mode', () => {
     const { db } = freshDb();
     const pipeline = db

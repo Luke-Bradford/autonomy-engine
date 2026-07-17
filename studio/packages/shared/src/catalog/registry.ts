@@ -5,6 +5,8 @@ import type { ActivityCatalog, ActivityCatalogEntry } from './types.js';
 import {
   EXECUTE_PIPELINE_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
+  FILE_READ_ACTIVITY_TYPE,
+  FILE_WRITE_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
   SWITCH_ACTIVITY_TYPE,
@@ -245,6 +247,45 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: [],
     outputs: [],
     configSchema: CallConfigSchema,
+  },
+  {
+    // #4 A11 — the `file_read` EXECUTION activity. The FIRST non-http/LLM
+    // connector (`fs`): connector-dispatched I/O (`kind:'execution'`), so it
+    // REQUIRES a bound `fs` connection whose non-secret `config.roots` the
+    // server-side adapter confines the read to (path-traversal + symlink guard).
+    // `idempotent:true` — a read is side-effect-free, so the boot reconciler may
+    // safely RESUME an in-flight read after a crash (re-reading yields the same
+    // bytes); it is the first activity to opt into the read-only idempotent case
+    // the fail-safe `false` default anticipates. Outputs the file `content` (as
+    // UTF-8 text) and the canonical `path` actually read. `configSchema` is
+    // palette metadata; the adapter validates the live request (the `${}`-
+    // substituted `path`). No `secretSinkFields` — `fs` is credential-less.
+    type: FILE_READ_ACTIVITY_TYPE,
+    title: 'Read File',
+    kind: 'execution',
+    category: 'general',
+    idempotent: true,
+    connectionKinds: ['fs'],
+    outputs: [out('content', 'string'), out('path', 'string')],
+    configSchema: z.object({ path: z.string().min(1) }),
+  },
+  {
+    // #4 A11 — the `file_write` EXECUTION activity. Same `fs` connector as
+    // `file_read`, but `idempotent:false`: a write is a SIDE EFFECT, so the boot
+    // reconciler FREEZES an in-flight write after a crash rather than risk a
+    // double write on resume (fail-safe). Overwrites the target (truncate) with
+    // the `${}`-substituted `content` as UTF-8 text; outputs the `bytesWritten`
+    // and the canonical `path`. Bounded by the same server-side root/traversal
+    // guard as the read. `configSchema` is palette metadata; the adapter
+    // validates the live request. No `secretSinkFields` — `fs` is credential-less.
+    type: FILE_WRITE_ACTIVITY_TYPE,
+    title: 'Write File',
+    kind: 'execution',
+    category: 'general',
+    idempotent: false,
+    connectionKinds: ['fs'],
+    outputs: [out('bytesWritten', 'number'), out('path', 'string')],
+    configSchema: z.object({ path: z.string().min(1), content: z.string() }),
   },
 ];
 

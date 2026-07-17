@@ -14,6 +14,7 @@ function ctx(over: Partial<ActivityContext> = {}): ActivityContext {
     runId: 'run_1',
     nodeId: 'n1',
     attemptId: 'n1#0',
+    activityType: over.activityType ?? 'http_request',
     input: over.input ?? { url: 'https://api.example.com/thing' },
     connectionConfig: over.connectionConfig ?? {},
     signal: over.signal ?? new AbortController().signal,

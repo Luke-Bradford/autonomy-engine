@@ -18,9 +18,12 @@ const validConnection = {
 };
 
 describe('ConnectionKindSchema', () => {
-  it.each(['anthropic_api', 'openai_api', 'ollama', 'agent_cli', 'http'])('accepts %s', (kind) => {
-    expect(ConnectionKindSchema.parse(kind)).toBe(kind);
-  });
+  it.each(['anthropic_api', 'openai_api', 'ollama', 'agent_cli', 'http', 'fs'])(
+    'accepts %s',
+    (kind) => {
+      expect(ConnectionKindSchema.parse(kind)).toBe(kind);
+    },
+  );
 
   it('rejects an unknown kind', () => {
     expect(() => ConnectionKindSchema.parse('carrier_pigeon')).toThrow();

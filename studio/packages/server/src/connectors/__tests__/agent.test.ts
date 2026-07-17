@@ -20,6 +20,7 @@ function ctx(over: Partial<ActivityContext> = {}): ActivityContext {
     runId: 'run_1',
     nodeId: 'n1',
     attemptId: 'n1#0',
+    activityType: over.activityType ?? 'agent_task',
     input: over.input ?? { task: 'do the thing' },
     connectionConfig: over.connectionConfig ?? { command: 'claude' },
     signal: over.signal ?? new AbortController().signal,

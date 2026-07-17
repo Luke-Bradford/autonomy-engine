@@ -48,5 +48,12 @@
 // `{type:'execute_pipeline', call}` node IDENTICALLY. No export carries an artifact
 // an older build mis-runs (the bump rule's load-bearing test, catalog/types.ts), so
 // bumping would only make an older build wrongly REFUSE a doc it can run. Stays 7.
-export const CATALOG_VERSION = 7;
+// 8 (#4 A11): `file_read`/`file_write` are NEW runnable EXECUTION types on a NEW
+// `fs` connection kind — the bump-rule's normal case, NOT the `execute_pipeline`
+// exception. They route BY TYPE at the executor (an older build lacks the catalog
+// entry → `UNKNOWN_ACTIVITY`, `executor.ts`), and their `fs` connection kind is
+// not even parseable by an older `ConnectionKindSchema` — so an export using them
+// carries artifacts an older build mis-runs and must refuse to import. Stamping 8
+// enforces that (`portability/envelope.ts`), the rule catalog/types.ts states.
+export const CATALOG_VERSION = 8;
 export const SCHEMA_VERSION = 1;

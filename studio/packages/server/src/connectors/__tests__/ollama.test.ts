@@ -13,6 +13,7 @@ function ctx(over: Partial<ActivityContext> = {}): ActivityContext {
     runId: 'run_1',
     nodeId: 'n1',
     attemptId: 'n1#0',
+    activityType: over.activityType ?? 'llm_call',
     input: over.input ?? { prompt: 'hi', model: 'llama3' },
     connectionConfig: over.connectionConfig ?? {},
     signal: over.signal ?? new AbortController().signal,

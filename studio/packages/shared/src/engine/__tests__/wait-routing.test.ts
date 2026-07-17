@@ -438,7 +438,10 @@ describe('wait catalog entry (#4 A5+A6)', () => {
     expect(entry?.outputs).toEqual([]);
   });
 
-  it('cataloguing the wait type bumped CATALOG_VERSION to 7', () => {
-    expect(CATALOG_VERSION).toBe(7);
+  it('cataloguing the wait type bumped CATALOG_VERSION to at least 7', () => {
+    // `>=` (not `toBe(7)`) so a later catalog TYPE bump (e.g. #4 A11's
+    // file_read/file_write → 8) does not falsely fail the wait-bump assertion;
+    // it still pins that wait's bump (7) landed and never regresses below it.
+    expect(CATALOG_VERSION).toBeGreaterThanOrEqual(7);
   });
 });

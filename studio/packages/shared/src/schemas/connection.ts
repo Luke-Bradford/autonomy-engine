@@ -12,6 +12,10 @@ export const ConnectionKindSchema = z.enum([
   'ollama',
   'agent_cli',
   'http',
+  // #4 A11 — the local filesystem connector: the FIRST non-http/LLM connector.
+  // Credential-less (no `secretRef`); its non-secret `config.roots` is the
+  // server-side allowlist the `fs` adapter confines every file activity to.
+  'fs',
 ]);
 export type ConnectionKind = z.infer<typeof ConnectionKindSchema>;
 

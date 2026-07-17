@@ -14,6 +14,8 @@ describe('activity catalog', () => {
       'agent_task',
       'execute_pipeline',
       'fail',
+      'file_read',
+      'file_write',
       'filter',
       'http_request',
       'if',
@@ -28,12 +30,18 @@ describe('activity catalog', () => {
     expect(getActivity('nope')).toBeUndefined();
   });
 
-  it('every MVP activity is non-idempotent (fail-safe crash-recovery default)', () => {
-    // The reconciler FREEZES a non-idempotent in-flight node; a real activity
-    // that regressed to idempotent:true would be silently re-run on resume.
-    for (const entry of catalog.values()) {
-      expect(entry.idempotent).toBe(false);
-    }
+  it('every activity is non-idempotent EXCEPT the read-only `file_read` (fail-safe crash-recovery default)', () => {
+    // The reconciler FREEZES a non-idempotent in-flight node and RESUMES an
+    // idempotent one. Everything that has a side effect (or unknown safety) must
+    // stay `false`, so a write/call that regressed to `idempotent:true` would be
+    // silently re-run on resume. `file_read` (#4 A11) is the sole read-only
+    // opt-in — assert it explicitly so a NEW idempotent activity is caught here.
+    const idempotent = [...catalog.values()]
+      .filter((entry) => entry.idempotent)
+      .map((entry) => entry.type);
+    expect(idempotent).toEqual(['file_read']);
+    // file_write MUST stay non-idempotent — a truncate+write is a side effect.
+    expect(getActivity('file_write')!.idempotent).toBe(false);
   });
 
   it('http_request needs an http connection and declares its outputs', () => {
@@ -70,6 +78,28 @@ describe('activity catalog', () => {
     expect(http.configSchema.safeParse({ url: 'https://example.com' }).success).toBe(true);
     // Missing the required `url`.
     expect(http.configSchema.safeParse({ method: 'GET' }).success).toBe(false);
+  });
+
+  it('file_read / file_write are execution activities on the `fs` connector (#4 A11)', () => {
+    const read = getActivity('file_read')!;
+    const write = getActivity('file_write')!;
+    for (const entry of [read, write]) {
+      expect(entry.kind).toBe('execution');
+      expect(entry.category).toBe('general');
+      expect(entry.connectionKinds).toEqual(['fs']);
+      // `fs` is credential-less — no secret sink on either file activity.
+      expect(entry.secretSinkFields).toBeUndefined();
+    }
+    // A read is side-effect-free (safe to resume); a write is not (fail-safe freeze).
+    expect(read.idempotent).toBe(true);
+    expect(write.idempotent).toBe(false);
+    expect(read.outputs.map((o) => o.name).sort()).toEqual(['content', 'path']);
+    expect(write.outputs.map((o) => o.name).sort()).toEqual(['bytesWritten', 'path']);
+    // configSchema (palette metadata): `path` required for both, `content` for write.
+    expect(read.configSchema.safeParse({ path: 'notes.txt' }).success).toBe(true);
+    expect(read.configSchema.safeParse({}).success).toBe(false);
+    expect(write.configSchema.safeParse({ path: 'out.txt', content: '' }).success).toBe(true);
+    expect(write.configSchema.safeParse({ path: 'out.txt' }).success).toBe(false);
   });
 });
 
