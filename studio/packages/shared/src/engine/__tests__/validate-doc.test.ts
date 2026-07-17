@@ -535,6 +535,30 @@ describe('validateDoc — call graph', () => {
   });
 });
 
+describe('validateDoc — execute_pipeline requires a call config (#4 A9)', () => {
+  it('rejects an execute_pipeline node with NO call config (a call-less call node)', () => {
+    // An `execute_pipeline` routes structurally on `node.call`. Without it, the
+    // reducer falls through to dispatch and the executor fails it
+    // CONTROL_NOT_DISPATCHABLE at run time — refuse it at SAVE instead.
+    const d = doc([node('ep', {}, { type: 'execute_pipeline' })]);
+    expect(validateDoc(d).join(' ')).toContain('node.ep: an execute_pipeline needs a call config');
+  });
+
+  it('accepts an execute_pipeline node that carries a call config', () => {
+    const d = doc([
+      node('ep', {}, { type: 'execute_pipeline', call: { pipelineVersionId: 'pv_1', params: {} } }),
+    ]);
+    expect(validateDoc(d)).toEqual([]);
+  });
+
+  it('does NOT require a call on a legacy call_pipeline-typed node (rule is type-specific, back-compat)', () => {
+    // The rule keys on `type === 'execute_pipeline'`, so a legacy `call_pipeline`
+    // node (any other type) is untouched — its call is optional as before.
+    const d = doc([node('c', {}, { type: 'call_pipeline' })]);
+    expect(validateDoc(d)).toEqual([]);
+  });
+});
+
 // ===========================================================================
 // P2c fix wave — termination + id safety (back-edge bounds, cycles, id space)
 // ===========================================================================

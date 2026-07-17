@@ -4,6 +4,7 @@ import { ReactFlowProvider } from '@xyflow/react';
 import {
   catalog,
   getActivity,
+  isStructuralCallActivity,
   type ConnectionPublic,
   type EdgeOn,
   type PipelineVersion,
@@ -170,9 +171,14 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
   );
 }
 
-/** The add-a-node palette: one button per catalog activity. */
-function Palette({ store }: { store: ReturnType<typeof createCanvasStore> }) {
-  const entries = [...catalog.values()];
+/** The add-a-node palette: one button per generically-authorable catalog activity.
+ * A structural-call activity (`execute_pipeline`) stores its config in `node.call`,
+ * not `node.config`, so the generic property panel cannot author it — it is
+ * excluded here (and `NodePanel` shows a read-only stub for an already-loaded one)
+ * until the dedicated call-node authoring UI (#425) exists. Exported for a headless
+ * render test. */
+export function Palette({ store }: { store: ReturnType<typeof createCanvasStore> }) {
+  const entries = [...catalog.values()].filter((e) => !isStructuralCallActivity(e.type));
   return (
     <aside className="palette" aria-label="Activity palette">
       <h3>Add activity</h3>
@@ -262,7 +268,7 @@ function EmptyPanel() {
  * before committing, so an invalid blob never reaches the store. The connection
  * dropdown is filtered to the kinds this activity accepts.
  */
-function NodePanel({
+export function NodePanel({
   store,
   connections,
   nodeId,
@@ -312,6 +318,24 @@ function NodePanel({
     setError(null);
     // Preserve the seeded `outputs` contract, which is edited elsewhere.
     store.getState().updateNodeConfig(nodeId, { ...(parsed as Record<string, unknown>), outputs });
+  }
+
+  // A structural-call activity (`execute_pipeline`) stores its settings in
+  // `node.call`, not `node.config`, so this generic `node.config` editor cannot
+  // author it — validating the edited blob against `entry.configSchema`
+  // (`CallConfigSchema`) would always fail (`pipelineVersionId` lives in
+  // `node.call`, unseen here). Such a node cannot be created via the canvas (the
+  // palette hides it, `addNode` refuses it), but one authored via the API can be
+  // LOADED, so show a read-only stub rather than an un-appliable form. Dedicated
+  // call-node authoring is #425. (The hooks above run unconditionally — this
+  // early return only skips the editor JSX.)
+  if (isStructuralCallActivity(nodeType)) {
+    return (
+      <aside className="property-panel" aria-label="Properties">
+        <h3>{entry?.title ?? nodeType}</h3>
+        <p className="page-hint">This activity is configured via the call-node editor (#425).</p>
+      </aside>
+    );
   }
 
   return (

@@ -14,6 +14,7 @@ import type { Expr, ExprSegment, TemplateMode } from './expr.js';
 import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
 import { getActivity } from '../catalog/registry.js';
 import {
+  EXECUTE_PIPELINE_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
@@ -1479,6 +1480,8 @@ export function validateDoc(
     if (node.type === FILTER_ACTIVITY_TYPE) validateFilterConfig(node, errors);
     // #4 A6 — a `wait`'s `seconds` presence + whole-value shape (number field).
     if (node.type === WAIT_ACTIVITY_TYPE) validateWaitConfig(node, errors);
+    // #4 A9 — an `execute_pipeline` MUST carry a `Node.call` (save-time half).
+    if (node.type === EXECUTE_PIPELINE_ACTIVITY_TYPE) validateExecutePipelineConfig(node, errors);
   }
 
   // Node-only forward reachability + the container index, for the back-edge
@@ -1831,6 +1834,26 @@ function validateWaitConfig(node: Node, errors: string[]): void {
     return;
   }
   validateWholeValue(where, raw, errors, 'seconds');
+}
+
+/**
+ * #4 A9 — an `execute_pipeline` node routes structurally on `Node.call` (it
+ * surfaces the `call_pipeline` mechanism as a first-class TYPE). A node typed
+ * `execute_pipeline` with NO `call` never reaches the call machinery: the reducer
+ * falls through to dispatch and the executor fails it `CONTROL_NOT_DISPATCHABLE`
+ * at run time. Refuse it at SAVE. The call BLOB's shape (`pipelineVersionId` etc.)
+ * is already enforced by `CallConfigSchema` on the write path (`StrictNodeSchema`),
+ * so this only checks PRESENCE. The converse is deliberately NOT enforced — a
+ * legacy `call_pipeline`-typed call node stays valid (back-compat), since routing
+ * keys on `call`, not this type.
+ */
+function validateExecutePipelineConfig(node: Node, errors: string[]): void {
+  if (node.call === undefined) {
+    errors.push(
+      `node.${node.id}: an execute_pipeline needs a call config ` +
+        '(target pipeline version + params)',
+    );
+  }
 }
 
 /**

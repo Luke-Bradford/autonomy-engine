@@ -1,8 +1,9 @@
 import { z } from 'zod';
-import type { Output } from '../schemas/pipeline.js';
+import { CallConfigSchema, type Output } from '../schemas/pipeline.js';
 import { SecretRefSchema } from '../schemas/secret-ref.js';
 import type { ActivityCatalog, ActivityCatalogEntry } from './types.js';
 import {
+  EXECUTE_PIPELINE_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
@@ -216,6 +217,35 @@ const ENTRIES: ActivityCatalogEntry[] = [
     outputs: [],
     configSchema: z.object({ seconds: z.string().min(1) }),
   },
+  {
+    // #4 A9 — the `execute_pipeline` CONTROL activity. It does NOT introduce a new
+    // mechanism: it SURFACES the pre-existing structural `call_pipeline` (P2c) as a
+    // first-class catalog TYPE. The reducer routes a call node STRUCTURALLY by the
+    // presence of `Node.call` (`reduce.ts`), NEVER by this `type` — so no reducer
+    // branch is added, and a legacy call node carrying any other `type` still
+    // routes unchanged (back-compat). It reaches the executor only as a `startChild`
+    // command (the real child spawn is P3b); the `kind:'control'` +
+    // `CONTROL_NOT_DISPATCHABLE` guard only ever fires for a MIS-authored call-less
+    // node, which `validateDoc` refuses to save.
+    //
+    // THE STRUCTURAL-CALL EXCEPTION: `configSchema` here types the `Node.call` blob
+    // (reused from `CallConfigSchema`, the SSOT), NOT `Node.config` like every other
+    // entry — so `isStructuralCallActivity` flags it and the generic palette/inspector
+    // exclude it (call-node authoring is #425). `outputs:[]`: a call node's outputs
+    // come from the CHILD projection, never a catalog template, so `lowerNodeOutputs`
+    // skips call nodes (seeding `[]` would flip the contract absent→declared-empty and
+    // silently drop every child output). Cataloguing this TYPE does NOT bump
+    // `CATALOG_VERSION` (structural routing = no older build mis-runs it; see
+    // `schemas/version.ts` + `catalog/types.ts`).
+    type: EXECUTE_PIPELINE_ACTIVITY_TYPE,
+    title: 'Execute Pipeline',
+    kind: 'control',
+    category: 'control',
+    idempotent: false,
+    connectionKinds: [],
+    outputs: [],
+    configSchema: CallConfigSchema,
+  },
 ];
 
 /** The MVP activity catalog, keyed by `type`. Frozen (read-only) at module load. */
@@ -224,4 +254,17 @@ export const catalog: ActivityCatalog = new Map(ENTRIES.map((e) => [e.type, e]))
 /** Look up an activity entry by `type`; `undefined` when the type is unknown. */
 export function getActivity(type: string): ActivityCatalogEntry | undefined {
   return catalog.get(type);
+}
+
+/**
+ * Whether an activity `type` stores its settings in `Node.call` (the structural
+ * `call_pipeline` mechanism, P2c) rather than `Node.config`. Today this is
+ * exactly `execute_pipeline` (#4 A9). It is the SSOT the generic authoring UI
+ * consults to EXCLUDE such a type: the palette/inspector author `Node.config`, so
+ * a call node needs the dedicated call-node authoring UI (#425), not a plain
+ * config form. A magic per-type check in the web layer would desync from this
+ * catalog fact, so the predicate lives here beside the entry.
+ */
+export function isStructuralCallActivity(type: string): boolean {
+  return type === EXECUTE_PIPELINE_ACTIVITY_TYPE;
 }

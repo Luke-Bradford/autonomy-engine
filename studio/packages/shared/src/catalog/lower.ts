@@ -48,9 +48,15 @@ import { getActivity } from './registry.js';
  * That equivalence is the caller's context; the "never overwrite a present value"
  * rule above is what keeps this safe even for a caller that has not parsed first.
  *
- * An UNKNOWN type (no catalog entry) and an uncatalogued `call_pipeline` node are
- * left `absent` — there is no catalog default to seed, and a call node's outputs
- * come from the child projection, never a catalog template.
+ * An UNKNOWN type (no catalog entry) and a `call_pipeline` node (carrying
+ * `Node.call`) are left `absent` — an unknown type has no catalog default to
+ * seed, and a call node's outputs come from the CHILD projection, never a catalog
+ * template. The call-node skip is now EXPLICIT (`node.call !== undefined`): before
+ * #4 A9 it happened only incidentally because `call_pipeline` was uncatalogued, but
+ * A9 catalogues `execute_pipeline` (with `outputs:[]`), so an implicit skip would
+ * seed `config.outputs = []` and flip the node's contract from `absent` (stores ALL
+ * child outputs) to `declared []` (stores NONE) — silently dropping every child
+ * output. The skip keys off `Node.call`, so it protects a call node of ANY type.
  *
  * ## Immutability
  *
@@ -63,8 +69,12 @@ export function lowerNodeOutputs(nodes: Node[]): Node[] {
     // Any present value — declared, empty [], or even corrupt — is left as-is;
     // seeding only ever fills a LITERALLY absent key, never overwrites (see doc).
     if (node.config['outputs'] !== undefined) return node;
+    // A call node's outputs come from the child projection, never a catalog
+    // template — skip it EXPLICITLY (not via the uncatalogued escape hatch below,
+    // which #4 A9's `execute_pipeline` entry no longer takes). See the class doc.
+    if (node.call !== undefined) return node;
     const entry = getActivity(node.type);
-    if (entry === undefined) return node; // unknown type / call_pipeline — no default to seed
+    if (entry === undefined) return node; // unknown type — no default to seed
     return {
       ...node,
       config: { ...node.config, outputs: entry.outputs.map((o) => ({ ...o })) },
