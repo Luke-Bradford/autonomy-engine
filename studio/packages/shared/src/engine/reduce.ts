@@ -846,8 +846,9 @@ export function createEngine(doc: EngineDoc): Engine {
     const c = containerById.get(cid);
     if (c === undefined || c.kind !== 'foreach') return undefined;
     const cs = state.containers[cid];
-    const items = cs?.items;
-    if (items === undefined || cs === undefined || cs.round >= items.length) return undefined;
+    if (cs === undefined) return undefined;
+    const items = cs.items;
+    if (items === undefined || cs.round >= items.length) return undefined;
     return { value: items[cs.round] };
   }
 
@@ -1468,7 +1469,7 @@ export function createEngine(doc: EngineDoc): Engine {
       items = evalForeachItems(c, state);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      diagnostics.push(`foreach '${c.id}' items failed: ${msg}`);
+      diagnostics.push(`container '${c.id}' items failed: ${msg}`);
       return {
         state,
         changed: false,

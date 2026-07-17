@@ -343,6 +343,21 @@ describe('validateDoc — foreach container (#4 A4)', () => {
     expect(validateRefs(d).join(' ')).toContain('only bound inside a filter/map/count');
   });
 
+  it('KNOWN #567: a downstream ${nodes.<foreach>.output.results} draws an advisory false-reject', () => {
+    // Container ids are not first-class producers in `computeGraph`/`outputsById`
+    // (a pre-existing loop/stage gap), so a downstream container-output ref is
+    // statically refused at save even though the RUN path resolves it (proven in
+    // reduce-p2c: 'exposes results to a downstream …'). Pinned so the follow-up
+    // (#567) that models container producers flips this deliberately, not silently.
+    const d = doc(
+      [node('w'), node('after', { got: '${nodes.fe.output.results}' })],
+      [edge('fe', 'after', 'success')],
+      [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${params.list}' }],
+      [LIST],
+    );
+    expect(validateRefs(d).join(' ')).toContain('nodes.fe.output.results');
+  });
+
   it('disables ${nodes.<foreachChild>.status} refs — the child re-runs per item (G1)', () => {
     // A foreach re-runs its children (one round per item) via resetContainerRound,
     // so a status ref to a re-running child is not stable — refused at save, the

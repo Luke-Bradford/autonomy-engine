@@ -10,6 +10,7 @@ import type {
   OperationalEdge,
 } from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
+import { driveRun, simpleResolve } from './helpers/run-driver.js';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -668,6 +669,42 @@ describe('foreach container (#4 A4)', () => {
       )
       .map((c) => c.preparedInput);
     expect(prepared).toEqual([{ x: 'x' }, { x: 'y' }, { x: 'z' }]);
+  });
+
+  it('binds ${item} in a call_pipeline body child (params path)', () => {
+    const eng = engine(
+      [callNode('call', 'child_pv', { sku: '${item}' })],
+      [],
+      [foreach('fe', ['call'], '${params.list}')],
+    );
+    const { commandsSeen } = drive(eng, { list: ['p', 'q'] });
+    const params = commandsSeen
+      .filter((c): c is Extract<EngineCommand, { type: 'startChild' }> => c.type === 'startChild')
+      .map((c) => c.params);
+    expect(params).toEqual([{ sku: 'p' }, { sku: 'q' }]);
+  });
+
+  it('binds ${item} in a switch `on` inside a foreach body (control path)', () => {
+    // The switch routes per item on ${item}; the log accumulates one
+    // switch.evaluated per item (state.branches is cleared each item, the log is
+    // not), proving ${item} reached the control-branch evaluator per iteration.
+    const eng = engine(
+      [node('route', { on: '${item}', cases: ['a', 'b'] }, { type: 'switch' })],
+      [],
+      [foreach('fe', ['route'], '${params.list}')],
+    );
+    const { state, log } = driveRun(eng, {
+      params: { list: ['a', 'b', 'c'] },
+      resolve: simpleResolve(),
+    });
+    const branches = log
+      .filter(
+        (e): e is Extract<EngineEvent, { type: 'switch.evaluated' }> =>
+          e.type === 'switch.evaluated',
+      )
+      .map((e) => e.branch);
+    expect(branches).toEqual(['a', 'b', 'default']); // 'c' matches no case → default
+    expect(state.containers.fe!.status).toBe('success');
   });
 
   it('a zero-item foreach succeeds immediately with results:[] and never runs the body', () => {

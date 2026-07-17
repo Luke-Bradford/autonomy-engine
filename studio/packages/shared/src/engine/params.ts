@@ -301,7 +301,7 @@ function resolveRoot(expr: Extract<Expr, { kind: 'ref' }>, root: RefRoot, env: E
       if (env.item === undefined) {
         throw new SubstituteError(
           `\${${expr.source}}: 'item' is only bound inside a filter/map/count ` +
-            'predicate — it has no value here',
+            'predicate or a foreach body — it has no value here',
         );
       }
       return env.item.value;
@@ -2433,7 +2433,7 @@ function checkRefRoot(
     if (!itemInScope) {
       errors.push(
         `${where}: \${${expr.source}} — 'item' is only bound inside a ` +
-          'filter/map/count predicate',
+          'filter/map/count predicate or a foreach body',
       );
     }
     return;
