@@ -1,4 +1,4 @@
-import type { ArmWakeupInput, ScheduledWakeup, Trigger } from '@autonomy-studio/shared';
+import type { ArmWakeupInput, ScheduledWakeup } from '@autonomy-studio/shared';
 import { listParsedTriggers } from '../repo/triggers.js';
 import { deleteWakeup, listPendingWakeups } from '../repo/scheduled-wakeups.js';
 import type { Db } from '../repo/types.js';
@@ -10,6 +10,7 @@ import {
   SCHEDULE_TICK_KIND,
   ScheduleTickRefSchema,
   scheduleBounds,
+  type SchedulableTrigger,
 } from './schedule-tick.js';
 
 /**
@@ -89,9 +90,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const now = deps.now ?? (() => Date.now());
   let stopped = false;
 
-  function seed(trigger: Trigger): void {
-    // `isSchedulable` guarantees `schedule` non-null; the caller only seeds such.
-    const schedule = trigger.schedule as string;
+  function seed(trigger: SchedulableTrigger): void {
+    // `SchedulableTrigger` carries a non-null `schedule` (narrowed by
+    // `isSchedulable`), so no cast is needed here.
+    const schedule = trigger.schedule;
     let next: number | null;
     try {
       // Bound the first occurrence to the recurrence's window (#5 S5b-2): a
@@ -147,7 +149,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       return;
     }
 
-    const schedulable = new Map<string, Trigger>(); // triggerId → the current trigger
+    // triggerId → the current trigger, narrowed to `SchedulableTrigger` by the
+    // `isSchedulable` type guard so seed/ref construction read `schedule` cast-free.
+    const schedulable = new Map<string, SchedulableTrigger>();
     for (const t of all) {
       if (isSchedulable(t)) schedulable.set(t.id, t);
     }

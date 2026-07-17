@@ -111,13 +111,18 @@ export type ScheduleTickRef = z.infer<typeof ScheduleTickRefSchema>;
  * byte-identical to a pre-S5b-2 row (so old pending rows stay fresh on deploy).
  *
  * Precondition: `trigger` is schedulable (`isSchedulable` ⇒ `schedule` non-null);
- * both call sites guarantee it.
+ * both call sites guarantee it. Enforced by a real guard (not a cast) so a future
+ * caller that violates it fails LOUDLY here rather than arming a `null`-schedule
+ * row that later blows up in croner.
  */
 export function buildScheduleTickRef(trigger: Trigger): ScheduleTickRef {
-  const ref: ScheduleTickRef = {
-    triggerId: trigger.id,
-    schedule: trigger.schedule as string,
-  };
+  const { schedule } = trigger;
+  if (schedule === null) {
+    throw new Error(
+      `buildScheduleTickRef: trigger ${trigger.id} has no schedule — call only for isSchedulable triggers`,
+    );
+  }
+  const ref: ScheduleTickRef = { triggerId: trigger.id, schedule };
   const r = trigger.recurrence;
   if (r?.startTime !== undefined) ref.startTime = r.startTime;
   if (r?.endTime !== undefined) ref.endTime = r.endTime;
@@ -155,11 +160,18 @@ export function scheduleBounds(trigger: Trigger): OccurrenceBounds {
   return bounds;
 }
 
+/** A schedulable trigger — one `isSchedulable` has proven carries a non-null
+ * `schedule`. Narrowing to this (rather than casting `schedule as string` at each
+ * use) lets the reconciler + handler read `trigger.schedule` as a plain string. */
+export type SchedulableTrigger = Trigger & { schedule: string };
+
 /** A trigger is eligible for scheduling iff enabled, in `schedule` mode, and it
  * carries a (syntactically present) cron expression. Binding is deliberately NOT
  * checked here — eligibility is about scheduling; FIRING re-checks binding. The
- * single owner of this predicate (used by the reconciler and this handler). */
-export function isSchedulable(t: Trigger): boolean {
+ * single owner of this predicate (used by the reconciler and this handler). A TYPE
+ * GUARD, so a caller that passes the check reads `trigger.schedule` as `string`
+ * without a cast. */
+export function isSchedulable(t: Trigger): t is SchedulableTrigger {
   return t.enabled && t.mode === 'schedule' && t.schedule !== null;
 }
 
@@ -203,11 +215,11 @@ export function createScheduleTickHandler(deps: ScheduleTickDeps): WakeupHandler
         return { status: 'suppressed', reason: 'ref_stale' };
       }
 
-      // `isSchedulable` (checked above) guarantees `schedule` is non-null; assert
-      // it for TS (the same cast `buildScheduleTickRef` documents). Compute the
-      // next occurrence (within the recurrence's bounds) up front so an invalid
-      // cron is caught before anything durable.
-      const schedule = trigger.schedule as string;
+      // `isSchedulable` (checked above) is a type guard, so `trigger.schedule` is
+      // narrowed to `string` here — no cast. Compute the next occurrence (within
+      // the recurrence's bounds) up front so an invalid cron is caught before
+      // anything durable.
+      const schedule = trigger.schedule;
       const bounds = scheduleBounds(trigger);
       let next: number | null;
       try {

@@ -322,7 +322,7 @@ describe('Scheduler — recurrence bounds (#5 S5b-2, #549)', () => {
   it('re-seeds on a bounds-only edit even though the compiled cron is unchanged', () => {
     const { db } = freshDb();
     const pv = seedVersion(db);
-    // Unbounded daily-9: seeds today's 13:00... no, 09:00 already passed at noon →
+    // Unbounded daily-9: at noon `now`, today's 09:00 has passed → next is
     // tomorrow 09:00.
     const t = seedTrigger(db, { pipelineVersionId: pv, recurrence: daily9() });
     const s = makeScheduler(db, () => NOON);
