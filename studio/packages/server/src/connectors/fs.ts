@@ -273,13 +273,20 @@ async function doWrite(
       0o644,
     );
     await fh.writeFile(input.content, { encoding: 'utf8', signal });
-    // Close BEFORE the rename to flush all bytes to the temp inode — and let a
-    // close error PROPAGATE (unlike the read/cleanup path's quiet close): a
-    // delayed-write/ENOSPC failure that only surfaces at `close()` (a known
-    // POSIX/NFS mode) means the temp is INCOMPLETE, so the write must fail and
-    // NOT rename a corrupt file over the target. The `finally` still runs (the
-    // temp is unlinked), and `fh` stays set so `closeQuietly` there is a safe
-    // best-effort second close.
+    // `fsync` the temp BEFORE the rename so the bytes are durable on disk first —
+    // otherwise a power-loss crash right after the rename could expose the new
+    // dir entry pointing at unflushed (zero-length) data on a filesystem without
+    // ordered metadata journaling. This is also where a deferred-allocation
+    // ENOSPC surfaces. (Residual, accepted: the parent directory is NOT fsync'd,
+    // so the rename itself is not guaranteed durable across a crash — worst case
+    // the target keeps its OLD content, never a torn/partial file.)
+    await fh.sync();
+    // Close BEFORE the rename — and let a close error PROPAGATE (unlike the
+    // read/cleanup path's quiet close): a delayed-write failure surfacing only at
+    // `close()` (a known POSIX/NFS mode) means the temp is INCOMPLETE, so the
+    // write must fail and NOT rename a corrupt file over the target. The
+    // `finally` still runs (temp unlinked), and `fh` stays set so `closeQuietly`
+    // there is a safe best-effort second close.
     await fh.close();
     fh = undefined;
     await rename(tmpPath, finalPath);
