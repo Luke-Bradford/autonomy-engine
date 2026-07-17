@@ -846,3 +846,90 @@ describe('createExecutor — worker-pool cap across concurrently-driven runs', (
     expect(peak).toBeGreaterThanOrEqual(2); // proves real overlap occurred (cap bit)
   });
 });
+
+describe('createExecutor — item 7 / S4: http_request config-sink secret headers, end-to-end', () => {
+  // The DIFFERENCE from the S3 block above: no synthetic catalog, no bypassed
+  // save gate. The version is authored through the REAL `createPipelineVersion`
+  // (default catalog), proving `http_request`'s `secretHeaders` sink now lets a
+  // `{$secret}` marker PASS the save gate; the run uses the REAL `httpAdapter`
+  // (via `testRegistry()`) with a mocked `fetch`, proving the resolved plaintext
+  // reaches the wire as a header and NEVER the durable log.
+  it('authors a marker past the real save gate, sends it as a header, keeps plaintext out of the log', async () => {
+    const db = freshDb().db;
+    const PLAINTEXT = 'sk-s4-end-to-end-secret';
+
+    // A standalone named secret owned by the run owner.
+    createSecret(db, {
+      ref: `sref-s4-${(seq += 1)}`,
+      ciphertext: await encrypt(PLAINTEXT, KEY),
+      ownerId: 'local',
+      name: 'api-key',
+    });
+    const connId = await seedConnection(db, 'http', {}, null);
+
+    // The REAL save gate accepts the marker ONLY because `secretHeaders` is a
+    // declared sink (S4) — a marker in `headers` would be refused here.
+    const pvId = seedVersion(db, [
+      httpNode('n1', connId, {
+        url: 'https://api.example.com/thing',
+        secretHeaders: { 'X-Api-Key': { $secret: 'api-key' } },
+      }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      status: 200,
+      text: () => Promise.resolve('OK'),
+      headers: new Headers({ 'x-h': '1' }),
+    } as unknown as Response);
+
+    const state = await startRun(deps(db), run);
+    expect(state.status).toBe('success');
+
+    // The resolved plaintext went out under its declared header name...
+    const sent = (fetchSpy.mock.calls[0]![1] as RequestInit).headers as Record<string, string>;
+    expect(sent['X-Api-Key']).toBe(PLAINTEXT);
+
+    // ...but NOTHING plaintext (nor a `preparedInput`) is in the durable run
+    // log — `node.dispatched` carries no input, so the events never hold it.
+    const raw = JSON.stringify(loadEngineEvents(db, run.id));
+    expect(raw).not.toContain(PLAINTEXT);
+    expect(raw).not.toContain('preparedInput');
+
+    // What DOES persist is the inert `{$secret:api-key}` marker, in the stored
+    // pipeline VERSION (a name, safe to persist/export/diff) — never plaintext.
+    const stored = getPipelineVersion(db, pvId)!;
+    expect(stored.nodes[0]!.config.secretHeaders).toEqual({ 'X-Api-Key': { $secret: 'api-key' } });
+    expect(JSON.stringify(stored)).not.toContain(PLAINTEXT);
+  });
+
+  it('a NON-marker value at secretHeaders fails PERMANENT, never silently sending it', async () => {
+    // The save gate only VISITS `{$secret}`-shaped values (isSecretRef), so a raw
+    // string at the sink is not a marker to bless OR refuse — it passes save. At
+    // dispatch it is left in ctx.input (never resolved to a secretField), where the
+    // adapter's `secretHeaders: z.record(SecretRefSchema)` rejects it as a permanent
+    // config error. The PR's fail-loud claim: a misauthored sink FAILS, it does not
+    // silently drop the value onto the wire. Proven through the REAL save gate +
+    // REAL httpAdapter (not the S3 synthetic-catalog block above).
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [
+      httpNode('n1', connId, {
+        url: 'https://api.example.com/thing',
+        secretHeaders: { 'X-Api-Key': 'raw-plaintext-not-a-marker' },
+      }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const state = await startRun(deps(db), run);
+    expect(state.status).toBe('failure');
+    // Fail-loud, not silent-drop: the misauthored request never reaches the wire.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+      kind: 'permanent',
+      error: expect.stringContaining('invalid http_request activity config'),
+    });
+  });
+});

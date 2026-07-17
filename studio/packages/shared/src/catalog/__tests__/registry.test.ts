@@ -25,6 +25,21 @@ describe('activity catalog', () => {
     expect(http.outputs.map((o) => o.name).sort()).toEqual(['body', 'headers', 'status']);
   });
 
+  it('http_request declares `secretHeaders` as its secret SINK (item 7 / S4)', () => {
+    // The FIRST real activity to open a sink — `validateRefs` accepts a
+    // `{$secret}` marker within `secretHeaders` and refuses it anywhere else.
+    expect(getActivity('http_request')!.secretSinkFields).toEqual(['secretHeaders']);
+  });
+
+  it('http_request is the ONLY activity in the whole catalog with a secret sink (fail-closed elsewhere)', () => {
+    // Assert across the full catalog, not a named subset, so a future activity
+    // that silently gains a sink is caught here rather than slipping through.
+    const withSink = [...catalog.values()]
+      .filter((entry) => entry.secretSinkFields !== undefined)
+      .map((entry) => entry.type);
+    expect(withSink).toEqual(['http_request']);
+  });
+
   it('llm_call binds any of the three LLM connection kinds', () => {
     expect(getActivity('llm_call')!.connectionKinds).toEqual([
       'anthropic_api',

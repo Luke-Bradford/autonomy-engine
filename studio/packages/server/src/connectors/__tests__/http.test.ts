@@ -91,6 +91,70 @@ describe('httpAdapter.runActivity', () => {
     expect(sent['x-both']).toBe('req'); // request header overrides connection default
   });
 
+  it('sends resolved config-sink secret headers (item 7 / S4) but NEVER echoes them', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, 'ok'));
+
+    await drain(
+      httpAdapter.runActivity(
+        // ctx.input keeps only the INERT marker (a name); the plaintext arrives
+        // via the resolved side channel, keyed by config path.
+        ctx({ input: { url: 'https://x/y', secretHeaders: { 'X-Api-Key': { $secret: 'k' } } } }),
+        null,
+        { 'secretHeaders.X-Api-Key': 'sk-config-sink-plaintext' },
+      ),
+    );
+
+    const init = fetchSpy.mock.calls[0]![1] as RequestInit;
+    const sent = init.headers as Record<string, string>;
+    // The resolved plaintext went out under its declared header name...
+    expect(sent['X-Api-Key']).toBe('sk-config-sink-plaintext');
+    // ...and the inert marker NEVER reached the wire as a header value.
+    expect(JSON.stringify(sent)).not.toContain('$secret');
+  });
+
+  it('a dotted config-sink header name survives prefix-strip (RFC 7230 tchar allows `.`)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, 'ok'));
+
+    await drain(httpAdapter.runActivity(ctx(), null, { 'secretHeaders.X.Api.Key': 'sk-dotted' }));
+
+    const sent = (fetchSpy.mock.calls[0]![1] as RequestInit).headers as Record<string, string>;
+    // slice(prefix.length) recovers the WHOLE name — a naive split('.')[1] would truncate it.
+    expect(sent['X.Api.Key']).toBe('sk-dotted');
+  });
+
+  it('a `__proto__` config-sink header name is SENT, never silently dropped ([[Set]] hazard)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, 'ok'));
+
+    // A header literally named `__proto__` is the adversarial case for building the
+    // header map by bracket-assignment (`headers[name] = value`, [[Set]]): the plain
+    // object's inherited `__proto__` accessor would swallow the write and DROP the
+    // resolved secret header — the exact silent-loss this sink exists to fail loudly
+    // on. `sinkHeadersFrom` builds via define-property, so it lands as an OWN key.
+    await drain(httpAdapter.runActivity(ctx(), null, { 'secretHeaders.__proto__': 'sk-proto' }));
+
+    const sent = (fetchSpy.mock.calls[0]![1] as RequestInit).headers as Record<string, string>;
+    expect(Object.prototype.hasOwnProperty.call(sent, '__proto__')).toBe(true);
+    expect(sent['__proto__']).toBe('sk-proto');
+  });
+
+  it('a config-sink header is the LAST word — it overrides the connection Bearer', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, 'ok'));
+
+    await drain(
+      httpAdapter.runActivity(
+        ctx({ connectionConfig: { headers: { 'x-base': 'base' } } }),
+        'conn-bearer-secret',
+        { 'secretHeaders.Authorization': 'Token sink-wins', 'secretHeaders.x-base': 'sink-base' },
+      ),
+    );
+
+    const sent = (fetchSpy.mock.calls[0]![1] as RequestInit).headers as Record<string, string>;
+    // Sink headers merge LAST: they beat both the connection-secret Bearer AND a
+    // same-named connection/request header.
+    expect(sent['Authorization']).toBe('Token sink-wins');
+    expect(sent['x-base']).toBe('sink-base');
+  });
+
   it('prepends the connection baseUrl to a relative request url', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, 'ok'));
     await drain(

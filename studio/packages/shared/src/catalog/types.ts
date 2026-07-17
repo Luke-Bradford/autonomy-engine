@@ -107,7 +107,13 @@ export interface ActivityCatalogEntry {
  * NB adding a new activity TYPE (as #4 does) needs a `CATALOG_VERSION` bump
  * (`schemas/version.ts`) so an older build refuses a doc it cannot run; adding
  * metadata FIELDS to existing entries — as F9a does — does not, since no export
- * carries them.
+ * carries them. The load-bearing test is "does an EXPORT now carry an artifact
+ * an older build would mis-run": F9a's fields (`false`/`[]` defaults) do not, so
+ * no bump; but S4 POPULATING `secretSinkFields: ['secretHeaders']` on
+ * `http_request` opens a sink an author can mark, so an export can now carry a
+ * `{$secret}` marker only a sink-declaring catalog resolves — an older build
+ * would drop the secret header silently. That DID bump `CATALOG_VERSION` (1→2),
+ * the escape clause of this rule firing, not a violation of it.
  */
 export type ActivityCatalog = ReadonlyMap<string, ActivityCatalogEntry>;
 
