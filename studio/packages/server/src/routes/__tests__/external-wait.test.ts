@@ -201,6 +201,9 @@ describe('external-wait routes', () => {
 
     const res = await app.inject({ method: 'POST', url: path, payload: { note: 'no decision' } });
     expect(res.statusCode).toBe(422);
+    // The 422 names WHICH declared field failed so a live-token holder can correct
+    // it on retry (safe to reveal — reachable only past the token + parked checks).
+    expect(res.json().detail).toContain('decision');
 
     await new Promise((r) => setTimeout(r, 30));
     const state = projectState(runId, resolveDoc);

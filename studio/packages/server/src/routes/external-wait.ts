@@ -55,16 +55,21 @@ export const externalWaitRoutes: FastifyPluginAsync = async (fastify) => {
     '/api/external-wait/:token',
     async (request, reply) => {
       const body = request.body instanceof Buffer ? request.body : undefined;
-      const outcome = await fastify.externalWaitCompleter.complete(request.params.token, body);
+      const { outcome, reason } = await fastify.externalWaitCompleter.complete(
+        request.params.token,
+        body,
+      );
       if (outcome === 'completed') {
         return reply.status(204).send();
       }
       if (outcome === 'invalid_payload') {
         // A live token for a parked node, but the body failed the declared
-        // contract — the ONLY case a valid holder can distinguish (not an oracle).
-        return reply
-          .status(422)
-          .send({ error: 'callback body does not match the declared output schema' });
+        // contract — the ONLY case a valid holder can distinguish (not an oracle),
+        // so `detail` names the offending field to guide the caller's retry.
+        return reply.status(422).send({
+          error: 'callback body does not match the declared output schema',
+          detail: reason,
+        });
       }
       // One fail-closed response for every non-completable case (no state oracle).
       return reply.status(404).send({ error: 'not found' });
