@@ -3,7 +3,7 @@ import { isWithinRunWindows, type ScheduledWakeup, type Trigger } from '@autonom
 import { getTrigger } from '../repo/triggers.js';
 import { armWakeup } from '../repo/scheduled-wakeups.js';
 import type { Db } from '../repo/types.js';
-import { UnboundTriggerError } from '../run/launcher.js';
+import { UnboundTriggerError, type FireResult } from '../run/launcher.js';
 import type { WakeupFireResult, WakeupHandler } from './alarms.js';
 import { InvalidScheduleError, nextOccurrence } from './recurrence.js';
 // The log seam is byte-identical to the cron reconciler's and lives beside it —
@@ -91,9 +91,12 @@ export function isSchedulable(t: Trigger): boolean {
 
 /** The run-spawning seam the handler reaches only via `afterCommit`. A lazy
  * closure over the app's `runLauncher` (the launcher is constructed after the
- * clock; the closure resolves it at fire time). Only `fire` is used. */
+ * clock; the closure resolves it at fire time). Only `fire` is used; the return
+ * is `FireResult` (not `unknown`) so a mis-shaped injected launcher is a
+ * compile-time error — the shape guarantee the old `Pick<RunLauncher,'fire'>`
+ * gave, kept without importing the whole launcher interface. */
 export interface ScheduleTickLauncher {
-  fire(trigger: Trigger): unknown;
+  fire(trigger: Trigger): FireResult;
 }
 
 export interface ScheduleTickDeps {

@@ -73,7 +73,12 @@ function makeScheduler(db: Db, now: () => number = () => NOON) {
   const clock = createAlarmClock({
     db,
     handlers: [
-      createScheduleTickHandler({ launcher: { fire: () => undefined }, log: silentLog() }),
+      // The reconciler never fires (sync only seeds/drops rows), so this launcher
+      // double is never called; it still must satisfy the `FireResult` seam.
+      createScheduleTickHandler({
+        launcher: { fire: () => ({ outcome: 'queued' }) },
+        log: silentLog(),
+      }),
     ],
     log: silentLog(),
     now,

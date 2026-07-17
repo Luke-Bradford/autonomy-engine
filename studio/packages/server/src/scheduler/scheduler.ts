@@ -112,6 +112,16 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   function sync(): void {
     if (stopped) return;
 
+    // TRADEOFF — the two passes are NOT wrapped in one transaction (the `arm` seam
+    // goes through the alarm clock, which owns its own `db`, so a caller-supplied
+    // tx cannot thread through it). A partial reconcile can therefore only happen
+    // on PROCESS DEATH between a drop and a re-seed — and that is benign: while the
+    // process is down nothing fires, and `buildApp` runs this `sync()` at boot
+    // BEFORE the alarm clock starts ticking, so the affected trigger is re-seeded
+    // before any tick could have fired it. No fire is lost beyond the crash's own
+    // downtime (schedule ticks are no-backfill regardless). Idempotency makes the
+    // heal safe to repeat.
+
     let all;
     try {
       // Resilient: a single corrupt/legacy row is SKIPPED (and warned), not
