@@ -1,44 +1,41 @@
-import { Cron } from 'croner';
-import { isWithinRunWindows, type Trigger } from '@autonomy-studio/shared';
-import { getTrigger, listParsedTriggers } from '../repo/triggers.js';
-import { UnboundTriggerError, type RunLauncher } from '../run/launcher.js';
+import type { ArmWakeupInput, ScheduledWakeup } from '@autonomy-studio/shared';
+import { listParsedTriggers } from '../repo/triggers.js';
+import { deleteWakeup, listPendingWakeups } from '../repo/scheduled-wakeups.js';
 import type { Db } from '../repo/types.js';
+import { InvalidScheduleError, nextOccurrence } from './recurrence.js';
+import { isSchedulable, SCHEDULE_TICK_KIND, ScheduleTickRefSchema } from './schedule-tick.js';
 
 /**
- * P4b — the SCHEDULER: the automatic firing loop for `schedule`-mode triggers.
- * It owns one `croner` `Cron` per eligible trigger and, on each tick, funnels
- * the fire through the shared run LAUNCHER — so the two load-bearing rules
- * ("unbound never fires" + concurrency admission) live in ONE place (the
- * launcher), and the scheduler adds only the two concerns that are ITS job:
+ * #5 S5 — the SCHEDULE RECONCILER. It reconciles the set of durable
+ * `schedule_tick` wakeup rows against the DB's schedulable triggers, so every
+ * automatic schedule fire flows through the ONE durable outbox (S1) and the ONE
+ * alarm clock — NOT a per-trigger in-memory `Cron` a restart silently lost
+ * (the pre-S5 design). Croner is now a CALCULATOR (`recurrence.ts`), never a
+ * firing source; the `schedule_tick` HANDLER (`schedule-tick.ts`) owns the fire
+ * and continues the chain.
  *
- *   1. **When** to fire — the cron expression (via `croner`).
- *   2. **Whether** an automatic fire is currently allowed — the trigger's
- *      run windows (`isWithinRunWindows`). A manual "run now" is an explicit
- *      operator override and is NOT gated by windows; only automatic firing is.
+ * The reconciler owns only SEEDING and CANCELLING:
  *
- * DEFERRED REQ (load-bearing, per the P4 plan): the scheduler MUST refuse to
- * fire a trigger with `pipelineVersionId === null`. It does so explicitly in
- * `dispatch` (skip + debug log) AND relies on the launcher throwing
- * `UnboundTriggerError` as the backstop — "unbound never fires" is defended in
- * both places.
+ *   - SEED — a schedulable trigger with no valid pending row gets its next
+ *     occurrence armed (the handler arms every occurrence after that).
+ *   - DROP — a pending row whose trigger is no longer schedulable (disabled,
+ *     mode changed, schedule cleared, unbound-out-of-schedule, or deleted), or
+ *     whose armed schedule string no longer matches the trigger's current one
+ *     (an edit), is DELETED (not settled `cancelled` — a cancelled row keeps its
+ *     `(kind, dedupeKey)`, which would make re-seeding the SAME occurrence after
+ *     a disable→re-enable within one interval collide and silently never arm);
+ *     the loop below re-seeds the new schedule.
  *
- * DESIGN — freshness over caching. A `Cron`'s tick captures only the trigger
- * ID; `dispatch` RE-READS the trigger from the DB every tick, so a trigger that
- * was disabled, rebound, re-windowed, or deleted between ticks always fires (or
- * skips) against its CURRENT state, even before the next `sync()`. `sync()`
- * itself only decides which cron SCHEDULES exist; correctness of any single
- * fire never depends on `sync()` having run.
+ * An OVERDUE-but-current pending row (a late fire the clock has not delivered
+ * yet) is KEPT, never dropped — dropping it would lose the ≤1-late fire.
  *
- * TIMEZONE — every `Cron` runs in UTC, matching the run-window UTC contract, so
- * a self-hosted instance behaves identically regardless of the host timezone.
- *
- * Per-app (a `createScheduler()` factory injected into `buildApp`, mirroring
- * `createSupervisor`/`createRunLauncher`), so its cron set never leaks across
- * app instances (test isolation, multi-tenant).
+ * Idempotent — safe at boot and after every trigger write. A no-op once
+ * `stop()`ped. Resilient: one corrupt trigger row or one unparseable wakeup ref
+ * is skipped (and warned), never allowed to dark-out the whole reconcile.
  */
 
 /** Minimal logger seam (Fastify's `log` satisfies it). REQUIRED on the deps
- * (#470); tests supply `silentLog()`. */
+ * (#470); tests supply `silentLog()`. Shared with `alarms.ts` (imported there). */
 export interface SchedulerLog {
   error(obj: unknown, msg?: string): void;
   warn(obj: unknown, msg?: string): void;
@@ -47,121 +44,89 @@ export interface SchedulerLog {
 
 export interface Scheduler {
   /**
-   * Reconcile the live cron set against the DB: schedule newly-eligible
-   * triggers, re-schedule ones whose cron expression changed, and stop crons
-   * for triggers that are no longer eligible (disabled, mode changed, unbound,
-   * schedule cleared, or deleted). Idempotent — safe to call at boot and after
-   * every trigger write. A no-op once `stop()`ped.
+   * Reconcile the durable `schedule_tick` rows against the DB: seed newly-eligible
+   * triggers, re-seed ones whose schedule string changed, and DROP (delete) rows
+   * for triggers no longer eligible. Overdue-but-current rows are kept (the clock
+   * fires them). Idempotent — safe at boot and after every trigger write. A no-op
+   * once `stop()`ped.
    */
   sync(): void;
-  /**
-   * The tick body for one trigger, exposed for direct (deterministic) testing
-   * and called by each `Cron`. Re-reads the trigger fresh and either fires it
-   * through the launcher or skips (disabled / wrong mode / unbound / outside a
-   * run window). Never throws — a scheduler tick must not crash the process.
-   */
-  dispatch(triggerId: string): void;
-  /** The trigger IDs that currently have a live cron scheduled — for tests and
-   * introspection. */
-  scheduledTriggerIds(): string[];
-  /** Stop every cron and stop accepting new schedules. Idempotent. */
+  /** Stop accepting new reconciles. Idempotent. The actual firing is stopped by
+   * the alarm clock (`alarmClock.stop()` + `clearInterval`), not here — this only
+   * makes `sync()` a no-op during shutdown so a late trigger write cannot seed a
+   * fresh row as the process goes away. */
   stop(): void;
 }
 
 export interface SchedulerDeps {
   db: Db;
-  /** The run launcher — only its `fire` is used. */
-  launcher: Pick<RunLauncher, 'fire'>;
   /**
-   * REQUIRED (#470): every tick/sync failure path (`dispatch` catch, invalid
-   * cron, corrupt/unparseable trigger row, list-on-sync fault) reports through
-   * `log`. Optional would let a caller omit it and swallow those faults
-   * silently — an absent logger must not be manufactured as a benign no-op.
+   * The alarm clock's `arm` — seeding goes through it so the `schedule_tick` kind
+   * + ref are validated at the call site (a malformed ref fails loudly here, not
+   * hours later in a background tick).
+   */
+  arm: (input: ArmWakeupInput) => ScheduledWakeup;
+  /**
+   * REQUIRED (#470): every reconcile fault path (invalid cron, corrupt trigger
+   * row, unparseable wakeup ref, list-on-sync fault) reports through `log`.
+   * Optional would let a caller omit it and swallow those faults silently — an
+   * absent logger must not be manufactured as a benign no-op.
    */
   log: SchedulerLog;
-  /** Clock seam for run-window evaluation; defaults to the wall clock. */
-  now?: () => Date;
-}
-
-/** A trigger is eligible for a cron iff it is enabled, in `schedule` mode, and
- * carries a (syntactically present) cron expression. Binding is intentionally
- * NOT checked here — an enabled trigger is already guaranteed bound by the
- * write API's `assertBindableIfEnabled`, and `dispatch` re-checks binding at
- * fire time regardless, so eligibility stays about scheduling, not firing. */
-function isSchedulable(t: Trigger): boolean {
-  return t.enabled && t.mode === 'schedule' && t.schedule !== null;
+  /** Clock seam (epoch ms); defaults to the wall clock, matching the alarm clock. */
+  now?: () => number;
 }
 
 export function createScheduler(deps: SchedulerDeps): Scheduler {
-  const { db, launcher } = deps;
-  const now = deps.now ?? (() => new Date());
-  /** triggerId → its live cron + the expression it was built from (so `sync`
-   * can detect an expression change and re-schedule). */
-  const crons = new Map<string, { cron: Cron; schedule: string }>();
+  const { db, arm } = deps;
+  const now = deps.now ?? (() => Date.now());
   let stopped = false;
 
-  function dispatch(triggerId: string): void {
-    // ONE structural try/catch wraps the WHOLE tick body so "a scheduler tick
-    // never crashes the process" is guaranteed by construction, not by every
-    // read/check/fire being individually guarded: a throw from `getTrigger`
-    // (DB error), `now()`, or `launcher.fire` is caught here. croner invokes
-    // this callback via an un-awaited async trigger and defaults `catch:false`,
-    // so an escaped throw would become a floating unhandled rejection — this
-    // catch (plus `catch:true` on the Cron below) prevents that.
+  function seed(triggerId: string, schedule: string): void {
+    let next: number | null;
     try {
-      const trigger = getTrigger(db, triggerId);
-      // Stale cron: the trigger was deleted, disabled, or changed mode/schedule
-      // since this cron was created. Skip quietly — the next `sync()` prunes the
-      // cron; correctness here is just "don't fire something ineligible".
-      if (trigger === null || !isSchedulable(trigger)) return;
-      // DEFERRED REQ: unbound never fires. Belt to the launcher's suspenders.
-      if (trigger.pipelineVersionId === null) {
-        deps.log.debug({ triggerId }, 'scheduler: skip — trigger is unbound');
-        return;
-      }
-      // Automatic-fire gate: run windows block NEW starts (manual fire is exempt).
-      if (!isWithinRunWindows(trigger.runWindows, now())) {
-        deps.log.debug({ triggerId }, 'scheduler: skip — outside run window');
-        return;
-      }
-      launcher.fire(trigger);
+      next = nextOccurrence(schedule, now());
     } catch (err) {
-      if (err instanceof UnboundTriggerError) {
-        // Raced to unbound between the check above and the fire — safe skip.
-        deps.log.debug({ triggerId }, 'scheduler: skip — trigger became unbound');
+      if (err instanceof InvalidScheduleError) {
+        // A cron the schema let through but croner rejects. Skip THIS trigger,
+        // never abort the reconcile — one poison schedule must not dark-out all
+        // scheduling (the blast-radius the per-row guards here exist to prevent).
+        deps.log.warn(
+          { err, triggerId, schedule },
+          'scheduler: invalid cron expression — skipping',
+        );
         return;
       }
-      // Any other fault (a DB read error, a launcher bug) must not crash the
-      // tick — log and move on; the next tick re-reads fresh state.
-      deps.log.error({ err, triggerId }, 'scheduler: tick failed');
+      throw err;
     }
-  }
-
-  function scheduleOne(t: Trigger): void {
-    const schedule = t.schedule as string; // isSchedulable guarantees non-null
-    try {
-      // UTC so behaviour is host-timezone-independent; the tick captures only
-      // the ID and re-reads fresh state in `dispatch`. `catch:true` makes
-      // croner swallow any callback throw (defence-in-depth atop `dispatch`'s
-      // own try/catch) so a tick can never surface an unhandled rejection.
-      const cron = new Cron(schedule, { timezone: 'UTC', catch: true }, () => dispatch(t.id));
-      crons.set(t.id, { cron, schedule });
-    } catch (err) {
-      // An invalid cron expression must never crash `sync()` — fail safe by
-      // leaving this trigger unscheduled and logging loudly. (The trigger
-      // schema does not yet validate cron syntax, so a bad string can exist.)
-      deps.log.warn({ err, triggerId: t.id, schedule }, 'scheduler: invalid cron expression');
-    }
+    // A finite schedule with no future occurrence: nothing to arm.
+    if (next === null) return;
+    arm({
+      kind: SCHEDULE_TICK_KIND,
+      ref: { triggerId, schedule },
+      dueAt: next,
+      discriminator: `tick-${next}`,
+    });
   }
 
   function sync(): void {
     if (stopped) return;
-    let all: Trigger[];
+
+    // TRADEOFF — the two passes are NOT wrapped in one transaction (the `arm` seam
+    // goes through the alarm clock, which owns its own `db`, so a caller-supplied
+    // tx cannot thread through it). A partial reconcile can therefore only happen
+    // on PROCESS DEATH between a drop and a re-seed — and that is benign: while the
+    // process is down nothing fires, and `buildApp` runs this `sync()` at boot
+    // BEFORE the alarm clock starts ticking, so the affected trigger is re-seeded
+    // before any tick could have fired it. No fire is lost beyond the crash's own
+    // downtime (schedule ticks are no-backfill regardless). Idempotency makes the
+    // heal safe to repeat.
+
+    let all;
     try {
       // Resilient: a single corrupt/legacy row is SKIPPED (and warned), not
-      // allowed to throw out the whole list — otherwise one poison row would
-      // dark-out ALL scheduling, the same blast-radius the per-cron try/catch
-      // in `scheduleOne` exists to prevent.
+      // allowed to throw out the whole list — one poison row would otherwise
+      // dark-out ALL scheduling.
       all = listParsedTriggers(db, (triggerId, err) =>
         deps.log.warn({ err, triggerId }, 'scheduler: skipping unparseable trigger row'),
       );
@@ -169,34 +134,51 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       deps.log.error({ err }, 'scheduler: failed to list triggers on sync');
       return;
     }
-    const desired = new Map<string, Trigger>();
+
+    const schedulable = new Map<string, string>(); // triggerId → current schedule
     for (const t of all) {
-      if (isSchedulable(t)) desired.set(t.id, t);
+      if (isSchedulable(t)) schedulable.set(t.id, t.schedule as string);
     }
 
-    // Stop crons that are gone or whose expression changed.
-    for (const [triggerId, entry] of crons) {
-      const want = desired.get(triggerId);
-      if (want === undefined || want.schedule !== entry.schedule) {
-        entry.cron.stop();
-        crons.delete(triggerId);
+    // Pass 1 — CANCEL dead / stale-schedule rows; remember which triggers still
+    // hold a valid pending row (so pass 2 does not double-seed them).
+    const keep = new Set<string>();
+    for (const row of listPendingWakeups(db)) {
+      if (row.kind !== SCHEDULE_TICK_KIND) continue;
+      const parsed = ScheduleTickRefSchema.safeParse(row.ref);
+      if (!parsed.success) {
+        // A ref we cannot read can never be reconciled or fired — drop it rather
+        // than leave an un-droppable pending row spinning.
+        deps.log.warn(
+          { wakeupId: row.id, err: parsed.error },
+          'scheduler: deleting unparseable schedule_tick ref',
+        );
+        deleteWakeup(db, row.id);
+        continue;
+      }
+      const { triggerId, schedule } = parsed.data;
+      const current = schedulable.get(triggerId);
+      if (current === undefined || current !== schedule) {
+        // DELETE, not cancel: a cancelled row keeps its `(kind, dedupeKey)`, so a
+        // re-seed of the SAME occurrence after a disable→re-enable (or edit→revert)
+        // within one interval would collide with the dead row and silently never
+        // arm. Deleting the dropped PENDING row frees the key. `deleteWakeup` is
+        // guarded to `status='pending'`, so a fired/suppressed sibling is untouched.
+        deleteWakeup(db, row.id);
+      } else {
+        keep.add(triggerId);
       }
     }
-    // Schedule triggers that are newly eligible or were just re-scheduled.
-    for (const [triggerId, t] of desired) {
-      if (!crons.has(triggerId)) scheduleOne(t);
-    }
-  }
 
-  function scheduledTriggerIds(): string[] {
-    return [...crons.keys()];
+    // Pass 2 — SEED any schedulable trigger left without a valid pending row.
+    for (const [triggerId, schedule] of schedulable) {
+      if (!keep.has(triggerId)) seed(triggerId, schedule);
+    }
   }
 
   function stop(): void {
     stopped = true;
-    for (const { cron } of crons.values()) cron.stop();
-    crons.clear();
   }
 
-  return { sync, dispatch, scheduledTriggerIds, stop };
+  return { sync, stop };
 }

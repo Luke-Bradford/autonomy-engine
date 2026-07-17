@@ -148,6 +148,32 @@ export function cancelWakeup(db: Db, id: string, at: number): ScheduledWakeup | 
   return settleWakeup(db, id, { status: 'cancelled', firedAt: at });
 }
 
+/**
+ * DELETE a pending alarm outright, freeing its `(kind, dedupeKey)`. Guarded by
+ * `WHERE status = 'pending'` so a SETTLED row is never removed — a `fired` row is
+ * a permanent outcome (the "settled = final" outbox invariant) and stays. Returns
+ * the deleted row, or `null` if it was not pending (already settled, or gone).
+ *
+ * Why a caller wants this over `cancelWakeup`: `cancelWakeup` SETTLES the row to
+ * `cancelled`, which KEEPS its `(kind, dedupeKey)` occupied. For a kind whose
+ * discriminator is DETERMINISTIC and re-derivable — schedule ticks
+ * (`tick-<occurrenceEpoch>`) — re-arming the SAME occurrence after a cancel then
+ * hits `armWakeup`'s upsert-if-absent, finds the dead `cancelled` row, and
+ * returns it WITHOUT inserting a live one → the alarm silently never arms
+ * (disable→re-enable, or edit→revert, within one occurrence interval). Deleting
+ * the dropped pending row frees the key so the re-seed inserts a real pending row.
+ * (Retry's `attempt-<n>` discriminator never re-collides, so retry uses cancel.)
+ */
+export function deleteWakeup(db: Db, id: string): ScheduledWakeup | null {
+  const deleted = db
+    .delete(scheduledWakeups)
+    .where(and(eq(scheduledWakeups.id, id), eq(scheduledWakeups.status, 'pending')))
+    .returning()
+    .all();
+  const row = deleted[0];
+  return row === undefined ? null : ScheduledWakeupSchema.parse(row);
+}
+
 export function getWakeupByKey(db: Db, kind: string, dedupeKey: string): ScheduledWakeup | null {
   return selectByKey(db, kind, dedupeKey);
 }

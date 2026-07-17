@@ -26,10 +26,12 @@ declare module 'fastify' {
      * fires" + concurrency admission. Per-app so its in-flight/queue state
      * never leaks across instances. */
     runLauncher: RunLauncher;
-    /** This app instance's scheduler: fires `schedule`-mode triggers on their
-     * cron (UTC) through the launcher, gated by run windows. Per-app so its
-     * cron set never leaks across instances. Routes call `.sync()` after any
-     * trigger write; `buildApp` syncs at boot and `.stop()`s it on close. */
+    /** This app instance's schedule RECONCILER (#5 S5): reconciles the durable
+     * `schedule_tick` outbox rows against the DB's schedulable triggers (croner is
+     * a next-fire CALCULATOR now, not a firing source — the alarm clock fires).
+     * Per-app so its state never leaks across instances. Routes call `.sync()`
+     * after any trigger write; `buildApp` syncs at boot and `.stop()`s it on
+     * close. */
     scheduler: Scheduler;
     /** This app instance's live-run-monitor event bus (P6). The run driver
      * publishes every appended `run_events` envelope to it; the run-events
