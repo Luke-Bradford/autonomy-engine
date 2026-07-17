@@ -558,22 +558,34 @@ export async function pump(
       break;
     }
 
-    // `scheduleRetry` is the driver's other OWN command — a single event (a sync
-    // array, which `for await` iterates too). `dispatchNode`/`startChild` go to
-    // the executor, which STREAMS its events so `node.dispatched` is folded
-    // (durable) before the side effect runs — see the `Executor` contract doc.
+    // `scheduleRetry` and `evaluateControl` are the driver's OWN commands — each
+    // a single synchronous event (a sync array, which `for await` iterates too),
+    // needing no executor. `dispatchNode`/`startChild` go to the executor, which
+    // STREAMS its events so `node.dispatched` is folded (durable) before the side
+    // effect runs — see the `Executor` contract doc.
     //
-    // `scheduleRetry` routes through this `source` rather than appending on its
-    // own: the loop below is what publishes to the P6 bus (so a watching client's
-    // raw event feed sees the retry as it is scheduled — note the monitor's
-    // per-node summary does not fold it yet), folds the PARSED event, and syncs
-    // the row. `armRetry` runs while building the array, which is what keeps the
-    // arm strictly BEFORE the append. Unlike `finishRun`, its event is not a
-    // verdict on its own event, so append-before-fold is fine.
+    // They route through this `source` rather than appending on their own: the
+    // loop below is what publishes to the P6 bus (so a watching client's raw
+    // event feed sees the retry/branch as it happens), folds the PARSED event,
+    // and syncs the row. `armRetry` runs while building the array, keeping the arm
+    // strictly BEFORE the append. Unlike `finishRun`, neither event is a verdict
+    // on its own event, so append-before-fold is fine. `evaluateControl` carries
+    // the branch the reducer already computed PURELY (#4 A1) — the driver just
+    // makes it durable as `condition.evaluated`.
     const source: Iterable<EngineEvent> | AsyncIterable<EngineEvent> =
       command.type === 'scheduleRetry'
         ? [armRetry(deps, state, command)]
-        : deps.executor.perform(command, state.runId);
+        : command.type === 'evaluateControl'
+          ? [
+              {
+                type: 'condition.evaluated' as const,
+                runId: state.runId,
+                nodeId: command.nodeId,
+                attemptId: command.attemptId,
+                branch: command.branch,
+              },
+            ]
+          : deps.executor.perform(command, state.runId);
 
     let terminal = false;
     for await (const event of source) {

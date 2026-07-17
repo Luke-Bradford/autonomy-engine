@@ -46,6 +46,13 @@ function node(id: string, extra: Partial<Node> = {}): Node {
 function edge(from: string, to: string, on: EdgeOn = 'success'): Edge {
   return { id: `${from}->${to}:${on}`, from, to, on };
 }
+// #4 A1 — a real `if` control node (catalogued kind:control) + its branch arms.
+function ifNode(id: string, condition: string): Node {
+  return node(id, { type: 'if', config: { condition } });
+}
+function branchEdge(from: string, to: string, branch: string): Edge {
+  return { id: `${from}->${to}:${branch}`, from, to, on: 'branch', branch };
+}
 
 function seedVersion(db: Db, nodes: Node[], edges: Edge[] = []): string {
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
@@ -123,6 +130,51 @@ describe('driver — startRun happy path', () => {
     const replayed = engine.projectRunState(loadEngineEvents(db, run.id));
     expect(replayed).toEqual(driven);
     expect(replayed.status).toBe('success');
+  });
+});
+
+describe('driver — if control activity routes through the REAL pump (#4 A1)', () => {
+  it('emits condition.evaluated (never dispatches the if), routes the taken arm, skips the other', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [ifNode('c', '${true}'), node('a'), node('b')],
+      [branchEdge('c', 'a', 'true'), branchEdge('c', 'b', 'false')],
+    );
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db), run);
+
+    expect(state.status).toBe('success');
+    expect(state.branches['c']).toBe('true');
+    expect(state.nodes.c!.status).toBe('success');
+    expect(state.nodes.a!.status).toBe('success');
+    expect(state.nodes.b!.status).toBe('skipped');
+
+    const log = loadEngineEvents(db, run.id);
+    // The pump's driver-own `evaluateControl` branch appended a durable
+    // `condition.evaluated` — the real driver.ts path, not just the shared harness.
+    expect(types(log)).toContain('condition.evaluated');
+    // The if is engine-evaluated: it must NEVER reach the executor as a dispatch.
+    expect(log.some((e) => e.type === 'node.dispatched' && e.nodeId === 'c')).toBe(false);
+  });
+
+  it('the persisted if-run log replays to the identical state (event-sourcing invariant)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [ifNode('c', '${false}'), node('a'), node('b')],
+      [branchEdge('c', 'a', 'true'), branchEdge('c', 'b', 'false')],
+    );
+    const run = seedRun(db, pvId);
+
+    const driven = await startRun(deps(db), run);
+    const engine = buildEngine(getPipelineVersion(db, pvId)!);
+    const replayed = engine.projectRunState(loadEngineEvents(db, run.id));
+    expect(replayed).toEqual(driven);
+    expect(replayed.branches['c']).toBe('false');
+    expect(replayed.nodes.b!.status).toBe('success');
+    expect(replayed.nodes.a!.status).toBe('skipped');
   });
 });
 

@@ -3,7 +3,9 @@ import { catalog, getActivity } from '../registry.js';
 
 describe('activity catalog', () => {
   it('exposes the MVP activity types', () => {
-    expect([...catalog.keys()].sort()).toEqual(['agent_task', 'http_request', 'llm_call']);
+    // `if` (#4 A1) is the first CONTROL activity — engine-evaluated, catalogued
+    // so the palette/executor-guard/version know it.
+    expect([...catalog.keys()].sort()).toEqual(['agent_task', 'http_request', 'if', 'llm_call']);
   });
 
   it('getActivity returns an entry for a known type and undefined for an unknown one', () => {
@@ -59,12 +61,15 @@ describe('activity catalog', () => {
 // --- F9a: the ActivityDefinition contract (#1 D6) ---------------------------
 
 describe('activity definition contract (#1 D6)', () => {
-  it('every MVP activity is connector-dispatched (kind: execution)', () => {
-    // Pins the claim F9a's spec block makes: no CONTROL entry exists yet, so
-    // the executor's control guard is unreachable through the shipped catalog
-    // and F9a's production behaviour delta is zero. The first control activity
-    // arrives with #4's A-series (if/switch/wait/…) and lands here.
+  it('splits execution (connector-dispatched) from control (engine-evaluated)', () => {
+    // Since #4 A1 the catalog has BOTH: `if` is the first `control` entry (the
+    // executor's `CONTROL_NOT_DISPATCHABLE` guard is now reachable), everything
+    // else is `execution`. An execution activity binds >=1 connection; a control
+    // activity binds NONE (it never touches a connector).
+    expect(getActivity('if')!.kind).toBe('control');
+    expect(getActivity('if')!.connectionKinds).toEqual([]);
     for (const entry of catalog.values()) {
+      if (entry.type === 'if') continue;
       expect(entry.kind).toBe('execution');
     }
   });

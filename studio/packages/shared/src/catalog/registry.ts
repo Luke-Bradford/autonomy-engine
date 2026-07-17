@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { Output } from '../schemas/pipeline.js';
 import { SecretRefSchema } from '../schemas/secret-ref.js';
 import type { ActivityCatalog, ActivityCatalogEntry } from './types.js';
+import { IF_ACTIVITY_TYPE } from './types.js';
 import { llmCallConfigSchema } from './llm-config.js';
 
 /**
@@ -97,6 +98,26 @@ const ENTRIES: ActivityCatalogEntry[] = [
       task: z.string().min(1),
       cwd: z.string().optional(),
     }),
+  },
+  {
+    // #4 A1 — the `if` CONTROL activity. `kind:'control'` = engine-evaluated: the
+    // reducer routes it STRUCTURALLY by `type` (the `call_pipeline`/`Node.call`
+    // precedent), never a connector, so `connectionKinds` is empty and the
+    // executor REFUSES a dispatched control node (`CONTROL_NOT_DISPATCHABLE`).
+    // `idempotent` is inert for the same reason (nothing dispatches it), and
+    // there are no `outputs` — an `if` produces a branch, not data. The
+    // `configSchema` is palette metadata; the save-time condition rule is
+    // `validateDoc`'s whole-value check. Cataloguing the TYPE (per D6's note)
+    // bumped `CATALOG_VERSION` 2→3 so an older build refuses an if-doc it cannot
+    // route rather than silently stranding its branch edges.
+    type: IF_ACTIVITY_TYPE,
+    title: 'If Condition',
+    kind: 'control',
+    category: 'control',
+    idempotent: false,
+    connectionKinds: [],
+    outputs: [],
+    configSchema: z.object({ condition: z.string().min(1) }),
   },
 ];
 

@@ -96,6 +96,9 @@ describe('#443 — terminalStatusOf', () => {
       // non-terminal events it names as free to land later.
       { type: 'node.retryScheduled', ...run, nodeId: 'n1', attemptId: 'n1#0', nextAttemptAt: 1 },
       { type: 'node.retryDue', ...run, nodeId: 'n1', previousAttemptId: 'n1#0' },
+      // #4 A0 — an `if`'s branch decision. NON-terminal: it folds the node to
+      // `success` + records the branch, but is not itself a run-terminating event.
+      { type: 'condition.evaluated', ...run, nodeId: 'n1', attemptId: 'n1#0', branch: 'true' },
     ];
     for (const event of nonTerminal) {
       expect(terminalStatusOf(event), `${event.type} must not be terminal`).toBeNull();

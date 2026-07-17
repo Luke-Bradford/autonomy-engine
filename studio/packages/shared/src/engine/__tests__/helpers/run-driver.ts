@@ -129,6 +129,20 @@ export function driveRun(eng: Engine, opts: DriveOptions): DriveResult {
       apply({ type: 'run.finished', runId, outcome: c.outcome, reason: c.reason });
       continue;
     }
+    // #4 A1 — the driver's OWN `evaluateControl` command (a `control` `if`
+    // evaluated its branch): fold `condition.evaluated`, no executor. Mirrors the
+    // real driver's `pump` (`server/src/run/driver.ts`); without it an if-run
+    // never routes and the guard throws.
+    if (c.type === 'evaluateControl') {
+      apply({
+        type: 'condition.evaluated',
+        runId,
+        nodeId: c.nodeId,
+        attemptId: c.attemptId,
+        branch: c.branch,
+      });
+      continue;
+    }
     if (c.type !== 'dispatchNode') continue;
     order.push(c.nodeId);
     apply({

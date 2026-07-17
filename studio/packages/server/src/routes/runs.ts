@@ -50,8 +50,8 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
 
   /**
    * #497 — the reducer's EXPLANATIONS for this run: why an edge was ignored, a
-   * container child neutralized, a branch inert, or which entities stalled it.
-   * Its DECISIONS are `/events` (the durable log); these say why.
+   * container child neutralized, or which entities stalled it. Its DECISIONS are
+   * `/events` (the durable log); these say why.
    *
    * Owner-scoped through the RUN, exactly as `/events` is: `run_diagnostics`
    * rows carry no `owner_id` of their own, so authorization is checked on the

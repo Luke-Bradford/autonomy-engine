@@ -473,29 +473,59 @@ describe('validateDoc — container boundary encapsulation', () => {
 });
 
 // ===========================================================================
-// Business `branch` edges — reported as inert (#1 owns the union, T3)
+// Business `branch` edges — the declared-branch rule (#4 A0 makes them routable)
 // ===========================================================================
 
-describe('validateDoc — business branch edges are reported as inert', () => {
-  // The union is settled HERE so #4 A0/A1/A2 can build `if`/`switch` against a
-  // final schema — but until an activity actually emits a branch outcome, a
-  // branch edge can never be satisfied. Parse stays permissive (a git import
-  // must round-trip one); `validateDoc` reports it, naming the ticket that
-  // lifts it.
-  //
-  // The write path refuses a doc this reports as of #444, but rows written
-  // before that gate were never validated. The reducer's diagnostic
-  // (edge-model.test.ts) is the real run-time observability for those — which is
-  // why F1 put one there rather than trust this half alone.
-  it('reports a branch edge and names the ticket that lifts it', () => {
+describe('validateDoc — branch edges route against the declared-branch rule (#4 A0)', () => {
+  // Since #4 A0 a branch edge is valid iff its SOURCE is a branching activity
+  // that DECLARES the label. `if` declares exactly {'true','false'}; any other
+  // source declares none. Parse stays permissive (a git import round-trips one);
+  // this rule is advisory (canvas badge + the #444 write gate). The reducer's
+  // run-time routing (`edge-model`/`branch-routing.test.ts`) is the other half.
+  const ifNode = (id: string, condition = "${equals(nodes.c.output.ok, 'true')}"): Node =>
+    node(id, { condition }, { type: 'if' });
+
+  it('accepts an if node with true/false branch edges', () => {
     const d = doc(
-      [node('if_1'), node('t')],
-      [{ id: 'e1', from: 'if_1', to: 't', on: 'branch', branch: 'true' }],
+      [ifNode('if_1'), node('a'), node('b')],
+      [
+        { id: 'e1', from: 'if_1', to: 'a', on: 'branch', branch: 'true' },
+        { id: 'e2', from: 'if_1', to: 'b', on: 'branch', branch: 'false' },
+      ],
+    );
+    // No branch-edge or condition error (there may be a ref error for `nodes.c`,
+    // which does not exist — so assert on the branch/condition rules only).
+    const errors = validateDoc(d).join(' ');
+    expect(errors).not.toMatch(/does not declare branch/);
+    expect(errors).not.toMatch(/is not a branching activity/);
+  });
+
+  it('rejects a branch edge whose source is NOT a branching activity', () => {
+    const d = doc(
+      [node('plain'), node('t')],
+      [{ id: 'e1', from: 'plain', to: 't', on: 'branch', branch: 'true' }],
     );
     const errors = validateDoc(d).join(' ');
     expect(errors).toContain("edge 'e1'");
-    expect(errors).toMatch(/branch/i);
-    expect(errors).toMatch(/A0|A1|A2|if\/switch/);
+    expect(errors).toMatch(/not a branching activity/);
+  });
+
+  it('rejects a branch label an if does not declare', () => {
+    const d = doc(
+      [ifNode('if_1'), node('t')],
+      [{ id: 'e1', from: 'if_1', to: 't', on: 'branch', branch: 'maybe' }],
+    );
+    const errors = validateDoc(d).join(' ');
+    expect(errors).toContain("edge 'e1'");
+    expect(errors).toMatch(/does not declare branch 'maybe'/);
+  });
+
+  it('rejects an if whose condition is missing or an embedded (non-whole-value) expression', () => {
+    const missing = validateDoc(doc([node('if_1', {}, { type: 'if' })])).join(' ');
+    expect(missing).toMatch(/node\.if_1\.condition: an if needs a boolean condition/);
+
+    const embedded = validateDoc(doc([ifNode('if_2', 'ok=${nodes.c.output.ok}')])).join(' ');
+    expect(embedded).toMatch(/node\.if_2\.condition:/);
   });
 
   it('still accepts the four operational conditions', () => {

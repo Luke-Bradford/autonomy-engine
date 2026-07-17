@@ -14,6 +14,7 @@ import type {
   TerminalNodeStatus,
 } from './types.js';
 import { SubstituteError, TERMINAL_NODE, terminalStatusOf } from './types.js';
+import { IF_ACTIVITY_TYPE, IF_BRANCH_TRUE, IF_BRANCH_FALSE } from '../catalog/types.js';
 import type { OutputType } from '../schemas/pipeline.js';
 import { outputContract, type CheckedContract, type OutputContract } from './outputs.js';
 import {
@@ -197,12 +198,12 @@ type EndpointOutcome = TerminalNodeStatus | null;
  * so a doc save/reorder never changes which `bounces[...]` counter a back-edge
  * maps to (CP1). `\x00` is a delimiter that cannot occur in an id/enum.
  *
- * The `branch` label is part of the key because two arms of one switch share
- * (from, to, 'branch'): without it, `X --branch:a--> Y` and `X --branch:b--> Y`
- * would share a single bounce counter (halving `maxBounces`) and resolve each
- * other's reset body. Unreachable while branch edges are inert (nothing emits a
- * branch outcome until #4 A0/A1/A2) — kept correct by construction so the
- * collision can't be introduced later by a ticket that isn't looking for it.
+ * The `branch` label is part of the key because two arms of one branching node
+ * share (from, to, 'branch'): without it, `X --branch:a--> Y` and
+ * `X --branch:b--> Y` would share a single bounce counter (halving `maxBounces`)
+ * and resolve each other's reset body. REACHABLE and load-bearing since #4 A1 —
+ * an `if`'s two arms can both target one node (e.g. an approval "redo" back-edge
+ * arm alongside the forward arm) — so this must stay in the key.
  */
 function stableEdgeKey(e: Edge): string {
   return `${e.from}\x00${e.to}\x00${e.on}\x00${e.on === 'branch' ? e.branch : ''}`;
@@ -511,14 +512,24 @@ export function createEngine(doc: EngineDoc): Engine {
     if (!endpointIds.has(edge.from)) return 'impossible';
     const oc = endpointOutcome(edge.from, state);
     if (oc === null) return 'pending';
-    // Business routing: no activity emits a branch outcome yet (#4 A0/A1/A2), so
-    // a branch edge can never satisfy. `settle` reports this as a diagnostic
-    // rather than letting the downstream strand silently.
-    if (edge.on === 'branch') return 'unsatisfied-terminal';
     if (oc === 'skipped') {
       // A skip propagates unless something explicitly catches it. `completion`
-      // does NOT catch it: the activity never ran, so it never completed.
+      // does NOT catch it: the activity never ran, so it never completed. A
+      // branch edge from a SKIPPED `if` is `impossible` here — the source never
+      // evaluated, so its (possibly stale, from a prior loop round) `branches`
+      // entry must NOT be read. This is why the branch check sits AFTER this
+      // block, not before it (#4 A0).
       return edge.on === 'skipped' ? 'satisfied' : 'impossible';
+    }
+    // Business routing (#4 A0): a branch edge is `satisfied` iff its source
+    // recorded EXACTLY this branch label (`condition.evaluated`, folded into
+    // `state.branches`). A terminal source that recorded no branch — a
+    // non-branching activity, a failed `if`, or any node from a pre-A0 doc —
+    // leaves every outgoing branch edge dead (`unsatisfied-terminal`), so the
+    // downstream skips. The `if` node itself is `success` here (control nodes
+    // terminate `success`), so this is reached with `oc === 'success'`.
+    if (edge.on === 'branch') {
+      return state.branches[edge.from] === edge.branch ? 'satisfied' : 'unsatisfied-terminal';
     }
     if (oc === 'success') {
       return edge.on === 'success' || edge.on === 'completion'
@@ -826,32 +837,6 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
-   * A `branch` edge cannot be satisfied until #4 A0/A1/A2 ship the `if`/`switch`
-   * activities that emit a branch outcome, so anything depending on one skips.
-   * Say so.
-   *
-   * This diagnostic is the ONLY thing that makes that visible for a doc already
-   * in storage: `validateDoc` reports a branch edge, and the write path now
-   * refuses one (#444) — but rows written before that gate were never validated,
-   * so such a doc still reaches the reducer. Without this, an operator just sees
-   * a silently skipped subgraph.
-   */
-  function noteInertBranch(id: string, incoming: Edge[], diagnostics: string[]): void {
-    const inert = incoming.filter((e) => e.on === 'branch').length;
-    if (inert === 0) return;
-    // Count them: on a fan-in, a hardcoded singular undercounts the cause and
-    // sends the operator hunting ONE edge when several are inert.
-    const subject = inert === 1 ? `an incoming 'branch' edge` : `${inert} incoming 'branch' edges`;
-    // Deliberately worded as a contributing cause, not THE cause: the entity may
-    // also have a genuinely dead operational predecessor, and claiming the branch
-    // edge is why would send an operator down the wrong path.
-    diagnostics.push(
-      `'${id}' was skipped and has ${subject}, which can never be satisfied — no ` +
-        `activity emits a branch outcome yet (#4 A0/A1/A2 implement if/switch against this schema)`,
-    );
-  }
-
-  /**
    * Try to advance ONE pending node (top-level or a child): skip it, dispatch
    * it (`dispatchNode`), or — for a `call_pipeline` node — emit `startChild` and
    * hold it `waiting`. A prep-input failure short-circuits to `invalid_event`.
@@ -868,12 +853,37 @@ export function createEngine(doc: EngineDoc): Engine {
     const node = nodeById.get(id)!;
     const r = computeReadiness(incoming, nodeJoin(node), state);
     if (r === 'skipped') {
-      noteInertBranch(id, incoming, diagnostics);
       return { state: withNode(state, id, { status: 'skipped' }), changed: true };
     }
     if (r !== 'ready') return { state, changed: false };
 
     const attemptId = `${id}#${ns.attempts}`;
+    if (node.type === IF_ACTIVITY_TYPE) {
+      // #4 A1 — a `control` `if` is ENGINE-evaluated: no connector, no executor
+      // round-trip. The reducer learns "this is control" STRUCTURALLY from
+      // `node.type` (the `call_pipeline`/`Node.call` precedent D6's note
+      // sanctions), checked before `node.call` — a node is one or the other.
+      // Evaluate the `${}` condition PURELY (the `evalIfBranch` pattern, clock-
+      // free + replay-stable), then ask the driver to make the chosen branch
+      // durable via `evaluateControl`. The node holds `ready` (the driver owes
+      // `condition.evaluated`, mirroring the `dispatchNode`/`node.dispatched`
+      // handshake) and is NEVER handed to the executor. A bad condition throws
+      // → `prepFailure` → `finishRun{invalid_event}`, the same verdict a
+      // dispatch prep-throw reaches.
+      let branch: string;
+      try {
+        branch = evalIfBranch(node, state);
+      } catch (err) {
+        return prepFailure(state, id, err, diagnostics);
+      }
+      const next = withNode(state, id, {
+        status: 'ready',
+        attempts: ns.attempts + 1,
+        currentAttemptId: attemptId,
+      });
+      commands.push({ type: 'evaluateControl', nodeId: id, attemptId, branch });
+      return { state: next, changed: true };
+    }
     if (node.call !== undefined) {
       // call_pipeline: resolve the (possibly `${}`) pipelineVersionId + params,
       // hold the node `waiting`, and ask the driver to spawn the child.
@@ -1107,6 +1117,37 @@ export function createEngine(doc: EngineDoc): Engine {
     );
   }
 
+  /**
+   * #4 A1 — evaluate an `if` node's `${}` boolean `config.condition` to its
+   * branch LABEL (`'true'`/`'false'`, matching `BranchEdgeSchema.branch`, a
+   * string — NOT a raw boolean, so `edgeState`'s `===` against the declared
+   * label holds). This is `evalExitWhen`'s exact shape, reading the SAME
+   * `wholeValueDefect` SSOT the save-time half (`validateDoc`) reads, so the two
+   * cannot word the rule differently. Pure over `state`: `substitute` reads only
+   * bound outputs/params/trigger context, so a replay reaches the same label.
+   * Throws (→ `prepFailure` → `finishRun{invalid_event}`) on a missing/non-string
+   * condition, a mode defect, or a non-boolean result — the run-time half of
+   * E6's boolean-condition rule that the write gate (#444) warns about first.
+   */
+  function evalIfBranch(node: Node, state: RunState): string {
+    const raw = node.config['condition'];
+    if (typeof raw !== 'string') {
+      throw new SubstituteError(
+        `if node '${node.id}' has no string 'condition' — an if routes on a ` +
+          "boolean ${} expression (e.g. ${equals(nodes.check.output.ok, 'true')})",
+      );
+    }
+    const src = raw.trim();
+    const defect = wholeValueDefect(src, 'condition');
+    if (defect !== null) throw new SubstituteError(defect);
+    const out = substitute(src, buildCtx(state));
+    if (typeof out === 'boolean') return out ? IF_BRANCH_TRUE : IF_BRANCH_FALSE;
+    throw new SubstituteError(
+      `if condition must resolve to a boolean, got ${typeof out} — ` +
+        "compare it explicitly (e.g. ${equals(nodes.check.output.done, 'true')})",
+    );
+  }
+
   /** A container's projected outputs = its children's outputs merged (sorted). */
   function projectContainerOutputs(c: Container, state: RunState): Record<string, unknown> {
     const out: Record<string, unknown> = {};
@@ -1251,7 +1292,6 @@ export function createEngine(doc: EngineDoc): Engine {
             state = enterContainer(state, id);
             changed = true;
           } else if (r === 'skipped') {
-            noteInertBranch(id, topIncoming.get(id)!, diagnostics);
             state = withContainer(state, id, { status: 'skipped' });
             changed = true;
           }
@@ -1464,7 +1504,8 @@ export function createEngine(doc: EngineDoc): Engine {
       return { state, commands: [], diagnostics };
     }
     // #480/#487/#488: say so when the bind voided something the author wrote.
-    // Same reasoning as `noteInertBranch`, and deliberately the same conclusion:
+    // Same reasoning the other bind-time diagnostics follow, and the same
+    // conclusion:
     // `validateDoc` reports these shapes and the write path now refuses them
     // (#444), but rows written before that gate were never validated, so such a
     // doc still reaches the reducer and this stays the ONLY thing that makes the
@@ -1496,6 +1537,11 @@ export function createEngine(doc: EngineDoc): Engine {
       outputs: {},
       containers: containerStates,
       bounces: {},
+      // #4 A0 — rebuilt from scratch here (no `...state` spread), so it must be
+      // stated explicitly like every sibling; missing it leaves `branches`
+      // `undefined` and `edgeState`'s `state.branches[from]` throws OUT of the
+      // pure reducer (the #487 fail-open this whole file guards against).
+      branches: {},
       sessions: {},
       // Carried across the started transition — the `run.triggerContext` seed
       // (#5 S12) folds into the `pending` state BEFORE this event, and rebuilding
@@ -1578,6 +1624,49 @@ export function createEngine(doc: EngineDoc): Engine {
       return { state, commands: [], diagnostics };
     }
     diagnostics.push(`duplicate node.succeeded for already-terminal node '${event.nodeId}'`);
+    return { state, commands: [], diagnostics };
+  }
+
+  /**
+   * #4 A0/A1 — fold `condition.evaluated`: an `if` chose a business branch. Same
+   * shape as `onSucceeded` (an `if` reaches terminal `success` the same way a
+   * dispatched node does, just via a different accepting event): the node is
+   * `ready` awaiting exactly this event, so record BOTH the terminal `success`
+   * AND the chosen `branch` label, then `settle` so `edgeState` routes the taken
+   * arm. A stale `attemptId` (a pre-restart evaluation) is ignored; a `pending`
+   * node is impossible (nothing dispatched it); the other statuses are
+   * unreachable for a control `if` (it is never dispatched/waiting/retrying) but
+   * carry a defined diagnostic no-op for parity with `onSucceeded`.
+   */
+  function onConditionEvaluated(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'condition.evaluated' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    const ns = state.nodes[event.nodeId];
+    if (ns === undefined) return { state, commands: [], diagnostics };
+    if (ns.status === 'ready') {
+      if (event.attemptId !== ns.currentAttemptId) {
+        return { state, commands: [], diagnostics };
+      }
+      let next = withNode(state, event.nodeId, { status: 'success' });
+      next = { ...next, branches: { ...next.branches, [event.nodeId]: event.branch } };
+      return settle(next, diagnostics);
+    }
+    if (ns.status === 'pending') {
+      diagnostics.push(`impossible condition.evaluated for never-evaluated node '${event.nodeId}'`);
+      return {
+        state,
+        commands: [{ type: 'finishRun', outcome: 'failure', reason: 'invalid_event' }],
+        diagnostics,
+      };
+    }
+    if (event.attemptId !== ns.currentAttemptId) {
+      return { state, commands: [], diagnostics };
+    }
+    diagnostics.push(
+      `condition.evaluated for node '${event.nodeId}' in unexpected status '${ns.status}'`,
+    );
     return { state, commands: [], diagnostics };
   }
 
@@ -1907,6 +1996,33 @@ export function createEngine(doc: EngineDoc): Engine {
       if (ns.currentAttemptId === undefined) continue;
       const node = nodeById.get(id)!;
       if (ns.status === 'ready') {
+        if (node.type === IF_ACTIVITY_TYPE) {
+          // #4 A1 crash recovery: an `if` folds to `ready` after `tryDispatchNode`
+          // pushed `evaluateControl`, but `projectRunState` keeps STATE, not
+          // COMMANDS — a crash between the predecessor's durable event and
+          // `condition.evaluated` re-derives `if=ready` with its command lost, and
+          // without this fork nothing re-emits it, so the run hangs `ready`
+          // forever (the `waiting && node.call` branch below re-emits `startChild`
+          // for the exact same reason). Recompute the branch PURELY (deterministic
+          // over the logged state) and re-emit. Idempotent: same
+          // `currentAttemptId`, and a duplicate `condition.evaluated` folds as a
+          // stale/terminal no-op. Terminalize a condition that now throws, the
+          // same verdict as the dispatch-prep branch below.
+          let branch: string;
+          try {
+            branch = evalIfBranch(node, state);
+          } catch (err) {
+            const failed = prepFailure(state, id, err, diagnostics);
+            return { state: failed.state, commands: [failed.finish!], diagnostics };
+          }
+          commands.push({
+            type: 'evaluateControl',
+            nodeId: id,
+            attemptId: ns.currentAttemptId,
+            branch,
+          });
+          continue;
+        }
         let prepared: Record<string, unknown>;
         try {
           prepared = prepInput(state, node);
@@ -2032,6 +2148,8 @@ export function createEngine(doc: EngineDoc): Engine {
         return onDispatched(state, event, diagnostics);
       case 'node.succeeded':
         return onSucceeded(state, event, diagnostics);
+      case 'condition.evaluated':
+        return onConditionEvaluated(state, event, diagnostics);
       case 'node.failed':
         return onFailed(state, event, diagnostics);
       case 'call.returned':
@@ -2068,6 +2186,7 @@ export function createEngine(doc: EngineDoc): Engine {
       outputs: {},
       containers: {},
       bounces: {},
+      branches: {},
       sessions: {},
       triggerContext: null,
     };

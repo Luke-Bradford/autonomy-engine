@@ -26,9 +26,9 @@ import type { Db } from './types.js';
  *
  * Per-RUN rather than per-fold, which is the whole point: a per-fold cap bounds
  * nothing, because `MAX_DRIVER_STEPS` is 1_000_000 and the attacker-shaped
- * diagnostics repeat PER FOLD — `noteInertBranch` once per node per settle,
- * `container capped at maxRounds` once per container per round — on a doc that
- * (being pre-#444) was never validated. A per-fold cap of 50 would therefore
+ * diagnostics repeat PER FOLD — e.g. `container capped at maxRounds` once per
+ * container per round — on a doc that (being pre-#444) was never validated. A
+ * per-fold cap of 50 would therefore
  * bound a single run at ~5e7 rows, which is not a bound in any sense an operator
  * would recognise.
  *
