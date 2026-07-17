@@ -189,6 +189,9 @@ describe('triggers repo', () => {
         schedule: null,
         recurrence: { frequency: 'day', schedule: { hours: [9] } },
       });
+      // No cast needed: an inverted window is a well-TYPED `Recurrence` (the
+      // `endTime > startTime` rule is a runtime write-refine, not a type
+      // constraint), so this exercises the repo's RecurrenceWriteSchema re-parse.
       expect(() =>
         updateTrigger(db, created.id, {
           recurrence: {
@@ -196,7 +199,7 @@ describe('triggers repo', () => {
             schedule: { hours: [9] },
             startTime: '2026-08-31T00:00:00Z',
             endTime: '2026-08-01T00:00:00Z',
-          } as never,
+          },
         }),
       ).toThrow();
     });
