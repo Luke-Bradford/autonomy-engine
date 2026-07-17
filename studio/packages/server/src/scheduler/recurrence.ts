@@ -77,6 +77,13 @@ export interface OccurrenceBounds {
  *     trigger, whose `schedule` is always such a compiled cron (a raw-cron
  *     escape-hatch trigger has no `recurrence`, thus no bounds).
  *
+ * These boundary semantics ARE croner-internal (floor + exclusivity), so croner is
+ * EXACT-pinned (`10.0.1`, no caret — see `package.json`) and the guard against a
+ * silent semantics change on upgrade is the boundary CHARACTERIZATION suite in
+ * `__tests__/recurrence.test.ts` (inclusive whole-second start, excluded
+ * sub-second-early slot, exclusive end): a croner upgrade that changed floor or
+ * exclusivity fails those tests LOUDLY at CI rather than mis-enforcing a window.
+ *
  * @throws {InvalidScheduleError} if `schedule` is not a cron string croner can
  *   parse (a malformed bound would also surface here — but callers pass
  *   `z.string().datetime()`-validated bounds, so that path is a belt).

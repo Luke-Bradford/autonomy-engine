@@ -311,11 +311,10 @@ describe('Scheduler — recurrence bounds (#5 S5b-2, #549)', () => {
   it('seeds NOTHING when now is past endTime (an exhausted window arms no row)', () => {
     const { db } = freshDb();
     const pv = seedVersion(db);
-    const t = seedTrigger(db, {
+    seedTrigger(db, {
       pipelineVersionId: pv,
       recurrence: daily9({ endTime: '2020-01-01T00:00:00Z' }),
     });
-    void t;
     makeScheduler(db, () => NOON).sync();
     expect(pendingTicks(db)).toHaveLength(0);
   });
@@ -344,7 +343,7 @@ describe('Scheduler — recurrence bounds (#5 S5b-2, #549)', () => {
   it('KEEPS a bounds-current row (idempotent) — no needless churn', () => {
     const { db } = freshDb();
     const pv = seedVersion(db);
-    const t = seedTrigger(db, {
+    seedTrigger(db, {
       pipelineVersionId: pv,
       recurrence: daily9({ startTime: '2026-08-10T00:00:00Z', endTime: '2026-09-01T00:00:00Z' }),
     });
@@ -356,6 +355,5 @@ describe('Scheduler — recurrence bounds (#5 S5b-2, #549)', () => {
     const second = pendingTicks(db);
     expect(second).toHaveLength(1);
     expect(second[0]?.id).toBe(first[0]?.id);
-    void t;
   });
 });
