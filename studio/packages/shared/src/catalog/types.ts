@@ -147,6 +147,21 @@ export const FILE_READ_ACTIVITY_TYPE = 'file_read';
 export const FILE_WRITE_ACTIVITY_TYPE = 'file_write';
 
 /**
+ * The `Node.type`s of the four remaining file EXECUTION activities (#4 A12) —
+ * `file_copy` / `file_move` / `file_delete` / `file_list`. Same `fs` connector as
+ * the A11 read/write pair, dispatched by `ctx.activityType` through the ONE
+ * adapter (`connectors/fs.ts`), so — like `FILE_{READ,WRITE}_ACTIVITY_TYPE` —
+ * each string is a TYPED identifier read in two agreeing places (catalog entry +
+ * adapter branch) and lives once. All four are `kind:'execution'` runnable TYPES
+ * routed BY TYPE at the executor (an older build lacks the entry → `UNKNOWN_
+ * ACTIVITY`), so cataloguing them bumps `CATALOG_VERSION` (the A11 rule again).
+ */
+export const FILE_COPY_ACTIVITY_TYPE = 'file_copy';
+export const FILE_MOVE_ACTIVITY_TYPE = 'file_move';
+export const FILE_DELETE_ACTIVITY_TYPE = 'file_delete';
+export const FILE_LIST_ACTIVITY_TYPE = 'file_list';
+
+/**
  * P3 — the ACTIVITY CATALOG entry: the static, pure metadata for one activity
  * `type` (the `type` on a pipeline `Node`). Lives in `shared` (no I/O) so the
  * SAME entry drives:

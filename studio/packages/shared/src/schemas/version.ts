@@ -55,5 +55,13 @@
 // not even parseable by an older `ConnectionKindSchema` — so an export using them
 // carries artifacts an older build mis-runs and must refuse to import. Stamping 8
 // enforces that (`portability/envelope.ts`), the rule catalog/types.ts states.
-export const CATALOG_VERSION = 8;
+// 9 (#4 A12): `file_copy`/`file_move`/`file_delete`/`file_list` are NEW runnable
+// EXECUTION types on the EXISTING `fs` connection kind — the A11 bump-rule case,
+// NOT the `execute_pipeline` exception. They route BY TYPE at the executor (an
+// older build lacks the catalog entry → `UNKNOWN_ACTIVITY`, `executor.ts`), so an
+// export using any of them carries an artifact an older build mis-runs and must
+// refuse to import. Stamping 9 enforces that (`portability/envelope.ts`), the
+// rule catalog/types.ts states. (No new connection kind this time — `fs` already
+// parses at 8 — so no migration; only the new activity types force the bump.)
+export const CATALOG_VERSION = 9;
 export const SCHEMA_VERSION = 1;

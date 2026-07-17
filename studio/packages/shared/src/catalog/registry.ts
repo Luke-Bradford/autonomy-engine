@@ -5,6 +5,10 @@ import type { ActivityCatalog, ActivityCatalogEntry } from './types.js';
 import {
   EXECUTE_PIPELINE_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
+  FILE_COPY_ACTIVITY_TYPE,
+  FILE_DELETE_ACTIVITY_TYPE,
+  FILE_LIST_ACTIVITY_TYPE,
+  FILE_MOVE_ACTIVITY_TYPE,
   FILE_READ_ACTIVITY_TYPE,
   FILE_WRITE_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
@@ -286,6 +290,72 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: ['fs'],
     outputs: [out('bytesWritten', 'number'), out('path', 'string')],
     configSchema: z.object({ path: z.string().min(1), content: z.string() }),
+  },
+  {
+    // #4 A12 — `file_copy`. Copies `source` → `dest`, both confined to the `fs`
+    // connection's roots by the same server-side guard. `idempotent:false` — a
+    // copy overwrites `dest` (a side effect), so the reconciler FREEZES an
+    // in-flight copy rather than risk a partial re-copy on resume. The adapter
+    // STREAMS source→temp→rename (no in-memory size cap, unlike `file_read`), so
+    // an arbitrarily large file copies without OOM. `configSchema` is palette
+    // metadata; the adapter validates the live `${}`-substituted request.
+    type: FILE_COPY_ACTIVITY_TYPE,
+    title: 'Copy File',
+    kind: 'execution',
+    category: 'general',
+    idempotent: false,
+    connectionKinds: ['fs'],
+    outputs: [out('bytesWritten', 'number'), out('source', 'string'), out('dest', 'string')],
+    configSchema: z.object({ source: z.string().min(1), dest: z.string().min(1) }),
+  },
+  {
+    // #4 A12 — `file_move`. Atomic same-filesystem `rename(source, dest)`, both
+    // confined to the roots. `idempotent:false` — the source is GONE after a
+    // successful move, so a resume of a completed move would fail (source
+    // missing); the reconciler must freeze it. A move ACROSS filesystems throws
+    // `EXDEV` → `permanent` (the operator composes `file_copy`+`file_delete` for
+    // that); documented same-filesystem-only. Outputs the canonical source/dest.
+    type: FILE_MOVE_ACTIVITY_TYPE,
+    title: 'Move File',
+    kind: 'execution',
+    category: 'general',
+    idempotent: false,
+    connectionKinds: ['fs'],
+    outputs: [out('source', 'string'), out('dest', 'string')],
+    configSchema: z.object({ source: z.string().min(1), dest: z.string().min(1) }),
+  },
+  {
+    // #4 A12 — `file_delete`. `unlink`s a single regular file confined to the
+    // roots. `idempotent:false` — a delete is a side effect (and a missing target
+    // is a `permanent` failure, not a benign success), so a resume must not
+    // re-run it. The target-symlink guard means a symlink AT the path is refused,
+    // not followed. Outputs the canonical `path` deleted.
+    type: FILE_DELETE_ACTIVITY_TYPE,
+    title: 'Delete File',
+    kind: 'execution',
+    category: 'general',
+    idempotent: false,
+    connectionKinds: ['fs'],
+    outputs: [out('path', 'string')],
+    configSchema: z.object({ path: z.string().min(1) }),
+  },
+  {
+    // #4 A12 — `file_list`. Lists the entries of a directory confined to the
+    // roots (bounded by the connection's `maxEntries`, default 10000). Like
+    // `file_read` it is side-effect-free, so `idempotent:true` — the reconciler
+    // may safely RESUME an in-flight list (re-listing yields an equivalent
+    // result). Each entry is `{name, type}` where `type` is
+    // `file`|`directory`|`symlink`|`other` from the raw dirent (a symlink entry
+    // is REPORTED, never followed). Outputs the `entries` array (json) + the
+    // canonical `path` listed.
+    type: FILE_LIST_ACTIVITY_TYPE,
+    title: 'List Directory',
+    kind: 'execution',
+    category: 'general',
+    idempotent: true,
+    connectionKinds: ['fs'],
+    outputs: [out('entries', 'json'), out('path', 'string')],
+    configSchema: z.object({ path: z.string().min(1) }),
   },
 ];
 
