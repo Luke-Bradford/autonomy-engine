@@ -14,6 +14,7 @@ import {
   parseJsonBody,
   resolveModel,
 } from './llm-shared.js';
+import type { NoCompletionReason } from './llm-shared.js';
 
 /**
  * The `anthropic_api` connector adapter: a single non-streaming call to the
@@ -56,9 +57,9 @@ const anthropicConnectionConfigSchema = llmConnectionConfigSchema.extend({
  * present text block whose text is `''` is a REAL (if empty) completion and
  * returns `''`, NOT `null`.
  */
-function extractText(json: unknown): string | null {
+function extractText(json: unknown): { text: string } | { reason: NoCompletionReason } {
   const content = (json as { content?: unknown }).content;
-  if (!Array.isArray(content)) return null;
+  if (!Array.isArray(content)) return { reason: 'absent_content' };
   const textBlocks = content.filter(
     (b): b is { type: string; text: string } =>
       typeof b === 'object' &&
@@ -66,8 +67,21 @@ function extractText(json: unknown): string | null {
       (b as { type?: unknown }).type === 'text' &&
       typeof (b as { text?: unknown }).text === 'string',
   );
-  if (textBlocks.length === 0) return null;
-  return textBlocks.map((b) => b.text).join('');
+  // ≥1 VALID text block is a real completion — a mix of valid + malformed/tool_use
+  // blocks still succeeds on the valid text (unchanged behaviour). Only zero valid
+  // text blocks is a no-completion, sub-classified for diagnostics (#556): a
+  // `type:'text'` block with a NON-string `text` is a single corrupt block
+  // (`malformed_block`); an empty array or tool_use-only response produced no text
+  // candidate (`empty_completion_set`).
+  if (textBlocks.length > 0) return { text: textBlocks.map((b) => b.text).join('') };
+  const hasMalformedTextBlock = content.some(
+    (b) =>
+      typeof b === 'object' &&
+      b !== null &&
+      (b as { type?: unknown }).type === 'text' &&
+      typeof (b as { text?: unknown }).text !== 'string',
+  );
+  return { reason: hasMalformedTextBlock ? 'malformed_block' : 'empty_completion_set' };
 }
 
 export const anthropicAdapter: ConnectorAdapter = {
@@ -166,15 +180,15 @@ export const anthropicAdapter: ConnectorAdapter = {
       yield parsed.event;
       return;
     }
-    const text = extractText(parsed.json);
-    if (text === null) {
-      yield noCompletionFailure('anthropic_api');
+    const extracted = extractText(parsed.json);
+    if ('reason' in extracted) {
+      yield noCompletionFailure('anthropic_api', extracted.reason);
       return;
     }
     yield {
       type: 'succeeded',
       outputs: {
-        text,
+        text: extracted.text,
         stopReason: coerceStopReason((parsed.json as { stop_reason?: unknown }).stop_reason),
       },
     };

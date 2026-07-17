@@ -61,23 +61,54 @@ describe('anthropicAdapter.runActivity', () => {
   // content array with zero text-type blocks) is a permanent failure, not
   // `succeeded{text:''}`. A tool_use-only response is text-mode-empty and fails
   // here because tools are not wired yet (revisit at L4b/L10).
+  //
+  // #556 — the failure carries a DIAGNOSTIC sub-reason (retry class stays
+  // `permanent` for all): a missing/wrong-type container is `absent_content`; a
+  // present container with no text candidate is `empty_completion_set`; a corrupt
+  // `type:'text'` block is `malformed_block`.
   it.each([
-    ['no content field', {}],
-    ['a non-array content', { content: 'hi' }],
-    ['an empty content array', { content: [] }],
-    ['only non-text blocks', { content: [{ type: 'tool_use', id: 't', name: 'x', input: {} }] }],
+    ['no content field', {}, 'absent_content'],
+    ['a non-array content', { content: 'hi' }, 'absent_content'],
+    ['an empty content array', { content: [] }, 'empty_completion_set'],
+    [
+      'only non-text blocks',
+      { content: [{ type: 'tool_use', id: 't', name: 'x', input: {} }] },
+      'empty_completion_set',
+    ],
     // A text-type block whose `text` is not a string is malformed, not a present
     // completion — it must route through the same absent-vs-present scrutiny.
-    ['a text block with a non-string text', { content: [{ type: 'text', text: 42 }] }],
-  ])('fails permanent when the 2xx body carries %s', async (_label, body) => {
+    [
+      'a text block with a non-string text',
+      { content: [{ type: 'text', text: 42 }] },
+      'malformed_block',
+    ],
+  ])('fails permanent (%s → %s) when the 2xx body carries it', async (_label, body, reason) => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, body));
     const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk-ant-key'));
     expect(events).toEqual([
       {
         type: 'failed',
         kind: 'permanent',
-        error: 'anthropic_api returned a 2xx response with no completion',
+        error: `anthropic_api returned a 2xx response with no completion (${reason})`,
       },
+    ]);
+  });
+
+  // #556 — a mix of a VALID text block and a malformed one still SUCCEEDS on the
+  // valid text (the sub-reason scrutiny only runs when there is zero valid text).
+  it('succeeds on a valid text block even alongside a malformed one', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, {
+        content: [
+          { type: 'text', text: 'hi' },
+          { type: 'text', text: 42 },
+        ],
+        stop_reason: 'end_turn',
+      }),
+    );
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk-ant-key'));
+    expect(events).toEqual([
+      { type: 'succeeded', outputs: { text: 'hi', stopReason: 'end_turn' } },
     ]);
   });
 

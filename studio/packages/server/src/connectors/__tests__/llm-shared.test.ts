@@ -1,16 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import { coerceStopReason, noCompletionFailure } from '../llm-shared.js';
 
-/** #461 — a 2xx with no readable completion is a permanent failure, adapter-named. */
+/** #461 — a 2xx with no readable completion is a permanent failure, adapter-named.
+ *  #556 — it carries a DIAGNOSTIC sub-reason; the retry class is `permanent` for
+ *  every reason, so no downstream behaviour branches on it. */
 describe('noCompletionFailure', () => {
-  it('is a permanent failure naming the adapter', () => {
-    expect(noCompletionFailure('openai_api')).toEqual({
+  it('is a permanent failure naming the adapter and the sub-reason', () => {
+    expect(noCompletionFailure('openai_api', 'absent_content')).toEqual({
       type: 'failed',
       kind: 'permanent',
-      error: 'openai_api returned a 2xx response with no completion',
+      error: 'openai_api returned a 2xx response with no completion (absent_content)',
     });
-    expect(noCompletionFailure('anthropic_api').error).toContain('anthropic_api');
-    expect(noCompletionFailure('ollama').error).toContain('ollama');
+    expect(noCompletionFailure('anthropic_api', 'malformed_block').error).toContain(
+      'anthropic_api',
+    );
+    expect(noCompletionFailure('ollama', 'malformed_block').error).toContain('ollama');
+  });
+
+  it('stays `permanent` for every sub-reason (the reason is diagnostic only)', () => {
+    for (const reason of ['absent_content', 'malformed_block', 'empty_completion_set'] as const) {
+      const event = noCompletionFailure('openai_api', reason);
+      expect(event.kind).toBe('permanent');
+      expect(event.error).toContain(`(${reason})`);
+    }
   });
 });
 

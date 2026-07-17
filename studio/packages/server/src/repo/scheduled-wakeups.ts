@@ -9,6 +9,7 @@ import {
 } from '@autonomy-studio/shared';
 import { scheduledWakeups } from '../db/schema.js';
 import { newId } from './ids.js';
+import { drainByBatches } from './retention.js';
 import type { Db } from './types.js';
 
 /**
@@ -233,50 +234,23 @@ export function pruneSettledWakeups(db: Db, opts: { before: number; limit?: numb
   return deleted.length;
 }
 
-/** Default per-batch bound for `drainSettledWakeups` — big enough that a normal
- * sweep is one batch, small enough that a months-deep backlog is pruned in
- * bounded DELETEs rather than one statement holding the single writer lock. */
-export const RETENTION_BATCH = 1_000;
-
-/**
- * Cap on batches a RECURRING sweep prunes per invocation (≤ 50k rows/tick).
- * better-sqlite3 is synchronous and the server is single-threaded, so an
- * UNBOUNDED drain-to-fixpoint on the hourly timer would block all in-flight HTTP
- * requests for its whole duration if a backlog ever accumulated during operation
- * (retention re-enabled after being off, a long pause). Bounding each recurring
- * sweep keeps that stall short; the leftover of a large backlog drains across the
- * following sweeps (each batch is a fast indexed DELETE). The BOOT sweep passes
- * no cap — a one-time full drain before the server accepts requests.
- */
-export const RETENTION_MAX_BATCHES_PER_SWEEP = 50;
-
 /**
  * #464 — drain settled rows older than `before` in bounded batches until a batch
  * comes back short (the fixpoint) OR `maxBatches` is reached. Returns the total
  * deleted. Pure over the clock — the caller passes `before = now - retentionMs`.
  *
- * Signature mirrors `pruneSettledWakeups`' options object. `batch` defaults to
- * `RETENTION_BATCH` and is clamped to ≥ 1 so a mistaken `batch <= 0` (which would
- * prune 0 rows forever, since `0 < 0` never breaks the loop) can never spin.
- * `maxBatches` (default unbounded) caps a single invocation so the recurring
- * sweep can bound its blocking — see `RETENTION_MAX_BATCHES_PER_SWEEP`.
+ * Signature mirrors `pruneSettledWakeups`' options object; the batching loop is
+ * the shared `drainByBatches` (see `./retention.ts` — the identical discipline
+ * the `webhook_deliveries` sweep uses).
  */
 export function drainSettledWakeups(
   db: Db,
   opts: { before: number; batch?: number; maxBatches?: number },
 ): number {
-  const batch = Math.max(1, opts.batch ?? RETENTION_BATCH);
-  const maxBatches = opts.maxBatches ?? Infinity;
-  let total = 0;
-  let batches = 0;
-  for (;;) {
-    if (batches >= maxBatches) break;
-    const n = pruneSettledWakeups(db, { before: opts.before, limit: batch });
-    total += n;
-    batches++;
-    if (n < batch) break;
-  }
-  return total;
+  return drainByBatches((limit) => pruneSettledWakeups(db, { before: opts.before, limit }), {
+    batch: opts.batch,
+    maxBatches: opts.maxBatches,
+  });
 }
 
 export function getWakeupByKey(db: Db, kind: string, dedupeKey: string): ScheduledWakeup | null {

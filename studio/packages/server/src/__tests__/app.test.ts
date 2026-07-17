@@ -6,11 +6,19 @@ import type { FastifyInstance } from 'fastify';
 import {
   buildApp,
   DEFAULT_WAKEUP_RETENTION_MS,
+  DEFAULT_WEBHOOK_RETENTION_MS,
   resolvePort,
   resolveRetentionMs,
 } from '../index.js';
+import { eq } from 'drizzle-orm';
+import { CATALOG_VERSION, type NewTrigger } from '@autonomy-studio/shared';
 import { openDb } from '../db/client.js';
+import { webhookDeliveries } from '../db/schema.js';
 import { armWakeup, getWakeup, settleWakeup } from '../repo/scheduled-wakeups.js';
+import { createPipeline } from '../repo/pipelines.js';
+import { createPipelineVersion } from '../repo/pipeline-versions.js';
+import { createTrigger } from '../repo/triggers.js';
+import { claimWebhookDelivery, getWebhookDelivery } from '../repo/webhook-deliveries.js';
 
 // `dbPath`/`masterKeyFile` are passed as call-time options to `buildApp()`
 // rather than via `process.env` — `process.env` is process-global and
@@ -35,23 +43,30 @@ describe('resolvePort', () => {
   });
 });
 
-describe('resolveRetentionMs (#464)', () => {
+describe('resolveRetentionMs (#464/#421)', () => {
   const MS_PER_DAY = 24 * 60 * 60 * 1000;
-  it('defaults to 30 days when unset or empty', () => {
-    expect(resolveRetentionMs(undefined)).toBe(DEFAULT_WAKEUP_RETENTION_MS);
-    expect(resolveRetentionMs('')).toBe(DEFAULT_WAKEUP_RETENTION_MS);
+  const wakeup = { envName: 'WAKEUP_RETENTION_DAYS', defaultMs: DEFAULT_WAKEUP_RETENTION_MS };
+  it('defaults to the given defaultMs when unset or empty', () => {
+    expect(resolveRetentionMs(undefined, wakeup)).toBe(DEFAULT_WAKEUP_RETENTION_MS);
+    expect(resolveRetentionMs('', wakeup)).toBe(DEFAULT_WAKEUP_RETENTION_MS);
     expect(DEFAULT_WAKEUP_RETENTION_MS).toBe(30 * MS_PER_DAY);
   });
   it('parses a day count into ms', () => {
-    expect(resolveRetentionMs('7')).toBe(7 * MS_PER_DAY);
+    expect(resolveRetentionMs('7', wakeup)).toBe(7 * MS_PER_DAY);
   });
   it('treats 0 as retention DISABLED', () => {
-    expect(resolveRetentionMs('0')).toBe(0);
+    expect(resolveRetentionMs('0', wakeup)).toBe(0);
   });
   it('throws (never NaN) on a non-integer or negative value', () => {
-    expect(() => resolveRetentionMs('abc')).toThrow(/Invalid WAKEUP_RETENTION_DAYS/);
-    expect(() => resolveRetentionMs('-1')).toThrow(/Invalid WAKEUP_RETENTION_DAYS/);
-    expect(() => resolveRetentionMs('1.5')).toThrow(/Invalid WAKEUP_RETENTION_DAYS/);
+    expect(() => resolveRetentionMs('abc', wakeup)).toThrow(/Invalid WAKEUP_RETENTION_DAYS/);
+    expect(() => resolveRetentionMs('-1', wakeup)).toThrow(/Invalid WAKEUP_RETENTION_DAYS/);
+    expect(() => resolveRetentionMs('1.5', wakeup)).toThrow(/Invalid WAKEUP_RETENTION_DAYS/);
+  });
+  it('#421 — carries the given envName + defaultMs (a webhook typo blames the webhook var)', () => {
+    const webhook = { envName: 'WEBHOOK_RETENTION_DAYS', defaultMs: DEFAULT_WEBHOOK_RETENTION_MS };
+    expect(resolveRetentionMs(undefined, webhook)).toBe(DEFAULT_WEBHOOK_RETENTION_MS);
+    expect(DEFAULT_WEBHOOK_RETENTION_MS).toBe(30 * MS_PER_DAY);
+    expect(() => resolveRetentionMs('nope', webhook)).toThrow(/Invalid WEBHOOK_RETENTION_DAYS/);
   });
 });
 
@@ -180,6 +195,102 @@ describe('#464 — retention boot sweep', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('#421 — webhook-deliveries retention boot sweep', () => {
+  /** Seed a trigger + one OLD and one FRESH webhook delivery (backdating the old
+   * one's `receivedAt` past the floor), close the handle, and return the ids so a
+   * booted app reopening the same file can be checked. */
+  function seedWebhookBacklog(path: string): {
+    triggerId: string;
+    oldKey: string;
+    freshKey: string;
+  } {
+    const seed = openDb(path);
+    const pipeline = createPipeline(seed.db, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(seed.db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    const input: NewTrigger = {
+      ownerId: 'local',
+      name: 'Hook',
+      pipelineVersionId: version.id,
+      params: {},
+      mode: 'webhook',
+      schedule: null,
+      webhook: null,
+      concurrency: { policy: 'parallel', max: 5 },
+      runWindows: null,
+      enabled: true,
+    };
+    const triggerId = createTrigger(seed.db, input).id;
+    const old = claimWebhookDelivery(seed.db, { triggerId, idempotencyKey: 'old' });
+    seed.db
+      .update(webhookDeliveries)
+      .set({ receivedAt: 1 }) // 1970 — far past any floor
+      .where(eq(webhookDeliveries.id, old.id))
+      .run();
+    claimWebhookDelivery(seed.db, { triggerId, idempotencyKey: 'fresh' }); // stamped now
+    seed.sqlite.close();
+    return { triggerId, oldKey: 'old', freshKey: 'fresh' };
+  }
+
+  it('prunes an aged delivery on boot, keeping fresh rows', async () => {
+    const path = join(tmpDir, 'webhook-retention-on.sqlite');
+    const { triggerId, oldKey, freshKey } = seedWebhookBacklog(path);
+
+    const app = await buildApp({
+      dbPath: path,
+      masterKeyFile: join(tmpDir, 'webhook-retention-on.key'),
+      webhookRetentionMs: 24 * 60 * 60 * 1000, // 1-day floor
+      wakeupRetentionMs: 0, // isolate the webhook sweep
+    });
+    await app.ready();
+
+    const check = openDb(path);
+    expect(getWebhookDelivery(check.db, triggerId, oldKey)).toBeNull(); // pruned
+    expect(getWebhookDelivery(check.db, triggerId, freshKey)?.idempotencyKey).toBe(freshKey); // kept
+    check.sqlite.close();
+    await app.close();
+  });
+
+  it('prunes NOTHING when webhook retention is disabled (webhookRetentionMs: 0)', async () => {
+    const path = join(tmpDir, 'webhook-retention-off.sqlite');
+    const { triggerId, oldKey } = seedWebhookBacklog(path);
+
+    const app = await buildApp({
+      dbPath: path,
+      masterKeyFile: join(tmpDir, 'webhook-retention-off.key'),
+      webhookRetentionMs: 0,
+      wakeupRetentionMs: 0,
+    });
+    await app.ready();
+
+    const check = openDb(path);
+    expect(getWebhookDelivery(check.db, triggerId, oldKey)?.idempotencyKey).toBe(oldKey); // sweep off
+    check.sqlite.close();
+    await app.close();
+  });
+
+  // A bad webhook window must reject BEFORE the (enabled) wakeup sweep's interval
+  // is armed — the boot error path runs before `onClose` is wired, so an interval
+  // armed then abandoned would keep firing against the open db. Enabling wakeup
+  // retention here (rather than disabling it) exercises that ordering.
+  it('rejects a negative webhookRetentionMs even with the wakeup sweep enabled', async () => {
+    await expect(
+      buildApp({
+        dbPath: join(tmpDir, 'webhook-retention-badms.sqlite'),
+        masterKeyFile: join(tmpDir, 'webhook-retention-badms.key'),
+        webhookRetentionMs: -1,
+        wakeupRetentionMs: 1_000,
+      }),
+    ).rejects.toThrow(/webhookRetentionMs/);
   });
 });
 

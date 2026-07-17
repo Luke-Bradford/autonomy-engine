@@ -52,21 +52,34 @@ describe('openaiAdapter.runActivity', () => {
   // #461 — a 2xx with NO readable completion is a permanent failure, not
   // `succeeded{text:''}`: the completion is the activity's product, and an
   // absent/degenerate response structure means the provider returned no product.
+  //
+  // #556 — sub-reason (diagnostic; retry class stays `permanent`): an absent/
+  // non-array `choices` container is `absent_content`; a present-but-empty
+  // `choices:[]` is `empty_completion_set`; a candidate present but its
+  // `message.content` non-string/absent is `malformed_block`.
   it.each([
-    ['no choices field at all', {}],
-    ['an empty choices array', { choices: [] }],
-    ['a choice with no message', { choices: [{ finish_reason: 'stop' }] }],
-    ['a message with no content', { choices: [{ message: { role: 'assistant' } }] }],
-    ['a non-string content', { choices: [{ message: { content: 42 } }] }],
-    ['a null content (tool-call shape)', { choices: [{ message: { content: null } }] }],
-  ])('fails permanent when the 2xx body carries %s', async (_label, body) => {
+    ['no choices field at all', {}, 'absent_content'],
+    ['an empty choices array', { choices: [] }, 'empty_completion_set'],
+    ['a choice with no message', { choices: [{ finish_reason: 'stop' }] }, 'malformed_block'],
+    [
+      'a message with no content',
+      { choices: [{ message: { role: 'assistant' } }] },
+      'malformed_block',
+    ],
+    ['a non-string content', { choices: [{ message: { content: 42 } }] }, 'malformed_block'],
+    [
+      'a null content (tool-call shape)',
+      { choices: [{ message: { content: null } }] },
+      'malformed_block',
+    ],
+  ])('fails permanent (%s → %s) when the 2xx body carries it', async (_label, body, reason) => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, body));
     const events = await drain(openaiAdapter.runActivity(ctx(), 'sk-oai'));
     expect(events).toEqual([
       {
         type: 'failed',
         kind: 'permanent',
-        error: 'openai_api returned a 2xx response with no completion',
+        error: `openai_api returned a 2xx response with no completion (${reason})`,
       },
     ]);
   });

@@ -265,8 +265,12 @@ What the hardened blocks above said, and what actually shipped:
   `unref`'d sweep in `buildApp`, served by a partial `scheduled_wakeups_retention_idx` on `fired_at`
   over settled rows. Safe because every current kind's re-arm window (minutes–hours) is orders of
   magnitude inside the floor, so a fired key is never freed while it could still be re-armed (the full
-  per-kind argument is in `repo/scheduled-wakeups.ts`). `webhook_deliveries` still has the sibling gap
-  (#421); the two were deliberately NOT merged into one retention mechanism yet.
+  per-kind argument is in `repo/scheduled-wakeups.ts`). The sibling `webhook_deliveries` gap is now
+  ALSO closed (#421): `WEBHOOK_RETENTION_DAYS` (default 30 days; `0` disables) drives
+  `pruneWebhookDeliveries`/`drainWebhookDeliveries` on the same boot + hourly `unref`'d sweep, sharing
+  the batching machinery (`repo/retention.ts`'s `drainByBatches`) but pruning by age across all
+  outcomes (a `webhook_deliveries` row has no settled-resurrection invariant — see that repo's safety
+  note). The two remain SEPARATE mechanisms over one shared batching primitive, not one merged sweep.
 - **NOT wired into `buildApp`.** The clock is constructed by its first consumer (F2b), rather than
   this ticket shipping an inert boot path with an empty registry.
 
