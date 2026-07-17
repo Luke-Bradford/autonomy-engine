@@ -15,6 +15,7 @@ import { createRunEventBus } from './run/event-bus.js';
 import { createScheduler } from './scheduler/scheduler.js';
 import { createAlarmClock, type AlarmClock } from './scheduler/alarms.js';
 import { createRetryAlarmHandler } from './scheduler/retry-alarm.js';
+import { createScheduleTickHandler } from './scheduler/schedule-tick.js';
 import { createConnectorRegistry } from './connectors/registry.js';
 import { makeDocResolver } from './run/driver.js';
 import type { DocResolver, RetryAlarms } from './run/driver.js';
@@ -184,9 +185,21 @@ export async function buildApp(opts?: BuildAppOptions) {
     bus: runEventBus,
     log: fastify.log,
   };
+  // #5 S5 — the `schedule_tick` handler moves schedule triggers off in-memory
+  // crons onto this same durable clock. Its only extra dependency is the launcher
+  // (to SPAWN a run, which the clock's contract forbids inside a fire tx — so it
+  // goes via `afterCommit`). The launcher is constructed below, after the clock,
+  // so a lazy closure resolves it at fire time — the identical pattern to
+  // `alarms.arm` above, and safe for the identical reason (called long after this
+  // body returns). The boot `tick()` that could fire it runs AFTER `runLauncher`
+  // is assigned (see the reordered wiring below).
+  const scheduleTickHandler = createScheduleTickHandler({
+    launcher: { fire: (t) => runLauncher.fire(t) },
+    log: fastify.log,
+  });
   const alarmClock: AlarmClock = createAlarmClock({
     db,
-    handlers: [createRetryAlarmHandler(driverBoundary)],
+    handlers: [createRetryAlarmHandler(driverBoundary), scheduleTickHandler],
     bus: runEventBus,
     log: fastify.log,
   });
@@ -209,40 +222,46 @@ export async function buildApp(opts?: BuildAppOptions) {
   });
   fastify.log.info({ reconcileReport }, 'boot reconcile complete');
 
+  // P4a: the run launcher — the one place a trigger becomes a run (manual fire,
+  // the scheduler, and webhooks all reuse it). Per-app, sharing this instance's
+  // driver boundary (db + doc resolver + real executor), so "unbound never fires"
+  // + concurrency admission are enforced in ONE place. Built BEFORE the boot tick
+  // below so the `schedule_tick` handler's lazy `fire` closure can resolve it if
+  // a schedule row is already due at boot (#5 S5).
+  const runLauncher = createRunLauncher({ ...driverBoundary });
+  fastify.decorate('runLauncher', runLauncher);
+
+  // P4b/#5 S5: the schedule RECONCILER — reconciles the durable `schedule_tick`
+  // outbox rows against the DB's schedulable triggers (croner is a CALCULATOR
+  // now, not a firing source). Per-app; trigger routes re-`sync()` it after any
+  // write, and this boot `sync()` SEEDS whatever is already enabled — done BEFORE
+  // the boot tick so a freshly-seeded row that is already due fires on that tick.
+  const scheduler = createScheduler({ db, arm: alarmClock.arm, log: fastify.log });
+  fastify.decorate('scheduler', scheduler);
+  scheduler.sync();
+
   // The clock is a SCAN, not a per-alarm timer: one tick sweeps every due row of
-  // every registered kind. The interval bounds retry LATENESS (an alarm fires at
-  // most this late), which `WakeupDelivery.latenessMs` reports honestly. It is
-  // `unref`'d so a pending tick can never hold the process open at shutdown.
+  // every registered kind (retry + schedule ticks). The interval bounds LATENESS
+  // (an alarm fires at most this late), which `WakeupDelivery.latenessMs` reports
+  // honestly. It is `unref`'d so a pending tick can never hold the process open at
+  // shutdown.
   //
   // Started strictly AFTER the reconcile above has been AWAITED, and that order is
   // load-bearing (`reconcile.ts` documents the other half). The boot reconciler
   // pumps runs WITHOUT the drive lock, which is safe only while it is the sole
   // pump source; a 1s tick running against a run it is mid-`pump` on would be the
-  // two-concurrent-drives divergence F2c exists to prevent. Nothing else can pump
-  // yet either — the launcher and scheduler are constructed below.
+  // two-concurrent-drives divergence F2c exists to prevent. The launcher +
+  // scheduler are constructed above but neither pumps until this tick fires a due
+  // row, which is after the awaited reconcile — so the invariant holds.
   const alarmTimer = setInterval(() => alarmClock.tick(), ALARM_TICK_MS);
   alarmTimer.unref();
 
-  // A held run's alarm may already be due (it was armed before the crash, and
-  // the process was down past its `dueAt`). Sweep once at boot so a retry that
-  // came due during downtime fires now rather than at the first interval — this
-  // is S1's "re-armed at boot", and the durable row is what makes it possible.
+  // A held retry alarm OR a schedule tick may already be due (armed before the
+  // crash, the process down past its `dueAt`). Sweep once at boot so it fires now
+  // rather than at the first interval — S1's "re-armed at boot", the durable row
+  // is what makes it possible. ≤1 late fire for schedule ticks: exactly one row
+  // per trigger goes overdue, and the handler arms the next FUTURE occurrence.
   alarmClock.tick();
-
-  // P4a: the run launcher — the one place a trigger becomes a run (manual fire
-  // now; the scheduler + webhooks reuse it in P4b/P4c). Per-app, sharing this
-  // instance's driver boundary (db + doc resolver + real executor), so
-  // "unbound never fires" + concurrency admission are enforced in ONE place.
-  const runLauncher = createRunLauncher({ ...driverBoundary });
-  fastify.decorate('runLauncher', runLauncher);
-
-  // P4b: the scheduler — fires `schedule`-mode triggers on their cron (UTC)
-  // through the launcher above, gated by each trigger's run windows. Per-app
-  // (mirrors the launcher/supervisor); trigger routes re-`sync()` it after any
-  // write, and `sync()` here schedules whatever is already enabled at boot.
-  const scheduler = createScheduler({ db, launcher: runLauncher, log: fastify.log });
-  fastify.decorate('scheduler', scheduler);
-  scheduler.sync();
 
   // Auth seam + the one global error handler, registered before any route so
   // every request (and every thrown error) is covered.

@@ -103,7 +103,7 @@ a worker, heartbeats; a **lease-expiry alarm** (S1) reclaims a dead worker's run
 | S2 | Migrate `wait` (#4) + `webhook`-expiry (#4) onto S1 |
 | S3 | Run lifecycle status model (`pending|queued|running|waiting|terminal` + reason) — all transitions durable events |
 | S4 | Lease/slot release for `queued`+`waiting` runs (split execution-lease from lifecycle) |
-| S5 | Recurrence model + croner-as-calculator producing wakeup rows + schedule catch-up (no-backfill, ≤1 late) |
+| S5 | Recurrence model + croner-as-calculator producing wakeup rows + schedule catch-up (no-backfill, ≤1 late). **S5a SHIPPED** the croner-as-calculator + catch-up halves (durable `schedule_tick` rows replace in-memory crons — see the "S5a — SHIPPED" block below); the ADF **recurrence MODEL** is split out to **S5b**. |
 | S6 | Admission: per-trigger + per-pipeline (both-must-pass) + fair queue (durable `queuedAt`, round-robin) |
 | S7 | Lease-expiry reclaim with generation tokens (on S1) + boot-reconcile formalization |
 | S8 | Event/webhook trigger firing via event bus + `externalWait` (with #4 A13) |
@@ -265,8 +265,53 @@ What the hardened blocks above said, and what actually shipped:
 - **NOT wired into `buildApp`.** The clock is constructed by its first consumer (F2b), rather than
   this ticket shipping an inert boot path with an empty registry.
 
+## S5a — SHIPPED (durable schedule ticks; the croner-as-calculator half of S5)
+
+S5 as tabled bundles three things: (1) croner-as-CALCULATOR producing durable wakeup rows,
+(2) schedule catch-up, (3) the ADF **recurrence MODEL** (`{frequency, interval, schedule?, …}`).
+S5a ships (1)+(2) and defers (3) to **S5b** — a clean cut along a real seam: the calculator consumes
+a cron *string* whether hand-authored or compiled from the recurrence object, and the object pairs
+with the UI recurrence builder (U14b, already a non-goal here). What shipped:
+
+- **Croner is now a CALCULATOR, never a firing source.** `scheduler/recurrence.ts:nextOccurrence`
+  computes the next fire time (UTC, strictly-after); `scheduler/schedule-tick.ts` is the
+  `schedule_tick` alarm HANDLER; `scheduler/scheduler.ts` is now a RECONCILER that seeds/cancels the
+  durable `schedule_tick` rows. The old in-memory `Cron`-per-trigger (a restart silently lost its
+  pending tick) is gone.
+- **The chain = one pending row per trigger.** Reconciler seeds occurrence 1; the handler, INSIDE the
+  clock's transaction, arms occurrence *n+1* atomically with settling *n*, then fires the launcher in
+  `afterCommit` (spec line 250's mandate — `launcher.fire` spawns a run and must never run inside the
+  fire tx). A crash between commit and the launcher fire still leaves the next occurrence armed.
+- **≤1-late-fire / no-backfill is STRUCTURAL, so the `#463` catchUp field is NOT added here.** Because
+  exactly one row per trigger goes overdue during downtime, boot fires it once and
+  `nextOccurrence(firedAt)` returns the next FUTURE slot (missed slots skipped). `fire`/`coalesce`/
+  `skip` only matters when a kind arms MULTIPLE overdue rows — that is **S10 tumbling backfill**, the
+  field's real first consumer. **#463 is re-scoped to S10, not closed by S5a.**
+- **`ref = {triggerId, schedule}`** — a safe superset of the spec's "cron ref = the trigger". Carrying
+  the armed schedule string lets a schedule EDIT be detected at fire time (`schedule_changed`
+  suppression, no re-arm — the reconciler seeds the new chain) and lets the reconciler tell a stale
+  row from a current one. The `tick-<dueEpoch>` discriminator still supplies the anti-silent-never-arm
+  guarantee.
+- **AMENDED — the named `trigger.fireSuppressed`/`fireSkipped` events (lines 137, 152, 193, 237–240)
+  are NOT emitted in v1.** There is no trigger-scoped event log to append them to (a run log only
+  exists once a run is created). A suppressed tick's durable trace is the settled `scheduled_wakeups`
+  row's persisted `status` + `firedAt` (lateness is derivable against its `dueAt`; `latenessMs` itself
+  is a computed `WakeupDelivery` field, not a column); the same treatment the retry handler gives its
+  own suppressions (settle-only, reason debug-logged). A trigger-lifecycle event log is deferred to
+  **S6 / the observability read-model** (#overview 11). Recorded here rather than dropped silently.
+- **S3 (lifecycle status model) / S4 (lease release) are NOT prerequisites** for S5a — a schedule fire
+  routes through the existing launcher/manual-fire path and needs no `queued`/`waiting` status.
+- **Known properties (inherent, acceptable, better than the in-memory status quo):** a closed run
+  window still writes one settled `suppressed` row per skipped occurrence (retention is #464,
+  unsolved for every kind); a crash or an `UnboundTriggerError` race between commit and the
+  `afterCommit` launcher fire loses that ONE occurrence's run (at-least-once is on the *alarm*, not
+  the *run*; spec line 250) — the schedule itself survives because the next occurrence is already
+  armed. **S5b (recurrence object)** must additionally honour `startTime`/`endTime` bounds; v1 relies
+  solely on croner returning `null` for a finite/exhausted cron.
+
 ## Non-goals
 
+- The **ADF recurrence MODEL** (`{frequency, interval, …}`) — S5b (see the S5a note above).
 - Broad event sources (file/queue/db-change) beyond HTTP/webhook — later.
 - Cross-trigger dependency graphs beyond tumbling self-dependency — later.
 - The UI recurrence/trigger builder (UI U14b renders this).

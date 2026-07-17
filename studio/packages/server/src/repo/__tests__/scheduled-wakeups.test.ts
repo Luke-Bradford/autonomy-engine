@@ -7,6 +7,8 @@ import { openDb } from '../../db/client.js';
 import {
   armWakeup,
   cancelWakeup,
+  deleteWakeup,
+  getWakeup,
   getWakeupByKey,
   listDueWakeups,
   listPendingWakeups,
@@ -244,5 +246,26 @@ describe('#5 S1 — settle / cancel', () => {
     settleWakeup(db, row.id, { status: 'fired', firedAt: 5_000 });
     expect(cancelWakeup(db, row.id, 9_000)).toBeNull();
     expect(getWakeupByKey(db, 'retry', row.dedupeKey)?.status).toBe('fired');
+  });
+
+  it('deleteWakeup removes a pending row and FREES its (kind, dedupeKey)', () => {
+    // The property the schedule reconciler needs: after a delete, re-arming the
+    // SAME (kind, dedupeKey) inserts a fresh PENDING row rather than returning a
+    // dead one — the collision `cancelWakeup` would leave.
+    const row = armRetry(db, 'attempt-1');
+    expect(deleteWakeup(db, row.id)?.id).toBe(row.id);
+    expect(getWakeup(db, row.id)).toBeNull();
+    expect(listPendingWakeups(db)).toHaveLength(0);
+
+    const rearmed = armRetry(db, 'attempt-1');
+    expect(rearmed.status).toBe('pending');
+    expect(listPendingWakeups(db)).toHaveLength(1);
+  });
+
+  it('deleteWakeup REFUSES a settled row — a fired outcome is permanent', () => {
+    const row = armRetry(db, 'attempt-1');
+    settleWakeup(db, row.id, { status: 'fired', firedAt: 5_000 });
+    expect(deleteWakeup(db, row.id)).toBeNull();
+    expect(getWakeup(db, row.id)?.status).toBe('fired');
   });
 });

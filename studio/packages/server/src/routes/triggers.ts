@@ -84,8 +84,8 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
     assertBindableIfEnabled(body.enabled, body.pipelineVersionId);
     requireOwnedPipelineVersion(db, body.pipelineVersionId, request.principal);
     const created = createTrigger(db, { ...body, ownerId: request.principal.ownerId });
-    // Reconcile the scheduler so a newly-enabled schedule trigger starts ticking
-    // without waiting for a restart (a no-op for a non-schedule trigger).
+    // Reconcile the durable `schedule_tick` rows so a newly-enabled schedule
+    // trigger is seeded immediately (a no-op for a non-schedule trigger).
     fastify.scheduler.sync();
     reply.status(201).send(toPublic(created));
   });
@@ -123,8 +123,9 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
     assertBindableIfEnabled(effEnabled, effPipelineVersionId);
     const updated = updateTrigger(db, existing.id, body);
     if (!updated) throw new NotFoundError('trigger', existing.id);
-    // Reconcile: a patch may enable/disable, rebind, change the cron, or switch
-    // mode — each of which adds, drops, or re-schedules this trigger's cron.
+    // Reconcile: a patch may enable/disable, rebind, change the schedule, or
+    // switch mode — each of which seeds, cancels, or re-seeds this trigger's
+    // durable `schedule_tick` row.
     fastify.scheduler.sync();
     return toPublic(updated);
   });
@@ -137,7 +138,8 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
       request.params.id,
     );
     deleteTrigger(db, existing.id);
-    // Reconcile so the deleted trigger's cron (if any) is stopped immediately.
+    // Reconcile so the deleted trigger's pending `schedule_tick` row (if any) is
+    // cancelled immediately.
     fastify.scheduler.sync();
     reply.status(204).send();
   });
