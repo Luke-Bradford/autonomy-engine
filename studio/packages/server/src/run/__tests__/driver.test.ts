@@ -15,7 +15,14 @@ import { createRun, getRun } from '../../repo/runs.js';
 import { runs } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { buildEngine, pump, startRun, type DocResolver, type DriverDeps } from '../driver.js';
+import {
+  buildEngine,
+  pump,
+  startRun,
+  terminalizeInterrupted,
+  type DocResolver,
+  type DriverDeps,
+} from '../driver.js';
 import { appendEngineEvent, loadEngineEvents } from '../events.js';
 import { createRunEventBus } from '../event-bus.js';
 import { listRunDiagnostics } from '../../repo/run-diagnostics.js';
@@ -116,6 +123,58 @@ describe('driver — startRun happy path', () => {
     const replayed = engine.projectRunState(loadEngineEvents(db, run.id));
     expect(replayed).toEqual(driven);
     expect(replayed.status).toBe('success');
+  });
+});
+
+describe('driver — startRun trigger context (#5 S12)', () => {
+  it('appends run.triggerContext BEFORE run.started and folds it into state', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a', { config: { at: '${trigger.scheduledTime}' } })]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db), run, {
+      triggerId: 'trg-1',
+      scheduledTime: '2026-07-17T09:00:00.000Z',
+      body: null,
+    });
+
+    expect(types(loadEngineEvents(db, run.id))[0]).toBe('run.triggerContext');
+    expect(types(loadEngineEvents(db, run.id))[1]).toBe('run.started');
+    expect(state.triggerContext).toEqual({
+      triggerId: 'trg-1',
+      scheduledTime: '2026-07-17T09:00:00.000Z',
+      body: null,
+    });
+  });
+
+  it('appends NO run.triggerContext when a run is started without a trigger', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db), run);
+
+    expect(types(loadEngineEvents(db, run.id))[0]).toBe('run.started');
+    expect(types(loadEngineEvents(db, run.id))).not.toContain('run.triggerContext');
+    expect(state.triggerContext).toBeNull();
+  });
+
+  // G2 (plan review): a run whose ONLY durable event is run.triggerContext (the
+  // run.started append faulted after it committed) must NOT be left a pending
+  // zombie — run.interrupted folds to a no-op on a pending state, so the row is
+  // patched directly to interrupted instead of synced to pending.
+  it('terminalizeInterrupted patches a lone-run.triggerContext run to interrupted, not pending', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const run = seedRun(db, pvId);
+    const bus = createRunEventBus();
+    appendEngineEvent(db, { type: 'run.triggerContext', runId: run.id, triggerId: 'trg-1' }, bus);
+
+    terminalizeInterrupted({ ...deps(db), bus }, run.id);
+
+    expect(getRun(db, run.id)?.status).toBe('interrupted');
+    // The log stays authoritative — a run.interrupted fact was appended.
+    expect(types(loadEngineEvents(db, run.id))).toEqual(['run.triggerContext', 'run.interrupted']);
   });
 });
 

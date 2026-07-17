@@ -22,6 +22,7 @@ function ctx(over: Partial<SubstitutionContext> = {}): SubstitutionContext {
     nodeOutputs: over.nodeOutputs ?? {},
     nodeStatuses: over.nodeStatuses ?? {},
     run: over.run ?? {},
+    trigger: over.trigger ?? {},
   };
 }
 

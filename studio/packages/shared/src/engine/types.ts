@@ -48,12 +48,21 @@ export type {
  *                readable by the expression language.
  * - `run`      — a CLOSED field set describing the current run's identity (see
  *                `RUN_FIELDS`). `${run.<field>}` may read only these names.
+ * - `trigger`  — the run's fire-time TRIGGER context (#5 S12), backing
+ *                `${trigger.<field>}` over a CLOSED field set (see
+ *                `TRIGGER_FIELDS`): `triggerId`, `scheduledTime` (the scheduled
+ *                occurrence for a `schedule` fire; `null` otherwise), and `body`
+ *                (the webhook/event/run-now payload; `json`, deep-addressable).
+ *                Its values are the durable `run.triggerContext` seed FACT folded
+ *                into `RunState.triggerContext` — never a fresh read — so every
+ *                field is stable across the whole run and identical on replay.
  */
 export interface SubstitutionContext {
   params: Record<string, unknown>;
   nodeOutputs: Record<string, Record<string, unknown>>;
   nodeStatuses: Record<string, NodeRunStatus>;
   run: Record<string, unknown>;
+  trigger: Record<string, unknown>;
 }
 
 /**
@@ -263,6 +272,27 @@ export type ContainerRunState = z.infer<typeof ContainerRunStateSchema>;
  * `sessions` (agent-session correlation) is defined for P3. All stay `{}` under
  * P2b's acyclic, container-free walk.
  */
+/**
+ * The run's fire-time TRIGGER context (#5 S12), folded from the durable
+ * `run.triggerContext` seed event and read by `${trigger.<field>}`.
+ *
+ * `triggerId` is the firing trigger (null for a run with no trigger — a child
+ * `call_pipeline` run, or a pre-S12 log). `scheduledTime` is the INTENDED
+ * scheduled occurrence (ISO-8601 UTC) for a `schedule` fire — the row's `dueAt`,
+ * never the possibly-late actual delivery — and `null` for a manual/webhook/event
+ * fire. `body` is the fire payload (webhook/event/run-now); `unknown` so it stays
+ * deep-addressable as `json` and carries no static shape.
+ *
+ * Deliberately NOT `.datetime()` on `scheduledTime` — a durable field with a
+ * format enum is a back-compat trap (same reasoning as `run.started.startedAt`).
+ */
+export const TriggerContextSchema = z.object({
+  triggerId: z.string().nullable(),
+  scheduledTime: z.string().nullable(),
+  body: z.unknown(),
+});
+export type TriggerContext = z.infer<typeof TriggerContextSchema>;
+
 export const RunStateSchema = z.object({
   runId: z.string(),
   pipelineVersionId: z.string(),
@@ -279,6 +309,13 @@ export const RunStateSchema = z.object({
   containers: z.record(z.string(), ContainerRunStateSchema),
   bounces: z.record(z.string(), z.number().int().nonnegative()),
   sessions: z.record(z.string(), z.unknown()),
+  /**
+   * The run's fire-time trigger context (#5 S12), seeded by `run.triggerContext`
+   * before `run.started` and carried across the started transition. `null` for a
+   * run with no trigger and for a pre-S12 log (which never carried the event), so
+   * `${trigger.*}` reads fall back to `null` deterministically on replay.
+   */
+  triggerContext: TriggerContextSchema.nullable(),
 });
 export type RunState = z.infer<typeof RunStateSchema>;
 
@@ -420,6 +457,21 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     startedAt: z.string().optional(),
     /** Already-resolved run params (post `resolveRunParams`, secrets stripped). */
     params: z.record(z.string(), z.unknown()),
+  }),
+  // #5 S12 — the durable fire-time TRIGGER context. Appended by the driver
+  // BEFORE `run.started` (it folds into the `pending` seed, so a root node's
+  // config can read `${trigger.*}` on the very first dispatch), and ONLY for a
+  // trigger-launched run — a child `call_pipeline` run carries none, so
+  // `RunState.triggerContext` stays `null` and `${trigger.*}` resolves `null`.
+  // `scheduledTime`/`body` are OPTIONAL (a manual fire carries neither) and fold
+  // to `null`; deliberately NOT `.datetime()` on `scheduledTime` for the same
+  // durable-back-compat reason as `run.started.startedAt`.
+  z.object({
+    type: z.literal('run.triggerContext'),
+    runId: z.string(),
+    triggerId: z.string().nullable(),
+    scheduledTime: z.string().optional(),
+    body: z.unknown().optional(),
   }),
   z.object({
     type: z.literal('node.dispatched'),

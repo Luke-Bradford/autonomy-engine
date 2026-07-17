@@ -3,7 +3,7 @@ import { isWithinRunWindows, type ScheduledWakeup, type Trigger } from '@autonom
 import { getTrigger } from '../repo/triggers.js';
 import { armWakeup } from '../repo/scheduled-wakeups.js';
 import type { Db } from '../repo/types.js';
-import { UnboundTriggerError, type FireResult } from '../run/launcher.js';
+import { UnboundTriggerError, type FireContext, type FireResult } from '../run/launcher.js';
 import type { WakeupFireResult, WakeupHandler } from './alarms.js';
 import { InvalidScheduleError, nextOccurrence } from './recurrence.js';
 // The log seam is byte-identical to the cron reconciler's and lives beside it —
@@ -96,7 +96,7 @@ export function isSchedulable(t: Trigger): boolean {
  * compile-time error — the shape guarantee the old `Pick<RunLauncher,'fire'>`
  * gave, kept without importing the whole launcher interface. */
 export interface ScheduleTickLauncher {
-  fire(trigger: Trigger): FireResult;
+  fire(trigger: Trigger, fireContext?: FireContext): FireResult;
 }
 
 export interface ScheduleTickDeps {
@@ -170,7 +170,13 @@ export function createScheduleTickHandler(deps: ScheduleTickDeps): WakeupHandler
         status: 'fired',
         afterCommit: () => {
           try {
-            launcher.fire(trigger);
+            // #5 S12 — seed `${trigger.scheduledTime}` with the INTENDED
+            // occurrence (`delivery.scheduledFor` = the row's `dueAt`), NOT the
+            // possibly-late actual `firedAt`, so a schedule expression reads the
+            // slot it was armed for and is identical on a boot-recovered late fire.
+            launcher.fire(trigger, {
+              scheduledTime: new Date(delivery.scheduledFor).toISOString(),
+            });
           } catch (err) {
             if (err instanceof UnboundTriggerError) {
               log.debug({ triggerId: trigger.id }, 'schedule tick: skip — trigger became unbound');

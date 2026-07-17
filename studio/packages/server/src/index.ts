@@ -194,7 +194,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   // body returns). The boot `tick()` that could fire it runs AFTER `runLauncher`
   // is assigned (see the reordered wiring below).
   const scheduleTickHandler = createScheduleTickHandler({
-    launcher: { fire: (t) => runLauncher.fire(t) },
+    launcher: { fire: (t, fc) => runLauncher.fire(t, fc) },
     log: fastify.log,
   });
   const alarmClock: AlarmClock = createAlarmClock({

@@ -92,6 +92,15 @@ export const RUN_FIELDS = [
 ] as const;
 
 /**
+ * The CLOSED `${trigger.<field>}` field set (#5 S12). `triggerId`/`scheduledTime`
+ * are strings (nullable at run time — a manual/child run carries neither, and a
+ * null throws only under deep addressing, exactly as the nullable `run` fields
+ * do). `body` is the fire payload, typed `json` so `${trigger.body.x}` deep-walks
+ * as the runtime-validated escape hatch (E7) rather than a static shape.
+ */
+export const TRIGGER_FIELDS = ['triggerId', 'scheduledTime', 'body'] as const;
+
+/**
  * A value that ISN'T THERE — a distinct error so `default()` (the one rescuing
  * function) can treat data absence as "use the fallback" while a typo'd param,
  * an out-of-scope `item` or a wrong SHAPE stays a hard error. Internal to this
@@ -164,7 +173,8 @@ type RefRoot =
   | { kind: 'params'; name: string; arity: 2 }
   | { kind: 'nodeOutput'; id: string; name: string; arity: 4 }
   | { kind: 'nodeStatus'; id: string; arity: 3 }
-  | { kind: 'run'; field: string; arity: 2 };
+  | { kind: 'run'; field: string; arity: 2 }
+  | { kind: 'trigger'; field: string; arity: 2 };
 
 function refRoot(fields: string[]): RefRoot | null {
   const [ns, a, b, c] = fields;
@@ -177,6 +187,8 @@ function refRoot(fields: string[]): RefRoot | null {
     return { kind: 'nodeStatus', id: a as string, arity: 3 };
   }
   if (ns === 'run' && fields.length >= 2) return { kind: 'run', field: a as string, arity: 2 };
+  if (ns === 'trigger' && fields.length >= 2)
+    return { kind: 'trigger', field: a as string, arity: 2 };
   return null;
 }
 
@@ -320,6 +332,16 @@ function resolveRoot(expr: Extract<Expr, { kind: 'ref' }>, root: RefRoot, env: E
       }
       return ctx.run[root.field];
     }
+    // `${trigger.<field>}` (#5 S12) — the fire-time trigger context. `buildCtx`
+    // always populates every TRIGGER_FIELDS name (null where the fire carried
+    // none), so a plain `SubstituteError` here means the AUTHOR named a field
+    // that does not exist — never a data-absence `default()` should rescue.
+    case 'trigger': {
+      if (!Object.prototype.hasOwnProperty.call(ctx.trigger, root.field)) {
+        throw new SubstituteError(`unknown trigger field \${trigger.${root.field}}`);
+      }
+      return ctx.trigger[root.field];
+    }
   }
 }
 
@@ -405,7 +427,8 @@ function stepField(cur: unknown, name: string, source: string): unknown {
  * `[expr]` — an array index, or a dynamic/quoted object key (spec #6 L40-41).
  *
  * A null/undefined INDEX is refused rather than coerced: `toStr(null)` is `''`,
- * and `run.triggerId` is seeded literal `null` for every run today, so
+ * and a nullable field like `run.triggerId` is `null` on any run WITHOUT a
+ * trigger (a child call_pipeline run, or a pre-S12 log), so
  * `${params.cfg[run.triggerId]}` would silently look up the own property `''`.
  * A null is never a key.
  */
@@ -1745,14 +1768,24 @@ function refRootType(root: RefRoot, scope: ScanScope): SigType {
     // `exitWhen`.
     case 'nodeStatus':
       return 'string';
-    // Every `RUN_FIELDS` member is a string. `triggerId`/`parentRunId` are seeded
-    // `null` by the reducer today (#5 owns the real seed), and typing them `any`
-    // instead would be strictly WEAKER, not safer: `any` additionally accepts
-    // `${add(run.triggerId, 1)}`, and the run-time null throws under either
-    // typing. The nullability gap is #5's to close, and no static type here can
-    // paper over it — `SigType` has no null.
+    // Every `RUN_FIELDS` member is a string. `run.triggerId` is now seeded from
+    // the `run.triggerContext` fact (#5 S12); `parentRunId` is still reducer-null
+    // until a child-run seed carries it. Typing a nullable field `any` instead
+    // would be strictly WEAKER, not safer: `any` additionally accepts
+    // `${add(run.parentRunId, 1)}`, and the run-time null throws under either
+    // typing. No static type here can paper over the nullability — `SigType` has
+    // no null.
     case 'run':
       return (RUN_FIELDS as readonly string[]).includes(root.field) ? 'string' : 'any';
+    // `${trigger.<field>}` (#5 S12). `triggerId`/`scheduledTime` are strings
+    // (nullable at run time, same as the nullable `run` fields above); `body` is
+    // an untyped `json` payload, so it is `any` — the escape hatch that lets
+    // `${trigger.body.x}` deep-address (the walk validates it at run time, E7).
+    // An unknown field also falls to `any` — `checkRefRoot` reports it once, and
+    // this avoids manufacturing a second error.
+    case 'trigger':
+      if (root.field === 'body') return 'any';
+      return (TRIGGER_FIELDS as readonly string[]).includes(root.field) ? 'string' : 'any';
   }
 }
 
@@ -2015,6 +2048,20 @@ function checkRefRoot(
       errors.push(
         `${where}: \${nodes.${id}.status} does not name an upstream node ` +
           '(a self, downstream, or unrelated node has no status here)',
+      );
+    }
+    return;
+  }
+  // `${trigger.<field>}` (#5 S12) — always AVAILABLE (a run-level seed, like
+  // `run`/`params`; there is no dominance question), so the only check is that
+  // the field is a known one. `softOk` is irrelevant: no trigger field is
+  // rescuable-absent — `body` is always present (null when the fire carried
+  // none), and a deep miss into it is E7's runtime walk, not a save-time error.
+  if (root.kind === 'trigger') {
+    if (!(TRIGGER_FIELDS as readonly string[]).includes(root.field)) {
+      errors.push(
+        `${where}: \${trigger.${root.field}} is not a known trigger field ` +
+          `(${TRIGGER_FIELDS.join(', ')})`,
       );
     }
     return;

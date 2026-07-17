@@ -771,8 +771,9 @@ export function createEngine(doc: EngineDoc): Engine {
   /**
    * Build the `${}` context. `nodeOutputs` is `state.outputs`, populated by
    * `node.succeeded` (and a `call.returned`, whose outputs are recorded even on
-   * a failing child) plus a container's projected outputs at exit. `triggerId`/
-   * `parentRunId` are not carried in `RunState` here, so they resolve to `null`.
+   * a failing child) plus a container's projected outputs at exit. `run.triggerId`
+   * now comes from `state.triggerContext` (the `run.triggerContext` seed, #5 S12);
+   * `parentRunId` is still not carried in `RunState`, so it resolves to `null`.
    *
    * `nodeStatuses` projects `state.nodes` down to bare statuses — the language
    * reads a node's verdict, never its `attempts`/`currentAttemptId` bookkeeping.
@@ -782,6 +783,7 @@ export function createEngine(doc: EngineDoc): Engine {
   function buildCtx(state: RunState): SubstitutionContext {
     const nodeStatuses: Record<string, NodeRunState['status']> = {};
     for (const [id, ns] of Object.entries(state.nodes)) nodeStatuses[id] = ns.status;
+    const tc = state.triggerContext;
     return {
       params: state.params,
       nodeOutputs: state.outputs,
@@ -790,8 +792,17 @@ export function createEngine(doc: EngineDoc): Engine {
         runId: state.runId,
         startedAt: state.startedAt,
         pipelineVersionId: state.pipelineVersionId,
-        triggerId: null,
+        triggerId: tc?.triggerId ?? null,
         parentRunId: null,
+      },
+      // The CLOSED `${trigger.*}` field set (#5 S12), flattened from the durable
+      // `run.triggerContext` seed. Every field is always present (null where the
+      // fire carried none) so `${trigger.scheduledTime}` resolves to `null`
+      // rather than throwing an unknown-field error on a manual/child run.
+      trigger: {
+        triggerId: tc?.triggerId ?? null,
+        scheduledTime: tc?.scheduledTime ?? null,
+        body: tc?.body ?? null,
       },
     };
   }
@@ -1392,6 +1403,34 @@ export function createEngine(doc: EngineDoc): Engine {
 
   // --- per-event reducers ---------------------------------------------------
 
+  // #5 S12 — fold the durable fire-time trigger context into the PRE-`run.started`
+  // seed. It must land while the run is still `pending` (the driver appends it
+  // immediately before `run.started`); a `run.triggerContext` arriving after the
+  // run has started is an impossible log and folds to a no-op + diagnostic rather
+  // than mutating a live run's identity.
+  function onRunTriggerContext(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'run.triggerContext' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    if (state.status !== 'pending') {
+      diagnostics.push('impossible run.triggerContext: the run has already started');
+      return { state, commands: [], diagnostics };
+    }
+    return {
+      state: {
+        ...state,
+        triggerContext: {
+          triggerId: event.triggerId,
+          scheduledTime: event.scheduledTime ?? null,
+          body: event.body ?? null,
+        },
+      },
+      commands: [],
+      diagnostics,
+    };
+  }
+
   function onRunStarted(
     state: RunState,
     event: Extract<EngineEvent, { type: 'run.started' }>,
@@ -1437,6 +1476,11 @@ export function createEngine(doc: EngineDoc): Engine {
       containers: containerStates,
       bounces: {},
       sessions: {},
+      // Carried across the started transition — the `run.triggerContext` seed
+      // (#5 S12) folds into the `pending` state BEFORE this event, and rebuilding
+      // `RunState` from scratch here would silently drop it, breaking
+      // `${trigger.*}` for every node dispatched by the settle below.
+      triggerContext: state.triggerContext,
     };
     return settle(started, diagnostics);
   }
@@ -1896,6 +1940,10 @@ export function createEngine(doc: EngineDoc): Engine {
 
     if (event.type === 'run.started') return onRunStarted(state, event, diagnostics);
 
+    // #5 S12 — handled BEFORE the `pending` early-return below, because it is the
+    // one non-`run.started` event that legitimately folds into a `pending` seed.
+    if (event.type === 'run.triggerContext') return onRunTriggerContext(state, event, diagnostics);
+
     if (state.status === 'pending') return { state, commands: [], diagnostics };
 
     if (event.runId !== state.runId) return { state, commands: [], diagnostics };
@@ -1981,6 +2029,7 @@ export function createEngine(doc: EngineDoc): Engine {
       containers: {},
       bounces: {},
       sessions: {},
+      triggerContext: null,
     };
   }
 

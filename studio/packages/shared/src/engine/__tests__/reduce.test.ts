@@ -454,6 +454,86 @@ describe('run.startedAt — the seeded, replay-stable timestamp', () => {
   });
 });
 
+// ===========================================================================
+// #5 S12 — ${trigger.*} resolves from the durable run.triggerContext seed
+// ===========================================================================
+
+describe('run.triggerContext — the fire-time trigger seed (#5 S12)', () => {
+  const SCHED = '2026-07-17T09:00:00.000Z';
+  const tctx = (
+    over: Partial<Extract<EngineEvent, { type: 'run.triggerContext' }>> = {},
+  ): EngineEvent => ({
+    type: 'run.triggerContext',
+    runId: RUN,
+    triggerId: 'trg-1',
+    ...over,
+  });
+
+  it('folds into the pending seed and is carried across run.started', () => {
+    const eng = engine([
+      node('a', { when: '${trigger.scheduledTime}', who: '${trigger.triggerId}' }),
+    ]);
+    const s = eng.reduce(eng.seedState(), tctx({ scheduledTime: SCHED })).state;
+    expect(s.status).toBe('pending');
+    expect(s.triggerContext).toEqual({ triggerId: 'trg-1', scheduledTime: SCHED, body: null });
+    const r = eng.reduce(s, started());
+    // Survives the started transition and is readable by the first dispatch.
+    expect(r.state.triggerContext).toEqual({
+      triggerId: 'trg-1',
+      scheduledTime: SCHED,
+      body: null,
+    });
+    const a = r.commands.find((c) => c.type === 'dispatchNode') as {
+      preparedInput: Record<string, unknown>;
+    };
+    expect(a.preparedInput).toEqual({ when: SCHED, who: 'trg-1' });
+  });
+
+  it('closes the run.triggerId null-seed gap — ${run.triggerId} reads the fired trigger', () => {
+    const eng = engine([node('a', { t: '${run.triggerId}' })]);
+    const s = eng.reduce(eng.seedState(), tctx()).state;
+    const r = eng.reduce(s, started());
+    const a = r.commands.find((c) => c.type === 'dispatchNode') as {
+      preparedInput: Record<string, unknown>;
+    };
+    expect(a.preparedInput).toEqual({ t: 'trg-1' });
+  });
+
+  it('deep-addresses ${trigger.body.x} as the runtime-validated json escape hatch', () => {
+    const eng = engine([node('a', { msg: '${trigger.body.text}' })]);
+    const s = eng.reduce(eng.seedState(), tctx({ body: { text: 'hello' } })).state;
+    const r = eng.reduce(s, started());
+    const a = r.commands.find((c) => c.type === 'dispatchNode') as {
+      preparedInput: Record<string, unknown>;
+    };
+    expect(a.preparedInput).toEqual({ msg: 'hello' });
+  });
+
+  it('a run with NO trigger seed resolves ${trigger.scheduledTime} to null', () => {
+    const eng = engine([node('a', { when: '${trigger.scheduledTime}' })]);
+    const r = eng.reduce(eng.seedState(), started());
+    expect(r.state.triggerContext).toBeNull();
+    const a = r.commands.find((c) => c.type === 'dispatchNode') as {
+      preparedInput: Record<string, unknown>;
+    };
+    expect(a.preparedInput).toEqual({ when: null });
+  });
+
+  it('a run.triggerContext after the run started is an impossible-log no-op + diagnostic', () => {
+    const eng = engine([node('a', {})]);
+    const s = eng.reduce(eng.seedState(), started()).state;
+    const r = eng.reduce(s, tctx({ scheduledTime: SCHED }));
+    expect(r.state.triggerContext).toBeNull(); // unchanged — never mutates a live run
+    expect(r.diagnostics.join(' ')).toContain('impossible run.triggerContext');
+  });
+
+  it('is identical on replay (folds the same log to the same state)', () => {
+    const eng = engine([node('a', { when: '${trigger.scheduledTime}' })]);
+    const log: EngineEvent[] = [tctx({ scheduledTime: SCHED }), started()];
+    expect(eng.projectRunState(log)).toEqual(eng.projectRunState(log));
+  });
+});
+
 describe('${nodes.<id>.status} — resolves from the run log (#6 E3 T6)', () => {
   it('reads an upstream FAILURE, where the output is unavailable', () => {
     // The ADF fan-in/OR shape: `b` runs only on a's failure and reports which
