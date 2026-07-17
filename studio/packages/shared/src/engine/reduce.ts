@@ -1417,7 +1417,12 @@ export function createEngine(doc: EngineDoc): Engine {
     diagnostics: string[],
   ): ReduceResult {
     if (state.status !== 'pending') {
-      diagnostics.push('impossible run.triggerContext: the run has already started');
+      // Accurate for EVERY non-pending status — the run may have started,
+      // finished, failed, or been interrupted; the seed belongs before any of
+      // them, so name the actual status rather than assuming "already started".
+      diagnostics.push(
+        `impossible run.triggerContext: the run is no longer pending (status: ${state.status})`,
+      );
       return { state, commands: [], diagnostics };
     }
     // A SECOND seed on a still-pending run is an impossible log (the driver
