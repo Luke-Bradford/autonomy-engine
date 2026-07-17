@@ -13,6 +13,10 @@ jobs:
   review:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
+    # #505: GitHub's default job timeout is 6h. This job makes several bounded,
+    # retried API calls (the curl itself is capped at --max-time 600); 20 min is
+    # generous headroom and caps any pathological hang far below the default.
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: write
@@ -23,10 +27,20 @@ jobs:
           fetch-depth: 0
 
       - name: Get PR diff
+        # #505: `gh pr diff` is a live GitHub API call; a transient 503 here
+        # failed the whole review job on 2026-07-16 (CI/studio-ci, which make no
+        # such call, stayed green). retry() absorbs the blip -- fail-safe: it
+        # returns gh's own status once attempts exhaust, so a real failure still
+        # reds the step. Wrapped in a function so each attempt re-runs the `>`.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: gh pr diff "$PR_NUMBER" > pr.diff
+        run: |
+          set -uo pipefail
+          # shellcheck source=/dev/null
+          . lib/ci_retry.sh
+          fetch_diff() { gh pr diff "$PR_NUMBER" > pr.diff; }
+          retry 5 3 fetch_diff || { echo "::error::gh pr diff failed after retries (transient GitHub API?)"; exit 1; }
 
       - name: Check if diff is doc-only
         # #192: ONE doc-only definition for the whole gate. This step sources
@@ -46,8 +60,21 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
+          # shellcheck source=/dev/null
+          . lib/ci_retry.sh
+          # #505: this failed as "origin/main not found" on 2026-07-16 even though
+          # the checkout log shows origin/main WAS fetched -- a transient blip in
+          # the same GitHub API window. If the ref is missing, re-fetch (retried)
+          # before concluding it is genuinely absent, so a hiccup doesn't red the
+          # gate. Still fail-safe: a ref that is truly gone after retries exits 1
+          # (refuse rather than misclassify), exactly as before.
           if ! git rev-parse --verify --quiet "origin/${BASE_REF}" >/dev/null; then
-            echo "::error::origin/${BASE_REF} not found — cannot classify PR; failing to avoid misclassification"
+            echo "origin/${BASE_REF} not present -- re-fetching (transient?)" >&2
+            fetch_base() { git fetch --quiet origin "${BASE_REF}:refs/remotes/origin/${BASE_REF}"; }
+            retry 4 3 fetch_base || true
+          fi
+          if ! git rev-parse --verify --quiet "origin/${BASE_REF}" >/dev/null; then
+            echo "::error::origin/${BASE_REF} not found after re-fetch — cannot classify PR; failing to avoid misclassification"
             exit 1
           fi
           files=$(git diff --name-only "origin/${BASE_REF}...HEAD")
@@ -74,8 +101,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          set -uo pipefail
+          # shellcheck source=/dev/null
+          . lib/ci_retry.sh
           printf '## Claude Code Review\n\nDoc-only diff — engineering review skipped to save tokens. If this PR needs a review (e.g. material claims in the docs that affect behaviour), request one manually.\n' > skip_notice.md
-          gh pr comment "$PR_NUMBER" --body-file skip_notice.md
+          post_skip() { gh pr comment "$PR_NUMBER" --body-file skip_notice.md; }
+          retry 5 3 post_skip || { echo "::error::gh pr comment (skip notice) failed after retries"; exit 1; }
 
       - name: Get PR comments
         if: steps.docs_only.outputs.docs_only != 'true'
@@ -84,9 +115,16 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
-          gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
-            --jq '[.[] | "### Comment by " + .user.login + " at " + .created_at + "\n" + .body] | join("\n\n---\n\n")' \
-            > pr_comments.txt
+          set -uo pipefail
+          # shellcheck source=/dev/null
+          . lib/ci_retry.sh
+          # #505: live GitHub API call -- retry transient blips (fail-safe).
+          get_comments() {
+            gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+              --jq '[.[] | "### Comment by " + .user.login + " at " + .created_at + "\n" + .body] | join("\n\n---\n\n")' \
+              > pr_comments.txt
+          }
+          retry 5 3 get_comments || { echo "::error::gh api (PR comments) failed after retries"; exit 1; }
 
       - name: Get PR title + body
         if: steps.docs_only.outputs.docs_only != 'true'
@@ -94,9 +132,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          gh pr view "$PR_NUMBER" --json title,body \
-            --jq '"# " + .title + "\n\n" + (.body // "(no description)")' \
-            > pr_description.txt
+          set -uo pipefail
+          # shellcheck source=/dev/null
+          . lib/ci_retry.sh
+          # #505: live GitHub API call -- retry transient blips (fail-safe).
+          get_desc() {
+            gh pr view "$PR_NUMBER" --json title,body \
+              --jq '"# " + .title + "\n\n" + (.body // "(no description)")' \
+              > pr_description.txt
+          }
+          retry 5 3 get_desc || { echo "::error::gh pr view failed after retries"; exit 1; }
 
       - name: Build request body
         # #468: the charter is SCOPE-AWARE and lives in lib/review_prompt.py
@@ -118,21 +163,35 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          HTTP_STATUS=$(curl -s -w "%{http_code}" \
-            -H "x-api-key: $ANTHROPIC_API_KEY" \
-            -H "anthropic-version: 2023-06-01" \
-            -H "content-type: application/json" \
-            --data-binary @request.json \
-            -o response.json \
-            https://api.anthropic.com/v1/messages)
+          set -uo pipefail
+          # shellcheck source=/dev/null
+          . lib/ci_retry.sh
+          # #505: the Anthropic call had NO timeout (GitHub's default job timeout
+          # is 6h) and no retry. `--connect-timeout`/`--max-time` bound a hung
+          # call; retry rides out a transient 5xx / 429 / network drop. A
+          # PERMANENT 4xx (a real request bug) exits immediately -- never retried,
+          # never mistaken for transient. A truncated/again-failing call still
+          # reds the step (fail-safe: the verdict guards downstream refuse a
+          # review that never arrived).
+          HTTP_STATUS=""
+          call_api() {
+            HTTP_STATUS=$(curl -sS --connect-timeout 30 --max-time 600 -w "%{http_code}" \
+              -H "x-api-key: $ANTHROPIC_API_KEY" \
+              -H "anthropic-version: 2023-06-01" \
+              -H "content-type: application/json" \
+              --data-binary @request.json \
+              -o response.json \
+              https://api.anthropic.com/v1/messages) || return 1   # curl transport failure -> transient
+            case "$HTTP_STATUS" in
+              2[0-9][0-9]) return 0 ;;                              # success
+              429|5[0-9][0-9]) echo "API HTTP $HTTP_STATUS (transient) -- will retry" >&2; return 1 ;;
+              *) echo "::error::Anthropic API HTTP $HTTP_STATUS (non-retryable); response:"; cat response.json; exit 1 ;;
+            esac
+          }
+          retry 4 5 call_api || { echo "::error::Anthropic API failed after retries (last HTTP ${HTTP_STATUS:-none})"; cat response.json 2>/dev/null || true; exit 1; }
 
           echo "HTTP status: $HTTP_STATUS"
           cat response.json
-
-          if [ "$HTTP_STATUS" != "200" ]; then
-            echo "API returned HTTP $HTTP_STATUS"
-            exit 1
-          fi
 
           # #504: was an inline `python3 -c` heredoc; now a TESTED extractor
           # (lib/review_prompt.py, tests/test_review_prompt.py) for the same
@@ -149,8 +208,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          set -uo pipefail
+          # shellcheck source=/dev/null
+          . lib/ci_retry.sh
           { echo "## Claude Code Review"; echo ""; cat review.txt; } > comment_body.txt
-          gh pr comment "$PR_NUMBER" --body-file comment_body.txt
+          # #505: a transient failure posting the comment would waste a whole
+          # successful review (the diff+API cost is already spent). Retry it.
+          post_review() { gh pr comment "$PR_NUMBER" --body-file comment_body.txt; }
+          retry 5 3 post_review || { echo "::error::gh pr comment (review) failed after retries"; exit 1; }
 
       - name: Fail workflow on truncated review
         if: steps.docs_only.outputs.docs_only != 'true'
