@@ -8,7 +8,12 @@ import type {
   Param,
   PipelineVersion,
 } from '../types.js';
-import { validateDoc, validatePipelineDoc, type PipelineResolver } from '../params.js';
+import {
+  validateDoc,
+  validatePipelineDoc,
+  validateRefs,
+  type PipelineResolver,
+} from '../params.js';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -225,6 +230,130 @@ describe('validateDoc — containers', () => {
       ],
     );
     expect(validateDoc(d).join(' ')).toContain('outsider');
+  });
+});
+
+// ===========================================================================
+// foreach container (#4 A4)
+// ===========================================================================
+
+describe('validateDoc — foreach container (#4 A4)', () => {
+  const LIST: Param = { name: 'list', type: 'json', required: true };
+
+  it('accepts a well-formed foreach (items + a body child, ${item} in the body)', () => {
+    const d = doc(
+      [node('w', { x: '${item}' })],
+      [],
+      [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${params.list}' }],
+      [LIST],
+    );
+    expect(validateDoc(d)).toEqual([]);
+    expect(validateRefs(d)).toEqual([]);
+  });
+
+  it('rejects a foreach with no items expression', () => {
+    const d = doc([node('w')], [], [{ id: 'fe', kind: 'foreach', children: ['w'] }]);
+    expect(validateDoc(d).join(' ')).toContain('a foreach needs an items expression');
+  });
+
+  it('rejects an exitWhen on a foreach (loop-only)', () => {
+    const d = doc(
+      [node('w')],
+      [],
+      [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${params.list}', exitWhen: '${x}' }],
+      [LIST],
+    );
+    expect(validateDoc(d).join(' ')).toContain(
+      'exitWhen is only meaningful on a loop, not a foreach',
+    );
+  });
+
+  it('rejects a maxRounds on a foreach (loop-only)', () => {
+    const d = doc(
+      [node('w')],
+      [],
+      [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${params.list}', maxRounds: 3 }],
+      [LIST],
+    );
+    expect(validateDoc(d).join(' ')).toContain(
+      'maxRounds is only meaningful on a loop, not a foreach',
+    );
+  });
+
+  it('rejects a foreach with no children (a useless empty body)', () => {
+    const d = doc(
+      [],
+      [],
+      [{ id: 'fe', kind: 'foreach', children: [], items: '${params.list}' }],
+      [LIST],
+    );
+    expect(validateDoc(d).join(' ')).toContain('a foreach needs at least one child');
+  });
+
+  it('rejects a non-whole-value (interpolated) items — it can only be a string', () => {
+    const d = doc(
+      [node('w')],
+      [],
+      [{ id: 'fe', kind: 'foreach', children: ['w'], items: 'x=${params.list}' }],
+      [LIST],
+    );
+    expect(validateDoc(d).join(' ')).toContain('whole-value');
+  });
+
+  it('rejects a literal items with no ${} at all', () => {
+    const d = doc(
+      [node('w')],
+      [],
+      [{ id: 'fe', kind: 'foreach', children: ['w'], items: 'a,b,c' }],
+    );
+    expect(validateDoc(d).join(' ')).toContain('items must be a ${...} expression');
+  });
+
+  it('rejects items that references ${item} (unbound — items runs before any item exists)', () => {
+    const d = doc(
+      [node('w')],
+      [],
+      [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${item}' }],
+    );
+    expect(validateDoc(d).join(' ')).toContain('only bound inside a filter/map/count');
+  });
+
+  it('rejects items that references its OWN child output (not produced until the body runs)', () => {
+    const d = doc(
+      [node('w', { outputs: [{ name: 'v', type: 'number' }] })],
+      [],
+      [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${nodes.w.output.v}' }],
+    );
+    // `w` is the foreach's own child, excluded from the items outer scope.
+    expect(validateDoc(d).join(' ')).toContain('nodes.w.output.v');
+  });
+
+  it('accepts items that references an UPSTREAM node output', () => {
+    const d = doc(
+      [node('src', { outputs: [{ name: 'rows', type: 'json' }] }), node('w')],
+      [edge('src', 'fe', 'success')],
+      [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${nodes.src.output.rows}' }],
+    );
+    expect(validateDoc(d)).toEqual([]);
+    expect(validateRefs(d)).toEqual([]);
+  });
+
+  it('KEEPS rejecting ${item} in a NON-foreach node config (regression on the itemInScope gate)', () => {
+    const d = doc([node('lonely', { x: '${item}' })]);
+    expect(validateRefs(d).join(' ')).toContain('only bound inside a filter/map/count');
+  });
+
+  it('disables ${nodes.<foreachChild>.status} refs — the child re-runs per item (G1)', () => {
+    // A foreach re-runs its children (one round per item) via resetContainerRound,
+    // so a status ref to a re-running child is not stable — refused at save, the
+    // same rule a loop/back-edge triggers (`canReRunNodes`).
+    const withForeach = doc(
+      [node('w'), node('reader', { s: '${nodes.w.status}' })],
+      [edge('fe', 'reader', 'success')],
+      [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${params.list}' }],
+      [LIST],
+    );
+    expect(validateRefs(withForeach).join(' ')).toContain('nodes.w.status');
   });
 });
 

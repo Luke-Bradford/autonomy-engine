@@ -258,6 +258,20 @@ export const ContainerRunStateSchema = z.object({
    * `no_progress`, `no_exit_condition`) — observability only; unset while
    * active/pending or on a clean exit. */
   reason: z.string().optional(),
+  /**
+   * FOREACH only (#4 A4): the resolved `items` array, snapshotted at enter so the
+   * per-item `${item}` binding and the `results` index are stable for the whole
+   * container lifetime (re-derived deterministically on replay — see `reduce.ts`
+   * enter path). `round` doubles as the 0-based item index. Unset for loop/stage.
+   */
+  items: z.array(z.unknown()).optional(),
+  /**
+   * FOREACH only (#4 A4): the order-stable per-item output accumulator — one
+   * entry per COMPLETED item (its projected child outputs), index-aligned with
+   * `items`. Projected as the container's `results` output at exit (partial on a
+   * mid-iteration child failure). Unset for loop/stage.
+   */
+  results: z.array(z.unknown()).optional(),
 });
 export type ContainerRunState = z.infer<typeof ContainerRunStateSchema>;
 

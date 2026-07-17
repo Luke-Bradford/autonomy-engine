@@ -299,6 +299,12 @@ const loop = (id: string, children: string[], exitWhen: string, maxRounds?: numb
   exitWhen,
   ...(maxRounds !== undefined ? { maxRounds } : {}),
 });
+const foreach = (id: string, children: string[], items: string): Container => ({
+  id,
+  kind: 'foreach',
+  children,
+  items,
+});
 
 describe('containers — stage', () => {
   it('a stage exits SUCCESS when all children are terminal, then fires its outer edge', () => {
@@ -613,6 +619,124 @@ describe('containers — loop do-while semantics (A3)', () => {
     expect(state.containers.lp!.round).toBe(0); // failed after round 0, did not re-round
     expect(state.nodes.recover!.status).toBe('success'); // outer completion caught it
     expect(state.status).toBe('success');
+  });
+});
+
+// ===========================================================================
+// foreach container (#4 A4) — item-based iteration
+// ===========================================================================
+
+describe('foreach container (#4 A4)', () => {
+  it('iterates the body once per item, aggregating order-stable results', () => {
+    const eng = engine(
+      [node('work'), node('after')],
+      [edge('fe', 'after', 'success')],
+      [foreach('fe', ['work'], '${params.list}')],
+    );
+    const { state, commandsSeen } = drive(
+      eng,
+      { list: ['a', 'b', 'c'] },
+      {
+        outcomeFor: (id, idx) =>
+          id === 'work' ? { outcome: 'success', outputs: { v: idx } } : { outcome: 'success' },
+      },
+    );
+    expect(state.containers.fe!.status).toBe('success');
+    expect(state.containers.fe!.round).toBe(2); // 0-based index of the LAST item
+    // order-stable aggregate, index-aligned with items
+    expect(state.containers.fe!.outputs).toEqual({ results: [{ v: 0 }, { v: 1 }, { v: 2 }] });
+    expect(state.outputs.fe).toEqual({ results: [{ v: 0 }, { v: 1 }, { v: 2 }] });
+    expect(state.nodes.after!.status).toBe('success'); // outer success edge fired
+    expect(state.status).toBe('success');
+    const workDispatches = commandsSeen.filter(
+      (c) => c.type === 'dispatchNode' && c.nodeId === 'work',
+    );
+    expect(workDispatches.length).toBe(3); // the body ran exactly once per item
+  });
+
+  it('binds ${item} to each element in a body-node config', () => {
+    const eng = engine(
+      [node('work', { x: '${item}' })],
+      [],
+      [foreach('fe', ['work'], '${params.list}')],
+    );
+    const { commandsSeen } = drive(eng, { list: ['x', 'y', 'z'] });
+    const prepared = commandsSeen
+      .filter(
+        (c): c is Extract<EngineCommand, { type: 'dispatchNode' }> =>
+          c.type === 'dispatchNode' && c.nodeId === 'work',
+      )
+      .map((c) => c.preparedInput);
+    expect(prepared).toEqual([{ x: 'x' }, { x: 'y' }, { x: 'z' }]);
+  });
+
+  it('a zero-item foreach succeeds immediately with results:[] and never runs the body', () => {
+    const eng = engine(
+      [node('work'), node('after')],
+      [edge('fe', 'after', 'success')],
+      [foreach('fe', ['work'], '${params.list}')],
+    );
+    const { state, commandsSeen } = drive(eng, { list: [] });
+    expect(state.containers.fe!.status).toBe('success');
+    expect(state.containers.fe!.round).toBe(0);
+    expect(state.containers.fe!.outputs).toEqual({ results: [] });
+    expect(state.nodes.work!.status).toBe('pending'); // body never dispatched
+    expect(commandsSeen.some((c) => c.type === 'dispatchNode' && c.nodeId === 'work')).toBe(false);
+    expect(state.nodes.after!.status).toBe('success'); // outer success still fires
+    expect(state.status).toBe('success');
+  });
+
+  it('fails fast on a child failure, exposing the PARTIAL results completed so far', () => {
+    const eng = engine(
+      [node('work'), node('recover')],
+      [edge('fe', 'recover', 'completion')],
+      [foreach('fe', ['work'], '${params.list}')],
+    );
+    // item 0 succeeds, item 1 (attempt idx 1) fails → the foreach fails fast, item 2 never runs.
+    const { state } = drive(
+      eng,
+      { list: ['a', 'b', 'c'] },
+      {
+        outcomeFor: (id, idx) =>
+          id === 'work' && idx === 1
+            ? { outcome: 'failure' }
+            : { outcome: 'success', outputs: { v: idx } },
+      },
+    );
+    expect(state.containers.fe!.status).toBe('failure');
+    expect(state.containers.fe!.reason).toBe('child_failed:work');
+    expect(state.containers.fe!.round).toBe(1); // failed on item index 1
+    expect(state.containers.fe!.outputs).toEqual({ results: [{ v: 0 }] }); // only item 0 completed
+    expect(state.nodes.recover!.status).toBe('success'); // outer completion caught it
+    expect(state.status).toBe('success');
+  });
+
+  it('fails the run invalid_event when items does not resolve to an array', () => {
+    const eng = engine([node('work')], [], [foreach('fe', ['work'], '${params.list}')]);
+    const { state, log } = drive(eng, { list: 42 });
+    expect(state.status).toBe('failure');
+    expect(reasonsOf(log)).toContain('invalid_event');
+    expect(state.nodes.work!.status).toBe('pending'); // body never ran
+  });
+
+  it('exposes results to a downstream ${nodes.<foreach>.output.results} ref at run time', () => {
+    const eng = engine(
+      [node('work'), node('after', { got: '${nodes.fe.output.results}' })],
+      [edge('fe', 'after', 'success')],
+      [foreach('fe', ['work'], '${params.list}')],
+    );
+    const { commandsSeen } = drive(
+      eng,
+      { list: ['a', 'b'] },
+      {
+        outcomeFor: (id, idx) =>
+          id === 'work' ? { outcome: 'success', outputs: { v: idx } } : { outcome: 'success' },
+      },
+    );
+    const afterPrep = commandsSeen.find((c) => c.type === 'dispatchNode' && c.nodeId === 'after');
+    expect(afterPrep?.type === 'dispatchNode' ? afterPrep.preparedInput : null).toEqual({
+      got: [{ v: 0 }, { v: 1 }],
+    });
   });
 });
 

@@ -240,9 +240,15 @@ interface Env {
   budget: { spent: number };
 }
 
-/** A fresh evaluation scope for one field. */
-function newEnv(ctx: SubstitutionContext): Env {
-  return { ctx, budget: { spent: 0 } };
+/**
+ * A fresh evaluation scope for one field. `item` seeds the `${item}` binding for
+ * a #4 A4 `foreach` body — lexical, so it rides on `Env` (not `SubstitutionContext`,
+ * per the settled decision at the `RefRoot`/`item` note above). A nested
+ * `filter`/`map`/`count` lambda still rebinds `item` in its own child `Env`, so
+ * the NEAREST enclosing iteration binds it.
+ */
+function newEnv(ctx: SubstitutionContext, item?: { value: unknown }): Env {
+  return item !== undefined ? { ctx, item, budget: { spent: 0 } } : { ctx, budget: { spent: 0 } };
 }
 
 /**
@@ -609,7 +615,16 @@ function arityText(min: number, max: number | null): string {
  * string. Arrays/objects recurse deterministically (object keys sorted). A
  * non-string scalar passes through untouched.
  */
-export function substitute(value: unknown, ctx: SubstitutionContext, depth = 0): unknown {
+export function substitute(
+  value: unknown,
+  ctx: SubstitutionContext,
+  depth = 0,
+  // The `${item}` binding for a #4 A4 `foreach` body, threaded UNCHANGED through
+  // every recursion so a nested config value (`{a: {b: "${item}"}}`) sees the same
+  // element as a top-level one. Undefined everywhere except a foreach child's
+  // dispatch → `${item}` throws "only bound inside …" (the pre-A4 behaviour).
+  item?: { value: unknown },
+): unknown {
   // Bound the config-TREE recursion so a pathologically nested config raises a
   // clean `SubstituteError` a node-failure catch handles, never a raw stack
   // overflow (the RUN half of #537; the SAVE half is `scan`/`scanSecretSinks`).
@@ -617,12 +632,12 @@ export function substitute(value: unknown, ctx: SubstitutionContext, depth = 0):
     throw new SubstituteError(`config nested too deep (over ${MAX_CONFIG_DEPTH} levels)`);
   }
   if (Array.isArray(value)) {
-    return value.map((v) => substitute(v, ctx, depth + 1));
+    return value.map((v) => substitute(v, ctx, depth + 1, item));
   }
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-      out[key] = substitute((value as Record<string, unknown>)[key], ctx, depth + 1);
+      out[key] = substitute((value as Record<string, unknown>)[key], ctx, depth + 1, item);
     }
     return out;
   }
@@ -648,7 +663,7 @@ export function substitute(value: unknown, ctx: SubstitutionContext, depth = 0):
 
   // ONE Env — and so ONE element budget — for the whole field: a field with
   // several embedded refs must not get a fresh allowance per `${}`.
-  const env = newEnv(ctx);
+  const env = newEnv(ctx, item);
 
   if (mode.mode === 'whole') {
     // Whole-value → preserve the resolved value's native type.
@@ -1022,6 +1037,18 @@ export function validateRefs(
   // `succeeded`, and the TYPE it infers is the one the reducer enforces there.
   const outputsById = outputsByIdOf(doc.nodes);
 
+  // #4 A4 — nodes that are children of a `foreach` body may reference `${item}`.
+  // `scan` refuses `${item}` by default (it is "only bound inside a filter/map/
+  // count predicate"), so a foreach body node is scanned with `itemInScope=true`
+  // — the SAVE-TIME half of the binding the reducer seeds at dispatch
+  // (`foreachItemOf`). First-declared-wins ownership is handled by the reducer's
+  // `containerMembership`; here a plain membership set suffices (a node in two
+  // foreach bodies would be a disjointness error `validateDoc` already reports).
+  const foreachChildIds = new Set<string>();
+  for (const c of doc.containers ?? []) {
+    if (c.kind === 'foreach') for (const ch of c.children) foreachChildIds.add(ch);
+  }
+
   for (const node of doc.nodes) {
     const guaranteed = graph.guaranteed.get(node.id) ?? new Set<string>();
     const settled = graph.settled.get(node.id) ?? new Set<string>();
@@ -1032,6 +1059,9 @@ export function validateRefs(
       node.config,
       { declared, guaranteed, settled, reachable, soft, outputsById },
       errors,
+      0,
+      undefined,
+      foreachChildIds.has(node.id),
     );
     // Item 7 / S2: a `{ "$secret": "<name>" }` marker is valid ONLY within a
     // declared sink field of this node's activity. `getActivity` reads the
@@ -1434,6 +1464,29 @@ export function validateDoc(
     if (c.kind === 'stage' && c.exitWhen !== undefined) {
       errors.push(`container '${c.id}': exitWhen is only meaningful on a loop, not a stage`);
     }
+    // #4 A4 — a `foreach` iterates its body once per element of `items`; it needs
+    // an items expression and takes NEITHER a loop's exitWhen NOR its maxRounds
+    // (it is bounded by items.length, not a predicate/cap). A zero-CHILD foreach
+    // terminates (it is not the loop's infinite-re-round hazard) but is useless,
+    // so it is refused for parity with the loop child-count rule.
+    if (c.kind === 'foreach') {
+      if (c.items === undefined) {
+        errors.push(
+          `container '${c.id}': a foreach needs an items expression ` +
+            '(the ${} array the body iterates)',
+        );
+      }
+      if (c.exitWhen !== undefined) {
+        errors.push(`container '${c.id}': exitWhen is only meaningful on a loop, not a foreach`);
+      }
+      if (c.maxRounds !== undefined) {
+        errors.push(`container '${c.id}': maxRounds is only meaningful on a loop, not a foreach`);
+      }
+      if (c.children.filter((ch) => nodeIdSet.has(ch)).length === 0) {
+        errors.push(`container '${c.id}': a foreach needs at least one child (its per-item body)`);
+      }
+      if (c.items !== undefined) validateForeachItems(c, declared, outputsById, nodeIdSet, errors);
+    }
     if (c.exitWhen !== undefined) validateExitWhen(c, declared, outputsById, errors);
   }
 
@@ -1720,6 +1773,55 @@ function validateExitWhen(
 }
 
 /**
+ * #4 A4 — SAVE-TIME half of the `foreach.items` rule (the reducer's
+ * `evalForeachItems` is the run-time half that BINDS for a pre-gate row). Enforces
+ * the CHECKABLE defects: `items` is a whole-value `${}` expression (an interpolated
+ * or literal `items` can only be a STRING, never the array the body iterates), its
+ * grammar/fn allowlist/param/secret/output-NAME refs are valid, and it does NOT
+ * reference `${item}` (unbound: items is evaluated BEFORE any item exists) or its
+ * OWN children (whose outputs do not exist until the body runs).
+ *
+ * SCOPE IS OUTER, and DELIBERATELY PERMISSIVE on dominance. `items` is evaluated
+ * over the container's upstream, but `computeGraph` keys reachability by node id
+ * only — a container's graph POSITION is not modeled (the same gap that makes a
+ * downstream `${nodes.<foreach>.output.results}` a known advisory false-reject, →
+ * container-producer follow-up). So availability here is "any non-child node
+ * output" rather than a precise dominance set: a ref to a genuinely un-dominating
+ * upstream node passes save and is caught at run time by `evalForeachItems`
+ * (→ `invalid_event`), never a silent accept. Own-children ARE excluded, which is
+ * the one foreach-specific correctness check the outer scope must make.
+ */
+function validateForeachItems(
+  c: Container,
+  declared: Map<string, Param>,
+  outputsById: Map<string, OutputContract>,
+  nodeIdSet: Set<string>,
+  errors: string[],
+): void {
+  if (c.items === undefined) return;
+  const where = `container.${c.id}.items`;
+  // Any node output EXCEPT this foreach's own children (which have not run when
+  // `items` is evaluated). Permissive availability — see the dominance note above.
+  const available = new Set<string>(nodeIdSet);
+  for (const ch of c.children) available.delete(ch);
+  const scope: ScanScope = {
+    declared,
+    outputsById,
+    guaranteed: available,
+    settled: available,
+    reachable: available,
+    soft: new Set<string>(),
+  };
+  // `itemInScope` defaults false → a `${item}` in `items` is refused for free.
+  scan(where, c.items, scope, errors);
+
+  // `items` is whole-value-REQUIRED, mirroring `exitWhen`: an embedded expression
+  // resolves to a STRING, so the body would iterate the string's characters (or
+  // `evalForeachItems` throws) — never the intended array.
+  validateWholeValue(where, c.items, errors, 'items');
+}
+
+/**
  * Detect a cycle in the FORWARD edge graph (all edges except `back:true`), over
  * node + container endpoints. Kahn's algorithm: any endpoint left with residual
  * in-degree after the topological sweep sits in (or downstream of) a cycle.
@@ -1922,6 +2024,12 @@ function scan(
   // a nested binding value (`{a: {b: "${params.x}"}}`) is restricted the same as
   // a top-level one. Undefined (`validateRefs`/`validateExitWhen`) = all roots.
   allowedRoots?: ReadonlySet<RefRoot['kind']>,
+  // Whether `${item}` is bound at this field's top level (#4 A4): true for a
+  // node scanned as a `foreach` body child, so `${item}` is accepted here the
+  // same way a `filter`/`map`/`count` lambda arg accepts it. Threaded UNCHANGED
+  // through the config tree (a nested `{a: "${item}"}` in a foreach child is
+  // still in scope). Default false = the pre-A4 doc-wide behaviour.
+  itemInScope = false,
 ): void {
   // Bound the config-TREE recursion so a pathologically nested config is
   // reported as a collected error, never a raw `RangeError` this pure validator
@@ -1947,14 +2055,16 @@ function scan(
         errors,
         where,
         false,
-        false,
+        itemInScope,
         allowedRoots,
       );
     }
     return;
   }
   if (Array.isArray(value)) {
-    value.forEach((v, i) => scan(`${where}[${i}]`, v, scope, errors, depth + 1, allowedRoots));
+    value.forEach((v, i) =>
+      scan(`${where}[${i}]`, v, scope, errors, depth + 1, allowedRoots, itemInScope),
+    );
     return;
   }
   if (value !== null && typeof value === 'object') {
@@ -1966,6 +2076,7 @@ function scan(
         errors,
         depth + 1,
         allowedRoots,
+        itemInScope,
       );
     }
   }
@@ -2498,10 +2609,15 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers
   //     `maxRounds` alone and carries NO back-edge, so an edge-only test misses
   //     it entirely (verified by test: a loop child's status accepted at save,
   //     then killing the run with `invalid_event` at dispatch).
-  // A `stage` never re-rounds (`stepContainers` exits it once its children are
-  // terminal), so it must NOT disable status refs.
+  // A `foreach` (#4 A4) re-runs its children exactly the same way — one round per
+  // item, via the SAME `resetContainerRound`→`resetNodes` — so it must disable
+  // status refs identically, or a `${nodes.<foreachChild>.status}` is false-
+  // accepted at save and then killed `invalid_event` at dispatch. A `stage` never
+  // re-rounds (`stepContainers` exits it once its children are terminal), so it
+  // must NOT disable status refs.
   const canReRunNodes =
-    doc.edges.some((e) => e.back === true) || doc.containers.some((c) => c.kind === 'loop');
+    doc.edges.some((e) => e.back === true) ||
+    doc.containers.some((c) => c.kind === 'loop' || c.kind === 'foreach');
 
   // Predecessors (forward), for reachability + the must-analysis.
   const preds = new Map<string, { from: string; on: string }[]>();
