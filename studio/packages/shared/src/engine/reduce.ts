@@ -1417,6 +1417,14 @@ export function createEngine(doc: EngineDoc): Engine {
       diagnostics.push('impossible run.triggerContext: the run has already started');
       return { state, commands: [], diagnostics };
     }
+    // A SECOND seed on a still-pending run is an impossible log (the driver
+    // appends exactly one, before `run.started`). The FIRST wins — overwriting
+    // would let a malformed log silently rewrite the run's identity — and the
+    // divergence is reported, mirroring `onRunStarted`'s already-started guard.
+    if (state.triggerContext !== null) {
+      diagnostics.push('impossible run.triggerContext: the run is already seeded');
+      return { state, commands: [], diagnostics };
+    }
     return {
       state: {
         ...state,

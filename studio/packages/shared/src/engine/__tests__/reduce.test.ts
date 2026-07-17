@@ -87,6 +87,17 @@ function dispatchIds(cmds: EngineCommand[]): string[] {
   return cmds.filter((c) => c.type === 'dispatchNode').map((c) => (c as { nodeId: string }).nodeId);
 }
 
+/** Find + NARROW a `dispatchNode` command (optionally for a specific node) on
+ * `.type`, so its `preparedInput` is read without an unchecked union cast. */
+function dispatchCmd(cmds: EngineCommand[], nodeId?: string) {
+  const cmd = cmds.find(
+    (c) => c.type === 'dispatchNode' && (nodeId === undefined || c.nodeId === nodeId),
+  );
+  if (cmd?.type !== 'dispatchNode')
+    throw new Error(`no dispatchNode command${nodeId === undefined ? '' : ` for ${nodeId}`}`);
+  return cmd;
+}
+
 // ===========================================================================
 // Replay determinism (event-sourcing invariant)
 // ===========================================================================
@@ -483,40 +494,46 @@ describe('run.triggerContext — the fire-time trigger seed (#5 S12)', () => {
       scheduledTime: SCHED,
       body: null,
     });
-    const a = r.commands.find((c) => c.type === 'dispatchNode') as {
-      preparedInput: Record<string, unknown>;
-    };
-    expect(a.preparedInput).toEqual({ when: SCHED, who: 'trg-1' });
+    expect(dispatchCmd(r.commands).preparedInput).toEqual({ when: SCHED, who: 'trg-1' });
   });
 
   it('closes the run.triggerId null-seed gap — ${run.triggerId} reads the fired trigger', () => {
     const eng = engine([node('a', { t: '${run.triggerId}' })]);
     const s = eng.reduce(eng.seedState(), tctx()).state;
     const r = eng.reduce(s, started());
-    const a = r.commands.find((c) => c.type === 'dispatchNode') as {
-      preparedInput: Record<string, unknown>;
-    };
-    expect(a.preparedInput).toEqual({ t: 'trg-1' });
+    expect(dispatchCmd(r.commands).preparedInput).toEqual({ t: 'trg-1' });
   });
 
   it('deep-addresses ${trigger.body.x} as the runtime-validated json escape hatch', () => {
     const eng = engine([node('a', { msg: '${trigger.body.text}' })]);
     const s = eng.reduce(eng.seedState(), tctx({ body: { text: 'hello' } })).state;
     const r = eng.reduce(s, started());
-    const a = r.commands.find((c) => c.type === 'dispatchNode') as {
-      preparedInput: Record<string, unknown>;
-    };
-    expect(a.preparedInput).toEqual({ msg: 'hello' });
+    expect(dispatchCmd(r.commands).preparedInput).toEqual({ msg: 'hello' });
   });
 
   it('a run with NO trigger seed resolves ${trigger.scheduledTime} to null', () => {
     const eng = engine([node('a', { when: '${trigger.scheduledTime}' })]);
     const r = eng.reduce(eng.seedState(), started());
     expect(r.state.triggerContext).toBeNull();
-    const a = r.commands.find((c) => c.type === 'dispatchNode') as {
-      preparedInput: Record<string, unknown>;
-    };
-    expect(a.preparedInput).toEqual({ when: null });
+    expect(dispatchCmd(r.commands).preparedInput).toEqual({ when: null });
+  });
+
+  it('a SECOND run.triggerContext on a still-pending run is a no-op + diagnostic (first wins)', () => {
+    const eng = engine([node('a', {})]);
+    const s = eng.reduce(eng.seedState(), tctx({ scheduledTime: SCHED })).state;
+    const r = eng.reduce(
+      s,
+      tctx({ triggerId: 'other', scheduledTime: '2099-01-01T00:00:00.000Z' }),
+    );
+    // The first seed is untouched — a malformed log cannot rewrite run identity.
+    expect(r.state.triggerContext).toEqual({
+      triggerId: 'trg-1',
+      scheduledTime: SCHED,
+      body: null,
+    });
+    expect(r.diagnostics.join(' ')).toContain(
+      'impossible run.triggerContext: the run is already seeded',
+    );
   });
 
   it('a run.triggerContext after the run started is an impossible-log no-op + diagnostic', () => {
