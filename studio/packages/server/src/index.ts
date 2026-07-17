@@ -17,6 +17,7 @@ import { createRunEventBus } from './run/event-bus.js';
 import { createScheduler } from './scheduler/scheduler.js';
 import { createAlarmClock, type AlarmClock } from './scheduler/alarms.js';
 import { createRetryAlarmHandler } from './scheduler/retry-alarm.js';
+import { createWaitAlarmHandler } from './scheduler/wait-alarm.js';
 import { createScheduleTickHandler } from './scheduler/schedule-tick.js';
 import { createConnectorRegistry } from './connectors/registry.js';
 import { makeDocResolver } from './run/driver.js';
@@ -261,7 +262,13 @@ export async function buildApp(opts?: BuildAppOptions) {
   });
   const alarmClock: AlarmClock = createAlarmClock({
     db,
-    handlers: [createRetryAlarmHandler(driverBoundary), scheduleTickHandler],
+    handlers: [
+      createRetryAlarmHandler(driverBoundary),
+      // #4 A5/A6 — the durable `wait` timer's `node_wait` handler; S1's second
+      // node-level alarm consumer, wired here the same way retry's is.
+      createWaitAlarmHandler(driverBoundary),
+      scheduleTickHandler,
+    ],
     bus: runEventBus,
     log: fastify.log,
   });

@@ -178,6 +178,31 @@ export function driveRun(eng: Engine, opts: DriveOptions): DriveResult {
       });
       continue;
     }
+    // #4 A6 — the driver's OWN `scheduleWait` command (a `control` `wait` parks on a
+    // durable timer): the real driver ARMS S1's alarm then appends
+    // `timer.waitScheduled`, and the alarm clock later appends `timer.due` once the
+    // wall clock reaches `dueAt` (`server/src/run/driver.ts` `armWait` +
+    // `scheduler/wait-alarm.ts`). The harness has NO clock, so it folds BOTH
+    // immediately (synthetic `dueAt`) — exercising the park→resume state machine end
+    // to end. Without it a wait node holds `ready` (then `wait_pending`) forever and
+    // the run never finishes. The alarm's real timing/freshness is covered
+    // server-side in `scheduler/__tests__/wait-alarm.test.ts`.
+    if (c.type === 'scheduleWait') {
+      apply({
+        type: 'timer.waitScheduled',
+        runId,
+        nodeId: c.nodeId,
+        attemptId: c.attemptId,
+        dueAt: 0,
+      });
+      apply({
+        type: 'timer.due',
+        runId,
+        nodeId: c.nodeId,
+        previousAttemptId: c.attemptId,
+      });
+      continue;
+    }
     if (c.type !== 'dispatchNode') continue;
     order.push(c.nodeId);
     apply({

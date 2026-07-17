@@ -237,6 +237,15 @@ export interface RetryAlarms {
  */
 export const RETRY_WAKEUP_KIND = 'node_retry';
 
+/**
+ * The `kind` under which a `wait` node's timer alarm is armed (#4 A5/A6). Matches
+ * the handler registered in `scheduler/wait-alarm.ts` — the clock refuses to arm a
+ * kind with no handler, so these two cannot silently drift apart. Distinct from
+ * `RETRY_WAKEUP_KIND` so the two consumers' rows never collide and each handler
+ * only ever sees its own.
+ */
+export const WAIT_WAKEUP_KIND = 'node_wait';
+
 export interface DriverDeps {
   db: Db;
   resolveDoc: DocResolver;
@@ -414,6 +423,79 @@ function armRetry(
 }
 
 /**
+ * The `ArmWakeupInput` for a `wait` node's timer alarm (#4 A5/A6) — the SSOT for
+ * that alarm's IDENTITY. Unlike retry's `retryArmInput`, there is only ONE caller
+ * (`armWait`): a `wait_pending` node always has a live alarm (the arm precedes the
+ * `timer.waitScheduled` that enters the hold), so the boot reconciler never has to
+ * ask whether one exists and there is no second call site to keep in agreement.
+ *
+ * `dueAt` is `now + seconds*1000`, where `seconds` was resolved PURELY by the
+ * reducer (`scheduleWait.seconds`, a `${}` over run state the driver cannot re-read
+ * off the immutable doc the way it reads retry's static interval). The clock is the
+ * driver's; the duration is the reducer's — D4's pure/impure split.
+ */
+export function waitArmInput(
+  deps: Pick<DriverDeps, 'now'>,
+  args: { runId: string; nodeId: string; attemptId: string; seconds: number },
+): ArmWakeupInput {
+  const now = deps.now ?? (() => Date.now());
+  return {
+    kind: WAIT_WAKEUP_KIND,
+    // The per-kind `ref` shape S1 declares for wait. `attemptId` is the freshness
+    // handle the handler needs to tell "the alarm for the still-parked attempt"
+    // from "a stale one".
+    ref: { runId: args.runId, nodeId: args.nodeId, attemptId: args.attemptId },
+    // ROUND to integer ms: S1's `dueAt` is `z.number().int()` (`ArmWakeupInputSchema`
+    // + `timer.waitScheduled`), and `seconds` — unlike retry's integer-bounded
+    // `retryIntervalSeconds` — is a `${}`-driven number that may be fractional (a
+    // computed backoff, a `Retry-After: 2.5`). Without the round, `now + 2.5*1000`
+    // fails `parse` INSIDE `armWait` → `startRun` rejects → the run re-throws on every
+    // boot (a poison pill), instead of a clean sub-second wait. `dueAt` is STORED, so
+    // rounding once here stays replay-deterministic (a replayed arm returns the row).
+    dueAt: Math.round(now() + args.seconds * 1000),
+    // VACUOUS for this kind (the `ref` already carries `attemptId`, so two attempts'
+    // keys differ whatever the discriminator holds — same as retry, per the spike
+    // block in `retryArmInput`). Required by S1 and kept self-describing; the
+    // occurrence-collision it guards against cannot happen for a ref-pinned kind.
+    discriminator: `wait-${args.attemptId}`,
+  };
+}
+
+/**
+ * Perform a `scheduleWait` (#4 A6): ARM the durable alarm, then hand back the
+ * `timer.waitScheduled` event recording when the wait is due. Same arm-before-append
+ * asymmetry as `armRetry`, and here it is what removes the boot-reconcile burden:
+ * the arm commits BEFORE the append that folds the node to `wait_pending`, so a
+ * `wait_pending` node ALWAYS has a live alarm — a crash before the append leaves the
+ * node `ready` (its `scheduleWait` re-emitted by `resume`/`projectRunState`, which
+ * re-arms idempotently), never a parked node with no alarm. `dueAt` is read back
+ * from the ARMED ROW, so a replayed command (idempotent by `(kind, dedupeKey)`)
+ * keeps the ORIGINAL due time rather than a fresh one.
+ */
+function armWait(
+  deps: DriverDeps,
+  state: RunState,
+  command: Extract<EngineCommand, { type: 'scheduleWait' }>,
+): EngineEvent {
+  const row = deps.alarms.arm(
+    waitArmInput(deps, {
+      runId: state.runId,
+      nodeId: command.nodeId,
+      attemptId: command.attemptId,
+      seconds: command.seconds,
+    }),
+  );
+
+  return {
+    type: 'timer.waitScheduled',
+    runId: state.runId,
+    nodeId: command.nodeId,
+    attemptId: command.attemptId,
+    dueAt: row.dueAt,
+  };
+}
+
+/**
  * Perform the driver's OWN `finishRun` command REDUCE-FIRST (#477): fold the
  * `run.finished` BEFORE appending it, and make it durable ONLY if the reducer
  * ACCEPTS. Returns the terminal state (the row is synced here).
@@ -576,6 +658,15 @@ export async function pump(
     let source: Iterable<EngineEvent> | AsyncIterable<EngineEvent>;
     if (command.type === 'scheduleRetry') {
       source = [armRetry(deps, state, command)];
+    } else if (command.type === 'scheduleWait') {
+      // #4 A6 — the driver's OWN `scheduleWait` command (a `control` `wait` parks
+      // on a durable timer): ARM S1's alarm then append `timer.waitScheduled`, whose
+      // fold parks the node `wait_pending`. `armWait` runs while building the array,
+      // keeping the arm strictly BEFORE the append (so a `wait_pending` node always
+      // has a live alarm — the property that removes the boot-reconcile burden). The
+      // alarm clock's `node_wait` handler later appends `timer.due` when it fires. No
+      // executor, like `scheduleRetry`/`evaluateControl`.
+      source = [armWait(deps, state, command)];
     } else if (command.type === 'evaluateControl') {
       // The control node's durable event is named by `command.event`
       // (`condition.evaluated` for an `if`, `switch.evaluated` for a `switch`, #4
