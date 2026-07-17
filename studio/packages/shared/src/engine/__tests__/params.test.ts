@@ -1655,8 +1655,12 @@ describe('validateTriggerBindings — save-time root restriction (#5 S12b)', () 
     expect(errors[0]).toMatch(/not \$\{run\.\*\}/);
   });
 
-  it('rejects an ${item} binding (only bound inside a lambda)', () => {
-    expect(validateTriggerBindings({ a: '${item}' })[0]).toMatch(/may reference only/);
+  it('rejects an ${item} binding, rendered bare (no dot-form) in the message', () => {
+    const err = validateTriggerBindings({ a: '${item}' })[0];
+    expect(err).toMatch(/may reference only/);
+    // `item` has no `.*` form — the message names it as `${item}`, not `${item.*}`.
+    expect(err).toContain('not ${item}');
+    expect(err).not.toContain('${item.*}');
   });
 
   it('rejects a disallowed root nested UNDER an allowed function/trigger ref', () => {

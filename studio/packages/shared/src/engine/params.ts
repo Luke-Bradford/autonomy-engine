@@ -2014,9 +2014,14 @@ function checkExprStatic(
   // outside the binding gate. `refRoot` above already turned the segments into
   // a root; `checkRefRoot` (below) still validates the field of an ALLOWED root.
   if (allowedRoots !== undefined && !allowedRoots.has(root.kind)) {
+    // Name the offending root as the AUTHOR wrote it: the two node kinds share
+    // the `nodes` namespace, and `item` has no dot-form (it is `${item}`, never
+    // `${item.*}`) — so render it bare rather than as a namespace prefix.
+    const ns = root.kind === 'nodeOutput' || root.kind === 'nodeStatus' ? 'nodes' : root.kind;
+    const shown = ns === 'item' ? '${item}' : `\${${ns}.*}`;
     errors.push(
       `${where}: \${${expr.source}} — a trigger param binding may reference only ` +
-        `\${trigger.*} (the fire-time trigger context), not \${${root.kind === 'nodeOutput' || root.kind === 'nodeStatus' ? 'nodes' : root.kind}.*}`,
+        `\${trigger.*} (the fire-time trigger context), not ${shown}`,
     );
     return;
   }
