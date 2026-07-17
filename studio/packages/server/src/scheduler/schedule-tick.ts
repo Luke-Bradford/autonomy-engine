@@ -10,7 +10,7 @@ import { armWakeup } from '../repo/scheduled-wakeups.js';
 import type { Db } from '../repo/types.js';
 import { UnboundTriggerError, type FireContext, type FireResult } from '../run/launcher.js';
 import type { WakeupFireResult, WakeupHandler } from './alarms.js';
-import { InvalidScheduleError, nextOccurrence } from './recurrence.js';
+import { InvalidScheduleError, nextOccurrence, type OccurrenceBounds } from './recurrence.js';
 // The log seam is byte-identical to the cron reconciler's and lives beside it —
 // imported (type-only, erased at runtime) rather than re-declared, exactly as
 // `alarms.ts` imports it, and so it does NOT form a runtime cycle with the value
@@ -58,8 +58,9 @@ import type { SchedulerLog } from './scheduler.js';
  *     terminal, do NOT re-arm.
  *   - unbound (`pipelineVersionId === null`) → terminal, do NOT re-arm (belt to
  *     the launcher's own `UnboundTriggerError`).
- *   - schedule edited since arm (`trigger.schedule !== ref.schedule`) → terminal
- *     for THIS chain; `scheduler.sync()` seeds the new schedule's chain.
+ *   - schedule OR bounds edited since arm (`!isRefFresh` — the compiled cron or
+ *     the recurrence's start/end window changed) → terminal for THIS chain
+ *     (reason `ref_stale`); `scheduler.sync()` seeds the new spec's chain.
  *   - invalid cron the schema let through → terminal, do NOT re-arm and do NOT
  *     throw (a throw rolls back in-tx and re-delivers this row every tick forever).
  *   - outside a run window → skip THIS occurrence but re-arm the next (the
@@ -76,21 +77,101 @@ export const SCHEDULE_TICK_KIND = 'schedule_tick';
 /**
  * S1's "typed `ref` per kind", validated at ARM time. `schedule` is carried (a
  * superset of the spec's "cron ref = the trigger") so a schedule EDIT is
- * detectable at fire time without a second read — the `schedule_changed`
- * freshness check — and so the reconciler can tell a stale-schedule row from a
- * current one. The `tick-<dueEpoch>` discriminator (not in the ref) is what makes
- * successive occurrences distinct rows and keeps arming idempotent.
+ * detectable at fire time without a second read — the `isRefFresh` check — and so
+ * the reconciler can tell a stale-schedule row from a current one. The
+ * `tick-<dueEpoch>` discriminator (not in the ref) is what makes successive
+ * occurrences distinct rows and keeps arming idempotent.
+ *
+ * #5 S5b-2 (#549): the recurrence bounds `startTime`/`endTime` ride here too — a
+ * bounds-only edit leaves the compiled cron (`schedule`) IDENTICAL, so it is
+ * invisible to a schedule-string compare; carrying the bounds makes such an edit
+ * detectable by the same freshness path. OPTIONAL so a row armed before S5b-2 (no
+ * bounds keys) still `safeParse`s — absent = unbounded = today's behaviour — and
+ * a bounds-free trigger's ref is byte-identical to the pre-S5b-2 shape.
+ * All ref values are strings (`WakeupRefSchema` = record of strings), so the
+ * bounds are the same UTC-`Z` ISO strings the recurrence stores, not epochs.
  */
 export const ScheduleTickRefSchema = z.object({
   triggerId: z.string().min(1),
   schedule: z.string().min(1),
+  startTime: z.string().datetime().optional(),
+  endTime: z.string().datetime().optional(),
 });
+export type ScheduleTickRef = z.infer<typeof ScheduleTickRefSchema>;
+
+/**
+ * Build the canonical `schedule_tick` ref from a trigger's CURRENT state — the
+ * SINGLE constructor both the reconciler (seed) and this handler (re-arm) use, so
+ * the two can never disagree about a row's identity. Bounds come from the
+ * `recurrence` (a raw-cron escape-hatch trigger has no `recurrence` → unbounded,
+ * exactly today's behaviour). Absent bounds are OMITTED (never set to `undefined`):
+ * `WakeupRefSchema` is a record of strings and `serializeRef` keys off
+ * `Object.keys`, so an `undefined`-valued key would both fail validation and
+ * corrupt the dedupe key — and omission is what keeps a bounds-free ref
+ * byte-identical to a pre-S5b-2 row (so old pending rows stay fresh on deploy).
+ *
+ * Precondition: `trigger` is schedulable (`isSchedulable` ⇒ `schedule` non-null);
+ * both call sites guarantee it. Enforced by a real guard (not a cast) so a future
+ * caller that violates it fails LOUDLY here rather than arming a `null`-schedule
+ * row that later blows up in croner.
+ */
+export function buildScheduleTickRef(trigger: Trigger): ScheduleTickRef {
+  const { schedule } = trigger;
+  if (schedule === null) {
+    throw new Error(
+      `buildScheduleTickRef: trigger ${trigger.id} has no schedule — call only for isSchedulable triggers`,
+    );
+  }
+  const ref: ScheduleTickRef = { triggerId: trigger.id, schedule };
+  const r = trigger.recurrence;
+  if (r?.startTime !== undefined) ref.startTime = r.startTime;
+  if (r?.endTime !== undefined) ref.endTime = r.endTime;
+  return ref;
+}
+
+/**
+ * Is a stored ref still current for `trigger`? True iff the ref the trigger would
+ * produce NOW equals the armed one — so a schedule-string edit OR a bounds-only
+ * edit both read as stale. The single freshness predicate the reconciler and the
+ * fire path share (they must agree, or one would fire a row the other would drop).
+ * Precondition as `buildScheduleTickRef`.
+ */
+export function isRefFresh(trigger: Trigger, ref: ScheduleTickRef): boolean {
+  const current = buildScheduleTickRef(trigger);
+  return (
+    current.schedule === ref.schedule &&
+    current.startTime === ref.startTime &&
+    current.endTime === ref.endTime
+  );
+}
+
+/**
+ * The trigger's firing-window bounds as epoch ms, for `nextOccurrence`. Derived
+ * from `recurrence` (raw-cron triggers have none → unbounded). The datetimes are
+ * `z.string().datetime()`-validated on the recurrence schema, so `Date.parse` is
+ * total here. Shared with the reconciler so seed + re-arm bound occurrences
+ * identically.
+ */
+export function scheduleBounds(trigger: Trigger): OccurrenceBounds {
+  const r = trigger.recurrence;
+  const bounds: OccurrenceBounds = {};
+  if (r?.startTime !== undefined) bounds.startAt = Date.parse(r.startTime);
+  if (r?.endTime !== undefined) bounds.stopAt = Date.parse(r.endTime);
+  return bounds;
+}
+
+/** A schedulable trigger — one `isSchedulable` has proven carries a non-null
+ * `schedule`. Narrowing to this (rather than casting `schedule as string` at each
+ * use) lets the reconciler + handler read `trigger.schedule` as a plain string. */
+export type SchedulableTrigger = Trigger & { schedule: string };
 
 /** A trigger is eligible for scheduling iff enabled, in `schedule` mode, and it
  * carries a (syntactically present) cron expression. Binding is deliberately NOT
  * checked here — eligibility is about scheduling; FIRING re-checks binding. The
- * single owner of this predicate (used by the reconciler and this handler). */
-export function isSchedulable(t: Trigger): boolean {
+ * single owner of this predicate (used by the reconciler and this handler). A TYPE
+ * GUARD, so a caller that passes the check reads `trigger.schedule` as `string`
+ * without a cast. */
+export function isSchedulable(t: Trigger): t is SchedulableTrigger {
   return t.enabled && t.mode === 'schedule' && t.schedule !== null;
 }
 
@@ -127,16 +208,22 @@ export function createScheduleTickHandler(deps: ScheduleTickDeps): WakeupHandler
       if (trigger.pipelineVersionId === null) {
         return { status: 'suppressed', reason: 'trigger_unbound' };
       }
-      if (trigger.schedule !== ref.schedule) {
-        return { status: 'suppressed', reason: 'schedule_changed' };
+      // Freshness gates FIRING, not just re-arm: a stale row (schedule string OR
+      // recurrence bounds edited since arm) must NOT fire — e.g. a moved `endTime`
+      // could otherwise fire a row past the new window before `sync()` drops it.
+      if (!isRefFresh(trigger, ref)) {
+        return { status: 'suppressed', reason: 'ref_stale' };
       }
 
-      // `isSchedulable` guarantees `schedule` is non-null. Compute the next
-      // occurrence up front so an invalid cron is caught before anything durable.
+      // `isSchedulable` (checked above) is a type guard, so `trigger.schedule` is
+      // narrowed to `string` here — no cast. Compute the next occurrence (within
+      // the recurrence's bounds) up front so an invalid cron is caught before
+      // anything durable.
       const schedule = trigger.schedule;
+      const bounds = scheduleBounds(trigger);
       let next: number | null;
       try {
-        next = nextOccurrence(schedule, delivery.firedAt);
+        next = nextOccurrence(schedule, delivery.firedAt, bounds);
       } catch (err) {
         if (err instanceof InvalidScheduleError) {
           // Settle + stop. Never re-arm (there is no valid next time) and never
@@ -154,7 +241,7 @@ export function createScheduleTickHandler(deps: ScheduleTickDeps): WakeupHandler
       if (next !== null) {
         armWakeup(tx, {
           kind: SCHEDULE_TICK_KIND,
-          ref: { triggerId: trigger.id, schedule },
+          ref: buildScheduleTickRef(trigger),
           dueAt: next,
           discriminator: `tick-${next}`,
         });

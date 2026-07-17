@@ -37,19 +37,80 @@ export class InvalidScheduleError extends Error {
 }
 
 /**
- * The next fire time STRICTLY AFTER `fromEpochMs`, as epoch ms, or `null` if the
- * schedule has no further occurrence (a finite one-shot already in the past).
+ * A recurrence's firing window (#5 S5b-2, #549), as epoch ms — a half-open
+ * `[startAt, stopAt)`. Both optional/open-ended; a bounds-free call is exactly the
+ * pre-S5b-2 behaviour. `startAt` is INCLUSIVE (an occurrence exactly at `startAt`
+ * fires), `stopAt` is EXCLUSIVE (an occurrence exactly at `stopAt` does not — the
+ * window has ended).
+ */
+export interface OccurrenceBounds {
+  startAt?: number;
+  stopAt?: number;
+}
+
+/**
+ * The next fire time STRICTLY AFTER `fromEpochMs` and within the (optional) bounds
+ * window, as epoch ms, or `null` if the schedule has no further occurrence (a
+ * finite one-shot in the past, or the `[startAt, stopAt)` window is exhausted).
  *
  * Computes next-from-`from`, so every slot missed during downtime is SKIPPED —
  * which is what makes schedule catch-up "no-backfill / ≤1 late fire" structural
  * rather than a policy the outbox has to enforce.
  *
- * @throws {InvalidScheduleError} if `schedule` is not a cron string croner can parse.
+ * ## Boundary contract vs croner-native semantics (verified empirically, croner 10.0.1)
+ *
+ * croner's `startAt`/`stopAt` are BOTH exclusive and second-truncated (FLOORED):
+ * it fires an occurrence iff `occurrence > floor(startAt)` and `occurrence <
+ * floor(stopAt)` (verified empirically). We expose a half-open `[startAt, stopAt)`
+ * — inclusive start, exclusive end, to millisecond precision — by compensating for
+ * both the floor and the exclusivity SYMMETRICALLY:
+ *   - `startAt` INCLUSIVE: hand croner `startAt - 1ms`. Because croner FLOORS,
+ *     `floor(startAt - 1ms)` is `floor(startAt) - 1s` ONLY when `startAt` is exactly
+ *     on a second and `floor(startAt)` otherwise — so croner returns exactly "the
+ *     first occurrence `>= startAt`": an occurrence on a whole-second `startAt` fires
+ *     (inclusive), while a sub-second `startAt` (e.g. `…:00.500Z`) does NOT re-admit
+ *     the earlier `…:00.000` slot (a full `-1s` nudge would).
+ *   - `stopAt` EXCLUSIVE: hand croner `ceil(stopAt)` (rounded UP to the second).
+ *     `floor(ceil(stopAt))` is `stopAt` for a whole-second bound (exact exclusive
+ *     end — an occurrence AT `stopAt` is excluded) and `ceil(stopAt)` for a
+ *     sub-second bound, so an occurrence strictly before the raw `stopAt` instant
+ *     (e.g. the `…:00.000` slot under a `…:00.500Z` end) is NOT wrongly excluded.
+ * Both compensations rely only on: (a) croner floors + compares exclusively, and
+ * (b) the compiled schedules are 5-field crons (minute granularity —
+ * `recurrenceToCron`), whose occurrences all land on whole seconds. Bounds only
+ * exist on a recurrence trigger, whose `schedule` is always such a compiled cron (a
+ * raw-cron escape-hatch trigger has no `recurrence`, thus no bounds).
+ *
+ * These boundary semantics ARE croner-internal (floor + exclusivity), so croner is
+ * EXACT-pinned (`10.0.1`, no caret — see `package.json`) and the guard against a
+ * silent semantics change on upgrade is the boundary CHARACTERIZATION suite in
+ * `__tests__/recurrence.test.ts` (inclusive whole-second start, excluded
+ * sub-second-early slot, exclusive end): a croner upgrade that changed floor or
+ * exclusivity fails those tests LOUDLY at CI rather than mis-enforcing a window.
+ *
+ * @throws {InvalidScheduleError} if `schedule` is not a cron string croner can
+ *   parse (a malformed bound would also surface here — but callers pass
+ *   `z.string().datetime()`-validated bounds, so that path is a belt).
  */
-export function nextOccurrence(schedule: string, fromEpochMs: number): number | null {
+export function nextOccurrence(
+  schedule: string,
+  fromEpochMs: number,
+  bounds: OccurrenceBounds = {},
+): number | null {
   let cron: Cron;
   try {
-    cron = new Cron(schedule, { timezone: 'UTC' });
+    const options: { timezone: string; startAt?: Date; stopAt?: Date } = { timezone: 'UTC' };
+    // Inclusive `startAt`: nudge 1ms earlier so a whole-second boundary occurrence
+    // clears croner's floored-exclusive comparison WITHOUT re-admitting a
+    // sub-second-early slot (see the boundary contract above).
+    if (bounds.startAt !== undefined) options.startAt = new Date(bounds.startAt - 1);
+    // Exclusive `stopAt`: round UP to the second so a sub-second end does not
+    // wrongly exclude an occurrence strictly before the raw instant, while a
+    // whole-second end stays an exact exclusive bound (symmetric to startAt).
+    if (bounds.stopAt !== undefined) {
+      options.stopAt = new Date(Math.ceil(bounds.stopAt / 1000) * 1000);
+    }
+    cron = new Cron(schedule, options);
   } catch (err) {
     throw new InvalidScheduleError(schedule, err);
   }

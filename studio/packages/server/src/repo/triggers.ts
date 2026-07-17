@@ -16,7 +16,7 @@ import type { Db } from './types.js';
  * #5 S5b-1 — the recurrence↔schedule derivation, the SINGLE write-path authority
  * for the two staying consistent. When a recurrence is set, `schedule` is a pure
  * DERIVED cache of `recurrenceToCron(recurrence)` (never co-authored), so the
- * firing chain's cron string (`isSchedulable`/`nextOccurrence`/`schedule_changed`)
+ * firing chain's cron string (`isSchedulable`/`nextOccurrence`/`isRefFresh`)
  * can never drift from the authored recurrence. When recurrence is null,
  * `schedule` is the raw-cron escape-hatch as before. Applied by BOTH createTrigger
  * and updateTrigger — and thus import, which routes through createTrigger.

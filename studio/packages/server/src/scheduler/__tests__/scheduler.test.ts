@@ -3,6 +3,7 @@ import {
   CATALOG_VERSION,
   type NewPipelineVersion,
   type Node,
+  type Recurrence,
   type RunWindow,
   type ScheduledWakeup,
   type Trigger,
@@ -52,6 +53,7 @@ function seedTrigger(
     schedule?: string | null;
     enabled?: boolean;
     runWindows?: RunWindow[] | null;
+    recurrence?: Recurrence | null;
   },
 ): Trigger {
   return createTrigger(db, {
@@ -60,7 +62,9 @@ function seedTrigger(
     pipelineVersionId: opts.pipelineVersionId,
     params: {},
     mode: opts.mode ?? 'schedule',
+    // A recurrence DERIVES `schedule` (raw `schedule` ignored) — bounds via recurrence.
     schedule: opts.schedule === undefined ? '* * * * *' : opts.schedule,
+    recurrence: opts.recurrence ?? null,
     webhook: null,
     concurrency: { policy: 'skip_if_running' },
     runWindows: opts.runWindows ?? null,
@@ -278,5 +282,78 @@ describe('Scheduler — sync() reconciles the durable schedule_tick set', () => 
     expect(pendingTicks(db)).toHaveLength(1);
     makeScheduler(db).sync();
     expect(pendingTicks(db)).toHaveLength(0);
+  });
+});
+
+describe('Scheduler — recurrence bounds (#5 S5b-2, #549)', () => {
+  // A daily-9 recurrence with the given bounds; the derived cron is always '0 9 * * *'.
+  const daily9 = (bounds: Partial<Recurrence> = {}): Recurrence => ({
+    frequency: 'day',
+    interval: 1,
+    schedule: { hours: [9] },
+    ...bounds,
+  });
+
+  it('seeds the first occurrence AT/AFTER a future startTime (skips slots before it)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    // `now` is 2026-07-15 noon; startTime is weeks out.
+    const t = seedTrigger(db, {
+      pipelineVersionId: pv,
+      recurrence: daily9({ startTime: '2026-08-10T00:00:00Z' }),
+    });
+    makeScheduler(db, () => NOON).sync();
+    expect(tickSummary(db)).toEqual([
+      { triggerId: t.id, dueAt: Date.parse('2026-08-10T09:00:00.000Z') },
+    ]);
+  });
+
+  it('seeds NOTHING when now is past endTime (an exhausted window arms no row)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    seedTrigger(db, {
+      pipelineVersionId: pv,
+      recurrence: daily9({ endTime: '2020-01-01T00:00:00Z' }),
+    });
+    makeScheduler(db, () => NOON).sync();
+    expect(pendingTicks(db)).toHaveLength(0);
+  });
+
+  it('re-seeds on a bounds-only edit even though the compiled cron is unchanged', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    // Unbounded daily-9: at noon `now`, today's 09:00 has passed → next is
+    // tomorrow 09:00.
+    const t = seedTrigger(db, { pipelineVersionId: pv, recurrence: daily9() });
+    const s = makeScheduler(db, () => NOON);
+    s.sync();
+    const tomorrow9 = Date.parse('2026-07-16T09:00:00.000Z');
+    expect(tickSummary(db)).toEqual([{ triggerId: t.id, dueAt: tomorrow9 }]);
+
+    // Add a future startTime — the cron ('0 9 * * *') is byte-identical, so a
+    // schedule-string compare would KEEP the stale row. The full-ref freshness
+    // check must drop+re-seed to the first in-window slot.
+    updateTrigger(db, t.id, { recurrence: daily9({ startTime: '2026-08-10T00:00:00Z' }) });
+    s.sync();
+    expect(tickSummary(db)).toEqual([
+      { triggerId: t.id, dueAt: Date.parse('2026-08-10T09:00:00.000Z') },
+    ]);
+  });
+
+  it('KEEPS a bounds-current row (idempotent) — no needless churn', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    seedTrigger(db, {
+      pipelineVersionId: pv,
+      recurrence: daily9({ startTime: '2026-08-10T00:00:00Z', endTime: '2026-09-01T00:00:00Z' }),
+    });
+    const s = makeScheduler(db, () => NOON);
+    s.sync();
+    const first = pendingTicks(db);
+    expect(first).toHaveLength(1);
+    s.sync(); // a bounds-unchanged re-sync keeps the SAME row
+    const second = pendingTicks(db);
+    expect(second).toHaveLength(1);
+    expect(second[0]?.id).toBe(first[0]?.id);
   });
 });

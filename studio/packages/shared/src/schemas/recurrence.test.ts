@@ -7,10 +7,11 @@ import {
 } from './recurrence.js';
 
 /**
- * #5 S5b-1 — the ADF recurrence MODEL, compiled to a cron string ("croner under
- * the hood"). This suite pins the compiler (the crux) and the write-boundary
- * rules. Bounds (`startTime`/`endTime`/`timeZone`) are S5b-2 (#549); `interval > 1`
- * is #550 — both are refused here rather than silently mis-compiled.
+ * #5 S5b-1/S5b-2 — the ADF recurrence MODEL, compiled to a cron string ("croner
+ * under the hood"). This suite pins the compiler (the crux), the write-boundary
+ * rules, and the S5b-2 (#549) `startTime`/`endTime` bounds. `timeZone` is deferred
+ * (#552 — UTC-only would be inert surface); `interval > 1` is #550 — both refused
+ * here rather than silently mis-compiled.
  */
 
 const base = (over: Partial<Recurrence> = {}): Recurrence => ({
@@ -118,6 +119,33 @@ describe('RecurrenceWriteSchema — the write-boundary rules', () => {
     expect(ok(base({ frequency: 'month', schedule: { monthDays: [32] } }))).toBe(false);
   });
 
+  it('accepts start/end bounds and rejects a non-UTC or naive datetime (#549 S5b-2)', () => {
+    // UTC-with-Z only (the run-window UTC contract); offsets + naive strings refused.
+    expect(ok(base({ startTime: '2026-08-01T00:00:00Z' }))).toBe(true);
+    expect(
+      ok(base({ startTime: '2026-08-01T00:00:00.000Z', endTime: '2026-08-31T00:00:00Z' })),
+    ).toBe(true);
+    expect(ok(base({ startTime: '2026-08-01T00:00:00+02:00' }))).toBe(false);
+    expect(ok(base({ endTime: '2026-08-01T00:00:00' }))).toBe(false);
+    expect(ok(base({ endTime: '2026-08-01' }))).toBe(false);
+  });
+
+  it('rejects endTime <= startTime (an empty/inverted window never fires) (#549)', () => {
+    expect(ok(base({ startTime: '2026-08-31T00:00:00Z', endTime: '2026-08-01T00:00:00Z' }))).toBe(
+      false,
+    );
+    expect(
+      err(base({ startTime: '2026-08-31T00:00:00Z', endTime: '2026-08-01T00:00:00Z' })),
+    ).toMatch(/endTime/);
+    // Equal instants are also empty (half-open [start, end) with start==end is empty).
+    expect(ok(base({ startTime: '2026-08-01T00:00:00Z', endTime: '2026-08-01T00:00:00Z' }))).toBe(
+      false,
+    );
+    // A lone bound (only start, or only end) is fine — the other side is open.
+    expect(ok(base({ startTime: '2026-08-01T00:00:00Z' }))).toBe(true);
+    expect(ok(base({ endTime: '2026-08-01T00:00:00Z' }))).toBe(true);
+  });
+
   it('every write-valid recurrence compiles without throwing (compiler totality)', () => {
     const valids: Recurrence[] = [
       base({ frequency: 'minute' }),
@@ -138,5 +166,18 @@ describe('RecurrenceSchema — the lenient stored/read shape', () => {
     // Read must NOT reject what write does — the same lenient-read discipline as
     // TriggerParamsSchema / ConcurrencySchema, so an older row never throws on read.
     expect(RecurrenceSchema.safeParse({ frequency: 'day', interval: 3 }).success).toBe(true);
+  });
+
+  it('parses stored start/end bounds and a bounds-free recurrence alike (#549)', () => {
+    expect(
+      RecurrenceSchema.safeParse({
+        frequency: 'day',
+        interval: 1,
+        startTime: '2026-08-01T00:00:00Z',
+        endTime: '2026-08-31T00:00:00Z',
+      }).success,
+    ).toBe(true);
+    // Absent bounds = unbounded/open-ended, exactly today's behaviour.
+    expect(RecurrenceSchema.safeParse({ frequency: 'day', interval: 1 }).success).toBe(true);
   });
 });

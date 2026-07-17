@@ -61,3 +61,90 @@ describe('nextOccurrence — croner as a pure next-fire calculator', () => {
     );
   });
 });
+
+/**
+ * #5 S5b-2 (#549) — bounds. `nextOccurrence` honours a half-open `[startAt, stopAt)`
+ * window: `startAt` INCLUSIVE (an occurrence exactly at `startAt` fires), `stopAt`
+ * EXCLUSIVE (an occurrence exactly at `stopAt` does NOT — the window ends). This
+ * suite pins that contract, including the croner-boundary compensation that makes
+ * `startAt` inclusive despite croner's native exclusivity.
+ */
+describe('nextOccurrence — start/end bounds (a half-open firing window)', () => {
+  const daily9 = '0 9 * * *';
+  const at = (iso: string) => Date.parse(iso);
+
+  it('startAt in the future: the first occurrence is at/after startAt, not before', () => {
+    // Seeded at Aug 1 while startAt is Aug 10 → the first fire is Aug 10 09:00,
+    // every daily slot before startAt is skipped.
+    const next = nextOccurrence(daily9, at('2026-08-01T00:00:00Z'), {
+      startAt: at('2026-08-10T00:00:00Z'),
+    });
+    expect(next).toBe(at('2026-08-10T09:00:00Z'));
+  });
+
+  it('startAt is INCLUSIVE — an occurrence exactly at startAt fires (croner-boundary compensated)', () => {
+    // Native croner `startAt` is exclusive at the exact second; the calculator
+    // compensates so `[startAt, …)` includes startAt itself. from strictly before.
+    const next = nextOccurrence(daily9, at('2026-08-01T00:00:00Z'), {
+      startAt: at('2026-08-01T09:00:00Z'),
+    });
+    expect(next).toBe(at('2026-08-01T09:00:00Z'));
+  });
+
+  it('a sub-second startAt does NOT re-admit the earlier whole-second slot (half-open, strict)', () => {
+    // startAt 09:00:00.500 → the 09:00:00.000 slot is BEFORE the window and must
+    // NOT fire (a full -1s nudge would wrongly re-admit it); the first in-window
+    // occurrence is the next day's 09:00.
+    const next = nextOccurrence(daily9, at('2026-08-01T00:00:00Z'), {
+      startAt: at('2026-08-01T09:00:00.500Z'),
+    });
+    expect(next).toBe(at('2026-08-02T09:00:00Z'));
+  });
+
+  it('stopAt is EXCLUSIVE — an occurrence exactly at stopAt does not fire, the window ends', () => {
+    const next = nextOccurrence(daily9, at('2026-08-01T00:00:00Z'), {
+      stopAt: at('2026-08-01T09:00:00Z'),
+    });
+    expect(next).toBeNull();
+  });
+
+  it('a sub-second stopAt does NOT exclude an occurrence strictly before the raw instant', () => {
+    // stopAt 09:00:00.500 → the 09:00:00.000 slot is strictly BEFORE the end and
+    // must still fire (a raw floored stopAt would wrongly drop it); symmetric to
+    // the inclusive-start sub-second case.
+    const next = nextOccurrence(daily9, at('2026-08-01T00:00:00Z'), {
+      stopAt: at('2026-08-01T09:00:00.500Z'),
+    });
+    expect(next).toBe(at('2026-08-01T09:00:00Z'));
+  });
+
+  it('an occurrence strictly before stopAt fires; the last one ends the chain', () => {
+    // stopAt Aug 3 09:00: Aug 1 & Aug 2 fire; Aug 3 (== stopAt) does not.
+    expect(
+      nextOccurrence(daily9, at('2026-08-01T00:00:00Z'), { stopAt: at('2026-08-03T09:00:00Z') }),
+    ).toBe(at('2026-08-01T09:00:00Z'));
+    expect(
+      nextOccurrence(daily9, at('2026-08-02T09:00:00Z'), { stopAt: at('2026-08-03T09:00:00Z') }),
+    ).toBeNull();
+  });
+
+  it('from already past stopAt → null (an exhausted window arms nothing)', () => {
+    expect(
+      nextOccurrence(daily9, at('2026-08-05T00:00:00Z'), { stopAt: at('2026-08-03T09:00:00Z') }),
+    ).toBeNull();
+  });
+
+  it('start+end together bound both sides', () => {
+    expect(
+      nextOccurrence(daily9, at('2026-08-01T00:00:00Z'), {
+        startAt: at('2026-08-10T00:00:00Z'),
+        stopAt: at('2026-08-20T00:00:00Z'),
+      }),
+    ).toBe(at('2026-08-10T09:00:00Z'));
+  });
+
+  it('no bounds passed → identical to the unbounded call (back-compat)', () => {
+    const from = at('2026-08-01T00:00:00Z');
+    expect(nextOccurrence(daily9, from, {})).toBe(nextOccurrence(daily9, from));
+  });
+});

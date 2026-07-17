@@ -3,7 +3,15 @@ import { listParsedTriggers } from '../repo/triggers.js';
 import { deleteWakeup, listPendingWakeups } from '../repo/scheduled-wakeups.js';
 import type { Db } from '../repo/types.js';
 import { InvalidScheduleError, nextOccurrence } from './recurrence.js';
-import { isSchedulable, SCHEDULE_TICK_KIND, ScheduleTickRefSchema } from './schedule-tick.js';
+import {
+  buildScheduleTickRef,
+  isRefFresh,
+  isSchedulable,
+  SCHEDULE_TICK_KIND,
+  ScheduleTickRefSchema,
+  scheduleBounds,
+  type SchedulableTrigger,
+} from './schedule-tick.js';
 
 /**
  * #5 S5 — the SCHEDULE RECONCILER. It reconciles the set of durable
@@ -82,28 +90,34 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const now = deps.now ?? (() => Date.now());
   let stopped = false;
 
-  function seed(triggerId: string, schedule: string): void {
+  function seed(trigger: SchedulableTrigger): void {
+    // `SchedulableTrigger` carries a non-null `schedule` (narrowed by
+    // `isSchedulable`), so no cast is needed here.
+    const schedule = trigger.schedule;
     let next: number | null;
     try {
-      next = nextOccurrence(schedule, now());
+      // Bound the first occurrence to the recurrence's window (#5 S5b-2): a
+      // future `startTime` seeds the first in-window slot; a past `endTime` seeds
+      // nothing (`next === null`).
+      next = nextOccurrence(schedule, now(), scheduleBounds(trigger));
     } catch (err) {
       if (err instanceof InvalidScheduleError) {
         // A cron the schema let through but croner rejects. Skip THIS trigger,
         // never abort the reconcile — one poison schedule must not dark-out all
         // scheduling (the blast-radius the per-row guards here exist to prevent).
         deps.log.warn(
-          { err, triggerId, schedule },
+          { err, triggerId: trigger.id, schedule },
           'scheduler: invalid cron expression — skipping',
         );
         return;
       }
       throw err;
     }
-    // A finite schedule with no future occurrence: nothing to arm.
+    // A finite schedule with no future occurrence (or a past `endTime`): nothing to arm.
     if (next === null) return;
     arm({
       kind: SCHEDULE_TICK_KIND,
-      ref: { triggerId, schedule },
+      ref: buildScheduleTickRef(trigger),
       dueAt: next,
       discriminator: `tick-${next}`,
     });
@@ -135,13 +149,17 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       return;
     }
 
-    const schedulable = new Map<string, string>(); // triggerId → current schedule
+    // triggerId → the current trigger, narrowed to `SchedulableTrigger` by the
+    // `isSchedulable` type guard so seed/ref construction read `schedule` cast-free.
+    const schedulable = new Map<string, SchedulableTrigger>();
     for (const t of all) {
-      if (isSchedulable(t)) schedulable.set(t.id, t.schedule as string);
+      if (isSchedulable(t)) schedulable.set(t.id, t);
     }
 
-    // Pass 1 — CANCEL dead / stale-schedule rows; remember which triggers still
-    // hold a valid pending row (so pass 2 does not double-seed them).
+    // Pass 1 — CANCEL dead / stale rows; remember which triggers still hold a
+    // valid pending row (so pass 2 does not double-seed them). Staleness is the
+    // full ref (`isRefFresh`), so a bounds-only edit — invisible to a bare
+    // schedule-string compare — is caught too (#5 S5b-2).
     const keep = new Set<string>();
     for (const row of listPendingWakeups(db)) {
       if (row.kind !== SCHEDULE_TICK_KIND) continue;
@@ -156,9 +174,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         deleteWakeup(db, row.id);
         continue;
       }
-      const { triggerId, schedule } = parsed.data;
-      const current = schedulable.get(triggerId);
-      if (current === undefined || current !== schedule) {
+      const trigger = schedulable.get(parsed.data.triggerId);
+      if (trigger === undefined || !isRefFresh(trigger, parsed.data)) {
         // DELETE, not cancel: a cancelled row keeps its `(kind, dedupeKey)`, so a
         // re-seed of the SAME occurrence after a disable→re-enable (or edit→revert)
         // within one interval would collide with the dead row and silently never
@@ -166,13 +183,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // guarded to `status='pending'`, so a fired/suppressed sibling is untouched.
         deleteWakeup(db, row.id);
       } else {
-        keep.add(triggerId);
+        keep.add(trigger.id);
       }
     }
 
     // Pass 2 — SEED any schedulable trigger left without a valid pending row.
-    for (const [triggerId, schedule] of schedulable) {
-      if (!keep.has(triggerId)) seed(triggerId, schedule);
+    for (const [triggerId, trigger] of schedulable) {
+      if (!keep.has(triggerId)) seed(trigger);
     }
   }
 
