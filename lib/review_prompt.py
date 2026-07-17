@@ -315,8 +315,13 @@ def build_system_rules(scope):
     )
 
 
-def build_payload(scope, diff, pr_description, comments_raw):
-    """Build the /v1/messages request payload for a review of `diff`."""
+def _build_user_prompt(diff, pr_description, comments_raw):
+    """The reviewer-facing content (description + comment history + diff).
+
+    Shared by BOTH transports so they review the exact same thing: the metered
+    API `build_payload` (message content) and the subscription `claude -p`
+    `build_review_prompt` (appended after the charter).
+    """
     user_prompt = "## PR title + description\n\n" + pr_description + "\n\n"
     user_prompt += (
         "## PR Comment History (previous review rounds and author responses)\n\n"
@@ -324,6 +329,24 @@ def build_payload(scope, diff, pr_description, comments_raw):
         + "\n\n"
     )
     user_prompt += "## Full diff\n```diff\n" + diff + "\n```"
+    return user_prompt
+
+
+def build_review_prompt(scope, diff, pr_description, comments_raw):
+    """The single prompt string for `claude -p` (subscription transport, #505).
+
+    Same scope-aware charter and same reviewer content as the API path -- only
+    the transport differs. `claude -p` takes one prompt, so the charter (the
+    API path's `system`) and the user content are concatenated; the charter's
+    findings-only / verdict-mandatory instructions are unchanged, so the review
+    and the verdict `extract_verdict` looks for are identical either way.
+    """
+    return build_system_rules(scope) + "\n\n" + _build_user_prompt(diff, pr_description, comments_raw)
+
+
+def build_payload(scope, diff, pr_description, comments_raw):
+    """Build the /v1/messages request payload for a review of `diff`."""
+    user_prompt = _build_user_prompt(diff, pr_description, comments_raw)
 
     return {
         "model": "claude-sonnet-5",
@@ -571,6 +594,73 @@ def _extract_main(response_path, review_path, stop_reason_path):
     return 0
 
 
+def extract_cli_result(response):
+    """Return (review_text, stop_reason) from a `claude -p --output-format json`
+    result object (the SUBSCRIPTION transport, #505). Fail-safe like
+    extract_review: raises ReviewExtractionError rather than returning anything
+    the gate could mistake for a review.
+
+    Shape: {"type":"result","is_error":bool,"result":"<text>","stop_reason":...}.
+    """
+    if not isinstance(response, dict):
+        raise ReviewExtractionError("claude -p output is not a JSON object: %r" % (response,))
+    if response.get("is_error"):
+        raise ReviewExtractionError(
+            "claude -p reported an error (is_error=true): %r -- not a review, failing the gate."
+            % (response.get("result"),)
+        )
+    text = response.get("result")
+    if not isinstance(text, str) or not text.strip():
+        raise ReviewExtractionError(
+            "claude -p returned no usable `result` text:\n%s" % json.dumps(response, indent=2)
+        )
+    return text, str(response.get("stop_reason") or "")
+
+
+def _prompt_main(files_path, diff_path, desc_path, comments_path, out_path):
+    """`--prompt <files.txt> <diff> <desc> <comments> <out>`: write the single
+    `claude -p` review prompt (scope-aware charter + reviewer content) to <out>."""
+    files = [ln for ln in _read(files_path).splitlines() if ln.strip()]
+    scope = classify_scope(files)
+    prompt = build_review_prompt(
+        scope,
+        _read(diff_path),
+        _read(desc_path).strip(),
+        _read(comments_path).strip(),
+    )
+    with open(out_path, "w", encoding="utf-8") as fh:
+        fh.write(prompt)
+    sys.stdout.write(
+        "review scope=%s (%d changed files); prompt %d chars\n" % (scope, len(files), len(prompt))
+    )
+    return 0
+
+
+def _extract_cli_main(response_path, review_path, stop_reason_path):
+    """`--extract-cli <response.json> <review.txt> <stop_reason.txt>`: extract a
+    review from `claude -p` JSON. Mirrors _extract_main's fail-closed contract."""
+    try:
+        with open(response_path, encoding="utf-8") as fh:
+            response = json.load(fh)
+    except (OSError, ValueError) as exc:
+        sys.stderr.write(
+            "review_prompt: cannot read the claude -p output %s (%s). Unreadable "
+            "is not an approval; failing the gate.\n" % (response_path, exc)
+        )
+        return 1
+    try:
+        text, stop_reason = extract_cli_result(response)
+    except ReviewExtractionError as exc:
+        sys.stderr.write("review_prompt: %s\n" % exc)
+        return 1
+    with open(review_path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    with open(stop_reason_path, "w", encoding="utf-8") as fh:
+        fh.write(stop_reason)
+    sys.stdout.write("review extracted from claude -p (stop_reason=%r)\n" % stop_reason)
+    return 0
+
+
 def main(argv):
     """CLI for the workflow: review_prompt.py <files.txt> <diff> <desc> <comments> <out>
 
@@ -579,6 +669,11 @@ def main(argv):
     (#504), so the gate calls these TESTED extractors instead of inline
     heredocs -- untestability is exactly how #468 survived, per the comment in
     claude-review.yml.
+
+    Subscription transport (#505): `--prompt <files> <diff> <desc> <comments>
+    <out>` builds the single `claude -p` prompt, and `--extract-cli
+    <response.json> <review.txt> <stop_reason.txt>` extracts the review from
+    claude -p's JSON output.
     """
     # Dispatch on the FLAG first, then check its arity. Matching arity first
     # and falling through on a mismatch is how `--extract a b c EXTRA` became a
@@ -592,6 +687,10 @@ def main(argv):
             return _verdict_main(argv[2])
         if argv[1] == "--extract" and len(argv) == 5:
             return _extract_main(argv[2], argv[3], argv[4])
+        if argv[1] == "--prompt" and len(argv) == 7:
+            return _prompt_main(argv[2], argv[3], argv[4], argv[5], argv[6])
+        if argv[1] == "--extract-cli" and len(argv) == 5:
+            return _extract_cli_main(argv[2], argv[3], argv[4])
         sys.stderr.write("review_prompt: bad flag or arity: %s\n\n%s" % (argv[1], _USAGE))
         return 2
 
