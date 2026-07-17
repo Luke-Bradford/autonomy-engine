@@ -224,6 +224,19 @@ function stableEdgeKey(e: Edge): string {
   return `${e.from}\x00${e.to}\x00${e.on}\x00${e.on === 'branch' ? e.branch : ''}`;
 }
 
+// Largest `seconds` for which the driver's `dueAt = now + seconds*1000` stays a
+// SAFE integer (past `Number.MAX_SAFE_INTEGER` a value is still an "integer" to
+// `Number.isInteger` but has lost ms precision, so the STORED `dueAt` would drift
+// from the intended instant — and an outright overflow to `±Infinity` fails
+// `ArmWakeupInputSchema`'s `z.number().int()`). The driver adds the wall clock
+// `now` (epoch ms) ON TOP of `seconds*1000`, so the bound reserves headroom for it:
+// capping `seconds*1000` alone leaves only ~1e3 ms of slack, far less than `now`
+// (~1.78e12). `NOW_CEILING_MS` (1e15 ms ≈ year 33650) over-estimates any real
+// clock; the resulting max wait is still ~253k years, past any real use. Module
+// scope: pure literals, so computed ONCE rather than per `createEngine` call.
+const NOW_CEILING_MS = 1e15;
+const MAX_WAIT_SECONDS = Math.floor((Number.MAX_SAFE_INTEGER - NOW_CEILING_MS) / 1000);
+
 /**
  * Bind a pipeline's graph and return the pure engine. All graph analysis
  * (incoming/outgoing edges, the implicit success-chain, container membership,
@@ -1559,18 +1572,6 @@ export function createEngine(doc: EngineDoc): Engine {
    * integer ms (S1's `dueAt` is `z.number().int()`), so a fractional `${}` seconds
    * is a valid sub-second wait, not an arm-time crash.
    */
-  // Largest `seconds` for which the driver's `dueAt = now + seconds*1000` stays a
-  // SAFE integer (past `Number.MAX_SAFE_INTEGER` a value is still an "integer" to
-  // `Number.isInteger` but has lost ms precision, so the STORED `dueAt` would drift
-  // from the intended instant — and an outright overflow to `±Infinity` fails
-  // `ArmWakeupInputSchema`'s `z.number().int()`). The driver adds the wall clock
-  // `now` (epoch ms) ON TOP of `seconds*1000`, so the bound must reserve headroom
-  // for it: capping `seconds*1000` alone leaves only ~1e3 ms of slack, far less
-  // than `now` (~1.78e12). `NOW_CEILING_MS` (1e15 ms ≈ year 33650) over-estimates
-  // any real clock; the resulting max wait is still ~253k years, past any real use.
-  const NOW_CEILING_MS = 1e15;
-  const MAX_WAIT_SECONDS = Math.floor((Number.MAX_SAFE_INTEGER - NOW_CEILING_MS) / 1000);
-
   function evalWaitSeconds(node: Node, state: RunState, item?: { value: unknown }): number {
     const raw = node.config['seconds'];
     if (typeof raw !== 'string' || raw.trim() === '') {
