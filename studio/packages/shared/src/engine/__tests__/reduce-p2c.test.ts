@@ -756,6 +756,19 @@ describe('foreach container (#4 A4)', () => {
     expect(state.nodes.work!.status).toBe('pending'); // body never ran
   });
 
+  it('is BOUNDED — an over-cap items array fails invalid_event before any item runs', () => {
+    // A data-controlled `items` is not unbounded: `substitute` charges the array
+    // against the inert language's per-field element budget (MAX_ARRAY_ELEMENTS_TOTAL
+    // = 100k), so an over-cap array throws at `evalForeachItems` → invalid_event.
+    // This is the foreach's iteration ceiling (the counterpart to a loop's maxRounds).
+    const huge = Array.from({ length: 100_001 }, (_, i) => i);
+    const eng = engine([node('work')], [], [foreach('fe', ['work'], '${params.list}')]);
+    const { state, log } = drive(eng, { list: huge });
+    expect(state.status).toBe('failure');
+    expect(reasonsOf(log)).toContain('invalid_event');
+    expect(state.nodes.work!.status).toBe('pending'); // body never ran
+  });
+
   it('exposes results to a downstream ${nodes.<foreach>.output.results} ref at run time', () => {
     const eng = engine(
       [node('work'), node('after', { got: '${nodes.fe.output.results}' })],

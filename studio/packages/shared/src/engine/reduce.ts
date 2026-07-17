@@ -1261,6 +1261,13 @@ export function createEngine(doc: EngineDoc): Engine {
     const src = (c.items ?? '').trim();
     const defect = wholeValueDefect(src, 'items');
     if (defect !== null) throw new SubstituteError(defect);
+    // `items` is NOT unbounded even from a data-controlled array (`params`/trigger):
+    // `substitute` charges every materialised array against the inert language's
+    // per-field element budget (`MAX_ARRAY_ELEMENTS_TOTAL`, params.ts), so an
+    // over-cap `items` throws HERE → the run fails `invalid_event` before a single
+    // item dispatches. That is the resolver's designated resource limit for
+    // array-forms (spec #6 "Resource limits"); it is the foreach's iteration
+    // ceiling, the counterpart to a loop's `maxRounds`.
     const out = substitute(src, buildCtx(state));
     if (!Array.isArray(out)) {
       throw new SubstituteError(
@@ -1564,16 +1571,12 @@ export function createEngine(doc: EngineDoc): Engine {
 
       let changed = false;
       for (const id of sortedTopEntities) {
-        if (containerById.has(id)) {
+        const cc = containerById.get(id);
+        if (cc !== undefined) {
           const cs = state.containers[id]!;
           if (cs.status !== 'pending') continue;
-          const r = computeReadiness(
-            topIncoming.get(id)!,
-            containerJoin(containerById.get(id)!),
-            state,
-          );
+          const r = computeReadiness(topIncoming.get(id)!, containerJoin(cc), state);
           if (r === 'ready') {
-            const cc = containerById.get(id)!;
             if (cc.kind === 'foreach') {
               // Foreach entry resolves `items` and may finish (bad items →
               // invalid_event) or exit immediately (zero items → success), so it

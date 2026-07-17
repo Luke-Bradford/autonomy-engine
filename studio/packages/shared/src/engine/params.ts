@@ -1464,6 +1464,12 @@ export function validateDoc(
     if (c.kind === 'stage' && c.exitWhen !== undefined) {
       errors.push(`container '${c.id}': exitWhen is only meaningful on a loop, not a stage`);
     }
+    // Symmetric to the exitWhen/maxRounds refusals: `items` is foreach-only, so a
+    // stray `items` on a loop/stage is a dead field — refuse it LOUDLY rather than
+    // silently accept it (the reducer ignores it, so nothing else would surface it).
+    if (c.kind !== 'foreach' && c.items !== undefined) {
+      errors.push(`container '${c.id}': items is only meaningful on a foreach, not a ${c.kind}`);
+    }
     // #4 A4 — a `foreach` iterates its body once per element of `items`; it needs
     // an items expression and takes NEITHER a loop's exitWhen NOR its maxRounds
     // (it is bounded by items.length, not a predicate/cap). A zero-CHILD foreach

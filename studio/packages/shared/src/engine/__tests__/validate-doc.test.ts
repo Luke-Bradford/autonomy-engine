@@ -280,6 +280,35 @@ describe('validateDoc — foreach container (#4 A4)', () => {
     );
   });
 
+  it('rejects a stray items on a loop or stage (foreach-only, symmetric with exitWhen)', () => {
+    const onLoop = doc(
+      [node('w', { outputs: [{ name: 'done', type: 'boolean' }] })],
+      [],
+      [
+        {
+          id: 'lp',
+          kind: 'loop',
+          children: ['w'],
+          exitWhen: '${nodes.w.output.done}',
+          items: '${params.list}',
+        },
+      ],
+      [LIST],
+    );
+    expect(validateDoc(onLoop).join(' ')).toContain(
+      'items is only meaningful on a foreach, not a loop',
+    );
+    const onStage = doc(
+      [node('a')],
+      [],
+      [{ id: 'stg', kind: 'stage', children: ['a'], items: '${params.list}' }],
+      [LIST],
+    );
+    expect(validateDoc(onStage).join(' ')).toContain(
+      'items is only meaningful on a foreach, not a stage',
+    );
+  });
+
   it('rejects a foreach with no children (a useless empty body)', () => {
     const d = doc(
       [],
