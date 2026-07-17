@@ -188,6 +188,13 @@ export function parseJsonBody(
 }
 
 /**
+ * The three LLM adapter kinds — narrower than the full `ConnectionKind` union so
+ * passing a non-LLM kind (`agent_cli`, `http`) to an LLM-only helper is a compile
+ * error, not a convention. Derived via `Extract` so it tracks the source enum.
+ */
+export type LlmConnectionKind = Extract<ConnectionKind, 'anthropic_api' | 'openai_api' | 'ollama'>;
+
+/**
  * #461 — the single failure event for a 2xx response that carries NO readable
  * completion. The completion IS `llm_call`'s whole product; a provider that
  * returns 200 but no completion structure (`{}`, `choices:[]`, a non-array
@@ -212,13 +219,6 @@ export function parseJsonBody(
  * matching the `<kind> HTTP <status>` errors (the generic `parseJsonBody`
  * message is the one exception, and names a unique symptom instead).
  */
-/**
- * The three LLM adapter kinds — narrower than the full `ConnectionKind` union so
- * passing a non-LLM kind (`agent_cli`, `http`) to an LLM-only helper is a compile
- * error, not a convention. Derived via `Extract` so it tracks the source enum.
- */
-export type LlmConnectionKind = Extract<ConnectionKind, 'anthropic_api' | 'openai_api' | 'ollama'>;
-
 export function noCompletionFailure(
   kind: LlmConnectionKind,
 ): Extract<ActivityEvent, { type: 'failed' }> {
