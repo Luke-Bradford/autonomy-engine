@@ -852,6 +852,30 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     error: z.string(),
   }),
   z.object({
+    /**
+     * #4 A8 — "this `control` `filter` node succeeds; make its output durable." A
+     * driver-OWN command like `evaluateControl`/`failNode` (no executor, no
+     * connector — the driver's `pump` routes it to a synchronous single-event
+     * append). The reducer resolves `items`+`predicate` PURELY (composing them into
+     * the inert `filter(items, predicate)` closed-fn over run state, exactly as
+     * `evaluateControl` resolves its branch) into the filtered `outputs`, holds the
+     * node `ready`, and hands the driver this command; the driver appends
+     * `node.succeeded` with these `outputs` and folds it via the SAME `onSucceeded`
+     * handler a dispatched node's success reaches (a `ready` node IS `LIVE_NODE`),
+     * so the declared-output contract (`validateOutputs`/`storeOutputs`) applies
+     * unchanged.
+     *
+     * `ExecutorCommand` deliberately excludes it (it is not `dispatchNode`/
+     * `startChild`), so forgetting the pump branch is a COMPILE error. The
+     * `attemptId` is the filter node's current attempt, so a stale re-emit (a
+     * pre-restart evaluation) folds as a stale/terminal no-op.
+     */
+    type: z.literal('succeedControl'),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    outputs: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
     type: z.literal('finishRun'),
     outcome: RunOutcomeSchema,
     reason: z.string().optional(),

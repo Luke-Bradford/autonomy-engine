@@ -301,6 +301,70 @@ describe('driver — fail control activity routes through the REAL pump (#4 A7)'
   });
 });
 
+describe('driver — filter control activity routes through the REAL pump (#4 A8)', () => {
+  // #4 A8 — a real `filter` control node (catalogued kind:control).
+  function filterNode(id: string, items: string, predicate: string): Node {
+    return node(id, { type: 'filter', config: { items, predicate } });
+  }
+
+  it('emits node.succeeded with the filtered result output (never dispatches the filter)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [filterNode('flt', '${params.nums}', '${greater(item, 2)}')],
+      [],
+      [{ name: 'nums', type: 'json', required: true }],
+    );
+    const run = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params: { nums: [1, 4, 2, 5] },
+    });
+
+    const state = await startRun(deps(db), run);
+
+    expect(state.status).toBe('success');
+    expect(state.nodes.flt!.status).toBe('success');
+    // Order preserved: 4, 5 (the > 2 elements) in their input positions.
+    expect(state.outputs.flt).toEqual({ result: [4, 5] });
+
+    const log = loadEngineEvents(db, run.id);
+    // The pump's driver-own `succeedControl` branch appended a durable
+    // `node.succeeded` — the real driver.ts path, not just the shared harness.
+    const succeeded = log.find((e) => e.type === 'node.succeeded' && e.nodeId === 'flt') as
+      Extract<EngineEvent, { type: 'node.succeeded' }> | undefined;
+    expect(succeeded?.outputs).toEqual({ result: [4, 5] });
+    // The filter is engine-evaluated: it must NEVER reach the executor as a dispatch.
+    expect(log.some((e) => e.type === 'node.dispatched' && e.nodeId === 'flt')).toBe(false);
+  });
+
+  it('the persisted filter-run log replays to the identical state (event-sourcing invariant)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [filterNode('flt', '${params.nums}', '${greater(item, 2)}')],
+      [],
+      [{ name: 'nums', type: 'json', required: true }],
+    );
+    const run = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params: { nums: [3, 1] },
+    });
+
+    const driven = await startRun(deps(db), run);
+    const engine = buildEngine(getPipelineVersion(db, pvId)!);
+    const replayed = engine.projectRunState(loadEngineEvents(db, run.id));
+    expect(replayed).toEqual(driven);
+    expect(replayed.status).toBe('success');
+    expect(replayed.outputs.flt).toEqual({ result: [3] });
+  });
+});
+
 describe('driver — startRun trigger context (#5 S12)', () => {
   it('appends run.triggerContext BEFORE run.started and folds it into state', async () => {
     const { db } = freshDb();

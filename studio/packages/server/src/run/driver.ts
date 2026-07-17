@@ -610,6 +610,22 @@ export async function pump(
           code: FAILURE_CODES.FORCED_FAIL,
         },
       ];
+    } else if (command.type === 'succeedControl') {
+      // #4 A8 — the driver's OWN `succeedControl` command (a `control` `filter`
+      // succeeds): append `node.succeeded` with the `outputs` the reducer already
+      // resolved PURELY (the filtered `{ result }`). Folded by the SAME `onSucceeded`
+      // handler a connector success reaches (a `ready` control node IS `LIVE_NODE`),
+      // so the declared-output contract applies unchanged. No executor, like
+      // `evaluateControl`/`failNode`.
+      source = [
+        {
+          type: 'node.succeeded',
+          runId: state.runId,
+          nodeId: command.nodeId,
+          attemptId: command.attemptId,
+          outputs: command.outputs,
+        },
+      ];
     } else {
       source = deps.executor.perform(command, state.runId);
     }

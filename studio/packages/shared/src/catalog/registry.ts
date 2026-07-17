@@ -2,7 +2,12 @@ import { z } from 'zod';
 import type { Output } from '../schemas/pipeline.js';
 import { SecretRefSchema } from '../schemas/secret-ref.js';
 import type { ActivityCatalog, ActivityCatalogEntry } from './types.js';
-import { FAIL_ACTIVITY_TYPE, IF_ACTIVITY_TYPE, SWITCH_ACTIVITY_TYPE } from './types.js';
+import {
+  FAIL_ACTIVITY_TYPE,
+  FILTER_ACTIVITY_TYPE,
+  IF_ACTIVITY_TYPE,
+  SWITCH_ACTIVITY_TYPE,
+} from './types.js';
 import { llmCallConfigSchema } from './llm-config.js';
 
 /**
@@ -160,6 +165,29 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: [],
     outputs: [],
     configSchema: z.object({ message: z.string().min(1) }),
+  },
+  {
+    // #4 A8 — the `filter` CONTROL activity. Engine-evaluated like `if`/`switch`/
+    // `fail` (`kind:'control'`, no connector, `CONTROL_NOT_DISPATCHABLE` on
+    // dispatch): the reducer routes it STRUCTURALLY by `type`. UNLIKE `if`/`switch`
+    // (a branch) and `fail` (a failure) it produces a normal SUCCESS carrying a
+    // `result` output — the input `items` array filtered by the whole-value `${}`
+    // `predicate`, order-preserved. The reducer composes the two config fields into
+    // the INERT expression language's existing `filter(items, predicate)` closed-fn
+    // (evaluated under ONE element budget) and holds `ready` while the driver
+    // appends `node.succeeded{outputs:{result}}` via the `succeedControl` command.
+    // `outputs`/`configSchema` are palette metadata; the save-time rules are
+    // `validateDoc`'s `validateFilterConfig` (shape/whole-value) and `validateRefs`'
+    // composed-expr scan (which gives the predicate lambda `${item}` scope).
+    // Cataloguing the TYPE bumped `CATALOG_VERSION` 5→6.
+    type: FILTER_ACTIVITY_TYPE,
+    title: 'Filter',
+    kind: 'control',
+    category: 'control',
+    idempotent: false,
+    connectionKinds: [],
+    outputs: [out('result', 'json')],
+    configSchema: z.object({ items: z.string().min(1), predicate: z.string().min(1) }),
   },
 ];
 
