@@ -563,9 +563,9 @@ describe('containers — loop do-while semantics (A3)', () => {
     expect(state.status).toBe('success');
   });
 
-  it('projects the LAST round`s child outputs — prior rounds are cleared', () => {
+  it("projects the LAST round's child outputs — prior rounds are cleared", () => {
     // A round resets its children and CLEARS their outputs (`resetNodes`), so the
-    // container`s projected output reflects only the FINAL round. A child emitting
+    // container's projected output reflects only the FINAL round. A child emitting
     // a round-varying value must project the value from the round it exited on.
     const eng = engine(
       [
@@ -588,7 +588,7 @@ describe('containers — loop do-while semantics (A3)', () => {
     );
     expect(state.containers.lp!.status).toBe('success');
     expect(state.containers.lp!.round).toBe(2);
-    // ONLY the final round`s value — not 0 (round 0) nor an accumulation.
+    // ONLY the final round's value — not 0 (round 0) nor an accumulation.
     expect(state.containers.lp!.outputs).toEqual({ done: true, n: 2 });
     expect(state.outputs.lp).toEqual({ done: true, n: 2 }); // ${nodes.lp.output.n}
   });
