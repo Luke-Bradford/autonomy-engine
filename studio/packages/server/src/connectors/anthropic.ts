@@ -49,8 +49,9 @@ const anthropicConnectionConfigSchema = llmConnectionConfigSchema.extend({
  * Concatenate the `text`-type content blocks of a Messages API response, or
  * `null` when the response carries NO text completion (#461): a non-array
  * `content` (absent/malformed), an empty array, or an array with zero
- * text-type blocks (e.g. a tool_use-only response — text-mode `llm_call` sends
- * no tools, so this is treated as no-completion and revisited at L4b/L10). A
+ * text-type blocks whose `text` is a string (a tool_use-only response, or a
+ * malformed `{type:'text', text: <non-string>}` block — text-mode `llm_call`
+ * sends no tools, so this is treated as no-completion and revisited at L4b/L10). A
  * present text block whose text is `''` is a REAL (if empty) completion and
  * returns `''`, NOT `null`.
  */
@@ -59,7 +60,10 @@ function extractText(json: unknown): string | null {
   if (!Array.isArray(content)) return null;
   const textBlocks = content.filter(
     (b): b is { type: string; text: string } =>
-      typeof b === 'object' && b !== null && (b as { type?: unknown }).type === 'text',
+      typeof b === 'object' &&
+      b !== null &&
+      (b as { type?: unknown }).type === 'text' &&
+      typeof (b as { text?: unknown }).text === 'string',
   );
   if (textBlocks.length === 0) return null;
   return textBlocks.map((b) => b.text).join('');

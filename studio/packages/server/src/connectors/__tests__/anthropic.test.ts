@@ -66,6 +66,9 @@ describe('anthropicAdapter.runActivity', () => {
     ['a non-array content', { content: 'hi' }],
     ['an empty content array', { content: [] }],
     ['only non-text blocks', { content: [{ type: 'tool_use', id: 't', name: 'x', input: {} }] }],
+    // A text-type block whose `text` is not a string is malformed, not a present
+    // completion — it must route through the same absent-vs-present scrutiny.
+    ['a text block with a non-string text', { content: [{ type: 'text', text: 42 }] }],
   ])('fails permanent when the 2xx body carries %s', async (_label, body) => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, body));
     const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk-ant-key'));
