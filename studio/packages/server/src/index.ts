@@ -6,11 +6,9 @@ import { openDb } from './db/client.js';
 import { appMeta } from './db/schema.js';
 import { resolveMasterKey } from './secrets/secrets.js';
 import { createSupervisor } from './workers/process-supervisor.js';
-import {
-  drainSettledWakeups,
-  getWakeupByKey,
-  RETENTION_MAX_BATCHES_PER_SWEEP,
-} from './repo/scheduled-wakeups.js';
+import { drainSettledWakeups, getWakeupByKey } from './repo/scheduled-wakeups.js';
+import { drainWebhookDeliveries } from './repo/webhook-deliveries.js';
+import { RETENTION_MAX_BATCHES_PER_SWEEP } from './repo/retention.js';
 import { reconcileOnBoot } from './run/reconcile.js';
 import { createExecutor } from './run/executor.js';
 import { createRunDrives } from './run/drives.js';
@@ -56,21 +54,35 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 export const DEFAULT_WAKEUP_RETENTION_MS = 30 * MS_PER_DAY;
 
 /**
- * Resolve `WAKEUP_RETENTION_DAYS` → the retention window in ms. Empty/undefined =
- * the 30-day default; `0` = retention DISABLED (never prune); any other value must
- * be a non-negative integer number of days. VALIDATED (not a silent `Number()`)
- * for the same reason `resolvePort` is: a typo that parsed to `NaN` would flow
- * into `before = now - NaN`, make the `firedAt < before` predicate always false,
- * and silently disable pruning — the bug persisting invisibly.
+ * Default retention floor for `webhook_deliveries` rows (#421). Also 30 days —
+ * generous ON PURPOSE (see `pruneWebhookDeliveries`'s safety argument): far
+ * beyond any real caller's `x-webhook-idempotency-key` retry window, so a key is
+ * freed only long after any legitimate retry could arrive, while keeping the
+ * append-per-delivery ledger from growing without bound.
  */
-export function resolveRetentionMs(raw: string | undefined): number {
+export const DEFAULT_WEBHOOK_RETENTION_MS = 30 * MS_PER_DAY;
+
+/**
+ * Resolve a `<NAME>_RETENTION_DAYS` env value → the retention window in ms.
+ * Empty/undefined = `defaultMs`; `0` = retention DISABLED (never prune); any
+ * other value must be a non-negative integer number of days. VALIDATED (not a
+ * silent `Number()`) for the same reason `resolvePort` is: a typo that parsed to
+ * `NaN` would flow into `before = now - NaN`, make the `< before` predicate
+ * always false, and silently disable pruning — the bug persisting invisibly.
+ * `envName` names the offending var in the error so a `WEBHOOK_RETENTION_DAYS`
+ * typo does not report `WAKEUP_RETENTION_DAYS`.
+ */
+export function resolveRetentionMs(
+  raw: string | undefined,
+  opts: { envName: string; defaultMs: number },
+): number {
   // `.trim()` so a whitespace-only value falls to the default rather than
   // `Number('   ') === 0` silently DISABLING retention.
-  if (raw === undefined || raw.trim() === '') return DEFAULT_WAKEUP_RETENTION_MS;
+  if (raw === undefined || raw.trim() === '') return opts.defaultMs;
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 0) {
     throw new Error(
-      `Invalid WAKEUP_RETENTION_DAYS "${raw}" — must be a non-negative integer number of days (0 disables retention)`,
+      `Invalid ${opts.envName} "${raw}" — must be a non-negative integer number of days (0 disables retention)`,
     );
   }
   return n * MS_PER_DAY;
@@ -113,9 +125,11 @@ export interface BuildAppOptions {
   dbPath?: string;
   /** Overrides `process.env.AUTONOMY_MASTER_KEY_FILE` for this app instance only; threaded through to `resolveMasterKey`. */
   masterKeyFile?: string;
-  /** #464 — overrides `WAKEUP_RETENTION_DAYS`/the 30-day default (ms). `0` disables the retention sweep. Call-time only, for test isolation + operator override. */
+  /** #464 — overrides `WAKEUP_RETENTION_DAYS`/the 30-day default (ms). `0` disables the wakeup retention sweep. Call-time only, for test isolation + operator override. */
   wakeupRetentionMs?: number;
-  /** #464 — overrides the retention sweep interval (ms); defaults to `RETENTION_SWEEP_MS`. Tests set it small (or disable via `wakeupRetentionMs: 0`) to avoid a real hour-long timer. */
+  /** #421 — overrides `WEBHOOK_RETENTION_DAYS`/the 30-day default (ms). `0` disables the webhook-deliveries retention sweep. Call-time only, for test isolation + operator override. */
+  webhookRetentionMs?: number;
+  /** #464/#421 — overrides the retention sweep interval (ms) for BOTH sweeps; defaults to `RETENTION_SWEEP_MS`. Tests set it small (or disable a sweep via its `*RetentionMs: 0`) to avoid a real hour-long timer. */
   retentionSweepMs?: number;
 }
 
@@ -311,53 +325,99 @@ export async function buildApp(opts?: BuildAppOptions) {
   // per trigger goes overdue, and the handler arms the next FUTURE occurrence.
   alarmClock.tick();
 
-  // #464 — RETENTION SWEEP. Settled `scheduled_wakeups` rows are permanent unless
-  // pruned; an always-on schedule/retry writes them forever. Prune settled rows
-  // past the retention floor, in bounded batches drained to a fixpoint. Disabled
-  // entirely when `retentionMs === 0` (`WAKEUP_RETENTION_DAYS=0` / test override).
-  const retentionMs =
-    opts?.wakeupRetentionMs ?? resolveRetentionMs(process.env.WAKEUP_RETENTION_DAYS);
+  // #464/#421 — RETENTION SWEEPS. Two append-only ledgers grow without bound (an
+  // always-on schedule/retry writes settled `scheduled_wakeups` forever; every
+  // delivery appends a `webhook_deliveries` row). Each is pruned past its OWN
+  // configurable floor, in bounded batches drained to a fixpoint, and each is
+  // disabled entirely when its retentionMs is 0. Both share the sweep interval.
   const retentionSweepMs = opts?.retentionSweepMs ?? RETENTION_SWEEP_MS;
-  // Validate the RESOLVED values — the env path is already checked by
-  // `resolveRetentionMs`, but the `BuildAppOptions` override path is not, and a
-  // degenerate `retentionSweepMs <= 0` would make `setInterval` fire continuously.
-  // Fail-fast at boot, consistent with the port/master-key resolution above.
-  if (!Number.isFinite(retentionMs) || retentionMs < 0) {
-    throw new Error(
-      `Invalid wakeupRetentionMs ${retentionMs} — must be a finite number ≥ 0 (0 disables retention)`,
-    );
-  }
-  if (retentionMs > 0 && (!Number.isFinite(retentionSweepMs) || retentionSweepMs <= 0)) {
+
+  // Resolve + VALIDATE both windows FIRST, before arming ANY timer. `label` names
+  // the offending option in the error. The env path is already validated by
+  // `resolveRetentionMs`, but the `BuildAppOptions` override path is not — so this
+  // fail-fast (consistent with port/master-key) covers it. Crucially, ALL throwing
+  // happens here: if `WEBHOOK_RETENTION_DAYS` is a typo, we must reject BEFORE the
+  // wakeup sweep's interval is armed, because the boot error path runs before the
+  // `onClose` teardown is registered — an interval armed then abandoned would keep
+  // firing hourly against the open `db`.
+  const resolveRetentionWindow = (
+    label: 'wakeup' | 'webhook',
+    overrideMs: number | undefined,
+    envName: string,
+    defaultMs: number,
+  ): number => {
+    const ms = overrideMs ?? resolveRetentionMs(process.env[envName], { envName, defaultMs });
+    if (!Number.isFinite(ms) || ms < 0) {
+      throw new Error(
+        `Invalid ${label}RetentionMs ${ms} — must be a finite number ≥ 0 (0 disables retention)`,
+      );
+    }
+    return ms;
+  };
+  const wakeupRetentionMs = resolveRetentionWindow(
+    'wakeup',
+    opts?.wakeupRetentionMs,
+    'WAKEUP_RETENTION_DAYS',
+    DEFAULT_WAKEUP_RETENTION_MS,
+  );
+  const webhookRetentionMs = resolveRetentionWindow(
+    'webhook',
+    opts?.webhookRetentionMs,
+    'WEBHOOK_RETENTION_DAYS',
+    DEFAULT_WEBHOOK_RETENTION_MS,
+  );
+  // A degenerate `retentionSweepMs <= 0` would make `setInterval` fire
+  // continuously — only matters once at least one sweep is enabled.
+  if (
+    (wakeupRetentionMs > 0 || webhookRetentionMs > 0) &&
+    (!Number.isFinite(retentionSweepMs) || retentionSweepMs <= 0)
+  ) {
     throw new Error(`Invalid retentionSweepMs ${retentionSweepMs} — must be a finite number > 0`);
   }
-  let retentionTimer: ReturnType<typeof setInterval> | undefined;
-  if (retentionMs > 0) {
-    // `maxBatches` bounds a RECURRING sweep's blocking (see the const's doc); the
-    // BOOT sweep passes undefined = a one-time full drain before serving.
-    const sweepRetention = (maxBatches?: number): void => {
-      // A DB fault here must never crash a headless server — the same structural
-      // guard the alarm tick (and cron ticks) use.
+
+  // Arm ONE ledger's boot + recurring sweep. Returns the interval timer (or
+  // `undefined` when disabled) so `onClose` can clear it. Reached only after all
+  // validation above, so no timer is armed before a possible throw.
+  const startRetentionSweep = (
+    label: 'wakeup' | 'webhook',
+    retentionMs: number,
+    drain: (before: number, maxBatches?: number) => number,
+  ): ReturnType<typeof setInterval> | undefined => {
+    if (retentionMs === 0) return undefined;
+    // A DB fault here must never crash a headless server — the same structural
+    // guard the alarm tick (and cron ticks) use. `maxBatches` bounds a RECURRING
+    // sweep's blocking (see `RETENTION_MAX_BATCHES_PER_SWEEP`); the BOOT sweep
+    // passes undefined = a one-time full drain before serving.
+    const sweep = (maxBatches?: number): void => {
       try {
-        const pruned = drainSettledWakeups(db, { before: Date.now() - retentionMs, maxBatches });
-        if (pruned > 0) fastify.log.info({ pruned }, 'wakeup retention: pruned settled rows');
+        const pruned = drain(Date.now() - retentionMs, maxBatches);
+        if (pruned > 0) fastify.log.info({ pruned }, `${label} retention: pruned rows`);
       } catch (err) {
-        fastify.log.error({ err }, 'wakeup retention sweep failed');
+        fastify.log.error({ err }, `${label} retention sweep failed`);
       }
     };
-    // Sweep once at boot (a long downtime — or first deploy of this feature —
-    // may have piled up a big backlog): a full drain, synchronous (better-sqlite3)
-    // so it blocks boot until clear, but the partial `scheduled_wakeups_retention_idx`
-    // keeps each batch an index range scan and the server is not yet serving. The
-    // recurring interval is BOUNDED (`RETENTION_MAX_BATCHES_PER_SWEEP`) so it can
-    // never stall in-flight requests if a backlog builds during operation.
-    // `unref`'d so a pending interval sweep never holds the process open.
-    sweepRetention();
-    retentionTimer = setInterval(
-      () => sweepRetention(RETENTION_MAX_BATCHES_PER_SWEEP),
-      retentionSweepMs,
-    );
-    retentionTimer.unref();
-  }
+    // Full drain at boot (a long downtime — or first deploy of the feature — may
+    // have piled up a backlog): synchronous better-sqlite3 blocks boot until
+    // clear, but each batch is an index range scan and the server is not yet
+    // serving. The recurring interval is BOUNDED so it can never stall in-flight
+    // requests if a backlog builds during operation. `unref`'d so a pending
+    // interval sweep never holds the process open at shutdown.
+    sweep();
+    const timer = setInterval(() => sweep(RETENTION_MAX_BATCHES_PER_SWEEP), retentionSweepMs);
+    timer.unref();
+    return timer;
+  };
+
+  const wakeupRetentionTimer = startRetentionSweep(
+    'wakeup',
+    wakeupRetentionMs,
+    (before, maxBatches) => drainSettledWakeups(db, { before, maxBatches }),
+  );
+  const webhookRetentionTimer = startRetentionSweep(
+    'webhook',
+    webhookRetentionMs,
+    (before, maxBatches) => drainWebhookDeliveries(db, { before, maxBatches }),
+  );
 
   // Auth seam + the one global error handler, registered before any route so
   // every request (and every thrown error) is covered.
@@ -413,9 +473,11 @@ export async function buildApp(opts?: BuildAppOptions) {
     // DURABLE, and the boot sweep above serves it on the next start.
     clearInterval(alarmTimer);
     alarmClock.stop();
-    // #464 — stop the retention sweep too; it is pure housekeeping, safe to drop
-    // instantly (the next boot sweeps again). `undefined` when retention is off.
-    if (retentionTimer !== undefined) clearInterval(retentionTimer);
+    // #464/#421 — stop both retention sweeps too; they are pure housekeeping, safe
+    // to drop instantly (the next boot sweeps again). `undefined` when that sweep
+    // is disabled.
+    if (wakeupRetentionTimer !== undefined) clearInterval(wakeupRetentionTimer);
+    if (webhookRetentionTimer !== undefined) clearInterval(webhookRetentionTimer);
     runLauncher.stop();
     await supervisor.reapAllSupervised();
   });

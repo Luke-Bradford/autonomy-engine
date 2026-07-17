@@ -127,13 +127,24 @@ export const openaiAdapter: ConnectorAdapter = {
       yield parsed.event;
       return;
     }
-    const choice = (parsed.json as { choices?: unknown }).choices;
-    const first = Array.isArray(choice) ? choice[0] : undefined;
+    // #461 — a present string (even '') is a real completion; anything else is
+    // NO completion → fail permanent, sub-classified for diagnostics (#556): an
+    // absent/non-array `choices` container is `absent_content`; a present-but-
+    // empty `choices:[]` is `empty_completion_set`; a candidate present but its
+    // `message.content` non-string/absent is `malformed_block`.
+    const choices = (parsed.json as { choices?: unknown }).choices;
+    if (!Array.isArray(choices)) {
+      yield noCompletionFailure('openai_api', 'absent_content');
+      return;
+    }
+    if (choices.length === 0) {
+      yield noCompletionFailure('openai_api', 'empty_completion_set');
+      return;
+    }
+    const first = choices[0];
     const text = (first as { message?: { content?: unknown } } | undefined)?.message?.content;
-    // #461 — a present string (even '') is a real completion; anything else
-    // (no choices, no message, non-string/null content) is NO completion → fail.
     if (typeof text !== 'string') {
-      yield noCompletionFailure('openai_api');
+      yield noCompletionFailure('openai_api', 'malformed_block');
       return;
     }
     yield {

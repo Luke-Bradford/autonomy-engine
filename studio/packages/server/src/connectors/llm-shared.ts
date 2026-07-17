@@ -191,6 +191,29 @@ export function parseJsonBody(
 export type LlmConnectionKind = Extract<ConnectionKind, 'anthropic_api' | 'openai_api' | 'ollama'>;
 
 /**
+ * #556 — the sub-reason a 2xx response carried no readable completion, for
+ * DIAGNOSTICS only. All three are the SAME `permanent` retry class (see
+ * `noCompletionFailure`); the distinction is which shape failed, so an operator
+ * reading a durable `error` can tell a provider RESPONSE-SHAPE change apart from
+ * a single corrupt block without re-deriving it from the raw body:
+ *
+ * - `absent_content` — the completion container is structurally missing or the
+ *   wrong type (anthropic non-array `content`, openai non-array `choices`,
+ *   ollama absent/non-object `message`). Usually a provider API change.
+ * - `empty_completion_set` — the container is present but holds no candidate
+ *   completion (an empty `content`/`choices` array, or anthropic tool_use-only
+ *   blocks). A well-formed response that simply produced no text.
+ * - `malformed_block` — a candidate IS present but its text field is the wrong
+ *   type (an anthropic `{type:'text', text:<non-string>}`, an openai/ollama
+ *   non-string `message.content`). Usually a single corrupt block.
+ *
+ * ollama has no `empty_completion_set` case — its response is a single message,
+ * not a candidate set — so it only ever reports `absent_content`/`malformed_block`.
+ * A shared taxonomy need not be surjective per adapter.
+ */
+export type NoCompletionReason = 'absent_content' | 'malformed_block' | 'empty_completion_set';
+
+/**
  * #461 — the single failure event for a 2xx response that carries NO readable
  * completion. The completion IS `llm_call`'s whole product; a provider that
  * returns 200 but no completion structure (`{}`, `choices:[]`, a non-array
@@ -213,15 +236,18 @@ export type LlmConnectionKind = Extract<ConnectionKind, 'anthropic_api' | 'opena
  *
  * `kind` names the adapter so the durable `error` is traceable to a provider,
  * matching the `<kind> HTTP <status>` errors (the generic `parseJsonBody`
- * message is the one exception, and names a unique symptom instead).
+ * message is the one exception, and names a unique symptom instead). `reason`
+ * (#556) sub-classifies the shape failure for diagnostics — the retry class is
+ * `permanent` for EVERY reason, so no downstream behaviour reads it.
  */
 export function noCompletionFailure(
   kind: LlmConnectionKind,
+  reason: NoCompletionReason,
 ): Extract<ActivityEvent, { type: 'failed' }> {
   return {
     type: 'failed',
     kind: 'permanent',
-    error: `${kind} returned a 2xx response with no completion`,
+    error: `${kind} returned a 2xx response with no completion (${reason})`,
   };
 }
 

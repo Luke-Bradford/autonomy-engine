@@ -83,18 +83,23 @@ describe('ollamaAdapter.runActivity', () => {
 
   // #461 — a 2xx with NO readable completion is a permanent failure, not
   // `succeeded{text:''}`.
+  //
+  // #556 — sub-reason (diagnostic; retry class stays `permanent`): an absent/
+  // non-object `message` is `absent_content`; a present message whose `content`
+  // is non-string/absent is `malformed_block`. ollama has no
+  // `empty_completion_set` — its response is a single message, not a candidate set.
   it.each([
-    ['no message field', { done: true }],
-    ['a message with no content', { message: { role: 'assistant' } }],
-    ['a non-string content', { message: { content: 42 } }],
-  ])('fails permanent when the 2xx body carries %s', async (_label, body) => {
+    ['no message field', { done: true }, 'absent_content'],
+    ['a message with no content', { message: { role: 'assistant' } }, 'malformed_block'],
+    ['a non-string content', { message: { content: 42 } }, 'malformed_block'],
+  ])('fails permanent (%s → %s) when the 2xx body carries it', async (_label, body, reason) => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, body));
     const events = await drain(ollamaAdapter.runActivity(ctx(), null));
     expect(events).toEqual([
       {
         type: 'failed',
         kind: 'permanent',
-        error: 'ollama returned a 2xx response with no completion',
+        error: `ollama returned a 2xx response with no completion (${reason})`,
       },
     ]);
   });

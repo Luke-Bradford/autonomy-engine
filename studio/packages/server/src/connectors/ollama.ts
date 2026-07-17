@@ -115,12 +115,20 @@ export const ollamaAdapter: ConnectorAdapter = {
       yield parsed.event;
       return;
     }
+    // #461 — a present string (even '') is a real completion; anything else is
+    // NO completion → fail rather than succeed with ''. Sub-classified for
+    // diagnostics (#556): an absent/non-object `message` is `absent_content`; a
+    // present message whose `content` is non-string/absent is `malformed_block`.
+    // ollama has no `empty_completion_set` — its response is a single message,
+    // not a candidate set (see `NoCompletionReason`).
     const message = (parsed.json as { message?: { content?: unknown } }).message;
-    const text = message?.content;
-    // #461 — a present string (even '') is a real completion; a missing message
-    // or non-string content is NO completion → fail rather than succeed with ''.
+    if (typeof message !== 'object' || message === null) {
+      yield noCompletionFailure('ollama', 'absent_content');
+      return;
+    }
+    const text = message.content;
     if (typeof text !== 'string') {
-      yield noCompletionFailure('ollama');
+      yield noCompletionFailure('ollama', 'malformed_block');
       return;
     }
     const doneReason = (parsed.json as { done_reason?: unknown }).done_reason;
