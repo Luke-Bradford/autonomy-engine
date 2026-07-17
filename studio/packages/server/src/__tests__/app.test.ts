@@ -116,6 +116,27 @@ describe('#464 — retention boot sweep', () => {
     await app.close();
   });
 
+  it('rejects a degenerate retentionSweepMs (would make setInterval fire continuously)', async () => {
+    await expect(
+      buildApp({
+        dbPath: join(tmpDir, 'retention-badsweep.sqlite'),
+        masterKeyFile: join(tmpDir, 'retention-badsweep.key'),
+        wakeupRetentionMs: 1_000,
+        retentionSweepMs: 0,
+      }),
+    ).rejects.toThrow(/retentionSweepMs/);
+  });
+
+  it('rejects a negative wakeupRetentionMs', async () => {
+    await expect(
+      buildApp({
+        dbPath: join(tmpDir, 'retention-badms.sqlite'),
+        masterKeyFile: join(tmpDir, 'retention-badms.key'),
+        wakeupRetentionMs: -1,
+      }),
+    ).rejects.toThrow(/wakeupRetentionMs/);
+  });
+
   it('the RECURRING interval sweep prunes a row that ages past the floor after boot', async () => {
     vi.useFakeTimers();
     try {

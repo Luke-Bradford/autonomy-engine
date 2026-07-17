@@ -6,7 +6,11 @@ import { openDb } from './db/client.js';
 import { appMeta } from './db/schema.js';
 import { resolveMasterKey } from './secrets/secrets.js';
 import { createSupervisor } from './workers/process-supervisor.js';
-import { drainSettledWakeups, getWakeupByKey } from './repo/scheduled-wakeups.js';
+import {
+  drainSettledWakeups,
+  getWakeupByKey,
+  RETENTION_MAX_BATCHES_PER_SWEEP,
+} from './repo/scheduled-wakeups.js';
 import { reconcileOnBoot } from './run/reconcile.js';
 import { createExecutor } from './run/executor.js';
 import { createRunDrives } from './run/drives.js';
@@ -314,26 +318,44 @@ export async function buildApp(opts?: BuildAppOptions) {
   const retentionMs =
     opts?.wakeupRetentionMs ?? resolveRetentionMs(process.env.WAKEUP_RETENTION_DAYS);
   const retentionSweepMs = opts?.retentionSweepMs ?? RETENTION_SWEEP_MS;
+  // Validate the RESOLVED values — the env path is already checked by
+  // `resolveRetentionMs`, but the `BuildAppOptions` override path is not, and a
+  // degenerate `retentionSweepMs <= 0` would make `setInterval` fire continuously.
+  // Fail-fast at boot, consistent with the port/master-key resolution above.
+  if (!Number.isFinite(retentionMs) || retentionMs < 0) {
+    throw new Error(
+      `Invalid wakeupRetentionMs ${retentionMs} — must be a finite number ≥ 0 (0 disables retention)`,
+    );
+  }
+  if (retentionMs > 0 && (!Number.isFinite(retentionSweepMs) || retentionSweepMs <= 0)) {
+    throw new Error(`Invalid retentionSweepMs ${retentionSweepMs} — must be a finite number > 0`);
+  }
   let retentionTimer: ReturnType<typeof setInterval> | undefined;
   if (retentionMs > 0) {
-    const sweepRetention = (): void => {
+    // `maxBatches` bounds a RECURRING sweep's blocking (see the const's doc); the
+    // BOOT sweep passes undefined = a one-time full drain before serving.
+    const sweepRetention = (maxBatches?: number): void => {
       // A DB fault here must never crash a headless server — the same structural
       // guard the alarm tick (and cron ticks) use.
       try {
-        const pruned = drainSettledWakeups(db, { before: Date.now() - retentionMs });
+        const pruned = drainSettledWakeups(db, { before: Date.now() - retentionMs, maxBatches });
         if (pruned > 0) fastify.log.info({ pruned }, 'wakeup retention: pruned settled rows');
       } catch (err) {
         fastify.log.error({ err }, 'wakeup retention sweep failed');
       }
     };
     // Sweep once at boot (a long downtime — or first deploy of this feature —
-    // may have piled up a big backlog), then on the coarse interval. The boot
-    // drain is synchronous (better-sqlite3), so it blocks boot until the backlog
-    // clears; the partial `scheduled_wakeups_retention_idx` keeps each batch an
-    // index range scan so even a year-deep backlog drains quickly. `unref`'d so a
-    // pending interval sweep never holds the process open at shutdown.
+    // may have piled up a big backlog): a full drain, synchronous (better-sqlite3)
+    // so it blocks boot until clear, but the partial `scheduled_wakeups_retention_idx`
+    // keeps each batch an index range scan and the server is not yet serving. The
+    // recurring interval is BOUNDED (`RETENTION_MAX_BATCHES_PER_SWEEP`) so it can
+    // never stall in-flight requests if a backlog builds during operation.
+    // `unref`'d so a pending interval sweep never holds the process open.
     sweepRetention();
-    retentionTimer = setInterval(sweepRetention, retentionSweepMs);
+    retentionTimer = setInterval(
+      () => sweepRetention(RETENTION_MAX_BATCHES_PER_SWEEP),
+      retentionSweepMs,
+    );
     retentionTimer.unref();
   }
 

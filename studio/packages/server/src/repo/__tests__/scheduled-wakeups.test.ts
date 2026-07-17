@@ -376,6 +376,17 @@ describe('#464 — pruneSettledWakeups (retention)', () => {
     expect(drainSettledWakeups(db, { before: 5_000, batch: 10 })).toBe(1);
   });
 
+  it('drainSettledWakeups caps a single invocation at maxBatches, resuming next call', () => {
+    // The recurring sweep bounds its per-tick work so it can never stall the
+    // single-threaded server; the leftover drains on the following sweeps.
+    for (let i = 0; i < 5; i++) settled(`attempt-${i}`, 'fired', 1_000 + i);
+
+    // batch 2 × maxBatches 2 → at most 4 rows this call (the two oldest batches).
+    expect(drainSettledWakeups(db, { before: 10_000, batch: 2, maxBatches: 2 })).toBe(4);
+    // The 5th drains on the next (uncapped) call.
+    expect(drainSettledWakeups(db, { before: 10_000, batch: 2 })).toBe(1);
+  });
+
   it('drainSettledWakeups clamps a non-positive batch to 1 rather than spinning forever', () => {
     // A `batch <= 0` would prune 0 rows per call and never break (`0 < 0` is
     // false). The clamp guarantees forward progress for a mistaken caller.
