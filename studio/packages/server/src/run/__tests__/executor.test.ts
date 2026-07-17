@@ -1,4 +1,7 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import sodium from 'libsodium-wrappers';
 import { z } from 'zod';
 import {
@@ -179,6 +182,63 @@ describe('createExecutor — happy path (real http adapter, mocked fetch)', () =
       outputs: { status: 200, body: 'BODY', headers: { 'x-h': '1' } },
     });
     expect(getRun(db, run.id)?.status).toBe('success');
+  });
+});
+
+describe('createExecutor — fs connector end-to-end (#4 A11, real fsAdapter)', () => {
+  // The `fs` connector is the FIRST to serve TWO activity types through ONE
+  // adapter, so it proves the executor threads `node.type` into
+  // `ActivityContext.activityType` — without it the adapter cannot tell a read
+  // from a write. Uses the REAL fsAdapter via `testRegistry()`.
+  function fsNode(id: string, connectionId: string, config: Record<string, unknown>): Node {
+    seq += 1;
+    // `type` is what the executor threads as `activityType`; both file activities
+    // bind an `fs` connection.
+    return {
+      id,
+      type: config.content === undefined ? 'file_read' : 'file_write',
+      config,
+      connectionId,
+      position: { x: seq, y: 0 },
+    };
+  }
+
+  let root: string;
+  beforeAll(async () => {
+    root = await realpath(await mkdtemp(join(tmpdir(), 'exec-fs-')));
+  });
+  afterAll(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('dispatches a file_read node and succeeds with the file content (activityType threaded)', async () => {
+    await writeFile(join(root, 'greeting.txt'), 'from disk', 'utf8');
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'fs', { roots: [root] }, null);
+    const pvId = seedVersion(db, [fsNode('n1', connId, { path: 'greeting.txt' })]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db), run);
+
+    expect(state.status).toBe('success');
+    const succeeded = loadEngineEvents(db, run.id).find((e) => e.type === 'node.succeeded');
+    expect(succeeded).toMatchObject({
+      outputs: { content: 'from disk', path: join(root, 'greeting.txt') },
+    });
+  });
+
+  it('dispatches a file_write node and the bytes land on disk', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'fs', { roots: [root] }, null);
+    const pvId = seedVersion(db, [
+      fsNode('n1', connId, { path: 'written.txt', content: 'payload' }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db), run);
+
+    expect(state.status).toBe('success');
+    expect(await readFile(join(root, 'written.txt'), 'utf8')).toBe('payload');
   });
 });
 

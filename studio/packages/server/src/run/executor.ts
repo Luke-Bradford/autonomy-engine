@@ -435,6 +435,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       runId,
       nodeId,
       attemptId,
+      // A multi-activity connector (`fs`, #4 A11) selects its operation from this;
+      // single-activity adapters ignore it. It is the node's own `type`.
+      activityType: node.type,
       input: command.preparedInput,
       connectionConfig,
       signal: controller.signal,

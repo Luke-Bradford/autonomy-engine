@@ -46,6 +46,15 @@ export interface ActivityContext {
   runId: string;
   nodeId: string;
   attemptId: string;
+  /**
+   * The dispatched node's activity `type` (the catalog key). Most adapters serve
+   * ONE activity and ignore it, but a connector that serves MORE THAN ONE
+   * activity type through a single adapter — the registry is keyed by connection
+   * KIND, so one `fs` connection backs both `file_read` and `file_write` (#4
+   * A11) — selects its operation from this field. Non-secret (it is `Node.type`,
+   * already public), safe to log.
+   */
+  activityType: string;
   /** The node's prepared (substituted) config. Secret-free by construction. */
   input: Record<string, unknown>;
   /** The bound Connection's non-secret `config`. */
