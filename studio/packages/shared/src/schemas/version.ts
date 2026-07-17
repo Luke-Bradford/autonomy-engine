@@ -33,5 +33,10 @@
 // node as an uncatalogued type (the executor fails it `UNKNOWN_ACTIVITY` rather
 // than engine-evaluating its predicate into a `result` output), so a doc using
 // `filter` must refuse to import there. Stamping 6 makes an older build reject it.
-export const CATALOG_VERSION = 6;
+// 7 (#4 A5+A6): the `wait` control activity is a NEW catalog TYPE, same rationale
+// as `if`/`switch`/`fail`/`filter`: a pre-A6 build does not route `wait` — it
+// treats the node as an uncatalogued type (the executor fails it `UNKNOWN_ACTIVITY`
+// rather than parking it on a durable timer), so a doc using `wait` must refuse to
+// import there. Stamping 7 makes an older build reject it.
+export const CATALOG_VERSION = 7;
 export const SCHEMA_VERSION = 1;

@@ -21,6 +21,7 @@ import {
   IF_BRANCH_FALSE,
   SWITCH_ACTIVITY_TYPE,
   SWITCH_DEFAULT_BRANCH,
+  WAIT_ACTIVITY_TYPE,
 } from '../catalog/types.js';
 import { SecretRefSchema, isSecretRef } from '../schemas/secret-ref.js';
 import type { EvalIn, FnSpec, SigType } from './functions.js';
@@ -1476,6 +1477,8 @@ export function validateDoc(
     if (node.type === FAIL_ACTIVITY_TYPE) validateFailConfig(node, errors);
     // #4 A8 — a `filter`'s `items`+`predicate` presence + whole-value shape.
     if (node.type === FILTER_ACTIVITY_TYPE) validateFilterConfig(node, errors);
+    // #4 A6 — a `wait`'s `seconds` presence + whole-value shape (number field).
+    if (node.type === WAIT_ACTIVITY_TYPE) validateWaitConfig(node, errors);
   }
 
   // Node-only forward reachability + the container index, for the back-edge
@@ -1804,6 +1807,30 @@ function validateFilterConfig(node: Node, errors: string[]): void {
     }
     validateWholeValue(where, raw, errors, noun);
   }
+}
+
+/**
+ * #4 A6 — a `wait`'s `seconds` SHAPE (save-time half). A WHOLE-value-REQUIRED `${}`
+ * field: it resolves to the NUMBER of seconds to park, so an embedded template
+ * (`"wait ${x}s"`) — which can only ever resolve to a STRING — could never be a
+ * duration; refuse it at save, exactly as `if.condition`/`filter.items` refuse a
+ * non-whole-value boolean/array (`validateWholeValue`). The `${}` REF checking is
+ * `validateRefs`' job (the generic node scan); the RUN-TIME type gate — that the
+ * resolved value is a finite, non-negative number — is `evalWaitSeconds`, which
+ * fails a malformed wait LOUD as `invalid_event` (the `wholeValueDefect` vs
+ * `validateWholeValue` split `if`/`filter` follow).
+ */
+function validateWaitConfig(node: Node, errors: string[]): void {
+  const where = `node.${node.id}.seconds`;
+  const raw = node.config['seconds'];
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    errors.push(
+      `${where}: a wait needs a non-empty \${} seconds expression ` +
+        '(e.g. ${5} or ${nodes.check.output.retryAfter})',
+    );
+    return;
+  }
+  validateWholeValue(where, raw, errors, 'seconds');
 }
 
 /**

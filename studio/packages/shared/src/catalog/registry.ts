@@ -7,6 +7,7 @@ import {
   FILTER_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
   SWITCH_ACTIVITY_TYPE,
+  WAIT_ACTIVITY_TYPE,
 } from './types.js';
 import { llmCallConfigSchema } from './llm-config.js';
 
@@ -188,6 +189,32 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: [],
     outputs: [out('result', 'json')],
     configSchema: z.object({ items: z.string().min(1), predicate: z.string().min(1) }),
+  },
+  {
+    // #4 A5+A6 — the `wait` CONTROL activity. Engine-evaluated like `if`/`switch`/
+    // `fail`/`filter` (`kind:'control'`, no connector, `CONTROL_NOT_DISPATCHABLE` on
+    // dispatch): the reducer routes it STRUCTURALLY by `type`. UNLIKE the four
+    // synchronous control activities it is DURABLE — a ready `wait` resolves its
+    // whole-value `${}` `seconds` PURELY, and the driver ARMS S1's alarm then
+    // appends `timer.waitScheduled`, parking the node `wait_pending` until the alarm
+    // clock fires `timer.due` (which SUCCEEDS the node with no output). No `outputs`
+    // (a wait produces no data) and no branch labels (a branch edge off a `wait` is
+    // correctly invalid). `seconds` is a WHOLE-VALUE `${}` number field like
+    // `if.condition`/`filter.items` (an embedded template can only be a string, so
+    // `validateWaitConfig` refuses it at save); `configSchema` is palette metadata,
+    // the save-time rule is `validateDoc`'s `validateWaitConfig`, and the run-time
+    // type gate is `evalWaitSeconds` (finite, non-negative). `idempotent:false` is
+    // inert (a control node is never dispatched, so no `node.dispatched.idempotent`
+    // is ever written). Cataloguing the TYPE bumped `CATALOG_VERSION` 6→7 so an
+    // older build refuses a wait-doc it cannot route rather than treating it inert.
+    type: WAIT_ACTIVITY_TYPE,
+    title: 'Wait',
+    kind: 'control',
+    category: 'control',
+    idempotent: false,
+    connectionKinds: [],
+    outputs: [],
+    configSchema: z.object({ seconds: z.string().min(1) }),
   },
 ];
 

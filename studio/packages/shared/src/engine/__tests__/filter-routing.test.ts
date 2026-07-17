@@ -318,7 +318,11 @@ describe('filter catalog entry (#4 A8)', () => {
     expect(entry?.outputs.map((o) => o.name)).toContain('result');
   });
 
-  it('cataloguing the filter type bumped CATALOG_VERSION to 6', () => {
-    expect(CATALOG_VERSION).toBe(6);
+  it('cataloguing the filter type bumped CATALOG_VERSION to at least 6', () => {
+    // Filter's bump was 5→6; it is no longer the LATEST catalogued type (A6's
+    // `wait` bumped 6→7), so this pins the floor its bump established rather than
+    // the current value — the newest routing test (`wait-routing`) pins the exact
+    // version, the house pattern for "latest activity owns the version assertion".
+    expect(CATALOG_VERSION).toBeGreaterThanOrEqual(6);
   });
 });

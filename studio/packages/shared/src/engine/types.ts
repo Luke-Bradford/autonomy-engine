@@ -117,9 +117,17 @@ export class ParamResolveError extends Error {
  * - `retry_pending` — F2b/D4's **HOLD**: a `transient` failure the node's policy
  *                  still has budget for. NON-terminal, which is the whole design
  *                  (see below), and resolved only by a `node.retryDue`.
+ * - `wait_pending` — #4 A5/A6's durable **PARK**: a `wait` control node paused on
+ *                  S1's alarm. NON-terminal, resolved only by a `timer.due`. It
+ *                  is entered by `timer.waitScheduled` — which the driver appends
+ *                  AFTER arming the alarm — so a `wait_pending` node ALWAYS has a
+ *                  live alarm row (unlike `retry_pending`, entered by `node.failed`
+ *                  BEFORE the arm, which is why retry needs a boot re-arm and wait
+ *                  does not).
  *
- * `retry_pending` is deliberately ABSENT from `TerminalNodeStatusSchema`, and
- * that single fact is what implements the HOLD — no new predicate anywhere:
+ * `retry_pending`/`wait_pending` are deliberately ABSENT from
+ * `TerminalNodeStatusSchema`, and that single fact is what implements the HOLD/PARK
+ * — no new predicate anywhere:
  * `TERMINAL_NODE` excludes it, so `endpointOutcome` returns `null`, every
  * readiness/outcome path treats the node as live, `allTopLevelTerminal` is false
  * (so the run cannot finish while a node is held), a container's
@@ -139,6 +147,7 @@ export const NodeRunStatusSchema = z.enum([
   'skipped',
   'waiting',
   'retry_pending',
+  'wait_pending',
 ]);
 export type NodeRunStatus = z.infer<typeof NodeRunStatusSchema>;
 
@@ -684,6 +693,53 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     previousAttemptId: z.string(),
   }),
   z.object({
+    /**
+     * #4 A5/A6 — the durable fact that a `wait` control node has PARKED on S1's
+     * alarm. Appended by the DRIVER once the alarm row exists (`armWait`), so the
+     * log records WHEN the wait is due rather than leaving it in an ephemeral
+     * timer. Named per the spec's `timer.*` family (A5). The reusable A5 PRIMITIVE
+     * is the durable alarm + arm-before-append ordering, which A17's `until`-timeout
+     * also consumes (spec line 77) — but its FOLD here is wait-specific (`ready` →
+     * `wait_pending`), so A17 arms the same alarm with its own due event/fold rather
+     * than reusing `timer.due`'s wait-node transition.
+     *
+     * Folding it TRANSITIONS the node `ready` → `wait_pending` (unlike
+     * `node.retryScheduled`, which is inert because `node.failed` already entered
+     * the hold). That ordering is load-bearing: the arm precedes this append, so a
+     * `wait_pending` node always has a live alarm and needs no boot re-arm.
+     *
+     * `dueAt` is a STORED fact (epoch ms), stamped from the ARMED ROW's `dueAt`,
+     * never recomputed at fold time — replay-deterministic (spec #5's spike block),
+     * exactly as `node.retryScheduled.nextAttemptAt` is. The reducer does not read
+     * it back (the alarm ROW fires the timer); it is the operator/audit fact for
+     * "when does this wait end".
+     */
+    type: z.literal('timer.waitScheduled'),
+    runId: z.string(),
+    nodeId: z.string(),
+    /** The attempt this timer parks (the alarm's freshness handle). */
+    attemptId: z.string(),
+    dueAt: z.number().int(),
+  }),
+  z.object({
+    /**
+     * #4 A5/A6 — the parked WAIT node's timer is DUE. Appended by the alarm clock's
+     * `node_wait` handler when S1's row comes due; folding it completes the wait
+     * (`wait_pending` → `success`, empty outputs). The `timer.*` twin of
+     * `node.retryDue` — but where `retryDue` re-dispatches, `timer.due` SUCCEEDS
+     * (a wait has nothing to re-run). Guarded on `wait_pending` at the parked
+     * attempt, so an at-least-once redelivery — or a `timer.due` for anything that
+     * is NOT a parked wait node — folds as a no-op. That guard is why this event is
+     * WAIT-specific despite the generic name: a future timer consumer (A17's
+     * `until`-timeout, on a container) does not reuse this fold — it arms the same
+     * A5 alarm but appends its own due event with its own transition.
+     */
+    type: z.literal('timer.due'),
+    runId: z.string(),
+    nodeId: z.string(),
+    previousAttemptId: z.string(),
+  }),
+  z.object({
     // The event-sourced representation of the boot reconciler's "this run
     // cannot be safely resumed" verdict (P2d). Appended when a run had a
     // NON-idempotent activity in flight at crash time (an LLM call that may
@@ -874,6 +930,33 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     nodeId: z.string(),
     attemptId: z.string(),
     outputs: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
+    /**
+     * #4 A6 — "this `control` `wait` node should PARK on a durable timer." A
+     * driver-OWN command like `scheduleRetry` (no executor, no connector — the
+     * driver's `pump` routes it to `armWait`, which arms S1's alarm THEN appends
+     * `timer.waitScheduled`). Mirrors the F2b/F2c pure/impure split: the reducer
+     * resolves the DURATION PURELY (the `${}` `seconds` over run state, exactly as
+     * `evaluateControl`/`filter` resolve their expressions) and hands the driver
+     * the resolved `seconds`; the driver decides WHEN (`now + seconds*1000` against
+     * a real clock) and stays the SOLE clock reader.
+     *
+     * Unlike `scheduleRetry` (whose interval is a static doc field the driver reads
+     * back from the immutable version), `seconds` IS carried here: a wait duration
+     * may be a `${}` expression over run state, which only the pure reducer's
+     * `substitute` can evaluate — so it is resolved reducer-side and passed, not
+     * re-read from the doc.
+     *
+     * `ExecutorCommand` deliberately excludes it (not `dispatchNode`/`startChild`),
+     * so forgetting the pump branch is a COMPILE error. The `attemptId` is the wait
+     * node's current attempt, the alarm's freshness handle.
+     */
+    type: z.literal('scheduleWait'),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    /** Resolved, non-negative, finite duration in seconds (the reducer's pure half). */
+    seconds: z.number(),
   }),
   z.object({
     type: z.literal('finishRun'),

@@ -22,6 +22,7 @@ import {
   IF_BRANCH_FALSE,
   SWITCH_ACTIVITY_TYPE,
   SWITCH_DEFAULT_BRANCH,
+  WAIT_ACTIVITY_TYPE,
 } from '../catalog/types.js';
 import type { OutputType } from '../schemas/pipeline.js';
 import { outputContract, type CheckedContract, type OutputContract } from './outputs.js';
@@ -143,6 +144,10 @@ const LIVE_NODE = new Set<NodeRunState['status']>(['ready', 'dispatched']);
  *   - `retry_pending` — S1's DURABLE ALARM row owes a `node.retryDue`. NOTHING is
  *     in flight here, which is exactly why a naive "converged and idle" test
  *     would tear down every retrying run.
+ *   - `wait_pending`  — S1's DURABLE ALARM row owes a `timer.due` (#4 A6). Same
+ *     shape as `retry_pending`: nothing in flight, a durable alarm the only
+ *     resolver — so `true`, or a run whose sole live node is waiting would be
+ *     torn down `stalled` (the single highest-risk classification in this ticket).
  */
 function awaitsExternalEvent(status: NodeRunState['status']): boolean {
   switch (status) {
@@ -150,6 +155,7 @@ function awaitsExternalEvent(status: NodeRunState['status']): boolean {
     case 'dispatched':
     case 'waiting':
     case 'retry_pending':
+    case 'wait_pending':
       return true;
     case 'pending':
     case 'success':
@@ -217,6 +223,19 @@ type EndpointOutcome = TerminalNodeStatus | null;
 function stableEdgeKey(e: Edge): string {
   return `${e.from}\x00${e.to}\x00${e.on}\x00${e.on === 'branch' ? e.branch : ''}`;
 }
+
+// Largest `seconds` for which the driver's `dueAt = now + seconds*1000` stays a
+// SAFE integer (past `Number.MAX_SAFE_INTEGER` a value is still an "integer" to
+// `Number.isInteger` but has lost ms precision, so the STORED `dueAt` would drift
+// from the intended instant — and an outright overflow to `±Infinity` fails
+// `ArmWakeupInputSchema`'s `z.number().int()`). The driver adds the wall clock
+// `now` (epoch ms) ON TOP of `seconds*1000`, so the bound reserves headroom for it:
+// capping `seconds*1000` alone leaves only ~1e3 ms of slack, far less than `now`
+// (~1.78e12). `NOW_CEILING_MS` (1e15 ms ≈ year 33650) over-estimates any real
+// clock; the resulting max wait is still ~253k years, past any real use. Module
+// scope: pure literals, so computed ONCE rather than per `createEngine` call.
+const NOW_CEILING_MS = 1e15;
+const MAX_WAIT_SECONDS = Math.floor((Number.MAX_SAFE_INTEGER - NOW_CEILING_MS) / 1000);
 
 /**
  * Bind a pipeline's graph and return the pure engine. All graph analysis
@@ -1006,6 +1025,34 @@ export function createEngine(doc: EngineDoc): Engine {
       commands.push({ type: 'succeedControl', nodeId: id, attemptId, outputs });
       return { state: next, changed: true };
     }
+    if (node.type === WAIT_ACTIVITY_TYPE) {
+      // #4 A6 — a `control` `wait` is ENGINE-evaluated like `if`/`switch`/`fail`/
+      // `filter` (checked here, before `node.call` and dispatch — a node is one or
+      // the other), but it is DURABLE: it PARKS on S1's alarm instead of producing a
+      // branch/failure/success synchronously. Resolve the `${}` `seconds` PURELY,
+      // hold the node `ready` (the driver owes `timer.waitScheduled`, the same
+      // handshake the other control activities use for their durable event), and
+      // emit a `scheduleWait` command carrying the resolved duration. NEVER handed to
+      // the executor. A missing/bad `seconds` (non-string, non-finite, negative, bad
+      // `${}` ref) throws → `prepFailure` → `finishRun{invalid_event}`, the same
+      // verdict a control-eval throw reaches. The node does NOT enter `wait_pending`
+      // here — that transition is `timer.waitScheduled`'s fold, appended by the
+      // driver AFTER it arms the alarm, so a `wait_pending` node always has a live
+      // alarm (why wait, unlike retry, needs no boot re-arm).
+      let seconds: number;
+      try {
+        seconds = evalWaitSeconds(node, state, foreachItemOf(state, id));
+      } catch (err) {
+        return prepFailure(state, id, err, diagnostics);
+      }
+      const next = withNode(state, id, {
+        status: 'ready',
+        attempts: ns.attempts + 1,
+        currentAttemptId: attemptId,
+      });
+      commands.push({ type: 'scheduleWait', nodeId: id, attemptId, seconds });
+      return { state: next, changed: true };
+    }
     if (node.call !== undefined) {
       // call_pipeline: resolve the (possibly `${}`) pipelineVersionId + params,
       // hold the node `waiting`, and ask the driver to spawn the child.
@@ -1497,6 +1544,89 @@ export function createEngine(doc: EngineDoc): Engine {
       throw new SubstituteError(`filter node '${node.id}' did not resolve to an array`);
     }
     return { result: out };
+  }
+
+  /**
+   * #4 A6 — resolve a `wait` node's authored `${}` `seconds` to the finite,
+   * non-negative NUMBER the driver's `armWait` turns into `dueAt = now +
+   * seconds*1000`. Pure over `state` (+ the `foreach` `item`): `substitute` reads
+   * only bound outputs/params/trigger context, so a replay resolves the SAME
+   * duration and the re-armed alarm keeps the original `dueAt`.
+   *
+   * `seconds` is a WHOLE-value `${}` field (like `if.condition`/`foreach.items`), so
+   * a well-formed one resolves to a TYPED value — a `number` (`${5}` /
+   * `${nodes.x.output.delay}`) or a numeric string; `Number()` coerces the latter.
+   * BOTH halves of the whole-value rule fire (the `wholeValueDefect` SSOT, exactly
+   * as `evalIfBranch`/`evalForeachItems` apply it at run time — not just at save):
+   * an embedded template (`"wait ${x}s"`) can only resolve to a STRING, never a
+   * duration, so it throws here as well as at save.
+   *
+   * Throws `SubstituteError` (→ `prepFailure` → `finishRun{invalid_event}`) on a
+   * missing/non-string raw `seconds`, a non-whole-value template, or a value that
+   * resolves to NaN / ±Infinity / a NEGATIVE number, or a non-number/non-numeric-
+   * string shape (array/boolean/null/empty-string) — a malformed wait fails the run
+   * LOUD rather than parking on a silently-defaulted or backwards timer (the
+   * project's "never manufacture an absent fact" rule; mirrors `evalFailMessage`/
+   * `evalFilter`, and the non-finite refusal #547 pinned at ingestion boundaries).
+   * Zero is allowed (an immediate wake). The `armWait` boundary rounds `dueAt` to
+   * integer ms (S1's `dueAt` is `z.number().int()`), so a fractional `${}` seconds
+   * is a valid sub-second wait, not an arm-time crash.
+   */
+  function evalWaitSeconds(node: Node, state: RunState, item?: { value: unknown }): number {
+    const raw = node.config['seconds'];
+    if (typeof raw !== 'string' || raw.trim() === '') {
+      throw new SubstituteError(
+        `wait node '${node.id}' has no 'seconds' — a wait parks for a number of ` +
+          'seconds (e.g. ${5} or ${nodes.check.output.retryAfter})',
+      );
+    }
+    const src = raw.trim();
+    // Run-time whole-value gate, the SSOT `validateWaitConfig` reads at save —
+    // enforced HERE too so a pre-gate legacy row (or any bypass of the save path)
+    // fails LOUD instead of coercing an embedded template's string result.
+    const defect = wholeValueDefect(src, 'seconds');
+    if (defect !== null) throw new SubstituteError(defect);
+    const resolved = substitute(src, buildCtx(state), 0, item);
+    // Accept a `number` (`${5}` / a number-typed ref) or a NON-EMPTY numeric
+    // `string` (`${'7'}` / a string-typed ref) — `Number` coerces the latter. But
+    // NOT via a bare `Number(resolved)`, which is fail-OPEN: `Number([])`,
+    // `Number(false)`, `Number(null)` and `Number('')` all yield `0`, and
+    // `Number([5])` yields `5` — so an array / boolean / null / empty-string
+    // `${}` would SILENTLY park for a manufactured duration instead of failing the
+    // run. Reject every non-number, non-numeric-string shape LOUD (the project's
+    // "never manufacture an absent fact" rule; the #547 non-finite refusal generalised
+    // to "not a plausible duration at all").
+    let seconds: number;
+    if (typeof resolved === 'number') {
+      seconds = resolved;
+    } else if (typeof resolved === 'string' && resolved.trim() !== '') {
+      seconds = Number(resolved);
+    } else {
+      seconds = NaN;
+    }
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      throw new SubstituteError(
+        `wait node '${node.id}' seconds must resolve to a finite, non-negative number ` +
+          `(got ${JSON.stringify(resolved)})`,
+      );
+    }
+    // Upper-bound `seconds` so the driver's `dueAt = now + seconds*1000` cannot
+    // overflow past a SAFE integer (→ ±Infinity / precision loss). An unbounded
+    // astronomical value passes the finite/non-negative gate here but then fails
+    // `ArmWakeupInputSchema`'s `z.number().int()` INSIDE `armWait` as a boot poison
+    // pill (the run re-throws on every resume) instead of failing LOUD here — the
+    // opposite tail of the fractional case `armWait` rounds. Reject at eval time so
+    // a bad duration fails the run cleanly, never the alarm arm. `MAX_WAIT_SECONDS`
+    // keeps the FULL `dueAt = now + seconds*1000` within `Number.MAX_SAFE_INTEGER`
+    // (it reserves headroom for `now` — see the constant), so no precision drift or
+    // overflow reaches the arm; the cap is still ~253k years, past any real wait.
+    if (seconds > MAX_WAIT_SECONDS) {
+      throw new SubstituteError(
+        `wait node '${node.id}' seconds ${seconds} exceeds the maximum ${MAX_WAIT_SECONDS} ` +
+          '(a longer wait would overflow the alarm due time)',
+      );
+    }
+    return seconds;
   }
 
   /** The current round's children outputs, merged (sorted, last-key-wins). */
@@ -2300,6 +2430,59 @@ export function createEngine(doc: EngineDoc): Engine {
     };
   }
 
+  /**
+   * #4 A6 — fold `timer.waitScheduled`: a `wait` node's durable alarm is armed, so
+   * PARK it `ready` → `wait_pending`. The `timer.*` twin of `node.retryScheduled`,
+   * but NOT inert — where retry's hold was already entered by `node.failed`, a wait
+   * has no prior hold event, so THIS fold is what enters it. Guarded on the node
+   * being `ready` at exactly this attempt (a stale/duplicate scheduled event for a
+   * node that has moved on is a no-op, mirroring `onRetryDue`). Does NOT `settle`:
+   * the node is now parked, nothing downstream can advance until `timer.due`.
+   */
+  function onWaitScheduled(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'timer.waitScheduled' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    const ns = state.nodes[event.nodeId];
+    if (ns === undefined) return { state, commands: [], diagnostics };
+    if (ns.status !== 'ready' || ns.currentAttemptId !== event.attemptId) {
+      // At-least-once + a back-edge reset both reach here legitimately (a duplicate
+      // scheduled event, or a node whose round reset it) — a no-op, not a defect.
+      return { state, commands: [], diagnostics };
+    }
+    return {
+      state: withNode(state, event.nodeId, { status: 'wait_pending' }),
+      commands: [],
+      diagnostics,
+    };
+  }
+
+  /**
+   * #4 A6 — fold `timer.due`: the parked `wait` node's alarm fired, so COMPLETE it
+   * (`wait_pending` → `success`, empty outputs — a wait produces no data). The
+   * `timer.*` twin of `onRetryDue`, but where retry re-dispatches, a wait SUCCEEDS
+   * (there is nothing to re-run), reaching terminal `success` the same way
+   * `onSucceeded` does and then `settle`-ing so downstream edges route. Guarded on
+   * `wait_pending` at the parked attempt (NOT `LIVE_NODE`, exactly as `onRetryDue`
+   * guards on `retry_pending`): an at-least-once redelivery, or an alarm naming an
+   * attempt the node has moved past, is a no-op. The clock's handler suppresses both
+   * before appending — this is the second layer (spec #5: "at-least-once + an
+   * idempotent fold").
+   */
+  function onWaitDue(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'timer.due' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    const ns = state.nodes[event.nodeId];
+    if (ns === undefined) return { state, commands: [], diagnostics };
+    if (ns.status !== 'wait_pending' || ns.currentAttemptId !== event.previousAttemptId) {
+      return { state, commands: [], diagnostics };
+    }
+    return settle(withNode(state, event.nodeId, { status: 'success' }), diagnostics);
+  }
+
   function onRetryRequested(
     state: RunState,
     event: Extract<EngineEvent, { type: 'node.retryRequested' }>,
@@ -2488,6 +2671,35 @@ export function createEngine(doc: EngineDoc): Engine {
           });
           continue;
         }
+        if (node.type === WAIT_ACTIVITY_TYPE) {
+          // #4 A6 crash recovery: a `wait` folds to `ready` after `tryDispatchNode`
+          // pushed `scheduleWait`, but `projectRunState` keeps STATE, not COMMANDS —
+          // a crash between the predecessor's durable event and `timer.waitScheduled`
+          // (or between the alarm arm and that append) re-derives the node `ready`
+          // with its command lost, and without this fork nothing re-emits it, so the
+          // run hangs `ready` forever (the same reason the control-branch/`fail`/
+          // `filter` forks above and `waiting && node.call` below re-emit). Recompute
+          // `seconds` PURELY and re-emit; the driver's `armWait` is idempotent by the
+          // alarm's `(kind, dedupeKey)`, so a re-arm returns the existing row and
+          // keeps the ORIGINAL `dueAt`. Terminalize a `seconds` that now throws, the
+          // same verdict as the dispatch-prep branch below. Passes the `foreach` item
+          // (as `tryDispatchNode` does) so a `${item}`-bearing `seconds` in a foreach
+          // body re-resolves identically on recovery rather than throwing (#569).
+          let seconds: number;
+          try {
+            seconds = evalWaitSeconds(node, state, foreachItemOf(state, id));
+          } catch (err) {
+            const failed = prepFailure(state, id, err, diagnostics);
+            return { state: failed.state, commands: [failed.finish], diagnostics };
+          }
+          commands.push({
+            type: 'scheduleWait',
+            nodeId: id,
+            attemptId: ns.currentAttemptId,
+            seconds,
+          });
+          continue;
+        }
         let prepared: Record<string, unknown>;
         try {
           prepared = prepInput(state, node);
@@ -2628,6 +2840,12 @@ export function createEngine(doc: EngineDoc): Engine {
         return { state, commands: [], diagnostics };
       case 'node.retryDue':
         return onRetryDue(state, event, diagnostics);
+      case 'timer.waitScheduled':
+        // #4 A6 — NOT inert (unlike `node.retryScheduled`): a wait has no prior
+        // hold event, so this fold is what parks the node `ready` → `wait_pending`.
+        return onWaitScheduled(state, event, diagnostics);
+      case 'timer.due':
+        return onWaitDue(state, event, diagnostics);
       case 'node.retryRequested':
         return onRetryRequested(state, event, diagnostics);
       case 'run.resumed':

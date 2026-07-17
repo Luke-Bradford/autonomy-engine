@@ -4,8 +4,9 @@ import { catalog, getActivity } from '../registry.js';
 describe('activity catalog', () => {
   it('exposes the MVP activity types', () => {
     // `if` (#4 A1) is the first CONTROL activity, `switch` (#4 A2) the second,
-    // `fail` (#4 A7) the third, `filter` (#4 A8) the fourth — all engine-evaluated,
-    // catalogued so the palette/executor-guard/version know them.
+    // `fail` (#4 A7) the third, `filter` (#4 A8) the fourth, `wait` (#4 A5+A6) the
+    // fifth (and first DURABLE control activity) — all engine-evaluated, catalogued
+    // so the palette/executor-guard/version know them.
     expect([...catalog.keys()].sort()).toEqual([
       'agent_task',
       'fail',
@@ -14,6 +15,7 @@ describe('activity catalog', () => {
       'if',
       'llm_call',
       'switch',
+      'wait',
     ]);
   });
 

@@ -365,6 +365,95 @@ describe('driver — filter control activity routes through the REAL pump (#4 A8
   });
 });
 
+describe('driver — wait control activity routes through the REAL pump (#4 A5+A6)', () => {
+  // #4 A6 — a real `wait` control node (catalogued kind:control).
+  function waitNode(id: string, seconds: string): Node {
+    return node(id, { type: 'wait', config: { seconds } });
+  }
+
+  it('arms the alarm and appends timer.waitScheduled, PARKING the node (never dispatches the wait)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [waitNode('w', '${5}')]);
+    const run = seedRun(db, pvId);
+    // Capture the stub so we can inspect the armed alarm (the stub returns a real
+    // row but never fires it — so the node stays parked and the run stays running).
+    const alarms = stubAlarms();
+    const resolveDoc: DocResolver = (id) => getPipelineVersion(db, id)!;
+    const d: DriverDeps = {
+      db,
+      resolveDoc,
+      executor: makeStubExecutor(),
+      alarms,
+      now: () => 1_000,
+    };
+
+    const state = await startRun(d, run);
+
+    // Parked, not finished — the alarm clock (absent here) owes the timer.due.
+    expect(state.nodes.w!.status).toBe('wait_pending');
+    expect(state.status).toBe('running');
+
+    // The pump's driver-own `scheduleWait` branch armed a durable alarm...
+    expect(alarms.armed).toHaveLength(1);
+    expect(alarms.armed[0]).toMatchObject({
+      kind: 'node_wait',
+      ref: { runId: run.id, nodeId: 'w', attemptId: 'w#0' },
+      dueAt: 1_000 + 5_000,
+    });
+    // ...THEN appended a durable `timer.waitScheduled` whose dueAt is read back from
+    // the armed row (the real driver.ts path, not just the shared harness).
+    const log = loadEngineEvents(db, run.id);
+    const scheduled = log.find((e) => e.type === 'timer.waitScheduled' && e.nodeId === 'w') as
+      Extract<EngineEvent, { type: 'timer.waitScheduled' }> | undefined;
+    expect(scheduled?.attemptId).toBe('w#0');
+    expect(scheduled?.dueAt).toBe(1_000 + 5_000);
+    // The wait is engine-evaluated: it must NEVER reach the executor as a dispatch.
+    expect(log.some((e) => e.type === 'node.dispatched' && e.nodeId === 'w')).toBe(false);
+  });
+
+  it('resolves a ${} seconds over run state, coercing to the numeric dueAt', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [waitNode('w', '${params.delay}')],
+      [],
+      [{ name: 'delay', type: 'number', required: true }],
+    );
+    const run = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params: { delay: 12 },
+    });
+    const alarms = stubAlarms();
+    const resolveDoc: DocResolver = (id) => getPipelineVersion(db, id)!;
+    const d: DriverDeps = {
+      db,
+      resolveDoc,
+      executor: makeStubExecutor(),
+      alarms,
+      now: () => 2_000,
+    };
+
+    await startRun(d, run);
+    expect(alarms.armed[0]!.dueAt).toBe(2_000 + 12_000);
+  });
+
+  it('the persisted parked-wait log replays to the identical state (event-sourcing invariant)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [waitNode('w', '${5}')]);
+    const run = seedRun(db, pvId);
+
+    const driven = await startRun(deps(db), run);
+    const engine = buildEngine(getPipelineVersion(db, pvId)!);
+    const replayed = engine.projectRunState(loadEngineEvents(db, run.id));
+    expect(replayed).toEqual(driven);
+    expect(replayed.nodes.w!.status).toBe('wait_pending');
+    expect(replayed.status).toBe('running');
+  });
+});
+
 describe('driver — startRun trigger context (#5 S12)', () => {
   it('appends run.triggerContext BEFORE run.started and folds it into state', async () => {
     const { db } = freshDb();

@@ -1515,3 +1515,58 @@ describe('reconcileOnBoot — #515 a present-but-unparseable version terminalize
     });
   });
 });
+
+describe('reconcileOnBoot — a run PARKED on a wait (#4 A6)', () => {
+  const realAlarms = (db: Db): RetryAlarms => ({
+    arm: (input) => armWakeup(db, input),
+    find: (input) => getWakeupByKey(db, input.kind, buildDedupeKey(input)),
+  });
+
+  function waitNode(id: string, seconds: string): Node {
+    seq += 1;
+    return { id, type: 'wait', config: { seconds }, position: { x: seq, y: 0 } };
+  }
+
+  async function seedParkedRun(db: Db, alarms: RetryAlarms) {
+    const pvId = seedVersion(db, [waitNode('w', '${30}')]);
+    const run = seedRun(db, pvId);
+    await startRun(
+      { db, resolveDoc: resolveDocFor(db), executor: makeStubExecutor(), alarms },
+      run,
+    );
+    return run;
+  }
+
+  it('reports it HELD, appends nothing, and leaves its live alarm row alone (no boot re-arm)', async () => {
+    // The parked-wait counterpart of the retry HELD case: a `wait_pending` node
+    // re-derives nothing on resume and cannot finish, so it reaches the reconciler
+    // with no commands — but UNLIKE a dropped `finishRun` it is NOT finalizable, and
+    // must not be mislabelled `finalized` (nor get a spurious `run.resumed`). Its
+    // alarm was armed BEFORE the park, so it always has a live row; the clock's boot
+    // tick fires it. Reconcile must leave it exactly as it found it.
+    const { db } = freshDb();
+    const alarms = realAlarms(db);
+    const run = await seedParkedRun(db, alarms);
+    const before = loadEngineEvents(db, run.id);
+    expect(before.map((e) => e.type)).toContain('timer.waitScheduled');
+    expect(listPendingWakeups(db)).toHaveLength(1);
+    const armedBefore = listPendingWakeups(db)[0];
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+      alarms,
+    });
+
+    expect(report.held).toEqual([run.id]);
+    expect(report.finalized).toEqual([]);
+    expect(report.resumed).toEqual([]);
+    expect(report.rearmed).toEqual([]);
+    expect(report.interrupted).toEqual([]);
+    // Untouched: no `run.resumed`, no second alarm, still running awaiting its row.
+    expect(loadEngineEvents(db, run.id)).toEqual(before);
+    expect(getRun(db, run.id)!.status).toBe('running');
+    expect(listPendingWakeups(db)).toEqual([armedBefore]);
+  });
+});

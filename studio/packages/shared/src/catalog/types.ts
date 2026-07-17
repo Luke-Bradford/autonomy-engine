@@ -100,6 +100,18 @@ export const FAIL_ACTIVITY_TYPE = 'fail';
 export const FILTER_ACTIVITY_TYPE = 'filter';
 
 /**
+ * The `Node.type` of the `wait` control activity (#4 A6). Same constant-SSOT
+ * rationale as the other control types: a typed identifier read STRUCTURALLY by
+ * the reducer's control-dispatch discriminant (`reduce.ts`), the save-time config
+ * rule (`validateDoc`'s `validateWaitConfig`), and this catalog entry. UNLIKE the
+ * synchronous control activities (`if`/`switch`/`fail`/`filter`), a `wait` is
+ * DURABLE — it parks the node `wait_pending` on S1's alarm (A5) until a `timer.due`
+ * fires, then SUCCEEDS with no output. It is the first control activity that both
+ * routes structurally AND consumes the durable-alarm machinery.
+ */
+export const WAIT_ACTIVITY_TYPE = 'wait';
+
+/**
  * P3 — the ACTIVITY CATALOG entry: the static, pure metadata for one activity
  * `type` (the `type` on a pipeline `Node`). Lives in `shared` (no I/O) so the
  * SAME entry drives:

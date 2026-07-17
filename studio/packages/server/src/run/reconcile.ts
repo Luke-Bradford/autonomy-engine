@@ -198,13 +198,13 @@ export interface ReconcileReport {
    * `run.finished`; now terminalized. */
   finalized: string[];
   /**
-   * Runs still HELD on a node's retry (F2b's `retry_pending`) after recovery —
-   * i.e. ones that now have a live pending alarm row, whether it is the row that
-   * outlived the crash (left untouched) or one `recoverHeld` re-armed (those are
-   * listed in `rearmed` too). "Held" means the run is genuinely WAITING and will
-   * advance on its own; a hold that could not be made true again is `interrupted`
-   * instead, never reported here. Reported so a held run is visibly waiting rather
-   * than silently indistinguishable from a stuck one.
+   * Runs alive on a durable NODE alarm with nothing to resume — "genuinely WAITING,
+   * will advance on its own." Two shapes: a node HELD on a retry (F2b's
+   * `retry_pending`, whose alarm may have been re-armed — those are in `rearmed`
+   * too), and a node PARKED on a wait (#4 A6's `wait_pending`, whose alarm is never
+   * re-armed here since it is always live). A hold that could not be made true again
+   * is `interrupted` instead, never reported here. Reported so such a run is visibly
+   * waiting rather than silently indistinguishable from a stuck one.
    */
   held: string[];
   /**
@@ -272,6 +272,17 @@ function dispatchedNodes(state: RunState): { id: string; attemptId: string }[] {
     .sort()
     .filter((id) => state.nodes[id]!.status === 'dispatched')
     .map((id) => ({ id, attemptId: state.nodes[id]!.currentAttemptId! }));
+}
+
+/**
+ * A run parked on a wait (#4 A6): at least one node is `wait_pending`. Deliberately
+ * NOT the reducer's `awaitsExternalEvent`, which is a SUPERSET (it also matches
+ * `ready`/`dispatched`/`waiting`/`retry_pending`) — the caller must match
+ * `wait_pending` EXCLUSIVELY, so a run with a still-live `ready` node is resumed
+ * normally rather than misreported `held`.
+ */
+function hasWaitPendingNode(state: RunState): boolean {
+  return Object.values(state.nodes).some((n) => n.status === 'wait_pending');
 }
 
 /**
@@ -644,6 +655,24 @@ async function reconcileOne(deps: ReconcileDeps, report: ReconcileReport, run: R
     // `run.resumed` that re-derives nothing. Otherwise fall through: the live
     // nodes resume normally and the run is reported `resumed` AS WELL AS held.
     if (commands.length === 0) return;
+  }
+
+  // A run PARKED on a wait (#4 A6) re-derives NOTHING above either — `onResumed`
+  // skips `wait_pending` (like `retry_pending`), and `settle` cannot finish a run
+  // whose node is non-terminal — so it reaches here with no commands. UNLIKE a
+  // retry hold it needs NO re-arm: a `wait_pending` node's alarm was armed BEFORE
+  // the `timer.waitScheduled` that parked it, so it always has a live row and the
+  // clock's boot tick fires it. But it must be caught HERE, not left to fall
+  // through: the finalize path below appends a spurious `run.resumed` (a no-op fold
+  // for a parked node) and MISreports a still-running parked run as `finalized`
+  // (`commands` is empty, so `needsExecutor` is false). Report it `held` — alive on
+  // a durable node alarm, nothing to resume, the same disposition as a retry hold —
+  // and stop, leaving its row untouched. Reached only when the wait is the ONLY
+  // live work: a run with a parked wait AND a ready sibling has `commands`, resumes
+  // normally, and its wait alarm fires independently.
+  if (commands.length === 0 && hasWaitPendingNode(next)) {
+    report.held.push(run.id);
+    return;
   }
 
   // `finishRun` is the driver's OWN command (no executor); `dispatchNode`/
