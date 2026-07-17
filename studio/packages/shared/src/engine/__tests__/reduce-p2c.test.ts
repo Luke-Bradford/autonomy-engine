@@ -790,6 +790,59 @@ describe('foreach container (#4 A4)', () => {
   });
 });
 
+describe('foreach crash recovery re-emits a control/call child WITH ${item} (#569)', () => {
+  // A control (`if`/`switch`) or `call_pipeline` child inside a foreach body whose
+  // decision references `${item}` can crash-recover while the round is live: the
+  // reducer had pushed its command (`evaluateControl` / `startChild`) but
+  // `projectRunState` keeps STATE not COMMANDS, so the command is lost and `resume`
+  // must re-derive it. The re-derive MUST pass the round's item (as the dispatch
+  // site does) — else `${item}` is unbound on recovery, `substitute` throws, and
+  // the run fails LOUD (`invalid_event`) instead of routing the branch/spawning the
+  // child it would have. Sibling of the A7 `fail` / A8 `filter` / A6 `wait` forks,
+  // which already pass the item.
+
+  it('re-derives a switch child branch with ${item} bound (control fork)', () => {
+    const eng = engine(
+      [node('route', { on: '${item}', cases: ['a', 'b'] }, { type: 'switch' })],
+      [],
+      [foreach('fe', ['route'], '${params.list}')],
+    );
+    // A log that ends the instant the foreach entered round 0 and `route` became
+    // `ready` (evaluateControl pushed, switch.evaluated not yet durable).
+    const projected = eng.projectRunState([started({ list: ['b', 'x'] })]);
+    expect(projected.nodes.route!.status).toBe('ready');
+
+    const { commands } = eng.resume(projected);
+    expect(commands).toContainEqual({
+      type: 'evaluateControl',
+      nodeId: 'route',
+      attemptId: 'route#0',
+      branch: 'b', // ${item} === 'b' matches case 'b' (not `default`)
+      event: 'switch.evaluated',
+    });
+    // No loud failure on resume, and never re-dispatched to the executor.
+    expect(commands.some((c) => c.type === 'finishRun')).toBe(false);
+    expect(commands.some((c) => c.type === 'dispatchNode' && c.nodeId === 'route')).toBe(false);
+  });
+
+  it('re-derives a call_pipeline child params with ${item} bound (call fork)', () => {
+    const eng = engine(
+      [callNode('call', 'child_pv', { sku: '${item}' })],
+      [],
+      [foreach('fe', ['call'], '${params.list}')],
+    );
+    // A log that ends the instant the foreach entered round 0 and the call child
+    // went `waiting` (startChild pushed, child run not yet spawned).
+    const projected = eng.projectRunState([started({ list: ['p', 'q'] })]);
+    expect(projected.nodes.call!.status).toBe('waiting');
+
+    const { commands } = eng.resume(projected);
+    const startChild = commands.find((c) => c.type === 'startChild');
+    expect(startChild?.type === 'startChild' ? startChild.params : null).toEqual({ sku: 'p' });
+    expect(commands.some((c) => c.type === 'finishRun')).toBe(false);
+  });
+});
+
 describe('containers — namespace isolation', () => {
   it('two containers projecting the SAME output name do not collide', () => {
     const eng = engine(
