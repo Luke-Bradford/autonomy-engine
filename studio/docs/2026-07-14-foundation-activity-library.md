@@ -115,6 +115,19 @@ These extend UI-epic Monitor (U10–U12) + #1 audit; listed here so they're not 
   over the same children (clears outputs each round, `exitWhen`) — that's `until`. `foreach` is
   **item-based**: `items` array, `${item}` context, parallel `batchCount`, deterministic per-item
   output aggregation + per-item namespacing, and #1's parallel-variable-mutation reject applies.
+  - **BUILD SPLIT — A4a SHIPPED 2026-07-17 (sequential), A4b DEFERRED → #566 (parallel).** A4a is
+    the SEQUENTIAL foreach: `round` doubles as the item index, one item per round, reusing the loop's
+    `resetContainerRound`→`resetNodes` machinery; `${item}` seeded per-dispatch via `foreachItemOf`;
+    the order-stable `{ results }` aggregate (`${nodes.<foreach>.output.results}`) accumulated on
+    `ContainerRunState.results` (partial on a fail-fast child failure); zero-item → immediate success.
+    **`batchCount` and the F5c parallel-variable-mutation reject are #566** — true parallelism needs
+    per-item node-state namespacing (item 0's `childA` and item 1's `childA` collide on the single
+    global `state.nodes.childA`), a structural change; `results` is "input-order-stable regardless of
+    `batchCount`", so #566 is forward-compatible. No inert `batchCount` field shipped in A4a.
+    **Static-checker limitation (#567):** `${nodes.<foreach>.output.results}` downstream and precise
+    `items` dominance draw an ADVISORY save-time false-reject — container ids are not first-class
+    producers in `computeGraph`/`outputsById` (a pre-existing loop/stage gap); the RUN path resolves
+    them correctly. Canvas authoring of the `foreach` kind is browser-gated → part of the UI epic.
 - **`webhook` is external-wait, NOT a timer.** `wait` = a scheduled `timer.due`. `webhook` **parks
   the run `waiting`** until an inbound, **correlated + authed + replay-protected** HTTP route
   appends `externalWait.completed` (or `expired` on timeout). Distinct suspend/resume source; both

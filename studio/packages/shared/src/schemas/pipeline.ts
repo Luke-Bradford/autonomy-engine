@@ -444,14 +444,17 @@ export const EdgeSchema = z.discriminatedUnion('on', [OperationalEdgeSchema, Bra
 export type Edge = z.infer<typeof EdgeSchema>;
 
 /**
- * A control-flow CONTAINER (P2c): a `loop` or `stage` grouping child nodes into
- * a namespace with its own lifecycle. `children` are node ids (unique within the
- * container, disjoint across containers — validated at save time). `exitWhen` (a
- * `${}` boolean over child outputs, loop only) and `maxRounds` bound a loop; a
- * `stage` exits once all children are terminal. `join` gates the container's own
- * readiness from its incoming OUTER edges (default `all`), mirroring a node's.
+ * A control-flow CONTAINER (P2c): a `loop`, `stage`, or `foreach` grouping child
+ * nodes into a namespace with its own lifecycle. `children` are node ids (unique
+ * within the container, disjoint across containers — validated at save time).
+ * `exitWhen` (a `${}` boolean over child outputs, loop only) and `maxRounds` bound
+ * a loop; a `stage` exits once all children are terminal; a `foreach` (#4 A4)
+ * iterates its body once per element of the `items` array, binding `${item}` and
+ * aggregating the order-stable `results: Array<childOutputShape>` output. `join`
+ * gates the container's own readiness from its incoming OUTER edges (default
+ * `all`), mirroring a node's.
  */
-export const ContainerKindSchema = z.enum(['loop', 'stage']);
+export const ContainerKindSchema = z.enum(['loop', 'stage', 'foreach']);
 export type ContainerKind = z.infer<typeof ContainerKindSchema>;
 
 export const ContainerSchema = z.object({
@@ -462,6 +465,14 @@ export const ContainerSchema = z.object({
   exitWhen: z.string().optional(),
   /** Hard cap on loop rounds — reaching it without `exitWhen` caps the loop. */
   maxRounds: z.number().int().positive().optional(),
+  /**
+   * `${}` whole-value expression resolving to an ARRAY over the container's OUTER
+   * scope (params/trigger/upstream outputs — NOT its own children, which have not
+   * run when it is evaluated). Foreach only: the body runs once per element with
+   * `${item}` bound to that element. A4a runs items SEQUENTIALLY (one per round);
+   * parallel `batchCount` is deferred to A4b.
+   */
+  items: z.string().optional(),
   /** Readiness rule over the container's own incoming OUTER edges (default `all`). */
   join: z.enum(['all', 'any']).optional(),
 });

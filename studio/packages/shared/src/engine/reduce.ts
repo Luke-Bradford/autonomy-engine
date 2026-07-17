@@ -827,7 +827,29 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   function prepInput(state: RunState, node: Node): Record<string, unknown> {
-    return substitute(node.config, buildCtx(state)) as Record<string, unknown>;
+    return substitute(node.config, buildCtx(state), 0, foreachItemOf(state, node.id)) as Record<
+      string,
+      unknown
+    >;
+  }
+
+  /**
+   * The `${item}` binding (#4 A4) for a node dispatched INSIDE a `foreach` body —
+   * the element at the container's current item index (`round`), or `undefined`
+   * for any node not in a foreach (so `${item}` throws its "only bound inside …"
+   * error everywhere else, unchanged). The resolved `items` array is snapshotted
+   * on `ContainerRunState.items` at enter, so this is a pure read.
+   */
+  function foreachItemOf(state: RunState, id: string): { value: unknown } | undefined {
+    const cid = childToContainer.get(id);
+    if (cid === undefined) return undefined;
+    const c = containerById.get(cid);
+    if (c === undefined || c.kind !== 'foreach') return undefined;
+    const cs = state.containers[cid];
+    if (cs === undefined) return undefined;
+    const items = cs.items;
+    if (items === undefined || cs.round >= items.length) return undefined;
+    return { value: items[cs.round] };
   }
 
   // --- the readiness fixpoint ("fold-to-fixpoint", CP1 Q2) ------------------
@@ -916,7 +938,7 @@ export function createEngine(doc: EngineDoc): Engine {
       // `finishRun{invalid_event}`, the same verdict a dispatch prep-throw reaches.
       let branch: string;
       try {
-        branch = evalControlBranch(node, state);
+        branch = evalControlBranch(node, state, foreachItemOf(state, id));
       } catch (err) {
         return prepFailure(state, id, err, diagnostics);
       }
@@ -941,8 +963,9 @@ export function createEngine(doc: EngineDoc): Engine {
       let callParams: Record<string, unknown>;
       try {
         const ctx = buildCtx(state);
-        pvId = String(substitute(node.call.pipelineVersionId, ctx));
-        callParams = substitute(node.call.params, ctx) as Record<string, unknown>;
+        const item = foreachItemOf(state, id);
+        pvId = String(substitute(node.call.pipelineVersionId, ctx, 0, item));
+        callParams = substitute(node.call.params, ctx, 0, item) as Record<string, unknown>;
       } catch (err) {
         return prepFailure(state, id, err, diagnostics);
       }
@@ -1085,6 +1108,22 @@ export function createEngine(doc: EngineDoc): Engine {
       if (c.kind === 'stage') {
         return { state: exitContainer(state, c, 'success'), changed: true };
       }
+      if (c.kind === 'foreach') {
+        // #4 A4 — the item-round is terminal and unfailed (the failure check above
+        // short-circuits fail-fast). Capture THIS item's projected child outputs
+        // into the order-stable `results` accumulator BEFORE `resetNodes` clears
+        // them, then advance to the next item or exit. `round` is the 0-based item
+        // index; the loop-only guards below (`no_progress`/`no_exit_condition`/
+        // `capped`) are deliberately unreachable for a foreach — it is bounded by
+        // `items.length`, not `exitWhen`/`maxRounds`.
+        const items = cs.items ?? [];
+        const results = [...(cs.results ?? []), mergeChildOutputs(c, state)];
+        const withResults = withContainer(state, c.id, { results });
+        if (cs.round + 1 < items.length) {
+          return { state: resetContainerRound(withResults, c), changed: true };
+        }
+        return { state: exitContainer(withResults, c, 'success'), changed: true };
+      }
       // loop
       let exit: boolean;
       try {
@@ -1208,6 +1247,38 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
+   * #4 A4 — evaluate a `foreach` container's `${}` `items` to its ARRAY, ONCE at
+   * enter time over the OUTER scope (`buildCtx`). Whole-value-REQUIRED like
+   * `exitWhen`: an embedded/interpolated `items` can only ever be a STRING, so it
+   * would iterate the string's characters or throw — refuse it outright (the
+   * run-time half of the save-time `validateForeachItems` rule, binding for a row
+   * written before that gate). A non-array result throws → `invalid_event` (never
+   * silently coerced), the same fail-LOUD posture as the switch `cases` guard.
+   * Pure over `state`: `substitute` reads only bound outputs/params/trigger, so a
+   * replay reaches the same array.
+   */
+  function evalForeachItems(c: Container, state: RunState): unknown[] {
+    const src = (c.items ?? '').trim();
+    const defect = wholeValueDefect(src, 'items');
+    if (defect !== null) throw new SubstituteError(defect);
+    // `items` is NOT unbounded even from a data-controlled array (`params`/trigger):
+    // `substitute` charges every materialised array against the inert language's
+    // per-field element budget (`MAX_ARRAY_ELEMENTS_TOTAL`, params.ts), so an
+    // over-cap `items` throws HERE → the run fails `invalid_event` before a single
+    // item dispatches. That is the resolver's designated resource limit for
+    // array-forms (spec #6 "Resource limits"); it is the foreach's iteration
+    // ceiling, the counterpart to a loop's `maxRounds`.
+    const out = substitute(src, buildCtx(state));
+    if (!Array.isArray(out)) {
+      throw new SubstituteError(
+        `foreach '${c.id}' items must resolve to an array, got ${out === null ? 'null' : typeof out} — ` +
+          'items is the ${} array the body iterates (e.g. ${params.records})',
+      );
+    }
+    return out;
+  }
+
+  /**
    * #4 A1 — evaluate an `if` node's `${}` boolean `config.condition` to its
    * branch LABEL (`'true'`/`'false'`, matching `BranchEdgeSchema.branch`, a
    * string — NOT a raw boolean, so `edgeState`'s `===` against the declared
@@ -1219,7 +1290,7 @@ export function createEngine(doc: EngineDoc): Engine {
    * condition, a mode defect, or a non-boolean result — the run-time half of
    * E6's boolean-condition rule that the write gate (#444) warns about first.
    */
-  function evalIfBranch(node: Node, state: RunState): string {
+  function evalIfBranch(node: Node, state: RunState, item?: { value: unknown }): string {
     const raw = node.config['condition'];
     if (typeof raw !== 'string') {
       throw new SubstituteError(
@@ -1230,7 +1301,7 @@ export function createEngine(doc: EngineDoc): Engine {
     const src = raw.trim();
     const defect = wholeValueDefect(src, 'condition');
     if (defect !== null) throw new SubstituteError(defect);
-    const out = substitute(src, buildCtx(state));
+    const out = substitute(src, buildCtx(state), 0, item);
     if (typeof out === 'boolean') return out ? IF_BRANCH_TRUE : IF_BRANCH_FALSE;
     throw new SubstituteError(
       `if condition must resolve to a boolean, got ${typeof out} — ` +
@@ -1265,9 +1336,9 @@ export function createEngine(doc: EngineDoc): Engine {
    * `controlBranchEvent` but forgetting the evaluator here surfaces loudly, not as
    * a wrong-branch route.
    */
-  function evalControlBranch(node: Node, state: RunState): string {
-    if (node.type === IF_ACTIVITY_TYPE) return evalIfBranch(node, state);
-    if (node.type === SWITCH_ACTIVITY_TYPE) return evalSwitchBranch(node, state);
+  function evalControlBranch(node: Node, state: RunState, item?: { value: unknown }): string {
+    if (node.type === IF_ACTIVITY_TYPE) return evalIfBranch(node, state, item);
+    if (node.type === SWITCH_ACTIVITY_TYPE) return evalSwitchBranch(node, state, item);
     throw new SubstituteError(`no control-branch evaluator for node type '${node.type}'`);
   }
 
@@ -1286,7 +1357,7 @@ export function createEngine(doc: EngineDoc): Engine {
    * run-time half of A2's string-match rule that the write gate
    * (`validateSwitchConfig`) warns about first.
    */
-  function evalSwitchBranch(node: Node, state: RunState): string {
+  function evalSwitchBranch(node: Node, state: RunState, item?: { value: unknown }): string {
     const raw = node.config['on'];
     if (typeof raw !== 'string') {
       throw new SubstituteError(
@@ -1294,7 +1365,7 @@ export function createEngine(doc: EngineDoc): Engine {
           'string ${} expression (e.g. ${nodes.classify.output.label})',
       );
     }
-    const out = substitute(raw, buildCtx(state));
+    const out = substitute(raw, buildCtx(state), 0, item);
     if (typeof out !== 'string') {
       throw new SubstituteError(
         `switch 'on' must resolve to a string, got ${typeof out} — ` +
@@ -1318,14 +1389,27 @@ export function createEngine(doc: EngineDoc): Engine {
     return rawCases.includes(out) ? out : SWITCH_DEFAULT_BRANCH;
   }
 
-  /** A container's projected outputs = its children's outputs merged (sorted). */
-  function projectContainerOutputs(c: Container, state: RunState): Record<string, unknown> {
+  /** The current round's children outputs, merged (sorted, last-key-wins). */
+  function mergeChildOutputs(c: Container, state: RunState): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     for (const ch of [...c.children].sort()) {
       const co = state.outputs[ch];
       if (co !== undefined) for (const k of Object.keys(co).sort()) out[k] = co[k];
     }
     return out;
+  }
+
+  /**
+   * A container's projected outputs at exit. A `loop`/`stage` projects the LAST
+   * round's merged child outputs. A `foreach` (#4 A4) instead projects the
+   * order-stable aggregate `{ results }` — the per-item accumulator on its
+   * `ContainerRunState` — on BOTH success (every item) and failure (the items
+   * completed before the failing one). `results` is index-aligned with `items`;
+   * `[]` for a zero-item foreach.
+   */
+  function projectContainerOutputs(c: Container, state: RunState): Record<string, unknown> {
+    if (c.kind === 'foreach') return { results: state.containers[c.id]?.results ?? [] };
+    return mergeChildOutputs(c, state);
   }
 
   /**
@@ -1372,6 +1456,41 @@ export function createEngine(doc: EngineDoc): Engine {
   function enterContainer(state: RunState, cid: string): RunState {
     const cs = state.containers[cid]!;
     return { ...state, containers: { ...state.containers, [cid]: { ...cs, status: 'active' } } };
+  }
+
+  /**
+   * #4 A4 — enter a `foreach`: evaluate `items` ONCE and snapshot it onto
+   * `ContainerRunState.items` (so the per-item `${item}` binding and the `results`
+   * index are stable for the whole lifetime). Then either:
+   *   - EMPTY items → exit `success` immediately with `{results:[]}`; the body runs
+   *     ZERO times (a foreach over nothing is a success, not a stall); or
+   *   - non-empty → mark `active` with an empty `results` accumulator, so item 0's
+   *     children dispatch bound to `${item}` = items[0].
+   * An items-eval throw (bad expr / non-array) terminalizes the run `invalid_event`
+   * via `Step.finish` — the same verdict a dispatch prep-throw reaches, plumbed
+   * through settle's enter loop (which otherwise has no finish channel).
+   */
+  function enterForeachStep(state: RunState, c: Container, diagnostics: string[]): Step {
+    let items: unknown[];
+    try {
+      items = evalForeachItems(c, state);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      diagnostics.push(`container '${c.id}' items failed: ${msg}`);
+      return {
+        state,
+        changed: false,
+        finish: { type: 'finishRun', outcome: 'failure', reason: 'invalid_event' },
+      };
+    }
+    if (items.length === 0) {
+      const seeded = withContainer(state, c.id, { items, results: [] });
+      return { state: exitContainer(seeded, c, 'success'), changed: true };
+    }
+    return {
+      state: withContainer(state, c.id, { status: 'active', items, results: [] }),
+      changed: true,
+    };
   }
 
   /**
@@ -1452,17 +1571,24 @@ export function createEngine(doc: EngineDoc): Engine {
 
       let changed = false;
       for (const id of sortedTopEntities) {
-        if (containerById.has(id)) {
+        const cc = containerById.get(id);
+        if (cc !== undefined) {
           const cs = state.containers[id]!;
           if (cs.status !== 'pending') continue;
-          const r = computeReadiness(
-            topIncoming.get(id)!,
-            containerJoin(containerById.get(id)!),
-            state,
-          );
+          const r = computeReadiness(topIncoming.get(id)!, containerJoin(cc), state);
           if (r === 'ready') {
-            state = enterContainer(state, id);
-            changed = true;
+            if (cc.kind === 'foreach') {
+              // Foreach entry resolves `items` and may finish (bad items →
+              // invalid_event) or exit immediately (zero items → success), so it
+              // needs the `Step.finish` channel `enterContainer` lacks.
+              const step = enterForeachStep(state, cc, diagnostics);
+              if (step.finish) return { state: step.state, commands: [step.finish], diagnostics };
+              state = step.state;
+              changed = true;
+            } else {
+              state = enterContainer(state, id);
+              changed = true;
+            }
           } else if (r === 'skipped') {
             noteDeadBranchOnSkip(id, topIncoming.get(id)!, state, diagnostics);
             state = withContainer(state, id, { status: 'skipped' });
