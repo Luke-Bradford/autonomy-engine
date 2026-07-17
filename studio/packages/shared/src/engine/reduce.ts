@@ -784,6 +784,9 @@ export function createEngine(doc: EngineDoc): Engine {
     const nodeStatuses: Record<string, NodeRunState['status']> = {};
     for (const [id, ns] of Object.entries(state.nodes)) nodeStatuses[id] = ns.status;
     const tc = state.triggerContext;
+    // One source for the trigger id — `${run.triggerId}` and `${trigger.triggerId}`
+    // are the same fact and must never drift.
+    const triggerId = tc?.triggerId ?? null;
     return {
       params: state.params,
       nodeOutputs: state.outputs,
@@ -792,7 +795,7 @@ export function createEngine(doc: EngineDoc): Engine {
         runId: state.runId,
         startedAt: state.startedAt,
         pipelineVersionId: state.pipelineVersionId,
-        triggerId: tc?.triggerId ?? null,
+        triggerId,
         parentRunId: null,
       },
       // The CLOSED `${trigger.*}` field set (#5 S12), flattened from the durable
@@ -800,7 +803,7 @@ export function createEngine(doc: EngineDoc): Engine {
       // fire carried none) so `${trigger.scheduledTime}` resolves to `null`
       // rather than throwing an unknown-field error on a manual/child run.
       trigger: {
-        triggerId: tc?.triggerId ?? null,
+        triggerId,
         scheduledTime: tc?.scheduledTime ?? null,
         body: tc?.body ?? null,
       },
