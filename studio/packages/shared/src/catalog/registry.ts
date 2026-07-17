@@ -34,6 +34,15 @@ const out = (name: string, type: Output['type']): Output => ({ name, type });
  */
 export const HTTP_SECRET_HEADERS_FIELD = 'secretHeaders';
 
+/**
+ * The Zod SHAPE of the `secretHeaders` sink value: header name → inert
+ * `{$secret:name}` marker. SSOT'd here (not just the field NAME above) so the
+ * catalog `configSchema` below and the http adapter's live `httpRequestInputSchema`
+ * (`connectors/http.ts`) can't desync on the value/key constraints either — one
+ * change to the record shape reaches both consumers, type-checked.
+ */
+export const httpSecretHeadersSchema = z.record(z.string(), SecretRefSchema).optional();
+
 const ENTRIES: ActivityCatalogEntry[] = [
   {
     type: 'http_request',
@@ -55,9 +64,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
       body: z.string().optional(),
       // Metadata only (catalog `configSchema` is not a save-time validator — the
       // adapter validates the live request). Documents the sink shape for the UI.
-      // Computed key from the shared SSOT constant (not a literal) so a rename
-      // can't desync this schema from `secretSinkFields`/the adapter prefix.
-      [HTTP_SECRET_HEADERS_FIELD]: z.record(z.string(), SecretRefSchema).optional(),
+      // Computed key + shared shape (`httpSecretHeadersSchema`) so neither the
+      // field name NOR the record shape can desync from the adapter's schema.
+      [HTTP_SECRET_HEADERS_FIELD]: httpSecretHeadersSchema,
     }),
   },
   {

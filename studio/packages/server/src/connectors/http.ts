@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { HTTP_SECRET_HEADERS_FIELD, SecretRefSchema } from '@autonomy-studio/shared';
+import { HTTP_SECRET_HEADERS_FIELD, httpSecretHeadersSchema } from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import { redactSecrets } from './redact.js';
 
@@ -66,12 +66,12 @@ const httpRequestInputSchema = z.object({
   headers: z.record(z.string(), z.string()).optional(),
   body: z.string().optional(),
   // The declared secret SINK (item 7 / S4): header name → inert `{$secret:name}`
-  // marker. Documentation-only here — the RESOLVED plaintext is read from the
-  // `secretFields` side channel, NEVER from this marker. Declared so a malformed
-  // value at the sink is caught rather than silently ignored. The key is the
-  // shared SSOT constant (computed, not a literal) so a rename can't desync this
-  // schema from the sink/prefix wiring.
-  [HTTP_SECRET_HEADERS_FIELD]: z.record(z.string(), SecretRefSchema).optional(),
+  // marker. The RESOLVED plaintext is read from the `secretFields` side channel,
+  // NEVER from this marker; this schema exists so a malformed value at the sink is
+  // caught rather than silently ignored. Both the field NAME and the record SHAPE
+  // come from the shared SSOT (`HTTP_SECRET_HEADERS_FIELD` + `httpSecretHeadersSchema`)
+  // so neither can desync from the catalog declaration or the sink/prefix wiring.
+  [HTTP_SECRET_HEADERS_FIELD]: httpSecretHeadersSchema,
 });
 
 /**
