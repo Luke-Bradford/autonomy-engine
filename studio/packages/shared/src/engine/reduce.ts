@@ -25,8 +25,7 @@ import {
   WAIT_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
 } from '../catalog/types.js';
-import type { OutputType } from '../schemas/pipeline.js';
-import { outputContract, type CheckedContract, type OutputContract } from './outputs.js';
+import { outputContract, storeOutputs, validateOutputs } from './outputs.js';
 import {
   backEdgeResetBody,
   composeFilterExpr,
@@ -2579,15 +2578,25 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
-   * #4 A13 — fold `externalWait.completed`: the parked `webhook` node's inbound
-   * callback arrived, so COMPLETE it (`external_wait_pending` → `success`, empty
-   * outputs — the payload is OPAQUE in A13). The external-wait twin of `onWaitDue`:
-   * where a wait completes on a `timer.due`, a webhook completes on an HTTP-route
-   * append, but both SUCCEED and `settle` so downstream `success` edges route.
-   * Guarded on `external_wait_pending` at the parked attempt (NOT `LIVE_NODE`,
-   * exactly as `onWaitDue`/`onRetryDue` guard): an at-least-once redelivery, or a
-   * completion naming an attempt the node has moved past, is a no-op. The route's
-   * own row-status guard is the first layer; this is the second (the pure fold).
+   * #4 A13/A16 — fold `externalWait.completed`: the parked `webhook` node's inbound
+   * callback arrived, so COMPLETE it (`external_wait_pending` → `success`). The
+   * external-wait twin of `onWaitDue`: where a wait completes on a `timer.due`, a
+   * webhook completes on an HTTP-route append, but both SUCCEED and `settle` so
+   * downstream `success` edges route. Guarded on `external_wait_pending` at the
+   * parked attempt (NOT `LIVE_NODE`, exactly as `onWaitDue`/`onRetryDue` guard): an
+   * at-least-once redelivery, or a completion naming an attempt the node has moved
+   * past, is a no-op. The route's own row-status guard is the first layer; this is
+   * the second (the pure fold).
+   *
+   * #4 A16 — the callback body's TYPED outputs ride `event.outputs` (validated +
+   * declared-key filtered at the HTTP boundary; `undefined` for a pre-A16 event or
+   * a webhook with no declared contract → `{}`, the A13 empty-outputs behaviour).
+   * This fold RE-FILTERS through `storeOutputs` against the immutable version's
+   * contract — NEVER failing the node (unlike `onSucceeded`, whose fail branch
+   * would defeat A16's stay-parked-on-malformed semantic; the boundary already
+   * rejected a bad payload) — so a hand-crafted event cannot seed an undeclared
+   * refable key. A corrupt (`invalid`) contract on a pre-F13a row folds as `absent`
+   * (store the already-filtered `{}`), never blocking the completion.
    */
   function onExternalWaitCompleted(
     state: RunState,
@@ -2599,7 +2608,26 @@ export function createEngine(doc: EngineDoc): Engine {
     if (ns.status !== 'external_wait_pending' || ns.currentAttemptId !== event.previousAttemptId) {
       return { state, commands: [], diagnostics };
     }
-    return settle(withNode(state, event.nodeId, { status: 'success' }), diagnostics);
+    const node = nodeById.get(event.nodeId)!;
+    const contract = outputContract(node);
+    // A DECLARED contract with an outputs-carrying (A16) event → filter to declared
+    // keys (never trust the event's key set). Everything else → store `{}`:
+    //  - a PRE-A16 event has no `outputs` field → `{}` (its A13 empty-outputs
+    //    behaviour on replay; NOT `storeOutputs(contract, {})`, which would
+    //    manufacture `{name: undefined}` for each declared key);
+    //  - ABSENT/INVALID → `{}`: nothing is refable, and — unlike `onSucceeded`'s
+    //    trusted-executor `storeOutputs(absent, …)` whole-payload branch — an
+    //    inbound callback body is UNTRUSTED, so a hand-crafted event must not seed
+    //    projected state with undeclared keys.
+    // This mirrors the HTTP boundary's `checkInboundOutputs` so the two stay in
+    // lock-step.
+    const stored =
+      event.outputs !== undefined && contract.kind === 'declared'
+        ? storeOutputs(contract, event.outputs)
+        : {};
+    let next = withNode(state, event.nodeId, { status: 'success' });
+    next = { ...next, outputs: { ...next.outputs, [event.nodeId]: stored } };
+    return settle(next, diagnostics);
   }
 
   /**
@@ -3136,74 +3164,4 @@ function fnv1a128(s: string): string {
     h = (h * FNV128_PRIME) & FNV128_MASK;
   }
   return h.toString(16).padStart(32, '0');
-}
-
-/**
- * Store ONLY a node's DECLARED output keys, dropping anything else the executor
- * carried (an undeclared key must never become refable). A node with no
- * declared outputs has no contract to enforce → its whole payload passes.
- *
- * Takes a `CheckedContract`, so an `invalid` one cannot reach the
- * whole-payload branch: `validateOutputs` errors first and terminalizes the
- * node. That is a TYPE guarantee rather than a comment — see `CheckedContract`.
- */
-function storeOutputs(
-  contract: CheckedContract,
-  outputs: Record<string, unknown>,
-): Record<string, unknown> {
-  return contract.kind === 'declared'
-    ? Object.fromEntries(contract.outputs.map((d) => [d.name, outputs[d.name]]))
-    : { ...outputs };
-}
-
-/**
- * Validate a result's outputs against the node's output contract. A missing or
- * mistyped declared output is an error. `absent` (no contract) → trivially
- * valid. `invalid` (a CORRUPT contract) → an error, never "no contract": see
- * `OutputContract` for why conflating those two fails open (#1 F13a).
- *
- * NARROWS on success: a `null` return means the contract is `CheckedContract`,
- * which is what lets `storeOutputs` refuse an `invalid` one at the type level.
- */
-function validateOutputs(
-  contract: OutputContract,
-  outputs: Record<string, unknown>,
-): { errs: string[]; checked: CheckedContract | null } {
-  // A corrupt contract is a CONFIG defect, not a bad result — the node produced
-  // nothing wrong. Worded to match `validateDoc`'s `config.outputs is
-  // malformed` so both paths are greppable together, and kept distinct from the
-  // caller's "produced invalid outputs" framing (which would blame the node, or
-  // on the call path the CHILD PIPELINE, for the author's typo).
-  if (contract.kind === 'invalid') {
-    return { errs: [`config.outputs is malformed (${contract.reason})`], checked: null };
-  }
-  if (contract.kind === 'absent') return { errs: [], checked: contract };
-  const errs: string[] = [];
-  for (const d of contract.outputs) {
-    if (!Object.prototype.hasOwnProperty.call(outputs, d.name)) {
-      errs.push(`missing declared output '${d.name}'`);
-      continue;
-    }
-    if (!matchesType(outputs[d.name], d.type)) {
-      errs.push(`output '${d.name}' is not of declared type '${d.type}'`);
-    }
-  }
-  return { errs, checked: contract };
-}
-
-function matchesType(value: unknown, type: OutputType): boolean {
-  switch (type) {
-    case 'string':
-      return typeof value === 'string';
-    // FINITE, not merely `!isNaN` (#6 E6). `number` means finite everywhere else
-    // in this engine (`matchesSig` enforces it on every fn arg), and E6 types
-    // `${nodes.x.output.n}` from this very declaration — so admitting `Infinity`
-    // here would seed an output that fails its own type check downstream.
-    case 'number':
-      return typeof value === 'number' && Number.isFinite(value);
-    case 'boolean':
-      return typeof value === 'boolean';
-    case 'json':
-      return true;
-  }
 }

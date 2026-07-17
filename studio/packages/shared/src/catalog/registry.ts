@@ -241,11 +241,16 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // EXPIRY alarm (+ a correlation row) then appends `externalWait.created`,
     // parking the node `external_wait_pending`. It resumes when an inbound,
     // correlated + authed + replay-protected HTTP callback appends
-    // `externalWait.completed` (SUCCEEDS the node, no output — the payload is OPAQUE
-    // in A13; typed `outputSchema`→`config.outputs` is A16) OR the expiry alarm
-    // fires `externalWait.expired` (FOLDS the node to `failure`, so its `failure`
-    // edge is the timeout/default path). `outputs:[]` (no typed output yet) and no
-    // branch labels. `timeoutSeconds` is a WHOLE-VALUE `${}` number field like
+    // `externalWait.completed` (SUCCEEDS the node) OR the expiry alarm fires
+    // `externalWait.expired` (FOLDS the node to `failure`, so its `failure` edge is
+    // the timeout/default path). #4 A16 (LANDED): the callback body is a TYPED
+    // output — validated at the HTTP boundary against the webhook's declared generic
+    // `config.outputs` and lowered onto `externalWait.completed.outputs`, so
+    // `${nodes.w.output.decision}` resolves downstream (a webhook that declares no
+    // outputs still succeeds with `{}`). The static `outputs:[]` here is the CATALOG
+    // default (webhook outputs are AUTHOR-declared via `config.outputs`, like
+    // `execute_pipeline`'s child-projected outputs — not catalog-fixed); no branch
+    // labels. `timeoutSeconds` is a WHOLE-VALUE `${}` number field like
     // `wait.seconds` (an embedded template can only be a string, so
     // `validateWebhookConfig` refuses it at save); `configSchema` is palette
     // metadata, the save-time rule is `validateDoc`'s `validateWebhookConfig`, and

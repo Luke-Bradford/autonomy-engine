@@ -122,11 +122,21 @@ export const WAIT_ACTIVITY_TYPE = 'wait';
  * `webhook` parks `external_wait_pending` until an inbound, correlated + authed +
  * replay-protected HTTP callback appends `externalWait.completed` (or a timeout
  * alarm appends `externalWait.expired`, folding the node to `failure` so its
- * `failure` edge is the timeout/default path). The completion payload is OPAQUE in
- * A13 (the node succeeds with no output, like `wait`); the typed `outputSchema` →
- * `config.outputs` lowering + outbound `callBackUri` injection are A16. Its
- * config rides `Node.config` (a `${}` `timeoutSeconds`), NOT `Node.call`, so it is
- * NOT a structural-call and is generically authorable (no palette exclusion).
+ * `failure` edge is the timeout/default path).
+ *
+ * #4 A16 (inbound half, LANDED) — the callback body is now a TYPED output: it is
+ * validated at the HTTP boundary (`checkInboundOutputs`) against the webhook's
+ * declared generic-F13 `config.outputs` contract, and the declared-key-filtered
+ * payload rides `externalWait.completed.outputs` so `${nodes.w.output.decision}`
+ * type-checks and resolves downstream. A webhook that declares no outputs still
+ * succeeds with `{}` (the A13 empty-outputs behaviour). The OUTBOUND half —
+ * injecting a `callBackUri` + correlation token into an outbound trigger — remains
+ * DEFERRED (it would need this `kind:'control'` node to do outbound HTTP I/O,
+ * against the #1 D6 no-connector-I/O invariant; the callback URL is already
+ * retrievable via `GET /api/runs/:id/external-waits`). Its config rides
+ * `Node.config` (a `${}` `timeoutSeconds` + optional `outputs`), NOT `Node.call`,
+ * so it is NOT a structural-call and is generically authorable (no palette
+ * exclusion).
  */
 export const WEBHOOK_ACTIVITY_TYPE = 'webhook';
 

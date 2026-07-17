@@ -81,8 +81,11 @@ describe('webhook parks then completes on an inbound callback (#4 A13)', () => {
     const { state, order, finish, log } = driveRun(e, { resolve: simpleResolve() });
 
     expect(state.nodes.w!.status).toBe('success');
-    // The completion payload is OPAQUE in A13 — the node produces no output.
-    expect(state.outputs.w).toBeUndefined();
+    // #4 A16 — a webhook with no declared `config.outputs` completes with an EMPTY
+    // typed-output object `{}` (consistent with every other succeeded node, which
+    // always gets an `outputs` entry), not `undefined`. The driveRun harness has no
+    // HTTP layer, so it folds `externalWait.completed` with no `outputs` field.
+    expect(state.outputs.w).toEqual({});
     expect(finish?.outcome).toBe('success');
     // Engine-evaluated: never handed to the executor.
     expect(order).not.toContain('w');
@@ -415,6 +418,117 @@ describe('webhook save-time validation (#4 A13)', () => {
 
   it('rejects a bad ${} ref in timeoutSeconds at SAVE', () => {
     const d = doc([webhookNode('w', '${nodes.ghost.output.y}')]);
+    expect(validateRefs(d).join(' ')).toMatch(/ghost/);
+  });
+});
+
+describe('webhook typed output — the fold stores declared outputs (#4 A16)', () => {
+  const declared = (outputs: Array<{ name: string; type: string }>) => ({ outputs });
+
+  it('stores the declared, filtered outputs the completion event carries', () => {
+    const e = eng([webhookNode('w', '${5}', declared([{ name: 'decision', type: 'string' }]))]);
+    const parked = parkedAt(e);
+    const { state, commands } = e.reduce(parked, {
+      type: 'externalWait.completed',
+      runId: 'r1',
+      nodeId: 'w',
+      previousAttemptId: 'w#0',
+      outputs: { decision: 'approve' },
+    });
+    expect(state.nodes.w!.status).toBe('success');
+    expect(state.outputs.w).toEqual({ decision: 'approve' });
+    expect(commands).toContainEqual({ type: 'finishRun', outcome: 'success' });
+  });
+
+  it('a downstream node reads the webhook output via ${nodes.w.output.decision}', () => {
+    const w = webhookNode('w', '${5}', declared([{ name: 'decision', type: 'string' }]));
+    const after: Node = {
+      id: 'after',
+      type: 'agent_task',
+      config: { note: '${nodes.w.output.decision}' },
+      position: { x: 99, y: 0 },
+    };
+    const e = eng([w, after], [edge('w', 'after', 'success')]);
+    const parked = parkedAt(e);
+    const state = e.reduce(parked, {
+      type: 'externalWait.completed',
+      runId: 'r1',
+      nodeId: 'w',
+      previousAttemptId: 'w#0',
+      outputs: { decision: 'reject' },
+    }).state;
+    const cmd = e
+      .resume(state)
+      .commands.find((c) => c.type === 'dispatchNode' && c.nodeId === 'after');
+    expect(cmd).toBeDefined();
+    // The resolved input carried the webhook's typed output downstream.
+    expect((cmd as { preparedInput?: Record<string, unknown> }).preparedInput).toEqual({
+      note: 'reject',
+    });
+  });
+
+  it('re-filters undeclared keys in the event, never seeding an unrefable output', () => {
+    // A hand-crafted/imported event with an undeclared extra key must not leak it
+    // into run state — the fold re-runs storeOutputs against the version contract.
+    const e = eng([webhookNode('w', '${5}', declared([{ name: 'decision', type: 'string' }]))]);
+    const parked = parkedAt(e);
+    const { state } = e.reduce(parked, {
+      type: 'externalWait.completed',
+      runId: 'r1',
+      nodeId: 'w',
+      previousAttemptId: 'w#0',
+      outputs: { decision: 'approve', secret: 'leaked' },
+    });
+    expect(state.outputs.w).toEqual({ decision: 'approve' });
+  });
+
+  it('a webhook with no declared outputs stores {} (A13 empty-outputs preserved)', () => {
+    const e = eng([webhookNode('w', '${5}')]);
+    const parked = parkedAt(e);
+    const { state } = e.reduce(parked, {
+      type: 'externalWait.completed',
+      runId: 'r1',
+      nodeId: 'w',
+      previousAttemptId: 'w#0',
+      outputs: { decision: 'approve' },
+    });
+    expect(state.nodes.w!.status).toBe('success');
+    // No contract → nothing refable → store nothing.
+    expect(state.outputs.w).toEqual({});
+  });
+
+  it('a pre-A16 completion event with no outputs field folds to empty outputs', () => {
+    const e = eng([webhookNode('w', '${5}', declared([{ name: 'decision', type: 'string' }]))]);
+    const parked = parkedAt(e);
+    const { state } = e.reduce(parked, {
+      type: 'externalWait.completed',
+      runId: 'r1',
+      nodeId: 'w',
+      previousAttemptId: 'w#0',
+    });
+    expect(state.nodes.w!.status).toBe('success');
+    expect(state.outputs.w).toEqual({});
+  });
+
+  it('the static ref-checker accepts a ${nodes.w.output.X} against a declared webhook', () => {
+    const d = doc(
+      [
+        webhookNode('w', '${5}', declared([{ name: 'decision', type: 'string' }])),
+        node('after', { note: '${nodes.w.output.decision}' }),
+      ],
+      [edge('w', 'after', 'success')],
+    );
+    expect(validateRefs(d)).toEqual([]);
+  });
+
+  it('the static ref-checker rejects a ${nodes.w.output.X} the webhook does NOT declare', () => {
+    const d = doc(
+      [
+        webhookNode('w', '${5}', declared([{ name: 'decision', type: 'string' }])),
+        node('after', { note: '${nodes.w.output.ghost}' }),
+      ],
+      [edge('w', 'after', 'success')],
+    );
     expect(validateRefs(d).join(' ')).toMatch(/ghost/);
   });
 });

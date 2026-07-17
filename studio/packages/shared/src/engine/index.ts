@@ -19,6 +19,12 @@ export {
   listFunctions,
 } from './functions.js';
 export type { SigType } from './functions.js';
+// #4 A16 — the inbound-callback output BOUNDARY validator. A NAMED re-export (not
+// `export *`): the reducer imports `outputContract`/`validateOutputs`/`storeOutputs`
+// from the module directly, but the server's webhook-callback completer needs ONE
+// public entry point to validate an untrusted body against `config.outputs` using
+// the SAME machinery the `node.succeeded` fold uses — never a second copy.
+export { checkInboundOutputs, type InboundOutputsResult } from './outputs.js';
 export * from './params.js';
 
 // P2b — the pure event-sourced reducer + acyclic DAG walk.
