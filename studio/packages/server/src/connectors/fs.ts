@@ -273,8 +273,14 @@ async function doWrite(
       0o644,
     );
     await fh.writeFile(input.content, { encoding: 'utf8', signal });
-    // Close BEFORE the rename so all bytes are flushed to the temp inode.
-    await closeQuietly(fh);
+    // Close BEFORE the rename to flush all bytes to the temp inode — and let a
+    // close error PROPAGATE (unlike the read/cleanup path's quiet close): a
+    // delayed-write/ENOSPC failure that only surfaces at `close()` (a known
+    // POSIX/NFS mode) means the temp is INCOMPLETE, so the write must fail and
+    // NOT rename a corrupt file over the target. The `finally` still runs (the
+    // temp is unlinked), and `fh` stays set so `closeQuietly` there is a safe
+    // best-effort second close.
+    await fh.close();
     fh = undefined;
     await rename(tmpPath, finalPath);
     renamed = true;
@@ -352,10 +358,12 @@ export const fsAdapter: ConnectorAdapter = {
         yield failed('permanent', `invalid file_write activity config: ${input.error.message}`);
         return;
       }
-      // A per-attempt temp suffix (sanitised to filename-safe chars) — unique so
-      // two concurrent writers never collide on the temp name, and `O_EXCL`
-      // refuses a stale one from a crashed prior attempt.
-      const tmpSuffix = `${ctx.nodeId}.${ctx.attemptId}`.replace(/[^\w.-]/g, '_');
+      // A per-dispatch temp suffix (sanitised to filename-safe chars) — includes
+      // `runId` so two DIFFERENT runs dispatching the same node/attempt id
+      // concurrently against the same fs root cannot collide on the temp name
+      // (which `O_EXCL` would otherwise turn into a spurious failure). `runId` is
+      // globally unique per run, so `runId.nodeId.attemptId` is unique per write.
+      const tmpSuffix = `${ctx.runId}.${ctx.nodeId}.${ctx.attemptId}`.replace(/[^\w.-]/g, '_');
       yield await doWrite(cfg.data, input.data, ctx.signal, tmpSuffix);
       return;
     }

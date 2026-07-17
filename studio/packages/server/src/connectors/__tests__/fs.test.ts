@@ -85,6 +85,16 @@ describe('fs connector — happy paths', () => {
     expect(entries).toEqual(['atomic.txt']); // the temp was renamed away, not orphaned
   });
 
+  it('a write whose rename fails (target is a directory) fails and cleans up the temp', async () => {
+    // Renaming the temp over an existing directory throws (EISDIR) — the write
+    // must report a FAILURE (never a false success) and leave no orphan temp,
+    // exercising the same catch+cleanup path the propagated close-error uses.
+    await mkdir(join(root, 'adir'));
+    const events = await drain(invoke(ctx('file_write', { path: 'adir', content: 'x' })));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(await readdir(root)).toEqual(['adir']); // temp cleaned up
+  });
+
   it('file_write into an existing subdirectory succeeds', async () => {
     await mkdir(join(root, 'sub'));
     const events = await drain(invoke(ctx('file_write', { path: 'sub/a.txt', content: 'hi' })));
