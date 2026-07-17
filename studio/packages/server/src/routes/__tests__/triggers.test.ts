@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { CATALOG_VERSION, type NewTrigger } from '@autonomy-studio/shared';
 import { createPipeline, createPipelineVersion, createTrigger } from '../../repo/index.js';
+import { getRun } from '../../repo/runs.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 
 function triggerBody(pipelineVersionId: string) {
@@ -320,6 +321,77 @@ describe('triggers routes', () => {
       const other = createTrigger(app.db, newTriggerInput(pipelineVersionId, 'someone-else'));
       const res = await app.inject({ method: 'POST', url: `/api/triggers/${other.id}/fire` });
       expect(res.statusCode).toBe(404);
+    });
+
+    // #5 S12b — run-now param override + fire-time binding resolution.
+    it('threads the run-now `{ params }` override into the run, winning over a binding', async () => {
+      const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'runnow' });
+      const version = createPipelineVersion(app.db, {
+        pipelineId: pipeline.id,
+        params: [{ name: 'c', type: 'string', required: false, default: 'dc' }],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      const created = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/triggers',
+          // A literal trigger binding for `c` that the run-now override must beat.
+          payload: { ...triggerBody(version.id), params: { c: 'binding-c' } },
+        })
+      ).json();
+
+      const fireRes = await app.inject({
+        method: 'POST',
+        url: `/api/triggers/${created.id}/fire`,
+        payload: { params: { c: 'runnow-c' } },
+      });
+      expect(fireRes.statusCode).toBe(202);
+      expect(fireRes.json().outcome).toBe('started');
+      await app.runLauncher.whenIdle();
+
+      // The run's stored override layer = trigger binding merged UNDER run-now.
+      expect(getRun(app.db, fireRes.json().runId)?.params).toEqual({ c: 'runnow-c' });
+    });
+
+    it('400 when a trigger param binding cannot resolve for this fire (deep-address of a null body)', async () => {
+      const created = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/triggers',
+          // Save-VALID (body is a known field) but throws at fire time: a manual
+          // fire carries a null body, so `${trigger.body.k}` deep-addresses null.
+          payload: { ...triggerBody(pipelineVersionId), params: { x: '${trigger.body.k}' } },
+        })
+      ).json();
+
+      const fireRes = await app.inject({ method: 'POST', url: `/api/triggers/${created.id}/fire` });
+      expect(fireRes.statusCode).toBe(400);
+      expect(fireRes.json().error).toBe('bad_request');
+    });
+
+    it('an undeclared run-now override surfaces as an INTERRUPTED run, not a 400', async () => {
+      const created = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/triggers',
+          payload: triggerBody(pipelineVersionId), // pv declares NO params
+        })
+      ).json();
+
+      const fireRes = await app.inject({
+        method: 'POST',
+        url: `/api/triggers/${created.id}/fire`,
+        payload: { params: { undeclared: 1 } },
+      });
+      // Admitted synchronously (202) — the bad override is caught at run start by
+      // `resolveRunParams` (background), consistent with a bad trigger-authored param.
+      expect(fireRes.statusCode).toBe(202);
+      expect(fireRes.json().outcome).toBe('started');
+      await app.runLauncher.whenIdle();
+      expect(getRun(app.db, fireRes.json().runId)?.status).toBe('interrupted');
     });
   });
 

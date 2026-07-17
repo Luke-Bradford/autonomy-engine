@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { isWithinRunWindows, type ScheduledWakeup, type Trigger } from '@autonomy-studio/shared';
+import {
+  isWithinRunWindows,
+  SubstituteError,
+  type ScheduledWakeup,
+  type Trigger,
+} from '@autonomy-studio/shared';
 import { getTrigger } from '../repo/triggers.js';
 import { armWakeup } from '../repo/scheduled-wakeups.js';
 import type { Db } from '../repo/types.js';
@@ -180,6 +185,26 @@ export function createScheduleTickHandler(deps: ScheduleTickDeps): WakeupHandler
           } catch (err) {
             if (err instanceof UnboundTriggerError) {
               log.debug({ triggerId: trigger.id }, 'schedule tick: skip — trigger became unbound');
+              return;
+            }
+            // #5 S12b — a trigger param binding that cannot resolve for THIS
+            // occurrence (e.g. a `${trigger.body.x}` deep-address on a schedule
+            // fire's null body — save-valid, since `body` is a known field, but
+            // fed no payload until S8; or a PRE-GATE row whose literal param now
+            // parses as an expression). Skip-and-log rather than rethrow: a
+            // misconfigured binding must not wedge the clock. The chain is
+            // already armed (above), so this only drops the one occurrence.
+            //
+            // `warn`, not `debug` (unlike the unbound skip above — a benign
+            // rebind race sync self-heals): a binding that never resolves means
+            // the schedule stops firing with no run to look at, so it needs an
+            // operator-visible signal. Matches the webhook path's severity for
+            // this same defect class (`routes/webhooks.ts`).
+            if (err instanceof SubstituteError) {
+              log.warn(
+                { triggerId: trigger.id, err },
+                'schedule tick: skip — trigger param binding could not be resolved',
+              );
               return;
             }
             throw err; // the clock's afterCommit guard logs it.

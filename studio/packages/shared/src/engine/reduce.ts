@@ -24,6 +24,7 @@ import {
   nodeForwardAdjacency,
   nodeJoin,
   substitute,
+  triggerRoot,
   wholeValueDefect,
 } from './params.js';
 
@@ -783,10 +784,14 @@ export function createEngine(doc: EngineDoc): Engine {
   function buildCtx(state: RunState): SubstitutionContext {
     const nodeStatuses: Record<string, NodeRunState['status']> = {};
     for (const [id, ns] of Object.entries(state.nodes)) nodeStatuses[id] = ns.status;
-    const tc = state.triggerContext;
-    // One source for the trigger id — `${run.triggerId}` and `${trigger.triggerId}`
-    // are the same fact and must never drift.
-    const triggerId = tc?.triggerId ?? null;
+    // The CLOSED `${trigger.*}` field set (#5 S12), flattened from the durable
+    // `run.triggerContext` seed via the shared `triggerRoot` helper (#5 S12b) —
+    // the same flattening `resolveTriggerBindings` uses at fire time, so a
+    // trigger field reads identically whether bound into params or read in a
+    // node config. Every field is always present (null where the fire carried
+    // none) so `${trigger.scheduledTime}` resolves to `null` rather than
+    // throwing an unknown-field error on a manual/child run.
+    const trigger = triggerRoot(state.triggerContext);
     return {
       params: state.params,
       nodeOutputs: state.outputs,
@@ -795,18 +800,12 @@ export function createEngine(doc: EngineDoc): Engine {
         runId: state.runId,
         startedAt: state.startedAt,
         pipelineVersionId: state.pipelineVersionId,
-        triggerId,
+        // One source for the trigger id — `${run.triggerId}` and
+        // `${trigger.triggerId}` are the same fact and must never drift.
+        triggerId: trigger.triggerId,
         parentRunId: null,
       },
-      // The CLOSED `${trigger.*}` field set (#5 S12), flattened from the durable
-      // `run.triggerContext` seed. Every field is always present (null where the
-      // fire carried none) so `${trigger.scheduledTime}` resolves to `null`
-      // rather than throwing an unknown-field error on a manual/child run.
-      trigger: {
-        triggerId,
-        scheduledTime: tc?.scheduledTime ?? null,
-        body: tc?.body ?? null,
-      },
+      trigger,
     };
   }
 

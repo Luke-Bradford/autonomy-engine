@@ -256,6 +256,27 @@ describe('webhook routes', () => {
     expect(listRuns(app.db, { triggerId: id })).toHaveLength(0);
   });
 
+  // #5 S12b — a trigger param binding that cannot resolve at fire time is a
+  // PERMANENT config defect. It must be RECORDED as a skip (not released), so a
+  // verbatim retry of the same key dedupes rather than re-firing in a storm.
+  it('records a skip (no run, no retry storm) when a param binding cannot resolve', async () => {
+    // `${trigger.body.k}` is save-VALID but deep-addresses the null body a
+    // webhook fire still carries (no payload feeder until S8).
+    const { id, secret } = await makeWebhookTrigger({ params: { x: '${trigger.body.k}' } });
+    const key = 'evt-bad-binding';
+
+    const res = await app.inject(signedRequest(id, secret, { idempotencyKey: key }));
+    expect(res.statusCode).toBe(202);
+    expect(res.json().outcome).toBe('skipped');
+    expect(res.json().reason).toMatch(/binding/);
+    expect(listRuns(app.db, { triggerId: id })).toHaveLength(0);
+
+    // The delivery WAS recorded — a byte-identical retry dedupes, never re-fires.
+    const retry = await app.inject(signedRequest(id, secret, { idempotencyKey: key }));
+    expect(retry.json().outcome).toBe('duplicate');
+    expect(listRuns(app.db, { triggerId: id })).toHaveLength(0);
+  });
+
   it('rotating the secret invalidates the old one', async () => {
     const { id, secret: oldSecret } = await makeWebhookTrigger();
     // Rotate.

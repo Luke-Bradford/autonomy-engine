@@ -5,6 +5,7 @@ import type {
   Param,
   PipelineVersion,
   SubstitutionContext,
+  TriggerContext,
 } from './types.js';
 import { ParamResolveError, SubstituteError, TERMINAL_NODE } from './types.js';
 import type { OutputContract } from './outputs.js';
@@ -850,6 +851,61 @@ function coerce(name: string, type: Param['type'], value: unknown): unknown {
   }
 }
 
+// --- trigger param bindings (#5 S12b) ---------------------------------------
+
+/**
+ * Flatten a `TriggerContext` to the CLOSED `${trigger.*}` root object every
+ * consumer resolves against — the SSOT for that shape, so a `TRIGGER_FIELDS`
+ * addition updates ONE site. `null` (a run with no trigger) yields all-null
+ * fields rather than an absent root, so `${trigger.scheduledTime}` resolves to
+ * `null` instead of throwing an unknown-field error. Shared by the reducer's
+ * `buildCtx` (RUN-time reads) and `resolveTriggerBindings` (FIRE-time binding
+ * resolution), so the two can never disagree about a trigger field's value.
+ */
+export function triggerRoot(tc: TriggerContext | null): {
+  triggerId: string | null;
+  scheduledTime: string | null;
+  body: unknown;
+} {
+  return {
+    triggerId: tc?.triggerId ?? null,
+    scheduledTime: tc?.scheduledTime ?? null,
+    body: tc?.body ?? null,
+  };
+}
+
+/**
+ * Resolve a trigger's expression-valued param bindings at FIRE time (#5 S12b).
+ * A `trigger.params` value may be a `${trigger.*}` expression (e.g. `{when:
+ * "${trigger.scheduledTime}"}`); this evaluates every one against the fire-time
+ * trigger context, so a schedule fire binds the occurrence it fired for.
+ *
+ * The substitution context carries ONLY the `trigger` root: a binding may
+ * reference nothing else, and the save-time gate (`validateTriggerBindings`)
+ * enforces that statically. The other roots are empty here so a stored,
+ * pre-gate binding referencing `${params.*}`/`${run.*}` throws (fail-safe)
+ * rather than resolving against a stale/absent value.
+ *
+ * PURE: reuses `substitute`, so it inherits the inert single-pass no-injection
+ * guarantee (a resolved value that itself contains `${...}` is emitted
+ * literally) and whole-value native-type preservation (a bare `${trigger.body}`
+ * keeps its json shape). Whole-value type preservation is why the result feeds
+ * `resolveRunParams` as the override layer directly, with no re-coercion here.
+ */
+export function resolveTriggerBindings(
+  triggerParams: Record<string, unknown>,
+  tc: TriggerContext,
+): Record<string, unknown> {
+  const ctx: SubstitutionContext = {
+    params: {},
+    nodeOutputs: {},
+    nodeStatuses: {},
+    run: {},
+    trigger: triggerRoot(tc),
+  };
+  return substitute(triggerParams, ctx) as Record<string, unknown>;
+}
+
 // --- validateRefs (pure static validation, run at pipeline-SAVE time) -------
 
 /**
@@ -1639,7 +1695,17 @@ interface ScanScope {
   outputsById?: Map<string, OutputContract>;
 }
 
-function scan(where: string, value: unknown, scope: ScanScope, errors: string[], depth = 0): void {
+function scan(
+  where: string,
+  value: unknown,
+  scope: ScanScope,
+  errors: string[],
+  depth = 0,
+  // A root restriction (#5 S12b), threaded UNCHANGED through every recursion so
+  // a nested binding value (`{a: {b: "${params.x}"}}`) is restricted the same as
+  // a top-level one. Undefined (`validateRefs`/`validateExitWhen`) = all roots.
+  allowedRoots?: ReadonlySet<RefRoot['kind']>,
+): void {
   // Bound the config-TREE recursion so a pathologically nested config is
   // reported as a collected error, never a raw `RangeError` this pure validator
   // is not contracted to throw (the SAVE half of #537, paired with `substitute`
@@ -1658,19 +1724,71 @@ function scan(where: string, value: unknown, scope: ScanScope, errors: string[],
       errors.push(`${where}: unterminated \${ reference`);
     }
     for (const m of mode.matches) {
-      checkExprStatic(parseExprSafe(m.body, where, errors), scope, errors, where, false);
+      checkExprStatic(
+        parseExprSafe(m.body, where, errors),
+        scope,
+        errors,
+        where,
+        false,
+        false,
+        allowedRoots,
+      );
     }
     return;
   }
   if (Array.isArray(value)) {
-    value.forEach((v, i) => scan(`${where}[${i}]`, v, scope, errors, depth + 1));
+    value.forEach((v, i) => scan(`${where}[${i}]`, v, scope, errors, depth + 1, allowedRoots));
     return;
   }
   if (value !== null && typeof value === 'object') {
     for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-      scan(`${where}.${key}`, (value as Record<string, unknown>)[key], scope, errors, depth + 1);
+      scan(
+        `${where}.${key}`,
+        (value as Record<string, unknown>)[key],
+        scope,
+        errors,
+        depth + 1,
+        allowedRoots,
+      );
     }
   }
+}
+
+/** The only expression root a trigger param binding may reference (#5 S12b). */
+const TRIGGER_BINDING_ROOTS: ReadonlySet<RefRoot['kind']> = new Set(['trigger']);
+
+/**
+ * SAVE-TIME validation of a trigger's expression-valued param BINDINGS (#5
+ * S12b). Every `${...}` in a `trigger.params` value must parse AND reference
+ * ONLY the `${trigger.*}` root — the sole facts that exist at fire time. A
+ * `${params.*}`/`${nodes.*}`/`${run.*}`/`${item}` binding is refused (they name
+ * a run's own state, which the trigger predates). Returns error strings (`[]` =
+ * valid); the write schema surfaces them as Zod issues.
+ *
+ * REUSES the one `scan`/`checkExprStatic` machinery `validateRefs` runs, via the
+ * `allowedRoots` restriction — so the fn allowlist, arity, arg-typing, path-depth
+ * and grammar rules are enforced identically and can never drift from a
+ * hand-rolled second walker. The scope is EMPTY (no declared params, no graph):
+ * a trigger has no nodes/params of its own, and any node/param ref is refused by
+ * the root restriction before the scope is ever consulted.
+ *
+ * A ROOTLESS expression (`${upper('x')}`, `${add(1, 2)}`) is ACCEPTED: the rule
+ * is "no root OTHER than trigger", and a pure-function binding references no
+ * fire-time-absent fact. `substitute` resolves it at fire time like any other.
+ */
+export function validateTriggerBindings(params: Record<string, unknown>): string[] {
+  const errors: string[] = [];
+  const scope: ScanScope = {
+    declared: new Map(),
+    guaranteed: new Set(),
+    settled: new Set(),
+    reachable: new Set(),
+    soft: new Set(),
+  };
+  for (const [name, value] of Object.entries(params)) {
+    scan(`params.${name}`, value, scope, errors, 0, TRIGGER_BINDING_ROOTS);
+  }
+  return errors;
 }
 
 /**
@@ -1814,6 +1932,7 @@ function checkExprStatic(
   where: string,
   softOk: boolean,
   itemInScope = false,
+  allowedRoots?: ReadonlySet<RefRoot['kind']>,
 ): void {
   if (expr.kind === 'str' || expr.kind === 'num' || expr.kind === 'bool') return;
   if (expr.kind === 'call') {
@@ -1840,6 +1959,10 @@ function checkExprStatic(
         // `item` stays in scope for anything nested inside a lambda arg; a
         // SIBLING arg of the same call does not inherit it.
         itemInScope || lambdas.includes(i),
+        // A root restriction (#5 S12b) applies to a ref nested under a call too:
+        // `${default(params.x, 'fb')}` in a trigger binding must still reject
+        // the `${params.x}` root.
+        allowedRoots,
       );
       // ARG TYPING (#6 E6) — the save-time mirror of run-time `checkArgTypes`,
       // reading the same `spec.args` with the same variadic-tail rule, so the
@@ -1881,6 +2004,22 @@ function checkExprStatic(
     errors.push(`${where}: unresolvable reference \${${expr.source}}`);
     return;
   }
+  // #5 S12b — ROOT RESTRICTION. When a caller restricts which roots are legal
+  // (a trigger param binding may reference ONLY `${trigger.*}` — the sole facts
+  // that exist at fire time), a ref whose root is outside the set is refused
+  // here, EARLY: returning before `pathDepthDefect`/tail-index/`checkRefRoot`/
+  // the scalar-root rule keeps a disallowed deep ref like `${run.x.y}` to ONE
+  // error rather than also tripping "deep addressing needs a json/any value".
+  // Undefined (every ordinary caller) = all roots allowed, so this is inert
+  // outside the binding gate. `refRoot` above already turned the segments into
+  // a root; `checkRefRoot` (below) still validates the field of an ALLOWED root.
+  if (allowedRoots !== undefined && !allowedRoots.has(root.kind)) {
+    errors.push(
+      `${where}: \${${expr.source}} — a trigger param binding may reference only ` +
+        `\${trigger.*} (the fire-time trigger context), not \${${root.kind === 'nodeOutput' || root.kind === 'nodeStatus' ? 'nodes' : root.kind}.*}`,
+    );
+    return;
+  }
   const tooDeep = pathDepthDefect(expr);
   if (tooDeep !== null) {
     errors.push(`${where}: ${tooDeep}`);
@@ -1900,7 +2039,7 @@ function checkExprStatic(
   // forcing `false` here would manufacture a false-reject.
   for (const seg of tail) {
     if (seg.kind !== 'index') continue;
-    checkExprStatic(seg.expr, scope, errors, where, softOk, itemInScope);
+    checkExprStatic(seg.expr, scope, errors, where, softOk, itemInScope, allowedRoots);
     // And TYPE it. `stepIndex` refuses a non-number/non-string index for EVERY
     // container shape, before it even splits array-vs-object, so an index whose
     // type is statically KNOWN to be boolean/array can never resolve for any

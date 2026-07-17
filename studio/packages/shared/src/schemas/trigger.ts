@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { validateTriggerBindings } from '../engine/params.js';
 
 export const TriggerModeSchema = z.enum(['manual', 'schedule', 'webhook', 'event', 'continuous']);
 export type TriggerMode = z.infer<typeof TriggerModeSchema>;
@@ -71,6 +72,34 @@ export const WebhookConfigSchema = z
 export type WebhookConfig = z.infer<typeof WebhookConfigSchema>;
 
 /**
+ * STORED/READ param shape — the raw record, deliberately LENIENT (no binding
+ * validation) so it parses any historically-valid row. Binding validation is a
+ * WRITE concern (`TriggerParamsWriteSchema`), NOT enforced on read: tightening
+ * the stored schema would make a trigger row persisted before the S12b gate
+ * throw on `getTrigger`/`listTriggers` rather than merely being refused at the
+ * write boundary (same reasoning as `ConcurrencySchema` above). At fire time,
+ * an unresolvable stored binding fails SAFE (`resolveTriggerBindings` throws).
+ */
+export const TriggerParamsSchema = z.record(z.string(), z.unknown());
+
+/**
+ * WRITE-boundary param shape (#5 S12b): the stored record PLUS static validation
+ * that every expression-valued binding parses AND references ONLY the
+ * `${trigger.*}` root (the sole facts that exist at fire time). A
+ * `${params.*}`/`${nodes.*}`/`${run.*}` binding is refused here so a trigger can
+ * never be created/updated to bind a param to state that does not exist when it
+ * fires. Reuses `validateTriggerBindings` (the shared checker) so the canvas /
+ * any client and the server refuse identically. A ZodEffects FIELD on
+ * `NewTriggerSchema` (like `ConcurrencyWriteSchema`), so the write object stays a
+ * ZodObject and `.omit()`/`.partial()` keep working on the write path.
+ */
+export const TriggerParamsWriteSchema = TriggerParamsSchema.superRefine((params, ctx) => {
+  for (const message of validateTriggerBindings(params)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+  }
+});
+
+/**
  * First-class trigger: binds ONE pipeline version + param values + firing
  * mode + concurrency policy. Many triggers can point at one pipeline
  * (version). "Assign" in the UI = create a trigger.
@@ -90,7 +119,7 @@ export const TriggerSchema = z.object({
    * fire a trigger with a null binding.
    */
   pipelineVersionId: z.string().min(1).nullable(),
-  params: z.record(z.string(), z.unknown()),
+  params: TriggerParamsSchema,
   mode: TriggerModeSchema,
   schedule: z.string().min(1).nullable(),
   webhook: WebhookConfigSchema.nullable(),
@@ -112,6 +141,9 @@ export const NewTriggerSchema = TriggerSchema.omit({
   updatedAt: true,
 }).extend({
   concurrency: ConcurrencyWriteSchema,
+  // Expression-valued param bindings are validated on the WRITE path only
+  // (#5 S12b) — see `TriggerParamsWriteSchema`.
+  params: TriggerParamsWriteSchema,
 });
 // z.input, not z.infer/z.output — see the note on NewConnection in
 // connection.ts for why every insert type in this package uses it.

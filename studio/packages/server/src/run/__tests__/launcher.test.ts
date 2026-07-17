@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   CATALOG_VERSION,
+  SubstituteError,
   type Concurrency,
   type Edge,
   type EdgeOn,
   type EngineEvent,
   type NewPipelineVersion,
   type Node,
+  type Param,
   type Trigger,
 } from '@autonomy-studio/shared';
 import { createPipeline } from '../../repo/pipelines.js';
@@ -44,11 +46,16 @@ function edge(from: string, to: string, on: EdgeOn = 'success'): Edge {
   return { id: `${from}->${to}:${on}`, from, to, on };
 }
 
-function seedVersion(db: Db, nodes: Node[] = [node('a')], edges: Edge[] = []): string {
+function seedVersion(
+  db: Db,
+  nodes: Node[] = [node('a')],
+  edges: Edge[] = [],
+  params: Param[] = [],
+): string {
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
   const input: NewPipelineVersion = {
     pipelineId: pipeline.id,
-    params: [],
+    params,
     outputs: [],
     nodes,
     edges,
@@ -59,13 +66,18 @@ function seedVersion(db: Db, nodes: Node[] = [node('a')], edges: Edge[] = []): s
 
 function seedTrigger(
   db: Db,
-  opts: { pipelineVersionId: string | null; concurrency?: Concurrency; enabled?: boolean },
+  opts: {
+    pipelineVersionId: string | null;
+    concurrency?: Concurrency;
+    enabled?: boolean;
+    params?: Record<string, unknown>;
+  },
 ): Trigger {
   return createTrigger(db, {
     ownerId: 'local',
     name: 'T',
     pipelineVersionId: opts.pipelineVersionId,
-    params: {},
+    params: opts.params ?? {},
     mode: 'manual',
     schedule: null,
     webhook: null,
@@ -73,6 +85,17 @@ function seedTrigger(
     runWindows: null,
     enabled: opts.enabled ?? false,
   });
+}
+
+/** The RESOLVED run params, read from the durable `run.started` fact (#5 S12b). */
+function startedParams(db: Db, runId: string): Record<string, unknown> {
+  const started = loadEngineEvents(db, runId).find((e) => e.type === 'run.started');
+  if (started?.type !== 'run.started') throw new Error(`no run.started for ${runId}`);
+  return started.params;
+}
+
+function strParam(name: string, def: string): Param {
+  return { name, type: 'string', required: false, default: def };
 }
 
 function deps(db: Db, executorOpts: StubExecutorOptions = {}): DriveDeps {
@@ -473,6 +496,77 @@ describe('RunLauncher — stop', () => {
     launcher.stop();
     const result = launcher.fire(trigger);
     expect(result.outcome).toBe('skipped');
+    expect(listRuns(db, { triggerId: trigger.id })).toHaveLength(0);
+  });
+});
+
+describe('RunLauncher — #5 S12b trigger param bindings + run-now override', () => {
+  it('resolves fire-time bindings and applies the full precedence (default < binding < run-now)', async () => {
+    const { db } = freshDb();
+    // pv declares three params with defaults; `w` reads the scheduled occurrence.
+    const pvId = seedVersion(
+      db,
+      [node('a')],
+      [],
+      [strParam('a', 'da'), strParam('b', 'db'), strParam('c', 'dc'), strParam('w', 'dw')],
+    );
+    // Trigger BINDINGS override the defaults of b/c/w; `a` is left to its default.
+    const trigger = seedTrigger(db, {
+      pipelineVersionId: pvId,
+      params: {
+        b: '${trigger.triggerId}',
+        c: 'literal-c',
+        w: '${trigger.scheduledTime}',
+      },
+    });
+
+    // RUN-NOW override wins over the binding for `c`.
+    const l = createRunLauncher(deps(db));
+    const result = l.fire(trigger, {
+      scheduledTime: '2026-07-17T09:00:00.000Z',
+      runNowParams: { c: 'runnow-c' },
+    });
+    expect(result.outcome).toBe('started');
+    await l.whenIdle();
+
+    const params = startedParams(db, result.runId!);
+    expect(params).toEqual({
+      a: 'da', // pipeline default (no binding, no override)
+      b: trigger.id, // trigger binding (${trigger.triggerId})
+      c: 'runnow-c', // run-now override beats the binding's 'literal-c'
+      w: '2026-07-17T09:00:00.000Z', // binding to the fire-time scheduled occurrence
+    });
+  });
+
+  it('a queued fire freezes ITS OWN run-now override at admission', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')], [], [strParam('c', 'dc')]);
+    const trigger = seedTrigger(db, {
+      pipelineVersionId: pvId,
+      concurrency: { policy: 'queue' },
+    });
+    const l = createRunLauncher(deps(db));
+
+    l.fire(trigger, { runNowParams: { c: 'first' } }); // takes the slot
+    l.fire(trigger, { runNowParams: { c: 'second' } }); // queued — must keep 'second'
+
+    await l.whenIdle();
+
+    const resolved = listRuns(db, { triggerId: trigger.id }).map((r) => startedParams(db, r.id).c);
+    expect(new Set(resolved)).toEqual(new Set(['first', 'second']));
+  });
+
+  it('THROWS SubstituteError and creates no run when a binding cannot resolve for this fire', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')], [], [strParam('x', 'dx')]);
+    // `${trigger.body.k}` is save-VALID (body is a known field) but deep-addresses
+    // a null body on a manual fire — a fire-time throw, refused before any run row.
+    const trigger = seedTrigger(db, {
+      pipelineVersionId: pvId,
+      params: { x: '${trigger.body.k}' },
+    });
+
+    expect(() => createRunLauncher(deps(db)).fire(trigger)).toThrow(SubstituteError);
     expect(listRuns(db, { triggerId: trigger.id })).toHaveLength(0);
   });
 });

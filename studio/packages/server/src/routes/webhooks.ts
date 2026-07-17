@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
-import { isWithinRunWindows, type Trigger } from '@autonomy-studio/shared';
+import { isWithinRunWindows, SubstituteError, type Trigger } from '@autonomy-studio/shared';
 import { getTrigger, getSecretByRef } from '../repo/index.js';
 import {
   claimWebhookDelivery,
@@ -164,6 +164,25 @@ function fireClaimed(
   try {
     result = fastify.runLauncher.fire(trigger);
   } catch (err) {
+    // #5 S12b — a trigger param binding that cannot resolve is a PERMANENT
+    // config defect (e.g. a `${trigger.body.x}` deep-address on the null body a
+    // pre-S8 webhook fire still carries), NOT a transient fault. RELEASING the
+    // claim would let the sender's verbatim retry (same idempotency key) re-fire
+    // and re-throw in a storm. Instead RECORD the delivery as `skipped` (so the
+    // same key dedupes) and 202 — the deliberate asymmetry the concurrency-skip
+    // below already uses. A corrected, genuinely-new event re-signs with a new
+    // key and fires. The detail is logged server-side, never returned.
+    if (err instanceof SubstituteError) {
+      fastify.log.warn(
+        { err, triggerId: trigger.id, deliveryId },
+        'webhook fire: unresolvable trigger param binding — recording skip',
+      );
+      finalizeWebhookDelivery(db, deliveryId, { outcome: 'skipped', runId: null });
+      return reply.status(202).send({
+        outcome: 'skipped',
+        reason: 'trigger param binding could not be resolved',
+      } satisfies WebhookFireResponse);
+    }
     // Release the claim so the same key can be retried after the cause is fixed.
     deleteWebhookDelivery(db, deliveryId);
     if (err instanceof UnboundTriggerError) {
