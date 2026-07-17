@@ -1,6 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import type { FastifyPluginAsync } from 'fastify';
-import { NewTriggerSchema, TriggerPublicSchema, type Trigger } from '@autonomy-studio/shared';
+import {
+  FireRequestSchema,
+  NewTriggerSchema,
+  SubstituteError,
+  TriggerPublicSchema,
+  type Trigger,
+} from '@autonomy-studio/shared';
 import {
   createSecret,
   createTrigger,
@@ -162,6 +168,13 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
    *
    * `202 Accepted`: an admitted run drives in the BACKGROUND (watch it live in
    * P6); a `queued`/`skipped` outcome is still a well-defined success.
+   *
+   * #5 S12b — the optional `{ params }` body is the RUN-NOW override layer, the
+   * top of the precedence stack (pipeline-default < trigger-binding < run-now).
+   * A malformed trigger param binding surfaces SYNCHRONOUSLY here as a 400
+   * (`SubstituteError`, before any run row is created); an undeclared/type-bad
+   * RUN-NOW override instead surfaces as an interrupted run at run start
+   * (`resolveRunParams`), consistent with a bad trigger-authored param today.
    */
   fastify.post<{ Params: { id: string } }>('/api/triggers/:id/fire', async (request, reply) => {
     const trigger = requireOwned(
@@ -170,12 +183,21 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
       'trigger',
       request.params.id,
     );
+    // A body is optional; `{}` (or none) means a plain "run now".
+    const body = FireRequestSchema.parse(request.body ?? {});
     try {
-      const result = fastify.runLauncher.fire(trigger);
+      const result = fastify.runLauncher.fire(trigger, { runNowParams: body.params });
       reply.status(202).send(result);
     } catch (err) {
       if (err instanceof UnboundTriggerError) {
         throw new BadRequestError(err.message);
+      }
+      // A trigger param binding that cannot resolve for this fire is a bad
+      // request (a misconfigured binding, or a `${trigger.body.x}` deep-address
+      // on a manual fire's null body) — the message is client-safe (never echoes
+      // a resolved value).
+      if (err instanceof SubstituteError) {
+        throw new BadRequestError(`trigger param binding could not be resolved: ${err.message}`);
       }
       throw err;
     }

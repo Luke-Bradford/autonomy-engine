@@ -14,10 +14,14 @@ import {
   RUN_FIELDS,
   TRIGGER_FIELDS,
   resolveRunParams,
+  resolveTriggerBindings,
   substitute,
+  triggerRoot,
   validateRefs,
+  validateTriggerBindings,
   validateWholeValue,
 } from '../params.js';
+import type { TriggerContext } from '../types.js';
 import { MAX_PATH_DEPTH } from '../functions.js';
 
 // --- helpers ---------------------------------------------------------------
@@ -1529,5 +1533,157 @@ describe("validateRefs — join:'any' + an untracked predecessor (#6 E3)", () =>
     const nodes = [node('a', {}), node('r', { note: '${nodes.a.output.text}' })];
     const edges = [edge('c', 'r', 'success'), edge('a', 'r', 'success')];
     expect(validateRefs(doc(nodes, edges))).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// #5 S12b — trigger param bindings (fire-time resolution + save-time validation)
+// ===========================================================================
+
+function tc(over: Partial<TriggerContext> = {}): TriggerContext {
+  return {
+    triggerId: over.triggerId ?? 'trg-1',
+    scheduledTime: over.scheduledTime ?? null,
+    body: 'body' in over ? over.body : null,
+  };
+}
+
+describe('triggerRoot — the shared ${trigger.*} flattening', () => {
+  it('flattens a context to the closed field set', () => {
+    expect(triggerRoot(tc({ scheduledTime: '2026-07-17T09:00:00.000Z' }))).toEqual({
+      triggerId: 'trg-1',
+      scheduledTime: '2026-07-17T09:00:00.000Z',
+      body: null,
+    });
+  });
+
+  it('yields all-null fields for a null context (a run with no trigger)', () => {
+    expect(triggerRoot(null)).toEqual({ triggerId: null, scheduledTime: null, body: null });
+  });
+});
+
+describe('resolveTriggerBindings — fire-time resolution (#5 S12b)', () => {
+  it('resolves a whole-value ${trigger.scheduledTime} binding, preserving null', () => {
+    const withT = resolveTriggerBindings(
+      { when: '${trigger.scheduledTime}' },
+      tc({ scheduledTime: '2026-07-17T09:00:00.000Z' }),
+    );
+    expect(withT).toEqual({ when: '2026-07-17T09:00:00.000Z' });
+    // A manual/schedule fire with no scheduledTime binds the null through.
+    expect(resolveTriggerBindings({ when: '${trigger.scheduledTime}' }, tc())).toEqual({
+      when: null,
+    });
+  });
+
+  it('deep-addresses ${trigger.body.*} and preserves the native json shape', () => {
+    const out = resolveTriggerBindings(
+      { uid: '${trigger.body.user.id}', whole: '${trigger.body}' },
+      tc({ body: { user: { id: 7 } } }),
+    );
+    expect(out).toEqual({ uid: 7, whole: { user: { id: 7 } } });
+  });
+
+  it('passes literal (non-expression) param values through untouched', () => {
+    const out = resolveTriggerBindings({ a: 'hello', n: 42, o: { k: 'v' } }, tc());
+    expect(out).toEqual({ a: 'hello', n: 42, o: { k: 'v' } });
+  });
+
+  it('coerces an EMBEDDED trigger ref to a string, whole-value keeps type', () => {
+    const out = resolveTriggerBindings(
+      { label: 'run-${trigger.triggerId}', id: '${trigger.triggerId}' },
+      tc({ triggerId: 'abc' }),
+    );
+    expect(out).toEqual({ label: 'run-abc', id: 'abc' });
+  });
+
+  it('stays INERT — a resolved value that contains ${} is emitted literally', () => {
+    const out = resolveTriggerBindings(
+      { x: '${trigger.body}' },
+      tc({ body: '${trigger.triggerId}' }),
+    );
+    expect(out).toEqual({ x: '${trigger.triggerId}' });
+  });
+
+  it('throws deep-addressing a null body (schedule/manual fire) — fail-safe', () => {
+    expect(() => resolveTriggerBindings({ x: '${trigger.body.k}' }, tc())).toThrow(SubstituteError);
+  });
+
+  it('throws for a stored, pre-gate binding referencing a non-trigger root', () => {
+    // The other roots are empty in the fire-time context, so a ${run.*}/${params.*}
+    // binding that slipped past an older save gate fails LOUD rather than resolving
+    // wrong. The save gate (validateTriggerBindings) prevents new ones.
+    expect(() => resolveTriggerBindings({ x: '${run.runId}' }, tc())).toThrow(SubstituteError);
+    expect(() => resolveTriggerBindings({ x: '${params.foo}' }, tc())).toThrow(SubstituteError);
+  });
+});
+
+describe('validateTriggerBindings — save-time root restriction (#5 S12b)', () => {
+  it('accepts trigger-only bindings across the closed field set', () => {
+    expect(
+      validateTriggerBindings({
+        a: '${trigger.triggerId}',
+        b: '${trigger.scheduledTime}',
+        c: '${trigger.body.payload.x}',
+        d: 'literal-and-${trigger.triggerId}',
+      }),
+    ).toEqual([]);
+  });
+
+  it('accepts functions OVER trigger refs (reuses the fn allowlist/arity)', () => {
+    expect(validateTriggerBindings({ a: "${default(trigger.body.x, 'fb')}" })).toEqual([]);
+  });
+
+  it('accepts a ROOTLESS pure-function binding (no fire-time-absent fact)', () => {
+    expect(validateTriggerBindings({ a: "${toUpper('x')}" })).toEqual([]);
+  });
+
+  it('rejects a ${params.*} binding (does not exist at fire time)', () => {
+    const errors = validateTriggerBindings({ a: '${params.foo}' });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/may reference only \$\{trigger\.\*\}/);
+    expect(errors[0]).toMatch(/not \$\{params\.\*\}/);
+  });
+
+  it('rejects a ${nodes.*} output/status binding, reported as ${nodes.*}', () => {
+    expect(validateTriggerBindings({ a: '${nodes.x.output.y}' })[0]).toMatch(/not \$\{nodes\.\*\}/);
+    expect(validateTriggerBindings({ a: '${nodes.x.status}' })[0]).toMatch(/not \$\{nodes\.\*\}/);
+  });
+
+  it('rejects a ${run.*} binding — and to ONE error even when deep', () => {
+    const errors = validateTriggerBindings({ a: '${run.runId.x.y}' });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/not \$\{run\.\*\}/);
+  });
+
+  it('rejects an ${item} binding, rendered bare (no dot-form) in the message', () => {
+    const err = validateTriggerBindings({ a: '${item}' })[0];
+    expect(err).toMatch(/may reference only/);
+    // `item` has no `.*` form — the message names it as `${item}`, not `${item.*}`.
+    expect(err).toContain('not ${item}');
+    expect(err).not.toContain('${item.*}');
+  });
+
+  it('rejects a disallowed root nested UNDER an allowed function/trigger ref', () => {
+    // The restriction threads into call args and tail-index exprs.
+    expect(validateTriggerBindings({ a: "${default(params.x, 'fb')}" })[0]).toMatch(
+      /not \$\{params\.\*\}/,
+    );
+    expect(validateTriggerBindings({ a: '${trigger.body[params.i]}' })[0]).toMatch(
+      /not \$\{params\.\*\}/,
+    );
+  });
+
+  it('rejects a disallowed root nested in a nested param value (deep record)', () => {
+    expect(validateTriggerBindings({ a: { b: ['${run.runId}'] } })[0]).toMatch(/not \$\{run\.\*\}/);
+  });
+
+  it('rejects an unknown trigger field (closed set) via the field check', () => {
+    expect(validateTriggerBindings({ a: '${trigger.nope}' })[0]).toMatch(
+      /is not a known trigger field/,
+    );
+  });
+
+  it('rejects a malformed expression (parse error), reported once', () => {
+    expect(validateTriggerBindings({ a: '${trigger.}' }).length).toBeGreaterThanOrEqual(1);
   });
 });

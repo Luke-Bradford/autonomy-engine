@@ -1,4 +1,5 @@
 import type { FireOutcome, FireResult, Trigger, TriggerContext } from '@autonomy-studio/shared';
+import { resolveTriggerBindings } from '@autonomy-studio/shared';
 import { countActiveRunsForTrigger, createRun } from '../repo/runs.js';
 import { startRun, terminalizeInterrupted, type DriveDeps, type DriveLog } from './driver.js';
 
@@ -49,6 +50,15 @@ export type { FireOutcome, FireResult };
 export interface FireContext {
   scheduledTime?: string;
   body?: unknown;
+  /**
+   * The RUN-NOW param override layer (#5 S12b) — the TOP of the precedence stack
+   * (pipeline-default < trigger-binding < run-now override). Supplied by the
+   * manual-fire endpoint's `{ params }` body; absent for a schedule/webhook fire.
+   * Merged OVER the trigger's fire-time-resolved bindings and frozen into the
+   * run's params at admission, so a queued fire launches with the same override
+   * layer the operator submitted.
+   */
+  runNowParams?: Record<string, unknown>;
 }
 
 /** Thrown by `fire()` when a trigger has no bound pipeline version. */
@@ -106,6 +116,13 @@ export const DEFAULT_MAX_QUEUE_DEPTH = 1000;
 interface QueuedFire {
   trigger: Trigger;
   triggerContext: TriggerContext;
+  /**
+   * The run's fully-resolved param OVERRIDE layer (#5 S12b): the trigger's
+   * fire-time-resolved bindings with any run-now override merged on top, frozen
+   * at admission. Rides the queue with `triggerContext` so a delayed launch uses
+   * the values of THIS fire, not whenever the slot happened to free.
+   */
+  params: Record<string, unknown>;
 }
 
 export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
@@ -151,8 +168,14 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     else inFlightByTrigger.set(triggerId, n);
   }
 
-  /** Create the run row (durable, `pending`) and drive it in the background. */
-  function launch(trigger: Trigger, triggerContext: TriggerContext): string {
+  /** Create the run row (durable, `pending`) and drive it in the background.
+   * `params` is the fire-time-resolved override layer (#5 S12b), frozen by
+   * `fire()` at admission and stored as the run's params. */
+  function launch(
+    trigger: Trigger,
+    triggerContext: TriggerContext,
+    params: Record<string, unknown>,
+  ): string {
     // Caller guarantees non-null (fire() throws UnboundTriggerError otherwise).
     const pipelineVersionId = trigger.pipelineVersionId as string;
     // The row is created `pending`, then `startRun` (below) flips it to
@@ -176,7 +199,10 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       pipelineVersionId,
       triggerId: trigger.id,
       parentRunId: null,
-      params: trigger.params,
+      // #5 S12b — the run-now/binding-resolved override layer (NOT the raw
+      // `trigger.params`), so `startRun`'s `resolveRunParams(pv, run.params)`
+      // applies pipeline-default < this merged layer.
+      params,
     });
 
     incInFlight(trigger.id);
@@ -219,7 +245,7 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     if ((inFlightByTrigger.get(triggerId) ?? 0) > 0) return;
     const next = q.shift()!;
     if (q.length === 0) queues.delete(triggerId);
-    launch(next.trigger, next.triggerContext);
+    launch(next.trigger, next.triggerContext, next.params);
   }
 
   function fire(trigger: Trigger, fireContext?: FireContext): FireResult {
@@ -241,13 +267,26 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       body: fireContext?.body ?? null,
     };
 
+    // #5 S12b — resolve the trigger's expression-valued param bindings against
+    // THIS fire's context, then merge the run-now override ON TOP. Precedence
+    // pipeline-default < trigger-binding < run-now collapses to
+    // `resolveRunParams(pv, mergedParams)` in `startRun`. Frozen here at
+    // admission so a queued fire launches with the same values. A binding that
+    // cannot resolve (a bad expression, or `${trigger.body.x}` on a null body)
+    // THROWS `SubstituteError` — the caller maps it (manual → 400, schedule /
+    // webhook → skip-and-log); it is refused BEFORE any run row is created.
+    const mergedParams: Record<string, unknown> = {
+      ...resolveTriggerBindings(trigger.params, triggerContext),
+      ...(fireContext?.runNowParams ?? {}),
+    };
+
     const active = countActiveRunsForTrigger(db, trigger.id);
     const { policy, max } = trigger.concurrency;
 
     if (policy === 'skip_if_running') {
       if (active > 0)
         return { outcome: 'skipped', reason: 'a run is already active for this trigger' };
-      return { outcome: 'started', runId: launch(trigger, triggerContext) };
+      return { outcome: 'started', runId: launch(trigger, triggerContext, mergedParams) };
     }
 
     if (policy === 'parallel') {
@@ -265,7 +304,7 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       if (active >= max) {
         return { outcome: 'skipped', reason: `parallel cap of ${max} reached` };
       }
-      return { outcome: 'started', runId: launch(trigger, triggerContext) };
+      return { outcome: 'started', runId: launch(trigger, triggerContext, mergedParams) };
     }
 
     // `queue`: single-slot, FIFO. Start now if idle, else enqueue (bounded).
@@ -274,11 +313,11 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       if (q.length >= maxQueueDepth) {
         return { outcome: 'skipped', reason: `queue is full (max ${maxQueueDepth} pending)` };
       }
-      q.push({ trigger, triggerContext });
+      q.push({ trigger, triggerContext, params: mergedParams });
       queues.set(trigger.id, q);
       return { outcome: 'queued' };
     }
-    return { outcome: 'started', runId: launch(trigger, triggerContext) };
+    return { outcome: 'started', runId: launch(trigger, triggerContext, mergedParams) };
   }
 
   async function whenIdle(): Promise<void> {

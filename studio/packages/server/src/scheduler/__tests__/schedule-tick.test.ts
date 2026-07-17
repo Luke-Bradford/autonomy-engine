@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
 import {
   CATALOG_VERSION,
+  SubstituteError,
   type NewPipelineVersion,
   type Node,
   type RunWindow,
@@ -237,6 +238,35 @@ describe('schedule_tick handler — freshness suppressions', () => {
     expect(result).toMatchObject({ status: 'suppressed', reason: 'trigger_unbound' });
     expect(launcher.fires).toHaveLength(0);
     expect(next).toHaveLength(0);
+  });
+
+  // #5 S12b — a save-valid `${trigger.body.x}` binding throws at fire time on a
+  // schedule fire (null body until S8). The afterCommit skip-and-logs it so a
+  // misconfigured binding drops the one occurrence, never wedges the clock.
+  it('a fire-time binding SubstituteError is skipped in afterCommit — clock never wedged', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pv });
+    const throwingLauncher: ScheduleTickLauncher = {
+      fire: () => {
+        throw new SubstituteError('${trigger.body.k}: has no field — the value before it is null');
+      },
+    };
+    const handler = createScheduleTickHandler({ launcher: throwingLauncher, log: silentLog() });
+    const row = armWakeup(db, {
+      kind: SCHEDULE_TICK_KIND,
+      ref: { triggerId: trigger.id, schedule: trigger.schedule as string },
+      dueAt: NOON,
+      discriminator: `tick-${NOON}`,
+    });
+    const result = handler.fire(row, { scheduledFor: NOON, firedAt: NOON, latenessMs: 0 }, db);
+
+    // The tick FIRED (the chain is armed in-tx); the launcher throw is swallowed
+    // in afterCommit as a skip, so the clock's afterCommit guard never sees it.
+    expect(result.status).toBe('fired');
+    if (result.status === 'fired') {
+      expect(() => result.afterCommit?.()).not.toThrow();
+    }
   });
 
   it('schedule edited since arm → suppressed schedule_changed, NO re-arm (sync reseeds)', () => {

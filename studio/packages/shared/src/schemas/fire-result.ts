@@ -26,3 +26,21 @@ export const FireResultSchema = z.object({
   reason: z.string().min(1).optional(),
 });
 export type FireResult = z.infer<typeof FireResultSchema>;
+
+/**
+ * The optional request body of a MANUAL fire (`POST /api/triggers/:id/fire`,
+ * #5 S12b) — colocated with `FireResultSchema` (its response counterpart) on
+ * purpose, so the one file owns the fire endpoint's request+result contract.
+ * `params` is the RUN-NOW override layer — the TOP of the precedence stack
+ * (pipeline-default < trigger-binding < run-now override). Every field is
+ * optional so a bare "run now" (no body) stays valid, exactly as before S12b.
+ *
+ * The override values are raw (uncoerced) and validated against the pipeline's
+ * declared params by `resolveRunParams` at run start — an undeclared/type-bad
+ * override surfaces as an interrupted run, not a request error, consistent with
+ * a bad trigger-authored param today.
+ */
+export const FireRequestSchema = z.object({
+  params: z.record(z.string(), z.unknown()).optional(),
+});
+export type FireRequest = z.infer<typeof FireRequestSchema>;

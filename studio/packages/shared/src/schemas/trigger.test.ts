@@ -154,12 +154,56 @@ describe('TriggerSchema', () => {
 });
 
 describe('NewTriggerSchema', () => {
+  const { id, createdAt, updatedAt, ...insert } = trigger;
+  void id;
+  void createdAt;
+  void updatedAt;
+
   it('accepts a payload without server-set fields', () => {
-    const { id, createdAt, updatedAt, ...insert } = trigger;
-    void id;
-    void createdAt;
-    void updatedAt;
     expect(NewTriggerSchema.parse(insert)).toEqual(insert);
+  });
+
+  // #5 S12b — expression-valued param binding validation (write path only).
+  it('accepts a ${trigger.*} param binding on the write path', () => {
+    const parsed = NewTriggerSchema.parse({
+      ...insert,
+      params: { when: '${trigger.scheduledTime}', uid: '${trigger.body.user.id}' },
+    });
+    expect(parsed.params).toEqual({
+      when: '${trigger.scheduledTime}',
+      uid: '${trigger.body.user.id}',
+    });
+  });
+
+  it('rejects a param binding that references a non-trigger root', () => {
+    expect(() => NewTriggerSchema.parse({ ...insert, params: { x: '${params.foo}' } })).toThrow(
+      /may reference only \$\{trigger\.\*\}/,
+    );
+    expect(() =>
+      NewTriggerSchema.parse({ ...insert, params: { x: '${nodes.a.output.y}' } }),
+    ).toThrow(/may reference only/);
+  });
+
+  it('rejects an unknown trigger field in a binding', () => {
+    expect(() => NewTriggerSchema.parse({ ...insert, params: { x: '${trigger.nope}' } })).toThrow(
+      /is not a known trigger field/,
+    );
+  });
+
+  it('accepts literal (non-expression) param values unchanged', () => {
+    expect(NewTriggerSchema.parse({ ...insert, params: { topic: 'news', n: 3 } }).params).toEqual({
+      topic: 'news',
+      n: 3,
+    });
+  });
+});
+
+describe('TriggerSchema (stored/read) tolerates a binding the write path would refuse', () => {
+  it('does not run binding validation on read', () => {
+    // A row persisted before the S12b gate must still READ — resolution fails
+    // SAFE at fire time, it is not refused on load.
+    const stored = { ...trigger, params: { x: '${params.foo}' } };
+    expect(TriggerSchema.parse(stored)).toEqual(stored);
   });
 });
 
