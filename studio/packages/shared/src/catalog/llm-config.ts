@@ -56,9 +56,13 @@ export const llmCallConfigSchema = z
     /** Overrides the connection's default model for this node. */
     model: z.string().optional(),
     maxTokens: z.number().int().positive().optional(),
-    temperature: z.number().optional(),
+    // Only the UNIVERSAL lower bound (0) is enforced here; the upper bound is
+    // provider-specific (Anthropic 0–1, OpenAI/Ollama 0–2) so the adapters own
+    // it. Catches a negative temperature at save-time, not at the provider call.
+    temperature: z.number().min(0).optional(),
     // L1 sampling — mapped per-provider by the adapters (names differ).
-    topP: z.number().optional(),
+    // `topP` is nucleus sampling: a probability, universally [0, 1].
+    topP: z.number().min(0).max(1).optional(),
     stop: z.array(z.string()).optional(),
     seed: z.number().int().optional(),
   })

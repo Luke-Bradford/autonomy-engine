@@ -42,6 +42,18 @@ describe('llmCallConfigSchema', () => {
     expect(r.success).toBe(true);
   });
 
+  it('rejects an out-of-range `topP` at save-time (universal [0,1] bound)', () => {
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi', topP: 1.5 }).success).toBe(false);
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi', topP: -0.1 }).success).toBe(false);
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi', topP: 0.9 }).success).toBe(true);
+  });
+
+  it('rejects a negative `temperature` (universal lower bound; upper is provider-owned)', () => {
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi', temperature: -0.1 }).success).toBe(false);
+    // 1.5 is valid for OpenAI/Ollama — the upper bound is intentionally not enforced here.
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi', temperature: 1.5 }).success).toBe(true);
+  });
+
   it('rejects both `prompt` and `messages` (ambiguous)', () => {
     const r = llmCallConfigSchema.safeParse({
       prompt: 'hi',
