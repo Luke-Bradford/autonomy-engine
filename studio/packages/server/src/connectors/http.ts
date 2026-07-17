@@ -82,13 +82,16 @@ const httpRequestInputSchema = z.object({
  * — are ignored, keeping this adapter's consumption scoped to what it declares.
  */
 function sinkHeadersFrom(secretFields: Readonly<Record<string, string>>): Record<string, string> {
-  const headers: Record<string, string> = {};
-  for (const [path, value] of Object.entries(secretFields)) {
-    if (path.startsWith(SECRET_HEADERS_PREFIX)) {
-      headers[path.slice(SECRET_HEADERS_PREFIX.length)] = value;
-    }
-  }
-  return headers;
+  // Build via `Object.fromEntries` (define-property, [[DefineOwnProperty]]) rather
+  // than bracket-assignment ([[Set]]): a header named `__proto__` would hit
+  // Object.prototype's `__proto__` setter under [[Set]] and be SILENTLY DROPPED —
+  // the exact silent-loss failure this sink exists to fail-loudly avoid. Under
+  // define-property it becomes a real own property that survives the spread below.
+  return Object.fromEntries(
+    Object.entries(secretFields)
+      .filter(([path]) => path.startsWith(SECRET_HEADERS_PREFIX))
+      .map(([path, value]) => [path.slice(SECRET_HEADERS_PREFIX.length), value]),
+  );
 }
 
 /** Resolve a possibly-relative request url against an optional connection baseUrl. */

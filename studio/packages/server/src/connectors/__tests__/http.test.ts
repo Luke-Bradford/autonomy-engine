@@ -122,6 +122,21 @@ describe('httpAdapter.runActivity', () => {
     expect(sent['X.Api.Key']).toBe('sk-dotted');
   });
 
+  it('a `__proto__` config-sink header name is SENT, never silently dropped ([[Set]] hazard)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, 'ok'));
+
+    // A header literally named `__proto__` is the adversarial case for building the
+    // header map by bracket-assignment (`headers[name] = value`, [[Set]]): the plain
+    // object's inherited `__proto__` accessor would swallow the write and DROP the
+    // resolved secret header — the exact silent-loss this sink exists to fail loudly
+    // on. `sinkHeadersFrom` builds via define-property, so it lands as an OWN key.
+    await drain(httpAdapter.runActivity(ctx(), null, { 'secretHeaders.__proto__': 'sk-proto' }));
+
+    const sent = (fetchSpy.mock.calls[0]![1] as RequestInit).headers as Record<string, string>;
+    expect(Object.prototype.hasOwnProperty.call(sent, '__proto__')).toBe(true);
+    expect(sent['__proto__']).toBe('sk-proto');
+  });
+
   it('a config-sink header is the LAST word — it overrides the connection Bearer', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, 'ok'));
 

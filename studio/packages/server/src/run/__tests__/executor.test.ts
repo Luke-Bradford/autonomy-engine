@@ -902,4 +902,34 @@ describe('createExecutor — item 7 / S4: http_request config-sink secret header
     expect(stored.nodes[0]!.config.secretHeaders).toEqual({ 'X-Api-Key': { $secret: 'api-key' } });
     expect(JSON.stringify(stored)).not.toContain(PLAINTEXT);
   });
+
+  it('a NON-marker value at secretHeaders fails PERMANENT, never silently sending it', async () => {
+    // The save gate only VISITS `{$secret}`-shaped values (isSecretRef), so a raw
+    // string at the sink is not a marker to bless OR refuse — it passes save. At
+    // dispatch it is left in ctx.input (never resolved to a secretField), where the
+    // adapter's `secretHeaders: z.record(SecretRefSchema)` rejects it as a permanent
+    // config error. The PR's fail-loud claim: a misauthored sink FAILS, it does not
+    // silently drop the value onto the wire. Proven through the REAL save gate +
+    // REAL httpAdapter (not the S3 synthetic-catalog block above).
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [
+      httpNode('n1', connId, {
+        url: 'https://api.example.com/thing',
+        secretHeaders: { 'X-Api-Key': 'raw-plaintext-not-a-marker' },
+      }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const state = await startRun(deps(db), run);
+    expect(state.status).toBe('failure');
+    // Fail-loud, not silent-drop: the misauthored request never reaches the wire.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+      kind: 'permanent',
+      error: expect.stringContaining('invalid http_request activity config'),
+    });
+  });
 });
