@@ -13,10 +13,12 @@ jobs:
   review:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    # #505: GitHub's default job timeout is 6h. This job makes several bounded,
-    # retried API calls (the curl itself is capped at --max-time 600); 20 min is
-    # generous headroom and caps any pathological hang far below the default.
-    timeout-minutes: 20
+    # #505: GitHub's default job timeout is 6h. This caps a pathological hang far
+    # below that AND stays ABOVE the total retry budget so the outer timeout never
+    # kills the job mid-retry (which would skip the give-up logic). Budget: the
+    # Anthropic step ~15.25 min worst case (3x300s + backoff) dominates; the four
+    # gh steps add ~40s each worst case; total < ~19 min. 25 leaves headroom.
+    timeout-minutes: 25
     permissions:
       contents: read
       pull-requests: write
@@ -173,9 +175,15 @@ jobs:
           # never mistaken for transient. A truncated/again-failing call still
           # reds the step (fail-safe: the verdict guards downstream refuse a
           # review that never arrived).
+          #
+          # BUDGET must fit under the job's `timeout-minutes: 20`, or the outer
+          # timeout kills the job mid-retry instead of letting the give-up logic
+          # run. Worst case here = 3 attempts x 300s max-time + (5s+10s) backoff
+          # = ~15.25 min, leaving headroom for the other (also-bounded) steps. A
+          # healthy call returns in 1-3 min; 300s is generous, not a target.
           HTTP_STATUS=""
           call_api() {
-            HTTP_STATUS=$(curl -sS --connect-timeout 30 --max-time 600 -w "%{http_code}" \
+            HTTP_STATUS=$(curl -sS --connect-timeout 30 --max-time 300 -w "%{http_code}" \
               -H "x-api-key: $ANTHROPIC_API_KEY" \
               -H "anthropic-version: 2023-06-01" \
               -H "content-type: application/json" \
@@ -188,7 +196,7 @@ jobs:
               *) echo "::error::Anthropic API HTTP $HTTP_STATUS (non-retryable); response:"; cat response.json; exit 1 ;;
             esac
           }
-          retry 4 5 call_api || { echo "::error::Anthropic API failed after retries (last HTTP ${HTTP_STATUS:-none})"; cat response.json 2>/dev/null || true; exit 1; }
+          retry 3 5 call_api || { echo "::error::Anthropic API failed after retries (last HTTP ${HTTP_STATUS:-none})"; cat response.json 2>/dev/null || true; exit 1; }
 
           echo "HTTP status: $HTTP_STATUS"
           cat response.json

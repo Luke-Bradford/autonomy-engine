@@ -34,10 +34,15 @@
 #   4xx) should `exit` from inside its wrapper function rather than `return`,
 #   so retry never sees it.
 retry() {
-  retry_max="$1"
-  retry_base="$2"
+  # `local` (bash 3.2 supports it) so retry never clobbers a caller's names when
+  # sourced alongside other logic. Assign from positionals/literals only -- never
+  # `local x=$(cmd)`, which would mask the command's exit status.
+  local retry_max="$1"
+  local retry_base="$2"
+  local retry_n=1
+  local retry_rc=0
+  local retry_sleep=0
   shift 2
-  retry_n=1
   while true; do
     # Capture the command's OWN exit status directly. `if "$@"; then ...; fi`
     # would make $? afterwards 0 (an if-compound succeeds when its condition is
