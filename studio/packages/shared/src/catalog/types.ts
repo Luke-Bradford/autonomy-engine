@@ -112,6 +112,25 @@ export const FILTER_ACTIVITY_TYPE = 'filter';
 export const WAIT_ACTIVITY_TYPE = 'wait';
 
 /**
+ * The `Node.type` of the `webhook` external-wait control activity (#4 A13). Read
+ * STRUCTURALLY by the reducer's control-dispatch discriminant (`reduce.ts`), the
+ * save-time config rule (`validateDoc`'s `validateWebhookConfig`), and this catalog
+ * entry — the same constant-SSOT rationale as `wait`.
+ *
+ * The DURABLE twin of `wait`, but a DIFFERENT suspend/resume source: where a `wait`
+ * parks `wait_pending` on S1's alarm and resumes when a `timer.due` fires, a
+ * `webhook` parks `external_wait_pending` until an inbound, correlated + authed +
+ * replay-protected HTTP callback appends `externalWait.completed` (or a timeout
+ * alarm appends `externalWait.expired`, folding the node to `failure` so its
+ * `failure` edge is the timeout/default path). The completion payload is OPAQUE in
+ * A13 (the node succeeds with no output, like `wait`); the typed `outputSchema` →
+ * `config.outputs` lowering + outbound `callBackUri` injection are A16. Its
+ * config rides `Node.config` (a `${}` `timeoutSeconds`), NOT `Node.call`, so it is
+ * NOT a structural-call and is generically authorable (no palette exclusion).
+ */
+export const WEBHOOK_ACTIVITY_TYPE = 'webhook';
+
+/**
  * The `Node.type` of the `execute_pipeline` control activity (#4 A9). UNLIKE
  * every other catalogued type, `execute_pipeline` is NOT a new mechanism — it
  * SURFACES the pre-existing structural `call_pipeline` (P2c): the reducer routes

@@ -23,6 +23,7 @@ import {
   SWITCH_ACTIVITY_TYPE,
   SWITCH_DEFAULT_BRANCH,
   WAIT_ACTIVITY_TYPE,
+  WEBHOOK_ACTIVITY_TYPE,
 } from '../catalog/types.js';
 import { SecretRefSchema, isSecretRef } from '../schemas/secret-ref.js';
 import type { EvalIn, FnSpec, SigType } from './functions.js';
@@ -1480,6 +1481,8 @@ export function validateDoc(
     if (node.type === FILTER_ACTIVITY_TYPE) validateFilterConfig(node, errors);
     // #4 A6 — a `wait`'s `seconds` presence + whole-value shape (number field).
     if (node.type === WAIT_ACTIVITY_TYPE) validateWaitConfig(node, errors);
+    // #4 A13 — a `webhook`'s `timeoutSeconds` presence + whole-value shape.
+    if (node.type === WEBHOOK_ACTIVITY_TYPE) validateWebhookConfig(node, errors);
     // #4 A9 — an `execute_pipeline` MUST carry a `Node.call` (save-time half).
     if (node.type === EXECUTE_PIPELINE_ACTIVITY_TYPE) validateExecutePipelineConfig(node, errors);
   }
@@ -1824,16 +1827,36 @@ function validateFilterConfig(node: Node, errors: string[]): void {
  * `validateWholeValue` split `if`/`filter` follow).
  */
 function validateWaitConfig(node: Node, errors: string[]): void {
-  const where = `node.${node.id}.seconds`;
-  const raw = node.config['seconds'];
+  validateDurationConfig(node, errors, 'seconds', 'wait');
+}
+
+/**
+ * #4 A13 — a `webhook` node parks on a `${}` `timeoutSeconds` (the save-time half,
+ * the twin of `validateWaitConfig`; the run-time half is
+ * `evalWebhookTimeoutSeconds`). Required — a webhook must always be time-bounded so
+ * it can never park indefinitely.
+ */
+function validateWebhookConfig(node: Node, errors: string[]): void {
+  validateDurationConfig(node, errors, 'timeoutSeconds', 'webhook');
+}
+
+/**
+ * #4 A6/A13 — the SSOT save-time rule for a durable-park node's `${}` DURATION
+ * field: a non-empty whole-value `${}` number expression. Parameterised by the
+ * config key + node noun so `wait` (`seconds`) and `webhook` (`timeoutSeconds`)
+ * share one rule with the matching run-time `evalDurationSeconds`.
+ */
+function validateDurationConfig(node: Node, errors: string[], field: string, noun: string): void {
+  const where = `node.${node.id}.${field}`;
+  const raw = node.config[field];
   if (typeof raw !== 'string' || raw.trim() === '') {
     errors.push(
-      `${where}: a wait needs a non-empty \${} seconds expression ` +
+      `${where}: a ${noun} needs a non-empty \${} ${field} expression ` +
         '(e.g. ${5} or ${nodes.check.output.retryAfter})',
     );
     return;
   }
-  validateWholeValue(where, raw, errors, 'seconds');
+  validateWholeValue(where, raw, errors, field);
 }
 
 /**

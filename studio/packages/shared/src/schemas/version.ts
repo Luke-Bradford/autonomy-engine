@@ -63,5 +63,12 @@
 // refuse to import. Stamping 9 enforces that (`portability/envelope.ts`), the
 // rule catalog/types.ts states. (No new connection kind this time — `fs` already
 // parses at 8 — so no migration; only the new activity types force the bump.)
-export const CATALOG_VERSION = 9;
+// 10 (#4 A13): `webhook` is a NEW control TYPE the reducer routes BY TYPE (its own
+// dispatch-prep branch + `externalWait.*` folds an older build lacks) — the normal
+// bump-rule case the control types obey, NOT the `execute_pipeline` structural
+// exception (which routes by `Node.call`, not the type string). An export using a
+// `webhook` node carries an artifact an older build mis-runs (`UNKNOWN_ACTIVITY` /
+// an inert unrouted control node), so it must refuse to import. Stamping 10
+// enforces that (`portability/envelope.ts`), the rule catalog/types.ts states.
+export const CATALOG_VERSION = 10;
 export const SCHEMA_VERSION = 1;

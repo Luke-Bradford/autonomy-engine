@@ -18,6 +18,8 @@ import {
 import { ZodError } from 'zod';
 import { getRun, updateRun } from '../repo/runs.js';
 import { getPipelineVersion } from '../repo/pipeline-versions.js';
+import { recordExternalWait } from '../repo/external-waits.js';
+import { hashExternalWaitToken } from '../webhooks/external-wait-token.js';
 import type { Db } from '../repo/types.js';
 import type { RunDrives } from './drives.js';
 import type { RunEventBus } from './event-bus.js';
@@ -246,6 +248,15 @@ export const RETRY_WAKEUP_KIND = 'node_retry';
  */
 export const WAIT_WAKEUP_KIND = 'node_wait';
 
+/**
+ * The `kind` under which a `webhook` node's EXPIRY alarm is armed (#4 A13). Matches
+ * the handler registered in `scheduler/external-wait-alarm.ts`. Distinct from
+ * `WAIT_WAKEUP_KIND`/`RETRY_WAKEUP_KIND` so each consumer's rows never collide and
+ * each handler only ever sees its own — the expiry fold (`externalWait.expired` →
+ * `failure`) is webhook-specific, unlike wait's `timer.due` → `success`.
+ */
+export const EXTERNAL_WAIT_WAKEUP_KIND = 'node_external_wait';
+
 export interface DriverDeps {
   db: Db;
   resolveDoc: DocResolver;
@@ -259,6 +270,20 @@ export interface DriverDeps {
    * error at every construction site.
    */
   alarms: RetryAlarms;
+  /**
+   * #4 A13 — the webhook external-wait CAPABILITY-TOKEN signer: derives the
+   * deterministic token a parked `webhook` node's inbound callback must present
+   * (`HMAC(masterKey, runId|nodeId|attemptId)` — the seam is closed over the master
+   * key in `index.ts` so the driver never handles the key itself, and the routes
+   * derive identically via the shared `webhooks/external-wait-token.ts`).
+   *
+   * OPTIONAL, unlike `alarms` — and the asymmetry is deliberate. `alarms` is
+   * required because ANY doc with `policy.retry` needs it, and its absence would
+   * HANG a `retry_pending` node with no recovery. Only a `webhook` node needs this,
+   * and its absence THROWS loudly in `armExternalWait` (a config error surfaced, not
+   * a silent hang), so a server with no webhooks constructs the driver unchanged.
+   */
+  signExternalWaitToken?: (args: { runId: string; nodeId: string; attemptId: string }) => string;
   /** P6 — the live-monitor bus. When present, every event this driver appends is
    * published to it (after the durable append) so a watching WS client tails the
    * run in real time. Optional: P2/P3 driver tests run without a bus unchanged. */
@@ -496,6 +521,85 @@ function armWait(
 }
 
 /**
+ * #4 A13 — the arm-input for a `webhook` node's EXPIRY alarm. The twin of
+ * `waitArmInput` under `EXTERNAL_WAIT_WAKEUP_KIND`: same `{runId,nodeId,attemptId}`
+ * ref (the freshness handle the expiry handler needs), same integer-ms `dueAt`
+ * rounding (a `${}` `timeoutSeconds` may be fractional), same vacuous per-attempt
+ * discriminator. `dueAt` here is the EXPIRY instant — when, absent a callback, the
+ * clock appends `externalWait.expired`.
+ */
+export function externalWaitArmInput(
+  deps: Pick<DriverDeps, 'now'>,
+  args: { runId: string; nodeId: string; attemptId: string; timeoutSeconds: number },
+): ArmWakeupInput {
+  const now = deps.now ?? (() => Date.now());
+  return {
+    kind: EXTERNAL_WAIT_WAKEUP_KIND,
+    ref: { runId: args.runId, nodeId: args.nodeId, attemptId: args.attemptId },
+    dueAt: Math.round(now() + args.timeoutSeconds * 1000),
+    discriminator: `external-wait-${args.attemptId}`,
+  };
+}
+
+/**
+ * Perform a `scheduleExternalWait` (#4 A13): DERIVE the correlation token, ARM the
+ * expiry alarm, RECORD the correlation row, then hand back the `externalWait.created`
+ * event. Same arm-before-append asymmetry as `armWait`: the alarm + row commit
+ * BEFORE the append that folds the node to `external_wait_pending`, so a parked
+ * webhook ALWAYS has a live alarm + a live correlation row — a crash before the
+ * append leaves the node `ready` (its `scheduleExternalWait` re-emitted by
+ * `resume`, which re-derives the SAME deterministic token → re-arms + re-records
+ * idempotently). `dueAt` is read back from the ARMED ROW (idempotent by
+ * `(kind, dedupeKey)`), so a replayed command keeps the ORIGINAL expiry, and the
+ * correlation row's `expiresAt` is stamped from that same `dueAt`.
+ *
+ * THROWS if `signExternalWaitToken` is unwired — a deployment/config error surfaced
+ * loudly (a webhook doc on a server that never wired the signer), never a silent
+ * hang. `index.ts` always wires it, so production never hits this.
+ */
+function armExternalWait(
+  deps: DriverDeps,
+  state: RunState,
+  command: Extract<EngineCommand, { type: 'scheduleExternalWait' }>,
+): EngineEvent {
+  if (deps.signExternalWaitToken === undefined) {
+    throw new Error(
+      `cannot park webhook node '${command.nodeId}': DriverDeps.signExternalWaitToken is not wired`,
+    );
+  }
+  const token = deps.signExternalWaitToken({
+    runId: state.runId,
+    nodeId: command.nodeId,
+    attemptId: command.attemptId,
+  });
+  const row = deps.alarms.arm(
+    externalWaitArmInput(deps, {
+      runId: state.runId,
+      nodeId: command.nodeId,
+      attemptId: command.attemptId,
+      timeoutSeconds: command.timeoutSeconds,
+    }),
+  );
+  const now = deps.now ?? (() => Date.now());
+  recordExternalWait(deps.db, {
+    runId: state.runId,
+    nodeId: command.nodeId,
+    attemptId: command.attemptId,
+    tokenHash: hashExternalWaitToken(token),
+    expiresAt: row.dueAt,
+    now: now(),
+  });
+
+  return {
+    type: 'externalWait.created',
+    runId: state.runId,
+    nodeId: command.nodeId,
+    attemptId: command.attemptId,
+    dueAt: row.dueAt,
+  };
+}
+
+/**
  * Perform the driver's OWN `finishRun` command REDUCE-FIRST (#477): fold the
  * `run.finished` BEFORE appending it, and make it durable ONLY if the reducer
  * ACCEPTS. Returns the terminal state (the row is synced here).
@@ -667,6 +771,17 @@ export async function pump(
       // alarm clock's `node_wait` handler later appends `timer.due` when it fires. No
       // executor, like `scheduleRetry`/`evaluateControl`.
       source = [armWait(deps, state, command)];
+    } else if (command.type === 'scheduleExternalWait') {
+      // #4 A13 — the driver's OWN `scheduleExternalWait` command (a `control`
+      // `webhook` parks awaiting an inbound callback): DERIVE the token, ARM S1's
+      // EXPIRY alarm + RECORD the correlation row, then append `externalWait.created`,
+      // whose fold parks the node `external_wait_pending`. `armExternalWait` runs
+      // while building the array, keeping the arm+record strictly BEFORE the append
+      // (so a parked webhook always has a live alarm + row). The clock's
+      // `node_external_wait` handler appends `externalWait.expired` on timeout, and
+      // the `POST /api/external-wait/:token` route appends `externalWait.completed` on
+      // a callback. No executor, like `scheduleWait`.
+      source = [armExternalWait(deps, state, command)];
     } else if (command.type === 'evaluateControl') {
       // The control node's durable event is named by `command.event`
       // (`condition.evaluated` for an `if`, `switch.evaluated` for a `switch`, #4
