@@ -1560,9 +1560,16 @@ export function createEngine(doc: EngineDoc): Engine {
    * is a valid sub-second wait, not an arm-time crash.
    */
   // Largest `seconds` for which the driver's `dueAt = now + seconds*1000` stays a
-  // safe integer (so `ArmWakeupInputSchema`'s `z.number().int()` accepts it rather
-  // than choking on ±Infinity / a lossy float). `MAX_SAFE_INTEGER / 1000`, floored.
-  const MAX_WAIT_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000);
+  // SAFE integer (past `Number.MAX_SAFE_INTEGER` a value is still an "integer" to
+  // `Number.isInteger` but has lost ms precision, so the STORED `dueAt` would drift
+  // from the intended instant — and an outright overflow to `±Infinity` fails
+  // `ArmWakeupInputSchema`'s `z.number().int()`). The driver adds the wall clock
+  // `now` (epoch ms) ON TOP of `seconds*1000`, so the bound must reserve headroom
+  // for it: capping `seconds*1000` alone leaves only ~1e3 ms of slack, far less
+  // than `now` (~1.78e12). `NOW_CEILING_MS` (1e15 ms ≈ year 33650) over-estimates
+  // any real clock; the resulting max wait is still ~253k years, past any real use.
+  const NOW_CEILING_MS = 1e15;
+  const MAX_WAIT_SECONDS = Math.floor((Number.MAX_SAFE_INTEGER - NOW_CEILING_MS) / 1000);
 
   function evalWaitSeconds(node: Node, state: RunState, item?: { value: unknown }): number {
     const raw = node.config['seconds'];
@@ -1608,9 +1615,10 @@ export function createEngine(doc: EngineDoc): Engine {
     // `ArmWakeupInputSchema`'s `z.number().int()` INSIDE `armWait` as a boot poison
     // pill (the run re-throws on every resume) instead of failing LOUD here — the
     // opposite tail of the fractional case `armWait` rounds. Reject at eval time so
-    // a bad duration fails the run cleanly, never the alarm arm. The bound keeps
-    // `seconds*1000` within `Number.MAX_SAFE_INTEGER` (~285k years; far past any
-    // real wait); `now` (~1.75e12 ms) is negligible against the ~9e15 headroom.
+    // a bad duration fails the run cleanly, never the alarm arm. `MAX_WAIT_SECONDS`
+    // keeps the FULL `dueAt = now + seconds*1000` within `Number.MAX_SAFE_INTEGER`
+    // (it reserves headroom for `now` — see the constant), so no precision drift or
+    // overflow reaches the arm; the cap is still ~253k years, past any real wait.
     if (seconds > MAX_WAIT_SECONDS) {
       throw new SubstituteError(
         `wait node '${node.id}' seconds ${seconds} exceeds the maximum ${MAX_WAIT_SECONDS} ` +
