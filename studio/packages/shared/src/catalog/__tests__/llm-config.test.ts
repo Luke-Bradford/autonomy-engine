@@ -118,6 +118,15 @@ describe('normalizeLlmRequest', () => {
     expect(n.system).toBeUndefined();
   });
 
+  // WARNING (review): the TS type does not encode the "exactly one of
+  // prompt/messages" invariant (only the runtime `.refine` does), so a caller
+  // that bypasses `llmCallConfigSchema.safeParse` could reach here with neither.
+  // Fail loud at the boundary instead of emitting `content: undefined` typed as
+  // `string` (validate at system boundaries; never manufacture a lie).
+  it('throws on a config with neither `prompt` nor `messages` (bypassed parse)', () => {
+    expect(() => normalizeLlmRequest({} as never)).toThrow(/prompt.*or.*messages/i);
+  });
+
   it('passes sampling through, yielding undefined (never null/0) for absent knobs', () => {
     const bare = normalizeLlmRequest({ prompt: 'hi' });
     expect(bare.sampling).toEqual({

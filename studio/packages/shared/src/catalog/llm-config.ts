@@ -113,11 +113,20 @@ export interface NormalizedLlmRequest {
  * connection default and per-provider fallback live outside this activity config.
  */
 export function normalizeLlmRequest(cfg: LlmCallConfig): NormalizedLlmRequest {
-  const messages = cfg.messages ?? [{ role: 'user' as const, content: cfg.prompt! }];
+  // The "exactly one of prompt/messages" invariant lives only in the runtime
+  // `.refine`, not the TS type — so a caller that skips `safeParse` could reach
+  // here with neither. Guard at the boundary rather than assert `cfg.prompt!`
+  // and emit `content: undefined` typed as `string` (a lie to the type system).
+  const messages: LlmMessage[] =
+    cfg.messages ?? (cfg.prompt !== undefined ? [{ role: 'user', content: cfg.prompt }] : []);
+  if (messages.length === 0) {
+    throw new Error('normalizeLlmRequest requires a validated config with `prompt` or `messages`');
+  }
   const systemParts: string[] = [];
   if (cfg.system !== undefined && cfg.system.length > 0) systemParts.push(cfg.system);
   for (const m of messages) {
-    if (m.role === 'system' && m.content.length > 0) systemParts.push(m.content);
+    // `content` is `z.string().min(1)`, so any system turn is non-empty.
+    if (m.role === 'system') systemParts.push(m.content);
   }
   const nonSystem = messages.filter(
     (m): m is { role: 'user' | 'assistant'; content: string } => m.role !== 'system',
