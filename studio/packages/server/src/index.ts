@@ -243,6 +243,15 @@ export async function buildApp(opts?: BuildAppOptions) {
   // while the launcher's identical fault is reported. That is the very
   // launcher-vs-alarm asymmetry F2c exists to remove, reintroduced by wiring
   // rather than by code.
+  // #4 A13 — the webhook external-wait token signer, closed over the master key so
+  // the driver derives a parked node's capability token without handling the key
+  // itself. The SAME derivation the routes use (`webhooks/external-wait-token.ts`),
+  // so the token the driver hashes into the row and the token the owner endpoint
+  // re-derives can never disagree. ONE closure, shared by the driver boundary AND
+  // the boot reconciler (which RESUMES a `ready` webhook and re-derives the same
+  // deterministic token) so the two cannot drift.
+  const signExternalWaitToken = (args: { runId: string; nodeId: string; attemptId: string }) =>
+    deriveExternalWaitToken(masterKeyResolution.key, args);
   const driverBoundary = {
     db,
     resolveDoc,
@@ -251,13 +260,7 @@ export async function buildApp(opts?: BuildAppOptions) {
     drives,
     bus: runEventBus,
     log: fastify.log,
-    // #4 A13 — the webhook external-wait token signer, closed over the master key so
-    // the driver derives a parked node's capability token without handling the key
-    // itself. The SAME derivation the routes use (`webhooks/external-wait-token.ts`),
-    // so the token the driver hashes into the row and the token the owner endpoint
-    // re-derives can never disagree.
-    signExternalWaitToken: (args: { runId: string; nodeId: string; attemptId: string }) =>
-      deriveExternalWaitToken(masterKeyResolution.key, args),
+    signExternalWaitToken,
   };
   // #5 S5 — the `schedule_tick` handler moves schedule triggers off in-memory
   // crons onto this same durable clock. Its only extra dependency is the launcher
@@ -305,9 +308,9 @@ export async function buildApp(opts?: BuildAppOptions) {
     // #4 A13 — the reconciler RESUMES a `ready` webhook (a crash between the
     // predecessor event and `externalWait.created` left its `scheduleExternalWait`
     // un-armed), which re-derives the same deterministic token — so it needs the
-    // signer too, or `armExternalWait` would throw mid-reconcile.
-    signExternalWaitToken: (args: { runId: string; nodeId: string; attemptId: string }) =>
-      deriveExternalWaitToken(masterKeyResolution.key, args),
+    // signer too, or `armExternalWait` would throw mid-reconcile. Same closure as
+    // the driver boundary above.
+    signExternalWaitToken,
   });
   fastify.log.info({ reconcileReport }, 'boot reconcile complete');
 
