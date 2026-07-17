@@ -59,17 +59,23 @@ export interface OccurrenceBounds {
  *
  * ## Boundary contract vs croner-native semantics (verified empirically, croner 10.0.1)
  *
- * croner's `startAt`/`stopAt` are BOTH exclusive at the exact second (an occurrence
- * that lands exactly on the bound is skipped), and second-truncated. We expose a
- * half-open `[startAt, stopAt)` instead:
+ * croner's `startAt`/`stopAt` are BOTH exclusive and second-truncated (FLOORED):
+ * it fires an occurrence iff `occurrence > floor(startAt)` and `occurrence <
+ * floor(stopAt)` (verified empirically). We expose a half-open `[startAt, stopAt)`
+ * — inclusive start, exclusive end — instead:
  *   - `stopAt` EXCLUSIVE matches croner directly — pass it through.
- *   - `startAt` INCLUSIVE does NOT — so we nudge it back by 1s before handing it to
- *     croner, which admits an occurrence landing exactly on `startAt` while
- *     admitting no spurious earlier one: the compiled schedules are 5-field crons
- *     (minute granularity — `recurrenceToCron`), whose only occurrence in the
- *     `(startAt-1s, startAt]` interval is `startAt` itself. (Bounds only exist on a
- *     recurrence trigger, whose `schedule` is always a compiled cron; a raw-cron
- *     escape-hatch trigger has no `recurrence` and thus no bounds.)
+ *   - `startAt` INCLUSIVE does NOT — so we hand croner `startAt - 1ms`. Because
+ *     croner FLOORS to the second, `floor(startTime - 1ms)` is `floor(startTime)-1s`
+ *     ONLY when `startTime` is exactly on a second (ms == 0) and `floor(startTime)`
+ *     otherwise — so croner returns exactly "the first occurrence `>= startTime`"
+ *     for minute-granular crons: an occurrence landing exactly on a whole-second
+ *     `startTime` fires (inclusive), while a sub-second `startTime` (e.g.
+ *     `…:00.500Z`) does NOT re-admit the earlier `…:00.000` slot. (A full `-1s`
+ *     nudge would wrongly re-admit that sub-second-early slot.) The compiled
+ *     schedules are 5-field crons (minute granularity — `recurrenceToCron`), whose
+ *     occurrences all land on whole seconds; bounds only exist on a recurrence
+ *     trigger, whose `schedule` is always such a compiled cron (a raw-cron
+ *     escape-hatch trigger has no `recurrence`, thus no bounds).
  *
  * @throws {InvalidScheduleError} if `schedule` is not a cron string croner can
  *   parse (a malformed bound would also surface here — but callers pass
@@ -83,9 +89,10 @@ export function nextOccurrence(
   let cron: Cron;
   try {
     const options: { timezone: string; startAt?: Date; stopAt?: Date } = { timezone: 'UTC' };
-    // Inclusive `startAt`: nudge 1s earlier so an exact-boundary occurrence clears
-    // croner's exclusive comparison (see the boundary contract above).
-    if (bounds.startAt !== undefined) options.startAt = new Date(bounds.startAt - 1000);
+    // Inclusive `startAt`: nudge 1ms earlier so a whole-second boundary occurrence
+    // clears croner's floored-exclusive comparison WITHOUT re-admitting a
+    // sub-second-early slot (see the boundary contract above).
+    if (bounds.startAt !== undefined) options.startAt = new Date(bounds.startAt - 1);
     // Exclusive `stopAt`: croner-native, pass through.
     if (bounds.stopAt !== undefined) options.stopAt = new Date(bounds.stopAt);
     cron = new Cron(schedule, options);

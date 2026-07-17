@@ -91,6 +91,16 @@ describe('nextOccurrence — start/end bounds (a half-open firing window)', () =
     expect(next).toBe(at('2026-08-01T09:00:00Z'));
   });
 
+  it('a sub-second startAt does NOT re-admit the earlier whole-second slot (half-open, strict)', () => {
+    // startAt 09:00:00.500 → the 09:00:00.000 slot is BEFORE the window and must
+    // NOT fire (a full -1s nudge would wrongly re-admit it); the first in-window
+    // occurrence is the next day's 09:00.
+    const next = nextOccurrence(daily9, at('2026-08-01T00:00:00Z'), {
+      startAt: at('2026-08-01T09:00:00.500Z'),
+    });
+    expect(next).toBe(at('2026-08-02T09:00:00Z'));
+  });
+
   it('stopAt is EXCLUSIVE — an occurrence exactly at stopAt does not fire, the window ends', () => {
     const next = nextOccurrence(daily9, at('2026-08-01T00:00:00Z'), {
       stopAt: at('2026-08-01T09:00:00Z'),

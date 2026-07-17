@@ -8,7 +8,7 @@ import { z } from 'zod';
  * (`recurrenceToCron`) — "croner under the hood", exactly as spec #5 §S2 frames
  * it. The compiled string is stored in the existing `Trigger.schedule` (a pure
  * DERIVED cache), so the whole firing chain — `isSchedulable`, the
- * `nextOccurrence` calculator, the `schedule_changed` freshness compare — is
+ * `nextOccurrence` calculator, the `isRefFresh` freshness compare — is
  * REUSED UNCHANGED. The raw cron string stays as an escape-hatch mode for
  * power users (a trigger has EITHER a `recurrence` or a raw `schedule`, never
  * both; the repo write path derives + enforces this).

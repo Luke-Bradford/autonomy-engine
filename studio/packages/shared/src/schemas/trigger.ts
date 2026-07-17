@@ -124,7 +124,7 @@ export const TriggerSchema = z.object({
   mode: TriggerModeSchema,
   /**
    * The compiled cron string the firing chain reads (`isSchedulable`,
-   * `nextOccurrence`, the `schedule_changed` freshness compare). When
+   * `nextOccurrence`, the `isRefFresh` freshness compare). When
    * `recurrence` is set this is a DERIVED cache of it (the repo write path
    * recompiles it on every write, so the two can never diverge); when
    * `recurrence` is null it is the raw cron escape-hatch a power user authored.
