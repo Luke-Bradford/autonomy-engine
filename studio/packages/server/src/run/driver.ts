@@ -576,9 +576,15 @@ export async function pump(
     if (command.type === 'scheduleRetry') {
       source = [armRetry(deps, state, command)];
     } else if (command.type === 'evaluateControl') {
+      // The control node's durable event is named by `command.event`
+      // (`condition.evaluated` for an `if`, `switch.evaluated` for a `switch`, #4
+      // A1/A2) — the reducer already computed the `branch` PURELY; the driver just
+      // makes it durable under the right event type. Both fold identically
+      // (`onControlBranchEvaluated`); the distinct type preserves the log's
+      // if-vs-switch distinction.
       source = [
         {
-          type: 'condition.evaluated' as const,
+          type: command.event,
           runId: state.runId,
           nodeId: command.nodeId,
           attemptId: command.attemptId,

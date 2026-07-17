@@ -540,4 +540,52 @@ describe('validateDoc — branch edges route against the declared-branch rule (#
     );
     expect(validateDoc(d)).toEqual([]);
   });
+
+  // #4 A2 — a `switch` declares its configured `cases` labels PLUS `default`.
+  const switchNode = (id: string, on: unknown, cases: unknown): Node =>
+    node(id, { on, cases }, { type: 'switch' });
+
+  it('accepts a switch with case + default branch edges (incl. an embedded on)', () => {
+    const d = doc(
+      [
+        switchNode('sw', 'tier-${nodes.c.output.n}', ['tier-1', 'tier-2']),
+        node('a'),
+        node('b'),
+        node('z'),
+      ],
+      [
+        { id: 'e1', from: 'sw', to: 'a', on: 'branch', branch: 'tier-1' },
+        { id: 'e2', from: 'sw', to: 'b', on: 'branch', branch: 'tier-2' },
+        { id: 'e3', from: 'sw', to: 'z', on: 'branch', branch: 'default' },
+      ],
+    );
+    const errors = validateDoc(d).join(' ');
+    expect(errors).not.toMatch(/does not declare branch/);
+    expect(errors).not.toMatch(/is not a branching activity/);
+    expect(errors).not.toMatch(/node\.sw\./);
+  });
+
+  it('rejects a switch branch edge for an undeclared case', () => {
+    const d = doc(
+      [switchNode('sw', '${nodes.c.output.tier}', ['gold']), node('t')],
+      [{ id: 'e1', from: 'sw', to: 't', on: 'branch', branch: 'silver' }],
+    );
+    const errors = validateDoc(d).join(' ');
+    expect(errors).toContain("edge 'e1'");
+    expect(errors).toMatch(/does not declare branch 'silver'/);
+  });
+
+  it('rejects a switch missing on, an empty cases, and a case named default', () => {
+    const noOn = validateDoc(doc([node('sw', { cases: ['x'] }, { type: 'switch' })])).join(' ');
+    expect(noOn).toMatch(/node\.sw\.on: a switch needs a string 'on'/);
+
+    const noCases = validateDoc(doc([switchNode('sw', '${nodes.c.output.t}', [])])).join(' ');
+    expect(noCases).toMatch(/node\.sw\.cases: a switch needs a non-empty/);
+
+    const dupAndDefault = validateDoc(
+      doc([switchNode('sw', '${nodes.c.output.t}', ['a', 'a', 'default'])]),
+    ).join(' ');
+    expect(dupAndDefault).toMatch(/node\.sw\.cases\[1\]: duplicate case label 'a'/);
+    expect(dupAndDefault).toMatch(/node\.sw\.cases\[2\]: a case may not be named 'default'/);
+  });
 });

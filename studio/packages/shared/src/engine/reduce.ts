@@ -14,7 +14,13 @@ import type {
   TerminalNodeStatus,
 } from './types.js';
 import { SubstituteError, TERMINAL_NODE, terminalStatusOf } from './types.js';
-import { IF_ACTIVITY_TYPE, IF_BRANCH_TRUE, IF_BRANCH_FALSE } from '../catalog/types.js';
+import {
+  IF_ACTIVITY_TYPE,
+  IF_BRANCH_TRUE,
+  IF_BRANCH_FALSE,
+  SWITCH_ACTIVITY_TYPE,
+  SWITCH_DEFAULT_BRANCH,
+} from '../catalog/types.js';
 import type { OutputType } from '../schemas/pipeline.js';
 import { outputContract, type CheckedContract, type OutputContract } from './outputs.js';
 import {
@@ -895,21 +901,22 @@ export function createEngine(doc: EngineDoc): Engine {
     if (r !== 'ready') return { state, changed: false };
 
     const attemptId = `${id}#${ns.attempts}`;
-    if (node.type === IF_ACTIVITY_TYPE) {
-      // #4 A1 — a `control` `if` is ENGINE-evaluated: no connector, no executor
-      // round-trip. The reducer learns "this is control" STRUCTURALLY from
-      // `node.type` (the `call_pipeline`/`Node.call` precedent D6's note
+    const controlEvent = controlBranchEvent(node.type);
+    if (controlEvent !== undefined) {
+      // #4 A1/A2 — a `control` `if`/`switch` is ENGINE-evaluated: no connector, no
+      // executor round-trip. The reducer learns "this is control" STRUCTURALLY
+      // from `node.type` (the `call_pipeline`/`Node.call` precedent D6's note
       // sanctions), checked before `node.call` — a node is one or the other.
-      // Evaluate the `${}` condition PURELY (the `evalIfBranch` pattern, clock-
-      // free + replay-stable), then ask the driver to make the chosen branch
-      // durable via `evaluateControl`. The node holds `ready` (the driver owes
-      // `condition.evaluated`, mirroring the `dispatchNode`/`node.dispatched`
-      // handshake) and is NEVER handed to the executor. A bad condition throws
-      // → `prepFailure` → `finishRun{invalid_event}`, the same verdict a
-      // dispatch prep-throw reaches.
+      // Evaluate the `${}` condition/`on` PURELY (clock-free + replay-stable),
+      // then ask the driver to make the chosen branch durable via
+      // `evaluateControl` (whose `event` names the durable event to append). The
+      // node holds `ready` (the driver owes `condition.evaluated`/`switch.evaluated`,
+      // mirroring the `dispatchNode`/`node.dispatched` handshake) and is NEVER
+      // handed to the executor. A bad condition/`on` throws → `prepFailure` →
+      // `finishRun{invalid_event}`, the same verdict a dispatch prep-throw reaches.
       let branch: string;
       try {
-        branch = evalIfBranch(node, state);
+        branch = evalControlBranch(node, state);
       } catch (err) {
         return prepFailure(state, id, err, diagnostics);
       }
@@ -918,7 +925,13 @@ export function createEngine(doc: EngineDoc): Engine {
         attempts: ns.attempts + 1,
         currentAttemptId: attemptId,
       });
-      commands.push({ type: 'evaluateControl', nodeId: id, attemptId, branch });
+      commands.push({
+        type: 'evaluateControl',
+        nodeId: id,
+        attemptId,
+        branch,
+        event: controlEvent,
+      });
       return { state: next, changed: true };
     }
     if (node.call !== undefined) {
@@ -1193,6 +1206,86 @@ export function createEngine(doc: EngineDoc): Engine {
       `if condition must resolve to a boolean, got ${typeof out} — ` +
         "compare it explicitly (e.g. ${equals(nodes.check.output.done, 'true')})",
     );
+  }
+
+  /**
+   * #4 A1/A2 — is `type` an engine-evaluated control BRANCHING activity, and if
+   * so, which durable event does its evaluation make? The ONE structural SSOT the
+   * reducer routes control nodes by (`tryDispatchNode` dispatch-prep + `resume`'s
+   * crash-recovery re-emit both read it), so the two paths cannot disagree on
+   * which types are control. `undefined` for every non-branching type (a normal
+   * execution node, a `call_pipeline`, a container).
+   */
+  function controlBranchEvent(
+    type: string,
+  ): 'condition.evaluated' | 'switch.evaluated' | undefined {
+    if (type === IF_ACTIVITY_TYPE) return 'condition.evaluated';
+    if (type === SWITCH_ACTIVITY_TYPE) return 'switch.evaluated';
+    return undefined;
+  }
+
+  /**
+   * #4 A1/A2 — evaluate a control branching node to its branch LABEL, dispatching
+   * on `type` to the per-activity evaluator. PRECONDITION: `controlBranchEvent`
+   * returned a defined event for this node (the caller checked). Throws
+   * (→ `prepFailure` → `finishRun{invalid_event}`) on a bad condition/`on`, so the
+   * decision is a fact the driver can make durable or the run fails — never a
+   * silent mis-route. EXHAUSTIVE over the control types (an unhandled type throws
+   * rather than silently running the `if` evaluator): adding a type to
+   * `controlBranchEvent` but forgetting the evaluator here surfaces loudly, not as
+   * a wrong-branch route.
+   */
+  function evalControlBranch(node: Node, state: RunState): string {
+    if (node.type === IF_ACTIVITY_TYPE) return evalIfBranch(node, state);
+    if (node.type === SWITCH_ACTIVITY_TYPE) return evalSwitchBranch(node, state);
+    throw new SubstituteError(`no control-branch evaluator for node type '${node.type}'`);
+  }
+
+  /**
+   * #4 A2 — evaluate a `switch` node's `${}` `config.on` to its branch LABEL: the
+   * matched case label, or `SWITCH_DEFAULT_BRANCH` when the value matches none.
+   * Unlike `if` (whose boolean can only come from a WHOLE-value `${}`), a `switch`
+   * matches on a STRING, so an EMBEDDED template (`"tier-${x}"`) is a legitimate
+   * `on` and is NOT whole-value-gated — `substitute` resolves it to a string
+   * verbatim (no `.trim()`: the resolved value is matched exactly against the case
+   * labels, so trimming could silently change which arm is taken). Pure over
+   * `state`: `substitute` reads only bound outputs/params/trigger context, so a
+   * replay reaches the same label. Throws (→ `invalid_event`) on a missing/
+   * non-string `on`, an `on` that resolves to a non-string (a whole-value
+   * `${number}` etc.), or a missing/malformed `cases` (non-array or empty) — the
+   * run-time half of A2's string-match rule that the write gate
+   * (`validateSwitchConfig`) warns about first.
+   */
+  function evalSwitchBranch(node: Node, state: RunState): string {
+    const raw = node.config['on'];
+    if (typeof raw !== 'string') {
+      throw new SubstituteError(
+        `switch node '${node.id}' has no string 'on' — a switch routes on a ` +
+          'string ${} expression (e.g. ${nodes.classify.output.label})',
+      );
+    }
+    const out = substitute(raw, buildCtx(state));
+    if (typeof out !== 'string') {
+      throw new SubstituteError(
+        `switch 'on' must resolve to a string, got ${typeof out} — ` +
+          'convert it explicitly (e.g. ${string(nodes.count.output.n)})',
+      );
+    }
+    // The write gate (`validateSwitchConfig`) is only ADVISORY, so a saved doc can
+    // reach here with a missing/malformed `cases`. Fail LOUD (→ `invalid_event`),
+    // mirroring the `on` check above and the write gate's own
+    // `!Array.isArray(rawCases) || rawCases.length === 0` rule — never silently
+    // normalise to `[]` and route EVERY value to `default`, which would mask a
+    // dropped/corrupt config as a benign fallthrough (an absent fact manufactured
+    // as a default).
+    const rawCases = node.config['cases'];
+    if (!Array.isArray(rawCases) || rawCases.length === 0) {
+      throw new SubstituteError(
+        `switch node '${node.id}' has no non-empty 'cases' array — a switch routes ` +
+          'a string value against a list of case labels (e.g. ["gold", "silver"])',
+      );
+    }
+    return rawCases.includes(out) ? out : SWITCH_DEFAULT_BRANCH;
   }
 
   /** A container's projected outputs = its children's outputs merged (sorted). */
@@ -1676,19 +1769,22 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
-   * #4 A0/A1 — fold `condition.evaluated`: an `if` chose a business branch. Same
-   * shape as `onSucceeded` (an `if` reaches terminal `success` the same way a
-   * dispatched node does, just via a different accepting event): the node is
-   * `ready` awaiting exactly this event, so record BOTH the terminal `success`
-   * AND the chosen `branch` label, then `settle` so `edgeState` routes the taken
-   * arm. A stale `attemptId` (a pre-restart evaluation) is ignored; a `pending`
-   * node is impossible (nothing dispatched it); the other statuses are
-   * unreachable for a control `if` (it is never dispatched/waiting/retrying) but
+   * #4 A0/A1/A2 — fold a control node's branch decision (`condition.evaluated` for
+   * an `if`, `switch.evaluated` for a `switch`): the node chose a business branch.
+   * The two events are IDENTICAL in shape and fold identically, so ONE handler
+   * serves both (the event type is preserved in the log only for observability).
+   * Same shape as `onSucceeded` (a control node reaches terminal `success` the
+   * same way a dispatched node does, just via a different accepting event): the
+   * node is `ready` awaiting exactly this event, so record BOTH the terminal
+   * `success` AND the chosen `branch` label, then `settle` so `edgeState` routes
+   * the taken arm. A stale `attemptId` (a pre-restart evaluation) is ignored; a
+   * `pending` node is impossible (nothing evaluated it); the other statuses are
+   * unreachable for a control node (it is never dispatched/waiting/retrying) but
    * carry a defined diagnostic no-op for parity with `onSucceeded`.
    */
-  function onConditionEvaluated(
+  function onControlBranchEvaluated(
     state: RunState,
-    event: Extract<EngineEvent, { type: 'condition.evaluated' }>,
+    event: Extract<EngineEvent, { type: 'condition.evaluated' | 'switch.evaluated' }>,
     diagnostics: string[],
   ): ReduceResult {
     const ns = state.nodes[event.nodeId];
@@ -1702,7 +1798,7 @@ export function createEngine(doc: EngineDoc): Engine {
       return settle(next, diagnostics);
     }
     if (ns.status === 'pending') {
-      diagnostics.push(`impossible condition.evaluated for never-evaluated node '${event.nodeId}'`);
+      diagnostics.push(`impossible ${event.type} for never-evaluated node '${event.nodeId}'`);
       return {
         state,
         commands: [{ type: 'finishRun', outcome: 'failure', reason: 'invalid_event' }],
@@ -1713,7 +1809,7 @@ export function createEngine(doc: EngineDoc): Engine {
       return { state, commands: [], diagnostics };
     }
     diagnostics.push(
-      `condition.evaluated for node '${event.nodeId}' in unexpected status '${ns.status}'`,
+      `${event.type} for node '${event.nodeId}' in unexpected status '${ns.status}'`,
     );
     return { state, commands: [], diagnostics };
   }
@@ -2044,21 +2140,22 @@ export function createEngine(doc: EngineDoc): Engine {
       if (ns.currentAttemptId === undefined) continue;
       const node = nodeById.get(id)!;
       if (ns.status === 'ready') {
-        if (node.type === IF_ACTIVITY_TYPE) {
-          // #4 A1 crash recovery: an `if` folds to `ready` after `tryDispatchNode`
-          // pushed `evaluateControl`, but `projectRunState` keeps STATE, not
-          // COMMANDS — a crash between the predecessor's durable event and
-          // `condition.evaluated` re-derives `if=ready` with its command lost, and
-          // without this fork nothing re-emits it, so the run hangs `ready`
-          // forever (the `waiting && node.call` branch below re-emits `startChild`
-          // for the exact same reason). Recompute the branch PURELY (deterministic
-          // over the logged state) and re-emit. Idempotent: same
-          // `currentAttemptId`, and a duplicate `condition.evaluated` folds as a
-          // stale/terminal no-op. Terminalize a condition that now throws, the
-          // same verdict as the dispatch-prep branch below.
+        const controlEvent = controlBranchEvent(node.type);
+        if (controlEvent !== undefined) {
+          // #4 A1/A2 crash recovery: a control `if`/`switch` folds to `ready` after
+          // `tryDispatchNode` pushed `evaluateControl`, but `projectRunState` keeps
+          // STATE, not COMMANDS — a crash between the predecessor's durable event
+          // and `condition.evaluated`/`switch.evaluated` re-derives the node
+          // `ready` with its command lost, and without this fork nothing re-emits
+          // it, so the run hangs `ready` forever (the `waiting && node.call` branch
+          // below re-emits `startChild` for the exact same reason). Recompute the
+          // branch PURELY (deterministic over the logged state) and re-emit.
+          // Idempotent: same `currentAttemptId`, and a duplicate durable event
+          // folds as a stale/terminal no-op. Terminalize a condition/`on` that now
+          // throws, the same verdict as the dispatch-prep branch below.
           let branch: string;
           try {
-            branch = evalIfBranch(node, state);
+            branch = evalControlBranch(node, state);
           } catch (err) {
             const failed = prepFailure(state, id, err, diagnostics);
             return { state: failed.state, commands: [failed.finish], diagnostics };
@@ -2068,6 +2165,7 @@ export function createEngine(doc: EngineDoc): Engine {
             nodeId: id,
             attemptId: ns.currentAttemptId,
             branch,
+            event: controlEvent,
           });
           continue;
         }
@@ -2197,7 +2295,8 @@ export function createEngine(doc: EngineDoc): Engine {
       case 'node.succeeded':
         return onSucceeded(state, event, diagnostics);
       case 'condition.evaluated':
-        return onConditionEvaluated(state, event, diagnostics);
+      case 'switch.evaluated':
+        return onControlBranchEvaluated(state, event, diagnostics);
       case 'node.failed':
         return onFailed(state, event, diagnostics);
       case 'call.returned':

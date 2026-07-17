@@ -99,6 +99,9 @@ describe('#443 — terminalStatusOf', () => {
       // #4 A0 — an `if`'s branch decision. NON-terminal: it folds the node to
       // `success` + records the branch, but is not itself a run-terminating event.
       { type: 'condition.evaluated', ...run, nodeId: 'n1', attemptId: 'n1#0', branch: 'true' },
+      // #4 A2 — a `switch`'s branch decision. NON-terminal for the same reason as
+      // `condition.evaluated` (its `if` twin) — folds the node to `success`.
+      { type: 'switch.evaluated', ...run, nodeId: 'n1', attemptId: 'n1#0', branch: 'gold' },
     ];
     for (const event of nonTerminal) {
       expect(terminalStatusOf(event), `${event.type} must not be terminal`).toBeNull();

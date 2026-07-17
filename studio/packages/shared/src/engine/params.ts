@@ -13,7 +13,13 @@ import { outputContract } from './outputs.js';
 import type { Expr, ExprSegment, TemplateMode } from './expr.js';
 import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
 import { getActivity } from '../catalog/registry.js';
-import { IF_ACTIVITY_TYPE, IF_BRANCH_TRUE, IF_BRANCH_FALSE } from '../catalog/types.js';
+import {
+  IF_ACTIVITY_TYPE,
+  IF_BRANCH_TRUE,
+  IF_BRANCH_FALSE,
+  SWITCH_ACTIVITY_TYPE,
+  SWITCH_DEFAULT_BRANCH,
+} from '../catalog/types.js';
 import { SecretRefSchema, isSecretRef } from '../schemas/secret-ref.js';
 import type { EvalIn, FnSpec, SigType } from './functions.js';
 import {
@@ -1364,6 +1370,8 @@ export function validateDoc(
     }
     // #4 A1 — an `if`'s boolean condition must be WHOLE-VALUE (save-time half).
     if (node.type === IF_ACTIVITY_TYPE) validateIfCondition(node, errors);
+    // #4 A2 — a `switch`'s `on` + `cases` shape (save-time half).
+    if (node.type === SWITCH_ACTIVITY_TYPE) validateSwitchConfig(node, errors);
   }
 
   // Node-only forward reachability + the container index, for the back-edge
@@ -1465,12 +1473,12 @@ export function validateDoc(
     if (branches === undefined) {
       errors.push(
         `edge '${e.id}': source '${e.from}' is not a branching activity — only an ` +
-          `'if' (true/false) emits a branch outcome`,
+          `'if' (true/false) or a 'switch' (its cases/default) emits a branch outcome`,
       );
     } else if (!branches.has(e.branch)) {
       errors.push(
         `edge '${e.id}': source '${e.from}' does not declare branch '${e.branch}' — ` +
-          `an 'if' routes only 'true'/'false'`,
+          `it routes only ${[...branches].map((b) => `'${b}'`).join('/')}`,
       );
     }
   }
@@ -1530,6 +1538,17 @@ export function validateDoc(
  */
 function declaredBranchesOf(node: Node): Set<string> | undefined {
   if (node.type === IF_ACTIVITY_TYPE) return new Set([IF_BRANCH_TRUE, IF_BRANCH_FALSE]);
+  if (node.type === SWITCH_ACTIVITY_TYPE) {
+    // A `switch` declares its configured case labels PLUS the implicit `default`
+    // fallthrough (`evalSwitchBranch` routes an unmatched value there). Only
+    // STRING case entries count — a malformed non-string case is reported by
+    // `validateSwitchConfig`, and including it here would just double up the noise.
+    const rawCases = node.config['cases'];
+    const cases = Array.isArray(rawCases)
+      ? rawCases.filter((c): c is string => typeof c === 'string')
+      : [];
+    return new Set([...cases, SWITCH_DEFAULT_BRANCH]);
+  }
   return undefined;
 }
 
@@ -1556,6 +1575,59 @@ function validateIfCondition(node: Node, errors: string[]): void {
     return;
   }
   validateWholeValue(where, raw, errors, 'condition');
+}
+
+/**
+ * #4 A2 — the SAVE-TIME half of the `switch` `on`/`cases` rule the reducer's
+ * `evalSwitchBranch` enforces at run time (both halves, or the rule is
+ * decorative). Advisory like every rule here (canvas badge + the #444 write gate).
+ *
+ * Deliberately UNLIKE `validateIfCondition`: an `if`'s boolean can only come from
+ * a whole-value `${}`, so an embedded template is refused; a `switch` matches on a
+ * STRING, and an embedded template (`"tier-${x}"`) resolves to a valid string, so
+ * `on` is NOT whole-value-gated here — its `${}` refs are already existence+grammar
+ * checked doc-wide by `validateRefs`, and the string TYPE of the result is enforced
+ * by the reducer at run time (`evalSwitchBranch` throws a non-string →
+ * `invalid_event`), the same deferral `validateIfCondition` documents for its
+ * boolean type. The `cases` rules (non-empty, unique strings, no `default`
+ * collision) are hygiene the reducer does not need — a duplicate or a `'default'`
+ * case routes deterministically regardless — but a save-time author error worth
+ * surfacing, matching `if`'s advisory posture.
+ */
+function validateSwitchConfig(node: Node, errors: string[]): void {
+  const where = `node.${node.id}`;
+  const on = node.config['on'];
+  if (typeof on !== 'string' || on.trim() === '') {
+    errors.push(
+      `${where}.on: a switch needs a string 'on' expression to match against its cases ` +
+        `(e.g. \${nodes.classify.output.label})`,
+    );
+  }
+  const rawCases = node.config['cases'];
+  if (!Array.isArray(rawCases) || rawCases.length === 0) {
+    errors.push(`${where}.cases: a switch needs a non-empty 'cases' array of case labels`);
+    return;
+  }
+  const seen = new Set<string>();
+  for (let i = 0; i < rawCases.length; i += 1) {
+    const c = rawCases[i];
+    if (typeof c !== 'string' || c === '') {
+      errors.push(`${where}.cases[${i}]: a case label must be a non-empty string`);
+      continue;
+    }
+    if (c === SWITCH_DEFAULT_BRANCH) {
+      errors.push(
+        `${where}.cases[${i}]: a case may not be named '${SWITCH_DEFAULT_BRANCH}' — ` +
+          `that label is reserved for the switch's implicit fallthrough branch`,
+      );
+      continue;
+    }
+    if (seen.has(c)) {
+      errors.push(`${where}.cases[${i}]: duplicate case label '${c}'`);
+      continue;
+    }
+    seen.add(c);
+  }
 }
 
 function validateExitWhen(

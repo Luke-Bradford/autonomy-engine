@@ -56,6 +56,26 @@ export const IF_BRANCH_TRUE = 'true';
 export const IF_BRANCH_FALSE = 'false';
 
 /**
+ * The `Node.type` of the `switch` control activity (#4 A2). Same constant-SSOT
+ * rationale as `IF_ACTIVITY_TYPE`: a typed identifier read STRUCTURALLY in the
+ * same three sites that must agree — the reducer's control-dispatch discriminant
+ * (`reduce.ts`, the `if`/`call_pipeline` precedent), the save-time branch/`on`
+ * rule (`validateDoc`), and this catalog entry.
+ */
+export const SWITCH_ACTIVITY_TYPE = 'switch';
+
+/**
+ * The fallthrough branch a `switch` routes to when its `on` value matches NO
+ * declared case (#4 A2). A typed identifier, not a magic string: the reducer
+ * STAMPS it onto `switch.evaluated` when no case matches, `validateDoc`'s
+ * declared-branch rule accepts it on a `switch`'s outgoing branch edges
+ * (alongside the configured case labels), and it is refused as a case label
+ * (a case named `'default'` would collide with the fallthrough) — three sites
+ * that must agree on the exact string, so it lives once.
+ */
+export const SWITCH_DEFAULT_BRANCH = 'default';
+
+/**
  * P3 — the ACTIVITY CATALOG entry: the static, pure metadata for one activity
  * `type` (the `type` on a pipeline `Node`). Lives in `shared` (no I/O) so the
  * SAME entry drives:

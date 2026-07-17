@@ -554,6 +554,25 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     branch: z.string(),
   }),
   z.object({
+    /**
+     * #4 A2 — a `control` `switch` matched its `${}` `on` value against the
+     * declared `cases` and chose a named-case (or `default`) `branch`. IDENTICAL
+     * durable-fact role + shape to `condition.evaluated` (an `if`), and folded by
+     * the same handler; a DISTINCT event type only so the log/monitor can tell a
+     * value-match decision from a boolean one (spec #4's codex-hardened block
+     * lists `switch.evaluated` separately from `condition.evaluated`). Appended by
+     * the DRIVER (`pump`) in response to the reducer's `evaluateControl` command,
+     * whose `event` discriminant names exactly this type. `branch` is the matched
+     * case label or `'default'`; `attemptId` is the switch node's current attempt,
+     * so a stale event (a pre-restart evaluation) is ignored.
+     */
+    type: z.literal('switch.evaluated'),
+    runId: z.string(),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    branch: z.string(),
+  }),
+  z.object({
     // A spawned `call_pipeline` child returned. `childOutcome` may be `failure`
     // and STILL carry projected `outputs` (the findings loop). Stale-rejected
     // like any attempt-bearing result: an `attemptId` that is not the call
@@ -761,11 +780,20 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     /**
-     * #4 A0/A1 — "this `control` node (`if`) evaluated to `branch`; make the fact
-     * durable." The reducer computes the branch PURELY (it holds the node's
-     * config + a clock-free eval of the `${}` condition over run state, exactly
-     * as `call_pipeline` resolves its `${}` pipelineVersionId), then hands the
-     * driver this command; the driver appends `condition.evaluated` and folds it.
+     * #4 A0/A1/A2 — "this `control` node (an `if` or a `switch`) evaluated to
+     * `branch`; make the fact durable." The reducer computes the branch PURELY
+     * (it holds the node's config + a clock-free eval of the `${}` condition/`on`
+     * over run state, exactly as `call_pipeline` resolves its `${}`
+     * pipelineVersionId), then hands the driver this command; the driver appends
+     * the event named by `event` (`condition.evaluated` for an `if`,
+     * `switch.evaluated` for a `switch`) and folds it.
+     *
+     * `event` is a REQUIRED discriminant (no `.default()` — a silent default here
+     * would let a producer emit the wrong event type): both construction sites
+     * (dispatch-prep + crash-recovery re-emit) must state which durable event the
+     * control node's evaluation makes. The two event types fold identically
+     * (`onControlBranchEvaluated`); the discriminant only tells the driver's pump
+     * which `type` to append and preserves the log's if-vs-switch distinction.
      *
      * A driver-OWN command like `scheduleRetry` — it needs no executor and no
      * connector (the driver's `pump` routes it to a synchronous single-event
@@ -776,6 +804,7 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     nodeId: z.string(),
     attemptId: z.string(),
     branch: z.string(),
+    event: z.enum(['condition.evaluated', 'switch.evaluated']),
   }),
   z.object({
     type: z.literal('finishRun'),

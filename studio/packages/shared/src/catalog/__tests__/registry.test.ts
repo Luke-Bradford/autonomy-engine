@@ -3,9 +3,16 @@ import { catalog, getActivity } from '../registry.js';
 
 describe('activity catalog', () => {
   it('exposes the MVP activity types', () => {
-    // `if` (#4 A1) is the first CONTROL activity — engine-evaluated, catalogued
-    // so the palette/executor-guard/version know it.
-    expect([...catalog.keys()].sort()).toEqual(['agent_task', 'http_request', 'if', 'llm_call']);
+    // `if` (#4 A1) is the first CONTROL activity; `switch` (#4 A2) the second —
+    // both engine-evaluated, catalogued so the palette/executor-guard/version
+    // know them.
+    expect([...catalog.keys()].sort()).toEqual([
+      'agent_task',
+      'http_request',
+      'if',
+      'llm_call',
+      'switch',
+    ]);
   });
 
   it('getActivity returns an entry for a known type and undefined for an unknown one', () => {
@@ -62,16 +69,29 @@ describe('activity catalog', () => {
 
 describe('activity definition contract (#1 D6)', () => {
   it('splits execution (connector-dispatched) from control (engine-evaluated)', () => {
-    // Since #4 A1 the catalog has BOTH: `if` is the first `control` entry (the
-    // executor's `CONTROL_NOT_DISPATCHABLE` guard is now reachable), everything
-    // else is `execution`. An execution activity binds >=1 connection; a control
-    // activity binds NONE (it never touches a connector).
-    expect(getActivity('if')!.kind).toBe('control');
-    expect(getActivity('if')!.connectionKinds).toEqual([]);
+    // Since #4 A1 the catalog has BOTH: `if`/`switch` are the `control` entries
+    // (the executor's `CONTROL_NOT_DISPATCHABLE` guard is now reachable),
+    // everything else is `execution`. An execution activity binds >=1 connection;
+    // a control activity binds NONE (it never touches a connector).
+    for (const type of ['if', 'switch']) {
+      expect(getActivity(type)!.kind).toBe('control');
+      expect(getActivity(type)!.connectionKinds).toEqual([]);
+      expect(getActivity(type)!.outputs).toEqual([]);
+    }
     for (const entry of catalog.values()) {
-      if (entry.type === 'if') continue;
+      if (entry.kind === 'control') continue;
       expect(entry.kind).toBe('execution');
     }
+  });
+
+  it('switch is a control activity exposing an on/cases configSchema for the palette (#4 A2)', () => {
+    const sw = getActivity('switch')!;
+    expect(sw.category).toBe('control');
+    expect(
+      sw.configSchema.safeParse({ on: '${nodes.c.output.t}', cases: ['a', 'b'] }).success,
+    ).toBe(true);
+    // Missing the required `on`.
+    expect(sw.configSchema.safeParse({ cases: ['a'] }).success).toBe(false);
   });
 
   it('categorises the MVP set per spec #4 (agent_task is an AI activity, not its own class)', () => {
