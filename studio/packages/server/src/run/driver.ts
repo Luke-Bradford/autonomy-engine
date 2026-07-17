@@ -853,13 +853,13 @@ export async function startRun(
       runId: run.id,
       triggerId: triggerContext.triggerId,
       // Omit the optionals when absent so the durable payload stays minimal and
-      // folds to `null` on the other side (schema fields are `.optional()`).
+      // folds to `null` on the other side (schema fields are `.optional()`). Both
+      // are normalized to `null` by `launcher.fire()`, so a single `!== null`
+      // suffices — `body` is never `undefined` here.
       ...(triggerContext.scheduledTime !== null
         ? { scheduledTime: triggerContext.scheduledTime }
         : {}),
-      ...(triggerContext.body !== null && triggerContext.body !== undefined
-        ? { body: triggerContext.body }
-        : {}),
+      ...(triggerContext.body !== null ? { body: triggerContext.body } : {}),
     };
     seed = appendAndFold(deps.db, deps.bus, engine, seed, tctxEvent, deps.log).state;
   }

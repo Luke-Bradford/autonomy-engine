@@ -23,6 +23,15 @@ import { stubAlarms } from './stub-alarms.js';
 
 type Db = ReturnType<typeof freshDb>['db'];
 
+/** Find + NARROW the run's durable trigger seed (#5 S12), so a shape regression
+ * fails loudly rather than passing under an unchecked union cast. */
+function triggerSeed(db: Db, runId: string): Extract<EngineEvent, { type: 'run.triggerContext' }> {
+  const seed = loadEngineEvents(db, runId).find((e) => e.type === 'run.triggerContext');
+  if (seed?.type !== 'run.triggerContext')
+    throw new Error(`no run.triggerContext seed for ${runId}`);
+  return seed;
+}
+
 let seq = 0;
 function node(id: string, extra: Partial<Node> = {}): Node {
   seq += 1;
@@ -119,8 +128,7 @@ describe('RunLauncher — a started run drives to completion in the background',
     expect(events[0]?.type).toBe('run.triggerContext');
     expect(events[1]?.type).toBe('run.started');
     expect(events.at(-1)?.type).toBe('run.finished');
-    const seed = events[0] as { triggerId: string };
-    expect(seed.triggerId).toBe(trigger.id);
+    expect(triggerSeed(db, result.runId!).triggerId).toBe(trigger.id);
   });
 
   it('threads a fire-time scheduledTime into the run.triggerContext seed (#5 S12)', async () => {
@@ -132,9 +140,7 @@ describe('RunLauncher — a started run drives to completion in the background',
     const result = launcher.fire(trigger, { scheduledTime: '2026-07-17T09:00:00.000Z' });
     await launcher.whenIdle();
 
-    const seed = loadEngineEvents(db, result.runId!).find(
-      (e) => e.type === 'run.triggerContext',
-    ) as { triggerId: string; scheduledTime?: string };
+    const seed = triggerSeed(db, result.runId!);
     expect(seed.triggerId).toBe(trigger.id);
     expect(seed.scheduledTime).toBe('2026-07-17T09:00:00.000Z');
   });
@@ -244,14 +250,9 @@ describe('RunLauncher — queue', () => {
 
     await launcher.whenIdle();
 
-    const scheduled = listRuns(db, { triggerId: trigger.id })
-      .map(
-        (r) =>
-          loadEngineEvents(db, r.id).find((e) => e.type === 'run.triggerContext') as {
-            scheduledTime?: string;
-          },
-      )
-      .map((e) => e.scheduledTime);
+    const scheduled = listRuns(db, { triggerId: trigger.id }).map(
+      (r) => triggerSeed(db, r.id).scheduledTime,
+    );
     // Both distinct occurrences survived — the queued fire did not inherit the
     // active run's context nor lose its own.
     expect(new Set(scheduled)).toEqual(new Set([T1, T2]));
