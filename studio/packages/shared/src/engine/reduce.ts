@@ -1251,9 +1251,10 @@ export function createEngine(doc: EngineDoc): Engine {
    * labels, so trimming could silently change which arm is taken). Pure over
    * `state`: `substitute` reads only bound outputs/params/trigger context, so a
    * replay reaches the same label. Throws (→ `invalid_event`) on a missing/
-   * non-string `on`, or an `on` that resolves to a non-string (a whole-value
-   * `${number}` etc.) — the run-time half of A2's string-match rule that the write
-   * gate (`validateSwitchConfig`) warns about first.
+   * non-string `on`, an `on` that resolves to a non-string (a whole-value
+   * `${number}` etc.), or a missing/malformed `cases` (non-array or empty) — the
+   * run-time half of A2's string-match rule that the write gate
+   * (`validateSwitchConfig`) warns about first.
    */
   function evalSwitchBranch(node: Node, state: RunState): string {
     const raw = node.config['on'];
@@ -1270,9 +1271,21 @@ export function createEngine(doc: EngineDoc): Engine {
           'convert it explicitly (e.g. ${string(nodes.count.output.n)})',
       );
     }
+    // The write gate (`validateSwitchConfig`) is only ADVISORY, so a saved doc can
+    // reach here with a missing/malformed `cases`. Fail LOUD (→ `invalid_event`),
+    // mirroring the `on` check above and the write gate's own
+    // `!Array.isArray(rawCases) || rawCases.length === 0` rule — never silently
+    // normalise to `[]` and route EVERY value to `default`, which would mask a
+    // dropped/corrupt config as a benign fallthrough (an absent fact manufactured
+    // as a default).
     const rawCases = node.config['cases'];
-    const cases = Array.isArray(rawCases) ? rawCases : [];
-    return cases.includes(out) ? out : SWITCH_DEFAULT_BRANCH;
+    if (!Array.isArray(rawCases) || rawCases.length === 0) {
+      throw new SubstituteError(
+        `switch node '${node.id}' has no non-empty 'cases' array — a switch routes ` +
+          'a string value against a list of case labels (e.g. ["gold", "silver"])',
+      );
+    }
+    return rawCases.includes(out) ? out : SWITCH_DEFAULT_BRANCH;
   }
 
   /** A container's projected outputs = its children's outputs merged (sorted). */

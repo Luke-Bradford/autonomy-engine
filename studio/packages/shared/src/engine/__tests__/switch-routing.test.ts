@@ -133,6 +133,44 @@ describe('switch on-expression failures terminalize invalid_event (#4 A2)', () =
     expect(finish?.outcome).toBe('failure');
     expect(finish?.reason).toBe('invalid_event');
   });
+
+  // The write gate (`validateSwitchConfig`) is only ADVISORY (palette metadata, not
+  // a run-time validator), so the reducer is the real gate on the `cases` array too
+  // — a missing/malformed `cases` must FAIL LOUD (invalid_event), mirroring the `on`
+  // check just above it, not silently normalise to `[]` and route EVERYTHING to
+  // `default` (which masks a dropped/corrupt config as a benign fallthrough).
+  it('a missing cases fails the run invalid_event (not a silent all-default route)', () => {
+    const badSwitch: Node = {
+      id: 's',
+      type: 'switch',
+      config: { on: '${params.tier}' },
+      position: { x: 0, y: 0 },
+    };
+    const e = eng([badSwitch, node('d')], [branchEdge('s', 'd', 'default')]);
+    const { finish } = driveRun(e, { params: { tier: 'gold' }, resolve: simpleResolve() });
+    expect(finish?.outcome).toBe('failure');
+    expect(finish?.reason).toBe('invalid_event');
+  });
+
+  it('a non-array cases fails the run invalid_event', () => {
+    const e = eng(
+      [switchNode('s', '${params.tier}', 'gold'), node('d')],
+      [branchEdge('s', 'd', 'default')],
+    );
+    const { finish } = driveRun(e, { params: { tier: 'gold' }, resolve: simpleResolve() });
+    expect(finish?.outcome).toBe('failure');
+    expect(finish?.reason).toBe('invalid_event');
+  });
+
+  it('an empty cases array fails the run invalid_event (mirrors the write gate)', () => {
+    const e = eng(
+      [switchNode('s', '${params.tier}', []), node('d')],
+      [branchEdge('s', 'd', 'default')],
+    );
+    const { finish } = driveRun(e, { params: { tier: 'gold' }, resolve: simpleResolve() });
+    expect(finish?.outcome).toBe('failure');
+    expect(finish?.reason).toBe('invalid_event');
+  });
 });
 
 describe('switch reuses the A0 branch model (#4 A2)', () => {
