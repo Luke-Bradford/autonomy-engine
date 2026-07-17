@@ -1944,6 +1944,19 @@ export function createEngine(doc: EngineDoc): Engine {
     // one non-`run.started` event that legitimately folds into a `pending` seed.
     if (event.type === 'run.triggerContext') return onRunTriggerContext(state, event, diagnostics);
 
+    // #5 S12 — a `run.interrupted` on a PENDING run terminalizes it, exactly as it
+    // does on a running run (below). The reachable case: the driver faulted
+    // between the `run.triggerContext` seed and `run.started`, and the interrupt
+    // cleanup appends `run.interrupted` over a lone-seed (still `pending`) log.
+    // Folding it to `interrupted` keeps the PROJECTION equal to the row the
+    // cleanup persists — without this the fold would no-op and the two would
+    // diverge (an event-sourcing invariant break). Only `run.interrupted`: a
+    // `run.finished` before start is genuinely impossible and stays an ignored
+    // no-op under the guard below.
+    if (state.status === 'pending' && event.type === 'run.interrupted') {
+      return { state: { ...state, status: 'interrupted' }, commands: [], diagnostics };
+    }
+
     if (state.status === 'pending') return { state, commands: [], diagnostics };
 
     if (event.runId !== state.runId) return { state, commands: [], diagnostics };

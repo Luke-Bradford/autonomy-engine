@@ -532,6 +532,22 @@ describe('run.triggerContext — the fire-time trigger seed (#5 S12)', () => {
     const log: EngineEvent[] = [tctx({ scheduledTime: SCHED }), started()];
     expect(eng.projectRunState(log)).toEqual(eng.projectRunState(log));
   });
+
+  // A run interrupted between the trigger seed and run.started (the driver
+  // faulted) must terminalize in the PROJECTION, not just via a row patch — so a
+  // re-fold of [run.triggerContext, run.interrupted] agrees with the persisted
+  // row. Without this the fold would no-op on the pending state and diverge.
+  it('run.interrupted on a pending seeded run folds to interrupted (row == projection)', () => {
+    const eng = engine([node('a')]);
+    const log: EngineEvent[] = [
+      tctx(),
+      { type: 'run.interrupted', runId: RUN, reason: 'drive_failed' },
+    ];
+    const state = eng.projectRunState(log);
+    expect(state.status).toBe('interrupted');
+    // The seed still survived the transition — the interrupt does not wipe it.
+    expect(state.triggerContext).toEqual({ triggerId: 'trg-1', scheduledTime: null, body: null });
+  });
 });
 
 describe('${nodes.<id>.status} — resolves from the run log (#6 E3 T6)', () => {

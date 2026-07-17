@@ -698,19 +698,12 @@ export function terminalizeInterrupted(deps: TerminalizeDeps, runId: string): vo
     // on the SAME `db` handle it used (#497's rule, reached the long way).
     const result = engine.reduce(engine.projectRunState(events), appended.event);
     recordRunDiagnostics(db, runId, appended.record.seq, 'fold', result.diagnostics, deps.log);
-    // The `run.interrupted` we just appended is a TERMINAL fact, so the row must
-    // end terminal. It normally will — folding it over a `running` state yields
-    // `interrupted`. But a run whose ONLY prior event is `run.triggerContext`
-    // (#5 S12) folds to a `pending` state, and `run.interrupted` on `pending` is a
-    // reducer no-op — so the fold reports `pending` and syncing to it would leave
-    // a non-terminal ZOMBIE row that no reconciler sweeps and that wedges a
-    // trigger's concurrency slot forever. When the fold cannot express the
-    // terminal fact the LOG already carries, patch the row directly.
-    if (isTerminalRow(result.state.status)) {
-      syncRunLifecycle(db, runId, result.state.status);
-    } else {
-      patchRow();
-    }
+    // The fold IS terminal on every reachable path: `run.interrupted` folds a
+    // `running` run to `interrupted`, AND (#5 S12) a lone-`run.triggerContext`
+    // `pending` run to `interrupted` too — the reducer terminalizes both, so the
+    // persisted row and a re-projection of the log agree (no zombie, no
+    // divergence). Sync the row FROM that projection rather than bypassing it.
+    syncRunLifecycle(db, runId, result.state.status);
   } catch (foldErr) {
     // The doc is unresolvable (e.g. its version was deleted). The
     // `run.interrupted` event is ALREADY durable in the log; just make the row

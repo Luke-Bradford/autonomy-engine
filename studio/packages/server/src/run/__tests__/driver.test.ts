@@ -161,9 +161,9 @@ describe('driver — startRun trigger context (#5 S12)', () => {
 
   // G2 (plan review): a run whose ONLY durable event is run.triggerContext (the
   // run.started append faulted after it committed) must NOT be left a pending
-  // zombie — run.interrupted folds to a no-op on a pending state, so the row is
-  // patched directly to interrupted instead of synced to pending.
-  it('terminalizeInterrupted patches a lone-run.triggerContext run to interrupted, not pending', () => {
+  // zombie. The reducer terminalizes run.interrupted on a pending run, so the
+  // ROW and a RE-PROJECTION of the log both reach `interrupted` — no divergence.
+  it('terminalizes a lone-run.triggerContext run to interrupted, row == projection', () => {
     const { db } = freshDb();
     const pvId = seedVersion(db, [node('a')]);
     const run = seedRun(db, pvId);
@@ -174,7 +174,11 @@ describe('driver — startRun trigger context (#5 S12)', () => {
 
     expect(getRun(db, run.id)?.status).toBe('interrupted');
     // The log stays authoritative — a run.interrupted fact was appended.
-    expect(types(loadEngineEvents(db, run.id))).toEqual(['run.triggerContext', 'run.interrupted']);
+    const events = loadEngineEvents(db, run.id);
+    expect(types(events)).toEqual(['run.triggerContext', 'run.interrupted']);
+    // The event-sourcing invariant: the row equals what folding the log computes.
+    const projected = buildEngine(getPipelineVersion(db, pvId)!).projectRunState(events);
+    expect(projected.status).toBe('interrupted');
   });
 });
 

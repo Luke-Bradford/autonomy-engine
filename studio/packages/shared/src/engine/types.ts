@@ -276,18 +276,20 @@ export type ContainerRunState = z.infer<typeof ContainerRunStateSchema>;
  * The run's fire-time TRIGGER context (#5 S12), folded from the durable
  * `run.triggerContext` seed event and read by `${trigger.<field>}`.
  *
- * `triggerId` is the firing trigger (null for a run with no trigger — a child
- * `call_pipeline` run, or a pre-S12 log). `scheduledTime` is the INTENDED
- * scheduled occurrence (ISO-8601 UTC) for a `schedule` fire — the row's `dueAt`,
- * never the possibly-late actual delivery — and `null` for a manual/webhook/event
- * fire. `body` is the fire payload (webhook/event/run-now); `unknown` so it stays
+ * `triggerId` is the firing trigger — always present, because a context EXISTS
+ * only for a trigger-launched run; a run with no trigger (a child `call_pipeline`
+ * run, or a pre-S12 log) has `RunState.triggerContext === null` entirely, not a
+ * context with a null id. `scheduledTime` is the INTENDED scheduled occurrence
+ * (ISO-8601 UTC) for a `schedule` fire — the row's `dueAt`, never the
+ * possibly-late actual delivery — and `null` for a manual/webhook/event fire.
+ * `body` is the fire payload (webhook/event/run-now); `unknown` so it stays
  * deep-addressable as `json` and carries no static shape.
  *
  * Deliberately NOT `.datetime()` on `scheduledTime` — a durable field with a
  * format enum is a back-compat trap (same reasoning as `run.started.startedAt`).
  */
 export const TriggerContextSchema = z.object({
-  triggerId: z.string().nullable(),
+  triggerId: z.string(),
   scheduledTime: z.string().nullable(),
   body: z.unknown(),
 });
@@ -469,7 +471,11 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('run.triggerContext'),
     runId: z.string(),
-    triggerId: z.string().nullable(),
+    // Non-nullable: the driver appends this ONLY for a trigger-launched run and
+    // always with `trigger.id`. A run with no trigger emits no event at all, so a
+    // null id is unreachable — the schema states that rather than admitting a
+    // dead branch.
+    triggerId: z.string(),
     scheduledTime: z.string().optional(),
     body: z.unknown().optional(),
   }),
