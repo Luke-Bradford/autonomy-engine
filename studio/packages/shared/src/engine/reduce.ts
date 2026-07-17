@@ -16,6 +16,7 @@ import type {
 import { SubstituteError, TERMINAL_NODE, terminalStatusOf } from './types.js';
 import {
   FAIL_ACTIVITY_TYPE,
+  FILTER_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
   IF_BRANCH_TRUE,
   IF_BRANCH_FALSE,
@@ -26,6 +27,7 @@ import type { OutputType } from '../schemas/pipeline.js';
 import { outputContract, type CheckedContract, type OutputContract } from './outputs.js';
 import {
   backEdgeResetBody,
+  composeFilterExpr,
   containerMembership,
   effectiveEdges,
   forwardDescendants,
@@ -979,6 +981,31 @@ export function createEngine(doc: EngineDoc): Engine {
       commands.push({ type: 'failNode', nodeId: id, attemptId, error });
       return { state: next, changed: true };
     }
+    if (node.type === FILTER_ACTIVITY_TYPE) {
+      // #4 A8 — a `control` `filter` is ENGINE-evaluated like `if`/`switch`/`fail`
+      // (checked here, before `node.call` and dispatch — a node is one or the
+      // other), but it produces a normal SUCCESS carrying a `result` OUTPUT, not a
+      // branch or a failure. Resolve `items`+`predicate` PURELY (the inert
+      // `filter(items, predicate)` closed-fn over run state), hold the node `ready`
+      // (the driver owes `node.succeeded`, the same handshake `if`/`switch`/`fail`
+      // use for their durable event), and emit a `succeedControl` command. NEVER
+      // handed to the executor. A missing/bad `items`/`predicate` (non-array,
+      // non-boolean predicate, bad `${}` ref) throws → `prepFailure` →
+      // `finishRun{invalid_event}`, the same verdict a control-eval throw reaches.
+      let outputs: Record<string, unknown>;
+      try {
+        outputs = evalFilter(node, state, foreachItemOf(state, id));
+      } catch (err) {
+        return prepFailure(state, id, err, diagnostics);
+      }
+      const next = withNode(state, id, {
+        status: 'ready',
+        attempts: ns.attempts + 1,
+        currentAttemptId: attemptId,
+      });
+      commands.push({ type: 'succeedControl', nodeId: id, attemptId, outputs });
+      return { state: next, changed: true };
+    }
     if (node.call !== undefined) {
       // call_pipeline: resolve the (possibly `${}`) pipelineVersionId + params,
       // hold the node `waiting`, and ask the driver to spawn the child.
@@ -1438,6 +1465,38 @@ export function createEngine(doc: EngineDoc): Engine {
       );
     }
     return String(substitute(raw, buildCtx(state), 0, item));
+  }
+
+  /**
+   * #4 A8 — resolve a `filter` node's `items`+`predicate` to its `{ result }`
+   * output. UNLIKE `if`/`switch` (a branch) and `fail` (a failure), a `filter`
+   * SUCCEEDS with data — the input array filtered by the whole-value `${}`
+   * predicate, order-preserved. `composeFilterExpr` splices the two whole-value
+   * fields into the inert language's existing `filter(items, predicate)` closed-fn
+   * (ONE `${}`, ONE array-element budget, `Array.prototype.filter` order), which
+   * `substitute` evaluates PURELY over run state (+ the `foreach` `item` for a
+   * filter inside a foreach body — the predicate's own `${item}` SHADOWS it
+   * per-element via the `filter` fn's `withItem`, exactly like a nested
+   * `filter(rows, greater(item, 2))`). Throws `SubstituteError` (→ `prepFailure` →
+   * `invalid_event`) on a missing/non-whole-value `items`/`predicate`, a non-array
+   * `items`, a non-boolean predicate element, or a bad `${}` ref — the malformed
+   * config fails the run LOUD rather than manufacturing a benign empty result (the
+   * project's "never manufacture an absent fact" rule; mirrors `evalSwitchBranch`).
+   */
+  function evalFilter(
+    node: Node,
+    state: RunState,
+    item?: { value: unknown },
+  ): Record<string, unknown> {
+    const out = substitute(composeFilterExpr(node.config), buildCtx(state), 0, item);
+    // The `filter(...)` fn returns an array or throws (`loopArr` on a non-array
+    // `items`, `expectBool` on a non-boolean predicate element). This guard is
+    // defensive — a composed `filter` can only yield an array — and keeps the
+    // stored `result` output honestly array-typed.
+    if (!Array.isArray(out)) {
+      throw new SubstituteError(`filter node '${node.id}' did not resolve to an array`);
+    }
+    return { result: out };
   }
 
   /** The current round's children outputs, merged (sorted, last-key-wins). */
@@ -2399,6 +2458,34 @@ export function createEngine(doc: EngineDoc): Engine {
             return { state: failed.state, commands: [failed.finish], diagnostics };
           }
           commands.push({ type: 'failNode', nodeId: id, attemptId: ns.currentAttemptId, error });
+          continue;
+        }
+        if (node.type === FILTER_ACTIVITY_TYPE) {
+          // #4 A8 crash recovery: a `filter` folds to `ready` after `tryDispatchNode`
+          // pushed `succeedControl`, but `projectRunState` keeps STATE, not COMMANDS
+          // — a crash between the predecessor's durable event and `node.succeeded`
+          // re-derives the node `ready` with its command lost, and without this fork
+          // nothing re-emits it, so the run hangs `ready` forever (the same reason
+          // the control-branch/`fail` forks above and `waiting && node.call` below
+          // re-emit). Recompute the filtered outputs PURELY and re-emit. Idempotent:
+          // same `currentAttemptId`, and a duplicate `node.succeeded` folds as a
+          // stale/terminal no-op. Terminalize `items`/`predicate` that now throws,
+          // the same verdict as the dispatch-prep branch below. Passes the `foreach`
+          // item (as `tryDispatchNode` does) so a `${item}`-bearing `items` in a
+          // foreach body re-resolves identically on recovery rather than throwing.
+          let outputs: Record<string, unknown>;
+          try {
+            outputs = evalFilter(node, state, foreachItemOf(state, id));
+          } catch (err) {
+            const failed = prepFailure(state, id, err, diagnostics);
+            return { state: failed.state, commands: [failed.finish], diagnostics };
+          }
+          commands.push({
+            type: 'succeedControl',
+            nodeId: id,
+            attemptId: ns.currentAttemptId,
+            outputs,
+          });
           continue;
         }
         let prepared: Record<string, unknown>;

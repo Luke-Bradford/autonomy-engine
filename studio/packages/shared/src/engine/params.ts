@@ -15,6 +15,7 @@ import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
 import { getActivity } from '../catalog/registry.js';
 import {
   FAIL_ACTIVITY_TYPE,
+  FILTER_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
   IF_BRANCH_TRUE,
   IF_BRANCH_FALSE,
@@ -771,6 +772,59 @@ export function validateWholeValue(
   return mode.mode === 'whole' ? mode : null; // non-whole + no defect = unterminated
 }
 
+/**
+ * #4 A8 — the composed `${filter(items, predicate)}` expression a `filter` control
+ * node evaluates. A `filter` carries TWO whole-value `${}` config fields; their
+ * bodies splice as the two arguments of the inert expression language's EXISTING
+ * `filter(array, predicate)` closed-fn. This is the SINGLE SSOT for both halves:
+ *  - RUN (`reduce.ts` `evalFilter`) passes the result to `substitute`, so the
+ *    predicate re-evaluates per element with `${item}` bound (the fn's `withItem`),
+ *    the array-element budget is charged ONCE (one `${}`/one `Env`), order is
+ *    `Array.prototype.filter`'s, a non-array `items` / non-boolean predicate throw
+ *    `SubstituteError` → `invalid_event`;
+ *  - SAVE (`validateRefs`) scans this SAME string, so `checkExprStatic` gives the
+ *    predicate (a `filter` `lambdaArg`) `${item}` scope while `items` (arg0) keeps
+ *    only the outer/foreach scope — the field-aware `${item}` rule for free.
+ *
+ * Throws `SubstituteError` if either field is missing, non-string, empty, or not a
+ * WHOLE-value `${}` (an embedded template like `"a${x}"` would splice as garbage).
+ * On the SAVE path the SAME defects are reported first, with a per-field message,
+ * by `validateFilterConfig` — this thrower is the run-time half (mirrors the
+ * `wholeValueDefect` vs `validateWholeValue` split).
+ *
+ * RAIL: each body is one balanced whole-value expression. A body CAN contain a
+ * top-level `,` (e.g. `${a, b}`), but that only splices a THIRD arg into the
+ * fixed-arity (`minArgs:2`, non-variadic) `filter` call, which then fails LOUD at
+ * both save (`checkArity`) and run — never a silent mis-parse. Never call on
+ * resolved data (that would re-read output as template, breaking no-injection).
+ */
+export function composeFilterExpr(config: Record<string, unknown>): string {
+  const items = filterFieldBody(config['items'], 'items');
+  const predicate = filterFieldBody(config['predicate'], 'predicate');
+  return `\${filter(${items}, ${predicate})}`;
+}
+
+/** Extract a filter field's whole-value `${}` body, or throw (run-time policy). */
+function filterFieldBody(value: unknown, noun: string): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new SubstituteError(
+      `filter node has no '${noun}' — a filter needs a non-empty \${} ${noun} expression`,
+    );
+  }
+  // Reuse the whole-value SSOT (`wholeValueDefect`), exactly as `evalIfBranch`
+  // does — one "not whole-value" message shared across the control activities.
+  const defect = wholeValueDefect(value, noun);
+  if (defect !== null) throw new SubstituteError(defect);
+  const mode = interpolationMode(value.trim());
+  // No defect yet NOT `whole` = an unterminated `${` (`defectOf` stays silent on
+  // it, leaving the grammar to the save-time scan — `scanFilterRefs`'s fallback).
+  // Fail LOUD at run rather than splice a broken body.
+  if (mode.mode !== 'whole') {
+    throw new SubstituteError(`filter '${noun}' has an unterminated \${...} reference`);
+  }
+  return mode.body;
+}
+
 // --- resolveRunParams -------------------------------------------------------
 
 /**
@@ -1055,15 +1109,30 @@ export function validateRefs(
     const settled = graph.settled.get(node.id) ?? new Set<string>();
     const reachable = graph.reachable.get(node.id) ?? new Set<string>();
     const soft = graph.soft.get(node.id) ?? new Set<string>();
-    scan(
-      `nodes.${node.id}.config`,
-      node.config,
-      { declared, guaranteed, settled, reachable, soft, outputsById },
-      errors,
-      0,
-      undefined,
-      foreachChildIds.has(node.id),
-    );
+    const scope: ScanScope = { declared, guaranteed, settled, reachable, soft, outputsById };
+    if (node.type === FILTER_ACTIVITY_TYPE) {
+      // #4 A8 — a `filter`'s two `${}` fields must be scanned as ONE composed
+      // `filter(items, predicate)` expression, NOT field-by-field: only then does
+      // `checkExprStatic` give the predicate (a `filter` `lambdaArg`) `${item}`
+      // scope while `items` (arg0) keeps the outer/foreach scope. Scanning the raw
+      // `predicate` field via the generic path would wrongly REFUSE its `${item}`
+      // outside a foreach. `items`+`predicate` are the filter's only `${}` config,
+      // so the composed scan replaces the generic one with no loss (`outputs` is
+      // inert to `scan`; `scanSecretSinks` still runs below). A malformed field
+      // (missing/non-whole-value) is skipped here and reported by
+      // `validateFilterConfig` — scanning garbage would double-report or mis-parse.
+      scanFilterRefs(node, scope, errors, foreachChildIds.has(node.id));
+    } else {
+      scan(
+        `nodes.${node.id}.config`,
+        node.config,
+        scope,
+        errors,
+        0,
+        undefined,
+        foreachChildIds.has(node.id),
+      );
+    }
     // Item 7 / S2: a `{ "$secret": "<name>" }` marker is valid ONLY within a
     // declared sink field of this node's activity. `getActivity` reads the
     // shared module catalog (no signature change to this fn or its callers,
@@ -1405,6 +1474,8 @@ export function validateDoc(
     if (node.type === SWITCH_ACTIVITY_TYPE) validateSwitchConfig(node, errors);
     // #4 A7 — a `fail`'s `message` presence (save-time half).
     if (node.type === FAIL_ACTIVITY_TYPE) validateFailConfig(node, errors);
+    // #4 A8 — a `filter`'s `items`+`predicate` presence + whole-value shape.
+    if (node.type === FILTER_ACTIVITY_TYPE) validateFilterConfig(node, errors);
   }
 
   // Node-only forward reachability + the container index, for the back-edge
@@ -1711,6 +1782,67 @@ function validateFailConfig(node: Node, errors: string[]): void {
         `(e.g. 'validation rejected the input')`,
     );
   }
+}
+
+/**
+ * #4 A8 — a `filter`'s `items`+`predicate` SHAPE (save-time half). Both are
+ * WHOLE-value-REQUIRED `${}` fields: `items` resolves to the array to filter,
+ * `predicate` to the per-element boolean — an embedded template (`"a${x}"`) would
+ * resolve to a STRING, so `composeFilterExpr` could not splice it into the
+ * `filter(items, predicate)` closed-fn. Mirrors `foreach.items`/`if.condition`'s
+ * whole-value rule (`validateWholeValue`) and `validateFailConfig`'s presence
+ * check. The `${}` REF checking (and the field-aware `${item}` scope) is
+ * `validateRefs`' job, which scans the SAME composed expression.
+ */
+function validateFilterConfig(node: Node, errors: string[]): void {
+  for (const noun of ['items', 'predicate'] as const) {
+    const where = `node.${node.id}.${noun}`;
+    const raw = node.config[noun];
+    if (typeof raw !== 'string' || raw.trim() === '') {
+      errors.push(`${where}: a filter needs a non-empty \${} ${noun} expression`);
+      continue;
+    }
+    validateWholeValue(where, raw, errors, noun);
+  }
+}
+
+/**
+ * #4 A8 — scan a `filter` node's `${}` refs as the ONE composed
+ * `filter(items, predicate)` expression (see `composeFilterExpr`), so
+ * `checkExprStatic` scopes `${item}` field-aware: allowed in the predicate (arg1,
+ * a `lambdaArg`) always, in `items` (arg0) only under `itemInScope` (foreach
+ * membership). A malformed field (missing / non-whole-value) is skipped —
+ * `validateFilterConfig` reports it — since a garbage compose would mis-parse.
+ */
+function scanFilterRefs(
+  node: Node,
+  scope: ScanScope,
+  errors: string[],
+  itemInScope: boolean,
+): void {
+  let composed: string;
+  try {
+    composed = composeFilterExpr(node.config);
+  } catch {
+    // Not composable (a missing / non-whole-value field): `validateFilterConfig`
+    // reports the SHAPE defect, but `validateWholeValue`/`defectOf` deliberately
+    // stay silent on a GRAMMAR error (an unterminated `${`) — every other field
+    // relies on the generic `scan` for that. Since a filter REPLACES that generic
+    // scan, fall back to scanning each raw field so an unterminated `${` / bad ref
+    // is still badged at SAVE, not deferred to a run-time `invalid_event`. Field-
+    // aware `${item}` scope even here: the predicate is a lambda position (`${item}`
+    // always bound), `items` only under foreach membership (`itemInScope`).
+    const rawItems = node.config['items'];
+    const rawPredicate = node.config['predicate'];
+    if (typeof rawItems === 'string') {
+      scan(`nodes.${node.id}.config.items`, rawItems, scope, errors, 0, undefined, itemInScope);
+    }
+    if (typeof rawPredicate === 'string') {
+      scan(`nodes.${node.id}.config.predicate`, rawPredicate, scope, errors, 0, undefined, true);
+    }
+    return;
+  }
+  scan(`nodes.${node.id}.config`, composed, scope, errors, 0, undefined, itemInScope);
 }
 
 function validateExitWhen(

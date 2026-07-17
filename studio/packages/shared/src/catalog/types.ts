@@ -88,6 +88,18 @@ export const SWITCH_DEFAULT_BRANCH = 'default';
 export const FAIL_ACTIVITY_TYPE = 'fail';
 
 /**
+ * The `Node.type` of the `filter` control activity (#4 A8). Same constant-SSOT
+ * rationale as the other control types: a typed identifier read STRUCTURALLY by
+ * the reducer's control-dispatch discriminant (`reduce.ts`), the save-time config
+ * rule (`validateDoc`'s `validateFilterConfig` + `validateRefs`' composed-expr
+ * scan), and this catalog entry. Unlike `if`/`switch` (a branch) and `fail` (a
+ * failure), a `filter` produces a normal SUCCESS with an OUTPUT — the input array
+ * filtered by a whole-value `${}` predicate — so it declares a `result` output and
+ * NO branch labels (a branch edge off a `filter` is correctly invalid).
+ */
+export const FILTER_ACTIVITY_TYPE = 'filter';
+
+/**
  * P3 — the ACTIVITY CATALOG entry: the static, pure metadata for one activity
  * `type` (the `type` on a pipeline `Node`). Lives in `shared` (no I/O) so the
  * SAME entry drives:

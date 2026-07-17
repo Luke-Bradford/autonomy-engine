@@ -163,6 +163,21 @@ export function driveRun(eng: Engine, opts: DriveOptions): DriveResult {
       });
       continue;
     }
+    // #4 A8 — the driver's OWN `succeedControl` command (a `control` `filter`
+    // succeeds): append `node.succeeded` with the `outputs` the reducer resolved
+    // (the filtered `{ result }`). Mirrors the real driver's `pump`
+    // (`server/src/run/driver.ts` `succeedControl` branch); without it a filter
+    // node holds `ready` forever and the run never finishes.
+    if (c.type === 'succeedControl') {
+      apply({
+        type: 'node.succeeded',
+        runId,
+        nodeId: c.nodeId,
+        attemptId: c.attemptId,
+        outputs: c.outputs,
+      });
+      continue;
+    }
     if (c.type !== 'dispatchNode') continue;
     order.push(c.nodeId);
     apply({

@@ -28,5 +28,10 @@
 // an uncatalogued type (the executor fails it `UNKNOWN_ACTIVITY` rather than
 // force-failing with the authored message), so a doc using `fail` must refuse to
 // import there. Stamping 5 makes an older build reject it.
-export const CATALOG_VERSION = 5;
+// 6 (#4 A8): the `filter` control activity is a NEW catalog TYPE, same rationale
+// as `if`/`switch`/`fail`: a pre-A8 build does not route `filter` — it treats the
+// node as an uncatalogued type (the executor fails it `UNKNOWN_ACTIVITY` rather
+// than engine-evaluating its predicate into a `result` output), so a doc using
+// `filter` must refuse to import there. Stamping 6 makes an older build reject it.
+export const CATALOG_VERSION = 6;
 export const SCHEMA_VERSION = 1;
