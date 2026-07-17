@@ -251,6 +251,238 @@ describe('fs connector — failure classification', () => {
   });
 });
 
+describe('fs connector — A12 file_copy', () => {
+  it('copies a file within the roots and returns bytesWritten + canonical paths', async () => {
+    await writeFile(join(root, 'src.txt'), 'copy me', 'utf8');
+    const events = await drain(invoke(ctx('file_copy', { source: 'src.txt', dest: 'dst.txt' })));
+    expect(events).toEqual([
+      {
+        type: 'succeeded',
+        outputs: { bytesWritten: 7, source: join(root, 'src.txt'), dest: join(root, 'dst.txt') },
+      },
+    ]);
+    expect(await readFile(join(root, 'dst.txt'), 'utf8')).toBe('copy me');
+    expect(await readFile(join(root, 'src.txt'), 'utf8')).toBe('copy me'); // source untouched
+  });
+
+  it('is binary-safe (chunked copy preserves non-UTF-8 bytes)', async () => {
+    const bytes = Buffer.from([0x00, 0x9f, 0x92, 0x96, 0xff]);
+    await writeFile(join(root, 'bin'), bytes);
+    await drain(invoke(ctx('file_copy', { source: 'bin', dest: 'bin.copy' })));
+    expect(await readFile(join(root, 'bin.copy'))).toEqual(bytes);
+  });
+
+  it('copies a file LARGER than the read byte cap (copy is streamed, uncapped)', async () => {
+    await writeFile(join(root, 'big.txt'), 'x'.repeat(50), 'utf8');
+    const events = await drain(
+      invoke(
+        ctx(
+          'file_copy',
+          { source: 'big.txt', dest: 'big.copy' },
+          { connectionConfig: { roots: [root], maxBytes: 10 } },
+        ),
+      ),
+    );
+    expect(events[0]).toMatchObject({ type: 'succeeded', outputs: { bytesWritten: 50 } });
+    expect(await readFile(join(root, 'big.copy'), 'utf8')).toHaveLength(50);
+  });
+
+  it('overwrites an existing dest atomically, leaving no temp behind', async () => {
+    await writeFile(join(root, 'a.txt'), 'new', 'utf8');
+    await writeFile(join(root, 'b.txt'), 'the old longer content', 'utf8');
+    await drain(invoke(ctx('file_copy', { source: 'a.txt', dest: 'b.txt' })));
+    expect(await readFile(join(root, 'b.txt'), 'utf8')).toBe('new');
+    expect((await readdir(root)).sort()).toEqual(['a.txt', 'b.txt']); // temp renamed away
+  });
+
+  it('refuses a source outside the roots as permanent', async () => {
+    await writeFile(join(outside, 'secret.txt'), 'x', 'utf8');
+    const events = await drain(
+      invoke(ctx('file_copy', { source: join(outside, 'secret.txt'), dest: 'here.txt' })),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect((events[0] as { error: string }).error).toMatch(/outside the allowed roots/);
+  });
+
+  it('refuses a dest outside the roots as permanent', async () => {
+    await writeFile(join(root, 'src.txt'), 'x', 'utf8');
+    const events = await drain(
+      invoke(ctx('file_copy', { source: 'src.txt', dest: join(outside, 'out.txt') })),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect((events[0] as { error: string }).error).toMatch(/outside the allowed roots/);
+  });
+
+  it('does NOT follow a symlink source pointing outside the roots', async () => {
+    await writeFile(join(outside, 'secret.txt'), 'top secret', 'utf8');
+    await symlink(join(outside, 'secret.txt'), join(root, 'link.txt'));
+    const events = await drain(
+      invoke(ctx('file_copy', { source: 'link.txt', dest: 'stolen.txt' })),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    // The secret was never copied in.
+    await expect(readFile(join(root, 'stolen.txt'), 'utf8')).rejects.toThrow();
+  });
+
+  it('a missing source is permanent (ENOENT), leaving no temp behind', async () => {
+    const events = await drain(invoke(ctx('file_copy', { source: 'nope.txt', dest: 'dst.txt' })));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  it('a directory source is permanent (not a regular file)', async () => {
+    await mkdir(join(root, 'adir'));
+    const events = await drain(invoke(ctx('file_copy', { source: 'adir', dest: 'dst.txt' })));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect((events[0] as { error: string }).error).toMatch(/not a regular file/);
+  });
+});
+
+describe('fs connector — A12 file_move', () => {
+  it('moves a file within the roots (source gone, dest created)', async () => {
+    await writeFile(join(root, 'from.txt'), 'move me', 'utf8');
+    const events = await drain(invoke(ctx('file_move', { source: 'from.txt', dest: 'to.txt' })));
+    expect(events).toEqual([
+      {
+        type: 'succeeded',
+        outputs: { source: join(root, 'from.txt'), dest: join(root, 'to.txt') },
+      },
+    ]);
+    expect(await readFile(join(root, 'to.txt'), 'utf8')).toBe('move me');
+    await expect(readFile(join(root, 'from.txt'), 'utf8')).rejects.toThrow(); // source gone
+  });
+
+  it('replaces an existing dest (rename semantics)', async () => {
+    await writeFile(join(root, 'from.txt'), 'new', 'utf8');
+    await writeFile(join(root, 'to.txt'), 'old', 'utf8');
+    await drain(invoke(ctx('file_move', { source: 'from.txt', dest: 'to.txt' })));
+    expect(await readFile(join(root, 'to.txt'), 'utf8')).toBe('new');
+    expect(await readdir(root)).toEqual(['to.txt']);
+  });
+
+  it('refuses a source outside the roots as permanent', async () => {
+    await writeFile(join(outside, 'secret.txt'), 'x', 'utf8');
+    const events = await drain(
+      invoke(ctx('file_move', { source: join(outside, 'secret.txt'), dest: 'here.txt' })),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect((events[0] as { error: string }).error).toMatch(/outside the allowed roots/);
+  });
+
+  it('refuses a dest outside the roots as permanent (no exfiltration)', async () => {
+    await writeFile(join(root, 'from.txt'), 'x', 'utf8');
+    const events = await drain(
+      invoke(ctx('file_move', { source: 'from.txt', dest: join(outside, 'out.txt') })),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(await readFile(join(root, 'from.txt'), 'utf8')).toBe('x'); // source not moved out
+  });
+
+  it('a missing source is permanent (ENOENT)', async () => {
+    const events = await drain(invoke(ctx('file_move', { source: 'nope.txt', dest: 'to.txt' })));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+  });
+});
+
+describe('fs connector — A12 file_delete', () => {
+  it('deletes a file within the roots and returns its canonical path', async () => {
+    await writeFile(join(root, 'gone.txt'), 'x', 'utf8');
+    const events = await drain(invoke(ctx('file_delete', { path: 'gone.txt' })));
+    expect(events).toEqual([{ type: 'succeeded', outputs: { path: join(root, 'gone.txt') } }]);
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  it('deleting a missing file is permanent (ENOENT), not a silent success', async () => {
+    const events = await drain(invoke(ctx('file_delete', { path: 'nope.txt' })));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+  });
+
+  it('deleting a directory is permanent (assert only the kind — errno varies by OS)', async () => {
+    await mkdir(join(root, 'adir'));
+    const events = await drain(invoke(ctx('file_delete', { path: 'adir' })));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(await readdir(root)).toEqual(['adir']); // not removed
+  });
+
+  it('does NOT delete through a target symlink pointing outside the roots', async () => {
+    await writeFile(join(outside, 'victim.txt'), 'original', 'utf8');
+    await symlink(join(outside, 'victim.txt'), join(root, 'link.txt'));
+    const events = await drain(invoke(ctx('file_delete', { path: 'link.txt' })));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    // The out-of-roots file was NOT deleted.
+    expect(await readFile(join(outside, 'victim.txt'), 'utf8')).toBe('original');
+  });
+
+  it('refuses a path outside the roots as permanent', async () => {
+    await writeFile(join(outside, 'secret.txt'), 'x', 'utf8');
+    const events = await drain(invoke(ctx('file_delete', { path: join(outside, 'secret.txt') })));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(await readFile(join(outside, 'secret.txt'), 'utf8')).toBe('x'); // untouched
+  });
+});
+
+describe('fs connector — A12 file_list', () => {
+  it('lists a directory with each entry typed (file/directory/symlink)', async () => {
+    await writeFile(join(root, 'f.txt'), 'x', 'utf8');
+    await mkdir(join(root, 'd'));
+    await symlink(join(root, 'f.txt'), join(root, 'l'));
+    const events = await drain(invoke(ctx('file_list', { path: '.' })));
+    expect(events[0]!.type).toBe('succeeded');
+    const outputs = (events[0] as Extract<ActivityEvent, { type: 'succeeded' }>).outputs as {
+      entries: Array<{ name: string; type: string }>;
+      path: string;
+    };
+    expect(outputs.path).toBe(root);
+    const byName = new Map(outputs.entries.map((e) => [e.name, e.type]));
+    expect(byName.get('f.txt')).toBe('file');
+    expect(byName.get('d')).toBe('directory');
+    expect(byName.get('l')).toBe('symlink'); // a symlink entry is reported, never followed
+    expect(outputs.entries).toHaveLength(3);
+  });
+
+  it('returns an empty entries array for an empty directory', async () => {
+    await mkdir(join(root, 'empty'));
+    const events = await drain(invoke(ctx('file_list', { path: 'empty' })));
+    expect(events[0]).toMatchObject({ type: 'succeeded', outputs: { entries: [] } });
+  });
+
+  it('caps the listing at maxEntries as a permanent failure', async () => {
+    for (const n of ['a', 'b', 'c']) await writeFile(join(root, n), 'x', 'utf8');
+    const events = await drain(
+      invoke(
+        ctx('file_list', { path: '.' }, { connectionConfig: { roots: [root], maxEntries: 2 } }),
+      ),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect((events[0] as { error: string }).error).toMatch(/list limit/);
+  });
+
+  it('listing a non-directory (a file) is permanent (ENOTDIR)', async () => {
+    await writeFile(join(root, 'f.txt'), 'x', 'utf8');
+    const events = await drain(invoke(ctx('file_list', { path: 'f.txt' })));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+  });
+
+  it('listing a missing directory is permanent (ENOENT)', async () => {
+    const events = await drain(invoke(ctx('file_list', { path: 'nope' })));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+  });
+
+  it('does NOT list a directory reached via a target symlink pointing outside', async () => {
+    await mkdir(join(outside, 'sensitive'));
+    await writeFile(join(outside, 'sensitive', 'a.txt'), 'x', 'utf8');
+    await symlink(join(outside, 'sensitive'), join(root, 'linkdir'));
+    const events = await drain(invoke(ctx('file_list', { path: 'linkdir' })));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+  });
+
+  it('refuses a path outside the roots as permanent', async () => {
+    const events = await drain(invoke(ctx('file_list', { path: outside })));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect((events[0] as { error: string }).error).toMatch(/outside the allowed roots/);
+  });
+});
+
 describe('fs connector — testConnection', () => {
   it('ok when every root is an existing directory', async () => {
     expect(await fsAdapter.testConnection({ roots: [root] }, null)).toEqual({ ok: true });

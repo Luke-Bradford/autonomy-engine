@@ -14,6 +14,10 @@ describe('activity catalog', () => {
       'agent_task',
       'execute_pipeline',
       'fail',
+      'file_copy',
+      'file_delete',
+      'file_list',
+      'file_move',
       'file_read',
       'file_write',
       'filter',
@@ -30,18 +34,21 @@ describe('activity catalog', () => {
     expect(getActivity('nope')).toBeUndefined();
   });
 
-  it('every activity is non-idempotent EXCEPT the read-only `file_read` (fail-safe crash-recovery default)', () => {
+  it('the read-only file activities are the ONLY idempotent ones (fail-safe crash-recovery default)', () => {
     // The reconciler FREEZES a non-idempotent in-flight node and RESUMES an
     // idempotent one. Everything that has a side effect (or unknown safety) must
     // stay `false`, so a write/call that regressed to `idempotent:true` would be
-    // silently re-run on resume. `file_read` (#4 A11) is the sole read-only
-    // opt-in — assert it explicitly so a NEW idempotent activity is caught here.
+    // silently re-run on resume. `file_read` (#4 A11) + `file_list` (#4 A12) are
+    // the sole read-only opt-ins — assert exactly them so a NEW idempotent
+    // activity is caught here. (Insertion order: read before list.)
     const idempotent = [...catalog.values()]
       .filter((entry) => entry.idempotent)
       .map((entry) => entry.type);
-    expect(idempotent).toEqual(['file_read']);
-    // file_write MUST stay non-idempotent — a truncate+write is a side effect.
-    expect(getActivity('file_write')!.idempotent).toBe(false);
+    expect(idempotent).toEqual(['file_read', 'file_list']);
+    // file_write/copy/move/delete MUST stay non-idempotent — each is a side effect.
+    for (const type of ['file_write', 'file_copy', 'file_move', 'file_delete']) {
+      expect(getActivity(type)!.idempotent).toBe(false);
+    }
   });
 
   it('http_request needs an http connection and declares its outputs', () => {
@@ -100,6 +107,38 @@ describe('activity catalog', () => {
     expect(read.configSchema.safeParse({}).success).toBe(false);
     expect(write.configSchema.safeParse({ path: 'out.txt', content: '' }).success).toBe(true);
     expect(write.configSchema.safeParse({ path: 'out.txt' }).success).toBe(false);
+  });
+
+  it('file_copy/move/delete/list are execution activities on the `fs` connector (#4 A12)', () => {
+    const copy = getActivity('file_copy')!;
+    const move = getActivity('file_move')!;
+    const del = getActivity('file_delete')!;
+    const list = getActivity('file_list')!;
+    for (const entry of [copy, move, del, list]) {
+      expect(entry.kind).toBe('execution');
+      expect(entry.category).toBe('general');
+      expect(entry.connectionKinds).toEqual(['fs']);
+      // `fs` is credential-less — no secret sink on any file activity.
+      expect(entry.secretSinkFields).toBeUndefined();
+    }
+    // Only the read-only list is safe to resume; the three mutating ops freeze.
+    expect(list.idempotent).toBe(true);
+    for (const entry of [copy, move, del]) expect(entry.idempotent).toBe(false);
+    // Outputs.
+    expect(copy.outputs.map((o) => o.name).sort()).toEqual(['bytesWritten', 'dest', 'source']);
+    expect(move.outputs.map((o) => o.name).sort()).toEqual(['dest', 'source']);
+    expect(del.outputs.map((o) => o.name)).toEqual(['path']);
+    expect(list.outputs.map((o) => o.name).sort()).toEqual(['entries', 'path']);
+    // `entries` is a json-typed output (an array of {name,type} objects).
+    expect(list.outputs.find((o) => o.name === 'entries')!.type).toBe('json');
+    // configSchema (palette metadata): copy/move need source+dest; delete/list a path.
+    expect(copy.configSchema.safeParse({ source: 'a.txt', dest: 'b.txt' }).success).toBe(true);
+    expect(copy.configSchema.safeParse({ source: 'a.txt' }).success).toBe(false);
+    expect(move.configSchema.safeParse({ source: 'a.txt', dest: 'b.txt' }).success).toBe(true);
+    expect(del.configSchema.safeParse({ path: 'a.txt' }).success).toBe(true);
+    expect(del.configSchema.safeParse({}).success).toBe(false);
+    expect(list.configSchema.safeParse({ path: 'sub' }).success).toBe(true);
+    expect(list.configSchema.safeParse({ path: '' }).success).toBe(false);
   });
 });
 

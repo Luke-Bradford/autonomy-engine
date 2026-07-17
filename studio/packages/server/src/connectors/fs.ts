@@ -1,8 +1,15 @@
-import { constants as fsConstants } from 'node:fs';
-import { lstat, open, realpath, rename, stat, unlink } from 'node:fs/promises';
+import { constants as fsConstants, type Dirent } from 'node:fs';
+import { lstat, open, opendir, realpath, rename, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { z } from 'zod';
-import { FILE_READ_ACTIVITY_TYPE, FILE_WRITE_ACTIVITY_TYPE } from '@autonomy-studio/shared';
+import {
+  FILE_COPY_ACTIVITY_TYPE,
+  FILE_DELETE_ACTIVITY_TYPE,
+  FILE_LIST_ACTIVITY_TYPE,
+  FILE_MOVE_ACTIVITY_TYPE,
+  FILE_READ_ACTIVITY_TYPE,
+  FILE_WRITE_ACTIVITY_TYPE,
+} from '@autonomy-studio/shared';
 import type {
   ActivityContext,
   ActivityEvent,
@@ -11,12 +18,15 @@ import type {
 } from './types.js';
 
 /**
- * The `fs` connector adapter (#4 A11) — the FIRST non-http/LLM connector, and the
- * first to serve MORE THAN ONE activity type through ONE adapter: `file_read` and
- * `file_write` both bind an `fs` connection, so `runActivity` selects the
- * operation from `ctx.activityType`. It is CREDENTIAL-LESS — the `secret` /
- * `secretFields` arguments are always empty (the catalog declares no
- * `secretSinkFields`, and an `fs` connection carries no `secretRef`).
+ * The `fs` connector adapter (#4 A11 + A12) — the FIRST non-http/LLM connector,
+ * and the first to serve MORE THAN ONE activity type through ONE adapter: all six
+ * file activities (`file_read`/`file_write` from A11, `file_copy`/`file_move`/
+ * `file_delete`/`file_list` from A12) bind an `fs` connection, so `runActivity`
+ * selects the operation from `ctx.activityType`. It is CREDENTIAL-LESS — the
+ * `secret` / `secretFields` arguments are always empty (the catalog declares no
+ * `secretSinkFields`, and an `fs` connection carries no `secretRef`). EVERY
+ * pipeline-supplied path (`path`/`source`/`dest`) runs through the same
+ * server-side `resolveWithinRoots` guard below before any I/O touches it.
  *
  * SECURITY MODEL (the ticket's core). Two trust tiers:
  *  - The connection `config.roots` is ADMIN-authored (server-side, never
@@ -64,6 +74,14 @@ import type {
 const DEFAULT_MAX_READ_BYTES = 10 * 1024 * 1024; // 10 MiB
 
 /**
+ * Default `file_list` entry cap — bounds a pathological directory (millions of
+ * entries) from producing an unbounded `entries` output / OOM-ing a worker. The
+ * adapter iterates lazily via `opendir` and STOPS at the cap (a `permanent`
+ * failure), so it never materialises more than this many dirents.
+ */
+const DEFAULT_MAX_LIST_ENTRIES = 10_000;
+
+/**
  * `O_NOFOLLOW` refuses to open a symlink at the final path component (→ `ELOOP`).
  * Defined on the target platforms (macOS + Linux); `?? 0` degrades to a harmless
  * no-op on any platform that lacks it rather than producing `NaN` flags.
@@ -96,11 +114,17 @@ const fsConnectionConfigSchema = z.object({
     .min(1, 'an fs connection needs at least one allowed root'),
   /** Per-read size cap in bytes. Defaults to 10 MiB. */
   maxBytes: z.number().int().positive().optional(),
+  /** Per-`file_list` entry cap. Defaults to 10000. */
+  maxEntries: z.number().int().positive().optional(),
 });
 
 /** The per-activity settings, read from the node's prepared (substituted) `input`. */
 const fileReadInputSchema = z.object({ path: z.string().min(1) });
 const fileWriteInputSchema = z.object({ path: z.string().min(1), content: z.string() });
+const fileCopyInputSchema = z.object({ source: z.string().min(1), dest: z.string().min(1) });
+const fileMoveInputSchema = z.object({ source: z.string().min(1), dest: z.string().min(1) });
+const fileDeleteInputSchema = z.object({ path: z.string().min(1) });
+const fileListInputSchema = z.object({ path: z.string().min(1) });
 
 /** Build a terminal `failed` event. */
 function failed(kind: ConnectorErrorKind, error: string): ActivityEvent {
@@ -208,19 +232,62 @@ async function closeQuietly(fh: Awaited<ReturnType<typeof open>> | undefined): P
   }
 }
 
+/** The confined canonical path, or the terminal `failed` event to yield instead. */
+type Resolved = { ok: true; path: string } | { ok: false; event: ActivityEvent };
+
+/**
+ * Confine ONE pipeline-supplied path to the roots, mapping both a policy denial
+ * (outside-roots / symlink → `permanent`) and a genuine fs error (`realpath`
+ * throwing on a missing parent → errno-classified) to a terminal `failed` event.
+ * The SSOT every file activity resolves through, so the guard has one call shape.
+ */
+async function resolveOrFail(
+  cfg: z.infer<typeof fsConnectionConfigSchema>,
+  requested: string,
+  signal: AbortSignal,
+): Promise<Resolved> {
+  try {
+    const resolved = await resolveWithinRoots(cfg.roots, requested);
+    if (!resolved.ok) return { ok: false, event: failed('permanent', resolved.error) };
+    return { ok: true, path: resolved.path };
+  } catch (err) {
+    return { ok: false, event: failFromError(err, signal) };
+  }
+}
+
+/** Confine BOTH ends of a two-path op (`file_copy`/`file_move`), short-circuiting on the first denial. */
+async function resolveSourceDest(
+  cfg: z.infer<typeof fsConnectionConfigSchema>,
+  source: string,
+  dest: string,
+  signal: AbortSignal,
+): Promise<{ ok: true; source: string; dest: string } | { ok: false; event: ActivityEvent }> {
+  const s = await resolveOrFail(cfg, source, signal);
+  if (!s.ok) return s;
+  const d = await resolveOrFail(cfg, dest, signal);
+  if (!d.ok) return d;
+  return { ok: true, source: s.path, dest: d.path };
+}
+
+/**
+ * A per-dispatch temp-file suffix (filename-safe), unique per (run,node,attempt)
+ * so two DIFFERENT runs dispatching the same node/attempt id concurrently against
+ * the same fs root cannot collide on a temp name (which `O_EXCL` would otherwise
+ * turn into a spurious failure). `runId` is globally unique per run, so
+ * `runId.nodeId.attemptId` is unique per write. Shared by `file_write`+`file_copy`.
+ */
+function makeTmpSuffix(ctx: ActivityContext): string {
+  return `${ctx.runId}.${ctx.nodeId}.${ctx.attemptId}`.replace(/[^\w.-]/g, '_');
+}
+
 async function doRead(
   cfg: z.infer<typeof fsConnectionConfigSchema>,
   requested: string,
   signal: AbortSignal,
 ): Promise<ActivityEvent> {
-  let finalPath: string;
-  try {
-    const resolved = await resolveWithinRoots(cfg.roots, requested);
-    if (!resolved.ok) return failed('permanent', resolved.error);
-    finalPath = resolved.path;
-  } catch (err) {
-    return failFromError(err, signal);
-  }
+  const r = await resolveOrFail(cfg, requested, signal);
+  if (!r.ok) return r.event;
+  const finalPath = r.path;
 
   const maxBytes = cfg.maxBytes ?? DEFAULT_MAX_READ_BYTES;
   let fh: Awaited<ReturnType<typeof open>> | undefined;
@@ -242,27 +309,26 @@ async function doRead(
   }
 }
 
-async function doWrite(
-  cfg: z.infer<typeof fsConnectionConfigSchema>,
-  input: z.infer<typeof fileWriteInputSchema>,
-  signal: AbortSignal,
+/**
+ * Crash-safe atomic replace, shared by `file_write` (writes a string) and
+ * `file_copy` (streams a source file): create a FRESH sibling temp, hand it to
+ * `writeInto`, `fsync` it, close it, then atomically `rename` it over
+ * `finalPath`. A crash/cancel before the rename leaves the target fully OLD,
+ * never torn; the temp is unlinked on every non-renamed exit. The temp lives in
+ * the SAME canonical, already-contained parent dir, so the rename is a
+ * same-filesystem atomic op (no EXDEV) and never crosses the root boundary.
+ * `tmpSuffix` is unique per dispatch attempt; `O_EXCL` refuses to reuse a stale
+ * temp, and `O_NOFOLLOW` keeps the temp create symlink-safe.
+ *
+ * Returns `undefined` on success (the caller builds the `succeeded` event with
+ * its own outputs), or a terminal `failed` event mapping the error.
+ */
+async function atomicReplace(
+  finalPath: string,
   tmpSuffix: string,
-): Promise<ActivityEvent> {
-  let finalPath: string;
-  try {
-    const resolved = await resolveWithinRoots(cfg.roots, input.path);
-    if (!resolved.ok) return failed('permanent', resolved.error);
-    finalPath = resolved.path;
-  } catch (err) {
-    return failFromError(err, signal);
-  }
-
-  // Write to a sibling temp file, then atomically `rename` it over the target —
-  // so a crash/cancel mid-write never leaves a half-written (torn) file. The temp
-  // lives in the SAME canonical, already-contained parent dir, so the rename is a
-  // same-filesystem atomic op (no EXDEV) and never crosses the root boundary.
-  // `tmpSuffix` is unique per dispatch attempt; `O_EXCL` refuses to reuse a stale
-  // temp, and `O_NOFOLLOW` keeps the temp create symlink-safe.
+  signal: AbortSignal,
+  writeInto: (fh: Awaited<ReturnType<typeof open>>) => Promise<void>,
+): Promise<ActivityEvent | undefined> {
   const tmpPath = `${finalPath}.tmp.${tmpSuffix}`;
   let fh: Awaited<ReturnType<typeof open>> | undefined;
   let renamed = false;
@@ -272,7 +338,7 @@ async function doWrite(
       fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | O_NOFOLLOW,
       0o644,
     );
-    await fh.writeFile(input.content, { encoding: 'utf8', signal });
+    await writeInto(fh);
     // `fsync` the temp BEFORE the rename so the bytes are durable on disk first —
     // otherwise a power-loss crash right after the rename could expose the new
     // dir entry pointing at unflushed (zero-length) data on a filesystem without
@@ -291,10 +357,7 @@ async function doWrite(
     fh = undefined;
     await rename(tmpPath, finalPath);
     renamed = true;
-    return {
-      type: 'succeeded',
-      outputs: { bytesWritten: Buffer.byteLength(input.content, 'utf8'), path: finalPath },
-    };
+    return undefined;
   } catch (err) {
     return failFromError(err, signal);
   } finally {
@@ -307,6 +370,181 @@ async function doWrite(
       } catch {
         // Nothing to clean up (temp never created) or already gone — ignore.
       }
+    }
+  }
+}
+
+async function doWrite(
+  cfg: z.infer<typeof fsConnectionConfigSchema>,
+  input: z.infer<typeof fileWriteInputSchema>,
+  signal: AbortSignal,
+  tmpSuffix: string,
+): Promise<ActivityEvent> {
+  const r = await resolveOrFail(cfg, input.path, signal);
+  if (!r.ok) return r.event;
+  const finalPath = r.path;
+
+  const failure = await atomicReplace(finalPath, tmpSuffix, signal, async (fh) => {
+    await fh.writeFile(input.content, { encoding: 'utf8', signal });
+  });
+  if (failure) return failure;
+  return {
+    type: 'succeeded',
+    outputs: { bytesWritten: Buffer.byteLength(input.content, 'utf8'), path: finalPath },
+  };
+}
+
+/** Classify a directory entry by its raw type (a symlink is REPORTED, not followed). */
+function direntType(d: Dirent): 'file' | 'directory' | 'symlink' | 'other' {
+  if (d.isFile()) return 'file';
+  if (d.isDirectory()) return 'directory';
+  if (d.isSymbolicLink()) return 'symlink';
+  return 'other';
+}
+
+async function doCopy(
+  cfg: z.infer<typeof fsConnectionConfigSchema>,
+  input: z.infer<typeof fileCopyInputSchema>,
+  signal: AbortSignal,
+  tmpSuffix: string,
+): Promise<ActivityEvent> {
+  const resolved = await resolveSourceDest(cfg, input.source, input.dest, signal);
+  if (!resolved.ok) return resolved.event;
+  const { source: sourcePath, dest: destPath } = resolved;
+
+  // Open the source with `O_NOFOLLOW` (closing the lstat→open symlink TOCTOU
+  // where supported) and STREAM it in fixed-size chunks into the atomic temp —
+  // so a copy is memory-bounded (no `maxBytes` cap, unlike `file_read`) and
+  // never loads a large file whole. `bytesWritten` is the actual copied length.
+  let src: Awaited<ReturnType<typeof open>> | undefined;
+  let bytesWritten = 0;
+  try {
+    src = await open(sourcePath, fsConstants.O_RDONLY | O_NOFOLLOW);
+    const st = await src.stat();
+    if (!st.isFile()) return failed('permanent', `source '${sourcePath}' is not a regular file`);
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    const failure = await atomicReplace(destPath, tmpSuffix, signal, async (dst) => {
+      for (;;) {
+        if (signal.aborted) throw new Error('file copy aborted');
+        const { bytesRead } = await src!.read(buffer, 0, buffer.length, null);
+        if (bytesRead === 0) break;
+        // A single `write` may be short (a full/slow FS), so loop until the whole
+        // chunk lands — never silently drop the tail or over-count `bytesWritten`.
+        let off = 0;
+        while (off < bytesRead) {
+          const { bytesWritten: w } = await dst.write(buffer, off, bytesRead - off);
+          off += w;
+        }
+        bytesWritten += bytesRead;
+      }
+    });
+    if (failure) return failure;
+    return { type: 'succeeded', outputs: { bytesWritten, source: sourcePath, dest: destPath } };
+  } catch (err) {
+    return failFromError(err, signal);
+  } finally {
+    await closeQuietly(src);
+  }
+}
+
+async function doMove(
+  cfg: z.infer<typeof fsConnectionConfigSchema>,
+  input: z.infer<typeof fileMoveInputSchema>,
+  signal: AbortSignal,
+): Promise<ActivityEvent> {
+  const resolved = await resolveSourceDest(cfg, input.source, input.dest, signal);
+  if (!resolved.ok) return resolved.event;
+  const { source: sourcePath, dest: destPath } = resolved;
+
+  // `rename` is atomic and symlink-safe at BOTH ends (it operates on the NAME,
+  // never following a link) and — unlike copy — needs no temp. Both ends are
+  // root-confined, so no `isFile()` check is needed: a move MAY relocate a whole
+  // directory (rename handles that in one op), the deliberate asymmetry with
+  // `file_copy` (which is file-only — it has no recursive-copy). It is
+  // same-filesystem only: a cross-mount move throws `EXDEV`, which stays
+  // `permanent` (the operator composes `file_copy` + `file_delete` for that).
+  try {
+    await rename(sourcePath, destPath);
+    return { type: 'succeeded', outputs: { source: sourcePath, dest: destPath } };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EXDEV') {
+      return failed(
+        'permanent',
+        `cannot move '${sourcePath}' to '${destPath}' across filesystems (EXDEV); ` +
+          `use file_copy + file_delete instead`,
+      );
+    }
+    return failFromError(err, signal);
+  }
+}
+
+async function doDelete(
+  cfg: z.infer<typeof fsConnectionConfigSchema>,
+  requested: string,
+  signal: AbortSignal,
+): Promise<ActivityEvent> {
+  const r = await resolveOrFail(cfg, requested, signal);
+  if (!r.ok) return r.event;
+  const finalPath = r.path;
+
+  // `unlink` a single regular file. A missing target (`ENOENT`) is `permanent`,
+  // NOT a benign success — the pipeline expected the file, and surfacing its
+  // absence is safer than a silent no-op. A directory target fails naturally
+  // (`EISDIR`/`EPERM`, platform-dependent, both `permanent`). The target-symlink
+  // guard already refused a symlink AT the path, so we never unlink through one.
+  try {
+    await unlink(finalPath);
+    return { type: 'succeeded', outputs: { path: finalPath } };
+  } catch (err) {
+    return failFromError(err, signal);
+  }
+}
+
+async function doList(
+  cfg: z.infer<typeof fsConnectionConfigSchema>,
+  requested: string,
+  signal: AbortSignal,
+): Promise<ActivityEvent> {
+  const r = await resolveOrFail(cfg, requested, signal);
+  if (!r.ok) return r.event;
+  const finalPath = r.path;
+
+  // NB: `opendir` has no `O_NOFOLLOW` equivalent, so — unlike read/write/copy,
+  // which close the lstat→open symlink TOCTOU with `O_NOFOLLOW` — the target-
+  // symlink guard here is `resolveWithinRoots`'s `lstat` ALONE. That residual
+  // (a concurrent swap of the final component to a symlink between the lstat and
+  // the `opendir`) is OUTSIDE the threat model: the pipeline supplies a path
+  // STRING, not a concurrent writer with write access to the admin-owned roots.
+  //
+  // Iterate lazily via `opendir` (never materialising more than `maxEntries`
+  // dirents) and STOP at the cap with a `permanent` failure, so a pathological
+  // directory cannot produce an unbounded output. Each entry is reported by its
+  // raw dirent type — a symlink entry is listed as `symlink`, never followed.
+  const maxEntries = cfg.maxEntries ?? DEFAULT_MAX_LIST_ENTRIES;
+  const entries: Array<{ name: string; type: ReturnType<typeof direntType> }> = [];
+  let dir: Awaited<ReturnType<typeof opendir>> | undefined;
+  try {
+    dir = await opendir(finalPath);
+    for (;;) {
+      if (signal.aborted) return failed('cancelled', 'file activity aborted');
+      const dirent = await dir.read();
+      if (dirent === null) break;
+      if (entries.length >= maxEntries) {
+        return failed('permanent', `directory has more than the ${maxEntries}-entry list limit`);
+      }
+      entries.push({ name: dirent.name, type: direntType(dirent) });
+    }
+    return { type: 'succeeded', outputs: { entries, path: finalPath } };
+  } catch (err) {
+    return failFromError(err, signal);
+  } finally {
+    // Manual `read()` loop (not `for await`), so close the handle ourselves on
+    // EVERY exit — success, cap-hit `return`, abort, or throw. A close after an
+    // already-consumed dir is swallowed.
+    try {
+      await dir?.close();
+    } catch {
+      // Already closed / never opened — ignore (never mask the terminal event).
     }
   }
 }
@@ -365,13 +603,48 @@ export const fsAdapter: ConnectorAdapter = {
         yield failed('permanent', `invalid file_write activity config: ${input.error.message}`);
         return;
       }
-      // A per-dispatch temp suffix (sanitised to filename-safe chars) — includes
-      // `runId` so two DIFFERENT runs dispatching the same node/attempt id
-      // concurrently against the same fs root cannot collide on the temp name
-      // (which `O_EXCL` would otherwise turn into a spurious failure). `runId` is
-      // globally unique per run, so `runId.nodeId.attemptId` is unique per write.
-      const tmpSuffix = `${ctx.runId}.${ctx.nodeId}.${ctx.attemptId}`.replace(/[^\w.-]/g, '_');
-      yield await doWrite(cfg.data, input.data, ctx.signal, tmpSuffix);
+      yield await doWrite(cfg.data, input.data, ctx.signal, makeTmpSuffix(ctx));
+      return;
+    }
+
+    if (ctx.activityType === FILE_COPY_ACTIVITY_TYPE) {
+      const input = fileCopyInputSchema.safeParse(ctx.input);
+      if (!input.success) {
+        yield failed('permanent', `invalid file_copy activity config: ${input.error.message}`);
+        return;
+      }
+      // Same atomic temp+rename as file_write (copy writes to a `dest`-sibling temp).
+      yield await doCopy(cfg.data, input.data, ctx.signal, makeTmpSuffix(ctx));
+      return;
+    }
+
+    if (ctx.activityType === FILE_MOVE_ACTIVITY_TYPE) {
+      const input = fileMoveInputSchema.safeParse(ctx.input);
+      if (!input.success) {
+        yield failed('permanent', `invalid file_move activity config: ${input.error.message}`);
+        return;
+      }
+      yield await doMove(cfg.data, input.data, ctx.signal);
+      return;
+    }
+
+    if (ctx.activityType === FILE_DELETE_ACTIVITY_TYPE) {
+      const input = fileDeleteInputSchema.safeParse(ctx.input);
+      if (!input.success) {
+        yield failed('permanent', `invalid file_delete activity config: ${input.error.message}`);
+        return;
+      }
+      yield await doDelete(cfg.data, input.data.path, ctx.signal);
+      return;
+    }
+
+    if (ctx.activityType === FILE_LIST_ACTIVITY_TYPE) {
+      const input = fileListInputSchema.safeParse(ctx.input);
+      if (!input.success) {
+        yield failed('permanent', `invalid file_list activity config: ${input.error.message}`);
+        return;
+      }
+      yield await doList(cfg.data, input.data.path, ctx.signal);
       return;
     }
 
