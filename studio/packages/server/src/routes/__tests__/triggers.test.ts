@@ -520,6 +520,44 @@ describe('triggers routes', () => {
       expect(res.statusCode).toBe(400);
     });
 
+    it('PATCH rejects adding a recurrence to a non-schedule (manual) trigger (400, effective mode)', async () => {
+      // The consistency guard is REUSED on PATCH against the EFFECTIVE mode — a
+      // manual trigger patched with only a recurrence (mode untouched) is refused.
+      const create = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: { ...triggerBody(pipelineVersionId), mode: 'manual', schedule: null },
+      });
+      const id = create.json().id;
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${id}`,
+        payload: { recurrence: { frequency: 'day' } },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('PATCH rejects a raw cron schedule on an existing recurrence trigger (400, effective recurrence)', async () => {
+      // Existing recurrence trigger; a PATCH that adds a raw cron `schedule`
+      // (recurrence untouched, still live) is refused — `schedule` is derived.
+      const create = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          ...triggerBody(pipelineVersionId),
+          schedule: null,
+          recurrence: { frequency: 'day', schedule: { hours: [9] } },
+        },
+      });
+      const id = create.json().id;
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${id}`,
+        payload: { schedule: '0 0 * * *' },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
     it('rejects an unsupported interval > 1 (#550) with a helpful message', async () => {
       const res = await app.inject({
         method: 'POST',

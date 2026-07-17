@@ -27,22 +27,28 @@ function deriveSchedule(recurrence: Recurrence | null, rawSchedule: string | nul
 
 /**
  * The effective stored `schedule` for an UPDATE, given the effective recurrence
- * and the patch. Mirrors `deriveSchedule` but honours PATCH semantics for the
- * raw-cron half: `schedule` has no default, so an OMITTED `patch.schedule` is
- * `undefined` (keep existing) while an explicit `null` clears it.
- *   - recurrence in effect        → derived cron (authoritative).
- *   - recurrence CLEARED this write → drop the stale derived cron; follow the
+ * and the patch. Honours PATCH semantics for the raw-cron half: `schedule` has no
+ * default, so an OMITTED `patch.schedule` is `undefined` (keep existing) while an
+ * explicit `null` clears it. Split on whether THIS patch touches `recurrence`:
+ *   - recurrence UNTOUCHED (`patch.recurrence === undefined`): the derived cron is
+ *     already correct on `existing` — do NOT recompute it; only the raw-cron half
+ *     can change, and only for a trigger with no recurrence (the route rejects a
+ *     raw `schedule` alongside a live recurrence).
+ *   - recurrence SET/CHANGED → (re)derive the cron from it.
+ *   - recurrence CLEARED (`null`) → drop the stale derived cron; follow the
  *     patch's raw `schedule` (or null) — never the old derived string.
- *   - recurrence untouched & null   → the normal raw-cron path.
  */
 function resolveUpdateSchedule(
   existing: Trigger,
   patch: Partial<NewTrigger>,
   recurrence: Recurrence | null,
 ): string | null {
+  if (patch.recurrence === undefined) {
+    if (existing.recurrence !== null) return existing.schedule;
+    return patch.schedule !== undefined ? patch.schedule : existing.schedule;
+  }
   if (recurrence !== null) return recurrenceToCron(recurrence);
-  if (patch.recurrence === null) return patch.schedule ?? null;
-  return patch.schedule !== undefined ? patch.schedule : existing.schedule;
+  return patch.schedule ?? null;
 }
 
 export function createTrigger(db: Db, input: NewTrigger): Trigger {
@@ -121,15 +127,18 @@ export function updateTrigger(db: Db, id: string, patch: Partial<NewTrigger>): T
   const existing = getTrigger(db, id);
   if (!existing) return null;
   // The write field's 3-state on `patch.recurrence`: `undefined` = untouched
-  // (keep existing), `null` = cleared this write, object = set. Normalize through
-  // `RecurrenceSchema` (idempotent) so the type carries the defaulted `interval`
-  // — `Partial<NewTrigger>` is the `z.input` shape (interval optional), but
-  // `recurrenceToCron` needs the resolved `Recurrence`.
-  const recurrenceRaw = patch.recurrence !== undefined ? patch.recurrence : existing.recurrence;
+  // (keep the already-parsed existing value), `null` = cleared, object = set.
+  // A newly-SET recurrence is normalized through `RecurrenceSchema` (idempotent)
+  // so the type carries the defaulted `interval` — `Partial<NewTrigger>` is the
+  // `z.input` shape (interval optional), but `recurrenceToCron` needs the
+  // resolved `Recurrence`. An untouched recurrence is already resolved (it came
+  // from `getTrigger` → `TriggerSchema`), so it needs no reparse.
   const recurrence: Recurrence | null =
-    recurrenceRaw === null || recurrenceRaw === undefined
-      ? null
-      : RecurrenceSchema.parse(recurrenceRaw);
+    patch.recurrence === undefined
+      ? existing.recurrence
+      : patch.recurrence === null
+        ? null
+        : RecurrenceSchema.parse(patch.recurrence);
   const updated = TriggerSchema.parse({
     ...existing,
     ...patch,
