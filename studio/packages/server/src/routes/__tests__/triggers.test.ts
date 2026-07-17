@@ -558,6 +558,21 @@ describe('triggers routes', () => {
       expect(res.statusCode).toBe(400);
     });
 
+    it('PATCH rejects supplying BOTH a new recurrence AND a raw cron in one request (400)', async () => {
+      const create = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: { ...triggerBody(pipelineVersionId), schedule: '0 2 * * *' },
+      });
+      const id = create.json().id;
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${id}`,
+        payload: { schedule: '0 0 * * *', recurrence: { frequency: 'day' } },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
     it('rejects an unsupported interval > 1 (#550) with a helpful message', async () => {
       const res = await app.inject({
         method: 'POST',

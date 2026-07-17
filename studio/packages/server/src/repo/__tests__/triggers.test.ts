@@ -186,6 +186,22 @@ describe('triggers repo', () => {
       expect(cleared!.schedule).toBeNull();
     });
 
+    it('refuses a write-invalid recurrence on update at the REPO boundary (not just the route)', () => {
+      // The repo is "the single write-path authority": a caller bypassing the
+      // HTTP route (an admin script / later refactor) must still be refused a
+      // wrong-compiling recurrence (here: a `week` with no `weekDays`, which
+      // would otherwise derive `dow:'*'` = daily) — validated by
+      // `RecurrenceWriteSchema`, not the lenient read schema.
+      const { db } = freshDb();
+      const version = setupPipelineVersion(db);
+      const created = createTrigger(db, buildTriggerInput(version.id));
+      expect(() =>
+        updateTrigger(db, created.id, {
+          recurrence: { frequency: 'week' } as never,
+        }),
+      ).toThrow();
+    });
+
     it('leaves recurrence + derived schedule untouched on an unrelated patch', () => {
       const { db } = freshDb();
       const version = setupPipelineVersion(db);

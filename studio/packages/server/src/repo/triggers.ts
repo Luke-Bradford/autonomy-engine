@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import {
   NewTriggerSchema,
-  RecurrenceSchema,
+  RecurrenceWriteSchema,
   TriggerSchema,
   recurrenceToCron,
   type NewTrigger,
@@ -128,17 +128,22 @@ export function updateTrigger(db: Db, id: string, patch: Partial<NewTrigger>): T
   if (!existing) return null;
   // The write field's 3-state on `patch.recurrence`: `undefined` = untouched
   // (keep the already-parsed existing value), `null` = cleared, object = set.
-  // A newly-SET recurrence is normalized through `RecurrenceSchema` (idempotent)
-  // so the type carries the defaulted `interval` — `Partial<NewTrigger>` is the
-  // `z.input` shape (interval optional), but `recurrenceToCron` needs the
-  // resolved `Recurrence`. An untouched recurrence is already resolved (it came
-  // from `getTrigger` → `TriggerSchema`), so it needs no reparse.
+  // A newly-SET recurrence is validated through `RecurrenceWriteSchema` — the
+  // WRITE schema, NOT the lenient read one — so the repo INDEPENDENTLY enforces
+  // the write-boundary invariants (interval=1, honoured/required schedule
+  // fields), making it a true single write-path authority: a caller bypassing
+  // the HTTP route (an admin script, a later refactor) is refused a
+  // wrong-compiling recurrence (e.g. a `week` with no `weekDays` → daily) rather
+  // than silently deriving a bad cron. It also normalizes the `z.input` shape
+  // (interval optional) to the resolved `Recurrence` `recurrenceToCron` needs.
+  // An untouched recurrence is already resolved+valid on `existing` (from
+  // `getTrigger` → `TriggerSchema`), so it needs no reparse.
   const recurrence: Recurrence | null =
     patch.recurrence === undefined
       ? existing.recurrence
       : patch.recurrence === null
         ? null
-        : RecurrenceSchema.parse(patch.recurrence);
+        : RecurrenceWriteSchema.parse(patch.recurrence);
   const updated = TriggerSchema.parse({
     ...existing,
     ...patch,
