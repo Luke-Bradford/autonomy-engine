@@ -51,6 +51,24 @@ describe('lowerNodeOutputs', () => {
     expect(lowered).toBe(n);
   });
 
+  it('leaves a CATALOGUED execute_pipeline call node absent (child projection, not the catalog template)', () => {
+    // #4 A9 — `execute_pipeline` IS now catalogued (with `outputs:[]`), so the
+    // uncatalogued escape hatch above no longer protects a call node. Lowering
+    // MUST still skip it: seeding `outputs:[]` would flip the node's contract from
+    // `absent` (stores ALL child outputs) to `declared []` (stores NONE), silently
+    // dropping every child output. The skip keys off `node.call`, not the type.
+    const n: Node = {
+      id: 'c',
+      type: 'execute_pipeline',
+      config: {},
+      position: { x: 0, y: 0 },
+      call: { pipelineVersionId: 'pv_1', params: {} },
+    };
+    const [lowered] = lowerNodeOutputs([n]);
+    expect(lowered!.config['outputs']).toBeUndefined();
+    expect(lowered).toBe(n);
+  });
+
   it('deep-copies the catalog outputs so the shared registry cannot be mutated via the doc', () => {
     const [lowered] = lowerNodeOutputs([node('a', 'http_request')]);
     const seeded = lowered!.config['outputs'] as Array<{ name: string; type: string }>;

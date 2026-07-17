@@ -1,6 +1,7 @@
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import {
   getActivity,
+  isStructuralCallActivity,
   type EdgeOn,
   type Edge,
   type Node,
@@ -106,6 +107,11 @@ export function createCanvasStore(): StoreApi<CanvasState> {
     addNode(type) {
       const entry = getActivity(type);
       if (!entry) return; // unknown catalog type — ignore rather than author garbage
+      // A structural-call activity (`execute_pipeline`) stores its settings in
+      // `node.call`, not `node.config`, so this generic config-form path would
+      // author a call-less, un-saveable node. Refuse it (the palette also hides its
+      // button); call-node authoring is #425.
+      if (isStructuralCallActivity(type)) return;
       const n = get().addCount;
       const node: Node = {
         id: newLocalId('n'),

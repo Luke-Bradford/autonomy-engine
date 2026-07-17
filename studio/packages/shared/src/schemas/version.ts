@@ -38,5 +38,15 @@
 // treats the node as an uncatalogued type (the executor fails it `UNKNOWN_ACTIVITY`
 // rather than parking it on a durable timer), so a doc using `wait` must refuse to
 // import there. Stamping 7 makes an older build reject it.
+// (no bump for #4 A9): `execute_pipeline` is a new catalogued TYPE, yet it is the
+// EXCEPTION to the "a new TYPE bumps" rule the five above obey. Those route BY
+// TYPE, so a pre-X build lacks the branch and mis-runs them (`UNKNOWN_ACTIVITY` /
+// inert branches). `execute_pipeline` instead SURFACES the pre-existing structural
+// `call_pipeline` (P2c): the reducer routes a call node by the presence of
+// `Node.call`, NEVER by the type string, and that routing predates every catalogued
+// control type — so an older build (lacking the entry) still routes an
+// `{type:'execute_pipeline', call}` node IDENTICALLY. No export carries an artifact
+// an older build mis-runs (the bump rule's load-bearing test, catalog/types.ts), so
+// bumping would only make an older build wrongly REFUSE a doc it can run. Stays 7.
 export const CATALOG_VERSION = 7;
 export const SCHEMA_VERSION = 1;

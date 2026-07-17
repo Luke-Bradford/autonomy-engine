@@ -112,6 +112,25 @@ export const FILTER_ACTIVITY_TYPE = 'filter';
 export const WAIT_ACTIVITY_TYPE = 'wait';
 
 /**
+ * The `Node.type` of the `execute_pipeline` control activity (#4 A9). UNLIKE
+ * every other catalogued type, `execute_pipeline` is NOT a new mechanism — it
+ * SURFACES the pre-existing structural `call_pipeline` (P2c): the reducer routes
+ * a call node by the presence of `Node.call` (`reduce.ts`), never by this type
+ * string, so an older build (which lacks this catalog entry) still routes an
+ * `{type:'execute_pipeline', call}` node IDENTICALLY. That is why cataloguing it
+ * does NOT bump `CATALOG_VERSION` (see `schemas/version.ts`) — it is the sole
+ * exception to the "a new TYPE bumps" rule the other control types obey.
+ *
+ * A first-class TYPE gains it: a catalog entry (palette metadata + the
+ * executor's `CONTROL_NOT_DISPATCHABLE` guard for a mis-authored call-less node)
+ * and a save-time rule (`validateDoc`: an `execute_pipeline` MUST carry a
+ * `Node.call`). Its settings live in `Node.call`, NOT `Node.config` — the
+ * `isStructuralCallActivity` exception the generic palette/inspector excludes
+ * (call-node authoring is #425).
+ */
+export const EXECUTE_PIPELINE_ACTIVITY_TYPE = 'execute_pipeline';
+
+/**
  * P3 — the ACTIVITY CATALOG entry: the static, pure metadata for one activity
  * `type` (the `type` on a pipeline `Node`). Lives in `shared` (no I/O) so the
  * SAME entry drives:

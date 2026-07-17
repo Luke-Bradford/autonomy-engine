@@ -91,6 +91,18 @@ describe('canvasStore', () => {
     expect(s.getState().dirty).toBe(false);
   });
 
+  it('addNode refuses a structural-call type (execute_pipeline) — config rides node.call, #425', () => {
+    // `execute_pipeline`'s settings live in `node.call`, not `node.config`, so the
+    // generic config-form path here would author a call-less, un-saveable node.
+    // Call-node authoring is #425; until then the store refuses it, like an unknown
+    // type — and the palette hides its button (see PipelineCanvas).
+    const s = createCanvasStore();
+    s.getState().loadVersion(null);
+    s.getState().addNode('execute_pipeline');
+    expect(s.getState().nodes).toHaveLength(0);
+    expect(s.getState().dirty).toBe(false);
+  });
+
   it('moveNode updates only the targeted node; an unknown id is a no-op', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(version());

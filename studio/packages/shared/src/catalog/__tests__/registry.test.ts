@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { catalog, getActivity } from '../registry.js';
+import { catalog, getActivity, isStructuralCallActivity } from '../registry.js';
+import { EXECUTE_PIPELINE_ACTIVITY_TYPE } from '../types.js';
 
 describe('activity catalog', () => {
   it('exposes the MVP activity types', () => {
     // `if` (#4 A1) is the first CONTROL activity, `switch` (#4 A2) the second,
     // `fail` (#4 A7) the third, `filter` (#4 A8) the fourth, `wait` (#4 A5+A6) the
     // fifth (and first DURABLE control activity) — all engine-evaluated, catalogued
-    // so the palette/executor-guard/version know them.
+    // so the palette/executor-guard/version know them. `execute_pipeline` (#4 A9)
+    // surfaces the pre-existing structural `Node.call` mechanism as a first-class
+    // catalog TYPE (its config rides `node.call`, not `node.config`).
     expect([...catalog.keys()].sort()).toEqual([
       'agent_task',
+      'execute_pipeline',
       'fail',
       'filter',
       'http_request',
@@ -105,6 +109,36 @@ describe('activity definition contract (#1 D6)', () => {
     // Missing / empty message is refused by the palette schema.
     expect(fail.configSchema.safeParse({}).success).toBe(false);
     expect(fail.configSchema.safeParse({ message: '' }).success).toBe(false);
+  });
+
+  it('execute_pipeline is a control activity typing the Node.call blob for the palette (#4 A9)', () => {
+    const ep = getActivity(EXECUTE_PIPELINE_ACTIVITY_TYPE)!;
+    expect(ep.kind).toBe('control');
+    expect(ep.category).toBe('control');
+    // A call node binds NO connection (it spawns a child run, never a connector)
+    // and its outputs come from the CHILD projection, never a catalog template —
+    // so it seeds no `outputs` (see `lowerNodeOutputs`, which skips call nodes).
+    expect(ep.connectionKinds).toEqual([]);
+    expect(ep.outputs).toEqual([]);
+    expect(ep.idempotent).toBe(false);
+    // configSchema mirrors the `CallConfigSchema` (`node.call`) — it types the CALL
+    // blob, not `node.config` (the structural-call exception). A valid call parses;
+    // a missing `pipelineVersionId` is refused.
+    expect(ep.configSchema.safeParse({ pipelineVersionId: 'v1', params: {} }).success).toBe(true);
+    expect(ep.configSchema.safeParse({ params: {} }).success).toBe(false);
+  });
+
+  it('execute_pipeline is the only structural-call activity (config rides node.call, #4 A9/#425)', () => {
+    // The palette/inspector author `node.config`; a structural-call activity's
+    // settings live in `node.call`, so the generic palette excludes it (call-node
+    // authoring is #425). Asserted across the full catalog so a future entry that
+    // silently becomes a structural-call type is caught here.
+    const structural = [...catalog.values()]
+      .map((e) => e.type)
+      .filter((t) => isStructuralCallActivity(t));
+    expect(structural).toEqual([EXECUTE_PIPELINE_ACTIVITY_TYPE]);
+    expect(isStructuralCallActivity('if')).toBe(false);
+    expect(isStructuralCallActivity('http_request')).toBe(false);
   });
 
   it('categorises the MVP set per spec #4 (agent_task is an AI activity, not its own class)', () => {
