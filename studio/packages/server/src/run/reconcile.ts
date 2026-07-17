@@ -275,6 +275,17 @@ function dispatchedNodes(state: RunState): { id: string; attemptId: string }[] {
 }
 
 /**
+ * A run parked on a wait (#4 A6): at least one node is `wait_pending`. Deliberately
+ * NOT the reducer's `awaitsExternalEvent`, which is a SUPERSET (it also matches
+ * `ready`/`dispatched`/`waiting`/`retry_pending`) — the caller must match
+ * `wait_pending` EXCLUSIVELY, so a run with a still-live `ready` node is resumed
+ * normally rather than misreported `held`.
+ */
+function hasWaitPendingNode(state: RunState): boolean {
+  return Object.values(state.nodes).some((n) => n.status === 'wait_pending');
+}
+
+/**
  * F2c/B2 — decide what a HELD run's alarm row actually says, and act on it.
  *
  * The premise this exists to kill: §A.5 originally said a held run needs nothing
@@ -659,7 +670,7 @@ async function reconcileOne(deps: ReconcileDeps, report: ReconcileReport, run: R
   // and stop, leaving its row untouched. Reached only when the wait is the ONLY
   // live work: a run with a parked wait AND a ready sibling has `commands`, resumes
   // normally, and its wait alarm fires independently.
-  if (commands.length === 0 && Object.values(next.nodes).some((n) => n.status === 'wait_pending')) {
+  if (commands.length === 0 && hasWaitPendingNode(next)) {
     report.held.push(run.id);
     return;
   }
