@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { secrets } from '../../db/schema.js';
+import { connections, pipelines, secrets } from '../../db/schema.js';
+import { listConnectionsPage } from '../connections.js';
 import { decodeCursor, encodeCursor, toPage } from '../pagination.js';
+import { listPipelinesPage } from '../pipelines.js';
 import { listNamedSecretsPage } from '../secrets.js';
 import { freshDb } from './helpers.js';
 
@@ -51,6 +53,101 @@ describe('toPage', () => {
   it('handles an empty result (empty items, null cursor)', () => {
     const page = toPage([], 10);
     expect(page.items).toEqual([]);
+    expect(page.nextCursor).toBeNull();
+  });
+});
+
+describe('owner scope holds under a cross-owner cursor replay (the #534 security claim)', () => {
+  // The cursor is an owner-AGNOSTIC position `(created_at, id)` — it carries no
+  // identity. The owner scope comes solely from the `ownerId` ARGUMENT the
+  // route stamps from `request.principal` (never the client). So a cursor
+  // minted while listing owner A's rows, replayed against owner B's list, must
+  // still return ONLY B's rows: the keyset only shifts WHERE in B's ordered set
+  // the page resumes, never widens it to A's rows.
+  //
+  // Each case interleaves the two owners' `created_at` values (A: 1000, 3000;
+  // B: 2000, 4000) and mints the cursor from A's EARLIEST row (1000). If the
+  // owner filter were ever dropped, A's later row (3000) would surface BETWEEN
+  // B's two rows — so its absence is a positive proof the filter is applied on
+  // every page, not just the first.
+
+  it('secrets: A-minted cursor replayed under B yields only B rows', () => {
+    const { db } = freshDb();
+    const rows = [
+      { owner: 'alice', id: 'sec_a1', createdAt: 1000 },
+      { owner: 'bob', id: 'sec_b2', createdAt: 2000 },
+      { owner: 'alice', id: 'sec_a3', createdAt: 3000 },
+      { owner: 'bob', id: 'sec_b4', createdAt: 4000 },
+    ].map((r) => ({
+      id: r.id,
+      ref: `ref-${r.id}`,
+      ciphertext: `blob-${r.id}`,
+      ownerId: r.owner,
+      name: `n-${r.id}`,
+      createdAt: r.createdAt,
+    }));
+    db.insert(secrets).values(rows).run();
+
+    const aCursor = decodeCursor(encodeCursor({ createdAt: 1000, id: 'sec_a1' }));
+    expect(aCursor).not.toBeNull();
+    const page = listNamedSecretsPage(db, 'bob', { limit: 10, cursor: aCursor ?? undefined });
+
+    expect(page.items.map((r) => r.id)).toEqual(['sec_b2', 'sec_b4']);
+    // Alice's row that sorts BETWEEN bob's rows never leaks in.
+    expect(page.items.some((r) => r.ownerId === 'alice')).toBe(false);
+    expect(page.nextCursor).toBeNull();
+  });
+
+  it('connections: A-minted cursor replayed under B yields only B rows', () => {
+    const { db } = freshDb();
+    const rows = [
+      { owner: 'alice', id: 'conn_a1', createdAt: 1000 },
+      { owner: 'bob', id: 'conn_b2', createdAt: 2000 },
+      { owner: 'alice', id: 'conn_a3', createdAt: 3000 },
+      { owner: 'bob', id: 'conn_b4', createdAt: 4000 },
+    ].map((r) => ({
+      id: r.id,
+      ownerId: r.owner,
+      name: `n-${r.id}`,
+      kind: 'http' as const,
+      config: {},
+      secretRef: null,
+      createdAt: r.createdAt,
+      updatedAt: r.createdAt,
+    }));
+    db.insert(connections).values(rows).run();
+
+    const aCursor = decodeCursor(encodeCursor({ createdAt: 1000, id: 'conn_a1' }));
+    expect(aCursor).not.toBeNull();
+    const page = listConnectionsPage(db, 'bob', { limit: 10, cursor: aCursor ?? undefined });
+
+    expect(page.items.map((r) => r.id)).toEqual(['conn_b2', 'conn_b4']);
+    expect(page.items.some((r) => r.ownerId === 'alice')).toBe(false);
+    expect(page.nextCursor).toBeNull();
+  });
+
+  it('pipelines: A-minted cursor replayed under B yields only B rows', () => {
+    const { db } = freshDb();
+    const rows = [
+      { owner: 'alice', id: 'pipe_a1', createdAt: 1000 },
+      { owner: 'bob', id: 'pipe_b2', createdAt: 2000 },
+      { owner: 'alice', id: 'pipe_a3', createdAt: 3000 },
+      { owner: 'bob', id: 'pipe_b4', createdAt: 4000 },
+    ].map((r) => ({
+      id: r.id,
+      ownerId: r.owner,
+      name: `n-${r.id}`,
+      createdAt: r.createdAt,
+      updatedAt: r.createdAt,
+    }));
+    db.insert(pipelines).values(rows).run();
+
+    const aCursor = decodeCursor(encodeCursor({ createdAt: 1000, id: 'pipe_a1' }));
+    expect(aCursor).not.toBeNull();
+    const page = listPipelinesPage(db, 'bob', { limit: 10, cursor: aCursor ?? undefined });
+
+    expect(page.items.map((r) => r.id)).toEqual(['pipe_b2', 'pipe_b4']);
+    expect(page.items.some((r) => r.ownerId === 'alice')).toBe(false);
     expect(page.nextCursor).toBeNull();
   });
 });

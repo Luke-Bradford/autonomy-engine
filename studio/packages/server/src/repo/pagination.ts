@@ -32,8 +32,11 @@ const CURSOR_VERSION = 1;
 
 const CursorPayloadSchema = z.object({
   v: z.literal(CURSOR_VERSION),
-  c: z.number(),
-  i: z.string(),
+  // `created_at` is a non-negative epoch-millis integer; a fractional or
+  // negative `c` is a malformed cursor, rejected here (→ 400) rather than
+  // round-tripped into the keyset predicate — the "closed, validated shape".
+  c: z.number().int().nonnegative(),
+  i: z.string().min(1),
 });
 
 /** Opaque, URL-safe (`base64url`) handle naming the last row of a page. The
