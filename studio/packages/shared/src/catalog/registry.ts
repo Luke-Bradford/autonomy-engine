@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { Output } from '../schemas/pipeline.js';
 import { SecretRefSchema } from '../schemas/secret-ref.js';
 import type { ActivityCatalog, ActivityCatalogEntry } from './types.js';
-import { IF_ACTIVITY_TYPE } from './types.js';
+import { IF_ACTIVITY_TYPE, SWITCH_ACTIVITY_TYPE } from './types.js';
 import { llmCallConfigSchema } from './llm-config.js';
 
 /**
@@ -118,6 +118,26 @@ const ENTRIES: ActivityCatalogEntry[] = [
     connectionKinds: [],
     outputs: [],
     configSchema: z.object({ condition: z.string().min(1) }),
+  },
+  {
+    // #4 A2 — the `switch` CONTROL activity. Same engine-evaluated shape as `if`
+    // (`kind:'control'`, no connector, `CONTROL_NOT_DISPATCHABLE` on dispatch, no
+    // `outputs` — it produces a branch, not data): the reducer routes it
+    // STRUCTURALLY by `type`. It matches the `${}` `on` value against declared
+    // `cases` labels → the matching case's branch, or the implicit `default`.
+    // `configSchema` is palette metadata (not the save-time validator, per the
+    // A1 rebuttal — `validateDoc`'s `validateSwitchConfig` is the real gate);
+    // `cases` carries no `.min(1)` here for the same reason. Cataloguing the TYPE
+    // bumped `CATALOG_VERSION` 3→4 so an older build refuses a switch-doc it
+    // cannot route rather than silently stranding its branch edges.
+    type: SWITCH_ACTIVITY_TYPE,
+    title: 'Switch',
+    kind: 'control',
+    category: 'control',
+    idempotent: false,
+    connectionKinds: [],
+    outputs: [],
+    configSchema: z.object({ on: z.string().min(1), cases: z.array(z.string()) }),
   },
 ];
 

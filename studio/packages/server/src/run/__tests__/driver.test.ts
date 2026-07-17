@@ -7,6 +7,7 @@ import {
   type EngineEvent,
   type Node,
   type NewPipelineVersion,
+  type Param,
 } from '@autonomy-studio/shared';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion } from '../../repo/pipeline-versions.js';
@@ -53,12 +54,16 @@ function ifNode(id: string, condition: string): Node {
 function branchEdge(from: string, to: string, branch: string): Edge {
   return { id: `${from}->${to}:${branch}`, from, to, on: 'branch', branch };
 }
+// #4 A2 — a real `switch` control node (catalogued kind:control) + its case arms.
+function switchNode(id: string, on: string, cases: string[]): Node {
+  return node(id, { type: 'switch', config: { on, cases } });
+}
 
-function seedVersion(db: Db, nodes: Node[], edges: Edge[] = []): string {
+function seedVersion(db: Db, nodes: Node[], edges: Edge[] = [], params: Param[] = []): string {
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
   const input: NewPipelineVersion = {
     pipelineId: pipeline.id,
-    params: [],
+    params,
     outputs: [],
     nodes,
     edges,
@@ -174,6 +179,72 @@ describe('driver — if control activity routes through the REAL pump (#4 A1)', 
     expect(replayed).toEqual(driven);
     expect(replayed.branches['c']).toBe('false');
     expect(replayed.nodes.b!.status).toBe('success');
+    expect(replayed.nodes.a!.status).toBe('skipped');
+  });
+});
+
+describe('driver — switch control activity routes through the REAL pump (#4 A2)', () => {
+  it('emits switch.evaluated (never dispatches the switch), routes the matched case, skips the rest', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [switchNode('s', 'tier-${params.n}', ['tier-1', 'tier-2']), node('a'), node('b'), node('d')],
+      [
+        branchEdge('s', 'a', 'tier-1'),
+        branchEdge('s', 'b', 'tier-2'),
+        branchEdge('s', 'd', 'default'),
+      ],
+      [{ name: 'n', type: 'number', required: true }],
+    );
+    const run = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params: { n: 1 },
+    });
+
+    const state = await startRun(deps(db), run);
+
+    expect(state.status).toBe('success');
+    expect(state.branches['s']).toBe('tier-1');
+    expect(state.nodes.s!.status).toBe('success');
+    expect(state.nodes.a!.status).toBe('success');
+    expect(state.nodes.b!.status).toBe('skipped');
+    expect(state.nodes.d!.status).toBe('skipped');
+
+    const log = loadEngineEvents(db, run.id);
+    // The pump's driver-own `evaluateControl` branch appended the durable event
+    // NAMED BY the command (`switch.evaluated`, not `condition.evaluated`) — the
+    // real driver.ts `command.event` path, not just the shared harness.
+    expect(types(log)).toContain('switch.evaluated');
+    expect(types(log)).not.toContain('condition.evaluated');
+    // The switch is engine-evaluated: it must NEVER reach the executor as a dispatch.
+    expect(log.some((e) => e.type === 'node.dispatched' && e.nodeId === 's')).toBe(false);
+  });
+
+  it('the persisted switch-run log replays to the identical state (event-sourcing invariant)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(
+      db,
+      [switchNode('s', '${params.tier}', ['gold']), node('a'), node('d')],
+      [branchEdge('s', 'a', 'gold'), branchEdge('s', 'd', 'default')],
+      [{ name: 'tier', type: 'string', required: true }],
+    );
+    const run = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params: { tier: 'bronze' },
+    });
+
+    const driven = await startRun(deps(db), run);
+    const engine = buildEngine(getPipelineVersion(db, pvId)!);
+    const replayed = engine.projectRunState(loadEngineEvents(db, run.id));
+    expect(replayed).toEqual(driven);
+    expect(replayed.branches['s']).toBe('default');
+    expect(replayed.nodes.d!.status).toBe('success');
     expect(replayed.nodes.a!.status).toBe('skipped');
   });
 });

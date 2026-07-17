@@ -246,6 +246,7 @@ describe('if crash recovery re-emits evaluateControl (#4 A1)', () => {
       nodeId: 'c',
       attemptId: 'c#0',
       branch: 'true',
+      event: 'condition.evaluated',
     });
   });
 });

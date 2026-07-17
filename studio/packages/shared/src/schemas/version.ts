@@ -19,5 +19,9 @@
 // Stamping 3 makes an older build reject it, the rule catalog/types.ts states for
 // adding a type. (Adding metadata FIELDS to existing entries does not bump; adding
 // a runnable TYPE does.)
-export const CATALOG_VERSION = 3;
+// 4 (#4 A2): the `switch` control activity is a NEW catalog TYPE, same rationale
+// as `if` (3): a pre-A2 build does not route `switch`, treats its named-case
+// branch edges as inert, and SILENTLY strands everything downstream — so a doc
+// using `switch` must refuse to import there.
+export const CATALOG_VERSION = 4;
 export const SCHEMA_VERSION = 1;
