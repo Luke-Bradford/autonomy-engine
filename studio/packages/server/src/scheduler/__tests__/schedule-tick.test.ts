@@ -5,6 +5,7 @@ import {
   SubstituteError,
   type NewPipelineVersion,
   type Node,
+  type Recurrence,
   type RunWindow,
   type Trigger,
   type TriggerMode,
@@ -29,9 +30,12 @@ import { makeStubExecutor } from '../../run/__tests__/stub-executor.js';
 import { stubAlarms } from '../../run/__tests__/stub-alarms.js';
 import { createAlarmClock } from '../alarms.js';
 import {
+  buildScheduleTickRef,
   createScheduleTickHandler,
+  isRefFresh,
   SCHEDULE_TICK_KIND,
   type ScheduleTickLauncher,
+  type ScheduleTickRef,
 } from '../schedule-tick.js';
 import { silentLog } from './testLog.js';
 
@@ -75,6 +79,7 @@ function seedTrigger(
     schedule?: string | null;
     enabled?: boolean;
     runWindows?: RunWindow[] | null;
+    recurrence?: Recurrence | null;
   },
 ): Trigger {
   return createTrigger(db, {
@@ -83,7 +88,10 @@ function seedTrigger(
     pipelineVersionId: opts.pipelineVersionId,
     params: {},
     mode: opts.mode ?? 'schedule',
+    // When a recurrence is given, `createTrigger` DERIVES `schedule` from it (the
+    // raw `schedule` here is ignored) — so bounds tests author via `recurrence`.
     schedule: opts.schedule === undefined ? '* * * * *' : opts.schedule,
+    recurrence: opts.recurrence ?? null,
     webhook: null,
     concurrency: { policy: 'skip_if_running' },
     runWindows: opts.runWindows ?? null,
@@ -116,11 +124,12 @@ function harness(db: Db, now: () => number, launcher: ScheduleTickLauncher = fak
   return { clock, launcher, handler };
 }
 
-/** Arm a schedule_tick for `trigger` due at `dueAt`, as sync()/a prior tick would. */
+/** Arm a schedule_tick for `trigger` due at `dueAt`, as sync()/a prior tick would.
+ * Uses the SINGLE ref constructor so a bounded trigger's row carries its bounds. */
 function armTick(db: Db, trigger: Trigger, dueAt: number) {
   return armWakeup(db, {
     kind: SCHEDULE_TICK_KIND,
-    ref: { triggerId: trigger.id, schedule: trigger.schedule as string },
+    ref: buildScheduleTickRef(trigger),
     dueAt,
     discriminator: `tick-${dueAt}`,
   });
@@ -199,13 +208,23 @@ describe('schedule_tick handler — freshness suppressions', () => {
    * REASON — which the clock only debug-logs — is assertable. `next` reports the
    * rows the handler ARMED, excluding the row under test.
    */
-  function fireDirect(db: Db, trigger: Trigger, opts: { now?: number; refSchedule?: string } = {}) {
+  function fireDirect(
+    db: Db,
+    trigger: Trigger,
+    opts: { now?: number; refSchedule?: string; ref?: ScheduleTickRef } = {},
+  ) {
     const launcher = fakeLauncher();
     const handler = createScheduleTickHandler({ launcher, log: silentLog() });
     const now = opts.now ?? NOON;
+    // Default ref = the one the trigger would arm NOW; `ref`/`refSchedule` let a
+    // test pin a STALE armed ref (schedule or bounds) to exercise freshness.
+    const ref: ScheduleTickRef = opts.ref ?? {
+      ...buildScheduleTickRef(trigger),
+      ...(opts.refSchedule !== undefined ? { schedule: opts.refSchedule } : {}),
+    };
     const row = armWakeup(db, {
       kind: SCHEDULE_TICK_KIND,
-      ref: { triggerId: trigger.id, schedule: opts.refSchedule ?? (trigger.schedule as string) },
+      ref,
       dueAt: now,
       discriminator: `tick-${now}`,
     });
@@ -269,7 +288,7 @@ describe('schedule_tick handler — freshness suppressions', () => {
     }
   });
 
-  it('schedule edited since arm → suppressed schedule_changed, NO re-arm (sync reseeds)', () => {
+  it('schedule edited since arm → suppressed ref_stale, NO re-arm (sync reseeds)', () => {
     const { db } = freshDb();
     const pv = seedVersion(db);
     const trigger = seedTrigger(db, { pipelineVersionId: pv, schedule: '* * * * *' });
@@ -277,7 +296,38 @@ describe('schedule_tick handler — freshness suppressions', () => {
     updateTrigger(db, trigger.id, { schedule: '0 9 * * *' });
     const edited = { ...trigger, schedule: '0 9 * * *' };
     const { result, launcher, next } = fireDirect(db, edited, { refSchedule: '* * * * *' });
-    expect(result).toMatchObject({ status: 'suppressed', reason: 'schedule_changed' });
+    expect(result).toMatchObject({ status: 'suppressed', reason: 'ref_stale' });
+    expect(launcher.fires).toHaveLength(0);
+    expect(next).toHaveLength(0);
+  });
+
+  // #5 S5b-2 (#549) — a bounds-only edit leaves the compiled cron IDENTICAL, so
+  // the old schedule-string compare would have missed it and fired the row under
+  // the STALE window. The full-ref freshness check catches it.
+  it('bounds edited since arm (cron unchanged) → suppressed ref_stale, NO re-arm', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    // Daily-9 recurrence, no bounds → schedule '0 9 * * *'.
+    const trigger = seedTrigger(db, {
+      pipelineVersionId: pv,
+      recurrence: { frequency: 'day', interval: 1, schedule: { hours: [9] } },
+    });
+    // Add an endTime; the derived cron is still '0 9 * * *' (bounds are not cron).
+    const edited = updateTrigger(db, trigger.id, {
+      recurrence: {
+        frequency: 'day',
+        interval: 1,
+        schedule: { hours: [9] },
+        endTime: '2027-01-01T00:00:00Z',
+      },
+    });
+    if (!edited) throw new Error('update failed');
+    expect(edited.schedule).toBe(trigger.schedule); // cron genuinely unchanged
+    // Row still carries the pre-edit (bounds-free) ref.
+    const { result, launcher, next } = fireDirect(db, edited, {
+      ref: buildScheduleTickRef(trigger),
+    });
+    expect(result).toMatchObject({ status: 'suppressed', reason: 'ref_stale' });
     expect(launcher.fires).toHaveLength(0);
     expect(next).toHaveLength(0);
   });
@@ -312,6 +362,88 @@ describe('schedule_tick handler — freshness suppressions', () => {
     expect(result).toMatchObject({ status: 'suppressed', reason: 'invalid_schedule' });
     expect(launcher.fires).toHaveLength(0);
     expect(next).toHaveLength(0);
+  });
+});
+
+describe('schedule_tick — ref construction + bounded re-arm (#5 S5b-2, #549)', () => {
+  it('buildScheduleTickRef OMITS absent bounds — byte-identical to a pre-S5b-2 ref', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    // A raw-cron trigger (no recurrence) and a bounds-free recurrence both produce
+    // a two-key ref, so a row armed before S5b-2 still reads as fresh on deploy.
+    const raw = seedTrigger(db, { pipelineVersionId: pv, schedule: '0 9 * * *' });
+    expect(buildScheduleTickRef(raw)).toEqual({ triggerId: raw.id, schedule: '0 9 * * *' });
+    expect(Object.keys(buildScheduleTickRef(raw)).sort()).toEqual(['schedule', 'triggerId']);
+
+    const bounded = seedTrigger(db, {
+      pipelineVersionId: pv,
+      recurrence: {
+        frequency: 'day',
+        interval: 1,
+        schedule: { hours: [9] },
+        startTime: '2026-08-01T00:00:00Z',
+        endTime: '2026-08-31T00:00:00Z',
+      },
+    });
+    expect(buildScheduleTickRef(bounded)).toEqual({
+      triggerId: bounded.id,
+      schedule: '0 9 * * *',
+      startTime: '2026-08-01T00:00:00Z',
+      endTime: '2026-08-31T00:00:00Z',
+    });
+    // isRefFresh: same trigger fresh; a bounds change makes the old ref stale.
+    expect(isRefFresh(bounded, buildScheduleTickRef(bounded))).toBe(true);
+    expect(isRefFresh(bounded, buildScheduleTickRef(raw))).toBe(false);
+  });
+
+  it('a fresh bounded trigger fires and re-arms the NEXT in-window occurrence', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    // Daily-9, window [Aug 1, Aug 4). Deliver the Aug 1 09:00 occurrence.
+    const trigger = seedTrigger(db, {
+      pipelineVersionId: pv,
+      recurrence: {
+        frequency: 'day',
+        interval: 1,
+        schedule: { hours: [9] },
+        startTime: '2026-08-01T00:00:00Z',
+        endTime: '2026-08-04T00:00:00Z',
+      },
+    });
+    const aug1 = Date.parse('2026-08-01T09:00:00Z');
+    const row = armTick(db, trigger, aug1);
+    const launcher = fakeLauncher();
+    const handler = createScheduleTickHandler({ launcher, log: silentLog() });
+    const result = handler.fire(row, { scheduledFor: aug1, firedAt: aug1, latenessMs: 0 }, db);
+    expect(result.status).toBe('fired');
+    // Next armed = Aug 2 09:00 (still < endTime).
+    const armed = pendingTicks(db).filter((w) => w.id !== row.id);
+    expect(armed).toHaveLength(1);
+    expect(armed[0]?.dueAt).toBe(Date.parse('2026-08-02T09:00:00Z'));
+  });
+
+  it('the last occurrence before endTime ends the chain (no re-arm past the window)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const trigger = seedTrigger(db, {
+      pipelineVersionId: pv,
+      recurrence: {
+        frequency: 'day',
+        interval: 1,
+        schedule: { hours: [9] },
+        endTime: '2026-08-04T00:00:00Z',
+      },
+    });
+    // Deliver Aug 3 09:00 (the last slot before the Aug 4 endTime).
+    const aug3 = Date.parse('2026-08-03T09:00:00Z');
+    const row = armTick(db, trigger, aug3);
+    const launcher = fakeLauncher();
+    const handler = createScheduleTickHandler({ launcher, log: silentLog() });
+    const result = handler.fire(row, { scheduledFor: aug3, firedAt: aug3, latenessMs: 0 }, db);
+    expect(result.status).toBe('fired');
+    // nextOccurrence(Aug 3 09:00, stopAt=Aug 4) → Aug 4 is past the window's last
+    // slot → null → chain ends, nothing re-armed.
+    expect(pendingTicks(db).filter((w) => w.id !== row.id)).toHaveLength(0);
   });
 });
 

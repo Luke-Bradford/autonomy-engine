@@ -152,6 +152,55 @@ describe('triggers repo', () => {
       expect(getTrigger(db, created.id)).toEqual(created);
     });
 
+    it('persists + round-trips recurrence bounds (#549 S5b-2), cron stays bound-free', () => {
+      const { db } = freshDb();
+      const version = setupPipelineVersion(db);
+      const created = createTrigger(db, {
+        ...buildTriggerInput(version.id),
+        schedule: null,
+        recurrence: {
+          frequency: 'day',
+          schedule: { hours: [9] },
+          startTime: '2026-08-01T00:00:00Z',
+          endTime: '2026-08-31T00:00:00Z',
+        },
+      });
+      // Bounds are NOT cron-expressible, so the derived cron is bound-free.
+      expect(created.schedule).toBe('0 9 * * *');
+      expect(created.recurrence).toEqual({
+        frequency: 'day',
+        interval: 1,
+        schedule: { hours: [9] },
+        startTime: '2026-08-01T00:00:00Z',
+        endTime: '2026-08-31T00:00:00Z',
+      });
+      // Read-back proves the bounds survive the schema⇔JSON-column seam (the #473
+      // silent-drop shape — a column that ignored the new keys would fail HERE).
+      expect(getTrigger(db, created.id)).toEqual(created);
+    });
+
+    it('refuses an inverted window (endTime <= startTime) at the REPO boundary (#549)', () => {
+      const { db } = freshDb();
+      const version = setupPipelineVersion(db);
+      // The repo re-validates via RecurrenceWriteSchema on UPDATE, so a caller
+      // bypassing the route cannot persist an empty window.
+      const created = createTrigger(db, {
+        ...buildTriggerInput(version.id),
+        schedule: null,
+        recurrence: { frequency: 'day', schedule: { hours: [9] } },
+      });
+      expect(() =>
+        updateTrigger(db, created.id, {
+          recurrence: {
+            frequency: 'day',
+            schedule: { hours: [9] },
+            startTime: '2026-08-31T00:00:00Z',
+            endTime: '2026-08-01T00:00:00Z',
+          } as never,
+        }),
+      ).toThrow();
+    });
+
     it('re-derives the schedule when the recurrence is updated', () => {
       const { db } = freshDb();
       const version = setupPipelineVersion(db);

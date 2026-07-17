@@ -22,11 +22,14 @@ import { z } from 'zod';
  *   the series' meaning.
  *   The common "every N minutes/hours" cases are authored via explicit `schedule`
  *   enumeration (`minutes: [0,15,30,45]`) or the raw-cron escape hatch.
- * - **No `startTime`/`endTime`/`timeZone` bounds yet** (#549, S5b-2). Shipping those
- *   FIELDS here without firing-chain enforcement would be inert "unreachable
- *   surface" — a field must land with its consumer (the S1 spec block's rule).
- *   v1 is UTC (the run-window UTC contract) and open-ended, exactly as the raw
- *   cron path already is.
+ * - **`startTime`/`endTime` bounds land in S5b-2** (#549): a half-open window
+ *   `[startTime, endTime)`, threaded to croner (`startAt`/`stopAt`) by the firing
+ *   chain (`nextOccurrence`) so the bounds actually gate firing rather than being
+ *   inert surface. `timeZone` is STILL deferred (#549 follow-up): v1 fires in UTC
+ *   (the run-window UTC contract), so a `timeZone` field that only accepted `'UTC'`
+ *   would be behaviourally identical to omitting it — the same inert "unreachable
+ *   surface" anti-pattern; it lands with non-UTC firing, not before.
+ *   All datetimes are UTC-with-`Z` (`z.string().datetime()` refuses offsets/naive).
  */
 
 export const RecurrenceFrequencySchema = z.enum(['minute', 'hour', 'day', 'week', 'month']);
@@ -61,6 +64,19 @@ export const RecurrenceSchema = z.object({
   frequency: RecurrenceFrequencySchema,
   interval: z.number().int().positive().default(1),
   schedule: RecurrenceScheduleSchema.optional(),
+  /**
+   * #5 S5b-2 (#549) — the recurrence's firing window `[startTime, endTime)` (both
+   * optional/open-ended). UTC-with-`Z` only (`z.string().datetime()` refuses
+   * offsets + naive strings), matching the run-window UTC contract. Enforced at
+   * FIRE time by the firing chain (croner `startAt`/`stopAt` via
+   * `nextOccurrence`), never by the compiled cron (bounds are not cron-expressible).
+   * `startTime` is INCLUSIVE, `endTime` EXCLUSIVE — a standard half-open interval
+   * (see `nextOccurrence`'s contract for the croner-boundary compensation).
+   * Format-validated on the lenient READ shape too (like the 0–59 range checks
+   * above); the cross-field `endTime > startTime` rule is a WRITE concern below.
+   */
+  startTime: z.string().datetime().optional(),
+  endTime: z.string().datetime().optional(),
 });
 export type Recurrence = z.infer<typeof RecurrenceSchema>;
 
@@ -132,6 +148,21 @@ export const RecurrenceWriteSchema = RecurrenceSchema.superRefine((r, ctx) => {
         r.frequency === 'week' ? 'day(s) of the week' : 'day(s) of the month'
       } to fire on`,
     });
+  }
+
+  // #5 S5b-2 (#549) — the window must be non-empty. Half-open `[start, end)`, so
+  // `end <= start` is empty (nothing ever fires); refuse it at write rather than
+  // silently persisting a schedule that can never fire. A lone bound is fine (the
+  // other side stays open). Both fields are already format-validated by
+  // `z.string().datetime()`, so `Date.parse` is total here.
+  if (r.startTime !== undefined && r.endTime !== undefined) {
+    if (Date.parse(r.endTime) <= Date.parse(r.startTime)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['endTime'],
+        message: 'endTime must be after startTime — the recurrence window is empty otherwise',
+      });
+    }
   }
 });
 

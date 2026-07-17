@@ -586,5 +586,74 @@ describe('triggers routes', () => {
       expect(res.statusCode).toBe(400);
       expect(JSON.stringify(res.json())).toContain('#550');
     });
+
+    // #5 S5b-2 (#549) — bounds authoring.
+    it('creates a bounded recurrence: bounds round-trip and the seeded tick carries them', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          ...triggerBody(pipelineVersionId),
+          schedule: null,
+          recurrence: {
+            frequency: 'day',
+            schedule: { hours: [9] },
+            startTime: '2026-08-01T00:00:00Z',
+            endTime: '2026-08-31T00:00:00Z',
+          },
+        },
+      });
+      expect(res.statusCode).toBe(201);
+      const created = res.json();
+      expect(created.schedule).toBe('0 9 * * *');
+      expect(created.recurrence).toEqual({
+        frequency: 'day',
+        interval: 1,
+        schedule: { hours: [9] },
+        startTime: '2026-08-01T00:00:00Z',
+        endTime: '2026-08-31T00:00:00Z',
+      });
+      // The seeded tick carries the bounds in its ref (so a later bounds edit is
+      // detectable) and is armed for the first in-window slot (Aug 1 09:00).
+      const ticks = scheduleTicksFor(app, created.id);
+      expect(ticks).toHaveLength(1);
+      expect(ticks[0]!.ref).toMatchObject({
+        schedule: '0 9 * * *',
+        startTime: '2026-08-01T00:00:00Z',
+        endTime: '2026-08-31T00:00:00Z',
+      });
+      expect(ticks[0]!.dueAt).toBe(Date.parse('2026-08-01T09:00:00.000Z'));
+    });
+
+    it('rejects an inverted/empty window (endTime <= startTime) with 400 (#549)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          ...triggerBody(pipelineVersionId),
+          schedule: null,
+          recurrence: {
+            frequency: 'day',
+            startTime: '2026-08-31T00:00:00Z',
+            endTime: '2026-08-01T00:00:00Z',
+          },
+        },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.stringify(res.json())).toContain('endTime');
+    });
+
+    it('rejects a non-UTC (offset) bound datetime with 400 (#549)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          ...triggerBody(pipelineVersionId),
+          schedule: null,
+          recurrence: { frequency: 'day', startTime: '2026-08-01T00:00:00+02:00' },
+        },
+      });
+      expect(res.statusCode).toBe(400);
+    });
   });
 });

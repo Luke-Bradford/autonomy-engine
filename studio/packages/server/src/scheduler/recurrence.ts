@@ -37,19 +37,58 @@ export class InvalidScheduleError extends Error {
 }
 
 /**
- * The next fire time STRICTLY AFTER `fromEpochMs`, as epoch ms, or `null` if the
- * schedule has no further occurrence (a finite one-shot already in the past).
+ * A recurrence's firing window (#5 S5b-2, #549), as epoch ms — a half-open
+ * `[startAt, stopAt)`. Both optional/open-ended; a bounds-free call is exactly the
+ * pre-S5b-2 behaviour. `startAt` is INCLUSIVE (an occurrence exactly at `startAt`
+ * fires), `stopAt` is EXCLUSIVE (an occurrence exactly at `stopAt` does not — the
+ * window has ended).
+ */
+export interface OccurrenceBounds {
+  startAt?: number;
+  stopAt?: number;
+}
+
+/**
+ * The next fire time STRICTLY AFTER `fromEpochMs` and within the (optional) bounds
+ * window, as epoch ms, or `null` if the schedule has no further occurrence (a
+ * finite one-shot in the past, or the `[startAt, stopAt)` window is exhausted).
  *
  * Computes next-from-`from`, so every slot missed during downtime is SKIPPED —
  * which is what makes schedule catch-up "no-backfill / ≤1 late fire" structural
  * rather than a policy the outbox has to enforce.
  *
- * @throws {InvalidScheduleError} if `schedule` is not a cron string croner can parse.
+ * ## Boundary contract vs croner-native semantics (verified empirically, croner 10.0.1)
+ *
+ * croner's `startAt`/`stopAt` are BOTH exclusive at the exact second (an occurrence
+ * that lands exactly on the bound is skipped), and second-truncated. We expose a
+ * half-open `[startAt, stopAt)` instead:
+ *   - `stopAt` EXCLUSIVE matches croner directly — pass it through.
+ *   - `startAt` INCLUSIVE does NOT — so we nudge it back by 1s before handing it to
+ *     croner, which admits an occurrence landing exactly on `startAt` while
+ *     admitting no spurious earlier one: the compiled schedules are 5-field crons
+ *     (minute granularity — `recurrenceToCron`), whose only occurrence in the
+ *     `(startAt-1s, startAt]` interval is `startAt` itself. (Bounds only exist on a
+ *     recurrence trigger, whose `schedule` is always a compiled cron; a raw-cron
+ *     escape-hatch trigger has no `recurrence` and thus no bounds.)
+ *
+ * @throws {InvalidScheduleError} if `schedule` is not a cron string croner can
+ *   parse (a malformed bound would also surface here — but callers pass
+ *   `z.string().datetime()`-validated bounds, so that path is a belt).
  */
-export function nextOccurrence(schedule: string, fromEpochMs: number): number | null {
+export function nextOccurrence(
+  schedule: string,
+  fromEpochMs: number,
+  bounds: OccurrenceBounds = {},
+): number | null {
   let cron: Cron;
   try {
-    cron = new Cron(schedule, { timezone: 'UTC' });
+    const options: { timezone: string; startAt?: Date; stopAt?: Date } = { timezone: 'UTC' };
+    // Inclusive `startAt`: nudge 1s earlier so an exact-boundary occurrence clears
+    // croner's exclusive comparison (see the boundary contract above).
+    if (bounds.startAt !== undefined) options.startAt = new Date(bounds.startAt - 1000);
+    // Exclusive `stopAt`: croner-native, pass through.
+    if (bounds.stopAt !== undefined) options.stopAt = new Date(bounds.stopAt);
+    cron = new Cron(schedule, options);
   } catch (err) {
     throw new InvalidScheduleError(schedule, err);
   }
