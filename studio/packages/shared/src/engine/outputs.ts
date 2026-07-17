@@ -157,13 +157,21 @@ function matchesType(value: unknown, type: OutputType): boolean {
  * The verdict of validating an INBOUND, UNTRUSTED payload (a `webhook` node's
  * HTTP callback body, #4 A16) against the node's declared output contract.
  * `ok:true` carries the declared-key-FILTERED outputs safe to persist into the
- * durable `externalWait.completed` event; `ok:false` carries a human reason the
- * route turns into a 422 (leaving the node parked — a malformed callback must
- * never fail the whole run, and a valid token that reaches this check is not a
- * state oracle, so naming the defect is safe).
+ * durable `externalWait.completed` event; `ok:false` carries a human reason and a
+ * `kind` telling the route how to treat it (leaving the node parked either way — a
+ * malformed callback must never fail the whole run):
+ *  - `'payload'` — the caller's body is missing/mistyped a declared key. The
+ *    caller can fix it by retrying, so the route surfaces `reason` in the 422 (a
+ *    live-token holder that reaches this check is not a state oracle — naming the
+ *    field is safe).
+ *  - `'contract'` — the node's OWN `config.outputs` is corrupt (a config-authoring
+ *    defect on a pre-F13a row). The external caller cannot fix that by retrying, so
+ *    the route logs `reason` server-side and does NOT leak the internal config
+ *    text into the response.
  */
 export type InboundOutputsResult =
-  { ok: true; outputs: Record<string, unknown> } | { ok: false; reason: string };
+  | { ok: true; outputs: Record<string, unknown> }
+  | { ok: false; kind: 'payload' | 'contract'; reason: string };
 
 /**
  * #4 A16 — validate a `webhook` node's inbound callback body against its
@@ -182,15 +190,23 @@ export type InboundOutputsResult =
  *    untrusted external body is NEVER stored wholesale — nothing can ref an
  *    undeclared output anyway, and dumping arbitrary external JSON into the
  *    raw-served run_events log is the leak this boundary exists to stop.
- *  - `invalid` (a corrupt contract, only reachable on a pre-F13a row) → `ok:false`.
+ *  - `invalid` (a corrupt contract, only reachable on a pre-F13a row) → `ok:false`
+ *    with `kind:'contract'` (not caller-correctable; see `InboundOutputsResult`).
  */
 export function checkInboundOutputs(
   node: Node,
   body: Record<string, unknown>,
 ): InboundOutputsResult {
   const { errs, checked } = validateOutputs(outputContract(node), body);
-  if (checked === null || errs.length > 0) {
-    return { ok: false, reason: errs.join('; ') };
+  // `checked === null` <=> the contract itself is corrupt (an author's defect,
+  // pre-F13a): a caller can't fix it by retrying a different body, so it is a
+  // `'contract'` failure. A non-null `checked` with errors is a caller-correctable
+  // `'payload'` mismatch (a missing/mistyped declared key).
+  if (checked === null) {
+    return { ok: false, kind: 'contract', reason: errs.join('; ') };
+  }
+  if (errs.length > 0) {
+    return { ok: false, kind: 'payload', reason: errs.join('; ') };
   }
   // `absent`/`declared:[]` → no declared keys; never persist an untrusted body.
   if (checked.kind === 'absent') return { ok: true, outputs: {} };

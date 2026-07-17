@@ -94,7 +94,12 @@ export function createExternalWaitCompleter(deps: DriveDeps): ExternalWaitComple
       // atomic even if `appendAndFold` throws (no half-settled row without its
       // event), and serializes against a concurrent expiry/duplicate-completion.
       const runId = row.runId;
-      type TxResult = { verdict: ExternalWaitOutcome; record: RunEvent | null; reason?: string };
+      type TxResult = {
+        verdict: ExternalWaitOutcome;
+        record: RunEvent | null;
+        reason?: string;
+        contractDefect?: boolean;
+      };
       const result: TxResult = deps.db.transaction((): TxResult => {
         const events = loadEngineEvents(deps.db, runId);
         // FRESHNESS (spec #5 / #443): the LOG decides whether the run is over —
@@ -138,7 +143,17 @@ export function createExternalWaitCompleter(deps: DriveDeps): ExternalWaitComple
         if (node === undefined) return { verdict: 'not_completable', record: null };
         const checked = checkInboundOutputs(node, payload);
         if (!checked.ok) {
-          return { verdict: 'invalid_payload', record: null, reason: checked.reason };
+          // A `'payload'` reason is caller-correctable → surface it in the 422.
+          // A `'contract'` reason is the node's OWN corrupt `config.outputs` (a
+          // config-authoring defect the caller can't fix by retrying) → flag it so
+          // the outer scope logs it server-side WITHOUT leaking config text to the
+          // caller. Both leave the node parked (nothing settled/appended).
+          return {
+            verdict: 'invalid_payload',
+            record: null,
+            reason: checked.reason,
+            contractDefect: checked.kind === 'contract',
+          };
         }
 
         // Settle the correlation row FIRST (guarded `WHERE status = 'pending'`): if
@@ -164,7 +179,19 @@ export function createExternalWaitCompleter(deps: DriveDeps): ExternalWaitComple
         return { verdict: 'completed', record: folded.record };
       });
 
-      if (result.record === null) return { outcome: result.verdict, reason: result.reason };
+      if (result.record === null) {
+        if (result.contractDefect) {
+          // Corrupt `config.outputs` on the parked node (pre-F13a): a server-side
+          // authoring defect, not a caller error — log it and return NO caller-
+          // facing reason (don't leak internal config text into the 422).
+          deps.log?.error(
+            { runId, nodeId: row.nodeId, reason: result.reason },
+            'webhook callback rejected: parked node has a malformed config.outputs contract',
+          );
+          return { outcome: result.verdict };
+        }
+        return { outcome: result.verdict, reason: result.reason };
+      }
       // AFTER commit: publish the completion to the live-tail bus (never before —
       // see above), then drive. Spawning work (the downstream drive, which may bill
       // real LLM calls) is forbidden inside the transaction.

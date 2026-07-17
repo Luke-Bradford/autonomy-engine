@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EngineEvent, Node } from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
-import { outputContract } from '../outputs.js';
+import { checkInboundOutputs, outputContract } from '../outputs.js';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -86,6 +86,49 @@ describe('outputContract — absent vs invalid vs declared (F13a)', () => {
     expect(outputContract(node('a', { outputs: [{ name: 'a.b', type: 'string' }] })).kind).toBe(
       'invalid',
     );
+  });
+});
+
+// --- the inbound (webhook-callback) boundary (#4 A16) ----------------------
+
+describe('checkInboundOutputs — payload vs contract failure kinds (#4 A16)', () => {
+  it('a missing declared key → ok:false, kind `payload`, reason names the field', () => {
+    const r = checkInboundOutputs(node('w', { outputs: [{ name: 'decision', type: 'string' }] }), {
+      note: 'no decision',
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('unreachable');
+    expect(r.kind).toBe('payload');
+    expect(r.reason).toContain('decision');
+  });
+
+  it('a mistyped declared key → ok:false, kind `payload`', () => {
+    const r = checkInboundOutputs(node('w', { outputs: [{ name: 'score', type: 'number' }] }), {
+      score: 'high',
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('unreachable');
+    expect(r.kind).toBe('payload');
+  });
+
+  // A corrupt contract is the node's OWN authoring defect (pre-F13a), NOT a
+  // caller error — so the route logs it server-side rather than leaking the
+  // internal `config.outputs is malformed (...)` text into the 422.
+  it('a corrupt contract → ok:false, kind `contract` (not caller-correctable)', () => {
+    const r = checkInboundOutputs(node('w', { outputs: [{ name: 'x', type: 'nonsense' }] }), {
+      x: 'v',
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('unreachable');
+    expect(r.kind).toBe('contract');
+  });
+
+  it('a valid body → ok:true with ONLY declared keys (undeclared dropped)', () => {
+    const r = checkInboundOutputs(node('w', { outputs: [{ name: 'decision', type: 'string' }] }), {
+      decision: 'ship',
+      extra: 'dropped',
+    });
+    expect(r).toEqual({ ok: true, outputs: { decision: 'ship' } });
   });
 });
 
