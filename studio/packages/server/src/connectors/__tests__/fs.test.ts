@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fsAdapter } from '../fs.js';
@@ -70,6 +79,12 @@ describe('fs connector — happy paths', () => {
     expect(await readFile(join(root, 'x.txt'), 'utf8')).toBe('new');
   });
 
+  it('file_write leaves no temp file behind on success (atomic rename)', async () => {
+    await drain(invoke(ctx('file_write', { path: 'atomic.txt', content: 'done' })));
+    const entries = await readdir(root);
+    expect(entries).toEqual(['atomic.txt']); // the temp was renamed away, not orphaned
+  });
+
   it('file_write into an existing subdirectory succeeds', async () => {
     await mkdir(join(root, 'sub'));
     const events = await drain(invoke(ctx('file_write', { path: 'sub/a.txt', content: 'hi' })));
@@ -128,7 +143,8 @@ describe('fs connector — path-traversal + symlink guard (security)', () => {
     await writeFile(join(outside, 'secret.txt'), 'top secret', 'utf8');
     await symlink(join(outside, 'secret.txt'), join(root, 'link.txt'));
     const events = await drain(invoke(ctx('file_read', { path: 'link.txt' })));
-    // O_NOFOLLOW refuses the symlink at the target → ELOOP → permanent, never the secret.
+    // The lstat symlink guard (+ O_NOFOLLOW defence-in-depth) refuses the target
+    // symlink → permanent, never the secret behind it.
     expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
     expect((events[0] as { outputs?: unknown }).outputs).toBeUndefined();
   });

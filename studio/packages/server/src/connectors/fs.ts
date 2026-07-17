@@ -1,5 +1,5 @@
 import { constants as fsConstants } from 'node:fs';
-import { open, realpath, stat } from 'node:fs/promises';
+import { lstat, open, realpath, rename, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { FILE_READ_ACTIVITY_TYPE, FILE_WRITE_ACTIVITY_TYPE } from '@autonomy-studio/shared';
@@ -35,11 +35,19 @@ import type {
  *     `realpath`, so an INTERMEDIATE symlink (a link inside a root pointing out)
  *     is resolved before the containment check — it cannot smuggle the target
  *     outside the roots.
- *  3. The FINAL path component is opened with `O_NOFOLLOW`, so a symlink AT the
- *     target (the classic write-through-a-symlink escape) is refused (`ELOOP`),
- *     not followed. The connector never traverses a symlink at the target — it
- *     operates only on real files within the canonical roots. This also closes
- *     the final-component TOCTOU window that a check-then-open would leave.
+ *  3. A symlink AT the target itself (the classic read-exfiltration /
+ *     write-through-a-symlink escape) is refused two ways: `lstat` on the final
+ *     path rejects a symlink target PORTABLY (independent of `O_NOFOLLOW`, which
+ *     is absent on some platforms), and the opens ALSO pass `O_NOFOLLOW` as
+ *     defence-in-depth that closes the `lstat`→open TOCTOU where the OS supports
+ *     it. The connector never traverses a symlink at the target — it operates
+ *     only on real files within the canonical roots.
+ *
+ * `file_write` is CRASH-SAFE: it writes to a sibling temp file (also inside the
+ * canonical parent) and atomically `rename`s it over the target, so a crash or
+ * cancel mid-write leaves the target either fully old or fully new, never a
+ * half-written file (the write is non-idempotent, so a torn file would be a real
+ * integrity risk).
  *
  * OUTCOME MAPPING: a completed read/write is `succeeded`. A denied path or a bad
  * config is `permanent` (a config mistake does not fix itself on retry). OS
@@ -169,7 +177,35 @@ async function resolveWithinRoots(
   if (!contained) {
     return { ok: false, error: `path '${requested}' resolves outside the allowed roots` };
   }
+
+  // Refuse a symlink AT the target itself, PORTABLY — `lstat` (which does not
+  // follow the final link) works everywhere, so the target-symlink guard does
+  // not silently disappear on a platform lacking `O_NOFOLLOW`. ENOENT is fine
+  // (a `file_write` to a not-yet-existing path); any other error propagates to
+  // the caller's errno mapper. The `O_NOFOLLOW` on the subsequent open remains
+  // as defence-in-depth against the lstat→open race.
+  try {
+    if ((await lstat(finalPath)).isSymbolicLink()) {
+      return {
+        ok: false,
+        error: `path '${requested}' is a symlink; the fs connector does not follow symlinks`,
+      };
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
   return { ok: true, path: finalPath };
+}
+
+/** Close a file handle, swallowing a close error so it never masks the result. */
+async function closeQuietly(fh: Awaited<ReturnType<typeof open>> | undefined): Promise<void> {
+  try {
+    await fh?.close();
+  } catch {
+    // A close failure after the read/write already produced its terminal event
+    // is not itself a classifiable activity outcome — never let it escape (and
+    // turn a `succeeded` into an unclassified throw).
+  }
 }
 
 async function doRead(
@@ -202,7 +238,7 @@ async function doRead(
   } catch (err) {
     return failFromError(err, signal);
   } finally {
-    await fh?.close();
+    await closeQuietly(fh);
   }
 }
 
@@ -210,6 +246,7 @@ async function doWrite(
   cfg: z.infer<typeof fsConnectionConfigSchema>,
   input: z.infer<typeof fileWriteInputSchema>,
   signal: AbortSignal,
+  tmpSuffix: string,
 ): Promise<ActivityEvent> {
   let finalPath: string;
   try {
@@ -220,18 +257,27 @@ async function doWrite(
     return failFromError(err, signal);
   }
 
+  // Write to a sibling temp file, then atomically `rename` it over the target —
+  // so a crash/cancel mid-write never leaves a half-written (torn) file. The temp
+  // lives in the SAME canonical, already-contained parent dir, so the rename is a
+  // same-filesystem atomic op (no EXDEV) and never crosses the root boundary.
+  // `tmpSuffix` is unique per dispatch attempt; `O_EXCL` refuses to reuse a stale
+  // temp, and `O_NOFOLLOW` keeps the temp create symlink-safe.
+  const tmpPath = `${finalPath}.tmp.${tmpSuffix}`;
   let fh: Awaited<ReturnType<typeof open>> | undefined;
+  let renamed = false;
   try {
-    // Overwrite (truncate) the target. `O_NOFOLLOW` refuses to create/open THROUGH
-    // a symlink at the final component (the write-escape B1 case). The parent was
-    // already canonicalised + contained; no recursive mkdir in v1 (a missing
-    // parent → `ENOENT` → permanent).
     fh = await open(
-      finalPath,
-      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | O_NOFOLLOW,
+      tmpPath,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | O_NOFOLLOW,
       0o644,
     );
     await fh.writeFile(input.content, { encoding: 'utf8', signal });
+    // Close BEFORE the rename so all bytes are flushed to the temp inode.
+    await closeQuietly(fh);
+    fh = undefined;
+    await rename(tmpPath, finalPath);
+    renamed = true;
     return {
       type: 'succeeded',
       outputs: { bytesWritten: Buffer.byteLength(input.content, 'utf8'), path: finalPath },
@@ -239,7 +285,16 @@ async function doWrite(
   } catch (err) {
     return failFromError(err, signal);
   } finally {
-    await fh?.close();
+    await closeQuietly(fh);
+    // Best-effort cleanup: if we created the temp but never renamed it away
+    // (error/cancel), remove it so a failed write leaves no orphan behind.
+    if (!renamed) {
+      try {
+        await unlink(tmpPath);
+      } catch {
+        // Nothing to clean up (temp never created) or already gone — ignore.
+      }
+    }
   }
 }
 
@@ -297,7 +352,11 @@ export const fsAdapter: ConnectorAdapter = {
         yield failed('permanent', `invalid file_write activity config: ${input.error.message}`);
         return;
       }
-      yield await doWrite(cfg.data, input.data, ctx.signal);
+      // A per-attempt temp suffix (sanitised to filename-safe chars) — unique so
+      // two concurrent writers never collide on the temp name, and `O_EXCL`
+      // refuses a stale one from a crashed prior attempt.
+      const tmpSuffix = `${ctx.nodeId}.${ctx.attemptId}`.replace(/[^\w.-]/g, '_');
+      yield await doWrite(cfg.data, input.data, ctx.signal, tmpSuffix);
       return;
     }
 
