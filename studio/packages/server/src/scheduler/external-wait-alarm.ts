@@ -65,6 +65,14 @@ export function createExternalWaitAlarmHandler(deps: ExternalWaitAlarmDeps): Wak
       // is `onExternalWaitExpired`'s own `external_wait_pending` guard; both are
       // load-bearing, since delivery is at-least-once. (Identical to `wait-alarm.ts`.)
       if (terminalFactFromLog(events) !== null) {
+        // #580 — the run went terminal while this node was parked (another branch
+        // failed the run). No `externalWait.expired` is appended (the log is
+        // authoritative, #443), but the correlation row would otherwise sit `pending`
+        // until the run's `ON DELETE CASCADE`. Settle it here, the same guarded
+        // `WHERE status='pending'` update the `node_not_parked_at_attempt` branch uses
+        // (a no-op if an inbound callback already `completed` it) — so the far-future
+        // expiry alarm at least cleans the orphan up rather than leaking it.
+        markExternalWaitExpired(tx, ref, deps.now?.() ?? Date.now());
         return { status: 'suppressed', reason: 'run_already_terminal' };
       }
 
