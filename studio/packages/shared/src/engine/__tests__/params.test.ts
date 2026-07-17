@@ -12,6 +12,7 @@ import { ParamResolveError, SubstituteError } from '../types.js';
 import {
   MAX_CONFIG_DEPTH,
   RUN_FIELDS,
+  TRIGGER_FIELDS,
   resolveRunParams,
   substitute,
   validateRefs,
@@ -27,6 +28,7 @@ function ctx(over: Partial<SubstitutionContext> = {}): SubstitutionContext {
     nodeOutputs: over.nodeOutputs ?? {},
     nodeStatuses: over.nodeStatuses ?? {},
     run: over.run ?? {},
+    trigger: over.trigger ?? {},
   };
 }
 
@@ -103,6 +105,35 @@ describe('substitute — reference resolution', () => {
 
   it('throws on an undeclared param reference', () => {
     expect(() => substitute('${params.missing}', ctx())).toThrow(SubstituteError);
+  });
+
+  // #5 S12 — the ${trigger.*} closed field set.
+  it('resolves ${trigger.<field>} from the closed set', () => {
+    const c = ctx({ trigger: { triggerId: 'trg-1', scheduledTime: null, body: null } });
+    expect(substitute('${trigger.triggerId}', c)).toBe('trg-1');
+  });
+
+  it('resolves ${trigger.scheduledTime} — the schedule occurrence, and null when absent', () => {
+    const withT = ctx({
+      trigger: { triggerId: 'trg-1', scheduledTime: '2026-07-17T09:00:00.000Z', body: null },
+    });
+    expect(substitute('at_${trigger.scheduledTime}', withT)).toBe('at_2026-07-17T09:00:00.000Z');
+    const withoutT = ctx({ trigger: { triggerId: 'trg-1', scheduledTime: null, body: null } });
+    expect(substitute('${trigger.scheduledTime}', withoutT)).toBeNull();
+  });
+
+  it('deep-addresses ${trigger.body.<path>} as the json escape hatch', () => {
+    const c = ctx({ trigger: { triggerId: 't', scheduledTime: null, body: { user: { id: 7 } } } });
+    expect(substitute('${trigger.body.user.id}', c)).toBe(7);
+  });
+
+  it('throws on an unknown trigger field (closed set)', () => {
+    const c = ctx({ trigger: { triggerId: 't', scheduledTime: null, body: null } });
+    expect(() => substitute('${trigger.nope}', c)).toThrow(SubstituteError);
+  });
+
+  it('exposes TRIGGER_FIELDS as the closed SSOT', () => {
+    expect([...TRIGGER_FIELDS]).toEqual(['triggerId', 'scheduledTime', 'body']);
   });
 });
 
@@ -446,9 +477,9 @@ describe('substitute — deep addressing: MISSING is rescuable, SHAPE is not (#6
   });
 
   it('refuses a NULL index rather than keying the empty string', () => {
-    // toStr(null) === '', and `run.triggerId` is seeded literal null for EVERY
-    // run today (spec L399) — so `${params.cfg[run.triggerId]}` would silently
-    // look up the own property ''. A null is never a key.
+    // toStr(null) === '', and `run.triggerId` is null on any run WITHOUT a trigger
+    // (a child call_pipeline run, or a pre-S12 log) — so `${params.cfg[run.triggerId]}`
+    // would silently look up the own property ''. A null is never a key.
     const n = ctx({ params: { cfg: { '': 'empty-key' } }, run: { triggerId: null } });
     expect(() => substitute('${params.cfg[run.triggerId]}', n)).toThrow(SubstituteError);
   });
@@ -702,6 +733,25 @@ describe('validateRefs — a malformed expression is reported ONCE (#6 E1)', () 
     const errors = validateRefs(doc([node('n', { prompt: expr })], []));
     expect(errors).toHaveLength(1);
     expect(errors[0]).not.toMatch(/unresolvable reference \$\{\}/);
+  });
+});
+
+describe('validateRefs — ${trigger.*} at SAVE time (#5 S12)', () => {
+  it('ACCEPTS every closed trigger field (always available, no dominance)', () => {
+    const nodes = [
+      node('n', {
+        a: '${trigger.triggerId}',
+        b: '${trigger.scheduledTime}',
+        c: '${trigger.body.payload.x}',
+      }),
+    ];
+    expect(validateRefs(doc(nodes, []))).toEqual([]);
+  });
+
+  it('REJECTS an unknown trigger field with the closed-set message', () => {
+    const errors = validateRefs(doc([node('n', { prompt: '${trigger.nope}' })], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/is not a known trigger field/);
   });
 });
 

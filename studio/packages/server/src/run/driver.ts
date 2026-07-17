@@ -12,6 +12,7 @@ import {
   type RunLifecycleStatus,
   type RunState,
   type ScheduledWakeup,
+  type TriggerContext,
 } from '@autonomy-studio/shared';
 import { ZodError } from 'zod';
 import { getRun, updateRun } from '../repo/runs.js';
@@ -697,6 +698,11 @@ export function terminalizeInterrupted(deps: TerminalizeDeps, runId: string): vo
     // on the SAME `db` handle it used (#497's rule, reached the long way).
     const result = engine.reduce(engine.projectRunState(events), appended.event);
     recordRunDiagnostics(db, runId, appended.record.seq, 'fold', result.diagnostics, deps.log);
+    // The fold IS terminal on every reachable path: `run.interrupted` folds a
+    // `running` run to `interrupted`, AND (#5 S12) a lone-`run.triggerContext`
+    // `pending` run to `interrupted` too — the reducer terminalizes both, so the
+    // persisted row and a re-projection of the log agree (no zombie, no
+    // divergence). Sync the row FROM that projection rather than bypassing it.
     syncRunLifecycle(db, runId, result.state.status);
   } catch (foldErr) {
     // The doc is unresolvable (e.g. its version was deleted). The
@@ -820,13 +826,43 @@ async function drive(deps: DriveDeps, runId: string): Promise<void> {
  * cleanup in one `drives.serialize`, so the interrupt append cannot interleave
  * with another drive either. A lock taken here would leave that gap open.
  */
-export async function startRun(deps: DriverDeps, run: Run): Promise<RunState> {
+export async function startRun(
+  deps: DriverDeps,
+  run: Run,
+  triggerContext?: TriggerContext,
+): Promise<RunState> {
   if (loadEngineEvents(deps.db, run.id).length > 0) {
     throw new Error(`run '${run.id}' already has an event log — use the boot reconciler to resume`);
   }
   const pv = deps.resolveDoc(run.pipelineVersionId);
   const resolvedParams = resolveRunParams(pv, run.params);
   const engine = buildEngine(pv);
+
+  // #5 S12 — seed the durable trigger context BEFORE `run.started`, so a root
+  // node's config can read `${trigger.*}` on the first dispatch. Deliberately
+  // appended AFTER `resolveDoc`/`resolveRunParams` (above): those throw on a bad
+  // doc/params, and doing so with an EMPTY log lets `terminalizeInterrupted`
+  // patch the row cleanly to `interrupted` — front-loading this append would
+  // instead strand a lone-`run.triggerContext` log and a `pending` zombie row.
+  // Only emitted when a trigger fired the run; a child `call_pipeline` run passes
+  // none, so its `RunState.triggerContext` stays `null`.
+  let seed = engine.seedState();
+  if (triggerContext !== undefined) {
+    const tctxEvent: EngineEvent = {
+      type: 'run.triggerContext',
+      runId: run.id,
+      triggerId: triggerContext.triggerId,
+      // Omit the optionals when absent so the durable payload stays minimal and
+      // folds to `null` on the other side (schema fields are `.optional()`). Both
+      // are normalized to `null` by `launcher.fire()`, so a single `!== null`
+      // suffices — `body` is never `undefined` here.
+      ...(triggerContext.scheduledTime !== null
+        ? { scheduledTime: triggerContext.scheduledTime }
+        : {}),
+      ...(triggerContext.body !== null ? { body: triggerContext.body } : {}),
+    };
+    seed = appendAndFold(deps.db, deps.bus, engine, seed, tctxEvent, deps.log).state;
+  }
 
   const started: EngineEvent = {
     type: 'run.started',
@@ -843,8 +879,10 @@ export async function startRun(deps: DriverDeps, run: Run): Promise<RunState> {
   };
   // #497: this fold is where `docDefects` drain — `onRunStarted` reports every
   // defect the bind neutralized (#480/#487/#488), once per run. Before the sink
-  // existed they were derived here and dropped on the floor.
-  const result = appendAndFold(deps.db, deps.bus, engine, engine.seedState(), started, deps.log);
+  // existed they were derived here and dropped on the floor. Folds onto `seed`
+  // (the post-`run.triggerContext` state, #5 S12), so `onRunStarted` carries the
+  // trigger context across the started transition rather than dropping it.
+  const result = appendAndFold(deps.db, deps.bus, engine, seed, started, deps.log);
   syncRunLifecycle(deps.db, run.id, result.state.status);
   return pump(deps, engine, result.state, result.commands);
 }

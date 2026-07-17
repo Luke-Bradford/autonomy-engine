@@ -771,8 +771,9 @@ export function createEngine(doc: EngineDoc): Engine {
   /**
    * Build the `${}` context. `nodeOutputs` is `state.outputs`, populated by
    * `node.succeeded` (and a `call.returned`, whose outputs are recorded even on
-   * a failing child) plus a container's projected outputs at exit. `triggerId`/
-   * `parentRunId` are not carried in `RunState` here, so they resolve to `null`.
+   * a failing child) plus a container's projected outputs at exit. `run.triggerId`
+   * now comes from `state.triggerContext` (the `run.triggerContext` seed, #5 S12);
+   * `parentRunId` is still not carried in `RunState`, so it resolves to `null`.
    *
    * `nodeStatuses` projects `state.nodes` down to bare statuses — the language
    * reads a node's verdict, never its `attempts`/`currentAttemptId` bookkeeping.
@@ -782,6 +783,10 @@ export function createEngine(doc: EngineDoc): Engine {
   function buildCtx(state: RunState): SubstitutionContext {
     const nodeStatuses: Record<string, NodeRunState['status']> = {};
     for (const [id, ns] of Object.entries(state.nodes)) nodeStatuses[id] = ns.status;
+    const tc = state.triggerContext;
+    // One source for the trigger id — `${run.triggerId}` and `${trigger.triggerId}`
+    // are the same fact and must never drift.
+    const triggerId = tc?.triggerId ?? null;
     return {
       params: state.params,
       nodeOutputs: state.outputs,
@@ -790,8 +795,17 @@ export function createEngine(doc: EngineDoc): Engine {
         runId: state.runId,
         startedAt: state.startedAt,
         pipelineVersionId: state.pipelineVersionId,
-        triggerId: null,
+        triggerId,
         parentRunId: null,
+      },
+      // The CLOSED `${trigger.*}` field set (#5 S12), flattened from the durable
+      // `run.triggerContext` seed. Every field is always present (null where the
+      // fire carried none) so `${trigger.scheduledTime}` resolves to `null`
+      // rather than throwing an unknown-field error on a manual/child run.
+      trigger: {
+        triggerId,
+        scheduledTime: tc?.scheduledTime ?? null,
+        body: tc?.body ?? null,
       },
     };
   }
@@ -1392,6 +1406,53 @@ export function createEngine(doc: EngineDoc): Engine {
 
   // --- per-event reducers ---------------------------------------------------
 
+  // #5 S12 — fold the durable fire-time trigger context into the PRE-`run.started`
+  // seed. It must land while the run is still `pending` (the driver appends it
+  // immediately before `run.started`); a `run.triggerContext` arriving after the
+  // run has started is an impossible log and folds to a no-op + diagnostic rather
+  // than mutating a live run's identity.
+  function onRunTriggerContext(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'run.triggerContext' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    if (state.status !== 'pending') {
+      // Accurate for EVERY non-pending status — the run may have started,
+      // finished, failed, or been interrupted; the seed belongs before any of
+      // them, so name the actual status rather than assuming "already started".
+      diagnostics.push(
+        `impossible run.triggerContext: the run is no longer pending (status: ${state.status})`,
+      );
+      return { state, commands: [], diagnostics };
+    }
+    // A SECOND seed on a still-pending run is an impossible log (the driver
+    // appends exactly one, before `run.started`). The FIRST wins — overwriting
+    // would let a malformed log silently rewrite the run's identity — and the
+    // divergence is reported, mirroring `onRunStarted`'s already-started guard.
+    if (state.triggerContext !== null) {
+      diagnostics.push('impossible run.triggerContext: the run is already seeded');
+      return { state, commands: [], diagnostics };
+    }
+    return {
+      state: {
+        ...state,
+        // Establish the run's identity at SEED time (the seed is its first event).
+        // Until now `runId` was only set by `run.started`; carrying it here lets
+        // the pre-start `run.interrupted` path below make a real identity check,
+        // and `onRunStarted` re-sets the same value (single-run log) so nothing
+        // downstream changes.
+        runId: event.runId,
+        triggerContext: {
+          triggerId: event.triggerId,
+          scheduledTime: event.scheduledTime ?? null,
+          body: event.body ?? null,
+        },
+      },
+      commands: [],
+      diagnostics,
+    };
+  }
+
   function onRunStarted(
     state: RunState,
     event: Extract<EngineEvent, { type: 'run.started' }>,
@@ -1437,6 +1498,11 @@ export function createEngine(doc: EngineDoc): Engine {
       containers: containerStates,
       bounces: {},
       sessions: {},
+      // Carried across the started transition — the `run.triggerContext` seed
+      // (#5 S12) folds into the `pending` state BEFORE this event, and rebuilding
+      // `RunState` from scratch here would silently drop it, breaking
+      // `${trigger.*}` for every node dispatched by the settle below.
+      triggerContext: state.triggerContext,
     };
     return settle(started, diagnostics);
   }
@@ -1896,6 +1962,29 @@ export function createEngine(doc: EngineDoc): Engine {
 
     if (event.type === 'run.started') return onRunStarted(state, event, diagnostics);
 
+    // #5 S12 — handled BEFORE the `pending` early-return below, because it is the
+    // one non-`run.started` event that legitimately folds into a `pending` seed.
+    if (event.type === 'run.triggerContext') return onRunTriggerContext(state, event, diagnostics);
+
+    // #5 S12 — a `run.interrupted` on a PENDING run terminalizes it, exactly as it
+    // does on a running run (below). The reachable case: the driver faulted
+    // between the `run.triggerContext` seed and `run.started`, and the interrupt
+    // cleanup appends `run.interrupted` over a lone-seed (still `pending`) log.
+    // Folding it to `interrupted` keeps the PROJECTION equal to the row the
+    // cleanup persists — without this the fold would no-op and the two would
+    // diverge (an event-sourcing invariant break). The identity check is REAL
+    // here (unlike the no-op pending fallback below): the seed established
+    // `state.runId`, so a foreign run's interrupt cannot terminalize this run — it
+    // falls through to the no-op. Only `run.interrupted`: a `run.finished` before
+    // start is genuinely impossible and stays an ignored no-op under the guard.
+    if (
+      state.status === 'pending' &&
+      event.type === 'run.interrupted' &&
+      event.runId === state.runId
+    ) {
+      return { state: { ...state, status: 'interrupted' }, commands: [], diagnostics };
+    }
+
     if (state.status === 'pending') return { state, commands: [], diagnostics };
 
     if (event.runId !== state.runId) return { state, commands: [], diagnostics };
@@ -1981,6 +2070,7 @@ export function createEngine(doc: EngineDoc): Engine {
       containers: {},
       bounces: {},
       sessions: {},
+      triggerContext: null,
     };
   }
 

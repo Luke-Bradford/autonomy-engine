@@ -1,4 +1,4 @@
-import type { FireOutcome, FireResult, Trigger } from '@autonomy-studio/shared';
+import type { FireOutcome, FireResult, Trigger, TriggerContext } from '@autonomy-studio/shared';
 import { countActiveRunsForTrigger, createRun } from '../repo/runs.js';
 import { startRun, terminalizeInterrupted, type DriveDeps, type DriveLog } from './driver.js';
 
@@ -37,6 +37,20 @@ import { startRun, terminalizeInterrupted, type DriveDeps, type DriveLog } from 
 // while the web client validates the same `202` body against that one schema.
 export type { FireOutcome, FireResult };
 
+/**
+ * The fire-time context a caller supplies (#5 S12) — the raw facts the durable
+ * `run.triggerContext` seed is built from. `scheduledTime` is the INTENDED
+ * scheduled occurrence (ISO-8601 UTC) for a `schedule` fire; `body` is the
+ * webhook/event/run-now payload. Both are optional: a manual fire supplies
+ * neither and the run's trigger context carries `triggerId` alone. All fields are
+ * OPTIONAL so every existing caller (manual/webhook fire) keeps compiling — they
+ * pass nothing and the launcher still records `triggerId`.
+ */
+export interface FireContext {
+  scheduledTime?: string;
+  body?: unknown;
+}
+
 /** Thrown by `fire()` when a trigger has no bound pipeline version. */
 export class UnboundTriggerError extends Error {
   constructor(public readonly triggerId: string) {
@@ -57,8 +71,10 @@ export interface RunLauncher {
    * runs drive in the background. Synchronous: the run row is created (and so
    * durably counts against the concurrency gate) before this returns.
    * @throws {UnboundTriggerError} if `trigger.pipelineVersionId` is null.
+   * @param fireContext optional fire-time facts (#5 S12) — the scheduled time
+   *   and/or payload that seed the run's durable `run.triggerContext`.
    */
-  fire(trigger: Trigger): FireResult;
+  fire(trigger: Trigger, fireContext?: FireContext): FireResult;
   /** Resolve once every in-flight AND queued run has reached quiescence — for
    * tests and (optionally) graceful shutdown. */
   whenIdle(): Promise<void>;
@@ -81,6 +97,17 @@ export interface RunLauncherDeps extends DriveDeps {
  */
 export const DEFAULT_MAX_QUEUE_DEPTH = 1000;
 
+/**
+ * A fire waiting for the (single) `queue` slot: the trigger plus the fire-time
+ * trigger context (#5 S12) captured at `fire()` time. The context rides the queue
+ * so a delayed launch still seeds `${trigger.scheduledTime}` with the occurrence
+ * that fired it, not whenever the slot happened to free.
+ */
+interface QueuedFire {
+  trigger: Trigger;
+  triggerContext: TriggerContext;
+}
+
 export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
   const { db } = deps;
   const inFlight = new Set<Promise<void>>();
@@ -98,7 +125,7 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
    * the same follow-up as the `pending`-orphan window in `launch()`; kept out of
    * this slice so P4a stays scoped to manual fire + concurrency.
    */
-  const queues = new Map<string, Trigger[]>();
+  const queues = new Map<string, QueuedFire[]>();
   /**
    * Per-trigger count of runs this launcher is CURRENTLY driving (promise not
    * yet settled). This is what advances the `queue`: a run's `finally`
@@ -125,7 +152,7 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
   }
 
   /** Create the run row (durable, `pending`) and drive it in the background. */
-  function launch(trigger: Trigger): string {
+  function launch(trigger: Trigger, triggerContext: TriggerContext): string {
     // Caller guarantees non-null (fire() throws UnboundTriggerError otherwise).
     const pipelineVersionId = trigger.pipelineVersionId as string;
     // The row is created `pending`, then `startRun` (below) flips it to
@@ -165,7 +192,7 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     // it. A fresh run's chain is empty, so this costs a microtask and no waiting.
     const p = deps.drives.serialize(run.id, async () => {
       try {
-        await startRun(deps, run);
+        await startRun(deps, run, triggerContext);
       } catch (err) {
         deps.log?.error({ err, runId: run.id, triggerId: trigger.id }, 'run drive failed');
         terminalizeInterrupted(deps, run.id);
@@ -192,10 +219,10 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     if ((inFlightByTrigger.get(triggerId) ?? 0) > 0) return;
     const next = q.shift()!;
     if (q.length === 0) queues.delete(triggerId);
-    launch(next);
+    launch(next.trigger, next.triggerContext);
   }
 
-  function fire(trigger: Trigger): FireResult {
+  function fire(trigger: Trigger, fireContext?: FireContext): FireResult {
     if (trigger.pipelineVersionId === null) {
       throw new UnboundTriggerError(trigger.id);
     }
@@ -203,13 +230,24 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       return { outcome: 'skipped', reason: 'launcher is shutting down' };
     }
 
+    // #5 S12 — freeze the run's durable trigger context at ADMISSION time. Every
+    // launched run (immediate OR later-drained from the queue) carries the SAME
+    // triggerId + the fire-time facts of THIS fire, so `${trigger.scheduledTime}`
+    // is the occurrence that admitted it. A run with no fire-time facts still
+    // records `triggerId` (nulls elsewhere).
+    const triggerContext: TriggerContext = {
+      triggerId: trigger.id,
+      scheduledTime: fireContext?.scheduledTime ?? null,
+      body: fireContext?.body ?? null,
+    };
+
     const active = countActiveRunsForTrigger(db, trigger.id);
     const { policy, max } = trigger.concurrency;
 
     if (policy === 'skip_if_running') {
       if (active > 0)
         return { outcome: 'skipped', reason: 'a run is already active for this trigger' };
-      return { outcome: 'started', runId: launch(trigger) };
+      return { outcome: 'started', runId: launch(trigger, triggerContext) };
     }
 
     if (policy === 'parallel') {
@@ -227,7 +265,7 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       if (active >= max) {
         return { outcome: 'skipped', reason: `parallel cap of ${max} reached` };
       }
-      return { outcome: 'started', runId: launch(trigger) };
+      return { outcome: 'started', runId: launch(trigger, triggerContext) };
     }
 
     // `queue`: single-slot, FIFO. Start now if idle, else enqueue (bounded).
@@ -236,11 +274,11 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       if (q.length >= maxQueueDepth) {
         return { outcome: 'skipped', reason: `queue is full (max ${maxQueueDepth} pending)` };
       }
-      q.push(trigger);
+      q.push({ trigger, triggerContext });
       queues.set(trigger.id, q);
       return { outcome: 'queued' };
     }
-    return { outcome: 'started', runId: launch(trigger) };
+    return { outcome: 'started', runId: launch(trigger, triggerContext) };
   }
 
   async function whenIdle(): Promise<void> {

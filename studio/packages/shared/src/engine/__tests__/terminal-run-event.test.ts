@@ -65,6 +65,9 @@ describe('#443 — terminalStatusOf', () => {
     // silently non-terminal event.
     const nonTerminal: EngineEvent[] = [
       { type: 'run.started', ...run, pipelineVersionId: 'pv1', params: {} },
+      // #5 S12 — the fire-time trigger seed. Non-terminal: it folds into the
+      // pre-`run.started` `pending` state and never ends a run.
+      { type: 'run.triggerContext', ...run, triggerId: 'trg-1' },
       { type: 'node.dispatched', ...run, nodeId: 'n1', attemptId: 'n1#0', idempotent: true },
       { type: 'node.succeeded', ...run, nodeId: 'n1', attemptId: 'n1#0', outputs: {} },
       EngineEventSchema.parse({

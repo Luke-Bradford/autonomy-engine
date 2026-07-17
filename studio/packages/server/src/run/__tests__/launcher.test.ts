@@ -23,6 +23,15 @@ import { stubAlarms } from './stub-alarms.js';
 
 type Db = ReturnType<typeof freshDb>['db'];
 
+/** Find + NARROW the run's durable trigger seed (#5 S12), so a shape regression
+ * fails loudly rather than passing under an unchecked union cast. */
+function triggerSeed(db: Db, runId: string): Extract<EngineEvent, { type: 'run.triggerContext' }> {
+  const seed = loadEngineEvents(db, runId).find((e) => e.type === 'run.triggerContext');
+  if (seed?.type !== 'run.triggerContext')
+    throw new Error(`no run.triggerContext seed for ${runId}`);
+  return seed;
+}
+
 let seq = 0;
 function node(id: string, extra: Partial<Node> = {}): Node {
   seq += 1;
@@ -114,8 +123,26 @@ describe('RunLauncher — a started run drives to completion in the background',
     expect(run?.pipelineVersionId).toBe(pvId);
     // The event log is durable — the source of truth the P6 monitor tails.
     const events = loadEngineEvents(db, result.runId!);
-    expect(events[0]?.type).toBe('run.started');
+    // #5 S12 — every launcher-fired run leads with the durable trigger seed
+    // (carrying at least `triggerId`), then `run.started`.
+    expect(events[0]?.type).toBe('run.triggerContext');
+    expect(events[1]?.type).toBe('run.started');
     expect(events.at(-1)?.type).toBe('run.finished');
+    expect(triggerSeed(db, result.runId!).triggerId).toBe(trigger.id);
+  });
+
+  it('threads a fire-time scheduledTime into the run.triggerContext seed (#5 S12)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId });
+    const launcher = createRunLauncher(deps(db));
+
+    const result = launcher.fire(trigger, { scheduledTime: '2026-07-17T09:00:00.000Z' });
+    await launcher.whenIdle();
+
+    const seed = triggerSeed(db, result.runId!);
+    expect(seed.triggerId).toBe(trigger.id);
+    expect(seed.scheduledTime).toBe('2026-07-17T09:00:00.000Z');
   });
 });
 
@@ -208,6 +235,27 @@ describe('RunLauncher — queue', () => {
     const runs = listRuns(db, { triggerId: trigger.id });
     expect(runs).toHaveLength(2);
     expect(runs.every((r) => r.status === 'success')).toBe(true);
+  });
+
+  it('a queued fire preserves the fire-time context captured at admission (#5 S12)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const launcher = createRunLauncher(deps(db));
+    const T1 = '2026-07-17T09:00:00.000Z';
+    const T2 = '2026-07-17T10:00:00.000Z';
+
+    launcher.fire(trigger, { scheduledTime: T1 }); // takes the slot
+    launcher.fire(trigger, { scheduledTime: T2 }); // queued — must keep ITS T2
+
+    await launcher.whenIdle();
+
+    const scheduled = listRuns(db, { triggerId: trigger.id }).map(
+      (r) => triggerSeed(db, r.id).scheduledTime,
+    );
+    // Both distinct occurrences survived — the queued fire did not inherit the
+    // active run's context nor lose its own.
+    expect(new Set(scheduled)).toEqual(new Set([T1, T2]));
   });
 
   it('skips a fire once the queue is at its depth cap (bounded in-memory queue)', async () => {
@@ -313,7 +361,9 @@ describe('RunLauncher — background failure', () => {
     const run = getRun(db, result.runId!);
     expect(run?.status).toBe('interrupted');
     const events = loadEngineEvents(db, result.runId!);
-    expect(events[0]?.type).toBe('run.started');
+    // #5 S12 — the trigger seed leads, then run.started, then the interrupt.
+    expect(events[0]?.type).toBe('run.triggerContext');
+    expect(events[1]?.type).toBe('run.started');
     // The row's status is reachable by folding the durable log, not out-of-band.
     expect(events.some((e) => e.type === 'run.interrupted')).toBe(true);
   });

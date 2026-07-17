@@ -180,16 +180,34 @@ describe('validateRefs — `${run.*}` typing', () => {
   it('types every run field as `string`', () => {
     expect(refsIn('${not(run.runId)}')).toMatch(/argument 1.*boolean.*got string/i);
     expect(refsIn('${not(run.startedAt)}')).toMatch(/argument 1.*boolean.*got string/i);
-    // `triggerId`/`parentRunId` are seeded `null` by the reducer today (#5 owns
-    // the real seed). They are STILL typed `string`: `any` would be strictly
-    // WEAKER, not safer — it accepts `${add(run.triggerId, 1)}` as well, and the
-    // run-time null throws under either typing. The nullability gap is #5's, and
-    // typing them `string` never manufactures a false-accept that `any` avoids.
+    // `run.triggerId` is now seeded from the `run.triggerContext` fact (#5 S12);
+    // `parentRunId` is still reducer-null (nullable). Both are STILL typed
+    // `string`: `any` would be strictly WEAKER, not safer — it accepts
+    // `${add(run.parentRunId, 1)}` as well, and the run-time null throws under
+    // either typing. Typing a nullable field `string` never manufactures a
+    // false-accept that `any` avoids.
     expect(refsIn('${not(run.parentRunId)}')).toMatch(/argument 1.*boolean.*got string/i);
   });
 
   it('accepts a run field in a string position', () => {
     expect(refsIn("${concat(run.runId, '!')}")).toBe('');
+  });
+});
+
+describe('validateRefs — `${trigger.*}` typing (#5 S12)', () => {
+  it('types triggerId/scheduledTime as `string`', () => {
+    expect(refsIn('${not(trigger.triggerId)}')).toMatch(/argument 1.*boolean.*got string/i);
+    expect(refsIn('${not(trigger.scheduledTime)}')).toMatch(/argument 1.*boolean.*got string/i);
+  });
+
+  it('types body permissively (`any`) so it is usable in any position', () => {
+    // `body` is an untyped json payload — the escape hatch, assignable both ways.
+    expect(refsIn('${not(trigger.body)}')).toBe('');
+    expect(refsIn("${concat(trigger.body, '!')}")).toBe('');
+  });
+
+  it('accepts a trigger string field in a string position', () => {
+    expect(refsIn("${concat(trigger.scheduledTime, '!')}")).toBe('');
   });
 });
 
@@ -383,7 +401,13 @@ describe('the catalog’s declared `ret` is honest (E6 reads it)', () => {
 
   it.each(Object.entries(RET_SAMPLES))('%s returns its declared `ret`', (name, expr) => {
     const spec = FUNCTIONS[name]!;
-    const value = substitute(expr, { params: {}, nodeOutputs: {}, nodeStatuses: {}, run: {} });
+    const value = substitute(expr, {
+      params: {},
+      nodeOutputs: {},
+      nodeStatuses: {},
+      run: {},
+      trigger: {},
+    });
     expect(
       matchesSig(value, spec.ret),
       `'${name}' declares ret '${spec.ret}' but ${expr} returned ${JSON.stringify(value)}`,
@@ -411,6 +435,7 @@ describe('`number` is FINITE at every boundary (E6’s `ret: number` premise)', 
     nodeOutputs: {},
     nodeStatuses: {},
     run: {},
+    trigger: {},
   });
 
   it('float() refuses an overflowing literal instead of returning Infinity', () => {

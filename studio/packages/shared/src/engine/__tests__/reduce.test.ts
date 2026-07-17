@@ -87,6 +87,17 @@ function dispatchIds(cmds: EngineCommand[]): string[] {
   return cmds.filter((c) => c.type === 'dispatchNode').map((c) => (c as { nodeId: string }).nodeId);
 }
 
+/** Find + NARROW a `dispatchNode` command (optionally for a specific node) on
+ * `.type`, so its `preparedInput` is read without an unchecked union cast. */
+function dispatchCmd(cmds: EngineCommand[], nodeId?: string) {
+  const cmd = cmds.find(
+    (c) => c.type === 'dispatchNode' && (nodeId === undefined || c.nodeId === nodeId),
+  );
+  if (cmd?.type !== 'dispatchNode')
+    throw new Error(`no dispatchNode command${nodeId === undefined ? '' : ` for ${nodeId}`}`);
+  return cmd;
+}
+
 // ===========================================================================
 // Replay determinism (event-sourcing invariant)
 // ===========================================================================
@@ -451,6 +462,119 @@ describe('run.startedAt — the seeded, replay-stable timestamp', () => {
   it('folds a pre-E3 log with no stamp to null', () => {
     const eng = engine([node('a', {})]);
     expect(eng.reduce(eng.seedState(), started()).state.startedAt).toBeNull();
+  });
+});
+
+// ===========================================================================
+// #5 S12 — ${trigger.*} resolves from the durable run.triggerContext seed
+// ===========================================================================
+
+describe('run.triggerContext — the fire-time trigger seed (#5 S12)', () => {
+  const SCHED = '2026-07-17T09:00:00.000Z';
+  const tctx = (
+    over: Partial<Extract<EngineEvent, { type: 'run.triggerContext' }>> = {},
+  ): EngineEvent => ({
+    type: 'run.triggerContext',
+    runId: RUN,
+    triggerId: 'trg-1',
+    ...over,
+  });
+
+  it('folds into the pending seed and is carried across run.started', () => {
+    const eng = engine([
+      node('a', { when: '${trigger.scheduledTime}', who: '${trigger.triggerId}' }),
+    ]);
+    const s = eng.reduce(eng.seedState(), tctx({ scheduledTime: SCHED })).state;
+    expect(s.status).toBe('pending');
+    expect(s.triggerContext).toEqual({ triggerId: 'trg-1', scheduledTime: SCHED, body: null });
+    const r = eng.reduce(s, started());
+    // Survives the started transition and is readable by the first dispatch.
+    expect(r.state.triggerContext).toEqual({
+      triggerId: 'trg-1',
+      scheduledTime: SCHED,
+      body: null,
+    });
+    expect(dispatchCmd(r.commands).preparedInput).toEqual({ when: SCHED, who: 'trg-1' });
+  });
+
+  it('closes the run.triggerId null-seed gap — ${run.triggerId} reads the fired trigger', () => {
+    const eng = engine([node('a', { t: '${run.triggerId}' })]);
+    const s = eng.reduce(eng.seedState(), tctx()).state;
+    const r = eng.reduce(s, started());
+    expect(dispatchCmd(r.commands).preparedInput).toEqual({ t: 'trg-1' });
+  });
+
+  it('deep-addresses ${trigger.body.x} as the runtime-validated json escape hatch', () => {
+    const eng = engine([node('a', { msg: '${trigger.body.text}' })]);
+    const s = eng.reduce(eng.seedState(), tctx({ body: { text: 'hello' } })).state;
+    const r = eng.reduce(s, started());
+    expect(dispatchCmd(r.commands).preparedInput).toEqual({ msg: 'hello' });
+  });
+
+  it('a run with NO trigger seed resolves ${trigger.scheduledTime} to null', () => {
+    const eng = engine([node('a', { when: '${trigger.scheduledTime}' })]);
+    const r = eng.reduce(eng.seedState(), started());
+    expect(r.state.triggerContext).toBeNull();
+    expect(dispatchCmd(r.commands).preparedInput).toEqual({ when: null });
+  });
+
+  it('a FOREIGN-run run.interrupted does NOT terminalize a seeded pending run (identity check)', () => {
+    const eng = engine([node('a', {})]);
+    const s = eng.reduce(eng.seedState(), tctx()).state; // seed establishes runId = RUN
+    const r = eng.reduce(s, {
+      type: 'run.interrupted',
+      runId: 'other-run',
+      reason: 'drive_failed',
+    });
+    expect(r.state.status).toBe('pending'); // untouched — the interrupt was for another run
+  });
+
+  it('a SECOND run.triggerContext on a still-pending run is a no-op + diagnostic (first wins)', () => {
+    const eng = engine([node('a', {})]);
+    const s = eng.reduce(eng.seedState(), tctx({ scheduledTime: SCHED })).state;
+    const r = eng.reduce(
+      s,
+      tctx({ triggerId: 'other', scheduledTime: '2099-01-01T00:00:00.000Z' }),
+    );
+    // The first seed is untouched — a malformed log cannot rewrite run identity.
+    expect(r.state.triggerContext).toEqual({
+      triggerId: 'trg-1',
+      scheduledTime: SCHED,
+      body: null,
+    });
+    expect(r.diagnostics.join(' ')).toContain(
+      'impossible run.triggerContext: the run is already seeded',
+    );
+  });
+
+  it('a run.triggerContext after the run started is an impossible-log no-op + diagnostic', () => {
+    const eng = engine([node('a', {})]);
+    const s = eng.reduce(eng.seedState(), started()).state;
+    const r = eng.reduce(s, tctx({ scheduledTime: SCHED }));
+    expect(r.state.triggerContext).toBeNull(); // unchanged — never mutates a live run
+    expect(r.diagnostics.join(' ')).toContain('impossible run.triggerContext');
+  });
+
+  it('is identical on replay (folds the same log to the same state)', () => {
+    const eng = engine([node('a', { when: '${trigger.scheduledTime}' })]);
+    const log: EngineEvent[] = [tctx({ scheduledTime: SCHED }), started()];
+    expect(eng.projectRunState(log)).toEqual(eng.projectRunState(log));
+  });
+
+  // A run interrupted between the trigger seed and run.started (the driver
+  // faulted) must terminalize in the PROJECTION, not just via a row patch — so a
+  // re-fold of [run.triggerContext, run.interrupted] agrees with the persisted
+  // row. Without this the fold would no-op on the pending state and diverge.
+  it('run.interrupted on a pending seeded run folds to interrupted (row == projection)', () => {
+    const eng = engine([node('a')]);
+    const log: EngineEvent[] = [
+      tctx(),
+      { type: 'run.interrupted', runId: RUN, reason: 'drive_failed' },
+    ];
+    const state = eng.projectRunState(log);
+    expect(state.status).toBe('interrupted');
+    // The seed still survived the transition — the interrupt does not wipe it.
+    expect(state.triggerContext).toEqual({ triggerId: 'trg-1', scheduledTime: null, body: null });
   });
 });
 

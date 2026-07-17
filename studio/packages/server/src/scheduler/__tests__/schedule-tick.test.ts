@@ -16,7 +16,12 @@ import { freshDb } from '../../repo/__tests__/helpers.js';
 import { armWakeup, getWakeup, listPendingWakeups } from '../../repo/scheduled-wakeups.js';
 import { listRuns } from '../../repo/runs.js';
 import type { Db } from '../../repo/types.js';
-import { createRunLauncher, UnboundTriggerError, type FireResult } from '../../run/launcher.js';
+import {
+  createRunLauncher,
+  UnboundTriggerError,
+  type FireContext,
+  type FireResult,
+} from '../../run/launcher.js';
 import { type DocResolver, type DriveDeps } from '../../run/driver.js';
 import { createRunDrives } from '../../run/drives.js';
 import { makeStubExecutor } from '../../run/__tests__/stub-executor.js';
@@ -85,13 +90,19 @@ function seedTrigger(
   });
 }
 
-/** A launcher test double that records every fire. */
-function fakeLauncher(): ScheduleTickLauncher & { fires: Trigger[] } {
+/** A launcher test double that records every fire (trigger + fire-time context). */
+function fakeLauncher(): ScheduleTickLauncher & {
+  fires: Trigger[];
+  contexts: (FireContext | undefined)[];
+} {
   const fires: Trigger[] = [];
+  const contexts: (FireContext | undefined)[] = [];
   return {
     fires,
-    fire: vi.fn((t: Trigger): FireResult => {
+    contexts,
+    fire: vi.fn((t: Trigger, fc?: FireContext): FireResult => {
       fires.push(t);
+      contexts.push(fc);
       return { outcome: 'started', runId: `run-${t.id}` };
     }),
   };
@@ -131,6 +142,12 @@ describe('schedule_tick handler — fire + continue the chain', () => {
     // The launcher fired exactly once, with this trigger (afterCommit, not in-tx).
     expect((launcher as ReturnType<typeof fakeLauncher>).fires.map((t) => t.id)).toEqual([
       trigger.id,
+    ]);
+    // #5 S12 — the fire carries the INTENDED occurrence (the row's dueAt = NOON)
+    // as `scheduledTime`, so `${trigger.scheduledTime}` reads the slot it fired
+    // for (immune to any lateness in actual delivery).
+    expect((launcher as ReturnType<typeof fakeLauncher>).contexts).toEqual([
+      { scheduledTime: new Date(NOON).toISOString() },
     ]);
 
     // The chain advanced: the NOON row is settled `fired`; a single pending row
