@@ -30,8 +30,30 @@ export type ActivityKind = 'execution' | 'control';
  * is code-side metadata and is never persisted in a doc, so no older export can
  * carry a value this build does not know.
  */
-export const ACTIVITY_CATEGORIES = ['general', 'ai'] as const;
+export const ACTIVITY_CATEGORIES = ['general', 'ai', 'control'] as const;
 export type ActivityCategory = (typeof ACTIVITY_CATEGORIES)[number];
+
+/**
+ * The `Node.type` of the `if` control activity (#4 A1). A named constant, not a
+ * magic string, because it is a TYPED identifier read structurally in THREE
+ * places that must agree: the reducer's control-dispatch discriminant
+ * (`reduce.ts` — how the engine learns a node is `if`, the `call_pipeline`/
+ * `Node.call` precedent the D6 note sanctions), the save-time branch/condition
+ * rule (`validateDoc`), and this catalog entry. A rename must reach all three,
+ * so the string lives once.
+ */
+export const IF_ACTIVITY_TYPE = 'if';
+
+/**
+ * The two business branch labels an `if` emits (#4 A1). Typed identifiers, not
+ * magic strings: the reducer STAMPS one of these onto `condition.evaluated`
+ * (`out ? IF_BRANCH_TRUE : IF_BRANCH_FALSE`), `validateDoc`'s declared-branch
+ * rule accepts EXACTLY these on an `if`'s outgoing branch edges, and an author's
+ * `BranchEdge.branch` must equal one — three sites that must agree on the exact
+ * string, so it lives once.
+ */
+export const IF_BRANCH_TRUE = 'true';
+export const IF_BRANCH_FALSE = 'false';
 
 /**
  * P3 — the ACTIVITY CATALOG entry: the static, pure metadata for one activity

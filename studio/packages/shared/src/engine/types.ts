@@ -310,6 +310,17 @@ export const RunStateSchema = z.object({
   outputs: z.record(z.string(), z.record(z.string(), z.unknown())),
   containers: z.record(z.string(), ContainerRunStateSchema),
   bounces: z.record(z.string(), z.number().int().nonnegative()),
+  /**
+   * #4 A0 — the business branch each `control` (`if`) node chose, `nodeId →
+   * label`, folded from `condition.evaluated`. `edgeState` reads it to satisfy
+   * exactly the taken branch edge. Empty for a run with no control node and for
+   * a pre-A0 log (which carried no such event), so branch edges from an old doc
+   * resolve `unsatisfied-terminal` (dead) deterministically on replay. NOT
+   * cleared by `resetNodes` on a loop re-round — a re-skipped `if`'s branch
+   * edges resolve `impossible` via the skipped-predecessor rule BEFORE this map
+   * is read, so a stale label can never re-satisfy last round's arm.
+   */
+  branches: z.record(z.string(), z.string()),
   sessions: z.record(z.string(), z.unknown()),
   /**
    * The run's fire-time trigger context (#5 S12), seeded by `run.triggerContext`
@@ -512,6 +523,35 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     kind: FailureKindSchema.default('permanent'),
     /** Optional machine detail (see `FAILURE_CODES`); an open vocabulary. */
     code: z.string().optional(),
+  }),
+  z.object({
+    /**
+     * #4 A0/A1 — a `control` activity (`if`) evaluated its `${}` condition and
+     * chose a business `branch`. The DURABLE fact `edgeState` reads to satisfy
+     * exactly the taken branch edge (`state.branches[nodeId] === edge.branch`);
+     * the other arms fall `unsatisfied-terminal` and skip. This is the codex-
+     * hardened "the decision is a fact in the LOG before the downstream walk
+     * depends on it" rule (#4 spec) — the reducer never re-evaluates the
+     * condition against (possibly drifted) state, it reads the logged label, so
+     * replay is deterministic.
+     *
+     * Appended by the DRIVER (`pump`) in response to the reducer's own
+     * `evaluateControl` command — the same driver-own, no-executor,
+     * append-then-fold shape as `scheduleRetry` → `node.retryScheduled`. NOT
+     * emitted by any connector; a control activity is engine-evaluated and never
+     * dispatched (the executor refuses one, `CONTROL_NOT_DISPATCHABLE`).
+     *
+     * `branch` is the STRING label (`'true'`/`'false'` for `if`), matching
+     * `BranchEdgeSchema.branch` (`z.string()`) — never a raw boolean, so the
+     * `===` against the edge's declared label holds. `attemptId` is the if
+     * node's current attempt, so a stale event (a pre-restart evaluation) is
+     * ignored exactly as `node.succeeded` is.
+     */
+    type: z.literal('condition.evaluated'),
+    runId: z.string(),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    branch: z.string(),
   }),
   z.object({
     // A spawned `call_pipeline` child returned. `childOutcome` may be `failure`
@@ -718,6 +758,24 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     type: z.literal('scheduleRetry'),
     nodeId: z.string(),
     failedAttemptId: z.string(),
+  }),
+  z.object({
+    /**
+     * #4 A0/A1 — "this `control` node (`if`) evaluated to `branch`; make the fact
+     * durable." The reducer computes the branch PURELY (it holds the node's
+     * config + a clock-free eval of the `${}` condition over run state, exactly
+     * as `call_pipeline` resolves its `${}` pipelineVersionId), then hands the
+     * driver this command; the driver appends `condition.evaluated` and folds it.
+     *
+     * A driver-OWN command like `scheduleRetry` — it needs no executor and no
+     * connector (the driver's `pump` routes it to a synchronous single-event
+     * append, NOT `executor.perform`). `ExecutorCommand` deliberately excludes
+     * it, so forgetting the pump branch is a COMPILE error.
+     */
+    type: z.literal('evaluateControl'),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    branch: z.string(),
   }),
   z.object({
     type: z.literal('finishRun'),

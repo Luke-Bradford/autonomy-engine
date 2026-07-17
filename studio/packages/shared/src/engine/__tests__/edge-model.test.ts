@@ -326,61 +326,34 @@ describe('a skip-only loop body cannot spin (bounce cap is a real ceiling)', () 
   });
 });
 
-describe('business branch edges are INERT until #4 A0/A1/A2', () => {
-  // The schema is settled HERE (T3: #1 owns the union) so `if`/`switch` can be
-  // built against a final shape. But no activity emits a branch outcome yet, so
-  // a branch edge cannot be satisfied. This pins that it degrades OBSERVABLY
-  // (diagnostic) rather than silently stranding the downstream.
-  it('a branch edge never satisfies, and says why', () => {
-    const eng = engine([node('if_1'), node('t')], [branchEdge('if_1', 't', 'true')]);
+describe('business branch edges — a branch edge off a NON-branching source is dead (#4 A0)', () => {
+  // #4 A0 made branch edges routable via `state.branches` — but only an `if`
+  // populates that map. A branch edge whose source is NOT a branching activity
+  // (here `node()` builds an `agent_task`) records no branch, so the edge is
+  // `unsatisfied-terminal` and the target skips. What CHANGED at A0: the retired
+  // `noteInertBranch` diagnostic no longer fires — the old "can never be
+  // satisfied … #4 A0/A1/A2" text is gone, because a branch edge is now a normal
+  // (here, un-taken) arm, not a broken doc. The full `if`-routing behaviour lives
+  // in `branch-routing.test.ts` (it needs real control nodes).
+  it('skips the target with NO inert-branch diagnostic', () => {
+    const eng = engine([node('src'), node('t')], [branchEdge('src', 't', 'true')]);
     const { state, diagnostics } = runAll(eng);
-    expect(state.nodes.if_1!.status).toBe('success');
+    expect(state.nodes.src!.status).toBe('success');
     expect(state.nodes.t!.status).toBe('skipped');
-    // Match the EXPLANATION, not just the word "branch" — the edge id itself
-    // contains "branch", so /branch/i would pass on a diagnostic that merely
-    // echoed it back and told the operator nothing.
-    expect(diagnostics.join('\n')).toMatch(/can never be satisfied/);
-    expect(diagnostics.join('\n')).toMatch(/A0|A1|A2|if\/switch/);
+    const text = diagnostics.join('\n');
+    expect(text).not.toMatch(/can never be satisfied/);
+    expect(text).not.toMatch(/emits a branch outcome/);
   });
 
-  // The container skip path is a SEPARATE call site (`settle`'s container loop,
-  // not `tryDispatchNode`), so it needs its own coverage — a branch edge into a
-  // stage must explain itself the same way.
-  it('a branch edge into a CONTAINER explains itself too', () => {
+  it('skips a CONTAINER target off a non-branching source, also with no diagnostic', () => {
     const eng = createEngine({
-      nodes: [node('if_1'), node('child')],
-      edges: [branchEdge('if_1', 'stg', 'true')],
+      nodes: [node('src'), node('child')],
+      edges: [branchEdge('src', 'stg', 'true')],
       containers: [{ id: 'stg', kind: 'stage', children: ['child'] }],
     });
     const { state, diagnostics } = runAll(eng);
     expect(state.containers.stg!.status).toBe('skipped');
-    expect(diagnostics.join('\n')).toMatch(/'stg'/);
-    expect(diagnostics.join('\n')).toMatch(/can never be satisfied/);
-  });
-
-  // A fan-in of branch edges: the diagnostic must account for ALL of them. A
-  // hardcoded singular ("has an incoming 'branch' edge") undercounts the cause
-  // and would send an operator hunting one edge when several are inert.
-  it('counts EVERY inert branch predecessor, not just one', () => {
-    const eng = engine(
-      [node('if_1'), node('if_2'), node('t')],
-      [branchEdge('if_1', 't', 'true'), branchEdge('if_2', 't', 'false')],
-    );
-    const { state, diagnostics } = runAll(eng);
-    expect(state.nodes.t!.status).toBe('skipped');
-
-    const text = diagnostics.join('\n');
-    expect(text).toMatch(/can never be satisfied/);
-    // Names the count, and reads as a plural — not "an incoming 'branch' edge".
-    expect(text).toMatch(/2 incoming 'branch' edges/);
-  });
-
-  // The singular wording must survive the pluralisation — an off-by-one that
-  // reported "1 incoming 'branch' edges" would be its own papercut.
-  it('still reads naturally for a single inert branch predecessor', () => {
-    const eng = engine([node('if_1'), node('t')], [branchEdge('if_1', 't', 'true')]);
-    const { diagnostics } = runAll(eng);
-    expect(diagnostics.join('\n')).toMatch(/has an incoming 'branch' edge,/);
+    expect(diagnostics.join('\n')).not.toMatch(/can never be satisfied/);
   });
 });
 
@@ -476,7 +449,7 @@ describe('cross-boundary edges (#480)', () => {
     // `validateDoc` would flag this doc, but nothing calls it on the way in
     // (#444), so without a diagnostic the operator sees `node_failed:h` with no
     // hint that the handler edge they authored was voided. Same reasoning — and
-    // the same conclusion — as `noteInertBranch`.
+    // the same conclusion — as the other bind-time neutralization diagnostics.
     const eng = createEngine({
       nodes: [node('h'), node('a')],
       edges: [edge('h', 'a', 'failure')],

@@ -13,6 +13,7 @@ import { outputContract } from './outputs.js';
 import type { Expr, ExprSegment, TemplateMode } from './expr.js';
 import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
 import { getActivity } from '../catalog/registry.js';
+import { IF_ACTIVITY_TYPE, IF_BRANCH_TRUE, IF_BRANCH_FALSE } from '../catalog/types.js';
 import { SecretRefSchema, isSecretRef } from '../schemas/secret-ref.js';
 import type { EvalIn, FnSpec, SigType } from './functions.js';
 import {
@@ -1355,11 +1356,14 @@ export function validateDoc(
   // the node at run time. Reported once per node: every
   // `${nodes.<id>.output.*}` ref against a corrupt contract has the same one
   // root cause, so per-ref errors would just bury it.
+  const nodeById = new Map<string, Node>(doc.nodes.map((n) => [n.id, n]));
   for (const node of doc.nodes) {
     const contract = outputsById.get(node.id);
     if (contract?.kind === 'invalid') {
       errors.push(`node '${node.id}': config.outputs is malformed (${contract.reason})`);
     }
+    // #4 A1 — an `if`'s boolean condition must be WHOLE-VALUE (save-time half).
+    if (node.type === IF_ACTIVITY_TYPE) validateIfCondition(node, errors);
   }
 
   // Node-only forward reachability + the container index, for the back-edge
@@ -1445,25 +1449,30 @@ export function validateDoc(
     }
   }
 
-  // Business `branch` edges: the union is settled here (spec #1 owns it, T3) so
-  // #4 can build `if`/`switch` against a final schema — but no activity emits a
-  // branch outcome yet, so a branch edge would silently skip everything
-  // downstream. Report it; PARSE stays permissive so a git import round-trips
-  // one unchanged.
-  //
-  // NB the WRITE PATH now refuses a doc this reports (#444 — the server calls
-  // `validatePipelineDoc` in `createPipelineVersion`), but rows written BEFORE
-  // that gate were never validated, so the reducer's diagnostic remains the
-  // thing that makes an inert branch edge observable at run time. Both halves
-  // are load-bearing; do not delete the reducer's on the strength of this one.
-  // #4 A0/A1/A2 replaces this rule with the real one ("a branch edge's source
-  // must declare that branch"), which needs the ActivityDefinition contract.
+  // Business `branch` edges (#4 A0): the REAL rule now that `if` routes them — a
+  // branch edge is valid iff its SOURCE is a branching activity that DECLARES the
+  // label. `if` declares exactly {'true','false'}; any other source type (or a
+  // container) declares none, so a branch edge off it can never satisfy at run
+  // time (`edgeState` reads `state.branches`, which only an `if` populates). This
+  // replaces the pre-A0 blanket "not routable yet" error. Advisory like every
+  // rule here (canvas badge + the #444 write gate); PARSE stays permissive
+  // (`EdgeSchema`) so a pre-gate git import round-trips one unchanged. A2 (switch)
+  // extends `declaredBranchesOf` with the node's configured case labels + default.
   for (const e of doc.edges) {
     if (e.on !== 'branch') continue;
-    errors.push(
-      `edge '${e.id}': business 'branch' edges are not routable yet — the if/switch activities ` +
-        `that emit a branch outcome land with #4 A0/A1/A2`,
-    );
+    const src = nodeById.get(e.from);
+    const branches = src === undefined ? undefined : declaredBranchesOf(src);
+    if (branches === undefined) {
+      errors.push(
+        `edge '${e.id}': source '${e.from}' is not a branching activity — only an ` +
+          `'if' (true/false) emits a branch outcome`,
+      );
+    } else if (!branches.has(e.branch)) {
+      errors.push(
+        `edge '${e.id}': source '${e.from}' does not declare branch '${e.branch}' — ` +
+          `an 'if' routes only 'true'/'false'`,
+      );
+    }
   }
 
   // The FORWARD graph (all edges minus `back:true`) must be a DAG — a forward
@@ -1511,6 +1520,44 @@ export function validateDoc(
 }
 
 /** Validate a container's `exitWhen` `${}` refs point only at its OWN children. */
+/**
+ * The business branch labels an activity DECLARES it can emit (#4 A0) — the ONE
+ * SSOT the branch-edge rule reads, so the declared set and the reducer's routing
+ * (`edgeState` over `state.branches`) cannot drift. `if` routes exactly
+ * `true`/`false`; every other type — and a container — declares none
+ * (`undefined`: only a control branching activity routes). A2 extends this with a
+ * `switch`'s configured case labels + `default`.
+ */
+function declaredBranchesOf(node: Node): Set<string> | undefined {
+  if (node.type === IF_ACTIVITY_TYPE) return new Set([IF_BRANCH_TRUE, IF_BRANCH_FALSE]);
+  return undefined;
+}
+
+/**
+ * #4 A1 — the SAVE-TIME half of the `if`-condition rule the reducer's
+ * `evalIfBranch` enforces at run time (both halves, or the rule is decorative —
+ * the E2/E6 split `exitWhen` follows). Whole-value ONLY: an EMBEDDED expression
+ * (`x${c}y`) can only ever resolve to a STRING, never a boolean, so it can never
+ * route — refuse it at save. The condition's `${}` refs are already
+ * existence+grammar checked doc-wide by `validateRefs`; the boolean TYPE of the
+ * whole expression is enforced by the reducer at run time (`evalIfBranch` throws
+ * a non-boolean → `invalid_event`) rather than re-derived here, which would need
+ * this validator to rebuild the per-node ref scope `validateRefs` already owns —
+ * a deliberate, documented deferral, not a gap (both halves are covered).
+ */
+function validateIfCondition(node: Node, errors: string[]): void {
+  const where = `node.${node.id}.condition`;
+  const raw = node.config['condition'];
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    errors.push(
+      `${where}: an if needs a boolean condition expression ` +
+        `(e.g. \${equals(nodes.check.output.ok, 'true')})`,
+    );
+    return;
+  }
+  validateWholeValue(where, raw, errors, 'condition');
+}
+
 function validateExitWhen(
   c: Container,
   declared: Map<string, Param>,
@@ -2439,10 +2486,11 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers
         const base =
           on === 'skipped' ? new Set<string>() : new Set(guaranteed.get(from) ?? new Set<string>());
         if (on === 'success') base.add(from);
-        // failure/completion/branch: `from` ran but did not necessarily succeed
-        // (a branch edge implies it did, but branch routing is inert until #4
-        // A0 — staying conservative can only over-reject, never over-accept) →
-        // its outputs are NOT guaranteed; only what was guaranteed before it is.
+        // failure/completion/branch: `from`'s OUTPUTS are not guaranteed to the
+        // target; only what was guaranteed before it is. A branch edge's source
+        // (an `if`, #4 A0) does reach `success`, but it produces NO outputs, so
+        // it is treated like failure/completion here — staying conservative can
+        // only over-reject, never over-accept (and `switch`, A2, is the same).
         acc = acc === null ? base : intersect(acc, base);
 
         // SETTLED asks a strictly weaker question than `guaranteed` — "did

@@ -13,5 +13,11 @@
 // sink-declaring catalog resolves. A pre-S4 build lacks the sink and would drop
 // the secret header SILENTLY at dispatch; stamping 2 makes it refuse the import
 // (`portability/envelope.ts`) instead — fail-safe on secrets. See catalog/types.ts.
-export const CATALOG_VERSION = 2;
+// 3 (#4 A1): the `if` control activity is a NEW catalog TYPE. A pre-A1 build does
+// not route `if` — it treats an `if`'s branch edges as inert and SILENTLY strands
+// everything downstream — so a doc using `if` must refuse to import there.
+// Stamping 3 makes an older build reject it, the rule catalog/types.ts states for
+// adding a type. (Adding metadata FIELDS to existing entries does not bump; adding
+// a runnable TYPE does.)
+export const CATALOG_VERSION = 3;
 export const SCHEMA_VERSION = 1;
