@@ -518,6 +518,17 @@ describe('run.triggerContext — the fire-time trigger seed (#5 S12)', () => {
     expect(dispatchCmd(r.commands).preparedInput).toEqual({ when: null });
   });
 
+  it('a FOREIGN-run run.interrupted does NOT terminalize a seeded pending run (identity check)', () => {
+    const eng = engine([node('a', {})]);
+    const s = eng.reduce(eng.seedState(), tctx()).state; // seed establishes runId = RUN
+    const r = eng.reduce(s, {
+      type: 'run.interrupted',
+      runId: 'other-run',
+      reason: 'drive_failed',
+    });
+    expect(r.state.status).toBe('pending'); // untouched — the interrupt was for another run
+  });
+
   it('a SECOND run.triggerContext on a still-pending run is a no-op + diagnostic (first wins)', () => {
     const eng = engine([node('a', {})]);
     const s = eng.reduce(eng.seedState(), tctx({ scheduledTime: SCHED })).state;

@@ -1428,6 +1428,12 @@ export function createEngine(doc: EngineDoc): Engine {
     return {
       state: {
         ...state,
+        // Establish the run's identity at SEED time (the seed is its first event).
+        // Until now `runId` was only set by `run.started`; carrying it here lets
+        // the pre-start `run.interrupted` path below make a real identity check,
+        // and `onRunStarted` re-sets the same value (single-run log) so nothing
+        // downstream changes.
+        runId: event.runId,
         triggerContext: {
           triggerId: event.triggerId,
           scheduledTime: event.scheduledTime ?? null,
@@ -1958,10 +1964,16 @@ export function createEngine(doc: EngineDoc): Engine {
     // cleanup appends `run.interrupted` over a lone-seed (still `pending`) log.
     // Folding it to `interrupted` keeps the PROJECTION equal to the row the
     // cleanup persists — without this the fold would no-op and the two would
-    // diverge (an event-sourcing invariant break). Only `run.interrupted`: a
-    // `run.finished` before start is genuinely impossible and stays an ignored
-    // no-op under the guard below.
-    if (state.status === 'pending' && event.type === 'run.interrupted') {
+    // diverge (an event-sourcing invariant break). The identity check is REAL
+    // here (unlike the no-op pending fallback below): the seed established
+    // `state.runId`, so a foreign run's interrupt cannot terminalize this run — it
+    // falls through to the no-op. Only `run.interrupted`: a `run.finished` before
+    // start is genuinely impossible and stays an ignored no-op under the guard.
+    if (
+      state.status === 'pending' &&
+      event.type === 'run.interrupted' &&
+      event.runId === state.runId
+    ) {
       return { state: { ...state, status: 'interrupted' }, commands: [], diagnostics };
     }
 
