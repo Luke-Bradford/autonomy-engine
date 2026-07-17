@@ -68,8 +68,10 @@ const httpRequestInputSchema = z.object({
   // The declared secret SINK (item 7 / S4): header name → inert `{$secret:name}`
   // marker. Documentation-only here — the RESOLVED plaintext is read from the
   // `secretFields` side channel, NEVER from this marker. Declared so a malformed
-  // value at the sink is caught rather than silently ignored.
-  secretHeaders: z.record(z.string(), SecretRefSchema).optional(),
+  // value at the sink is caught rather than silently ignored. The key is the
+  // shared SSOT constant (computed, not a literal) so a rename can't desync this
+  // schema from the sink/prefix wiring.
+  [HTTP_SECRET_HEADERS_FIELD]: z.record(z.string(), SecretRefSchema).optional(),
 });
 
 /**

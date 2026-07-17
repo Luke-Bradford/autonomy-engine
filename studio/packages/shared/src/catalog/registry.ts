@@ -55,7 +55,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
       body: z.string().optional(),
       // Metadata only (catalog `configSchema` is not a save-time validator — the
       // adapter validates the live request). Documents the sink shape for the UI.
-      secretHeaders: z.record(z.string(), SecretRefSchema).optional(),
+      // Computed key from the shared SSOT constant (not a literal) so a rename
+      // can't desync this schema from `secretSinkFields`/the adapter prefix.
+      [HTTP_SECRET_HEADERS_FIELD]: z.record(z.string(), SecretRefSchema).optional(),
     }),
   },
   {
