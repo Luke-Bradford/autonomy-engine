@@ -225,6 +225,16 @@ describe('wait with a malformed config fails the run LOUD (#4 A6)', () => {
     expect(finish?.reason).toBe('invalid_event');
   });
 
+  it('seconds too large to keep dueAt a safe integer → invalid_event (never an arm-time poison pill)', () => {
+    // 1e300 passes the finite/non-negative gate but `now + 1e300*1000` overflows
+    // to Infinity, which would fail ArmWakeupInputSchema's z.number().int() INSIDE
+    // armWait as a boot poison pill — it must fail LOUD here at eval time instead.
+    const e = eng([waitNode('w', '${params.huge}')]);
+    const { finish } = driveRun(e, { params: { huge: 1e300 }, resolve: simpleResolve() });
+    expect(finish?.outcome).toBe('failure');
+    expect(finish?.reason).toBe('invalid_event');
+  });
+
   it('a numeric STRING resolved value is coerced (not a failure)', () => {
     const e = eng([waitNode('w', '${params.n}')]);
     const { state, finish } = driveRun(e, { params: { n: '7' }, resolve: simpleResolve() });

@@ -1559,6 +1559,11 @@ export function createEngine(doc: EngineDoc): Engine {
    * integer ms (S1's `dueAt` is `z.number().int()`), so a fractional `${}` seconds
    * is a valid sub-second wait, not an arm-time crash.
    */
+  // Largest `seconds` for which the driver's `dueAt = now + seconds*1000` stays a
+  // safe integer (so `ArmWakeupInputSchema`'s `z.number().int()` accepts it rather
+  // than choking on ±Infinity / a lossy float). `MAX_SAFE_INTEGER / 1000`, floored.
+  const MAX_WAIT_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000);
+
   function evalWaitSeconds(node: Node, state: RunState, item?: { value: unknown }): number {
     const raw = node.config['seconds'];
     if (typeof raw !== 'string' || raw.trim() === '') {
@@ -1595,6 +1600,21 @@ export function createEngine(doc: EngineDoc): Engine {
       throw new SubstituteError(
         `wait node '${node.id}' seconds must resolve to a finite, non-negative number ` +
           `(got ${JSON.stringify(resolved)})`,
+      );
+    }
+    // Upper-bound `seconds` so the driver's `dueAt = now + seconds*1000` cannot
+    // overflow past a SAFE integer (→ ±Infinity / precision loss). An unbounded
+    // astronomical value passes the finite/non-negative gate here but then fails
+    // `ArmWakeupInputSchema`'s `z.number().int()` INSIDE `armWait` as a boot poison
+    // pill (the run re-throws on every resume) instead of failing LOUD here — the
+    // opposite tail of the fractional case `armWait` rounds. Reject at eval time so
+    // a bad duration fails the run cleanly, never the alarm arm. The bound keeps
+    // `seconds*1000` within `Number.MAX_SAFE_INTEGER` (~285k years; far past any
+    // real wait); `now` (~1.75e12 ms) is negligible against the ~9e15 headroom.
+    if (seconds > MAX_WAIT_SECONDS) {
+      throw new SubstituteError(
+        `wait node '${node.id}' seconds ${seconds} exceeds the maximum ${MAX_WAIT_SECONDS} ` +
+          '(a longer wait would overflow the alarm due time)',
       );
     }
     return seconds;
