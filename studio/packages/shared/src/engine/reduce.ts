@@ -928,7 +928,17 @@ export function createEngine(doc: EngineDoc): Engine {
     return { state: next, changed: true };
   }
 
-  function prepFailure(state: RunState, id: string, err: unknown, diagnostics: string[]): Step {
+  // Return type PINS `finish` as present (not the `Step`-optional `finish?`): every
+  // `prepFailure` path terminalizes, so each call site reads `failed.finish` without a
+  // non-null `!`. Narrowing here makes the invariant compiler-enforced — if a future
+  // edit stopped setting `finish`, this signature would fail to typecheck rather than
+  // silently emit an `undefined` command downstream.
+  function prepFailure(
+    state: RunState,
+    id: string,
+    err: unknown,
+    diagnostics: string[],
+  ): Step & { finish: EngineCommand } {
     const msg = err instanceof Error ? err.message : String(err);
     diagnostics.push(`dispatch prep failed for node '${id}': ${msg}`);
     return {
@@ -2013,7 +2023,7 @@ export function createEngine(doc: EngineDoc): Engine {
             branch = evalIfBranch(node, state);
           } catch (err) {
             const failed = prepFailure(state, id, err, diagnostics);
-            return { state: failed.state, commands: [failed.finish!], diagnostics };
+            return { state: failed.state, commands: [failed.finish], diagnostics };
           }
           commands.push({
             type: 'evaluateControl',
@@ -2035,7 +2045,7 @@ export function createEngine(doc: EngineDoc): Engine {
           // per boot; `driveRun` makes this the RUNTIME path for every retry AND
           // discards `onRetryDue`'s terminalize in favour of it.
           const failed = prepFailure(state, id, err, diagnostics);
-          return { state: failed.state, commands: [failed.finish!], diagnostics };
+          return { state: failed.state, commands: [failed.finish], diagnostics };
         }
         commands.push({
           type: 'dispatchNode',
@@ -2054,7 +2064,7 @@ export function createEngine(doc: EngineDoc): Engine {
           // Terminalize for the same reason as the `ready` branch above, and to
           // match `tryDispatchNode`'s own call-prep throw (`prepFailure`).
           const failed = prepFailure(state, id, err, diagnostics);
-          return { state: failed.state, commands: [failed.finish!], diagnostics };
+          return { state: failed.state, commands: [failed.finish], diagnostics };
         }
         commands.push({
           type: 'startChild',
