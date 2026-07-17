@@ -70,5 +70,17 @@
 // `webhook` node carries an artifact an older build mis-runs (`UNKNOWN_ACTIVITY` /
 // an inert unrouted control node), so it must refuse to import. Stamping 10
 // enforces that (`portability/envelope.ts`), the rule catalog/types.ts states.
-export const CATALOG_VERSION = 10;
+// 11 (#4 A16): `webhook` typed OUTPUT. No new TYPE and no new catalog-entry field
+// (webhook outputs are author-declared via the generic F13 `config.outputs`, like
+// `execute_pipeline`'s child-projected outputs) — but this is NOT the A9 structural
+// exception. An A16 export authors a webhook whose declared `config.outputs` a
+// downstream `${nodes.w.output.decision}` depends on; a pre-A16 build (which parks
+// + completes the webhook but NEVER populates its outputs — the inbound body was
+// OPAQUE in A13) leaves that ref unresolved and mis-runs the export. That is the
+// bump-rule's load-bearing test (an older build mis-runs the artifact), met exactly
+// as A11/A13's `UNKNOWN_ACTIVITY` mis-run was — so it bumps, unlike A9 (whose
+// exports were IDENTICALLY runnable on older builds). Stamping 11 makes a 10-build
+// refuse an A16 export at import (`portability/envelope.ts`) rather than silently
+// leaving the typed output empty at run time.
+export const CATALOG_VERSION = 11;
 export const SCHEMA_VERSION = 1;

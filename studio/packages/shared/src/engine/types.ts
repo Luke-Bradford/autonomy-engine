@@ -783,17 +783,28 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * #4 A13 — the parked `webhook` node's inbound callback ARRIVED. Appended by
      * the `POST /api/external-wait/:token` route once it has authenticated the
      * capability token and correlated it to this parked (runId, nodeId, attemptId).
-     * Folding it completes the wait (`external_wait_pending` → `success`, empty
-     * outputs — the payload is OPAQUE in A13; typed `outputSchema`→`config.outputs`
-     * is A16). The external-wait twin of `timer.due`: where `timer.due` fires from
-     * an alarm, this fires from an HTTP request. Guarded on `external_wait_pending`
-     * at the parked attempt, so an at-least-once / replayed callback folds as a
-     * no-op (the second layer behind the route's own row-status guard).
+     * Folding it completes the wait (`external_wait_pending` → `success`). The
+     * external-wait twin of `timer.due`: where `timer.due` fires from an alarm,
+     * this fires from an HTTP request. Guarded on `external_wait_pending` at the
+     * parked attempt, so an at-least-once / replayed callback folds as a no-op (the
+     * second layer behind the route's own row-status guard).
+     *
+     * #4 A16 — `outputs` carries the inbound callback body's TYPED, declared-key
+     * FILTERED payload (ADF `reportStatusOnCallBack`). It is validated + filtered
+     * at the HTTP BOUNDARY (`checkInboundOutputs`) against the webhook's
+     * `config.outputs` contract BEFORE this event is appended, so only declared,
+     * correctly-typed keys ever enter the raw-served run_events log — never the
+     * correlation token (still absent, see `externalWait.created`) and never an
+     * undeclared external key. `optional` for back-compat: a pre-A16 completion
+     * event carries none, and the fold defaults it to `{}` (empty outputs, the A13
+     * behaviour). The fold re-filters through `storeOutputs` against the immutable
+     * version so a hand-crafted event cannot inject an undeclared refable key.
      */
     type: z.literal('externalWait.completed'),
     runId: z.string(),
     nodeId: z.string(),
     previousAttemptId: z.string(),
+    outputs: z.record(z.string(), z.unknown()).optional(),
   }),
   z.object({
     /**
