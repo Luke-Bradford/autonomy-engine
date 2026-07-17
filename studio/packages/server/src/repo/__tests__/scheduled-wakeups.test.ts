@@ -10,8 +10,10 @@ import {
   deleteWakeup,
   getWakeup,
   getWakeupByKey,
+  drainSettledWakeups,
   listDueWakeups,
   listPendingWakeups,
+  pruneSettledWakeups,
   settleWakeup,
 } from '../scheduled-wakeups.js';
 import type { Db } from '../types.js';
@@ -267,5 +269,118 @@ describe('#5 S1 — settle / cancel', () => {
     settleWakeup(db, row.id, { status: 'fired', firedAt: 5_000 });
     expect(deleteWakeup(db, row.id)).toBeNull();
     expect(getWakeup(db, row.id)?.status).toBe('fired');
+  });
+});
+
+describe('#464 — pruneSettledWakeups (retention)', () => {
+  let db: Db;
+  beforeEach(() => {
+    db = freshDb().db;
+  });
+
+  /** Arm a pending row under a unique discriminator, then settle it at `firedAt`. */
+  function settled(
+    discriminator: string,
+    status: 'fired' | 'suppressed' | 'cancelled',
+    firedAt: number,
+  ) {
+    const row = armRetry(db, discriminator);
+    return settleWakeup(db, row.id, { status, firedAt })!;
+  }
+
+  it('deletes settled rows OLDER than the cutoff, keeps NEWER ones', () => {
+    const old = settled('attempt-1', 'fired', 1_000);
+    const recent = settled('attempt-2', 'fired', 9_000);
+
+    const deleted = pruneSettledWakeups(db, { before: 5_000 });
+
+    expect(deleted).toBe(1);
+    expect(getWakeup(db, old.id)).toBeNull();
+    expect(getWakeup(db, recent.id)?.id).toBe(recent.id);
+  });
+
+  it('NEVER prunes pending rows, however old their dueAt — the claim scan must keep them', () => {
+    // A pending row has firedAt = null, so the `firedAt < before` predicate never
+    // selects it. Belt-and-suspenders on the `status != 'pending'` filter: an
+    // armed alarm is the one thing retention must never touch.
+    const armed = armRetry(db, 'attempt-1', /* dueAt far in the past */ 1);
+
+    const deleted = pruneSettledWakeups(db, { before: 10_000 });
+
+    expect(deleted).toBe(0);
+    expect(getWakeup(db, armed.id)?.status).toBe('pending');
+    expect(listPendingWakeups(db)).toHaveLength(1);
+  });
+
+  it('prunes every SETTLED status — fired, suppressed AND cancelled', () => {
+    const f = settled('attempt-1', 'fired', 1_000);
+    const s = settled('attempt-2', 'suppressed', 1_000);
+    const c = settled('attempt-3', 'cancelled', 1_000);
+
+    const deleted = pruneSettledWakeups(db, { before: 5_000 });
+
+    expect(deleted).toBe(3);
+    for (const row of [f, s, c]) expect(getWakeup(db, row.id)).toBeNull();
+  });
+
+  it('is EXCLUSIVE on the boundary: a row settled exactly AT the cutoff is retained', () => {
+    // `firedAt < before`, strict. The cutoff is `now - retentionMs`, so a row
+    // exactly at the floor is still within the safe window and must survive —
+    // this strictness is what keeps a fired key un-prunable until it is provably
+    // past every consumer's replay window (the idempotency guarantee).
+    const atCutoff = settled('attempt-1', 'fired', 5_000);
+    const justUnder = settled('attempt-2', 'fired', 4_999);
+
+    const deleted = pruneSettledWakeups(db, { before: 5_000 });
+
+    expect(deleted).toBe(1);
+    expect(getWakeup(db, atCutoff.id)?.id).toBe(atCutoff.id);
+    expect(getWakeup(db, justUnder.id)).toBeNull();
+  });
+
+  it('is BOUNDED by `limit`, deleting the OLDEST rows first', () => {
+    const a = settled('attempt-1', 'fired', 1_000);
+    const b = settled('attempt-2', 'fired', 2_000);
+    const c = settled('attempt-3', 'fired', 3_000);
+
+    const deleted = pruneSettledWakeups(db, { before: 10_000, limit: 2 });
+
+    expect(deleted).toBe(2);
+    // Oldest two gone; the newest survives for the next sweep.
+    expect(getWakeup(db, a.id)).toBeNull();
+    expect(getWakeup(db, b.id)).toBeNull();
+    expect(getWakeup(db, c.id)?.id).toBe(c.id);
+  });
+
+  it('returns 0 when nothing is due for pruning', () => {
+    settled('attempt-1', 'fired', 9_000);
+    expect(pruneSettledWakeups(db, { before: 5_000 })).toBe(0);
+  });
+
+  it('drainSettledWakeups DRAINS a whole backlog to a fixpoint in bounded batches', () => {
+    // A batch smaller than the backlog must still fully drain — the loop runs
+    // until a batch comes back short. This is what stops a high-volume instance
+    // from capping at `batch` rows/sweep forever.
+    for (let i = 0; i < 5; i++) settled(`attempt-${i}`, 'fired', 1_000 + i);
+
+    const total = drainSettledWakeups(db, { before: 10_000, batch: 2 });
+
+    expect(total).toBe(5);
+    // Fully drained: a further drain finds nothing.
+    expect(drainSettledWakeups(db, { before: 10_000, batch: 2 })).toBe(0);
+  });
+
+  it('drainSettledWakeups respects the cutoff — leaves rows newer than `before`', () => {
+    settled('attempt-1', 'fired', 1_000);
+    settled('attempt-2', 'fired', 9_000);
+    expect(drainSettledWakeups(db, { before: 5_000, batch: 10 })).toBe(1);
+  });
+
+  it('drainSettledWakeups clamps a non-positive batch to 1 rather than spinning forever', () => {
+    // A `batch <= 0` would prune 0 rows per call and never break (`0 < 0` is
+    // false). The clamp guarantees forward progress for a mistaken caller.
+    settled('attempt-1', 'fired', 1_000);
+    settled('attempt-2', 'fired', 1_001);
+    expect(drainSettledWakeups(db, { before: 10_000, batch: 0 })).toBe(2);
   });
 });

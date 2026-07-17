@@ -6,7 +6,7 @@ import { openDb } from './db/client.js';
 import { appMeta } from './db/schema.js';
 import { resolveMasterKey } from './secrets/secrets.js';
 import { createSupervisor } from './workers/process-supervisor.js';
-import { getWakeupByKey } from './repo/scheduled-wakeups.js';
+import { drainSettledWakeups, getWakeupByKey } from './repo/scheduled-wakeups.js';
 import { reconcileOnBoot } from './run/reconcile.js';
 import { createExecutor } from './run/executor.js';
 import { createRunDrives } from './run/drives.js';
@@ -40,6 +40,38 @@ export function resolvePort(raw: string | undefined): number {
   return n;
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * Default retention floor for settled `scheduled_wakeups` rows (#464). 30 days is
+ * orders of magnitude beyond every current alarm kind's re-arm window (see
+ * `pruneSettledWakeups`'s safety argument), so a fired key is never freed while
+ * it could still be legitimately re-armed — while keeping the table from growing
+ * without bound (an always-on minute-trigger writes ~525k rows/year on its own).
+ */
+export const DEFAULT_WAKEUP_RETENTION_MS = 30 * MS_PER_DAY;
+
+/**
+ * Resolve `WAKEUP_RETENTION_DAYS` → the retention window in ms. Empty/undefined =
+ * the 30-day default; `0` = retention DISABLED (never prune); any other value must
+ * be a non-negative integer number of days. VALIDATED (not a silent `Number()`)
+ * for the same reason `resolvePort` is: a typo that parsed to `NaN` would flow
+ * into `before = now - NaN`, make the `firedAt < before` predicate always false,
+ * and silently disable pruning — the bug persisting invisibly.
+ */
+export function resolveRetentionMs(raw: string | undefined): number {
+  // `.trim()` so a whitespace-only value falls to the default rather than
+  // `Number('   ') === 0` silently DISABLING retention.
+  if (raw === undefined || raw.trim() === '') return DEFAULT_WAKEUP_RETENTION_MS;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new Error(
+      `Invalid WAKEUP_RETENTION_DAYS "${raw}" — must be a non-negative integer number of days (0 disables retention)`,
+    );
+  }
+  return n * MS_PER_DAY;
+}
+
 const PORT = resolvePort(process.env.PORT);
 const HOST = '127.0.0.1';
 
@@ -56,6 +88,14 @@ const HOST = '127.0.0.1';
 const ALARM_TICK_MS = 1_000;
 
 /**
+ * How often the #464 retention sweep runs. Pure housekeeping (prune settled
+ * `scheduled_wakeups` rows past the retention floor), not latency-sensitive —
+ * hourly is ample against a 30-day floor. `unref`'d like the alarm timer so a
+ * pending sweep never holds the process open at shutdown.
+ */
+const RETENTION_SWEEP_MS = 60 * 60 * 1000;
+
+/**
  * Max request body size. Equal to Fastify's own default (1 MiB) — set
  * EXPLICITLY so the bound is a stated decision, not an inherited default worth
  * re-verifying on every Fastify upgrade. It is the upstream cap the error
@@ -69,6 +109,10 @@ export interface BuildAppOptions {
   dbPath?: string;
   /** Overrides `process.env.AUTONOMY_MASTER_KEY_FILE` for this app instance only; threaded through to `resolveMasterKey`. */
   masterKeyFile?: string;
+  /** #464 — overrides `WAKEUP_RETENTION_DAYS`/the 30-day default (ms). `0` disables the retention sweep. Call-time only, for test isolation + operator override. */
+  wakeupRetentionMs?: number;
+  /** #464 — overrides the retention sweep interval (ms); defaults to `RETENTION_SWEEP_MS`. Tests set it small (or disable via `wakeupRetentionMs: 0`) to avoid a real hour-long timer. */
+  retentionSweepMs?: number;
 }
 
 export async function buildApp(opts?: BuildAppOptions) {
@@ -263,6 +307,36 @@ export async function buildApp(opts?: BuildAppOptions) {
   // per trigger goes overdue, and the handler arms the next FUTURE occurrence.
   alarmClock.tick();
 
+  // #464 — RETENTION SWEEP. Settled `scheduled_wakeups` rows are permanent unless
+  // pruned; an always-on schedule/retry writes them forever. Prune settled rows
+  // past the retention floor, in bounded batches drained to a fixpoint. Disabled
+  // entirely when `retentionMs === 0` (`WAKEUP_RETENTION_DAYS=0` / test override).
+  const retentionMs =
+    opts?.wakeupRetentionMs ?? resolveRetentionMs(process.env.WAKEUP_RETENTION_DAYS);
+  const retentionSweepMs = opts?.retentionSweepMs ?? RETENTION_SWEEP_MS;
+  let retentionTimer: ReturnType<typeof setInterval> | undefined;
+  if (retentionMs > 0) {
+    const sweepRetention = (): void => {
+      // A DB fault here must never crash a headless server — the same structural
+      // guard the alarm tick (and cron ticks) use.
+      try {
+        const pruned = drainSettledWakeups(db, { before: Date.now() - retentionMs });
+        if (pruned > 0) fastify.log.info({ pruned }, 'wakeup retention: pruned settled rows');
+      } catch (err) {
+        fastify.log.error({ err }, 'wakeup retention sweep failed');
+      }
+    };
+    // Sweep once at boot (a long downtime — or first deploy of this feature —
+    // may have piled up a big backlog), then on the coarse interval. The boot
+    // drain is synchronous (better-sqlite3), so it blocks boot until the backlog
+    // clears; the partial `scheduled_wakeups_retention_idx` keeps each batch an
+    // index range scan so even a year-deep backlog drains quickly. `unref`'d so a
+    // pending interval sweep never holds the process open at shutdown.
+    sweepRetention();
+    retentionTimer = setInterval(sweepRetention, retentionSweepMs);
+    retentionTimer.unref();
+  }
+
   // Auth seam + the one global error handler, registered before any route so
   // every request (and every thrown error) is covered.
   registerAuthHook(fastify);
@@ -317,6 +391,9 @@ export async function buildApp(opts?: BuildAppOptions) {
     // DURABLE, and the boot sweep above serves it on the next start.
     clearInterval(alarmTimer);
     alarmClock.stop();
+    // #464 — stop the retention sweep too; it is pure housekeeping, safe to drop
+    // instantly (the next boot sweeps again). `undefined` when retention is off.
+    if (retentionTimer !== undefined) clearInterval(retentionTimer);
     runLauncher.stop();
     await supervisor.reapAllSupervised();
   });
