@@ -837,6 +837,42 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
+   * A skipped entity's OBSERVABILITY backstop (retired `noteInertBranch`, re-scoped
+   * for #4 A0). Flag ONLY the anomaly: an incoming `branch` edge whose source
+   * terminalised `success`/`failure` WITHOUT recording a branch (`branches[from]`
+   * undefined) — a non-branching activity, a failed `if`, or a pre-#444 legacy row.
+   * Such an edge can never satisfy, so the target is skipped SILENTLY (the run can
+   * still succeed, so nothing else surfaces the lost subgraph). `validateDoc` is the
+   * write-time half, but legacy rows were never validated — this is the runtime half
+   * the deleted comment warned not to drop on the strength of `validateDoc` alone.
+   *
+   * NOT flagged: a source that took a DIFFERENT arm (`branches[from]` defined ≠ this
+   * label — normal routing) or a SKIPPED source (skip propagation — cause already
+   * upstream; edgeState makes those `impossible`, so they never reach here as dead
+   * `branch` edges with a terminal success/failure source).
+   */
+  function noteDeadBranchOnSkip(
+    id: string,
+    incoming: Edge[],
+    state: RunState,
+    diagnostics: string[],
+  ): void {
+    const dead = incoming.filter((e) => {
+      if (e.on !== 'branch') return false;
+      const oc = endpointOutcome(e.from, state);
+      return (oc === 'success' || oc === 'failure') && state.branches[e.from] === undefined;
+    }).length;
+    if (dead === 0) return;
+    const subject = dead === 1 ? `an incoming 'branch' edge` : `${dead} incoming 'branch' edges`;
+    diagnostics.push(
+      `'${id}' was skipped and has ${subject} whose source terminalised without recording a ` +
+        `branch outcome (a non-branching activity, a failed 'if', or a pre-#444 legacy row), so ` +
+        `the edge could never be satisfied and the subgraph was skipped silently — check the ` +
+        `branch source`,
+    );
+  }
+
+  /**
    * Try to advance ONE pending node (top-level or a child): skip it, dispatch
    * it (`dispatchNode`), or — for a `call_pipeline` node — emit `startChild` and
    * hold it `waiting`. A prep-input failure short-circuits to `invalid_event`.
@@ -853,6 +889,7 @@ export function createEngine(doc: EngineDoc): Engine {
     const node = nodeById.get(id)!;
     const r = computeReadiness(incoming, nodeJoin(node), state);
     if (r === 'skipped') {
+      noteDeadBranchOnSkip(id, incoming, state, diagnostics);
       return { state: withNode(state, id, { status: 'skipped' }), changed: true };
     }
     if (r !== 'ready') return { state, changed: false };
@@ -1302,6 +1339,7 @@ export function createEngine(doc: EngineDoc): Engine {
             state = enterContainer(state, id);
             changed = true;
           } else if (r === 'skipped') {
+            noteDeadBranchOnSkip(id, topIncoming.get(id)!, state, diagnostics);
             state = withContainer(state, id, { status: 'skipped' });
             changed = true;
           }

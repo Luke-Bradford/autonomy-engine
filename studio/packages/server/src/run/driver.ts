@@ -572,20 +572,22 @@ export async function pump(
     // on its own event, so append-before-fold is fine. `evaluateControl` carries
     // the branch the reducer already computed PURELY (#4 A1) — the driver just
     // makes it durable as `condition.evaluated`.
-    const source: Iterable<EngineEvent> | AsyncIterable<EngineEvent> =
-      command.type === 'scheduleRetry'
-        ? [armRetry(deps, state, command)]
-        : command.type === 'evaluateControl'
-          ? [
-              {
-                type: 'condition.evaluated' as const,
-                runId: state.runId,
-                nodeId: command.nodeId,
-                attemptId: command.attemptId,
-                branch: command.branch,
-              },
-            ]
-          : deps.executor.perform(command, state.runId);
+    let source: Iterable<EngineEvent> | AsyncIterable<EngineEvent>;
+    if (command.type === 'scheduleRetry') {
+      source = [armRetry(deps, state, command)];
+    } else if (command.type === 'evaluateControl') {
+      source = [
+        {
+          type: 'condition.evaluated' as const,
+          runId: state.runId,
+          nodeId: command.nodeId,
+          attemptId: command.attemptId,
+          branch: command.branch,
+        },
+      ];
+    } else {
+      source = deps.executor.perform(command, state.runId);
+    }
 
     let terminal = false;
     for await (const event of source) {
