@@ -198,12 +198,27 @@ jobs:
         if: steps.docs_only.outputs.docs_only != 'true'
         run: |
           set -uo pipefail
-          claude -p \
-            --model sonnet \
-            --allowedTools "" \
-            --setting-sources "" \
-            --output-format json < prompt.txt > response.json 2> claude-stderr.log || true
-          [ -s claude-stderr.log ] && { echo "--- claude -p stderr ---"; cat claude-stderr.log; } >&2 || true
+          # shellcheck source=/dev/null
+          . lib/ci_retry.sh
+          # Retry a TRANSIENT hiccup (network blip / auth glitch) so it self-heals
+          # rather than redding the gate on the first try (#579 review). run_review
+          # succeeds only on valid JSON with is_error=false, so a persistent
+          # failure exhausts the retries and falls through to the fail-closed
+          # extractor below.
+          run_review() {
+            claude -p \
+              --model sonnet \
+              --allowedTools "" \
+              --setting-sources "" \
+              --output-format json < prompt.txt > response.json 2> claude-stderr.log
+            python3 -c "import json,sys; sys.exit(1 if json.load(open('response.json')).get('is_error') else 0)" 2>/dev/null
+          }
+          if ! retry 3 5 run_review; then
+            # Only surface stderr on ACTUAL failure (#579 nitpick), not on an
+            # incidental warning from a successful run.
+            echo "::warning::claude -p review failed after retries" >&2
+            [ -s claude-stderr.log ] && { echo "--- claude -p stderr ---"; cat claude-stderr.log; } >&2 || true
+          fi
           # TESTED extractor (lib/review_prompt.py) -- #504/#501 lifted these out
           # of untestable heredocs. Exits non-zero on every unusable output.
           python3 lib/review_prompt.py --extract-cli response.json review.txt stop_reason.txt
