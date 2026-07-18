@@ -426,11 +426,17 @@ export type FailureKind = z.infer<typeof FailureKindSchema>;
  *   the run-cost projection (L6) cannot treat this response as fully accounted.
  *   Whatever partial count WAS present is still stamped (usage is a fact — never
  *   discard a captured token count); the status is what flags the gap.
+ * - `unpriced` (#2 L14) — a CLI/subscription response that IS metered (provider,
+ *   model, possibly tokens are known) but has NO per-response dollar price BY
+ *   DESIGN: a subscription/flat-rate seat covers the call, so there is no unit
+ *   price to resolve and the executor stamps NONE of the price fields. Crucially
+ *   this is NOT a measurement gap like `unknown` — the cost IS known (there is no
+ *   marginal charge) — so the L6 run-cost projection counts it in its OWN bucket
+ *   (`unpricedResponseCount`) and does NOT flag the run cost as incomplete.
  *
- * L14 extends this with `unpriced` (a CLI/subscription response that is metered
- * but carries no unit price) — additive, so no reshape of a stored event.
+ * Additive extension — no reshape of a stored `metered`/`unknown` event.
  */
-export const MeteringStatusSchema = z.enum(['metered', 'unknown']);
+export const MeteringStatusSchema = z.enum(['metered', 'unknown', 'unpriced']);
 export type MeteringStatus = z.infer<typeof MeteringStatusSchema>;
 
 /**

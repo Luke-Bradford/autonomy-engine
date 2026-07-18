@@ -54,9 +54,12 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
   /**
    * #2 L6 — the run-cost projection: SUMS the `costEstimate` stamped on this
    * run's `activity.metered` events (`computeRunCost`, the shared SSOT). Read
-   * off the durable event log, deterministic, fail-closed — an unpriced/unknown
-   * response leaves `complete:false` and its cost OUT of the total (never a
-   * manufactured 0). Owner-scoped THROUGH the run, exactly as `/events` is.
+   * off the durable event log, deterministic, fail-closed — a genuine cost gap
+   * (an unpriced MODEL, or `meteringStatus:'unknown'` usage) leaves `complete:false`
+   * and its cost OUT of the total (never a manufactured 0). #2 L14: a subscription
+   * `meteringStatus:'unpriced'` response is NOT a gap — it is counted separately
+   * (`unpricedResponseCount`) and does NOT flip `complete`. Owner-scoped THROUGH
+   * the run, exactly as `/events` is.
    */
   fastify.get<{ Params: { id: string } }>('/api/runs/:id/cost', async (request) => {
     const run = requireOwned(
