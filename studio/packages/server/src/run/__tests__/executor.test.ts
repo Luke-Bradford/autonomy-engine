@@ -371,6 +371,70 @@ describe('createExecutor — activity.captured (#2 L9a prompt/completion capture
   });
 });
 
+describe('createExecutor — activity.agentTelemetry (#2 L11a agent_task telemetry)', () => {
+  it('maps an agentTelemetry ActivityEvent to a durable event with ids stamped, before the terminal', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
+    const run = seedRun(db, pvId);
+    const adapters = fakeHttpAdapter(async function* () {
+      yield {
+        type: 'agentTelemetry',
+        telemetry: {
+          latencyMs: 42,
+          exitCode: 0,
+          summary: 'completed',
+          outputChars: 5,
+          outputHash: 'out-hash',
+        },
+      } satisfies ActivityEvent;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+
+    const state = await startRun(deps(db, { adapters }), run);
+
+    expect(state.status).toBe('success');
+    const events = loadEngineEvents(db, run.id);
+    const types = events.map((e) => e.type);
+    expect(types).toContain('activity.agentTelemetry');
+    expect(types.indexOf('activity.agentTelemetry')).toBeLessThan(types.indexOf('node.succeeded'));
+    const telem = events.find((e) => e.type === 'activity.agentTelemetry');
+    expect(telem).toMatchObject({
+      runId: run.id,
+      nodeId: 'n1',
+      latencyMs: 42,
+      exitCode: 0,
+      summary: 'completed',
+      outputChars: 5,
+      outputHash: 'out-hash',
+    });
+    // The executor stamps the attempt id.
+    expect(typeof (telem as { attemptId?: unknown }).attemptId).toBe('string');
+  });
+
+  it('OMITS signal and outputHash on the engine event when the telemetry carried none (fail-closed)', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
+    const run = seedRun(db, pvId);
+    const adapters = fakeHttpAdapter(async function* () {
+      yield {
+        type: 'agentTelemetry',
+        telemetry: { latencyMs: 7, exitCode: null, summary: 'spawnFailed', outputChars: 0 },
+      } satisfies ActivityEvent;
+      // spawnFailed → a permanent terminal (the telemetry still lands first).
+      yield { type: 'failed', kind: 'permanent', error: 'boom' } satisfies ActivityEvent;
+    });
+
+    await startRun(deps(db, { adapters }), run);
+
+    const telem = loadEngineEvents(db, run.id).find((e) => e.type === 'activity.agentTelemetry');
+    expect(telem).not.toHaveProperty('signal');
+    expect(telem).not.toHaveProperty('outputHash');
+    expect(telem).toMatchObject({ exitCode: null, summary: 'spawnFailed', outputChars: 0 });
+  });
+});
+
 describe('createExecutor — activity.metered price fields (#2 L5 cost)', () => {
   /** Run one node that emits a single metered fact, return the stored event. */
   async function meteredOf(

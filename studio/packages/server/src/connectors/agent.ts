@@ -10,6 +10,7 @@ import {
 } from './llm-shared.js';
 import type { NormalizedLlmRequest } from './llm-shared.js';
 import { redactSecrets } from './redact.js';
+import { sha256Hex } from '../util/hash.js';
 
 /**
  * The `agent_cli` connector adapter: runs an agent CLI (Claude Code, Codex, or
@@ -194,46 +195,90 @@ async function spawnAndCollect(
 }
 
 /**
- * Classify a subprocess RESULT into either a `failed` event (the not-completed
+ * The single classification of a subprocess RESULT, shared by BOTH invocation
+ * shapes AND the L11a telemetry. `summary` is the outcome class; `terminal` is a
+ * discriminated union (a `failed` event for the not-completed outcomes, or a
+ * completed `exitCode` so the caller's exit-code narrowing is type-checked).
+ * Deriving both from ONE partition is deliberate: `summary` and the terminal it
+ * accompanies CANNOT disagree.
+ */
+interface CliClassification {
+  /**
+   * The L11a `summary`. `completed` ⟺ `terminal.exitCode` present; the rest ⟺
+   * `terminal.failed`. The precedence below is load-bearing: the supervisor sets
+   * `killed:true` ALONGSIDE `timedOut`/`aborted` (a tree-kill is how it enforces
+   * a timeout / cancel), so `killed` must be checked AFTER the more specific
+   * `aborted`/`timedOut`, else every timeout/cancel misclassifies as `killed`.
+   */
+  summary: 'completed' | 'timedOut' | 'aborted' | 'killed' | 'signalled' | 'spawnFailed';
+  /** The exit code, VERBATIM from the result (`null` on any non-completion). */
+  exitCode: number | null;
+  /** The terminating signal, VERBATIM from the result (`null` if none). */
+  signal: NodeJS.Signals | null;
+  terminal: { failed: Extract<ActivityEvent, { type: 'failed' }> } | { exitCode: number };
+}
+
+/**
+ * Classify a subprocess RESULT (see `CliClassification`). The not-completed
  * outcomes BOTH invocation shapes map identically — abort/timeout/shutdown-reap/
- * spawn-failure/external-signal) or a completed exit code (a discriminated union
- * so the caller's exit-code narrowing is type-checked). The run's own cancel
- * wins over a coincident timeout.
+ * spawn-failure/external-signal. The run's own cancel wins over a coincident
+ * timeout, and both win over the `killed` superset flag (see the precedence note).
  */
 function classifyCliOutcome(
   result: SupervisedResult,
   command: string,
   label: string,
-): { failed: Extract<ActivityEvent, { type: 'failed' }> } | { exitCode: number } {
+): CliClassification {
+  const base = { exitCode: result.exitCode, signal: result.signal };
   if (result.aborted)
-    return { failed: { type: 'failed', kind: 'cancelled', error: `${label} aborted` } };
+    return {
+      ...base,
+      summary: 'aborted',
+      terminal: { failed: { type: 'failed', kind: 'cancelled', error: `${label} aborted` } },
+    };
   if (result.timedOut)
-    return { failed: { type: 'failed', kind: 'transient', error: `${label} timed out` } };
+    return {
+      ...base,
+      summary: 'timedOut',
+      terminal: { failed: { type: 'failed', kind: 'transient', error: `${label} timed out` } },
+    };
   if (result.killed)
     return {
-      failed: { type: 'failed', kind: 'cancelled', error: `${label} killed (server shutdown)` },
+      ...base,
+      summary: 'killed',
+      terminal: {
+        failed: { type: 'failed', kind: 'cancelled', error: `${label} killed (server shutdown)` },
+      },
     };
   if (result.exitCode === null) {
     // No exit code and we didn't kill it: a spawn failure (bad command →
     // `permanent`) or an external kill signal (→ `transient`).
     if (result.signal !== null) {
       return {
-        failed: {
-          type: 'failed',
-          kind: 'transient',
-          error: `${label} killed by signal ${result.signal}`,
+        ...base,
+        summary: 'signalled',
+        terminal: {
+          failed: {
+            type: 'failed',
+            kind: 'transient',
+            error: `${label} killed by signal ${result.signal}`,
+          },
         },
       };
     }
     return {
-      failed: {
-        type: 'failed',
-        kind: 'permanent',
-        error: `${label} failed to start (is '${command}' on PATH?)`,
+      ...base,
+      summary: 'spawnFailed',
+      terminal: {
+        failed: {
+          type: 'failed',
+          kind: 'permanent',
+          error: `${label} failed to start (is '${command}' on PATH?)`,
+        },
       },
     };
   }
-  return { exitCode: result.exitCode };
+  return { ...base, summary: 'completed', terminal: { exitCode: result.exitCode } };
 }
 
 /**
@@ -258,6 +303,10 @@ async function* runAgentTask(
     };
     return;
   }
+  // Time the subprocess wall clock in the (impure) adapter — the L11a `latencyMs`
+  // telemetry fact, stamped once here and frozen into the log (the reducer never
+  // reads a clock).
+  const started = Date.now();
   const { result, stdout } = await spawnAndCollect(
     supervisor,
     config,
@@ -266,12 +315,31 @@ async function* runAgentTask(
     secret,
     ctx.signal,
   );
-  const outcome = classifyCliOutcome(result, config.command, 'agent_task');
-  if ('failed' in outcome) {
-    yield outcome.failed;
+  const latencyMs = Date.now() - started;
+  const classification = classifyCliOutcome(result, config.command, 'agent_task');
+  const output = stdout.join('\n');
+  // #2 L11a — emit the subprocess TELEMETRY fact BEFORE the terminal (mirroring
+  // `metered`/`captured`), so the exit code + summary + latency + stdout SHAPE are
+  // observable regardless of outcome — including the FAILURE paths, where the
+  // terminal `node.failed` carries none of this today. Shape only (`outputChars` +
+  // fingerprint), never raw text; the fingerprint is OMITTED for empty stdout
+  // (fail-closed — no `hash('')`).
+  yield {
+    type: 'agentTelemetry',
+    telemetry: {
+      latencyMs,
+      exitCode: classification.exitCode,
+      summary: classification.summary,
+      ...(classification.signal !== null ? { signal: classification.signal } : {}),
+      outputChars: output.length,
+      ...(output.length > 0 ? { outputHash: sha256Hex(output) } : {}),
+    },
+  };
+  if ('failed' in classification.terminal) {
+    yield classification.terminal.failed;
     return;
   }
-  yield { type: 'succeeded', outputs: { output: stdout.join('\n'), exitCode: outcome.exitCode } };
+  yield { type: 'succeeded', outputs: { output, exitCode: classification.terminal.exitCode } };
 }
 
 /**
@@ -337,12 +405,12 @@ async function* runLlmCall(
     secret,
     ctx.signal,
   );
-  const outcome = classifyCliOutcome(result, config.command, 'llm_call');
-  if ('failed' in outcome) {
-    yield outcome.failed;
+  const { terminal } = classifyCliOutcome(result, config.command, 'llm_call');
+  if ('failed' in terminal) {
+    yield terminal.failed;
     return;
   }
-  if (outcome.exitCode !== 0) {
+  if (terminal.exitCode !== 0) {
     // Some CLIs (e.g. `codex exec`) print their error/diagnostic to STDOUT, not
     // stderr — fold BOTH into the detail so a failure is never a bare "exited N"
     // with no context. stderr first (the conventional error channel).
@@ -366,7 +434,7 @@ async function* runLlmCall(
     yield {
       type: 'failed',
       kind: 'permanent',
-      error: `llm_call CLI exited ${outcome.exitCode}${detail !== '' ? `: ${detail}` : ''}`,
+      error: `llm_call CLI exited ${terminal.exitCode}${detail !== '' ? `: ${detail}` : ''}`,
     };
     return;
   }

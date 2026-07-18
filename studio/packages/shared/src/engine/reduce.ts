@@ -3247,6 +3247,13 @@ export function createEngine(doc: EngineDoc): Engine {
         // it lives in the log for the Monitor run-detail. Captured once at dispatch,
         // never recomputed on replay.
         return { state, commands: [], diagnostics };
+      case 'activity.agentTelemetry':
+        // #2 L11a — INERT (like `activity.captured`): an `agent_task` subprocess
+        // TELEMETRY FACT (exitCode + summary + latency + stdout shape) is
+        // observability, not run state. It never enters `outputs` or `${}`, so
+        // folding it cannot change semantics; it lives in the log for the Monitor
+        // run-detail. Captured once at dispatch, never recomputed on replay.
+        return { state, commands: [], diagnostics };
       case 'node.dispatched':
         return onDispatched(state, event, diagnostics);
       case 'node.succeeded':

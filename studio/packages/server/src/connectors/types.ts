@@ -100,16 +100,38 @@ export interface LlmCapture {
 }
 
 /**
- * What an adapter streams. `output`, `metered`, and `captured` are observability
- * only (partial progress / a per-response metering fact / a per-response
- * prompt-completion capture fact); exactly one terminal `succeeded`/`failed` ends
- * the stream. The executor maps these to engine events (`node.output` /
- * `activity.metered` / `activity.captured` / `node.succeeded` / `node.failed`).
+ * A subprocess TELEMETRY fact for ONE `agent_task` attempt (#2 L11a): the agent-
+ * CLI child's exit code + a `summary` outcome classification + wall-clock latency
+ * + the stdout SHAPE (chars + `sha256` fingerprint, NO raw text — the same
+ * telemetry-vs-content discipline as `LlmCapture`). The executor stamps
+ * `runId`/`nodeId`/`attemptId` onto the durable `activity.agentTelemetry` event;
+ * the adapter supplies the rest. `signal` is OMITTED (not null) when the child was
+ * not signalled; `outputHash` is OMITTED when `outputChars === 0` — fail-closed,
+ * never `hash('')`.
+ */
+export interface AgentTelemetry {
+  latencyMs: number;
+  exitCode: number | null;
+  summary: 'completed' | 'timedOut' | 'aborted' | 'killed' | 'signalled' | 'spawnFailed';
+  signal?: string;
+  outputChars: number;
+  outputHash?: string;
+}
+
+/**
+ * What an adapter streams. `output`, `metered`, `captured`, and `agentTelemetry`
+ * are observability only (partial progress / a per-response metering fact / a
+ * per-response prompt-completion capture fact / an `agent_task` subprocess
+ * telemetry fact); exactly one terminal `succeeded`/`failed` ends the stream. The
+ * executor maps these to engine events (`node.output` / `activity.metered` /
+ * `activity.captured` / `activity.agentTelemetry` / `node.succeeded` /
+ * `node.failed`).
  */
 export type ActivityEvent =
   | { type: 'output'; name: string; value: unknown }
   | { type: 'metered'; usage: LlmUsage }
   | { type: 'captured'; capture: LlmCapture }
+  | { type: 'agentTelemetry'; telemetry: AgentTelemetry }
   | { type: 'succeeded'; outputs: Record<string, unknown> }
   | {
       type: 'failed';

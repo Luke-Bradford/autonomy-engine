@@ -1311,3 +1311,32 @@ describe('activity.captured is inert (#2 L9a)', () => {
     expect(r.state.status).toBe('running');
   });
 });
+
+// ===========================================================================
+// #2 L11a — activity.agentTelemetry is an inert observability fact
+// ===========================================================================
+
+describe('activity.agentTelemetry is inert (#2 L11a)', () => {
+  it('folding activity.agentTelemetry changes neither state nor commands, and does not terminalize the node', () => {
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const before = s;
+    const r = eng.reduce(s, {
+      type: 'activity.agentTelemetry',
+      runId: RUN,
+      nodeId: 'a',
+      attemptId: attempt('a'),
+      latencyMs: 456,
+      exitCode: 0,
+      summary: 'completed',
+      outputChars: 12,
+      outputHash: 'oh',
+    });
+    // Inert like activity.captured / activity.metered: identical state, no
+    // commands, node still in flight — telemetry never enters outputs/${}.
+    expect(r.state).toEqual(before);
+    expect(r.commands).toEqual([]);
+    expect(r.state.status).toBe('running');
+  });
+});

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createAgentAdapter, renderCliPrompt } from '../agent.js';
+import { sha256Hex } from '../../util/hash.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
 import type {
   OutputLineEvent,
@@ -76,9 +77,26 @@ describe('createAgentAdapter().runActivity', () => {
       ),
     );
 
-    expect(events).toEqual([
-      { type: 'succeeded', outputs: { output: 'working...\ndone', exitCode: 0 } },
-    ]);
+    // #2 L11a — the subprocess telemetry fact is ordered BEFORE the terminal.
+    expect(events[0]).toMatchObject({
+      type: 'agentTelemetry',
+      telemetry: {
+        summary: 'completed',
+        exitCode: 0,
+        outputChars: 'working...\ndone'.length,
+        outputHash: sha256Hex('working...\ndone'),
+      },
+    });
+    expect((events[0] as { telemetry: { latencyMs: number } }).telemetry.latencyMs).toBeTypeOf(
+      'number',
+    );
+    // stdout shape only — no signal on a clean exit, no raw text.
+    expect(events[0]).not.toHaveProperty('telemetry.signal');
+    expect(events[1]).toEqual({
+      type: 'succeeded',
+      outputs: { output: 'working...\ndone', exitCode: 0 },
+    });
+    expect(events).toHaveLength(2);
     expect(spawnArgs[0]!.command).toBe('claude');
     // Static args precede the task, which is the final argv element.
     expect(spawnArgs[0]!.args).toEqual(['-p', 'ship it']);
@@ -108,25 +126,104 @@ describe('createAgentAdapter().runActivity', () => {
   it('a non-zero exit is STILL succeeded (exit code is data the pipeline branches on)', async () => {
     const { supervisor } = fakeSupervisor([{ stream: 'stdout', line: 'partial' }], { exitCode: 2 });
     const events = await drain(createAgentAdapter(supervisor).runActivity(ctx(), null));
-    expect(events).toEqual([{ type: 'succeeded', outputs: { output: 'partial', exitCode: 2 } }]);
+    // Completed on its own → telemetry `summary: completed` carrying the real exit
+    // code, ordered before the (still-succeeded) terminal.
+    expect(events[0]).toMatchObject({
+      type: 'agentTelemetry',
+      telemetry: { summary: 'completed', exitCode: 2, outputChars: 'partial'.length },
+    });
+    expect(events[1]).toEqual({ type: 'succeeded', outputs: { output: 'partial', exitCode: 2 } });
   });
 
-  it('maps a timeout to a transient failure', async () => {
-    const { supervisor } = fakeSupervisor([], { exitCode: null, timedOut: true, killed: true });
+  it('maps a timeout to a transient failure (telemetry summary=timedOut precedes it)', async () => {
+    const { supervisor } = fakeSupervisor([], {
+      exitCode: null,
+      timedOut: true,
+      killed: true,
+      signal: 'SIGTERM',
+    });
     const events = await drain(createAgentAdapter(supervisor).runActivity(ctx(), null));
-    expect(events[0]).toMatchObject({ type: 'failed', kind: 'transient' });
+    // `killed` is a superset flag the supervisor sets alongside `timedOut`; the
+    // classification must NOT misread it as `summary: killed`.
+    expect(events[0]).toMatchObject({
+      type: 'agentTelemetry',
+      telemetry: { summary: 'timedOut', exitCode: null, signal: 'SIGTERM' },
+    });
+    expect(events.find((e) => e.type === 'failed')).toMatchObject({
+      type: 'failed',
+      kind: 'transient',
+    });
   });
 
-  it('maps an abort to a cancelled failure', async () => {
+  it('captures the PARTIAL stdout SHAPE of a timed-out subprocess (the failure-path value-add)', async () => {
+    // The whole point of L11a: on a failure that today yields ONLY `node.failed`,
+    // the partial output shape + exit code + latency are still observable.
+    const { supervisor } = fakeSupervisor(
+      [
+        { stream: 'stdout', line: 'started work' },
+        { stream: 'stdout', line: 'made progress' },
+      ],
+      { exitCode: null, timedOut: true, killed: true },
+    );
+    const events = await drain(createAgentAdapter(supervisor).runActivity(ctx(), null));
+    const partial = 'started work\nmade progress';
+    expect(events[0]).toMatchObject({
+      type: 'agentTelemetry',
+      telemetry: {
+        summary: 'timedOut',
+        outputChars: partial.length,
+        outputHash: sha256Hex(partial),
+      },
+    });
+    expect(events.find((e) => e.type === 'failed')).toMatchObject({ kind: 'transient' });
+  });
+
+  it('maps an abort to a cancelled failure (telemetry summary=aborted precedes it)', async () => {
     const { supervisor } = fakeSupervisor([], { exitCode: null, aborted: true, killed: true });
     const events = await drain(createAgentAdapter(supervisor).runActivity(ctx(), null));
-    expect(events[0]).toMatchObject({ type: 'failed', kind: 'cancelled' });
+    expect(events[0]).toMatchObject({
+      type: 'agentTelemetry',
+      telemetry: { summary: 'aborted' },
+    });
+    expect(events.find((e) => e.type === 'failed')).toMatchObject({ kind: 'cancelled' });
   });
 
   it('maps a failure-to-start (null exit, no signal, not killed) to permanent', async () => {
     const { supervisor } = fakeSupervisor([], { exitCode: null, signal: null });
     const events = await drain(createAgentAdapter(supervisor).runActivity(ctx(), null));
-    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    // No stdout → `outputHash` OMITTED (fail-closed, never hash('')).
+    expect(events[0]).toMatchObject({
+      type: 'agentTelemetry',
+      telemetry: { summary: 'spawnFailed', exitCode: null, outputChars: 0 },
+    });
+    expect(events[0]).not.toHaveProperty('telemetry.outputHash');
+    expect(events.find((e) => e.type === 'failed')).toMatchObject({ kind: 'permanent' });
+  });
+
+  it('maps a server-shutdown reap (killed by us, neither aborted nor timed out) to killed/cancelled', async () => {
+    // The `reapAllSupervised` path: the supervisor set `killed:true` on its own
+    // (tree-killed on shutdown) without the run aborting or the wall-clock firing.
+    const { supervisor } = fakeSupervisor([{ stream: 'stdout', line: 'was working' }], {
+      exitCode: null,
+      killed: true,
+      signal: 'SIGTERM',
+    });
+    const events = await drain(createAgentAdapter(supervisor).runActivity(ctx(), null));
+    expect(events[0]).toMatchObject({
+      type: 'agentTelemetry',
+      telemetry: { summary: 'killed', exitCode: null, signal: 'SIGTERM' },
+    });
+    expect(events.find((e) => e.type === 'failed')).toMatchObject({ kind: 'cancelled' });
+  });
+
+  it('maps an external kill signal (null exit, signal set, not killed by us) to signalled/transient', async () => {
+    const { supervisor } = fakeSupervisor([], { exitCode: null, signal: 'SIGKILL', killed: false });
+    const events = await drain(createAgentAdapter(supervisor).runActivity(ctx(), null));
+    expect(events[0]).toMatchObject({
+      type: 'agentTelemetry',
+      telemetry: { summary: 'signalled', exitCode: null, signal: 'SIGKILL' },
+    });
+    expect(events.find((e) => e.type === 'failed')).toMatchObject({ kind: 'transient' });
   });
 
   it('rejects a config with no command as a permanent failure (no spawn)', async () => {
@@ -210,7 +307,31 @@ describe('createAgentAdapter().runActivity', () => {
       reapAllSupervised: () => Promise.resolve(),
     };
     const events = await drain(createAgentAdapter(supervisor).runActivity(ctx(), null));
-    expect(events).toEqual([{ type: 'succeeded', outputs: { output: 'a\nb\nc', exitCode: 0 } }]);
+    expect(events.find((e) => e.type === 'succeeded')).toEqual({
+      type: 'succeeded',
+      outputs: { output: 'a\nb\nc', exitCode: 0 },
+    });
+    // Telemetry fingerprints the fully-drained stdout (not a mid-drain snapshot).
+    expect(events[0]).toMatchObject({
+      type: 'agentTelemetry',
+      telemetry: {
+        summary: 'completed',
+        outputChars: 'a\nb\nc'.length,
+        outputHash: sha256Hex('a\nb\nc'),
+      },
+    });
+  });
+
+  it('a spawn-failure config error (bad activity input) does NOT emit telemetry (no subprocess ran)', async () => {
+    const { supervisor, spawnArgs } = fakeSupervisor([], { exitCode: 0 });
+    const events = await drain(
+      // `task` is required; an empty task fails validation before any spawn.
+      createAgentAdapter(supervisor).runActivity(ctx({ input: { task: '' } }), null),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(events.some((e) => e.type === 'agentTelemetry')).toBe(false);
+    expect(spawnArgs).toHaveLength(0);
   });
 });
 
@@ -275,6 +396,12 @@ describe('createAgentAdapter().runActivity — llm_call (CLI/subscription single
     ]);
     // The prompt is the final argv element (never argv-leaked flags).
     expect(spawnArgs[0]!.args).toEqual(['-p', 'Say hi']);
+  });
+
+  it('emits NO agentTelemetry (that fact is agent_task-only, not the llm_call shape)', async () => {
+    const { supervisor } = fakeSupervisor([{ stream: 'stdout', line: 'Hi' }], { exitCode: 0 });
+    const events = await drain(createAgentAdapter(supervisor).runActivity(llmCtx(), null));
+    expect(events.some((e) => e.type === 'agentTelemetry')).toBe(false);
   });
 
   it('stamps NO token counts and NO price fields on the unpriced metered event', async () => {
