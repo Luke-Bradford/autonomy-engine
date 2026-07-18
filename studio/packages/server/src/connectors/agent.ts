@@ -9,6 +9,7 @@ import {
   resolveModel,
 } from './llm-shared.js';
 import type { NormalizedLlmRequest } from './llm-shared.js';
+import { redactSecrets } from './redact.js';
 
 /**
  * The `agent_cli` connector adapter: runs an agent CLI (Claude Code, Codex, or
@@ -345,7 +346,13 @@ async function* runLlmCall(
     return;
   }
   if (outcome.exitCode !== 0) {
-    const raw = stderr.join('\n').trim();
+    // REDACT the resolved secret out of the child stderr BEFORE it lands in the
+    // durable `node.failed` event — a CLI commonly echoes the injected key in an
+    // auth/quota error, and this string is persisted to `run_events` and served
+    // over the API. Redact the FULL stderr first, then truncate, so a secret
+    // straddling the truncation boundary is still fully scrubbed. Same never-leak
+    // discipline every sibling adapter upholds (http/llm-shared → `redactSecrets`).
+    const raw = redactSecrets(stderr.join('\n').trim(), [secret]);
     const detail =
       raw.length > MAX_STDERR_DETAIL_CHARS ? `…${raw.slice(-MAX_STDERR_DETAIL_CHARS)}` : raw;
     yield {

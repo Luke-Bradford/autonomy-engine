@@ -347,6 +347,25 @@ describe('createAgentAdapter().runActivity — llm_call (CLI/subscription single
     expect((events[0] as { error: string }).error).toContain('boom: quota exhausted');
   });
 
+  it('REDACTS the injected secret out of a non-zero-exit failure error (stderr echo leak)', async () => {
+    // A CLI that echoes the injected key in an auth/quota error must never leak it
+    // into the durable `node.failed` event.
+    const { supervisor } = fakeSupervisor(
+      [{ stream: 'stderr', line: 'auth failed for key sk-leaky-secret at api.example' }],
+      { exitCode: 1 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        llmCtx({ connectionConfig: { command: 'claude', args: ['-p'], secretEnv: 'API_KEY' } }),
+        'sk-leaky-secret',
+      ),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    const error = (events[0] as { error: string }).error;
+    expect(error).not.toContain('sk-leaky-secret');
+    expect(error).toContain('***'); // the secret substring is replaced, not the whole message
+  });
+
   it('rejects a `structured` outputMode on a CLI connection as permanent (no JSON-mode on opaque stdout)', async () => {
     const { supervisor, spawnArgs } = fakeSupervisor([], { exitCode: 0 });
     const events = await drain(
