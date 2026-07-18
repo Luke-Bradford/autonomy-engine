@@ -74,11 +74,12 @@ describe('activity catalog', () => {
     expect(withSink).toEqual(['http_request']);
   });
 
-  it('llm_call binds any of the three LLM connection kinds', () => {
+  it('llm_call binds the LLM provider kinds plus agent_cli (CLI/subscription, #2 L14b)', () => {
     expect(getActivity('llm_call')!.connectionKinds).toEqual([
       'anthropic_api',
       'openai_api',
       'ollama',
+      'agent_cli',
     ]);
   });
 

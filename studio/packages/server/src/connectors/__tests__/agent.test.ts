@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createAgentAdapter } from '../agent.js';
+import { createAgentAdapter, renderCliPrompt } from '../agent.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
 import type {
   OutputLineEvent,
@@ -230,5 +230,233 @@ describe('createAgentAdapter().testConnection', () => {
       ok: false,
     });
     expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
+// #2 L14b — the SAME `agent_cli` adapter also serves the `llm_call` activity: a
+// CLI/subscription single-shot (`claude -p`/`codex exec` → stdout). The completion
+// is metered `unpriced` (a flat/covered seat pays for it — no per-token price BY
+// DESIGN), making L14a's inert `unpriced` status LIVE.
+describe('createAgentAdapter().runActivity — llm_call (CLI/subscription single-shot)', () => {
+  function llmCtx(over: Partial<ActivityContext> = {}): ActivityContext {
+    return ctx({
+      activityType: 'llm_call',
+      connectionConfig: over.connectionConfig ?? { command: 'claude', args: ['-p'] },
+      input: over.input ?? { prompt: 'Say hi' },
+      ...over,
+    });
+  }
+
+  it('spawns the prompt as the final argv element and captures stdout as `text`', async () => {
+    const { supervisor, spawnArgs } = fakeSupervisor(
+      [
+        { stream: 'stdout', line: 'Hi there' },
+        { stream: 'stderr', line: 'some log noise' },
+      ],
+      { exitCode: 0 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        llmCtx({
+          connectionConfig: { command: 'claude', args: ['-p'] },
+          input: { prompt: 'Say hi' },
+        }),
+        null,
+      ),
+    );
+
+    // metered (unpriced) is ordered BEFORE the terminal, mirroring the API adapters.
+    expect(events).toEqual([
+      {
+        type: 'metered',
+        usage: { provider: 'agent_cli', model: 'cli', meteringStatus: 'unpriced' },
+      },
+      { type: 'succeeded', outputs: { text: 'Hi there', stopReason: 'unknown' } },
+    ]);
+    // The prompt is the final argv element (never argv-leaked flags).
+    expect(spawnArgs[0]!.args).toEqual(['-p', 'Say hi']);
+  });
+
+  it('stamps NO token counts and NO price fields on the unpriced metered event', async () => {
+    const { supervisor } = fakeSupervisor([{ stream: 'stdout', line: 'out' }], { exitCode: 0 });
+    const events = await drain(createAgentAdapter(supervisor).runActivity(llmCtx(), null));
+    const metered = events.find((e) => e.type === 'metered');
+    expect(metered).toBeDefined();
+    // usage is a fact but a CLI gives none; ALL price/token fields stay absent.
+    expect(metered).toEqual({
+      type: 'metered',
+      usage: { provider: 'agent_cli', model: 'cli', meteringStatus: 'unpriced' },
+    });
+  });
+
+  it('resolves the metered model node < connection < the `cli` fallback', async () => {
+    // node model wins
+    const a = await drain(
+      createAgentAdapter(fakeSupervisor([], { exitCode: 0 }).supervisor).runActivity(
+        llmCtx({
+          connectionConfig: { command: 'claude', model: 'connection-model' },
+          input: { prompt: 'x', model: 'node-model' },
+        }),
+        null,
+      ),
+    );
+    expect(a.find((e) => e.type === 'metered')).toMatchObject({
+      usage: { model: 'node-model' },
+    });
+    // connection model when the node omits one
+    const b = await drain(
+      createAgentAdapter(fakeSupervisor([], { exitCode: 0 }).supervisor).runActivity(
+        llmCtx({
+          connectionConfig: { command: 'claude', model: 'connection-model' },
+          input: { prompt: 'x' },
+        }),
+        null,
+      ),
+    );
+    expect(b.find((e) => e.type === 'metered')).toMatchObject({
+      usage: { model: 'connection-model' },
+    });
+  });
+
+  it('a present-but-empty completion (exit 0, empty stdout) still succeeds with text:""', async () => {
+    const { supervisor } = fakeSupervisor([], { exitCode: 0 });
+    const events = await drain(createAgentAdapter(supervisor).runActivity(llmCtx(), null));
+    expect(events).toEqual([
+      {
+        type: 'metered',
+        usage: { provider: 'agent_cli', model: 'cli', meteringStatus: 'unpriced' },
+      },
+      { type: 'succeeded', outputs: { text: '', stopReason: 'unknown' } },
+    ]);
+  });
+
+  it('a non-zero exit is a PERMANENT failure (no completion; do not hot-loop) with NO metered event', async () => {
+    const { supervisor } = fakeSupervisor(
+      [
+        { stream: 'stdout', line: 'partial' },
+        { stream: 'stderr', line: 'boom: quota exhausted' },
+      ],
+      { exitCode: 1 },
+    );
+    const events = await drain(createAgentAdapter(supervisor).runActivity(llmCtx(), null));
+    // No metering fact — we cannot know a billable response occurred.
+    expect(events.some((e) => e.type === 'metered')).toBe(false);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    // The stderr diagnostic is surfaced in the error.
+    expect((events[0] as { error: string }).error).toContain('boom: quota exhausted');
+  });
+
+  it('rejects a `structured` outputMode on a CLI connection as permanent (no JSON-mode on opaque stdout)', async () => {
+    const { supervisor, spawnArgs } = fakeSupervisor([], { exitCode: 0 });
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        llmCtx({
+          input: {
+            prompt: 'classify this',
+            outputMode: 'structured',
+            outputSchema: { type: 'object', properties: { category: { type: 'string' } } },
+          },
+        }),
+        null,
+      ),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(spawnArgs).toHaveLength(0); // rejected before spawn
+  });
+
+  it('rejects an invalid llm_call config as a permanent failure (no spawn)', async () => {
+    const { supervisor, spawnArgs } = fakeSupervisor([], { exitCode: 0 });
+    const events = await drain(
+      // neither prompt nor messages
+      createAgentAdapter(supervisor).runActivity(llmCtx({ input: {} }), null),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(spawnArgs).toHaveLength(0);
+  });
+
+  it('maps a timeout to transient and an abort to cancelled (mirrors agent_task)', async () => {
+    const t = await drain(
+      createAgentAdapter(
+        fakeSupervisor([], { exitCode: null, timedOut: true, killed: true }).supervisor,
+      ).runActivity(llmCtx(), null),
+    );
+    expect(t[0]).toMatchObject({ type: 'failed', kind: 'transient' });
+    const a = await drain(
+      createAgentAdapter(
+        fakeSupervisor([], { exitCode: null, aborted: true, killed: true }).supervisor,
+      ).runActivity(llmCtx(), null),
+    );
+    expect(a[0]).toMatchObject({ type: 'failed', kind: 'cancelled' });
+  });
+
+  it('injects the secret into env only, and folds system + messages into one prompt', async () => {
+    const { supervisor, spawnArgs } = fakeSupervisor([{ stream: 'stdout', line: 'ok' }], {
+      exitCode: 0,
+    });
+    await drain(
+      createAgentAdapter(supervisor).runActivity(
+        llmCtx({
+          connectionConfig: { command: 'claude', args: ['-p'], secretEnv: 'ANTHROPIC_API_KEY' },
+          input: {
+            system: 'You are terse.',
+            messages: [
+              { role: 'user', content: 'What is 2+2?' },
+              { role: 'assistant', content: '4' },
+              { role: 'user', content: 'And 3+3?' },
+            ],
+          },
+        }),
+        'sk-secret',
+      ),
+    );
+    expect(spawnArgs[0]!.env!.ANTHROPIC_API_KEY).toBe('sk-secret');
+    const prompt = spawnArgs[0]!.args!.at(-1)!;
+    expect(prompt).toBe('You are terse.\n\nUser: What is 2+2?\n\nAssistant: 4\n\nUser: And 3+3?');
+    expect(JSON.stringify(spawnArgs[0]!.args)).not.toContain('sk-secret');
+  });
+
+  it('rejects an unknown activityType with a loud permanent failure', async () => {
+    const { supervisor, spawnArgs } = fakeSupervisor([], { exitCode: 0 });
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        ctx({ activityType: 'not_a_real_activity', input: {} }),
+        null,
+      ),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(spawnArgs).toHaveLength(0);
+  });
+});
+
+describe('renderCliPrompt', () => {
+  it('reduces a single user turn with no system to raw content', () => {
+    expect(renderCliPrompt({ messages: [{ role: 'user', content: 'hello' }], sampling: {} })).toBe(
+      'hello',
+    );
+  });
+
+  it('prefixes the system prompt and labels a multi-turn transcript', () => {
+    expect(
+      renderCliPrompt({
+        system: 'be terse',
+        messages: [
+          { role: 'user', content: 'q1' },
+          { role: 'assistant', content: 'a1' },
+        ],
+        sampling: {},
+      }),
+    ).toBe('be terse\n\nUser: q1\n\nAssistant: a1');
+  });
+
+  it('keeps a single user turn labelled-free but still prepends a system prompt', () => {
+    expect(
+      renderCliPrompt({ system: 'sys', messages: [{ role: 'user', content: 'u' }], sampling: {} }),
+    ).toBe('sys\n\nu');
+  });
+
+  it('is defensive on an empty message list (direct callers) — returns the system or empty', () => {
+    expect(renderCliPrompt({ messages: [], sampling: {} })).toBe('');
+    expect(renderCliPrompt({ system: 'only sys', messages: [], sampling: {} })).toBe('only sys');
   });
 });

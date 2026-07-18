@@ -100,7 +100,14 @@ const ENTRIES: ActivityCatalogEntry[] = [
     kind: 'execution',
     category: 'ai',
     idempotent: false,
-    connectionKinds: ['anthropic_api', 'openai_api', 'ollama'],
+    // #2 L14b — `agent_cli` joins the LLM-provider kinds: an `llm_call` can bind a
+    // CLI/subscription connection (the SAME agent-CLI connection `agent_task` uses,
+    // per the spec's "LLM connection kinds unchanged; subscription/CLI auth via the
+    // agent CLI"). The `agent_cli` adapter serves BOTH activities, selecting by
+    // `ctx.activityType`. Widening this list bumped `CATALOG_VERSION` 12→13 so a
+    // pre-L14b build refuses to import a pipeline binding `agent_cli` to `llm_call`
+    // (which it would reject at dispatch) rather than mis-run it — see version.ts.
+    connectionKinds: ['anthropic_api', 'openai_api', 'ollama', 'agent_cli'],
     outputs: [out('text', 'string'), out('stopReason', 'string')],
     // #2 L1 — the SSOT config schema, shared with the three LLM adapters so the
     // palette metadata and the live request validation can never desync (the
