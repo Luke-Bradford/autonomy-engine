@@ -2,9 +2,8 @@ import { z } from 'zod';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import {
   DEFAULT_LLM_TIMEOUT_MS,
-  classifyHttpStatus,
   coerceStopReason,
-  errorExcerpt,
+  httpStatusFailure,
   llmCallConfigSchema,
   llmConnectionConfigSchema,
   llmPost,
@@ -229,11 +228,13 @@ export const anthropicAdapter: ConnectorAdapter = {
         if (res.status < 200 || res.status >= 300) {
           return {
             type: 'terminal',
-            event: {
-              type: 'failed',
-              kind: classifyHttpStatus(res.status),
-              error: `anthropic_api HTTP ${res.status}: ${errorExcerpt(res.bodyText)}`,
-            },
+            event: httpStatusFailure(
+              'anthropic_api',
+              res.status,
+              res.bodyText,
+              res.retryAfterHeader,
+              Date.now(),
+            ),
           };
         }
         const body = parseJsonBody(res.bodyText);
@@ -299,11 +300,13 @@ export const anthropicAdapter: ConnectorAdapter = {
       return;
     }
     if (result.status < 200 || result.status >= 300) {
-      yield {
-        type: 'failed',
-        kind: classifyHttpStatus(result.status),
-        error: `anthropic_api HTTP ${result.status}: ${errorExcerpt(result.bodyText)}`,
-      };
+      yield httpStatusFailure(
+        'anthropic_api',
+        result.status,
+        result.bodyText,
+        result.retryAfterHeader,
+        Date.now(),
+      );
       return;
     }
     const parsed = parseJsonBody(result.bodyText);

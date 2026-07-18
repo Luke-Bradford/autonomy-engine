@@ -2360,7 +2360,19 @@ export function createEngine(doc: EngineDoc): Engine {
         return {
           state: withNode(state, event.nodeId, { status: 'retry_pending' }),
           commands: [
-            { type: 'scheduleRetry', nodeId: event.nodeId, failedAttemptId: event.attemptId },
+            {
+              type: 'scheduleRetry',
+              nodeId: event.nodeId,
+              failedAttemptId: event.attemptId,
+              // #2 L7 — thread the provider's `Retry-After` hint (frozen on this
+              // durable event) to the driver, which prefers it over the static
+              // `policy.retryIntervalSeconds`. Omitted when absent (→ policy
+              // interval). Copying an already-frozen number keeps the reducer
+              // clock-free and replay-deterministic.
+              ...(event.retryAfterSeconds !== undefined
+                ? { retryAfterSeconds: event.retryAfterSeconds }
+                : {}),
+            },
           ],
           diagnostics,
         };

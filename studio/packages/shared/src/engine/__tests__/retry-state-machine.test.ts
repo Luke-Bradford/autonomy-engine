@@ -87,6 +87,28 @@ describe('F2b §A.3 — retry eligibility', () => {
     expect(r.state.status).toBe('running');
   });
 
+  // #2 L7 — a `Retry-After` hint frozen on the durable `node.failed` is threaded
+  // onto the `scheduleRetry` command so the driver can prefer it over the policy
+  // interval. Copied verbatim; the reducer reads no clock (replay-deterministic).
+  it('threads a node.failed retryAfterSeconds hint onto the scheduleRetry command', () => {
+    const eng = engine([node('a', { retry: 1 })]);
+    const s = inFlight(eng, 'a');
+
+    const r = eng.reduce(s, {
+      type: 'node.failed',
+      runId: RUN,
+      nodeId: 'a',
+      attemptId: 'a#0',
+      error: 'slow down',
+      kind: 'transient',
+      retryAfterSeconds: 42,
+    });
+
+    expect(r.commands).toEqual([
+      { type: 'scheduleRetry', nodeId: 'a', failedAttemptId: 'a#0', retryAfterSeconds: 42 },
+    ]);
+  });
+
   it.each([['permanent' as const], ['cancelled' as const]])(
     'NEVER retries a `%s` failure, even with budget to spare (D4)',
     (kind) => {

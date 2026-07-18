@@ -19,6 +19,7 @@ import { freshDb } from '../../repo/__tests__/helpers.js';
 import {
   buildEngine,
   pump,
+  retryArmInput,
   startRun,
   terminalizeInterrupted,
   type DocResolver,
@@ -769,5 +770,69 @@ describe('driver — reduce-first finishRun (#477)', () => {
     await expect(
       pump(deps(db), noReplacement, state, [{ type: 'finishRun', outcome: 'success' }]),
     ).rejects.toThrow(/no replacement finishRun/);
+  });
+});
+
+// #2 L7 — `retryArmInput` chooses the retry alarm's interval. A provider's
+// `Retry-After` hint (threaded on the `scheduleRetry` command from the durable
+// `node.failed`) OVERRIDES the node's static `policy.retryIntervalSeconds`; when
+// absent the policy interval (then the engine default) applies. `dueAt` is a
+// pure function of the chosen interval + the injected clock.
+describe('retryArmInput — L7 provider Retry-After override', () => {
+  function retryDeps(db: Db, nowMs: number): Pick<DriverDeps, 'resolveDoc' | 'now'> {
+    return { resolveDoc: (id) => getPipelineVersion(db, id)!, now: () => nowMs };
+  }
+
+  it('prefers a supplied retryAfterSeconds over the policy interval', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a', { policy: { retry: 2, retryIntervalSeconds: 300 } })]);
+    const input = retryArmInput(retryDeps(db, 1_000), {
+      runId: 'r',
+      pipelineVersionId: pvId,
+      nodeId: 'a',
+      failedAttemptId: 'a#0',
+      retryAfterSeconds: 42,
+    });
+    // 42s from the provider, NOT the 300s policy interval.
+    expect(input.dueAt).toBe(1_000 + 42_000);
+    // Identity is unchanged by the override — the hint only moves `dueAt`.
+    expect(input.ref).toEqual({ runId: 'r', nodeId: 'a', attemptId: 'a#0' });
+  });
+
+  it('honours a provider hint even BELOW the 30s policy floor (provider authority)', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a', { policy: { retry: 1, retryIntervalSeconds: 300 } })]);
+    const input = retryArmInput(retryDeps(db, 0), {
+      runId: 'r',
+      pipelineVersionId: pvId,
+      nodeId: 'a',
+      failedAttemptId: 'a#0',
+      retryAfterSeconds: 5,
+    });
+    expect(input.dueAt).toBe(5_000);
+  });
+
+  it('falls back to the policy interval when no hint is supplied (the reconciler path)', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a', { policy: { retry: 2, retryIntervalSeconds: 300 } })]);
+    const input = retryArmInput(retryDeps(db, 1_000), {
+      runId: 'r',
+      pipelineVersionId: pvId,
+      nodeId: 'a',
+      failedAttemptId: 'a#0',
+    });
+    expect(input.dueAt).toBe(1_000 + 300_000);
+  });
+
+  it('falls back to the engine default when neither hint nor policy interval is set', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a', { policy: { retry: 1 } })]);
+    const input = retryArmInput(retryDeps(db, 0), {
+      runId: 'r',
+      pipelineVersionId: pvId,
+      nodeId: 'a',
+      failedAttemptId: 'a#0',
+    });
+    expect(input.dueAt).toBe(30 * 1_000); // DEFAULT_RETRY_INTERVAL_SECONDS
   });
 });

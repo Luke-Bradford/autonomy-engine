@@ -206,6 +206,18 @@ export type CallConfig = z.infer<typeof CallConfigSchema>;
  * secure fields wait and the retry knobs do not: a dropped retry costs
  * availability, a dropped redaction discloses a secret.
  */
+
+/**
+ * The ceiling (whole seconds) on a retry delay — spec #1 D4 verbatim (max of the
+ * 30–86400 range). The SSOT for that bound: the policy `retryIntervalSeconds`
+ * schema below caps here, and so does #2 L7's provider `Retry-After` hint (its
+ * `MAX_RETRY_AFTER_SECONDS` and the `node.failed`/`scheduleRetry` schema caps all
+ * import this) — a provider hint feeds the SAME retry-alarm `dueAt` an author
+ * interval does, so both must be bounded by ONE value, not three copies of the
+ * literal that could drift ("export once, import everywhere").
+ */
+export const MAX_RETRY_INTERVAL_SECONDS = 86400;
+
 export const NodePolicySchema = z.object({
   /**
    * Wall-clock budget for one attempt. F3 terminalizes an over-budget attempt
@@ -246,7 +258,7 @@ export const NodePolicySchema = z.object({
    * Absent means "policy says nothing", and F2c resolves that to
    * `DEFAULT_RETRY_INTERVAL_SECONDS` below.
    */
-  retryIntervalSeconds: z.number().int().min(30).max(86400).optional(),
+  retryIntervalSeconds: z.number().int().min(30).max(MAX_RETRY_INTERVAL_SECONDS).optional(),
 });
 export type NodePolicy = z.infer<typeof NodePolicySchema>;
 
