@@ -184,6 +184,47 @@ describe('importEnvelope: pipeline', () => {
     expect(importedVersion.id).not.toBe(sourceVersion.id);
   });
 
+  it('round-trip: a structured llm_call outputSchema + derived outputs survive export → import (#2 L4a)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Structured' });
+    const outputSchema = {
+      type: 'object',
+      properties: { category: { type: 'string' }, score: { type: 'number' } },
+    };
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [
+        {
+          id: 'clf',
+          type: 'llm_call',
+          config: { prompt: 'classify', outputMode: 'structured', outputSchema },
+          position: { x: 0, y: 0 },
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const envelope = exportPipeline(db, pipeline.id, 'owner-a');
+    const result = importEnvelope(db, 'owner-b', envelope);
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+
+    // Re-read the IMPORTED (immutable) row: the source `outputSchema` survives
+    // (so L4b recovers optionality) AND the derived contract is re-lowered
+    // idempotently on import — import re-runs `createPipelineVersion`, which
+    // re-derives `config.outputs` from the round-tripped `outputSchema`.
+    const imported = getPipelineVersion(db, result.versions[0]!.id)!.nodes.find(
+      (n) => n.id === 'clf',
+    )!;
+    expect(imported.config['outputSchema']).toEqual(outputSchema);
+    expect(imported.config['outputs']).toEqual([
+      { name: 'category', type: 'string' },
+      { name: 'score', type: 'number' },
+    ]);
+  });
+
   // #485 — the #473 import test above pins ONE field (`containers`).
   // `importPipelineEnvelope` builds its `NewPipelineVersion` by hand, and every
   // `.default()` field is optional in `z.input`, so a future field could be

@@ -13,6 +13,7 @@ import {
   FILE_WRITE_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
+  LLM_CALL_ACTIVITY_TYPE,
   SWITCH_ACTIVITY_TYPE,
   WAIT_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
@@ -94,7 +95,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     }),
   },
   {
-    type: 'llm_call',
+    type: LLM_CALL_ACTIVITY_TYPE,
     title: 'LLM Call',
     kind: 'execution',
     category: 'ai',

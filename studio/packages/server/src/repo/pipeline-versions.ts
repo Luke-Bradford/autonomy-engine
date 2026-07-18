@@ -1,6 +1,7 @@
 import { asc, eq, max } from 'drizzle-orm';
 import { z } from 'zod';
 import {
+  lowerLlmStructuredOutputs,
   lowerNodeOutputs,
   NewPipelineVersionSchema,
   PipelineVersionSchema,
@@ -87,9 +88,19 @@ export function createPipelineVersion(db: Db, input: NewPipelineVersion): Pipeli
   // strict path never saw, and the closing `PipelineVersionSchema.parse` is
   // read-tolerant, so without the re-parse a seeded contract would bypass the
   // write-path validation the field is supposed to have.
+  //
+  // #2 L4a — `lowerLlmStructuredOutputs` runs FIRST: a `structured` `llm_call`'s
+  // `config.outputs` is DERIVED from its `outputSchema` (overwriting any stale
+  // catalog-default seed), so it must set the contract before `lowerNodeOutputs`,
+  // which then sees a present value and skips it (text-mode `llm_call`s still get
+  // the `[text, stopReason]` default). An INVALID `outputSchema` is left
+  // un-lowered here and reported by `validateLlmCallOutput` in
+  // `validatePipelineDoc` below → 400, so no garbage contract persists.
   const lowered = {
     ...parsed,
-    nodes: z.array(StrictNodeSchema).parse(lowerNodeOutputs(parsed.nodes)),
+    nodes: z
+      .array(StrictNodeSchema)
+      .parse(lowerNodeOutputs(lowerLlmStructuredOutputs(parsed.nodes))),
   };
 
   // Mint the id BEFORE validation so the call-graph analysis (#495) has a
