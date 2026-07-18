@@ -8,6 +8,18 @@ async function drain(stream: AsyncIterable<ActivityEvent>): Promise<ActivityEven
   return events;
 }
 
+/** The terminal `succeeded` event — now preceded by a `metered` event (#2 L2). */
+function succeeded(events: ActivityEvent[]): Extract<ActivityEvent, { type: 'succeeded' }> {
+  const ev = events.find((e) => e.type === 'succeeded');
+  if (ev === undefined) throw new Error(`no succeeded event in ${JSON.stringify(events)}`);
+  return ev;
+}
+
+/** The `metered` usage event (#2 L2), or undefined if none was yielded. */
+function metered(events: ActivityEvent[]): Extract<ActivityEvent, { type: 'metered' }> | undefined {
+  return events.find((e): e is Extract<ActivityEvent, { type: 'metered' }> => e.type === 'metered');
+}
+
 function ctx(over: Partial<ActivityContext> = {}): ActivityContext {
   return {
     runId: 'run_1',
@@ -32,6 +44,7 @@ function fakeResponse(status: number, body: unknown): Response {
 
 const OK_BODY = {
   choices: [{ message: { role: 'assistant', content: 'the answer' }, finish_reason: 'stop' }],
+  usage: { prompt_tokens: 11, completion_tokens: 4 },
 };
 
 describe('openaiAdapter.runActivity', () => {
@@ -45,8 +58,11 @@ describe('openaiAdapter.runActivity', () => {
   ])('yields a string stopReason when finish_reason is %s', async (_label, choice) => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, { choices: [choice] }));
     const events = await drain(openaiAdapter.runActivity(ctx(), 'sk-oai'));
-    expect(events[0]).toMatchObject({ type: 'succeeded', outputs: { stopReason: 'unknown' } });
-    const outputs = (events[0] as Extract<ActivityEvent, { type: 'succeeded' }>).outputs;
+    expect(succeeded(events)).toMatchObject({
+      type: 'succeeded',
+      outputs: { stopReason: 'unknown' },
+    });
+    const outputs = succeeded(events).outputs;
     expect(typeof outputs.stopReason).toBe('string');
   });
 
@@ -94,17 +110,19 @@ describe('openaiAdapter.runActivity', () => {
       }),
     );
     const events = await drain(openaiAdapter.runActivity(ctx(), 'sk-oai'));
-    expect(events).toEqual([
-      { type: 'succeeded', outputs: { text: '', stopReason: 'content_filter' } },
-    ]);
+    expect(succeeded(events)).toEqual({
+      type: 'succeeded',
+      outputs: { text: '', stopReason: 'content_filter' },
+    });
   });
 
   it('POSTs chat/completions and surfaces content + finish_reason', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     const events = await drain(openaiAdapter.runActivity(ctx(), 'sk-oai'));
-    expect(events).toEqual([
-      { type: 'succeeded', outputs: { text: 'the answer', stopReason: 'stop' } },
-    ]);
+    expect(succeeded(events)).toEqual({
+      type: 'succeeded',
+      outputs: { text: 'the answer', stopReason: 'stop' },
+    });
     const [url, init] = fetchSpy.mock.calls[0]! as [string, RequestInit];
     expect(url).toBe('https://api.openai.com/v1/chat/completions');
     expect((init.headers as Record<string, string>)['Authorization']).toBe('Bearer sk-oai');
@@ -213,6 +231,48 @@ describe('openaiAdapter v2 config (L1)', () => {
         'sk',
       ),
     );
-    expect(events[0]).toMatchObject({ type: 'succeeded' });
+    expect(succeeded(events)).toMatchObject({ type: 'succeeded' });
+  });
+});
+
+// #2 L2 — usage capture. Chat Completions reports `usage.{prompt_tokens,
+// completion_tokens}`; the adapter yields a `metered` event before the terminal.
+describe('openaiAdapter usage capture (L2)', () => {
+  it('yields a metered event with the token counts, ordered before succeeded', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(openaiAdapter.runActivity(ctx(), 'sk'));
+    expect(events.map((e) => e.type)).toEqual(['metered', 'succeeded']);
+    expect(metered(events)).toEqual({
+      type: 'metered',
+      usage: {
+        provider: 'openai_api',
+        model: 'gpt-4o',
+        inputTokens: 11,
+        outputTokens: 4,
+        meteringStatus: 'metered',
+      },
+    });
+  });
+
+  it('reports meteringStatus unknown when a gateway omits usage', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, {
+        choices: [{ message: { content: 'x' }, finish_reason: 'stop' }],
+      }),
+    );
+    const events = await drain(openaiAdapter.runActivity(ctx(), 'sk'));
+    expect(metered(events)?.usage).toEqual({
+      provider: 'openai_api',
+      model: 'gpt-4o',
+      meteringStatus: 'unknown',
+    });
+    expect(succeeded(events)).toMatchObject({ type: 'succeeded' });
+  });
+
+  it('yields NO metered event on a failure', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(429, 'slow down'));
+    const events = await drain(openaiAdapter.runActivity(ctx(), 'sk'));
+    expect(metered(events)).toBeUndefined();
+    expect(events[0]).toMatchObject({ type: 'failed' });
   });
 });

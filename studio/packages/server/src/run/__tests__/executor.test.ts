@@ -185,6 +185,77 @@ describe('createExecutor — happy path (real http adapter, mocked fetch)', () =
   });
 });
 
+describe('createExecutor — activity.metered (#2 L2 usage capture)', () => {
+  it('maps a metered ActivityEvent to a durable activity.metered event, before node.succeeded', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    // An explicit empty output contract so a `succeeded{outputs:{}}` from the fake
+    // adapter validates — this test is about the metering event, not http outputs.
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
+    const run = seedRun(db, pvId);
+    const adapters = fakeHttpAdapter(async function* () {
+      yield {
+        type: 'metered',
+        usage: {
+          provider: 'anthropic_api',
+          model: 'claude-opus-4-8',
+          inputTokens: 3,
+          outputTokens: 9,
+          meteringStatus: 'metered',
+        },
+      } satisfies ActivityEvent;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+
+    const state = await startRun(deps(db, { adapters }), run);
+
+    expect(state.status).toBe('success');
+    const events = loadEngineEvents(db, run.id);
+    const types = events.map((e) => e.type);
+    // The metered fact is durable AND ordered before the terminal node.succeeded.
+    expect(types).toContain('activity.metered');
+    expect(types.indexOf('activity.metered')).toBeLessThan(types.indexOf('node.succeeded'));
+    expect(events.find((e) => e.type === 'activity.metered')).toMatchObject({
+      runId: run.id,
+      nodeId: 'n1',
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      inputTokens: 3,
+      outputTokens: 9,
+      meteringStatus: 'metered',
+    });
+  });
+
+  it('OMITS token fields on the engine event when meteringStatus is unknown', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    // An explicit empty output contract so a `succeeded{outputs:{}}` from the fake
+    // adapter validates — this test is about the metering event, not http outputs.
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
+    const run = seedRun(db, pvId);
+    const adapters = fakeHttpAdapter(async function* () {
+      yield {
+        type: 'metered',
+        usage: { provider: 'ollama', model: 'llama3', meteringStatus: 'unknown' },
+      } satisfies ActivityEvent;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+
+    await startRun(deps(db, { adapters }), run);
+
+    const metered = loadEngineEvents(db, run.id).find((e) => e.type === 'activity.metered');
+    // Absent counts are OMITTED, not stored as `undefined`/`0` — the stored event
+    // matches the schema's `.optional()` shape, and `meteringStatus` flags the gap.
+    expect(metered).not.toHaveProperty('inputTokens');
+    expect(metered).not.toHaveProperty('outputTokens');
+    expect(metered).toMatchObject({
+      provider: 'ollama',
+      model: 'llama3',
+      meteringStatus: 'unknown',
+    });
+  });
+});
+
 describe('createExecutor — fs connector end-to-end (#4 A11, real fsAdapter)', () => {
   // The `fs` connector is the FIRST to serve TWO activity types through ONE
   // adapter, so it proves the executor threads `node.type` into

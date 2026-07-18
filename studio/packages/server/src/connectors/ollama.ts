@@ -8,6 +8,7 @@ import {
   llmConnectionConfigSchema,
   llmPost,
   llmProbeGet,
+  meterUsage,
   noCompletionFailure,
   normalizeLlmRequest,
   parseJsonBody,
@@ -131,6 +132,14 @@ export const ollamaAdapter: ConnectorAdapter = {
       yield noCompletionFailure('ollama', 'malformed_block');
       return;
     }
+    // #2 L2 — capture the metering fact before the terminal event. Ollama reports
+    // token counts at the TOP LEVEL (`prompt_eval_count`/`eval_count`), not under
+    // a `usage` object; a model still warming up may omit them → `unknown`.
+    const counts = parsed.json as { prompt_eval_count?: unknown; eval_count?: unknown };
+    yield {
+      type: 'metered',
+      usage: meterUsage('ollama', model, counts.prompt_eval_count, counts.eval_count),
+    };
     const doneReason = (parsed.json as { done_reason?: unknown }).done_reason;
     yield {
       type: 'succeeded',

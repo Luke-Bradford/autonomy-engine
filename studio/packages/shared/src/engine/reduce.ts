@@ -3164,6 +3164,12 @@ export function createEngine(doc: EngineDoc): Engine {
       }
       case 'node.output':
         return { state, commands: [], diagnostics };
+      case 'activity.metered':
+        // #2 L2 — INERT (like `node.output`): a per-response metering FACT is
+        // telemetry, not run state. It never enters `outputs` or `${}`, so folding
+        // it cannot change semantics; it lives in the log for the L6 cost
+        // projection to SUM. Captured once at dispatch, never recomputed on replay.
+        return { state, commands: [], diagnostics };
       case 'node.dispatched':
         return onDispatched(state, event, diagnostics);
       case 'node.succeeded':

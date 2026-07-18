@@ -8,6 +8,7 @@ import {
   llmConnectionConfigSchema,
   llmPost,
   llmProbeGet,
+  meterUsage,
   noCompletionFailure,
   normalizeLlmRequest,
   parseJsonBody,
@@ -147,6 +148,16 @@ export const openaiAdapter: ConnectorAdapter = {
       yield noCompletionFailure('openai_api', 'malformed_block');
       return;
     }
+    // #2 L2 — capture the metering fact before the terminal event. Chat
+    // Completions reports `usage.{prompt_tokens, completion_tokens}` (a gateway
+    // may omit it → `meterUsage` flags `unknown`).
+    const usage = (
+      parsed.json as { usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } }
+    ).usage;
+    yield {
+      type: 'metered',
+      usage: meterUsage('openai_api', model, usage?.prompt_tokens, usage?.completion_tokens),
+    };
     yield {
       type: 'succeeded',
       outputs: {

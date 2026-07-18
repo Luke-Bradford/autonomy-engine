@@ -123,6 +123,20 @@ describe('#443 — terminalStatusOf', () => {
       // neither is itself a run-terminating event.
       { type: 'container.timeoutScheduled', ...run, containerId: 'lp', dueAt: 1 },
       { type: 'container.timedOut', ...run, containerId: 'lp' },
+      // #2 L2 — a per-response metering FACT. NON-terminal: an observability event
+      // (like `node.output`) folded inert; it neither terminates the run nor folds
+      // a node, and is free to land before the terminal `node.succeeded`.
+      {
+        type: 'activity.metered',
+        ...run,
+        nodeId: 'n1',
+        attemptId: 'n1#0',
+        provider: 'anthropic_api',
+        model: 'claude-opus-4-8',
+        inputTokens: 10,
+        outputTokens: 20,
+        meteringStatus: 'metered',
+      },
     ];
     for (const event of nonTerminal) {
       expect(terminalStatusOf(event), `${event.type} must not be terminal`).toBeNull();
