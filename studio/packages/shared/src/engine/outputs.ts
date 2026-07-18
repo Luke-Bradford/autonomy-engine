@@ -2,6 +2,7 @@ import {
   NodeOutputsFieldSchema,
   type Container,
   type Node,
+  type Output,
   type OutputType,
 } from '../schemas/pipeline.js';
 
@@ -15,7 +16,13 @@ import {
  * every path on this module stops them from ever disagreeing about which output
  * names a node produces.
  */
-export type DeclaredOutput = { name: string; type: OutputType; optional?: boolean };
+// The subset of the shared `OutputSchema` the contract checker reads — `name`,
+// `type`, and `optional` (the ref checker + reducer do not use `description`).
+// DERIVED via `Pick` from `Output` (not hand-listed) so a change to those
+// fields' shape — e.g. `optional`'s type — propagates here automatically; a
+// hand-maintained duplicate would be the exact lower-vs-validate drift this
+// module exists to prevent.
+export type DeclaredOutput = Pick<Output, 'name' | 'type' | 'optional'>;
 
 /**
  * What a node's `config.outputs` says — THREE distinct facts (#1 F13a):
