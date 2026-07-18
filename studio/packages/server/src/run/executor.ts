@@ -200,9 +200,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
    * fix itself on a retry.
    */
   async function resolveConnection(
-    node: Node,
+    connectionId: string | undefined,
     kinds: readonly string[],
     activityType: string,
+    ownerId: string | null,
   ): Promise<
     | { error: string; code: string }
     | {
@@ -211,16 +212,33 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         connectionConfig: Record<string, unknown>;
       }
   > {
-    if (node.connectionId === undefined) {
+    // #2 L13a — `connectionId` is the value the reducer resolved from the node's
+    // (possibly `${}`) connectionId against the run env, threaded on the
+    // `dispatchNode` command. The executor never reads `node.connectionId`
+    // directly: that raw field may be a `${}` template it has no run env to
+    // resolve. `undefined` here ⟺ the node carried no connectionId at all; a
+    // `${}` that resolved to '' is a bound-but-empty ref → CONNECTION_NOT_FOUND
+    // below, distinct from CONNECTION_MISSING.
+    if (connectionId === undefined) {
       return {
         error: `activity '${activityType}' requires a connection but the node has none`,
         code: FAILURE_CODES.CONNECTION_MISSING,
       };
     }
-    const connection = getConnection(deps.db, node.connectionId);
-    if (connection === null) {
+    const connection = getConnection(deps.db, connectionId);
+    // Owner authorization (authn ≠ authz): a run may bind ONLY a connection it
+    // owns, or a null-owner (shared/global) connection. This closes the vector
+    // #2 L13a opened — `connectionId` now derives from run params, which a
+    // trigger's body/param bindings can influence, so a bare id lookup would let
+    // a run steer dispatch onto ANOTHER owner's connection and decrypt ITS
+    // secret. Mirrors the owner-scoping the config-sink secret path already
+    // enforces (`resolveConfigSecrets` → `getSecretByName(db, name, ownerId)`).
+    // A cross-owner (or null-owner-run vs owned-connection) hit folds into
+    // NOT_FOUND — never a distinct "forbidden", which would leak that the id
+    // names a real connection (enumeration-resistant, fail-closed).
+    if (connection === null || (connection.ownerId !== null && connection.ownerId !== ownerId)) {
       return {
-        error: `connection '${node.connectionId}' not found`,
+        error: `connection '${connectionId}' not found`,
         code: FAILURE_CODES.CONNECTION_NOT_FOUND,
       };
     }
@@ -464,7 +482,12 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     let secret: string | null;
     let connectionConfig: Record<string, unknown>;
     if (entry.connectionKinds.length > 0) {
-      const resolved = await resolveConnection(node, entry.connectionKinds, node.type);
+      const resolved = await resolveConnection(
+        command.resolvedConnectionId,
+        entry.connectionKinds,
+        node.type,
+        ownerId,
+      );
       if ('error' in resolved) {
         yield nodeFailed(runId, nodeId, attemptId, {
           error: resolved.error,

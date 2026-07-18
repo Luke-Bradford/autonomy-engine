@@ -424,6 +424,94 @@ describe('preparedInput substitution', () => {
 });
 
 // ===========================================================================
+// #2 L13a — connectionId as a ${}-resolvable dynamic-routing ref
+// ===========================================================================
+
+/** A node with an explicit top-level `connectionId` (the `node` helper omits it). */
+function connNode(id: string, connectionId: string, config: Record<string, unknown> = {}): Node {
+  return { ...node(id, config), connectionId };
+}
+
+describe('#2 L13a — connectionId resolution on dispatchNode', () => {
+  it('resolves a ${params.*} connectionId and threads it as resolvedConnectionId', () => {
+    const eng = engine([connNode('a', '${params.provider}')]);
+    const r = eng.reduce(eng.seedState(), started({ provider: 'anthropic-prod' }));
+    expect(dispatchCmd(r.commands, 'a').resolvedConnectionId).toBe('anthropic-prod');
+  });
+
+  it('passes a literal connectionId through unchanged', () => {
+    const eng = engine([connNode('a', 'conn-fixed-123')]);
+    const r = eng.reduce(eng.seedState(), started());
+    expect(dispatchCmd(r.commands, 'a').resolvedConnectionId).toBe('conn-fixed-123');
+  });
+
+  it('leaves resolvedConnectionId undefined when the node carries no connectionId', () => {
+    const eng = engine([node('a')]);
+    const r = eng.reduce(eng.seedState(), started());
+    expect(dispatchCmd(r.commands, 'a').resolvedConnectionId).toBeUndefined();
+  });
+
+  it('supports interpolation (prefix-${}) the same way call.pipelineVersionId does', () => {
+    const eng = engine([connNode('a', 'conn-${params.env}')]);
+    const r = eng.reduce(eng.seedState(), started({ env: 'staging' }));
+    expect(dispatchCmd(r.commands, 'a').resolvedConnectionId).toBe('conn-staging');
+  });
+
+  it('resolves against the SAME env as config: an upstream output routes the node', () => {
+    const eng = engine(
+      [node('a'), connNode('b', '${nodes.a.output.conn}', { msg: 'hi' })],
+      [edge('a', 'b', 'success')],
+    );
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const r = eng.reduce(s, succeeded('a', attempt('a'), { conn: 'conn-from-output' }));
+    const b = dispatchCmd(r.commands, 'b');
+    expect(b.resolvedConnectionId).toBe('conn-from-output');
+    // config and connectionId resolved against the one env — no drift.
+    expect(b.preparedInput).toEqual({ msg: 'hi' });
+  });
+
+  it('fails the run (invalid_event) when a ${} connectionId references an unknown var', () => {
+    const eng = engine([connNode('a', '${nodes.ghost.output.x}')]);
+    const r = eng.reduce(eng.seedState(), started());
+    // No dispatchNode; the prep throw terminalizes exactly like a bad config ref.
+    expect(r.commands.some((c) => c.type === 'dispatchNode')).toBe(false);
+    expect(r.commands).toContainEqual({
+      type: 'finishRun',
+      outcome: 'failure',
+      reason: 'invalid_event',
+    });
+  });
+
+  it('the run.resumed re-emit (4th dispatch site) re-derives resolvedConnectionId', () => {
+    // After run.started the root node sits `ready` (its dispatchNode was emitted
+    // but node.dispatched never folded — the crash window). run.resumed re-emits
+    // that command; it MUST carry the resolved connectionId like the first emit.
+    const eng = engine([connNode('a', '${params.provider}')]);
+    const s = eng.reduce(eng.seedState(), started({ provider: 'ollama-local' })).state;
+    expect(s.nodes.a!.status).toBe('ready');
+    const resumed = eng.reduce(s, { type: 'run.resumed', runId: RUN, reason: 'boot_reconcile' });
+    expect(dispatchCmd(resumed.commands, 'a').resolvedConnectionId).toBe('ollama-local');
+  });
+
+  it('a ${} connectionId re-resolves identically on a retry re-dispatch', () => {
+    const eng = engine([connNode('a', '${params.provider}')]);
+    let s = eng.reduce(eng.seedState(), started({ provider: 'openai-eu' })).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    // The onRetryRequested re-dispatch path (a distinct dispatchNode emission
+    // site) must thread the resolved id too, re-resolved from the same params.
+    const retry = eng.reduce(s, {
+      type: 'node.retryRequested',
+      runId: RUN,
+      nodeId: 'a',
+      previousAttemptId: attempt('a'),
+      reason: 'boot_reconcile',
+    });
+    expect(dispatchCmd(retry.commands, 'a').resolvedConnectionId).toBe('openai-eu');
+  });
+});
+
+// ===========================================================================
 // #6 E3 — ${run.startedAt} + ${nodes.<id>.status} resolve from LOGGED FACTS
 // ===========================================================================
 

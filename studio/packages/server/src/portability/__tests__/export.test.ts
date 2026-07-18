@@ -98,6 +98,57 @@ describe('exportPipeline', () => {
     }
   });
 
+  it('#2 L13a — PRESERVES a ${} (dynamic) connectionId and does NOT flag it for rebind', () => {
+    const { db } = freshDb();
+    const connection = createConnection(db, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'Dynamic route' });
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [{ name: 'provider', type: 'string', required: true }],
+      outputs: [],
+      nodes: [
+        // A dynamic (portable) route — references a param, not a concrete row.
+        {
+          id: 'dynamic',
+          type: 'llm_call',
+          config: {},
+          connectionId: '${params.provider}',
+          position: { x: 0, y: 0 },
+        },
+        // A literal, env-specific id — still stripped + flagged for rebind.
+        {
+          id: 'literal',
+          type: 'llm_call',
+          config: {},
+          connectionId: connection.id,
+          position: { x: 1, y: 1 },
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const envelope = exportPipeline(db, pipeline.id, 'local');
+    if (envelope.kind !== 'pipeline') throw new Error('unreachable');
+    const nodes = envelope.data.versions[0]!.nodes;
+    const dyn = nodes.find((n) => n.id === 'dynamic')!;
+    const lit = nodes.find((n) => n.id === 'literal')!;
+
+    // The expression survives verbatim; the concrete id is nulled.
+    expect(dyn.connectionId).toBe('${params.provider}');
+    expect(lit.connectionId).toBeNull();
+    // Only the literal node needs a rebind on import; the dynamic one does not.
+    expect(envelope.data.strippedConnectionRefs).toEqual(['literal']);
+    // The concrete id never leaks; the expression is not a concrete id.
+    expect(JSON.stringify(envelope)).not.toContain(connection.id);
+  });
+
   it('strippedConnectionRefs is empty when no node has a connectionId', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'No connections' });

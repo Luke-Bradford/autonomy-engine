@@ -73,6 +73,36 @@ describe('importEnvelope: pipeline', () => {
     expect(getPipelineVersion(db, importedVersion.id)).toEqual(importedVersion);
   });
 
+  it('#2 L13a — a ${} (dynamic) connectionId survives export → import unchanged, no rebind', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Dynamic route' });
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [{ name: 'provider', type: 'string', required: true }],
+      outputs: [],
+      nodes: [
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: {},
+          connectionId: '${params.provider}',
+          position: { x: 1, y: 2 },
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const envelope = exportPipeline(db, pipeline.id, 'owner-a');
+    const result = importEnvelope(db, 'owner-b', envelope);
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+
+    // The portable routing expression round-trips verbatim — NOT nulled — so the
+    // imported pipeline still routes; and no rebind is owed for it.
+    expect(result.versions[0]!.nodes[0]!.connectionId).toBe('${params.provider}');
+    expect(result.attention).toEqual([]);
+  });
+
   // #444 + #459. The gate makes mid-import rejection a REAL class (before it,
   // only a Zod parse could reject), so the import's atomicity stops being
   // theoretical: without a transaction, a refused version leaves an orphan

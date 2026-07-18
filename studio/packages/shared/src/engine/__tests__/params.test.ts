@@ -777,6 +777,41 @@ describe('validateRefs — ${trigger.*} at SAVE time (#5 S12)', () => {
   });
 });
 
+describe('#2 L13a — connectionId ${} refs at SAVE time', () => {
+  /** A node with a top-level connectionId (the file's `node` helper omits it). */
+  function connNode(id: string, connectionId: string): Node {
+    return { ...node(id, {}), connectionId };
+  }
+
+  it('ACCEPTS a literal connectionId (no ${} — the scan no-ops)', () => {
+    expect(validateRefs(doc([connNode('n', 'conn-fixed-123')], []))).toEqual([]);
+  });
+
+  it('ACCEPTS a ${} connectionId whose ref is a declared param', () => {
+    const errors = validateRefs(
+      doc(
+        [connNode('n', '${params.provider}')],
+        [],
+        [{ name: 'provider', type: 'string', required: true }],
+      ),
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('REJECTS a ${} connectionId referencing an undeclared param', () => {
+    const errors = validateRefs(doc([connNode('n', '${params.nope}')], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/not a declared param/);
+    expect(errors[0]).toMatch(/connectionId/);
+  });
+
+  it('REJECTS a malformed ${} connectionId expression at save', () => {
+    const errors = validateRefs(doc([connNode('n', '${params.a[0}')], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/connectionId/);
+  });
+});
+
 describe('validateRefs — deep `[]`/`.` addressing at SAVE time (#6 E7)', () => {
   const producer = node('a', {
     outputs: [
