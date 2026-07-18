@@ -255,6 +255,46 @@ describe('importEnvelope: pipeline', () => {
     ]);
   });
 
+  it('round-trip: a structured agent_task outputSchema + derived outputs survive export → import (#2 L11b)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Structured agent' });
+    const outputSchema = {
+      type: 'object',
+      properties: { verdict: { type: 'string' }, confidence: { type: 'number' } },
+    };
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [
+        {
+          id: 'rev',
+          type: 'agent_task',
+          config: { task: 'review the diff', outputSchema },
+          position: { x: 0, y: 0 },
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const envelope = exportPipeline(db, pipeline.id, 'owner-a');
+    const result = importEnvelope(db, 'owner-b', envelope);
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+
+    // The source `outputSchema` survives AND the derived contract is re-lowered
+    // idempotently on import (import re-runs `createPipelineVersion`, which
+    // re-derives `config.outputs` via `lowerAgentTaskStructuredOutputs`).
+    const imported = getPipelineVersion(db, result.versions[0]!.id)!.nodes.find(
+      (n) => n.id === 'rev',
+    )!;
+    expect(imported.config['outputSchema']).toEqual(outputSchema);
+    expect(imported.config['outputs']).toEqual([
+      { name: 'verdict', type: 'string' },
+      { name: 'confidence', type: 'number' },
+    ]);
+  });
+
   // #485 — the #473 import test above pins ONE field (`containers`).
   // `importPipelineEnvelope` builds its `NewPipelineVersion` by hand, and every
   // `.default()` field is optional in `z.input`, so a future field could be

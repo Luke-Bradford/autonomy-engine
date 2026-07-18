@@ -19,6 +19,7 @@ import {
   WAIT_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
 } from './types.js';
+import { agentTaskConfigSchema } from './agent-config.js';
 import { llmCallConfigSchema } from './llm-config.js';
 import {
   fileCopyConfigSchema,
@@ -125,10 +126,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     idempotent: false,
     connectionKinds: ['agent_cli'],
     outputs: [out('output', 'string'), out('exitCode', 'number')],
-    configSchema: z.object({
-      task: z.string().min(1),
-      cwd: z.string().optional(),
-    }),
+    configSchema: agentTaskConfigSchema,
   },
   {
     // #4 A1 — the `if` CONTROL activity. `kind:'control'` = engine-evaluated: the

@@ -107,5 +107,22 @@
 // stamping 13 makes a pre-13 build refuse the import (`portability/envelope.ts`)
 // instead of failing the node at run time. (The metering plumbing L14a shipped is
 // inert without this binding, so no older-build data concern beyond the refusal.)
-export const CATALOG_VERSION = 13;
+// 14 (#2 L11b): `agent_task` STRUCTURED output. An `agent_task` node may now
+// declare an `outputSchema` (the same restricted subset `llm_call` uses) that
+// LOWERS at save into `config.outputs`, so a downstream `${nodes.x.output.field}`
+// binds a typed field the subprocess returns via its sentinel-delimited stdout
+// block. This is the IDENTICAL bump-rule shape as L4a (comment 12): a pre-L11b
+// build ignores `outputSchema` and runs the node in the opaque `{output, exitCode}`
+// mode, so the reducer's `validateOutputs` (`engine/outputs.ts`) then FAILS the
+// node on `missing declared output '<field>'` against the persisted schema-lowered
+// `config.outputs` — an ACTIVE node-failure mis-run, so it bumps 13→14: a pre-14
+// build must refuse an L11b export at import (`portability/envelope.ts`) rather
+// than fail the structured node at run time. (The envelope stamps `catalogVersion:
+// 14` UNCONDITIONALLY, so — as with every bump — a pre-14 build refuses ANY v14
+// export, structured or not; the point specific to L11b is that only a STRUCTURED
+// node's persisted config actually mis-runs on an older build, which is what makes
+// the refusal a correctness gate here rather than mere version bookkeeping. A
+// non-structured `agent_task` node carries no `outputSchema` and its config is
+// byte-identical across the bump.)
+export const CATALOG_VERSION = 14;
 export const SCHEMA_VERSION = 1;

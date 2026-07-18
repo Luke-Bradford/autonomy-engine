@@ -17,6 +17,7 @@ import {
   EXECUTE_PIPELINE_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
+  AGENT_TASK_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
   IF_BRANCH_TRUE,
   IF_BRANCH_FALSE,
@@ -26,7 +27,7 @@ import {
   WAIT_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
 } from '../catalog/types.js';
-import { llmStructuredOutputSurfaceSchema } from '../catalog/llm-config.js';
+import { llmOutputSchemaSchema, llmStructuredOutputSurfaceSchema } from '../catalog/llm-config.js';
 import { SecretRefSchema, isSecretRef } from '../schemas/secret-ref.js';
 import type { EvalIn, FnSpec, SigType } from './functions.js';
 import {
@@ -1512,6 +1513,8 @@ export function validateDoc(
     if (node.type === EXECUTE_PIPELINE_ACTIVITY_TYPE) validateExecutePipelineConfig(node, errors);
     // #2 L4a — an `llm_call`'s structured output surface (outputMode/outputSchema).
     if (node.type === LLM_CALL_ACTIVITY_TYPE) validateLlmCallOutput(node, errors);
+    // #2 L11b — an `agent_task`'s optional structured `outputSchema` subset.
+    if (node.type === AGENT_TASK_ACTIVITY_TYPE) validateAgentTaskOutput(node, errors);
   }
 
   // Node-only forward reachability + the container index, for the back-edge
@@ -1939,6 +1942,27 @@ function validateLlmCallOutput(node: Node, errors: string[]): void {
     // hardcoded prefix needed.
     const path = issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
     errors.push(`node.${node.id}: ${path}${issue.message}`);
+  }
+}
+
+/**
+ * #2 L11b — the `agent_task` counterpart of `validateLlmCallOutput`: an OPTIONAL
+ * structured `outputSchema`, opted into by presence (no `outputMode` coupling), so
+ * the gate is `llmOutputSchemaSchema` on the raw field directly — the SAME
+ * predicate `lowerAgentTaskStructuredOutputs` uses, so a schema that lowers is
+ * exactly one that saves (the SSOT invariant). Absent → nothing to check; a present
+ * schema that fails the subset → readable per-issue diagnostics (prefixed
+ * `outputSchema.`) that refuse the whole save (no garbage-lowered contract ever
+ * persists — the same fail-closed shape as the `llm_call` path).
+ */
+function validateAgentTaskOutput(node: Node, errors: string[]): void {
+  const raw = node.config['outputSchema'];
+  if (raw === undefined) return;
+  const parsed = llmOutputSchemaSchema.safeParse(raw);
+  if (parsed.success) return;
+  for (const issue of parsed.error.issues) {
+    const suffix = issue.path.length > 0 ? `.${issue.path.join('.')}` : '';
+    errors.push(`node.${node.id}: outputSchema${suffix}: ${issue.message}`);
   }
 }
 

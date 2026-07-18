@@ -169,3 +169,72 @@ export function parseAndValidateStructured(
   }
   return validateStructuredOutput(schema, payload);
 }
+
+/**
+ * #2 L11b — the sentinel markers that delimit an `agent_task` subprocess's
+ * STRUCTURED result inside its (otherwise free-form, chatty) stdout. Unlike a
+ * provider's native JSON mode, a CLI agent's stdout is a human transcript, so the
+ * structured payload can't be "the whole output" — it is a fenced block the agent
+ * is instructed to emit. Distinctive, unlikely-to-collide tokens on their own
+ * lines; `extractStructuredBlock` scans for the LAST complete pair.
+ */
+export const AGENT_STRUCTURED_OPEN = '<<<STUDIO_STRUCTURED_OUTPUT>>>';
+export const AGENT_STRUCTURED_CLOSE = '<<<END_STUDIO_STRUCTURED_OUTPUT>>>';
+
+/**
+ * #2 L11b — the instruction appended to an `agent_task`'s `task` when the node
+ * declares an `outputSchema`, directing the agent to emit its final result as a
+ * single JSON object fenced by the sentinels. DISTINCT from
+ * `structuredOutputInstruction` (which forbids ALL surrounding prose — wrong for a
+ * chatty agent CLI that legitimately narrates before its answer): here prose is
+ * fine, only the FENCED block is parsed. Contains the schema so the agent knows
+ * the exact shape to produce.
+ */
+export function agentStructuredInstruction(schema: LlmOutputSchema): string {
+  return (
+    `When you have finished, output your final result as a single JSON object that ` +
+    `conforms to the following JSON Schema, wrapped EXACTLY between the marker lines ` +
+    `${AGENT_STRUCTURED_OPEN} and ${AGENT_STRUCTURED_CLOSE} (each marker on its own ` +
+    `line, the JSON in between, no code fences). Any other output before the markers ` +
+    `is ignored. JSON Schema:\n${JSON.stringify(schema)}`
+  );
+}
+
+/**
+ * #2 L11b — extract the JSON text of the agent's structured result from its
+ * (free-form) stdout: the body of the LAST complete
+ * `${AGENT_STRUCTURED_OPEN}…${AGENT_STRUCTURED_CLOSE}` block whose contents PARSE
+ * as JSON, or `null` if there is no such block.
+ *
+ * Selecting the last JSON-PARSEABLE block (not merely the last complete block) is
+ * what makes the protocol robust to a chatty CLI: an agent legitimately narrates,
+ * and often ECHOES or re-states the instruction — which itself names both markers.
+ * A prose block (e.g. an instruction echo, whose body is not JSON) must NOT shadow
+ * the real answer and turn a valid run into a false `permanent` failure, so such
+ * blocks are skipped in favour of an earlier JSON one. The final answer is still
+ * "last wins" among JSON blocks. The CHOSEN body is returned RAW (trimmed) and
+ * re-checked by `parseAndValidateStructured` (a schema mismatch there is still a
+ * real failure — this only skips NON-JSON noise, never masks a schema defect).
+ */
+export function extractStructuredBlock(stdout: string): string | null {
+  const bodies: string[] = [];
+  let from = 0;
+  for (;;) {
+    const open = stdout.indexOf(AGENT_STRUCTURED_OPEN, from);
+    if (open === -1) break;
+    const bodyStart = open + AGENT_STRUCTURED_OPEN.length;
+    const close = stdout.indexOf(AGENT_STRUCTURED_CLOSE, bodyStart);
+    if (close === -1) break; // an unterminated trailing OPEN — no more complete blocks
+    bodies.push(stdout.slice(bodyStart, close).trim());
+    from = close + AGENT_STRUCTURED_CLOSE.length;
+  }
+  for (let i = bodies.length - 1; i >= 0; i -= 1) {
+    try {
+      JSON.parse(bodies[i]!);
+      return bodies[i]!;
+    } catch {
+      // Not JSON (prose / an instruction echo) — fall back to an earlier block.
+    }
+  }
+  return null;
+}

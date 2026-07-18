@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { AGENT_STRUCTURED_CLOSE, AGENT_STRUCTURED_OPEN } from '@autonomy-studio/shared';
 import { createAgentAdapter, renderCliPrompt } from '../agent.js';
 import { sha256Hex } from '../../util/hash.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
@@ -332,6 +333,176 @@ describe('createAgentAdapter().runActivity', () => {
     expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
     expect(events.some((e) => e.type === 'agentTelemetry')).toBe(false);
     expect(spawnArgs).toHaveLength(0);
+  });
+
+  // #2 L11b — OPT-IN structured output: a declared outputSchema makes the fenced
+  // stdout block the success contract.
+  describe('structured output (#2 L11b)', () => {
+    const outputSchema = {
+      type: 'object',
+      properties: { verdict: { type: 'string' }, score: { type: 'number' } },
+    };
+    const block = (json: string) => [
+      { stream: 'stdout' as const, line: 'thinking about it...' },
+      { stream: 'stdout' as const, line: AGENT_STRUCTURED_OPEN },
+      { stream: 'stdout' as const, line: json },
+      { stream: 'stdout' as const, line: AGENT_STRUCTURED_CLOSE },
+    ];
+
+    it('extracts + validates the fenced block into TYPED outputs (schema fields only, no output/exitCode)', async () => {
+      const { supervisor, spawnArgs } = fakeSupervisor(block('{"verdict":"pass","score":9}'), {
+        exitCode: 0,
+      });
+      const events = await drain(
+        createAgentAdapter(supervisor).runActivity(
+          ctx({ input: { task: 'review', outputSchema } }),
+          null,
+        ),
+      );
+      // Telemetry STILL precedes the terminal (exit code stays observable there).
+      expect(events[0]).toMatchObject({ type: 'agentTelemetry', telemetry: { exitCode: 0 } });
+      expect(events[1]).toEqual({ type: 'succeeded', outputs: { verdict: 'pass', score: 9 } });
+      // The structured instruction (naming the sentinels) is appended to the task argv.
+      const finalArg = spawnArgs[0]!.args!.at(-1)!;
+      expect(finalArg).toContain('review');
+      expect(finalArg).toContain(AGENT_STRUCTURED_OPEN);
+    });
+
+    it('resolves the LAST complete block when an earlier one appears in the transcript', async () => {
+      const { supervisor } = fakeSupervisor(
+        [
+          { stream: 'stdout', line: AGENT_STRUCTURED_OPEN },
+          { stream: 'stdout', line: '{"verdict":"draft","score":1}' },
+          { stream: 'stdout', line: AGENT_STRUCTURED_CLOSE },
+          { stream: 'stdout', line: 'on reflection, final answer:' },
+          ...block('{"verdict":"final","score":10}'),
+        ],
+        { exitCode: 0 },
+      );
+      const events = await drain(
+        createAgentAdapter(supervisor).runActivity(
+          ctx({ input: { task: 'review', outputSchema } }),
+          null,
+        ),
+      );
+      expect(events.find((e) => e.type === 'succeeded')).toEqual({
+        type: 'succeeded',
+        outputs: { verdict: 'final', score: 10 },
+      });
+    });
+
+    it('a MISSING block is a permanent failure with a distinct reason', async () => {
+      const { supervisor } = fakeSupervisor([{ stream: 'stdout', line: 'no markers here' }], {
+        exitCode: 0,
+      });
+      const events = await drain(
+        createAgentAdapter(supervisor).runActivity(
+          ctx({ input: { task: 'review', outputSchema } }),
+          null,
+        ),
+      );
+      expect(events.find((e) => e.type === 'failed')).toEqual({
+        type: 'failed',
+        kind: 'permanent',
+        error:
+          'agent_task structured output invalid: no valid structured output block found in stdout',
+      });
+      expect(events.some((e) => e.type === 'succeeded')).toBe(false);
+    });
+
+    it('ignores a TRAILING instruction-echo block (non-JSON) after the real answer', async () => {
+      // A chatty agent may restate the instruction (which names both markers) AFTER
+      // its answer; that echo forms a complete but non-JSON block. It must NOT shadow
+      // the real answer and fail an otherwise-valid run.
+      const { supervisor } = fakeSupervisor(
+        [
+          ...block('{"verdict":"pass","score":7}'),
+          { stream: 'stdout', line: 'Done. (I wrapped it as instructed between the markers.)' },
+          { stream: 'stdout', line: AGENT_STRUCTURED_OPEN },
+          { stream: 'stdout', line: 'and' },
+          { stream: 'stdout', line: AGENT_STRUCTURED_CLOSE },
+        ],
+        { exitCode: 0 },
+      );
+      const events = await drain(
+        createAgentAdapter(supervisor).runActivity(
+          ctx({ input: { task: 'review', outputSchema } }),
+          null,
+        ),
+      );
+      expect(events.find((e) => e.type === 'succeeded')).toEqual({
+        type: 'succeeded',
+        outputs: { verdict: 'pass', score: 7 },
+      });
+    });
+
+    it('a non-JSON block body is a permanent failure', async () => {
+      const { supervisor } = fakeSupervisor(block('not json at all {'), { exitCode: 0 });
+      const events = await drain(
+        createAgentAdapter(supervisor).runActivity(
+          ctx({ input: { task: 'review', outputSchema } }),
+          null,
+        ),
+      );
+      expect(events.find((e) => e.type === 'failed')).toMatchObject({
+        type: 'failed',
+        kind: 'permanent',
+        error: expect.stringContaining('agent_task structured output invalid'),
+      });
+    });
+
+    it('a schema-mismatching block (missing required field) is a permanent failure', async () => {
+      const { supervisor } = fakeSupervisor(block('{"verdict":"pass"}'), { exitCode: 0 });
+      const events = await drain(
+        createAgentAdapter(supervisor).runActivity(
+          ctx({ input: { task: 'review', outputSchema } }),
+          null,
+        ),
+      );
+      expect(events.find((e) => e.type === 'failed')).toMatchObject({
+        type: 'failed',
+        kind: 'permanent',
+      });
+      expect(events.some((e) => e.type === 'succeeded')).toBe(false);
+    });
+
+    it('a failure-to-COMPLETE (timeout) stays transient even with an outputSchema', async () => {
+      const { supervisor } = fakeSupervisor(block('{"verdict":"pass","score":9}'), {
+        exitCode: null,
+        timedOut: true,
+        killed: true,
+      });
+      const events = await drain(
+        createAgentAdapter(supervisor).runActivity(
+          ctx({ input: { task: 'review', outputSchema } }),
+          null,
+        ),
+      );
+      // Structured mode reinterprets only a COMPLETED process; a timeout is unchanged.
+      expect(events.find((e) => e.type === 'failed')).toMatchObject({
+        type: 'failed',
+        kind: 'transient',
+      });
+    });
+
+    it('never echoes child stdout (a secret in an invalid block) into the durable failure', async () => {
+      const secret = 'sk-agent-secret-xyz';
+      const { supervisor } = fakeSupervisor(
+        block(`{"verdict":"${secret}"` /* unterminated → invalid JSON */),
+        { exitCode: 0 },
+      );
+      const events = await drain(
+        createAgentAdapter(supervisor).runActivity(
+          ctx({
+            connectionConfig: { command: 'claude', secretEnv: 'ANTHROPIC_API_KEY' },
+            input: { task: 'review', outputSchema },
+          }),
+          secret,
+        ),
+      );
+      const failed = events.find((e) => e.type === 'failed') as { error: string };
+      expect(failed.error).not.toContain(secret);
+    });
   });
 });
 
