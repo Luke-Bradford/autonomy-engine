@@ -15,9 +15,11 @@ import {
   parseAndValidateStructured,
   parseJsonBody,
   resolveModel,
+  runStructuredWithRepair,
+  structuredEcho,
   structuredOutputInstruction,
-  structuredValidationFailure,
 } from './llm-shared.js';
+import type { LlmTurn } from './llm-shared.js';
 
 /**
  * The `openai_api` connector adapter: a single non-streaming call to the
@@ -101,52 +103,94 @@ export const openaiAdapter: ConnectorAdapter = {
       reasoningEffort,
       structuredOutput,
     } = normalizeLlmRequest(input.data);
+    const baseUrl = (config.data.baseUrl ?? DEFAULT_OPENAI_BASE_URL).replace(/\/+$/, '');
+    const url = `${baseUrl}/chat/completions`;
+    const headers = { Authorization: `Bearer ${secret}` };
+    const timeoutMs = config.data.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS;
+
     // Chat Completions carries the system instruction as a LEADING `role:system`
-    // message (not a top-level param), then the ordered non-system turns. #2 L4b —
-    // a structured node appends the schema directive to the system content: OpenAI's
-    // `response_format:json_object` REQUIRES the literal token "JSON" in the prompt,
-    // which `structuredOutputInstruction` guarantees, and the schema steers the model.
+    // message (not a top-level param). #2 L4b — a structured node appends the schema
+    // directive to the system content: `response_format:json_object` REQUIRES the
+    // literal token "JSON" in the prompt, which `structuredOutputInstruction`
+    // guarantees, and the schema steers the model.
     const systemParts: string[] = [];
     if (system !== undefined) systemParts.push(system);
     if (structuredOutput !== undefined)
       systemParts.push(structuredOutputInstruction(structuredOutput));
-    const messages: { role: string; content: string }[] = [];
-    if (systemParts.length > 0)
-      messages.push({ role: 'system', content: systemParts.join('\n\n') });
-    messages.push(...turns);
-    const requestBody: Record<string, unknown> = { model, messages };
-    if (sampling.maxTokens !== undefined) requestBody.max_tokens = sampling.maxTokens;
-    if (sampling.temperature !== undefined) requestBody.temperature = sampling.temperature;
-    if (sampling.topP !== undefined) requestBody.top_p = sampling.topP;
-    if (sampling.stop !== undefined) requestBody.stop = sampling.stop;
-    if (sampling.seed !== undefined) requestBody.seed = sampling.seed;
-    // #2 L3 — Chat Completions carries reasoning as a top-level `reasoning_effort`
-    // (only reasoning models honor it; a non-reasoning model or a gateway that
-    // does not support it rejects/ignores it — best-effort, opt-in). `max` clamps
-    // to `high` via the shared helper (OpenAI has no `max` rung). No key when unset.
-    // Compatible with structured mode (unlike Anthropic's forced-tool/thinking clash).
-    if (reasoningEffort !== undefined) {
-      requestBody.reasoning_effort = openAiReasoningEffort(reasoningEffort);
-    }
-    // #2 L4b — JSON mode. `json_object` (not strict `json_schema`) is the robust
-    // choice: strict mode requires `additionalProperties:false` + all-required on
-    // EVERY nested object, but the L4a subset permits LOOSE nested `object`/`array`
-    // (lowered to opaque `json`), which would 400 under strict. `json_object`
-    // guarantees valid JSON with no schema-shape constraints; the strict
-    // parse/validate of the RESPONSE (`parseAndValidateStructured`) is the
-    // correctness guarantee. Widely supported by OpenAI-compatible gateways.
+    const systemContent = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
+
+    // Assemble the wire body for a set of (non-system) turns. Only `messages`
+    // changes across L4c repair calls, so the static scaffold is rebuilt from the
+    // passed turns each call. Sampling + reasoning apply in BOTH modes;
+    // `response_format` only in structured mode (so text mode is byte-identical to
+    // pre-L4c).
+    const buildBody = (msgTurns: LlmTurn[]): Record<string, unknown> => {
+      const messages: { role: string; content: string }[] = [];
+      if (systemContent !== undefined) messages.push({ role: 'system', content: systemContent });
+      messages.push(...msgTurns);
+      const body: Record<string, unknown> = { model, messages };
+      if (sampling.maxTokens !== undefined) body.max_tokens = sampling.maxTokens;
+      if (sampling.temperature !== undefined) body.temperature = sampling.temperature;
+      if (sampling.topP !== undefined) body.top_p = sampling.topP;
+      if (sampling.stop !== undefined) body.stop = sampling.stop;
+      if (sampling.seed !== undefined) body.seed = sampling.seed;
+      // #2 L3 — top-level `reasoning_effort` (reasoning models only; others
+      // ignore/reject — best-effort, opt-in). `max`→`high` (OpenAI has no `max`
+      // rung). Compatible with structured mode (no Anthropic-style clash).
+      if (reasoningEffort !== undefined)
+        body.reasoning_effort = openAiReasoningEffort(reasoningEffort);
+      // #2 L4b — `json_object` (not strict `json_schema`): the L4a subset permits
+      // LOOSE nested `object`/`array` which would 400 under strict; `json_object`
+      // guarantees valid JSON with no shape constraints, and the strict parse/
+      // validate of the RESPONSE (`parseAndValidateStructured`) is the correctness
+      // guarantee. Widely supported by OpenAI-compatible gateways.
+      if (structuredOutput !== undefined) body.response_format = { type: 'json_object' };
+      return body;
+    };
+
+    // #2 L4c — STRUCTURED path with bounded internal repair. Each call meters (a
+    // 2xx billed even if invalid), parses+validates `choices[0].message.content`;
+    // an absent/empty `choices` or non-string content yields `undefined`, which
+    // `parseAndValidateStructured` rejects → the loop re-prompts before
+    // terminalizing `permanent`. The no-completion case is covered here without a
+    // separate #461 branch.
     if (structuredOutput !== undefined) {
-      requestBody.response_format = { type: 'json_object' };
+      yield* runStructuredWithRepair('openai_api', turns, async (msgTurns) => {
+        const res = await llmPost(ctx, url, headers, buildBody(msgTurns), timeoutMs);
+        if (res.type === 'failed') return { type: 'terminal', event: res.event };
+        if (res.status < 200 || res.status >= 300) {
+          return {
+            type: 'terminal',
+            event: {
+              type: 'failed',
+              kind: classifyHttpStatus(res.status),
+              error: `openai_api HTTP ${res.status}: ${errorExcerpt(res.bodyText)}`,
+            },
+          };
+        }
+        const body = parseJsonBody(res.bodyText);
+        if (!body.ok) return { type: 'terminal', event: body.event };
+        const u = (
+          body.json as { usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } }
+        ).usage;
+        const usage = meterUsage('openai_api', model, u?.prompt_tokens, u?.completion_tokens);
+        const choices = (body.json as { choices?: unknown }).choices;
+        const content =
+          Array.isArray(choices) && choices.length > 0
+            ? (choices[0] as { message?: { content?: unknown } } | undefined)?.message?.content
+            : undefined;
+        return {
+          type: 'validated',
+          usage,
+          result: parseAndValidateStructured(structuredOutput, content),
+          echo: structuredEcho(content),
+        };
+      });
+      return;
     }
 
-    const baseUrl = (config.data.baseUrl ?? DEFAULT_OPENAI_BASE_URL).replace(/\/+$/, '');
-    const result = await llmPost(
-      ctx,
-      `${baseUrl}/chat/completions`,
-      { Authorization: `Bearer ${secret}` },
-      requestBody,
-      config.data.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS,
-    );
+    // TEXT path.
+    const result = await llmPost(ctx, url, headers, buildBody(turns), timeoutMs);
     if (result.type === 'failed') {
       yield result.event;
       return;
@@ -162,38 +206,6 @@ export const openaiAdapter: ConnectorAdapter = {
     const parsed = parseJsonBody(result.bodyText);
     if (!parsed.ok) {
       yield parsed.event;
-      return;
-    }
-    // #2 L4b — STRUCTURED path. Meter FIRST (a 2xx billed, even if the structured
-    // payload is invalid), then parse+validate `choices[0].message.content` as JSON
-    // against the schema. An absent/empty `choices` or a non-string content yields
-    // `undefined`, which `parseAndValidateStructured` rejects (→ `permanent`), so
-    // the no-completion case is covered without a separate #461 branch here.
-    if (structuredOutput !== undefined) {
-      const structuredUsage = (
-        parsed.json as { usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } }
-      ).usage;
-      yield {
-        type: 'metered',
-        usage: meterUsage(
-          'openai_api',
-          model,
-          structuredUsage?.prompt_tokens,
-          structuredUsage?.completion_tokens,
-        ),
-      };
-      const structuredChoices = (parsed.json as { choices?: unknown }).choices;
-      const content =
-        Array.isArray(structuredChoices) && structuredChoices.length > 0
-          ? (structuredChoices[0] as { message?: { content?: unknown } } | undefined)?.message
-              ?.content
-          : undefined;
-      const validated = parseAndValidateStructured(structuredOutput, content);
-      if (!validated.ok) {
-        yield structuredValidationFailure('openai_api', validated.reason);
-        return;
-      }
-      yield { type: 'succeeded', outputs: validated.value };
       return;
     }
     // #461 — a present string (even '') is a real completion; anything else is

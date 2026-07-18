@@ -341,22 +341,52 @@ describe('ollamaAdapter.runActivity — structured output (#2 L4b)', () => {
     expect(succeeded(events).outputs).toEqual({ category: 'feature' });
   });
 
-  it('fails permanent (still meters) on an out-of-enum value (#592)', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      fakeResponse(200, jsonResponse({ category: 'question' })),
-    );
+  it('fails permanent (metering BOTH repair calls) on a persistently out-of-enum value (#592)', async () => {
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(fakeResponse(200, jsonResponse({ category: 'question' })));
     const events = await drain(ollamaAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), null));
-    expect(metered(events)).toBeDefined();
+    expect(spy).toHaveBeenCalledTimes(2); // #2 L4c — one internal repair
+    expect(events.filter((e) => e.type === 'metered')).toHaveLength(2);
     expect(failed(events)).toMatchObject({ kind: 'permanent' });
     expect(failed(events).error).toContain('enum');
   });
 
-  it('fails permanent when message.content is not valid JSON', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      fakeResponse(200, { message: { content: 'not json' }, prompt_eval_count: 1, eval_count: 1 }),
+  it('fails permanent (metering both calls) when message.content is never valid JSON', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, {
+        message: { content: 'not json' },
+        prompt_eval_count: 1,
+        eval_count: 1,
+      }),
     );
     const events = await drain(ollamaAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), null));
+    expect(spy).toHaveBeenCalledTimes(2);
     expect(failed(events)).toMatchObject({ kind: 'permanent' });
     expect(failed(events).error).toContain('JSON');
+  });
+
+  it('#2 L4c — repairs an invalid FIRST completion then succeeds (two metered)', async () => {
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, jsonResponse({ category: 'question' }))) // out-of-enum
+      .mockResolvedValueOnce(fakeResponse(200, jsonResponse({ category: 'feature' }))); // corrected
+    const events = await drain(ollamaAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), null));
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(events.filter((e) => e.type === 'metered')).toHaveLength(2);
+    expect(succeeded(events).outputs).toEqual({ category: 'feature' });
+    // the repair request keeps the native `format` schema AND carries the critique.
+    const secondBody = JSON.parse((spy.mock.calls[1]![1] as RequestInit).body as string);
+    const msgs = secondBody.messages as { role: string; content: string }[];
+    expect(secondBody.format).toEqual(STRUCTURED_INPUT.outputSchema);
+    expect(msgs.some((m) => m.role === 'user' && m.content.includes('enum'))).toBe(true);
+  });
+
+  it('#2 L4c — does NOT repair a transport failure (one call, no metered)', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(500, 'boom'));
+    const events = await drain(ollamaAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), null));
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(metered(events)).toBeUndefined();
+    expect(failed(events)).toMatchObject({ kind: 'transient' });
   });
 });

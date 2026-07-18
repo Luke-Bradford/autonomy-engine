@@ -374,25 +374,66 @@ describe('openaiAdapter.runActivity — structured output (#2 L4b)', () => {
     expect(succeeded(events).outputs).toEqual({ category: 'feature' });
   });
 
-  it('fails permanent (still meters) on an out-of-enum value (#592)', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      fakeResponse(200, jsonResponse({ category: 'question' })),
-    );
+  it('fails permanent (metering BOTH repair calls) on a persistently out-of-enum value (#592)', async () => {
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(fakeResponse(200, jsonResponse({ category: 'question' })));
     const events = await drain(openaiAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'));
-    expect(metered(events)).toBeDefined();
+    expect(spy).toHaveBeenCalledTimes(2); // #2 L4c — one internal repair
+    expect(events.filter((e) => e.type === 'metered')).toHaveLength(2);
     expect(failed(events)).toMatchObject({ kind: 'permanent' });
     expect(failed(events).error).toContain('enum');
   });
 
-  it('fails permanent when the completion is not valid JSON', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+  it('fails permanent (metering both calls) when the completion is never valid JSON', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       fakeResponse(200, {
         choices: [{ message: { content: 'sorry, not json' } }],
         usage: {},
       }),
     );
     const events = await drain(openaiAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'));
+    expect(spy).toHaveBeenCalledTimes(2);
     expect(failed(events)).toMatchObject({ kind: 'permanent' });
     expect(failed(events).error).toContain('JSON');
+  });
+
+  it('#2 L4c — an empty `choices` (no completion) now ROUTES THROUGH repair, then succeeds', async () => {
+    // Pre-L4c an empty `choices` was an immediate `noCompletionFailure` (#461); a
+    // structured call now feeds it through the repair loop (an absent completion is
+    // just an invalid structured payload), so a corrected retry can still succeed.
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, { choices: [], usage: {} })) // no completion
+      .mockResolvedValueOnce(fakeResponse(200, jsonResponse({ category: 'bug' }))); // corrected
+    const events = await drain(openaiAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'));
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(events.filter((e) => e.type === 'metered')).toHaveLength(2);
+    expect(succeeded(events).outputs).toEqual({ category: 'bug' });
+  });
+
+  it('#2 L4c — repairs an invalid FIRST completion then succeeds (two metered)', async () => {
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, jsonResponse({ category: 'question' }))) // out-of-enum
+      .mockResolvedValueOnce(fakeResponse(200, jsonResponse({ category: 'feature' }))); // corrected
+    const events = await drain(openaiAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'));
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(events.filter((e) => e.type === 'metered')).toHaveLength(2);
+    expect(succeeded(events).outputs).toEqual({ category: 'feature' });
+    // the repair request keeps the JSON system directive AND carries the critique.
+    const secondBody = JSON.parse((spy.mock.calls[1]![1] as RequestInit).body as string);
+    const msgs = secondBody.messages as { role: string; content: string }[];
+    expect(secondBody.response_format).toEqual({ type: 'json_object' });
+    expect(msgs.find((m) => m.role === 'system')?.content).toContain('JSON');
+    expect(msgs.some((m) => m.role === 'user' && m.content.includes('enum'))).toBe(true);
+  });
+
+  it('#2 L4c — does NOT repair a transport failure (one call, no metered)', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(503, 'overloaded'));
+    const events = await drain(openaiAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'));
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(metered(events)).toBeUndefined();
+    expect(failed(events)).toMatchObject({ kind: 'transient' });
   });
 });

@@ -285,10 +285,13 @@ export function noCompletionFailure(
  * payload that fails the schema (missing field, wrong type, out-of-enum). Like
  * `noCompletionFailure` it is `permanent` — a 2xx means transport + server
  * succeeded, so an unusable structured body is a response-content problem the
- * identical request won't fix (retry policy gates on `transient`). L4c will add
- * an internal repair sub-call BEFORE this terminal; today the first invalid
- * response terminalizes. `kind` names the provider so the durable `error` is
- * traceable, matching the `<kind> HTTP <status>` / `noCompletionFailure` errors.
+ * identical request won't fix (retry policy gates on `transient`). `kind` names
+ * the provider so the durable `error` is traceable, matching the `<kind> HTTP
+ * <status>` / `noCompletionFailure` errors.
+ *
+ * #2 L4c — this is the terminal `runStructuredWithRepair` emits ONLY after every
+ * internal repair sub-call has also failed; the FIRST invalid response now
+ * triggers a bounded repair re-prompt (same attempt) instead of terminalizing.
  */
 export function structuredValidationFailure(
   kind: LlmConnectionKind,
@@ -299,6 +302,145 @@ export function structuredValidationFailure(
     kind: 'permanent',
     error: `${kind} structured output invalid: ${reason}`,
   };
+}
+
+/**
+ * #2 L4c — how many INTERNAL repair sub-calls a structured `llm_call` makes after
+ * a 2xx response that parsed but produced no schema-valid structured output. `1`
+ * = up to ONE repair (≤2 total provider calls per attempt).
+ *
+ * A CONSTANT, deliberately NOT an author knob: `LlmCallConfig` declares no repair
+ * field, and a run REPLAYS from its immutable event log (never by re-calling), so
+ * this value never needs version-pinning — changing it alters only how many calls
+ * a LIVE dispatch makes, never a past run's recorded outcome (its `metered` +
+ * terminal events are already frozen). Kept in ONE place so all three adapters
+ * bound repair identically, mirroring how `meterUsage` is the single completeness
+ * decision.
+ */
+export const DEFAULT_STRUCTURED_REPAIRS = 1;
+
+/** A non-system conversation turn — the provider-agnostic shape the loop threads. */
+export type LlmTurn = { role: 'user' | 'assistant'; content: string };
+
+/**
+ * #2 L4c — the provider-agnostic outcome of ONE structured provider call, mapped
+ * by each adapter's `doCall` closure for `runStructuredWithRepair` to drive:
+ *
+ * - `terminal` — a transport/HTTP/non-JSON failure. NOT repaired: a 5xx/timeout/
+ *   cancel is the engine retry policy's job (it gates on `transient`), and a
+ *   non-2xx / non-JSON body is not a structured-conformance problem a re-prompt
+ *   fixes. The loop yields this event verbatim and stops.
+ * - `validated` — a completed 2xx that BILLED (`usage`) whose structured payload
+ *   was strict-validated (`result`). `echo` is a bounded, always-non-empty textual
+ *   echo of what the model produced, fed into the repair turn on failure.
+ */
+export type StructuredCallOutcome =
+  | { type: 'terminal'; event: Extract<ActivityEvent, { type: 'failed' }> }
+  | { type: 'validated'; usage: LlmUsage; result: StructuredValidationResult; echo: string };
+
+/**
+ * #2 L4c — a bounded, ALWAYS-NON-EMPTY textual echo of a structured response's
+ * payload, to feed back into a repair sub-call so the model sees what it got
+ * wrong. A parsed object (Anthropic's forced-tool `input`) is JSON-stringified; a
+ * raw completion string (OpenAI/Ollama `message.content`) passes through; an
+ * absent / non-stringifiable payload (the no-block or non-string cases, which are
+ * now repairable too) becomes a placeholder. NEVER empty: the echo rides the
+ * repair turn as `assistant` content (or folded into a `user` turn), and an empty
+ * assistant turn is itself an Anthropic 400. Bounded via `errorExcerpt` so a huge
+ * payload cannot bloat the repair request or a durable message.
+ */
+export function structuredEcho(payload: unknown): string {
+  let text: string | undefined;
+  if (typeof payload === 'string') text = payload;
+  else if (payload !== undefined && payload !== null) {
+    try {
+      // A plain provider JSON value never throws, but a BigInt / circular value
+      // would — fall back to the placeholder rather than crash the repair call.
+      text = JSON.stringify(payload);
+    } catch {
+      text = undefined;
+    }
+  }
+  if (text === undefined || text.length === 0) {
+    return '(the response contained no valid structured output)';
+  }
+  return errorExcerpt(text);
+}
+
+/**
+ * #2 L4c — build the message turns for a structured repair sub-call: the prior
+ * turns plus a critique naming the schema failure and asking for a corrected
+ * result, with the invalid response echoed back.
+ *
+ * ROLE ALTERNATION: Anthropic's Messages API requires strictly-alternating
+ * user/assistant turns (OpenAI/Ollama are lenient). A v2 `messages[]` may legally
+ * END on an `assistant` turn, so appending `assistant`(echo) + `user`(critique)
+ * unconditionally would yield `…assistant, assistant, user` and 400 the very
+ * repair it is meant to power. So: if the turns already end on `assistant`, the
+ * echo is FOLDED into the single appended `user` turn (`…assistant → user`);
+ * otherwise the invalid response becomes its own `assistant` turn before the
+ * `user` critique (`…user → assistant → user`). Either shape alternates, so every
+ * provider accepts the repair request.
+ */
+export function buildRepairTurns(turns: LlmTurn[], reason: string, echo: string): LlmTurn[] {
+  const critique =
+    'Your previous response did not satisfy the required structured output schema. ' +
+    `Validation error: ${reason}. ` +
+    'Respond again with a corrected result that conforms to the schema, and output only that result.';
+  const last = turns[turns.length - 1];
+  if (last !== undefined && last.role === 'assistant') {
+    return [
+      ...turns,
+      { role: 'user', content: `${critique}\n\nYour previous (invalid) output was:\n${echo}` },
+    ];
+  }
+  return [...turns, { role: 'assistant', content: echo }, { role: 'user', content: critique }];
+}
+
+/**
+ * #2 L4c — drive a structured `llm_call` with bounded INTERNAL repair. `doCall`
+ * performs ONE provider call for the given turns (rebuilding the wire body — the
+ * `system` param + structured-mode scaffold — from the non-system turns each
+ * time) and maps its result to a `StructuredCallOutcome`.
+ *
+ * The loop yields the `metered` FACT for EVERY billed call (repair calls bill too
+ * — spec: an `activity.metered` per provider response, including repair + failed-
+ * but-billed calls), then: a valid result → `succeeded`; an invalid result with
+ * repairs remaining → append a repair critique and re-call; an invalid result
+ * with none remaining → `structuredValidationFailure` (`permanent`). A `terminal`
+ * outcome (transport/HTTP/non-JSON) is yielded verbatim and stops the loop, never
+ * repaired.
+ *
+ * It stays inside ONE engine attempt (the adapter passes the same `attemptId`
+ * context to every `llmPost`) and emits EXACTLY ONE terminal, so the node
+ * terminalizes once — repair is a sub-call, not a new attempt. A run cancelled
+ * between calls is caught by the next `llmPost` (it re-checks `ctx.signal.aborted`
+ * at entry and returns a `cancelled` terminal), so no repair fires after abort.
+ */
+export async function* runStructuredWithRepair(
+  provider: LlmConnectionKind,
+  initialTurns: LlmTurn[],
+  doCall: (turns: LlmTurn[]) => Promise<StructuredCallOutcome>,
+): AsyncIterable<ActivityEvent> {
+  let turns = initialTurns;
+  for (let repairIndex = 0; repairIndex <= DEFAULT_STRUCTURED_REPAIRS; repairIndex++) {
+    const outcome = await doCall(turns);
+    if (outcome.type === 'terminal') {
+      yield outcome.event;
+      return;
+    }
+    yield { type: 'metered', usage: outcome.usage };
+    if (outcome.result.ok) {
+      yield { type: 'succeeded', outputs: outcome.result.value };
+      return;
+    }
+    if (repairIndex < DEFAULT_STRUCTURED_REPAIRS) {
+      turns = buildRepairTurns(turns, outcome.result.reason, outcome.echo);
+      continue;
+    }
+    yield structuredValidationFailure(provider, outcome.result.reason);
+    return;
+  }
 }
 
 /** A short, safe excerpt of a non-2xx response body for a failure `error`. */
