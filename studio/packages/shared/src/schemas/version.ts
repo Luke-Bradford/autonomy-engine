@@ -96,5 +96,16 @@
 // exports were IDENTICALLY runnable on older builds). Stamping 11 makes a 10-build
 // refuse an A16 export at import (`portability/envelope.ts`) rather than silently
 // leaving the typed output empty at run time.
-export const CATALOG_VERSION = 12;
+// 13 (#2 L14b): `llm_call` now also binds an `agent_cli` connection (a CLI/
+// subscription single-shot). This WIDENS `llm_call.connectionKinds` — no new type
+// or field, but it is NOT the `execute_pipeline` structural exception (that node
+// is IDENTICALLY runnable on an older build; this one is not). A pipeline binding
+// `agent_cli` to an `llm_call` node, loaded on a pre-13 build, imports fine (12 ≯
+// 12) but then FAILS at dispatch: `resolveConnection` rejects `agent_cli` — it is
+// not in the pre-13 `connectionKinds` list → the node fails `permanent`. That is
+// the A11/A13 loud-fail mis-run the bump rule exists for (catalog/types.ts), so
+// stamping 13 makes a pre-13 build refuse the import (`portability/envelope.ts`)
+// instead of failing the node at run time. (The metering plumbing L14a shipped is
+// inert without this binding, so no older-build data concern beyond the refusal.)
+export const CATALOG_VERSION = 13;
 export const SCHEMA_VERSION = 1;

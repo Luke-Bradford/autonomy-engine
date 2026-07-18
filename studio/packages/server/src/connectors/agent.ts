@@ -1,12 +1,37 @@
 import { z } from 'zod';
+import { AGENT_TASK_ACTIVITY_TYPE, LLM_CALL_ACTIVITY_TYPE } from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
-import type { Supervisor } from '../workers/process-supervisor.js';
+import type { Supervisor, SupervisedResult } from '../workers/process-supervisor.js';
+import {
+  coerceStopReason,
+  llmCallConfigSchema,
+  normalizeLlmRequest,
+  resolveModel,
+} from './llm-shared.js';
+import type { NormalizedLlmRequest } from './llm-shared.js';
+import { redactSecrets } from './redact.js';
 
 /**
  * The `agent_cli` connector adapter: runs an agent CLI (Claude Code, Codex, or
  * any command) as a supervised subprocess via the per-app `Supervisor` (the
  * `createSupervisor()` instance the host injects, whose `reapAllSupervised()` is
- * wired into graceful shutdown). The `agent_task` activity supplies the `task`
+ * wired into graceful shutdown).
+ *
+ * ONE adapter, TWO invocation shapes (selected by `ctx.activityType`, the same
+ * multi-activity seam the `fs` connector uses for `file_read`/`file_write`):
+ * - `agent_task` — the agentic subprocess: `task` in, stdout + `exitCode` out,
+ *   exit code is DATA the pipeline branches on (see OUTCOME MAPPING below).
+ * - `llm_call` (#2 L14b) — a CLI/subscription SINGLE-SHOT (`claude -p`/
+ *   `codex exec` → stdout): the `llm_call` config's prompt is folded into one
+ *   string, appended as the final argv element, and the process stdout is the
+ *   `text` completion. The response is metered `unpriced` — a flat/covered seat
+ *   pays for it, so there is NO per-token dollar price BY DESIGN (the executor
+ *   suppresses all price fields on `unpriced`; L6 counts it as a known
+ *   zero-marginal, not a measurement gap). A non-zero exit is a `permanent`
+ *   failure here (unlike `agent_task`): the LLM shape's contract is a completion,
+ *   and an opaque CLI error is not something to hot-loop a retry on.
+ *
+ * The `agent_task` activity supplies the `task`
  * (and an optional `cwd`); the Connection's non-secret `config` supplies the
  * `command`, static `args`, non-secret `env`, an optional `cwd`, and — per the
  * secret discipline — the NAME of the env var (`secretEnv`) the resolved secret
@@ -59,6 +84,14 @@ const agentConnectionConfigSchema = z.object({
   secretEnv: z.string().optional(),
   /** Default working directory; the activity `cwd` overrides it. */
   cwd: z.string().optional(),
+  /**
+   * #2 L14b — the default model this CLI connection reports for an `llm_call`
+   * (node `config.model` < this < the `cli` fallback). Purely a metering LABEL:
+   * an `unpriced` subscription call has no price to resolve, and the operator
+   * configures any real `--model` flag statically via `args`; this only names
+   * the model for observability/audit.
+   */
+  model: z.string().optional(),
   /** Hard wall-clock timeout (ms). Exceeding it tree-kills the process. */
   timeoutMs: z.number().int().positive().optional(),
   /** Combined stdout+stderr byte cap before output is truncated. */
@@ -69,6 +102,291 @@ const agentRequestInputSchema = z.object({
   task: z.string().min(1),
   cwd: z.string().optional(),
 });
+
+type AgentConnectionConfig = z.infer<typeof agentConnectionConfigSchema>;
+
+/** The `provider` field on an `llm_call` CLI response's metering fact — the
+ * Connection kind, per the `activity.metered` contract. */
+const AGENT_CLI_PROVIDER = 'agent_cli';
+
+/** The metering model LABEL when neither the node nor the connection names one.
+ * An `unpriced` call has no price to resolve, so this is descriptive only. */
+const CLI_MODEL_FALLBACK = 'cli';
+
+/** Bound on the CLI diagnostic excerpt folded into a non-zero-exit failure
+ * message, so a verbose CLI cannot bloat the durable `node.failed` event. Over
+ * the cap, the head and tail (half each) are kept with a middle elision. */
+const MAX_STDERR_DETAIL_CHARS = 1000;
+
+/**
+ * #2 L14b — flatten a normalized `llm_call` request into the SINGLE prompt string
+ * a CLI single-shot (`claude -p <prompt>`) takes. A lone user turn with no system
+ * reduces to its raw content (the common Generate shape); anything richer folds
+ * to a role-labelled transcript with the system prompt first, so a multi-turn
+ * conversation reaches the CLI unambiguously. Pure + exported for direct tests.
+ */
+export function renderCliPrompt(req: NormalizedLlmRequest): string {
+  // The production caller (a `safeParse`d config) always has ≥1 non-system
+  // message, but this is exported — stay defensive for a direct caller rather
+  // than index into an empty array.
+  if (req.messages.length === 0) return req.system ?? '';
+  const body =
+    req.messages.length === 1 && req.messages[0]!.role === 'user'
+      ? req.messages[0]!.content
+      : req.messages
+          .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+          .join('\n\n');
+  return req.system !== undefined ? `${req.system}\n\n${body}` : body;
+}
+
+/**
+ * Spawn the CLI single-shot (shared by both invocation shapes) and collect its
+ * output. `finalArg` (the `task` or the folded prompt) is the LAST argv element,
+ * never a place a secret rides — the secret goes ONLY into the child env, and the
+ * harness master-key vars are stripped (defense in depth: an arbitrary agent
+ * binary must never see the key that decrypts every connection secret). stdout
+ * and stderr are each collected line-by-line (bounded by the supervisor's byte
+ * budget); the supervisor closes the stream once the child exits, so the drain
+ * terminates and is `await`ed rather than raced.
+ */
+async function spawnAndCollect(
+  supervisor: Supervisor,
+  config: AgentConnectionConfig,
+  finalArg: string,
+  cwd: string | undefined,
+  secret: string | null,
+  signal: AbortSignal,
+): Promise<{ result: SupervisedResult; stdout: string[]; stderr: string[] }> {
+  const env: Record<string, string | undefined> = { ...(config.env ?? {}) };
+  // The secret (if any) is injected ONLY into the child env, never argv.
+  if (secret !== null && config.secretEnv !== undefined) {
+    env[config.secretEnv] = secret;
+  }
+  // Defense-in-depth: STRIP the harness's own secrets master-key vars from the
+  // child (`undefined` unsets an inherited var). These win over any operator
+  // `config.env` collision — correct, since no agent needs the harness key.
+  for (const masterKeyVar of MASTER_KEY_ENV_VARS) env[masterKeyVar] = undefined;
+
+  const proc = supervisor.spawnSupervised({
+    command: config.command,
+    args: [...(config.args ?? []), finalArg],
+    cwd,
+    env,
+    // A default upper bound so a hung agent can never PERMANENTLY hold a shared
+    // worker-pool slot; generous, since agent runs are long. Per-connection
+    // overridable via `config.timeoutMs`.
+    timeoutMs: config.timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS,
+    maxOutputBytes: config.maxOutputBytes,
+    signal,
+  });
+
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const collect = (async () => {
+    for await (const ev of proc.events) {
+      if (ev.stream === 'stdout') stdout.push(ev.line);
+      else stderr.push(ev.line);
+    }
+  })();
+  const result = await proc.result;
+  await collect;
+  return { result, stdout, stderr };
+}
+
+/**
+ * Classify a subprocess RESULT into either a `failed` event (the not-completed
+ * outcomes BOTH invocation shapes map identically — abort/timeout/shutdown-reap/
+ * spawn-failure/external-signal) or a completed exit code (a discriminated union
+ * so the caller's exit-code narrowing is type-checked). The run's own cancel
+ * wins over a coincident timeout.
+ */
+function classifyCliOutcome(
+  result: SupervisedResult,
+  command: string,
+  label: string,
+): { failed: Extract<ActivityEvent, { type: 'failed' }> } | { exitCode: number } {
+  if (result.aborted)
+    return { failed: { type: 'failed', kind: 'cancelled', error: `${label} aborted` } };
+  if (result.timedOut)
+    return { failed: { type: 'failed', kind: 'transient', error: `${label} timed out` } };
+  if (result.killed)
+    return {
+      failed: { type: 'failed', kind: 'cancelled', error: `${label} killed (server shutdown)` },
+    };
+  if (result.exitCode === null) {
+    // No exit code and we didn't kill it: a spawn failure (bad command →
+    // `permanent`) or an external kill signal (→ `transient`).
+    if (result.signal !== null) {
+      return {
+        failed: {
+          type: 'failed',
+          kind: 'transient',
+          error: `${label} killed by signal ${result.signal}`,
+        },
+      };
+    }
+    return {
+      failed: {
+        type: 'failed',
+        kind: 'permanent',
+        error: `${label} failed to start (is '${command}' on PATH?)`,
+      },
+    };
+  }
+  return { exitCode: result.exitCode };
+}
+
+/**
+ * The `agent_task` invocation shape: `task` in, stdout + `exitCode` out. OUTCOME
+ * MAPPING (mirroring the `http` adapter's "status is data"): a subprocess that
+ * COMPLETES on its own — any exit code — is `succeeded{ output, exitCode }`, so a
+ * pipeline can branch on `${nodes.x.output.exitCode}`. Only a failure-to-complete
+ * is a `failed` event.
+ */
+async function* runAgentTask(
+  supervisor: Supervisor,
+  ctx: ActivityContext,
+  secret: string | null,
+  config: AgentConnectionConfig,
+): AsyncIterable<ActivityEvent> {
+  const input = agentRequestInputSchema.safeParse(ctx.input);
+  if (!input.success) {
+    yield {
+      type: 'failed',
+      kind: 'permanent',
+      error: `invalid agent_task activity config: ${input.error.message}`,
+    };
+    return;
+  }
+  const { result, stdout } = await spawnAndCollect(
+    supervisor,
+    config,
+    input.data.task,
+    input.data.cwd ?? config.cwd,
+    secret,
+    ctx.signal,
+  );
+  const outcome = classifyCliOutcome(result, config.command, 'agent_task');
+  if ('failed' in outcome) {
+    yield outcome.failed;
+    return;
+  }
+  yield { type: 'succeeded', outputs: { output: stdout.join('\n'), exitCode: outcome.exitCode } };
+}
+
+/**
+ * #2 L14b — the `llm_call` invocation shape on a CLI/subscription connection: a
+ * single-shot subprocess whose stdout is the `text` completion. The response is
+ * metered `unpriced` (emitted BEFORE the terminal, mirroring the API adapters);
+ * a non-zero exit is a `permanent` failure (an opaque CLI/model error the LLM
+ * contract cannot express as a completion, and not one to hot-loop). NO metering
+ * fact is emitted on ANY failure — we cannot know whether a billable response
+ * occurred (a spawn failure definitely did not), and fabricating one would
+ * misreport spend.
+ *
+ * SHAPE LIMITS (a CLI single-shot cannot carry the full `llm_call` config, so the
+ * operator drives these via the connection's static `args`, NOT the node config):
+ * - `sampling` (`temperature`/`maxTokens`/`topP`/`stop`/`seed`) and
+ *   `reasoningEffort` are NOT forwarded — a generic CLI has no portable flag for
+ *   them. An author who needs e.g. `temperature: 0` for a deterministic Judge
+ *   must set the CLI's own flag in `args`; the node-config value is inert here.
+ *   (Called out rather than silently assumed, matching the price/token honesty.)
+ * - The folded prompt is the FINAL argv element (never shell-interpolated). If a
+ *   prompt can begin with `-`/`--`, add a `--` end-of-options terminator to the
+ *   connection's `args` where the target CLI supports it, so the prompt is never
+ *   parsed as a flag.
+ */
+async function* runLlmCall(
+  supervisor: Supervisor,
+  ctx: ActivityContext,
+  secret: string | null,
+  config: AgentConnectionConfig,
+): AsyncIterable<ActivityEvent> {
+  const llm = llmCallConfigSchema.safeParse(ctx.input);
+  if (!llm.success) {
+    yield {
+      type: 'failed',
+      kind: 'permanent',
+      error: `invalid llm_call config: ${llm.error.message}`,
+    };
+    return;
+  }
+  if (llm.data.outputMode === 'structured') {
+    // A CLI's stdout is opaque text — there is no provider JSON/tool mode to
+    // ENFORCE a schema against, and parse-and-validate on arbitrary stdout is an
+    // opt-in agent protocol (L11b), not this shape. Reject at dispatch (the bound
+    // connection kind is not reliably known at save-time).
+    yield {
+      type: 'failed',
+      kind: 'permanent',
+      error:
+        'structured output is not supported on an agent_cli (CLI) connection — bind a provider connection (anthropic/openai/ollama) or use agent_task',
+    };
+    return;
+  }
+  const prompt = renderCliPrompt(normalizeLlmRequest(llm.data));
+  // Model is a metering LABEL only (an unpriced call resolves no price): node <
+  // connection < the `cli` fallback.
+  const model = resolveModel(llm.data, config, undefined) ?? CLI_MODEL_FALLBACK;
+
+  const { result, stdout, stderr } = await spawnAndCollect(
+    supervisor,
+    config,
+    prompt,
+    config.cwd,
+    secret,
+    ctx.signal,
+  );
+  const outcome = classifyCliOutcome(result, config.command, 'llm_call');
+  if ('failed' in outcome) {
+    yield outcome.failed;
+    return;
+  }
+  if (outcome.exitCode !== 0) {
+    // Some CLIs (e.g. `codex exec`) print their error/diagnostic to STDOUT, not
+    // stderr — fold BOTH into the detail so a failure is never a bare "exited N"
+    // with no context. stderr first (the conventional error channel).
+    // REDACT the resolved secret out of that text BEFORE it lands in the durable
+    // `node.failed` event — a CLI commonly echoes the injected key in an
+    // auth/quota error, and this string is persisted to `run_events` and served
+    // over the API. Redact the FULL text first, then truncate, so a secret
+    // straddling the truncation boundary is still fully scrubbed. Same never-leak
+    // discipline every sibling adapter upholds (http/llm-shared → `redactSecrets`).
+    const diagnostic = [stderr.join('\n'), stdout.join('\n')]
+      .map((s) => s.trim())
+      .filter((s) => s !== '')
+      .join('\n');
+    const raw = redactSecrets(diagnostic, [secret]);
+    // Keep BOTH ends when over the cap: a CLI may print the real error EARLY (then
+    // trail off in progress noise) OR summarise it at the END, so preserving only
+    // one end can bury the signal. Head + tail with a middle elision covers both.
+    const half = Math.floor(MAX_STDERR_DETAIL_CHARS / 2);
+    const detail =
+      raw.length > MAX_STDERR_DETAIL_CHARS ? `${raw.slice(0, half)}…${raw.slice(-half)}` : raw;
+    yield {
+      type: 'failed',
+      kind: 'permanent',
+      error: `llm_call CLI exited ${outcome.exitCode}${detail !== '' ? `: ${detail}` : ''}`,
+    };
+    return;
+  }
+  // A billable (subscription-covered) response occurred: meter it `unpriced` with
+  // NO tokens (a CLI gives none) — the executor keeps ALL price fields absent, and
+  // L6 folds it into the run-cost's `unpriced` bucket (not the incompleteness gap).
+  yield {
+    type: 'metered',
+    usage: { provider: AGENT_CLI_PROVIDER, model, meteringStatus: 'unpriced' },
+  };
+  // A present-but-empty completion (exit 0, empty stdout) is a real result — like
+  // an API adapter's explicit `content:''` — so it succeeds with `text:''`. There
+  // is no provider stop-reason for a CLI, so `coerceStopReason(undefined)` stamps
+  // the honest `unknown` sentinel (NOT a fabricated `'stop'`, which is a real
+  // OpenAI finish_reason a `${...stopReason} == 'stop'` branch would confuse).
+  yield {
+    type: 'succeeded',
+    outputs: { text: stdout.join('\n'), stopReason: coerceStopReason(undefined) },
+  };
+}
 
 /**
  * Build the `agent_cli` adapter bound to a specific `Supervisor` (per-app, so
@@ -99,90 +417,21 @@ export function createAgentAdapter(supervisor: Supervisor): ConnectorAdapter {
         };
         return;
       }
-      const input = agentRequestInputSchema.safeParse(ctx.input);
-      if (!input.success) {
-        yield {
-          type: 'failed',
-          kind: 'permanent',
-          error: `invalid agent_task activity config: ${input.error.message}`,
-        };
+      // ONE adapter, two invocation shapes (the `fs` multi-activity seam). A
+      // mis-routed third type fails LOUDLY rather than being silently treated as
+      // one of the two.
+      if (ctx.activityType === LLM_CALL_ACTIVITY_TYPE) {
+        yield* runLlmCall(supervisor, ctx, secret, config.data);
         return;
       }
-
-      const env: Record<string, string | undefined> = { ...(config.data.env ?? {}) };
-      // The secret (if any) is injected ONLY into the child env, never argv.
-      if (secret !== null && config.data.secretEnv !== undefined) {
-        env[config.data.secretEnv] = secret;
-      }
-      // Defense-in-depth: STRIP the harness's own secrets master-key vars from
-      // the child (the child otherwise inherits the full server env). An
-      // arbitrary agent subprocess must never see the key that decrypts EVERY
-      // connection secret. `undefined` unsets an inherited var (see the
-      // `SpawnSupervisedOptions.env` contract). These win over any operator
-      // `config.env` collision — correct, since no agent needs the harness key.
-      for (const masterKeyVar of MASTER_KEY_ENV_VARS) env[masterKeyVar] = undefined;
-
-      const proc = supervisor.spawnSupervised({
-        command: config.data.command,
-        args: [...(config.data.args ?? []), input.data.task],
-        cwd: input.data.cwd ?? config.data.cwd,
-        env,
-        // A default upper bound so a hung agent can never PERMANENTLY hold a
-        // shared worker-pool slot (the invariant every other adapter upholds);
-        // generous, since agent runs are long. Overridable via `config.timeoutMs`.
-        timeoutMs: config.data.timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS,
-        maxOutputBytes: config.data.maxOutputBytes,
-        signal: ctx.signal,
-      });
-
-      // Drain stdout line-by-line (bounded by the supervisor's byte budget) into
-      // the `output`. The supervisor closes the stream once the child exits, so
-      // this loop terminates. stderr is intentionally not surfaced as `output`.
-      const outLines: string[] = [];
-      const collect = (async () => {
-        for await (const ev of proc.events) {
-          if (ev.stream === 'stdout') outLines.push(ev.line);
-        }
-      })();
-      const result = await proc.result;
-      await collect;
-
-      // The run's own cancel wins over a coincident timeout.
-      if (result.aborted) {
-        yield { type: 'failed', kind: 'cancelled', error: 'agent_task aborted' };
+      if (ctx.activityType === AGENT_TASK_ACTIVITY_TYPE) {
+        yield* runAgentTask(supervisor, ctx, secret, config.data);
         return;
       }
-      if (result.timedOut) {
-        yield { type: 'failed', kind: 'transient', error: 'agent_task timed out' };
-        return;
-      }
-      if (result.killed) {
-        // Reaped by graceful shutdown (not abort/timeout, handled above).
-        yield { type: 'failed', kind: 'cancelled', error: 'agent_task killed (server shutdown)' };
-        return;
-      }
-      if (result.exitCode === null) {
-        // No exit code and we didn't kill it: a spawn failure (bad command → a
-        // `permanent` config error) or an external kill signal (→ transient).
-        if (result.signal !== null) {
-          yield {
-            type: 'failed',
-            kind: 'transient',
-            error: `agent_task killed by signal ${result.signal}`,
-          };
-        } else {
-          yield {
-            type: 'failed',
-            kind: 'permanent',
-            error: `agent_task failed to start (is '${config.data.command}' on PATH?)`,
-          };
-        }
-        return;
-      }
-
       yield {
-        type: 'succeeded',
-        outputs: { output: outLines.join('\n'), exitCode: result.exitCode },
+        type: 'failed',
+        kind: 'permanent',
+        error: `agent_cli adapter cannot serve activity '${ctx.activityType}'`,
       };
     },
   };
