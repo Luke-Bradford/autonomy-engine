@@ -339,6 +339,35 @@ describe('lowerOutputSchema', () => {
       [{ name: 'text', type: 'string' }],
     );
   });
+
+  // #594 — a property NOT named in an EXPLICIT `required` list lowers with
+  // `optional:true`; a required one carries no `optional` (absent = required).
+  it('marks a property omitted from a present `required` list as optional', () => {
+    const outputs = lowerOutputSchema({
+      type: 'object',
+      properties: { category: { type: 'string' }, reason: { type: 'string' } },
+      required: ['category'],
+    });
+    expect(outputs).toEqual([
+      { name: 'category', type: 'string' },
+      { name: 'reason', type: 'string', optional: true },
+    ]);
+  });
+
+  // An ABSENT `required` list keeps the L4b floor: ALL required (no `optional`
+  // key), NOT strict-JSON-Schema "absent required = all optional" — which would
+  // silently null-fill and change existing saved-schema semantics toward data
+  // loss. Optionality is opt-in via an explicit partial `required` list.
+  it('leaves every property required when there is no `required` list', () => {
+    const outputs = lowerOutputSchema({
+      type: 'object',
+      properties: { a: { type: 'string' }, b: { type: 'number' } },
+    });
+    expect(outputs).toEqual([
+      { name: 'a', type: 'string' },
+      { name: 'b', type: 'number' },
+    ]);
+  });
 });
 
 // #2 L4a — the outputMode↔outputSchema COUPLING surface, the exact slice both the

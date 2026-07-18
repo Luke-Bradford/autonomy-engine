@@ -130,6 +130,39 @@ describe('checkInboundOutputs — payload vs contract failure kinds (#4 A16)', (
     });
     expect(r).toEqual({ ok: true, outputs: { decision: 'ship' } });
   });
+
+  // #594 — `optional` is on the SHARED `OutputSchema`, so the present-null
+  // tolerance is available at this boundary too (an intentional consequence of
+  // one output-contract SSOT, not an llm-only path). An omitted optional
+  // declared key is ok:true and stored as a present `null` (one stored shape).
+  it('an omitted OPTIONAL declared key → ok:true, stored as present-null (#594)', () => {
+    const r = checkInboundOutputs(
+      node('w', {
+        outputs: [
+          { name: 'decision', type: 'string' },
+          { name: 'note', type: 'string', optional: true },
+        ],
+      }),
+      { decision: 'ship' },
+    );
+    expect(r).toEqual({ ok: true, outputs: { decision: 'ship', note: null } });
+  });
+
+  it('a present OPTIONAL declared key still type-checks (#594)', () => {
+    const n = node('w', {
+      outputs: [
+        { name: 'decision', type: 'string' },
+        { name: 'score', type: 'number', optional: true },
+      ],
+    });
+    expect(checkInboundOutputs(n, { decision: 'ship', score: 5 })).toEqual({
+      ok: true,
+      outputs: { decision: 'ship', score: 5 },
+    });
+    // Present-but-mistyped optional is STILL a payload failure.
+    const bad = checkInboundOutputs(n, { decision: 'ship', score: 'high' });
+    expect(bad.ok).toBe(false);
+  });
 });
 
 // --- the runtime consequence ----------------------------------------------
@@ -167,6 +200,45 @@ describe('reducer — a malformed contract FAILS the node, never fails open (F13
     expect(diagnostics.join(' ')).toContain("node 'a' has invalid config");
     expect(diagnostics.join(' ')).toContain('config.outputs is malformed');
     expect(diagnostics.join(' ')).not.toContain('produced invalid outputs');
+  });
+
+  // #594 — an OPTIONAL declared output the executor omits must let the node
+  // SUCCEED (stored as present-null), not fail `missing declared output`. A
+  // REQUIRED output is unchanged: omitting it still fails the node.
+  it('an omitted OPTIONAL output → node SUCCEEDS, stored as present-null', () => {
+    const n = node('a', {
+      outputs: [
+        { name: 'text', type: 'string' },
+        { name: 'reason', type: 'string', optional: true },
+      ],
+    });
+    const { state } = driveOne(n, { text: 'hi' });
+    expect(state.nodes['a']?.status).toBe('success');
+    expect(state.outputs['a']).toEqual({ text: 'hi', reason: null });
+  });
+
+  it('an OPTIONAL output present-null → node SUCCEEDS, stored null', () => {
+    const n = node('a', {
+      outputs: [
+        { name: 'text', type: 'string' },
+        { name: 'reason', type: 'string', optional: true },
+      ],
+    });
+    const { state } = driveOne(n, { text: 'hi', reason: null });
+    expect(state.nodes['a']?.status).toBe('success');
+    expect(state.outputs['a']).toEqual({ text: 'hi', reason: null });
+  });
+
+  it('a REQUIRED output omitted still FAILS the node (optionality is opt-in)', () => {
+    const n = node('a', {
+      outputs: [
+        { name: 'text', type: 'string' },
+        { name: 'reason', type: 'string' },
+      ],
+    });
+    const { state, diagnostics } = driveOne(n, { text: 'hi' });
+    expect(state.nodes['a']?.status).toBe('failure');
+    expect(diagnostics.join(' ')).toContain("missing declared output 'reason'");
   });
 });
 

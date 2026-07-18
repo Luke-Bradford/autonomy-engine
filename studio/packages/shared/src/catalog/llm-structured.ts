@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isOptionalProperty } from './llm-config.js';
 import type { LlmOutputSchema } from './llm-config.js';
 
 /**
@@ -15,7 +16,8 @@ import type { LlmOutputSchema } from './llm-config.js';
  * provider's enforcement is BEST-EFFORT — a gateway/model may return prose or a
  * near-miss. `validateStructuredOutput` is what makes the field addressable:
  * strip unknown keys, NO coercion, enforce declared type + enum (#592), reject a
- * missing field. A response that fails it terminalizes the node `permanent`
+ * missing REQUIRED field (an optional field → present-null, #594). A response
+ * that fails it terminalizes the node `permanent`
  * (L4c adds an internal repair sub-call before that; today it fails on the first
  * invalid response).
  *
@@ -59,25 +61,32 @@ function baseZodForProperty(type: LlmOutputSchema['properties'][string]['type'])
 /**
  * Validate a raw structured payload against a `structured` node's `outputSchema`.
  *
- * ALL declared properties are REQUIRED at runtime (the author's `required` list
- * is not consulted here): the lowering pass (`lowerOutputSchema`) lowers EVERY
- * property to a plain `{name,type}` with no optionality channel, and the
- * reducer's `validateOutputs` fails a `missing declared output` — and
- * `matchesType(undefined, 'string')` is false — so a structured node's contract
- * is "every declared field must be produced". True optional/nullable RUNTIME
- * semantics (an absent optional field → a present `null` output) needs a lowering
- * + `matchesType` change and is tracked as a follow-up (#594); L4b's floor is all-present.
+ * OPTIONALITY (#594): a property is REQUIRED unless the schema carries an EXPLICIT
+ * `required` list that OMITS it (an ABSENT `required` list = all required, the L4b
+ * all-present floor — see `lowerOutputSchema`). A required property must be present
+ * + non-null. An OPTIONAL property may be absent or `null`; either way it is
+ * normalized to a present `null` in the returned object (PRESENT-NULL), so the
+ * stored `succeeded.outputs` always carries the key and the reducer's
+ * `validateOutputs`/`storeOutputs` (which accept the present-null for an optional
+ * lowered row) never re-reject it. This keeps the DRIFT GUARD exact: a scalar
+ * present-null this validator emits is exactly what `validateOutputs` tolerates
+ * for an optional output (`matchesType(null, <scalar>)` is `false`, so the
+ * null-tolerance lives in `validateOutputs`, not here).
  *
- * `enum` (#592) is enforced on top of the base type: L4a accepted `enum` on a
- * property but nothing consumed it, so an author who wrote `enum:[...]` got no
- * guarantee. Here the parsed value MUST be a member (works for non-string enums
- * too). Unknown keys are STRIPPED (Zod's default object behaviour) — the spec's
- * "strip unknown keys, store only the validated/normalized object".
+ * `enum` (#592) is enforced on top of the base type: the parsed value MUST be a
+ * member (works for non-string enums too). For an OPTIONAL enum, an absent/`null`
+ * value bypasses the enum check (present-null) — only a PRESENT non-null value is
+ * constrained. Unknown keys are STRIPPED (Zod's default object behaviour) — the
+ * spec's "strip unknown keys, store only the validated/normalized object".
  */
 export function validateStructuredOutput(
   schema: LlmOutputSchema,
   payload: unknown,
 ): StructuredValidationResult {
+  // Optionality reads the SHARED `isOptionalProperty` SSOT (llm-config.ts), the
+  // SAME rule `lowerOutputSchema` freezes with — so "what validates" and "what
+  // lowers" can never disagree about which fields are optional.
+  const optionalNames: string[] = [];
   const shape: Record<string, z.ZodTypeAny> = {};
   for (const [name, prop] of Object.entries(schema.properties)) {
     let field = baseZodForProperty(prop.type);
@@ -86,6 +95,13 @@ export function validateStructuredOutput(
       field = field.refine((v) => allowed.includes(v), {
         message: 'value is not one of the declared enum values',
       });
+    }
+    // `.nullable().optional()` wraps the (enum-)refined base, so a present `null`
+    // or an absent key SHORT-CIRCUITS the refine — the enum/type checks run only
+    // on a present non-null value, exactly the present-null contract above.
+    if (isOptionalProperty(schema, name)) {
+      optionalNames.push(name);
+      field = field.nullable().optional();
     }
     shape[name] = field;
   }
@@ -98,7 +114,17 @@ export function validateStructuredOutput(
       .join('; ');
     return { ok: false, reason };
   }
-  return { ok: true, value: parsed.data };
+  // Present-null normalization: an OPTIONAL property that was absent (Zod drops
+  // the key under `.optional()`), or present as `undefined`, is written back as an
+  // explicit `null` so the stored object carries every declared key in exactly one
+  // shape. Keying on `=== undefined` (not `hasOwnProperty`) covers both the absent
+  // case and a `{opt: undefined}` payload; an explicit `null` is already the shape
+  // and is left untouched.
+  const value: Record<string, unknown> = { ...parsed.data };
+  for (const name of optionalNames) {
+    if (value[name] === undefined) value[name] = null;
+  }
+  return { ok: true, value };
 }
 
 /**

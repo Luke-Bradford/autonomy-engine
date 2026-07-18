@@ -15,7 +15,7 @@ import {
  * every path on this module stops them from ever disagreeing about which output
  * names a node produces.
  */
-export type DeclaredOutput = { name: string; type: OutputType };
+export type DeclaredOutput = { name: string; type: OutputType; optional?: boolean };
 
 /**
  * What a node's `config.outputs` says — THREE distinct facts (#1 F13a):
@@ -116,9 +116,20 @@ export function storeOutputs(
   contract: CheckedContract,
   outputs: Record<string, unknown>,
 ): Record<string, unknown> {
-  return contract.kind === 'declared'
-    ? Object.fromEntries(contract.outputs.map((d) => [d.name, outputs[d.name]]))
-    : { ...outputs };
+  if (contract.kind !== 'declared') return { ...outputs };
+  return Object.fromEntries(
+    contract.outputs.map((d) => {
+      // #594 — one stored shape: an OPTIONAL output the producer omitted is
+      // stored as a present `null`, not left absent. Absent would serialize AWAY
+      // in the logged `node.succeeded`, so a downstream `${nodes.x.output.opt}`
+      // would resolve to missing rather than the present-null this contract
+      // promises. A REQUIRED-absent name is unreachable here (`validateOutputs`
+      // errors first and the node fails before `storeOutputs`).
+      const has = Object.prototype.hasOwnProperty.call(outputs, d.name);
+      if (has) return [d.name, outputs[d.name]];
+      return [d.name, d.optional ? null : outputs[d.name]];
+    }),
+  );
 }
 
 /**
@@ -146,11 +157,20 @@ export function validateOutputs(
   if (contract.kind === 'absent') return { errs: [], checked: contract };
   const errs: string[] = [];
   for (const d of contract.outputs) {
+    const value = outputs[d.name];
     if (!Object.prototype.hasOwnProperty.call(outputs, d.name)) {
+      // #594 — an absent OPTIONAL output is valid (→ present-null via
+      // `storeOutputs`); an absent REQUIRED output is still an error.
+      if (d.optional) continue;
       errs.push(`missing declared output '${d.name}'`);
       continue;
     }
-    if (!matchesType(outputs[d.name], d.type)) {
+    // #594 — a present `null` satisfies an OPTIONAL output (present-null), for
+    // which `matchesType(null, <scalar>)` is deliberately `false`; the
+    // null-tolerance lives HERE so `matchesType` stays a pure "is this value of
+    // this type" predicate. A required output must still match its type.
+    if (d.optional && value === null) continue;
+    if (!matchesType(value, d.type)) {
       errs.push(`output '${d.name}' is not of declared type '${d.type}'`);
     }
   }
