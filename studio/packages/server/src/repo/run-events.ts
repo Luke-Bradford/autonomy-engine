@@ -95,13 +95,16 @@ export function maxRunEventSeq(db: Db, runId: string): number | null {
  *   - `incompleteRunCount` = runs with >=1 metered response lacking a costEstimate,
  *     via `GROUP BY run_id HAVING count(*) > count(costEstimate)`.
  *
- * SHARED PREDICATE SET: (A) the metered sums/counts, (B) the incomplete-run
- * count, and (C) the run count all scan the IDENTICAL row set (same join, same
- * `activity.metered` filter, same owner scope), so the derived `complete`
- * (from responseCount − priced) and `incompleteRunCount` cannot disagree — the
- * documented `complete === (incompleteRunCount === 0)` invariant holds.
- * `runCount` (C) counts runs on the `runs` table, so it INCLUDES zero-metered
- * runs (each a complete $0, contributing to the count only).
+ * SHARED PREDICATE SET + SNAPSHOT: (A) the metered sums/counts, (B) the
+ * incomplete-run count, and (C) the run count all scan the IDENTICAL row set
+ * (same join, same `activity.metered` filter, same owner scope) AND run inside
+ * ONE read transaction (a single consistent SQLite snapshot). Both together are
+ * what make the derived `complete` (from responseCount − priced) and
+ * `incompleteRunCount` UNCONDITIONALLY consistent — the documented
+ * `complete === (incompleteRunCount === 0)` invariant holds even under a
+ * concurrent write, not merely because the reads happen to be issued with no
+ * `await` between them. `runCount` (C) counts runs on the `runs` table, so it
+ * INCLUDES zero-metered runs (each a complete $0, contributing to the count only).
  *
  * SOUNDNESS of trusting the stored `type` + payload JSON instead of re-parsing
  * each row through Zod: the SOLE production writer, `appendEngineEvent`
@@ -130,56 +133,66 @@ export function aggregatePipelineCost(
     meteredConditions.push(eq(runs.ownerId, ownerId));
   }
   const costEstimate = sql`json_extract(${runEvents.payload}, '$.costEstimate')`;
-
-  // (A) Pipeline-wide scalar sums/counts over metered events.
-  const sums = db
-    .select({
-      responseCount: count(),
-      pricedResponseCount: count(costEstimate),
-      totalCostEstimate: sql<number>`coalesce(sum(${costEstimate}), 0)`,
-      inputTokens: sql<number>`coalesce(sum(json_extract(${runEvents.payload}, '$.inputTokens')), 0)`,
-      outputTokens: sql<number>`coalesce(sum(json_extract(${runEvents.payload}, '$.outputTokens')), 0)`,
-    })
-    .from(runEvents)
-    .innerJoin(runs, eq(runEvents.runId, runs.id))
-    .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
-    .where(and(...meteredConditions))
-    .get();
-
-  // (B) incompleteRunCount — runs with >=1 metered response lacking a costEstimate.
-  const incompleteRuns = db
-    .select({ runId: runEvents.runId })
-    .from(runEvents)
-    .innerJoin(runs, eq(runEvents.runId, runs.id))
-    .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
-    .where(and(...meteredConditions))
-    .groupBy(runEvents.runId)
-    .having(sql`count(*) > count(${costEstimate})`)
-    .as('incomplete_runs');
-  const incompleteRunCount = db.select({ n: count() }).from(incompleteRuns).get()?.n ?? 0;
-
-  // (C) runCount — ALL runs of the pipeline (incl. zero-metered), owner-scoped.
   const runConditions = [eq(pipelineVersions.pipelineId, pipelineId)];
   if (ownerId !== undefined) {
     runConditions.push(eq(runs.ownerId, ownerId));
   }
-  const runCount =
-    db
-      .select({ n: count() })
-      .from(runs)
-      .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
-      .where(and(...runConditions))
-      .get()?.n ?? 0;
 
-  return {
-    runCount,
-    incompleteRunCount,
-    responseCount: sums?.responseCount ?? 0,
-    pricedResponseCount: sums?.pricedResponseCount ?? 0,
-    totalCostEstimate: sums?.totalCostEstimate ?? 0,
-    inputTokens: sums?.inputTokens ?? 0,
-    outputTokens: sums?.outputTokens ?? 0,
-  };
+  // All THREE reads run in ONE transaction so they observe a single consistent
+  // SQLite snapshot. Only then does "the derived `complete` (from A) and
+  // `incompleteRunCount` (from B) cannot disagree" hold UNCONDITIONALLY — a
+  // concurrent metered-event/run insert can no longer land between the reads and
+  // skew A against B. It also stops the guarantee resting on the three `.get()`s
+  // being issued with no `await` between them (true today — the fn is synchronous
+  // — but a snapshot makes it robust to a future async refactor). Read-only, so
+  // there is nothing to roll back; the transaction is purely for snapshot isolation.
+  return db.transaction((tx): PipelineCostAggregates => {
+    // (A) Pipeline-wide scalar sums/counts over metered events.
+    const sums = tx
+      .select({
+        responseCount: count(),
+        pricedResponseCount: count(costEstimate),
+        totalCostEstimate: sql<number>`coalesce(sum(${costEstimate}), 0)`,
+        inputTokens: sql<number>`coalesce(sum(json_extract(${runEvents.payload}, '$.inputTokens')), 0)`,
+        outputTokens: sql<number>`coalesce(sum(json_extract(${runEvents.payload}, '$.outputTokens')), 0)`,
+      })
+      .from(runEvents)
+      .innerJoin(runs, eq(runEvents.runId, runs.id))
+      .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
+      .where(and(...meteredConditions))
+      .get();
+
+    // (B) incompleteRunCount — runs with >=1 metered response lacking a costEstimate.
+    const incompleteRuns = tx
+      .select({ runId: runEvents.runId })
+      .from(runEvents)
+      .innerJoin(runs, eq(runEvents.runId, runs.id))
+      .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
+      .where(and(...meteredConditions))
+      .groupBy(runEvents.runId)
+      .having(sql`count(*) > count(${costEstimate})`)
+      .as('incomplete_runs');
+    const incompleteRunCount = tx.select({ n: count() }).from(incompleteRuns).get()?.n ?? 0;
+
+    // (C) runCount — ALL runs of the pipeline (incl. zero-metered), owner-scoped.
+    const runCount =
+      tx
+        .select({ n: count() })
+        .from(runs)
+        .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
+        .where(and(...runConditions))
+        .get()?.n ?? 0;
+
+    return {
+      runCount,
+      incompleteRunCount,
+      responseCount: sums?.responseCount ?? 0,
+      pricedResponseCount: sums?.pricedResponseCount ?? 0,
+      totalCostEstimate: sums?.totalCostEstimate ?? 0,
+      inputTokens: sums?.inputTokens ?? 0,
+      outputTokens: sums?.outputTokens ?? 0,
+    };
+  });
 }
 
 export function getRunEvent(db: Db, id: string): RunEvent | null {
