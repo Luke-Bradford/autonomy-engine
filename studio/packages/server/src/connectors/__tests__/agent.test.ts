@@ -357,6 +357,21 @@ describe('createAgentAdapter().runActivity — llm_call (CLI/subscription single
     expect((events[0] as { error: string }).error).toContain('error: model overloaded, try later');
   });
 
+  it('keeps BOTH the head and tail of an over-long CLI diagnostic (error may be early or late)', async () => {
+    const early = 'FATAL: config parse error at line 1';
+    const late = 'exhausted all retries, giving up';
+    const noise = 'x'.repeat(4000);
+    const { supervisor } = fakeSupervisor([{ stream: 'stderr', line: `${early}${noise}${late}` }], {
+      exitCode: 1,
+    });
+    const events = await drain(createAgentAdapter(supervisor).runActivity(llmCtx(), null));
+    const error = (events[0] as { error: string }).error;
+    expect(error).toContain(early); // head preserved
+    expect(error).toContain(late); // tail preserved
+    expect(error).toContain('…'); // middle elided
+    expect(error.length).toBeLessThan(1200); // bounded
+  });
+
   it('REDACTS the injected secret out of a non-zero-exit failure error (stderr echo leak)', async () => {
     // A CLI that echoes the injected key in an auth/quota error must never leak it
     // into the durable `node.failed` event.

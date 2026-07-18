@@ -113,8 +113,9 @@ const AGENT_CLI_PROVIDER = 'agent_cli';
  * An `unpriced` call has no price to resolve, so this is descriptive only. */
 const CLI_MODEL_FALLBACK = 'cli';
 
-/** Bound on the stderr excerpt folded into a non-zero-exit failure message, so a
- * verbose CLI cannot bloat the durable `node.failed` event. */
+/** Bound on the CLI diagnostic excerpt folded into a non-zero-exit failure
+ * message, so a verbose CLI cannot bloat the durable `node.failed` event. Over
+ * the cap, the head and tail (half each) are kept with a middle elision. */
 const MAX_STDERR_DETAIL_CHARS = 1000;
 
 /**
@@ -356,8 +357,12 @@ async function* runLlmCall(
       .filter((s) => s !== '')
       .join('\n');
     const raw = redactSecrets(diagnostic, [secret]);
+    // Keep BOTH ends when over the cap: a CLI may print the real error EARLY (then
+    // trail off in progress noise) OR summarise it at the END, so preserving only
+    // one end can bury the signal. Head + tail with a middle elision covers both.
+    const half = Math.floor(MAX_STDERR_DETAIL_CHARS / 2);
     const detail =
-      raw.length > MAX_STDERR_DETAIL_CHARS ? `…${raw.slice(-MAX_STDERR_DETAIL_CHARS)}` : raw;
+      raw.length > MAX_STDERR_DETAIL_CHARS ? `${raw.slice(0, half)}…${raw.slice(-half)}` : raw;
     yield {
       type: 'failed',
       kind: 'permanent',
