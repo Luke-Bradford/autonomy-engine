@@ -551,7 +551,11 @@ describe('containers — loop wall-clock timeout (#4 A17)', () => {
     // with no marker — its alarm was never durably armed.
     expect(r0.state.containers.lp!.status).toBe('active');
     expect(r0.state.containers.lp!.timeoutDueAt).toBeUndefined();
-    const resumed = eng.reduce(r0.state, { type: 'run.resumed', runId: RUN, reason: 'boot' });
+    const resumed = eng.reduce(r0.state, {
+      type: 'run.resumed',
+      runId: RUN,
+      reason: 'boot_reconcile',
+    });
     expect(resumed.commands.find((c) => c.type === 'scheduleContainerTimeout')).toMatchObject({
       containerId: 'lp',
       seconds: 3600,
@@ -572,7 +576,7 @@ describe('containers — loop wall-clock timeout (#4 A17)', () => {
       dueAt: 999,
     }).state;
     expect(s.containers.lp!.timeoutDueAt).toBe(999);
-    const resumed = eng.reduce(s, { type: 'run.resumed', runId: RUN, reason: 'boot' });
+    const resumed = eng.reduce(s, { type: 'run.resumed', runId: RUN, reason: 'boot_reconcile' });
     expect(resumed.commands.find((c) => c.type === 'scheduleContainerTimeout')).toBeUndefined();
   });
 });
