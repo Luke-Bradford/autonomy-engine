@@ -292,6 +292,20 @@ describe('storeOutputs — optional undefined → present-null (#594)', () => {
     });
     expect(stored).toEqual({ note: 'hi' });
   });
+
+  // Pins WHY `storeOutputs` reads via `hasOwnProperty` rather than a bare
+  // `outputs[d.name]`: for an optional output whose name collides with an
+  // `Object.prototype` member, a bare read would capture the INHERITED function;
+  // the own-key check normalizes the absent key to present-null instead (and
+  // keeps `storeOutputs` in step with `validateOutputs`'s own-key semantics).
+  it('an optional output named like a prototype member (`toString`) → present-null, not the inherited fn', () => {
+    const stored = storeOutputs(
+      declared([{ name: 'toString', type: 'string', optional: true }]),
+      {},
+    );
+    expect(stored['toString']).toBeNull();
+    expect(typeof stored['toString']).not.toBe('function');
+  });
 });
 
 // --- the call_pipeline path shares the same contract check ----------------

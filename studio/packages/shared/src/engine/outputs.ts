@@ -134,9 +134,19 @@ export function storeOutputs(
       // Normalizing `undefined` (not just the omitted key) closes the reachable
       // hole where an optional `json` output — for which `matchesType(undefined,
       // 'json')` is `true` — passes `validateOutputs` with a raw `undefined` and
-      // reaches here. A REQUIRED-absent/undefined name is unreachable
-      // (`validateOutputs` errors first and the node fails before
-      // `storeOutputs`), so it keeps the raw value.
+      // reaches here. A REQUIRED output keeps its raw value: an absent required
+      // name is unreachable (`validateOutputs` fails the node first), though a
+      // required `json` present as an explicit `undefined` DOES reach here (same
+      // `matchesType(undefined,'json')` quirk) and is stored as-is — required
+      // outputs carry no present-null promise, so that predates and is out of
+      // scope for #594.
+      //
+      // `hasOwnProperty` (not a bare `outputs[d.name]`, which would look like a
+      // redundant guard) is DELIBERATE: it mirrors `validateOutputs`'s own-key
+      // check, so an OPTIONAL output whose name collides with an
+      // `Object.prototype` member (e.g. `toString`) normalizes to `null` here
+      // instead of capturing the inherited value — and the two paths agree on
+      // what "absent" means.
       const has = Object.prototype.hasOwnProperty.call(outputs, d.name);
       const value = has ? outputs[d.name] : undefined;
       if (d.optional && value === undefined) return [d.name, null];
