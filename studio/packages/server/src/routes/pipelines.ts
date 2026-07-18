@@ -1,12 +1,19 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { NewPipelineSchema, NewPipelineVersionSchema } from '@autonomy-studio/shared';
+import {
+  NewPipelineSchema,
+  NewPipelineVersionSchema,
+  computeRunCost,
+  rollupPipelineCost,
+} from '@autonomy-studio/shared';
 import {
   createPipeline,
   createPipelineVersion,
   deletePipeline,
   getPipeline,
+  listMeteredEventsForPipeline,
   listPipelineVersions,
   listPipelinesPage,
+  listRunsForPipeline,
   updatePipeline,
 } from '../repo/index.js';
 import { NotFoundError } from '../errors.js';
@@ -110,6 +117,50 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
       return version;
     },
   );
+
+  /**
+   * #2 L6 — the per-PIPELINE cost rollup: SUMS `costEstimate` across EVERY run of
+   * the pipeline (all versions). Two indexed queries — the run set (for
+   * `runCount`, incl. zero-cost runs) + all their `activity.metered` events —
+   * folded per-run through `computeRunCost` then `rollupPipelineCost`, the shared
+   * SSOT. Fail-closed: an unpriced/unknown response leaves the rollup
+   * `complete:false` (and its run counted in `incompleteRunCount`); the total is
+   * an honest lower bound, never manufactured-0-padded.
+   *
+   * Owner-scoped in TWO places (authentication ≠ authorization): `requireOwned`
+   * on the pipeline, AND the run/event queries filter on the RUNS' own
+   * `owner_id` — defense in depth, never trusting that every run under the
+   * pipeline shares its owner.
+   *
+   * NOTE (scope): this is the API/projection half of "→ Monitor". Rendering the
+   * cost in the run/pipeline monitor UI is deferred to the U-series UI epic
+   * (#439), which carries the mandatory browser-verify gate.
+   */
+  fastify.get<{ Params: { id: string } }>('/api/pipelines/:id/cost', async (request) => {
+    const pipeline = requireOwned(
+      getPipeline(db, request.params.id),
+      request.principal,
+      'pipeline',
+      request.params.id,
+    );
+    const ownerId = request.principal.ownerId;
+    const pipelineRuns = listRunsForPipeline(db, pipeline.id, ownerId);
+    const meteredEvents = listMeteredEventsForPipeline(db, pipeline.id, ownerId);
+
+    // Group the (already metered-only) events by run so each run's completeness
+    // is computed independently — a run with no metered events folds to a
+    // complete $0 (it is still in `pipelineRuns`, so it counts toward `runCount`).
+    const eventsByRun = new Map<string, typeof meteredEvents>();
+    for (const event of meteredEvents) {
+      const bucket = eventsByRun.get(event.runId);
+      if (bucket) bucket.push(event);
+      else eventsByRun.set(event.runId, [event]);
+    }
+
+    return rollupPipelineCost(
+      pipelineRuns.map((run) => computeRunCost(eventsByRun.get(run.id) ?? [])),
+    );
+  });
 
   // Deliberately NO update/delete route for a specific version: PipelineVersion
   // is immutable once written (see `repo/pipeline-versions.ts` — the module

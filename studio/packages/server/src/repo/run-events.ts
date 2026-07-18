@@ -1,11 +1,11 @@
-import { asc, eq, max } from 'drizzle-orm';
+import { and, asc, eq, max } from 'drizzle-orm';
 import {
   NewRunEventSchema,
   RunEventSchema,
   type NewRunEvent,
   type RunEvent,
 } from '@autonomy-studio/shared';
-import { runEvents } from '../db/schema.js';
+import { pipelineVersions, runEvents, runs } from '../db/schema.js';
 import { newId } from './ids.js';
 import type { Db } from './types.js';
 
@@ -71,6 +71,43 @@ export function maxRunEventSeq(db: Db, runId: string): number | null {
     .where(eq(runEvents.runId, runId))
     .get();
   return row?.maxSeq ?? null;
+}
+
+/**
+ * #2 L6 — every `activity.metered` event across ALL runs of a pipeline, in ONE
+ * indexed join (`run_events → runs → pipeline_versions`), so the per-pipeline
+ * cost rollup is 2 queries total (this + `listRunsForPipeline`), not 1+N. The
+ * `type = 'activity.metered'` filter is exact on the stored envelope `type`
+ * column (`appendRunEvent` stamps it from the payload's `type`), so it is a
+ * cheap pre-filter — the projection still re-parses each payload and folds only
+ * true metered events, so a mislabelled row can never inflate the cost.
+ *
+ * Owner-scoped when `ownerId` is passed, matching `listRunsForPipeline` exactly
+ * so the two queries agree on the run set (defense in depth: filters the RUNS'
+ * own `owner_id`, not just the pipeline's). Ordered by `(runId, seq)` for a
+ * deterministic result; the fold itself is order-independent.
+ */
+export function listMeteredEventsForPipeline(
+  db: Db,
+  pipelineId: string,
+  ownerId?: string,
+): RunEvent[] {
+  const conditions = [
+    eq(pipelineVersions.pipelineId, pipelineId),
+    eq(runEvents.type, 'activity.metered'),
+  ];
+  if (ownerId !== undefined) {
+    conditions.push(eq(runs.ownerId, ownerId));
+  }
+  const rows = db
+    .select()
+    .from(runEvents)
+    .innerJoin(runs, eq(runEvents.runId, runs.id))
+    .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
+    .where(and(...conditions))
+    .orderBy(asc(runEvents.runId), asc(runEvents.seq))
+    .all();
+  return rows.map((row) => RunEventSchema.parse(row.run_events));
 }
 
 export function getRunEvent(db: Db, id: string): RunEvent | null {

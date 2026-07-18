@@ -3,7 +3,12 @@ import { CATALOG_VERSION, type NewPipelineVersion } from '@autonomy-studio/share
 import { runEvents } from '../../db/schema.js';
 import { createPipelineVersion } from '../pipeline-versions.js';
 import { createPipeline } from '../pipelines.js';
-import { appendRunEvent, getRunEvent, listRunEvents } from '../run-events.js';
+import {
+  appendRunEvent,
+  getRunEvent,
+  listMeteredEventsForPipeline,
+  listRunEvents,
+} from '../run-events.js';
 import * as runEventsRepo from '../run-events.js';
 import { createRun } from '../runs.js';
 import { freshDb } from './helpers.js';
@@ -92,5 +97,112 @@ describe('run-events repo', () => {
     const mod = runEventsRepo as unknown as Record<string, unknown>;
     expect(mod['updateRunEvent']).toBeUndefined();
     expect(mod['deleteRunEvent']).toBeUndefined();
+  });
+
+  it('listMeteredEventsForPipeline joins run_events→runs→pipeline_versions, metered-only, owner-scoped', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const v1 = createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    const v2 = createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    const other = createPipeline(db, { ownerId: 'local', name: 'Other' });
+    const ov = createPipelineVersion(db, {
+      pipelineId: other.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const runV1 = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: v1.id,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+    const runV2 = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: v2.id,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+    const runOtherOwner = createRun(db, {
+      ownerId: 'someone-else',
+      pipelineVersionId: v1.id,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+    const runOtherPipeline = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: ov.id,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+
+    const meteredPayload = (runId: string) => ({
+      type: 'activity.metered',
+      runId,
+      nodeId: 'n1',
+      attemptId: 'n1#1',
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      meteringStatus: 'metered' as const,
+      inputTokens: 10,
+      outputTokens: 20,
+      inUnitPrice: 5,
+      outUnitPrice: 25,
+      costEstimate: 0.00055,
+      priceTableVersion: 'builtin-2026-07-18',
+    });
+
+    // Metered events on both in-scope runs + a non-metered event that must NOT match.
+    const m1 = appendRunEvent(db, {
+      runId: runV1.id,
+      type: 'activity.metered',
+      payload: meteredPayload(runV1.id),
+    });
+    appendRunEvent(db, { runId: runV1.id, type: 'node.output', payload: { type: 'node.output' } });
+    const m2 = appendRunEvent(db, {
+      runId: runV2.id,
+      type: 'activity.metered',
+      payload: meteredPayload(runV2.id),
+    });
+    // Excluded by owner scope + by pipeline scope respectively.
+    appendRunEvent(db, {
+      runId: runOtherOwner.id,
+      type: 'activity.metered',
+      payload: meteredPayload(runOtherOwner.id),
+    });
+    appendRunEvent(db, {
+      runId: runOtherPipeline.id,
+      type: 'activity.metered',
+      payload: meteredPayload(runOtherPipeline.id),
+    });
+
+    const scoped = listMeteredEventsForPipeline(db, pipeline.id, 'local');
+    expect(scoped.map((e) => e.id).sort()).toEqual([m1.id, m2.id].sort());
+    expect(scoped.every((e) => e.type === 'activity.metered')).toBe(true);
+
+    // Unscoped primitive sees the other-owner metered event too (owner filter dropped).
+    expect(listMeteredEventsForPipeline(db, pipeline.id)).toHaveLength(3);
+    expect(listMeteredEventsForPipeline(db, 'pipe_missing', 'local')).toEqual([]);
   });
 });

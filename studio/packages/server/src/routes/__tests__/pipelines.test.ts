@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { CATALOG_VERSION } from '@autonomy-studio/shared';
-import { createPipeline, createRun } from '../../repo/index.js';
+import { appendRunEvent, createPipeline, createRun } from '../../repo/index.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 
 const emptyVersionBody = { params: [], outputs: [], nodes: [], edges: [] };
@@ -126,6 +126,76 @@ describe('pipelines routes', () => {
     const deleteRes = await app.inject({ method: 'DELETE', url: `/api/pipelines/${pipeline.id}` });
     expect(deleteRes.statusCode).toBe(409);
     expect(deleteRes.json().error).toBe('conflict');
+  });
+
+  it('GET /api/pipelines/:id/cost rolls up cost across ALL versions of the pipeline, fail-closed', async () => {
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'CostPipe' });
+    const mkVersion = async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${pipeline.id}/versions`,
+        payload: emptyVersionBody,
+      });
+      return res.json().id as string;
+    };
+    const v1 = await mkVersion();
+    const v2 = await mkVersion();
+
+    const mkRun = (pipelineVersionId: string) =>
+      createRun(app.db, {
+        ownerId: 'local',
+        pipelineVersionId,
+        triggerId: null,
+        parentRunId: null,
+        params: {},
+      });
+    const runV1 = mkRun(v1);
+    const runV2 = mkRun(v2);
+    mkRun(v1); // a zero-cost run (no metered events) — counts toward runCount only
+
+    const metered = (runId: string, fields: Record<string, unknown>) => ({
+      type: 'activity.metered',
+      runId,
+      nodeId: 'n1',
+      attemptId: 'n1#1',
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      meteringStatus: 'metered',
+      ...fields,
+    });
+    appendRunEvent(app.db, {
+      runId: runV1.id,
+      type: 'activity.metered',
+      payload: metered(runV1.id, { inputTokens: 100, outputTokens: 100, costEstimate: 0.01 }),
+    });
+    // runV2 has an unpriced response → runV2 incomplete, rollup incomplete
+    appendRunEvent(app.db, {
+      runId: runV2.id,
+      type: 'activity.metered',
+      payload: metered(runV2.id, { inputTokens: 50, outputTokens: 50, costEstimate: 0.005 }),
+    });
+    appendRunEvent(app.db, {
+      runId: runV2.id,
+      type: 'activity.metered',
+      payload: metered(runV2.id, { inputTokens: 10, outputTokens: 10 }),
+    });
+
+    const res = await app.inject({ method: 'GET', url: `/api/pipelines/${pipeline.id}/cost` });
+    expect(res.statusCode).toBe(200);
+    const rollup = res.json();
+    expect(rollup.runCount).toBe(3);
+    expect(rollup.responseCount).toBe(3);
+    expect(rollup.pricedResponseCount).toBe(2);
+    expect(rollup.costUnknownResponseCount).toBe(1);
+    expect(rollup.totalCostEstimate).toBeCloseTo(0.015, 10);
+    expect(rollup.incompleteRunCount).toBe(1);
+    expect(rollup.complete).toBe(false);
+  });
+
+  it('GET /api/pipelines/:id/cost 404s for a pipeline owned by someone else', async () => {
+    const other = createPipeline(app.db, { ownerId: 'someone-else', name: 'NotMineCost' });
+    const res = await app.inject({ method: 'GET', url: `/api/pipelines/${other.id}/cost` });
+    expect(res.statusCode).toBe(404);
   });
 
   it('owner scoping: a pipeline belonging to a different owner is not visible', async () => {

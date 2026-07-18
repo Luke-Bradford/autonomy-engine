@@ -33,3 +33,7 @@ export * from './triggers/run-window.js';
 // #2 L5 — the model price table + cost-estimate math (SSOT for the price fields
 // stamped onto `activity.metered`; L6 sums the stamped costEstimate).
 export * from './pricing/price-table.js';
+
+// #2 L6 — the run-cost projection: a pure fold that SUMS the stamped
+// `costEstimate` per run + per pipeline (fail-closed on an absent estimate).
+export * from './pricing/run-cost.js';
