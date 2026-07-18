@@ -230,6 +230,24 @@ describe('reducer — a malformed contract FAILS the node, never fails open (F13
     expect(state.outputs['a']).toEqual({ text: 'hi', reason: null });
   });
 
+  // #594 uniform — an OPTIONAL SCALAR present-`undefined` must normalize like an
+  // omitted / present-null one (→ present-null), NOT hard-fail type-checking.
+  // Without the `undefined` short-circuit in `validateOutputs`, an optional
+  // `string` set to `undefined` errored while an optional `json` silently passed
+  // (`matchesType(undefined,'json') === true`) — the "one stored shape" contract
+  // must hold across ALL types, matching `storeOutputs`.
+  it('an OPTIONAL scalar present-undefined → node SUCCEEDS, stored present-null', () => {
+    const n = node('a', {
+      outputs: [
+        { name: 'text', type: 'string' },
+        { name: 'reason', type: 'string', optional: true },
+      ],
+    });
+    const { state } = driveOne(n, { text: 'hi', reason: undefined });
+    expect(state.nodes['a']?.status).toBe('success');
+    expect(state.outputs['a']).toEqual({ text: 'hi', reason: null });
+  });
+
   it('a REQUIRED output omitted still FAILS the node (optionality is opt-in)', () => {
     const n = node('a', {
       outputs: [

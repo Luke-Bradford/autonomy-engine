@@ -171,11 +171,16 @@ export function validateOutputs(
       errs.push(`missing declared output '${d.name}'`);
       continue;
     }
-    // #594 — a present `null` satisfies an OPTIONAL output (present-null), for
-    // which `matchesType(null, <scalar>)` is deliberately `false`; the
-    // null-tolerance lives HERE so `matchesType` stays a pure "is this value of
-    // this type" predicate. A required output must still match its type.
-    if (d.optional && value === null) continue;
+    // #594 — a present `null` (or an explicit `undefined`) satisfies an OPTIONAL
+    // output (present-null); `storeOutputs` normalizes both to a present `null`.
+    // `matchesType(null, <scalar>)` is deliberately `false`, so the
+    // null/undefined-tolerance lives HERE, keeping `matchesType` a pure "is this
+    // value of this type" predicate AND keeping the optional contract UNIFORM
+    // across all types: without the `undefined` arm an optional SCALAR set to
+    // `undefined` hard-fails type-checking while an optional `json` — for which
+    // `matchesType(undefined,'json')` is `true` — silently passes. A required
+    // output must still match its type.
+    if (d.optional && (value === null || value === undefined)) continue;
     if (!matchesType(value, d.type)) {
       errs.push(`output '${d.name}' is not of declared type '${d.type}'`);
     }
