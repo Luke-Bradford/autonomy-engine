@@ -10,6 +10,7 @@ import {
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import type { Supervisor, SupervisedResult } from '../workers/process-supervisor.js';
 import {
+  MAX_RETRY_AFTER_SECONDS,
   coerceStopReason,
   llmCallConfigSchema,
   normalizeLlmRequest,
@@ -104,7 +105,52 @@ const agentConnectionConfigSchema = z.object({
   timeoutMs: z.number().int().positive().optional(),
   /** Combined stdout+stderr byte cap before output is truncated. */
   maxOutputBytes: z.number().int().positive().optional(),
+  /**
+   * #2 L14c — the subscription/quota reset-window hint. A subscription CLI's
+   * usage quota resets on a rolling window; when a non-zero-exit's combined
+   * stderr+stdout matches `exhaustionPattern`, the failure is a THROTTLE (quota
+   * exhausted), NOT a permanent error. The adapter then emits `rate_limit`
+   * (→ engine transient + `code:'rate_limit'`) carrying `resetWindowSeconds` as
+   * the L7 `retryAfterSeconds`, so the EXISTING retry-alarm path arms a retry at
+   * reset time instead of hot-looping a doomed subprocess — the reset window IS
+   * the alarm's `dueAt`. Both fields required when present; a per-CLI hint because
+   * exhaustion output is not standardised across CLIs (claude/codex differ).
+   *
+   * `resetWindowSeconds` is capped at the engine retry-alarm ceiling
+   * (`MAX_RETRY_AFTER_SECONDS`, 24h): the L7 alarm cannot schedule further out, so
+   * a > 24h window (e.g. a weekly quota) is REFUSED here at save-time rather than
+   * silently clamped down (a clamp would fire the retry while still exhausted).
+   * Windows > 24h need the persisted per-connection window + admission-gate — the
+   * deferred remainder of #609, a different mechanism than this L7-reuse slice.
+   */
+  quota: z
+    .object({
+      /**
+       * A regular expression (compiled with `new RegExp`, no implicit flags)
+       * tested against the combined stderr+stdout of a non-zero exit. Validated
+       * compilable at the boundary so the runtime match never throws. Matching is
+       * CASE-SENSITIVE (no flags): bake any case-insensitivity into the pattern
+       * itself (e.g. `[Uu]sage limit`) rather than relying on a flag.
+       */
+      exhaustionPattern: z.string().min(1).refine(isCompilableRegex, {
+        message: 'exhaustionPattern must be a valid regular expression',
+      }),
+      /** Conservative reset window (whole seconds) to wait before a retry. */
+      resetWindowSeconds: z.number().int().positive().max(MAX_RETRY_AFTER_SECONDS),
+    })
+    .optional(),
 });
+
+/** True iff `pattern` compiles as a `RegExp` (a boundary guard so a malformed
+ * `quota.exhaustionPattern` is refused at config-save, never thrown at emit). */
+function isCompilableRegex(pattern: string): boolean {
+  try {
+    new RegExp(pattern);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 type AgentConnectionConfig = z.infer<typeof agentConnectionConfigSchema>;
 
@@ -484,6 +530,28 @@ async function* runLlmCall(
     const half = Math.floor(MAX_STDERR_DETAIL_CHARS / 2);
     const detail =
       raw.length > MAX_STDERR_DETAIL_CHARS ? `${raw.slice(0, half)}…${raw.slice(-half)}` : raw;
+    // #2 L14c — a subscription-quota exhaustion is a THROTTLE, not a permanent
+    // error. Match the connection's `quota.exhaustionPattern` against the
+    // PRE-redaction diagnostic (detection accuracy; the emitted `error` stays the
+    // redacted+truncated `detail`). On a hit, emit `rate_limit` (→ engine transient
+    // + `code:'rate_limit'`) carrying the reset window as the L7 `retryAfterSeconds`
+    // so the existing retry-alarm path waits out the window instead of hot-looping.
+    // The pattern is boundary-validated compilable, so `new RegExp` cannot throw.
+    // NOTE: whether an alarm actually ARMS is the reducer's call — a `rate_limit`
+    // (transient) failure only schedules a retry when the node carries a
+    // `policy.retry` budget. With no retry policy the node settles to a plain
+    // terminal failure (now merely tagged `code:'rate_limit'`) — correct: there is
+    // nothing to retry against, so there is no hot-loop to wait out.
+    const quota = config.quota;
+    if (quota !== undefined && new RegExp(quota.exhaustionPattern).test(diagnostic)) {
+      yield {
+        type: 'failed',
+        kind: 'rate_limit',
+        error: `llm_call CLI exited ${terminal.exitCode} (quota exhausted)${detail !== '' ? `: ${detail}` : ''}`,
+        retryAfterSeconds: quota.resetWindowSeconds,
+      };
+      return;
+    }
     yield {
       type: 'failed',
       kind: 'permanent',
