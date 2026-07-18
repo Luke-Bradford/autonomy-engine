@@ -119,15 +119,21 @@ export function storeOutputs(
   if (contract.kind !== 'declared') return { ...outputs };
   return Object.fromEntries(
     contract.outputs.map((d) => {
-      // #594 — one stored shape: an OPTIONAL output the producer omitted is
-      // stored as a present `null`, not left absent. Absent would serialize AWAY
-      // in the logged `node.succeeded`, so a downstream `${nodes.x.output.opt}`
-      // would resolve to missing rather than the present-null this contract
-      // promises. A REQUIRED-absent name is unreachable here (`validateOutputs`
-      // errors first and the node fails before `storeOutputs`).
+      // #594 — one stored shape: an OPTIONAL output the producer omitted OR set
+      // explicitly to `undefined` is stored as a present `null`, not left
+      // absent. Absent/undefined would serialize AWAY in the logged
+      // `node.succeeded`, so a downstream `${nodes.x.output.opt}` would resolve
+      // to missing rather than the present-null this contract promises.
+      // Normalizing `undefined` (not just the omitted key) closes the reachable
+      // hole where an optional `json` output — for which `matchesType(undefined,
+      // 'json')` is `true` — passes `validateOutputs` with a raw `undefined` and
+      // reaches here. A REQUIRED-absent/undefined name is unreachable
+      // (`validateOutputs` errors first and the node fails before
+      // `storeOutputs`), so it keeps the raw value.
       const has = Object.prototype.hasOwnProperty.call(outputs, d.name);
-      if (has) return [d.name, outputs[d.name]];
-      return [d.name, d.optional ? null : outputs[d.name]];
+      const value = has ? outputs[d.name] : undefined;
+      if (d.optional && value === undefined) return [d.name, null];
+      return [d.name, value];
     }),
   );
 }

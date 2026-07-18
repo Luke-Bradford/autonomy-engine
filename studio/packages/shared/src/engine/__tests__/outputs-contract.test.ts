@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { EngineEvent, Node } from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
-import { checkInboundOutputs, outputContract } from '../outputs.js';
+import { checkInboundOutputs, outputContract, storeOutputs } from '../outputs.js';
+import type { DeclaredOutput } from '../outputs.js';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -239,6 +240,39 @@ describe('reducer — a malformed contract FAILS the node, never fails open (F13
     const { state, diagnostics } = driveOne(n, { text: 'hi' });
     expect(state.nodes['a']?.status).toBe('failure');
     expect(diagnostics.join(' ')).toContain("missing declared output 'reason'");
+  });
+});
+
+// --- storeOutputs directly: optional `undefined` normalizes to present-null -
+
+describe('storeOutputs — optional undefined → present-null (#594)', () => {
+  const declared = (outputs: DeclaredOutput[]) => ({ kind: 'declared' as const, outputs });
+
+  // The reachable hole the #594 fix must also close: `matchesType(undefined,
+  // 'json')` is `true`, so an OPTIONAL json output an internal producer sets
+  // explicitly to `undefined` PASSES `validateOutputs` and reaches
+  // `storeOutputs`. Storing the raw `undefined` serializes AWAY in the logged
+  // `node.succeeded`, so a downstream `${nodes.x.output.data}` resolves to
+  // missing rather than the present-null the contract promises — the exact
+  // absence #594 forbids for an omitted optional.
+  it('an optional json output set to `undefined` → present-null, not raw undefined', () => {
+    const stored = storeOutputs(declared([{ name: 'data', type: 'json', optional: true }]), {
+      data: undefined,
+    });
+    expect('data' in stored).toBe(true);
+    expect(stored['data']).toBeNull();
+  });
+
+  it('an omitted optional output → present-null', () => {
+    const stored = storeOutputs(declared([{ name: 'note', type: 'string', optional: true }]), {});
+    expect(stored).toEqual({ note: null });
+  });
+
+  it('a present optional value is stored as-is', () => {
+    const stored = storeOutputs(declared([{ name: 'note', type: 'string', optional: true }]), {
+      note: 'hi',
+    });
+    expect(stored).toEqual({ note: 'hi' });
   });
 });
 
