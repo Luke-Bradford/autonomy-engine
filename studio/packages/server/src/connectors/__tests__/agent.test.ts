@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AGENT_STRUCTURED_CLOSE, AGENT_STRUCTURED_OPEN } from '@autonomy-studio/shared';
 import { createAgentAdapter, renderCliPrompt } from '../agent.js';
+import { MAX_RETRY_AFTER_SECONDS } from '../llm-shared.js';
 import { sha256Hex } from '../../util/hash.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
 import type {
@@ -768,6 +769,168 @@ describe('createAgentAdapter().runActivity — llm_call (CLI/subscription single
     );
     expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
     expect(spawnArgs).toHaveLength(0);
+  });
+
+  // #2 L14c — a subscription CLI's usage quota resets on a rolling window. When a
+  // non-zero exit's output matches the connection's configured `quota.exhaustionPattern`,
+  // the failure is a quota exhaustion (throttling), NOT a permanent error: emit
+  // `rate_limit` (→ engine transient + `code:'rate_limit'`) carrying the reset window
+  // as `retryAfterSeconds`, so the existing L7 path arms a retry alarm at reset time
+  // instead of hot-looping a doomed subprocess. NO new event/table — the reset window
+  // IS the retry alarm's `dueAt`.
+  const quotaConfig = {
+    command: 'claude',
+    args: ['-p'],
+    quota: { exhaustionPattern: 'usage limit reached|rate.?limit', resetWindowSeconds: 3600 },
+  };
+
+  it('reclassifies a matching non-zero-exit (stderr) as rate_limit + retryAfterSeconds', async () => {
+    const { supervisor } = fakeSupervisor(
+      [{ stream: 'stderr', line: 'Error: usage limit reached for this account' }],
+      { exitCode: 1 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(llmCtx({ connectionConfig: quotaConfig }), null),
+    );
+    // No metering fact (no billable response occurred), one terminal failure.
+    expect(events.some((e) => e.type === 'metered')).toBe(false);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'failed',
+      kind: 'rate_limit',
+      retryAfterSeconds: 3600,
+    });
+    // The diagnostic is still surfaced (redaction/truncation unchanged).
+    expect((events[0] as { error: string }).error).toContain('usage limit reached');
+  });
+
+  it('matches the quota pattern against STDOUT too (some CLIs print the quota error to stdout)', async () => {
+    const { supervisor } = fakeSupervisor(
+      [{ stream: 'stdout', line: 'you have hit your rate-limit; try again later' }],
+      { exitCode: 2 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(llmCtx({ connectionConfig: quotaConfig }), null),
+    );
+    expect(events[0]).toMatchObject({
+      type: 'failed',
+      kind: 'rate_limit',
+      retryAfterSeconds: 3600,
+    });
+  });
+
+  it('leaves a non-matching non-zero-exit as PERMANENT (no false-positive retry)', async () => {
+    const { supervisor } = fakeSupervisor(
+      [{ stream: 'stderr', line: 'Error: invalid argument --frobnicate' }],
+      { exitCode: 1 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(llmCtx({ connectionConfig: quotaConfig }), null),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(events[0]).not.toHaveProperty('retryAfterSeconds');
+  });
+
+  it('leaves a non-zero-exit PERMANENT when the connection declares NO quota hint', async () => {
+    // Same output that WOULD match a quota pattern, but no pattern is configured.
+    const { supervisor } = fakeSupervisor([{ stream: 'stderr', line: 'usage limit reached' }], {
+      exitCode: 1,
+    });
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        llmCtx({ connectionConfig: { command: 'claude', args: ['-p'] } }),
+        null,
+      ),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+  });
+
+  it('still REDACTS the injected secret out of a quota (rate_limit) failure error', async () => {
+    const { supervisor } = fakeSupervisor(
+      [{ stream: 'stderr', line: 'usage limit reached for key sk-leaky-secret' }],
+      { exitCode: 1 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        llmCtx({
+          connectionConfig: { ...quotaConfig, secretEnv: 'API_KEY' },
+        }),
+        'sk-leaky-secret',
+      ),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'rate_limit' });
+    const error = (events[0] as { error: string }).error;
+    expect(error).not.toContain('sk-leaky-secret');
+    expect(error).toContain('***');
+  });
+
+  it('does NOT consult the quota pattern on a successful (exit 0) completion', async () => {
+    // A completion whose text happens to contain the quota phrase is a real result,
+    // not a failure — the quota check only runs on a non-zero exit.
+    const { supervisor } = fakeSupervisor([{ stream: 'stdout', line: 'usage limit reached' }], {
+      exitCode: 0,
+    });
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(llmCtx({ connectionConfig: quotaConfig }), null),
+    );
+    expect(events.map((e) => e.type)).toEqual(['metered', 'succeeded']);
+  });
+});
+
+// #2 L14c — the connection `config.quota` hint is validated at the boundary (save /
+// dispatch): an un-compilable regex or an out-of-range window is refused with a clear
+// error rather than throwing later at the failure emit.
+describe('agent_cli config quota hint validation', () => {
+  const schema = createAgentAdapter(fakeSupervisor([], {}).supervisor).configSchema;
+
+  it('accepts a valid quota hint', () => {
+    const r = schema.safeParse({
+      command: 'claude',
+      quota: { exhaustionPattern: 'rate limit', resetWindowSeconds: 3600 },
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects an un-compilable exhaustionPattern regex', () => {
+    const r = schema.safeParse({
+      command: 'claude',
+      quota: { exhaustionPattern: '(', resetWindowSeconds: 60 },
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('rejects a non-positive resetWindowSeconds', () => {
+    expect(
+      schema.safeParse({
+        command: 'claude',
+        quota: { exhaustionPattern: 'x', resetWindowSeconds: 0 },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects a resetWindowSeconds above the 24h retry-alarm ceiling (windows > 24h are the deferred admission-gate slice)', () => {
+    expect(
+      schema.safeParse({
+        command: 'claude',
+        quota: { exhaustionPattern: 'x', resetWindowSeconds: MAX_RETRY_AFTER_SECONDS + 1 },
+      }).success,
+    ).toBe(false);
+    // exactly at the ceiling is allowed
+    expect(
+      schema.safeParse({
+        command: 'claude',
+        quota: { exhaustionPattern: 'x', resetWindowSeconds: MAX_RETRY_AFTER_SECONDS },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects a partial quota hint (both fields required)', () => {
+    expect(schema.safeParse({ command: 'claude', quota: { exhaustionPattern: 'x' } }).success).toBe(
+      false,
+    );
+    expect(schema.safeParse({ command: 'claude', quota: { resetWindowSeconds: 60 } }).success).toBe(
+      false,
+    );
   });
 });
 
