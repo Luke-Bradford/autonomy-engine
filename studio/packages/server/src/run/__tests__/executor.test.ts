@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import sodium from 'libsodium-wrappers';
 import { z } from 'zod';
 import {
+  BUILTIN_PRICE_TABLE_VERSION,
   CATALOG_VERSION,
   type ActivityCatalog,
   type ActivityCatalogEntry,
@@ -252,6 +253,177 @@ describe('createExecutor — activity.metered (#2 L2 usage capture)', () => {
       provider: 'ollama',
       model: 'llama3',
       meteringStatus: 'unknown',
+    });
+  });
+});
+
+describe('createExecutor — activity.metered price fields (#2 L5 cost)', () => {
+  /** Run one node that emits a single metered fact, return the stored event. */
+  async function meteredOf(
+    db: Db,
+    connectionConfig: Record<string, unknown>,
+    usage: Extract<ActivityEvent, { type: 'metered' }>['usage'],
+  ): Promise<Record<string, unknown>> {
+    const connId = await seedConnection(db, 'http', connectionConfig, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
+    const run = seedRun(db, pvId);
+    const adapters = fakeHttpAdapter(async function* () {
+      yield { type: 'metered', usage } satisfies ActivityEvent;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+    await startRun(deps(db, { adapters }), run);
+    return loadEngineEvents(db, run.id).find(
+      (e) => e.type === 'activity.metered',
+    ) as unknown as Record<string, unknown>;
+  }
+
+  it('stamps unit prices + costEstimate for a priced model with a metered token pair', async () => {
+    const metered = await meteredOf(
+      freshDb().db,
+      {},
+      {
+        provider: 'anthropic_api',
+        model: 'claude-opus-4-8',
+        inputTokens: 1_000_000,
+        outputTokens: 500_000,
+        meteringStatus: 'metered',
+      },
+    );
+    // Opus 4.8 = $5/Mtok in, $25/Mtok out → 1M×5 + 0.5M×25 (÷1e6) = 5 + 12.5 = 17.5
+    expect(metered).toMatchObject({
+      inUnitPrice: 5,
+      outUnitPrice: 25,
+      costEstimate: 17.5,
+      priceTableVersion: BUILTIN_PRICE_TABLE_VERSION,
+    });
+  });
+
+  it('leaves ALL price fields absent for a model with no known price (never a zero)', async () => {
+    // A legacy-active Anthropic model absent from the built-in table.
+    const metered = await meteredOf(
+      freshDb().db,
+      {},
+      {
+        provider: 'anthropic_api',
+        model: 'claude-opus-4-5',
+        inputTokens: 10,
+        outputTokens: 20,
+        meteringStatus: 'metered',
+      },
+    );
+    // Usage facts still land; the price absence stays VISIBLE (no manufactured 0)
+    // so L6 can flag run-cost incompleteness.
+    expect(metered).toMatchObject({ model: 'claude-opus-4-5', inputTokens: 10, outputTokens: 20 });
+    expect(metered).not.toHaveProperty('inUnitPrice');
+    expect(metered).not.toHaveProperty('outUnitPrice');
+    expect(metered).not.toHaveProperty('costEstimate');
+    expect(metered).not.toHaveProperty('priceTableVersion');
+  });
+
+  it('stamps unit prices but OMITS costEstimate when usage is incomplete (unknown)', async () => {
+    // Priced model, but only an input count → meteringStatus 'unknown'. A full
+    // cost cannot be computed, so costEstimate is absent while the known unit
+    // prices are still recorded.
+    const metered = await meteredOf(
+      freshDb().db,
+      {},
+      {
+        provider: 'anthropic_api',
+        model: 'claude-opus-4-8',
+        inputTokens: 100,
+        meteringStatus: 'unknown',
+      },
+    );
+    expect(metered).toMatchObject({
+      inUnitPrice: 5,
+      outUnitPrice: 25,
+      priceTableVersion: BUILTIN_PRICE_TABLE_VERSION,
+      meteringStatus: 'unknown',
+    });
+    expect(metered).not.toHaveProperty('costEstimate');
+  });
+
+  it('applies a per-connection price override (wins over built-in absence)', async () => {
+    // openai_api has no built-in price; the connection supplies one.
+    const metered = await meteredOf(
+      freshDb().db,
+      {
+        priceTable: {
+          version: 'acme-v1',
+          models: { 'gpt-5': { inUnitPrice: 2, outUnitPrice: 8 } },
+        },
+      },
+      {
+        provider: 'openai_api',
+        model: 'gpt-5',
+        inputTokens: 1_000_000,
+        outputTokens: 1_000_000,
+        meteringStatus: 'metered',
+      },
+    );
+    // 1M×2 + 1M×8 (÷1e6) = 2 + 8 = 10
+    expect(metered).toMatchObject({
+      inUnitPrice: 2,
+      outUnitPrice: 8,
+      costEstimate: 10,
+      priceTableVersion: 'acme-v1',
+    });
+  });
+
+  it('leaves a prototype-named model unpriced without throwing on the durable append', async () => {
+    // `model` is operator config; a value like `toString` must resolve UNPRICED
+    // (own-property lookup), not to an inherited function that would mint a
+    // NaN costEstimate and make the metered append throw.
+    const metered = await meteredOf(
+      freshDb().db,
+      {},
+      {
+        provider: 'anthropic_api',
+        model: 'toString',
+        inputTokens: 5,
+        outputTokens: 5,
+        meteringStatus: 'metered',
+      },
+    );
+    expect(metered).toMatchObject({ model: 'toString', meteringStatus: 'metered' });
+    expect(metered).not.toHaveProperty('inUnitPrice');
+    expect(metered).not.toHaveProperty('costEstimate');
+  });
+
+  it('ignores a malformed price override (fail-safe: never fails the node)', async () => {
+    // A negative price is rejected by the schema → override discarded → the
+    // built-in table is used, and the run still succeeds.
+    const db = freshDb().db;
+    const connId = await seedConnection(
+      db,
+      'http',
+      { priceTable: { models: { 'claude-opus-4-8': { inUnitPrice: -1, outUnitPrice: 8 } } } },
+      null,
+    );
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
+    const run = seedRun(db, pvId);
+    const adapters = fakeHttpAdapter(async function* () {
+      yield {
+        type: 'metered',
+        usage: {
+          provider: 'anthropic_api',
+          model: 'claude-opus-4-8',
+          inputTokens: 1_000_000,
+          outputTokens: 0,
+          meteringStatus: 'metered',
+        },
+      } satisfies ActivityEvent;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+    const state = await startRun(deps(db, { adapters }), run);
+    expect(state.status).toBe('success');
+    const metered = loadEngineEvents(db, run.id).find((e) => e.type === 'activity.metered');
+    // Built-in Opus 4.8 price, NOT the malformed override.
+    expect(metered).toMatchObject({
+      inUnitPrice: 5,
+      outUnitPrice: 25,
+      costEstimate: 5,
+      priceTableVersion: BUILTIN_PRICE_TABLE_VERSION,
     });
   });
 });

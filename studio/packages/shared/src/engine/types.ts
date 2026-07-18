@@ -689,15 +689,16 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * failed-but-billed response both need. A dedicated event is the shape those
      * extend; overloading `node.succeeded` would force a migration later.
      *
-     * PRICE-LESS BY DESIGN (the L2/L5 split): this carries only the usage facts
-     * available at L2 (`provider`/`model`/token counts/`meteringStatus`). L5 adds
-     * the PRICE fields (`inUnitPrice`/`outUnitPrice`/`costEstimate`/
-     * `priceTableVersion`) ADDITIVELY, plus the price table + the run-cost
-     * projection (L6) that SUMS these events. Introducing the carrier here (not
-     * L5) is correct sequencing: run_events are immutable, so an L2-era run's
-     * usage must land in the summable shape now or be stranded forever.
+     * The L2/L5 SPLIT: L2 introduced this carrier PRICE-LESS (`provider`/`model`/
+     * token counts/`meteringStatus`); L5 EXTENDS it ADDITIVELY with the PRICE
+     * fields below (`inUnitPrice`/`outUnitPrice`/`costEstimate`/
+     * `priceTableVersion`) + the price table, and L6 SUMS the stamped
+     * `costEstimate` for the run-cost projection. Introducing the carrier at L2
+     * (not L5) was correct sequencing: run_events are immutable, so an L2-era
+     * run's usage had to land in the summable shape then or be stranded forever —
+     * and the price fields being OPTIONAL keeps those L2-era events valid.
      * `providerRequestId` (a usage fact for crash-window reconciliation, not a
-     * price) is a conscious deferral — the event extends to it additively too.
+     * price) remains a conscious deferral — the event extends to it additively too.
      */
     type: z.literal('activity.metered'),
     runId: z.string(),
@@ -716,6 +717,26 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     inputTokens: z.number().int().nonnegative().optional(),
     outputTokens: z.number().int().nonnegative().optional(),
     meteringStatus: MeteringStatusSchema,
+    /**
+     * #2 L5 — the PRICE fields, stamped from the model price table AT capture
+     * time (immutable: a later price change never edits a past run's cost). All
+     * OPTIONAL and FAIL-CLOSED:
+     * - `inUnitPrice`/`outUnitPrice` (USD per 1M tokens) + `priceTableVersion`
+     *   are stamped IFF a price was resolved for `(provider, model)`; a model
+     *   with no known price leaves ALL FOUR absent (never a zero — an absent
+     *   price stays visible so L6 can flag run-cost incompleteness, the #473/F13a
+     *   fail-open lesson).
+     * - `costEstimate` (USD, raw/unrounded — L6 owns display) is stamped IFF a
+     *   price was resolved AND both token counts are present (equivalently
+     *   `meteringStatus === 'metered'` under `meterUsage`, which sets that status
+     *   iff both counts are valid). So `costEstimate` present ⟺ a trustworthy full
+     *   cost; its absence (unpriced model OR incomplete usage) is the run-cost
+     *   completeness signal.
+     */
+    inUnitPrice: z.number().nonnegative().optional(),
+    outUnitPrice: z.number().nonnegative().optional(),
+    costEstimate: z.number().nonnegative().optional(),
+    priceTableVersion: z.string().optional(),
   }),
   z.object({
     type: z.literal('run.resumed'),

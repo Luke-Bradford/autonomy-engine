@@ -29,3 +29,7 @@ export * from './catalog/index.js';
 
 // P4b — the pure run-window evaluator (scheduler's automatic-fire gate).
 export * from './triggers/run-window.js';
+
+// #2 L5 — the model price table + cost-estimate math (SSOT for the price fields
+// stamped onto `activity.metered`; L6 sums the stamped costEstimate).
+export * from './pricing/price-table.js';
