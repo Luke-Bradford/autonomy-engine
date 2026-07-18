@@ -824,6 +824,72 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
       .optional(),
   }),
   z.object({
+    /**
+     * #2 L11a — a subprocess TELEMETRY fact for ONE `agent_task` attempt: the
+     * agent-CLI child's `exitCode`, a `summary` outcome classification, its
+     * wall-clock `latencyMs`, and the stdout SHAPE (chars + fingerprint). The
+     * `agent_task` twin of `activity.captured`: emitted by the adapter as a
+     * non-terminal `agentTelemetry` ActivityEvent (mirroring `metered`/`captured`)
+     * which the executor maps here, ordered BEFORE the terminal
+     * `node.succeeded`/`node.failed`. ONE per subprocess run.
+     *
+     * OBSERVABILITY ONLY — the reducer folds it INERT (like `activity.metered` /
+     * `activity.captured` / `node.output`): telemetry, not a typed `${}`-
+     * addressable output, so it never enters `outputs` and cannot change run
+     * semantics. NOT in `TERMINAL_RUN_EVENT_TYPES`. Captured once at dispatch and
+     * NEVER recomputed on replay (the subprocess is not re-run — a fact in the log).
+     *
+     * WHY IT EXISTS: on SUCCESS the stdout already lands durably as
+     * `node.succeeded outputs.output`, so the value-add is the FAILURE path —
+     * today a timed-out / signalled `agent_task` yields only `node.failed{error}`
+     * and its partial output, exit code, and latency are LOST. This event makes
+     * them observable regardless of outcome, without duplicating (potentially
+     * large) text into a second place.
+     *
+     * TELEMETRY-vs-CONTENT / F4 SPLIT — carries the stdout SHAPE (`outputChars` +
+     * `outputHash`), NOT raw text, exactly like `activity.captured`. `outputHash`
+     * is a `sha256` FINGERPRINT for drift/reproducibility, NOT a redaction
+     * guarantee (a short/low-entropy stdout is a brute-forceable oracle) — safe
+     * here only because `agent_task`'s `output` is not a D8-secure field and is
+     * already stored plaintext. RAW partial-output capture (an agent CLI can echo
+     * an injected secret into stdout — the same leak the L14b `llm_call` CLI path
+     * REDACTS) requires F4's field-secure model and is DEFERRED to the L9b-style
+     * "full" capture; `summary` is therefore the structured outcome, never a text
+     * excerpt. stderr shape is not captured here (the ticket's telemetry is
+     * output/exitCode/summary; stdout is what maps to the `output` field).
+     */
+    type: z.literal('activity.agentTelemetry'),
+    runId: z.string(),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    /** Subprocess wall time in ms (the spec's always-on `latency` telemetry). */
+    latencyMs: z.number().int().nonnegative(),
+    /**
+     * The child's exit code, passed through VERBATIM from the supervisor —
+     * `null` whenever the process produced none (a spawn failure, a timeout/abort
+     * tree-kill, or an external signal). Never asserted by this layer.
+     */
+    exitCode: z.number().int().nullable(),
+    /**
+     * The `summary` — a structured outcome classification derived from the SAME
+     * `classifyCliOutcome` partition that decides the terminal, so `summary` and
+     * the `node.succeeded`/`node.failed` it precedes can never disagree.
+     * `completed` = the child exited on its own (ANY code — exit code is data the
+     * pipeline branches on); the rest are failures-to-complete.
+     */
+    summary: z.enum(['completed', 'timedOut', 'aborted', 'killed', 'signalled', 'spawnFailed']),
+    /** Present IFF the child was terminated by a signal (verbatim from the result). */
+    signal: z.string().optional(),
+    /** stdout length in chars (the shape's LENGTH half; no text). */
+    outputChars: z.number().int().nonnegative(),
+    /**
+     * `sha256` fingerprint of stdout. ABSENT when `outputChars === 0` — fail-
+     * closed: no output is absent, NEVER `hash('')` (which would manufacture a
+     * benign fact — the `#473`/fail-open lesson, as on `activity.captured`).
+     */
+    outputHash: z.string().optional(),
+  }),
+  z.object({
     type: z.literal('run.resumed'),
     runId: z.string(),
     reason: z.literal('boot_reconcile'),

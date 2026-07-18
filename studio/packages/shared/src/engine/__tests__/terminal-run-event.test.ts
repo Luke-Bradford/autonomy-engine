@@ -153,6 +153,20 @@ describe('#443 — terminalStatusOf', () => {
           messages: [{ role: 'user', chars: 5, contentHash: 'h' }],
         },
       },
+      // #2 L11a — an `agent_task` subprocess TELEMETRY fact. NON-terminal: an
+      // observability event (like `activity.captured`) folded inert; it neither
+      // terminates the run nor folds a node, and is free to land before the terminal.
+      {
+        type: 'activity.agentTelemetry',
+        ...run,
+        nodeId: 'n1',
+        attemptId: 'n1#0',
+        latencyMs: 42,
+        exitCode: 0,
+        summary: 'completed',
+        outputChars: 5,
+        outputHash: 'oh',
+      },
     ];
     for (const event of nonTerminal) {
       expect(terminalStatusOf(event), `${event.type} must not be terminal`).toBeNull();

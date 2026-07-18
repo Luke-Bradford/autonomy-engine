@@ -382,6 +382,25 @@ export function createExecutor(deps: ExecutorDeps): Executor {
             request: capture.request,
             ...(capture.completion !== undefined ? { completion: capture.completion } : {}),
           });
+        } else if (ev.type === 'agentTelemetry') {
+          // #2 L11a — an `agent_task` subprocess TELEMETRY fact (non-terminal, like
+          // `captured`): stamp the exit code + summary + latency + stdout shape into
+          // the durable log as `activity.agentTelemetry`, ordered BEFORE the terminal.
+          // The reducer folds it inert. Carries only shape/classification (no raw
+          // text), so it needs no scrubbing. The executor adds the run/node/attempt ids.
+          const { telemetry } = ev;
+          events.push({
+            type: 'activity.agentTelemetry',
+            runId,
+            nodeId,
+            attemptId,
+            latencyMs: telemetry.latencyMs,
+            exitCode: telemetry.exitCode,
+            summary: telemetry.summary,
+            outputChars: telemetry.outputChars,
+            ...(telemetry.signal !== undefined ? { signal: telemetry.signal } : {}),
+            ...(telemetry.outputHash !== undefined ? { outputHash: telemetry.outputHash } : {}),
+          });
         } else if (ev.type === 'succeeded') {
           events.push({ type: 'node.succeeded', runId, nodeId, attemptId, outputs: ev.outputs });
           return events;
