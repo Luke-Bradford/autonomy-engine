@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import type { ConnectionKind } from '@autonomy-studio/shared';
+import type { ConnectionKind, MeteringStatus } from '@autonomy-studio/shared';
 
 /**
  * P3 — the CONNECTOR ADAPTER contract (target-architecture "connector model").
@@ -64,12 +64,30 @@ export interface ActivityContext {
 }
 
 /**
- * What an adapter streams. `output` is observability only (partial progress);
- * exactly one terminal `succeeded`/`failed` ends the stream. The executor maps
- * these to engine events (`node.output` / `node.succeeded` / `node.failed`).
+ * A metering FACT for ONE provider response (#2 L2). Non-secret telemetry —
+ * `provider` (the Connection kind) + resolved `model` + token counts. Token
+ * counts are OPTIONAL: a provider may omit `usage` or report a partial/malformed
+ * count, in which case whatever WAS reported is kept and `meteringStatus` is
+ * `unknown` (never discard a captured fact). `metered` means a full, well-formed
+ * pair. Prices are NOT here — they arrive at L5 (see `activity.metered`).
+ */
+export interface LlmUsage {
+  provider: string;
+  model: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  meteringStatus: MeteringStatus;
+}
+
+/**
+ * What an adapter streams. `output` and `metered` are observability only (partial
+ * progress / a per-response metering fact); exactly one terminal
+ * `succeeded`/`failed` ends the stream. The executor maps these to engine events
+ * (`node.output` / `activity.metered` / `node.succeeded` / `node.failed`).
  */
 export type ActivityEvent =
   | { type: 'output'; name: string; value: unknown }
+  | { type: 'metered'; usage: LlmUsage }
   | { type: 'succeeded'; outputs: Record<string, unknown> }
   | { type: 'failed'; kind: ConnectorErrorKind; error: string };
 

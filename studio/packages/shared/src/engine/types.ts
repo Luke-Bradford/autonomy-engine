@@ -413,6 +413,26 @@ export const FailureKindSchema = z.enum(['transient', 'permanent', 'cancelled'])
 export type FailureKind = z.infer<typeof FailureKindSchema>;
 
 /**
+ * #2 L2 — the completeness axis of a metered provider response. The SSOT for the
+ * `activity.metered` event's status field AND the server-side `meterUsage`
+ * normalizer, so the literal set is spelled ONCE (mirroring L1's "LLM machinery
+ * from one module" decision) — both the shared event schema and the connector
+ * layer import it.
+ *
+ * - `metered` — the provider reported a full, well-formed token count (both input
+ *   and output), so the usage fact is complete.
+ * - `unknown` — the provider omitted usage, or sent a malformed/partial count, so
+ *   the run-cost projection (L6) cannot treat this response as fully accounted.
+ *   Whatever partial count WAS present is still stamped (usage is a fact — never
+ *   discard a captured token count); the status is what flags the gap.
+ *
+ * L14 extends this with `unpriced` (a CLI/subscription response that is metered
+ * but carries no unit price) — additive, so no reshape of a stored event.
+ */
+export const MeteringStatusSchema = z.enum(['metered', 'unknown']);
+export type MeteringStatus = z.infer<typeof MeteringStatusSchema>;
+
+/**
  * The `node.failed.code` values the ENGINE itself mints or keys off — one source
  * of truth, so no producer hand-spells a durable identifier.
  *
@@ -650,6 +670,52 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     nodeId: z.string(),
     name: z.string(),
     value: z.unknown(),
+  }),
+  z.object({
+    /**
+     * #2 L2 — a metering FACT captured PER provider response: the token usage of
+     * one `llm_call` (anthropic/openai/ollama) dispatch, stamped into the log at
+     * dispatch time and NEVER recomputed (replay folds the fact, it does not re-
+     * call the model — spec #2's replay invariant). Emitted by the adapter as a
+     * non-terminal `metered` ActivityEvent (mirroring `node.output`) which the
+     * executor maps here, ordered BEFORE the terminal `node.succeeded`.
+     *
+     * OBSERVABILITY ONLY — the reducer folds it INERT (like `node.output`): usage
+     * is telemetry, not a typed `${}`-addressable output, so it never enters
+     * `outputs` and cannot change run semantics. It is NOT ridden on
+     * `node.succeeded` deliberately: that event carries the node's declared typed
+     * outputs (`validateOutputs`), and metering is per-RESPONSE, not per-node — a
+     * granularity L4c's repair sub-call (two billed responses, one node) and L7's
+     * failed-but-billed response both need. A dedicated event is the shape those
+     * extend; overloading `node.succeeded` would force a migration later.
+     *
+     * PRICE-LESS BY DESIGN (the L2/L5 split): this carries only the usage facts
+     * available at L2 (`provider`/`model`/token counts/`meteringStatus`). L5 adds
+     * the PRICE fields (`inUnitPrice`/`outUnitPrice`/`costEstimate`/
+     * `priceTableVersion`) ADDITIVELY, plus the price table + the run-cost
+     * projection (L6) that SUMS these events. Introducing the carrier here (not
+     * L5) is correct sequencing: run_events are immutable, so an L2-era run's
+     * usage must land in the summable shape now or be stranded forever.
+     * `providerRequestId` (a usage fact for crash-window reconciliation, not a
+     * price) is a conscious deferral — the event extends to it additively too.
+     */
+    type: z.literal('activity.metered'),
+    runId: z.string(),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    /** The provider that billed — the Connection kind (`anthropic_api`/…). */
+    provider: z.string(),
+    /** The resolved model this response was produced by. */
+    model: z.string(),
+    /**
+     * Input/prompt + output/completion token counts. OPTIONAL: a provider (or an
+     * OpenAI-compatible gateway) may omit `usage`, or send a partial/malformed
+     * count — then the present count (if any) is stamped and `meteringStatus` is
+     * `unknown`. A well-formed pair sets `meteringStatus:'metered'`.
+     */
+    inputTokens: z.number().int().nonnegative().optional(),
+    outputTokens: z.number().int().nonnegative().optional(),
+    meteringStatus: MeteringStatusSchema,
   }),
   z.object({
     type: z.literal('run.resumed'),

@@ -9,6 +9,7 @@ import {
   llmConnectionConfigSchema,
   llmPost,
   llmProbeGet,
+  meterUsage,
   noCompletionFailure,
   normalizeLlmRequest,
   parseJsonBody,
@@ -136,7 +137,10 @@ export const anthropicAdapter: ConnectorAdapter = {
       return;
     }
 
-    const model = resolveModel(input.data, config.data, DEFAULT_MODEL);
+    // The `DEFAULT_MODEL` fallback makes this non-null; the `?? DEFAULT_MODEL`
+    // narrows the `string | null` return to `string` for `meterUsage` (which
+    // needs a resolved model) without changing behaviour.
+    const model = resolveModel(input.data, config.data, DEFAULT_MODEL) ?? DEFAULT_MODEL;
     const { system, messages, sampling } = normalizeLlmRequest(input.data);
     const baseUrl = (config.data.baseUrl ?? DEFAULT_ANTHROPIC_BASE_URL).replace(/\/+$/, '');
     // The Messages API takes `system` as a top-level param (not a message), so
@@ -185,6 +189,15 @@ export const anthropicAdapter: ConnectorAdapter = {
       yield noCompletionFailure('anthropic_api', extracted.reason);
       return;
     }
+    // #2 L2 — capture the metering fact before the terminal event. The Messages
+    // API reports `usage.{input_tokens, output_tokens}`; `meterUsage` records
+    // whatever is a valid non-negative integer and flags completeness.
+    const usage = (parsed.json as { usage?: { input_tokens?: unknown; output_tokens?: unknown } })
+      .usage;
+    yield {
+      type: 'metered',
+      usage: meterUsage('anthropic_api', model, usage?.input_tokens, usage?.output_tokens),
+    };
     yield {
       type: 'succeeded',
       outputs: {

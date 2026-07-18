@@ -1112,3 +1112,31 @@ describe('#1 F0/F2b — a failure kind alone never retries: policy is what opts 
     );
   });
 });
+
+// ===========================================================================
+// #2 L2 — activity.metered is an inert observability fact
+// ===========================================================================
+
+describe('activity.metered is inert (#2 L2)', () => {
+  it('folding activity.metered changes neither state nor commands, and does not terminalize the node', () => {
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const before = s;
+    const r = eng.reduce(s, {
+      type: 'activity.metered',
+      runId: RUN,
+      nodeId: 'a',
+      attemptId: attempt('a'),
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      inputTokens: 1,
+      outputTokens: 2,
+      meteringStatus: 'metered',
+    });
+    // Inert like node.output: identical state, no commands, node still in flight.
+    expect(r.state).toEqual(before);
+    expect(r.commands).toEqual([]);
+    expect(r.state.status).toBe('running');
+  });
+});

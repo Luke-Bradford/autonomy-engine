@@ -282,6 +282,25 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       for await (const ev of adapter.runActivity(ctx, secret, secretFields)) {
         if (ev.type === 'output') {
           events.push({ type: 'node.output', runId, nodeId, name: ev.name, value: ev.value });
+        } else if (ev.type === 'metered') {
+          // #2 L2 — a per-response metering FACT (non-terminal, like `output`):
+          // stamp the captured usage into the durable log as `activity.metered`,
+          // ordered BEFORE the terminal `succeeded`. The reducer folds it inert;
+          // L6 SUMS these events for the run-cost projection. Optional token fields
+          // are omitted (not sent as `undefined`) so the stored event matches the
+          // schema's `.optional()` shape exactly.
+          const { usage } = ev;
+          events.push({
+            type: 'activity.metered',
+            runId,
+            nodeId,
+            attemptId,
+            provider: usage.provider,
+            model: usage.model,
+            meteringStatus: usage.meteringStatus,
+            ...(usage.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
+            ...(usage.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
+          });
         } else if (ev.type === 'succeeded') {
           events.push({ type: 'node.succeeded', runId, nodeId, attemptId, outputs: ev.outputs });
           return events;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { coerceStopReason, noCompletionFailure } from '../llm-shared.js';
+import { coerceStopReason, meterUsage, noCompletionFailure } from '../llm-shared.js';
 
 /** #461 — a 2xx with no readable completion is a permanent failure, adapter-named.
  *  #556 — it carries a DIAGNOSTIC sub-reason; the retry class is `permanent` for
@@ -68,5 +68,57 @@ describe('coerceStopReason', () => {
       'unload',
     ];
     expect(DOCUMENTED_PROVIDER_VALUES).not.toContain(coerceStopReason(null));
+  });
+});
+
+/** #2 L2 — the metering-fact normalizer shared by all three LLM adapters. */
+describe('meterUsage', () => {
+  it('records both counts and reports metered when the pair is well-formed', () => {
+    expect(meterUsage('anthropic_api', 'claude-opus-4-8', 10, 20)).toEqual({
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      inputTokens: 10,
+      outputTokens: 20,
+      meteringStatus: 'metered',
+    });
+  });
+
+  it('reports unknown with NO token fields when usage is entirely absent', () => {
+    expect(meterUsage('openai_api', 'gpt-4o', undefined, undefined)).toEqual({
+      provider: 'openai_api',
+      model: 'gpt-4o',
+      meteringStatus: 'unknown',
+    });
+  });
+
+  it('keeps whichever count is valid but reports unknown when the pair is incomplete', () => {
+    // A fact is never discarded: the valid input count is stamped even though the
+    // output count is missing — but the response is not fully accounted → unknown.
+    expect(meterUsage('ollama', 'llama3', 7, undefined)).toEqual({
+      provider: 'ollama',
+      model: 'llama3',
+      inputTokens: 7,
+      meteringStatus: 'unknown',
+    });
+  });
+
+  it('rejects a non-integer, negative, or non-number count as invalid (→ unknown, dropped)', () => {
+    for (const bad of [1.5, -1, NaN, Infinity, '5', null, {}]) {
+      const usage = meterUsage('openai_api', 'gpt-4o', bad, 3);
+      expect(usage).not.toHaveProperty('inputTokens');
+      expect(usage.outputTokens).toBe(3);
+      expect(usage.meteringStatus).toBe('unknown');
+    }
+  });
+
+  it('accepts a zero token count as a valid, present fact', () => {
+    // 0 is a real count (an empty completion), not "absent" — it must be recorded.
+    expect(meterUsage('anthropic_api', 'm', 0, 0)).toEqual({
+      provider: 'anthropic_api',
+      model: 'm',
+      inputTokens: 0,
+      outputTokens: 0,
+      meteringStatus: 'metered',
+    });
   });
 });

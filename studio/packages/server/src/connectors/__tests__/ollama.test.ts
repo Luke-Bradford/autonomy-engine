@@ -8,6 +8,18 @@ async function drain(stream: AsyncIterable<ActivityEvent>): Promise<ActivityEven
   return events;
 }
 
+/** The terminal `succeeded` event — now preceded by a `metered` event (#2 L2). */
+function succeeded(events: ActivityEvent[]): Extract<ActivityEvent, { type: 'succeeded' }> {
+  const ev = events.find((e) => e.type === 'succeeded');
+  if (ev === undefined) throw new Error(`no succeeded event in ${JSON.stringify(events)}`);
+  return ev;
+}
+
+/** The `metered` usage event (#2 L2), or undefined if none was yielded. */
+function metered(events: ActivityEvent[]): Extract<ActivityEvent, { type: 'metered' }> | undefined {
+  return events.find((e): e is Extract<ActivityEvent, { type: 'metered' }> => e.type === 'metered');
+}
+
 function ctx(over: Partial<ActivityContext> = {}): ActivityContext {
   return {
     runId: 'run_1',
@@ -34,15 +46,18 @@ const OK_BODY = {
   message: { role: 'assistant', content: 'local answer' },
   done: true,
   done_reason: 'stop',
+  prompt_eval_count: 12,
+  eval_count: 8,
 };
 
 describe('ollamaAdapter.runActivity', () => {
   it('POSTs /api/chat (stream:false) to localhost by default, no auth header', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     const events = await drain(ollamaAdapter.runActivity(ctx(), null));
-    expect(events).toEqual([
-      { type: 'succeeded', outputs: { text: 'local answer', stopReason: 'stop' } },
-    ]);
+    expect(succeeded(events)).toEqual({
+      type: 'succeeded',
+      outputs: { text: 'local answer', stopReason: 'stop' },
+    });
     const [url, init] = fetchSpy.mock.calls[0]! as [string, RequestInit];
     expect(url).toBe('http://localhost:11434/api/chat');
     const body = JSON.parse(init.body as string);
@@ -79,7 +94,10 @@ describe('ollamaAdapter.runActivity', () => {
       fakeResponse(200, { message: { content: 'x' }, done: true }),
     );
     const events = await drain(ollamaAdapter.runActivity(ctx(), null));
-    expect(events[0]).toMatchObject({ type: 'succeeded', outputs: { stopReason: 'unknown' } });
+    expect(succeeded(events)).toMatchObject({
+      type: 'succeeded',
+      outputs: { stopReason: 'unknown' },
+    });
   });
 
   // #461 — a 2xx with NO readable completion is a permanent failure, not
@@ -110,7 +128,10 @@ describe('ollamaAdapter.runActivity', () => {
       fakeResponse(200, { message: { content: '' }, done_reason: 'stop' }),
     );
     const events = await drain(ollamaAdapter.runActivity(ctx(), null));
-    expect(events).toEqual([{ type: 'succeeded', outputs: { text: '', stopReason: 'stop' } }]);
+    expect(succeeded(events)).toEqual({
+      type: 'succeeded',
+      outputs: { text: '', stopReason: 'stop' },
+    });
   });
 
   it('fails permanent when no model is resolvable', async () => {
@@ -189,6 +210,46 @@ describe('ollamaAdapter v2 config (L1)', () => {
         null,
       ),
     );
-    expect(events[0]).toMatchObject({ type: 'succeeded' });
+    expect(succeeded(events)).toMatchObject({ type: 'succeeded' });
+  });
+});
+
+// #2 L2 — usage capture. Ollama reports token counts at the TOP LEVEL
+// (`prompt_eval_count`/`eval_count`), not under a `usage` object.
+describe('ollamaAdapter usage capture (L2)', () => {
+  it('yields a metered event with the top-level token counts, before succeeded', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(ollamaAdapter.runActivity(ctx(), null));
+    expect(events.map((e) => e.type)).toEqual(['metered', 'succeeded']);
+    expect(metered(events)).toEqual({
+      type: 'metered',
+      usage: {
+        provider: 'ollama',
+        model: 'llama3',
+        inputTokens: 12,
+        outputTokens: 8,
+        meteringStatus: 'metered',
+      },
+    });
+  });
+
+  it('reports meteringStatus unknown when a model omits the eval counts', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, { message: { content: 'x' }, done_reason: 'stop' }),
+    );
+    const events = await drain(ollamaAdapter.runActivity(ctx(), null));
+    expect(metered(events)?.usage).toEqual({
+      provider: 'ollama',
+      model: 'llama3',
+      meteringStatus: 'unknown',
+    });
+    expect(succeeded(events)).toMatchObject({ type: 'succeeded' });
+  });
+
+  it('yields NO metered event on a failure', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(500, 'model crashed'));
+    const events = await drain(ollamaAdapter.runActivity(ctx(), null));
+    expect(metered(events)).toBeUndefined();
+    expect(events[0]).toMatchObject({ type: 'failed' });
   });
 });

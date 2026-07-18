@@ -130,6 +130,20 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 | L1 | `llm_call` config v2: role `messages[]` + sampling + `${}` in content | 1 |
 | L2 | Real adapters: anthropic/openai/ollama `llm_call` (text mode) + usage capture | 1 |
 | L3 | `reasoningEffort` mapping per provider | 1 |
+
+> **L2/L5 split (built 2026-07-18):** L2 introduces the **`activity.metered` engine
+> event** — the durable, per-response carrier for the captured usage facts
+> (`provider`/`model`/`inputTokens`/`outputTokens`/`meteringStatus`) — **price-less by
+> design**. This is NOT a lane violation: `run_events` are immutable, so an L2-era
+> run's usage must land in the summable event shape at capture time or be stranded
+> forever (the "Outputs, usage & cost" section models usage AS this event, which
+> governs over the roadmap's convenience of *introducing* it under L5). **L5 EXTENDS
+> the same event additively** with the PRICE fields (`inUnitPrice`/`outUnitPrice`/
+> `costEstimate`/`priceTableVersion`) + the price table; **L6** sums it. The event is
+> folded INERT by the reducer (observability, like `node.output`), so it never enters
+> `outputs`/`${}` and replay never re-calls the model. `providerRequestId` (a usage
+> fact for crash-window reconciliation, not a price) is a conscious later addition —
+> also additive.
 | L4a | `outputSchema` subset + save-time lowering to `config.outputs` + validation | 2 |
 | L4b | provider JSON/tool mode adapters + strict parse/validate | 2 |
 | L4c | repair sub-call (internal, same attempt) + metering of both calls | 2 |

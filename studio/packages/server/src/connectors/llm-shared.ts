@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { ConnectionKind } from '@autonomy-studio/shared';
 import { llmCallConfigSchema, normalizeLlmRequest } from '@autonomy-studio/shared';
 import type { LlmCallConfig, LlmSampling, NormalizedLlmRequest } from '@autonomy-studio/shared';
-import type { ActivityContext, ActivityEvent, ConnectorErrorKind } from './types.js';
+import type { ActivityContext, ActivityEvent, ConnectorErrorKind, LlmUsage } from './types.js';
 import { redactSecrets } from './redact.js';
 
 // #2 L1 — the `llm_call` config schema + its normalization are the SSOT in
@@ -292,6 +292,45 @@ const STOP_REASON_UNKNOWN = 'unknown';
  */
 export function coerceStopReason(value: unknown): string {
   return typeof value === 'string' ? value : STOP_REASON_UNKNOWN;
+}
+
+/** A token count is valid only if it is a non-negative integer. */
+function coerceTokenCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * #2 L2 — assemble the metering FACT for one provider response into the shared
+ * `LlmUsage` shape (→ the executor's `activity.metered` event). Each adapter maps
+ * its provider's token field names (Anthropic `input_tokens`/`output_tokens`,
+ * OpenAI `prompt_tokens`/`completion_tokens`, Ollama `prompt_eval_count`/
+ * `eval_count`) to the two raw candidates; this is the single place that decides
+ * completeness so all three classify identically.
+ *
+ * WHATEVER IS PRESENT IS KEPT (usage is a fact, never discarded): each token
+ * count is stamped iff it is a valid non-negative integer. `meteringStatus` is
+ * `metered` ONLY when BOTH counts are valid — a well-formed pair the L6 cost
+ * projection can trust; otherwise `unknown` (a provider omitted `usage`, sent a
+ * partial count, or a malformed value), while any single valid count still lands.
+ * A response reporting `{input:10}` only records `inputTokens:10` + `unknown`, so
+ * the completeness gap is visible rather than a manufactured zero.
+ */
+export function meterUsage(
+  provider: LlmConnectionKind,
+  model: string,
+  inputRaw: unknown,
+  outputRaw: unknown,
+): LlmUsage {
+  const inputTokens = coerceTokenCount(inputRaw);
+  const outputTokens = coerceTokenCount(outputRaw);
+  const usage: LlmUsage = {
+    provider,
+    model,
+    meteringStatus: inputTokens !== undefined && outputTokens !== undefined ? 'metered' : 'unknown',
+  };
+  if (inputTokens !== undefined) usage.inputTokens = inputTokens;
+  if (outputTokens !== undefined) usage.outputTokens = outputTokens;
+  return usage;
 }
 
 /**

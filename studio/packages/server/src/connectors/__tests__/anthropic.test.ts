@@ -8,6 +8,18 @@ async function drain(stream: AsyncIterable<ActivityEvent>): Promise<ActivityEven
   return events;
 }
 
+/** The terminal `succeeded` event — now preceded by a `metered` event (#2 L2). */
+function succeeded(events: ActivityEvent[]): Extract<ActivityEvent, { type: 'succeeded' }> {
+  const ev = events.find((e) => e.type === 'succeeded');
+  if (ev === undefined) throw new Error(`no succeeded event in ${JSON.stringify(events)}`);
+  return ev;
+}
+
+/** The `metered` usage event (#2 L2), or undefined if none was yielded. */
+function metered(events: ActivityEvent[]): Extract<ActivityEvent, { type: 'metered' }> | undefined {
+  return events.find((e): e is Extract<ActivityEvent, { type: 'metered' }> => e.type === 'metered');
+}
+
 function ctx(over: Partial<ActivityContext> = {}): ActivityContext {
   return {
     runId: 'run_1',
@@ -38,6 +50,7 @@ const OK_BODY = {
     { type: 'text', text: 'there!' },
   ],
   stop_reason: 'end_turn',
+  usage: { input_tokens: 5, output_tokens: 7 },
 };
 
 describe('anthropicAdapter.runActivity', () => {
@@ -53,9 +66,11 @@ describe('anthropicAdapter.runActivity', () => {
       fakeResponse(200, { content: [{ type: 'text', text: 'x' }], ...over }),
     );
     const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk-ant-key'));
-    expect(events[0]).toMatchObject({ type: 'succeeded', outputs: { stopReason: 'unknown' } });
-    const outputs = (events[0] as Extract<ActivityEvent, { type: 'succeeded' }>).outputs;
-    expect(typeof outputs.stopReason).toBe('string');
+    expect(succeeded(events)).toMatchObject({
+      type: 'succeeded',
+      outputs: { stopReason: 'unknown' },
+    });
+    expect(typeof succeeded(events).outputs.stopReason).toBe('string');
   });
 
   // #461 — a 2xx with NO readable completion (absent/non-array `content`, or a
@@ -108,9 +123,10 @@ describe('anthropicAdapter.runActivity', () => {
       }),
     );
     const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk-ant-key'));
-    expect(events).toEqual([
-      { type: 'succeeded', outputs: { text: 'hi', stopReason: 'end_turn' } },
-    ]);
+    expect(succeeded(events)).toEqual({
+      type: 'succeeded',
+      outputs: { text: 'hi', stopReason: 'end_turn' },
+    });
   });
 
   // The complement: a present text block (even an empty string) is a real result.
@@ -119,7 +135,10 @@ describe('anthropicAdapter.runActivity', () => {
       fakeResponse(200, { content: [{ type: 'text', text: '' }], stop_reason: 'end_turn' }),
     );
     const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk-ant-key'));
-    expect(events).toEqual([{ type: 'succeeded', outputs: { text: '', stopReason: 'end_turn' } }]);
+    expect(succeeded(events)).toEqual({
+      type: 'succeeded',
+      outputs: { text: '', stopReason: 'end_turn' },
+    });
   });
 
   it('POSTs the Messages API and surfaces concatenated text + stopReason', async () => {
@@ -127,9 +146,10 @@ describe('anthropicAdapter.runActivity', () => {
 
     const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk-ant-key'));
 
-    expect(events).toEqual([
-      { type: 'succeeded', outputs: { text: 'Hi there!', stopReason: 'end_turn' } },
-    ]);
+    expect(succeeded(events)).toEqual({
+      type: 'succeeded',
+      outputs: { text: 'Hi there!', stopReason: 'end_turn' },
+    });
     const [url, init] = fetchSpy.mock.calls[0]! as [string, RequestInit];
     expect(url).toBe('https://api.anthropic.com/v1/messages');
     expect(init.method).toBe('POST');
@@ -307,7 +327,7 @@ describe('anthropicAdapter v2 config (L1)', () => {
         'sk',
       ),
     );
-    expect(events[0]).toMatchObject({ type: 'succeeded' });
+    expect(succeeded(events)).toMatchObject({ type: 'succeeded' });
   });
 
   it('fails permanent when the config sets both prompt and messages', async () => {
@@ -320,5 +340,79 @@ describe('anthropicAdapter v2 config (L1)', () => {
     );
     expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+// #2 L2 — usage capture. The adapter yields a `metered` event carrying the
+// provider token counts BEFORE the terminal `succeeded`; the executor turns it
+// into a durable `activity.metered` engine event the L6 cost projection sums.
+describe('anthropicAdapter usage capture (L2)', () => {
+  it('yields a metered event with the token counts, ordered before succeeded', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
+    // Order: metered precedes the terminal succeeded.
+    expect(events.map((e) => e.type)).toEqual(['metered', 'succeeded']);
+    expect(metered(events)).toEqual({
+      type: 'metered',
+      usage: {
+        provider: 'anthropic_api',
+        model: 'claude-opus-4-8',
+        inputTokens: 5,
+        outputTokens: 7,
+        meteringStatus: 'metered',
+      },
+    });
+  });
+
+  it('reports meteringStatus unknown with NO token fields when usage is absent', async () => {
+    // OK response shape but no `usage` object at all (some gateways omit it).
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, { content: [{ type: 'text', text: 'x' }], stop_reason: 'end_turn' }),
+    );
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
+    expect(metered(events)?.usage).toEqual({
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      meteringStatus: 'unknown',
+    });
+    // The terminal event still lands — an unmetered response is NOT a failure.
+    expect(succeeded(events)).toMatchObject({ type: 'succeeded' });
+  });
+
+  it('keeps the present count when only one token field is valid (partial → unknown)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, {
+        content: [{ type: 'text', text: 'x' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 9, output_tokens: -1 },
+      }),
+    );
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
+    // The valid input count is stamped; the invalid negative output is dropped;
+    // the pair is incomplete so meteringStatus is unknown.
+    expect(metered(events)?.usage).toEqual({
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      inputTokens: 9,
+      meteringStatus: 'unknown',
+    });
+  });
+
+  it('records the resolved (node-override) model on the metered event', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { prompt: 'p', model: 'claude-haiku-4-5' } }),
+        'sk',
+      ),
+    );
+    expect(metered(events)?.usage.model).toBe('claude-haiku-4-5');
+  });
+
+  it('yields NO metered event on a failure (non-2xx produced no billed response)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(500, 'overloaded'));
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
+    expect(metered(events)).toBeUndefined();
+    expect(events[0]).toMatchObject({ type: 'failed' });
   });
 });
