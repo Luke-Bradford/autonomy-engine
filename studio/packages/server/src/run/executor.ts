@@ -2,7 +2,10 @@ import pLimit from 'p-limit';
 import {
   catalog as sharedCatalog,
   collectSecretSinkMarkers,
+  computeCostEstimate,
   FAILURE_CODES,
+  parseConnectionPriceTable,
+  resolvePrice,
   type ActivityCatalog,
   type EngineEvent,
   type FailureKind,
@@ -278,6 +281,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     attemptId: string,
   ): Promise<EngineEvent[]> {
     const events: EngineEvent[] = [];
+    // #2 L5 — the per-connection price-table override, parsed ONCE per dispatch
+    // (fail-safe: a malformed override → null → the built-in table is used, and
+    // a bad price config never fails the node — pricing is best-effort).
+    const priceOverride = parseConnectionPriceTable(ctx.connectionConfig);
     try {
       for await (const ev of adapter.runActivity(ctx, secret, secretFields)) {
         if (ev.type === 'output') {
@@ -289,7 +296,32 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // L6 SUMS these events for the run-cost projection. Optional token fields
           // are omitted (not sent as `undefined`) so the stored event matches the
           // schema's `.optional()` shape exactly.
+          //
+          // #2 L5 — resolve the unit price for (provider, model) against the
+          // price table (override ⊕ built-in) and stamp it AT capture. FAIL-CLOSED:
+          // an unpriced model leaves ALL price fields absent (never a zero), and
+          // `costEstimate` is stamped ONLY when both token counts are present —
+          // equivalently `meteringStatus === 'metered'` (meterUsage sets that iff
+          // both counts are valid) — so its presence ⟺ a trustworthy full cost.
           const { usage } = ev;
+          const price = resolvePrice(usage.provider, usage.model, priceOverride);
+          const priceFields =
+            price === null
+              ? {}
+              : {
+                  inUnitPrice: price.inUnitPrice,
+                  outUnitPrice: price.outUnitPrice,
+                  priceTableVersion: price.priceTableVersion,
+                  ...(usage.inputTokens !== undefined && usage.outputTokens !== undefined
+                    ? {
+                        costEstimate: computeCostEstimate(
+                          usage.inputTokens,
+                          usage.outputTokens,
+                          price,
+                        ),
+                      }
+                    : {}),
+                };
           events.push({
             type: 'activity.metered',
             runId,
@@ -300,6 +332,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
             meteringStatus: usage.meteringStatus,
             ...(usage.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
             ...(usage.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
+            ...priceFields,
           });
         } else if (ev.type === 'succeeded') {
           events.push({ type: 'node.succeeded', runId, nodeId, attemptId, outputs: ev.outputs });

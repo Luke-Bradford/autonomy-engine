@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Edge, EdgeOn, EngineCommand, EngineEvent, FailureKind, Node } from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
+import { BUILTIN_PRICE_TABLE_VERSION } from '../../pricing/price-table.js';
 import { driveRun } from './helpers/run-driver.js';
 
 // --- helpers ---------------------------------------------------------------
@@ -1135,6 +1136,32 @@ describe('activity.metered is inert (#2 L2)', () => {
       meteringStatus: 'metered',
     });
     // Inert like node.output: identical state, no commands, node still in flight.
+    expect(r.state).toEqual(before);
+    expect(r.commands).toEqual([]);
+    expect(r.state.status).toBe('running');
+  });
+
+  it('stays inert with the #2 L5 price fields present (they ride the same event)', () => {
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const before = s;
+    const r = eng.reduce(s, {
+      type: 'activity.metered',
+      runId: RUN,
+      nodeId: 'a',
+      attemptId: attempt('a'),
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      inputTokens: 1_000_000,
+      outputTokens: 500_000,
+      meteringStatus: 'metered',
+      inUnitPrice: 5,
+      outUnitPrice: 25,
+      costEstimate: 17.5,
+      priceTableVersion: BUILTIN_PRICE_TABLE_VERSION,
+    });
+    // The price fields are pure observability — folding them changes nothing.
     expect(r.state).toEqual(before);
     expect(r.commands).toEqual([]);
     expect(r.state.status).toBe('running');
