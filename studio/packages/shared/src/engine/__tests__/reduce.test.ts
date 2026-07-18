@@ -1167,3 +1167,36 @@ describe('activity.metered is inert (#2 L2)', () => {
     expect(r.state.status).toBe('running');
   });
 });
+
+// ===========================================================================
+// #2 L9a — activity.captured is an inert observability fact
+// ===========================================================================
+
+describe('activity.captured is inert (#2 L9a)', () => {
+  it('folding activity.captured changes neither state nor commands, and does not terminalize the node', () => {
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const before = s;
+    const r = eng.reduce(s, {
+      type: 'activity.captured',
+      runId: RUN,
+      nodeId: 'a',
+      attemptId: attempt('a'),
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      latencyMs: 123,
+      request: {
+        messageCount: 1,
+        system: { chars: 4, contentHash: 'sh' },
+        messages: [{ role: 'user', chars: 5, contentHash: 'mh' }],
+      },
+      completion: { chars: 3, contentHash: 'ch' },
+    });
+    // Inert like activity.metered / node.output: identical state, no commands,
+    // node still in flight.
+    expect(r.state).toEqual(before);
+    expect(r.commands).toEqual([]);
+    expect(r.state.status).toBe('running');
+  });
+});

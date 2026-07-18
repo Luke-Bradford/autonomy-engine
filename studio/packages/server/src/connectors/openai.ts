@@ -1,6 +1,7 @@
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import {
   DEFAULT_LLM_TIMEOUT_MS,
+  buildCapture,
   coerceStopReason,
   httpStatusFailure,
   llmCallConfigSchema,
@@ -191,12 +192,30 @@ export const openaiAdapter: ConnectorAdapter = {
     }
 
     // TEXT path.
+    const started = Date.now();
     const result = await llmPost(ctx, url, headers, buildBody(turns), timeoutMs);
+    const latencyMs = Date.now() - started;
+    // #2 L9a — the prompt/completion CAPTURE fact, emitted before EVERY post-request
+    // terminal. `system` is the LOGICAL system instruction (not `systemContent`,
+    // which folds in the structured-mode scaffold — text mode has none anyway).
+    const captureOf = (completionText?: string): ActivityEvent => ({
+      type: 'captured',
+      capture: buildCapture({
+        provider: 'openai_api',
+        model,
+        latencyMs,
+        turns,
+        system,
+        completionText,
+      }),
+    });
     if (result.type === 'failed') {
+      yield captureOf();
       yield result.event;
       return;
     }
     if (result.status < 200 || result.status >= 300) {
+      yield captureOf();
       yield httpStatusFailure(
         'openai_api',
         result.status,
@@ -208,6 +227,7 @@ export const openaiAdapter: ConnectorAdapter = {
     }
     const parsed = parseJsonBody(result.bodyText);
     if (!parsed.ok) {
+      yield captureOf();
       yield parsed.event;
       return;
     }
@@ -218,16 +238,19 @@ export const openaiAdapter: ConnectorAdapter = {
     // `message.content` non-string/absent is `malformed_block`.
     const choices = (parsed.json as { choices?: unknown }).choices;
     if (!Array.isArray(choices)) {
+      yield captureOf();
       yield noCompletionFailure('openai_api', 'absent_content');
       return;
     }
     if (choices.length === 0) {
+      yield captureOf();
       yield noCompletionFailure('openai_api', 'empty_completion_set');
       return;
     }
     const first = choices[0];
     const text = (first as { message?: { content?: unknown } } | undefined)?.message?.content;
     if (typeof text !== 'string') {
+      yield captureOf();
       yield noCompletionFailure('openai_api', 'malformed_block');
       return;
     }
@@ -241,6 +264,7 @@ export const openaiAdapter: ConnectorAdapter = {
       type: 'metered',
       usage: meterUsage('openai_api', model, usage?.prompt_tokens, usage?.completion_tokens),
     };
+    yield captureOf(text);
     yield {
       type: 'succeeded',
       outputs: {

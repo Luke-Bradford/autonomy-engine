@@ -20,6 +20,15 @@ function metered(events: ActivityEvent[]): Extract<ActivityEvent, { type: 'meter
   return events.find((e): e is Extract<ActivityEvent, { type: 'metered' }> => e.type === 'metered');
 }
 
+/** The `captured` prompt/completion event (#2 L9a). */
+function captured(events: ActivityEvent[]): Extract<ActivityEvent, { type: 'captured' }> {
+  const ev = events.find(
+    (e): e is Extract<ActivityEvent, { type: 'captured' }> => e.type === 'captured',
+  );
+  if (ev === undefined) throw new Error(`no captured event in ${JSON.stringify(events)}`);
+  return ev;
+}
+
 function ctx(over: Partial<ActivityContext> = {}): ActivityContext {
   return {
     runId: 'run_1',
@@ -114,13 +123,14 @@ describe('ollamaAdapter.runActivity', () => {
   ])('fails permanent (%s → %s) when the 2xx body carries it', async (_label, body, reason) => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, body));
     const events = await drain(ollamaAdapter.runActivity(ctx(), null));
-    expect(events).toEqual([
-      {
-        type: 'failed',
-        kind: 'permanent',
-        error: `ollama returned a 2xx response with no completion (${reason})`,
-      },
-    ]);
+    // #2 L9a — a capture (completion ABSENT) precedes the terminal failure.
+    expect(events.map((e) => e.type)).toEqual(['captured', 'failed']);
+    expect(failed(events)).toEqual({
+      type: 'failed',
+      kind: 'permanent',
+      error: `ollama returned a 2xx response with no completion (${reason})`,
+    });
+    expect(captured(events).capture.completion).toBeUndefined();
   });
 
   it('succeeds with an explicit empty-string completion', async () => {
@@ -144,7 +154,7 @@ describe('ollamaAdapter.runActivity', () => {
   it('maps 500 to a transient failure', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(500, 'model loading'));
     const events = await drain(ollamaAdapter.runActivity(ctx(), null));
-    expect(events[0]).toMatchObject({ type: 'failed', kind: 'transient' });
+    expect(failed(events)).toMatchObject({ type: 'failed', kind: 'transient' });
   });
 });
 
@@ -246,7 +256,7 @@ describe('ollamaAdapter usage capture (L2)', () => {
   it('yields a metered event with the top-level token counts, before succeeded', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     const events = await drain(ollamaAdapter.runActivity(ctx(), null));
-    expect(events.map((e) => e.type)).toEqual(['metered', 'succeeded']);
+    expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'succeeded']);
     expect(metered(events)).toEqual({
       type: 'metered',
       usage: {
@@ -276,7 +286,7 @@ describe('ollamaAdapter usage capture (L2)', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(500, 'model crashed'));
     const events = await drain(ollamaAdapter.runActivity(ctx(), null));
     expect(metered(events)).toBeUndefined();
-    expect(events[0]).toMatchObject({ type: 'failed' });
+    expect(failed(events)).toMatchObject({ type: 'failed' });
   });
 });
 

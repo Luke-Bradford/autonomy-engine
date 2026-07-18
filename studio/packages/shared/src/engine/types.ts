@@ -753,6 +753,71 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     priceTableVersion: z.string().optional(),
   }),
   z.object({
+    /**
+     * #2 L9a — a debugging CAPTURE FACT for ONE `llm_call` provider response: the
+     * prompt/completion SHAPE + the provider-call latency, stamped into the log at
+     * dispatch time and NEVER recomputed (replay folds the fact, it does not re-
+     * call the model — spec #2's replay invariant). Emitted by the adapter as a
+     * non-terminal `captured` ActivityEvent (mirroring `metered`) which the
+     * executor maps here, ordered BEFORE the terminal `node.succeeded`/`node.failed`.
+     * ONE per provider response — a text call emits one; a structured-repair call's
+     * per-response capture is deferred to L9b (see below).
+     *
+     * OBSERVABILITY ONLY — the reducer folds it INERT (like `activity.metered` /
+     * `node.output`): capture is telemetry, not a typed `${}`-addressable output,
+     * so it never enters `outputs` and cannot change run semantics. NOT in
+     * `TERMINAL_RUN_EVENT_TYPES`.
+     *
+     * SECURE / F4 SPLIT — this is the "redacted" default the spec's telemetry-vs-
+     * content hardening prescribes: "log hash/length/token-count, not text". It
+     * carries NO raw prompt/completion text. `chars` is the LENGTH half; the
+     * TOKEN-COUNT half lives on `activity.metered` (`inputTokens`/`outputTokens`).
+     * `contentHash` is a `sha256` FINGERPRINT for drift/reproducibility, NOT a
+     * redaction guarantee (a short/low-entropy input is a brute-forceable oracle) —
+     * safe here only because no field is D8-secure yet. RAW-content ('full' mode)
+     * capture + verbose reasoning-trace capture BOTH require F4's field-secure model
+     * (`secureInputFields`/`secureOutputFields`, redacted-when-set) and are DEFERRED
+     * to L9b; structured-mode per-response capture defers there too (its completion
+     * IS raw structured content, F4-gated; its request half is F4-independent but
+     * deferred with it for plumbing cohesion). See L9b (#605).
+     */
+    type: z.literal('activity.captured'),
+    runId: z.string(),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    /** The provider that produced this response — the Connection kind. */
+    provider: z.string(),
+    /** The resolved model this response was produced by. */
+    model: z.string(),
+    /** Provider-call wall time in ms (the spec's always-on `latency` telemetry). */
+    latencyMs: z.number().int().nonnegative(),
+    /** The prompt SHAPE (fingerprints + lengths, no text). */
+    request: z.object({
+      /** Number of user/assistant turns (the `system` instruction is separate). */
+      messageCount: z.number().int().nonnegative(),
+      /** Present IFF a system instruction was sent. */
+      system: z
+        .object({ chars: z.number().int().nonnegative(), contentHash: z.string() })
+        .optional(),
+      messages: z.array(
+        z.object({
+          role: z.enum(['user', 'assistant']),
+          chars: z.number().int().nonnegative(),
+          contentHash: z.string(),
+        }),
+      ),
+    }),
+    /**
+     * The completion SHAPE. ABSENT when no completion text was extracted (a
+     * transport/HTTP/no-completion failure) — fail-closed: an absent completion is
+     * absent, NEVER a hash of `''` (which would manufacture a benign fact, the
+     * `#473`/fail-open lesson).
+     */
+    completion: z
+      .object({ chars: z.number().int().nonnegative(), contentHash: z.string() })
+      .optional(),
+  }),
+  z.object({
     type: z.literal('run.resumed'),
     runId: z.string(),
     reason: z.literal('boot_reconcile'),

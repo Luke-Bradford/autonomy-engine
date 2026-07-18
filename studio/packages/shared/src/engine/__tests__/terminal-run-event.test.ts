@@ -137,6 +137,22 @@ describe('#443 — terminalStatusOf', () => {
         outputTokens: 20,
         meteringStatus: 'metered',
       },
+      // #2 L9a — a per-response prompt/completion CAPTURE fact. NON-terminal: an
+      // observability event (like `activity.metered`) folded inert; it neither
+      // terminates the run nor folds a node, and is free to land before the terminal.
+      {
+        type: 'activity.captured',
+        ...run,
+        nodeId: 'n1',
+        attemptId: 'n1#0',
+        provider: 'anthropic_api',
+        model: 'claude-opus-4-8',
+        latencyMs: 12,
+        request: {
+          messageCount: 1,
+          messages: [{ role: 'user', chars: 5, contentHash: 'h' }],
+        },
+      },
     ];
     for (const event of nonTerminal) {
       expect(terminalStatusOf(event), `${event.type} must not be terminal`).toBeNull();

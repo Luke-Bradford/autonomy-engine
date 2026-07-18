@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { anthropicAdapter } from '../anthropic.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
+import { sha256Hex } from '../../util/hash.js';
+
+function captured(events: ActivityEvent[]): Extract<ActivityEvent, { type: 'captured' }> {
+  const ev = events.find(
+    (e): e is Extract<ActivityEvent, { type: 'captured' }> => e.type === 'captured',
+  );
+  if (ev === undefined) throw new Error(`no captured event in ${JSON.stringify(events)}`);
+  return ev;
+}
 
 async function drain(stream: AsyncIterable<ActivityEvent>): Promise<ActivityEvent[]> {
   const events: ActivityEvent[] = [];
@@ -101,13 +110,14 @@ describe('anthropicAdapter.runActivity', () => {
   ])('fails permanent (%s → %s) when the 2xx body carries it', async (_label, body, reason) => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, body));
     const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk-ant-key'));
-    expect(events).toEqual([
-      {
-        type: 'failed',
-        kind: 'permanent',
-        error: `anthropic_api returned a 2xx response with no completion (${reason})`,
-      },
-    ]);
+    // #2 L9a — a capture (completion ABSENT) precedes the terminal failure.
+    expect(events.map((e) => e.type)).toEqual(['captured', 'failed']);
+    expect(failed(events)).toEqual({
+      type: 'failed',
+      kind: 'permanent',
+      error: `anthropic_api returned a 2xx response with no completion (${reason})`,
+    });
+    expect(captured(events).capture.completion).toBeUndefined();
   });
 
   // #556 — a mix of a VALID text block and a malformed one still SUCCEEDS on the
@@ -237,7 +247,7 @@ describe('anthropicAdapter.runActivity', () => {
         fakeResponse(status, { error: { message: 'boom' } }),
       );
       const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
-      expect(events[0]).toMatchObject({ type: 'failed', kind });
+      expect(failed(events)).toMatchObject({ type: 'failed', kind });
       vi.restoreAllMocks();
     }
   });
@@ -250,15 +260,15 @@ describe('anthropicAdapter.runActivity', () => {
       fakeResponse(429, { error: { message: 'slow down' } }, { 'retry-after': '42' }),
     );
     const rl = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
-    expect(rl[0]).toMatchObject({ type: 'failed', kind: 'rate_limit', retryAfterSeconds: 42 });
+    expect(failed(rl)).toMatchObject({ type: 'failed', kind: 'rate_limit', retryAfterSeconds: 42 });
     vi.restoreAllMocks();
 
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       fakeResponse(400, { error: { message: 'bad' } }, { 'retry-after': '42' }),
     );
     const perm = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
-    expect(perm[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
-    expect(perm[0]).not.toHaveProperty('retryAfterSeconds');
+    expect(failed(perm)).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(failed(perm)).not.toHaveProperty('retryAfterSeconds');
   });
 
   it('never echoes the secret in a failure event', async () => {
@@ -276,13 +286,13 @@ describe('anthropicAdapter.runActivity', () => {
     const events = await drain(
       anthropicAdapter.runActivity(ctx({ signal: controller.signal }), 'sk'),
     );
-    expect(events[0]).toMatchObject({ type: 'failed', kind: 'cancelled' });
+    expect(failed(events)).toMatchObject({ type: 'failed', kind: 'cancelled' });
   });
 
   it('maps a malformed 2xx JSON body to a permanent failure', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, 'not json{'));
     const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
-    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(failed(events)).toMatchObject({ type: 'failed', kind: 'permanent' });
   });
 
   it('REDACTS the secret when a header-validation TypeError quotes it verbatim', async () => {
@@ -293,7 +303,7 @@ describe('anthropicAdapter.runActivity', () => {
       new TypeError(`Headers.append: "${secret}" is an invalid header value.`),
     );
     const events = await drain(anthropicAdapter.runActivity(ctx(), secret));
-    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(failed(events)).toMatchObject({ type: 'failed', kind: 'permanent' });
     expect(JSON.stringify(events)).not.toContain('sk-realkey-9999');
     expect(JSON.stringify(events)).toContain('***');
   });
@@ -301,7 +311,7 @@ describe('anthropicAdapter.runActivity', () => {
   it('maps a bad-URL TypeError to a permanent failure', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Invalid URL'));
     const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
-    expect(events[0]).toMatchObject({
+    expect(failed(events)).toMatchObject({
       type: 'failed',
       kind: 'permanent',
       error: expect.stringContaining('Invalid URL'),
@@ -320,7 +330,7 @@ describe('anthropicAdapter.runActivity', () => {
     const events = await drain(
       anthropicAdapter.runActivity(ctx({ connectionConfig: { timeoutMs: 10 } }), 'sk'),
     );
-    expect(events[0]).toMatchObject({ type: 'failed', kind: 'transient' });
+    expect(failed(events)).toMatchObject({ type: 'failed', kind: 'transient' });
     expect(JSON.stringify(events)).toContain('timed out');
   });
 });
@@ -401,8 +411,8 @@ describe('anthropicAdapter usage capture (L2)', () => {
   it('yields a metered event with the token counts, ordered before succeeded', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
-    // Order: metered precedes the terminal succeeded.
-    expect(events.map((e) => e.type)).toEqual(['metered', 'succeeded']);
+    // Order: metered then the #2 L9a capture precede the terminal succeeded.
+    expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'succeeded']);
     expect(metered(events)).toEqual({
       type: 'metered',
       usage: {
@@ -464,7 +474,7 @@ describe('anthropicAdapter usage capture (L2)', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(500, 'overloaded'));
     const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
     expect(metered(events)).toBeUndefined();
-    expect(events[0]).toMatchObject({ type: 'failed' });
+    expect(failed(events)).toMatchObject({ type: 'failed' });
   });
 });
 
@@ -617,5 +627,55 @@ describe('anthropicAdapter.runActivity — structured output (#2 L4b)', () => {
     );
     expect(events.filter((e) => e.type === 'metered')).toHaveLength(1);
     expect(failed(events)).toMatchObject({ kind: 'cancelled' });
+  });
+});
+
+describe('anthropicAdapter — #2 L9a prompt/completion capture', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('emits a capture (shape + latency, NO raw text) after metered and before the terminal on success', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { prompt: 'hello there', system: 'be brief' } }),
+        'sk-ant-key',
+      ),
+    );
+    const types = events.map((e) => e.type);
+    // Ordering: metered → captured → succeeded (capture precedes the terminal).
+    expect(types.indexOf('metered')).toBeLessThan(types.indexOf('captured'));
+    expect(types.indexOf('captured')).toBeLessThan(types.indexOf('succeeded'));
+
+    const { capture } = captured(events);
+    expect(capture.provider).toBe('anthropic_api');
+    expect(capture.model).toBe('claude-opus-4-8');
+    expect(typeof capture.latencyMs).toBe('number');
+    expect(capture.latencyMs).toBeGreaterThanOrEqual(0);
+    expect(capture.request).toEqual({
+      messageCount: 1,
+      system: { chars: 8, contentHash: sha256Hex('be brief') },
+      messages: [{ role: 'user', chars: 11, contentHash: sha256Hex('hello there') }],
+    });
+    expect(capture.completion).toEqual({ chars: 9, contentHash: sha256Hex('Hi there!') });
+    // No raw prompt/completion text anywhere in the event.
+    const blob = JSON.stringify(captured(events));
+    for (const raw of ['hello there', 'be brief', 'Hi there!']) expect(blob).not.toContain(raw);
+  });
+
+  it('emits a capture with completion ABSENT before a non-2xx failure terminal (nothing metered)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(500, { error: { message: 'boom' } }),
+    );
+    const events = await drain(
+      anthropicAdapter.runActivity(ctx({ input: { prompt: 'hi' } }), 'sk'),
+    );
+    const { capture } = captured(events);
+    expect(capture.completion).toBeUndefined();
+    expect(capture.request.messages).toEqual([
+      { role: 'user', chars: 2, contentHash: sha256Hex('hi') },
+    ]);
+    const types = events.map((e) => e.type);
+    expect(types.indexOf('captured')).toBeLessThan(types.indexOf('failed'));
+    expect(types).not.toContain('metered'); // a non-2xx billed nothing
   });
 });

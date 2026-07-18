@@ -152,6 +152,23 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 | L7 | LLM `errorMap` (rate-limit→transient + `retry-after`) wired to #1 policy | 2 |
 | L8 | Palette **recipes** (Generate/Extract/Classify/Judge presets) | 2 |
 | L9 | Prompt/completion secure capture + verbose reasoning log | 2 |
+
+> **L9a/L9b split (built 2026-07-18):** L9's "#1 D8 secure" dependency —
+> `secureInputFields`/`secureOutputFields` (redacted-when-set) — is **F4 territory
+> and NOT built yet** (`pipeline.ts` still *refuses* a `secureOutput` key). Since
+> `run_events` are immutable, capturing RAW prompt/completion text absent that
+> model would be an unrepairable fail-open leak. So the ticket split: **L9a ships
+> the F4-independent, fail-closed METADATA capture** the telemetry-vs-content
+> hardening prescribes ("log hash/length/token-count, not text") — a new inert
+> `activity.captured` event carrying per-message `{role, chars, contentHash}` +
+> `system` + `latencyMs` for TEXT-mode `llm_call`, emitted before every
+> post-request terminal (success + each failure), completion OMITTED when absent
+> (never `hash('')`). **L9b (#605)** carries the F4-gated remainder: raw-content
+> `'full'` mode (+ keyed-HMAC hash to close the unsalted-sha256 oracle), verbose
+> reasoning-trace (needs adapter thinking-block extraction too), and structured-
+> mode capture (its completion is raw structured content; its request half is
+> F4-independent but deferred with it for plumbing cohesion).
+
 | L10a | local tool contract + single tool call (opaque driver-internal) | 3 |
 | L10b | bounded tool loop + telemetry (non-state observability events) + cancellation | 3 |
 | L10c | MCP servers + tool security policy | 3 |
