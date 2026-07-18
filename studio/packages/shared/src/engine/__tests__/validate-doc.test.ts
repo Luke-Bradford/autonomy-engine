@@ -87,6 +87,96 @@ describe('validateDoc — config.outputs (F13a)', () => {
 });
 
 // ===========================================================================
+// llm_call structured outputSchema — save-time subset validation (#2 L4a)
+// ===========================================================================
+
+describe('validateDoc — llm_call structured outputSchema (L4a)', () => {
+  function llm(id: string, config: Record<string, unknown>): Node {
+    return node(id, config, { type: 'llm_call' });
+  }
+  const okSchema = { type: 'object', properties: { category: { type: 'string' } } };
+
+  it('accepts a valid structured llm_call', () => {
+    const d = doc([llm('a', { prompt: 'x', outputMode: 'structured', outputSchema: okSchema })]);
+    expect(validateDoc(d).join(' ')).not.toContain('outputSchema');
+  });
+
+  it('accepts a plain text (or legacy) llm_call with no output surface', () => {
+    expect(validateDoc(doc([llm('a', { prompt: 'x' })])).join(' ')).not.toContain('outputSchema');
+    expect(
+      validateDoc(doc([llm('a', { prompt: 'x', outputMode: 'text' })])).join(' '),
+    ).not.toContain('outputSchema');
+  });
+
+  it('reports structured mode without an outputSchema', () => {
+    const d = doc([llm('a', { prompt: 'x', outputMode: 'structured' })]);
+    expect(validateDoc(d).join(' ')).toContain('node.a: outputSchema');
+    expect(validateDoc(d).join(' ')).toContain('requires an outputSchema');
+  });
+
+  it('reports an outputSchema without structured mode (text-mode stray schema)', () => {
+    const d = doc([llm('a', { prompt: 'x', outputSchema: okSchema })]);
+    expect(validateDoc(d).join(' ')).toContain('only valid with');
+  });
+
+  it('reports an empty-properties structured schema', () => {
+    const d = doc([
+      llm('a', {
+        prompt: 'x',
+        outputMode: 'structured',
+        outputSchema: { type: 'object', properties: {} },
+      }),
+    ]);
+    expect(validateDoc(d).join(' ')).toContain('at least one property');
+  });
+
+  it('reports a non-addressable property name', () => {
+    const d = doc([
+      llm('a', {
+        prompt: 'x',
+        outputMode: 'structured',
+        outputSchema: { type: 'object', properties: { 'my-field': { type: 'string' } } },
+      }),
+    ]);
+    expect(validateDoc(d).join(' ')).toContain('not addressable');
+  });
+
+  it('reports oneOf/anyOf and an unsupported property type (strict subset)', () => {
+    const oneOf = doc([
+      llm('a', {
+        prompt: 'x',
+        outputMode: 'structured',
+        outputSchema: { type: 'object', properties: { x: { type: 'string' } }, oneOf: [] },
+      }),
+    ]);
+    expect(validateDoc(oneOf).join(' ')).toContain('outputSchema');
+    const badType = doc([
+      llm('a', {
+        prompt: 'x',
+        outputMode: 'structured',
+        outputSchema: { type: 'object', properties: { x: { type: 'null' } } },
+      }),
+    ]);
+    expect(validateDoc(badType).join(' ')).toContain('outputSchema');
+  });
+
+  it('reports a `required` naming an undeclared property', () => {
+    const d = doc([
+      llm('a', {
+        prompt: 'x',
+        outputMode: 'structured',
+        outputSchema: {
+          type: 'object',
+          properties: { x: { type: 'string' } },
+          required: ['ghost'],
+        },
+      }),
+    ]);
+    expect(validateDoc(d).join(' ')).toContain('undeclared property');
+  });
+});
+
+// ===========================================================================
 // Container children — existence + disjointness + loop/stage config
 // ===========================================================================
 

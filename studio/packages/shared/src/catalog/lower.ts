@@ -1,5 +1,7 @@
 import type { Node } from '../schemas/pipeline.js';
 import { getActivity } from './registry.js';
+import { llmStructuredOutputSurfaceSchema, lowerOutputSchema } from './llm-config.js';
+import { LLM_CALL_ACTIVITY_TYPE } from './types.js';
 
 /**
  * #1 F13b — LOWER the catalog's canonical `outputs` into a node's
@@ -78,6 +80,58 @@ export function lowerNodeOutputs(nodes: Node[]): Node[] {
     return {
       ...node,
       config: { ...node.config, outputs: entry.outputs.map((o) => ({ ...o })) },
+    };
+  });
+}
+
+/**
+ * #2 L4a — DERIVE a structured `llm_call` node's `config.outputs` from its
+ * `outputSchema` (the restricted subset). For every `llm_call` node in
+ * `outputMode:'structured'` with a VALID `outputSchema`, this sets
+ * `config.outputs` to the lowered `Output[]`. Run this BEFORE `lowerNodeOutputs`
+ * in `createPipelineVersion`, so the generic catalog-default pass then sees a
+ * present value and correctly skips (a structured node's contract is its schema,
+ * not the `[text, stopReason]` default).
+ *
+ * ## The one deliberate exception to `lowerNodeOutputs`'s never-overwrite rule
+ *
+ * `lowerNodeOutputs` (above) NEVER overwrites a present `config.outputs` — that is
+ * how it avoids masking a corrupt or author-authored contract. This helper does
+ * the OPPOSITE for structured nodes: it OVERWRITES whatever is there. That is safe
+ * precisely because a structured node's `config.outputs` is DERIVED, not authored:
+ * there is no author override to protect, and no meaningful "corrupt contract" to
+ * mask — the single source of truth is the `outputSchema`. In particular this is
+ * what replaces a STALE catalog-default seed (`[text, stopReason]`, written
+ * client-side by the web palette on node creation) once the author switches the
+ * node to structured mode. A structured node arriving with an already-CORRUPT
+ * incoming `config.outputs` is refused earlier (the first `StrictNodeSchema` parse
+ * in `createPipelineVersion`, before any lowering runs), so overwrite never has to
+ * reason about corruption.
+ *
+ * An INVALID `outputSchema` (fails the subset) is left UN-lowered: the node is
+ * returned unchanged so its prior contract stands and the save-time validator
+ * (`validateLlmCallOutput`) raises the readable diagnostic → the whole save is
+ * refused (400), and no garbage-lowered contract ever persists. The
+ * `llmStructuredOutputSurfaceSchema.safeParse(...).success` gate here is the SAME
+ * subset check `validateLlmCallOutput` reports through, so "what lowers" and "what
+ * saves" can never disagree.
+ */
+export function lowerLlmStructuredOutputs(nodes: Node[]): Node[] {
+  return nodes.map((node) => {
+    if (node.type !== LLM_CALL_ACTIVITY_TYPE) return node;
+    const surface = llmStructuredOutputSurfaceSchema.safeParse(node.config);
+    // Not structured, or an invalid/absent schema: leave the node alone (a text
+    // node is seeded by `lowerNodeOutputs`; an invalid schema is a save-time
+    // diagnostic, not a lowering concern).
+    if (!surface.success) return node;
+    // `success` implies the coupling held, so `outputMode:'structured'` guarantees
+    // a valid `outputSchema` is present — the explicit `=== undefined` guard states
+    // that invariant to the type system rather than asserting it away with `!`.
+    const { outputMode, outputSchema } = surface.data;
+    if (outputMode !== 'structured' || outputSchema === undefined) return node;
+    return {
+      ...node,
+      config: { ...node.config, outputs: lowerOutputSchema(outputSchema) },
     };
   });
 }

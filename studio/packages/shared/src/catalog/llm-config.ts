@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isAddressableOutputName, type Output, type OutputType } from '../schemas/pipeline.js';
 
 /**
  * #2 L1 — the `llm_call` activity config v2 (the rich model) + its provider-
@@ -37,6 +38,190 @@ export const reasoningEffortSchema = z.enum(['low', 'medium', 'high', 'max']);
 export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
 
 /**
+ * #2 L4a — the output MODE. `text` (the default when absent, for back-compat with
+ * every pre-L4a `llm_call`) yields the catalog's `[text, stopReason]` contract;
+ * `structured` yields typed fields derived from `outputSchema`.
+ */
+export const outputModeSchema = z.enum(['text', 'structured']);
+export type OutputMode = z.infer<typeof outputModeSchema>;
+
+/**
+ * #2 L4a — one restricted property in a structured `outputSchema`. Only the
+ * TOP-LEVEL property TYPES are addressable (`${nodes.x.output.<name>}` is a single
+ * segment, #6 E7), so only they must map cleanly to an `OutputType`; nested
+ * `object`/`array` shape is kept deliberately LOOSE (it lowers to the opaque
+ * `json` type) — L4a does not type-check inside a nested field. `.strict()` is
+ * what enforces the subset: it rejects `oneOf`/`anyOf`/`allOf`/`$ref`/
+ * `patternProperties` and any other JSON-Schema keyword outside this closed set,
+ * so "restricted subset" is enforced by construction, not by an allow-list of
+ * rejections that could miss one.
+ */
+const llmOutputPropertySchema = z
+  .object({
+    type: z.enum(['string', 'number', 'integer', 'boolean', 'object', 'array']),
+    description: z.string().optional(),
+    // Present for enum-typed scalars — kept as opaque values; the base `type`
+    // still decides the lowered OutputType.
+    enum: z.array(z.unknown()).optional(),
+    // Nested shape for `array`/`object` — LOOSE by design (lowers to `json`).
+    items: z.unknown().optional(),
+    properties: z.record(z.string(), z.unknown()).optional(),
+    required: z.array(z.string()).optional(),
+  })
+  .strict();
+
+/**
+ * #2 L4a — the restricted `outputSchema` SUBSET a `structured` `llm_call`
+ * declares. An OBJECT root with a NON-EMPTY set of named properties, each an
+ * addressable identifier (so it can lower into `config.outputs` and be referenced
+ * as `${nodes.x.output.<name>}`), an optional `required` list that must name only
+ * declared properties, and `additionalProperties` that — if present — must be
+ * `false` (addressable fields need a closed object). `.strict()` rejects every
+ * other JSON-Schema keyword (oneOf/anyOf/$ref/…), which is what makes this a
+ * SUBSET rather than "arbitrary JSON Schema".
+ *
+ * This is the SINGLE source of the subset rules: the save-time validator
+ * (`engine/params.ts::validateLlmCallOutput`) parses through it for readable
+ * diagnostics, and the lowering pass (`catalog/lower.ts::lowerLlmStructuredOutputs`)
+ * uses `.safeParse(...).success` as its "valid schema" gate — so "what saves" and
+ * "what lowers" can never disagree about the subset.
+ */
+export const llmOutputSchemaSchema = z
+  .object({
+    type: z.literal('object'),
+    properties: z.record(z.string(), llmOutputPropertySchema),
+    required: z.array(z.string()).optional(),
+    // Only an explicit `false` is legal — `true`/an object/omitted-but-open would
+    // let a non-addressable field slip past the declared contract. Absent is the
+    // common case (closed is the implied default for a declared contract here).
+    additionalProperties: z.literal(false).optional(),
+    // Benign JSON-Schema metadata accepted at the root (a real exported schema
+    // commonly carries these, and the PROPERTY schema already allows `description`
+    // — accepting them here keeps root and property symmetric so a hand-written or
+    // imported schema is not 400'd for a doc string). They do not affect lowering.
+    description: z.string().optional(),
+    title: z.string().optional(),
+  })
+  .strict()
+  .superRefine((schema, ctx) => {
+    const names = Object.keys(schema.properties);
+    if (names.length === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['properties'],
+        message: 'a structured outputSchema must declare at least one property',
+      });
+    }
+    for (const name of names) {
+      if (!isAddressableOutputName(name)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['properties', name],
+          message:
+            `property name '${name}' is not addressable: a ` +
+            '${nodes.<id>.output.<name>} reference takes a single identifier segment',
+        });
+      }
+    }
+    for (const r of schema.required ?? []) {
+      if (!Object.prototype.hasOwnProperty.call(schema.properties, r)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['required'],
+          message: `required names an undeclared property '${r}'`,
+        });
+      }
+    }
+  });
+
+export type LlmOutputSchema = z.infer<typeof llmOutputSchemaSchema>;
+
+/**
+ * #2 L4a — the `outputMode`↔`outputSchema` COUPLING rule, extracted as a reusable
+ * `superRefine` body so the DISPATCH schema (`llmCallConfigSchema`) and the
+ * save-time SURFACE schema (`llmStructuredOutputSurfaceSchema`) enforce ONE rule
+ * from one place (Zod `.pick`/`.merge` drop `.refine`s, so the two would silently
+ * diverge without this — the same reason `refuseDuplicateNames` was extracted in
+ * `schemas/pipeline.ts`). `structured` REQUIRES a schema; any other mode (incl.
+ * absent = text) FORBIDS one — which also gives text-mode's "reject a stray
+ * outputSchema" for free.
+ */
+function refineOutputModeCoupling(
+  c: { outputMode?: OutputMode; outputSchema?: unknown },
+  ctx: z.RefinementCtx,
+): void {
+  const structured = c.outputMode === 'structured';
+  if (structured && c.outputSchema === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['outputSchema'],
+      message: "outputMode:'structured' requires an outputSchema",
+    });
+  }
+  if (!structured && c.outputSchema !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['outputSchema'],
+      message: "outputSchema is only valid with outputMode:'structured'",
+    });
+  }
+}
+
+/**
+ * #2 L4a — the exact `{ outputMode, outputSchema }` SLICE of a node's config that
+ * the save-time validator and the lowering pass read. NON-STRICT: a real
+ * `node.config` carries many other keys (`prompt`/`messages`/`outputs`/…), so this
+ * only picks the two L4a fields and applies the coupling rule; everything else
+ * passes through untouched.
+ */
+export const llmStructuredOutputSurfaceSchema = z
+  .object({
+    outputMode: outputModeSchema.optional(),
+    outputSchema: llmOutputSchemaSchema.optional(),
+  })
+  .superRefine(refineOutputModeCoupling);
+
+export type LlmStructuredOutputSurface = z.infer<typeof llmStructuredOutputSurfaceSchema>;
+
+/**
+ * #2 L4a — lower a validated structured `outputSchema` to the `config.outputs`
+ * `Output[]` contract the rest of the engine already understands
+ * (`engine/outputs.ts`, `validateRefs`). Each TOP-LEVEL property becomes one
+ * declared output, insertion order preserved (`Object.entries` is insertion-order
+ * for string keys). Type lowering collapses the JSON-Schema types onto the four
+ * `OutputType`s: `string`→`string`, `number`/`integer`→`number`,
+ * `boolean`→`boolean`, `object`/`array`→the opaque `json` (their inner shape is
+ * not addressable, #6 E7).
+ *
+ * The schema's `required` info is deliberately NOT consumed here: the immutable
+ * `PipelineVersion` keeps the whole `outputSchema` (this lowering NEVER strips it),
+ * so L4b recovers optional/nullable typing from `outputSchema.required` at runtime
+ * without re-deriving frozen rows. Lowering all properties as plain `{name,type}`
+ * is therefore lossless — the optionality lives on, one field over.
+ */
+export function lowerOutputSchema(schema: LlmOutputSchema): Output[] {
+  return Object.entries(schema.properties).map(([name, prop]) => ({
+    name,
+    type: lowerOutputPropertyType(prop.type),
+  }));
+}
+
+function lowerOutputPropertyType(type: LlmOutputSchema['properties'][string]['type']): OutputType {
+  switch (type) {
+    case 'string':
+      return 'string';
+    case 'number':
+    case 'integer':
+      return 'number';
+    case 'boolean':
+      return 'boolean';
+    case 'object':
+    case 'array':
+      return 'json';
+  }
+}
+
+/**
  * The canonical `llm_call` config.
  *
  * NON-STRICT BY DESIGN (#2 L1, planning-gate HIGH constraint): the value parsed
@@ -53,9 +238,12 @@ export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
  * `prompt` shorthand", "`system` shorthand allowed") and the back-compat mandate
  * make the shorthand load-bearing.
  *
- * Later-ticket surface still OFF the schema (kept off so nothing inert/
- * unreachable ships): `outputMode`/`outputSchema` (L4a),
- * `tools`/`toolChoice`/`mcpServers` (L10). `reasoningEffort` landed in L3 (below).
+ * `outputMode`/`outputSchema` landed in L4a (below): unlike the still-off tool
+ * surface they are NON-inert — a `structured` node's `outputSchema` LOWERS into
+ * `config.outputs` at save time (`catalog/lower.ts`), so the fields drive real
+ * behaviour the moment they ship. Still OFF the schema (kept off so nothing inert/
+ * unreachable ships): `tools`/`toolChoice`/`mcpServers` (L10). `reasoningEffort`
+ * landed in L3 (below).
  */
 export const llmCallConfigSchema = z
   .object({
@@ -87,13 +275,22 @@ export const llmCallConfigSchema = z
     // OpenAI `reasoning_effort`, Ollama `think`). `xhigh` is intentionally not
     // offered (see `reasoningEffortSchema`); an unknown level fails at save-time.
     reasoningEffort: reasoningEffortSchema.optional(),
+    // L4a output surface — `outputMode` (absent = text, back-compat) selects the
+    // node's output contract; a `structured` node's `outputSchema` (the restricted
+    // subset) lowers into `config.outputs` at save. The coupling between the two is
+    // the shared `refineOutputModeCoupling` rule (below), applied here so a
+    // structured-without-schema config fails at DISPATCH the same way it fails at
+    // save.
+    outputMode: outputModeSchema.optional(),
+    outputSchema: llmOutputSchemaSchema.optional(),
   })
   .refine((c) => (c.prompt !== undefined) !== (c.messages !== undefined), {
     message: 'llm_call requires exactly one of `prompt` or `messages`',
   })
   .refine((c) => c.messages === undefined || c.messages.some((m) => m.role !== 'system'), {
     message: 'llm_call `messages` must contain at least one non-system (user/assistant) message',
-  });
+  })
+  .superRefine(refineOutputModeCoupling);
 
 export type LlmCallConfig = z.infer<typeof llmCallConfigSchema>;
 

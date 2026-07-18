@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { getActivity } from '../registry.js';
-import { llmCallConfigSchema, normalizeLlmRequest } from '../llm-config.js';
+import {
+  llmCallConfigSchema,
+  llmOutputSchemaSchema,
+  llmStructuredOutputSurfaceSchema,
+  lowerOutputSchema,
+  normalizeLlmRequest,
+} from '../llm-config.js';
 
 describe('llmCallConfigSchema', () => {
   it('accepts the v1 `prompt` shorthand', () => {
@@ -206,5 +212,206 @@ describe('normalizeLlmRequest', () => {
     expect(normalizeLlmRequest({ prompt: 'hi', reasoningEffort: 'high' }).reasoningEffort).toBe(
       'high',
     );
+  });
+});
+
+// #2 L4a — the restricted `outputSchema` SUBSET (object root, finite named
+// scalar/json/array/object properties, closed additionalProperties, no
+// oneOf/anyOf/$ref). This is the SINGLE schema both the save-time validator
+// (`validateDoc`) and the lowering gate (`catalog/lower.ts`) parse through, so the
+// subset rules can never drift between "what saves" and "what lowers".
+describe('llmOutputSchemaSchema', () => {
+  const objSchema = (extra: Record<string, unknown> = {}) => ({
+    type: 'object',
+    properties: { category: { type: 'string' }, score: { type: 'number' } },
+    ...extra,
+  });
+
+  it('accepts a well-formed object-root subset', () => {
+    expect(llmOutputSchemaSchema.safeParse(objSchema()).success).toBe(true);
+  });
+
+  it('accepts every scalar/json/array/object property type + integer', () => {
+    const r = llmOutputSchemaSchema.safeParse({
+      type: 'object',
+      properties: {
+        s: { type: 'string' },
+        n: { type: 'number' },
+        i: { type: 'integer' },
+        b: { type: 'boolean' },
+        o: { type: 'object', properties: { inner: { type: 'string' } } },
+        a: { type: 'array', items: { type: 'string' } },
+      },
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('accepts benign root metadata (description/title) — symmetric with property-level', () => {
+    expect(
+      llmOutputSchemaSchema.safeParse({
+        type: 'object',
+        title: 'Classification',
+        description: 'the classifier result',
+        properties: { category: { type: 'string', description: 'the label' } },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects a non-object root', () => {
+    expect(
+      llmOutputSchemaSchema.safeParse({ type: 'array', items: { type: 'string' } }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an empty `properties` (a structured output must declare a field)', () => {
+    expect(llmOutputSchemaSchema.safeParse({ type: 'object', properties: {} }).success).toBe(false);
+  });
+
+  it('rejects an unsupported property type', () => {
+    expect(
+      llmOutputSchemaSchema.safeParse({ type: 'object', properties: { x: { type: 'null' } } })
+        .success,
+    ).toBe(false);
+  });
+
+  it('rejects oneOf/anyOf/$ref at the root (strict subset)', () => {
+    expect(llmOutputSchemaSchema.safeParse(objSchema({ oneOf: [] })).success).toBe(false);
+    expect(llmOutputSchemaSchema.safeParse(objSchema({ anyOf: [] })).success).toBe(false);
+    expect(llmOutputSchemaSchema.safeParse(objSchema({ $ref: '#/x' })).success).toBe(false);
+  });
+
+  it('rejects open additionalProperties but accepts an explicit `false`', () => {
+    expect(llmOutputSchemaSchema.safeParse(objSchema({ additionalProperties: true })).success).toBe(
+      false,
+    );
+    expect(
+      llmOutputSchemaSchema.safeParse(objSchema({ additionalProperties: false })).success,
+    ).toBe(true);
+  });
+
+  it('rejects a non-addressable property name (would derive an unaddressable output)', () => {
+    expect(
+      llmOutputSchemaSchema.safeParse({
+        type: 'object',
+        properties: { 'my-field': { type: 'string' } },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects a `required` entry that names no declared property', () => {
+    expect(
+      llmOutputSchemaSchema.safeParse(objSchema({ required: ['category', 'ghost'] })).success,
+    ).toBe(false);
+    expect(llmOutputSchemaSchema.safeParse(objSchema({ required: ['category'] })).success).toBe(
+      true,
+    );
+  });
+});
+
+describe('lowerOutputSchema', () => {
+  it('maps top-level properties to Output[] with type lowering, preserving order', () => {
+    const outputs = lowerOutputSchema({
+      type: 'object',
+      properties: {
+        category: { type: 'string' },
+        count: { type: 'integer' },
+        score: { type: 'number' },
+        ok: { type: 'boolean' },
+        meta: { type: 'object', properties: { a: { type: 'string' } } },
+        tags: { type: 'array', items: { type: 'string' } },
+      },
+    });
+    // integer→number, object/array→json; insertion order preserved.
+    expect(outputs).toEqual([
+      { name: 'category', type: 'string' },
+      { name: 'count', type: 'number' },
+      { name: 'score', type: 'number' },
+      { name: 'ok', type: 'boolean' },
+      { name: 'meta', type: 'json' },
+      { name: 'tags', type: 'json' },
+    ]);
+  });
+
+  it('lowers a property literally named `text` to a single output (no catalog-default collision)', () => {
+    // The catalog default `[text, stopReason]` is OVERWRITTEN, not merged, by the
+    // lowering pass — so a structured field named `text` is the sole `text` output.
+    expect(lowerOutputSchema({ type: 'object', properties: { text: { type: 'string' } } })).toEqual(
+      [{ name: 'text', type: 'string' }],
+    );
+  });
+});
+
+// #2 L4a — the outputMode↔outputSchema COUPLING surface, the exact slice both the
+// lowering pass and `validateDoc` parse from a node's config.
+describe('llmStructuredOutputSurfaceSchema', () => {
+  const schema = { type: 'object', properties: { x: { type: 'string' } } };
+
+  it('accepts a text-mode / legacy node (both fields absent — back-compat)', () => {
+    expect(llmStructuredOutputSurfaceSchema.safeParse({}).success).toBe(true);
+    expect(llmStructuredOutputSurfaceSchema.safeParse({ outputMode: 'text' }).success).toBe(true);
+  });
+
+  it('accepts a structured node with a valid outputSchema', () => {
+    expect(
+      llmStructuredOutputSurfaceSchema.safeParse({ outputMode: 'structured', outputSchema: schema })
+        .success,
+    ).toBe(true);
+  });
+
+  it('rejects structured WITHOUT an outputSchema', () => {
+    expect(llmStructuredOutputSurfaceSchema.safeParse({ outputMode: 'structured' }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects an outputSchema WITHOUT structured mode (text-mode stray schema)', () => {
+    expect(llmStructuredOutputSurfaceSchema.safeParse({ outputSchema: schema }).success).toBe(
+      false,
+    );
+    expect(
+      llmStructuredOutputSurfaceSchema.safeParse({ outputMode: 'text', outputSchema: schema })
+        .success,
+    ).toBe(false);
+  });
+
+  it('ignores the rest of a real node.config (non-strict — config carries many keys)', () => {
+    expect(
+      llmStructuredOutputSurfaceSchema.safeParse({
+        prompt: 'hi',
+        outputs: [{ name: 'text', type: 'string' }],
+        outputMode: 'structured',
+        outputSchema: schema,
+      }).success,
+    ).toBe(true);
+  });
+});
+
+// #2 L4a — the coupling rule is shared with the DISPATCH schema so a structured
+// node fails the same way whether checked at save or at dispatch.
+describe('llmCallConfigSchema — L4a structured-output coupling', () => {
+  it('accepts a legacy text config unchanged (no outputMode/outputSchema)', () => {
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi' }).success).toBe(true);
+  });
+
+  it('accepts a structured config with a valid schema', () => {
+    expect(
+      llmCallConfigSchema.safeParse({
+        prompt: 'classify this',
+        outputMode: 'structured',
+        outputSchema: { type: 'object', properties: { category: { type: 'string' } } },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects structured-without-schema and schema-without-structured at dispatch too', () => {
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi', outputMode: 'structured' }).success).toBe(
+      false,
+    );
+    expect(
+      llmCallConfigSchema.safeParse({
+        prompt: 'hi',
+        outputSchema: { type: 'object', properties: { x: { type: 'string' } } },
+      }).success,
+    ).toBe(false);
   });
 });

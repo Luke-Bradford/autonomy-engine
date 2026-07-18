@@ -289,6 +289,139 @@ describe('InvalidPipelineDocError message (#496)', () => {
   });
 });
 
+describe('pipeline-versions repo — L4a structured llm_call lowering (#2 L4a)', () => {
+  function structuredInput(
+    pipelineId: string,
+    outputSchema: unknown,
+    extraNodeConfig: Record<string, unknown> = {},
+    edges: NewPipelineVersion['edges'] = [],
+    nodes: NewPipelineVersion['nodes'] = [],
+  ): NewPipelineVersion {
+    return {
+      pipelineId,
+      params: [],
+      outputs: [],
+      nodes: [
+        {
+          id: 'clf',
+          type: 'llm_call',
+          config: {
+            prompt: 'classify this',
+            outputMode: 'structured',
+            outputSchema,
+            ...extraNodeConfig,
+          },
+          position: { x: 0, y: 0 },
+        },
+        ...nodes,
+      ],
+      edges,
+      catalogVersion: CATALOG_VERSION,
+    };
+  }
+
+  it('DERIVES config.outputs from a structured outputSchema and pins it in the immutable version', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const v = createPipelineVersion(
+      db,
+      structuredInput(pipeline.id, {
+        type: 'object',
+        properties: { category: { type: 'string' }, score: { type: 'number' } },
+      }),
+    );
+    const node = v.nodes.find((n) => n.id === 'clf')!;
+    expect(node.config['outputs']).toEqual([
+      { name: 'category', type: 'string' },
+      { name: 'score', type: 'number' },
+    ]);
+    // Re-read the immutable row: the derived contract AND the source outputSchema
+    // are both persisted (L4a never strips outputSchema — L4b recovers optionality).
+    const reread = getPipelineVersion(db, v.id)!.nodes.find((n) => n.id === 'clf')!;
+    expect(reread.config['outputs']).toEqual(node.config['outputs']);
+    expect(reread.config['outputSchema']).toBeDefined();
+  });
+
+  it('OVERWRITES a stale [text, stopReason] seed rather than merging (UI-seed path)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const v = createPipelineVersion(
+      db,
+      structuredInput(
+        pipeline.id,
+        { type: 'object', properties: { category: { type: 'string' } } },
+        {
+          outputs: [
+            { name: 'text', type: 'string' },
+            { name: 'stopReason', type: 'string' },
+          ],
+        },
+      ),
+    );
+    expect(v.nodes.find((n) => n.id === 'clf')!.config['outputs']).toEqual([
+      { name: 'category', type: 'string' },
+    ]);
+  });
+
+  it('lets a downstream ${nodes.clf.output.category} bind to the DERIVED contract (validateRefs)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    // A consumer node referencing the derived field must pass validateRefs — the
+    // schema→outputs→ref binding is the whole point of lowering before validation.
+    expect(() =>
+      createPipelineVersion(
+        db,
+        structuredInput(
+          pipeline.id,
+          { type: 'object', properties: { category: { type: 'string' } } },
+          {},
+          [{ id: 'e', from: 'clf', to: 'use', on: 'success' }],
+          [
+            {
+              id: 'use',
+              type: 'agent_task',
+              config: { task: '${nodes.clf.output.category}' },
+              position: { x: 1, y: 0 },
+            },
+          ],
+        ),
+      ),
+    ).not.toThrow();
+  });
+
+  it('REFUSES a ref to a field the schema does not declare (nothing persists)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    expect(() =>
+      createPipelineVersion(
+        db,
+        structuredInput(
+          pipeline.id,
+          { type: 'object', properties: { category: { type: 'string' } } },
+          {},
+          [{ id: 'e', from: 'clf', to: 'use', on: 'success' }],
+          [
+            {
+              id: 'use',
+              type: 'agent_task',
+              config: { task: '${nodes.clf.output.ghost}' },
+              position: { x: 1, y: 0 },
+            },
+          ],
+        ),
+      ),
+    ).toThrow(InvalidPipelineDocError);
+  });
+
+  it('REFUSES an invalid outputSchema at save (no garbage contract persists)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    expect(() =>
+      createPipelineVersion(db, structuredInput(pipeline.id, { type: 'object', properties: {} })),
+    ).toThrow(InvalidPipelineDocError);
+  });
+});
+
 describe('pipeline-versions repo', () => {
   it('creates version 1 for a brand-new pipeline', () => {
     const { db } = freshDb();

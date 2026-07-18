@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { lowerNodeOutputs } from '../lower.js';
+import { lowerLlmStructuredOutputs, lowerNodeOutputs } from '../lower.js';
 import { getActivity } from '../registry.js';
+import { LLM_CALL_ACTIVITY_TYPE } from '../types.js';
 import type { Node } from '../../schemas/pipeline.js';
 
 function node(id: string, type: string, config: Record<string, unknown> = {}): Node {
@@ -98,5 +99,96 @@ describe('lowerNodeOutputs', () => {
     const [lowered] = lowerNodeOutputs([node('a', 'http_request', { url: 'https://x' })]);
     expect(lowered!.config['url']).toBe('https://x');
     expect(lowered!.config['outputs']).toBeDefined();
+  });
+});
+
+describe('lowerLlmStructuredOutputs (#2 L4a)', () => {
+  const schema = {
+    type: 'object',
+    properties: { category: { type: 'string' }, score: { type: 'number' } },
+  };
+
+  it('derives config.outputs from a structured llm_call outputSchema', () => {
+    const [lowered] = lowerLlmStructuredOutputs([
+      node('a', LLM_CALL_ACTIVITY_TYPE, {
+        prompt: 'classify',
+        outputMode: 'structured',
+        outputSchema: schema,
+      }),
+    ]);
+    expect(lowered!.config['outputs']).toEqual([
+      { name: 'category', type: 'string' },
+      { name: 'score', type: 'number' },
+    ]);
+  });
+
+  it('OVERWRITES a stale catalog-default seed ([text, stopReason]) — the UI-seed path', () => {
+    // The web palette seeds `[text, stopReason]` on node creation; switching to
+    // structured mode + authoring an outputSchema must REPLACE that stale contract,
+    // not merge with it (the whole reason the overwrite exception exists).
+    const [lowered] = lowerLlmStructuredOutputs([
+      node('a', LLM_CALL_ACTIVITY_TYPE, {
+        prompt: 'classify',
+        outputMode: 'structured',
+        outputSchema: schema,
+        outputs: [
+          { name: 'text', type: 'string' },
+          { name: 'stopReason', type: 'string' },
+        ],
+      }),
+    ]);
+    expect(lowered!.config['outputs']).toEqual([
+      { name: 'category', type: 'string' },
+      { name: 'score', type: 'number' },
+    ]);
+  });
+
+  it('leaves a TEXT-mode (or legacy) llm_call untouched — lowerNodeOutputs seeds it', () => {
+    const textNode = node('a', LLM_CALL_ACTIVITY_TYPE, { prompt: 'hi' });
+    const [lowered] = lowerLlmStructuredOutputs([textNode]);
+    expect(lowered!.config['outputs']).toBeUndefined();
+    expect(lowered).toBe(textNode); // unchanged node returned as-is
+  });
+
+  it('leaves a non-llm_call node untouched', () => {
+    const http = node('a', 'http_request', { outputMode: 'structured', outputSchema: schema });
+    const [lowered] = lowerLlmStructuredOutputs([http]);
+    expect(lowered).toBe(http);
+  });
+
+  it('does NOT lower an INVALID outputSchema (leaves outputs as-is for validateDoc to reject)', () => {
+    // A corrupt/absent-schema structured node must not lower to garbage; skipping
+    // it leaves any prior contract intact and lets the save-time validator raise a
+    // readable diagnostic (→ 400), so nothing bad ever persists.
+    const bad = node('a', LLM_CALL_ACTIVITY_TYPE, {
+      prompt: 'x',
+      outputMode: 'structured',
+      outputSchema: { type: 'object', properties: {} }, // empty → invalid subset
+    });
+    const [lowered] = lowerLlmStructuredOutputs([bad]);
+    expect(lowered!.config['outputs']).toBeUndefined();
+    expect(lowered).toBe(bad);
+  });
+
+  it('composes with lowerNodeOutputs: structured derives, text gets the catalog default', () => {
+    const [structured, text] = lowerNodeOutputs(
+      lowerLlmStructuredOutputs([
+        node('s', LLM_CALL_ACTIVITY_TYPE, {
+          prompt: 'classify',
+          outputMode: 'structured',
+          outputSchema: schema,
+        }),
+        node('t', LLM_CALL_ACTIVITY_TYPE, { prompt: 'hi' }),
+      ]),
+    );
+    expect(structured!.config['outputs']).toEqual([
+      { name: 'category', type: 'string' },
+      { name: 'score', type: 'number' },
+    ]);
+    // text-mode node: lowerNodeOutputs seeds the catalog default.
+    expect(text!.config['outputs']).toEqual([
+      { name: 'text', type: 'string' },
+      { name: 'stopReason', type: 'string' },
+    ]);
   });
 });

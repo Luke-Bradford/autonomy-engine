@@ -34,6 +34,19 @@ export const ACTIVITY_CATEGORIES = ['general', 'ai', 'control'] as const;
 export type ActivityCategory = (typeof ACTIVITY_CATEGORIES)[number];
 
 /**
+ * The `Node.type` of the `llm_call` execution activity (#2 L-series). A named
+ * constant, not a magic string, because — like the control types below — it is a
+ * TYPED identifier read structurally in agreeing places: the catalog entry
+ * (`registry.ts`), the L4a save-time structured-output rule (`validateDoc`), and
+ * the L4a lowering pass (`catalog/lower.ts`) that derives a structured node's
+ * `config.outputs` from its `outputSchema`. A rename must reach all of them, so
+ * the string lives once. (Pre-L4a it was an incidental literal in `registry.ts`
+ * only; L4a's second and third readers are what make the SSOT constant earn its
+ * keep.)
+ */
+export const LLM_CALL_ACTIVITY_TYPE = 'llm_call';
+
+/**
  * The `Node.type` of the `if` control activity (#4 A1). A named constant, not a
  * magic string, because it is a TYPED identifier read structurally in THREE
  * places that must agree: the reducer's control-dispatch discriminant

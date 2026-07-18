@@ -20,11 +20,13 @@ import {
   IF_ACTIVITY_TYPE,
   IF_BRANCH_TRUE,
   IF_BRANCH_FALSE,
+  LLM_CALL_ACTIVITY_TYPE,
   SWITCH_ACTIVITY_TYPE,
   SWITCH_DEFAULT_BRANCH,
   WAIT_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
 } from '../catalog/types.js';
+import { llmStructuredOutputSurfaceSchema } from '../catalog/llm-config.js';
 import { SecretRefSchema, isSecretRef } from '../schemas/secret-ref.js';
 import type { EvalIn, FnSpec, SigType } from './functions.js';
 import {
@@ -1490,6 +1492,8 @@ export function validateDoc(
     if (node.type === WEBHOOK_ACTIVITY_TYPE) validateWebhookConfig(node, errors);
     // #4 A9 — an `execute_pipeline` MUST carry a `Node.call` (save-time half).
     if (node.type === EXECUTE_PIPELINE_ACTIVITY_TYPE) validateExecutePipelineConfig(node, errors);
+    // #2 L4a — an `llm_call`'s structured output surface (outputMode/outputSchema).
+    if (node.type === LLM_CALL_ACTIVITY_TYPE) validateLlmCallOutput(node, errors);
   }
 
   // Node-only forward reachability + the container index, for the back-edge
@@ -1890,6 +1894,33 @@ function validateExecutePipelineConfig(node: Node, errors: string[]): void {
       `node.${node.id}: an execute_pipeline needs a call config ` +
         '(target pipeline version + params)',
     );
+  }
+}
+
+/**
+ * #2 L4a — the save-time rule for a `llm_call`'s structured OUTPUT surface
+ * (`outputMode` + `outputSchema`). Parses the `{outputMode, outputSchema}` SLICE
+ * of the node config through `llmStructuredOutputSurfaceSchema` — the SAME schema
+ * the lowering pass (`catalog/lower.ts`) gates on — and turns any subset/coupling
+ * issue into a readable diagnostic the authoring UI can show. Because lowering and
+ * this validator parse through ONE schema, a schema that lowers is exactly a
+ * schema that validates, and vice versa (no drift between "what saves" and "what
+ * lowers").
+ *
+ * This checks ONLY the L4a surface; the rest of `llm_call` config
+ * (prompt/messages/sampling) is intentionally NOT re-validated here (it never was
+ * at save time — the adapters validate the whole config at dispatch), so L4a adds
+ * no back-compat risk to existing text nodes.
+ */
+function validateLlmCallOutput(node: Node, errors: string[]): void {
+  const parsed = llmStructuredOutputSurfaceSchema.safeParse(node.config);
+  if (parsed.success) return;
+  for (const issue of parsed.error.issues) {
+    // Every issue path starts at the `outputSchema`/`outputMode` field (the two
+    // keys this slice picks), so the dotted path already names the surface — no
+    // hardcoded prefix needed.
+    const path = issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
+    errors.push(`node.${node.id}: ${path}${issue.message}`);
   }
 }
 

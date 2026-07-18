@@ -70,6 +70,16 @@
 // `webhook` node carries an artifact an older build mis-runs (`UNKNOWN_ACTIVITY` /
 // an inert unrouted control node), so it must refuse to import. Stamping 10
 // enforces that (`portability/envelope.ts`), the rule catalog/types.ts states.
+// 12 (#2 L4a): `llm_call` STRUCTURED output. A `structured` node declares an
+// `outputSchema` (a restricted subset) that LOWERS at save into `config.outputs`,
+// so a downstream `${nodes.x.output.category}` binds to a typed field. A pre-L4a
+// build ignores `outputMode`/`outputSchema` entirely and runs the node in TEXT
+// mode — producing `{text, stopReason}` — so the reducer's `validateOutputs`
+// (`engine/outputs.ts`) then FAILS the node on `missing declared output
+// 'category'` against the persisted `config.outputs`. That is an ACTIVE
+// node-failure mis-run (not merely an empty output), the same bump-rule shape as
+// A16, so it bumps 11→12: a pre-12 build must refuse an L4a export at import
+// (`portability/envelope.ts`) rather than fail the structured node at run time.
 // 11 (#4 A16): `webhook` typed OUTPUT. No new TYPE and no new catalog-entry field
 // (webhook outputs are author-declared via the generic F13 `config.outputs`, like
 // `execute_pipeline`'s child-projected outputs) — but this is NOT the A9 structural
@@ -82,5 +92,5 @@
 // exports were IDENTICALLY runnable on older builds). Stamping 11 makes a 10-build
 // refuse an A16 export at import (`portability/envelope.ts`) rather than silently
 // leaving the typed output empty at run time.
-export const CATALOG_VERSION = 11;
+export const CATALOG_VERSION = 12;
 export const SCHEMA_VERSION = 1;

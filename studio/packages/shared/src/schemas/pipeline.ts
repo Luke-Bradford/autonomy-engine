@@ -61,6 +61,24 @@ export type Output = z.infer<typeof OutputSchema>;
 const NODE_OUTPUT_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /**
+ * Whether `name` is addressable as a `${nodes.<id>.output.<name>}` reference —
+ * i.e. a single identifier segment (`NODE_OUTPUT_NAME_RE`). `NodeOutputsSchema`
+ * below is the primary enforcer, but this predicate is EXPORTED for one other
+ * legitimate consumer: #2 L4a's `outputSchema` subset validator
+ * (`catalog/llm-config.ts`), which must apply the SAME rule to a structured
+ * schema's top-level PROPERTY names — those names lower into `config.outputs`, so
+ * an unaddressable property (`my-field`) would derive an unaddressable output and
+ * be rejected downstream by `NodeOutputsSchema` with a confusing `config.outputs`
+ * error the author never wrote. Enforcing it at the schema door instead keeps
+ * "declarable" and "referenceable" the same set at BOTH producers, from one
+ * predicate (the SSOT reason `refuseDuplicateNames` was extracted for #458). The
+ * regex itself stays unexported so the rule has exactly one spelling.
+ */
+export function isAddressableOutputName(name: string): boolean {
+  return NODE_OUTPUT_NAME_RE.test(name);
+}
+
+/**
  * A `superRefine` body that refuses duplicate `name`s in a list of named
  * declarations. A duplicate NAME is state corruption, not a style nit: every
  * consumer indexes these lists by name and so silently COLLAPSES a duplicate
@@ -102,7 +120,7 @@ function refuseDuplicateNames(label: string, scope: string) {
 const refuseDuplicateNodeOutputNames = refuseDuplicateNames('output', 'within a node');
 const NodeOutputsSchema = z.array(OutputSchema).superRefine((outputs, ctx) => {
   for (const [i, o] of outputs.entries()) {
-    if (!NODE_OUTPUT_NAME_RE.test(o.name)) {
+    if (!isAddressableOutputName(o.name)) {
       ctx.addIssue({
         code: 'custom',
         path: [i, 'name'],
