@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   mkdir,
   mkdtemp,
+  open,
   readdir,
   readFile,
   realpath,
@@ -12,13 +13,17 @@ import {
 } from 'node:fs/promises';
 
 // Mock `node:fs/promises` but pass every export straight through to the real
-// implementation — only `rename` becomes a spy (a real-behaving `vi.fn`) so a
-// single test can inject an `EXDEV` rejection to exercise `doMove`'s
-// cross-filesystem branch, which a single-temp-dir test cannot stage.
+// implementation — only `rename` and `open` become spies (real-behaving
+// `vi.fn`s). A single test injects an `EXDEV` rejection through `rename` to
+// exercise `doMove`'s cross-filesystem branch, and the atomic-write tests wrap
+// `open` once to return a REAL handle whose `sync`/`close` rejects — both are
+// modes a single-temp-dir test cannot otherwise stage. Every other call (and
+// every other test) still hits the real filesystem.
 vi.mock('node:fs/promises', async (importActual) => {
   const actual = await importActual<typeof import('node:fs/promises')>();
-  return { ...actual, rename: vi.fn(actual.rename) };
+  return { ...actual, rename: vi.fn(actual.rename), open: vi.fn(actual.open) };
 });
+import type { FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fsAdapter } from '../fs.js';
@@ -221,6 +226,61 @@ describe('fs connector — failure classification', () => {
     );
     expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
   });
+
+  // #575 — atomicReplace fsyncs then CLOSES the temp BEFORE the rename and lets a
+  // sync/close error PROPAGATE (unlike the read/cleanup path's quiet close): a
+  // delayed-write/ENOSPC failure surfaced only at `sync()`/`close()` (a real
+  // POSIX/NFS mode) means the temp is INCOMPLETE, so the write must FAIL and NOT
+  // rename a corrupt temp over the target. We stage that mode by wrapping `open`
+  // once so the returned REAL handle's `sync`/`close` rejects — everything else
+  // (temp creation, write, cleanup) is real filesystem I/O. Each test seeds the
+  // target with known content first and asserts it is UNCHANGED: the regression
+  // this guards is precisely "renamed a corrupt temp over valid data", which a
+  // non-pre-existing target could not detect.
+  // Both failure modes (sync-time vs close-time) share identical
+  // seed/invoke/assert scaffolding; only the throwing method on the real handle
+  // differs. `install` stages that one difference on the handle the wrapped
+  // `open` returns; everything else (temp creation, write, cleanup) is real I/O.
+  it.each<{ name: string; install: (fh: FileHandle) => void }>([
+    {
+      name: 'fh.sync() throws',
+      install: (fh) => {
+        fh.sync = vi.fn(async () => {
+          throw Object.assign(new Error('simulated fsync failure'), { code: 'EIO' });
+        });
+      },
+    },
+    {
+      name: 'fh.close() throws before rename',
+      install: (fh) => {
+        const realClose = fh.close.bind(fh);
+        fh.close = vi.fn(async () => {
+          // Free the real fd first (so the test leaks nothing), THEN surface the
+          // close-time error the way a delayed-write flush failure would.
+          await realClose();
+          throw Object.assign(new Error('simulated close-time flush failure'), { code: 'EIO' });
+        });
+      },
+    },
+  ])(
+    'a write whose $name propagates it: no false success, target untouched, temp cleaned',
+    async ({ install }) => {
+      const realFs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      await writeFile(join(root, 'out.txt'), 'original', 'utf8');
+      vi.mocked(open).mockImplementationOnce(async (...args: Parameters<typeof realFs.open>) => {
+        const fh = await realFs.open(...args);
+        install(fh);
+        return fh;
+      });
+      const events = await drain(
+        invoke(ctx('file_write', { path: 'out.txt', content: 'CORRUPT' })),
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0]!.type).toBe('failed'); // NOT a false `succeeded`
+      expect(await readFile(join(root, 'out.txt'), 'utf8')).toBe('original'); // never renamed over
+      expect(await readdir(root)).toEqual(['out.txt']); // incomplete temp unlinked
+    },
+  );
 
   it('an aborted signal yields cancelled', async () => {
     const ac = new AbortController();
