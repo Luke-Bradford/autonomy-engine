@@ -14,10 +14,11 @@ import {
   normalizeLlmRequest,
   parseJsonBody,
   resolveModel,
-  structuredValidationFailure,
+  runStructuredWithRepair,
+  structuredEcho,
   validateStructuredOutput,
 } from './llm-shared.js';
-import type { NoCompletionReason } from './llm-shared.js';
+import type { LlmTurn, NoCompletionReason } from './llm-shared.js';
 
 /** The forced-tool name a structured `llm_call` requires Anthropic to call. */
 const STRUCTURED_TOOL_NAME = 'structured_output';
@@ -177,10 +178,99 @@ export const anthropicAdapter: ConnectorAdapter = {
       input.data,
     );
     const baseUrl = (config.data.baseUrl ?? DEFAULT_ANTHROPIC_BASE_URL).replace(/\/+$/, '');
-    // The Messages API takes `system` as a top-level param (not a message), so
-    // the normalized system string lands here; sampling maps to Anthropic's
-    // names (`top_p`, `stop_sequences`), and it has no `seed`, so that knob is
-    // dropped for this provider (documented asymmetry, #2 L1).
+    const url = `${baseUrl}/v1/messages`;
+    const headers = {
+      'x-api-key': secret,
+      'anthropic-version': config.data.anthropicVersion ?? DEFAULT_ANTHROPIC_VERSION,
+    };
+    const timeoutMs = config.data.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS;
+
+    // #2 L4b/L4c — STRUCTURED output via FORCED tool use: one tool whose
+    // `input_schema` is the node's `outputSchema`, forced with `tool_choice`. This
+    // is the robust, model-agnostic Anthropic structured mechanism (the newer
+    // `output_config.format` is model-gated), and it makes a `tool_use`-only
+    // response the COMPLETION rather than a no-completion (superseding the text-mode
+    // note in `extractText`). A forced `tool_choice` precludes the adaptive-thinking
+    // reasoning surface on the Messages API, so structured mode intentionally does
+    // NOT emit `thinking`/`output_config` even when `reasoningEffort` is set (the
+    // two are mutually exclusive here; reasoning stays available in text mode and on
+    // the other providers). L4c wraps the call in a bounded internal repair loop:
+    // `runStructuredWithRepair` rebuilds the body from the (possibly repair-extended)
+    // turns each call, meters every billed call, re-prompts on an invalid/absent
+    // forced-tool result, and terminalizes `permanent` only once repairs run out —
+    // all inside ONE attempt.
+    if (structuredOutput !== undefined) {
+      // The Messages API takes `system` as a top-level param (not a message) and
+      // has no `seed` (dropped, documented #2 L1); only `messages` changes across
+      // repair calls, so the static scaffold is rebuilt with the passed turns.
+      const buildStructuredBody = (turns: LlmTurn[]): Record<string, unknown> => {
+        const body: Record<string, unknown> = {
+          model,
+          max_tokens: sampling.maxTokens ?? DEFAULT_MAX_TOKENS,
+          messages: turns,
+          tools: [
+            {
+              name: STRUCTURED_TOOL_NAME,
+              description: 'Emit the required structured result as this tool call.',
+              input_schema: structuredOutput,
+            },
+          ],
+          tool_choice: { type: 'tool', name: STRUCTURED_TOOL_NAME },
+        };
+        if (system !== undefined) body.system = system;
+        if (sampling.temperature !== undefined) body.temperature = sampling.temperature;
+        if (sampling.topP !== undefined) body.top_p = sampling.topP;
+        if (sampling.stop !== undefined) body.stop_sequences = sampling.stop;
+        return body;
+      };
+      yield* runStructuredWithRepair('anthropic_api', messages, async (turns) => {
+        const res = await llmPost(ctx, url, headers, buildStructuredBody(turns), timeoutMs);
+        if (res.type === 'failed') return { type: 'terminal', event: res.event };
+        if (res.status < 200 || res.status >= 300) {
+          return {
+            type: 'terminal',
+            event: {
+              type: 'failed',
+              kind: classifyHttpStatus(res.status),
+              error: `anthropic_api HTTP ${res.status}: ${errorExcerpt(res.bodyText)}`,
+            },
+          };
+        }
+        const body = parseJsonBody(res.bodyText);
+        if (!body.ok) return { type: 'terminal', event: body.event };
+        // Meter FIRST (a 2xx billed, even if the structured payload is invalid —
+        // spec: `activity.metered` on failed-but-billed calls); the loop yields it
+        // before deciding succeed / repair / terminal.
+        const u = (body.json as { usage?: { input_tokens?: unknown; output_tokens?: unknown } })
+          .usage;
+        const usage = meterUsage('anthropic_api', model, u?.input_tokens, u?.output_tokens);
+        const tool = findStructuredToolInput(body.json);
+        // A missing forced-tool block is now REPAIRABLE (fold into an invalid
+        // result) rather than an immediate terminal — a model that answered with
+        // text instead of the tool may correct on a re-prompt.
+        if (!tool.found) {
+          return {
+            type: 'validated',
+            usage,
+            result: {
+              ok: false,
+              reason: `response carried no ${STRUCTURED_TOOL_NAME} tool_use block`,
+            },
+            echo: structuredEcho(undefined),
+          };
+        }
+        return {
+          type: 'validated',
+          usage,
+          result: validateStructuredOutput(structuredOutput, tool.input),
+          echo: structuredEcho(tool.input),
+        };
+      });
+      return;
+    }
+
+    // TEXT path. `system` is a top-level param; sampling maps to Anthropic's names
+    // (`top_p`, `stop_sequences`); no `seed` (dropped, #2 L1).
     const requestBody: Record<string, unknown> = {
       model,
       max_tokens: sampling.maxTokens ?? DEFAULT_MAX_TOKENS,
@@ -193,51 +283,17 @@ export const anthropicAdapter: ConnectorAdapter = {
     // #2 L3 — reasoning effort. The MODERN Messages-API surface is adaptive
     // thinking + `output_config.effort`; the older `thinking:{enabled,budget_tokens}`
     // is REMOVED (HTTP 400) on every current model, including the DEFAULT_MODEL
-    // `claude-opus-4-8` — so the spec's "extended-thinking budget" prose (dated
-    // 2026-07-14) is lowered to the current wire mechanism. Both keys are emitted
-    // together: `output_config.effort` sets the depth, `thinking:{adaptive}` turns
-    // reasoning ON (omitting it leaves Opus 4.8 non-thinking, making effort inert).
-    // CAVEAT: thinking tokens count against `max_tokens` (default 1024) — an author
-    // pairing a high effort with a low `maxTokens` may get a truncated/short answer;
-    // raise `maxTokens` accordingly. Only fires when the author opted in, so a node
-    // with no `reasoningEffort` is byte-identical to a pre-L3 request. (An older
-    // model that predates `output_config`/adaptive rejects this with a clear
-    // provider 400 — a genuine permanent failure, not a silent wrong result.)
-    //
-    // #2 L4b — STRUCTURED output via FORCED tool use: one tool whose `input_schema`
-    // is the node's `outputSchema`, forced with `tool_choice`. This is the robust,
-    // model-agnostic Anthropic structured mechanism (the newer `output_config.format`
-    // is model-gated), and it makes a `tool_use`-only response the COMPLETION rather
-    // than a no-completion (superseding the text-mode note in `extractText`). A
-    // forced `tool_choice` precludes the adaptive-thinking reasoning surface on the
-    // Messages API, so structured mode intentionally does NOT emit `thinking`/
-    // `output_config` even when `reasoningEffort` is set — the two are mutually
-    // exclusive here (documented tradeoff; reasoning stays available in text mode
-    // and on the other providers' structured mode).
-    if (structuredOutput !== undefined) {
-      requestBody.tools = [
-        {
-          name: STRUCTURED_TOOL_NAME,
-          description: 'Emit the required structured result as this tool call.',
-          input_schema: structuredOutput,
-        },
-      ];
-      requestBody.tool_choice = { type: 'tool', name: STRUCTURED_TOOL_NAME };
-    } else if (reasoningEffort !== undefined) {
+    // `claude-opus-4-8`. Both keys are emitted together: `output_config.effort` sets
+    // the depth, `thinking:{adaptive}` turns reasoning ON (omitting it leaves Opus
+    // 4.8 non-thinking, making effort inert). CAVEAT: thinking tokens count against
+    // `max_tokens` (default 1024). Only fires when the author opted in, so a node
+    // with no `reasoningEffort` is byte-identical to a pre-L3 request.
+    if (reasoningEffort !== undefined) {
       requestBody.thinking = { type: 'adaptive' };
       requestBody.output_config = { effort: reasoningEffort };
     }
 
-    const result = await llmPost(
-      ctx,
-      `${baseUrl}/v1/messages`,
-      {
-        'x-api-key': secret,
-        'anthropic-version': config.data.anthropicVersion ?? DEFAULT_ANTHROPIC_VERSION,
-      },
-      requestBody,
-      config.data.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS,
-    );
+    const result = await llmPost(ctx, url, headers, requestBody, timeoutMs);
     if (result.type === 'failed') {
       yield result.event;
       return;
@@ -255,33 +311,6 @@ export const anthropicAdapter: ConnectorAdapter = {
       yield parsed.event;
       return;
     }
-    const usage = (parsed.json as { usage?: { input_tokens?: unknown; output_tokens?: unknown } })
-      .usage;
-    // #2 L4b — STRUCTURED path. Meter FIRST (a 2xx billed, even if the structured
-    // payload is invalid — spec: `activity.metered` on failed calls that still
-    // bill), THEN extract + strict-validate the forced-tool `input`. A missing
-    // block or a schema failure terminalizes `permanent` (L4c adds repair).
-    if (structuredOutput !== undefined) {
-      yield {
-        type: 'metered',
-        usage: meterUsage('anthropic_api', model, usage?.input_tokens, usage?.output_tokens),
-      };
-      const tool = findStructuredToolInput(parsed.json);
-      if (!tool.found) {
-        yield structuredValidationFailure(
-          'anthropic_api',
-          `response carried no ${STRUCTURED_TOOL_NAME} tool_use block`,
-        );
-        return;
-      }
-      const validated = validateStructuredOutput(structuredOutput, tool.input);
-      if (!validated.ok) {
-        yield structuredValidationFailure('anthropic_api', validated.reason);
-        return;
-      }
-      yield { type: 'succeeded', outputs: validated.value };
-      return;
-    }
     const extracted = extractText(parsed.json);
     if ('reason' in extracted) {
       yield noCompletionFailure('anthropic_api', extracted.reason);
@@ -289,8 +318,9 @@ export const anthropicAdapter: ConnectorAdapter = {
     }
     // #2 L2 — capture the metering fact before the terminal event. The Messages
     // API reports `usage.{input_tokens, output_tokens}`; `meterUsage` records
-    // whatever is a valid non-negative integer and flags completeness. (`usage`
-    // is read once above, before the structured branch.)
+    // whatever is a valid non-negative integer and flags completeness.
+    const usage = (parsed.json as { usage?: { input_tokens?: unknown; output_tokens?: unknown } })
+      .usage;
     yield {
       type: 'metered',
       usage: meterUsage('anthropic_api', model, usage?.input_tokens, usage?.output_tokens),

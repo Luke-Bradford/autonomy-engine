@@ -514,28 +514,89 @@ describe('anthropicAdapter.runActivity — structured output (#2 L4b)', () => {
     expect(succeeded(events).outputs).toEqual({ category: 'feature' });
   });
 
-  it('fails permanent (but still meters) on an out-of-enum value (#592)', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      fakeResponse(200, toolResponse({ category: 'question' })),
-    );
+  it('fails permanent (metering BOTH repair calls) on a persistently out-of-enum value (#592)', async () => {
+    // #2 L4c — an out-of-enum value now triggers ONE internal repair; both the
+    // original and the repair call bill, and only the exhausted loop terminalizes.
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(fakeResponse(200, toolResponse({ category: 'question' })));
     const events = await drain(
       anthropicAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'),
     );
-    expect(metered(events)).toBeDefined();
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(events.filter((e) => e.type === 'metered')).toHaveLength(2);
     expect(failed(events)).toMatchObject({ kind: 'permanent' });
     expect(failed(events).error).toContain('enum');
   });
 
-  it('fails permanent on a response with no structured_output tool_use block', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      fakeResponse(200, { content: [{ type: 'text', text: 'sorry' }], usage: {} }),
-    );
+  it('fails permanent (metering both calls) when no structured_output block is ever returned', async () => {
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        fakeResponse(200, { content: [{ type: 'text', text: 'sorry' }], usage: {} }),
+      );
     const events = await drain(
       anthropicAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'),
     );
-    // meter-first: a 2xx billed even though it carried no usable structured block.
-    expect(metered(events)).toBeDefined();
+    // a missing forced-tool block is now repairable — still terminalizes once
+    // repairs are exhausted, and every 2xx billed.
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(events.filter((e) => e.type === 'metered')).toHaveLength(2);
     expect(failed(events)).toMatchObject({ kind: 'permanent' });
     expect(failed(events).error).toContain('tool_use');
+  });
+
+  it('#2 L4c — repairs an invalid FIRST response then succeeds (two metered, valid output)', async () => {
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, toolResponse({ category: 'question' }))) // out-of-enum
+      .mockResolvedValueOnce(fakeResponse(200, toolResponse({ category: 'bug' }))); // corrected
+    const events = await drain(
+      anthropicAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'),
+    );
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(events.filter((e) => e.type === 'metered')).toHaveLength(2);
+    expect(succeeded(events).outputs).toEqual({ category: 'bug' });
+    // the SECOND request carries the repair critique + prior echo, and its turns
+    // still alternate (…user → assistant(echo) → user(critique)).
+    const secondBody = JSON.parse((spy.mock.calls[1]![1] as RequestInit).body as string);
+    const msgs = secondBody.messages as { role: string; content: string }[];
+    expect(msgs).toHaveLength(3);
+    expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
+    expect(msgs[2]!.content).toContain('enum');
+    // the structured scaffold is rebuilt on the repair call, not dropped.
+    expect(secondBody.tool_choice).toEqual({ type: 'tool', name: 'structured_output' });
+  });
+
+  it('#2 L4c — does NOT repair a transport failure; only ONE call, no metered', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(500, 'overloaded'));
+    const events = await drain(
+      anthropicAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'),
+    );
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(metered(events)).toBeUndefined();
+    expect(failed(events)).toMatchObject({ kind: 'transient' });
+  });
+
+  it('#2 L4c — a run cancelled between calls stops after ONE metered (no repair)', async () => {
+    const controller = new AbortController();
+    // First call: invalid response (would trigger a repair) AND cancel the run.
+    // Second call: llmPost aborts its signal up-front, so fetch sees an aborted
+    // signal and rejects — exactly as the real fetch does — → `cancelled` terminal.
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      if ((init as RequestInit).signal?.aborted) {
+        return Promise.reject(new DOMException('aborted', 'AbortError'));
+      }
+      controller.abort();
+      return Promise.resolve(fakeResponse(200, toolResponse({ category: 'question' })));
+    });
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: STRUCTURED_INPUT, signal: controller.signal }),
+        'sk',
+      ),
+    );
+    expect(events.filter((e) => e.type === 'metered')).toHaveLength(1);
+    expect(failed(events)).toMatchObject({ kind: 'cancelled' });
   });
 });

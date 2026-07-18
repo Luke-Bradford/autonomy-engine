@@ -17,9 +17,9 @@ import type { LlmOutputSchema } from './llm-config.js';
  * near-miss. `validateStructuredOutput` is what makes the field addressable:
  * strip unknown keys, NO coercion, enforce declared type + enum (#592), reject a
  * missing REQUIRED field (an optional field → present-null, #594). A response
- * that fails it terminalizes the node `permanent`
- * (L4c adds an internal repair sub-call before that; today it fails on the first
- * invalid response).
+ * that fails it triggers a bounded internal repair sub-call (#2 L4c,
+ * `runStructuredWithRepair`) and terminalizes the node `permanent` only once the
+ * repairs are exhausted.
  *
  * DRIFT GUARD (kept STRICTER-or-equal to `matchesType`): the reducer re-checks
  * this module's output against the LOWERED `config.outputs` via `matchesType`
@@ -78,6 +78,9 @@ function baseZodForProperty(type: LlmOutputSchema['properties'][string]['type'])
  * value bypasses the enum check (present-null) — only a PRESENT non-null value is
  * constrained. Unknown keys are STRIPPED (Zod's default object behaviour) — the
  * spec's "strip unknown keys, store only the validated/normalized object".
+ *
+ * A failure returns `{ ok:false, reason }`; the adapter's repair loop (#2 L4c)
+ * feeds `reason` back to the model in a corrective re-prompt before terminalizing.
  */
 export function validateStructuredOutput(
   schema: LlmOutputSchema,

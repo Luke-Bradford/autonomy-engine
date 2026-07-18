@@ -14,9 +14,11 @@ import {
   parseAndValidateStructured,
   parseJsonBody,
   resolveModel,
+  runStructuredWithRepair,
+  structuredEcho,
   structuredOutputInstruction,
-  structuredValidationFailure,
 } from './llm-shared.js';
+import type { LlmTurn } from './llm-shared.js';
 
 /**
  * The `ollama` connector adapter: a single non-streaming call to a local (or
@@ -85,52 +87,90 @@ export const ollamaAdapter: ConnectorAdapter = {
       reasoningEffort,
       structuredOutput,
     } = normalizeLlmRequest(input.data);
+    const baseUrl = (config.data.baseUrl ?? DEFAULT_OLLAMA_BASE_URL).replace(/\/+$/, '');
+    const url = `${baseUrl}/api/chat`;
+    const headers: Record<string, string> =
+      secret !== null ? { Authorization: `Bearer ${secret}` } : {};
+    const timeoutMs = config.data.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS;
+
     // Ollama's `/api/chat` carries the system instruction as a LEADING
-    // `role:system` message; sampling lives under `options` (`num_predict` is
-    // its name for max output tokens). #2 L4b — a structured node appends the
-    // schema directive to system (belt-and-suspenders alongside the native
-    // `format` below; harmless if `format` alone already constrains the model).
+    // `role:system` message. #2 L4b — a structured node appends the schema directive
+    // to system (belt-and-suspenders alongside the native `format`; harmless if
+    // `format` alone already constrains the model).
     const systemParts: string[] = [];
     if (system !== undefined) systemParts.push(system);
     if (structuredOutput !== undefined)
       systemParts.push(structuredOutputInstruction(structuredOutput));
-    const messages: { role: string; content: string }[] = [];
-    if (systemParts.length > 0)
-      messages.push({ role: 'system', content: systemParts.join('\n\n') });
-    messages.push(...turns);
-    const options: Record<string, unknown> = {};
-    if (sampling.temperature !== undefined) options.temperature = sampling.temperature;
-    if (sampling.maxTokens !== undefined) options.num_predict = sampling.maxTokens;
-    if (sampling.topP !== undefined) options.top_p = sampling.topP;
-    if (sampling.stop !== undefined) options.stop = sampling.stop;
-    if (sampling.seed !== undefined) options.seed = sampling.seed;
-    const requestBody: Record<string, unknown> = { model, messages, stream: false };
-    if (Object.keys(options).length > 0) requestBody.options = options;
-    // #2 L4b — Ollama's NATIVE structured output: the TOP-LEVEL `format` accepts a
-    // JSON Schema and constrains decoding to it. Ollama is lenient about schema
-    // shape (unlike OpenAI strict json_schema), so the L4a subset — including its
-    // loose nested `object`/`array` — passes through as-is. The strict parse/validate
-    // of the response is still the correctness guarantee (a model may ignore `format`).
-    if (structuredOutput !== undefined) requestBody.format = structuredOutput;
-    // #2 L3 — Ollama's `/api/chat` takes reasoning as the TOP-LEVEL `think` param
-    // (NOT under `options`), which accepts a boolean OR a level string, so our
-    // enum passes through verbatim. Best-effort per the spec ("ollama/others:
-    // best-effort or ignored"): Ollama documents `low|medium|high` levels (e.g.
-    // gpt-oss); `max` is NOT a documented Ollama level, so `think:'max'` is
-    // best-effort and may be ignored or rejected by a given model. A thinking
-    // model separates its reasoning trace; a non-thinking model ignores the
-    // field. No key when unset, so a node with no `reasoningEffort` is
-    // byte-identical to pre-L3.
-    if (reasoningEffort !== undefined) requestBody.think = reasoningEffort;
+    const systemContent = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
 
-    const baseUrl = (config.data.baseUrl ?? DEFAULT_OLLAMA_BASE_URL).replace(/\/+$/, '');
-    const result = await llmPost(
-      ctx,
-      `${baseUrl}/api/chat`,
-      secret !== null ? { Authorization: `Bearer ${secret}` } : {},
-      requestBody,
-      config.data.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS,
-    );
+    // Assemble the wire body for a set of (non-system) turns. Only `messages`
+    // changes across L4c repair calls, so the static scaffold is rebuilt from the
+    // passed turns each call. Sampling (under `options`) + `think` apply in BOTH
+    // modes; `format` only in structured mode (so text mode is byte-identical to
+    // pre-L4c).
+    const buildBody = (msgTurns: LlmTurn[]): Record<string, unknown> => {
+      const messages: { role: string; content: string }[] = [];
+      if (systemContent !== undefined) messages.push({ role: 'system', content: systemContent });
+      messages.push(...msgTurns);
+      const options: Record<string, unknown> = {};
+      if (sampling.temperature !== undefined) options.temperature = sampling.temperature;
+      if (sampling.maxTokens !== undefined) options.num_predict = sampling.maxTokens;
+      if (sampling.topP !== undefined) options.top_p = sampling.topP;
+      if (sampling.stop !== undefined) options.stop = sampling.stop;
+      if (sampling.seed !== undefined) options.seed = sampling.seed;
+      const body: Record<string, unknown> = { model, messages, stream: false };
+      if (Object.keys(options).length > 0) body.options = options;
+      // #2 L4b — Ollama's NATIVE structured output: the TOP-LEVEL `format` accepts a
+      // JSON Schema and constrains decoding. Ollama is lenient about schema shape
+      // (unlike OpenAI strict json_schema), so the L4a subset — including its loose
+      // nested `object`/`array` — passes through as-is; the strict parse/validate of
+      // the response is still the correctness guarantee (a model may ignore `format`).
+      if (structuredOutput !== undefined) body.format = structuredOutput;
+      // #2 L3 — reasoning is the TOP-LEVEL `think` param (NOT under `options`),
+      // accepting a boolean OR level string, so our enum passes through verbatim.
+      // Best-effort ("ollama/others: best-effort or ignored"): `max` is not a
+      // documented Ollama level and may be ignored/rejected. No key when unset, so
+      // a node with no `reasoningEffort` is byte-identical to pre-L3.
+      if (reasoningEffort !== undefined) body.think = reasoningEffort;
+      return body;
+    };
+
+    // #2 L4c — STRUCTURED path with bounded internal repair. Each call meters (a
+    // 2xx billed even if invalid), parses+validates `message.content`; an absent
+    // message or non-string content yields `undefined`, which
+    // `parseAndValidateStructured` rejects → the loop re-prompts before
+    // terminalizing `permanent`. Covers the no-completion case here too.
+    if (structuredOutput !== undefined) {
+      yield* runStructuredWithRepair('ollama', turns, async (msgTurns) => {
+        const res = await llmPost(ctx, url, headers, buildBody(msgTurns), timeoutMs);
+        if (res.type === 'failed') return { type: 'terminal', event: res.event };
+        if (res.status < 200 || res.status >= 300) {
+          return {
+            type: 'terminal',
+            event: {
+              type: 'failed',
+              kind: classifyHttpStatus(res.status),
+              error: `ollama HTTP ${res.status}: ${errorExcerpt(res.bodyText)}`,
+            },
+          };
+        }
+        const body = parseJsonBody(res.bodyText);
+        if (!body.ok) return { type: 'terminal', event: body.event };
+        const counts = body.json as { prompt_eval_count?: unknown; eval_count?: unknown };
+        const usage = meterUsage('ollama', model, counts.prompt_eval_count, counts.eval_count);
+        const content = (body.json as { message?: { content?: unknown } }).message?.content;
+        return {
+          type: 'validated',
+          usage,
+          result: parseAndValidateStructured(structuredOutput, content),
+          echo: structuredEcho(content),
+        };
+      });
+      return;
+    }
+
+    // TEXT path.
+    const result = await llmPost(ctx, url, headers, buildBody(turns), timeoutMs);
     if (result.type === 'failed') {
       yield result.event;
       return;
@@ -146,33 +186,6 @@ export const ollamaAdapter: ConnectorAdapter = {
     const parsed = parseJsonBody(result.bodyText);
     if (!parsed.ok) {
       yield parsed.event;
-      return;
-    }
-    // #2 L4b — STRUCTURED path. Meter FIRST (a 2xx billed, even if invalid), then
-    // parse+validate `message.content` as JSON against the schema. An absent message
-    // or a non-string content yields `undefined`, which `parseAndValidateStructured`
-    // rejects (→ `permanent`), covering the no-completion case here too.
-    if (structuredOutput !== undefined) {
-      const structuredCounts = parsed.json as {
-        prompt_eval_count?: unknown;
-        eval_count?: unknown;
-      };
-      yield {
-        type: 'metered',
-        usage: meterUsage(
-          'ollama',
-          model,
-          structuredCounts.prompt_eval_count,
-          structuredCounts.eval_count,
-        ),
-      };
-      const structuredMessage = (parsed.json as { message?: { content?: unknown } }).message;
-      const validated = parseAndValidateStructured(structuredOutput, structuredMessage?.content);
-      if (!validated.ok) {
-        yield structuredValidationFailure('ollama', validated.reason);
-        return;
-      }
-      yield { type: 'succeeded', outputs: validated.value };
       return;
     }
     // #461 — a present string (even '') is a real completion; anything else is
