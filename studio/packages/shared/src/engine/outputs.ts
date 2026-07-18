@@ -1,4 +1,9 @@
-import { NodeOutputsFieldSchema, type Node, type OutputType } from '../schemas/pipeline.js';
+import {
+  NodeOutputsFieldSchema,
+  type Container,
+  type Node,
+  type OutputType,
+} from '../schemas/pipeline.js';
 
 /**
  * A node's declared output contract, read from `config.outputs`. This module is
@@ -65,6 +70,22 @@ export function outputContract(node: Node): OutputContract {
   return parsed.data === undefined
     ? { kind: 'absent' }
     : { kind: 'declared', outputs: parsed.data };
+}
+
+/**
+ * A CONTAINER's output contract for the static ref-checker (#567). A `foreach`
+ * aggregates its body into the SINGLE output `results` — an opaque `json` array
+ * (element shape is run-time-only, #6 E4) — the exact shape the reducer projects
+ * (`projectContainerOutputs`: `{ results }`). A `loop`/`stage` projects its LAST
+ * round's MERGED child outputs, a DYNAMIC shape with no fixed contract, so its
+ * name-check is skipped (`absent`) while the container id stays a first-class
+ * producer for dominance. Lives beside `outputContract` so both producer kinds —
+ * node and container — read from this one module (this file's SSOT reason).
+ */
+export function containerOutputContract(c: Pick<Container, 'kind'>): OutputContract {
+  return c.kind === 'foreach'
+    ? { kind: 'declared', outputs: [{ name: 'results', type: 'json' }] }
+    : { kind: 'absent' };
 }
 
 // `declaredOutputNames` (a names-only `Set` view) was REMOVED at #6 E6: the
