@@ -368,6 +368,24 @@ describe('lowerOutputSchema', () => {
       { name: 'b', type: 'number' },
     ]);
   });
+
+  // The one input shape `isOptionalProperty` treats differently from "absent":
+  // an EXPLICIT empty `required: []` is a present list naming nothing, so EVERY
+  // property is optional (`required !== undefined` && never `.includes`). This
+  // is the deliberate present-vs-absent split — pin it so the `!== undefined`
+  // guard is never "simplified" into a truthiness/length check that would
+  // collapse `[]` into the absent (all-required) floor.
+  it('treats an EXPLICIT empty `required: []` as ALL properties optional', () => {
+    const outputs = lowerOutputSchema({
+      type: 'object',
+      properties: { a: { type: 'string' }, b: { type: 'number' } },
+      required: [],
+    });
+    expect(outputs).toEqual([
+      { name: 'a', type: 'string', optional: true },
+      { name: 'b', type: 'number', optional: true },
+    ]);
+  });
 });
 
 // #2 L4a — the outputMode↔outputSchema COUPLING surface, the exact slice both the
