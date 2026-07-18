@@ -47,6 +47,16 @@ export type ActivityCategory = (typeof ACTIVITY_CATEGORIES)[number];
 export const LLM_CALL_ACTIVITY_TYPE = 'llm_call';
 
 /**
+ * The `Node.type` of the `agent_task` execution activity (the agent-CLI
+ * subprocess). A named constant, not a magic string, because it now has more than
+ * one reader that must agree: this catalog entry AND the `agent_cli` connector
+ * adapter, which — since #2 L14b — serves BOTH `agent_task` and `llm_call` and
+ * dispatches on `ctx.activityType`. A rename must reach both, so the string lives
+ * once (the SSOT that `LLM_CALL_ACTIVITY_TYPE` above already earns).
+ */
+export const AGENT_TASK_ACTIVITY_TYPE = 'agent_task';
+
+/**
  * The `Node.type` of the `if` control activity (#4 A1). A named constant, not a
  * magic string, because it is a TYPED identifier read structurally in THREE
  * places that must agree: the reducer's control-dispatch discriminant

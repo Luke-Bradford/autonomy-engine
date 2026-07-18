@@ -347,6 +347,16 @@ describe('createAgentAdapter().runActivity — llm_call (CLI/subscription single
     expect((events[0] as { error: string }).error).toContain('boom: quota exhausted');
   });
 
+  it('folds a stdout-only diagnostic into a non-zero-exit failure (some CLIs print errors to stdout)', async () => {
+    const { supervisor } = fakeSupervisor(
+      [{ stream: 'stdout', line: 'error: model overloaded, try later' }],
+      { exitCode: 3 },
+    );
+    const events = await drain(createAgentAdapter(supervisor).runActivity(llmCtx(), null));
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect((events[0] as { error: string }).error).toContain('error: model overloaded, try later');
+  });
+
   it('REDACTS the injected secret out of a non-zero-exit failure error (stderr echo leak)', async () => {
     // A CLI that echoes the injected key in an auth/quota error must never leak it
     // into the durable `node.failed` event.

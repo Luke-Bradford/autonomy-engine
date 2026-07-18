@@ -11,6 +11,7 @@ import {
   FILE_MOVE_ACTIVITY_TYPE,
   FILE_READ_ACTIVITY_TYPE,
   FILE_WRITE_ACTIVITY_TYPE,
+  AGENT_TASK_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
   LLM_CALL_ACTIVITY_TYPE,
@@ -115,7 +116,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     configSchema: llmCallConfigSchema,
   },
   {
-    type: 'agent_task',
+    type: AGENT_TASK_ACTIVITY_TYPE,
     title: 'Agent Task',
     kind: 'execution',
     // Spec #4 files `agent_task` under "Execution — AI (Spec #2)" next to

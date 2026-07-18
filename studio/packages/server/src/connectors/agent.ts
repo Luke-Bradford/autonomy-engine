@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { LLM_CALL_ACTIVITY_TYPE } from '@autonomy-studio/shared';
+import { AGENT_TASK_ACTIVITY_TYPE, LLM_CALL_ACTIVITY_TYPE } from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import type { Supervisor, SupervisedResult } from '../workers/process-supervisor.js';
 import {
@@ -116,10 +116,6 @@ const CLI_MODEL_FALLBACK = 'cli';
 /** Bound on the stderr excerpt folded into a non-zero-exit failure message, so a
  * verbose CLI cannot bloat the durable `node.failed` event. */
 const MAX_STDERR_DETAIL_CHARS = 1000;
-
-/** The `agent_task` activity type — the agentic subprocess shape. (`llm_call`
- * has an exported constant; `agent_task` does not, so it is pinned here.) */
-const AGENT_TASK_ACTIVITY_TYPE = 'agent_task';
 
 /**
  * #2 L14b — flatten a normalized `llm_call` request into the SINGLE prompt string
@@ -346,13 +342,20 @@ async function* runLlmCall(
     return;
   }
   if (outcome.exitCode !== 0) {
-    // REDACT the resolved secret out of the child stderr BEFORE it lands in the
-    // durable `node.failed` event — a CLI commonly echoes the injected key in an
+    // Some CLIs (e.g. `codex exec`) print their error/diagnostic to STDOUT, not
+    // stderr — fold BOTH into the detail so a failure is never a bare "exited N"
+    // with no context. stderr first (the conventional error channel).
+    // REDACT the resolved secret out of that text BEFORE it lands in the durable
+    // `node.failed` event — a CLI commonly echoes the injected key in an
     // auth/quota error, and this string is persisted to `run_events` and served
-    // over the API. Redact the FULL stderr first, then truncate, so a secret
+    // over the API. Redact the FULL text first, then truncate, so a secret
     // straddling the truncation boundary is still fully scrubbed. Same never-leak
     // discipline every sibling adapter upholds (http/llm-shared → `redactSecrets`).
-    const raw = redactSecrets(stderr.join('\n').trim(), [secret]);
+    const diagnostic = [stderr.join('\n'), stdout.join('\n')]
+      .map((s) => s.trim())
+      .filter((s) => s !== '')
+      .join('\n');
+    const raw = redactSecrets(diagnostic, [secret]);
     const detail =
       raw.length > MAX_STDERR_DETAIL_CHARS ? `…${raw.slice(-MAX_STDERR_DETAIL_CHARS)}` : raw;
     yield {
