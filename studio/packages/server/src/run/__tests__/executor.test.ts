@@ -731,7 +731,8 @@ describe('createExecutor — #2 L13a dynamic connectionId routing', () => {
 
   it('routes to the connection a ${params.provider} resolves to', async () => {
     const db = freshDb().db;
-    const connA = await seedConnection(db, 'http', { tag: 'A' }, null);
+    // Two connections exist so routing has a genuine choice; the run must reach B.
+    await seedConnection(db, 'http', { tag: 'A' }, null);
     const connB = await seedConnection(db, 'http', { tag: 'B' }, null);
     const pvId = routeVersion(db, '${params.provider}');
 
@@ -744,7 +745,6 @@ describe('createExecutor — #2 L13a dynamic connectionId routing', () => {
     expect(state.status).toBe('success');
     // The run reached B's connection, not A's — genuine routing by param.
     expect(sink.config).toEqual({ tag: 'B' });
-    void connA;
   });
 
   it('the SAME node routes to the OTHER connection when the param changes', async () => {
@@ -775,6 +775,51 @@ describe('createExecutor — #2 L13a dynamic connectionId routing', () => {
       kind: 'permanent',
       code: 'connection_not_found',
     });
+  });
+
+  it('REFUSES a ${} resolving to ANOTHER owner’s connection id (authz, not just authn)', async () => {
+    // The escalation L13a widened: `connectionId` now derives from run params
+    // (trigger-influenceable), so a run must not be able to steer dispatch onto
+    // a connection it does not own and decrypt that connection's secret. Folds
+    // into NOT_FOUND (never leaks that the id names a real, other-owned row).
+    const db = freshDb().db;
+    const foreign = createConnection(db, {
+      ownerId: 'someone-else',
+      name: 'Foreign',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const pvId = routeVersion(db, '${params.provider}'); // run owner is 'local'
+    const run = routeRun(db, pvId, foreign.id);
+
+    const state = await startRun(deps(db), run);
+    expect(state.status).toBe('failure');
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+      code: 'connection_not_found',
+    });
+  });
+
+  it('ALLOWS a ${} resolving to a null-owner (shared/global) connection', async () => {
+    // A null-owner connection is not "another owner's private" row — it is
+    // shared, so any run may bind it (the owner check is `!== null && !== owner`).
+    const db = freshDb().db;
+    const shared = createConnection(db, {
+      ownerId: null,
+      name: 'Shared',
+      kind: 'http',
+      config: { tag: 'shared' },
+      secretRef: null,
+    });
+    const pvId = routeVersion(db, '${params.provider}');
+
+    const sink: { config?: Record<string, unknown> } = {};
+    const state = await startRun(
+      deps(db, { adapters: capturingAdapter(sink) }),
+      routeRun(db, pvId, shared.id),
+    );
+    expect(state.status).toBe('success');
+    expect(sink.config).toEqual({ tag: 'shared' });
   });
 
   it('a ${} that resolves to the EMPTY string is bound-but-empty → CONNECTION_NOT_FOUND', async () => {
@@ -1235,7 +1280,18 @@ describe('createExecutor — config-sink secrets: dispatch resolution + redactio
     const db = freshDb().db;
     // Even a globally-present name must not resolve for a run with no owner.
     await seedNamedSecret(db, 'orphan-key', 'value', 'local');
-    const connId = await seedConnection(db, 'http', {}, null);
+    // A null-owner (shared) connection so this test isolates the CONFIG-SECRET
+    // null-owner gate: a null-owner run is now also refused an OWNED connection
+    // (#2 L13a authz), which would otherwise fail this run one gate earlier with
+    // `connection_not_found`. A shared connection resolves, so the run reaches
+    // and exercises the standalone-secret fail-closed this test is about.
+    const connId = createConnection(db, {
+      ownerId: null,
+      name: 'Shared',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    }).id;
     const { doc, run, runId } = seedMarkerRun(db, markerNode('orphan-key', connId), {
       ownerId: null,
     });

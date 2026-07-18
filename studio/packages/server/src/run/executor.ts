@@ -203,6 +203,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     connectionId: string | undefined,
     kinds: readonly string[],
     activityType: string,
+    ownerId: string | null,
   ): Promise<
     | { error: string; code: string }
     | {
@@ -225,7 +226,17 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       };
     }
     const connection = getConnection(deps.db, connectionId);
-    if (connection === null) {
+    // Owner authorization (authn ≠ authz): a run may bind ONLY a connection it
+    // owns, or a null-owner (shared/global) connection. This closes the vector
+    // #2 L13a opened — `connectionId` now derives from run params, which a
+    // trigger's body/param bindings can influence, so a bare id lookup would let
+    // a run steer dispatch onto ANOTHER owner's connection and decrypt ITS
+    // secret. Mirrors the owner-scoping the config-sink secret path already
+    // enforces (`resolveConfigSecrets` → `getSecretByName(db, name, ownerId)`).
+    // A cross-owner (or null-owner-run vs owned-connection) hit folds into
+    // NOT_FOUND — never a distinct "forbidden", which would leak that the id
+    // names a real connection (enumeration-resistant, fail-closed).
+    if (connection === null || (connection.ownerId !== null && connection.ownerId !== ownerId)) {
       return {
         error: `connection '${connectionId}' not found`,
         code: FAILURE_CODES.CONNECTION_NOT_FOUND,
@@ -464,6 +475,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         command.resolvedConnectionId,
         entry.connectionKinds,
         node.type,
+        ownerId,
       );
       if ('error' in resolved) {
         yield nodeFailed(runId, nodeId, attemptId, {
