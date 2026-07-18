@@ -372,19 +372,46 @@ describe('validateDoc — foreach container (#4 A4)', () => {
     expect(validateRefs(d).join(' ')).toContain('only bound inside a filter/map/count');
   });
 
-  it('KNOWN #567: a downstream ${nodes.<foreach>.output.results} draws an advisory false-reject', () => {
-    // Container ids are not first-class producers in `computeGraph`/`outputsById`
-    // (a pre-existing loop/stage gap), so a downstream container-output ref is
-    // statically refused at save even though the RUN path resolves it (proven in
-    // reduce-p2c: 'exposes results to a downstream …'). Pinned so the follow-up
-    // (#567) that models container producers flips this deliberately, not silently.
+  it('ACCEPTS a downstream ${nodes.<foreach>.output.results} ref (#567: container is a first-class producer)', () => {
+    // Container ids are now first-class producers in `computeGraph`/`outputsById`
+    // (#567): a foreach declares the single output `results` (json), and the outer
+    // `fe → after` success edge makes `fe` a guaranteed producer at `after`. So the
+    // ref that the RUN path already resolves (reduce-p2c: 'exposes results to a
+    // downstream …') validates at SAVE too, instead of the old advisory false-reject.
     const d = doc(
       [node('w'), node('after', { got: '${nodes.fe.output.results}' })],
       [edge('fe', 'after', 'success')],
       [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${params.list}' }],
       [LIST],
     );
-    expect(validateRefs(d).join(' ')).toContain('nodes.fe.output.results');
+    expect(validateDoc(d)).toEqual([]);
+    expect(validateRefs(d)).toEqual([]);
+  });
+
+  it('rejects a downstream ${nodes.<foreach>.output.<undeclared>} by the name-check (#567)', () => {
+    // A foreach declares exactly `results`; any other output name is refused at save
+    // by the same producer-name check that governs a node's declared outputs.
+    const d = doc(
+      [node('w'), node('after', { got: '${nodes.fe.output.nope}' })],
+      [edge('fe', 'after', 'success')],
+      [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${params.list}' }],
+      [LIST],
+    );
+    expect(validateRefs(d).join(' ')).toContain("declares no output named 'nope'");
+  });
+
+  it('rejects a foreach items ref to a node that does NOT dominate the container (#567)', () => {
+    // Pre-#567 `validateForeachItems` was permissive on dominance (availability =
+    // "any non-child node output") because a container's graph position was not
+    // modelled. Now `items` is scanned in the container endpoint's real OUTER
+    // dominance set, so a ref to a DOWNSTREAM node (`later`, reachable only AFTER
+    // `fe` exits) is caught at SAVE instead of at run time (`invalid_event`).
+    const d = doc(
+      [node('w', { x: '${item}' }), node('later')],
+      [edge('fe', 'later', 'success')],
+      [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${nodes.later.output.x}' }],
+    );
+    expect(validateDoc(d).join(' ')).toContain('does not name an upstream');
   });
 
   it('disables ${nodes.<foreachChild>.status} refs — the child re-runs per item (G1)', () => {
@@ -398,6 +425,89 @@ describe('validateDoc — foreach container (#4 A4)', () => {
       [LIST],
     );
     expect(validateRefs(withForeach).join(' ')).toContain('nodes.w.status');
+  });
+});
+
+// ===========================================================================
+// container producers in the static ref-checker (#567)
+// ===========================================================================
+
+describe('validateDoc — container output refs (#567)', () => {
+  it('resolves a downstream ${nodes.<stage>.output.<k>} (loop/stage project child outputs; name unchecked, dominance checked)', () => {
+    // A `stage`/`loop` has no fixed declared contract (it projects its last round's
+    // merged child outputs), so the NAME check is skipped — but the container id is a
+    // first-class producer, so the `stg → after` success edge makes it guaranteed at
+    // `after`. Any output key resolves.
+    const d = doc(
+      [
+        node('w', { outputs: [{ name: 'k', type: 'string' }] }),
+        node('after', { got: '${nodes.stg.output.k}' }),
+      ],
+      [edge('stg', 'after', 'success')],
+      [{ id: 'stg', kind: 'stage', children: ['w'] }],
+    );
+    expect(validateDoc(d)).toEqual([]);
+    expect(validateRefs(d)).toEqual([]);
+  });
+
+  it('still rejects a ${nodes.<container>.output.<k>} on a node the container does NOT dominate', () => {
+    // No edge from `stg` to `reader`: the container does not dominate `reader`, so its
+    // output is not available there — a false-accept would be the never-safe direction.
+    const d = doc(
+      [node('w'), node('reader', { got: '${nodes.stg.output.k}' }), node('sink')],
+      [edge('reader', 'sink', 'success')],
+      [{ id: 'stg', kind: 'stage', children: ['w'] }],
+    );
+    expect(validateRefs(d).join(' ')).toContain('does not name an upstream');
+  });
+
+  it('preserves conservative any-join: a sibling output behind a container under join:any is NOT guaranteed', () => {
+    // `after` has join:any over {stg, sib}: it dispatches the moment EITHER settles,
+    // so a still-running `sib` is not guaranteed. With `stg` now tracked, the
+    // guaranteed-intersection over both incoming branches correctly excludes `sib`
+    // (the old `untrackedAnyJoin` zeroing is unneeded for a real container).
+    const d = doc(
+      [
+        node('w'),
+        node('sib', { outputs: [{ name: 'v', type: 'string' }] }),
+        node('after', { join: 'any', got: '${nodes.sib.output.v}' }),
+      ],
+      [edge('stg', 'after', 'success'), edge('sib', 'after', 'success')],
+      [{ id: 'stg', kind: 'stage', children: ['w'] }],
+    );
+    expect(validateRefs(d).join(' ')).toContain('not guaranteed here');
+  });
+
+  it('a child→container back-edge grants NO default()-only soft visibility (soft stays node-only)', () => {
+    // #567 widens forward reachability/dominance to container endpoints but keeps the
+    // back-edge/soft analysis NODE-ONLY. A loop child bouncing to its enclosing
+    // container must not manufacture a new `default()`-visible source for an outside
+    // reader (soft is the one LOOSENING direction — a false-accept surface). Even
+    // wrapped in default(), an outside ref to a loop child is refused (a downstream
+    // reader consumes the loop via `${nodes.lp.output.*}`, never a child directly).
+    const d = doc(
+      [
+        node('w', { outputs: [{ name: 'done', type: 'boolean' }] }),
+        node('reader', { got: '${default(nodes.w.output.done, false)}' }),
+      ],
+      [edge('lp', 'reader', 'success'), edge('w', 'lp', 'failure', { back: true, maxBounces: 2 })],
+      [{ id: 'lp', kind: 'loop', children: ['w'], maxRounds: 3 }],
+    );
+    // The specific message pins the mechanism: `w` is not soft-visible to `reader`,
+    // so it lands in the "no upstream" branch, not "wrap it in default()".
+    expect(validateRefs(d).join(' ')).toContain('does not name an upstream');
+  });
+
+  it('rejects a downstream ${nodes.<foreach>.output.results} on a node the foreach does NOT dominate', () => {
+    // The dominance check is container-kind-agnostic: a foreach's declared `results`
+    // still requires the foreach to dominate the reader (no `fe → reader` edge here).
+    const d = doc(
+      [node('w'), node('reader', { got: '${nodes.fe.output.results}' }), node('sink')],
+      [edge('reader', 'sink', 'success')],
+      [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${params.list}' }],
+      [{ name: 'list', type: 'json', required: true }],
+    );
+    expect(validateRefs(d).join(' ')).toContain('does not name an upstream');
   });
 });
 

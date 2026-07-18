@@ -29,11 +29,12 @@ import { outputContract, type CheckedContract, type OutputContract } from './out
 import {
   backEdgeResetBody,
   composeFilterExpr,
+  containerJoin,
   containerMembership,
-  effectiveEdges,
   forwardDescendants,
   nodeForwardAdjacency,
   nodeJoin,
+  partitionReadiness,
   substitute,
   triggerRoot,
   wholeValueDefect,
@@ -342,39 +343,28 @@ export function createEngine(doc: EngineDoc): Engine {
   // of `topLevelNodeIds` — it does not leak back as an unconditional root.
   const topLevelNodeIds = nodeIds.filter((id) => !childSet.has(id));
 
-  // Endpoints for edges = node ids ∪ container ids (an OUTER edge may name a
-  // container). Back-edges are split out; forward edges drive the acyclic walk.
-  const endpointIds = new Set<string>([...nodeIds, ...containerIds]);
-  const allEdges = effectiveEdges(doc);
-  const forwardEdges = allEdges.filter(
-    (e) => !e.back && endpointIds.has(e.from) && endpointIds.has(e.to),
-  );
-  const backEdges = allEdges.filter(
-    (e) => e.back && endpointIds.has(e.from) && endpointIds.has(e.to),
-  );
+  // Endpoints + the FORWARD readiness partition (endpoints = node ids ∪ container
+  // ids; INTERNAL vs TOP-LEVEL edge classification incl. #480/#488/#498) come from
+  // the SHARED SSOT `partitionReadiness` (params.ts), so the static ref-checker
+  // (`computeGraph`) keys dominance off the EXACT same classification the reducer
+  // runs on — the #567 anti-drift guarantee. This reducer keeps ownership of the
+  // `topOutgoing` index and the cross-boundary DIAGNOSTICS below (the static path
+  // reports those separately, in `validateDoc`).
+  const {
+    endpointIds,
+    backEdges,
+    internalForwardByContainer,
+    topForwardEdges,
+    topIncoming,
+    childIncoming,
+  } = partitionReadiness(doc, containers, childToContainer);
 
-  // Partition forward edges: INTERNAL (both endpoints children of the SAME
-  // container) walk within that container; everything else is a TOP-LEVEL edge
-  // between top-level entities (top-level nodes and container ids).
-  const internalForwardByContainer = new Map<string, Edge[]>();
-  for (const c of containers) internalForwardByContainer.set(c.id, []);
-  const topForwardEdges: Edge[] = [];
-  for (const e of forwardEdges) {
-    const fc = childToContainer.get(e.from);
-    const tc = childToContainer.get(e.to);
-    if (fc !== undefined && fc === tc) internalForwardByContainer.get(fc)!.push(e);
-    else topForwardEdges.push(e);
-  }
-
-  // Top-level readiness graph (entities = top-level nodes + containers).
+  // Top-level readiness entities (top-level nodes + containers) + the `topOutgoing`
+  // index this reducer owns (the partition supplies `topIncoming`).
   const topEntities = [...topLevelNodeIds, ...containerIds];
   const sortedTopEntities = [...topEntities].sort();
-  const topIncoming = new Map<string, Edge[]>();
   const topOutgoing = new Map<string, Edge[]>();
-  for (const id of topEntities) {
-    topIncoming.set(id, []);
-    topOutgoing.set(id, []);
-  }
+  for (const id of topEntities) topOutgoing.set(id, []);
   // #480: a CROSS-BOUNDARY edge — exactly one endpoint a child, or children of
   // DIFFERENT containers (`params.ts`'s `validateDoc` states the same rule as
   // `fromOwner !== toOwner`; keep the two in step) — is excluded from
@@ -470,14 +460,15 @@ export function createEngine(doc: EngineDoc): Engine {
     // #498: a child → child of a DIFFERENT container reaches here indexed
     // NOWHERE — the top-source guard above never fired (`e.from` is a child, so
     // not a `topOutgoing` key), it is not the #488 own-container case, and
-    // `topIncoming` does not take it (`e.to` is a child, not a top entity). It
-    // is the same cross-boundary rule as the guard above (always cross-boundary
-    // by construction here — a same-container child pair is `internalForward`,
-    // never in `topForwardEdges`), reported at the one place it is actually
-    // dropped. `!topOutgoing.has(e.from)` is what distinguishes it from a
-    // top-source edge already reported/routed above.
-    if (topIncoming.has(e.to)) topIncoming.get(e.to)!.push(e);
-    else if (!topOutgoing.has(e.from)) docDefects.push(crossBoundaryDefect(e));
+    // `topIncoming` (built by `partitionReadiness`) does not take it (`e.to` is a
+    // child, not a top entity). It is the same cross-boundary rule as the guard
+    // above (always cross-boundary by construction here — a same-container child
+    // pair is `internalForward`, never in `topForwardEdges`), reported at the one
+    // place it is actually dropped. The `topIncoming` INDEXING itself now lives in
+    // `partitionReadiness` (the SSOT); this loop only emits the diagnostic.
+    if (!topIncoming.has(e.to) && !topOutgoing.has(e.from)) {
+      docDefects.push(crossBoundaryDefect(e));
+    }
   }
 
   // (F1b removed a `backOutgoing` index here. Its ONLY reader was the old
@@ -486,18 +477,13 @@ export function createEngine(doc: EngineDoc): Engine {
   // predicate is forward-only; back-edges still drive `fireBackEdges` via
   // `backEdges`/`backBodyByKey` below.)
 
-  // Per-container internal readiness graph (over its children).
-  const childIncoming = new Map<string, Edge[]>();
+  // Per-container internal readiness: `childIncoming` comes from the shared
+  // `partitionReadiness`; this reducer builds only the `childOutgoing` mirror it
+  // uses for its child-level outcome walk.
   const childOutgoing = new Map<string, Edge[]>();
-  for (const ch of childSet) {
-    childIncoming.set(ch, []);
-    childOutgoing.set(ch, []);
-  }
+  for (const ch of childSet) childOutgoing.set(ch, []);
   for (const c of containers) {
-    for (const e of internalForwardByContainer.get(c.id)!) {
-      childOutgoing.get(e.from)!.push(e);
-      childIncoming.get(e.to)!.push(e);
-    }
+    for (const e of internalForwardByContainer.get(c.id)!) childOutgoing.get(e.from)!.push(e);
   }
 
   // Node→node forward reachability (for back-edge body computation). Container
@@ -2911,11 +2897,6 @@ function withNode(state: RunState, id: string, patch: Partial<NodeRunState>): Ru
 function withContainer(state: RunState, id: string, patch: Partial<ContainerRunState>): RunState {
   const prev = state.containers[id]!;
   return { ...state, containers: { ...state.containers, [id]: { ...prev, ...patch } } };
-}
-
-/** A container's join rule over its OUTER incoming edges (default `all`). */
-function containerJoin(c: Container): 'all' | 'any' {
-  return c.join === 'any' ? 'any' : 'all';
 }
 
 /** Stable string compare (avoids locale-dependent default sort semantics). */

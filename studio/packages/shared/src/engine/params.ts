@@ -9,7 +9,7 @@ import type {
 } from './types.js';
 import { ParamResolveError, SubstituteError, TERMINAL_NODE } from './types.js';
 import type { OutputContract } from './outputs.js';
-import { outputContract } from './outputs.js';
+import { containerOutputContract, outputContract } from './outputs.js';
 import type { Expr, ExprSegment, TemplateMode } from './expr.js';
 import { interpolationMode, parseExpr, restoreEscapes } from './expr.js';
 import { getActivity } from '../catalog/registry.js';
@@ -1092,7 +1092,7 @@ export function validateRefs(
   // SSOT is the same `config.outputs` the reducer stores/validates against, so a
   // name static validation accepts is exactly one the run would keep at
   // `succeeded`, and the TYPE it infers is the one the reducer enforces there.
-  const outputsById = outputsByIdOf(doc.nodes);
+  const outputsById = outputsByIdOf(doc.nodes, doc.containers ?? []);
 
   // #4 A4 — nodes that are children of a `foreach` body may reference `${item}`.
   // `scan` refuses `${item}` by default (it is "only bound inside a filter/map/
@@ -1436,7 +1436,12 @@ export function validateDoc(
       errors.push(...jsonReplaySafetyErrors(`param '${p.name}' default`, p.default));
     }
   }
-  const outputsById = outputsByIdOf(doc.nodes);
+  const outputsById = outputsByIdOf(doc.nodes, doc.containers ?? []);
+  // #567 — a `foreach`'s `items` is validated against the container ENDPOINT's real
+  // OUTER dominance (see `validateForeachItems`). Built lazily: only a foreach with
+  // an `items` expression needs it, so a foreach-free doc pays nothing.
+  let graphForItems: Graph | null = null;
+  const itemsGraph = (): Graph => (graphForItems ??= computeGraph(doc));
 
   // GLOBAL id uniqueness: node ids and container ids share ONE namespace (the
   // projection keys `state.nodes` / `state.outputs` / `endpointOutcome` by id),
@@ -1571,7 +1576,8 @@ export function validateDoc(
       if (c.children.filter((ch) => nodeIdSet.has(ch)).length === 0) {
         errors.push(`container '${c.id}': a foreach needs at least one child (its per-item body)`);
       }
-      if (c.items !== undefined) validateForeachItems(c, declared, outputsById, nodeIdSet, errors);
+      if (c.items !== undefined)
+        validateForeachItems(c, declared, outputsById, itemsGraph(), errors);
     }
     if (c.exitWhen !== undefined) validateExitWhen(c, declared, outputsById, errors);
   }
@@ -1993,36 +1999,34 @@ function validateExitWhen(
  * reference `${item}` (unbound: items is evaluated BEFORE any item exists) or its
  * OWN children (whose outputs do not exist until the body runs).
  *
- * SCOPE IS OUTER, and DELIBERATELY PERMISSIVE on dominance. `items` is evaluated
- * over the container's upstream, but `computeGraph` keys reachability by node id
- * only — a container's graph POSITION is not modeled (the same gap that makes a
- * downstream `${nodes.<foreach>.output.results}` a known advisory false-reject, →
- * container-producer follow-up). So availability here is "any non-child node
- * output" rather than a precise dominance set: a ref to a genuinely un-dominating
- * upstream node passes save and is caught at run time by `evalForeachItems`
- * (→ `invalid_event`), never a silent accept. Own-children ARE excluded, which is
- * the one foreach-specific correctness check the outer scope must make.
+ * SCOPE IS OUTER: `items` is evaluated over the container's upstream, so its
+ * availability is the container ENDPOINT's own dominance set (#567 — `computeGraph`
+ * now models container graph position). A ref to a genuinely un-dominating upstream
+ * node is caught at SAVE (not deferred to `evalForeachItems`' run-time
+ * `invalid_event`). Own-children are excluded FOR FREE: a child runs only after the
+ * container enters, so it can never be a forward-ancestor of the container endpoint
+ * (no child→container forward edge survives the partition), hence never in
+ * `guaranteed`/`reachable` of `c.id`.
  */
 function validateForeachItems(
   c: Container,
   declared: Map<string, Param>,
   outputsById: Map<string, OutputContract>,
-  nodeIdSet: Set<string>,
+  graph: Graph,
   errors: string[],
 ): void {
   if (c.items === undefined) return;
   const where = `container.${c.id}.items`;
-  // Any node output EXCEPT this foreach's own children (which have not run when
-  // `items` is evaluated). Permissive availability — see the dominance note above.
-  const available = new Set<string>(nodeIdSet);
-  for (const ch of c.children) available.delete(ch);
+  // The container endpoint's real OUTER dominance sets (#567). `soft` is node-only,
+  // so a container id has no soft entry (`?? ∅`) — `items` has no default()-round
+  // semantics anyway.
   const scope: ScanScope = {
     declared,
     outputsById,
-    guaranteed: available,
-    settled: available,
-    reachable: available,
-    soft: new Set<string>(),
+    guaranteed: graph.guaranteed.get(c.id) ?? new Set<string>(),
+    settled: graph.settled.get(c.id) ?? new Set<string>(),
+    reachable: graph.reachable.get(c.id) ?? new Set<string>(),
+    soft: graph.soft.get(c.id) ?? new Set<string>(),
   };
   // `itemInScope` defaults false → a `${item}` in `items` is refused for free.
   scan(where, c.items, scope, errors);
@@ -2353,9 +2357,15 @@ function parseExprSafe(body: string, where: string, errors: string[]): Expr {
  * wants. One helper so `validateRefs` and `validateExitWhen` build it the same
  * way and cannot disagree about a node's contract.
  */
-function outputsByIdOf(nodes: readonly Node[]): Map<string, OutputContract> {
+function outputsByIdOf(
+  nodes: readonly Node[],
+  containers: readonly Container[] = [],
+): Map<string, OutputContract> {
   const m = new Map<string, OutputContract>();
   for (const node of nodes) m.set(node.id, outputContract(node));
+  // #567: container endpoints are first-class producers. A foreach declares
+  // `results`; loop/stage carry an `absent` (dynamic) contract (name-unchecked).
+  for (const c of containers) m.set(c.id, containerOutputContract(c));
   return m;
 }
 
@@ -2759,6 +2769,105 @@ function checkRefRoot(
 
 // --- the graph / dominance helper -------------------------------------------
 
+/**
+ * The per-endpoint FORWARD readiness partition, shared by the runtime reducer
+ * (`reduce.ts`) and the static availability analysis (`computeGraph`). Both must
+ * key readiness/dominance off the SAME edge partition, or the static checker
+ * describes a different engine than the one that runs — the #567 drift the SSOT
+ * discipline exists to prevent. `reduce.ts` consumes `topIncoming`/`childIncoming`
+ * verbatim for its readiness walk; `computeGraph` merges them into its predecessor
+ * cone. The equivalence is pinned by test (`readiness-partition.test.ts`).
+ *
+ * Endpoints = node ids ∪ container ids. A FORWARD edge (both endpoints known,
+ * `!back`) is classified:
+ *   - INTERNAL — both endpoints children of the SAME container: gates that child's
+ *     readiness within its container body (`childIncoming`).
+ *   - TOP-LEVEL — between top-level entities (top nodes + container ids): gates the
+ *     target (`topIncoming`), EXCEPT a child → its OWN enclosing container id, which
+ *     is dropped (it would strand the run — the container must activate before the
+ *     child runs; reduce.ts #488). A child → a top-level target IS kept (it still
+ *     SKIPS the target when the child does not take it; reduce.ts #480).
+ *   - CROSS-BOUNDARY — exactly one endpoint a child, or children of DIFFERENT
+ *     containers, with a CHILD target: inert for readiness (reduce.ts #480/#498;
+ *     `validateDoc` reports it) — a child target is not a `topIncoming` key, so it
+ *     is naturally excluded.
+ *
+ * This function IS the SSOT (it replaced the reducer's former inline partition):
+ * `reduce.ts` and `computeGraph` both CONSUME it rather than re-deriving the rules.
+ * `childToContainer` (the membership owner map) is supplied by the caller so each
+ * side controls its own neutralization: the reducer passes its `kept`-filtered
+ * membership, the static path a fresh `containerMembership(doc.containers)`. A
+ * non-node/undeclared child id is absent from `endpointIds`, so every edge touching
+ * it is filtered out here regardless. The line references below point at the
+ * reducer sites that own the sibling concerns (topOutgoing index + diagnostics).
+ */
+export interface ReadinessPartition {
+  endpointIds: Set<string>;
+  backEdges: Edge[];
+  internalForwardByContainer: Map<string, Edge[]>;
+  topForwardEdges: Edge[];
+  /** per top-level entity (top node or container id) → its readiness-gating incoming edges. */
+  topIncoming: Map<string, Edge[]>;
+  /** per child node id → its within-container readiness-gating incoming edges. */
+  childIncoming: Map<string, Edge[]>;
+}
+
+export function partitionReadiness(
+  doc: Pick<PipelineVersion, 'nodes' | 'edges'>,
+  containers: readonly Container[],
+  childToContainer: Map<string, string>,
+): ReadinessPartition {
+  const nodeIds = doc.nodes.map((n) => n.id);
+  const containerIds = containers.map((c) => c.id);
+  const endpointIds = new Set<string>([...nodeIds, ...containerIds]);
+  const childSet = new Set(childToContainer.keys());
+  const allEdges = effectiveEdges(doc);
+  const forwardEdges = allEdges.filter(
+    (e) => !e.back && endpointIds.has(e.from) && endpointIds.has(e.to),
+  );
+  const backEdges = allEdges.filter(
+    (e) => e.back && endpointIds.has(e.from) && endpointIds.has(e.to),
+  );
+
+  // INTERNAL (same-container children) vs TOP-LEVEL split (reduce.ts:359-366).
+  const internalForwardByContainer = new Map<string, Edge[]>();
+  for (const c of containers) internalForwardByContainer.set(c.id, []);
+  const topForwardEdges: Edge[] = [];
+  for (const e of forwardEdges) {
+    const fc = childToContainer.get(e.from);
+    const tc = childToContainer.get(e.to);
+    if (fc !== undefined && fc === tc) internalForwardByContainer.get(fc)!.push(e);
+    else topForwardEdges.push(e);
+  }
+
+  // Top-level readiness incoming (reduce.ts:452-481, topIncoming half only — the
+  // topOutgoing index + cross-boundary diagnostics stay in the reducer).
+  const topLevelNodeIds = nodeIds.filter((id) => !childSet.has(id));
+  const topIncoming = new Map<string, Edge[]>();
+  for (const id of [...topLevelNodeIds, ...containerIds]) topIncoming.set(id, []);
+  for (const e of topForwardEdges) {
+    if (childToContainer.get(e.from) === e.to) continue; // #488 child → own container
+    const bucket = topIncoming.get(e.to);
+    if (bucket !== undefined) bucket.push(e); // a CHILD target (#498) has no bucket → excluded
+  }
+
+  // Per-container internal readiness incoming (reduce.ts:490-501).
+  const childIncoming = new Map<string, Edge[]>();
+  for (const ch of childSet) childIncoming.set(ch, []);
+  for (const c of containers) {
+    for (const e of internalForwardByContainer.get(c.id)!) childIncoming.get(e.to)!.push(e);
+  }
+
+  return {
+    endpointIds,
+    backEdges,
+    internalForwardByContainer,
+    topForwardEdges,
+    topIncoming,
+    childIncoming,
+  };
+}
+
 interface Graph {
   /** nodeId → node ids whose SUCCESS is guaranteed on every path to it. */
   guaranteed: Map<string, Set<string>>;
@@ -2782,30 +2891,50 @@ interface Graph {
  * exactly "X dominates R on the success graph" — the spec's dominance rule.
  */
 function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers'>): Graph {
+  // Endpoints = node ids ∪ container ids (#567). Container endpoints are FIRST-CLASS
+  // producers here — a `${nodes.<container>.output.*}` ref resolves against the
+  // container's real graph position, matching the reducer, which already keys
+  // readiness off exactly this partition (`partitionReadiness`, the shared SSOT).
   const nodeIds = doc.nodes.map((n) => n.id);
-  const idSet = new Set(nodeIds);
-  const effective = effectiveEdges(doc);
-  const forward = effective.filter((e) => !e.back && idSet.has(e.from) && idSet.has(e.to));
-  const back = doc.edges.filter((e) => e.back && idSet.has(e.from) && idSet.has(e.to));
+  const nodeIdSet = new Set(nodeIds);
+  const containers = doc.containers ?? [];
+  const childToContainer = containerMembership(containers).owner;
+  const part = partitionReadiness(doc, containers, childToContainer);
+  const endpointIds = part.endpointIds;
+  // Merged per-endpoint incoming: a top entity draws from `topIncoming`, a child
+  // from `childIncoming` (an endpoint is exactly one of the two).
+  const incomingOf = (id: string): Edge[] =>
+    part.topIncoming.get(id) ?? part.childIncoming.get(id) ?? [];
+  // Flattened forward edges (partition-correct) for the topo succ-decrement.
+  const forwardForWalk: Edge[] = [];
+  for (const id of endpointIds) for (const e of incomingOf(id)) forwardForWalk.push(e);
 
-  // Nodes with an incoming forward edge from an UNTRACKED endpoint — in practice
-  // a CONTAINER (node and container ids share one endpoint namespace, and this
-  // analysis is node-only, so a container predecessor is invisible here while
-  // being fully live in the reducer's readiness graph).
-  //
-  // This asymmetry only bites under an `any` join, and there it is a
-  // FALSE-ACCEPT, which is the one direction that is never safe: `r` dispatches
-  // the moment the container satisfies, while a tracked sibling is still
-  // running. Intersecting over the tracked edges alone silently asserts the
-  // sibling settled. Under `all`, an untracked predecessor merely ADDS a
-  // requirement — every tracked predecessor must satisfy regardless — so
-  // ignoring it stays sound, which is why this is scoped to `any`.
+  // `soft` + `back` stay NODE-ONLY (#567): a container-targeted back-edge would be
+  // the one LOOSENING direction (a new `default()`-visible source), and #567 needs
+  // neither back nor soft widened. A node-only `back` matches the pre-#567 behaviour
+  // exactly (a child→container back-edge was already dropped when idSet was nodes).
+  const back = doc.edges.filter((e) => e.back && nodeIdSet.has(e.from) && nodeIdSet.has(e.to));
+
+  // Endpoints whose readiness draws on an UNTRACKED predecessor — an edge from an
+  // id that is neither a node nor a container (a dangling reference `validateDoc`
+  // rejects). Real containers are now TRACKED, so their any-join is handled by the
+  // genuine intersection below (which excludes a still-running sibling — the correct
+  // conservative any-join answer). This guard survives only as a fail-safe for a
+  // malformed doc reaching `validateRefs` on its own: an unseen `any`-join
+  // predecessor is a FALSE-ACCEPT risk (the endpoint dispatches while a tracked
+  // sibling is still running), so its guaranteed/settled are zeroed.
   const nodeById = new Map(doc.nodes.map((n) => [n.id, n]));
+  const containerById = new Map(containers.map((c) => [c.id, c]));
+  const joinOf = (id: string): 'all' | 'any' => {
+    const c = containerById.get(id);
+    if (c !== undefined) return containerJoin(c);
+    const n = nodeById.get(id);
+    return n !== undefined ? nodeJoin(n) : 'all';
+  };
   const untrackedAnyJoin = new Set<string>();
-  for (const e of effective) {
-    if (e.back || !idSet.has(e.to) || idSet.has(e.from)) continue;
-    const to = nodeById.get(e.to);
-    if (to !== undefined && nodeJoin(to) === 'any') untrackedAnyJoin.add(e.to);
+  for (const e of effectiveEdges(doc)) {
+    if (e.back || !endpointIds.has(e.to) || endpointIds.has(e.from)) continue;
+    if (joinOf(e.to) === 'any') untrackedAnyJoin.add(e.to);
   }
 
   // A doc that can RE-RUN a node cannot support a stable `settled` answer: a
@@ -2831,21 +2960,25 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers
     doc.edges.some((e) => e.back === true) ||
     doc.containers.some((c) => c.kind === 'loop' || c.kind === 'foreach');
 
-  // Predecessors (forward), for reachability + the must-analysis.
+  // Predecessors (forward), for reachability + the must-analysis. Keyed over ALL
+  // endpoints (nodes + containers) off the shared readiness partition, so a
+  // container's dominance is computed identically to the reducer's readiness.
   const preds = new Map<string, { from: string; on: string }[]>();
   const indeg = new Map<string, number>();
-  for (const id of nodeIds) {
+  for (const id of endpointIds) {
     preds.set(id, []);
     indeg.set(id, 0);
   }
-  for (const e of forward) {
-    preds.get(e.to)!.push({ from: e.from, on: e.on });
-    indeg.set(e.to, (indeg.get(e.to) ?? 0) + 1);
+  for (const id of endpointIds) {
+    for (const e of incomingOf(id)) {
+      preds.get(id)!.push({ from: e.from, on: e.on });
+      indeg.set(id, (indeg.get(id) ?? 0) + 1);
+    }
   }
 
   // reachable[R] = transitive closure of forward predecessors.
   const reachable = new Map<string, Set<string>>();
-  for (const id of nodeIds) {
+  for (const id of endpointIds) {
     const acc = new Set<string>();
     const stack = preds.get(id)!.map((p) => p.from);
     while (stack.length) {
@@ -2858,13 +2991,13 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers
   }
 
   // guaranteed[R] + settled[R] via ONE topological pass (Kahn). The forward
-  // graph is a DAG (back-edges removed); any node stranded in a residual cycle
+  // graph is a DAG (back-edges removed); any endpoint stranded in a residual cycle
   // keeps the safe empty set (which refuses unconditional refs).
   const guaranteed = new Map<string, Set<string>>();
   const settled = new Map<string, Set<string>>();
   const indegWork = new Map(indeg);
-  const queue = nodeIds.filter((id) => (indegWork.get(id) ?? 0) === 0);
-  for (const id of nodeIds) {
+  const queue = [...endpointIds].filter((id) => (indegWork.get(id) ?? 0) === 0);
+  for (const id of endpointIds) {
     guaranteed.set(id, new Set());
     settled.set(id, new Set());
   }
@@ -2910,11 +3043,13 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers
         // element of settled[from] survives only if it survives the dead group's
         // own edge, and that group's predecessor is terminal). The inversion is
         // load-bearing for exactly the case the intersection cannot see: an
-        // UNTRACKED (container) predecessor under an `all` join. There `from` is
-        // skipped by the untracked group dying, while its tracked siblings —
-        // which are all settled[from] contains — may still be in flight. Pinned
-        // by test: "does not inherit a skipped node's own predecessors (untracked
-        // predecessor)".
+        // UNTRACKED predecessor under an `all` join — an edge from a dangling id
+        // `validateDoc` rejects (containers are now TRACKED endpoints, #567, so a
+        // container predecessor is handled by the intersection itself). There
+        // `from` is skipped by the untracked group dying, while its tracked
+        // siblings — which are all settled[from] contains — may still be in flight.
+        // Pinned by test: "does not inherit a skipped node's own predecessors
+        // (untracked predecessor)".
         const sbase =
           on === 'skipped' ? new Set<string>() : new Set(settled.get(from) ?? new Set<string>());
         sbase.add(from);
@@ -2929,7 +3064,7 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers
       guaranteed.set(id, new Set());
       settled.set(id, new Set());
     }
-    for (const e of forward) {
+    for (const e of forwardForWalk) {
       if (e.from !== id) continue;
       const d = (indegWork.get(e.to) ?? 0) - 1;
       indegWork.set(e.to, d);
@@ -2940,8 +3075,9 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers
   // Doc-wide `settled` refusal for a doc that can re-run nodes (see
   // `canReRunNodes`). Note this does NOT disable `${nodes.<child>.status}` inside
   // a loop's own `exitWhen`: `validateExitWhen` builds its own scope, where every
-  // child is terminal by the reducer's own precondition.
-  if (canReRunNodes) for (const id of nodeIds) settled.set(id, new Set());
+  // child is terminal by the reducer's own precondition. Zeroed over ALL endpoints
+  // so a `${nodes.<container>.status}` ref is refused in a re-run doc too.
+  if (canReRunNodes) for (const id of endpointIds) settled.set(id, new Set());
 
   // soft[R]: back-edge sources whose outputs R may read ONLY inside default().
   // A source `s` is soft-visible to R iff R is the back-edge target (or a
@@ -2971,6 +3107,18 @@ function computeGraph(doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers
  */
 export function nodeJoin(node: Pick<Node, 'config'>): 'all' | 'any' {
   return node.config['join'] === 'any' ? 'any' : 'all';
+}
+
+/**
+ * A CONTAINER's join rule (`'any'` opt-in; default `'all'`), gating its readiness
+ * from its incoming OUTER edges — the container-endpoint sibling of `nodeJoin`.
+ * SSOT shared by the reducer (`reduce.ts` imports this) and `computeGraph`, so the
+ * static availability analysis and the runtime readiness rule agree on when a
+ * container can run. Unlike a node, a container carries `join` directly (not under
+ * `config`).
+ */
+export function containerJoin(c: Pick<Container, 'join'>): 'all' | 'any' {
+  return c.join === 'any' ? 'any' : 'all';
 }
 
 /**
