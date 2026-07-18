@@ -3182,6 +3182,13 @@ export function createEngine(doc: EngineDoc): Engine {
         // it cannot change semantics; it lives in the log for the L6 cost
         // projection to SUM. Captured once at dispatch, never recomputed on replay.
         return { state, commands: [], diagnostics };
+      case 'activity.captured':
+        // #2 L9a — INERT (like `activity.metered`): a per-response prompt/completion
+        // CAPTURE FACT (shape + latency) is debugging telemetry, not run state. It
+        // never enters `outputs` or `${}`, so folding it cannot change semantics;
+        // it lives in the log for the Monitor run-detail. Captured once at dispatch,
+        // never recomputed on replay.
+        return { state, commands: [], diagnostics };
       case 'node.dispatched':
         return onDispatched(state, event, diagnostics);
       case 'node.succeeded':

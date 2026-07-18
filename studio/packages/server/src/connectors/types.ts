@@ -80,14 +80,36 @@ export interface LlmUsage {
 }
 
 /**
- * What an adapter streams. `output` and `metered` are observability only (partial
- * progress / a per-response metering fact); exactly one terminal
- * `succeeded`/`failed` ends the stream. The executor maps these to engine events
- * (`node.output` / `activity.metered` / `node.succeeded` / `node.failed`).
+ * A debugging CAPTURE fact for ONE `llm_call` provider response (#2 L9a): the
+ * prompt/completion SHAPE (hash + length, NO raw text) + provider-call latency.
+ * The "redacted" default the spec's telemetry-vs-content hardening prescribes.
+ * The executor stamps `runId`/`nodeId`/`attemptId` onto the durable
+ * `activity.captured` event; the adapter supplies the rest. `completion` is
+ * OMITTED (not null) when no completion text was extracted — fail-closed.
+ */
+export interface LlmCapture {
+  provider: string;
+  model: string;
+  latencyMs: number;
+  request: {
+    messageCount: number;
+    system?: { chars: number; contentHash: string };
+    messages: { role: 'user' | 'assistant'; chars: number; contentHash: string }[];
+  };
+  completion?: { chars: number; contentHash: string };
+}
+
+/**
+ * What an adapter streams. `output`, `metered`, and `captured` are observability
+ * only (partial progress / a per-response metering fact / a per-response
+ * prompt-completion capture fact); exactly one terminal `succeeded`/`failed` ends
+ * the stream. The executor maps these to engine events (`node.output` /
+ * `activity.metered` / `activity.captured` / `node.succeeded` / `node.failed`).
  */
 export type ActivityEvent =
   | { type: 'output'; name: string; value: unknown }
   | { type: 'metered'; usage: LlmUsage }
+  | { type: 'captured'; capture: LlmCapture }
   | { type: 'succeeded'; outputs: Record<string, unknown> }
   | {
       type: 'failed';

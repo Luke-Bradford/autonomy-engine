@@ -257,6 +257,81 @@ describe('createExecutor — activity.metered (#2 L2 usage capture)', () => {
   });
 });
 
+describe('createExecutor — activity.captured (#2 L9a prompt/completion capture)', () => {
+  it('maps a captured ActivityEvent to a durable activity.captured event, before node.succeeded', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
+    const run = seedRun(db, pvId);
+    const adapters = fakeHttpAdapter(async function* () {
+      yield {
+        type: 'captured',
+        capture: {
+          provider: 'anthropic_api',
+          model: 'claude-opus-4-8',
+          latencyMs: 12,
+          request: {
+            messageCount: 1,
+            system: { chars: 4, contentHash: 'sys-hash' },
+            messages: [{ role: 'user', chars: 5, contentHash: 'msg-hash' }],
+          },
+          completion: { chars: 3, contentHash: 'out-hash' },
+        },
+      } satisfies ActivityEvent;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+
+    const state = await startRun(deps(db, { adapters }), run);
+
+    expect(state.status).toBe('success');
+    const events = loadEngineEvents(db, run.id);
+    const types = events.map((e) => e.type);
+    expect(types).toContain('activity.captured');
+    expect(types.indexOf('activity.captured')).toBeLessThan(types.indexOf('node.succeeded'));
+    const captured = events.find((e) => e.type === 'activity.captured');
+    expect(captured).toMatchObject({
+      runId: run.id,
+      nodeId: 'n1',
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      latencyMs: 12,
+      request: {
+        messageCount: 1,
+        system: { chars: 4, contentHash: 'sys-hash' },
+        messages: [{ role: 'user', chars: 5, contentHash: 'msg-hash' }],
+      },
+      completion: { chars: 3, contentHash: 'out-hash' },
+    });
+    // The executor stamps the attempt id.
+    expect(typeof (captured as { attemptId?: unknown }).attemptId).toBe('string');
+  });
+
+  it('OMITS completion on the engine event when the capture carried none (fail-closed)', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
+    const run = seedRun(db, pvId);
+    const adapters = fakeHttpAdapter(async function* () {
+      yield {
+        type: 'captured',
+        capture: {
+          provider: 'ollama',
+          model: 'llama3',
+          latencyMs: 7,
+          request: { messageCount: 1, messages: [{ role: 'user', chars: 2, contentHash: 'h' }] },
+        },
+      } satisfies ActivityEvent;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+
+    await startRun(deps(db, { adapters }), run);
+
+    const captured = loadEngineEvents(db, run.id).find((e) => e.type === 'activity.captured');
+    expect(captured).not.toHaveProperty('completion');
+    expect(captured).toMatchObject({ provider: 'ollama', model: 'llama3', latencyMs: 7 });
+  });
+});
+
 describe('createExecutor — activity.metered price fields (#2 L5 cost)', () => {
   /** Run one node that emits a single metered fact, return the stored event. */
   async function meteredOf(

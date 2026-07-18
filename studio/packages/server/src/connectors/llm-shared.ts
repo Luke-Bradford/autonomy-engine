@@ -16,8 +16,15 @@ import type {
   ReasoningEffort,
   StructuredValidationResult,
 } from '@autonomy-studio/shared';
-import type { ActivityContext, ActivityEvent, ConnectorErrorKind, LlmUsage } from './types.js';
+import type {
+  ActivityContext,
+  ActivityEvent,
+  ConnectorErrorKind,
+  LlmCapture,
+  LlmUsage,
+} from './types.js';
 import { redactSecrets } from './redact.js';
+import { sha256Hex } from '../util/hash.js';
 
 // #2 L1 — the `llm_call` config schema + its normalization are the SSOT in
 // `@autonomy-studio/shared`; re-exported here so each adapter imports its LLM
@@ -644,6 +651,54 @@ export function meterUsage(
   if (inputTokens !== undefined) usage.inputTokens = inputTokens;
   if (outputTokens !== undefined) usage.outputTokens = outputTokens;
   return usage;
+}
+
+/**
+ * #2 L9a — assemble the debugging CAPTURE fact for one provider response into the
+ * shared `LlmCapture` shape (→ the executor's `activity.captured` event). ONE per
+ * provider response, mirroring `meterUsage`/`activity.metered`.
+ *
+ * REDACTED BY CONSTRUCTION — carries NO raw text: each message/system/completion
+ * yields `{ chars, contentHash }` (length + `sha256` fingerprint), the spec's
+ * "log hash/length/token-count, not text" default. `chars` is UTF-16 string
+ * length (a length metric, not a grapheme count); the token-count half lives on
+ * `activity.metered`. `contentHash` is a drift/reproducibility fingerprint, NOT a
+ * redaction guarantee (see `sha256Hex`).
+ *
+ * FAIL-CLOSED on absence: `system` is omitted when no system instruction was sent,
+ * and `completion` is omitted when `completionText` is undefined (a failure before
+ * a readable completion) — an absent completion is ABSENT, never `hash('')`, which
+ * would manufacture a benign fact.
+ */
+export function buildCapture(args: {
+  provider: LlmConnectionKind;
+  model: string;
+  latencyMs: number;
+  turns: LlmTurn[];
+  system?: string;
+  completionText?: string;
+}): LlmCapture {
+  const { provider, model, latencyMs, turns, system, completionText } = args;
+  const capture: LlmCapture = {
+    provider,
+    model,
+    latencyMs,
+    request: {
+      messageCount: turns.length,
+      messages: turns.map((t) => ({
+        role: t.role,
+        chars: t.content.length,
+        contentHash: sha256Hex(t.content),
+      })),
+    },
+  };
+  if (system !== undefined) {
+    capture.request.system = { chars: system.length, contentHash: sha256Hex(system) };
+  }
+  if (completionText !== undefined) {
+    capture.completion = { chars: completionText.length, contentHash: sha256Hex(completionText) };
+  }
+  return capture;
 }
 
 /**

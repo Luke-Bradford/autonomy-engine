@@ -20,6 +20,15 @@ function metered(events: ActivityEvent[]): Extract<ActivityEvent, { type: 'meter
   return events.find((e): e is Extract<ActivityEvent, { type: 'metered' }> => e.type === 'metered');
 }
 
+/** The `captured` prompt/completion event (#2 L9a). */
+function captured(events: ActivityEvent[]): Extract<ActivityEvent, { type: 'captured' }> {
+  const ev = events.find(
+    (e): e is Extract<ActivityEvent, { type: 'captured' }> => e.type === 'captured',
+  );
+  if (ev === undefined) throw new Error(`no captured event in ${JSON.stringify(events)}`);
+  return ev;
+}
+
 function ctx(over: Partial<ActivityContext> = {}): ActivityContext {
   return {
     runId: 'run_1',
@@ -92,13 +101,14 @@ describe('openaiAdapter.runActivity', () => {
   ])('fails permanent (%s → %s) when the 2xx body carries it', async (_label, body, reason) => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, body));
     const events = await drain(openaiAdapter.runActivity(ctx(), 'sk-oai'));
-    expect(events).toEqual([
-      {
-        type: 'failed',
-        kind: 'permanent',
-        error: `openai_api returned a 2xx response with no completion (${reason})`,
-      },
-    ]);
+    // #2 L9a — a capture (completion ABSENT) precedes the terminal failure.
+    expect(events.map((e) => e.type)).toEqual(['captured', 'failed']);
+    expect(failed(events)).toEqual({
+      type: 'failed',
+      kind: 'permanent',
+      error: `openai_api returned a 2xx response with no completion (${reason})`,
+    });
+    expect(captured(events).capture.completion).toBeUndefined();
   });
 
   // The complement: a PRESENT-but-empty completion is a real result and succeeds
@@ -173,7 +183,7 @@ describe('openaiAdapter.runActivity', () => {
   it('maps 429 to rate_limit and never echoes the secret', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(429, 'slow down'));
     const events = await drain(openaiAdapter.runActivity(ctx(), 'sk-secret-xyz'));
-    expect(events[0]).toMatchObject({ type: 'failed', kind: 'rate_limit' });
+    expect(failed(events)).toMatchObject({ type: 'failed', kind: 'rate_limit' });
     expect(JSON.stringify(events)).not.toContain('sk-secret-xyz');
   });
 });
@@ -274,7 +284,7 @@ describe('openaiAdapter usage capture (L2)', () => {
   it('yields a metered event with the token counts, ordered before succeeded', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     const events = await drain(openaiAdapter.runActivity(ctx(), 'sk'));
-    expect(events.map((e) => e.type)).toEqual(['metered', 'succeeded']);
+    expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'succeeded']);
     expect(metered(events)).toEqual({
       type: 'metered',
       usage: {
@@ -306,7 +316,7 @@ describe('openaiAdapter usage capture (L2)', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(429, 'slow down'));
     const events = await drain(openaiAdapter.runActivity(ctx(), 'sk'));
     expect(metered(events)).toBeUndefined();
-    expect(events[0]).toMatchObject({ type: 'failed' });
+    expect(failed(events)).toMatchObject({ type: 'failed' });
   });
 });
 

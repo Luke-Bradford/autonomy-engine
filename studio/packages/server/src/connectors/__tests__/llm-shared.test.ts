@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_STRUCTURED_REPAIRS,
   MAX_RETRY_AFTER_SECONDS,
+  buildCapture,
   buildRepairTurns,
   coerceStopReason,
   httpStatusFailure,
@@ -12,6 +13,7 @@ import {
   runStructuredWithRepair,
   structuredEcho,
 } from '../llm-shared.js';
+import { sha256Hex } from '../../util/hash.js';
 import type { LlmTurn, StructuredCallOutcome } from '../llm-shared.js';
 import type { ActivityEvent, LlmUsage } from '../types.js';
 
@@ -142,6 +144,116 @@ describe('meterUsage', () => {
       outputTokens: 0,
       meteringStatus: 'metered',
     });
+  });
+});
+
+// #2 L9a — the prompt/completion CAPTURE builder. Metadata ONLY (hash + length),
+// NEVER raw text; fail-closed on absence.
+describe('buildCapture', () => {
+  const turns: LlmTurn[] = [
+    { role: 'user', content: 'hello world' },
+    { role: 'assistant', content: 'hi' },
+  ];
+
+  it('captures per-message role/length/hash and NEVER carries raw text', () => {
+    const cap = buildCapture({
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      latencyMs: 42,
+      turns,
+      system: 'be terse',
+      completionText: 'the answer',
+    });
+    expect(cap).toEqual({
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      latencyMs: 42,
+      request: {
+        messageCount: 2,
+        system: { chars: 8, contentHash: sha256Hex('be terse') },
+        messages: [
+          { role: 'user', chars: 11, contentHash: sha256Hex('hello world') },
+          { role: 'assistant', chars: 2, contentHash: sha256Hex('hi') },
+        ],
+      },
+      completion: { chars: 10, contentHash: sha256Hex('the answer') },
+    });
+    // Defence in depth: no field anywhere holds the plaintext.
+    const blob = JSON.stringify(cap);
+    for (const raw of ['hello world', 'be terse', 'the answer']) {
+      expect(blob).not.toContain(raw);
+    }
+  });
+
+  it('omits `system` when no system instruction was sent', () => {
+    const cap = buildCapture({
+      provider: 'ollama',
+      model: 'm',
+      latencyMs: 1,
+      turns,
+      completionText: 'x',
+    });
+    expect(cap.request).not.toHaveProperty('system');
+    expect(cap.request.messageCount).toBe(2);
+  });
+
+  it('omits `completion` entirely when there is no completion (fail-closed — never hash of "")', () => {
+    const cap = buildCapture({ provider: 'openai_api', model: 'm', latencyMs: 5, turns });
+    expect(cap).not.toHaveProperty('completion');
+    // The empty-string hash must NOT appear — an absent completion is absent.
+    expect(JSON.stringify(cap)).not.toContain(sha256Hex(''));
+  });
+
+  it('is a stable drift fingerprint: identical content ⇒ identical hash, a change flips it', () => {
+    const a = buildCapture({
+      provider: 'ollama',
+      model: 'm',
+      latencyMs: 1,
+      turns,
+      completionText: 'z',
+    });
+    const b = buildCapture({
+      provider: 'ollama',
+      model: 'm',
+      latencyMs: 999,
+      turns,
+      completionText: 'z',
+    });
+    expect(b.request.messages[0]?.contentHash).toBe(a.request.messages[0]?.contentHash);
+    const c = buildCapture({
+      provider: 'ollama',
+      model: 'm',
+      latencyMs: 1,
+      turns: [
+        { role: 'user', content: 'hello worlD' },
+        { role: 'assistant', content: 'hi' },
+      ],
+      completionText: 'z',
+    });
+    expect(c.request.messages[0]?.contentHash).not.toBe(a.request.messages[0]?.contentHash);
+  });
+
+  it('records a present-but-empty completion as a real fact (chars 0, hashed)', () => {
+    // An empty completion ('') is a real result (#461 present-but-empty succeeds),
+    // distinct from ABSENT: it IS captured, with chars 0 and the empty-string hash.
+    const cap = buildCapture({
+      provider: 'openai_api',
+      model: 'm',
+      latencyMs: 1,
+      turns,
+      completionText: '',
+    });
+    expect(cap.completion).toEqual({ chars: 0, contentHash: sha256Hex('') });
+  });
+});
+
+describe('sha256Hex', () => {
+  it('is a deterministic lowercase-hex sha256 of the utf8 input', () => {
+    // Known-answer vector: sha256('') — locks the algorithm + encoding.
+    expect(sha256Hex('')).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+    expect(sha256Hex('abc')).toBe(
+      'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+    );
   });
 });
 

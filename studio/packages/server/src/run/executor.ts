@@ -334,6 +334,25 @@ export function createExecutor(deps: ExecutorDeps): Executor {
             ...(usage.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
             ...priceFields,
           });
+        } else if (ev.type === 'captured') {
+          // #2 L9a — a per-response prompt/completion CAPTURE fact (non-terminal,
+          // like `metered`): stamp the shape + latency into the durable log as
+          // `activity.captured`, ordered BEFORE the terminal. The reducer folds it
+          // inert. Built from the adapter's `ActivityContext.input` (secret-free by
+          // construction) — it carries no plaintext, so it needs no scrubbing (the
+          // capture is hash/length only). The executor adds the run/node/attempt ids.
+          const { capture } = ev;
+          events.push({
+            type: 'activity.captured',
+            runId,
+            nodeId,
+            attemptId,
+            provider: capture.provider,
+            model: capture.model,
+            latencyMs: capture.latencyMs,
+            request: capture.request,
+            ...(capture.completion !== undefined ? { completion: capture.completion } : {}),
+          });
         } else if (ev.type === 'succeeded') {
           events.push({ type: 'node.succeeded', runId, nodeId, attemptId, outputs: ev.outputs });
           return events;

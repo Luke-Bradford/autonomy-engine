@@ -1,6 +1,7 @@
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import {
   DEFAULT_LLM_TIMEOUT_MS,
+  buildCapture,
   coerceStopReason,
   httpStatusFailure,
   llmCallConfigSchema,
@@ -171,12 +172,29 @@ export const ollamaAdapter: ConnectorAdapter = {
     }
 
     // TEXT path.
+    const started = Date.now();
     const result = await llmPost(ctx, url, headers, buildBody(turns), timeoutMs);
+    const latencyMs = Date.now() - started;
+    // #2 L9a — the prompt/completion CAPTURE fact, emitted before EVERY post-request
+    // terminal. `completionText` is passed ONLY on success (failure omits it).
+    const captureOf = (completionText?: string): ActivityEvent => ({
+      type: 'captured',
+      capture: buildCapture({
+        provider: 'ollama',
+        model,
+        latencyMs,
+        turns,
+        system,
+        completionText,
+      }),
+    });
     if (result.type === 'failed') {
+      yield captureOf();
       yield result.event;
       return;
     }
     if (result.status < 200 || result.status >= 300) {
+      yield captureOf();
       yield httpStatusFailure(
         'ollama',
         result.status,
@@ -188,6 +206,7 @@ export const ollamaAdapter: ConnectorAdapter = {
     }
     const parsed = parseJsonBody(result.bodyText);
     if (!parsed.ok) {
+      yield captureOf();
       yield parsed.event;
       return;
     }
@@ -199,11 +218,13 @@ export const ollamaAdapter: ConnectorAdapter = {
     // not a candidate set (see `NoCompletionReason`).
     const message = (parsed.json as { message?: { content?: unknown } }).message;
     if (typeof message !== 'object' || message === null) {
+      yield captureOf();
       yield noCompletionFailure('ollama', 'absent_content');
       return;
     }
     const text = message.content;
     if (typeof text !== 'string') {
+      yield captureOf();
       yield noCompletionFailure('ollama', 'malformed_block');
       return;
     }
@@ -215,6 +236,7 @@ export const ollamaAdapter: ConnectorAdapter = {
       type: 'metered',
       usage: meterUsage('ollama', model, counts.prompt_eval_count, counts.eval_count),
     };
+    yield captureOf(text);
     const doneReason = (parsed.json as { done_reason?: unknown }).done_reason;
     yield {
       type: 'succeeded',

@@ -1,4 +1,5 @@
-import { createHmac, createHash } from 'node:crypto';
+import { createHmac } from 'node:crypto';
+import { sha256Hex } from '../util/hash.js';
 
 /**
  * #4 A13 — the correlation-token SSOT for `webhook` external-wait.
@@ -63,5 +64,5 @@ export function deriveExternalWaitToken(
  * bearer credential.
  */
 export function hashExternalWaitToken(token: string): string {
-  return createHash('sha256').update(token, 'utf8').digest('hex');
+  return sha256Hex(token);
 }

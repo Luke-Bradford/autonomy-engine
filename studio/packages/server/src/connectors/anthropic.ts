@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import {
   DEFAULT_LLM_TIMEOUT_MS,
+  buildCapture,
   coerceStopReason,
   httpStatusFailure,
   llmCallConfigSchema,
@@ -294,12 +295,31 @@ export const anthropicAdapter: ConnectorAdapter = {
       requestBody.output_config = { effort: reasoningEffort };
     }
 
+    const started = Date.now();
     const result = await llmPost(ctx, url, headers, requestBody, timeoutMs);
+    const latencyMs = Date.now() - started;
+    // #2 L9a — the prompt/completion CAPTURE fact, emitted before EVERY post-request
+    // terminal (success + each failure) so the debugging capture is not success-only.
+    // `completionText` is passed ONLY on success — a failure omits `completion`
+    // (fail-closed: an absent completion is absent, never a hash of '').
+    const captureOf = (completionText?: string): ActivityEvent => ({
+      type: 'captured',
+      capture: buildCapture({
+        provider: 'anthropic_api',
+        model,
+        latencyMs,
+        turns: messages,
+        system,
+        completionText,
+      }),
+    });
     if (result.type === 'failed') {
+      yield captureOf();
       yield result.event;
       return;
     }
     if (result.status < 200 || result.status >= 300) {
+      yield captureOf();
       yield httpStatusFailure(
         'anthropic_api',
         result.status,
@@ -311,11 +331,13 @@ export const anthropicAdapter: ConnectorAdapter = {
     }
     const parsed = parseJsonBody(result.bodyText);
     if (!parsed.ok) {
+      yield captureOf();
       yield parsed.event;
       return;
     }
     const extracted = extractText(parsed.json);
     if ('reason' in extracted) {
+      yield captureOf();
       yield noCompletionFailure('anthropic_api', extracted.reason);
       return;
     }
@@ -328,6 +350,7 @@ export const anthropicAdapter: ConnectorAdapter = {
       type: 'metered',
       usage: meterUsage('anthropic_api', model, usage?.input_tokens, usage?.output_tokens),
     };
+    yield captureOf(extracted.text);
     yield {
       type: 'succeeded',
       outputs: {
