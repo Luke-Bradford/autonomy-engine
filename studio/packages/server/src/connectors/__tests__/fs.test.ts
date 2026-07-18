@@ -23,6 +23,7 @@ vi.mock('node:fs/promises', async (importActual) => {
   const actual = await importActual<typeof import('node:fs/promises')>();
   return { ...actual, rename: vi.fn(actual.rename), open: vi.fn(actual.open) };
 });
+import type { FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fsAdapter } from '../fs.js';
@@ -236,43 +237,50 @@ describe('fs connector — failure classification', () => {
   // target with known content first and asserts it is UNCHANGED: the regression
   // this guards is precisely "renamed a corrupt temp over valid data", which a
   // non-pre-existing target could not detect.
-  it('a write whose fh.sync() throws propagates it: no false success, target untouched, temp cleaned', async () => {
-    const realFs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
-    await writeFile(join(root, 'out.txt'), 'original', 'utf8');
-    vi.mocked(open).mockImplementationOnce(async (...args: Parameters<typeof realFs.open>) => {
-      const fh = await realFs.open(...args);
-      fh.sync = vi.fn(async () => {
-        throw Object.assign(new Error('simulated fsync failure'), { code: 'EIO' });
+  // Both failure modes (sync-time vs close-time) share identical
+  // seed/invoke/assert scaffolding; only the throwing method on the real handle
+  // differs. `install` stages that one difference on the handle the wrapped
+  // `open` returns; everything else (temp creation, write, cleanup) is real I/O.
+  it.each<{ name: string; install: (fh: FileHandle) => void }>([
+    {
+      name: 'fh.sync() throws',
+      install: (fh) => {
+        fh.sync = vi.fn(async () => {
+          throw Object.assign(new Error('simulated fsync failure'), { code: 'EIO' });
+        });
+      },
+    },
+    {
+      name: 'fh.close() throws before rename',
+      install: (fh) => {
+        const realClose = fh.close.bind(fh);
+        fh.close = vi.fn(async () => {
+          // Free the real fd first (so the test leaks nothing), THEN surface the
+          // close-time error the way a delayed-write flush failure would.
+          await realClose();
+          throw Object.assign(new Error('simulated close-time flush failure'), { code: 'EIO' });
+        });
+      },
+    },
+  ])(
+    'a write whose $name propagates it: no false success, target untouched, temp cleaned',
+    async ({ install }) => {
+      const realFs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      await writeFile(join(root, 'out.txt'), 'original', 'utf8');
+      vi.mocked(open).mockImplementationOnce(async (...args: Parameters<typeof realFs.open>) => {
+        const fh = await realFs.open(...args);
+        install(fh);
+        return fh;
       });
-      return fh;
-    });
-    const events = await drain(invoke(ctx('file_write', { path: 'out.txt', content: 'CORRUPT' })));
-    expect(events).toHaveLength(1);
-    expect(events[0]!.type).toBe('failed'); // NOT a false `succeeded`
-    expect(await readFile(join(root, 'out.txt'), 'utf8')).toBe('original'); // never renamed over
-    expect(await readdir(root)).toEqual(['out.txt']); // incomplete temp unlinked
-  });
-
-  it('a write whose fh.close() throws before rename propagates it: no false success, target untouched, temp cleaned', async () => {
-    const realFs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
-    await writeFile(join(root, 'out.txt'), 'original', 'utf8');
-    vi.mocked(open).mockImplementationOnce(async (...args: Parameters<typeof realFs.open>) => {
-      const fh = await realFs.open(...args);
-      const realClose = fh.close.bind(fh);
-      fh.close = vi.fn(async () => {
-        // Free the real fd first (so the test leaks nothing), THEN surface the
-        // close-time error the way a delayed-write flush failure would.
-        await realClose();
-        throw Object.assign(new Error('simulated close-time flush failure'), { code: 'EIO' });
-      });
-      return fh;
-    });
-    const events = await drain(invoke(ctx('file_write', { path: 'out.txt', content: 'CORRUPT' })));
-    expect(events).toHaveLength(1);
-    expect(events[0]!.type).toBe('failed'); // NOT a false `succeeded`
-    expect(await readFile(join(root, 'out.txt'), 'utf8')).toBe('original'); // never renamed over
-    expect(await readdir(root)).toEqual(['out.txt']); // incomplete temp unlinked
-  });
+      const events = await drain(
+        invoke(ctx('file_write', { path: 'out.txt', content: 'CORRUPT' })),
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0]!.type).toBe('failed'); // NOT a false `succeeded`
+      expect(await readFile(join(root, 'out.txt'), 'utf8')).toBe('original'); // never renamed over
+      expect(await readdir(root)).toEqual(['out.txt']); // incomplete temp unlinked
+    },
+  );
 
   it('an aborted signal yields cancelled', async () => {
     const ac = new AbortController();
