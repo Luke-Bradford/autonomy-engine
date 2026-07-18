@@ -2,6 +2,7 @@ import {
   NodeOutputsFieldSchema,
   type Container,
   type Node,
+  type Output,
   type OutputType,
 } from '../schemas/pipeline.js';
 
@@ -15,7 +16,13 @@ import {
  * every path on this module stops them from ever disagreeing about which output
  * names a node produces.
  */
-export type DeclaredOutput = { name: string; type: OutputType };
+// The subset of the shared `OutputSchema` the contract checker reads — `name`,
+// `type`, and `optional` (the ref checker + reducer do not use `description`).
+// DERIVED via `Pick` from `Output` (not hand-listed) so a change to those
+// fields' shape — e.g. `optional`'s type — propagates here automatically; a
+// hand-maintained duplicate would be the exact lower-vs-validate drift this
+// module exists to prevent.
+export type DeclaredOutput = Pick<Output, 'name' | 'type' | 'optional'>;
 
 /**
  * What a node's `config.outputs` says — THREE distinct facts (#1 F13a):
@@ -116,9 +123,36 @@ export function storeOutputs(
   contract: CheckedContract,
   outputs: Record<string, unknown>,
 ): Record<string, unknown> {
-  return contract.kind === 'declared'
-    ? Object.fromEntries(contract.outputs.map((d) => [d.name, outputs[d.name]]))
-    : { ...outputs };
+  if (contract.kind !== 'declared') return { ...outputs };
+  return Object.fromEntries(
+    contract.outputs.map((d) => {
+      // #594 — one stored shape: an OPTIONAL output the producer omitted OR set
+      // explicitly to `undefined` is stored as a present `null`, not left
+      // absent. Absent/undefined would serialize AWAY in the logged
+      // `node.succeeded`, so a downstream `${nodes.x.output.opt}` would resolve
+      // to missing rather than the present-null this contract promises.
+      // Normalizing `undefined` (not just the omitted key) closes the reachable
+      // hole where an optional `json` output — for which `matchesType(undefined,
+      // 'json')` is `true` — passes `validateOutputs` with a raw `undefined` and
+      // reaches here. A REQUIRED output keeps its raw value: an absent required
+      // name is unreachable (`validateOutputs` fails the node first), though a
+      // required `json` present as an explicit `undefined` DOES reach here (same
+      // `matchesType(undefined,'json')` quirk) and is stored as-is — required
+      // outputs carry no present-null promise, so that predates and is out of
+      // scope for #594.
+      //
+      // `hasOwnProperty` (not a bare `outputs[d.name]`, which would look like a
+      // redundant guard) is DELIBERATE: it mirrors `validateOutputs`'s own-key
+      // check, so an OPTIONAL output whose name collides with an
+      // `Object.prototype` member (e.g. `toString`) normalizes to `null` here
+      // instead of capturing the inherited value — and the two paths agree on
+      // what "absent" means.
+      const has = Object.prototype.hasOwnProperty.call(outputs, d.name);
+      const value = has ? outputs[d.name] : undefined;
+      if (d.optional && value === undefined) return [d.name, null];
+      return [d.name, value];
+    }),
+  );
 }
 
 /**
@@ -146,11 +180,25 @@ export function validateOutputs(
   if (contract.kind === 'absent') return { errs: [], checked: contract };
   const errs: string[] = [];
   for (const d of contract.outputs) {
+    const value = outputs[d.name];
     if (!Object.prototype.hasOwnProperty.call(outputs, d.name)) {
+      // #594 — an absent OPTIONAL output is valid (→ present-null via
+      // `storeOutputs`); an absent REQUIRED output is still an error.
+      if (d.optional) continue;
       errs.push(`missing declared output '${d.name}'`);
       continue;
     }
-    if (!matchesType(outputs[d.name], d.type)) {
+    // #594 — a present `null` (or an explicit `undefined`) satisfies an OPTIONAL
+    // output (present-null); `storeOutputs` normalizes both to a present `null`.
+    // `matchesType(null, <scalar>)` is deliberately `false`, so the
+    // null/undefined-tolerance lives HERE, keeping `matchesType` a pure "is this
+    // value of this type" predicate AND keeping the optional contract UNIFORM
+    // across all types: without the `undefined` arm an optional SCALAR set to
+    // `undefined` hard-fails type-checking while an optional `json` — for which
+    // `matchesType(undefined,'json')` is `true` — silently passes. A required
+    // output must still match its type.
+    if (d.optional && (value === null || value === undefined)) continue;
+    if (!matchesType(value, d.type)) {
       errs.push(`output '${d.name}' is not of declared type '${d.type}'`);
     }
   }

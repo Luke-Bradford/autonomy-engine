@@ -37,6 +37,17 @@ export const OutputSchema = z.object({
   name: z.string().min(1),
   type: OutputTypeSchema,
   description: z.string().optional(),
+  // #594 — an OPTIONAL declared output MAY be produced as a present `null` (or
+  // omitted by the executor and normalized to present-null by `storeOutputs`)
+  // instead of a required present-non-null value. ABSENT = required, which is
+  // load-bearing: every pre-#594 lowered row AND every non-structured node keeps
+  // the all-required floor, so the immutable-version fold is unchanged (no old
+  // logged `node.succeeded` re-folds differently). Today only #2 structured
+  // `llm_call` lowering (`lowerOutputSchema`) sets it — from an EXPLICIT partial
+  // `required` list that omits the property. Since `OutputSchema` is the ONE
+  // shared output contract, a hand-authored node MAY set it too; `validateOutputs`
+  // / `storeOutputs` / `checkInboundOutputs` honour it uniformly (present-null).
+  optional: z.boolean().optional(),
 });
 export type Output = z.infer<typeof OutputSchema>;
 

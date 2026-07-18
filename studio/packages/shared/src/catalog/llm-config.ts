@@ -193,25 +193,43 @@ export type LlmStructuredOutputSurface = z.infer<typeof llmStructuredOutputSurfa
  * `boolean`→`boolean`, `object`/`array`→the opaque `json` (their inner shape is
  * not addressable, #6 E7).
  *
- * The schema's `required` info is deliberately NOT consumed here: the immutable
- * `PipelineVersion` keeps the whole `outputSchema` (this lowering NEVER strips it),
- * so a later ticket can recover optional/nullable typing from `outputSchema.required`
- * without re-deriving frozen rows. Lowering all properties as plain `{name,type}`
- * is therefore lossless — the optionality lives on, one field over.
+ * #594 — a property NOT named in an EXPLICIT `required` list lowers with
+ * `optional:true` (the optionality channel now lives ON the lowered row, via
+ * `Output.optional`). An ABSENT `required` list keeps every property required
+ * (the L4b all-present floor) — NOT strict-JSON-Schema "absent required = all
+ * optional", which would silently null-fill and change existing saved-schema
+ * semantics toward data loss. Optionality is therefore opt-in via an explicit
+ * partial `required` list. This is immutable-fold-safe: pre-#594 lowered rows
+ * carry no `optional` → all-required → identical fold; a new version's optional
+ * row only produces NEW events.
  *
- * L4b UPDATE: at RUNTIME, structured output requires EVERY declared field to be
- * produced (`llm-structured.ts::validateStructuredOutput`) — because a lowered row
- * has no optionality channel and the reducer's `validateOutputs` fails a
- * `missing declared output` (`matchesType(undefined,'string')` is false). So the
- * runtime floor is all-present; true optional→present-`null` semantics (which
- * needs a lowering + `matchesType` change) is the deferred follow-up (#594) the
- * sentence above anticipates, NOT something L4b delivers.
+ * At RUNTIME an optional field the model omits becomes a present `null`
+ * (`llm-structured.ts::validateStructuredOutput` normalizes it; the reducer's
+ * `validateOutputs`/`storeOutputs` accept the present-null). A required field
+ * omitted still fails `missing declared output`.
  */
 export function lowerOutputSchema(schema: LlmOutputSchema): Output[] {
-  return Object.entries(schema.properties).map(([name, prop]) => ({
-    name,
-    type: lowerOutputPropertyType(prop.type),
-  }));
+  return Object.entries(schema.properties).map(([name, prop]) => {
+    const out: Output = { name, type: lowerOutputPropertyType(prop.type) };
+    if (isOptionalProperty(schema, name)) out.optional = true;
+    return out;
+  });
+}
+
+/**
+ * #594 — the SSOT for "is this structured-output property OPTIONAL?". A property
+ * is optional ONLY when the schema carries an EXPLICIT `required` list that OMITS
+ * it; an ABSENT `required` list = ALL required (the L4b all-present back-compat
+ * floor, NOT strict-JSON-Schema "absent required = all optional", which would
+ * silently null-fill existing saved schemas toward data loss). Exported so BOTH
+ * the save-time lowering (`lowerOutputSchema`, what freezes into the immutable
+ * version) AND the dispatch-time validator (`llm-structured.ts::
+ * validateStructuredOutput`, what turns a response into `succeeded.outputs`) read
+ * ONE rule — they can never disagree about which fields are optional (the very
+ * lower-vs-validate drift class #594 is about).
+ */
+export function isOptionalProperty(schema: LlmOutputSchema, name: string): boolean {
+  return schema.required !== undefined && !schema.required.includes(name);
 }
 
 function lowerOutputPropertyType(type: LlmOutputSchema['properties'][string]['type']): OutputType {
