@@ -85,6 +85,31 @@ describe('llmCallConfigSchema', () => {
     expect(r.success).toBe(false);
   });
 
+  // #2 L3 — the reasoning knob. Exactly the spec's enum (low|medium|high|max).
+  it('accepts each `reasoningEffort` level', () => {
+    for (const effort of ['low', 'medium', 'high', 'max'] as const) {
+      expect(llmCallConfigSchema.safeParse({ prompt: 'hi', reasoningEffort: effort }).success).toBe(
+        true,
+      );
+    }
+  });
+
+  it('rejects a `reasoningEffort` outside the spec enum', () => {
+    // `xhigh` is a real Anthropic effort level but is intentionally NOT in the
+    // cross-provider SSOT enum (spec #2 config v2 lists low|medium|high|max);
+    // this boundary test pins that decision.
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi', reasoningEffort: 'xhigh' }).success).toBe(
+      false,
+    );
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi', reasoningEffort: 'none' }).success).toBe(
+      false,
+    );
+  });
+
+  it('treats `reasoningEffort` as optional (omitting it is valid)', () => {
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi' }).success).toBe(true);
+  });
+
   // SSOT: the catalog entry and the adapter validation are ONE schema object.
   it('IS the llm_call catalog configSchema (single source of truth)', () => {
     expect(getActivity('llm_call')!.configSchema).toBe(llmCallConfigSchema);
@@ -171,5 +196,15 @@ describe('normalizeLlmRequest', () => {
       stop: ['x'],
       seed: 7,
     });
+  });
+
+  // #2 L3 — `reasoningEffort` is a top-level sibling of `sampling` (it maps to a
+  // DIFFERENT request location per provider, so it is not a sampling knob); it
+  // passes through verbatim, `undefined` when absent.
+  it('passes `reasoningEffort` through, undefined when absent', () => {
+    expect(normalizeLlmRequest({ prompt: 'hi' }).reasoningEffort).toBeUndefined();
+    expect(normalizeLlmRequest({ prompt: 'hi', reasoningEffort: 'high' }).reasoningEffort).toBe(
+      'high',
+    );
   });
 });

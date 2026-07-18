@@ -200,6 +200,32 @@ describe('ollamaAdapter v2 config (L1)', () => {
     expect(body.options.num_predict).toBe(42);
   });
 
+  // #2 L3 — Ollama's `/api/chat` takes reasoning as the TOP-LEVEL `think` param
+  // (not under `options`); our enum passes through verbatim. `max` is not a
+  // documented Ollama level, so it's best-effort (may be ignored/rejected by a
+  // model) — but the ADAPTER's job is faithful passthrough, which this pins.
+  // Spec #2: "ollama/others: best-effort or ignored".
+  it('maps reasoningEffort to the top-level `think` param (verbatim, incl. max)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(
+      ollamaAdapter.runActivity(
+        ctx({ input: { prompt: 'p', model: 'llama3', reasoningEffort: 'max' } }),
+        null,
+      ),
+    );
+    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.think).toBe('max');
+    expect(body.options).toBeUndefined(); // think is not a sampling option
+  });
+
+  it('sends NO `think` when reasoningEffort is unset (byte-compat with pre-L3)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(ollamaAdapter.runActivity(ctx({ input: { prompt: 'p', model: 'llama3' } }), null));
+    expect(
+      JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string).think,
+    ).toBeUndefined();
+  });
+
   it('validates the whole node.config — the seeded `outputs` key passes (non-strict)', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     const events = await drain(

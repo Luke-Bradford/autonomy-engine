@@ -221,6 +221,39 @@ describe('openaiAdapter v2 config (L1)', () => {
     expect(body.seed).toBe(7);
   });
 
+  // #2 L3 — `reasoningEffort` maps to the top-level `reasoning_effort` param.
+  it('maps reasoningEffort to reasoning_effort (max clamps to high; OpenAI has no `max`)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(
+      openaiAdapter.runActivity(
+        ctx({ input: { prompt: 'p', model: 'gpt-4o', reasoningEffort: 'low' } }),
+        'sk',
+      ),
+    );
+    expect(
+      JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string).reasoning_effort,
+    ).toBe('low');
+
+    fetchSpy.mockClear();
+    await drain(
+      openaiAdapter.runActivity(
+        ctx({ input: { prompt: 'p', model: 'gpt-4o', reasoningEffort: 'max' } }),
+        'sk',
+      ),
+    );
+    expect(
+      JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string).reasoning_effort,
+    ).toBe('high');
+  });
+
+  it('sends NO reasoning_effort when reasoningEffort is unset (byte-compat with pre-L3)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(openaiAdapter.runActivity(ctx({ input: { prompt: 'p', model: 'gpt-4o' } }), 'sk'));
+    expect(
+      JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string).reasoning_effort,
+    ).toBeUndefined();
+  });
+
   it('validates the whole node.config — the seeded `outputs` key passes (non-strict)', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     const events = await drain(

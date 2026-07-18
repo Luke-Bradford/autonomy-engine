@@ -1,7 +1,12 @@
 import { z } from 'zod';
 import type { ConnectionKind } from '@autonomy-studio/shared';
 import { llmCallConfigSchema, normalizeLlmRequest } from '@autonomy-studio/shared';
-import type { LlmCallConfig, LlmSampling, NormalizedLlmRequest } from '@autonomy-studio/shared';
+import type {
+  LlmCallConfig,
+  LlmSampling,
+  NormalizedLlmRequest,
+  ReasoningEffort,
+} from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorErrorKind, LlmUsage } from './types.js';
 import { redactSecrets } from './redact.js';
 
@@ -9,7 +14,7 @@ import { redactSecrets } from './redact.js';
 // `@autonomy-studio/shared`; re-exported here so each adapter imports its LLM
 // machinery from ONE module. See `shared/src/catalog/llm-config.ts`.
 export { llmCallConfigSchema, normalizeLlmRequest };
-export type { LlmCallConfig, LlmSampling, NormalizedLlmRequest };
+export type { LlmCallConfig, LlmSampling, NormalizedLlmRequest, ReasoningEffort };
 
 /**
  * P3b — shared machinery for the LLM connector adapters (`anthropic_api`,
@@ -292,6 +297,21 @@ const STOP_REASON_UNKNOWN = 'unknown';
  */
 export function coerceStopReason(value: unknown): string {
   return typeof value === 'string' ? value : STOP_REASON_UNKNOWN;
+}
+
+/**
+ * #2 L3 — lower the portable `reasoningEffort` to OpenAI's `reasoning_effort`
+ * vocabulary. Anthropic (`output_config.effort`) and Ollama (`think`) both accept
+ * the full `low|medium|high|max` enum verbatim, so ONLY OpenAI needs a mapping:
+ * its canonical levels are `low|medium|high` (some newer models also accept
+ * `minimal`/`xhigh`, but never `max`), so `max` clamps DOWN to the strongest
+ * universally-valid level, `high`. Clamping (not dropping) preserves the author's
+ * "maximum reasoning" intent on the provider that lacks a `max` rung. This is the
+ * single place that decides the OpenAI lowering, mirroring how `meterUsage` is the
+ * single place that classifies usage completeness.
+ */
+export function openAiReasoningEffort(effort: ReasoningEffort): 'low' | 'medium' | 'high' {
+  return effort === 'max' ? 'high' : effort;
 }
 
 /** A token count is valid only if it is a non-negative integer. */

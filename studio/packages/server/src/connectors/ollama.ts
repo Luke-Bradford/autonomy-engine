@@ -75,7 +75,7 @@ export const ollamaAdapter: ConnectorAdapter = {
       return;
     }
 
-    const { system, messages: turns, sampling } = normalizeLlmRequest(input.data);
+    const { system, messages: turns, sampling, reasoningEffort } = normalizeLlmRequest(input.data);
     // Ollama's `/api/chat` carries the system instruction as a LEADING
     // `role:system` message; sampling lives under `options` (`num_predict` is
     // its name for max output tokens).
@@ -90,6 +90,16 @@ export const ollamaAdapter: ConnectorAdapter = {
     if (sampling.seed !== undefined) options.seed = sampling.seed;
     const requestBody: Record<string, unknown> = { model, messages, stream: false };
     if (Object.keys(options).length > 0) requestBody.options = options;
+    // #2 L3 — Ollama's `/api/chat` takes reasoning as the TOP-LEVEL `think` param
+    // (NOT under `options`), which accepts a boolean OR a level string, so our
+    // enum passes through verbatim. Best-effort per the spec ("ollama/others:
+    // best-effort or ignored"): Ollama documents `low|medium|high` levels (e.g.
+    // gpt-oss); `max` is NOT a documented Ollama level, so `think:'max'` is
+    // best-effort and may be ignored or rejected by a given model. A thinking
+    // model separates its reasoning trace; a non-thinking model ignores the
+    // field. No key when unset, so a node with no `reasoningEffort` is
+    // byte-identical to pre-L3.
+    if (reasoningEffort !== undefined) requestBody.think = reasoningEffort;
 
     const baseUrl = (config.data.baseUrl ?? DEFAULT_OLLAMA_BASE_URL).replace(/\/+$/, '');
     const result = await llmPost(
