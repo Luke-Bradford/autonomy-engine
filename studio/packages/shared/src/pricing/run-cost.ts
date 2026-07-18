@@ -8,13 +8,20 @@ import { EngineEventSchema } from '../engine/types.js';
  * a later price change never alters a past run's recorded cost (spec #2's replay
  * invariant).
  *
- * FAIL-CLOSED (the #473 / F13a lesson): an absent `costEstimate` — an unpriced
- * model, OR a response with incomplete usage (`meteringStatus:'unknown'`) — is the
- * run-cost INCOMPLETENESS signal. It is NEVER summed as `0` (a manufactured zero
- * would silently understate spend, the exact fail-open shape the merge-gate and
- * F13a forbid). Instead it flips `complete` to `false` and increments
- * `costUnknownResponseCount`, so `totalCostEstimate` is honestly a LOWER BOUND
- * whenever `complete` is false.
+ * FAIL-CLOSED (the #473 / F13a lesson): an absent `costEstimate` on a response
+ * whose cost we EXPECTED to know — an unpriced model, OR incomplete usage
+ * (`meteringStatus:'unknown'`) — is the run-cost INCOMPLETENESS signal. It is
+ * NEVER summed as `0` (a manufactured zero would silently understate spend, the
+ * exact fail-open shape the merge-gate and F13a forbid). Instead it flips
+ * `complete` to `false` and increments `costUnknownResponseCount`, so
+ * `totalCostEstimate` is honestly a LOWER BOUND whenever `complete` is false.
+ *
+ * L14 carves out a THIRD category: a `meteringStatus:'unpriced'` response — a
+ * CLI/subscription call whose cost is a known FLAT/covered zero-marginal, not a
+ * measurement gap — also lacks a `costEstimate` but must NOT flip `complete`. It
+ * is counted in its own `unpricedResponseCount` so the run stays complete while
+ * the Monitor can still surface "N subscription calls." The three counts partition
+ * every response: `priced + unpriced + costUnknown === responseCount`.
  *
  * TOTAL / never-throws (the prevention-log #12 lesson): every payload is
  * re-validated through `EngineEventSchema.safeParse`, and a row that does not
@@ -44,10 +51,19 @@ export interface RunCost {
   /** Responses carrying a `costEstimate` (price resolved AND both token counts present). */
   pricedResponseCount: number;
   /**
-   * Responses WITHOUT a `costEstimate` — an unpriced model, OR incomplete usage
-   * (`meteringStatus:'unknown'`). Cause-neutral: what they share is that their
-   * cost is UNKNOWN, which is why the total is a lower bound. Always
-   * `pricedResponseCount + costUnknownResponseCount === responseCount`.
+   * L14: responses with `meteringStatus:'unpriced'` — a CLI/subscription call whose
+   * cost is a KNOWN flat/covered zero-marginal (no unit price by design), NOT a
+   * measurement gap. They carry no `costEstimate` but do NOT flip `complete`; they
+   * are surfaced separately so a run of subscription calls reads as complete-but-
+   * uncosted rather than incomplete.
+   */
+  unpricedResponseCount: number;
+  /**
+   * Responses whose cost is genuinely UNKNOWN — an unpriced MODEL, OR incomplete
+   * usage (`meteringStatus:'unknown'`): a response we expected to price but could
+   * not. This is the incompleteness signal (it flips `complete`); an `unpriced`
+   * subscription call is EXCLUDED (see `unpricedResponseCount`). Always
+   * `pricedResponseCount + unpricedResponseCount + costUnknownResponseCount === responseCount`.
    */
   costUnknownResponseCount: number;
   /** Sum of the PRESENT `inputTokens` / `outputTokens` counts. A partial count
@@ -91,6 +107,11 @@ export interface PipelineCostAggregates {
   responseCount: number;
   /** Responses carrying a `costEstimate` (present — a genuine `0` counts, an absent key does not). */
   pricedResponseCount: number;
+  /** L14: responses with `meteringStatus:'unpriced'` (subscription/CLI, no unit
+   * price by design). Disjoint from `pricedResponseCount` — the executor never
+   * stamps a `costEstimate` on an `unpriced` response — so `costUnknownResponseCount`
+   * is derived as `responseCount - pricedResponseCount - unpricedResponseCount`. */
+  unpricedResponseCount: number;
   /** SUM of the PRESENT `costEstimate`s — a LOWER BOUND; absent ones contribute
    * nothing, never a manufactured 0 (the fail-closed rule). */
   totalCostEstimate: number;
@@ -105,24 +126,30 @@ export interface PipelineCostAggregates {
  * bounded SQL rollup (#599, `aggregatePipelineCost`) funnel through here, so the
  * fail-closed rule lives in ONE place and the two paths cannot drift:
  *
- *   - `costUnknownResponseCount` is DERIVED as `responseCount - pricedResponseCount`,
- *     NEVER summed as a manufactured 0 — an absent `costEstimate` is already
- *     excluded from `pricedResponseCount`, so the difference is exactly the
- *     unpriced/unknown count (the #473 / F13a lesson).
+ *   - `costUnknownResponseCount` is DERIVED as
+ *     `responseCount - pricedResponseCount - unpricedResponseCount`, NEVER summed
+ *     as a manufactured 0 — a genuine gap (absent `costEstimate` on a response we
+ *     expected to price) is excluded from BOTH `pricedResponseCount` and
+ *     `unpricedResponseCount`, so the difference is exactly the unknown count (the
+ *     #473 / F13a lesson). L14: a subscription `unpriced` response is carved OUT of
+ *     the gap so it does not flip `complete`.
  *   - `complete` is `costUnknownResponseCount === 0`, matching `computeRunCost`.
  *
  * `runCount`/`incompleteRunCount` are passed through as measured. The caller is
- * responsible for computing all three counts over the SAME row set (same join,
- * filter, owner scope) so the documented invariant
- * `complete === (incompleteRunCount === 0)` holds.
+ * responsible for computing all counts over the SAME row set (same join, filter,
+ * owner scope) so the documented invariant `complete === (incompleteRunCount === 0)`
+ * holds — a run counts as incomplete IFF it has a genuine cost-unknown response
+ * (NOT merely an `unpriced` one).
  */
 export function rollupFromAggregates(agg: PipelineCostAggregates): PipelineCostRollup {
-  const costUnknownResponseCount = agg.responseCount - agg.pricedResponseCount;
+  const costUnknownResponseCount =
+    agg.responseCount - agg.pricedResponseCount - agg.unpricedResponseCount;
   return {
     currency: 'USD',
     totalCostEstimate: agg.totalCostEstimate,
     responseCount: agg.responseCount,
     pricedResponseCount: agg.pricedResponseCount,
+    unpricedResponseCount: agg.unpricedResponseCount,
     costUnknownResponseCount,
     inputTokens: agg.inputTokens,
     outputTokens: agg.outputTokens,
@@ -138,6 +165,7 @@ export function computeRunCost(events: readonly { payload: unknown }[]): RunCost
   let totalCostEstimate = 0;
   let responseCount = 0;
   let pricedResponseCount = 0;
+  let unpricedResponseCount = 0;
   let costUnknownResponseCount = 0;
   let inputTokens = 0;
   let outputTokens = 0;
@@ -152,11 +180,19 @@ export function computeRunCost(events: readonly { payload: unknown }[]): RunCost
     if (e.inputTokens !== undefined) inputTokens += e.inputTokens;
     if (e.outputTokens !== undefined) outputTokens += e.outputTokens;
 
+    // Three disjoint, exhaustive categories. `costEstimate` presence wins first —
+    // it is stamped ONLY when a price resolved AND both tokens were present, so its
+    // presence means a fully-known cost regardless of status.
     if (e.costEstimate !== undefined) {
       totalCostEstimate += e.costEstimate;
       pricedResponseCount += 1;
+    } else if (e.meteringStatus === 'unpriced') {
+      // L14: a subscription/CLI call — cost is a known flat/covered zero-marginal,
+      // NOT a measurement gap, so it does not flip `complete`.
+      unpricedResponseCount += 1;
     } else {
-      // FAIL-CLOSED: no manufactured 0 — the absence is recorded, not padded.
+      // FAIL-CLOSED: a genuine gap (unpriced model / unknown usage). No manufactured
+      // 0 — the absence is recorded, not padded, and flips `complete`.
       costUnknownResponseCount += 1;
     }
   }
@@ -166,6 +202,7 @@ export function computeRunCost(events: readonly { payload: unknown }[]): RunCost
     totalCostEstimate,
     responseCount,
     pricedResponseCount,
+    unpricedResponseCount,
     costUnknownResponseCount,
     inputTokens,
     outputTokens,
@@ -177,10 +214,10 @@ export function computeRunCost(events: readonly { payload: unknown }[]): RunCost
  * fold-many counterpart to {@link computeRunCost}'s fold-one. Sums the
  * money/count fields and delegates the fail-closed derivation to
  * {@link rollupFromAggregates} (the single derivation site shared with the #599
- * SQL rollup). Summing each run's `pricedResponseCount` and deriving unknown as
- * `responseCount - priced` is equivalent to summing each run's
- * `costUnknownResponseCount` directly, since `computeRunCost` guarantees
- * `priced + unknown === responseCount` per run.
+ * SQL rollup). Summing each run's `pricedResponseCount` + `unpricedResponseCount`
+ * and deriving unknown as `responseCount - priced - unpriced` is equivalent to
+ * summing each run's `costUnknownResponseCount` directly, since `computeRunCost`
+ * guarantees `priced + unpriced + unknown === responseCount` per run.
  *
  * NOTE (#599): the per-pipeline cost ROUTE no longer calls this — it aggregates
  * bounded-ly in SQL (`aggregatePipelineCost`) then derives via
@@ -193,6 +230,7 @@ export function rollupPipelineCost(runCosts: readonly RunCost[]): PipelineCostRo
   let totalCostEstimate = 0;
   let responseCount = 0;
   let pricedResponseCount = 0;
+  let unpricedResponseCount = 0;
   let inputTokens = 0;
   let outputTokens = 0;
   let incompleteRunCount = 0;
@@ -201,6 +239,7 @@ export function rollupPipelineCost(runCosts: readonly RunCost[]): PipelineCostRo
     totalCostEstimate += rc.totalCostEstimate;
     responseCount += rc.responseCount;
     pricedResponseCount += rc.pricedResponseCount;
+    unpricedResponseCount += rc.unpricedResponseCount;
     inputTokens += rc.inputTokens;
     outputTokens += rc.outputTokens;
     if (!rc.complete) incompleteRunCount += 1;
@@ -211,6 +250,7 @@ export function rollupPipelineCost(runCosts: readonly RunCost[]): PipelineCostRo
     incompleteRunCount,
     responseCount,
     pricedResponseCount,
+    unpricedResponseCount,
     totalCostEstimate,
     inputTokens,
     outputTokens,

@@ -78,6 +78,41 @@ describe('computeRunCost', () => {
     expect(cost.complete).toBe(false);
   });
 
+  it('L14: an unpriced (subscription/CLI) response is its OWN category — NOT a cost gap, stays complete', () => {
+    // meteringStatus 'unpriced' → a CLI/subscription call that is metered (we know
+    // provider/model, maybe tokens) but has NO per-response dollar price BY DESIGN
+    // (flat/covered). The executor guarantees it carries no costEstimate. It is
+    // NOT a measurement gap, so it does NOT flip complete=false — it lands in its
+    // own `unpricedResponseCount`, distinct from the genuine `costUnknownResponseCount`.
+    const cost = computeRunCost([
+      metered({ inputTokens: 100, outputTokens: 200, costEstimate: 0.01 }),
+      metered({ meteringStatus: 'unpriced', inputTokens: 50, outputTokens: 60 }),
+    ]);
+    expect(cost.responseCount).toBe(2);
+    expect(cost.pricedResponseCount).toBe(1);
+    expect(cost.unpricedResponseCount).toBe(1);
+    expect(cost.costUnknownResponseCount).toBe(0);
+    // total is the ONE priced response — the unpriced one adds no dollars (there are none).
+    expect(cost.totalCostEstimate).toBeCloseTo(0.01, 10);
+    // tokens are still summed (usage is a fact even when there is no price).
+    expect(cost.inputTokens).toBe(150);
+    expect(cost.outputTokens).toBe(260);
+    // a subscription call is not a measurement gap → the run is COMPLETE.
+    expect(cost.complete).toBe(true);
+  });
+
+  it('L14: an unpriced response alongside a genuine cost-unknown one → still incomplete (the gap remains)', () => {
+    const cost = computeRunCost([
+      metered({ meteringStatus: 'unpriced', inputTokens: 1, outputTokens: 1 }),
+      // genuine gap: metered model with no costEstimate (unpriced MODEL, not subscription)
+      metered({ inputTokens: 999, outputTokens: 999 }),
+    ]);
+    expect(cost.responseCount).toBe(2);
+    expect(cost.unpricedResponseCount).toBe(1);
+    expect(cost.costUnknownResponseCount).toBe(1);
+    expect(cost.complete).toBe(false);
+  });
+
   it('a run with zero metered responses is complete with a $0 total (nothing to price)', () => {
     const cost = computeRunCost([]);
     expect(cost.responseCount).toBe(0);
@@ -111,14 +146,20 @@ describe('computeRunCost', () => {
     expect(cost.totalCostEstimate).toBeCloseTo(0.001, 10);
   });
 
-  it('invariant: pricedResponseCount + costUnknownResponseCount === responseCount', () => {
+  it('invariant: priced + unpriced + costUnknown === responseCount (L14: three disjoint categories)', () => {
     const cost = computeRunCost([
-      metered({ inputTokens: 1, outputTokens: 1, costEstimate: 0.001 }),
-      metered({ inputTokens: 1, outputTokens: 1 }),
-      metered({ meteringStatus: 'unknown', inputTokens: 1 }),
+      metered({ inputTokens: 1, outputTokens: 1, costEstimate: 0.001 }), // priced
+      metered({ inputTokens: 1, outputTokens: 1 }), // unpriced MODEL → cost-unknown
+      metered({ meteringStatus: 'unknown', inputTokens: 1 }), // partial usage → cost-unknown
+      metered({ meteringStatus: 'unpriced', inputTokens: 1, outputTokens: 1 }), // subscription
     ]);
-    expect(cost.pricedResponseCount + cost.costUnknownResponseCount).toBe(cost.responseCount);
-    expect(cost.responseCount).toBe(3);
+    expect(
+      cost.pricedResponseCount + cost.unpricedResponseCount + cost.costUnknownResponseCount,
+    ).toBe(cost.responseCount);
+    expect(cost.responseCount).toBe(4);
+    expect(cost.pricedResponseCount).toBe(1);
+    expect(cost.unpricedResponseCount).toBe(1);
+    expect(cost.costUnknownResponseCount).toBe(2);
   });
 });
 
@@ -168,6 +209,25 @@ describe('rollupPipelineCost', () => {
     expect(rollup.totalCostEstimate).toBeCloseTo(0.005, 10);
   });
 
+  it('L14: a pipeline of priced + subscription(unpriced) runs (no gaps) rolls up COMPLETE', () => {
+    const priced = computeRunCost([
+      metered({ inputTokens: 1, outputTokens: 1, costEstimate: 0.004 }),
+    ]);
+    const subscription = computeRunCost([
+      metered({ meteringStatus: 'unpriced', inputTokens: 10, outputTokens: 20 }),
+      metered({ meteringStatus: 'unpriced', inputTokens: 5, outputTokens: 5 }),
+    ]);
+    const rollup = rollupPipelineCost([priced, subscription]);
+    expect(rollup.responseCount).toBe(3);
+    expect(rollup.pricedResponseCount).toBe(1);
+    expect(rollup.unpricedResponseCount).toBe(2);
+    expect(rollup.costUnknownResponseCount).toBe(0);
+    // no measurement gap anywhere → complete, and no run counts as incomplete.
+    expect(rollup.incompleteRunCount).toBe(0);
+    expect(rollup.complete).toBe(true);
+    expect(rollup.totalCostEstimate).toBeCloseTo(0.004, 10);
+  });
+
   it('rollupPipelineCost delegates to rollupFromAggregates (identical output for equivalent aggregates)', () => {
     // #599 — the array fold and the SQL rollup MUST agree. This pins that
     // `rollupPipelineCost` produces exactly what `rollupFromAggregates` would for
@@ -186,6 +246,7 @@ describe('rollupPipelineCost', () => {
         incompleteRunCount: 1,
         responseCount: 3,
         pricedResponseCount: 2,
+        unpricedResponseCount: 0,
         totalCostEstimate: 0.015,
         inputTokens: 160,
         outputTokens: 160,
@@ -201,6 +262,7 @@ describe('rollupFromAggregates (#599 — the single fail-closed derivation site)
       incompleteRunCount: 2,
       responseCount: 10,
       pricedResponseCount: 7,
+      unpricedResponseCount: 0,
       totalCostEstimate: 1.25,
       inputTokens: 500,
       outputTokens: 900,
@@ -223,6 +285,7 @@ describe('rollupFromAggregates (#599 — the single fail-closed derivation site)
       incompleteRunCount: 0,
       responseCount: 5,
       pricedResponseCount: 5,
+      unpricedResponseCount: 0,
       totalCostEstimate: 0.5,
       inputTokens: 10,
       outputTokens: 20,
@@ -237,6 +300,7 @@ describe('rollupFromAggregates (#599 — the single fail-closed derivation site)
       incompleteRunCount: 0,
       responseCount: 0,
       pricedResponseCount: 0,
+      unpricedResponseCount: 0,
       totalCostEstimate: 0,
       inputTokens: 0,
       outputTokens: 0,
@@ -245,5 +309,38 @@ describe('rollupFromAggregates (#599 — the single fail-closed derivation site)
     expect(rollup.responseCount).toBe(0);
     expect(rollup.costUnknownResponseCount).toBe(0);
     expect(rollup.complete).toBe(true);
+  });
+
+  it('L14: DERIVES costUnknown = responseCount - priced - unpriced; unpriced does NOT flip complete', () => {
+    const rollup = rollupFromAggregates({
+      runCount: 3,
+      incompleteRunCount: 0,
+      responseCount: 8,
+      pricedResponseCount: 5,
+      unpricedResponseCount: 3, // subscription calls — no dollar price, but not a gap
+      totalCostEstimate: 2,
+      inputTokens: 100,
+      outputTokens: 200,
+    });
+    // 8 - 5 - 3 = 0 genuine gaps → complete, even though only 5 carry a dollar cost.
+    expect(rollup.costUnknownResponseCount).toBe(0);
+    expect(rollup.unpricedResponseCount).toBe(3);
+    expect(rollup.complete).toBe(true);
+  });
+
+  it('L14: a genuine gap alongside unpriced responses still derives a non-zero costUnknown', () => {
+    const rollup = rollupFromAggregates({
+      runCount: 2,
+      incompleteRunCount: 1,
+      responseCount: 6,
+      pricedResponseCount: 3,
+      unpricedResponseCount: 2,
+      totalCostEstimate: 0.9,
+      inputTokens: 10,
+      outputTokens: 10,
+    });
+    // 6 - 3 - 2 = 1 genuine cost-unknown response → incomplete.
+    expect(rollup.costUnknownResponseCount).toBe(1);
+    expect(rollup.complete).toBe(false);
   });
 });

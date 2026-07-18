@@ -122,9 +122,12 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
    * (`aggregatePipelineCost`, #599) — a fixed number of scalar queries whose
    * result is O(1), rather than loading every metered event (runs × LLM-calls,
    * unbounded) into memory — then the shared fail-closed SSOT derivation
-   * (`rollupFromAggregates`). Fail-closed: an unpriced/unknown response leaves the
-   * rollup `complete:false` (and its run counted in `incompleteRunCount`); the
-   * total is an honest lower bound, never manufactured-0-padded.
+   * (`rollupFromAggregates`). Fail-closed: a genuine cost gap (an unpriced MODEL, or
+   * `meteringStatus:'unknown'` usage) leaves the rollup `complete:false` (and its
+   * run counted in `incompleteRunCount`); the total is an honest lower bound, never
+   * manufactured-0-padded. #2 L14: a subscription `meteringStatus:'unpriced'`
+   * response is NOT a gap — counted separately (`unpricedResponseCount`), it does
+   * not flip `complete` or count its run as incomplete.
    *
    * Owner-scoped in TWO places (authentication ≠ authorization): `requireOwned`
    * on the pipeline, AND `aggregatePipelineCost` filters on the RUNS' own

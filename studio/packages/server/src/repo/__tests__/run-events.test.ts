@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   CATALOG_VERSION,
+  computeRunCost,
   rollupFromAggregates,
+  rollupPipelineCost,
   type NewPipelineVersion,
 } from '@autonomy-studio/shared';
 import { runEvents } from '../../db/schema.js';
@@ -110,7 +112,12 @@ describe('run-events repo', () => {
     // when priced). An ABSENT costEstimate is the cost-unknown signal.
     function metered(
       runId: string,
-      fields: { inputTokens: number; outputTokens: number; cost?: number },
+      fields: {
+        inputTokens: number;
+        outputTokens: number;
+        cost?: number;
+        meteringStatus?: 'metered' | 'unknown' | 'unpriced';
+      },
     ): Record<string, unknown> {
       const base: Record<string, unknown> = {
         type: 'activity.metered',
@@ -119,7 +126,7 @@ describe('run-events repo', () => {
         attemptId: 'n1#1',
         provider: 'anthropic_api',
         model: 'claude-opus-4-8',
-        meteringStatus: 'metered',
+        meteringStatus: fields.meteringStatus ?? 'metered',
         inputTokens: fields.inputTokens,
         outputTokens: fields.outputTokens,
       };
@@ -254,6 +261,137 @@ describe('run-events repo', () => {
       expect(rollupFromAggregates(agg).complete).toBe(false);
     });
 
+    it('L14: a subscription (meteringStatus=unpriced) response is its own category, NOT a cost gap', () => {
+      const { db } = freshDb();
+      const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+      const v = mkVersion(db, pipeline.id);
+      const subRun = mkRun(db, v.id); // two subscription calls — no dollar cost, no gap
+      const pricedRun = mkRun(db, v.id);
+      const gapRun = mkRun(db, v.id); // a genuine cost-unknown response
+      appendRunEvent(db, {
+        runId: subRun.id,
+        type: 'activity.metered',
+        payload: metered(subRun.id, {
+          inputTokens: 10,
+          outputTokens: 20,
+          meteringStatus: 'unpriced',
+        }),
+      });
+      appendRunEvent(db, {
+        runId: subRun.id,
+        type: 'activity.metered',
+        payload: metered(subRun.id, {
+          inputTokens: 5,
+          outputTokens: 5,
+          meteringStatus: 'unpriced',
+        }),
+      });
+      appendRunEvent(db, {
+        runId: pricedRun.id,
+        type: 'activity.metered',
+        payload: metered(pricedRun.id, { inputTokens: 1, outputTokens: 1, cost: 0.02 }),
+      });
+      appendRunEvent(db, {
+        runId: gapRun.id,
+        type: 'activity.metered',
+        payload: metered(gapRun.id, { inputTokens: 9, outputTokens: 9 }), // unpriced MODEL → gap
+      });
+
+      const agg = aggregatePipelineCost(db, pipeline.id, 'local');
+      expect(agg.responseCount).toBe(4);
+      expect(agg.pricedResponseCount).toBe(1);
+      expect(agg.unpricedResponseCount).toBe(2); // the two subscription calls
+      // ONLY gapRun is incomplete — the subscription run is NOT (its cost is known: none).
+      expect(agg.incompleteRunCount).toBe(1);
+      expect(agg.totalCostEstimate).toBeCloseTo(0.02, 10); // subscription adds no dollars
+
+      const rollup = rollupFromAggregates(agg);
+      // costUnknown = 4 - 1 priced - 2 unpriced = 1 genuine gap.
+      expect(rollup.costUnknownResponseCount).toBe(1);
+      expect(rollup.unpricedResponseCount).toBe(2);
+      expect(rollup.complete).toBe(false);
+      expect(rollup.complete).toBe(agg.incompleteRunCount === 0);
+    });
+
+    it('L14: a pipeline of ONLY subscription responses is COMPLETE (no measurement gap)', () => {
+      const { db } = freshDb();
+      const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+      const v = mkVersion(db, pipeline.id);
+      const subRun = mkRun(db, v.id);
+      appendRunEvent(db, {
+        runId: subRun.id,
+        type: 'activity.metered',
+        payload: metered(subRun.id, {
+          inputTokens: 3,
+          outputTokens: 4,
+          meteringStatus: 'unpriced',
+        }),
+      });
+      const agg = aggregatePipelineCost(db, pipeline.id, 'local');
+      expect(agg.responseCount).toBe(1);
+      expect(agg.pricedResponseCount).toBe(0);
+      expect(agg.unpricedResponseCount).toBe(1);
+      expect(agg.incompleteRunCount).toBe(0); // subscription-only run is complete
+      const rollup = rollupFromAggregates(agg);
+      expect(rollup.costUnknownResponseCount).toBe(0);
+      expect(rollup.complete).toBe(true);
+    });
+
+    it('L14: SQL rollup === in-memory fold over the SAME rows (incl. unpriced) — the paths cannot drift', () => {
+      // The strongest anti-drift guard: run one mixed event set (priced, subscription
+      // unpriced, genuine gap, $0-priced, zero-metered run) through BOTH the bounded
+      // SQL path (aggregatePipelineCost→rollupFromAggregates) AND the in-memory fold
+      // (computeRunCost per run→rollupPipelineCost), and assert identical rollups.
+      const { db } = freshDb();
+      const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+      const v = mkVersion(db, pipeline.id);
+      const rPriced = mkRun(db, v.id);
+      const rSub = mkRun(db, v.id);
+      const rGap = mkRun(db, v.id);
+      mkRun(db, v.id); // a zero-metered run — counts toward runCount only
+      const rows: { runId: string; payload: Record<string, unknown> }[] = [
+        {
+          runId: rPriced.id,
+          payload: metered(rPriced.id, { inputTokens: 10, outputTokens: 20, cost: 0.03 }),
+        },
+        {
+          runId: rPriced.id,
+          payload: metered(rPriced.id, { inputTokens: 1, outputTokens: 1, cost: 0 }),
+        },
+        {
+          runId: rSub.id,
+          payload: metered(rSub.id, {
+            inputTokens: 5,
+            outputTokens: 6,
+            meteringStatus: 'unpriced',
+          }),
+        },
+        {
+          runId: rSub.id,
+          payload: metered(rSub.id, {
+            inputTokens: 7,
+            outputTokens: 8,
+            meteringStatus: 'unpriced',
+          }),
+        },
+        { runId: rGap.id, payload: metered(rGap.id, { inputTokens: 9, outputTokens: 9 }) }, // unpriced MODEL → gap
+        {
+          runId: rGap.id,
+          payload: metered(rGap.id, { inputTokens: 2, outputTokens: 3, meteringStatus: 'unknown' }),
+        },
+      ];
+      for (const r of rows) {
+        appendRunEvent(db, { runId: r.runId, type: 'activity.metered', payload: r.payload });
+      }
+
+      const sqlRollup = rollupFromAggregates(aggregatePipelineCost(db, pipeline.id, 'local'));
+      const foldRollup = rollupPipelineCost(
+        [rPriced, rSub, rGap].map((run) => computeRunCost(listRunEvents(db, run.id))),
+      );
+      // The zero-metered run contributes only to runCount; fold it in so both agree.
+      expect(sqlRollup).toEqual({ ...foldRollup, runCount: 4 });
+    });
+
     it('an empty pipeline (runs but no metered events) → complete $0, runCount counts the runs', () => {
       const { db } = freshDb();
       const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
@@ -266,6 +404,7 @@ describe('run-events repo', () => {
         incompleteRunCount: 0,
         responseCount: 0,
         pricedResponseCount: 0,
+        unpricedResponseCount: 0,
         totalCostEstimate: 0,
         inputTokens: 0,
         outputTokens: 0,
@@ -280,6 +419,7 @@ describe('run-events repo', () => {
         incompleteRunCount: 0,
         responseCount: 0,
         pricedResponseCount: 0,
+        unpricedResponseCount: 0,
         totalCostEstimate: 0,
         inputTokens: 0,
         outputTokens: 0,

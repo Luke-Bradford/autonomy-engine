@@ -304,7 +304,18 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // equivalently `meteringStatus === 'metered'` (meterUsage sets that iff
           // both counts are valid) — so its presence ⟺ a trustworthy full cost.
           const { usage } = ev;
-          const price = resolvePrice(usage.provider, usage.model, priceOverride);
+          // #2 L14 — a subscription/CLI response (`meteringStatus:'unpriced'`) has
+          // NO per-token dollar price BY DESIGN (a flat/covered seat pays for it).
+          // Suppress price resolution entirely so ALL four price fields stay absent
+          // — even if the (provider, model) WOULD match a priced built-in entry.
+          // Stamping a manufactured per-token cost onto a subscription call would
+          // misreport spend (the same fail-open shape #473 / the merge-gate forbid).
+          // The usage counts are still stamped below (usage is a fact); only the
+          // price is withheld, and L6 folds `unpriced` into its own non-gap bucket.
+          const price =
+            usage.meteringStatus === 'unpriced'
+              ? null
+              : resolvePrice(usage.provider, usage.model, priceOverride);
           const priceFields =
             price === null
               ? {}

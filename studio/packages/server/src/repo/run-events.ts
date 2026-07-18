@@ -91,9 +91,15 @@ export function maxRunEventSeq(db: Db, runId: string): number | null {
  *   - `COUNT(json_extract(payload,'$.costEstimate'))` counts a present value —
  *     including a genuine `0` — but NOT an absent key, giving
  *     `pricedResponseCount`. `costEstimate` is `.optional()` (never JSON null),
- *     so absent ⟺ json_extract NULL ⟺ cost-unknown.
- *   - `incompleteRunCount` = runs with >=1 metered response lacking a costEstimate,
- *     via `GROUP BY run_id HAVING count(*) > count(costEstimate)`.
+ *     so absent ⟺ json_extract NULL ⟺ not priced.
+ *   - #2 L14: `unpricedResponseCount` = metered rows with no costEstimate whose
+ *     `meteringStatus` is `unpriced` (a subscription/CLI call — a KNOWN zero-marginal,
+ *     not a gap). Carved out of the incompleteness signal below so the derived
+ *     `costUnknownResponseCount = responseCount - priced - unpriced` counts only
+ *     genuine gaps and `complete` stays true for a subscription-only run.
+ *   - `incompleteRunCount` = runs with >=1 metered response that is neither priced
+ *     nor `unpriced`, via
+ *     `GROUP BY run_id HAVING count(*) > count(costEstimate) + <unpriced-in-group>`.
  *
  * SHARED PREDICATE SET + SNAPSHOT: (A) the metered sums/counts, (B) the
  * incomplete-run count, and (C) the run count all scan the IDENTICAL row set
@@ -133,6 +139,14 @@ export function aggregatePipelineCost(
     meteredConditions.push(eq(runs.ownerId, ownerId));
   }
   const costEstimate = sql`json_extract(${runEvents.payload}, '$.costEstimate')`;
+  // #2 L14 — the per-group SUM of `unpriced` (subscription/CLI) responses: metered
+  // rows with NO `costEstimate` whose `meteringStatus` is `unpriced`. The
+  // `costEstimate is null` guard keeps this DISJOINT from `count(costEstimate)`
+  // exactly as the pure fold's `else if` does (the executor never stamps a price on
+  // an `unpriced` response, so the guard is belt-and-suspenders that pins fold-SQL
+  // equivalence). `case ... then 1 else 0` never yields NULL, so the sum is a real
+  // number over any non-empty group.
+  const unpricedCount = sql`sum(case when ${costEstimate} is null and json_extract(${runEvents.payload}, '$.meteringStatus') = 'unpriced' then 1 else 0 end)`;
   const runConditions = [eq(pipelineVersions.pipelineId, pipelineId)];
   if (ownerId !== undefined) {
     runConditions.push(eq(runs.ownerId, ownerId));
@@ -152,6 +166,9 @@ export function aggregatePipelineCost(
       .select({
         responseCount: count(),
         pricedResponseCount: count(costEstimate),
+        // coalesce handles the empty-set case (sum of no rows is NULL); the inner
+        // case-expression never per-row-pads a 0 where a status is absent.
+        unpricedResponseCount: sql<number>`coalesce(${unpricedCount}, 0)`,
         totalCostEstimate: sql<number>`coalesce(sum(${costEstimate}), 0)`,
         inputTokens: sql<number>`coalesce(sum(json_extract(${runEvents.payload}, '$.inputTokens')), 0)`,
         outputTokens: sql<number>`coalesce(sum(json_extract(${runEvents.payload}, '$.outputTokens')), 0)`,
@@ -162,7 +179,10 @@ export function aggregatePipelineCost(
       .where(and(...meteredConditions))
       .get();
 
-    // (B) incompleteRunCount — runs with >=1 metered response lacking a costEstimate.
+    // (B) incompleteRunCount — runs with >=1 metered response that is a GENUINE
+    // cost gap: neither priced (has a costEstimate) NOR `unpriced` (subscription).
+    // #2 L14: subtracting the per-group unpriced count keeps a subscription-only run
+    // from being flagged incomplete — its cost is known (none), not missing.
     const incompleteRuns = tx
       .select({ runId: runEvents.runId })
       .from(runEvents)
@@ -170,7 +190,7 @@ export function aggregatePipelineCost(
       .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
       .where(and(...meteredConditions))
       .groupBy(runEvents.runId)
-      .having(sql`count(*) > count(${costEstimate})`)
+      .having(sql`count(*) > count(${costEstimate}) + ${unpricedCount}`)
       .as('incomplete_runs');
     const incompleteRunCount = tx.select({ n: count() }).from(incompleteRuns).get()?.n ?? 0;
 
@@ -188,6 +208,7 @@ export function aggregatePipelineCost(
       incompleteRunCount,
       responseCount: sums?.responseCount ?? 0,
       pricedResponseCount: sums?.pricedResponseCount ?? 0,
+      unpricedResponseCount: sums?.unpricedResponseCount ?? 0,
       totalCostEstimate: sums?.totalCostEstimate ?? 0,
       inputTokens: sums?.inputTokens ?? 0,
       outputTokens: sums?.outputTokens ?? 0,

@@ -1166,6 +1166,29 @@ describe('activity.metered is inert (#2 L2)', () => {
     expect(r.commands).toEqual([]);
     expect(r.state.status).toBe('running');
   });
+
+  it('L14: accepts and stays inert for a meteringStatus:unpriced event with NO price fields', () => {
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const before = s;
+    // A subscription/CLI response: metered (provider/model/tokens known) but no
+    // per-response price — the schema accepts the new status with all price fields absent.
+    const r = eng.reduce(s, {
+      type: 'activity.metered',
+      runId: RUN,
+      nodeId: 'a',
+      attemptId: attempt('a'),
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      inputTokens: 10,
+      outputTokens: 20,
+      meteringStatus: 'unpriced',
+    });
+    expect(r.state).toEqual(before);
+    expect(r.commands).toEqual([]);
+    expect(r.state.status).toBe('running');
+  });
 });
 
 // ===========================================================================

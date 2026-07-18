@@ -255,6 +255,45 @@ describe('createExecutor — activity.metered (#2 L2 usage capture)', () => {
       meteringStatus: 'unknown',
     });
   });
+
+  it('L14: meteringStatus=unpriced SUPPRESSES all price fields — even for a priceable model', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
+    const run = seedRun(db, pvId);
+    // A CLI/subscription response whose (provider, model) WOULD resolve a built-in
+    // price (claude-opus-4-8 is in the price table). The executor must NOT stamp a
+    // per-token cost onto a subscription call — a manufactured cost misreports spend.
+    const adapters = fakeHttpAdapter(async function* () {
+      yield {
+        type: 'metered',
+        usage: {
+          provider: 'anthropic_api',
+          model: 'claude-opus-4-8',
+          inputTokens: 100,
+          outputTokens: 200,
+          meteringStatus: 'unpriced',
+        },
+      } satisfies ActivityEvent;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+
+    await startRun(deps(db, { adapters }), run);
+
+    const metered = loadEngineEvents(db, run.id).find((e) => e.type === 'activity.metered');
+    // usage (a FACT) is kept; the price (a DERIVATION) is suppressed entirely.
+    expect(metered).toMatchObject({
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      inputTokens: 100,
+      outputTokens: 200,
+      meteringStatus: 'unpriced',
+    });
+    expect(metered).not.toHaveProperty('inUnitPrice');
+    expect(metered).not.toHaveProperty('outUnitPrice');
+    expect(metered).not.toHaveProperty('priceTableVersion');
+    expect(metered).not.toHaveProperty('costEstimate');
+  });
 });
 
 describe('createExecutor — activity.captured (#2 L9a prompt/completion capture)', () => {
