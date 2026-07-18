@@ -2,8 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { CATALOG_VERSION, type NewPipelineVersion, type NewRun } from '@autonomy-studio/shared';
 import { createPipelineVersion } from '../pipeline-versions.js';
 import { createPipeline } from '../pipelines.js';
-import { createRun, deleteRun, getRun, listRuns, updateRun } from '../runs.js';
+import { createRun, deleteRun, getRun, listRuns, listRunsForPipeline, updateRun } from '../runs.js';
 import { freshDb } from './helpers.js';
+
+function newVersion(db: ReturnType<typeof freshDb>['db'], pipelineId: string) {
+  return createPipelineVersion(db, {
+    pipelineId,
+    params: [],
+    outputs: [],
+    nodes: [],
+    edges: [],
+    catalogVersion: CATALOG_VERSION,
+  });
+}
 
 function setupPipelineVersion(db: ReturnType<typeof freshDb>['db']) {
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
@@ -79,6 +90,38 @@ describe('runs repo', () => {
     ).toEqual([a.id, parent.id, child.id].sort());
     expect(listRuns(db, { parentRunId: parent.id })).toEqual([child]);
     expect(listRuns(db)).toHaveLength(4);
+  });
+
+  it('listRunsForPipeline returns runs across ALL versions of the pipeline, joined via pipeline_versions', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const v1 = newVersion(db, pipeline.id);
+    const v2 = newVersion(db, pipeline.id);
+    const other = createPipeline(db, { ownerId: 'local', name: 'Other' });
+    const ov = newVersion(db, other.id);
+
+    const r1 = createRun(db, buildRunInput(v1.id));
+    const r2 = createRun(db, buildRunInput(v2.id));
+    createRun(db, buildRunInput(ov.id)); // different pipeline — excluded
+
+    expect(
+      listRunsForPipeline(db, pipeline.id)
+        .map((r) => r.id)
+        .sort(),
+    ).toEqual([r1.id, r2.id].sort());
+    expect(listRunsForPipeline(db, 'pipe_missing')).toEqual([]);
+  });
+
+  it('listRunsForPipeline owner-scopes the RUNS themselves (defense in depth), in SQL', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const v1 = newVersion(db, pipeline.id);
+    const mine = createRun(db, buildRunInput(v1.id, { ownerId: 'local' }));
+    createRun(db, buildRunInput(v1.id, { ownerId: 'someone-else' }));
+
+    expect(listRunsForPipeline(db, pipeline.id, 'local').map((r) => r.id)).toEqual([mine.id]);
+    // unscoped call still sees both (the primitive; the route always passes an owner).
+    expect(listRunsForPipeline(db, pipeline.id)).toHaveLength(2);
   });
 
   it('filters listRuns by ownerId, in SQL (never over-fetched then filtered)', () => {

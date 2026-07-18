@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
+import { computeRunCost } from '@autonomy-studio/shared';
 import { getRun, listRunDiagnostics, listRunEvents, listRuns } from '../repo/index.js';
 import { listPendingExternalWaitsByRun } from '../repo/external-waits.js';
 import { deriveExternalWaitToken } from '../webhooks/external-wait-token.js';
@@ -48,6 +49,23 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       request.params.id,
     );
     return listRunEvents(db, run.id);
+  });
+
+  /**
+   * #2 L6 — the run-cost projection: SUMS the `costEstimate` stamped on this
+   * run's `activity.metered` events (`computeRunCost`, the shared SSOT). Read
+   * off the durable event log, deterministic, fail-closed — an unpriced/unknown
+   * response leaves `complete:false` and its cost OUT of the total (never a
+   * manufactured 0). Owner-scoped THROUGH the run, exactly as `/events` is.
+   */
+  fastify.get<{ Params: { id: string } }>('/api/runs/:id/cost', async (request) => {
+    const run = requireOwned(
+      getRun(db, request.params.id),
+      request.principal,
+      'run',
+      request.params.id,
+    );
+    return computeRunCost(listRunEvents(db, run.id));
   });
 
   /**

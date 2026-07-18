@@ -8,7 +8,7 @@ import {
   type RunLifecyclePatch,
   type RunStatus,
 } from '@autonomy-studio/shared';
-import { runs } from '../db/schema.js';
+import { pipelineVersions, runs } from '../db/schema.js';
 import { newId } from './ids.js';
 import type { Db } from './types.js';
 
@@ -88,6 +88,32 @@ export function updateRun(db: Db, id: string, patch: RunLifecyclePatch): Run | n
   const updated = RunSchema.parse({ ...existing, ...parsedPatch, id: existing.id });
   db.update(runs).set(updated).where(eq(runs.id, id)).run();
   return updated;
+}
+
+/**
+ * #2 L6 — every run of a pipeline, across ALL its immutable versions (runs bind
+ * a `pipelineVersionId`, not a `pipelineId`, so this joins through
+ * `pipeline_versions`). Backs the per-pipeline cost rollup: `runCount` = all
+ * runs, including zero-cost ones. Both join sides are indexed
+ * (`runs_pipeline_version_id_idx`, `pipeline_versions_pipeline_id_idx`).
+ *
+ * Owner-scoped when `ownerId` is passed (authentication ≠ authorization: the
+ * route proves the caller owns the PIPELINE, and this filters the RUNS by their
+ * own `owner_id` too — defense in depth, never trusting that every run under a
+ * pipeline shares its owner). Filtered in SQL, never loaded-then-filtered.
+ */
+export function listRunsForPipeline(db: Db, pipelineId: string, ownerId?: string): Run[] {
+  const conditions = [eq(pipelineVersions.pipelineId, pipelineId)];
+  if (ownerId !== undefined) {
+    conditions.push(eq(runs.ownerId, ownerId));
+  }
+  const rows = db
+    .select()
+    .from(runs)
+    .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
+    .where(and(...conditions))
+    .all();
+  return rows.map((row) => RunSchema.parse(row.runs));
 }
 
 /**

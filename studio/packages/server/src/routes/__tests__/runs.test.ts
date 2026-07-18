@@ -69,6 +69,64 @@ describe('runs routes (read-only)', () => {
     expect(events[1].seq).toBe(1);
   });
 
+  it('GET /api/runs/:id/cost SUMS the metered events, fail-closed on an absent costEstimate', async () => {
+    const run = createRun(app.db, {
+      ownerId: 'local',
+      pipelineVersionId,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+    const metered = (fields: Record<string, unknown>) => ({
+      type: 'activity.metered',
+      runId: run.id,
+      nodeId: 'n1',
+      attemptId: 'n1#1',
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      meteringStatus: 'metered',
+      ...fields,
+    });
+    appendRunEvent(app.db, {
+      runId: run.id,
+      type: 'run.started',
+      payload: { type: 'run.started' },
+    });
+    appendRunEvent(app.db, {
+      runId: run.id,
+      type: 'activity.metered',
+      payload: metered({ inputTokens: 100, outputTokens: 200, costEstimate: 0.0055 }),
+    });
+    // unpriced response — no costEstimate → must not be summed as 0, flips complete
+    appendRunEvent(app.db, {
+      runId: run.id,
+      type: 'activity.metered',
+      payload: metered({ inputTokens: 10, outputTokens: 20 }),
+    });
+
+    const res = await app.inject({ method: 'GET', url: `/api/runs/${run.id}/cost` });
+    expect(res.statusCode).toBe(200);
+    const cost = res.json();
+    expect(cost.currency).toBe('USD');
+    expect(cost.responseCount).toBe(2);
+    expect(cost.pricedResponseCount).toBe(1);
+    expect(cost.costUnknownResponseCount).toBe(1);
+    expect(cost.totalCostEstimate).toBeCloseTo(0.0055, 10);
+    expect(cost.complete).toBe(false);
+  });
+
+  it('GET /api/runs/:id/cost 404s for a run owned by someone else', async () => {
+    const other = createRun(app.db, {
+      ownerId: 'someone-else',
+      pipelineVersionId,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+    const res = await app.inject({ method: 'GET', url: `/api/runs/${other.id}/cost` });
+    expect(res.statusCode).toBe(404);
+  });
+
   it('there is no POST /api/runs route (runs are created by the engine/scheduler, not this API)', async () => {
     const res = await app.inject({
       method: 'POST',
