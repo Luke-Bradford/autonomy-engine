@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import { AGENT_TASK_ACTIVITY_TYPE, LLM_CALL_ACTIVITY_TYPE } from '@autonomy-studio/shared';
+import {
+  AGENT_TASK_ACTIVITY_TYPE,
+  LLM_CALL_ACTIVITY_TYPE,
+  agentTaskConfigSchema,
+  agentStructuredInstruction,
+  extractStructuredBlock,
+  parseAndValidateStructured,
+} from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter } from './types.js';
 import type { Supervisor, SupervisedResult } from '../workers/process-supervisor.js';
 import {
@@ -97,11 +104,6 @@ const agentConnectionConfigSchema = z.object({
   timeoutMs: z.number().int().positive().optional(),
   /** Combined stdout+stderr byte cap before output is truncated. */
   maxOutputBytes: z.number().int().positive().optional(),
-});
-
-const agentRequestInputSchema = z.object({
-  task: z.string().min(1),
-  cwd: z.string().optional(),
 });
 
 type AgentConnectionConfig = z.infer<typeof agentConnectionConfigSchema>;
@@ -287,6 +289,17 @@ function classifyCliOutcome(
  * COMPLETES on its own — any exit code — is `succeeded{ output, exitCode }`, so a
  * pipeline can branch on `${nodes.x.output.exitCode}`. Only a failure-to-complete
  * is a `failed` event.
+ *
+ * #2 L11b — OPT-IN STRUCTURED output: when the node declares an `outputSchema`, the
+ * `task` gains an appended instruction directing the agent to emit its final result
+ * as a JSON object fenced by the `AGENT_STRUCTURED_*` sentinels, and the
+ * self-completed branch changes — the FENCED BLOCK becomes the success contract
+ * (its exit code stays observable only via telemetry): a schema-valid block →
+ * `succeeded{ ...typedFields }`; a missing / non-JSON / schema-failing block →
+ * `permanent` (the structured contract the operator asked for was not met, and the
+ * identical CLI call won't fix a response-content problem). The failure-to-COMPLETE
+ * branch (timeout/kill/spawn) is unchanged — structured mode only reinterprets a
+ * process that finished.
  */
 async function* runAgentTask(
   supervisor: Supervisor,
@@ -294,7 +307,7 @@ async function* runAgentTask(
   secret: string | null,
   config: AgentConnectionConfig,
 ): AsyncIterable<ActivityEvent> {
-  const input = agentRequestInputSchema.safeParse(ctx.input);
+  const input = agentTaskConfigSchema.safeParse(ctx.input);
   if (!input.success) {
     yield {
       type: 'failed',
@@ -303,6 +316,15 @@ async function* runAgentTask(
     };
     return;
   }
+  const outputSchema = input.data.outputSchema;
+  // The structured protocol rides the TASK (the CLI prompt): the agent is told to
+  // fence its final JSON result between the sentinels. Appended in the adapter,
+  // AFTER `${}` substitution, so it is never itself re-substituted; the telemetry
+  // hashes the child's STDOUT, so the appended arg never perturbs L11a fixtures.
+  const task =
+    outputSchema !== undefined
+      ? `${input.data.task}\n\n${agentStructuredInstruction(outputSchema)}`
+      : input.data.task;
   // Time the subprocess wall clock in the (impure) adapter — the L11a `latencyMs`
   // telemetry fact, stamped once here and frozen into the log (the reducer never
   // reads a clock).
@@ -310,7 +332,7 @@ async function* runAgentTask(
   const { result, stdout } = await spawnAndCollect(
     supervisor,
     config,
-    input.data.task,
+    task,
     input.data.cwd ?? config.cwd,
     secret,
     ctx.signal,
@@ -337,6 +359,37 @@ async function* runAgentTask(
   };
   if ('failed' in classification.terminal) {
     yield classification.terminal.failed;
+    return;
+  }
+  // #2 L11b — STRUCTURED mode: the fenced block is the success contract, not the
+  // exit code. `parseAndValidateStructured` returns ONLY the schema-declared, typed
+  // fields (unknown keys stripped, optionals present-null), which is exactly the
+  // `succeeded.outputs` the reducer's `validateOutputs` accepts against the
+  // schema-lowered `config.outputs`. A missing block is a DISTINCT reason (not the
+  // misleading "not valid JSON" of an empty parse). The reason names fields/types,
+  // never the raw payload, so no child content — secret or otherwise — is echoed
+  // into the durable `node.failed`.
+  if (outputSchema !== undefined) {
+    const block = extractStructuredBlock(output);
+    if (block === null) {
+      yield {
+        type: 'failed',
+        kind: 'permanent',
+        error:
+          'agent_task structured output invalid: no valid structured output block found in stdout',
+      };
+      return;
+    }
+    const validated = parseAndValidateStructured(outputSchema, block);
+    if (!validated.ok) {
+      yield {
+        type: 'failed',
+        kind: 'permanent',
+        error: `agent_task structured output invalid: ${validated.reason}`,
+      };
+      return;
+    }
+    yield { type: 'succeeded', outputs: validated.value };
     return;
   }
   yield { type: 'succeeded', outputs: { output, exitCode: classification.terminal.exitCode } };

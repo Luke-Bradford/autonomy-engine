@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { lowerLlmStructuredOutputs, lowerNodeOutputs } from '../lower.js';
+import {
+  lowerAgentTaskStructuredOutputs,
+  lowerLlmStructuredOutputs,
+  lowerNodeOutputs,
+} from '../lower.js';
 import { getActivity } from '../registry.js';
-import { LLM_CALL_ACTIVITY_TYPE } from '../types.js';
+import { AGENT_TASK_ACTIVITY_TYPE, LLM_CALL_ACTIVITY_TYPE } from '../types.js';
 import type { Node } from '../../schemas/pipeline.js';
 
 function node(id: string, type: string, config: Record<string, unknown> = {}): Node {
@@ -189,6 +193,81 @@ describe('lowerLlmStructuredOutputs (#2 L4a)', () => {
     expect(text!.config['outputs']).toEqual([
       { name: 'text', type: 'string' },
       { name: 'stopReason', type: 'string' },
+    ]);
+  });
+});
+
+describe('lowerAgentTaskStructuredOutputs (#2 L11b)', () => {
+  const schema = {
+    type: 'object',
+    properties: { verdict: { type: 'string' }, confidence: { type: 'number' } },
+  };
+
+  it('derives config.outputs from an agent_task outputSchema (presence = opt-in, no outputMode)', () => {
+    const [lowered] = lowerAgentTaskStructuredOutputs([
+      node('a', AGENT_TASK_ACTIVITY_TYPE, { task: 'review this', outputSchema: schema }),
+    ]);
+    expect(lowered!.config['outputs']).toEqual([
+      { name: 'verdict', type: 'string' },
+      { name: 'confidence', type: 'number' },
+    ]);
+  });
+
+  it('OVERWRITES a stale catalog-default seed ([output, exitCode])', () => {
+    const [lowered] = lowerAgentTaskStructuredOutputs([
+      node('a', AGENT_TASK_ACTIVITY_TYPE, {
+        task: 't',
+        outputSchema: schema,
+        outputs: [
+          { name: 'output', type: 'string' },
+          { name: 'exitCode', type: 'number' },
+        ],
+      }),
+    ]);
+    expect(lowered!.config['outputs']).toEqual([
+      { name: 'verdict', type: 'string' },
+      { name: 'confidence', type: 'number' },
+    ]);
+  });
+
+  it('leaves a NON-structured agent_task (no outputSchema) untouched — lowerNodeOutputs seeds it', () => {
+    const plain = node('a', AGENT_TASK_ACTIVITY_TYPE, { task: 't' });
+    const [lowered] = lowerAgentTaskStructuredOutputs([plain]);
+    expect(lowered!.config['outputs']).toBeUndefined();
+    expect(lowered).toBe(plain); // unchanged node returned as-is
+  });
+
+  it('leaves a non-agent_task node untouched', () => {
+    const llm = node('a', LLM_CALL_ACTIVITY_TYPE, { outputSchema: schema });
+    const [lowered] = lowerAgentTaskStructuredOutputs([llm]);
+    expect(lowered).toBe(llm);
+  });
+
+  it('does NOT lower an INVALID outputSchema (leaves outputs as-is for validateDoc to reject)', () => {
+    const bad = node('a', AGENT_TASK_ACTIVITY_TYPE, {
+      task: 't',
+      outputSchema: { type: 'object', properties: {} }, // empty → invalid subset
+    });
+    const [lowered] = lowerAgentTaskStructuredOutputs([bad]);
+    expect(lowered!.config['outputs']).toBeUndefined();
+    expect(lowered).toBe(bad);
+  });
+
+  it('composes with lowerNodeOutputs: structured derives, plain gets the catalog default', () => {
+    const [structured, plain] = lowerNodeOutputs(
+      lowerAgentTaskStructuredOutputs([
+        node('s', AGENT_TASK_ACTIVITY_TYPE, { task: 'review', outputSchema: schema }),
+        node('p', AGENT_TASK_ACTIVITY_TYPE, { task: 'run' }),
+      ]),
+    );
+    expect(structured!.config['outputs']).toEqual([
+      { name: 'verdict', type: 'string' },
+      { name: 'confidence', type: 'number' },
+    ]);
+    // plain agent_task: lowerNodeOutputs seeds the catalog default.
+    expect(plain!.config['outputs']).toEqual([
+      { name: 'output', type: 'string' },
+      { name: 'exitCode', type: 'number' },
     ]);
   });
 });

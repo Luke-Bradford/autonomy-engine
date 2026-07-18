@@ -1,7 +1,11 @@
 import type { Node } from '../schemas/pipeline.js';
 import { getActivity } from './registry.js';
-import { llmStructuredOutputSurfaceSchema, lowerOutputSchema } from './llm-config.js';
-import { LLM_CALL_ACTIVITY_TYPE } from './types.js';
+import {
+  llmOutputSchemaSchema,
+  llmStructuredOutputSurfaceSchema,
+  lowerOutputSchema,
+} from './llm-config.js';
+import { AGENT_TASK_ACTIVITY_TYPE, LLM_CALL_ACTIVITY_TYPE } from './types.js';
 
 /**
  * #1 F13b — LOWER the catalog's canonical `outputs` into a node's
@@ -132,6 +136,36 @@ export function lowerLlmStructuredOutputs(nodes: Node[]): Node[] {
     return {
       ...node,
       config: { ...node.config, outputs: lowerOutputSchema(outputSchema) },
+    };
+  });
+}
+
+/**
+ * #2 L11b — DERIVE a structured `agent_task` node's `config.outputs` from its
+ * `outputSchema`, the `agent_task` counterpart of `lowerLlmStructuredOutputs`.
+ * `agent_task` has no `outputMode` flag: the PRESENCE of a valid `outputSchema` IS
+ * the opt-in, so the gate is `llmOutputSchemaSchema.safeParse(config.outputSchema)`
+ * directly (not the `{outputMode,outputSchema}` coupling surface `llm_call` needs).
+ *
+ * This gate is the SAME predicate `validateAgentTaskOutput` (`engine/params.ts`)
+ * uses, so "what lowers" and "what saves" can never disagree (the SSOT invariant
+ * `lowerLlmStructuredOutputs` documents): an ABSENT schema → left alone (seeded by
+ * `lowerNodeOutputs` to the catalog default `[output, exitCode]`); an INVALID
+ * schema → left UN-lowered so the prior contract stands and the save-time
+ * diagnostic refuses the whole save; a VALID schema → OVERWRITE `config.outputs`
+ * with the lowered rows (safe for the identical reason: a structured node's
+ * contract is DERIVED, not authored). Run BEFORE `lowerNodeOutputs`.
+ */
+export function lowerAgentTaskStructuredOutputs(nodes: Node[]): Node[] {
+  return nodes.map((node) => {
+    if (node.type !== AGENT_TASK_ACTIVITY_TYPE) return node;
+    const raw = node.config['outputSchema'];
+    if (raw === undefined) return node;
+    const parsed = llmOutputSchemaSchema.safeParse(raw);
+    if (!parsed.success) return node;
+    return {
+      ...node,
+      config: { ...node.config, outputs: lowerOutputSchema(parsed.data) },
     };
   });
 }

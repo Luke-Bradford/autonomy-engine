@@ -3,6 +3,7 @@
 export * from './types.js';
 export * from './registry.js';
 export * from './lower.js';
+export * from './agent-config.js';
 export * from './llm-config.js';
 export * from './llm-recipes.js';
 export * from './llm-structured.js';

@@ -14,6 +14,7 @@ import {
   validateRefs,
   type PipelineResolver,
 } from '../params.js';
+import { lowerAgentTaskStructuredOutputs } from '../../catalog/lower.js';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -173,6 +174,70 @@ describe('validateDoc — llm_call structured outputSchema (L4a)', () => {
       }),
     ]);
     expect(validateDoc(d).join(' ')).toContain('undeclared property');
+  });
+});
+
+// ===========================================================================
+// agent_task structured outputSchema — save-time subset validation (#2 L11b)
+// ===========================================================================
+
+describe('validateDoc — agent_task structured outputSchema (L11b)', () => {
+  // The default `node()` helper is already an agent_task.
+  const okSchema = { type: 'object', properties: { verdict: { type: 'string' } } };
+
+  it('accepts a valid structured agent_task (presence of outputSchema = opt-in)', () => {
+    const d = doc([node('a', { task: 't', outputSchema: okSchema })]);
+    expect(validateDoc(d).join(' ')).not.toContain('outputSchema');
+  });
+
+  it('accepts a plain agent_task with no outputSchema (no coupling to enforce)', () => {
+    expect(validateDoc(doc([node('a', { task: 't' })])).join(' ')).not.toContain('outputSchema');
+  });
+
+  it('reports an empty-properties structured schema, prefixed node.<id>: outputSchema', () => {
+    const d = doc([node('a', { task: 't', outputSchema: { type: 'object', properties: {} } })]);
+    expect(validateDoc(d).join(' ')).toContain('node.a: outputSchema');
+    expect(validateDoc(d).join(' ')).toContain('at least one property');
+  });
+
+  it('reports a non-addressable property name', () => {
+    const d = doc([
+      node('a', {
+        task: 't',
+        outputSchema: { type: 'object', properties: { 'my-field': { type: 'string' } } },
+      }),
+    ]);
+    expect(validateDoc(d).join(' ')).toContain('not addressable');
+  });
+
+  it('reports an unsupported property type (strict subset)', () => {
+    const d = doc([
+      node('a', {
+        task: 't',
+        outputSchema: { type: 'object', properties: { x: { type: 'null' } } },
+      }),
+    ]);
+    expect(validateDoc(d).join(' ')).toContain('outputSchema');
+  });
+
+  it('lowering and validation gate on the SAME predicate: a schema lowers IFF it saves', () => {
+    // Both `lowerAgentTaskStructuredOutputs` and `validateAgentTaskOutput` gate on
+    // `llmOutputSchemaSchema.safeParse(config.outputSchema)`. This pins the SSOT
+    // invariant: whatever the validator lets save is exactly what lowering derives —
+    // no garbage-lowered contract, no un-saveable-but-lowered node.
+    const cases: Array<{ outputSchema?: unknown }> = [
+      { outputSchema: okSchema }, // valid
+      { outputSchema: { type: 'object', properties: {} } }, // invalid (empty)
+      { outputSchema: { type: 'object', properties: { 'bad-name': { type: 'string' } } } }, // invalid
+      {}, // absent
+    ];
+    for (const extra of cases) {
+      const config = { task: 't', ...extra };
+      const [lowered] = lowerAgentTaskStructuredOutputs([node('a', config)]);
+      const derived = lowered!.config['outputs'] !== undefined;
+      const saves = !validateDoc(doc([node('a', config)])).some((e) => e.includes('outputSchema'));
+      expect(derived).toBe(saves && extra.outputSchema !== undefined);
+    }
   });
 });
 

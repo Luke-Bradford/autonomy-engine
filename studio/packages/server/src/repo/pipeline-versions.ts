@@ -1,6 +1,7 @@
 import { asc, eq, max } from 'drizzle-orm';
 import { z } from 'zod';
 import {
+  lowerAgentTaskStructuredOutputs,
   lowerLlmStructuredOutputs,
   lowerNodeOutputs,
   NewPipelineVersionSchema,
@@ -96,11 +97,19 @@ export function createPipelineVersion(db: Db, input: NewPipelineVersion): Pipeli
   // the `[text, stopReason]` default). An INVALID `outputSchema` is left
   // un-lowered here and reported by `validateLlmCallOutput` in
   // `validatePipelineDoc` below → 400, so no garbage contract persists.
+  //
+  // #2 L11b — `lowerAgentTaskStructuredOutputs` is the `agent_task` counterpart,
+  // composed in the SAME derive-before-seed slot: a structured `agent_task`'s
+  // `config.outputs` is derived from its `outputSchema` (opt-in by presence), so it
+  // too must run before `lowerNodeOutputs` seeds the `[output, exitCode]` default.
+  // An invalid schema is left un-lowered and reported by `validateAgentTaskOutput`.
   const lowered = {
     ...parsed,
     nodes: z
       .array(StrictNodeSchema)
-      .parse(lowerNodeOutputs(lowerLlmStructuredOutputs(parsed.nodes))),
+      .parse(
+        lowerNodeOutputs(lowerAgentTaskStructuredOutputs(lowerLlmStructuredOutputs(parsed.nodes))),
+      ),
   };
 
   // Mint the id BEFORE validation so the call-graph analysis (#495) has a

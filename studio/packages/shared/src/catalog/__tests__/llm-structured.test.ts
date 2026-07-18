@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AGENT_STRUCTURED_CLOSE,
+  AGENT_STRUCTURED_OPEN,
+  agentStructuredInstruction,
+  extractStructuredBlock,
   parseAndValidateStructured,
   structuredOutputInstruction,
   validateStructuredOutput,
@@ -239,5 +243,64 @@ describe('validateStructuredOutput — optional fields (#594)', () => {
       validated.value,
     );
     expect(errs).toEqual([]);
+  });
+});
+
+describe('extractStructuredBlock (#2 L11b)', () => {
+  const wrap = (json: string): string =>
+    `${AGENT_STRUCTURED_OPEN}\n${json}\n${AGENT_STRUCTURED_CLOSE}`;
+
+  it('extracts the fenced JSON from noisy agent stdout', () => {
+    const stdout = `thinking out loud...\ndoing work\n${wrap('{"verdict":"pass"}')}\nbye`;
+    expect(extractStructuredBlock(stdout)).toBe('{"verdict":"pass"}');
+  });
+
+  it('returns null when no block is present', () => {
+    expect(extractStructuredBlock('just chatter, no markers')).toBeNull();
+  });
+
+  it('returns null on an unterminated (open but no close) block', () => {
+    expect(extractStructuredBlock(`${AGENT_STRUCTURED_OPEN}\n{"a":1}`)).toBeNull();
+  });
+
+  it('resolves the LAST complete block when the instruction is echoed earlier', () => {
+    // An agent that echoes the instruction (which names the markers) then emits its
+    // real answer last must resolve to the real answer.
+    const stdout = `I will emit ${AGENT_STRUCTURED_OPEN} ... ${AGENT_STRUCTURED_CLOSE} at the end.\n${wrap(
+      '{"verdict":"final"}',
+    )}`;
+    expect(extractStructuredBlock(stdout)).toBe('{"verdict":"final"}');
+  });
+
+  it('skips a TRAILING non-JSON block (instruction echo after the answer) for the real JSON one', () => {
+    // The failure mode a naive "last complete block" would hit: a chatty agent
+    // restates the instruction AFTER its answer, forming a complete non-JSON block.
+    // Selecting the last JSON-PARSEABLE block skips it.
+    const stdout = `${wrap('{"verdict":"real"}')}\nreminder: wrap between ${AGENT_STRUCTURED_OPEN} and ${AGENT_STRUCTURED_CLOSE}.`;
+    expect(extractStructuredBlock(stdout)).toBe('{"verdict":"real"}');
+  });
+
+  it('picks the LAST JSON block when several are JSON (final answer wins)', () => {
+    const stdout = `${wrap('{"verdict":"draft"}')}\n${wrap('{"verdict":"final"}')}`;
+    expect(extractStructuredBlock(stdout)).toBe('{"verdict":"final"}');
+  });
+
+  it('feeds through parseAndValidateStructured to typed outputs', () => {
+    const s = schema({ type: 'object', properties: { verdict: { type: 'string' } } });
+    const block = extractStructuredBlock(wrap('{"verdict":"pass"}'));
+    const validated = parseAndValidateStructured(s, block);
+    expect(validated).toEqual({ ok: true, value: { verdict: 'pass' } });
+  });
+});
+
+describe('agentStructuredInstruction (#2 L11b)', () => {
+  it('names both sentinels and embeds the schema, but does NOT forbid prose', () => {
+    const s = schema({ type: 'object', properties: { verdict: { type: 'string' } } });
+    const instr = agentStructuredInstruction(s);
+    expect(instr).toContain(AGENT_STRUCTURED_OPEN);
+    expect(instr).toContain(AGENT_STRUCTURED_CLOSE);
+    expect(instr).toContain(JSON.stringify(s));
+    // Distinct from structuredOutputInstruction, which forbids surrounding prose.
+    expect(instr).not.toContain('nothing else');
   });
 });
