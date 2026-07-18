@@ -142,6 +142,20 @@ function drive(eng: Engine, params: Record<string, unknown>, opts: DriveOpts = {
       apply(returned(c.callNodeId, c.attemptId, res.childOutcome, res.outputs ?? {}, c.childRunId));
       continue;
     }
+    if (c.type === 'scheduleContainerTimeout') {
+      // #4 A17 — this clockless harness simulates the driver's `armContainerTimeout`:
+      // append `container.timeoutScheduled` (stamping the loop's `timeoutDueAt`
+      // marker) but do NOT fire the timeout — a loop timing out is driven separately
+      // by applying `container.timedOut` directly. A synthetic deterministic `dueAt`
+      // keeps the replay stable (no real clock in this harness).
+      apply({
+        type: 'container.timeoutScheduled',
+        runId: RUN,
+        containerId: c.containerId,
+        dueAt: 1_700_000_000_000 + c.seconds * 1000,
+      });
+      continue;
+    }
     apply(dispatched(c.nodeId, c.attemptId));
     const idx = attempts[c.nodeId] ?? 0;
     attempts[c.nodeId] = idx + 1;
@@ -409,6 +423,161 @@ describe('containers — loop', () => {
     expect(state.nodes.recover!.status).toBe('success'); // outer completion caught the cap
     expect(state.status).toBe('success');
     void log;
+  });
+});
+
+// #4 A17 — a `loop`'s wall-clock `timeout`: armed ONCE at container-enter (consumes
+// the S1 durable alarm, like `wait`), fires `container.timedOut` when it elapses
+// while the loop is still active → the loop FAILS `timeout`, its live children are
+// neutralized so a late result cannot re-animate them, and its outer failure edge
+// routes. A lost arm (crash in the enter→arm window) is re-emitted by `onResumed`.
+const loopT = (
+  id: string,
+  children: string[],
+  exitWhen: string,
+  timeout: number,
+  maxRounds?: number,
+): Container => ({
+  id,
+  kind: 'loop',
+  children,
+  exitWhen,
+  timeout,
+  ...(maxRounds !== undefined ? { maxRounds } : {}),
+});
+
+describe('containers — loop wall-clock timeout (#4 A17)', () => {
+  it('arms scheduleContainerTimeout ONCE at enter and stamps timeoutDueAt (not per round)', () => {
+    const eng = engine(
+      [
+        node('work'),
+        node('check', { outputs: [{ name: 'done', type: 'boolean' }] }),
+        node('final'),
+      ],
+      [edge('work', 'check', 'success'), edge('lp', 'final', 'success')],
+      // exits at round 1, so the loop re-rounds ONCE — proving the arm does not
+      // re-fire per round (it bounds the loop's TOTAL wall-clock).
+      [loopT('lp', ['work', 'check'], '${nodes.check.output.done}', 3600, 5)],
+    );
+    const { state, commandsSeen } = drive(
+      eng,
+      {},
+      {
+        outcomeFor: (id, idx) =>
+          id === 'check'
+            ? { outcome: 'success', outputs: { done: idx >= 1 } }
+            : { outcome: 'success' },
+      },
+    );
+    const arms = commandsSeen.filter((c) => c.type === 'scheduleContainerTimeout');
+    expect(arms).toHaveLength(1);
+    expect(arms[0]).toMatchObject({ containerId: 'lp', seconds: 3600 });
+    expect(state.containers.lp!.round).toBe(1); // it DID re-round once
+    expect(state.containers.lp!.timeoutDueAt).toBeDefined(); // the scheduled fold stamped it
+    expect(state.containers.lp!.status).toBe('success'); // timeout never fired in the harness
+  });
+
+  it('a timeout mid-flight FAILS the loop `timeout`, neutralizes children, routes the outer failure edge, and ignores the late child result', () => {
+    const eng = engine(
+      [node('work'), node('recover')],
+      [edge('lp', 'recover', 'failure')],
+      [loopT('lp', ['work'], '${nodes.work.output.done}', 3600, 100)],
+    );
+    let s = eng.seedState();
+    const r0 = eng.reduce(s, started());
+    s = r0.state;
+    const disp = r0.commands.find((c) => c.type === 'dispatchNode') as Extract<
+      EngineCommand,
+      { type: 'dispatchNode' }
+    >;
+    expect(disp.nodeId).toBe('work');
+    const workAttempt = disp.attemptId;
+    expect(r0.commands.find((c) => c.type === 'scheduleContainerTimeout')).toBeDefined();
+
+    // The driver armed the alarm and stamped the marker; the child is now in flight.
+    s = eng.reduce(s, {
+      type: 'container.timeoutScheduled',
+      runId: RUN,
+      containerId: 'lp',
+      dueAt: 1_700_000_003_600_000,
+    }).state;
+    s = eng.reduce(s, dispatched('work', workAttempt)).state;
+    expect(s.nodes.work!.status).toBe('dispatched'); // a running child
+
+    // The wall-clock timeout fires.
+    const t = eng.reduce(s, { type: 'container.timedOut', runId: RUN, containerId: 'lp' });
+    s = t.state;
+    expect(s.containers.lp!.status).toBe('failure');
+    expect(s.containers.lp!.reason).toBe('timeout');
+    // The in-flight child is neutralized to terminal `skipped` (NOT `pending` — a
+    // late result on a pending node reads as an impossible log and fails the run),
+    // with its attempt cleared, so a late result cannot fold against it.
+    expect(s.nodes.work!.status).toBe('skipped');
+    expect(s.nodes.work!.currentAttemptId).toBeUndefined();
+    // The outer FAILURE edge routes.
+    const rec = t.commands.find((c) => c.type === 'dispatchNode') as Extract<
+      EngineCommand,
+      { type: 'dispatchNode' }
+    >;
+    expect(rec.nodeId).toBe('recover');
+
+    // A REDELIVERED timeout on the now-failed (but run still RUNNING) loop is a no-op
+    // — the fold's `active` guard, exercised on a running run.
+    const again = eng.reduce(s, { type: 'container.timedOut', runId: RUN, containerId: 'lp' });
+    expect(again.state).toEqual(s);
+    expect(again.commands).toEqual([]);
+
+    // The LATE result of the cut-off child, at its stale attempt, folds to nothing.
+    const late = eng.reduce(s, succeeded('work', workAttempt, { done: true }));
+    expect(late.state.nodes.work!.status).toBe('skipped'); // not resurrected
+    expect(late.state.containers.lp!.status).toBe('failure');
+    expect(late.commands).toEqual([]);
+
+    // The handled failure edge lets the run finish SUCCESS once recover completes
+    // (the reducer emits the finishRun COMMAND; the driver makes it durable).
+    s = eng.reduce(s, dispatched('recover', rec.attemptId)).state;
+    const fin = eng.reduce(s, succeeded('recover', rec.attemptId));
+    expect(fin.commands.find((c) => c.type === 'finishRun')).toMatchObject({ outcome: 'success' });
+  });
+
+  it('onResumed RE-EMITS scheduleContainerTimeout for an active loop whose arm was lost (no timeoutDueAt)', () => {
+    const eng = engine(
+      [node('work')],
+      [],
+      [loopT('lp', ['work'], '${nodes.work.output.done}', 3600, 100)],
+    );
+    const r0 = eng.reduce(eng.seedState(), started());
+    // The crash landed BEFORE `container.timeoutScheduled`, so the loop is active
+    // with no marker — its alarm was never durably armed.
+    expect(r0.state.containers.lp!.status).toBe('active');
+    expect(r0.state.containers.lp!.timeoutDueAt).toBeUndefined();
+    const resumed = eng.reduce(r0.state, {
+      type: 'run.resumed',
+      runId: RUN,
+      reason: 'boot_reconcile',
+    });
+    expect(resumed.commands.find((c) => c.type === 'scheduleContainerTimeout')).toMatchObject({
+      containerId: 'lp',
+      seconds: 3600,
+    });
+  });
+
+  it('onResumed does NOT re-arm a loop that already recorded its timeout (timeoutDueAt set)', () => {
+    const eng = engine(
+      [node('work')],
+      [],
+      [loopT('lp', ['work'], '${nodes.work.output.done}', 3600, 100)],
+    );
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, {
+      type: 'container.timeoutScheduled',
+      runId: RUN,
+      containerId: 'lp',
+      dueAt: 999,
+    }).state;
+    expect(s.containers.lp!.timeoutDueAt).toBe(999);
+    const resumed = eng.reduce(s, { type: 'run.resumed', runId: RUN, reason: 'boot_reconcile' });
+    expect(resumed.commands.find((c) => c.type === 'scheduleContainerTimeout')).toBeUndefined();
   });
 });
 

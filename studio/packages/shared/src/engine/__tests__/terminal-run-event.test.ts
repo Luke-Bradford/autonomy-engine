@@ -116,6 +116,13 @@ describe('#443 — terminalStatusOf', () => {
       { type: 'externalWait.created', ...run, nodeId: 'n1', attemptId: 'n1#0', dueAt: 1 },
       { type: 'externalWait.completed', ...run, nodeId: 'n1', previousAttemptId: 'n1#0' },
       { type: 'externalWait.expired', ...run, nodeId: 'n1', previousAttemptId: 'n1#0' },
+      // #4 A17 — the container wall-clock timeout pair. NON-terminal: both fold a
+      // CONTAINER, not the run — `container.timeoutScheduled` stamps the loop's
+      // `timeoutDueAt`, `container.timedOut` fails the loop and lets `settle` decide
+      // the run's fate (a handled outer edge can still make the run succeed), so
+      // neither is itself a run-terminating event.
+      { type: 'container.timeoutScheduled', ...run, containerId: 'lp', dueAt: 1 },
+      { type: 'container.timedOut', ...run, containerId: 'lp' },
     ];
     for (const event of nonTerminal) {
       expect(terminalStatusOf(event), `${event.type} must not be terminal`).toBeNull();

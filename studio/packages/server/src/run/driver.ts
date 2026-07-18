@@ -4,6 +4,7 @@ import {
   DEFAULT_RETRY_INTERVAL_SECONDS,
   EngineEventSchema,
   FAILURE_CODES,
+  MAX_WAIT_SECONDS,
   type ArmWakeupInput,
   type Engine,
   type EngineCommand,
@@ -256,6 +257,15 @@ export const WAIT_WAKEUP_KIND = 'node_wait';
  * `failure`) is webhook-specific, unlike wait's `timer.due` → `success`.
  */
 export const EXTERNAL_WAIT_WAKEUP_KIND = 'node_external_wait';
+
+/**
+ * The `kind` under which a `loop` container's WALL-CLOCK timeout alarm is armed
+ * (#4 A17). Matches the handler registered in `scheduler/container-timeout-alarm.ts`.
+ * Distinct from the node-scoped kinds so each consumer's rows never collide — this
+ * is the first CONTAINER-scoped alarm (its `ref` names a container, not a node),
+ * and its due fold FAILS the loop (`container.timedOut`), unlike wait's `success`.
+ */
+export const CONTAINER_TIMEOUT_WAKEUP_KIND = 'container_timeout';
 
 export interface DriverDeps {
   db: Db;
@@ -516,6 +526,74 @@ function armWait(
     runId: state.runId,
     nodeId: command.nodeId,
     attemptId: command.attemptId,
+    dueAt: row.dueAt,
+  };
+}
+
+/**
+ * #4 A17 — the arm-input for a `loop` container's wall-clock timeout alarm. The
+ * CONTAINER-scoped cousin of `waitArmInput`: its `ref` names the container (not a
+ * node) and there is NO attempt handle — a container timeout is armed ONCE per run
+ * (at enter), not per attempt, so the freshness check the handler makes is "is the
+ * container still `active`", read from the log, not an attempt match.
+ *
+ * `seconds` is a STATIC positive int from the immutable doc, but it is CLAMPED to
+ * `MAX_WAIT_SECONDS` before `dueAt = now + seconds*1000` so an absurd value can
+ * never overflow past `Number.MAX_SAFE_INTEGER` and poison the arm (the STORED
+ * `dueAt` would drift, or `±Infinity` would fail `ArmWakeupInputSchema`). Clamping
+ * — not throwing as `evalDurationSeconds` does for `wait` — is the graceful choice
+ * for a SAFETY bound the loop already has other exits for, and there is no
+ * prep-failure channel at the settle enter site that emits the command. A clamp to
+ * ~253k years is indistinguishable from "no practical timeout" for any real loop.
+ */
+export function containerTimeoutArmInput(
+  deps: Pick<DriverDeps, 'now'>,
+  args: { runId: string; containerId: string; seconds: number },
+): ArmWakeupInput {
+  const now = deps.now ?? (() => Date.now());
+  const bounded = Math.min(args.seconds, MAX_WAIT_SECONDS);
+  return {
+    kind: CONTAINER_TIMEOUT_WAKEUP_KIND,
+    // The container is the freshness handle — no attempt. Arm-once per run, so the
+    // ref alone is unique per (run, container).
+    ref: { runId: args.runId, containerId: args.containerId },
+    // ROUND to integer ms for `ArmWakeupInputSchema`'s `z.number().int()` (a static
+    // int `seconds` cannot be fractional, but `now()` may be, and the round keeps
+    // this replay-deterministic exactly as `waitArmInput` documents).
+    dueAt: Math.round(now() + bounded * 1000),
+    // VACUOUS for this kind (the `ref` already pins the (run, container) occurrence,
+    // and only one timeout is ever armed per container) — kept self-describing, as
+    // wait/retry keep theirs.
+    discriminator: `container-timeout-${args.containerId}`,
+  };
+}
+
+/**
+ * Perform a `scheduleContainerTimeout` (#4 A17): ARM the durable timeout alarm,
+ * then hand back the `container.timeoutScheduled` event recording when the loop
+ * times out. Same arm-before-append asymmetry as `armWait`: the arm commits BEFORE
+ * the append whose fold stamps `timeoutDueAt`, so a loop that records the marker
+ * always has a live alarm; a crash before the append leaves the loop `active` with
+ * no marker, and `onResumed`/`projectRunState` re-emit `scheduleContainerTimeout`,
+ * which re-arms idempotently by `(kind, dedupeKey)` and keeps the ORIGINAL `dueAt`.
+ */
+function armContainerTimeout(
+  deps: DriverDeps,
+  state: RunState,
+  command: Extract<EngineCommand, { type: 'scheduleContainerTimeout' }>,
+): EngineEvent {
+  const row = deps.alarms.arm(
+    containerTimeoutArmInput(deps, {
+      runId: state.runId,
+      containerId: command.containerId,
+      seconds: command.seconds,
+    }),
+  );
+
+  return {
+    type: 'container.timeoutScheduled',
+    runId: state.runId,
+    containerId: command.containerId,
     dueAt: row.dueAt,
   };
 }
@@ -782,6 +860,16 @@ export async function pump(
       // the `POST /api/external-wait/:token` route appends `externalWait.completed` on
       // a callback. No executor, like `scheduleWait`.
       source = [armExternalWait(deps, state, command)];
+    } else if (command.type === 'scheduleContainerTimeout') {
+      // #4 A17 — the driver's OWN `scheduleContainerTimeout` command (a `loop`
+      // container just went `active` with a wall-clock `timeout`): ARM S1's timeout
+      // alarm then append `container.timeoutScheduled`, whose fold stamps the loop's
+      // `timeoutDueAt`. `armContainerTimeout` runs while building the array, keeping
+      // the arm strictly BEFORE the append (so a loop that records the marker always
+      // has a live alarm). The clock's `container_timeout` handler appends
+      // `container.timedOut` when it fires, failing the loop. No executor, like
+      // `scheduleWait` — parks nothing (children keep running).
+      source = [armContainerTimeout(deps, state, command)];
     } else if (command.type === 'evaluateControl') {
       // The control node's durable event is named by `command.event`
       // (`condition.evaluated` for an `if`, `switch.evaluated` for a `switch`, #4
