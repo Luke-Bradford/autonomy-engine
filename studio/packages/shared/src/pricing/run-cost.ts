@@ -74,6 +74,64 @@ export interface PipelineCostRollup extends RunCost {
   incompleteRunCount: number;
 }
 
+/**
+ * #599 — the scalar aggregates a per-pipeline rollup is built from, the shape a
+ * BOUNDED SQL aggregation produces (`aggregatePipelineCost`) as well as what the
+ * in-memory array fold sums to. Deliberately carries neither
+ * `costUnknownResponseCount` NOR `complete`: both are DERIVED by
+ * {@link rollupFromAggregates} (the single fail-closed derivation site), so no
+ * caller can hand in an inconsistent priced/unknown/complete triple.
+ */
+export interface PipelineCostAggregates {
+  /** All runs of the pipeline, INCLUDING zero-metered ones (each a complete $0). */
+  runCount: number;
+  /** Runs with at least one cost-unknown metered response. */
+  incompleteRunCount: number;
+  /** Total `activity.metered` responses folded. */
+  responseCount: number;
+  /** Responses carrying a `costEstimate` (present — a genuine `0` counts, an absent key does not). */
+  pricedResponseCount: number;
+  /** SUM of the PRESENT `costEstimate`s — a LOWER BOUND; absent ones contribute
+   * nothing, never a manufactured 0 (the fail-closed rule). */
+  totalCostEstimate: number;
+  /** Sum of the PRESENT `inputTokens` / `outputTokens` counts. */
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/**
+ * The SINGLE fail-closed derivation of a {@link PipelineCostRollup} from scalar
+ * aggregates. BOTH the in-memory array fold ({@link rollupPipelineCost}) and the
+ * bounded SQL rollup (#599, `aggregatePipelineCost`) funnel through here, so the
+ * fail-closed rule lives in ONE place and the two paths cannot drift:
+ *
+ *   - `costUnknownResponseCount` is DERIVED as `responseCount - pricedResponseCount`,
+ *     NEVER summed as a manufactured 0 — an absent `costEstimate` is already
+ *     excluded from `pricedResponseCount`, so the difference is exactly the
+ *     unpriced/unknown count (the #473 / F13a lesson).
+ *   - `complete` is `costUnknownResponseCount === 0`, matching `computeRunCost`.
+ *
+ * `runCount`/`incompleteRunCount` are passed through as measured. The caller is
+ * responsible for computing all three counts over the SAME row set (same join,
+ * filter, owner scope) so the documented invariant
+ * `complete === (incompleteRunCount === 0)` holds.
+ */
+export function rollupFromAggregates(agg: PipelineCostAggregates): PipelineCostRollup {
+  const costUnknownResponseCount = agg.responseCount - agg.pricedResponseCount;
+  return {
+    currency: 'USD',
+    totalCostEstimate: agg.totalCostEstimate,
+    responseCount: agg.responseCount,
+    pricedResponseCount: agg.pricedResponseCount,
+    costUnknownResponseCount,
+    inputTokens: agg.inputTokens,
+    outputTokens: agg.outputTokens,
+    complete: costUnknownResponseCount === 0,
+    runCount: agg.runCount,
+    incompleteRunCount: agg.incompleteRunCount,
+  };
+}
+
 /** Fold one run's events into a `RunCost`. Pure, deterministic, order-independent,
  * never throws. */
 export function computeRunCost(events: readonly { payload: unknown }[]): RunCost {
@@ -115,34 +173,46 @@ export function computeRunCost(events: readonly { payload: unknown }[]): RunCost
   };
 }
 
-/** Roll up per-run costs into a per-pipeline total. Pure; sums the money/count
- * fields and derives the run-level counts. */
+/** Roll up an ARRAY of per-run costs into a per-pipeline total — the pure
+ * fold-many counterpart to {@link computeRunCost}'s fold-one. Sums the
+ * money/count fields and delegates the fail-closed derivation to
+ * {@link rollupFromAggregates} (the single derivation site shared with the #599
+ * SQL rollup). Summing each run's `pricedResponseCount` and deriving unknown as
+ * `responseCount - priced` is equivalent to summing each run's
+ * `costUnknownResponseCount` directly, since `computeRunCost` guarantees
+ * `priced + unknown === responseCount` per run.
+ *
+ * NOTE (#599): the per-pipeline cost ROUTE no longer calls this — it aggregates
+ * bounded-ly in SQL (`aggregatePipelineCost`) then derives via
+ * `rollupFromAggregates`. This array fold is RETAINED as the SSOT's in-memory
+ * `RunCost[]` reducer for any consumer already holding per-run costs (and as the
+ * reference the SQL path's derivation is proven equivalent to); it is
+ * deliberately not deleted alongside the unbounded LOADERS #599 removed, which
+ * were the actual scaling hazard. */
 export function rollupPipelineCost(runCosts: readonly RunCost[]): PipelineCostRollup {
-  const rollup: PipelineCostRollup = {
-    currency: 'USD',
-    totalCostEstimate: 0,
-    responseCount: 0,
-    pricedResponseCount: 0,
-    costUnknownResponseCount: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    complete: true,
-    runCount: runCosts.length,
-    incompleteRunCount: 0,
-  };
+  let totalCostEstimate = 0;
+  let responseCount = 0;
+  let pricedResponseCount = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let incompleteRunCount = 0;
 
   for (const rc of runCosts) {
-    rollup.totalCostEstimate += rc.totalCostEstimate;
-    rollup.responseCount += rc.responseCount;
-    rollup.pricedResponseCount += rc.pricedResponseCount;
-    rollup.costUnknownResponseCount += rc.costUnknownResponseCount;
-    rollup.inputTokens += rc.inputTokens;
-    rollup.outputTokens += rc.outputTokens;
-    if (!rc.complete) rollup.incompleteRunCount += 1;
+    totalCostEstimate += rc.totalCostEstimate;
+    responseCount += rc.responseCount;
+    pricedResponseCount += rc.pricedResponseCount;
+    inputTokens += rc.inputTokens;
+    outputTokens += rc.outputTokens;
+    if (!rc.complete) incompleteRunCount += 1;
   }
 
-  // Equivalent to `incompleteRunCount === 0`, derived from the summed responses
-  // as the single source (a run is incomplete IFF it has a cost-unknown response).
-  rollup.complete = rollup.costUnknownResponseCount === 0;
-  return rollup;
+  return rollupFromAggregates({
+    runCount: runCosts.length,
+    incompleteRunCount,
+    responseCount,
+    pricedResponseCount,
+    totalCostEstimate,
+    inputTokens,
+    outputTokens,
+  });
 }
