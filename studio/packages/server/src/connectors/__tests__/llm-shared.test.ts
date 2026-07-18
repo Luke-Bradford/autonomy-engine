@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { coerceStopReason, meterUsage, noCompletionFailure } from '../llm-shared.js';
+import {
+  coerceStopReason,
+  meterUsage,
+  noCompletionFailure,
+  openAiReasoningEffort,
+} from '../llm-shared.js';
 
 /** #461 — a 2xx with no readable completion is a permanent failure, adapter-named.
  *  #556 — it carries a DIAGNOSTIC sub-reason; the retry class is `permanent` for
@@ -120,5 +125,20 @@ describe('meterUsage', () => {
       outputTokens: 0,
       meteringStatus: 'metered',
     });
+  });
+});
+
+// #2 L3 — the OpenAI reasoning-effort clamp. Anthropic + Ollama take the enum
+// value verbatim (all four are valid there); OpenAI's canonical vocabulary is
+// low|medium|high, so `max` clamps down to `high` and the rest pass through.
+describe('openAiReasoningEffort', () => {
+  it('passes low/medium/high through unchanged', () => {
+    expect(openAiReasoningEffort('low')).toBe('low');
+    expect(openAiReasoningEffort('medium')).toBe('medium');
+    expect(openAiReasoningEffort('high')).toBe('high');
+  });
+
+  it('clamps `max` to `high` (OpenAI has no `max` level)', () => {
+    expect(openAiReasoningEffort('max')).toBe('high');
   });
 });

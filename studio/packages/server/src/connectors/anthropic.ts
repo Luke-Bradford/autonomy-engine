@@ -141,7 +141,7 @@ export const anthropicAdapter: ConnectorAdapter = {
     // narrows the `string | null` return to `string` for `meterUsage` (which
     // needs a resolved model) without changing behaviour.
     const model = resolveModel(input.data, config.data, DEFAULT_MODEL) ?? DEFAULT_MODEL;
-    const { system, messages, sampling } = normalizeLlmRequest(input.data);
+    const { system, messages, sampling, reasoningEffort } = normalizeLlmRequest(input.data);
     const baseUrl = (config.data.baseUrl ?? DEFAULT_ANTHROPIC_BASE_URL).replace(/\/+$/, '');
     // The Messages API takes `system` as a top-level param (not a message), so
     // the normalized system string lands here; sampling maps to Anthropic's
@@ -156,6 +156,23 @@ export const anthropicAdapter: ConnectorAdapter = {
     if (sampling.temperature !== undefined) requestBody.temperature = sampling.temperature;
     if (sampling.topP !== undefined) requestBody.top_p = sampling.topP;
     if (sampling.stop !== undefined) requestBody.stop_sequences = sampling.stop;
+    // #2 L3 — reasoning effort. The MODERN Messages-API surface is adaptive
+    // thinking + `output_config.effort`; the older `thinking:{enabled,budget_tokens}`
+    // is REMOVED (HTTP 400) on every current model, including the DEFAULT_MODEL
+    // `claude-opus-4-8` — so the spec's "extended-thinking budget" prose (dated
+    // 2026-07-14) is lowered to the current wire mechanism. Both keys are emitted
+    // together: `output_config.effort` sets the depth, `thinking:{adaptive}` turns
+    // reasoning ON (omitting it leaves Opus 4.8 non-thinking, making effort inert).
+    // CAVEAT: thinking tokens count against `max_tokens` (default 1024) — an author
+    // pairing a high effort with a low `maxTokens` may get a truncated/short answer;
+    // raise `maxTokens` accordingly. Only fires when the author opted in, so a node
+    // with no `reasoningEffort` is byte-identical to a pre-L3 request. (An older
+    // model that predates `output_config`/adaptive rejects this with a clear
+    // provider 400 — a genuine permanent failure, not a silent wrong result.)
+    if (reasoningEffort !== undefined) {
+      requestBody.thinking = { type: 'adaptive' };
+      requestBody.output_config = { effort: reasoningEffort };
+    }
 
     const result = await llmPost(
       ctx,

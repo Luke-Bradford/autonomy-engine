@@ -8,6 +8,7 @@ import { z } from 'zod';
  * (`anthropic`/`openai`/`ollama`, for live request validation). Before L1 those
  * two sites duplicated an inline `z.object`; unifying them here is the same
  * shared→server pattern `http_request` uses for `httpSecretHeadersSchema`.
+ * L3 lands `reasoningEffort` (below) on this same schema.
  *
  * `${}` in message `content` needs NO code here: `content` is a plain string,
  * and the engine's config-tree substitution (`engine/params.ts::substitute`)
@@ -25,13 +26,24 @@ export const llmMessageSchema = z.object({
 export type LlmMessage = z.infer<typeof llmMessageSchema>;
 
 /**
+ * #2 L3 — the cross-provider reasoning-effort vocabulary. This is the SSOT enum
+ * the spec's config v2 pins (`low|medium|high|max`); it is deliberately NARROWER
+ * than any single provider's native set (Anthropic's `effort` also accepts
+ * `xhigh`) so a pipeline author writes ONE portable knob and each adapter lowers
+ * it to that provider's wire shape (see `llm-shared.ts`).
+ */
+export const reasoningEffortSchema = z.enum(['low', 'medium', 'high', 'max']);
+
+export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
+
+/**
  * The canonical `llm_call` config.
  *
  * NON-STRICT BY DESIGN (#2 L1, planning-gate HIGH constraint): the value parsed
  * at dispatch is the whole substituted `node.config`, which carries the seeded
- * `outputs` contract key (and, later, L3 `reasoningEffort` / L4a `outputMode` /
- * L10 `tools`). A `.strict()` object would reject every real dispatch on that
- * extra key — so unknown keys pass through, exactly as the pre-L1 schema did.
+ * `outputs` contract key (and, later, L4a `outputMode` / L10 `tools`). A
+ * `.strict()` object would reject every real dispatch on that extra key — so
+ * unknown keys pass through, exactly as the pre-L1 schema did.
  *
  * Back-compat: the v1 `{ prompt, system?, model?, maxTokens?, temperature? }`
  * config still validates (the `prompt` shorthand path) and normalizes to a
@@ -41,9 +53,9 @@ export type LlmMessage = z.infer<typeof llmMessageSchema>;
  * `prompt` shorthand", "`system` shorthand allowed") and the back-compat mandate
  * make the shorthand load-bearing.
  *
- * OUT of L1 scope (later tickets — kept off the schema so no inert/unreachable
- * surface ships): `outputMode`/`outputSchema` (L4a), `reasoningEffort` (L3),
- * `tools`/`toolChoice`/`mcpServers` (L10).
+ * Later-ticket surface still OFF the schema (kept off so nothing inert/
+ * unreachable ships): `outputMode`/`outputSchema` (L4a),
+ * `tools`/`toolChoice`/`mcpServers` (L10). `reasoningEffort` landed in L3 (below).
  */
 export const llmCallConfigSchema = z
   .object({
@@ -70,6 +82,11 @@ export const llmCallConfigSchema = z
     // every stop entry.
     stop: z.array(z.string().min(1)).optional(),
     seed: z.number().int().optional(),
+    // L3 reasoning knob — the portable effort level; each adapter lowers it to
+    // that provider's reasoning surface (Anthropic adaptive-thinking+effort,
+    // OpenAI `reasoning_effort`, Ollama `think`). `xhigh` is intentionally not
+    // offered (see `reasoningEffortSchema`); an unknown level fails at save-time.
+    reasoningEffort: reasoningEffortSchema.optional(),
   })
   .refine((c) => (c.prompt !== undefined) !== (c.messages !== undefined), {
     message: 'llm_call requires exactly one of `prompt` or `messages`',
@@ -99,6 +116,12 @@ export interface NormalizedLlmRequest {
   system?: string;
   messages: { role: 'user' | 'assistant'; content: string }[];
   sampling: LlmSampling;
+  // L3 — a TOP-LEVEL sibling of `sampling`, not a sampling knob: it lowers to a
+  // DIFFERENT request location per provider (Anthropic `thinking`+`output_config`,
+  // OpenAI/Ollama a top-level field), whereas every `sampling` knob is one wire
+  // parameter. `undefined` = the author set no reasoning effort; the adapter
+  // then adds no reasoning surface (byte-identical to a pre-L3 request).
+  reasoningEffort?: ReasoningEffort;
 }
 
 /**
@@ -150,5 +173,6 @@ export function normalizeLlmRequest(cfg: LlmCallConfig): NormalizedLlmRequest {
       stop: cfg.stop,
       seed: cfg.seed,
     },
+    reasoningEffort: cfg.reasoningEffort,
   };
 }

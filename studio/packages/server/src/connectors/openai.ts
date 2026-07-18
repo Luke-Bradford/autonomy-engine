@@ -11,6 +11,7 @@ import {
   meterUsage,
   noCompletionFailure,
   normalizeLlmRequest,
+  openAiReasoningEffort,
   parseJsonBody,
   resolveModel,
 } from './llm-shared.js';
@@ -90,7 +91,7 @@ export const openaiAdapter: ConnectorAdapter = {
       return;
     }
 
-    const { system, messages: turns, sampling } = normalizeLlmRequest(input.data);
+    const { system, messages: turns, sampling, reasoningEffort } = normalizeLlmRequest(input.data);
     // Chat Completions carries the system instruction as a LEADING `role:system`
     // message (not a top-level param), then the ordered non-system turns.
     const messages: { role: string; content: string }[] = [];
@@ -102,6 +103,13 @@ export const openaiAdapter: ConnectorAdapter = {
     if (sampling.topP !== undefined) requestBody.top_p = sampling.topP;
     if (sampling.stop !== undefined) requestBody.stop = sampling.stop;
     if (sampling.seed !== undefined) requestBody.seed = sampling.seed;
+    // #2 L3 — Chat Completions carries reasoning as a top-level `reasoning_effort`
+    // (only reasoning models honor it; a non-reasoning model or a gateway that
+    // does not support it rejects/ignores it — best-effort, opt-in). `max` clamps
+    // to `high` via the shared helper (OpenAI has no `max` rung). No key when unset.
+    if (reasoningEffort !== undefined) {
+      requestBody.reasoning_effort = openAiReasoningEffort(reasoningEffort);
+    }
 
     const baseUrl = (config.data.baseUrl ?? DEFAULT_OPENAI_BASE_URL).replace(/\/+$/, '');
     const result = await llmPost(

@@ -173,6 +173,38 @@ describe('anthropicAdapter.runActivity', () => {
     expect(body.messages).toEqual([{ role: 'user', content: 'p' }]);
   });
 
+  // #2 L3 — reasoningEffort engages the modern Anthropic reasoning surface:
+  // adaptive thinking + output_config.effort (NOT the deprecated budget_tokens,
+  // which 400s on every current model incl. the claude-opus-4-8 default).
+  it('maps reasoningEffort to adaptive thinking + output_config.effort', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(
+      anthropicAdapter.runActivity(ctx({ input: { prompt: 'p', reasoningEffort: 'high' } }), 'sk'),
+    );
+    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.thinking).toEqual({ type: 'adaptive' });
+    expect(body.output_config).toEqual({ effort: 'high' });
+  });
+
+  // `max` is a valid Anthropic `output_config.effort` level (no clamp, unlike
+  // OpenAI) — pin the verbatim passthrough of the strongest rung.
+  it('passes reasoningEffort `max` to output_config.effort verbatim (no clamp)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(
+      anthropicAdapter.runActivity(ctx({ input: { prompt: 'p', reasoningEffort: 'max' } }), 'sk'),
+    );
+    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.output_config).toEqual({ effort: 'max' });
+  });
+
+  it('sends NO thinking / output_config when reasoningEffort is unset (byte-compat with pre-L3)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(anthropicAdapter.runActivity(ctx({ input: { prompt: 'p' } }), 'sk'));
+    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.thinking).toBeUndefined();
+    expect(body.output_config).toBeUndefined();
+  });
+
   it('prefers the node model over the connection default model', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     await drain(
