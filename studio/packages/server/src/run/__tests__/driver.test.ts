@@ -775,9 +775,12 @@ describe('driver — reduce-first finishRun (#477)', () => {
 
 // #2 L7 — `retryArmInput` chooses the retry alarm's interval. A provider's
 // `Retry-After` hint (threaded on the `scheduleRetry` command from the durable
-// `node.failed`) OVERRIDES the node's static `policy.retryIntervalSeconds`; when
-// absent the policy interval (then the engine default) applies. `dueAt` is a
-// pure function of the chosen interval + the injected clock.
+// `node.failed`) OVERRIDES the node's static `policy.retryIntervalSeconds` —
+// including a hint SHORTER than a large author interval (provider authority) —
+// but is itself floored at the 30s spec #1 D4 anti-hot-loop minimum
+// (`DEFAULT_RETRY_INTERVAL_SECONDS`): #602. When absent the policy interval
+// (then the engine default) applies. `dueAt` is a pure function of the chosen
+// interval + the injected clock.
 describe('retryArmInput — L7 provider Retry-After override', () => {
   function retryDeps(db: Db, nowMs: number): Pick<DriverDeps, 'resolveDoc' | 'now'> {
     return { resolveDoc: (id) => getPipelineVersion(db, id)!, now: () => nowMs };
@@ -799,7 +802,12 @@ describe('retryArmInput — L7 provider Retry-After override', () => {
     expect(input.ref).toEqual({ runId: 'r', nodeId: 'a', attemptId: 'a#0' });
   });
 
-  it('honours a provider hint even BELOW the 30s policy floor (provider authority)', () => {
+  // #602 — a provider hint BELOW the 30s spec #1 D4 floor is clamped UP to 30s,
+  // not honoured verbatim: retrying a throttling provider in <30s is the exact
+  // hot retry loop the floor exists to prevent. The hint's own event stays
+  // honest (the frozen `retryAfterSeconds` still records what the provider said);
+  // only the ARMED interval is floored.
+  it('clamps a sub-30s provider hint UP to the 30s D4 anti-hot-loop floor (#602)', () => {
     const { db } = freshDb();
     const pvId = seedVersion(db, [node('a', { policy: { retry: 1, retryIntervalSeconds: 300 } })]);
     const input = retryArmInput(retryDeps(db, 0), {
@@ -809,7 +817,27 @@ describe('retryArmInput — L7 provider Retry-After override', () => {
       failedAttemptId: 'a#0',
       retryAfterSeconds: 5,
     });
-    expect(input.dueAt).toBe(5_000);
+    expect(input.dueAt).toBe(30_000);
+  });
+
+  // #602 boundary sweep around the 30s floor. `1` is the schema-minimum hint
+  // (`retryAfterSeconds` is a positive int) — the true worst-case hot-loop input.
+  it.each([
+    [1, 30_000],
+    [29, 30_000],
+    [30, 30_000],
+    [31, 31_000],
+  ])('floors a %ss hint to dueAt %s (#602 boundary)', (hint, expected) => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a', { policy: { retry: 1, retryIntervalSeconds: 300 } })]);
+    const input = retryArmInput(retryDeps(db, 0), {
+      runId: 'r',
+      pipelineVersionId: pvId,
+      nodeId: 'a',
+      failedAttemptId: 'a#0',
+      retryAfterSeconds: hint,
+    });
+    expect(input.dueAt).toBe(expected);
   });
 
   it('falls back to the policy interval when no hint is supplied (the reconciler path)', () => {

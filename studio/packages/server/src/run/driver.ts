@@ -396,6 +396,19 @@ export function syncRunLifecycle(db: Db, runId: string, status: RunLifecycleStat
  * crash-before-arm re-arm falls back to the policy interval — a benign
  * degradation (see `recoverHeld`), never an identity change: `dueAt` is not part
  * of the alarm dedupe key.
+ *
+ * #602 — the hint is FLOORED at `DEFAULT_RETRY_INTERVAL_SECONDS` (30s), spec #1
+ * D4's system-wide anti-hot-loop minimum: a rate-limit is a provider actively
+ * throttling us, so honouring a sub-30s `Retry-After` would re-fire inside the
+ * exact window that floor exists to forbid (see the const's own note). The floor
+ * only bites BELOW 30s — L7's "provider authority" is intact above it, including
+ * a hint SHORTER than a larger author `retryIntervalSeconds` (the provider's real
+ * window beats a static guess). It applies to the hint alone: only a supplied
+ * `retryAfterSeconds` is clamped, so the no-hint path keeps trusting the author's
+ * configured interval verbatim (a weak >0s signal can thus yield a shorter wait
+ * than NO signal, which correctly falls back to that interval). The clamp is a
+ * use-time reconciliation, not a rewrite of the frozen fact: the `node.failed`
+ * event still records what the provider actually said.
  */
 export function retryArmInput(
   deps: Pick<DriverDeps, 'resolveDoc' | 'now'>,
@@ -410,8 +423,14 @@ export function retryArmInput(
   const now = deps.now ?? (() => Date.now());
   const doc = deps.resolveDoc(args.pipelineVersionId);
   const policy = doc.nodes.find((n) => n.id === args.nodeId)?.policy;
+  // #602 — floor a supplied provider hint at the 30s D4 anti-hot-loop minimum;
+  // the no-hint path (reconciler) keeps the author's configured interval as-is.
+  const flooredHint =
+    args.retryAfterSeconds !== undefined
+      ? Math.max(args.retryAfterSeconds, DEFAULT_RETRY_INTERVAL_SECONDS)
+      : undefined;
   const intervalSeconds =
-    args.retryAfterSeconds ?? policy?.retryIntervalSeconds ?? DEFAULT_RETRY_INTERVAL_SECONDS;
+    flooredHint ?? policy?.retryIntervalSeconds ?? DEFAULT_RETRY_INTERVAL_SECONDS;
   return {
     kind: RETRY_WAKEUP_KIND,
     // The per-kind `ref` shape S1 declares for retry. `attemptId` is not
