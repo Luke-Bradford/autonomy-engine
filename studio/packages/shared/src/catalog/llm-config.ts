@@ -195,9 +195,17 @@ export type LlmStructuredOutputSurface = z.infer<typeof llmStructuredOutputSurfa
  *
  * The schema's `required` info is deliberately NOT consumed here: the immutable
  * `PipelineVersion` keeps the whole `outputSchema` (this lowering NEVER strips it),
- * so L4b recovers optional/nullable typing from `outputSchema.required` at runtime
+ * so a later ticket can recover optional/nullable typing from `outputSchema.required`
  * without re-deriving frozen rows. Lowering all properties as plain `{name,type}`
  * is therefore lossless — the optionality lives on, one field over.
+ *
+ * L4b UPDATE: at RUNTIME, structured output requires EVERY declared field to be
+ * produced (`llm-structured.ts::validateStructuredOutput`) — because a lowered row
+ * has no optionality channel and the reducer's `validateOutputs` fails a
+ * `missing declared output` (`matchesType(undefined,'string')` is false). So the
+ * runtime floor is all-present; true optional→present-`null` semantics (which
+ * needs a lowering + `matchesType` change) is the deferred follow-up (#594) the
+ * sentence above anticipates, NOT something L4b delivers.
  */
 export function lowerOutputSchema(schema: LlmOutputSchema): Output[] {
   return Object.entries(schema.properties).map(([name, prop]) => ({
@@ -319,6 +327,13 @@ export interface NormalizedLlmRequest {
   // parameter. `undefined` = the author set no reasoning effort; the adapter
   // then adds no reasoning surface (byte-identical to a pre-L3 request).
   reasoningEffort?: ReasoningEffort;
+  // L4b — the restricted `outputSchema` of a `structured` node, threaded here as
+  // the SSOT so all three adapters read it uniformly (the same pattern as L3's
+  // `reasoningEffort`). Present iff `outputMode:'structured'` (the coupling rule
+  // guarantees a schema when it is). Each adapter maps it to its provider's native
+  // JSON/tool mode; the runtime strict validate/parse of the RESPONSE lives in
+  // `llm-structured.ts`. `undefined` = a text-mode node (byte-identical to pre-L4b).
+  structuredOutput?: LlmOutputSchema;
 }
 
 /**
@@ -371,5 +386,9 @@ export function normalizeLlmRequest(cfg: LlmCallConfig): NormalizedLlmRequest {
       seed: cfg.seed,
     },
     reasoningEffort: cfg.reasoningEffort,
+    // L4b — carry the schema only for a structured node. The `refineOutputModeCoupling`
+    // rule makes `outputSchema` present whenever `outputMode` is `structured`, so
+    // the ternary never yields `structured`-without-schema.
+    structuredOutput: cfg.outputMode === 'structured' ? cfg.outputSchema : undefined,
   };
 }

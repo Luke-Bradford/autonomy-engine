@@ -448,3 +448,94 @@ describe('anthropicAdapter usage capture (L2)', () => {
     expect(events[0]).toMatchObject({ type: 'failed' });
   });
 });
+
+function failed(events: ActivityEvent[]): Extract<ActivityEvent, { type: 'failed' }> {
+  const ev = events.find((e) => e.type === 'failed');
+  if (ev === undefined) throw new Error(`no failed event in ${JSON.stringify(events)}`);
+  return ev;
+}
+
+function sentBody(spy: ReturnType<typeof vi.spyOn>): Record<string, unknown> {
+  return JSON.parse((spy.mock.calls[0]![1] as RequestInit).body as string) as Record<
+    string,
+    unknown
+  >;
+}
+
+const STRUCTURED_INPUT = {
+  prompt: 'classify this ticket',
+  outputMode: 'structured',
+  outputSchema: {
+    type: 'object',
+    properties: { category: { type: 'string', enum: ['bug', 'feature'] } },
+  },
+};
+
+/** A Messages API response that answered via the forced `structured_output` tool. */
+function toolResponse(input: unknown): unknown {
+  return {
+    content: [{ type: 'tool_use', name: 'structured_output', input }],
+    stop_reason: 'tool_use',
+    usage: { input_tokens: 4, output_tokens: 6 },
+  };
+}
+
+describe('anthropicAdapter.runActivity — structured output (#2 L4b)', () => {
+  it('forces the structured_output tool and omits the reasoning surface', async () => {
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(fakeResponse(200, toolResponse({ category: 'bug' })));
+    await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { ...STRUCTURED_INPUT, reasoningEffort: 'high' } }),
+        'sk',
+      ),
+    );
+    const body = sentBody(spy);
+    expect(body.tool_choice).toEqual({ type: 'tool', name: 'structured_output' });
+    expect((body.tools as { name: string; input_schema: unknown }[])[0]).toMatchObject({
+      name: 'structured_output',
+      input_schema: STRUCTURED_INPUT.outputSchema,
+    });
+    // forced tool_choice precludes adaptive thinking → reasoning keys are dropped.
+    expect(body.thinking).toBeUndefined();
+    expect(body.output_config).toBeUndefined();
+  });
+
+  it('meters then succeeds with the validated object (only schema fields)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, toolResponse({ category: 'feature', extra: 'stripped' })),
+    );
+    const events = await drain(
+      anthropicAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'),
+    );
+    expect(metered(events)?.usage).toMatchObject({ inputTokens: 4, outputTokens: 6 });
+    // unknown key stripped; no text/stopReason (not in the structured contract).
+    expect(succeeded(events).outputs).toEqual({ category: 'feature' });
+  });
+
+  it('fails permanent (but still meters) on an out-of-enum value (#592)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, toolResponse({ category: 'question' })),
+    );
+    const events = await drain(
+      anthropicAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'),
+    );
+    expect(metered(events)).toBeDefined();
+    expect(failed(events)).toMatchObject({ kind: 'permanent' });
+    expect(failed(events).error).toContain('enum');
+  });
+
+  it('fails permanent on a response with no structured_output tool_use block', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, { content: [{ type: 'text', text: 'sorry' }], usage: {} }),
+    );
+    const events = await drain(
+      anthropicAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'),
+    );
+    // meter-first: a 2xx billed even though it carried no usable structured block.
+    expect(metered(events)).toBeDefined();
+    expect(failed(events)).toMatchObject({ kind: 'permanent' });
+    expect(failed(events).error).toContain('tool_use');
+  });
+});

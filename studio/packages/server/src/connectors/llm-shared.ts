@@ -1,20 +1,42 @@
 import { z } from 'zod';
 import type { ConnectionKind } from '@autonomy-studio/shared';
-import { llmCallConfigSchema, normalizeLlmRequest } from '@autonomy-studio/shared';
+import {
+  llmCallConfigSchema,
+  normalizeLlmRequest,
+  parseAndValidateStructured,
+  structuredOutputInstruction,
+  validateStructuredOutput,
+} from '@autonomy-studio/shared';
 import type {
   LlmCallConfig,
+  LlmOutputSchema,
   LlmSampling,
   NormalizedLlmRequest,
   ReasoningEffort,
+  StructuredValidationResult,
 } from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorErrorKind, LlmUsage } from './types.js';
 import { redactSecrets } from './redact.js';
 
 // #2 L1 — the `llm_call` config schema + its normalization are the SSOT in
 // `@autonomy-studio/shared`; re-exported here so each adapter imports its LLM
-// machinery from ONE module. See `shared/src/catalog/llm-config.ts`.
-export { llmCallConfigSchema, normalizeLlmRequest };
-export type { LlmCallConfig, LlmSampling, NormalizedLlmRequest, ReasoningEffort };
+// machinery from ONE module. See `shared/src/catalog/llm-config.ts`. #2 L4b adds
+// the runtime structured parse/validate helpers (`shared/src/catalog/llm-structured.ts`).
+export {
+  llmCallConfigSchema,
+  normalizeLlmRequest,
+  parseAndValidateStructured,
+  structuredOutputInstruction,
+  validateStructuredOutput,
+};
+export type {
+  LlmCallConfig,
+  LlmOutputSchema,
+  LlmSampling,
+  NormalizedLlmRequest,
+  ReasoningEffort,
+  StructuredValidationResult,
+};
 
 /**
  * P3b — shared machinery for the LLM connector adapters (`anthropic_api`,
@@ -253,6 +275,29 @@ export function noCompletionFailure(
     type: 'failed',
     kind: 'permanent',
     error: `${kind} returned a 2xx response with no completion (${reason})`,
+  };
+}
+
+/**
+ * #2 L4b — the single failure event for a `structured` `llm_call` whose 2xx
+ * response produced no VALID structured completion: no forced-tool block
+ * (Anthropic), a non-string / unparseable-JSON completion (OpenAI/Ollama), or a
+ * payload that fails the schema (missing field, wrong type, out-of-enum). Like
+ * `noCompletionFailure` it is `permanent` — a 2xx means transport + server
+ * succeeded, so an unusable structured body is a response-content problem the
+ * identical request won't fix (retry policy gates on `transient`). L4c will add
+ * an internal repair sub-call BEFORE this terminal; today the first invalid
+ * response terminalizes. `kind` names the provider so the durable `error` is
+ * traceable, matching the `<kind> HTTP <status>` / `noCompletionFailure` errors.
+ */
+export function structuredValidationFailure(
+  kind: LlmConnectionKind,
+  reason: string,
+): Extract<ActivityEvent, { type: 'failed' }> {
+  return {
+    type: 'failed',
+    kind: 'permanent',
+    error: `${kind} structured output invalid: ${reason}`,
   };
 }
 

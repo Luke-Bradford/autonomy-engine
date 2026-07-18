@@ -11,8 +11,11 @@ import {
   meterUsage,
   noCompletionFailure,
   normalizeLlmRequest,
+  parseAndValidateStructured,
   parseJsonBody,
   resolveModel,
+  structuredOutputInstruction,
+  structuredValidationFailure,
 } from './llm-shared.js';
 
 /**
@@ -75,12 +78,25 @@ export const ollamaAdapter: ConnectorAdapter = {
       return;
     }
 
-    const { system, messages: turns, sampling, reasoningEffort } = normalizeLlmRequest(input.data);
+    const {
+      system,
+      messages: turns,
+      sampling,
+      reasoningEffort,
+      structuredOutput,
+    } = normalizeLlmRequest(input.data);
     // Ollama's `/api/chat` carries the system instruction as a LEADING
     // `role:system` message; sampling lives under `options` (`num_predict` is
-    // its name for max output tokens).
+    // its name for max output tokens). #2 L4b — a structured node appends the
+    // schema directive to system (belt-and-suspenders alongside the native
+    // `format` below; harmless if `format` alone already constrains the model).
+    const systemParts: string[] = [];
+    if (system !== undefined) systemParts.push(system);
+    if (structuredOutput !== undefined)
+      systemParts.push(structuredOutputInstruction(structuredOutput));
     const messages: { role: string; content: string }[] = [];
-    if (system !== undefined) messages.push({ role: 'system', content: system });
+    if (systemParts.length > 0)
+      messages.push({ role: 'system', content: systemParts.join('\n\n') });
     messages.push(...turns);
     const options: Record<string, unknown> = {};
     if (sampling.temperature !== undefined) options.temperature = sampling.temperature;
@@ -90,6 +106,12 @@ export const ollamaAdapter: ConnectorAdapter = {
     if (sampling.seed !== undefined) options.seed = sampling.seed;
     const requestBody: Record<string, unknown> = { model, messages, stream: false };
     if (Object.keys(options).length > 0) requestBody.options = options;
+    // #2 L4b — Ollama's NATIVE structured output: the TOP-LEVEL `format` accepts a
+    // JSON Schema and constrains decoding to it. Ollama is lenient about schema
+    // shape (unlike OpenAI strict json_schema), so the L4a subset — including its
+    // loose nested `object`/`array` — passes through as-is. The strict parse/validate
+    // of the response is still the correctness guarantee (a model may ignore `format`).
+    if (structuredOutput !== undefined) requestBody.format = structuredOutput;
     // #2 L3 — Ollama's `/api/chat` takes reasoning as the TOP-LEVEL `think` param
     // (NOT under `options`), which accepts a boolean OR a level string, so our
     // enum passes through verbatim. Best-effort per the spec ("ollama/others:
@@ -124,6 +146,33 @@ export const ollamaAdapter: ConnectorAdapter = {
     const parsed = parseJsonBody(result.bodyText);
     if (!parsed.ok) {
       yield parsed.event;
+      return;
+    }
+    // #2 L4b — STRUCTURED path. Meter FIRST (a 2xx billed, even if invalid), then
+    // parse+validate `message.content` as JSON against the schema. An absent message
+    // or a non-string content yields `undefined`, which `parseAndValidateStructured`
+    // rejects (→ `permanent`), covering the no-completion case here too.
+    if (structuredOutput !== undefined) {
+      const structuredCounts = parsed.json as {
+        prompt_eval_count?: unknown;
+        eval_count?: unknown;
+      };
+      yield {
+        type: 'metered',
+        usage: meterUsage(
+          'ollama',
+          model,
+          structuredCounts.prompt_eval_count,
+          structuredCounts.eval_count,
+        ),
+      };
+      const structuredMessage = (parsed.json as { message?: { content?: unknown } }).message;
+      const validated = parseAndValidateStructured(structuredOutput, structuredMessage?.content);
+      if (!validated.ok) {
+        yield structuredValidationFailure('ollama', validated.reason);
+        return;
+      }
+      yield { type: 'succeeded', outputs: validated.value };
       return;
     }
     // #461 — a present string (even '') is a real completion; anything else is
