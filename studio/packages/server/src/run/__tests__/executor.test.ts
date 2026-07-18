@@ -696,6 +696,102 @@ describe('createExecutor — loud pre-flight failures (no bogus node.dispatched)
   });
 });
 
+describe('createExecutor — #2 L13a dynamic connectionId routing', () => {
+  // Seed a version whose http node routes by `${params.provider}` — the param
+  // MUST be declared or `validatePipelineDoc` (my new connectionId scan) refuses
+  // the version, so this also proves the save-gate accepts a well-formed ref.
+  function routeVersion(db: Db, connExpr: string): string {
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    return createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [{ name: 'provider', type: 'string', required: true }],
+      outputs: [],
+      nodes: [httpNode('n1', connExpr, { url: 'https://x/y', outputs: [] })],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    }).id;
+  }
+  function routeRun(db: Db, pvId: string, provider: string) {
+    return createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params: { provider },
+    });
+  }
+  // An adapter that records the connectionConfig it was handed, proving the run
+  // reached the connection the param selected (not merely "a" connection).
+  function capturingAdapter(sink: { config?: Record<string, unknown> }): ConnectorRegistry {
+    return fakeHttpAdapter(async function* (ctx) {
+      sink.config = ctx.connectionConfig;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+  }
+
+  it('routes to the connection a ${params.provider} resolves to', async () => {
+    const db = freshDb().db;
+    const connA = await seedConnection(db, 'http', { tag: 'A' }, null);
+    const connB = await seedConnection(db, 'http', { tag: 'B' }, null);
+    const pvId = routeVersion(db, '${params.provider}');
+
+    const sink: { config?: Record<string, unknown> } = {};
+    const state = await startRun(
+      deps(db, { adapters: capturingAdapter(sink) }),
+      routeRun(db, pvId, connB),
+    );
+
+    expect(state.status).toBe('success');
+    // The run reached B's connection, not A's — genuine routing by param.
+    expect(sink.config).toEqual({ tag: 'B' });
+    void connA;
+  });
+
+  it('the SAME node routes to the OTHER connection when the param changes', async () => {
+    const db = freshDb().db;
+    const connA = await seedConnection(db, 'http', { tag: 'A' }, null);
+    await seedConnection(db, 'http', { tag: 'B' }, null);
+    const pvId = routeVersion(db, '${params.provider}');
+
+    const sink: { config?: Record<string, unknown> } = {};
+    const state = await startRun(
+      deps(db, { adapters: capturingAdapter(sink) }),
+      routeRun(db, pvId, connA),
+    );
+    expect(state.status).toBe('success');
+    expect(sink.config).toEqual({ tag: 'A' });
+  });
+
+  it('a ${} that resolves to an unknown id fails with CONNECTION_NOT_FOUND (not MISSING)', async () => {
+    const db = freshDb().db;
+    await seedConnection(db, 'http', { tag: 'A' }, null);
+    const pvId = routeVersion(db, '${params.provider}');
+    const run = routeRun(db, pvId, 'conn-does-not-exist');
+
+    const state = await startRun(deps(db), run);
+    expect(state.status).toBe('failure');
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+      error: expect.stringContaining("connection 'conn-does-not-exist' not found"),
+      kind: 'permanent',
+      code: 'connection_not_found',
+    });
+  });
+
+  it('a ${} that resolves to the EMPTY string is bound-but-empty → CONNECTION_NOT_FOUND', async () => {
+    // A bound ref that resolves to '' is distinct from a node with NO connection
+    // (which is CONNECTION_MISSING) — the guard is `=== undefined`, not falsy.
+    const db = freshDb().db;
+    const pvId = routeVersion(db, '${params.provider}');
+    const run = routeRun(db, pvId, '');
+
+    const state = await startRun(deps(db), run);
+    expect(state.status).toBe('failure');
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+      code: 'connection_not_found',
+    });
+  });
+});
+
 describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () => {
   /**
    * A one-entry catalog. The MVP set is entirely `execution`-with-a-connection,

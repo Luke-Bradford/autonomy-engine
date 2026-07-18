@@ -1138,6 +1138,24 @@ export function validateRefs(
         foreachChildIds.has(node.id),
       );
     }
+    // #2 L13a — a node's top-level `connectionId` may be a `${}` expression
+    // (dynamic connection routing), resolved at dispatch by the reducer against
+    // the SAME env `scan` scopes here (params/nodes/run/trigger, plus `${item}`
+    // for a foreach body child). Validate its refs at SAVE so a bad ref is badged
+    // rather than deferred to a run-time `invalid_event`. A literal id has no
+    // `${}` and `scan` no-ops on it; it is NOT a secret sink (no `$secret` marker
+    // — a secret-typed ref is refused by `scan` itself), so no `scanSecretSinks`.
+    if (node.connectionId !== undefined) {
+      scan(
+        `nodes.${node.id}.connectionId`,
+        node.connectionId,
+        scope,
+        errors,
+        0,
+        undefined,
+        foreachChildIds.has(node.id),
+      );
+    }
     // Item 7 / S2: a `{ "$secret": "<name>" }` marker is valid ONLY within a
     // declared sink field of this node's activity. `getActivity` reads the
     // shared module catalog (no signature change to this fn or its callers,

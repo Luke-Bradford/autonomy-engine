@@ -1131,6 +1131,16 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     nodeId: z.string(),
     attemptId: z.string(),
     preparedInput: z.record(z.string(), z.unknown()),
+    /**
+     * #2 L13a — the node's `connectionId` after the reducer resolved its `${}`
+     * expression against the run env (a literal id passes through unchanged;
+     * `undefined` when the node carries no `connectionId`). The executor consumes
+     * THIS, never `node.connectionId` — the raw field may be a `${}` template the
+     * executor has no run env to resolve. Like every field of a command, it is
+     * EPHEMERAL (re-derived on each reduce, never persisted in `run_events`), so
+     * adding it carries no replay/migration concern.
+     */
+    resolvedConnectionId: z.string().optional(),
   }),
   z.object({
     // Spawn a `call_pipeline` child. `childRunId` is DETERMINISTIC from

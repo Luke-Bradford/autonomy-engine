@@ -852,6 +852,61 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
+   * #2 L13a — resolve a node's (possibly `${}`) `connectionId` against the run
+   * env, so ONE node can route Anthropic-vs-OpenAI by a `${params.provider}`.
+   * Mirrors `call.pipelineVersionId`'s dispatch-time resolution
+   * (`String(substitute(...))`, full interpolation, same `buildCtx`/`item` env as
+   * `prepInput`) so the resolved id shares EXACTLY the config's env — a route that
+   * reads `${nodes.x.status}` sees the same status the config does. A literal id
+   * passes through `substitute` unchanged; `undefined` stays `undefined` (the
+   * node carries no connection). Throws exactly as `prepInput` does (bad ref /
+   * grammar), so the caller's existing try/catch → `prepFailure` covers it.
+   */
+  function resolveConnectionId(state: RunState, node: Node): string | undefined {
+    if (node.connectionId === undefined) return undefined;
+    return String(substitute(node.connectionId, buildCtx(state), 0, foreachItemOf(state, node.id)));
+  }
+
+  /**
+   * Bundle the two dispatch-prep resolutions so every `dispatchNode` emission
+   * site threads a resolved `connectionId` alongside the substituted config with
+   * NO drift — both run against the SAME `(state, node)` the site passes. Kept as
+   * ONE helper (rather than two calls per site) so a future site cannot ship the
+   * config resolution and forget the connection one.
+   */
+  function prepDispatch(
+    state: RunState,
+    node: Node,
+  ): { preparedInput: Record<string, unknown>; resolvedConnectionId: string | undefined } {
+    return {
+      preparedInput: prepInput(state, node),
+      resolvedConnectionId: resolveConnectionId(state, node),
+    };
+  }
+
+  /**
+   * Build a `dispatchNode` command from a `prepDispatch` result. The SOLE
+   * constructor of this command, so the four emission sites (`tryDispatchNode`,
+   * `onRetryDue`, `onRetryRequested`, `run.resumed` re-emit) cannot drift on which
+   * fields a `dispatchNode` carries — dropping `resolvedConnectionId` at one site
+   * (the #2 L13a routing key) is made structurally impossible rather than a
+   * per-site discipline.
+   */
+  function dispatchNodeCommand(
+    nodeId: string,
+    attemptId: string,
+    prepared: { preparedInput: Record<string, unknown>; resolvedConnectionId: string | undefined },
+  ): Extract<EngineCommand, { type: 'dispatchNode' }> {
+    return {
+      type: 'dispatchNode',
+      nodeId,
+      attemptId,
+      preparedInput: prepared.preparedInput,
+      resolvedConnectionId: prepared.resolvedConnectionId,
+    };
+  }
+
+  /**
    * The `${item}` binding (#4 A4) for a node dispatched INSIDE a `foreach` body —
    * the element at the container's current item index (`round`), or `undefined`
    * for any node not in a foreach (so `${item}` throws its "only bound inside …"
@@ -1105,9 +1160,12 @@ export function createEngine(doc: EngineDoc): Engine {
       return { state: next, changed: true };
     }
 
-    let prepared: Record<string, unknown>;
+    let prepared: {
+      preparedInput: Record<string, unknown>;
+      resolvedConnectionId: string | undefined;
+    };
     try {
-      prepared = prepInput(state, node);
+      prepared = prepDispatch(state, node);
     } catch (err) {
       return prepFailure(state, id, err, diagnostics);
     }
@@ -1116,7 +1174,7 @@ export function createEngine(doc: EngineDoc): Engine {
       attempts: ns.attempts + 1,
       currentAttemptId: attemptId,
     });
-    commands.push({ type: 'dispatchNode', nodeId: id, attemptId, preparedInput: prepared });
+    commands.push(dispatchNodeCommand(id, attemptId, prepared));
     return { state: next, changed: true };
   }
 
@@ -2524,9 +2582,12 @@ export function createEngine(doc: EngineDoc): Engine {
     // reach). `onRetryRequested` recovers a node from `ready`/`dispatched`, which
     // a `node.output` observability event cannot populate either — but it has the
     // clear, so this asymmetry is deliberate and stated rather than silent.
-    let prepared: Record<string, unknown>;
+    let prepared: {
+      preparedInput: Record<string, unknown>;
+      resolvedConnectionId: string | undefined;
+    };
     try {
-      prepared = prepInput(next, nodeById.get(event.nodeId)!);
+      prepared = prepDispatch(next, nodeById.get(event.nodeId)!);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       diagnostics.push(`dispatch prep failed for node '${event.nodeId}': ${msg}`);
@@ -2538,9 +2599,7 @@ export function createEngine(doc: EngineDoc): Engine {
     }
     return {
       state: next,
-      commands: [
-        { type: 'dispatchNode', nodeId: event.nodeId, attemptId, preparedInput: prepared },
-      ],
+      commands: [dispatchNodeCommand(event.nodeId, attemptId, prepared)],
       diagnostics,
     };
   }
@@ -2800,9 +2859,12 @@ export function createEngine(doc: EngineDoc): Engine {
       delete outputs[event.nodeId];
       next = { ...next, outputs };
     }
-    let prepared: Record<string, unknown>;
+    let prepared: {
+      preparedInput: Record<string, unknown>;
+      resolvedConnectionId: string | undefined;
+    };
     try {
-      prepared = prepInput(next, nodeById.get(event.nodeId)!);
+      prepared = prepDispatch(next, nodeById.get(event.nodeId)!);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       diagnostics.push(`dispatch prep failed for node '${event.nodeId}': ${msg}`);
@@ -2814,9 +2876,7 @@ export function createEngine(doc: EngineDoc): Engine {
     }
     return {
       state: next,
-      commands: [
-        { type: 'dispatchNode', nodeId: event.nodeId, attemptId, preparedInput: prepared },
-      ],
+      commands: [dispatchNodeCommand(event.nodeId, attemptId, prepared)],
       diagnostics,
     };
   }
@@ -3023,9 +3083,12 @@ export function createEngine(doc: EngineDoc): Engine {
           });
           continue;
         }
-        let prepared: Record<string, unknown>;
+        let prepared: {
+          preparedInput: Record<string, unknown>;
+          resolvedConnectionId: string | undefined;
+        };
         try {
-          prepared = prepInput(state, node);
+          prepared = prepDispatch(state, node);
         } catch (err) {
           // TERMINALIZE, never swallow — the same verdict `tryDispatchNode`,
           // `onRetryDue` and `onRetryRequested` all reach from a prep throw. This
@@ -3037,12 +3100,7 @@ export function createEngine(doc: EngineDoc): Engine {
           const failed = prepFailure(state, id, err, diagnostics);
           return { state: failed.state, commands: [failed.finish], diagnostics };
         }
-        commands.push({
-          type: 'dispatchNode',
-          nodeId: id,
-          attemptId: ns.currentAttemptId,
-          preparedInput: prepared,
-        });
+        commands.push(dispatchNodeCommand(id, ns.currentAttemptId, prepared));
       } else if (ns.status === 'waiting' && node.call !== undefined) {
         let pvId: string;
         let callParams: Record<string, unknown>;

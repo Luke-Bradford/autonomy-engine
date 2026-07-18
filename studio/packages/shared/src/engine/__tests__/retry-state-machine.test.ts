@@ -228,6 +228,27 @@ describe('F2b §A.4 — node.retryDue re-dispatches a held node', () => {
     ]);
   });
 
+  // #2 L13a — the onRetryDue re-dispatch is one of the four dispatchNode
+  // emission sites; a ${} connectionId must be RE-RESOLVED on the new attempt
+  // (not dropped) so a routed node keeps its connection across a retry.
+  it('re-resolves a ${} connectionId onto the re-dispatched command', () => {
+    const routed: Node = { ...node('a', { retry: 2 }), connectionId: '${params.provider}' };
+    const eng = engine([routed]);
+    let s = eng.reduce(eng.seedState(), {
+      type: 'run.started',
+      runId: RUN,
+      pipelineVersionId: 'pv1',
+      params: { provider: 'anthropic-x' },
+    }).state;
+    s = eng.reduce(s, dispatched('a', 'a#0')).state;
+    s = eng.reduce(s, failed('a', 'a#0')).state;
+
+    const r = eng.reduce(s, retryDue('a', 'a#0'));
+
+    const cmd = r.commands.find((c) => c.type === 'dispatchNode');
+    expect(cmd?.type === 'dispatchNode' && cmd.resolvedConnectionId).toBe('anthropic-x');
+  });
+
   it('IGNORES a duplicate retryDue (at-least-once delivery must fold idempotently)', () => {
     const eng = engine([node('a', { retry: 2 })]);
     let s = inFlight(eng, 'a');

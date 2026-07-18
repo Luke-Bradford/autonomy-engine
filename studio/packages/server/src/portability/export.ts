@@ -6,6 +6,7 @@ import {
   SCHEMA_VERSION,
   TriggerExportDataSchema,
   WebhookPublicConfigSchema,
+  interpolationMode,
   type ConnectionExportData,
   type ExportEnvelope,
   type Node,
@@ -18,16 +19,29 @@ import { getConnection, getPipeline, getTrigger, listPipelineVersions } from '..
 import { NotFoundError } from '../errors.js';
 import type { Db } from '../repo/types.js';
 
-/** Every node's `connectionId` is nulled on export — a connection id from
+/** A LITERAL `connectionId` is nulled on export — a concrete connection id from
  * another workspace is meaningless; the importer re-binds to their OWN
- * connections (see `NodeExportSchema`). Any node whose ORIGINAL
+ * connections (see `NodeExportSchema`). Any node whose ORIGINAL literal
  * `connectionId` was non-null (i.e. actually stripped, not just absent) has
  * its id added to `strippedIds` so the envelope's `strippedConnectionRefs`
  * can later tell the importer exactly which nodes need a connection
  * rebind — as opposed to every node, which would false-positive-flood nodes
- * that never referenced a connection. */
+ * that never referenced a connection.
+ *
+ * #2 L13a — a `${}` `connectionId` (dynamic routing) is PORTABLE: it references
+ * run params/outputs, not a concrete env-specific connection row, so it is
+ * PRESERVED across the export boundary rather than nulled — nulling it would
+ * silently destroy the authored routing (import would restore no connection),
+ * exactly the fail-open "manufacture an absent fact" this codebase refuses. A
+ * preserved dynamic id needs no rebind, so it is NOT added to `strippedIds`.
+ * `interpolationMode` is the SSOT literal-vs-dynamic classifier (`$$`-escaped
+ * text is `literal`) — the same one `literalCallTargets` uses for call targets. */
 function stripNodeConnectionId(node: Node, strippedIds: Set<string>): NodeExport {
   const { connectionId, ...rest } = node;
+  if (connectionId != null && interpolationMode(connectionId).mode !== 'literal') {
+    // Dynamic (`${}`) — portable, keep it, no rebind needed.
+    return { ...rest, connectionId };
+  }
   if (connectionId != null) strippedIds.add(node.id);
   return { ...rest, connectionId: null };
 }
