@@ -382,18 +382,36 @@ export function syncRunLifecycle(db: Db, runId: string, status: RunLifecycleStat
  * silently vacuous the first time either drifted — it would look up a key nothing
  * ever armed, find nothing, and re-arm a healthy hold on every boot.
  *
- * `dueAt` is `now + the node's retryIntervalSeconds`, read from the run's
- * IMMUTABLE bound version — the same doc the reducer read when it decided
- * eligibility, so the two cannot disagree and a replay reads the identical value.
+ * `dueAt` is `now + the retry interval`. The interval is the node's
+ * `retryIntervalSeconds`, read from the run's IMMUTABLE bound version — the same
+ * doc the reducer read when it decided eligibility, so the two cannot disagree
+ * and a replay reads the identical value.
+ *
+ * #2 L7 — a caller-supplied `retryAfterSeconds` (a provider's `Retry-After` hint,
+ * threaded from the durable `node.failed` via the `scheduleRetry` command)
+ * OVERRIDES the policy interval: the provider knows its own reset window, so
+ * retrying earlier just re-throttles and retrying later wastes time. It is a
+ * frozen event fact, so replay-determinism holds exactly as for the doc field.
+ * The boot reconciler does NOT supply it (it re-derives from the doc), so a
+ * crash-before-arm re-arm falls back to the policy interval — a benign
+ * degradation (see `recoverHeld`), never an identity change: `dueAt` is not part
+ * of the alarm dedupe key.
  */
 export function retryArmInput(
   deps: Pick<DriverDeps, 'resolveDoc' | 'now'>,
-  args: { runId: string; pipelineVersionId: string; nodeId: string; failedAttemptId: string },
+  args: {
+    runId: string;
+    pipelineVersionId: string;
+    nodeId: string;
+    failedAttemptId: string;
+    retryAfterSeconds?: number;
+  },
 ): ArmWakeupInput {
   const now = deps.now ?? (() => Date.now());
   const doc = deps.resolveDoc(args.pipelineVersionId);
   const policy = doc.nodes.find((n) => n.id === args.nodeId)?.policy;
-  const intervalSeconds = policy?.retryIntervalSeconds ?? DEFAULT_RETRY_INTERVAL_SECONDS;
+  const intervalSeconds =
+    args.retryAfterSeconds ?? policy?.retryIntervalSeconds ?? DEFAULT_RETRY_INTERVAL_SECONDS;
   return {
     kind: RETRY_WAKEUP_KIND,
     // The per-kind `ref` shape S1 declares for retry. `attemptId` is not
@@ -445,6 +463,8 @@ function armRetry(
       pipelineVersionId: state.pipelineVersionId,
       nodeId: command.nodeId,
       failedAttemptId: command.failedAttemptId,
+      // #2 L7 — prefer the provider's `Retry-After` hint over the policy interval.
+      retryAfterSeconds: command.retryAfterSeconds,
     }),
   );
 

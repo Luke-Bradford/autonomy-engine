@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_RETRY_INTERVAL_SECONDS } from '../schemas/pipeline.js';
 import type {
   Param,
   Output,
@@ -595,6 +596,19 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     kind: FailureKindSchema.default('permanent'),
     /** Optional machine detail (see `FAILURE_CODES`); an open vocabulary. */
     code: z.string().optional(),
+    /**
+     * #2 L7 — a provider-instructed backoff (whole seconds), parsed from a
+     * `Retry-After` header on a retryable LLM failure (429/503). When present on a
+     * `transient` failure the reducer copies it onto the `scheduleRetry` command,
+     * and the driver arms the retry alarm at `now + retryAfterSeconds` INSTEAD of
+     * `policy.retryIntervalSeconds` — the provider knows its own reset window. A
+     * durable, event-frozen fact (captured once, impurely, in the adapter): the
+     * reducer only reads it, so replay is deterministic. `.max` mirrors the policy
+     * `retryIntervalSeconds` ceiling as defence-in-depth — the adapter already
+     * clamps (`MAX_RETRY_AFTER_SECONDS`), this rejects a hand-forged event too.
+     * Ignored on any non-`transient` failure (which never retries).
+     */
+    retryAfterSeconds: z.number().int().positive().max(MAX_RETRY_INTERVAL_SECONDS).optional(),
   }),
   z.object({
     /**
@@ -1070,17 +1084,26 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
      * F2b (D4) — "this node's `transient` failure is retry-eligible; arm its
      * alarm." The reducer's half of the pure/impure split: it decides ELIGIBLE
      * (a pure read of the bound version's `policy` + the node's `retries`), the
-     * DRIVER decides WHEN (`retryIntervalSeconds` against a real clock) and
-     * appends `node.retryScheduled` → later `node.retryDue`.
+     * DRIVER decides WHEN (against a real clock) and appends
+     * `node.retryScheduled` → later `node.retryDue`.
      *
-     * Shape is spec-verbatim (#1 D4 and joint spec §A.2). Note the interval is
-     * NOT carried here: the driver reads it from the same IMMUTABLE bound
-     * version the reducer read, so the two cannot disagree, and the reducer
-     * stays clock-free.
+     * Shape is spec-verbatim (#1 D4 and joint spec §A.2). The STATIC interval is
+     * NOT carried: the driver reads `policy.retryIntervalSeconds` from the same
+     * IMMUTABLE bound version the reducer read, so the two cannot disagree and the
+     * reducer stays clock-free.
+     *
+     * #2 L7 — `retryAfterSeconds` IS carried when present: it is a PROVIDER hint
+     * frozen on the durable `node.failed` event (a `Retry-After` header), not a
+     * doc field, so — exactly like `scheduleWait.seconds` (a `${}`-resolved
+     * duration the reducer must compute) — only the value threaded through the
+     * command carries it to the driver, which prefers it over the policy interval.
+     * The reducer stays clock-free: it copies an already-frozen number, reads no
+     * clock. Absent → the driver falls back to the policy interval.
      */
     type: z.literal('scheduleRetry'),
     nodeId: z.string(),
     failedAttemptId: z.string(),
+    retryAfterSeconds: z.number().int().positive().max(MAX_RETRY_INTERVAL_SECONDS).optional(),
   }),
   z.object({
     /**

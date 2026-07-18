@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ConnectionKind } from '@autonomy-studio/shared';
 import {
+  MAX_RETRY_INTERVAL_SECONDS,
   llmCallConfigSchema,
   normalizeLlmRequest,
   parseAndValidateStructured,
@@ -105,9 +106,16 @@ export function resolveModel(
   return pick(input.model) ?? pick(config.model) ?? fallback ?? null;
 }
 
-/** A completed HTTP exchange (any status) OR a terminal failure event. */
+/**
+ * A completed HTTP exchange (any status) OR a terminal failure event.
+ *
+ * #2 L7 — the `response` variant surfaces the raw `Retry-After` header (or
+ * `null`). It is discarded for a 2xx, but on a 429/503 the adapter feeds it
+ * through `httpStatusFailure` → `parseRetryAfter` so the retry alarm waits the
+ * PROVIDER-instructed time instead of the static `policy.retryIntervalSeconds`.
+ */
 export type LlmFetchResult =
-  | { type: 'response'; status: number; bodyText: string }
+  | { type: 'response'; status: number; bodyText: string; retryAfterHeader: string | null }
   | { type: 'failed'; event: Extract<ActivityEvent, { type: 'failed' }> };
 
 /**
@@ -144,7 +152,15 @@ export async function llmPost(
     });
     const bodyText = await res.text();
     clearTimeout(timer);
-    return { type: 'response', status: res.status, bodyText };
+    // `Headers.get` is case-insensitive and returns `null` when absent — the exact
+    // shape `parseRetryAfter` expects (L7). Captured for every status; only a
+    // retryable failure ever reads it.
+    return {
+      type: 'response',
+      status: res.status,
+      bodyText,
+      retryAfterHeader: res.headers.get('retry-after'),
+    };
   } catch (err) {
     // The run's own cancel wins over a coincident timeout.
     if (ctx.signal.aborted) {
@@ -441,6 +457,96 @@ export async function* runStructuredWithRepair(
     yield structuredValidationFailure(provider, outcome.result.reason);
     return;
   }
+}
+
+/**
+ * #2 L7 — the ceiling for a provider's `Retry-After` hint. It IS the policy
+ * `retryIntervalSeconds` ceiling (imported, not re-declared — one SSOT in
+ * `pipeline.ts`): a provider hint feeds the SAME retry-alarm `dueAt` an author-set
+ * interval does, so honouring a hint larger than any interval the schema would
+ * ACCEPT would let a provider (or a garbage header) park a node for longer than an
+ * operator ever could. Clamping here bounds that blast radius without needing the
+ * reducer to re-validate a runtime value.
+ */
+export const MAX_RETRY_AFTER_SECONDS = MAX_RETRY_INTERVAL_SECONDS;
+
+/**
+ * #2 L7 — clamp a candidate `Retry-After` seconds value onto the usable range.
+ * `< 1` (a zero/negative delta, or an HTTP-date already in the past) → `undefined`:
+ * "retry immediately" against a provider that is actively throttling us is a hot
+ * loop, so the caller falls back to `policy.retryIntervalSeconds` (floor 30s)
+ * instead. A non-finite value is likewise rejected. Above the ceiling clamps DOWN.
+ */
+function clampRetryAfter(seconds: number): number | undefined {
+  if (!Number.isFinite(seconds) || seconds < 1) return undefined;
+  return Math.min(Math.trunc(seconds), MAX_RETRY_AFTER_SECONDS);
+}
+
+/**
+ * #2 L7 — parse an RFC-9110 `Retry-After` header into a bounded seconds hint for
+ * the retry alarm, or `undefined` when it carries nothing usable (absent header,
+ * a past date, a zero/garbage value) — in which case the driver falls back to the
+ * node's `policy.retryIntervalSeconds`. Two legal forms:
+ *  - **delta-seconds** — a non-negative integer (`Retry-After: 120`). What the
+ *    first-party Anthropic/OpenAI APIs send.
+ *  - **HTTP-date** — an absolute instant (`Retry-After: Wed, 21 Oct 2015 …`);
+ *    converted to a delta from `nowMs` and rounded UP (never retry a hair early).
+ *
+ * `nowMs` is passed in (not read here) so the parse is a pure, unit-testable
+ * function; the adapter supplies `Date.now()` at capture time. The value is
+ * captured once, frozen onto the durable `node.failed` event, and folded
+ * deterministically on replay — the clock is read exactly once, impurely, in the
+ * adapter, never in the reducer.
+ */
+export function parseRetryAfter(header: string | null, nowMs: number): number | undefined {
+  if (header === null) return undefined;
+  const trimmed = header.trim();
+  if (trimmed.length === 0) return undefined;
+  // delta-seconds: a bare non-negative integer (a decimal like `120.5` is neither
+  // a valid delta-seconds nor a date, so it falls through to `undefined`).
+  if (/^\d+$/.test(trimmed)) return clampRetryAfter(Number(trimmed));
+  // HTTP-date: absolute instant → delta from now, rounded up.
+  const whenMs = Date.parse(trimmed);
+  if (Number.isNaN(whenMs)) return undefined;
+  return clampRetryAfter(Math.ceil((whenMs - nowMs) / 1000));
+}
+
+/**
+ * #2 L7 — the SINGLE builder for a non-2xx LLM response's terminal `failed`
+ * event, so all three adapters classify (and now carry retry-after) identically.
+ * `provider` is the connection-kind label for the `<provider> HTTP <status>`
+ * message (matching `noCompletionFailure`/`structuredValidationFailure`); the
+ * event's own `kind` comes from `classifyHttpStatus`.
+ *
+ * The parsed `retryAfterSeconds` hint is attached ONLY when the failure is
+ * RETRYABLE (`rate_limit`/`transient`): a `permanent`/`auth` failure never
+ * retries (`retryEligible` gates on the engine's `transient`), so a `Retry-After`
+ * riding a 400/401 is meaningless and carrying it would be misleading noise. An
+ * absent/useless header simply omits the field → the driver uses the policy
+ * interval.
+ *
+ * Returns the BARE `failed` event; the structured-path callers
+ * (`runStructuredWithRepair`'s `doCall`) wrap it in `{type:'terminal', event}`
+ * themselves, exactly as they do today with the inline construction.
+ */
+export function httpStatusFailure(
+  provider: LlmConnectionKind,
+  status: number,
+  bodyText: string,
+  retryAfterHeader: string | null,
+  nowMs: number,
+): Extract<ActivityEvent, { type: 'failed' }> {
+  const kind = classifyHttpStatus(status);
+  const event: Extract<ActivityEvent, { type: 'failed' }> = {
+    type: 'failed',
+    kind,
+    error: `${provider} HTTP ${status}: ${errorExcerpt(bodyText)}`,
+  };
+  if (kind === 'rate_limit' || kind === 'transient') {
+    const retryAfterSeconds = parseRetryAfter(retryAfterHeader, nowMs);
+    if (retryAfterSeconds !== undefined) event.retryAfterSeconds = retryAfterSeconds;
+  }
+  return event;
 }
 
 /** A short, safe excerpt of a non-2xx response body for a failure `error`. */

@@ -89,7 +89,20 @@ export type ActivityEvent =
   | { type: 'output'; name: string; value: unknown }
   | { type: 'metered'; usage: LlmUsage }
   | { type: 'succeeded'; outputs: Record<string, unknown> }
-  | { type: 'failed'; kind: ConnectorErrorKind; error: string };
+  | {
+      type: 'failed';
+      kind: ConnectorErrorKind;
+      error: string;
+      /**
+       * #2 L7 — a provider-instructed backoff hint (whole seconds), parsed from a
+       * `Retry-After` header on a retryable non-2xx (429/503). Optional: only the
+       * LLM adapters set it, and only on a `rate_limit`/`transient` failure. The
+       * executor plumbs it onto `node.failed`, whence the reducer feeds it to the
+       * retry alarm's `dueAt` (overriding `policy.retryIntervalSeconds`). Ignored
+       * for any failure the engine will not retry.
+       */
+      retryAfterSeconds?: number;
+    };
 
 export interface ConnectorAdapter {
   /** The Connection kind this adapter handles (unique key in the registry). */

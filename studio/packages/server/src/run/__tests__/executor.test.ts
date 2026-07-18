@@ -426,6 +426,40 @@ describe('createExecutor — activity.metered price fields (#2 L5 cost)', () => 
       priceTableVersion: BUILTIN_PRICE_TABLE_VERSION,
     });
   });
+
+  // #2 L7 — the executor plumbs an adapter `failed.retryAfterSeconds` onto the
+  // durable `node.failed`, whence the reducer feeds it to the retry alarm. An
+  // adapter `failed` WITHOUT the field yields a `node.failed` without it.
+  it('plumbs an adapter Retry-After hint onto node.failed, and omits it when absent', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x' })]);
+    const run = seedRun(db, pvId);
+    const adapters = fakeHttpAdapter(async function* () {
+      yield {
+        type: 'failed',
+        kind: 'rate_limit',
+        error: 'slow down',
+        retryAfterSeconds: 42,
+      } satisfies ActivityEvent;
+    });
+    await startRun(deps(db, { adapters }), run);
+    const failed = loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed');
+    // rate_limit → engine `transient`, with the hint carried through.
+    expect(failed).toMatchObject({ kind: 'transient', retryAfterSeconds: 42 });
+
+    const db2 = freshDb().db;
+    const connId2 = await seedConnection(db2, 'http', {}, null);
+    const pvId2 = seedVersion(db2, [httpNode('n1', connId2, { url: 'https://x' })]);
+    const run2 = seedRun(db2, pvId2);
+    const adapters2 = fakeHttpAdapter(async function* () {
+      yield { type: 'failed', kind: 'transient', error: 'blip' } satisfies ActivityEvent;
+    });
+    await startRun(deps(db2, { adapters: adapters2 }), run2);
+    const failed2 = loadEngineEvents(db2, run2.id).find((e) => e.type === 'node.failed');
+    expect(failed2).toMatchObject({ kind: 'transient' });
+    expect(failed2).not.toHaveProperty('retryAfterSeconds');
+  });
 });
 
 describe('createExecutor — fs connector end-to-end (#4 A11, real fsAdapter)', () => {

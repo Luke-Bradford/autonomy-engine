@@ -79,7 +79,7 @@ function nodeFailed(
   runId: string,
   nodeId: string,
   attemptId: string,
-  failure: { error: string; kind: FailureKind; code?: string },
+  failure: { error: string; kind: FailureKind; code?: string; retryAfterSeconds?: number },
 ): EngineEvent {
   return { type: 'node.failed', runId, nodeId, attemptId, ...failure };
 }
@@ -341,8 +341,17 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // F0: map the adapter's PROVIDER kind onto the engine's retry axis and
           // carry the message through RAW. This used to be `${ev.kind}: ${ev.error}`
           // — a classification recoverable only by parsing text.
+          // #2 L7: plumb a `Retry-After` hint (LLM adapters set it only on a
+          // retryable non-2xx) onto the durable event; the reducer feeds it to the
+          // retry alarm. Omitted when absent → the driver uses the policy interval.
           events.push(
-            nodeFailed(runId, nodeId, attemptId, { error: ev.error, ...toEngineFailure(ev.kind) }),
+            nodeFailed(runId, nodeId, attemptId, {
+              error: ev.error,
+              ...toEngineFailure(ev.kind),
+              ...(ev.retryAfterSeconds !== undefined
+                ? { retryAfterSeconds: ev.retryAfterSeconds }
+                : {}),
+            }),
           );
           return events;
         }

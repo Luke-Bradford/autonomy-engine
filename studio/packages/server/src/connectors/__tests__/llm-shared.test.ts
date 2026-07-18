@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_STRUCTURED_REPAIRS,
+  MAX_RETRY_AFTER_SECONDS,
   buildRepairTurns,
   coerceStopReason,
+  httpStatusFailure,
   meterUsage,
   noCompletionFailure,
   openAiReasoningEffort,
+  parseRetryAfter,
   runStructuredWithRepair,
   structuredEcho,
 } from '../llm-shared.js';
@@ -288,5 +291,88 @@ describe('runStructuredWithRepair', () => {
     );
     expect(calls).toBe(1); // no repair on a transport/HTTP failure
     expect(events).toEqual([{ type: 'failed', kind: 'transient', error: 'llm request timed out' }]);
+  });
+});
+
+/** #2 L7 — parse the provider's `Retry-After` HTTP header into a bounded seconds
+ *  hint for the retry alarm. Both RFC-9110 forms; a useless/absent value → the
+ *  caller falls back to `policy.retryIntervalSeconds`. */
+describe('parseRetryAfter', () => {
+  const NOW = 1_000_000_000_000; // fixed clock for deterministic HTTP-date math
+
+  it('parses delta-seconds', () => {
+    expect(parseRetryAfter('120', NOW)).toBe(120);
+    expect(parseRetryAfter('1', NOW)).toBe(1);
+  });
+
+  it('trims surrounding whitespace before the integer match', () => {
+    expect(parseRetryAfter('  30 ', NOW)).toBe(30);
+  });
+
+  it('parses an HTTP-date into whole seconds from now (rounded up)', () => {
+    // HTTP-date has second resolution, so the whole-second delta is exact...
+    const when = new Date(NOW + 45_000).toUTCString();
+    expect(parseRetryAfter(when, NOW)).toBe(45);
+    // ...and a sub-second `now` offset rounds the delta UP, so we never retry
+    // a hair before the instant the provider named.
+    expect(parseRetryAfter(when, NOW + 400)).toBe(45); // 44.6s → 45
+  });
+
+  it('returns undefined for a past HTTP-date (retry-now → use policy)', () => {
+    const past = new Date(NOW - 60_000).toUTCString();
+    expect(parseRetryAfter(past, NOW)).toBeUndefined();
+  });
+
+  it('returns undefined for a null / empty / zero / garbage value (policy fallback)', () => {
+    expect(parseRetryAfter(null, NOW)).toBeUndefined();
+    expect(parseRetryAfter('', NOW)).toBeUndefined();
+    expect(parseRetryAfter('   ', NOW)).toBeUndefined();
+    expect(parseRetryAfter('0', NOW)).toBeUndefined(); // "retry now" → don't hot-loop
+    expect(parseRetryAfter('-5', NOW)).toBeUndefined();
+    expect(parseRetryAfter('120.5', NOW)).toBeUndefined(); // not integer, not a date
+    expect(parseRetryAfter('soon', NOW)).toBeUndefined();
+  });
+
+  it('clamps an absurd value to MAX_RETRY_AFTER_SECONDS', () => {
+    expect(parseRetryAfter('999999999', NOW)).toBe(MAX_RETRY_AFTER_SECONDS);
+    expect(MAX_RETRY_AFTER_SECONDS).toBe(86400); // matches the policy retryIntervalSeconds ceiling
+  });
+});
+
+/** #2 L7 — the single builder for a non-2xx LLM failure. Attaches the parsed
+ *  `retryAfterSeconds` hint ONLY when the failure is retryable (rate_limit /
+ *  transient); an auth/permanent status carrying the header does NOT (it never
+ *  retries, so the hint is meaningless). */
+describe('httpStatusFailure', () => {
+  const NOW = 1_000_000_000_000;
+
+  it('builds the adapter-named HTTP failure, kind from the status', () => {
+    expect(httpStatusFailure('anthropic_api', 429, '{"error":"slow down"}', null, NOW)).toEqual({
+      type: 'failed',
+      kind: 'rate_limit',
+      error: 'anthropic_api HTTP 429: {"error":"slow down"}',
+    });
+    expect(httpStatusFailure('openai_api', 503, 'overloaded', null, NOW).kind).toBe('transient');
+    expect(httpStatusFailure('ollama', 400, 'bad', null, NOW).kind).toBe('permanent');
+    expect(httpStatusFailure('openai_api', 401, 'nope', null, NOW).kind).toBe('auth');
+  });
+
+  it('attaches retryAfterSeconds on a 429 / 5xx that carries the header', () => {
+    expect(httpStatusFailure('anthropic_api', 429, 'b', '30', NOW).retryAfterSeconds).toBe(30);
+    expect(httpStatusFailure('openai_api', 503, 'b', '12', NOW).retryAfterSeconds).toBe(12);
+  });
+
+  it('does NOT attach retryAfterSeconds to a permanent/auth failure even with the header', () => {
+    expect(httpStatusFailure('ollama', 400, 'b', '30', NOW).retryAfterSeconds).toBeUndefined();
+    expect(httpStatusFailure('openai_api', 401, 'b', '30', NOW).retryAfterSeconds).toBeUndefined();
+  });
+
+  it('omits retryAfterSeconds when the header is absent or useless', () => {
+    expect(
+      httpStatusFailure('anthropic_api', 429, 'b', null, NOW).retryAfterSeconds,
+    ).toBeUndefined();
+    expect(
+      httpStatusFailure('anthropic_api', 429, 'b', '0', NOW).retryAfterSeconds,
+    ).toBeUndefined();
   });
 });

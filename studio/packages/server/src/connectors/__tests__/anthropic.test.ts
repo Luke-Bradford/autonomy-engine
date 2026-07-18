@@ -36,11 +36,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function fakeResponse(status: number, body: unknown): Response {
+function fakeResponse(status: number, body: unknown, headers?: Record<string, string>): Response {
   return {
     status,
     text: () => Promise.resolve(typeof body === 'string' ? body : JSON.stringify(body)),
-    headers: new Headers(),
+    headers: new Headers(headers),
   } as unknown as Response;
 }
 
@@ -240,6 +240,25 @@ describe('anthropicAdapter.runActivity', () => {
       expect(events[0]).toMatchObject({ type: 'failed', kind });
       vi.restoreAllMocks();
     }
+  });
+
+  // #2 L7 — a 429 (or 5xx) carrying a `Retry-After` header surfaces the
+  // provider-instructed backoff on the failure event; a permanent failure never
+  // does (it will not retry, so the hint is meaningless).
+  it('carries the Retry-After hint on a retryable failure but not a permanent one', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(429, { error: { message: 'slow down' } }, { 'retry-after': '42' }),
+    );
+    const rl = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
+    expect(rl[0]).toMatchObject({ type: 'failed', kind: 'rate_limit', retryAfterSeconds: 42 });
+    vi.restoreAllMocks();
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(400, { error: { message: 'bad' } }, { 'retry-after': '42' }),
+    );
+    const perm = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
+    expect(perm[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(perm[0]).not.toHaveProperty('retryAfterSeconds');
   });
 
   it('never echoes the secret in a failure event', async () => {

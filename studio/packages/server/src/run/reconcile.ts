@@ -350,6 +350,11 @@ function recoverHeld(
     // `{status:'retry_pending'}`, leaving `currentAttemptId` untouched. So a held
     // node's `currentAttemptId` IS the attempt its alarm is keyed to.
     const failedAttemptId = state.nodes[nodeId]!.currentAttemptId!;
+    // #2 L7 — no `retryAfterSeconds` here: the provider hint lives on the durable
+    // `node.failed` event, not in `RunState`, so a crash-before-arm re-arm can't
+    // recover it and falls back to `policy.retryIntervalSeconds`. Benign: `find`
+    // matches on IDENTITY (`dueAt` is not in the dedupe key), so a healthy hold is
+    // still recognised; only the rare re-armed alarm's timing reverts to policy.
     const input = retryArmInput(deps, {
       runId: run.id,
       pipelineVersionId: run.pipelineVersionId,
