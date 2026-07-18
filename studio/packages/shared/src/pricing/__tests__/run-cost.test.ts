@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeRunCost, rollupPipelineCost } from '../run-cost.js';
+import { computeRunCost, rollupFromAggregates, rollupPipelineCost } from '../run-cost.js';
 
 /**
  * L6 — the run-cost projection SUMS `activity.metered` events deterministically.
@@ -166,5 +166,84 @@ describe('rollupPipelineCost', () => {
     expect(rollup.incompleteRunCount).toBe(0);
     expect(rollup.complete).toBe(true);
     expect(rollup.totalCostEstimate).toBeCloseTo(0.005, 10);
+  });
+
+  it('rollupPipelineCost delegates to rollupFromAggregates (identical output for equivalent aggregates)', () => {
+    // #599 — the array fold and the SQL rollup MUST agree. This pins that
+    // `rollupPipelineCost` produces exactly what `rollupFromAggregates` would for
+    // the same summed aggregates, so the two paths cannot drift.
+    const runA = computeRunCost([
+      metered({ inputTokens: 100, outputTokens: 100, costEstimate: 0.01 }),
+    ]);
+    const runB = computeRunCost([
+      metered({ inputTokens: 50, outputTokens: 50, costEstimate: 0.005 }),
+      metered({ inputTokens: 10, outputTokens: 10 }),
+    ]);
+    const runC = computeRunCost([]);
+    expect(rollupPipelineCost([runA, runB, runC])).toEqual(
+      rollupFromAggregates({
+        runCount: 3,
+        incompleteRunCount: 1,
+        responseCount: 3,
+        pricedResponseCount: 2,
+        totalCostEstimate: 0.015,
+        inputTokens: 160,
+        outputTokens: 160,
+      }),
+    );
+  });
+});
+
+describe('rollupFromAggregates (#599 — the single fail-closed derivation site)', () => {
+  it('DERIVES costUnknownResponseCount = responseCount - pricedResponseCount (never summed as 0)', () => {
+    const rollup = rollupFromAggregates({
+      runCount: 4,
+      incompleteRunCount: 2,
+      responseCount: 10,
+      pricedResponseCount: 7,
+      totalCostEstimate: 1.25,
+      inputTokens: 500,
+      outputTokens: 900,
+    });
+    expect(rollup.currency).toBe('USD');
+    expect(rollup.responseCount).toBe(10);
+    expect(rollup.pricedResponseCount).toBe(7);
+    expect(rollup.costUnknownResponseCount).toBe(3);
+    expect(rollup.totalCostEstimate).toBeCloseTo(1.25, 10);
+    expect(rollup.inputTokens).toBe(500);
+    expect(rollup.outputTokens).toBe(900);
+    expect(rollup.runCount).toBe(4);
+    expect(rollup.incompleteRunCount).toBe(2);
+    expect(rollup.complete).toBe(false);
+  });
+
+  it('complete=true iff every response priced (costUnknownResponseCount === 0)', () => {
+    const rollup = rollupFromAggregates({
+      runCount: 2,
+      incompleteRunCount: 0,
+      responseCount: 5,
+      pricedResponseCount: 5,
+      totalCostEstimate: 0.5,
+      inputTokens: 10,
+      outputTokens: 20,
+    });
+    expect(rollup.costUnknownResponseCount).toBe(0);
+    expect(rollup.complete).toBe(true);
+  });
+
+  it('zero responses → complete $0 (nothing to price)', () => {
+    const rollup = rollupFromAggregates({
+      runCount: 3, // runs exist but none metered — each a complete $0
+      incompleteRunCount: 0,
+      responseCount: 0,
+      pricedResponseCount: 0,
+      totalCostEstimate: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+    });
+    expect(rollup.runCount).toBe(3);
+    expect(rollup.responseCount).toBe(0);
+    expect(rollup.costUnknownResponseCount).toBe(0);
+    expect(rollup.complete).toBe(true);
   });
 });

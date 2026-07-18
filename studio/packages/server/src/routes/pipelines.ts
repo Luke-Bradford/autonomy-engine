@@ -2,18 +2,16 @@ import type { FastifyPluginAsync } from 'fastify';
 import {
   NewPipelineSchema,
   NewPipelineVersionSchema,
-  computeRunCost,
-  rollupPipelineCost,
+  rollupFromAggregates,
 } from '@autonomy-studio/shared';
 import {
+  aggregatePipelineCost,
   createPipeline,
   createPipelineVersion,
   deletePipeline,
   getPipeline,
-  listMeteredEventsForPipeline,
   listPipelineVersions,
   listPipelinesPage,
-  listRunsForPipeline,
   updatePipeline,
 } from '../repo/index.js';
 import { NotFoundError } from '../errors.js';
@@ -119,16 +117,17 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   /**
-   * #2 L6 — the per-PIPELINE cost rollup: SUMS `costEstimate` across EVERY run of
-   * the pipeline (all versions). Two indexed queries — the run set (for
-   * `runCount`, incl. zero-cost runs) + all their `activity.metered` events —
-   * folded per-run through `computeRunCost` then `rollupPipelineCost`, the shared
-   * SSOT. Fail-closed: an unpriced/unknown response leaves the rollup
-   * `complete:false` (and its run counted in `incompleteRunCount`); the total is
-   * an honest lower bound, never manufactured-0-padded.
+   * #2 L6 / #599 — the per-PIPELINE cost rollup: SUMS `costEstimate` across EVERY
+   * run of the pipeline (all versions). A BOUNDED SQL aggregation
+   * (`aggregatePipelineCost`, #599) — a fixed number of scalar queries whose
+   * result is O(1), rather than loading every metered event (runs × LLM-calls,
+   * unbounded) into memory — then the shared fail-closed SSOT derivation
+   * (`rollupFromAggregates`). Fail-closed: an unpriced/unknown response leaves the
+   * rollup `complete:false` (and its run counted in `incompleteRunCount`); the
+   * total is an honest lower bound, never manufactured-0-padded.
    *
    * Owner-scoped in TWO places (authentication ≠ authorization): `requireOwned`
-   * on the pipeline, AND the run/event queries filter on the RUNS' own
+   * on the pipeline, AND `aggregatePipelineCost` filters on the RUNS' own
    * `owner_id` — defense in depth, never trusting that every run under the
    * pipeline shares its owner.
    *
@@ -143,23 +142,7 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
       'pipeline',
       request.params.id,
     );
-    const ownerId = request.principal.ownerId;
-    const pipelineRuns = listRunsForPipeline(db, pipeline.id, ownerId);
-    const meteredEvents = listMeteredEventsForPipeline(db, pipeline.id, ownerId);
-
-    // Group the (already metered-only) events by run so each run's completeness
-    // is computed independently — a run with no metered events folds to a
-    // complete $0 (it is still in `pipelineRuns`, so it counts toward `runCount`).
-    const eventsByRun = new Map<string, typeof meteredEvents>();
-    for (const event of meteredEvents) {
-      const bucket = eventsByRun.get(event.runId);
-      if (bucket) bucket.push(event);
-      else eventsByRun.set(event.runId, [event]);
-    }
-
-    return rollupPipelineCost(
-      pipelineRuns.map((run) => computeRunCost(eventsByRun.get(run.id) ?? [])),
-    );
+    return rollupFromAggregates(aggregatePipelineCost(db, pipeline.id, request.principal.ownerId));
   });
 
   // Deliberately NO update/delete route for a specific version: PipelineVersion
