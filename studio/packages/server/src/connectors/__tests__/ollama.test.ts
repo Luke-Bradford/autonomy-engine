@@ -279,3 +279,84 @@ describe('ollamaAdapter usage capture (L2)', () => {
     expect(events[0]).toMatchObject({ type: 'failed' });
   });
 });
+
+function failed(events: ActivityEvent[]): Extract<ActivityEvent, { type: 'failed' }> {
+  const ev = events.find((e) => e.type === 'failed');
+  if (ev === undefined) throw new Error(`no failed event in ${JSON.stringify(events)}`);
+  return ev;
+}
+
+const STRUCTURED_INPUT = {
+  prompt: 'classify this ticket',
+  model: 'llama3',
+  outputMode: 'structured',
+  outputSchema: {
+    type: 'object',
+    properties: { category: { type: 'string', enum: ['bug', 'feature'] } },
+  },
+};
+
+/** An /api/chat response whose message.content is the structured JSON string. */
+function jsonResponse(obj: unknown): unknown {
+  return {
+    message: { role: 'assistant', content: JSON.stringify(obj) },
+    done: true,
+    done_reason: 'stop',
+    prompt_eval_count: 12,
+    eval_count: 8,
+  };
+}
+
+describe('ollamaAdapter.runActivity — structured output (#2 L4b)', () => {
+  it('sends the schema in the native top-level format field', async () => {
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(fakeResponse(200, jsonResponse({ category: 'bug' })));
+    await drain(ollamaAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), null));
+    const body = JSON.parse((spy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.format).toEqual(STRUCTURED_INPUT.outputSchema);
+  });
+
+  it('keeps the think reasoning field alongside structured mode', async () => {
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(fakeResponse(200, jsonResponse({ category: 'bug' })));
+    await drain(
+      ollamaAdapter.runActivity(
+        ctx({ input: { ...STRUCTURED_INPUT, reasoningEffort: 'high' } }),
+        null,
+      ),
+    );
+    const body = JSON.parse((spy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.format).toEqual(STRUCTURED_INPUT.outputSchema);
+    expect(body.think).toBe('high');
+  });
+
+  it('meters then succeeds with the parsed+validated object (unknown key stripped)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, jsonResponse({ category: 'feature', junk: 1 })),
+    );
+    const events = await drain(ollamaAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), null));
+    expect(metered(events)?.usage).toMatchObject({ inputTokens: 12, outputTokens: 8 });
+    expect(succeeded(events).outputs).toEqual({ category: 'feature' });
+  });
+
+  it('fails permanent (still meters) on an out-of-enum value (#592)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, jsonResponse({ category: 'question' })),
+    );
+    const events = await drain(ollamaAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), null));
+    expect(metered(events)).toBeDefined();
+    expect(failed(events)).toMatchObject({ kind: 'permanent' });
+    expect(failed(events).error).toContain('enum');
+  });
+
+  it('fails permanent when message.content is not valid JSON', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, { message: { content: 'not json' }, prompt_eval_count: 1, eval_count: 1 }),
+    );
+    const events = await drain(ollamaAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), null));
+    expect(failed(events)).toMatchObject({ kind: 'permanent' });
+    expect(failed(events).error).toContain('JSON');
+  });
+});

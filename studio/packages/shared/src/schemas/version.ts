@@ -80,6 +80,10 @@
 // node-failure mis-run (not merely an empty output), the same bump-rule shape as
 // A16, so it bumps 11→12: a pre-12 build must refuse an L4a export at import
 // (`portability/envelope.ts`) rather than fail the structured node at run time.
+// (#2 L4b — provider structured request + runtime strict parse/validate — rides
+// this SAME 12: it adds no new type/field/artifact, only makes the adapters
+// ENFORCE the `outputSchema` v12 already declares. No bump — an L4a and an L4b
+// export are byte-identical; the L4b runtime behaviour is not a persisted shape.)
 // 11 (#4 A16): `webhook` typed OUTPUT. No new TYPE and no new catalog-entry field
 // (webhook outputs are author-declared via the generic F13 `config.outputs`, like
 // `execute_pipeline`'s child-projected outputs) — but this is NOT the A9 structural

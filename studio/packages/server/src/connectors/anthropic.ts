@@ -14,8 +14,13 @@ import {
   normalizeLlmRequest,
   parseJsonBody,
   resolveModel,
+  structuredValidationFailure,
+  validateStructuredOutput,
 } from './llm-shared.js';
 import type { NoCompletionReason } from './llm-shared.js';
+
+/** The forced-tool name a structured `llm_call` requires Anthropic to call. */
+const STRUCTURED_TOOL_NAME = 'structured_output';
 
 /**
  * The `anthropic_api` connector adapter: a single non-streaming call to the
@@ -85,6 +90,33 @@ function extractText(json: unknown): { text: string } | { reason: NoCompletionRe
   return { reason: hasMalformedTextBlock ? 'malformed_block' : 'empty_completion_set' };
 }
 
+/**
+ * #2 L4b — locate the forced `structured_output` tool_use block's `input` in a
+ * Messages API response. Returns `{ found:false }` when the response carries no
+ * such block (a model that answered with text instead of calling the tool, or a
+ * malformed `content`); `{ found:true, input }` otherwise (the raw `input` — the
+ * shared `validateStructuredOutput` decides whether it is a usable object). The
+ * `input` of a `tool_use` block is already a PARSED object (unlike OpenAI/Ollama,
+ * which return the JSON as a string in `message.content`), so no text-parse here.
+ */
+function findStructuredToolInput(
+  json: unknown,
+): { found: false } | { found: true; input: unknown } {
+  const content = (json as { content?: unknown }).content;
+  if (!Array.isArray(content)) return { found: false };
+  for (const b of content) {
+    if (
+      typeof b === 'object' &&
+      b !== null &&
+      (b as { type?: unknown }).type === 'tool_use' &&
+      (b as { name?: unknown }).name === STRUCTURED_TOOL_NAME
+    ) {
+      return { found: true, input: (b as { input?: unknown }).input };
+    }
+  }
+  return { found: false };
+}
+
 export const anthropicAdapter: ConnectorAdapter = {
   kind: 'anthropic_api',
   configSchema: anthropicConnectionConfigSchema,
@@ -141,7 +173,9 @@ export const anthropicAdapter: ConnectorAdapter = {
     // narrows the `string | null` return to `string` for `meterUsage` (which
     // needs a resolved model) without changing behaviour.
     const model = resolveModel(input.data, config.data, DEFAULT_MODEL) ?? DEFAULT_MODEL;
-    const { system, messages, sampling, reasoningEffort } = normalizeLlmRequest(input.data);
+    const { system, messages, sampling, reasoningEffort, structuredOutput } = normalizeLlmRequest(
+      input.data,
+    );
     const baseUrl = (config.data.baseUrl ?? DEFAULT_ANTHROPIC_BASE_URL).replace(/\/+$/, '');
     // The Messages API takes `system` as a top-level param (not a message), so
     // the normalized system string lands here; sampling maps to Anthropic's
@@ -169,7 +203,27 @@ export const anthropicAdapter: ConnectorAdapter = {
     // with no `reasoningEffort` is byte-identical to a pre-L3 request. (An older
     // model that predates `output_config`/adaptive rejects this with a clear
     // provider 400 — a genuine permanent failure, not a silent wrong result.)
-    if (reasoningEffort !== undefined) {
+    //
+    // #2 L4b — STRUCTURED output via FORCED tool use: one tool whose `input_schema`
+    // is the node's `outputSchema`, forced with `tool_choice`. This is the robust,
+    // model-agnostic Anthropic structured mechanism (the newer `output_config.format`
+    // is model-gated), and it makes a `tool_use`-only response the COMPLETION rather
+    // than a no-completion (superseding the text-mode note in `extractText`). A
+    // forced `tool_choice` precludes the adaptive-thinking reasoning surface on the
+    // Messages API, so structured mode intentionally does NOT emit `thinking`/
+    // `output_config` even when `reasoningEffort` is set — the two are mutually
+    // exclusive here (documented tradeoff; reasoning stays available in text mode
+    // and on the other providers' structured mode).
+    if (structuredOutput !== undefined) {
+      requestBody.tools = [
+        {
+          name: STRUCTURED_TOOL_NAME,
+          description: 'Emit the required structured result as this tool call.',
+          input_schema: structuredOutput,
+        },
+      ];
+      requestBody.tool_choice = { type: 'tool', name: STRUCTURED_TOOL_NAME };
+    } else if (reasoningEffort !== undefined) {
       requestBody.thinking = { type: 'adaptive' };
       requestBody.output_config = { effort: reasoningEffort };
     }
@@ -201,6 +255,33 @@ export const anthropicAdapter: ConnectorAdapter = {
       yield parsed.event;
       return;
     }
+    const usage = (parsed.json as { usage?: { input_tokens?: unknown; output_tokens?: unknown } })
+      .usage;
+    // #2 L4b — STRUCTURED path. Meter FIRST (a 2xx billed, even if the structured
+    // payload is invalid — spec: `activity.metered` on failed calls that still
+    // bill), THEN extract + strict-validate the forced-tool `input`. A missing
+    // block or a schema failure terminalizes `permanent` (L4c adds repair).
+    if (structuredOutput !== undefined) {
+      yield {
+        type: 'metered',
+        usage: meterUsage('anthropic_api', model, usage?.input_tokens, usage?.output_tokens),
+      };
+      const tool = findStructuredToolInput(parsed.json);
+      if (!tool.found) {
+        yield structuredValidationFailure(
+          'anthropic_api',
+          `response carried no ${STRUCTURED_TOOL_NAME} tool_use block`,
+        );
+        return;
+      }
+      const validated = validateStructuredOutput(structuredOutput, tool.input);
+      if (!validated.ok) {
+        yield structuredValidationFailure('anthropic_api', validated.reason);
+        return;
+      }
+      yield { type: 'succeeded', outputs: validated.value };
+      return;
+    }
     const extracted = extractText(parsed.json);
     if ('reason' in extracted) {
       yield noCompletionFailure('anthropic_api', extracted.reason);
@@ -208,9 +289,8 @@ export const anthropicAdapter: ConnectorAdapter = {
     }
     // #2 L2 — capture the metering fact before the terminal event. The Messages
     // API reports `usage.{input_tokens, output_tokens}`; `meterUsage` records
-    // whatever is a valid non-negative integer and flags completeness.
-    const usage = (parsed.json as { usage?: { input_tokens?: unknown; output_tokens?: unknown } })
-      .usage;
+    // whatever is a valid non-negative integer and flags completeness. (`usage`
+    // is read once above, before the structured branch.)
     yield {
       type: 'metered',
       usage: meterUsage('anthropic_api', model, usage?.input_tokens, usage?.output_tokens),

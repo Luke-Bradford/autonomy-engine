@@ -309,3 +309,90 @@ describe('openaiAdapter usage capture (L2)', () => {
     expect(events[0]).toMatchObject({ type: 'failed' });
   });
 });
+
+function failed(events: ActivityEvent[]): Extract<ActivityEvent, { type: 'failed' }> {
+  const ev = events.find((e) => e.type === 'failed');
+  if (ev === undefined) throw new Error(`no failed event in ${JSON.stringify(events)}`);
+  return ev;
+}
+
+const STRUCTURED_INPUT = {
+  prompt: 'classify this ticket',
+  model: 'gpt-4o',
+  outputMode: 'structured',
+  outputSchema: {
+    type: 'object',
+    properties: { category: { type: 'string', enum: ['bug', 'feature'] } },
+  },
+};
+
+/** A Chat Completions response whose content is the structured JSON string. */
+function jsonResponse(obj: unknown): unknown {
+  return {
+    choices: [{ message: { content: JSON.stringify(obj) }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 9, completion_tokens: 3 },
+  };
+}
+
+describe('openaiAdapter.runActivity — structured output (#2 L4b)', () => {
+  it('sends response_format:json_object and a JSON-schema system directive', async () => {
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(fakeResponse(200, jsonResponse({ category: 'bug' })));
+    await drain(openaiAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'));
+    const body = JSON.parse((spy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.response_format).toEqual({ type: 'json_object' });
+    const sys = (body.messages as { role: string; content: string }[]).find(
+      (m) => m.role === 'system',
+    );
+    // json_object mode requires the token "JSON" in the prompt; the schema steers.
+    expect(sys?.content).toContain('JSON');
+    expect(sys?.content).toContain('category');
+  });
+
+  it('keeps reasoning_effort alongside structured mode (no Anthropic-style clash)', async () => {
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(fakeResponse(200, jsonResponse({ category: 'bug' })));
+    await drain(
+      openaiAdapter.runActivity(
+        ctx({ input: { ...STRUCTURED_INPUT, reasoningEffort: 'high' } }),
+        'sk',
+      ),
+    );
+    const body = JSON.parse((spy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.response_format).toEqual({ type: 'json_object' });
+    expect(body.reasoning_effort).toBe('high');
+  });
+
+  it('meters then succeeds with the parsed+validated object (unknown key stripped)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, jsonResponse({ category: 'feature', junk: 1 })),
+    );
+    const events = await drain(openaiAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'));
+    expect(metered(events)?.usage).toMatchObject({ inputTokens: 9, outputTokens: 3 });
+    expect(succeeded(events).outputs).toEqual({ category: 'feature' });
+  });
+
+  it('fails permanent (still meters) on an out-of-enum value (#592)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, jsonResponse({ category: 'question' })),
+    );
+    const events = await drain(openaiAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'));
+    expect(metered(events)).toBeDefined();
+    expect(failed(events)).toMatchObject({ kind: 'permanent' });
+    expect(failed(events).error).toContain('enum');
+  });
+
+  it('fails permanent when the completion is not valid JSON', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, {
+        choices: [{ message: { content: 'sorry, not json' } }],
+        usage: {},
+      }),
+    );
+    const events = await drain(openaiAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'));
+    expect(failed(events)).toMatchObject({ kind: 'permanent' });
+    expect(failed(events).error).toContain('JSON');
+  });
+});
