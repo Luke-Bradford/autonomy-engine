@@ -26,6 +26,7 @@ export const WINDOW_EVENT_TYPES = [
   'window.failed',
   'window.retryScheduled',
   'window.retryDue',
+  'window.superseded',
 ] as const;
 
 export const WindowEventTypeSchema = z.enum(WINDOW_EVENT_TYPES);
@@ -117,6 +118,24 @@ export const WindowRetryDuePayloadSchema = z.object({
   attempt: z.number().int().positive(),
 });
 
+/**
+ * `window.superseded` — #5 S11d's stale-epoch DISPOSITION: a geometry edit
+ * minted a new config epoch while this window was still non-terminal
+ * (`waiting`/`retry_pending` — old-epoch debris with no run in flight), so
+ * the disposition pass folds it TERMINAL under the epoch that replaced it.
+ * A `running` old-epoch window is NOT superseded — its live run settles it
+ * through the normal completion path. TERMINAL AND PERMANENT: reverting to
+ * the old geometry does NOT resurrect a superseded window (the projection's
+ * uniqueness refuses re-creation — the same one-way rule as the backfill
+ * cursor's skips); post-revert it satisfies dependents vacuously, as a
+ * dispositioned window (see `WindowSelfDependencySchema`).
+ */
+export const WindowSupersededPayloadSchema = z.object({
+  /** The config epoch that was CURRENT when the disposition ran — the epoch
+   * that superseded this window's. */
+  currentEpoch: z.string().min(1),
+});
+
 export const WindowEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('window.created'), payload: WindowCreatedPayloadSchema }),
   z.object({ type: z.literal('window.runCreated'), payload: WindowRunCreatedPayloadSchema }),
@@ -127,6 +146,7 @@ export const WindowEventSchema = z.discriminatedUnion('type', [
     payload: WindowRetryScheduledPayloadSchema,
   }),
   z.object({ type: z.literal('window.retryDue'), payload: WindowRetryDuePayloadSchema }),
+  z.object({ type: z.literal('window.superseded'), payload: WindowSupersededPayloadSchema }),
 ]);
 export type WindowEvent = z.infer<typeof WindowEventSchema>;
 
@@ -137,7 +157,9 @@ export type WindowEvent = z.infer<typeof WindowEventSchema>;
  * re-modelled here); `retry_pending` (#5 S11c) = the last run failed and the
  * retry interval is elapsing — no run in flight, so the window holds NO
  * per-window concurrency slot (capacity counts `running` only) and does NOT
- * close the S10 backfill gate; `succeeded`/`failed` are terminal.
+ * close the S10 backfill gate; `succeeded`/`failed` are terminal;
+ * `superseded` (#5 S11d) is terminal — old-epoch debris dispositioned by a
+ * geometry edit (see `WindowSupersededPayloadSchema`).
  */
 export const WindowStatusSchema = z.enum([
   'waiting',
@@ -145,6 +167,7 @@ export const WindowStatusSchema = z.enum([
   'succeeded',
   'failed',
   'retry_pending',
+  'superseded',
 ]);
 export type WindowStatus = z.infer<typeof WindowStatusSchema>;
 
@@ -182,6 +205,11 @@ export function foldWindowStatus(events: ReadonlyArray<WindowEvent>): WindowStat
       case 'window.retryDue':
         // Mirrors `retryDueWindow`'s `retry_pending` guard.
         if (status === 'retry_pending') status = 'waiting';
+        break;
+      case 'window.superseded':
+        // #5 S11d — mirrors `supersedeWindow`'s guard: only the two
+        // no-run-in-flight non-terminal states are disposable.
+        if (status === 'waiting' || status === 'retry_pending') status = 'superseded';
         break;
     }
   }
