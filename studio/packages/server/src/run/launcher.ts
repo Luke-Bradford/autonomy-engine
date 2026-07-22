@@ -96,6 +96,16 @@ export interface FireContext {
    */
   windowEpoch?: string;
   /**
+   * #5 S11b — the fired window's bounds `[windowStart, windowEnd)` (ISO-8601
+   * UTC), the USER-FACING `${trigger.windowStart/End}` facts a tumbling
+   * trigger's param bindings resolve against. Supplied ONLY by the tumbling
+   * materialize path (both origins — one `materializeOne` site); absent for
+   * every other fire and OMITTED (not nulled) from the frozen context, the
+   * `windowEpoch` discipline.
+   */
+  windowStart?: string;
+  windowEnd?: string;
+  /**
    * The RUN-NOW param override layer (#5 S12b) — the TOP of the precedence stack
    * (pipeline-default < trigger-binding < run-now override). Supplied by the
    * manual-fire endpoint's `{ params }` body; absent for a schedule/webhook fire.
@@ -460,6 +470,9 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       // #5 S10 — OMITTED (not nulled) when absent: the optional schema field
       // stays absent for every non-window fire, matching every pre-S10 row.
       ...(fireContext?.windowEpoch !== undefined ? { windowEpoch: fireContext.windowEpoch } : {}),
+      // #5 S11b — the user-facing window bounds, same absent-not-null rule.
+      ...(fireContext?.windowStart !== undefined ? { windowStart: fireContext.windowStart } : {}),
+      ...(fireContext?.windowEnd !== undefined ? { windowEnd: fireContext.windowEnd } : {}),
     };
 
     // #5 S12b — resolve the trigger's expression-valued param bindings against

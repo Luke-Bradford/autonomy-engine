@@ -37,8 +37,26 @@ export const TriggerContextSchema = z.object({
    * forward-only arming). OPTIONAL and absent for every non-window fire and
    * every pre-S10 row. INTERNAL linkage fact only — deliberately NOT in the
    * closed `${trigger.*}` field set (`TRIGGER_FIELDS`); the user-facing
-   * `${trigger.windowStart/End}` surface is #5 S11's ticket.
+   * surface is `windowStart`/`windowEnd` below (#5 S11b).
    */
   windowEpoch: z.string().optional(),
+  /**
+   * #5 S11b — the fired window's bounds `[windowStart, windowEnd)` (ISO-8601
+   * UTC), the USER-FACING `${trigger.windowStart/End}` facts. Frozen by the
+   * tumbling materialize path at fire time; OPTIONAL and absent for every
+   * non-window fire and every pre-S11b row — never manufactured on read (the
+   * `windowEpoch`/`origin` discipline: an absent fact stays absent).
+   *
+   * CONTEXT-SCOPED at save: only a TUMBLING trigger's param bindings may
+   * reference them (`TRIGGER_WINDOW_FIELDS` + `windowFields` scan scope — the
+   * ADF `@trigger().outputs.windowStartTime` parameter-mapping idiom); a node
+   * config or a non-tumbling binding is refused at the write boundary. Window
+   * facts reach a pipeline as declared PARAMS via bindings — the durable
+   * `run.triggerContext` EVENT (and so `RunState.triggerContext`/`buildCtx`)
+   * deliberately does NOT carry them: like `windowEpoch`, they are
+   * launcher-context/run-ROW facts only.
+   */
+  windowStart: z.string().optional(),
+  windowEnd: z.string().optional(),
 });
 export type TriggerContext = z.infer<typeof TriggerContextSchema>;

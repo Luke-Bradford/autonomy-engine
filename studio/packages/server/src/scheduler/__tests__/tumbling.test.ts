@@ -256,12 +256,18 @@ describe('window_due handler — fire + continue the chain', () => {
     const { clock, launcher } = harness(db, () => W0_END);
     clock.tick();
 
-    // Fired once, afterCommit, with `${trigger.scheduledTime}` = windowEnd and
-    // (#5 S10) the config epoch frozen in for the epoch-scoped link join.
+    // Fired once, afterCommit, with `${trigger.scheduledTime}` = windowEnd,
+    // (#5 S10) the config epoch frozen in for the epoch-scoped link join, and
+    // (#5 S11b) the user-facing window bounds for `${trigger.windowStart/End}`.
     const fl = launcher as ReturnType<typeof fakeLauncher>;
     expect(fl.fires.map((t) => t.id)).toEqual([trigger.id]);
     expect(fl.contexts).toEqual([
-      { scheduledTime: iso(W0_END), windowEpoch: windowConfigEpoch(CONFIG) },
+      {
+        scheduledTime: iso(W0_END),
+        windowEpoch: windowConfigEpoch(CONFIG),
+        windowStart: iso(T0),
+        windowEnd: iso(W0_END),
+      },
     ]);
 
     // The row settled fired; the chain armed window 1 in the same tx.
@@ -1160,9 +1166,13 @@ describe('#5 S10 — backfill pass (sync)', () => {
     expect(rows.every((r) => r.origin === 'backfill')).toBe(true);
     // Exactly ONE fired (the oldest), linked; the rest wait under the gate.
     expect(launcher.fires).toHaveLength(1);
+    // #5 S11b — a BACKFILL fire carries the same window bounds as a live one
+    // (both origins share `materializeOne`).
     expect(launcher.contexts[0]).toEqual({
       scheduledTime: iso(W0_END),
       windowEpoch: windowConfigEpoch(BF10),
+      windowStart: iso(T0),
+      windowEnd: iso(W0_END),
     });
     expect(getWindowState(db, keyFor(trigger, T0))?.status).toBe('running');
     expect(listWindowStates(db, { triggerId: trigger.id, status: 'waiting' })).toHaveLength(3);

@@ -58,6 +58,13 @@ export type {
  *                Its values are the durable `run.triggerContext` seed FACT folded
  *                into `RunState.triggerContext` — never a fresh read — so every
  *                field is stable across the whole run and identical on replay.
+ *                `windowStart`/`windowEnd` (#5 S11b, `TRIGGER_WINDOW_FIELDS`)
+ *                also flatten here via `triggerRoot` but are always `null` in a
+ *                REDUCER context: the seed event does not carry them (they are
+ *                launcher-context/run-ROW facts, the `windowEpoch` discipline),
+ *                and save-time context-scoping keeps them out of node configs —
+ *                they are read only by a tumbling trigger's param bindings,
+ *                resolved in the launcher at fire time.
  */
 export interface SubstitutionContext {
   params: Record<string, unknown>;

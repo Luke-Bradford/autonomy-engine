@@ -775,6 +775,17 @@ describe('validateRefs — ${trigger.*} at SAVE time (#5 S12)', () => {
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatch(/is not a known trigger field/);
   });
+
+  // #5 S11b — `${trigger.windowStart/End}` is CONTEXT-SCOPED to a tumbling
+  // trigger's param bindings (the one save-time surface where the tumbling
+  // context is known); a NODE CONFIG cannot know its firing trigger's mode at
+  // save, so the ref is refused here with a message pointing at the binding
+  // surface — never accepted-then-null on a manual/schedule run.
+  it('REJECTS ${trigger.windowStart/End} in a node config (context-scoped, S11b)', () => {
+    const errors = validateRefs(doc([node('n', { prompt: '${trigger.windowStart}' })], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/tumbling trigger's param bindings/);
+  });
 });
 
 describe('#2 L13a — connectionId ${} refs at SAVE time', () => {
@@ -1602,16 +1613,36 @@ function tc(over: Partial<TriggerContext> = {}): TriggerContext {
 }
 
 describe('triggerRoot — the shared ${trigger.*} flattening', () => {
-  it('flattens a context to the closed field set', () => {
+  it('flattens a context to the closed field set (window bounds null — #5 S11b)', () => {
     expect(triggerRoot(tc({ scheduledTime: '2026-07-17T09:00:00.000Z' }))).toEqual({
       triggerId: 'trg-1',
       scheduledTime: '2026-07-17T09:00:00.000Z',
       body: null,
+      windowStart: null,
+      windowEnd: null,
     });
   });
 
   it('yields all-null fields for a null context (a run with no trigger)', () => {
-    expect(triggerRoot(null)).toEqual({ triggerId: null, scheduledTime: null, body: null });
+    expect(triggerRoot(null)).toEqual({
+      triggerId: null,
+      scheduledTime: null,
+      body: null,
+      windowStart: null,
+      windowEnd: null,
+    });
+  });
+
+  it('carries the window bounds of a window fire, but NEVER windowEpoch (#5 S11b)', () => {
+    const root = triggerRoot({
+      ...tc({}),
+      windowEpoch: 'abcd1234abcd1234',
+      windowStart: '2026-07-22T00:00:00.000Z',
+      windowEnd: '2026-07-22T01:00:00.000Z',
+    });
+    expect(root.windowStart).toBe('2026-07-22T00:00:00.000Z');
+    expect(root.windowEnd).toBe('2026-07-22T01:00:00.000Z');
+    expect(root).not.toHaveProperty('windowEpoch');
   });
 });
 

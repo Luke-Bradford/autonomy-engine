@@ -5,6 +5,7 @@ import {
   NewTriggerSchema,
   SubstituteError,
   TriggerPublicSchema,
+  windowBindingErrors,
   type ConcurrencyPolicy,
   type EventConfig,
   type Recurrence,
@@ -184,6 +185,32 @@ function assertWindowConsistent(
   }
 }
 
+/**
+ * #5 S11b — the MODE-scoped half of the window-field binding rule, checked
+ * against the EFFECTIVE post-write state (the `assertWindowConsistent`
+ * pattern): `${trigger.windowStart/End}` bindings are legal ONLY on a
+ * `tumbling` trigger — no other mode ever fires with window bounds, so the
+ * binding would silently resolve `null` forever. The FIELD-level write schema
+ * (`TriggerParamsWriteSchema`) is deliberately window-lenient (it cannot see
+ * `mode`); this is where the context becomes known. `windowBindingErrors` is
+ * the shared set-difference primitive — a pre-gate stored binding's UNRELATED
+ * defects never leak in, so a mode/enabled-only PATCH on such a row is refused
+ * only for window refs, never for noise it did not introduce. No legal write
+ * path predates this rule with a violating row (window fields were unknown —
+ * refused — before S11b), and the import path refuses the one hand-crafted
+ * source, so this assert can never brick a legitimately-created trigger.
+ */
+function assertWindowBindingsConsistent(mode: TriggerMode, params: Record<string, unknown>): void {
+  if (mode === 'tumbling') return;
+  const offending = windowBindingErrors(params);
+  if (offending.length > 0) {
+    throw new BadRequestError(
+      `\${trigger.windowStart/End} bindings are only valid on a 'tumbling' trigger ` +
+        `(no other mode fires with window bounds): ${offending.join('; ')}`,
+    );
+  }
+}
+
 export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
 
@@ -193,6 +220,7 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
     assertRecurrenceConsistent(body.mode, body.recurrence ?? null, body.schedule !== null);
     assertEventConsistent(body.mode, body.event ?? null, body.enabled);
     assertWindowConsistent(body.mode, body.window ?? null, body.enabled, body.concurrency.policy);
+    assertWindowBindingsConsistent(body.mode, body.params);
     requireOwnedPipelineVersion(db, body.pipelineVersionId, request.principal);
     const created = createTrigger(db, { ...body, ownerId: request.principal.ownerId });
     // Reconcile the durable `schedule_tick` rows so a newly-enabled schedule
@@ -247,6 +275,9 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
     const effPolicy =
       body.concurrency !== undefined ? body.concurrency.policy : existing.concurrency.policy;
     assertWindowConsistent(effMode, effWindow, effEnabled, effPolicy);
+    // #5 S11b — same effective-state posture: a mode switch away from tumbling
+    // must also drop any window-field bindings in the SAME patch.
+    assertWindowBindingsConsistent(effMode, body.params ?? existing.params);
     const updated = updateTrigger(db, existing.id, body);
     if (!updated) throw new NotFoundError('trigger', existing.id);
     // Reconcile: a patch may enable/disable, rebind, change the schedule, or

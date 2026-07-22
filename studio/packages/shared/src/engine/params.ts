@@ -117,6 +117,25 @@ export const RUN_FIELDS = [
 export const TRIGGER_FIELDS = ['triggerId', 'scheduledTime', 'body'] as const;
 
 /**
+ * The CONTEXT-SCOPED `${trigger.<field>}` extension (#5 S11b): a fired tumbling
+ * window's bounds `[windowStart, windowEnd)` (ISO-8601 UTC strings). NOT in
+ * `TRIGGER_FIELDS` because they are not globally readable — the spec scopes them
+ * to "tumbling-window-bound pipelines", and the one save-time surface where that
+ * binding is a KNOWN fact is the tumbling trigger's own param bindings (a
+ * pipeline doc does not know its triggers at save; triggers reference pipelines,
+ * are created later, and change mode). So — mirroring ADF, whose
+ * `@trigger().outputs.windowStartTime` is usable only in the trigger's
+ * parameter mapping — these fields are legal ONLY where `ScanScope.
+ * windowFieldsInScope` is set: a tumbling trigger's param bindings
+ * (`validateTriggerBindings` with `windowFields: true`). A node config or a
+ * non-tumbling binding is refused at save with a message naming this rule,
+ * never accepted-then-null on a manual/schedule run. At RUN time `triggerRoot`
+ * carries them unconditionally (null when the fire had none) — the fail-soft
+ * backstop for a pre-gate stored row, same as `scheduledTime` on a manual fire.
+ */
+export const TRIGGER_WINDOW_FIELDS = ['windowStart', 'windowEnd'] as const;
+
+/**
  * A value that ISN'T THERE — a distinct error so `default()` (the one rescuing
  * function) can treat data absence as "use the fallback" while a typo'd param,
  * an out-of-scope `item` or a wrong SHAPE stays a hard error. Internal to this
@@ -1025,11 +1044,21 @@ export function triggerRoot(tc: TriggerContext | null): {
   triggerId: string | null;
   scheduledTime: string | null;
   body: unknown;
+  windowStart: string | null;
+  windowEnd: string | null;
 } {
   return {
     triggerId: tc?.triggerId ?? null,
     scheduledTime: tc?.scheduledTime ?? null,
     body: tc?.body ?? null,
+    // #5 S11b — the window bounds, null for every non-window fire. Save-time
+    // context-scoping (`TRIGGER_WINDOW_FIELDS`) means no legal doc/binding reads
+    // them outside a tumbling trigger's bindings; carrying them here
+    // unconditionally makes a pre-gate stored row fail SOFT (null — the
+    // scheduledTime-on-manual semantic) rather than throw at fire time.
+    // `windowEpoch` stays deliberately ABSENT: internal linkage, never readable.
+    windowStart: tc?.windowStart ?? null,
+    windowEnd: tc?.windowEnd ?? null,
   };
 }
 
@@ -2332,6 +2361,16 @@ interface ScanScope {
    * fail-open.
    */
   outputsById?: Map<string, OutputContract>;
+  /**
+   * #5 S11b — whether `${trigger.windowStart/End}` (`TRIGGER_WINDOW_FIELDS`)
+   * are legal in this scan. TRUE only for a trigger's param-binding scan
+   * (`validateTriggerBindings` with `windowFields: true` — the field-level
+   * write gate; the MODE-scoped half, tumbling-only, is the route's cross-field
+   * assert via `windowBindingErrors`). Absent/false everywhere else — a node
+   * config cannot know its firing trigger's mode at save, so the ref is refused
+   * there with a message naming the binding surface.
+   */
+  windowFieldsInScope?: boolean;
 }
 
 function scan(
@@ -2423,8 +2462,17 @@ const TRIGGER_BINDING_ROOTS: ReadonlySet<RefRoot['kind']> = new Set(['trigger'])
  * A ROOTLESS expression (`${upper('x')}`, `${add(1, 2)}`) is ACCEPTED: the rule
  * is "no root OTHER than trigger", and a pure-function binding references no
  * fire-time-absent fact. `substitute` resolves it at fire time like any other.
+ *
+ * `windowFields` (#5 S11b) puts `${trigger.windowStart/End}` in scope. The
+ * FIELD-level write gate (`TriggerParamsWriteSchema`) passes TRUE — it cannot
+ * see the trigger's `mode`, so the tumbling-only half of the rule is the
+ * route's cross-field assert against the effective post-write state, via
+ * `windowBindingErrors` below (the `assertWindowConsistent` pattern).
  */
-export function validateTriggerBindings(params: Record<string, unknown>): string[] {
+export function validateTriggerBindings(
+  params: Record<string, unknown>,
+  opts?: { windowFields?: boolean },
+): string[] {
   const errors: string[] = [];
   const scope: ScanScope = {
     declared: new Map(),
@@ -2432,11 +2480,36 @@ export function validateTriggerBindings(params: Record<string, unknown>): string
     settled: new Set(),
     reachable: new Set(),
     soft: new Set(),
+    windowFieldsInScope: opts?.windowFields === true,
   };
   for (const [name, value] of Object.entries(params)) {
     scan(`params.${name}`, value, scope, errors, 0, TRIGGER_BINDING_ROOTS);
   }
   return errors;
+}
+
+/**
+ * The `${trigger.windowStart/End}` references in a trigger's param bindings —
+ * as context-scoped error strings, `[]` when none (#5 S11b). The MODE-scoping
+ * primitive: the route's cross-field assert (and the import guard) refuse a
+ * NON-tumbling trigger whose bindings reference window fields, against the
+ * effective post-write state where `mode` is known.
+ *
+ * Implemented as the SET DIFFERENCE of two runs of the one scan — restricted
+ * (`windowFields: false`) minus permissive (`windowFields: true`). The flag's
+ * ONLY message-visible effect is the context-scoped arm of `checkRefRoot`
+ * (every OTHER message — a disallowed root, a typo'd unknown field, a grammar
+ * error — is scope-independent BY CONSTRUCTION: the unknown-field enumeration
+ * deliberately lists all five fields in both scopes), so the difference is
+ * exactly the window-field defects: a stored binding's unrelated errors
+ * (`${params.x}`, a `${trigger.nope}` typo) appear in BOTH runs, string-equal,
+ * and cancel — a mode/enabled-only PATCH on such a row is never refused for
+ * noise it did not introduce. Kept HERE, next to the arm that creates the
+ * delta, so the invariant and its unit test live in one file.
+ */
+export function windowBindingErrors(params: Record<string, unknown>): string[] {
+  const permitted = new Set(validateTriggerBindings(params, { windowFields: true }));
+  return validateTriggerBindings(params, { windowFields: false }).filter((e) => !permitted.has(e));
 }
 
 /**
@@ -2557,7 +2630,14 @@ function refRootType(root: RefRoot, scope: ScanScope): SigType {
     // this avoids manufacturing a second error.
     case 'trigger':
       if (root.field === 'body') return 'any';
-      return (TRIGGER_FIELDS as readonly string[]).includes(root.field) ? 'string' : 'any';
+      // `windowStart`/`windowEnd` (#5 S11b) type 'string' like the other
+      // timestamp fields — typing is scope-independent (an out-of-scope ref is
+      // already refused by `checkRefRoot`; `any` here would only weaken the
+      // in-scope check, per the `run` note above).
+      return (TRIGGER_FIELDS as readonly string[]).includes(root.field) ||
+        (TRIGGER_WINDOW_FIELDS as readonly string[]).includes(root.field)
+        ? 'string'
+        : 'any';
   }
 }
 
@@ -2856,12 +2936,34 @@ function checkRefRoot(
   // rescuable-absent — `body` is always present (null when the fire carried
   // none), and a deep miss into it is E7's runtime walk, not a save-time error.
   if (root.kind === 'trigger') {
-    if (!(TRIGGER_FIELDS as readonly string[]).includes(root.field)) {
-      errors.push(
-        `${where}: \${trigger.${root.field}} is not a known trigger field ` +
-          `(${TRIGGER_FIELDS.join(', ')})`,
-      );
+    if ((TRIGGER_FIELDS as readonly string[]).includes(root.field)) return;
+    // #5 S11b — the window bounds are CONTEXT-SCOPED: legal only where the
+    // tumbling binding is a known save-time fact (a trigger's param bindings,
+    // `windowFieldsInScope`). Out of scope gets a message naming the rule and
+    // the legal surface — not the generic unknown-field message, which would
+    // read as "this field does not exist" when it exists elsewhere.
+    if ((TRIGGER_WINDOW_FIELDS as readonly string[]).includes(root.field)) {
+      if (!scope.windowFieldsInScope) {
+        errors.push(
+          `${where}: \${trigger.${root.field}} is context-scoped — only a ` +
+            `tumbling trigger's param bindings may reference it (window facts ` +
+            `reach a pipeline as params bound there)`,
+        );
+      }
+      return;
     }
+    // The enumeration is deliberately SCOPE-INDEPENDENT (all five fields, even
+    // where the window pair is out of scope): `windowBindingErrors` is a string
+    // set-difference of a restricted and a permissive run, and a scope-dependent
+    // message here would make a TYPO'd unknown field differ between the runs and
+    // leak into the difference as a phantom "window binding" (pre-PR lens
+    // finding). An in-scope-refused window field never reaches this message (the
+    // arm above owns it), and listing the pair to a node-config author is honest
+    // — the fields exist; the context-scoped arm explains where.
+    const known = [...TRIGGER_FIELDS, ...TRIGGER_WINDOW_FIELDS];
+    errors.push(
+      `${where}: \${trigger.${root.field}} is not a known trigger field (${known.join(', ')})`,
+    );
     return;
   }
   if (!(RUN_FIELDS as readonly string[]).includes(root.field)) {

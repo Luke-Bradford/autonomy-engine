@@ -1,7 +1,9 @@
 import {
   ConnectionPublicSchema,
+  ImportError,
   TriggerPublicSchema,
   parseAndUpgradeEnvelope,
+  windowBindingErrors,
   type ExportEnvelope,
   type ImportAttentionItem,
   type ImportResult,
@@ -150,6 +152,25 @@ function importTriggerEnvelope(
 
   const attention: ImportAttentionItem[] = [{ type: 'unboundPipelineVersion' }];
   if (exportedWebhook !== null) attention.push({ type: 'requiresWebhookSecret' });
+
+  // #5 S11b — `${trigger.windowStart/End}` bindings are tumbling-only (the
+  // route's `assertWindowBindingsConsistent`, which this path bypasses). Unlike
+  // `event`/`window` below, params CANNOT be forced consistent (they are user
+  // content — surgically rewriting expressions is worse than refusing), so a
+  // mode-inconsistent envelope is REFUSED outright: importing it would create a
+  // row whose every subsequent PATCH — including the mandatory rebind this
+  // import contract directs the operator to make — 400s on the cross-field
+  // rule. No legal write path produces such an envelope; only a hand-crafted
+  // one reaches here.
+  if (rest.mode !== 'tumbling') {
+    const offending = windowBindingErrors(rest.params);
+    if (offending.length > 0) {
+      throw new ImportError(
+        `trigger envelope binds \${trigger.windowStart/End} on a '${rest.mode}' trigger — ` +
+          `window-field bindings are only valid on a 'tumbling' trigger: ${offending.join('; ')}`,
+      );
+    }
+  }
 
   // Cross-entity refs ALWAYS stay null on import, regardless of what the
   // envelope carried — the importer re-binds via the normal PATCH route.
