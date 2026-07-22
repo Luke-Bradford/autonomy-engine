@@ -1583,6 +1583,368 @@ describe('#5 S10 — gated drain (completion tap + boot reconcile)', () => {
   });
 });
 
+describe('#5 S11a — per-window concurrency (capped unified materialize)', () => {
+  /** Geometry helper: a `waiting` window row [T0+k*15m, T0+(k+1)*15m). */
+  function seedWindow(
+    db: Db,
+    trigger: Trigger,
+    k: number,
+    origin: 'live' | 'backfill' = 'live',
+  ): WindowKey {
+    const key = keyFor(trigger, T0 + k * MIN15);
+    createWindow(db, {
+      ...key,
+      windowEnd: iso(T0 + (k + 1) * MIN15),
+      geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+      origin,
+    });
+    return key;
+  }
+
+  it('cap=1: a capacity-blocked LIVE window stays waiting IN WINDOW STATE — no run row (the rehoming pin)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const capped: WindowConfig = { ...CONFIG, maxConcurrentWindows: 1 };
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: capped });
+    // W0 holds the one slot (a REAL live run — a fake id would fold
+    // failed{missing} in reconcile step 1 and free the slot); W1 is waiting.
+    const busy = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pv,
+      triggerId: trigger.id,
+      parentRunId: null,
+      params: {},
+    });
+    updateRun(db, busy.id, { status: 'running' });
+    const w0 = seedWindow(db, trigger, 0);
+    linkWindowRun(db, w0, busy.id, 'fire');
+    seedWindow(db, trigger, 1);
+    const launcher = fakeLauncher();
+    const service = createTumblingService({
+      db,
+      arm: () => undefined,
+      launcher,
+      log: silentLog(),
+      now: () => T0 + 65 * 60_000,
+    });
+
+    service.reconcile();
+
+    // Pre-S11a the live window fired ungated (a queued run row); under the cap
+    // it WAITS in window state with no launcher fire at all.
+    expect(launcher.fires).toHaveLength(0);
+    expect(getWindowState(db, keyFor(trigger, T0 + MIN15))?.status).toBe('waiting');
+  });
+
+  it('cap=2: fires up to the free slots, oldest first; the excess waits', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const capped: WindowConfig = { ...CONFIG, maxConcurrentWindows: 2 };
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: capped });
+    seedWindow(db, trigger, 2);
+    seedWindow(db, trigger, 0);
+    seedWindow(db, trigger, 1);
+    const launcher = fakeLauncher();
+    const service = createTumblingService({
+      db,
+      arm: () => undefined,
+      launcher,
+      log: silentLog(),
+      now: () => T0 + 65 * 60_000,
+    });
+
+    service.reconcile();
+
+    // Two oldest fired (W0, W1 — windowStart order, not insert order); W2 waits.
+    expect(launcher.contexts.map((c) => c?.scheduledTime)).toEqual([
+      iso(W0_END),
+      iso(T0 + 2 * MIN15),
+    ]);
+    expect(getWindowState(db, keyFor(trigger, T0 + 2 * MIN15))?.status).toBe('waiting');
+  });
+
+  it('unified oldest-first: a NEW live window queues BEHIND a backfill backlog (the documented S10-split reversal)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const capped: WindowConfig = { ...CONFIG, maxBackfillWindows: 10, maxConcurrentWindows: 2 };
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: capped });
+    seedWindow(db, trigger, 0, 'backfill');
+    seedWindow(db, trigger, 1, 'backfill');
+    seedWindow(db, trigger, 4, 'live'); // the fresh live window — YOUNGEST
+    const launcher = fakeLauncher();
+    const service = createTumblingService({
+      db,
+      arm: () => undefined,
+      launcher,
+      log: silentLog(),
+      now: () => T0 + 95 * 60_000,
+    });
+
+    service.reconcile();
+
+    // Both slots go to the OLDER backfill windows; the live window waits its
+    // turn (ADF drains windows oldest-first up to maxConcurrency — under a cap
+    // the S10 live-priority split no longer applies, a conscious reversal).
+    expect(launcher.contexts.map((c) => c?.scheduledTime)).toEqual([
+      iso(W0_END),
+      iso(T0 + 2 * MIN15),
+    ]);
+    expect(getWindowState(db, keyFor(trigger, T0 + 4 * MIN15))?.status).toBe('waiting');
+  });
+
+  it('an ANY-epoch running window consumes capacity (old-epoch runs are real work)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const capped: WindowConfig = { ...CONFIG, maxConcurrentWindows: 1 };
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: capped });
+    // A running window under a DIFFERENT (old) epoch.
+    const oldKey: WindowKey = {
+      triggerId: trigger.id,
+      configEpoch: 'old-epoch',
+      windowStart: iso(T0),
+    };
+    createWindow(db, {
+      ...oldKey,
+      windowEnd: iso(W0_END),
+      geometry: { frequency: 'minute', interval: 30, startTime: CONFIG.startTime },
+      origin: 'live',
+    });
+    const oldRun = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pv,
+      triggerId: trigger.id,
+      parentRunId: null,
+      params: {},
+    });
+    updateRun(db, oldRun.id, { status: 'running' });
+    linkWindowRun(db, oldKey, oldRun.id, 'fire');
+    seedWindow(db, trigger, 1); // current-epoch waiting
+    const launcher = fakeLauncher();
+    const service = createTumblingService({
+      db,
+      arm: () => undefined,
+      launcher,
+      log: silentLog(),
+      now: () => T0 + 65 * 60_000,
+    });
+
+    service.reconcile();
+
+    expect(launcher.fires).toHaveLength(0);
+    expect(getWindowState(db, keyFor(trigger, T0 + MIN15))?.status).toBe('waiting');
+  });
+
+  it('a QUEUED window run consumes a slot (window `running` covers a run-level-queued run)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const capped: WindowConfig = { ...CONFIG, maxConcurrentWindows: 1 };
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: capped });
+    seedWindow(db, trigger, 0);
+    seedWindow(db, trigger, 1);
+    // The launcher reports `queued` (pipeline-cap pressure) — the window still
+    // links and holds its slot until window-terminal.
+    const launcher = fakeLauncher([{ outcome: 'queued', runId: 'queued-run' }]);
+    const service = createTumblingService({
+      db,
+      arm: () => undefined,
+      launcher,
+      log: silentLog(),
+      now: () => T0 + 65 * 60_000,
+    });
+
+    service.reconcile();
+
+    expect(launcher.fires).toHaveLength(1);
+    expect(getWindowState(db, keyFor(trigger, T0))?.status).toBe('running');
+    expect(getWindowState(db, keyFor(trigger, T0 + MIN15))?.status).toBe('waiting');
+  });
+
+  it('a window whose run is PARKED `waiting` still holds its slot (held until window-terminal — the deliberate divergence from run-slot release)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const capped: WindowConfig = { ...CONFIG, maxConcurrentWindows: 1 };
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: capped });
+    const parked = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pv,
+      triggerId: trigger.id,
+      parentRunId: null,
+      params: {},
+    });
+    updateRun(db, parked.id, { status: 'waiting' });
+    const w0 = seedWindow(db, trigger, 0);
+    linkWindowRun(db, w0, parked.id, 'fire');
+    seedWindow(db, trigger, 1);
+    const launcher = fakeLauncher();
+    const service = createTumblingService({
+      db,
+      arm: () => undefined,
+      launcher,
+      log: silentLog(),
+      now: () => T0 + 65 * 60_000,
+    });
+
+    service.reconcile();
+
+    // The parked run released its RUN-level admission slot (S4), but the WINDOW
+    // slot is held until the window terminalizes — cap semantics are per
+    // window-in-flight, the ADF-faithful reading.
+    expect(launcher.fires).toHaveLength(0);
+    expect(getWindowState(db, keyFor(trigger, T0 + MIN15))?.status).toBe('waiting');
+  });
+
+  it('the completion tap frees a slot and drains the next waiting window', async () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const capped: WindowConfig = { ...CONFIG, maxConcurrentWindows: 1 };
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: capped });
+    const w0 = seedWindow(db, trigger, 0);
+    linkWindowRun(db, w0, 'run-w0', 'fire');
+    seedWindow(db, trigger, 1);
+    const launcher = fakeLauncher();
+    const service = createTumblingService({
+      db,
+      arm: () => undefined,
+      launcher,
+      log: silentLog(),
+      now: () => T0 + 65 * 60_000,
+    });
+    const bus = createRunEventBus();
+    const unsubscribe = service.subscribeCompletion(bus);
+
+    bus.publish({
+      id: 'evt-s11',
+      runId: 'run-w0',
+      seq: 1,
+      type: 'run.finished',
+      payload: { outcome: 'success' },
+      ts: T0 + 66 * 60_000,
+    });
+    await Promise.resolve(); // the tap defers one microtask
+
+    // W0 settled (run row gone → failed{missing}) → slot freed → W1 fired.
+    expect(getWindowState(db, w0)?.status).toBe('failed');
+    expect(launcher.fires).toHaveLength(1);
+    expect(getWindowState(db, keyFor(trigger, T0 + MIN15))?.status).toBe('running');
+    unsubscribe();
+  });
+
+  it('the capped scan is bounded by CAPACITY, not MATERIALIZE_BATCH — and never warns about designed waiting', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const capped: WindowConfig = { ...CONFIG, maxConcurrentWindows: 30 };
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: capped });
+    // 35 waiting windows: more than MATERIALIZE_BATCH (25) and more than cap.
+    for (let k = 0; k < 35; k += 1) seedWindow(db, trigger, k);
+    const launcher = fakeLauncher();
+    const log = silentLog();
+    const service = createTumblingService({
+      db,
+      arm: () => undefined,
+      launcher,
+      log,
+      now: () => T0 + 24 * 60 * 60_000,
+    });
+
+    service.reconcile();
+
+    // All 30 slots fill in ONE pass (a batch-bound scan would stop at 25 and
+    // idle 5 slots until the next kick); the 5 excess windows wait silently —
+    // waiting-in-state is the designed steady state under a cap, not a
+    // truncation to warn about.
+    expect(launcher.fires).toHaveLength(30);
+    expect(listWindowStates(db, { triggerId: trigger.id, status: 'waiting' })).toHaveLength(5);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it('sync() kicks a cap-only trigger (cap-raise liveness) without ever creating backfill rows', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const capped: WindowConfig = { ...CONFIG, maxConcurrentWindows: 2 };
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: capped });
+    seedWindow(db, trigger, 0);
+    seedWindow(db, trigger, 1);
+    const launcher = fakeLauncher();
+    const service = createTumblingService({
+      db,
+      arm: () => undefined,
+      launcher,
+      log: silentLog(),
+      now: () => T0 + 65 * 60_000,
+    });
+
+    service.sync();
+
+    // Both stranded windows fired on the sync kick (previously only backfill
+    // triggers were kicked), and NO backfill pass ran: no cursor, no
+    // backfill-origin rows for windows the forward chain never created.
+    expect(launcher.fires).toHaveLength(2);
+    expect(getBackfillCursor(db, trigger.id, windowConfigEpoch(capped))).toBeNull();
+    expect(listWindowStates(db, { triggerId: trigger.id, origin: 'backfill' })).toHaveLength(0);
+  });
+
+  it('an UNBOUND cap-only trigger is not kicked by sync() (mirrors the backfill unbound skip)', () => {
+    const { db } = freshDb();
+    const capped: WindowConfig = { ...CONFIG, maxConcurrentWindows: 2 };
+    const trigger = seedTumbling(db, { pipelineVersionId: null, window: capped });
+    seedWindow(db, trigger, 0);
+    const launcher = fakeLauncher();
+    const service = createTumblingService({
+      db,
+      arm: () => undefined,
+      launcher,
+      log: silentLog(),
+      now: () => T0 + 65 * 60_000,
+    });
+
+    service.sync();
+
+    expect(launcher.fires).toHaveLength(0);
+  });
+
+  it('link-heal still runs under the cap: a crash orphan is linked, then counted against capacity', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const capped: WindowConfig = { ...CONFIG, maxConcurrentWindows: 1 };
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: capped });
+    // The crash shape: W0's fire committed a run (frozen context matches) but
+    // the link never landed; W1 waits behind it.
+    seedWindow(db, trigger, 0);
+    const orphan = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pv,
+      triggerId: trigger.id,
+      parentRunId: null,
+      params: {},
+      triggerContext: {
+        triggerId: trigger.id,
+        scheduledTime: iso(W0_END),
+        body: null,
+        windowEpoch: windowConfigEpoch(capped),
+      },
+    });
+    seedWindow(db, trigger, 1);
+    const launcher = fakeLauncher();
+    const service = createTumblingService({
+      db,
+      arm: () => undefined,
+      launcher,
+      log: silentLog(),
+      now: () => T0 + 65 * 60_000,
+    });
+
+    service.reconcile();
+
+    // W0 link-healed (no second fire) and now holds the one slot; W1 waits —
+    // no over-cap execution even through the heal path.
+    expect(launcher.fires).toHaveLength(0);
+    const w0 = getWindowState(db, keyFor(trigger, T0));
+    expect(w0?.status).toBe('running');
+    expect(w0?.runId).toBe(orphan.id);
+    expect(getWindowState(db, keyFor(trigger, T0 + MIN15))?.status).toBe('waiting');
+  });
+});
+
 describe('#5 S10 — repo: cursor + epoch-scoped join', () => {
   it('advanceBackfillCursor is monotonic (a backwards move loses)', () => {
     const { db } = freshDb();

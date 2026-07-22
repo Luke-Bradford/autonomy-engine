@@ -131,26 +131,40 @@ import type { SchedulerLog } from './scheduler.js';
  * v1-acceptable (the run-terminal tap needs no liveness help: it is re-derived
  * from the run row, and reconcile covers a crashed tap).
  *
+ * ## #5 S11a — per-window CONCURRENCY (opt-in via `window.maxConcurrentWindows`)
+ *
+ * When set (1–50 at the write boundary), materialization is CAPACITY-GATED:
+ * one oldest-first scan over BOTH origins fires until `maxConcurrentWindows`
+ * windows are `running` trigger-wide (any epoch) — see `materializeCapped`
+ * for the three decided semantics (slot held until window-terminal;
+ * oldest-first with no origin priority — the documented S10-split reversal;
+ * capacity-bounded scan with no truncation warn). The launcher's per-trigger
+ * admission (`admissionCapacity`, run/launcher.ts) reads the SAME cap so the
+ * materialized runs actually execute in parallel under the mandatory `queue`
+ * policy. ABSENT = the exact S9/S10 semantics below — opt-in like backfill,
+ * for the same upgrade-never-surprises reason.
+ *
  * ## Deliberate non-behaviours (v1)
  *
  * - `runWindows` do NOT gate tumbling fires (unlike schedule ticks): a
  *   tumbling window is data-completeness-driven, and a run-window suppression
  *   would silently LOSE the window for a non-backfill trigger. Event/webhook
  *   fires already set this precedent (only schedule gates).
- * - No `${trigger.windowStart/End}` expression fields — S11 (context-scoped
+ * - No `${trigger.windowStart/End}` expression fields — S11b (context-scoped
  *   save-time validation), per the spec's ticket split.
- * - No self-dependency / per-trigger window retry or concurrency — S11.
- * - LIVE overflow windows DO materialize into the S6 durable admission queue
- *   (a `queued` run row each, bounded by the per-trigger depth cap). This
- *   brushes the spec's "blocked/backfill windows live in window state, not as
- *   full runs": BACKFILL bulk now honours that line (the S10 gate above);
- *   rehoming LIVE blocking into window state is S11's, with its capacity
- *   hook. Forward-only live flow produces ≤1 new window per interval, so the
- *   queue depth stays O(pipeline slowness). A conscious, documented tradeoff
- *   — not an accident.
+ * - No per-trigger window RETRY (S11c) or self-dependency (S11d).
+ * - For a CAP-LESS trigger, LIVE overflow windows DO materialize into the S6
+ *   durable admission queue (a `queued` run row each, bounded by the
+ *   per-trigger depth cap). This brushes the spec's "blocked/backfill windows
+ *   live in window state, not as full runs": BACKFILL bulk honours that line
+ *   (the S10 gate above), and a CAPPED trigger now honours it for live
+ *   windows too (S11a) — rehoming live blocking stays opt-in so no shipped
+ *   trigger changes behavior. Forward-only live flow produces ≤1 new window
+ *   per interval, so the cap-less queue depth stays O(pipeline slowness). A
+ *   conscious, documented tradeoff — not an accident.
  * - Old-epoch `waiting` windows (a geometry edit mid-drain) and old-epoch
- *   cursor rows stay INERT debris until the trigger's delete CASCADE — S11's
- *   disposition pass owns anything smarter.
+ *   cursor rows stay INERT debris until the trigger's delete CASCADE — a
+ *   later S11 slice's disposition pass owns anything smarter.
  */
 
 export const WINDOW_DUE_KIND = 'window_due';
@@ -464,17 +478,95 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
   }
 
   /**
+   * #5 S11a — the CAPPED unified materialize: when the trigger opts into
+   * `maxConcurrentWindows`, ONE oldest-first (`windowStart` asc) scan over the
+   * current epoch's waiting unlinked windows — BOTH origins — fires until the
+   * cap is reached. Capacity = windows with status `running`, trigger-wide,
+   * ANY epoch (an old-epoch run still consumes real work — the S10 gate's
+   * rationale, kept). Three decided semantics, each pinned by test:
+   *
+   * - **The window SLOT is held until window-terminal.** A window stays
+   *   `running` while its run is queued at run level OR parked `waiting` on a
+   *   timer/dependency — a DELIBERATE divergence from the run-level slot
+   *   release (S4): the cap bounds windows-in-flight, ADF's `maxConcurrency`
+   *   semantic, and S11c/S11d (retry, self-dependency) will build on it.
+   * - **Live queues BEHIND backfill (oldest-first, no origin priority)** — a
+   *   conscious REVERSAL of S10's two-scan split (which existed to keep an
+   *   ungated live window from starving behind the backfill batch bound; under
+   *   a cap nothing is ungated, so windows drain strictly oldest-first, the
+   *   ADF order). Alternative considered and REJECTED: reserving one slot for
+   *   the newest live window — it would break oldest-first for no operational
+   *   gain (the backlog is bounded by `maxBackfillWindows` ≤ 1000 and drains
+   *   at cap parallelism). Opt-in, so no shipped trigger changes ordering.
+   * - **The scan is bounded by CAPACITY, not `MATERIALIZE_BATCH`,** and the
+   *   truncation WARN does not apply: excess waiting windows are the DESIGNED
+   *   steady state under a cap ("blocked windows live in window state"), not a
+   *   stranding anomaly — warning on every completion-tap pass of a healthy
+   *   bulk drain would be noise, the inverse no-silent-caps failure.
+   *
+   * Termination: every row `materializeOne` returns `'continue'` for has left
+   * the waiting-unlinked set (linked, fired+linked, or lost to a concurrent
+   * writer), so the refetch loop strictly shrinks and needs no artificial
+   * bound; `'stop'` bails the pass. No over-cap EXECUTION is possible even
+   * around a crash orphan: the LAUNCHER counts the orphan's run
+   * (`countActiveRunsForTrigger`), so fires past it come back run-level
+   * `queued` — at worst one extra window links a QUEUED run for a pass. The
+   * scan usually link-heals the orphan first (its window tends to be the
+   * oldest waiting row), but `backfillPass` can create OLDER windows in the
+   * same sync, deferring the heal to a later pass — the launcher gate, not
+   * heal order, is what carries the no-over-cap guarantee.
+   */
+  function materializeCapped(trigger: TumblingTrigger, cap: number): void {
+    const epoch = windowConfigEpoch(trigger.window);
+    for (;;) {
+      if (stopped) return;
+      const running = listWindowStates(db, {
+        triggerId: trigger.id,
+        status: 'running',
+        limit: cap,
+      }).length;
+      if (running >= cap) {
+        log.debug(
+          { triggerId: trigger.id, cap },
+          'tumbling: materialize gated — window concurrency cap reached',
+        );
+        return;
+      }
+      const waiting = listWindowStates(db, {
+        triggerId: trigger.id,
+        configEpoch: epoch,
+        status: 'waiting',
+        unlinked: true,
+        limit: cap - running,
+      });
+      if (waiting.length === 0) return;
+      for (const row of waiting) {
+        if (materializeOne(trigger, row) === 'stop') return;
+      }
+      // Recount and refetch: link-heals of already-terminal orphans settle
+      // without consuming capacity, so a single fetch could under-fill.
+    }
+  }
+
+  /**
    * Materialize the unlinked `waiting` windows of `trigger`'s CURRENT epoch,
-   * oldest first, in TWO origin-scoped scans (#5 S10): `'live'` windows keep
-   * S9's ungated batch semantics exactly; then AT MOST ONE `'backfill'`
-   * window fires, and only when the trigger has ZERO `running`-status windows
-   * (ANY epoch — an old-epoch run still consumes real capacity), so a bulk
-   * backlog drains serially instead of flooding the admission queue. The
-   * split keeps a 1000-row backfill backlog from starving the live window
-   * behind the batch bound (they no longer share one oldest-first scan).
+   * oldest first. #5 S11a: a trigger with `window.maxConcurrentWindows` takes
+   * the CAPPED unified path above; ABSENT keeps the exact S9/S10 semantics
+   * below — TWO origin-scoped scans (#5 S10): `'live'` windows keep S9's
+   * ungated batch semantics exactly; then AT MOST ONE `'backfill'` window
+   * fires, and only when the trigger has ZERO `running`-status windows (ANY
+   * epoch — an old-epoch run still consumes real capacity), so a bulk backlog
+   * drains serially instead of flooding the admission queue. The split keeps
+   * a 1000-row backfill backlog from starving the live window behind the
+   * batch bound (they no longer share one oldest-first scan).
    */
   function materializeWindows(trigger: TumblingTrigger): void {
     if (stopped) return;
+    const cap = trigger.window.maxConcurrentWindows;
+    if (cap !== undefined) {
+      materializeCapped(trigger, cap);
+      return;
+    }
     const epoch = windowConfigEpoch(trigger.window);
     // Fetch ONE past the batch bound so a full batch is distinguishable from a
     // truncated one — a silent cap would read as "swept everything" when it
@@ -743,9 +835,13 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     // can now FIRE runs (at most one gated backfill window per trigger, plus
     // any stranded live windows) — sanctioned: routes already fire runs in
     // request context (manual fire, events), and sync runs post-write, never
-    // inside a transaction.
+    // inside a transaction. #5 S11a: capacity-managed triggers
+    // (`maxConcurrentWindows`) get the SAME kick even without backfill — a
+    // cap RAISE frees slots with no completion tap coming, and the route
+    // write's sync() is what drains the freed capacity promptly.
     for (const trigger of eligible.values()) {
-      if (trigger.window.maxBackfillWindows === undefined) continue;
+      const hasBackfill = trigger.window.maxBackfillWindows !== undefined;
+      if (!hasBackfill && trigger.window.maxConcurrentWindows === undefined) continue;
       // UNBOUND triggers are skipped ENTIRELY (unlike forward seeding, where
       // eligibility deliberately ignores binding): running the pass would
       // accrete waiting rows on every sync with the lookback bound never
@@ -753,13 +849,20 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
       // left unbound for a week would violate the `maxBackfillWindows`
       // contract by thousands of rows. Skipping keeps the cursor lagging, so
       // the bounded lookback applies AT BIND TIME — symmetric with the
-      // disabled→re-enabled semantics.
+      // disabled→re-enabled semantics. For a CAP-ONLY trigger (#5 S11a) the
+      // skip is simpler but still right: an unbound fire would just throw
+      // `UnboundTriggerError` → 'stop', so kicking it is pure wasted work.
       if (trigger.pipelineVersionId === null) continue;
       try {
-        backfillPass(trigger);
+        // The backfill pass runs strictly for backfill-opted triggers — a
+        // cap-only trigger must never accrete backfill rows (pinned by test).
+        if (hasBackfill) backfillPass(trigger);
         materializeWindows(trigger);
       } catch (err) {
-        log.warn({ err, triggerId: trigger.id }, 'tumbling: backfill pass failed — skipping');
+        log.warn(
+          { err, triggerId: trigger.id },
+          'tumbling: backfill/materialize pass failed — skipping',
+        );
       }
     }
   }

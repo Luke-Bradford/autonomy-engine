@@ -278,24 +278,38 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
   }
 
   /**
-   * #631 — the trigger's LIVE admission capacity for a queue drain: how many
-   * concurrent runs its CURRENT policy allows. `parallel` → its validated cap
-   * (fail-closed to a single slot on a missing/invalid cap, logged so the
-   * corrupted row stays diagnosable); `queue` / `skip_if_running` / a deleted
-   * (null) trigger → 1 (both non-parallel policies are single-slot; an orphaned
-   * row still drains FIFO one-at-a-time). Read fresh from the DB on every drain so
-   * a `queue`→`parallel` policy edit takes effect on rows already queued. */
+   * #631 — the trigger's LIVE admission capacity: how many concurrent runs its
+   * CURRENT config allows. `parallel` → its validated cap (fail-closed to a
+   * single slot on a missing/invalid cap, logged so the corrupted row stays
+   * diagnosable); #5 S11a: a TUMBLING trigger with `window.maxConcurrentWindows`
+   * → that cap (per-window concurrency — the window gate in
+   * `scheduler/tumbling.ts` keeps windows-in-flight ≤ cap, and THIS read is what
+   * lets their runs actually execute in parallel under the mandatory `queue`
+   * policy; mode-gated so a stray window config on a non-tumbling row stays
+   * inert). Otherwise `queue` / `skip_if_running` / a deleted (null) trigger →
+   * 1. Read fresh from the DB on every drain — and from the fire-time row on
+   * every `fire()` — so a policy or cap edit takes effect on rows already
+   * queued. The stored cap is HONORED even above the write-boundary cap of 50
+   * (the `maxBackfillWindows` read-lenient precedent); a non-positive value
+   * cannot reach here — it fails the whole trigger parse.
+   */
   function admissionCapacity(trigger: Trigger | null): number {
-    if (trigger === null || trigger.concurrency.policy !== 'parallel') return 1;
-    const max = validParallelMax(trigger.concurrency.max);
-    if (max === null) {
-      deps.log?.warn?.(
-        { triggerId: trigger.id, concurrency: trigger.concurrency },
-        'parallel trigger has no valid concurrency max; draining queue single-slot (fail-closed)',
-      );
-      return 1;
+    if (trigger === null) return 1;
+    if (trigger.concurrency.policy === 'parallel') {
+      const max = validParallelMax(trigger.concurrency.max);
+      if (max === null) {
+        deps.log?.warn?.(
+          { triggerId: trigger.id, concurrency: trigger.concurrency },
+          'parallel trigger has no valid concurrency max; draining queue single-slot (fail-closed)',
+        );
+        return 1;
+      }
+      return max;
     }
-    return max;
+    if (trigger.mode === 'tumbling' && trigger.window?.maxConcurrentWindows !== undefined) {
+      return trigger.window.maxConcurrentWindows;
+    }
+    return 1;
   }
 
   /**
@@ -536,12 +550,20 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       return { outcome: 'started', runId: launch(trigger, triggerContext, mergedParams) };
     }
 
-    // `queue`: single-slot, FIFO. Start now ONLY if the slot is free AND nothing
-    // is already queued ahead AND the pipeline has room — else enqueue a durable
-    // `queued` row (bounded). Checking the queue depth as well as the active
-    // count keeps FIFO across the boot window: a fire that arrives while queued
-    // rows still await draining must fall in BEHIND them, not jump the slot.
-    if (active > 0 || countQueuedRunsForTrigger(db, trigger.id) > 0 || pipelineFull) {
+    // `queue`: FIFO over the trigger's admission capacity — 1 for an ordinary
+    // trigger (single-slot, unchanged), the window cap for a tumbling trigger
+    // with `maxConcurrentWindows` (#5 S11a; `admissionCapacity` is the ONE
+    // capacity read the fire path and the drain share, so the two gates cannot
+    // drift). Start now ONLY if a slot is free AND nothing is already queued
+    // ahead AND the pipeline has room — else enqueue a durable `queued` row
+    // (bounded). Checking the queue depth as well as the active count keeps
+    // FIFO across the boot window: a fire that arrives while queued rows still
+    // await draining must fall in BEHIND them, not jump the slot.
+    if (
+      active >= admissionCapacity(trigger) ||
+      countQueuedRunsForTrigger(db, trigger.id) > 0 ||
+      pipelineFull
+    ) {
       return enqueue();
     }
     return { outcome: 'started', runId: launch(trigger, triggerContext, mergedParams) };

@@ -852,6 +852,36 @@ describe('triggers routes', () => {
       expect(res.json().window).toBeNull();
     });
 
+    it('accepts `maxConcurrentWindows` and round-trips it; a PATCH cap-raise lands (#5 S11a)', async () => {
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: tumblingBody({ window: { ...window, maxConcurrentWindows: 2 } }),
+      });
+      expect(created.statusCode).toBe(201);
+      expect(created.json().window.maxConcurrentWindows).toBe(2);
+
+      // The cap-raise edit path: the route re-validates the merged window and
+      // its trailing `scheduler.sync()` is what kicks the freed capacity (the
+      // materialize kick itself is pinned in scheduler/__tests__/tumbling.ts).
+      const raised = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${created.json().id}`,
+        payload: { window: { ...window, maxConcurrentWindows: 5 } },
+      });
+      expect(raised.statusCode).toBe(200);
+      expect(raised.json().window.maxConcurrentWindows).toBe(5);
+    });
+
+    it('rejects `maxConcurrentWindows` above the write cap of 50 (#5 S11a)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: tumblingBody({ window: { ...window, maxConcurrentWindows: 51 } }),
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
     it("rejects a non-'queue' concurrency policy on a tumbling trigger (v1 — skip would strand a window)", async () => {
       const skip = await app.inject({
         method: 'POST',

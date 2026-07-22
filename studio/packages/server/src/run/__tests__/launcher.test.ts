@@ -10,6 +10,7 @@ import {
   type Node,
   type Param,
   type Trigger,
+  type WindowConfig,
 } from '@autonomy-studio/shared';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
@@ -79,6 +80,10 @@ function seedTrigger(
     concurrency?: Concurrency;
     enabled?: boolean;
     params?: Record<string, unknown>;
+    // #5 S11a — the tumbling capacity tests need a real windowed trigger, so
+    // the admission gate reads the cap from the same shape production does.
+    mode?: 'manual' | 'tumbling';
+    window?: WindowConfig;
   },
 ): Trigger {
   return createTrigger(db, {
@@ -86,9 +91,10 @@ function seedTrigger(
     name: 'T',
     pipelineVersionId: opts.pipelineVersionId,
     params: opts.params ?? {},
-    mode: 'manual',
+    mode: opts.mode ?? 'manual',
     schedule: null,
     webhook: null,
+    window: opts.window,
     concurrency: opts.concurrency ?? { policy: 'skip_if_running' },
     runWindows: null,
     enabled: opts.enabled ?? false,
@@ -421,6 +427,102 @@ describe('RunLauncher — queue', () => {
     expect(overflow.reason).toContain('queue is full');
 
     await launcher.whenIdle();
+  });
+});
+
+describe('RunLauncher — #5 S11a tumbling `maxConcurrentWindows` widens the queue slot', () => {
+  const window: WindowConfig = {
+    frequency: 'hour',
+    interval: 1,
+    startTime: '2026-07-01T00:00:00.000Z',
+    maxConcurrentWindows: 2,
+  };
+
+  it('admits up to the window cap before queueing (fire path)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, {
+      pipelineVersionId: pvId,
+      concurrency: { policy: 'queue' },
+      mode: 'tumbling',
+      window,
+    });
+    // Hang the runs so the burst observes stable admission decisions.
+    const launcher = createRunLauncher(deps(db, { nodes: { a: { hang: true } } }));
+
+    expect(launcher.fire(trigger).outcome).toBe('started');
+    expect(launcher.fire(trigger).outcome).toBe('started'); // 2nd slot — capacity 2, not 1
+    expect(launcher.fire(trigger).outcome).toBe('queued'); // over the cap → durable queue
+
+    await launcher.whenIdle();
+  });
+
+  it('drains the queue up to the window cap, not a single slot', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, {
+      pipelineVersionId: pvId,
+      concurrency: { policy: 'queue' },
+      mode: 'tumbling',
+      window,
+    });
+    // Three durable waiters left by a previous instance (the recoverQueued
+    // restart shape), drained by a launcher whose runs HANG — so the admitted
+    // count is exactly the drain's capacity read, not a settle cascade.
+    for (let i = 0; i < 3; i++) {
+      createRun(db, {
+        pipelineVersionId: pvId,
+        ownerId: 'local',
+        triggerId: trigger.id,
+        parentRunId: null,
+        params: {},
+        status: 'queued',
+        queuedAt: Date.now() + i,
+      });
+    }
+    const launcher = createRunLauncher(deps(db, { nodes: { a: { hang: true } } }));
+    launcher.recoverQueued();
+    await launcher.whenIdle();
+
+    // Capacity 2 (the window cap), not the queue policy's single slot: two
+    // waiters admitted (hung at `running`), one still queued behind the cap.
+    const runs = listRuns(db, { triggerId: trigger.id });
+    expect(runs.filter((r) => r.status === 'running')).toHaveLength(2);
+    expect(runs.filter((r) => r.status === 'queued')).toHaveLength(1);
+  });
+
+  it('a tumbling trigger WITHOUT the cap keeps the single queue slot (legacy)', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const { maxConcurrentWindows, ...uncapped } = window;
+    void maxConcurrentWindows;
+    const trigger = seedTrigger(db, {
+      pipelineVersionId: pvId,
+      concurrency: { policy: 'queue' },
+      mode: 'tumbling',
+      window: uncapped,
+    });
+    const launcher = createRunLauncher(deps(db, { nodes: { a: { hang: true } } }));
+
+    expect(launcher.fire(trigger).outcome).toBe('started');
+    expect(launcher.fire(trigger).outcome).toBe('queued'); // capacity stays 1
+  });
+
+  it('a NON-tumbling trigger ignores a stray window cap (mode-gated)', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    // A corrupted/hand-written row: window config on a manual trigger. The
+    // capacity read is mode-gated, so it stays single-slot.
+    const trigger = seedTrigger(db, {
+      pipelineVersionId: pvId,
+      concurrency: { policy: 'queue' },
+      mode: 'manual',
+      window,
+    });
+    const launcher = createRunLauncher(deps(db, { nodes: { a: { hang: true } } }));
+
+    expect(launcher.fire(trigger).outcome).toBe('started');
+    expect(launcher.fire(trigger).outcome).toBe('queued');
   });
 });
 
