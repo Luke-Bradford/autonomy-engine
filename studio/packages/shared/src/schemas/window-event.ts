@@ -111,7 +111,11 @@ export function foldWindowStatus(events: ReadonlyArray<WindowEvent>): WindowStat
         if (status === 'running') status = 'succeeded';
         break;
       case 'window.failed':
-        if (status === 'running' || status === 'waiting') status = 'failed';
+        // `running` only — MIRRORS the write path exactly (`completeWindow`
+        // guards every terminal transition, success or failure, on the current
+        // status being `running`), so the fold and the guarded projection can
+        // never diverge on an out-of-order sequence.
+        if (status === 'running') status = 'failed';
         break;
     }
   }

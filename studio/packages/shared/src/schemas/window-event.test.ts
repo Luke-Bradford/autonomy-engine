@@ -73,5 +73,8 @@ describe('foldWindowStatus (the pure rebuild fold)', () => {
       'succeeded',
     );
     expect(foldWindowStatus([created, succeeded])).toBe('waiting');
+    // Symmetric with succeeded: BOTH terminals transition only from `running`,
+    // mirroring `completeWindow`'s guard exactly (no fold/projection skew).
+    expect(foldWindowStatus([created, failed])).toBe('waiting');
   });
 });

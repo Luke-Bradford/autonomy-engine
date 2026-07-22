@@ -416,7 +416,17 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
         );
         return;
       }
-      linkWindowRun(db, key, result.runId, 'fire');
+      if (!linkWindowRun(db, key, result.runId, 'fire')) {
+        // The window lost its `waiting` guard between the scan and this link —
+        // a concurrent linker won (their run serves the window) and the run
+        // fired HERE is an orphan. Unreachable in-process (materialize is
+        // synchronous end-to-end), so fail LOUD like the runId-contract branch
+        // above rather than silently strand a live run.
+        log.error(
+          { triggerId: trigger.id, windowStart: row.windowStart, runId: result.runId },
+          'tumbling: fired run could not be linked (window no longer waiting) — orphaned run',
+        );
+      }
     }
   }
 
