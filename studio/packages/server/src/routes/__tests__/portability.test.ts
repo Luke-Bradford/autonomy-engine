@@ -189,6 +189,40 @@ describe('portability routes (export + import)', () => {
       expect(JSON.stringify(imported)).not.toContain('secref_leak_check_marker');
     });
 
+    // #5 S8 — the event subscription has no secret and round-trips VERBATIM
+    // (the #473 silent-drop shape guarded against): the import arrives unbound
+    // + disabled (standard), with the subscription intact for re-enable.
+    it('round-trips an event trigger subscription through export → import', async () => {
+      const triggerRes = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          name: 'Event sub',
+          pipelineVersionId: null,
+          params: {},
+          mode: 'event',
+          schedule: null,
+          webhook: null,
+          event: { name: 'order.created' },
+          concurrency: { policy: 'queue' },
+          runWindows: null,
+          enabled: false,
+        },
+      });
+      expect(triggerRes.statusCode).toBe(201);
+      const trigger = triggerRes.json();
+
+      const envelope = (
+        await app.inject({ method: 'GET', url: `/api/triggers/${trigger.id}/export` })
+      ).json();
+      expect(envelope.data.event).toEqual({ name: 'order.created' });
+
+      const importRes = await app.inject({ method: 'POST', url: '/api/import', payload: envelope });
+      expect(importRes.statusCode).toBe(201);
+      expect(importRes.json().trigger.event).toEqual({ name: 'order.created' });
+      expect(importRes.json().trigger.enabled).toBe(false);
+    });
+
     it('404 for a missing or not-owned trigger', async () => {
       const missing = await app.inject({ method: 'GET', url: '/api/triggers/trig_missing/export' });
       expect(missing.statusCode).toBe(404);

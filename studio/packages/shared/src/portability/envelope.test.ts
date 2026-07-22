@@ -150,6 +150,16 @@ describe('parseAndUpgradeEnvelope', () => {
   });
 
   describe('the upgrade framework (chained-apply)', () => {
+    // Version-stamp-only hops from `from` up to SCHEMA_VERSION, so the fake
+    // legacy fixtures below (which reshape into the v1 pipeline shape — still
+    // shape-identical at v2 for a pipeline envelope) reach the current version
+    // without re-encoding the real upgraders.
+    const passthroughHops = (from: number): Array<[number, Upgrader]> =>
+      Array.from({ length: SCHEMA_VERSION - from }, (_, i) => [
+        from + i,
+        (env: unknown) => ({ ...(env as Record<string, unknown>), schemaVersion: from + i + 1 }),
+      ]);
+
     it('chains a FAKE upgrader registered from a lower schemaVersion up to SCHEMA_VERSION', () => {
       // Simulate a legacy (pre-CATALOG_VERSION-aware, differently-shaped)
       // envelope at schemaVersion 0 and a fake upgrader that reshapes it into
@@ -169,7 +179,10 @@ describe('parseAndUpgradeEnvelope', () => {
         return { ...rest, schemaVersion: 1, data: legacyPipelineBlob };
       };
 
-      const fakeRegistry = new Map<number, Upgrader>([[0, upgradeV0ToV1]]);
+      // A passthrough hop for each version between the fake's landing point
+      // (1) and today's SCHEMA_VERSION, so this test keeps exercising the
+      // chain without re-encoding every real upgrader's reshaping.
+      const fakeRegistry = new Map<number, Upgrader>([[0, upgradeV0ToV1], ...passthroughHops(1)]);
       const result = parseAndUpgradeEnvelope(legacyV0Envelope, fakeRegistry);
       expect(result.schemaVersion).toBe(SCHEMA_VERSION);
       expect(result).toEqual(validPipelineEnvelope);
@@ -200,6 +213,7 @@ describe('parseAndUpgradeEnvelope', () => {
       const fakeRegistry = new Map<number, Upgrader>([
         [-1, upgradeMinusOneToZero],
         [0, upgradeZeroToOne],
+        ...passthroughHops(1),
       ]);
 
       const result = parseAndUpgradeEnvelope(legacyMinusOneEnvelope, fakeRegistry);
@@ -250,13 +264,9 @@ describe('parseAndUpgradeEnvelope', () => {
       ).toThrow(ImportError);
     });
 
-    it('a normal one-step chain lands EXACTLY on SCHEMA_VERSION', () => {
-      const upgradeZeroToOne: Upgrader = (env) => {
-        const e = env as Record<string, unknown>;
-        return { ...e, schemaVersion: 1 };
-      };
+    it('a normal one-hop-at-a-time chain lands EXACTLY on SCHEMA_VERSION', () => {
       const olderEnvelope = { ...validPipelineEnvelope, schemaVersion: 0 };
-      const result = parseAndUpgradeEnvelope(olderEnvelope, new Map([[0, upgradeZeroToOne]]));
+      const result = parseAndUpgradeEnvelope(olderEnvelope, new Map(passthroughHops(0)));
       expect(result.schemaVersion).toBe(SCHEMA_VERSION);
     });
 
@@ -266,6 +276,70 @@ describe('parseAndUpgradeEnvelope', () => {
       expect(() => parseAndUpgradeEnvelope(olderEnvelope, new Map([[0, brokenUpgrader]]))).toThrow(
         ImportError,
       );
+    });
+  });
+
+  // #5 S8 — the REAL v1→v2 upgrader (the production `UPGRADERS` registry):
+  // a v1 trigger envelope predates `recurrence` (#5 S5b — which bumped no
+  // version, a latent import break healed here) and `event` (#5 S8), both now
+  // required-nullable on the stored shape. The upgrader backfills `null` (the
+  // honest "never had one" value) so a pre-S5b/pre-S8 export still imports.
+  describe('v1→v2 upgrader (production registry)', () => {
+    const v1TriggerData = {
+      id: 'trig_1',
+      ownerId: null,
+      name: 'Legacy trigger',
+      pipelineVersionId: null,
+      params: {},
+      mode: 'manual' as const,
+      schedule: null,
+      webhook: null,
+      concurrency: { policy: 'queue' as const },
+      runWindows: null,
+      enabled: false,
+      createdAt: 1700000000000,
+      updatedAt: 1700000000000,
+      // NO `recurrence`, NO `event` — the pre-S5b/pre-S8 v1 shape.
+    };
+    const v1TriggerEnvelope = {
+      schemaVersion: 1,
+      catalogVersion: CATALOG_VERSION,
+      kind: 'trigger' as const,
+      exportedAt: 1700000000000,
+      data: v1TriggerData,
+    };
+
+    it('imports a v1 trigger envelope, backfilling recurrence:null + event:null', () => {
+      const result = parseAndUpgradeEnvelope(v1TriggerEnvelope);
+      expect(result.schemaVersion).toBe(SCHEMA_VERSION);
+      if (result.kind !== 'trigger') throw new Error('expected a trigger envelope');
+      expect(result.data.recurrence).toBeNull();
+      expect(result.data.event).toBeNull();
+    });
+
+    it('does NOT clobber a v1 trigger envelope that already carries a recurrence', () => {
+      const recurrence = { frequency: 'day', interval: 1 };
+      const env = { ...v1TriggerEnvelope, data: { ...v1TriggerData, recurrence } };
+      const result = parseAndUpgradeEnvelope(env);
+      if (result.kind !== 'trigger') throw new Error('expected a trigger envelope');
+      expect(result.data.recurrence).toEqual(recurrence);
+      expect(result.data.event).toBeNull();
+    });
+
+    it('upgrades a v1 pipeline envelope untouched (only the version stamp advances)', () => {
+      const result = parseAndUpgradeEnvelope({ ...validPipelineEnvelope, schemaVersion: 1 });
+      expect(result.schemaVersion).toBe(SCHEMA_VERSION);
+      expect(result.kind).toBe('pipeline');
+    });
+
+    it('a CURRENT trigger envelope needs no upgrade (already at SCHEMA_VERSION)', () => {
+      const env = {
+        ...v1TriggerEnvelope,
+        schemaVersion: SCHEMA_VERSION,
+        data: { ...v1TriggerData, recurrence: null, event: null },
+      };
+      const result = parseAndUpgradeEnvelope(env);
+      expect(result.schemaVersion).toBe(SCHEMA_VERSION);
     });
   });
 });

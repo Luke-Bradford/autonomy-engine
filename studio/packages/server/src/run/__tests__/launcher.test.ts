@@ -948,6 +948,21 @@ describe('RunLauncher — #5 S12b trigger param bindings + run-now override', ()
     expect(() => createRunLauncher(deps(db)).fire(trigger)).toThrow(SubstituteError);
     expect(listRuns(db, { triggerId: trigger.id })).toHaveLength(0);
   });
+
+  it('THROWS SubstituteError and creates no run on a non-finite number in the fire body (#547 boundary 3, #5 S8)', () => {
+    // `JSON.parse('{"x":1e999}')` is valid JSON yielding `Infinity` — reachable
+    // from both S8 production feeders (webhook raw body, events payload). Unchecked
+    // it would be frozen into the durable `run.triggerContext`, where
+    // `JSON.stringify` persists it as `null`: the live folded RunState and the
+    // replayed log would silently disagree.
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId });
+
+    const body = JSON.parse('{"x":1e999}') as unknown;
+    expect(() => createRunLauncher(deps(db)).fire(trigger, { body })).toThrow(SubstituteError);
+    expect(listRuns(db, { triggerId: trigger.id })).toHaveLength(0);
+  });
 });
 
 describe('RunLauncher — #5 S6b per-pipeline both-must-pass admission', () => {

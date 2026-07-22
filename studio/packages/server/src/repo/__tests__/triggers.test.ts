@@ -130,6 +130,64 @@ describe('triggers repo', () => {
     expect(getTrigger(db, created.id)).toBeNull();
   });
 
+  describe('#5 S8 — event subscription config', () => {
+    it('defaults an OMITTED write-side `event` to null on create (pre-S8 payloads keep working)', () => {
+      const { db } = freshDb();
+      const version = setupPipelineVersion(db);
+      // `buildTriggerInput` carries no `event` key at all.
+      const created = createTrigger(db, buildTriggerInput(version.id));
+      expect(created.event).toBeNull();
+      expect(getTrigger(db, created.id)!.event).toBeNull();
+    });
+
+    it('creates and round-trips an event trigger', () => {
+      const { db } = freshDb();
+      const version = setupPipelineVersion(db);
+      const created = createTrigger(db, {
+        ...buildTriggerInput(version.id),
+        mode: 'event',
+        schedule: null,
+        event: { name: 'order.created' },
+      });
+      expect(created.event).toEqual({ name: 'order.created' });
+      expect(getTrigger(db, created.id)).toEqual(created);
+    });
+
+    it('PATCH 3-state: omitted keeps, object sets, null clears', () => {
+      const { db } = freshDb();
+      const version = setupPipelineVersion(db);
+      const created = createTrigger(db, {
+        ...buildTriggerInput(version.id),
+        mode: 'event',
+        schedule: null,
+        event: { name: 'order.created' },
+      });
+      // Omitted → untouched.
+      expect(updateTrigger(db, created.id, { enabled: false })!.event).toEqual({
+        name: 'order.created',
+      });
+      // Object → set.
+      expect(updateTrigger(db, created.id, { event: { name: 'order.updated' } })!.event).toEqual({
+        name: 'order.updated',
+      });
+      // Null → cleared.
+      expect(updateTrigger(db, created.id, { event: null })!.event).toBeNull();
+    });
+
+    it('lists triggers filtered by mode, in SQL', () => {
+      const { db } = freshDb();
+      const version = setupPipelineVersion(db);
+      const evt = createTrigger(db, {
+        ...buildTriggerInput(version.id),
+        mode: 'event',
+        schedule: null,
+        event: { name: 'order.created' },
+      });
+      createTrigger(db, buildTriggerInput(version.id));
+      expect(listTriggers(db, { mode: 'event' })).toEqual([evt]);
+    });
+  });
+
   describe('#5 S5b-1 — recurrence → derived schedule', () => {
     it('derives the cron `schedule` from a recurrence on create, and round-trips the recurrence', () => {
       const { db } = freshDb();

@@ -5,7 +5,11 @@ import type {
   Trigger,
   TriggerContext,
 } from '@autonomy-studio/shared';
-import { resolveTriggerBindings, TERMINAL_RUN_EVENT } from '@autonomy-studio/shared';
+import {
+  assertJsonReplaySafe,
+  resolveTriggerBindings,
+  TERMINAL_RUN_EVENT,
+} from '@autonomy-studio/shared';
 import {
   admitQueuedRun,
   countActiveRunsForPipeline,
@@ -389,6 +393,15 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     if (stopped) {
       return { outcome: 'skipped', reason: 'launcher is shutting down' };
     }
+
+    // #547 boundary 3 (#5 S8) — refuse a non-finite number ANYWHERE in the fire
+    // body BEFORE it is frozen into the durable `run.triggerContext`:
+    // `JSON.parse('{"x":1e999}')` is valid JSON yielding `Infinity`, which
+    // `JSON.stringify` would persist as `null` — the live folded RunState and
+    // the replayed log silently disagreeing. One seat for every feeder (webhook
+    // raw body, events payload); throws `SubstituteError`, which every fire
+    // caller already maps (manual → 400, webhook/events → record-skip).
+    assertJsonReplaySafe('trigger body', fireContext?.body ?? null);
 
     // #5 S12 — freeze the run's durable trigger context at ADMISSION time. Every
     // launched run (immediate OR later-drained from the queue) carries the SAME

@@ -145,11 +145,35 @@ export const webhooksRoutes: FastifyPluginAsync = async (fastify) => {
         throw err;
       }
 
-      // --- 4. Fire through the shared launcher.
-      return fireClaimed(fastify, trigger, deliveryId, reply);
+      // --- 4. Fire through the shared launcher, seeding `${trigger.body}`
+      // (#5 S8 — the first production feeder of the S12a context seam) from
+      // the SAME verified bytes the signature covered.
+      return fireClaimed(fastify, trigger, deliveryId, deriveBody(rawBody), reply);
     },
   );
 };
+
+/**
+ * #5 S8 — the delivery body → `${trigger.body}` lowering, from the exact bytes
+ * the HMAC verified: empty → `undefined` (the context seed records null — no
+ * manufactured value); valid JSON → the parsed value (the common webhook case,
+ * `${trigger.body.x}` deep-addresses it); anything else → the raw UTF-8 STRING.
+ * The string fallback is deliberate: it is the honest representation of a
+ * non-JSON delivery (`${trigger.body}` yields the text), and a `${trigger.body.x}`
+ * deep-address on it fails SAFE through the launcher's `SubstituteError` →
+ * record-skip path rather than silently seeding null. A non-finite JSON number
+ * (`1e999` → `Infinity`) survives this parse but is refused by the launcher's
+ * replay-safety backstop (#547) before anything durable is written.
+ */
+function deriveBody(rawBody: Buffer): unknown {
+  if (rawBody.length === 0) return undefined;
+  const text = rawBody.toString('utf8');
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
 
 /** Fire a claimed delivery and finalize its ledger row, or release the claim on
  * an unexpected fault so a corrected retry of the same key is not deduped. */
@@ -157,21 +181,24 @@ function fireClaimed(
   fastify: Parameters<FastifyPluginAsync>[0],
   trigger: Trigger,
   deliveryId: string,
+  body: unknown,
   reply: FastifyReply,
 ): FastifyReply {
   const { db } = fastify;
   let result;
   try {
-    result = fastify.runLauncher.fire(trigger);
+    result = fastify.runLauncher.fire(trigger, { body });
   } catch (err) {
     // #5 S12b — a trigger param binding that cannot resolve is a PERMANENT
-    // config defect (e.g. a `${trigger.body.x}` deep-address on the null body a
-    // pre-S8 webhook fire still carries), NOT a transient fault. RELEASING the
-    // claim would let the sender's verbatim retry (same idempotency key) re-fire
-    // and re-throw in a storm. Instead RECORD the delivery as `skipped` (so the
-    // same key dedupes) and 202 — the deliberate asymmetry the concurrency-skip
-    // below already uses. A corrected, genuinely-new event re-signs with a new
-    // key and fires. The detail is logged server-side, never returned.
+    // config defect (e.g. a `${trigger.body.x}` deep-address on a body this
+    // delivery does not carry), NOT a transient fault — and #547's non-finite
+    // fire-body refusal (`1e999` in the payload) rides the same class. RELEASING
+    // the claim would let the sender's verbatim retry (same idempotency key)
+    // re-fire and re-throw in a storm. Instead RECORD the delivery as `skipped`
+    // (so the same key dedupes) and 202 — the deliberate asymmetry the
+    // concurrency-skip below already uses. A corrected, genuinely-new event
+    // re-signs with a new key and fires. The detail is logged server-side,
+    // never returned.
     if (err instanceof SubstituteError) {
       fastify.log.warn(
         { err, triggerId: trigger.id, deliveryId },

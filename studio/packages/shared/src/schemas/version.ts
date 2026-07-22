@@ -125,4 +125,11 @@
 // non-structured `agent_task` node carries no `outputSchema` and its config is
 // byte-identical across the bump.)
 export const CATALOG_VERSION = 14;
-export const SCHEMA_VERSION = 1;
+// SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
+// fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
+// not: a latent import break for every pre-S5b trigger export, healed by the
+// same upgrader) and `event` (#5 S8). A v1 trigger envelope carries neither
+// key, so it would fail the final Zod validation on import; the registered
+// v1→v2 upgrader (`portability/envelope.ts`) backfills `null` — the honest
+// "never had one" value — for both, on `kind:'trigger'` envelopes only.
+export const SCHEMA_VERSION = 2;

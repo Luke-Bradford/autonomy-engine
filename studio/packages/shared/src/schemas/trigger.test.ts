@@ -117,6 +117,7 @@ const trigger = {
   mode: 'schedule',
   schedule: '0 2 * * *',
   webhook: null,
+  event: null,
   concurrency: { policy: 'skip_if_running' },
   runWindows: null,
   recurrence: null,
@@ -151,6 +152,55 @@ describe('TriggerSchema', () => {
   it('accepts a null pipelineVersionId (an unbound trigger, e.g. freshly imported)', () => {
     const unbound = { ...trigger, pipelineVersionId: null };
     expect(TriggerSchema.parse(unbound)).toEqual(unbound);
+  });
+
+  // #5 S8 — event-mode named-channel subscription config.
+  it('round-trips an event trigger with an event config', () => {
+    const evt = {
+      ...trigger,
+      mode: 'event',
+      schedule: null,
+      event: { name: 'order.created' },
+    };
+    expect(TriggerSchema.parse(evt)).toEqual(evt);
+  });
+
+  it('rejects an event config missing its name', () => {
+    expect(() => TriggerSchema.parse({ ...trigger, event: {} })).toThrow();
+    expect(() => TriggerSchema.parse({ ...trigger, event: { name: '' } })).toThrow();
+  });
+
+  it('passes unknown event-config keys through (open-ended, like webhook)', () => {
+    const evt = { ...trigger, event: { name: 'x', filter: 'later' } };
+    expect(TriggerSchema.parse(evt)).toEqual(evt);
+  });
+});
+
+describe('NewTriggerSchema.event (write-side 3-state, the recurrence precedent)', () => {
+  const { id, createdAt, updatedAt, ...insert } = trigger;
+  void id;
+  void createdAt;
+  void updatedAt;
+  // The write fixture must not itself carry `event` — omission is the case
+  // under test (backward compatibility for pre-S8 clients).
+  const { event, ...insertNoEvent } = insert;
+  void event;
+
+  it('parses with `event` OMITTED (pre-S8 payloads keep working) and does NOT inject a value', () => {
+    const parsed = NewTriggerSchema.parse(insertNoEvent);
+    expect('event' in parsed && parsed.event !== undefined).toBe(false);
+  });
+
+  it('accepts an explicit null (clear) and an object (set)', () => {
+    expect(NewTriggerSchema.parse({ ...insertNoEvent, event: null }).event).toBeNull();
+    expect(
+      NewTriggerSchema.parse({ ...insertNoEvent, event: { name: 'order.created' } }).event,
+    ).toEqual({ name: 'order.created' });
+  });
+
+  it('a .partial() PATCH body does NOT manufacture an `event` key (no .default() pitfall)', () => {
+    const parsed = NewTriggerSchema.partial().parse({ enabled: false });
+    expect('event' in parsed && parsed.event !== undefined).toBe(false);
   });
 });
 

@@ -5,6 +5,7 @@ import {
   NewTriggerSchema,
   SubstituteError,
   TriggerPublicSchema,
+  type EventConfig,
   type Recurrence,
   type Trigger,
   type TriggerMode,
@@ -111,6 +112,36 @@ function assertRecurrenceConsistent(
   }
 }
 
+/**
+ * #5 S8 — the event-config CROSS-field rules, checked against the EFFECTIVE
+ * post-write state (the `assertRecurrenceConsistent` pattern; a Zod refine
+ * can't see across fields on a `.partial()` PATCH body). Two invariants:
+ *   - an event subscription only makes sense on an `event` trigger (it IS what
+ *     the mode fires on);
+ *   - an ENABLED event trigger MUST carry a subscription — enabled-but-
+ *     unsubscribable is inert by construction (nothing can ever fan out to
+ *     it), the same refusal shape as `assertBindableIfEnabled` for unbound.
+ * NOTE this is a (deliberate) behaviour change for a pre-S8 `mode:'event'` row
+ * (inert then, `event: NULL` post-migration): while ENABLED, any patch that
+ * leaves it subscription-less is refused until it is configured or disabled.
+ */
+function assertEventConsistent(
+  mode: TriggerMode,
+  event: EventConfig | null,
+  enabled: boolean,
+): void {
+  if (event !== null && mode !== 'event') {
+    throw new BadRequestError(
+      "an event subscription is only valid on an 'event' trigger — set mode:'event' or remove `event`",
+    );
+  }
+  if (mode === 'event' && enabled && event === null) {
+    throw new BadRequestError(
+      'an enabled event trigger must carry an `event` subscription ({name}) — configure it or disable the trigger',
+    );
+  }
+}
+
 export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
 
@@ -118,6 +149,7 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
     const body = TriggerWriteBodySchema.parse(request.body);
     assertBindableIfEnabled(body.enabled, body.pipelineVersionId);
     assertRecurrenceConsistent(body.mode, body.recurrence ?? null, body.schedule !== null);
+    assertEventConsistent(body.mode, body.event ?? null, body.enabled);
     requireOwnedPipelineVersion(db, body.pipelineVersionId, request.principal);
     const created = createTrigger(db, { ...body, ownerId: request.principal.ownerId });
     // Reconcile the durable `schedule_tick` rows so a newly-enabled schedule
@@ -163,6 +195,9 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
     const effMode = body.mode ?? existing.mode;
     const effRecurrence = body.recurrence !== undefined ? body.recurrence : existing.recurrence;
     assertRecurrenceConsistent(effMode, effRecurrence, typeof body.schedule === 'string');
+    // Same 3-state PATCH semantics as recurrence: undefined = untouched.
+    const effEvent = body.event !== undefined ? body.event : existing.event;
+    assertEventConsistent(effMode, effEvent, effEnabled);
     const updated = updateTrigger(db, existing.id, body);
     if (!updated) throw new NotFoundError('trigger', existing.id);
     // Reconcile: a patch may enable/disable, rebind, change the schedule, or
