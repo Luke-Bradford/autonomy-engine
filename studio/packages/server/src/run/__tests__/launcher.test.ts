@@ -13,7 +13,7 @@ import {
 } from '@autonomy-studio/shared';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
-import { createTrigger } from '../../repo/triggers.js';
+import { createTrigger, updateTrigger } from '../../repo/triggers.js';
 import {
   countActiveRunsForTrigger,
   createRun,
@@ -482,6 +482,61 @@ describe('RunLauncher — durable admission queue (#5 S6a)', () => {
     const runs = listRuns(db, { triggerId: trigger.id });
     expect(runs).toHaveLength(3);
     expect(runs.filter((r) => r.status === 'success')).toHaveLength(3);
+  });
+});
+
+describe('RunLauncher — drainQueue re-checks LIVE concurrency policy (#631)', () => {
+  it('admits up to the live parallel cap when policy is edited queue→parallel while rows are queued', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    // Hang the active run so the single slot stays occupied and the overflow
+    // fires become DURABLE `queued` rows while we edit the policy.
+    const launcher = createRunLauncher(deps(db, { nodes: { a: { hang: true } } }));
+
+    expect(launcher.fire(trigger).outcome).toBe('started'); // holds the single slot
+    expect(launcher.fire(trigger).outcome).toBe('queued');
+    expect(launcher.fire(trigger).outcome).toBe('queued');
+    expect(launcher.fire(trigger).outcome).toBe('queued'); // 3 durable queued rows
+
+    // Operator widens concurrency while rows are already queued.
+    updateTrigger(db, trigger.id, { concurrency: { policy: 'parallel', max: 3 } });
+
+    // A single drain must now admit up to the LIVE cap (3), not trickle one at a
+    // time gated on active===0. active=1 (the run holding the slot) → 2 more
+    // admitted this drain, the 3rd overflow still waits.
+    launcher.recoverQueued();
+    await launcher.whenIdle();
+
+    const runs = listRuns(db, { triggerId: trigger.id });
+    expect(runs).toHaveLength(4);
+    expect(runs.filter((r) => r.status === 'running')).toHaveLength(3); // up to the live cap
+    expect(runs.filter((r) => r.status === 'queued')).toHaveLength(1); // the overflow waits
+  });
+
+  it('fails CLOSED to single-slot for a misconfigured parallel (no max) — queued rows still fully drain, never stranded', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    // Non-hang executor: each run completes and frees the slot, so the drain
+    // cascades on settle.
+    const launcher = createRunLauncher(deps(db));
+
+    expect(launcher.fire(trigger).outcome).toBe('started'); // takes the slot (drives a microtask later)
+    expect(launcher.fire(trigger).outcome).toBe('queued');
+    expect(launcher.fire(trigger).outcome).toBe('queued'); // 2 durable queued rows
+
+    // A corrupted/legacy row: `parallel` with NO `max` (the lenient stored schema
+    // permits it on read). The drain must fall back to a single slot — NOT read a
+    // NaN cap (`active < NaN` is always false), which would STRAND every queued
+    // row forever.
+    updateTrigger(db, trigger.id, { concurrency: { policy: 'parallel' } });
+
+    await launcher.whenIdle();
+
+    const runs = listRuns(db, { triggerId: trigger.id });
+    expect(runs).toHaveLength(3);
+    expect(runs.every((r) => r.status === 'success')).toBe(true); // all drained, none stranded
   });
 });
 

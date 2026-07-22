@@ -14,6 +14,7 @@ import {
   listRuns,
   nextQueuedRunForTrigger,
 } from '../repo/runs.js';
+import { getTrigger } from '../repo/triggers.js';
 import { startRun, terminalizeInterrupted, type DriveDeps, type DriveLog } from './driver.js';
 
 /**
@@ -114,9 +115,10 @@ export interface RunLauncher {
   /**
    * #5 S6a — drain any durably `queued` fires this launcher instance has not yet
    * picked up: for each trigger with queued rows, kick a drain (admitting its
-   * oldest queued run if its slot is free; the rest follow on settle). Called
-   * ONCE at boot, AFTER the boot reconciler (which resumes `running` rows) so the
-   * drain's DB active-count already reflects any resumed run — no double-admit.
+   * oldest queued runs up to the trigger's live concurrency capacity (#631); any
+   * remaining waiters follow on settle). Called ONCE at boot, AFTER the boot
+   * reconciler (which resumes `running` rows) so the drain's DB active-count
+   * already reflects any resumed run — no double-admit.
    * Idempotent and safe to call when the queue is empty (a no-op).
    */
   recoverQueued(): void;
@@ -140,6 +142,22 @@ export interface RunLauncherDeps extends DriveDeps {
  * bursts queue fine; a config-driven bound can come with P4b/c.
  */
 export const DEFAULT_MAX_QUEUE_DEPTH = 1000;
+
+/**
+ * The ONE validity rule for a `parallel` trigger's concurrency cap, shared by the
+ * admission path (`fire`) and the queue drain (`drainQueue` via
+ * `admissionCapacity`) so both read a `max` the same way. Returns the
+ * positive-integer cap, or `null` for a missing/invalid one (a row written before
+ * `ConcurrencySchema`'s refinement existed, or restored from an older export).
+ * Each caller FAILS CLOSED on `null` in its own way — `fire` skips the fire;
+ * `drainQueue` falls back to a single slot so already-`queued` rows still drain
+ * rather than strand — but neither ever coerces a bad cap to `NaN` (an
+ * `active >= NaN` / `active < NaN` comparison is always false, which would admit
+ * unbounded or strand the queue).
+ */
+function validParallelMax(max: number | undefined): number | null {
+  return max !== undefined && Number.isInteger(max) && max >= 1 ? max : null;
+}
 
 export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
   const { db } = deps;
@@ -219,22 +237,58 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
   }
 
   /**
-   * #5 S6a — when a `queue`-policy run's DRIVE ends, admit the trigger's oldest
-   * durably-`queued` fire IF its slot is now free. Gated on the DB active-count
-   * (`countActiveRunsForTrigger` = `pending`/`running`), NOT an in-memory counter.
-   * That is the correct single-slot definition under S4's lease/slot split: a run
-   * is durably `running` ⇒ it OCCUPIES the slot, so we must not admit past it.
+   * #631 — the trigger's LIVE admission capacity for a queue drain: how many
+   * concurrent runs its CURRENT policy allows. `parallel` → its validated cap
+   * (fail-closed to a single slot on a missing/invalid cap, logged so the
+   * corrupted row stays diagnosable); `queue` / `skip_if_running` / a deleted
+   * (null) trigger → 1 (both non-parallel policies are single-slot; an orphaned
+   * row still drains FIFO one-at-a-time). Read fresh from the DB on every drain so
+   * a `queue`→`parallel` policy edit takes effect on rows already queued. */
+  function admissionCapacity(trigger: Trigger | null): number {
+    if (trigger === null || trigger.concurrency.policy !== 'parallel') return 1;
+    const max = validParallelMax(trigger.concurrency.max);
+    if (max === null) {
+      deps.log?.warn?.(
+        { triggerId: trigger.id, concurrency: trigger.concurrency },
+        'parallel trigger has no valid concurrency max; draining queue single-slot (fail-closed)',
+      );
+      return 1;
+    }
+    return max;
+  }
+
+  /**
+   * #5 S6a / #631 — when a run's DRIVE ends (or at boot via `recoverQueued`),
+   * admit the trigger's oldest durably-`queued` fires UP TO its LIVE concurrency
+   * capacity. Capacity is read fresh from the trigger on every drain
+   * (`admissionCapacity`): a `parallel(max=N)` trigger admits up to `N` at once,
+   * `queue`/`skip_if_running` a single slot. Reading it live is what closes #631 —
+   * a policy edited `queue`→`parallel` while rows are already queued drains them up
+   * to the new cap instead of trickling one per settle. (Conscious non-goal: FIFO
+   * ACROSS that transition window is not preserved — a NEW fire under the edited
+   * `parallel` policy takes `fire`'s parallel branch, which gates on `active >=
+   * cap` and does not consult `countQueuedRunsForTrigger`, so it can start ahead of
+   * an older still-`queued` row. `parallel` offers no ordering guarantee, so this
+   * is acceptable; the queued rows still fully drain up to the cap on each settle.)
+   *
+   * Gated on the DB active-count (`countActiveRunsForTrigger` = `pending`/
+   * `running`), NOT an in-memory counter — the restart-safe, correct definition
+   * under S4's lease/slot split: a run durably `running` ⇒ it OCCUPIES a slot, so
+   * we admit only into FREE capacity. Each admission flips a row `queued → pending`
+   * SYNCHRONOUSLY (`admitQueuedRun`), so the loop's next active-count read already
+   * reflects it (the drive itself runs a microtask later) — the loop admits
+   * exactly `capacity - active` rows and terminates.
    *
    * The normal cases all resolve cleanly: a launcher-driven run's pump runs to
-   * TERMINAL within its drive promise (DB count → 0 → admit the next), and a run
-   * that PARKS settles its drive at `waiting` (∉ active → count 0 → admit). The
-   * one case this leaves is a run stuck at `running` after its drive ended — a
-   * genuinely HUNG/crashed activity (executor dispatched a node but never yielded
-   * a terminal). Such a run legitimately holds its slot; the durable `queued`
-   * fire waits (it is a row, not a lost in-memory entry) until the boot reconciler
-   * sweeps the stuck run to `interrupted` and `recoverQueued` admits the waiter —
-   * a recoverability the old in-memory queue lacked (it drained on drive-end but
-   * then lost every queued fire on the restart that fault required).
+   * TERMINAL within its drive promise (frees its slot → the next drain admits),
+   * and a run that PARKS settles its drive at `waiting` (∉ active → frees its
+   * slot). The one case this leaves is a run stuck at `running` after its drive
+   * ended — a genuinely HUNG/crashed activity (executor dispatched a node but
+   * never yielded a terminal). Such a run legitimately holds its slot; the durable
+   * `queued` fire waits (it is a row, not a lost in-memory entry) until the boot
+   * reconciler sweeps the stuck run to `interrupted` and `recoverQueued` admits
+   * the waiter — a recoverability the old in-memory queue lacked (it drained on
+   * drive-end but then lost every queued fire on the restart that fault required).
    *
    * KNOWN FOLLOW-UPS (later #5 S6 slices): (a) draining on ANY run's
    * terminalization (#629) — a run terminalized OUTSIDE the launcher (a
@@ -246,27 +300,31 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
    * re-checks capacity rather than transiently exceeding it.
    *
    * Neither is a regression vs pre-S6a `main`: this DB-gated drain never
-   * double-admits past the single slot (where `main`'s in-memory gate silently
+   * over-admits past the live capacity (where `main`'s in-memory gate silently
    * could, by excluding an alarm-resumed run), and `recoverQueued` bounds the
    * worst case to "until next boot" — where `main` simply LOST every queued fire.
    * The (a) gap is a latency cliff to close, not a correctness regression.
    *
-   * A no-op when the slot is occupied or the queue is empty. */
+   * A no-op when capacity is full or the queue is empty. */
   function drainQueue(triggerId: string): void {
     if (stopped) return;
-    if (countActiveRunsForTrigger(db, triggerId) > 0) return;
-    const next = nextQueuedRunForTrigger(db, triggerId);
-    if (next === null) return;
-    // Flip `queued → pending` + re-stamp `started_at` atomically (the UPDATE's
-    // `status = 'queued'` guard makes it idempotent — a concurrent/duplicate
-    // drain that lost the race gets `null` and does nothing).
-    const admitted = admitQueuedRun(db, next.id);
-    if (admitted === null) return;
-    // The frozen fire-time context rides the row (`trigger_context`); pass it so
-    // a delayed admission still seeds `${trigger.scheduledTime}` with the
-    // occurrence that fired it. `null` (a run with no fire-time facts) → the
-    // driver's "no trigger context" path.
-    driveRun(admitted, admitted.triggerContext ?? undefined);
+    // #631 — capacity from the trigger's CURRENT policy, read fresh each drain so
+    // a `queue`→`parallel` edit applies to rows already queued.
+    const capacity = admissionCapacity(getTrigger(db, triggerId));
+    while (countActiveRunsForTrigger(db, triggerId) < capacity) {
+      const next = nextQueuedRunForTrigger(db, triggerId);
+      if (next === null) return;
+      // Flip `queued → pending` + re-stamp `started_at` atomically (the UPDATE's
+      // `status = 'queued'` guard makes it idempotent — a concurrent/duplicate
+      // drain that lost the race gets `null`); stop this drain if we lost it.
+      const admitted = admitQueuedRun(db, next.id);
+      if (admitted === null) return;
+      // The frozen fire-time context rides the row (`trigger_context`); pass it so
+      // a delayed admission still seeds `${trigger.scheduledTime}` with the
+      // occurrence that fired it. `null` (a run with no fire-time facts) → the
+      // driver's "no trigger context" path.
+      driveRun(admitted, admitted.triggerContext ?? undefined);
+    }
   }
 
   function fire(trigger: Trigger, fireContext?: FireContext): FireResult {
@@ -315,15 +373,17 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       // ConcurrencySchema. Defense-in-depth against a row written before that
       // refinement existed (or restored from an older export): a missing/invalid
       // cap must FAIL CLOSED (skip), never coerce to NaN and let `active >= NaN`
-      // admit every fire unbounded.
-      if (max === undefined || !Number.isInteger(max) || max < 1) {
+      // admit every fire unbounded. `validParallelMax` is the shared validity rule
+      // the queue drain reads too (#631).
+      const cap = validParallelMax(max);
+      if (cap === null) {
         return {
           outcome: 'skipped',
           reason: 'parallel trigger has no valid concurrency max (misconfigured)',
         };
       }
-      if (active >= max) {
-        return { outcome: 'skipped', reason: `parallel cap of ${max} reached` };
+      if (active >= cap) {
+        return { outcome: 'skipped', reason: `parallel cap of ${cap} reached` };
       }
       return { outcome: 'started', runId: launch(trigger, triggerContext, mergedParams) };
     }
@@ -361,10 +421,11 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     if (stopped) return;
     // Kick a drain for each trigger that has durable `queued` rows this instance
     // has not yet picked up (a previous process enqueued them, or this one did
-    // before a crash). One drain admits the trigger's OLDEST queued run if its
-    // slot is free; the rest cascade on settle via `driveRun`'s `finally`. Run
-    // once at boot, AFTER the reconciler has resumed `running` rows so the
-    // per-drain DB active-count already reflects them (no double-admit).
+    // before a crash). One drain admits the trigger's oldest queued runs up to its
+    // live concurrency capacity (#631); any remaining waiters cascade on settle
+    // via `driveRun`'s `finally`. Run once at boot, AFTER the reconciler has
+    // resumed `running` rows so the per-drain DB active-count already reflects
+    // them (no double-admit).
     const triggerIds = new Set<string>();
     for (const run of listRuns(db, { status: 'queued' })) {
       if (run.triggerId !== null) triggerIds.add(run.triggerId);
