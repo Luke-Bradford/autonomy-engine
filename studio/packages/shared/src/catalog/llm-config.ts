@@ -253,7 +253,21 @@ export const llmToolDefSchema = z
       .refine((d) => !d.includes('${'), {
         message: 'templates are not supported in tool metadata',
       }),
-    parameters: makeRestrictedSchemaSubset('a tool parameters schema'),
+    // The `${`-refusal must cover the WHOLE subtree, not just this root: the
+    // subset's nested `items`/`properties`/`enum`/`title`/`description` are
+    // loose (`z.unknown()`), and every string in them ships verbatim to the
+    // provider wire (`toolWireParameters`) — a `${...}` anywhere would be a
+    // silent inert literal, the exact thing the deferred-eval design forbids.
+    parameters: makeRestrictedSchemaSubset('a tool parameters schema').superRefine(
+      (params, ctx) => {
+        if (subtreeContainsTemplate(params, 0)) {
+          ctx.addIssue({
+            code: 'custom',
+            message: 'templates are not supported in tool metadata',
+          });
+        }
+      },
+    ),
     /**
      * The whole-value `${...}` the driver evaluates when the model calls this
      * tool, over `${tool.args.*}` only. Whole-value + ref scoping are enforced
@@ -263,6 +277,25 @@ export const llmToolDefSchema = z
     expression: z.string().min(1),
   })
   .strict();
+
+/**
+ * #2 L10a — does any STRING anywhere in this (parameters) subtree contain a
+ * `${`? Depth-bounded so a pathologically nested schema reports as a template
+ * defect rather than overflowing — fail-CLOSED: an over-deep subtree returns
+ * `true` (refused) because a tree too deep to inspect cannot be certified
+ * template-free.
+ */
+function subtreeContainsTemplate(value: unknown, depth: number): boolean {
+  if (depth > 64) return true;
+  if (typeof value === 'string') return value.includes('${');
+  if (Array.isArray(value)) return value.some((v) => subtreeContainsTemplate(v, depth + 1));
+  if (value !== null && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).some((v) =>
+      subtreeContainsTemplate(v, depth + 1),
+    );
+  }
+  return false;
+}
 
 export type LlmToolDef = z.infer<typeof llmToolDefSchema>;
 
@@ -294,7 +327,7 @@ export const llmToolsArraySchema = z
  * deliberate deferral, not an oversight.
  */
 function refineLlmToolsCoupling(
-  c: { tools?: unknown; toolChoice?: unknown; outputMode?: OutputMode },
+  c: { tools?: unknown; toolChoice?: unknown; outputMode?: unknown },
   ctx: z.RefinementCtx,
 ): void {
   if (c.toolChoice !== undefined && c.tools === undefined) {
@@ -325,7 +358,11 @@ export const llmToolsSurfaceSchema = z
   .object({
     tools: llmToolsArraySchema.optional(),
     toolChoice: llmToolChoiceSchema.optional(),
-    outputMode: outputModeSchema.optional(),
+    // Read LOOSELY on purpose: the coupling rule only asks "is it 'structured'".
+    // `llmStructuredOutputSurfaceSchema` (validateLlmCallOutput) OWNS the enum's
+    // own diagnostic — re-validating it here would report an invalid value twice
+    // on the same node.
+    outputMode: z.unknown().optional(),
   })
   .superRefine(refineLlmToolsCoupling);
 

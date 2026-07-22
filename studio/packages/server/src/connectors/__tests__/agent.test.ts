@@ -736,6 +736,36 @@ describe('createAgentAdapter().runActivity — llm_call (CLI/subscription single
     expect(spawnArgs).toHaveLength(0); // rejected before spawn
   });
 
+  it("runs normally when declared tools are parked with toolChoice 'none' (provider parity)", async () => {
+    const { supervisor, spawnArgs } = fakeSupervisor([{ stream: 'stdout', line: 'hi' }], {
+      exitCode: 0,
+    });
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        llmCtx({
+          input: {
+            prompt: 'add 1 and 2',
+            toolChoice: 'none',
+            tools: [
+              {
+                name: 'adder',
+                description: 'Adds two numbers.',
+                parameters: {
+                  type: 'object',
+                  properties: { a: { type: 'number' }, b: { type: 'number' } },
+                },
+                expression: '${add(tool.args.a, tool.args.b)}',
+              },
+            ],
+          },
+        }),
+        null,
+      ),
+    );
+    expect(events[events.length - 1]).toMatchObject({ type: 'succeeded' });
+    expect(spawnArgs).toHaveLength(1); // "tools off" runs the plain single-shot
+  });
+
   it('rejects an invalid llm_call config as a permanent failure (no spawn)', async () => {
     const { supervisor, spawnArgs } = fakeSupervisor([], { exitCode: 0 });
     const events = await drain(

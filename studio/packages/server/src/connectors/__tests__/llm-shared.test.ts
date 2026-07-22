@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_STRUCTURED_REPAIRS,
   MAX_RETRY_AFTER_SECONDS,
+  MAX_TOOL_RESULT_CHARS,
   buildCapture,
   buildRepairTurns,
   coerceStopReason,
@@ -563,7 +564,8 @@ describe('executeLocalTool (#2 L10a)', () => {
     };
     const r = executeLocalTool(tool, { n: 9999 });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.message).toMatch(/too large/);
+    // The message names the SSOT cap, pinning the boundary to the constant.
+    if (!r.ok) expect(r.message).toContain(`max ${MAX_TOOL_RESULT_CHARS}`);
   });
 });
 

@@ -493,12 +493,15 @@ async function* runLlmCall(
     };
     return;
   }
-  if (llm.data.tools !== undefined) {
+  if (llm.data.tools !== undefined && llm.data.toolChoice !== 'none') {
     // #2 L10a — same shape limit as structured: a single-shot CLI exchange has
     // no tool_use/tool_result wire to drive the local tool round-trip through.
     // Reject LOUD at dispatch rather than silently run the prompt without the
     // author's tools (the connection kind is not reliably known at save-time —
-    // L13a routes `connectionId` dynamically).
+    // L13a routes `connectionId` dynamically). `toolChoice:'none'` is exempt,
+    // mirroring the provider adapters: "tools off" means running without them
+    // IS the author's intent, so a dynamically-routed node parked on 'none'
+    // behaves identically on every connection kind.
     yield {
       type: 'failed',
       kind: 'permanent',

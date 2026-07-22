@@ -115,6 +115,27 @@ describe('validateRefs — llm_call tools (#2 L10a)', () => {
     expect(validateRefs(d)).toEqual([]);
   });
 
+  it('accepts ${item} inside a lambda arg over a tool-args array (save half of the runtime contract)', () => {
+    const d = doc([
+      llm('n', {
+        prompt: 'hi',
+        tools: [
+          adderTool({
+            parameters: { type: 'object', properties: { rows: { type: 'array' } } },
+            expression: '${filter(tool.args.rows, greater(item, 2))}',
+          }),
+        ],
+      }),
+    ]);
+    expect(validateRefs(d)).toEqual([]);
+  });
+
+  it('still rejects a bare out-of-lambda ${item} in a tool expression', () => {
+    const d = doc([llm('n', { prompt: 'hi', tools: [adderTool({ expression: '${item}' })] })]);
+    const errors = validateRefs(d);
+    expect(errors.join(' ')).toMatch(/only bound inside/);
+  });
+
   it('rejects a ref to an undeclared tool parameter', () => {
     const d = doc([
       llm('n', { prompt: 'hi', tools: [adderTool({ expression: '${tool.args.missing}' })] }),
@@ -208,6 +229,11 @@ describe('validateDoc — llm_call tools surface (#2 L10a)', () => {
     );
     expect(errors.join(' ')).toMatch(/node\.n/);
     expect(errors.join(' ')).toMatch(/plain identifier/);
+  });
+
+  it('reports an invalid outputMode value exactly once (the structured surface owns the enum)', () => {
+    const errors = validateDoc(doc([llm('n', { prompt: 'hi', outputMode: 'weird' })]));
+    expect(errors.filter((e) => e.includes('outputMode')).length).toBe(1);
   });
 });
 

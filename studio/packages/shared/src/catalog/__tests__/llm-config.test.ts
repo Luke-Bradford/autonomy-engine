@@ -509,6 +509,39 @@ describe('llmToolDefSchema (#2 L10a)', () => {
     expect(llmToolDefSchema.safeParse({ ...TOOL, extra: 1 }).success).toBe(false);
   });
 
+  it('rejects a ${ anywhere in the parameters subtree (nested metadata included)', () => {
+    // Nested `title`/`description`/`enum`/`items` strings ship verbatim to the
+    // provider wire — a `${...}` there would be a silent inert literal.
+    expect(
+      llmToolDefSchema.safeParse({
+        ...TOOL,
+        parameters: {
+          type: 'object',
+          title: 'uses ${params.x}',
+          properties: { a: { type: 'number' } },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      llmToolDefSchema.safeParse({
+        ...TOOL,
+        parameters: {
+          type: 'object',
+          properties: { a: { type: 'string', enum: ['${params.y}', 'z'] } },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      llmToolDefSchema.safeParse({
+        ...TOOL,
+        parameters: {
+          type: 'object',
+          properties: { a: { type: 'number', description: 'give me ${params.x}' } },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it('rejects a zero-parameter tool (v1 requires at least one parameter)', () => {
     const r = llmToolDefSchema.safeParse({
       ...TOOL,

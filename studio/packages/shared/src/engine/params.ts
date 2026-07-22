@@ -2628,9 +2628,17 @@ const TRIGGER_BINDING_ROOTS: RootRestriction = {
     'a trigger param binding may reference only ${trigger.*} (the fire-time trigger context)',
 };
 
-/** #2 L10a — the only expression root an llm_call tool expression may reference. */
+/**
+ * #2 L10a — the only expression roots an llm_call tool expression may reference.
+ * `item` is in the SET because the restriction check runs BEFORE the lambda
+ * scoping — a `${item}` inside a `filter`/`map`/`count` lambda over a tool-args
+ * array is legal (the runtime binds it via the child-env spread), and refusing
+ * it here would make every predicate-taking function unusable in a tool
+ * expression. A bare/out-of-lambda `${item}` is still refused downstream by
+ * `checkRefRoot`'s `itemInScope` check, so this widening is exactly scope-sound.
+ */
 const TOOL_EXPRESSION_ROOTS: RootRestriction = {
-  roots: new Set(['tool']),
+  roots: new Set(['tool', 'item']),
   describe:
     'a tool expression may reference only ${tool.args.*} (the model-supplied tool-call arguments)',
 };
