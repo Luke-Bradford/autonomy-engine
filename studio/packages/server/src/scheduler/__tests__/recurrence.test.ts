@@ -507,6 +507,37 @@ describe('nextOccurrence — zone-aware interval > 1 stepping (#623)', () => {
     }
   });
 
+  it('every 2 days at 09:00 America/New_York tracks the FALL-BACK (13:00Z→14:00Z, the non-monotonicity direction)', () => {
+    // Companion to the spring-forward case above, pinning the OTHER DST direction the
+    // bisection's monotonicity claim rests on. A fall-back (Nov 1 2026, 02:00 EDT →
+    // 01:00 EST) REPEATS the 01:00 local hour: the offset decreases and the local clock
+    // re-enters an earlier wall-time — the one direction where `localDayNumber` could,
+    // in theory, regress across a local midnight. It cannot: the repeated hour stays on
+    // the SAME calendar day (Nov 1), so `localDayNumber` is still monotonic non-decreasing
+    // and the day-start bisection in `localDayStartInstant` stays exact. This test would
+    // fail loudly if a future change (or croner upgrade) let the local day briefly regress.
+    // Anchor = Oct 28 local-midnight (2026-10-28T04:00:00Z, EDT). Qualifying local days
+    // are Oct 28, 30, Nov 1, 3, 5. The 09:00 occurrence is 13:00Z while EDT (-4) and
+    // 14:00Z after the fall-back (EST, -5) — same wall-clock, DST-shifted UTC.
+    const anchor = at('2026-10-28T04:00:00Z');
+    const step = { frequency: 'day' as const, interval: 2, anchorEpochMs: anchor };
+    const bounds = { startAt: anchor };
+    const cron = '0 9 * * *';
+    const expected = [
+      '2026-10-28T13:00:00Z', // EDT (-4)
+      '2026-10-30T13:00:00Z', // EDT (-4)
+      '2026-11-01T14:00:00Z', // EST (-5), after the fall-back — 09:00 is past the 01:00 repeat
+      '2026-11-03T14:00:00Z',
+      '2026-11-05T14:00:00Z',
+    ];
+    let from = anchor - 1;
+    for (const iso of expected) {
+      const next = nextOccurrence(cron, from, bounds, step, NY);
+      expect(next).toBe(at(iso));
+      from = next!;
+    }
+  });
+
   it('minute stepping is zone-INDEPENDENT — a non-UTC zone is identical to UTC (even across a fall-back)', () => {
     // A `minute` recurrence compiles to `* * * * *`; croner enumerates every absolute
     // minute uniformly (60s stride) regardless of zone/DST (verified empirically), so
