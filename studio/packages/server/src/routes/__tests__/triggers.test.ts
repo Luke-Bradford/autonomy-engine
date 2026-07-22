@@ -949,5 +949,73 @@ describe('triggers routes', () => {
       expect(res.statusCode).toBe(200);
       expect(res.json().window).toEqual(window);
     });
+
+    // #5 S11b — `${trigger.windowStart/End}` bindings are MODE-scoped
+    // (cross-field, effective state): legal only on a tumbling trigger.
+    describe('#5 S11b — window-field bindings (mode-scoped, effective state)', () => {
+      const windowBindings = {
+        ws: '${trigger.windowStart}',
+        we: '${trigger.windowEnd}',
+      };
+
+      it('accepts window-field bindings on a tumbling trigger', async () => {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/triggers',
+          payload: tumblingBody({ params: windowBindings }),
+        });
+        expect(res.statusCode).toBe(201);
+        expect(res.json().params).toEqual(windowBindings);
+      });
+
+      it('rejects window-field bindings on a schedule trigger (400, mode-scoped)', async () => {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/triggers',
+          payload: {
+            ...triggerBody(pipelineVersionId),
+            mode: 'schedule' as const,
+            schedule: '*/5 * * * *',
+            params: { ws: '${trigger.windowStart}' },
+          },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.json().message).toMatch(/tumbling/);
+      });
+
+      it('PATCH guards the EFFECTIVE state: a mode switch away from tumbling with window bindings is refused', async () => {
+        const created = (
+          await app.inject({
+            method: 'POST',
+            url: '/api/triggers',
+            payload: tumblingBody({ params: windowBindings, enabled: false }),
+          })
+        ).json();
+        const res = await app.inject({
+          method: 'PATCH',
+          url: `/api/triggers/${created.id}`,
+          payload: { mode: 'manual', window: null },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.json().message).toMatch(/tumbling/);
+      });
+
+      it('PATCH can leave tumbling by ALSO dropping the window bindings', async () => {
+        const created = (
+          await app.inject({
+            method: 'POST',
+            url: '/api/triggers',
+            payload: tumblingBody({ params: windowBindings, enabled: false }),
+          })
+        ).json();
+        const res = await app.inject({
+          method: 'PATCH',
+          url: `/api/triggers/${created.id}`,
+          payload: { mode: 'manual', window: null, params: {} },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().mode).toBe('manual');
+      });
+    });
   });
 });

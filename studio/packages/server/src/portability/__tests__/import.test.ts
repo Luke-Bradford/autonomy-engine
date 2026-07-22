@@ -718,6 +718,64 @@ describe('importEnvelope: trigger', () => {
     const result = importEnvelope(db, 'owner-b', envelope);
     expect(result.attention).toEqual([{ type: 'unboundPipelineVersion' }]);
   });
+
+  // #5 S11b — window-field bindings are tumbling-only (the route's cross-field
+  // assert). This path bypasses route asserts, so it must REFUSE the envelope
+  // rather than create a row whose every subsequent PATCH — including the
+  // mandatory rebind — 400s on the effective-state rule (the same
+  // brick-avoidance reasoning that forces `event`/`window` null above; params
+  // can't be surgically forced consistent, so refusal is the honest disposition).
+  it('refuses a NON-tumbling envelope whose params bind ${trigger.windowStart/End}', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db, 'owner-a');
+    const trigger = createTrigger(db, {
+      ownerId: 'owner-a',
+      name: 'Windowed',
+      pipelineVersionId: version.id,
+      params: { ws: '${trigger.windowStart}' },
+      mode: 'tumbling',
+      schedule: null,
+      webhook: null,
+      window: { frequency: 'minute', interval: 15, startTime: '2026-07-01T00:00:00.000Z' },
+      concurrency: { policy: 'queue' },
+      runWindows: null,
+      enabled: false,
+    });
+    const envelope = exportTrigger(db, trigger.id, 'owner-a');
+    // Hand-craft a mode-inconsistent envelope (the only source of this state —
+    // no legal write path produces it).
+    const data = envelope.data as { mode: string; window: unknown };
+    data.mode = 'manual';
+    data.window = null;
+
+    expect(() => importEnvelope(db, 'owner-b', envelope)).toThrow(ImportError);
+    expect(() => importEnvelope(db, 'owner-b', envelope)).toThrow(/tumbling/);
+  });
+
+  it('imports a TUMBLING envelope with window-field bindings intact', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db, 'owner-a');
+    const trigger = createTrigger(db, {
+      ownerId: 'owner-a',
+      name: 'Windowed',
+      pipelineVersionId: version.id,
+      params: { ws: '${trigger.windowStart}', we: '${trigger.windowEnd}' },
+      mode: 'tumbling',
+      schedule: null,
+      webhook: null,
+      window: { frequency: 'minute', interval: 15, startTime: '2026-07-01T00:00:00.000Z' },
+      concurrency: { policy: 'queue' },
+      runWindows: null,
+      enabled: false,
+    });
+    const envelope = exportTrigger(db, trigger.id, 'owner-a');
+    const result = importEnvelope(db, 'owner-b', envelope);
+    if (result.kind !== 'trigger') throw new Error('unreachable');
+    expect(result.trigger.params).toEqual({
+      ws: '${trigger.windowStart}',
+      we: '${trigger.windowEnd}',
+    });
+  });
 });
 
 describe('importEnvelope: refusals', () => {

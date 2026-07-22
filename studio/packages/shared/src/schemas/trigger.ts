@@ -126,7 +126,13 @@ export const TriggerParamsSchema = z.record(z.string(), z.unknown());
  * ZodObject and `.omit()`/`.partial()` keep working on the write path.
  */
 export const TriggerParamsWriteSchema = TriggerParamsSchema.superRefine((params, ctx) => {
-  for (const message of validateTriggerBindings(params)) {
+  // `windowFields: true` — the FIELD level is deliberately window-LENIENT
+  // (#5 S11b): this ZodEffects cannot see the trigger's `mode`, so refusing
+  // `${trigger.windowStart/End}` here would break a tumbling trigger's legal
+  // bindings. The tumbling-only half is the route's cross-field assert
+  // (`assertWindowBindingsConsistent`, against the effective post-write state)
+  // + the import guard — both via the shared `windowBindingErrors`.
+  for (const message of validateTriggerBindings(params, { windowFields: true })) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message });
   }
   // #547 — refuse a LITERAL non-finite number in any param VALUE (e.g.

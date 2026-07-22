@@ -386,6 +386,43 @@ describe('RunLauncher — queue', () => {
     launcher.fire(trigger, { scheduledTime: '2026-07-17T09:00:00.000Z' });
     const row = listRuns(db, { triggerId: trigger.id })[0];
     expect(row?.triggerContext).not.toHaveProperty('windowEpoch');
+    // #5 S11b — the user-facing window bounds follow the same discipline.
+    expect(row?.triggerContext).not.toHaveProperty('windowStart');
+    expect(row?.triggerContext).not.toHaveProperty('windowEnd');
+  });
+
+  it('a window fire freezes windowStart/windowEnd into the context AND resolves them in bindings (#5 S11b)', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, undefined, undefined, [
+      { name: 'ws', type: 'string', required: false },
+    ]);
+    const trigger = seedTrigger(db, {
+      pipelineVersionId: pvId,
+      params: { ws: '${trigger.windowStart}' },
+    });
+    const launcher = createRunLauncher(deps(db));
+    const WS = '2026-07-22T00:00:00.000Z';
+    const WE = '2026-07-22T01:00:00.000Z';
+
+    const result = launcher.fire(trigger, {
+      scheduledTime: WE,
+      windowEpoch: 'ep1234',
+      windowStart: WS,
+      windowEnd: WE,
+    });
+    expect(result.outcome).toBe('started');
+    const row = listRuns(db, { triggerId: trigger.id })[0];
+    // Frozen on the ROW like windowEpoch (durable even for a crash-orphan)…
+    expect(row?.triggerContext).toEqual({
+      triggerId: trigger.id,
+      scheduledTime: WE,
+      body: null,
+      windowEpoch: 'ep1234',
+      windowStart: WS,
+      windowEnd: WE,
+    });
+    // …and resolved into the run's params through the S12b binding layer.
+    expect(row?.params).toEqual({ ws: WS });
   });
 
   it('a queued fire preserves the fire-time context captured at admission (#5 S12)', async () => {

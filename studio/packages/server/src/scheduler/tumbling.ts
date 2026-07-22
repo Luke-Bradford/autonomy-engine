@@ -426,6 +426,10 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
       result = launcher.fire(trigger, {
         scheduledTime: row.windowEnd,
         windowEpoch: row.configEpoch,
+        // #5 S11b — the user-facing `${trigger.windowStart/End}` facts, frozen
+        // into the run's context so the trigger's param bindings resolve them.
+        windowStart: row.windowStart,
+        windowEnd: row.windowEnd,
       });
     } catch (err) {
       if (err instanceof UnboundTriggerError) {
