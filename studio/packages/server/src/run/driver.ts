@@ -1005,6 +1005,15 @@ export async function pump(
           outputs: command.outputs,
         },
       ];
+    } else if (command.type === 'parkRun') {
+      // #5 S3 (#619) — the driver's OWN `parkRun` command (the run parked on a
+      // durable timer/callback): append `run.waiting{reason}`, whose fold flips the
+      // run running→waiting. No executor, like `evaluateControl`. `run.waiting` is
+      // NOT terminal, so the pump continues — but a parked run has no further
+      // command, so the queue drains and the pump returns with the run `waiting`
+      // (its row synced by the `syncRunLifecycle` in the fold loop below). The
+      // reverse edge waiting→running is the reducer's, on the resolving event.
+      source = [{ type: 'run.waiting', runId: state.runId, reason: command.reason }];
     } else {
       source = deps.executor.perform(command, state.runId);
     }

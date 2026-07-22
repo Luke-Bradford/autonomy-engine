@@ -12,6 +12,7 @@ import type {
   RunState,
   SubstitutionContext,
   TerminalNodeStatus,
+  WaitingReason,
 } from './types.js';
 import { SubstituteError, TERMINAL_NODE, terminalStatusOf } from './types.js';
 import {
@@ -170,6 +171,81 @@ function awaitsExternalEvent(status: NodeRunState['status']): boolean {
     case 'skipped':
       return false;
   }
+}
+
+/**
+ * #5 S3 (#619) — is this node ACTIVELY progressing the run, as opposed to parked
+ * on an external event / terminal / awaiting readiness? The distinction the
+ * `run.waiting` PRODUCER turns on: a run parks (`running` → `waiting`) only when
+ * NOTHING is in flight. The two "in-flight" awaits that keep a run `running`
+ * despite awaiting an event are a call child (`waiting`, its child pipeline is
+ * running) and a retry hold (`retry_pending`, F2b keeps a retrying run `running`).
+ * `wait_pending`/`external_wait_pending` are the PARKED awaits — precisely NOT in
+ * flight. This is a proper subset of `awaitsExternalEvent`, and the two must be
+ * free to disagree, so it gets its own exhaustive `switch` (a 9th status is a
+ * compile error here, forcing its author to place it).
+ */
+function isNodeInFlight(status: NodeRunState['status']): boolean {
+  switch (status) {
+    case 'ready':
+    case 'dispatched':
+    case 'waiting':
+    case 'retry_pending':
+      return true;
+    case 'wait_pending':
+    case 'external_wait_pending':
+    case 'pending':
+    case 'success':
+    case 'failure':
+    case 'skipped':
+      return false;
+  }
+}
+
+/**
+ * #5 S3 (#619) — the waiting→running REVERSE EDGE: a parked run resumes. Applied
+ * at every site that RESOLVES a parked node (`onWaitDue`/`onExternalWaitCompleted`/
+ * `onExternalWaitExpired`) and on `run.resumed` (`onResumed`), BEFORE the node
+ * transition + `settle`, so the resumed walk runs against a `running` run and can
+ * re-park (`parkRun`) if another wait remains. Durable without its own event: it
+ * is keyed off the durable resolving event, so a replay reproduces it. A no-op on
+ * a `running`/terminal run, so it is safe to apply unconditionally at those sites.
+ */
+function unparkIfWaiting(state: RunState): RunState {
+  return state.status === 'waiting' ? { ...state, status: 'running', waitingReason: null } : state;
+}
+
+/**
+ * #5 S3 (#619) — the events that RESUME a parked (`waiting`) run. The top-level
+ * fold guard ignores every non-terminal event on a non-`running` run; these are
+ * the exceptions, admitted to the switch so the parked node's own handler can
+ * un-park the run. A stale/mismatched one still no-ops in its handler, correctly
+ * leaving the run `waiting`. (`run.waiting` is deliberately absent — a second park
+ * on an already-`waiting` run stays an ignored no-op, the S3 status-guard.)
+ */
+const UNPARK_EVENTS = new Set<EngineEvent['type']>([
+  'timer.due',
+  'externalWait.completed',
+  'externalWait.expired',
+  'run.resumed',
+]);
+
+/**
+ * #5 S3 (#619) — WHY a parked run is `waiting`, derived from its parked node
+ * kinds. Called only from `settle`'s producer branch, which has already
+ * established a park (some node awaits an event, nothing is in flight) — so at
+ * least one node is `wait_pending` or `external_wait_pending` here. When BOTH
+ * kinds are parked (a parallel wait + webhook), the tie-break is
+ * `waiting_external`: an inbound callback is the less-predictable, typically
+ * longer-lived dependency, so it names the run's park. That is a stable tie-break,
+ * not a semantic ranking — the run un-parks whenever the FIRST of them resolves.
+ * `waiting_concurrency`/`waiting_dependency` have no node-level producer (S6/S9-11).
+ */
+function parkReason(state: RunState): WaitingReason {
+  const anyExternal = Object.values(state.nodes).some(
+    (ns) => ns.status === 'external_wait_pending',
+  );
+  return anyExternal ? 'waiting_external' : 'waiting_timer';
 }
 
 /**
@@ -2072,6 +2148,23 @@ export function createEngine(doc: EngineDoc): Engine {
           `enforcing that at #444, and rows written before it were never validated.`,
       );
       commands.push({ type: 'finishRun', outcome: 'failure', reason: 'stalled' });
+    } else if (state.status === 'running') {
+      // #5 S3 (#619) — THE `run.waiting` PRODUCER. The walk reached a fixpoint
+      // with the run non-terminal and (the two branches above are exhausted) at
+      // least one node awaiting an external event. If NOTHING is in flight — no
+      // `ready`/`dispatched` node, no call child `waiting`, no `retry_pending`
+      // hold (F2b keeps a retrying run `running`, so it is NOT a waiting reason) —
+      // the run is PARKED on a durable timer/callback. Emit `run.waiting` via the
+      // driver-own `parkRun` command; the driver appends the durable event and the
+      // fold flips running→waiting. Guarded on `status === 'running'` so a
+      // re-`settle` of an already-`waiting` run does not re-emit a redundant park
+      // (the S3 fold's own status-guard would ignore it, but not emitting keeps the
+      // log clean). The reverse edge waiting→running rides the resolving event's
+      // fold (`unparkIfWaiting`), so no counterpart command is needed here.
+      const inFlight = Object.values(state.nodes).some((ns) => isNodeInFlight(ns.status));
+      if (!inFlight) {
+        commands.push({ type: 'parkRun', reason: parkReason(state) });
+      }
     }
     return { state, commands, diagnostics };
   }
@@ -2614,8 +2707,14 @@ export function createEngine(doc: EngineDoc): Engine {
    * but NOT inert — where retry's hold was already entered by `node.failed`, a wait
    * has no prior hold event, so THIS fold is what enters it. Guarded on the node
    * being `ready` at exactly this attempt (a stale/duplicate scheduled event for a
-   * node that has moved on is a no-op, mirroring `onRetryDue`). Does NOT `settle`:
-   * the node is now parked, nothing downstream can advance until `timer.due`.
+   * node that has moved on is a no-op, mirroring `onRetryDue`).
+   *
+   * #5 S3 (#619) — `settle`s after parking, unlike its pre-producer self: nothing
+   * downstream can advance (the node is parked), but `settle` is where the
+   * `run.waiting` PRODUCER lives, and a run whose SOLE live node is this wait would
+   * otherwise never be detected as parked (no later node-completion `settle`s it).
+   * `settle` finds nothing to dispatch — a `wait_pending` node satisfies no edges —
+   * and simply emits `parkRun` if the run is now fully parked.
    */
   function onWaitScheduled(
     state: RunState,
@@ -2629,11 +2728,7 @@ export function createEngine(doc: EngineDoc): Engine {
       // scheduled event, or a node whose round reset it) — a no-op, not a defect.
       return { state, commands: [], diagnostics };
     }
-    return {
-      state: withNode(state, event.nodeId, { status: 'wait_pending' }),
-      commands: [],
-      diagnostics,
-    };
+    return settle(withNode(state, event.nodeId, { status: 'wait_pending' }), diagnostics);
   }
 
   /**
@@ -2658,7 +2753,13 @@ export function createEngine(doc: EngineDoc): Engine {
     if (ns.status !== 'wait_pending' || ns.currentAttemptId !== event.previousAttemptId) {
       return { state, commands: [], diagnostics };
     }
-    return settle(withNode(state, event.nodeId, { status: 'success' }), diagnostics);
+    // #5 S3 (#619) — un-park FIRST (waiting→running) so the resumed walk re-parks
+    // via `parkRun` if another wait remains; a stale event never reaches here (the
+    // guard above), so it cannot un-park a run that is not genuinely resuming.
+    return settle(
+      withNode(unparkIfWaiting(state), event.nodeId, { status: 'success' }),
+      diagnostics,
+    );
   }
 
   /**
@@ -2735,8 +2836,12 @@ export function createEngine(doc: EngineDoc): Engine {
    * external-wait twin of `onWaitScheduled` (and NOT inert, for the same reason: a
    * webhook has no prior hold event). Guarded on the node being `ready` at exactly
    * this attempt (a stale/duplicate created event for a node that has moved on — an
-   * at-least-once re-arm, or a back-edge reset — is a no-op). Does NOT `settle`: the
-   * node is now parked, nothing downstream can advance until the callback/expiry.
+   * at-least-once re-arm, or a back-edge reset — is a no-op).
+   *
+   * #5 S3 (#619) — `settle`s after parking, for the same reason as `onWaitScheduled`:
+   * `settle` is the `run.waiting` PRODUCER, and a run whose sole live node is this
+   * webhook would otherwise never be detected parked. `settle` dispatches nothing (a
+   * parked node satisfies no edges) and emits `parkRun` if the run is fully parked.
    */
   function onExternalWaitCreated(
     state: RunState,
@@ -2748,11 +2853,7 @@ export function createEngine(doc: EngineDoc): Engine {
     if (ns.status !== 'ready' || ns.currentAttemptId !== event.attemptId) {
       return { state, commands: [], diagnostics };
     }
-    return {
-      state: withNode(state, event.nodeId, { status: 'external_wait_pending' }),
-      commands: [],
-      diagnostics,
-    };
+    return settle(withNode(state, event.nodeId, { status: 'external_wait_pending' }), diagnostics);
   }
 
   /**
@@ -2803,7 +2904,8 @@ export function createEngine(doc: EngineDoc): Engine {
       event.outputs !== undefined && contract.kind === 'declared'
         ? storeOutputs(contract, event.outputs)
         : {};
-    let next = withNode(state, event.nodeId, { status: 'success' });
+    // #5 S3 (#619) — un-park FIRST (waiting→running); see `onWaitDue`.
+    let next = withNode(unparkIfWaiting(state), event.nodeId, { status: 'success' });
     next = { ...next, outputs: { ...next.outputs, [event.nodeId]: stored } };
     return settle(next, diagnostics);
   }
@@ -2833,7 +2935,13 @@ export function createEngine(doc: EngineDoc): Engine {
     if (ns.status !== 'external_wait_pending' || ns.currentAttemptId !== event.previousAttemptId) {
       return { state, commands: [], diagnostics };
     }
-    return settle(withNode(state, event.nodeId, { status: 'failure' }), diagnostics);
+    // #5 S3 (#619) — un-park FIRST (waiting→running); see `onWaitDue`. A finishRun
+    // from the failure below (unhandled timeout) sets the terminal status last, so
+    // the intermediate `running` is invisible either way.
+    return settle(
+      withNode(unparkIfWaiting(state), event.nodeId, { status: 'failure' }),
+      diagnostics,
+    );
   }
 
   function onRetryRequested(
@@ -2932,6 +3040,10 @@ export function createEngine(doc: EngineDoc): Engine {
    *    handled above, so the two mechanisms never emit for the same node.
    */
   function onResumed(state: RunState, diagnostics: string[]): ReduceResult {
+    // #5 S3 (#619) — a `run.resumed` un-parks a `waiting` run (waiting→running)
+    // before re-deriving, matching the web `deriveRunLifecycle` reverse edge. The
+    // resumed walk re-parks via `parkRun` if the run is still fully parked.
+    state = unparkIfWaiting(state);
     // The `run.resumed` fold's own guards do not apply when `resume()` calls this
     // directly, so re-state the one that matters: a run that is not `running` has
     // nothing to re-derive, and re-emitting a dispatch for a settled run would
@@ -3199,14 +3311,24 @@ export function createEngine(doc: EngineDoc): Engine {
     if (event.runId !== state.runId) return { state, commands: [], diagnostics };
 
     if (state.status !== 'running') {
-      // A terminal-transition event (`run.finished`/`run.interrupted`) arriving
-      // on an already-terminal run is a benign no-op, not a malformed log, so it
-      // earns no diagnostic. `terminalStatusOf` is the SSOT for that set (#443) —
-      // the log-authoritative reconciler reads the same one.
-      if (terminalStatusOf(event) === null) {
-        diagnostics.push(`event '${event.type}' on a '${state.status}' run is ignored`);
+      // #5 S3 (#619) — a `waiting` run is PARKED, not terminal. Admit the events
+      // that RESUME it (a parked node's alarm/callback firing, or a boot resume) to
+      // the switch, where the node's own handler un-parks the run (`waiting` →
+      // `running`) as it resolves the node — a stale/mismatched one still no-ops
+      // there, correctly leaving the run `waiting`. WITHOUT this the guard would
+      // ignore the very events that resume a parked run and every parked run would
+      // hang forever. Everything else on a non-`running` run is still ignored.
+      const resumesWaiting = state.status === 'waiting' && UNPARK_EVENTS.has(event.type);
+      if (!resumesWaiting) {
+        // A terminal-transition event (`run.finished`/`run.interrupted`) arriving
+        // on an already-terminal run is a benign no-op, not a malformed log, so it
+        // earns no diagnostic. `terminalStatusOf` is the SSOT for that set (#443) —
+        // the log-authoritative reconciler reads the same one.
+        if (terminalStatusOf(event) === null) {
+          diagnostics.push(`event '${event.type}' on a '${state.status}' run is ignored`);
+        }
+        return { state, commands: [], diagnostics };
       }
-      return { state, commands: [], diagnostics };
     }
 
     switch (event.type) {
@@ -3306,11 +3428,11 @@ export function createEngine(doc: EngineDoc): Engine {
         // becomes `waiting` and records WHY. Reached only with `status ===
         // 'running'` (the guard above ignores it on any other status), so it is
         // structurally the running→waiting edge and nothing else. No command, no
-        // clock read — the run stops advancing until the event lands; the reverse
-        // edge (waiting→running) ships with the PRODUCER (#5 S4/S6), where
-        // `onResumed`/re-dispatch clears `waitingReason`. Nothing EMITS this event
-        // yet, so a real log never reaches here this fire (F2a/L14a-style model
-        // slice); the fold is exercised by unit tests and is ready for S4/S6.
+        // clock read — the run stops advancing until the event lands. #619 wired the
+        // PRODUCER that emits this (`settle` → the driver-own `parkRun` → the driver
+        // appends `run.waiting`) and the REVERSE EDGE (`unparkIfWaiting`, on the
+        // resolving event's own fold), so a real log DOES reach here now — the row is
+        // synced `waiting`, and the projection reproduces it on replay.
         return {
           state: { ...state, status: 'waiting', waitingReason: event.reason },
           commands: [],

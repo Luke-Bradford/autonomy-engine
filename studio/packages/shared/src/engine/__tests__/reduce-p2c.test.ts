@@ -156,6 +156,13 @@ function drive(eng: Engine, params: Record<string, unknown>, opts: DriveOpts = {
       });
       continue;
     }
+    if (c.type === 'parkRun') {
+      // #5 S3 (#619) — mirror the driver's parkRun branch (append run.waiting). No
+      // doc here parks (a call child is in-flight `waiting`, not a durable park), so
+      // this is a defensive mirror kept for type-exhaustiveness and future docs.
+      apply({ type: 'run.waiting', runId: RUN, reason: c.reason });
+      continue;
+    }
     apply(dispatched(c.nodeId, c.attemptId));
     const idx = attempts[c.nodeId] ?? 0;
     attempts[c.nodeId] = idx + 1;

@@ -424,6 +424,17 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
     failed: [],
   };
 
+  // #5 S3 (#619) — `status: 'running'` ONLY, and now DELIBERATELY so: a genuinely
+  // PARKED run has status `waiting` (the `run.waiting` producer ran during its
+  // drive), and its liveness is its durable NODE alarm — armed BEFORE the park, so
+  // always live — which the alarm clock's boot tick fires INDEPENDENTLY of this
+  // scan, un-parking it back to `running` and driving it. So a `waiting` run needs
+  // no reconcile scan; scanning it would append a redundant `run.resumed`. The one
+  // parked-run case that DOES land here is the CRASH-GAP: a crash between the
+  // `timer.waitScheduled`/`externalWait.created` fold and the `parkRun` →
+  // `run.waiting` append leaves the row `running` with a `wait_pending`/
+  // `external_wait_pending` node and no `run.waiting` in the log — caught by the
+  // held-park branch in `reconcileOne`, left for its (live) alarm.
   for (const run of listRuns(deps.db, { status: 'running' })) {
     // #479 — the per-run fault boundary. Boot reconcile IS the recovery path, so
     // it is the worst place for an all-or-nothing failure mode: without this, ONE
@@ -677,22 +688,27 @@ async function reconcileOne(deps: ReconcileDeps, report: ReconcileReport, run: R
   }
 
   // A run PARKED on a durable node alarm — a `wait` (#4 A6, `wait_pending`) or a
-  // `webhook` (#4 A13, `external_wait_pending`) — re-derives NOTHING above either:
+  // `webhook` (#4 A13, `external_wait_pending`) — re-emits NO dispatch above:
   // `onResumed` skips both parked statuses (like `retry_pending`), and `settle`
-  // cannot finish a run whose node is non-terminal, so it reaches here with no
-  // commands. UNLIKE a retry hold it needs NO re-arm: the alarm was armed BEFORE the
-  // event that parked the node, so it always has a live row and the clock's boot
-  // tick fires it. But it must be caught HERE, not left to fall through: the finalize
-  // path below appends a spurious `run.resumed` (a no-op fold for a parked node) and
-  // MISreports a still-running parked run as `finalized` (`commands` is empty, so
-  // `needsExecutor` is false). Report it `held` — alive on a durable node alarm,
-  // nothing to resume, the same disposition as a retry hold — and stop, leaving its
-  // row untouched. Reached only when the park is the ONLY live work: a run with a
-  // parked node AND a ready sibling has `commands`, resumes normally, and its alarm
-  // fires independently. (A `webhook` external wait typically parks for a long time
-  // awaiting a human/external callback, so a restart while parked is its NORMAL, not
-  // exceptional, boot state.)
-  if (commands.length === 0 && hasDurableParkNode(next)) {
+  // cannot finish a run whose node is non-terminal. UNLIKE a retry hold it needs NO
+  // re-arm: the alarm was armed BEFORE the event that parked the node, so it always
+  // has a live row and the clock's boot tick fires it. But it must be caught HERE,
+  // not left to fall through: the finalize path below would append a spurious
+  // `run.resumed` and MISreport a still-parked run. Report it `held` — alive on a
+  // durable node alarm, nothing to EXECUTE — and stop, leaving its row untouched.
+  //
+  // #5 S3 (#619) — its resume now `settle`s to a lone `parkRun` (the `run.waiting`
+  // producer), a DRIVER-OWN command that executes nothing. So exclude it before the
+  // "nothing to do" test: a run whose only "work" is to RE-record its park has no
+  // executable command and is left for its alarm, exactly as before the producer.
+  // (A genuinely parked run's row is `waiting` and is not scanned at all — see the
+  // scan comment; this catches only the CRASH-GAP run whose row is still `running`
+  // because its `run.waiting` append was lost. Its alarm folds the resolving event
+  // against the `running` projection and drives it, no re-park needed.) A parked
+  // node AND a ready sibling still has a `dispatchNode` in `liveCommands`, so it
+  // resumes normally and re-parks only once the sibling settles.
+  const liveCommands = commands.filter((c) => c.type !== 'parkRun');
+  if (liveCommands.length === 0 && hasDurableParkNode(next)) {
     report.held.push(run.id);
     return;
   }
@@ -709,7 +725,12 @@ async function reconcileOne(deps: ReconcileDeps, report: ReconcileReport, run: R
   // The second is why this bucket matters beyond crash recovery: a run wedged
   // by a pre-#444 doc is released at the next boot instead of holding its
   // concurrency slot until an operator intervenes.
-  const needsExecutor = commands.some((c) => c.type !== 'finishRun');
+  // Over `liveCommands` (parkRun already filtered): a `parkRun` is driver-own like
+  // `finishRun`, so it never NEEDS an executor. It cannot actually reach here — a
+  // lone `parkRun` short-circuits at the held-park branch above, and it never
+  // co-occurs with a `dispatchNode` (a park requires nothing in flight) — but
+  // filtering it keeps that invariant locally obvious rather than load-bearing.
+  const needsExecutor = liveCommands.some((c) => c.type !== 'finishRun');
   if (needsExecutor && deps.executor === undefined) {
     report.deferred.push(run.id);
     return;

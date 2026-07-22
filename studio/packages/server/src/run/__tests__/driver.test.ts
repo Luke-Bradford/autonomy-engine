@@ -391,8 +391,11 @@ describe('driver — wait control activity routes through the REAL pump (#4 A5+A
     const state = await startRun(d, run);
 
     // Parked, not finished — the alarm clock (absent here) owes the timer.due.
+    // #5 S3 (#619) — the pump's parkRun branch appended `run.waiting`, so the whole
+    // run is now `waiting` (was `running` before the producer).
     expect(state.nodes.w!.status).toBe('wait_pending');
-    expect(state.status).toBe('running');
+    expect(state.status).toBe('waiting');
+    expect(state.waitingReason).toBe('waiting_timer');
 
     // The pump's driver-own `scheduleWait` branch armed a durable alarm...
     expect(alarms.armed).toHaveLength(1);
@@ -451,7 +454,10 @@ describe('driver — wait control activity routes through the REAL pump (#4 A5+A
     const replayed = engine.projectRunState(loadEngineEvents(db, run.id));
     expect(replayed).toEqual(driven);
     expect(replayed.nodes.w!.status).toBe('wait_pending');
-    expect(replayed.status).toBe('running');
+    // #5 S3 (#619) — the persisted `run.waiting` replays to `waiting` (the park is
+    // durable, so the projection reproduces it exactly).
+    expect(replayed.status).toBe('waiting');
+    expect(replayed.waitingReason).toBe('waiting_timer');
   });
 });
 
