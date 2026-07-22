@@ -363,6 +363,49 @@ describe('schedule_tick handler — freshness suppressions', () => {
     expect(launcher.fires).toHaveLength(0);
     expect(next).toHaveLength(0);
   });
+
+  // #637 — a poison (unparseable) trigger row must SETTLE the chain, never
+  // throw: a handler throw rolls back the fire tx, so the pending row would
+  // re-fire + error-log on every tick, forever. `sync()` re-seeds the chain if
+  // the row is later repaired — the `invalid_schedule` discipline.
+  //
+  // The write API cannot produce a corrupt row (`updateTrigger` re-parses), so
+  // corrupt it directly — the hand-edit/legacy-drift vector the ticket names.
+  // Out-of-enum concurrency policy: valid JSON, no CHECK, `TriggerSchema` rejects.
+  function corruptTriggerRow(db: Db, id: string): void {
+    db.update(triggers)
+      .set({ concurrency: { policy: 'nope' } as unknown as Trigger['concurrency'] })
+      .where(eq(triggers.id, id))
+      .run();
+  }
+
+  it('unparseable trigger row → suppressed trigger_unparseable, NO re-arm, NO throw (#637)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pv });
+    corruptTriggerRow(db, trigger.id);
+    const { result, launcher, next } = fireDirect(db, trigger);
+    expect(result).toMatchObject({ status: 'suppressed', reason: 'trigger_unparseable' });
+    expect(launcher.fires).toHaveLength(0);
+    expect(next).toHaveLength(0);
+  });
+
+  it('poison row through the REAL clock: settles suppressed, second tick inert (#637)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pv });
+    const row = armTick(db, trigger, NOON);
+    corruptTriggerRow(db, trigger.id);
+
+    const { clock, launcher } = harness(db, () => NOON);
+    expect(() => clock.tick()).not.toThrow();
+
+    // Settled durably — NOT left pending (the forever-re-fire the ticket names).
+    expect(getWakeup(db, row.id)?.status).toBe('suppressed');
+    expect(pendingTicks(db)).toHaveLength(0);
+    clock.tick(); // nothing left to deliver
+    expect((launcher as ReturnType<typeof fakeLauncher>).fires).toHaveLength(0);
+  });
 });
 
 describe('schedule_tick — ref construction + bounded re-arm (#5 S5b-2, #549)', () => {

@@ -7,7 +7,7 @@ import {
   type Trigger,
   type WindowConfig,
 } from '@autonomy-studio/shared';
-import { getTrigger, listParsedTriggers } from '../repo/triggers.js';
+import { getParsedTrigger, listParsedTriggers } from '../repo/triggers.js';
 import { getRun } from '../repo/runs.js';
 import { armWakeup, deleteWakeup, listPendingWakeups } from '../repo/scheduled-wakeups.js';
 import {
@@ -696,7 +696,19 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     refSchema: WindowDueRefSchema,
     fire(row: ScheduledWakeup, delivery, tx: Db): WakeupFireResult {
       const ref = WindowDueRefSchema.parse(row.ref);
-      const trigger = getTrigger(tx, ref.triggerId);
+      const read = getParsedTrigger(tx, ref.triggerId);
+
+      // #637 — a CORRUPT trigger row must settle the chain, not throw: a throw
+      // rolls back the fire tx, so the pending row would re-fire + error-log
+      // on every tick, forever. Settle + warn; `sync()` re-seeds after repair.
+      if (read.status === 'unparseable') {
+        log.warn(
+          { triggerId: ref.triggerId, err: read.error },
+          'tumbling: trigger row unparseable — settling the chain (sync() re-seeds after repair)',
+        );
+        return { status: 'suppressed', reason: 'trigger_unparseable' };
+      }
+      const trigger = read.status === 'found' ? read.trigger : null;
 
       // Terminal suppressions (the schedule-tick discipline): settle, never
       // re-arm, never throw — `sync()` seeds a new chain when warranted.
@@ -896,7 +908,20 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
       listWindowStates(db, { status: 'waiting', unlinked: true }).map((r) => r.triggerId),
     );
     for (const triggerId of strandedTriggerIds) {
-      const trigger = getTrigger(db, triggerId);
+      // #637 — `reconcile()` is called BARE at boot, so a poison trigger row
+      // must skip-and-warn (the `listParsedTriggers` per-row discipline), not
+      // throw: a throw here aborted server boot and starved every other
+      // trigger's reconcile. The stranded window stays `waiting` (inert, not
+      // lost) until the row is repaired.
+      const read = getParsedTrigger(db, triggerId);
+      if (read.status === 'unparseable') {
+        log.warn(
+          { triggerId, err: read.error },
+          'tumbling: reconcile skipped an unparseable trigger row (stranded windows stay inert)',
+        );
+        continue;
+      }
+      const trigger = read.status === 'found' ? read.trigger : null;
       if (trigger === null || !isTumblable(trigger) || trigger.pipelineVersionId === null) {
         continue;
       }
@@ -926,7 +951,20 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
           // materialization gate (the window is no longer `running`), so the
           // trigger's next backfill window fires now — this tap is what makes
           // a bulk backlog drain serially instead of waiting for boot.
-          const trigger = getTrigger(db, row.triggerId);
+          //
+          // #637 — lenient read: the settle above (derived from the RUN row)
+          // must land even when the trigger row is corrupt; only the drain
+          // kick — which needs the parsed trigger — is skipped, with a warn
+          // instead of the per-terminal-run error spam a throw produced here.
+          const read = getParsedTrigger(db, row.triggerId);
+          if (read.status === 'unparseable') {
+            log.warn(
+              { triggerId: row.triggerId, err: read.error },
+              'tumbling: completion tap skipped the drain kick — trigger row unparseable',
+            );
+            return;
+          }
+          const trigger = read.status === 'found' ? read.trigger : null;
           if (trigger !== null && isTumblable(trigger) && trigger.pipelineVersionId !== null) {
             materializeWindows(trigger);
           }

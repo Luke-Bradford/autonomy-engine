@@ -80,6 +80,31 @@ export function getTrigger(db: Db, id: string): Trigger | null {
   return row ? TriggerSchema.parse(row) : null;
 }
 
+/** The 3-way verdict of {@link getParsedTrigger}: `missing` (no row) and
+ * `unparseable` (row present, `TriggerSchema` rejects it) are DISTINCT — a
+ * caller settling an alarm chain reports corruption differently from absence. */
+export type ParsedTriggerRead =
+  | { status: 'found'; trigger: Trigger }
+  | { status: 'missing' }
+  | { status: 'unparseable'; error: unknown };
+
+/**
+ * #637 — the single-row LENIENT read, symmetric with `listParsedTriggers`: a
+ * corrupt/legacy/hand-edited row is a reported verdict, never a throw. The
+ * scheduler's alarm handlers use this because a handler throw rolls back the
+ * fire transaction, leaving the wakeup row `pending` — so one poison trigger
+ * row would re-fire + error-log on EVERY clock tick, forever. (`getTrigger`
+ * stays strict: a route surfacing a poison row as a 500 is right there.)
+ */
+export function getParsedTrigger(db: Db, id: string): ParsedTriggerRead {
+  const row = db.select().from(triggers).where(eq(triggers.id, id)).get();
+  if (!row) return { status: 'missing' };
+  const result = TriggerSchema.safeParse(row);
+  return result.success
+    ? { status: 'found', trigger: result.data }
+    : { status: 'unparseable', error: result.error };
+}
+
 export interface ListTriggersFilter {
   pipelineVersionId?: string;
   /** Filters in SQL, like `listConnections`/`listPipelines` — never loaded

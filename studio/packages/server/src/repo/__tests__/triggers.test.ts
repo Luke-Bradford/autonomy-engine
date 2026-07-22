@@ -5,6 +5,7 @@ import { createPipeline } from '../pipelines.js';
 import {
   createTrigger,
   deleteTrigger,
+  getParsedTrigger,
   getTrigger,
   listParsedTriggers,
   listTriggers,
@@ -344,6 +345,35 @@ describe('triggers repo', () => {
       const parsed = listParsedTriggers(db, (id) => skipped.push(id));
       expect(parsed.map((t) => t.id)).toEqual([good.id]);
       expect(skipped).toEqual(['trig_poison']);
+    });
+  });
+
+  // #637 — the single-row lenient read the alarm handlers use, symmetric with
+  // `listParsedTriggers`: a corrupt row is a REPORTED verdict, never a throw.
+  describe('getParsedTrigger — 3-way lenient single-row read', () => {
+    it('found: returns the parsed trigger', () => {
+      const { db } = freshDb();
+      const version = setupPipelineVersion(db);
+      const created = createTrigger(db, buildTriggerInput(version.id));
+      const read = getParsedTrigger(db, created.id);
+      expect(read.status).toBe('found');
+      if (read.status === 'found') expect(read.trigger.id).toBe(created.id);
+    });
+
+    it('missing: an absent row is a distinct verdict, not an error', () => {
+      const { db } = freshDb();
+      expect(getParsedTrigger(db, 'trig_nope')).toEqual({ status: 'missing' });
+    });
+
+    it('unparseable: a poison row reports the error instead of throwing', () => {
+      const { db } = freshDb();
+      insertPoisonRow(db, 'trig_poison');
+      // The strict read throws on the same row...
+      expect(() => getTrigger(db, 'trig_poison')).toThrow();
+      // ...the lenient one reports.
+      const read = getParsedTrigger(db, 'trig_poison');
+      expect(read.status).toBe('unparseable');
+      if (read.status === 'unparseable') expect(read.error).toBeDefined();
     });
   });
 });
