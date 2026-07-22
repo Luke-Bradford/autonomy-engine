@@ -400,6 +400,25 @@ export const anthropicAdapter: ConnectorAdapter = {
           const usage = meterUsage('anthropic_api', model, u?.input_tokens, u?.output_tokens);
           const calls = extractToolUses(parsed.json);
           if (calls.length > 0) {
+            // A `tool_use` block without a string `id` is a malformed provider
+            // response: the continuation's `tool_result` REQUIRES `tool_use_id`,
+            // so shipping `''` would only trade this clear local diagnostic for
+            // an opaque provider 400. Fail loud instead (same class as the
+            // malformed-block no-completion failures; a retry of the identical
+            // request won't fix a response-shape defect → `permanent`).
+            if (calls.some((c) => c.id === null)) {
+              return {
+                type: 'terminal',
+                event: {
+                  type: 'failed',
+                  kind: 'permanent',
+                  error:
+                    'anthropic_api returned a tool_use block without a string id — ' +
+                    'malformed tool-call response',
+                },
+                capture: captureOf(),
+              };
+            }
             const responseContent = (parsed.json as { content: unknown[] }).content;
             return {
               type: 'toolUse',
@@ -413,6 +432,7 @@ export const anthropicAdapter: ConnectorAdapter = {
                   role: 'user',
                   content: results.map((r) => ({
                     type: 'tool_result',
+                    // Non-null by the malformed-response gate above.
                     tool_use_id: r.id ?? '',
                     content: r.resultText,
                     ...(r.isError ? { is_error: true } : {}),

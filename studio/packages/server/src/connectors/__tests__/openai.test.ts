@@ -584,6 +584,28 @@ describe('openaiAdapter — local tools (#2 L10a)', () => {
     expect(toolMsg.content).toMatch(/invalid arguments for tool 'adder'/);
   });
 
+  it('fails permanent (loud, local) on a tool call without a string id', async () => {
+    const noId = {
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{ type: 'function', function: { name: 'adder', arguments: '{}' } }],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+      usage: { prompt_tokens: 3, completion_tokens: 2 },
+    };
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, noId));
+    const events = await drain(openaiAdapter.runActivity(toolCtx(), 'sk'));
+    const last = events[events.length - 1]!;
+    expect(last).toMatchObject({ type: 'failed', kind: 'permanent' });
+    if (last.type === 'failed') expect(last.error).toMatch(/without a string id/);
+    expect(fetchSpy).toHaveBeenCalledTimes(1); // failed locally, no continuation
+  });
+
   it('fails permanent on a second tool round-trip request', async () => {
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(fakeResponse(200, TOOL_CALL_BODY))

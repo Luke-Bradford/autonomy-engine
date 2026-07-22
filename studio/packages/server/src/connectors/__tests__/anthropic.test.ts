@@ -839,6 +839,23 @@ describe('anthropicAdapter — local tools (#2 L10a)', () => {
     });
   });
 
+  it('fails permanent (loud, local) on a tool_use block without a string id', async () => {
+    const noId = {
+      content: [{ type: 'tool_use', name: 'adder', input: { a: 1, b: 2 } }],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 3, output_tokens: 2 },
+    };
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, noId));
+    const events = await drain(anthropicAdapter.runActivity(toolCtx(), 'sk'));
+    const last = events[events.length - 1]!;
+    expect(last).toMatchObject({ type: 'failed', kind: 'permanent' });
+    if (last.type === 'failed') expect(last.error).toMatch(/without a string id/);
+    // No continuation was attempted — the malformed response failed locally,
+    // not as an opaque provider 400 on a '' tool_use_id.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(events.filter((e) => e.type === 'captured')).toHaveLength(1);
+  });
+
   it('fails permanent when the model requests a second tool round-trip', async () => {
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(fakeResponse(200, TOOL_USE_BODY))

@@ -321,6 +321,24 @@ export const openaiAdapter: ConnectorAdapter = {
           // which the text branch below would misread as `malformed_block`.
           const calls = extractToolCalls(first?.message);
           if (calls.length > 0) {
+            // A tool call without a string `id` is a malformed provider
+            // response: the continuation's `role:'tool'` message REQUIRES
+            // `tool_call_id`, so shipping `''` would only trade this clear
+            // local diagnostic for an opaque provider 400. Fail loud instead
+            // (`permanent` — a response-shape defect a retry won't fix).
+            if (calls.some((c) => c.id === null)) {
+              return {
+                type: 'terminal',
+                event: {
+                  type: 'failed',
+                  kind: 'permanent',
+                  error:
+                    'openai_api returned a tool call without a string id — ' +
+                    'malformed tool-call response',
+                },
+                capture: captureOf(),
+              };
+            }
             const rawMessage = first!.message;
             return {
               type: 'toolUse',
@@ -332,6 +350,7 @@ export const openaiAdapter: ConnectorAdapter = {
                 rawMessage,
                 ...results.map((r) => ({
                   role: 'tool',
+                  // Non-null by the malformed-response gate above.
                   tool_call_id: r.id ?? '',
                   content: r.resultText,
                 })),
