@@ -2233,6 +2233,10 @@ export function createEngine(doc: EngineDoc): Engine {
       startedAt: event.startedAt ?? null,
       params: { ...event.params },
       status: 'running',
+      // #5 S3 — a freshly-started run is `running`, never parked; stated
+      // explicitly like `branches` because this literal is rebuilt from scratch
+      // (no `...state` spread), and a missing field would leave it `undefined`.
+      waitingReason: null,
       nodes,
       outputs: {},
       containers: containerStates,
@@ -3297,6 +3301,21 @@ export function createEngine(doc: EngineDoc): Engine {
         return onRetryRequested(state, event, diagnostics);
       case 'run.resumed':
         return onResumed(state, diagnostics);
+      case 'run.waiting':
+        // #5 S3 — FORWARD-ONLY: a running run parked on an external event, so it
+        // becomes `waiting` and records WHY. Reached only with `status ===
+        // 'running'` (the guard above ignores it on any other status), so it is
+        // structurally the running→waiting edge and nothing else. No command, no
+        // clock read — the run stops advancing until the event lands; the reverse
+        // edge (waiting→running) ships with the PRODUCER (#5 S4/S6), where
+        // `onResumed`/re-dispatch clears `waitingReason`. Nothing EMITS this event
+        // yet, so a real log never reaches here this fire (F2a/L14a-style model
+        // slice); the fold is exercised by unit tests and is ready for S4/S6.
+        return {
+          state: { ...state, status: 'waiting', waitingReason: event.reason },
+          commands: [],
+          diagnostics,
+        };
       case 'run.interrupted':
         // Terminal: the boot reconciler froze a run whose non-idempotent node
         // was in flight at crash time. No command — the run stops here (the
@@ -3313,6 +3332,7 @@ export function createEngine(doc: EngineDoc): Engine {
       startedAt: null,
       params: {},
       status: 'pending',
+      waitingReason: null,
       nodes: {},
       outputs: {},
       containers: {},
