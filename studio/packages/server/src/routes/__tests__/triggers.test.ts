@@ -704,4 +704,95 @@ describe('triggers routes', () => {
       expect(res.statusCode).toBe(400);
     });
   });
+
+  describe('#5 S8 — event-config cross-field rules (effective state)', () => {
+    function eventBody(overrides: Record<string, unknown> = {}) {
+      return {
+        ...triggerBody(pipelineVersionId),
+        mode: 'event' as const,
+        schedule: null,
+        event: { name: 'order.created' },
+        ...overrides,
+      };
+    }
+
+    it('creates an event trigger with a subscription', async () => {
+      const res = await app.inject({ method: 'POST', url: '/api/triggers', payload: eventBody() });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().event).toEqual({ name: 'order.created' });
+    });
+
+    it('rejects an event config on a non-event trigger (400)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: { ...triggerBody(pipelineVersionId), event: { name: 'order.created' } },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('rejects ENABLING an event trigger with no subscription (unsubscribable-but-enabled)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: eventBody({ event: null, enabled: true }),
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('accepts a DISABLED event trigger with no subscription (a draft / pre-S8 row shape)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: eventBody({ event: null, enabled: false }),
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().event).toBeNull();
+    });
+
+    it('PATCH guards the EFFECTIVE state: clearing the subscription on an enabled event trigger is refused', async () => {
+      const created = (
+        await app.inject({ method: 'POST', url: '/api/triggers', payload: eventBody() })
+      ).json();
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${created.id}`,
+        payload: { event: null },
+      });
+      expect(res.statusCode).toBe(400);
+      // Disable + clear together is fine.
+      const ok = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${created.id}`,
+        payload: { event: null, enabled: false },
+      });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json().event).toBeNull();
+    });
+
+    it('PATCH guards the EFFECTIVE state: switching mode away from event keeps a live subscription refused', async () => {
+      const created = (
+        await app.inject({ method: 'POST', url: '/api/triggers', payload: eventBody() })
+      ).json();
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${created.id}`,
+        payload: { mode: 'manual' },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('an unrelated PATCH leaves an existing subscription untouched (no .partial() clobber)', async () => {
+      const created = (
+        await app.inject({ method: 'POST', url: '/api/triggers', payload: eventBody() })
+      ).json();
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${created.id}`,
+        payload: { name: 'Renamed' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().event).toEqual({ name: 'order.created' });
+    });
+  });
 });

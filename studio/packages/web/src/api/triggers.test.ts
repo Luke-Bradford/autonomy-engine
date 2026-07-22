@@ -17,6 +17,7 @@ const sample = {
   mode: 'schedule' as const,
   schedule: '0 2 * * *',
   webhook: null,
+  event: null,
   concurrency: { policy: 'skip_if_running' as const },
   runWindows: null,
   recurrence: null,

@@ -142,17 +142,33 @@ export type Upgrader = (env: unknown) => unknown;
 export type UpgraderRegistry = ReadonlyMap<number, Upgrader>;
 
 /**
- * The live upgrader registry, keyed by the `schemaVersion` an upgrader
- * migrates FROM. EMPTY today — `SCHEMA_VERSION` is 1 and there is no older
- * version to upgrade from. A future schema bump adds exactly ONE entry here
- * (e.g. `UPGRADERS.set(1, upgradeV1ToV2)`); `parseAndUpgradeEnvelope`'s
- * chaining loop already handles a multi-step chain (v1→v2→v3, ...) with no
- * further change required. Tests inject their OWN registry (see
- * `parseAndUpgradeEnvelope`'s `upgraders` param) rather than mutating this
- * shared instance, so a fake upgrader registered in a test never leaks into
- * another test file or into production parsing.
+ * v1→v2 (#5 S8): backfill the two required-nullable trigger fields added since
+ * schemaVersion 1 — `recurrence` (#5 S5b; its missing bump left every pre-S5b
+ * trigger export un-importable, healed here) and `event` (#5 S8) — as `null`
+ * (the honest "never had one" value; contrast #473's manufactured `.default`).
+ * Only a `kind:'trigger'` envelope's `data` is touched; an already-present key
+ * (a post-S5b v1 export DOES carry `recurrence`) is never clobbered. Pipeline/
+ * connection envelopes pass through with only the version stamp advanced.
  */
-export const UPGRADERS: Map<number, Upgrader> = new Map();
+function upgradeV1ToV2(env: unknown): unknown {
+  if (!isPlainObject(env)) return env; // parseAndUpgradeEnvelope rejects it next
+  const upgraded: Record<string, unknown> = { ...env, schemaVersion: 2 };
+  if (env.kind === 'trigger' && isPlainObject(env.data)) {
+    upgraded.data = { recurrence: null, event: null, ...env.data };
+  }
+  return upgraded;
+}
+
+/**
+ * The live upgrader registry, keyed by the `schemaVersion` an upgrader
+ * migrates FROM. A future schema bump adds exactly ONE entry here;
+ * `parseAndUpgradeEnvelope`'s chaining loop already handles a multi-step chain
+ * (v1→v2→v3, ...) with no further change required. Tests inject their OWN
+ * registry (see `parseAndUpgradeEnvelope`'s `upgraders` param) rather than
+ * mutating this shared instance, so a fake upgrader registered in a test never
+ * leaks into another test file or into production parsing.
+ */
+export const UPGRADERS: Map<number, Upgrader> = new Map([[1, upgradeV1ToV2]]);
 
 function parseJson(raw: string): unknown {
   try {

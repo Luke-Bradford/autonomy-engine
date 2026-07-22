@@ -74,6 +74,22 @@ export const WebhookConfigSchema = z
 export type WebhookConfig = z.infer<typeof WebhookConfigSchema>;
 
 /**
+ * #5 S8 — an `event`-mode trigger's SUBSCRIPTION: `name` is the named event
+ * channel it fires on (an inbound `POST /api/events {name, …}` fans out to
+ * every enabled event trigger subscribed to that name, owner-scoped). Kept
+ * open-ended with a catchall — the `webhook` config precedent — so later
+ * event-source breadth (filters, source selectors) can extend it without a
+ * stored-shape break. No secret lives here: the events endpoint is first-party
+ * authed (session/principal), unlike the public HMAC webhook endpoint.
+ */
+export const EventConfigSchema = z
+  .object({
+    name: z.string().min(1),
+  })
+  .catchall(z.unknown());
+export type EventConfig = z.infer<typeof EventConfigSchema>;
+
+/**
  * STORED/READ param shape — the raw record, deliberately LENIENT (no binding
  * validation) so it parses any historically-valid row. Binding validation is a
  * WRITE concern (`TriggerParamsWriteSchema`), NOT enforced on read: tightening
@@ -147,6 +163,14 @@ export const TriggerSchema = z.object({
    */
   recurrence: RecurrenceSchema.nullable(),
   webhook: WebhookConfigSchema.nullable(),
+  /**
+   * #5 S8 — the event-mode subscription (`{name}`); null for every non-event
+   * trigger (and for a pre-S8 event-mode row, which is inert until configured
+   * — see `assertEventConsistent` on the write path). Stored shape stays
+   * required-nullable like `recurrence`: every persisted row carries the
+   * column explicitly.
+   */
+  event: EventConfigSchema.nullable(),
   concurrency: ConcurrencySchema,
   runWindows: z.array(RunWindowSchema).nullable(),
   enabled: z.boolean(),
@@ -184,6 +208,14 @@ export const NewTriggerSchema = TriggerSchema.omit({
   // `TriggerSchema.recurrence` stays required-nullable — every persisted row
   // carries the column explicitly.
   recurrence: RecurrenceWriteSchema.nullable().optional(),
+  // #5 S8 — `event` follows `recurrence`'s `.nullable().optional()` (NOT
+  // `.default(null)`) 3-state exactly, for the same verified reason: a
+  // `.default()` IS applied by `.partial()`, so an unrelated PATCH would parse
+  // `event: null` and silently CLEAR an existing subscription. OMITTED →
+  // untouched, explicit `null` → clear, object → set; a NEW field, so omission
+  // keeps every pre-S8 create payload valid. The stored `TriggerSchema.event`
+  // stays required-nullable.
+  event: EventConfigSchema.nullable().optional(),
 });
 // z.input, not z.infer/z.output — see the note on NewConnection in
 // connection.ts for why every insert type in this package uses it.

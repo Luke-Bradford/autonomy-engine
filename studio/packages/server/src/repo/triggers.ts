@@ -7,6 +7,7 @@ import {
   type NewTrigger,
   type Recurrence,
   type Trigger,
+  type TriggerMode,
 } from '@autonomy-studio/shared';
 import { triggers } from '../db/schema.js';
 import { newId } from './ids.js';
@@ -61,6 +62,9 @@ export function createTrigger(db: Db, input: NewTrigger): Trigger {
     id: newId('trig'),
     ...parsed,
     recurrence,
+    // #5 S8 — same 3-state write field as `recurrence`: omitted = "no
+    // subscription" (null). The stored shape requires the key explicitly.
+    event: parsed.event ?? null,
     schedule: deriveSchedule(recurrence, parsed.schedule),
     createdAt: now,
     updatedAt: now,
@@ -79,6 +83,10 @@ export interface ListTriggersFilter {
   /** Filters in SQL, like `listConnections`/`listPipelines` — never loaded
    * then filtered in the route. */
   ownerId?: string;
+  /** #5 S8 — SQL filter on the typed `mode` column (the events fan-out lists
+   * `mode:'event'` rows; the per-name match happens on the parsed rows — a
+   * `json_extract` on the `event` JSON buys nothing at this row count). */
+  mode?: TriggerMode;
 }
 
 export function listTriggers(db: Db, filter: ListTriggersFilter = {}): Trigger[] {
@@ -88,6 +96,9 @@ export function listTriggers(db: Db, filter: ListTriggersFilter = {}): Trigger[]
   }
   if (filter.ownerId !== undefined) {
     conditions.push(eq(triggers.ownerId, filter.ownerId));
+  }
+  if (filter.mode !== undefined) {
+    conditions.push(eq(triggers.mode, filter.mode));
   }
 
   const rows =

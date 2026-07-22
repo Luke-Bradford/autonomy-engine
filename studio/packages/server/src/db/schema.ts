@@ -16,6 +16,7 @@ import {
   type Node,
   type Output,
   type Param,
+  type EventConfig,
   type Recurrence,
   type RunDiagnosticPhase,
   type RunStatus,
@@ -155,6 +156,10 @@ export const triggers = sqliteTable(
     // non-schedule trigger. `schedule` is the DERIVED cron cache of it.
     recurrence: text('recurrence', { mode: 'json' }).$type<Recurrence | null>(),
     webhook: text('webhook', { mode: 'json' }).$type<WebhookConfig | null>(),
+    // #5 S8: the event-mode subscription (`{name}`). Nullable JSON (the
+    // `recurrence`/`run_windows` precedent) — NULL is the honest value for
+    // every non-event trigger and every pre-S8 row.
+    event: text('event', { mode: 'json' }).$type<EventConfig | null>(),
     concurrency: text('concurrency', { mode: 'json' }).notNull().$type<Concurrency>(),
     runWindows: text('run_windows', { mode: 'json' }).$type<RunWindow[] | null>(),
     enabled: integer('enabled', { mode: 'boolean' }).notNull(),

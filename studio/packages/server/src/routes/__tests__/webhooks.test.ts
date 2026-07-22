@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { CATALOG_VERSION } from '@autonomy-studio/shared';
 import { createPipeline, createPipelineVersion, listRuns } from '../../repo/index.js';
+import { loadEngineEvents } from '../../run/events.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 import { signWebhook } from '../../webhooks/verify.js';
 
@@ -134,6 +135,96 @@ describe('webhook routes', () => {
     expect(run.triggerId).toBe(id);
   });
 
+  // #5 S8 — the webhook body is the FIRST production feeder of
+  // `run.triggerContext.body` (S12a plumbed the seam; pre-S8 fires carried null).
+  describe('#5 S8 — the delivery body seeds ${trigger.body}', () => {
+    function triggerContextOf(runId: string) {
+      const seed = loadEngineEvents(app.db, runId).find((e) => e.type === 'run.triggerContext');
+      if (seed?.type !== 'run.triggerContext') throw new Error(`no trigger seed for ${runId}`);
+      return seed;
+    }
+
+    it('a JSON delivery body lands parsed in run.triggerContext.body and resolves ${trigger.body.x} bindings', async () => {
+      // A version that DECLARES the param the binding feeds (an undeclared
+      // override is refused by resolveRunParams).
+      const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'With param' });
+      const version = createPipelineVersion(app.db, {
+        pipelineId: pipeline.id,
+        params: [{ name: 'who', type: 'string', required: false, default: 'nobody' }],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      const { id, secret } = await makeWebhookTrigger({
+        pipelineVersionId: version.id,
+        params: { who: '${trigger.body.user}' },
+      });
+      const res = await app.inject(
+        signedRequest(id, secret, { body: JSON.stringify({ user: 'ada', n: 2 }) }),
+      );
+      expect(res.json().outcome).toBe('started');
+      const runId = res.json().runId as string;
+      await app.runLauncher.whenIdle();
+
+      expect(triggerContextOf(runId).body).toEqual({ user: 'ada', n: 2 });
+      const started = loadEngineEvents(app.db, runId).find((e) => e.type === 'run.started');
+      if (started?.type !== 'run.started') throw new Error('no run.started');
+      expect(started.params.who).toBe('ada');
+    });
+
+    it('an unparseable (non-JSON) body seeds the raw string — honest, and deep-addresses fail safe', async () => {
+      const { id, secret } = await makeWebhookTrigger();
+      const res = await app.inject(signedRequest(id, secret, { body: 'plain text, not json' }));
+      expect(res.json().outcome).toBe('started');
+      await app.runLauncher.whenIdle();
+      expect(triggerContextOf(res.json().runId as string).body).toBe('plain text, not json');
+    });
+
+    it('an empty body seeds nothing (the durable event omits `body`; it folds to null on read)', async () => {
+      const { id, secret } = await makeWebhookTrigger();
+      const res = await app.inject(signedRequest(id, secret, { body: '' }));
+      expect(res.json().outcome).toBe('started');
+      await app.runLauncher.whenIdle();
+      // The seed event's omitted-when-null contract (driver.ts): no manufactured
+      // value lands in the log; `RunState.triggerContext.body` folds to null.
+      expect('body' in triggerContextOf(res.json().runId as string)).toBe(false);
+    });
+
+    it('a >64-level-nested body is refused as a recorded skip (the walker cannot verify it — fails closed)', async () => {
+      // Not itself a replay hazard, but `assertJsonReplaySafe` cannot traverse
+      // past MAX_CONFIG_DEPTH (64) — unverifiable fails closed. A deliberate,
+      // documented behaviour change for such senders (see `deriveBody`).
+      const { id, secret } = await makeWebhookTrigger();
+      const deep = '{"a":'.repeat(70) + '1' + '}'.repeat(70);
+      const key = 'evt-deep';
+      const res = await app.inject(signedRequest(id, secret, { body: deep, idempotencyKey: key }));
+      expect(res.statusCode).toBe(202);
+      expect(res.json().outcome).toBe('skipped');
+      expect(listRuns(app.db, { triggerId: id })).toHaveLength(0);
+      const retry = await app.inject(
+        signedRequest(id, secret, { body: deep, idempotencyKey: key }),
+      );
+      expect(retry.json().outcome).toBe('duplicate');
+    });
+
+    it('a non-finite JSON number (1e999 → Infinity) is refused as a recorded skip, never persisted (#547)', async () => {
+      const { id, secret } = await makeWebhookTrigger();
+      const key = 'evt-nonfinite';
+      const res = await app.inject(
+        signedRequest(id, secret, { body: '{"x":1e999}', idempotencyKey: key }),
+      );
+      expect(res.statusCode).toBe(202);
+      expect(res.json().outcome).toBe('skipped');
+      expect(listRuns(app.db, { triggerId: id })).toHaveLength(0);
+      // Recorded — the verbatim retry dedupes rather than re-throwing in a storm.
+      const retry = await app.inject(
+        signedRequest(id, secret, { body: '{"x":1e999}', idempotencyKey: key }),
+      );
+      expect(retry.json().outcome).toBe('duplicate');
+    });
+  });
+
   it('rejects a bad signature (401) and does NOT fire', async () => {
     const { id } = await makeWebhookTrigger();
     const res = await app.inject(signedRequest(id, 'not-the-real-secret'));
@@ -260,8 +351,8 @@ describe('webhook routes', () => {
   // PERMANENT config defect. It must be RECORDED as a skip (not released), so a
   // verbatim retry of the same key dedupes rather than re-firing in a storm.
   it('records a skip (no run, no retry storm) when a param binding cannot resolve', async () => {
-    // `${trigger.body.k}` is save-VALID but deep-addresses the null body a
-    // webhook fire still carries (no payload feeder until S8).
+    // `${trigger.body.k}` is save-VALID but deep-addresses a key the delivered
+    // body (`{event:'ping'}`) does not carry — unresolvable for THIS fire.
     const { id, secret } = await makeWebhookTrigger({ params: { x: '${trigger.body.k}' } });
     const key = 'evt-bad-binding';
 

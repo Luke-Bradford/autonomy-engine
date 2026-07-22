@@ -34,6 +34,7 @@ import { secretsRoutes } from './routes/secrets.js';
 import { pipelinesRoutes } from './routes/pipelines.js';
 import { triggersRoutes } from './routes/triggers.js';
 import { webhooksRoutes } from './routes/webhooks.js';
+import { eventsRoutes } from './routes/events.js';
 import { externalWaitRoutes } from './routes/external-wait.js';
 import { runsRoutes } from './routes/runs.js';
 import { runStreamRoutes } from './routes/run-stream.js';
@@ -512,6 +513,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   await fastify.register(pipelinesRoutes);
   await fastify.register(triggersRoutes);
   await fastify.register(webhooksRoutes);
+  await fastify.register(eventsRoutes);
   await fastify.register(externalWaitRoutes);
   await fastify.register(runsRoutes);
   await fastify.register(runStreamRoutes);
