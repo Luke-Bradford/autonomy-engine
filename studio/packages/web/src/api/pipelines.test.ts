@@ -11,6 +11,7 @@ const pipeline = {
   id: 'pl_1',
   ownerId: 'local',
   name: 'My pipeline',
+  concurrency: null,
   createdAt: 1,
   updatedAt: 1,
 };
@@ -71,7 +72,8 @@ describe('pipelines API', () => {
     expect(fetchMock.mock.calls[0]![0]).toBe('/api/pipelines');
     const init = fetchMock.mock.calls[0]![1] as RequestInit;
     expect(init.method).toBe('POST');
-    expect(JSON.parse(init.body as string)).toEqual({ name: 'My pipeline' });
+    // The write schema's default makes the uncapped state explicit on create.
+    expect(JSON.parse(init.body as string)).toEqual({ name: 'My pipeline', concurrency: null });
   });
 
   it('deletePipeline DELETEs and resolves void on 204', async () => {

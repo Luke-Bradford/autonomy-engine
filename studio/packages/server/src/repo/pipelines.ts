@@ -61,13 +61,17 @@ export function listPipelinesPage(db: Db, ownerId: string, args: PageArgs): Pagi
   return toPage(rows, args.limit);
 }
 
-/** Only `name` (and `ownerId`, unused by MVP callers) are mutable here — the
- * graph itself is never edited in place; every graph change is a new
- * `PipelineVersion` row (see `pipeline-versions.ts`). */
+/** Only `name`, `concurrency` (#5 S6b — the live admission cap, deliberately
+ * mutable/repairable) and `ownerId` (unused by MVP callers) are mutable here —
+ * the graph itself is never edited in place; every graph change is a new
+ * `PipelineVersion` row (see `pipeline-versions.ts`). NOTE the parse below is
+ * the LENIENT read schema: cap strictness is the HTTP boundary's job
+ * (`PipelinePatchBodySchema`) — an internal caller passing an invalid cap
+ * would persist it, and the launcher's use sites fail closed to a single slot. */
 export function updatePipeline(
   db: Db,
   id: string,
-  patch: Partial<Pick<NewPipeline, 'name' | 'ownerId'>>,
+  patch: Partial<Pick<NewPipeline, 'name' | 'ownerId' | 'concurrency'>>,
 ): Pipeline | null {
   const existing = getPipeline(db, id);
   if (!existing) return null;

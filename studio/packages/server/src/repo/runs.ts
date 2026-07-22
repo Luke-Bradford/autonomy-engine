@@ -8,7 +8,7 @@ import {
   type RunLifecyclePatch,
   type RunStatus,
 } from '@autonomy-studio/shared';
-import { runs } from '../db/schema.js';
+import { pipelineVersions, runs } from '../db/schema.js';
 import { newId } from './ids.js';
 import type { Db } from './types.js';
 
@@ -165,15 +165,39 @@ export function countQueuedRunsForTrigger(db: Db, triggerId: string): number {
  * same-ms burst arbitrarily. Deterministic and stable across replays/restarts.
  * The queue is bounded (`maxQueueDepth`) and per-trigger, so the unindexed
  * `ORDER BY` scans a small set — no dedicated index in this slice.
+ *
+ * #5 S6b — `pipelineId` (optional) PIPELINE-scopes the pick: a queued row
+ * freezes the version it enqueued under while the trigger's binding is
+ * mutable, so one trigger can hold queued rows on TWO pipelines (rebound
+ * mid-queue). A pipeline drain must admit only rows belonging to the drained
+ * pipeline — the trigger-global oldest could be a FOREIGN-pipeline row that
+ * never passed that pipeline's gate.
  */
-export function nextQueuedRunForTrigger(db: Db, triggerId: string): Run | null {
-  const row = db
-    .select()
-    .from(runs)
-    .where(and(eq(runs.triggerId, triggerId), eq(runs.status, 'queued')))
-    .orderBy(asc(runs.queuedAt), asc(sql`rowid`))
-    .limit(1)
-    .get();
+export function nextQueuedRunForTrigger(
+  db: Db,
+  triggerId: string,
+  pipelineId?: string,
+): Run | null {
+  const base = and(eq(runs.triggerId, triggerId), eq(runs.status, 'queued'));
+  const row =
+    pipelineId === undefined
+      ? db
+          .select()
+          .from(runs)
+          .where(base)
+          .orderBy(asc(runs.queuedAt), asc(sql`rowid`))
+          .limit(1)
+          .get()
+      : db
+          .select({ runs })
+          .from(runs)
+          .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
+          .where(and(base, eq(pipelineVersions.pipelineId, pipelineId)))
+          // Same rowid tie-break as the unscoped branch — qualified, since the
+          // join makes a bare `rowid` ambiguous.
+          .orderBy(asc(runs.queuedAt), asc(sql`${runs}.rowid`))
+          .limit(1)
+          .get()?.runs;
   return row ? RunSchema.parse(row) : null;
 }
 
@@ -201,6 +225,116 @@ export function admitQueuedRun(db: Db, id: string): Run | null {
     .run();
   if (result.changes === 0) return null;
   return getRun(db, id);
+}
+
+/**
+ * #5 S6b — count the PIPELINE's currently-active runs across ALL its versions
+ * and triggers (including a trigger-less `call_pipeline` child bound to one of
+ * its versions): the per-pipeline half of both-must-pass admission. Same
+ * `ACTIVE_RUN_STATUSES` definition as the per-trigger gate — `queued` is
+ * pre-admission and `waiting` released its slot, so neither occupies pipeline
+ * capacity. SQL-filtered via the runs ⋈ pipeline_versions join (a run row
+ * carries only its immutable `pipelineVersionId`; the version row carries the
+ * pipeline identity).
+ */
+export function countActiveRunsForPipeline(db: Db, pipelineId: string): number {
+  const row = db
+    .select({ n: count() })
+    .from(runs)
+    .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
+    .where(
+      and(
+        eq(pipelineVersions.pipelineId, pipelineId),
+        inArray(runs.status, [...ACTIVE_RUN_STATUSES]),
+      ),
+    )
+    .get();
+  return row?.n ?? 0;
+}
+
+/** One trigger's standing in the pipeline's admission queue (#5 S6b). */
+export interface QueuedTriggerCandidate {
+  triggerId: string;
+  /** The trigger's oldest waiting fire (its next-to-admit, FIFO within the trigger). */
+  oldestQueuedAt: number;
+  /** When the trigger was last SERVED — MAX(started_at) over its non-queued
+   * runs (`admitQueuedRun`/`createRun` stamp admission time). `null` = never. */
+  lastAdmittedAt: number | null;
+}
+
+/**
+ * #5 S6b — the pipeline's queued triggers in FAIR service order:
+ * least-recently-ADMITTED first (never-served first), then oldest `queuedAt`,
+ * then `triggerId` (a total, deterministic order). This is the durable
+ * round-robin the spec's "per-trigger round-robin (no monopoly)" requires,
+ * derived entirely from persisted run rows — `started_at` is (re-)stamped at
+ * every admission, so MAX(started_at) over a trigger's non-queued runs IS its
+ * durable service record; no in-memory rotation pointer, restart-safe. A
+ * trigger that bursts 100 old fires cannot monopolize a single-slot pipeline:
+ * once served, it becomes the MOST-recently-admitted and rotates behind the
+ * others. (Caveat, accepted: deleting run history — `deleteRun`, a future
+ * retention sweep — erases the service record, resetting a trigger to
+ * "never served"; fairness degrades gracefully, never deadlocks.)
+ *
+ * Within a trigger the queue order stays strict durable-`queuedAt` FIFO
+ * (`nextQueuedRunForTrigger`).
+ */
+export function queuedTriggerCandidatesForPipeline(
+  db: Db,
+  pipelineId: string,
+): QueuedTriggerCandidate[] {
+  // Grouped queued rows for this pipeline (runs ⋈ versions), per trigger.
+  const queuedGroups = db
+    .select({
+      triggerId: runs.triggerId,
+      oldestQueuedAt: sql<number>`min(${runs.queuedAt})`,
+    })
+    .from(runs)
+    .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
+    .where(and(eq(pipelineVersions.pipelineId, pipelineId), eq(runs.status, 'queued')))
+    .groupBy(runs.triggerId)
+    .all();
+
+  const triggerIds = queuedGroups.map((g) => g.triggerId).filter((id): id is string => id !== null);
+  if (triggerIds.length === 0) return [];
+
+  // Service record per trigger: MAX(started_at) over its NON-queued rows (a
+  // queued row's started_at is an enqueue-time placeholder, not a service).
+  // PIPELINE-scoped like everything else here: a trigger rebound from another
+  // pipeline must rank by its service within THIS pipeline, not drag its old
+  // pipeline's history into the fairness order.
+  const served = db
+    .select({
+      triggerId: runs.triggerId,
+      lastAdmittedAt: sql<number>`max(${runs.startedAt})`,
+    })
+    .from(runs)
+    .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
+    .where(
+      and(
+        eq(pipelineVersions.pipelineId, pipelineId),
+        inArray(runs.triggerId, triggerIds),
+        sql`${runs.status} != 'queued'`,
+      ),
+    )
+    .groupBy(runs.triggerId)
+    .all();
+  const lastAdmitted = new Map(served.map((s) => [s.triggerId, s.lastAdmittedAt]));
+
+  return queuedGroups
+    .filter((g): g is typeof g & { triggerId: string } => g.triggerId !== null)
+    .map((g) => ({
+      triggerId: g.triggerId,
+      oldestQueuedAt: g.oldestQueuedAt,
+      lastAdmittedAt: lastAdmitted.get(g.triggerId) ?? null,
+    }))
+    .sort((a, b) => {
+      const aServed = a.lastAdmittedAt ?? -Infinity;
+      const bServed = b.lastAdmittedAt ?? -Infinity;
+      if (aServed !== bServed) return aServed - bServed;
+      if (a.oldestQueuedAt !== b.oldestQueuedAt) return a.oldestQueuedAt - b.oldestQueuedAt;
+      return a.triggerId < b.triggerId ? -1 : a.triggerId > b.triggerId ? 1 : 0;
+    });
 }
 
 export function deleteRun(db: Db, id: string): boolean {

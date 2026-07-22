@@ -8,13 +8,17 @@ import type {
 import { resolveTriggerBindings, TERMINAL_RUN_EVENT } from '@autonomy-studio/shared';
 import {
   admitQueuedRun,
+  countActiveRunsForPipeline,
   countActiveRunsForTrigger,
   countQueuedRunsForTrigger,
   createRun,
   getRun,
   listRuns,
   nextQueuedRunForTrigger,
+  queuedTriggerCandidatesForPipeline,
 } from '../repo/runs.js';
+import { getPipelineIdForVersion } from '../repo/pipeline-versions.js';
+import { getPipeline } from '../repo/pipelines.js';
 import { getTrigger } from '../repo/triggers.js';
 import { startRun, terminalizeInterrupted, type DriveDeps, type DriveLog } from './driver.js';
 
@@ -28,10 +32,13 @@ import { startRun, terminalizeInterrupted, type DriveDeps, type DriveLog } from 
  *      is refused (throws `UnboundTriggerError`) — the PRIMARY guarantee the
  *      architecture requires of the scheduler. The write-API's
  *      `assertBindableIfEnabled` is only defense-in-depth on top of this.
- *   2. **Concurrency admission.** Per the trigger's policy, a fire is either
- *      started immediately, queued, or skipped — gated on the count of the
- *      trigger's currently-active (non-terminal) runs, read from the DB so the
- *      gate stays correct across a restart (see `countActiveRunsForTrigger`).
+ *   2. **Concurrency admission — BOTH-MUST-PASS (#5 S6b).** Per the trigger's
+ *      policy AND the pipeline's `concurrency` cap, a fire is either started
+ *      immediately, queued, or skipped — gated on DB counts
+ *      (`countActiveRunsForTrigger` + `countActiveRunsForPipeline`) so the
+ *      gate stays correct across a restart. Per-pipeline overflow QUEUES
+ *      (durable), whatever the trigger policy; the trigger-level skip rules
+ *      apply first.
  *
  * A started run DRIVES IN THE BACKGROUND: `fire()` returns as soon as the run
  * row is durably created (status `pending`), and the reduce↔persist pump runs
@@ -114,12 +121,12 @@ export interface RunLauncher {
    * tests and (optionally) graceful shutdown. */
   whenIdle(): Promise<void>;
   /**
-   * #5 S6a — drain any durably `queued` fires this launcher instance has not yet
-   * picked up: for each trigger with queued rows, kick a drain (admitting its
-   * oldest queued runs up to the trigger's live concurrency capacity (#631); any
-   * remaining waiters follow on settle). Called ONCE at boot, AFTER the boot
-   * reconciler (which resumes `running` rows) so the drain's DB active-count
-   * already reflects any resumed run — no double-admit.
+   * #5 S6a/S6b — drain any durably `queued` fires this launcher instance has
+   * not yet picked up: for each PIPELINE with queued rows, kick a fair drain
+   * (admitting across its triggers, least-recently-admitted first, up to BOTH
+   * live capacities; any remaining waiters follow on settle). Called ONCE at
+   * boot, AFTER the boot reconciler (which resumes `running` rows) so the
+   * drain's DB active-count already reflects any resumed run — no double-admit.
    * Idempotent and safe to call when the queue is empty (a no-op).
    */
   recoverQueued(): void;
@@ -146,12 +153,12 @@ export const DEFAULT_MAX_QUEUE_DEPTH = 1000;
 
 /**
  * The ONE validity rule for a `parallel` trigger's concurrency cap, shared by the
- * admission path (`fire`) and the queue drain (`drainQueue` via
+ * admission path (`fire`) and the queue drain (`drainPipelineQueue` via
  * `admissionCapacity`) so both read a `max` the same way. Returns the
  * positive-integer cap, or `null` for a missing/invalid one (a row written before
  * `ConcurrencySchema`'s refinement existed, or restored from an older export).
  * Each caller FAILS CLOSED on `null` in its own way — `fire` skips the fire;
- * `drainQueue` falls back to a single slot so already-`queued` rows still drain
+ * the drain falls back to a single slot so already-`queued` rows still drain
  * rather than strand — but neither ever coerces a bad cap to `NaN` (an
  * `active >= NaN` / `active < NaN` comparison is always false, which would admit
  * unbounded or strand the queue).
@@ -168,7 +175,7 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
 
   /**
    * Drive an already-created `pending` run in the background (the shared tail of
-   * an immediate `launch()` and a queue `drainQueue()` admission). The run row
+   * an immediate `launch()` and a queue `drainPipelineQueue()` admission). The run row
    * exists (`pending`, empty log) before this is called; `startRun` flips it to
    * `running` via `run.started`.
    *
@@ -181,8 +188,9 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
    * between the failed pump and the interrupt that describes it. A fresh run's
    * chain is empty, so this costs a microtask and no waiting.
    *
-   * The settle `finally` drains the trigger's durable queue on the DB count
-   * (`drainQueue`), so the NEXT queued fire is admitted as soon as this drive
+   * The settle `finally` drains the run's PIPELINE queue on the DB counts
+   * (`drainPipelineQueue`, #5 S6b), so the NEXT queued fire — from ANY of the
+   * pipeline's triggers — is admitted as soon as this drive
    * ends — whether it ended terminal, `interrupted`, or parked `waiting` (all of
    * which free the slot; only `pending`/`running` still occupy it).
    */
@@ -199,9 +207,11 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     inFlight.add(p);
     void p.finally(() => {
       inFlight.delete(p);
-      // Every launcher-created run carries a `triggerId`, but the row type is
-      // nullable; guard so a trigger-less row (never produced here) can't drain.
-      if (run.triggerId !== null) drainQueue(run.triggerId);
+      // #5 S6b — the drain is PIPELINE-scoped: this run's settle may free a
+      // pipeline slot another trigger's queued fire is waiting on, so keying
+      // the drain by triggerId would strand cross-trigger waiters.
+      const pipelineId = getPipelineIdForVersion(db, run.pipelineVersionId);
+      if (pipelineId !== null) drainPipelineQueue(pipelineId);
     });
   }
 
@@ -259,72 +269,116 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
   }
 
   /**
-   * #5 S6a / #631 — when a run's DRIVE ends (or at boot via `recoverQueued`),
-   * admit the trigger's oldest durably-`queued` fires UP TO its LIVE concurrency
-   * capacity. Capacity is read fresh from the trigger on every drain
-   * (`admissionCapacity`): a `parallel(max=N)` trigger admits up to `N` at once,
-   * `queue`/`skip_if_running` a single slot. Reading it live is what closes #631 —
-   * a policy edited `queue`→`parallel` while rows are already queued drains them up
-   * to the new cap instead of trickling one per settle. (Conscious non-goal: FIFO
-   * ACROSS that transition window is not preserved — a NEW fire under the edited
-   * `parallel` policy takes `fire`'s parallel branch, which gates on `active >=
-   * cap` and does not consult `countQueuedRunsForTrigger`, so it can start ahead of
-   * an older still-`queued` row. `parallel` offers no ordering guarantee, so this
-   * is acceptable; the queued rows still fully drain up to the cap on each settle.)
+   * #5 S6b — the pipeline's LIVE admission capacity: `concurrency` on the
+   * MUTABLE `pipelines` row (max concurrent runs across ALL its triggers, plus
+   * any trigger-less `call_pipeline` child bound to one of its versions).
+   * `null` = uncapped → `Infinity`. Read fresh on
+   * every fire/drain (#631's precedent), so an operator edit applies to rows
+   * already queued. The stored cap is READ-lenient (`PipelineSchema`), so an
+   * out-of-band-corrupted value must FAIL CLOSED here: a non-positive-integer
+   * cap degrades to a SINGLE slot (logged) — admission keeps moving one at a
+   * time rather than refusing everything (`Infinity` would fail OPEN) or
+   * comparing against `NaN` (which admits unbounded — see `validParallelMax`).
+   * A MISSING pipeline row fails closed the same way: it is unreachable
+   * through FK integrity (every fire/drain resolves the pipeline via an
+   * existing version row, and `pipelines → pipeline_versions` CASCADE is
+   * blocked by `pipeline_versions → runs` RESTRICT while any run row exists),
+   * but if a corrupted DB ever presents it, an ABSENT row is an absent fact —
+   * not evidence of "uncapped" — so it must not fail OPEN to `Infinity`.
+   */
+  function pipelineCapacity(pipelineId: string): number {
+    const pipeline = getPipeline(db, pipelineId);
+    if (pipeline === null) {
+      deps.log?.warn?.(
+        { pipelineId },
+        'pipeline row missing during admission; failing closed to a single slot',
+      );
+      return 1;
+    }
+    if (pipeline.concurrency === null) return Infinity;
+    const cap = pipeline.concurrency;
+    if (!Number.isInteger(cap) || cap < 1) {
+      deps.log?.warn?.(
+        { pipelineId, concurrency: cap },
+        'pipeline has an invalid concurrency cap; failing closed to a single slot',
+      );
+      return 1;
+    }
+    return cap;
+  }
+
+  /** Both-must-pass, pipeline half: is there a FREE pipeline slot? Skips the
+   * count query entirely for the (common) uncapped pipeline. */
+  function pipelineHasRoom(pipelineId: string): boolean {
+    const cap = pipelineCapacity(pipelineId);
+    if (cap === Infinity) return true;
+    return countActiveRunsForPipeline(db, pipelineId) < cap;
+  }
+
+  /**
+   * #5 S6a/S6b / #631 — when a run's drive ends, a terminal event publishes
+   * (#629), or at boot via `recoverQueued`, admit the PIPELINE's durably-`queued`
+   * fires while BOTH gates have room (both-must-pass, the same rule `fire()`
+   * applies): a free pipeline slot AND the candidate trigger's own free slot.
+   * Every capacity is read FRESH per admission (#631): the trigger's from its
+   * CURRENT policy (`admissionCapacity` — a `queue`→`parallel` edit applies to
+   * rows already queued; conscious non-goal: FIFO across that transition window
+   * is not preserved, since a NEW fire under the edited `parallel` policy gates
+   * on `active >= cap` alone and can start ahead of an older still-`queued` row
+   * — `parallel` offers no ordering guarantee. The same holds for a `parallel`
+   * trigger's own pipeline-overflow rows: a later fire that finds pipeline room
+   * starts ahead of them by design), and the pipeline's from its mutable row
+   * (`pipelineCapacity`).
    *
-   * Gated on the DB active-count (`countActiveRunsForTrigger` = `pending`/
-   * `running`), NOT an in-memory counter — the restart-safe, correct definition
-   * under S4's lease/slot split: a run durably `running` ⇒ it OCCUPIES a slot, so
-   * we admit only into FREE capacity. Each admission flips a row `queued → pending`
-   * SYNCHRONOUSLY (`admitQueuedRun`), so the loop's next active-count read already
-   * reflects it (the drive itself runs a microtask later) — the loop admits
-   * exactly `capacity - active` rows and terminates.
+   * FAIRNESS (the spec's "per-trigger round-robin (no monopoly)"): candidates
+   * come from `queuedTriggerCandidatesForPipeline` ordered least-recently-
+   * ADMITTED first (never-served first, then oldest `queuedAt`, then
+   * `triggerId`) — a durable round-robin derived from re-stamped `started_at`,
+   * no in-memory rotation pointer, restart-safe. Within a trigger the order
+   * stays strict `queuedAt` FIFO (`nextQueuedRunForTrigger`). A trigger at its
+   * OWN capacity is skipped, never allowed to stall other triggers' waiters.
+   * One admission per outer iteration, so the pipeline count is re-read before
+   * each next admit and the cap is honoured mid-drain.
    *
-   * The normal cases all resolve cleanly: a launcher-driven run's pump runs to
-   * TERMINAL within its drive promise (frees its slot → the next drain admits),
-   * and a run that PARKS settles its drive at `waiting` (∉ active → frees its
-   * slot). The one case this leaves is a run stuck at `running` after its drive
-   * ended — a genuinely HUNG/crashed activity (executor dispatched a node but
-   * never yielded a terminal). Such a run legitimately holds its slot; the durable
-   * `queued` fire waits (it is a row, not a lost in-memory entry) until the boot
-   * reconciler sweeps the stuck run to `interrupted` and `recoverQueued` admits
-   * the waiter — a recoverability the old in-memory queue lacked (it drained on
-   * drive-end but then lost every queued fire on the restart that fault required).
+   * Gated on DB counts, NOT in-memory state — restart-safe under S4's
+   * lease/slot split (`waiting` released its slot; `queued` is pre-admission).
+   * Each admission flips its row `queued → pending` SYNCHRONOUSLY
+   * (`admitQueuedRun`, idempotent via its `status = 'queued'` guard), so the
+   * next iteration's counts already reflect it. A run stuck at `running` after
+   * its drive ended (hung activity) legitimately holds its slot until the boot
+   * reconciler sweeps it — the durable waiters keep (S6a's recoverability).
    *
-   * KNOWN FOLLOW-UPS (later #5 S6 slices): (a) draining on ANY run's
-   * terminalization (#629) — a run terminalized OUTSIDE the launcher (a
-   * retry-alarm or external-wait resume of a previously-parked run) does not pass
-   * back through this `finally`, so a fire that queued during that resumed run's
-   * `running` window drains only on the next launcher-driven settle for the
-   * trigger or on the next boot's `recoverQueued`; a bus hook on `run.finished`
-   * closes that. (b) the `waiting_concurrency` re-admission gate so a resumed run
-   * re-checks capacity rather than transiently exceeding it.
-   *
-   * Neither is a regression vs pre-S6a `main`: this DB-gated drain never
-   * over-admits past the live capacity (where `main`'s in-memory gate silently
-   * could, by excluding an alarm-resumed run), and `recoverQueued` bounds the
-   * worst case to "until next boot" — where `main` simply LOST every queued fire.
-   * The (a) gap is a latency cliff to close, not a correctness regression.
+   * KNOWN FOLLOW-UP (later #5 S6 slice): the `waiting_concurrency` re-admission
+   * gate — a RESUMED parked run re-checking both caps rather than transiently
+   * exceeding them (the spec's "by default" opt-in).
    *
    * A no-op when capacity is full or the queue is empty. */
-  function drainQueue(triggerId: string): void {
+  function drainPipelineQueue(pipelineId: string): void {
     if (stopped) return;
-    // #631 — capacity from the trigger's CURRENT policy, read fresh each drain so
-    // a `queue`→`parallel` edit applies to rows already queued.
-    const capacity = admissionCapacity(getTrigger(db, triggerId));
-    while (countActiveRunsForTrigger(db, triggerId) < capacity) {
-      const next = nextQueuedRunForTrigger(db, triggerId);
-      if (next === null) return;
-      // Flip `queued → pending` + re-stamp `started_at` atomically (the UPDATE's
-      // `status = 'queued'` guard makes it idempotent — a concurrent/duplicate
-      // drain that lost the race gets `null`); stop this drain if we lost it.
-      const admitted = admitQueuedRun(db, next.id);
-      if (admitted === null) return;
-      // The frozen fire-time context rides the row (`trigger_context`); pass it so
-      // a delayed admission still seeds `${trigger.scheduledTime}` with the
-      // occurrence that fired it. `null` (a run with no fire-time facts) → the
-      // driver's "no trigger context" path.
-      driveRun(admitted, admitted.triggerContext ?? undefined);
+    for (;;) {
+      if (!pipelineHasRoom(pipelineId)) return;
+      const candidates = queuedTriggerCandidatesForPipeline(db, pipelineId);
+      let admitted = false;
+      for (const candidate of candidates) {
+        const triggerCapacity = admissionCapacity(getTrigger(db, candidate.triggerId));
+        if (countActiveRunsForTrigger(db, candidate.triggerId) >= triggerCapacity) continue;
+        // PIPELINE-scoped pick: a trigger rebound to another pipeline mid-queue
+        // can hold a globally-older FOREIGN-pipeline row — admitting that here
+        // would drive it under THIS pipeline's gate, breaching the other's cap.
+        const next = nextQueuedRunForTrigger(db, candidate.triggerId, pipelineId);
+        if (next === null) continue;
+        // A concurrent/duplicate drain that lost the race gets `null` — try the
+        // next candidate rather than aborting the whole drain.
+        const row = admitQueuedRun(db, next.id);
+        if (row === null) continue;
+        // The frozen fire-time context rides the row (`trigger_context`) so a
+        // delayed admission still seeds `${trigger.scheduledTime}` with the
+        // occurrence that fired it.
+        driveRun(row, row.triggerContext ?? undefined);
+        admitted = true;
+        break;
+      }
+      if (!admitted) return;
     }
   }
 
@@ -363,9 +417,46 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     const active = countActiveRunsForTrigger(db, trigger.id);
     const { policy, max } = trigger.concurrency;
 
+    // #5 S6b — the per-PIPELINE half of both-must-pass admission. Resolved via
+    // the trigger's bound version (a run row only carries `pipelineVersionId`;
+    // the version row carries the pipeline identity). A version whose row is
+    // GONE resolves `null` → the gate is bypassed (uncapped): such a fire can
+    // never run anyway — the drive's doc-resolve failure path (#508 territory)
+    // owns that fault, and refusing it HERE would mask it as a capacity skip.
+    const pipelineId = getPipelineIdForVersion(db, trigger.pipelineVersionId);
+    const pipelineFull = pipelineId !== null && !pipelineHasRoom(pipelineId);
+
+    /** Per-pipeline overflow QUEUES (spec: "max concurrent runs across all its
+     * triggers; overflow queues") for EVERY trigger policy — a durable `queued`
+     * row on the same S6a substrate, bounded by the per-trigger depth cap. */
+    function enqueue(): FireResult {
+      const queuedCount = countQueuedRunsForTrigger(db, trigger.id);
+      if (queuedCount >= maxQueueDepth) {
+        return { outcome: 'skipped', reason: `queue is full (max ${maxQueueDepth} pending)` };
+      }
+      createRun(db, {
+        // Non-null: fire() threw UnboundTriggerError above if it were null.
+        pipelineVersionId: trigger.pipelineVersionId as string,
+        ownerId: trigger.ownerId,
+        triggerId: trigger.id,
+        parentRunId: null,
+        params: mergedParams,
+        status: 'queued',
+        queuedAt: Date.now(),
+        triggerContext,
+      });
+      return { outcome: 'queued' };
+    }
+
     if (policy === 'skip_if_running') {
+      // The trigger-level SKIP applies before queueing (spec). A queued row is
+      // an OUTSTANDING fire: without counting it, pipeline-overflow queueing
+      // would let this policy stack multiple outstanding fires.
       if (active > 0)
         return { outcome: 'skipped', reason: 'a run is already active for this trigger' };
+      if (countQueuedRunsForTrigger(db, trigger.id) > 0)
+        return { outcome: 'skipped', reason: 'a fire is already queued for this trigger' };
+      if (pipelineFull) return enqueue();
       return { outcome: 'started', runId: launch(trigger, triggerContext, mergedParams) };
     }
 
@@ -386,52 +477,40 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       if (active >= cap) {
         return { outcome: 'skipped', reason: `parallel cap of ${cap} reached` };
       }
+      // Trigger cap clear but pipeline full → QUEUE (the one path a `parallel`
+      // trigger enqueues). Conscious non-goal, mirroring #631's transition
+      // window: a LATER fire that finds pipeline room starts ahead of these
+      // rows — `parallel` offers no ordering guarantee.
+      if (pipelineFull) return enqueue();
       return { outcome: 'started', runId: launch(trigger, triggerContext, mergedParams) };
     }
 
     // `queue`: single-slot, FIFO. Start now ONLY if the slot is free AND nothing
-    // is already queued ahead — else enqueue a durable `queued` row (bounded).
-    // Checking the queue depth as well as the active count keeps FIFO across the
-    // boot window: a fire that arrives while queued rows still await draining
-    // must fall in BEHIND them, not jump the slot.
-    const queuedCount = countQueuedRunsForTrigger(db, trigger.id);
-    if (active > 0 || queuedCount > 0) {
-      if (queuedCount >= maxQueueDepth) {
-        return { outcome: 'skipped', reason: `queue is full (max ${maxQueueDepth} pending)` };
-      }
-      // Durable enqueue: a real `runs` row (`status = 'queued'`) that survives a
-      // restart, carrying its FIFO key + frozen fire-time context + params. No
-      // drive yet — `drainQueue` admits it when the slot frees.
-      createRun(db, {
-        // Non-null: fire() threw UnboundTriggerError above if it were null.
-        pipelineVersionId: trigger.pipelineVersionId as string,
-        ownerId: trigger.ownerId,
-        triggerId: trigger.id,
-        parentRunId: null,
-        params: mergedParams,
-        status: 'queued',
-        queuedAt: Date.now(),
-        triggerContext,
-      });
-      return { outcome: 'queued' };
+    // is already queued ahead AND the pipeline has room — else enqueue a durable
+    // `queued` row (bounded). Checking the queue depth as well as the active
+    // count keeps FIFO across the boot window: a fire that arrives while queued
+    // rows still await draining must fall in BEHIND them, not jump the slot.
+    if (active > 0 || countQueuedRunsForTrigger(db, trigger.id) > 0 || pipelineFull) {
+      return enqueue();
     }
     return { outcome: 'started', runId: launch(trigger, triggerContext, mergedParams) };
   }
 
   function recoverQueued(): void {
     if (stopped) return;
-    // Kick a drain for each trigger that has durable `queued` rows this instance
+    // Kick a drain for each PIPELINE that has durable `queued` rows this instance
     // has not yet picked up (a previous process enqueued them, or this one did
-    // before a crash). One drain admits the trigger's oldest queued runs up to its
-    // live concurrency capacity (#631); any remaining waiters cascade on settle
+    // before a crash). One drain admits fairly across the pipeline's triggers up
+    // to BOTH live capacities (#631/S6b); any remaining waiters cascade on settle
     // via `driveRun`'s `finally`. Run once at boot, AFTER the reconciler has
     // resumed `running` rows so the per-drain DB active-count already reflects
     // them (no double-admit).
-    const triggerIds = new Set<string>();
+    const pipelineIds = new Set<string>();
     for (const run of listRuns(db, { status: 'queued' })) {
-      if (run.triggerId !== null) triggerIds.add(run.triggerId);
+      const pipelineId = getPipelineIdForVersion(db, run.pipelineVersionId);
+      if (pipelineId !== null) pipelineIds.add(pipelineId);
     }
-    for (const triggerId of triggerIds) drainQueue(triggerId);
+    for (const pipelineId of pipelineIds) drainPipelineQueue(pipelineId);
   }
 
   async function whenIdle(): Promise<void> {
@@ -468,12 +547,12 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
    *
    * The whole body runs in a DETACHED microtask, so a fault here is NOT isolated
    * by the bus's `onListenerError` (which only wraps the synchronous publish call)
-   * — hence the local try/catch. `drainQueue`/`getTrigger` are best-effort: a
+   * — hence the local try/catch. The drain reads are best-effort: a
    * drain that fails (a DB blip) must be logged, never crash the process as an
-   * unhandled rejection. `drainQueue` re-checks `stopped` itself.
+   * unhandled rejection. `drainPipelineQueue` re-checks `stopped` itself.
    *
    * For a run THIS launcher drove, this drains REDUNDANTLY with `driveRun`'s
-   * `finally` (which already ran, synchronously). That is harmless — `drainQueue`
+   * `finally` (which already ran, synchronously). That is harmless — the drain
    * + `admitQueuedRun`'s `status = 'queued'` guard are idempotent, so the second
    * drain finds capacity full or the queue empty and admits nothing — and is the
    * accepted cost of a bus tap over a targeted callback: ONE hook covers every
@@ -488,8 +567,13 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
         try {
           if (stopped) return;
           const run = getRun(db, runId);
-          // A trigger-less run (a `call_pipeline` child) has no queue to drain.
-          if (run !== null && run.triggerId !== null) drainQueue(run.triggerId);
+          if (run === null) return;
+          // #5 S6b — drain by the run's PIPELINE, not its trigger: even a
+          // trigger-less run (a `call_pipeline` child) occupies a pipeline slot,
+          // so its terminalization can free capacity a queued fire from any of
+          // the pipeline's triggers is waiting on.
+          const pipelineId = getPipelineIdForVersion(db, run.pipelineVersionId);
+          if (pipelineId !== null) drainPipelineQueue(pipelineId);
         } catch (err) {
           deps.log?.error?.({ err, runId }, 'queue drain on run terminalization failed');
         }

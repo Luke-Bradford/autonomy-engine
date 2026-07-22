@@ -87,6 +87,11 @@ export const pipelines = sqliteTable(
     id: text('id').primaryKey(),
     ownerId: text('owner_id'),
     name: text('name').notNull(),
+    // #5 S6b — per-pipeline concurrency cap (max concurrent runs across ALL
+    // the pipeline's triggers; both-must-pass admission). NULL = uncapped —
+    // pre-S6b rows are genuinely uncapped, so the nullable ADD COLUMN backfill
+    // is truthful, not manufactured (#473's lesson does not apply).
+    concurrency: integer('concurrency'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },

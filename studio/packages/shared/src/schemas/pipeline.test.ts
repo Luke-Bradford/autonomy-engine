@@ -293,6 +293,7 @@ const pipeline = {
   id: 'pipe_1',
   ownerId: null,
   name: 'My pipeline',
+  concurrency: null,
   createdAt: 1700000000000,
   updatedAt: 1700000000000,
 };
@@ -305,6 +306,25 @@ describe('PipelineSchema', () => {
   it('rejects an empty name', () => {
     expect(() => PipelineSchema.parse({ ...pipeline, name: '' })).toThrow();
   });
+
+  // #5 S6b — per-pipeline concurrency cap (#1 D1 field, F8b enforcement).
+  it('defaults concurrency to null (uncapped) for a pre-S6b row without the key', () => {
+    const { concurrency, ...preS6b } = pipeline;
+    void concurrency;
+    expect(PipelineSchema.parse(preS6b).concurrency).toBeNull();
+  });
+
+  it('round-trips a positive-integer concurrency cap', () => {
+    expect(PipelineSchema.parse({ ...pipeline, concurrency: 3 }).concurrency).toBe(3);
+  });
+
+  it('READ path is lenient: a corrupted cap parses (use sites fail closed)', () => {
+    // The read schema must never brick GET/PATCH on a row corrupted out-of-band
+    // (older-export restore, manual SQL) — same read-tolerant/write-strict
+    // asymmetry as StrictNodeSchema (F13a) and trigger's ConcurrencySchema.
+    expect(PipelineSchema.parse({ ...pipeline, concurrency: 0 }).concurrency).toBe(0);
+    expect(PipelineSchema.parse({ ...pipeline, concurrency: 1.5 }).concurrency).toBe(1.5);
+  });
 });
 
 describe('NewPipelineSchema', () => {
@@ -314,6 +334,26 @@ describe('NewPipelineSchema', () => {
     void createdAt;
     void updatedAt;
     expect(NewPipelineSchema.parse(insert)).toEqual(insert);
+  });
+
+  // #5 S6b — WRITE path is strict: only a positive integer (or null) cap.
+  it('defaults concurrency to null when absent', () => {
+    expect(NewPipelineSchema.parse({ ownerId: null, name: 'p' }).concurrency).toBeNull();
+  });
+
+  it('accepts a positive-integer cap and an explicit null (clear)', () => {
+    expect(NewPipelineSchema.parse({ ownerId: null, name: 'p', concurrency: 2 }).concurrency).toBe(
+      2,
+    );
+    expect(
+      NewPipelineSchema.parse({ ownerId: null, name: 'p', concurrency: null }).concurrency,
+    ).toBeNull();
+  });
+
+  it('rejects zero, negative, and non-integer caps on write', () => {
+    expect(() => NewPipelineSchema.parse({ ownerId: null, name: 'p', concurrency: 0 })).toThrow();
+    expect(() => NewPipelineSchema.parse({ ownerId: null, name: 'p', concurrency: -1 })).toThrow();
+    expect(() => NewPipelineSchema.parse({ ownerId: null, name: 'p', concurrency: 1.5 })).toThrow();
   });
 });
 

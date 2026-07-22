@@ -537,6 +537,26 @@ export const PipelineSchema = z.object({
   id: z.string().min(1),
   ownerId: z.string().min(1).nullable(),
   name: z.string().min(1),
+  /**
+   * #5 S6b / #1 D1+F8b — per-PIPELINE concurrency cap: the max concurrent runs
+   * across ALL the pipeline's triggers (admission is BOTH per-trigger AND
+   * per-pipeline; overflow queues). `null` = uncapped — the default is a
+   * genuine absence-means-uncapped semantic for pre-S6b rows, not a
+   * manufactured value (#473's lesson does not apply).
+   *
+   * Lives on the MUTABLE pipeline row, NOT the immutable version doc: the cap
+   * is a live operational gate read FRESH at every admission (#631's
+   * precedent), must stay repairable (versions are immutable), and must not
+   * race across triggers bound to different versions of the same pipeline.
+   *
+   * READ path is deliberately LENIENT (`z.number()`): a row corrupted
+   * out-of-band (older-export restore, manual SQL) must not brick GET/PATCH —
+   * strictness lives on the WRITE path (`NewPipelineSchema`), and the
+   * launcher's use sites FAIL CLOSED on an invalid stored cap (same asymmetry
+   * as `StrictNodeSchema`/F13a and trigger's `ConcurrencySchema` vs
+   * `ConcurrencyWriteSchema`).
+   */
+  concurrency: z.number().nullable().default(null),
   createdAt: z.number().int(),
   updatedAt: z.number().int(),
 });
@@ -546,6 +566,10 @@ export const NewPipelineSchema = PipelineSchema.omit({
   id: true,
   createdAt: true,
   updatedAt: true,
+}).extend({
+  // WRITE shape: only a positive-integer cap (or null = uncapped) may be
+  // stored — see the read/write asymmetry note on `PipelineSchema.concurrency`.
+  concurrency: z.number().int().positive().nullable().default(null),
 });
 // z.input, not z.infer/z.output — see the note on NewConnection in
 // connection.ts for why every insert type in this package uses it.

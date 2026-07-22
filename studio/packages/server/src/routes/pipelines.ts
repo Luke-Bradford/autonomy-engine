@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { z } from 'zod';
 import {
   NewPipelineSchema,
   NewPipelineVersionSchema,
@@ -20,6 +21,17 @@ import { exportPipeline } from '../portability/index.js';
 
 /** `ownerId` is stamped from `request.principal`, never client-supplied. */
 const PipelineWriteBodySchema = NewPipelineSchema.omit({ ownerId: true });
+
+/**
+ * PATCH body: like the write shape but with NO `.default()` on `concurrency` —
+ * `.partial()` over a defaulted field still APPLIES the default, so a rename
+ * PATCH would silently manufacture `concurrency: null` and clear the cap
+ * (#473's shape: an absent fact must never become a value). Absent = preserve;
+ * explicit `null` = clear; the positive-int write rule still holds.
+ */
+const PipelinePatchBodySchema = PipelineWriteBodySchema.extend({
+  concurrency: z.number().int().positive().nullable(),
+}).partial();
 
 /** `pipelineId` comes from the `:id` route param, never the body. */
 const PipelineVersionWriteBodySchema = NewPipelineVersionSchema.omit({ pipelineId: true });
@@ -54,7 +66,7 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
       'pipeline',
       request.params.id,
     );
-    const body = PipelineWriteBodySchema.partial().parse(request.body);
+    const body = PipelinePatchBodySchema.parse(request.body);
     const updated = updatePipeline(db, existing.id, body);
     if (!updated) throw new NotFoundError('pipeline', existing.id);
     return updated;
