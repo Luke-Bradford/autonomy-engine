@@ -599,7 +599,7 @@ describe('triggers routes', () => {
       expect(res.statusCode).toBe(400);
     });
 
-    it('rejects an unsupported interval > 1 (#550) with a helpful message', async () => {
+    it('rejects interval > 1 WITHOUT a startTime anchor (#550) with a helpful message', async () => {
       const res = await app.inject({
         method: 'POST',
         url: '/api/triggers',
@@ -611,6 +611,28 @@ describe('triggers routes', () => {
       });
       expect(res.statusCode).toBe(400);
       expect(JSON.stringify(res.json())).toContain('#550');
+    });
+
+    it('accepts interval > 1 WITH a startTime anchor (#550 every-N-period) and derives the base cron', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          ...triggerBody(pipelineVersionId),
+          schedule: null,
+          recurrence: {
+            frequency: 'day',
+            interval: 2,
+            schedule: { hours: [9] },
+            startTime: '2026-08-01T00:00:00Z',
+          },
+        },
+      });
+      expect(res.statusCode).toBe(201);
+      const body = res.json();
+      // The derived cron carries only the within-period pattern; interval gates fires.
+      expect(body.schedule).toBe('0 9 * * *');
+      expect(body.recurrence.interval).toBe(2);
     });
 
     // #5 S5b-2 (#549) — bounds authoring.

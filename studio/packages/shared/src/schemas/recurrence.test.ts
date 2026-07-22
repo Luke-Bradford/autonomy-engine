@@ -9,9 +9,10 @@ import {
 /**
  * #5 S5b-1/S5b-2 — the ADF recurrence MODEL, compiled to a cron string ("croner
  * under the hood"). This suite pins the compiler (the crux), the write-boundary
- * rules, and the S5b-2 (#549) `startTime`/`endTime` bounds. `timeZone` is deferred
- * (#552 — UTC-only would be inert surface); `interval > 1` is #550 — both refused
- * here rather than silently mis-compiled.
+ * rules, and the S5b-2 (#549) `startTime`/`endTime` bounds. `interval > 1` (#550)
+ * is now accepted (startTime-anchored, capped) — the compiler still emits only the
+ * within-period pattern; the server stepping calculator gates the periods. `timeZone`
+ * is still deferred (#552 — UTC-only would be inert surface).
  */
 
 const base = (over: Partial<Recurrence> = {}): Recurrence => ({
@@ -83,9 +84,35 @@ describe('RecurrenceWriteSchema — the write-boundary rules', () => {
     expect(parsed.interval).toBe(1);
   });
 
-  it('rejects interval > 1 (#550 — not cron-expressible without a stepping calculator)', () => {
+  it('accepts interval > 1 WHEN anchored by startTime (#550 — every-N-period stepping)', () => {
+    // interval>1 is "every N periods", faithfully computed by the server stepping
+    // calculator (not cron-expressible). It is startTime-ANCHORED (which period is
+    // period 0), so an anchor is mandatory.
+    expect(ok(base({ interval: 2, startTime: '2026-08-01T00:00:00Z' }))).toBe(true);
+    expect(
+      ok(
+        base({
+          frequency: 'week',
+          interval: 3,
+          schedule: { weekDays: [1] },
+          startTime: '2026-08-01T00:00:00Z',
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects interval > 1 WITHOUT startTime (#550 — no anchor means no defined period 0)', () => {
     expect(ok(base({ interval: 2 }))).toBe(false);
-    expect(err(base({ interval: 2 }))).toMatch(/#550/);
+    expect(err(base({ interval: 2 }))).toMatch(/startTime/);
+    // interval === 1 needs no anchor (every period fires; nothing to anchor).
+    expect(ok(base({ interval: 1 }))).toBe(true);
+  });
+
+  it('rejects interval above the MAX cap (#550 — bounds the stepping calculator)', () => {
+    expect(ok(base({ interval: 1001, startTime: '2026-08-01T00:00:00Z' }))).toBe(false);
+    expect(err(base({ interval: 1001, startTime: '2026-08-01T00:00:00Z' }))).toMatch(/1000/);
+    // The cap boundary itself is accepted.
+    expect(ok(base({ interval: 1000, startTime: '2026-08-01T00:00:00Z' }))).toBe(true);
   });
 
   it('requires weekDays for a weekly recurrence (a week with no day is not cron-expressible)', () => {

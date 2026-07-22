@@ -15,13 +15,14 @@ import { z } from 'zod';
  *
  * ## v1 scope (deliberate, documented — not silent cuts)
  *
- * - **`interval` is fixed at 1** (#550). `interval > 1` ("every N periods") is not
- *   faithfully cron-expressible: day/week stepping has no cron form, and
- *   minute/hour/month cron-step syntax is period-start-anchored (not
- *   `startTime`-anchored as ADF defines it), so accepting it would silently change
- *   the series' meaning.
- *   The common "every N minutes/hours" cases are authored via explicit `schedule`
- *   enumeration (`minutes: [0,15,30,45]`) or the raw-cron escape hatch.
+ * - **`interval > 1` ("every N periods") is server-COMPUTED, not cron-compiled**
+ *   (#550, shipped). It is not faithfully cron-expressible (day/week stepping has no
+ *   cron form; minute/hour/month cron-step syntax is period-GRID-anchored, not
+ *   `startTime`-anchored as the semantics require), so `recurrenceToCron` still
+ *   compiles ONLY the within-period pattern (interval is ignored by the compiler)
+ *   and the server's `nextOccurrence` stepping calculator gates fires to the
+ *   qualifying periods. Write rules: `interval > 1` REQUIRES `startTime` (the
+ *   anchor that defines period 0) and is capped at `MAX_RECURRENCE_INTERVAL`.
  * - **`startTime`/`endTime` bounds land in S5b-2** (#549): a half-open window
  *   `[startTime, endTime)`, threaded to croner (`startAt`/`stopAt`) by the firing
  *   chain (`nextOccurrence`) so the bounds actually gate firing rather than being
@@ -34,6 +35,17 @@ import { z } from 'zod';
 
 export const RecurrenceFrequencySchema = z.enum(['minute', 'hour', 'day', 'week', 'month']);
 export type RecurrenceFrequency = z.infer<typeof RecurrenceFrequencySchema>;
+
+/**
+ * The largest `interval` a recurrence may author (#550). "Every N periods" is
+ * computed by the server stepping calculator, which probes forward for the next
+ * qualifying period; an unbounded interval would let a schedule whose qualifying
+ * periods never contain a valid occurrence (e.g. the 31st every 1000 months) probe
+ * arbitrarily far. A generous cap (≈83 years of monthly periods) covers every real
+ * cadence while keeping the calculator's lookahead bounded. Write-boundary only —
+ * the lenient read shape stays uncapped (see `RecurrenceSchema`).
+ */
+export const MAX_RECURRENCE_INTERVAL = 1000;
 
 /**
  * The ADF "advanced schedule" sub-object: which minutes/hours/week-days/
@@ -116,13 +128,30 @@ const ALL_SCHEDULE_FIELDS: ReadonlyArray<keyof RecurrenceSchedule> = [
  * Shared so a client pre-validates identically to the server.
  */
 export const RecurrenceWriteSchema = RecurrenceSchema.superRefine((r, ctx) => {
-  if (r.interval !== 1) {
+  // #550 — "every N periods" stepping. `interval > 1` is NOT faithfully
+  // cron-expressible (day/week stepping has no cron form; minute/hour/month
+  // cron-step syntax is period-GRID-anchored, not `startTime`-anchored as the
+  // recurrence semantics require), so the server computes it with a stepping
+  // calculator (`nextOccurrence`'s `step`). Two write-boundary rules keep it
+  // well-defined:
+  //   1. It must be `startTime`-ANCHORED — "every 2 weeks" is meaningless without
+  //      knowing which period is period 0. So `interval > 1` REQUIRES `startTime`.
+  //   2. It is capped at `MAX_RECURRENCE_INTERVAL` — an unbounded interval would
+  //      let the calculator probe unboundedly far for the next qualifying period.
+  if (r.interval > MAX_RECURRENCE_INTERVAL) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['interval'],
+      message: `interval must be at most ${MAX_RECURRENCE_INTERVAL} — a larger "every N periods" is not supported (#550)`,
+    });
+  }
+  if (r.interval > 1 && r.startTime === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['startTime'],
       message:
-        'interval must be 1 in v1 — "every N periods" is not yet supported (#550). Author the ' +
-        'individual times via `schedule` (e.g. minutes: [0,15,30,45]) or use a raw cron `schedule`.',
+        'interval > 1 ("every N periods") requires a startTime anchor — it defines which ' +
+        'period is period 0 (#550). Set startTime, or use interval: 1.',
     });
   }
 

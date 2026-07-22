@@ -10,7 +10,12 @@ import { armWakeup } from '../repo/scheduled-wakeups.js';
 import type { Db } from '../repo/types.js';
 import { UnboundTriggerError, type FireContext, type FireResult } from '../run/launcher.js';
 import type { WakeupFireResult, WakeupHandler } from './alarms.js';
-import { InvalidScheduleError, nextOccurrence, type OccurrenceBounds } from './recurrence.js';
+import {
+  InvalidScheduleError,
+  nextOccurrence,
+  type OccurrenceBounds,
+  type OccurrenceStep,
+} from './recurrence.js';
 // The log seam is byte-identical to the cron reconciler's and lives beside it —
 // imported (type-only, erased at runtime) rather than re-declared, exactly as
 // `alarms.ts` imports it, and so it does NOT form a runtime cycle with the value
@@ -96,6 +101,19 @@ export const ScheduleTickRefSchema = z.object({
   schedule: z.string().min(1),
   startTime: z.string().datetime().optional(),
   endTime: z.string().datetime().optional(),
+  /**
+   * #5 S5b (#550) — the recurrence `interval` when > 1, as a decimal string
+   * (`WakeupRefSchema` is a record of strings). Carried because an interval edit
+   * leaves the compiled cron (`schedule`) IDENTICAL — `recurrenceToCron` ignores
+   * interval (it is a firing-time GATE, not part of the pattern) — so a bare
+   * schedule + bounds compare would miss it and keep firing on the old cadence.
+   * OMITTED for `interval === 1` (the common case), so a row armed before #550 is
+   * byte-identical to today's ref and stays fresh on deploy — the same
+   * optional-for-back-compat discipline the S5b-2 bounds keys use. `frequency` is
+   * NOT carried: it always changes the compiled cron, so a frequency edit is
+   * already caught by the `schedule` compare.
+   */
+  interval: z.string().regex(/^\d+$/).optional(),
 });
 export type ScheduleTickRef = z.infer<typeof ScheduleTickRefSchema>;
 
@@ -126,6 +144,9 @@ export function buildScheduleTickRef(trigger: Trigger): ScheduleTickRef {
   const r = trigger.recurrence;
   if (r?.startTime !== undefined) ref.startTime = r.startTime;
   if (r?.endTime !== undefined) ref.endTime = r.endTime;
+  // #550 — carry `interval` ONLY when it changes firing (> 1); interval 1 omits it
+  // to stay byte-identical to a pre-#550 ref (so old pending rows stay fresh).
+  if (r !== null && r.interval > 1) ref.interval = String(r.interval);
   return ref;
 }
 
@@ -141,7 +162,8 @@ export function isRefFresh(trigger: Trigger, ref: ScheduleTickRef): boolean {
   return (
     current.schedule === ref.schedule &&
     current.startTime === ref.startTime &&
-    current.endTime === ref.endTime
+    current.endTime === ref.endTime &&
+    current.interval === ref.interval
   );
 }
 
@@ -158,6 +180,26 @@ export function scheduleBounds(trigger: Trigger): OccurrenceBounds {
   if (r?.startTime !== undefined) bounds.startAt = Date.parse(r.startTime);
   if (r?.endTime !== undefined) bounds.stopAt = Date.parse(r.endTime);
   return bounds;
+}
+
+/**
+ * #5 S5b (#550) — the "every N periods" stepping descriptor for `nextOccurrence`,
+ * or `undefined` when the recurrence fires every period (`interval <= 1`, or a
+ * raw-cron trigger with no recurrence — the pre-#550 base case). The anchor is the
+ * recurrence's `startTime` (the write schema REQUIRES it for `interval > 1`, so a
+ * write-valid recurrence always resolves a finite anchor); a corrupt/imported row
+ * lacking it yields `NaN`, which `nextOccurrence` fails closed on. Shared with the
+ * reconciler so seed + re-arm step identically. `Date.parse` is total on the
+ * `z.string().datetime()`-validated `startTime`.
+ */
+export function recurrenceStep(trigger: Trigger): OccurrenceStep | undefined {
+  const r = trigger.recurrence;
+  if (r === null || r.interval <= 1) return undefined;
+  return {
+    frequency: r.frequency,
+    interval: r.interval,
+    anchorEpochMs: r.startTime !== undefined ? Date.parse(r.startTime) : Number.NaN,
+  };
 }
 
 /** A schedulable trigger — one `isSchedulable` has proven carries a non-null
@@ -221,9 +263,10 @@ export function createScheduleTickHandler(deps: ScheduleTickDeps): WakeupHandler
       // anything durable.
       const schedule = trigger.schedule;
       const bounds = scheduleBounds(trigger);
+      const step = recurrenceStep(trigger);
       let next: number | null;
       try {
-        next = nextOccurrence(schedule, delivery.firedAt, bounds);
+        next = nextOccurrence(schedule, delivery.firedAt, bounds, step);
       } catch (err) {
         if (err instanceof InvalidScheduleError) {
           // Settle + stop. Never re-arm (there is no valid next time) and never
