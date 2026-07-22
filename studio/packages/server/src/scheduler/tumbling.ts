@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   SubstituteError,
   TERMINAL_RUN_EVENT,
+  windowSizeSeconds,
   type ScheduledWakeup,
   type Trigger,
   type WindowConfig,
@@ -22,6 +23,7 @@ import {
   listWindowStates,
   retryDueWindow,
   retryWindow,
+  supersedeWindow,
   type TumblingWindowStateRow,
   type WindowKey,
 } from '../repo/tumbling-windows.js';
@@ -169,6 +171,27 @@ import type { SchedulerLog } from './scheduler.js';
  * counts). On `retryDue` the window re-enters the oldest-first scan, so a
  * retried (oldest) window takes the next slot — the ADF order.
  *
+ * ## #5 S11d — SELF-dependency (opt-in via `window.selfDependency`) + the
+ * stale-epoch disposition
+ *
+ * A trigger with `selfDependency {offsetInSeconds, sizeInSeconds?}` gates
+ * each window on its own PAST windows: the dependency interval's same-epoch
+ * windows must all be `succeeded` (or dispositioned — see
+ * `dependencySatisfied` for the full rule set: pre-grid vacuous, skipped =
+ * satisfied via the trigger's own catch-up disposition, `failed` blocks until
+ * a retry re-drives). Blocked windows stay `waiting` IN WINDOW STATE — no
+ * run row, no alarm — and every materialize scan walks PAST them (keyset
+ * cursors, so a blocked front can never starve a ready tail). Liveness rides
+ * the existing kicks: a dependency's success is a run-terminal event, so the
+ * completion tap re-materializes the trigger; sync pass 3's stranded-waiting
+ * probe and boot reconcile cover edits/restarts.
+ *
+ * The stale-epoch DISPOSITION (`supersedeStaleEpochWindows`) closes S9-S11c's
+ * documented debris hole: old-epoch `waiting`/`retry_pending` rows now fold
+ * TERMINAL (`window.superseded`) in sync pass 3 + boot reconcile
+ * (enabled-agnostic at boot). Old-epoch CURSOR rows remain inert until the
+ * trigger's delete CASCADE — they gate nothing.
+ *
  * ## Deliberate non-behaviours (v1)
  *
  * - `runWindows` do NOT gate tumbling fires (unlike schedule ticks): a
@@ -178,7 +201,6 @@ import type { SchedulerLog } from './scheduler.js';
  * - `${trigger.windowStart/End}` (S11b) SHIPPED: `materializeOne` freezes the
  *   window bounds into the fire context; a tumbling trigger's param bindings
  *   (the one legal surface — context-scoped at save) resolve them fire-time.
- * - No self-dependency (S11d). Per-window RETRY (S11c) SHIPPED — see above.
  * - For a CAP-LESS trigger, LIVE overflow windows DO materialize into the S6
  *   durable admission queue (a `queued` run row each, bounded by the
  *   per-trigger depth cap). This brushes the spec's "blocked/backfill windows
@@ -188,9 +210,9 @@ import type { SchedulerLog } from './scheduler.js';
  *   trigger changes behavior. Forward-only live flow produces ≤1 new window
  *   per interval, so the cap-less queue depth stays O(pipeline slowness). A
  *   conscious, documented tradeoff — not an accident.
- * - Old-epoch `waiting` windows (a geometry edit mid-drain) and old-epoch
- *   cursor rows stay INERT debris until the trigger's delete CASCADE — a
- *   later S11 slice's disposition pass owns anything smarter.
+ * - A dependency-blocked OLDEST backfill window holds the serial backfill
+ *   drain (see the gate's comment) — deliberate: the gate's whole point is
+ *   serial oldest-first order.
  */
 
 export const WINDOW_DUE_KIND = 'window_due';
@@ -302,17 +324,13 @@ export function windowConfigEpoch(config: WindowConfig): string {
     .slice(0, 16);
 }
 
-const SIZE_MS: Record<WindowConfig['frequency'], number> = {
-  minute: 60_000,
-  hour: 3_600_000,
-  day: 86_400_000,
-};
-
 /** Fixed window size in ms — total for every schema-valid config (the
  * frequencies are all fixed-duration UTC units; that is WHY month/week are
- * excluded from `WindowFrequencySchema`). */
+ * excluded from `WindowFrequencySchema`). Delegates to the shared
+ * `windowSizeSeconds` (#5 S11d) so the frequency→duration map has ONE home
+ * (the write-boundary span caps use the same numbers). */
 export function windowSizeMs(config: WindowConfig): number {
-  return SIZE_MS[config.frequency] * config.interval;
+  return windowSizeSeconds(config) * 1000;
 }
 
 export interface WindowOccurrence {
@@ -536,10 +554,77 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
    * every later window would refuse identically this pass), `'continue'`
    * otherwise.
    */
+  /**
+   * #5 S11d — is `row`'s self-dependency satisfied? A window with
+   * `window.selfDependency` materializes only after every same-epoch window
+   * intersecting `[start + offset, start + offset + size)` reaches
+   * `succeeded` — with the DISPOSITION rule: a dependency window the trigger
+   * itself permanently dispositioned counts as satisfied. Concretely, per
+   * grid position of the interval:
+   *
+   * - row exists → satisfied iff `succeeded` or `superseded` (a geometry
+   *   edit's disposition — the same class as a skip; matters after a REVERT,
+   *   when superseded rows are current-epoch again). `failed` blocks until a
+   *   retry re-drives it (ADF's rerun-wait semantic — visible in window
+   *   state, never silent); `waiting`/`running`/`retry_pending` block until
+   *   they resolve.
+   * - no row → satisfied iff the trigger already dispositioned that window:
+   *   for a backfill-opted trigger, `startMs < cursor` (the cursor is the
+   *   EXCLUSIVE disposition boundary — everything below it is created or
+   *   deliberately skipped; `null` cursor = nothing dispositioned yet, the
+   *   pending backfill pass will create it); for a forward-only trigger, the
+   *   window CLOSED (`endMs <= now`) — the ≤1-late chain creates rows
+   *   strictly in window order, so a closed no-row window is exactly a
+   *   permanently-skipped one, and a dependent's row cannot even exist while
+   *   its dependency's overdue fire is still pending.
+   * - pre-grid positions (`k < 0` — the span reaches before window 0) are
+   *   vacuously satisfied: no such window can ever exist (without this the
+   *   chain would deadlock at its own origin).
+   *
+   * The no-row check is ARITHMETIC (grid count vs rows found, then one
+   * boundary test on the LARGEST missing position — vacuity is monotone:
+   * older ⇒ more dispositioned), so a stored-lenient giant span costs one
+   * bounded range query, not an O(span) grid walk.
+   */
+  function dependencySatisfied(trigger: TumblingTrigger, row: TumblingWindowStateRow): boolean {
+    const dep = trigger.window.selfDependency;
+    if (dep === undefined) return true;
+    const size = windowSizeMs(trigger.window);
+    const start0 = Date.parse(trigger.window.startTime);
+    const wStart = Date.parse(row.windowStart);
+    const iStart = wStart + dep.offsetInSeconds * 1000;
+    const iEnd = iStart + (dep.sizeInSeconds !== undefined ? dep.sizeInSeconds * 1000 : size);
+    // Grid positions intersecting [iStart, iEnd): smallest k whose END is
+    // after iStart (floor handles the aligned case exactly), largest k whose
+    // START is before iEnd — both clamped to the grid (k >= 0).
+    const kLo = Math.max(0, Math.floor((iStart - start0) / size));
+    const kHi = Math.ceil((iEnd - start0) / size) - 1;
+    if (kHi < kLo) return true; // wholly pre-grid
+    const rows = listWindowStates(db, {
+      triggerId: trigger.id,
+      configEpoch: row.configEpoch,
+      windowStartGte: new Date(start0 + kLo * size).toISOString(),
+      windowStartLte: new Date(start0 + kHi * size).toISOString(),
+    });
+    for (const r of rows) {
+      if (r.status !== 'succeeded' && r.status !== 'superseded') return false;
+    }
+    if (rows.length >= kHi - kLo + 1) return true; // every position has a row
+    // The largest missing position decides for all of them (monotone).
+    const have = new Set(rows.map((r) => Date.parse(r.windowStart)));
+    let k = kHi;
+    while (have.has(start0 + k * size)) k -= 1;
+    if (trigger.window.maxBackfillWindows !== undefined) {
+      const cursor = getBackfillCursor(db, trigger.id, row.configEpoch);
+      return cursor !== null && start0 + k * size < cursor;
+    }
+    return start0 + (k + 1) * size <= now();
+  }
+
   function materializeOne(
     trigger: TumblingTrigger,
     row: TumblingWindowStateRow,
-  ): 'continue' | 'stop' {
+  ): 'continue' | 'blocked' | 'stop' {
     const key = keyOf(row);
     // LINK-BEFORE-FIRE (single-fire under crash): an unlinked run whose
     // frozen `triggerContext.scheduledTime` is this window's end AND whose
@@ -557,6 +642,21 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
         settleIfTerminal(key, existingRunId, trigger);
       }
       return 'continue';
+    }
+    // #5 S11d — the dependency gate, AFTER the link-heal (a crash-orphaned
+    // run already consumed the dependency at its original fire — healing the
+    // link is recording a fact, not admitting new work) and BEFORE the fire.
+    // A blocked window stays `waiting` IN WINDOW STATE — no run row (the
+    // codex-hardened "blocked windows live in window state, NOT as full
+    // runs") — and the scans walk PAST it (`'blocked'` ≠ `'stop'`): with a
+    // multi-window offset, a younger window's dependency can be met while an
+    // older one's is not (ADF: windows run when THEIR deps are met).
+    if (!dependencySatisfied(trigger, row)) {
+      log.debug(
+        { triggerId: trigger.id, windowStart: row.windowStart },
+        'tumbling: window dependency-blocked; stays waiting',
+      );
+      return 'blocked';
     }
     let result: FireResult;
     try {
@@ -648,12 +748,17 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
    *   stranding anomaly — warning on every completion-tap pass of a healthy
    *   bulk drain would be noise, the inverse no-silent-caps failure.
    *
-   * Termination: every row `materializeOne` returns `'continue'` for has left
-   * the waiting-unlinked set (linked, fired+linked, or lost to a concurrent
-   * writer), so the refetch loop strictly shrinks and needs no artificial
-   * bound; `'stop'` bails the pass. No over-cap EXECUTION is possible even
-   * around a crash orphan: the LAUNCHER counts the orphan's run
-   * (`countActiveRunsForTrigger`), so fires past it come back run-level
+   * Termination (#5 S11d re-argued): the scan is a KEYSET walk — the cursor
+   * strictly advances past every processed row, so the loop ends at the key
+   * space's edge regardless of outcome. The keyset replaced the original
+   * fixed-front refetch ("every `'continue'` row has left the waiting set")
+   * because a dependency-`'blocked'` row does NOT leave the set — a
+   * fixed-front refetch would rescan the same blocked front forever (a
+   * genuine infinite loop) and never reach a ready row behind it (with a
+   * multi-window offset, younger windows can be ready while older ones are
+   * blocked). `'stop'` still bails the pass. No over-cap EXECUTION is
+   * possible even around a crash orphan: the LAUNCHER counts the orphan's
+   * run (`countActiveRunsForTrigger`), so fires past it come back run-level
    * `queued` — at worst one extra window links a QUEUED run for a pass. The
    * scan usually link-heals the orphan first (its window tends to be the
    * oldest waiting row), but `backfillPass` can create OLDER windows in the
@@ -662,6 +767,7 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
    */
   function materializeCapped(trigger: TumblingTrigger, cap: number): void {
     const epoch = windowConfigEpoch(trigger.window);
+    let cursor: string | undefined;
     for (;;) {
       if (stopped) return;
       const running = listWindowStates(db, {
@@ -676,19 +782,25 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
         );
         return;
       }
+      // Page bound = free capacity (each page fires at most that many, so the
+      // cap cannot overshoot within a page); blocked rows in the page consume
+      // cursor, not capacity, and the next iteration recounts + walks on.
+      // Recounting per iteration also covers link-heals of already-terminal
+      // orphans, which settle without consuming capacity (the pre-S11d
+      // refetch's under-fill rationale, kept).
       const waiting = listWindowStates(db, {
         triggerId: trigger.id,
         configEpoch: epoch,
         status: 'waiting',
         unlinked: true,
+        windowStartGt: cursor,
         limit: cap - running,
       });
       if (waiting.length === 0) return;
       for (const row of waiting) {
+        cursor = row.windowStart;
         if (materializeOne(trigger, row) === 'stop') return;
       }
-      // Recount and refetch: link-heals of already-terminal orphans settle
-      // without consuming capacity, so a single fetch could under-fill.
     }
   }
 
@@ -712,30 +824,43 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
       return;
     }
     const epoch = windowConfigEpoch(trigger.window);
-    // Fetch ONE past the batch bound so a full batch is distinguishable from a
-    // truncated one — a silent cap would read as "swept everything" when it
-    // didn't (the no-silent-caps rule; review WARNING on the first S9 pass).
-    const waiting = listWindowStates(db, {
-      triggerId: trigger.id,
-      configEpoch: epoch,
-      status: 'waiting',
-      unlinked: true,
-      origin: 'live',
-      limit: MATERIALIZE_BATCH + 1,
-    });
-    if (waiting.length > MATERIALIZE_BATCH) {
-      // Operator-visible: a backlog past the batch bound (e.g. persistent
-      // launcher refusals) is NOT dropped — the excess stays `waiting` and the
-      // next window fire / boot reconcile continues the sweep — but the
-      // truncation itself must be signalled, not silent.
-      log.warn(
-        { triggerId: trigger.id, batch: MATERIALIZE_BATCH },
-        'tumbling: stranded-window sweep truncated at the batch bound — more waiting windows remain (retried next pass/boot)',
-      );
-      waiting.length = MATERIALIZE_BATCH;
-    }
-    for (const row of waiting) {
-      if (materializeOne(trigger, row) === 'stop') return;
+    // #5 S11d — a KEYSET walk (`windowStartGt` cursor) bounded by FIRES, not
+    // fetched rows: a dependency-blocked row stays in the waiting set, so the
+    // old fixed-front fetch would rescan (and, past `MATERIALIZE_BATCH`
+    // blocked rows, permanently starve) the ready tail behind it. Blocked
+    // rows consume cursor only; `MATERIALIZE_BATCH` still bounds the work a
+    // single pass admits.
+    let fired = 0;
+    let cursor: string | undefined;
+    for (;;) {
+      const waiting = listWindowStates(db, {
+        triggerId: trigger.id,
+        configEpoch: epoch,
+        status: 'waiting',
+        unlinked: true,
+        origin: 'live',
+        windowStartGt: cursor,
+        limit: MATERIALIZE_BATCH,
+      });
+      if (waiting.length === 0) break;
+      for (const row of waiting) {
+        cursor = row.windowStart;
+        if (fired >= MATERIALIZE_BATCH) {
+          // Operator-visible: a backlog past the batch bound (e.g. persistent
+          // launcher refusals) is NOT dropped — the excess stays `waiting` and
+          // the next window fire / boot reconcile continues the sweep — but
+          // the truncation itself must be signalled, not silent (the
+          // no-silent-caps rule; review WARNING on the first S9 pass).
+          log.warn(
+            { triggerId: trigger.id, batch: MATERIALIZE_BATCH },
+            'tumbling: stranded-window sweep truncated at the batch bound — more waiting windows remain (retried next pass/boot)',
+          );
+          return;
+        }
+        const outcome = materializeOne(trigger, row);
+        if (outcome === 'stop') return;
+        if (outcome === 'continue') fired += 1;
+      }
     }
     // The backfill scan. The gate reads pure window state (`running` = linked
     // + unsettled — no run-table join); an unlinked crash orphan does NOT
@@ -758,6 +883,13 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
       );
       return;
     }
+    // #5 S11d — a dependency-`'blocked'` OLDEST backfill window holds the
+    // serial drain (deliberate, v1): the drain is strictly oldest-first, and
+    // with a self-dependency the oldest window's deps are below it — already
+    // dispositioned or drained ahead of it — so a persistent block here means
+    // a FAILED dependency, which is designed to hold until a retry re-drives
+    // it. Skipping ahead would trade that visible hold for out-of-order
+    // backfill under a gate whose whole point is serial order.
     materializeOne(trigger, backfillRow);
   }
 
@@ -916,9 +1048,9 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
    * lenient trigger read (#637 — a corrupt row settles, never throws;
    * `sync()`'s overdue heal re-drives after repair), terminal suppressions
    * for every stale case (the window stays `retry_pending`, healed by the
-   * overdue drive once the trigger is current again — or inert forever for
-   * stale-epoch debris, like its `waiting` siblings), the durable flip
-   * in-tx, and the run-spawning materialize in `afterCommit` only.
+   * overdue drive once the trigger is current again — or folded terminal by
+   * #5 S11d's stale-epoch disposition for old-epoch debris), the durable
+   * flip in-tx, and the run-spawning materialize in `afterCommit` only.
    */
   const retryHandler: WakeupHandler = {
     kind: WINDOW_RETRY_KIND,
@@ -942,12 +1074,12 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
       }
       if (windowConfigEpoch(trigger.window) !== ref.epoch) {
         // A geometry edit mid-interval: the window is old-epoch debris now —
-        // permanently `retry_pending` until S11d's disposition pass (the
+        // #5 S11d's disposition pass (sync + boot reconcile) folds it
+        // terminal (`window.superseded`); this alarm just settles. (The
         // settle-time epoch guard makes this reachable only for an edit
         // landing INSIDE the interval — ~86400s for write-boundary rows;
         // longer for a hand-edited over-cap interval, the same read-lenient
-        // tradeoff the cap documents). The same debris class as old-epoch
-        // `waiting` rows, dispositioned together.
+        // tradeoff the cap documents.)
         return { status: 'suppressed', reason: 'epoch_stale' };
       }
       const key: WindowKey = {
@@ -1004,6 +1136,47 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
       if (retryDueWindow(db, keyOf(row), row.attempt)) drove = true;
     }
     return drove;
+  }
+
+  /**
+   * #5 S11d — the stale-epoch DISPOSITION: fold every old-epoch `waiting` /
+   * `retry_pending` row of `trigger` terminal (`window.superseded`). A
+   * geometry edit mints a new epoch and re-covers the timeline under it; the
+   * old epoch's non-terminal rows are debris no scan will ever drive again
+   * (materialize and the overdue heal are current-epoch-scoped) — before this
+   * pass they sat inert forever. `running` rows are NOT touched: a live run
+   * settles its window through the normal completion path regardless of
+   * epoch. TERMINAL AND PERMANENT: a revert does not resurrect a superseded
+   * window (projection uniqueness refuses re-creation — the backfill cursor's
+   * one-way rule), and post-revert it satisfies dependents vacuously, as a
+   * dispositioned window. Runs in `sync()` pass 3 for every eligible trigger
+   * (BEFORE the early-continue and the unbound skip — disposition spawns no
+   * run, so it is safe unbound, the `driveOverdueRetries` argument) and in
+   * boot `reconcile()` enabled-agnostic (a DISABLED tumbling trigger still
+   * has a current epoch to compare against — the settle path's
+   * `isWindowConfigured` posture; a pause defers nothing here).
+   */
+  function supersedeStaleEpochWindows(trigger: TumblingTrigger): void {
+    const epoch = windowConfigEpoch(trigger.window);
+    let count = 0;
+    for (const status of ['waiting', 'retry_pending'] as const) {
+      for (const row of listWindowStates(db, {
+        triggerId: trigger.id,
+        configEpochNot: epoch,
+        status,
+      })) {
+        if (supersedeWindow(db, keyOf(row), epoch)) count += 1;
+      }
+    }
+    if (count > 0) {
+      // WARN, not debug — windows folded terminal without ever firing is an
+      // operator-relevant disposition (the S10 cursor-skip precedent:
+      // deliberate loss is signalled, never silent).
+      log.warn(
+        { triggerId: trigger.id, count },
+        'tumbling: superseded stale-epoch windows (geometry-edit debris folded terminal)',
+      );
+    }
   }
 
   function seed(trigger: TumblingTrigger): void {
@@ -1106,6 +1279,19 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
       } catch (err) {
         log.warn({ err, triggerId: trigger.id }, 'tumbling: overdue-retry drive failed — skipping');
       }
+      // #5 S11d — the stale-epoch disposition, ALSO before the early-continue
+      // below and the unbound skip: the debris a geometry edit leaves is
+      // old-epoch, so the current-epoch stranded probe never sees it (a plain
+      // no-backfill/no-cap trigger would early-continue right past it), and
+      // dispositioning spawns no run (safe unbound, like the drive above).
+      try {
+        supersedeStaleEpochWindows(trigger);
+      } catch (err) {
+        log.warn(
+          { err, triggerId: trigger.id },
+          'tumbling: stale-epoch disposition failed — skipping',
+        );
+      }
       if (!hasBackfill && trigger.window.maxConcurrentWindows === undefined && !droveRetries) {
         // #5 S11c — one more kick condition: stranded `waiting` windows of the
         // current epoch. Without it, a retry flipped to `waiting` during an
@@ -1199,6 +1385,26 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
         driveOverdueRetries(trigger);
       } catch (err) {
         log.error({ err, triggerId }, 'tumbling: reconcile failed to drive overdue retries');
+      }
+    }
+    // 1.75 (#5 S11d) — the stale-epoch disposition at boot, ENABLED-AGNOSTIC
+    // (`readWindowConfigured` reads disabled rows too): a disabled tumbling
+    // trigger still has a current epoch to compare against, and folding its
+    // old-epoch debris terminal spawns nothing — so a pause defers nothing
+    // here, symmetric with the settle path. Covers debris `sync()` never
+    // reaches (its pass runs for ENABLED triggers only).
+    for (const triggerId of new Set(
+      [
+        ...listWindowStates(db, { status: 'waiting' }),
+        ...listWindowStates(db, { status: 'retry_pending' }),
+      ].map((r) => r.triggerId),
+    )) {
+      const trigger = readWindowConfigured(triggerCache, triggerId);
+      if (trigger === null) continue; // corrupt/missing/mode-changed — no epoch to compare
+      try {
+        supersedeStaleEpochWindows(trigger);
+      } catch (err) {
+        log.error({ err, triggerId }, 'tumbling: reconcile failed to disposition stale windows');
       }
     }
     // 2 — stranded `waiting` windows of still-current triggers (crash between

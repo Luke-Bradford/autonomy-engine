@@ -28,6 +28,7 @@ import {
   completeWindow,
   retryDueWindow,
   retryWindow,
+  supersedeWindow,
   type WindowKey,
 } from '../../repo/tumbling-windows.js';
 import type { Db } from '../../repo/types.js';
@@ -908,17 +909,20 @@ describe('completion: bus tap + boot reconcile', () => {
       },
       debug: () => undefined,
     };
-    // Launcher refuses everything (full queue) — the backlog persists; only
-    // the truncation signal is under test.
-    const launcher = fakeLauncher(
-      Array.from({ length: 30 }, () => ({ outcome: 'skipped' as const, reason: 'queue is full' })),
-    );
+    // #5 S11d re-shaped the bound: the keyset scan is bounded by FIRES (a
+    // dependency-blocked row consumes cursor, not budget), so the truncation
+    // warn now signals "the pass admitted its full batch and more remains" —
+    // the launcher admits everything and the 26th window is the excess. (A
+    // launcher-refusal backlog signals through its own per-skip warn.)
+    const launcher = fakeLauncher();
     const service = createTumblingService({ db, arm: () => undefined, launcher, log });
     service.reconcile();
 
     expect(warns.some((m) => typeof m === 'string' && m.includes('truncated'))).toBe(true);
-    // Nothing dropped: every window is still durably `waiting` for later passes.
-    expect(listWindowStates(db, { triggerId: trigger.id, status: 'waiting' })).toHaveLength(26);
+    // Nothing dropped: the batch fired; the excess window is still durably
+    // `waiting` for later passes.
+    expect(launcher.fires).toHaveLength(25);
+    expect(listWindowStates(db, { triggerId: trigger.id, status: 'waiting' })).toHaveLength(1);
   });
 
   it('boot reconcile re-materializes a stranded waiting window (fires once)', () => {
@@ -946,7 +950,7 @@ describe('completion: bus tap + boot reconcile', () => {
     expect(getWindowState(db, key)?.runId).toBe('run-heal');
   });
 
-  it('boot reconcile leaves a STALE-epoch waiting window inert', () => {
+  it('boot reconcile DISPOSITIONS a stale-epoch waiting window (superseded, never fired — #5 S11d)', () => {
     const { db } = freshDb();
     const pv = seedVersion(db);
     const trigger = seedTumbling(db, { pipelineVersionId: pv });
@@ -968,8 +972,10 @@ describe('completion: bus tap + boot reconcile', () => {
     });
     service.reconcile();
 
+    // Pre-S11d the row stayed `waiting` forever (documented inert debris);
+    // the disposition pass now folds it terminal — still never fired.
     expect(launcher.fires).toHaveLength(0);
-    expect(getWindowState(db, key)?.status).toBe('waiting');
+    expect(getWindowState(db, key)?.status).toBe('superseded');
   });
 
   // #637 — `reconcile()` is called BARE at boot (`index.ts`), so a poison
@@ -1481,7 +1487,7 @@ describe('#5 S10 — backfill pass (sync)', () => {
     expect(listWindowStates(db, { triggerId: trigger.id })).toHaveLength(0);
   });
 
-  it('an epoch edit mid-drain backfills the NEW epoch fresh; old-epoch windows stay inert', () => {
+  it('an epoch edit mid-drain backfills the NEW epoch fresh; old-epoch waiting windows are superseded (#5 S11d)', () => {
     const { db } = freshDb();
     const pv = seedVersion(db);
     const trigger = seedTumbling(db, { pipelineVersionId: pv, window: BF10 });
@@ -1499,13 +1505,12 @@ describe('#5 S10 — backfill pass (sync)', () => {
     const newEpoch = windowConfigEpoch(edited);
     const newRows = listWindowStates(db, { triggerId: trigger.id, configEpoch: newEpoch });
     expect(newRows.map((r) => r.windowStart)).toEqual([iso(T0), iso(T0 + 30 * 60_000)]);
-    // Old-epoch waiting windows still exist, untouched (inert debris — S11's).
-    const oldWaiting = listWindowStates(db, {
-      triggerId: trigger.id,
-      configEpoch: oldEpoch,
-      status: 'waiting',
-    });
-    expect(oldWaiting.length).toBeGreaterThan(0);
+    // #5 S11d — the old epoch's waiting windows are DISPOSITIONED (terminal
+    // `superseded`), no longer inert debris; a running one (mid-drain) is
+    // untouched — its live run settles it through the normal path.
+    const oldRows = listWindowStates(db, { triggerId: trigger.id, configEpoch: oldEpoch });
+    expect(oldRows.filter((r) => r.status === 'waiting')).toHaveLength(0);
+    expect(oldRows.some((r) => r.status === 'superseded')).toBe(true);
   });
 
   it('disable → re-enable resumes the drain from the cursor (windows missed while disabled backfill)', () => {
@@ -3099,6 +3104,537 @@ describe('#5 S11c — per-trigger window retry', () => {
       // The window is NOT stranded: it stays retry_pending, and the overdue
       // heal drives it once the trigger is re-enabled (previous test).
       expect(getWindowState(db, key)?.status).toBe('retry_pending');
+    });
+  });
+});
+
+describe('#5 S11d — self-dependency + stale-epoch disposition', () => {
+  /** Geometry helper: a window row [T0+k*15m, T0+(k+1)*15m) in any status. */
+  function seedWindow(
+    db: Db,
+    trigger: Trigger,
+    k: number,
+    origin: 'live' | 'backfill' = 'live',
+  ): WindowKey {
+    const key = keyFor(trigger, T0 + k * MIN15);
+    createWindow(db, {
+      ...key,
+      windowEnd: iso(T0 + (k + 1) * MIN15),
+      geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+      origin,
+    });
+    return key;
+  }
+
+  /** Drive a seeded window to a terminal/held status via the guarded repo
+   * flips (fake run ids are fine — only `running` windows are re-derived from
+   * the run table, and these end elsewhere). */
+  function windowInStatus(
+    db: Db,
+    trigger: Trigger,
+    k: number,
+    status: 'waiting' | 'succeeded' | 'failed' | 'retry_pending' | 'superseded',
+  ): WindowKey {
+    const key = seedWindow(db, trigger, k);
+    if (status === 'waiting') return key;
+    if (status === 'superseded') {
+      if (!isTumblable(trigger)) throw new Error('fixture must be tumblable');
+      expect(supersedeWindow(db, key, windowConfigEpoch(trigger.window))).toBe(true);
+      return key;
+    }
+    expect(linkWindowRun(db, key, `run-w${k}`, 'fire')).toBe(true);
+    if (status === 'succeeded') {
+      expect(completeWindow(db, key, { status: 'succeeded', runId: `run-w${k}` })).toBe(true);
+    } else if (status === 'failed') {
+      expect(
+        completeWindow(db, key, { status: 'failed', runId: `run-w${k}`, runStatus: 'failure' }),
+      ).toBe(true);
+    } else {
+      expect(
+        retryWindow(db, key, {
+          runId: `run-w${k}`,
+          runStatus: 'failure',
+          attempt: 1,
+          nextAttemptAtMs: T0 + 10 * 60 * 60_000,
+        }),
+      ).toBe(true);
+    }
+    return key;
+  }
+
+  function service(db: Db, launcher = fakeLauncher(), nowMs = T0 + 4 * 60 * 60_000) {
+    return {
+      launcher,
+      service: createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher,
+        log: silentLog(),
+        now: () => nowMs,
+      }),
+    };
+  }
+
+  // Previous-window dependency: W_k depends on W_{k-1}.
+  const DEP_PREV: WindowConfig = { ...CONFIG, selfDependency: { offsetInSeconds: -900 } };
+  // Two windows back, one window long: W_k depends on W_{k-2} only.
+  const DEP_SKIP: WindowConfig = {
+    ...CONFIG,
+    selfDependency: { offsetInSeconds: -1800, sizeInSeconds: 900 },
+  };
+
+  describe('dependency gate (materialize-time predicate)', () => {
+    it('fires when the dependency window succeeded', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: DEP_PREV });
+      windowInStatus(db, trigger, 0, 'succeeded');
+      seedWindow(db, trigger, 1);
+      const { launcher, service: svc } = service(db);
+
+      svc.reconcile();
+
+      expect(launcher.contexts.map((c) => c?.scheduledTime)).toEqual([iso(T0 + 2 * MIN15)]);
+      expect(getWindowState(db, keyFor(trigger, T0 + MIN15))?.status).toBe('running');
+    });
+
+    it('the first window’s pre-grid dependency is vacuous (grid clamp — no deadlock at the chain origin)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: DEP_PREV });
+      seedWindow(db, trigger, 0);
+      const { launcher, service: svc } = service(db);
+
+      svc.reconcile();
+
+      expect(launcher.fires).toHaveLength(1);
+      expect(getWindowState(db, keyFor(trigger, T0))?.status).toBe('running');
+    });
+
+    it('blocks behind a FAILED dependency (ADF’s rerun-wait semantic — no fire, stays waiting in state)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: DEP_PREV });
+      windowInStatus(db, trigger, 0, 'failed');
+      seedWindow(db, trigger, 1);
+      const { launcher, service: svc } = service(db);
+
+      svc.reconcile();
+
+      expect(launcher.fires).toHaveLength(0);
+      expect(getWindowState(db, keyFor(trigger, T0 + MIN15))?.status).toBe('waiting');
+    });
+
+    it('blocks behind a retry_pending dependency (it may still succeed — wait for the re-drive)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: DEP_PREV });
+      windowInStatus(db, trigger, 0, 'retry_pending');
+      seedWindow(db, trigger, 1);
+      // now BEFORE the stored retry due instant, so the reconcile heal does
+      // not re-drive W0 out from under the assertion.
+      const { launcher, service: svc } = service(db, fakeLauncher(), T0 + 60 * 60_000);
+
+      svc.reconcile();
+
+      expect(launcher.fires).toHaveLength(0);
+      expect(getWindowState(db, keyFor(trigger, T0 + MIN15))?.status).toBe('waiting');
+    });
+
+    it('a dependency the chain will still drive blocks; the dependent fires once it succeeds (tap liveness)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: DEP_PREV });
+      // W0 waiting, W1 waiting: the scan fires W0 (vacuous pre-grid dep) and
+      // W1 blocks behind the now-RUNNING W0.
+      seedWindow(db, trigger, 0);
+      seedWindow(db, trigger, 1);
+      const { launcher, service: svc } = service(db);
+
+      svc.reconcile();
+
+      expect(launcher.fires).toHaveLength(1);
+      expect(getWindowState(db, keyFor(trigger, T0))?.status).toBe('running');
+      expect(getWindowState(db, keyFor(trigger, T0 + MIN15))?.status).toBe('waiting');
+
+      // W0 succeeds → the settle path’s materialize kick fires W1.
+      expect(completeWindow(db, keyFor(trigger, T0), { status: 'succeeded', runId: 'run-1' })).toBe(
+        true,
+      );
+      svc.reconcile();
+      expect(launcher.fires).toHaveLength(2);
+      expect(getWindowState(db, keyFor(trigger, T0 + MIN15))?.status).toBe('running');
+    });
+
+    it('a permanently-skipped no-row dependency is vacuously satisfied (forward-only disposition)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: DEP_SKIP });
+      // W2 depends on W0 only — W0 was skipped by the no-backfill policy (no
+      // row, long closed). The dependency inherits the trigger’s own
+      // disposition of missed windows.
+      seedWindow(db, trigger, 2);
+      const { launcher, service: svc } = service(db);
+
+      svc.reconcile();
+
+      expect(launcher.fires).toHaveLength(1);
+      expect(getWindowState(db, keyFor(trigger, T0 + 2 * MIN15))?.status).toBe('running');
+    });
+
+    it('a current-epoch SUPERSEDED dependency satisfies (the revert interaction — dispositioned, not pending)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: DEP_PREV });
+      windowInStatus(db, trigger, 0, 'superseded');
+      seedWindow(db, trigger, 1);
+      const { launcher, service: svc } = service(db);
+
+      svc.reconcile();
+
+      expect(launcher.fires).toHaveLength(1);
+      expect(getWindowState(db, keyFor(trigger, T0 + MIN15))?.status).toBe('running');
+    });
+
+    it('out-of-order readiness: a blocked older window does not starve a ready younger one', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: DEP_SKIP });
+      windowInStatus(db, trigger, 0, 'failed'); // blocks W2
+      windowInStatus(db, trigger, 1, 'succeeded'); // satisfies W3
+      seedWindow(db, trigger, 2);
+      seedWindow(db, trigger, 3);
+      const { launcher, service: svc } = service(db);
+
+      svc.reconcile();
+
+      // W2 is dependency-blocked; W3 fires past it (ADF: windows run when
+      // THEIR deps are met, not in strict sequence).
+      expect(launcher.contexts.map((c) => c?.scheduledTime)).toEqual([iso(T0 + 4 * MIN15)]);
+      expect(getWindowState(db, keyFor(trigger, T0 + 2 * MIN15))?.status).toBe('waiting');
+      expect(getWindowState(db, keyFor(trigger, T0 + 3 * MIN15))?.status).toBe('running');
+    });
+
+    it('a blocked front LARGER than the materialize batch does not starve the ready tail (keyset regression)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      // W_k depends on W_{k-27}: 26 failed deps block W27..W52; W26 succeeded
+      // readies W53. The blocked front (26) exceeds MATERIALIZE_BATCH (25) —
+      // a fixed-front fetch would rescan the same blocked rows forever and
+      // never reach W53.
+      const config: WindowConfig = {
+        ...CONFIG,
+        selfDependency: { offsetInSeconds: -27 * 900, sizeInSeconds: 900 },
+      };
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: config });
+      for (let k = 0; k < 26; k += 1) windowInStatus(db, trigger, k, 'failed');
+      windowInStatus(db, trigger, 26, 'succeeded');
+      for (let k = 27; k <= 53; k += 1) seedWindow(db, trigger, k);
+      const { launcher, service: svc } = service(db, fakeLauncher(), T0 + 24 * 60 * 60_000);
+
+      svc.reconcile();
+
+      expect(launcher.contexts.map((c) => c?.scheduledTime)).toEqual([iso(T0 + 54 * MIN15)]);
+      expect(getWindowState(db, keyFor(trigger, T0 + 53 * MIN15))?.status).toBe('running');
+      expect(getWindowState(db, keyFor(trigger, T0 + 27 * MIN15))?.status).toBe('waiting');
+    });
+
+    it('capped materialize skips a blocked front and fills capacity from the ready tail (no refetch loop)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const config: WindowConfig = { ...DEP_SKIP, maxConcurrentWindows: 1 };
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: config });
+      windowInStatus(db, trigger, 0, 'failed'); // blocks W2
+      windowInStatus(db, trigger, 1, 'succeeded'); // readies W3
+      seedWindow(db, trigger, 2);
+      seedWindow(db, trigger, 3);
+      const { launcher, service: svc } = service(db);
+
+      svc.reconcile();
+
+      expect(launcher.contexts.map((c) => c?.scheduledTime)).toEqual([iso(T0 + 4 * MIN15)]);
+      expect(getWindowState(db, keyFor(trigger, T0 + 2 * MIN15))?.status).toBe('waiting');
+    });
+
+    it('backfill trigger: a no-row dependency below the cursor is dispositioned (fires); above it blocks', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const config: WindowConfig = { ...DEP_SKIP, maxBackfillWindows: 2 };
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: config });
+      if (!isTumblable(trigger)) throw new Error('fixture must be tumblable');
+      const epoch = windowConfigEpoch(trigger.window);
+      seedWindow(db, trigger, 2); // dep = W0 (no row)
+
+      // Cursor NOT past W0’s start → W0 is still the backfill pass’s to
+      // create → the dependent waits for it.
+      advanceBackfillCursor(db, trigger.id, epoch, T0);
+      const first = service(db);
+      first.service.reconcile();
+      expect(first.launcher.fires).toHaveLength(0);
+      expect(getWindowState(db, keyFor(trigger, T0 + 2 * MIN15))?.status).toBe('waiting');
+
+      // Cursor past W0’s start → W0 was deliberately skipped (dispositioned)
+      // → vacuously satisfied.
+      advanceBackfillCursor(db, trigger.id, epoch, T0 + 1);
+      const second = service(db);
+      second.service.reconcile();
+      expect(second.launcher.fires).toHaveLength(1);
+      expect(getWindowState(db, keyFor(trigger, T0 + 2 * MIN15))?.status).toBe('running');
+    });
+
+    it('backfill trigger with NO cursor yet: nothing is dispositioned — the dependent waits for the pass', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const config: WindowConfig = { ...DEP_SKIP, maxBackfillWindows: 2 };
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: config });
+      seedWindow(db, trigger, 2);
+      const { launcher, service: svc } = service(db);
+
+      svc.reconcile();
+
+      expect(launcher.fires).toHaveLength(0);
+      expect(getWindowState(db, keyFor(trigger, T0 + 2 * MIN15))?.status).toBe('waiting');
+    });
+
+    it('the link-before-fire heal runs even for a blocked window (the dependency was consumed at fire time)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: DEP_PREV });
+      if (!isTumblable(trigger)) throw new Error('fixture must be tumblable');
+      windowInStatus(db, trigger, 0, 'failed'); // blocks W1
+      seedWindow(db, trigger, 1);
+      // A crash-orphaned run for W1: fired before W0’s failure landed, link
+      // never committed.
+      const orphan = createRun(db, {
+        ownerId: 'local',
+        pipelineVersionId: pv,
+        triggerId: trigger.id,
+        parentRunId: null,
+        params: {},
+        triggerContext: {
+          triggerId: trigger.id,
+          scheduledTime: iso(T0 + 2 * MIN15),
+          body: null,
+          windowEpoch: windowConfigEpoch(trigger.window),
+        },
+      });
+      updateRun(db, orphan.id, { status: 'running' });
+      const { launcher, service: svc } = service(db);
+
+      svc.reconcile();
+
+      // No NEW fire — the orphan was LINKED (heal-first, gate-second).
+      expect(launcher.fires).toHaveLength(0);
+      const w1 = getWindowState(db, keyFor(trigger, T0 + MIN15));
+      expect(w1?.status).toBe('running');
+      expect(w1?.runId).toBe(orphan.id);
+    });
+  });
+
+  describe('stale-epoch disposition (window.superseded)', () => {
+    /** An old-epoch window row (geometry that no longer matches the trigger). */
+    function seedOldEpochWindow(
+      db: Db,
+      trigger: Trigger,
+      status: 'waiting' | 'retry_pending',
+    ): WindowKey {
+      const key: WindowKey = {
+        triggerId: trigger.id,
+        configEpoch: 'old-epoch',
+        windowStart: iso(T0),
+      };
+      createWindow(db, {
+        ...key,
+        windowEnd: iso(T0 + 30 * 60_000),
+        geometry: { frequency: 'minute', interval: 30, startTime: CONFIG.startTime },
+        origin: 'live',
+      });
+      if (status === 'retry_pending') {
+        expect(linkWindowRun(db, key, 'run-old', 'fire')).toBe(true);
+        expect(
+          retryWindow(db, key, {
+            runId: 'run-old',
+            runStatus: 'failure',
+            attempt: 1,
+            nextAttemptAtMs: T0 + 10 * 60 * 60_000,
+          }),
+        ).toBe(true);
+      }
+      return key;
+    }
+
+    it('sync supersedes old-epoch waiting + retry_pending debris — even for a trigger the pass would otherwise skip early', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      // Plain trigger: no backfill, no cap, bound, no current-epoch stranded
+      // rows — the exact shape pass 3 early-continues on. Disposition must
+      // run BEFORE that continue.
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: CONFIG });
+      if (!isTumblable(trigger)) throw new Error('fixture must be tumblable');
+      const currentEpoch = windowConfigEpoch(trigger.window);
+      const waitingKey = seedOldEpochWindow(db, trigger, 'waiting');
+      const svc = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => T0 + 60 * 60_000,
+      });
+
+      svc.sync();
+
+      const row = getWindowState(db, waitingKey);
+      expect(row?.status).toBe('superseded');
+      expect(row?.nextAttemptAtMs).toBeNull();
+      // The event is durable and the fold agrees with the projection.
+      const events = listWindowEvents(db, waitingKey);
+      expect(events.at(-1)).toEqual({
+        type: 'window.superseded',
+        payload: { currentEpoch },
+      });
+      expect(rebuildWindowStatus(db, waitingKey)).toBe('superseded');
+    });
+
+    it('sync supersedes old-epoch retry_pending debris of an UNBOUND trigger (before the unbound skip)', () => {
+      const { db } = freshDb();
+      const trigger = seedTumbling(db, { pipelineVersionId: null, window: CONFIG });
+      const key = seedOldEpochWindow(db, trigger, 'retry_pending');
+      const svc = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => T0 + 60 * 60_000,
+      });
+
+      svc.sync();
+
+      const row = getWindowState(db, key);
+      expect(row?.status).toBe('superseded');
+      expect(row?.nextAttemptAtMs).toBeNull();
+      expect(rebuildWindowStatus(db, key)).toBe('superseded');
+    });
+
+    it('current-epoch rows are never superseded; old-epoch RUNNING rows settle via their run instead', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: CONFIG });
+      // Current-epoch waiting row (would fire, not supersede).
+      const currentKey = keyFor(trigger, T0);
+      createWindow(db, {
+        ...currentKey,
+        windowEnd: iso(T0 + MIN15),
+        geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+        origin: 'live',
+      });
+      // Old-epoch running row with a LIVE run.
+      const liveRun = createRun(db, {
+        ownerId: 'local',
+        pipelineVersionId: pv,
+        triggerId: trigger.id,
+        parentRunId: null,
+        params: {},
+      });
+      updateRun(db, liveRun.id, { status: 'running' });
+      const oldKey: WindowKey = {
+        triggerId: trigger.id,
+        configEpoch: 'old-epoch',
+        windowStart: iso(T0),
+      };
+      createWindow(db, {
+        ...oldKey,
+        windowEnd: iso(T0 + 30 * 60_000),
+        geometry: { frequency: 'minute', interval: 30, startTime: CONFIG.startTime },
+        origin: 'live',
+      });
+      expect(linkWindowRun(db, oldKey, liveRun.id, 'fire')).toBe(true);
+      const svc = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => T0 + 60 * 60_000,
+      });
+
+      svc.sync();
+
+      expect(getWindowState(db, currentKey)?.status).toBe('running'); // fired, not superseded
+      expect(getWindowState(db, oldKey)?.status).toBe('running'); // its live run settles it
+    });
+
+    it('boot reconcile supersedes — including for a DISABLED trigger (enabled-agnostic, like the settle path)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: CONFIG, enabled: false });
+      const key = seedOldEpochWindow(db, trigger, 'waiting');
+      const svc = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => T0 + 60 * 60_000,
+      });
+
+      svc.reconcile();
+
+      expect(getWindowState(db, key)?.status).toBe('superseded');
+      expect(rebuildWindowStatus(db, key)).toBe('superseded');
+    });
+
+    it('supersede is PERMANENT: reverting to the old geometry does not resurrect the window', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: CONFIG });
+      if (!isTumblable(trigger)) throw new Error('fixture must be tumblable');
+      // A superseded row under the trigger’s CURRENT epoch (i.e. post-revert).
+      const key = keyFor(trigger, T0);
+      createWindow(db, {
+        ...key,
+        windowEnd: iso(T0 + MIN15),
+        geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+        origin: 'live',
+      });
+      expect(supersedeWindow(db, key, 'newer-epoch')).toBe(true);
+      const { launcher, service: svc } = service(db);
+
+      svc.sync();
+      svc.reconcile();
+
+      // Not re-created (projection uniqueness), not re-fired, not
+      // re-superseded (current epoch is excluded from the disposition scan).
+      expect(launcher.fires).toHaveLength(0);
+      expect(getWindowState(db, key)?.status).toBe('superseded');
+      expect(
+        createWindow(db, {
+          ...key,
+          windowEnd: iso(T0 + MIN15),
+          geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+          origin: 'live',
+        }),
+      ).toBe(false);
+    });
+
+    it('repo guard: supersedeWindow refuses running and terminal rows (appends nothing)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: CONFIG });
+      const runningKey = keyFor(trigger, T0);
+      createWindow(db, {
+        ...runningKey,
+        windowEnd: iso(T0 + MIN15),
+        geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+        origin: 'live',
+      });
+      expect(linkWindowRun(db, runningKey, 'run-1', 'fire')).toBe(true);
+      expect(supersedeWindow(db, runningKey, 'ep-x')).toBe(false);
+      expect(getWindowState(db, runningKey)?.status).toBe('running');
+      expect(listWindowEvents(db, runningKey).some((e) => e.type === 'window.superseded')).toBe(
+        false,
+      );
+
+      expect(completeWindow(db, runningKey, { status: 'succeeded', runId: 'run-1' })).toBe(true);
+      expect(supersedeWindow(db, runningKey, 'ep-x')).toBe(false);
+      expect(getWindowState(db, runningKey)?.status).toBe('succeeded');
     });
   });
 });

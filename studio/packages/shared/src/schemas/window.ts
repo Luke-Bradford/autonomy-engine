@@ -30,6 +30,31 @@ export const WindowRetryPolicySchema = z.object({
 export type WindowRetryPolicy = z.infer<typeof WindowRetryPolicySchema>;
 
 /**
+ * #5 S11d — a tumbling trigger's SELF-dependency (ADF's
+ * `TumblingWindowTriggerDependencyReference` restricted to the trigger
+ * itself; cross-trigger dependency graphs stay a non-goal): window `W` is
+ * materialized only after every same-epoch window intersecting the dependency
+ * interval `[W.start + offset, W.start + offset + size)` reaches `succeeded`.
+ * `offsetInSeconds` is strictly NEGATIVE (a self-dependency on the present or
+ * future is a structural deadlock); `sizeInSeconds` defaults to the window
+ * size. A window the trigger itself permanently DISPOSITIONED — skipped by
+ * the no-backfill policy or the bounded-backfill cursor, or `superseded` by a
+ * geometry edit — satisfies the dependency vacuously (the dependency inherits
+ * the trigger's own disposition of missed windows); a `failed` dependency
+ * blocks its dependents until a retry re-drives it (ADF's rerun-wait
+ * semantic — visible in window state, never silent).
+ */
+export const WindowSelfDependencySchema = z.object({
+  /** Dependency-interval start relative to the window's own start — strictly
+   * negative (the interval must lie wholly in the past; the write boundary
+   * additionally refuses `offset + size > 0`). */
+  offsetInSeconds: z.number().int().negative(),
+  /** Dependency-interval length; ABSENT = one window size (ADF's default). */
+  sizeInSeconds: z.number().int().positive().optional(),
+});
+export type WindowSelfDependency = z.infer<typeof WindowSelfDependencySchema>;
+
+/**
  * #5 S9 — a `tumbling`-mode trigger's window config. Windows are the
  * contiguous, non-overlapping intervals `[startTime + k*size, startTime +
  * (k+1)*size)` for `k >= 0`, where `size = interval * frequency` (fixed ms,
@@ -104,6 +129,19 @@ export const WindowConfigSchema = z.object({
    * out-of-range value (the `maxBackfillWindows` precedent).
    */
   retry: WindowRetryPolicySchema.optional(),
+  /**
+   * #5 S11d — opt-in SELF-dependency (see `WindowSelfDependencySchema`).
+   * ABSENT = no dependency gate — the exact S9-S11c behavior (the
+   * upgrade-never-surprises rule shared by every bound here). A BOUND like
+   * `endTime`/`maxBackfillWindows`/`maxConcurrentWindows`/`retry`: it does
+   * not participate in the config epoch and never rides an alarm ref — it
+   * only gates WHEN an already-known window may materialize. The
+   * write-boundary rules (strictly-past interval, span caps) live in
+   * `WindowConfigWriteSchema`; the stored shape stays lenient and the gate
+   * HONORS a stored out-of-range value (which can at worst permanently block
+   * that trigger's OWN windows — visible in window state, never corrupting).
+   */
+  selfDependency: WindowSelfDependencySchema.optional(),
 });
 export type WindowConfig = z.infer<typeof WindowConfigSchema>;
 
@@ -121,6 +159,22 @@ export const MAX_CONCURRENT_WINDOWS_CAP = 50;
 export const MAX_WINDOW_RETRY_COUNT_CAP = 100;
 export const MIN_WINDOW_RETRY_INTERVAL_SECONDS = 30;
 export const MAX_WINDOW_RETRY_INTERVAL_SECONDS = 86_400;
+
+/** #5 S11d write-boundary span cap: the self-dependency interval's reach
+ * (`|offset|`) and length (`size`) may each cover at most this many windows —
+ * bounds the per-materialize dependency scan (each candidate window checks
+ * the rows of its interval). */
+export const MAX_DEPENDENCY_SPAN_WINDOWS = 100;
+
+/** Seconds per window for a config — the ONE place the frequency→seconds map
+ * lives shared-side (the server's `windowSizeMs` mirrors it in ms). */
+export function windowSizeSeconds(config: {
+  frequency: WindowFrequency;
+  interval: number;
+}): number {
+  const unit = { minute: 60, hour: 3_600, day: 86_400 }[config.frequency];
+  return config.interval * unit;
+}
 
 /**
  * WRITE-boundary shape: the stored shape PLUS the one cross-field rule —
@@ -174,6 +228,38 @@ export const WindowConfigWriteSchema = WindowConfigSchema.superRefine((w, ctx) =
         code: z.ZodIssueCode.custom,
         path: ['retry', 'intervalInSeconds'],
         message: `\`retry.intervalInSeconds\` must be between ${MIN_WINDOW_RETRY_INTERVAL_SECONDS} and ${MAX_WINDOW_RETRY_INTERVAL_SECONDS}`,
+      });
+    }
+  }
+  // #5 S11d — the self-dependency's cross-field rules (write concern; the
+  // stored shape stays lenient on read, and the gate honors what it finds).
+  if (w.selfDependency !== undefined) {
+    const sizeSeconds = windowSizeSeconds(w);
+    const effectiveSize = w.selfDependency.sizeInSeconds ?? sizeSeconds;
+    // The dependency interval must lie WHOLLY in the past relative to the
+    // window's own start: an interval reaching `[.., start)`'s right edge or
+    // beyond makes the window depend on itself (or a future window) — a
+    // structural deadlock, refused up front.
+    if (w.selfDependency.offsetInSeconds + effectiveSize > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['selfDependency', 'offsetInSeconds'],
+        message:
+          '`selfDependency` interval must lie wholly before the window (`offsetInSeconds + sizeInSeconds` must be ≤ 0)',
+      });
+    }
+    if (-w.selfDependency.offsetInSeconds > MAX_DEPENDENCY_SPAN_WINDOWS * sizeSeconds) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['selfDependency', 'offsetInSeconds'],
+        message: `\`selfDependency.offsetInSeconds\` may reach back at most ${MAX_DEPENDENCY_SPAN_WINDOWS} windows`,
+      });
+    }
+    if (effectiveSize > MAX_DEPENDENCY_SPAN_WINDOWS * sizeSeconds) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['selfDependency', 'sizeInSeconds'],
+        message: `\`selfDependency.sizeInSeconds\` may cover at most ${MAX_DEPENDENCY_SPAN_WINDOWS} windows`,
       });
     }
   }

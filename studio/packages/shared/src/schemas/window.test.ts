@@ -182,3 +182,71 @@ describe('WindowConfigWriteSchema (write-boundary cross-field rule)', () => {
     expect(WindowConfigSchema.parse(stored)).toEqual(stored);
   });
 });
+
+// #5 S11d — the self-dependency write-boundary rules. `config` is 15-minute
+// windows (size 900s), so the span cap is 100 * 900 = 90000s.
+describe('WindowConfigWriteSchema (selfDependency cross-field rules)', () => {
+  it('accepts a previous-window dependency (offset = -size, size defaulted)', () => {
+    const w = { ...config, selfDependency: { offsetInSeconds: -900 } };
+    expect(WindowConfigWriteSchema.parse(w)).toEqual(w);
+  });
+
+  it('accepts an explicit interval lying wholly in the past', () => {
+    const w = { ...config, selfDependency: { offsetInSeconds: -3600, sizeInSeconds: 1800 } };
+    expect(WindowConfigWriteSchema.parse(w)).toEqual(w);
+  });
+
+  it('rejects zero/positive offset at the object shape', () => {
+    expect(() =>
+      WindowConfigSchema.parse({ ...config, selfDependency: { offsetInSeconds: 0 } }),
+    ).toThrow();
+    expect(() =>
+      WindowConfigSchema.parse({ ...config, selfDependency: { offsetInSeconds: 900 } }),
+    ).toThrow();
+  });
+
+  it('rejects an interval overlapping the window itself (offset + size > 0 — structural deadlock)', () => {
+    // size defaults to one window (900): offset -900 + 1800 explicit = +900 → overlap.
+    expect(() =>
+      WindowConfigWriteSchema.parse({
+        ...config,
+        selfDependency: { offsetInSeconds: -900, sizeInSeconds: 1800 },
+      }),
+    ).toThrow();
+    // Defaulted size: offset -1 + 900 = +899 → overlap.
+    expect(() =>
+      WindowConfigWriteSchema.parse({ ...config, selfDependency: { offsetInSeconds: -1 } }),
+    ).toThrow();
+  });
+
+  it('rejects spans past the 100-window cap on WRITE (stored shape stays lenient)', () => {
+    // Reach: 101 windows back.
+    expect(() =>
+      WindowConfigWriteSchema.parse({
+        ...config,
+        selfDependency: { offsetInSeconds: -900 * 101 },
+      }),
+    ).toThrow();
+    // Length: 100-window size but offset only 100 back → also overlaps; use a
+    // far offset with an over-cap size to isolate the size rule.
+    expect(() =>
+      WindowConfigWriteSchema.parse({
+        ...config,
+        selfDependency: { offsetInSeconds: -900 * 100, sizeInSeconds: 900 * 101 },
+      }),
+    ).toThrow();
+    // Stored/read shape parses the same value — the gate HONORS what it finds
+    // (which can at worst permanently block the trigger's OWN windows).
+    const stored = { ...config, selfDependency: { offsetInSeconds: -900 * 101 } };
+    expect(WindowConfigSchema.parse(stored)).toEqual(stored);
+  });
+
+  it('accepts the exact cap boundary (100 windows reach and length)', () => {
+    const w = {
+      ...config,
+      selfDependency: { offsetInSeconds: -900 * 100, sizeInSeconds: 900 * 100 },
+    };
+    // offset + size = 0 → wholly in the past (right-open interval) → legal.
+    expect(WindowConfigWriteSchema.parse(w)).toEqual(w);
+  });
+});

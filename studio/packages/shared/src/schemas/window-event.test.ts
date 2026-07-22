@@ -150,3 +150,27 @@ describe('foldWindowStatus (the pure rebuild fold)', () => {
     expect(foldWindowStatus([created, runCreated, failed, retryScheduled])).toBe('failed');
   });
 });
+
+// #5 S11d — the stale-epoch disposition through the fold.
+describe('foldWindowStatus (window.superseded)', () => {
+  const superseded = {
+    type: 'window.superseded',
+    payload: { currentEpoch: 'epoch-b' },
+  } as const;
+
+  it('folds waiting → superseded and retry_pending → superseded', () => {
+    expect(foldWindowStatus([created, superseded])).toBe('superseded');
+    expect(foldWindowStatus([created, runCreated, retryScheduled, superseded])).toBe('superseded');
+  });
+
+  it('never supersedes a running or terminal window (mirrors supersedeWindow guard)', () => {
+    expect(foldWindowStatus([created, runCreated, superseded])).toBe('running');
+    expect(foldWindowStatus([created, runCreated, succeeded, superseded])).toBe('succeeded');
+    expect(foldWindowStatus([created, runCreated, failed, superseded])).toBe('failed');
+  });
+
+  it('superseded is terminal — no further transitions apply', () => {
+    expect(foldWindowStatus([created, superseded, runCreated])).toBe('superseded');
+    expect(foldWindowStatus([created, superseded, superseded])).toBe('superseded');
+  });
+});

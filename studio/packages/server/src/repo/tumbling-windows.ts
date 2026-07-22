@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray, isNull, lte, ne, sql } from 'drizzle-orm';
 import {
   WindowEventSchema,
   WindowStatusSchema,
@@ -219,6 +219,29 @@ export function retryDueWindow(db: Db, key: WindowKey, attempt: number): boolean
   });
 }
 
+/**
+ * #5 S11d — SUPERSEDE an old-epoch window: guarded flip
+ * `waiting|retry_pending → superseded` + append `window.superseded`,
+ * atomically. TERMINAL disposition of debris a geometry edit left behind —
+ * only the two no-run-in-flight non-terminal states are disposable (a
+ * `running` old-epoch window settles through its live run's completion path
+ * instead). `nextAttemptAtMs` clears (no retry is pending on a terminal row).
+ * Returns `false` (appending nothing) when the guard loses — a duplicate
+ * disposition (sync + boot reconcile can both attempt it) is a no-op.
+ */
+export function supersedeWindow(db: Db, key: WindowKey, currentEpoch: string): boolean {
+  return db.transaction((tx) => {
+    const updated = tx
+      .update(tumblingWindowState)
+      .set({ status: 'superseded', nextAttemptAtMs: null, updatedAt: Date.now() })
+      .where(and(keyWhere(key), inArray(tumblingWindowState.status, ['waiting', 'retry_pending'])))
+      .run();
+    if (updated.changes === 0) return false;
+    appendEvent(tx, key, { type: 'window.superseded', payload: { currentEpoch } });
+    return true;
+  });
+}
+
 /** The terminal fact `completeWindow` folds a run's outcome into. */
 export type WindowTerminal =
   | { status: 'succeeded'; runId: string }
@@ -271,12 +294,24 @@ export function getWindowStateByRunId(db: Db, runId: string): TumblingWindowStat
 export interface ListWindowStatesFilter {
   triggerId?: string;
   configEpoch?: string;
+  /** #5 S11d — rows of any epoch EXCEPT this one (the stale-epoch
+   * disposition scan). */
+  configEpochNot?: string;
   status?: WindowStatus;
   /** `true` → only rows with `run_id IS NULL` (the stranded-`waiting` scan). */
   unlinked?: boolean;
   /** #5 S10 — the two-scan materialize split: `'live'` (ungated, S9 batch
    * semantics) vs `'backfill'` (one-at-a-time under the gate). */
   origin?: WindowOrigin;
+  /** #5 S11d — KEYSET pagination for the materialize scans (`windowStart`
+   * strictly after this ISO instant): a dependency-blocked row stays in the
+   * `waiting` set, so a fixed-front refetch would rescan (or starve behind)
+   * the same blocked rows forever; the cursor walks past them. Lexical ISO
+   * compare is chronological — `toISOString()` is fixed-width UTC. */
+  windowStartGt?: string;
+  /** #5 S11d — inclusive range bounds for the dependency-interval row scan. */
+  windowStartGte?: string;
+  windowStartLte?: string;
   limit?: number;
 }
 
@@ -290,11 +325,19 @@ export function listWindowStates(
     conditions.push(eq(tumblingWindowState.triggerId, filter.triggerId));
   if (filter.configEpoch !== undefined)
     conditions.push(eq(tumblingWindowState.configEpoch, filter.configEpoch));
+  if (filter.configEpochNot !== undefined)
+    conditions.push(ne(tumblingWindowState.configEpoch, filter.configEpochNot));
   if (filter.status !== undefined) {
     conditions.push(eq(tumblingWindowState.status, WindowStatusSchema.parse(filter.status)));
   }
   if (filter.unlinked === true) conditions.push(isNull(tumblingWindowState.runId));
   if (filter.origin !== undefined) conditions.push(eq(tumblingWindowState.origin, filter.origin));
+  if (filter.windowStartGt !== undefined)
+    conditions.push(gt(tumblingWindowState.windowStart, filter.windowStartGt));
+  if (filter.windowStartGte !== undefined)
+    conditions.push(gte(tumblingWindowState.windowStart, filter.windowStartGte));
+  if (filter.windowStartLte !== undefined)
+    conditions.push(lte(tumblingWindowState.windowStart, filter.windowStartLte));
   let query = db
     .select()
     .from(tumblingWindowState)
