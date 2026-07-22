@@ -1203,6 +1203,59 @@ describe('#1 F0/F2b — a failure kind alone never retries: policy is what opts 
 });
 
 // ===========================================================================
+// #2 L10b — activity.toolCalled is an inert observability fact
+// ===========================================================================
+
+describe('activity.toolCalled is inert (#2 L10b)', () => {
+  it('folding activity.toolCalled changes neither state nor commands, and does not terminalize the node', () => {
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const before = s;
+    const r = eng.reduce(s, {
+      type: 'activity.toolCalled',
+      runId: RUN,
+      nodeId: 'a',
+      attemptId: attempt('a'),
+      round: 0,
+      toolName: 'adder',
+      callId: 't1',
+      argsChars: 13,
+      argsHash: 'h1',
+      resultChars: 1,
+      resultHash: 'h2',
+      isError: false,
+    });
+    // Inert like activity.metered: identical state, no commands, node in flight.
+    expect(r.state).toEqual(before);
+    expect(r.commands).toEqual([]);
+    expect(r.state.status).toBe('running');
+  });
+
+  it('stays inert with the optional fields absent (an error result for a nameless call)', () => {
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const before = s;
+    const r = eng.reduce(s, {
+      type: 'activity.toolCalled',
+      runId: RUN,
+      nodeId: 'a',
+      attemptId: attempt('a'),
+      round: 2,
+      toolName: '',
+      argsChars: 0,
+      resultChars: 25,
+      resultHash: 'h',
+      isError: true,
+    });
+    expect(r.state).toEqual(before);
+    expect(r.commands).toEqual([]);
+    expect(r.state.status).toBe('running');
+  });
+});
+
+// ===========================================================================
 // #2 L2 — activity.metered is an inert observability fact
 // ===========================================================================
 

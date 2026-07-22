@@ -119,12 +119,34 @@ export interface AgentTelemetry {
 }
 
 /**
- * What an adapter streams. `output`, `metered`, `captured`, and `agentTelemetry`
- * are observability only (partial progress / a per-response metering fact / a
- * per-response prompt-completion capture fact / an `agent_task` subprocess
- * telemetry fact); exactly one terminal `succeeded`/`failed` ends the stream. The
- * executor maps these to engine events (`node.output` / `activity.metered` /
- * `activity.captured` / `activity.agentTelemetry` / `node.succeeded` /
+ * A telemetry FACT for ONE executed local tool call inside an `llm_call` tool
+ * loop (#2 L10b): the 0-based provider-exchange `round` that requested it, the
+ * EXECUTED tool name (`''` for a nameless malformed call), the provider call id
+ * (absent where the provider has none — Ollama), the args/result SHAPE (chars +
+ * `sha256`, NO raw text — the `LlmCapture` telemetry-vs-content discipline;
+ * hashes ABSENT at 0 chars, never `hash('')`), and whether the fed-back result
+ * was an ERROR tool_result. The executor stamps `runId`/`nodeId`/`attemptId`
+ * onto the durable `activity.toolCalled` event; the loop supplies the rest.
+ */
+export interface ToolCallTelemetry {
+  round: number;
+  toolName: string;
+  callId?: string;
+  argsChars: number;
+  argsHash?: string;
+  resultChars: number;
+  resultHash?: string;
+  isError: boolean;
+}
+
+/**
+ * What an adapter streams. `output`, `metered`, `captured`, `agentTelemetry`,
+ * and `toolCalled` are observability only (partial progress / a per-response
+ * metering fact / a per-response prompt-completion capture fact / an
+ * `agent_task` subprocess telemetry fact / an executed-tool-call fact); exactly
+ * one terminal `succeeded`/`failed` ends the stream. The executor maps these to
+ * engine events (`node.output` / `activity.metered` / `activity.captured` /
+ * `activity.agentTelemetry` / `activity.toolCalled` / `node.succeeded` /
  * `node.failed`).
  */
 export type ActivityEvent =
@@ -132,6 +154,7 @@ export type ActivityEvent =
   | { type: 'metered'; usage: LlmUsage }
   | { type: 'captured'; capture: LlmCapture }
   | { type: 'agentTelemetry'; telemetry: AgentTelemetry }
+  | { type: 'toolCalled'; call: ToolCallTelemetry }
   | { type: 'succeeded'; outputs: Record<string, unknown> }
   | {
       type: 'failed';

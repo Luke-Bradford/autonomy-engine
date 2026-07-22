@@ -194,6 +194,22 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 > wire on a single-shot CLI). CATALOG_VERSION 14→15.
 
 | L10b | bounded tool loop + telemetry (non-state observability events) + cancellation | 3 |
+
+> **L10b (built 2026-07-22):** `maxToolIterations` (1–25, absent = 1 — the L10a
+> single round-trip; coupled to `tools` at save) bounds how many tool ROUND-TRIPS
+> one attempt may spend — `runTextWithTools` drives the bounded loop, still one
+> attempt → one terminal. A toolUse response with the budget spent fails
+> `permanent` ("tool budget") AFTER its `metered` — every billed exchange is
+> metered, terminal or not. Telemetry = one inert `activity.toolCalled` engine
+> event per EXECUTED call (0-based exchange `round`, executed name, provider call
+> id, args/result chars + sha256; hashes OMITTED at 0 chars — fingerprints, not
+> redaction; #605's keyed-HMAC covers them). Cancellation: the run signal is
+> re-checked after each billed toolUse exchange BEFORE tool execution (abort
+> outranks budget exhaustion) → `cancelled` terminal, no post-abort
+> execution/telemetry (in-flight aborts stay `llmPost`'s). Continuation choice
+> still downgrades to `auto`; capture stays first-exchange-only.
+> CATALOG_VERSION 15→16.
+
 | L10c | MCP servers + tool security policy | 3 |
 | L11a | `agent_task` subprocess telemetry (output/exitCode/summary) | 3 |
 | L11b | opt-in structured protocol (JSON-to-file / sentinel block) + schema validation | 3 |

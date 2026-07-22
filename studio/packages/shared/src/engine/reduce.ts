@@ -3392,6 +3392,14 @@ export function createEngine(doc: EngineDoc): Engine {
         // folding it cannot change semantics; it lives in the log for the Monitor
         // run-detail. Captured once at dispatch, never recomputed on replay.
         return { state, commands: [], diagnostics };
+      case 'activity.toolCalled':
+        // #2 L10b — INERT (like `activity.agentTelemetry`): one executed tool
+        // call's TELEMETRY FACT (name + round + args/result shape + isError) is
+        // observability, not run state. The tool loop is opaque driver-internal
+        // (one attempt → one terminal); this never enters `outputs` or `${}`, so
+        // folding it cannot change semantics. Captured once at dispatch, never
+        // recomputed on replay (replay NEVER re-calls the model or the tools).
+        return { state, commands: [], diagnostics };
       case 'node.dispatched':
         return onDispatched(state, event, diagnostics);
       case 'node.succeeded':

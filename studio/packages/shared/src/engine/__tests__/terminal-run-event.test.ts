@@ -171,6 +171,23 @@ describe('#443 — terminalStatusOf', () => {
         outputChars: 5,
         outputHash: 'oh',
       },
+      // #2 L10b — an executed-tool-call TELEMETRY fact. NON-terminal: an
+      // observability event (like `activity.agentTelemetry`) folded inert; it
+      // neither terminates the run nor folds a node, and lands before the terminal.
+      {
+        type: 'activity.toolCalled',
+        ...run,
+        nodeId: 'n1',
+        attemptId: 'n1#0',
+        round: 0,
+        toolName: 'adder',
+        callId: 't1',
+        argsChars: 13,
+        argsHash: 'ah',
+        resultChars: 1,
+        resultHash: 'rh',
+        isError: false,
+      },
     ];
     for (const event of nonTerminal) {
       expect(terminalStatusOf(event), `${event.type} must not be terminal`).toBeNull();

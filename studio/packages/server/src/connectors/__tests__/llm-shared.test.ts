@@ -16,6 +16,7 @@ import {
   runStructuredWithRepair,
   runTextWithTools,
   structuredEcho,
+  toolCallTelemetry,
 } from '../llm-shared.js';
 import { sha256Hex } from '../../util/hash.js';
 import type { LlmToolDef, LlmTurn, StructuredCallOutcome, ToolCallResult } from '../llm-shared.js';
@@ -635,7 +636,14 @@ describe('runTextWithTools (#2 L10a — single round-trip)', () => {
         return Promise.resolve({ type: 'text' as const, usage: USAGE, succeeded: SUCCEEDED });
       }),
     );
-    expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'metered', 'succeeded']);
+    // L10b adds the executed-call telemetry fact between the exchanges.
+    expect(events.map((e) => e.type)).toEqual([
+      'metered',
+      'captured',
+      'toolCalled',
+      'metered',
+      'succeeded',
+    ]);
     // The continuation call sees the tool-result conversation AND the downgraded
     // choice — a `required` first call must not force a second tool call.
     expect(seen).toEqual([
@@ -703,5 +711,242 @@ describe('runTextWithTools (#2 L10a — single round-trip)', () => {
       { id: 't1', name: 'nope', resultText: "unknown tool 'nope'", isError: true },
     ]);
     expect(events[events.length - 1]!.type).toBe('succeeded');
+  });
+});
+
+describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)', () => {
+  const CAPTURE: LlmCapture = {
+    provider: 'anthropic_api',
+    model: 'm',
+    latencyMs: 5,
+    request: { messageCount: 1, messages: [{ role: 'user', chars: 2, contentHash: 'h' }] },
+  };
+  const SUCCEEDED: Extract<ActivityEvent, { type: 'succeeded' }> = {
+    type: 'succeeded',
+    outputs: { text: 'done', stopReason: 'end_turn' },
+  };
+  /** A doCall that answers `toolUses` toolUse rounds, then text. */
+  const scripted = (toolUses: number) => {
+    let calls = 0;
+    return () => {
+      calls += 1;
+      if (calls <= toolUses) {
+        return Promise.resolve({
+          type: 'toolUse' as const,
+          usage: USAGE,
+          capture: calls === 1 ? CAPTURE : undefined,
+          calls: [{ id: `t${calls}`, name: 'adder', args: { a: calls, b: 1 } }],
+          buildNext: () => `conv${calls}`,
+        });
+      }
+      return Promise.resolve({ type: 'text' as const, usage: USAGE, succeeded: SUCCEEDED });
+    };
+  };
+
+  it('drives maxRounds round-trips: per-exchange metering, per-call telemetry, then success', async () => {
+    const events = await drain(
+      runTextWithTools('anthropic_api', [ADDER], 'conv0', 'auto', scripted(3), 3),
+    );
+    expect(events.map((e) => e.type)).toEqual([
+      'metered',
+      'captured',
+      'toolCalled',
+      'metered',
+      'toolCalled',
+      'metered',
+      'toolCalled',
+      'metered',
+      'succeeded',
+    ]);
+    // Each telemetry event stamps the 0-based exchange index that REQUESTED it.
+    const rounds = events.flatMap((e) => (e.type === 'toolCalled' ? [e.call.round] : []));
+    expect(rounds).toEqual([0, 1, 2]);
+  });
+
+  it('meters the final billed exchange, then fails permanent on budget exhaustion', async () => {
+    const events = await drain(
+      runTextWithTools('openai_api', [ADDER], 'conv0', 'auto', scripted(99), 2),
+    );
+    // Exchanges 0..2 all billed (3 metered); rounds 0 and 1 executed their
+    // tools (2 toolCalled); exchange 2's toolUse exhausts the budget.
+    expect(events.filter((e) => e.type === 'metered')).toHaveLength(3);
+    expect(events.filter((e) => e.type === 'toolCalled')).toHaveLength(2);
+    const last = events[events.length - 1]!;
+    expect(last).toMatchObject({ type: 'failed', kind: 'permanent' });
+    if (last.type === 'failed') {
+      expect(last.error).toMatch(/tool budget/);
+      expect(last.error).toContain('maxToolIterations: 2');
+    }
+  });
+
+  it('carries the telemetry shape: name, id, args/result chars + sha256, isError', async () => {
+    const events = await drain(
+      runTextWithTools(
+        'anthropic_api',
+        [ADDER],
+        'conv0',
+        'auto',
+        (conv: unknown) =>
+          conv === 'conv0'
+            ? Promise.resolve({
+                type: 'toolUse' as const,
+                usage: USAGE,
+                capture: CAPTURE,
+                calls: [
+                  { id: 't1', name: 'adder', args: { a: 1, b: 2 } },
+                  { id: 't2', name: 'nope', args: {} },
+                ],
+                buildNext: () => 'after',
+              })
+            : Promise.resolve({ type: 'text' as const, usage: USAGE, succeeded: SUCCEEDED }),
+        1,
+      ),
+    );
+    const calls = events.flatMap((e) => (e.type === 'toolCalled' ? [e.call] : []));
+    const args1 = JSON.stringify({ a: 1, b: 2 });
+    expect(calls).toEqual([
+      {
+        round: 0,
+        toolName: 'adder',
+        callId: 't1',
+        argsChars: args1.length,
+        argsHash: sha256Hex(args1),
+        resultChars: 1, // '3'
+        resultHash: sha256Hex('3'),
+        isError: false,
+      },
+      {
+        round: 0,
+        toolName: 'nope',
+        callId: 't2',
+        argsChars: 2, // '{}'
+        argsHash: sha256Hex('{}'),
+        resultChars: "unknown tool 'nope'".length,
+        resultHash: sha256Hex("unknown tool 'nope'"),
+        isError: true,
+      },
+    ]);
+  });
+
+  it('aborts between rounds: cancelled terminal, no tool execution, no telemetry', async () => {
+    const controller = new AbortController();
+    let builtNext = false;
+    const events = await drain(
+      runTextWithTools(
+        'anthropic_api',
+        [ADDER],
+        'conv0',
+        'auto',
+        () => {
+          // The run is cancelled while the provider call is in flight; the
+          // response still arrives (billed → metered) but the loop must not
+          // execute tools or emit telemetry afterwards.
+          controller.abort();
+          return Promise.resolve({
+            type: 'toolUse' as const,
+            usage: USAGE,
+            capture: CAPTURE,
+            calls: [{ id: 't1', name: 'adder', args: { a: 1, b: 2 } }],
+            buildNext: () => {
+              builtNext = true;
+              return 'next';
+            },
+          });
+        },
+        3,
+        controller.signal,
+      ),
+    );
+    expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'failed']);
+    const last = events[events.length - 1]!;
+    expect(last).toMatchObject({ type: 'failed', kind: 'cancelled' });
+    if (last.type === 'failed') expect(last.error).toBe('llm tool loop aborted');
+    expect(builtNext).toBe(false);
+  });
+
+  it('prefers the cancelled terminal when an abort coincides with budget exhaustion', async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const events = await drain(
+      runTextWithTools(
+        'openai_api',
+        [ADDER],
+        'c',
+        'auto',
+        () => {
+          calls += 1;
+          // The run is cancelled while the budget-EXHAUSTING exchange is in
+          // flight — the abort is the truer fact for operator intent, so
+          // `cancelled` must win over `permanent` ("tool budget").
+          if (calls === 2) controller.abort();
+          return Promise.resolve({
+            type: 'toolUse' as const,
+            usage: USAGE,
+            capture: calls === 1 ? CAPTURE : undefined,
+            calls: [{ id: `t${calls}`, name: 'adder', args: { a: 1, b: 2 } }],
+            buildNext: () => 'next',
+          });
+        },
+        1,
+        controller.signal,
+      ),
+    );
+    const last = events[events.length - 1]!;
+    expect(last).toMatchObject({ type: 'failed', kind: 'cancelled' });
+    // The exhausting exchange is still billed → metered before the terminal.
+    expect(events.filter((e) => e.type === 'metered')).toHaveLength(2);
+  });
+
+  it('defaults to the single L10a round-trip when no budget is passed', async () => {
+    const events = await drain(runTextWithTools('ollama', [ADDER], 'conv0', 'auto', scripted(99)));
+    const last = events[events.length - 1]!;
+    expect(last).toMatchObject({ type: 'failed', kind: 'permanent' });
+    if (last.type === 'failed') expect(last.error).toMatch(/tool budget/);
+    expect(events.filter((e) => e.type === 'metered')).toHaveLength(2);
+    expect(events.filter((e) => e.type === 'toolCalled')).toHaveLength(1);
+  });
+});
+
+describe('toolCallTelemetry (#2 L10b — fail-closed shape rules)', () => {
+  it('omits hashes for zero-length args/result (never hash(""))', () => {
+    const t = toolCallTelemetry(
+      1,
+      { id: null, name: 'echo', args: undefined },
+      { id: null, name: 'echo', resultText: '', isError: false },
+    );
+    expect(t).toEqual({
+      round: 1,
+      toolName: 'echo',
+      argsChars: 0,
+      resultChars: 0,
+      isError: false,
+    });
+    expect(t.callId).toBeUndefined();
+    expect(t.argsHash).toBeUndefined();
+    expect(t.resultHash).toBeUndefined();
+  });
+
+  it('measures unserializable args as 0 instead of throwing (circular reference)', () => {
+    const circular: { self?: unknown } = {};
+    circular.self = circular;
+    const t = toolCallTelemetry(
+      2,
+      { id: 'c1', name: 'echo', args: circular },
+      { id: 'c1', name: 'echo', resultText: 'ok', isError: false },
+    );
+    expect(t.argsChars).toBe(0);
+    expect(t.argsHash).toBeUndefined();
+    expect(t.resultChars).toBe(2);
+  });
+
+  it('uses the EXECUTED name (may be empty for a nameless malformed call)', () => {
+    const t = toolCallTelemetry(
+      0,
+      { id: 'x', name: null, args: { a: 1 } },
+      { id: 'x', name: '', resultText: 'malformed tool call: no tool name', isError: true },
+    );
+    expect(t.toolName).toBe('');
+    expect(t.callId).toBe('x');
+    expect(t.isError).toBe(true);
   });
 });

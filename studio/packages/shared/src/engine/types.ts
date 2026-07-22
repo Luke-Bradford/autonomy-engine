@@ -935,6 +935,57 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     outputHash: z.string().optional(),
   }),
   z.object({
+    /**
+     * #2 L10b — one EXECUTED local tool call inside an `llm_call` tool loop
+     * (the spec's "non-state observability events (`tool.called` etc.)"). The
+     * adapter's loop emits a non-terminal `toolCalled` ActivityEvent per call
+     * it answers (mirroring `metered`/`captured`), which the executor maps
+     * here, ordered BEFORE the terminal. A response with parallel calls emits
+     * one event per call, all sharing a `round`.
+     *
+     * OBSERVABILITY ONLY — the reducer folds it INERT (like `activity.metered`
+     * / `activity.captured` / `activity.agentTelemetry`): telemetry, not a
+     * typed `${}`-addressable output, so it never enters `outputs` and cannot
+     * change run semantics. Captured at dispatch and NEVER recomputed on replay
+     * (the tool loop is not re-run — a fact in the log).
+     *
+     * TELEMETRY-vs-CONTENT — carries the args/result SHAPE (chars + `sha256`),
+     * NOT raw text. The hashes are FINGERPRINTS for drift/correlation, NOT a
+     * redaction guarantee (a short/low-entropy value is a brute-forceable
+     * oracle) — safe here only because tool args/results are model-visible,
+     * non-D8-secure content already bounded by `MAX_TOOL_RESULT_CHARS`. The
+     * L9b (#605) keyed-HMAC hardening covers these hashes when it lands, as it
+     * does `activity.captured`/`agentTelemetry`.
+     */
+    type: z.literal('activity.toolCalled'),
+    runId: z.string(),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    /**
+     * The 0-based provider-EXCHANGE index that REQUESTED this call (the loop's
+     * `firstExchange` axis: 0 = the author's turns) — correlates parallel calls
+     * per exchange without counting `activity.metered` events in log order.
+     */
+    round: z.number().int().nonnegative(),
+    /**
+     * The EXECUTED tool name — `''` for a structurally nameless (malformed)
+     * call, which is answered with an error tool_result, never asserted.
+     */
+    toolName: z.string(),
+    /** The provider's call id. ABSENT where the provider has none (Ollama). */
+    callId: z.string().optional(),
+    /** Model-supplied args: JSON-serialized length (0 when unserializable). */
+    argsChars: z.number().int().nonnegative(),
+    /** ABSENT when `argsChars === 0` — fail-closed, never `hash('')`. */
+    argsHash: z.string().optional(),
+    /** The tool_result text length (error results included — the model sees them). */
+    resultChars: z.number().int().nonnegative(),
+    /** ABSENT when `resultChars === 0` — fail-closed, never `hash('')`. */
+    resultHash: z.string().optional(),
+    /** Whether the result fed back was an ERROR tool_result (tool-level defect). */
+    isError: z.boolean(),
+  }),
+  z.object({
     type: z.literal('run.resumed'),
     runId: z.string(),
     /**
