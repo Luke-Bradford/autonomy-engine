@@ -427,3 +427,46 @@ export const externalWaits = sqliteTable(
     ),
   ],
 );
+
+/**
+ * #2 L14c — the per-connection quota RESET-WINDOW store (the PROACTIVE half of
+ * the CLI/subscription quota primitive; the reactive half — pattern-match a
+ * subprocess's exhaustion output into a `rate_limit` failure — shipped in the
+ * first L14c slice on `connectors/agent.ts`).
+ *
+ * A subscription CLI (`agent_cli`) has a usage quota that resets on a rolling
+ * window. When ONE dispatch discovers exhaustion (a `node.failed{code:'rate_limit',
+ * retryAfterSeconds}`), the driver records the reset epoch HERE, keyed by the
+ * `connectionId` it dispatched with. Every SUBSEQUENT dispatch of that shared
+ * connection — in ANY run — then reads this row at pre-flight and short-circuits
+ * to the same `rate_limit` retry WITHOUT spawning a doomed subprocess (the
+ * admission gate), instead of each run independently burning a subprocess to
+ * rediscover the shared quota is spent.
+ *
+ * ONE row per connection (`connection_id` PRIMARY KEY, upserted MAX-of-window).
+ * Driver INFRA, never part of a resource response — no Zod resource counterpart,
+ * so `schema-table-parity.test.ts` exempts it like `scheduled_wakeups`.
+ *
+ * The reset epoch is a STORED FACT, anchored to the failure event's durable `ts`
+ * (never recomputed at read time), so the driver is the SOLE WRITER and the
+ * adapter only EXTRACTS the window — the studio analog of the engine's
+ * reset-epoch-split invariant (`bin/agents/*.sh` extract, `supervisor.sh`
+ * persists `.last_usage_reset`). The whole layer is a best-effort OPTIMISATION
+ * over the already-correct reactive path: an absent row means "not known
+ * exhausted", so a missed write only degrades to the reactive behaviour, never
+ * to incorrectness (fail-safe, never fail-open). FK CASCADE: a window is
+ * meaningless once its connection is gone.
+ */
+export const connectionQuotaState = sqliteTable('connection_quota_state', {
+  connectionId: text('connection_id')
+    .primaryKey()
+    .references(() => connections.id, { onDelete: 'cascade' }),
+  /** Epoch ms the exhausted quota window resets; the admission gate refuses
+   * dispatch while `reset_epoch_ms > now`. A STORED fact (never recomputed). */
+  resetEpochMs: integer('reset_epoch_ms').notNull(),
+  /** Epoch ms of the LAST write to this row (the writing failure event's `ts`) —
+   * AUDIT ONLY, read nowhere today. Note it advances on every write, so on a
+   * MAX-upsert that KEEPS an earlier window it stamps the newest write, not the
+   * window-setting event; it is "last write", not "when the kept window was set". */
+  updatedAtMs: integer('updated_at_ms').notNull(),
+});

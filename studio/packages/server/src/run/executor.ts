@@ -1,5 +1,6 @@
 import pLimit from 'p-limit';
 import {
+  AGENT_CLI_CONNECTION_KIND,
   catalog as sharedCatalog,
   collectSecretSinkMarkers,
   computeCostEstimate,
@@ -13,6 +14,7 @@ import {
 } from '@autonomy-studio/shared';
 import { getRun } from '../repo/runs.js';
 import { getConnection } from '../repo/connections.js';
+import { getConnectionQuotaResetEpoch } from '../repo/connection-quota.js';
 import { getSecretByRef, getSecretByName } from '../repo/secrets.js';
 import { decrypt } from '../secrets/secrets.js';
 import { deepRedactRecord, deepRedactSecrets, redactSecrets } from '../connectors/redact.js';
@@ -67,6 +69,11 @@ export interface ExecutorDeps {
   catalog?: ActivityCatalog;
   /** Global worker-pool cap on concurrent ADAPTER runs. Default 4. */
   concurrency?: number;
+  /** #2 L14c — clock seam (epoch ms) for the quota admission gate's "is this
+   * connection's reset window still in the future" check; defaults to the wall
+   * clock, mirroring `DriverDeps.now`/`AlarmClockDeps.now`. Injected in tests for
+   * determinism. Read only on a LIVE pre-flight (never on replay). */
+  now?: () => number;
 }
 
 /**
@@ -79,7 +86,16 @@ function nodeFailed(
   runId: string,
   nodeId: string,
   attemptId: string,
-  failure: { error: string; kind: FailureKind; code?: string; retryAfterSeconds?: number },
+  failure: {
+    error: string;
+    kind: FailureKind;
+    code?: string;
+    retryAfterSeconds?: number;
+    // #2 L14c — the resolved connection this attempt dispatched to (stamped ONLY
+    // on a post-dispatch adapter failure, so the driver's quota-window writer can
+    // key an `agent_cli` `rate_limit` window off the exact connection).
+    connectionId?: string;
+  },
 ): EngineEvent {
   return { type: 'node.failed', runId, nodeId, attemptId, ...failure };
 }
@@ -205,7 +221,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     activityType: string,
     ownerId: string | null,
   ): Promise<
-    | { error: string; code: string }
+    | { error: string; code: string; kind?: FailureKind; retryAfterSeconds?: number }
     | {
         adapter: ConnectorAdapter;
         secret: string | null;
@@ -255,6 +271,30 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         code: FAILURE_CODES.NO_ADAPTER,
       };
     }
+    // #2 L14c — the quota ADMISSION GATE. A subscription CLI (`agent_cli`) shares
+    // ONE rolling usage quota across every run that binds it. When an earlier
+    // dispatch discovered exhaustion, the driver recorded the reset window here
+    // (keyed by this SAME resolved `connectionId`); while it is still in the
+    // future, short-circuit to a `rate_limit` retry WITHOUT decrypting the secret
+    // or spawning a doomed subprocess — otherwise every concurrent run burns its
+    // own subprocess to rediscover the shared quota is spent. Placed AFTER kind +
+    // adapter validation so a genuinely mis-bound connection still surfaces its
+    // PERMANENT error rather than a spurious transient. This carries NO
+    // `connectionId` (a pre-dispatch failure), so the driver's window writer does
+    // not re-record the window it is reacting to. Best-effort over the reactive
+    // path: an absent row (`null`) means "not known exhausted" → not gated.
+    if (connection.kind === AGENT_CLI_CONNECTION_KIND) {
+      const resetEpochMs = getConnectionQuotaResetEpoch(deps.db, connectionId);
+      const now = (deps.now ?? Date.now)();
+      if (resetEpochMs !== null && resetEpochMs > now) {
+        return {
+          error: `connection '${connectionId}' quota is exhausted; retry after the reset window`,
+          code: FAILURE_CODES.RATE_LIMIT,
+          kind: 'transient',
+          retryAfterSeconds: Math.ceil((resetEpochMs - now) / 1000),
+        };
+      }
+    }
     let secret: string | null = null;
     if (connection.secretRef !== null) {
       const secretRow = getSecretByRef(deps.db, connection.secretRef);
@@ -297,6 +337,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     runId: string,
     nodeId: string,
     attemptId: string,
+    connectionId: string | undefined,
   ): Promise<EngineEvent[]> {
     const events: EngineEvent[] = [];
     // #2 L5 — the per-connection price-table override, parsed ONCE per dispatch
@@ -418,6 +459,13 @@ export function createExecutor(deps: ExecutorDeps): Executor {
               ...(ev.retryAfterSeconds !== undefined
                 ? { retryAfterSeconds: ev.retryAfterSeconds }
                 : {}),
+              // #2 L14c — stamp the resolved connection on the DISPATCHED failure
+              // so the driver's window writer knows which `agent_cli` connection a
+              // `rate_limit` came from (L13a `${}` routing means the node's
+              // template string is not it). Only the adapter path carries it; a
+              // pre-dispatch failure legitimately has none. Always defined here (a
+              // connection-bound activity dispatched), the guard is type-hygiene.
+              ...(connectionId !== undefined ? { connectionId } : {}),
             }),
           );
           return events;
@@ -508,10 +556,17 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         ownerId,
       );
       if ('error' in resolved) {
+        // Most pre-flight failures are PERMANENT (a config typo does not self-heal);
+        // the #2 L14c admission gate is the one transient case, carrying its own
+        // `kind:'transient'` + `retryAfterSeconds` so it flows through the L7 retry
+        // path exactly like an adapter-reported `rate_limit`.
         yield nodeFailed(runId, nodeId, attemptId, {
           error: resolved.error,
-          kind: 'permanent',
+          kind: resolved.kind ?? 'permanent',
           code: resolved.code,
+          ...(resolved.retryAfterSeconds !== undefined
+            ? { retryAfterSeconds: resolved.retryAfterSeconds }
+            : {}),
         });
         return;
       }
@@ -576,7 +631,17 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       signal: controller.signal,
     };
     const events = await limit(() =>
-      runAdapter(adapter, ctx, secret, secretFields, controller, runId, nodeId, attemptId),
+      runAdapter(
+        adapter,
+        ctx,
+        secret,
+        secretFields,
+        controller,
+        runId,
+        nodeId,
+        attemptId,
+        command.resolvedConnectionId,
+      ),
     );
     // F4 output/error redaction (item 7 / S3): an ADDITIVE executor-level choke
     // point that switches ON only for a node that resolved a config-sink secret

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  AGENT_CLI_CONNECTION_KIND,
   AGENT_TASK_ACTIVITY_TYPE,
   LLM_CALL_ACTIVITY_TYPE,
   agentTaskConfigSchema,
@@ -155,8 +156,9 @@ function isCompilableRegex(pattern: string): boolean {
 type AgentConnectionConfig = z.infer<typeof agentConnectionConfigSchema>;
 
 /** The `provider` field on an `llm_call` CLI response's metering fact — the
- * Connection kind, per the `activity.metered` contract. */
-const AGENT_CLI_PROVIDER = 'agent_cli';
+ * Connection kind, per the `activity.metered` contract. Derived from the shared
+ * kind constant so the metering label cannot drift from the adapter's `kind`. */
+const AGENT_CLI_PROVIDER: string = AGENT_CLI_CONNECTION_KIND;
 
 /** The metering model LABEL when neither the node nor the connection names one.
  * An `unpriced` call has no price to resolve, so this is descriptive only. */
@@ -583,7 +585,7 @@ async function* runLlmCall(
  */
 export function createAgentAdapter(supervisor: Supervisor): ConnectorAdapter {
   return {
-    kind: 'agent_cli',
+    kind: AGENT_CLI_CONNECTION_KIND,
     configSchema: agentConnectionConfigSchema,
 
     async testConnection(config) {

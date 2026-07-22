@@ -615,6 +615,18 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * Ignored on any non-`transient` failure (which never retries).
      */
     retryAfterSeconds: z.number().int().positive().max(MAX_RETRY_INTERVAL_SECONDS).optional(),
+    /**
+     * #2 L14c — the RESOLVED connection this attempt dispatched to (the L13a
+     * `${}`-substituted id, a frozen fact — NOT the node's template string). The
+     * executor stamps it only on a POST-DISPATCH adapter failure, so the driver's
+     * quota-window writer can key the per-connection reset window off the exact
+     * connection an `agent_cli` `rate_limit` came from. Absent on any pre-dispatch
+     * failure (a bad secret, or the admission gate's OWN short-circuit — which
+     * must not re-record the window it is reacting to). The REDUCER never reads it
+     * (a driver-side derivation hint, like an audit fact); additive + optional, so
+     * every pre-L14c `node.failed` in a durable log stays valid.
+     */
+    connectionId: z.string().optional(),
   }),
   z.object({
     /**
