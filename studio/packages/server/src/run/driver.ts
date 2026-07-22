@@ -354,15 +354,16 @@ export function buildEngine(pv: PipelineVersion): Engine {
 }
 
 /**
- * #5 S4 — the execution-lease TTL. A `running` run HOLDS a lease until now+TTL (a
- * live drive is executing it); this is the initial grant stamped on entry to
- * `running`. Heartbeat RENEWAL, the lease-expiry alarm, and generation tokens are
- * #5 S7 — until S7 NOTHING reads `leaseUntil` (boot-reconcile scans by STATUS, not
- * lease), so on a long run this value simply goes stale with no consumer, harmless
- * until S7's renewal keeps it fresh. The value is the S7 heartbeat-miss budget; S7
- * tunes it when renewal lands.
+ * #5 S4/S7 — the execution-lease TTL. A `running` run HOLDS a lease until
+ * now+TTL: the initial grant is stamped on entry to `running` (below), and S7's
+ * heartbeat sweep (`scheduler/lease.ts`) RENEWS it while the run's drive is
+ * live. The lease is "when to next VERIFY liveness": a lease that expires
+ * without renewal fires the durable `run_lease` alarm, whose reclaim re-runs
+ * the boot-reconcile policy under the drive lock. The value IS the
+ * heartbeat-miss budget — five missed sweeps at the 60s `LEASE_SWEEP_MS`
+ * (resolving the old "S7 tunes it when renewal lands" note: 5 minutes stands).
  */
-const LEASE_TTL_MS = 5 * 60_000;
+export const LEASE_TTL_MS = 5 * 60_000;
 
 /**
  * Sync the DB run's lifecycle status/finishedAt to `status`. Only touches `runs`

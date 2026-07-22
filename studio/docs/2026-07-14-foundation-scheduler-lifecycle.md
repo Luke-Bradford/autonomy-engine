@@ -105,7 +105,7 @@ a worker, heartbeats; a **lease-expiry alarm** (S1) reclaims a dead worker's run
 | S4 | Lease/slot release for `queued`+`waiting` runs (split execution-lease from lifecycle) |
 | S5 | Recurrence model + croner-as-calculator producing wakeup rows + schedule catch-up (no-backfill, ≤1 late). **S5a SHIPPED** the croner-as-calculator + catch-up halves (durable `schedule_tick` rows replace in-memory crons — see the "S5a — SHIPPED" block below); the ADF **recurrence MODEL** is split out to **S5b**. |
 | S6 | Admission: per-trigger + per-pipeline (both-must-pass) + fair queue (durable `queuedAt`, round-robin). **S6a SHIPPED 2026-07-21** (durable admission queue: `queued` run rows + `queued_at` FIFO + boot `recoverQueued`; #631 live-capacity re-check; #629 bus-hook drain on ANY terminalization). **S6b SHIPPED 2026-07-22** — the per-PIPELINE half: `Pipeline.concurrency` (positive int, `null` = uncapped) lives on the **MUTABLE `pipelines` row, NOT the immutable version doc** (a live operational gate read fresh per admission, #631's precedent; a version-doc cap would be unrepairable and would race across triggers bound to different versions — the domain spec's D1/F8a row is annotated to match). `fire()` is both-must-pass for every policy; **per-pipeline overflow QUEUES** (durable, bounded by the per-trigger depth cap), with `skip_if_running`'s trigger-level skip applying first (a queued row counts as its outstanding fire). The drain is **pipeline-scoped** (`drainPipelineQueue`, keyed off the settling run's version→pipeline) at all three sites (settle `finally`, #629 bus hook — which now also drains for a trigger-LESS `call_pipeline` child, `recoverQueued`), admitting while BOTH live capacities have room. **Fairness = least-recently-ADMITTED trigger first** (never-served first, then oldest `queuedAt`, then `triggerId`; strict `queuedAt` FIFO within a trigger) — a durable round-robin derived from admission-re-stamped `started_at`, no rotation pointer, restart-safe; a trigger at its own cap is skipped, never stalling others. Read-lenient/write-strict cap schema; launcher fails CLOSED to a single slot on a corrupted stored cap. Remaining S6 slice: the `waiting_concurrency` RE-admission gate on resume. |
-| S7 | Lease-expiry reclaim with generation tokens (on S1) + boot-reconcile formalization |
+| S7 | Lease-expiry reclaim with generation tokens (on S1) + boot-reconcile formalization. **SHIPPED 2026-07-22** — see the S7 block below; supersedes **#465** (the `supersede` primitive landed here with its consumer, as that ticket planned). |
 | S8 | Event/webhook trigger firing via event bus + `externalWait` (with #4 A13) |
 | S9 | Tumbling-window: window-domain EVENTS (`window.created/runCreated/…`) + projection + config-versioned window key + single-fire |
 | S10 | Tumbling-window: bounded backfill (maxBackfillWindows + durable cursor, incremental via S1) |
@@ -224,16 +224,19 @@ What the hardened blocks above said, and what actually shipped:
     tick, which IS the at-least-once contract. The multi-worker claim lease
     (`claimed_by`/`claim_expires`) the spike flags for a later S-tier lands as one coherent change
     **if** this outgrows better-sqlite3's single writer. In-tick re-entrancy is an in-memory flag.
-  - `supersededBy` + `supersede` (cancel-old + arm-new) — **S7 surface, deferred to S7** (#465).
+  - `supersededBy` + `supersede` (cancel-old + arm-new) — **S7 surface, deferred to S7** (#465);
+    **NOW LANDED there** (migration 0017, `supersedeWakeup` — see the S7 block below).
     Its only spec anchor is *"heartbeats supersede old alarms"*, which the ticket table places at
     S7 (lease-expiry generation tokens). It was built here first and the pre-PR review found it had
     already produced a silent-lost-alarm: the guard compared the replacement KEY, but arming is
     upsert-if-absent, so a replacement colliding with any pre-existing row returned that spent row
     while the live alarm was still cancelled. Exactly what a primitive with no consumer to pin its
-    semantics gets wrong. It lands at S7 via `ALTER TABLE ... ADD COLUMN superseded_by TEXT`
-    (native in SQLite — not the table-recreate a CHECK change would need).
-  - **Consequence, stated plainly:** an armed alarm is IMMUTABLE — there is no way to move a
-    `dueAt`. A caller wanting a later alarm arms a NEW one under a new discriminator.
+    semantics gets wrong. It landed at S7 via `ALTER TABLE ... ADD COLUMN superseded_by TEXT`
+    (native in SQLite — not the table-recreate a CHECK change would need), guarding on what the
+    arm RESOLVED TO (`created === false` → refuse + roll back), exactly as #465 prescribed.
+  - **Consequence, restated for the S7 era:** an armed alarm is immutable BY RE-ARMING; the one
+    sanctioned way to move a `dueAt` is `supersedeWakeup` — an explicit cancel-old + arm-new in
+    one transaction. A caller without a supersede claim arms a NEW alarm under a new discriminator.
 - **AMENDED — `isFresh` is not a separate registry predicate.** Freshness is `fire`'s discriminated
   return (`fired` | `suppressed{reason}`), because a suppression must be able to append its OWN
   durable event (`trigger.fireSuppressed`) in the same transaction as the settle — a boolean
@@ -317,6 +320,64 @@ with the UI recurrence builder (U14b, already a non-goal here). What shipped:
   the *run*; spec line 250) — the schedule itself survives because the next occurrence is already
   armed. **S5b (recurrence object)** must additionally honour `startTime`/`endTime` bounds; v1 relies
   solely on croner returning `null` for a finite/exhausted cron.
+
+## S7 — SHIPPED 2026-07-22 (lease-expiry reclaim + heartbeats + the reconcile formalization)
+
+One module owns the whole lease lifecycle: `scheduler/lease.ts` (`createLeaseService` → the
+heartbeat `sweep` + the `run_lease` alarm handler + the reclaim), because the three share the
+in-flight-reclaim set and the alarm-identity scheme. What the hardened lines above said, and what
+shipped:
+
+- **The unifying invariant:** every `running` row holds a `leaseUntil` and (within one 60s sweep
+  interval) a pending `run_lease` alarm due at it. The lease is *"when to next VERIFY liveness"*:
+  a live-drive run is renewed by the sweep and its alarm never fires; a run alive on its OWN
+  durable node alarm (a retry hold, a crash-gap parked wait) gets its lease RENEWED by the
+  reclaim's `held` verdict (a self-perpetuating check, never a churny interrupt); a genuinely
+  stranded run (drive gone) is reclaimed. `waiting`/`queued`/terminal rows keep `leaseUntil =
+  null` (S4) and are out of scope — their liveness is their own alarm / the admission queue.
+- **Generation token, honoured verbatim:** the alarm's ref carries the `leaseUntil` it was armed
+  against (`{runId, leaseUntil}`, discriminator `lease-<leaseUntil>` — vacuous like retry's, the
+  ref pins the occurrence); the handler reclaims ONLY if the row still holds that exact value
+  (else `lease_renewed` suppression — reachable via a park→resume re-stamp, since
+  `syncRunLifecycle` stamps a fresh lease on every real status change to `running`). Expiry
+  (`leaseUntil <= now`, the one comparison) is structural at fire time: `dueAt === leaseUntil`.
+  Further verdicts: `run_not_found` / `not_running` / `reclaim_in_flight` / `drive_live` (a live
+  drive with an expired lease means the SWEEP stalled — never reclaim under a live drive).
+- **"Heartbeats supersede old alarms", mechanically:** the sweep stamps `heartbeatAt` (the
+  S4-deferred half — live-drive EVIDENCE, written nowhere else) + `leaseUntil = now + TTL` and
+  supersedes the previous generation's alarm to the new one, all in ONE transaction (the repo tx
+  nests as a SAVEPOINT), so row-lease and alarm generation cannot diverge across a crash.
+  `supersedeWakeup` (#465, built as specced): arm-new FIRST, refuse+roll-back on
+  `created === false` (trap 1: check what the arm resolved to, not the key), old cancelled with
+  `supersededBy` provenance only if still pending (a missing/settled old still arms the
+  replacement — the post-boot renewal case; settled is FINAL, never rewritten). Churn is one
+  cancelled row per sweep per live run, ACCEPTED — bounded by #464 retention; a lazy-supersede
+  optimization is a follow-up if volume ever matters.
+- **The reclaim IS the boot-reconcile policy — the "formalization":** `reconcileOne` is now
+  exported with a two-entry-point lock contract (reconcile.ts's header): boot (lock-free by
+  proof) and the lease reclaim, which wraps it in `drives.serialize` and re-checks the row under
+  the lock (status still `running`, lease still expired — anything can happen between the fire's
+  commit and lock acquisition). Its `run.resumed`/`node.retryRequested` facts carry
+  `reason: 'lease_reclaim'` (the event union's closed reason enum grew its second value — each
+  value names a sanctioned resumer). Idempotent in-flight → resumed under a new attempt;
+  non-idempotent → frozen `interrupted` — identical policy, per-activity, unchanged.
+- **At-least-once closes through the sweep:** the reclaim spawns `afterCommit` (the clock
+  contract), so a fault between settle and reclaim would lose it — the sweep's third branch bumps
+  the generation of any no-drive expired-lease (or spent-current-generation) row to a strictly
+  advancing `leaseUntil` and arms it immediately due, so the #465 discriminator trap cannot bite
+  and a lost reclaim is retried within one sweep. Branch 2 arms the missing alarm for a
+  no-drive still-live lease (the drive-dropped-before-first-sweep window). In-memory
+  `reclaimsInFlight` keeps the sweep from stamping `heartbeatAt` off a reclaim's own `serialize`
+  registration (registration ≠ drive); a crash empties it and the durable self-heal re-arms.
+- **Boot order is load-bearing:** reconcile → lease sweep → alarm interval + boot tick. The sweep
+  BEFORE the tick so it observes only the reconciler's final states, never a boot-fired reclaim's
+  registration. A boot-resumed run does NOT re-stamp its lease (running→running is
+  `syncRunLifecycle`'s early-return), so a held run's pre-crash alarm token MATCHES and fires
+  into a reclaim whose `held` verdict renews — convergence by design, not by suppression.
+- **Self-cleaning tails, accepted:** a completed run's pending lease alarm fires up to TTL late
+  into a `not_running` suppression (one settled row per run; #464 prunes); `LEASE_TTL_MS` stays
+  5 min (the heartbeat-miss budget: five missed 60s sweeps) — the S4 "S7 tunes it" note resolves
+  to keeping it.
 
 ## Non-goals
 

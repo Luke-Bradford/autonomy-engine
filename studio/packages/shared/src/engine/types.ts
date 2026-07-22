@@ -930,7 +930,14 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('run.resumed'),
     runId: z.string(),
-    reason: z.literal('boot_reconcile'),
+    /**
+     * WHICH recovery mechanism resumed the run — the two sanctioned callers of
+     * the reconcile policy (`reconcile.ts`'s lock contract): the boot scan, and
+     * #5 S7's lease-expiry reclaim. Closed on purpose (unlike
+     * `node.retryRequested.reason`): each value names a code path, and an
+     * unknown one would mean an unsanctioned resumer.
+     */
+    reason: z.enum(['boot_reconcile', 'lease_reclaim']),
   }),
   z.object({
     /**

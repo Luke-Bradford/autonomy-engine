@@ -21,6 +21,7 @@ import { createWaitAlarmHandler } from './scheduler/wait-alarm.js';
 import { createExternalWaitAlarmHandler } from './scheduler/external-wait-alarm.js';
 import { createContainerTimeoutAlarmHandler } from './scheduler/container-timeout-alarm.js';
 import { createScheduleTickHandler } from './scheduler/schedule-tick.js';
+import { createLeaseService, LEASE_SWEEP_MS } from './scheduler/lease.js';
 import { createConnectorRegistry } from './connectors/registry.js';
 import { makeDocResolver } from './run/driver.js';
 import { createExternalWaitCompleter } from './run/external-wait-service.js';
@@ -275,6 +276,12 @@ export async function buildApp(opts?: BuildAppOptions) {
     launcher: { fire: (t, fc) => runLauncher.fire(t, fc) },
     log: fastify.log,
   });
+  // #5 S7 — the run-lease service: ONE module owning the heartbeat sweep, the
+  // `run_lease` handler, and the reclaim (they share the reclaims-in-flight set
+  // and the alarm-identity scheme). Same driver boundary as the retry alarm —
+  // the reclaim is the second sanctioned caller of the reconcile policy and
+  // takes the drive lock through it (`reconcile.ts`'s lock contract).
+  const leaseService = createLeaseService(driverBoundary);
   const alarmClock: AlarmClock = createAlarmClock({
     db,
     handlers: [
@@ -290,6 +297,8 @@ export async function buildApp(opts?: BuildAppOptions) {
       // outruns its wall-clock bound.
       createContainerTimeoutAlarmHandler(driverBoundary),
       scheduleTickHandler,
+      // #5 S7 — `run_lease` expiry → reclaim; S1's first RUN-level consumer.
+      leaseService.handler,
     ],
     bus: runEventBus,
     log: fastify.log,
@@ -364,8 +373,24 @@ export async function buildApp(opts?: BuildAppOptions) {
   // two-concurrent-drives divergence F2c exists to prevent. The launcher +
   // scheduler are constructed above but neither pumps until this tick fires a due
   // row, which is after the awaited reconcile — so the invariant holds.
+  // #5 S7 — the BOOT lease sweep, deliberately BEFORE the boot tick below: the
+  // tick can fire a stale-lease alarm whose reclaim registers in the drive
+  // registry, and a sweep that then observed that registration would stamp
+  // `heartbeatAt` (live-drive evidence) off a reclaim — a false liveness record
+  // — and renew the lease out from under the reclaim's guard. Running first,
+  // it sees only the reconciler's final states: every still-`running` row
+  // (held / crash-gap parked) gets its lease alarm ensured or its generation
+  // bumped, so the tick right after delivers whatever is genuinely due.
+  leaseService.sweep();
+
   const alarmTimer = setInterval(() => alarmClock.tick(), ALARM_TICK_MS);
   alarmTimer.unref();
+
+  // The recurring heartbeat: renews live-drive runs' leases (superseding their
+  // alarms to the new generation) and self-heals lost reclaims. `unref`'d like
+  // every other housekeeping timer here.
+  const leaseTimer = setInterval(() => leaseService.sweep(), LEASE_SWEEP_MS);
+  leaseTimer.unref();
 
   // A held retry alarm OR a schedule tick may already be due (armed before the
   // crash, the process down past its `dueAt`). Sweep once at boot so it fires now
@@ -527,6 +552,9 @@ export async function buildApp(opts?: BuildAppOptions) {
     // DURABLE, and the boot sweep above serves it on the next start.
     clearInterval(alarmTimer);
     alarmClock.stop();
+    // #5 S7 — no further heartbeat sweeps (arming/renewing would be pointless
+    // work against a closing db; pending lease alarms are durable regardless).
+    clearInterval(leaseTimer);
     // #464/#421 — stop both retention sweeps too; they are pure housekeeping, safe
     // to drop instantly (the next boot sweeps again). `undefined` when that sweep
     // is disabled.

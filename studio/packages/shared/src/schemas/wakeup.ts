@@ -34,14 +34,15 @@ import { z } from 'zod';
  *   before it fires, so stale retries / expired leases / disabled triggers
  *   can't emit valid-looking events."
  * - `cancelled` — disarmed before it came due (a `wait` node cancelled, a
- *   trigger deleted). Also the slot S7's `supersede` will reuse when a lease
- *   heartbeat replaces an alarm.
+ *   trigger deleted). Also the slot S7's `supersede` reuses when a lease
+ *   heartbeat replaces an alarm — such a row additionally carries
+ *   `supersededBy` (the replacement's id) as provenance.
  *
  * Deliberately NO `claimed`: the fire is ONE transaction (handler + status
  * update together — see `scheduler/alarms.ts`), so there is no suspension point
  * between picking a row up and settling it. The 0005 migration carries the full
- * argument, and the matching reason `claimedAt`/`supersededBy` are absent from
- * the row.
+ * argument. (`supersededBy`, deferred by the same "no writer" rule, gained its
+ * writer at S7 — the 0017 migration — and is present below.)
  */
 export const WakeupStatusSchema = z.enum(['pending', 'fired', 'suppressed', 'cancelled']);
 export type WakeupStatus = z.infer<typeof WakeupStatusSchema>;
@@ -176,5 +177,13 @@ export const ScheduledWakeupSchema = z.object({
   status: WakeupStatusSchema,
   /** Epoch ms the clock settled this row; null while `pending`. */
   firedAt: z.number().int().nullable(),
+  /**
+   * #5 S7 (#465) — when a `supersede` replaced this alarm (cancel-old +
+   * arm-new in one transaction), the REPLACEMENT row's id. PROVENANCE ONLY:
+   * a bare column, no self-FK, never joined for correctness (the
+   * `webhook_deliveries.run_id` precedent) — so a #464 retention prune of the
+   * row it names leaves a harmless dangling string. Null everywhere else.
+   */
+  supersededBy: z.string().min(1).nullable(),
 });
 export type ScheduledWakeup = z.infer<typeof ScheduledWakeupSchema>;

@@ -9,10 +9,10 @@ import {
 describe('#5 S1 — WakeupStatus vocabulary', () => {
   it('is exactly the four reachable states', () => {
     // Each has a distinct writer: `pending` (arm), `fired`/`suppressed` (the
-    // clock's fire txn), `cancelled` (cancelWakeup, and S7's supersede later).
+    // clock's fire txn), `cancelled` (cancelWakeup, and S7's supersede).
     // A status nothing can write would be the same unreachable-surface defect
     // as a column no code sets — see the 0005 migration's note on why
-    // `claimed_at`/`superseded_by` are absent.
+    // `claimed_at` is absent (`superseded_by` gained its writer at S7).
     expect(WakeupStatusSchema.options).toEqual(['pending', 'fired', 'suppressed', 'cancelled']);
   });
 });
@@ -133,6 +133,7 @@ describe('#5 S1 — ScheduledWakeupSchema is the durable row', () => {
     dedupeKey: 'retry:{"nodeId":"a","runId":"run_1"}:attempt-1',
     status: 'pending' as const,
     firedAt: null,
+    supersededBy: null,
   };
 
   it('parses a pending row', () => {
@@ -152,5 +153,16 @@ describe('#5 S1 — ScheduledWakeupSchema is the durable row', () => {
 
   it('rejects an unknown status — the status vocabulary IS closed', () => {
     expect(() => ScheduledWakeupSchema.parse({ ...row, status: 'claimed' })).toThrow();
+  });
+
+  it('#5 S7 — round-trips supersededBy, and its absence is an ERROR, not a default', () => {
+    // Provenance for a superseded (cancelled) row. No `.default(null)`: an
+    // absent column being manufactured as a benign value is the #473 fail-open
+    // shape — a row missing the field must fail parse, not silently read null.
+    const cancelled = { ...row, status: 'cancelled' as const, firedAt: 500, supersededBy: 'wku_2' };
+    expect(ScheduledWakeupSchema.parse(cancelled).supersededBy).toBe('wku_2');
+    const withoutColumn: Partial<typeof row> = { ...row };
+    delete withoutColumn.supersededBy;
+    expect(() => ScheduledWakeupSchema.parse(withoutColumn)).toThrow();
   });
 });

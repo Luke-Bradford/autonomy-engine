@@ -13,8 +13,11 @@ import { syncRunLifecycle } from '../driver.js';
  * (`leaseUntil = null`) so it occupies no worker. The lease is a pure projection
  * of status — no new event, no reducer change — written only on a real status
  * transition (the same idempotent early-return that guards `finishedAt`), so it
- * is stamped ONCE on entry to `running` and never re-stamped mid-run (heartbeat
- * RENEWAL + expiry reclaim are #5 S7).
+ * is stamped ONCE on entry to `running` and never re-stamped BY THIS FUNCTION
+ * mid-run — mid-run renewal is #5 S7's heartbeat sweep (`scheduler/lease.ts`),
+ * a separate writer. The re-stamp on waiting→running (pinned below) is what
+ * makes a pre-park lease alarm's generation token stale — S7's `lease_renewed`
+ * suppression path.
  */
 function setupRun(db: ReturnType<typeof freshDb>['db']) {
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
