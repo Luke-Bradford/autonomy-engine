@@ -400,3 +400,94 @@ describe('ollamaAdapter.runActivity — structured output (#2 L4b)', () => {
     expect(failed(events)).toMatchObject({ kind: 'transient' });
   });
 });
+
+// ---------------------------------------------------------------------------
+// #2 L10a — local tools: wire shape + the single tool round-trip.
+// ---------------------------------------------------------------------------
+
+describe('ollamaAdapter — local tools (#2 L10a)', () => {
+  const ADDER = {
+    name: 'adder',
+    description: 'Adds two numbers.',
+    parameters: {
+      type: 'object',
+      properties: { a: { type: 'number' }, b: { type: 'number' } },
+    },
+    expression: '${add(tool.args.a, tool.args.b)}',
+  };
+
+  const TOOL_CALL_BODY = {
+    message: {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{ function: { name: 'adder', arguments: { a: 1, b: 2 } } }],
+    },
+    done: true,
+    done_reason: 'stop',
+    prompt_eval_count: 7,
+    eval_count: 3,
+  };
+
+  function toolCtx(over: Record<string, unknown> = {}): ActivityContext {
+    return ctx({ input: { prompt: 'add 1 and 2', model: 'llama3', tools: [ADDER], ...over } });
+  }
+
+  function requestBody(spy: ReturnType<typeof vi.spyOn>, call: number): Record<string, unknown> {
+    return JSON.parse(
+      ((spy as unknown as { mock: { calls: unknown[][] } }).mock.calls[call]![1] as RequestInit)
+        .body as string,
+    ) as Record<string, unknown>;
+  }
+
+  it('sends function-wrapped tools; no tool_choice (Ollama has no forced-choice surface)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    // `required` is best-effort on this provider — tools are sent, the model decides.
+    await drain(ollamaAdapter.runActivity(toolCtx({ toolChoice: 'required' }), null));
+    const body = requestBody(fetchSpy, 0);
+    expect(body).not.toHaveProperty('tool_choice');
+    expect(body.tools).toEqual([
+      {
+        type: 'function',
+        function: {
+          name: 'adder',
+          description: 'Adds two numbers.',
+          parameters: {
+            type: 'object',
+            properties: { a: { type: 'number' }, b: { type: 'number' } },
+            required: ['a', 'b'],
+            additionalProperties: false,
+          },
+        },
+      },
+    ]);
+  });
+
+  it('drives one round-trip: object arguments, no call ids, role:tool results', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, TOOL_CALL_BODY))
+      .mockResolvedValueOnce(fakeResponse(200, OK_BODY));
+    const events = await drain(ollamaAdapter.runActivity(toolCtx(), null));
+    expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'metered', 'succeeded']);
+    const second = requestBody(fetchSpy, 1);
+    const msgs = second.messages as Record<string, unknown>[];
+    expect(msgs[msgs.length - 2]).toEqual(TOOL_CALL_BODY.message);
+    expect(msgs[msgs.length - 1]).toEqual({ role: 'tool', content: '3' });
+  });
+
+  it('fails permanent on a second tool round-trip request', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, TOOL_CALL_BODY))
+      .mockResolvedValueOnce(fakeResponse(200, TOOL_CALL_BODY));
+    const events = await drain(ollamaAdapter.runActivity(toolCtx(), null));
+    const last = events[events.length - 1]!;
+    expect(last).toMatchObject({ type: 'failed', kind: 'permanent' });
+    if (last.type === 'failed') expect(last.error).toMatch(/tool budget/);
+  });
+
+  it("omits tools under toolChoice 'none'", async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(ollamaAdapter.runActivity(toolCtx({ toolChoice: 'none' }), null));
+    expect(requestBody(fetchSpy, 0)).not.toHaveProperty('tools');
+  });
+});

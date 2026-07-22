@@ -447,3 +447,159 @@ describe('openaiAdapter.runActivity — structured output (#2 L4b)', () => {
     expect(failed(events)).toMatchObject({ kind: 'transient' });
   });
 });
+
+// ---------------------------------------------------------------------------
+// #2 L10a — local tools: wire shape + the single tool round-trip.
+// ---------------------------------------------------------------------------
+
+describe('openaiAdapter — local tools (#2 L10a)', () => {
+  const ADDER = {
+    name: 'adder',
+    description: 'Adds two numbers.',
+    parameters: {
+      type: 'object',
+      properties: { a: { type: 'number' }, b: { type: 'number' } },
+    },
+    expression: '${add(tool.args.a, tool.args.b)}',
+  };
+
+  const TOOL_CALL_BODY = {
+    choices: [
+      {
+        message: {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'adder', arguments: '{"a":1,"b":2}' },
+            },
+          ],
+        },
+        finish_reason: 'tool_calls',
+      },
+    ],
+    usage: { prompt_tokens: 9, completion_tokens: 5 },
+  };
+
+  function toolCtx(over: Record<string, unknown> = {}): ActivityContext {
+    return ctx({ input: { prompt: 'add 1 and 2', model: 'gpt-4o', tools: [ADDER], ...over } });
+  }
+
+  function requestBody(spy: ReturnType<typeof vi.spyOn>, call: number): Record<string, unknown> {
+    return JSON.parse(
+      ((spy as unknown as { mock: { calls: unknown[][] } }).mock.calls[call]![1] as RequestInit)
+        .body as string,
+    ) as Record<string, unknown>;
+  }
+
+  it('sends function-wrapped tools with the explicit-required schema, tool_choice auto', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(openaiAdapter.runActivity(toolCtx(), 'sk'));
+    const body = requestBody(fetchSpy, 0);
+    expect(body.tool_choice).toBe('auto');
+    expect(body.tools).toEqual([
+      {
+        type: 'function',
+        function: {
+          name: 'adder',
+          description: 'Adds two numbers.',
+          parameters: {
+            type: 'object',
+            properties: { a: { type: 'number' }, b: { type: 'number' } },
+            required: ['a', 'b'],
+            additionalProperties: false,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("maps toolChoice 'required' and downgrades the continuation to 'auto'", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, TOOL_CALL_BODY))
+      .mockResolvedValueOnce(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      openaiAdapter.runActivity(toolCtx({ toolChoice: 'required' }), 'sk'),
+    );
+    expect(events[events.length - 1]!.type).toBe('succeeded');
+    expect(requestBody(fetchSpy, 0).tool_choice).toBe('required');
+    expect(requestBody(fetchSpy, 1).tool_choice).toBe('auto');
+  });
+
+  it('drives one round-trip: continuation carries the raw assistant message + tool results', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, TOOL_CALL_BODY))
+      .mockResolvedValueOnce(fakeResponse(200, OK_BODY));
+    const events = await drain(openaiAdapter.runActivity(toolCtx(), 'sk'));
+    expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'metered', 'succeeded']);
+    expect(succeeded(events).outputs).toEqual({ text: 'the answer', stopReason: 'stop' });
+    const second = requestBody(fetchSpy, 1);
+    const msgs = second.messages as Record<string, unknown>[];
+    expect(msgs[msgs.length - 2]).toEqual(TOOL_CALL_BODY.choices[0]!.message);
+    expect(msgs[msgs.length - 1]).toEqual({
+      role: 'tool',
+      tool_call_id: 'call_1',
+      content: '3',
+    });
+  });
+
+  it('a tool-calls-only response (content null) is the tool flow, not a no-completion', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, TOOL_CALL_BODY))
+      .mockResolvedValueOnce(fakeResponse(200, OK_BODY));
+    const events = await drain(openaiAdapter.runActivity(toolCtx(), 'sk'));
+    expect(events.every((e) => e.type !== 'failed')).toBe(true);
+  });
+
+  it('feeds unparseable arguments back as an error tool result', async () => {
+    const badArgs = {
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              { id: 'call_1', type: 'function', function: { name: 'adder', arguments: '{oops' } },
+            ],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+      usage: { prompt_tokens: 3, completion_tokens: 2 },
+    };
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, badArgs))
+      .mockResolvedValueOnce(fakeResponse(200, OK_BODY));
+    const events = await drain(openaiAdapter.runActivity(toolCtx(), 'sk'));
+    expect(events[events.length - 1]!.type).toBe('succeeded');
+    const second = requestBody(fetchSpy, 1);
+    const msgs = second.messages as Record<string, unknown>[];
+    const toolMsg = msgs[msgs.length - 1] as { role: string; content: string };
+    expect(toolMsg.role).toBe('tool');
+    expect(toolMsg.content).toMatch(/invalid arguments for tool 'adder'/);
+  });
+
+  it('fails permanent on a second tool round-trip request', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, TOOL_CALL_BODY))
+      .mockResolvedValueOnce(fakeResponse(200, TOOL_CALL_BODY));
+    const events = await drain(openaiAdapter.runActivity(toolCtx(), 'sk'));
+    const last = events[events.length - 1]!;
+    expect(last).toMatchObject({ type: 'failed', kind: 'permanent' });
+    if (last.type === 'failed') expect(last.error).toMatch(/tool budget/);
+  });
+
+  it("omits tools under toolChoice 'none' and when the node declares none", async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(openaiAdapter.runActivity(toolCtx({ toolChoice: 'none' }), 'sk'));
+    await drain(openaiAdapter.runActivity(ctx(), 'sk'));
+    expect(requestBody(fetchSpy, 0)).not.toHaveProperty('tools');
+    expect(requestBody(fetchSpy, 0)).not.toHaveProperty('tool_choice');
+    expect(requestBody(fetchSpy, 1)).not.toHaveProperty('tools');
+  });
+});

@@ -5,17 +5,20 @@ import {
   buildCapture,
   buildRepairTurns,
   coerceStopReason,
+  executeLocalTool,
+  executeToolCalls,
   httpStatusFailure,
   meterUsage,
   noCompletionFailure,
   openAiReasoningEffort,
   parseRetryAfter,
   runStructuredWithRepair,
+  runTextWithTools,
   structuredEcho,
 } from '../llm-shared.js';
 import { sha256Hex } from '../../util/hash.js';
-import type { LlmTurn, StructuredCallOutcome } from '../llm-shared.js';
-import type { ActivityEvent, LlmUsage } from '../types.js';
+import type { LlmToolDef, LlmTurn, StructuredCallOutcome, ToolCallResult } from '../llm-shared.js';
+import type { ActivityEvent, LlmCapture, LlmUsage } from '../types.js';
 
 async function drain(stream: AsyncIterable<ActivityEvent>): Promise<ActivityEvent[]> {
   const events: ActivityEvent[] = [];
@@ -486,5 +489,217 @@ describe('httpStatusFailure', () => {
     expect(
       httpStatusFailure('anthropic_api', 429, 'b', '0', NOW).retryAfterSeconds,
     ).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2 L10a — local tool execution + the single-round-trip tool flow.
+// ---------------------------------------------------------------------------
+
+const ADDER: LlmToolDef = {
+  name: 'adder',
+  description: 'Adds two numbers.',
+  parameters: {
+    type: 'object',
+    properties: { a: { type: 'number' }, b: { type: 'number' } },
+  },
+  expression: '${add(tool.args.a, tool.args.b)}',
+};
+
+describe('executeLocalTool (#2 L10a)', () => {
+  it('validates args and evaluates the expression to a JSON result string', () => {
+    const r = executeLocalTool(ADDER, { a: 2, b: 3 });
+    expect(r).toEqual({ ok: true, resultText: '5' });
+  });
+
+  it('strips unknown args (validateStructuredOutput reuse)', () => {
+    const r = executeLocalTool(ADDER, { a: 2, b: 3, extra: 'x' });
+    expect(r).toEqual({ ok: true, resultText: '5' });
+  });
+
+  it('returns an error for missing/mistyped args instead of failing the node', () => {
+    const missing = executeLocalTool(ADDER, { a: 2 });
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(missing.message).toMatch(/invalid arguments for tool 'adder'/);
+    const mistyped = executeLocalTool(ADDER, { a: 'two', b: 3 });
+    expect(mistyped.ok).toBe(false);
+  });
+
+  it('returns an error for a non-object args payload', () => {
+    expect(executeLocalTool(ADDER, 'garbage').ok).toBe(false);
+    expect(executeLocalTool(ADDER, null).ok).toBe(false);
+  });
+
+  it('normalizes an optional arg to present-null (#594 contract)', () => {
+    const tool: LlmToolDef = {
+      ...ADDER,
+      name: 'echoer',
+      parameters: {
+        type: 'object',
+        properties: { req: { type: 'string' }, opt: { type: 'string' } },
+        required: ['req'],
+      },
+      expression: '${coalesce(tool.args.opt, tool.args.req)}',
+    };
+    expect(executeLocalTool(tool, { req: 'fallback' })).toEqual({
+      ok: true,
+      resultText: '"fallback"',
+    });
+  });
+
+  it('returns an error when the expression evaluation throws', () => {
+    const tool: LlmToolDef = { ...ADDER, expression: '${tool.args.a.deep.miss}' };
+    const r = executeLocalTool(tool, { a: 1, b: 2 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toMatch(/evaluation failed/);
+  });
+
+  it('bounds an oversized result instead of shipping it', () => {
+    const tool: LlmToolDef = {
+      name: 'big',
+      description: 'Builds a big array.',
+      parameters: { type: 'object', properties: { n: { type: 'number' } } },
+      expression: '${range(0, tool.args.n)}',
+    };
+    const r = executeLocalTool(tool, { n: 9999 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toMatch(/too large/);
+  });
+});
+
+describe('executeToolCalls (#2 L10a)', () => {
+  it('executes each call in order against the declared tools', () => {
+    const results = executeToolCalls(
+      [ADDER],
+      [
+        { id: 't1', name: 'adder', args: { a: 1, b: 2 } },
+        { id: 't2', name: 'adder', args: { a: 10, b: 20 } },
+      ],
+    );
+    expect(results).toEqual([
+      { id: 't1', name: 'adder', resultText: '3', isError: false },
+      { id: 't2', name: 'adder', resultText: '30', isError: false },
+    ]);
+  });
+
+  it('returns an error result for an unknown tool and a nameless call', () => {
+    const results = executeToolCalls(
+      [ADDER],
+      [
+        { id: 't1', name: 'mystery', args: {} },
+        { id: 't2', name: null, args: {} },
+      ],
+    );
+    expect(results[0]).toMatchObject({ isError: true, resultText: "unknown tool 'mystery'" });
+    expect(results[1]).toMatchObject({ isError: true });
+  });
+});
+
+describe('runTextWithTools (#2 L10a — single round-trip)', () => {
+  const CAPTURE: LlmCapture = {
+    provider: 'anthropic_api',
+    model: 'm',
+    latencyMs: 5,
+    request: { messageCount: 1, messages: [{ role: 'user', chars: 2, contentHash: 'h' }] },
+  };
+  const SUCCEEDED: Extract<ActivityEvent, { type: 'succeeded' }> = {
+    type: 'succeeded',
+    outputs: { text: 'done', stopReason: 'end_turn' },
+  };
+
+  it('passes an immediate text response through: metered, captured, succeeded', async () => {
+    const events = await drain(
+      runTextWithTools('anthropic_api', [ADDER], ['conv0'], 'auto', () =>
+        Promise.resolve({ type: 'text', usage: USAGE, capture: CAPTURE, succeeded: SUCCEEDED }),
+      ),
+    );
+    expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'succeeded']);
+  });
+
+  it('drives one tool round-trip: 2 metered, 1 captured (first exchange), then success', async () => {
+    const seen: { conv: unknown; choice: string }[] = [];
+    const events = await drain(
+      runTextWithTools('anthropic_api', [ADDER], 'conv0', 'required', (conv, choice) => {
+        seen.push({ conv, choice });
+        if (seen.length === 1) {
+          return Promise.resolve({
+            type: 'toolUse' as const,
+            usage: USAGE,
+            capture: CAPTURE,
+            calls: [{ id: 't1', name: 'adder', args: { a: 1, b: 2 } }],
+            buildNext: (results: ToolCallResult[]) => `conv1:${results[0]!.resultText}`,
+          });
+        }
+        return Promise.resolve({ type: 'text' as const, usage: USAGE, succeeded: SUCCEEDED });
+      }),
+    );
+    expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'metered', 'succeeded']);
+    // The continuation call sees the tool-result conversation AND the downgraded
+    // choice — a `required` first call must not force a second tool call.
+    expect(seen).toEqual([
+      { conv: 'conv0', choice: 'required' },
+      { conv: 'conv1:3', choice: 'auto' },
+    ]);
+  });
+
+  it('fails permanent when the model requests a second tool call', async () => {
+    let calls = 0;
+    const events = await drain(
+      runTextWithTools('openai_api', [ADDER], 'c', 'auto', () => {
+        calls += 1;
+        return Promise.resolve({
+          type: 'toolUse' as const,
+          usage: USAGE,
+          capture: calls === 1 ? CAPTURE : undefined,
+          calls: [{ id: `t${calls}`, name: 'adder', args: { a: 1, b: 2 } }],
+          buildNext: () => 'next',
+        });
+      }),
+    );
+    expect(calls).toBe(2);
+    const last = events[events.length - 1]!;
+    expect(last).toMatchObject({ type: 'failed', kind: 'permanent' });
+    if (last.type === 'failed') expect(last.error).toMatch(/tool budget/);
+    // Both billed responses are metered; the single first-exchange capture holds.
+    expect(events.filter((e) => e.type === 'metered')).toHaveLength(2);
+    expect(events.filter((e) => e.type === 'captured')).toHaveLength(1);
+  });
+
+  it('yields a first-exchange capture before a terminal failure (L9a invariant)', async () => {
+    const events = await drain(
+      runTextWithTools('ollama', [ADDER], 'c', 'auto', () =>
+        Promise.resolve({
+          type: 'terminal' as const,
+          event: { type: 'failed' as const, kind: 'transient' as const, error: 'boom' },
+          capture: CAPTURE,
+        }),
+      ),
+    );
+    expect(events.map((e) => e.type)).toEqual(['captured', 'failed']);
+  });
+
+  it('feeds an error tool_result back rather than failing the node', async () => {
+    let sawResults: ToolCallResult[] | null = null;
+    const events = await drain(
+      runTextWithTools('anthropic_api', [ADDER], 'c', 'auto', (conv) => {
+        if (conv === 'c') {
+          return Promise.resolve({
+            type: 'toolUse' as const,
+            usage: USAGE,
+            capture: CAPTURE,
+            calls: [{ id: 't1', name: 'nope', args: {} }],
+            buildNext: (results: ToolCallResult[]) => {
+              sawResults = results;
+              return 'after';
+            },
+          });
+        }
+        return Promise.resolve({ type: 'text' as const, usage: USAGE, succeeded: SUCCEEDED });
+      }),
+    );
+    expect(sawResults).toEqual([
+      { id: 't1', name: 'nope', resultText: "unknown tool 'nope'", isError: true },
+    ]);
+    expect(events[events.length - 1]!.type).toBe('succeeded');
   });
 });

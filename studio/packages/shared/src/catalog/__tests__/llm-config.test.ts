@@ -4,8 +4,11 @@ import {
   llmCallConfigSchema,
   llmOutputSchemaSchema,
   llmStructuredOutputSurfaceSchema,
+  llmToolDefSchema,
+  llmToolsSurfaceSchema,
   lowerOutputSchema,
   normalizeLlmRequest,
+  toolWireParameters,
 } from '../llm-config.js';
 
 describe('llmCallConfigSchema', () => {
@@ -460,5 +463,144 @@ describe('llmCallConfigSchema — L4a structured-output coupling', () => {
         outputSchema: { type: 'object', properties: { x: { type: 'string' } } },
       }).success,
     ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2 L10a — local tool contract (ToolDef schema + coupling + wire lowering).
+// ---------------------------------------------------------------------------
+
+/** A minimal valid ToolDef for the tests below. */
+const TOOL = {
+  name: 'adder',
+  description: 'Adds two numbers.',
+  parameters: {
+    type: 'object',
+    properties: { a: { type: 'number' }, b: { type: 'number' } },
+  },
+  expression: '${add(tool.args.a, tool.args.b)}',
+};
+
+describe('llmToolDefSchema (#2 L10a)', () => {
+  it('accepts a valid tool definition', () => {
+    expect(llmToolDefSchema.safeParse(TOOL).success).toBe(true);
+  });
+
+  it('rejects a non-addressable tool name', () => {
+    expect(llmToolDefSchema.safeParse({ ...TOOL, name: 'bad name' }).success).toBe(false);
+    expect(llmToolDefSchema.safeParse({ ...TOOL, name: '1st' }).success).toBe(false);
+  });
+
+  it('rejects an empty description and a template in tool metadata', () => {
+    expect(llmToolDefSchema.safeParse({ ...TOOL, description: '' }).success).toBe(false);
+    // ${} in tool metadata would ship as a silent inert literal (tools are
+    // excluded from substitution), so it is refused at the schema.
+    const r = llmToolDefSchema.safeParse({ ...TOOL, description: 'about ${params.topic}' });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.map((i) => i.message).join(' ')).toMatch(
+        /templates are not supported in tool metadata/,
+      );
+    }
+  });
+
+  it('rejects an empty expression and unknown keys', () => {
+    expect(llmToolDefSchema.safeParse({ ...TOOL, expression: '' }).success).toBe(false);
+    expect(llmToolDefSchema.safeParse({ ...TOOL, extra: 1 }).success).toBe(false);
+  });
+
+  it('rejects a zero-parameter tool (v1 requires at least one parameter)', () => {
+    const r = llmToolDefSchema.safeParse({
+      ...TOOL,
+      parameters: { type: 'object', properties: {} },
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('labels parameter-subset diagnostics with the tool noun, not outputSchema', () => {
+    const r = llmToolDefSchema.safeParse({
+      ...TOOL,
+      parameters: { type: 'object', properties: {} },
+    });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      const text = r.error.issues.map((i) => i.message).join(' ');
+      expect(text).toMatch(/tool parameters/);
+      expect(text).not.toMatch(/outputSchema/);
+    }
+  });
+});
+
+describe('llmCallConfigSchema — L10a tools surface + coupling', () => {
+  it('accepts a text-mode config with tools and a toolChoice', () => {
+    expect(
+      llmCallConfigSchema.safeParse({ prompt: 'hi', tools: [TOOL], toolChoice: 'auto' }).success,
+    ).toBe(true);
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi', tools: [TOOL] }).success).toBe(true);
+  });
+
+  it('rejects toolChoice without tools', () => {
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi', toolChoice: 'auto' }).success).toBe(false);
+  });
+
+  it('rejects tools with structured output mode (v1 defers the combination)', () => {
+    expect(
+      llmCallConfigSchema.safeParse({
+        prompt: 'hi',
+        tools: [TOOL],
+        outputMode: 'structured',
+        outputSchema: { type: 'object', properties: { x: { type: 'string' } } },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an empty tools array and duplicate tool names', () => {
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi', tools: [] }).success).toBe(false);
+    expect(
+      llmCallConfigSchema.safeParse({ prompt: 'hi', tools: [TOOL, { ...TOOL }] }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an unknown toolChoice value', () => {
+    expect(
+      llmCallConfigSchema.safeParse({ prompt: 'hi', tools: [TOOL], toolChoice: 'always' }).success,
+    ).toBe(false);
+  });
+});
+
+describe('llmToolsSurfaceSchema (#2 L10a save-time slice)', () => {
+  it('passes a config with no tools through untouched', () => {
+    expect(llmToolsSurfaceSchema.safeParse({ prompt: 'hi', other: 1 }).success).toBe(true);
+  });
+
+  it('applies the same coupling rules as the dispatch schema', () => {
+    expect(llmToolsSurfaceSchema.safeParse({ toolChoice: 'auto' }).success).toBe(false);
+    expect(
+      llmToolsSurfaceSchema.safeParse({ tools: [TOOL], outputMode: 'structured' }).success,
+    ).toBe(false);
+    expect(llmToolsSurfaceSchema.safeParse({ tools: [TOOL] }).success).toBe(true);
+  });
+});
+
+describe('toolWireParameters (#2 L10a)', () => {
+  it('synthesizes an explicit all-names required list when absent', () => {
+    // The local validator treats an ABSENT required list as ALL-required (#594);
+    // the model reads standard JSON Schema (absent = all optional). The wire
+    // shape must say what the validator enforces.
+    const wire = toolWireParameters({
+      type: 'object',
+      properties: { a: { type: 'number' }, b: { type: 'string' } },
+    });
+    expect(wire.required).toEqual(['a', 'b']);
+    expect(wire.additionalProperties).toBe(false);
+  });
+
+  it('preserves an explicit partial required list', () => {
+    const wire = toolWireParameters({
+      type: 'object',
+      properties: { a: { type: 'number' }, b: { type: 'string' } },
+      required: ['a'],
+    });
+    expect(wire.required).toEqual(['a']);
   });
 });

@@ -124,7 +124,18 @@
 // the refusal a correctness gate here rather than mere version bookkeeping. A
 // non-structured `agent_task` node carries no `outputSchema` and its config is
 // byte-identical across the bump.)
-export const CATALOG_VERSION = 14;
+// 15 (#2 L10a): `llm_call` LOCAL TOOLS. A node may declare `tools[]` (pure
+// `${tool.args.*}` expressions, the T11 ToolDef contract) + `toolChoice`; the
+// reducer's dispatch-prep EXCLUDES the `tools` subtree from substitution
+// (deferred-eval) and the adapters drive a single tool round-trip. A pre-15
+// build has NO `tool` expression root and NO prepInput exclusion, so loading a
+// tools-declaring export there makes the blanket substitution walk
+// `tools[].expression` and THROW `unresolvable reference ${tool.args.…}` at
+// dispatch-prep — an ACTIVE node-failure mis-run (the A11/A13 loud-fail shape),
+// so it bumps 14→15: a pre-15 build must refuse an L10a export at import
+// (`portability/envelope.ts`) rather than fail the tools node at run time. (A
+// no-tools `llm_call` config is byte-identical across the bump.)
+export const CATALOG_VERSION = 15;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

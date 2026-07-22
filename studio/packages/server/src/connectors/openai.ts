@@ -16,10 +16,12 @@ import {
   parseJsonBody,
   resolveModel,
   runStructuredWithRepair,
+  runTextWithTools,
   structuredEcho,
   structuredOutputInstruction,
+  toolWireParameters,
 } from './llm-shared.js';
-import type { LlmTurn } from './llm-shared.js';
+import type { LlmToolChoice, LlmTurn, ToolCallRequest, ToolRoundOutcome } from './llm-shared.js';
 
 /**
  * The `openai_api` connector adapter: a single non-streaming call to the
@@ -41,6 +43,36 @@ import type { LlmTurn } from './llm-shared.js';
  */
 
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
+
+/**
+ * #2 L10a — extract a Chat Completions response message's `tool_calls` as
+ * normalized `ToolCallRequest`s, in provider order (ALL are answered in the one
+ * round-trip). `function.arguments` arrives as a JSON STRING — parsed here; an
+ * unparseable string is passed through RAW so the shared args validator rejects
+ * it with a readable reason (→ an error tool_result the model can recover
+ * from), never a silent drop. Non-string `id`/`name` surface as `null`.
+ */
+function extractToolCalls(message: unknown): ToolCallRequest[] {
+  const tcs = (message as { tool_calls?: unknown } | undefined)?.tool_calls;
+  if (!Array.isArray(tcs)) return [];
+  return tcs.map((tc) => {
+    const id = (tc as { id?: unknown }).id;
+    const fn = (tc as { function?: { name?: unknown; arguments?: unknown } }).function;
+    let args: unknown = fn?.arguments;
+    if (typeof args === 'string') {
+      try {
+        args = JSON.parse(args);
+      } catch {
+        // keep the raw string — `executeLocalTool`'s validation names the defect
+      }
+    }
+    return {
+      id: typeof id === 'string' ? id : null,
+      name: typeof fn?.name === 'string' ? fn.name : null,
+      args,
+    };
+  });
+}
 
 export const openaiAdapter: ConnectorAdapter = {
   kind: 'openai_api',
@@ -188,6 +220,157 @@ export const openaiAdapter: ConnectorAdapter = {
           echo: structuredEcho(content),
         };
       });
+      return;
+    }
+
+    // #2 L10a — LOCAL TOOLS path (text mode only; the config coupling forbids
+    // tools+structured). `toolChoice:'none'` falls through to the plain text
+    // path with NO tools on the wire. Unlike Anthropic there is no
+    // reasoning-vs-forced-choice clash: `reasoning_effort` is a sibling knob,
+    // kept in both calls.
+    const tools = input.data.tools;
+    const authorChoice = input.data.toolChoice ?? 'auto';
+    if (tools !== undefined && authorChoice !== 'none') {
+      const wireTools = tools.map((t) => ({
+        type: 'function',
+        function: {
+          name: t.name,
+          description: t.description,
+          // Explicit-required + closed (`toolWireParameters`): the wire says
+          // exactly what the local args validator enforces (#594 alignment).
+          parameters: toolWireParameters(t.parameters),
+        },
+      }));
+      const buildToolBody = (
+        msgs: readonly unknown[],
+        // `'none'` never reaches here (the guard above falls through to the
+        // plain text path); typed total so the generator's choice threads as-is.
+        choice: LlmToolChoice,
+      ): Record<string, unknown> => {
+        const body: Record<string, unknown> = { model, messages: msgs };
+        if (sampling.maxTokens !== undefined) body.max_tokens = sampling.maxTokens;
+        if (sampling.temperature !== undefined) body.temperature = sampling.temperature;
+        if (sampling.topP !== undefined) body.top_p = sampling.topP;
+        if (sampling.stop !== undefined) body.stop = sampling.stop;
+        if (sampling.seed !== undefined) body.seed = sampling.seed;
+        if (reasoningEffort !== undefined)
+          body.reasoning_effort = openAiReasoningEffort(reasoningEffort);
+        body.tools = wireTools;
+        body.tool_choice = choice;
+        return body;
+      };
+      // The conversation value `C` is the WIRE messages array (leading system
+      // included); the continuation appends the response's RAW assistant
+      // message (with its `tool_calls`) + one `role:'tool'` result per call id
+      // — the shape Chat Completions requires.
+      const initial: readonly unknown[] =
+        systemContent !== undefined
+          ? [{ role: 'system', content: systemContent }, ...turns]
+          : [...turns];
+      yield* runTextWithTools<readonly unknown[]>(
+        'openai_api',
+        tools,
+        initial,
+        authorChoice,
+        async (conv, choice): Promise<ToolRoundOutcome<readonly unknown[]>> => {
+          const started = Date.now();
+          const res = await llmPost(ctx, url, headers, buildToolBody(conv, choice), timeoutMs);
+          const latencyMs = Date.now() - started;
+          // First-exchange capture semantics (#2 L9a): request = the author's
+          // turns; the generator emits only the round-0 capture (#605 owns
+          // continuation-turn representation).
+          const captureOf = (completionText?: string) =>
+            buildCapture({
+              provider: 'openai_api',
+              model,
+              latencyMs,
+              turns,
+              system,
+              completionText,
+            });
+          if (res.type === 'failed') {
+            return { type: 'terminal', event: res.event, capture: captureOf() };
+          }
+          if (res.status < 200 || res.status >= 300) {
+            return {
+              type: 'terminal',
+              event: httpStatusFailure(
+                'openai_api',
+                res.status,
+                res.bodyText,
+                res.retryAfterHeader,
+                Date.now(),
+              ),
+              capture: captureOf(),
+            };
+          }
+          const parsed = parseJsonBody(res.bodyText);
+          if (!parsed.ok) {
+            return { type: 'terminal', event: parsed.event, capture: captureOf() };
+          }
+          const u = (
+            parsed.json as { usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } }
+          ).usage;
+          const usage = meterUsage('openai_api', model, u?.prompt_tokens, u?.completion_tokens);
+          const choices = (parsed.json as { choices?: unknown }).choices;
+          const first =
+            Array.isArray(choices) && choices.length > 0
+              ? (choices[0] as { message?: unknown; finish_reason?: unknown })
+              : undefined;
+          // Tool calls FIRST: a tool-calls-only response carries `content:null`,
+          // which the text branch below would misread as `malformed_block`.
+          const calls = extractToolCalls(first?.message);
+          if (calls.length > 0) {
+            const rawMessage = first!.message;
+            return {
+              type: 'toolUse',
+              usage,
+              capture: captureOf(),
+              calls,
+              buildNext: (results) => [
+                ...conv,
+                rawMessage,
+                ...results.map((r) => ({
+                  role: 'tool',
+                  tool_call_id: r.id ?? '',
+                  content: r.resultText,
+                })),
+              ],
+            };
+          }
+          if (!Array.isArray(choices)) {
+            return {
+              type: 'terminal',
+              event: noCompletionFailure('openai_api', 'absent_content'),
+              capture: captureOf(),
+            };
+          }
+          if (choices.length === 0) {
+            return {
+              type: 'terminal',
+              event: noCompletionFailure('openai_api', 'empty_completion_set'),
+              capture: captureOf(),
+            };
+          }
+          const text = (first as { message?: { content?: unknown } } | undefined)?.message?.content;
+          if (typeof text !== 'string') {
+            return {
+              type: 'terminal',
+              event: noCompletionFailure('openai_api', 'malformed_block'),
+              capture: captureOf(),
+            };
+          }
+          return {
+            type: 'text',
+            usage,
+            capture: captureOf(text),
+            succeeded: {
+              type: 'succeeded',
+              outputs: { text, stopReason: coerceStopReason(first?.finish_reason) },
+            },
+          };
+        },
+      );
       return;
     }
 

@@ -114,7 +114,9 @@ completion (an explicit `content:''`, or an anthropic `[{type:'text',text:''}]`)
 result and **succeeds** — `stopReason` (e.g. `content_filter`, `length`) carries why and
 downstream can branch on it. A tool-call-only 2xx (OpenAI `content:null`+`finish_reason:
 'tool_calls'`, anthropic all-`tool_use` blocks) is text-mode-empty and fails `permanent`
-today **because tools are not wired** (revisit at L4b/L10).
+**only on a node declaring NO tools** — with tools declared (L10a, built 2026-07-22) the
+tool calls ARE the flow: the driver answers them and continues. The no-tools path stays
+byte-identical (still `permanent`, the pre-L10a behaviour).
 
 ## Connections (workers) — reuse #1, extend config
 
@@ -170,6 +172,27 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 > F4-independent but deferred with it for plumbing cohesion).
 
 | L10a | local tool contract + single tool call (opaque driver-internal) | 3 |
+
+> **L10a (built 2026-07-22):** `ToolDef = {name, description, parameters, expression}`
+> — `parameters` is the SAME restricted schema subset as structured output;
+> `expression` is a whole-value `${...}` over **`${tool.args.*}` only**, evaluated
+> args-only in the inert expression language. That makes a v1 tool **pure +
+> read-only BY CONSTRUCTION** (T11's binding decision) with no run-state/I/O/secret
+> reach; the `tools` subtree is **deferred-eval** (excluded from dispatch-prep
+> substitution; save-time scans each expression with the `tool` root
+> context-scoped). One tool ROUND-TRIP per attempt (all parallel calls of one
+> response are answered; a second tool-use response fails `permanent`), one
+> terminal, per-response metering, one first-exchange L9a capture (continuation
+> turns are #605's plumbing). `toolChoice: auto|required|none` — `required`
+> downgrades to `auto` on the continuation (else it could never yield text) and
+> suppresses Anthropic adaptive thinking (the forced-choice clash, structured-path
+> precedent); `none` sends no tools at all; Ollama has no forced-choice surface so
+> `required` is best-effort there. Tool-level defects (unknown name, invalid args,
+> eval error, over-cap result) return **error tool_results the model can recover
+> from**, never node failures. `tools`+`structured` is refused in v1 (structured
+> rides a forced provider tool); `agent_cli` rejects tools at dispatch (no tool
+> wire on a single-shot CLI). CATALOG_VERSION 14→15.
+
 | L10b | bounded tool loop + telemetry (non-state observability events) + cancellation | 3 |
 | L10c | MCP servers + tool security policy | 3 |
 | L11a | `agent_task` subprocess telemetry (output/exitCode/summary) | 3 |
