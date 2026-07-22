@@ -1,5 +1,12 @@
 import { sql } from 'drizzle-orm';
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import {
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 import {
   ConnectionKindSchema,
@@ -27,6 +34,11 @@ import {
   type WakeupStatus,
   type WebhookConfig,
   type WebhookDeliveryOutcome,
+  type WindowConfig,
+  type WindowEventType,
+  type WindowStatus,
+  WindowEventTypeSchema,
+  WindowStatusSchema,
 } from '@autonomy-studio/shared';
 
 /**
@@ -160,6 +172,12 @@ export const triggers = sqliteTable(
     // `recurrence`/`run_windows` precedent) — NULL is the honest value for
     // every non-event trigger and every pre-S8 row.
     event: text('event', { mode: 'json' }).$type<EventConfig | null>(),
+    // #5 S9: the tumbling-window geometry (`{frequency, interval, startTime,
+    // endTime?}`). Nullable JSON (the `recurrence`/`event` precedent) — NULL is
+    // the honest value for every non-tumbling trigger and every pre-S9 row.
+    // (`window` is a SQLite keyword since 3.25 but valid as a column name —
+    // verified empirically; Drizzle quotes identifiers regardless.)
+    window: text('window', { mode: 'json' }).$type<WindowConfig | null>(),
     concurrency: text('concurrency', { mode: 'json' }).notNull().$type<Concurrency>(),
     runWindows: text('run_windows', { mode: 'json' }).$type<RunWindow[] | null>(),
     enabled: integer('enabled', { mode: 'boolean' }).notNull(),
@@ -491,3 +509,87 @@ export const connectionQuotaState = sqliteTable('connection_quota_state', {
    * window-setting event; it is "last write", not "when the kept window was set". */
   updatedAtMs: integer('updated_at_ms').notNull(),
 });
+
+/**
+ * #5 S9 — the tumbling-window DOMAIN EVENT LOG (the TRUTH for window
+ * lifecycle; the spec's codex-hardened block: "Tumbling state = projection,
+ * not truth"). A window exists BEFORE any run materializes for it, so its
+ * lifecycle cannot live in a run's per-run event log — this table is the
+ * window-scoped append log. The codex-hardened window key `(triggerId,
+ * configEpoch, windowStart)` rides the row as columns (`config_epoch` is the
+ * server-computed hash of the geometry tuple `(frequency, interval,
+ * startTime)` — `scheduler/tumbling.ts`); `seq` (rowid alias) is the global
+ * append order rebuilds fold in. Append-only: never updated, never deleted
+ * (except by trigger-delete CASCADE, symmetric with the projection below so a
+ * rebuild can never resurrect rows for a gone trigger).
+ *
+ * Driver-adjacent DOMAIN data with no top-level Zod resource counterpart
+ * (`WindowEventSchema` types the `{type, payload}` half), so
+ * `schema-table-parity.test.ts` exempts it like `scheduled_wakeups`.
+ */
+export const windowEvents = sqliteTable(
+  'window_events',
+  {
+    /** Global append order (rowid alias) — the fold order for rebuilds. */
+    seq: integer('seq').primaryKey({ autoIncrement: true }),
+    triggerId: text('trigger_id')
+      .notNull()
+      .references(() => triggers.id, { onDelete: 'cascade' }),
+    configEpoch: text('config_epoch').notNull(),
+    /** UTC ISO of the window's inclusive start — the key's occurrence part. */
+    windowStart: text('window_start').notNull(),
+    type: text('type', { enum: asEnumTuple(WindowEventTypeSchema.options) })
+      .notNull()
+      .$type<WindowEventType>(),
+    payload: text('payload', { mode: 'json' }).notNull().$type<Record<string, unknown>>(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    // SINGLE-FIRE at the event level: `window.created` exactly once per window
+    // key — the hard backstop beneath the projection's UNIQUE primary key.
+    uniqueIndex('window_events_created_once_idx')
+      .on(table.triggerId, table.configEpoch, table.windowStart)
+      .where(sql`${table.type} = 'window.created'`),
+    // Fold/rebuild scan: one window's events in append order.
+    index('window_events_window_idx').on(table.triggerId, table.configEpoch, table.windowStart),
+  ],
+);
+
+/**
+ * #5 S9 — the tumbling-window state PROJECTION: materialized from
+ * `window_events` (same-transaction with each append), rebuildable by folding
+ * a window's events in `seq` order (`foldWindowStatus` in shared is the pure
+ * status fold; the rebuild test pins projection == fold). UNIQUE on the window
+ * key via the composite PRIMARY KEY — the spec's "materialized projection with
+ * uniqueness". `run_id` is BARE (no FK) like `webhook_deliveries.run_id`: the
+ * link is provenance, not integrity. Blocked/backfill windows live HERE, not
+ * as run rows (spec: "Blocked/backfill windows live in window state, NOT as
+ * full runs") — a run row materializes only when the window fires through the
+ * launcher. Driver infra for parity purposes (exempt in
+ * `schema-table-parity.test.ts`).
+ */
+export const tumblingWindowState = sqliteTable(
+  'tumbling_window_state',
+  {
+    triggerId: text('trigger_id')
+      .notNull()
+      .references(() => triggers.id, { onDelete: 'cascade' }),
+    configEpoch: text('config_epoch').notNull(),
+    /** UTC ISO, inclusive start of `[windowStart, windowEnd)`. */
+    windowStart: text('window_start').notNull(),
+    /** UTC ISO, exclusive end — also the window's `dueAt` instant. */
+    windowEnd: text('window_end').notNull(),
+    status: text('status', { enum: asEnumTuple(WindowStatusSchema.options) })
+      .notNull()
+      .$type<WindowStatus>(),
+    runId: text('run_id'),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.triggerId, table.configEpoch, table.windowStart] }),
+    // Completion tap: resolve a terminalized run back to its window.
+    index('tumbling_window_state_run_id_idx').on(table.runId),
+    // Reconcile/stranded scans: non-terminal windows.
+    index('tumbling_window_state_status_idx').on(table.status),
+  ],
+);

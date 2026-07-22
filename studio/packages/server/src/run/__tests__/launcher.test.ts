@@ -334,6 +334,41 @@ describe('RunLauncher — queue', () => {
     expect(runs.every((r) => r.status === 'success')).toBe(true);
   });
 
+  it('a QUEUED fire reports the durable row’s runId (#5 S9)', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const launcher = createRunLauncher(deps(db));
+
+    launcher.fire(trigger); // takes the slot
+    const queued = launcher.fire(trigger);
+    expect(queued.outcome).toBe('queued');
+    // The row always existed (S6a); S9 reports its id so the tumbling
+    // completion chain can link a queued window run.
+    const row = listRuns(db, { triggerId: trigger.id }).find((r) => r.status === 'queued');
+    expect(queued.runId).toBe(row?.id);
+  });
+
+  it('a STARTED run row persists the frozen fire-time triggerContext (#5 S9)', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId });
+    const launcher = createRunLauncher(deps(db));
+    const T1 = '2026-07-17T09:00:00.000Z';
+
+    const result = launcher.fire(trigger, { scheduledTime: T1 });
+    expect(result.outcome).toBe('started');
+    // Durable on the ROW (not only in the run's event log): the tumbling
+    // reconcile's link-before-fire join reads it even for a run whose drive
+    // never appended an event before a crash.
+    const row = listRuns(db, { triggerId: trigger.id })[0];
+    expect(row?.triggerContext).toEqual({
+      triggerId: trigger.id,
+      scheduledTime: T1,
+      body: null,
+    });
+  });
+
   it('a queued fire preserves the fire-time context captured at admission (#5 S12)', async () => {
     const { db } = freshDb();
     const pvId = seedVersion(db);

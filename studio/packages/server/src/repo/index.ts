@@ -11,3 +11,4 @@ export * from './run-diagnostics.js';
 export * from './secrets.js';
 export * from './webhook-deliveries.js';
 export * from './scheduled-wakeups.js';
+export * from './tumbling-windows.js';

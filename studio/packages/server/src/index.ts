@@ -15,6 +15,7 @@ import { createRunDrives } from './run/drives.js';
 import { createRunLauncher } from './run/launcher.js';
 import { createRunEventBus } from './run/event-bus.js';
 import { createScheduler } from './scheduler/scheduler.js';
+import { createTumblingService } from './scheduler/tumbling.js';
 import { createAlarmClock, type AlarmClock } from './scheduler/alarms.js';
 import { createRetryAlarmHandler } from './scheduler/retry-alarm.js';
 import { createWaitAlarmHandler } from './scheduler/wait-alarm.js';
@@ -283,6 +284,18 @@ export async function buildApp(opts?: BuildAppOptions) {
   // the reclaim is the second sanctioned caller of the reconcile policy and
   // takes the drive lock through it (`reconcile.ts`'s lock contract).
   const leaseService = createLeaseService(driverBoundary);
+  // #5 S9 — the tumbling-window service: the `window_due` handler + reconciler
+  // + completion tap + boot reconcile in ONE module (they share the epoch/key
+  // scheme — the lease-service precedent). Both seams are lazy closures over
+  // values constructed BELOW (`alarmClock.arm` / `runLauncher.fire`), resolved
+  // at call time — the identical pattern (and safety argument) as
+  // `scheduleTickHandler`'s launcher closure above.
+  const tumblingService = createTumblingService({
+    db,
+    arm: (input) => alarmClock.arm(input),
+    launcher: { fire: (t, fc) => runLauncher.fire(t, fc) },
+    log: fastify.log,
+  });
   const alarmClock: AlarmClock = createAlarmClock({
     db,
     handlers: [
@@ -300,6 +313,8 @@ export async function buildApp(opts?: BuildAppOptions) {
       scheduleTickHandler,
       // #5 S7 — `run_lease` expiry → reclaim; S1's first RUN-level consumer.
       leaseService.handler,
+      // #5 S9 — `window_due` → tumbling window creation + materialization.
+      tumblingService.handler,
     ],
     bus: runEventBus,
     log: fastify.log,
@@ -358,8 +373,33 @@ export async function buildApp(opts?: BuildAppOptions) {
   // write, and this boot `sync()` SEEDS whatever is already enabled — done BEFORE
   // the boot tick so a freshly-seeded row that is already due fires on that tick.
   const scheduler = createScheduler({ db, arm: alarmClock.arm, log: fastify.log });
-  fastify.decorate('scheduler', scheduler);
-  scheduler.sync();
+  // #5 S9 — ONE trigger-reconcile seam (the composite): trigger routes call
+  // `fastify.scheduler.sync()` after every write, and pairing a second
+  // `tumblingService.sync()` at each of those call sites by convention is how
+  // a future fourth site silently misses one — so the decorator composes both
+  // behind the interface the routes already use.
+  const triggerReconciler = {
+    sync(): void {
+      scheduler.sync();
+      tumblingService.sync();
+    },
+    stop(): void {
+      scheduler.stop();
+      tumblingService.stop();
+    },
+  };
+  fastify.decorate('scheduler', triggerReconciler);
+  // #5 S9 — the window-side boot reconcile, in its load-bearing slot: AFTER
+  // `reconcileOnBoot` + `recoverQueued` above (run statuses + DB admission
+  // counts are settled, so a link-heal reads terminal facts and a re-fire
+  // admits against true counts) and BEFORE the seeds + boot tick below (a
+  // reconciled window must not race its own `window_due` fire).
+  tumblingService.reconcile();
+  // #5 S9 — the run-terminal completion tap (window succeeded/failed follows
+  // its run). Wired before the boot tick so a window run that terminalizes on
+  // that first tick already completes its window.
+  const unsubscribeWindowTap = tumblingService.subscribeCompletion(runEventBus);
+  triggerReconciler.sync();
 
   // The clock is a SCAN, not a per-alarm timer: one tick sweeps every due row of
   // every registered kind (retry + schedule ticks). The interval bounds LATENESS
@@ -541,7 +581,11 @@ export async function buildApp(opts?: BuildAppOptions) {
     // while we reap; in-flight background runs are left to settle or be
     // recovered by the boot reconciler on next start. Then tree-kill any
     // in-flight `agent_cli` subprocess.
-    scheduler.stop();
+    triggerReconciler.stop(); // both halves: cron scheduler + tumbling service
+    // #5 S9 — drop the window-completion tap so a terminal event after
+    // shutdown neither writes nor keeps this instance reachable (the #629
+    // launcher-tap discipline; idempotent).
+    unsubscribeWindowTap();
     // The alarm clock is stopped alongside the scheduler and for the identical
     // reason: it is the OTHER thing that can start work on a timer. Clearing the
     // interval stops future ticks; `stop()` stops firing.

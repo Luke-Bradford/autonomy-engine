@@ -168,7 +168,26 @@ function upgradeV1ToV2(env: unknown): unknown {
  * mutating this shared instance, so a fake upgrader registered in a test never
  * leaks into another test file or into production parsing.
  */
-export const UPGRADERS: Map<number, Upgrader> = new Map([[1, upgradeV1ToV2]]);
+/**
+ * v2→v3 (#5 S9): backfill the required-nullable trigger field added since
+ * schemaVersion 2 — `window` (the tumbling-window geometry) — as `null` (the
+ * honest "never had one" value). Only a `kind:'trigger'` envelope's `data` is
+ * touched; an already-present key is never clobbered. Pipeline/connection
+ * envelopes pass through with only the version stamp advanced.
+ */
+function upgradeV2ToV3(env: unknown): unknown {
+  if (!isPlainObject(env)) return env; // parseAndUpgradeEnvelope rejects it next
+  const upgraded: Record<string, unknown> = { ...env, schemaVersion: 3 };
+  if (env.kind === 'trigger' && isPlainObject(env.data)) {
+    upgraded.data = { window: null, ...env.data };
+  }
+  return upgraded;
+}
+
+export const UPGRADERS: Map<number, Upgrader> = new Map([
+  [1, upgradeV1ToV2],
+  [2, upgradeV2ToV3],
+]);
 
 function parseJson(raw: string): unknown {
   try {

@@ -298,6 +298,13 @@ export function deleteWakeup(db: Db, id: string): ScheduledWakeup | null {
  *   - `schedule_tick` (`{triggerId}`, `tick-<occurrenceEpoch>`): the reconciler
  *     seeds only FUTURE occurrences, so a fired past occurrence is never
  *     re-armed (catch-up is ≤1 late, minutes).
+ *   - `window_due` (#5 S9, `window-<startEpochMs>`): seed and re-arm both go
+ *     through `firstWindowEndingAfter(now)` — only windows ENDING in the
+ *     future are ever armed — so a fired past window's key is never re-armed
+ *     (and even if it were, the handler's projection-existence suppression +
+ *     the partial UNIQUE `window.created` index refuse a second fire). #5 S10
+ *     backfill will arm PAST windows and MUST re-verify this argument when it
+ *     lands (its cursor machinery, not key-reuse, has to carry the guarantee).
  * A future kind with a longer re-arm window (e.g. #4 `wait`) MUST re-check this
  * floor. Pending rows are never eligible here (only settled), so a far-future
  * `wait` alarm still `pending` is untouched regardless of its age.

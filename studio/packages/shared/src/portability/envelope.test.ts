@@ -309,12 +309,13 @@ describe('parseAndUpgradeEnvelope', () => {
       data: v1TriggerData,
     };
 
-    it('imports a v1 trigger envelope, backfilling recurrence:null + event:null', () => {
+    it('imports a v1 trigger envelope, chain-upgrading to backfill recurrence/event/window', () => {
       const result = parseAndUpgradeEnvelope(v1TriggerEnvelope);
       expect(result.schemaVersion).toBe(SCHEMA_VERSION);
       if (result.kind !== 'trigger') throw new Error('expected a trigger envelope');
       expect(result.data.recurrence).toBeNull();
       expect(result.data.event).toBeNull();
+      expect(result.data.window).toBeNull();
     });
 
     it('does NOT clobber a v1 trigger envelope that already carries a recurrence', () => {
@@ -336,10 +337,69 @@ describe('parseAndUpgradeEnvelope', () => {
       const env = {
         ...v1TriggerEnvelope,
         schemaVersion: SCHEMA_VERSION,
-        data: { ...v1TriggerData, recurrence: null, event: null },
+        data: { ...v1TriggerData, recurrence: null, event: null, window: null },
       };
       const result = parseAndUpgradeEnvelope(env);
       expect(result.schemaVersion).toBe(SCHEMA_VERSION);
+    });
+  });
+
+  // #5 S9 — the v2→v3 upgrader: a v2 trigger envelope predates `window`
+  // (required-nullable on the stored shape since S9).
+  describe('v2→v3 upgrader (production registry)', () => {
+    const v2TriggerData = {
+      id: 'trig_1',
+      ownerId: null,
+      name: 'S8-era trigger',
+      pipelineVersionId: null,
+      params: {},
+      mode: 'event' as const,
+      schedule: null,
+      webhook: null,
+      recurrence: null,
+      event: { name: 'order.created' },
+      concurrency: { policy: 'queue' as const },
+      runWindows: null,
+      enabled: false,
+      createdAt: 1700000000000,
+      updatedAt: 1700000000000,
+      // NO `window` — the pre-S9 v2 shape.
+    };
+    const v2TriggerEnvelope = {
+      schemaVersion: 2,
+      catalogVersion: CATALOG_VERSION,
+      kind: 'trigger' as const,
+      exportedAt: 1700000000000,
+      data: v2TriggerData,
+    };
+
+    it('imports a v2 trigger envelope, backfilling window:null (event kept verbatim)', () => {
+      const result = parseAndUpgradeEnvelope(v2TriggerEnvelope);
+      expect(result.schemaVersion).toBe(SCHEMA_VERSION);
+      if (result.kind !== 'trigger') throw new Error('expected a trigger envelope');
+      expect(result.data.window).toBeNull();
+      expect(result.data.event).toEqual({ name: 'order.created' });
+    });
+
+    it('does NOT clobber a v2 trigger envelope that already carries a window', () => {
+      const window = {
+        frequency: 'hour' as const,
+        interval: 1,
+        startTime: '2026-07-01T00:00:00.000Z',
+      };
+      const env = {
+        ...v2TriggerEnvelope,
+        data: { ...v2TriggerData, mode: 'tumbling' as const, event: null, window },
+      };
+      const result = parseAndUpgradeEnvelope(env);
+      if (result.kind !== 'trigger') throw new Error('expected a trigger envelope');
+      expect(result.data.window).toEqual(window);
+    });
+
+    it('upgrades a v2 pipeline envelope untouched (only the version stamp advances)', () => {
+      const result = parseAndUpgradeEnvelope({ ...validPipelineEnvelope, schemaVersion: 2 });
+      expect(result.schemaVersion).toBe(SCHEMA_VERSION);
+      expect(result.kind).toBe('pipeline');
     });
   });
 });

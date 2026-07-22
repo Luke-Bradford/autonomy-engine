@@ -257,6 +257,12 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       // `trigger.params`), so `startRun`'s `resolveRunParams(pv, run.params)`
       // applies pipeline-default < this merged layer.
       params,
+      // #5 S9 — persist the frozen fire-time context on STARTED rows too (the
+      // queued path always did). Durable BEFORE the drive's `run.triggerContext`
+      // event (which lands a microtask later), so a crash in that window still
+      // leaves a run↔fire join on the row — the tumbling reconcile's
+      // link-before-fire check (`findUnlinkedRunForWindow`) depends on it.
+      triggerContext,
     });
     driveRun(run, triggerContext);
     return run.id;
@@ -463,7 +469,7 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       if (queuedCount >= maxQueueDepth) {
         return { outcome: 'skipped', reason: `queue is full (max ${maxQueueDepth} pending)` };
       }
-      createRun(db, {
+      const queued = createRun(db, {
         // Non-null: fire() threw UnboundTriggerError above if it were null.
         pipelineVersionId: trigger.pipelineVersionId as string,
         ownerId: trigger.ownerId,
@@ -474,7 +480,11 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
         queuedAt: Date.now(),
         triggerContext,
       });
-      return { outcome: 'queued' };
+      // #5 S9 — report the durable row's id (it always existed; `queued` just
+      // went unreported pre-S9). The tumbling completion chain links a QUEUED
+      // run to its window by this id — without it a queued window run could
+      // never terminalize its window.
+      return { outcome: 'queued', runId: queued.id };
     }
 
     if (policy === 'skip_if_running') {
