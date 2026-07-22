@@ -442,6 +442,29 @@ export function createExecutor(deps: ExecutorDeps): Executor {
             ...(telemetry.signal !== undefined ? { signal: telemetry.signal } : {}),
             ...(telemetry.outputHash !== undefined ? { outputHash: telemetry.outputHash } : {}),
           });
+        } else if (ev.type === 'toolCalled') {
+          // #2 L10b — one executed tool call's TELEMETRY fact (non-terminal, like
+          // `agentTelemetry`): stamp the round + name + args/result shape into the
+          // durable log as `activity.toolCalled`, ordered BEFORE the terminal. The
+          // reducer folds it inert. Carries only shape/classification (chars +
+          // hashes, no raw text), so it needs no scrubbing. The executor adds the
+          // run/node/attempt ids; optional fields stay OMITTED when absent
+          // (fail-closed — never manufactured).
+          const { call } = ev;
+          events.push({
+            type: 'activity.toolCalled',
+            runId,
+            nodeId,
+            attemptId,
+            round: call.round,
+            toolName: call.toolName,
+            argsChars: call.argsChars,
+            resultChars: call.resultChars,
+            isError: call.isError,
+            ...(call.callId !== undefined ? { callId: call.callId } : {}),
+            ...(call.argsHash !== undefined ? { argsHash: call.argsHash } : {}),
+            ...(call.resultHash !== undefined ? { resultHash: call.resultHash } : {}),
+          });
         } else if (ev.type === 'succeeded') {
           events.push({ type: 'node.succeeded', runId, nodeId, attemptId, outputs: ev.outputs });
           return events;

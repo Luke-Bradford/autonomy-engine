@@ -306,6 +306,10 @@ export const ollamaAdapter: ConnectorAdapter = {
             },
           };
         },
+        // #2 L10b — the author's tool round-trip budget (absent = the L10a
+        // single round-trip) + the run signal (between-rounds cancellation).
+        input.data.maxToolIterations ?? 1,
+        ctx.signal,
       );
       return;
     }

@@ -26,6 +26,7 @@ import type {
   ConnectorErrorKind,
   LlmCapture,
   LlmUsage,
+  ToolCallTelemetry,
 } from './types.js';
 import { redactSecrets } from './redact.js';
 import { sha256Hex } from '../util/hash.js';
@@ -610,6 +611,36 @@ export function executeToolCalls(
 }
 
 /**
+ * #2 L10b — build the telemetry fact for ONE executed tool call (the
+ * `activity.toolCalled` payload minus the executor-stamped ids). Shape only,
+ * never text: args are measured over their JSON serialization (key order
+ * as-received from the provider — cross-call hash equality is serialization-
+ * order-sensitive; unserializable args measure 0), the result over the
+ * verbatim `resultText` (error results included — the model sees them). Hashes
+ * are OMITTED at 0 chars — fail-closed, never `hash('')` (the #473 lesson);
+ * they are `sha256` FINGERPRINTS, not a redaction guarantee (see the
+ * `activity.toolCalled` schema doc; #605's keyed-HMAC hardening covers them).
+ * `toolName` is the EXECUTED name (`''` for a nameless malformed call).
+ */
+export function toolCallTelemetry(
+  round: number,
+  call: ToolCallRequest,
+  result: ToolCallResult,
+): ToolCallTelemetry {
+  const argsJson = JSON.stringify(call.args) ?? '';
+  return {
+    round,
+    toolName: result.name,
+    ...(call.id !== null ? { callId: call.id } : {}),
+    argsChars: argsJson.length,
+    ...(argsJson.length > 0 ? { argsHash: sha256Hex(argsJson) } : {}),
+    resultChars: result.resultText.length,
+    ...(result.resultText.length > 0 ? { resultHash: sha256Hex(result.resultText) } : {}),
+    isError: result.isError,
+  };
+}
+
+/**
  * #2 L10a — the provider-agnostic outcome of ONE provider call in a tool flow,
  * mapped by each adapter's `doCall` closure for `runTextWithTools` to drive:
  *
@@ -648,19 +679,31 @@ export type ToolRoundOutcome<C> =
     };
 
 /**
- * #2 L10a — drive a text-mode `llm_call` WITH declared tools through its single
- * bounded tool round-trip, inside ONE engine attempt with EXACTLY ONE terminal.
+ * #2 L10a/L10b — drive a text-mode `llm_call` WITH declared tools through its
+ * BOUNDED tool loop, inside ONE engine attempt with EXACTLY ONE terminal (the
+ * spec's opaque driver-internal loop — resumable event-modeled loops are a
+ * separate sub-spec, not v1).
  *
- * Flow: call → (billed → `metered`) → text? → `succeeded` · toolUse? → execute
- * ALL requested calls locally (`executeToolCalls` — pure, args-only) → continue
- * with the adapter-built tool-result conversation → the follow-up must yield
- * text; a SECOND toolUse response fails `permanent` (the v1 budget is one
- * round-trip per attempt; the bounded multi-iteration loop is L10b).
+ * Flow, per exchange: call → (billed → `metered`) → text? → `succeeded` ·
+ * toolUse? → execute ALL requested calls locally (`executeToolCalls` — pure,
+ * args-only), emit one `toolCalled` telemetry fact per executed call, continue
+ * with the adapter-built tool-result conversation. `maxRounds` (the author's
+ * `maxToolIterations`, absent = 1 — the L10a single round-trip) bounds how many
+ * tool ROUND-TRIPS one attempt may spend: a toolUse response with the budget
+ * spent fails `permanent` — after its `metered` (the exchange was billed; the
+ * fact is kept regardless of the terminal that follows).
  *
- * CHOICE DOWNGRADE (load-bearing): the continuation call always passes `auto`,
- * whatever the author's `toolChoice` — a `required` first call that stayed
- * forced on the continuation could NEVER produce the final text and would fail
- * every `required` node on the budget unconditionally.
+ * CANCELLATION (#2 L10b): `signal` is re-checked after each billed toolUse
+ * exchange, BEFORE executing its tools — an aborted run yields a `cancelled`
+ * terminal with NO post-abort tool execution and NO post-abort telemetry.
+ * `executeToolCalls` is synchronous + pure, so no other abort window exists
+ * inside the loop; an abort during the provider call is `llmPost`'s (entry
+ * re-check + in-flight abort), exactly as the repair loop is.
+ *
+ * CHOICE DOWNGRADE (load-bearing): every continuation call passes `auto`,
+ * whatever the author's `toolChoice` — a `required` call that stayed forced on
+ * continuations could NEVER produce the final text and would fail every
+ * `required` node on the budget unconditionally.
  *
  * CAPTURE (#2 L9a): exactly ONE `captured` fact per attempt, for the FIRST
  * exchange (request = the author's turns; completion omitted unless the first
@@ -671,8 +714,7 @@ export type ToolRoundOutcome<C> =
  *
  * Metering mirrors the plain text path: every completed-2xx outcome (`text`/
  * `toolUse`) is metered; a `terminal` outcome is not (the text path's existing
- * posture for failed exchanges). A run cancelled between calls is caught by the
- * next `llmPost` (signal re-check at entry) exactly as the repair loop is.
+ * posture for failed exchanges).
  */
 export async function* runTextWithTools<C>(
   provider: LlmConnectionKind,
@@ -680,10 +722,12 @@ export async function* runTextWithTools<C>(
   initial: C,
   initialChoice: LlmToolChoice,
   doCall: (conv: C, choice: LlmToolChoice) => Promise<ToolRoundOutcome<C>>,
+  maxRounds: number = 1,
+  signal?: AbortSignal,
 ): AsyncIterable<ActivityEvent> {
   let conv = initial;
   let choice = initialChoice;
-  for (let round = 0; round <= 1; round++) {
+  for (let round = 0; ; round++) {
     const outcome = await doCall(conv, choice);
     const firstExchange = round === 0;
     if (outcome.type === 'terminal') {
@@ -701,17 +745,24 @@ export async function* runTextWithTools<C>(
       yield outcome.succeeded;
       return;
     }
-    if (!firstExchange) {
+    if (round >= maxRounds) {
       yield {
         type: 'failed',
         kind: 'permanent',
         error:
-          `${provider} requested another tool call after the tool round-trip — ` +
-          'the v1 tool budget is a single round-trip per attempt (bounded loop lands in L10b)',
+          `${provider} requested another tool call after the tool budget ` +
+          `was exhausted (maxToolIterations: ${maxRounds})`,
       };
       return;
     }
+    if (signal?.aborted === true) {
+      yield { type: 'failed', kind: 'cancelled', error: 'llm tool loop aborted' };
+      return;
+    }
     const results = executeToolCalls(tools, outcome.calls);
+    for (const [i, result] of results.entries()) {
+      yield { type: 'toolCalled', call: toolCallTelemetry(round, outcome.calls[i]!, result) };
+    }
     conv = outcome.buildNext(results);
     choice = 'auto';
   }

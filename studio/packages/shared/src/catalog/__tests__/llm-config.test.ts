@@ -7,6 +7,7 @@ import {
   llmToolDefSchema,
   llmToolsSurfaceSchema,
   lowerOutputSchema,
+  MAX_TOOL_ITERATIONS,
   normalizeLlmRequest,
   toolWireParameters,
 } from '../llm-config.js';
@@ -598,6 +599,49 @@ describe('llmCallConfigSchema — L10a tools surface + coupling', () => {
     expect(
       llmCallConfigSchema.safeParse({ prompt: 'hi', tools: [TOOL], toolChoice: 'always' }).success,
     ).toBe(false);
+  });
+});
+
+describe('llmCallConfigSchema — L10b maxToolIterations', () => {
+  it('accepts maxToolIterations alongside tools', () => {
+    expect(
+      llmCallConfigSchema.safeParse({ prompt: 'hi', tools: [TOOL], maxToolIterations: 5 }).success,
+    ).toBe(true);
+    expect(
+      llmCallConfigSchema.safeParse({ prompt: 'hi', tools: [TOOL], maxToolIterations: 1 }).success,
+    ).toBe(true);
+    expect(
+      llmCallConfigSchema.safeParse({
+        prompt: 'hi',
+        tools: [TOOL],
+        maxToolIterations: MAX_TOOL_ITERATIONS,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects maxToolIterations without tools (same coupling as toolChoice)', () => {
+    expect(llmCallConfigSchema.safeParse({ prompt: 'hi', maxToolIterations: 3 }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects zero, negative, fractional, and over-cap values', () => {
+    for (const bad of [0, -1, 1.5, MAX_TOOL_ITERATIONS + 1]) {
+      expect(
+        llmCallConfigSchema.safeParse({ prompt: 'hi', tools: [TOOL], maxToolIterations: bad })
+          .success,
+      ).toBe(false);
+    }
+  });
+
+  it('surface schema applies the same rules at save-time', () => {
+    expect(llmToolsSurfaceSchema.safeParse({ tools: [TOOL], maxToolIterations: 5 }).success).toBe(
+      true,
+    );
+    expect(llmToolsSurfaceSchema.safeParse({ maxToolIterations: 5 }).success).toBe(false);
+    expect(llmToolsSurfaceSchema.safeParse({ tools: [TOOL], maxToolIterations: 0 }).success).toBe(
+      false,
+    );
   });
 });
 

@@ -318,16 +318,42 @@ export const llmToolsArraySchema = z
   });
 
 /**
+ * #2 L10b — the tool-loop budget ceiling: the maximum `maxToolIterations` an
+ * author may set. Each iteration is a BILLED provider exchange (plus the final
+ * text exchange), so the cap is a blast-radius ceiling on runaway agentic
+ * billing — each exchange is itself bounded by `maxTokens` and
+ * `MAX_TOOL_RESULT_CHARS`, making 25 a generous but finite worst case. Nothing
+ * in the spec pins the number; it can be raised deliberately, never implicitly.
+ */
+export const MAX_TOOL_ITERATIONS = 25;
+
+/**
+ * #2 L10b — the author's tool-loop budget: how many tool ROUND-TRIPS (provider
+ * exchanges that request tools and get results back) one attempt may spend
+ * before the model must answer with text. ABSENT = 1, the L10a single
+ * round-trip — saved configs are immutable, so a more generous implicit
+ * default would silently change the billing/failure behaviour of every
+ * existing tools node on upgrade.
+ */
+const maxToolIterationsSchema = z.number().int().min(1).max(MAX_TOOL_ITERATIONS);
+
+/**
  * #2 L10a — the `tools`/`toolChoice` COUPLING rule, extracted (the
  * `refineOutputModeCoupling` pattern) so the DISPATCH schema and the save-time
  * SURFACE slice enforce ONE rule: `toolChoice` is meaningless without `tools`,
  * and `tools` + `outputMode:'structured'` is refused in v1 — Anthropic's
  * structured mode already rides a FORCED tool (`structured_output`), and
  * arbitrating between the author's tools and the structured scaffold is a
- * deliberate deferral, not an oversight.
+ * deliberate deferral, not an oversight. #2 L10b adds `maxToolIterations` to
+ * the same rule: a loop budget without tools is meaningless.
  */
 function refineLlmToolsCoupling(
-  c: { tools?: unknown; toolChoice?: unknown; outputMode?: unknown },
+  c: {
+    tools?: unknown;
+    toolChoice?: unknown;
+    outputMode?: unknown;
+    maxToolIterations?: unknown;
+  },
   ctx: z.RefinementCtx,
 ): void {
   if (c.toolChoice !== undefined && c.tools === undefined) {
@@ -335,6 +361,13 @@ function refineLlmToolsCoupling(
       code: 'custom',
       path: ['toolChoice'],
       message: 'toolChoice is only valid when tools are declared',
+    });
+  }
+  if (c.maxToolIterations !== undefined && c.tools === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['maxToolIterations'],
+      message: 'maxToolIterations is only valid when tools are declared',
     });
   }
   if (c.tools !== undefined && c.outputMode === 'structured') {
@@ -358,6 +391,7 @@ export const llmToolsSurfaceSchema = z
   .object({
     tools: llmToolsArraySchema.optional(),
     toolChoice: llmToolChoiceSchema.optional(),
+    maxToolIterations: maxToolIterationsSchema.optional(),
     // Read LOOSELY on purpose: the coupling rule only asks "is it 'structured'".
     // `llmStructuredOutputSurfaceSchema` (validateLlmCallOutput) OWNS the enum's
     // own diagnostic — re-validating it here would report an invalid value twice
@@ -471,9 +505,9 @@ function lowerOutputPropertyType(type: LlmOutputSchema['properties'][string]['ty
  * `outputMode`/`outputSchema` landed in L4a (below): a `structured` node's
  * `outputSchema` LOWERS into `config.outputs` at save time (`catalog/lower.ts`),
  * so the fields drive real behaviour the moment they ship. `tools`/`toolChoice`
- * landed in L10a (below) — the local pure-tool contract with a single tool
- * round-trip. Still OFF the schema (kept off so nothing inert/unreachable
- * ships): `mcpServers` (L10c) and `maxToolIterations` (L10b's bounded loop).
+ * landed in L10a (below) — the local pure-tool contract; `maxToolIterations`
+ * landed in L10b (the bounded multi-round loop). Still OFF the schema (kept
+ * off so nothing inert/unreachable ships): `mcpServers` (L10c).
  * `reasoningEffort` landed in L3 (below).
  */
 export const llmCallConfigSchema = z
@@ -522,6 +556,10 @@ export const llmCallConfigSchema = z
     // at save.
     tools: llmToolsArraySchema.optional(),
     toolChoice: llmToolChoiceSchema.optional(),
+    // L10b bounded tool loop — how many tool round-trips one attempt may spend
+    // (absent = 1, the L10a single round-trip). Coupled to `tools` by the shared
+    // `refineLlmToolsCoupling` rule below.
+    maxToolIterations: maxToolIterationsSchema.optional(),
   })
   .refine((c) => (c.prompt !== undefined) !== (c.messages !== undefined), {
     message: 'llm_call requires exactly one of `prompt` or `messages`',

@@ -768,7 +768,13 @@ describe('anthropicAdapter — local tools (#2 L10a)', () => {
       anthropicAdapter.runActivity(toolCtx({ toolChoice: 'required' }), 'sk'),
     );
     // metered (call 1) → captured (first exchange) → metered (call 2) → succeeded.
-    expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'metered', 'succeeded']);
+    expect(events.map((e) => e.type)).toEqual([
+      'metered',
+      'captured',
+      'toolCalled',
+      'metered',
+      'succeeded',
+    ]);
     expect(succeeded(events).outputs).toEqual({ text: 'Hi there!', stopReason: 'end_turn' });
 
     const second = requestBody(fetchSpy, 1);
@@ -784,6 +790,40 @@ describe('anthropicAdapter — local tools (#2 L10a)', () => {
     // could never answer with text. Tools stay present (tool_result needs them).
     expect(second.tool_choice).toEqual({ type: 'auto' });
     expect(second.tools).toBeDefined();
+  });
+
+  it('drives TWO round-trips under maxToolIterations: 2 (#2 L10b bounded loop)', async () => {
+    const secondToolUse = {
+      content: [{ type: 'tool_use', id: 'tu_2', name: 'adder', input: { a: 3, b: 4 } }],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 12, output_tokens: 5 },
+    };
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, TOOL_USE_BODY))
+      .mockResolvedValueOnce(fakeResponse(200, secondToolUse))
+      .mockResolvedValueOnce(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(toolCtx({ maxToolIterations: 2 }), 'sk'),
+    );
+    // Three billed exchanges, one telemetry fact per executed round, one terminal.
+    expect(events.map((e) => e.type)).toEqual([
+      'metered',
+      'captured',
+      'toolCalled',
+      'metered',
+      'toolCalled',
+      'metered',
+      'succeeded',
+    ]);
+    expect(succeeded(events).outputs.text).toBe('Hi there!');
+    // The third request answers the SECOND round's call (7 = 3+4).
+    const third = requestBody(fetchSpy, 2);
+    const msgs = third.messages as Record<string, unknown>[];
+    expect(msgs[msgs.length - 1]).toEqual({
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'tu_2', content: '7' }],
+    });
   });
 
   it('executes ALL parallel tool_use blocks of one response in one round-trip', async () => {

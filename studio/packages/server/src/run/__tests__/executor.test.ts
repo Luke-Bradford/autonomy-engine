@@ -384,6 +384,76 @@ describe('createExecutor — activity.captured (#2 L9a prompt/completion capture
   });
 });
 
+describe('createExecutor — activity.toolCalled (#2 L10b tool-loop telemetry)', () => {
+  it('maps a toolCalled ActivityEvent to a durable event with ids stamped, before the terminal', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
+    const run = seedRun(db, pvId);
+    const adapters = fakeHttpAdapter(async function* () {
+      yield {
+        type: 'toolCalled',
+        call: {
+          round: 0,
+          toolName: 'adder',
+          callId: 't1',
+          argsChars: 13,
+          argsHash: 'args-hash',
+          resultChars: 1,
+          resultHash: 'result-hash',
+          isError: false,
+        },
+      } satisfies ActivityEvent;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+
+    const state = await startRun(deps(db, { adapters }), run);
+
+    expect(state.status).toBe('success');
+    const events = loadEngineEvents(db, run.id);
+    const types = events.map((e) => e.type);
+    expect(types).toContain('activity.toolCalled');
+    expect(types.indexOf('activity.toolCalled')).toBeLessThan(types.indexOf('node.succeeded'));
+    const called = events.find((e) => e.type === 'activity.toolCalled');
+    expect(called).toMatchObject({
+      runId: run.id,
+      nodeId: 'n1',
+      round: 0,
+      toolName: 'adder',
+      callId: 't1',
+      argsChars: 13,
+      argsHash: 'args-hash',
+      resultChars: 1,
+      resultHash: 'result-hash',
+      isError: false,
+    });
+    // The executor stamps the attempt id.
+    expect(typeof (called as { attemptId?: unknown }).attemptId).toBe('string');
+  });
+
+  it('OMITS callId and both hashes on the engine event when the telemetry carried none (fail-closed)', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
+    const run = seedRun(db, pvId);
+    const adapters = fakeHttpAdapter(async function* () {
+      yield {
+        type: 'toolCalled',
+        call: { round: 1, toolName: '', argsChars: 0, resultChars: 0, isError: true },
+      } satisfies ActivityEvent;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+
+    await startRun(deps(db, { adapters }), run);
+
+    const called = loadEngineEvents(db, run.id).find((e) => e.type === 'activity.toolCalled');
+    expect(called).toBeDefined();
+    expect(called).not.toHaveProperty('callId');
+    expect(called).not.toHaveProperty('argsHash');
+    expect(called).not.toHaveProperty('resultHash');
+  });
+});
+
 describe('createExecutor — activity.agentTelemetry (#2 L11a agent_task telemetry)', () => {
   it('maps an agentTelemetry ActivityEvent to a durable event with ids stamped, before the terminal', async () => {
     const db = freshDb().db;

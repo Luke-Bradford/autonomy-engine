@@ -535,7 +535,13 @@ describe('openaiAdapter — local tools (#2 L10a)', () => {
       .mockResolvedValueOnce(fakeResponse(200, TOOL_CALL_BODY))
       .mockResolvedValueOnce(fakeResponse(200, OK_BODY));
     const events = await drain(openaiAdapter.runActivity(toolCtx(), 'sk'));
-    expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'metered', 'succeeded']);
+    expect(events.map((e) => e.type)).toEqual([
+      'metered',
+      'captured',
+      'toolCalled',
+      'metered',
+      'succeeded',
+    ]);
     expect(succeeded(events).outputs).toEqual({ text: 'the answer', stopReason: 'stop' });
     const second = requestBody(fetchSpy, 1);
     const msgs = second.messages as Record<string, unknown>[];

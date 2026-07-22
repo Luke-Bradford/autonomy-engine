@@ -135,7 +135,19 @@
 // so it bumps 14→15: a pre-15 build must refuse an L10a export at import
 // (`portability/envelope.ts`) rather than fail the tools node at run time. (A
 // no-tools `llm_call` config is byte-identical across the bump.)
-export const CATALOG_VERSION = 15;
+// 16 (#2 L10b): `llm_call` BOUNDED TOOL LOOP. A tools node may declare
+// `maxToolIterations: N` (1–25, absent = 1), the per-attempt tool round-trip
+// budget. A pre-16 build passes the unknown key through (`llmCallConfigSchema`
+// is non-strict) and RUNS the node — but with the hard-wired budget of 1, so
+// the node fails `permanent` ("tool budget") the moment the model actually
+// spends a second round-trip. That mis-run is CONDITIONAL on runtime model
+// behaviour (unlike bumps 13/14's deterministic failures) — but an artifact
+// that is not runnable AS AUTHORED still mis-runs (the A11/A13 loud-fail
+// shape, not the A9 "identically runnable" exception), so it bumps 15→16: a
+// pre-16 build must refuse an L10b export at import (`portability/envelope.ts`)
+// rather than under-run the authored budget at run time. (A tools config
+// without the key is byte-identical across the bump.)
+export const CATALOG_VERSION = 16;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

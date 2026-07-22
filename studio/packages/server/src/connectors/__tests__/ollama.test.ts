@@ -468,7 +468,13 @@ describe('ollamaAdapter — local tools (#2 L10a)', () => {
       .mockResolvedValueOnce(fakeResponse(200, TOOL_CALL_BODY))
       .mockResolvedValueOnce(fakeResponse(200, OK_BODY));
     const events = await drain(ollamaAdapter.runActivity(toolCtx(), null));
-    expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'metered', 'succeeded']);
+    expect(events.map((e) => e.type)).toEqual([
+      'metered',
+      'captured',
+      'toolCalled',
+      'metered',
+      'succeeded',
+    ]);
     const second = requestBody(fetchSpy, 1);
     const msgs = second.messages as Record<string, unknown>[];
     expect(msgs[msgs.length - 2]).toEqual(TOOL_CALL_BODY.message);
