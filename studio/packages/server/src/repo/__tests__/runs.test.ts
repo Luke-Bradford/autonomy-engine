@@ -490,3 +490,59 @@ describe('#646 — listParsedRuns (lenient per-row scan)', () => {
     expect(skipped).toEqual([bad.id]);
   });
 });
+
+describe('#646 — nextQueuedRunForTrigger picks PAST a corrupt FIFO head', () => {
+  function seedQueueTrigger(db: ReturnType<typeof freshDb>['db'], versionId: string) {
+    return createTrigger(db, {
+      ownerId: 'local',
+      name: 'T',
+      pipelineVersionId: versionId,
+      params: {},
+      mode: 'manual',
+      schedule: null,
+      webhook: null,
+      concurrency: { policy: 'queue' },
+      runWindows: null,
+      enabled: false,
+    });
+  }
+
+  it('skips the corrupt head (reported), returns the next healthy queued row', () => {
+    const { db, sqlite } = freshDb();
+    const version = setupPipelineVersion(db);
+    const trigger = seedQueueTrigger(db, version.id);
+    const bad = createRun(db, buildRunInput(version.id, { triggerId: trigger.id }));
+    const good = createRun(db, buildRunInput(version.id, { triggerId: trigger.id }));
+    sqlite.prepare("UPDATE runs SET status = 'queued', queued_at = ? WHERE id = ?").run(10, bad.id);
+    sqlite
+      .prepare("UPDATE runs SET status = 'queued', queued_at = ? WHERE id = ?")
+      .run(20, good.id);
+    // Corrupt the OLDER row — the FIFO head the old strict `.get()` mapped
+    // (and threw on) before returning anything.
+    sqlite.prepare('UPDATE runs SET params = ? WHERE id = ?').run('not json', bad.id);
+
+    const skipped: string[] = [];
+    const next = nextQueuedRunForTrigger(db, trigger.id, undefined, (id, err) => {
+      skipped.push(id);
+      expect(err).toBeInstanceOf(SyntaxError);
+    });
+    expect(next?.id).toBe(good.id);
+    expect(skipped).toEqual([bad.id]);
+  });
+
+  it('a corrupt-only queue yields null (skipped, not thrown)', () => {
+    const { db, sqlite } = freshDb();
+    const version = setupPipelineVersion(db);
+    const trigger = seedQueueTrigger(db, version.id);
+    const bad = createRun(db, buildRunInput(version.id, { triggerId: trigger.id }));
+    sqlite
+      .prepare(
+        "UPDATE runs SET status = 'queued', queued_at = 10, params = 'not json' WHERE id = ?",
+      )
+      .run(bad.id);
+
+    const skipped: string[] = [];
+    expect(nextQueuedRunForTrigger(db, trigger.id, undefined, (id) => skipped.push(id))).toBeNull();
+    expect(skipped).toEqual([bad.id]);
+  });
+});

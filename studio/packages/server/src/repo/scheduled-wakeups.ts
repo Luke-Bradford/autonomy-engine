@@ -387,7 +387,7 @@ export function deleteWakeup(db: Db, id: string): ScheduledWakeup | null {
  */
 export function pruneSettledWakeups(db: Db, opts: { before: number; limit?: number }): number {
   // Oldest-first, `id` breaking `firedAt` ties — the same total order
-  // `listDueWakeups`/`listPendingWakeups` use, so batch boundaries are stable
+  // `listParsedDueWakeups`/`listPendingWakeups` use, so batch boundaries are stable
   // across sweeps. Deleting via a subquery of ids (not `DELETE … LIMIT`, which
   // throws unless better-sqlite3 is compiled with SQLITE_ENABLE_UPDATE_DELETE_LIMIT).
   const doomed = db

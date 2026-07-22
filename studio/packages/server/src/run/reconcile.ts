@@ -480,9 +480,12 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
   // the poison row visible nowhere (the strict list routes throw too). A skipped
   // row is reported in `corrupt`, the needs-attention channel.
   for (const run of listParsedRuns(deps.db, { status: 'running' }, (id, err) => {
+    // Truncated like `RunLogUnparseableError`'s message: a raw ZodError message
+    // is its full issues JSON, and this reason is logged in the boot report.
+    const detail = err instanceof Error ? err.message : String(err);
     report.corrupt.push({
       runId: id,
-      reason: `run_row_unparseable:${err instanceof Error ? err.message : String(err)}`,
+      reason: `run_row_unparseable:${detail.length > 200 ? `${detail.slice(0, 200)}…` : detail}`,
     });
   })) {
     // #479 — the per-run fault boundary. Boot reconcile IS the recovery path, so

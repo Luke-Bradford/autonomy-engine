@@ -129,9 +129,14 @@ export class RunLogUnparseableError extends Error {
     public readonly runId: string,
     public readonly cause: unknown,
   ) {
+    // TRUNCATED detail: a ZodError's message is its full issues JSON (multi-KB
+    // for a union miss), and this message is re-embedded into boot-report
+    // reasons and log lines. The `cause` carries the whole error for anyone who
+    // needs it; the message only needs to identify the failure.
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    const capped = detail.length > 200 ? `${detail.slice(0, 200)}…` : detail;
     super(
-      `run '${runId}' has an unparseable run_events payload — the log cannot be replayed: ` +
-        (cause instanceof Error ? cause.message : String(cause)),
+      `run '${runId}' has an unparseable run_events payload — the log cannot be replayed: ${capped}`,
     );
     this.name = 'RunLogUnparseableError';
   }

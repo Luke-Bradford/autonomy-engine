@@ -97,7 +97,20 @@ export type ParsedTriggerRead =
  * stays strict: a route surfacing a poison row as a 500 is right there.)
  */
 export function getParsedTrigger(db: Db, id: string): ParsedTriggerRead {
-  const row = db.select().from(triggers).where(eq(triggers.id, id)).get();
+  // #646 — the `.get()` itself is a corruption surface: drizzle's `{mode:'json'}`
+  // codec (this table has EIGHT such columns) is a bare `JSON.parse` at row
+  // mapping, so an invalid-JSON cell throws `SyntaxError` BEFORE `safeParse` is
+  // reached — the exact throw-inside-a-handler this function exists to prevent.
+  // Same #515 classification as everywhere else: `SyntaxError` here is
+  // deterministic stored-TEXT corruption → an `unparseable` verdict; any other
+  // throw is a genuine DB fault and propagates.
+  let row;
+  try {
+    row = db.select().from(triggers).where(eq(triggers.id, id)).get();
+  } catch (error) {
+    if (error instanceof SyntaxError) return { status: 'unparseable', error };
+    throw error;
+  }
   if (!row) return { status: 'missing' };
   const result = TriggerSchema.safeParse(row);
   return result.success
@@ -151,12 +164,21 @@ export function listParsedTriggers(
   db: Db,
   onSkip?: (id: unknown, err: unknown) => void,
 ): Trigger[] {
-  const rows = db.select().from(triggers).all();
+  // #646 — two-phase, like `listParsedRuns`/`listParsedDueWakeups` and for the
+  // same empirically-verified reason: the old single-phase `.all()` mapped every
+  // row through the json codec FIRST, so one invalid-JSON cell threw
+  // `SyntaxError` out of the whole list before any per-row `safeParse` could
+  // skip it — this "lenient" scan only survived the ZodError class and still
+  // darkened ALL scheduling on the SyntaxError class. Phase 1 is a codec-free
+  // id-only projection; phase 2 reuses the single-row lenient read, so both
+  // corruption classes are one skipped row.
+  const ids = db.select({ id: triggers.id }).from(triggers).all();
   const parsed: Trigger[] = [];
-  for (const row of rows) {
-    const result = TriggerSchema.safeParse(row);
-    if (result.success) parsed.push(result.data);
-    else onSkip?.((row as { id?: unknown }).id, result.error);
+  for (const { id } of ids) {
+    const read = getParsedTrigger(db, id);
+    // `missing` = deleted between the phases: silently not a trigger any more.
+    if (read.status === 'found') parsed.push(read.trigger);
+    else if (read.status === 'unparseable') onSkip?.(id, read.error);
   }
   return parsed;
 }

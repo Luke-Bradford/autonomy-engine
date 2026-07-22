@@ -231,28 +231,52 @@ export function nextQueuedRunForTrigger(
   db: Db,
   triggerId: string,
   pipelineId?: string,
+  /** #646 — invoked for each corrupt row SKIPPED on the way to the head. */
+  onSkip?: (id: string, err: unknown) => void,
 ): Run | null {
   const base = and(eq(runs.triggerId, triggerId), eq(runs.status, 'queued'));
-  const row =
+  // #646 — LENIENT per row, like `listParsedRuns` and for the same empirically-
+  // verified reason: the old strict `.get()` mapped the FIFO head through the
+  // json codec, so a corrupt head row threw `SyntaxError` out of every drain —
+  // including `recoverQueued`'s unguarded boot drain, re-opening the exact
+  // boot-abort this sweep closes, one hop deeper. Phase 1 is a codec-free
+  // id-only pick in queue order (no `limit(1)`: the head might be the corrupt
+  // row being skipped); phase 2 walks the ids to the first HEALTHY row. A
+  // corrupt row is skipped (reported via `onSkip`), NOT admitted and NOT
+  // permitted to block the queue behind it: it can never be admitted anyway (no
+  // reader can construct it), so blocking on it would starve the trigger's
+  // healthy fires behind an unserviceable head, forever.
+  const ids = (
     pipelineId === undefined
       ? db
-          .select()
+          .select({ id: runs.id })
           .from(runs)
           .where(base)
           .orderBy(asc(runs.queuedAt), asc(sql`rowid`))
-          .limit(1)
-          .get()
+          .all()
       : db
-          .select({ runs })
+          .select({ id: runs.id })
           .from(runs)
           .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
           .where(and(base, eq(pipelineVersions.pipelineId, pipelineId)))
           // Same rowid tie-break as the unscoped branch — qualified, since the
           // join makes a bare `rowid` ambiguous.
           .orderBy(asc(runs.queuedAt), asc(sql`${runs}.rowid`))
-          .limit(1)
-          .get()?.runs;
-  return row ? RunSchema.parse(row) : null;
+          .all()
+  ).map((row) => row.id);
+
+  for (const id of ids) {
+    try {
+      const row = getRun(db, id);
+      // Deleted or admitted between the phases: no longer a queued candidate.
+      if (row === null || row.status !== 'queued') continue;
+      return row;
+    } catch (err) {
+      if (err instanceof ZodError || err instanceof SyntaxError) onSkip?.(id, err);
+      else throw err;
+    }
+  }
+  return null;
 }
 
 /**

@@ -346,6 +346,22 @@ describe('triggers repo', () => {
       expect(parsed.map((t) => t.id)).toEqual([good.id]);
       expect(skipped).toEqual(['trig_poison']);
     });
+
+    it('#646 — survives the SyntaxError class too (invalid stored JSON, not just wrong shape)', () => {
+      const { db, sqlite } = freshDb();
+      const version = setupPipelineVersion(db);
+      const good = createTrigger(db, buildTriggerInput(version.id));
+      const bad = createTrigger(db, buildTriggerInput(version.id));
+      // An invalid-JSON CELL: the drizzle codec throws SyntaxError at row
+      // mapping, BEFORE any per-row safeParse — the old single-phase scan
+      // died wholesale on this class and darkened all scheduling.
+      sqlite.prepare('UPDATE triggers SET params = ? WHERE id = ?').run('not json', bad.id);
+
+      const skipped: unknown[] = [];
+      const parsed = listParsedTriggers(db, (id) => skipped.push(id));
+      expect(parsed.map((t) => t.id)).toEqual([good.id]);
+      expect(skipped).toEqual([bad.id]);
+    });
   });
 
   // #637 — the single-row lenient read the alarm handlers use, symmetric with
@@ -374,6 +390,20 @@ describe('triggers repo', () => {
       const read = getParsedTrigger(db, 'trig_poison');
       expect(read.status).toBe('unparseable');
       if (read.status === 'unparseable') expect(read.error).toBeDefined();
+    });
+
+    it('#646 — an invalid-JSON cell (SyntaxError at the codec) is unparseable too, not a throw', () => {
+      const { db, sqlite } = freshDb();
+      const version = setupPipelineVersion(db);
+      const bad = createTrigger(db, buildTriggerInput(version.id));
+      sqlite.prepare('UPDATE triggers SET params = ? WHERE id = ?').run('not json', bad.id);
+
+      // The strict read throws at row mapping (before the schema)...
+      expect(() => getTrigger(db, bad.id)).toThrow(SyntaxError);
+      // ...the lenient one reports the same fault as a verdict.
+      const read = getParsedTrigger(db, bad.id);
+      expect(read.status).toBe('unparseable');
+      if (read.status === 'unparseable') expect(read.error).toBeInstanceOf(SyntaxError);
     });
   });
 });

@@ -345,6 +345,14 @@ export async function buildApp(opts?: BuildAppOptions) {
     signExternalWaitToken,
   });
   fastify.log.info({ reconcileReport }, 'boot reconcile complete');
+  // #646 — corruption is a needs-attention verdict, not routine boot noise: an
+  // operator watching warn/error must see it without reading the info report.
+  if (reconcileReport.corrupt.length > 0) {
+    fastify.log.error(
+      { corrupt: reconcileReport.corrupt },
+      'boot reconcile found unreadable stored run state — needs operator repair',
+    );
+  }
 
   // P4a: the run launcher — the one place a trigger becomes a run (manual fire,
   // the scheduler, and webhooks all reuse it). Per-app, sharing this instance's

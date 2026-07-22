@@ -433,7 +433,12 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
         // PIPELINE-scoped pick: a trigger rebound to another pipeline mid-queue
         // can hold a globally-older FOREIGN-pipeline row — admitting that here
         // would drive it under THIS pipeline's gate, breaching the other's cap.
-        const next = nextQueuedRunForTrigger(db, candidate.triggerId, pipelineId);
+        // #646 — the pick is lenient: a corrupt queued row is skipped (logged),
+        // never allowed to throw a drain (the boot drain runs unguarded) or to
+        // block the healthy fires queued behind it.
+        const next = nextQueuedRunForTrigger(db, candidate.triggerId, pipelineId, (id, err) => {
+          deps.log?.warn?.({ err, runId: id }, 'queue drain skipping a corrupt queued run row');
+        });
         if (next === null) continue;
         // A concurrent/duplicate drain that lost the race gets `null` — try the
         // next candidate rather than aborting the whole drain.
@@ -608,8 +613,9 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     // #646 — lenient scan: this runs unguarded at boot (`index.ts`), so one
     // corrupt `queued` row in a strict whole-list parse would abort SERVER BOOT
     // — surface 3's exact failure mode through a second door. A skipped row is
-    // logged; its trigger's queue drains past it only if the row is not the
-    // FIFO head (`nextQueuedRunForTrigger` stays strict — a named #646-residual).
+    // logged; the drain below picks past it too (`nextQueuedRunForTrigger` is
+    // lenient), so a corrupt FIFO head can neither throw out of this unguarded
+    // boot path nor starve the healthy fires queued behind it.
     const pipelineIds = new Set<string>();
     const queued = listParsedRuns(db, { status: 'queued' }, (id, err) => {
       deps.log?.error?.({ err, runId: id }, 'recoverQueued: skipping a corrupt queued run row');

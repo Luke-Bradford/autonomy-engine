@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z, ZodError } from 'zod';
 import { buildDedupeKey, type ArmWakeupInput, type Run } from '@autonomy-studio/shared';
 import { LEASE_TTL_MS, type DriveDeps } from '../run/driver.js';
 import { emptyReconcileReport, reconcileOne } from '../run/reconcile.js';
@@ -225,7 +225,26 @@ export function createLeaseService(deps: LeaseServiceDeps): LeaseService {
     refSchema: LeaseWakeupRefSchema,
     fire(row, _delivery, db: Db): WakeupFireResult {
       const ref = LeaseWakeupRefSchema.parse(row.ref);
-      const run = getRun(db, ref.runId);
+      // #646 — the `run_unparseable` suppress the durable-alarm skeleton got in
+      // #642, mirrored into this bespoke handler: every `running` row holds a
+      // pending `run_lease` alarm (the module invariant), so the corrupt row the
+      // lenient boot scan now lets SURVIVE would otherwise throw here on every
+      // tick — the clock's per-row catch keeps the alarm pending, a 1 Hz
+      // poison-fire loop for as long as the row exists. Suppress is self-healing:
+      // once the row is repaired, the sweep's expired-lease branch re-arms.
+      let run: Run | null;
+      try {
+        run = getRun(db, ref.runId);
+      } catch (err) {
+        if (err instanceof ZodError || err instanceof SyntaxError) {
+          deps.log?.warn?.(
+            { err, runId: ref.runId },
+            'run_lease: run row unparseable — suppressing (permanently corrupt)',
+          );
+          return { status: 'suppressed', reason: 'run_unparseable' };
+        }
+        throw err;
+      }
       if (run === null) return { status: 'suppressed', reason: 'run_not_found' };
       if (run.status !== 'running') return { status: 'suppressed', reason: 'not_running' };
       // THE GENERATION-TOKEN CHECK (codex-hardened): reclaim only if the row
@@ -319,9 +338,12 @@ export function createLeaseService(deps: LeaseServiceDeps): LeaseService {
     try {
       // #646 — lenient per row: with the strict list, ONE corrupt `running` row
       // threw the whole scan into the catch below, silencing the S7 lease
-      // heartbeat for EVERY live run for as long as the row existed.
+      // heartbeat for EVERY live run for as long as the row existed. `warn`, not
+      // `error`: this repeats every sweep interval until the row is repaired —
+      // the boot report's `corrupt` bucket is the error-level attention signal;
+      // this is the recurring reminder.
       rows = listParsedRuns(deps.db, { status: 'running' }, (id, err) => {
-        deps.log?.error({ err, runId: id }, 'run_lease: sweep skipping a corrupt run row');
+        deps.log?.warn?.({ err, runId: id }, 'run_lease: sweep skipping a corrupt run row');
       });
     } catch (err) {
       deps.log?.error({ err }, 'run_lease: sweep scan failed');
