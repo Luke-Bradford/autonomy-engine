@@ -175,6 +175,23 @@ describe('deriveRunLifecycle', () => {
     const events = [envelope({ type: 'run.interrupted', runId: 'r', reason: 'boot' })];
     expect(deriveRunLifecycle(events)).toBe('interrupted');
   });
+  it('#5 S3 — a run.waiting tailing after run.started shows `waiting` (live park view)', () => {
+    const events = [
+      envelope({ type: 'run.started', runId: 'r', pipelineVersionId: 'pv', params: {} }),
+      envelope({ type: 'run.waiting', runId: 'r', reason: 'waiting_external' }),
+    ];
+    expect(deriveRunLifecycle(events)).toBe('waiting');
+  });
+  it('#5 S3 — a run.resumed/started after a run.waiting returns the VIEW to running', () => {
+    // The live-view reverse edge (the reducer defers the waiting→running producer
+    // to S4/S6, but the monitor must un-park a run the moment it advances again).
+    const events = [
+      envelope({ type: 'run.started', runId: 'r', pipelineVersionId: 'pv', params: {} }),
+      envelope({ type: 'run.waiting', runId: 'r', reason: 'waiting_timer' }),
+      envelope({ type: 'run.resumed', runId: 'r', reason: 'boot_reconcile' }),
+    ];
+    expect(deriveRunLifecycle(events)).toBe('running');
+  });
   it('a resume AFTER a terminal shows running again — the VIEW rule, not the log rule', () => {
     // This is the deliberate divergence from the server's `terminalFactFromLog`
     // (#443), which reads the last TERMINAL fact and must never let a resume erase

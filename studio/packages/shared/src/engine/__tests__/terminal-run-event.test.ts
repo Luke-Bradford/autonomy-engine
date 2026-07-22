@@ -89,6 +89,10 @@ describe('#443 — terminalStatusOf', () => {
       },
       { type: 'node.output', ...run, nodeId: 'n1', name: 'chunk', value: 'x' },
       { type: 'run.resumed', ...run, reason: 'boot_reconcile' },
+      // #5 S3 — the run parked on an external event. NON-terminal: the run
+      // resumes to `running` when the event lands, so it must never read as a
+      // terminal fact (else `runs.status` would freeze `waiting` forever).
+      { type: 'run.waiting', ...run, reason: 'waiting_external' },
       { type: 'node.retryRequested', ...run, nodeId: 'n1', previousAttemptId: 'n1#0', reason: 'r' },
       // F2b/F2c's retry pair. NON-terminal, and §E of the joint spec depends on
       // that being deliberate: its invariant is "no TERMINAL event is appended
@@ -180,6 +184,14 @@ describe('#443 — terminalStatusOf', () => {
     // Load-bearing for #443: `terminalFactFromLog` must not read a resumed run as
     // terminal, and must not let a resume ERASE an earlier terminal fact either.
     expect(terminalStatusOf({ type: 'run.resumed', ...run, reason: 'boot_reconcile' })).toBeNull();
+  });
+
+  it('a `run.waiting` is NOT terminal (#5 S3) — a parked run resumes, it does not end', () => {
+    // The run-level twin of the node parked-states: `waiting` is a non-terminal
+    // sub-state, so neither the log-reader (`terminalStatusOf`) nor the driver's
+    // `TERMINAL_RUN` set (asserted in the server suite) may treat it as an end.
+    expect(terminalStatusOf({ type: 'run.waiting', ...run, reason: 'waiting_timer' })).toBeNull();
+    expect((TERMINAL_RUN_EVENT as ReadonlySet<string>).has('run.waiting')).toBe(false);
   });
 });
 

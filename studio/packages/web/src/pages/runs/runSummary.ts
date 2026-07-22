@@ -154,7 +154,15 @@ export function deriveRunLifecycle(events: RunEvent[]): RunLifecycleStatus | nul
     if (terminal !== null) {
       status = terminal;
     } else if (e.type === 'run.started' || e.type === 'run.resumed') {
+      // A resume/(re)start tailing in shows the run running again — and CLEARS a
+      // prior `waiting` (the live-view reverse edge, mirroring the reducer's
+      // deferred waiting→running producer at #5 S4/S6).
       status = 'running';
+    } else if (e.type === 'run.waiting') {
+      // #5 S3 — the run parked on an external event. Live VIEW: show it `waiting`
+      // (not the stale `running`) until a `run.started`/`run.resumed` returns it.
+      // Non-exhaustive if/else, so this case is added by hand (no compile guard).
+      status = 'waiting';
     }
   }
   return status;

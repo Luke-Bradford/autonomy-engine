@@ -244,11 +244,45 @@ export type NodeRunState = z.infer<typeof NodeRunStateSchema>;
 export const RunLifecycleStatusSchema = z.enum([
   'pending',
   'running',
+  // #5 S3 — a whole-run PARKED sub-state: the run is bound to an external event
+  // (a timer, a webhook, a capacity slot, a tumbling dependency) and is not
+  // actively executing. Non-terminal — the run resumes to `running` when the
+  // event lands. Carries a `RunState.waitingReason` (see `WaitingReasonSchema`).
+  // NOTE the DB's `RunStatusSchema` (schemas/run.ts) has always listed `waiting`
+  // (migration 0002's CHECK allows it), so this widening keeps the lifecycle set
+  // a SUBSET of the DB set (`driver.ts` identity mapping) with NO migration.
+  // The PRODUCER (running→waiting on park, and the waiting→running reverse edge)
+  // is deferred to S4/S6 — see the S3 fold's doc in `reduce.ts`.
+  'waiting',
   'success',
   'failure',
   'interrupted',
 ]);
 export type RunLifecycleStatus = z.infer<typeof RunLifecycleStatusSchema>;
+
+/**
+ * #5 S3 — WHY a run is `waiting`. The reasons are the run-level twins of the
+ * node parked-states `awaitsExternalEvent` (`reduce.ts`) recognises:
+ *   - `waiting_timer`       — a `wait` node parked `wait_pending` (#4 A6 timer).
+ *   - `waiting_external`    — a `webhook` node parked `external_wait_pending`
+ *                             (#4 A13), or any inbound external-wait.
+ *   - `waiting_concurrency` — admission held the run for a capacity slot. NO
+ *                             producer until #5 S6 (admission); reserved here so
+ *                             the vocabulary is settled when S6 wires it.
+ *   - `waiting_dependency`  — a tumbling-window self-dependency blocked the run.
+ *                             NO producer until #5 S9-S11 (tumbling); reserved.
+ * Deliberately NOT a reason: a `retry_pending` node (#1 F2b) keeps the run
+ * `running` — a transient failure being retried is still an in-flight run, not a
+ * parked one. Widening this enum later is additive-safe (a durable log never
+ * carried an unknown reason).
+ */
+export const WaitingReasonSchema = z.enum([
+  'waiting_timer',
+  'waiting_external',
+  'waiting_concurrency',
+  'waiting_dependency',
+]);
+export type WaitingReason = z.infer<typeof WaitingReasonSchema>;
 
 /**
  * A container's lifecycle state within a run (P2c).
@@ -350,6 +384,14 @@ export const RunStateSchema = z.object({
   startedAt: z.string().nullable(),
   params: z.record(z.string(), z.unknown()),
   status: RunLifecycleStatusSchema,
+  /**
+   * #5 S3 — WHY the run is `waiting`, or `null` when it is not. Meaningful ONLY
+   * while `status === 'waiting'`; every non-waiting transition leaves it `null`
+   * (the `run.waiting` fold is the sole writer). `null` (never absent) so a
+   * projection over any log — including one that never reached `waiting` — is
+   * deterministic on replay, exactly as `triggerContext` is.
+   */
+  waitingReason: WaitingReasonSchema.nullable(),
   nodes: z.record(z.string(), NodeRunStateSchema),
   outputs: z.record(z.string(), z.record(z.string(), z.unknown())),
   containers: z.record(z.string(), ContainerRunStateSchema),
@@ -905,6 +947,23 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     type: z.literal('run.resumed'),
     runId: z.string(),
     reason: z.literal('boot_reconcile'),
+  }),
+  z.object({
+    /**
+     * #5 S3 — the durable fact that a RUNNING run parked on an external event and
+     * became `waiting`. NON-terminal: the run resumes to `running` when the event
+     * lands. FORWARD-ONLY in the reducer this fire: the fold sets
+     * `status → 'waiting'` + `waitingReason`; the reverse edge (waiting→running)
+     * lives in `onResumed`/re-dispatch and ships with the PRODUCER (#5 S4/S6).
+     *
+     * Whole-run scoped (no `nodeId`): the run — not one node — is what a worker/
+     * slot is freed from. The spec leaves "whole-run or node-scoped" defined "per
+     * case"; S3 commits whole-run for the run-lifecycle status. Extensible: an
+     * optional `nodeId` can be added later without breaking a durable log.
+     */
+    type: z.literal('run.waiting'),
+    runId: z.string(),
+    reason: WaitingReasonSchema,
   }),
   z.object({
     type: z.literal('node.retryRequested'),
