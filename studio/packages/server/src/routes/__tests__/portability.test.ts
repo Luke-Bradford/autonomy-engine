@@ -223,6 +223,45 @@ describe('portability routes (export + import)', () => {
       expect(importRes.json().trigger.enabled).toBe(false);
     });
 
+    it('forces event:null on a NON-event-mode envelope (cross-field guard the import path must not bypass)', async () => {
+      // A hand-crafted envelope with `mode:'schedule'` + an event subscription
+      // would otherwise create a row every subsequent PATCH 400s on
+      // (`assertEventConsistent` — the route guard `createTrigger` bypasses).
+      const exported = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/triggers',
+          payload: {
+            name: 'Sched',
+            pipelineVersionId: null,
+            params: {},
+            mode: 'schedule',
+            schedule: '0 2 * * *',
+            webhook: null,
+            event: null,
+            concurrency: { policy: 'queue' },
+            runWindows: null,
+            enabled: false,
+          },
+        })
+      ).json();
+      const envelope = (
+        await app.inject({ method: 'GET', url: `/api/triggers/${exported.id}/export` })
+      ).json();
+      envelope.data.event = { name: 'crafted' }; // the hand-edit
+
+      const importRes = await app.inject({ method: 'POST', url: '/api/import', payload: envelope });
+      expect(importRes.statusCode).toBe(201);
+      expect(importRes.json().trigger.event).toBeNull();
+      // The imported row is fully patchable (the invariant holds).
+      const patch = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${importRes.json().trigger.id}`,
+        payload: { name: 'Renamed after import' },
+      });
+      expect(patch.statusCode).toBe(200);
+    });
+
     it('404 for a missing or not-owned trigger', async () => {
       const missing = await app.inject({ method: 'GET', url: '/api/triggers/trig_missing/export' });
       expect(missing.statusCode).toBe(404);

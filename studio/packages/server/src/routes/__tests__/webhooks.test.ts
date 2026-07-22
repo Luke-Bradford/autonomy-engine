@@ -191,6 +191,23 @@ describe('webhook routes', () => {
       expect('body' in triggerContextOf(res.json().runId as string)).toBe(false);
     });
 
+    it('a >64-level-nested body is refused as a recorded skip (the walker cannot verify it — fails closed)', async () => {
+      // Not itself a replay hazard, but `assertJsonReplaySafe` cannot traverse
+      // past MAX_CONFIG_DEPTH (64) — unverifiable fails closed. A deliberate,
+      // documented behaviour change for such senders (see `deriveBody`).
+      const { id, secret } = await makeWebhookTrigger();
+      const deep = '{"a":'.repeat(70) + '1' + '}'.repeat(70);
+      const key = 'evt-deep';
+      const res = await app.inject(signedRequest(id, secret, { body: deep, idempotencyKey: key }));
+      expect(res.statusCode).toBe(202);
+      expect(res.json().outcome).toBe('skipped');
+      expect(listRuns(app.db, { triggerId: id })).toHaveLength(0);
+      const retry = await app.inject(
+        signedRequest(id, secret, { body: deep, idempotencyKey: key }),
+      );
+      expect(retry.json().outcome).toBe('duplicate');
+    });
+
     it('a non-finite JSON number (1e999 → Infinity) is refused as a recorded skip, never persisted (#547)', async () => {
       const { id, secret } = await makeWebhookTrigger();
       const key = 'evt-nonfinite';

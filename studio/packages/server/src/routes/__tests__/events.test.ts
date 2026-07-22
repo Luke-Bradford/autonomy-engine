@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { CATALOG_VERSION } from '@autonomy-studio/shared';
 import {
@@ -7,6 +7,7 @@ import {
   createTrigger,
   listRuns,
 } from '../../repo/index.js';
+import { getWebhookDelivery } from '../../repo/webhook-deliveries.js';
 import { loadEngineEvents } from '../../run/events.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 
@@ -222,5 +223,130 @@ describe('POST /api/events', () => {
   it('400s a malformed publish (missing name)', async () => {
     const res = await publish({ payload: { x: 1 } });
     expect(res.statusCode).toBe(400);
+  });
+
+  it('a keyed GATE skip records nothing — the SAME key fires once the trigger is enabled', async () => {
+    const trig = createTrigger(app.db, eventTriggerInput('t11.created', { enabled: false }));
+    const skipped = await publish({ name: 't11.created', idempotencyKey: 'evt-gate' });
+    expect(
+      (skipped.json().results as Array<{ triggerId: string; outcome: string }>).find(
+        (r) => r.triggerId === trig.id,
+      )?.outcome,
+    ).toBe('skipped');
+    expect(getWebhookDelivery(app.db, trig.id, 'evt-gate')).toBeNull();
+
+    await app.inject({
+      method: 'PATCH',
+      url: `/api/triggers/${trig.id}`,
+      payload: { enabled: true },
+    });
+    const fired = await publish({ name: 't11.created', idempotencyKey: 'evt-gate' });
+    expect(
+      (fired.json().results as Array<{ triggerId: string; outcome: string }>).find(
+        (r) => r.triggerId === trig.id,
+      )?.outcome,
+    ).toBe('started');
+    await app.runLauncher.whenIdle();
+  });
+
+  it('an unbound subscriber RELEASES its claim (skipped, defense-in-depth) — the key fires after rebinding', async () => {
+    // Only creatable by bypassing the route guard (repo direct) — the write API
+    // refuses enabled+unbound. The fan-out must honour "unbound never fires"
+    // regardless, and must not burn the sender's key on it.
+    const trig = createTrigger(
+      app.db,
+      eventTriggerInput('t12.created', { pipelineVersionId: null }),
+    );
+    const res = await publish({ name: 't12.created', idempotencyKey: 'evt-unbound' });
+    const result = (
+      res.json().results as Array<{ triggerId: string; outcome: string; reason?: string }>
+    ).find((r) => r.triggerId === trig.id);
+    expect(result?.outcome).toBe('skipped');
+    expect(result?.reason).toMatch(/no bound pipeline version/);
+    expect(getWebhookDelivery(app.db, trig.id, 'evt-unbound')).toBeNull();
+
+    await app.inject({
+      method: 'PATCH',
+      url: `/api/triggers/${trig.id}`,
+      payload: { pipelineVersionId },
+    });
+    const fired = await publish({ name: 't12.created', idempotencyKey: 'evt-unbound' });
+    expect(
+      (fired.json().results as Array<{ triggerId: string; outcome: string }>).find(
+        (r) => r.triggerId === trig.id,
+      )?.outcome,
+    ).toBe('started');
+    await app.runLauncher.whenIdle();
+  });
+
+  it("an unexpected launcher fault reports outcome:'error', releases the claim, and never aborts siblings", async () => {
+    const bad = createTrigger(app.db, eventTriggerInput('t13.created'));
+    const good = createTrigger(
+      app.db,
+      eventTriggerInput('t13.created', { name: 'Unaffected sibling' }),
+    );
+
+    // Inject a one-shot fault at the launcher seam for the bad trigger only —
+    // the route, ledger, and sibling firing under test are all real.
+    const realFire = app.runLauncher.fire.bind(app.runLauncher);
+    const spy = vi.spyOn(app.runLauncher, 'fire').mockImplementation((trigger, ctx) => {
+      if (trigger.id === bad.id) throw new Error('injected launcher fault');
+      return realFire(trigger, ctx);
+    });
+    try {
+      const res = await publish({ name: 't13.created', idempotencyKey: 'evt-fault' });
+      expect(res.statusCode).toBe(202);
+      const results = res.json().results as Array<{ triggerId: string; outcome: string }>;
+      expect(results.find((r) => r.triggerId === bad.id)?.outcome).toBe('error');
+      expect(results.find((r) => r.triggerId === good.id)?.outcome).toBe('started');
+      // The claim was RELEASED — a corrected retry of the same key is not deduped.
+      expect(getWebhookDelivery(app.db, bad.id, 'evt-fault')).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+    // After the fault clears, the same key fires (release verified end-to-end).
+    const retry = await publish({ name: 't13.created', idempotencyKey: 'evt-fault' });
+    expect(
+      (retry.json().results as Array<{ triggerId: string; outcome: string }>).find(
+        (r) => r.triggerId === bad.id,
+      )?.outcome,
+    ).toBe('started');
+    await app.runLauncher.whenIdle();
+  });
+
+  it('a keyed publish during launcher shutdown RELEASES the claim (transient — never a durable skip)', async () => {
+    // Dedicated app: stopping the shared launcher would poison later tests.
+    const local = await buildTestApp();
+    try {
+      const pipeline = createPipeline(local.db, { ownerId: 'local', name: 'Shutdown' });
+      const version = createPipelineVersion(local.db, {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      const trig = createTrigger(local.db, {
+        ...eventTriggerInput('t14.created'),
+        pipelineVersionId: version.id,
+      });
+
+      local.runLauncher.stop();
+      const res = await local.inject({
+        method: 'POST',
+        url: '/api/events',
+        payload: { name: 't14.created', idempotencyKey: 'evt-shutdown' },
+      });
+      const result = (
+        res.json().results as Array<{ triggerId: string; outcome: string; reason?: string }>
+      ).find((r) => r.triggerId === trig.id);
+      expect(result?.outcome).toBe('skipped');
+      expect(result?.reason).toMatch(/shutting down/);
+      // NOT finalized — the post-restart retry of the same key must fire.
+      expect(getWebhookDelivery(local.db, trig.id, 'evt-shutdown')).toBeNull();
+    } finally {
+      await local.close();
+    }
   });
 });

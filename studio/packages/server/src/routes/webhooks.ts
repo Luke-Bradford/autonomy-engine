@@ -1,15 +1,8 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
-import { isWithinRunWindows, SubstituteError, type Trigger } from '@autonomy-studio/shared';
+import { isWithinRunWindows } from '@autonomy-studio/shared';
 import { getTrigger, getSecretByRef } from '../repo/index.js';
-import {
-  claimWebhookDelivery,
-  deleteWebhookDelivery,
-  DuplicateWebhookDeliveryError,
-  finalizeWebhookDelivery,
-  getWebhookDelivery,
-} from '../repo/webhook-deliveries.js';
 import { decrypt } from '../secrets/secrets.js';
-import { UnboundTriggerError } from '../run/launcher.js';
+import { fireTriggerThroughLedger } from './fire-through-ledger.js';
 import { verifyWebhook } from '../webhooks/verify.js';
 
 /**
@@ -124,31 +117,47 @@ export const webhooksRoutes: FastifyPluginAsync = async (fastify) => {
           .send({ outcome: 'skipped', reason: 'outside run window' } satisfies WebhookFireResponse);
       }
 
-      // --- 3. Idempotency + replay: claim the delivery BEFORE firing.
+      // --- 3+4. Idempotency + fire, through the ONE shared ledger seam
+      // (`fire-through-ledger.ts` owns the claim/finalize/release asymmetries).
+      // The key falls back to the signature: deterministic in
+      // secret+timestamp+body, so a verbatim replay collides but a
+      // freshly-signed event does not. The fire seeds `${trigger.body}` (#5 S8
+      // — the first production feeder of the S12a context seam) from the SAME
+      // verified bytes the signature covered.
       const idempotencyKey =
         firstHeader(request.headers['x-webhook-idempotency-key']) ||
-        // Fall back to the signature: deterministic in secret+timestamp+body,
-        // so a verbatim replay collides but a freshly-signed event does not.
         (firstHeader(request.headers['x-webhook-signature']) as string);
 
-      let deliveryId: string;
-      try {
-        deliveryId = claimWebhookDelivery(db, { triggerId, idempotencyKey }).id;
-      } catch (err) {
-        if (err instanceof DuplicateWebhookDeliveryError) {
-          const existing = getWebhookDelivery(db, triggerId, idempotencyKey);
+      const outcome = fireTriggerThroughLedger(db, request.log, {
+        triggerId,
+        idempotencyKey,
+        fire: () => fastify.runLauncher.fire(trigger, { body: deriveBody(rawBody) }),
+      });
+      switch (outcome.kind) {
+        case 'duplicate':
           return reply.status(202).send({
             outcome: 'duplicate',
-            runId: existing?.runId ?? undefined,
+            runId: outcome.runId ?? undefined,
           } satisfies WebhookFireResponse);
-        }
-        throw err;
+        case 'binding_skip':
+          // Permanent config-vs-payload defect, recorded so the verbatim retry
+          // dedupes; the detail is logged server-side, never returned.
+          return reply.status(202).send({
+            outcome: 'skipped',
+            reason: 'trigger param binding could not be resolved',
+          } satisfies WebhookFireResponse);
+        case 'unbound':
+          // Defense-in-depth: the write API refuses to enable an unbound
+          // trigger, so an enabled-but-unbound webhook should not exist — but
+          // "unbound never fires" is honoured here regardless.
+          return reply.status(422).send({ error: 'trigger has no bound pipeline version' });
+        case 'fired':
+          return reply.status(202).send({
+            outcome: outcome.result.outcome,
+            runId: outcome.result.runId,
+            reason: outcome.result.reason,
+          } satisfies WebhookFireResponse);
       }
-
-      // --- 4. Fire through the shared launcher, seeding `${trigger.body}`
-      // (#5 S8 — the first production feeder of the S12a context seam) from
-      // the SAME verified bytes the signature covered.
-      return fireClaimed(fastify, trigger, deliveryId, deriveBody(rawBody), reply);
     },
   );
 };
@@ -161,9 +170,18 @@ export const webhooksRoutes: FastifyPluginAsync = async (fastify) => {
  * The string fallback is deliberate: it is the honest representation of a
  * non-JSON delivery (`${trigger.body}` yields the text), and a `${trigger.body.x}`
  * deep-address on it fails SAFE through the launcher's `SubstituteError` →
- * record-skip path rather than silently seeding null. A non-finite JSON number
- * (`1e999` → `Infinity`) survives this parse but is refused by the launcher's
- * replay-safety backstop (#547) before anything durable is written.
+ * record-skip path rather than silently seeding null.
+ *
+ * TWO payload classes survive this parse but are refused by the launcher's
+ * replay-safety backstop (#547) before anything durable is written, and land
+ * as a RECORDED skip (the verbatim retry dedupes; a corrected event re-signs
+ * with a new key): a non-finite JSON number (`1e999` → `Infinity`, which
+ * `JSON.stringify` would silently persist as `null`), and a body nested deeper
+ * than the walker's `MAX_CONFIG_DEPTH` (64) bound — the latter is not itself a
+ * replay hazard, but the walker cannot VERIFY what it cannot safely traverse,
+ * and unverifiable fails closed. Both classes are deliberate behaviour changes
+ * for such senders (pre-S8, any body fired because it was ignored); the real
+ * reason is logged server-side per the ledger seam's contract.
  */
 function deriveBody(rawBody: Buffer): unknown {
   if (rawBody.length === 0) return undefined;
@@ -173,68 +191,4 @@ function deriveBody(rawBody: Buffer): unknown {
   } catch {
     return text;
   }
-}
-
-/** Fire a claimed delivery and finalize its ledger row, or release the claim on
- * an unexpected fault so a corrected retry of the same key is not deduped. */
-function fireClaimed(
-  fastify: Parameters<FastifyPluginAsync>[0],
-  trigger: Trigger,
-  deliveryId: string,
-  body: unknown,
-  reply: FastifyReply,
-): FastifyReply {
-  const { db } = fastify;
-  let result;
-  try {
-    result = fastify.runLauncher.fire(trigger, { body });
-  } catch (err) {
-    // #5 S12b — a trigger param binding that cannot resolve is a PERMANENT
-    // config defect (e.g. a `${trigger.body.x}` deep-address on a body this
-    // delivery does not carry), NOT a transient fault — and #547's non-finite
-    // fire-body refusal (`1e999` in the payload) rides the same class. RELEASING
-    // the claim would let the sender's verbatim retry (same idempotency key)
-    // re-fire and re-throw in a storm. Instead RECORD the delivery as `skipped`
-    // (so the same key dedupes) and 202 — the deliberate asymmetry the
-    // concurrency-skip below already uses. A corrected, genuinely-new event
-    // re-signs with a new key and fires. The detail is logged server-side,
-    // never returned.
-    if (err instanceof SubstituteError) {
-      fastify.log.warn(
-        { err, triggerId: trigger.id, deliveryId },
-        'webhook fire: unresolvable trigger param binding — recording skip',
-      );
-      finalizeWebhookDelivery(db, deliveryId, { outcome: 'skipped', runId: null });
-      return reply.status(202).send({
-        outcome: 'skipped',
-        reason: 'trigger param binding could not be resolved',
-      } satisfies WebhookFireResponse);
-    }
-    // Release the claim so the same key can be retried after the cause is fixed.
-    deleteWebhookDelivery(db, deliveryId);
-    if (err instanceof UnboundTriggerError) {
-      // Defense-in-depth: the write API refuses to enable an unbound trigger,
-      // so an enabled-but-unbound webhook should not exist — but "unbound never
-      // fires" is honoured here regardless.
-      return reply.status(422).send({ error: 'trigger has no bound pipeline version' });
-    }
-    throw err;
-  }
-  // Finalize the claim with the launcher's outcome. NOTE the deliberate
-  // asymmetry with a GATE skip (disabled / out-of-window, above): a gate skip
-  // records NO delivery so the same key retries once the trigger is
-  // enabled/in-window, whereas a CONCURRENCY skip here (`skip_if_running` /
-  // `parallel` cap / full `queue`) IS recorded — the delivery WAS admitted and
-  // the trigger decided, so the same logical event must not re-fire just
-  // because a slot later frees (a genuinely new event re-signs with a new
-  // timestamp → new idempotency key → fires).
-  finalizeWebhookDelivery(db, deliveryId, {
-    outcome: result.outcome,
-    runId: result.runId ?? null,
-  });
-  return reply.status(202).send({
-    outcome: result.outcome,
-    runId: result.runId,
-    reason: result.reason,
-  } satisfies WebhookFireResponse);
 }

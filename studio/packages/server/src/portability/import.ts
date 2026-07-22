@@ -170,6 +170,12 @@ function importTriggerEnvelope(
     ownerId,
     pipelineVersionId: null,
     webhook: null,
+    // #5 S8 — an event subscription only makes sense on an `event` trigger
+    // (`assertEventConsistent`, the route guard this path bypasses): force it
+    // null on any other mode, or a hand-crafted envelope could create a row
+    // whose every subsequent PATCH 400s on the cross-field rule. An event-mode
+    // trigger keeps its subscription verbatim (no secret in it).
+    event: rest.mode === 'event' ? (rest.event ?? null) : null,
     enabled: false,
   });
 

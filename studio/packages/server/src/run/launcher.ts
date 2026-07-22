@@ -97,6 +97,17 @@ export interface FireContext {
   runNowParams?: Record<string, unknown>;
 }
 
+/**
+ * The `reason` on the TRANSIENT shutdown skip `fire()` returns while the
+ * launcher is stopping. Exported as the SSOT the delivery-ledger seam
+ * (`routes/fire-through-ledger.ts`) compares against: a shutdown skip must
+ * RELEASE a claimed idempotency key, never finalize it — recording a durable
+ * `skipped` for a purely transient condition would serve the sender's
+ * post-restart retry of the same key as `duplicate` and silently lose the
+ * event.
+ */
+export const SHUTDOWN_SKIP_REASON = 'launcher is shutting down';
+
 /** Thrown by `fire()` when a trigger has no bound pipeline version. */
 export class UnboundTriggerError extends Error {
   constructor(public readonly triggerId: string) {
@@ -391,7 +402,7 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       throw new UnboundTriggerError(trigger.id);
     }
     if (stopped) {
-      return { outcome: 'skipped', reason: 'launcher is shutting down' };
+      return { outcome: 'skipped', reason: SHUTDOWN_SKIP_REASON };
     }
 
     // #547 boundary 3 (#5 S8) — refuse a non-finite number ANYWHERE in the fire
@@ -400,7 +411,12 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     // `JSON.stringify` would persist as `null` — the live folded RunState and
     // the replayed log silently disagreeing. One seat for every feeder (webhook
     // raw body, events payload); throws `SubstituteError`, which every fire
-    // caller already maps (manual → 400, webhook/events → record-skip).
+    // caller already maps (manual → 400, webhook/events → record-skip). NOTE
+    // the walker's depth bound (`MAX_CONFIG_DEPTH`, 64) rides this refusal: a
+    // deeper body is not itself a replay hazard, but what cannot be safely
+    // traversed cannot be verified, and unverifiable fails closed — a
+    // deliberate, documented behaviour change for a >64-level webhook body
+    // (see `deriveBody` in routes/webhooks.ts).
     assertJsonReplaySafe('trigger body', fireContext?.body ?? null);
 
     // #5 S12 — freeze the run's durable trigger context at ADMISSION time. Every
