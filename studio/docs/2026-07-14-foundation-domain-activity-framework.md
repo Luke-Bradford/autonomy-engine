@@ -64,6 +64,15 @@ trap for a durable event field). `code:'timeout'` is RESERVED there for F3's pol
 Add optional (default-empty) doc fields: `description? · annotations?: string[] ·
 folder? · concurrency? · variables?: VariableDef[]`. Old versions parse unchanged.
 
+> **`concurrency` SHIPPED 2026-07-22 (#5 S6b) — and it lives on the MUTABLE `pipelines` ROW, not
+> the immutable version doc.** The cap is a live operational admission gate ("max concurrent runs
+> across all its triggers", #5 spec) read FRESH at every fire/drain (#631's precedent): a
+> version-doc cap would be unrepairable (versions are immutable) and would race across triggers
+> bound to different versions of the same pipeline. A later F8a fire adding the REMAINING D1
+> fields (`description`/`annotations`/`folder` on the version doc) must NOT re-add `concurrency`
+> there — one home only. Enforcement (F8b) shipped in the same S6b slice (launcher both-must-pass
+> admission + pipeline-scoped fair drain).
+
 ### D2 — Parameters vs Variables
 
 - **Params** stay read-only-in-run. Type set = ADF parity **String/Int/Float/Bool/Array/
@@ -386,7 +395,7 @@ rerun (gated).**
 | F7b | `${global}` resolver + explicit-namespace validation |
 | F7c | secure globals → secret store |
 | F8a | pipeline props schema (desc/annotations/folder/concurrency) |
-| F8b | per-pipeline concurrency enforcement (scheduler/launcher) |
+| F8b | per-pipeline concurrency enforcement (scheduler/launcher) — **SHIPPED 2026-07-22 with #5 S6b** (see the D1 note above: the cap lives on the mutable `pipelines` row; launcher both-must-pass admission + pipeline-scoped fair drain) |
 | F9a | ActivityDefinition contract type (+ idempotent/cancel/timeoutScope/secure/errorMap) — **MINIMAL SHIPPED 2026-07-15** (build-order item 3: "minimal contract EARLY, migrations later"). The existing `ActivityCatalogEntry` IS the ActivityDefinition; it gained `kind: 'execution'\|'control'` (the dispatch discriminant — now the executor's PRIMARY branch, checked ahead of the retained `connectionKinds.length > 0` proxy, with a distinct `CONTROL_NOT_DISPATCHABLE` code) + `category`/`ACTIVITY_CATEGORIES` (U5's palette groups, values per spec #4's headings — `agent_task` is `ai`, there is no `agent` class) + an `ActivityDefinition` alias. `cancel`/`timeoutScope`/`secure`/`errorMap`/`inputs` are deliberately NOT declared — each is sequencing behind a named owner (F2a/F3/F4/F15/F9b-d), not an open question. **Production delta is ZERO** and the reducer does not read `kind` yet: **whether A1/A2 route control via this `kind` or a structural discriminant (the `call_pipeline` precedent) is an OPEN FORK no spec settles — #4 owns it.** See the F9a spike-hardened block under D6. |
 | F9b | migrate `http_request` onto it |
 | F9c | migrate `llm_call` |

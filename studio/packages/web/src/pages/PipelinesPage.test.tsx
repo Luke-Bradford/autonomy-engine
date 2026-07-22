@@ -37,6 +37,7 @@ function pipeline(overrides: Partial<Pipeline> = {}): Pipeline {
     id: 'pl_1',
     ownerId: 'local',
     name: 'My pipeline',
+    concurrency: null,
     createdAt: 1,
     updatedAt: 1,
     ...overrides,

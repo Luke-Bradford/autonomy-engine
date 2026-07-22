@@ -10,6 +10,7 @@ import { createPipeline } from '../pipelines.js';
 import { createTrigger } from '../triggers.js';
 import {
   admitQueuedRun,
+  countActiveRunsForPipeline,
   countActiveRunsForTrigger,
   countQueuedRunsForTrigger,
   createRun,
@@ -17,6 +18,7 @@ import {
   getRun,
   listRuns,
   nextQueuedRunForTrigger,
+  queuedTriggerCandidatesForPipeline,
   updateRun,
 } from '../runs.js';
 import { freshDb } from './helpers.js';
@@ -299,5 +301,149 @@ describe('durable admission queue — #5 S6a', () => {
     // A row that was never queued is not admissible either.
     const running = createRun(db, buildRunInput(version.id, { triggerId: trigger.id }));
     expect(admitQueuedRun(db, running.id)).toBeNull();
+  });
+});
+
+describe('per-pipeline admission — #5 S6b', () => {
+  function seedPipelineWithVersions(db: ReturnType<typeof freshDb>['db']) {
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const versionInput: NewPipelineVersion = {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    };
+    const v1 = createPipelineVersion(db, versionInput);
+    const v2 = createPipelineVersion(db, versionInput);
+    return { pipeline, v1, v2 };
+  }
+  function seedTriggerOn(db: ReturnType<typeof freshDb>['db'], versionId: string, name: string) {
+    return createTrigger(db, {
+      ownerId: 'local',
+      name,
+      pipelineVersionId: versionId,
+      params: {},
+      mode: 'manual',
+      schedule: null,
+      webhook: null,
+      concurrency: { policy: 'queue' },
+      runWindows: null,
+      enabled: false,
+    });
+  }
+
+  it('countActiveRunsForPipeline spans ALL versions + triggers of the pipeline; excludes queued/waiting/terminals and other pipelines', () => {
+    const { db } = freshDb();
+    const { pipeline, v1, v2 } = seedPipelineWithVersions(db);
+    const t1 = seedTriggerOn(db, v1.id, 'T1');
+    const t2 = seedTriggerOn(db, v2.id, 'T2');
+    // Active: one pending on v1/t1, one running on v2/t2 — DIFFERENT versions of
+    // the same pipeline both count (the cap is "across all its triggers").
+    createRun(db, buildRunInput(v1.id, { triggerId: t1.id }));
+    const running = createRun(db, buildRunInput(v2.id, { triggerId: t2.id }));
+    updateRun(db, running.id, { status: 'running' });
+    // A trigger-less (future call_pipeline child) run of this pipeline counts too.
+    createRun(db, buildRunInput(v1.id));
+    // Non-occupying rows: queued (pre-admission), waiting (parked), terminal.
+    createRun(db, buildRunInput(v1.id, { triggerId: t1.id, status: 'queued', queuedAt: 1 }));
+    const parked = createRun(db, buildRunInput(v1.id, { triggerId: t1.id }));
+    updateRun(db, parked.id, { status: 'waiting' });
+    const done = createRun(db, buildRunInput(v2.id, { triggerId: t2.id }));
+    updateRun(db, done.id, { status: 'success' });
+    // A run of a DIFFERENT pipeline never counts.
+    const other = setupPipelineVersion(db);
+    createRun(db, buildRunInput(other.id));
+
+    expect(countActiveRunsForPipeline(db, pipeline.id)).toBe(3);
+  });
+
+  it('queuedTriggerCandidatesForPipeline groups queued rows by trigger with oldestQueuedAt + lastAdmittedAt, ordered least-recently-admitted first', () => {
+    const { db, sqlite } = freshDb();
+    const { pipeline, v1, v2 } = seedPipelineWithVersions(db);
+    const t1 = seedTriggerOn(db, v1.id, 'T1');
+    const t2 = seedTriggerOn(db, v2.id, 'T2');
+    const t3 = seedTriggerOn(db, v1.id, 'T3');
+
+    // T1 was ADMITTED recently (a non-queued row with a fresh startedAt);
+    // T2 was admitted longer ago; T3 has never been served (no non-queued rows).
+    const t1Served = createRun(db, buildRunInput(v1.id, { triggerId: t1.id }));
+    updateRun(db, t1Served.id, { status: 'success' });
+    const t2Served = createRun(db, buildRunInput(v2.id, { triggerId: t2.id }));
+    updateRun(db, t2Served.id, { status: 'success' });
+    // Force a strict service-time order: t2 served BEFORE t1. Raw SQL because
+    // startedAt is deliberately NOT lifecycle-patchable (see updateRun).
+    sqlite.prepare('UPDATE runs SET started_at = ? WHERE id = ?').run(1000, t2Served.id);
+    sqlite.prepare('UPDATE runs SET started_at = ? WHERE id = ?').run(2000, t1Served.id);
+
+    // Queued rows: T1 has the OLDEST queuedAt overall; T2 and T3 newer.
+    createRun(db, buildRunInput(v1.id, { triggerId: t1.id, status: 'queued', queuedAt: 10 }));
+    createRun(db, buildRunInput(v1.id, { triggerId: t1.id, status: 'queued', queuedAt: 40 }));
+    createRun(db, buildRunInput(v2.id, { triggerId: t2.id, status: 'queued', queuedAt: 20 }));
+    createRun(db, buildRunInput(v1.id, { triggerId: t3.id, status: 'queued', queuedAt: 30 }));
+
+    const candidates = queuedTriggerCandidatesForPipeline(db, pipeline.id);
+    // Least-recently-ADMITTED first: never-served T3, then T2 (1000), then T1
+    // (2000) — despite T1 holding the oldest queued row. Within a trigger the
+    // oldest queuedAt is reported.
+    expect(candidates).toEqual([
+      { triggerId: t3.id, oldestQueuedAt: 30, lastAdmittedAt: null },
+      { triggerId: t2.id, oldestQueuedAt: 20, lastAdmittedAt: 1000 },
+      { triggerId: t1.id, oldestQueuedAt: 10, lastAdmittedAt: 2000 },
+    ]);
+  });
+
+  it('queuedTriggerCandidatesForPipeline: never-served ties break by oldestQueuedAt, then triggerId; other pipelines and non-queued rows excluded', () => {
+    const { db } = freshDb();
+    const { pipeline, v1 } = seedPipelineWithVersions(db);
+    const tA = seedTriggerOn(db, v1.id, 'A');
+    const tB = seedTriggerOn(db, v1.id, 'B');
+    createRun(db, buildRunInput(v1.id, { triggerId: tB.id, status: 'queued', queuedAt: 5 }));
+    createRun(db, buildRunInput(v1.id, { triggerId: tA.id, status: 'queued', queuedAt: 7 }));
+    // A queued row on a DIFFERENT pipeline must not appear.
+    const other = setupPipelineVersion(db);
+    const tOther = seedTriggerOn(db, other.id, 'X');
+    createRun(db, buildRunInput(other.id, { triggerId: tOther.id, status: 'queued', queuedAt: 1 }));
+
+    const candidates = queuedTriggerCandidatesForPipeline(db, pipeline.id);
+    expect(candidates).toEqual([
+      { triggerId: tB.id, oldestQueuedAt: 5, lastAdmittedAt: null },
+      { triggerId: tA.id, oldestQueuedAt: 7, lastAdmittedAt: null },
+    ]);
+    expect(queuedTriggerCandidatesForPipeline(db, 'pipe_nonexistent')).toEqual([]);
+  });
+
+  it('a REBOUND trigger: candidates + oldest pick + service record are all PIPELINE-scoped, never trigger-global', () => {
+    // A queued run row freezes the version it enqueued under, while the
+    // trigger's binding is mutable — so ONE trigger can hold queued rows on TWO
+    // pipelines. Every drain read must scope to the drained pipeline, or
+    // pipeline A's drain would admit (and gate-check) a pipeline-B row.
+    const { db, sqlite } = freshDb();
+    const { pipeline: pipeA, v1: vA } = seedPipelineWithVersions(db);
+    const { v1: vB } = seedPipelineWithVersions(db);
+    const t = seedTriggerOn(db, vA.id, 'T');
+
+    // T's GLOBALLY-oldest queued row is on pipeline B; its pipeline-A row is newer.
+    createRun(db, buildRunInput(vB.id, { triggerId: t.id, status: 'queued', queuedAt: 10 }));
+    createRun(db, buildRunInput(vA.id, { triggerId: t.id, status: 'queued', queuedAt: 20 }));
+    // T's most recent SERVICE was on pipeline B; its pipeline-A service is older.
+    const servedA = createRun(db, buildRunInput(vA.id, { triggerId: t.id }));
+    updateRun(db, servedA.id, { status: 'success' });
+    const servedB = createRun(db, buildRunInput(vB.id, { triggerId: t.id }));
+    updateRun(db, servedB.id, { status: 'success' });
+    sqlite.prepare('UPDATE runs SET started_at = ? WHERE id = ?').run(1000, servedA.id);
+    sqlite.prepare('UPDATE runs SET started_at = ? WHERE id = ?').run(2000, servedB.id);
+
+    // Pipeline A's candidates report A's oldest row + A's service record only.
+    expect(queuedTriggerCandidatesForPipeline(db, pipeA.id)).toEqual([
+      { triggerId: t.id, oldestQueuedAt: 20, lastAdmittedAt: 1000 },
+    ]);
+    // The pipeline-scoped pick returns A's row, NOT the globally-older B row.
+    const picked = nextQueuedRunForTrigger(db, t.id, pipeA.id);
+    expect(picked?.pipelineVersionId).toBe(vA.id);
+    expect(picked?.queuedAt).toBe(20);
+    // The unscoped pick (per-trigger FIFO, S6a behaviour) still sees the global oldest.
+    expect(nextQueuedRunForTrigger(db, t.id)?.queuedAt).toBe(10);
   });
 });

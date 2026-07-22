@@ -18,6 +18,9 @@ const validPipelineEnvelope = {
       id: 'pipe_1',
       ownerId: null,
       name: 'P',
+      // #5 S6b — the per-pipeline cap rides the export envelope (a pre-S6b
+      // envelope without the key imports as uncapped via the read default).
+      concurrency: null,
       createdAt: 1700000000000,
       updatedAt: 1700000000000,
     },

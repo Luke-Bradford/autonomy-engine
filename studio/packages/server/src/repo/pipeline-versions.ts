@@ -222,6 +222,21 @@ export function getPipelineVersion(db: Db, id: string): PipelineVersion | null {
   return row ? PipelineVersionSchema.parse(row) : null;
 }
 
+/**
+ * #5 S6b — the version's PIPELINE identity alone, without parsing the whole
+ * (potentially large) doc: the launcher resolves this on every fire and queue
+ * drain to key the per-pipeline admission gate, so it must stay a
+ * single-column read, not a `PipelineVersionSchema.parse`.
+ */
+export function getPipelineIdForVersion(db: Db, id: string): string | null {
+  const row = db
+    .select({ pipelineId: pipelineVersions.pipelineId })
+    .from(pipelineVersions)
+    .where(eq(pipelineVersions.id, id))
+    .get();
+  return row?.pipelineId ?? null;
+}
+
 /** All versions of one pipeline, oldest first. */
 export function listPipelineVersions(db: Db, pipelineId: string): PipelineVersion[] {
   const rows = db

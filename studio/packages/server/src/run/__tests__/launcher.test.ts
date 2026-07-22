@@ -15,6 +15,7 @@ import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createTrigger, updateTrigger } from '../../repo/triggers.js';
 import {
+  countActiveRunsForPipeline,
   countActiveRunsForTrigger,
   createRun,
   getRun,
@@ -653,8 +654,8 @@ describe('RunLauncher — drainQueue on ANY terminalization via the run-event bu
     const pvId = seedVersion(db);
     const launcher = createRunLauncher(deps(db, {}, bus));
 
-    // A `call_pipeline` CHILD run: no trigger, so nothing to drain — the hook must
-    // guard the null triggerId, not throw.
+    // A `call_pipeline` CHILD run: no trigger — the hook drains its PIPELINE's
+    // queue (#5 S6b; empty here), and must tolerate the null triggerId, not throw.
     const parent = createRun(db, {
       ownerId: 'local',
       pipelineVersionId: pvId,
@@ -946,5 +947,361 @@ describe('RunLauncher — #5 S12b trigger param bindings + run-now override', ()
 
     expect(() => createRunLauncher(deps(db)).fire(trigger)).toThrow(SubstituteError);
     expect(listRuns(db, { triggerId: trigger.id })).toHaveLength(0);
+  });
+});
+
+describe('RunLauncher — #5 S6b per-pipeline both-must-pass admission', () => {
+  const flushMicrotasks = () => new Promise((r) => setTimeout(r, 0));
+
+  /** One pipeline with an explicit concurrency cap + a version factory, so
+   * several triggers (possibly on different versions) share the pipeline. */
+  function seedCappedPipeline(db: Db, cap: number | null) {
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P', concurrency: cap });
+    const mkVersion = (nodes: Node[] = [node('a')]): string => {
+      const input: NewPipelineVersion = {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes,
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      };
+      return createPipelineVersion(db, input).id;
+    };
+    return { pipeline, mkVersion };
+  }
+
+  function seedQueuedRow(db: Db, pvId: string, triggerId: string, queuedAt: number) {
+    return createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId,
+      parentRunId: null,
+      params: {},
+      status: 'queued',
+      queuedAt,
+    });
+  }
+
+  it('queue policy: a fire with a FREE trigger slot queues when the PIPELINE cap is reached by another trigger', async () => {
+    const { db } = freshDb();
+    const { mkVersion } = seedCappedPipeline(db, 1);
+    const pvId = mkVersion([node('a')]);
+    const t1 = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const t2 = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const launcher = createRunLauncher(deps(db, { nodes: { a: { hang: true } } }));
+
+    expect(launcher.fire(t1).outcome).toBe('started'); // occupies the pipeline's ONE slot
+    // t2 has no active run of its own — per-trigger alone would start; the
+    // pipeline gate must queue it (both-must-pass).
+    expect(launcher.fire(t2).outcome).toBe('queued');
+    const t2Runs = listRuns(db, { triggerId: t2.id });
+    expect(t2Runs).toHaveLength(1);
+    expect(t2Runs[0]!.status).toBe('queued');
+    await launcher.whenIdle();
+  });
+
+  it('parallel policy: pipeline overflow QUEUES (spec: per-pipeline overflow queues), while its own trigger cap still SKIPS', async () => {
+    const { db } = freshDb();
+    const { mkVersion } = seedCappedPipeline(db, 1);
+    const pvId = mkVersion([node('a')]);
+    const t1 = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const t2 = seedTrigger(db, {
+      pipelineVersionId: pvId,
+      concurrency: { policy: 'parallel', max: 3 },
+    });
+    const launcher = createRunLauncher(deps(db, { nodes: { a: { hang: true } } }));
+
+    expect(launcher.fire(t1).outcome).toBe('started');
+    // t2 parallel(max=3) with 0 active of its own: pipeline full → queued, not skipped.
+    expect(launcher.fire(t2).outcome).toBe('queued');
+    expect(listRuns(db, { triggerId: t2.id })[0]!.status).toBe('queued');
+    await launcher.whenIdle();
+  });
+
+  it('parallel policy: its OWN cap reached still skips (unchanged), even with pipeline room', async () => {
+    const { db } = freshDb();
+    const { mkVersion } = seedCappedPipeline(db, 5);
+    const pvId = mkVersion([node('a')]);
+    const t1 = seedTrigger(db, {
+      pipelineVersionId: pvId,
+      concurrency: { policy: 'parallel', max: 1 },
+    });
+    const launcher = createRunLauncher(deps(db, { nodes: { a: { hang: true } } }));
+
+    expect(launcher.fire(t1).outcome).toBe('started');
+    const second = launcher.fire(t1);
+    expect(second.outcome).toBe('skipped');
+    if (second.outcome === 'skipped') expect(second.reason).toContain('parallel cap');
+    await launcher.whenIdle();
+  });
+
+  it('skip_if_running: pipeline-full queues the fire; a SECOND fire skips while the queued row is outstanding (at-most-one)', async () => {
+    const { db } = freshDb();
+    const { mkVersion } = seedCappedPipeline(db, 1);
+    const pvId = mkVersion([node('a')]);
+    const t1 = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const t2 = seedTrigger(db, {
+      pipelineVersionId: pvId,
+      concurrency: { policy: 'skip_if_running' },
+    });
+    const launcher = createRunLauncher(deps(db, { nodes: { a: { hang: true } } }));
+
+    expect(launcher.fire(t1).outcome).toBe('started'); // pipeline slot taken
+    expect(launcher.fire(t2).outcome).toBe('queued'); // trigger clear, pipeline full → queue
+    // The queued row is an OUTSTANDING fire: skip_if_running must not stack another.
+    const second = launcher.fire(t2);
+    expect(second.outcome).toBe('skipped');
+    expect(listRuns(db, { triggerId: t2.id })).toHaveLength(1);
+    await launcher.whenIdle();
+  });
+
+  it('uncapped pipeline (null): per-trigger behaviour unchanged — a free-slot queue trigger starts even with another trigger active', async () => {
+    const { db } = freshDb();
+    const { mkVersion } = seedCappedPipeline(db, null);
+    const pvId = mkVersion([node('a')]);
+    const t1 = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const t2 = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const launcher = createRunLauncher(deps(db, { nodes: { a: { hang: true } } }));
+
+    expect(launcher.fire(t1).outcome).toBe('started');
+    expect(launcher.fire(t2).outcome).toBe('started'); // no pipeline gate
+    await launcher.whenIdle();
+  });
+
+  it('cross-trigger drain on settle: T1 finishing admits T2’s queued waiter (pipeline slot freed)', async () => {
+    const { db } = freshDb();
+    const { mkVersion } = seedCappedPipeline(db, 1);
+    // Distinct node ids so T1's node can dwell in flight while T2's is instant.
+    const pvSlow = mkVersion([node('slow')]);
+    const pvFast = mkVersion([node('b')]);
+    const t1 = seedTrigger(db, { pipelineVersionId: pvSlow, concurrency: { policy: 'queue' } });
+    const t2 = seedTrigger(db, { pipelineVersionId: pvFast, concurrency: { policy: 'queue' } });
+    const launcher = createRunLauncher(deps(db, { nodes: { slow: { delayMs: 30 } } }));
+
+    expect(launcher.fire(t1).outcome).toBe('started');
+    expect(launcher.fire(t2).outcome).toBe('queued');
+
+    await launcher.whenIdle();
+
+    // T1's settle drained the PIPELINE queue, admitting T2's row (a per-trigger
+    // drain of T1 alone would have stranded it until boot).
+    const t2Run = listRuns(db, { triggerId: t2.id })[0]!;
+    expect(t2Run.status).toBe('success');
+  });
+
+  it('fair drain order: least-recently-admitted trigger first (no monopoly), FIFO within a trigger', async () => {
+    const { db } = freshDb();
+    const { pipeline, mkVersion } = seedCappedPipeline(db, 1);
+    const pvId = mkVersion([node('a')]);
+    const t1 = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const t2 = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+
+    // Seed the queue DIRECTLY with pinned queuedAt keys (fire() stamps wall-clock
+    // ms, which collides within a synchronous burst — the drain's ordering
+    // contract is what this test pins, and it reads only durable rows).
+    // T1 monopolises the queue with the three OLDEST rows; T2 has one newer row.
+    seedQueuedRow(db, pvId, t1.id, 10);
+    seedQueuedRow(db, pvId, t1.id, 20);
+    seedQueuedRow(db, pvId, t1.id, 30);
+    seedQueuedRow(db, pvId, t2.id, 40);
+
+    // Record the ADMISSION order via the bus: every admitted run's run.started
+    // is published in drive order (cap 1 → strictly sequential settles).
+    const bus = createRunEventBus();
+    const startedTriggers: string[] = [];
+    let maxObservedActive = 0;
+    bus.subscribeAll((e) => {
+      if (e.type === 'run.started') {
+        const run = getRun(db, e.runId);
+        startedTriggers.push(run!.triggerId === t1.id ? 'T1' : 'T2');
+        maxObservedActive = Math.max(
+          maxObservedActive,
+          countActiveRunsForPipeline(db, pipeline.id),
+        );
+      }
+    });
+    const launcher = createRunLauncher(deps(db, {}, bus));
+    launcher.recoverQueued();
+    await launcher.whenIdle();
+    await flushMicrotasks(); // the bus-hook drain of the LAST settle is microtask-deferred
+    await launcher.whenIdle();
+
+    // Never-served ties broke by oldestQueuedAt → T1 first (10 < 40). After T1
+    // is served once it is the MOST-recently-admitted, so never-served T2 goes
+    // next — NOT T1's remaining older rows (that would be the monopoly). Then
+    // T1 drains FIFO (20, 30).
+    expect(startedTriggers).toEqual(['T1', 'T2', 'T1', 'T1']);
+    expect(listRuns(db).filter((r) => r.status === 'queued')).toHaveLength(0);
+    // The pipeline cap was honoured THROUGHOUT the drain, not just at the end.
+    expect(maxObservedActive).toBe(1);
+  });
+
+  it('a trigger at its OWN cap is skipped by the drain without stalling other triggers', async () => {
+    const { db, sqlite } = freshDb();
+    const { mkVersion } = seedCappedPipeline(db, 2);
+    const pvSlow = mkVersion([node('slow')]);
+    const pvFast = mkVersion([node('b')]);
+    // T1 parallel(max=1): its hanging active run pins it AT its own cap while it
+    // holds a queued row (enqueued via the pipeline gate earlier in its life).
+    const t1 = seedTrigger(db, {
+      pipelineVersionId: pvSlow,
+      concurrency: { policy: 'parallel', max: 1 },
+    });
+    const t2 = seedTrigger(db, { pipelineVersionId: pvFast, concurrency: { policy: 'queue' } });
+    const launcher = createRunLauncher(deps(db, { nodes: { slow: { hang: true } } }));
+
+    expect(launcher.fire(t1).outcome).toBe('started'); // hangs — T1 at its own cap
+    seedQueuedRow(db, pvSlow, t1.id, 10); // T1's waiter (oldest)
+    seedQueuedRow(db, pvFast, t2.id, 20); // T2's waiter
+    // Pin T2's service record NEWER than T1's, so at-cap T1 sorts FIRST in the
+    // LRA order and the drain must CONTINUE past it to reach T2 — a drain that
+    // ABORTS on an at-cap candidate (instead of skipping it) fails this test.
+    const t2Served = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvFast,
+      triggerId: t2.id,
+      parentRunId: null,
+      params: {},
+    });
+    updateRun(db, t2Served.id, { status: 'success' });
+    const t1Active = listRuns(db, { triggerId: t1.id })[0]!;
+    sqlite
+      .prepare('UPDATE runs SET started_at = ? WHERE id = ?')
+      .run(t1Active.startedAt + 60_000, t2Served.id);
+
+    launcher.recoverQueued(); // pipeline has room (1 active < cap 2)
+    await launcher.whenIdle();
+
+    // T1's waiter must NOT stall the drain: T1 is at its own cap, so the drain
+    // skips it and admits T2's row.
+    const t2Admitted = listRuns(db, { triggerId: t2.id }).filter((r) => r.id !== t2Served.id);
+    expect(t2Admitted).toHaveLength(1);
+    expect(t2Admitted[0]!.status).toBe('success');
+    const t1Statuses = listRuns(db, { triggerId: t1.id })
+      .map((r) => r.status)
+      .sort();
+    expect(t1Statuses).toEqual(['queued', 'running']); // waiter intact, occupier still hanging
+  });
+
+  it('bus hook: an out-of-launcher terminalization admits ANOTHER trigger’s queued waiter (pipeline-wide drain)', async () => {
+    const { db } = freshDb();
+    const bus = createRunEventBus();
+    const { mkVersion } = seedCappedPipeline(db, 1);
+    const pvId = mkVersion([node('a')]);
+    const t1 = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const t2 = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const launcher = createRunLauncher(deps(db, {}, bus));
+
+    // An out-of-launcher occupier on T1 holds the pipeline's one slot.
+    const occupier = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: t1.id,
+      parentRunId: null,
+      params: {},
+    });
+    updateRun(db, occupier.id, { status: 'running' });
+    expect(launcher.fire(t2).outcome).toBe('queued');
+
+    appendEngineEvent(db, { type: 'run.finished', runId: occupier.id, outcome: 'success' }, bus);
+    syncRunLifecycle(db, occupier.id, 'success');
+    await flushMicrotasks();
+    await launcher.whenIdle();
+
+    expect(listRuns(db, { triggerId: t2.id })[0]!.status).toBe('success');
+  });
+
+  it('bus hook: a trigger-less CHILD run’s terminalization drains its PIPELINE’s queue', async () => {
+    const { db } = freshDb();
+    const bus = createRunEventBus();
+    const { mkVersion } = seedCappedPipeline(db, 1);
+    const pvId = mkVersion([node('a')]);
+    const t1 = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const launcher = createRunLauncher(deps(db, {}, bus));
+
+    // A (future call_pipeline) CHILD run of this pipeline occupies its slot even
+    // with no trigger; its terminalization must free the slot for the queue.
+    const parent = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+    updateRun(db, parent.id, { status: 'success' }); // parent itself frees no slot here
+    const child = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: parent.id,
+      params: {},
+    });
+    updateRun(db, child.id, { status: 'running' });
+    expect(launcher.fire(t1).outcome).toBe('queued'); // pipeline full via the child
+
+    appendEngineEvent(db, { type: 'run.finished', runId: child.id, outcome: 'success' }, bus);
+    syncRunLifecycle(db, child.id, 'success');
+    await flushMicrotasks();
+    await launcher.whenIdle();
+
+    expect(listRuns(db, { triggerId: t1.id })[0]!.status).toBe('success');
+  });
+
+  it('a trigger REBOUND across pipelines mid-queue: pipeline A\u2019s drain admits only A\u2019s row — the globally-older foreign row stays queued', async () => {
+    const { db } = freshDb();
+    const { mkVersion: mkA } = seedCappedPipeline(db, 1);
+    const { mkVersion: mkB } = seedCappedPipeline(db, 1);
+    const pvA = mkA([node('a')]);
+    const pvB = mkB([node('a')]);
+    // T is bound to A now, but holds a GLOBALLY-OLDER queued row frozen on B
+    // (enqueued before a rebind) plus a newer row on A.
+    const t = seedTrigger(db, { pipelineVersionId: pvA, concurrency: { policy: 'queue' } });
+    seedQueuedRow(db, pvB, t.id, 10); // foreign-pipeline row, oldest
+    seedQueuedRow(db, pvA, t.id, 20); // this pipeline's row
+    // Pipeline B is FULL — its row must not be admitted under A's gate.
+    const tB = seedTrigger(db, { pipelineVersionId: pvB, concurrency: { policy: 'queue' } });
+    const bOccupier = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvB,
+      triggerId: tB.id,
+      parentRunId: null,
+      params: {},
+    });
+    updateRun(db, bOccupier.id, { status: 'running' });
+
+    const launcher = createRunLauncher(deps(db));
+    launcher.recoverQueued(); // drains A (room) and B (full — no-op)
+    await launcher.whenIdle();
+
+    const tRuns = listRuns(db, { triggerId: t.id });
+    // A's row was admitted and ran; B's row is UNTOUCHED (still queued) — it
+    // never re-passed B's gate, so it must not have been driven.
+    const aRun = tRuns.find((r) => r.pipelineVersionId === pvA)!;
+    const bRun = tRuns.find((r) => r.pipelineVersionId === pvB)!;
+    expect(aRun.status).toBe('success');
+    expect(bRun.status).toBe('queued');
+  });
+
+  it('queue-depth bound applies to the pipeline-overflow enqueue paths too', async () => {
+    const { db } = freshDb();
+    const { mkVersion } = seedCappedPipeline(db, 1);
+    const pvId = mkVersion([node('a')]);
+    const t1 = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const t2 = seedTrigger(db, {
+      pipelineVersionId: pvId,
+      concurrency: { policy: 'parallel', max: 3 },
+    });
+    const launcher = createRunLauncher({
+      ...deps(db, { nodes: { a: { hang: true } } }),
+      maxQueueDepth: 1,
+    });
+
+    expect(launcher.fire(t1).outcome).toBe('started'); // pipeline slot taken
+    expect(launcher.fire(t2).outcome).toBe('queued'); // parallel → pipeline overflow queues
+    const third = launcher.fire(t2);
+    expect(third.outcome).toBe('skipped'); // bounded, never unbounded growth
+    if (third.outcome === 'skipped') expect(third.reason).toContain('queue is full');
+    await launcher.whenIdle();
   });
 });

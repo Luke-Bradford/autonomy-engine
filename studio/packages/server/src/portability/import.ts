@@ -59,7 +59,15 @@ function importPipelineEnvelopeInTx(
     versions: exportedVersions,
     strippedConnectionRefs,
   } = envelope.data;
-  const pipeline = createPipeline(db, { ownerId, name: exportedPipeline.name });
+  // #5 S6b — `concurrency` rides the round-trip (the #473 lesson: a field the
+  // import silently drops is destroyed data). `createPipeline`'s WRITE schema
+  // is strict, so an envelope carrying a corrupted cap (the read schema is
+  // lenient) is REFUSED here rather than laundered into a fresh row.
+  const pipeline = createPipeline(db, {
+    ownerId,
+    name: exportedPipeline.name,
+    concurrency: exportedPipeline.concurrency,
+  });
 
   // Only nodes actually recorded here HAD a connection stripped on export —
   // every node's `connectionId` is nulled by export regardless (see

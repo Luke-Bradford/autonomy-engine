@@ -48,6 +48,61 @@ describe('pipelines routes', () => {
     expect(missing.statusCode).toBe(404);
   });
 
+  it('#5 S6b — concurrency cap: create with a cap, PATCH it, clear it with an explicit null, reject invalid caps', async () => {
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/pipelines',
+      payload: { name: 'Capped', concurrency: 2 },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const created = createRes.json();
+    expect(created.concurrency).toBe(2);
+
+    // Absent from a PATCH → preserved (partial semantics).
+    const rename = await app.inject({
+      method: 'PATCH',
+      url: `/api/pipelines/${created.id}`,
+      payload: { name: 'Still capped' },
+    });
+    expect(rename.json().concurrency).toBe(2);
+
+    // PATCH to a new cap.
+    const raise = await app.inject({
+      method: 'PATCH',
+      url: `/api/pipelines/${created.id}`,
+      payload: { concurrency: 5 },
+    });
+    expect(raise.statusCode).toBe(200);
+    expect(raise.json().concurrency).toBe(5);
+
+    // Explicit null CLEARS the cap (uncapped) — distinct from absent.
+    const clear = await app.inject({
+      method: 'PATCH',
+      url: `/api/pipelines/${created.id}`,
+      payload: { concurrency: null },
+    });
+    expect(clear.statusCode).toBe(200);
+    expect(clear.json().concurrency).toBeNull();
+
+    // The WRITE boundary refuses a non-positive-integer cap.
+    for (const bad of [0, -1, 1.5]) {
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/pipelines/${created.id}`,
+        payload: { concurrency: bad },
+      });
+      expect(res.statusCode).toBe(400);
+    }
+
+    // A default create is uncapped.
+    const plain = await app.inject({
+      method: 'POST',
+      url: '/api/pipelines',
+      payload: { name: 'Uncapped' },
+    });
+    expect(plain.json().concurrency).toBeNull();
+  });
+
   it('PipelineVersion: create + immutability (no update/delete route), version increments', async () => {
     const pipelineRes = await app.inject({
       method: 'POST',
