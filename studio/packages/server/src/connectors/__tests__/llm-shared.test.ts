@@ -926,6 +926,19 @@ describe('toolCallTelemetry (#2 L10b — fail-closed shape rules)', () => {
     expect(t.resultHash).toBeUndefined();
   });
 
+  it('measures unserializable args as 0 instead of throwing (circular reference)', () => {
+    const circular: { self?: unknown } = {};
+    circular.self = circular;
+    const t = toolCallTelemetry(
+      2,
+      { id: 'c1', name: 'echo', args: circular },
+      { id: 'c1', name: 'echo', resultText: 'ok', isError: false },
+    );
+    expect(t.argsChars).toBe(0);
+    expect(t.argsHash).toBeUndefined();
+    expect(t.resultChars).toBe(2);
+  });
+
   it('uses the EXECUTED name (may be empty for a nameless malformed call)', () => {
     const t = toolCallTelemetry(
       0,

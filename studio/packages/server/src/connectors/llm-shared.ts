@@ -628,7 +628,15 @@ export function toolCallTelemetry(
   call: ToolCallRequest,
   result: ToolCallResult,
 ): ToolCallTelemetry {
-  const argsJson = JSON.stringify(call.args) ?? '';
+  let argsJson: string;
+  try {
+    // `JSON.stringify(undefined)` IS `undefined` (not a throw) — both the
+    // throw (BigInt/circular) and the undefined case fold to "measures 0",
+    // matching `executeLocalTool`'s serialization guard.
+    argsJson = JSON.stringify(call.args) ?? '';
+  } catch {
+    argsJson = '';
+  }
   return {
     round,
     toolName: result.name,
