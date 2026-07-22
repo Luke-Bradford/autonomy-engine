@@ -16,9 +16,12 @@ import {
   createWindow,
   findUnlinkedRunForWindow,
   getBackfillCursor,
+  getWindowState,
   getWindowStateByRunId,
   linkWindowRun,
   listWindowStates,
+  retryDueWindow,
+  retryWindow,
   type TumblingWindowStateRow,
   type WindowKey,
 } from '../repo/tumbling-windows.js';
@@ -144,6 +147,28 @@ import type { SchedulerLog } from './scheduler.js';
  * policy. ABSENT = the exact S9/S10 semantics below — opt-in like backfill,
  * for the same upgrade-never-surprises reason.
  *
+ * ## #5 S11c — per-window RETRY (opt-in via `window.retry`)
+ *
+ * A window whose run terminalizes with a KNOWN failure (`failure`/
+ * `interrupted` — never `missing`: the outcome of a vanished run row is
+ * unknown, it may have succeeded) re-drives up to `retry.count` times,
+ * `retry.intervalInSeconds` apart. The decision lives in `settleIfTerminal`
+ * (every settle path funnels through it); the hold is a first-class window
+ * status `retry_pending` (`window.retryScheduled` event, `runId` cleared, the
+ * due instant STORED in `next_attempt_at_ms`), resolved by the durable
+ * `window_retry` alarm (`window.retryDue` → `waiting` → the normal
+ * materialize scan fires a fresh run). Alarm suppressions (corrupt/disabled/
+ * unbound trigger at fire time) do not strand the window: the OVERDUE HEAL
+ * (`driveOverdueRetries` — sync pass 3 + boot reconcile, state-driven) flips
+ * any current-epoch `retry_pending` row whose due instant passed. AMENDMENT
+ * to S11a's "slot held until window-terminal": a `retry_pending` window holds
+ * NO concurrency slot and does not close the S10 backfill gate — between
+ * attempts there is no run in flight, and a slot idled for up to 86400s of
+ * retry interval would starve healthy windows; the S11a phrase remains true
+ * of every LINKED state (a run-level `queued`/parked-`waiting` run still
+ * counts). On `retryDue` the window re-enters the oldest-first scan, so a
+ * retried (oldest) window takes the next slot — the ADF order.
+ *
  * ## Deliberate non-behaviours (v1)
  *
  * - `runWindows` do NOT gate tumbling fires (unlike schedule ticks): a
@@ -153,7 +178,7 @@ import type { SchedulerLog } from './scheduler.js';
  * - `${trigger.windowStart/End}` (S11b) SHIPPED: `materializeOne` freezes the
  *   window bounds into the fire context; a tumbling trigger's param bindings
  *   (the one legal surface — context-scoped at save) resolve them fire-time.
- * - No per-trigger window RETRY (S11c) or self-dependency (S11d).
+ * - No self-dependency (S11d). Per-window RETRY (S11c) SHIPPED — see above.
  * - For a CAP-LESS trigger, LIVE overflow windows DO materialize into the S6
  *   durable admission queue (a `queued` run row each, bounded by the
  *   per-trigger depth cap). This brushes the spec's "blocked/backfill windows
@@ -169,6 +194,9 @@ import type { SchedulerLog } from './scheduler.js';
  */
 
 export const WINDOW_DUE_KIND = 'window_due';
+
+/** #5 S11c — the per-window retry alarm's kind (the `node_retry` naming). */
+export const WINDOW_RETRY_KIND = 'window_retry';
 
 /** How many stranded `waiting` windows one materialize pass retries. Bounds
  * the work a single alarm fire / boot does; the next fire (or boot) continues.
@@ -195,6 +223,36 @@ export const WindowDueRefSchema = z.object({
   endTime: z.string().datetime().optional(),
 });
 export type WindowDueRef = z.infer<typeof WindowDueRefSchema>;
+
+/**
+ * #5 S11c — the `window_retry` ref: the window KEY plus the retry ordinal.
+ * `attempt` doubles as the freshness handle (the row must still be
+ * `retry_pending` at exactly this attempt) AND the dedupe discriminator
+ * (`attempt-<n>` — the codex-hardened rule: without it, attempt-2's alarm
+ * would collide with attempt-1's already-`fired` row and silently never arm).
+ * The retry POLICY deliberately does not ride the ref (it is a BOUND, not
+ * freshness — the fire re-checks nothing about it: a policy edit mid-interval
+ * never cancels an already-committed `window.retryScheduled` decision).
+ */
+export const WindowRetryRefSchema = z.object({
+  triggerId: z.string().min(1),
+  epoch: z.string().min(1),
+  windowStart: z.string().datetime(),
+  attempt: z.string().regex(/^\d+$/),
+});
+export type WindowRetryRef = z.infer<typeof WindowRetryRefSchema>;
+
+/** The canonical `window_retry` ref — typed so the settle path (which arms via
+ * the repo `armWakeup`, inside its own transaction, without the clock's
+ * arm-time validation) is compile-time safe. */
+export function buildWindowRetryRef(key: WindowKey, attempt: number): WindowRetryRef {
+  return {
+    triggerId: key.triggerId,
+    epoch: key.configEpoch,
+    windowStart: key.windowStart,
+    attempt: String(attempt),
+  };
+}
 
 /** A tumbling trigger `isTumblable` has proven carries a window config. */
 export type TumblingTrigger = Trigger & { window: WindowConfig };
@@ -340,6 +398,8 @@ export interface TumblingDeps {
 export interface TumblingService {
   /** The `window_due` alarm handler — register with the clock. */
   handler: WakeupHandler;
+  /** #5 S11c — the `window_retry` alarm handler — register with the clock. */
+  retryHandler: WakeupHandler;
   /** Reconcile durable `window_due` rows against the DB (seed/keep/drop) —
    * idempotent; boot + after every trigger write (`scheduler.sync()`'s
    * composite calls it). */
@@ -373,12 +433,31 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
 
   /**
    * Fold a run's CURRENT terminal status (if any) into its window. Shared by
-   * the completion tap and the boot reconcile — the tap reads the run ROW (by
-   * tap time the terminal status is durably synced), so both paths derive the
-   * same fact from the same source. Returns without appending when the run is
-   * still live (`completeWindow`'s `running` guard makes a double call safe).
+   * the completion tap, the boot reconcile, and the link-heal — the tap reads
+   * the run ROW (by tap time the terminal status is durably synced), so all
+   * paths derive the same fact from the same source. Returns without
+   * appending when the run is still live (`completeWindow`'s/`retryWindow`'s
+   * `running` guards make a double call safe).
+   *
+   * #5 S11c — the RETRY DECISION lives here (the one place every settle path
+   * funnels through). A KNOWN failure (`failure`/`interrupted`) retries —
+   * `running → retry_pending` + the `window_retry` alarm, one transaction —
+   * when ALL hold:
+   * - `trigger` is available and carries `window.retry` (a `null` trigger =
+   *   the row was corrupt/missing at settle time — policy UNKNOWN, so the
+   *   window folds terminal exactly as pre-S11c: never manufacture a retry
+   *   from an unreadable row);
+   * - the window belongs to the CURRENT epoch (an old-epoch window folds
+   *   terminal: its retry alarm would be refused as `epoch_stale` and the
+   *   overdue heal only drives current-epoch rows, so a retry here would
+   *   strand it `retry_pending` forever — stale-epoch disposition stays
+   *   S11d's);
+   * - budget remains (`attempt < retry.count`, read from the projection row).
+   * `missing` NEVER retries: the run row is gone, so the outcome is UNKNOWN —
+   * it may have SUCCEEDED, and a retry would manufacture duplicate side
+   * effects from an absent fact.
    */
-  function settleIfTerminal(key: WindowKey, runId: string): void {
+  function settleIfTerminal(key: WindowKey, runId: string, trigger: TumblingTrigger | null): void {
     const run = getRun(db, runId);
     if (run === null) {
       // The linked run row is GONE — an absent fact folded CLOSED as failure
@@ -388,14 +467,37 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     }
     if (run.status === 'success') {
       completeWindow(db, key, { status: 'succeeded', runId });
-    } else if (run.status === 'failure') {
-      completeWindow(db, key, { status: 'failed', runId, runStatus: 'failure' });
-    } else if (run.status === 'interrupted') {
-      // Interrupted IS terminal for the window (finding 6): S11's per-trigger
-      // retry policy is what will re-drive a failed window, not a hold-open.
-      completeWindow(db, key, { status: 'failed', runId, runStatus: 'interrupted' });
+      return;
     }
-    // pending/queued/running/waiting → still live; the tap completes it later.
+    if (run.status !== 'failure' && run.status !== 'interrupted') {
+      return; // pending/queued/running/waiting → still live; the tap completes it later.
+    }
+    const runStatus = run.status;
+    const retry = trigger?.window.retry;
+    if (
+      retry !== undefined &&
+      trigger !== null &&
+      key.configEpoch === windowConfigEpoch(trigger.window)
+    ) {
+      const row = getWindowState(db, key);
+      if (row !== null && row.status === 'running' && row.attempt < retry.count) {
+        const attempt = row.attempt + 1;
+        const nextAttemptAtMs = now() + retry.intervalInSeconds * 1000;
+        db.transaction((tx) => {
+          // Guarded flip first; arm ONLY when it wins (a lost race must not
+          // commit an alarm row for a decision that didn't happen).
+          if (!retryWindow(tx, key, { runId, runStatus, attempt, nextAttemptAtMs })) return;
+          armWakeup(tx, {
+            kind: WINDOW_RETRY_KIND,
+            ref: buildWindowRetryRef(key, attempt),
+            dueAt: nextAttemptAtMs,
+            discriminator: `attempt-${attempt}`,
+          });
+        });
+        return;
+      }
+    }
+    completeWindow(db, key, { status: 'failed', runId, runStatus });
   }
 
   /**
@@ -415,10 +517,16 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     // frozen `triggerContext.scheduledTime` is this window's end AND whose
     // frozen `windowEpoch` is this window's epoch is THIS window's run from a
     // fire whose link never committed.
-    const existingRunId = findUnlinkedRunForWindow(db, trigger.id, row.configEpoch, row.windowEnd);
+    const existingRunId = findUnlinkedRunForWindow(
+      db,
+      trigger.id,
+      row.configEpoch,
+      row.windowEnd,
+      row.windowStart,
+    );
     if (existingRunId !== null) {
       if (linkWindowRun(db, key, existingRunId, 'reconcile')) {
-        settleIfTerminal(key, existingRunId);
+        settleIfTerminal(key, existingRunId, trigger);
       }
       return 'continue';
     }
@@ -490,11 +598,14 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
    * ANY epoch (an old-epoch run still consumes real work — the S10 gate's
    * rationale, kept). Three decided semantics, each pinned by test:
    *
-   * - **The window SLOT is held until window-terminal.** A window stays
-   *   `running` while its run is queued at run level OR parked `waiting` on a
-   *   timer/dependency — a DELIBERATE divergence from the run-level slot
-   *   release (S4): the cap bounds windows-in-flight, ADF's `maxConcurrency`
-   *   semantic, and S11c/S11d (retry, self-dependency) will build on it.
+   * - **The window SLOT is held while a run is LINKED** (until window-terminal
+   *   or a retry hold). A window stays `running` while its run is queued at
+   *   run level OR parked `waiting` on a timer/dependency — a DELIBERATE
+   *   divergence from the run-level slot release (S4): the cap bounds
+   *   windows-in-flight, ADF's `maxConcurrency` semantic. #5 S11c AMENDED the
+   *   original "until window-terminal" phrasing: a `retry_pending` window
+   *   (non-terminal, but NO run in flight) releases the slot — see the module
+   *   header's S11c section.
    * - **Live queues BEHIND backfill (oldest-first, no origin priority)** — a
    *   conscious REVERSAL of S10's two-scan split (which existed to keep an
    *   ungated live window from starving behind the backfill batch bound; under
@@ -771,6 +882,99 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     },
   };
 
+  /**
+   * #5 S11c — the `window_retry` alarm handler: the retry interval elapsed,
+   * so re-open the window for materialization. Same shape as `window_due`:
+   * lenient trigger read (#637 — a corrupt row settles, never throws;
+   * `sync()`'s overdue heal re-drives after repair), terminal suppressions
+   * for every stale case (the window stays `retry_pending`, healed by the
+   * overdue drive once the trigger is current again — or inert forever for
+   * stale-epoch debris, like its `waiting` siblings), the durable flip
+   * in-tx, and the run-spawning materialize in `afterCommit` only.
+   */
+  const retryHandler: WakeupHandler = {
+    kind: WINDOW_RETRY_KIND,
+    refSchema: WindowRetryRefSchema,
+    fire(row: ScheduledWakeup, _delivery, tx: Db): WakeupFireResult {
+      const ref = WindowRetryRefSchema.parse(row.ref);
+      const read = getParsedTrigger(tx, ref.triggerId);
+      if (read.status === 'unparseable') {
+        log.warn(
+          { triggerId: ref.triggerId, err: read.error },
+          'tumbling: trigger row unparseable — retry settles (the overdue heal re-drives after repair)',
+        );
+        return { status: 'suppressed', reason: 'trigger_unparseable' };
+      }
+      const trigger = read.status === 'found' ? read.trigger : null;
+      if (trigger === null || !isTumblable(trigger)) {
+        return { status: 'suppressed', reason: 'trigger_not_tumbling' };
+      }
+      if (trigger.pipelineVersionId === null) {
+        return { status: 'suppressed', reason: 'trigger_unbound' };
+      }
+      if (windowConfigEpoch(trigger.window) !== ref.epoch) {
+        // A geometry edit mid-interval: the window is old-epoch debris now —
+        // inert until S11d's disposition pass (the settle-time epoch guard
+        // makes this unreachable except for an edit landing INSIDE the
+        // interval, bounded by the 86400s write cap).
+        return { status: 'suppressed', reason: 'epoch_stale' };
+      }
+      const key: WindowKey = {
+        triggerId: ref.triggerId,
+        configEpoch: ref.epoch,
+        windowStart: ref.windowStart,
+      };
+      const state = getWindowState(tx, key);
+      const attempt = Number(ref.attempt);
+      if (state === null || state.status !== 'retry_pending' || state.attempt !== attempt) {
+        // Already re-driven (the overdue heal won the race), or moved on —
+        // at-least-once delivery settles without a duplicate append.
+        return { status: 'suppressed', reason: 'window_not_retry_pending' };
+      }
+      if (!retryDueWindow(tx, key, attempt)) {
+        // Unreachable single-writer (the guard was just checked in this tx) —
+        // defensive, same suppression.
+        return { status: 'suppressed', reason: 'window_not_retry_pending' };
+      }
+      return {
+        status: 'fired',
+        afterCommit: () => {
+          materializeWindows(trigger);
+        },
+      };
+    },
+  };
+
+  /**
+   * #5 S11c — the OVERDUE HEAL: drive `retry_pending` windows of `trigger`'s
+   * CURRENT epoch whose stored `nextAttemptAtMs` has passed. The normal path
+   * is the `window_retry` alarm; this covers the alarm's terminal
+   * suppressions (the trigger was corrupt/disabled/unbound at fire time — the
+   * settled row is gone forever, so WITHOUT this the window would be stuck
+   * `retry_pending` on a long-lived process until reboot). STATE-driven, not
+   * config-driven: a scheduled retry survives policy removal (the
+   * `window.retryScheduled` event is a committed durable decision), so
+   * eligibility is "has overdue retry_pending rows", never "has a retry
+   * policy". Double-drive against a still-pending alarm is safe: the flip is
+   * guarded, and the alarm's later delivery suppresses as
+   * `window_not_retry_pending`. Returns whether any window was driven (the
+   * sync pass uses it to decide whether a materialize kick is owed).
+   */
+  function driveOverdueRetries(trigger: TumblingTrigger): boolean {
+    const epoch = windowConfigEpoch(trigger.window);
+    const rows = listWindowStates(db, {
+      triggerId: trigger.id,
+      configEpoch: epoch,
+      status: 'retry_pending',
+    });
+    let drove = false;
+    for (const row of rows) {
+      if (row.nextAttemptAtMs === null || row.nextAttemptAtMs > now()) continue;
+      if (retryDueWindow(db, keyOf(row), row.attempt)) drove = true;
+    }
+    return drove;
+  }
+
   function seed(trigger: TumblingTrigger): void {
     // Plain upsert-if-absent arm — the `created===false` guard (#465's trap
     // shape) is deliberately absent, resting on a temporal argument: a SETTLED
@@ -855,10 +1059,25 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     // inside a transaction. #5 S11a: capacity-managed triggers
     // (`maxConcurrentWindows`) get the SAME kick even without backfill — a
     // cap RAISE frees slots with no completion tap coming, and the route
-    // write's sync() is what drains the freed capacity promptly.
+    // write's sync() is what drains the freed capacity promptly. #5 S11c:
+    // the overdue-retry heal also runs here for EVERY eligible trigger, and
+    // a drive earns the same kick.
     for (const trigger of eligible.values()) {
       const hasBackfill = trigger.window.maxBackfillWindows !== undefined;
-      if (!hasBackfill && trigger.window.maxConcurrentWindows === undefined) continue;
+      // #5 S11c — the overdue-retry heal runs for EVERY eligible trigger
+      // (state-driven — see `driveOverdueRetries`), BEFORE the unbound skip:
+      // the flip to `waiting` is safe unbound (the window becomes a normal
+      // stranded-waiting row, materialized once bound), and skipping it would
+      // strand a retry-only trigger's window until reboot.
+      let droveRetries = false;
+      try {
+        droveRetries = driveOverdueRetries(trigger);
+      } catch (err) {
+        log.warn({ err, triggerId: trigger.id }, 'tumbling: overdue-retry drive failed — skipping');
+      }
+      if (!hasBackfill && trigger.window.maxConcurrentWindows === undefined && !droveRetries) {
+        continue;
+      }
       // UNBOUND triggers are skipped ENTIRELY (unlike forward seeding, where
       // eligibility deliberately ignores binding): running the pass would
       // accrete waiting rows on every sync with the lookback bound never
@@ -884,21 +1103,50 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     }
   }
 
+  /** #5 S11c — one lenient trigger read per trigger id (the settle decision
+   * needs the retry policy; a corrupt/missing row reads as `null` = policy
+   * unknown = terminal fold, the #637 discipline). Memoized per reconcile
+   * pass so the `running`-window loop does not re-read per row. */
+  function readTumblable(cache: Map<string, TumblingTrigger | null>, triggerId: string) {
+    const hit = cache.get(triggerId);
+    if (hit !== undefined) return hit;
+    const read = getParsedTrigger(db, triggerId);
+    const trigger = read.status === 'found' && isTumblable(read.trigger) ? read.trigger : null;
+    cache.set(triggerId, trigger);
+    return trigger;
+  }
+
   function reconcile(): void {
     if (stopped) return;
+    const triggerCache = new Map<string, TumblingTrigger | null>();
     // 1 — `running` windows whose run already terminalized (or vanished): the
     // completion tap is in-memory, so a crash between a run's terminal event
     // and the window append loses the transition; re-derive it from the run
-    // row (at-least-once, `completeWindow`'s guard dedupes).
+    // row (at-least-once, `completeWindow`'s/`retryWindow`'s guards dedupe).
     for (const row of listWindowStates(db, { status: 'running' })) {
       if (row.runId === null) continue; // unreachable: link + flip are one tx
       try {
-        settleIfTerminal(keyOf(row), row.runId);
+        settleIfTerminal(keyOf(row), row.runId, readTumblable(triggerCache, row.triggerId));
       } catch (err) {
         log.error(
           { err, triggerId: row.triggerId, windowStart: row.windowStart },
           'tumbling: reconcile failed to settle window',
         );
+      }
+    }
+    // 1.5 (#5 S11c) — drive overdue `retry_pending` windows (an alarm
+    // suppressed while the trigger was broken is a settled row, gone forever;
+    // boot is the backstop the suppression paths lean on). The flip lands the
+    // windows in `waiting`, so step 2's stranded scan below picks them up.
+    for (const triggerId of new Set(
+      listWindowStates(db, { status: 'retry_pending' }).map((r) => r.triggerId),
+    )) {
+      const trigger = readTumblable(triggerCache, triggerId);
+      if (trigger === null) continue; // corrupt/missing/not-tumbling — inert until repaired
+      try {
+        driveOverdueRetries(trigger);
+      } catch (err) {
+        log.error({ err, triggerId }, 'tumbling: reconcile failed to drive overdue retries');
       }
     }
     // 2 — stranded `waiting` windows of still-current triggers (crash between
@@ -946,17 +1194,20 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
           if (stopped) return;
           const row = getWindowStateByRunId(db, runId);
           if (row === null || row.status !== 'running') return;
-          settleIfTerminal(keyOf(row), runId);
+          // #637 — lenient read, BEFORE the settle since #5 S11c's retry
+          // decision needs the policy: the settle (derived from the RUN row)
+          // must land even when the trigger row is corrupt — a `null` trigger
+          // folds terminal (policy unknown), never throws; only the drain
+          // kick below is additionally skipped, with a warn instead of the
+          // per-terminal-run error spam a throw produced here.
+          const read = getParsedTrigger(db, row.triggerId);
+          const trigger =
+            read.status === 'found' && isTumblable(read.trigger) ? read.trigger : null;
+          settleIfTerminal(keyOf(row), runId, trigger);
           // #5 S10 — drain continuation: the settle just released the
           // materialization gate (the window is no longer `running`), so the
           // trigger's next backfill window fires now — this tap is what makes
           // a bulk backlog drain serially instead of waiting for boot.
-          //
-          // #637 — lenient read: the settle above (derived from the RUN row)
-          // must land even when the trigger row is corrupt; only the drain
-          // kick — which needs the parsed trigger — is skipped, with a warn
-          // instead of the per-terminal-run error spam a throw produced here.
-          const read = getParsedTrigger(db, row.triggerId);
           if (read.status === 'unparseable') {
             log.warn(
               { triggerId: row.triggerId, err: read.error },
@@ -964,8 +1215,7 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
             );
             return;
           }
-          const trigger = read.status === 'found' ? read.trigger : null;
-          if (trigger !== null && isTumblable(trigger) && trigger.pipelineVersionId !== null) {
+          if (trigger !== null && trigger.pipelineVersionId !== null) {
             materializeWindows(trigger);
           }
         } catch (err) {
@@ -979,5 +1229,5 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     stopped = true;
   }
 
-  return { handler, sync, reconcile, subscribeCompletion, stop };
+  return { handler, retryHandler, sync, reconcile, subscribeCompletion, stop };
 }

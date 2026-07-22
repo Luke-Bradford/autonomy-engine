@@ -78,6 +78,40 @@ describe('WindowConfigSchema — maxConcurrentWindows (#5 S11a)', () => {
   });
 });
 
+describe('WindowConfigSchema — retry (#5 S11c)', () => {
+  it('round-trips a config with a retry policy', () => {
+    const w = { ...config, retry: { count: 3, intervalInSeconds: 60 } };
+    expect(WindowConfigSchema.parse(w)).toEqual(w);
+  });
+
+  it('is optional — absent means no retry (window.failed stays terminal, exact S9-S11b behavior)', () => {
+    const parsed = WindowConfigSchema.parse(config);
+    expect(parsed.retry).toBeUndefined();
+  });
+
+  it('rejects a non-positive or fractional count/intervalInSeconds', () => {
+    expect(() =>
+      WindowConfigSchema.parse({ ...config, retry: { count: 0, intervalInSeconds: 60 } }),
+    ).toThrow();
+    expect(() =>
+      WindowConfigSchema.parse({ ...config, retry: { count: 1.5, intervalInSeconds: 60 } }),
+    ).toThrow();
+    expect(() =>
+      WindowConfigSchema.parse({ ...config, retry: { count: 3, intervalInSeconds: 0 } }),
+    ).toThrow();
+    expect(() =>
+      WindowConfigSchema.parse({ ...config, retry: { count: 3, intervalInSeconds: -30 } }),
+    ).toThrow();
+  });
+
+  it('requires both fields when present (a half-specified policy is refused)', () => {
+    expect(() => WindowConfigSchema.parse({ ...config, retry: { count: 3 } })).toThrow();
+    expect(() =>
+      WindowConfigSchema.parse({ ...config, retry: { intervalInSeconds: 60 } }),
+    ).toThrow();
+  });
+});
+
 describe('WindowConfigWriteSchema (write-boundary cross-field rule)', () => {
   it('accepts endTime strictly after startTime', () => {
     const w = { ...config, endTime: '2026-07-02T00:00:00.000Z' };
@@ -120,5 +154,31 @@ describe('WindowConfigWriteSchema (write-boundary cross-field rule)', () => {
     expect(() =>
       WindowConfigWriteSchema.parse({ ...config, endTime: '2026-06-30T00:00:00.000Z' }),
     ).toThrow();
+  });
+
+  // #5 S11c — the retry write-boundary caps (ADF's activity-retry range).
+  it('accepts retry at the write-boundary bounds (count 100, interval 30..86400)', () => {
+    const min = { ...config, retry: { count: 1, intervalInSeconds: 30 } };
+    expect(WindowConfigWriteSchema.parse(min)).toEqual(min);
+    const max = { ...config, retry: { count: 100, intervalInSeconds: 86_400 } };
+    expect(WindowConfigWriteSchema.parse(max)).toEqual(max);
+  });
+
+  it('rejects retry outside the write bounds (stored shape stays lenient)', () => {
+    expect(() =>
+      WindowConfigWriteSchema.parse({ ...config, retry: { count: 101, intervalInSeconds: 60 } }),
+    ).toThrow();
+    expect(() =>
+      WindowConfigWriteSchema.parse({ ...config, retry: { count: 3, intervalInSeconds: 29 } }),
+    ).toThrow();
+    expect(() =>
+      WindowConfigWriteSchema.parse({ ...config, retry: { count: 3, intervalInSeconds: 86_401 } }),
+    ).toThrow();
+    // Stored/read shape parses the same values — the caps are a write concern,
+    // so a row persisted under a future, looser cap never throws on read (and
+    // the settle path HONORS the stored value — the maxBackfillWindows
+    // precedent).
+    const stored = { ...config, retry: { count: 101, intervalInSeconds: 1 } };
+    expect(WindowConfigSchema.parse(stored)).toEqual(stored);
   });
 });

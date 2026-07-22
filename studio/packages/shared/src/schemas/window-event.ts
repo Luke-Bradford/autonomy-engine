@@ -24,6 +24,8 @@ export const WINDOW_EVENT_TYPES = [
   'window.runCreated',
   'window.succeeded',
   'window.failed',
+  'window.retryScheduled',
+  'window.retryDue',
 ] as const;
 
 export const WindowEventTypeSchema = z.enum(WINDOW_EVENT_TYPES);
@@ -85,11 +87,44 @@ export const WindowFailedPayloadSchema = z.object({
   runStatus: z.enum(['failure', 'interrupted', 'missing']),
 });
 
+/**
+ * `window.retryScheduled` — #5 S11c: the window's run terminalized with a
+ * KNOWN failure and the per-trigger retry policy has budget left, so the
+ * window holds (`running → retry_pending`) until `nextAttemptAt` instead of
+ * folding terminal. `runStatus` deliberately EXCLUDES `missing`: a vanished
+ * run row means the outcome is unknown — the run may have SUCCEEDED — so a
+ * retry would manufacture duplicate side effects from an absent fact;
+ * `missing` stays a terminal `window.failed`. `attempt` is the retry ordinal
+ * this event consumed (1-based); `nextAttemptAt` is the STORED due instant
+ * (`scheduled_wakeups.dueAt` mirrors it — never recomputed at fold time).
+ */
+export const WindowRetryScheduledPayloadSchema = z.object({
+  runId: z.string().min(1),
+  runStatus: z.enum(['failure', 'interrupted']),
+  attempt: z.number().int().positive(),
+  nextAttemptAt: z.string().datetime(),
+});
+
+/**
+ * `window.retryDue` — #5 S11c: the retry interval elapsed (the `window_retry`
+ * alarm fired, or the sync/reconcile overdue heal drove it); the window
+ * re-enters the materialize scan (`retry_pending → waiting`) and its next run
+ * links via a fresh `window.runCreated`.
+ */
+export const WindowRetryDuePayloadSchema = z.object({
+  attempt: z.number().int().positive(),
+});
+
 export const WindowEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('window.created'), payload: WindowCreatedPayloadSchema }),
   z.object({ type: z.literal('window.runCreated'), payload: WindowRunCreatedPayloadSchema }),
   z.object({ type: z.literal('window.succeeded'), payload: WindowSucceededPayloadSchema }),
   z.object({ type: z.literal('window.failed'), payload: WindowFailedPayloadSchema }),
+  z.object({
+    type: z.literal('window.retryScheduled'),
+    payload: WindowRetryScheduledPayloadSchema,
+  }),
+  z.object({ type: z.literal('window.retryDue'), payload: WindowRetryDuePayloadSchema }),
 ]);
 export type WindowEvent = z.infer<typeof WindowEventSchema>;
 
@@ -97,9 +132,18 @@ export type WindowEvent = z.infer<typeof WindowEventSchema>;
  * The projection's status vocabulary (spec S3: "waiting / running / succeeded
  * / failed"). `waiting` = created, no run yet; `running` = a run is linked
  * (its OWN lifecycle — queued/running/waiting — is the run's story, not
- * re-modelled here); `succeeded`/`failed` are terminal.
+ * re-modelled here); `retry_pending` (#5 S11c) = the last run failed and the
+ * retry interval is elapsing — no run in flight, so the window holds NO
+ * per-window concurrency slot (capacity counts `running` only) and does NOT
+ * close the S10 backfill gate; `succeeded`/`failed` are terminal.
  */
-export const WindowStatusSchema = z.enum(['waiting', 'running', 'succeeded', 'failed']);
+export const WindowStatusSchema = z.enum([
+  'waiting',
+  'running',
+  'succeeded',
+  'failed',
+  'retry_pending',
+]);
 export type WindowStatus = z.infer<typeof WindowStatusSchema>;
 
 /**
@@ -128,6 +172,14 @@ export function foldWindowStatus(events: ReadonlyArray<WindowEvent>): WindowStat
         // status being `running`), so the fold and the guarded projection can
         // never diverge on an out-of-order sequence.
         if (status === 'running') status = 'failed';
+        break;
+      case 'window.retryScheduled':
+        // #5 S11c — same discipline: mirrors `retryWindow`'s `running` guard.
+        if (status === 'running') status = 'retry_pending';
+        break;
+      case 'window.retryDue':
+        // Mirrors `retryDueWindow`'s `retry_pending` guard.
+        if (status === 'retry_pending') status = 'waiting';
         break;
     }
   }

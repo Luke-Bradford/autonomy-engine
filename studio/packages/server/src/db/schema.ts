@@ -595,6 +595,21 @@ export const tumblingWindowState = sqliteTable(
       .notNull()
       .default('live')
       .$type<WindowOrigin>(),
+    /**
+     * #5 S11c — retries CONSUMED by this window (0 = the initial attempt has
+     * never been re-driven; honest for every pre-S11c row). Monotonic via the
+     * guarded `running → retry_pending` flip; the settle-time budget check
+     * (`attempt < retry.count`) reads it. Re-derivable from the event log as
+     * the count of `window.retryScheduled` events (pinned by test).
+     */
+    attempt: integer('attempt').notNull().default(0),
+    /**
+     * #5 S11c — the STORED due instant (epoch ms) of a pending retry; NULL
+     * outside `retry_pending`. Mirrors the `window_retry` alarm's `dueAt`
+     * (never recomputed); the sync/reconcile OVERDUE HEAL reads it to re-drive
+     * a retry whose alarm was suppressed while the trigger was broken.
+     */
+    nextAttemptAtMs: integer('next_attempt_at_ms'),
     updatedAt: integer('updated_at').notNull(),
   },
   (table) => [

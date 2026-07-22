@@ -13,6 +13,23 @@ export const WindowFrequencySchema = z.enum(['minute', 'hour', 'day']);
 export type WindowFrequency = z.infer<typeof WindowFrequencySchema>;
 
 /**
+ * #5 S11c — a tumbling trigger's per-window RETRY policy (ADF's tumbling
+ * `retryPolicy {count, intervalInSeconds}`): a window whose run terminalizes
+ * with a KNOWN failure (`failure`/`interrupted` — never `missing`, an unknown
+ * outcome) is re-driven up to `count` times, `intervalInSeconds` apart, before
+ * `window.failed` becomes terminal. Both fields required — a half-specified
+ * policy is an authoring mistake, refused at the object shape.
+ */
+export const WindowRetryPolicySchema = z.object({
+  /** Max re-drives per window (attempts = 1 initial + up to `count` retries). */
+  count: z.number().int().positive(),
+  /** Delay between a failed attempt and its retry — a STORED fact at schedule
+   * time (`scheduled_wakeups.dueAt`), never recomputed. */
+  intervalInSeconds: z.number().int().positive(),
+});
+export type WindowRetryPolicy = z.infer<typeof WindowRetryPolicySchema>;
+
+/**
  * #5 S9 — a `tumbling`-mode trigger's window config. Windows are the
  * contiguous, non-overlapping intervals `[startTime + k*size, startTime +
  * (k+1)*size)` for `k >= 0`, where `size = interval * frequency` (fixed ms,
@@ -73,6 +90,20 @@ export const WindowConfigSchema = z.object({
    * HONORS a stored over-cap value (the `maxBackfillWindows` precedent).
    */
   maxConcurrentWindows: z.number().int().positive().optional(),
+  /**
+   * #5 S11c — opt-in per-window RETRY (see `WindowRetryPolicySchema`). ABSENT
+   * = no retry — `window.failed` is terminal on the first failed run, the
+   * exact S9-S11b behavior (an upgrade must never change a shipped trigger's
+   * semantics — the `maxBackfillWindows`/`maxConcurrentWindows` rule). A
+   * BOUND like the other three: it does not participate in the config epoch
+   * and never rides the `window_due` alarm ref (it never affects the pending
+   * forward row's eligibility — it only governs the settle-time decision for
+   * an already-fired window). The write-boundary caps (count ≤ 100, interval
+   * 30–86400s — ADF's activity-retry range) live in `WindowConfigWriteSchema`;
+   * the stored shape stays lenient and the settle path HONORS a stored
+   * out-of-range value (the `maxBackfillWindows` precedent).
+   */
+  retry: WindowRetryPolicySchema.optional(),
 });
 export type WindowConfig = z.infer<typeof WindowConfigSchema>;
 
@@ -83,6 +114,13 @@ export const MAX_BACKFILL_WINDOWS_CAP = 1000;
 /** The #5 S11a write-boundary cap on `maxConcurrentWindows` — ADF's tumbling
  * `maxConcurrency` range is 1-50 (see `WindowConfigWriteSchema`). */
 export const MAX_CONCURRENT_WINDOWS_CAP = 50;
+
+/** #5 S11c write-boundary caps on `retry` — count bounds the duplicate-run
+ * blast radius of one window (100 re-drives is already pathological);
+ * the interval bounds are ADF's activity-retry range (30–86400s). */
+export const MAX_WINDOW_RETRY_COUNT_CAP = 100;
+export const MIN_WINDOW_RETRY_INTERVAL_SECONDS = 30;
+export const MAX_WINDOW_RETRY_INTERVAL_SECONDS = 86_400;
 
 /**
  * WRITE-boundary shape: the stored shape PLUS the one cross-field rule —
@@ -117,5 +155,26 @@ export const WindowConfigWriteSchema = WindowConfigSchema.superRefine((w, ctx) =
       path: ['maxConcurrentWindows'],
       message: `\`maxConcurrentWindows\` must be at most ${MAX_CONCURRENT_WINDOWS_CAP}`,
     });
+  }
+  // #5 S11c — bound the retry policy at authoring time (same shape: write
+  // concern; the stored shape stays lenient on read).
+  if (w.retry !== undefined) {
+    if (w.retry.count > MAX_WINDOW_RETRY_COUNT_CAP) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['retry', 'count'],
+        message: `\`retry.count\` must be at most ${MAX_WINDOW_RETRY_COUNT_CAP}`,
+      });
+    }
+    if (
+      w.retry.intervalInSeconds < MIN_WINDOW_RETRY_INTERVAL_SECONDS ||
+      w.retry.intervalInSeconds > MAX_WINDOW_RETRY_INTERVAL_SECONDS
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['retry', 'intervalInSeconds'],
+        message: `\`retry.intervalInSeconds\` must be between ${MIN_WINDOW_RETRY_INTERVAL_SECONDS} and ${MAX_WINDOW_RETRY_INTERVAL_SECONDS}`,
+      });
+    }
   }
 });

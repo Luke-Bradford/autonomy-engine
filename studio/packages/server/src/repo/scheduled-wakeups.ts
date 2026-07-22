@@ -309,6 +309,15 @@ export function deleteWakeup(db: Db, id: string): ScheduledWakeup | null {
  *     the no-re-create guarantee for past windows — so this bullet's "only
  *     future-ending windows are ever armed" stays true verbatim and pruning
  *     fired `window_due` rows remains safe.
+ *   - `window_retry` (#5 S11c, `attempt-<n>`): `attempt` is MONOTONIC per
+ *     window (the guarded `running → retry_pending` flip is the only
+ *     incrementer, and a window re-reaches `running` only via a NEW linked
+ *     run), so a fired `(window, attempt-n)` key is never re-armed — the
+ *     settle path always arms attempt n+1. `dueAt ≤ now + 86400s` (the write
+ *     cap; a stored over-cap interval merely needs to stay under the 30-day
+ *     floor — enforced by nothing, noted as the same lenient-stored-shape
+ *     tradeoff the cap documents), and the overdue heal drives the WINDOW
+ *     row, never re-arms the alarm.
  * A future kind with a longer re-arm window (e.g. #4 `wait`) MUST re-check this
  * floor. Pending rows are never eligible here (only settled), so a far-future
  * `wait` alarm still `pending` is untouched regardless of its age.

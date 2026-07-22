@@ -315,6 +315,8 @@ export async function buildApp(opts?: BuildAppOptions) {
       leaseService.handler,
       // #5 S9 — `window_due` → tumbling window creation + materialization.
       tumblingService.handler,
+      // #5 S11c — `window_retry` → a failed window's retry interval elapsed.
+      tumblingService.retryHandler,
     ],
     bus: runEventBus,
     log: fastify.log,
