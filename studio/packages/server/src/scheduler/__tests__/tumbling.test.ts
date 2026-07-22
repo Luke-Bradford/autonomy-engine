@@ -3549,6 +3549,56 @@ describe('#5 S11d — self-dependency + stale-epoch disposition', () => {
       expect(getWindowState(db2, keyFor(trigger2, T0 + 2 * MIN15))?.status).toBe('running');
     });
 
+    it('a stored-lenient GIANT span clamps the range bounds instead of throwing (hand-edit vector)', () => {
+      // Review NITPICK (PR #645): `dependencySatisfied`'s ISO-range clamp had
+      // no test whose span actually NEEDS it. The stored shape is
+      // read-lenient — `WindowConfigWriteSchema` refuses `offset + size > 0`
+      // and the span caps, but a hand-edited row parses on READ
+      // (`WindowSelfDependencySchema` only requires a negative offset and a
+      // positive int size) — so a giant `sizeInSeconds` pushes the Lte bound
+      // past the ECMAScript Date range, where `toISOString()` THROWS without
+      // the clamp (caught as `reconcile failed to materialize windows` on
+      // every pass — the exact failure the clamp exists to prevent).
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: DEP_PREV });
+      // Hand-edit past the write API (the #637 `corruptTriggerRow` vector):
+      // 9e12 s = 9e15 ms — past both the max Date (8.64e15 ms) and the clamp
+      // bound (9999-12-31), while still a safe positive int for the read
+      // parse. Geometry is untouched, so the seeded rows' epoch stays current.
+      db.update(triggers)
+        .set({
+          window: {
+            ...CONFIG,
+            selfDependency: { offsetInSeconds: -900, sizeInSeconds: 9_000_000_000_000 },
+          },
+        })
+        .where(eq(triggers.id, trigger.id))
+        .run();
+      windowInStatus(db, trigger, 0, 'succeeded');
+      seedWindow(db, trigger, 1);
+      const launcher = fakeLauncher();
+      const log = silentLog();
+      const svc = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher,
+        log,
+        now: () => T0 + 4 * 60 * 60_000,
+      });
+
+      svc.reconcile();
+
+      // The gate HONORS the stored monster: the clamped range query runs
+      // (bounds land inside the ISO range) and the interval — which now
+      // covers W1 itself — blocks, visibly `waiting`, with NOTHING logged.
+      // The un-clamped variant dies with a RangeError → `log.error` instead.
+      expect(log.error).not.toHaveBeenCalled();
+      expect(log.warn).not.toHaveBeenCalled();
+      expect(launcher.fires).toHaveLength(0);
+      expect(getWindowState(db, keyFor(trigger, T0 + MIN15))?.status).toBe('waiting');
+    });
+
     it('a dependency-blocked OLDEST backfill window HOLDS the serial drain (no skip-ahead)', () => {
       const { db } = freshDb();
       const pv = seedVersion(db);
