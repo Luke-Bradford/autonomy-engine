@@ -303,8 +303,12 @@ export function deleteWakeup(db: Db, id: string): ScheduledWakeup | null {
  *     future are ever armed — so a fired past window's key is never re-armed
  *     (and even if it were, the handler's projection-existence suppression +
  *     the partial UNIQUE `window.created` index refuse a second fire). #5 S10
- *     backfill will arm PAST windows and MUST re-verify this argument when it
- *     lands (its cursor machinery, not key-reuse, has to carry the guarantee).
+ *     RE-VERIFIED at landing: backfill does NOT arm wakeup rows at all — it
+ *     creates window rows directly, with the durable backfill CURSOR
+ *     (`tumbling_backfill_cursors`, monotonic) + the projection PK carrying
+ *     the no-re-create guarantee for past windows — so this bullet's "only
+ *     future-ending windows are ever armed" stays true verbatim and pruning
+ *     fired `window_due` rows remains safe.
  * A future kind with a longer re-arm window (e.g. #4 `wait`) MUST re-check this
  * floor. Pending rows are never eligible here (only settled), so a far-future
  * `wait` alarm still `pending` is untouched regardless of its age.

@@ -4,9 +4,10 @@ import {
   WindowStatusSchema,
   foldWindowStatus,
   type WindowEvent,
+  type WindowOrigin,
   type WindowStatus,
 } from '@autonomy-studio/shared';
-import { runs, tumblingWindowState, windowEvents } from '../db/schema.js';
+import { runs, tumblingBackfillCursors, tumblingWindowState, windowEvents } from '../db/schema.js';
 import type { Db } from './types.js';
 
 /**
@@ -40,6 +41,9 @@ export interface TumblingWindowStateRow extends WindowKey {
   windowEnd: string;
   status: WindowStatus;
   runId: string | null;
+  /** #5 S10 — `'live'` (forward chain) vs `'backfill'` (the bounded backfill
+   * pass); drives the materialization gate in `scheduler/tumbling.ts`. */
+  origin: WindowOrigin;
   updatedAt: number;
 }
 
@@ -81,6 +85,10 @@ export function createWindow(
   input: WindowKey & {
     windowEnd: string;
     geometry: { frequency: 'minute' | 'hour' | 'day'; interval: number; startTime: string };
+    /** #5 S10 — REQUIRED, no repo-level default: the caller must state how the
+     * window became known ('live' = forward chain, 'backfill' = the bounded
+     * backfill pass) — a manufactured default here would silently mis-gate. */
+    origin: WindowOrigin;
   },
 ): boolean {
   return db.transaction((tx) => {
@@ -93,6 +101,7 @@ export function createWindow(
         windowEnd: input.windowEnd,
         status: 'waiting',
         runId: null,
+        origin: input.origin,
         updatedAt: Date.now(),
       })
       .onConflictDoNothing()
@@ -100,7 +109,7 @@ export function createWindow(
     if (inserted.changes === 0) return false;
     appendEvent(tx, input, {
       type: 'window.created',
-      payload: { windowEnd: input.windowEnd, ...input.geometry },
+      payload: { windowEnd: input.windowEnd, ...input.geometry, origin: input.origin },
     });
     return true;
   });
@@ -187,6 +196,9 @@ export interface ListWindowStatesFilter {
   status?: WindowStatus;
   /** `true` → only rows with `run_id IS NULL` (the stranded-`waiting` scan). */
   unlinked?: boolean;
+  /** #5 S10 — the two-scan materialize split: `'live'` (ungated, S9 batch
+   * semantics) vs `'backfill'` (one-at-a-time under the gate). */
+  origin?: WindowOrigin;
   limit?: number;
 }
 
@@ -204,6 +216,7 @@ export function listWindowStates(
     conditions.push(eq(tumblingWindowState.status, WindowStatusSchema.parse(filter.status)));
   }
   if (filter.unlinked === true) conditions.push(isNull(tumblingWindowState.runId));
+  if (filter.origin !== undefined) conditions.push(eq(tumblingWindowState.origin, filter.origin));
   let query = db
     .select()
     .from(tumblingWindowState)
@@ -243,25 +256,30 @@ export function rebuildWindowStatus(db: Db, key: WindowKey): WindowStatus | null
 
 /**
  * #5 S9 single-fire reconcile (finding 3): an UNLINKED run for `triggerId`
- * whose frozen `triggerContext.scheduledTime` equals `windowEnd` — the
- * durable run↔window join for the crash window between `launcher.fire` (run
- * row committed) and `linkWindowRun` (link committed). Excludes runs already
- * linked to ANY window (an epoch edit can make two epochs share a boundary
- * instant, and the old epoch's run must never satisfy the new epoch's heal).
- * Oldest first, so a pathological double-fire heals deterministically.
+ * whose frozen `triggerContext.scheduledTime` equals `windowEnd` AND whose
+ * frozen `triggerContext.windowEpoch` equals `configEpoch` — the durable
+ * run↔window join for the crash window between `launcher.fire` (run row
+ * committed) and `linkWindowRun` (link committed). Excludes runs already
+ * linked to ANY window. Oldest first, so a pathological double-fire heals
+ * deterministically.
  *
- * S10 RE-VERIFY POINT: an UNLINKED old-epoch run at a shared boundary would
- * satisfy this join too. Unreachable in forward-only S9 (every window's end is
- * strictly future at creation, while a stray unlinked run's frozen
- * `scheduledTime` is past by the time another epoch can produce a colliding
- * window) — but S10 backfill arms PAST windows and breaks that temporal
- * argument. The fix belongs to S10: persist the window key (epoch) in
- * `triggerContext` for window fires and add it to this join. (`triggerContext`
- * carries no epoch field today, so the join cannot be epoch-scoped yet.)
+ * S10 RE-VERIFY — RESOLVED: the epoch is now IN the join. S9's temporal
+ * argument ("a stray unlinked run's frozen `scheduledTime` is past by the
+ * time another epoch can produce a colliding window") broke the moment S10
+ * backfill started creating PAST windows, so every window fire now freezes
+ * `windowEpoch` into the run's `triggerContext` and the join matches it
+ * STRICTLY. Strict on purpose: a NULL-tolerant match could LINK an old-epoch
+ * orphan onto a backfilled window that shares its boundary instant — silent
+ * corruption (the window would fold the WRONG run's outcome). The cost is
+ * one narrow at-least-once case: a run fired by pre-S10 code whose link
+ * crashed exactly at the upgrade boundary carries no `windowEpoch`, is never
+ * link-healed, and its window fires a second run — duplicate execution, never
+ * a wrong link.
  */
 export function findUnlinkedRunForWindow(
   db: Db,
   triggerId: string,
+  configEpoch: string,
   windowEnd: string,
 ): string | null {
   const row = db
@@ -271,6 +289,7 @@ export function findUnlinkedRunForWindow(
       and(
         eq(runs.triggerId, triggerId),
         sql`json_extract(${runs.triggerContext}, '$.scheduledTime') = ${windowEnd}`,
+        sql`json_extract(${runs.triggerContext}, '$.windowEpoch') = ${configEpoch}`,
         sql`NOT EXISTS (SELECT 1 FROM ${tumblingWindowState} s WHERE s.run_id = ${runs.id})`,
       ),
     )
@@ -278,4 +297,50 @@ export function findUnlinkedRunForWindow(
     .limit(1)
     .get();
   return row?.id ?? null;
+}
+
+/**
+ * #5 S10 — the durable backfill cursor for `(triggerId, configEpoch)`:
+ * the EXCLUSIVE disposition boundary (epoch ms). Every window of the epoch
+ * with `startMs < cursor` is dispositioned — created, or deliberately skipped
+ * past the `maxBackfillWindows` lookback — and must never be re-created.
+ * `null` = no backfill pass has run for this epoch yet.
+ */
+export function getBackfillCursor(db: Db, triggerId: string, configEpoch: string): number | null {
+  const row = db
+    .select({ cursorMs: tumblingBackfillCursors.cursorMs })
+    .from(tumblingBackfillCursors)
+    .where(
+      and(
+        eq(tumblingBackfillCursors.triggerId, triggerId),
+        eq(tumblingBackfillCursors.configEpoch, configEpoch),
+      ),
+    )
+    .get();
+  return row?.cursorMs ?? null;
+}
+
+/**
+ * Advance the backfill cursor — MONOTONIC by construction (`MAX(cursor_ms,
+ * excluded)`): a backwards move would un-disposition skipped windows and
+ * resurrect them, so a stale caller (e.g. a backwards clock jump making a
+ * later pass compute an earlier edge) silently loses to the stored value
+ * rather than rewinding it.
+ */
+export function advanceBackfillCursor(
+  db: Db,
+  triggerId: string,
+  configEpoch: string,
+  cursorMs: number,
+): void {
+  db.insert(tumblingBackfillCursors)
+    .values({ triggerId, configEpoch, cursorMs, updatedAt: Date.now() })
+    .onConflictDoUpdate({
+      target: [tumblingBackfillCursors.triggerId, tumblingBackfillCursors.configEpoch],
+      set: {
+        cursorMs: sql`MAX(${tumblingBackfillCursors.cursorMs}, excluded.cursor_ms)`,
+        updatedAt: Date.now(),
+      },
+    })
+    .run();
 }

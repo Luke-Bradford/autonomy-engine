@@ -28,5 +28,17 @@ export const TriggerContextSchema = z.object({
   triggerId: z.string(),
   scheduledTime: z.string().nullable(),
   body: z.unknown(),
+  /**
+   * #5 S10 — the tumbling-window CONFIG EPOCH the fire was made under (the
+   * `windowConfigEpoch` hash), persisted so `findUnlinkedRunForWindow` (the
+   * crash-heal run↔window join) can be epoch-scoped: without it, an UNLINKED
+   * old-epoch run at an epoch-shared boundary instant could satisfy a
+   * backfilled window's heal and mislink (S9's temporal argument only covered
+   * forward-only arming). OPTIONAL and absent for every non-window fire and
+   * every pre-S10 row. INTERNAL linkage fact only — deliberately NOT in the
+   * closed `${trigger.*}` field set (`TRIGGER_FIELDS`); the user-facing
+   * `${trigger.windowStart/End}` surface is #5 S11's ticket.
+   */
+  windowEpoch: z.string().optional(),
 });
 export type TriggerContext = z.infer<typeof TriggerContextSchema>;

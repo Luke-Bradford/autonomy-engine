@@ -43,6 +43,23 @@ describe('WindowEventSchema', () => {
     const e = { type: 'window.failed', payload: { runId: null, runStatus: 'missing' } };
     expect(WindowEventSchema.parse(e)).toEqual(e);
   });
+
+  it('window.created carries an optional origin (#5 S10) — a pre-S10 payload still parses', () => {
+    // Absent origin = 'live' semantically (every pre-S10 log row); the schema
+    // stays read-compatible with S9 events rather than manufacturing a value.
+    expect(WindowEventSchema.parse(created)).toEqual(created);
+    const backfill = {
+      ...created,
+      payload: { ...created.payload, origin: 'backfill' },
+    };
+    expect(WindowEventSchema.parse(backfill)).toEqual(backfill);
+    expect(() =>
+      WindowEventSchema.parse({
+        ...created,
+        payload: { ...created.payload, origin: 'timetravel' },
+      }),
+    ).toThrow();
+  });
 });
 
 describe('WindowStatusSchema', () => {
