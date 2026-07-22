@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import {
@@ -11,6 +12,7 @@ import {
   type ScheduledWakeup,
   type WakeupRef,
 } from '@autonomy-studio/shared';
+import { runEvents } from '../../db/schema.js';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun } from '../../repo/runs.js';
@@ -41,8 +43,9 @@ import type { WakeupDelivery } from '../alarms.js';
  * timeout}-alarm.test.ts) as the equivalence proof; this pins the seam's own
  * contract, above all the `settleSideEffect` CALL-POINT ASYMMETRY (the single
  * subtlest behavior the extraction had to preserve): it fires on terminal-suppress,
- * on stale (layer-2) suppress, and on fire — but NOT on `run_not_found` or
- * `doc_unresolvable`.
+ * on stale (layer-2) suppress, and on fire — but NOT on `run_not_found`,
+ * `doc_unresolvable`, or the #642 corrupt-read suppressions
+ * (`ref_unparseable`/`run_events_unparseable`/`run_unparseable`).
  */
 
 const NOW = 1_700_000_000_000;
@@ -221,6 +224,109 @@ describe('#585 createDurableAlarmHandler — the shared skeleton', () => {
     const result = handler.fire(alarmRow({ runId, nodeId: 'w', attemptId: 'w#0' }), delivery, db);
 
     expect(result).toMatchObject({ status: 'suppressed', reason: 'doc_unresolvable' });
+    expect(settle).not.toHaveBeenCalled();
+  });
+
+  // #642 — the poison-pending class (#637's, on the run surface): a PERMANENTLY
+  // corrupt stored row (hand-edit/legacy-drift) throws the same way on every
+  // tick, so treating it as a transient blip re-fires + error-logs forever.
+  // Suppress with a distinct reason; settleSideEffect stays UNCALLED (the
+  // run_not_found/doc_unresolvable asymmetry extended to the corrupt reads).
+  it('#642 SUPPRESSES run_events_unparseable on a schema-corrupt event payload; no settleSideEffect', async () => {
+    const { db } = freshDb();
+    const runId = await parkedWaitRun(db);
+    // The log is APPEND-ONLY (a DB trigger blocks UPDATE), so the honest
+    // hand-edit/legacy-drift vector is a corrupt APPENDED row: valid JSON,
+    // wrong shape — EngineEventSchema rejects it (ZodError).
+    db.insert(runEvents)
+      .values({
+        id: 'evt_poison',
+        runId,
+        seq: 999,
+        type: 'not.an.engine.event',
+        payload: { type: 'not.an.engine.event' },
+        ts: NOW,
+      })
+      .run();
+    const { config, settle } = spyConfig();
+    const handler = createDurableAlarmHandler(deps(db), config);
+
+    const result = handler.fire(alarmRow({ runId, nodeId: 'w', attemptId: 'w#0' }), delivery, db);
+
+    expect(result).toMatchObject({ status: 'suppressed', reason: 'run_events_unparseable' });
+    expect(settle).not.toHaveBeenCalled();
+  });
+
+  it('#642 SUPPRESSES run_events_unparseable on an invalid-JSON payload cell (SyntaxError, the #515 codec boundary)', async () => {
+    const { db } = freshDb();
+    const runId = await parkedWaitRun(db);
+    // Drizzle's json codec is a bare JSON.parse at row mapping — invalid TEXT
+    // throws SyntaxError BEFORE the schema is reached (#515's second half).
+    // Raw INSERT (the log's UPDATE is trigger-blocked; append is the vector).
+    db.run(
+      sql`INSERT INTO run_events (id, run_id, seq, type, payload, ts)
+          VALUES ('evt_poison', ${runId}, 999, 'x', 'not json', ${NOW})`,
+    );
+    const { config, settle } = spyConfig();
+    const handler = createDurableAlarmHandler(deps(db), config);
+
+    const result = handler.fire(alarmRow({ runId, nodeId: 'w', attemptId: 'w#0' }), delivery, db);
+
+    expect(result).toMatchObject({ status: 'suppressed', reason: 'run_events_unparseable' });
+    expect(settle).not.toHaveBeenCalled();
+  });
+
+  it('#642 SUPPRESSES run_unparseable on a corrupt run row; no settleSideEffect', async () => {
+    const { db } = freshDb();
+    const runId = await parkedWaitRun(db);
+    // `status` carries a SQL CHECK, so corrupt a non-CHECKed column the schema
+    // types as number: the table is not STRICT, so SQLite stores the text and
+    // RunSchema.parse rejects it (ZodError). Events stay valid — the log read
+    // and the layer-1 terminal check pass first, pinning the ORDER of reads.
+    db.run(sql`UPDATE runs SET started_at = 'yesterday' WHERE id = ${runId}`);
+    const { config, settle } = spyConfig();
+    const handler = createDurableAlarmHandler(deps(db), config);
+
+    const result = handler.fire(alarmRow({ runId, nodeId: 'w', attemptId: 'w#0' }), delivery, db);
+
+    expect(result).toMatchObject({ status: 'suppressed', reason: 'run_unparseable' });
+    expect(settle).not.toHaveBeenCalled();
+    // No due event appended on a suppress (the log is readable here — pin it).
+    expect(loadEngineEvents(db, runId).filter((e) => e.type === 'timer.due')).toHaveLength(0);
+  });
+
+  it('#642 SUPPRESSES ref_unparseable on a stored ref that fails the kind schema; no settleSideEffect', async () => {
+    const { db } = freshDb();
+    const runId = await parkedWaitRun(db);
+    const { config, settle } = spyConfig();
+    const handler = createDurableAlarmHandler(deps(db), config);
+
+    // A valid string-record missing the kind's required key (a renamed/legacy
+    // ref shape) — survives the clock's scan-time WakeupRefSchema but fails
+    // WaitRef here. (Invalid JSON in the ref CELL never reaches this handler:
+    // it kills the tick at the scan — named in the module doc, follow-up #646.)
+    const result = handler.fire(alarmRow({ runId, nodeId: 'w' }), delivery, db);
+
+    expect(result).toMatchObject({ status: 'suppressed', reason: 'ref_unparseable' });
+    expect(settle).not.toHaveBeenCalled();
+    // No due event appended on a suppress (the log is readable here — pin it).
+    expect(loadEngineEvents(db, runId).filter((e) => e.type === 'timer.due')).toHaveLength(0);
+  });
+
+  it('#642 RETHROWS a genuine DB read fault from the log read (transient blip → alarm stays pending)', async () => {
+    const { db } = freshDb();
+    const runId = await parkedWaitRun(db);
+    const { config, settle } = spyConfig();
+    const handler = createDurableAlarmHandler(deps(db), config);
+    // A REAL SqliteError through the REAL read path (no stub): drop the table,
+    // so `listRunEvents` throws a driver fault — neither ZodError nor
+    // SyntaxError — pinning the transient half of the #642 classification at
+    // the new catch site (a passing blip must NOT be suppressed as corruption).
+    db.run(sql`DROP TABLE run_events`);
+
+    expect(() =>
+      handler.fire(alarmRow({ runId, nodeId: 'w', attemptId: 'w#0' }), delivery, db),
+    ).toThrow(/no such table/);
     expect(settle).not.toHaveBeenCalled();
   });
 

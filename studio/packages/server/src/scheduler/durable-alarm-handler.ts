@@ -1,7 +1,8 @@
-import type { z } from 'zod';
+import { ZodError, type z } from 'zod';
 import type {
   EngineEvent,
   NodeRunStatus,
+  Run,
   RunState,
   ScheduledWakeup,
   WakeupRef,
@@ -58,10 +59,34 @@ import type { WakeupFireResult, WakeupHandler } from './alarms.js';
  * #508, or present-but-unparseable, #515) throws while resolving the doc; a throw
  * inside the clock's transaction rolls back the settle, leaving the row `pending`
  * and re-delivered on EVERY tick forever for a run that can never be driven again.
- * So SUPPRESS on that type. But ONLY that type — a NON-`DocUnresolvableError`
- * throw is a transient blip the rollback+redeliver is FOR, so rethrow it (the
- * clock leaves the row `pending` for the next tick). Suppressing every throw would
- * classify a passing blip as a dead run and drop the alarm forever.
+ * So SUPPRESS on that type — and (#642) on the SAME poison-pending class from the
+ * fire's three other stored-row reads: the wakeup `ref` failing the kind's schema,
+ * a `run_events` payload `EngineEventSchema` rejects, and a run row `RunSchema`
+ * rejects. The classification is #515's, verbatim (`makeDocResolver`): a
+ * `ZodError` (well-formed JSON, wrong shape) or a `SyntaxError` (drizzle's json
+ * codec is a bare `JSON.parse`, so invalid TEXT throws before the schema) is
+ * DETERMINISTIC — the same row throws the same way on every tick, definitionally
+ * not the transient blip the rollback+redeliver contract exists for. Any OTHER
+ * throw is a DB read fault (a better-sqlite3 error is neither type) — genuinely
+ * transient — so rethrow it (the clock leaves the row `pending` for the next
+ * tick). Suppressing every throw would classify a passing blip as a dead run and
+ * drop the alarm forever.
+ *
+ * Why suppress rather than force-terminalize the run (#642's disposition): a
+ * terminal fact minted from an UNREADABLE log would be manufactured, not derived
+ * (#443: the log is authoritative — and here it cannot even be read), and it
+ * would foreclose repair-then-resume. The suppressed run is inert, not lost — it
+ * cannot be driven anyway (every drive path performs the same reads). How inert
+ * LOOKS differs by surface: for `ref_unparseable` the run itself is intact, so
+ * it stays visible as a stuck `running` row, and the next boot's `recoverHeld`
+ * finds the SPENT alarm and freezes a retry-held run `interrupted`
+ * (`retry_alarm_spent`) — a needs-attention verdict the operator sees. For the
+ * corrupt-log / corrupt-run-row cases the SAME corruption also breaks the boot
+ * reconciler's own strict reads before any such convergence (a corrupt
+ * `running` run row even aborts boot at the `listRuns` scan) — those surfaces,
+ * plus the clock's scan-time ref-CELL parse (`listDueWakeups` parses every due
+ * row before any handler runs, so one invalid-JSON cell kills the whole tick),
+ * are #646's, deliberately not this module's.
  */
 
 /** The kind's layer-2 subject guard verdict; a stale subject settles the alarm. */
@@ -92,10 +117,12 @@ export interface DurableAlarmConfig<TRef extends WakeupRef & { runId: string }> 
    * event. Today only `external_wait` uses it, to settle its correlation row
    * (`markExternalWaitExpired`) atomically with the log. Invoked at EXACTLY three
    * points — terminal-log suppress, stale (layer-2) suppress, and on fire (between
-   * the append and the lifecycle sync) — and DELIBERATELY NOT on `run_not_found`
-   * or `doc_unresolvable` (the run row / version is gone; there is nothing whose
-   * correlation to settle, and those paths are the exceptional ones). Preserving
-   * that asymmetry is load-bearing; see `external-wait-alarm.ts`.
+   * the append and the lifecycle sync) — and DELIBERATELY NOT on `run_not_found`,
+   * `doc_unresolvable`, or the #642 corrupt-read suppressions (`ref_unparseable`/
+   * `run_events_unparseable`/`run_unparseable`): the run row / version is gone or
+   * unreadable; there is nothing whose correlation to settle, and those paths are
+   * the exceptional ones. Preserving that asymmetry is load-bearing; see
+   * `external-wait-alarm.ts`.
    */
   settleSideEffect?(tx: Db, ref: TRef, deps: DriveDeps): void;
 }
@@ -113,8 +140,33 @@ export function createDurableAlarmHandler<TRef extends WakeupRef & { runId: stri
     kind: config.kind,
     refSchema: config.refSchema,
     fire(row: ScheduledWakeup, _delivery, tx: Db): WakeupFireResult {
-      const ref = config.refSchema.parse(row.ref);
-      const events = loadEngineEvents(tx, ref.runId);
+      // #642 — the three stored-row reads suppress on PERMANENT corruption
+      // (ZodError/SyntaxError, the #515 classification — see the module doc)
+      // instead of poison-pending the row forever; any other throw is a
+      // transient DB fault and propagates for the rollback+redeliver.
+      const parsedRef = config.refSchema.safeParse(row.ref);
+      if (!parsedRef.success) {
+        deps.log?.warn?.(
+          { err: parsedRef.error, wakeupId: row.id, kind: config.kind },
+          'durable alarm: stored ref fails the kind schema — settling (permanently corrupt)',
+        );
+        return { status: 'suppressed', reason: 'ref_unparseable' };
+      }
+      const ref = parsedRef.data;
+
+      let events: EngineEvent[];
+      try {
+        events = loadEngineEvents(tx, ref.runId);
+      } catch (err) {
+        if (err instanceof ZodError || err instanceof SyntaxError) {
+          deps.log?.warn?.(
+            { err, wakeupId: row.id, runId: ref.runId },
+            'durable alarm: run_events payload unparseable — settling (permanently corrupt)',
+          );
+          return { status: 'suppressed', reason: 'run_events_unparseable' };
+        }
+        throw err;
+      }
 
       // FRESHNESS layer 1: the log is authoritative for terminality (#443).
       if (terminalFactFromLog(events) !== null) {
@@ -122,7 +174,19 @@ export function createDurableAlarmHandler<TRef extends WakeupRef & { runId: stri
         return { status: 'suppressed', reason: 'run_already_terminal' };
       }
 
-      const run = getRun(tx, ref.runId);
+      let run: Run | null;
+      try {
+        run = getRun(tx, ref.runId);
+      } catch (err) {
+        if (err instanceof ZodError || err instanceof SyntaxError) {
+          deps.log?.warn?.(
+            { err, wakeupId: row.id, runId: ref.runId },
+            'durable alarm: run row unparseable — settling (permanently corrupt)',
+          );
+          return { status: 'suppressed', reason: 'run_unparseable' };
+        }
+        throw err;
+      }
       if (run === null) return { status: 'suppressed', reason: 'run_not_found' };
 
       let engine;
