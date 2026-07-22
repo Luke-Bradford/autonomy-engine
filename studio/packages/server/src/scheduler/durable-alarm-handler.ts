@@ -16,7 +16,12 @@ import {
   syncRunLifecycle,
   type DriveDeps,
 } from '../run/driver.js';
-import { appendAndFold, loadEngineEvents, terminalFactFromLog } from '../run/events.js';
+import {
+  appendAndFold,
+  loadEngineEvents,
+  RunLogUnparseableError,
+  terminalFactFromLog,
+} from '../run/events.js';
 import type { WakeupFireResult, WakeupHandler } from './alarms.js';
 
 /**
@@ -81,12 +86,14 @@ import type { WakeupFireResult, WakeupHandler } from './alarms.js';
  * it stays visible as a stuck `running` row, and the next boot's `recoverHeld`
  * finds the SPENT alarm and freezes a retry-held run `interrupted`
  * (`retry_alarm_spent`) — a needs-attention verdict the operator sees. For the
- * corrupt-log / corrupt-run-row cases the SAME corruption also breaks the boot
- * reconciler's own strict reads before any such convergence (a corrupt
- * `running` run row even aborts boot at the `listRuns` scan) — those surfaces,
- * plus the clock's scan-time ref-CELL parse (`listDueWakeups` parses every due
- * row before any handler runs, so one invalid-JSON cell kills the whole tick),
- * are #646's, deliberately not this module's.
+ * corrupt-log / corrupt-run-row cases the boot reconciler now (#646) reports
+ * the run in `ReconcileReport.corrupt` (its scan is lenient per row, so a
+ * corrupt `running` row no longer aborts boot) and the clock's scan itself is
+ * lenient (`listParsedDueWakeups` — one invalid-JSON ref CELL no longer kills
+ * the whole tick; the scan settles such a row `suppressed`). The corrupt-log
+ * class arrives here TYPED: `loadEngineEvents` wraps it as
+ * `RunLogUnparseableError` at the source, so this module branches on the type
+ * rather than re-deriving the raw `ZodError || SyntaxError` check.
  */
 
 /** The kind's layer-2 subject guard verdict; a stale subject settles the alarm. */
@@ -158,7 +165,11 @@ export function createDurableAlarmHandler<TRef extends WakeupRef & { runId: stri
       try {
         events = loadEngineEvents(tx, ref.runId);
       } catch (err) {
-        if (err instanceof ZodError || err instanceof SyntaxError) {
+        // #646 — the corruption classes arrive TYPED from `loadEngineEvents`
+        // now (`RunLogUnparseableError` wraps the raw `ZodError`/`SyntaxError`
+        // at the source); a non-corruption throw passes through unwrapped and
+        // propagates as the transient rollback+redeliver below.
+        if (err instanceof RunLogUnparseableError) {
           deps.log?.warn?.(
             { err, wakeupId: row.id, runId: ref.runId },
             'durable alarm: run_events payload unparseable — settling (permanently corrupt)',

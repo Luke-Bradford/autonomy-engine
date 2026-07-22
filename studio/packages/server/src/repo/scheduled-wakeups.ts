@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray, lt, lte, ne } from 'drizzle-orm';
+import { ZodError } from 'zod';
 import {
   ArmWakeupInputSchema,
   ScheduledWakeupSchema,
@@ -156,6 +157,14 @@ export function supersedeWakeup(
   });
 }
 
+/** The per-row verdict of {@link listParsedDueWakeups} — `found` (parses) and
+ * `unparseable` (row present, unreadable) are DISTINCT, per the
+ * `ParsedTriggerRead` precedent: the clock settles corruption differently from
+ * firing a healthy alarm. */
+export type ParsedDueWakeup =
+  | { status: 'found'; wakeup: ScheduledWakeup }
+  | { status: 'unparseable'; id: string; error: unknown };
+
 /**
  * The claim scan: pending rows due at or before `now`, for REGISTERED kinds
  * only, oldest first.
@@ -172,17 +181,32 @@ export function supersedeWakeup(
  * a batch at once), and without a tie-breaker SQLite may order them differently
  * across ticks and restarts — so a replayed or restarted tick could claim the
  * same-due batch in a different order than the run that came before it.
+ *
+ * #646 — LENIENT per row (the `listParsedTriggers` discipline, applied to the
+ * scan): a whole-list `rows.map(parse)` dies on ONE corrupt cell — empirically,
+ * drizzle's `{mode:'json'}` codec throws `SyntaxError` out of `.all()` itself on
+ * an invalid-JSON `ref` — so a single poison row silenced EVERY alarm of every
+ * kind for as long as it existed. Two phases: an id-only projection (codec-free,
+ * so it cannot throw on a corrupt cell) with the WHERE/ORDER above, then a
+ * strict per-id read whose failure is scoped to its own row. Only the
+ * DETERMINISTIC corruption classes are reported as `unparseable`
+ * (`SyntaxError` = invalid stored TEXT, `ZodError` = wrong shape — the #515
+ * classification: stored bytes parse the same way on every tick, definitionally
+ * not transient); any other throw is a genuine DB fault and propagates so the
+ * tick's structural catch retries next tick. A row settled between the two
+ * phases is skipped — the fire-time in-transaction re-read makes that window
+ * harmless anyway.
  */
-export function listDueWakeups(
+export function listParsedDueWakeups(
   db: Db,
   opts: { kinds: readonly string[]; now: number },
-): ScheduledWakeup[] {
+): ParsedDueWakeup[] {
   // `inArray` with an empty list is a SQL error in some dialects and an
   // always-false predicate in others; short-circuit so "an alarm clock with no
   // handlers is inert" is guaranteed here rather than by the caller.
   if (opts.kinds.length === 0) return [];
-  const rows = db
-    .select()
+  const ids = db
+    .select({ id: scheduledWakeups.id })
     .from(scheduledWakeups)
     .where(
       and(
@@ -193,7 +217,42 @@ export function listDueWakeups(
     )
     .orderBy(asc(scheduledWakeups.dueAt), asc(scheduledWakeups.id))
     .all();
-  return rows.map((row) => ScheduledWakeupSchema.parse(row));
+
+  const parsed: ParsedDueWakeup[] = [];
+  for (const { id } of ids) {
+    try {
+      const row = getWakeup(db, id);
+      // Gone or settled between the phases: skip, don't report — nothing is
+      // pending-and-due any more.
+      if (row === null || row.status !== 'pending') continue;
+      parsed.push({ status: 'found', wakeup: row });
+    } catch (error) {
+      if (error instanceof ZodError || error instanceof SyntaxError) {
+        parsed.push({ status: 'unparseable', id, error });
+      } else {
+        throw error;
+      }
+    }
+  }
+  return parsed;
+}
+
+/**
+ * #646 — settle a row {@link listParsedDueWakeups} reported `unparseable`,
+ * CODEC-FREE: `settleWakeup`'s `.returning()` re-maps the row through the json
+ * codec and would re-throw the very corruption being settled. Same atomic
+ * `WHERE status = 'pending'` guard; returns whether this call did the settle.
+ * `suppressed` (not `cancelled`): it is the same verdict #642's fire-time
+ * corruption suppressions settle to — "delivery declined, permanently" — while
+ * `cancelled` is the caller-disarm door.
+ */
+export function settleCorruptWakeup(db: Db, id: string, firedAt: number): boolean {
+  const result = db
+    .update(scheduledWakeups)
+    .set({ status: 'suppressed', firedAt })
+    .where(and(eq(scheduledWakeups.id, id), eq(scheduledWakeups.status, 'pending')))
+    .run();
+  return result.changes > 0;
 }
 
 /**
@@ -328,7 +387,7 @@ export function deleteWakeup(db: Db, id: string): ScheduledWakeup | null {
  */
 export function pruneSettledWakeups(db: Db, opts: { before: number; limit?: number }): number {
   // Oldest-first, `id` breaking `firedAt` ties — the same total order
-  // `listDueWakeups`/`listPendingWakeups` use, so batch boundaries are stable
+  // `listParsedDueWakeups`/`listPendingWakeups` use, so batch boundaries are stable
   // across sweeps. Deleting via a subquery of ids (not `DELETE … LIMIT`, which
   // throws unless better-sqlite3 is compiled with SQLITE_ENABLE_UPDATE_DELETE_LIMIT).
   const doomed = db

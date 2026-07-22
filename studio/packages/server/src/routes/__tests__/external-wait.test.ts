@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import {
   buildDedupeKey,
@@ -276,5 +277,76 @@ describe('external-wait routes', () => {
       payload: { decision: 'approve' },
     });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe('#646 — a corrupt run LOG behind a live callback is a 500, not a 400', () => {
+  it('server-side log corruption is never blamed on the caller as validation_error', async () => {
+    const app = await buildTestApp();
+    try {
+      // Reuse the outer harness shape inline (this describe has its own app so
+      // the poison row cannot leak into the shared instance's later tests).
+      const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'P' });
+      const input: NewPipelineVersion = {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [webhookNode('w')],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      };
+      const pvId = createPipelineVersion(app.db, input).id;
+      const run = createRun(app.db, {
+        ownerId: 'local',
+        pipelineVersionId: pvId,
+        triggerId: null,
+        parentRunId: null,
+        params: {},
+      });
+      const resolveDoc: DocResolver = (id) => {
+        const pv = getPipelineVersion(app.db, id);
+        if (pv === null) throw new Error(`no pv ${id}`);
+        return pv;
+      };
+      const deps: DriveDeps = {
+        db: app.db,
+        resolveDoc,
+        executor: makeStubExecutor(),
+        alarms: {
+          arm: (i) => clock.arm(i),
+          find: (i) => getWakeupByKey(app.db, i.kind, buildDedupeKey(i)),
+        },
+        drives: createRunDrives(),
+        now: () => Date.now(),
+        signExternalWaitToken: (a) => deriveExternalWaitToken(app.masterKey, a),
+      };
+      const clock = createAlarmClock({
+        db: app.db,
+        handlers: [createExternalWaitAlarmHandler(deps)],
+        now: () => Date.now(),
+        log: silentLog(),
+      });
+      await startRun(deps, run);
+
+      const list = await app.inject({ method: 'GET', url: `/api/runs/${run.id}/external-waits` });
+      const path = (list.json() as Array<{ callbackPath: string }>)[0]!.callbackPath;
+
+      // Poison appended row (the log's UPDATE is trigger-blocked — #642
+      // precedent). Deliberately the ZodError CLASS — valid JSON, wrong shape —
+      // because that is the class whose route behavior this pins: before #646
+      // the raw ZodError from the log read fell into the global ZodError→400
+      // mapping (`errors.ts`), telling the EXTERNAL CALLER its POST was
+      // invalid. The typed RunLogUnparseableError is a server fault: 500.
+      // (The SyntaxError class was already a 500 — no change to pin there.)
+      app.db.run(
+        sql`INSERT INTO run_events (id, run_id, seq, type, payload, ts)
+            VALUES ('evt_poison', ${run.id}, 999, 'x', '{"type":"no.such.event"}', ${Date.now()})`,
+      );
+      const res = await app.inject({ method: 'POST', url: path });
+      expect(res.statusCode).toBe(500);
+      expect((res.json() as { error: string }).error).toBe('internal_error');
+    } finally {
+      await app.close();
+    }
   });
 });

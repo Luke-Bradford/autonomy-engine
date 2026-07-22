@@ -1566,3 +1566,50 @@ describe('RunLauncher — #5 S6b per-pipeline both-must-pass admission', () => {
     await launcher.whenIdle();
   });
 });
+
+// #646 — surface 3 one hop deeper: `recoverQueued` runs unguarded at boot, and
+// the old strict FIFO-head pick (`nextQueuedRunForTrigger`) mapped the head row
+// through the json codec — so a corrupt QUEUED head row threw `SyntaxError` out
+// of the boot drain and ABORTED SERVER BOOT (and, from the settle-path drain,
+// escaped as an unhandled rejection).
+describe('RunLauncher — recoverQueued survives a corrupt queued run row (#646)', () => {
+  it('does not throw, skips the corrupt head, and still admits the healthy waiter behind it', async () => {
+    const { db, sqlite } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    // Two durable waiters (the restart shape): the OLDER one is then corrupted,
+    // making it the FIFO head the drain's pick meets first.
+    const bad = createRun(db, {
+      pipelineVersionId: pvId,
+      ownerId: 'local',
+      triggerId: trigger.id,
+      parentRunId: null,
+      params: {},
+      status: 'queued',
+      queuedAt: 10,
+    });
+    const good = createRun(db, {
+      pipelineVersionId: pvId,
+      ownerId: 'local',
+      triggerId: trigger.id,
+      parentRunId: null,
+      params: {},
+      status: 'queued',
+      queuedAt: 20,
+    });
+    sqlite.prepare('UPDATE runs SET params = ? WHERE id = ?').run('not json', bad.id);
+
+    const launcher = createRunLauncher(deps(db, { nodes: { a: { hang: true } } }));
+    expect(() => launcher.recoverQueued()).not.toThrow();
+    await launcher.whenIdle();
+
+    // The healthy waiter was admitted past the corrupt head; the corrupt row
+    // stays durably `queued` (inert, visible, repairable) — asserted RAW, since
+    // no strict reader can even construct it.
+    const badStatus = sqlite.prepare('SELECT status FROM runs WHERE id = ?').get(bad.id) as {
+      status: string;
+    };
+    expect(badStatus.status).toBe('queued');
+    expect(getRun(db, good.id)?.status).toBe('running');
+  });
+});

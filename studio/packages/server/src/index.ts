@@ -107,8 +107,8 @@ const HOST = '127.0.0.1';
  * due at T is delivered somewhere in [T, T + this). One second is far below the
  * 30s floor `retryIntervalSeconds` enforces, so it is invisible against any
  * retry a doc can actually configure, while keeping the tick cheap — the scan is
- * one indexed query per kind, and `listDueWakeups` returns nothing on an idle
- * system.
+ * one indexed query per kind, and `listParsedDueWakeups` returns nothing on an
+ * idle system.
  */
 const ALARM_TICK_MS = 1_000;
 
@@ -345,6 +345,14 @@ export async function buildApp(opts?: BuildAppOptions) {
     signExternalWaitToken,
   });
   fastify.log.info({ reconcileReport }, 'boot reconcile complete');
+  // #646 — corruption is a needs-attention verdict, not routine boot noise: an
+  // operator watching warn/error must see it without reading the info report.
+  if (reconcileReport.corrupt.length > 0) {
+    fastify.log.error(
+      { corrupt: reconcileReport.corrupt },
+      'boot reconcile found unreadable stored run state — needs operator repair',
+    );
+  }
 
   // P4a: the run launcher — the one place a trigger becomes a run (manual fire,
   // the scheduler, and webhooks all reuse it). Per-app, sharing this instance's

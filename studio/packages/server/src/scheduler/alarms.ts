@@ -1,6 +1,12 @@
 import type { z } from 'zod';
 import type { ArmWakeupInput, RunEvent, ScheduledWakeup, WakeupRef } from '@autonomy-studio/shared';
-import { armWakeup, getWakeup, listDueWakeups, settleWakeup } from '../repo/scheduled-wakeups.js';
+import {
+  armWakeup,
+  getWakeup,
+  listParsedDueWakeups,
+  settleCorruptWakeup,
+  settleWakeup,
+} from '../repo/scheduled-wakeups.js';
 import type { Db } from '../repo/types.js';
 import type { RunEventBus } from '../run/event-bus.js';
 // The log seam this module needs is byte-identical to the cron scheduler's, and
@@ -254,9 +260,26 @@ export function createAlarmClock(deps: AlarmClockDeps): AlarmClock {
       // not crash a headless server's timer (the rule `scheduler.ts:96-131`
       // already sets for cron ticks).
       const at = now();
-      const due = listDueWakeups(db, { kinds: [...handlers.keys()], now: at });
+      const due = listParsedDueWakeups(db, { kinds: [...handlers.keys()], now: at });
 
-      for (const row of due) {
+      for (const entry of due) {
+        if (entry.status === 'unparseable') {
+          // #646 — a row the scan cannot even read (invalid stored JSON, or a
+          // shape `ScheduledWakeupSchema` rejects). Deterministic corruption
+          // (the #515 classification, applied at the scan the way #642 applied
+          // it at the fire), so settle it `suppressed` — codec-free, since the
+          // strict settle's `.returning()` would re-throw the very corruption —
+          // rather than skip-and-warn on every tick forever, the exact
+          // poison-pending shape #642 eliminated. `settled: false` means a
+          // concurrent settle beat us to it; either way the row is spent.
+          const settled = settleCorruptWakeup(db, entry.id, at);
+          log.error(
+            { err: entry.error, wakeupId: entry.id, settled },
+            'alarm clock: settled a corrupt wakeup row (scan-time unparseable)',
+          );
+          continue;
+        }
+        const row = entry.wakeup;
         const handler = handlers.get(row.kind);
         // Unreachable — the scan filters by registered kind — but a missing
         // handler must never throw past this loop.

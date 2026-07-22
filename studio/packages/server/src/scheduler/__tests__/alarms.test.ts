@@ -654,3 +654,36 @@ function brokenDb(): Db {
     },
   } as unknown as Db;
 }
+
+describe('#646 — a corrupt wakeup row cannot kill the tick', () => {
+  it('settles the poison row `suppressed` and still fires the healthy alarm', () => {
+    const { db, sqlite } = freshDb();
+    const handler = spyHandler();
+    const log = silentLog(); // its channels are already spies
+    const clock = createAlarmClock({ db, handlers: [handler], now: () => 5_000, log });
+    const bad = clock.arm({ kind: 'retry', ref: RETRY_REF, dueAt: 100, discriminator: 'bad' });
+    const good = clock.arm({ kind: 'retry', ref: RETRY_REF, dueAt: 200, discriminator: 'good' });
+    // The hand-edit/legacy-drift vector: an invalid-JSON ref CELL. Before #646
+    // the scan's whole-list parse threw out of the structural try/catch and NO
+    // alarm of ANY kind fired while this row existed.
+    sqlite.prepare('UPDATE scheduled_wakeups SET ref = ? WHERE id = ?').run('not json', bad.id);
+
+    clock.tick();
+
+    // The healthy alarm FIRED — the poison row degraded itself, not the tick.
+    expect(handler.calls).toBe(1);
+    expect(getWakeup(db, good.id)?.status).toBe('fired');
+    // The poison row is settled `suppressed` (the #642 disposition, applied at
+    // the scan): spent, visible, never re-delivered — not poison-pending.
+    const badRow = sqlite
+      .prepare('SELECT status, fired_at FROM scheduled_wakeups WHERE id = ?')
+      .get(bad.id) as { status: string; fired_at: number };
+    expect(badRow).toEqual({ status: 'suppressed', fired_at: 5_000 });
+    expect(log.error).toHaveBeenCalledOnce();
+
+    // And the next tick has nothing to spin on: no more fires, no more logs.
+    clock.tick();
+    expect(handler.calls).toBe(1);
+    expect(log.error).toHaveBeenCalledOnce();
+  });
+});

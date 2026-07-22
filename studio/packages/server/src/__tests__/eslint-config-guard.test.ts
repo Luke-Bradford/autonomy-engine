@@ -30,14 +30,25 @@ const studioRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..
 const coveredFile = resolve(studioRoot, 'packages/server/src/index.ts');
 
 describe('#467 typed-lint async-safety gate', () => {
-  it('enables no-floating-promises and no-misused-promises for server source', async () => {
-    const eslint = new ESLint({ cwd: studioRoot });
-    const config = await eslint.calculateConfigForFile(coveredFile);
+  // #650 — flaked under the full-parallel workspace `pnpm test` (four packages'
+  // vitest processes at once): constructing a real `ESLint` instance with the
+  // typed-project service is the contention point, and the default timeout can
+  // trip under that load while the same test passes standalone and in CI. The
+  // retry is honest here BECAUSE the assertions are deterministic config
+  // resolution — a genuine gate regression (rule removed/downgraded) fails all
+  // three attempts identically; only environment contention is absorbed.
+  it(
+    'enables no-floating-promises and no-misused-promises for server source',
+    { retry: 2, timeout: 30_000 },
+    async () => {
+      const eslint = new ESLint({ cwd: studioRoot });
+      const config = await eslint.calculateConfigForFile(coveredFile);
 
-    // `calculateConfigForFile` NORMALIZES severity to a number: `2` === 'error'
-    // (`1` === 'warn', `0` === 'off'). Asserting `2` catches both "rule removed"
-    // (undefined) and "downgraded to warn" (`1`), either of which reopens the gate.
-    expect(config.rules?.['@typescript-eslint/no-floating-promises']?.[0]).toBe(2);
-    expect(config.rules?.['@typescript-eslint/no-misused-promises']?.[0]).toBe(2);
-  });
+      // `calculateConfigForFile` NORMALIZES severity to a number: `2` === 'error'
+      // (`1` === 'warn', `0` === 'off'). Asserting `2` catches both "rule removed"
+      // (undefined) and "downgraded to warn" (`1`), either of which reopens the gate.
+      expect(config.rules?.['@typescript-eslint/no-floating-promises']?.[0]).toBe(2);
+      expect(config.rules?.['@typescript-eslint/no-misused-promises']?.[0]).toBe(2);
+    },
+  );
 });

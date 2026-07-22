@@ -17,7 +17,7 @@ import {
   countQueuedRunsForTrigger,
   createRun,
   getRun,
-  listRuns,
+  listParsedRuns,
   nextQueuedRunForTrigger,
   queuedTriggerCandidatesForPipeline,
 } from '../repo/runs.js';
@@ -433,7 +433,12 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
         // PIPELINE-scoped pick: a trigger rebound to another pipeline mid-queue
         // can hold a globally-older FOREIGN-pipeline row — admitting that here
         // would drive it under THIS pipeline's gate, breaching the other's cap.
-        const next = nextQueuedRunForTrigger(db, candidate.triggerId, pipelineId);
+        // #646 — the pick is lenient: a corrupt queued row is skipped (logged),
+        // never allowed to throw a drain (the boot drain runs unguarded) or to
+        // block the healthy fires queued behind it.
+        const next = nextQueuedRunForTrigger(db, candidate.triggerId, pipelineId, (id, err) => {
+          deps.log?.warn?.({ err, runId: id }, 'queue drain skipping a corrupt queued run row');
+        });
         if (next === null) continue;
         // A concurrent/duplicate drain that lost the race gets `null` — try the
         // next candidate rather than aborting the whole drain.
@@ -605,8 +610,17 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     // via `driveRun`'s `finally`. Run once at boot, AFTER the reconciler has
     // resumed `running` rows so the per-drain DB active-count already reflects
     // them (no double-admit).
+    // #646 — lenient scan: this runs unguarded at boot (`index.ts`), so one
+    // corrupt `queued` row in a strict whole-list parse would abort SERVER BOOT
+    // — surface 3's exact failure mode through a second door. A skipped row is
+    // logged; the drain below picks past it too (`nextQueuedRunForTrigger` is
+    // lenient), so a corrupt FIFO head can neither throw out of this unguarded
+    // boot path nor starve the healthy fires queued behind it.
     const pipelineIds = new Set<string>();
-    for (const run of listRuns(db, { status: 'queued' })) {
+    const queued = listParsedRuns(db, { status: 'queued' }, (id, err) => {
+      deps.log?.error?.({ err, runId: id }, 'recoverQueued: skipping a corrupt queued run row');
+    });
+    for (const run of queued) {
       const pipelineId = getPipelineIdForVersion(db, run.pipelineVersionId);
       if (pipelineId !== null) pipelineIds.add(pipelineId);
     }

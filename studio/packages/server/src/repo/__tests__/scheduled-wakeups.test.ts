@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { sql } from 'drizzle-orm';
 import { buildDedupeKey, type ArmWakeupInput } from '@autonomy-studio/shared';
 import { openDb } from '../../db/client.js';
 import {
@@ -11,12 +12,14 @@ import {
   getWakeup,
   getWakeupByKey,
   drainSettledWakeups,
-  listDueWakeups,
+  listParsedDueWakeups,
   listPendingWakeups,
   pruneSettledWakeups,
+  settleCorruptWakeup,
   settleWakeup,
   supersedeWakeup,
   SupersedeRefusedError,
+  type ParsedDueWakeup,
 } from '../scheduled-wakeups.js';
 import type { Db } from '../types.js';
 import { freshDb } from './helpers.js';
@@ -116,7 +119,12 @@ describe('#5 S1 — armWakeup', () => {
   });
 });
 
-describe('#5 S1 — listDueWakeups (the claim scan)', () => {
+/** Unwrap a scan's `found` rows — most claim-scan tests only care about those. */
+function foundRows(entries: ParsedDueWakeup[]) {
+  return entries.flatMap((e) => (e.status === 'found' ? [e.wakeup] : []));
+}
+
+describe('#5 S1 — listParsedDueWakeups (the claim scan)', () => {
   let db: Db;
   beforeEach(() => {
     db = freshDb().db;
@@ -127,7 +135,7 @@ describe('#5 S1 — listDueWakeups (the claim scan)', () => {
     armWakeup(db, { kind: 'retry', ref: RETRY_REF, dueAt: 100, discriminator: 'a' });
     armWakeup(db, { kind: 'retry', ref: RETRY_REF, dueAt: 200, discriminator: 'b' });
 
-    const due = listDueWakeups(db, { kinds: ['retry'], now: 250 });
+    const due = foundRows(listParsedDueWakeups(db, { kinds: ['retry'], now: 250 }));
 
     // Oldest first: a late alarm must not be starved by a fresher one.
     expect(due.map((r) => r.dueAt)).toEqual([100, 200]);
@@ -143,7 +151,7 @@ describe('#5 S1 — listDueWakeups (the claim scan)', () => {
 
     // Same query, repeatedly: the order must be identical AND id-ascending.
     for (let i = 0; i < 5; i++) {
-      const due = listDueWakeups(db, { kinds: ['retry'], now: 250 });
+      const due = foundRows(listParsedDueWakeups(db, { kinds: ['retry'], now: 250 }));
       expect(due.map((r) => r.id)).toEqual(expected);
     }
     expect(listPendingWakeups(db).map((r) => r.id)).toEqual(expected);
@@ -151,8 +159,8 @@ describe('#5 S1 — listDueWakeups (the claim scan)', () => {
 
   it('excludes rows not yet due', () => {
     armRetry(db, 'attempt-1', 5_000);
-    expect(listDueWakeups(db, { kinds: ['retry'], now: 4_999 })).toHaveLength(0);
-    expect(listDueWakeups(db, { kinds: ['retry'], now: 5_000 })).toHaveLength(1);
+    expect(listParsedDueWakeups(db, { kinds: ['retry'], now: 4_999 })).toHaveLength(0);
+    expect(listParsedDueWakeups(db, { kinds: ['retry'], now: 5_000 })).toHaveLength(1);
   });
 
   it('excludes rows that are already settled', () => {
@@ -163,7 +171,7 @@ describe('#5 S1 — listDueWakeups (the claim scan)', () => {
     const c = armRetry(db, 'attempt-3', 100);
     cancelWakeup(db, c.id, 150);
 
-    expect(listDueWakeups(db, { kinds: ['retry'], now: 9_999 })).toHaveLength(0);
+    expect(listParsedDueWakeups(db, { kinds: ['retry'], now: 9_999 })).toHaveLength(0);
   });
 
   it('NEVER claims an unregistered kind — the row stays pending and recoverable', () => {
@@ -173,14 +181,16 @@ describe('#5 S1 — listDueWakeups (the claim scan)', () => {
     // the kind is registered again.
     armWakeup(db, { kind: 'from_the_future', ref: RETRY_REF, dueAt: 100, discriminator: 'x' });
 
-    expect(listDueWakeups(db, { kinds: ['retry'], now: 9_999 })).toHaveLength(0);
+    expect(listParsedDueWakeups(db, { kinds: ['retry'], now: 9_999 })).toHaveLength(0);
     expect(listPendingWakeups(db)).toHaveLength(1);
-    expect(listDueWakeups(db, { kinds: ['retry', 'from_the_future'], now: 9_999 })).toHaveLength(1);
+    expect(
+      listParsedDueWakeups(db, { kinds: ['retry', 'from_the_future'], now: 9_999 }),
+    ).toHaveLength(1);
   });
 
   it('an empty kind list claims nothing (an alarm clock with no handlers is inert)', () => {
     armRetry(db, 'attempt-1', 100);
-    expect(listDueWakeups(db, { kinds: [], now: 9_999 })).toHaveLength(0);
+    expect(listParsedDueWakeups(db, { kinds: [], now: 9_999 })).toHaveLength(0);
   });
 
   it('pending rows SURVIVE a real process restart — the headline S1 win', () => {
@@ -199,7 +209,7 @@ describe('#5 S1 — listDueWakeups (the claim scan)', () => {
 
       const rebooted = openDb(file); // the boot
       try {
-        const due = listDueWakeups(rebooted.db, { kinds: ['retry'], now: 9_999 });
+        const due = foundRows(listParsedDueWakeups(rebooted.db, { kinds: ['retry'], now: 9_999 }));
         expect(due).toHaveLength(1);
         expect(due[0]!.dueAt).toBe(100);
         expect(due[0]!.ref).toEqual(RETRY_REF);
@@ -209,6 +219,57 @@ describe('#5 S1 — listDueWakeups (the claim scan)', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('#646 — the scan is LENIENT per row (poison-cell isolation)', () => {
+  let db: Db;
+  beforeEach(() => {
+    db = freshDb().db;
+  });
+
+  /** Corrupt one row's `ref` cell via raw SQL — exactly the hand-edit/legacy-
+   * drift vector the ticket names; bypasses the write path's validation AND the
+   * json codec. */
+  function corruptRef(id: string, value: string) {
+    db.run(sql`UPDATE scheduled_wakeups SET ref = ${value} WHERE id = ${id}`);
+  }
+
+  it('one invalid-JSON ref cell no longer kills the whole scan — the healthy sibling is still found', () => {
+    const bad = armRetry(db, 'bad', 100);
+    const good = armRetry(db, 'good', 200);
+    corruptRef(bad.id, 'not json');
+
+    const entries = listParsedDueWakeups(db, { kinds: ['retry'], now: 9_999 });
+
+    expect(entries).toHaveLength(2);
+    // Scan order (dueAt asc) is preserved across the verdict split.
+    expect(entries[0]).toMatchObject({ status: 'unparseable', id: bad.id });
+    expect((entries[0] as { error: unknown }).error).toBeInstanceOf(SyntaxError);
+    expect(entries[1]).toMatchObject({ status: 'found' });
+    expect(foundRows(entries).map((r) => r.id)).toEqual([good.id]);
+  });
+
+  it('valid JSON that ScheduledWakeupSchema rejects is unparseable too (the ZodError class)', () => {
+    const bad = armRetry(db, 'bad', 100);
+    // A non-string-valued record: WakeupRefSchema requires Record<string,string>.
+    corruptRef(bad.id, '{"runId": 42}');
+
+    const entries = listParsedDueWakeups(db, { kinds: ['retry'], now: 9_999 });
+    expect(entries).toEqual([{ status: 'unparseable', id: bad.id, error: expect.any(Object) }]);
+  });
+
+  it('settleCorruptWakeup settles the poison row CODEC-FREE, pending-only, atomically', () => {
+    const bad = armRetry(db, 'bad', 100);
+    corruptRef(bad.id, 'not json');
+
+    // The strict settle would re-map the row through the codec and re-throw the
+    // very corruption being settled — the codec-free settle must not.
+    expect(settleCorruptWakeup(db, bad.id, 500)).toBe(true);
+    // Spent: the scan no longer surfaces it, so the tick cannot spin on it.
+    expect(listParsedDueWakeups(db, { kinds: ['retry'], now: 9_999 })).toHaveLength(0);
+    // The atomic `WHERE status = 'pending'` guard: a second settle is a no-op.
+    expect(settleCorruptWakeup(db, bad.id, 600)).toBe(false);
   });
 });
 

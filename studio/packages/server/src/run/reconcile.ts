@@ -7,7 +7,7 @@ import {
   type Run,
   type RunState,
 } from '@autonomy-studio/shared';
-import { listRuns } from '../repo/runs.js';
+import { listParsedRuns } from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
 import {
   buildEngine,
@@ -24,6 +24,7 @@ import {
   appendAndFold,
   appendEngineEvent,
   loadEngineEvents,
+  RunLogUnparseableError,
   terminalFactFromLog,
 } from './events.js';
 import { recordRunDiagnostics } from '../repo/run-diagnostics.js';
@@ -258,9 +259,31 @@ export interface ReconcileReport {
    * `DocUnresolvableError`, and `reconcileOne` terminalizes it `interrupted`
    * (`doc_unresolvable:<pvId>`) BEFORE it can reach this catch, so it no longer
    * re-`failed`s forever. A NON-`DocUnresolvableError` throw is, by the resolver's
-   * contract, transient — hence lands here.
+   * contract, transient — hence lands here. The OTHER permanent class — stored-row
+   * CORRUPTION — is #646's `corrupt` bucket below, branched on its typed error
+   * before this catch files anything, so the transient-only contract stays true.
    */
   failed: Array<{ runId: string; reason: string }>;
+  /**
+   * #646 — runs whose STORED STATE is unreadable: the run ROW itself no longer
+   * parses (`run_row_unparseable:` — the lenient scan skipped it), or its
+   * `run_events` LOG no longer replays (`run_log_unparseable:` — the typed
+   * `RunLogUnparseableError` from `loadEngineEvents`). PERMANENT (the #515
+   * classification: stored bytes parse the same way on every boot), so filing
+   * these under `failed` would break its transient-only contract and re-`failed`
+   * the run on every boot forever — the exact misfiling this bucket closes.
+   *
+   * The run is deliberately left AS-IS, not terminalized: a terminal fact minted
+   * from an unreadable log would be manufactured, not derived (#443 — the log is
+   * authoritative, and here it cannot even be read; for a corrupt ROW there is
+   * not even a `Run` to append against), and it would foreclose repair-then-
+   * resume. The CONSCIOUS COST: unlike #508's `doc_unresolvable` terminalize,
+   * an unreadable run left `running` keeps occupying its trigger/pipeline
+   * concurrency slot (`ACTIVE_RUN_STATUSES`) until an operator repairs or
+   * deletes the row — corruption needs attention, and a silently freed slot
+   * would hide it. This bucket in the boot log IS that attention signal.
+   */
+  corrupt: Array<{ runId: string; reason: string }>;
 }
 
 /**
@@ -432,6 +455,7 @@ export function emptyReconcileReport(): ReconcileReport {
     held: [],
     rearmed: [],
     failed: [],
+    corrupt: [],
   };
 }
 
@@ -449,7 +473,21 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
   // `run.waiting` append leaves the row `running` with a `wait_pending`/
   // `external_wait_pending` node and no `run.waiting` in the log — caught by the
   // held-park branch in `reconcileOne`, left for its (live) alarm.
-  for (const run of listRuns(deps.db, { status: 'running' })) {
+  // #646 — the scan is LENIENT per row: `listRuns`'s whole-list parse sits ABOVE
+  // the #479 per-run catch, so one corrupt `running` row (invalid stored JSON in
+  // `params`/`trigger_context`, or a shape `RunSchema` rejects) aborted SERVER
+  // BOOT at `index.ts`'s unguarded await — killing recovery for every run, with
+  // the poison row visible nowhere (the strict list routes throw too). A skipped
+  // row is reported in `corrupt`, the needs-attention channel.
+  for (const run of listParsedRuns(deps.db, { status: 'running' }, (id, err) => {
+    // Truncated like `RunLogUnparseableError`'s message: a raw ZodError message
+    // is its full issues JSON, and this reason is logged in the boot report.
+    const detail = err instanceof Error ? err.message : String(err);
+    report.corrupt.push({
+      runId: id,
+      reason: `run_row_unparseable:${detail.length > 200 ? `${detail.slice(0, 200)}…` : detail}`,
+    });
+  })) {
     // #479 — the per-run fault boundary. Boot reconcile IS the recovery path, so
     // it is the worst place for an all-or-nothing failure mode: without this, ONE
     // run whose reconcile threw (originally an unresolvable version — now that
@@ -476,6 +514,13 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
       await reconcileOne(deps, report, run);
     } catch (err) {
       if (err instanceof ReconcileInvariantError) throw err;
+      // #646 — a corrupt LOG is permanent, not transient: file it under
+      // `corrupt` (see that bucket's doc), never `failed`, so it does not
+      // masquerade as a fault the next boot could clear.
+      if (err instanceof RunLogUnparseableError) {
+        report.corrupt.push({ runId: run.id, reason: `run_log_unparseable:${err.message}` });
+        continue;
+      }
       report.failed.push({
         runId: run.id,
         reason: err instanceof Error ? err.message : String(err),

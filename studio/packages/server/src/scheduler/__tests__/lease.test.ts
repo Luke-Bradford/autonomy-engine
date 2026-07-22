@@ -591,3 +591,106 @@ describe('#5 S7 — the reclaim guard + generation token, end to end', () => {
     expect(loadEngineEvents(db, run.id)).toHaveLength(logBefore);
   });
 });
+
+describe('#646 — corruption cannot silence or churn the lease service', () => {
+  it('the sweep survives a corrupt running row — the healthy run still gets its liveness watch', async () => {
+    const { db, sqlite } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const healthy = seedRun(db, pvId);
+    const bad = seedRun(db, pvId);
+    const { deps, drives, lease, time } = harness(db, {
+      nodes: { a: { hang: true, idempotent: true } },
+    });
+
+    await startRun(deps, healthy);
+    await drives.whenIdle();
+    updateRun(db, healthy.id, { leaseUntil: NOW + LEASE_TTL_MS });
+    updateRun(db, bad.id, { status: 'running' });
+    // Pre-#646 the strict whole-list scan threw on this one cell and the catch
+    // swallowed the ENTIRE sweep — no live run was watched while it existed.
+    sqlite.prepare('UPDATE runs SET params = ? WHERE id = ?').run('not json', bad.id);
+
+    time.t = NOW + 60_000;
+    lease.sweep();
+
+    // The healthy run's liveness alarm was still armed.
+    expect(pendingLeaseAlarms(db)).toHaveLength(1);
+  });
+
+  it('a corrupt-LOG run RENEWS its lease on reclaim instead of poison-churning every sweep', async () => {
+    const { db, sqlite } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const run = seedRun(db, pvId);
+    const { deps, clock, drives, lease, time } = harness(db, {
+      nodes: { a: { hang: true, idempotent: true } },
+    });
+
+    await startRun(deps, run);
+    await drives.whenIdle();
+    updateRun(db, run.id, { leaseUntil: NOW + LEASE_TTL_MS });
+    // Poison appended row (the log's UPDATE is trigger-blocked — #642 precedent).
+    sqlite
+      .prepare(
+        'INSERT INTO run_events (id, run_id, seq, type, payload, ts) VALUES (?, ?, ?, ?, ?, ?)',
+      )
+      .run('evt_poison', run.id, 999, 'x', 'not json', NOW);
+
+    time.t = NOW + 60_000;
+    lease.sweep();
+    expect(pendingLeaseAlarms(db)).toHaveLength(1);
+
+    // Lease expires → alarm fires → reclaim → reconcileOne throws the TYPED
+    // corruption error → the catch renews rather than leaving the lease
+    // expired for the next sweep to re-bump (one wakeup row + one error log
+    // per interval, forever — the churn this branch closes).
+    time.t = NOW + LEASE_TTL_MS;
+    clock.tick();
+    await drives.whenIdle();
+    // The renew happens in reclaim's catch, after its serialized section
+    // rejects — flush the microtask/timer chain before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const after = getRun(db, run.id)!;
+    expect(after.status).toBe('running'); // repairable, deliberately not terminalized
+    // Renewed a full TTL out from the reclaim, and the next-generation watch armed.
+    expect(after.leaseUntil).toBe(NOW + LEASE_TTL_MS + LEASE_TTL_MS);
+    expect(pendingLeaseAlarms(db)).toHaveLength(1);
+  });
+});
+
+describe('#646 — the bespoke lease handler suppresses a corrupt run row (no 1 Hz poison loop)', () => {
+  it('a due lease alarm for a corrupt row settles `suppressed` instead of re-firing every tick', async () => {
+    const { db, sqlite } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const run = seedRun(db, pvId);
+    const { deps, clock, drives, lease, time } = harness(db, {
+      nodes: { a: { hang: true, idempotent: true } },
+    });
+
+    await startRun(deps, run);
+    await drives.whenIdle();
+    updateRun(db, run.id, { leaseUntil: NOW + LEASE_TTL_MS });
+    // Arm the liveness watch while the row is still healthy (the module
+    // invariant: every running row holds a pending run_lease alarm)...
+    time.t = NOW + 60_000;
+    lease.sweep();
+    expect(pendingLeaseAlarms(db)).toHaveLength(1);
+    // ...then the row goes corrupt (the surface-3 row boot now lets survive).
+    sqlite.prepare('UPDATE runs SET params = ? WHERE id = ?').run('not json', run.id);
+
+    // The alarm comes due: `getRun` inside the fire throws the codec
+    // SyntaxError. Pre-#646 that rolled back the settle — the alarm stayed
+    // pending and re-fired on EVERY 1s tick, forever. Now: suppressed.
+    time.t = NOW + LEASE_TTL_MS;
+    clock.tick();
+    expect(pendingLeaseAlarms(db)).toHaveLength(0);
+    const settled = sqlite
+      .prepare("SELECT status FROM scheduled_wakeups WHERE kind = 'run_lease'")
+      .all() as Array<{ status: string }>;
+    expect(settled).toEqual([{ status: 'suppressed' }]);
+
+    // And the next tick has nothing to spin on.
+    clock.tick();
+    expect(pendingLeaseAlarms(db)).toHaveLength(0);
+  });
+});

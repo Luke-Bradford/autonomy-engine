@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { EngineEvent } from '@autonomy-studio/shared';
-import { appendEngineEvent, loadEngineEvents, terminalFactFromLog } from '../events.js';
+import {
+  appendEngineEvent,
+  loadEngineEvents,
+  RunLogUnparseableError,
+  terminalFactFromLog,
+} from '../events.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion } from '../../repo/pipeline-versions.js';
@@ -130,5 +135,75 @@ describe('appendEngineEvent — the fold and the log are the same fact', () => {
     // now relies on by folding `.event`.
     expect(record.payload).toEqual(event);
     expect(loadEngineEvents(db, run.id)[0]).toEqual(event);
+  });
+});
+
+describe('#646 — loadEngineEvents types log corruption at the source', () => {
+  function seedRunWithEvent(db: ReturnType<typeof freshDb>['db']) {
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const pv = createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [{ id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } }],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    const run = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pv.id,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+    appendEngineEvent(db, {
+      type: 'run.started',
+      runId: run.id,
+      pipelineVersionId: pv.id,
+      params: {},
+    });
+    return run;
+  }
+
+  it('wraps an invalid-JSON payload (SyntaxError class) as RunLogUnparseableError', () => {
+    const { db, sqlite } = freshDb();
+    const run = seedRunWithEvent(db);
+    // The log is APPEND-ONLY (a DB trigger blocks UPDATE), so the honest
+    // corruption vector is a poison APPENDED row (the #642 test precedent).
+    sqlite
+      .prepare(
+        'INSERT INTO run_events (id, run_id, seq, type, payload, ts) VALUES (?, ?, ?, ?, ?, ?)',
+      )
+      .run('evt_poison', run.id, 999, 'x', 'not json', 1_700_000_000_000);
+
+    expect(() => loadEngineEvents(db, run.id)).toThrow(RunLogUnparseableError);
+    try {
+      loadEngineEvents(db, run.id);
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      // The wrapper preserves the identifying facts a consumer files by.
+      expect(err).toBeInstanceOf(RunLogUnparseableError);
+      expect((err as RunLogUnparseableError).runId).toBe(run.id);
+      expect((err as RunLogUnparseableError).cause).toBeInstanceOf(SyntaxError);
+    }
+  });
+
+  it('wraps a shape EngineEventSchema rejects (ZodError class) the same way', () => {
+    const { db, sqlite } = freshDb();
+    const run = seedRunWithEvent(db);
+    // Valid JSON, wrong shape — EngineEventSchema rejects it (ZodError).
+    sqlite
+      .prepare(
+        'INSERT INTO run_events (id, run_id, seq, type, payload, ts) VALUES (?, ?, ?, ?, ?, ?)',
+      )
+      .run('evt_poison', run.id, 999, 'x', '{"type":"no.such.event"}', 1_700_000_000_000);
+
+    expect(() => loadEngineEvents(db, run.id)).toThrow(RunLogUnparseableError);
+  });
+
+  it('a healthy log loads unchanged', () => {
+    const { db } = freshDb();
+    const run = seedRunWithEvent(db);
+    expect(loadEngineEvents(db, run.id)).toHaveLength(1);
   });
 });
