@@ -272,17 +272,30 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
    * #5 S6b — the pipeline's LIVE admission capacity: `concurrency` on the
    * MUTABLE `pipelines` row (max concurrent runs across ALL its triggers, plus
    * any trigger-less `call_pipeline` child bound to one of its versions).
-   * `null` (and a deleted pipeline) = uncapped → `Infinity`. Read fresh on
+   * `null` = uncapped → `Infinity`. Read fresh on
    * every fire/drain (#631's precedent), so an operator edit applies to rows
    * already queued. The stored cap is READ-lenient (`PipelineSchema`), so an
    * out-of-band-corrupted value must FAIL CLOSED here: a non-positive-integer
    * cap degrades to a SINGLE slot (logged) — admission keeps moving one at a
    * time rather than refusing everything (`Infinity` would fail OPEN) or
    * comparing against `NaN` (which admits unbounded — see `validParallelMax`).
+   * A MISSING pipeline row fails closed the same way: it is unreachable
+   * through FK integrity (every fire/drain resolves the pipeline via an
+   * existing version row, and `pipelines → pipeline_versions` CASCADE is
+   * blocked by `pipeline_versions → runs` RESTRICT while any run row exists),
+   * but if a corrupted DB ever presents it, an ABSENT row is an absent fact —
+   * not evidence of "uncapped" — so it must not fail OPEN to `Infinity`.
    */
   function pipelineCapacity(pipelineId: string): number {
     const pipeline = getPipeline(db, pipelineId);
-    if (pipeline === null || pipeline.concurrency === null) return Infinity;
+    if (pipeline === null) {
+      deps.log?.warn?.(
+        { pipelineId },
+        'pipeline row missing during admission; failing closed to a single slot',
+      );
+      return 1;
+    }
+    if (pipeline.concurrency === null) return Infinity;
     const cap = pipeline.concurrency;
     if (!Number.isInteger(cap) || cap < 1) {
       deps.log?.warn?.(
