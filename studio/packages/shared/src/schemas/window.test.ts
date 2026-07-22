@@ -60,6 +60,24 @@ describe('WindowConfigSchema — maxBackfillWindows (#5 S10)', () => {
   });
 });
 
+describe('WindowConfigSchema — maxConcurrentWindows (#5 S11a)', () => {
+  it('round-trips a config with maxConcurrentWindows', () => {
+    const w = { ...config, maxConcurrentWindows: 4 };
+    expect(WindowConfigSchema.parse(w)).toEqual(w);
+  });
+
+  it('is optional — absent means the exact S9/S10 ungated behavior', () => {
+    const parsed = WindowConfigSchema.parse(config);
+    expect(parsed.maxConcurrentWindows).toBeUndefined();
+  });
+
+  it('rejects a non-positive or fractional maxConcurrentWindows', () => {
+    expect(() => WindowConfigSchema.parse({ ...config, maxConcurrentWindows: 0 })).toThrow();
+    expect(() => WindowConfigSchema.parse({ ...config, maxConcurrentWindows: -2 })).toThrow();
+    expect(() => WindowConfigSchema.parse({ ...config, maxConcurrentWindows: 1.5 })).toThrow();
+  });
+});
+
 describe('WindowConfigWriteSchema (write-boundary cross-field rule)', () => {
   it('accepts endTime strictly after startTime', () => {
     const w = { ...config, endTime: '2026-07-02T00:00:00.000Z' };
@@ -78,6 +96,22 @@ describe('WindowConfigWriteSchema (write-boundary cross-field rule)', () => {
     expect(WindowConfigSchema.parse({ ...config, maxBackfillWindows: 1001 })).toEqual({
       ...config,
       maxBackfillWindows: 1001,
+    });
+  });
+
+  it('accepts maxConcurrentWindows up to the write-boundary cap (50)', () => {
+    const w = { ...config, maxConcurrentWindows: 50 };
+    expect(WindowConfigWriteSchema.parse(w)).toEqual(w);
+  });
+
+  it('rejects maxConcurrentWindows above the cap on WRITE (stored shape stays lenient)', () => {
+    expect(() => WindowConfigWriteSchema.parse({ ...config, maxConcurrentWindows: 51 })).toThrow();
+    // Stored/read shape parses the same value — the cap is a write concern, so a
+    // row persisted under a future, looser cap never throws on read (and the
+    // capacity gate HONORS the stored value — the maxBackfillWindows precedent).
+    expect(WindowConfigSchema.parse({ ...config, maxConcurrentWindows: 51 })).toEqual({
+      ...config,
+      maxConcurrentWindows: 51,
     });
   });
 

@@ -152,12 +152,14 @@ function assertEventConsistent(
  *   - an ENABLED tumbling trigger MUST carry a window — enabled-but-windowless
  *     is inert by construction (no chain can ever seed), the same refusal
  *     shape as `assertBindableIfEnabled`/`assertEventConsistent`;
- *   - a tumbling trigger's concurrency policy must be `queue` (v1):
+ *   - a tumbling trigger's concurrency policy must be `queue`:
  *     `skip_if_running` would SKIP a window's one materialization and strand
  *     it forever (a tumbling window must eventually run — that is the mode's
- *     whole contract), and `parallel` belongs to S11's per-trigger window
- *     concurrency (1–N with self-dependency), not here. Refused up front
- *     rather than silently mis-firing.
+ *     whole contract), and `parallel` is the wrong knob — #5 S11a puts
+ *     per-window concurrency in `window.maxConcurrentWindows` (policy =
+ *     overflow DISPOSITION, the window cap = slot count; the launcher's
+ *     admission reads the cap). Refused up front rather than silently
+ *     mis-firing.
  */
 function assertWindowConsistent(
   mode: TriggerMode,
@@ -177,7 +179,7 @@ function assertWindowConsistent(
   }
   if (mode === 'tumbling' && concurrencyPolicy !== 'queue') {
     throw new BadRequestError(
-      "a tumbling trigger's concurrency policy must be 'queue' (v1) — a skipped window would strand forever; per-window concurrency arrives with S11",
+      "a tumbling trigger's concurrency policy must be 'queue' — a skipped window would strand forever; for per-window concurrency set `window.maxConcurrentWindows` (#5 S11a)",
     );
   }
 }

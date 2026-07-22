@@ -54,12 +54,35 @@ export const WindowConfigSchema = z.object({
    * under a future, looser cap never throws on read.
    */
   maxBackfillWindows: z.number().int().positive().optional(),
+  /**
+   * #5 S11a — per-window CONCURRENCY: at most this many of the trigger's
+   * windows may hold a run at once (window status `running`, trigger-wide,
+   * ANY epoch — an old-epoch run still consumes real capacity). When set,
+   * materialization is capacity-gated and a blocked window WAITS IN WINDOW
+   * STATE (no run row) — the codex-hardened "blocked windows live in window
+   * state, NOT as full runs" — and the launcher's per-trigger admission widens
+   * to the same cap so materialized runs actually execute in parallel. ABSENT
+   * = the exact S9/S10 behavior (live windows materialize ungated into the
+   * admission queue; backfill fires one-at-a-time at zero running windows) —
+   * an upgrade must never change a shipped trigger's semantics, so the gate is
+   * opt-in like `maxBackfillWindows`. A BOUND like `endTime`, not geometry: it
+   * does not participate in the config epoch and never rides the alarm ref (it
+   * never affects the pending forward row's eligibility). The write-boundary
+   * cap (50, ADF's tumbling `maxConcurrency` range) lives in
+   * `WindowConfigWriteSchema`; the stored shape stays lenient and the gate
+   * HONORS a stored over-cap value (the `maxBackfillWindows` precedent).
+   */
+  maxConcurrentWindows: z.number().int().positive().optional(),
 });
 export type WindowConfig = z.infer<typeof WindowConfigSchema>;
 
 /** The #5 S10 write-boundary cap on `maxBackfillWindows` — bounds the windows
  * one backfill pass may create (see `WindowConfigWriteSchema`). */
 export const MAX_BACKFILL_WINDOWS_CAP = 1000;
+
+/** The #5 S11a write-boundary cap on `maxConcurrentWindows` — ADF's tumbling
+ * `maxConcurrency` range is 1-50 (see `WindowConfigWriteSchema`). */
+export const MAX_CONCURRENT_WINDOWS_CAP = 50;
 
 /**
  * WRITE-boundary shape: the stored shape PLUS the one cross-field rule —
@@ -84,6 +107,15 @@ export const WindowConfigWriteSchema = WindowConfigSchema.superRefine((w, ctx) =
       code: z.ZodIssueCode.custom,
       path: ['maxBackfillWindows'],
       message: `\`maxBackfillWindows\` must be at most ${MAX_BACKFILL_WINDOWS_CAP}`,
+    });
+  }
+  // #5 S11a — cap the per-window concurrency at authoring time (same shape:
+  // write concern; the stored shape stays lenient on read).
+  if (w.maxConcurrentWindows !== undefined && w.maxConcurrentWindows > MAX_CONCURRENT_WINDOWS_CAP) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['maxConcurrentWindows'],
+      message: `\`maxConcurrentWindows\` must be at most ${MAX_CONCURRENT_WINDOWS_CAP}`,
     });
   }
 });
