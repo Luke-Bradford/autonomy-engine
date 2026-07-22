@@ -1177,12 +1177,23 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     const epoch = windowConfigEpoch(trigger.window);
     let count = 0;
     for (const status of ['waiting', 'retry_pending'] as const) {
-      for (const row of listWindowStates(db, {
-        triggerId: trigger.id,
-        configEpochNot: epoch,
-        status,
-      })) {
-        if (supersedeWindow(db, keyOf(row), epoch)) count += 1;
+      // Batched drain, not one unbounded fetch (review NITPICK on PR #645):
+      // heavy accumulated debris must never materialize as one giant row
+      // array. No cursor needed — every fetched row LEAVES the filter set
+      // (superseded, or the guard lost because its status already changed,
+      // which equally unmatches the `status` filter), so refetching page 1
+      // until empty terminates.
+      for (;;) {
+        const rows = listWindowStates(db, {
+          triggerId: trigger.id,
+          configEpochNot: epoch,
+          status,
+          limit: MATERIALIZE_BATCH,
+        });
+        if (rows.length === 0) break;
+        for (const row of rows) {
+          if (supersedeWindow(db, keyOf(row), epoch)) count += 1;
+        }
       }
     }
     if (count > 0) {

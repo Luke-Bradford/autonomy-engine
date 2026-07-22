@@ -3670,6 +3670,57 @@ describe('#5 S11d — self-dependency + stale-epoch disposition', () => {
       expect(rebuildWindowStatus(db, waitingKey)).toBe('superseded');
     });
 
+    it('disposition drains debris DEEPER than one batch (27 waiting > MATERIALIZE_BATCH = 25) to empty — batched fetch loop, not one bounded pass', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: CONFIG });
+      if (!isTumblable(trigger)) throw new Error('fixture must be tumblable');
+      // 30 old-epoch rows with distinct windowStarts: 27 waiting + 3
+      // retry_pending — the WAITING arm alone exceeds one batch (the fetch
+      // limit is per-status, so a mix summing past 25 would not discriminate).
+      // A single limit-bounded fetch would strand 2 waiting rows; the drain
+      // loop must fold ALL of them terminal in one sync.
+      const keys: WindowKey[] = [];
+      for (let i = 0; i < 30; i += 1) {
+        const key: WindowKey = {
+          triggerId: trigger.id,
+          configEpoch: 'old-epoch',
+          windowStart: iso(T0 + i * 30 * 60_000),
+        };
+        createWindow(db, {
+          ...key,
+          windowEnd: iso(T0 + (i + 1) * 30 * 60_000),
+          geometry: { frequency: 'minute', interval: 30, startTime: CONFIG.startTime },
+          origin: 'live',
+        });
+        if (i % 10 === 9) {
+          expect(linkWindowRun(db, key, `run-old-${i}`, 'fire')).toBe(true);
+          expect(
+            retryWindow(db, key, {
+              runId: `run-old-${i}`,
+              runStatus: 'failure',
+              attempt: 1,
+              nextAttemptAtMs: T0 + 10 * 60 * 60_000,
+            }),
+          ).toBe(true);
+        }
+        keys.push(key);
+      }
+      const svc = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => T0 + 60 * 60_000,
+      });
+
+      svc.sync();
+
+      for (const key of keys) {
+        expect(getWindowState(db, key)?.status).toBe('superseded');
+      }
+    });
+
     it('sync supersedes old-epoch retry_pending debris of an UNBOUND trigger (before the unbound skip)', () => {
       const { db } = freshDb();
       const trigger = seedTumbling(db, { pipelineVersionId: null, window: CONFIG });
