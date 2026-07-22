@@ -92,20 +92,125 @@ const DAY_MS = 86_400_000;
 const MAX_PERIOD_PROBES = 1000;
 
 /**
- * The period model for a `frequency`, anchored at `anchor`:
+ * The period model for a `frequency`, anchored at `anchor`, INTERPRETED in
+ * `timeZone`:
  *  - `ordinal(ms)` = which period (relative to the anchor's period) an instant is
  *    in — 0 for the anchor's own period, increasing forward. Qualifying ⇔
  *    `ordinal % interval === 0`.
  *  - `startInstant(rel)` = the epoch-ms START of the period `rel` steps after the
  *    anchor's period — the instant the jump seeks the first occurrence at/after.
- * All computed in UTC (matching the whole firing chain's UTC contract); the
- * fixed-length units (minute/hour/day/week) are pure integer arithmetic with no
- * DST/leap hazard, and month is calendar arithmetic on UTC year/month.
+ *
+ * ## UTC vs zone-aware (#5 S5b-timeZone stepping, #623)
+ *
+ * For `timeZone === 'UTC'` (the default) AND for the fixed-length `minute`/`hour`
+ * units in ANY zone, the model is pure integer UTC arithmetic — no DST/leap hazard.
+ * `minute`/`hour` periods are absolute durations a zone cannot stretch: an every-N
+ * minute/hour cadence is the same wall-independent grid regardless of `timeZone`,
+ * so the UTC arithmetic is correct even under a non-UTC recurrence (verified
+ * empirically: croner's every-minute enumeration is uniform 60s across DST). This
+ * keeps the whole UTC path byte-identical to pre-#623.
+ *
+ * For a NON-UTC `day`/`week`/`month` (calendar units whose length AND boundary move
+ * with the zone's local calendar — a DST day is 23h or 25h), the grid is the zone's
+ * LOCAL calendar: `ordinal` counts local calendar days/weeks/months, and
+ * `startInstant` returns the exact instant a local period begins. That local-period
+ * boundary is found by MONOTONIC BISECTION on the local-day number
+ * (`localDayStartInstant`) rather than an offset-inverse, because a naive
+ * wall-clock→instant inverse OVER-CORRECTS across a DST gap at midnight (a rare
+ * zone that springs forward at 00:00, e.g. historical America/Santiago) and lands
+ * on the PREVIOUS local day. Bisection is exact for every transition — gap,
+ * fall-back, sub-hour-offset, even a fully-skipped civil day (Samoa 2011-12-30) —
+ * because the local-day number is monotonic non-decreasing in the instant.
+ *
+ * `hour` in a non-UTC zone is NOT modelled here — it is refused up front by
+ * `nextOccurrence` (and the write schema), because croner enumerates an `hour`
+ * pattern by WALL-CLOCK hour, which skips/repeats an absolute hour across DST
+ * (verified empirically), so absolute-hour ordinals mis-qualify. See `nextOccurrence`.
  */
 function periodModel(
   frequency: RecurrenceFrequency,
   anchor: number,
+  timeZone: string,
 ): { ordinal: (ms: number) => number; startInstant: (rel: number) => number } {
+  const zoneAware =
+    timeZone !== 'UTC' && (frequency === 'day' || frequency === 'week' || frequency === 'month');
+
+  if (zoneAware) {
+    // One formatter for the whole model (construction is the costly part; reuse it).
+    // Only Y/M/D is extracted — never the hour — so the ICU "24:00 vs 00:00" midnight
+    // quirk cannot bite, and the whole model needs only the local calendar date.
+    const dtf = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const localYmd = (ms: number): { y: number; mo: number; d: number } => {
+      const parts = dtf.formatToParts(new Date(ms));
+      const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
+      return { y: get('year'), mo: get('month'), d: get('day') };
+    };
+    // A stable integer per LOCAL calendar day: the civil day number of the zone's
+    // local date. Monotonic non-decreasing in `ms` (local time never runs backward
+    // across a day boundary), which is what makes the bisection below exact.
+    const localDayNumber = (ms: number): number => {
+      const { y, mo, d } = localYmd(ms);
+      return Date.UTC(y, mo - 1, d) / DAY_MS;
+    };
+    // The FIRST instant whose local-day number is >= `targetDayNum` — i.e. the exact
+    // instant the target local calendar day BEGINS in `timeZone`. Bisection over a
+    // ±1-day window brackets the boundary for every real IANA offset (|offset| < 24h,
+    // real range +14/-12), and is exact for any DST transition because
+    // `localDayNumber` is monotonic. On a fully-SKIPPED civil day (no local instant
+    // maps to it) this returns the next day's start; the stepping loop re-validates
+    // `ordinal` after the jump, so a skipped qualifying period is just omitted at the
+    // cost of a bounded extra probe or two — never a mis-fire, and the calendar-day
+    // grid keeps subsequent period parity aligned.
+    const localDayStartInstant = (targetDayNum: number): number => {
+      let lo = targetDayNum * DAY_MS - DAY_MS; // localDayNumber(lo) < targetDayNum
+      let hi = targetDayNum * DAY_MS + DAY_MS; // localDayNumber(hi) >= targetDayNum
+      while (hi - lo > 1) {
+        const mid = lo + Math.floor((hi - lo) / 2);
+        if (localDayNumber(mid) >= targetDayNum) hi = mid;
+        else lo = mid;
+      }
+      return hi;
+    };
+
+    if (frequency === 'month') {
+      const { y, mo } = localYmd(anchor);
+      const anchorOrd = y * 12 + (mo - 1);
+      return {
+        ordinal: (ms) => {
+          const p = localYmd(ms);
+          return p.y * 12 + (p.mo - 1) - anchorOrd;
+        },
+        // Start of the 1st (local calendar) of the target month.
+        startInstant: (rel) => {
+          const abs = anchorOrd + rel;
+          const firstOfMonthDayNum = Date.UTC(Math.floor(abs / 12), abs % 12, 1) / DAY_MS;
+          return localDayStartInstant(firstOfMonthDayNum);
+        },
+      };
+    }
+    if (frequency === 'week') {
+      // A "week" is a rolling 7-day block from the anchor's LOCAL calendar day.
+      const anchorDay = localDayNumber(anchor);
+      return {
+        ordinal: (ms) => Math.floor((localDayNumber(ms) - anchorDay) / 7),
+        startInstant: (rel) => localDayStartInstant(anchorDay + rel * 7),
+      };
+    }
+    // day
+    const anchorDay = localDayNumber(anchor);
+    return {
+      ordinal: (ms) => localDayNumber(ms) - anchorDay,
+      startInstant: (rel) => localDayStartInstant(anchorDay + rel),
+    };
+  }
+
+  // UTC path (default zone, and minute/hour in any zone) — unchanged pre-#623
+  // arithmetic: pure integer, no DST/leap hazard.
   if (frequency === 'month') {
     const anchorOrd = new Date(anchor).getUTCFullYear() * 12 + new Date(anchor).getUTCMonth();
     return {
@@ -197,19 +302,29 @@ function periodModel(
  * exact spin `InvalidScheduleError` exists to prevent). Two defenses: an unresolvable
  * non-UTC zone is rejected up front as `InvalidScheduleError` (the belt), AND the
  * whole croner interaction — construct AND every `nextRun` — is wrapped so ANY
- * croner throw (bad cron OR a zone `TypeError`) surfaces typed, never raw. `timeZone`
- * only affects `interval === 1`: `interval > 1` with a non-UTC zone is refused at the
- * write boundary (#552; zone-aware stepping deferred to #623) AND fail-closed here as
- * `InvalidScheduleError` (a lenient-read imported row could pair them), so the UTC
- * period model below is never asked to reason about a non-UTC grid.
+ * croner throw (bad cron OR a zone `TypeError`) surfaces typed, never raw.
+ *
+ * `timeZone` governs `interval === 1` fully, and `interval > 1` ("every N periods")
+ * for the `day`/`week`/`month`/`minute` frequencies (#623): `day`/`week`/`month` step
+ * on the zone's LOCAL calendar grid (`periodModel` zone-aware branch), while `minute`
+ * is a fixed absolute cadence a zone cannot stretch (so its UTC grid is already
+ * correct). The one exception is `hour` stepping in a non-UTC zone: croner enumerates
+ * an `hour` pattern by WALL-CLOCK hour, which SKIPS or REPEATS an absolute hour across
+ * a DST transition (verified empirically, croner 10.0.1 — a NY fall-back skips an
+ * absolute hour; a 30-min-DST zone like Lord Howe repeats one), so the absolute-hour
+ * ordinal grid mis-qualifies. That single combination stays refused at the write
+ * boundary AND fail-closed here as `InvalidScheduleError` (a lenient-read imported row
+ * could still pair them), until a wall-clock-hour-aware model lands (follow-up).
  *
  * @throws {InvalidScheduleError} if `schedule` is not a cron string croner can
  *   parse (a malformed bound would also surface here — but callers pass
  *   `z.string().datetime()`-validated bounds, so that path is a belt), if `timeZone`
  *   is a non-UTC zone the runtime cannot resolve, if croner throws at any `nextRun`
- *   (e.g. a zone that slips past the belt), OR if a `step` with `interval > 1`
+ *   (e.g. a zone that slips past the belt), if a `step` with `interval > 1`
  *   carries a non-finite `anchorEpochMs` (a write-impossible
- *   interval>1-without-startTime row — fail CLOSED, never over-fire).
+ *   interval>1-without-startTime row — fail CLOSED, never over-fire), OR if a `step`
+ *   with `interval > 1` pairs an `hour` frequency with a non-UTC zone (the
+ *   wall-clock-hour hazard above — fail CLOSED, never mis-qualify).
  */
 export function nextOccurrence(
   schedule: string,
@@ -233,17 +348,17 @@ export function nextOccurrence(
   if (step !== undefined && step.interval > 1 && !Number.isFinite(step.anchorEpochMs)) {
     throw new InvalidScheduleError(schedule, new Error('interval > 1 requires a finite anchor'));
   }
-  //  - #552/#623: the write schema refuses interval>1 with a non-UTC zone (zone-aware
-  //    stepping is deferred), but the READ shape is lenient — a corrupt/imported row
-  //    could pair them. The stepping period model is UTC calendar arithmetic while
-  //    croner would interpret the cron in the non-UTC zone: a two-grid mismatch that
-  //    silently mis-qualifies periods near a day boundary. Fail CLOSED here (same
-  //    discipline as the anchor guard) rather than mis-fire, until #623 lands the
-  //    zone-aware period model.
-  if (step !== undefined && step.interval > 1 && timeZone !== 'UTC') {
+  //  - #623: `hour`-frequency stepping in a non-UTC zone is refused (write schema
+  //    too), but the READ shape is lenient — a corrupt/imported row could pair them.
+  //    croner enumerates an `hour` pattern by WALL-CLOCK hour, which skips/repeats an
+  //    absolute hour across DST, so the absolute-hour period grid mis-qualifies. Fail
+  //    CLOSED here (same discipline as the anchor guard) rather than mis-fire. (The
+  //    other frequencies ARE supported: day/week/month via the zone-aware period
+  //    model, minute as a zone-independent absolute cadence.)
+  if (step !== undefined && step.interval > 1 && step.frequency === 'hour' && timeZone !== 'UTC') {
     throw new InvalidScheduleError(
       schedule,
-      new Error('interval > 1 with a non-UTC timeZone is not supported yet (#623)'),
+      new Error('interval > 1 hour-frequency stepping with a non-UTC timeZone is not supported'),
     );
   }
 
@@ -271,9 +386,10 @@ export function nextOccurrence(
       return next === null ? null : next.getTime();
     }
 
-    // #550 — every-N-period stepping (UTC-only: interval>1 with a non-UTC zone is
-    // fail-closed above, so the UTC period model is correct here).
-    const { ordinal, startInstant } = periodModel(step.frequency, step.anchorEpochMs);
+    // #550 — every-N-period stepping. `periodModel` steps on the zone's LOCAL calendar
+    // for a non-UTC day/week/month (#623) and on the UTC/absolute grid otherwise; the
+    // one unsafe combination (non-UTC hour) is fail-closed above.
+    const { ordinal, startInstant } = periodModel(step.frequency, step.anchorEpochMs, timeZone);
     let candidate = cron.nextRun(new Date(fromEpochMs));
     for (let probes = 0; candidate !== null && probes < MAX_PERIOD_PROBES; probes++) {
       const rel = ordinal(candidate.getTime());

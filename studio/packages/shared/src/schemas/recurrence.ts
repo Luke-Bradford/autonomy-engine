@@ -34,11 +34,12 @@ import { z } from 'zod';
  *   its real consumer — non-UTC firing threaded through `nextOccurrence` — not as a
  *   `'UTC'`-only inert field. Absent ⇒ UTC (the run-window contract), so a
  *   timeZone-free recurrence is byte-identical to a pre-#552 one. **Two seams the
- *   caller must know:** (1) `interval > 1` ("every N periods") stays UTC-only for
- *   now — the stepping calculator's period grid is UTC calendar arithmetic; a
- *   zone-aware period model (with its DST-inverse hazards) is deferred to #623, so
- *   the write boundary REFUSES `interval > 1` with a non-UTC zone rather than
- *   shipping subtly-wrong DST stepping. (2) **run windows stay UTC** — the
+ *   caller must know:** (1) `interval > 1` ("every N periods") is zone-aware for
+ *   `day`/`week`/`month` (the stepping calculator steps on the zone's LOCAL calendar
+ *   grid, #623) and `minute` (a zone-independent absolute cadence); only `hour`
+ *   stepping stays UTC-only, because croner enumerates hours by wall-clock and so
+ *   skips/repeats an absolute hour across DST — the write boundary REFUSES `interval
+ *   > 1` + non-UTC ONLY for an `hour` frequency. (2) **run windows stay UTC** — the
  *   `timeZone` governs ONLY cron interpretation; `isWithinRunWindows` still gates in
  *   UTC, so a NY-zoned recurrence gated by a UTC run window is coherent but
  *   two-zoned (documented at the `schedule-tick.ts` gate).
@@ -129,8 +130,8 @@ export const RecurrenceSchema = z.object({
    * (UTC-`Z`), so they are unaffected by this zone — the zone governs only WHICH
    * wall-clock instants the pattern picks, not the window it is clipped to. Only a
    * FORMAT-free string on the lenient READ shape (an old/imported row never throws);
-   * the "must be a resolvable IANA zone" + "interval > 1 stays UTC-only" rules are
-   * WRITE concerns below.
+   * the "must be a resolvable IANA zone" + "interval > 1 is UTC-only for an `hour`
+   * frequency" rules are WRITE concerns below.
    */
   timeZone: z.string().optional(),
 });
@@ -208,19 +209,28 @@ export const RecurrenceWriteSchema = RecurrenceSchema.superRefine((r, ctx) => {
       message: `timeZone must be a valid IANA zone (e.g. 'America/New_York', 'UTC') — '${r.timeZone}' is not resolvable`,
     });
   }
-  // #552 — "every N periods" (interval > 1) stays UTC-only for now. The stepping
-  // calculator's period grid is UTC calendar arithmetic; a zone-aware period model
-  // (local-calendar day/week/month boundaries + the DST-inverse local-midnight→
-  // instant conversion) is a genuine expansion deferred to #623. Refuse a non-UTC
-  // zone here rather than ship subtly-wrong DST stepping (interval === 1 gets full
-  // non-UTC support — croner handles it natively). Absent or 'UTC' ⇒ permitted.
-  if (r.interval > 1 && r.timeZone !== undefined && r.timeZone !== 'UTC') {
+  // #623 — "every N periods" (interval > 1) in a non-UTC zone is supported for
+  // `day`/`week`/`month` (the server stepping calculator steps on the zone's LOCAL
+  // calendar grid) and `minute` (a fixed absolute cadence a zone cannot stretch). The
+  // one exception is `hour`: croner enumerates an `hour` pattern by WALL-CLOCK hour,
+  // which skips/repeats an ABSOLUTE hour across a DST transition (verified
+  // empirically), so the calculator's absolute-hour period grid mis-qualifies. Refuse
+  // that single combination rather than ship subtly-wrong DST stepping; a
+  // wall-clock-hour-aware model is a follow-up. (interval === 1 gets full non-UTC
+  // support at every frequency — croner handles it natively.) Absent/'UTC' ⇒ permitted.
+  if (
+    r.interval > 1 &&
+    r.frequency === 'hour' &&
+    r.timeZone !== undefined &&
+    r.timeZone !== 'UTC'
+  ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['timeZone'],
       message:
-        'interval > 1 ("every N periods") is UTC-only for now — a non-UTC timeZone with ' +
-        'stepping is deferred to #623. Use interval: 1 with this timeZone, or omit the timeZone.',
+        "interval > 1 ('every N periods') for an 'hour' recurrence is UTC-only — croner " +
+        'enumerates hours by wall-clock, which skips/repeats an absolute hour across DST. ' +
+        'Use interval: 1 with this timeZone, omit the timeZone, or use a day/week/month frequency.',
     });
   }
 
