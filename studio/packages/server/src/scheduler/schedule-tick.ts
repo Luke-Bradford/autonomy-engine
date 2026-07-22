@@ -5,7 +5,7 @@ import {
   type ScheduledWakeup,
   type Trigger,
 } from '@autonomy-studio/shared';
-import { getTrigger } from '../repo/triggers.js';
+import { getParsedTrigger } from '../repo/triggers.js';
 import { armWakeup } from '../repo/scheduled-wakeups.js';
 import type { Db } from '../repo/types.js';
 import { UnboundTriggerError, type FireContext, type FireResult } from '../run/launcher.js';
@@ -265,7 +265,20 @@ export function createScheduleTickHandler(deps: ScheduleTickDeps): WakeupHandler
     refSchema: ScheduleTickRefSchema,
     fire(row: ScheduledWakeup, delivery, tx: Db): WakeupFireResult {
       const ref = ScheduleTickRefSchema.parse(row.ref);
-      const trigger = getTrigger(tx, ref.triggerId);
+      const read = getParsedTrigger(tx, ref.triggerId);
+
+      // #637 — a CORRUPT trigger row must settle the chain, not throw: a throw
+      // rolls back the fire tx, so the pending row would re-fire + error-log on
+      // every tick, forever. Settle + warn; `sync()` re-seeds if the row is
+      // later repaired (the `invalid_schedule` discipline).
+      if (read.status === 'unparseable') {
+        log.warn(
+          { triggerId: ref.triggerId, err: read.error },
+          'schedule tick: trigger row unparseable — settling the chain (sync() re-seeds after repair)',
+        );
+        return { status: 'suppressed', reason: 'trigger_unparseable' };
+      }
+      const trigger = read.status === 'found' ? read.trigger : null;
 
       // Terminal suppressions — the schedule this row served no longer exists;
       // settle and stop the chain. `scheduler.sync()` re-seeds if a NEW chain is

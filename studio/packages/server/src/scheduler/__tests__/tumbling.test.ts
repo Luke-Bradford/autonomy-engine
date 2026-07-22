@@ -1,3 +1,4 @@
+import { eq } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
 import {
   CATALOG_VERSION,
@@ -7,6 +8,7 @@ import {
   type TriggerMode,
   type WindowConfig,
 } from '@autonomy-studio/shared';
+import { triggers } from '../../db/schema.js';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createTrigger, deleteTrigger, updateTrigger } from '../../repo/triggers.js';
@@ -166,6 +168,17 @@ function keyFor(trigger: Trigger, startMs: number): WindowKey {
     configEpoch: windowConfigEpoch(trigger.window),
     windowStart: iso(startMs),
   };
+}
+
+/** #637 — corrupt a trigger row IN PLACE, past the write API (which re-parses):
+ * an out-of-enum concurrency policy is valid JSON with no CHECK constraint, so
+ * the row persists but `TriggerSchema.parse` rejects it — the hand-edit/legacy
+ * drift vector the ticket names. */
+function corruptTriggerRow(db: Db, id: string): void {
+  db.update(triggers)
+    .set({ concurrency: { policy: 'nope' } as unknown as Trigger['concurrency'] })
+    .where(eq(triggers.id, id))
+    .run();
 }
 
 describe('window math', () => {
@@ -510,6 +523,37 @@ describe('window_due handler — fire + continue the chain', () => {
     expect(getWakeup(db, row.id)?.status).toBe('suppressed');
     expect((launcher as ReturnType<typeof fakeLauncher>).fires).toHaveLength(0);
     expect(pendingWindows(db)).toHaveLength(0);
+  });
+
+  // #637 — a poison (unparseable) trigger row must SETTLE the chain, never
+  // throw: a handler throw rolls back the fire tx, so the pending row would
+  // re-fire + error-log on every tick, forever (`sync()` re-seeds after repair).
+  it('unparseable trigger row → suppressed trigger_unparseable, NO re-arm, NO throw (#637)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const trigger = seedTumbling(db, { pipelineVersionId: pv });
+    const row = armWindow(db, trigger, T0, W0_END);
+    corruptTriggerRow(db, trigger.id);
+
+    // Direct fire pins the suppression REASON (the clock only debug-logs it)…
+    const launcher = fakeLauncher();
+    const { service } = harness(db, () => W0_END, launcher);
+    const result = service.handler.fire(
+      row,
+      { scheduledFor: W0_END, firedAt: W0_END, latenessMs: 0 },
+      db,
+    );
+    expect(result).toMatchObject({ status: 'suppressed', reason: 'trigger_unparseable' });
+    expect(launcher.fires).toHaveLength(0);
+    expect(pendingWindows(db).filter((w) => w.id !== row.id)).toHaveLength(0); // no re-arm
+    expect(getWindowState(db, keyFor(trigger, T0))).toBeNull(); // no window created
+
+    // …and the REAL clock settles the row durably (not pending-forever).
+    const { clock } = harness(db, () => W0_END, launcher);
+    expect(() => clock.tick()).not.toThrow();
+    expect(getWakeup(db, row.id)?.status).toBe('suppressed');
+    clock.tick(); // settled — nothing re-delivers
+    expect(launcher.fires).toHaveLength(0);
   });
 });
 
@@ -922,6 +966,89 @@ describe('completion: bus tap + boot reconcile', () => {
 
     expect(launcher.fires).toHaveLength(0);
     expect(getWindowState(db, key)?.status).toBe('waiting');
+  });
+
+  // #637 — `reconcile()` is called BARE at boot (`index.ts`), so a poison
+  // trigger row with a stranded waiting window used to throw out of the whole
+  // scan: one corrupt row ABORTED SERVER BOOT and starved every other
+  // trigger's reconcile. It must skip-and-warn instead (`listParsedTriggers`'
+  // per-row discipline), still healing the healthy triggers.
+  it('boot reconcile SURVIVES a poison trigger row and still heals the healthy one (#637)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const poison = seedTumbling(db, { pipelineVersionId: pv });
+    const healthy = seedTumbling(db, { pipelineVersionId: pv });
+    // Both triggers have a stranded waiting window (crash between window tx and fire).
+    for (const t of [poison, healthy]) {
+      createWindow(db, {
+        ...keyFor(t, T0),
+        windowEnd: iso(W0_END),
+        geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+        origin: 'live',
+      });
+    }
+    corruptTriggerRow(db, poison.id);
+
+    const warns: unknown[] = [];
+    const log = {
+      error: () => undefined,
+      warn: (_obj: unknown, msg?: string) => warns.push(msg),
+      debug: () => undefined,
+    };
+    const launcher = fakeLauncher([{ outcome: 'started', runId: 'run-heal' }]);
+    const service = createTumblingService({ db, arm: () => undefined, launcher, log });
+    expect(() => service.reconcile()).not.toThrow();
+
+    // The healthy trigger's stranded window still healed…
+    expect(getWindowState(db, keyFor(healthy, T0))?.runId).toBe('run-heal');
+    // …the poison one was skipped (inert, not lost) and the corruption reported.
+    expect(getWindowState(db, keyFor(poison, T0))?.status).toBe('waiting');
+    expect(warns.length).toBeGreaterThan(0);
+  });
+
+  it('the completion tap tolerates a poison trigger row: settles the window, skips the drain (#637)', async () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const trigger = seedTumbling(db, { pipelineVersionId: pv });
+    const { key, run } = linkedWindow(db, trigger, pv);
+    updateRun(db, run.id, { status: 'success', finishedAt: W0_END + 1 });
+    corruptTriggerRow(db, trigger.id);
+
+    // The pre-fix tap also settled (the throw came AFTER `settleIfTerminal`,
+    // caught by the tap's own try/catch) — what the fix changes is the
+    // reporting: a deliberate per-skip WARN, not caught-error spam. Collect
+    // both channels so the test pins that distinction.
+    const warns: unknown[] = [];
+    const errors: unknown[] = [];
+    const log = {
+      error: (_obj: unknown, msg?: string) => errors.push(msg),
+      warn: (_obj: unknown, msg?: string) => warns.push(msg),
+      debug: () => undefined,
+    };
+    const bus = createRunEventBus();
+    const service = createTumblingService({
+      db,
+      arm: () => undefined,
+      launcher: fakeLauncher(),
+      log,
+    });
+    service.subscribeCompletion(bus);
+    bus.publish({
+      id: 'evt1',
+      runId: run.id,
+      seq: 9,
+      type: 'run.finished',
+      payload: { outcome: 'success' },
+      ts: W0_END + 1,
+    });
+    await Promise.resolve();
+
+    // The settle (derived from the RUN row) still lands; only the
+    // materialize-drain kick — which needs the trigger — is skipped, and the
+    // skip is a WARN naming the corruption, not a caught-throw error.
+    expect(getWindowState(db, key)?.status).toBe('succeeded');
+    expect(warns.some((m) => typeof m === 'string' && m.includes('unparseable'))).toBe(true);
+    expect(errors).toHaveLength(0);
   });
 });
 

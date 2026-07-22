@@ -23,7 +23,7 @@ import {
 } from '../repo/runs.js';
 import { getPipelineIdForVersion } from '../repo/pipeline-versions.js';
 import { getPipeline } from '../repo/pipelines.js';
-import { getTrigger } from '../repo/triggers.js';
+import { getParsedTrigger } from '../repo/triggers.js';
 import { startRun, terminalizeInterrupted, type DriveDeps, type DriveLog } from './driver.js';
 
 /**
@@ -414,7 +414,21 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       const candidates = queuedTriggerCandidatesForPipeline(db, pipelineId);
       let admitted = false;
       for (const candidate of candidates) {
-        const triggerCapacity = admissionCapacity(getTrigger(db, candidate.triggerId));
+        // #637 — lenient read: this drain runs on boot (`recoverQueued`), on
+        // run settle, and on the bus tap, so a poison (unparseable) trigger row
+        // must skip-and-warn — a throw here aborted boot / became an unhandled
+        // rejection / starved every later candidate's queued rows. The corrupt
+        // trigger's own rows stay durably `queued` until the row is repaired.
+        const read = getParsedTrigger(db, candidate.triggerId);
+        if (read.status === 'unparseable') {
+          deps.log?.warn?.(
+            { triggerId: candidate.triggerId, err: read.error },
+            'queue drain skipped an unparseable trigger row (its queued runs stay queued)',
+          );
+          continue;
+        }
+        const trigger = read.status === 'found' ? read.trigger : null;
+        const triggerCapacity = admissionCapacity(trigger);
         if (countActiveRunsForTrigger(db, candidate.triggerId) >= triggerCapacity) continue;
         // PIPELINE-scoped pick: a trigger rebound to another pipeline mid-queue
         // can hold a globally-older FOREIGN-pipeline row — admitting that here

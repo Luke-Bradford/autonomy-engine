@@ -1,3 +1,4 @@
+import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import {
   CATALOG_VERSION,
@@ -15,6 +16,7 @@ import {
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createTrigger, updateTrigger } from '../../repo/triggers.js';
+import { triggers } from '../../db/schema.js';
 import { listRunEvents } from '../../repo/run-events.js';
 import {
   countActiveRunsForPipeline,
@@ -538,6 +540,45 @@ describe('RunLauncher — #5 S11a tumbling `maxConcurrentWindows` widens the que
     const runs = listRuns(db, { triggerId: trigger.id });
     expect(runs.filter((r) => r.status === 'running')).toHaveLength(2);
     expect(runs.filter((r) => r.status === 'queued')).toHaveLength(1);
+  });
+
+  // #637 — the drain runs on boot (`recoverQueued`), on settle, and on the bus
+  // tap: a poison (unparseable) trigger row must skip-and-warn, not throw — a
+  // throw here aborted boot / became an unhandled rejection / starved every
+  // later candidate's queued rows.
+  it('recoverQueued SURVIVES a poison trigger row and still admits the healthy waiter (#637)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const poison = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const healthy = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    // One durable waiter each (the restart shape); the poison one is OLDER, so
+    // the drain meets it first and must skip PAST it, not abort.
+    for (const [i, t] of [poison, healthy].entries()) {
+      createRun(db, {
+        pipelineVersionId: pvId,
+        ownerId: 'local',
+        triggerId: t.id,
+        parentRunId: null,
+        params: {},
+        status: 'queued',
+        queuedAt: Date.now() + i,
+      });
+    }
+    // Corrupt the poison row past the write API (out-of-enum concurrency
+    // policy: valid JSON, no CHECK, `TriggerSchema` rejects).
+    db.update(triggers)
+      .set({ concurrency: { policy: 'nope' } as unknown as Concurrency })
+      .where(eq(triggers.id, poison.id))
+      .run();
+
+    const launcher = createRunLauncher(deps(db, { nodes: { a: { hang: true } } }));
+    expect(() => launcher.recoverQueued()).not.toThrow();
+    await launcher.whenIdle();
+
+    // The healthy trigger's waiter was admitted; the poison one's stays
+    // durably `queued` (inert, not lost) until the row is repaired.
+    expect(listRuns(db, { triggerId: healthy.id })[0]?.status).toBe('running');
+    expect(listRuns(db, { triggerId: poison.id })[0]?.status).toBe('queued');
   });
 
   it('a tumbling trigger WITHOUT the cap keeps the single queue slot (legacy)', () => {
