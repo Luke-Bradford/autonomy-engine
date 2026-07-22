@@ -440,6 +440,56 @@ describe('schedule_tick — ref construction + bounded re-arm (#5 S5b-2, #549)',
     expect('interval' in buildScheduleTickRef(every1)).toBe(false);
   });
 
+  // #5 S5b-timeZone (#552) — a timeZone edit leaves the derived cron IDENTICAL (the
+  // zone is a croner interpretation option, not part of the pattern), so the ref
+  // carries `timeZone` (only when non-UTC) to make a zone edit read as stale.
+  it('timeZone carried in the ref ONLY when non-UTC; a timeZone edit reads as stale', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const ny = seedTrigger(db, {
+      pipelineVersionId: pv,
+      recurrence: {
+        frequency: 'day',
+        interval: 1,
+        schedule: { hours: [9] },
+        timeZone: 'America/New_York',
+      },
+    });
+    expect(buildScheduleTickRef(ny)).toEqual({
+      triggerId: ny.id,
+      schedule: '0 9 * * *',
+      timeZone: 'America/New_York',
+    });
+    // Edit the zone NY → London: cron is byte-identical, but the ref's timeZone changes.
+    const london = updateTrigger(db, ny.id, {
+      recurrence: {
+        frequency: 'day',
+        interval: 1,
+        schedule: { hours: [9] },
+        timeZone: 'Europe/London',
+      },
+    });
+    if (!london) throw new Error('update failed');
+    expect(london.schedule).toBe(ny.schedule); // cron genuinely unchanged
+    expect(isRefFresh(london, buildScheduleTickRef(ny))).toBe(false);
+
+    // Absent timeZone OMITS the key — byte-identical to a pre-#552 ref (unzoned ⇒
+    // UTC), so a row armed before this shipped stays fresh on deploy.
+    const unzoned = seedTrigger(db, {
+      pipelineVersionId: pv,
+      recurrence: { frequency: 'day', interval: 1, schedule: { hours: [9] } },
+    });
+    expect('timeZone' in buildScheduleTickRef(unzoned)).toBe(false);
+    // Explicit UTC is behaviourally identical to unzoned → also OMITS the key, so a
+    // UTC recurrence's ref stays byte-identical to an unzoned one (and to pre-#552).
+    const utc = seedTrigger(db, {
+      pipelineVersionId: pv,
+      recurrence: { frequency: 'day', interval: 1, schedule: { hours: [9] }, timeZone: 'UTC' },
+    });
+    expect('timeZone' in buildScheduleTickRef(utc)).toBe(false);
+    expect(isRefFresh(unzoned, buildScheduleTickRef(utc))).toBe(true);
+  });
+
   it('a stepped (interval>1) trigger re-arms the NEXT qualifying occurrence, not the next daily slot', () => {
     const { db } = freshDb();
     const pv = seedVersion(db);

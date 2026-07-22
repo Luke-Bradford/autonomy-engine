@@ -8,6 +8,7 @@ import {
   isRefFresh,
   isSchedulable,
   recurrenceStep,
+  recurrenceTimeZone,
   SCHEDULE_TICK_KIND,
   ScheduleTickRefSchema,
   scheduleBounds,
@@ -101,7 +102,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // future `startTime` seeds the first in-window slot; a past `endTime` seeds
       // nothing (`next === null`). `recurrenceStep` (#5 S5b, #550) gates it to the
       // qualifying periods for an `interval > 1` "every N periods" recurrence.
-      next = nextOccurrence(schedule, now(), scheduleBounds(trigger), recurrenceStep(trigger));
+      // `recurrenceTimeZone` (#5 S5b, #552) interprets the cron in the recurrence's
+      // zone (UTC when unzoned) — seed + re-arm MUST use the same zone.
+      next = nextOccurrence(
+        schedule,
+        now(),
+        scheduleBounds(trigger),
+        recurrenceStep(trigger),
+        recurrenceTimeZone(trigger),
+      );
     } catch (err) {
       if (err instanceof InvalidScheduleError) {
         // A cron the schema let through but croner rejects. Skip THIS trigger,

@@ -269,3 +269,118 @@ describe('nextOccurrence — interval > 1 stepping (every-N-period, startTime-an
     );
   });
 });
+
+/**
+ * #5 S5b-timeZone (#552) — `timeZone` interprets the cron pattern in a non-UTC zone.
+ * These pin croner 10.0.1's native wall-clock/DST behaviour (croner is EXACT-pinned,
+ * so this suite fails LOUDLY if an upgrade changes it) and the invalid-zone
+ * fail-closed guard against the alarm-spin the class exists to prevent.
+ */
+describe('nextOccurrence — timeZone (non-UTC firing, #552)', () => {
+  const at = (iso: string) => Date.parse(iso);
+  const daily9 = '0 9 * * *';
+
+  it('default (absent/UTC) is unchanged — a daily 09:00 resolves to 09:00Z', () => {
+    const from = at('2026-07-15T08:30:00.000Z');
+    // Both the omitted-param default and an explicit 'UTC' resolve identically.
+    expect(nextOccurrence(daily9, from)).toBe(at('2026-07-15T09:00:00.000Z'));
+    expect(nextOccurrence(daily9, from, {}, undefined, 'UTC')).toBe(at('2026-07-15T09:00:00.000Z'));
+  });
+
+  it('interprets the pattern in the given zone — 09:00 America/New_York is a UTC-offset instant', () => {
+    // Mid-summer NY is EDT (UTC-4), so 09:00 NY = 13:00Z.
+    expect(
+      nextOccurrence(daily9, at('2026-07-15T00:00:00Z'), {}, undefined, 'America/New_York'),
+    ).toBe(at('2026-07-15T13:00:00Z'));
+    // Mid-winter NY is EST (UTC-5), so 09:00 NY = 14:00Z.
+    expect(
+      nextOccurrence(daily9, at('2026-01-15T00:00:00Z'), {}, undefined, 'America/New_York'),
+    ).toBe(at('2026-01-15T14:00:00Z'));
+  });
+
+  it('tracks the DST spring-forward: 09:00 NY moves 14:00Z→13:00Z across 2026-03-08', () => {
+    // The daily 09:00 NY occurrence stays 09:00 wall-clock; its UTC instant shifts an
+    // hour earlier the day the clocks spring forward (02:00 EST → 03:00 EDT). This is
+    // the whole point of a wall-clock zone vs a fixed offset.
+    // From the evening of 03-07 (past that day's 14:00Z EST occurrence): the next is
+    // 03-08 09:00 EDT = 13:00Z (an hour earlier in UTC than an EST day).
+    const afterSwitch = nextOccurrence(
+      daily9,
+      at('2026-03-07T18:00:00Z'),
+      {},
+      undefined,
+      'America/New_York',
+    );
+    expect(afterSwitch).toBe(at('2026-03-08T13:00:00Z')); // 09:00 EDT (clocks sprung forward)
+    // From midnight-eve 03-06 (before that day's 14:00Z occurrence): the next is
+    // 03-06 09:00 EST = 14:00Z — an EST day sits an hour later in UTC than an EDT one.
+    const beforeSwitch = nextOccurrence(
+      daily9,
+      at('2026-03-06T02:00:00Z'),
+      {},
+      undefined,
+      'America/New_York',
+    );
+    expect(beforeSwitch).toBe(at('2026-03-06T14:00:00Z')); // 09:00 EST, before the switch
+  });
+
+  it('fires a DST fall-back wall-time ONCE (croner picks the first occurrence)', () => {
+    // 01:30 NY occurs twice on 2026-11-01 (01:30 EDT then 01:30 EST). croner returns
+    // the FIRST (05:30Z), not a double-fire — characterize it so an upgrade can't
+    // silently change it.
+    expect(
+      nextOccurrence('30 1 * * *', at('2026-10-31T12:00:00Z'), {}, undefined, 'America/New_York'),
+    ).toBe(at('2026-11-01T05:30:00Z'));
+  });
+
+  it('bounds are absolute instants — a UTC startAt still clips a non-UTC recurrence', () => {
+    // The [startAt, stopAt) window is instants, independent of the cron's zone. A NY
+    // daily 09:00 with a UTC startAt at 2026-07-16T00:00:00Z skips the 07-15 occurrence
+    // (13:00Z, before the bound) and fires the 07-16 one.
+    const next = nextOccurrence(
+      daily9,
+      at('2026-07-15T00:00:00Z'),
+      { startAt: at('2026-07-16T00:00:00Z') },
+      undefined,
+      'America/New_York',
+    );
+    expect(next).toBe(at('2026-07-16T13:00:00Z'));
+  });
+
+  it('throws InvalidScheduleError (never a raw croner throw) for an unresolvable zone', () => {
+    // The belt: croner does NOT reject a bad zone at construct — it throws a raw
+    // TypeError at nextRun. A raw throw here would roll back inside the alarm clock's
+    // tx and re-deliver forever; it MUST surface as the typed error the handler
+    // suppresses. Assert BOTH that it's the typed error AND that no raw TypeError
+    // escapes the nextRun path.
+    expect(() =>
+      nextOccurrence(daily9, at('2026-07-15T00:00:00Z'), {}, undefined, 'Not/AZone'),
+    ).toThrow(InvalidScheduleError);
+    expect(() =>
+      nextOccurrence(daily9, at('2026-07-15T00:00:00Z'), {}, undefined, 'Not/AZone'),
+    ).not.toThrow(TypeError);
+    // Empty string would be silently interpreted as host-local by croner — reject it.
+    expect(() => nextOccurrence(daily9, at('2026-07-15T00:00:00Z'), {}, undefined, '')).toThrow(
+      InvalidScheduleError,
+    );
+  });
+
+  it('fails CLOSED on interval>1 + a non-UTC zone (write-refused, but a lenient-read row could pair them)', () => {
+    // The write schema refuses this pairing (#552; zone-aware stepping deferred to
+    // #623), but the READ shape is lenient — a corrupt/imported row could carry both.
+    // The UTC period model would mis-step against a NY-interpreted cron, so the firing
+    // chain fail-closes (settle, no mis-fire) rather than silently step on wrong days.
+    const step = {
+      frequency: 'day' as const,
+      interval: 2,
+      anchorEpochMs: at('2026-08-01T00:00:00Z'),
+    };
+    expect(() =>
+      nextOccurrence(daily9, at('2026-08-01T12:00:00Z'), {}, step, 'America/New_York'),
+    ).toThrow(InvalidScheduleError);
+    // interval>1 with UTC (or unzoned) still steps normally — this is the base case.
+    expect(nextOccurrence(daily9, at('2026-08-01T12:00:00Z'), {}, step, 'UTC')).toBe(
+      at('2026-08-03T09:00:00Z'),
+    );
+  });
+});

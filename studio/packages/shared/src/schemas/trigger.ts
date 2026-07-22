@@ -142,8 +142,8 @@ export const TriggerSchema = z.object({
    * schedule?}`), the authoring representation the UI round-trips and re-edits.
    * Null for a raw-cron / non-schedule trigger. Read-lenient (stored shape);
    * write validation + the recurrence↔schedule derivation live on the write
-   * path (`RecurrenceWriteSchema` + the repo). Bounds (start/end/timeZone) are
-   * S5b-2 (#549).
+   * path (`RecurrenceWriteSchema` + the repo). Bounds (start/end) are S5b-2
+   * (#549); the `timeZone` is S5b-timeZone (#552).
    */
   recurrence: RecurrenceSchema.nullable(),
   webhook: WebhookConfigSchema.nullable(),
