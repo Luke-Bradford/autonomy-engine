@@ -382,10 +382,11 @@ function refineLlmToolsCoupling(
 }
 
 /**
- * #2 L10a — the exact `{ tools, toolChoice, outputMode }` SLICE of a node's
- * config the save-time validator reads (`params.ts::validateLlmCallTools`),
- * mirroring `llmStructuredOutputSurfaceSchema`. NON-STRICT: only the tool
- * fields are picked; everything else passes through untouched.
+ * #2 L10a/L10b — the exact `{ tools, toolChoice, maxToolIterations, outputMode }`
+ * SLICE of a node's config the save-time validator reads
+ * (`params.ts::validateLlmCallTools`), mirroring
+ * `llmStructuredOutputSurfaceSchema`. NON-STRICT: only the tool fields are
+ * picked; everything else passes through untouched.
  */
 export const llmToolsSurfaceSchema = z
   .object({

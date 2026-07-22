@@ -2078,8 +2078,9 @@ function validateLlmCallOutput(node: Node, errors: string[]): void {
 }
 
 /**
- * #2 L10a — the tools-surface counterpart of `validateLlmCallOutput`: parse the
- * `{ tools, toolChoice, outputMode }` slice through `llmToolsSurfaceSchema`
+ * #2 L10a/L10b — the tools-surface counterpart of `validateLlmCallOutput`:
+ * parse the `{ tools, toolChoice, maxToolIterations, outputMode }` slice
+ * through `llmToolsSurfaceSchema`
  * (ToolDef shapes, unique names, the toolChoice/structured coupling) and
  * surface each issue as a node-scoped diagnostic. The EXPRESSION refs are
  * `scanLlmToolRefs`'s half (validateRefs); this is the config SHAPE half.

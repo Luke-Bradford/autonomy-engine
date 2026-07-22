@@ -464,9 +464,10 @@ export const anthropicAdapter: ConnectorAdapter = {
             },
           };
         },
-        // #2 L10b — the author's tool round-trip budget (absent = the L10a
-        // single round-trip) + the run signal (between-rounds cancellation).
-        input.data.maxToolIterations ?? 1,
+        // #2 L10b — the author's tool round-trip budget (absent → the generator's
+        // default of 1, the L10a single round-trip — one SSOT for the rule) +
+        // the run signal (between-rounds cancellation).
+        input.data.maxToolIterations,
         ctx.signal,
       );
       return;

@@ -864,6 +864,39 @@ describe('runTextWithTools (#2 L10b — bounded loop + telemetry + cancellation)
     expect(builtNext).toBe(false);
   });
 
+  it('prefers the cancelled terminal when an abort coincides with budget exhaustion', async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const events = await drain(
+      runTextWithTools(
+        'openai_api',
+        [ADDER],
+        'c',
+        'auto',
+        () => {
+          calls += 1;
+          // The run is cancelled while the budget-EXHAUSTING exchange is in
+          // flight — the abort is the truer fact for operator intent, so
+          // `cancelled` must win over `permanent` ("tool budget").
+          if (calls === 2) controller.abort();
+          return Promise.resolve({
+            type: 'toolUse' as const,
+            usage: USAGE,
+            capture: calls === 1 ? CAPTURE : undefined,
+            calls: [{ id: `t${calls}`, name: 'adder', args: { a: 1, b: 2 } }],
+            buildNext: () => 'next',
+          });
+        },
+        1,
+        controller.signal,
+      ),
+    );
+    const last = events[events.length - 1]!;
+    expect(last).toMatchObject({ type: 'failed', kind: 'cancelled' });
+    // The exhausting exchange is still billed → metered before the terminal.
+    expect(events.filter((e) => e.type === 'metered')).toHaveLength(2);
+  });
+
   it('defaults to the single L10a round-trip when no budget is passed', async () => {
     const events = await drain(runTextWithTools('ollama', [ADDER], 'conv0', 'auto', scripted(99)));
     const last = events[events.length - 1]!;

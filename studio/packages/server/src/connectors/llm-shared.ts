@@ -475,14 +475,15 @@ export async function* runStructuredWithRepair(
 }
 
 // ---------------------------------------------------------------------------
-// #2 L10a — local tool execution + the SINGLE-round-trip tool flow.
+// #2 L10a/L10b — local tool execution + the BOUNDED tool loop.
 //
 // The tool CONTRACT (`LlmToolDef` — pure, args-only expressions) is shared
 // (`catalog/llm-config.ts`); this block is the driver half: validate the
-// model's arguments, evaluate the expression, and drive the one bounded
-// tool round-trip inside ONE engine attempt (the spec's "opaque
-// driver-internal" model). The bounded MULTI-iteration loop + `tool.called`
-// telemetry are L10b; MCP + security policy are L10c.
+// model's arguments, evaluate the expression, and drive the bounded tool
+// loop (`maxToolIterations` round-trips, absent = 1 — the L10a single
+// round-trip) inside ONE engine attempt (the spec's "opaque driver-internal"
+// model), with per-executed-call `toolCalled` telemetry and between-rounds
+// cancellation. MCP + security policy are L10c.
 // ---------------------------------------------------------------------------
 
 /**
@@ -745,6 +746,14 @@ export async function* runTextWithTools<C>(
       yield outcome.succeeded;
       return;
     }
+    // Abort is checked BEFORE budget exhaustion: when a run is cancelled while
+    // its final (budget-exhausting) exchange was in flight, `cancelled` is the
+    // truer terminal for operator intent than `permanent` — either way exactly
+    // one terminal, no retry, no further billing.
+    if (signal?.aborted === true) {
+      yield { type: 'failed', kind: 'cancelled', error: 'llm tool loop aborted' };
+      return;
+    }
     if (round >= maxRounds) {
       yield {
         type: 'failed',
@@ -753,10 +762,6 @@ export async function* runTextWithTools<C>(
           `${provider} requested another tool call after the tool budget ` +
           `was exhausted (maxToolIterations: ${maxRounds})`,
       };
-      return;
-    }
-    if (signal?.aborted === true) {
-      yield { type: 'failed', kind: 'cancelled', error: 'llm tool loop aborted' };
       return;
     }
     const results = executeToolCalls(tools, outcome.calls);
