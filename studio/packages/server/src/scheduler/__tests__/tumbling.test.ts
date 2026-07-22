@@ -2900,5 +2900,205 @@ describe('#5 S11c — per-trigger window retry', () => {
       expect(state?.status).toBe('running');
       expect(state?.origin).toBe('backfill');
     });
+
+    it('retry_pending does NOT close the S10 backfill gate (a waiting backfill window still fires)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      if (!isTumblable(trigger)) throw new Error('unreachable');
+      // W1 is mid-retry-interval (retry_pending); W0 is a waiting BACKFILL
+      // window. The gate requires ZERO `running` windows — a retry hold has
+      // no run in flight, so it must not count.
+      const { key: k1, run } = failedWindow(db, trigger, pv);
+      retryWindow(db, k1, {
+        runId: run.id,
+        runStatus: 'failure',
+        attempt: 1,
+        nextAttemptAtMs: W0_END + 600_000, // far future — stays retry_pending
+      });
+      const k0 = keyFor(trigger, T0 - MIN15);
+      createWindow(db, {
+        ...k0,
+        windowEnd: iso(T0),
+        geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+        origin: 'backfill',
+      });
+
+      const launcher = fakeLauncher([{ outcome: 'started', runId: 'run-bf' }]);
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher,
+        log: silentLog(),
+        now: () => W0_END + 1, // before the retry is due
+      });
+      service.reconcile();
+
+      expect(getWindowState(db, k0)?.status).toBe('running');
+      expect(getWindowState(db, k1)?.status).toBe('retry_pending');
+    });
+  });
+
+  describe('disabled-trigger symmetry (a pause never forfeits the retry)', () => {
+    it('a run failing while its trigger is DISABLED still holds retry_pending, and heals on re-enable', async () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const { key, run } = failedWindow(db, trigger, pv);
+      // The pause lands BEFORE the settle — the retry decision must read the
+      // policy anyway (enabled-agnostic): folding terminal here while a
+      // disable AFTER retryScheduled survives would make the same operator
+      // action destroy or preserve the budget purely by timing.
+      updateTrigger(db, trigger.id, { enabled: false });
+
+      const bus = createRunEventBus();
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => W0_END + 1,
+      });
+      service.subscribeCompletion(bus);
+      await tapTerminal(bus, run.id);
+
+      expect(getWindowState(db, key)?.status).toBe('retry_pending');
+      expect(pendingRetries(db)).toHaveLength(1);
+
+      // Re-enable after the interval: sync()'s state-driven heal re-drives
+      // and materializes a fresh run.
+      updateTrigger(db, trigger.id, { enabled: true });
+      const launcher2 = fakeLauncher([{ outcome: 'started', runId: 'run-a2' }]);
+      const service2 = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: launcher2,
+        log: silentLog(),
+        now: () => W0_END + 1 + 60_001,
+      });
+      service2.sync();
+
+      const state = getWindowState(db, key);
+      expect(state?.status).toBe('running');
+      expect(state?.runId).toBe('run-a2');
+    });
+
+    it('a REBIND write materializes a window the unbound-stretch heal flipped to waiting (no wait for fire/boot)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const due = W0_END + 60_000;
+      const { key, run } = failedWindow(db, trigger, pv);
+      retryWindow(db, key, {
+        runId: run.id,
+        runStatus: 'failure',
+        attempt: 1,
+        nextAttemptAtMs: due,
+      });
+      // Unbind; the overdue heal still flips the window to waiting (the
+      // pre-bind drive), but materialize is skipped while unbound.
+      updateTrigger(db, trigger.id, { pipelineVersionId: null });
+      const service1 = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => due + 1,
+      });
+      service1.sync();
+      expect(getWindowState(db, key)?.status).toBe('waiting');
+
+      // The REBIND write's sync must kick materialize for the stranded row —
+      // not leave it waiting for the next window fire or reboot.
+      updateTrigger(db, trigger.id, { pipelineVersionId: pv });
+      const launcher2 = fakeLauncher([{ outcome: 'started', runId: 'run-a2' }]);
+      const service2 = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: launcher2,
+        log: silentLog(),
+        now: () => due + 2,
+      });
+      service2.sync();
+
+      const state = getWindowState(db, key);
+      expect(state?.status).toBe('running');
+      expect(state?.runId).toBe('run-a2');
+    });
+
+    it('a stored over-cap retry interval cannot wedge the settle (Date-range clamp; window still holds retry_pending)', async () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      // Read-lenient stored shape: an interval far past ECMAScript's max
+      // time value. The write boundary caps at 86400, so the row is seeded
+      // valid and then hand-edited PAST the boundary (the corruptTriggerRow
+      // vector — the exact hand-edit/drift class the leniency exists for).
+      // Unclamped, the settle's ISO stamp would THROW on every tap and boot
+      // reconcile — the window stuck `running` forever, slot held, backfill
+      // gate closed.
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const { key, run } = failedWindow(db, trigger, pv);
+      db.update(triggers)
+        .set({ window: { ...RETRY_CONFIG, retry: { count: 1, intervalInSeconds: 9e12 } } })
+        .where(eq(triggers.id, trigger.id))
+        .run();
+
+      const bus = createRunEventBus();
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => W0_END + 1,
+      });
+      service.subscribeCompletion(bus);
+      await tapTerminal(bus, run.id);
+
+      const state = getWindowState(db, key);
+      expect(state?.status).toBe('retry_pending');
+      // Clamped to the last 4-digit-year instant (Zod-datetime-representable).
+      expect(state?.nextAttemptAtMs).toBe(Date.parse('9999-12-31T23:59:59.999Z'));
+    });
+
+    it('the retry alarm firing while the trigger is DISABLED suppresses trigger_not_tumbling (window survives)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const due = W0_END + 60_000;
+      const { key, run } = failedWindow(db, trigger, pv);
+      retryWindow(db, key, {
+        runId: run.id,
+        runStatus: 'failure',
+        attempt: 1,
+        nextAttemptAtMs: due,
+      });
+      const alarm = armWakeup(db, {
+        kind: WINDOW_RETRY_KIND,
+        ref: buildWindowRetryRef(key, 1),
+        dueAt: due,
+        discriminator: 'attempt-1',
+      });
+      updateTrigger(db, trigger.id, { enabled: false });
+
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => due,
+      });
+      const row = getWakeup(db, alarm.id);
+      if (row === null) throw new Error('fixture alarm missing');
+      const result = service.retryHandler.fire(
+        row,
+        { scheduledFor: due, firedAt: due, latenessMs: 0 },
+        db,
+      );
+
+      expect(result).toEqual({ status: 'suppressed', reason: 'trigger_not_tumbling' });
+      // The window is NOT stranded: it stays retry_pending, and the overdue
+      // heal drives it once the trigger is re-enabled (previous test).
+      expect(getWindowState(db, key)?.status).toBe('retry_pending');
+    });
   });
 });

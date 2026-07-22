@@ -266,6 +266,20 @@ export function isTumblable(t: Trigger): t is TumblingTrigger {
 }
 
 /**
+ * #5 S11c — the SETTLE-decision guard: window-configured, enabled-AGNOSTIC.
+ * The retry decision must survive a PAUSE: a run failing while its trigger is
+ * disabled forfeits nothing (the window holds `retry_pending`; the alarm
+ * suppresses while disabled and the overdue heal re-drives on re-enable) —
+ * symmetric with a window already held when the disable lands. Only losing
+ * the policy SOURCE folds terminal: a deleted/corrupt row, or a mode change
+ * away from `tumbling` (the trigger renounced windowing). Everything that
+ * FIRES still gates on `isTumblable` — this guard never materializes a run.
+ */
+export function isWindowConfigured(t: Trigger): t is TumblingTrigger {
+  return t.mode === 'tumbling' && t.window !== null;
+}
+
+/**
  * The config EPOCH: sha256 over the pinned geometry tuple `(frequency,
  * interval, startTime)` — an explicitly enumerated field list, NEVER a
  * whole-object hash (a hash over the full config would re-key — and re-fire —
@@ -444,9 +458,11 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
    * `running → retry_pending` + the `window_retry` alarm, one transaction —
    * when ALL hold:
    * - `trigger` is available and carries `window.retry` (a `null` trigger =
-   *   the row was corrupt/missing at settle time — policy UNKNOWN, so the
-   *   window folds terminal exactly as pre-S11c: never manufacture a retry
-   *   from an unreadable row);
+   *   the row was corrupt/missing at settle time, or its mode moved off
+   *   `tumbling` — the policy SOURCE is gone, so the window folds terminal
+   *   exactly as pre-S11c: never manufacture a retry from an unreadable row.
+   *   Callers derive it via `isWindowConfigured`, NOT `isTumblable`: a
+   *   DISABLED trigger keeps its retry — see the guard's doc);
    * - the window belongs to the CURRENT epoch (an old-epoch window folds
    *   terminal: its retry alarm would be refused as `epoch_stale` and the
    *   overdue heal only drives current-epoch rows, so a retry here would
@@ -482,7 +498,19 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
       const row = getWindowState(db, key);
       if (row !== null && row.status === 'running' && row.attempt < retry.count) {
         const attempt = row.attempt + 1;
-        const nextAttemptAtMs = now() + retry.intervalInSeconds * 1000;
+        // Clamped to 9999-12-31T23:59:59.999Z (the last instant whose ISO
+        // form keeps a 4-digit year — Zod's `.datetime()` rejects the
+        // expanded `+275760-…` form, and ECMAScript overflows entirely past
+        // ±8.64e15): the stored shape is read-lenient (the write caps are
+        // boundary-only), so a hand-edited interval can push the stamp past
+        // either limit — unclamped, `retryWindow`'s event append would THROW
+        // on every settle, sticking the window in `running` forever (slot
+        // held, backfill gate closed). Clamping keeps the stored value's
+        // meaning ("retry absurdly far out") without the wedge.
+        const nextAttemptAtMs = Math.min(
+          now() + retry.intervalInSeconds * 1000,
+          253_402_300_799_999,
+        );
         db.transaction((tx) => {
           // Guarded flip first; arm ONLY when it wins (a lost race must not
           // commit an alarm row for a decision that didn't happen).
@@ -914,9 +942,12 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
       }
       if (windowConfigEpoch(trigger.window) !== ref.epoch) {
         // A geometry edit mid-interval: the window is old-epoch debris now —
-        // inert until S11d's disposition pass (the settle-time epoch guard
-        // makes this unreachable except for an edit landing INSIDE the
-        // interval, bounded by the 86400s write cap).
+        // permanently `retry_pending` until S11d's disposition pass (the
+        // settle-time epoch guard makes this reachable only for an edit
+        // landing INSIDE the interval — ~86400s for write-boundary rows;
+        // longer for a hand-edited over-cap interval, the same read-lenient
+        // tradeoff the cap documents). The same debris class as old-epoch
+        // `waiting` rows, dispositioned together.
         return { status: 'suppressed', reason: 'epoch_stale' };
       }
       const key: WindowKey = {
@@ -1076,7 +1107,23 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
         log.warn({ err, triggerId: trigger.id }, 'tumbling: overdue-retry drive failed — skipping');
       }
       if (!hasBackfill && trigger.window.maxConcurrentWindows === undefined && !droveRetries) {
-        continue;
+        // #5 S11c — one more kick condition: stranded `waiting` windows of the
+        // current epoch. Without it, a retry flipped to `waiting` during an
+        // UNBOUND stretch (the drive above deliberately runs pre-bind) waits
+        // for the next window fire or boot after the REBIND write — up to a
+        // full window interval, or reboot for an endTime-exhausted chain.
+        // Checking state (not "did this pass flip") also heals the rest of
+        // the stranded-waiting class on any trigger write — a deliberate
+        // widening of S9/S10's fire/boot-only liveness, same sanction as the
+        // pass-3 kick itself (sync runs post-write, never in a tx).
+        const stranded = listWindowStates(db, {
+          triggerId: trigger.id,
+          configEpoch: windowConfigEpoch(trigger.window),
+          status: 'waiting',
+          unlinked: true,
+          limit: 1,
+        });
+        if (stranded.length === 0) continue;
       }
       // UNBOUND triggers are skipped ENTIRELY (unlike forward seeding, where
       // eligibility deliberately ignores binding): running the pass would
@@ -1104,14 +1151,16 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
   }
 
   /** #5 S11c — one lenient trigger read per trigger id (the settle decision
-   * needs the retry policy; a corrupt/missing row reads as `null` = policy
-   * unknown = terminal fold, the #637 discipline). Memoized per reconcile
-   * pass so the `running`-window loop does not re-read per row. */
-  function readTumblable(cache: Map<string, TumblingTrigger | null>, triggerId: string) {
+   * needs the retry policy; a corrupt/missing/mode-changed row reads as
+   * `null` = policy source gone = terminal fold, the #637 discipline; a
+   * DISABLED row still reads — `isWindowConfigured`, see its doc). Memoized
+   * per reconcile pass so the `running`-window loop does not re-read per row. */
+  function readWindowConfigured(cache: Map<string, TumblingTrigger | null>, triggerId: string) {
     const hit = cache.get(triggerId);
     if (hit !== undefined) return hit;
     const read = getParsedTrigger(db, triggerId);
-    const trigger = read.status === 'found' && isTumblable(read.trigger) ? read.trigger : null;
+    const trigger =
+      read.status === 'found' && isWindowConfigured(read.trigger) ? read.trigger : null;
     cache.set(triggerId, trigger);
     return trigger;
   }
@@ -1126,7 +1175,7 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     for (const row of listWindowStates(db, { status: 'running' })) {
       if (row.runId === null) continue; // unreachable: link + flip are one tx
       try {
-        settleIfTerminal(keyOf(row), row.runId, readTumblable(triggerCache, row.triggerId));
+        settleIfTerminal(keyOf(row), row.runId, readWindowConfigured(triggerCache, row.triggerId));
       } catch (err) {
         log.error(
           { err, triggerId: row.triggerId, windowStart: row.windowStart },
@@ -1141,8 +1190,11 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     for (const triggerId of new Set(
       listWindowStates(db, { status: 'retry_pending' }).map((r) => r.triggerId),
     )) {
-      const trigger = readTumblable(triggerCache, triggerId);
-      if (trigger === null) continue; // corrupt/missing/not-tumbling — inert until repaired
+      const trigger = readWindowConfigured(triggerCache, triggerId);
+      // Corrupt/missing/mode-changed OR still disabled — inert until
+      // repaired/re-enabled (the flip would go nowhere useful while disabled;
+      // sync() drives it the moment the trigger is eligible again).
+      if (trigger === null || !trigger.enabled) continue;
       try {
         driveOverdueRetries(trigger);
       } catch (err) {
@@ -1201,9 +1253,14 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
           // kick below is additionally skipped, with a warn instead of the
           // per-terminal-run error spam a throw produced here.
           const read = getParsedTrigger(db, row.triggerId);
-          const trigger =
-            read.status === 'found' && isTumblable(read.trigger) ? read.trigger : null;
-          settleIfTerminal(keyOf(row), runId, trigger);
+          const parsed = read.status === 'found' ? read.trigger : null;
+          // Settle sees the ENABLED-agnostic guard (a pause must not forfeit
+          // the retry); the drain kick below keeps the full `isTumblable`.
+          settleIfTerminal(
+            keyOf(row),
+            runId,
+            parsed !== null && isWindowConfigured(parsed) ? parsed : null,
+          );
           // #5 S10 — drain continuation: the settle just released the
           // materialization gate (the window is no longer `running`), so the
           // trigger's next backfill window fires now — this tap is what makes
@@ -1215,8 +1272,8 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
             );
             return;
           }
-          if (trigger !== null && trigger.pipelineVersionId !== null) {
-            materializeWindows(trigger);
+          if (parsed !== null && isTumblable(parsed) && parsed.pipelineVersionId !== null) {
+            materializeWindows(parsed);
           }
         } catch (err) {
           log.error({ err, runId }, 'tumbling: window completion tap failed');

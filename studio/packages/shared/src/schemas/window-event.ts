@@ -75,12 +75,14 @@ export const WindowSucceededPayloadSchema = z.object({
 });
 
 /**
- * `window.failed` — the window's run terminalized without success.
- * `runStatus`: `failure` (the run failed), `interrupted` (crash/abort — a
- * terminal run fact, so the window is terminal too; #5 S11's per-trigger retry
- * policy is what will re-drive a failed window), or `missing` (the linked run
- * row is GONE at reconcile time — an absent fact folded closed as failure,
- * never silently dropped).
+ * `window.failed` — the window's run terminalized without success, and #5
+ * S11c's retry policy did NOT claim it (no policy, budget exhausted, stale
+ * epoch, unreadable trigger row, or an unknown outcome). TERMINAL: a failed
+ * window is never re-driven — a retry happens INSTEAD of this event
+ * (`window.retryScheduled`), never after it. `runStatus`: `failure` (the run
+ * failed), `interrupted` (crash/abort — a terminal run fact), or `missing`
+ * (the linked run row is GONE at reconcile time — an absent fact folded
+ * closed as failure, never silently dropped).
  */
 export const WindowFailedPayloadSchema = z.object({
   runId: z.string().min(1).nullable(),
