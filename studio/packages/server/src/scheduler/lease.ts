@@ -117,6 +117,16 @@ export interface LeaseService {
   /** One heartbeat pass over every `running` row. Never throws (per-run faults
    * are logged and skip that run; the scan fault logs and returns). */
   sweep(): void;
+  /**
+   * The reclaim itself. Production's ONLY caller is the handler's
+   * `afterCommit`; exposed for the same reason `reconcile.ts` exports
+   * `ReconcileInvariantError` — the under-lock abort guard is not reachable
+   * from a natural fixture (an uncontended `serialize` starts its work in the
+   * same frame as the fire, leaving no window to interpose), and an untested
+   * guard gets deleted as ceremony. A test queues this behind a held drive and
+   * changes the run's state before releasing it.
+   */
+  reclaim(runId: string): Promise<void>;
 }
 
 export function createLeaseService(deps: LeaseServiceDeps): LeaseService {
@@ -307,5 +317,5 @@ export function createLeaseService(deps: LeaseServiceDeps): LeaseService {
     }
   }
 
-  return { handler, sweep };
+  return { handler, sweep, reclaim };
 }

@@ -372,8 +372,12 @@ shipped:
 - **Boot order is load-bearing:** reconcile → lease sweep → alarm interval + boot tick. The sweep
   BEFORE the tick so it observes only the reconciler's final states, never a boot-fired reclaim's
   registration. A boot-resumed run does NOT re-stamp its lease (running→running is
-  `syncRunLifecycle`'s early-return), so a held run's pre-crash alarm token MATCHES and fires
-  into a reclaim whose `held` verdict renews — convergence by design, not by suppression.
+  `syncRunLifecycle`'s early-return), so a held run's stale pre-crash lease converges by one of
+  two paths depending on downtime: still-live lease → the pre-crash alarm's token MATCHES and
+  fires into a reclaim whose `held` verdict renews; already-expired lease (the long-downtime
+  case) → the boot sweep's branch 3 BUMPS the generation first, the pre-crash alarm suppresses
+  `lease_renewed`, and the reclaim comes from the new generation's immediately-due alarm. Either
+  way the run lands on the renewal chain.
 - **Self-cleaning tails, accepted:** a completed run's pending lease alarm fires up to TTL late
   into a `not_running` suppression (one settled row per run; #464 prunes); `LEASE_TTL_MS` stays
   5 min (the heartbeat-miss budget: five missed 60s sweeps) — the S4 "S7 tunes it" note resolves
