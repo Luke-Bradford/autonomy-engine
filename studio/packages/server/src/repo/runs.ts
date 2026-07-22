@@ -1,4 +1,4 @@
-import { and, count, eq, inArray } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, sql } from 'drizzle-orm';
 import {
   NewRunSchema,
   RunLifecyclePatchSchema,
@@ -107,12 +107,14 @@ export function updateRun(db: Db, id: string, patch: RunLifecyclePatch): Run | n
  * CONSEQUENCE (intended, spec-sanctioned): a parked run no longer blocks a new
  * fire, so a `skip_if_running` trigger with a long-parked run WILL fire again,
  * and a resumed run can transiently exceed `parallel`'s `max`. Bounding this with
- * a fair-queue / `waiting_concurrency` re-admission gate on resume is #5 **S6**'s
- * scope, not S4's — the "by default" in the spec is exactly that S6 opt-in.
+ * a `waiting_concurrency` re-admission gate on resume is a LATER #5 S6 slice, not
+ * S6a's — the "by default" in the spec is exactly that opt-in. (S6a made the
+ * QUEUE durable; the resume-readmission gate rides the same substrate next.)
  *
- * `queued` is NOT a run status (a queued fire is held in the launcher's in-memory
- * queue with no run row, so it never counted here); when #5 S6 persists a
- * `queued` status it must likewise stay OUT of this set (pre-admission ≠ a slot).
+ * `queued` (#5 S6a — a fire held in the durable admission queue, a real `runs`
+ * row now) stays OUT of this set: pre-admission ≠ occupying a slot, so a queued
+ * row must not count against its trigger's admission gate. `countQueuedRunsForTrigger`
+ * is the SEPARATE queue-depth count.
  */
 const ACTIVE_RUN_STATUSES = ['pending', 'running'] as const satisfies readonly RunStatus[];
 
@@ -131,6 +133,74 @@ export function countActiveRunsForTrigger(db: Db, triggerId: string): number {
     .where(and(eq(runs.triggerId, triggerId), inArray(runs.status, [...ACTIVE_RUN_STATUSES])))
     .get();
   return row?.n ?? 0;
+}
+
+/**
+ * #5 S6a — the DURABLE admission queue. A `queue`-policy fire that overflows the
+ * trigger's single slot becomes a `runs` row with `status = 'queued'` and a
+ * `queued_at` FIFO key, replacing the launcher's old in-memory FIFO (which a
+ * crash silently dropped). `count`/`next` back the launcher's enqueue-bound and
+ * drain; `admit` promotes the drained row.
+ */
+
+/** How many fires are currently held in the durable queue for `triggerId` (the
+ * launcher's `maxQueueDepth` bound is checked against this — restart-safe, unlike
+ * the old in-memory array length). `queued` is deliberately NOT in
+ * `ACTIVE_RUN_STATUSES` (pre-admission ≠ a slot), so this is a SEPARATE count. */
+export function countQueuedRunsForTrigger(db: Db, triggerId: string): number {
+  const row = db
+    .select({ n: count() })
+    .from(runs)
+    .where(and(eq(runs.triggerId, triggerId), eq(runs.status, 'queued')))
+    .get();
+  return row?.n ?? 0;
+}
+
+/**
+ * The oldest queued fire for `triggerId` — the next to admit — or `null` if the
+ * queue is empty. STRICT arrival FIFO: `queued_at` (ms) then `rowid` as the
+ * tie-breaker for two fires enqueued in the SAME millisecond. `rowid` is SQLite's
+ * monotonic-with-INSERT key, so it reproduces the exact enqueue order the old
+ * in-memory array gave — `id` (a random nanoid) could NOT, it would order a
+ * same-ms burst arbitrarily. Deterministic and stable across replays/restarts.
+ * The queue is bounded (`maxQueueDepth`) and per-trigger, so the unindexed
+ * `ORDER BY` scans a small set — no dedicated index in this slice.
+ */
+export function nextQueuedRunForTrigger(db: Db, triggerId: string): Run | null {
+  const row = db
+    .select()
+    .from(runs)
+    .where(and(eq(runs.triggerId, triggerId), eq(runs.status, 'queued')))
+    .orderBy(asc(runs.queuedAt), asc(sql`rowid`))
+    .limit(1)
+    .get();
+  return row ? RunSchema.parse(row) : null;
+}
+
+/**
+ * Admit a queued run: flip `queued → pending` and RE-STAMP `started_at` to now
+ * (admission time — `run.started.startedAt` reads the row, so `${run.startedAt}`
+ * must reflect when the run was admitted, not when it was enqueued; driver.ts's
+ * `startRun` comment anticipates exactly this). `queued_at` and `trigger_context`
+ * are preserved (the queued-at record + the frozen fire-time context the drive
+ * still needs). Returns the admitted run, or `null` if the row is missing or was
+ * already admitted by a concurrent drain — the `status = 'queued'` guard in the
+ * UPDATE makes the promotion idempotent (a second drain flips nothing).
+ *
+ * This is a PURPOSE-BUILT write, deliberately NOT `updateRun`: re-stamping
+ * `started_at` is a provenance rewrite that `RunLifecyclePatchSchema` (`.strict()`,
+ * no `startedAt`) forbids by design. Admission is the one sanctioned exception,
+ * so it gets its own function rather than a hole in the lifecycle-patch guard.
+ */
+export function admitQueuedRun(db: Db, id: string): Run | null {
+  const startedAt = Date.now();
+  const result = db
+    .update(runs)
+    .set({ status: 'pending', startedAt })
+    .where(and(eq(runs.id, id), eq(runs.status, 'queued')))
+    .run();
+  if (result.changes === 0) return null;
+  return getRun(db, id);
 }
 
 export function deleteRun(db: Db, id: string): boolean {

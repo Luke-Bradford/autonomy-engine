@@ -5,9 +5,9 @@ import type {
   Param,
   PipelineVersion,
   SubstitutionContext,
-  TriggerContext,
 } from './types.js';
 import { ParamResolveError, SubstituteError, TERMINAL_NODE } from './types.js';
+import type { TriggerContext } from '../schemas/trigger-context.js';
 import type { OutputContract } from './outputs.js';
 import { containerOutputContract, outputContract } from './outputs.js';
 import type { Expr, ExprSegment, TemplateMode } from './expr.js';

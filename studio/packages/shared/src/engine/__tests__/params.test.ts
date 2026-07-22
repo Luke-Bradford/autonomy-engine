@@ -24,7 +24,7 @@ import {
   validateTriggerBindings,
   validateWholeValue,
 } from '../params.js';
-import type { TriggerContext } from '../types.js';
+import type { TriggerContext } from '../../schemas/trigger-context.js';
 import { MAX_PATH_DEPTH } from '../functions.js';
 
 // --- helpers ---------------------------------------------------------------

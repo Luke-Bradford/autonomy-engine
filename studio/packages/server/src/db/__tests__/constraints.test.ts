@@ -146,6 +146,31 @@ describe('P1a DB constraints (fresh migrated DB, raw db access)', () => {
         })
         .run(),
     ).toThrow(/CHECK constraint failed/);
+
+    // #5 S6a — the widened CHECK (migration 0015) ACCEPTS `queued`, with the two
+    // new columns. Asserts the migration's CHECK vocab against the DB, not just
+    // the Zod enum (they drift independently — hand-rolled migrations).
+    expect(() =>
+      db
+        .insert(runs)
+        .values({
+          id: 'run_queued',
+          ownerId: null,
+          pipelineVersionId: version.id,
+          triggerId: null,
+          parentRunId: null,
+          params: {},
+          status: 'queued',
+          leaseUntil: null,
+          heartbeatAt: null,
+          queuedAt: 1234,
+          triggerContext: { triggerId: 'trg_x', scheduledTime: null, body: null },
+          startedAt: 1,
+          finishedAt: null,
+        })
+        .run(),
+    ).not.toThrow();
+    expect(db.select().from(runs).where(eq(runs.id, 'run_queued')).get()?.status).toBe('queued');
   });
 
   it('CHECK rejects an out-of-range triggers.enabled (integer-boolean column)', () => {

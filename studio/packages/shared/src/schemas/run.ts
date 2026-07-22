@@ -1,7 +1,19 @@
 import { z } from 'zod';
+import { TriggerContextSchema } from './trigger-context.js';
 
 export const RunStatusSchema = z.enum([
   'pending',
+  // #5 S6a — a fire held in the durable admission QUEUE: a run row exists (so the
+  // queue survives a restart, unlike the old in-memory launcher FIFO) but no
+  // event log and no drive yet. Like `pending`, it is a PRE-`run.started` ROW
+  // status — never event-projected (absent from the engine's
+  // `RunLifecycleStatusSchema`) — and, like `pending` counting a slot, it must
+  // stay OUT of `ACTIVE_RUN_STATUSES`: pre-admission ≠ occupying a slot. On
+  // admission the launcher re-stamps `startedAt`, flips it to `pending`, and
+  // drives it. (`run.queued`/`run.admitted` as durable EVENTS belong to the
+  // trigger/observability read-model — #overview 11 — which does not exist yet;
+  // deferred there, not dropped, exactly as S5a deferred `trigger.fireSuppressed`.)
+  'queued',
   'running',
   'success',
   'failure',
@@ -30,6 +42,23 @@ export const RunSchema = z.object({
   status: RunStatusSchema,
   leaseUntil: z.number().int().nullable(),
   heartbeatAt: z.number().int().nullable(),
+  /**
+   * #5 S6a — when this fire entered the durable admission QUEUE (epoch-ms), the
+   * FIFO ordering key the launcher drains oldest-first. `null` for every run that
+   * was never queued (an immediate start, or a legacy row). Set once at enqueue
+   * and never rewritten — admission re-stamps `startedAt`, not this — so it stays
+   * a faithful record of when the fire was admitted-to-the-queue for observability.
+   */
+  queuedAt: z.number().int().nullable(),
+  /**
+   * #5 S6a — the fire-time trigger context (#5 S12) a durably `queued` run must
+   * carry so a delayed admission still seeds `${trigger.scheduledTime}` with the
+   * occurrence that fired it, not whenever the slot happened to free. `null` for
+   * an immediately-started run (its context is folded straight into the event log
+   * by `startRun`) and for a run with no trigger. Immutable, like `params`: set
+   * at enqueue, read once at admission, never patched.
+   */
+  triggerContext: TriggerContextSchema.nullable(),
   startedAt: z.number().int(),
   finishedAt: z.number().int().nullable(),
 });
@@ -45,10 +74,18 @@ export const NewRunSchema = RunSchema.omit({
   status: true,
   leaseUntil: true,
   heartbeatAt: true,
+  queuedAt: true,
+  triggerContext: true,
   startedAt: true,
   finishedAt: true,
 }).extend({
   status: RunStatusSchema.default('pending'),
+  // #5 S6a — both default `null`, so every existing `createRun` caller (an
+  // immediate start) keeps compiling and passing nothing; only the launcher's
+  // durable-queue path sets them (`status: 'queued'` + `queuedAt` + the frozen
+  // fire-time `triggerContext`).
+  queuedAt: z.number().int().nullable().default(null),
+  triggerContext: TriggerContextSchema.nullable().default(null),
 });
 // z.input, not z.infer/z.output — see the note on NewConnection in
 // connection.ts for why every insert type in this package uses it (here it

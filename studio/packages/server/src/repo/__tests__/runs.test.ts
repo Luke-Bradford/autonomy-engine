@@ -9,11 +9,14 @@ import { createPipelineVersion } from '../pipeline-versions.js';
 import { createPipeline } from '../pipelines.js';
 import { createTrigger } from '../triggers.js';
 import {
+  admitQueuedRun,
   countActiveRunsForTrigger,
+  countQueuedRunsForTrigger,
   createRun,
   deleteRun,
   getRun,
   listRuns,
+  nextQueuedRunForTrigger,
   updateRun,
 } from '../runs.js';
 import { freshDb } from './helpers.js';
@@ -187,5 +190,114 @@ describe('countActiveRunsForTrigger — #5 S4 slot release', () => {
 
     // Only the pending + running rows occupy a slot; waiting + all terminals do not.
     expect(countActiveRunsForTrigger(db, trigger.id)).toBe(2);
+  });
+});
+
+describe('durable admission queue — #5 S6a', () => {
+  function seedTrigger(db: ReturnType<typeof freshDb>['db'], versionId: string) {
+    return createTrigger(db, {
+      ownerId: 'local',
+      name: 'T',
+      pipelineVersionId: versionId,
+      params: {},
+      mode: 'manual',
+      schedule: null,
+      webhook: null,
+      concurrency: { policy: 'queue' },
+      runWindows: null,
+      enabled: false,
+    });
+  }
+  function seedQueued(
+    db: ReturnType<typeof freshDb>['db'],
+    versionId: string,
+    triggerId: string,
+    queuedAt: number,
+  ) {
+    return createRun(db, buildRunInput(versionId, { triggerId, status: 'queued', queuedAt }));
+  }
+
+  it('a `queued` row does NOT occupy a slot (pre-admission), but IS counted by countQueuedRunsForTrigger', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    const trigger = seedTrigger(db, version.id);
+    seedQueued(db, version.id, trigger.id, 100);
+    seedQueued(db, version.id, trigger.id, 200);
+
+    expect(countActiveRunsForTrigger(db, trigger.id)).toBe(0);
+    expect(countQueuedRunsForTrigger(db, trigger.id)).toBe(2);
+  });
+
+  it('nextQueuedRunForTrigger returns the OLDEST-queuedAt row, deterministically', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    const trigger = seedTrigger(db, version.id);
+    // Insert out of order; the FIFO key is queuedAt, not insertion.
+    seedQueued(db, version.id, trigger.id, 300);
+    const oldest = seedQueued(db, version.id, trigger.id, 100);
+    seedQueued(db, version.id, trigger.id, 200);
+
+    expect(nextQueuedRunForTrigger(db, trigger.id)?.id).toBe(oldest.id);
+  });
+
+  it('breaks a same-millisecond queuedAt tie by INSERTION order (rowid), not random id', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    const trigger = seedTrigger(db, version.id);
+    // Three fires with the IDENTICAL queuedAt (a same-ms burst). Strict arrival
+    // FIFO must return them in the order they were enqueued — the random nanoid
+    // `id` cannot give that; `rowid` (monotonic with INSERT) does.
+    const first = seedQueued(db, version.id, trigger.id, 500);
+    const second = seedQueued(db, version.id, trigger.id, 500);
+    const third = seedQueued(db, version.id, trigger.id, 500);
+
+    // Drain the whole tie group in order, admitting each so the next surfaces.
+    const drained: string[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const next = nextQueuedRunForTrigger(db, trigger.id)!;
+      drained.push(next.id);
+      admitQueuedRun(db, next.id);
+    }
+    expect(drained).toEqual([first.id, second.id, third.id]);
+  });
+
+  it('nextQueuedRunForTrigger is null when the queue is empty', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    const trigger = seedTrigger(db, version.id);
+    expect(nextQueuedRunForTrigger(db, trigger.id)).toBeNull();
+  });
+
+  it('admitQueuedRun flips queued→pending and RE-STAMPS startedAt to admission time', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    const trigger = seedTrigger(db, version.id);
+    const run = seedQueued(db, version.id, trigger.id, 100);
+    const enqueuedStartedAt = run.startedAt;
+
+    const before = Date.now();
+    const admitted = admitQueuedRun(db, run.id);
+    expect(admitted).not.toBeNull();
+    expect(admitted!.status).toBe('pending');
+    expect(admitted!.startedAt).toBeGreaterThanOrEqual(before);
+    // startedAt is the ADMISSION time, not the enqueue-time placeholder — so
+    // `${run.startedAt}` reflects when the run was admitted (driver contract).
+    expect(admitted!.startedAt).toBeGreaterThanOrEqual(enqueuedStartedAt);
+    // queuedAt is PRESERVED (the historical enqueue record), not rewritten.
+    expect(admitted!.queuedAt).toBe(100);
+  });
+
+  it('admitQueuedRun is idempotent: a second admission (or a non-queued row) returns null and changes nothing', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    const trigger = seedTrigger(db, version.id);
+    const run = seedQueued(db, version.id, trigger.id, 100);
+
+    expect(admitQueuedRun(db, run.id)).not.toBeNull(); // first wins
+    expect(admitQueuedRun(db, run.id)).toBeNull(); // row is now `pending`, not `queued`
+    expect(getRun(db, run.id)!.status).toBe('pending');
+    // A row that was never queued is not admissible either.
+    const running = createRun(db, buildRunInput(version.id, { triggerId: trigger.id }));
+    expect(admitQueuedRun(db, running.id)).toBeNull();
   });
 });
