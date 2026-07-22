@@ -2,8 +2,22 @@ import { z } from 'zod';
 import { validateTriggerBindings } from '../engine/params.js';
 import { addParamsReplaySafetyIssues } from './replay-safety.js';
 import { RecurrenceSchema, RecurrenceWriteSchema } from './recurrence.js';
+import { WindowConfigSchema, WindowConfigWriteSchema } from './window.js';
 
-export const TriggerModeSchema = z.enum(['manual', 'schedule', 'webhook', 'event', 'continuous']);
+export const TriggerModeSchema = z.enum([
+  'manual',
+  'schedule',
+  'webhook',
+  'event',
+  'continuous',
+  // #5 S9 — the STATEFUL tumbling-window trigger: each fixed-size window
+  // `[start+k*size, start+(k+1)*size)` fires exactly once, when it closes.
+  // Requires a `window` config (`assertWindowConsistent` on the write path).
+  // NOTE adding a mode also needs the `triggers.mode` CHECK constraint widened
+  // (a table-recreate migration — see 0019); the Drizzle enum alone is not the
+  // runtime gate.
+  'tumbling',
+]);
 export type TriggerMode = z.infer<typeof TriggerModeSchema>;
 
 export const ConcurrencyPolicySchema = z.enum(['queue', 'skip_if_running', 'parallel']);
@@ -171,6 +185,13 @@ export const TriggerSchema = z.object({
    * column explicitly.
    */
   event: EventConfigSchema.nullable(),
+  /**
+   * #5 S9 — the tumbling-window geometry (`{frequency, interval, startTime,
+   * endTime?}`); null for every non-tumbling trigger (and for a pre-S9 row).
+   * Stored shape stays required-nullable like `recurrence`/`event`: every
+   * persisted row carries the column explicitly.
+   */
+  window: WindowConfigSchema.nullable(),
   concurrency: ConcurrencySchema,
   runWindows: z.array(RunWindowSchema).nullable(),
   enabled: z.boolean(),
@@ -216,6 +237,14 @@ export const NewTriggerSchema = TriggerSchema.omit({
   // keeps every pre-S8 create payload valid. The stored `TriggerSchema.event`
   // stays required-nullable.
   event: EventConfigSchema.nullable().optional(),
+  // #5 S9 — `window` follows the same verified `.nullable().optional()` (NOT
+  // `.default(null)`) 3-state as `recurrence`/`event`: a `.default()` IS
+  // applied by `.partial()`, so an unrelated PATCH would parse `window: null`
+  // and silently CLEAR an existing config. OMITTED → untouched, explicit
+  // `null` → clear, object → set (validated through the WRITE schema — the
+  // endTime-after-startTime cross-field rule). A NEW field, so omission keeps
+  // every pre-S9 create payload valid.
+  window: WindowConfigWriteSchema.nullable().optional(),
 });
 // z.input, not z.infer/z.output — see the note on NewConnection in
 // connection.ts for why every insert type in this package uses it.

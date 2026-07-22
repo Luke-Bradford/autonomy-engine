@@ -13,9 +13,12 @@ import {
 } from './trigger.js';
 
 describe('TriggerModeSchema', () => {
-  it.each(['manual', 'schedule', 'webhook', 'event', 'continuous'])('accepts %s', (mode) => {
-    expect(TriggerModeSchema.parse(mode)).toBe(mode);
-  });
+  it.each(['manual', 'schedule', 'webhook', 'event', 'continuous', 'tumbling'])(
+    'accepts %s',
+    (mode) => {
+      expect(TriggerModeSchema.parse(mode)).toBe(mode);
+    },
+  );
 
   it('rejects an unknown mode', () => {
     expect(() => TriggerModeSchema.parse('cron')).toThrow();
@@ -118,6 +121,7 @@ const trigger = {
   schedule: '0 2 * * *',
   webhook: null,
   event: null,
+  window: null,
   concurrency: { policy: 'skip_if_running' },
   runWindows: null,
   recurrence: null,
@@ -201,6 +205,66 @@ describe('NewTriggerSchema.event (write-side 3-state, the recurrence precedent)'
   it('a .partial() PATCH body does NOT manufacture an `event` key (no .default() pitfall)', () => {
     const parsed = NewTriggerSchema.partial().parse({ enabled: false });
     expect('event' in parsed && parsed.event !== undefined).toBe(false);
+  });
+});
+
+// #5 S9 — the tumbling-window config field.
+describe('TriggerSchema.window', () => {
+  const window = { frequency: 'hour', interval: 1, startTime: '2026-07-01T00:00:00.000Z' };
+
+  it('round-trips a tumbling trigger with a window config', () => {
+    const tumbling = { ...trigger, mode: 'tumbling', schedule: null, window };
+    expect(TriggerSchema.parse(tumbling)).toEqual(tumbling);
+  });
+
+  it('rejects a window with a non-fixed-duration frequency (month/week are not v1)', () => {
+    expect(() =>
+      TriggerSchema.parse({ ...trigger, window: { ...window, frequency: 'month' } }),
+    ).toThrow();
+    expect(() =>
+      TriggerSchema.parse({ ...trigger, window: { ...window, frequency: 'week' } }),
+    ).toThrow();
+  });
+
+  it('rejects a window missing its startTime anchor or with a non-positive interval', () => {
+    const { startTime, ...noStart } = window;
+    void startTime;
+    expect(() => TriggerSchema.parse({ ...trigger, window: noStart })).toThrow();
+    expect(() => TriggerSchema.parse({ ...trigger, window: { ...window, interval: 0 } })).toThrow();
+  });
+});
+
+describe('NewTriggerSchema.window (write-side 3-state, the recurrence/event precedent)', () => {
+  const { id, createdAt, updatedAt, ...insert } = trigger;
+  void id;
+  void createdAt;
+  void updatedAt;
+  const { window: fixtureWindow, ...insertNoWindow } = insert;
+  void fixtureWindow;
+  const window = { frequency: 'minute', interval: 15, startTime: '2026-07-01T00:00:00.000Z' };
+
+  it('parses with `window` OMITTED (pre-S9 payloads keep working) and does NOT inject a value', () => {
+    const parsed = NewTriggerSchema.parse(insertNoWindow);
+    expect('window' in parsed && parsed.window !== undefined).toBe(false);
+  });
+
+  it('accepts an explicit null (clear) and an object (set)', () => {
+    expect(NewTriggerSchema.parse({ ...insertNoWindow, window: null }).window).toBeNull();
+    expect(NewTriggerSchema.parse({ ...insertNoWindow, window }).window).toEqual(window);
+  });
+
+  it('a .partial() PATCH body does NOT manufacture a `window` key (no .default() pitfall)', () => {
+    const parsed = NewTriggerSchema.partial().parse({ enabled: false });
+    expect('window' in parsed && parsed.window !== undefined).toBe(false);
+  });
+
+  it('enforces the WRITE cross-field rule (endTime after startTime) on set', () => {
+    expect(() =>
+      NewTriggerSchema.parse({
+        ...insertNoWindow,
+        window: { ...window, endTime: '2026-06-01T00:00:00.000Z' },
+      }),
+    ).toThrow();
   });
 });
 

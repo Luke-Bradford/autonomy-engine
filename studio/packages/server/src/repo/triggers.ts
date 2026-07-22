@@ -65,6 +65,8 @@ export function createTrigger(db: Db, input: NewTrigger): Trigger {
     // #5 S8 — same 3-state write field as `recurrence`: omitted = "no
     // subscription" (null). The stored shape requires the key explicitly.
     event: parsed.event ?? null,
+    // #5 S9 — same 3-state: omitted = "no window geometry" (null).
+    window: parsed.window ?? null,
     schedule: deriveSchedule(recurrence, parsed.schedule),
     createdAt: now,
     updatedAt: now,

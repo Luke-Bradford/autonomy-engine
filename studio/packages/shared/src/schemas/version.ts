@@ -132,4 +132,9 @@ export const CATALOG_VERSION = 14;
 // key, so it would fail the final Zod validation on import; the registered
 // v1→v2 upgrader (`portability/envelope.ts`) backfills `null` — the honest
 // "never had one" value — for both, on `kind:'trigger'` envelopes only.
-export const SCHEMA_VERSION = 2;
+// SCHEMA_VERSION 3 (#5 S9): `TriggerSchema` gained the required-nullable
+// stored field `window` (the tumbling-window geometry). A v2 trigger envelope
+// does not carry the key, so it would fail the final Zod validation on import;
+// the registered v2→v3 upgrader (`portability/envelope.ts`) backfills `null` —
+// the honest "never had one" value — on `kind:'trigger'` envelopes only.
+export const SCHEMA_VERSION = 3;

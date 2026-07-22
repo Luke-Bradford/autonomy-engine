@@ -795,4 +795,129 @@ describe('triggers routes', () => {
       expect(res.json().event).toEqual({ name: 'order.created' });
     });
   });
+
+  describe('#5 S9 — window-config cross-field rules (effective state)', () => {
+    const window = {
+      frequency: 'minute' as const,
+      interval: 15,
+      startTime: '2026-07-01T00:00:00.000Z',
+    };
+    function tumblingBody(overrides: Record<string, unknown> = {}) {
+      return {
+        ...triggerBody(pipelineVersionId),
+        mode: 'tumbling' as const,
+        schedule: null,
+        window,
+        concurrency: { policy: 'queue' as const },
+        ...overrides,
+      };
+    }
+
+    it('creates a tumbling trigger with a window config', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: tumblingBody(),
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().window).toEqual(window);
+      expect(res.json().mode).toBe('tumbling');
+    });
+
+    it('rejects a window config on a non-tumbling trigger (400)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: { ...triggerBody(pipelineVersionId), window },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('rejects ENABLING a tumbling trigger with no window (windowless-but-enabled)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: tumblingBody({ window: null, enabled: true }),
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('accepts a DISABLED tumbling trigger with no window (a draft)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: tumblingBody({ window: null, enabled: false }),
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().window).toBeNull();
+    });
+
+    it("rejects a non-'queue' concurrency policy on a tumbling trigger (v1 — skip would strand a window)", async () => {
+      const skip = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: tumblingBody({ concurrency: { policy: 'skip_if_running' } }),
+      });
+      expect(skip.statusCode).toBe(400);
+      const parallel = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: tumblingBody({ concurrency: { policy: 'parallel', max: 3 } }),
+      });
+      expect(parallel.statusCode).toBe(400);
+    });
+
+    it('rejects a window whose endTime is not after startTime (shared write rule)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: tumblingBody({ window: { ...window, endTime: '2026-06-01T00:00:00.000Z' } }),
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('PATCH guards the EFFECTIVE state: clearing the window on an enabled tumbling trigger is refused', async () => {
+      const created = (
+        await app.inject({ method: 'POST', url: '/api/triggers', payload: tumblingBody() })
+      ).json();
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${created.id}`,
+        payload: { window: null },
+      });
+      expect(res.statusCode).toBe(400);
+      const ok = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${created.id}`,
+        payload: { window: null, enabled: false },
+      });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json().window).toBeNull();
+    });
+
+    it('PATCH guards the EFFECTIVE state: a policy edit away from queue on a tumbling trigger is refused', async () => {
+      const created = (
+        await app.inject({ method: 'POST', url: '/api/triggers', payload: tumblingBody() })
+      ).json();
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${created.id}`,
+        payload: { concurrency: { policy: 'skip_if_running' } },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('an unrelated PATCH leaves an existing window untouched (no .partial() clobber)', async () => {
+      const created = (
+        await app.inject({ method: 'POST', url: '/api/triggers', payload: tumblingBody() })
+      ).json();
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${created.id}`,
+        payload: { name: 'Renamed' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().window).toEqual(window);
+    });
+  });
 });

@@ -22,8 +22,15 @@ describe('FireResultSchema', () => {
     });
   });
 
-  it('parses a bare queued result (no runId/reason)', () => {
+  it('parses a bare queued result (a pre-S9 response shape — still tolerated)', () => {
     expect(FireResultSchema.parse({ outcome: 'queued' })).toEqual({ outcome: 'queued' });
+  });
+
+  it('parses a queued result WITH a runId (#5 S9 — the durable row is reported)', () => {
+    expect(FireResultSchema.parse({ outcome: 'queued', runId: 'run_1' })).toEqual({
+      outcome: 'queued',
+      runId: 'run_1',
+    });
   });
 
   it('parses a skipped result with a reason', () => {

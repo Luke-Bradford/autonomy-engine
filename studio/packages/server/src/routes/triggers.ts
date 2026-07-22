@@ -9,6 +9,7 @@ import {
   type Recurrence,
   type Trigger,
   type TriggerMode,
+  type WindowConfig,
 } from '@autonomy-studio/shared';
 import {
   createSecret,
@@ -142,6 +143,44 @@ function assertEventConsistent(
   }
 }
 
+/**
+ * #5 S9 — the window-config CROSS-field rules, checked against the EFFECTIVE
+ * post-write state (the `assertEventConsistent` pattern). Three invariants:
+ *   - a window geometry only makes sense on a `tumbling` trigger (it IS what
+ *     the mode fires on);
+ *   - an ENABLED tumbling trigger MUST carry a window — enabled-but-windowless
+ *     is inert by construction (no chain can ever seed), the same refusal
+ *     shape as `assertBindableIfEnabled`/`assertEventConsistent`;
+ *   - a tumbling trigger's concurrency policy must be `queue` (v1):
+ *     `skip_if_running` would SKIP a window's one materialization and strand
+ *     it forever (a tumbling window must eventually run — that is the mode's
+ *     whole contract), and `parallel` belongs to S11's per-trigger window
+ *     concurrency (1–N with self-dependency), not here. Refused up front
+ *     rather than silently mis-firing.
+ */
+function assertWindowConsistent(
+  mode: TriggerMode,
+  window: WindowConfig | null,
+  enabled: boolean,
+  concurrencyPolicy: string,
+): void {
+  if (window !== null && mode !== 'tumbling') {
+    throw new BadRequestError(
+      "a window config is only valid on a 'tumbling' trigger — set mode:'tumbling' or remove `window`",
+    );
+  }
+  if (mode === 'tumbling' && enabled && window === null) {
+    throw new BadRequestError(
+      'an enabled tumbling trigger must carry a `window` config ({frequency, interval, startTime}) — configure it or disable the trigger',
+    );
+  }
+  if (mode === 'tumbling' && concurrencyPolicy !== 'queue') {
+    throw new BadRequestError(
+      "a tumbling trigger's concurrency policy must be 'queue' (v1) — a skipped window would strand forever; per-window concurrency arrives with S11",
+    );
+  }
+}
+
 export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
 
@@ -150,6 +189,7 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
     assertBindableIfEnabled(body.enabled, body.pipelineVersionId);
     assertRecurrenceConsistent(body.mode, body.recurrence ?? null, body.schedule !== null);
     assertEventConsistent(body.mode, body.event ?? null, body.enabled);
+    assertWindowConsistent(body.mode, body.window ?? null, body.enabled, body.concurrency.policy);
     requireOwnedPipelineVersion(db, body.pipelineVersionId, request.principal);
     const created = createTrigger(db, { ...body, ownerId: request.principal.ownerId });
     // Reconcile the durable `schedule_tick` rows so a newly-enabled schedule
@@ -198,6 +238,12 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
     // Same 3-state PATCH semantics as recurrence: undefined = untouched.
     const effEvent = body.event !== undefined ? body.event : existing.event;
     assertEventConsistent(effMode, effEvent, effEnabled);
+    // #5 S9 — same 3-state; concurrency is all-or-nothing on a PATCH (no
+    // partial concurrency object), so the effective policy is body-or-existing.
+    const effWindow = body.window !== undefined ? body.window : existing.window;
+    const effPolicy =
+      body.concurrency !== undefined ? body.concurrency.policy : existing.concurrency.policy;
+    assertWindowConsistent(effMode, effWindow, effEnabled, effPolicy);
     const updated = updateTrigger(db, existing.id, body);
     if (!updated) throw new NotFoundError('trigger', existing.id);
     // Reconcile: a patch may enable/disable, rebind, change the schedule, or

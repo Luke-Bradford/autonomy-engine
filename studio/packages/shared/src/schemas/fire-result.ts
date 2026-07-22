@@ -15,13 +15,16 @@ export type FireOutcome = z.infer<typeof FireOutcomeSchema>;
  * The wire shape the server's `RunLauncher.fire()` returns and the `202` fire
  * endpoint sends. Shared FE/BE so the web client validates the fire response
  * through the SAME schema the launcher's type is derived from (`launcher.ts`
- * derives `FireResult`/`FireOutcome` from these). `runId` is present iff
- * `started`; `reason` iff `skipped` — both optional, so the schema tolerates a
- * bare `{ outcome }` for `queued`.
+ * derives `FireResult`/`FireOutcome` from these). `runId` is present iff a
+ * run row was created (`started` AND — since #5 S9 — `queued`, whose durable
+ * row always existed but went unreported; the tumbling-window completion
+ * chain needs to link a queued run to its window); `reason` iff `skipped`.
+ * Both optional, so the schema tolerates a bare `{ outcome }` (a pre-S9
+ * `queued` response).
  */
 export const FireResultSchema = z.object({
   outcome: FireOutcomeSchema,
-  /** The created run's id — present iff `outcome === 'started'`. */
+  /** The created run's id — present iff a run row exists (`started`/`queued`). */
   runId: z.string().min(1).optional(),
   /** Why admission was refused — present iff `outcome === 'skipped'`. */
   reason: z.string().min(1).optional(),

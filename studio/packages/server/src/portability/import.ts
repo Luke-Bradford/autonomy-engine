@@ -176,6 +176,11 @@ function importTriggerEnvelope(
     // whose every subsequent PATCH 400s on the cross-field rule. An event-mode
     // trigger keeps its subscription verbatim (no secret in it).
     event: rest.mode === 'event' ? (rest.event ?? null) : null,
+    // #5 S9 — a window geometry only makes sense on a `tumbling` trigger
+    // (`assertWindowConsistent`, the route guard this path bypasses): force it
+    // null on any other mode, exactly as `event` above. A tumbling trigger
+    // keeps its geometry verbatim (no secret in it).
+    window: rest.mode === 'tumbling' ? (rest.window ?? null) : null,
     enabled: false,
   });
 

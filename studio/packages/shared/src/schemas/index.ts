@@ -4,6 +4,8 @@ export * from './pagination.js';
 export * from './connection.js';
 export * from './pipeline.js';
 export * from './recurrence.js';
+export * from './window.js';
+export * from './window-event.js';
 export * from './trigger.js';
 export * from './trigger-context.js';
 export * from './fire-result.js';

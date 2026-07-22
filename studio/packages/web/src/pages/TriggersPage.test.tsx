@@ -45,6 +45,7 @@ function trigger(overrides: Partial<TriggerPublic> = {}): TriggerPublic {
     schedule: '0 2 * * *',
     webhook: null,
     event: null,
+    window: null,
     concurrency: { policy: 'skip_if_running' },
     runWindows: null,
     recurrence: null,
