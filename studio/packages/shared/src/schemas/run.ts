@@ -12,11 +12,13 @@ export const RunStatusSchema = z.enum([
 export type RunStatus = z.infer<typeof RunStatusSchema>;
 
 /**
- * One execution of a specific, immutable `PipelineVersion`. `leaseUntil` +
- * `heartbeatAt` back the boot-time reconciler's "could this `running` row
- * have survived a restart?" check (see the target architecture's Run &
- * execution model); both are epoch-ms, nullable until a run actually starts
- * executing.
+ * One execution of a specific, immutable `PipelineVersion`. `leaseUntil` is the
+ * execution LEASE: #5 S4 has a `running` run HOLD it (`now + LEASE_TTL_MS`,
+ * projected from status by `syncRunLifecycle`) and a parked/terminal run RELEASE
+ * it (`null`), splitting "held by a live drive" from the lifecycle status. The
+ * boot reconciler does NOT yet read it — it scans by `status` today; heartbeat
+ * RENEWAL of `heartbeatAt` + the lease-expiry reclaim that consumes these are #5
+ * S7 (target architecture's Run & execution model). Both are epoch-ms, nullable.
  */
 export const RunSchema = z.object({
   id: z.string().min(1),

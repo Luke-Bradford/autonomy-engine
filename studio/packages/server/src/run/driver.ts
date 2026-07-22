@@ -354,6 +354,17 @@ export function buildEngine(pv: PipelineVersion): Engine {
 }
 
 /**
+ * #5 S4 — the execution-lease TTL. A `running` run HOLDS a lease until now+TTL (a
+ * live drive is executing it); this is the initial grant stamped on entry to
+ * `running`. Heartbeat RENEWAL, the lease-expiry alarm, and generation tokens are
+ * #5 S7 — until S7 NOTHING reads `leaseUntil` (boot-reconcile scans by STATUS, not
+ * lease), so on a long run this value simply goes stale with no consumer, harmless
+ * until S7's renewal keeps it fresh. The value is the S7 heartbeat-miss budget; S7
+ * tunes it when renewal lands.
+ */
+const LEASE_TTL_MS = 5 * 60_000;
+
+/**
  * Sync the DB run's lifecycle status/finishedAt to `status`. Only touches `runs`
  * when something actually changed (idempotent); `finishedAt` is stamped ONCE, the
  * first time the run reaches a terminal status, and never moved.
@@ -374,7 +385,12 @@ export function syncRunLifecycle(db: Db, runId: string, status: RunLifecycleStat
     ? (existing.finishedAt ?? Date.now())
     : existing.finishedAt;
   if (existing.status === status && existing.finishedAt === finishedAt) return;
-  updateRun(db, runId, { status, finishedAt });
+  // #5 S4 — project the execution lease from status: `running` HOLDS a lease,
+  // anything else (waiting/terminal) RELEASES it. Written only on a real status
+  // change (the early-return above), so the lease is stamped ONCE on entry to
+  // `running` and never re-stamped mid-run — renewal is S7.
+  const leaseUntil = status === 'running' ? Date.now() + LEASE_TTL_MS : null;
+  updateRun(db, runId, { status, finishedAt, leaseUntil });
 }
 
 /**
@@ -1095,7 +1111,12 @@ export function terminalizeInterrupted(deps: TerminalizeDeps, runId: string): vo
   const patchRow = (): void => {
     const run = getRun(db, runId);
     if (run !== null && !isTerminalRow(run.status)) {
-      updateRun(db, runId, { status: 'interrupted', finishedAt: Date.now() });
+      // #5 S4 — this is the ONE terminal transition that bypasses
+      // `syncRunLifecycle` (a lone row-patch when the log has no events), so it
+      // must RELEASE the execution lease itself; otherwise an interrupted run
+      // keeps a stale `leaseUntil` that S7's lease-expiry reconciler would treat
+      // as a phantom live worker.
+      updateRun(db, runId, { status: 'interrupted', finishedAt: Date.now(), leaseUntil: null });
     }
   };
   let events: EngineEvent[];

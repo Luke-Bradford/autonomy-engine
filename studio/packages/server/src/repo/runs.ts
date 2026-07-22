@@ -91,26 +91,30 @@ export function updateRun(db: Db, id: string, patch: RunLifecyclePatch): Run | n
 }
 
 /**
- * Non-terminal run statuses — a run in one of these still occupies a
- * concurrency slot for its trigger. Terminal = `success`/`failure`/`skipped`/
- * `interrupted`. (`skipped` is terminal; the concurrency gate never CREATES a
- * skipped run row, but a node-driven skip that terminalizes a whole run must
- * still free the slot.)
+ * Statuses that OCCUPY a concurrency slot for their trigger — the admission
+ * count. Terminal = `success`/`failure`/`skipped`/`interrupted`. (`skipped` is
+ * terminal; the concurrency gate never CREATES a skipped run row, but a
+ * node-driven skip that terminalizes a whole run must still free the slot.)
  *
- * #5 S3 (#619) — `waiting` deliberately STAYS here for now. The Codex-hardened
- * spec (line 132) has a parked run RELEASE its concurrency slot, but that split
- * (execution-lease vs lifecycle) is #5 **S4**'s scope — releasing the slot before
- * S4's lease machinery lands would OVER-ADMIT on resume (a `waiting` run that
- * un-parks back to `running` could exceed the trigger's concurrency with nothing
- * to re-acquire the slot). Counting a parked run against its trigger is the
- * conservative, safe default until S4; when S4 lands the lease it OWNS removing
- * `waiting` from this set.
+ * #5 S4 — a `waiting` (parked) run RELEASES its slot: per the Codex-hardened spec
+ * (line 132-134) a run parked on a timer/webhook/dependency for hours "must not
+ * occupy a worker or a slot", and "resumption is event-driven". So `waiting` is
+ * NOT here — parking frees the trigger's slot, and a resuming run rejoins
+ * `running` directly. This is the split #5 S3 deferred: the execution LEASE
+ * (`syncRunLifecycle` projects `leaseUntil` from status — held while `running`,
+ * released on park) is now distinct from the lifecycle status.
+ *
+ * CONSEQUENCE (intended, spec-sanctioned): a parked run no longer blocks a new
+ * fire, so a `skip_if_running` trigger with a long-parked run WILL fire again,
+ * and a resumed run can transiently exceed `parallel`'s `max`. Bounding this with
+ * a fair-queue / `waiting_concurrency` re-admission gate on resume is #5 **S6**'s
+ * scope, not S4's — the "by default" in the spec is exactly that S6 opt-in.
+ *
+ * `queued` is NOT a run status (a queued fire is held in the launcher's in-memory
+ * queue with no run row, so it never counted here); when #5 S6 persists a
+ * `queued` status it must likewise stay OUT of this set (pre-admission ≠ a slot).
  */
-const ACTIVE_RUN_STATUSES = [
-  'pending',
-  'running',
-  'waiting',
-] as const satisfies readonly RunStatus[];
+const ACTIVE_RUN_STATUSES = ['pending', 'running'] as const satisfies readonly RunStatus[];
 
 /**
  * Count a trigger's currently-active (non-terminal) runs — the P4 concurrency
