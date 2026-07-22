@@ -5,6 +5,7 @@ import {
   NewTriggerSchema,
   SubstituteError,
   TriggerPublicSchema,
+  type ConcurrencyPolicy,
   type EventConfig,
   type Recurrence,
   type Trigger,
@@ -162,7 +163,7 @@ function assertWindowConsistent(
   mode: TriggerMode,
   window: WindowConfig | null,
   enabled: boolean,
-  concurrencyPolicy: string,
+  concurrencyPolicy: ConcurrencyPolicy,
 ): void {
   if (window !== null && mode !== 'tumbling') {
     throw new BadRequestError(
