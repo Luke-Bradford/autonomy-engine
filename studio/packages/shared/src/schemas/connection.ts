@@ -19,6 +19,14 @@ export const ConnectionKindSchema = z.enum([
 ]);
 export type ConnectionKind = z.infer<typeof ConnectionKindSchema>;
 
+/**
+ * The CLI/subscription connection kind (`claude -p` / `codex exec`). Named here
+ * so the equality checks that gate subscription-only behaviour — the #2 L14c
+ * quota admission gate (executor pre-flight) and its window writer (driver) —
+ * share ONE typed identifier instead of a bare `'agent_cli'` string in each.
+ */
+export const AGENT_CLI_CONNECTION_KIND: ConnectionKind = 'agent_cli';
+
 export const ConnectionSchema = z.object({
   id: z.string().min(1),
   ownerId: z.string().min(1).nullable(),

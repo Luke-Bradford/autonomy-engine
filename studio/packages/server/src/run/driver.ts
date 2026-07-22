@@ -1,4 +1,5 @@
 import {
+  AGENT_CLI_CONNECTION_KIND,
   createEngine,
   resolveRunParams,
   DEFAULT_RETRY_INTERVAL_SECONDS,
@@ -18,6 +19,8 @@ import {
 } from '@autonomy-studio/shared';
 import { ZodError } from 'zod';
 import { getRun, updateRun } from '../repo/runs.js';
+import { getConnection } from '../repo/connections.js';
+import { recordConnectionQuotaExhaustion } from '../repo/connection-quota.js';
 import { getPipelineVersion } from '../repo/pipeline-versions.js';
 import { recordExternalWait } from '../repo/external-waits.js';
 import { hashExternalWaitToken } from '../webhooks/external-wait-token.js';
@@ -820,6 +823,49 @@ function driveFinishRun(
 }
 
 /**
+ * #2 L14c — the SOLE WRITER of the per-connection quota reset window (the studio
+ * analog of the engine's reset-epoch-split invariant: the `agent_cli` adapter only
+ * EXTRACTS the reset window into `retryAfterSeconds`; this one site PERSISTS it).
+ *
+ * Called for every event the pump appends. On a POST-DISPATCH `rate_limit` failure
+ * — the adapter discovered a subscription CLI's quota is spent — it records the
+ * reset window keyed by the connection the executor stamped on the event (the L13a
+ * `${}`-resolved id; the node's template string is not it). Every subsequent
+ * dispatch of that shared connection then reads the window and is admission-gated
+ * before it spawns a doomed subprocess.
+ *
+ * Anchored to the event's durable `ts` (`eventTs`), NOT a fresh clock: the write is
+ * a pure function of the frozen event, so it is idempotent under a re-dispatch (the
+ * `MAX`-upsert absorbs a repeat) and needs no clock seam. Replay-safe BY
+ * CONSTRUCTION — the pump appends only genuinely-new events; boot/resume rebuilds
+ * state through `projectRunState`'s pure fold, NOT this path, so a replayed
+ * `node.failed{rate_limit}` never re-fires the write.
+ *
+ * Gated on `kind === agent_cli`: a provider-API 429 (anthropic/openai) carries the
+ * SAME `rate_limit` code via L7 but has no subscription quota window, so it keeps
+ * its existing per-node retry unchanged. Best-effort — a failed write only loses the
+ * optimisation and degrades to the reactive path, never to incorrectness.
+ */
+function recordQuotaWindowIfExhausted(db: Db, event: EngineEvent, eventTs: number): void {
+  if (
+    event.type !== 'node.failed' ||
+    event.code !== FAILURE_CODES.RATE_LIMIT ||
+    event.retryAfterSeconds === undefined ||
+    event.connectionId === undefined
+  ) {
+    return;
+  }
+  const connection = getConnection(db, event.connectionId);
+  if (connection?.kind !== AGENT_CLI_CONNECTION_KIND) return;
+  recordConnectionQuotaExhaustion(
+    db,
+    event.connectionId,
+    eventTs + event.retryAfterSeconds * 1000,
+    eventTs,
+  );
+}
+
+/**
  * The reduce↔persist fixpoint. Drains `commands` (and everything they cascade),
  * appending every produced event and folding it. Stops when the queue empties
  * or the run reaches a terminal fact. Returns the final projected state.
@@ -972,6 +1018,7 @@ export async function pump(
       // just appended at (#497) — the run's main derivation site.
       const result = appendAndFold(deps.db, deps.bus, engine, state, event, deps.log);
       state = result.state;
+      recordQuotaWindowIfExhausted(deps.db, event, result.record.ts);
       syncRunLifecycle(deps.db, state.runId, state.status);
       queue.push(...result.commands);
       if (TERMINAL_RUN.has(state.status)) {

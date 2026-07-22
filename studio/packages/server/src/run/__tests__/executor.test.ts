@@ -21,12 +21,18 @@ import { createConnection } from '../../repo/connections.js';
 import { createSecret } from '../../repo/secrets.js';
 import { encrypt } from '../../secrets/secrets.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { startRun, type DocResolver } from '../driver.js';
-import { refuseToArm } from './stub-alarms.js';
+import { startRun, type DocResolver, type RetryAlarms } from '../driver.js';
+import { refuseToArm, stubAlarms } from './stub-alarms.js';
 import { reconcileOnBoot } from '../reconcile.js';
 import { loadEngineEvents } from '../events.js';
 import { createExecutor } from '../executor.js';
 import { createConnectorRegistry, type ConnectorRegistry } from '../../connectors/registry.js';
+import { and, eq } from 'drizzle-orm';
+import { runEvents } from '../../db/schema.js';
+import {
+  getConnectionQuotaResetEpoch,
+  recordConnectionQuotaExhaustion,
+} from '../../repo/connection-quota.js';
 import type { ActivityEvent, ConnectorAdapter } from '../../connectors/types.js';
 import type { Supervisor } from '../../workers/process-supervisor.js';
 
@@ -104,6 +110,8 @@ function deps(
     concurrency?: number;
     masterKey?: Uint8Array;
     catalog?: ActivityCatalog;
+    now?: () => number;
+    alarms?: RetryAlarms;
   } = {},
 ) {
   const resolveDoc = resolveDocFor(db);
@@ -117,10 +125,15 @@ function deps(
       adapters: over.adapters ?? testRegistry(),
       concurrency: over.concurrency,
       catalog: over.catalog,
+      now: over.now,
     }),
-    // No doc here declares `policy.retry`, so no `scheduleRetry` can be emitted
-    // and nothing should ever arm — say so rather than accepting one silently.
-    alarms: refuseToArm,
+    // The same clock the executor gate reads also drives a retry's `dueAt`, so a
+    // gate-armed retry lands deterministically in the `now`-injecting tests.
+    now: over.now,
+    // Default: no doc declares `policy.retry`, so no `scheduleRetry` can be emitted
+    // and nothing should ever arm — say so rather than accepting one silently. A
+    // test that DOES exercise the retry path passes a real `stubAlarms`.
+    alarms: over.alarms ?? refuseToArm,
   };
 }
 
@@ -1598,5 +1611,186 @@ describe('createExecutor — item 7 / S4: http_request config-sink secret header
       kind: 'permanent',
       error: expect.stringContaining('invalid http_request activity config'),
     });
+  });
+});
+
+// --- #2 L14c: CLI/subscription quota admission gate + window writer ----------
+
+/** A fake `agent_cli` adapter yielding a caller-supplied terminal, so the quota
+ * tests never spawn a real subprocess (the `noopSupervisor` would throw). */
+function fakeAgentCliAdapter(run: ConnectorAdapter['runActivity']): ConnectorRegistry {
+  const adapter: ConnectorAdapter = {
+    kind: 'agent_cli',
+    configSchema: z.object({}).passthrough(),
+    testConnection: () => Promise.resolve({ ok: true }),
+    runActivity: run,
+  };
+  return new Map([['agent_cli', adapter]]);
+}
+
+function agentTaskNode(
+  id: string,
+  connectionId: string | undefined,
+  policy?: Node['policy'],
+): Node {
+  seq += 1;
+  return {
+    id,
+    type: 'agent_task',
+    config: { task: 'do work' },
+    connectionId,
+    position: { x: seq, y: 0 },
+    ...(policy !== undefined ? { policy } : {}),
+  };
+}
+
+/** An adapter runActivity that yields a subscription-quota `rate_limit` failure
+ * carrying `retryAfterSeconds` — the reactive shape L14c's first slice emits. */
+const rateLimit = (retryAfterSeconds: number): ConnectorAdapter['runActivity'] =>
+  async function* () {
+    yield { type: 'failed', kind: 'rate_limit', error: 'quota exhausted', retryAfterSeconds };
+  };
+
+describe('#2 L14c — quota window writer (driver, sole persister)', () => {
+  it('records the reset window on an agent_cli rate_limit, anchored to the event ts', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'agent_cli', {}, 'k');
+    const pvId = seedVersion(db, [agentTaskNode('n1', connId)]);
+    const run = seedRun(db, pvId);
+
+    await startRun(deps(db, { adapters: fakeAgentCliAdapter(rateLimit(300)) }), run);
+
+    const failed = loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed');
+    expect(failed).toMatchObject({ code: 'rate_limit', connectionId: connId });
+    // The window is anchored to the FAILURE EVENT's durable ts (not a fresh clock),
+    // so it is a pure function of the frozen event and idempotent on replay. Read
+    // the row's stored ts off the raw log to pin the exact `ts + retryAfter` epoch.
+    const failedRow = db
+      .select({ ts: runEvents.ts })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, run.id), eq(runEvents.type, 'node.failed')))
+      .get();
+    expect(failedRow).toBeDefined();
+    expect(getConnectionQuotaResetEpoch(db, connId)).toBe(failedRow!.ts + 300 * 1000);
+  });
+
+  it('does NOT record a window for a provider-API rate_limit (no subscription quota)', async () => {
+    // An `http` connection's `rate_limit` shares the code AND is stamped with its
+    // resolved `connectionId` on the dispatched failure — so this proves the driver
+    // gates the window writer on `kind === agent_cli`, not merely on the presence of
+    // a connectionId. A provider-API 429 has no subscription quota window.
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y' })]);
+    const run = seedRun(db, pvId);
+    const adapters = fakeHttpAdapter(async function* () {
+      yield { type: 'failed', kind: 'rate_limit', error: 'slow down', retryAfterSeconds: 120 };
+    });
+
+    await startRun(deps(db, { adapters }), run);
+
+    const failed = loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed');
+    // The failure IS a rate_limit carrying both the hint and the connectionId, but
+    // the connection is `http` not `agent_cli` → the driver records no window.
+    expect(failed).toMatchObject({
+      code: 'rate_limit',
+      retryAfterSeconds: 120,
+      connectionId: connId,
+    });
+    expect(getConnectionQuotaResetEpoch(db, connId)).toBeNull();
+  });
+});
+
+describe('#2 L14c — quota admission gate (executor pre-flight)', () => {
+  it('short-circuits an agent_cli dispatch during an active window WITHOUT spawning', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'agent_cli', {}, 'k');
+    const pvId = seedVersion(db, [agentTaskNode('n1', connId)]);
+    const run = seedRun(db, pvId);
+    // An active window: reset 60s in the future of the injected clock.
+    const now = () => 1_000_000;
+    recordConnectionQuotaExhaustion(db, connId, 1_000_000 + 60_000, 900_000);
+
+    // This adapter MUST NOT be reached — a hit means the gate failed to fire.
+    const neverCalled = vi.fn();
+    const registry = fakeAgentCliAdapter(
+      // eslint-disable-next-line require-yield
+      async function* () {
+        neverCalled();
+        throw new Error('adapter should not run while the quota window is active');
+      },
+    );
+
+    await startRun(deps(db, { adapters: registry, now }), run);
+
+    expect(neverCalled).not.toHaveBeenCalled();
+    const types = eventTypes(db, run.id);
+    expect(types).not.toContain('node.dispatched');
+    const failed = loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed');
+    expect(failed).toMatchObject({ kind: 'transient', code: 'rate_limit', retryAfterSeconds: 60 });
+    // A pre-dispatch failure carries NO connectionId, so the writer does not
+    // re-record the window it is reacting to.
+    expect(failed).not.toHaveProperty('connectionId');
+  });
+
+  it('does NOT gate once the window has elapsed (dispatch proceeds to the adapter)', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'agent_cli', {}, 'k');
+    const pvId = seedVersion(db, [agentTaskNode('n1', connId)]);
+    const run = seedRun(db, pvId);
+    // A window that reset in the PAST relative to the injected clock → not active.
+    const now = () => 2_000_000;
+    recordConnectionQuotaExhaustion(db, connId, 1_500_000, 1_400_000);
+
+    const reached = vi.fn();
+    const registry = fakeAgentCliAdapter(async function* () {
+      reached();
+      yield { type: 'succeeded', outputs: { result: 'ok' } };
+    });
+
+    await startRun(deps(db, { adapters: registry, now }), run);
+
+    expect(reached).toHaveBeenCalledTimes(1);
+    expect(eventTypes(db, run.id)).toContain('node.dispatched');
+  });
+
+  it('a gated node WITH a retry policy actually arms a retry at the window end (flows through L7)', async () => {
+    // The gate emits `kind:'transient'` + `retryAfterSeconds` precisely so it
+    // flows through the L7 retry path exactly like an adapter-reported rate_limit
+    // — so a gated node that DECLARES a retry budget must genuinely arm a retry
+    // (not merely fail-shaped-as-transient). The same injected clock drives both
+    // the gate's remaining-window math and the retry's `dueAt`, so the armed alarm
+    // lands exactly at the window reset, WITHOUT ever reaching the adapter.
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'agent_cli', {}, 'k');
+    const pvId = seedVersion(db, [
+      agentTaskNode('n1', connId, { retry: 1, retryIntervalSeconds: 300 }),
+    ]);
+    const run = seedRun(db, pvId);
+    const now = () => 1_000_000;
+    recordConnectionQuotaExhaustion(db, connId, 1_000_000 + 60_000, 900_000);
+
+    const neverCalled = vi.fn();
+    const registry = fakeAgentCliAdapter(
+      // eslint-disable-next-line require-yield
+      async function* () {
+        neverCalled();
+        throw new Error('adapter should not run while the quota window is active');
+      },
+    );
+    const alarms = stubAlarms();
+
+    await startRun(deps(db, { adapters: registry, now, alarms }), run);
+
+    // The gate short-circuited (no dispatch), yet a real retry was armed — landing
+    // at the window reset (now + the gate's 60s remaining), NOT the 300s static
+    // policy interval, so the provider-authority hint governs (#602/L7).
+    expect(neverCalled).not.toHaveBeenCalled();
+    expect(eventTypes(db, run.id)).toContain('node.retryScheduled');
+    expect(alarms.armed).toHaveLength(1);
+    const [armed] = alarms.armed;
+    expect(armed).toBeDefined();
+    expect(armed!.dueAt).toBe(1_000_000 + 60_000);
+    expect(armed!.ref).toMatchObject({ runId: run.id, nodeId: 'n1' });
   });
 });
