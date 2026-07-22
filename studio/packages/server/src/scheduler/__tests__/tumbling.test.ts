@@ -26,19 +26,23 @@ import {
   listWindowStates,
   rebuildWindowStatus,
   completeWindow,
+  retryDueWindow,
+  retryWindow,
   type WindowKey,
 } from '../../repo/tumbling-windows.js';
 import type { Db } from '../../repo/types.js';
 import { createRunEventBus } from '../../run/event-bus.js';
 import { type FireContext, type FireResult } from '../../run/launcher.js';
-import { createAlarmClock } from '../alarms.js';
+import { createAlarmClock, type WakeupHandler } from '../alarms.js';
 import {
   buildWindowDueRef,
+  buildWindowRetryRef,
   createTumblingService,
   firstWindowEndingAfter,
   isTumblable,
   isWindowRefFresh,
   WINDOW_DUE_KIND,
+  WINDOW_RETRY_KIND,
   windowConfigEpoch,
   windowSizeMs,
   type TumblingLauncher,
@@ -2119,12 +2123,982 @@ describe('#5 S10 — repo: cursor + epoch-scoped join', () => {
 
     // Absent epoch (a pre-S10 orphan) → NOT matched (documented at-least-once).
     mkRun();
-    expect(findUnlinkedRunForWindow(db, trigger.id, 'epA', iso(W0_END))).toBeNull();
+    expect(findUnlinkedRunForWindow(db, trigger.id, 'epA', iso(W0_END), iso(T0))).toBeNull();
     // Wrong epoch → NOT matched (the old-epoch-at-shared-boundary hazard).
     mkRun('epB');
-    expect(findUnlinkedRunForWindow(db, trigger.id, 'epA', iso(W0_END))).toBeNull();
+    expect(findUnlinkedRunForWindow(db, trigger.id, 'epA', iso(W0_END), iso(T0))).toBeNull();
     // Right epoch → matched.
     const match = mkRun('epA');
-    expect(findUnlinkedRunForWindow(db, trigger.id, 'epA', iso(W0_END))).toBe(match.id);
+    expect(findUnlinkedRunForWindow(db, trigger.id, 'epA', iso(W0_END), iso(T0))).toBe(match.id);
+  });
+});
+
+describe('#5 S11c — per-trigger window retry', () => {
+  const RETRY_CONFIG: WindowConfig = { ...CONFIG, retry: { count: 2, intervalInSeconds: 60 } };
+
+  /** A linked window whose run has terminalized with `runStatus`. */
+  function failedWindow(
+    db: Db,
+    trigger: Trigger,
+    pv: string,
+    runStatus: 'failure' | 'interrupted' = 'failure',
+  ) {
+    if (!isTumblable(trigger)) throw new Error('fixture must be tumblable');
+    const key = keyFor(trigger, T0);
+    createWindow(db, {
+      ...key,
+      windowEnd: iso(W0_END),
+      geometry: {
+        frequency: trigger.window.frequency,
+        interval: trigger.window.interval,
+        startTime: trigger.window.startTime,
+      },
+      origin: 'live',
+    });
+    const run = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pv,
+      triggerId: trigger.id,
+      parentRunId: null,
+      params: {},
+      triggerContext: {
+        triggerId: trigger.id,
+        scheduledTime: iso(W0_END),
+        body: null,
+        windowEpoch: key.configEpoch,
+      },
+    });
+    linkWindowRun(db, key, run.id, 'fire');
+    updateRun(db, run.id, { status: runStatus, finishedAt: W0_END + 1 });
+    return { key, run };
+  }
+
+  /** Publish the run-terminal event and let the tap's microtask run. */
+  async function tapTerminal(bus: ReturnType<typeof createRunEventBus>, runId: string) {
+    bus.publish({
+      id: 'evt1',
+      runId,
+      seq: 9,
+      type: 'run.finished',
+      payload: {},
+      ts: W0_END + 1,
+    });
+    await Promise.resolve();
+  }
+
+  function pendingRetries(db: Db) {
+    return listPendingWakeups(db).filter((w) => w.kind === WINDOW_RETRY_KIND);
+  }
+
+  describe('repo: retryWindow / retryDueWindow (guarded flips)', () => {
+    function waitingWindow(db: Db, trigger: Trigger) {
+      const key = keyFor(trigger, T0);
+      createWindow(db, {
+        ...key,
+        windowEnd: iso(W0_END),
+        geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+        origin: 'live',
+      });
+      return key;
+    }
+
+    it('retryWindow flips running → retry_pending: attempt+1, runId CLEARED, dueAt stamped, event appended', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const key = waitingWindow(db, trigger);
+      linkWindowRun(db, key, 'run-a1', 'fire');
+
+      const due = W0_END + 60_000;
+      expect(
+        retryWindow(db, key, {
+          runId: 'run-a1',
+          runStatus: 'failure',
+          attempt: 1,
+          nextAttemptAtMs: due,
+        }),
+      ).toBe(true);
+
+      const state = getWindowState(db, key);
+      expect(state?.status).toBe('retry_pending');
+      expect(state?.attempt).toBe(1);
+      expect(state?.runId).toBeNull();
+      expect(state?.nextAttemptAtMs).toBe(due);
+      const events = listWindowEvents(db, key);
+      expect(events[2]).toEqual({
+        type: 'window.retryScheduled',
+        payload: { runId: 'run-a1', runStatus: 'failure', attempt: 1, nextAttemptAt: iso(due) },
+      });
+      expect(rebuildWindowStatus(db, key)).toBe('retry_pending');
+    });
+
+    it('retryWindow no-ops (appends NOTHING) unless the window is running', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const key = waitingWindow(db, trigger); // waiting, not running
+      expect(
+        retryWindow(db, key, {
+          runId: 'run-x',
+          runStatus: 'failure',
+          attempt: 1,
+          nextAttemptAtMs: W0_END,
+        }),
+      ).toBe(false);
+      expect(getWindowState(db, key)?.status).toBe('waiting');
+      expect(listWindowEvents(db, key)).toHaveLength(1); // created only
+    });
+
+    it('retryDueWindow flips retry_pending → waiting (dueAt cleared, attempt kept, event appended); no-ops elsewhere', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const key = waitingWindow(db, trigger);
+      // Not retry_pending yet — the flip must refuse.
+      expect(retryDueWindow(db, key, 1)).toBe(false);
+      linkWindowRun(db, key, 'run-a1', 'fire');
+      retryWindow(db, key, {
+        runId: 'run-a1',
+        runStatus: 'failure',
+        attempt: 1,
+        nextAttemptAtMs: W0_END + 60_000,
+      });
+
+      expect(retryDueWindow(db, key, 1)).toBe(true);
+      const state = getWindowState(db, key);
+      expect(state?.status).toBe('waiting');
+      expect(state?.attempt).toBe(1);
+      expect(state?.runId).toBeNull();
+      expect(state?.nextAttemptAtMs).toBeNull();
+      const events = listWindowEvents(db, key);
+      expect(events[3]).toEqual({ type: 'window.retryDue', payload: { attempt: 1 } });
+      expect(rebuildWindowStatus(db, key)).toBe('waiting');
+      // Double-drive is safe: the guard makes the second flip a no-op.
+      expect(retryDueWindow(db, key, 1)).toBe(false);
+      expect(listWindowEvents(db, key)).toHaveLength(4);
+    });
+
+    it('the projection stays fold-consistent and attempt == count(retryScheduled) through a full retry lifecycle', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const key = waitingWindow(db, trigger);
+      linkWindowRun(db, key, 'run-a1', 'fire');
+      retryWindow(db, key, {
+        runId: 'run-a1',
+        runStatus: 'failure',
+        attempt: 1,
+        nextAttemptAtMs: W0_END + 60_000,
+      });
+      retryDueWindow(db, key, 1);
+      linkWindowRun(db, key, 'run-a2', 'fire');
+      retryWindow(db, key, {
+        runId: 'run-a2',
+        runStatus: 'interrupted',
+        attempt: 2,
+        nextAttemptAtMs: W0_END + 120_000,
+      });
+      retryDueWindow(db, key, 2);
+      linkWindowRun(db, key, 'run-a3', 'fire');
+      completeWindow(db, key, { status: 'succeeded', runId: 'run-a3' });
+
+      expect(getWindowState(db, key)?.status).toBe('succeeded');
+      expect(rebuildWindowStatus(db, key)).toBe('succeeded');
+      const events = listWindowEvents(db, key);
+      const retriesInLog = events.filter((e) => e.type === 'window.retryScheduled').length;
+      expect(retriesInLog).toBe(2);
+      expect(getWindowState(db, key)?.attempt).toBe(retriesInLog);
+    });
+
+    it('findUnlinkedRunForWindow NEVER resurrects a consumed prior attempt (the event-log exclusion)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      if (!isTumblable(trigger)) throw new Error('unreachable');
+      const key = waitingWindow(db, trigger);
+      const mkRun = () =>
+        createRun(db, {
+          ownerId: 'local',
+          pipelineVersionId: pv,
+          triggerId: trigger.id,
+          parentRunId: null,
+          params: {},
+          triggerContext: {
+            triggerId: trigger.id,
+            scheduledTime: iso(W0_END),
+            body: null,
+            windowEpoch: key.configEpoch,
+          },
+        });
+
+      // Attempt 1 fired, linked, failed, retry consumed it (runId cleared).
+      const a1 = mkRun();
+      linkWindowRun(db, key, a1.id, 'fire');
+      retryWindow(db, key, {
+        runId: a1.id,
+        runStatus: 'failure',
+        attempt: 1,
+        nextAttemptAtMs: W0_END + 60_000,
+      });
+      retryDueWindow(db, key, 1);
+      // The projection no longer references a1 — but the event log does. The
+      // join must NOT hand a1 back as a "crash orphan": link-healing the OLD
+      // FAILED run would fold a stale outcome and burn the retry budget
+      // without ever re-executing.
+      expect(
+        findUnlinkedRunForWindow(db, trigger.id, key.configEpoch, iso(W0_END), key.windowStart),
+      ).toBeNull();
+
+      // A genuine crash orphan (attempt-2 fired, link never committed) IS
+      // matched — the heal still works.
+      const a2 = mkRun();
+      expect(
+        findUnlinkedRunForWindow(db, trigger.id, key.configEpoch, iso(W0_END), key.windowStart),
+      ).toBe(a2.id);
+      // And once a2 links, a later scan matches NOTHING (a1 stays excluded).
+      linkWindowRun(db, key, a2.id, 'fire');
+      retryWindow(db, key, {
+        runId: a2.id,
+        runStatus: 'failure',
+        attempt: 2,
+        nextAttemptAtMs: W0_END + 120_000,
+      });
+      retryDueWindow(db, key, 2);
+      expect(
+        findUnlinkedRunForWindow(db, trigger.id, key.configEpoch, iso(W0_END), key.windowStart),
+      ).toBeNull();
+    });
+  });
+
+  describe('settle-time retry decision (tap + reconcile + link-heal share it)', () => {
+    it('a failed run with budget → retry_pending + a window_retry alarm (attempt-n discriminator), NOT window.failed', async () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const { key, run } = failedWindow(db, trigger, pv);
+
+      const bus = createRunEventBus();
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => W0_END + 1,
+      });
+      service.subscribeCompletion(bus);
+      await tapTerminal(bus, run.id);
+
+      const state = getWindowState(db, key);
+      expect(state?.status).toBe('retry_pending');
+      expect(state?.attempt).toBe(1);
+      expect(state?.nextAttemptAtMs).toBe(W0_END + 1 + 60_000);
+      // The alarm: dueAt is the STORED nextAttemptAt; the dedupe discriminator
+      // carries the attempt ordinal (the codex-hardened attempt-n rule).
+      const alarms = pendingRetries(db);
+      expect(alarms).toHaveLength(1);
+      expect(alarms[0]?.dueAt).toBe(W0_END + 1 + 60_000);
+      expect(alarms[0]?.dedupeKey).toContain('attempt-1');
+      // No terminal event in the log.
+      expect(listWindowEvents(db, key).map((e) => e.type)).not.toContain('window.failed');
+    });
+
+    it('an INTERRUPTED run retries too (a known failure)', async () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const { key, run } = failedWindow(db, trigger, pv, 'interrupted');
+
+      const bus = createRunEventBus();
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => W0_END + 1,
+      });
+      service.subscribeCompletion(bus);
+      await tapTerminal(bus, run.id);
+
+      expect(getWindowState(db, key)?.status).toBe('retry_pending');
+    });
+
+    it('budget EXHAUSTED → terminal window.failed exactly as before', async () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, {
+        pipelineVersionId: pv,
+        window: { ...CONFIG, retry: { count: 1, intervalInSeconds: 60 } },
+      });
+      if (!isTumblable(trigger)) throw new Error('unreachable');
+      const { key, run } = failedWindow(db, trigger, pv);
+      // Simulate the budget already consumed: attempt = count = 1.
+      retryWindow(db, key, {
+        runId: run.id,
+        runStatus: 'failure',
+        attempt: 1,
+        nextAttemptAtMs: W0_END + 60_000,
+      });
+      retryDueWindow(db, key, 1);
+      const run2 = createRun(db, {
+        ownerId: 'local',
+        pipelineVersionId: pv,
+        triggerId: trigger.id,
+        parentRunId: null,
+        params: {},
+        triggerContext: {
+          triggerId: trigger.id,
+          scheduledTime: iso(W0_END),
+          body: null,
+          windowEpoch: key.configEpoch,
+        },
+      });
+      linkWindowRun(db, key, run2.id, 'fire');
+      updateRun(db, run2.id, { status: 'failure', finishedAt: W0_END + 2 });
+
+      const bus = createRunEventBus();
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => W0_END + 2,
+      });
+      service.subscribeCompletion(bus);
+      await tapTerminal(bus, run2.id);
+
+      const state = getWindowState(db, key);
+      expect(state?.status).toBe('failed');
+      expect(pendingRetries(db)).toHaveLength(0);
+      const last = listWindowEvents(db, key).at(-1);
+      expect(last).toEqual({
+        type: 'window.failed',
+        payload: { runId: run2.id, runStatus: 'failure' },
+      });
+    });
+
+    it('a MISSING run never retries — an unknown outcome folds terminal (reconcile path)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      if (!isTumblable(trigger)) throw new Error('unreachable');
+      const key = keyFor(trigger, T0);
+      createWindow(db, {
+        ...key,
+        windowEnd: iso(W0_END),
+        geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+        origin: 'live',
+      });
+      linkWindowRun(db, key, 'run-gone', 'fire');
+
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+      });
+      service.reconcile();
+
+      expect(getWindowState(db, key)?.status).toBe('failed');
+      expect(pendingRetries(db)).toHaveLength(0);
+    });
+
+    it('NO retry policy → the exact pre-S11c terminal behavior (regression pin)', async () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv }); // plain CONFIG, no retry
+      const { key, run } = failedWindow(db, trigger, pv);
+
+      const bus = createRunEventBus();
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+      });
+      service.subscribeCompletion(bus);
+      await tapTerminal(bus, run.id);
+
+      expect(getWindowState(db, key)?.status).toBe('failed');
+      expect(pendingRetries(db)).toHaveLength(0);
+    });
+
+    it('an OLD-EPOCH window never retries — settle folds it terminal (no permanently-stuck retry_pending)', async () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const { key, run } = failedWindow(db, trigger, pv);
+      // Geometry edit AFTER the run fired: the window's epoch is now stale.
+      // A retry decision here would schedule an alarm the handler must refuse
+      // (epoch-stale) and the overdue heal only drives CURRENT-epoch rows —
+      // the window would hold `retry_pending` forever. Settle must fold it
+      // terminal instead (stale-epoch disposition stays S11d's).
+      updateTrigger(db, trigger.id, { window: { ...RETRY_CONFIG, interval: 30 } });
+
+      const bus = createRunEventBus();
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => W0_END + 1,
+      });
+      service.subscribeCompletion(bus);
+      await tapTerminal(bus, run.id);
+
+      expect(getWindowState(db, key)?.status).toBe('failed');
+      expect(pendingRetries(db)).toHaveLength(0);
+    });
+
+    it('a CORRUPT trigger row at settle time = policy unknown = terminal (the #637 lenient read; settle still lands)', async () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const { key, run } = failedWindow(db, trigger, pv);
+      corruptTriggerRow(db, trigger.id);
+
+      const bus = createRunEventBus();
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+      });
+      service.subscribeCompletion(bus);
+      await tapTerminal(bus, run.id);
+
+      // Never manufacture a retry from an unreadable row — but the settle
+      // itself (derived from the RUN row) must still land.
+      expect(getWindowState(db, key)?.status).toBe('failed');
+      expect(pendingRetries(db)).toHaveLength(0);
+    });
+  });
+
+  describe('window_retry alarm handler', () => {
+    function retryHarness(db: Db, now: () => number, launcher: TumblingLauncher = fakeLauncher()) {
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher,
+        log: silentLog(),
+        now,
+      });
+      const clock = createAlarmClock({
+        db,
+        handlers: [service.handler, service.retryHandler],
+        log: silentLog(),
+        now,
+      });
+      return { clock, service, launcher };
+    }
+
+    /** A retry_pending window with its armed alarm, as the settle path leaves it. */
+    function retryPendingWindow(db: Db, trigger: Trigger, pv: string, dueMs: number) {
+      const { key, run } = failedWindow(db, trigger, pv);
+      retryWindow(db, key, {
+        runId: run.id,
+        runStatus: 'failure',
+        attempt: 1,
+        nextAttemptAtMs: dueMs,
+      });
+      const alarm = armWakeup(db, {
+        kind: WINDOW_RETRY_KIND,
+        ref: buildWindowRetryRef(key, 1),
+        dueAt: dueMs,
+        discriminator: 'attempt-1',
+      });
+      return { key, run, alarm };
+    }
+
+    it('a due retry re-drives the window: retryDue + a NEW run fired and linked (the old run never re-linked)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const due = W0_END + 60_000;
+      const { key, run, alarm } = retryPendingWindow(db, trigger, pv, due);
+
+      const launcher = fakeLauncher([{ outcome: 'started', runId: 'run-a2' }]);
+      const { clock } = retryHarness(db, () => due, launcher);
+      clock.tick();
+
+      expect(getWakeup(db, alarm.id)?.status).toBe('fired');
+      const state = getWindowState(db, key);
+      expect(state?.status).toBe('running');
+      expect(state?.runId).toBe('run-a2');
+      expect(state?.runId).not.toBe(run.id);
+      expect(state?.attempt).toBe(1);
+      expect(listWindowEvents(db, key).map((e) => e.type)).toEqual([
+        'window.created',
+        'window.runCreated',
+        'window.retryScheduled',
+        'window.retryDue',
+        'window.runCreated',
+      ]);
+      expect(rebuildWindowStatus(db, key)).toBe('running');
+      // The new fire froze the SAME window context (S11b parity).
+      const fl = launcher as ReturnType<typeof fakeLauncher>;
+      expect(fl.contexts.at(-1)).toEqual({
+        scheduledTime: iso(W0_END),
+        windowEpoch: key.configEpoch,
+        windowStart: iso(T0),
+        windowEnd: iso(W0_END),
+      });
+    });
+
+    /** Direct fire pins the suppression REASON (the clock only debug-logs
+     * it) — the #637 test precedent. */
+    function directFire(db: Db, service: { retryHandler: WakeupHandler }, alarmId: string) {
+      const row = getWakeup(db, alarmId);
+      if (row === null) throw new Error('fixture alarm missing');
+      return service.retryHandler.fire(
+        row,
+        { scheduledFor: row.dueAt, firedAt: row.dueAt, latenessMs: 0 },
+        db,
+      );
+    }
+
+    it('suppresses a STALE delivery (window already re-driven past this attempt)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const due = W0_END + 60_000;
+      const { key, alarm } = retryPendingWindow(db, trigger, pv, due);
+      // The window moved on before delivery (e.g. the overdue heal drove it).
+      retryDueWindow(db, key, 1);
+
+      const { service } = retryHarness(db, () => due);
+      const result = directFire(db, service, alarm.id);
+
+      expect(result).toEqual({ status: 'suppressed', reason: 'window_not_retry_pending' });
+      // No duplicate retryDue appended.
+      const dueEvents = listWindowEvents(db, key).filter((e) => e.type === 'window.retryDue');
+      expect(dueEvents).toHaveLength(1);
+    });
+
+    it('suppresses on a CORRUPT trigger row (#637 discipline) — the window stays retry_pending, healed after repair', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const due = W0_END + 60_000;
+      const { key, alarm } = retryPendingWindow(db, trigger, pv, due);
+      corruptTriggerRow(db, trigger.id);
+
+      const { service } = retryHarness(db, () => due);
+      const result = directFire(db, service, alarm.id);
+
+      expect(result).toEqual({ status: 'suppressed', reason: 'trigger_unparseable' });
+      expect(getWindowState(db, key)?.status).toBe('retry_pending');
+    });
+
+    it('suppresses an UNBOUND trigger and an EPOCH-STALE ref', () => {
+      // Unbound.
+      {
+        const { db } = freshDb();
+        const pv = seedVersion(db);
+        const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+        const due = W0_END + 60_000;
+        const { alarm } = retryPendingWindow(db, trigger, pv, due);
+        updateTrigger(db, trigger.id, { pipelineVersionId: null });
+        const { service } = retryHarness(db, () => due);
+        expect(directFire(db, service, alarm.id)).toEqual({
+          status: 'suppressed',
+          reason: 'trigger_unbound',
+        });
+      }
+      // Epoch-stale (geometry edited mid-interval): the window is now
+      // old-epoch debris — inert until S11d's disposition pass, like its
+      // waiting siblings.
+      {
+        const { db } = freshDb();
+        const pv = seedVersion(db);
+        const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+        const due = W0_END + 60_000;
+        const { key, alarm } = retryPendingWindow(db, trigger, pv, due);
+        updateTrigger(db, trigger.id, { window: { ...RETRY_CONFIG, interval: 30 } });
+        const { service } = retryHarness(db, () => due);
+        expect(directFire(db, service, alarm.id)).toEqual({
+          status: 'suppressed',
+          reason: 'epoch_stale',
+        });
+        expect(getWindowState(db, key)?.status).toBe('retry_pending');
+      }
+    });
+  });
+
+  describe('overdue heal (sync + reconcile) — a suppressed alarm is not a stuck window', () => {
+    it('sync() re-drives an overdue retry_pending window after the trigger heals (state-driven, no backfill/cap needed)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const due = W0_END + 60_000;
+      const { key, run } = failedWindow(db, trigger, pv);
+      retryWindow(db, key, {
+        runId: run.id,
+        runStatus: 'failure',
+        attempt: 1,
+        nextAttemptAtMs: due,
+      });
+      // The alarm was suppressed while the trigger was broken (settled row,
+      // gone forever) — simulated by simply never arming one.
+
+      const launcher = fakeLauncher([{ outcome: 'started', runId: 'run-a2' }]);
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher,
+        log: silentLog(),
+        now: () => due + 1,
+      });
+      service.sync();
+
+      const state = getWindowState(db, key);
+      expect(state?.status).toBe('running');
+      expect(state?.runId).toBe('run-a2');
+      expect(listWindowEvents(db, key).map((e) => e.type)).toContain('window.retryDue');
+    });
+
+    it('sync() does NOT drive a retry_pending window before its due instant', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const due = W0_END + 60_000;
+      const { key, run } = failedWindow(db, trigger, pv);
+      retryWindow(db, key, {
+        runId: run.id,
+        runStatus: 'failure',
+        attempt: 1,
+        nextAttemptAtMs: due,
+      });
+
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => due - 1,
+      });
+      service.sync();
+
+      expect(getWindowState(db, key)?.status).toBe('retry_pending');
+    });
+
+    it('boot reconcile() re-drives an overdue retry_pending window', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const due = W0_END + 60_000;
+      const { key, run } = failedWindow(db, trigger, pv);
+      retryWindow(db, key, {
+        runId: run.id,
+        runStatus: 'failure',
+        attempt: 1,
+        nextAttemptAtMs: due,
+      });
+
+      const launcher = fakeLauncher([{ outcome: 'started', runId: 'run-a2' }]);
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher,
+        log: silentLog(),
+        now: () => due + 1,
+      });
+      service.reconcile();
+
+      const state = getWindowState(db, key);
+      expect(state?.status).toBe('running');
+      expect(state?.runId).toBe('run-a2');
+    });
+  });
+
+  describe('S11a/S10 interplay', () => {
+    it('retry_pending holds NO per-window concurrency slot (no run in flight)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, {
+        pipelineVersionId: pv,
+        window: { ...RETRY_CONFIG, maxConcurrentWindows: 1 },
+      });
+      if (!isTumblable(trigger)) throw new Error('unreachable');
+      // W0 is mid-retry-interval; W1 is waiting.
+      const { key: k0, run } = failedWindow(db, trigger, pv);
+      retryWindow(db, k0, {
+        runId: run.id,
+        runStatus: 'failure',
+        attempt: 1,
+        nextAttemptAtMs: W0_END + 60_000,
+      });
+      const k1 = keyFor(trigger, T0 + MIN15);
+      createWindow(db, {
+        ...k1,
+        windowEnd: iso(T0 + 2 * MIN15),
+        geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+        origin: 'live',
+      });
+
+      const launcher = fakeLauncher([{ outcome: 'started', runId: 'run-w1' }]);
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher,
+        log: silentLog(),
+        now: () => W0_END + 1, // before W0's retry is due
+      });
+      service.sync();
+
+      // Under cap=1, W1 fires anyway: the retry_pending W0 does not hold the
+      // slot — a long retry interval must not idle capacity.
+      expect(getWindowState(db, k1)?.status).toBe('running');
+      expect(getWindowState(db, k0)?.status).toBe('retry_pending');
+    });
+
+    it('a backfill-origin window retries under the backfill gate (origin preserved)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      if (!isTumblable(trigger)) throw new Error('unreachable');
+      const key = keyFor(trigger, T0);
+      createWindow(db, {
+        ...key,
+        windowEnd: iso(W0_END),
+        geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+        origin: 'backfill',
+      });
+      const run = createRun(db, {
+        ownerId: 'local',
+        pipelineVersionId: pv,
+        triggerId: trigger.id,
+        parentRunId: null,
+        params: {},
+        triggerContext: {
+          triggerId: trigger.id,
+          scheduledTime: iso(W0_END),
+          body: null,
+          windowEpoch: key.configEpoch,
+        },
+      });
+      linkWindowRun(db, key, run.id, 'fire');
+      updateRun(db, run.id, { status: 'failure', finishedAt: W0_END + 1 });
+      retryWindow(db, key, {
+        runId: run.id,
+        runStatus: 'failure',
+        attempt: 1,
+        nextAttemptAtMs: W0_END + 60_000,
+      });
+      retryDueWindow(db, key, 1);
+
+      const launcher = fakeLauncher([{ outcome: 'started', runId: 'run-a2' }]);
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher,
+        log: silentLog(),
+        now: () => W0_END + 60_001,
+      });
+      service.reconcile();
+
+      const state = getWindowState(db, key);
+      expect(state?.status).toBe('running');
+      expect(state?.origin).toBe('backfill');
+    });
+
+    it('retry_pending does NOT close the S10 backfill gate (a waiting backfill window still fires)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      if (!isTumblable(trigger)) throw new Error('unreachable');
+      // W1 is mid-retry-interval (retry_pending); W0 is a waiting BACKFILL
+      // window. The gate requires ZERO `running` windows — a retry hold has
+      // no run in flight, so it must not count.
+      const { key: k1, run } = failedWindow(db, trigger, pv);
+      retryWindow(db, k1, {
+        runId: run.id,
+        runStatus: 'failure',
+        attempt: 1,
+        nextAttemptAtMs: W0_END + 600_000, // far future — stays retry_pending
+      });
+      const k0 = keyFor(trigger, T0 - MIN15);
+      createWindow(db, {
+        ...k0,
+        windowEnd: iso(T0),
+        geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+        origin: 'backfill',
+      });
+
+      const launcher = fakeLauncher([{ outcome: 'started', runId: 'run-bf' }]);
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher,
+        log: silentLog(),
+        now: () => W0_END + 1, // before the retry is due
+      });
+      service.reconcile();
+
+      expect(getWindowState(db, k0)?.status).toBe('running');
+      expect(getWindowState(db, k1)?.status).toBe('retry_pending');
+    });
+  });
+
+  describe('disabled-trigger symmetry (a pause never forfeits the retry)', () => {
+    it('a run failing while its trigger is DISABLED still holds retry_pending, and heals on re-enable', async () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const { key, run } = failedWindow(db, trigger, pv);
+      // The pause lands BEFORE the settle — the retry decision must read the
+      // policy anyway (enabled-agnostic): folding terminal here while a
+      // disable AFTER retryScheduled survives would make the same operator
+      // action destroy or preserve the budget purely by timing.
+      updateTrigger(db, trigger.id, { enabled: false });
+
+      const bus = createRunEventBus();
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => W0_END + 1,
+      });
+      service.subscribeCompletion(bus);
+      await tapTerminal(bus, run.id);
+
+      expect(getWindowState(db, key)?.status).toBe('retry_pending');
+      expect(pendingRetries(db)).toHaveLength(1);
+
+      // Re-enable after the interval: sync()'s state-driven heal re-drives
+      // and materializes a fresh run.
+      updateTrigger(db, trigger.id, { enabled: true });
+      const launcher2 = fakeLauncher([{ outcome: 'started', runId: 'run-a2' }]);
+      const service2 = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: launcher2,
+        log: silentLog(),
+        now: () => W0_END + 1 + 60_001,
+      });
+      service2.sync();
+
+      const state = getWindowState(db, key);
+      expect(state?.status).toBe('running');
+      expect(state?.runId).toBe('run-a2');
+    });
+
+    it('a REBIND write materializes a window the unbound-stretch heal flipped to waiting (no wait for fire/boot)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const due = W0_END + 60_000;
+      const { key, run } = failedWindow(db, trigger, pv);
+      retryWindow(db, key, {
+        runId: run.id,
+        runStatus: 'failure',
+        attempt: 1,
+        nextAttemptAtMs: due,
+      });
+      // Unbind; the overdue heal still flips the window to waiting (the
+      // pre-bind drive), but materialize is skipped while unbound.
+      updateTrigger(db, trigger.id, { pipelineVersionId: null });
+      const service1 = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => due + 1,
+      });
+      service1.sync();
+      expect(getWindowState(db, key)?.status).toBe('waiting');
+
+      // The REBIND write's sync must kick materialize for the stranded row —
+      // not leave it waiting for the next window fire or reboot.
+      updateTrigger(db, trigger.id, { pipelineVersionId: pv });
+      const launcher2 = fakeLauncher([{ outcome: 'started', runId: 'run-a2' }]);
+      const service2 = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: launcher2,
+        log: silentLog(),
+        now: () => due + 2,
+      });
+      service2.sync();
+
+      const state = getWindowState(db, key);
+      expect(state?.status).toBe('running');
+      expect(state?.runId).toBe('run-a2');
+    });
+
+    it('a stored over-cap retry interval cannot wedge the settle (Date-range clamp; window still holds retry_pending)', async () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      // Read-lenient stored shape: an interval far past ECMAScript's max
+      // time value. The write boundary caps at 86400, so the row is seeded
+      // valid and then hand-edited PAST the boundary (the corruptTriggerRow
+      // vector — the exact hand-edit/drift class the leniency exists for).
+      // Unclamped, the settle's ISO stamp would THROW on every tap and boot
+      // reconcile — the window stuck `running` forever, slot held, backfill
+      // gate closed.
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const { key, run } = failedWindow(db, trigger, pv);
+      db.update(triggers)
+        .set({ window: { ...RETRY_CONFIG, retry: { count: 1, intervalInSeconds: 9e12 } } })
+        .where(eq(triggers.id, trigger.id))
+        .run();
+
+      const bus = createRunEventBus();
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => W0_END + 1,
+      });
+      service.subscribeCompletion(bus);
+      await tapTerminal(bus, run.id);
+
+      const state = getWindowState(db, key);
+      expect(state?.status).toBe('retry_pending');
+      // Clamped to the last 4-digit-year instant (Zod-datetime-representable).
+      expect(state?.nextAttemptAtMs).toBe(Date.parse('9999-12-31T23:59:59.999Z'));
+    });
+
+    it('the retry alarm firing while the trigger is DISABLED suppresses trigger_not_tumbling (window survives)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: RETRY_CONFIG });
+      const due = W0_END + 60_000;
+      const { key, run } = failedWindow(db, trigger, pv);
+      retryWindow(db, key, {
+        runId: run.id,
+        runStatus: 'failure',
+        attempt: 1,
+        nextAttemptAtMs: due,
+      });
+      const alarm = armWakeup(db, {
+        kind: WINDOW_RETRY_KIND,
+        ref: buildWindowRetryRef(key, 1),
+        dueAt: due,
+        discriminator: 'attempt-1',
+      });
+      updateTrigger(db, trigger.id, { enabled: false });
+
+      const service = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher: fakeLauncher(),
+        log: silentLog(),
+        now: () => due,
+      });
+      const row = getWakeup(db, alarm.id);
+      if (row === null) throw new Error('fixture alarm missing');
+      const result = service.retryHandler.fire(
+        row,
+        { scheduledFor: due, firedAt: due, latenessMs: 0 },
+        db,
+      );
+
+      expect(result).toEqual({ status: 'suppressed', reason: 'trigger_not_tumbling' });
+      // The window is NOT stranded: it stays retry_pending, and the overdue
+      // heal drives it once the trigger is re-enabled (previous test).
+      expect(getWindowState(db, key)?.status).toBe('retry_pending');
+    });
   });
 });

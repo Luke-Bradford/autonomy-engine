@@ -19,11 +19,24 @@ const failed = {
   type: 'window.failed',
   payload: { runId: 'run_1', runStatus: 'failure' },
 } as const;
+const retryScheduled = {
+  type: 'window.retryScheduled',
+  payload: {
+    runId: 'run_1',
+    runStatus: 'failure',
+    attempt: 1,
+    nextAttemptAt: '2026-07-01T01:05:00.000Z',
+  },
+} as const;
+const retryDue = { type: 'window.retryDue', payload: { attempt: 1 } } as const;
 
 describe('WindowEventSchema', () => {
-  it.each([created, runCreated, succeeded, failed])('round-trips $type', (event) => {
-    expect(WindowEventSchema.parse(event)).toEqual(event);
-  });
+  it.each([created, runCreated, succeeded, failed, retryScheduled, retryDue])(
+    'round-trips $type',
+    (event) => {
+      expect(WindowEventSchema.parse(event)).toEqual(event);
+    },
+  );
 
   it('rejects an unknown type', () => {
     expect(() => WindowEventSchema.parse({ type: 'window.exploded', payload: {} })).toThrow();
@@ -42,6 +55,18 @@ describe('WindowEventSchema', () => {
   it('window.failed accepts a null runId (a never-materialized window folded closed)', () => {
     const e = { type: 'window.failed', payload: { runId: null, runStatus: 'missing' } };
     expect(WindowEventSchema.parse(e)).toEqual(e);
+  });
+
+  it('window.retryScheduled refuses runStatus `missing` (#5 S11c — an unknown outcome never retries)', () => {
+    // A vanished run row means the outcome is UNKNOWN — the run may have
+    // SUCCEEDED, so a retry would duplicate side effects. `missing` stays a
+    // terminal `window.failed` fact; the union refuses it at the boundary.
+    expect(() =>
+      WindowEventSchema.parse({
+        type: 'window.retryScheduled',
+        payload: { ...retryScheduled.payload, runStatus: 'missing' },
+      }),
+    ).toThrow();
   });
 
   it('window.created carries an optional origin (#5 S10) — a pre-S10 payload still parses', () => {
@@ -63,7 +88,7 @@ describe('WindowEventSchema', () => {
 });
 
 describe('WindowStatusSchema', () => {
-  it.each(['waiting', 'running', 'succeeded', 'failed'])('accepts %s', (s) => {
+  it.each(['waiting', 'running', 'succeeded', 'failed', 'retry_pending'])('accepts %s', (s) => {
     expect(WindowStatusSchema.parse(s)).toBe(s);
   });
 });
@@ -93,5 +118,35 @@ describe('foldWindowStatus (the pure rebuild fold)', () => {
     // Symmetric with succeeded: BOTH terminals transition only from `running`,
     // mirroring `completeWindow`'s guard exactly (no fold/projection skew).
     expect(foldWindowStatus([created, failed])).toBe('waiting');
+  });
+
+  // #5 S11c — the retry loop through the fold.
+  it('folds the retry loop created → runCreated → retryScheduled → retryDue → runCreated → succeeded', () => {
+    expect(foldWindowStatus([created, runCreated, retryScheduled])).toBe('retry_pending');
+    expect(foldWindowStatus([created, runCreated, retryScheduled, retryDue])).toBe('waiting');
+    expect(foldWindowStatus([created, runCreated, retryScheduled, retryDue, runCreated])).toBe(
+      'running',
+    );
+    expect(
+      foldWindowStatus([created, runCreated, retryScheduled, retryDue, runCreated, succeeded]),
+    ).toBe('succeeded');
+    expect(
+      foldWindowStatus([created, runCreated, retryScheduled, retryDue, runCreated, failed]),
+    ).toBe('failed');
+  });
+
+  it('guards the retry transitions like every other (retryScheduled from running only, retryDue from retry_pending only)', () => {
+    // Mirrors the projection's guarded writes (`retryWindow`/`retryDueWindow`)
+    // exactly — no fold/projection skew on out-of-order sequences.
+    expect(foldWindowStatus([created, retryScheduled])).toBe('waiting');
+    expect(foldWindowStatus([created, runCreated, retryDue])).toBe('running');
+    expect(foldWindowStatus([created, runCreated, retryScheduled, retryScheduled])).toBe(
+      'retry_pending',
+    );
+    expect(foldWindowStatus([created, runCreated, retryScheduled, retryDue, retryDue])).toBe(
+      'waiting',
+    );
+    // A terminal never regresses into the retry loop.
+    expect(foldWindowStatus([created, runCreated, failed, retryScheduled])).toBe('failed');
   });
 });

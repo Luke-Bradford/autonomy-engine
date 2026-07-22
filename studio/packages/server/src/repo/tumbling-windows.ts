@@ -44,6 +44,13 @@ export interface TumblingWindowStateRow extends WindowKey {
   /** #5 S10 — `'live'` (forward chain) vs `'backfill'` (the bounded backfill
    * pass); drives the materialization gate in `scheduler/tumbling.ts`. */
   origin: WindowOrigin;
+  /** #5 S11c — retries consumed (0 = never re-driven). Monotonic via the
+   * guarded `running → retry_pending` flip; equals the count of
+   * `window.retryScheduled` events in the log (pinned by test). */
+  attempt: number;
+  /** #5 S11c — the STORED due instant (epoch ms) of a pending retry; NULL
+   * outside `retry_pending`. The sync/reconcile overdue heal reads it. */
+  nextAttemptAtMs: number | null;
   updatedAt: number;
 }
 
@@ -137,6 +144,77 @@ export function linkWindowRun(
       .run();
     if (updated.changes === 0) return false;
     appendEvent(tx, key, { type: 'window.runCreated', payload: { runId, via } });
+    return true;
+  });
+}
+
+/**
+ * #5 S11c — RETRY a window from its run's KNOWN failure: guarded flip
+ * `running → retry_pending` + append `window.retryScheduled`, atomically.
+ * `attempt` increments, `runId` CLEARS (no run is in flight during the
+ * interval — the completion tap must not resolve the consumed run to this
+ * window again), and `nextAttemptAtMs` stores the due instant (the
+ * `window_retry` alarm's `dueAt` mirrors it — never recomputed). Returns
+ * `false` (appending nothing) unless the window is currently `running` — the
+ * same at-least-once idempotency `completeWindow` has, so the tap and the
+ * boot reconcile can both attempt the same retry and exactly one wins.
+ * `runStatus` excludes `missing` at the type level: an unknown outcome never
+ * retries (see the event schema).
+ */
+export function retryWindow(
+  db: Db,
+  key: WindowKey,
+  input: {
+    runId: string;
+    runStatus: 'failure' | 'interrupted';
+    attempt: number;
+    nextAttemptAtMs: number;
+  },
+): boolean {
+  return db.transaction((tx) => {
+    const updated = tx
+      .update(tumblingWindowState)
+      .set({
+        status: 'retry_pending',
+        runId: null,
+        attempt: input.attempt,
+        nextAttemptAtMs: input.nextAttemptAtMs,
+        updatedAt: Date.now(),
+      })
+      .where(and(keyWhere(key), eq(tumblingWindowState.status, 'running')))
+      .run();
+    if (updated.changes === 0) return false;
+    appendEvent(tx, key, {
+      type: 'window.retryScheduled',
+      payload: {
+        runId: input.runId,
+        runStatus: input.runStatus,
+        attempt: input.attempt,
+        nextAttemptAt: new Date(input.nextAttemptAtMs).toISOString(),
+      },
+    });
+    return true;
+  });
+}
+
+/**
+ * #5 S11c — the retry interval elapsed (`window_retry` fired, or the
+ * sync/reconcile overdue heal drove it): guarded flip `retry_pending →
+ * waiting` + append `window.retryDue`, atomically. The window re-enters the
+ * materialize scan; `attempt` is kept (the budget check reads it at the NEXT
+ * settle). Returns `false` (appending nothing) unless currently
+ * `retry_pending` — a duplicate delivery/heal race loses the guard, so
+ * double-driving is safe.
+ */
+export function retryDueWindow(db: Db, key: WindowKey, attempt: number): boolean {
+  return db.transaction((tx) => {
+    const updated = tx
+      .update(tumblingWindowState)
+      .set({ status: 'waiting', nextAttemptAtMs: null, updatedAt: Date.now() })
+      .where(and(keyWhere(key), eq(tumblingWindowState.status, 'retry_pending')))
+      .run();
+    if (updated.changes === 0) return false;
+    appendEvent(tx, key, { type: 'window.retryDue', payload: { attempt } });
     return true;
   });
 }
@@ -275,12 +353,29 @@ export function rebuildWindowStatus(db: Db, key: WindowKey): WindowStatus | null
  * crashed exactly at the upgrade boundary carries no `windowEpoch`, is never
  * link-healed, and its window fires a second run — duplicate execution, never
  * a wrong link.
+ *
+ * S11c RE-SHAPE: "unlinked" is now an EVENT-LOG fact, not a projection-column
+ * fact. Retry clears the projection's `run_id` (the consumed attempt has no
+ * current window), so the old exclusion — `NOT EXISTS(… s.run_id = runs.id)`
+ * — would hand a consumed FAILED attempt back as a "crash orphan" and
+ * link-heal it onto its own window: a stale outcome folded as fresh, the
+ * retry budget burned with nothing re-executed. Every link since S9 appends
+ * `window.runCreated` in the same tx (`linkWindowRun`), so the log's
+ * runCreated set is the complete ever-linked set — the durable authority.
+ * The subquery is scoped to THIS window's key columns (served by
+ * `window_events_window_idx`, not a full log scan) — equivalent, not weaker:
+ * candidates are already fixed to `(triggerId, windowEpoch, scheduledTime ==
+ * windowEnd)`, every linked run's frozen `scheduledTime` equals its own
+ * window's end, and in a fixed grid one `(epoch, windowEnd)` names exactly
+ * one `windowStart` — so the only window whose `runCreated` events could
+ * ever name a candidate run is this one.
  */
 export function findUnlinkedRunForWindow(
   db: Db,
   triggerId: string,
   configEpoch: string,
   windowEnd: string,
+  windowStart: string,
 ): string | null {
   const row = db
     .select({ id: runs.id })
@@ -290,7 +385,14 @@ export function findUnlinkedRunForWindow(
         eq(runs.triggerId, triggerId),
         sql`json_extract(${runs.triggerContext}, '$.scheduledTime') = ${windowEnd}`,
         sql`json_extract(${runs.triggerContext}, '$.windowEpoch') = ${configEpoch}`,
-        sql`NOT EXISTS (SELECT 1 FROM ${tumblingWindowState} s WHERE s.run_id = ${runs.id})`,
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${windowEvents} e
+          WHERE e.trigger_id = ${triggerId}
+            AND e.config_epoch = ${configEpoch}
+            AND e.window_start = ${windowStart}
+            AND e.type = 'window.runCreated'
+            AND json_extract(e.payload, '$.runId') = ${runs.id}
+        )`,
       ),
     )
     .orderBy(asc(runs.startedAt), asc(runs.id))
