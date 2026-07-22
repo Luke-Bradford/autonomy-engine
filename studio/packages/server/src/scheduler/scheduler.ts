@@ -7,10 +7,10 @@ import {
   buildScheduleTickRef,
   isRefFresh,
   isSchedulable,
+  recurrenceStep,
   SCHEDULE_TICK_KIND,
   ScheduleTickRefSchema,
   scheduleBounds,
-  recurrenceStep,
   type SchedulableTrigger,
 } from './schedule-tick.js';
 
