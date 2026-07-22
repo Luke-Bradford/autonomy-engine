@@ -23,8 +23,10 @@ import {
   buildEngine,
   DocUnparseableError,
   DocUnresolvableError,
+  externalWaitArmInput,
   makeDocResolver,
   startRun,
+  waitArmInput,
   type DocResolver,
   type Executor,
   type RetryAlarms,
@@ -1538,18 +1540,19 @@ describe('reconcileOnBoot — a run PARKED on a wait (#4 A6)', () => {
     return run;
   }
 
-  it('reports it HELD, appends nothing, and leaves its live alarm row alone (no boot re-arm)', async () => {
-    // The parked-wait counterpart of the retry HELD case: a `wait_pending` node
-    // re-derives nothing on resume and cannot finish, so it reaches the reconciler
-    // with no commands — but UNLIKE a dropped `finishRun` it is NOT finalizable, and
-    // must not be mislabelled `finalized` (nor get a spurious `run.resumed`). Its
-    // alarm was armed BEFORE the park, so it always has a live row; the clock's boot
-    // tick fires it. Reconcile must leave it exactly as it found it.
+  it('a genuinely-`waiting` run is INVISIBLE to reconcile — its durable alarm recovers it', async () => {
+    // #5 S3 (#619) — the producer now parks the whole run `waiting` (its row is
+    // `waiting`, not `running`), so the running-only boot scan never sees it. That
+    // is CORRECT: its alarm was armed BEFORE the park, so it always has a live row,
+    // and the clock's boot tick fires it independently — un-parking it back to
+    // `running` and driving it. Scanning it here would append a redundant
+    // `run.resumed`. Reconcile must leave a waiting run exactly as it found it.
     const { db } = freshDb();
     const alarms = realAlarms(db);
     const run = await seedParkedRun(db, alarms);
+    expect(getRun(db, run.id)!.status).toBe('waiting');
     const before = loadEngineEvents(db, run.id);
-    expect(before.map((e) => e.type)).toContain('timer.waitScheduled');
+    expect(before.map((e) => e.type)).toContain('run.waiting');
     expect(listPendingWakeups(db)).toHaveLength(1);
     const armedBefore = listPendingWakeups(db)[0];
 
@@ -1560,15 +1563,71 @@ describe('reconcileOnBoot — a run PARKED on a wait (#4 A6)', () => {
       alarms,
     });
 
-    expect(report.held).toEqual([run.id]);
-    expect(report.finalized).toEqual([]);
+    // Not in ANY bucket — the scan never selected it.
+    expect(report.held).toEqual([]);
     expect(report.resumed).toEqual([]);
-    expect(report.rearmed).toEqual([]);
+    expect(report.finalized).toEqual([]);
     expect(report.interrupted).toEqual([]);
-    // Untouched: no `run.resumed`, no second alarm, still running awaiting its row.
+    // Untouched: log, row, and the live alarm all exactly as before.
+    expect(loadEngineEvents(db, run.id)).toEqual(before);
+    expect(getRun(db, run.id)!.status).toBe('waiting');
+    expect(listPendingWakeups(db)).toEqual([armedBefore]);
+  });
+
+  it('the CRASH-GAP run (row still `running`, `run.waiting` append lost) is reported HELD', async () => {
+    // The one parked-run case reconcile DOES see: a crash between the
+    // `timer.waitScheduled` fold and the `parkRun` → `run.waiting` append leaves the
+    // row `running` with a `wait_pending` node and no `run.waiting` in the log. On
+    // resume the reducer re-derives a lone `parkRun` (the producer) — a DRIVER-OWN
+    // command that EXECUTES nothing — so the held-park branch (which excludes
+    // `parkRun`) still catches it: report `held`, append nothing, leave its live
+    // alarm to recover it. Built by hand (the run_events log is append-only) as the
+    // exact pre-`run.waiting` state: `run.started` + an armed alarm + the
+    // `timer.waitScheduled` that parks the node, with the row still `running`.
+    const { db } = freshDb();
+    const alarms = realAlarms(db);
+    const pvId = seedVersion(db, [waitNode('w', '${30}')]);
+    const run = seedRun(db, pvId);
+    appendEngineEvent(db, {
+      type: 'run.started',
+      runId: run.id,
+      pipelineVersionId: pvId,
+      params: {},
+    });
+    const row = alarms.arm(
+      waitArmInput(
+        { now: () => 1_000 },
+        { runId: run.id, nodeId: 'w', attemptId: 'w#0', seconds: 30 },
+      ),
+    );
+    appendEngineEvent(db, {
+      type: 'timer.waitScheduled',
+      runId: run.id,
+      nodeId: 'w',
+      attemptId: 'w#0',
+      dueAt: row.dueAt,
+    });
+    updateRun(db, run.id, { status: 'running' });
+    const before = loadEngineEvents(db, run.id);
+    expect(before.map((e) => e.type)).not.toContain('run.waiting');
+    const armedBefore = listPendingWakeups(db);
+    expect(armedBefore).toHaveLength(1);
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+      alarms,
+    });
+
+    expect(report.held).toEqual([run.id]);
+    expect(report.resumed).toEqual([]);
+    expect(report.finalized).toEqual([]);
+    expect(report.interrupted).toEqual([]);
+    // Untouched: no `run.resumed`, no second alarm, still `running` on its live row.
     expect(loadEngineEvents(db, run.id)).toEqual(before);
     expect(getRun(db, run.id)!.status).toBe('running');
-    expect(listPendingWakeups(db)).toEqual([armedBefore]);
+    expect(listPendingWakeups(db)).toEqual(armedBefore);
   });
 });
 
@@ -1602,17 +1661,18 @@ describe('reconcileOnBoot — a run PARKED on a webhook external wait (#4 A13)',
     return run;
   }
 
-  it('reports it HELD, appends nothing, and leaves its live alarm row alone (the normal restart-while-parked case)', async () => {
-    // #4 A13 — the webhook counterpart of the wait HELD case. An `external_wait_pending`
-    // node re-derives nothing on resume and cannot finish, so it reaches the reconciler
-    // with no commands — and must NOT be mislabelled `finalized` nor get a spurious
-    // `run.resumed`. A webhook typically parks for a long time awaiting a human/external
-    // callback, so a restart while parked is its COMMON boot state.
+  it('a genuinely-`waiting` webhook run is INVISIBLE to reconcile (the normal restart-while-parked case)', async () => {
+    // #5 S3 (#619) — the webhook counterpart of the wait case. The producer parked
+    // the run `waiting`, so the running-only boot scan never selects it. A webhook
+    // typically parks for a long time awaiting a human/external callback, so a
+    // restart while parked is its COMMON boot state; its expiry alarm (armed BEFORE
+    // the park) recovers it, un-parking it on `externalWait.completed`/`expired`.
     const { db } = freshDb();
     const alarms = realAlarms(db);
     const run = await seedParkedWebhook(db, alarms);
+    expect(getRun(db, run.id)!.status).toBe('waiting');
     const before = loadEngineEvents(db, run.id);
-    expect(before.map((e) => e.type)).toContain('externalWait.created');
+    expect(before.map((e) => e.type)).toContain('run.waiting');
     expect(listPendingWakeups(db)).toHaveLength(1);
     const armedBefore = listPendingWakeups(db)[0];
 
@@ -1624,14 +1684,70 @@ describe('reconcileOnBoot — a run PARKED on a webhook external wait (#4 A13)',
       signExternalWaitToken: sign,
     });
 
-    expect(report.held).toEqual([run.id]);
+    expect(report.held).toEqual([]);
     expect(report.finalized).toEqual([]);
     expect(report.resumed).toEqual([]);
-    expect(report.rearmed).toEqual([]);
     expect(report.interrupted).toEqual([]);
-    // Untouched: no spurious `run.resumed`, no second alarm, still running.
+    // Untouched: no `run.resumed`, no second alarm, still `waiting` on its live row.
+    expect(loadEngineEvents(db, run.id)).toEqual(before);
+    expect(getRun(db, run.id)!.status).toBe('waiting');
+    expect(listPendingWakeups(db)).toEqual([armedBefore]);
+  });
+
+  it('the CRASH-GAP webhook run (row still `running`, `run.waiting` lost) is reported HELD', async () => {
+    // As for the wait crash-gap: the row is `running`, the node is
+    // `external_wait_pending`, and there is no `run.waiting` in the log. Resume
+    // re-derives a lone `parkRun` (excluded by the held-park branch), so it is
+    // reported `held` and left for its live expiry alarm. Built by hand as the exact
+    // pre-`run.waiting` state (the log is append-only).
+    const { db } = freshDb();
+    const alarms = realAlarms(db);
+    const pvId = seedVersion(db, [webhookNode('w')]);
+    const run = seedRun(db, pvId);
+    appendEngineEvent(db, {
+      type: 'run.started',
+      runId: run.id,
+      pipelineVersionId: pvId,
+      params: {},
+    });
+    const row = alarms.arm(
+      externalWaitArmInput(
+        { now: () => 1_000 },
+        {
+          runId: run.id,
+          nodeId: 'w',
+          attemptId: 'w#0',
+          timeoutSeconds: 30,
+        },
+      ),
+    );
+    appendEngineEvent(db, {
+      type: 'externalWait.created',
+      runId: run.id,
+      nodeId: 'w',
+      attemptId: 'w#0',
+      dueAt: row.dueAt,
+    });
+    updateRun(db, run.id, { status: 'running' });
+    const before = loadEngineEvents(db, run.id);
+    expect(before.map((e) => e.type)).not.toContain('run.waiting');
+    const armedBefore = listPendingWakeups(db);
+    expect(armedBefore).toHaveLength(1);
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+      alarms,
+      signExternalWaitToken: sign,
+    });
+
+    expect(report.held).toEqual([run.id]);
+    expect(report.resumed).toEqual([]);
+    expect(report.finalized).toEqual([]);
+    expect(report.interrupted).toEqual([]);
     expect(loadEngineEvents(db, run.id)).toEqual(before);
     expect(getRun(db, run.id)!.status).toBe('running');
-    expect(listPendingWakeups(db)).toEqual([armedBefore]);
+    expect(listPendingWakeups(db)).toEqual(armedBefore);
   });
 });

@@ -96,6 +96,15 @@ export function updateRun(db: Db, id: string, patch: RunLifecyclePatch): Run | n
  * `interrupted`. (`skipped` is terminal; the concurrency gate never CREATES a
  * skipped run row, but a node-driven skip that terminalizes a whole run must
  * still free the slot.)
+ *
+ * #5 S3 (#619) — `waiting` deliberately STAYS here for now. The Codex-hardened
+ * spec (line 132) has a parked run RELEASE its concurrency slot, but that split
+ * (execution-lease vs lifecycle) is #5 **S4**'s scope — releasing the slot before
+ * S4's lease machinery lands would OVER-ADMIT on resume (a `waiting` run that
+ * un-parks back to `running` could exceed the trigger's concurrency with nothing
+ * to re-acquire the slot). Counting a parked run against its trigger is the
+ * conservative, safe default until S4; when S4 lands the lease it OWNS removing
+ * `waiting` from this set.
  */
 const ACTIVE_RUN_STATUSES = [
   'pending',

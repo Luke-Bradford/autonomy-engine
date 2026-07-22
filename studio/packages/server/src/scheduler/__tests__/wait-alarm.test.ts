@@ -117,10 +117,14 @@ describe('A6 — arming a wait (the driver half)', () => {
 
     const state = await startRun(deps, run);
 
-    // The node is PARKED, and the run is deliberately NOT finished.
+    // The node is PARKED and the run is deliberately NOT finished. #5 S3 (#619):
+    // the run.waiting PRODUCER ran, so the whole run is now `waiting` (was
+    // `running` before the producer) with reason `waiting_timer`, both in the
+    // projection and on the row.
     expect(state.nodes.w!.status).toBe('wait_pending');
-    expect(state.status).toBe('running');
-    expect(getRun(db, run.id)!.status).toBe('running');
+    expect(state.status).toBe('waiting');
+    expect(state.waitingReason).toBe('waiting_timer');
+    expect(getRun(db, run.id)!.status).toBe('waiting');
 
     const pending = listPendingWakeups(db);
     expect(pending).toHaveLength(1);
@@ -130,8 +134,14 @@ describe('A6 — arming a wait (the driver half)', () => {
       dueAt: NOW + 5_000,
     });
 
-    const scheduled = loadEngineEvents(db, run.id).find((e) => e.type === 'timer.waitScheduled');
-    expect(scheduled).toMatchObject({ nodeId: 'w', attemptId: 'w#0', dueAt: NOW + 5_000 });
+    const log = loadEngineEvents(db, run.id);
+    expect(log.find((e) => e.type === 'timer.waitScheduled')).toMatchObject({
+      nodeId: 'w',
+      attemptId: 'w#0',
+      dueAt: NOW + 5_000,
+    });
+    // The durable park fact: appended AFTER the arm, once nothing is in flight.
+    expect(log.find((e) => e.type === 'run.waiting')).toMatchObject({ reason: 'waiting_timer' });
   });
 
   it('ARMS BEFORE it appends — a crash between them leaves a live alarm, not a hung run', async () => {
@@ -219,6 +229,8 @@ describe('A6 — the alarm fires: the wait completes', () => {
 
     await startRun(deps, run);
     expect(getRunState(db, deps, run.id).nodes.w!.status).toBe('wait_pending');
+    // #5 S3 (#619) — the producer parked the whole run.
+    expect(getRun(db, run.id)!.status).toBe('waiting');
 
     // Not due yet: the clock must not fire it early.
     clock.tick();
@@ -233,6 +245,8 @@ describe('A6 — the alarm fires: the wait completes', () => {
     const state = getRunState(db, deps, run.id);
     expect(state.nodes.w!.status).toBe('success');
     expect(state.nodes.after!.status).toBe('success');
+    // #5 S3 (#619) — the alarm un-parked the run (waiting→running) before it drove
+    // `after` and finished GREEN.
     expect(state.status).toBe('success');
     expect(getRun(db, run.id)!.status).toBe('success');
 
@@ -240,6 +254,7 @@ describe('A6 — the alarm fires: the wait completes', () => {
     expect(types).toEqual([
       'run.started',
       'timer.waitScheduled',
+      'run.waiting', // #5 S3 (#619) — the durable park
       'timer.due',
       'node.dispatched',
       'node.succeeded',

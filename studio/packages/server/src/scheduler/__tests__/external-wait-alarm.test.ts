@@ -122,8 +122,14 @@ describe('A13 — arming a webhook (the driver half)', () => {
     const state = await startRun(deps, run);
 
     expect(state.nodes.w!.status).toBe('external_wait_pending');
-    expect(state.status).toBe('running');
-    expect(getRun(db, run.id)!.status).toBe('running');
+    // #5 S3 (#619) — the producer parked the whole run `waiting` (was `running`
+    // before the producer), reason `waiting_external`.
+    expect(state.status).toBe('waiting');
+    expect(state.waitingReason).toBe('waiting_external');
+    expect(getRun(db, run.id)!.status).toBe('waiting');
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'run.waiting')).toMatchObject({
+      reason: 'waiting_external',
+    });
 
     // The expiry alarm.
     const pending = listPendingWakeups(db);

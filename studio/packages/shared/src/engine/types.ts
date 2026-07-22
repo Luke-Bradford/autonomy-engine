@@ -1470,6 +1470,22 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     outcome: RunOutcomeSchema,
     reason: z.string().optional(),
   }),
+  z.object({
+    /**
+     * #5 S3 (#619) — "this run has PARKED on an external event, so record it
+     * `waiting`." A driver-OWN command like `finishRun` (no executor — the pump
+     * appends the durable `run.waiting{reason}` and folds it, running→waiting).
+     * Emitted by `settle` when the walk reaches a fixpoint with the run
+     * non-terminal, at least one node awaiting an external event, and NOTHING in
+     * flight (no `ready`/`dispatched`/call-`waiting`/`retry_pending` node). The
+     * reverse edge (waiting→running) rides the durable resolving event's own fold
+     * (`timer.due`/`externalWait.*`/`run.resumed`), so it needs no counterpart
+     * command. `ExecutorCommand` excludes it (Extract dispatchNode|startChild), so
+     * forgetting the pump branch is a COMPILE error.
+     */
+    type: z.literal('parkRun'),
+    reason: WaitingReasonSchema,
+  }),
 ]);
 export type EngineCommand = z.infer<typeof EngineCommandSchema>;
 
