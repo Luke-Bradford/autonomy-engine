@@ -26,15 +26,46 @@ import { z } from 'zod';
  * - **`startTime`/`endTime` bounds land in S5b-2** (#549): a half-open window
  *   `[startTime, endTime)`, threaded to croner (`startAt`/`stopAt`) by the firing
  *   chain (`nextOccurrence`) so the bounds actually gate firing rather than being
- *   inert surface. `timeZone` is STILL deferred (#549 follow-up): v1 fires in UTC
- *   (the run-window UTC contract), so a `timeZone` field that only accepted `'UTC'`
- *   would be behaviourally identical to omitting it — the same inert "unreachable
- *   surface" anti-pattern; it lands with non-UTC firing, not before.
+ *   inert surface.
  *   All datetimes are UTC-with-`Z` (`z.string().datetime()` refuses offsets/naive).
+ * - **`timeZone` lands in S5b-timeZone** (#552): an IANA zone in which the cron
+ *   pattern is INTERPRETED, so a schedule fires at a wall-clock time in a non-UTC
+ *   zone (croner 10.0.1 honours `timezone` natively, DST included). It lands WITH
+ *   its real consumer — non-UTC firing threaded through `nextOccurrence` — not as a
+ *   `'UTC'`-only inert field. Absent ⇒ UTC (the run-window contract), so a
+ *   timeZone-free recurrence is byte-identical to a pre-#552 one. **Two seams the
+ *   caller must know:** (1) `interval > 1` ("every N periods") stays UTC-only for
+ *   now — the stepping calculator's period grid is UTC calendar arithmetic; a
+ *   zone-aware period model (with its DST-inverse hazards) is deferred to #623, so
+ *   the write boundary REFUSES `interval > 1` with a non-UTC zone rather than
+ *   shipping subtly-wrong DST stepping. (2) **run windows stay UTC** — the
+ *   `timeZone` governs ONLY cron interpretation; `isWithinRunWindows` still gates in
+ *   UTC, so a NY-zoned recurrence gated by a UTC run window is coherent but
+ *   two-zoned (documented at the `schedule-tick.ts` gate).
  */
 
 export const RecurrenceFrequencySchema = z.enum(['minute', 'hour', 'day', 'week', 'month']);
 export type RecurrenceFrequency = z.infer<typeof RecurrenceFrequencySchema>;
+
+/**
+ * #5 S5b-timeZone (#552) — is `tz` an IANA zone the runtime can resolve? True iff
+ * `Intl.DateTimeFormat` accepts it. This is the SAME ICU timezone database croner
+ * consumes (verified empirically, croner 10.0.1), so a zone that passes here is one
+ * croner can interpret — the write-boundary guard that keeps an unresolvable zone
+ * out of the firing chain, where croner throws a raw `TypeError` at `nextRun` (NOT
+ * at construct) that would otherwise roll back inside the alarm clock's transaction
+ * and re-deliver the row forever (see `nextOccurrence`). `''` and any non-IANA
+ * string are rejected (`Intl.DateTimeFormat` throws `RangeError`). Stdlib-only, so
+ * it lives here in `shared` (which imports no croner). `'UTC'` is valid.
+ */
+export function isValidTimeZone(tz: string): boolean {
+  try {
+    Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The largest `interval` a recurrence may author (#550). "Every N periods" is
@@ -89,6 +120,19 @@ export const RecurrenceSchema = z.object({
    */
   startTime: z.string().datetime().optional(),
   endTime: z.string().datetime().optional(),
+  /**
+   * #5 S5b-timeZone (#552) — the IANA zone the cron pattern is INTERPRETED in
+   * (e.g. `'America/New_York'` fires a daily `09:00` at 09:00 NY wall-clock, which
+   * is 14:00Z in winter / 13:00Z in summer — croner handles the DST shift). Absent
+   * ⇒ UTC (the run-window contract), so a timeZone-free recurrence is byte-identical
+   * to a pre-#552 one. The `startTime`/`endTime` bounds are absolute instants
+   * (UTC-`Z`), so they are unaffected by this zone — the zone governs only WHICH
+   * wall-clock instants the pattern picks, not the window it is clipped to. Only a
+   * FORMAT-free string on the lenient READ shape (an old/imported row never throws);
+   * the "must be a resolvable IANA zone" + "interval > 1 stays UTC-only" rules are
+   * WRITE concerns below.
+   */
+  timeZone: z.string().optional(),
 });
 export type Recurrence = z.infer<typeof RecurrenceSchema>;
 
@@ -152,6 +196,31 @@ export const RecurrenceWriteSchema = RecurrenceSchema.superRefine((r, ctx) => {
       message:
         'interval > 1 ("every N periods") requires a startTime anchor — it defines which ' +
         'period is period 0 (#550). Set startTime, or use interval: 1.',
+    });
+  }
+
+  // #552 — a `timeZone` must be an IANA zone the runtime (and thus croner) can
+  // resolve; an unresolvable zone would otherwise throw deep in the firing chain.
+  if (r.timeZone !== undefined && !isValidTimeZone(r.timeZone)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['timeZone'],
+      message: `timeZone must be a valid IANA zone (e.g. 'America/New_York', 'UTC') — '${r.timeZone}' is not resolvable`,
+    });
+  }
+  // #552 — "every N periods" (interval > 1) stays UTC-only for now. The stepping
+  // calculator's period grid is UTC calendar arithmetic; a zone-aware period model
+  // (local-calendar day/week/month boundaries + the DST-inverse local-midnight→
+  // instant conversion) is a genuine expansion deferred to #623. Refuse a non-UTC
+  // zone here rather than ship subtly-wrong DST stepping (interval === 1 gets full
+  // non-UTC support — croner handles it natively). Absent or 'UTC' ⇒ permitted.
+  if (r.interval > 1 && r.timeZone !== undefined && r.timeZone !== 'UTC') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['timeZone'],
+      message:
+        'interval > 1 ("every N periods") is UTC-only for now — a non-UTC timeZone with ' +
+        'stepping is deferred to #623. Use interval: 1 with this timeZone, or omit the timeZone.',
     });
   }
 

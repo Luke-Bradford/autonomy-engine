@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isValidTimeZone,
   RecurrenceSchema,
   RecurrenceWriteSchema,
   recurrenceToCron,
@@ -12,7 +13,8 @@ import {
  * rules, and the S5b-2 (#549) `startTime`/`endTime` bounds. `interval > 1` (#550)
  * is now accepted (startTime-anchored, capped) — the compiler still emits only the
  * within-period pattern; the server stepping calculator gates the periods. `timeZone`
- * is still deferred (#552 — UTC-only would be inert surface).
+ * (#552) is now accepted (a resolvable IANA zone; UTC-only when `interval > 1` — the
+ * zone-aware period model is deferred to #623), threaded to croner by `nextOccurrence`.
  */
 
 const base = (over: Partial<Recurrence> = {}): Recurrence => ({
@@ -173,6 +175,30 @@ describe('RecurrenceWriteSchema — the write-boundary rules', () => {
     expect(ok(base({ endTime: '2026-08-01T00:00:00Z' }))).toBe(true);
   });
 
+  it('accepts a resolvable IANA timeZone and rejects an unresolvable one (#552)', () => {
+    expect(ok(base({ timeZone: 'America/New_York' }))).toBe(true);
+    expect(ok(base({ timeZone: 'UTC' }))).toBe(true);
+    expect(ok(base({ timeZone: 'Europe/London' }))).toBe(true);
+    // Unresolvable / empty zone → refused (croner would throw at nextRun otherwise).
+    expect(ok(base({ timeZone: 'Not/AZone' }))).toBe(false);
+    expect(err(base({ timeZone: 'Not/AZone' }))).toMatch(/timeZone/);
+    expect(ok(base({ timeZone: '' }))).toBe(false);
+    // Absent is fine — unzoned ⇒ UTC, byte-identical to a pre-#552 recurrence.
+    expect(ok(base({}))).toBe(true);
+  });
+
+  it('interval > 1 is UTC-only: refuses a non-UTC timeZone, allows UTC/absent (#552, defer #623)', () => {
+    const anchored = { interval: 2, startTime: '2026-08-01T00:00:00Z' };
+    // Stepping in a non-UTC zone is deferred (#623) — refuse it, do not mis-fire.
+    expect(ok(base({ ...anchored, timeZone: 'America/New_York' }))).toBe(false);
+    expect(err(base({ ...anchored, timeZone: 'America/New_York' }))).toMatch(/623|UTC-only/);
+    // Explicit UTC (behaviourally identical to unzoned) and absent are permitted.
+    expect(ok(base({ ...anchored, timeZone: 'UTC' }))).toBe(true);
+    expect(ok(base(anchored))).toBe(true);
+    // interval === 1 with a non-UTC zone is the common case — fully supported.
+    expect(ok(base({ timeZone: 'America/New_York' }))).toBe(true);
+  });
+
   it('every write-valid recurrence compiles without throwing (compiler totality)', () => {
     const valids: Recurrence[] = [
       base({ frequency: 'minute' }),
@@ -206,5 +232,33 @@ describe('RecurrenceSchema — the lenient stored/read shape', () => {
     ).toBe(true);
     // Absent bounds = unbounded/open-ended, exactly today's behaviour.
     expect(RecurrenceSchema.safeParse({ frequency: 'day', interval: 1 }).success).toBe(true);
+  });
+
+  it('parses a stored timeZone (read is lenient — no IANA check on read) (#552)', () => {
+    // The read shape must never reject what write accepted; it also does not
+    // re-validate the zone (an imported/legacy row is taken as-is). The firing
+    // chain's `isValidTimeZone` belt + `InvalidScheduleError` guard cover a bad
+    // stored zone at fire time.
+    expect(
+      RecurrenceSchema.safeParse({ frequency: 'day', interval: 1, timeZone: 'America/New_York' })
+        .success,
+    ).toBe(true);
+    // Absent timeZone = UTC, exactly today's behaviour.
+    expect(RecurrenceSchema.safeParse({ frequency: 'day', interval: 1 }).success).toBe(true);
+  });
+});
+
+describe('isValidTimeZone — the IANA-zone write-boundary guard (#552)', () => {
+  it('accepts resolvable IANA zones (including UTC and aliases)', () => {
+    expect(isValidTimeZone('UTC')).toBe(true);
+    expect(isValidTimeZone('America/New_York')).toBe(true);
+    expect(isValidTimeZone('Europe/London')).toBe(true);
+    expect(isValidTimeZone('Etc/GMT+5')).toBe(true);
+  });
+
+  it('rejects unresolvable and empty strings (croner would throw on these)', () => {
+    expect(isValidTimeZone('Not/AZone')).toBe(false);
+    expect(isValidTimeZone('')).toBe(false);
+    expect(isValidTimeZone('utc/nonsense')).toBe(false);
   });
 });

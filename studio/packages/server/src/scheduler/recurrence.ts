@@ -1,5 +1,5 @@
 import { Cron } from 'croner';
-import type { RecurrenceFrequency } from '@autonomy-studio/shared';
+import { isValidTimeZone, type RecurrenceFrequency } from '@autonomy-studio/shared';
 
 /**
  * #5 S5 — croner as a RECURRENCE CALCULATOR, not a firing source.
@@ -14,8 +14,14 @@ import type { RecurrenceFrequency } from '@autonomy-studio/shared';
  * handler (`schedule-tick.ts`) compute through, so they cannot disagree about
  * when a trigger is next due (CLAUDE.md: single source of truth).
  *
- * TIMEZONE — always UTC, matching the run-window UTC contract, so a self-hosted
- * instance behaves identically regardless of host timezone.
+ * TIMEZONE — UTC by DEFAULT (matching the run-window UTC contract, so a self-hosted
+ * instance behaves identically regardless of host timezone), but a recurrence may
+ * name an IANA `timeZone` (#5 S5b-timeZone, #552) in which the cron pattern is
+ * INTERPRETED — a daily `09:00` in `America/New_York` fires at 09:00 NY wall-clock
+ * (14:00Z winter / 13:00Z summer; croner tracks the DST shift). The zone governs
+ * only WHICH instants the pattern picks; the `[startAt, stopAt)` bounds are absolute
+ * instants and so are unaffected by it, and run windows stay UTC (a two-zoned but
+ * coherent seam, documented at `schedule-tick.ts`).
  */
 
 /**
@@ -182,22 +188,71 @@ function periodModel(
  * "nothing more to arm" a finite schedule yields, settling the chain rather than
  * spinning.
  *
+ * ## `timeZone` (#5 S5b-timeZone, #552)
+ *
+ * `timeZone` (default `'UTC'`) is the IANA zone croner INTERPRETS `schedule` in. A
+ * bad zone does NOT throw at `new Cron(...)` — croner throws a raw `TypeError` at
+ * `nextRun` (verified empirically, croner 10.0.1), which OUTSIDE a guard would roll
+ * back inside the alarm clock's transaction and re-deliver the row forever (the
+ * exact spin `InvalidScheduleError` exists to prevent). Two defenses: an unresolvable
+ * non-UTC zone is rejected up front as `InvalidScheduleError` (the belt), AND the
+ * whole croner interaction — construct AND every `nextRun` — is wrapped so ANY
+ * croner throw (bad cron OR a zone `TypeError`) surfaces typed, never raw. `timeZone`
+ * only affects `interval === 1`: `interval > 1` with a non-UTC zone is refused at the
+ * write boundary (#552; zone-aware stepping deferred to #623) AND fail-closed here as
+ * `InvalidScheduleError` (a lenient-read imported row could pair them), so the UTC
+ * period model below is never asked to reason about a non-UTC grid.
+ *
  * @throws {InvalidScheduleError} if `schedule` is not a cron string croner can
  *   parse (a malformed bound would also surface here — but callers pass
- *   `z.string().datetime()`-validated bounds, so that path is a belt), OR if a
- *   `step` with `interval > 1` carries a non-finite `anchorEpochMs` (a
- *   write-impossible interval>1-without-startTime row — fail CLOSED, never
- *   over-fire).
+ *   `z.string().datetime()`-validated bounds, so that path is a belt), if `timeZone`
+ *   is a non-UTC zone the runtime cannot resolve, if croner throws at any `nextRun`
+ *   (e.g. a zone that slips past the belt), OR if a `step` with `interval > 1`
+ *   carries a non-finite `anchorEpochMs` (a write-impossible
+ *   interval>1-without-startTime row — fail CLOSED, never over-fire).
  */
 export function nextOccurrence(
   schedule: string,
   fromEpochMs: number,
   bounds: OccurrenceBounds = {},
   step?: OccurrenceStep,
+  timeZone = 'UTC',
 ): number | null {
-  let cron: Cron;
+  // Fail-closed guards BEFORE any croner (kept out of the wrapping try so their own
+  // typed throws are not double-wrapped):
+  //  - #552 belt: an unresolvable non-UTC zone would throw a raw TypeError at
+  //    nextRun (croner does NOT validate the zone at construct); reject it here.
+  if (timeZone !== 'UTC' && !isValidTimeZone(timeZone)) {
+    throw new InvalidScheduleError(
+      schedule,
+      new Error(`invalid timeZone: ${JSON.stringify(timeZone)}`),
+    );
+  }
+  //  - #550: a non-finite anchor is write-impossible (the write schema requires
+  //    startTime for interval>1) but a corrupt/imported row could reach here.
+  if (step !== undefined && step.interval > 1 && !Number.isFinite(step.anchorEpochMs)) {
+    throw new InvalidScheduleError(schedule, new Error('interval > 1 requires a finite anchor'));
+  }
+  //  - #552/#623: the write schema refuses interval>1 with a non-UTC zone (zone-aware
+  //    stepping is deferred), but the READ shape is lenient — a corrupt/imported row
+  //    could pair them. The stepping period model is UTC calendar arithmetic while
+  //    croner would interpret the cron in the non-UTC zone: a two-grid mismatch that
+  //    silently mis-qualifies periods near a day boundary. Fail CLOSED here (same
+  //    discipline as the anchor guard) rather than mis-fire, until #623 lands the
+  //    zone-aware period model.
+  if (step !== undefined && step.interval > 1 && timeZone !== 'UTC') {
+    throw new InvalidScheduleError(
+      schedule,
+      new Error('interval > 1 with a non-UTC timeZone is not supported yet (#623)'),
+    );
+  }
+
+  // The ENTIRE croner interaction is wrapped — construct AND every `nextRun` — so a
+  // raw croner throw (a malformed cron, or a zone TypeError that slips the belt)
+  // never escapes untyped to spin the alarm; it becomes InvalidScheduleError, which
+  // the handler suppresses (settle, no re-arm).
   try {
-    const options: { timezone: string; startAt?: Date; stopAt?: Date } = { timezone: 'UTC' };
+    const options: { timezone: string; startAt?: Date; stopAt?: Date } = { timezone: timeZone };
     // Inclusive `startAt`: nudge 1ms earlier so a whole-second boundary occurrence
     // clears croner's floored-exclusive comparison WITHOUT re-admitting a
     // sub-second-early slot (see the boundary contract above).
@@ -208,42 +263,40 @@ export function nextOccurrence(
     if (bounds.stopAt !== undefined) {
       options.stopAt = new Date(Math.ceil(bounds.stopAt / 1000) * 1000);
     }
-    cron = new Cron(schedule, options);
+    const cron = new Cron(schedule, options);
+
+    // No stepping (absent, or the every-period base case): the plain calculator.
+    if (step === undefined || step.interval <= 1) {
+      const next = cron.nextRun(new Date(fromEpochMs));
+      return next === null ? null : next.getTime();
+    }
+
+    // #550 — every-N-period stepping (UTC-only: interval>1 with a non-UTC zone is
+    // fail-closed above, so the UTC period model is correct here).
+    const { ordinal, startInstant } = periodModel(step.frequency, step.anchorEpochMs);
+    let candidate = cron.nextRun(new Date(fromEpochMs));
+    for (let probes = 0; candidate !== null && probes < MAX_PERIOD_PROBES; probes++) {
+      const rel = ordinal(candidate.getTime());
+      // Qualifying ⇔ a NON-NEGATIVE multiple of `interval` from the anchor. The
+      // `rel >= 0` half matters only defensively: production always pairs `step`
+      // with `startAt === anchor` (both derive from `startTime` — see
+      // `recurrenceStep`/`scheduleBounds`), so croner never returns a candidate
+      // before the anchor and `rel >= 0` holds. Were a caller to pass `step` with no
+      // `startAt`, JS's negative modulo (`-2 % 2 === 0`) would otherwise false-qualify
+      // a pre-anchor period; the guard rejects it and the jump below advances to
+      // period 0 (the anchor's period).
+      if (rel >= 0 && rel % step.interval === 0) return candidate.getTime();
+      // Jump croner to the start of the next qualifying period (the first multiple of
+      // `interval` strictly after this candidate's period). `startInstant - 1ms`
+      // reuses the inclusive-boundary compensation so an occurrence exactly at the
+      // period start is not skipped.
+      const nextQualifying = (Math.floor(rel / step.interval) + 1) * step.interval;
+      candidate = cron.nextRun(new Date(startInstant(nextQualifying) - 1));
+    }
+    return null;
   } catch (err) {
+    // Our own guards throw before the try; anything caught here is a croner throw.
+    if (err instanceof InvalidScheduleError) throw err;
     throw new InvalidScheduleError(schedule, err);
   }
-
-  // No stepping (absent, or the every-period base case): the plain calculator.
-  if (step === undefined || step.interval <= 1) {
-    const next = cron.nextRun(new Date(fromEpochMs));
-    return next === null ? null : next.getTime();
-  }
-
-  // #550 — every-N-period stepping. A non-finite anchor is write-impossible (the
-  // write schema requires startTime for interval>1) but a corrupt/imported row
-  // could reach here; fail closed rather than mis-fire.
-  if (!Number.isFinite(step.anchorEpochMs)) {
-    throw new InvalidScheduleError(schedule, new Error('interval > 1 requires a finite anchor'));
-  }
-  const { ordinal, startInstant } = periodModel(step.frequency, step.anchorEpochMs);
-  let candidate = cron.nextRun(new Date(fromEpochMs));
-  for (let probes = 0; candidate !== null && probes < MAX_PERIOD_PROBES; probes++) {
-    const rel = ordinal(candidate.getTime());
-    // Qualifying ⇔ a NON-NEGATIVE multiple of `interval` from the anchor. The
-    // `rel >= 0` half matters only defensively: production always pairs `step`
-    // with `startAt === anchor` (both derive from `startTime` — see
-    // `recurrenceStep`/`scheduleBounds`), so croner never returns a candidate
-    // before the anchor and `rel >= 0` holds. Were a caller to pass `step` with no
-    // `startAt`, JS's negative modulo (`-2 % 2 === 0`) would otherwise false-qualify
-    // a pre-anchor period; the guard rejects it and the jump below advances to
-    // period 0 (the anchor's period).
-    if (rel >= 0 && rel % step.interval === 0) return candidate.getTime();
-    // Jump croner to the start of the next qualifying period (the first multiple of
-    // `interval` strictly after this candidate's period). `startInstant - 1ms`
-    // reuses the inclusive-boundary compensation so an occurrence exactly at the
-    // period start is not skipped.
-    const nextQualifying = (Math.floor(rel / step.interval) + 1) * step.interval;
-    candidate = cron.nextRun(new Date(startInstant(nextQualifying) - 1));
-  }
-  return null;
 }

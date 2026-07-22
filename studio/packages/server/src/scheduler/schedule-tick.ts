@@ -114,6 +114,16 @@ export const ScheduleTickRefSchema = z.object({
    * already caught by the `schedule` compare.
    */
   interval: z.string().regex(/^\d+$/).optional(),
+  /**
+   * #5 S5b-timeZone (#552) — the recurrence `timeZone` when non-UTC. Carried because
+   * a timeZone edit leaves the compiled cron (`schedule`) IDENTICAL — the zone is a
+   * croner interpretation option, not part of the pattern — so a bare schedule +
+   * bounds + interval compare would miss it and keep firing in the old zone. OMITTED
+   * for absent/UTC (unzoned ⇒ UTC), so a row armed before #552, or for a UTC/unzoned
+   * recurrence, is byte-identical to today's ref and stays fresh on deploy — the same
+   * carry-only-when-it-changes-firing discipline the `interval` key uses.
+   */
+  timeZone: z.string().min(1).optional(),
 });
 export type ScheduleTickRef = z.infer<typeof ScheduleTickRefSchema>;
 
@@ -147,6 +157,9 @@ export function buildScheduleTickRef(trigger: Trigger): ScheduleTickRef {
   // #550 — carry `interval` ONLY when it changes firing (> 1); interval 1 omits it
   // to stay byte-identical to a pre-#550 ref (so old pending rows stay fresh).
   if (r !== null && r.interval > 1) ref.interval = String(r.interval);
+  // #552 — carry `timeZone` ONLY when it changes firing (non-UTC); absent/UTC omits
+  // it (unzoned ⇒ UTC) to stay byte-identical to a pre-#552 ref.
+  if (r?.timeZone !== undefined && r.timeZone !== 'UTC') ref.timeZone = r.timeZone;
   return ref;
 }
 
@@ -163,7 +176,8 @@ export function isRefFresh(trigger: Trigger, ref: ScheduleTickRef): boolean {
     current.schedule === ref.schedule &&
     current.startTime === ref.startTime &&
     current.endTime === ref.endTime &&
-    current.interval === ref.interval
+    current.interval === ref.interval &&
+    current.timeZone === ref.timeZone
   );
 }
 
@@ -200,6 +214,18 @@ export function recurrenceStep(trigger: Trigger): OccurrenceStep | undefined {
     interval: r.interval,
     anchorEpochMs: r.startTime !== undefined ? Date.parse(r.startTime) : Number.NaN,
   };
+}
+
+/**
+ * #5 S5b-timeZone (#552) — the IANA zone `nextOccurrence` interprets the cron in,
+ * or `'UTC'` when the recurrence names none (unzoned ⇒ UTC, the run-window contract
+ * — and a raw-cron trigger with no recurrence). Shared with the reconciler so seed +
+ * re-arm interpret the schedule in the SAME zone. A stored non-UTC zone that fails
+ * to resolve at fire time is caught by `nextOccurrence`'s `InvalidScheduleError` guard
+ * (settle, no re-arm), never a raw croner throw.
+ */
+export function recurrenceTimeZone(trigger: Trigger): string {
+  return trigger.recurrence?.timeZone ?? 'UTC';
 }
 
 /** A schedulable trigger — one `isSchedulable` has proven carries a non-null
@@ -264,9 +290,10 @@ export function createScheduleTickHandler(deps: ScheduleTickDeps): WakeupHandler
       const schedule = trigger.schedule;
       const bounds = scheduleBounds(trigger);
       const step = recurrenceStep(trigger);
+      const timeZone = recurrenceTimeZone(trigger);
       let next: number | null;
       try {
-        next = nextOccurrence(schedule, delivery.firedAt, bounds, step);
+        next = nextOccurrence(schedule, delivery.firedAt, bounds, step, timeZone);
       } catch (err) {
         if (err instanceof InvalidScheduleError) {
           // Settle + stop. Never re-arm (there is no valid next time) and never
@@ -293,6 +320,14 @@ export function createScheduleTickHandler(deps: ScheduleTickDeps): WakeupHandler
       // Automatic-fire gate: a run window blocks a NEW start (a manual "run now"
       // is an explicit override, exempt — only automatic firing is gated). Skip
       // this occurrence; the next is already armed above.
+      //
+      // #552 TWO-ZONE SEAM: `isWithinRunWindows` evaluates the FIRE INSTANT in UTC
+      // (its documented contract), whereas a recurrence's `timeZone` interprets the
+      // cron in a non-UTC zone. So a `America/New_York` recurrence gated by a UTC
+      // run window is coherent but two-zoned — the window matches the UTC instant,
+      // not the NY wall-clock. This is deliberate (run windows stay UTC for all
+      // trigger modes, not just recurrence); a zoned run window is a separate future
+      // expansion, not this ticket. The seam is documented on `RecurrenceSchema`.
       if (!isWithinRunWindows(trigger.runWindows, new Date(delivery.firedAt))) {
         return { status: 'suppressed', reason: 'outside_run_window' };
       }
