@@ -42,10 +42,43 @@ describe('WindowConfigSchema', () => {
   });
 });
 
+describe('WindowConfigSchema — maxBackfillWindows (#5 S10)', () => {
+  it('round-trips a config with maxBackfillWindows', () => {
+    const w = { ...config, maxBackfillWindows: 48 };
+    expect(WindowConfigSchema.parse(w)).toEqual(w);
+  });
+
+  it('is optional — absent means no backfill (exact S9 behavior)', () => {
+    const parsed = WindowConfigSchema.parse(config);
+    expect(parsed.maxBackfillWindows).toBeUndefined();
+  });
+
+  it('rejects a non-positive or fractional maxBackfillWindows', () => {
+    expect(() => WindowConfigSchema.parse({ ...config, maxBackfillWindows: 0 })).toThrow();
+    expect(() => WindowConfigSchema.parse({ ...config, maxBackfillWindows: -5 })).toThrow();
+    expect(() => WindowConfigSchema.parse({ ...config, maxBackfillWindows: 1.5 })).toThrow();
+  });
+});
+
 describe('WindowConfigWriteSchema (write-boundary cross-field rule)', () => {
   it('accepts endTime strictly after startTime', () => {
     const w = { ...config, endTime: '2026-07-02T00:00:00.000Z' };
     expect(WindowConfigWriteSchema.parse(w)).toEqual(w);
+  });
+
+  it('accepts maxBackfillWindows up to the write-boundary cap (1000)', () => {
+    const w = { ...config, maxBackfillWindows: 1000 };
+    expect(WindowConfigWriteSchema.parse(w)).toEqual(w);
+  });
+
+  it('rejects maxBackfillWindows above the cap on WRITE (stored shape stays lenient)', () => {
+    expect(() => WindowConfigWriteSchema.parse({ ...config, maxBackfillWindows: 1001 })).toThrow();
+    // Stored/read shape parses the same value — the cap is a write concern, so a
+    // row persisted under a future, looser cap never throws on read.
+    expect(WindowConfigSchema.parse({ ...config, maxBackfillWindows: 1001 })).toEqual({
+      ...config,
+      maxBackfillWindows: 1001,
+    });
   });
 
   it('rejects endTime at or before startTime', () => {

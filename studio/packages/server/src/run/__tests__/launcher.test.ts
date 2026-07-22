@@ -356,17 +356,30 @@ describe('RunLauncher — queue', () => {
     const launcher = createRunLauncher(deps(db));
     const T1 = '2026-07-17T09:00:00.000Z';
 
-    const result = launcher.fire(trigger, { scheduledTime: T1 });
+    const result = launcher.fire(trigger, { scheduledTime: T1, windowEpoch: 'ep1234' });
     expect(result.outcome).toBe('started');
     // Durable on the ROW (not only in the run's event log): the tumbling
     // reconcile's link-before-fire join reads it even for a run whose drive
-    // never appended an event before a crash.
+    // never appended an event before a crash. #5 S10: `windowEpoch` rides the
+    // same frozen context so the join is epoch-scoped.
     const row = listRuns(db, { triggerId: trigger.id })[0];
     expect(row?.triggerContext).toEqual({
       triggerId: trigger.id,
       scheduledTime: T1,
       body: null,
+      windowEpoch: 'ep1234',
     });
+  });
+
+  it('a non-window fire OMITS windowEpoch from the frozen context (#5 S10 — absent, never null)', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId });
+    const launcher = createRunLauncher(deps(db));
+
+    launcher.fire(trigger, { scheduledTime: '2026-07-17T09:00:00.000Z' });
+    const row = listRuns(db, { triggerId: trigger.id })[0];
+    expect(row?.triggerContext).not.toHaveProperty('windowEpoch');
   });
 
   it('a queued fire preserves the fire-time context captured at admission (#5 S12)', async () => {
@@ -450,7 +463,7 @@ describe('RunLauncher — durable admission queue (#5 S6a)', () => {
     const T2 = '2026-07-22T10:00:00.000Z';
 
     expect(launcher.fire(trigger).outcome).toBe('started'); // takes + holds the slot
-    const queued = launcher.fire(trigger, { scheduledTime: T2 });
+    const queued = launcher.fire(trigger, { scheduledTime: T2, windowEpoch: 'ep9' });
     expect(queued.outcome).toBe('queued');
 
     // A REAL row exists (durable), distinct from the started run.
@@ -459,8 +472,14 @@ describe('RunLauncher — durable admission queue (#5 S6a)', () => {
     const row = queuedRuns[0]!;
     expect(row.queuedAt).toBeTypeOf('number');
     // The fire-time context is frozen ON THE ROW so a delayed admission still
-    // seeds `${trigger.scheduledTime}` with THIS occurrence.
-    expect(row.triggerContext).toEqual({ triggerId: trigger.id, scheduledTime: T2, body: null });
+    // seeds `${trigger.scheduledTime}` with THIS occurrence — and (#5 S10) the
+    // windowEpoch rides it, so a QUEUED window run is epoch-joinable too.
+    expect(row.triggerContext).toEqual({
+      triggerId: trigger.id,
+      scheduledTime: T2,
+      body: null,
+      windowEpoch: 'ep9',
+    });
     // A queued row has NO event log yet (pre-`run.started`, like `pending`).
     expect(loadEngineEvents(db, row.id)).toHaveLength(0);
   });

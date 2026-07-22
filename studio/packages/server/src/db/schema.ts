@@ -36,6 +36,7 @@ import {
   type WebhookDeliveryOutcome,
   type WindowConfig,
   type WindowEventType,
+  type WindowOrigin,
   type WindowStatus,
   WindowEventTypeSchema,
   WindowStatusSchema,
@@ -583,6 +584,17 @@ export const tumblingWindowState = sqliteTable(
       .notNull()
       .$type<WindowStatus>(),
     runId: text('run_id'),
+    /**
+     * #5 S10 — HOW the window became known: `'live'` = the forward
+     * `window_due` chain (S9), `'backfill'` = the bounded backfill pass.
+     * Drives the materialization gate (backfill fires one-at-a-time; live
+     * keeps S9's ungated behavior). DEFAULT 'live' is the honest value for
+     * every pre-S10 row — all were created by the live chain.
+     */
+    origin: text('origin', { enum: ['live', 'backfill'] })
+      .notNull()
+      .default('live')
+      .$type<WindowOrigin>(),
     updatedAt: integer('updated_at').notNull(),
   },
   (table) => [
@@ -592,4 +604,30 @@ export const tumblingWindowState = sqliteTable(
     // Reconcile/stranded scans: non-terminal windows.
     index('tumbling_window_state_status_idx').on(table.status),
   ],
+);
+
+/**
+ * #5 S10 — the durable BACKFILL CURSOR, one row per (trigger, config epoch).
+ * `cursor_ms` is the EXCLUSIVE disposition boundary: every window of the
+ * epoch with `windowStart < cursor_ms` is dispositioned (created, or
+ * deliberately skipped past the `maxBackfillWindows` lookback) and must never
+ * be re-created or re-armed. This cursor + the projection PK — NOT wakeup-key
+ * absence — carry the no-double-fire guarantee for past windows (backfill
+ * never arms `scheduled_wakeups` rows at all; see the re-verified retention
+ * note in `repo/scheduled-wakeups.ts`). Monotonic via the repo write path.
+ * Old-epoch rows are debris after a geometry edit (never read again),
+ * reclaimed by the trigger's delete CASCADE. Driver infra for parity purposes
+ * (exempt in `schema-table-parity.test.ts`).
+ */
+export const tumblingBackfillCursors = sqliteTable(
+  'tumbling_backfill_cursors',
+  {
+    triggerId: text('trigger_id')
+      .notNull()
+      .references(() => triggers.id, { onDelete: 'cascade' }),
+    configEpoch: text('config_epoch').notNull(),
+    cursorMs: integer('cursor_ms').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.triggerId, table.configEpoch] })],
 );

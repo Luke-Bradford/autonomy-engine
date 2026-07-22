@@ -41,7 +41,19 @@ export const WindowCreatedPayloadSchema = z.object({
   frequency: WindowFrequencySchema,
   interval: z.number().int().positive(),
   startTime: z.string().datetime(),
+  /**
+   * #5 S10 — HOW the window became known: `'live'` = the forward `window_due`
+   * chain (the S9 path), `'backfill'` = the bounded backfill pass re-covering
+   * windows missed during downtime. OPTIONAL and absent in every pre-S10 log
+   * (absent = live semantically) — the schema stays read-compatible with S9
+   * events rather than manufacturing a value on parse. Origin drives the
+   * materialization gate (backfill windows fire one-at-a-time; live windows
+   * keep S9's ungated behavior) — recorded on the event so a rebuild can
+   * re-derive the projection's `origin` column.
+   */
+  origin: z.enum(['live', 'backfill']).optional(),
 });
+export type WindowOrigin = NonNullable<z.infer<typeof WindowCreatedPayloadSchema>['origin']>;
 
 /**
  * `window.runCreated` — exactly one run materialized for the window

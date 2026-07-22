@@ -87,6 +87,15 @@ export interface FireContext {
   scheduledTime?: string;
   body?: unknown;
   /**
+   * #5 S10 — the tumbling-window CONFIG EPOCH the fire is made under, frozen
+   * into `run.triggerContext.windowEpoch` so `findUnlinkedRunForWindow` (the
+   * crash-heal run↔window join) is epoch-scoped. Supplied ONLY by the
+   * tumbling materialize path; absent for every other fire (and omitted, not
+   * nulled, from the context — the schema field is optional). An INTERNAL
+   * linkage fact: deliberately not in the `${trigger.*}` field set.
+   */
+  windowEpoch?: string;
+  /**
    * The RUN-NOW param override layer (#5 S12b) — the TOP of the precedence stack
    * (pipeline-default < trigger-binding < run-now override). Supplied by the
    * manual-fire endpoint's `{ params }` body; absent for a schedule/webhook fire.
@@ -434,6 +443,9 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       triggerId: trigger.id,
       scheduledTime: fireContext?.scheduledTime ?? null,
       body: fireContext?.body ?? null,
+      // #5 S10 — OMITTED (not nulled) when absent: the optional schema field
+      // stays absent for every non-window fire, matching every pre-S10 row.
+      ...(fireContext?.windowEpoch !== undefined ? { windowEpoch: fireContext.windowEpoch } : {}),
     };
 
     // #5 S12b — resolve the trigger's expression-valued param bindings against

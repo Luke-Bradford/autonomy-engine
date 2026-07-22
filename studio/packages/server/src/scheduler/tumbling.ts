@@ -11,12 +11,15 @@ import { getTrigger, listParsedTriggers } from '../repo/triggers.js';
 import { getRun } from '../repo/runs.js';
 import { armWakeup, deleteWakeup, listPendingWakeups } from '../repo/scheduled-wakeups.js';
 import {
+  advanceBackfillCursor,
   completeWindow,
   createWindow,
   findUnlinkedRunForWindow,
+  getBackfillCursor,
   getWindowStateByRunId,
   linkWindowRun,
   listWindowStates,
+  type TumblingWindowStateRow,
   type WindowKey,
 } from '../repo/tumbling-windows.js';
 import type { Db } from '../repo/types.js';
@@ -45,8 +48,52 @@ import type { SchedulerLog } from './scheduler.js';
  * launcher. One pending row per trigger, so ≤1-late/no-backfill is STRUCTURAL
  * exactly as it is for schedule ticks: during downtime one row goes overdue,
  * boot fires it once, and the re-arm targets the next window ending in the
- * FUTURE — the skipped-past windows are #5 S10 backfill's job (with #463's
- * per-kind catch-up policy), deliberately NOT this ticket's.
+ * FUTURE — the skipped-past windows are #5 S10 backfill's job (below).
+ *
+ * ## #5 S10 — bounded BACKFILL (opt-in via `window.maxBackfillWindows`)
+ *
+ * When a tumbling trigger opts in, `sync()` runs a backfill pass: the MOST
+ * RECENT `maxBackfillWindows` fully-closed windows of the CURRENT epoch that
+ * were missed (downtime, a disabled stretch, a past `startTime` predating the
+ * trigger) are created as `origin: 'backfill'` window rows — older missed
+ * windows are permanently SKIPPED, with the durable cursor
+ * (`tumbling_backfill_cursors`) jumping past them and a WARN naming the count
+ * (no-silent-caps). Creation + cursor advance are ONE transaction; the cursor
+ * is the exclusive disposition boundary (everything below it is created or
+ * deliberately skipped, never revisited), MONOTONIC by the repo write path.
+ * Absent `maxBackfillWindows` = no backfill = exact S9 behavior — a conscious
+ * deviation from the spec's per-kind catch-up line ("tumbling = bounded
+ * backfill"): an UPGRADE must never surprise-fire past windows for an
+ * existing trigger, so backfill is opt-in.
+ *
+ * Backfill NEVER arms wakeup rows — creation is direct, so `window_due` keys
+ * keep targeting only future-ending windows and the wakeup-retention floor
+ * argument (`repo/scheduled-wakeups.ts`) holds verbatim; idempotency is the
+ * cursor + the projection PK, not wakeup-key absence. "Incremental via S1"
+ * (the ticket row) is satisfied by the FORWARD chain remaining the S1 outbox.
+ *
+ * Backfill windows live in WINDOW STATE, not as run rows (the codex-hardened
+ * line): materialization is GATED — at most ONE backfill window fires per
+ * pass, and only while the trigger has ZERO `running`-status windows (any
+ * epoch), so a 1000-window backlog drains serially (settle → next fire)
+ * instead of flooding the S6 admission queue. `origin: 'live'` windows keep
+ * S9's ungated batch semantics exactly (rehoming LIVE blocking into window
+ * state is S11's mandate, not this ticket's). Drain liveness: the completion
+ * tap re-materializes the trigger after settling a window; boot `reconcile()`
+ * and every forward-window fire continue the sweep. KNOWN HOLE (v1-accepted):
+ * if a backfill fire is skipped (queue-full/shutdown) and the forward chain
+ * is distant (day windows) or EXHAUSTED (`endTime` passed — no forward fire
+ * ever again), nothing kicks the drain until the next trigger write or boot.
+ *
+ * A window that closed during DOWNTIME while its `window_due` row sat overdue
+ * is created by the backfill pass first (sync runs before the boot tick), so
+ * the overdue alarm settles `window_already_exists`: for a backfill-enabled
+ * trigger, S9's "≤1-late live fire" becomes a backfill window (gated, ordered
+ * with its peers) — decided, tested; default triggers keep S9 behavior. The
+ * same holds on a RUNNING server: a route-write sync() landing in the small
+ * gap between a window's close and its alarm tick creates that on-time window
+ * as backfill (the alarm then suppresses) — occasionally an on-time window
+ * fires gated rather than ungated-live; single-fire holds either way.
  *
  * ## Identity: the config-versioned window key
  *
@@ -88,20 +135,22 @@ import type { SchedulerLog } from './scheduler.js';
  *
  * - `runWindows` do NOT gate tumbling fires (unlike schedule ticks): a
  *   tumbling window is data-completeness-driven, and a run-window suppression
- *   would silently LOSE the window until S10 backfill exists. Event/webhook
+ *   would silently LOSE the window for a non-backfill trigger. Event/webhook
  *   fires already set this precedent (only schedule gates).
  * - No `${trigger.windowStart/End}` expression fields — S11 (context-scoped
  *   save-time validation), per the spec's ticket split.
  * - No self-dependency / per-trigger window retry or concurrency — S11.
- * - Overflow windows DO materialize into the S6 durable admission queue (a
- *   `queued` run row each, bounded by the per-trigger depth cap). This brushes
- *   the spec's "blocked/backfill windows live in window state, not as full
- *   runs": that line is about BACKFILL/BLOCKED bulk (S10/S11 — potentially
- *   thousands of windows), where materialize-on-capacity needs the capacity
- *   hook S11 owns. Forward-only S9 produces ≤1 new window per interval, so the
- *   queue depth stays O(pipeline slowness), the cap skips + strand-heal bound
- *   it, and S11 rehomes blocking into window state. A conscious, documented
- *   tradeoff — not an accident.
+ * - LIVE overflow windows DO materialize into the S6 durable admission queue
+ *   (a `queued` run row each, bounded by the per-trigger depth cap). This
+ *   brushes the spec's "blocked/backfill windows live in window state, not as
+ *   full runs": BACKFILL bulk now honours that line (the S10 gate above);
+ *   rehoming LIVE blocking into window state is S11's, with its capacity
+ *   hook. Forward-only live flow produces ≤1 new window per interval, so the
+ *   queue depth stays O(pipeline slowness). A conscious, documented tradeoff
+ *   — not an accident.
+ * - Old-epoch `waiting` windows (a geometry edit mid-drain) and old-epoch
+ *   cursor rows stay INERT debris until the trigger's delete CASCADE — S11's
+ *   disposition pass owns anything smarter.
  */
 
 export const WINDOW_DUE_KIND = 'window_due';
@@ -193,7 +242,8 @@ export interface WindowOccurrence {
  * landing mid-window — never fires, its data span would be incomplete). The
  * single occurrence calculator seed + re-arm share, so the two can never
  * disagree — and the structural no-backfill: asking with a late `afterMs`
- * SKIPS the missed windows (S10's job) rather than replaying them.
+ * SKIPS the missed windows rather than replaying them (the S10 backfill pass
+ * is what re-covers them, bounded, for opted-in triggers).
  */
 export function firstWindowEndingAfter(
   config: WindowConfig,
@@ -334,12 +384,94 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
   }
 
   /**
-   * Materialize every unlinked `waiting` window of `trigger`'s CURRENT epoch,
-   * oldest first (bounded): LINK an existing unlinked run when one matches
-   * (the crash heal — never a second fire), else FIRE through the launcher
-   * and link the created (started OR queued) run. Stops at the first
-   * trigger-level refusal (unbound/binding/skip) — later windows would refuse
-   * identically this pass.
+   * Materialize ONE waiting window: LINK an existing unlinked run when one
+   * matches the epoch-scoped join (the crash heal — never a second fire),
+   * else FIRE through the launcher and link the created (started OR queued)
+   * run. Returns `'stop'` on a TRIGGER-level refusal (unbound/binding/skip —
+   * every later window would refuse identically this pass), `'continue'`
+   * otherwise.
+   */
+  function materializeOne(
+    trigger: TumblingTrigger,
+    row: TumblingWindowStateRow,
+  ): 'continue' | 'stop' {
+    const key = keyOf(row);
+    // LINK-BEFORE-FIRE (single-fire under crash): an unlinked run whose
+    // frozen `triggerContext.scheduledTime` is this window's end AND whose
+    // frozen `windowEpoch` is this window's epoch is THIS window's run from a
+    // fire whose link never committed.
+    const existingRunId = findUnlinkedRunForWindow(db, trigger.id, row.configEpoch, row.windowEnd);
+    if (existingRunId !== null) {
+      if (linkWindowRun(db, key, existingRunId, 'reconcile')) {
+        settleIfTerminal(key, existingRunId);
+      }
+      return 'continue';
+    }
+    let result: FireResult;
+    try {
+      result = launcher.fire(trigger, {
+        scheduledTime: row.windowEnd,
+        windowEpoch: row.configEpoch,
+      });
+    } catch (err) {
+      if (err instanceof UnboundTriggerError) {
+        log.debug({ triggerId: trigger.id }, 'tumbling: skip — trigger became unbound');
+        return 'stop';
+      }
+      if (err instanceof SubstituteError) {
+        // A trigger param binding that cannot resolve — operator-visible
+        // (the schedule-tick severity rationale): the trigger's windows stop
+        // materializing with no run to look at.
+        log.warn(
+          { err, triggerId: trigger.id },
+          'tumbling: skip — trigger param binding could not be resolved',
+        );
+        return 'stop';
+      }
+      throw err;
+    }
+    if (result.outcome === 'skipped') {
+      // Queue-full or shutdown. The window STAYS `waiting` — healed by the
+      // next window's materialize pass or boot reconcile (the header's
+      // liveness story), never dropped.
+      log.warn(
+        { triggerId: trigger.id, windowStart: row.windowStart, reason: result.reason },
+        'tumbling: window fire skipped; window stays waiting',
+      );
+      return 'stop';
+    }
+    if (result.runId === undefined) {
+      // Unreachable post-S9 (`started` and `queued` both report runId) —
+      // fail LOUD if a future launcher change breaks the contract.
+      log.error(
+        { triggerId: trigger.id, windowStart: row.windowStart, outcome: result.outcome },
+        'tumbling: fire returned no runId; window stays waiting',
+      );
+      return 'stop';
+    }
+    if (!linkWindowRun(db, key, result.runId, 'fire')) {
+      // The window lost its `waiting` guard between the scan and this link —
+      // a concurrent linker won (their run serves the window) and the run
+      // fired HERE is an orphan. Unreachable in-process (materialize is
+      // synchronous end-to-end), so fail LOUD like the runId-contract branch
+      // above rather than silently strand a live run.
+      log.error(
+        { triggerId: trigger.id, windowStart: row.windowStart, runId: result.runId },
+        'tumbling: fired run could not be linked (window no longer waiting) — orphaned run',
+      );
+    }
+    return 'continue';
+  }
+
+  /**
+   * Materialize the unlinked `waiting` windows of `trigger`'s CURRENT epoch,
+   * oldest first, in TWO origin-scoped scans (#5 S10): `'live'` windows keep
+   * S9's ungated batch semantics exactly; then AT MOST ONE `'backfill'`
+   * window fires, and only when the trigger has ZERO `running`-status windows
+   * (ANY epoch — an old-epoch run still consumes real capacity), so a bulk
+   * backlog drains serially instead of flooding the admission queue. The
+   * split keeps a 1000-row backfill backlog from starving the live window
+   * behind the batch bound (they no longer share one oldest-first scan).
    */
   function materializeWindows(trigger: TumblingTrigger): void {
     if (stopped) return;
@@ -352,6 +484,7 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
       configEpoch: epoch,
       status: 'waiting',
       unlinked: true,
+      origin: 'live',
       limit: MATERIALIZE_BATCH + 1,
     });
     if (waiting.length > MATERIALIZE_BATCH) {
@@ -366,67 +499,98 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
       waiting.length = MATERIALIZE_BATCH;
     }
     for (const row of waiting) {
-      const key = keyOf(row);
-      // LINK-BEFORE-FIRE (single-fire under crash): an unlinked run whose
-      // frozen `triggerContext.scheduledTime` is this window's end is THIS
-      // window's run from a fire whose link never committed.
-      const existingRunId = findUnlinkedRunForWindow(db, trigger.id, row.windowEnd);
-      if (existingRunId !== null) {
-        if (linkWindowRun(db, key, existingRunId, 'reconcile')) {
-          settleIfTerminal(key, existingRunId);
-        }
-        continue;
+      if (materializeOne(trigger, row) === 'stop') return;
+    }
+    // The backfill scan. The gate reads pure window state (`running` = linked
+    // + unsettled — no run-table join); an unlinked crash orphan does NOT
+    // close it, so the link-heal inside `materializeOne` still runs.
+    const backfillRows = listWindowStates(db, {
+      triggerId: trigger.id,
+      configEpoch: epoch,
+      status: 'waiting',
+      unlinked: true,
+      origin: 'backfill',
+      limit: 1,
+    });
+    const backfillRow = backfillRows[0];
+    if (backfillRow === undefined) return;
+    const holders = listWindowStates(db, { triggerId: trigger.id, status: 'running', limit: 1 });
+    if (holders.length > 0) {
+      log.debug(
+        { triggerId: trigger.id, windowStart: backfillRow.windowStart },
+        'tumbling: backfill gated — a window is running; drains on its completion',
+      );
+      return;
+    }
+    materializeOne(trigger, backfillRow);
+  }
+
+  /**
+   * #5 S10 — the bounded backfill pass for one opted-in trigger: create the
+   * most recent `maxBackfillWindows` missed fully-closed windows of the
+   * CURRENT epoch as `origin: 'backfill'` rows and advance the durable cursor
+   * to the live edge, atomically. Windows older than the lookback are
+   * permanently SKIPPED (cursor jumps past them; WARNed, never silent).
+   * Idempotent: the cursor floors the scan and the projection PK dedupes
+   * anything the forward chain already created (ANY status counts as
+   * dispositioned). NEVER arms wakeup rows — see the module header.
+   */
+  function backfillPass(trigger: TumblingTrigger): void {
+    const config = trigger.window;
+    const bound = config.maxBackfillWindows;
+    if (bound === undefined) return;
+    const epoch = windowConfigEpoch(config);
+    const size = windowSizeMs(config);
+    const start0 = Date.parse(config.startTime);
+    // The live EDGE — the exclusive upper bound for backfill window STARTS:
+    // the start of the first window still ending in the future (that one is
+    // the forward chain's), or, when `endTime` exhausts the chain, the end of
+    // the last FULL window inside the bound (its start + size ≤ endTime ≤ any
+    // later instant — the exhausted chain's tail is still backfillable).
+    const next = firstWindowEndingAfter(config, now());
+    let edgeMs: number;
+    if (next !== null) {
+      edgeMs = next.startMs;
+    } else if (config.endTime !== undefined) {
+      edgeMs = start0 + Math.floor((Date.parse(config.endTime) - start0) / size) * size;
+    } else {
+      // Unreachable: `firstWindowEndingAfter` returns null only under endTime.
+      return;
+    }
+    if (edgeMs <= start0) return; // nothing has fully closed yet
+    const cursor = getBackfillCursor(db, trigger.id, epoch);
+    const dispositioned = Math.max(cursor ?? start0, start0);
+    let lower = Math.max(dispositioned, edgeMs - bound * size);
+    // Defensive grid alignment (the cursor is always written as a window
+    // boundary; a corrupted value must not shift the whole grid): align UP.
+    lower = start0 + Math.ceil((lower - start0) / size) * size;
+    if (lower >= edgeMs) return; // fully dispositioned already
+    const skipped = Math.max(0, Math.round((lower - dispositioned) / size));
+    db.transaction((tx) => {
+      for (let startMs = lower; startMs < edgeMs; startMs += size) {
+        createWindow(tx, {
+          triggerId: trigger.id,
+          configEpoch: epoch,
+          windowStart: new Date(startMs).toISOString(),
+          windowEnd: new Date(startMs + size).toISOString(),
+          geometry: {
+            frequency: config.frequency,
+            interval: config.interval,
+            startTime: config.startTime,
+          },
+          origin: 'backfill',
+        });
       }
-      let result: FireResult;
-      try {
-        result = launcher.fire(trigger, { scheduledTime: row.windowEnd });
-      } catch (err) {
-        if (err instanceof UnboundTriggerError) {
-          log.debug({ triggerId: trigger.id }, 'tumbling: skip — trigger became unbound');
-          return;
-        }
-        if (err instanceof SubstituteError) {
-          // A trigger param binding that cannot resolve — operator-visible
-          // (the schedule-tick severity rationale): the trigger's windows stop
-          // materializing with no run to look at.
-          log.warn(
-            { err, triggerId: trigger.id },
-            'tumbling: skip — trigger param binding could not be resolved',
-          );
-          return;
-        }
-        throw err;
-      }
-      if (result.outcome === 'skipped') {
-        // Queue-full or shutdown. The window STAYS `waiting` — healed by the
-        // next window's materialize pass or boot reconcile (the header's
-        // liveness story), never dropped.
-        log.warn(
-          { triggerId: trigger.id, windowStart: row.windowStart, reason: result.reason },
-          'tumbling: window fire skipped; window stays waiting',
-        );
-        return;
-      }
-      if (result.runId === undefined) {
-        // Unreachable post-S9 (`started` and `queued` both report runId) —
-        // fail LOUD if a future launcher change breaks the contract.
-        log.error(
-          { triggerId: trigger.id, windowStart: row.windowStart, outcome: result.outcome },
-          'tumbling: fire returned no runId; window stays waiting',
-        );
-        return;
-      }
-      if (!linkWindowRun(db, key, result.runId, 'fire')) {
-        // The window lost its `waiting` guard between the scan and this link —
-        // a concurrent linker won (their run serves the window) and the run
-        // fired HERE is an orphan. Unreachable in-process (materialize is
-        // synchronous end-to-end), so fail LOUD like the runId-contract branch
-        // above rather than silently strand a live run.
-        log.error(
-          { triggerId: trigger.id, windowStart: row.windowStart, runId: result.runId },
-          'tumbling: fired run could not be linked (window no longer waiting) — orphaned run',
-        );
-      }
+      advanceBackfillCursor(tx, trigger.id, epoch, edgeMs);
+    });
+    if (skipped > 0) {
+      // No-silent-caps: the lookback bound DROPPED windows — permanently
+      // (the cursor is past them; raising `maxBackfillWindows` later recovers
+      // nothing — a one-way ratchet, deliberate).
+      log.warn(
+        { triggerId: trigger.id, skipped, maxBackfillWindows: bound },
+        'tumbling: backfill skipped windows beyond the lookback bound (permanently dispositioned)',
+      );
     }
   }
 
@@ -479,6 +643,7 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
           interval: trigger.window.interval,
           startTime: trigger.window.startTime,
         },
+        origin: 'live',
       });
       if (!created) {
         return { status: 'suppressed', reason: 'window_already_exists' };
@@ -569,6 +734,34 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
         log.warn({ err, triggerId: id }, 'tumbling: failed to seed window chain — skipping');
       }
     }
+
+    // Pass 3 (#5 S10) — the bounded backfill for every opted-in eligible
+    // trigger (ALL of them, seeded-this-pass or not: missed windows accrue
+    // whether or not the forward row survived), then a materialize kick so a
+    // fresh backlog — or a drain resumed by a re-enable — starts moving
+    // without waiting for boot/the next window fire. The kick means sync()
+    // can now FIRE runs (at most one gated backfill window per trigger, plus
+    // any stranded live windows) — sanctioned: routes already fire runs in
+    // request context (manual fire, events), and sync runs post-write, never
+    // inside a transaction.
+    for (const trigger of eligible.values()) {
+      if (trigger.window.maxBackfillWindows === undefined) continue;
+      // UNBOUND triggers are skipped ENTIRELY (unlike forward seeding, where
+      // eligibility deliberately ignores binding): running the pass would
+      // accrete waiting rows on every sync with the lookback bound never
+      // engaging (each pass only sees the SINCE-LAST-SYNC gap), so a trigger
+      // left unbound for a week would violate the `maxBackfillWindows`
+      // contract by thousands of rows. Skipping keeps the cursor lagging, so
+      // the bounded lookback applies AT BIND TIME — symmetric with the
+      // disabled→re-enabled semantics.
+      if (trigger.pipelineVersionId === null) continue;
+      try {
+        backfillPass(trigger);
+        materializeWindows(trigger);
+      } catch (err) {
+        log.warn({ err, triggerId: trigger.id }, 'tumbling: backfill pass failed — skipping');
+      }
+    }
   }
 
   function reconcile(): void {
@@ -621,6 +814,14 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
           const row = getWindowStateByRunId(db, runId);
           if (row === null || row.status !== 'running') return;
           settleIfTerminal(keyOf(row), runId);
+          // #5 S10 — drain continuation: the settle just released the
+          // materialization gate (the window is no longer `running`), so the
+          // trigger's next backfill window fires now — this tap is what makes
+          // a bulk backlog drain serially instead of waiting for boot.
+          const trigger = getTrigger(db, row.triggerId);
+          if (trigger !== null && isTumblable(trigger) && trigger.pipelineVersionId !== null) {
+            materializeWindows(trigger);
+          }
         } catch (err) {
           log.error({ err, runId }, 'tumbling: window completion tap failed');
         }

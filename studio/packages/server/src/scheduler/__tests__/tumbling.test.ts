@@ -9,12 +9,15 @@ import {
 } from '@autonomy-studio/shared';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion } from '../../repo/pipeline-versions.js';
-import { createTrigger, updateTrigger } from '../../repo/triggers.js';
+import { createTrigger, deleteTrigger, updateTrigger } from '../../repo/triggers.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { armWakeup, getWakeup, listPendingWakeups } from '../../repo/scheduled-wakeups.js';
 import { createRun, updateRun } from '../../repo/runs.js';
 import {
+  advanceBackfillCursor,
   createWindow,
+  findUnlinkedRunForWindow,
+  getBackfillCursor,
   getWindowState,
   linkWindowRun,
   listWindowEvents,
@@ -253,10 +256,13 @@ describe('window_due handler — fire + continue the chain', () => {
     const { clock, launcher } = harness(db, () => W0_END);
     clock.tick();
 
-    // Fired once, afterCommit, with `${trigger.scheduledTime}` = windowEnd.
+    // Fired once, afterCommit, with `${trigger.scheduledTime}` = windowEnd and
+    // (#5 S10) the config epoch frozen in for the epoch-scoped link join.
     const fl = launcher as ReturnType<typeof fakeLauncher>;
     expect(fl.fires.map((t) => t.id)).toEqual([trigger.id]);
-    expect(fl.contexts).toEqual([{ scheduledTime: iso(W0_END) }]);
+    expect(fl.contexts).toEqual([
+      { scheduledTime: iso(W0_END), windowEpoch: windowConfigEpoch(CONFIG) },
+    ]);
 
     // The row settled fired; the chain armed window 1 in the same tx.
     expect(getWakeup(db, row.id)?.status).toBe('fired');
@@ -295,6 +301,7 @@ describe('window_due handler — fire + continue the chain', () => {
         frequency: 'minute',
         interval: 15,
         startTime: CONFIG.startTime,
+        origin: 'live',
       },
     });
   });
@@ -432,6 +439,7 @@ describe('window_due handler — fire + continue the chain', () => {
       ...keyFor(trigger, T0),
       windowEnd: iso(W0_END),
       geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+      origin: 'live',
     });
     const row = armWindow(db, trigger, T0, W0_END);
 
@@ -513,6 +521,7 @@ describe('single-fire under crash: link-before-fire reconcile', () => {
       ...key,
       windowEnd: iso(W0_END),
       geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+      origin: 'live',
     });
     const orphan = createRun(db, {
       ownerId: 'local',
@@ -520,7 +529,12 @@ describe('single-fire under crash: link-before-fire reconcile', () => {
       triggerId: trigger.id,
       parentRunId: null,
       params: {},
-      triggerContext: { triggerId: trigger.id, scheduledTime: iso(W0_END), body: null },
+      triggerContext: {
+        triggerId: trigger.id,
+        scheduledTime: iso(W0_END),
+        body: null,
+        windowEpoch: windowConfigEpoch(CONFIG),
+      },
     });
 
     const launcher = fakeLauncher();
@@ -553,6 +567,7 @@ describe('single-fire under crash: link-before-fire reconcile', () => {
       ...key,
       windowEnd: iso(W0_END),
       geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+      origin: 'live',
     });
     const orphan = createRun(db, {
       ownerId: 'local',
@@ -560,7 +575,12 @@ describe('single-fire under crash: link-before-fire reconcile', () => {
       triggerId: trigger.id,
       parentRunId: null,
       params: {},
-      triggerContext: { triggerId: trigger.id, scheduledTime: iso(W0_END), body: null },
+      triggerContext: {
+        triggerId: trigger.id,
+        scheduledTime: iso(W0_END),
+        body: null,
+        windowEpoch: windowConfigEpoch(CONFIG),
+      },
     });
     updateRun(db, orphan.id, { status: 'success', finishedAt: W0_END + 1 });
 
@@ -588,6 +608,7 @@ describe('single-fire under crash: link-before-fire reconcile', () => {
       ...oldKey,
       windowEnd: iso(W0_END),
       geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+      origin: 'live',
     });
     const oldRun = createRun(db, {
       ownerId: 'local',
@@ -612,6 +633,7 @@ describe('single-fire under crash: link-before-fire reconcile', () => {
       ...newKey,
       windowEnd: iso(W0_END), // same instant as the old window's end
       geometry: { frequency: 'minute', interval: 5, startTime: CONFIG.startTime },
+      origin: 'live',
     });
 
     const launcher = fakeLauncher([{ outcome: 'started', runId: 'run-new' }]);
@@ -638,6 +660,7 @@ describe('completion: bus tap + boot reconcile', () => {
       ...key,
       windowEnd: iso(W0_END),
       geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+      origin: 'live',
     });
     const run = createRun(db, {
       ownerId: 'local',
@@ -783,6 +806,7 @@ describe('completion: bus tap + boot reconcile', () => {
       ...key,
       windowEnd: iso(W0_END),
       geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+      origin: 'live',
     });
     // Link to a run id that has no row (deleted out-of-band / corrupted).
     linkWindowRun(db, key, 'run-gone', 'fire');
@@ -818,6 +842,7 @@ describe('completion: bus tap + boot reconcile', () => {
         windowStart: iso(T0 + k * MIN15),
         windowEnd: iso(T0 + (k + 1) * MIN15),
         geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+        origin: 'live',
       });
     }
 
@@ -851,6 +876,7 @@ describe('completion: bus tap + boot reconcile', () => {
       ...key,
       windowEnd: iso(W0_END),
       geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+      origin: 'live',
     });
 
     const launcher = fakeLauncher([{ outcome: 'started', runId: 'run-heal' }]);
@@ -875,6 +901,7 @@ describe('completion: bus tap + boot reconcile', () => {
       ...key,
       windowEnd: iso(W0_END),
       geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+      origin: 'live',
     });
     updateTrigger(db, trigger.id, { window: { ...CONFIG, interval: 30 } }); // new epoch
 
@@ -998,6 +1025,7 @@ describe('repo guards (the projection’s status machine)', () => {
       ...keyFor(trigger, T0),
       windowEnd: iso(W0_END),
       geometry: { frequency: 'minute' as const, interval: 15, startTime: CONFIG.startTime },
+      origin: 'live' as const,
     };
     expect(createWindow(db, input)).toBe(true);
     expect(createWindow(db, input)).toBe(false);
@@ -1013,6 +1041,7 @@ describe('repo guards (the projection’s status machine)', () => {
       ...key,
       windowEnd: iso(W0_END),
       geometry: { frequency: 'minute' as const, interval: 15, startTime: CONFIG.startTime },
+      origin: 'live' as const,
     };
     // complete before create/link: no row, guard lost.
     expect(completeWindow(db, key, { status: 'succeeded', runId: 'r' })).toBe(false);
@@ -1047,6 +1076,7 @@ describe('repo guards (the projection’s status machine)', () => {
         windowStart: iso(T0 + k * MIN15),
         windowEnd: iso(T0 + (k + 1) * MIN15),
         geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+        origin: 'live',
       });
     }
     linkWindowRun(
@@ -1087,5 +1117,515 @@ describe('service surface', () => {
     service.reconcile();
     expect(launcher.fires).toHaveLength(0);
     expect(pendingWindows(db)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #5 S10 — bounded backfill (maxBackfillWindows + durable cursor)
+// ---------------------------------------------------------------------------
+
+describe('#5 S10 — backfill pass (sync)', () => {
+  function backfillHarness(db: Db, now: () => number, launcher = fakeLauncher()) {
+    const log = silentLog();
+    const service = createTumblingService({
+      db,
+      arm: (input) => clock.arm(input),
+      launcher,
+      log,
+      now,
+    });
+    const clock = createAlarmClock({ db, handlers: [service.handler], log: silentLog(), now });
+    return { service, clock, launcher, log };
+  }
+
+  const BF10: WindowConfig = { ...CONFIG, maxBackfillWindows: 10 };
+
+  it('creates the missed windows oldest-first as origin=backfill, fires exactly ONE, cursor at the edge', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: BF10 });
+    // now = T0+65min: W0..W3 (ends 15..60) are closed; W4 [60,75) is current.
+    const now = T0 + 65 * 60_000;
+    const { service, launcher } = backfillHarness(db, () => now);
+
+    service.sync();
+
+    const rows = listWindowStates(db, { triggerId: trigger.id });
+    expect(rows.map((r) => r.windowStart)).toEqual([
+      iso(T0),
+      iso(T0 + MIN15),
+      iso(T0 + 2 * MIN15),
+      iso(T0 + 3 * MIN15),
+    ]);
+    expect(rows.every((r) => r.origin === 'backfill')).toBe(true);
+    // Exactly ONE fired (the oldest), linked; the rest wait under the gate.
+    expect(launcher.fires).toHaveLength(1);
+    expect(launcher.contexts[0]).toEqual({
+      scheduledTime: iso(W0_END),
+      windowEpoch: windowConfigEpoch(BF10),
+    });
+    expect(getWindowState(db, keyFor(trigger, T0))?.status).toBe('running');
+    expect(listWindowStates(db, { triggerId: trigger.id, status: 'waiting' })).toHaveLength(3);
+    // Durable cursor at the live edge.
+    expect(getBackfillCursor(db, trigger.id, windowConfigEpoch(BF10))).toBe(T0 + 60 * 60_000);
+    // The forward chain is seeded for the CURRENT window only — backfill armed
+    // NO wakeup rows for past windows (the retention re-verify, executable).
+    const pending = pendingWindows(db);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.dueAt).toBe(T0 + 75 * 60_000);
+  });
+
+  it('skips windows beyond the lookback permanently (cursor jump + WARN; raising the bound later recovers nothing)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const bf2: WindowConfig = { ...CONFIG, maxBackfillWindows: 2 };
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: bf2 });
+    const now = T0 + 65 * 60_000;
+    const { service, log } = backfillHarness(db, () => now);
+
+    service.sync();
+
+    // Only the MOST RECENT 2 closed windows (W2, W3); W0/W1 skipped, warned.
+    expect(listWindowStates(db, { triggerId: trigger.id }).map((r) => r.windowStart)).toEqual([
+      iso(T0 + 2 * MIN15),
+      iso(T0 + 3 * MIN15),
+    ]);
+    expect(
+      log.warn.mock.calls.some(
+        ([obj, msg]) =>
+          typeof msg === 'string' &&
+          msg.includes('lookback') &&
+          (obj as { skipped?: number }).skipped === 2,
+      ),
+    ).toBe(true);
+
+    // The ratchet: raising the bound does NOT resurrect the skipped windows —
+    // the cursor already dispositioned them.
+    updateTrigger(db, trigger.id, { window: { ...bf2, maxBackfillWindows: 10 } });
+    service.sync();
+    expect(listWindowStates(db, { triggerId: trigger.id })).toHaveLength(2);
+  });
+
+  it('is idempotent: a second sync creates nothing and fires nothing (gate closed by the running window)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: BF10 });
+    const now = T0 + 65 * 60_000;
+    const { service, launcher } = backfillHarness(db, () => now);
+
+    service.sync();
+    const afterFirst = listWindowStates(db, { triggerId: trigger.id }).length;
+    service.sync();
+
+    expect(listWindowStates(db, { triggerId: trigger.id })).toHaveLength(afterFirst);
+    expect(launcher.fires).toHaveLength(1); // still just the first fire
+  });
+
+  it('absent maxBackfillWindows → no backfill rows, no cursor (exact S9)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const trigger = seedTumbling(db, { pipelineVersionId: pv }); // plain CONFIG
+    const { service, launcher } = backfillHarness(db, () => T0 + 65 * 60_000);
+
+    service.sync();
+
+    expect(listWindowStates(db, { triggerId: trigger.id })).toHaveLength(0);
+    expect(getBackfillCursor(db, trigger.id, windowConfigEpoch(CONFIG))).toBeNull();
+    expect(launcher.fires).toHaveLength(0);
+  });
+
+  it('never duplicates a window the forward chain already owns (projection dedup; origin stays live)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: BF10 });
+    // The forward chain already created + fired W2.
+    const w2 = keyFor(trigger, T0 + 2 * MIN15);
+    createWindow(db, {
+      ...w2,
+      windowEnd: iso(T0 + 3 * MIN15),
+      geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+      origin: 'live',
+    });
+    const { service } = backfillHarness(db, () => T0 + 65 * 60_000);
+
+    service.sync();
+
+    const rows = listWindowStates(db, { triggerId: trigger.id });
+    expect(rows).toHaveLength(4);
+    expect(rows.find((r) => r.windowStart === w2.windowStart)?.origin).toBe('live');
+    // ONE window.created per key — the partial UNIQUE index never tripped.
+    expect(listWindowEvents(db, w2).filter((e) => e.type === 'window.created')).toHaveLength(1);
+  });
+
+  it('an EXHAUSTED chain (endTime passed) still backfills its tail and fires it', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const bounded: WindowConfig = {
+      ...CONFIG,
+      endTime: iso(T0 + 30 * 60_000),
+      maxBackfillWindows: 10,
+    };
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: bounded });
+    const { service, launcher } = backfillHarness(db, () => T0 + 65 * 60_000);
+
+    service.sync();
+
+    // W0, W1 (ends 15, 30 ≤ endTime) — created; NO forward row (exhausted).
+    expect(listWindowStates(db, { triggerId: trigger.id }).map((r) => r.windowStart)).toEqual([
+      iso(T0),
+      iso(T0 + MIN15),
+    ]);
+    expect(pendingWindows(db)).toHaveLength(0);
+    // The oldest fired despite the dead forward chain (the sync kick).
+    expect(launcher.fires).toHaveLength(1);
+  });
+
+  it('an UNBOUND trigger is skipped entirely — the lookback applies at BIND time', () => {
+    // Running the pass unbound would accrete rows every sync with the bound
+    // never engaging (each pass only sees the since-last-sync gap) — the
+    // reviewed accumulation hazard. Skip keeps the cursor lagging so binding
+    // gets the same bounded lookback a re-enable does.
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const bf2: WindowConfig = { ...CONFIG, maxBackfillWindows: 2 };
+    const trigger = seedTumbling(db, { pipelineVersionId: null, window: bf2 });
+    const { service, launcher } = backfillHarness(db, () => T0 + 65 * 60_000);
+
+    service.sync();
+    expect(listWindowStates(db, { triggerId: trigger.id })).toHaveLength(0);
+    expect(getBackfillCursor(db, trigger.id, windowConfigEpoch(bf2))).toBeNull();
+    expect(launcher.fires).toHaveLength(0);
+
+    // Bind → the NEXT sync backfills, bounded by the lookback (2 of 4 missed).
+    updateTrigger(db, trigger.id, { pipelineVersionId: pv });
+    service.sync();
+    expect(listWindowStates(db, { triggerId: trigger.id })).toHaveLength(2);
+  });
+
+  it('a mid-window endTime clips the exhausted-chain edge to the last FULL window', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    // endTime T0+20min on 15-min windows: W0 [0,15) is full; [15,30) is
+    // partial past the bound and must never exist.
+    const clipped: WindowConfig = {
+      ...CONFIG,
+      endTime: iso(T0 + 20 * 60_000),
+      maxBackfillWindows: 10,
+    };
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: clipped });
+    const { service } = backfillHarness(db, () => T0 + 65 * 60_000);
+
+    service.sync();
+
+    expect(listWindowStates(db, { triggerId: trigger.id }).map((r) => r.windowStart)).toEqual([
+      iso(T0),
+    ]);
+  });
+
+  it('deleting a trigger mid-drain CASCADEs its windows AND its cursor; a later sync is a no-op', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: BF10 });
+    const { service } = backfillHarness(db, () => T0 + 65 * 60_000);
+    service.sync();
+    const epoch = windowConfigEpoch(BF10);
+    expect(listWindowStates(db, { triggerId: trigger.id }).length).toBeGreaterThan(0);
+    expect(getBackfillCursor(db, trigger.id, epoch)).not.toBeNull();
+
+    expect(deleteTrigger(db, trigger.id)).toBe(true);
+
+    expect(listWindowStates(db, { triggerId: trigger.id })).toHaveLength(0);
+    expect(getBackfillCursor(db, trigger.id, epoch)).toBeNull();
+    service.sync(); // must not throw or resurrect anything
+    expect(listWindowStates(db, { triggerId: trigger.id })).toHaveLength(0);
+  });
+
+  it('an epoch edit mid-drain backfills the NEW epoch fresh; old-epoch windows stay inert', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: BF10 });
+    const now = T0 + 65 * 60_000;
+    const { service } = backfillHarness(db, () => now);
+    service.sync();
+    const oldEpoch = windowConfigEpoch(BF10);
+    expect(listWindowStates(db, { triggerId: trigger.id, configEpoch: oldEpoch })).toHaveLength(4);
+
+    // Geometry edit → new epoch (30-min windows): W0'..W1' closed by now(65).
+    const edited: WindowConfig = { ...BF10, interval: 30 };
+    updateTrigger(db, trigger.id, { window: edited });
+    service.sync();
+
+    const newEpoch = windowConfigEpoch(edited);
+    const newRows = listWindowStates(db, { triggerId: trigger.id, configEpoch: newEpoch });
+    expect(newRows.map((r) => r.windowStart)).toEqual([iso(T0), iso(T0 + 30 * 60_000)]);
+    // Old-epoch waiting windows still exist, untouched (inert debris — S11's).
+    const oldWaiting = listWindowStates(db, {
+      triggerId: trigger.id,
+      configEpoch: oldEpoch,
+      status: 'waiting',
+    });
+    expect(oldWaiting.length).toBeGreaterThan(0);
+  });
+
+  it('disable → re-enable resumes the drain from the cursor (windows missed while disabled backfill)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: BF10 });
+    let now = T0 + 65 * 60_000;
+    const { service } = backfillHarness(db, () => now);
+    service.sync(); // W0..W3 dispositioned, cursor at 60min
+
+    updateTrigger(db, trigger.id, { enabled: false });
+    service.sync(); // drops the pending row; backfill skips the disabled trigger
+
+    now = T0 + 95 * 60_000; // W4 [60,75) + W5 [75,90) closed while disabled
+    updateTrigger(db, trigger.id, { enabled: true });
+    service.sync();
+
+    const rows = listWindowStates(db, { triggerId: trigger.id });
+    expect(rows.map((r) => r.windowStart)).toContain(iso(T0 + 60 * 60_000));
+    expect(rows.map((r) => r.windowStart)).toContain(iso(T0 + 75 * 60_000));
+    expect(getBackfillCursor(db, trigger.id, windowConfigEpoch(BF10))).toBe(T0 + 90 * 60_000);
+  });
+
+  it('the boot-overdue race: a window closed during downtime becomes a BACKFILL window; the overdue alarm suppresses', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: BF10 });
+    // The pre-downtime pending row: W3 [45,60), due at 60min.
+    const row = armWindow(db, trigger, T0 + 3 * MIN15, T0 + 60 * 60_000);
+    const now = T0 + 65 * 60_000; // boot after downtime
+    const { service, clock } = backfillHarness(db, () => now);
+
+    service.sync(); // the boot order: sync (backfill) BEFORE the boot tick
+    clock.tick();
+
+    // W3 was created by the backfill pass; the overdue alarm suppressed.
+    expect(getWindowState(db, keyFor(trigger, T0 + 3 * MIN15))?.origin).toBe('backfill');
+    expect(getWakeup(db, row.id)?.status).toBe('suppressed');
+    // The stronger single-fire fact: exactly ONE window.created for W3.
+    expect(
+      listWindowEvents(db, keyFor(trigger, T0 + 3 * MIN15)).filter(
+        (e) => e.type === 'window.created',
+      ),
+    ).toHaveLength(1);
+    // The chain re-armed the CURRENT window in the same handler tx.
+    const pending = pendingWindows(db);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.dueAt).toBe(T0 + 75 * 60_000);
+  });
+});
+
+describe('#5 S10 — gated drain (completion tap + boot reconcile)', () => {
+  it('the completion tap kicks the next backfill window after a settle', async () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const bf: WindowConfig = { ...CONFIG, maxBackfillWindows: 10 };
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: bf });
+    const launcher = fakeLauncher();
+    const service = createTumblingService({
+      db,
+      arm: () => undefined,
+      launcher,
+      log: silentLog(),
+      now: () => T0 + 65 * 60_000,
+    });
+    service.sync(); // creates W0..W3; fires W0 (fake 'run-1' — no run row)
+    expect(launcher.fires).toHaveLength(1);
+    const w0 = keyFor(trigger, T0);
+    expect(getWindowState(db, w0)?.status).toBe('running');
+
+    const bus = createRunEventBus();
+    const unsubscribe = service.subscribeCompletion(bus);
+    bus.publish({
+      id: 'evt-s10',
+      runId: 'run-1',
+      seq: 1,
+      type: 'run.finished',
+      payload: { outcome: 'success' },
+      ts: T0 + 66 * 60_000,
+    });
+    await Promise.resolve(); // the tap defers one microtask
+
+    // The tap settled W0 (its run row is GONE → folded closed as
+    // failed{missing} — the absent-fact discipline) AND the settle released
+    // the gate, so the kick fired the NEXT backfill window (W1).
+    expect(getWindowState(db, w0)?.status).toBe('failed');
+    expect(launcher.fires).toHaveLength(2);
+    expect(getWindowState(db, keyFor(trigger, T0 + MIN15))?.status).toBe('running');
+    unsubscribe();
+  });
+
+  it('boot reconcile fires exactly ONE gated backfill window — even on an EXHAUSTED chain', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    // endTime long passed: NO forward chain exists, so boot reconcile is the
+    // ONLY drain kick left (the documented liveness slot) — the literal
+    // exhausted-chain boot-drain case.
+    const bf: WindowConfig = {
+      ...CONFIG,
+      endTime: iso(T0 + 45 * 60_000),
+      maxBackfillWindows: 10,
+    };
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: bf });
+    // Backfill rows exist but nothing has fired (e.g. the sync kick crashed).
+    for (let k = 0; k < 3; k += 1) {
+      createWindow(db, {
+        ...keyFor(trigger, T0 + k * MIN15),
+        windowEnd: iso(T0 + (k + 1) * MIN15),
+        geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+        origin: 'backfill',
+      });
+    }
+    const launcher = fakeLauncher();
+    const service = createTumblingService({
+      db,
+      arm: () => undefined,
+      launcher,
+      log: silentLog(),
+      now: () => T0 + 65 * 60_000,
+    });
+
+    service.reconcile();
+
+    expect(launcher.fires).toHaveLength(1);
+    expect(getWindowState(db, keyFor(trigger, T0))?.status).toBe('running');
+    expect(listWindowStates(db, { triggerId: trigger.id, status: 'waiting' })).toHaveLength(2);
+  });
+
+  it('a crashed BACKFILL fire link-heals through the gated scan (epoch-matched orphan, no second run)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const bf: WindowConfig = { ...CONFIG, maxBackfillWindows: 10 };
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: bf });
+    // The crash shape for a backfill window: row created + the fire's run row
+    // committed (frozen scheduledTime == windowEnd, windowEpoch == epoch) —
+    // link never landed.
+    const key = keyFor(trigger, T0);
+    createWindow(db, {
+      ...key,
+      windowEnd: iso(W0_END),
+      geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+      origin: 'backfill',
+    });
+    const orphan = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pv,
+      triggerId: trigger.id,
+      parentRunId: null,
+      params: {},
+      triggerContext: {
+        triggerId: trigger.id,
+        scheduledTime: iso(W0_END),
+        body: null,
+        windowEpoch: windowConfigEpoch(bf),
+      },
+    });
+    const launcher = fakeLauncher();
+    const service = createTumblingService({
+      db,
+      arm: () => undefined,
+      launcher,
+      log: silentLog(),
+      now: () => T0 + 65 * 60_000,
+    });
+
+    service.reconcile();
+
+    expect(launcher.fires).toHaveLength(0); // linked, never re-fired
+    const state = getWindowState(db, key);
+    expect(state?.status).toBe('running');
+    expect(state?.runId).toBe(orphan.id);
+  });
+
+  it('backfill defers to a RUNNING window (any origin); live windows still fire past the gate', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const bf: WindowConfig = { ...CONFIG, maxBackfillWindows: 10 };
+    const trigger = seedTumbling(db, { pipelineVersionId: pv, window: bf });
+    // A RUNNING window holds the gate.
+    const held = keyFor(trigger, T0 + 5 * MIN15);
+    createWindow(db, {
+      ...held,
+      windowEnd: iso(T0 + 6 * MIN15),
+      geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+      origin: 'live',
+    });
+    linkWindowRun(db, held, 'busy-run', 'fire');
+    // One stranded LIVE window + one backfill window, both waiting.
+    createWindow(db, {
+      ...keyFor(trigger, T0 + 4 * MIN15),
+      windowEnd: iso(T0 + 5 * MIN15),
+      geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+      origin: 'live',
+    });
+    createWindow(db, {
+      ...keyFor(trigger, T0),
+      windowEnd: iso(W0_END),
+      geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+      origin: 'backfill',
+    });
+    const launcher = fakeLauncher();
+    const service = createTumblingService({
+      db,
+      arm: () => undefined,
+      launcher,
+      log: silentLog(),
+      now: () => T0 + 95 * 60_000,
+    });
+
+    service.reconcile();
+
+    // The stranded LIVE window fired (ungated — S9 semantics preserved); the
+    // backfill window stayed waiting behind the busy gate.
+    expect(launcher.contexts.map((c) => c?.scheduledTime)).toEqual([iso(T0 + 5 * MIN15)]);
+    expect(getWindowState(db, keyFor(trigger, T0))?.status).toBe('waiting');
+  });
+});
+
+describe('#5 S10 — repo: cursor + epoch-scoped join', () => {
+  it('advanceBackfillCursor is monotonic (a backwards move loses)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const trigger = seedTumbling(db, { pipelineVersionId: pv });
+
+    advanceBackfillCursor(db, trigger.id, 'ep1', 5000);
+    expect(getBackfillCursor(db, trigger.id, 'ep1')).toBe(5000);
+    advanceBackfillCursor(db, trigger.id, 'ep1', 3000); // backwards — must lose
+    expect(getBackfillCursor(db, trigger.id, 'ep1')).toBe(5000);
+    advanceBackfillCursor(db, trigger.id, 'ep1', 9000);
+    expect(getBackfillCursor(db, trigger.id, 'ep1')).toBe(9000);
+    // Epoch-scoped: another epoch has its own row.
+    expect(getBackfillCursor(db, trigger.id, 'ep2')).toBeNull();
+  });
+
+  it('findUnlinkedRunForWindow matches STRICTLY on windowEpoch', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const trigger = seedTumbling(db, { pipelineVersionId: pv });
+    const mkRun = (windowEpoch?: string) =>
+      createRun(db, {
+        ownerId: 'local',
+        pipelineVersionId: pv,
+        triggerId: trigger.id,
+        parentRunId: null,
+        params: {},
+        triggerContext: {
+          triggerId: trigger.id,
+          scheduledTime: iso(W0_END),
+          body: null,
+          ...(windowEpoch !== undefined ? { windowEpoch } : {}),
+        },
+      });
+
+    // Absent epoch (a pre-S10 orphan) → NOT matched (documented at-least-once).
+    mkRun();
+    expect(findUnlinkedRunForWindow(db, trigger.id, 'epA', iso(W0_END))).toBeNull();
+    // Wrong epoch → NOT matched (the old-epoch-at-shared-boundary hazard).
+    mkRun('epB');
+    expect(findUnlinkedRunForWindow(db, trigger.id, 'epA', iso(W0_END))).toBeNull();
+    // Right epoch → matched.
+    const match = mkRun('epA');
+    expect(findUnlinkedRunForWindow(db, trigger.id, 'epA', iso(W0_END))).toBe(match.id);
   });
 });

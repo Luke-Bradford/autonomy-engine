@@ -38,8 +38,28 @@ export const WindowConfigSchema = z.object({
   /** Optional upper bound: a window fires only if `windowEnd <= endTime` (a
    * PARTIAL trailing window never fires — its data span would be incomplete). */
   endTime: z.string().datetime().optional(),
+  /**
+   * #5 S10 — opt-in bounded BACKFILL: at most this many of the MOST RECENT
+   * fully-closed windows missed while the trigger was down/disabled (or before
+   * it existed, for a past `startTime`) are created and materialized; older
+   * missed windows are permanently skipped (the durable cursor jumps past
+   * them, logged). ABSENT = no backfill — the exact S9 forward-only behavior;
+   * an upgrade must never surprise-fire past windows for an existing trigger,
+   * so this is deliberately opt-in even though the spec's per-kind catch-up
+   * line reads "tumbling = bounded backfill" (a conscious, documented
+   * deviation). A BOUND like `endTime`, not geometry: it does not participate
+   * in the config epoch and never re-keys windows. The write-boundary cap
+   * (1000, `WindowConfigWriteSchema`) bounds the created-rows blast radius;
+   * the stored shape stays lenient (structural checks only) so a row persisted
+   * under a future, looser cap never throws on read.
+   */
+  maxBackfillWindows: z.number().int().positive().optional(),
 });
 export type WindowConfig = z.infer<typeof WindowConfigSchema>;
+
+/** The #5 S10 write-boundary cap on `maxBackfillWindows` — bounds the windows
+ * one backfill pass may create (see `WindowConfigWriteSchema`). */
+export const MAX_BACKFILL_WINDOWS_CAP = 1000;
 
 /**
  * WRITE-boundary shape: the stored shape PLUS the one cross-field rule —
@@ -55,6 +75,15 @@ export const WindowConfigWriteSchema = WindowConfigSchema.superRefine((w, ctx) =
       code: z.ZodIssueCode.custom,
       path: ['endTime'],
       message: '`endTime` must be strictly after `startTime`',
+    });
+  }
+  // #5 S10 — cap the backfill bound at authoring time (a WRITE concern, like
+  // the endTime rule above: the stored shape stays lenient on read).
+  if (w.maxBackfillWindows !== undefined && w.maxBackfillWindows > MAX_BACKFILL_WINDOWS_CAP) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['maxBackfillWindows'],
+      message: `\`maxBackfillWindows\` must be at most ${MAX_BACKFILL_WINDOWS_CAP}`,
     });
   }
 });
