@@ -15,10 +15,18 @@ import {
   parseJsonBody,
   resolveModel,
   runStructuredWithRepair,
+  runTextWithTools,
   structuredEcho,
+  toolWireParameters,
   validateStructuredOutput,
 } from './llm-shared.js';
-import type { LlmTurn, NoCompletionReason } from './llm-shared.js';
+import type {
+  LlmToolChoice,
+  LlmTurn,
+  NoCompletionReason,
+  ToolCallRequest,
+  ToolRoundOutcome,
+} from './llm-shared.js';
 
 /** The forced-tool name a structured `llm_call` requires Anthropic to call. */
 const STRUCTURED_TOOL_NAME = 'structured_output';
@@ -116,6 +124,34 @@ function findStructuredToolInput(
     }
   }
   return { found: false };
+}
+
+/**
+ * #2 L10a — extract every `tool_use` block of a Messages API response as a
+ * normalized `ToolCallRequest`, in provider order (Anthropic emits parallel
+ * tool_use blocks by default — ALL are answered in the one round-trip). A block
+ * with a non-string `name`/`id` is still surfaced (`null` fields) so the shared
+ * executor can answer it with an error tool_result rather than silently
+ * dropping a block the continuation would then 400 on. `input` is already a
+ * PARSED object on this provider; `executeLocalTool`'s args validation decides
+ * whether it is usable.
+ */
+function extractToolUses(json: unknown): ToolCallRequest[] {
+  const content = (json as { content?: unknown }).content;
+  if (!Array.isArray(content)) return [];
+  const calls: ToolCallRequest[] = [];
+  for (const b of content) {
+    if (typeof b === 'object' && b !== null && (b as { type?: unknown }).type === 'tool_use') {
+      const id = (b as { id?: unknown }).id;
+      const name = (b as { name?: unknown }).name;
+      calls.push({
+        id: typeof id === 'string' ? id : null,
+        name: typeof name === 'string' ? name : null,
+        args: (b as { input?: unknown }).input,
+      });
+    }
+  }
+  return calls;
 }
 
 export const anthropicAdapter: ConnectorAdapter = {
@@ -268,6 +304,167 @@ export const anthropicAdapter: ConnectorAdapter = {
           echo: structuredEcho(tool.input),
         };
       });
+      return;
+    }
+
+    // #2 L10a — LOCAL TOOLS path (text mode only; the config coupling forbids
+    // tools+structured). `toolChoice:'none'` deliberately falls through to the
+    // plain text path with NO tools on the wire — semantically "tools off",
+    // with zero wire-surface difference from an undeclared-tools node.
+    const tools = input.data.tools;
+    const authorChoice = input.data.toolChoice ?? 'auto';
+    if (tools !== undefined && authorChoice !== 'none') {
+      // A FORCED tool_choice (`required` → `{type:'any'}`) precludes the
+      // adaptive-thinking surface, exactly as the structured path's forced
+      // `{type:'tool'}` does — so a `required` flow suppresses `thinking`/
+      // `output_config` for the WHOLE attempt (one rule per node; enabling it
+      // only on the downgraded continuation would split one node's reasoning
+      // posture across calls). An `auto` flow keeps reasoning as text mode does.
+      const suppressThinking = authorChoice === 'required';
+      const buildToolBody = (
+        msgs: readonly unknown[],
+        // `'none'` never reaches here (the guard above falls through to the
+        // plain text path) — the ternary maps it to `auto` for type totality.
+        choice: LlmToolChoice,
+      ): Record<string, unknown> => {
+        const body: Record<string, unknown> = {
+          model,
+          max_tokens: sampling.maxTokens ?? DEFAULT_MAX_TOKENS,
+          messages: msgs,
+          tools: tools.map((t) => ({
+            name: t.name,
+            description: t.description,
+            // Explicit-required + closed (`toolWireParameters`): the wire says
+            // exactly what the local args validator enforces (#594 alignment).
+            input_schema: toolWireParameters(t.parameters),
+          })),
+          tool_choice: { type: choice === 'required' ? 'any' : 'auto' },
+        };
+        if (system !== undefined) body.system = system;
+        if (sampling.temperature !== undefined) body.temperature = sampling.temperature;
+        if (sampling.topP !== undefined) body.top_p = sampling.topP;
+        if (sampling.stop !== undefined) body.stop_sequences = sampling.stop;
+        if (reasoningEffort !== undefined && !suppressThinking) {
+          body.thinking = { type: 'adaptive' };
+          body.output_config = { effort: reasoningEffort };
+        }
+        return body;
+      };
+      // The conversation value `C` is the WIRE messages array: the initial
+      // author turns are valid wire messages, and the continuation replays the
+      // response's RAW content blocks (preserving any thinking blocks, which
+      // Anthropic requires intact during tool use) + the tool_result turn.
+      yield* runTextWithTools<readonly unknown[]>(
+        'anthropic_api',
+        tools,
+        messages,
+        authorChoice,
+        async (conv, choice): Promise<ToolRoundOutcome<readonly unknown[]>> => {
+          const started = Date.now();
+          const res = await llmPost(ctx, url, headers, buildToolBody(conv, choice), timeoutMs);
+          const latencyMs = Date.now() - started;
+          // First-exchange capture semantics (#2 L9a): request = the author's
+          // turns. The generator emits only the round-0 capture; continuation
+          // exchanges carry tool turns `LlmCapture` cannot represent (#605).
+          const captureOf = (completionText?: string) =>
+            buildCapture({
+              provider: 'anthropic_api',
+              model,
+              latencyMs,
+              turns: messages,
+              system,
+              completionText,
+            });
+          if (res.type === 'failed') {
+            return { type: 'terminal', event: res.event, capture: captureOf() };
+          }
+          if (res.status < 200 || res.status >= 300) {
+            return {
+              type: 'terminal',
+              event: httpStatusFailure(
+                'anthropic_api',
+                res.status,
+                res.bodyText,
+                res.retryAfterHeader,
+                Date.now(),
+              ),
+              capture: captureOf(),
+            };
+          }
+          const parsed = parseJsonBody(res.bodyText);
+          if (!parsed.ok) {
+            return { type: 'terminal', event: parsed.event, capture: captureOf() };
+          }
+          const u = (parsed.json as { usage?: { input_tokens?: unknown; output_tokens?: unknown } })
+            .usage;
+          const usage = meterUsage('anthropic_api', model, u?.input_tokens, u?.output_tokens);
+          const calls = extractToolUses(parsed.json);
+          if (calls.length > 0) {
+            // A `tool_use` block without a string `id` is a malformed provider
+            // response: the continuation's `tool_result` REQUIRES `tool_use_id`,
+            // so shipping `''` would only trade this clear local diagnostic for
+            // an opaque provider 400. Fail loud instead (same class as the
+            // malformed-block no-completion failures; a retry of the identical
+            // request won't fix a response-shape defect → `permanent`).
+            if (calls.some((c) => c.id === null)) {
+              return {
+                type: 'terminal',
+                event: {
+                  type: 'failed',
+                  kind: 'permanent',
+                  error:
+                    'anthropic_api returned a tool_use block without a string id — ' +
+                    'malformed tool-call response',
+                },
+                capture: captureOf(),
+              };
+            }
+            const responseContent = (parsed.json as { content: unknown[] }).content;
+            return {
+              type: 'toolUse',
+              usage,
+              capture: captureOf(),
+              calls,
+              buildNext: (results) => [
+                ...conv,
+                { role: 'assistant', content: responseContent },
+                {
+                  role: 'user',
+                  content: results.map((r) => ({
+                    type: 'tool_result',
+                    // Non-null by the malformed-response gate above.
+                    tool_use_id: r.id ?? '',
+                    content: r.resultText,
+                    ...(r.isError ? { is_error: true } : {}),
+                  })),
+                },
+              ],
+            };
+          }
+          const extracted = extractText(parsed.json);
+          if ('reason' in extracted) {
+            return {
+              type: 'terminal',
+              event: noCompletionFailure('anthropic_api', extracted.reason),
+              capture: captureOf(),
+            };
+          }
+          return {
+            type: 'text',
+            usage,
+            capture: captureOf(extracted.text),
+            succeeded: {
+              type: 'succeeded',
+              outputs: {
+                text: extracted.text,
+                stopReason: coerceStopReason(
+                  (parsed.json as { stop_reason?: unknown }).stop_reason,
+                ),
+              },
+            },
+          };
+        },
+      );
       return;
     }
 

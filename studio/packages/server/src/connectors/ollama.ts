@@ -15,10 +15,12 @@ import {
   parseJsonBody,
   resolveModel,
   runStructuredWithRepair,
+  runTextWithTools,
   structuredEcho,
   structuredOutputInstruction,
+  toolWireParameters,
 } from './llm-shared.js';
-import type { LlmTurn } from './llm-shared.js';
+import type { LlmTurn, ToolCallRequest, ToolRoundOutcome } from './llm-shared.js';
 
 /**
  * The `ollama` connector adapter: a single non-streaming call to a local (or
@@ -168,6 +170,143 @@ export const ollamaAdapter: ConnectorAdapter = {
           echo: structuredEcho(content),
         };
       });
+      return;
+    }
+
+    // #2 L10a — LOCAL TOOLS path (text mode only; the config coupling forbids
+    // tools+structured). Ollama has NO forced-choice wire surface, so
+    // `toolChoice:'required'` is BEST-EFFORT here (tools are sent, the model
+    // decides — the L3 reasoning-knob posture); `'none'` falls through to the
+    // plain text path with no tools on the wire. `think` has no clash with
+    // tools and is kept.
+    const tools = input.data.tools;
+    const authorChoice = input.data.toolChoice ?? 'auto';
+    if (tools !== undefined && authorChoice !== 'none') {
+      const wireTools = tools.map((t) => ({
+        type: 'function',
+        function: {
+          name: t.name,
+          description: t.description,
+          // Explicit-required + closed (`toolWireParameters`): the wire says
+          // exactly what the local args validator enforces (#594 alignment).
+          parameters: toolWireParameters(t.parameters),
+        },
+      }));
+      const buildToolBody = (msgs: readonly unknown[]): Record<string, unknown> => {
+        const options: Record<string, unknown> = {};
+        if (sampling.temperature !== undefined) options.temperature = sampling.temperature;
+        if (sampling.maxTokens !== undefined) options.num_predict = sampling.maxTokens;
+        if (sampling.topP !== undefined) options.top_p = sampling.topP;
+        if (sampling.stop !== undefined) options.stop = sampling.stop;
+        if (sampling.seed !== undefined) options.seed = sampling.seed;
+        const body: Record<string, unknown> = { model, messages: msgs, stream: false };
+        if (Object.keys(options).length > 0) body.options = options;
+        if (reasoningEffort !== undefined) body.think = reasoningEffort;
+        body.tools = wireTools;
+        return body;
+      };
+      // The conversation value `C` is the WIRE messages array (leading system
+      // included); the continuation appends the response's RAW assistant
+      // message + one `role:'tool'` result per call (Ollama tool calls carry no
+      // ids — results map back by order).
+      const initial: readonly unknown[] =
+        systemContent !== undefined
+          ? [{ role: 'system', content: systemContent }, ...turns]
+          : [...turns];
+      yield* runTextWithTools<readonly unknown[]>(
+        'ollama',
+        tools,
+        initial,
+        authorChoice,
+        async (conv): Promise<ToolRoundOutcome<readonly unknown[]>> => {
+          const started = Date.now();
+          const res = await llmPost(ctx, url, headers, buildToolBody(conv), timeoutMs);
+          const latencyMs = Date.now() - started;
+          // First-exchange capture semantics (#2 L9a): request = the author's
+          // turns; the generator emits only the round-0 capture (#605 owns
+          // continuation-turn representation).
+          const captureOf = (completionText?: string) =>
+            buildCapture({ provider: 'ollama', model, latencyMs, turns, system, completionText });
+          if (res.type === 'failed') {
+            return { type: 'terminal', event: res.event, capture: captureOf() };
+          }
+          if (res.status < 200 || res.status >= 300) {
+            return {
+              type: 'terminal',
+              event: httpStatusFailure(
+                'ollama',
+                res.status,
+                res.bodyText,
+                res.retryAfterHeader,
+                Date.now(),
+              ),
+              capture: captureOf(),
+            };
+          }
+          const parsed = parseJsonBody(res.bodyText);
+          if (!parsed.ok) {
+            return { type: 'terminal', event: parsed.event, capture: captureOf() };
+          }
+          const counts = parsed.json as { prompt_eval_count?: unknown; eval_count?: unknown };
+          const usage = meterUsage('ollama', model, counts.prompt_eval_count, counts.eval_count);
+          const message = (parsed.json as { message?: unknown }).message;
+          // Tool calls FIRST: a tool-calls response commonly carries an empty
+          // `content` the text branch would accept as a real (empty) completion.
+          const rawCalls = (message as { tool_calls?: unknown } | undefined | null)?.tool_calls;
+          const calls: ToolCallRequest[] = Array.isArray(rawCalls)
+            ? rawCalls.map((tc) => {
+                const fn = (tc as { function?: { name?: unknown; arguments?: unknown } }).function;
+                return {
+                  id: null, // Ollama tool calls carry no id
+                  name: typeof fn?.name === 'string' ? fn.name : null,
+                  args: fn?.arguments, // already a parsed object on this provider
+                };
+              })
+            : [];
+          if (calls.length > 0) {
+            return {
+              type: 'toolUse',
+              usage,
+              capture: captureOf(),
+              calls,
+              buildNext: (results) => [
+                ...conv,
+                message,
+                ...results.map((r) => ({ role: 'tool', content: r.resultText })),
+              ],
+            };
+          }
+          if (typeof message !== 'object' || message === null) {
+            return {
+              type: 'terminal',
+              event: noCompletionFailure('ollama', 'absent_content'),
+              capture: captureOf(),
+            };
+          }
+          const text = (message as { content?: unknown }).content;
+          if (typeof text !== 'string') {
+            return {
+              type: 'terminal',
+              event: noCompletionFailure('ollama', 'malformed_block'),
+              capture: captureOf(),
+            };
+          }
+          return {
+            type: 'text',
+            usage,
+            capture: captureOf(text),
+            succeeded: {
+              type: 'succeeded',
+              outputs: {
+                text,
+                stopReason: coerceStopReason(
+                  (parsed.json as { done_reason?: unknown }).done_reason,
+                ),
+              },
+            },
+          };
+        },
+      );
       return;
     }
 

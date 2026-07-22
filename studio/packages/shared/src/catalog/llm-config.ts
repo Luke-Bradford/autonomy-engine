@@ -86,53 +86,65 @@ const llmOutputPropertySchema = z
  * uses `.safeParse(...).success` as its "valid schema" gate — so "what saves" and
  * "what lowers" can never disagree about the subset.
  */
-export const llmOutputSchemaSchema = z
-  .object({
-    type: z.literal('object'),
-    properties: z.record(z.string(), llmOutputPropertySchema),
-    required: z.array(z.string()).optional(),
-    // Only an explicit `false` is legal — `true`/an object/omitted-but-open would
-    // let a non-addressable field slip past the declared contract. Absent is the
-    // common case (closed is the implied default for a declared contract here).
-    additionalProperties: z.literal(false).optional(),
-    // Benign JSON-Schema metadata accepted at the root (a real exported schema
-    // commonly carries these, and the PROPERTY schema already allows `description`
-    // — accepting them here keeps root and property symmetric so a hand-written or
-    // imported schema is not 400'd for a doc string). They do not affect lowering.
-    description: z.string().optional(),
-    title: z.string().optional(),
-  })
-  .strict()
-  .superRefine((schema, ctx) => {
-    const names = Object.keys(schema.properties);
-    if (names.length === 0) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['properties'],
-        message: 'a structured outputSchema must declare at least one property',
-      });
-    }
-    for (const name of names) {
-      if (!isAddressableOutputName(name)) {
+export const llmOutputSchemaSchema = makeRestrictedSchemaSubset('a structured outputSchema');
+
+/**
+ * #2 L10a — the restricted-subset FACTORY behind `llmOutputSchemaSchema`,
+ * extracted so a tool's `parameters` declaration (`llmToolDefSchema` below)
+ * enforces the IDENTICAL subset rules with correctly-worded diagnostics (`noun`
+ * appears in the ≥1-property message — a tool-parameters defect must not read
+ * "outputSchema"). One factory, so the two surfaces can never drift on what the
+ * subset admits.
+ */
+function makeRestrictedSchemaSubset(noun: string) {
+  return z
+    .object({
+      type: z.literal('object'),
+      properties: z.record(z.string(), llmOutputPropertySchema),
+      required: z.array(z.string()).optional(),
+      // Only an explicit `false` is legal — `true`/an object/omitted-but-open would
+      // let a non-addressable field slip past the declared contract. Absent is the
+      // common case (closed is the implied default for a declared contract here).
+      additionalProperties: z.literal(false).optional(),
+      // Benign JSON-Schema metadata accepted at the root (a real exported schema
+      // commonly carries these, and the PROPERTY schema already allows `description`
+      // — accepting them here keeps root and property symmetric so a hand-written or
+      // imported schema is not 400'd for a doc string). They do not affect lowering.
+      description: z.string().optional(),
+      title: z.string().optional(),
+    })
+    .strict()
+    .superRefine((schema, ctx) => {
+      const names = Object.keys(schema.properties);
+      if (names.length === 0) {
         ctx.addIssue({
           code: 'custom',
-          path: ['properties', name],
-          message:
-            `property name '${name}' is not addressable: a ` +
-            '${nodes.<id>.output.<name>} reference takes a single identifier segment',
+          path: ['properties'],
+          message: `${noun} must declare at least one property`,
         });
       }
-    }
-    for (const r of schema.required ?? []) {
-      if (!Object.prototype.hasOwnProperty.call(schema.properties, r)) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['required'],
-          message: `required names an undeclared property '${r}'`,
-        });
+      for (const name of names) {
+        if (!isAddressableOutputName(name)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['properties', name],
+            message:
+              `property name '${name}' is not addressable: a ` +
+              '${nodes.<id>.output.<name>} reference takes a single identifier segment',
+          });
+        }
       }
-    }
-  });
+      for (const r of schema.required ?? []) {
+        if (!Object.prototype.hasOwnProperty.call(schema.properties, r)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['required'],
+            message: `required names an undeclared property '${r}'`,
+          });
+        }
+      }
+    });
+}
 
 export type LlmOutputSchema = z.infer<typeof llmOutputSchemaSchema>;
 
@@ -182,6 +194,198 @@ export const llmStructuredOutputSurfaceSchema = z
   .superRefine(refineOutputModeCoupling);
 
 export type LlmStructuredOutputSurface = z.infer<typeof llmStructuredOutputSurfaceSchema>;
+
+// ---------------------------------------------------------------------------
+// #2 L10a — the LOCAL TOOL contract (`ToolDef`) + the tools config surface.
+//
+// T11 (foundation-overview, binding): "define `ToolDef`; MVP tools are
+// read-only/pure". A v1 tool is pure BY CONSTRUCTION: its `expression` is a
+// whole-value `${...}` in the inert expression language (side-effect-free
+// closed function catalog), evaluated against an env that binds ONLY
+// `${tool.args.*}` — the model-supplied, schema-validated call arguments. No
+// run state, no I/O, no secrets can reach it. Side-effecting tools are the
+// deferred event-modeled resumable-loop sub-spec, not this surface.
+//
+// The `tools` subtree is DEFERRED-EVAL: `${tool.args.x}` has no value until the
+// model calls the tool inside the adapter, so the reducer's dispatch-prep
+// substitution SKIPS the subtree (`reduce.ts::prepInput`) and save-time ref
+// validation scans each `expression` with the `tool` root context-scoped
+// (`params.ts::scanLlmToolRefs`). Everything else in a ToolDef is
+// authoring-STATIC — which is why `${` anywhere in tool metadata is refused
+// outright (it would ship to the provider as a silent inert literal).
+// ---------------------------------------------------------------------------
+
+/**
+ * #2 L10a — the author's tool-choice knob, provider-mapped by the adapters:
+ * `auto` (default — the model decides), `required` (the first call forces a
+ * tool call; the internal continuation call always downgrades to `auto`, else
+ * the forced choice could never yield a final text), `none` (tools are not sent
+ * at all — the plain text path, byte-identical to an undeclared-tools node).
+ * Ollama has no forced-choice wire surface, so `required` is best-effort there
+ * (tools are sent; the model decides) — the same posture as the L3 reasoning
+ * knob.
+ */
+export const llmToolChoiceSchema = z.enum(['auto', 'required', 'none']);
+export type LlmToolChoice = z.infer<typeof llmToolChoiceSchema>;
+
+/**
+ * #2 L10a — one local tool definition. `parameters` reuses the SAME restricted
+ * schema subset as structured output (via `makeRestrictedSchemaSubset`), so the
+ * model-facing argument contract and the local argument VALIDATOR
+ * (`validateStructuredOutput`, reused for args) can never disagree about shape.
+ * v1 requires ≥1 parameter: with an args-only env, a zero-arg expression can
+ * only compute a constant the author could have inlined in the prompt.
+ *
+ * `.strict()` — a ToolDef is a closed contract; an unknown key is a typo or a
+ * feature (`mcpServers`-era config) this build does not implement, and passing
+ * it through would silently drop authored intent.
+ */
+export const llmToolDefSchema = z
+  .object({
+    /** Addressable identifier — the name the model calls the tool by. */
+    name: z.string().refine(isAddressableOutputName, {
+      message:
+        'tool name must be a plain identifier (letters, digits, _; not starting with a digit)',
+    }),
+    description: z
+      .string()
+      .min(1)
+      .refine((d) => !d.includes('${'), {
+        message: 'templates are not supported in tool metadata',
+      }),
+    // The `${`-refusal must cover the WHOLE subtree, not just this root: the
+    // subset's nested `items`/`properties`/`enum`/`title`/`description` are
+    // loose (`z.unknown()`), and every string in them ships verbatim to the
+    // provider wire (`toolWireParameters`) — a `${...}` anywhere would be a
+    // silent inert literal, the exact thing the deferred-eval design forbids.
+    parameters: makeRestrictedSchemaSubset('a tool parameters schema').superRefine(
+      (params, ctx) => {
+        if (subtreeContainsTemplate(params, 0)) {
+          ctx.addIssue({
+            code: 'custom',
+            message: 'templates are not supported in tool metadata',
+          });
+        }
+      },
+    ),
+    /**
+     * The whole-value `${...}` the driver evaluates when the model calls this
+     * tool, over `${tool.args.*}` only. Whole-value + ref scoping are enforced
+     * at save by `scanLlmToolRefs` (params.ts) and re-checked at run by
+     * `evalToolExpression` — the schema here only pins non-empty.
+     */
+    expression: z.string().min(1),
+  })
+  .strict();
+
+/**
+ * #2 L10a — does any STRING anywhere in this (parameters) subtree contain a
+ * `${`? Depth-bounded so a pathologically nested schema reports as a template
+ * defect rather than overflowing — fail-CLOSED: an over-deep subtree returns
+ * `true` (refused) because a tree too deep to inspect cannot be certified
+ * template-free.
+ */
+function subtreeContainsTemplate(value: unknown, depth: number): boolean {
+  if (depth > 64) return true;
+  if (typeof value === 'string') return value.includes('${');
+  if (Array.isArray(value)) return value.some((v) => subtreeContainsTemplate(v, depth + 1));
+  if (value !== null && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).some((v) =>
+      subtreeContainsTemplate(v, depth + 1),
+    );
+  }
+  return false;
+}
+
+export type LlmToolDef = z.infer<typeof llmToolDefSchema>;
+
+/** #2 L10a — the tools array: non-empty, unique names (the model calls by name). */
+export const llmToolsArraySchema = z
+  .array(llmToolDefSchema)
+  .min(1)
+  .superRefine((tools, ctx) => {
+    const seen = new Set<string>();
+    for (const [i, t] of tools.entries()) {
+      if (seen.has(t.name)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [i, 'name'],
+          message: `duplicate tool name '${t.name}' (tool names must be unique on a node)`,
+        });
+      }
+      seen.add(t.name);
+    }
+  });
+
+/**
+ * #2 L10a — the `tools`/`toolChoice` COUPLING rule, extracted (the
+ * `refineOutputModeCoupling` pattern) so the DISPATCH schema and the save-time
+ * SURFACE slice enforce ONE rule: `toolChoice` is meaningless without `tools`,
+ * and `tools` + `outputMode:'structured'` is refused in v1 — Anthropic's
+ * structured mode already rides a FORCED tool (`structured_output`), and
+ * arbitrating between the author's tools and the structured scaffold is a
+ * deliberate deferral, not an oversight.
+ */
+function refineLlmToolsCoupling(
+  c: { tools?: unknown; toolChoice?: unknown; outputMode?: unknown },
+  ctx: z.RefinementCtx,
+): void {
+  if (c.toolChoice !== undefined && c.tools === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['toolChoice'],
+      message: 'toolChoice is only valid when tools are declared',
+    });
+  }
+  if (c.tools !== undefined && c.outputMode === 'structured') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['tools'],
+      message:
+        "tools are not supported with outputMode:'structured' " +
+        '(structured output rides a forced provider tool; the combination is deferred)',
+    });
+  }
+}
+
+/**
+ * #2 L10a — the exact `{ tools, toolChoice, outputMode }` SLICE of a node's
+ * config the save-time validator reads (`params.ts::validateLlmCallTools`),
+ * mirroring `llmStructuredOutputSurfaceSchema`. NON-STRICT: only the tool
+ * fields are picked; everything else passes through untouched.
+ */
+export const llmToolsSurfaceSchema = z
+  .object({
+    tools: llmToolsArraySchema.optional(),
+    toolChoice: llmToolChoiceSchema.optional(),
+    // Read LOOSELY on purpose: the coupling rule only asks "is it 'structured'".
+    // `llmStructuredOutputSurfaceSchema` (validateLlmCallOutput) OWNS the enum's
+    // own diagnostic — re-validating it here would report an invalid value twice
+    // on the same node.
+    outputMode: z.unknown().optional(),
+  })
+  .superRefine(refineLlmToolsCoupling);
+
+/**
+ * #2 L10a — lower a tool's `parameters` to the PROVIDER-facing wire schema
+ * (Anthropic `input_schema`, OpenAI/Ollama `function.parameters`).
+ *
+ * The local args validator (`validateStructuredOutput`) applies the #594 rule:
+ * an ABSENT `required` list = ALL required. But the MODEL reads standard JSON
+ * Schema, where absent `required` = all optional — so a well-behaved model
+ * would legitimately omit args the validator then fails, burning the single
+ * L10a round-trip on a self-inflicted error. The wire shape must SAY what the
+ * validator enforces: an absent `required` is lowered to the explicit all-names
+ * list, and `additionalProperties: false` is always stamped (the subset admits
+ * only the explicit-`false` form anyway).
+ */
+export function toolWireParameters(parameters: LlmOutputSchema): Record<string, unknown> {
+  return {
+    ...parameters,
+    required: parameters.required ?? Object.keys(parameters.properties),
+    additionalProperties: false,
+  };
+}
 
 /**
  * #2 L4a — lower a validated structured `outputSchema` to the `config.outputs`
@@ -264,12 +468,13 @@ function lowerOutputPropertyType(type: LlmOutputSchema['properties'][string]['ty
  * `prompt` shorthand", "`system` shorthand allowed") and the back-compat mandate
  * make the shorthand load-bearing.
  *
- * `outputMode`/`outputSchema` landed in L4a (below): unlike the still-off tool
- * surface they are NON-inert — a `structured` node's `outputSchema` LOWERS into
- * `config.outputs` at save time (`catalog/lower.ts`), so the fields drive real
- * behaviour the moment they ship. Still OFF the schema (kept off so nothing inert/
- * unreachable ships): `tools`/`toolChoice`/`mcpServers` (L10). `reasoningEffort`
- * landed in L3 (below).
+ * `outputMode`/`outputSchema` landed in L4a (below): a `structured` node's
+ * `outputSchema` LOWERS into `config.outputs` at save time (`catalog/lower.ts`),
+ * so the fields drive real behaviour the moment they ship. `tools`/`toolChoice`
+ * landed in L10a (below) — the local pure-tool contract with a single tool
+ * round-trip. Still OFF the schema (kept off so nothing inert/unreachable
+ * ships): `mcpServers` (L10c) and `maxToolIterations` (L10b's bounded loop).
+ * `reasoningEffort` landed in L3 (below).
  */
 export const llmCallConfigSchema = z
   .object({
@@ -309,6 +514,14 @@ export const llmCallConfigSchema = z
     // save.
     outputMode: outputModeSchema.optional(),
     outputSchema: llmOutputSchemaSchema.optional(),
+    // L10a tool surface — the local pure-tool contract. `tools` declares the
+    // callable tools (deferred-eval `${tool.args.*}` expressions — see the
+    // ToolDef block above); `toolChoice` maps per provider. The coupling with
+    // `outputMode` is the shared `refineLlmToolsCoupling` rule (below), applied
+    // here so a tools+structured config fails at DISPATCH the same way it fails
+    // at save.
+    tools: llmToolsArraySchema.optional(),
+    toolChoice: llmToolChoiceSchema.optional(),
   })
   .refine((c) => (c.prompt !== undefined) !== (c.messages !== undefined), {
     message: 'llm_call requires exactly one of `prompt` or `messages`',
@@ -316,7 +529,8 @@ export const llmCallConfigSchema = z
   .refine((c) => c.messages === undefined || c.messages.some((m) => m.role !== 'system'), {
     message: 'llm_call `messages` must contain at least one non-system (user/assistant) message',
   })
-  .superRefine(refineOutputModeCoupling);
+  .superRefine(refineOutputModeCoupling)
+  .superRefine(refineLlmToolsCoupling);
 
 export type LlmCallConfig = z.infer<typeof llmCallConfigSchema>;
 

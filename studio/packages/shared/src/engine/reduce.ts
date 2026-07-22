@@ -21,6 +21,7 @@ import {
   IF_ACTIVITY_TYPE,
   IF_BRANCH_TRUE,
   IF_BRANCH_FALSE,
+  LLM_CALL_ACTIVITY_TYPE,
   SWITCH_ACTIVITY_TYPE,
   SWITCH_DEFAULT_BRANCH,
   WAIT_ACTIVITY_TYPE,
@@ -921,10 +922,21 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   function prepInput(state: RunState, node: Node): Record<string, unknown> {
-    return substitute(node.config, buildCtx(state), 0, foreachItemOf(state, node.id)) as Record<
-      string,
-      unknown
-    >;
+    const item = foreachItemOf(state, node.id);
+    // #2 L10a — an llm_call's `tools` subtree is DEFERRED-EVAL: its expressions
+    // reference `${tool.args.*}`, bound only when the model calls the tool
+    // inside the adapter, so the blanket substitution must not walk it (the
+    // unbound `tool` root would throw here and fail the dispatch). The subtree
+    // is re-attached RAW — it is authoring-STATIC by design (save-time refuses
+    // `${` in tool metadata and scopes the expressions; `evalToolExpression`
+    // evaluates them args-only at call time).
+    if (node.type === LLM_CALL_ACTIVITY_TYPE && node.config['tools'] !== undefined) {
+      const { tools, ...rest } = node.config;
+      const prepared = substitute(rest, buildCtx(state), 0, item) as Record<string, unknown>;
+      prepared['tools'] = tools;
+      return prepared;
+    }
+    return substitute(node.config, buildCtx(state), 0, item) as Record<string, unknown>;
   }
 
   /**

@@ -27,7 +27,13 @@ import {
   WAIT_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
 } from '../catalog/types.js';
-import { llmOutputSchemaSchema, llmStructuredOutputSurfaceSchema } from '../catalog/llm-config.js';
+import {
+  llmOutputSchemaSchema,
+  llmStructuredOutputSurfaceSchema,
+  llmToolDefSchema,
+  llmToolsSurfaceSchema,
+  lowerOutputSchema,
+} from '../catalog/llm-config.js';
 import { SecretRefSchema, isSecretRef } from '../schemas/secret-ref.js';
 import type { EvalIn, FnSpec, SigType } from './functions.js';
 import {
@@ -209,7 +215,12 @@ type RefRoot =
   | { kind: 'nodeOutput'; id: string; name: string; arity: 4 }
   | { kind: 'nodeStatus'; id: string; arity: 3 }
   | { kind: 'run'; field: string; arity: 2 }
-  | { kind: 'trigger'; field: string; arity: 2 };
+  | { kind: 'trigger'; field: string; arity: 2 }
+  // #2 L10a — `${tool.args.<name>}`: a model-supplied tool-call argument, bound
+  // ONLY while an llm_call tool expression evaluates (`evalToolExpression`).
+  // Context-scoped like `${trigger.windowStart}` (S11b): save-time legality is
+  // `scope.toolArgTypes` presence, run-time binding is `Env.toolArgs`.
+  | { kind: 'tool'; name: string; arity: 3 };
 
 function refRoot(fields: string[]): RefRoot | null {
   const [ns, a, b, c] = fields;
@@ -224,6 +235,11 @@ function refRoot(fields: string[]): RefRoot | null {
   if (ns === 'run' && fields.length >= 2) return { kind: 'run', field: a as string, arity: 2 };
   if (ns === 'trigger' && fields.length >= 2)
     return { kind: 'trigger', field: a as string, arity: 2 };
+  // `${tool}` / `${tool.args}` (too short) fall through to `null` — an
+  // unresolvable reference, matching every other under-specified root.
+  if (ns === 'tool' && fields.length >= 3 && a === 'args') {
+    return { kind: 'tool', name: b as string, arity: 3 };
+  }
   return null;
 }
 
@@ -259,6 +275,14 @@ function pathDepthDefect(expr: Extract<Expr, { kind: 'ref' }>): string | null {
 interface Env {
   ctx: SubstitutionContext;
   item?: { value: unknown };
+  /**
+   * #2 L10a — the `${tool.args.*}` binding, present ONLY while a tool
+   * expression evaluates (`evalToolExpression`). Lexical like `item`: it is not
+   * a run fact, it exists only inside one tool call's evaluation. The validated
+   * argument object (every declared parameter present — optionals as `null`,
+   * per `validateStructuredOutput`'s present-null contract).
+   */
+  toolArgs?: Record<string, unknown>;
   /**
    * Elements materialised so far by THIS field's evaluation. Shared by every
    * child Env (the object is passed by reference, deliberately), so nesting
@@ -382,6 +406,24 @@ function resolveRoot(expr: Extract<Expr, { kind: 'ref' }>, root: RefRoot, env: E
         throw new SubstituteError(`unknown trigger field \${trigger.${root.field}}`);
       }
       return ctx.trigger[root.field];
+    }
+    // `${tool.args.<name>}` (#2 L10a) — bound only inside `evalToolExpression`.
+    // Both refusals are plain `SubstituteError`s, never `MissingValueError`:
+    // an unbound `tool` is a scope error and an undeclared name is a doc error
+    // (save-time scoping enforces both) — `default()` must not rescue either.
+    case 'tool': {
+      if (env.toolArgs === undefined) {
+        throw new SubstituteError(
+          `\${${expr.source}}: 'tool' is only bound inside an llm_call tool expression — ` +
+            'it has no value here',
+        );
+      }
+      if (!Object.prototype.hasOwnProperty.call(env.toolArgs, root.name)) {
+        throw new SubstituteError(
+          `\${tool.args.${root.name}}: this tool declares no parameter named '${root.name}'`,
+        );
+      }
+      return env.toolArgs[root.name];
     }
   }
 }
@@ -798,6 +840,43 @@ export function validateWholeValue(
 }
 
 /**
+ * #2 L10a — evaluate an llm_call TOOL EXPRESSION against the model-supplied,
+ * schema-validated call arguments. The RUN-TIME half of the tool contract; the
+ * save-time half is `scanLlmToolRefs` (whole-value + `${tool.args.*}`-only,
+ * declared-name checked).
+ *
+ * The env binds ONLY `toolArgs` — `ctx` is EMPTY by construction, so a
+ * run-state ref that slipped past save (`${params.x}`, `${run.runId}`, …)
+ * throws its ordinary unknown-reference error rather than resolving. That is
+ * what makes a v1 tool PURE + read-only (T11): the closed function catalog has
+ * no side effects, and the env carries no run state, no I/O, no secrets.
+ * `${item}` still binds inside a `filter`/`map`/`count` lambda over a tool-args
+ * array (the `withItem` child-env spread carries `toolArgs` through).
+ *
+ * Whole-value REQUIRED, re-checked here (mirroring `filterFieldBody`): rows
+ * written before the save gate existed never passed through it, and an
+ * interpolated expression would coerce a non-string result to a string. Throws
+ * `SubstituteError` on any defect; the caller (`executeLocalTool`, server)
+ * turns it into an error tool_result for the model, never a node failure.
+ */
+export function evalToolExpression(expression: string, args: Record<string, unknown>): unknown {
+  const defect = wholeValueDefect(expression, 'tool expression');
+  if (defect !== null) throw new SubstituteError(defect);
+  const mode = interpolationMode(expression.trim());
+  // No defect yet NOT `whole` = an unterminated `${` (`defectOf` stays silent
+  // on it at this layer). Fail LOUD rather than evaluate a broken body.
+  if (mode.mode !== 'whole') {
+    throw new SubstituteError('tool expression has an unterminated ${...} reference');
+  }
+  const env: Env = {
+    ctx: { params: {}, nodeOutputs: {}, nodeStatuses: {}, run: {}, trigger: {} },
+    toolArgs: args,
+    budget: { spent: 0 },
+  };
+  return evalExpr(parseExpr(mode.body), env);
+}
+
+/**
  * #4 A8 — the composed `${filter(items, predicate)}` expression a `filter` control
  * node evaluates. A `filter` carries TWO whole-value `${}` config fields; their
  * bodies splice as the two arguments of the inert expression language's EXISTING
@@ -1157,6 +1236,27 @@ export function validateRefs(
       // (missing/non-whole-value) is skipped here and reported by
       // `validateFilterConfig` — scanning garbage would double-report or mis-parse.
       scanFilterRefs(node, scope, errors, foreachChildIds.has(node.id));
+    } else if (node.type === LLM_CALL_ACTIVITY_TYPE && node.config['tools'] !== undefined) {
+      // #2 L10a — an llm_call's `tools` subtree is DEFERRED-EVAL (its
+      // expressions reference `${tool.args.*}`, bound only when the model calls
+      // the tool), so the generic scan must not walk it: it would refuse the
+      // `tool` root as context-scoped. Scan the REST of the config normally,
+      // then each tool expression with the `tool` root in scope + restricted
+      // (`scanLlmToolRefs`). `scanSecretSinks` (below) still walks the whole
+      // config including `tools` — correct fail-closed behaviour (`llm_call`
+      // declares no secret sink, so a `{$secret}` marker anywhere is refused).
+      const rest: Record<string, unknown> = { ...node.config };
+      delete rest['tools'];
+      scan(
+        `nodes.${node.id}.config`,
+        rest,
+        scope,
+        errors,
+        0,
+        undefined,
+        foreachChildIds.has(node.id),
+      );
+      scanLlmToolRefs(node, errors);
     } else {
       scan(
         `nodes.${node.id}.config`,
@@ -1541,7 +1641,10 @@ export function validateDoc(
     // #4 A9 — an `execute_pipeline` MUST carry a `Node.call` (save-time half).
     if (node.type === EXECUTE_PIPELINE_ACTIVITY_TYPE) validateExecutePipelineConfig(node, errors);
     // #2 L4a — an `llm_call`'s structured output surface (outputMode/outputSchema).
-    if (node.type === LLM_CALL_ACTIVITY_TYPE) validateLlmCallOutput(node, errors);
+    if (node.type === LLM_CALL_ACTIVITY_TYPE) {
+      validateLlmCallOutput(node, errors);
+      validateLlmCallTools(node, errors); // #2 L10a — the tools config surface
+    }
     // #2 L11b — an `agent_task`'s optional structured `outputSchema` subset.
     if (node.type === AGENT_TASK_ACTIVITY_TYPE) validateAgentTaskOutput(node, errors);
   }
@@ -1975,6 +2078,22 @@ function validateLlmCallOutput(node: Node, errors: string[]): void {
 }
 
 /**
+ * #2 L10a — the tools-surface counterpart of `validateLlmCallOutput`: parse the
+ * `{ tools, toolChoice, outputMode }` slice through `llmToolsSurfaceSchema`
+ * (ToolDef shapes, unique names, the toolChoice/structured coupling) and
+ * surface each issue as a node-scoped diagnostic. The EXPRESSION refs are
+ * `scanLlmToolRefs`'s half (validateRefs); this is the config SHAPE half.
+ */
+function validateLlmCallTools(node: Node, errors: string[]): void {
+  const parsed = llmToolsSurfaceSchema.safeParse(node.config);
+  if (parsed.success) return;
+  for (const issue of parsed.error.issues) {
+    const path = issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
+    errors.push(`node.${node.id}: ${path}${issue.message}`);
+  }
+}
+
+/**
  * #2 L11b — the `agent_task` counterpart of `validateLlmCallOutput`: an OPTIONAL
  * structured `outputSchema`, opted into by presence (no `outputMode` coupling), so
  * the gate is `llmOutputSchemaSchema` on the raw field directly — the SAME
@@ -2032,6 +2151,45 @@ function scanFilterRefs(
     return;
   }
   scan(`nodes.${node.id}.config`, composed, scope, errors, 0, undefined, itemInScope);
+}
+
+/**
+ * #2 L10a — scan an llm_call's `tools[].expression` fields, each with the
+ * `tool` root IN SCOPE (`toolArgTypes` = that tool's declared parameters,
+ * lowered to `SigType` via the SAME `lowerOutputSchema` the structured path
+ * freezes with) and every OTHER root RESTRICTED out (`TOOL_EXPRESSION_ROOTS`
+ * — a `${params.x}` names run state a tool evaluation deliberately cannot
+ * see). Whole-value REQUIRED (`validateWholeValue`, mirroring the filter
+ * fields): an interpolated expression would coerce the result to a string.
+ *
+ * A tool that fails `llmToolDefSchema` is SKIPPED here — `validateLlmCallTools`
+ * reports the shape defect, and scanning a malformed def would mis-derive its
+ * parameter scope. The scope sets are empty: a tool expression references no
+ * graph fact, and the root restriction refuses any that tries before the scope
+ * is consulted.
+ */
+function scanLlmToolRefs(node: Node, errors: string[]): void {
+  const rawTools = node.config['tools'];
+  if (!Array.isArray(rawTools)) return; // shape defect — validateLlmCallTools reports it
+  rawTools.forEach((raw, i) => {
+    const parsed = llmToolDefSchema.safeParse(raw);
+    if (!parsed.success) return;
+    const where = `nodes.${node.id}.config.tools[${i}].expression`;
+    const argTypes = new Map<string, SigType>();
+    for (const out of lowerOutputSchema(parsed.data.parameters)) {
+      argTypes.set(out.name, sigOfDeclared(out.type));
+    }
+    const scope: ScanScope = {
+      declared: new Map(),
+      guaranteed: new Set(),
+      settled: new Set(),
+      reachable: new Set(),
+      soft: new Set(),
+      toolArgTypes: argTypes,
+    };
+    validateWholeValue(where, parsed.data.expression, errors, 'tool expression');
+    scan(where, parsed.data.expression, scope, errors, 0, TOOL_EXPRESSION_ROOTS);
+  });
 }
 
 function validateExitWhen(
@@ -2371,6 +2529,28 @@ interface ScanScope {
    * there with a message naming the binding surface.
    */
   windowFieldsInScope?: boolean;
+  /**
+   * #2 L10a — whether `${tool.args.*}` is legal in this scan, and against which
+   * declared parameters. PRESENT only for a tool expression's scan
+   * (`scanLlmToolRefs`): the map carries each declared parameter's lowered
+   * `SigType` for E6 typing, and membership is the declared-name check. Absent
+   * everywhere else — an ordinary config field has no tool call in flight, so
+   * the ref is refused with a message naming the legal surface.
+   */
+  toolArgTypes?: ReadonlyMap<string, SigType>;
+}
+
+/**
+ * A ROOT RESTRICTION for a scan (#5 S12b, generalized for #2 L10a): `roots` is
+ * the closed set of legal root kinds; `describe` is the caller-worded refusal
+ * ("a trigger param binding may reference only ${trigger.*} (the fire-time
+ * trigger context)") that `checkExprStatic` completes with ", not ${<shown>}".
+ * Carried as ONE object so a second restricted surface (a tool expression)
+ * cannot inherit another surface's wording.
+ */
+interface RootRestriction {
+  roots: ReadonlySet<RefRoot['kind']>;
+  describe: string;
 }
 
 function scan(
@@ -2382,7 +2562,7 @@ function scan(
   // A root restriction (#5 S12b), threaded UNCHANGED through every recursion so
   // a nested binding value (`{a: {b: "${params.x}"}}`) is restricted the same as
   // a top-level one. Undefined (`validateRefs`/`validateExitWhen`) = all roots.
-  allowedRoots?: ReadonlySet<RefRoot['kind']>,
+  allowedRoots?: RootRestriction,
   // Whether `${item}` is bound at this field's top level (#4 A4): true for a
   // node scanned as a `foreach` body child, so `${item}` is accepted here the
   // same way a `filter`/`map`/`count` lambda arg accepts it. Threaded UNCHANGED
@@ -2442,7 +2622,26 @@ function scan(
 }
 
 /** The only expression root a trigger param binding may reference (#5 S12b). */
-const TRIGGER_BINDING_ROOTS: ReadonlySet<RefRoot['kind']> = new Set(['trigger']);
+const TRIGGER_BINDING_ROOTS: RootRestriction = {
+  roots: new Set(['trigger']),
+  describe:
+    'a trigger param binding may reference only ${trigger.*} (the fire-time trigger context)',
+};
+
+/**
+ * #2 L10a — the only expression roots an llm_call tool expression may reference.
+ * `item` is in the SET because the restriction check runs BEFORE the lambda
+ * scoping — a `${item}` inside a `filter`/`map`/`count` lambda over a tool-args
+ * array is legal (the runtime binds it via the child-env spread), and refusing
+ * it here would make every predicate-taking function unusable in a tool
+ * expression. A bare/out-of-lambda `${item}` is still refused downstream by
+ * `checkRefRoot`'s `itemInScope` check, so this widening is exactly scope-sound.
+ */
+const TOOL_EXPRESSION_ROOTS: RootRestriction = {
+  roots: new Set(['tool', 'item']),
+  describe:
+    'a tool expression may reference only ${tool.args.*} (the model-supplied tool-call arguments)',
+};
 
 /**
  * SAVE-TIME validation of a trigger's expression-valued param BINDINGS (#5
@@ -2638,6 +2837,15 @@ function refRootType(root: RefRoot, scope: ScanScope): SigType {
         (TRIGGER_WINDOW_FIELDS as readonly string[]).includes(root.field)
         ? 'string'
         : 'any';
+    // `${tool.args.<name>}` (#2 L10a) — the declared parameter's lowered type
+    // (string/number/boolean; object/array lower to `json` → `any`, the E7 deep-
+    // addressing escape hatch). Out of scope / undeclared falls to `any` —
+    // `checkRefRoot` reports it once. NOTE an OPTIONAL parameter is present-null
+    // at run (`validateStructuredOutput`); `SigType` has no null, so a null that
+    // reaches a typed position throws at run — the same recorded posture as the
+    // nullable `run` fields above.
+    case 'tool':
+      return scope.toolArgTypes?.get(root.name) ?? 'any';
   }
 }
 
@@ -2666,7 +2874,7 @@ function checkExprStatic(
   where: string,
   softOk: boolean,
   itemInScope = false,
-  allowedRoots?: ReadonlySet<RefRoot['kind']>,
+  allowedRoots?: RootRestriction,
 ): void {
   if (expr.kind === 'str' || expr.kind === 'num' || expr.kind === 'bool') return;
   if (expr.kind === 'call') {
@@ -2747,16 +2955,13 @@ function checkExprStatic(
   // Undefined (every ordinary caller) = all roots allowed, so this is inert
   // outside the binding gate. `refRoot` above already turned the segments into
   // a root; `checkRefRoot` (below) still validates the field of an ALLOWED root.
-  if (allowedRoots !== undefined && !allowedRoots.has(root.kind)) {
+  if (allowedRoots !== undefined && !allowedRoots.roots.has(root.kind)) {
     // Name the offending root as the AUTHOR wrote it: the two node kinds share
     // the `nodes` namespace, and `item` has no dot-form (it is `${item}`, never
     // `${item.*}`) — so render it bare rather than as a namespace prefix.
     const ns = root.kind === 'nodeOutput' || root.kind === 'nodeStatus' ? 'nodes' : root.kind;
     const shown = ns === 'item' ? '${item}' : `\${${ns}.*}`;
-    errors.push(
-      `${where}: \${${expr.source}} — a trigger param binding may reference only ` +
-        `\${trigger.*} (the fire-time trigger context), not ${shown}`,
-    );
+    errors.push(`${where}: \${${expr.source}} — ${allowedRoots.describe}, not ${shown}`);
     return;
   }
   const tooDeep = pathDepthDefect(expr);
@@ -2935,6 +3140,28 @@ function checkRefRoot(
   // the field is a known one. `softOk` is irrelevant: no trigger field is
   // rescuable-absent — `body` is always present (null when the fire carried
   // none), and a deep miss into it is E7's runtime walk, not a save-time error.
+  // `${tool.args.<name>}` (#2 L10a) — context-scoped like the window fields:
+  // legal only inside an llm_call tool expression's scan (`toolArgTypes`
+  // present), and then only for a parameter that tool declares. `softOk` is
+  // irrelevant: an unbound/undeclared tool ref raises a plain `SubstituteError`
+  // at run (never `MissingValueError`), so `default()` cannot rescue it and
+  // relaxing here would accept a doc that still throws.
+  if (root.kind === 'tool') {
+    if (scope.toolArgTypes === undefined) {
+      errors.push(
+        `${where}: \${${expr.source}} is context-scoped — only an llm_call tool ` +
+          `expression may reference \${tool.args.*} (the model-supplied tool-call arguments)`,
+      );
+      return;
+    }
+    if (!scope.toolArgTypes.has(root.name)) {
+      errors.push(
+        `${where}: \${tool.args.${root.name}} — this tool declares no parameter named ` +
+          `'${root.name}'`,
+      );
+    }
+    return;
+  }
   if (root.kind === 'trigger') {
     if ((TRIGGER_FIELDS as readonly string[]).includes(root.field)) return;
     // #5 S11b — the window bounds are CONTEXT-SCOPED: legal only where the

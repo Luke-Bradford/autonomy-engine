@@ -493,6 +493,23 @@ async function* runLlmCall(
     };
     return;
   }
+  if (llm.data.tools !== undefined && llm.data.toolChoice !== 'none') {
+    // #2 L10a — same shape limit as structured: a single-shot CLI exchange has
+    // no tool_use/tool_result wire to drive the local tool round-trip through.
+    // Reject LOUD at dispatch rather than silently run the prompt without the
+    // author's tools (the connection kind is not reliably known at save-time —
+    // L13a routes `connectionId` dynamically). `toolChoice:'none'` is exempt,
+    // mirroring the provider adapters: "tools off" means running without them
+    // IS the author's intent, so a dynamically-routed node parked on 'none'
+    // behaves identically on every connection kind.
+    yield {
+      type: 'failed',
+      kind: 'permanent',
+      error:
+        'tools are not supported on an agent_cli (CLI) connection — bind a provider connection (anthropic/openai/ollama)',
+    };
+    return;
+  }
   const prompt = renderCliPrompt(normalizeLlmRequest(llm.data));
   // Model is a metering LABEL only (an unpriced call resolves no price): node <
   // connection < the `cli` fallback.

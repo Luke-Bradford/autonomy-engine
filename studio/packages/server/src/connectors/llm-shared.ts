@@ -2,16 +2,20 @@ import { z } from 'zod';
 import type { ConnectionKind } from '@autonomy-studio/shared';
 import {
   MAX_RETRY_INTERVAL_SECONDS,
+  evalToolExpression,
   llmCallConfigSchema,
   normalizeLlmRequest,
   parseAndValidateStructured,
   structuredOutputInstruction,
+  toolWireParameters,
   validateStructuredOutput,
 } from '@autonomy-studio/shared';
 import type {
   LlmCallConfig,
   LlmOutputSchema,
   LlmSampling,
+  LlmToolChoice,
+  LlmToolDef,
   NormalizedLlmRequest,
   ReasoningEffort,
   StructuredValidationResult,
@@ -35,12 +39,15 @@ export {
   normalizeLlmRequest,
   parseAndValidateStructured,
   structuredOutputInstruction,
+  toolWireParameters,
   validateStructuredOutput,
 };
 export type {
   LlmCallConfig,
   LlmOutputSchema,
   LlmSampling,
+  LlmToolChoice,
+  LlmToolDef,
   NormalizedLlmRequest,
   ReasoningEffort,
   StructuredValidationResult,
@@ -463,6 +470,250 @@ export async function* runStructuredWithRepair(
     }
     yield structuredValidationFailure(provider, outcome.result.reason);
     return;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #2 L10a — local tool execution + the SINGLE-round-trip tool flow.
+//
+// The tool CONTRACT (`LlmToolDef` — pure, args-only expressions) is shared
+// (`catalog/llm-config.ts`); this block is the driver half: validate the
+// model's arguments, evaluate the expression, and drive the one bounded
+// tool round-trip inside ONE engine attempt (the spec's "opaque
+// driver-internal" model). The bounded MULTI-iteration loop + `tool.called`
+// telemetry are L10b; MCP + security policy are L10c.
+// ---------------------------------------------------------------------------
+
+/**
+ * #2 L10a — the ceiling for one tool result's serialized length. A tool result
+ * rides the continuation request (billed input) and, transitively, durable
+ * capture/telemetry surfaces — an unbounded expression result (a large mapped
+ * array) must not bloat either. Over-cap is an ERROR result the model sees
+ * (fail-closed and explicit), never a silent truncation.
+ */
+export const MAX_TOOL_RESULT_CHARS = 32_000;
+
+/** One tool call as the MODEL requested it, provider-normalized by the adapter.
+ *  `id` is the provider's call id (`null` where the provider has none — Ollama);
+ *  `name` is `null` for a structurally malformed call (no readable name). */
+export interface ToolCallRequest {
+  id: string | null;
+  name: string | null;
+  args: unknown;
+}
+
+/** One executed tool call's result, ready for the provider's tool_result shape.
+ *  `isError:true` carries a diagnostic the MODEL can recover from in its final
+ *  text — a tool-level defect is never a node failure (the node fails only on
+ *  transport/shape/budget grounds, same as text mode). */
+export interface ToolCallResult {
+  id: string | null;
+  name: string;
+  resultText: string;
+  isError: boolean;
+}
+
+export type LocalToolExecution = { ok: true; resultText: string } | { ok: false; message: string };
+
+/**
+ * #2 L10a — execute ONE local tool call: validate the model-supplied arguments
+ * against the tool's declared `parameters` (REUSING `validateStructuredOutput`
+ * — strict types, unknown keys stripped, missing-required fails, optionals
+ * normalized present-null, the exact #594 contract the wire schema advertises
+ * via `toolWireParameters`), then evaluate the pure args-only expression
+ * (`evalToolExpression`) and JSON-serialize the result.
+ *
+ * Every defect returns `{ok:false}` with a bounded message FOR THE MODEL
+ * (invalid args, an evaluation throw, an unserializable `undefined`/BigInt
+ * result, an over-cap result) — the caller feeds it back as an error
+ * tool_result. Expression-error messages are client-safe by construction
+ * (`SubstituteError` never echoes resolved values) and the env carries no
+ * secrets, so no redaction pass is needed here.
+ */
+export function executeLocalTool(def: LlmToolDef, rawArgs: unknown): LocalToolExecution {
+  const validated = validateStructuredOutput(def.parameters, rawArgs);
+  if (!validated.ok) {
+    return {
+      ok: false,
+      message: `invalid arguments for tool '${def.name}': ${errorExcerpt(validated.reason)}`,
+    };
+  }
+  let result: unknown;
+  try {
+    result = evalToolExpression(def.expression, validated.value);
+  } catch (err) {
+    return {
+      ok: false,
+      message: `tool '${def.name}' evaluation failed: ${errorExcerpt(
+        err instanceof Error ? err.message : String(err),
+      )}`,
+    };
+  }
+  let text: string | undefined;
+  try {
+    // `JSON.stringify(undefined)` IS `undefined` (not a throw) — both the
+    // throw (BigInt/circular) and the undefined case fold to "unserializable".
+    text = JSON.stringify(result);
+  } catch {
+    text = undefined;
+  }
+  if (text === undefined) {
+    return { ok: false, message: `tool '${def.name}' produced an unserializable result` };
+  }
+  if (text.length > MAX_TOOL_RESULT_CHARS) {
+    return {
+      ok: false,
+      message:
+        `tool '${def.name}' result is too large ` +
+        `(${text.length} chars, max ${MAX_TOOL_RESULT_CHARS})`,
+    };
+  }
+  return { ok: true, resultText: text };
+}
+
+/**
+ * #2 L10a — execute EVERY tool call of one provider response, in provider
+ * order. A provider may emit several calls in a single response (Anthropic
+ * parallel tool_use blocks, OpenAI `tool_calls[]`); all are executed under the
+ * SAME single round-trip — the budget counts provider EXCHANGES, not calls —
+ * and each gets exactly one result (a continuation missing any id is a provider
+ * 400). An unknown name or a nameless (malformed) call yields an error result
+ * the model sees, never a node failure.
+ */
+export function executeToolCalls(
+  tools: readonly LlmToolDef[],
+  calls: readonly ToolCallRequest[],
+): ToolCallResult[] {
+  return calls.map((call) => {
+    if (call.name === null) {
+      return {
+        id: call.id,
+        name: '',
+        resultText: 'malformed tool call: no tool name',
+        isError: true,
+      };
+    }
+    const def = tools.find((t) => t.name === call.name);
+    if (def === undefined) {
+      return {
+        id: call.id,
+        name: call.name,
+        resultText: `unknown tool '${call.name}'`,
+        isError: true,
+      };
+    }
+    const exec = executeLocalTool(def, call.args);
+    return exec.ok
+      ? { id: call.id, name: call.name, resultText: exec.resultText, isError: false }
+      : { id: call.id, name: call.name, resultText: exec.message, isError: true };
+  });
+}
+
+/**
+ * #2 L10a — the provider-agnostic outcome of ONE provider call in a tool flow,
+ * mapped by each adapter's `doCall` closure for `runTextWithTools` to drive:
+ *
+ * - `terminal`  — a transport/HTTP/non-JSON/no-completion failure, yielded
+ *   verbatim (the engine retry policy owns transient-ness). `capture` (when the
+ *   exchange got far enough to stamp one) preserves the L9a capture-before-
+ *   terminal invariant.
+ * - `text`      — a completed exchange with a readable text completion: the
+ *   billed `usage`, the optional capture fact, and the ready `succeeded` event
+ *   (the adapter maps text/stopReason exactly as its plain text path does).
+ * - `toolUse`   — the model requested tool call(s): the billed `usage`, the
+ *   normalized `calls`, and `buildNext(results)` — the adapter-owned
+ *   continuation builder (provider turn shapes are NOT provider-agnostic:
+ *   Anthropic replays raw content blocks + tool_result blocks, OpenAI appends
+ *   the assistant tool_calls message + role:'tool' messages, Ollama similar) —
+ *   returning the next conversation value `C`.
+ */
+export type ToolRoundOutcome<C> =
+  | {
+      type: 'terminal';
+      event: Extract<ActivityEvent, { type: 'failed' }>;
+      capture?: LlmCapture;
+    }
+  | {
+      type: 'text';
+      usage: LlmUsage;
+      capture?: LlmCapture;
+      succeeded: Extract<ActivityEvent, { type: 'succeeded' }>;
+    }
+  | {
+      type: 'toolUse';
+      usage: LlmUsage;
+      capture?: LlmCapture;
+      calls: ToolCallRequest[];
+      buildNext: (results: ToolCallResult[]) => C;
+    };
+
+/**
+ * #2 L10a — drive a text-mode `llm_call` WITH declared tools through its single
+ * bounded tool round-trip, inside ONE engine attempt with EXACTLY ONE terminal.
+ *
+ * Flow: call → (billed → `metered`) → text? → `succeeded` · toolUse? → execute
+ * ALL requested calls locally (`executeToolCalls` — pure, args-only) → continue
+ * with the adapter-built tool-result conversation → the follow-up must yield
+ * text; a SECOND toolUse response fails `permanent` (the v1 budget is one
+ * round-trip per attempt; the bounded multi-iteration loop is L10b).
+ *
+ * CHOICE DOWNGRADE (load-bearing): the continuation call always passes `auto`,
+ * whatever the author's `toolChoice` — a `required` first call that stayed
+ * forced on the continuation could NEVER produce the final text and would fail
+ * every `required` node on the budget unconditionally.
+ *
+ * CAPTURE (#2 L9a): exactly ONE `captured` fact per attempt, for the FIRST
+ * exchange (request = the author's turns; completion omitted unless the first
+ * response was text) — emitted before any terminal, preserving the
+ * capture-precedes-terminal invariant. Continuation exchanges carry provider-
+ * specific tool turns `LlmCapture.request` cannot represent; their capture is
+ * #605's structured-capture plumbing, not silently hashed wrong here.
+ *
+ * Metering mirrors the plain text path: every completed-2xx outcome (`text`/
+ * `toolUse`) is metered; a `terminal` outcome is not (the text path's existing
+ * posture for failed exchanges). A run cancelled between calls is caught by the
+ * next `llmPost` (signal re-check at entry) exactly as the repair loop is.
+ */
+export async function* runTextWithTools<C>(
+  provider: LlmConnectionKind,
+  tools: readonly LlmToolDef[],
+  initial: C,
+  initialChoice: LlmToolChoice,
+  doCall: (conv: C, choice: LlmToolChoice) => Promise<ToolRoundOutcome<C>>,
+): AsyncIterable<ActivityEvent> {
+  let conv = initial;
+  let choice = initialChoice;
+  for (let round = 0; round <= 1; round++) {
+    const outcome = await doCall(conv, choice);
+    const firstExchange = round === 0;
+    if (outcome.type === 'terminal') {
+      if (firstExchange && outcome.capture !== undefined) {
+        yield { type: 'captured', capture: outcome.capture };
+      }
+      yield outcome.event;
+      return;
+    }
+    yield { type: 'metered', usage: outcome.usage };
+    if (firstExchange && outcome.capture !== undefined) {
+      yield { type: 'captured', capture: outcome.capture };
+    }
+    if (outcome.type === 'text') {
+      yield outcome.succeeded;
+      return;
+    }
+    if (!firstExchange) {
+      yield {
+        type: 'failed',
+        kind: 'permanent',
+        error:
+          `${provider} requested another tool call after the tool round-trip — ` +
+          'the v1 tool budget is a single round-trip per attempt (bounded loop lands in L10b)',
+      };
+      return;
+    }
+    const results = executeToolCalls(tools, outcome.calls);
+    conv = outcome.buildNext(results);
+    choice = 'auto';
   }
 }
 

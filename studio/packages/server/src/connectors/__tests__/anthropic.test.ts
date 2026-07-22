@@ -679,3 +679,213 @@ describe('anthropicAdapter — #2 L9a prompt/completion capture', () => {
     expect(types).not.toContain('metered'); // a non-2xx billed nothing
   });
 });
+
+// ---------------------------------------------------------------------------
+// #2 L10a — local tools: wire shape + the single tool round-trip.
+// ---------------------------------------------------------------------------
+
+describe('anthropicAdapter — local tools (#2 L10a)', () => {
+  const ADDER = {
+    name: 'adder',
+    description: 'Adds two numbers.',
+    parameters: {
+      type: 'object',
+      properties: { a: { type: 'number' }, b: { type: 'number' } },
+    },
+    expression: '${add(tool.args.a, tool.args.b)}',
+  };
+
+  const TOOL_USE_BODY = {
+    content: [
+      { type: 'text', text: 'Let me add those.' },
+      { type: 'tool_use', id: 'tu_1', name: 'adder', input: { a: 1, b: 2 } },
+    ],
+    stop_reason: 'tool_use',
+    usage: { input_tokens: 10, output_tokens: 4 },
+  };
+
+  function toolCtx(over: Record<string, unknown> = {}): ActivityContext {
+    return ctx({ input: { prompt: 'add 1 and 2', tools: [ADDER], ...over } });
+  }
+
+  function requestBody(spy: ReturnType<typeof vi.spyOn>, call: number): Record<string, unknown> {
+    return JSON.parse(
+      ((spy as unknown as { mock: { calls: unknown[][] } }).mock.calls[call]![1] as RequestInit)
+        .body as string,
+    ) as Record<string, unknown>;
+  }
+
+  it('sends tools with the explicit-required wire schema and tool_choice auto by default', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(anthropicAdapter.runActivity(toolCtx(), 'sk'));
+    const body = requestBody(fetchSpy, 0);
+    expect(body.tool_choice).toEqual({ type: 'auto' });
+    expect(body.tools).toEqual([
+      {
+        name: 'adder',
+        description: 'Adds two numbers.',
+        input_schema: {
+          type: 'object',
+          properties: { a: { type: 'number' }, b: { type: 'number' } },
+          required: ['a', 'b'],
+          additionalProperties: false,
+        },
+      },
+    ]);
+  });
+
+  it("maps toolChoice 'required' to {type:'any'} and suppresses the thinking surface", async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(
+      anthropicAdapter.runActivity(
+        toolCtx({ toolChoice: 'required', reasoningEffort: 'high' }),
+        'sk',
+      ),
+    );
+    const body = requestBody(fetchSpy, 0);
+    expect(body.tool_choice).toEqual({ type: 'any' });
+    // A forced tool_choice precludes adaptive thinking (the structured-path
+    // precedent) — the whole flow suppresses it rather than 400.
+    expect(body).not.toHaveProperty('thinking');
+    expect(body).not.toHaveProperty('output_config');
+  });
+
+  it("omits tools entirely under toolChoice 'none' (the plain text path)", async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(anthropicAdapter.runActivity(toolCtx({ toolChoice: 'none' }), 'sk'));
+    const body = requestBody(fetchSpy, 0);
+    expect(body).not.toHaveProperty('tools');
+    expect(body).not.toHaveProperty('tool_choice');
+    expect(succeeded(events).outputs.text).toBe('Hi there!');
+  });
+
+  it('drives one tool round-trip and succeeds on the follow-up text', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, TOOL_USE_BODY))
+      .mockResolvedValueOnce(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(toolCtx({ toolChoice: 'required' }), 'sk'),
+    );
+    // metered (call 1) → captured (first exchange) → metered (call 2) → succeeded.
+    expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'metered', 'succeeded']);
+    expect(succeeded(events).outputs).toEqual({ text: 'Hi there!', stopReason: 'end_turn' });
+
+    const second = requestBody(fetchSpy, 1);
+    // The continuation replays the raw assistant content and answers with a
+    // tool_result carrying the executed expression's value.
+    const msgs = second.messages as Record<string, unknown>[];
+    expect(msgs[msgs.length - 2]).toEqual({ role: 'assistant', content: TOOL_USE_BODY.content });
+    expect(msgs[msgs.length - 1]).toEqual({
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: '3' }],
+    });
+    // The forced first choice DOWNGRADES on the continuation — else the model
+    // could never answer with text. Tools stay present (tool_result needs them).
+    expect(second.tool_choice).toEqual({ type: 'auto' });
+    expect(second.tools).toBeDefined();
+  });
+
+  it('executes ALL parallel tool_use blocks of one response in one round-trip', async () => {
+    const parallel = {
+      content: [
+        { type: 'tool_use', id: 'tu_1', name: 'adder', input: { a: 1, b: 2 } },
+        { type: 'tool_use', id: 'tu_2', name: 'adder', input: { a: 10, b: 20 } },
+      ],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 8, output_tokens: 6 },
+    };
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, parallel))
+      .mockResolvedValueOnce(fakeResponse(200, OK_BODY));
+    const events = await drain(anthropicAdapter.runActivity(toolCtx(), 'sk'));
+    expect(events[events.length - 1]!.type).toBe('succeeded');
+    const second = requestBody(fetchSpy, 1);
+    const msgs = second.messages as Record<string, unknown>[];
+    expect(msgs[msgs.length - 1]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 'tu_1', content: '3' },
+        { type: 'tool_result', tool_use_id: 'tu_2', content: '30' },
+      ],
+    });
+  });
+
+  it('feeds an error tool_result back for an unknown tool / invalid args', async () => {
+    const badCall = {
+      content: [{ type: 'tool_use', id: 'tu_1', name: 'mystery', input: {} }],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 3, output_tokens: 2 },
+    };
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, badCall))
+      .mockResolvedValueOnce(fakeResponse(200, OK_BODY));
+    const events = await drain(anthropicAdapter.runActivity(toolCtx(), 'sk'));
+    expect(events[events.length - 1]!.type).toBe('succeeded');
+    const second = requestBody(fetchSpy, 1);
+    const msgs = second.messages as Record<string, unknown>[];
+    expect(msgs[msgs.length - 1]).toEqual({
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'tu_1',
+          content: "unknown tool 'mystery'",
+          is_error: true,
+        },
+      ],
+    });
+  });
+
+  it('fails permanent (loud, local) on a tool_use block without a string id', async () => {
+    const noId = {
+      content: [{ type: 'tool_use', name: 'adder', input: { a: 1, b: 2 } }],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 3, output_tokens: 2 },
+    };
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, noId));
+    const events = await drain(anthropicAdapter.runActivity(toolCtx(), 'sk'));
+    const last = events[events.length - 1]!;
+    expect(last).toMatchObject({ type: 'failed', kind: 'permanent' });
+    if (last.type === 'failed') expect(last.error).toMatch(/without a string id/);
+    // No continuation was attempted — the malformed response failed locally,
+    // not as an opaque provider 400 on a '' tool_use_id.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(events.filter((e) => e.type === 'captured')).toHaveLength(1);
+  });
+
+  it('fails permanent when the model requests a second tool round-trip', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, TOOL_USE_BODY))
+      .mockResolvedValueOnce(fakeResponse(200, TOOL_USE_BODY));
+    const events = await drain(anthropicAdapter.runActivity(toolCtx(), 'sk'));
+    const last = events[events.length - 1]!;
+    expect(last).toMatchObject({ type: 'failed', kind: 'permanent' });
+    if (last.type === 'failed') expect(last.error).toMatch(/tool budget/);
+    // Both billed responses metered; one first-exchange capture (L9a).
+    expect(events.filter((e) => e.type === 'metered')).toHaveLength(2);
+    expect(events.filter((e) => e.type === 'captured')).toHaveLength(1);
+  });
+
+  it('emits the first-exchange capture before a transport terminal (L9a invariant)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(fakeResponse(500, 'overloaded'));
+    const events = await drain(anthropicAdapter.runActivity(toolCtx(), 'sk'));
+    expect(events.map((e) => e.type)).toEqual(['captured', 'failed']);
+  });
+
+  it('still succeeds directly when the model answers with text and never calls a tool', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(anthropicAdapter.runActivity(toolCtx(), 'sk'));
+    expect(events.map((e) => e.type)).toEqual(['metered', 'captured', 'succeeded']);
+  });
+
+  it('sends no tools key at all when the node declares none (byte-identical)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
+    const body = requestBody(fetchSpy, 0);
+    expect(body).not.toHaveProperty('tools');
+    expect(body).not.toHaveProperty('tool_choice');
+  });
+});
