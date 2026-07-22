@@ -1060,6 +1060,11 @@ export async function pump(
 /** Minimal logger seam (Fastify's `log` satisfies it); optional for tests. */
 export interface DriveLog {
   error(obj: unknown, msg?: string): void;
+  /** Optional lower-severity channel for a diagnosable-but-non-fatal event (e.g.
+   * a fail-closed fallback on a corrupted row). The real `fastify.log` (pino)
+   * provides it; a minimal test stub may omit it, so call sites guard with
+   * `deps.log?.warn?.(...)`. */
+  warn?(obj: unknown, msg?: string): void;
 }
 
 /** What `terminalizeInterrupted` needs — no executor, no alarms, no lock. */
