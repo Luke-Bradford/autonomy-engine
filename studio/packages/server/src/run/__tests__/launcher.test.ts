@@ -15,6 +15,7 @@ import {
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createTrigger, updateTrigger } from '../../repo/triggers.js';
+import { listRunEvents } from '../../repo/run-events.js';
 import {
   countActiveRunsForPipeline,
   countActiveRunsForTrigger,
@@ -391,7 +392,7 @@ describe('RunLauncher — queue', () => {
     expect(row?.triggerContext).not.toHaveProperty('windowEnd');
   });
 
-  it('a window fire freezes windowStart/windowEnd into the context AND resolves them in bindings (#5 S11b)', () => {
+  it('a window fire freezes windowStart/windowEnd into the context AND resolves them in bindings (#5 S11b)', async () => {
     const { db } = freshDb();
     const pvId = seedVersion(db, undefined, undefined, [
       { name: 'ws', type: 'string', required: false },
@@ -423,6 +424,17 @@ describe('RunLauncher — queue', () => {
     });
     // …and resolved into the run's params through the S12b binding layer.
     expect(row?.params).toEqual({ ws: WS });
+    // The durable `run.triggerContext` EVENT deliberately does NOT carry the
+    // window facts (they are launcher-context/run-ROW facts — the windowEpoch
+    // discipline), so `RunState`/`buildCtx` resolve them null and a reducer
+    // replay is byte-identical with or without S11b. The drive appends
+    // asynchronously — wait for it before reading the log.
+    await launcher.whenIdle();
+    const tctxEvent = listRunEvents(db, row?.id ?? '').find((e) => e.type === 'run.triggerContext');
+    expect(tctxEvent).toBeDefined();
+    expect(tctxEvent?.payload).not.toHaveProperty('windowStart');
+    expect(tctxEvent?.payload).not.toHaveProperty('windowEnd');
+    expect(tctxEvent?.payload).not.toHaveProperty('windowEpoch');
   });
 
   it('a queued fire preserves the fire-time context captured at admission (#5 S12)', async () => {

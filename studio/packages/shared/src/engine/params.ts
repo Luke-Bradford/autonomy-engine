@@ -2497,12 +2497,15 @@ export function validateTriggerBindings(
  *
  * Implemented as the SET DIFFERENCE of two runs of the one scan — restricted
  * (`windowFields: false`) minus permissive (`windowFields: true`). The flag's
- * ONLY effect is the window-field arm of `checkRefRoot`, so the difference is
- * exactly the window-field defects: a pre-gate stored binding's unrelated
- * errors (`${params.x}`, a typo) appear in BOTH runs and cancel — a
- * mode/enabled-only PATCH on such a row is never refused for noise it did not
- * introduce. Kept HERE, next to the arm that creates the delta, so the
- * invariant and its unit test live in one file.
+ * ONLY message-visible effect is the context-scoped arm of `checkRefRoot`
+ * (every OTHER message — a disallowed root, a typo'd unknown field, a grammar
+ * error — is scope-independent BY CONSTRUCTION: the unknown-field enumeration
+ * deliberately lists all five fields in both scopes), so the difference is
+ * exactly the window-field defects: a stored binding's unrelated errors
+ * (`${params.x}`, a `${trigger.nope}` typo) appear in BOTH runs, string-equal,
+ * and cancel — a mode/enabled-only PATCH on such a row is never refused for
+ * noise it did not introduce. Kept HERE, next to the arm that creates the
+ * delta, so the invariant and its unit test live in one file.
  */
 export function windowBindingErrors(params: Record<string, unknown>): string[] {
   const permitted = new Set(validateTriggerBindings(params, { windowFields: true }));
@@ -2949,9 +2952,15 @@ function checkRefRoot(
       }
       return;
     }
-    const known = scope.windowFieldsInScope
-      ? [...TRIGGER_FIELDS, ...TRIGGER_WINDOW_FIELDS]
-      : [...TRIGGER_FIELDS];
+    // The enumeration is deliberately SCOPE-INDEPENDENT (all five fields, even
+    // where the window pair is out of scope): `windowBindingErrors` is a string
+    // set-difference of a restricted and a permissive run, and a scope-dependent
+    // message here would make a TYPO'd unknown field differ between the runs and
+    // leak into the difference as a phantom "window binding" (pre-PR lens
+    // finding). An in-scope-refused window field never reaches this message (the
+    // arm above owns it), and listing the pair to a node-config author is honest
+    // — the fields exist; the context-scoped arm explains where.
+    const known = [...TRIGGER_FIELDS, ...TRIGGER_WINDOW_FIELDS];
     errors.push(
       `${where}: \${trigger.${root.field}} is not a known trigger field (${known.join(', ')})`,
     );

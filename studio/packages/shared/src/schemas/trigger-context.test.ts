@@ -121,6 +121,15 @@ describe('windowBindingErrors (#5 S11b — the mode-scoping primitive)', () => {
   it('is empty for a binding set with no window-field references', () => {
     expect(windowBindingErrors({ ok: '${trigger.scheduledTime}', bad: '${params.x}' })).toEqual([]);
   });
+
+  it('a TYPO’d unknown trigger field cancels too (scope-independent message)', () => {
+    // The unknown-field enumeration must be identical in both scans — a
+    // scope-dependent list would make this typo differ between the runs and
+    // leak into the difference as a phantom "window binding", bricking an
+    // unrelated PATCH / mislabelling an import refusal (pre-PR lens finding).
+    expect(windowBindingErrors({ bad: '${trigger.scheduledtime}' })).toEqual([]);
+    expect(windowBindingErrors({ bad: '${trigger.windowstart}' })).toEqual([]);
+  });
 });
 
 describe('TriggerContextSchema window bounds (#5 S11b)', () => {

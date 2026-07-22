@@ -150,8 +150,9 @@ import type { SchedulerLog } from './scheduler.js';
  *   tumbling window is data-completeness-driven, and a run-window suppression
  *   would silently LOSE the window for a non-backfill trigger. Event/webhook
  *   fires already set this precedent (only schedule gates).
- * - No `${trigger.windowStart/End}` expression fields — S11b (context-scoped
- *   save-time validation), per the spec's ticket split.
+ * - `${trigger.windowStart/End}` (S11b) SHIPPED: `materializeOne` freezes the
+ *   window bounds into the fire context; a tumbling trigger's param bindings
+ *   (the one legal surface — context-scoped at save) resolve them fire-time.
  * - No per-trigger window RETRY (S11c) or self-dependency (S11d).
  * - For a CAP-LESS trigger, LIVE overflow windows DO materialize into the S6
  *   durable admission queue (a `queued` run row each, bounded by the
