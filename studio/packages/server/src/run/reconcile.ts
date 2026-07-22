@@ -69,17 +69,26 @@ import { recordRunDiagnostics } from '../repo/run-diagnostics.js';
  * `finalized` are reachable only by folding these events, never by an
  * out-of-band patch).
  *
- * ## Why this pumps WITHOUT the per-run drive lock
+ * ## The lock contract (#5 S7 — the formalization)
  *
- * F2c made "exactly one drive per run" structural (`run/drives.ts`), and the two
- * RUNTIME entry points — the launcher and the retry alarm — carry the lock. This
- * one does not, because at boot it is provably the only pump source: `buildApp`
- * awaits `reconcileOnBoot` BEFORE it starts the alarm clock's interval and before
- * the launcher or scheduler exist. That ordering is load-bearing rather than
- * incidental — with the interval started first, a 1s tick would fire an alarm
- * into a run this loop is mid-`pump` on, which is exactly B1 — so it is stated at
- * its one call site too. Anything that ever calls this against a LIVE app must
- * take the lock instead of relying on this paragraph.
+ * The per-run reconcile policy (`reconcileOne`) has exactly TWO sanctioned
+ * entry points, distinguished by how they satisfy F2c's "exactly one drive per
+ * run":
+ *
+ *  - **Boot** (`reconcileOnBoot`): pumps WITHOUT the drive lock, safe because
+ *    at boot it is provably the only pump source — `buildApp` awaits it BEFORE
+ *    the alarm clock's interval starts and before the launcher or scheduler
+ *    exist. That ordering is load-bearing rather than incidental (with the
+ *    interval started first, a 1s tick would fire an alarm into a run this
+ *    loop is mid-`pump` on — exactly B1), so it is stated at the call site too.
+ *  - **Lease reclaim** (#5 S7, `scheduler/lease.ts`): the LIVE-app caller. It
+ *    MUST — and does — wrap `reconcileOne` in `drives.serialize(runId, …)`,
+ *    re-reading the run row under the lock before acting. `reconcileOne`
+ *    re-loads the log and re-projects on entry, which is the other half of the
+ *    F2c mechanism (a lock around a stale snapshot serializes nothing).
+ *
+ * Any future caller joins the second contract: take the lock, re-check under
+ * it. There is no third mode.
  */
 
 /**
@@ -412,8 +421,9 @@ function recoverHeld(
   return 'rearmed';
 }
 
-export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileReport> {
-  const report: ReconcileReport = {
+/** An all-empty report — one per boot scan, or one per S7 lease reclaim. */
+export function emptyReconcileReport(): ReconcileReport {
+  return {
     resumed: [],
     interrupted: [],
     deferred: [],
@@ -423,6 +433,10 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
     rearmed: [],
     failed: [],
   };
+}
+
+export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileReport> {
+  const report = emptyReconcileReport();
 
   // #5 S3 (#619) — `status: 'running'` ONLY, and now DELIBERATELY so: a genuinely
   // PARKED run has status `waiting` (the `run.waiting` producer ran during its
@@ -521,8 +535,22 @@ function terminalizeUnresolvable(deps: ReconcileDeps, run: Run): void {
  * Throws on any per-run fault; the caller records it into `report.failed` and
  * carries on with the next run. Its OWN invariant violations throw
  * `ReconcileInvariantError`, which the caller re-throws — see that class.
+ *
+ * EXPORTED at #5 S7: this is the "boot-reconcile formalization" — the
+ * per-activity idempotency policy is ONE function with two sanctioned entry
+ * points (see the lock contract in the module header), not a boot loop plus a
+ * re-implementation. The lease reclaim (`scheduler/lease.ts`) calls it under
+ * the drive lock with a fresh `emptyReconcileReport()` and reads the verdict
+ * from the buckets.
  */
-async function reconcileOne(deps: ReconcileDeps, report: ReconcileReport, run: Run): Promise<void> {
+export async function reconcileOne(
+  deps: ReconcileDeps,
+  report: ReconcileReport,
+  run: Run,
+  /** WHICH sanctioned mechanism is reconciling — recorded on the `run.resumed`
+   * + `node.retryRequested` facts so the log says who resumed it. */
+  reason: 'boot_reconcile' | 'lease_reclaim' = 'boot_reconcile',
+): Promise<void> {
   const events = loadEngineEvents(deps.db, run.id);
 
   // #443 — the LOG is authoritative over the projection for terminality: a
@@ -620,13 +648,13 @@ async function reconcileOne(deps: ReconcileDeps, report: ReconcileReport, run: R
   // event and `run.finished` would have dropped — then a `node.retryRequested`
   // per idempotent in-flight node re-dispatches it under a NEW attempt.
   const reconcileEvents: EngineEvent[] = [
-    { type: 'run.resumed', runId: run.id, reason: 'boot_reconcile' },
+    { type: 'run.resumed', runId: run.id, reason },
     ...inFlight.map(({ id, attemptId }): EngineEvent => ({
       type: 'node.retryRequested',
       runId: run.id,
       nodeId: id,
       previousAttemptId: attemptId,
-      reason: 'boot_reconcile',
+      reason,
     })),
   ];
   let next = state;

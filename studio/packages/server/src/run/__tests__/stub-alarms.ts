@@ -57,6 +57,7 @@ export function stubAlarms(): StubAlarms {
         dedupeKey,
         status: 'pending',
         firedAt: null,
+        supersededBy: null,
       };
       byKey.set(`${input.kind}:${dedupeKey}`, row);
       armed.push(row);

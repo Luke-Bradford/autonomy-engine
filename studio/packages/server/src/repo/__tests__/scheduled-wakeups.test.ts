@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { buildDedupeKey } from '@autonomy-studio/shared';
+import { buildDedupeKey, type ArmWakeupInput } from '@autonomy-studio/shared';
 import { openDb } from '../../db/client.js';
 import {
   armWakeup,
@@ -15,6 +15,8 @@ import {
   listPendingWakeups,
   pruneSettledWakeups,
   settleWakeup,
+  supersedeWakeup,
+  SupersedeRefusedError,
 } from '../scheduled-wakeups.js';
 import type { Db } from '../types.js';
 import { freshDb } from './helpers.js';
@@ -56,10 +58,10 @@ describe('#5 S1 — armWakeup', () => {
   });
 
   it('does NOT move dueAt on re-arm — an armed alarm is IMMUTABLE', () => {
-    // There is deliberately no way to move a `dueAt`: re-scheduling (a backoff
-    // push-out, a lease heartbeat) is S7's `supersede`, which needs a durable
-    // `supersededBy` slot and a consumer to pin its semantics. Until then, a
-    // later alarm is a NEW alarm under a new discriminator.
+    // There is deliberately no way to move a `dueAt` by RE-ARMING: re-scheduling
+    // (a backoff push-out, a lease heartbeat) is S7's `supersedeWakeup` — an
+    // explicit cancel-old + arm-new, below — never a mutation of a live row. A
+    // later alarm is otherwise a NEW alarm under a new discriminator.
     const first = armRetry(db, 'attempt-1', 1_000);
     const second = armRetry(db, 'attempt-1', 9_999);
     expect(second.dueAt).toBe(1_000);
@@ -397,5 +399,104 @@ describe('#464 — pruneSettledWakeups (retention)', () => {
     settled('attempt-1', 'fired', 1_000);
     settled('attempt-2', 'fired', 1_001);
     expect(drainSettledWakeups(db, { before: 10_000, batch: 0 })).toBe(2);
+  });
+});
+
+describe('#5 S7 (#465) — supersedeWakeup (cancel-old + arm-new, ONE transaction)', () => {
+  let db: Db;
+  beforeEach(() => {
+    db = freshDb().db;
+  });
+
+  const leaseRef = (leaseUntil: number) => ({ runId: 'run_1', leaseUntil: String(leaseUntil) });
+  const leaseInput = (leaseUntil: number): ArmWakeupInput => ({
+    kind: 'run_lease',
+    ref: leaseRef(leaseUntil),
+    dueAt: leaseUntil,
+    discriminator: `lease-${leaseUntil}`,
+  });
+
+  it('happy path: old → cancelled + supersededBy = new id; next → pending', () => {
+    const old = armWakeup(db, leaseInput(1_000));
+
+    const next = supersedeWakeup(db, { old: leaseInput(1_000), next: leaseInput(2_000), at: 500 });
+
+    expect(next.status).toBe('pending');
+    expect(next.dueAt).toBe(2_000);
+    const oldAfter = getWakeup(db, old.id)!;
+    expect(oldAfter.status).toBe('cancelled');
+    expect(oldAfter.supersededBy).toBe(next.id);
+    expect(listPendingWakeups(db).map((w) => w.id)).toEqual([next.id]);
+  });
+
+  it('#465 trap 1: REFUSES (and rolls back) when the replacement key collides with ANY pre-existing row — the old alarm stays ARMED', () => {
+    // The S1 pre-PR review's silent-lost-alarm: arming is upsert-if-absent, so a
+    // replacement whose key collides with a pre-existing (even FIRED) row would
+    // return that spent row while the live alarm was cancelled — zero pending
+    // alarms, nothing logged. The guard must check what the arm RESOLVED TO
+    // (created === false), not compare keys.
+    const spent = armWakeup(db, leaseInput(2_000));
+    settleWakeup(db, spent.id, { status: 'fired', firedAt: 2_000 });
+    const live = armWakeup(db, leaseInput(3_000));
+
+    expect(() =>
+      supersedeWakeup(db, { old: leaseInput(3_000), next: leaseInput(2_000), at: 2_500 }),
+    ).toThrow(SupersedeRefusedError);
+
+    // Rolled back: the live alarm is still armed, the spent row untouched.
+    const liveAfter = getWakeup(db, live.id)!;
+    expect(liveAfter.status).toBe('pending');
+    expect(liveAfter.supersededBy).toBeNull();
+    expect(getWakeup(db, spent.id)!.status).toBe('fired');
+  });
+
+  it('old MISSING: the replacement still arms (nothing to cancel)', () => {
+    // The heartbeat's first-renewal / post-boot case: the previous generation's
+    // alarm fired+suppressed (or never existed) while the process was down —
+    // renewal must still arm the next generation rather than refuse.
+    const next = supersedeWakeup(db, { old: leaseInput(1_000), next: leaseInput(2_000), at: 500 });
+    expect(next.status).toBe('pending');
+    expect(listPendingWakeups(db)).toHaveLength(1);
+  });
+
+  it('old already SETTLED: the replacement arms; the settled outcome is never overwritten', () => {
+    const old = armWakeup(db, leaseInput(1_000));
+    settleWakeup(db, old.id, { status: 'suppressed', firedAt: 1_100 });
+
+    const next = supersedeWakeup(db, {
+      old: leaseInput(1_000),
+      next: leaseInput(2_000),
+      at: 1_200,
+    });
+
+    expect(next.status).toBe('pending');
+    const oldAfter = getWakeup(db, old.id)!;
+    // Settled is FINAL: supersede must not rewrite `suppressed` → `cancelled`.
+    expect(oldAfter.status).toBe('suppressed');
+    expect(oldAfter.supersededBy).toBeNull();
+  });
+
+  it('is ONE transaction: a refused supersede leaves no partial write', () => {
+    // #465 trap 2, the other half: if cancel-old committed while arm-new
+    // refused, BOTH alarms would be lost. Covered by the collision test's
+    // still-pending assertion; this pins the inverse order too (arm-new first
+    // cannot leak a row when the tx rolls back).
+    const spent = armWakeup(db, leaseInput(2_000));
+    settleWakeup(db, spent.id, { status: 'fired', firedAt: 2_000 });
+    armWakeup(db, leaseInput(3_000));
+
+    try {
+      supersedeWakeup(db, { old: leaseInput(3_000), next: leaseInput(2_000), at: 2_500 });
+    } catch {
+      // expected
+    }
+    // Exactly the two original rows — one pending, one fired; no orphan insert.
+    expect(listPendingWakeups(db)).toHaveLength(1);
+  });
+
+  it('settleWakeup without supersededBy leaves the column null', () => {
+    const row = armWakeup(db, leaseInput(1_000));
+    const settled = settleWakeup(db, row.id, { status: 'fired', firedAt: 1_000 })!;
+    expect(settled.supersededBy).toBeNull();
   });
 });

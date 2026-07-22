@@ -148,3 +148,31 @@ describe('createRunDrives', () => {
     expect(order).toEqual(['first', 'second']);
   });
 });
+
+describe('#5 S7 — activeRunIds', () => {
+  it('lists runs with a live or queued chain; empties on drain', async () => {
+    // The lease heartbeat's liveness signal: a run in this list has SOMETHING
+    // holding (or waiting for) its drive lock. Registration is synchronous, so
+    // the id is visible before the caller ever awaits.
+    const drives = createRunDrives();
+    expect(drives.activeRunIds()).toEqual([]);
+
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const a = drives.serialize('run-a', () => gate);
+    const b = drives.serialize('run-b', async () => undefined);
+    expect(drives.activeRunIds().sort()).toEqual(['run-a', 'run-b']);
+
+    await b;
+    // The registry entry is dropped by bookkeeping chained AFTER the drive
+    // settles — give the microtask queue a macrotask turn to flush it.
+    await new Promise((r) => setTimeout(r, 0));
+    // run-b's chain drained; run-a still holds its slot.
+    expect(drives.activeRunIds()).toEqual(['run-a']);
+
+    release();
+    await a;
+    await drives.whenIdle();
+    expect(drives.activeRunIds()).toEqual([]);
+  });
+});

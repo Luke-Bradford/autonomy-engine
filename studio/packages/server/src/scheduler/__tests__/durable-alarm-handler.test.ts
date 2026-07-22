@@ -133,6 +133,7 @@ function alarmRow(ref: WakeupRef): ScheduledWakeup {
     dueAt: NOW,
     dedupeKey: 'test',
     status: 'pending',
+    supersededBy: null,
     firedAt: null,
   };
 }

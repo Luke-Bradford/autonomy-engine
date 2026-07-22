@@ -36,6 +36,22 @@ import type { Db } from './types.js';
  * successful outcome — that indifference IS the replay idempotency.
  */
 export function armWakeup(db: Db, input: ArmWakeupInput): ScheduledWakeup {
+  return armWakeupInternal(db, input).row;
+}
+
+/**
+ * The arm with its honesty bit: `created` says whether this call actually
+ * INSERTED. `armWakeup` returns the existing row whatever its status (the
+ * load-bearing replay idempotency), which means the RETURN VALUE cannot tell a
+ * fresh arm from a spent collision — exactly the gap that let the S1-era
+ * `supersedeWakeup` ship a silent-lost-alarm (#465 trap 1: "the guard must
+ * check what the arm RESOLVED TO — not the key"). `supersedeWakeup` refuses on
+ * `created === false`; plain callers keep the indifferent `armWakeup`.
+ */
+function armWakeupInternal(
+  db: Db,
+  input: ArmWakeupInput,
+): { row: ScheduledWakeup; created: boolean } {
   const parsed = ArmWakeupInputSchema.parse(input);
   const dedupeKey = buildDedupeKey({
     kind: parsed.kind,
@@ -52,13 +68,12 @@ export function armWakeup(db: Db, input: ArmWakeupInput): ScheduledWakeup {
     // Returning the EXISTING row whatever its status is the load-bearing half:
     // a replayed `scheduleRetry` for an attempt whose alarm already fired must
     // be a no-op, not a resurrection. It also makes an armed alarm IMMUTABLE —
-    // there is deliberately no way to move a `dueAt`. Re-scheduling (a backoff
-    // push-out, a lease heartbeat) is S7's `supersede`, which needs a durable
-    // `supersededBy` slot and a consumer to pin its semantics; neither exists
-    // yet. Until then a caller that wants a later alarm arms a NEW one under a
-    // new discriminator.
+    // there is deliberately no way to move a `dueAt` by re-arming.
+    // Re-scheduling (a backoff push-out, a lease heartbeat) is S7's
+    // `supersedeWakeup` below: an explicit cancel-old + arm-new in one
+    // transaction, never a mutation of a live row.
     const existing = selectByKey(tx, parsed.kind, dedupeKey);
-    if (existing !== null) return existing;
+    if (existing !== null) return { row: existing, created: false };
 
     const row: ScheduledWakeup = {
       id: newId('wku'),
@@ -68,9 +83,76 @@ export function armWakeup(db: Db, input: ArmWakeupInput): ScheduledWakeup {
       dedupeKey,
       status: 'pending',
       firedAt: null,
+      supersededBy: null,
     };
     tx.insert(scheduledWakeups).values(row).run();
-    return ScheduledWakeupSchema.parse(row);
+    return { row: ScheduledWakeupSchema.parse(row), created: true };
+  });
+}
+
+/**
+ * #5 S7 (#465) — a supersede whose replacement failed to ARM. Thrown INSIDE the
+ * supersede transaction so the whole thing rolls back and the old alarm stays
+ * pending (#465 trap 2: "refusing must roll back, so a rejected supersede
+ * leaves the old alarm ARMED rather than losing both"). Named so a caller's
+ * per-item catch can tell this expected refusal from a real fault — the
+ * `StaleWakeupError` pattern.
+ */
+export class SupersedeRefusedError extends Error {
+  constructor(dedupeKey: string) {
+    super(
+      `supersede refused: the replacement key '${dedupeKey}' already names an existing row — ` +
+        `arming it would return that row (whatever its status) instead of inserting a live alarm`,
+    );
+    this.name = 'SupersedeRefusedError';
+  }
+}
+
+/**
+ * #5 S7 (#465) — replace one alarm with another: cancel `old` + arm `next` in
+ * ONE transaction. The ONLY sanctioned way to "move" a `dueAt` (arming is
+ * immutable-by-design — see `armWakeup`). First consumer: the lease heartbeat
+ * ("heartbeats supersede old alarms", spec #5's codex-hardened line).
+ *
+ * Semantics, decided per #465:
+ *  - `next` must actually INSERT. If its key collides with ANY pre-existing row
+ *    (even a spent one — a fired heartbeat generation, say), the supersede
+ *    REFUSES by throwing `SupersedeRefusedError`, rolling back the cancel, so
+ *    the old alarm stays armed. The guard checks what the arm RESOLVED TO
+ *    (`created`), never the key: `armWakeup` returns the existing row whatever
+ *    its status, so key comparison is exactly the check that shipped the
+ *    S1-era silent-lost-alarm.
+ *  - `old` is cancelled ONLY if still pending, stamped `supersededBy = next.id`
+ *    (provenance). An `old` that is MISSING or already SETTLED cancels nothing
+ *    and the replacement still arms — the heartbeat's post-boot case, where the
+ *    previous generation's alarm fired/suppressed while the process was down
+ *    and renewal must still arm the next generation. A settled outcome is
+ *    never rewritten (the outbox's "settled is FINAL" invariant).
+ *
+ * `at` is the caller-supplied cancel timestamp (`firedAt` on the cancelled
+ * row), required for the same reason `cancelWakeup`'s is.
+ */
+export function supersedeWakeup(
+  db: Db,
+  input: { old: ArmWakeupInput; next: ArmWakeupInput; at: number },
+): ScheduledWakeup {
+  return db.transaction((tx) => {
+    const { row: next, created } = armWakeupInternal(tx, input.next);
+    if (!created) throw new SupersedeRefusedError(next.dedupeKey);
+
+    const oldParsed = ArmWakeupInputSchema.parse(input.old);
+    const oldKey = buildDedupeKey({
+      kind: oldParsed.kind,
+      ref: oldParsed.ref,
+      discriminator: oldParsed.discriminator,
+    });
+    const old = selectByKey(tx, oldParsed.kind, oldKey);
+    if (old !== null && old.status === 'pending') {
+      // `settleWakeup`'s atomic `WHERE status = 'pending'` guard still applies;
+      // under this transaction the read above cannot go stale.
+      settleWakeup(tx, old.id, { status: 'cancelled', firedAt: input.at, supersededBy: next.id });
+    }
+    return next;
   });
 }
 
@@ -127,11 +209,20 @@ export function listDueWakeups(
 export function settleWakeup(
   db: Db,
   id: string,
-  settle: { status: Exclude<WakeupStatus, 'pending'>; firedAt: number },
+  settle: {
+    status: Exclude<WakeupStatus, 'pending'>;
+    firedAt: number;
+    /** #5 S7 — the replacement row's id; only `supersedeWakeup` passes it. */
+    supersededBy?: string;
+  },
 ): ScheduledWakeup | null {
   const updated = db
     .update(scheduledWakeups)
-    .set({ status: settle.status, firedAt: settle.firedAt })
+    .set({
+      status: settle.status,
+      firedAt: settle.firedAt,
+      ...(settle.supersededBy !== undefined ? { supersededBy: settle.supersededBy } : {}),
+    })
     .where(and(eq(scheduledWakeups.id, id), eq(scheduledWakeups.status, 'pending')))
     .returning()
     .all();
@@ -211,9 +302,9 @@ export function deleteWakeup(db: Db, id: string): ScheduledWakeup | null {
  * floor. Pending rows are never eligible here (only settled), so a far-future
  * `wait` alarm still `pending` is untouched regardless of its age.
  *
- * (When #465's `supersede` lands, pruning a settled row a `superseded_by` points
- * AT leaves a dangling reference — harmless: it is provenance only, no FK, never
- * joined for correctness. No special handling needed here.)
+ * (#465's `supersede` is live (S7): pruning a settled row a `superseded_by`
+ * points AT leaves a dangling reference — harmless, decided deliberately: it is
+ * provenance only, no FK, never joined for correctness. No special handling.)
  */
 export function pruneSettledWakeups(db: Db, opts: { before: number; limit?: number }): number {
   // Oldest-first, `id` breaking `firedAt` ties — the same total order

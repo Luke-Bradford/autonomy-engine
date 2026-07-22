@@ -27,10 +27,12 @@ export type RunStatus = z.infer<typeof RunStatusSchema>;
  * One execution of a specific, immutable `PipelineVersion`. `leaseUntil` is the
  * execution LEASE: #5 S4 has a `running` run HOLD it (`now + LEASE_TTL_MS`,
  * projected from status by `syncRunLifecycle`) and a parked/terminal run RELEASE
- * it (`null`), splitting "held by a live drive" from the lifecycle status. The
- * boot reconciler does NOT yet read it — it scans by `status` today; heartbeat
- * RENEWAL of `heartbeatAt` + the lease-expiry reclaim that consumes these are #5
- * S7 (target architecture's Run & execution model). Both are epoch-ms, nullable.
+ * it (`null`), splitting "held by a live drive" from the lifecycle status.
+ * #5 S7's lease service (`server/scheduler/lease.ts`) is the live consumer:
+ * its heartbeat sweep RENEWS `leaseUntil` + stamps `heartbeatAt` (live-drive
+ * evidence — written nowhere else) while a drive is live, and its `run_lease`
+ * alarm reclaims a run whose lease expired unrenewed. The boot reconciler
+ * still scans by `status`, not lease. Both are epoch-ms, nullable.
  */
 export const RunSchema = z.object({
   id: z.string().min(1),

@@ -51,6 +51,16 @@ export interface RunDrives {
   idle(): boolean;
   /** How many runs currently have a live chain — a leak check for tests. */
   size(): number;
+  /**
+   * #5 S7 — the runs that currently have a live-or-queued chain: the lease
+   * heartbeat's in-memory liveness signal ("is SOMETHING holding this run's
+   * drive lock right now?"). Registration is synchronous (see `serialize`), so
+   * a just-spawned drive is visible before its caller ever awaits. Note the
+   * caveat the lease module owns: ANY `serialize` caller registers — including
+   * a lease RECLAIM — which is why the sweeper also consults its own
+   * `reclaimsInFlight` set rather than reading membership as "a real drive".
+   */
+  activeRunIds(): string[];
 }
 
 export function createRunDrives(): RunDrives {
@@ -123,5 +133,6 @@ export function createRunDrives(): RunDrives {
     whenIdle,
     idle: () => outstanding.size === 0,
     size: () => byRun.size,
+    activeRunIds: () => [...byRun.keys()],
   };
 }
