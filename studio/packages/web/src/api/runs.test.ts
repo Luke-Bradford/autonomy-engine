@@ -11,6 +11,8 @@ const sampleRun = {
   status: 'running' as const,
   leaseUntil: null,
   heartbeatAt: null,
+  queuedAt: null,
+  triggerContext: null,
   startedAt: 100,
   finishedAt: null,
 };

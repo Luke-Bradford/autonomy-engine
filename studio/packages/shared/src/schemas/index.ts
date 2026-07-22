@@ -5,6 +5,7 @@ export * from './connection.js';
 export * from './pipeline.js';
 export * from './recurrence.js';
 export * from './trigger.js';
+export * from './trigger-context.js';
 export * from './fire-result.js';
 export * from './run.js';
 export * from './external-wait.js';

@@ -328,6 +328,14 @@ export async function buildApp(opts?: BuildAppOptions) {
   const runLauncher = createRunLauncher({ ...driverBoundary });
   fastify.decorate('runLauncher', runLauncher);
 
+  // #5 S6a — recover the durable admission QUEUE: admit the oldest `queued` run
+  // of every trigger whose slot is now free (the rest cascade on settle). Runs
+  // AFTER the awaited reconcile above (so the drain's DB active-count already
+  // reflects any run it resumed to `running` — no double-admit past a single
+  // slot) and BEFORE the scheduler seeds + the boot tick fires, so a queued fire
+  // keeps its place ahead of a fresh schedule fire for the same trigger.
+  runLauncher.recoverQueued();
+
   // #4 A13 — the webhook external-wait COMPLETER: the run-side of
   // `POST /api/external-wait/:token`. Shares the same driver boundary (so the
   // completion append + downstream drive run under the shared per-run lock), exactly

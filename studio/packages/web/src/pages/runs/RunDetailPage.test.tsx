@@ -43,6 +43,8 @@ function run(overrides: Partial<Run> = {}): Run {
     status: 'running',
     leaseUntil: null,
     heartbeatAt: null,
+    queuedAt: null,
+    triggerContext: null,
     startedAt: 1_700_000_000_000,
     finishedAt: null,
     ...overrides,

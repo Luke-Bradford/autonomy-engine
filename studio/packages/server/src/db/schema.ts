@@ -20,6 +20,7 @@ import {
   type RunDiagnosticPhase,
   type RunStatus,
   type RunWindow,
+  type TriggerContext,
   type TriggerMode,
   type WakeupRef,
   type WakeupStatus,
@@ -183,6 +184,11 @@ export const runs = sqliteTable(
       .$type<RunStatus>(),
     leaseUntil: integer('lease_until'),
     heartbeatAt: integer('heartbeat_at'),
+    // #5 S6a — the durable admission-queue FIFO key + the fire-time trigger
+    // context a `queued` run carries until admission (both `null` for an
+    // immediately-started run). See `RunSchema` for the full contract.
+    queuedAt: integer('queued_at'),
+    triggerContext: text('trigger_context', { mode: 'json' }).$type<TriggerContext>(),
     startedAt: integer('started_at').notNull(),
     finishedAt: integer('finished_at'),
   },

@@ -9,12 +9,18 @@ import {
 } from './run.js';
 
 describe('RunStatusSchema', () => {
-  it.each(['pending', 'running', 'success', 'failure', 'skipped', 'waiting', 'interrupted'])(
-    'accepts %s',
-    (status) => {
-      expect(RunStatusSchema.parse(status)).toBe(status);
-    },
-  );
+  it.each([
+    'pending',
+    'queued',
+    'running',
+    'success',
+    'failure',
+    'skipped',
+    'waiting',
+    'interrupted',
+  ])('accepts %s', (status) => {
+    expect(RunStatusSchema.parse(status)).toBe(status);
+  });
 
   it('rejects an unknown status', () => {
     expect(() => RunStatusSchema.parse('cancelled')).toThrow();
@@ -31,6 +37,8 @@ const run = {
   status: 'pending',
   leaseUntil: null,
   heartbeatAt: null,
+  queuedAt: null,
+  triggerContext: null,
   startedAt: 1700000000000,
   finishedAt: null,
 };

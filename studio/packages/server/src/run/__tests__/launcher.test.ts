@@ -14,7 +14,13 @@ import {
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createTrigger } from '../../repo/triggers.js';
-import { createRun, getRun, listRuns, updateRun } from '../../repo/runs.js';
+import {
+  countActiveRunsForTrigger,
+  createRun,
+  getRun,
+  listRuns,
+  updateRun,
+} from '../../repo/runs.js';
 import { loadEngineEvents } from '../events.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { type DocResolver, type DriveDeps, type Executor } from '../driver.js';
@@ -364,15 +370,18 @@ describe('RunLauncher — queue', () => {
   });
 });
 
-describe('RunLauncher — queue drains even when a run rests non-terminal', () => {
-  it('advances the queue when the previous drive ends at a non-terminal rest (crash sim)', async () => {
+describe('RunLauncher — a run stuck at `running` holds its slot (durable queue)', () => {
+  it('does NOT admit the queued fire while a hung run still occupies the slot', async () => {
     const { db } = freshDb();
     const pvId = seedVersion(db);
     const trigger = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
-    // `hang` comes to rest at `running` (node dispatched, no terminal) — the DB
-    // active-count stays 1, so a DB-gated drain would stall the queue forever.
-    // The in-memory in-flight count still hits 0 on promise-settle, so the drain
-    // must launch the queued fire regardless.
+    // `hang` comes to rest at `running` (node dispatched, no terminal) — a
+    // genuinely stuck/crashed drive. Under S4's lease/slot split a durably
+    // `running` run OCCUPIES the slot, so the DB-gated drain must NOT admit past
+    // it (that would transiently double-run the single-slot trigger). Unlike the
+    // old in-memory queue (which drained on drive-end and lost the waiter on the
+    // restart the fault required), the waiter is a DURABLE `queued` row that
+    // survives to be admitted once the stuck run is swept + `recoverQueued` runs.
     const launcher = createRunLauncher(deps(db, { nodes: { a: { hang: true } } }));
 
     expect(launcher.fire(trigger).outcome).toBe('started');
@@ -380,9 +389,99 @@ describe('RunLauncher — queue drains even when a run rests non-terminal', () =
 
     await launcher.whenIdle();
 
-    // Both fires produced a run (the queued one drained despite the first
-    // resting non-terminal) — proving the queue did not stall.
-    expect(listRuns(db, { triggerId: trigger.id })).toHaveLength(2);
+    const runs = listRuns(db, { triggerId: trigger.id });
+    expect(runs).toHaveLength(2);
+    // The hung run holds the slot at `running`; its waiter stays `queued` (not
+    // drained, not lost) — the durable-queue correctness the in-memory design
+    // could not give.
+    expect(runs.filter((r) => r.status === 'running')).toHaveLength(1);
+    expect(runs.filter((r) => r.status === 'queued')).toHaveLength(1);
+  });
+});
+
+describe('RunLauncher — durable admission queue (#5 S6a)', () => {
+  it('enqueues a durable `queued` run row (status + queuedAt + frozen triggerContext), not an in-memory entry', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    // Hang the active run so the slot never frees during this synchronous check.
+    const launcher = createRunLauncher(deps(db, { nodes: { a: { hang: true } } }));
+    const T2 = '2026-07-22T10:00:00.000Z';
+
+    expect(launcher.fire(trigger).outcome).toBe('started'); // takes + holds the slot
+    const queued = launcher.fire(trigger, { scheduledTime: T2 });
+    expect(queued.outcome).toBe('queued');
+
+    // A REAL row exists (durable), distinct from the started run.
+    const queuedRuns = listRuns(db, { triggerId: trigger.id }).filter((r) => r.status === 'queued');
+    expect(queuedRuns).toHaveLength(1);
+    const row = queuedRuns[0]!;
+    expect(row.queuedAt).toBeTypeOf('number');
+    // The fire-time context is frozen ON THE ROW so a delayed admission still
+    // seeds `${trigger.scheduledTime}` with THIS occurrence.
+    expect(row.triggerContext).toEqual({ triggerId: trigger.id, scheduledTime: T2, body: null });
+    // A queued row has NO event log yet (pre-`run.started`, like `pending`).
+    expect(loadEngineEvents(db, row.id)).toHaveLength(0);
+  });
+
+  it('a queued fire does NOT count against the trigger admission gate (pre-admission ≠ a slot)', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const launcher = createRunLauncher(deps(db, { nodes: { a: { hang: true } } }));
+
+    launcher.fire(trigger); // running (holds slot)
+    launcher.fire(trigger); // queued
+    // `countActiveRunsForTrigger` (pending+running) sees ONLY the running run.
+    expect(countActiveRunsForTrigger(db, trigger.id)).toBe(1);
+  });
+
+  it('recoverQueued() admits a durable waiter a PREVIOUS launcher left behind (restart), draining it to success', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+
+    // Launcher A hangs its run to hold the slot and leave a durable `queued` row.
+    const launcherA = createRunLauncher(deps(db, { nodes: { a: { hang: true } } }));
+    const started = launcherA.fire(trigger);
+    expect(launcherA.fire(trigger).outcome).toBe('queued');
+    await launcherA.whenIdle();
+    launcherA.stop(); // #5 S6a — must NOT drop the durable queued row
+
+    // Simulate a restart: the boot reconciler sweeps the stuck `running` run to
+    // `interrupted`, freeing the slot. A FRESH launcher (empty in-memory state,
+    // NON-hanging executor) recovers the queue exactly as boot does after reconcile.
+    updateRun(db, (started as { runId: string }).runId, {
+      status: 'interrupted',
+      finishedAt: Date.now(),
+    });
+    const launcherB = createRunLauncher(deps(db));
+    launcherB.recoverQueued();
+    await launcherB.whenIdle();
+
+    const runs = listRuns(db, { triggerId: trigger.id });
+    expect(runs.filter((r) => r.status === 'queued')).toHaveLength(0); // waiter admitted
+    expect(runs.filter((r) => r.status === 'success')).toHaveLength(1); // and drove to success
+  });
+
+  it('fully drains a multi-deep durable queue (every waiter runs to success)', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const launcher = createRunLauncher(deps(db));
+
+    launcher.fire(trigger); // takes the slot
+    launcher.fire(trigger); // queued
+    launcher.fire(trigger); // queued
+
+    await launcher.whenIdle();
+
+    // The whole chain drains (no waiter stranded): every run reached success and
+    // none is left `queued`. (Strict oldest-`queuedAt`-first ORDER is asserted
+    // deterministically in the repo test, where `queuedAt` is controllable.)
+    const runs = listRuns(db, { triggerId: trigger.id });
+    expect(runs).toHaveLength(3);
+    expect(runs.filter((r) => r.status === 'success')).toHaveLength(3);
   });
 });
 
