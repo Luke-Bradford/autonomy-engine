@@ -1,8 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { CATALOG_VERSION, type NewPipelineVersion, type NewRun } from '@autonomy-studio/shared';
+import {
+  CATALOG_VERSION,
+  type NewPipelineVersion,
+  type NewRun,
+  type RunStatus,
+} from '@autonomy-studio/shared';
 import { createPipelineVersion } from '../pipeline-versions.js';
 import { createPipeline } from '../pipelines.js';
-import { createRun, deleteRun, getRun, listRuns, updateRun } from '../runs.js';
+import { createTrigger } from '../triggers.js';
+import {
+  countActiveRunsForTrigger,
+  createRun,
+  deleteRun,
+  getRun,
+  listRuns,
+  updateRun,
+} from '../runs.js';
 import { freshDb } from './helpers.js';
 
 function setupPipelineVersion(db: ReturnType<typeof freshDb>['db']) {
@@ -141,5 +154,38 @@ describe('runs repo', () => {
     const created = createRun(db, buildRunInput(version.id));
     expect(deleteRun(db, created.id)).toBe(true);
     expect(getRun(db, created.id)).toBeNull();
+  });
+});
+
+describe('countActiveRunsForTrigger — #5 S4 slot release', () => {
+  it('counts pending + running, but NOT waiting (parked releases its slot) or terminals', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    const trigger = createTrigger(db, {
+      ownerId: 'local',
+      name: 'T',
+      pipelineVersionId: version.id,
+      params: {},
+      mode: 'manual',
+      schedule: null,
+      webhook: null,
+      concurrency: { policy: 'skip_if_running' },
+      runWindows: null,
+      enabled: false,
+    });
+    const seed = (status: RunStatus): void => {
+      const run = createRun(db, buildRunInput(version.id, { triggerId: trigger.id }));
+      if (status !== 'pending') updateRun(db, run.id, { status });
+    };
+    seed('pending');
+    seed('running');
+    seed('waiting'); // #5 S4 — a parked run RELEASES its concurrency slot.
+    seed('success');
+    seed('failure');
+    seed('skipped');
+    seed('interrupted');
+
+    // Only the pending + running rows occupy a slot; waiting + all terminals do not.
+    expect(countActiveRunsForTrigger(db, trigger.id)).toBe(2);
   });
 });

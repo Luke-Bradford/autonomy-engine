@@ -14,7 +14,7 @@ import {
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createTrigger } from '../../repo/triggers.js';
-import { getRun, listRuns } from '../../repo/runs.js';
+import { createRun, getRun, listRuns, updateRun } from '../../repo/runs.js';
 import { loadEngineEvents } from '../events.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { type DocResolver, type DriveDeps, type Executor } from '../driver.js';
@@ -169,6 +169,65 @@ describe('RunLauncher — a started run drives to completion in the background',
   });
 });
 
+describe('RunLauncher — #5 S4: a parked (waiting) run releases its concurrency slot', () => {
+  // Seed a run that is PARKED (`waiting`) for the trigger — the S4 slot-release
+  // contract: a run parked on a timer/webhook for hours must not keep occupying
+  // its trigger's slot. Pre-S4 `waiting` counted as active and blocked new fires.
+  function seedWaitingRun(db: Db, triggerId: string, pvId: string): void {
+    const run = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId,
+      parentRunId: null,
+      params: {},
+    });
+    updateRun(db, run.id, { status: 'waiting' });
+  }
+
+  it('skip_if_running: admits a new fire while the only other run is parked', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, {
+      pipelineVersionId: pvId,
+      concurrency: { policy: 'skip_if_running' },
+    });
+    seedWaitingRun(db, trigger.id, pvId);
+    const launcher = createRunLauncher(deps(db));
+
+    expect(launcher.fire(trigger).outcome).toBe('started');
+    await launcher.whenIdle();
+  });
+
+  it('parallel(max=1): admits a new fire while the only other run is parked', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, {
+      pipelineVersionId: pvId,
+      concurrency: { policy: 'parallel', max: 1 },
+    });
+    seedWaitingRun(db, trigger.id, pvId);
+    const launcher = createRunLauncher(deps(db));
+
+    expect(launcher.fire(trigger).outcome).toBe('started');
+    await launcher.whenIdle();
+  });
+
+  it('queue: starts (does not enqueue) a fire while the only other run is parked', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, {
+      pipelineVersionId: pvId,
+      concurrency: { policy: 'queue' },
+    });
+    seedWaitingRun(db, trigger.id, pvId);
+    const launcher = createRunLauncher(deps(db));
+
+    // `queue` admission also reads the DB active count — a freed slot starts it now.
+    expect(launcher.fire(trigger).outcome).toBe('started');
+    await launcher.whenIdle();
+  });
+});
+
 describe('RunLauncher — skip_if_running', () => {
   it('skips a second fire while one is active, then allows a fire once idle', async () => {
     const { db } = freshDb();
@@ -219,6 +278,9 @@ describe('RunLauncher — parallel', () => {
     const runs = listRuns(db, { triggerId: trigger.id });
     expect(runs).toHaveLength(2);
     expect(runs.every((r) => r.status === 'running')).toBe(true);
+    // #5 S4 — end-to-end through the real launcher/pump: a `running` run HOLDS the
+    // execution lease (a live drive is executing it).
+    expect(runs.every((r) => r.leaseUntil !== null)).toBe(true);
   });
 
   it('fails closed (skip) for a parallel trigger with no max (legacy/corrupted row)', () => {

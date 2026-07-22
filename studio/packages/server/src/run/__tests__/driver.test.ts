@@ -12,7 +12,7 @@ import {
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion } from '../../repo/pipeline-versions.js';
 import { getPipelineVersion } from '../../repo/pipeline-versions.js';
-import { createRun, getRun } from '../../repo/runs.js';
+import { createRun, getRun, updateRun } from '../../repo/runs.js';
 import { runs } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { freshDb } from '../../repo/__tests__/helpers.js';
@@ -396,6 +396,9 @@ describe('driver — wait control activity routes through the REAL pump (#4 A5+A
     expect(state.nodes.w!.status).toBe('wait_pending');
     expect(state.status).toBe('waiting');
     expect(state.waitingReason).toBe('waiting_timer');
+    // #5 S4 — end-to-end through the real pump: parking RELEASED the execution
+    // lease on the row (the run no longer holds a worker while parked).
+    expect(getRun(db, run.id)?.leaseUntil).toBeNull();
 
     // The pump's driver-own `scheduleWait` branch armed a durable alarm...
     expect(alarms.armed).toHaveLength(1);
@@ -514,6 +517,25 @@ describe('driver — startRun trigger context (#5 S12)', () => {
     // The event-sourcing invariant: the row equals what folding the log computes.
     const projected = buildEngine(getPipelineVersion(db, pvId)!).projectRunState(events);
     expect(projected.status).toBe('interrupted');
+  });
+
+  // #5 S4 — the lease is RELEASED on every transition out of `running`, including
+  // the direct row-patch path (`terminalizeInterrupted` with no engine events, which
+  // bypasses `syncRunLifecycle`). Otherwise an interrupted run keeps a stale lease
+  // that S7's lease-expiry reconciler would inherit as a phantom live worker.
+  it('releases the execution lease when interrupting via the patch path (#5 S4)', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const run = seedRun(db, pvId);
+    // A running row that HOLDS a lease, with NO engine events → the patchRow path.
+    updateRun(db, run.id, { status: 'running', leaseUntil: Date.now() + 60_000 });
+    const bus = createRunEventBus();
+
+    terminalizeInterrupted({ ...deps(db), bus }, run.id);
+
+    const after = getRun(db, run.id);
+    expect(after?.status).toBe('interrupted');
+    expect(after?.leaseUntil).toBeNull();
   });
 });
 
