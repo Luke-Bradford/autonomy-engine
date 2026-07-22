@@ -21,6 +21,7 @@ import {
   getWindowStateByRunId,
   linkWindowRun,
   listWindowStates,
+  listWindowTriggerIds,
   retryDueWindow,
   retryWindow,
   supersedeWindow,
@@ -841,6 +842,11 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     let fired = 0;
     let cursor: string | undefined;
     live: for (;;) {
+      // Between-page stop check (review WARNING, PR #645): blocked rows keep
+      // the walk alive without touching the launcher, so a large blocked
+      // front would otherwise page — and fire ready tails — past a `stop()`
+      // landing mid-pass. Same check as `materializeCapped`'s loop head.
+      if (stopped) return;
       const waiting = listWindowStates(db, {
         triggerId: trigger.id,
         configEpoch: epoch,
@@ -1384,9 +1390,7 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     // suppressed while the trigger was broken is a settled row, gone forever;
     // boot is the backstop the suppression paths lean on). The flip lands the
     // windows in `waiting`, so step 2's stranded scan below picks them up.
-    for (const triggerId of new Set(
-      listWindowStates(db, { status: 'retry_pending' }).map((r) => r.triggerId),
-    )) {
+    for (const triggerId of listWindowTriggerIds(db, { status: 'retry_pending' })) {
       const trigger = readWindowConfigured(triggerCache, triggerId);
       // Corrupt/missing/mode-changed OR still disabled — inert until
       // repaired/re-enabled (the flip would go nowhere useful while disabled;
@@ -1403,13 +1407,14 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     // trigger still has a current epoch to compare against, and folding its
     // old-epoch debris terminal spawns nothing — so a pause defers nothing
     // here, symmetric with the settle path. Covers debris `sync()` never
-    // reaches (its pass runs for ENABLED triggers only).
-    for (const triggerId of new Set(
-      [
-        ...listWindowStates(db, { status: 'waiting' }),
-        ...listWindowStates(db, { status: 'retry_pending' }),
-      ].map((r) => r.triggerId),
-    )) {
+    // reaches (its pass runs for ENABLED triggers only). Trigger set via
+    // DISTINCT projection, not a row fetch — the debris this step exists to
+    // fold is exactly what would make a row fetch unbounded (review NITPICK,
+    // PR #645).
+    for (const triggerId of new Set([
+      ...listWindowTriggerIds(db, { status: 'waiting' }),
+      ...listWindowTriggerIds(db, { status: 'retry_pending' }),
+    ])) {
       const trigger = readWindowConfigured(triggerCache, triggerId);
       if (trigger === null) continue; // corrupt/missing/mode-changed — no epoch to compare
       try {
@@ -1421,10 +1426,7 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     // 2 — stranded `waiting` windows of still-current triggers (crash between
     // the window tx and the fire, or a skipped fire): link-before-fire, then
     // fire. A stale-epoch or no-longer-eligible trigger's windows stay inert.
-    const strandedTriggerIds = new Set(
-      listWindowStates(db, { status: 'waiting', unlinked: true }).map((r) => r.triggerId),
-    );
-    for (const triggerId of strandedTriggerIds) {
+    for (const triggerId of listWindowTriggerIds(db, { status: 'waiting', unlinked: true })) {
       // #637 — `reconcile()` is called BARE at boot, so a poison trigger row
       // must skip-and-warn (the `listParsedTriggers` per-row discipline), not
       // throw: a throw here aborted server boot and starved every other

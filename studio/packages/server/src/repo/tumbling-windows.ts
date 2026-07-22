@@ -348,6 +348,31 @@ export function listWindowStates(
   return query.all();
 }
 
+/**
+ * DISTINCT trigger ids owning rows matching the filter — boot reconcile's
+ * trigger-set derivation. A projection, not a row fetch: reconcile only needs
+ * WHICH triggers to visit, and accumulated debris rows (a long-superseded
+ * epoch, a deep blocked front) can dwarf the trigger count, so materializing
+ * every row to `.map((r) => r.triggerId)` scans an unbounded set (review
+ * NITPICK on PR #645).
+ */
+export function listWindowTriggerIds(
+  db: Db,
+  filter: { status?: WindowStatus; unlinked?: boolean } = {},
+): string[] {
+  const conditions = [];
+  if (filter.status !== undefined) {
+    conditions.push(eq(tumblingWindowState.status, WindowStatusSchema.parse(filter.status)));
+  }
+  if (filter.unlinked === true) conditions.push(isNull(tumblingWindowState.runId));
+  return db
+    .selectDistinct({ triggerId: tumblingWindowState.triggerId })
+    .from(tumblingWindowState)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .all()
+    .map((r) => r.triggerId);
+}
+
 /** One window's events in append (`seq`) order — the rebuild scan. */
 export function listWindowEvents(db: Db, key: WindowKey): WindowEvent[] {
   const rows = db

@@ -24,6 +24,7 @@ import {
   linkWindowRun,
   listWindowEvents,
   listWindowStates,
+  listWindowTriggerIds,
   rebuildWindowStatus,
   completeWindow,
   retryDueWindow,
@@ -1236,6 +1237,43 @@ describe('repo guards (the projection’s status machine)', () => {
       unlinked: true,
     });
     expect(waiting.map((w) => w.windowStart)).toEqual([iso(T0), iso(T0 + 2 * MIN15)]);
+  });
+
+  it('listWindowTriggerIds projects DISTINCT trigger ids by status/unlinked (the reconcile trigger-set derivation)', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const tA = seedTumbling(db, { pipelineVersionId: pv });
+    const tB = seedTumbling(db, { pipelineVersionId: pv });
+    if (!isTumblable(tA) || !isTumblable(tB)) throw new Error('unreachable');
+    // tA: two waiting rows (one later linked) — DISTINCT must collapse them.
+    // tB: one waiting row.
+    for (const [trigger, ks] of [
+      [tA, [0, 1]],
+      [tB, [0]],
+    ] as const) {
+      for (const k of ks) {
+        createWindow(db, {
+          triggerId: trigger.id,
+          configEpoch: windowConfigEpoch(trigger.window),
+          windowStart: iso(T0 + k * MIN15),
+          windowEnd: iso(T0 + (k + 1) * MIN15),
+          geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+          origin: 'live',
+        });
+      }
+    }
+    expect(listWindowTriggerIds(db, { status: 'waiting' }).sort()).toEqual([tA.id, tB.id].sort());
+    // Link tA's W0: it leaves the unlinked set but tA still owns unlinked W1.
+    linkWindowRun(db, keyFor(tA, T0), 'r-distinct', 'fire');
+    expect(listWindowTriggerIds(db, { status: 'waiting', unlinked: true }).sort()).toEqual(
+      [tA.id, tB.id].sort(),
+    );
+    // Now link tA's W1 too: tA has no unlinked waiting rows left.
+    linkWindowRun(db, keyFor(tA, T0 + MIN15), 'r-distinct-2', 'fire');
+    expect(listWindowTriggerIds(db, { status: 'waiting', unlinked: true })).toEqual([tB.id]);
+    // Status filter: running rows exist for tA only.
+    expect(listWindowTriggerIds(db, { status: 'running' })).toEqual([tA.id]);
+    expect(listWindowTriggerIds(db, { status: 'retry_pending' })).toEqual([]);
   });
 });
 
@@ -3264,6 +3302,45 @@ describe('#5 S11d — self-dependency + stale-epoch disposition', () => {
       svc.reconcile();
       expect(launcher.fires).toHaveLength(2);
       expect(getWindowState(db, keyFor(trigger, T0 + MIN15))?.status).toBe('running');
+    });
+
+    it('stop() mid-pass halts the keyset walk between pages (a blocked front must not page past shutdown)', () => {
+      // Review WARNING (PR #645): the live keyset loop pages past blocked rows,
+      // so a large blocked front keeps the walk alive across many fetches — a
+      // `stop()` landing mid-pass (e.g. via a fire’s downstream taps) must end
+      // the walk at the next page boundary, as `materializeCapped` already does.
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: DEP_PREV });
+      // Page 1 (batch = 25): W0 ready (vacuous pre-grid dep) — its fire stops
+      // the service; W1..W24 blocked (each behind its waiting/running elder),
+      // consuming cursor only.
+      for (let k = 0; k <= 24; k += 1) seedWindow(db, trigger, k);
+      // Page 2: W26 READY (dep W25 succeeded) — must NOT fire after stop().
+      windowInStatus(db, trigger, 25, 'succeeded');
+      seedWindow(db, trigger, 26);
+      const fires: Trigger[] = [];
+      let stopRef: () => void = () => undefined;
+      const launcher: TumblingLauncher = {
+        fire: (t: Trigger): FireResult => {
+          fires.push(t);
+          stopRef();
+          return { outcome: 'started', runId: `run-stop-${fires.length}` };
+        },
+      };
+      const svc = createTumblingService({
+        db,
+        arm: () => undefined,
+        launcher,
+        log: silentLog(),
+        now: () => T0 + 10 * 60 * 60_000,
+      });
+      stopRef = () => svc.stop();
+
+      svc.reconcile();
+
+      expect(fires).toHaveLength(1); // W0 only — page 2 never fetched
+      expect(getWindowState(db, keyFor(trigger, T0 + 26 * MIN15))?.status).toBe('waiting');
     });
 
     it('a permanently-skipped no-row dependency is vacuously satisfied (forward-only disposition)', () => {
