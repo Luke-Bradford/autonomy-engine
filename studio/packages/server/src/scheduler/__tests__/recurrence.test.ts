@@ -365,21 +365,211 @@ describe('nextOccurrence — timeZone (non-UTC firing, #552)', () => {
     );
   });
 
-  it('fails CLOSED on interval>1 + a non-UTC zone (write-refused, but a lenient-read row could pair them)', () => {
-    // The write schema refuses this pairing (#552; zone-aware stepping deferred to
-    // #623), but the READ shape is lenient — a corrupt/imported row could carry both.
-    // The UTC period model would mis-step against a NY-interpreted cron, so the firing
-    // chain fail-closes (settle, no mis-fire) rather than silently step on wrong days.
-    const step = {
+  it('fails CLOSED on interval>1 + an HOUR frequency in a non-UTC zone (write-refused, lenient-read could pair)', () => {
+    // #623: hour-frequency stepping in a non-UTC zone stays refused — croner
+    // enumerates an `hour` pattern by WALL-CLOCK hour, which skips/repeats an absolute
+    // hour across DST (verified empirically), so the absolute-hour period grid
+    // mis-qualifies. The write schema refuses it, but the READ shape is lenient (an
+    // imported row could carry both), so the firing chain fail-closes (settle, no
+    // mis-fire) rather than silently step on wrong hours.
+    const hourStep = {
+      frequency: 'hour' as const,
+      interval: 2,
+      anchorEpochMs: at('2026-08-01T00:00:00Z'),
+    };
+    expect(() =>
+      nextOccurrence('30 * * * *', at('2026-08-01T00:00:00Z'), {}, hourStep, 'America/New_York'),
+    ).toThrow(InvalidScheduleError);
+    // The SAME hour step with UTC (or unzoned) still steps normally — the base case.
+    // Anchor 00:00Z is period 0 (qualifying), so the first :30 occurrence, 00:30Z, fires.
+    expect(nextOccurrence('30 * * * *', at('2026-08-01T00:00:00Z'), {}, hourStep, 'UTC')).toBe(
+      at('2026-08-01T00:30:00Z'),
+    );
+    // A DAY step in a non-UTC zone NO LONGER throws — it steps on the local calendar
+    // grid now (#623; see the zone-aware suite below). Just assert it does not throw.
+    const dayStep = {
       frequency: 'day' as const,
       interval: 2,
       anchorEpochMs: at('2026-08-01T00:00:00Z'),
     };
     expect(() =>
-      nextOccurrence(daily9, at('2026-08-01T12:00:00Z'), {}, step, 'America/New_York'),
-    ).toThrow(InvalidScheduleError);
-    // interval>1 with UTC (or unzoned) still steps normally — this is the base case.
-    expect(nextOccurrence(daily9, at('2026-08-01T12:00:00Z'), {}, step, 'UTC')).toBe(
+      nextOccurrence(daily9, at('2026-08-01T12:00:00Z'), {}, dayStep, 'America/New_York'),
+    ).not.toThrow();
+  });
+});
+
+/**
+ * #5 S5b-timeZone stepping (#623) — `interval > 1` ("every N periods") in a NON-UTC
+ * zone. `day`/`week`/`month` step on the zone's LOCAL calendar grid: the qualifying
+ * periods align to local calendar days/weeks/months, while each occurrence's UTC
+ * instant tracks the zone's DST (a wall-clock 09:00 stays 09:00 but its UTC instant
+ * shifts an hour across the spring/fall transition). `minute` is a zone-independent
+ * absolute cadence. `hour` stays refused (see the fail-closed test above).
+ *
+ * These pin concrete UTC instants a correct zone-aware stepper produces (computed
+ * against croner 10.0.1, which is EXACT-pinned), so a regression in the period model
+ * OR a croner upgrade that changed its zone handling fails LOUDLY.
+ */
+describe('nextOccurrence — zone-aware interval > 1 stepping (#623)', () => {
+  const at = (iso: string) => Date.parse(iso);
+  const NY = 'America/New_York';
+
+  it('every 2 days at 09:00 America/New_York tracks the spring-forward (14:00Z→13:00Z)', () => {
+    // Anchor = Mar 2 local-midnight (2026-03-02T05:00:00Z, EST). Qualifying local days
+    // are Mar 2, 4, 6, 8, 10… The 09:00 occurrence is 14:00Z while EST (-5) and 13:00Z
+    // after the 2026-03-08 spring-forward (EDT, -4) — same wall-clock, shifted UTC.
+    const anchor = at('2026-03-02T05:00:00Z');
+    const step = { frequency: 'day' as const, interval: 2, anchorEpochMs: anchor };
+    const bounds = { startAt: anchor };
+    const cron = '0 9 * * *';
+    const expected = [
+      '2026-03-02T14:00:00Z',
+      '2026-03-04T14:00:00Z',
+      '2026-03-06T14:00:00Z',
+      '2026-03-08T13:00:00Z', // spring-forward: 09:00 EDT is an hour earlier in UTC
+      '2026-03-10T13:00:00Z',
+    ];
+    let from = anchor - 1; // seed just before the inclusive anchor
+    for (const iso of expected) {
+      const next = nextOccurrence(cron, from, bounds, step, NY);
+      expect(next).toBe(at(iso));
+      from = next!;
+    }
+  });
+
+  it('every 2 weeks on Monday at 08:00 America/New_York (local-week grid, 14-day stride)', () => {
+    // Anchor = Mon Aug 3 local-midnight (2026-08-03T04:00:00Z, EDT). A "week" is a
+    // rolling 7 local days from the anchor day; qualifying weeks are 0, 2, 4… so the
+    // Mondays are Aug 3, 17, 31, Sep 14 (Aug 10 & 24 fall in odd weeks, skipped).
+    const anchor = at('2026-08-03T04:00:00Z');
+    const step = { frequency: 'week' as const, interval: 2, anchorEpochMs: anchor };
+    const bounds = { startAt: anchor };
+    const cron = '0 8 * * 1';
+    const expected = [
+      '2026-08-03T12:00:00Z',
+      '2026-08-17T12:00:00Z',
+      '2026-08-31T12:00:00Z',
+      '2026-09-14T12:00:00Z',
+    ];
+    let from = anchor - 1;
+    for (const iso of expected) {
+      const next = nextOccurrence(cron, from, bounds, step, NY);
+      expect(next).toBe(at(iso));
+      from = next!;
+    }
+  });
+
+  it('every 2 months on the 1st at 00:30 America/New_York tracks the spring DST (05:30Z→04:30Z)', () => {
+    // Anchor = Jan 1 local-midnight (2026-01-01T05:00:00Z, EST). Qualifying months are
+    // Jan, Mar, May, Jul. The 00:30 occurrence is 05:30Z under EST and 04:30Z under EDT
+    // (May/Jul are after the spring-forward) — same wall-clock, DST-shifted UTC.
+    const anchor = at('2026-01-01T05:00:00Z');
+    const step = { frequency: 'month' as const, interval: 2, anchorEpochMs: anchor };
+    const bounds = { startAt: anchor };
+    const cron = '30 0 1 * *';
+    const expected = [
+      '2026-01-01T05:30:00Z',
+      '2026-03-01T05:30:00Z',
+      '2026-05-01T04:30:00Z', // EDT
+      '2026-07-01T04:30:00Z',
+    ];
+    let from = anchor - 1;
+    for (const iso of expected) {
+      const next = nextOccurrence(cron, from, bounds, step, NY);
+      expect(next).toBe(at(iso));
+      from = next!;
+    }
+  });
+
+  it('steps correctly across a DST GAP-AT-MIDNIGHT zone (America/Santiago, 2026-09-06 00:00→01:00)', () => {
+    // Santiago springs forward AT midnight — local 00:00 on 2026-09-06 does not exist.
+    // The local-day boundary is found by monotonic bisection (not an offset-inverse
+    // that would over-correct to the previous day), so day-stepping stays exact across
+    // the gap. Anchor 2026-09-04T03:00:00Z resolves to Sep 3 23:00 local (CLT -4), so
+    // the anchor's local day is Sep 3. Qualifying local days are the even offsets from
+    // it: Sep 3, 5, 7, 9, 11 — the first fire after the anchor instant is Sep 5. The
+    // 12:00 occurrence is 16:00Z while CLT (-4) and 15:00Z after the switch (CLST -3).
+    const anchor = at('2026-09-04T03:00:00Z');
+    const step = { frequency: 'day' as const, interval: 2, anchorEpochMs: anchor };
+    const bounds = { startAt: anchor };
+    const cron = '0 12 * * *';
+    const expected = [
+      '2026-09-05T16:00:00Z', // CLT (-4)
+      '2026-09-07T15:00:00Z', // CLST (-3), after the gap-at-midnight spring-forward
+      '2026-09-09T15:00:00Z',
+      '2026-09-11T15:00:00Z',
+    ];
+    let from = anchor - 1;
+    for (const iso of expected) {
+      const next = nextOccurrence(cron, from, bounds, step, 'America/Santiago');
+      expect(next).toBe(at(iso));
+      from = next!;
+    }
+  });
+
+  it('every 2 days at 09:00 America/New_York tracks the FALL-BACK (13:00Z→14:00Z, the non-monotonicity direction)', () => {
+    // Companion to the spring-forward case above, pinning the OTHER DST direction the
+    // bisection's monotonicity claim rests on. A fall-back (Nov 1 2026, 02:00 EDT →
+    // 01:00 EST) REPEATS the 01:00 local hour: the offset decreases and the local clock
+    // re-enters an earlier wall-time — the one direction where `localDayNumber` could,
+    // in theory, regress across a local midnight. It cannot: the repeated hour stays on
+    // the SAME calendar day (Nov 1), so `localDayNumber` is still monotonic non-decreasing
+    // and the day-start bisection in `localDayStartInstant` stays exact. This test would
+    // fail loudly if a future change (or croner upgrade) let the local day briefly regress.
+    // Anchor = Oct 28 local-midnight (2026-10-28T04:00:00Z, EDT). Qualifying local days
+    // are Oct 28, 30, Nov 1, 3, 5. The 09:00 occurrence is 13:00Z while EDT (-4) and
+    // 14:00Z after the fall-back (EST, -5) — same wall-clock, DST-shifted UTC.
+    const anchor = at('2026-10-28T04:00:00Z');
+    const step = { frequency: 'day' as const, interval: 2, anchorEpochMs: anchor };
+    const bounds = { startAt: anchor };
+    const cron = '0 9 * * *';
+    const expected = [
+      '2026-10-28T13:00:00Z', // EDT (-4)
+      '2026-10-30T13:00:00Z', // EDT (-4)
+      '2026-11-01T14:00:00Z', // EST (-5), after the fall-back — 09:00 is past the 01:00 repeat
+      '2026-11-03T14:00:00Z',
+      '2026-11-05T14:00:00Z',
+    ];
+    let from = anchor - 1;
+    for (const iso of expected) {
+      const next = nextOccurrence(cron, from, bounds, step, NY);
+      expect(next).toBe(at(iso));
+      from = next!;
+    }
+  });
+
+  it('minute stepping is zone-INDEPENDENT — a non-UTC zone is identical to UTC (even across a fall-back)', () => {
+    // A `minute` recurrence compiles to `* * * * *`; croner enumerates every absolute
+    // minute uniformly (60s stride) regardless of zone/DST (verified empirically), so
+    // the absolute-minute period grid is correct without any zone-aware handling. Every
+    // step in a non-UTC zone must equal the UTC result. Span the NY fall-back to prove
+    // DST does not perturb it.
+    const anchor = at('2026-11-01T04:03:00Z');
+    const step = { frequency: 'minute' as const, interval: 15, anchorEpochMs: anchor };
+    const bounds = { startAt: anchor };
+    let fromNy = anchor;
+    let fromUtc = anchor;
+    for (let i = 0; i < 5; i++) {
+      const ny = nextOccurrence('* * * * *', fromNy, bounds, step, NY);
+      const utc = nextOccurrence('* * * * *', fromUtc, bounds, step, 'UTC');
+      expect(ny).toBe(utc);
+      expect(ny).not.toBeNull();
+      fromNy = ny!;
+      fromUtc = utc!;
+    }
+  });
+
+  it('a UTC recurrence is byte-identical to pre-#623 — the UTC period model is untouched', () => {
+    // Regression belt: the whole zone-aware branch is gated on a non-UTC zone, so an
+    // explicit 'UTC' (and the omitted-timeZone default) still walk the original UTC
+    // integer arithmetic. Same expectation as the interval>1 UTC suite above.
+    const anchor = at('2026-08-01T00:00:00Z');
+    const step = { frequency: 'day' as const, interval: 2, anchorEpochMs: anchor };
+    const bounds = { startAt: anchor };
+    expect(nextOccurrence('0 9 * * *', at('2026-08-01T09:00:00Z'), bounds, step, 'UTC')).toBe(
+      at('2026-08-03T09:00:00Z'),
+    );
+    expect(nextOccurrence('0 9 * * *', at('2026-08-01T09:00:00Z'), bounds, step)).toBe(
       at('2026-08-03T09:00:00Z'),
     );
   });

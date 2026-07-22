@@ -13,8 +13,9 @@ import {
  * rules, and the S5b-2 (#549) `startTime`/`endTime` bounds. `interval > 1` (#550)
  * is now accepted (startTime-anchored, capped) — the compiler still emits only the
  * within-period pattern; the server stepping calculator gates the periods. `timeZone`
- * (#552) is now accepted (a resolvable IANA zone; UTC-only when `interval > 1` — the
- * zone-aware period model is deferred to #623), threaded to croner by `nextOccurrence`.
+ * (#552) is now accepted (a resolvable IANA zone), threaded to croner by
+ * `nextOccurrence`; `interval > 1` steps zone-aware for day/week/month/minute and is
+ * UTC-only for an `hour` frequency (#623 — croner enumerates hours by wall-clock).
  */
 
 const base = (over: Partial<Recurrence> = {}): Recurrence => ({
@@ -187,16 +188,76 @@ describe('RecurrenceWriteSchema — the write-boundary rules', () => {
     expect(ok(base({}))).toBe(true);
   });
 
-  it('interval > 1 is UTC-only: refuses a non-UTC timeZone, allows UTC/absent (#552, defer #623)', () => {
-    const anchored = { interval: 2, startTime: '2026-08-01T00:00:00Z' };
-    // Stepping in a non-UTC zone is deferred (#623) — refuse it, do not mis-fire.
-    expect(ok(base({ ...anchored, timeZone: 'America/New_York' }))).toBe(false);
-    expect(err(base({ ...anchored, timeZone: 'America/New_York' }))).toMatch(/623|UTC-only/);
-    // Explicit UTC (behaviourally identical to unzoned) and absent are permitted.
-    expect(ok(base({ ...anchored, timeZone: 'UTC' }))).toBe(true);
-    expect(ok(base(anchored))).toBe(true);
-    // interval === 1 with a non-UTC zone is the common case — fully supported.
-    expect(ok(base({ timeZone: 'America/New_York' }))).toBe(true);
+  it('interval > 1 + a non-UTC timeZone: accepted for day/week/month/minute, refused for hour (#623)', () => {
+    const anchor = '2026-08-01T00:00:00Z';
+    // day/week/month step on the zone's LOCAL calendar grid — non-UTC now permitted.
+    expect(
+      ok(base({ frequency: 'day', interval: 2, startTime: anchor, timeZone: 'America/New_York' })),
+    ).toBe(true);
+    expect(
+      ok(
+        base({
+          frequency: 'week',
+          interval: 2,
+          schedule: { weekDays: [1] },
+          startTime: anchor,
+          timeZone: 'America/New_York',
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      ok(
+        base({
+          frequency: 'month',
+          interval: 2,
+          schedule: { monthDays: [1] },
+          startTime: anchor,
+          timeZone: 'Europe/London',
+        }),
+      ),
+    ).toBe(true);
+    // minute is a zone-independent absolute cadence — permitted (the zone is inert).
+    expect(
+      ok(
+        base({
+          frequency: 'minute',
+          interval: 15,
+          startTime: anchor,
+          timeZone: 'America/New_York',
+        }),
+      ),
+    ).toBe(true);
+
+    // hour is the ONE refusal: croner enumerates hours by wall-clock, which
+    // skips/repeats an absolute hour across DST, so absolute-hour stepping mis-qualifies.
+    const hourNonUtc = base({
+      frequency: 'hour',
+      interval: 2,
+      schedule: { minutes: [30] },
+      startTime: anchor,
+      timeZone: 'America/New_York',
+    });
+    expect(ok(hourNonUtc)).toBe(false);
+    expect(err(hourNonUtc)).toMatch(/hour|wall-clock|UTC-only/i);
+    // hour + interval>1 is fine with UTC (or unzoned) — only the non-UTC pairing is refused.
+    expect(
+      ok(
+        base({
+          frequency: 'hour',
+          interval: 2,
+          schedule: { minutes: [30] },
+          startTime: anchor,
+          timeZone: 'UTC',
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      ok(base({ frequency: 'hour', interval: 2, schedule: { minutes: [30] }, startTime: anchor })),
+    ).toBe(true);
+    // interval === 1 with a non-UTC zone is fully supported at every frequency (incl. hour).
+    expect(
+      ok(base({ frequency: 'hour', schedule: { minutes: [30] }, timeZone: 'America/New_York' })),
+    ).toBe(true);
   });
 
   it('every write-valid recurrence compiles without throwing (compiler totality)', () => {
