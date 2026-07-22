@@ -344,13 +344,27 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
   function materializeWindows(trigger: TumblingTrigger): void {
     if (stopped) return;
     const epoch = windowConfigEpoch(trigger.window);
+    // Fetch ONE past the batch bound so a full batch is distinguishable from a
+    // truncated one — a silent cap would read as "swept everything" when it
+    // didn't (the no-silent-caps rule; review WARNING on the first S9 pass).
     const waiting = listWindowStates(db, {
       triggerId: trigger.id,
       configEpoch: epoch,
       status: 'waiting',
       unlinked: true,
-      limit: MATERIALIZE_BATCH,
+      limit: MATERIALIZE_BATCH + 1,
     });
+    if (waiting.length > MATERIALIZE_BATCH) {
+      // Operator-visible: a backlog past the batch bound (e.g. persistent
+      // launcher refusals) is NOT dropped — the excess stays `waiting` and the
+      // next window fire / boot reconcile continues the sweep — but the
+      // truncation itself must be signalled, not silent.
+      log.warn(
+        { triggerId: trigger.id, batch: MATERIALIZE_BATCH },
+        'tumbling: stranded-window sweep truncated at the batch bound — more waiting windows remain (retried next pass/boot)',
+      );
+      waiting.length = MATERIALIZE_BATCH;
+    }
     for (const row of waiting) {
       const key = keyOf(row);
       // LINK-BEFORE-FIRE (single-fire under crash): an unlinked run whose

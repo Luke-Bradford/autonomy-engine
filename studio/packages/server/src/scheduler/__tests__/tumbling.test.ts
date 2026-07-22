@@ -804,6 +804,44 @@ describe('completion: bus tap + boot reconcile', () => {
     });
   });
 
+  it('a stranded-window sweep past the batch bound WARNS instead of truncating silently', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const trigger = seedTumbling(db, { pipelineVersionId: pv });
+    if (!isTumblable(trigger)) throw new Error('unreachable');
+    const epoch = windowConfigEpoch(trigger.window);
+    // One more stranded window than one pass retries (MATERIALIZE_BATCH = 25).
+    for (let k = 0; k < 26; k += 1) {
+      createWindow(db, {
+        triggerId: trigger.id,
+        configEpoch: epoch,
+        windowStart: iso(T0 + k * MIN15),
+        windowEnd: iso(T0 + (k + 1) * MIN15),
+        geometry: { frequency: 'minute', interval: 15, startTime: CONFIG.startTime },
+      });
+    }
+
+    const warns: unknown[] = [];
+    const log = {
+      error: () => undefined,
+      warn: (_obj: unknown, msg?: string) => {
+        warns.push(msg);
+      },
+      debug: () => undefined,
+    };
+    // Launcher refuses everything (full queue) — the backlog persists; only
+    // the truncation signal is under test.
+    const launcher = fakeLauncher(
+      Array.from({ length: 30 }, () => ({ outcome: 'skipped' as const, reason: 'queue is full' })),
+    );
+    const service = createTumblingService({ db, arm: () => undefined, launcher, log });
+    service.reconcile();
+
+    expect(warns.some((m) => typeof m === 'string' && m.includes('truncated'))).toBe(true);
+    // Nothing dropped: every window is still durably `waiting` for later passes.
+    expect(listWindowStates(db, { triggerId: trigger.id, status: 'waiting' })).toHaveLength(26);
+  });
+
   it('boot reconcile re-materializes a stranded waiting window (fires once)', () => {
     const { db } = freshDb();
     const pv = seedVersion(db);
