@@ -5,12 +5,13 @@ import type {
   Trigger,
   TriggerContext,
 } from '@autonomy-studio/shared';
-import { resolveTriggerBindings } from '@autonomy-studio/shared';
+import { resolveTriggerBindings, TERMINAL_RUN_EVENT } from '@autonomy-studio/shared';
 import {
   admitQueuedRun,
   countActiveRunsForTrigger,
   countQueuedRunsForTrigger,
   createRun,
+  getRun,
   listRuns,
   nextQueuedRunForTrigger,
 } from '../repo/runs.js';
@@ -445,11 +446,69 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     }
   }
 
+  /**
+   * #629 — drain the durable admission queue on ANY run terminalization, not just
+   * the launcher-driven ones. `driveRun`'s `finally` covers a run THIS launcher
+   * drove; a run whose slot-freeing terminalization happens elsewhere (a
+   * retry-alarm or external-wait resume of a previously-parked run pumps it to
+   * terminal OUTSIDE `driveRun`) never reaches that `finally`, so a fire that
+   * queued during that run's `running` window would sit `queued` with the slot
+   * free until the next launcher-driven settle for the trigger or the next boot's
+   * `recoverQueued`. Subscribing to the run-event bus closes that latency cliff:
+   * every terminal event (`run.finished`/`run.interrupted`, whoever drove it)
+   * kicks a drain of that run's trigger queue.
+   *
+   * DEFERRED to a microtask, deliberately: the terminal event is PUBLISHED before
+   * `syncRunLifecycle` flips `runs.status` (both the driver's `driveFinishRun` and
+   * `terminalizeInterrupted` append+publish first, sync second). A synchronous
+   * drain here would read the finishing run as still `running` and admit nothing;
+   * one microtask later its status is durably terminal, so the DB active-count the
+   * drain gates on is correct. (The alarm path already publishes post-commit, so
+   * it too is settled by the time this runs — a microtask is uniformly safe.)
+   *
+   * The whole body runs in a DETACHED microtask, so a fault here is NOT isolated
+   * by the bus's `onListenerError` (which only wraps the synchronous publish call)
+   * — hence the local try/catch. `drainQueue`/`getTrigger` are best-effort: a
+   * drain that fails (a DB blip) must be logged, never crash the process as an
+   * unhandled rejection. `drainQueue` re-checks `stopped` itself.
+   *
+   * For a run THIS launcher drove, this drains REDUNDANTLY with `driveRun`'s
+   * `finally` (which already ran, synchronously). That is harmless — `drainQueue`
+   * + `admitQueuedRun`'s `status = 'queued'` guard are idempotent, so the second
+   * drain finds capacity full or the queue empty and admits nothing — and is the
+   * accepted cost of a bus tap over a targeted callback: ONE hook covers every
+   * terminalization source without the launcher having to be threaded into the
+   * alarm handlers + external-wait completer that terminalize out of band.
+   */
+  function subscribeTerminalDrain(bus: NonNullable<RunLauncherDeps['bus']>): () => void {
+    return bus.subscribeAll((event) => {
+      if (!(TERMINAL_RUN_EVENT as ReadonlySet<string>).has(event.type)) return;
+      const runId = event.runId;
+      queueMicrotask(() => {
+        try {
+          if (stopped) return;
+          const run = getRun(db, runId);
+          // A trigger-less run (a `call_pipeline` child) has no queue to drain.
+          if (run !== null && run.triggerId !== null) drainQueue(run.triggerId);
+        } catch (err) {
+          deps.log?.error?.({ err, runId }, 'queue drain on run terminalization failed');
+        }
+      });
+    });
+  }
+
+  // Subscribe only when a bus is wired (production always is; many driver tests
+  // construct a launcher without one — they keep the pre-#629 behaviour).
+  const unsubscribeTerminalDrain = deps.bus ? subscribeTerminalDrain(deps.bus) : undefined;
+
   function stop(): void {
     // #5 S6a — only halt accepting/draining. Durable `queued` rows are NOT
     // cleared (there is no in-memory queue to clear anymore); they persist and a
     // later `recoverQueued()` picks them up. In-flight drives settle on their own.
     stopped = true;
+    // #629 — drop the bus subscription so a terminal event after shutdown neither
+    // drains nor keeps this instance reachable (idempotent; safe if never set).
+    unsubscribeTerminalDrain?.();
   }
 
   return { fire, whenIdle, recoverQueued, stop };

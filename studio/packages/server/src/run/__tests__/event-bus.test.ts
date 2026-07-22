@@ -103,3 +103,78 @@ describe('createRunEventBus', () => {
     expect(bus.subscriberCount('run_x')).toBe(0);
   });
 });
+
+// #629 — the GLOBAL subscription mode: a cross-run reactor (the launcher's queue
+// drain) that must react to a run's terminal event regardless of its runId,
+// which the per-run `subscribe` cannot serve (it is keyed by a runId known in
+// advance; the target case is a run the reactor never subscribed to).
+describe('createRunEventBus — subscribeAll (cross-run tap)', () => {
+  it('delivers EVERY published event to a global subscriber, whatever the runId', () => {
+    const bus = createRunEventBus();
+    const seen: RunEvent[] = [];
+    bus.subscribeAll((e) => seen.push(e));
+
+    bus.publish(evt('run_a', 0));
+    bus.publish(evt('run_b', 1));
+
+    expect(seen.map((e) => e.runId)).toEqual(['run_a', 'run_b']);
+  });
+
+  it('delivers to BOTH the run subscriber and a global subscriber', () => {
+    const bus = createRunEventBus();
+    const perRun: RunEvent[] = [];
+    const global: RunEvent[] = [];
+    bus.subscribe('run_a', (e) => perRun.push(e));
+    bus.subscribeAll((e) => global.push(e));
+
+    bus.publish(evt('run_a', 0));
+
+    expect(perRun).toHaveLength(1);
+    expect(global).toHaveLength(1);
+  });
+
+  it('stops delivering after unsubscribe, idempotently', () => {
+    const bus = createRunEventBus();
+    const seen: RunEvent[] = [];
+    const off = bus.subscribeAll((e) => seen.push(e));
+
+    bus.publish(evt('run_a', 0));
+    off();
+    off(); // must not throw
+    bus.publish(evt('run_a', 1));
+
+    expect(seen).toHaveLength(1);
+  });
+
+  it('isolates a throwing global subscriber: per-run + other globals still receive, error reported', () => {
+    const onListenerError = vi.fn();
+    const bus = createRunEventBus({ onListenerError });
+    const perRun: RunEvent[] = [];
+    const otherGlobal: RunEvent[] = [];
+    bus.subscribe('run_a', (e) => perRun.push(e));
+    bus.subscribeAll(() => {
+      throw new Error('boom');
+    });
+    bus.subscribeAll((e) => otherGlobal.push(e));
+
+    expect(() => bus.publish(evt('run_a', 0))).not.toThrow();
+    expect(perRun).toHaveLength(1);
+    expect(otherGlobal).toHaveLength(1);
+    expect(onListenerError).toHaveBeenCalledOnce();
+    expect(onListenerError.mock.calls[0]![1]).toBe('run_a');
+  });
+
+  it('lets a global subscriber unsubscribe from within its own callback safely', () => {
+    const bus = createRunEventBus();
+    const seen: number[] = [];
+    const off = bus.subscribeAll((e) => {
+      seen.push(e.seq);
+      off();
+    });
+
+    bus.publish(evt('run_a', 0));
+    bus.publish(evt('run_a', 1));
+
+    expect(seen).toEqual([0]);
+  });
+});

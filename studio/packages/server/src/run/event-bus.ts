@@ -33,6 +33,19 @@ export interface RunEventBus {
    * unsubscribe; calling it more than once (or from inside the listener) is
    * safe and removes only THIS subscription. */
   subscribe(runId: string, listener: RunEventListener): () => void;
+  /**
+   * #629 — subscribe `listener` to EVERY published event, whatever its `runId`.
+   * The per-run `subscribe` is keyed by a runId the subscriber already knows (the
+   * WS tail of a run it is watching); this GLOBAL tap serves a cross-run reactor
+   * that must react to a run it never subscribed to — the launcher draining a
+   * trigger's durable admission queue when a run terminalizes OUTSIDE its own
+   * drive (a retry-alarm or external-wait resume). Same isolation as `subscribe`:
+   * a throwing global listener is caught + reported via `onListenerError`, never
+   * allowed to break the publish loop, a co-subscriber, or the driver's pump.
+   * Returns an idempotent unsubscribe, safe to call more than once or from inside
+   * the listener.
+   */
+  subscribeAll(listener: RunEventListener): () => void;
   /** Current subscriber count for a run (observability/tests). */
   subscriberCount(runId: string): number;
 }
@@ -45,18 +58,28 @@ export interface RunEventBusOptions {
 
 export function createRunEventBus(opts: RunEventBusOptions = {}): RunEventBus {
   const listeners = new Map<string, Set<RunEventListener>>();
+  // #629 — GLOBAL subscribers (`subscribeAll`), delivered to on every publish
+  // regardless of `runId`. Held separately from the per-run map so the per-run
+  // fast path (`listeners.get(runId)`) is unchanged.
+  const globalListeners = new Set<RunEventListener>();
+
+  function deliver(listener: RunEventListener, event: RunEvent): void {
+    try {
+      listener(event);
+    } catch (err) {
+      opts.onListenerError?.(err, event.runId);
+    }
+  }
 
   function publish(event: RunEvent): void {
+    // Iterate SNAPSHOTS: a listener that unsubscribes (or subscribes) from within
+    // its own callback must not mutate a set we are iterating.
     const set = listeners.get(event.runId);
-    if (set === undefined) return;
-    // Iterate a SNAPSHOT: a listener that unsubscribes (or subscribes) from
-    // within its own callback must not mutate the set we are iterating.
-    for (const listener of [...set]) {
-      try {
-        listener(event);
-      } catch (err) {
-        opts.onListenerError?.(err, event.runId);
-      }
+    if (set !== undefined) {
+      for (const listener of [...set]) deliver(listener, event);
+    }
+    if (globalListeners.size > 0) {
+      for (const listener of [...globalListeners]) deliver(listener, event);
     }
   }
 
@@ -79,9 +102,19 @@ export function createRunEventBus(opts: RunEventBusOptions = {}): RunEventBus {
     };
   }
 
+  function subscribeAll(listener: RunEventListener): () => void {
+    globalListeners.add(listener);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      globalListeners.delete(listener);
+    };
+  }
+
   function subscriberCount(runId: string): number {
     return listeners.get(runId)?.size ?? 0;
   }
 
-  return { publish, subscribe, subscriberCount };
+  return { publish, subscribe, subscribeAll, subscriberCount };
 }

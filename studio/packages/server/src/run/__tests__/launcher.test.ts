@@ -21,10 +21,11 @@ import {
   listRuns,
   updateRun,
 } from '../../repo/runs.js';
-import { loadEngineEvents } from '../events.js';
+import { appendEngineEvent, loadEngineEvents } from '../events.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { type DocResolver, type DriveDeps, type Executor } from '../driver.js';
+import { syncRunLifecycle, type DocResolver, type DriveDeps, type Executor } from '../driver.js';
 import { createRunDrives } from '../drives.js';
+import { createRunEventBus, type RunEventBus } from '../event-bus.js';
 import { createRunLauncher, UnboundTriggerError } from '../launcher.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
@@ -104,7 +105,7 @@ function strParam(name: string, def: string): Param {
   return { name, type: 'string', required: false, default: def };
 }
 
-function deps(db: Db, executorOpts: StubExecutorOptions = {}): DriveDeps {
+function deps(db: Db, executorOpts: StubExecutorOptions = {}, bus?: RunEventBus): DriveDeps {
   const resolveDoc: DocResolver = (id) => {
     const pv = getPipelineVersion(db, id);
     if (pv === null) throw new Error(`no pv ${id}`);
@@ -115,6 +116,10 @@ function deps(db: Db, executorOpts: StubExecutorOptions = {}): DriveDeps {
     resolveDoc,
     executor: makeStubExecutor(executorOpts),
     alarms: stubAlarms(),
+    // #629 — most tests pass no bus (launcher does not subscribe → unchanged);
+    // the terminalization-drain tests wire a real bus so the driver's appends
+    // publish through it and the launcher's global hook fires.
+    bus,
     // The REAL registry, not a stub: it is pure in-memory bookkeeping with no I/O
     // to fake, and the launcher's whole use of it (every drive runs under the
     // run's lock) is only meaningful against the real serialization.
@@ -537,6 +542,163 @@ describe('RunLauncher — drainQueue re-checks LIVE concurrency policy (#631)', 
     const runs = listRuns(db, { triggerId: trigger.id });
     expect(runs).toHaveLength(3);
     expect(runs.every((r) => r.status === 'success')).toBe(true); // all drained, none stranded
+  });
+});
+
+describe('RunLauncher — drainQueue on ANY terminalization via the run-event bus (#629)', () => {
+  // A microtask flush: the bus hook DEFERS its drain (the terminal event
+  // publishes BEFORE `runs.status` is synced), so the drain runs one microtask
+  // after the terminalization. The occupier is NOT launcher-driven, so at the
+  // moment of terminalization `inFlight` is empty and a bare `whenIdle()` would
+  // return before the drain even schedules the admitted run — flush first.
+  const flushMicrotasks = () => new Promise((r) => setTimeout(r, 0));
+
+  // Seed a `running` run the launcher did NOT drive — the stand-in for a
+  // previously-parked run that a retry-alarm / external-wait resume is driving to
+  // terminal OUTSIDE the launcher's own `driveRun` (so its settle never reaches
+  // `driveRun`'s `finally`).
+  function seedRunningOccupier(db: Db, triggerId: string, pvId: string): string {
+    const run = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId,
+      parentRunId: null,
+      params: {},
+    });
+    updateRun(db, run.id, { status: 'running' });
+    return run.id;
+  }
+
+  it('a run.finished published for an out-of-launcher run drains that trigger’s queued waiter', async () => {
+    const { db } = freshDb();
+    const bus = createRunEventBus();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const launcher = createRunLauncher(deps(db, {}, bus));
+
+    // An out-of-launcher run holds the single slot; a fresh fire must queue.
+    const occupier = seedRunningOccupier(db, trigger.id, pvId);
+    expect(launcher.fire(trigger).outcome).toBe('queued');
+    expect(
+      listRuns(db, { triggerId: trigger.id }).filter((r) => r.status === 'queued'),
+    ).toHaveLength(1);
+
+    // Terminalize the occupier the way the driver does: PUBLISH `run.finished`
+    // (status still `running` at this instant — a SYNCHRONOUS drain would read
+    // the slot as occupied and admit nothing) THEN sync the row terminal.
+    appendEngineEvent(db, { type: 'run.finished', runId: occupier, outcome: 'success' }, bus);
+    syncRunLifecycle(db, occupier, 'success');
+
+    await flushMicrotasks(); // let the deferred drain run + schedule the admitted run
+    await launcher.whenIdle();
+
+    const runs = listRuns(db, { triggerId: trigger.id });
+    expect(runs.filter((r) => r.status === 'queued')).toHaveLength(0); // the waiter was admitted
+    // The admitted run drove to success (it is the non-occupier run for this trigger).
+    const admitted = runs.find((r) => r.id !== occupier);
+    expect(admitted?.status).toBe('success');
+  });
+
+  it('also drains on run.interrupted', async () => {
+    const { db } = freshDb();
+    const bus = createRunEventBus();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const launcher = createRunLauncher(deps(db, {}, bus));
+
+    const occupier = seedRunningOccupier(db, trigger.id, pvId);
+    expect(launcher.fire(trigger).outcome).toBe('queued');
+
+    appendEngineEvent(
+      db,
+      { type: 'run.interrupted', runId: occupier, reason: 'drive_failed' },
+      bus,
+    );
+    syncRunLifecycle(db, occupier, 'interrupted');
+
+    await flushMicrotasks();
+    await launcher.whenIdle();
+
+    expect(
+      listRuns(db, { triggerId: trigger.id }).filter((r) => r.status === 'queued'),
+    ).toHaveLength(0);
+  });
+
+  it('a NON-terminal event (node.output) does not drain', async () => {
+    const { db } = freshDb();
+    const bus = createRunEventBus();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const launcher = createRunLauncher(deps(db, {}, bus));
+
+    const occupier = seedRunningOccupier(db, trigger.id, pvId);
+    expect(launcher.fire(trigger).outcome).toBe('queued');
+
+    // A live-progress event frees no slot — the waiter must stay queued.
+    appendEngineEvent(
+      db,
+      { type: 'node.output', runId: occupier, nodeId: 'a', name: 'chunk', value: 1 },
+      bus,
+    );
+
+    await flushMicrotasks();
+    expect(
+      listRuns(db, { triggerId: trigger.id }).filter((r) => r.status === 'queued'),
+    ).toHaveLength(1);
+  });
+
+  it('a terminal event for a trigger-less (child) run is a safe no-op', async () => {
+    const { db } = freshDb();
+    const bus = createRunEventBus();
+    const pvId = seedVersion(db);
+    const launcher = createRunLauncher(deps(db, {}, bus));
+
+    // A `call_pipeline` CHILD run: no trigger, so nothing to drain — the hook must
+    // guard the null triggerId, not throw.
+    const parent = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+    const child = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: parent.id,
+      params: {},
+    });
+    updateRun(db, child.id, { status: 'running' });
+
+    appendEngineEvent(db, { type: 'run.finished', runId: child.id, outcome: 'success' }, bus);
+    syncRunLifecycle(db, child.id, 'success');
+
+    await expect(flushMicrotasks()).resolves.toBeUndefined(); // no throw escapes the microtask
+    launcher.stop();
+  });
+
+  it('stop() unsubscribes the hook: a later terminal event drains nothing', async () => {
+    const { db } = freshDb();
+    const bus = createRunEventBus();
+    const pvId = seedVersion(db);
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId, concurrency: { policy: 'queue' } });
+    const launcher = createRunLauncher(deps(db, {}, bus));
+
+    const occupier = seedRunningOccupier(db, trigger.id, pvId);
+    expect(launcher.fire(trigger).outcome).toBe('queued');
+
+    launcher.stop(); // stop draining (drainQueue also guards `stopped`)
+
+    appendEngineEvent(db, { type: 'run.finished', runId: occupier, outcome: 'success' }, bus);
+    syncRunLifecycle(db, occupier, 'success');
+
+    await flushMicrotasks();
+    // The durable waiter is untouched (a fresh launcher's recoverQueued would pick
+    // it up — S6a's durability guarantee).
+    expect(
+      listRuns(db, { triggerId: trigger.id }).filter((r) => r.status === 'queued'),
+    ).toHaveLength(1);
   });
 });
 
