@@ -16,6 +16,7 @@ import {
   createRun,
   deleteRun,
   getRun,
+  listParsedRuns,
   listRuns,
   nextQueuedRunForTrigger,
   queuedTriggerCandidatesForPipeline,
@@ -445,5 +446,47 @@ describe('per-pipeline admission — #5 S6b', () => {
     expect(picked?.queuedAt).toBe(20);
     // The unscoped pick (per-trigger FIFO, S6a behaviour) still sees the global oldest.
     expect(nextQueuedRunForTrigger(db, t.id)?.queuedAt).toBe(10);
+  });
+});
+
+describe('#646 — listParsedRuns (lenient per-row scan)', () => {
+  it('skips a corrupt row, reports it via onSkip, and still returns the healthy siblings', () => {
+    const { db, sqlite } = freshDb();
+    const version = setupPipelineVersion(db);
+    const good = createRun(db, buildRunInput(version.id));
+    const bad = createRun(db, buildRunInput(version.id));
+    updateRun(db, good.id, { status: 'running' });
+    updateRun(db, bad.id, { status: 'running' });
+    // The hand-edit/legacy-drift vector: invalid stored JSON in a codec column.
+    // Empirically (see listParsedRuns' doc) this throws SyntaxError out of the
+    // strict list's `.all()` itself, killing the WHOLE scan — the failure mode
+    // that aborted server boot.
+    sqlite.prepare('UPDATE runs SET params = ? WHERE id = ?').run('not json', bad.id);
+
+    // The strict list still throws (routes keep their 500-on-poison contract)…
+    expect(() => listRuns(db, { status: 'running' })).toThrow();
+
+    // …the lenient scan isolates the poison row and reports it.
+    const skipped: string[] = [];
+    const rows = listParsedRuns(db, { status: 'running' }, (id, err) => {
+      skipped.push(id);
+      expect(err).toBeInstanceOf(SyntaxError);
+    });
+    expect(rows.map((r) => r.id)).toEqual([good.id]);
+    expect(skipped).toEqual([bad.id]);
+  });
+
+  it('a shape RunSchema rejects (ZodError class) is skipped the same way', () => {
+    const { db, sqlite } = freshDb();
+    const version = setupPipelineVersion(db);
+    const bad = createRun(db, buildRunInput(version.id));
+    updateRun(db, bad.id, { status: 'running' });
+    // Well-formed JSON, wrong shape: params must be an object, not an array.
+    sqlite.prepare('UPDATE runs SET params = ? WHERE id = ?').run('[1,2,3]', bad.id);
+
+    const skipped: string[] = [];
+    const rows = listParsedRuns(db, { status: 'running' }, (id) => skipped.push(id));
+    expect(rows).toEqual([]);
+    expect(skipped).toEqual([bad.id]);
   });
 });

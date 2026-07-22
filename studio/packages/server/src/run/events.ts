@@ -1,3 +1,4 @@
+import { ZodError } from 'zod';
 import {
   EngineEventSchema,
   terminalStatusOf,
@@ -111,13 +112,47 @@ export interface DiagnosticLog {
 }
 
 /**
+ * #646 — a run whose `run_events` log cannot be replayed: some row's `payload`
+ * is invalid stored TEXT (`SyntaxError` — drizzle's json codec is a bare
+ * `JSON.parse`) or a shape `EngineEventSchema` rejects (`ZodError`). PERMANENT
+ * by the #515 classification: stored bytes parse the same way on every read, so
+ * this is definitionally not the transient blip retry/redelivery contracts
+ * exist for. Typed at the SOURCE (the `driver.ts` doctrine: the classification
+ * lives here rather than re-derived by every consumer as a raw
+ * `ZodError || SyntaxError` check) so the boot reconciler can file it as
+ * corruption instead of transient `failed`, and the durable-alarm skeleton can
+ * suppress on it. Any NON-corruption throw (a DB read fault) passes through
+ * `loadEngineEvents` unwrapped — callers' transient handling is unaffected.
+ */
+export class RunLogUnparseableError extends Error {
+  constructor(
+    public readonly runId: string,
+    public readonly cause: unknown,
+  ) {
+    super(
+      `run '${runId}' has an unparseable run_events payload — the log cannot be replayed: ` +
+        (cause instanceof Error ? cause.message : String(cause)),
+    );
+    this.name = 'RunLogUnparseableError';
+  }
+}
+
+/**
  * Replay a run's durable log as the typed `EngineEvent[]` the reducer folds
  * (append order = `seq` ascending, guaranteed by `listRunEvents`). Any row
  * whose `payload` is not a valid `EngineEvent` throws here — the log is the
- * source of truth, so a corrupt entry is a hard error, never a silent skip.
+ * source of truth, so a corrupt entry is a hard error, never a silent skip —
+ * as the typed {@link RunLogUnparseableError} (#646).
  */
 export function loadEngineEvents(db: Db, runId: string): EngineEvent[] {
-  return listRunEvents(db, runId).map((row) => EngineEventSchema.parse(row.payload));
+  try {
+    return listRunEvents(db, runId).map((row) => EngineEventSchema.parse(row.payload));
+  } catch (err) {
+    if (err instanceof ZodError || err instanceof SyntaxError) {
+      throw new RunLogUnparseableError(runId, err);
+    }
+    throw err;
+  }
 }
 
 /**

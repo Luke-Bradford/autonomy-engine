@@ -1751,3 +1751,74 @@ describe('reconcileOnBoot — a run PARKED on a webhook external wait (#4 A13)',
     expect(listPendingWakeups(db)).toEqual(armedBefore);
   });
 });
+
+describe('reconcileOnBoot — #646 stored-state corruption is PERMANENT, filed `corrupt`, and cannot abort boot', () => {
+  it('a corrupt RUN ROW no longer aborts the whole boot — the healthy sibling still reconciles', async () => {
+    const { db, sqlite } = freshDb();
+    // Two crashed runs: one healthy, one whose row is then corrupted.
+    const healthy = await seedCrashedRun(db, [node('a')], [], {
+      nodes: { a: { hang: true, idempotent: true } },
+    });
+    const bad = await seedCrashedRun(db, [node('a')], [], {
+      nodes: { a: { hang: true, idempotent: true } },
+    });
+    // The hand-edit/legacy-drift vector: invalid stored JSON in a codec column.
+    // Pre-#646 this threw SyntaxError out of the strict scan's `.all()` — ABOVE
+    // the #479 per-run catch — and the server FAILED TO BOOT.
+    sqlite.prepare('UPDATE runs SET params = ? WHERE id = ?').run('not json', bad.id);
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor({ nodes: { a: { outcome: 'success' } } }),
+      alarms: stubAlarms(),
+    });
+
+    expect(report.resumed).toEqual([healthy.id]);
+    expect(report.corrupt).toEqual([
+      { runId: bad.id, reason: expect.stringMatching(/^run_row_unparseable:/) as string },
+    ]);
+    // NOT misfiled as transient, and deliberately NOT terminalized (a terminal
+    // fact for an unreadable row would be manufactured — repair-then-resume).
+    expect(report.failed).toEqual([]);
+  });
+
+  it('a corrupt run LOG is filed `corrupt` (permanent), never `failed` (transient-only)', async () => {
+    const { db, sqlite } = freshDb();
+    const run = await seedCrashedRun(db, [node('a')], [], {
+      nodes: { a: { hang: true, idempotent: true } },
+    });
+    // The log is APPEND-ONLY (UPDATE is trigger-blocked): the corruption vector
+    // is a poison appended row (the #642 test precedent).
+    sqlite
+      .prepare(
+        'INSERT INTO run_events (id, run_id, seq, type, payload, ts) VALUES (?, ?, ?, ?, ?, ?)',
+      )
+      .run('evt_poison', run.id, 999, 'x', 'not json', 1_700_000_000_000);
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor({}),
+      alarms: stubAlarms(),
+    });
+
+    expect(report.corrupt).toEqual([
+      { runId: run.id, reason: expect.stringMatching(/^run_log_unparseable:/) as string },
+    ]);
+    expect(report.failed).toEqual([]);
+    // Left running — visible, repairable, deliberately occupying its slot as
+    // the needs-attention signal (see the `corrupt` bucket doc for the cost).
+    expect(getRun(db, run.id)!.status).toBe('running');
+    // And the verdict is STABLE across boots: the same report, not an
+    // accumulating `failed` re-fail.
+    const again = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor({}),
+      alarms: stubAlarms(),
+    });
+    expect(again.corrupt.map((c) => c.runId)).toEqual([run.id]);
+    expect(again.failed).toEqual([]);
+  });
+});

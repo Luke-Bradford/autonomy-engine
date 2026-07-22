@@ -1,4 +1,5 @@
 import { and, asc, count, eq, inArray, sql } from 'drizzle-orm';
+import { ZodError } from 'zod';
 import {
   NewRunSchema,
   RunLifecyclePatchSchema,
@@ -43,7 +44,7 @@ export interface ListRunsFilter {
   status?: RunStatus;
 }
 
-export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
+function listRunsConditions(filter: ListRunsFilter) {
   const conditions = [];
   if (filter.pipelineVersionId !== undefined) {
     conditions.push(eq(runs.pipelineVersionId, filter.pipelineVersionId));
@@ -60,7 +61,11 @@ export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
   if (filter.status !== undefined) {
     conditions.push(eq(runs.status, filter.status));
   }
+  return conditions;
+}
 
+export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
+  const conditions = listRunsConditions(filter);
   const rows =
     conditions.length > 0
       ? db
@@ -70,6 +75,55 @@ export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
           .all()
       : db.select().from(runs).all();
   return rows.map((row) => RunSchema.parse(row));
+}
+
+/**
+ * #646 — `listRuns`, but RESILIENT per row (the `listParsedTriggers`
+ * discipline): a corrupt/legacy/hand-edited row is skipped (and reported via
+ * `onSkip`) instead of throwing out the whole list. The boot reconciler, the
+ * queued-run recovery and the S7 lease sweep use this because their scans sit
+ * ABOVE any per-run fault boundary — one poison `running`/`queued` row
+ * otherwise aborts SERVER BOOT (`reconcileOnBoot`/`recoverQueued` are awaited
+ * unguarded in `index.ts`) or silences the lease heartbeat for every live run.
+ * (`listRuns` stays strict: a route surfacing a poison row as a 500 is right
+ * there.)
+ *
+ * Two phases for the same empirically-verified reason as
+ * `listParsedDueWakeups`: drizzle's `{mode:'json'}` codec (`params`,
+ * `trigger_context`) throws out of `.all()` itself on one invalid-JSON cell, so
+ * per-row leniency needs a codec-free id-only projection first, then a strict
+ * per-id read whose failure is scoped to its own row. Only DETERMINISTIC
+ * corruption (`ZodError`/`SyntaxError` — the #515 classification) is skipped;
+ * any other throw is a genuine DB fault and propagates. A row deleted between
+ * the phases is silently skipped.
+ */
+export function listParsedRuns(
+  db: Db,
+  filter: ListRunsFilter = {},
+  onSkip?: (id: string, err: unknown) => void,
+): Run[] {
+  const conditions = listRunsConditions(filter);
+  const ids = (
+    conditions.length > 0
+      ? db
+          .select({ id: runs.id })
+          .from(runs)
+          .where(and(...conditions))
+          .all()
+      : db.select({ id: runs.id }).from(runs).all()
+  ).map((row) => row.id);
+
+  const parsed: Run[] = [];
+  for (const id of ids) {
+    try {
+      const row = getRun(db, id);
+      if (row !== null) parsed.push(row);
+    } catch (err) {
+      if (err instanceof ZodError || err instanceof SyntaxError) onSkip?.(id, err);
+      else throw err;
+    }
+  }
+  return parsed;
 }
 
 /**

@@ -17,7 +17,7 @@ import {
   countQueuedRunsForTrigger,
   createRun,
   getRun,
-  listRuns,
+  listParsedRuns,
   nextQueuedRunForTrigger,
   queuedTriggerCandidatesForPipeline,
 } from '../repo/runs.js';
@@ -605,8 +605,16 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     // via `driveRun`'s `finally`. Run once at boot, AFTER the reconciler has
     // resumed `running` rows so the per-drain DB active-count already reflects
     // them (no double-admit).
+    // #646 — lenient scan: this runs unguarded at boot (`index.ts`), so one
+    // corrupt `queued` row in a strict whole-list parse would abort SERVER BOOT
+    // — surface 3's exact failure mode through a second door. A skipped row is
+    // logged; its trigger's queue drains past it only if the row is not the
+    // FIFO head (`nextQueuedRunForTrigger` stays strict — a named #646-residual).
     const pipelineIds = new Set<string>();
-    for (const run of listRuns(db, { status: 'queued' })) {
+    const queued = listParsedRuns(db, { status: 'queued' }, (id, err) => {
+      deps.log?.error?.({ err, runId: id }, 'recoverQueued: skipping a corrupt queued run row');
+    });
+    for (const run of queued) {
       const pipelineId = getPipelineIdForVersion(db, run.pipelineVersionId);
       if (pipelineId !== null) pipelineIds.add(pipelineId);
     }

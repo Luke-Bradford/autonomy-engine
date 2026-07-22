@@ -107,8 +107,8 @@ const HOST = '127.0.0.1';
  * due at T is delivered somewhere in [T, T + this). One second is far below the
  * 30s floor `retryIntervalSeconds` enforces, so it is invisible against any
  * retry a doc can actually configure, while keeping the tick cheap — the scan is
- * one indexed query per kind, and `listDueWakeups` returns nothing on an idle
- * system.
+ * one indexed query per kind, and `listParsedDueWakeups` returns nothing on an
+ * idle system.
  */
 const ALARM_TICK_MS = 1_000;
 

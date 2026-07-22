@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { buildDedupeKey, type ArmWakeupInput, type Run } from '@autonomy-studio/shared';
 import { LEASE_TTL_MS, type DriveDeps } from '../run/driver.js';
 import { emptyReconcileReport, reconcileOne } from '../run/reconcile.js';
-import { getRun, listRuns, updateRun } from '../repo/runs.js';
+import { getRun, listParsedRuns, updateRun } from '../repo/runs.js';
+import { RunLogUnparseableError } from '../run/events.js';
 import { armWakeup, getWakeupByKey, supersedeWakeup } from '../repo/scheduled-wakeups.js';
 import type { Db } from '../repo/types.js';
 import type { WakeupFireResult, WakeupHandler } from './alarms.js';
@@ -176,6 +177,22 @@ export function createLeaseService(deps: LeaseServiceDeps): LeaseService {
         deps.log?.warn?.({ runId, report }, 'run_lease: reclaimed a dead-lease run');
       });
     } catch (err) {
+      // #646 — a corrupt run LOG is PERMANENT (typed at the source by
+      // `loadEngineEvents`), so "the sweep will re-arm" below would poison-churn:
+      // every sweep sees the expired lease, bumps the generation, fires, and
+      // `reconcileOne` throws the same error again — one new wakeup row + one
+      // error log per sweep interval per corrupt run, forever. Renew the lease
+      // instead (the held-run treatment): the churn is bounded to once per TTL,
+      // each renewal re-logs the corruption as the needs-attention signal, and
+      // repairing the log makes the next reclaim succeed normally.
+      if (err instanceof RunLogUnparseableError) {
+        renewHeldLease(runId, now());
+        deps.log?.error(
+          { err, runId },
+          'run_lease: run log unparseable — lease renewed, needs repair',
+        );
+        return;
+      }
       // Includes `ReconcileInvariantError`: at boot that crashes the process,
       // but here a throw would land in the clock's floating afterCommit catch
       // as one log line anyway — so log it with the run id attached and rely
@@ -300,7 +317,12 @@ export function createLeaseService(deps: LeaseServiceDeps): LeaseService {
     let rows: Run[];
     const at = now();
     try {
-      rows = listRuns(deps.db, { status: 'running' });
+      // #646 — lenient per row: with the strict list, ONE corrupt `running` row
+      // threw the whole scan into the catch below, silencing the S7 lease
+      // heartbeat for EVERY live run for as long as the row existed.
+      rows = listParsedRuns(deps.db, { status: 'running' }, (id, err) => {
+        deps.log?.error({ err, runId: id }, 'run_lease: sweep skipping a corrupt run row');
+      });
     } catch (err) {
       deps.log?.error({ err }, 'run_lease: sweep scan failed');
       return;
