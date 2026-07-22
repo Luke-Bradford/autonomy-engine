@@ -396,6 +396,75 @@ describe('schedule_tick — ref construction + bounded re-arm (#5 S5b-2, #549)',
     expect(isRefFresh(bounded, buildScheduleTickRef(raw))).toBe(false);
   });
 
+  // #5 S5b (#550) — an interval edit leaves the derived cron IDENTICAL
+  // (`recurrenceToCron` ignores interval), so without `interval` in the ref the
+  // schedule-string + bounds compare would miss it and keep firing on the OLD
+  // cadence. The ref carries `interval` (only when >1) so the edit reads as stale.
+  it('interval carried in the ref ONLY when >1; an interval edit reads as stale', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    const every2 = seedTrigger(db, {
+      pipelineVersionId: pv,
+      recurrence: {
+        frequency: 'day',
+        interval: 2,
+        schedule: { hours: [9] },
+        startTime: '2026-08-01T00:00:00Z',
+      },
+    });
+    expect(buildScheduleTickRef(every2)).toEqual({
+      triggerId: every2.id,
+      schedule: '0 9 * * *',
+      startTime: '2026-08-01T00:00:00Z',
+      interval: '2',
+    });
+    // Edit interval 2 → 3: cron is byte-identical, but the ref's interval changes.
+    const every3 = updateTrigger(db, every2.id, {
+      recurrence: {
+        frequency: 'day',
+        interval: 3,
+        schedule: { hours: [9] },
+        startTime: '2026-08-01T00:00:00Z',
+      },
+    });
+    if (!every3) throw new Error('update failed');
+    expect(every3.schedule).toBe(every2.schedule); // cron genuinely unchanged
+    expect(isRefFresh(every3, buildScheduleTickRef(every2))).toBe(false);
+
+    // interval === 1 OMITS the key — byte-identical to a pre-#550 ref, so a row
+    // armed before this shipped stays fresh on deploy.
+    const every1 = seedTrigger(db, {
+      pipelineVersionId: pv,
+      recurrence: { frequency: 'day', interval: 1, schedule: { hours: [9] } },
+    });
+    expect('interval' in buildScheduleTickRef(every1)).toBe(false);
+  });
+
+  it('a stepped (interval>1) trigger re-arms the NEXT qualifying occurrence, not the next daily slot', () => {
+    const { db } = freshDb();
+    const pv = seedVersion(db);
+    // Every 2 days at 09:00, anchored Aug 1. Deliver the Aug 1 09:00 fire → the next
+    // armed slot must be Aug 3 09:00 (Aug 2 is a skipped, non-qualifying day).
+    const trigger = seedTrigger(db, {
+      pipelineVersionId: pv,
+      recurrence: {
+        frequency: 'day',
+        interval: 2,
+        schedule: { hours: [9] },
+        startTime: '2026-08-01T00:00:00Z',
+      },
+    });
+    const aug1 = Date.parse('2026-08-01T09:00:00Z');
+    const row = armTick(db, trigger, aug1);
+    const launcher = fakeLauncher();
+    const handler = createScheduleTickHandler({ launcher, log: silentLog() });
+    const result = handler.fire(row, { scheduledFor: aug1, firedAt: aug1, latenessMs: 0 }, db);
+    expect(result.status).toBe('fired');
+    const armed = pendingTicks(db).filter((w) => w.id !== row.id);
+    expect(armed).toHaveLength(1);
+    expect(armed[0]?.dueAt).toBe(Date.parse('2026-08-03T09:00:00Z'));
+  });
+
   it('a fresh bounded trigger fires and re-arms the NEXT in-window occurrence', () => {
     const { db } = freshDb();
     const pv = seedVersion(db);

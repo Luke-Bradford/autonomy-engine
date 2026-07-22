@@ -148,3 +148,124 @@ describe('nextOccurrence — start/end bounds (a half-open firing window)', () =
     expect(nextOccurrence(daily9, from, {})).toBe(nextOccurrence(daily9, from));
   });
 });
+
+/**
+ * #5 S5b (#550) — `interval > 1` ("every N periods"). The compiled cron carries
+ * only the within-period pattern; `step` gates fires to the QUALIFYING periods —
+ * those an integer multiple of `interval` periods from the `startTime` anchor.
+ * The anchor is also the `startAt` bound, so the series' period 0 is the anchor's
+ * period and the first fire is the first qualifying occurrence at/after it.
+ *
+ * The week rule is studio's DOCUMENTED semantics (spec: startTime-ANCHORED, not
+ * period-grid-anchored): a "week" is a rolling 7-day block counted from the
+ * anchor's calendar day. These tests pin concrete UTC dates so a change to that
+ * interpretation fails loudly rather than silently shifting a series.
+ */
+describe('nextOccurrence — interval > 1 stepping (every-N-period, startTime-anchored)', () => {
+  const at = (iso: string) => Date.parse(iso);
+
+  it('every 2 days at 09:00, anchored Aug 1 → Aug 1, 3, 5 (odd days skipped)', () => {
+    const anchor = at('2026-08-01T00:00:00Z');
+    const step = { frequency: 'day' as const, interval: 2, anchorEpochMs: anchor };
+    const bounds = { startAt: anchor };
+    expect(nextOccurrence('0 9 * * *', anchor, bounds, step)).toBe(at('2026-08-01T09:00:00Z'));
+    expect(nextOccurrence('0 9 * * *', at('2026-08-01T09:00:00Z'), bounds, step)).toBe(
+      at('2026-08-03T09:00:00Z'),
+    );
+    expect(nextOccurrence('0 9 * * *', at('2026-08-03T09:00:00Z'), bounds, step)).toBe(
+      at('2026-08-05T09:00:00Z'),
+    );
+  });
+
+  it('every 15 minutes, anchored 12:03 → 12:03, 12:18, 12:33 (from a per-minute cron)', () => {
+    const anchor = at('2026-08-01T12:03:00Z');
+    const step = { frequency: 'minute' as const, interval: 15, anchorEpochMs: anchor };
+    const bounds = { startAt: anchor };
+    // from BEFORE the anchor: the first fire is the anchor slot itself (inclusive).
+    expect(nextOccurrence('* * * * *', at('2026-08-01T12:00:00Z'), bounds, step)).toBe(
+      at('2026-08-01T12:03:00Z'),
+    );
+    expect(nextOccurrence('* * * * *', at('2026-08-01T12:03:00Z'), bounds, step)).toBe(
+      at('2026-08-01T12:18:00Z'),
+    );
+    expect(nextOccurrence('* * * * *', at('2026-08-01T12:18:00Z'), bounds, step)).toBe(
+      at('2026-08-01T12:33:00Z'),
+    );
+  });
+
+  it('every 2 weeks on Mon & Wed at 08:00, anchored Mon Aug 3 → both days in weeks 0 and 2, none in week 1', () => {
+    const anchor = at('2026-08-03T00:00:00Z'); // a Monday
+    const step = { frequency: 'week' as const, interval: 2, anchorEpochMs: anchor };
+    const bounds = { startAt: anchor };
+    const cron = '0 8 * * 1,3';
+    // Week block 0 (Aug 3–9): Mon Aug 3, Wed Aug 5 both fire.
+    expect(nextOccurrence(cron, at('2026-08-03T00:00:00Z'), bounds, step)).toBe(
+      at('2026-08-03T08:00:00Z'),
+    );
+    expect(nextOccurrence(cron, at('2026-08-03T08:00:00Z'), bounds, step)).toBe(
+      at('2026-08-05T08:00:00Z'),
+    );
+    // Week block 1 (Aug 10–16): Mon Aug 10 & Wed Aug 12 are SKIPPED — the next fire
+    // jumps to week block 2's Monday, Aug 17.
+    expect(nextOccurrence(cron, at('2026-08-05T08:00:00Z'), bounds, step)).toBe(
+      at('2026-08-17T08:00:00Z'),
+    );
+    expect(nextOccurrence(cron, at('2026-08-17T08:00:00Z'), bounds, step)).toBe(
+      at('2026-08-19T08:00:00Z'),
+    );
+  });
+
+  it('every 2 months on the 1st, anchored Jan → Jan, Mar, May (calendar-month stepping)', () => {
+    const anchor = at('2026-01-01T00:00:00Z');
+    const step = { frequency: 'month' as const, interval: 2, anchorEpochMs: anchor };
+    const bounds = { startAt: anchor };
+    const cron = '0 0 1 * *';
+    // Seed from BEFORE the anchor: the inclusive startAt admits the Jan 1 00:00 slot
+    // (croner's nextRun is strictly-after, so from == the occurrence would skip it).
+    expect(nextOccurrence(cron, at('2025-12-15T00:00:00Z'), bounds, step)).toBe(
+      at('2026-01-01T00:00:00Z'),
+    );
+    expect(nextOccurrence(cron, at('2026-01-01T00:00:00Z'), bounds, step)).toBe(
+      at('2026-03-01T00:00:00Z'),
+    );
+    expect(nextOccurrence(cron, at('2026-03-01T00:00:00Z'), bounds, step)).toBe(
+      at('2026-05-01T00:00:00Z'),
+    );
+  });
+
+  it('a qualifying period that NEVER contains an occurrence → null (no spin, honest exhaustion)', () => {
+    // Every 12 months on the 30th, anchored February. The only qualifying months are
+    // Februaries, which never have a 30th, so croner emits the 30th of NON-qualifying
+    // months forever — the step calculator jumps past each and, finding no qualifying
+    // occurrence within its probe budget, returns null (settles the chain) rather than
+    // looping. (Contrast: interval 1 would fire the 30th of every OTHER month.)
+    const anchor = at('2026-02-01T00:00:00Z');
+    const step = { frequency: 'month' as const, interval: 12, anchorEpochMs: anchor };
+    expect(nextOccurrence('0 0 30 * *', anchor, { startAt: anchor }, step)).toBeNull();
+  });
+
+  it('stopAt still bounds a stepped series (Aug 1, 3 fire; Aug 5 == stopAt is excluded)', () => {
+    const anchor = at('2026-08-01T00:00:00Z');
+    const step = { frequency: 'day' as const, interval: 2, anchorEpochMs: anchor };
+    const bounds = { startAt: anchor, stopAt: at('2026-08-05T09:00:00Z') };
+    expect(nextOccurrence('0 9 * * *', at('2026-08-03T09:00:00Z'), bounds, step)).toBeNull();
+  });
+
+  it('interval 1 via step is identical to no step (the every-period base case)', () => {
+    const anchor = at('2026-08-01T00:00:00Z');
+    const step = { frequency: 'day' as const, interval: 1, anchorEpochMs: anchor };
+    const from = at('2026-08-01T12:00:00Z');
+    expect(nextOccurrence('0 9 * * *', from, {}, step)).toBe(nextOccurrence('0 9 * * *', from));
+  });
+
+  it('a step with a NaN anchor (write-impossible interval>1 without startTime) fails closed', () => {
+    // The write schema requires startTime for interval>1, so this is unreachable via
+    // authoring; a hand-edited/imported row could still carry it. Fail CLOSED with a
+    // typed error (callers suppress + settle) rather than silently over-firing every
+    // period or spinning the clock.
+    const step = { frequency: 'day' as const, interval: 2, anchorEpochMs: Number.NaN };
+    expect(() => nextOccurrence('0 9 * * *', at('2026-08-01T00:00:00Z'), {}, step)).toThrow(
+      InvalidScheduleError,
+    );
+  });
+});

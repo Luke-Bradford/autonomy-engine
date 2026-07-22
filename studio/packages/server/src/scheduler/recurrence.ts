@@ -1,4 +1,5 @@
 import { Cron } from 'croner';
+import type { RecurrenceFrequency } from '@autonomy-studio/shared';
 
 /**
  * #5 S5 — croner as a RECURRENCE CALCULATOR, not a firing source.
@@ -49,6 +50,86 @@ export interface OccurrenceBounds {
 }
 
 /**
+ * #5 S5b (#550) — "every N periods" stepping. The compiled cron carries only the
+ * WITHIN-period pattern (which minutes/hours/days); `step` gates fires to the
+ * QUALIFYING periods — those an integer multiple of `interval` periods from the
+ * `anchorEpochMs`. Absent (or `interval <= 1`) → every period fires, exactly the
+ * pre-#550 behaviour.
+ *
+ * The anchor is the recurrence's `startTime` (also the `startAt` bound), so period
+ * 0 is the anchor's period and every qualifying period is `k·interval` after it.
+ * `frequency` fixes the period UNIT; a period's ordinal is computed relative to the
+ * anchor so "every 2 weeks from a Wednesday" is 7-day blocks from that Wednesday —
+ * studio's DOCUMENTED startTime-anchored semantics (the spec rejects the
+ * period-grid anchoring that cron-step "slash-N" syntax would give).
+ */
+export interface OccurrenceStep {
+  frequency: RecurrenceFrequency;
+  interval: number;
+  anchorEpochMs: number;
+}
+
+const MINUTE_MS = 60_000;
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+
+/**
+ * Safety backstop for the stepping probe: the maximum number of qualifying periods
+ * to look ahead before declaring the series exhausted (`null`). A well-formed
+ * recurrence lands its next fire in the first qualifying period; only one whose
+ * qualifying periods NEVER contain a valid occurrence (e.g. the 30th every 12
+ * months — the only qualifying months are Februaries, which have no 30th) probes to
+ * the cap. `MAX_RECURRENCE_INTERVAL` (write cap) bounds how FAR apart qualifying
+ * periods are; this bounds how MANY are probed. 1000 periods is generous
+ * head-room over any real cadence.
+ */
+const MAX_PERIOD_PROBES = 1000;
+
+/**
+ * The period model for a `frequency`, anchored at `anchor`:
+ *  - `ordinal(ms)` = which period (relative to the anchor's period) an instant is
+ *    in — 0 for the anchor's own period, increasing forward. Qualifying ⇔
+ *    `ordinal % interval === 0`.
+ *  - `startInstant(rel)` = the epoch-ms START of the period `rel` steps after the
+ *    anchor's period — the instant the jump seeks the first occurrence at/after.
+ * All computed in UTC (matching the whole firing chain's UTC contract); the
+ * fixed-length units (minute/hour/day/week) are pure integer arithmetic with no
+ * DST/leap hazard, and month is calendar arithmetic on UTC year/month.
+ */
+function periodModel(
+  frequency: RecurrenceFrequency,
+  anchor: number,
+): { ordinal: (ms: number) => number; startInstant: (rel: number) => number } {
+  if (frequency === 'month') {
+    const anchorOrd = new Date(anchor).getUTCFullYear() * 12 + new Date(anchor).getUTCMonth();
+    return {
+      ordinal: (ms) => {
+        const d = new Date(ms);
+        return d.getUTCFullYear() * 12 + d.getUTCMonth() - anchorOrd;
+      },
+      startInstant: (rel) => {
+        const abs = anchorOrd + rel;
+        return Date.UTC(Math.floor(abs / 12), abs % 12, 1);
+      },
+    };
+  }
+  if (frequency === 'week') {
+    // A "week" is a rolling 7-day block from the anchor's calendar DAY (UTC).
+    const anchorDay = Math.floor(anchor / DAY_MS);
+    return {
+      ordinal: (ms) => Math.floor((Math.floor(ms / DAY_MS) - anchorDay) / 7),
+      startInstant: (rel) => (anchorDay + rel * 7) * DAY_MS,
+    };
+  }
+  const unit = frequency === 'minute' ? MINUTE_MS : frequency === 'hour' ? HOUR_MS : DAY_MS;
+  const anchorOrd = Math.floor(anchor / unit);
+  return {
+    ordinal: (ms) => Math.floor(ms / unit) - anchorOrd,
+    startInstant: (rel) => (anchorOrd + rel) * unit,
+  };
+}
+
+/**
  * The next fire time STRICTLY AFTER `fromEpochMs` and within the (optional) bounds
  * window, as epoch ms, or `null` if the schedule has no further occurrence (a
  * finite one-shot in the past, or the `[startAt, stopAt)` window is exhausted).
@@ -88,14 +169,31 @@ export interface OccurrenceBounds {
  * sub-second-early slot, exclusive end): a croner upgrade that changed floor or
  * exclusivity fails those tests LOUDLY at CI rather than mis-enforcing a window.
  *
+ * ## `step` (#5 S5b, #550) — "every N periods"
+ *
+ * With a `step` whose `interval > 1`, only occurrences in QUALIFYING periods fire.
+ * The cron enumerates the within-period pattern; this walks it forward, and on a
+ * non-qualifying candidate JUMPS croner to the start of the next qualifying period
+ * rather than enumerating every skipped occurrence — so the work per fire is
+ * O(periods skipped), not O(occurrences skipped), independent of how dense the
+ * within-period pattern is. A qualifying period with no occurrence (e.g. the 30th
+ * of a February) advances to the next; if none is found within `MAX_PERIOD_PROBES`
+ * (or croner exhausts a finite/bounded schedule), the result is `null` — the same
+ * "nothing more to arm" a finite schedule yields, settling the chain rather than
+ * spinning.
+ *
  * @throws {InvalidScheduleError} if `schedule` is not a cron string croner can
  *   parse (a malformed bound would also surface here — but callers pass
- *   `z.string().datetime()`-validated bounds, so that path is a belt).
+ *   `z.string().datetime()`-validated bounds, so that path is a belt), OR if a
+ *   `step` with `interval > 1` carries a non-finite `anchorEpochMs` (a
+ *   write-impossible interval>1-without-startTime row — fail CLOSED, never
+ *   over-fire).
  */
 export function nextOccurrence(
   schedule: string,
   fromEpochMs: number,
   bounds: OccurrenceBounds = {},
+  step?: OccurrenceStep,
 ): number | null {
   let cron: Cron;
   try {
@@ -114,6 +212,38 @@ export function nextOccurrence(
   } catch (err) {
     throw new InvalidScheduleError(schedule, err);
   }
-  const next = cron.nextRun(new Date(fromEpochMs));
-  return next === null ? null : next.getTime();
+
+  // No stepping (absent, or the every-period base case): the plain calculator.
+  if (step === undefined || step.interval <= 1) {
+    const next = cron.nextRun(new Date(fromEpochMs));
+    return next === null ? null : next.getTime();
+  }
+
+  // #550 — every-N-period stepping. A non-finite anchor is write-impossible (the
+  // write schema requires startTime for interval>1) but a corrupt/imported row
+  // could reach here; fail closed rather than mis-fire.
+  if (!Number.isFinite(step.anchorEpochMs)) {
+    throw new InvalidScheduleError(schedule, new Error('interval > 1 requires a finite anchor'));
+  }
+  const { ordinal, startInstant } = periodModel(step.frequency, step.anchorEpochMs);
+  let candidate = cron.nextRun(new Date(fromEpochMs));
+  for (let probes = 0; candidate !== null && probes < MAX_PERIOD_PROBES; probes++) {
+    const rel = ordinal(candidate.getTime());
+    // Qualifying ⇔ a NON-NEGATIVE multiple of `interval` from the anchor. The
+    // `rel >= 0` half matters only defensively: production always pairs `step`
+    // with `startAt === anchor` (both derive from `startTime` — see
+    // `recurrenceStep`/`scheduleBounds`), so croner never returns a candidate
+    // before the anchor and `rel >= 0` holds. Were a caller to pass `step` with no
+    // `startAt`, JS's negative modulo (`-2 % 2 === 0`) would otherwise false-qualify
+    // a pre-anchor period; the guard rejects it and the jump below advances to
+    // period 0 (the anchor's period).
+    if (rel >= 0 && rel % step.interval === 0) return candidate.getTime();
+    // Jump croner to the start of the next qualifying period (the first multiple of
+    // `interval` strictly after this candidate's period). `startInstant - 1ms`
+    // reuses the inclusive-boundary compensation so an occurrence exactly at the
+    // period start is not skipped.
+    const nextQualifying = (Math.floor(rel / step.interval) + 1) * step.interval;
+    candidate = cron.nextRun(new Date(startInstant(nextQualifying) - 1));
+  }
+  return null;
 }
