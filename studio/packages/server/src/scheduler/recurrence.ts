@@ -137,13 +137,19 @@ function periodModel(
 
   if (zoneAware) {
     // One formatter for the whole model (construction is the costly part; reuse it).
-    // Only Y/M/D is extracted — never the hour — so the ICU "24:00 vs 00:00" midnight
-    // quirk cannot bite, and the whole model needs only the local calendar date.
+    // Only Y/M/D — and a `second` for the whole-minute-offset guard in
+    // `localDayStartInstant` (#626) — is extracted; never the HOUR, so the ICU
+    // "24:00 vs 00:00" midnight quirk cannot bite, and the model needs only the local
+    // calendar date. (A `second` field with no `hour`/`minute` IS emitted by this
+    // runtime's ICU — the one non-obvious dependency here, pinned by a test so a future
+    // Node/ICU build that dropped it fails LOUDLY rather than silently `NaN`-ing the
+    // guard.)
     const dtf = new Intl.DateTimeFormat('en-US', {
       timeZone,
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
+      second: '2-digit',
     });
     const localYmd = (ms: number): { y: number; mo: number; d: number } => {
       const parts = dtf.formatToParts(new Date(ms));
@@ -157,24 +163,66 @@ function periodModel(
       const { y, mo, d } = localYmd(ms);
       return Date.UTC(y, mo - 1, d) / DAY_MS;
     };
+    // The zone's local SECOND-of-minute at a MINUTE-ALIGNED UTC instant — which, at
+    // such an instant, IS the sub-minute component of the zone's UTC offset: 0 for
+    // every modern whole-minute IANA offset (including the half/three-quarter-hour
+    // zones — +05:30 Kolkata, +05:45 Kathmandu, +12:45 Chatham are all whole-MINUTE),
+    // and non-zero only for a pre-standardization sub-minute LMT offset (e.g.
+    // America/New_York's −04:56:02 before 1883, whose local second reads 58). The
+    // whole-minute-offset guard below reads it to decide whether a minute-grid boundary
+    // is exact. `Number(...)`, never a `=== '00'` compare: this ICU build renders a
+    // zero second as "0".
+    const localSecondOfMinute = (ms: number): number =>
+      Number(dtf.formatToParts(new Date(ms)).find((p) => p.type === 'second')?.value);
     // The FIRST instant whose local-day number is >= `targetDayNum` — i.e. the exact
-    // instant the target local calendar day BEGINS in `timeZone`. Bisection over a
-    // ±1-day window brackets the boundary for every real IANA offset (|offset| < 24h,
-    // real range +14/-12), and is exact for any DST transition because
-    // `localDayNumber` is monotonic. On a fully-SKIPPED civil day (no local instant
-    // maps to it) this returns the next day's start; the stepping loop re-validates
-    // `ordinal` after the jump, so a skipped qualifying period is just omitted at the
-    // cost of a bounded extra probe or two — never a mis-fire, and the calendar-day
-    // grid keeps subsequent period parity aligned.
+    // instant the target local calendar day BEGINS in `timeZone`, found by MONOTONIC
+    // bisection (exact for any DST transition because `localDayNumber` is monotonic).
+    // On a fully-SKIPPED civil day (no local instant maps to it) this returns the next
+    // day's start; the stepping loop re-validates `ordinal` after the jump, so a
+    // skipped qualifying period is just omitted at the cost of a bounded extra probe or
+    // two — never a mis-fire, and the calendar-day grid keeps subsequent period parity
+    // aligned.
+    //
+    // #626 — bisect on the MINUTE grid, not the ms grid: a modern IANA offset is a
+    // whole number of minutes, so a local-day boundary lands on a minute-aligned UTC
+    // instant, and the minute grid brackets it in ~half the `formatToParts` calls of a
+    // 1ms bisection (~13 vs ~27) — which matters because the outer probe loop is
+    // bounded only by `MAX_PERIOD_PROBES` (1000), so a degenerate never-qualifying
+    // config would otherwise do tens of thousands of `Intl` calls. `targetDayNum ·
+    // DAY_MS ± DAY_MS` is already minute-aligned (DAY_MS = 1440 · MINUTE_MS), so the
+    // bisection runs in integer MINUTES with no rounding.
     const localDayStartInstant = (targetDayNum: number): number => {
-      let lo = targetDayNum * DAY_MS - DAY_MS; // localDayNumber(lo) < targetDayNum
-      let hi = targetDayNum * DAY_MS + DAY_MS; // localDayNumber(hi) >= targetDayNum
-      while (hi - lo > 1) {
-        const mid = lo + Math.floor((hi - lo) / 2);
-        if (localDayNumber(mid) >= targetDayNum) hi = mid;
+      let loMin = (targetDayNum * DAY_MS - DAY_MS) / MINUTE_MS; // localDayNumber(loMin·min) < target
+      let hiMin = (targetDayNum * DAY_MS + DAY_MS) / MINUTE_MS; // localDayNumber(hiMin·min) >= target
+      while (hiMin - loMin > 1) {
+        const midMin = loMin + Math.floor((hiMin - loMin) / 2);
+        if (localDayNumber(midMin * MINUTE_MS) >= targetDayNum) hiMin = midMin;
+        else loMin = midMin;
+      }
+      const hi = hiMin * MINUTE_MS;
+      // WHOLE-MINUTE-OFFSET GUARD. After the loop the true boundary B satisfies
+      // localDayNumber(hi − MINUTE_MS) < target <= localDayNumber(hi), so B ∈
+      // (hi − MINUTE_MS, hi]. When the offset is whole-minute — every reachable
+      // recurrence, since post-1970 IANA offsets AND their DST transitions are all
+      // minute-aligned in UTC — B is minute-aligned, and the only minute-aligned
+      // instant in that half-open interval is `hi`, so B = hi exactly and a
+      // minute-aligned UTC instant then reads local second 0. A NON-zero second means
+      // the offset carries a sub-minute component (a pre-standardization LMT era), so
+      // the boundary may fall strictly inside the last minute: fall back to an exact
+      // 1ms bisection of that final minute, preserving the pre-#626 exactness. The one
+      // uncovered sliver is a sub-minute DST *transition* landing inside the last minute
+      // while `hi` itself still reads second 0 — bounded to pre-standardization
+      // transition days no real recurrence anchors to (the same era the model already
+      // dismisses), never a live gap.
+      if (localSecondOfMinute(hi) === 0) return hi;
+      let lo = hi - MINUTE_MS; // == loMin·MINUTE_MS: localDayNumber(lo) < target (loop invariant)
+      let h = hi;
+      while (h - lo > 1) {
+        const mid = lo + Math.floor((h - lo) / 2);
+        if (localDayNumber(mid) >= targetDayNum) h = mid;
         else lo = mid;
       }
-      return hi;
+      return h;
     };
 
     if (frequency === 'month') {

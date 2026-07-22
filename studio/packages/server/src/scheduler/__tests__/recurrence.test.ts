@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InvalidScheduleError, nextOccurrence } from '../recurrence.js';
 
 /**
@@ -572,5 +572,84 @@ describe('nextOccurrence — zone-aware interval > 1 stepping (#623)', () => {
     expect(nextOccurrence('0 9 * * *', at('2026-08-01T09:00:00Z'), bounds, step)).toBe(
       at('2026-08-03T09:00:00Z'),
     );
+  });
+});
+
+/**
+ * #626 — the zone-aware `localDayStartInstant` bisects a ±1-day window to find the
+ * exact UTC instant a local calendar day begins. It now bisects on the MINUTE grid
+ * (a modern IANA offset is whole-minute, so the boundary is minute-aligned) guarded
+ * by a whole-minute check that falls back to exact 1ms bisection for a rare
+ * pre-standardization sub-minute LMT offset. These pin (a) the reduced `Intl` call
+ * count, (b) the ICU dependency the guard rests on, and (c) that the sub-minute
+ * FALLBACK stays exact — the correctness the perf win must not cost.
+ */
+describe('nextOccurrence — zone-aware bisection Intl-call bound (#626)', () => {
+  const at = (iso: string) => Date.parse(iso);
+  const NY = 'America/New_York';
+  afterEach(() => vi.restoreAllMocks());
+
+  it('bounds formatToParts for a zone-aware step — minute-grid bisection halves the 1ms count', () => {
+    // A one-jump every-2-day NY step: `startInstant` resolves ONE local-day boundary.
+    // The pre-#626 1ms bisection cost 52 `formatToParts` total for this scenario; the
+    // minute-grid bisection + guard costs 37. Assert a threshold strictly BETWEEN — so
+    // this fails LOUDLY both on a regression to the 1ms grid (52 > 45) and if the
+    // boundary bisection is ever removed/short-circuited (far fewer). Not a microbench:
+    // a fixed call count for a fixed scenario, the exact "iteration-count
+    // characterization" the ticket asks for.
+    const spy = vi.spyOn(Intl.DateTimeFormat.prototype, 'formatToParts');
+    const anchor = at('2026-03-02T05:00:00Z');
+    const step = { frequency: 'day' as const, interval: 2, anchorEpochMs: anchor };
+    const bounds = { startAt: anchor };
+    spy.mockClear();
+    const next = nextOccurrence('0 9 * * *', at('2026-03-02T14:00:00Z'), bounds, step, NY);
+    expect(next).toBe(at('2026-03-04T14:00:00Z')); // still correct
+    expect(spy.mock.calls.length).toBeLessThan(45);
+    expect(spy.mock.calls.length).toBeGreaterThan(20); // not accidentally skipping the boundary
+  });
+
+  it('the ICU build emits a `second` part with no hour/minute — the whole-minute guard depends on it', () => {
+    // The guard reads local second-of-minute from a formatter carrying only Y/M/D +
+    // `second` (never `hour`, to dodge the ICU 24:00 midnight quirk). Some ICU builds
+    // drop `second` when neither `hour` nor `minute` is present; THIS runtime does not.
+    // Pin it: a future Node/ICU that dropped it would silently `NaN` the guard (making
+    // it never take the fast path — a perf regression, not a correctness one, but still
+    // worth catching), so fail loudly here instead.
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: NY,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      second: '2-digit',
+    }).formatToParts(new Date(at('2026-07-01T12:00:00Z')));
+    const second = parts.find((p) => p.type === 'second');
+    expect(second).toBeDefined();
+    expect(Number(second!.value)).toBe(0); // minute-aligned UTC, whole-minute modern offset → 0
+  });
+
+  it('stays EXACT for a sub-minute LMT offset — the fallback path (America/New_York 1883, −04:56:02)', () => {
+    // Before 1883-11-18 New York ran on LMT −04:56:02, a SUB-minute offset: a local-day
+    // boundary (local midnight) lands at a non-minute UTC instant (…04:56:02Z), so the
+    // whole-minute guard reads a non-zero second (58) and MUST fall back to 1ms bisection.
+    // A `0 0 * * *` (midnight) fire makes the boundary precision load-bearing: the fire
+    // IS the boundary, so a minute-grid boundary off by 58s would push croner PAST the
+    // occurrence and skip it. Verified: with the fallback removed this sequence diverges
+    // wildly (the 2nd fire jumps from June to November, into the post-standardization
+    // whole-minute era). Pinned to exact ms.
+    const anchor = Date.UTC(1883, 5, 1) + (4 * 3600 + 56 * 60 + 2) * 1000; // 1883-06-01 00:00 local NY
+    const step = { frequency: 'day' as const, interval: 2, anchorEpochMs: anchor };
+    const bounds = { startAt: anchor };
+    const expected = [
+      '1883-06-01T04:56:02Z',
+      '1883-06-03T04:56:02Z',
+      '1883-06-05T04:56:02Z',
+      '1883-06-07T04:56:02Z',
+    ];
+    let from = anchor - 1;
+    for (const iso of expected) {
+      const next = nextOccurrence('0 0 * * *', from, bounds, step, NY);
+      expect(next).toBe(at(iso));
+      from = next!;
+    }
   });
 });
