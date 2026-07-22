@@ -3396,6 +3396,104 @@ describe('#5 S11d — self-dependency + stale-epoch disposition', () => {
       expect(getWindowState(db, keyFor(trigger, T0 + 2 * MIN15))?.status).toBe('waiting');
     });
 
+    it('a multi-window dependency interval requires EVERY covered position (one failed among succeeded blocks)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      // Interval = 3 windows: W3 depends on W0 + W1 + W2.
+      const config: WindowConfig = {
+        ...CONFIG,
+        selfDependency: { offsetInSeconds: -2700, sizeInSeconds: 2700 },
+      };
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: config });
+      windowInStatus(db, trigger, 0, 'succeeded');
+      windowInStatus(db, trigger, 1, 'failed');
+      windowInStatus(db, trigger, 2, 'succeeded');
+      seedWindow(db, trigger, 3);
+      const { launcher, service: svc } = service(db);
+
+      svc.reconcile();
+
+      expect(launcher.fires).toHaveLength(0);
+      expect(getWindowState(db, keyFor(trigger, T0 + 3 * MIN15))?.status).toBe('waiting');
+    });
+
+    it('a multi-window interval with a HOLE among present rows fires when the hole is dispositioned (the missing-position walk)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const config: WindowConfig = {
+        ...CONFIG,
+        selfDependency: { offsetInSeconds: -2700, sizeInSeconds: 2700 },
+      };
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: config });
+      // W3 depends on W0 + W1 + W2; W1 has NO row (permanently skipped,
+      // closed — forward-only disposition). rows(2) < required(3), and the
+      // largest-missing walk must step past W2's present row to find W1.
+      windowInStatus(db, trigger, 0, 'succeeded');
+      windowInStatus(db, trigger, 2, 'succeeded');
+      seedWindow(db, trigger, 3);
+      const { launcher, service: svc } = service(db);
+
+      svc.reconcile();
+
+      expect(launcher.contexts.map((c) => c?.scheduledTime)).toEqual([iso(T0 + 4 * MIN15)]);
+      expect(getWindowState(db, keyFor(trigger, T0 + 3 * MIN15))?.status).toBe('running');
+    });
+
+    it('an UNALIGNED offset straddles into the partial window — the straddled row still counts', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      // offset -1000s, size defaulted to 900s: for W2 the interval
+      // [W2.start-1000, W2.start-100) intersects BOTH W0 (partially, the
+      // straddle) and W1 — a `windowStartGte: interval-start` fetch would
+      // silently drop W0.
+      const config: WindowConfig = { ...CONFIG, selfDependency: { offsetInSeconds: -1000 } };
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: config });
+      windowInStatus(db, trigger, 0, 'failed');
+      windowInStatus(db, trigger, 1, 'succeeded');
+      seedWindow(db, trigger, 2);
+      const { launcher, service: svc } = service(db);
+
+      svc.reconcile();
+
+      // Blocked by the straddled FAILED W0.
+      expect(launcher.fires).toHaveLength(0);
+      expect(getWindowState(db, keyFor(trigger, T0 + 2 * MIN15))?.status).toBe('waiting');
+
+      // With the straddled row succeeded instead, the same shape fires.
+      const { db: db2 } = freshDb();
+      const pv2 = seedVersion(db2);
+      const trigger2 = seedTumbling(db2, { pipelineVersionId: pv2, window: config });
+      windowInStatus(db2, trigger2, 0, 'succeeded');
+      windowInStatus(db2, trigger2, 1, 'succeeded');
+      seedWindow(db2, trigger2, 2);
+      const second = service(db2);
+      second.service.reconcile();
+      expect(second.launcher.fires).toHaveLength(1);
+      expect(getWindowState(db2, keyFor(trigger2, T0 + 2 * MIN15))?.status).toBe('running');
+    });
+
+    it('a dependency-blocked OLDEST backfill window HOLDS the serial drain (no skip-ahead)', () => {
+      const { db } = freshDb();
+      const pv = seedVersion(db);
+      const config: WindowConfig = { ...DEP_SKIP, maxBackfillWindows: 10 };
+      const trigger = seedTumbling(db, { pipelineVersionId: pv, window: config });
+      if (!isTumblable(trigger)) throw new Error('fixture must be tumblable');
+      // Deps as rows so the cursor rule is not in play.
+      windowInStatus(db, trigger, 0, 'failed'); // blocks W2
+      windowInStatus(db, trigger, 1, 'succeeded'); // would ready W3
+      seedWindow(db, trigger, 2, 'backfill');
+      seedWindow(db, trigger, 3, 'backfill');
+      const { launcher, service: svc } = service(db);
+
+      svc.reconcile();
+
+      // The serial gate takes the OLDEST backfill window only; blocked ⇒ the
+      // drain holds — W3 is NOT fired out of order past it.
+      expect(launcher.fires).toHaveLength(0);
+      expect(getWindowState(db, keyFor(trigger, T0 + 2 * MIN15))?.status).toBe('waiting');
+      expect(getWindowState(db, keyFor(trigger, T0 + 3 * MIN15))?.status).toBe('waiting');
+    });
+
     it('the link-before-fire heal runs even for a blocked window (the dependency was consumed at fire time)', () => {
       const { db } = freshDb();
       const pv = seedVersion(db);

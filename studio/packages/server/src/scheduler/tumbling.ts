@@ -600,11 +600,19 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     const kLo = Math.max(0, Math.floor((iStart - start0) / size));
     const kHi = Math.ceil((iEnd - start0) / size) - 1;
     if (kHi < kLo) return true; // wholly pre-grid
+    // Range bounds CLAMPED into the representable ISO range (epoch 0 …
+    // 9999-12-31, the S11c `nextAttemptAtMs` clamp's rationale): the stored
+    // shape is read-lenient, so a hand-edited giant offset/size can push a
+    // bound past the ECMAScript Date range, where `toISOString()` THROWS —
+    // which would turn "gate honors a weird stored value" into a logged
+    // error on every pass. No real row lives outside the clamp, so the
+    // query's meaning is unchanged.
+    const clampMs = (ms: number) => Math.min(Math.max(ms, 0), 253_402_300_799_999);
     const rows = listWindowStates(db, {
       triggerId: trigger.id,
       configEpoch: row.configEpoch,
-      windowStartGte: new Date(start0 + kLo * size).toISOString(),
-      windowStartLte: new Date(start0 + kHi * size).toISOString(),
+      windowStartGte: new Date(clampMs(start0 + kLo * size)).toISOString(),
+      windowStartLte: new Date(clampMs(start0 + kHi * size)).toISOString(),
     });
     for (const r of rows) {
       if (r.status !== 'succeeded' && r.status !== 'superseded') return false;
@@ -832,7 +840,7 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     // single pass admits.
     let fired = 0;
     let cursor: string | undefined;
-    for (;;) {
+    live: for (;;) {
       const waiting = listWindowStates(db, {
         triggerId: trigger.id,
         configEpoch: epoch,
@@ -850,12 +858,15 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
           // launcher refusals) is NOT dropped — the excess stays `waiting` and
           // the next window fire / boot reconcile continues the sweep — but
           // the truncation itself must be signalled, not silent (the
-          // no-silent-caps rule; review WARNING on the first S9 pass).
+          // no-silent-caps rule; review WARNING on the first S9 pass). BREAK,
+          // not return: the backfill scan below must still run (its gate,
+          // not the live bound, decides backfill) — pre-S11d the fixed-front
+          // shape fell through here too.
           log.warn(
             { triggerId: trigger.id, batch: MATERIALIZE_BATCH },
-            'tumbling: stranded-window sweep truncated at the batch bound — more waiting windows remain (retried next pass/boot)',
+            'tumbling: stranded-window sweep truncated at the batch bound — more waiting windows remain, some possibly dependency-blocked (retried next pass/boot)',
           );
-          return;
+          break live;
         }
         const outcome = materializeOne(trigger, row);
         if (outcome === 'stop') return;
