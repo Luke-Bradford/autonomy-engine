@@ -52,8 +52,9 @@ import {
  * would be its own hand-list; the honest mitigation is this paragraph.
  *
  * Also not covered: infra tables with no resource schema (`scheduled_wakeups`,
- * `webhook_deliveries`, `run_events`, `connection_quota_state`), whose row shape
- * IS driver-internal and has no 1:1 Zod counterpart by design.
+ * `webhook_deliveries`, `run_events`, `connection_quota_state`, and #5 S9's
+ * `window_events` + `tumbling_window_state`), whose row shape IS
+ * driver-internal and has no 1:1 Zod counterpart by design.
  */
 const CASES: { name: string; table: Parameters<typeof getTableColumns>[0]; schema: z.ZodObject }[] =
   [

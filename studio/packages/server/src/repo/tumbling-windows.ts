@@ -249,6 +249,15 @@ export function rebuildWindowStatus(db: Db, key: WindowKey): WindowStatus | null
  * linked to ANY window (an epoch edit can make two epochs share a boundary
  * instant, and the old epoch's run must never satisfy the new epoch's heal).
  * Oldest first, so a pathological double-fire heals deterministically.
+ *
+ * S10 RE-VERIFY POINT: an UNLINKED old-epoch run at a shared boundary would
+ * satisfy this join too. Unreachable in forward-only S9 (every window's end is
+ * strictly future at creation, while a stray unlinked run's frozen
+ * `scheduledTime` is past by the time another epoch can produce a colliding
+ * window) — but S10 backfill arms PAST windows and breaks that temporal
+ * argument. The fix belongs to S10: persist the window key (epoch) in
+ * `triggerContext` for window fires and add it to this join. (`triggerContext`
+ * carries no epoch field today, so the join cannot be epoch-scoped yet.)
  */
 export function findUnlinkedRunForWindow(
   db: Db,

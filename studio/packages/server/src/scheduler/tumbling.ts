@@ -150,6 +150,14 @@ export function isTumblable(t: Trigger): t is TumblingTrigger {
  * every window on a benign `endTime` extension, and re-epoch every trigger on
  * any future additive config field). Truncated to 16 hex chars (64 bits):
  * collision-irrelevant at per-trigger config-edit cardinality.
+ *
+ * The hash is over the VERBATIM `startTime` string, not its parsed instant —
+ * so a semantically-identical rewrite (`…T00:00:00Z` → `…T00:00:00.000Z`)
+ * mints a new epoch and re-covers the same wall-clock windows under new keys.
+ * Deliberate, spec-consistent ("editing a tumbling trigger mints a new config
+ * epoch" — an `interval` edit re-covers instants the same way), and the
+ * projection dedupes nothing across epochs by design; noted so the class of
+ * "false edit" is a known property, not a surprise.
  */
 export function windowConfigEpoch(config: WindowConfig): string {
   return createHash('sha256')
@@ -466,6 +474,13 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
   };
 
   function seed(trigger: TumblingTrigger): void {
+    // Plain upsert-if-absent arm — the `created===false` guard (#465's trap
+    // shape) is deliberately absent, resting on a temporal argument: a SETTLED
+    // `window_due` row's window always ENDED at or before its settle time,
+    // while seed/re-arm only ever target a window ending strictly after
+    // `now()`, so under a monotonic wall clock the same `(kind, dedupeKey)`
+    // can never recur. (A backwards clock jump could collide once; the chain
+    // then self-heals at the next sync after the clock re-passes the end.)
     const next = firstWindowEndingAfter(trigger.window, now());
     // Exhausted (endTime passed, or a partial trailing window): nothing to arm.
     if (next === null) return;
