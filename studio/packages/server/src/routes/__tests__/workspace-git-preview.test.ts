@@ -9,12 +9,13 @@ import { fixtureGit, seedRemote } from '../../git/__tests__/fixtures.js';
 import { buildTestAppWithContext, type TestApp } from '../../__tests__/build-test-app.js';
 
 /**
- * #3 G4 — the import-preview route against a REAL local bare remote. It reads
- * the COLLABORATION branch (`main`) and reports what the parser recognises —
- * strictly read-only (no DB resource touched, no reconcile). To seed the collab
- * branch with genuine serialized files, we let studio Commit to its working
- * branch, then merge that into `main` in a work clone (exactly a human merging
- * the studio PR).
+ * #3 G4/G5b — the import-preview route against a REAL local bare remote. It reads
+ * the COLLABORATION branch (`main`) and reports what the parser recognises, each
+ * resource carrying its reconcile DISPOSITION vs the DB working copy plus the
+ * pipelines a pull would archive (#3 G5b) — the classify reads DB rows but WRITES
+ * nothing (the apply is G5c). To seed the collab branch with genuine serialized
+ * files, we let studio Commit to its working branch, then merge that into `main`
+ * in a work clone (exactly a human merging the studio PR).
  */
 
 describe('workspace-git import-preview route', () => {
@@ -83,17 +84,61 @@ describe('workspace-git import-preview route', () => {
     expect(result.head).toMatch(/^[0-9a-f]{40}$/);
     expect(result.diagnostics).toEqual([]);
 
+    // The branch holds exactly what the DB serialized, so every resource is
+    // UNCHANGED and nothing is proposed for archive.
+    expect(result.archive).toEqual([]);
     const byKind = Object.fromEntries(result.resources.map((r: { kind: string }) => [r.kind, r]));
     expect(byKind.pipeline).toMatchObject({
       path: 'pipelines/my-pipeline.json',
       resourceId: pipeline.resourceId,
       name: 'My Pipeline',
+      disposition: 'unchanged',
+      nameChanged: false,
+      contentChanged: false,
     });
     expect(byKind.connection).toMatchObject({
       path: 'connections/my-conn.json',
       resourceId: connection.resourceId,
       name: 'My Conn',
+      disposition: 'unchanged',
     });
+  });
+
+  it('classifies a locally-edited pipeline as update and a DB-only pipeline as a proposed archive', async () => {
+    const { remote, work } = seedRemote(testApp.tmpDir);
+    await connect(remote);
+
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Edited' });
+    createPipelineVersion(app.db, {
+      ...baseVersion(pipeline.id),
+      outputs: [{ name: 'before', type: 'string' }],
+    });
+    expect((await commit('author v1')).json().commit.committed).toBe(true);
+    mergeWorkingIntoMain(work);
+
+    // After the commit: author a NEW version of the committed pipeline (a real
+    // content edit) AND a brand-new pipeline that was never committed.
+    createPipelineVersion(app.db, {
+      ...baseVersion(pipeline.id),
+      outputs: [{ name: 'after', type: 'string' }],
+    });
+    const local = createPipeline(app.db, { ownerId: 'local', name: 'Local Only' });
+    createPipelineVersion(app.db, baseVersion(local.id));
+
+    const { preview: result } = (await preview()).json();
+    const edited = result.resources.find(
+      (r: { resourceId: string }) => r.resourceId === pipeline.resourceId,
+    );
+    expect(edited).toMatchObject({ disposition: 'update', contentChanged: true });
+    // The DB-only pipeline is not on the branch, so a pull would archive it.
+    expect(result.archive).toEqual([
+      {
+        path: 'pipelines/local-only.json',
+        kind: 'pipeline',
+        resourceId: local.resourceId,
+        name: 'Local Only',
+      },
+    ]);
   });
 
   it('returns an empty preview when the collaboration branch does not exist yet', async () => {
@@ -103,7 +148,7 @@ describe('workspace-git import-preview route', () => {
 
     const res = await preview();
     expect(res.statusCode).toBe(200);
-    expect(res.json().preview).toEqual({ head: null, resources: [], diagnostics: [] });
+    expect(res.json().preview).toEqual({ head: null, resources: [], archive: [], diagnostics: [] });
   });
 
   it('surfaces a malformed committed file as a diagnostic (not dropped, not a throw)', async () => {

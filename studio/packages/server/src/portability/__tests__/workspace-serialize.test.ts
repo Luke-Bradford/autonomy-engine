@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CATALOG_VERSION, type NewPipelineVersion } from '@autonomy-studio/shared';
 import {
+  archivePipeline,
   createConnection,
   createPipeline,
   createPipelineVersion,
@@ -245,5 +246,116 @@ describe('serializeWorkspace', () => {
     const { db } = freshDb();
     createPipeline(db, { ownerId: 'local', name: 'Empty Shell' });
     expect(serializeWorkspace(db, 'local')).toEqual([]);
+  });
+
+  // #666 / #3 G5b — git represents an archived pipeline as file ABSENCE (the
+  // reconcile delete-classification), so serialize must OMIT it AND its now-
+  // disabled dependent triggers; otherwise archive → Commit → import would
+  // RESURRECT the pipeline on the next round-trip.
+  it('OMITS an archived pipeline (git = file-absence for archive)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'Gone' });
+    createPipelineVersion(db, baseVersion(pipeline.id));
+    archivePipeline(db, pipeline.id);
+
+    expect(serializeWorkspace(db, 'local')).toEqual([]);
+  });
+
+  it('OMITS a trigger bound to an archived pipeline (its disabled dependent)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'Gone' });
+    const version = createPipelineVersion(db, baseVersion(pipeline.id));
+    createTrigger(db, {
+      ownerId: 'local',
+      name: 'Dependent',
+      pipelineVersionId: version.id,
+      params: {},
+      mode: 'manual',
+      schedule: null,
+      webhook: null,
+      concurrency: { policy: 'queue' },
+      runWindows: null,
+      enabled: true,
+    });
+    // archivePipeline disables this trigger; serialize must then omit it (its
+    // pipeline file is absent, so a serialized binding would dangle in git).
+    archivePipeline(db, pipeline.id);
+
+    expect(serializeWorkspace(db, 'local')).toEqual([]);
+  });
+
+  it('still serializes a LIVE pipeline whose call_pipeline targets an archived version (faithful; dangle is import-side)', () => {
+    const { db } = freshDb();
+    const child = createPipeline(db, { ownerId: 'local', name: 'Child' });
+    const childVersion = createPipelineVersion(db, baseVersion(child.id));
+    const parent = createPipeline(db, { ownerId: 'local', name: 'Parent' });
+    createPipelineVersion(db, {
+      ...baseVersion(parent.id),
+      nodes: [
+        {
+          id: 'call1',
+          type: 'call_pipeline',
+          config: {},
+          position: { x: 0, y: 0 },
+          call: { pipelineVersionId: childVersion.id, params: {} },
+        },
+      ],
+    });
+    archivePipeline(db, child.id);
+
+    const files = serializeWorkspace(db, 'local');
+    // The archived child's own file is gone...
+    expect(files.find((f) => f.path.startsWith('pipelines/child'))).toBeUndefined();
+    // ...but the LIVE parent still serializes, its call ref remapped to the
+    // (still-real) version resourceId — the dangle-on-import is G7's charter.
+    const parentEnv = envelopeAt(files, 'pipelines/parent.json');
+    expect(parentEnv.data.versions[0].nodes[0].call.pipelineVersionId).toBe(
+      childVersion.resourceId,
+    );
+  });
+
+  it('leaves an unrelated live trigger untouched when another pipeline is archived', () => {
+    const { db } = freshDb();
+    const archived = createPipeline(db, { ownerId: 'local', name: 'Archived' });
+    createPipelineVersion(db, baseVersion(archived.id));
+    archivePipeline(db, archived.id);
+
+    const live = createPipeline(db, { ownerId: 'local', name: 'Live' });
+    const liveVersion = createPipelineVersion(db, baseVersion(live.id));
+    createTrigger(db, {
+      ownerId: 'local',
+      name: 'Keeper',
+      pipelineVersionId: liveVersion.id,
+      params: {},
+      mode: 'manual',
+      schedule: null,
+      webhook: null,
+      concurrency: { policy: 'queue' },
+      runWindows: null,
+      enabled: true,
+    });
+
+    const files = serializeWorkspace(db, 'local');
+    expect(files.map((f) => f.path).sort()).toEqual([
+      'pipelines/live.json',
+      'triggers/keeper.json',
+    ]);
+    expect(envelopeAt(files, 'triggers/keeper.json').data.pipelineVersionId).toBe(
+      liveVersion.resourceId,
+    );
+  });
+
+  it('does NOT suffix a live pipeline slug just because an archived one shared its name', () => {
+    const { db } = freshDb();
+    const archived = createPipeline(db, { ownerId: 'local', name: 'Report' });
+    createPipelineVersion(db, baseVersion(archived.id));
+    archivePipeline(db, archived.id);
+
+    const live = createPipeline(db, { ownerId: 'local', name: 'Report' });
+    createPipelineVersion(db, baseVersion(live.id));
+
+    // The archived one is omitted, so the live one keeps the clean, un-suffixed
+    // slug (path disambiguation is computed over the EMITTED set only).
+    expect(serializeWorkspace(db, 'local').map((f) => f.path)).toEqual(['pipelines/report.json']);
   });
 });

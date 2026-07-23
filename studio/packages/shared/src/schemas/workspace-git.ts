@@ -237,30 +237,72 @@ export const WorkspaceParseDiagnosticSchema = z.object({
 export type WorkspaceParseDiagnostic = z.infer<typeof WorkspaceParseDiagnosticSchema>;
 
 /**
- * #3 G4 — a resource the parser recognised on the branch, as a PREVIEW SUMMARY
- * (path, kind, stable id, display name) — NOT the full import payload. The
- * preview answers "what would a pull bring in / is the branch well-formed",
- * it does NOT diff against the DB or classify create/update/rename/delete
- * (that is G5's transactional reconcile). `resourceId` is `null` for a
- * pre-G1 file with no stable identity.
+ * #3 G5b — the reconcile DISPOSITION of a resource on the branch, relative to
+ * the DB workspace, matched by stable `resourceId`:
+ * - `create`: no DB resource has this `resourceId` (or the file is pre-G1 with
+ *   no `resourceId` — legacy-no-identity → create-new).
+ * - `unchanged`: a DB resource matches and neither its content NOR its name
+ *   differs — a pull would be a no-op for it.
+ * - `update`: a DB resource matches but its canonical CONTENT differs (a pull
+ *   would mint a new immutable version / upsert). May ALSO be a rename — see the
+ *   independent `nameChanged` flag (a content edit supersedes it in the label).
+ * - `rename`: a DB resource matches, content is identical, only the display
+ *   name (hence the cosmetic file path) differs.
+ * The apply of these dispositions (the transactional write-path) is G5c; this
+ * preview is read-only.
+ */
+export const WorkspaceGitDispositionSchema = z.enum(['create', 'unchanged', 'update', 'rename']);
+export type WorkspaceGitDisposition = z.infer<typeof WorkspaceGitDispositionSchema>;
+
+/**
+ * #3 G4/G5b — a resource the parser recognised on the branch, as a PREVIEW
+ * SUMMARY (path, kind, stable id, display name) carrying its reconcile
+ * `disposition` vs the DB (#3 G5b). `nameChanged`/`contentChanged` are the
+ * independent signals the `disposition` label summarises — kept explicit so a
+ * rename that ALSO edits content loses neither signal (the apply, G5c, needs
+ * both). Both are `false` for a `create` (there is no DB counterpart to diff).
+ * `resourceId` is `null` for a pre-G1 file with no stable identity.
  */
 export const WorkspaceGitPreviewResourceSchema = z.object({
   path: z.string().min(1),
   kind: ExportKindSchema,
   resourceId: z.string().min(1).nullable(),
   name: z.string(),
+  disposition: WorkspaceGitDispositionSchema,
+  nameChanged: z.boolean(),
+  contentChanged: z.boolean(),
 });
 export type WorkspaceGitPreviewResource = z.infer<typeof WorkspaceGitPreviewResourceSchema>;
 
 /**
- * #3 G4 — the `POST /api/workspace/git/import-preview` result: the collab-branch
- * head the preview was parsed at (`null` when the collaboration branch does not
- * exist yet — the empty-repo / first-run state), the recognised resources, and
- * every parse diagnostic. Read-only: no DB resource is touched.
+ * #3 G5b — a DB pipeline the pull would ARCHIVE: it exists (non-archived) in the
+ * DB workspace but its `resourceId` is ABSENT from the branch, i.e. its file was
+ * deleted in git. Only PIPELINES have an archive state (G5a) — a connection or
+ * trigger absent from the branch is DELIBERATELY not surfaced here (its
+ * delete/orphan semantics are undecided in the spec — "never DB-delete on
+ * import" — and are deferred to the G5c apply). `path` is where the pipeline's
+ * file WOULD be, for display continuity with `resources`.
+ */
+export const WorkspaceGitArchiveProposalSchema = z.object({
+  path: z.string().min(1),
+  kind: z.literal('pipeline'),
+  resourceId: z.string().min(1),
+  name: z.string(),
+});
+export type WorkspaceGitArchiveProposal = z.infer<typeof WorkspaceGitArchiveProposalSchema>;
+
+/**
+ * #3 G4/G5b — the `POST /api/workspace/git/import-preview` result: the
+ * collab-branch head the preview was parsed at (`null` when the collaboration
+ * branch does not exist yet — the empty-repo / first-run state), the recognised
+ * resources each carrying its reconcile `disposition` vs the DB, the pipelines a
+ * pull would archive, and every parse diagnostic. Read-only: the classify reads
+ * DB rows but WRITES nothing (the apply is G5c).
  */
 export const WorkspaceGitImportPreviewSchema = z.object({
   head: z.string().min(1).nullable(),
   resources: z.array(WorkspaceGitPreviewResourceSchema),
+  archive: z.array(WorkspaceGitArchiveProposalSchema),
   diagnostics: z.array(WorkspaceParseDiagnosticSchema),
 });
 export type WorkspaceGitImportPreview = z.infer<typeof WorkspaceGitImportPreviewSchema>;
