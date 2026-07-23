@@ -232,3 +232,50 @@ describe('CliGitProvider — G3a commit primitives', () => {
     expect(await provider.hasStagedChanges(checkout)).toBe(true); // the deletion is staged
   });
 });
+
+describe('CliGitProvider — G4 read primitives', () => {
+  /** A checkout with managed files committed on `main`; returns the head sha. */
+  function withCommittedFiles() {
+    const { remote, work } = seedRemote(tmp());
+    mkdirSync(join(work, 'pipelines'));
+    mkdirSync(join(work, 'connections'));
+    writeFileSync(join(work, 'pipelines/a.json'), '{"a":1}');
+    writeFileSync(join(work, 'connections/b.json'), '{"b":2}');
+    writeFileSync(join(work, 'pipelines/keep.gitkeep'), ''); // a non-json file in a managed dir
+    writeFileSync(join(work, 'README.md'), 'root file'); // outside any managed dir
+    fixtureGit(work, ['add', '.']);
+    fixtureGit(work, ['commit', '-m', 'seed managed files']);
+    fixtureGit(work, ['push', 'origin', 'main']);
+    const headSha = fixtureGit(work, ['rev-parse', 'HEAD']).trim();
+
+    const checkout = join(tmp(), 'checkout');
+    execFileSync('git', ['clone', '--quiet', '--origin', 'origin', remote, checkout], {
+      encoding: 'utf8',
+    });
+    return { checkout, headSha };
+  }
+
+  it('lsTreeManaged lists only blobs under the given dirs at a ref (README excluded)', async () => {
+    const provider = new CliGitProvider();
+    const { checkout, headSha } = withCommittedFiles();
+
+    const paths = await provider.lsTreeManaged(checkout, headSha, ['pipelines', 'connections']);
+    expect(paths.sort()).toEqual(
+      ['connections/b.json', 'pipelines/a.json', 'pipelines/keep.gitkeep'].sort(),
+    );
+    // The root README is never under a managed dir.
+    expect(paths).not.toContain('README.md');
+  });
+
+  it('lsTreeManaged returns no entries for a dir absent from the tree (not an error)', async () => {
+    const provider = new CliGitProvider();
+    const { checkout, headSha } = withCommittedFiles();
+    await expect(provider.lsTreeManaged(checkout, headSha, ['triggers'])).resolves.toEqual([]);
+  });
+
+  it('showBlob returns the blob content verbatim (byte-identical)', async () => {
+    const provider = new CliGitProvider();
+    const { checkout, headSha } = withCommittedFiles();
+    await expect(provider.showBlob(checkout, headSha, 'pipelines/a.json')).resolves.toBe('{"a":1}');
+  });
+});

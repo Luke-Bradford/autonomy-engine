@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ExportKindSchema } from '../portability/envelope.js';
 
 /**
  * #3 G2 — the workspace↔git association (Foundation Spec #3, Option A:
@@ -208,3 +209,58 @@ export const WorkspaceGitCommitResultSchema = z.object({
   files: z.array(z.string().min(1)),
 });
 export type WorkspaceGitCommitResult = z.infer<typeof WorkspaceGitCommitResultSchema>;
+
+/**
+ * #3 G4 — one problem the workspace parser found in a committed file. Reported
+ * from the import-preview so a malformed branch is VISIBLE, never silently
+ * dropped (#473 shape). The `message` is a fixed, categorical string keyed by
+ * `code` — deliberately NOT the raw JSON/Zod error text, which could echo
+ * arbitrary committed file content into an API response.
+ * - `unparseable`: not valid JSON / failed envelope upgrade+validation.
+ * - `kind_mismatch`: a valid envelope whose `kind` disagrees with its directory.
+ * - `duplicate_resource_id`: a non-null `resourceId` claimed by 2+ files of a kind.
+ * - `unknown_dir`: a file outside the three managed directories.
+ */
+export const WorkspaceParseDiagnosticCodeSchema = z.enum([
+  'unparseable',
+  'kind_mismatch',
+  'duplicate_resource_id',
+  'unknown_dir',
+]);
+export type WorkspaceParseDiagnosticCode = z.infer<typeof WorkspaceParseDiagnosticCodeSchema>;
+
+export const WorkspaceParseDiagnosticSchema = z.object({
+  path: z.string().min(1),
+  code: WorkspaceParseDiagnosticCodeSchema,
+  message: z.string().min(1),
+});
+export type WorkspaceParseDiagnostic = z.infer<typeof WorkspaceParseDiagnosticSchema>;
+
+/**
+ * #3 G4 — a resource the parser recognised on the branch, as a PREVIEW SUMMARY
+ * (path, kind, stable id, display name) — NOT the full import payload. The
+ * preview answers "what would a pull bring in / is the branch well-formed",
+ * it does NOT diff against the DB or classify create/update/rename/delete
+ * (that is G5's transactional reconcile). `resourceId` is `null` for a
+ * pre-G1 file with no stable identity.
+ */
+export const WorkspaceGitPreviewResourceSchema = z.object({
+  path: z.string().min(1),
+  kind: ExportKindSchema,
+  resourceId: z.string().min(1).nullable(),
+  name: z.string(),
+});
+export type WorkspaceGitPreviewResource = z.infer<typeof WorkspaceGitPreviewResourceSchema>;
+
+/**
+ * #3 G4 — the `POST /api/workspace/git/import-preview` result: the collab-branch
+ * head the preview was parsed at (`null` when the collaboration branch does not
+ * exist yet — the empty-repo / first-run state), the recognised resources, and
+ * every parse diagnostic. Read-only: no DB resource is touched.
+ */
+export const WorkspaceGitImportPreviewSchema = z.object({
+  head: z.string().min(1).nullable(),
+  resources: z.array(WorkspaceGitPreviewResourceSchema),
+  diagnostics: z.array(WorkspaceParseDiagnosticSchema),
+});
+export type WorkspaceGitImportPreview = z.infer<typeof WorkspaceGitImportPreviewSchema>;

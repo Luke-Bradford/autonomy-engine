@@ -1,5 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import { resourceSlug, resourceFilePaths } from './paths.js';
+import {
+  MANAGED_DIRS,
+  RESOURCE_KIND_DIRS,
+  RESOURCE_KINDS,
+  kindForDir,
+  resourceSlug,
+  resourceFilePaths,
+} from './paths.js';
+
+describe('dir↔kind SSOT', () => {
+  it('MANAGED_DIRS is exactly the kind dirs in RESOURCE_KINDS order', () => {
+    expect(MANAGED_DIRS).toEqual(RESOURCE_KINDS.map((k) => RESOURCE_KIND_DIRS[k]));
+    expect(MANAGED_DIRS).toEqual(['pipelines', 'connections', 'triggers']);
+  });
+
+  it('kindForDir is the exact inverse of RESOURCE_KIND_DIRS', () => {
+    for (const kind of RESOURCE_KINDS) {
+      expect(kindForDir(RESOURCE_KIND_DIRS[kind])).toBe(kind);
+    }
+  });
+
+  it('kindForDir returns null for a non-managed directory', () => {
+    expect(kindForDir('runs')).toBeNull();
+    expect(kindForDir('')).toBeNull();
+    expect(kindForDir('pipelines/nested')).toBeNull();
+  });
+});
 
 describe('resourceSlug', () => {
   it('lowercases and collapses non-alphanumeric runs to a single dash', () => {
