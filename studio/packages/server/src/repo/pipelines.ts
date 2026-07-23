@@ -20,6 +20,9 @@ export function createPipeline(db: Db, input: NewPipeline): Pipeline {
     // (the write schemas omit it; no client/patch path may supply one).
     resourceId: newId('res'),
     ...parsed,
+    // #3 G5a — a pipeline is always born un-archived (write schema omits it);
+    // archive is a server-driven lifecycle action, never a create field.
+    archived: false,
     createdAt: now,
     updatedAt: now,
   };
@@ -30,6 +33,24 @@ export function createPipeline(db: Db, input: NewPipeline): Pipeline {
 export function getPipeline(db: Db, id: string): Pipeline | null {
   const row = db.select().from(pipelines).where(eq(pipelines.id, id)).get();
   return row ? PipelineSchema.parse(row) : null;
+}
+
+/**
+ * #3 G5a — the DISPATCH-guard's narrow read: is this pipeline archived? A
+ * single-column projection (NOT `getPipeline`, which strict-parses the whole
+ * row) so the launcher's per-fire guard does not widen the strict-read surface
+ * on a hot path — the boolean column is all the guard needs. Returns `false`
+ * for a missing pipeline (the guard's caller has already resolved a non-null id
+ * from a live version; a vanished row is the drive's doc-resolve fault, not an
+ * archive). `archived` is drizzle boolean-mode, so this reads a real boolean.
+ */
+export function isPipelineArchived(db: Db, id: string): boolean {
+  const row = db
+    .select({ archived: pipelines.archived })
+    .from(pipelines)
+    .where(eq(pipelines.id, id))
+    .get();
+  return row?.archived === true;
 }
 
 export function listPipelines(db: Db, ownerId?: string): Pipeline[] {
@@ -54,6 +75,11 @@ export function listPipelinesPage(db: Db, ownerId: string, args: PageArgs): Pagi
     .where(
       and(
         eq(pipelines.ownerId, ownerId),
+        // #3 G5a — archived pipelines drop off the default list (they are
+        // soft-deleted). They remain reachable by id (`getPipeline`) for
+        // manage/restore surfaces, and the unscoped `listPipelines` primitive
+        // stays UNfiltered so export/serialize still round-trip them.
+        eq(pipelines.archived, false),
         args.cursor ? afterCursor(pipelines.createdAt, pipelines.id, args.cursor) : undefined,
       ),
     )
@@ -79,6 +105,22 @@ export function updatePipeline(
   const existing = getPipeline(db, id);
   if (!existing) return null;
   const updated = PipelineSchema.parse({ ...existing, ...patch, updatedAt: Date.now() });
+  db.update(pipelines).set(updated).where(eq(pipelines.id, id)).run();
+  return updated;
+}
+
+/**
+ * #3 G5a (item ②) — flip a pipeline to ARCHIVED (soft-delete). The low-level
+ * row write only; the caller-facing `archivePipeline` service
+ * (`repo/archive.ts`) wraps this together with disabling dependent triggers in
+ * ONE transaction. Idempotent at the row level (archiving an archived pipeline
+ * re-writes `archived=true`). Returns `null` for "no such pipeline". Archive is
+ * the ONLY mutation of `archived` — no un-archive path ships in G5a.
+ */
+export function archivePipelineRow(db: Db, id: string): Pipeline | null {
+  const existing = getPipeline(db, id);
+  if (!existing) return null;
+  const updated = PipelineSchema.parse({ ...existing, archived: true, updatedAt: Date.now() });
   db.update(pipelines).set(updated).where(eq(pipelines.id, id)).run();
   return updated;
 }

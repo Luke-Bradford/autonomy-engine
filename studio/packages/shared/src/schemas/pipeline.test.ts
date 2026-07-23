@@ -308,6 +308,7 @@ const pipeline = {
   ownerId: null,
   name: 'My pipeline',
   concurrency: null,
+  archived: false,
   createdAt: 1700000000000,
   updatedAt: 1700000000000,
 };
@@ -339,16 +340,34 @@ describe('PipelineSchema', () => {
     expect(PipelineSchema.parse({ ...pipeline, concurrency: 0 }).concurrency).toBe(0);
     expect(PipelineSchema.parse({ ...pipeline, concurrency: 1.5 }).concurrency).toBe(1.5);
   });
+
+  it('#3 G5a — REQUIRES `archived` with NO default (a NOT-NULL column never reads absent; #473)', () => {
+    // A `.default(false)` would manufacture an absent fact — the column is NOT
+    // NULL DEFAULT 0, so a real read always carries the flag. An absent value is
+    // a corrupt row: a loud parse failure, not a silent false.
+    const { archived, ...withoutArchived } = pipeline;
+    void archived;
+    expect(() => PipelineSchema.parse(withoutArchived)).toThrow();
+    expect(PipelineSchema.parse({ ...pipeline, archived: true }).archived).toBe(true);
+  });
 });
 
 describe('NewPipelineSchema', () => {
   it('accepts a payload without server-set fields', () => {
-    const { id, resourceId, createdAt, updatedAt, ...insert } = pipeline;
+    // `archived` is server-set too (#3 G5a — always born false, never a create
+    // field), so it is destructured out alongside id/resourceId/timestamps.
+    const { id, resourceId, archived, createdAt, updatedAt, ...insert } = pipeline;
     void id;
     void resourceId;
+    void archived;
     void createdAt;
     void updatedAt;
     expect(NewPipelineSchema.parse(insert)).toEqual(insert);
+  });
+
+  it('#3 G5a — strips `archived` (server-set, never client-supplied on create)', () => {
+    const parsed = NewPipelineSchema.parse({ ownerId: null, name: 'p', archived: true });
+    expect(parsed).not.toHaveProperty('archived');
   });
 
   // #5 S6b — WRITE path is strict: only a positive integer (or null) cap.

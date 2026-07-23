@@ -146,6 +146,14 @@ export const webhooksRoutes: FastifyPluginAsync = async (fastify) => {
             outcome: 'skipped',
             reason: 'trigger param binding could not be resolved',
           } satisfies WebhookFireResponse);
+        case 'archived':
+          // #3 G5a — the bound pipeline is archived; a permanent decision, so
+          // the delivery was recorded skipped (a verbatim retry dedupes). The
+          // detail is logged server-side, never returned.
+          return reply.status(202).send({
+            outcome: 'skipped',
+            reason: 'pipeline is archived',
+          } satisfies WebhookFireResponse);
         case 'unbound':
           // Defense-in-depth: the write API refuses to enable an unbound
           // trigger, so an enabled-but-unbound webhook should not exist — but

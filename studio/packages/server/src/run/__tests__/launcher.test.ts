@@ -13,8 +13,12 @@ import {
   type Trigger,
   type WindowConfig,
 } from '@autonomy-studio/shared';
-import { createPipeline } from '../../repo/pipelines.js';
-import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
+import { archivePipelineRow, createPipeline } from '../../repo/pipelines.js';
+import {
+  createPipelineVersion,
+  getPipelineIdForVersion,
+  getPipelineVersion,
+} from '../../repo/pipeline-versions.js';
 import { createTrigger, updateTrigger } from '../../repo/triggers.js';
 import { triggers } from '../../db/schema.js';
 import { listRunEvents } from '../../repo/run-events.js';
@@ -31,7 +35,7 @@ import { freshDb } from '../../repo/__tests__/helpers.js';
 import { syncRunLifecycle, type DocResolver, type DriveDeps, type Executor } from '../driver.js';
 import { createRunDrives } from '../drives.js';
 import { createRunEventBus, type RunEventBus } from '../event-bus.js';
-import { createRunLauncher, UnboundTriggerError } from '../launcher.js';
+import { ArchivedPipelineError, createRunLauncher, UnboundTriggerError } from '../launcher.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
 
@@ -145,6 +149,25 @@ describe('RunLauncher — unbound never fires', () => {
 
     expect(() => launcher.fire(trigger)).toThrow(UnboundTriggerError);
     expect(listRuns(db, { triggerId: trigger.id })).toHaveLength(0);
+  });
+
+  it('#3 G5a — throws ArchivedPipelineError (dispatch guard) and creates no run when the bound pipeline is archived', () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db);
+    const pipelineId = getPipelineIdForVersion(db, pvId)!;
+    // A still-ENABLED trigger bound to an archived pipeline — the exact gap the
+    // dispatch guard closes (archive disables triggers, but a re-enable / new
+    // binding must still not fire).
+    const trigger = seedTrigger(db, { pipelineVersionId: pvId, enabled: true });
+    archivePipelineRow(db, pipelineId);
+    const launcher = createRunLauncher(deps(db));
+
+    expect(() => launcher.fire(trigger)).toThrow(ArchivedPipelineError);
+    expect(listRuns(db, { triggerId: trigger.id })).toHaveLength(0);
+
+    // A non-archived pipeline is unaffected.
+    const okTrigger = seedTrigger(db, { pipelineVersionId: seedVersion(db) });
+    expect(launcher.fire(okTrigger).outcome).toBe('started');
   });
 });
 

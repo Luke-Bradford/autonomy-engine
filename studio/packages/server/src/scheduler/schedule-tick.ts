@@ -8,7 +8,12 @@ import {
 import { getParsedTrigger } from '../repo/triggers.js';
 import { armWakeup } from '../repo/scheduled-wakeups.js';
 import type { Db } from '../repo/types.js';
-import { UnboundTriggerError, type FireContext, type FireResult } from '../run/launcher.js';
+import {
+  ArchivedPipelineError,
+  UnboundTriggerError,
+  type FireContext,
+  type FireResult,
+} from '../run/launcher.js';
 import type { WakeupFireResult, WakeupHandler } from './alarms.js';
 import {
   InvalidScheduleError,
@@ -363,6 +368,15 @@ export function createScheduleTickHandler(deps: ScheduleTickDeps): WakeupHandler
           } catch (err) {
             if (err instanceof UnboundTriggerError) {
               log.debug({ triggerId: trigger.id }, 'schedule tick: skip — trigger became unbound');
+              return;
+            }
+            // #3 G5a — the bound pipeline was archived between arm and fire.
+            // Archive disables dependent triggers (so `sync()` normally drops
+            // this chain first), but a fire already in flight is skipped here —
+            // the launcher's dispatch guard is the guarantee. Benign like the
+            // unbound race: `debug`, not `warn`.
+            if (err instanceof ArchivedPipelineError) {
+              log.debug({ triggerId: trigger.id }, 'schedule tick: skip — pipeline archived');
               return;
             }
             // #5 S12b — a trigger param binding that cannot resolve for THIS

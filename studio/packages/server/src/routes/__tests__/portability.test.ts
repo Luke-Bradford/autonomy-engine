@@ -36,6 +36,8 @@ describe('portability routes (export + import)', () => {
         payload: emptyVersionBody,
       });
       const version = versionRes.json();
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { archived: _archived, ...pipelineWithoutArchived } = pipeline;
 
       const exportRes = await app.inject({
         method: 'GET',
@@ -49,7 +51,10 @@ describe('portability routes (export + import)', () => {
         kind: 'pipeline',
         exportedAt: expect.any(Number),
         data: {
-          pipeline,
+          // #3 G5a — `archived` is a LOCAL runtime state, NEVER exported (git
+          // represents archive as file absence). The export strips it, so the
+          // envelope's pipeline is the DB row MINUS `archived`.
+          pipeline: pipelineWithoutArchived,
           versions: [{ ...version }],
           strippedConnectionRefs: [],
         },

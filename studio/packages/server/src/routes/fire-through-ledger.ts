@@ -7,7 +7,12 @@ import {
   finalizeWebhookDelivery,
   getWebhookDelivery,
 } from '../repo/webhook-deliveries.js';
-import { SHUTDOWN_SKIP_REASON, UnboundTriggerError, type FireResult } from '../run/launcher.js';
+import {
+  ArchivedPipelineError,
+  SHUTDOWN_SKIP_REASON,
+  UnboundTriggerError,
+  type FireResult,
+} from '../run/launcher.js';
 import type { Db } from '../repo/types.js';
 
 /**
@@ -49,6 +54,7 @@ export type LedgerFireOutcome =
   | { kind: 'fired'; result: FireResult }
   | { kind: 'duplicate'; runId: string | null }
   | { kind: 'binding_skip' }
+  | { kind: 'archived' }
   | { kind: 'unbound' };
 
 export interface LedgerFireInput {
@@ -104,6 +110,18 @@ export function fireTriggerThroughLedger(
         finalizeWebhookDelivery(db, deliveryId, { outcome: 'skipped', runId: null });
       }
       return { kind: 'binding_skip' };
+    }
+    if (err instanceof ArchivedPipelineError) {
+      // #3 G5a — a PERMANENT decision (the pipeline is archived, it won't fire
+      // again), so FINALIZE the delivery as `skipped` under the key, exactly
+      // like the binding/concurrency decisions above — NOT release. A verbatim
+      // retry of the same key then dedupes instead of re-attempting an archived
+      // pipeline forever. (A genuinely-new event carries a new key.)
+      log.warn({ err, triggerId }, 'trigger fire: pipeline archived — recording skip');
+      if (deliveryId !== null) {
+        finalizeWebhookDelivery(db, deliveryId, { outcome: 'skipped', runId: null });
+      }
+      return { kind: 'archived' };
     }
     release();
     if (err instanceof UnboundTriggerError) return { kind: 'unbound' };

@@ -594,6 +594,21 @@ export const PipelineSchema = z.object({
    * `ConcurrencyWriteSchema`).
    */
   concurrency: z.number().nullable().default(null),
+  /**
+   * #3 G5a (item ②) — a real ARCHIVED state on the MUTABLE pipeline row. An
+   * archived pipeline is soft-deleted: its immutable versions + runs (audit
+   * history) are PRESERVED, it drops off the default list, and it can never
+   * dispatch a run (the launcher refuses it) — the buildable alternative to
+   * hard-delete, which `PipelineHasRunsError` forbids once runs exist.
+   *
+   * REQUIRED with NO `.default()` (#473 — the column is `NOT NULL DEFAULT 0`,
+   * so a read always carries a real value; a `.default(false)` would be dead
+   * surface manufacturing an absent fact). Archive is a LOCAL runtime state,
+   * NOT authoring content: git represents it as file ABSENCE, so it is OMITTED
+   * from the export envelope (`PipelineExportSchema`) and never client-settable
+   * on create (`NewPipelineSchema` omits it — always born `false`).
+   */
+  archived: z.boolean(),
   createdAt: z.number().int(),
   updatedAt: z.number().int(),
 });
@@ -603,6 +618,10 @@ export const NewPipelineSchema = PipelineSchema.omit({
   id: true,
   // Server-minted, like `id` — no write path (create OR patch) may supply it.
   resourceId: true,
+  // #3 G5a — a pipeline is always born un-archived; archive is a server-driven
+  // lifecycle action (POST /archive · G5b import delete-classification), never
+  // a create/patch field.
+  archived: true,
   createdAt: true,
   updatedAt: true,
 }).extend({

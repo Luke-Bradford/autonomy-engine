@@ -63,6 +63,7 @@ const pipeline: Pipeline = {
   ownerId: 'local',
   name: 'My pipeline',
   concurrency: null,
+  archived: false,
   createdAt: 1,
   updatedAt: 1,
 };

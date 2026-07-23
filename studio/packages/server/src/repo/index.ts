@@ -5,6 +5,7 @@ export * from './connections.js';
 export * from './pipelines.js';
 export * from './pipeline-versions.js';
 export * from './triggers.js';
+export * from './archive.js';
 export * from './runs.js';
 export * from './run-events.js';
 export * from './run-diagnostics.js';

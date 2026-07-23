@@ -9,7 +9,7 @@ import {
   type Trigger,
   type TriggerMode,
 } from '@autonomy-studio/shared';
-import { triggers } from '../db/schema.js';
+import { pipelineVersions, triggers } from '../db/schema.js';
 import { newId } from './ids.js';
 import type { Db } from './types.js';
 
@@ -152,6 +152,28 @@ export function listTriggers(db: Db, filter: ListTriggersFilter = {}): Trigger[]
           .all()
       : db.select().from(triggers).all();
   return rows.map((row) => TriggerSchema.parse(row));
+}
+
+/**
+ * #3 G5a (item ②) — the pipeline→dependent-triggers REVERSE lookup. A trigger
+ * binds a pipeline ONLY through a concrete `pipeline_version_id` (immutability:
+ * "unbound never fires" — a null binding never dispatches), so "every trigger
+ * that depends on pipeline X" is the join triggers→pipeline_versions on
+ * `pipeline_id`, capturing bindings to ALL of the pipeline's versions (not just
+ * the latest). Used by the archive service to disable every dependent trigger.
+ * Unbound (null-version) triggers correctly never match (they can't fire).
+ * Strict parse (an archive acting on a corrupt trigger row SHOULD surface, not
+ * silently skip a trigger it needed to disable — the opposite tradeoff from the
+ * scheduler's `listParsedTriggers`, whose job is to keep firing despite one bad row).
+ */
+export function listTriggersByPipeline(db: Db, pipelineId: string): Trigger[] {
+  const rows = db
+    .select({ trigger: triggers })
+    .from(triggers)
+    .innerJoin(pipelineVersions, eq(triggers.pipelineVersionId, pipelineVersions.id))
+    .where(eq(pipelineVersions.pipelineId, pipelineId))
+    .all();
+  return rows.map((row) => TriggerSchema.parse(row.trigger));
 }
 
 /**

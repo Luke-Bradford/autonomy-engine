@@ -42,7 +42,14 @@ export type PipelineVersionExport = z.infer<typeof PipelineVersionExportSchema>;
 
 /** The pipeline row as it appears in an export: `resourceId` nullable (see
  * `exportResourceId`). */
-export const PipelineExportSchema = PipelineSchema.omit({ resourceId: true }).extend({
+export const PipelineExportSchema = PipelineSchema.omit({
+  resourceId: true,
+  // #3 G5a — `archived` is a LOCAL runtime state, never authoring content: git
+  // represents an archived pipeline as file ABSENCE (the G5b reconcile
+  // delete-classification), so it never enters the wire. `z.object` strips it
+  // on export and ignores it on any future import — no SCHEMA_VERSION bump.
+  archived: true,
+}).extend({
   resourceId: exportResourceId,
 });
 export type PipelineExport = z.infer<typeof PipelineExportSchema>;

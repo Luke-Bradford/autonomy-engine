@@ -8,6 +8,7 @@ import {
   WorkspaceGitAlreadyConnectedError,
 } from './repo/index.js';
 import { GitOperationError, GitUnavailableError } from './git/provider.js';
+import { ArchivedPipelineError } from './run/launcher.js';
 import { ISSUE_LIST_CAP } from './limits.js';
 
 /**
@@ -115,6 +116,14 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
 
     if (error instanceof PipelineHasRunsError) {
       request.log.warn({ err: error }, 'conflict: pipeline has run history');
+      reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);
+      return;
+    }
+
+    // #3 G5a — a manual fire whose bound pipeline is archived. A conflict with
+    // the pipeline's lifecycle state, message client-safe (ids only).
+    if (error instanceof ArchivedPipelineError) {
+      request.log.warn({ err: error }, 'conflict: pipeline is archived');
       reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);
       return;
     }
