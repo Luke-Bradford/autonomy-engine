@@ -298,8 +298,15 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       }
 
       const checkout = checkoutDirFor(workspaceGitRoot, ownerId);
-      const files = await readWorkspaceFilesAtRef(provider, checkout, head, MANAGED_DIRS);
-      const incoming = parseWorkspaceFiles(files);
+      const { files, unreadable } = await readWorkspaceFilesAtRef(
+        provider,
+        checkout,
+        head,
+        MANAGED_DIRS,
+      );
+      // An unreadable managed file (#664) becomes a per-file `unreadable`
+      // diagnostic here rather than 502ing the whole preview.
+      const incoming = parseWorkspaceFiles(files, unreadable);
 
       // Diff against the DB working copy run through the IDENTICAL serialize+parse
       // path, so both sides get the same volatile treatment and #666's
@@ -352,8 +359,16 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       }
 
       const checkout = checkoutDirFor(workspaceGitRoot, ownerId);
-      const files = await readWorkspaceFilesAtRef(provider, checkout, head, MANAGED_DIRS);
-      const incoming = parseWorkspaceFiles(files);
+      const { files, unreadable } = await readWorkspaceFilesAtRef(
+        provider,
+        checkout,
+        head,
+        MANAGED_DIRS,
+      );
+      // An unreadable managed file (#664) is a diagnostic, so `applyWorkspace`
+      // REFUSES the whole import fail-closed (an incomplete snapshot must not
+      // archive a pipeline whose file merely failed to read) — never a 502.
+      const incoming = parseWorkspaceFiles(files, unreadable);
       return WorkspaceGitApplyResultSchema.parse(applyWorkspace(db, ownerId, incoming, head));
     });
 

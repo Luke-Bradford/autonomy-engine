@@ -214,6 +214,25 @@ describe('classifyWorkspace', () => {
     expect(dispositionOf(plan, 'res_keep')?.disposition).toBe('unchanged');
   });
 
+  it('#664 — proposes NO archives when the branch snapshot has ANY diagnostic (incomplete → unsound)', () => {
+    // `res_gone`'s file failed to read/parse, so it is absent from `incoming` but
+    // present in the DB. Without the guard it would be a spurious "will archive
+    // res_gone" alongside the diagnostic for its own file. An incomplete snapshot
+    // cannot soundly infer deletions, so archive is empty while the diagnostic
+    // stands — matching the apply's refuse-on-diagnostic posture.
+    const db = ws({
+      pipelines: [parsedPipeline('res_keep', 'Keep'), parsedPipeline('res_gone', 'Gone')],
+    });
+    const incoming = ws({
+      pipelines: [parsedPipeline('res_keep', 'Keep')],
+      diagnostics: [{ path: 'pipelines/gone.json', code: 'unreadable', message: 'x' }],
+    });
+    const plan = classifyWorkspace(db, incoming);
+    expect(plan.archive).toEqual([]);
+    // The still-readable resources are classified as normal.
+    expect(dispositionOf(plan, 'res_keep')?.disposition).toBe('unchanged');
+  });
+
   it('does NOT propose archiving a connection or trigger absent from the branch (deferred to G5c)', () => {
     const db = ws({
       connections: [parsedConnection('res_c', 'C')],

@@ -182,7 +182,10 @@ describe('applyWorkspace (#3 G5c-1)', () => {
 
     const result = applyWorkspace(db, 'local', incoming, 'sha1');
 
-    expect(result.applied.find((a) => a.kind === 'pipeline')?.action).toBe('restored');
+    const restored = result.applied.find((a) => a.kind === 'pipeline');
+    expect(restored?.action).toBe('restored');
+    // Un-archive ONLY — the version was already materialised, so nothing minted.
+    expect(restored?.versionMinted).toBe(false);
     expect(getPipeline(db, pipe.id)!.archived).toBe(false);
     // No duplicate row under the same resourceId.
     expect(listPipelines(db, 'local').filter((p) => p.resourceId === pipe.resourceId)).toHaveLength(
@@ -208,6 +211,90 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(() => applyWorkspace(db, 'local', incoming, 'sha1')).toThrow(WorkspaceApplyError);
     // Atomic: the pipeline stays archived, nothing half-restored.
     expect(getPipeline(db, pipe.id)!.archived).toBe(true);
+  });
+
+  it('#672 — a RESTORE that also advances the version reports restored + versionMinted:true', () => {
+    // src authors v1, then (after tgt has it archived) advances to v2.
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(src, {
+      ...baseVersion(pipe.id),
+      outputs: [{ name: 'v1', type: 'string' }],
+    });
+
+    const tgt = freshDb().db;
+    applyWorkspace(tgt, 'local', snapshot(src), 'sha1');
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    archivePipeline(tgt, tgtPipe.id);
+    expect(getPipeline(tgt, tgtPipe.id)!.archived).toBe(true);
+
+    // A NEW immutable version (fresh resourceId, changed content) reappears while
+    // the DB row is still archived — un-archive AND mint, both signalled.
+    createPipelineVersion(src, {
+      ...baseVersion(pipe.id),
+      outputs: [{ name: 'v2', type: 'string' }],
+    });
+    const result = applyWorkspace(tgt, 'local', snapshot(src), 'sha2');
+
+    const applied = result.applied.find((a) => a.kind === 'pipeline');
+    expect(applied?.action).toBe('restored');
+    expect(applied?.versionMinted).toBe(true);
+    expect(getPipeline(tgt, tgtPipe.id)!.archived).toBe(false);
+    // Both versions now present in the restored pipeline (v1 kept, v2 minted).
+    expect(listPipelineVersions(tgt, tgtPipe.id)).toHaveLength(2);
+    expect(getLatestPipelineVersion(tgt, tgtPipe.id)!.outputs[0]!.name).toBe('v2');
+  });
+
+  it('#672 — versionMinted tracks the immutable-version mint independent of action', () => {
+    // A fresh create carrying a version, a rename, and a connection in one apply.
+    const src = freshDb().db;
+    createConnection(src, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(src, baseVersion(pipe.id));
+
+    const tgt = freshDb().db;
+    const created = applyWorkspace(tgt, 'local', snapshot(src), 'sha1');
+    // created pipeline mints its first version; created connection never mints.
+    expect(created.applied.find((a) => a.kind === 'pipeline')).toMatchObject({
+      action: 'created',
+      versionMinted: true,
+    });
+    expect(created.applied.find((a) => a.kind === 'connection')).toMatchObject({
+      action: 'created',
+      versionMinted: false,
+    });
+
+    // A pure rename patches the row, mints nothing → versionMinted:false.
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    updatePipeline(src, pipe.id, { name: 'P renamed' });
+    const renamed = applyWorkspace(tgt, 'local', snapshot(src), 'sha2');
+    expect(renamed.applied.find((a) => a.kind === 'pipeline')).toMatchObject({
+      action: 'renamed',
+      versionMinted: false,
+    });
+    expect(getPipeline(tgt, tgtPipe.id)!.name).toBe('P renamed');
+
+    // A version-doc edit → updated + versionMinted:true.
+    createPipelineVersion(src, {
+      ...baseVersion(pipe.id),
+      outputs: [{ name: 'x', type: 'string' }],
+    });
+    const updated = applyWorkspace(tgt, 'local', snapshot(src), 'sha3');
+    expect(updated.applied.find((a) => a.kind === 'pipeline')).toMatchObject({
+      action: 'updated',
+      versionMinted: true,
+    });
+
+    // Re-applying the same branch → unchanged + versionMinted:false.
+    const again = applyWorkspace(tgt, 'local', snapshot(src), 'sha3');
+    expect(again.applied.every((a) => a.versionMinted === false)).toBe(true);
+    expect(again.applied.every((a) => a.action === 'unchanged')).toBe(true);
   });
 
   it('ARCHIVES a DB pipeline absent from the branch and disables its dependent trigger', () => {
