@@ -817,7 +817,25 @@ describe('pipeline-versions repo — L12 emitMessages transcript lowering (#2 L1
     ).not.toThrow();
   });
 
-  it('REFUSES a hand-declared messages row without the flag (nothing persists)', () => {
+  it('STRIPS a flag-less row matching the exact machine shape (indistinguishable from a toggle-off leftover)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const pv = createPipelineVersion(
+      db,
+      llmInput(pipeline.id, {
+        prompt: 'hi',
+        outputs: [
+          { name: 'text', type: 'string' },
+          { name: 'messages', type: 'json' },
+        ],
+      }),
+    );
+    // The heal removes it; a downstream ref would then fail loudly at save with
+    // "declares no output named 'messages'" — the trail to the emitMessages flag.
+    expect(pv.nodes[0]!.config['outputs']).toEqual([{ name: 'text', type: 'string' }]);
+  });
+
+  it('REFUSES a hand-decorated messages row without the flag (nothing persists)', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
     expect(() =>
@@ -827,10 +845,44 @@ describe('pipeline-versions repo — L12 emitMessages transcript lowering (#2 L1
           prompt: 'hi',
           outputs: [
             { name: 'text', type: 'string' },
-            { name: 'messages', type: 'json' },
+            { name: 'messages', type: 'string' }, // non-json → not the machine shape
           ],
         }),
       ),
     ).toThrow(/emitMessages/);
+  });
+});
+
+describe('pipeline-versions repo — L12 emitMessages toggle-off heal', () => {
+  it('a flag-off re-save of a flag-on version STRIPS the machine row instead of refusing (round-trip)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const base: NewPipelineVersion = {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [
+        {
+          id: 'chat',
+          type: 'llm_call',
+          config: { prompt: 'hi', emitMessages: true },
+          position: { x: 0, y: 0 },
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    };
+    const v1 = createPipelineVersion(db, base);
+    // Simulate the canvas round-trip: v2 re-saves v1's STORED nodes (which carry
+    // the machine-lowered row) with the flag turned off.
+    const storedNode = v1.nodes[0]!;
+    const v2 = createPipelineVersion(db, {
+      ...base,
+      nodes: [{ ...storedNode, config: { ...storedNode.config, emitMessages: false } }],
+    });
+    expect(v2.nodes[0]!.config['outputs']).toEqual([
+      { name: 'text', type: 'string' },
+      { name: 'stopReason', type: 'string' },
+    ]);
   });
 });

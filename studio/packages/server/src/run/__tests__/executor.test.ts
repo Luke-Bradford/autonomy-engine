@@ -1883,7 +1883,6 @@ describe('createExecutor — L12 emitMessages transcript + history threading', (
       kind: 'anthropic_api',
       configSchema: testRegistry().get('anthropic_api')!.configSchema,
       testConnection: () => Promise.resolve({ ok: true }),
-      // eslint-disable-next-line @typescript-eslint/require-await
       runActivity: async function* (ctx) {
         yield {
           type: 'succeeded',
@@ -1986,6 +1985,56 @@ describe('createExecutor — L12 emitMessages transcript + history threading', (
     const succeeded = loadEngineEvents(db, run.id).find((e) => e.type === 'node.succeeded');
     expect(succeeded).toMatchObject({
       outputs: { text: '', messages: [{ role: 'user', content: 'q' }] },
+    });
+  });
+});
+
+describe('createExecutor — L12 transcript is connection-kind-agnostic (single choke-point)', () => {
+  it('augments an agent_cli-kind llm_call the same way (emission keys off activityType, not adapter)', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'agent_cli', {}, null);
+    const adapter: ConnectorAdapter = {
+      kind: 'agent_cli',
+      configSchema: testRegistry().get('agent_cli')!.configSchema,
+      testConnection: () => Promise.resolve({ ok: true }),
+      runActivity: async function* () {
+        yield {
+          type: 'succeeded',
+          outputs: { text: 'CLI SAYS', stopReason: 'end_turn' },
+        } satisfies ActivityEvent;
+      },
+    };
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const pvId = createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [
+        {
+          id: 'a',
+          type: 'llm_call',
+          config: { prompt: 'q', emitMessages: true },
+          connectionId: connId,
+          position: { x: 0, y: 0 },
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    }).id;
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { adapters: new Map([['agent_cli', adapter]]) }), run);
+
+    expect(state.status).toBe('success');
+    const succeeded = loadEngineEvents(db, run.id).find((e) => e.type === 'node.succeeded');
+    expect(succeeded).toMatchObject({
+      outputs: {
+        text: 'CLI SAYS',
+        messages: [
+          { role: 'user', content: 'q' },
+          { role: 'assistant', content: 'CLI SAYS' },
+        ],
+      },
     });
   });
 });

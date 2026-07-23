@@ -151,11 +151,12 @@
 // whole-value `${...}` resolving to a turn array, prepended at dispatch) and/or
 // `emitMessages: true` (lowers a `{messages, json}` output row at save; the
 // executor emits the transcript). A pre-17 build mis-runs BOTH persisted
-// shapes deterministically. `history`: the pre-17 dispatch schema is
-// non-strict, so the substituted array passes THROUGH — but that build's
-// `normalizeLlmRequest` never reads it, silently DROPPING the conversation
-// past and sending only the authored turns (a silent-WRONG completion, worse
-// than a loud failure). `emitMessages`: the persisted contract declares
+// shapes deterministically. `history`: the pre-17 adapter parse succeeds and
+// STRIPS the unknown key (Zod's default object drops unknown keys), so the
+// resolved turn array never reaches that build's `normalizeLlmRequest` at all
+// — the conversation past is silently DROPPED and only the authored turns are
+// sent (a silent-WRONG completion, worse than a loud failure). `emitMessages`:
+// the persisted contract declares
 // `messages`, which a pre-17 executor never emits, so the reducer fails the
 // node on `missing declared output 'messages'` (the A11/A13 loud-fail shape).
 // The silent-drop half alone mandates the bump: a pre-17 build must refuse an

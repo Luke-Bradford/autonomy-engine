@@ -5,6 +5,7 @@ import {
   collectSecretSinkMarkers,
   computeCostEstimate,
   FAILURE_CODES,
+  findLlmMessagesRowIndex,
   LLM_CALL_ACTIVITY_TYPE,
   llmCallConfigSchema,
   normalizeLlmRequest,
@@ -172,6 +173,15 @@ function withTranscript(
   if (ctx.activityType !== LLM_CALL_ACTIVITY_TYPE) return outputs;
   const cfg = llmCallConfigSchema.safeParse(ctx.input);
   if (!cfg.success || cfg.data.emitMessages !== true) return outputs;
+  // The DECLARED-ROW gate: emit only when the persisted contract carries the
+  // lowered `messages` row. Every ≥17 save couples flag→row, but a pre-17
+  // stored doc could carry a stray `emitMessages: true` the old save path never
+  // lowered (unknown config keys passed through) — emitting for it would just
+  // be an undeclared key `storeOutputs` silently drops. Skipping keeps a pre-17
+  // doc's behaviour byte-identical to a pre-17 build, and makes flag+row (not
+  // flag alone) the emission condition — contract and emission cannot desync.
+  const declared = ctx.input['outputs'];
+  if (!Array.isArray(declared) || findLlmMessagesRowIndex(declared) === -1) return outputs;
   const text = outputs['text'];
   if (typeof text !== 'string') return outputs;
   const turns: { role: string; content: string }[] = [...normalizeLlmRequest(cfg.data).messages];

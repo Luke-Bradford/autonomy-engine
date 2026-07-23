@@ -1,6 +1,9 @@
 import type { Node } from '../schemas/pipeline.js';
 import { getActivity } from './registry.js';
 import {
+  findLlmMessagesRowIndex,
+  isLlmTranscriptRow,
+  LLM_TRANSCRIPT_ROW,
   llmOutputSchemaSchema,
   llmStructuredOutputSurfaceSchema,
   lowerOutputSchema,
@@ -158,30 +161,48 @@ export function lowerLlmStructuredOutputs(nodes: Node[]): Node[] {
  * appended to — the flag IS the author's opt-in, and honouring "declares
  * nothing" over it would silently drop the very output the flag requests.
  *
- * No-ops (each mirrors a sibling pass's rule): flag absent/false or a non-`true`
- * value (opt-in is a LITERAL `true` — the schema's `z.boolean()` refuses a
- * `${...}` string, so lowering and the executor's emission gate read one rule);
- * a structured node (emitMessages+structured is refused at save — lowering a row
- * for it would persist a contract the refusal then orphans); a call node (child
- * projection owns its outputs); a corrupt non-array `outputs` (left for the
- * StrictNodeSchema parse to refuse — never masked, per `lowerNodeOutputs`'s
- * fail-closed note).
+ * TOGGLE-OFF HEAL: the appended row persists in the stored config, and a canvas
+ * edit round-trips it — so turning the flag off (or deleting the key) would
+ * strand a machine-added row the validator then refuses as "hand-written", a
+ * save dead-end the feature's own lowering manufactured. So the flag-off
+ * direction STRIPS the row again — but ONLY the exact machine shape
+ * (`isLlmTranscriptRow`): a row the author decorated (extra keys, different
+ * type) is treated as hand-written and left for `validateLlmCallConversation`
+ * to report, never silently removed. Both directions reconcile a DERIVED
+ * contract with the current config — the same justification as the structured
+ * overwrite exception.
+ *
+ * No-ops (each mirrors a sibling pass's rule): opt-in is a LITERAL `true` (the
+ * schema's `z.boolean()` refuses a `${...}` string, so lowering and the
+ * executor's emission gate read one rule); a structured node is left ENTIRELY
+ * alone — emitMessages+structured is refused at save, and its DERIVED rows may
+ * legitimately include a schema property named `messages` that the strip must
+ * never touch; a call node (child projection owns its outputs); a corrupt
+ * non-array `outputs` (left for the StrictNodeSchema parse to refuse — never
+ * masked, per `lowerNodeOutputs`'s fail-closed note).
  */
 export function lowerLlmEmitMessages(nodes: Node[]): Node[] {
   return nodes.map((node) => {
     if (node.type !== LLM_CALL_ACTIVITY_TYPE) return node;
-    if (node.config['emitMessages'] !== true) return node;
     if (node.config['outputMode'] === 'structured') return node;
     if (node.call !== undefined) return node;
     const outputs = node.config['outputs'];
     if (!Array.isArray(outputs)) return node;
-    const hasMessagesRow = outputs.some(
-      (o) => typeof o === 'object' && o !== null && (o as { name?: unknown }).name === 'messages',
-    );
-    if (hasMessagesRow) return node;
+    const idx = findLlmMessagesRowIndex(outputs);
+    if (node.config['emitMessages'] === true) {
+      // Opt-in: append the derived row when absent (a present row — whatever its
+      // shape — is the validator's to judge, never lowered over).
+      if (idx !== -1) return node;
+      return {
+        ...node,
+        config: { ...node.config, outputs: [...outputs, { ...LLM_TRANSCRIPT_ROW }] },
+      };
+    }
+    // Flag off/absent: strip ONLY the exact machine shape (the toggle-off heal).
+    if (idx === -1 || !isLlmTranscriptRow(outputs[idx])) return node;
     return {
       ...node,
-      config: { ...node.config, outputs: [...outputs, { name: 'messages', type: 'json' }] },
+      config: { ...node.config, outputs: outputs.filter((_, i) => i !== idx) },
     };
   });
 }

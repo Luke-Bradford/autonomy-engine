@@ -240,9 +240,14 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 > option needs no new llm surface, and the F5c parallel-mutation hard-reject
 > covers its determinism). A cross-run **conversation object** is continuation
 > state — deferred to the same event-modeled sub-spec as L10c (#653 precedent),
-> not v1. CATALOG_VERSION 16→17 (a pre-17 build silently DROPS a resolved
-> `history` — `normalizeLlmRequest` never read it — and never emits a declared
-> transcript row).
+> not v1. Neither `history` nor the transcript carries a length cap in v1 —
+> a self-threading loop re-embeds its whole past each round (quadratic growth);
+> this rides the existing "prompt budgeting / truncation" deferral above, which
+> owns the preflight-estimate fix. Toggling `emitMessages` OFF strips the exact
+> machine-lowered row again (the lowering pass heals its own append; a
+> hand-decorated row is refused, never silently removed). CATALOG_VERSION 16→17
+> (a pre-17 build silently DROPS a resolved `history` — its adapter parse
+> strips the unknown key — and never emits a declared transcript row).
 | **L13** | **Connection parameterization + dynamic routing (T9):** non-secret **connection parameters** (expression-bound at dispatch); **`connectionId`/`model` as validated `${}` refs** (route Anthropic-vs-OpenAI by param in ONE node). Since `connectionId` is a top-level `Node` field, this ADDS an expression pass there (or the blessed fallback: `switch(${params.provider})` → fixed-connection nodes → converge). | 2 |
 | **L14** | **`cli`/subscription connection kind (T5):** a CLI-agent connection `llm_call` accepts + single-shot adapter (`claude -p`/`codex exec` → stdout); quota/reset-window primitive; `meteringStatus` metered/unpriced/unknown + run-cost completeness flag. | 1 |
 

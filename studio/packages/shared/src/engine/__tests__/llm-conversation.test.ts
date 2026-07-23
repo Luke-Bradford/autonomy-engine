@@ -164,3 +164,27 @@ describe('validateRefs — llm_call history expression (#2 L12)', () => {
     expect(validateRefs(d).join(' ')).toMatch(/history must resolve to an array/);
   });
 });
+
+describe('validateDoc/validateRefs — L12 review-hardening rules', () => {
+  it('rejects a whitespace-PADDED whole-value history (dispatch substitutes untrimmed)', () => {
+    const d = doc(
+      [
+        upstreamWithTranscript('a'),
+        llm('b', { prompt: 'next', history: '${nodes.a.output.messages} ' }),
+      ],
+      [edge('a', 'b')],
+    );
+    expect(validateRefs(d).join(' ')).toMatch(/whitespace around the whole-value/);
+  });
+
+  it('rejects conversation fields on a CALL node (they would be silently inert)', () => {
+    const call: Node = {
+      id: 'c',
+      type: 'llm_call',
+      config: { emitMessages: true },
+      position: { x: 0, y: 0 },
+      call: { pipelineVersionId: 'pv_x', params: {} },
+    };
+    expect(validateDoc(doc([call])).join(' ')).toMatch(/no effect on a call node/);
+  });
+});

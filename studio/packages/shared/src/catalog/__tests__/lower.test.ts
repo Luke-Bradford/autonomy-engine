@@ -359,3 +359,62 @@ describe('lowerLlmEmitMessages', () => {
     expect(lowered[1]).toBe(corrupt);
   });
 });
+
+describe('lowerLlmEmitMessages — toggle-off heal (#2 L12)', () => {
+  it('strips the EXACT machine-lowered row when the flag is turned off (round-trip heal)', () => {
+    const [lowered] = lowerLlmEmitMessages([
+      node('a', LLM_CALL_ACTIVITY_TYPE, {
+        prompt: 'p',
+        emitMessages: false,
+        outputs: [
+          { name: 'text', type: 'string' },
+          { name: 'stopReason', type: 'string' },
+          { name: 'messages', type: 'json' },
+        ],
+      }),
+    ]);
+    expect(lowered!.config['outputs']).toEqual([
+      { name: 'text', type: 'string' },
+      { name: 'stopReason', type: 'string' },
+    ]);
+  });
+
+  it('strips when the flag key is DELETED too (absent = off)', () => {
+    const [lowered] = lowerLlmEmitMessages([
+      node('a', LLM_CALL_ACTIVITY_TYPE, {
+        prompt: 'p',
+        outputs: [{ name: 'messages', type: 'json' }],
+      }),
+    ]);
+    expect(lowered!.config['outputs']).toEqual([]);
+  });
+
+  it('does NOT strip an author-DECORATED row (extra keys = hand-written; validator reports it)', () => {
+    const decorated = node('a', LLM_CALL_ACTIVITY_TYPE, {
+      prompt: 'p',
+      outputs: [{ name: 'messages', type: 'json', optional: true }],
+    });
+    const [lowered] = lowerLlmEmitMessages([decorated]);
+    expect(lowered).toBe(decorated);
+  });
+
+  it('does NOT strip a non-json messages row (hand-written; validator reports it)', () => {
+    const handWritten = node('a', LLM_CALL_ACTIVITY_TYPE, {
+      prompt: 'p',
+      outputs: [{ name: 'messages', type: 'string' }],
+    });
+    const [lowered] = lowerLlmEmitMessages([handWritten]);
+    expect(lowered).toBe(handWritten);
+  });
+
+  it('never touches a structured node in either direction (derived rows may legitimately be named messages)', () => {
+    const structured = node('a', LLM_CALL_ACTIVITY_TYPE, {
+      prompt: 'p',
+      outputMode: 'structured',
+      outputSchema: { type: 'object', properties: { messages: { type: 'array' } } },
+      outputs: [{ name: 'messages', type: 'json' }],
+    });
+    const [lowered] = lowerLlmEmitMessages([structured]);
+    expect(lowered).toBe(structured);
+  });
+});

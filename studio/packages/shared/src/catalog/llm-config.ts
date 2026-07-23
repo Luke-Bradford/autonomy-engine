@@ -430,7 +430,42 @@ export const llmConversationSurfaceSchema = z
   })
   .superRefine(refineLlmConversationCoupling);
 
-export type LlmConversationSurface = z.infer<typeof llmConversationSurfaceSchema>;
+/**
+ * #2 L12 — the ONE place the transcript output row's name/shape is written. The
+ * lowering pass (`lower.ts::lowerLlmEmitMessages`) appends/strips EXACTLY this
+ * shape, the save-time validator (`params.ts::validateLlmCallConversation`)
+ * checks conflicts against the same name, and the executor's emission gate
+ * (`withTranscript`) verifies the row is declared before emitting — a name
+ * literal in any of those sites alone could silently desync them.
+ */
+export const LLM_TRANSCRIPT_ROW = { name: 'messages', type: 'json' } as const;
+
+/** Index of the first output row named `messages` in a raw `config.outputs` array, or -1. */
+export function findLlmMessagesRowIndex(outputs: readonly unknown[]): number {
+  return outputs.findIndex(
+    (o) =>
+      typeof o === 'object' &&
+      o !== null &&
+      (o as { name?: unknown }).name === LLM_TRANSCRIPT_ROW.name,
+  );
+}
+
+/**
+ * Is `row` EXACTLY the machine-lowered transcript row (`{name:'messages',
+ * type:'json'}`, no extra keys)? The toggle-off heal in `lowerLlmEmitMessages`
+ * strips only this shape — anything an author decorated (an `optional` flag, a
+ * different type) is treated as hand-written and left for the validator to
+ * report, never silently removed.
+ */
+export function isLlmTranscriptRow(row: unknown): boolean {
+  if (typeof row !== 'object' || row === null) return false;
+  const r = row as { name?: unknown; type?: unknown };
+  return (
+    Object.keys(row).length === 2 &&
+    r.name === LLM_TRANSCRIPT_ROW.name &&
+    r.type === LLM_TRANSCRIPT_ROW.type
+  );
+}
 
 /**
  * #2 L10a/L10b — the exact `{ tools, toolChoice, maxToolIterations, outputMode }`

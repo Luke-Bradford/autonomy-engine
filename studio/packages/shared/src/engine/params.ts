@@ -28,6 +28,7 @@ import {
   WEBHOOK_ACTIVITY_TYPE,
 } from '../catalog/types.js';
 import {
+  findLlmMessagesRowIndex,
   llmConversationSurfaceSchema,
   llmOutputSchemaSchema,
   llmStructuredOutputSurfaceSchema,
@@ -2117,14 +2118,19 @@ function validateLlmCallTools(node: Node, errors: string[]): void {
  *    ref). A literal turn ARRAY is refused — literal turns belong in `messages`;
  *    admitting both shapes would make the save-time gate and dispatch-time
  *    shape (the resolved array) ambiguous about which side produced the value.
- * 3. The `messages` OUTPUT row rules — skipped for a structured node (its rows
+ * 3. A CALL node with either conversation key is refused outright — its
+ *    dispatch/outputs are the child pipeline's, so the fields would be silently
+ *    inert (an opt-in that vanishes without a diagnostic).
+ * 4. The `messages` OUTPUT row rules — skipped for a structured node (its rows
  *    are DERIVED from `outputSchema`, where a property legitimately named
- *    `messages` is the author's own typed field, not a transcript) and for a
- *    call node (child-projected contract, same skip as `lowerNodeOutputs`):
+ *    `messages` is the author's own typed field, not a transcript):
  *    - a `messages` row WITHOUT `emitMessages: true` is refused — the flag is
  *      the opt-in; a hand-declared row alone makes EVERY run fail
  *      `missing declared output 'messages'` (the executor emits only on the
- *      flag), a guaranteed run-time failure caught here at save;
+ *      flag), a guaranteed run-time failure caught here at save. (The exact
+ *      MACHINE-lowered shape never reaches this rule: `lowerLlmEmitMessages`'s
+ *      toggle-off heal strips it before validation, so this fires only on
+ *      genuinely hand-written or author-decorated rows.)
  *    - with the flag, a row not typed `json` is refused (the transcript is a
  *      turn array; a scalar-typed row would fail `validateOutputs` on every
  *      success — the same guaranteed-failure class).
@@ -2144,14 +2150,25 @@ function validateLlmCallConversation(node: Node, errors: string[]): void {
         'a turn array (literal turns belong in `messages`)',
     );
   }
+  // A CALL node's dispatch and outputs are the child pipeline's — the executor
+  // never runs `withTranscript` for it and lowering skips it, so a conversation
+  // field would be silently inert. Refuse it (present at all, either key) rather
+  // than let an author's opt-in vanish without a diagnostic.
+  if (node.call !== undefined) {
+    if (node.config['emitMessages'] !== undefined || history !== undefined) {
+      errors.push(
+        `node.${node.id}: emitMessages/history have no effect on a call node ` +
+          "(its dispatch and outputs are the child pipeline's) — remove them",
+      );
+    }
+    return;
+  }
   if (node.config['outputMode'] === 'structured') return;
-  if (node.call !== undefined) return;
   const outputs = node.config['outputs'];
   if (!Array.isArray(outputs)) return;
-  const row = outputs.find(
-    (o) => typeof o === 'object' && o !== null && (o as { name?: unknown }).name === 'messages',
-  );
-  if (row === undefined) return;
+  const idx = findLlmMessagesRowIndex(outputs);
+  if (idx === -1) return;
+  const row = outputs[idx];
   if (node.config['emitMessages'] !== true) {
     errors.push(
       `node.${node.id}: a \`messages\` output row on an llm_call is DERIVED — ` +
@@ -2214,6 +2231,22 @@ function scanLlmHistoryRef(node: Node, scope: ScanScope, errors: string[]): void
   const where = `nodes.${node.id}.config.history`;
   const whole = validateWholeValue(where, raw, errors, 'history');
   if (whole === null) return;
+  // TRIM ASYMMETRY GUARD: `validateWholeValue` classifies the TRIMMED text, but
+  // `history` is resolved by the blanket dispatch substitution, which
+  // deliberately does NOT trim (`substitute`'s documented rail) — so a padded
+  // `'${...} '` would pass the mode check here yet resolve to an interpolated
+  // STRING at dispatch and fail the array parse on every run. `exitWhen`/
+  // `filter` don't have this gap only because their run-time halves re-trim;
+  // history's run-time half is the generic walk, so the SAVE side must refuse
+  // exactly what dispatch will mis-handle.
+  if (raw !== raw.trim()) {
+    errors.push(
+      `${where}: history has whitespace around the whole-value \${...} expression — ` +
+        'dispatch substitution resolves the field untrimmed, which would demote the ' +
+        'array to a string; remove the surrounding whitespace',
+    );
+    return;
+  }
   let parsed: Expr;
   try {
     parsed = parseExpr(whole.body);
