@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_STRUCTURED_REPAIRS,
   MAX_RETRY_AFTER_SECONDS,
@@ -13,6 +13,7 @@ import {
   noCompletionFailure,
   openAiReasoningEffort,
   parseRetryAfter,
+  postJsonAndParse,
   runStructuredWithRepair,
   runTextWithTools,
   structuredEcho,
@@ -20,7 +21,7 @@ import {
 } from '../llm-shared.js';
 import { sha256Hex } from '../../util/hash.js';
 import type { LlmToolDef, LlmTurn, StructuredCallOutcome, ToolCallResult } from '../llm-shared.js';
-import type { ActivityEvent, LlmCapture, LlmUsage } from '../types.js';
+import type { ActivityContext, ActivityEvent, LlmCapture, LlmUsage } from '../types.js';
 
 async function drain(stream: AsyncIterable<ActivityEvent>): Promise<ActivityEvent[]> {
   const events: ActivityEvent[] = [];
@@ -453,6 +454,95 @@ describe('parseRetryAfter', () => {
   it('clamps an absurd value to MAX_RETRY_AFTER_SECONDS', () => {
     expect(parseRetryAfter('999999999', NOW)).toBe(MAX_RETRY_AFTER_SECONDS);
     expect(MAX_RETRY_AFTER_SECONDS).toBe(86400); // matches the policy retryIntervalSeconds ceiling
+  });
+});
+
+/** #648 — the shared post→status→parse terminal ladder. One helper folds the
+ *  three-step `llmPost failed → non-2xx httpStatusFailure → parseJsonBody`
+ *  sequence every adapter path (text / structured / tools) previously carried
+ *  inline. Latency brackets the POST (fetch + body read) only — the JSON parse
+ *  is excluded, matching the adapters' historical per-site measurement. */
+describe('postJsonAndParse (#648)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const pctx = (): ActivityContext => ({
+    runId: 'run_1',
+    nodeId: 'n1',
+    attemptId: 'n1#0',
+    activityType: 'llm_call',
+    input: {},
+    connectionConfig: {},
+    signal: new AbortController().signal,
+  });
+
+  function fakeResponse(status: number, bodyText: string, retryAfter?: string): Response {
+    const headers = new Headers();
+    if (retryAfter !== undefined) headers.set('retry-after', retryAfter);
+    return {
+      status,
+      text: () => Promise.resolve(bodyText),
+      headers,
+    } as unknown as Response;
+  }
+
+  it('returns the parsed json + a numeric latency on a 2xx JSON body', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, '{"a":1}'));
+    const res = await postJsonAndParse(pctx(), 'openai_api', 'http://x/y', {}, { m: 1 }, 1000);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.json).toEqual({ a: 1 });
+      expect(typeof res.latencyMs).toBe('number');
+      expect(res.latencyMs).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('passes a transport failure event through (network error → transient)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('socket hang up'));
+    const res = await postJsonAndParse(pctx(), 'ollama', 'http://x/y', {}, {}, 1000);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.event).toMatchObject({ type: 'failed', kind: 'transient' });
+      // The failure arm carries latency too — the text/tools capture closures
+      // (#2 L9a) report the latency of a FAILED exchange as well.
+      expect(typeof res.latencyMs).toBe('number');
+    }
+  });
+
+  it('maps a non-2xx through httpStatusFailure, retry-after hint included', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(429, '{"err":"slow"}', '7'));
+    const res = await postJsonAndParse(pctx(), 'anthropic_api', 'http://x/y', {}, {}, 1000);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.event).toMatchObject({
+        type: 'failed',
+        kind: 'rate_limit',
+        retryAfterSeconds: 7,
+      });
+      expect(res.event.error).toContain('anthropic_api HTTP 429');
+    }
+  });
+
+  it('maps a plain 4xx to a permanent adapter-named failure', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(400, 'bad request'));
+    const res = await postJsonAndParse(pctx(), 'openai_api', 'http://x/y', {}, {}, 1000);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.event).toMatchObject({ type: 'failed', kind: 'permanent' });
+      expect(res.event.error).toContain('openai_api HTTP 400');
+    }
+  });
+
+  it('rejects a 2xx non-JSON body as a permanent parse failure', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, 'not json'));
+    const res = await postJsonAndParse(pctx(), 'ollama', 'http://x/y', {}, {}, 1000);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.event).toMatchObject({
+        type: 'failed',
+        kind: 'permanent',
+        error: 'provider returned a non-JSON response body',
+      });
+    }
   });
 });
 

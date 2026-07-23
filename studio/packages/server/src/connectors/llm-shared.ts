@@ -871,6 +871,50 @@ export function httpStatusFailure(
   return event;
 }
 
+/**
+ * #648 — one round-trip of the shared terminal ladder: POST the JSON body, then
+ * fold the three failure steps every adapter path previously carried inline —
+ * a transport failure passes its ready-made event through, a non-2xx maps via
+ * `httpStatusFailure`, and a 2xx body must parse as JSON. Success hands back
+ * the parsed body. `latencyMs` brackets `llmPost` only (fetch + body read,
+ * JSON parse excluded), matching the adapters' historical per-site measurement;
+ * it is returned in BOTH arms so the text/tools capture closures (#2 L9a) can
+ * report the latency of a failed exchange too.
+ */
+export type LlmExchangeResult =
+  | { ok: true; json: unknown; latencyMs: number }
+  | { ok: false; event: Extract<ActivityEvent, { type: 'failed' }>; latencyMs: number };
+
+export async function postJsonAndParse(
+  ctx: ActivityContext,
+  provider: LlmConnectionKind,
+  url: string,
+  headers: Record<string, string>,
+  body: unknown,
+  timeoutMs: number,
+): Promise<LlmExchangeResult> {
+  const started = Date.now();
+  const res = await llmPost(ctx, url, headers, body, timeoutMs);
+  const latencyMs = Date.now() - started;
+  if (res.type === 'failed') return { ok: false, event: res.event, latencyMs };
+  if (res.status < 200 || res.status >= 300) {
+    return {
+      ok: false,
+      event: httpStatusFailure(
+        provider,
+        res.status,
+        res.bodyText,
+        res.retryAfterHeader,
+        Date.now(),
+      ),
+      latencyMs,
+    };
+  }
+  const parsed = parseJsonBody(res.bodyText);
+  if (!parsed.ok) return { ok: false, event: parsed.event, latencyMs };
+  return { ok: true, json: parsed.json, latencyMs };
+}
+
 /** A short, safe excerpt of a non-2xx response body for a failure `error`. */
 export function errorExcerpt(bodyText: string): string {
   const trimmed = bodyText.trim();

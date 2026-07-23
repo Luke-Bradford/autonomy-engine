@@ -3,17 +3,15 @@ import {
   DEFAULT_LLM_TIMEOUT_MS,
   buildCapture,
   coerceStopReason,
-  httpStatusFailure,
   llmCallConfigSchema,
   llmConnectionConfigSchema,
-  llmPost,
   llmProbeGet,
   meterUsage,
   noCompletionFailure,
   normalizeLlmRequest,
   openAiReasoningEffort,
   parseAndValidateStructured,
-  parseJsonBody,
+  postJsonAndParse,
   resolveModel,
   runStructuredWithRepair,
   runTextWithTools,
@@ -151,16 +149,26 @@ export const openaiAdapter: ConnectorAdapter = {
       systemParts.push(structuredOutputInstruction(structuredOutput));
     const systemContent = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
 
-    // Assemble the wire body for a set of (non-system) turns. Only `messages`
-    // changes across L4c repair calls, so the static scaffold is rebuilt from the
-    // passed turns each call. Sampling + reasoning apply in BOTH modes;
-    // `response_format` only in structured mode (so text mode is byte-identical to
-    // pre-L4c).
-    const buildBody = (msgTurns: LlmTurn[]): Record<string, unknown> => {
-      const messages: { role: string; content: string }[] = [];
-      if (systemContent !== undefined) messages.push({ role: 'system', content: systemContent });
-      messages.push(...msgTurns);
-      const body: Record<string, unknown> = { model, messages };
+    // Prepend the (possibly structured-extended) system message to a set of
+    // author turns, producing the full wire `messages` array. Shared by the
+    // structured/text callers of `buildBody` and the tools path's initial
+    // conversation seed.
+    const wireMessages = (msgTurns: LlmTurn[]): readonly unknown[] =>
+      systemContent !== undefined
+        ? [{ role: 'system', content: systemContent }, ...msgTurns]
+        : [...msgTurns];
+
+    // #648 — ONE wire-body builder for all three paths (text / structured L4c /
+    // tools L10a); previously the sampling+reasoning stanza was duplicated per
+    // path. `msgs` is the FULL wire messages array (system included). Sampling +
+    // reasoning apply in every mode; `response_format` only in structured mode
+    // (which the config coupling forbids from co-occurring with `toolWire`);
+    // tools/tool_choice only when the tools path passes them.
+    const buildBody = (
+      msgs: readonly unknown[],
+      toolWire?: { tools: unknown[]; choice: LlmToolChoice },
+    ): Record<string, unknown> => {
+      const body: Record<string, unknown> = { model, messages: msgs };
       if (sampling.maxTokens !== undefined) body.max_tokens = sampling.maxTokens;
       if (sampling.temperature !== undefined) body.temperature = sampling.temperature;
       if (sampling.topP !== undefined) body.top_p = sampling.topP;
@@ -177,7 +185,20 @@ export const openaiAdapter: ConnectorAdapter = {
       // validate of the RESPONSE (`parseAndValidateStructured`) is the correctness
       // guarantee. Widely supported by OpenAI-compatible gateways.
       if (structuredOutput !== undefined) body.response_format = { type: 'json_object' };
+      if (toolWire !== undefined) {
+        body.tools = toolWire.tools;
+        body.tool_choice = toolWire.choice;
+      }
       return body;
+    };
+
+    // #648 — Chat Completions reports `usage.{prompt_tokens, completion_tokens}`
+    // (a gateway may omit it → `meterUsage` flags `unknown`); previously
+    // extracted inline per path.
+    const usageOf = (json: unknown) => {
+      const u = (json as { usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } })
+        .usage;
+      return meterUsage('openai_api', model, u?.prompt_tokens, u?.completion_tokens);
     };
 
     // #2 L4c — STRUCTURED path with bounded internal repair. Each call meters (a
@@ -188,34 +209,23 @@ export const openaiAdapter: ConnectorAdapter = {
     // separate #461 branch.
     if (structuredOutput !== undefined) {
       yield* runStructuredWithRepair('openai_api', turns, async (msgTurns) => {
-        const res = await llmPost(ctx, url, headers, buildBody(msgTurns), timeoutMs);
-        if (res.type === 'failed') return { type: 'terminal', event: res.event };
-        if (res.status < 200 || res.status >= 300) {
-          return {
-            type: 'terminal',
-            event: httpStatusFailure(
-              'openai_api',
-              res.status,
-              res.bodyText,
-              res.retryAfterHeader,
-              Date.now(),
-            ),
-          };
-        }
-        const body = parseJsonBody(res.bodyText);
-        if (!body.ok) return { type: 'terminal', event: body.event };
-        const u = (
-          body.json as { usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } }
-        ).usage;
-        const usage = meterUsage('openai_api', model, u?.prompt_tokens, u?.completion_tokens);
-        const choices = (body.json as { choices?: unknown }).choices;
+        const res = await postJsonAndParse(
+          ctx,
+          'openai_api',
+          url,
+          headers,
+          buildBody(wireMessages(msgTurns)),
+          timeoutMs,
+        );
+        if (!res.ok) return { type: 'terminal', event: res.event };
+        const choices = (res.json as { choices?: unknown }).choices;
         const content =
           Array.isArray(choices) && choices.length > 0
             ? (choices[0] as { message?: { content?: unknown } } | undefined)?.message?.content
             : undefined;
         return {
           type: 'validated',
-          usage,
+          usage: usageOf(res.json),
           result: parseAndValidateStructured(structuredOutput, content),
           echo: structuredEcho(content),
         };
@@ -241,78 +251,45 @@ export const openaiAdapter: ConnectorAdapter = {
           parameters: toolWireParameters(t.parameters),
         },
       }));
-      const buildToolBody = (
-        msgs: readonly unknown[],
-        // `'none'` never reaches here (the guard above falls through to the
-        // plain text path); typed total so the generator's choice threads as-is.
-        choice: LlmToolChoice,
-      ): Record<string, unknown> => {
-        const body: Record<string, unknown> = { model, messages: msgs };
-        if (sampling.maxTokens !== undefined) body.max_tokens = sampling.maxTokens;
-        if (sampling.temperature !== undefined) body.temperature = sampling.temperature;
-        if (sampling.topP !== undefined) body.top_p = sampling.topP;
-        if (sampling.stop !== undefined) body.stop = sampling.stop;
-        if (sampling.seed !== undefined) body.seed = sampling.seed;
-        if (reasoningEffort !== undefined)
-          body.reasoning_effort = openAiReasoningEffort(reasoningEffort);
-        body.tools = wireTools;
-        body.tool_choice = choice;
-        return body;
-      };
       // The conversation value `C` is the WIRE messages array (leading system
       // included); the continuation appends the response's RAW assistant
       // message (with its `tool_calls`) + one `role:'tool'` result per call id
-      // — the shape Chat Completions requires.
-      const initial: readonly unknown[] =
-        systemContent !== undefined
-          ? [{ role: 'system', content: systemContent }, ...turns]
-          : [...turns];
+      // — the shape Chat Completions requires. `'none'` never reaches the
+      // per-round `choice` (the guard above falls through to the plain text
+      // path); `buildBody`'s `toolWire.choice` is typed total so the
+      // generator's choice threads as-is.
       yield* runTextWithTools<readonly unknown[]>(
         'openai_api',
         tools,
-        initial,
+        wireMessages(turns),
         authorChoice,
         async (conv, choice): Promise<ToolRoundOutcome<readonly unknown[]>> => {
-          const started = Date.now();
-          const res = await llmPost(ctx, url, headers, buildToolBody(conv, choice), timeoutMs);
-          const latencyMs = Date.now() - started;
+          const res = await postJsonAndParse(
+            ctx,
+            'openai_api',
+            url,
+            headers,
+            buildBody(conv, { tools: wireTools, choice }),
+            timeoutMs,
+          );
           // First-exchange capture semantics (#2 L9a): request = the author's
           // turns; the generator emits only the round-0 capture (#605 owns
-          // continuation-turn representation).
+          // continuation-turn representation). Emitted for EVERY post-request
+          // outcome — a terminal carries the capture alongside its event.
           const captureOf = (completionText?: string) =>
             buildCapture({
               provider: 'openai_api',
               model,
-              latencyMs,
+              latencyMs: res.latencyMs,
               turns,
               system,
               completionText,
             });
-          if (res.type === 'failed') {
+          if (!res.ok) {
             return { type: 'terminal', event: res.event, capture: captureOf() };
           }
-          if (res.status < 200 || res.status >= 300) {
-            return {
-              type: 'terminal',
-              event: httpStatusFailure(
-                'openai_api',
-                res.status,
-                res.bodyText,
-                res.retryAfterHeader,
-                Date.now(),
-              ),
-              capture: captureOf(),
-            };
-          }
-          const parsed = parseJsonBody(res.bodyText);
-          if (!parsed.ok) {
-            return { type: 'terminal', event: parsed.event, capture: captureOf() };
-          }
-          const u = (
-            parsed.json as { usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } }
-          ).usage;
-          const usage = meterUsage('openai_api', model, u?.prompt_tokens, u?.completion_tokens);
-          const choices = (parsed.json as { choices?: unknown }).choices;
+          const usage = usageOf(res.json);
+          const choices = (res.json as { choices?: unknown }).choices;
           const first =
             Array.isArray(choices) && choices.length > 0
               ? (choices[0] as { message?: unknown; finish_reason?: unknown })
@@ -399,9 +376,14 @@ export const openaiAdapter: ConnectorAdapter = {
     }
 
     // TEXT path.
-    const started = Date.now();
-    const result = await llmPost(ctx, url, headers, buildBody(turns), timeoutMs);
-    const latencyMs = Date.now() - started;
+    const result = await postJsonAndParse(
+      ctx,
+      'openai_api',
+      url,
+      headers,
+      buildBody(wireMessages(turns)),
+      timeoutMs,
+    );
     // #2 L9a — the prompt/completion CAPTURE fact, emitted before EVERY post-request
     // terminal. `system` is the LOGICAL system instruction (not `systemContent`,
     // which folds in the structured-mode scaffold — text mode has none anyway).
@@ -410,32 +392,15 @@ export const openaiAdapter: ConnectorAdapter = {
       capture: buildCapture({
         provider: 'openai_api',
         model,
-        latencyMs,
+        latencyMs: result.latencyMs,
         turns,
         system,
         completionText,
       }),
     });
-    if (result.type === 'failed') {
+    if (!result.ok) {
       yield captureOf();
       yield result.event;
-      return;
-    }
-    if (result.status < 200 || result.status >= 300) {
-      yield captureOf();
-      yield httpStatusFailure(
-        'openai_api',
-        result.status,
-        result.bodyText,
-        result.retryAfterHeader,
-        Date.now(),
-      );
-      return;
-    }
-    const parsed = parseJsonBody(result.bodyText);
-    if (!parsed.ok) {
-      yield captureOf();
-      yield parsed.event;
       return;
     }
     // #461 — a present string (even '') is a real completion; anything else is
@@ -443,7 +408,7 @@ export const openaiAdapter: ConnectorAdapter = {
     // absent/non-array `choices` container is `absent_content`; a present-but-
     // empty `choices:[]` is `empty_completion_set`; a candidate present but its
     // `message.content` non-string/absent is `malformed_block`.
-    const choices = (parsed.json as { choices?: unknown }).choices;
+    const choices = (result.json as { choices?: unknown }).choices;
     if (!Array.isArray(choices)) {
       yield captureOf();
       yield noCompletionFailure('openai_api', 'absent_content');
@@ -461,16 +426,8 @@ export const openaiAdapter: ConnectorAdapter = {
       yield noCompletionFailure('openai_api', 'malformed_block');
       return;
     }
-    // #2 L2 — capture the metering fact before the terminal event. Chat
-    // Completions reports `usage.{prompt_tokens, completion_tokens}` (a gateway
-    // may omit it → `meterUsage` flags `unknown`).
-    const usage = (
-      parsed.json as { usage?: { prompt_tokens?: unknown; completion_tokens?: unknown } }
-    ).usage;
-    yield {
-      type: 'metered',
-      usage: meterUsage('openai_api', model, usage?.prompt_tokens, usage?.completion_tokens),
-    };
+    // #2 L2 — capture the metering fact before the terminal event.
+    yield { type: 'metered', usage: usageOf(result.json) };
     yield captureOf(text);
     yield {
       type: 'succeeded',

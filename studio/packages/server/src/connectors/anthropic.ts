@@ -4,15 +4,13 @@ import {
   DEFAULT_LLM_TIMEOUT_MS,
   buildCapture,
   coerceStopReason,
-  httpStatusFailure,
   llmCallConfigSchema,
   llmConnectionConfigSchema,
-  llmPost,
   llmProbeGet,
   meterUsage,
   noCompletionFailure,
   normalizeLlmRequest,
-  parseJsonBody,
+  postJsonAndParse,
   resolveModel,
   runStructuredWithRepair,
   runTextWithTools,
@@ -20,13 +18,7 @@ import {
   toolWireParameters,
   validateStructuredOutput,
 } from './llm-shared.js';
-import type {
-  LlmToolChoice,
-  LlmTurn,
-  NoCompletionReason,
-  ToolCallRequest,
-  ToolRoundOutcome,
-} from './llm-shared.js';
+import type { NoCompletionReason, ToolCallRequest, ToolRoundOutcome } from './llm-shared.js';
 
 /** The forced-tool name a structured `llm_call` requires Anthropic to call. */
 const STRUCTURED_TOOL_NAME = 'structured_output';
@@ -221,6 +213,54 @@ export const anthropicAdapter: ConnectorAdapter = {
     };
     const timeoutMs = config.data.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS;
 
+    // #648 — ONE wire-body builder for all three paths (text / structured L4c /
+    // tools L10a); previously the system/temperature/top_p/stop stanza was
+    // duplicated per path. The Messages API takes `system` as a top-level param
+    // (not a message) and has no `seed` (dropped, documented #2 L1). Tools +
+    // tool_choice travel as ONE `toolWire` group so a `tool_choice` without
+    // `tools` (a provider 400) is unrepresentable. `allowThinking` carries each
+    // path's reasoning posture — see the callers for why a forced choice
+    // precludes the adaptive-thinking surface.
+    const buildBody = (
+      msgs: readonly unknown[],
+      opts: { toolWire?: { tools: unknown[]; choice: unknown }; allowThinking: boolean },
+    ): Record<string, unknown> => {
+      const body: Record<string, unknown> = {
+        model,
+        max_tokens: sampling.maxTokens ?? DEFAULT_MAX_TOKENS,
+        messages: msgs,
+      };
+      if (opts.toolWire !== undefined) {
+        body.tools = opts.toolWire.tools;
+        body.tool_choice = opts.toolWire.choice;
+      }
+      if (system !== undefined) body.system = system;
+      if (sampling.temperature !== undefined) body.temperature = sampling.temperature;
+      if (sampling.topP !== undefined) body.top_p = sampling.topP;
+      if (sampling.stop !== undefined) body.stop_sequences = sampling.stop;
+      // #2 L3 — reasoning effort. The MODERN Messages-API surface is adaptive
+      // thinking + `output_config.effort`; the older `thinking:{enabled,budget_tokens}`
+      // is REMOVED (HTTP 400) on every current model, including the DEFAULT_MODEL
+      // `claude-opus-4-8`. Both keys are emitted together: `output_config.effort` sets
+      // the depth, `thinking:{adaptive}` turns reasoning ON (omitting it leaves Opus
+      // 4.8 non-thinking, making effort inert). CAVEAT: thinking tokens count against
+      // `max_tokens` (default 1024). Only fires when the author opted in, so a node
+      // with no `reasoningEffort` is byte-identical to a pre-L3 request.
+      if (reasoningEffort !== undefined && opts.allowThinking) {
+        body.thinking = { type: 'adaptive' };
+        body.output_config = { effort: reasoningEffort };
+      }
+      return body;
+    };
+
+    // #648 — the Messages API reports `usage.{input_tokens, output_tokens}`;
+    // `meterUsage` records whatever is a valid non-negative integer and flags
+    // completeness. Previously extracted inline per path.
+    const usageOf = (json: unknown) => {
+      const u = (json as { usage?: { input_tokens?: unknown; output_tokens?: unknown } }).usage;
+      return meterUsage('anthropic_api', model, u?.input_tokens, u?.output_tokens);
+    };
+
     // #2 L4b/L4c — STRUCTURED output via FORCED tool use: one tool whose
     // `input_schema` is the node's `outputSchema`, forced with `tool_choice`. This
     // is the robust, model-agnostic Anthropic structured mechanism (the newer
@@ -236,53 +276,35 @@ export const anthropicAdapter: ConnectorAdapter = {
     // forced-tool result, and terminalizes `permanent` only once repairs run out —
     // all inside ONE attempt.
     if (structuredOutput !== undefined) {
-      // The Messages API takes `system` as a top-level param (not a message) and
-      // has no `seed` (dropped, documented #2 L1); only `messages` changes across
-      // repair calls, so the static scaffold is rebuilt with the passed turns.
-      const buildStructuredBody = (turns: LlmTurn[]): Record<string, unknown> => {
-        const body: Record<string, unknown> = {
-          model,
-          max_tokens: sampling.maxTokens ?? DEFAULT_MAX_TOKENS,
-          messages: turns,
-          tools: [
-            {
-              name: STRUCTURED_TOOL_NAME,
-              description: 'Emit the required structured result as this tool call.',
-              input_schema: structuredOutput,
-            },
-          ],
-          tool_choice: { type: 'tool', name: STRUCTURED_TOOL_NAME },
-        };
-        if (system !== undefined) body.system = system;
-        if (sampling.temperature !== undefined) body.temperature = sampling.temperature;
-        if (sampling.topP !== undefined) body.top_p = sampling.topP;
-        if (sampling.stop !== undefined) body.stop_sequences = sampling.stop;
-        return body;
+      // A forced `tool_choice` precludes the adaptive-thinking reasoning
+      // surface, so structured mode never emits `thinking`/`output_config`
+      // (`allowThinking:false`); only `messages` changes across repair calls,
+      // so the static scaffold is rebuilt with the passed turns.
+      const structuredWire = {
+        tools: [
+          {
+            name: STRUCTURED_TOOL_NAME,
+            description: 'Emit the required structured result as this tool call.',
+            input_schema: structuredOutput,
+          },
+        ],
+        choice: { type: 'tool', name: STRUCTURED_TOOL_NAME },
       };
       yield* runStructuredWithRepair('anthropic_api', messages, async (turns) => {
-        const res = await llmPost(ctx, url, headers, buildStructuredBody(turns), timeoutMs);
-        if (res.type === 'failed') return { type: 'terminal', event: res.event };
-        if (res.status < 200 || res.status >= 300) {
-          return {
-            type: 'terminal',
-            event: httpStatusFailure(
-              'anthropic_api',
-              res.status,
-              res.bodyText,
-              res.retryAfterHeader,
-              Date.now(),
-            ),
-          };
-        }
-        const body = parseJsonBody(res.bodyText);
-        if (!body.ok) return { type: 'terminal', event: body.event };
+        const res = await postJsonAndParse(
+          ctx,
+          'anthropic_api',
+          url,
+          headers,
+          buildBody(turns, { toolWire: structuredWire, allowThinking: false }),
+          timeoutMs,
+        );
+        if (!res.ok) return { type: 'terminal', event: res.event };
         // Meter FIRST (a 2xx billed, even if the structured payload is invalid —
         // spec: `activity.metered` on failed-but-billed calls); the loop yields it
         // before deciding succeed / repair / terminal.
-        const u = (body.json as { usage?: { input_tokens?: unknown; output_tokens?: unknown } })
-          .usage;
-        const usage = meterUsage('anthropic_api', model, u?.input_tokens, u?.output_tokens);
-        const tool = findStructuredToolInput(body.json);
+        const usage = usageOf(res.json);
+        const tool = findStructuredToolInput(res.json);
         // A missing forced-tool block is now REPAIRABLE (fold into an invalid
         // result) rather than an immediate terminal — a model that answered with
         // text instead of the tool may correct on a re-prompt.
@@ -321,84 +343,59 @@ export const anthropicAdapter: ConnectorAdapter = {
       // only on the downgraded continuation would split one node's reasoning
       // posture across calls). An `auto` flow keeps reasoning as text mode does.
       const suppressThinking = authorChoice === 'required';
-      const buildToolBody = (
-        msgs: readonly unknown[],
-        // `'none'` never reaches here (the guard above falls through to the
-        // plain text path) — the ternary maps it to `auto` for type totality.
-        choice: LlmToolChoice,
-      ): Record<string, unknown> => {
-        const body: Record<string, unknown> = {
-          model,
-          max_tokens: sampling.maxTokens ?? DEFAULT_MAX_TOKENS,
-          messages: msgs,
-          tools: tools.map((t) => ({
-            name: t.name,
-            description: t.description,
-            // Explicit-required + closed (`toolWireParameters`): the wire says
-            // exactly what the local args validator enforces (#594 alignment).
-            input_schema: toolWireParameters(t.parameters),
-          })),
-          tool_choice: { type: choice === 'required' ? 'any' : 'auto' },
-        };
-        if (system !== undefined) body.system = system;
-        if (sampling.temperature !== undefined) body.temperature = sampling.temperature;
-        if (sampling.topP !== undefined) body.top_p = sampling.topP;
-        if (sampling.stop !== undefined) body.stop_sequences = sampling.stop;
-        if (reasoningEffort !== undefined && !suppressThinking) {
-          body.thinking = { type: 'adaptive' };
-          body.output_config = { effort: reasoningEffort };
-        }
-        return body;
-      };
+      const localTools = tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        // Explicit-required + closed (`toolWireParameters`): the wire says
+        // exactly what the local args validator enforces (#594 alignment).
+        input_schema: toolWireParameters(t.parameters),
+      }));
       // The conversation value `C` is the WIRE messages array: the initial
       // author turns are valid wire messages, and the continuation replays the
       // response's RAW content blocks (preserving any thinking blocks, which
       // Anthropic requires intact during tool use) + the tool_result turn.
+      // `'none'` never reaches the per-round `choice` (the guard above falls
+      // through to the plain text path) — the ternary maps it to `auto` for
+      // type totality.
       yield* runTextWithTools<readonly unknown[]>(
         'anthropic_api',
         tools,
         messages,
         authorChoice,
         async (conv, choice): Promise<ToolRoundOutcome<readonly unknown[]>> => {
-          const started = Date.now();
-          const res = await llmPost(ctx, url, headers, buildToolBody(conv, choice), timeoutMs);
-          const latencyMs = Date.now() - started;
+          const res = await postJsonAndParse(
+            ctx,
+            'anthropic_api',
+            url,
+            headers,
+            buildBody(conv, {
+              toolWire: {
+                tools: localTools,
+                choice: { type: choice === 'required' ? 'any' : 'auto' },
+              },
+              allowThinking: !suppressThinking,
+            }),
+            timeoutMs,
+          );
           // First-exchange capture semantics (#2 L9a): request = the author's
           // turns. The generator emits only the round-0 capture; continuation
           // exchanges carry tool turns `LlmCapture` cannot represent (#605).
+          // Emitted for EVERY post-request outcome — a terminal carries the
+          // capture alongside its event.
           const captureOf = (completionText?: string) =>
             buildCapture({
               provider: 'anthropic_api',
               model,
-              latencyMs,
+              latencyMs: res.latencyMs,
               turns: messages,
               system,
               completionText,
             });
-          if (res.type === 'failed') {
+          if (!res.ok) {
             return { type: 'terminal', event: res.event, capture: captureOf() };
           }
-          if (res.status < 200 || res.status >= 300) {
-            return {
-              type: 'terminal',
-              event: httpStatusFailure(
-                'anthropic_api',
-                res.status,
-                res.bodyText,
-                res.retryAfterHeader,
-                Date.now(),
-              ),
-              capture: captureOf(),
-            };
-          }
-          const parsed = parseJsonBody(res.bodyText);
-          if (!parsed.ok) {
-            return { type: 'terminal', event: parsed.event, capture: captureOf() };
-          }
-          const u = (parsed.json as { usage?: { input_tokens?: unknown; output_tokens?: unknown } })
-            .usage;
-          const usage = meterUsage('anthropic_api', model, u?.input_tokens, u?.output_tokens);
-          const calls = extractToolUses(parsed.json);
+          const usage = usageOf(res.json);
+          const calls = extractToolUses(res.json);
           if (calls.length > 0) {
             // A `tool_use` block without a string `id` is a malformed provider
             // response: the continuation's `tool_result` REQUIRES `tool_use_id`,
@@ -419,7 +416,7 @@ export const anthropicAdapter: ConnectorAdapter = {
                 capture: captureOf(),
               };
             }
-            const responseContent = (parsed.json as { content: unknown[] }).content;
+            const responseContent = (res.json as { content: unknown[] }).content;
             return {
               type: 'toolUse',
               usage,
@@ -441,7 +438,7 @@ export const anthropicAdapter: ConnectorAdapter = {
               ],
             };
           }
-          const extracted = extractText(parsed.json);
+          const extracted = extractText(res.json);
           if ('reason' in extracted) {
             return {
               type: 'terminal',
@@ -457,9 +454,7 @@ export const anthropicAdapter: ConnectorAdapter = {
               type: 'succeeded',
               outputs: {
                 text: extracted.text,
-                stopReason: coerceStopReason(
-                  (parsed.json as { stop_reason?: unknown }).stop_reason,
-                ),
+                stopReason: coerceStopReason((res.json as { stop_reason?: unknown }).stop_reason),
               },
             },
           };
@@ -473,33 +468,16 @@ export const anthropicAdapter: ConnectorAdapter = {
       return;
     }
 
-    // TEXT path. `system` is a top-level param; sampling maps to Anthropic's names
-    // (`top_p`, `stop_sequences`); no `seed` (dropped, #2 L1).
-    const requestBody: Record<string, unknown> = {
-      model,
-      max_tokens: sampling.maxTokens ?? DEFAULT_MAX_TOKENS,
-      messages,
-    };
-    if (system !== undefined) requestBody.system = system;
-    if (sampling.temperature !== undefined) requestBody.temperature = sampling.temperature;
-    if (sampling.topP !== undefined) requestBody.top_p = sampling.topP;
-    if (sampling.stop !== undefined) requestBody.stop_sequences = sampling.stop;
-    // #2 L3 — reasoning effort. The MODERN Messages-API surface is adaptive
-    // thinking + `output_config.effort`; the older `thinking:{enabled,budget_tokens}`
-    // is REMOVED (HTTP 400) on every current model, including the DEFAULT_MODEL
-    // `claude-opus-4-8`. Both keys are emitted together: `output_config.effort` sets
-    // the depth, `thinking:{adaptive}` turns reasoning ON (omitting it leaves Opus
-    // 4.8 non-thinking, making effort inert). CAVEAT: thinking tokens count against
-    // `max_tokens` (default 1024). Only fires when the author opted in, so a node
-    // with no `reasoningEffort` is byte-identical to a pre-L3 request.
-    if (reasoningEffort !== undefined) {
-      requestBody.thinking = { type: 'adaptive' };
-      requestBody.output_config = { effort: reasoningEffort };
-    }
-
-    const started = Date.now();
-    const result = await llmPost(ctx, url, headers, requestBody, timeoutMs);
-    const latencyMs = Date.now() - started;
+    // TEXT path — no tools on the wire, reasoning allowed (see `buildBody` for
+    // the L3 adaptive-thinking surface).
+    const result = await postJsonAndParse(
+      ctx,
+      'anthropic_api',
+      url,
+      headers,
+      buildBody(messages, { allowThinking: true }),
+      timeoutMs,
+    );
     // #2 L9a — the prompt/completion CAPTURE fact, emitted before EVERY post-request
     // terminal (success + each failure) so the debugging capture is not success-only.
     // `completionText` is passed ONLY on success — a failure omits `completion`
@@ -509,55 +487,31 @@ export const anthropicAdapter: ConnectorAdapter = {
       capture: buildCapture({
         provider: 'anthropic_api',
         model,
-        latencyMs,
+        latencyMs: result.latencyMs,
         turns: messages,
         system,
         completionText,
       }),
     });
-    if (result.type === 'failed') {
+    if (!result.ok) {
       yield captureOf();
       yield result.event;
       return;
     }
-    if (result.status < 200 || result.status >= 300) {
-      yield captureOf();
-      yield httpStatusFailure(
-        'anthropic_api',
-        result.status,
-        result.bodyText,
-        result.retryAfterHeader,
-        Date.now(),
-      );
-      return;
-    }
-    const parsed = parseJsonBody(result.bodyText);
-    if (!parsed.ok) {
-      yield captureOf();
-      yield parsed.event;
-      return;
-    }
-    const extracted = extractText(parsed.json);
+    const extracted = extractText(result.json);
     if ('reason' in extracted) {
       yield captureOf();
       yield noCompletionFailure('anthropic_api', extracted.reason);
       return;
     }
-    // #2 L2 — capture the metering fact before the terminal event. The Messages
-    // API reports `usage.{input_tokens, output_tokens}`; `meterUsage` records
-    // whatever is a valid non-negative integer and flags completeness.
-    const usage = (parsed.json as { usage?: { input_tokens?: unknown; output_tokens?: unknown } })
-      .usage;
-    yield {
-      type: 'metered',
-      usage: meterUsage('anthropic_api', model, usage?.input_tokens, usage?.output_tokens),
-    };
+    // #2 L2 — capture the metering fact before the terminal event.
+    yield { type: 'metered', usage: usageOf(result.json) };
     yield captureOf(extracted.text);
     yield {
       type: 'succeeded',
       outputs: {
         text: extracted.text,
-        stopReason: coerceStopReason((parsed.json as { stop_reason?: unknown }).stop_reason),
+        stopReason: coerceStopReason((result.json as { stop_reason?: unknown }).stop_reason),
       },
     };
   },
