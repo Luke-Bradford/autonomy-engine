@@ -205,3 +205,46 @@ describe('deriveRunLifecycle', () => {
     expect(deriveRunLifecycle(events)).toBe('running');
   });
 });
+
+describe('deriveNodeActivity — parallel foreach instance keys (#566 slice 2 / #4 A4b)', () => {
+  it('folds an instance-key event onto the CANVAS node row (docNodeIdOf)', () => {
+    // Two item instances of one doc node `w`: both fold onto the single `w` row
+    // (last-write-wins, the same collapse the sequential rounds already have).
+    const events = [
+      envelope({
+        type: 'node.dispatched',
+        runId: 'r',
+        nodeId: 'w@0',
+        attemptId: 'w@0#0',
+        idempotent: true,
+      }),
+      envelope({
+        type: 'node.dispatched',
+        runId: 'r',
+        nodeId: 'w@1',
+        attemptId: 'w@1#0',
+        idempotent: true,
+      }),
+      envelope({
+        type: 'node.succeeded',
+        runId: 'r',
+        nodeId: 'w@0',
+        attemptId: 'w@0#0',
+        outputs: {},
+      }),
+      envelope({
+        type: 'node.failed',
+        runId: 'r',
+        nodeId: 'w@1',
+        attemptId: 'w@1#0',
+        error: 'item 1 broke',
+        kind: 'permanent',
+      }),
+    ];
+    const activity = deriveNodeActivity(events);
+    expect(activity.map((a) => a.nodeId)).toEqual(['w']);
+    expect(activity[0]!.attempts).toBe(2); // both instances counted on the one row
+    expect(activity[0]!.status).toBe('failure'); // last write wins
+    expect(activity[0]!.error).toBe('item 1 broke');
+  });
+});

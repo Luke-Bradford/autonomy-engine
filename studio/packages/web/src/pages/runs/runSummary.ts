@@ -1,4 +1,5 @@
 import {
+  docNodeIdOf,
   EngineEventSchema,
   terminalStatusOf,
   type RunEvent,
@@ -55,7 +56,15 @@ export interface NodeActivity {
  */
 export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
   const byNode = new Map<string, NodeActivity>();
-  const ensure = (nodeId: string): NodeActivity => {
+  // #566 slice 2 / #4 A4b — a PARALLEL foreach's body events carry per-item
+  // INSTANCE keys (`w@1`); fold them onto the CANVAS node's row (`w`) so item
+  // instances light up the one node the author drew — last-write-wins, the same
+  // collapse the sequential foreach's rounds already have. CAVEAT: a literal
+  // node id shaped like `x@2` is folded onto `x` too — accepted; save-time now
+  // refuses such ids for parallel docs, and a doc-free event view cannot tell
+  // the two apart.
+  const ensure = (rawNodeId: string): NodeActivity => {
+    const nodeId = docNodeIdOf(rawNodeId);
     let n = byNode.get(nodeId);
     if (!n) {
       n = {

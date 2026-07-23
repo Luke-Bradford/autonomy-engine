@@ -543,6 +543,18 @@ export const ContainerSchema = z.object({
    * parallel `batchCount` is deferred to A4b.
    */
   items: z.string().optional(),
+  /**
+   * #4 A4b (#566 slice 2) — foreach-only PARALLEL item cap: how many items may be
+   * in flight at once. Absent or `1` = sequential (the A4a round machinery,
+   * byte-identical). `>= 2` = parallel mode: each in-flight item's body-node
+   * state lives under a per-item instance key (`<nodeId>@<i>`), and up to
+   * `batchCount` items run concurrently — adapters are still bounded by the
+   * pump's `PER_RUN_DISPATCH_CONCURRENCY`. Hard-capped at 50 so one foreach
+   * cannot flood the run. `validateDoc` refuses `>= 2` combined with a back-edge
+   * touching the body (bare-id machinery would be silently dead) or any doc id
+   * containing `@` (instance-key collision).
+   */
+  batchCount: z.number().int().min(1).max(50).optional(),
   /** Readiness rule over the container's own incoming OUTER edges (default `all`). */
   join: z.enum(['all', 'any']).optional(),
 });

@@ -5,6 +5,7 @@ import {
   collectSecretSinkMarkers,
   computeCostEstimate,
   containsSecretMarker,
+  resolveDocNode,
   FAILURE_CODES,
   findLlmMessagesRowIndex,
   LLM_CALL_ACTIVITY_TYPE,
@@ -216,7 +217,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     const run = getRun(deps.db, runId);
     if (run === null) return null;
     const pv = deps.resolveDoc(run.pipelineVersionId);
-    const node = pv.nodes.find((n) => n.id === nodeId) ?? null;
+    // #4 A4b — a parallel-foreach dispatch carries an INSTANCE key (`w@1`);
+    // EXACT id first (a legacy literal `x@2` node resolves to itself), then the
+    // instance-suffix strip resolves the doc node behind the item instance.
+    const node = resolveDocNode(pv.nodes, nodeId) ?? null;
     return node === null ? null : { node, ownerId: run.ownerId };
   }
 

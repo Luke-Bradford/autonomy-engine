@@ -41,6 +41,7 @@ import {
   triggerRoot,
   wholeValueDefect,
 } from './params.js';
+import { docNodeIdOf, instanceKey, parseInstanceKey } from './instance-key.js';
 
 // ---------------------------------------------------------------------------
 // P2b + P2c — the PURE event-sourced reducer + walk (DAG, back-edges,
@@ -444,6 +445,63 @@ export function createEngine(doc: EngineDoc): Engine {
   // of `topLevelNodeIds` — it does not leak back as an unconditional root.
   const topLevelNodeIds = nodeIds.filter((id) => !childSet.has(id));
 
+  // #4 A4b (#566 slice 2) — PARALLEL foreach mode. A foreach with
+  // `batchCount >= 2` runs its items concurrently: each in-flight item i's
+  // body-node state lives under the instance key `<nodeId>@<i>` (see
+  // `instance-key.ts`), seeded when the item STARTS and deleted when it
+  // completes. Sequential mode (absent/1) keeps the A4a round machinery
+  // byte-identical — parallel is a SEPARATE derivation path
+  // (`stepForeachParallel` + the item-start pass in `settle`), and every piece
+  // of sequential machinery explicitly skips a parallel container.
+  const isParallelForeach = (c: Container): boolean =>
+    c.kind === 'foreach' && (c.batchCount ?? 1) >= 2;
+  /** Children of parallel-mode foreach containers: NEVER seeded as bare ids. */
+  const parallelChildIds = new Set<string>();
+  for (const c of containers) {
+    if (!isParallelForeach(c)) continue;
+    for (const ch of c.children) parallelChildIds.add(ch);
+  }
+
+  /**
+   * The item scope an INSTANCE state-key belongs to, or `undefined` for a bare
+   * doc id. Deliberately requires the resolved container to be PARALLEL-mode:
+   * a legacy doc may carry a literal node id shaped like `x@2` (only parallel
+   * docs refuse `@` in ids), and such an id must keep resolving as itself —
+   * `parseInstanceKey` alone cannot tell the two apart, this can.
+   */
+  function scopeOfStateId(sid: string): { container: Container; itemIndex: number } | undefined {
+    const parsed = parseInstanceKey(sid);
+    if (parsed === null) return undefined;
+    const cid = childToContainer.get(parsed.docId);
+    if (cid === undefined) return undefined;
+    const c = containerById.get(cid);
+    if (c === undefined || !isParallelForeach(c)) return undefined;
+    return { container: c, itemIndex: parsed.itemIndex };
+  }
+
+  /**
+   * Resolve the DOC node behind an event/command nodeId. EXACT id first — a
+   * legacy literal `x@2` node resolves to itself — then the instance-key
+   * fallback (`w@1` → `w`) for parallel-body events.
+   */
+  function docNodeFor(id: string): Node | undefined {
+    return nodeById.get(id) ?? nodeById.get(docNodeIdOf(id));
+  }
+
+  /** An item scope for readiness/outcome walks over a parallel body. */
+  type ItemScope = { container: Container; itemIndex: number };
+
+  /**
+   * Map a bare doc id to its state key under an item scope: the container's own
+   * children map to their instance keys, everything else (top-level nodes,
+   * containers) stays bare. Doc EDGES stay bare — only state lookups map.
+   */
+  function ikey(id: string, scope?: ItemScope): string {
+    return scope !== undefined && childToContainer.get(id) === scope.container.id
+      ? instanceKey(id, scope.itemIndex)
+      : id;
+  }
+
   // Endpoints + the FORWARD readiness partition (endpoints = node ids ∪ container
   // ids; INTERNAL vs TOP-LEVEL edge classification incl. #480/#488/#498) come from
   // the SHARED SSOT `partitionReadiness` (params.ts), so the static ref-checker
@@ -608,8 +666,12 @@ export function createEngine(doc: EngineDoc): Engine {
 
   // --- endpoint / edge helpers (pure over the passed-in `state`) ------------
 
-  /** A node's or container's terminal outcome, or `null` if not yet terminal. */
-  function endpointOutcome(id: string, state: RunState): EndpointOutcome {
+  /**
+   * A node's or container's terminal outcome, or `null` if not yet terminal.
+   * Under an item `scope` (#4 A4b) a parallel body child's outcome is read from
+   * its per-item INSTANCE entry; everything else is unchanged.
+   */
+  function endpointOutcome(id: string, state: RunState, scope?: ItemScope): EndpointOutcome {
     if (containerById.has(id)) {
       const cs = state.containers[id];
       if (cs === undefined) return null;
@@ -617,15 +679,15 @@ export function createEngine(doc: EngineDoc): Engine {
         ? cs.status
         : null;
     }
-    const ns = state.nodes[id];
+    const ns = state.nodes[ikey(id, scope)];
     if (ns === undefined) return null;
     return TERMINAL_NODE.has(ns.status) ? (ns.status as EndpointOutcome) : null;
   }
 
   /** The state of ONE incoming edge, from its predecessor endpoint's outcome. */
-  function edgeState(edge: Edge, state: RunState): EdgeState {
+  function edgeState(edge: Edge, state: RunState, scope?: ItemScope): EdgeState {
     if (!endpointIds.has(edge.from)) return 'impossible';
-    const oc = endpointOutcome(edge.from, state);
+    const oc = endpointOutcome(edge.from, state, scope);
     if (oc === null) return 'pending';
     if (oc === 'skipped') {
       // A skip propagates unless something explicitly catches it. `completion`
@@ -644,7 +706,11 @@ export function createEngine(doc: EngineDoc): Engine {
     // downstream skips. The `if` node itself is `success` here (control nodes
     // terminate `success`), so this is reached with `oc === 'success'`.
     if (edge.on === 'branch') {
-      return state.branches[edge.from] === edge.branch ? 'satisfied' : 'unsatisfied-terminal';
+      // #4 A4b — a parallel body child's branch decision lives under its
+      // INSTANCE key (`onControlBranchEvaluated` folds the event's nodeId).
+      return state.branches[ikey(edge.from, scope)] === edge.branch
+        ? 'satisfied'
+        : 'unsatisfied-terminal';
     }
     if (oc === 'success') {
       return edge.on === 'success' || edge.on === 'completion'
@@ -671,14 +737,19 @@ export function createEngine(doc: EngineDoc): Engine {
    * any group dead; `any` → ready iff ≥1 group satisfied, skipped iff all dead.
    * (`any` is unchanged by the grouping: OR distributes over OR.)
    */
-  function computeReadiness(incoming: Edge[], join: 'all' | 'any', state: RunState): Readiness {
+  function computeReadiness(
+    incoming: Edge[],
+    join: 'all' | 'any',
+    state: RunState,
+    scope?: ItemScope,
+  ): Readiness {
     if (incoming.length === 0) return 'ready';
 
     const byPredecessor = new Map<string, EdgeState[]>();
     for (const e of incoming) {
       const states = byPredecessor.get(e.from);
-      if (states === undefined) byPredecessor.set(e.from, [edgeState(e, state)]);
-      else states.push(edgeState(e, state));
+      if (states === undefined) byPredecessor.set(e.from, [edgeState(e, state, scope)]);
+      else states.push(edgeState(e, state, scope));
     }
     // Order-independent (`every`/`some`), so Map iteration order can't affect
     // the result — the reducer stays pure and replay-stable. A GROUP is never
@@ -761,11 +832,12 @@ export function createEngine(doc: EngineDoc): Engine {
     outgoing: ReadonlyMap<string, Edge[]>,
     incoming: ReadonlyMap<string, Edge[]>,
     state: RunState,
+    scope?: ItemScope,
   ): string | null {
     const outs = (id: string): readonly Edge[] => outgoing.get(id) ?? [];
     const ins = (id: string): readonly Edge[] => incoming.get(id) ?? [];
     const ran = (id: string): boolean => {
-      const oc = endpointOutcome(id, state);
+      const oc = endpointOutcome(id, state, scope);
       return oc === 'success' || oc === 'failure';
     };
 
@@ -781,9 +853,11 @@ export function createEngine(doc: EngineDoc): Engine {
         if (seen.has(id)) continue;
         seen.add(id);
         for (const e of outs(id)) {
-          const es = edgeState(e, state);
+          const es = edgeState(e, state, scope);
           if (e.on === 'skipped' && es === 'satisfied' && ran(e.to)) return true;
-          if (isEdgeStateDead(es) && endpointOutcome(e.to, state) === 'skipped') stack.push(e.to);
+          if (isEdgeStateDead(es) && endpointOutcome(e.to, state, scope) === 'skipped') {
+            stack.push(e.to);
+          }
         }
       }
       return false;
@@ -809,13 +883,13 @@ export function createEngine(doc: EngineDoc): Engine {
      */
     function absorbedFailure(id: string): boolean {
       for (const e of outs(id)) {
-        const es = edgeState(e, state);
+        const es = edgeState(e, state, scope);
         if ((e.on === 'failure' || e.on === 'completion') && es === 'satisfied' && ran(e.to)) {
           return true;
         }
         if (
           isEdgeStateDead(es) &&
-          endpointOutcome(e.to, state) === 'skipped' &&
+          endpointOutcome(e.to, state, scope) === 'skipped' &&
           absorbedSkip(e.to, new Set())
         ) {
           return true;
@@ -837,7 +911,7 @@ export function createEngine(doc: EngineDoc): Engine {
         const id = stack.pop()!;
         if (seen.has(id)) continue;
         seen.add(id);
-        const oc = endpointOutcome(id, state);
+        const oc = endpointOutcome(id, state, scope);
         if (oc === 'failure') return id;
         if (oc !== 'skipped') continue;
         const parents = ins(id);
@@ -847,7 +921,7 @@ export function createEngine(doc: EngineDoc): Engine {
     }
 
     for (const id of entities) {
-      if (endpointOutcome(id, state) !== 'failure') continue;
+      if (endpointOutcome(id, state, scope) !== 'failure') continue;
       if (!absorbedFailure(id)) return id;
     }
     // Forward leaves. These maps exclude back-edges by construction, so this
@@ -886,8 +960,12 @@ export function createEngine(doc: EngineDoc): Engine {
    * container's own `failure` is then absorbed (or not) by its OUTER edges at
    * top level, which is a separate decision made by `runOutcomeFailure`.
    */
-  function containerOutcomeFailure(c: Container, state: RunState): string | null {
-    return outcomeFailure([...c.children].sort(), childOutgoing, childIncoming, state);
+  function containerOutcomeFailure(
+    c: Container,
+    state: RunState,
+    scope?: ItemScope,
+  ): string | null {
+    return outcomeFailure([...c.children].sort(), childOutgoing, childIncoming, state, scope);
   }
 
   /** Every TOP-LEVEL entity is terminal (waiting/active/pending count as live). */
@@ -935,8 +1013,11 @@ export function createEngine(doc: EngineDoc): Engine {
     };
   }
 
-  function prepInput(state: RunState, node: Node): Record<string, unknown> {
-    const item = foreachItemOf(state, node.id);
+  function prepInput(
+    state: RunState,
+    node: Node,
+    item: { value: unknown } | undefined,
+  ): Record<string, unknown> {
     // #2 L10a — an llm_call's `tools` subtree is DEFERRED-EVAL: its expressions
     // reference `${tool.args.*}`, bound only when the model calls the tool
     // inside the adapter, so the blanket substitution must not walk it (the
@@ -964,9 +1045,13 @@ export function createEngine(doc: EngineDoc): Engine {
    * node carries no connection). Throws exactly as `prepInput` does (bad ref /
    * grammar), so the caller's existing try/catch → `prepFailure` covers it.
    */
-  function resolveConnectionId(state: RunState, node: Node): string | undefined {
+  function resolveConnectionId(
+    state: RunState,
+    node: Node,
+    item: { value: unknown } | undefined,
+  ): string | undefined {
     if (node.connectionId === undefined) return undefined;
-    return String(substitute(node.connectionId, buildCtx(state), 0, foreachItemOf(state, node.id)));
+    return String(substitute(node.connectionId, buildCtx(state), 0, item));
   }
 
   /**
@@ -984,14 +1069,10 @@ export function createEngine(doc: EngineDoc): Engine {
   function resolveConnectionParams(
     state: RunState,
     node: Node,
+    item: { value: unknown } | undefined,
   ): Record<string, unknown> | undefined {
     if (node.connectionParams === undefined) return undefined;
-    return substitute(
-      node.connectionParams,
-      buildCtx(state),
-      0,
-      foreachItemOf(state, node.id),
-    ) as Record<string, unknown>;
+    return substitute(node.connectionParams, buildCtx(state), 0, item) as Record<string, unknown>;
   }
 
   /**
@@ -1001,11 +1082,21 @@ export function createEngine(doc: EngineDoc): Engine {
    * ONE helper (rather than two calls per site) so a future site cannot ship the
    * config resolution and forget the connection one.
    */
-  function prepDispatch(state: RunState, node: Node): PreparedDispatch {
+  /**
+   * #4 A4b — `sid` is the STATE id the dispatch is keyed by: the bare doc id in
+   * sequential mode (the default keeps every pre-A4b call site byte-identical),
+   * or an instance key (`<node.id>@<i>`) for a parallel-body dispatch, which
+   * routes the whole prep through the item's env: `${item}` = that item's
+   * element and `${nodes.<sibling>.*}` = the SAME item's sibling instances (the
+   * `scopedEvalState` overlay).
+   */
+  function prepDispatch(state: RunState, node: Node, sid: string = node.id): PreparedDispatch {
+    const es = scopedEvalState(state, sid);
+    const item = foreachItemOf(state, sid);
     return {
-      preparedInput: prepInput(state, node),
-      resolvedConnectionId: resolveConnectionId(state, node),
-      resolvedConnectionParams: resolveConnectionParams(state, node),
+      preparedInput: prepInput(es, node, item),
+      resolvedConnectionId: resolveConnectionId(es, node, item),
+      resolvedConnectionParams: resolveConnectionParams(es, node, item),
     };
   }
 
@@ -1040,6 +1131,15 @@ export function createEngine(doc: EngineDoc): Engine {
    * on `ContainerRunState.items` at enter, so this is a pure read.
    */
   function foreachItemOf(state: RunState, id: string): { value: unknown } | undefined {
+    // #4 A4b — an INSTANCE key (a parallel-body dispatch) binds the item at ITS
+    // index, not the round's. `scopeOfStateId` (not bare `parseInstanceKey`)
+    // keeps a legacy literal `x@2` node id on the round path below.
+    const scope = scopeOfStateId(id);
+    if (scope !== undefined) {
+      const items = state.containers[scope.container.id]?.items;
+      if (items === undefined || scope.itemIndex >= items.length) return undefined;
+      return { value: items[scope.itemIndex] };
+    }
     const cid = childToContainer.get(id);
     if (cid === undefined) return undefined;
     const c = containerById.get(cid);
@@ -1049,6 +1149,33 @@ export function createEngine(doc: EngineDoc): Engine {
     const items = cs.items;
     if (items === undefined || cs.round >= items.length) return undefined;
     return { value: items[cs.round] };
+  }
+
+  /**
+   * #4 A4b — the per-item EVAL-STATE overlay. For a parallel-body dispatch
+   * (state id = an instance key), a body node's config reads its siblings by
+   * their BARE doc ids (`${nodes.a.output.v}` / `${nodes.a.status}`), but their
+   * state lives under instance keys — so build a VIEW where the container's
+   * children's `nodes`/`outputs`/`branches` entries are their item-i instances.
+   * Everything outside the container is untouched. Identity for a bare id, so
+   * every sequential path is byte-identical.
+   */
+  function scopedEvalState(state: RunState, sid: string): RunState {
+    const scope = scopeOfStateId(sid);
+    if (scope === undefined) return state;
+    const nodes = { ...state.nodes };
+    const outputs = { ...state.outputs };
+    const branches = { ...state.branches };
+    for (const ch of scope.container.children) {
+      const k = instanceKey(ch, scope.itemIndex);
+      const ns = state.nodes[k];
+      if (ns !== undefined) nodes[ch] = ns;
+      const o = state.outputs[k];
+      if (o !== undefined) outputs[ch] = o;
+      const b = state.branches[k];
+      if (b !== undefined) branches[ch] = b;
+    }
+    return { ...state, nodes, outputs, branches };
   }
 
   // --- the readiness fixpoint ("fold-to-fixpoint", CP1 Q2) ------------------
@@ -1083,11 +1210,14 @@ export function createEngine(doc: EngineDoc): Engine {
     incoming: Edge[],
     state: RunState,
     diagnostics: string[],
+    scope?: ItemScope,
   ): void {
     const dead = incoming.filter((e) => {
       if (e.on !== 'branch') return false;
-      const oc = endpointOutcome(e.from, state);
-      return (oc === 'success' || oc === 'failure') && state.branches[e.from] === undefined;
+      const oc = endpointOutcome(e.from, state, scope);
+      return (
+        (oc === 'success' || oc === 'failure') && state.branches[ikey(e.from, scope)] === undefined
+      );
     }).length;
     if (dead === 0) return;
     const subject = dead === 1 ? `an incoming 'branch' edge` : `${dead} incoming 'branch' edges`;
@@ -1103,6 +1233,11 @@ export function createEngine(doc: EngineDoc): Engine {
    * Try to advance ONE pending node (top-level or a child): skip it, dispatch
    * it (`dispatchNode`), or — for a `call_pipeline` node — emit `startChild` and
    * hold it `waiting`. A prep-input failure short-circuits to `invalid_event`.
+   *
+   * #4 A4b — `id` is always the BARE doc id (edges/readiness stay doc-keyed);
+   * an item `scope` maps every STATE read/write and every emitted command's
+   * nodeId to the item's instance key (`sid`), and routes `${}` prep through
+   * the item's env. Without a scope `sid === id` and nothing changes.
    */
   function tryDispatchNode(
     state: RunState,
@@ -1110,18 +1245,20 @@ export function createEngine(doc: EngineDoc): Engine {
     incoming: Edge[],
     commands: EngineCommand[],
     diagnostics: string[],
+    scope?: ItemScope,
   ): Step {
-    const ns = state.nodes[id]!;
+    const sid = ikey(id, scope);
+    const ns = state.nodes[sid]!;
     if (ns.status !== 'pending') return { state, changed: false };
     const node = nodeById.get(id)!;
-    const r = computeReadiness(incoming, nodeJoin(node), state);
+    const r = computeReadiness(incoming, nodeJoin(node), state, scope);
     if (r === 'skipped') {
-      noteDeadBranchOnSkip(id, incoming, state, diagnostics);
-      return { state: withNode(state, id, { status: 'skipped' }), changed: true };
+      noteDeadBranchOnSkip(id, incoming, state, diagnostics, scope);
+      return { state: withNode(state, sid, { status: 'skipped' }), changed: true };
     }
     if (r !== 'ready') return { state, changed: false };
 
-    const attemptId = `${id}#${ns.attempts}`;
+    const attemptId = `${sid}#${ns.attempts}`;
     const controlEvent = controlBranchEvent(node.type);
     if (controlEvent !== undefined) {
       // #4 A1/A2 — a `control` `if`/`switch` is ENGINE-evaluated: no connector, no
@@ -1137,18 +1274,18 @@ export function createEngine(doc: EngineDoc): Engine {
       // `finishRun{invalid_event}`, the same verdict a dispatch prep-throw reaches.
       let branch: string;
       try {
-        branch = evalControlBranch(node, state, foreachItemOf(state, id));
+        branch = evalControlBranch(node, scopedEvalState(state, sid), foreachItemOf(state, sid));
       } catch (err) {
-        return prepFailure(state, id, err, diagnostics);
+        return prepFailure(state, sid, err, diagnostics);
       }
-      const next = withNode(state, id, {
+      const next = withNode(state, sid, {
         status: 'ready',
         attempts: ns.attempts + 1,
         currentAttemptId: attemptId,
       });
       commands.push({
         type: 'evaluateControl',
-        nodeId: id,
+        nodeId: sid,
         attemptId,
         branch,
         event: controlEvent,
@@ -1165,16 +1302,16 @@ export function createEngine(doc: EngineDoc): Engine {
       // `finishRun{invalid_event}`, the same verdict a control-eval throw reaches.
       let error: string;
       try {
-        error = evalFailMessage(node, state, foreachItemOf(state, id));
+        error = evalFailMessage(node, scopedEvalState(state, sid), foreachItemOf(state, sid));
       } catch (err) {
-        return prepFailure(state, id, err, diagnostics);
+        return prepFailure(state, sid, err, diagnostics);
       }
-      const next = withNode(state, id, {
+      const next = withNode(state, sid, {
         status: 'ready',
         attempts: ns.attempts + 1,
         currentAttemptId: attemptId,
       });
-      commands.push({ type: 'failNode', nodeId: id, attemptId, error });
+      commands.push({ type: 'failNode', nodeId: sid, attemptId, error });
       return { state: next, changed: true };
     }
     if (node.type === FILTER_ACTIVITY_TYPE) {
@@ -1190,16 +1327,16 @@ export function createEngine(doc: EngineDoc): Engine {
       // `finishRun{invalid_event}`, the same verdict a control-eval throw reaches.
       let outputs: Record<string, unknown>;
       try {
-        outputs = evalFilter(node, state, foreachItemOf(state, id));
+        outputs = evalFilter(node, scopedEvalState(state, sid), foreachItemOf(state, sid));
       } catch (err) {
-        return prepFailure(state, id, err, diagnostics);
+        return prepFailure(state, sid, err, diagnostics);
       }
-      const next = withNode(state, id, {
+      const next = withNode(state, sid, {
         status: 'ready',
         attempts: ns.attempts + 1,
         currentAttemptId: attemptId,
       });
-      commands.push({ type: 'succeedControl', nodeId: id, attemptId, outputs });
+      commands.push({ type: 'succeedControl', nodeId: sid, attemptId, outputs });
       return { state: next, changed: true };
     }
     if (node.type === WAIT_ACTIVITY_TYPE) {
@@ -1218,16 +1355,16 @@ export function createEngine(doc: EngineDoc): Engine {
       // alarm (why wait, unlike retry, needs no boot re-arm).
       let seconds: number;
       try {
-        seconds = evalWaitSeconds(node, state, foreachItemOf(state, id));
+        seconds = evalWaitSeconds(node, scopedEvalState(state, sid), foreachItemOf(state, sid));
       } catch (err) {
-        return prepFailure(state, id, err, diagnostics);
+        return prepFailure(state, sid, err, diagnostics);
       }
-      const next = withNode(state, id, {
+      const next = withNode(state, sid, {
         status: 'ready',
         attempts: ns.attempts + 1,
         currentAttemptId: attemptId,
       });
-      commands.push({ type: 'scheduleWait', nodeId: id, attemptId, seconds });
+      commands.push({ type: 'scheduleWait', nodeId: sid, attemptId, seconds });
       return { state: next, changed: true };
     }
     if (node.type === WEBHOOK_ACTIVITY_TYPE) {
@@ -1244,16 +1381,20 @@ export function createEngine(doc: EngineDoc): Engine {
       // `external_wait_pending` node always has a live alarm.
       let timeoutSeconds: number;
       try {
-        timeoutSeconds = evalWebhookTimeoutSeconds(node, state, foreachItemOf(state, id));
+        timeoutSeconds = evalWebhookTimeoutSeconds(
+          node,
+          scopedEvalState(state, sid),
+          foreachItemOf(state, sid),
+        );
       } catch (err) {
-        return prepFailure(state, id, err, diagnostics);
+        return prepFailure(state, sid, err, diagnostics);
       }
-      const next = withNode(state, id, {
+      const next = withNode(state, sid, {
         status: 'ready',
         attempts: ns.attempts + 1,
         currentAttemptId: attemptId,
       });
-      commands.push({ type: 'scheduleExternalWait', nodeId: id, attemptId, timeoutSeconds });
+      commands.push({ type: 'scheduleExternalWait', nodeId: sid, attemptId, timeoutSeconds });
       return { state: next, changed: true };
     }
     if (node.call !== undefined) {
@@ -1262,22 +1403,22 @@ export function createEngine(doc: EngineDoc): Engine {
       let pvId: string;
       let callParams: Record<string, unknown>;
       try {
-        const ctx = buildCtx(state);
-        const item = foreachItemOf(state, id);
+        const ctx = buildCtx(scopedEvalState(state, sid));
+        const item = foreachItemOf(state, sid);
         pvId = String(substitute(node.call.pipelineVersionId, ctx, 0, item));
         callParams = substitute(node.call.params, ctx, 0, item) as Record<string, unknown>;
       } catch (err) {
-        return prepFailure(state, id, err, diagnostics);
+        return prepFailure(state, sid, err, diagnostics);
       }
-      const childRunId = deterministicChildRunId(state.runId, id, attemptId);
-      const next = withNode(state, id, {
+      const childRunId = deterministicChildRunId(state.runId, sid, attemptId);
+      const next = withNode(state, sid, {
         status: 'waiting',
         attempts: ns.attempts + 1,
         currentAttemptId: attemptId,
       });
       commands.push({
         type: 'startChild',
-        callNodeId: id,
+        callNodeId: sid,
         attemptId,
         childRunId,
         pipelineVersionId: pvId,
@@ -1288,16 +1429,16 @@ export function createEngine(doc: EngineDoc): Engine {
 
     let prepared: PreparedDispatch;
     try {
-      prepared = prepDispatch(state, node);
+      prepared = prepDispatch(state, node, sid);
     } catch (err) {
-      return prepFailure(state, id, err, diagnostics);
+      return prepFailure(state, sid, err, diagnostics);
     }
-    const next = withNode(state, id, {
+    const next = withNode(state, sid, {
       status: 'ready',
       attempts: ns.attempts + 1,
       currentAttemptId: attemptId,
     });
-    commands.push(dispatchNodeCommand(id, attemptId, prepared));
+    commands.push(dispatchNodeCommand(sid, attemptId, prepared));
     return { state: next, changed: true };
   }
 
@@ -1386,6 +1527,10 @@ export function createEngine(doc: EngineDoc): Engine {
   function stepContainers(state: RunState, diagnostics: string[]): Step {
     for (const cid of [...containerIds].sort()) {
       const c = containerById.get(cid)!;
+      // #4 A4b — a PARALLEL foreach is advanced by `stepForeachParallel`, never
+      // by this round machinery: its children have NO bare-id entries (the
+      // `state.nodes[ch]!` reads below would throw out of the pure reducer).
+      if (isParallelForeach(c)) continue;
       const cs = state.containers[cid]!;
       if (cs.status !== 'active') continue;
       if (!c.children.every((ch) => TERMINAL_NODE.has(state.nodes[ch]!.status))) continue;
@@ -1868,11 +2013,19 @@ export function createEngine(doc: EngineDoc): Engine {
     return seconds;
   }
 
-  /** The current round's children outputs, merged (sorted, last-key-wins). */
-  function mergeChildOutputs(c: Container, state: RunState): Record<string, unknown> {
+  /**
+   * The current round's children outputs, merged (sorted, last-key-wins).
+   * `keyOf` (#4 A4b) maps a child's doc id to its STATE key — identity for the
+   * sequential round, the item's instance key for a parallel item's merge.
+   */
+  function mergeChildOutputs(
+    c: Container,
+    state: RunState,
+    keyOf: (ch: string) => string = (ch) => ch,
+  ): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     for (const ch of [...c.children].sort()) {
-      const co = state.outputs[ch];
+      const co = state.outputs[keyOf(ch)];
       if (co !== undefined) for (const k of Object.keys(co).sort()) out[k] = co[k];
     }
     return out;
@@ -1994,8 +2147,265 @@ export function createEngine(doc: EngineDoc): Engine {
       const seeded = withContainer(state, c.id, { items, results: [] });
       return { state: exitContainer(seeded, c, 'success'), changed: true };
     }
+    // #4 A4b — PARALLEL mode: seed a FULL-LENGTH `results` of null holes (an
+    // item completes by replacing its hole with the merged child outputs — always
+    // an object, so null is unambiguous) and `nextItem: 0`; the item-start pass
+    // in `settle` seeds instance entries up to `batchCount`. `round` stays 0.
+    //
+    // Runtime guards FIRST, mirroring `validateDoc`'s parallel refusals for the
+    // legacy immutable rows that gate never saw: an `@` in any doc entity id
+    // collides with the instance-key grammar, and a back-edge touching this body
+    // addresses bare ids the parallel path never seeds. Both throw the same
+    // verdict as a bad `items` (→ `finishRun{invalid_event}`) rather than run a
+    // doc whose machinery would be silently wrong.
+    if (isParallelForeach(c)) {
+      const atId = [...nodeIds, ...containerIds].find((id) => id.includes('@'));
+      if (atId !== undefined) {
+        diagnostics.push(
+          `container '${c.id}': parallel foreach (batchCount >= 2) reserves '@' in ids for ` +
+            `instance keys, but '${atId}' contains one — refused`,
+        );
+        return {
+          state,
+          changed: false,
+          finish: { type: 'finishRun', outcome: 'failure', reason: 'invalid_event' },
+        };
+      }
+      const bodySet = new Set(c.children);
+      // Endpoint check PLUS reset-body overlap: on a legacy pre-validation row a
+      // cross-boundary defect edge (refused at save, voided from routing) can put
+      // a body child on a back-edge's target..source path even though both
+      // endpoints sit outside the container — `fireBackEdges`' bodyTerminal check
+      // would then be permanently false (entries live under instance keys), the
+      // exact "silently dead machinery" this guard refuses. `validateDoc` needs
+      // only the endpoint check (it refuses cross-boundary edges in the same
+      // pass, so no save-time reset body can cross the container wall).
+      const touching = backEdges.find(
+        (be) =>
+          bodySet.has(be.from) ||
+          bodySet.has(be.to) ||
+          be.to === c.id ||
+          (backBodyByKey.get(stableEdgeKey(be)) ?? []).some((id) => bodySet.has(id)),
+      );
+      if (touching !== undefined) {
+        diagnostics.push(
+          `container '${c.id}': parallel foreach (batchCount >= 2) cannot run with back-edge ` +
+            `'${touching.from}'→'${touching.to}' touching its body — back-edge machinery is ` +
+            `keyed by bare node ids and would be silently dead under per-item instances`,
+        );
+        return {
+          state,
+          changed: false,
+          finish: { type: 'finishRun', outcome: 'failure', reason: 'invalid_event' },
+        };
+      }
+      return {
+        state: withContainer(state, c.id, {
+          status: 'active',
+          items,
+          results: items.map(() => null),
+          nextItem: 0,
+        }),
+        changed: true,
+      };
+    }
     return {
       state: withContainer(state, c.id, { status: 'active', items, results: [] }),
+      changed: true,
+    };
+  }
+
+  /**
+   * #4 A4b — every instance state-key currently seeded for container `c`, sorted
+   * for deterministic iteration. Completed items' entries are DELETED, so this
+   * names exactly the live + terminal-but-unconsumed instances.
+   */
+  function instanceKeysOf(state: RunState, c: Container): string[] {
+    return Object.keys(state.nodes)
+      .filter((k) => scopeOfStateId(k)?.container.id === c.id)
+      .sort();
+  }
+
+  /**
+   * #4 A4b — advance the first ACTIVE parallel foreach that has something to
+   * settle, one change per call (the `stepContainers` shape). In order:
+   *
+   *   1. ITEM COMPLETION — an in-flight item (results[i] === null, i < nextItem)
+   *      whose instance nodes are ALL terminal:
+   *        - outcome clean (the SAME `outcomeFailure` predicate, scoped to the
+   *          item) → record `results[i]` = merged instance outputs and DELETE the
+   *          item's instance entries from nodes/outputs/branches (state hygiene;
+   *          a late terminal for a deleted instance folds to a benign no-op).
+   *          UNDER DOOM a TRUNCATED item — any child in `doomed.flipped`, i.e.
+   *          flipped to `skipped` before it ran — keeps a NULL HOLE (entries
+   *          still deleted): its merged outputs are partial, and recording them
+   *          would make a half-executed item indistinguishable from a completed
+   *          one. An item with NO flipped children genuinely completed
+   *          mid-drain and records normally.
+   *        - blamed → DOOM the container (first blame wins): stop starting items,
+   *          flip every non-in-flight non-terminal instance to `skipped`
+   *          (recording each in `doomed.flipped` — the truncation record the
+   *          drain reads), and
+   *          CANCEL any `retry_pending` hold to terminal `failure` (its next act
+   *          would be to START a fresh billable attempt whose result doom
+   *          discards; the armed alarm's later `node.retryDue` folds to a benign
+   *          status-guard no-op). Genuinely in-flight work — a live adapter
+   *          call, a call child — drains to terminal via its own events; their
+   *          late results must keep folding cleanly. Parked waits/webhooks
+   *          (`wait_pending`/`external_wait_pending`) also drain: the exit waits
+   *          out their (bounded) timeout rather than tearing down live
+   *          alarms/correlation rows. A terminal-failed item under an EXISTING
+   *          doom records nothing and changes nothing — its null hole is the
+   *          contract.
+   *   2. EXIT — success when every hole is filled and all items started; failure
+   *      (`child_failed:<blame instance>`) when doomed and nothing remains in
+   *      flight. Failure results keep FULL-LENGTH null holes (deliberately
+   *      different from sequential's prefix shape — both are pinned).
+   *
+   * Item STARTS live in `settle`'s own loop (they emit dispatch commands, which
+   * this Step-shaped walker has no channel for).
+   */
+  function stepForeachParallel(state: RunState, diagnostics: string[]): Step {
+    for (const cid of [...containerIds].sort()) {
+      const c = containerById.get(cid)!;
+      if (!isParallelForeach(c)) continue;
+      const cs = state.containers[cid]!;
+      if (cs.status !== 'active') continue;
+      const items = cs.items ?? [];
+      const results = cs.results ?? [];
+      const nextItem = cs.nextItem ?? 0;
+      const children = [...c.children].sort();
+
+      for (let i = 0; i < nextItem; i += 1) {
+        if (results[i] !== null) continue; // completed (or never started)
+        const allTerminal = children.every((ch) => {
+          const ns = state.nodes[instanceKey(ch, i)];
+          return ns !== undefined && TERMINAL_NODE.has(ns.status);
+        });
+        if (!allTerminal) continue;
+        const scope: ItemScope = { container: c, itemIndex: i };
+        const blamed = containerOutcomeFailure(c, state, scope);
+        if (blamed === null) {
+          const nodes = { ...state.nodes };
+          const outputs = { ...state.outputs };
+          const branches = { ...state.branches };
+          for (const ch of children) {
+            const k = instanceKey(ch, i);
+            delete nodes[k];
+            delete outputs[k];
+            delete branches[k];
+          }
+          // DOOM DRAIN — a TRUNCATED item (any child flipped `skipped` by the
+          // doom before it ran) keeps its NULL HOLE: its partial merge recorded
+          // here would read as a completed item downstream. An item with NO
+          // flipped children genuinely completed mid-drain and records normally
+          // (see the docblock).
+          if (cs.doomed?.flipped.some((k) => parseInstanceKey(k)?.itemIndex === i) === true) {
+            return { state: { ...state, nodes, outputs, branches }, changed: true };
+          }
+          const merged = mergeChildOutputs(c, state, (ch) => instanceKey(ch, i));
+          const nextResults = [...results];
+          nextResults[i] = merged;
+          const next: RunState = {
+            ...state,
+            nodes,
+            outputs,
+            branches,
+            containers: {
+              ...state.containers,
+              [cid]: { ...cs, results: nextResults },
+            },
+          };
+          return { state: next, changed: true };
+        }
+        if (cs.doomed === undefined) {
+          const blame = instanceKey(blamed, i);
+          diagnostics.push(
+            `container '${cid}' failed: child '${blame}' failed — draining in-flight items, ` +
+              `no new items start`,
+          );
+          // Flip every non-in-flight, non-terminal instance to `skipped` so it
+          // can never dispatch; genuinely in-flight instances drain. A
+          // `retry_pending` hold is CANCELLED to terminal `failure` instead: it
+          // is "in flight" only in the run-parking sense — its next act would be
+          // to START a fresh billable attempt whose result doom discards (the
+          // item's slot stays a null hole either way), so the held failure
+          // stands. The armed alarm's later `node.retryDue` folds to a benign
+          // no-op (`onRetryDue`'s status guard).
+          let nodes = state.nodes;
+          const flipped: string[] = [];
+          for (const k of instanceKeysOf(state, c)) {
+            const ns = nodes[k]!;
+            if (ns.status === 'retry_pending') {
+              if (nodes === state.nodes) nodes = { ...nodes };
+              nodes[k] = { ...ns, status: 'failure', currentAttemptId: undefined };
+              continue;
+            }
+            if (TERMINAL_NODE.has(ns.status) || isNodeInFlight(ns.status)) continue;
+            if (nodes === state.nodes) nodes = { ...nodes };
+            nodes[k] = { ...ns, status: 'skipped', currentAttemptId: undefined };
+            flipped.push(k);
+          }
+          const next: RunState = {
+            ...state,
+            nodes,
+            containers: { ...state.containers, [cid]: { ...cs, doomed: { blame, flipped } } },
+          };
+          return { state: next, changed: true };
+        }
+        // already doomed: a drained item that ITSELF failed records nothing.
+      }
+
+      if (cs.doomed !== undefined) {
+        const anyLive = instanceKeysOf(state, c).some(
+          (k) => !TERMINAL_NODE.has(state.nodes[k]!.status),
+        );
+        if (!anyLive) {
+          return {
+            state: exitContainer(state, c, 'failure', `child_failed:${cs.doomed.blame}`),
+            changed: true,
+          };
+        }
+        continue;
+      }
+      if (nextItem === items.length && results.every((r) => r !== null)) {
+        return { state: exitContainer(state, c, 'success'), changed: true };
+      }
+    }
+    return { state, changed: false };
+  }
+
+  /**
+   * #4 A4b — START items for an active, un-doomed parallel foreach: while fewer
+   * than `batchCount` items are in flight and items remain, seed the next item's
+   * instance entries (`pending`, fresh attempts/retries) and bump `nextItem`.
+   * Pure state seeding — the per-item dispatch pass in `settle` then walks each
+   * in-flight item's children with its scope.
+   */
+  function startParallelItems(state: RunState, c: Container): Step {
+    const cs = state.containers[c.id]!;
+    if (cs.status !== 'active' || cs.doomed !== undefined) return { state, changed: false };
+    const items = cs.items ?? [];
+    const results = cs.results ?? [];
+    const batch = c.batchCount ?? 1;
+    let nextItem = cs.nextItem ?? 0;
+    let inFlight = 0;
+    for (let i = 0; i < nextItem; i += 1) if (results[i] === null) inFlight += 1;
+    if (inFlight >= batch || nextItem >= items.length) return { state, changed: false };
+    const nodes = { ...state.nodes };
+    while (inFlight < batch && nextItem < items.length) {
+      for (const ch of c.children) {
+        nodes[instanceKey(ch, nextItem)] = { status: 'pending', attempts: 0, retries: 0 };
+      }
+      nextItem += 1;
+      inFlight += 1;
+    }
+    return {
+      state: {
+        ...state,
+        nodes,
+        containers: { ...state.containers, [c.id]: { ...cs, nextItem } },
+      },
       changed: true,
     };
   }
@@ -2076,6 +2486,14 @@ export function createEngine(doc: EngineDoc): Engine {
         continue;
       }
 
+      // #4 A4b — the parallel foreach's OWN advance (item completion, doom,
+      // exit); the sequential `stepContainers` above skips parallel containers.
+      const pstepped = stepForeachParallel(state, diagnostics);
+      if (pstepped.changed) {
+        state = pstepped.state;
+        continue;
+      }
+
       let changed = false;
       for (const id of sortedTopEntities) {
         const cc = containerById.get(id);
@@ -2130,7 +2548,43 @@ export function createEngine(doc: EngineDoc): Engine {
 
       for (const cid of [...containerIds].sort()) {
         if (state.containers[cid]!.status !== 'active') continue;
-        for (const ch of [...containerById.get(cid)!.children].sort()) {
+        const cc = containerById.get(cid)!;
+        if (isParallelForeach(cc)) {
+          // #4 A4b — parallel: START items up to `batchCount`, then walk each
+          // in-flight item's children under its ITEM SCOPE (instance state keys,
+          // per-item `${item}`/sibling env). The sequential bare-id walk below
+          // must never touch this container — its children have no bare entries.
+          const startStep = startParallelItems(state, cc);
+          if (startStep.changed) {
+            state = startStep.state;
+            changed = true;
+          }
+          const cs = state.containers[cid]!;
+          if (cs.doomed !== undefined) continue; // draining: dispatch nothing new
+          const results = cs.results ?? [];
+          const nextItem = cs.nextItem ?? 0;
+          for (let i = 0; i < nextItem; i += 1) {
+            if (results[i] !== null) continue;
+            const scope: ItemScope = { container: cc, itemIndex: i };
+            for (const ch of [...cc.children].sort()) {
+              const step = tryDispatchNode(
+                state,
+                ch,
+                childIncoming.get(ch)!,
+                commands,
+                diagnostics,
+                scope,
+              );
+              if (step.finish) return { state: step.state, commands: [step.finish], diagnostics };
+              if (step.changed) {
+                state = step.state;
+                changed = true;
+              }
+            }
+          }
+          continue;
+        }
+        for (const ch of [...cc.children].sort()) {
           const step = tryDispatchNode(state, ch, childIncoming.get(ch)!, commands, diagnostics);
           if (step.finish) return { state: step.state, commands: [step.finish], diagnostics };
           if (step.changed) {
@@ -2265,7 +2719,16 @@ export function createEngine(doc: EngineDoc): Engine {
     const stuck = new Set(sortedTopEntities.filter((id) => endpointOutcome(id, state) === null));
     for (const cid of [...containerIds].sort()) {
       if (state.containers[cid]!.status !== 'active') continue;
-      for (const ch of [...containerById.get(cid)!.children].sort()) {
+      const c = containerById.get(cid)!;
+      // #4 A4b — a parallel container's children have no bare entries; name its
+      // live INSTANCE keys instead (the reader needs WHICH item wedged it).
+      if (isParallelForeach(c)) {
+        for (const k of instanceKeysOf(state, c)) {
+          if (!TERMINAL_NODE.has(state.nodes[k]!.status)) stuck.add(k);
+        }
+        continue;
+      }
+      for (const ch of [...c.children].sort()) {
         if (!TERMINAL_NODE.has(state.nodes[ch]!.status)) stuck.add(ch);
       }
     }
@@ -2360,7 +2823,13 @@ export function createEngine(doc: EngineDoc): Engine {
     // held to applies — a `RangeError` out of the PURE reducer kills the pump.
     for (const d of docDefects) diagnostics.push(d);
     const nodes: Record<string, NodeRunState> = {};
-    for (const id of nodeIds) nodes[id] = { status: 'pending', attempts: 0, retries: 0 };
+    // #4 A4b — a PARALLEL foreach's children get NO bare-id entries: their state
+    // is seeded per item under instance keys when the item starts. Deterministic
+    // from the doc, so replay seeds identically.
+    for (const id of nodeIds) {
+      if (parallelChildIds.has(id)) continue;
+      nodes[id] = { status: 'pending', attempts: 0, retries: 0 };
+    }
     const containerStates: Record<string, ContainerRunState> = {};
     for (const c of containers)
       containerStates[c.id] = { status: 'pending', round: 0, outputs: {} };
@@ -2439,7 +2908,7 @@ export function createEngine(doc: EngineDoc): Engine {
       if (event.attemptId !== ns.currentAttemptId) {
         return { state, commands: [], diagnostics };
       }
-      const node = nodeById.get(event.nodeId)!;
+      const node = docNodeFor(event.nodeId)!;
       const { errs, checked } = validateOutputs(outputContract(node), event.outputs);
       if (checked === null || errs.length > 0) {
         // `checked === null` ⇒ a corrupt CONFIG, not a bad result: say so rather
@@ -2553,7 +3022,7 @@ export function createEngine(doc: EngineDoc): Engine {
       if (event.attemptId !== ns.currentAttemptId) {
         return { state, commands: [], diagnostics };
       }
-      if (retryEligible(nodeById.get(event.nodeId)!, ns, event.kind)) {
+      if (retryEligible(docNodeFor(event.nodeId)!, ns, event.kind)) {
         // The HOLD (#472, §A). Fold to a NON-terminal status and ask the driver
         // to arm the alarm. Deliberately does NOT call `settle`: the node is not
         // terminal, so nothing new can have become ready or skipped, and the run
@@ -2636,7 +3105,7 @@ export function createEngine(doc: EngineDoc): Engine {
         );
         return { state, commands: [], diagnostics };
       }
-      const node = nodeById.get(event.callNodeId)!;
+      const node = docNodeFor(event.callNodeId)!;
       // Validate declared outputs on BOTH outcomes. A FAILED child still returns
       // projected outputs (the findings loop) — but they flow into `state.outputs`
       // and thus into `${}` substitution, so mistyped outputs must never be stored
@@ -2728,7 +3197,9 @@ export function createEngine(doc: EngineDoc): Engine {
     // clear, so this asymmetry is deliberate and stated rather than silent.
     let prepared: PreparedDispatch;
     try {
-      prepared = prepDispatch(next, nodeById.get(event.nodeId)!);
+      // #4 A4b — `event.nodeId` may be an instance key; prep against it so the
+      // retry re-resolves the ITEM's own env (docNodeFor strips the suffix).
+      prepared = prepDispatch(next, docNodeFor(event.nodeId)!, event.nodeId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       diagnostics.push(`dispatch prep failed for node '${event.nodeId}': ${msg}`);
@@ -2931,7 +3402,7 @@ export function createEngine(doc: EngineDoc): Engine {
     if (ns.status !== 'external_wait_pending' || ns.currentAttemptId !== event.previousAttemptId) {
       return { state, commands: [], diagnostics };
     }
-    const node = nodeById.get(event.nodeId)!;
+    const node = docNodeFor(event.nodeId)!;
     const contract = outputContract(node);
     // A DECLARED contract with an outputs-carrying (A16) event → filter to declared
     // keys (never trust the event's key set). Everything else → store `{}`:
@@ -3017,7 +3488,8 @@ export function createEngine(doc: EngineDoc): Engine {
     }
     let prepared: PreparedDispatch;
     try {
-      prepared = prepDispatch(next, nodeById.get(event.nodeId)!);
+      // #4 A4b — see `onRetryDue`: prep against the (possibly instance) state id.
+      prepared = prepDispatch(next, docNodeFor(event.nodeId)!, event.nodeId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       diagnostics.push(`dispatch prep failed for node '${event.nodeId}': ${msg}`);
@@ -3093,10 +3565,19 @@ export function createEngine(doc: EngineDoc): Engine {
     if (state.status !== 'running') return { state, commands: [], diagnostics };
 
     const commands: EngineCommand[] = [];
-    for (const id of [...nodeIds].sort()) {
-      const ns = state.nodes[id]!;
-      if (ns.currentAttemptId === undefined) continue;
-      const node = nodeById.get(id)!;
+    // #4 A4b — walk DOC ids first (sorted — the pre-A4b emit order, byte-stable
+    // for every sequential log), THEN the parallel-body INSTANCE keys present in
+    // state (sorted). A parallel child has no bare entry (skipped by the guard);
+    // an instance key resolves its doc node via `docNodeFor` and re-derives prep
+    // under its own item env (`prepDispatch(…, id)` / `scopedEvalState`), the
+    // #569 parity this slice owes.
+    const instanceIds = Object.keys(state.nodes)
+      .filter((k) => scopeOfStateId(k) !== undefined)
+      .sort();
+    for (const id of [...[...nodeIds].sort(), ...instanceIds]) {
+      const ns = state.nodes[id];
+      if (ns === undefined || ns.currentAttemptId === undefined) continue;
+      const node = docNodeFor(id)!;
       if (ns.status === 'ready') {
         const controlEvent = controlBranchEvent(node.type);
         if (controlEvent !== undefined) {
@@ -3116,7 +3597,7 @@ export function createEngine(doc: EngineDoc): Engine {
           // body re-resolves identically on recovery rather than throwing (#569).
           let branch: string;
           try {
-            branch = evalControlBranch(node, state, foreachItemOf(state, id));
+            branch = evalControlBranch(node, scopedEvalState(state, id), foreachItemOf(state, id));
           } catch (err) {
             const failed = prepFailure(state, id, err, diagnostics);
             return { state: failed.state, commands: [failed.finish], diagnostics };
@@ -3145,7 +3626,7 @@ export function createEngine(doc: EngineDoc): Engine {
           // body re-resolves identically on recovery rather than throwing.
           let error: string;
           try {
-            error = evalFailMessage(node, state, foreachItemOf(state, id));
+            error = evalFailMessage(node, scopedEvalState(state, id), foreachItemOf(state, id));
           } catch (err) {
             const failed = prepFailure(state, id, err, diagnostics);
             return { state: failed.state, commands: [failed.finish], diagnostics };
@@ -3168,7 +3649,7 @@ export function createEngine(doc: EngineDoc): Engine {
           // foreach body re-resolves identically on recovery rather than throwing.
           let outputs: Record<string, unknown>;
           try {
-            outputs = evalFilter(node, state, foreachItemOf(state, id));
+            outputs = evalFilter(node, scopedEvalState(state, id), foreachItemOf(state, id));
           } catch (err) {
             const failed = prepFailure(state, id, err, diagnostics);
             return { state: failed.state, commands: [failed.finish], diagnostics };
@@ -3197,7 +3678,7 @@ export function createEngine(doc: EngineDoc): Engine {
           // body re-resolves identically on recovery rather than throwing (#569).
           let seconds: number;
           try {
-            seconds = evalWaitSeconds(node, state, foreachItemOf(state, id));
+            seconds = evalWaitSeconds(node, scopedEvalState(state, id), foreachItemOf(state, id));
           } catch (err) {
             const failed = prepFailure(state, id, err, diagnostics);
             return { state: failed.state, commands: [failed.finish], diagnostics };
@@ -3227,7 +3708,11 @@ export function createEngine(doc: EngineDoc): Engine {
           // `${item}`-bearing `timeoutSeconds` re-resolves identically (#569).
           let timeoutSeconds: number;
           try {
-            timeoutSeconds = evalWebhookTimeoutSeconds(node, state, foreachItemOf(state, id));
+            timeoutSeconds = evalWebhookTimeoutSeconds(
+              node,
+              scopedEvalState(state, id),
+              foreachItemOf(state, id),
+            );
           } catch (err) {
             const failed = prepFailure(state, id, err, diagnostics);
             return { state: failed.state, commands: [failed.finish], diagnostics };
@@ -3242,7 +3727,7 @@ export function createEngine(doc: EngineDoc): Engine {
         }
         let prepared: PreparedDispatch;
         try {
-          prepared = prepDispatch(state, node);
+          prepared = prepDispatch(state, node, id);
         } catch (err) {
           // TERMINALIZE, never swallow — the same verdict `tryDispatchNode`,
           // `onRetryDue` and `onRetryRequested` all reach from a prep throw. This
@@ -3259,7 +3744,7 @@ export function createEngine(doc: EngineDoc): Engine {
         let pvId: string;
         let callParams: Record<string, unknown>;
         try {
-          const ctx = buildCtx(state);
+          const ctx = buildCtx(scopedEvalState(state, id));
           // Pass the `foreach` item (as `tryDispatchNode`'s call-dispatch does) so a
           // `${item}`-bearing `pipelineVersionId`/`params` in a foreach body
           // re-resolves identically on recovery rather than throwing (#569).
