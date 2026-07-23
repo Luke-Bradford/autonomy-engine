@@ -165,3 +165,46 @@ export const WorkspaceGitStatusSchema = WorkspaceGitSchema.extend({
   state: WorkspaceGitStateSchema,
 });
 export type WorkspaceGitStatus = z.infer<typeof WorkspaceGitStatusSchema>;
+
+const MAX_COMMIT_MESSAGE_LEN = 2000;
+
+/**
+ * #3 G3a — a Commit message. `.trim()` first so a whitespace-only message
+ * fails `.min(1)` (git refuses `commit -m ""` without `--allow-empty-message`,
+ * which would surface as a raw non-zero exit); the trimmed value is what
+ * reaches the git argv. NUL is refused outright — git cannot carry it in a
+ * commit message and it has no business at a text boundary. Newlines ARE
+ * allowed (multi-paragraph messages are valid git). Input policy lives here at
+ * the boundary, mirroring the repoUrl/branch validators above.
+ */
+export const CommitMessageSchema = z
+  .string()
+  .trim()
+  .min(1, 'commit message must not be empty')
+  .max(MAX_COMMIT_MESSAGE_LEN)
+  .refine((value) => !value.includes('\x00'), 'commit message must not contain a NUL byte');
+
+/** Commit body: just the message — the working branch is derived
+ * `studio/<ownerId>/work` this slice (the persisted column + feature-branch
+ * selection land with their first reader, G9). */
+export const CommitWorkspaceGitBodySchema = z
+  .object({
+    message: CommitMessageSchema,
+  })
+  .strict();
+export type CommitWorkspaceGitBody = z.infer<typeof CommitWorkspaceGitBodySchema>;
+
+/**
+ * The Commit result. `committed:false` (with `commitSha:null`) is the no-op
+ * outcome — the serialized files were already identical to the working
+ * branch's tip, so nothing was committed or pushed. `files` is the managed
+ * file set the serialization produced (always the current working copy),
+ * regardless of whether a commit happened.
+ */
+export const WorkspaceGitCommitResultSchema = z.object({
+  committed: z.boolean(),
+  branch: z.string().min(1),
+  commitSha: z.string().min(1).nullable(),
+  files: z.array(z.string().min(1)),
+});
+export type WorkspaceGitCommitResult = z.infer<typeof WorkspaceGitCommitResultSchema>;
