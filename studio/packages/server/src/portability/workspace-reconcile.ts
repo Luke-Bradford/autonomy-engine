@@ -40,6 +40,11 @@ import type {
  * delete/orphan semantics are undecided in the spec ("never DB-delete on
  * import") and are deferred to the G5c apply. A pre-G1 file (`resourceId: null`)
  * has no identity to match, so it always classifies `create`.
+ *
+ * Archive inference is SOUND only over a complete snapshot: if `incoming` carries
+ * any parse diagnostic (a file that failed to read/parse never reached
+ * `incoming.pipelines`), NO archives are proposed — an absent id could be a real
+ * deletion or just an unread file, indistinguishable here (#664).
  */
 
 export interface WorkspaceReconcilePlan {
@@ -189,17 +194,30 @@ export function classifyWorkspace(
   // A DB pipeline whose resourceId is absent from the branch would be archived
   // by a pull (git-delete → archive, G5a). Only non-null incoming ids can match
   // (a `null`-id incoming pipeline is a fresh create, never a match).
+  //
+  // But "absent from the branch" is only sound when the branch snapshot is
+  // COMPLETE. A parse diagnostic (#664 unreadable, or unparseable / kind_mismatch
+  // / unknown_dir) means a committed file did NOT reach `incoming.pipelines`, so
+  // an absent id could be a real deletion OR just an unread file — indistinguishable
+  // here. Inferring archive from an incomplete snapshot would advertise a spurious
+  // "will archive P" for the very pipeline whose file failed to read. So propose
+  // NO archives while any diagnostic stands (the operator fixes the branch first);
+  // the apply already REFUSES wholesale on any diagnostic, so this only makes the
+  // read-only preview agree with that fail-closed posture.
   const incomingPipelineIds = new Set(
     incoming.pipelines.map((p) => p.resourceId).filter((id): id is string => id !== null),
   );
-  const archive: WorkspaceGitArchiveProposal[] = db.pipelines
-    .filter((p) => p.resourceId !== null && !incomingPipelineIds.has(p.resourceId))
-    .map((p) => ({
-      path: p.path,
-      kind: 'pipeline' as const,
-      resourceId: p.resourceId!,
-      name: pipelineName(p),
-    }));
+  const archive: WorkspaceGitArchiveProposal[] =
+    incoming.diagnostics.length > 0
+      ? []
+      : db.pipelines
+          .filter((p) => p.resourceId !== null && !incomingPipelineIds.has(p.resourceId))
+          .map((p) => ({
+            path: p.path,
+            kind: 'pipeline' as const,
+            resourceId: p.resourceId!,
+            name: pipelineName(p),
+          }));
 
   return { resources, archive };
 }

@@ -134,6 +134,21 @@ describe('parseWorkspaceFiles', () => {
     ]);
   });
 
+  it('#664 — surfaces reader-supplied unreadable paths as `unreadable` diagnostics', () => {
+    // A readable file plus two paths the git reader could not read (over the
+    // output cap / per-blob failure). The unreadable paths never reach `files`,
+    // so they are passed alongside and must show up as diagnostics.
+    const parsed = parseWorkspaceFiles(
+      [pipelineFile('pipelines/ok.json', 'res_ok')],
+      ['pipelines/huge.json', 'connections/big.json'],
+    );
+    expect(parsed.pipelines).toHaveLength(1);
+    expect(parsed.diagnostics).toEqual([
+      { path: 'pipelines/huge.json', code: 'unreadable', message: expect.any(String) },
+      { path: 'connections/big.json', code: 'unreadable', message: expect.any(String) },
+    ]);
+  });
+
   it('reports an envelope whose kind disagrees with its directory as kind_mismatch', () => {
     // A connection envelope committed under pipelines/.
     const connEnv = canonicalStringify({

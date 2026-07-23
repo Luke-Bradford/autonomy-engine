@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CATALOG_VERSION, type NewPipelineVersion } from '@autonomy-studio/shared';
@@ -60,6 +62,20 @@ describe('workspace-git import route', () => {
     fixtureGit(work, ['push', 'origin', 'main']);
   }
 
+  /** Commit an oversized (>1 MiB) managed `.json` to `main` — a `git show` of it
+   * overflows the provider's collected-output cap, so the reader cannot read it
+   * (#664). Not valid JSON content: the read fails BEFORE any parse. */
+  function pushOversizedManagedFile(work: string) {
+    mkdirSync(join(work, 'pipelines'), { recursive: true });
+    writeFileSync(
+      join(work, 'pipelines/huge.json'),
+      JSON.stringify({ blob: 'x'.repeat(2 * 1024 * 1024) }),
+    );
+    fixtureGit(work, ['add', '.']);
+    fixtureGit(work, ['commit', '-m', 'oversized managed file']);
+    fixtureGit(work, ['push', 'origin', 'main']);
+  }
+
   it('404s when the workspace is not connected to a repo', async () => {
     const res = await importBranch();
     expect(res.statusCode).toBe(404);
@@ -77,6 +93,22 @@ describe('workspace-git import route', () => {
     expect(result.refused).toBe(false);
     expect(result.applied).toEqual([]);
     expect(result.archived).toEqual([]);
+  });
+
+  it('#664 — an oversized managed file REFUSES the import as a diagnostic, never a 502', async () => {
+    const { remote, work } = seedRemote(testApp.tmpDir);
+    await connect(remote);
+    pushOversizedManagedFile(work);
+
+    const res = await importBranch();
+    // Read failure degrades to a per-file diagnostic → fail-closed refuse, not 502.
+    expect(res.statusCode).toBe(200);
+    const { import: result } = res.json();
+    expect(result.refused).toBe(true);
+    expect(result.applied).toEqual([]);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ path: 'pipelines/huge.json', code: 'unreadable' }),
+    );
   });
 
   it('round-trips: importing the branch the DB just committed is all unchanged', async () => {

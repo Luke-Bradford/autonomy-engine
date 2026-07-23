@@ -309,6 +309,7 @@ export function applyWorkspace(
           kind: 'connection',
           resourceId: created.resourceId,
           action: 'created',
+          versionMinted: false, // connections have no versions
         });
         continue;
       }
@@ -325,7 +326,13 @@ export function applyWorkspace(
         action = 'renamed';
       }
       connById.set(existing.resourceId, existing.id);
-      applied.push({ path: inc.path, kind: 'connection', resourceId: existing.resourceId, action });
+      applied.push({
+        path: inc.path,
+        kind: 'connection',
+        resourceId: existing.resourceId,
+        action,
+        versionMinted: false, // connections have no versions
+      });
     }
 
     // --- Pipelines ---
@@ -433,7 +440,17 @@ export function applyWorkspace(
         }
       }
 
-      applied.push({ path: inc.path, kind: 'pipeline', resourceId, action });
+      // `versionMinted` is ORTHOGONAL to `action` (#672): a `restored` pipeline
+      // whose branch version doc also changed is `restored` + `versionMinted:true`
+      // — a signal the single-valued `action` cannot carry. `willMint` is the one
+      // place the mint is decided, so this can never disagree with the write.
+      applied.push({
+        path: inc.path,
+        kind: 'pipeline',
+        resourceId,
+        action,
+        versionMinted: willMint,
+      });
       if (willMint && version !== undefined) {
         minters.push({ pipelineId, versionRid, version, callRefs: literalCallRefs(version) });
       }

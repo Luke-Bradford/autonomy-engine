@@ -170,6 +170,31 @@ describe('workspace-git import-preview route', () => {
     ]);
   });
 
+  it('#664 — an oversized committed file is a per-file diagnostic, not a whole-preview 502', async () => {
+    const { remote, work } = seedRemote(testApp.tmpDir);
+    await connect(remote);
+
+    // A managed .json larger than the provider's 1 MiB collected-output cap: a
+    // `git show` of it overflows, so the reader cannot read it. It must degrade
+    // to a per-file `unreadable` diagnostic, never fail the whole preview.
+    mkdirSync(join(work, 'pipelines'), { recursive: true });
+    writeFileSync(
+      join(work, 'pipelines/huge.json'),
+      JSON.stringify({ blob: 'x'.repeat(2 * 1024 * 1024) }),
+    );
+    fixtureGit(work, ['add', '.']);
+    fixtureGit(work, ['commit', '-m', 'oversized']);
+    fixtureGit(work, ['push', 'origin', 'main']);
+
+    const res = await preview();
+    expect(res.statusCode).toBe(200);
+    const { preview: result } = res.json();
+    expect(result.resources).toEqual([]);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ path: 'pipelines/huge.json', code: 'unreadable' }),
+    );
+  });
+
   it('returns 404 when previewing before any repo is connected', async () => {
     expect((await preview()).statusCode).toBe(404);
   });

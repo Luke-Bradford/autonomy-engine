@@ -220,12 +220,19 @@ export type WorkspaceGitCommitResult = z.infer<typeof WorkspaceGitCommitResultSc
  * - `kind_mismatch`: a valid envelope whose `kind` disagrees with its directory.
  * - `duplicate_resource_id`: a non-null `resourceId` claimed by 2+ files of a kind.
  * - `unknown_dir`: a file outside the three managed directories.
+ * - `unreadable`: the committed blob could not be READ from the object store
+ *   (over the provider's 1 MiB collected-output cap, or a per-blob git failure).
+ *   Its content was never parsed, so — like `unparseable` — it makes a preview
+ *   VISIBLE (never a whole-workspace 502, #664) and REFUSES an apply fail-closed
+ *   (an incomplete snapshot must not archive a pipeline whose file merely failed
+ *   to read).
  */
 export const WorkspaceParseDiagnosticCodeSchema = z.enum([
   'unparseable',
   'kind_mismatch',
   'duplicate_resource_id',
   'unknown_dir',
+  'unreadable',
 ]);
 export type WorkspaceParseDiagnosticCode = z.infer<typeof WorkspaceParseDiagnosticCodeSchema>;
 
@@ -313,11 +320,18 @@ export type WorkspaceGitImportPreview = z.infer<typeof WorkspaceGitImportPreview
  *   inserted, PRESERVING the file's `resourceId`.
  * - `restored`: the `resourceId` matched a soft-archived pipeline whose file
  *   reappeared → the existing row was un-archived (not duplicated; spec note 1).
+ *   A restore MAY also advance the version — see the orthogonal `versionMinted`.
  * - `updated`: the version doc and/or a row field (`concurrency`) changed → a new
  *   immutable version was minted and/or the row patched.
  * - `renamed`: only the display name changed → the row's `name` was patched, no
  *   version minted.
  * - `unchanged`: a matching resource was identical → no write.
+ *
+ * `action` and `versionMinted` are ORTHOGONAL: `action` is the row-level
+ * disposition, `versionMinted` is whether a new immutable version was minted in
+ * the SAME apply. They coincide for `updated` (a content change mints) but a
+ * `restored` can carry EITHER value (#672 — un-archive alone, or un-archive + a
+ * changed version doc), so the version signal is not derivable from `action`.
  */
 export const WorkspaceGitAppliedActionSchema = z.enum([
   'created',
@@ -330,12 +344,18 @@ export type WorkspaceGitAppliedAction = z.infer<typeof WorkspaceGitAppliedAction
 
 /** #3 G5c — one resource the apply wrote (or confirmed unchanged), with the
  * concrete `action` taken. `resourceId` is the resource's stable identity after
- * apply (never null — a pre-G1 file's create mints one). */
+ * apply (never null — a pre-G1 file's create mints one). `versionMinted` is the
+ * orthogonal "did this apply mint a new immutable version" signal (#672): always
+ * `false` for a connection; for a pipeline it is independent of `action` (a
+ * `restored` that also advances the version reports `restored` + `true`, which
+ * `action` alone cannot express). Explicit boolean, never defaulted — an absent
+ * fact must not be manufactured as `false`. */
 export const WorkspaceGitAppliedResourceSchema = z.object({
   path: z.string().min(1),
   kind: ExportKindSchema,
   resourceId: z.string().min(1),
   action: WorkspaceGitAppliedActionSchema,
+  versionMinted: z.boolean(),
 });
 export type WorkspaceGitAppliedResource = z.infer<typeof WorkspaceGitAppliedResourceSchema>;
 

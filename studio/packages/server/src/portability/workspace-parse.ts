@@ -37,6 +37,12 @@ import type { WorkspaceFile } from './workspace-serialize.js';
  * preview shows the whole picture; #473: a bad file is visible, not dropped).
  * Only fully-valid files land in the `pipelines`/`connections`/`triggers`
  * arrays.
+ *
+ * `unreadablePaths` are managed files the git reader could not read at all
+ * (#664 — a blob over the provider's collected-output cap, or a per-blob git
+ * failure): they never reach `files`, so they are surfaced here as `unreadable`
+ * diagnostics rather than silently vanishing (the same visible-not-dropped
+ * contract). A caller that read files directly (the DB snapshot) passes none.
  */
 
 /** A parsed pipeline: keyed on the pipeline ROW's `resourceId` (what G5's
@@ -77,6 +83,7 @@ const DIAGNOSTIC_MESSAGE: Record<WorkspaceParseDiagnostic['code'], string> = {
   kind_mismatch: 'envelope kind does not match its directory',
   duplicate_resource_id: 'resourceId is claimed by more than one file of this kind',
   unknown_dir: 'file is not under a managed resource directory',
+  unreadable: 'file could not be read from the repository',
 };
 
 function diagnostic(
@@ -95,11 +102,18 @@ function envelopeResourceId(envelope: ExportEnvelope): string | null {
     : envelope.data.resourceId;
 }
 
-export function parseWorkspaceFiles(files: readonly WorkspaceFile[]): ParsedWorkspace {
+export function parseWorkspaceFiles(
+  files: readonly WorkspaceFile[],
+  unreadablePaths: readonly string[] = [],
+): ParsedWorkspace {
   const pipelines: ParsedPipeline[] = [];
   const connections: ParsedConnection[] = [];
   const triggers: ParsedTrigger[] = [];
-  const diagnostics: WorkspaceParseDiagnostic[] = [];
+  // Unreadable files never made it into `files` — surface each as a diagnostic
+  // up front so a preview shows the whole picture and an apply fails closed.
+  const diagnostics: WorkspaceParseDiagnostic[] = unreadablePaths.map((path) =>
+    diagnostic(path, 'unreadable'),
+  );
 
   const seenResourceId: Record<ResourceKind, Set<string>> = {
     pipeline: new Set(),
