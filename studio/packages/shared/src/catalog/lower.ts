@@ -1,6 +1,9 @@
 import type { Node } from '../schemas/pipeline.js';
 import { getActivity } from './registry.js';
 import {
+  findLlmMessagesRowIndex,
+  isLlmTranscriptRow,
+  LLM_TRANSCRIPT_ROW,
   llmOutputSchemaSchema,
   llmStructuredOutputSurfaceSchema,
   lowerOutputSchema,
@@ -136,6 +139,70 @@ export function lowerLlmStructuredOutputs(nodes: Node[]): Node[] {
     return {
       ...node,
       config: { ...node.config, outputs: lowerOutputSchema(outputSchema) },
+    };
+  });
+}
+
+/**
+ * #2 L12 — APPEND the transcript output row (`{messages, json}`) to an
+ * `emitMessages: true` `llm_call`'s `config.outputs`. The row is DERIVED from
+ * the flag (like a structured node's schema-derived contract), so adding it to
+ * a present contract is the same justified exception to `lowerNodeOutputs`'s
+ * never-overwrite rule that `lowerLlmStructuredOutputs` documents — but
+ * APPEND-ONLY: existing rows are never touched, and a present row already named
+ * `messages` leaves the node alone entirely (whatever its declared type — the
+ * save-time validator `validateLlmCallConversation` reports a non-`json`
+ * conflict; lowering over it would mask the author's declaration).
+ *
+ * Runs AFTER `lowerNodeOutputs` in `createPipelineVersion` (unlike the two
+ * structured passes, which must run BEFORE it): the appended row EXTENDS the
+ * seeded `[text, stopReason]` default rather than replacing it, so the base
+ * contract must already be present. An explicit author `outputs: []` is still
+ * appended to — the flag IS the author's opt-in, and honouring "declares
+ * nothing" over it would silently drop the very output the flag requests.
+ *
+ * TOGGLE-OFF HEAL: the appended row persists in the stored config, and a canvas
+ * edit round-trips it — so turning the flag off (or deleting the key) would
+ * strand a machine-added row the validator then refuses as "hand-written", a
+ * save dead-end the feature's own lowering manufactured. So the flag-off
+ * direction STRIPS the row again — but ONLY the exact machine shape
+ * (`isLlmTranscriptRow`): a row the author decorated (extra keys, different
+ * type) is treated as hand-written and left for `validateLlmCallConversation`
+ * to report, never silently removed. Both directions reconcile a DERIVED
+ * contract with the current config — the same justification as the structured
+ * overwrite exception.
+ *
+ * No-ops (each mirrors a sibling pass's rule): opt-in is a LITERAL `true` (the
+ * schema's `z.boolean()` refuses a `${...}` string, so lowering and the
+ * executor's emission gate read one rule); a structured node is left ENTIRELY
+ * alone — emitMessages+structured is refused at save, and its DERIVED rows may
+ * legitimately include a schema property named `messages` that the strip must
+ * never touch; a call node (child projection owns its outputs); a corrupt
+ * non-array `outputs` (left for the StrictNodeSchema parse to refuse — never
+ * masked, per `lowerNodeOutputs`'s fail-closed note).
+ */
+export function lowerLlmEmitMessages(nodes: Node[]): Node[] {
+  return nodes.map((node) => {
+    if (node.type !== LLM_CALL_ACTIVITY_TYPE) return node;
+    if (node.config['outputMode'] === 'structured') return node;
+    if (node.call !== undefined) return node;
+    const outputs = node.config['outputs'];
+    if (!Array.isArray(outputs)) return node;
+    const idx = findLlmMessagesRowIndex(outputs);
+    if (node.config['emitMessages'] === true) {
+      // Opt-in: append the derived row when absent (a present row — whatever its
+      // shape — is the validator's to judge, never lowered over).
+      if (idx !== -1) return node;
+      return {
+        ...node,
+        config: { ...node.config, outputs: [...outputs, { ...LLM_TRANSCRIPT_ROW }] },
+      };
+    }
+    // Flag off/absent: strip ONLY the exact machine shape (the toggle-off heal).
+    if (idx === -1 || !isLlmTranscriptRow(outputs[idx])) return node;
+    return {
+      ...node,
+      config: { ...node.config, outputs: outputs.filter((_, i) => i !== idx) },
     };
   });
 }

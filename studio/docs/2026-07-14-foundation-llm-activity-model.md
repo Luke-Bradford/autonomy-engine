@@ -210,10 +210,44 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 > still downgrades to `auto`; capture stays first-exchange-only.
 > CATALOG_VERSION 15→16.
 
-| L10c | MCP servers + tool security policy | 3 |
+| L10c | MCP servers + tool security policy — **DEFERRED to the event-modeled side-effecting sub-spec** (operator, 2026-07-23, #653: option B). A NO-OP in v1: local pure tools (L10a/L10b) are the ENTIRE v1 tool surface; MCP/external tools are never admitted under any v1 policy shape — purity stays machine-verified BY CONSTRUCTION, never operator-asserted inside the opaque loop. Re-open only on explicit operator instruction. | 3 |
 | L11a | `agent_task` subprocess telemetry (output/exitCode/summary) | 3 |
 | L11b | opt-in structured protocol (JSON-to-file / sentinel block) + schema validation | 3 |
 | L12 | Multi-turn / conversation state (agentic loop owns history; single-shot stays stateless) | 3 |
+
+> **L12 (built 2026-07-23):** multi-turn is **STATELESS DATAFLOW** — open question
+> 5's v1 answer is *neither* option: conversation state lives nowhere; it is a
+> VALUE threaded through node outputs. Two primitives: **`history`** (optional
+> `llm_call` config; at save a whole-value `${...}` statically refused for
+> definite scalars, at dispatch — via whole-value native-type preservation — a
+> `llmMessageSchema[]` array prepended to the authored `prompt`/`messages`;
+> history system-turns fold into the single system string after the node's own
+> `system`) and **`emitMessages: true`** (lowers an appended `{messages, json}`
+> output row at save — `lowerLlmEmitMessages`, append-only, after the seed pass —
+> and the executor augments a successful text completion with the transcript:
+> the request's non-system turns + the final assistant text, assembled at the
+> single succeeded choke-point so all three API adapters + `agent_cli` + the
+> L10b tool loop are covered uniformly). Tool exchanges are EXCLUDED by
+> construction (the agentic loop owns its internal history — this ticket's own
+> boundary; tool traffic is `activity.toolCalled` telemetry). An EMPTY completion
+> appends no assistant turn (never a manufactured empty turn; `stopReason`
+> carries why). `emitMessages`+structured is refused in v1 (the transcript's
+> final turn IS the text completion; structured capture is deferred with L9b
+> #605). A hand-declared `messages` row without the flag is refused at save (it
+> could only ever fail `missing declared output`). Chains COMPOUND with no
+> state: `history: '${nodes.a.output.messages}'` — and when F5 variables land,
+> `${vars.history}` + `append_variable` feed the SAME input (the run-variable
+> option needs no new llm surface, and the F5c parallel-mutation hard-reject
+> covers its determinism). A cross-run **conversation object** is continuation
+> state — deferred to the same event-modeled sub-spec as L10c (#653 precedent),
+> not v1. Neither `history` nor the transcript carries a length cap in v1 —
+> a self-threading loop re-embeds its whole past each round (quadratic growth);
+> this rides the existing "prompt budgeting / truncation" deferral above, which
+> owns the preflight-estimate fix. Toggling `emitMessages` OFF strips the exact
+> machine-lowered row again (the lowering pass heals its own append; a
+> hand-decorated row is refused, never silently removed). CATALOG_VERSION 16→17
+> (a pre-17 build silently DROPS a resolved `history` — its adapter parse
+> strips the unknown key — and never emits a declared transcript row).
 | **L13** | **Connection parameterization + dynamic routing (T9):** non-secret **connection parameters** (expression-bound at dispatch); **`connectionId`/`model` as validated `${}` refs** (route Anthropic-vs-OpenAI by param in ONE node). Since `connectionId` is a top-level `Node` field, this ADDS an expression pass there (or the blessed fallback: `switch(${params.provider})` → fixed-connection nodes → converge). | 2 |
 | **L14** | **`cli`/subscription connection kind (T5):** a CLI-agent connection `llm_call` accepts + single-shot adapter (`claude -p`/`codex exec` → stdout); quota/reset-window primitive; `meteringStatus` metered/unpriced/unknown + run-cost completeness flag. | 1 |
 
@@ -269,4 +303,7 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
    config vs optional (cost shown only when configured)?
 4. Reasoning trace capture: store (debug value) vs drop (size/secure) by default?
 5. Conversation state (L12): a run-variable message history vs a dedicated conversation object —
-   interaction with #1's parallel-variable hard-reject.
+   interaction with #1's parallel-variable hard-reject. **ANSWERED (L12, 2026-07-23): neither, for
+   v1 — multi-turn is stateless dataflow (node-output threading via `history`/`emitMessages`; see
+   the L12 built-block). A run-variable history feeds the same `history` input once F5 lands; a
+   cross-run conversation object is continuation state, deferred to the event-modeled sub-spec.**

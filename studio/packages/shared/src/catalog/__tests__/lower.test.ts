@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   lowerAgentTaskStructuredOutputs,
+  lowerLlmEmitMessages,
   lowerLlmStructuredOutputs,
   lowerNodeOutputs,
 } from '../lower.js';
@@ -269,5 +270,151 @@ describe('lowerAgentTaskStructuredOutputs (#2 L11b)', () => {
       { name: 'output', type: 'string' },
       { name: 'exitCode', type: 'number' },
     ]);
+  });
+});
+
+// ===========================================================================
+// #2 L12 — `lowerLlmEmitMessages`: the transcript-output opt-in appends a
+// `{messages, json}` row to an emitMessages llm_call's contract.
+// ===========================================================================
+
+describe('lowerLlmEmitMessages', () => {
+  it('appends the messages row to a seeded text-mode contract (runs AFTER lowerNodeOutputs)', () => {
+    const [lowered] = lowerLlmEmitMessages(
+      lowerNodeOutputs([node('a', LLM_CALL_ACTIVITY_TYPE, { prompt: 'p', emitMessages: true })]),
+    );
+    expect(lowered!.config['outputs']).toEqual([
+      { name: 'text', type: 'string' },
+      { name: 'stopReason', type: 'string' },
+      { name: 'messages', type: 'json' },
+    ]);
+  });
+
+  it('appends to an author-declared contract without touching the existing rows', () => {
+    const [lowered] = lowerLlmEmitMessages([
+      node('a', LLM_CALL_ACTIVITY_TYPE, {
+        prompt: 'p',
+        emitMessages: true,
+        outputs: [{ name: 'text', type: 'string' }],
+      }),
+    ]);
+    expect(lowered!.config['outputs']).toEqual([
+      { name: 'text', type: 'string' },
+      { name: 'messages', type: 'json' },
+    ]);
+  });
+
+  it('appends to an explicit empty contract (the opt-in IS the author intent)', () => {
+    const [lowered] = lowerLlmEmitMessages([
+      node('a', LLM_CALL_ACTIVITY_TYPE, { prompt: 'p', emitMessages: true, outputs: [] }),
+    ]);
+    expect(lowered!.config['outputs']).toEqual([{ name: 'messages', type: 'json' }]);
+  });
+
+  it('leaves a node with an existing `messages` row untouched (whatever its type — save-time reports a conflict)', () => {
+    const declared = [{ name: 'messages', type: 'string' }];
+    const [lowered] = lowerLlmEmitMessages([
+      node('a', LLM_CALL_ACTIVITY_TYPE, { prompt: 'p', emitMessages: true, outputs: declared }),
+    ]);
+    expect(lowered!.config['outputs']).toBe(declared);
+  });
+
+  it('is a no-op without the flag, with emitMessages:false, and for non-llm nodes', () => {
+    const noFlag = node('a', LLM_CALL_ACTIVITY_TYPE, { prompt: 'p', outputs: [] });
+    const offFlag = node('b', LLM_CALL_ACTIVITY_TYPE, {
+      prompt: 'p',
+      emitMessages: false,
+      outputs: [],
+    });
+    const other = node('c', 'http_request', { emitMessages: true, outputs: [] });
+    const lowered = lowerLlmEmitMessages([noFlag, offFlag, other]);
+    expect(lowered[0]).toBe(noFlag);
+    expect(lowered[1]).toBe(offFlag);
+    expect(lowered[2]).toBe(other);
+  });
+
+  it('is a no-op for a structured node (emitMessages+structured is a save-time refusal, never a lowered row)', () => {
+    const n = node('a', LLM_CALL_ACTIVITY_TYPE, {
+      prompt: 'p',
+      emitMessages: true,
+      outputMode: 'structured',
+      outputSchema: { type: 'object', properties: { a: { type: 'string' } } },
+    });
+    const [lowered] = lowerLlmEmitMessages([n]);
+    expect(lowered).toBe(n);
+  });
+
+  it('is a no-op for a call node and a corrupt (non-array) outputs value', () => {
+    const call = {
+      ...node('a', LLM_CALL_ACTIVITY_TYPE, { prompt: 'p', emitMessages: true }),
+      call: { pipelineVersionId: 'pv', params: {} },
+    } as Node;
+    const corrupt = node('b', LLM_CALL_ACTIVITY_TYPE, {
+      prompt: 'p',
+      emitMessages: true,
+      outputs: 'garbage',
+    });
+    const lowered = lowerLlmEmitMessages([call, corrupt]);
+    expect(lowered[0]).toBe(call);
+    expect(lowered[1]).toBe(corrupt);
+  });
+});
+
+describe('lowerLlmEmitMessages — toggle-off heal (#2 L12)', () => {
+  it('strips the EXACT machine-lowered row when the flag is turned off (round-trip heal)', () => {
+    const [lowered] = lowerLlmEmitMessages([
+      node('a', LLM_CALL_ACTIVITY_TYPE, {
+        prompt: 'p',
+        emitMessages: false,
+        outputs: [
+          { name: 'text', type: 'string' },
+          { name: 'stopReason', type: 'string' },
+          { name: 'messages', type: 'json' },
+        ],
+      }),
+    ]);
+    expect(lowered!.config['outputs']).toEqual([
+      { name: 'text', type: 'string' },
+      { name: 'stopReason', type: 'string' },
+    ]);
+  });
+
+  it('strips when the flag key is DELETED too (absent = off)', () => {
+    const [lowered] = lowerLlmEmitMessages([
+      node('a', LLM_CALL_ACTIVITY_TYPE, {
+        prompt: 'p',
+        outputs: [{ name: 'messages', type: 'json' }],
+      }),
+    ]);
+    expect(lowered!.config['outputs']).toEqual([]);
+  });
+
+  it('does NOT strip an author-DECORATED row (extra keys = hand-written; validator reports it)', () => {
+    const decorated = node('a', LLM_CALL_ACTIVITY_TYPE, {
+      prompt: 'p',
+      outputs: [{ name: 'messages', type: 'json', optional: true }],
+    });
+    const [lowered] = lowerLlmEmitMessages([decorated]);
+    expect(lowered).toBe(decorated);
+  });
+
+  it('does NOT strip a non-json messages row (hand-written; validator reports it)', () => {
+    const handWritten = node('a', LLM_CALL_ACTIVITY_TYPE, {
+      prompt: 'p',
+      outputs: [{ name: 'messages', type: 'string' }],
+    });
+    const [lowered] = lowerLlmEmitMessages([handWritten]);
+    expect(lowered).toBe(handWritten);
+  });
+
+  it('never touches a structured node in either direction (derived rows may legitimately be named messages)', () => {
+    const structured = node('a', LLM_CALL_ACTIVITY_TYPE, {
+      prompt: 'p',
+      outputMode: 'structured',
+      outputSchema: { type: 'object', properties: { messages: { type: 'array' } } },
+      outputs: [{ name: 'messages', type: 'json' }],
+    });
+    const [lowered] = lowerLlmEmitMessages([structured]);
+    expect(lowered).toBe(structured);
   });
 });

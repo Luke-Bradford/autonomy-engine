@@ -147,7 +147,23 @@
 // pre-16 build must refuse an L10b export at import (`portability/envelope.ts`)
 // rather than under-run the authored budget at run time. (A tools config
 // without the key is byte-identical across the bump.)
-export const CATALOG_VERSION = 16;
+// 17 (#2 L12): `llm_call` MULTI-TURN DATAFLOW. A node may declare `history` (a
+// whole-value `${...}` resolving to a turn array, prepended at dispatch) and/or
+// `emitMessages: true` (lowers a `{messages, json}` output row at save; the
+// executor emits the transcript). A pre-17 build mis-runs BOTH persisted
+// shapes deterministically. `history`: the pre-17 adapter parse succeeds and
+// STRIPS the unknown key (Zod's default object drops unknown keys), so the
+// resolved turn array never reaches that build's `normalizeLlmRequest` at all
+// — the conversation past is silently DROPPED and only the authored turns are
+// sent (a silent-WRONG completion, worse than a loud failure). `emitMessages`:
+// the persisted contract declares
+// `messages`, which a pre-17 executor never emits, so the reducer fails the
+// node on `missing declared output 'messages'` (the A11/A13 loud-fail shape).
+// The silent-drop half alone mandates the bump: a pre-17 build must refuse an
+// L12 export at import (`portability/envelope.ts`) rather than run a
+// conversation node without its conversation. (A config with neither key is
+// byte-identical across the bump.)
+export const CATALOG_VERSION = 17;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the
