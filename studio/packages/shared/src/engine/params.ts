@@ -1812,6 +1812,14 @@ export function validateDoc(
     if (c.kind !== 'loop' && c.timeout !== undefined) {
       errors.push(`container '${c.id}': timeout is only meaningful on a loop, not a ${c.kind}`);
     }
+    // #4 A4b (#566 slice 2) — `batchCount` is foreach-only, mirroring the `items`
+    // rule: on a loop/stage it is a dead field, refused LOUDLY rather than
+    // silently accepted.
+    if (c.kind !== 'foreach' && c.batchCount !== undefined) {
+      errors.push(
+        `container '${c.id}': batchCount is only meaningful on a foreach, not a ${c.kind}`,
+      );
+    }
     // #4 A4 — a `foreach` iterates its body once per element of `items`; it needs
     // an items expression and takes NEITHER a loop's exitWhen NOR its maxRounds
     // (it is bounded by items.length, not a predicate/cap). A zero-CHILD foreach
@@ -1835,6 +1843,38 @@ export function validateDoc(
       }
       if (c.items !== undefined)
         validateForeachItems(c, declared, outputsById, itemsGraph(), errors);
+      // #4 A4b (#566 slice 2) — PARALLEL mode (`batchCount >= 2`) refusals. Both
+      // rules exist because parallel items are namespaced per instance key
+      // (`<nodeId>@<i>`) while two pieces of machinery stay keyed by BARE doc ids:
+      //   - back-edges: `fireBackEdges`' bounce counters + reset bodies address
+      //     bare ids, so a back-edge touching a parallel body would be silently
+      //     dead (never fire, never cap) — refused rather than left inert.
+      //   - `@` in any doc entity id collides with the instance-key grammar
+      //     (`parseInstanceKey` matches `<id>@<digits>`), so an event for the
+      //     literal node could fold onto another node's item instance.
+      // Sequential mode (absent / 1) is untouched — neither rule applies.
+      if ((c.batchCount ?? 1) >= 2) {
+        const bodySet = new Set(c.children);
+        for (const e of doc.edges) {
+          if (e.back !== true) continue;
+          if (bodySet.has(e.from) || bodySet.has(e.to) || e.to === c.id) {
+            errors.push(
+              `container '${c.id}': cannot combine batchCount >= 2 with back-edge '${e.id}' ` +
+                `touching its body — back-edge machinery is keyed by bare node ids and would be ` +
+                `silently dead under per-item instances`,
+            );
+          }
+        }
+        const offenders = [...doc.nodes.map((n) => n.id), ...containers.map((cc) => cc.id)].filter(
+          (id) => id.includes('@'),
+        );
+        for (const id of offenders) {
+          errors.push(
+            `container '${c.id}': batchCount >= 2 reserves '@' in ids for per-item instance ` +
+              `keys, but '${id}' contains one — rename it or drop batchCount`,
+          );
+        }
+      }
     }
     if (c.exitWhen !== undefined) validateExitWhen(c, declared, outputsById, errors);
   }

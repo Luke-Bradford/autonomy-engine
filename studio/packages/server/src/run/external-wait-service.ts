@@ -1,4 +1,9 @@
-import { checkInboundOutputs, type EngineEvent, type RunEvent } from '@autonomy-studio/shared';
+import {
+  checkInboundOutputs,
+  docNodeIdOf,
+  type EngineEvent,
+  type RunEvent,
+} from '@autonomy-studio/shared';
 import { getRun } from '../repo/runs.js';
 import { getExternalWaitByTokenHash, markExternalWaitCompleted } from '../repo/external-waits.js';
 import { hashExternalWaitToken } from '../webhooks/external-wait-token.js';
@@ -139,7 +144,12 @@ export function createExternalWaitCompleter(deps: DriveDeps): ExternalWaitComple
         // `config.outputs` at the BOUNDARY, AFTER the parked check (so a guesser
         // never reaches it) and BEFORE `markExternalWaitCompleted` (so a bad body
         // settles nothing and appends nothing — the node stays parked to retry).
-        const node = doc.nodes.find((n) => n.id === row.nodeId);
+        // #4 A4b — a webhook parked inside a PARALLEL foreach body registered its
+        // correlation row under an instance key; resolve the doc node behind it
+        // (exact id first — a legacy literal `x@2` node resolves to itself).
+        const node =
+          doc.nodes.find((n) => n.id === row.nodeId) ??
+          doc.nodes.find((n) => n.id === docNodeIdOf(row.nodeId));
         if (node === undefined) return { verdict: 'not_completable', record: null };
         const checked = checkInboundOutputs(node, payload);
         if (!checked.ok) {

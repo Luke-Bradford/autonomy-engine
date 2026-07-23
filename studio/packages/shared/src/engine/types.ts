@@ -344,6 +344,25 @@ export const ContainerRunStateSchema = z.object({
    * mid-iteration child failure). Unset for loop/stage.
    */
   results: z.array(z.unknown()).optional(),
+  /**
+   * FOREACH PARALLEL mode only (#4 A4b, `batchCount >= 2`): items `[0, nextItem)`
+   * have been STARTED (their per-item instance entries seeded). An item i is
+   * in flight while `i < nextItem && results[i] === null` — in parallel mode
+   * `results` is seeded FULL-LENGTH with `null` holes at enter (a completed
+   * item's merged child outputs are always an object, so `null` is unambiguous),
+   * and `round` stays 0/unused. Unset for loop/stage and for a sequential
+   * foreach (whose round machinery is byte-identical to A4a).
+   */
+  nextItem: z.number().int().min(0).optional(),
+  /**
+   * FOREACH PARALLEL mode only (#4 A4b): the fail-fast DRAIN marker. Set when an
+   * item completes with a blamed failure: no new items start, non-in-flight
+   * instance nodes are skipped, genuinely in-flight instances drain to terminal,
+   * and once nothing is in flight the container exits
+   * `failure{child_failed:<blame>}`. `blame` is the blamed INSTANCE key
+   * (`<docNodeId>@<i>`). Unset while healthy and in sequential mode.
+   */
+  doomed: z.object({ blame: z.string() }).optional(),
 });
 export type ContainerRunState = z.infer<typeof ContainerRunStateSchema>;
 

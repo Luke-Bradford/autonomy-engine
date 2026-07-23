@@ -26,6 +26,9 @@ export type { SigType } from './functions.js';
 // the SAME machinery the `node.succeeded` fold uses — never a second copy.
 export { checkInboundOutputs, type InboundOutputsResult } from './outputs.js';
 export * from './params.js';
+// #4 A4b — the parallel-foreach instance-key grammar (`<nodeId>@<i>`), shared
+// by the reducer, the server's doc-node lookups and the web run view.
+export * from './instance-key.js';
 
 // P2b — the pure event-sourced reducer + acyclic DAG walk.
 export * from './reduce.js';

@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   CATALOG_VERSION,
+  type Container,
   type Edge,
   type EdgeOn,
   type EngineEvent,
   type NewPipelineVersion,
   type Node,
+  type Param,
 } from '@autonomy-studio/shared';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
@@ -41,26 +43,32 @@ function fanOut(ids: string[]): { nodes: Node[]; edges: Edge[] } {
   };
 }
 
-function seedVersion(db: Db, nodes: Node[], edges: Edge[]): string {
+function seedVersion(
+  db: Db,
+  nodes: Node[],
+  edges: Edge[],
+  extra: { containers?: Container[]; params?: Param[] } = {},
+): string {
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
   const input: NewPipelineVersion = {
     pipelineId: pipeline.id,
-    params: [],
+    params: extra.params ?? [],
     outputs: [],
     nodes,
     edges,
+    ...(extra.containers !== undefined ? { containers: extra.containers } : {}),
     catalogVersion: CATALOG_VERSION,
   };
   return createPipelineVersion(db, input).id;
 }
 
-function seedRun(db: Db, pvId: string) {
+function seedRun(db: Db, pvId: string, params: Record<string, unknown> = {}) {
   return createRun(db, {
     ownerId: 'local',
     pipelineVersionId: pvId,
     triggerId: null,
     parentRunId: null,
-    params: {},
+    params,
   });
 }
 
@@ -422,5 +430,51 @@ describe('driver — intra-run concurrent dispatch (#4 A4b slice 1)', () => {
     expect(errors).toHaveLength(2);
     // The fold (drive) error leads; the concurrent stream diagnostic survives.
     expect(errors.some((e) => e instanceof Error && e.message === 'b exploded')).toBe(true);
+  });
+});
+
+describe('driver — parallel foreach (#566 slice 2 / #4 A4b)', () => {
+  it("two item instances' adapter phases genuinely overlap under batchCount=2", async () => {
+    const { db } = freshDb();
+    // ONE body node, TWO items: the real pump must hold w@0's adapter phase open
+    // until w@1's begins — under a sequential foreach (or a batchCount silently
+    // dropped anywhere between schema, validator and reducer) w@1 never starts
+    // while w@0 is in flight, the 1s fallback fires, and `overlapped` stays false.
+    const pvId = seedVersion(db, [node('w')], [], {
+      containers: [
+        { id: 'fe', kind: 'foreach', children: ['w'], items: '${params.list}', batchCount: 2 },
+      ],
+      params: [{ name: 'list', type: 'json', required: true }],
+    });
+    const run = seedRun(db, pvId, { list: ['a', 'b'] });
+
+    let releaseFirst: () => void = () => {};
+    const secondStarted = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let overlapped = false;
+
+    const state = await startRun(
+      deps(db, {
+        nodes: {
+          'w@0': {
+            gate: async () => {
+              overlapped = await boundedRace(secondStarted, 1000);
+            },
+            outputs: { v: 0 },
+          },
+          'w@1': { onStart: () => releaseFirst(), outputs: { v: 1 } },
+        },
+      }),
+      run,
+    );
+
+    expect(overlapped).toBe(true);
+    expect(state.status).toBe('success');
+    expect(state.containers['fe']!.status).toBe('success');
+    expect(state.containers['fe']!.outputs).toEqual({ results: [{ v: 0 }, { v: 1 }] });
+    // the persisted parallel log replays to the identical driven state.
+    const engine = buildEngine(getPipelineVersion(db, pvId)!);
+    expect(engine.projectRunState(loadEngineEvents(db, run.id))).toEqual(state);
   });
 });

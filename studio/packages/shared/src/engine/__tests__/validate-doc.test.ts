@@ -14,6 +14,7 @@ import {
   validateRefs,
   type PipelineResolver,
 } from '../params.js';
+import { ContainerSchema } from '../../schemas/pipeline.js';
 import { lowerAgentTaskStructuredOutputs } from '../../catalog/lower.js';
 
 // --- helpers ---------------------------------------------------------------
@@ -1158,5 +1159,87 @@ describe('validateDoc — connectionParams shape (L13b)', () => {
     // {} binds nothing but still signals intent — same inert-config refusal.
     const d = doc([node('n', {}, { connectionParams: {} })]);
     expect(validateDoc(d).join(' ')).toMatch(/node\.n: connectionParams/);
+  });
+});
+
+// ===========================================================================
+// parallel foreach — batchCount (#566 slice 2 / #4 A4b)
+// ===========================================================================
+
+describe('validateDoc — parallel foreach batchCount (#4 A4b)', () => {
+  const LIST: Param = { name: 'list', type: 'json', required: true };
+  const fe = (extra: Partial<Container> = {}): Container => ({
+    id: 'fe',
+    kind: 'foreach',
+    children: ['w'],
+    items: '${params.list}',
+    ...extra,
+  });
+
+  it('accepts batchCount on a foreach (parallel mode)', () => {
+    const d = doc([node('w', { x: '${item}' })], [], [fe({ batchCount: 2 })], [LIST]);
+    expect(validateDoc(d)).toEqual([]);
+  });
+
+  it('accepts an explicit batchCount: 1 (sequential mode, stated)', () => {
+    const d = doc([node('w')], [], [fe({ batchCount: 1 })], [LIST]);
+    expect(validateDoc(d)).toEqual([]);
+  });
+
+  it('rejects batchCount on a loop or stage (foreach-only, symmetric with items)', () => {
+    const onLoop = doc(
+      [node('w', { outputs: [{ name: 'done', type: 'boolean' }] })],
+      [],
+      [
+        {
+          id: 'lp',
+          kind: 'loop',
+          children: ['w'],
+          exitWhen: '${nodes.w.output.done}',
+          batchCount: 2,
+        },
+      ],
+    );
+    expect(validateDoc(onLoop).join(' ')).toContain(
+      'batchCount is only meaningful on a foreach, not a loop',
+    );
+    const onStage = doc(
+      [node('a')],
+      [],
+      [{ id: 'stg', kind: 'stage', children: ['a'], batchCount: 2 }],
+    );
+    expect(validateDoc(onStage).join(' ')).toContain(
+      'batchCount is only meaningful on a foreach, not a stage',
+    );
+  });
+
+  it('schema refuses a batchCount over the cap (50) and under 1', () => {
+    expect(ContainerSchema.safeParse(fe({ batchCount: 51 })).success).toBe(false);
+    expect(ContainerSchema.safeParse(fe({ batchCount: 0 })).success).toBe(false);
+    expect(ContainerSchema.safeParse(fe({ batchCount: 2.5 })).success).toBe(false);
+    expect(ContainerSchema.safeParse(fe({ batchCount: 50 })).success).toBe(true);
+  });
+
+  it('rejects batchCount >= 2 when a back-edge touches the foreach body (bare-id machinery)', () => {
+    // w -> w back-edge (self-loop within the body): back-edge bounce counters and
+    // reset bodies are keyed by BARE doc ids, so under per-item instances the
+    // machinery would be silently dead — refused at save.
+    const d = doc(
+      [node('w')],
+      [edge('w', 'w', 'failure', { back: true, maxBounces: 2 })],
+      [fe({ batchCount: 2 })],
+      [LIST],
+    );
+    expect(validateDoc(d).join(' ')).toContain('cannot combine batchCount');
+  });
+
+  it('rejects batchCount >= 2 when any doc id contains "@" (instance-key collision)', () => {
+    const d = doc([node('w'), node('other@2')], [], [fe({ batchCount: 2 })], [LIST]);
+    expect(validateDoc(d).join(' ')).toContain("'@'");
+  });
+
+  it('does NOT apply the parallel-only refusals at batchCount 1 / absent', () => {
+    const withAt = doc([node('w'), node('other@2')], [], [fe({ batchCount: 1 })], [LIST]);
+    expect(validateDoc(withAt).join(' ')).not.toContain("'@'");
   });
 });
